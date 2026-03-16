@@ -28,12 +28,18 @@ export default function TerminalView({ wsUrl }: Props) {
 
     try { term.loadAddon(new WebglAddon()) } catch { /* fallback to canvas */ }
 
-    fitAddon.fit()
+    // Delay initial fit to next frame — flex layout may not have final dimensions yet
+    requestAnimationFrame(() => fitAddon.fit())
 
     const conn = connectTerminal(
       wsUrl,
       (data) => term.write(new Uint8Array(data)),
       () => term.write('\r\n\x1b[31m[disconnected]\x1b[0m\r\n'),
+      () => {
+        // WebSocket opened — send initial size so tmux renders at correct dimensions
+        fitAddon.fit()
+        conn.resize(term.cols, term.rows)
+      },
     )
 
     term.onData((data) => conn.send(data))

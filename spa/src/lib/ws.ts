@@ -8,10 +8,12 @@ export function connectTerminal(
   url: string,
   onData: (data: ArrayBuffer) => void,
   onClose: () => void,
+  onOpen?: () => void,
 ): TerminalConnection {
   const ws = new WebSocket(url)
   ws.binaryType = 'arraybuffer'
 
+  ws.onopen = () => onOpen?.()
   ws.onmessage = (e) => {
     if (e.data instanceof ArrayBuffer) onData(e.data)
   }

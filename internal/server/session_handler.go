@@ -31,6 +31,9 @@ type createReq struct {
 }
 
 func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
+	// Sync: discover tmux sessions not yet in DB
+	h.syncTmuxSessions()
+
 	sessions, err := h.store.ListSessions()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -41,6 +44,36 @@ func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(sessions)
+}
+
+// syncTmuxSessions discovers tmux sessions not yet tracked in SQLite and adds them.
+func (h *SessionHandler) syncTmuxSessions() {
+	tmuxSessions, err := h.tmux.ListSessions()
+	if err != nil {
+		return
+	}
+
+	dbSessions, err := h.store.ListSessions()
+	if err != nil {
+		return
+	}
+
+	known := make(map[string]bool, len(dbSessions))
+	for _, s := range dbSessions {
+		known[s.Name] = true
+	}
+
+	for _, ts := range tmuxSessions {
+		if known[ts.Name] {
+			continue
+		}
+		h.store.CreateSession(store.Session{
+			Name:       ts.Name,
+			TmuxTarget: ts.Name + ":0",
+			Cwd:        ts.Cwd,
+			Mode:       "term",
+		})
+	}
 }
 
 func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
