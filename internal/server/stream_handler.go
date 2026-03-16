@@ -4,6 +4,7 @@ package server
 import (
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/gorilla/websocket"
 	"github.com/wake/tmux-box/internal/stream"
@@ -27,12 +28,16 @@ func HandleStreamWS(w http.ResponseWriter, r *http.Request, sess *stream.StreamS
 	defer sess.Unsubscribe(ch)
 
 	done := make(chan struct{})
+	var writeMu sync.Mutex
 
-	// Session stdout → WebSocket
+	// Session stdout → WebSocket (mutex-protected writes)
 	go func() {
 		defer close(done)
 		for line := range ch {
-			if err := conn.WriteMessage(websocket.TextMessage, line); err != nil {
+			writeMu.Lock()
+			err := conn.WriteMessage(websocket.TextMessage, line)
+			writeMu.Unlock()
+			if err != nil {
 				return
 			}
 		}
@@ -53,7 +58,9 @@ func HandleStreamWS(w http.ResponseWriter, r *http.Request, sess *stream.StreamS
 	select {
 	case <-done:
 	case <-sess.Done():
+		writeMu.Lock()
 		conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "session ended"))
+		writeMu.Unlock()
 	}
 }
