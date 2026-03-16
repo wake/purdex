@@ -1,7 +1,60 @@
+// cmd/tbox/main.go
 package main
 
-import "fmt"
+import (
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+
+	"github.com/wake/tmux-box/internal/config"
+	"github.com/wake/tmux-box/internal/server"
+	"github.com/wake/tmux-box/internal/store"
+	"github.com/wake/tmux-box/internal/tmux"
+)
 
 func main() {
-	fmt.Println("tbox")
+	configPath := flag.String("config", "", "path to config.toml (default: ~/.config/tbox/config.toml)")
+	bind := flag.String("bind", "", "override bind address")
+	port := flag.Int("port", 0, "override port")
+	flag.Parse()
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if *bind != "" {
+		cfg.Bind = *bind
+	}
+	if *port != 0 {
+		cfg.Port = *port
+	}
+
+	os.MkdirAll(cfg.DataDir, 0755)
+
+	st, err := store.Open(filepath.Join(cfg.DataDir, "state.db"))
+	if err != nil {
+		log.Fatalf("store: %v", err)
+	}
+	defer st.Close()
+
+	tx := tmux.NewRealExecutor()
+	srv := server.New(cfg, st, tx)
+
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		fmt.Println("\nshutting down...")
+		os.Exit(0)
+	}()
+
+	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
+	log.Printf("tbox daemon listening on %s", addr)
+	if err := srv.ListenAndServe(); err != nil {
+		log.Fatal(err)
+	}
 }

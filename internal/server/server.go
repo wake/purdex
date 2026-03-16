@@ -7,6 +7,7 @@ import (
 
 	"github.com/wake/tmux-box/internal/config"
 	"github.com/wake/tmux-box/internal/store"
+	"github.com/wake/tmux-box/internal/terminal"
 	"github.com/wake/tmux-box/internal/tmux"
 )
 
@@ -28,6 +29,17 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/sessions", sh.List)
 	s.mux.HandleFunc("POST /api/sessions", sh.Create)
 	s.mux.HandleFunc("DELETE /api/sessions/{id}", sh.Delete)
+	s.mux.HandleFunc("/ws/terminal/{session}", s.handleTerminal)
+}
+
+func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("session")
+	if !s.tmux.HasSession(name) {
+		http.Error(w, "session not found", 404)
+		return
+	}
+	relay := terminal.NewRelay("tmux", []string{"attach-session", "-t", name}, "/tmp")
+	relay.HandleWebSocket(w, r)
 }
 
 func (s *Server) Handler() http.Handler {
