@@ -79,9 +79,11 @@ export default function App() {
           if (event.value === 'connected') {
             setHandoffState('connected')
             setHandoffProgress('')
+            fetchSessions(daemonBase)
           } else if (event.value.startsWith('failed')) {
             setHandoffState('disconnected')
             setHandoffProgress('')
+            fetchSessions(daemonBase) // refetch to sync mode from DB
           } else {
             setHandoffProgress(event.value)
           }
@@ -103,10 +105,9 @@ export default function App() {
     setHash(active.uid, newMode)
   }, [active])
 
-  // Handoff for stream modes → update hash immediately
+  // Handoff for stream modes — stay on stream page, handoff runs in background
   const handleHandoff = useCallback(async (mode: string, preset: string) => {
     if (!active) return
-    setHash(active.uid, mode)
     setActivePreset(preset)
     try {
       useStreamStore.getState().setHandoffState('handoff-in-progress')
