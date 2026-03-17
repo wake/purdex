@@ -101,10 +101,26 @@ func migrate(db *sql.DB) error {
 		}
 	}
 	if !hasUID {
-		db.Exec("ALTER TABLE sessions ADD COLUMN uid TEXT NOT NULL DEFAULT ''")
+		if _, err := db.Exec("ALTER TABLE sessions ADD COLUMN uid TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("add uid column: %w", err)
+		}
 	}
-	// Backfill empty UIDs
-	db.Exec("UPDATE sessions SET uid = hex(randomblob(4)) WHERE uid = ''")
+	// Backfill empty UIDs using Go-based generateUID() for consistent format
+	rows2, err := db.Query("SELECT id FROM sessions WHERE uid = ''")
+	if err != nil {
+		return fmt.Errorf("query empty uids: %w", err)
+	}
+	defer rows2.Close()
+	for rows2.Next() {
+		var id int64
+		if err := rows2.Scan(&id); err == nil {
+			if _, err := db.Exec("UPDATE sessions SET uid = ? WHERE id = ?", generateUID(), id); err != nil {
+				return fmt.Errorf("backfill uid for id %d: %w", id, err)
+			}
+		}
+	}
+	// Ensure UID uniqueness
+	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_uid ON sessions(uid) WHERE uid != ''")
 	return nil
 }
 

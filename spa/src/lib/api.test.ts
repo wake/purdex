@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { listSessions, createSession, deleteSession, switchMode, type Session } from './api'
 
 const mockSession: Session = {
-  id: 1, name: 'test', tmux_target: 'test:0',
+  id: 1, uid: 'testuid1', name: 'test', tmux_target: 'test:0',
   cwd: '/tmp', mode: 'term', group_id: 0, sort_order: 0,
 }
 

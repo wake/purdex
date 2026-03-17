@@ -35,7 +35,6 @@ function setHash(uid: string, mode: string) {
 
 export default function App() {
   const { sessions, fetch: fetchSessions } = useSessionStore()
-  const conn = useStreamStore((s) => s.conn)
   const { config, fetch: fetchConfig } = useConfigStore()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [activePreset, setActivePreset] = useState('')
@@ -115,10 +114,6 @@ export default function App() {
     }
   }, [active, fetchSessions])
 
-  const handleInterrupt = useCallback(() => {
-    conn?.interrupt()
-  }, [conn])
-
   // Derive presets from config
   const streamPresets = config?.stream?.presets || [{ name: 'cc', command: 'claude -p --input-format stream-json --output-format stream-json' }]
 
@@ -138,7 +133,6 @@ export default function App() {
             activePreset={activePreset}
             onModeChange={handleModeChange}
             onHandoff={handleHandoff}
-            onInterrupt={handleInterrupt}
           />
         )}
         <div className="flex-1 overflow-hidden">

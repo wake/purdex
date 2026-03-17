@@ -14,7 +14,6 @@ interface Props {
   activePreset?: string
   onModeChange: (mode: string) => void
   onHandoff: (mode: string, preset: string) => void
-  onInterrupt: () => void
 }
 
 export default function TopBar({ sessionName, mode, streamPresets, activePreset, onModeChange, onHandoff }: Props) {

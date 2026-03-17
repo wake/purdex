@@ -35,6 +35,15 @@ func TestSessionCRUD(t *testing.T) {
 		t.Error("want non-zero id")
 	}
 
+	// Verify UID is generated
+	got, err := db.GetSession(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.UID) != 8 {
+		t.Errorf("want 8-char UID, got %q (len %d)", got.UID, len(got.UID))
+	}
+
 	// List
 	sessions, err := db.ListSessions()
 	if err != nil {
