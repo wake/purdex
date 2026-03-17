@@ -201,24 +201,32 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 	}
 
 	// Step 4: Extract session ID via /status
+	// Send /status then rapidly capture full pane content. The /status dialog
+	// may auto-dismiss quickly, so retry capture several times.
 	broadcast("extracting-id")
 	if err := s.tmux.SendKeys(sess.Name, "/status"); err != nil {
 		broadcast("failed:send /status: " + err.Error())
 		return
 	}
-	time.Sleep(2 * time.Second)
-	paneContent, err := s.tmux.CapturePaneContent(sess.Name, 40)
-	if err != nil {
-		broadcast("failed:capture pane: " + err.Error())
-		return
+	var sessionID string
+	for attempt := 0; attempt < 6; attempt++ {
+		time.Sleep(500 * time.Millisecond)
+		paneContent, err := s.tmux.CapturePaneContent(sess.Name, 200)
+		if err != nil {
+			continue
+		}
+		id, err := detect.ExtractSessionID(paneContent)
+		if err == nil {
+			sessionID = id
+			break
+		}
 	}
-	sessionID, err := detect.ExtractSessionID(paneContent)
-	if err != nil {
+	if sessionID == "" {
 		broadcast("failed:could not extract session ID")
 		return
 	}
 
-	// Step 5: Exit CC gracefully
+	// Step 5: Exit CC gracefully — Escape dismisses /status dialog if still open
 	broadcast("exiting-cc")
 	if err := s.tmux.SendKeysRaw(sess.Name, "Escape"); err != nil {
 		broadcast("failed:send Escape: " + err.Error())
