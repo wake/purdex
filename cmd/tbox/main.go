@@ -15,7 +15,6 @@ import (
 	"github.com/wake/tmux-box/internal/config"
 	"github.com/wake/tmux-box/internal/server"
 	"github.com/wake/tmux-box/internal/store"
-	"github.com/wake/tmux-box/internal/stream"
 	"github.com/wake/tmux-box/internal/tmux"
 )
 
@@ -45,10 +44,8 @@ func main() {
 	defer st.Close()
 
 	tx := tmux.NewRealExecutor()
-	sm := stream.NewManager()
-	defer sm.StopAll()
 
-	s := server.New(cfg, st, tx, sm)
+	s := server.New(cfg, st, tx)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
 	srv := &http.Server{
