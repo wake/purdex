@@ -74,8 +74,8 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Mode != "stream" && req.Mode != "jsonl" {
-		http.Error(w, "mode must be stream or jsonl", http.StatusBadRequest)
+	if req.Mode != "stream" && req.Mode != "jsonl" && req.Mode != "term" {
+		http.Error(w, "mode must be stream, jsonl, or term", http.StatusBadRequest)
 		return
 	}
 
@@ -97,17 +97,19 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	bind := s.cfg.Bind
 	s.cfgMu.RUnlock()
 
-	// Find preset command
+	// Find preset command (not required for term mode)
 	var command string
-	for _, p := range presets {
-		if p.Name == req.Preset {
-			command = p.Command
-			break
+	if req.Mode != "term" {
+		for _, p := range presets {
+			if p.Name == req.Preset {
+				command = p.Command
+				break
+			}
 		}
-	}
-	if command == "" {
-		http.Error(w, "preset not found", http.StatusBadRequest)
-		return
+		if command == "" {
+			http.Error(w, "preset not found", http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Try per-session lock
@@ -125,7 +127,11 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"handoff_id": handoffID})
 
 	// Run async handoff in goroutine
-	go s.runHandoff(sess, req.Mode, command, handoffID, token, port, bind)
+	if req.Mode == "term" {
+		go s.runHandoffToTerm(sess, handoffID)
+	} else {
+		go s.runHandoff(sess, req.Mode, command, handoffID, token, port, bind)
+	}
 }
 
 // runHandoff executes the handoff sequence asynchronously:
@@ -224,6 +230,13 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 		return
 	}
 	broadcast("connected")
+}
+
+// runHandoffToTerm handles the handoff from stream/jsonl back to terminal mode.
+// This is a stub that will be fully implemented in a later task.
+func (s *Server) runHandoffToTerm(sess store.Session, handoffID string) {
+	defer s.handoffLocks.Unlock(sess.Name)
+	s.events.Broadcast(sess.Name, "handoff", "failed:not implemented")
 }
 
 func generateHandoffID() string {

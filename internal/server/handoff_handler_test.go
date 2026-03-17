@@ -223,6 +223,64 @@ func TestHandoffInvalidBody(t *testing.T) {
 	}
 }
 
+func TestHandoffTermMode(t *testing.T) {
+	srv, db := newHandoffTestServer(t)
+
+	id, err := db.CreateSession(store.Session{
+		Name: "test-session", TmuxTarget: "test-session:0", Cwd: "/tmp", Mode: "stream",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Set cc_session_id so handoff-to-term has something to work with
+	ccID := "01abc234-5678-9def-0123-456789abcdef"
+	db.UpdateSession(id, store.SessionUpdate{CCSessionID: &ccID})
+
+	// POST handoff with mode=term (no preset)
+	body, _ := json.Marshal(map[string]string{"mode": "term"})
+	resp, err := http.Post(srv.URL+"/api/sessions/1/handoff", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("want 202, got %d", resp.StatusCode)
+	}
+
+	var result map[string]string
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["handoff_id"] == "" {
+		t.Fatal("expected handoff_id in response")
+	}
+
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestHandoffTermModeNoPresetRequired(t *testing.T) {
+	srv, db := newHandoffTestServer(t)
+
+	_, err := db.CreateSession(store.Session{
+		Name: "test-session", TmuxTarget: "test-session:0", Cwd: "/tmp", Mode: "stream",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// mode=term without preset should still be accepted (not 400)
+	body, _ := json.Marshal(map[string]string{"mode": "term"})
+	resp, err := http.Post(srv.URL+"/api/sessions/1/handoff", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("want 202, got %d", resp.StatusCode)
+	}
+}
+
 func TestHandoffJSONLPreset(t *testing.T) {
 	srv, db := newHandoffTestServer(t)
 
