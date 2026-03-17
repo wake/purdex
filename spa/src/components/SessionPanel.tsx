@@ -1,6 +1,7 @@
 // spa/src/components/SessionPanel.tsx
 import { useSessionStore } from '../stores/useSessionStore'
 import { Terminal, Lightning, CircleDashed, GearSix } from '@phosphor-icons/react'
+import SessionStatusBadge, { type SessionStatus } from './SessionStatusBadge'
 
 function SessionIcon({ mode, id }: { mode: string; id: number }) {
   const props = { size: 16, 'data-testid': `session-icon-${id}` }
@@ -11,7 +12,20 @@ function SessionIcon({ mode, id }: { mode: string; id: number }) {
   }
 }
 
-export default function SessionPanel() {
+/** Derive a simple status from session mode (placeholder until session-events WS provides real status) */
+function deriveStatus(mode: string): SessionStatus {
+  switch (mode) {
+    case 'stream': return 'cc-running'
+    case 'jsonl': return 'cc-running'
+    default: return 'not-in-cc'
+  }
+}
+
+interface Props {
+  onSettingsOpen?: () => void
+}
+
+export default function SessionPanel({ onSettingsOpen }: Props) {
   const { sessions, activeId, setActive } = useSessionStore()
 
   return (
@@ -29,6 +43,7 @@ export default function SessionPanel() {
               }`}
             >
               <SessionIcon mode={s.mode} id={s.id} />
+              <SessionStatusBadge status={deriveStatus(s.mode)} />
               <span className="flex-1 truncate">{s.name}</span>
               <span className="text-xs text-gray-500">{s.mode}</span>
             </button>
@@ -37,7 +52,11 @@ export default function SessionPanel() {
       </div>
       {/* Settings button — fixed at bottom */}
       <div className="p-3 border-t border-gray-800">
-        <button className="flex items-center gap-2 text-gray-400 hover:text-gray-300 text-sm cursor-pointer w-full">
+        <button
+          data-testid="settings-btn"
+          onClick={onSettingsOpen}
+          className="flex items-center gap-2 text-gray-400 hover:text-gray-300 text-sm cursor-pointer w-full"
+        >
           <GearSix size={16} />
           <span>Settings</span>
         </button>
