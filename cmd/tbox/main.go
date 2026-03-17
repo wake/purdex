@@ -19,20 +19,39 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "", "path to config.toml (default: ~/.config/tbox/config.toml)")
-	bind := flag.String("bind", "", "override bind address")
-	port := flag.Int("port", 0, "override port")
-	flag.Parse()
+	if len(os.Args) < 2 {
+		fmt.Fprintf(os.Stderr, "Usage: tbox <command> [flags]\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, relay\n")
+		os.Exit(1)
+	}
 
-	cfg, err := config.Load(*configPath)
+	switch os.Args[1] {
+	case "serve":
+		runServe(os.Args[2:])
+	case "relay":
+		runRelay(os.Args[2:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
+		os.Exit(1)
+	}
+}
+
+func runServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/tbox/config.toml)")
+	bindOverride := fs.String("bind", "", "override bind address")
+	portOverride := fs.Int("port", 0, "override port")
+	fs.Parse(args)
+
+	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	if *bind != "" {
-		cfg.Bind = *bind
+	if *bindOverride != "" {
+		cfg.Bind = *bindOverride
 	}
-	if *port != 0 {
-		cfg.Port = *port
+	if *portOverride != 0 {
+		cfg.Port = *portOverride
 	}
 
 	os.MkdirAll(cfg.DataDir, 0755)
@@ -66,4 +85,10 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Printf("server error: %v", err)
 	}
+}
+
+func runRelay(args []string) {
+	// Placeholder — will be implemented in Task 4
+	fmt.Fprintln(os.Stderr, "relay: not yet implemented")
+	os.Exit(1)
 }
