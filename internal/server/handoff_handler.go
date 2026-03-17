@@ -226,16 +226,22 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 		return
 	}
 
-	// Step 5: Exit CC gracefully — Escape dismisses /status dialog if still open
+	// Step 5: Kill CC process — Escape dismisses /status dialog, then Ctrl+C to terminate.
+	// IMPORTANT: Do NOT use /exit — it properly ends the session, making --resume unable
+	// to continue the conversation. Ctrl+C kills the process but preserves session state.
 	broadcast("exiting-cc")
 	if err := s.tmux.SendKeysRaw(sess.Name, "Escape"); err != nil {
 		broadcast("failed:send Escape: " + err.Error())
 		return
 	}
 	time.Sleep(500 * time.Millisecond)
-	if err := s.tmux.SendKeys(sess.Name, "/exit"); err != nil {
-		broadcast("failed:send /exit: " + err.Error())
-		return
+	// Send Ctrl+C repeatedly to ensure CC exits (first may just cancel current input)
+	for i := 0; i < 3; i++ {
+		if err := s.tmux.SendKeysRaw(sess.Name, "C-c"); err != nil {
+			broadcast("failed:send C-c: " + err.Error())
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
 	}
 	exitDeadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(exitDeadline) {
