@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/wake/tmux-box/internal/config"
+	"github.com/wake/tmux-box/internal/relay"
 	"github.com/wake/tmux-box/internal/server"
 	"github.com/wake/tmux-box/internal/store"
 	"github.com/wake/tmux-box/internal/tmux"
@@ -88,7 +89,37 @@ func runServe(args []string) {
 }
 
 func runRelay(args []string) {
-	// Placeholder — will be implemented in Task 4
-	fmt.Fprintln(os.Stderr, "relay: not yet implemented")
-	os.Exit(1)
+	fs := flag.NewFlagSet("relay", flag.ExitOnError)
+	session := fs.String("session", "", "session name (required)")
+	daemon := fs.String("daemon", "ws://127.0.0.1:7860", "daemon WebSocket address")
+	fs.Parse(args)
+
+	if *session == "" {
+		fmt.Fprintln(os.Stderr, "relay: --session is required")
+		os.Exit(1)
+	}
+
+	cmdArgs := fs.Args()
+	if len(cmdArgs) == 0 {
+		fmt.Fprintln(os.Stderr, "relay: no command specified after flags")
+		os.Exit(1)
+	}
+
+	token := os.Getenv("TBOX_TOKEN")
+	wsURL := fmt.Sprintf("%s/ws/cli-bridge/%s", *daemon, *session)
+
+	r := &relay.Relay{
+		SessionName: *session,
+		DaemonURL:   wsURL,
+		Token:       token,
+		Command:     cmdArgs,
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	if err := r.Run(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "relay: %v\n", err)
+		os.Exit(1)
+	}
 }
