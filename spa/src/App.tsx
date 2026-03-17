@@ -132,7 +132,7 @@ export default function App() {
   }, [active, fetchSessions])
 
   // Derive presets from config
-  const streamPresets = config?.stream?.presets || [{ name: 'cc', command: 'claude -p --input-format stream-json --output-format stream-json' }]
+  const streamPresets = config?.stream?.presets || [{ name: 'cc', command: 'claude -p --verbose --input-format stream-json --output-format stream-json' }]
 
   return (
     <div className="h-screen bg-[#191919] text-gray-200 flex">
