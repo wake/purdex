@@ -1,9 +1,8 @@
 // spa/src/components/ConversationView.tsx
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useCallback } from 'react'
 import { useStreamStore } from '../stores/useStreamStore'
 import {
   connectStream,
-  type StreamConnection,
   type StreamMessage,
   type ControlRequest,
 } from '../lib/stream-ws'
@@ -19,7 +18,7 @@ interface Props {
 }
 
 export default function ConversationView({ wsUrl }: Props) {
-  const connRef = useRef<StreamConnection | null>(null)
+  const connRef = useRef<ReturnType<typeof connectStream> | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const {
     messages,
@@ -31,6 +30,7 @@ export default function ConversationView({ wsUrl }: Props) {
     setStreaming,
     setSessionInfo,
     addCost,
+    setConn,
     clear,
   } = useStreamStore()
 
@@ -61,15 +61,15 @@ export default function ConversationView({ wsUrl }: Props) {
         }
       },
       () => setStreaming(false),
-      () => setStreaming(true),
+      // onOpen: intentionally no-op — isStreaming is set in handleSend
     )
     connRef.current = conn
-    ;(window as any).__streamConn = conn
+    setConn(conn)
 
     return () => {
       conn.close()
       connRef.current = null
-      ;(window as any).__streamConn = null
+      setConn(null)
     }
   }, [wsUrl]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -80,7 +80,7 @@ export default function ConversationView({ wsUrl }: Props) {
     }
   }, [messages, pendingControlRequests])
 
-  const handleSend = (text: string) => {
+  const handleSend = useCallback((text: string) => {
     connRef.current?.send({
       type: 'user',
       message: { role: 'user', content: text },
@@ -95,31 +95,39 @@ export default function ConversationView({ wsUrl }: Props) {
       },
     } as StreamMessage)
     setStreaming(true)
-  }
+  }, [addMessage, setStreaming])
 
-  const handleAllow = (req: ControlRequest) => {
+  const handleAllow = useCallback((req: ControlRequest) => {
     connRef.current?.sendControlResponse(req.request_id, {
       behavior: 'allow',
       updatedInput: req.request.input,
     })
     resolveControlRequest(req.request_id)
-  }
+  }, [resolveControlRequest])
 
-  const handleDeny = (req: ControlRequest) => {
+  const handleDeny = useCallback((req: ControlRequest) => {
     connRef.current?.sendControlResponse(req.request_id, {
       behavior: 'deny',
       message: 'User denied',
     })
     resolveControlRequest(req.request_id)
-  }
+  }, [resolveControlRequest])
 
-  const handleAskAnswer = (req: ControlRequest, answer: string) => {
+  const handleAskAnswer = useCallback((req: ControlRequest, answer: string) => {
+    const input = req.request.input as Record<string, unknown> | undefined
+    const questions = (input?.questions as Array<Record<string, unknown>>) || []
+    const questionText = questions.length > 0
+      ? (questions[0].question as string) || ''
+      : ''
     connRef.current?.sendControlResponse(req.request_id, {
       behavior: 'allow',
-      updatedInput: { answer },
+      updatedInput: {
+        questions,
+        answers: { [questionText]: answer },
+      },
     })
     resolveControlRequest(req.request_id)
-  }
+  }, [resolveControlRequest])
 
   return (
     <div className="flex flex-col h-full">
@@ -131,10 +139,11 @@ export default function ConversationView({ wsUrl }: Props) {
           </div>
         )}
         {messages.map((msg, i) => {
+          const key = `${wsUrl}-${i}`
           if (msg.type === 'assistant' && 'message' in msg) {
             const content = msg.message.content
             return (
-              <div key={i}>
+              <div key={key}>
                 {content.map((block, j) => {
                   if (block.type === 'text' && block.text) {
                     return <MessageBubble key={j} role="assistant" content={block.text} />
@@ -154,7 +163,7 @@ export default function ConversationView({ wsUrl }: Props) {
               (b: { type: string }) => b.type === 'text',
             )
             if (textBlock && 'text' in textBlock) {
-              return <MessageBubble key={i} role="user" content={textBlock.text as string} />
+              return <MessageBubble key={key} role="user" content={textBlock.text as string} />
             }
           }
           return null
@@ -164,15 +173,16 @@ export default function ConversationView({ wsUrl }: Props) {
         {pendingControlRequests.map((req) => {
           if (req.request.tool_name === 'AskUserQuestion') {
             const input = req.request.input as Record<string, unknown> | undefined
-            const question = (input?.question as string) || 'Please answer:'
-            const options = (input?.options as string[]) || []
-            const multiSelect = (input?.multiSelect as boolean) || false
+            const questions = (input?.questions as Array<{
+              question: string
+              header?: string
+              options?: Array<{ label: string; description?: string }>
+              multiSelect?: boolean
+            }>) || []
             return (
               <AskUserQuestion
                 key={req.request_id}
-                question={question}
-                options={options}
-                multiSelect={multiSelect}
+                questions={questions}
                 onSubmit={(answer) => handleAskAnswer(req, answer)}
                 onCancel={() => handleDeny(req)}
               />

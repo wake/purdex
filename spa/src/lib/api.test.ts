@@ -52,7 +52,7 @@ describe('deleteSession', () => {
 })
 
 describe('switchMode', () => {
-  it('sends PUT request with mode and returns updated session', async () => {
+  it('sends POST request with mode and returns updated session', async () => {
     const updated: Session = { ...mockSession, mode: 'stream' }
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify(updated), { status: 200 })
@@ -62,7 +62,7 @@ describe('switchMode', () => {
     expect(spy).toHaveBeenCalledWith(
       'http://localhost:7860/api/sessions/1/mode',
       expect.objectContaining({
-        method: 'PUT',
+        method: 'POST',
         headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ mode: 'stream' }),
       })

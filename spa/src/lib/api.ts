@@ -34,7 +34,7 @@ export async function deleteSession(base: string, id: number): Promise<void> {
 
 export async function switchMode(base: string, id: number, mode: string): Promise<Session> {
   const res = await fetch(`${base}/api/sessions/${id}/mode`, {
-    method: 'PUT',
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mode }),
   })

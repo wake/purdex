@@ -58,6 +58,7 @@ func NewSession(command string, args []string, cwd string) (*StreamSession, erro
 
 func (s *StreamSession) readLoop() {
 	defer func() {
+		s.cmd.Wait()
 		s.mu.Lock()
 		s.running = false
 		close(s.done)
@@ -89,8 +90,8 @@ func (s *StreamSession) readLoop() {
 
 // Send writes a JSON line to the subprocess stdin.
 func (s *StreamSession) Send(data []byte) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.running {
 		return io.ErrClosedPipe
 	}
@@ -111,13 +112,14 @@ func (s *StreamSession) Subscribe() <-chan []byte {
 	return ch
 }
 
-// Unsubscribe removes a subscriber channel.
+// Unsubscribe removes a subscriber channel and closes it.
 func (s *StreamSession) Unsubscribe(ch <-chan []byte) {
 	s.mu.Lock()
 	// Type assertion to get the writable channel
 	for c := range s.subscribers {
 		if c == ch {
 			delete(s.subscribers, c)
+			close(c)
 			break
 		}
 	}
@@ -141,7 +143,6 @@ func (s *StreamSession) Stop() {
 		s.cmd.Process.Kill()
 		<-s.done
 	}
-	s.cmd.Wait()
 }
 
 // Done returns a channel that closes when the subprocess exits.

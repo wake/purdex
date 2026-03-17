@@ -42,6 +42,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
+	defer st.Close()
 
 	tx := tmux.NewRealExecutor()
 	sm := stream.NewManager()
@@ -68,6 +69,4 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Printf("server error: %v", err)
 	}
-
-	st.Close()
 }

@@ -1,6 +1,6 @@
 // spa/src/stores/useStreamStore.ts
 import { create } from 'zustand'
-import type { StreamMessage, ControlRequest } from '../lib/stream-ws'
+import type { StreamMessage, ControlRequest, StreamConnection } from '../lib/stream-ws'
 
 interface StreamState {
   messages: StreamMessage[]
@@ -9,6 +9,7 @@ interface StreamState {
   sessionId: string | null
   model: string | null
   cost: number
+  conn: StreamConnection | null
 
   addMessage: (msg: StreamMessage) => void
   addControlRequest: (req: ControlRequest) => void
@@ -16,6 +17,7 @@ interface StreamState {
   setStreaming: (v: boolean) => void
   setSessionInfo: (sessionId: string, model: string) => void
   addCost: (usd: number) => void
+  setConn: (conn: StreamConnection | null) => void
   clear: () => void
 }
 
@@ -26,6 +28,7 @@ export const useStreamStore = create<StreamState>((set) => ({
   sessionId: null,
   model: null,
   cost: 0,
+  conn: null,
 
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
 
@@ -45,5 +48,14 @@ export const useStreamStore = create<StreamState>((set) => ({
 
   addCost: (usd) => set((s) => ({ cost: s.cost + usd })),
 
-  clear: () => set({ messages: [], pendingControlRequests: [], isStreaming: false, cost: 0 }),
+  setConn: (conn) => set({ conn }),
+
+  clear: () => set({
+    messages: [],
+    pendingControlRequests: [],
+    isStreaming: false,
+    sessionId: null,
+    model: null,
+    cost: 0,
+  }),
 }))

@@ -86,7 +86,14 @@ func (h *SessionHandler) SwitchMode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update mode in store
-	h.store.UpdateSession(id, store.SessionUpdate{Mode: &req.Mode})
+	if err := h.store.UpdateSession(id, store.SessionUpdate{Mode: &req.Mode}); err != nil {
+		// Rollback: if we just started a stream, stop it
+		if req.Mode == "stream" {
+			h.streams.Stop(sess.Name)
+		}
+		http.Error(w, "update session: "+err.Error(), 500)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "switched to " + req.Mode})
@@ -200,6 +207,7 @@ func (h *SessionHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, s := range sessions {
 		if s.ID == id {
+			h.streams.Stop(s.Name)
 			h.tmux.KillSession(s.Name)
 			break
 		}

@@ -2,26 +2,35 @@
 import { useState } from 'react'
 import { ChatCircleDots, Check, X } from '@phosphor-icons/react'
 
-interface Props {
+export interface QuestionItem {
   question: string
-  options: string[]
-  multiSelect: boolean
+  header?: string
+  options?: Array<{ label: string; description?: string }>
+  multiSelect?: boolean
+}
+
+interface Props {
+  questions: QuestionItem[]
   onSubmit: (answer: string) => void
   onCancel: () => void
 }
 
-export default function AskUserQuestion({ question, options, multiSelect, onSubmit, onCancel }: Props) {
+export default function AskUserQuestion({ questions, onSubmit, onCancel }: Props) {
+  const q = questions[0] || { question: 'Please answer:', options: [], multiSelect: false }
+  const options = q.options || []
+  const multiSelect = q.multiSelect || false
+
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
-  function toggle(opt: string) {
+  function toggle(label: string) {
     setSelected(prev => {
       const next = new Set(prev)
       if (multiSelect) {
-        if (next.has(opt)) next.delete(opt)
-        else next.add(opt)
+        if (next.has(label)) next.delete(label)
+        else next.add(label)
       } else {
         next.clear()
-        next.add(opt)
+        next.add(label)
       }
       return next
     })
@@ -37,17 +46,17 @@ export default function AskUserQuestion({ question, options, multiSelect, onSubm
       {/* Header */}
       <div className="flex items-center gap-2 mb-3">
         <ChatCircleDots size={18} weight="fill" className="text-blue-400 flex-shrink-0" />
-        <p className="text-sm font-semibold text-blue-200">{question}</p>
+        <p className="text-sm font-semibold text-blue-200">{q.question}</p>
       </div>
 
       {/* Options */}
       <div className="flex flex-col gap-1.5 mb-3">
         {options.map(opt => {
-          const isSelected = selected.has(opt)
+          const isSelected = selected.has(opt.label)
           return (
             <button
-              key={opt}
-              onClick={() => toggle(opt)}
+              key={opt.label}
+              onClick={() => toggle(opt.label)}
               className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left cursor-pointer transition-colors ${
                 isSelected
                   ? 'bg-blue-600/30 border border-blue-500/50 text-blue-100'
@@ -57,7 +66,12 @@ export default function AskUserQuestion({ question, options, multiSelect, onSubm
               <span className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 ${isSelected ? 'bg-blue-500' : 'bg-gray-700'}`}>
                 {isSelected && <Check size={10} weight="bold" className="text-white" />}
               </span>
-              {opt}
+              <span>
+                {opt.label}
+                {opt.description && (
+                  <span className="text-gray-400 text-xs ml-1.5">— {opt.description}</span>
+                )}
+              </span>
             </button>
           )
         })}
