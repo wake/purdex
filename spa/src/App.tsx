@@ -146,10 +146,7 @@ export default function App() {
           <TopBar
             sessionName={active.name}
             mode={currentMode}
-            streamPresets={streamPresets}
-            activePreset={activePreset}
             onModeChange={handleModeChange}
-            onHandoff={handleHandoff}
           />
         )}
         <div className="flex-1 overflow-hidden">
