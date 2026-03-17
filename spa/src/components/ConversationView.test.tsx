@@ -74,8 +74,8 @@ describe('ConversationView', () => {
 
   it('shows HandoffButton when handoffState is idle', () => {
     // clear() in useEffect sets handoffState to idle, so it shows HandoffButton by default
-    render(<ConversationView wsUrl="ws://test" sessionName="test" presetName="cc" />)
-    expect(screen.getByText('Start cc')).toBeInTheDocument()
+    render(<ConversationView wsUrl="ws://test" sessionName="test" presetName="cc" sessionStatus="cc-idle" />)
+    expect(screen.getByText('Handoff')).toBeInTheDocument()
   })
 
   it('shows HandoffButton when handoffState is disconnected', () => {
@@ -91,7 +91,7 @@ describe('ConversationView', () => {
     act(() => {
       useStreamStore.getState().setHandoffState('connected')
     })
-    expect(screen.queryByText('Start cc')).not.toBeInTheDocument()
+    expect(screen.queryByText('Handoff')).not.toBeInTheDocument()
     expect(screen.getByText(/waiting/i)).toBeInTheDocument()
   })
 })

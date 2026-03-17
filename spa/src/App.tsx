@@ -55,6 +55,10 @@ export default function App() {
   const active = sessions.find((s) => s.uid === route.uid) || null
   const currentMode = route.mode
 
+  const sessionStatus = useStreamStore((s) =>
+    active ? s.sessionStatus[active.name] : undefined
+  )
+
   // Fetch sessions and config on mount
   useEffect(() => {
     fetchSessions(daemonBase)
@@ -114,6 +118,18 @@ export default function App() {
     }
   }, [active, fetchSessions])
 
+  const handleHandoffToTerm = useCallback(async () => {
+    if (!active) return
+    try {
+      useStreamStore.getState().setHandoffState('handoff-in-progress')
+      await handoff(daemonBase, active.id, 'term')
+      setHash(active.uid, 'term')
+      await fetchSessions(daemonBase)
+    } catch (e) {
+      console.error('handoff to term failed:', e)
+    }
+  }, [active, fetchSessions])
+
   // Derive presets from config
   const streamPresets = config?.stream?.presets || [{ name: 'cc', command: 'claude -p --input-format stream-json --output-format stream-json' }]
 
@@ -137,18 +153,27 @@ export default function App() {
         )}
         <div className="flex-1 overflow-hidden">
           {active ? (
-            currentMode === 'stream' ? (
-              <ConversationView
-                wsUrl={`${wsBase}/ws/cli-bridge-sub/${encodeURIComponent(active.name)}`}
-                sessionName={active.name}
-                presetName={activePreset || streamPresets[0]?.name || 'cc'}
-                onHandoff={() => handleHandoff('stream', activePreset || streamPresets[0]?.name || 'cc')}
-              />
-            ) : (
-              <TerminalView
-                wsUrl={`${wsBase}/ws/terminal/${encodeURIComponent(active.name)}`}
-              />
-            )
+            <>
+              <div style={{ display: currentMode === 'term' ? 'block' : 'none', height: '100%' }}>
+                <TerminalView
+                  wsUrl={`${wsBase}/ws/terminal/${encodeURIComponent(active.name)}`}
+                />
+              </div>
+              <div style={{
+                display: currentMode === 'stream' ? 'flex' : 'none',
+                flexDirection: 'column',
+                height: '100%',
+              }}>
+                <ConversationView
+                  wsUrl={`${wsBase}/ws/cli-bridge-sub/${encodeURIComponent(active.name)}`}
+                  sessionName={active.name}
+                  presetName={activePreset || streamPresets[0]?.name || 'cc'}
+                  sessionStatus={sessionStatus}
+                  onHandoff={() => handleHandoff('stream', activePreset || streamPresets[0]?.name || 'cc')}
+                  onHandoffToTerm={handleHandoffToTerm}
+                />
+              </div>
+            </>
           ) : (
             <div className="flex items-center justify-center h-full">
               <p className="text-gray-400">Select a session</p>
