@@ -22,11 +22,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
     }
   },
   update: async (base, updates) => {
-    try {
-      const config = await updateConfig(base, updates)
-      set({ config })
-    } catch {
-      /* handle error */
-    }
+    const config = await updateConfig(base, updates)
+    set({ config })
   },
 }))

@@ -1,5 +1,5 @@
 // spa/src/components/TopBar.tsx
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Terminal, Lightning, CircleDashed, Stop } from '@phosphor-icons/react'
 
 interface Preset {
@@ -12,13 +12,33 @@ interface Props {
   mode: string
   streamPresets: Preset[]
   jsonlPresets: Preset[]
+  activePreset?: string
   onModeChange: (mode: string) => void
   onHandoff: (mode: string, preset: string) => void
   onInterrupt: () => void
 }
 
-export default function TopBar({ sessionName, mode, streamPresets, jsonlPresets, onModeChange, onHandoff, onInterrupt }: Props) {
+export default function TopBar({ sessionName, mode, streamPresets, jsonlPresets, activePreset, onModeChange, onHandoff, onInterrupt }: Props) {
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
+
+  // Click-outside + Escape to close dropdown
+  useEffect(() => {
+    if (!openDropdown) return
+    function handleClick(e: MouseEvent) {
+      if (!(e.target as Element).closest('[data-testid="mode-switch"]')) {
+        setOpenDropdown(null)
+      }
+    }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpenDropdown(null)
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [openDropdown])
 
   function handleModeClick(m: string, presets: Preset[]) {
     if (m === 'term') {
@@ -46,7 +66,7 @@ export default function TopBar({ sessionName, mode, streamPresets, jsonlPresets,
       <span className="text-sm text-[#e5e5e5] font-medium truncate">{sessionName}</span>
       <div className="flex-1" />
 
-      {/* Mode buttons */}
+      {/* Mode buttons: term → stream → jsonl */}
       <div className="flex items-center gap-1" data-testid="mode-switch">
         {/* Term — simple button */}
         <button
@@ -60,31 +80,6 @@ export default function TopBar({ sessionName, mode, streamPresets, jsonlPresets,
           <span>term</span>
         </button>
 
-        {/* JSONL — with dropdown */}
-        <div className="relative">
-          <button
-            onClick={() => handleModeClick('jsonl', jsonlPresets)}
-            data-testid="mode-btn-jsonl"
-            className={`flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer transition-colors ${
-              mode === 'jsonl' ? 'bg-[#404040] text-[#f0f0f0]' : 'text-[#888] hover:text-[#ccc] hover:bg-[#333]'
-            }`}
-          >
-            <CircleDashed size={14} weight={mode === 'jsonl' ? 'fill' : 'regular'} />
-            <span>jsonl</span>
-            {jsonlPresets.length > 1 && <span className="text-[10px]">▾</span>}
-          </button>
-          {openDropdown === 'jsonl' && (
-            <div data-testid="dropdown-jsonl" className="absolute top-full right-0 mt-1 bg-[#2a2a2a] border border-[#404040] rounded-lg py-1 min-w-[140px] z-10 shadow-lg">
-              {jsonlPresets.map(p => (
-                <button key={p.name} onClick={() => handlePresetClick('jsonl', p.name)}
-                  className="block w-full text-left px-3 py-1.5 text-xs text-[#ddd] hover:bg-[#404040]">
-                  {p.name}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
         {/* Stream — with dropdown */}
         <div className="relative">
           <button
@@ -96,13 +91,42 @@ export default function TopBar({ sessionName, mode, streamPresets, jsonlPresets,
           >
             <Lightning size={14} weight={mode === 'stream' ? 'fill' : 'regular'} />
             <span>stream</span>
-            {streamPresets.length > 1 && <span className="text-[10px]">▾</span>}
+            {streamPresets.length > 1 && <span className="text-[10px]">&#9662;</span>}
           </button>
           {openDropdown === 'stream' && (
             <div data-testid="dropdown-stream" className="absolute top-full right-0 mt-1 bg-[#2a2a2a] border border-[#404040] rounded-lg py-1 min-w-[140px] z-10 shadow-lg">
               {streamPresets.map(p => (
                 <button key={p.name} onClick={() => handlePresetClick('stream', p.name)}
-                  className="block w-full text-left px-3 py-1.5 text-xs text-[#ddd] hover:bg-[#404040]">
+                  className={`block w-full text-left px-3 py-1.5 text-xs ${
+                    p.name === activePreset ? 'bg-[#404040] text-white' : 'text-[#ddd] hover:bg-[#404040]'
+                  }`}>
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* JSONL — with dropdown */}
+        <div className="relative">
+          <button
+            onClick={() => handleModeClick('jsonl', jsonlPresets)}
+            data-testid="mode-btn-jsonl"
+            className={`flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer transition-colors ${
+              mode === 'jsonl' ? 'bg-[#404040] text-[#f0f0f0]' : 'text-[#888] hover:text-[#ccc] hover:bg-[#333]'
+            }`}
+          >
+            <CircleDashed size={14} weight={mode === 'jsonl' ? 'fill' : 'regular'} />
+            <span>jsonl</span>
+            {jsonlPresets.length > 1 && <span className="text-[10px]">&#9662;</span>}
+          </button>
+          {openDropdown === 'jsonl' && (
+            <div data-testid="dropdown-jsonl" className="absolute top-full right-0 mt-1 bg-[#2a2a2a] border border-[#404040] rounded-lg py-1 min-w-[140px] z-10 shadow-lg">
+              {jsonlPresets.map(p => (
+                <button key={p.name} onClick={() => handlePresetClick('jsonl', p.name)}
+                  className={`block w-full text-left px-3 py-1.5 text-xs ${
+                    p.name === activePreset ? 'bg-[#404040] text-white' : 'text-[#ddd] hover:bg-[#404040]'
+                  }`}>
                   {p.name}
                 </button>
               ))}

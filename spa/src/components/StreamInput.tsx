@@ -4,11 +4,12 @@ import { Plus } from '@phosphor-icons/react'
 
 interface Props {
   onSend: (text: string) => void
+  onAttach?: () => void
   disabled?: boolean
   placeholder?: string
 }
 
-export default function StreamInput({ onSend, disabled = false, placeholder = 'Reply...' }: Props) {
+export default function StreamInput({ onSend, onAttach, disabled = false, placeholder = 'Reply...' }: Props) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -56,6 +57,7 @@ export default function StreamInput({ onSend, disabled = false, placeholder = 'R
         <button
           type="button"
           disabled={disabled}
+          onClick={onAttach}
           className="w-7 h-7 rounded-md flex items-center justify-center text-[#666] hover:text-[#ddd] hover:bg-[#333] transition-colors disabled:opacity-40"
         >
           <Plus size={16} />

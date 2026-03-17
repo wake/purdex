@@ -21,7 +21,7 @@ beforeEach(() => {
 
 describe('ConversationView', () => {
   it('renders empty state when connected', () => {
-    render(<ConversationView wsUrl="ws://test" sessionName="test" />)
+    render(<ConversationView wsUrl="ws://test" sessionName="test" presetName="cc" />)
     // After mount, clear() runs and resets handoffState to idle.
     // Set connected after mount.
     act(() => {
@@ -31,7 +31,7 @@ describe('ConversationView', () => {
   })
 
   it('renders messages', () => {
-    render(<ConversationView wsUrl="ws://test" sessionName="test" />)
+    render(<ConversationView wsUrl="ws://test" sessionName="test" presetName="cc" />)
     act(() => {
       useStreamStore.getState().setHandoffState('connected')
       useStreamStore.getState().addMessage({
@@ -47,7 +47,7 @@ describe('ConversationView', () => {
   })
 
   it('shows ThinkingIndicator when streaming with no assistant messages', () => {
-    render(<ConversationView wsUrl="ws://test" sessionName="test" />)
+    render(<ConversationView wsUrl="ws://test" sessionName="test" presetName="cc" />)
     act(() => {
       useStreamStore.getState().setHandoffState('connected')
       useStreamStore.getState().setStreaming(true)
@@ -56,7 +56,7 @@ describe('ConversationView', () => {
   })
 
   it('hides ThinkingIndicator when assistant message arrives', () => {
-    render(<ConversationView wsUrl="ws://test" sessionName="test" />)
+    render(<ConversationView wsUrl="ws://test" sessionName="test" presetName="cc" />)
     act(() => {
       useStreamStore.getState().setHandoffState('connected')
       useStreamStore.getState().setStreaming(true)

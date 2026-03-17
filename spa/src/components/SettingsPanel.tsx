@@ -21,6 +21,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
   const [ccCommands, setCcCommands] = useState<string[]>([])
   const [pollInterval, setPollInterval] = useState(5)
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // Seed local state from config
   useEffect(() => {
@@ -75,6 +76,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
 
   async function handleSave() {
     setSaving(true)
+    setError(null)
     try {
       await update(daemonBase, {
         stream: { presets: streamPresets.filter(p => p.name.trim()) },
@@ -86,7 +88,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
       })
       onClose()
     } catch (e) {
-      console.error('save config failed:', e)
+      setError(e instanceof Error ? e.message : 'Save failed')
     } finally {
       setSaving(false)
     }
@@ -223,6 +225,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
           >
             {saving ? 'Saving...' : 'Save'}
           </button>
+          {error && <p className="text-red-400 text-xs mt-2" data-testid="settings-error">{error}</p>}
         </div>
       </div>
     </div>

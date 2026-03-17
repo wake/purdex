@@ -116,4 +116,50 @@ describe('TopBar', () => {
     const btn = screen.getByTestId('mode-btn-stream')
     expect(btn.textContent).toContain('▾')
   })
+
+  it('renders buttons in order: term → stream → jsonl', () => {
+    render(<TopBar {...defaultProps} />)
+    const modeSwitch = screen.getByTestId('mode-switch')
+    const buttons = modeSwitch.querySelectorAll('button')
+    // First button = term, second = stream, third = jsonl
+    expect(buttons[0].textContent).toContain('term')
+    expect(buttons[1].textContent).toContain('stream')
+    expect(buttons[2].textContent).toContain('jsonl')
+  })
+
+  it('closes dropdown on Escape key', () => {
+    const multiPresets = [
+      { name: 'cc', command: 'claude' },
+      { name: 'gemini', command: 'gemini-cli' },
+    ]
+    render(<TopBar {...defaultProps} streamPresets={multiPresets} />)
+    fireEvent.click(screen.getByTestId('mode-btn-stream'))
+    expect(screen.getByTestId('dropdown-stream')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('dropdown-stream')).toBeNull()
+  })
+
+  it('closes dropdown on click outside', () => {
+    const multiPresets = [
+      { name: 'cc', command: 'claude' },
+      { name: 'gemini', command: 'gemini-cli' },
+    ]
+    render(<TopBar {...defaultProps} streamPresets={multiPresets} />)
+    fireEvent.click(screen.getByTestId('mode-btn-stream'))
+    expect(screen.getByTestId('dropdown-stream')).toBeInTheDocument()
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByTestId('dropdown-stream')).toBeNull()
+  })
+
+  it('highlights active preset in dropdown', () => {
+    const multiPresets = [
+      { name: 'cc', command: 'claude' },
+      { name: 'gemini', command: 'gemini-cli' },
+    ]
+    render(<TopBar {...defaultProps} streamPresets={multiPresets} activePreset="cc" />)
+    fireEvent.click(screen.getByTestId('mode-btn-stream'))
+    const ccButton = screen.getByText('cc')
+    expect(ccButton.className).toContain('bg-[#404040]')
+    expect(ccButton.className).toContain('text-white')
+  })
 })

@@ -13,6 +13,8 @@ interface StreamState {
   cost: number
   conn: StreamConnection | null
   handoffState: HandoffState
+  handoffProgress: string
+  sessionStatus: Record<string, string>
 
   addMessage: (msg: StreamMessage) => void
   addControlRequest: (req: ControlRequest) => void
@@ -22,6 +24,8 @@ interface StreamState {
   addCost: (usd: number) => void
   setConn: (conn: StreamConnection | null) => void
   setHandoffState: (state: HandoffState) => void
+  setHandoffProgress: (progress: string) => void
+  setSessionStatus: (session: string, status: string) => void
   clear: () => void
 }
 
@@ -34,6 +38,8 @@ export const useStreamStore = create<StreamState>((set) => ({
   cost: 0,
   conn: null,
   handoffState: 'idle',
+  handoffProgress: '',
+  sessionStatus: {},
 
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
 
@@ -57,6 +63,11 @@ export const useStreamStore = create<StreamState>((set) => ({
 
   setHandoffState: (handoffState) => set({ handoffState }),
 
+  setHandoffProgress: (handoffProgress) => set({ handoffProgress }),
+
+  setSessionStatus: (session, status) =>
+    set((s) => ({ sessionStatus: { ...s.sessionStatus, [session]: status } })),
+
   clear: () => set({
     messages: [],
     pendingControlRequests: [],
@@ -65,5 +76,6 @@ export const useStreamStore = create<StreamState>((set) => ({
     model: null,
     cost: 0,
     handoffState: 'idle',
+    handoffProgress: '',
   }),
 }))

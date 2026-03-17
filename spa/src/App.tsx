@@ -7,6 +7,7 @@ import SettingsPanel from './components/SettingsPanel'
 import { useSessionStore } from './stores/useSessionStore'
 import { useStreamStore } from './stores/useStreamStore'
 import { useConfigStore } from './stores/useConfigStore'
+import { connectSessionEvents } from './lib/session-events'
 import { switchMode, handoff } from './lib/api'
 
 // TODO: daemonBase should come from host management (localStorage)
@@ -19,6 +20,7 @@ export default function App() {
   const { config, fetch: fetchConfig } = useConfigStore()
   const active = sessions.find((s) => s.id === activeId)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [activePreset, setActivePreset] = useState('')
 
   // Fetch sessions and config on mount
   useEffect(() => {
@@ -28,33 +30,29 @@ export default function App() {
 
   // Connect session-events WS on mount (for status updates)
   useEffect(() => {
-    let ws: WebSocket | null = null
-    try {
-      ws = new WebSocket(`${wsBase}/ws/session-events`)
-      ws.onmessage = (ev) => {
-        try {
-          const data = JSON.parse(ev.data)
-          if (data.type === 'session_update' || data.type === 'status_change') {
-            // Refresh sessions on any status event
-            fetchSessions(daemonBase)
-          }
-        } catch {
-          // ignore parse errors
+    const conn = connectSessionEvents(
+      `${wsBase}/ws/session-events`,
+      (event) => {
+        if (event.type === 'status') {
+          useStreamStore.getState().setSessionStatus(event.session, event.value)
+          // Refresh sessions on status change
+          fetchSessions(daemonBase)
         }
-      }
-      ws.onerror = () => { /* will reconnect on close */ }
-      ws.onclose = () => {
-        // Simple reconnect after 3s
-        setTimeout(() => {
-          // Component may have unmounted; this is best-effort
-        }, 3000)
-      }
-    } catch {
-      // WebSocket construction failed
-    }
-    return () => {
-      ws?.close()
-    }
+        if (event.type === 'handoff') {
+          const { setHandoffState, setHandoffProgress } = useStreamStore.getState()
+          if (event.value === 'connected') {
+            setHandoffState('connected')
+            setHandoffProgress('')
+          } else if (event.value.startsWith('failed')) {
+            setHandoffState('disconnected')
+            setHandoffProgress('')
+          } else {
+            setHandoffProgress(event.value)
+          }
+        }
+      },
+    )
+    return () => conn.close()
   }, [fetchSessions])
 
   // Switch to term mode
@@ -72,10 +70,13 @@ export default function App() {
   const handleHandoff = useCallback(async (mode: string, preset: string) => {
     if (!active) return
     try {
+      useStreamStore.getState().setHandoffState('handoff-in-progress')
+      setActivePreset(preset)
       await handoff(daemonBase, active.id, mode, preset)
       await fetchSessions(daemonBase)
     } catch (e) {
       console.error('handoff failed:', e)
+      useStreamStore.getState().setHandoffState('disconnected')
     }
   }, [active, fetchSessions])
 
@@ -97,6 +98,7 @@ export default function App() {
             mode={active.mode}
             streamPresets={streamPresets}
             jsonlPresets={jsonlPresets}
+            activePreset={activePreset}
             onModeChange={handleModeChange}
             onHandoff={handleHandoff}
             onInterrupt={handleInterrupt}
@@ -108,6 +110,8 @@ export default function App() {
               <ConversationView
                 wsUrl={`${wsBase}/ws/cli-bridge-sub/${encodeURIComponent(active.name)}`}
                 sessionName={active.name}
+                presetName={activePreset || streamPresets[0]?.name || 'cc'}
+                onHandoff={() => handleHandoff('stream', activePreset || streamPresets[0]?.name || 'cc')}
               />
             ) : (
               <TerminalView

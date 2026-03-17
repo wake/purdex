@@ -42,4 +42,24 @@ describe('HandoffButton', () => {
     expect(screen.getByText(/disconnected/i)).toBeInTheDocument()
     expect(screen.getByText('Start cc')).toBeInTheDocument()
   })
+
+  it('shows progress label for detecting', () => {
+    render(<HandoffButton presetName="cc" state="handoff-in-progress" progress="detecting" onHandoff={() => {}} />)
+    expect(screen.getByText('Detecting CC...')).toBeInTheDocument()
+  })
+
+  it('shows progress label for stopping-cc', () => {
+    render(<HandoffButton presetName="cc" state="handoff-in-progress" progress="stopping-cc" onHandoff={() => {}} />)
+    expect(screen.getByText('Stopping CC...')).toBeInTheDocument()
+  })
+
+  it('shows progress label for launching', () => {
+    render(<HandoffButton presetName="cc" state="handoff-in-progress" progress="launching" onHandoff={() => {}} />)
+    expect(screen.getByText('Launching relay...')).toBeInTheDocument()
+  })
+
+  it('falls back to Connecting... with empty progress', () => {
+    render(<HandoffButton presetName="cc" state="handoff-in-progress" progress="" onHandoff={() => {}} />)
+    expect(screen.getByText('Connecting...')).toBeInTheDocument()
+  })
 })
