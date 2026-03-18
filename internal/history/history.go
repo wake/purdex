@@ -69,7 +69,8 @@ func ParseJSONL(r io.Reader, maxBytes int64) ([]map[string]interface{}, error) {
 			}
 		}
 
-		// Filter CC internal markup in user string content (BEFORE normalization)
+		// Filter CC internal markup in user string content (BEFORE normalization).
+		// CC internal markup always uses string content, not content block arrays.
 		if typ == "user" {
 			if contentStr, ok := msg["content"].(string); ok {
 				if strings.HasPrefix(contentStr, "<local-command-stdout>") ||

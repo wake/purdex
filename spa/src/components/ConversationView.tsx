@@ -223,7 +223,7 @@ export default function ConversationView({ sessionName, onHandoff, onHandoffToTe
         {messages.map((msg, i) => {
           const key = `${sessionName}-${i}`
 
-          {/* --- Assistant messages --- */}
+          // --- Assistant messages ---
           if (msg.type === 'assistant' && 'message' in msg) {
             const am = msg as AssistantMessage
             return (
@@ -244,7 +244,7 @@ export default function ConversationView({ sessionName, onHandoff, onHandoffToTe
             )
           }
 
-          {/* --- User messages --- */}
+          // --- User messages ---
           if (msg.type === 'user' && 'message' in msg) {
             const um = msg as UserMessage
             const blocks = um.message.content
@@ -252,15 +252,15 @@ export default function ConversationView({ sessionName, onHandoff, onHandoffToTe
             return (
               <div key={key}>
                 {blocks.map((block, j) => {
-                  {/* Tool result */}
+                  // Tool result
                   if (block.type === 'tool_result') {
                     const content = typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
                     return <ToolResultBlock key={j} content={content} isError={block.is_error ?? false} />
                   }
 
-                  {/* Text blocks */}
+                  // Text blocks
                   if (block.type === 'text' && block.text) {
-                    {/* Interrupted */}
+                    // Interrupted
                     if (block.text === '[Request interrupted by user]') {
                       return (
                         <div key={j} data-testid="interrupted-msg"
@@ -271,7 +271,7 @@ export default function ConversationView({ sessionName, onHandoff, onHandoffToTe
                       )
                     }
 
-                    {/* Slash command */}
+                    // Slash command
                     if (block.text.startsWith('/')) {
                       return (
                         <div key={j} className="flex justify-end">
@@ -284,7 +284,7 @@ export default function ConversationView({ sessionName, onHandoff, onHandoffToTe
                       )
                     }
 
-                    {/* Normal user text */}
+                    // Normal user text
                     return <MessageBubble key={j} role="user" content={block.text} />
                   }
 

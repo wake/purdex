@@ -35,6 +35,7 @@ export default function ToolCallBlock({ tool, input }: Props) {
     <div className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] text-sm my-1 overflow-hidden">
       <button
         data-testid="tool-header"
+        aria-expanded={expanded}
         className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#252525] cursor-pointer text-left"
         onClick={() => setExpanded(v => !v)}
       >

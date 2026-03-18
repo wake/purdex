@@ -20,6 +20,7 @@ export default function ToolResultBlock({ content, isError }: Props) {
     >
       <button
         data-testid="tool-result-header"
+        aria-expanded={expanded}
         className={`w-full flex items-center gap-2 px-3 py-1.5 cursor-pointer text-left text-xs ${
           isError ? 'text-[#c77] hover:bg-[#251f1f]' : 'text-[#8bc] hover:bg-[#1f251f]'
         }`}

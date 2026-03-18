@@ -13,6 +13,7 @@ export default function ThinkingBlock({ content }: Props) {
     <div className="border-l-2 border-[#444] my-1">
       <button
         data-testid="thinking-header"
+        aria-expanded={expanded}
         className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-[#888] hover:text-[#bbb] cursor-pointer w-full text-left"
         onClick={() => setExpanded(v => !v)}
       >
