@@ -2,8 +2,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
+
+	"github.com/wake/tmux-box/internal/store"
 
 	"github.com/gorilla/websocket"
 )
@@ -50,12 +54,37 @@ func (s *Server) handleCliBridge(w http.ResponseWriter, r *http.Request) {
 	// Relay WS → bridge (subprocess stdout → SPA subscribers)
 	go func() {
 		defer cancel()
+		initCaptured := false
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
 				return
 			}
 			s.bridge.RelayToSubscribers(sessionName, msg)
+
+			// One-shot init metadata capture: extract model from CC init message
+			if !initCaptured && bytes.Contains(msg, []byte(`"subtype":"init"`)) {
+				var init struct {
+					Type    string `json:"type"`
+					Subtype string `json:"subtype"`
+					Model   string `json:"model"`
+				}
+				if json.Unmarshal(msg, &init) == nil && init.Type == "system" && init.Subtype == "init" {
+					initCaptured = true
+					if init.Model != "" {
+						sessions, err := s.store.ListSessions()
+						if err == nil {
+							for _, sess := range sessions {
+								if sess.Name == sessionName {
+									s.store.UpdateSession(sess.ID, store.SessionUpdate{CCModel: &init.Model})
+									s.events.Broadcast(sessionName, "init", init.Model)
+									break
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 	}()
 
