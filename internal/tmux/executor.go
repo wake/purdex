@@ -178,13 +178,14 @@ type KeysCall struct {
 }
 
 type FakeExecutor struct {
-	sessions      map[string]TmuxSession
-	paneCommands  map[string]string   // target → command name
-	paneContents  map[string]string   // target → captured text
-	paneChildren  map[string][]string // target → child command names
-	paneSizes     map[string][2]int   // target → [cols, rows]
-	rawKeysCalls  []RawKeysCall
-	keysCalls     []KeysCall
+	sessions         map[string]TmuxSession
+	paneCommands     map[string]string   // target → command name
+	paneContents     map[string]string   // target → captured text
+	paneChildren     map[string][]string // target → child command names
+	paneSizes        map[string][2]int   // target → [cols, rows]
+	rawKeysCalls     []RawKeysCall
+	keysCalls        []KeysCall
+	autoResizeCalls  []string // targets passed to ResizeWindowAuto
 }
 
 func NewFakeExecutor() *FakeExecutor {
@@ -308,5 +309,10 @@ func (f *FakeExecutor) ResizeWindow(target string, cols, rows int) error {
 }
 
 func (f *FakeExecutor) ResizeWindowAuto(target string) error {
+	f.autoResizeCalls = append(f.autoResizeCalls, target)
 	return nil
+}
+
+func (f *FakeExecutor) AutoResizeCalls() []string {
+	return f.autoResizeCalls
 }
