@@ -41,4 +41,24 @@ describe('ToolCallBlock', () => {
     render(<ToolCallBlock tool="WebFetch" input={{ url: 'https://example.com' }} />)
     expect(screen.getByText(/example\.com/)).toBeInTheDocument()
   })
+
+  it('uses unified wrench icon for all tools', () => {
+    const { container } = render(<ToolCallBlock tool="Bash" input={{}} />)
+    expect(container.querySelector('[data-testid="tool-icon-wrench"]')).toBeInTheDocument()
+  })
+
+  it('shows description for Agent tool', () => {
+    render(<ToolCallBlock tool="Agent" input={{ description: 'Explore handoff code' }} />)
+    expect(screen.getByText(/Explore handoff code/)).toBeInTheDocument()
+  })
+
+  it('shows pattern for Grep tool', () => {
+    render(<ToolCallBlock tool="Grep" input={{ pattern: 'TODO' }} />)
+    expect(screen.getByText(/TODO/)).toBeInTheDocument()
+  })
+
+  it('shows pattern for Glob tool', () => {
+    render(<ToolCallBlock tool="Glob" input={{ pattern: '**/*.ts' }} />)
+    expect(screen.getByText(/\*\*\/\*\.ts/)).toBeInTheDocument()
+  })
 })
