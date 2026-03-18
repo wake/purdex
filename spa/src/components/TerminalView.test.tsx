@@ -1,9 +1,14 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, act } from '@testing-library/react'
 import TerminalView from './TerminalView'
 
-const { mockClose, TerminalSpy } = vi.hoisted(() => {
+const { mockClose, TerminalSpy, capturedCallbacks } = vi.hoisted(() => {
   const mockClose = vi.fn()
+  const capturedCallbacks: {
+    onData?: (data: ArrayBuffer) => void
+    onClose?: () => void
+    onOpen?: () => void
+  } = {}
   const TerminalSpy = vi.fn(function (opts: Record<string, unknown>) {
     ;(this as unknown as Record<string, unknown>)._opts = opts
     return {
@@ -19,7 +24,7 @@ const { mockClose, TerminalSpy } = vi.hoisted(() => {
       _opts: opts,
     }
   })
-  return { mockClose, TerminalSpy }
+  return { mockClose, TerminalSpy, capturedCallbacks }
 })
 
 // xterm.js requires DOM APIs not available in jsdom, so we test mounting only
@@ -45,10 +50,15 @@ vi.mock('@xterm/addon-webgl', () => ({
 }))
 
 vi.mock('../lib/ws', () => ({
-  connectTerminal: vi.fn().mockReturnValue({
-    send: vi.fn(),
-    resize: vi.fn(),
-    close: mockClose,
+  connectTerminal: vi.fn((_url: string, onData: () => void, onClose: () => void, onOpen: () => void) => {
+    capturedCallbacks.onData = onData
+    capturedCallbacks.onClose = onClose
+    capturedCallbacks.onOpen = onOpen
+    return {
+      send: vi.fn(),
+      resize: vi.fn(),
+      close: mockClose,
+    }
   }),
 }))
 
@@ -93,5 +103,39 @@ describe('TerminalView', () => {
     const overlay = container.querySelector('[data-testid="terminal-overlay"]')
     expect(overlay).toBeInTheDocument()
     expect(overlay?.getAttribute('style')).toContain('opacity: 1')
+  })
+
+  it('shows reconnecting overlay on disconnect', () => {
+    const { container } = render(
+      <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" />
+    )
+    // Simulate open then disconnect
+    act(() => capturedCallbacks.onOpen?.())
+    act(() => capturedCallbacks.onClose?.())
+
+    const overlay = container.querySelector('[data-testid="terminal-overlay"]')
+    expect(overlay).toBeInTheDocument()
+    expect(overlay?.getAttribute('style')).toContain('opacity: 1')
+    // 50% transparent background, not fully opaque
+    expect(overlay?.getAttribute('style')).toContain('0.5')
+    expect(overlay?.textContent).toContain('reconnecting...')
+  })
+
+  it('hides reconnecting overlay on reconnect', () => {
+    const { container } = render(
+      <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" />
+    )
+    act(() => capturedCallbacks.onOpen?.())
+    act(() => capturedCallbacks.onClose?.())
+
+    // Overlay should be visible
+    let overlay = container.querySelector('[data-testid="terminal-overlay"]')
+    expect(overlay?.getAttribute('style')).toContain('opacity: 1')
+
+    // Simulate reconnect
+    act(() => capturedCallbacks.onOpen?.())
+
+    overlay = container.querySelector('[data-testid="terminal-overlay"]')
+    expect(overlay?.getAttribute('style')).toContain('opacity: 0')
   })
 })
