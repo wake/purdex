@@ -2,8 +2,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
+
+	"github.com/wake/tmux-box/internal/store"
 
 	"github.com/gorilla/websocket"
 )
@@ -37,7 +41,9 @@ func (s *Server) handleCliBridge(w http.ResponseWriter, r *http.Request) {
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, err.Error()))
 		return
 	}
+	s.events.Broadcast(sessionName, "relay", "connected")
 	defer func() {
+		s.events.Broadcast(sessionName, "relay", "disconnected")
 		s.bridge.UnregisterRelay(sessionName)
 		// When relay disconnects, revert session mode to "term" if it was in stream/jsonl.
 		// This prevents the session from being stuck in stream mode after a failed handoff.
@@ -50,12 +56,31 @@ func (s *Server) handleCliBridge(w http.ResponseWriter, r *http.Request) {
 	// Relay WS → bridge (subprocess stdout → SPA subscribers)
 	go func() {
 		defer cancel()
+		initCaptured := false
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
 				return
 			}
 			s.bridge.RelayToSubscribers(sessionName, msg)
+
+			// One-shot init metadata capture: extract model from CC init message
+			if !initCaptured && bytes.Contains(msg, []byte(`"subtype":"init"`)) {
+				var init struct {
+					Type    string `json:"type"`
+					Subtype string `json:"subtype"`
+					Model   string `json:"model"`
+				}
+				if json.Unmarshal(msg, &init) == nil && init.Type == "system" && init.Subtype == "init" {
+					initCaptured = true
+					if init.Model != "" {
+						if sess, err := s.store.GetSessionByName(sessionName); err == nil {
+							s.store.UpdateSession(sess.ID, store.SessionUpdate{CCModel: &init.Model})
+							s.events.Broadcast(sessionName, "init", init.Model)
+						}
+					}
+				}
+			}
 		}
 	}()
 

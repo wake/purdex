@@ -9,19 +9,27 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/wake/tmux-box/internal/bridge"
 	"github.com/wake/tmux-box/internal/store"
 	"github.com/wake/tmux-box/internal/tmux"
 )
 
 var validSessionName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-type SessionHandler struct {
-	store *store.Store
-	tmux  tmux.Executor
+// SessionResponse wraps store.Session with runtime state for API responses.
+type SessionResponse struct {
+	store.Session
+	HasRelay bool `json:"has_relay"`
 }
 
-func NewSessionHandler(s *store.Store, t tmux.Executor) *SessionHandler {
-	return &SessionHandler{store: s, tmux: t}
+type SessionHandler struct {
+	store  *store.Store
+	tmux   tmux.Executor
+	bridge *bridge.Bridge
+}
+
+func NewSessionHandler(s *store.Store, t tmux.Executor, b *bridge.Bridge) *SessionHandler {
+	return &SessionHandler{store: s, tmux: t, bridge: b}
 }
 
 type switchModeReq struct {
@@ -88,11 +96,15 @@ func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	if sessions == nil {
-		sessions = []store.Session{}
+	result := make([]SessionResponse, len(sessions))
+	for i, s := range sessions {
+		result[i] = SessionResponse{
+			Session:  s,
+			HasRelay: h.bridge.HasRelay(s.Name),
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sessions)
+	json.NewEncoder(w).Encode(result)
 }
 
 // syncTmuxSessions discovers tmux sessions not yet tracked in SQLite and adds them.

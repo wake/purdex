@@ -1,7 +1,7 @@
 // spa/src/lib/session-events.ts
 
 export interface SessionEvent {
-  type: 'status' | 'handoff'
+  type: 'status' | 'handoff' | 'relay'
   session: string
   value: string
 }

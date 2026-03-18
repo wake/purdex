@@ -47,12 +47,13 @@ func New(cfg config.Config, st *store.Store, tx tmux.Executor, cfgPath string) *
 }
 
 func (s *Server) routes() {
-	sh := NewSessionHandler(s.store, s.tmux)
+	sh := NewSessionHandler(s.store, s.tmux, s.bridge)
 	s.mux.HandleFunc("GET /api/sessions", sh.List)
 	s.mux.HandleFunc("POST /api/sessions", sh.Create)
 	s.mux.HandleFunc("DELETE /api/sessions/{id}", sh.Delete)
 	s.mux.HandleFunc("POST /api/sessions/{id}/mode", sh.SwitchMode)
 	s.mux.HandleFunc("POST /api/sessions/{id}/handoff", s.handleHandoff)
+	s.mux.HandleFunc("GET /api/sessions/{id}/history", s.handleHistory)
 	s.mux.HandleFunc("/ws/terminal/{session}", s.handleTerminal)
 	s.mux.HandleFunc("/ws/cli-bridge/{session}", s.handleCliBridge)
 	s.mux.HandleFunc("/ws/cli-bridge-sub/{session}", s.handleCliBridgeSubscribe)

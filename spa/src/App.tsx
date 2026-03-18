@@ -8,7 +8,9 @@ import { useSessionStore } from './stores/useSessionStore'
 import { useStreamStore } from './stores/useStreamStore'
 import { useConfigStore } from './stores/useConfigStore'
 import { connectSessionEvents } from './lib/session-events'
-import { handoff } from './lib/api'
+import { handoff, fetchHistory } from './lib/api'
+import { useRelayWsManager } from './hooks/useRelayWsManager'
+import type { SessionStatus } from './components/SessionStatusBadge'
 
 // TODO: daemonBase should come from host management (localStorage)
 const daemonBase = 'http://100.64.0.2:7860'
@@ -55,9 +57,8 @@ export default function App() {
   const active = sessions.find((s) => s.uid === route.uid) || null
   const currentMode = route.mode
 
-  const sessionStatus = useStreamStore((s) =>
-    active ? s.sessionStatus[active.name] : undefined
-  )
+  // Relay WS lifecycle — driven by relayStatus from session-events
+  useRelayWsManager(wsBase)
 
   // Fetch sessions and config on mount
   useEffect(() => {
@@ -71,21 +72,33 @@ export default function App() {
       `${wsBase}/ws/session-events`,
       (event) => {
         if (event.type === 'status') {
-          useStreamStore.getState().setSessionStatus(event.session, event.value as import('./components/SessionStatusBadge').SessionStatus)
+          useStreamStore.getState().setSessionStatus(event.session, event.value as SessionStatus)
           fetchSessions(daemonBase)
         }
+        if (event.type === 'relay') {
+          useStreamStore.getState().setRelayStatus(event.session, event.value === 'connected')
+        }
         if (event.type === 'handoff') {
-          const { setHandoffState, setHandoffProgress } = useStreamStore.getState()
+          const store = useStreamStore.getState()
           if (event.value === 'connected') {
-            setHandoffState('connected')
-            setHandoffProgress('')
+            store.setHandoffState(event.session, 'connected')
+            store.setHandoffProgress(event.session, '')
             fetchSessions(daemonBase)
+            // Fetch history after handoff:connected (cc_session_id is now in DB)
+            const sess = useSessionStore.getState().sessions.find((s) => s.name === event.session)
+            if (sess) {
+              fetchHistory(daemonBase, sess.id).then((msgs) => {
+                if (msgs.length > 0) {
+                  useStreamStore.getState().loadHistory(event.session, msgs)
+                }
+              }).catch(() => { /* history fetch failed — non-critical */ })
+            }
           } else if (event.value.startsWith('failed')) {
-            setHandoffState('disconnected')
-            setHandoffProgress('')
-            fetchSessions(daemonBase) // refetch to sync mode from DB
+            store.setHandoffState(event.session, 'disconnected')
+            store.setHandoffProgress(event.session, '')
+            fetchSessions(daemonBase)
           } else {
-            setHandoffProgress(event.value)
+            store.setHandoffProgress(event.session, event.value)
           }
         }
       },
@@ -110,12 +123,12 @@ export default function App() {
     if (!active) return
     setActivePreset(preset)
     try {
-      useStreamStore.getState().setHandoffState('handoff-in-progress')
+      useStreamStore.getState().setHandoffState(active.name, 'handoff-in-progress')
       await handoff(daemonBase, active.id, mode, preset)
       await fetchSessions(daemonBase)
     } catch (e) {
       console.error('handoff failed:', e)
-      useStreamStore.getState().setHandoffState('disconnected')
+      useStreamStore.getState().setHandoffState(active.name, 'disconnected')
     }
   }, [active, fetchSessions])
 
@@ -123,12 +136,12 @@ export default function App() {
     if (!active) return
     setHash(active.uid, 'term')
     try {
-      useStreamStore.getState().setHandoffState('handoff-in-progress')
+      useStreamStore.getState().setHandoffState(active.name, 'handoff-in-progress')
       await handoff(daemonBase, active.id, 'term')
       await fetchSessions(daemonBase)
     } catch (e) {
       console.error('handoff to term failed:', e)
-      useStreamStore.getState().setHandoffState('disconnected')
+      useStreamStore.getState().setHandoffState(active.name, 'disconnected')
     }
   }, [active, fetchSessions])
 
@@ -164,8 +177,7 @@ export default function App() {
                 height: '100%',
               }}>
                 <ConversationView
-                  wsUrl={`${wsBase}/ws/cli-bridge-sub/${encodeURIComponent(active.name)}`}
-                  sessionStatus={sessionStatus}
+                  sessionName={active.name}
                   onHandoff={() => handleHandoff('stream', activePreset || streamPresets[0]?.name || 'cc')}
                   onHandoffToTerm={handleHandoffToTerm}
                 />

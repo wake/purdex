@@ -1,12 +1,10 @@
 // spa/src/components/ConversationView.tsx
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useRef, useCallback, useState, useEffect } from 'react'
 import { useStreamStore } from '../stores/useStreamStore'
 import {
-  connectStream,
   type StreamMessage,
   type AssistantMessage,
   type UserMessage,
-  type SystemMessage,
   type ControlRequest,
 } from '../lib/stream-ws'
 import MessageBubble from './MessageBubble'
@@ -18,90 +16,34 @@ import ThinkingIndicator from './ThinkingIndicator'
 import FileAttachment, { type AttachedFile } from './FileAttachment'
 import HandoffButton from './HandoffButton'
 
-import type { SessionStatus } from './SessionStatusBadge'
-
 interface Props {
-  wsUrl: string
-  sessionStatus?: SessionStatus
+  sessionName: string
   onHandoff?: () => void
   onHandoffToTerm?: () => void
 }
 
-export default function ConversationView({ wsUrl, sessionStatus, onHandoff, onHandoffToTerm }: Props) {
-  const connRef = useRef<ReturnType<typeof connectStream> | null>(null)
+const EMPTY_MESSAGES: StreamMessage[] = []
+const EMPTY_CONTROLS: ControlRequest[] = []
+
+export default function ConversationView({ sessionName, onHandoff, onHandoffToTerm }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const prevWsUrlRef = useRef<string>('')
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const dragCounter = useRef(0)
-  const {
-    messages,
-    pendingControlRequests,
-    isStreaming,
-    handoffState,
-    handoffProgress,
-    addMessage,
-    addControlRequest,
-    resolveControlRequest,
-    setStreaming,
-    setSessionInfo,
-    addCost,
-    setConn,
-    setHandoffState,
-    clear,
-  } = useStreamStore()
+
+  // Read per-session state from store
+  const messages = useStreamStore((s) => s.sessions[sessionName]?.messages ?? EMPTY_MESSAGES)
+  const pendingControlRequests = useStreamStore((s) => s.sessions[sessionName]?.pendingControlRequests ?? EMPTY_CONTROLS)
+  const isStreaming = useStreamStore((s) => s.sessions[sessionName]?.isStreaming ?? false)
+  const conn = useStreamStore((s) => s.sessions[sessionName]?.conn ?? null)
+  const handoffState = useStreamStore((s) => s.handoffState[sessionName] ?? 'idle')
+  const handoffProgress = useStreamStore((s) => s.handoffProgress[sessionName] ?? '')
+  const sessionStatus = useStreamStore((s) => s.sessionStatus[sessionName])
 
   // ThinkingIndicator: visible when streaming and no assistant messages yet
   const hasAssistantMessage = messages.some((m) => m.type === 'assistant')
   const showThinking = isStreaming && !hasAssistantMessage
-
-  useEffect(() => {
-    // Only clear when switching to a different session, not on re-mount
-    if (prevWsUrlRef.current && prevWsUrlRef.current !== wsUrl) {
-      clear()
-    }
-    prevWsUrlRef.current = wsUrl
-
-    const conn = connectStream(
-      wsUrl,
-      (msg) => {
-        if (msg.type === 'system') {
-          const sys = msg as SystemMessage
-          if (sys.subtype === 'init') {
-            setSessionInfo(sys.session_id ?? '', sys.model ?? '')
-            setHandoffState('connected')
-          }
-          return
-        }
-        if (msg.type === 'control_request') {
-          addControlRequest(msg as ControlRequest)
-          return
-        }
-        if (msg.type === 'result' && 'total_cost_usd' in msg) {
-          addCost((msg as { total_cost_usd?: number }).total_cost_usd || 0)
-          setStreaming(false)
-          return
-        }
-        if (msg.type === 'assistant' || msg.type === 'user') {
-          addMessage(msg)
-        }
-      },
-      () => {
-        setStreaming(false)
-        setHandoffState('disconnected')
-      },
-      // onOpen: intentionally no-op — isStreaming is set in handleSend
-    )
-    connRef.current = conn
-    setConn(conn)
-
-    return () => {
-      conn.close()
-      connRef.current = null
-      setConn(null)
-    }
-  }, [wsUrl]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll on new messages or control requests
   useEffect(() => {
@@ -111,12 +53,11 @@ export default function ConversationView({ wsUrl, sessionStatus, onHandoff, onHa
   }, [messages, pendingControlRequests])
 
   const handleSend = useCallback((text: string) => {
-    connRef.current?.send({
+    conn?.send({
       type: 'user',
       message: { role: 'user', content: text },
     })
-    // Add user message locally for immediate display
-    addMessage({
+    useStreamStore.getState().addMessage(sessionName, {
       type: 'user' as const,
       message: {
         role: 'user',
@@ -124,26 +65,25 @@ export default function ConversationView({ wsUrl, sessionStatus, onHandoff, onHa
         stop_reason: null,
       },
     } as StreamMessage)
-    setStreaming(true)
-    // Clear attached files after send
+    useStreamStore.getState().setStreaming(sessionName, true)
     setAttachedFiles([])
-  }, [addMessage, setStreaming])
+  }, [conn, sessionName])
 
   const handleAllow = useCallback((req: ControlRequest) => {
-    connRef.current?.sendControlResponse(req.request_id, {
+    conn?.sendControlResponse(req.request_id, {
       behavior: 'allow',
       updatedInput: req.request.input,
     })
-    resolveControlRequest(req.request_id)
-  }, [resolveControlRequest])
+    useStreamStore.getState().resolveControlRequest(sessionName, req.request_id)
+  }, [conn, sessionName])
 
   const handleDeny = useCallback((req: ControlRequest) => {
-    connRef.current?.sendControlResponse(req.request_id, {
+    conn?.sendControlResponse(req.request_id, {
       behavior: 'deny',
       message: 'User denied',
     })
-    resolveControlRequest(req.request_id)
-  }, [resolveControlRequest])
+    useStreamStore.getState().resolveControlRequest(sessionName, req.request_id)
+  }, [conn, sessionName])
 
   const handleAskAnswer = useCallback((req: ControlRequest, answer: string) => {
     const input = req.request.input as Record<string, unknown> | undefined
@@ -151,15 +91,15 @@ export default function ConversationView({ wsUrl, sessionStatus, onHandoff, onHa
     const questionText = questions.length > 0
       ? (questions[0].question as string) || ''
       : ''
-    connRef.current?.sendControlResponse(req.request_id, {
+    conn?.sendControlResponse(req.request_id, {
       behavior: 'allow',
       updatedInput: {
         questions,
         answers: { [questionText]: answer },
       },
     })
-    resolveControlRequest(req.request_id)
-  }, [resolveControlRequest])
+    useStreamStore.getState().resolveControlRequest(sessionName, req.request_id)
+  }, [conn, sessionName])
 
   const handleRemoveFile = useCallback((index: number) => {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index))
@@ -228,9 +168,9 @@ export default function ConversationView({ wsUrl, sessionStatus, onHandoff, onHa
     if (onHandoff) {
       onHandoff()
     } else {
-      setHandoffState('handoff-in-progress')
+      useStreamStore.getState().setHandoffState(sessionName, 'handoff-in-progress')
     }
-  }, [onHandoff, setHandoffState])
+  }, [onHandoff, sessionName])
 
   // When handoffState is not 'connected', show the HandoffButton overlay
   if (handoffState !== 'connected') {
@@ -278,7 +218,7 @@ export default function ConversationView({ wsUrl, sessionStatus, onHandoff, onHa
           </div>
         )}
         {messages.map((msg, i) => {
-          const key = `${wsUrl}-${i}`
+          const key = `${sessionName}-${i}`
           if (msg.type === 'assistant' && 'message' in msg) {
             const am = msg as AssistantMessage
             const content = am.message.content

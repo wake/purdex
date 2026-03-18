@@ -2,6 +2,7 @@
 package server_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -19,16 +20,24 @@ import (
 // setupServer creates a test HTTP server with real bridge wiring.
 func setupServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	_, srv := setupServerWithDB(t)
+	return srv
+}
+
+// setupServerWithDB creates a test server and returns the DB for direct assertions.
+func setupServerWithDB(t *testing.T) (*store.Store, *httptest.Server) {
+	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	cfg := config.Config{} // no token/IP restriction for tests
-	s := server.New(cfg, db, tmux.NewFakeExecutor(), "")
+	cfg := config.Config{}
+	tx := tmux.NewFakeExecutor()
+	s := server.New(cfg, db, tx, "")
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
-	return srv
+	return db, srv
 }
 
 func wsURL(srv *httptest.Server, path string) string {
@@ -124,6 +133,84 @@ func TestBridgeSubscribeNoRelay(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestBridgeInitMetadataSavesToDB(t *testing.T) {
+	db, srv := setupServerWithDB(t)
+
+	// Create session in DB
+	sessID, err := db.CreateSession(store.Session{Name: "model-test", Cwd: "/tmp", Mode: "stream"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Connect relay
+	relay := dial(t, wsURL(srv, "/ws/cli-bridge/model-test"))
+	defer relay.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// Relay sends init message (simulating CC output)
+	relay.WriteMessage(websocket.TextMessage, []byte(
+		`{"type":"system","subtype":"init","model":"claude-opus-4-6","session_id":"xyz"}`,
+	))
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify DB has the model
+	got, err := db.GetSession(sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CCModel != "claude-opus-4-6" {
+		t.Fatalf("want claude-opus-4-6, got %q", got.CCModel)
+	}
+}
+
+func TestSessionListIncludesHasRelay(t *testing.T) {
+	db, srv := setupServerWithDB(t)
+
+	// Create session
+	db.CreateSession(store.Session{Name: "relay-dto", Cwd: "/tmp", Mode: "term"})
+
+	// Before relay: has_relay should be false
+	resp, _ := http.Get(srv.URL + "/api/sessions")
+	var sessions []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&sessions)
+	resp.Body.Close()
+
+	var found map[string]interface{}
+	for _, s := range sessions {
+		if s["name"] == "relay-dto" {
+			found = s
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("session not found")
+	}
+	if found["has_relay"] != false {
+		t.Fatalf("want has_relay=false before relay, got %v", found["has_relay"])
+	}
+
+	// Connect relay
+	relay := dial(t, wsURL(srv, "/ws/cli-bridge/relay-dto"))
+	defer relay.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// After relay: has_relay should be true
+	resp, _ = http.Get(srv.URL + "/api/sessions")
+	json.NewDecoder(resp.Body).Decode(&sessions)
+	resp.Body.Close()
+
+	found = nil
+	for _, s := range sessions {
+		if s["name"] == "relay-dto" {
+			found = s
+			break
+		}
+	}
+	if found["has_relay"] != true {
+		t.Fatalf("want has_relay=true after relay, got %v", found["has_relay"])
 	}
 }
 
