@@ -81,18 +81,25 @@ export default function App() {
         if (event.type === 'handoff') {
           const store = useStreamStore.getState()
           if (event.value === 'connected') {
-            store.setHandoffState(event.session, 'connected')
             store.setHandoffProgress(event.session, '')
-            fetchSessions(daemonBase)
-            // Fetch history after handoff:connected (cc_session_id is now in DB)
-            const sess = useSessionStore.getState().sessions.find((s) => s.name === event.session)
-            if (sess) {
-              fetchHistory(daemonBase, sess.id).then((msgs) => {
-                if (msgs.length > 0) {
+            // Wait for fresh session data to determine mode before setting final state
+            fetchSessions(daemonBase).then(() => {
+              const sess = useSessionStore.getState().sessions.find((s) => s.name === event.session)
+              if (sess && sess.mode !== 'term') {
+                // Stream/JSONL handoff — mark connected and load conversation history
+                useStreamStore.getState().setHandoffState(event.session, 'connected')
+                fetchHistory(daemonBase, sess.id).then((msgs) => {
                   useStreamStore.getState().loadHistory(event.session, msgs)
-                }
-              }).catch(() => { /* history fetch failed — non-critical */ })
-            }
+                }).catch(() => { /* history fetch failed — non-critical */ })
+              } else {
+                // Term handoff — clear stale per-session state and reset to idle
+                useStreamStore.getState().clearSession(event.session)
+                useStreamStore.getState().setHandoffState(event.session, 'idle')
+              }
+            }).catch(() => {
+              // fetchSessions failed — fall back to idle (safe default)
+              useStreamStore.getState().setHandoffState(event.session, 'idle')
+            })
           } else if (event.value.startsWith('failed')) {
             store.setHandoffState(event.session, 'disconnected')
             store.setHandoffProgress(event.session, '')
