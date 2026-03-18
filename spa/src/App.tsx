@@ -81,18 +81,26 @@ export default function App() {
         if (event.type === 'handoff') {
           const store = useStreamStore.getState()
           if (event.value === 'connected') {
-            store.setHandoffState(event.session, 'connected')
             store.setHandoffProgress(event.session, '')
-            fetchSessions(daemonBase)
-            // Fetch history after handoff:connected (cc_session_id is now in DB)
-            const sess = useSessionStore.getState().sessions.find((s) => s.name === event.session)
-            if (sess) {
-              fetchHistory(daemonBase, sess.id).then((msgs) => {
-                if (msgs.length > 0) {
-                  useStreamStore.getState().loadHistory(event.session, msgs)
-                }
-              }).catch(() => { /* history fetch failed — non-critical */ })
-            }
+            // Wait for fresh session data to determine mode before setting final state
+            fetchSessions(daemonBase).then(() => {
+              const sess = useSessionStore.getState().sessions.find((s) => s.name === event.session)
+              if (sess && sess.mode !== 'term') {
+                // Stream/JSONL handoff — mark connected and load conversation history
+                useStreamStore.getState().setHandoffState(event.session, 'connected')
+                fetchHistory(daemonBase, sess.id).then((msgs) => {
+                  if (msgs.length > 0) {
+                    useStreamStore.getState().loadHistory(event.session, msgs)
+                  }
+                }).catch(() => { /* history fetch failed — non-critical */ })
+              } else {
+                // Term handoff — reset to idle so stream page shows HandoffButton
+                useStreamStore.getState().setHandoffState(event.session, 'idle')
+              }
+            }).catch(() => {
+              // fetchSessions failed — fall back to connected
+              useStreamStore.getState().setHandoffState(event.session, 'connected')
+            })
           } else if (event.value.startsWith('failed')) {
             store.setHandoffState(event.session, 'disconnected')
             store.setHandoffProgress(event.session, '')

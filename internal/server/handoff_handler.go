@@ -314,6 +314,15 @@ func (s *Server) runHandoffToTerm(sess store.Session, handoffID string) {
 	}
 	sessionID := current.CCSessionID
 
+	// Step 1.5: Pre-update mode to "term" before shutting down relay.
+	// This prevents revertModeOnRelayDisconnect from firing a spurious
+	// "failed:relay disconnected" event during an intentional handoff.
+	termMode := "term"
+	if err := s.store.UpdateSession(sess.ID, store.SessionUpdate{Mode: &termMode}); err != nil {
+		broadcast("failed:db pre-update error: " + err.Error())
+		return
+	}
+
 	// Step 2: Shut down relay
 	if s.bridge.HasRelay(sess.Name) {
 		broadcast("stopping-relay")
@@ -368,11 +377,9 @@ func (s *Server) runHandoffToTerm(sess store.Session, handoffID string) {
 		return
 	}
 
-	// Step 6: Update DB (mode=term, clear cc_session_id)
-	termMode := "term"
+	// Step 6: Update DB (clear cc_session_id; mode already set to "term" in step 1.5)
 	emptyID := ""
 	if err := s.store.UpdateSession(sess.ID, store.SessionUpdate{
-		Mode:        &termMode,
 		CCSessionID: &emptyID,
 	}); err != nil {
 		broadcast("failed:db update error: " + err.Error())
