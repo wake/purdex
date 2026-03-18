@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.5.0] - 2026-03-18
+
+Stream Message UI — 完整渲染所有 CC 訊息類型
+
+### 新增
+
+- **ThinkingBlock** — 可摺疊的 thinking 區塊（Brain icon，collapsed by default）
+- **ToolResultBlock** — 可摺疊的 tool result 顯示（CheckCircle/XCircle 區分成功/錯誤）
+- **Slash command 氣泡** — `/exit`、`/status` 等指令以黃棕色氣泡顯示（TerminalWindow bold icon）
+- **Interrupted 提示** — 中斷訊息靠左紅棕色顯示（Prohibit icon）
+- **@tailwindcss/typography** — 啟用 prose markdown 樣式
+
+### 修改
+
+- **MessageBubble** — User: 藍色氣泡靠右；Assistant: 移除氣泡，直接 prose markdown 輸出（Cowork 風格）
+- **ToolCallBlock** — 統一 Wrench icon（移除 per-tool icons），新增 Agent/Grep/Glob summary
+- **ConversationView** — 接線所有 content block 類型（thinking、tool_use、tool_result、text、command、interrupted）
+
+### 修復
+
+- **ParseJSONL 過濾 CC 內部標記** — 跳過 `isMeta`、`<local-command-caveat>`、`<local-command-stdout>`、`<synthetic>` assistant；解析 `<command-name>` 為乾淨文字
+- **aria-expanded** — 所有可摺疊元件加入無障礙屬性
+
 ## [0.4.2] - 2026-03-18
 
 Bugfix: 從 CC `/status` 取得 cwd，修復空 cwd session 的歷史載入
