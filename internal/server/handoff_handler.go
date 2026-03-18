@@ -138,11 +138,11 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 //  1. Disconnect existing relay if present
 //  2. Verify CC is running (prerequisite)
 //  3. If CC is busy, interrupt to idle
-//  4. Extract session ID via /status
+//  4. Extract session ID + cwd via /status
 //  5. Exit CC gracefully
 //  6. Launch tbox relay with --resume
 //  7. Wait for relay to connect back via cli-bridge
-//  8. Update DB (mode + cc_session_id) and broadcast success
+//  8. Update DB (mode + cc_session_id + cwd) and broadcast success
 func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token string, port int, bind string) {
 	defer s.handoffLocks.Unlock(sess.Name)
 
