@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.1] - 2026-03-18
+
+Bugfix: Handoff tmux target、pane resize、xterm.js 選取
+
+### 修復
+
+- **Handoff tmux target 解析** — 所有 tmux 操作改用 `sess.TmuxTarget`（session:window 格式），避免 bare session name 被 tmux 模糊解析到錯誤的 pane
+- **Handoff pane resize** — xterm.js 在 `display:none` 時 PTY 尺寸過小（10x5），tmux smallest-client 規則縮小 pane，`/status` TUI 渲染錯亂。relay PTY 預設 80x24，handoff 前檢查 pane 尺寸並 resize window
+- **xterm.js 文字選取** — 啟用 `macOptionClickForcesSelection` 和 `rightClickSelectsWord`，抑制 terminal container 的右鍵選單
+
 ## [0.5.0] - 2026-03-18
 
 Stream Message UI — 完整渲染所有 CC 訊息類型
