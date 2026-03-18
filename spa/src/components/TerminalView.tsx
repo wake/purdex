@@ -103,6 +103,9 @@ export default function TerminalView({ wsUrl, visible = true }: Props) {
       setReady(false)
       requestAnimationFrame(() => {
         fitAddonRef.current?.fit()
+        // Explicitly send resize even if fit() didn't change dimensions,
+        // because tmux window may have been resized during stream mode
+        // and onResize won't fire when cols/rows stay the same.
         const term = termRef.current
         const conn = connRef.current
         if (term && conn) {
