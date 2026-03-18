@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.2] - 2026-03-19
+
+架構重構：Stream UI 狀態改由 server-derived relayStatus 驅動
+
+### 重構
+
+- **ConversationView 改用 relayStatus** — 不再依賴 ephemeral `handoffState`，改為 `relayStatus[session]` 作為 single source of truth。Page refresh / WS 重連後自動恢復 stream UI 狀態
+- **移除 handoffState** — store 中的 `HandoffState` type、`handoffState` map、`setHandoffState` action 全部移除
+- **HandoffButton 簡化** — props 從 `state: HandoffState` 改為 `inProgress: boolean`
+
+### 新增
+
+- **TerminalView `visible` prop** — 切回 term tab 時自動 refit + resize，用遮罩擋住 500ms 等待 tmux 調整完畢再 fadeout
+
+### 修復
+
+- **Handoff 前退出 copy-mode** — 發送 Escape + C-u 退出 tmux 捲動模式並清空輸入，避免 send-keys 注入失敗
+- **Handoff Escape error check** — SendKeysRaw(Escape) 失敗時提早返回
+
 ## [0.5.1] - 2026-03-18
 
 Bugfix: Handoff tmux target、pane resize、xterm.js 選取
