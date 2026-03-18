@@ -150,8 +150,8 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 		s.events.Broadcast(sess.Name, "handoff", value)
 	}
 
-	// Use TmuxTarget (session:window.pane format) for all tmux operations to
-	// prevent ambiguous target resolution that sends commands to wrong panes.
+	// Use TmuxTarget (session:window format, e.g. "myapp:0") for all tmux
+	// Executor calls to prevent ambiguous target resolution.
 	target := sess.TmuxTarget
 	if target == "" {
 		target = sess.Name + ":0"
@@ -212,7 +212,10 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 	// client may have a tiny size (e.g. 10x5), causing /status to render garbled
 	// text that capture-pane cannot parse.
 	if cols, rows, err := s.tmux.PaneSize(target); err == nil && (cols < 80 || rows < 24) {
-		s.tmux.ResizeWindow(target, 80, 24)
+		if err := s.tmux.ResizeWindow(target, 80, 24); err != nil {
+			broadcast("failed:resize pane: " + err.Error())
+			return
+		}
 		time.Sleep(200 * time.Millisecond)
 	}
 
