@@ -48,7 +48,7 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 	c.Dir = r.cwd
 	c.Env = append(os.Environ(), "TERM=xterm-256color")
 
-	ptmx, err := pty.Start(c)
+	ptmx, err := pty.StartWithSize(c, &pty.Winsize{Cols: 80, Rows: 24})
 	if err != nil {
 		log.Printf("pty start: %v", err)
 		return

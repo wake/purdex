@@ -22,6 +22,8 @@ export default function TerminalView({ wsUrl }: Props) {
       fontSize: 14,
       fontFamily: 'Menlo, Monaco, monospace',
       cursorBlink: true,
+      macOptionClickForcesSelection: true,
+      rightClickSelectsWord: true,
     })
 
     const fitAddon = new FitAddon()
@@ -60,17 +62,23 @@ export default function TerminalView({ wsUrl }: Props) {
     term.onData((data) => conn.send(data))
     term.onResize(({ cols, rows }) => conn.resize(cols, rows))
 
+    // Suppress browser context menu on the terminal to avoid double-menu
+    const container = containerRef.current
+    const handleContextMenu = (e: MouseEvent) => e.preventDefault()
+    container.addEventListener('contextmenu', handleContextMenu)
+
     let rafId = 0
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(rafId)
       rafId = requestAnimationFrame(() => fitAddon.fit())
     })
-    observer.observe(containerRef.current)
+    observer.observe(container)
 
     return () => {
       clearTimeout(fallbackTimer)
       cancelAnimationFrame(rafId)
       observer.disconnect()
+      container.removeEventListener('contextmenu', handleContextMenu)
       conn.close()
       term.dispose()
     }
