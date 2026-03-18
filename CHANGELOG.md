@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.3] - 2026-03-19
+
+修復 handoff 後 terminal 視窗尺寸無法自動恢復的問題
+
+### 修復
+
+- **Handoff 後 tmux 自動 resize 恢復** — `tmux resize-window -x 80 -y 24`（handoff step 3.5）會讓 tmux 進入手動尺寸模式，導致回到 term 後 window 卡在 80x24 不隨瀏覽器 viewport 調整。handoff 完成 `/status` 擷取後立即呼叫 `resize-window -A` 清除手動旗標
+
+### 新增
+
+- **`[terminal] auto_resize` 設定** — 預設啟用，每次 terminal WS 連線時自動清除手動尺寸旗標。使用者可設 `auto_resize = false` 停用
+- **`Executor.ResizeWindowAuto`** — 封裝 `tmux resize-window -A`
+- **`Relay.OnStart` callback** — PTY 啟動後的 hook，用於 terminal 連線時重設視窗尺寸
+
 ## [0.5.2] - 2026-03-19
 
 架構重構：Stream UI 狀態改由 server-derived relayStatus 驅動
