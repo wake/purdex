@@ -137,7 +137,11 @@ func (s *Server) StartStatusPoller(ctx context.Context) {
 				}
 
 				for _, sess := range sessions {
-					status := s.detector.Detect(sess.Name)
+					detectTarget := sess.TmuxTarget
+					if detectTarget == "" {
+						detectTarget = sess.Name + ":0"
+					}
+					status := s.detector.Detect(detectTarget)
 					if prev, ok := lastStatus[sess.Name]; !ok || prev != status {
 						lastStatus[sess.Name] = status
 						s.events.Broadcast(sess.Name, "status", string(status))

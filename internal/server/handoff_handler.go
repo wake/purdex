@@ -150,6 +150,13 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 		s.events.Broadcast(sess.Name, "handoff", value)
 	}
 
+	// Use TmuxTarget (session:window format, e.g. "myapp:0") for all tmux
+	// Executor calls to prevent ambiguous target resolution.
+	target := sess.TmuxTarget
+	if target == "" {
+		target = sess.Name + ":0"
+	}
+
 	// Step 1: If relay already connected, shut it down
 	if s.bridge.HasRelay(sess.Name) {
 		broadcast("stopping-relay")
@@ -169,7 +176,7 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 
 	// Step 2: Prerequisite — CC must be running
 	broadcast("detecting")
-	status := s.detector.Detect(sess.Name)
+	status := s.detector.Detect(target)
 	if status == detect.StatusNormal || status == detect.StatusNotInCC {
 		broadcast("failed:no CC running")
 		return
@@ -178,40 +185,52 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 	// Step 3: If CC is busy (not idle), interrupt to idle
 	if status != detect.StatusCCIdle {
 		broadcast("stopping-cc")
-		if err := s.tmux.SendKeysRaw(sess.Name, "C-u"); err != nil {
+		if err := s.tmux.SendKeysRaw(target, "C-u"); err != nil {
 			broadcast("failed:send C-u: " + err.Error())
 			return
 		}
-		if err := s.tmux.SendKeysRaw(sess.Name, "C-c"); err != nil {
+		if err := s.tmux.SendKeysRaw(target, "C-c"); err != nil {
 			broadcast("failed:send C-c: " + err.Error())
 			return
 		}
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
 			time.Sleep(500 * time.Millisecond)
-			st := s.detector.Detect(sess.Name)
+			st := s.detector.Detect(target)
 			if st == detect.StatusCCIdle {
 				break
 			}
 		}
-		if s.detector.Detect(sess.Name) != detect.StatusCCIdle {
+		if s.detector.Detect(target) != detect.StatusCCIdle {
 			broadcast("failed:could not reach CC idle")
 			return
 		}
+	}
+
+	// Step 3.5: Ensure pane is large enough for /status TUI to render.
+	// When xterm.js container is display:none (user on stream page), the PTY
+	// client may have a tiny size (e.g. 10x5), causing /status to render garbled
+	// text that capture-pane cannot parse.
+	if cols, rows, err := s.tmux.PaneSize(target); err == nil && (cols < 80 || rows < 24) {
+		if err := s.tmux.ResizeWindow(target, 80, 24); err != nil {
+			broadcast("failed:resize pane: " + err.Error())
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	// Step 4: Extract session ID + cwd via /status
 	// Send /status then rapidly capture full pane content. The /status dialog
 	// may auto-dismiss quickly, so retry capture several times.
 	broadcast("extracting-id")
-	if err := s.tmux.SendKeys(sess.Name, "/status"); err != nil {
+	if err := s.tmux.SendKeys(target, "/status"); err != nil {
 		broadcast("failed:send /status: " + err.Error())
 		return
 	}
 	var statusInfo detect.StatusInfo
 	for attempt := 0; attempt < 6; attempt++ {
 		time.Sleep(500 * time.Millisecond)
-		paneContent, err := s.tmux.CapturePaneContent(sess.Name, 200)
+		paneContent, err := s.tmux.CapturePaneContent(target, 200)
 		if err != nil {
 			continue
 		}
@@ -230,23 +249,23 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 	// Both /exit and Ctrl+C preserve session state for --resume. /exit is preferred
 	// because a command is more stable than a key combination.
 	broadcast("exiting-cc")
-	if err := s.tmux.SendKeysRaw(sess.Name, "Escape"); err != nil {
+	if err := s.tmux.SendKeysRaw(target, "Escape"); err != nil {
 		broadcast("failed:send Escape: " + err.Error())
 		return
 	}
 	time.Sleep(500 * time.Millisecond)
-	if err := s.tmux.SendKeys(sess.Name, "/exit"); err != nil {
+	if err := s.tmux.SendKeys(target, "/exit"); err != nil {
 		broadcast("failed:send /exit: " + err.Error())
 		return
 	}
 	exitDeadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(exitDeadline) {
 		time.Sleep(500 * time.Millisecond)
-		if s.detector.Detect(sess.Name) == detect.StatusNormal {
+		if s.detector.Detect(target) == detect.StatusNormal {
 			break
 		}
 	}
-	if s.detector.Detect(sess.Name) != detect.StatusNormal {
+	if s.detector.Detect(target) != detect.StatusNormal {
 		broadcast("failed:CC did not exit")
 		return
 	}
@@ -264,7 +283,7 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 
 	relayCmd := fmt.Sprintf("tbox relay --session %s --daemon ws://%s:%d --token-file %s -- %s --resume %s",
 		sess.Name, bind, port, tokenFile, command, statusInfo.SessionID)
-	if err := s.tmux.SendKeys(sess.Name, relayCmd); err != nil {
+	if err := s.tmux.SendKeys(target, relayCmd); err != nil {
 		os.Remove(tokenFile)
 		broadcast("failed:send-keys error: " + err.Error())
 		return
@@ -304,6 +323,12 @@ func (s *Server) runHandoffToTerm(sess store.Session, handoffID string) {
 
 	broadcast := func(value string) {
 		s.events.Broadcast(sess.Name, "handoff", value)
+	}
+
+	// Use TmuxTarget for all tmux operations (same rationale as runHandoff).
+	target := sess.TmuxTarget
+	if target == "" {
+		target = sess.Name + ":0"
 	}
 
 	// Step 1: Get session ID from DB
@@ -354,12 +379,12 @@ func (s *Server) runHandoffToTerm(sess store.Session, handoffID string) {
 	broadcast("waiting-shell")
 	shellDeadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(shellDeadline) {
-		if s.detector.Detect(sess.Name) == detect.StatusNormal {
+		if s.detector.Detect(target) == detect.StatusNormal {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	if s.detector.Detect(sess.Name) != detect.StatusNormal {
+	if s.detector.Detect(target) != detect.StatusNormal {
 		rollbackMode()
 		broadcast("failed:shell did not recover")
 		return
@@ -368,7 +393,7 @@ func (s *Server) runHandoffToTerm(sess store.Session, handoffID string) {
 	// Launch interactive CC with --resume
 	broadcast("launching-cc")
 	resumeCmd := fmt.Sprintf("claude --resume %s", sessionID)
-	if err := s.tmux.SendKeys(sess.Name, resumeCmd); err != nil {
+	if err := s.tmux.SendKeys(target, resumeCmd); err != nil {
 		rollbackMode()
 		broadcast("failed:send-keys error: " + err.Error())
 		return
@@ -377,13 +402,13 @@ func (s *Server) runHandoffToTerm(sess store.Session, handoffID string) {
 	// Verify CC started
 	ccDeadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(ccDeadline) {
-		st := s.detector.Detect(sess.Name)
+		st := s.detector.Detect(target)
 		if st == detect.StatusCCIdle || st == detect.StatusCCRunning || st == detect.StatusCCWaiting {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	finalSt := s.detector.Detect(sess.Name)
+	finalSt := s.detector.Detect(target)
 	if finalSt != detect.StatusCCIdle && finalSt != detect.StatusCCRunning && finalSt != detect.StatusCCWaiting {
 		rollbackMode()
 		broadcast("failed:CC did not start")

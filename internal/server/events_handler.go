@@ -138,7 +138,11 @@ func (s *Server) sendStatusSnapshot(sub *eventSubscriber) {
 		return
 	}
 	for _, sess := range sessions {
-		status := s.detector.Detect(sess.Name)
+		detectTarget := sess.TmuxTarget
+		if detectTarget == "" {
+			detectTarget = sess.Name + ":0"
+		}
+		status := s.detector.Detect(detectTarget)
 		msg, err := json.Marshal(sessionEvent{
 			Type:    "status",
 			Session: sess.Name,

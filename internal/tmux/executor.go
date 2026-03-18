@@ -27,6 +27,8 @@ type Executor interface {
 	PanePID(target string) (string, error)
 	PaneChildCommands(target string) ([]string, error)
 	CapturePaneContent(target string, lastN int) (string, error)
+	PaneSize(target string) (cols, rows int, err error)
+	ResizeWindow(target string, cols, rows int) error
 }
 
 // --- Real Executor ---
@@ -140,6 +142,24 @@ func (r *RealExecutor) CapturePaneContent(target string, lastN int) (string, err
 	return string(out), nil
 }
 
+func (r *RealExecutor) PaneSize(target string) (cols, rows int, err error) {
+	out, err := exec.Command("tmux", "list-panes", "-t", target, "-F", "#{pane_width} #{pane_height}").Output()
+	if err != nil {
+		return 0, 0, fmt.Errorf("tmux list-panes size: %w", err)
+	}
+	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+	var c, r2 int
+	if _, err := fmt.Sscanf(line, "%d %d", &c, &r2); err != nil {
+		return 0, 0, fmt.Errorf("parse pane size: %w", err)
+	}
+	return c, r2, nil
+}
+
+func (r *RealExecutor) ResizeWindow(target string, cols, rows int) error {
+	return exec.Command("tmux", "resize-window", "-t", target,
+		"-x", fmt.Sprintf("%d", cols), "-y", fmt.Sprintf("%d", rows)).Run()
+}
+
 // --- Fake Executor ---
 
 type RawKeysCall struct {
@@ -147,12 +167,19 @@ type RawKeysCall struct {
 	Keys   []string
 }
 
+type KeysCall struct {
+	Target string
+	Keys   string
+}
+
 type FakeExecutor struct {
 	sessions      map[string]TmuxSession
 	paneCommands  map[string]string   // target → command name
 	paneContents  map[string]string   // target → captured text
 	paneChildren  map[string][]string // target → child command names
+	paneSizes     map[string][2]int   // target → [cols, rows]
 	rawKeysCalls  []RawKeysCall
+	keysCalls     []KeysCall
 }
 
 func NewFakeExecutor() *FakeExecutor {
@@ -161,6 +188,7 @@ func NewFakeExecutor() *FakeExecutor {
 		paneCommands: make(map[string]string),
 		paneContents: make(map[string]string),
 		paneChildren: make(map[string][]string),
+		paneSizes:    make(map[string][2]int),
 	}
 }
 
@@ -194,7 +222,14 @@ func (f *FakeExecutor) HasSession(name string) bool {
 	return ok
 }
 
-func (f *FakeExecutor) SendKeys(_, _ string) error { return nil }
+func (f *FakeExecutor) SendKeys(target, keys string) error {
+	f.keysCalls = append(f.keysCalls, KeysCall{Target: target, Keys: keys})
+	return nil
+}
+
+func (f *FakeExecutor) KeysSent() []KeysCall {
+	return f.keysCalls
+}
 
 func (f *FakeExecutor) SendKeysRaw(target string, keys ...string) error {
 	f.rawKeysCalls = append(f.rawKeysCalls, RawKeysCall{Target: target, Keys: keys})
@@ -243,4 +278,26 @@ func (f *FakeExecutor) CapturePaneContent(target string, lastN int) (string, err
 		return "", fmt.Errorf("no pane content for target %q", target)
 	}
 	return content, nil
+}
+
+func (f *FakeExecutor) SetPaneSize(target string, cols, rows int) {
+	f.paneSizes[target] = [2]int{cols, rows}
+}
+
+func (f *FakeExecutor) PaneSizeOf(target string) ([2]int, bool) {
+	sz, ok := f.paneSizes[target]
+	return sz, ok
+}
+
+func (f *FakeExecutor) PaneSize(target string) (int, int, error) {
+	sz, ok := f.paneSizes[target]
+	if !ok {
+		return 80, 24, nil // default
+	}
+	return sz[0], sz[1], nil
+}
+
+func (f *FakeExecutor) ResizeWindow(target string, cols, rows int) error {
+	f.paneSizes[target] = [2]int{cols, rows}
+	return nil
 }

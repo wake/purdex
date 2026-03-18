@@ -26,8 +26,9 @@ func newHandoffTestServer(t *testing.T) (*httptest.Server, *store.Store) {
 	t.Cleanup(func() { db.Close() })
 
 	fakeTmux := tmux.NewFakeExecutor()
-	fakeTmux.SetPaneCommand("test-session", "claude") // CC running (idle)
-	fakeTmux.SetPaneContent("test-session", "  Session ID: deadbeef-1234-5678-9abc-def012345678\n❯ ")
+	// Register at TmuxTarget format (session:window) to match handoff code.
+	fakeTmux.SetPaneCommand("test-session:0", "claude") // CC running (idle)
+	fakeTmux.SetPaneContent("test-session:0", "  Session ID: deadbeef-1234-5678-9abc-def012345678\n❯ ")
 
 	cfg := config.Config{
 		Port: 7860,
@@ -279,6 +280,163 @@ func TestHandoffTermModeNoPresetRequired(t *testing.T) {
 
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("want 202, got %d", resp.StatusCode)
+	}
+}
+
+// TestHandoffUsesTmuxTarget verifies that runHandoff sends all tmux commands
+// (detect, send-keys, capture-pane) to sess.TmuxTarget ("session:0" format)
+// rather than the bare sess.Name. Using bare name causes tmux to resolve
+// ambiguously and potentially target the wrong pane.
+func TestHandoffUsesTmuxTarget(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	fakeTmux := tmux.NewFakeExecutor()
+	// Register pane data at TmuxTarget "my-session:0" — NOT bare "my-session".
+	// If handoff code uses bare Name, detect/capture will fail (map miss).
+	fakeTmux.SetPaneCommand("my-session:0", "claude")
+	fakeTmux.SetPaneContent("my-session:0", "  Session ID: deadbeef-1234\n  Cwd: /tmp/test\n❯ ")
+
+	cfg := config.Config{
+		Port: 7860,
+		Bind: "127.0.0.1",
+		Stream: config.StreamConfig{
+			Presets: []config.Preset{
+				{Name: "cc", Command: "claude -p --input-format stream-json --output-format stream-json"},
+			},
+		},
+		Detect: config.DetectConfig{
+			CCCommands:   []string{"claude"},
+			PollInterval: 2,
+		},
+	}
+
+	s := server.New(cfg, db, fakeTmux, "")
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+
+	_, err = db.CreateSession(store.Session{
+		Name:       "my-session",
+		TmuxTarget: "my-session:0",
+		Cwd:        "/tmp",
+		Mode:       "term",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Trigger handoff
+	body, _ := json.Marshal(map[string]string{"mode": "stream", "preset": "cc"})
+	resp, err := http.Post(srv.URL+"/api/sessions/1/handoff", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("want 202, got %d", resp.StatusCode)
+	}
+
+	// Wait for async handoff goroutine to progress past detect + send-keys steps.
+	// It will eventually fail waiting for relay (expected), but the tmux calls
+	// should have been recorded by then.
+	time.Sleep(5 * time.Second)
+
+	// Verify SendKeys calls used TmuxTarget, not bare Name
+	for _, call := range fakeTmux.KeysSent() {
+		if call.Target == "my-session" {
+			t.Errorf("SendKeys used bare session name %q instead of TmuxTarget; keys=%q", call.Target, call.Keys)
+		}
+	}
+	for _, call := range fakeTmux.RawKeysSent() {
+		if call.Target == "my-session" {
+			t.Errorf("SendKeysRaw used bare session name %q instead of TmuxTarget; keys=%v", call.Target, call.Keys)
+		}
+	}
+
+	// Verify at least some calls were made to the correct target
+	hasCorrectTarget := false
+	for _, call := range fakeTmux.KeysSent() {
+		if call.Target == "my-session:0" {
+			hasCorrectTarget = true
+			break
+		}
+	}
+	for _, call := range fakeTmux.RawKeysSent() {
+		if call.Target == "my-session:0" {
+			hasCorrectTarget = true
+			break
+		}
+	}
+	if !hasCorrectTarget {
+		t.Error("no tmux commands were sent to TmuxTarget \"my-session:0\"")
+	}
+}
+
+// TestHandoffResizesPaneTooSmall verifies that handoff enlarges a too-small pane
+// before sending /status, so capture-pane can extract the session ID.
+func TestHandoffResizesPaneTooSmall(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneCommand("small-session:0", "claude")
+	fakeTmux.SetPaneContent("small-session:0", "  Session ID: deadbeef-1234\n  Cwd: /tmp/test\n❯ ")
+	// Simulate a tiny pane (like when xterm.js container is display:none)
+	fakeTmux.SetPaneSize("small-session:0", 10, 5)
+
+	cfg := config.Config{
+		Port: 7860,
+		Bind: "127.0.0.1",
+		Stream: config.StreamConfig{
+			Presets: []config.Preset{
+				{Name: "cc", Command: "claude -p --input-format stream-json --output-format stream-json"},
+			},
+		},
+		Detect: config.DetectConfig{
+			CCCommands:   []string{"claude"},
+			PollInterval: 2,
+		},
+	}
+
+	s := server.New(cfg, db, fakeTmux, "")
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+
+	_, err = db.CreateSession(store.Session{
+		Name:       "small-session",
+		TmuxTarget: "small-session:0",
+		Cwd:        "/tmp",
+		Mode:       "term",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(map[string]string{"mode": "stream", "preset": "cc"})
+	resp, err := http.Post(srv.URL+"/api/sessions/1/handoff", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("want 202, got %d", resp.StatusCode)
+	}
+
+	time.Sleep(5 * time.Second)
+
+	// Verify that ResizeWindow was called to enlarge the pane
+	sz, ok := fakeTmux.PaneSizeOf("small-session:0")
+	if !ok {
+		t.Fatal("pane size not tracked")
+	}
+	if sz[0] < 80 || sz[1] < 24 {
+		t.Errorf("pane should have been resized to at least 80x24, got %dx%d", sz[0], sz[1])
 	}
 }
 
