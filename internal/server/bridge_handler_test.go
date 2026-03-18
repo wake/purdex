@@ -2,6 +2,7 @@
 package server_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -162,6 +163,54 @@ func TestBridgeInitMetadataSavesToDB(t *testing.T) {
 	}
 	if got.CCModel != "claude-opus-4-6" {
 		t.Fatalf("want claude-opus-4-6, got %q", got.CCModel)
+	}
+}
+
+func TestSessionListIncludesHasRelay(t *testing.T) {
+	db, srv := setupServerWithDB(t)
+
+	// Create session
+	db.CreateSession(store.Session{Name: "relay-dto", Cwd: "/tmp", Mode: "term"})
+
+	// Before relay: has_relay should be false
+	resp, _ := http.Get(srv.URL + "/api/sessions")
+	var sessions []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&sessions)
+	resp.Body.Close()
+
+	var found map[string]interface{}
+	for _, s := range sessions {
+		if s["name"] == "relay-dto" {
+			found = s
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("session not found")
+	}
+	if found["has_relay"] != false {
+		t.Fatalf("want has_relay=false before relay, got %v", found["has_relay"])
+	}
+
+	// Connect relay
+	relay := dial(t, wsURL(srv, "/ws/cli-bridge/relay-dto"))
+	defer relay.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// After relay: has_relay should be true
+	resp, _ = http.Get(srv.URL + "/api/sessions")
+	json.NewDecoder(resp.Body).Decode(&sessions)
+	resp.Body.Close()
+
+	found = nil
+	for _, s := range sessions {
+		if s["name"] == "relay-dto" {
+			found = s
+			break
+		}
+	}
+	if found["has_relay"] != true {
+		t.Fatalf("want has_relay=true after relay, got %v", found["has_relay"])
 	}
 }
 

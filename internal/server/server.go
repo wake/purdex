@@ -47,7 +47,7 @@ func New(cfg config.Config, st *store.Store, tx tmux.Executor, cfgPath string) *
 }
 
 func (s *Server) routes() {
-	sh := NewSessionHandler(s.store, s.tmux)
+	sh := NewSessionHandler(s.store, s.tmux, s.bridge)
 	s.mux.HandleFunc("GET /api/sessions", sh.List)
 	s.mux.HandleFunc("POST /api/sessions", sh.Create)
 	s.mux.HandleFunc("DELETE /api/sessions/{id}", sh.Delete)
