@@ -174,6 +174,13 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 		}
 	}
 
+	// Step 1.5: Prepare pane — exit tmux copy-mode (if active) and clear
+	// any partial input. Escape exits copy-mode and also closes CC dialogs.
+	// C-u clears the input line. Both are safe no-ops in normal state.
+	s.tmux.SendKeysRaw(target, "Escape")
+	s.tmux.SendKeysRaw(target, "C-u")
+	time.Sleep(200 * time.Millisecond)
+
 	// Step 2: Prerequisite — CC must be running
 	broadcast("detecting")
 	status := s.detector.Detect(target)

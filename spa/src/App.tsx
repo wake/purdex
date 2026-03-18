@@ -176,6 +176,7 @@ export default function App() {
               <div style={{ display: currentMode === 'term' ? 'block' : 'none', height: '100%' }}>
                 <TerminalView
                   wsUrl={`${wsBase}/ws/terminal/${encodeURIComponent(active.name)}`}
+                  visible={currentMode === 'term'}
                 />
               </div>
               <div style={{
