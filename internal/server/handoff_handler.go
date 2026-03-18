@@ -200,7 +200,7 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 		}
 	}
 
-	// Step 4: Extract session ID via /status
+	// Step 4: Extract session ID + cwd via /status
 	// Send /status then rapidly capture full pane content. The /status dialog
 	// may auto-dismiss quickly, so retry capture several times.
 	broadcast("extracting-id")
@@ -208,20 +208,20 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 		broadcast("failed:send /status: " + err.Error())
 		return
 	}
-	var sessionID string
+	var statusInfo detect.StatusInfo
 	for attempt := 0; attempt < 6; attempt++ {
 		time.Sleep(500 * time.Millisecond)
 		paneContent, err := s.tmux.CapturePaneContent(sess.Name, 200)
 		if err != nil {
 			continue
 		}
-		id, err := detect.ExtractSessionID(paneContent)
+		info, err := detect.ExtractStatusInfo(paneContent)
 		if err == nil {
-			sessionID = id
+			statusInfo = info
 			break
 		}
 	}
-	if sessionID == "" {
+	if statusInfo.SessionID == "" {
 		broadcast("failed:could not extract session ID")
 		return
 	}
@@ -263,7 +263,7 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 	})
 
 	relayCmd := fmt.Sprintf("tbox relay --session %s --daemon ws://%s:%d --token-file %s -- %s --resume %s",
-		sess.Name, bind, port, tokenFile, command, sessionID)
+		sess.Name, bind, port, tokenFile, command, statusInfo.SessionID)
 	if err := s.tmux.SendKeys(sess.Name, relayCmd); err != nil {
 		os.Remove(tokenFile)
 		broadcast("failed:send-keys error: " + err.Error())
@@ -284,9 +284,13 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 		return
 	}
 
-	// Step 8: Update DB (mode + cc_session_id together) and broadcast success
-	ccID := sessionID
-	if err := s.store.UpdateSession(sess.ID, store.SessionUpdate{Mode: &mode, CCSessionID: &ccID}); err != nil {
+	// Step 8: Update DB (mode + cc_session_id + cwd) and broadcast success
+	ccID := statusInfo.SessionID
+	update := store.SessionUpdate{Mode: &mode, CCSessionID: &ccID}
+	if statusInfo.Cwd != "" {
+		update.Cwd = &statusInfo.Cwd
+	}
+	if err := s.store.UpdateSession(sess.ID, update); err != nil {
 		broadcast("failed:db update: " + err.Error())
 		return
 	}
