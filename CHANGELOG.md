@@ -1,12 +1,13 @@
 # Changelog
 
-## [0.5.3] - 2026-03-19
+## [0.5.4] - 2026-03-19
 
-修復 handoff 後 terminal 視窗尺寸無法自動恢復的問題
+修復 handoff 相關的 terminal resize 與 copy-mode 問題
 
 ### 修復
 
 - **Handoff 後 tmux 自動 resize 恢復** — `tmux resize-window -x 80 -y 24`（handoff step 3.5）會讓 tmux 進入手動尺寸模式，導致回到 term 後 window 卡在 80x24 不隨瀏覽器 viewport 調整。handoff 完成 `/status` 擷取後立即呼叫 `resize-window -A` 清除手動旗標
+- **Handoff 前退出 tmux copy-mode** — terminal 處於 copy-mode（捲動瀏覽歷史）時 handoff 會失敗。改用 `tmux send-keys -X cancel` 取代依賴 `Escape`，不受 vi/emacs mode 影響且不送按鍵到底層應用
 
 ### 新增
 
