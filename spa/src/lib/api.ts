@@ -9,6 +9,8 @@ export interface Session {
   group_id: number
   sort_order: number
   cc_session_id: string
+  cc_model: string
+  has_relay: boolean
 }
 
 export async function listSessions(base: string): Promise<Session[]> {
@@ -63,6 +65,14 @@ export async function handoff(
     const text = await res.text().catch(() => '')
     throw new Error(`handoff failed: ${res.status} ${text}`.trim())
   }
+  return res.json()
+}
+
+// --- History API ---
+
+export async function fetchHistory(base: string, sessionId: number): Promise<import('./stream-ws').StreamMessage[]> {
+  const res = await fetch(`${base}/api/sessions/${sessionId}/history`)
+  if (!res.ok) return []
   return res.json()
 }
 

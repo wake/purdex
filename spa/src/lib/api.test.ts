@@ -5,6 +5,7 @@ import { listSessions, createSession, deleteSession, switchMode, handoff, type S
 const mockSession: Session = {
   id: 1, uid: 'testuid1', name: 'test', tmux_target: 'test:0',
   cwd: '/tmp', mode: 'term', group_id: 0, sort_order: 0, cc_session_id: '',
+  cc_model: '', has_relay: false,
 }
 
 beforeEach(() => {
