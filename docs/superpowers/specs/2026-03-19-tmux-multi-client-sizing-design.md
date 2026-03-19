@@ -1,7 +1,6 @@
 # tmux 多 Client 視窗尺寸修正設計
 
 > 日期：2026-03-19
-> 版本：v0.6.0
 > 狀態：設計確認
 
 ---
@@ -10,15 +9,16 @@
 
 ### Root Cause
 
-`tmux resize-window -A` 有未記載的副作用 — 自動將 `window-size` 設為 `manual`。一旦變成 `manual`，tmux 不再理會任何 client 的尺寸變化。
+`tmux resize-window` 的所有形式（`-A`、`-x`/`-y`）都有副作用 — 自動將 `window-size` 設為 `manual`（見 man page："This command will automatically set window-size to manual in the window options"）。一旦變成 `manual`，tmux 不再理會任何 client 的尺寸變化。
 
 影響發生在所有呼叫 `resize-window` 的地方：
 
 | 位置 | 呼叫 | 副作用 |
 |------|------|--------|
 | `server.go` relay OnStart | `ResizeWindowAuto(name)` | 設為 manual |
-| `handoff_handler.go` 前置 | `ResizeWindow(target, 80, 24)` | 設為 manual |
+| `handoff_handler.go` 前置 | `ResizeWindow(target, 80, 24)` | 設為 manual（刻意，由後置清理恢復） |
 | `handoff_handler.go` 後置 | `ResizeWindowAuto(target)` | 設為 manual |
+| `handoff_handler.go` error paths (×3) | `ResizeWindowAuto(target)` | 設為 manual |
 
 ### 症狀
 
@@ -61,27 +61,28 @@ func (r *RealExecutor) SetWindowOption(target, option, value string) error {
 
 ### 修復點
 
-每次 `resize-window` 之後恢復 `window-size latest`：
-
-**server.go relay OnStart**（relay 連線後）：
+引入 helper function 統一處理恢復：
 
 ```go
-s.tmux.ResizeWindowAuto(name)
-s.tmux.SetWindowOption(name, "window-size", "latest")
+// restoreWindowSizing 在 resize-window 之後恢復 window-size 為 latest，
+// 避免 resize-window 的副作用將 window-size 鎖為 manual。
+func (s *Server) restoreWindowSizing(target string) {
+    s.tmux.ResizeWindowAuto(target)
+    s.tmux.SetWindowOption(target, "window-size", "latest")
+}
 ```
 
-**handoff_handler.go 後置清理**（handoff 結束後）：
+所有呼叫 `ResizeWindowAuto` 的地方改用 `restoreWindowSizing`：
 
-```go
-s.tmux.ResizeWindowAuto(target)
-s.tmux.SetWindowOption(target, "window-size", "latest")
-```
+| 位置 | 修改 |
+|------|------|
+| `server.go` relay OnStart | `restoreWindowSizing(name)` |
+| `handoff_handler.go` 後置清理（L278） | `restoreWindowSizing(target)` |
+| `handoff_handler.go` error path（L243） | `restoreWindowSizing(target)` |
+| `handoff_handler.go` error path（L251） | `restoreWindowSizing(target)` |
+| `handoff_handler.go` error path（L259） | `restoreWindowSizing(target)` |
 
-**handoff_handler.go 前置**（handoff 期間 `ResizeWindow(80,24)`）：不恢復。handoff 期間刻意固定尺寸，由後置清理統一恢復。
-
-### 不包在 ResizeWindowAuto 內部的原因
-
-handoff 中間的 `ResizeWindow(80,24)` 是刻意要暫時固定尺寸（確保 `/status` TUI 可正常顯示），到後置清理才恢復。如果把恢復邏輯包在 `ResizeWindowAuto` 裡，會與 `ResizeWindow` 的行為不一致。呼叫端明確控制何時恢復更清晰。
+**handoff_handler.go 前置 `ResizeWindow(80,24)`（L227）**：不恢復。handoff 期間刻意固定尺寸，由後置清理或 error path 統一恢復。
 
 ---
 
@@ -117,12 +118,14 @@ func (tc TerminalConfig) IsSessionGroup() bool {
 tmux attach-session -t {name}
 
 // session_group = true
-relaySession := fmt.Sprintf("%s-tbox-%s", name, shortID())
+relaySession := fmt.Sprintf("%s-tbox-%x", name, randomBytes(4))  // 8 hex chars
 tmux new-session -d -t {name} -s {relaySession}
 tmux attach-session -t {relaySession}
 ```
 
-用 `-d`（detached）+ `attach` 兩步，因為 `new-session -t` 直接執行會嘗試接管當前終端，在 PTY 環境下需要分開處理。
+- `randomBytes(4)` 產生 4 bytes 隨機數，hex 編碼為 8 字元（4,294,967,296 種組合）
+- 用 `-d`（detached）+ `attach` 兩步，因為 `new-session -t` 直接執行會嘗試接管當前終端，在 PTY 環境下需要分開處理
+- 如果 `new-session` 因名稱碰撞失敗，重新產生 ID 重試（最多 3 次）
 
 ### 清理
 
@@ -132,22 +135,34 @@ tmux attach-session -t {relaySession}
 defer exec.Command("tmux", "kill-session", "-t", relaySession).Run()
 ```
 
-**異常殘留清理**：daemon 啟動時清理 `*-tbox-*` pattern 的 sessions（異常退出可能留下）：
+**異常殘留清理**：daemon 啟動時清理殘留的 grouped sessions。獨立函數 `cleanupStaleRelays()`，不混入 `resetStaleModes()`：
 
 ```go
-// server.go resetStaleModes() 中
-sessions := tmux list-sessions -F '#{session_name}'
-for each session matching "*-tbox-*":
-    tmux kill-session -t {session}
+func (s *Server) cleanupStaleRelays() {
+    // tmux list-sessions -F '#{session_name}'
+    // 匹配 pattern: {name}-tbox-{8 hex chars}（正規表達式驗證 hex 部分）
+    // 對每個匹配的 session 執行 kill-session
+}
 ```
+
+使用正規表達式 `^.+-tbox-[0-9a-f]{8}$` 驗證，避免誤殺使用者的 session。
 
 ### 與 auto_resize 的交互
 
-Session group 啟用時，`resize-window -A` 和 `SetWindowOption` 作用在 grouped session 的 window 上。`auto_resize` 的目標從 `name`（原始 session）改為 `relaySession`（grouped session），只影響該 relay 自己。
+Session group 啟用時，每個 grouped session 只有一個 tmux client（relay 自己）。`window-size latest` 會自動將 window 調整為該 client 的尺寸，因此 **`auto_resize`（`resize-window -A`）在 session_group 模式下不需要執行** — 省去 `-A` 的副作用問題。
+
+```go
+// session_group = true 時，OnStart 不設定 auto_resize
+// session_group = false 時，OnStart 設定 restoreWindowSizing（現行 + Part 1 修復）
+```
 
 ### 與 handoff 的交互
 
-Handoff 操作的是原始 session（`name`），不是 grouped session。handoff 期間的 `ResizeWindow` 和 `ResizeWindowAuto` 仍然作用在原始 session 上，不受 session group 影響。
+Handoff 操作的是原始 session（`name`），不是 grouped session。流程：
+
+1. Handoff 開始 → relay 被 shutdown → relay 的 defer 自動 `kill-session` 清理 grouped session
+2. Handoff 期間的 `ResizeWindow` / `restoreWindowSizing` 作用在原始 session，不受 session group 影響
+3. Handoff 完成 → 新 relay 啟動 → 如果 session_group=true，建立新的 grouped session
 
 ---
 
@@ -155,15 +170,24 @@ Handoff 操作的是原始 session（`name`），不是 grouped session。handof
 
 ### Part 1 測試
 
-- 驗證 `ResizeWindowAuto` 後 `window-size` 恢復為 `latest`
-- 驗證 `ResizeWindow(80,24)` 後 `window-size` 為 `manual`（handoff 期間刻意行為）
-- 驗證 handoff 後置清理恢復 `window-size latest`
+- `restoreWindowSizing` 呼叫 `ResizeWindowAuto` + `SetWindowOption("window-size", "latest")`
+- relay OnStart 呼叫 `restoreWindowSizing`
+- handoff 後置清理呼叫 `restoreWindowSizing`
+- handoff error paths（send-keys 失敗）呼叫 `restoreWindowSizing`
+- handoff 前置 `ResizeWindow(80,24)` 不呼叫 `restoreWindowSizing`
 - `FakeExecutor` 新增 `SetWindowOption` 記錄
 
 ### Part 2 測試
 
 - `IsSessionGroup()` 預設 false、設為 true 時返回 true
-- session_group=true 時 relay 建立 grouped session
+- session_group=true 時 relay 建立 grouped session（`new-session -d -t` + `attach`）
 - relay 斷開時 grouped session 被 kill
-- daemon 啟動時清理殘留 `*-tbox-*` sessions
+- `cleanupStaleRelays` 清理匹配 `{name}-tbox-{hex}` 的 sessions
+- `cleanupStaleRelays` 不誤殺不匹配 pattern 的 sessions
+- session_group=true 時 `auto_resize` 不執行 `resize-window -A`
 - session_group=false 時行為與現行一致
+- `new-session` 名稱碰撞時重試
+
+### 發佈策略
+
+Part 1（bug fix）和 Part 2（新功能）在同一個 PR 中交付，因為兩者共享 `SetWindowOption` 基礎設施且改動範圍緊密相關。
