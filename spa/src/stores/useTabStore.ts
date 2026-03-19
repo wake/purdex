@@ -32,7 +32,8 @@ export const useTabStore = create<TabState>()(
       removeTab: (tabId) =>
         set((state) => {
           if (!state.tabs[tabId]) return state
-          const { [tabId]: _, ...remainingTabs } = state.tabs
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { [tabId]: _removed, ...remainingTabs } = state.tabs
           const newOrder = state.tabOrder.filter((id) => id !== tabId)
           let newActiveId = state.activeTabId
           if (state.activeTabId === tabId) {

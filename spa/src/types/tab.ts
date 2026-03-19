@@ -63,7 +63,8 @@ function defaultSidebarState(): WorkspaceSidebarState {
 }
 
 export function createTab(opts: Omit<Tab, 'id' | 'icon'> & { icon?: string }): Tab {
-  const { isDirty: _isDirty, ...rest } = opts
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { isDirty, ...rest } = opts
   return {
     ...rest,
     id: generateId(),
