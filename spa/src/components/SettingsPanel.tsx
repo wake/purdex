@@ -20,6 +20,8 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
   const [jsonlPresets, setJsonlPresets] = useState<PresetRow[]>([])
   const [ccCommands, setCcCommands] = useState<string[]>([])
   const [pollInterval, setPollInterval] = useState(5)
+  const [autoResize, setAutoResize] = useState(true)
+  const [ignoreSize, setIgnoreSize] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -30,6 +32,8 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
       setJsonlPresets(config.jsonl?.presets?.map(p => ({ ...p })) || [])
       setCcCommands([...(config.detect?.cc_commands || [])])
       setPollInterval(config.detect?.poll_interval || 5)
+      setAutoResize(config.terminal?.auto_resize !== false)
+      setIgnoreSize(config.terminal?.ignore_size === true)
     }
   }, [config])
 
@@ -79,6 +83,10 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
     setError(null)
     try {
       await update(daemonBase, {
+        terminal: {
+          auto_resize: autoResize,
+          ignore_size: ignoreSize,
+        },
         stream: { presets: streamPresets.filter(p => p.name.trim()) },
         jsonl: { presets: jsonlPresets.filter(p => p.name.trim()) },
         detect: {
@@ -110,9 +118,43 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
         </div>
 
         <div className="p-4 space-y-6">
+          {/* Terminal */}
+          <section>
+            <h3 className="text-xs uppercase text-[#999] mb-2">Terminal</h3>
+            <span className="block text-[11px] text-[#777] mb-3">變更後需重新連線生效</span>
+            <div className="space-y-3">
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <span className="text-xs text-[#ddd]">Auto Resize</span>
+                  <span className="block text-[11px] text-[#777]">連線後自動調整 tmux 視窗尺寸</span>
+                </div>
+                <input
+                  data-testid="terminal-auto-resize"
+                  type="checkbox"
+                  checked={autoResize}
+                  onChange={e => setAutoResize(e.target.checked)}
+                  className="w-4 h-4 accent-blue-500 cursor-pointer"
+                />
+              </label>
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <span className="text-xs text-[#ddd]">Ignore Size</span>
+                  <span className="block text-[11px] text-[#777]">relay 不影響 tmux 視窗尺寸（保護 iTerm）</span>
+                </div>
+                <input
+                  data-testid="terminal-ignore-size"
+                  type="checkbox"
+                  checked={ignoreSize}
+                  onChange={e => setIgnoreSize(e.target.checked)}
+                  className="w-4 h-4 accent-blue-500 cursor-pointer"
+                />
+              </label>
+            </div>
+          </section>
+
           {/* Stream Presets */}
           <section>
-            <h3 className="text-xs uppercase text-[#888] mb-2">Stream Presets</h3>
+            <h3 className="text-xs uppercase text-[#999] mb-2">Stream Presets</h3>
             <div className="space-y-2">
               {streamPresets.map((p, i) => (
                 <div key={i} className="flex items-center gap-2">
@@ -144,7 +186,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
 
           {/* JSONL Presets */}
           <section>
-            <h3 className="text-xs uppercase text-[#888] mb-2">
+            <h3 className="text-xs uppercase text-[#999] mb-2">
               JSONL Presets
               <span className="ml-2 text-[10px] text-yellow-500 normal-case">(Phase 3)</span>
             </h3>
@@ -179,7 +221,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
 
           {/* CC Detect Commands */}
           <section>
-            <h3 className="text-xs uppercase text-[#888] mb-2">CC Detect Commands</h3>
+            <h3 className="text-xs uppercase text-[#999] mb-2">CC Detect Commands</h3>
             <div className="space-y-2">
               {ccCommands.map((cmd, i) => (
                 <div key={i} className="flex items-center gap-2">
@@ -204,7 +246,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
 
           {/* Poll Interval */}
           <section>
-            <h3 className="text-xs uppercase text-[#888] mb-2">Poll Interval (seconds)</h3>
+            <h3 className="text-xs uppercase text-[#999] mb-2">Poll Interval (seconds)</h3>
             <input
               data-testid="poll-interval"
               type="number"

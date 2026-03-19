@@ -25,9 +25,10 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 
 // configUpdateRequest defines the fields that can be updated via PUT /api/config.
 type configUpdateRequest struct {
-	Stream *config.StreamConfig `json:"stream,omitempty"`
-	JSONL  *config.JSONLConfig  `json:"jsonl,omitempty"`
-	Detect *detectUpdateRequest `json:"detect,omitempty"`
+	Stream   *config.StreamConfig   `json:"stream,omitempty"`
+	JSONL    *config.JSONLConfig    `json:"jsonl,omitempty"`
+	Detect   *detectUpdateRequest   `json:"detect,omitempty"`
+	Terminal *config.TerminalConfig `json:"terminal,omitempty"`
 }
 
 // detectUpdateRequest allows partial updates to detect config.
@@ -63,6 +64,15 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Detect.PollInterval != nil && *req.Detect.PollInterval > 0 {
 			s.cfg.Detect.PollInterval = *req.Detect.PollInterval
+		}
+	}
+
+	if req.Terminal != nil {
+		if req.Terminal.AutoResize != nil {
+			s.cfg.Terminal.AutoResize = req.Terminal.AutoResize
+		}
+		if req.Terminal.IgnoreSize != nil {
+			s.cfg.Terminal.IgnoreSize = req.Terminal.IgnoreSize
 		}
 	}
 
