@@ -78,6 +78,17 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/config", s.handlePutConfig)
 }
 
+// RestoreWindowSizing clears manual window-size set by resize-window
+// and restores automatic sizing based on the latest client.
+func (s *Server) RestoreWindowSizing(target string) {
+	if err := s.tmux.ResizeWindowAuto(target); err != nil {
+		log.Printf("RestoreWindowSizing: ResizeWindowAuto(%s): %v", target, err)
+	}
+	if err := s.tmux.SetWindowOption(target, "window-size", "latest"); err != nil {
+		log.Printf("RestoreWindowSizing: SetWindowOption(%s): %v", target, err)
+	}
+}
+
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("session")
 	if !s.tmux.HasSession(name) {
@@ -94,7 +105,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			// (3) browser send its viewport resize — so -A sees the real size.
 			go func() {
 				time.Sleep(1200 * time.Millisecond)
-				s.tmux.ResizeWindowAuto(name)
+				s.RestoreWindowSizing(name)
 			}()
 		}
 	}
