@@ -238,6 +238,77 @@ func TestPutConfigPartialDetect(t *testing.T) {
 	}
 }
 
+func TestPutConfigUpdatesTerminal(t *testing.T) {
+	srv, _ := newConfigTestServer(t)
+
+	// PUT: enable ignore_size, disable auto_resize
+	update := map[string]any{
+		"terminal": map[string]any{
+			"auto_resize": false,
+			"ignore_size": true,
+		},
+	}
+	body, _ := json.Marshal(update)
+	resp := authPut(t, srv.URL+"/api/config", body)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, string(b))
+	}
+
+	var cfg config.Config
+	json.NewDecoder(resp.Body).Decode(&cfg)
+
+	if cfg.Terminal.AutoResize == nil || *cfg.Terminal.AutoResize != false {
+		t.Errorf("want auto_resize=false, got %v", cfg.Terminal.AutoResize)
+	}
+	if cfg.Terminal.IgnoreSize == nil || *cfg.Terminal.IgnoreSize != true {
+		t.Errorf("want ignore_size=true, got %v", cfg.Terminal.IgnoreSize)
+	}
+
+	// GET: verify persisted
+	getResp := authGet(t, srv.URL+"/api/config")
+	defer getResp.Body.Close()
+
+	var getCfg config.Config
+	json.NewDecoder(getResp.Body).Decode(&getCfg)
+
+	if getCfg.Terminal.IgnoreSize == nil || *getCfg.Terminal.IgnoreSize != true {
+		t.Errorf("GET after PUT: want ignore_size=true, got %v", getCfg.Terminal.IgnoreSize)
+	}
+}
+
+func TestPutConfigPartialTerminal(t *testing.T) {
+	srv, _ := newConfigTestServer(t)
+
+	// Only update ignore_size, leave auto_resize unchanged
+	update := map[string]any{
+		"terminal": map[string]any{
+			"ignore_size": true,
+		},
+	}
+	body, _ := json.Marshal(update)
+	resp := authPut(t, srv.URL+"/api/config", body)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+
+	var cfg config.Config
+	json.NewDecoder(resp.Body).Decode(&cfg)
+
+	// ignore_size updated
+	if cfg.Terminal.IgnoreSize == nil || *cfg.Terminal.IgnoreSize != true {
+		t.Errorf("want ignore_size=true, got %v", cfg.Terminal.IgnoreSize)
+	}
+	// auto_resize should remain nil (default true)
+	if cfg.Terminal.AutoResize != nil {
+		t.Errorf("auto_resize should remain nil (default), got %v", *cfg.Terminal.AutoResize)
+	}
+}
+
 func TestPutConfigInvalidJSON(t *testing.T) {
 	srv, _ := newConfigTestServer(t)
 
