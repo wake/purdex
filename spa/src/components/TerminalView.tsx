@@ -74,11 +74,54 @@ export default function TerminalView({ wsUrl, visible = true }: Props) {
     )
     connRef.current = conn
 
-    term.onData((data) => conn.send(data))
+    const container = containerRef.current
+    const ta = container.querySelector('.xterm-helper-textarea')
+
+    // --- Shift+Enter: send \n (line feed) instead of \r (carriage return) ---
+    // Traditional terminals can't distinguish Shift+Enter from Enter (both
+    // send \r). We intercept on the container in capture phase (before xterm.js
+    // handles it on the textarea) and send \n directly, which CC accepts as a
+    // newline insertion (same as Ctrl+J).
+    let shiftEnterHandled = false
+    const handleShiftEnter = (ev: Event) => {
+      const ke = ev as KeyboardEvent
+      if (ke.key === 'Enter' && ke.shiftKey && !ke.ctrlKey && !ke.metaKey) {
+        ke.stopPropagation()
+        ke.preventDefault()
+        shiftEnterHandled = true
+        conn.send('\n')
+      }
+    }
+    container.addEventListener('keydown', handleShiftEnter, true)
+
+    // --- IME duplicate guard ---
+    // On macOS, pressing Cmd during CJK composition triggers xterm.js
+    // _finalizeComposition (first send), then compositionend fires and sends
+    // again. Mouse clicks can also re-trigger from residual textarea content.
+    // Track last composed text and suppress duplicates until next compositionstart.
+    let lastComposedSent = ''
+    const handleCompositionStart = () => { lastComposedSent = '' }
+    ta?.addEventListener('compositionstart', handleCompositionStart)
+
+    term.onData((data) => {
+      // Suppress \r leaked from xterm.js after our Shift+Enter handler
+      if (shiftEnterHandled && data === '\r') {
+        shiftEnterHandled = false
+        return
+      }
+      shiftEnterHandled = false
+
+      // Suppress IME composition duplicates (same non-escape multi-char data)
+      const isComposed = data.length > 1 && data.charCodeAt(0) !== 0x1b
+      if (isComposed && data === lastComposedSent) return
+      if (isComposed) lastComposedSent = data
+      else lastComposedSent = '' // reset on non-composed input (fixes #21)
+
+      conn.send(data)
+    })
     term.onResize(({ cols, rows }) => conn.resize(cols, rows))
 
     // Suppress browser context menu on the terminal to avoid double-menu
-    const container = containerRef.current
     const handleContextMenu = (e: MouseEvent) => e.preventDefault()
     container.addEventListener('contextmenu', handleContextMenu)
 
@@ -93,6 +136,8 @@ export default function TerminalView({ wsUrl, visible = true }: Props) {
       clearTimeout(fallbackTimer)
       cancelAnimationFrame(rafId)
       observer.disconnect()
+      container.removeEventListener('keydown', handleShiftEnter, true)
+      ta?.removeEventListener('compositionstart', handleCompositionStart)
       container.removeEventListener('contextmenu', handleContextMenu)
       conn.close()
       term.dispose()
