@@ -3,9 +3,11 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"sync"
 	"time"
 
@@ -16,6 +18,8 @@ import (
 	"github.com/wake/tmux-box/internal/terminal"
 	"github.com/wake/tmux-box/internal/tmux"
 )
+
+var relaySessionPattern = regexp.MustCompile(`^.+-tbox-[0-9a-f]{8}$`)
 
 type Server struct {
 	cfg          config.Config
@@ -44,7 +48,25 @@ func New(cfg config.Config, st *store.Store, tx tmux.Executor, cfgPath string) *
 	}
 	s.routes()
 	s.resetStaleModes()
+	s.CleanupStaleRelays()
 	return s
+}
+
+// CleanupStaleRelays removes tmux sessions created by session group mode
+// that were not cleaned up (e.g., daemon crashed). Matches pattern: {name}-tbox-{8 hex chars}.
+func (s *Server) CleanupStaleRelays() {
+	names, err := s.tmux.ListSessionNames()
+	if err != nil {
+		log.Printf("CleanupStaleRelays: failed to list sessions: %v", err)
+		return
+	}
+	for _, name := range names {
+		if relaySessionPattern.MatchString(name) {
+			if err := s.tmux.KillSession(name); err != nil {
+				log.Printf("CleanupStaleRelays: failed to kill %q: %v", name, err)
+			}
+		}
+	}
 }
 
 // resetStaleModes resets any sessions stuck in stream/jsonl mode back to term.
@@ -78,23 +100,85 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/config", s.handlePutConfig)
 }
 
+// RestoreWindowSizing clears manual window-size set by resize-window
+// and restores automatic sizing based on the latest client.
+func (s *Server) RestoreWindowSizing(target string) {
+	if err := s.tmux.ResizeWindowAuto(target); err != nil {
+		log.Printf("RestoreWindowSizing: ResizeWindowAuto(%s): %v", target, err)
+	}
+	if err := s.tmux.SetWindowOption(target, "window-size", "latest"); err != nil {
+		log.Printf("RestoreWindowSizing: SetWindowOption(%s): %v", target, err)
+	}
+}
+
+// BuildTerminalRelay returns the command, args, and cleanup function for a terminal relay.
+// When session_group is enabled, it creates a grouped session for size isolation.
+func (s *Server) BuildTerminalRelay(name string) (cmd string, args []string, cleanup func(), err error) {
+	if !s.cfg.Terminal.IsSessionGroup() {
+		args := []string{"attach-session", "-t", name}
+		if s.cfg.Terminal.IsIgnoreSize() {
+			args = append(args, "-f", "ignore-size")
+		}
+		return "tmux", args, func() {}, nil
+	}
+
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", nil, nil, fmt.Errorf("generate relay ID: %w", err)
+	}
+	relaySession := fmt.Sprintf("%s-tbox-%x", name, b)
+
+	// Retry up to 3 times on name collision
+	for attempt := 0; attempt < 3; attempt++ {
+		err = s.tmux.NewGroupedSession(name, relaySession)
+		if err == nil {
+			break
+		}
+		b = make([]byte, 4)
+		if _, randErr := rand.Read(b); randErr != nil {
+			return "", nil, nil, fmt.Errorf("generate relay ID on retry: %w", randErr)
+		}
+		relaySession = fmt.Sprintf("%s-tbox-%x", name, b)
+	}
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("create grouped session: %w", err)
+	}
+
+	cleanup = func() {
+		if err := s.tmux.KillSession(relaySession); err != nil {
+			log.Printf("BuildTerminalRelay cleanup: failed to kill relay session %q: %v", relaySession, err)
+		}
+	}
+
+	args = []string{"attach-session", "-t", relaySession}
+	if s.cfg.Terminal.IsIgnoreSize() {
+		args = append(args, "-f", "ignore-size")
+	}
+	return "tmux", args, cleanup, nil
+}
+
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("session")
 	if !s.tmux.HasSession(name) {
 		http.Error(w, "session not found", 404)
 		return
 	}
-	// cwd doesn't matter for tmux attach-session; tmux manages its own working directory.
-	relay := terminal.NewRelay("tmux", []string{"attach-session", "-t", name}, "/")
-	if s.cfg.Terminal.IsAutoResize() {
+
+	cmd, args, cleanup, err := s.BuildTerminalRelay(name)
+	if err != nil {
+		http.Error(w, "relay setup failed: "+err.Error(), 500)
+		return
+	}
+	defer cleanup()
+
+	relay := terminal.NewRelay(cmd, args, "/")
+	// session_group=true: each grouped session has only one client,
+	// so window-size latest auto-adjusts — no need for resize-window -A.
+	if s.cfg.Terminal.IsAutoResize() && !s.cfg.Terminal.IsSessionGroup() {
 		relay.OnStart = func() {
-			// Clear any manual window size (e.g. set by handoff or user) so
-			// tmux auto-resizes to match the browser viewport.
-			// Delay to let: (1) tmux register the client, (2) WS I/O start,
-			// (3) browser send its viewport resize — so -A sees the real size.
 			go func() {
 				time.Sleep(1200 * time.Millisecond)
-				s.tmux.ResizeWindowAuto(name)
+				s.RestoreWindowSizing(name)
 			}()
 		}
 	}
