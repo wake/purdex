@@ -115,6 +115,7 @@ export default function TerminalView({ wsUrl, visible = true }: Props) {
       const isComposed = data.length > 1 && data.charCodeAt(0) !== 0x1b
       if (isComposed && data === lastComposedSent) return
       if (isComposed) lastComposedSent = data
+      else lastComposedSent = '' // reset on non-composed input (fixes #21)
 
       conn.send(data)
     })
