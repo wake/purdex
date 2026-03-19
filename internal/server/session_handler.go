@@ -125,7 +125,7 @@ func (h *SessionHandler) syncTmuxSessions() {
 	}
 
 	for _, ts := range tmuxSessions {
-		if known[ts.Name] {
+		if known[ts.Name] || relaySessionPattern.MatchString(ts.Name) {
 			continue
 		}
 		h.store.CreateSession(store.Session{

@@ -52,7 +52,7 @@ func New(cfg config.Config, st *store.Store, tx tmux.Executor, cfgPath string) *
 	return s
 }
 
-// CleanupStaleRelays removes tmux sessions created by session group mode
+// CleanupStaleRelays removes tmux sessions and DB records created by session group mode
 // that were not cleaned up (e.g., daemon crashed). Matches pattern: {name}-tbox-{8 hex chars}.
 func (s *Server) CleanupStaleRelays() {
 	names, err := s.tmux.ListSessionNames()
@@ -65,6 +65,16 @@ func (s *Server) CleanupStaleRelays() {
 			if err := s.tmux.KillSession(name); err != nil {
 				log.Printf("CleanupStaleRelays: failed to kill %q: %v", name, err)
 			}
+		}
+	}
+	// Also clean up any DB records for relay sessions (created by syncTmuxSessions)
+	dbSessions, err := s.store.ListSessions()
+	if err != nil {
+		return
+	}
+	for _, sess := range dbSessions {
+		if relaySessionPattern.MatchString(sess.Name) {
+			s.store.DeleteSession(sess.ID)
 		}
 	}
 }
