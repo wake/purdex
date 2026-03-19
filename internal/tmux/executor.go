@@ -31,6 +31,10 @@ type Executor interface {
 	ResizeWindow(target string, cols, rows int) error
 	ResizeWindowAuto(target string) error
 	SetWindowOption(target, option, value string) error
+	// NewGroupedSession creates a detached session linked to an existing session (session group).
+	NewGroupedSession(baseSession, newSession string) error
+	// ListSessionNames returns all tmux session names.
+	ListSessionNames() ([]string, error)
 }
 
 // --- Real Executor ---
@@ -168,6 +172,30 @@ func (r *RealExecutor) ResizeWindowAuto(target string) error {
 
 func (r *RealExecutor) SetWindowOption(target, option, value string) error {
 	return exec.Command("tmux", "set-window-option", "-t", target, option, value).Run()
+}
+
+func (r *RealExecutor) NewGroupedSession(baseSession, newSession string) error {
+	return exec.Command("tmux", "new-session", "-d", "-t", baseSession, "-s", newSession).Run()
+}
+
+func (r *RealExecutor) ListSessionNames() ([]string, error) {
+	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if strings.Contains(string(exitErr.Stderr), "no server running") ||
+				strings.Contains(string(exitErr.Stderr), "no sessions") {
+				return nil, nil
+			}
+		}
+		return nil, fmt.Errorf("tmux list-sessions: %w", err)
+	}
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			names = append(names, line)
+		}
+	}
+	return names, nil
 }
 
 // --- Fake Executor ---
@@ -330,4 +358,21 @@ func (f *FakeExecutor) SetWindowOption(target, option, value string) error {
 
 func (f *FakeExecutor) SetWindowOptionCalls() []struct{ Target, Option, Value string } {
 	return f.setWindowOptionCalls
+}
+
+func (f *FakeExecutor) NewGroupedSession(baseSession, newSession string) error {
+	base, ok := f.sessions[baseSession]
+	if !ok {
+		return fmt.Errorf("session not found: %s", baseSession)
+	}
+	f.sessions[newSession] = TmuxSession{Name: newSession, Cwd: base.Cwd}
+	return nil
+}
+
+func (f *FakeExecutor) ListSessionNames() ([]string, error) {
+	names := make([]string, 0, len(f.sessions))
+	for name := range f.sessions {
+		names = append(names, name)
+	}
+	return names, nil
 }
