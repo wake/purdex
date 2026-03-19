@@ -94,6 +94,38 @@ func TestBuildTerminalRelayWithoutSessionGroup(t *testing.T) {
 	}
 }
 
+func TestBuildTerminalRelayWithIgnoreSize(t *testing.T) {
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.AddSession("myapp", "/tmp")
+
+	db, _ := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	defer db.Close()
+
+	isTrue := true
+	cfg := config.Config{
+		Terminal: config.TerminalConfig{IgnoreSize: &isTrue},
+	}
+	srv := server.New(cfg, db, fakeTmux, "")
+
+	_, args, cleanup, err := srv.BuildTerminalRelay("myapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	// Should have -f ignore-size in args
+	foundFlag := false
+	for i, a := range args {
+		if a == "-f" && i+1 < len(args) && args[i+1] == "ignore-size" {
+			foundFlag = true
+			break
+		}
+	}
+	if !foundFlag {
+		t.Errorf("expected -f ignore-size in args, got %v", args)
+	}
+}
+
 func TestCleanupStaleRelays(t *testing.T) {
 	fakeTmux := tmux.NewFakeExecutor()
 	fakeTmux.AddSession("myapp", "/tmp")

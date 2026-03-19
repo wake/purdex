@@ -16,6 +16,9 @@ interface PresetRow {
 export default function SettingsPanel({ daemonBase, onClose }: Props) {
   const { config, fetch: fetchConfig, update } = useConfigStore()
 
+  const [autoResize, setAutoResize] = useState(true)
+  const [sessionGroup, setSessionGroup] = useState(false)
+  const [ignoreSize, setIgnoreSize] = useState(false)
   const [streamPresets, setStreamPresets] = useState<PresetRow[]>([])
   const [jsonlPresets, setJsonlPresets] = useState<PresetRow[]>([])
   const [ccCommands, setCcCommands] = useState<string[]>([])
@@ -26,6 +29,9 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
   // Seed local state from config
   useEffect(() => {
     if (config) {
+      setAutoResize(config.terminal?.auto_resize !== false)
+      setSessionGroup(config.terminal?.session_group === true)
+      setIgnoreSize(config.terminal?.ignore_size === true)
       setStreamPresets(config.stream?.presets?.map(p => ({ ...p })) || [])
       setJsonlPresets(config.jsonl?.presets?.map(p => ({ ...p })) || [])
       setCcCommands([...(config.detect?.cc_commands || [])])
@@ -79,6 +85,11 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
     setError(null)
     try {
       await update(daemonBase, {
+        terminal: {
+          auto_resize: autoResize,
+          session_group: sessionGroup,
+          ignore_size: ignoreSize,
+        },
         stream: { presets: streamPresets.filter(p => p.name.trim()) },
         jsonl: { presets: jsonlPresets.filter(p => p.name.trim()) },
         detect: {
@@ -110,6 +121,49 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
         </div>
 
         <div className="p-4 space-y-6">
+          {/* Terminal */}
+          <section>
+            <h3 className="text-xs uppercase text-[#888] mb-2">Terminal</h3>
+            <div className="space-y-3">
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <span className="text-xs text-[#ddd]">Auto Resize</span>
+                  <p className="text-[10px] text-[#666]">連線後自動調整 tmux 視窗尺寸</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={autoResize}
+                  onChange={e => setAutoResize(e.target.checked)}
+                  className="w-4 h-4 accent-blue-500 cursor-pointer"
+                />
+              </label>
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <span className="text-xs text-[#ddd]">Session Group</span>
+                  <p className="text-[10px] text-[#666]">每個連線建立獨立 grouped session</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={sessionGroup}
+                  onChange={e => setSessionGroup(e.target.checked)}
+                  className="w-4 h-4 accent-blue-500 cursor-pointer"
+                />
+              </label>
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <span className="text-xs text-[#ddd]">Ignore Size</span>
+                  <p className="text-[10px] text-[#666]">relay 不影響 tmux 視窗尺寸（保護 iTerm）</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={ignoreSize}
+                  onChange={e => setIgnoreSize(e.target.checked)}
+                  className="w-4 h-4 accent-blue-500 cursor-pointer"
+                />
+              </label>
+            </div>
+          </section>
+
           {/* Stream Presets */}
           <section>
             <h3 className="text-xs uppercase text-[#888] mb-2">Stream Presets</h3>

@@ -136,3 +136,18 @@ func TestIsSessionGroupTrue(t *testing.T) {
 		t.Error("expected IsSessionGroup() to be true when set")
 	}
 }
+
+func TestIsIgnoreSizeDefaultFalse(t *testing.T) {
+	tc := config.TerminalConfig{}
+	if tc.IsIgnoreSize() {
+		t.Error("expected IsIgnoreSize() to be false by default")
+	}
+}
+
+func TestIsIgnoreSizeTrue(t *testing.T) {
+	v := true
+	tc := config.TerminalConfig{IgnoreSize: &v}
+	if !tc.IsIgnoreSize() {
+		t.Error("expected IsIgnoreSize() to be true when set")
+	}
+}

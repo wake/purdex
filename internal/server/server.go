@@ -115,7 +115,11 @@ func (s *Server) RestoreWindowSizing(target string) {
 // When session_group is enabled, it creates a grouped session for size isolation.
 func (s *Server) BuildTerminalRelay(name string) (cmd string, args []string, cleanup func(), err error) {
 	if !s.cfg.Terminal.IsSessionGroup() {
-		return "tmux", []string{"attach-session", "-t", name}, func() {}, nil
+		args := []string{"attach-session", "-t", name}
+		if s.cfg.Terminal.IsIgnoreSize() {
+			args = append(args, "-f", "ignore-size")
+		}
+		return "tmux", args, func() {}, nil
 	}
 
 	b := make([]byte, 4)
@@ -146,7 +150,11 @@ func (s *Server) BuildTerminalRelay(name string) (cmd string, args []string, cle
 		}
 	}
 
-	return "tmux", []string{"attach-session", "-t", relaySession}, cleanup, nil
+	args = []string{"attach-session", "-t", relaySession}
+	if s.cfg.Terminal.IsIgnoreSize() {
+		args = append(args, "-f", "ignore-size")
+	}
+	return "tmux", args, cleanup, nil
 }
 
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
