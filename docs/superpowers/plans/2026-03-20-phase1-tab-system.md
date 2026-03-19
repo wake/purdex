@@ -50,6 +50,7 @@
 | `spa/src/components/TabContent.test.tsx` | 根據 type 渲染正確元件 |
 | `spa/src/components/StatusBar.test.tsx` | 顯示連線資訊 |
 | `spa/src/hooks/useIsMobile.test.ts` | breakpoint 判斷 |
+| `spa/src/lib/parseHash.test.ts` | hash routing 解析（新格式 + legacy） |
 
 ---
 
@@ -192,10 +193,10 @@ function defaultSidebarState(): WorkspaceSidebarState {
 
 export function createTab(opts: Omit<Tab, 'id' | 'icon'> & { icon?: string }): Tab {
   return {
+    ...opts,
     id: generateId(),
     icon: opts.icon ?? iconForType(opts.type),
-    isDirty: opts.type === 'editor' ? false : undefined,
-    ...opts,
+    isDirty: opts.type === 'editor' ? (opts.isDirty ?? false) : undefined,
   }
 }
 
@@ -336,6 +337,25 @@ describe('useTabStore', () => {
     useTabStore.getState().addTab(tab)
     expect(useTabStore.getState().getActiveTab()).toEqual(tab)
   })
+
+  it('ignores setActiveTab with nonexistent id', () => {
+    const tab = createTab({ type: 'terminal', label: 'dev', hostId: 'mlab' })
+    useTabStore.getState().addTab(tab)
+    useTabStore.getState().setActiveTab('nonexistent')
+    expect(useTabStore.getState().activeTabId).toBe(tab.id)
+  })
+
+  it('ignores updateTab with nonexistent id', () => {
+    useTabStore.getState().updateTab('nonexistent', { label: 'ghost' })
+    expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(0)
+  })
+
+  it('removeTab is no-op for nonexistent id', () => {
+    const tab = createTab({ type: 'terminal', label: 'dev', hostId: 'mlab' })
+    useTabStore.getState().addTab(tab)
+    useTabStore.getState().removeTab('nonexistent')
+    expect(useTabStore.getState().tabOrder).toHaveLength(1)
+  })
 })
 ```
 
@@ -392,15 +412,19 @@ export const useTabStore = create<TabState>()(
         }),
 
       setActiveTab: (tabId) =>
-        set({ activeTabId: tabId }),
+        set((state) => {
+          if (!state.tabs[tabId]) return state
+          return { activeTabId: tabId }
+        }),
 
       reorderTabs: (order) =>
         set({ tabOrder: order }),
 
       updateTab: (tabId, updates) =>
-        set((state) => ({
-          tabs: { ...state.tabs, [tabId]: { ...state.tabs[tabId], ...updates } },
-        })),
+        set((state) => {
+          if (!state.tabs[tabId]) return state
+          return { tabs: { ...state.tabs, [tabId]: { ...state.tabs[tabId], ...updates } } }
+        }),
 
       getActiveTab: () => {
         const { tabs, activeTabId } = get()
@@ -422,7 +446,7 @@ export const useTabStore = create<TabState>()(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd spa && npx vitest run src/stores/useTabStore.test.ts`
-Expected: PASS (9 tests)
+Expected: PASS (12 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -513,6 +537,21 @@ describe('useWorkspaceStore', () => {
     const ws = useWorkspaceStore.getState().workspaces.find(w => w.id === wsId)!
     expect(ws.activeTabId).toBe('tab-1')
   })
+
+  it('does not add duplicate tab to workspace', () => {
+    const wsId = useWorkspaceStore.getState().workspaces[0].id
+    useWorkspaceStore.getState().addTabToWorkspace(wsId, 'tab-1')
+    useWorkspaceStore.getState().addTabToWorkspace(wsId, 'tab-1')
+    const ws = useWorkspaceStore.getState().workspaces[0]
+    expect(ws.tabs).toEqual(['tab-1'])
+  })
+
+  it('switches activeWorkspaceId when removing active workspace', () => {
+    const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+    useWorkspaceStore.getState().setActiveWorkspace(ws2.id)
+    useWorkspaceStore.getState().removeWorkspace(ws2.id)
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(useWorkspaceStore.getState().workspaces[0].id)
+  })
 })
 ```
 
@@ -572,9 +611,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       addTabToWorkspace: (wsId, tabId) =>
         set((state) => ({
-          workspaces: state.workspaces.map((ws) =>
-            ws.id === wsId ? { ...ws, tabs: [...ws.tabs, tabId] } : ws,
-          ),
+          workspaces: state.workspaces.map((ws) => {
+            if (ws.id !== wsId) return ws
+            if (ws.tabs.includes(tabId)) return ws // 防重複
+            return { ...ws, tabs: [...ws.tabs, tabId] }
+          }),
         })),
 
       removeTabFromWorkspace: (wsId, tabId) =>
@@ -1085,41 +1126,58 @@ git commit -m "feat: add TabBar component for horizontal tab switching"
 
 ```typescript
 // spa/src/components/TabContent.test.tsx
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, cleanup } from '@testing-library/react'
 import { TabContent } from './TabContent'
 import type { Tab } from '../types/tab'
 
-// Mock heavy components
+// Mock heavy components — 不使用 lazy，直接 mock 為同步元件
 vi.mock('./TerminalView', () => ({
-  default: ({ wsUrl }: { wsUrl: string }) => <div data-testid="terminal-view">Terminal: {wsUrl}</div>,
+  default: ({ wsUrl, visible }: { wsUrl: string; visible: boolean }) => (
+    <div data-testid="terminal-view" data-visible={visible}>Terminal: {wsUrl}</div>
+  ),
 }))
 vi.mock('./ConversationView', () => ({
-  default: ({ sessionName }: { sessionName: string }) => <div data-testid="conversation-view">Stream: {sessionName}</div>,
+  default: ({ sessionName }: { sessionName: string }) => (
+    <div data-testid="conversation-view">Stream: {sessionName}</div>
+  ),
 }))
+
+beforeEach(() => cleanup())
+
+const termTab: Tab = { id: 't1', type: 'terminal', label: 'dev', icon: 'Terminal', hostId: 'mlab', sessionName: 'dev' }
+const streamTab: Tab = { id: 't2', type: 'stream', label: 'claude', icon: 'ChatCircleDots', hostId: 'mlab', sessionName: 'claude' }
+const editorTab: Tab = { id: 't3', type: 'editor', label: 'file.ts', icon: 'File', hostId: 'mlab', filePath: '/file.ts' }
 
 describe('TabContent', () => {
   it('renders TerminalView for terminal tab', () => {
-    const tab: Tab = { id: 't1', type: 'terminal', label: 'dev', icon: 'Terminal', hostId: 'mlab', sessionName: 'dev' }
-    render(<TabContent tab={tab} wsBase="ws://test" daemonBase="http://test" />)
+    render(<TabContent allTabs={[termTab]} activeTabId="t1" wsBase="ws://test" daemonBase="http://test" />)
     expect(screen.getByTestId('terminal-view')).toBeTruthy()
   })
 
   it('renders ConversationView for stream tab', () => {
-    const tab: Tab = { id: 't2', type: 'stream', label: 'claude', icon: 'ChatCircleDots', hostId: 'mlab', sessionName: 'claude' }
-    render(<TabContent tab={tab} wsBase="ws://test" daemonBase="http://test" />)
+    render(<TabContent allTabs={[streamTab]} activeTabId="t2" wsBase="ws://test" daemonBase="http://test" />)
     expect(screen.getByTestId('conversation-view')).toBeTruthy()
   })
 
   it('renders placeholder for editor tab', () => {
-    const tab: Tab = { id: 't3', type: 'editor', label: 'file.ts', icon: 'File', hostId: 'mlab', filePath: '/file.ts' }
-    render(<TabContent tab={tab} wsBase="ws://test" daemonBase="http://test" />)
+    render(<TabContent allTabs={[editorTab]} activeTabId="t3" wsBase="ws://test" daemonBase="http://test" />)
     expect(screen.getByText(/file\.ts/)).toBeTruthy()
   })
 
-  it('renders empty state when no tab', () => {
-    render(<TabContent tab={null} wsBase="ws://test" daemonBase="http://test" />)
+  it('renders empty state when no tabs', () => {
+    render(<TabContent allTabs={[]} activeTabId={null} wsBase="ws://test" daemonBase="http://test" />)
     expect(screen.getByText(/選擇或建立/)).toBeTruthy()
+  })
+
+  it('keeps all terminal tabs mounted but hides inactive ones', () => {
+    render(<TabContent allTabs={[termTab, streamTab]} activeTabId="t2" wsBase="ws://test" daemonBase="http://test" />)
+    // Terminal is mounted but not visible
+    const termView = screen.getByTestId('terminal-view')
+    expect(termView).toBeTruthy()
+    expect(termView.dataset.visible).toBe('false')
+    // Stream is visible
+    expect(screen.getByTestId('conversation-view')).toBeTruthy()
   })
 })
 ```
@@ -1129,26 +1187,34 @@ describe('TabContent', () => {
 Run: `cd spa && npx vitest run src/components/TabContent.test.tsx`
 Expected: FAIL — module not found
 
-- [ ] **Step 3: Implement TabContent**
+- [ ] **Step 3: Implement TabContent (keep-alive 策略)**
+
+**核心設計**：所有已開啟的 terminal/stream tab 同時掛載，用 CSS `display: none` 隱藏非活躍分頁。
+這避免切換分頁時 xterm.js 實例被銷毀和 WebSocket 斷線重連。
 
 ```typescript
 // spa/src/components/TabContent.tsx
-import { lazy, Suspense } from 'react'
+import TerminalView from './TerminalView'
+import ConversationView from './ConversationView'
 import type { Tab } from '../types/tab'
 
-const TerminalView = lazy(() => import('./TerminalView'))
-const ConversationView = lazy(() => import('./ConversationView'))
-
 interface Props {
-  tab: Tab | null
+  allTabs: Tab[]                    // 所有需要掛載的 tabs
+  activeTabId: string | null
   wsBase: string
   daemonBase: string
+  terminalKey?: number              // 用於強制重建 terminal（settings 變更後）
+  connectingMessage?: string        // terminal 重連時的訊息
   onHandoff?: () => void
   onHandoffToTerm?: () => void
 }
 
-export function TabContent({ tab, wsBase, daemonBase, onHandoff, onHandoffToTerm }: Props) {
-  if (!tab) {
+export function TabContent({
+  allTabs, activeTabId, wsBase, daemonBase,
+  terminalKey, connectingMessage,
+  onHandoff, onHandoffToTerm,
+}: Props) {
+  if (allTabs.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-600 text-sm">
         選擇或建立一個分頁開始使用
@@ -1158,26 +1224,38 @@ export function TabContent({ tab, wsBase, daemonBase, onHandoff, onHandoffToTerm
 
   return (
     <div className="flex-1 overflow-hidden relative">
-      <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-600">Loading...</div>}>
-        {tab.type === 'terminal' && tab.sessionName && (
-          <TerminalView
-            wsUrl={`${wsBase}/ws/terminal/${tab.sessionName}`}
-            visible={true}
-          />
-        )}
-        {tab.type === 'stream' && tab.sessionName && (
-          <ConversationView
-            sessionName={tab.sessionName}
-            onHandoff={onHandoff}
-            onHandoffToTerm={onHandoffToTerm}
-          />
-        )}
-        {tab.type === 'editor' && (
-          <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">
-            Editor: {tab.filePath ?? tab.label}（Phase 5 實作）
+      {allTabs.map((tab) => {
+        const isActive = tab.id === activeTabId
+
+        return (
+          <div
+            key={tab.id}
+            className="absolute inset-0"
+            style={{ display: isActive ? 'flex' : 'none' }}
+          >
+            {tab.type === 'terminal' && tab.sessionName && (
+              <TerminalView
+                key={tab.type === 'terminal' && isActive ? terminalKey : undefined}
+                wsUrl={`${wsBase}/ws/terminal/${tab.sessionName}`}
+                visible={isActive}
+                connectingMessage={isActive ? connectingMessage : undefined}
+              />
+            )}
+            {tab.type === 'stream' && tab.sessionName && (
+              <ConversationView
+                sessionName={tab.sessionName}
+                onHandoff={isActive ? onHandoff : undefined}
+                onHandoffToTerm={isActive ? onHandoffToTerm : undefined}
+              />
+            )}
+            {tab.type === 'editor' && (
+              <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">
+                Editor: {tab.filePath ?? tab.label}（Phase 5 實作）
+              </div>
+            )}
           </div>
-        )}
-      </Suspense>
+        )
+      })}
     </div>
   )
 }
@@ -1290,33 +1368,28 @@ git commit -m "feat: add StatusBar component for connection info display"
 
 - [ ] **Step 1: 確認 TerminalView 和 ConversationView 有 default export**
 
-檢查 `spa/src/components/TerminalView.tsx` 和 `spa/src/components/ConversationView.tsx` 是否有 default export。如果是 named export，需要加上 `export default`。TabContent 使用 `lazy(() => import('./TerminalView'))` 需要 default export。
-
-若沒有 default export，在檔案最後加：
-```typescript
-export default TerminalView  // 或 ConversationView
-```
+檢查 `spa/src/components/TerminalView.tsx` 和 `spa/src/components/ConversationView.tsx`。
+實際檔案使用 `export default function TerminalView` / `export default function ConversationView`，已有 default export。無需修改。
 
 - [ ] **Step 2: 重構 App.tsx**
 
-將 App.tsx 完全改寫為新的佈局結構。保留所有現有功能（session fetch、session-events WS、handoff 邏輯），但將 UI 從 SessionPanel+TopBar+Content 改為 ActivityBar+TabBar+TabContent+StatusBar。
+將 App.tsx 完全改寫為新的佈局結構。**核心原則：業務邏輯從現有 App.tsx 原封搬移，只改佈局結構和導航方式。**
 
-核心改動：
-- 移除 TopBar 引用，功能由 TabBar 取代
-- 移除 SessionPanel 引用（Phase 3 重新引入為側欄面板）
-- 新增 migration 邏輯：首次載入時，將現有 sessions 轉為 tabs
-- Hash routing 從 `#/{uid}/{mode}` 改為 `#/tab/{tabId}`
+改動：
+- 移除 TopBar、SessionPanel 引用
+- 新增 ActivityBar + TabBar + TabContent(keep-alive) + StatusBar
+- 新增 migration 邏輯（首次載入時 sessions → tabs）
+- Hash routing 升級為 `#/tab/{tabId}`
+- **完整保留** handoff、terminal reconnect、session-events 所有邏輯
 
 ```typescript
 // spa/src/App.tsx — 完整重寫
-// 注意：此處只列出結構性改動，實際實作需保留所有 session-events、handoff、stream 邏輯
-
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { ActivityBar } from './components/ActivityBar'
 import { TabBar } from './components/TabBar'
 import { TabContent } from './components/TabContent'
 import { StatusBar } from './components/StatusBar'
-import { SettingsPanel } from './components/SettingsPanel'
+import SettingsPanel from './components/SettingsPanel'  // default import
 import { useSessionStore } from './stores/useSessionStore'
 import { useStreamStore } from './stores/useStreamStore'
 import { useConfigStore } from './stores/useConfigStore'
@@ -1325,17 +1398,23 @@ import { useWorkspaceStore } from './stores/useWorkspaceStore'
 import { useRelayWsManager } from './hooks/useRelayWsManager'
 import { useIsMobile } from './hooks/useIsMobile'
 import { connectSessionEvents } from './lib/session-events'
+import { handoff, fetchHistory } from './lib/api'
 import { createTab, isStandaloneTab } from './types/tab'
 import type { Tab } from './types/tab'
 
 const daemonBase = 'http://100.64.0.2:7860'  // TODO: from config/localStorage
 const wsBase = daemonBase.replace(/^http/, 'ws')
 
-function parseHash(): { tabId: string | null } {
+// --- Hash routing helpers (export for testing) ---
+export function parseHash(): { tabId: string | null; legacyUid?: string; legacyMode?: string } {
   const hash = window.location.hash.replace(/^#\/?/, '')
   if (!hash) return { tabId: null }
   const parts = hash.split('/')
   if (parts[0] === 'tab' && parts[1]) return { tabId: parts[1] }
+  // Legacy format: #/{uid}/{mode}
+  if (parts[0] && parts[0] !== 'tab') {
+    return { tabId: null, legacyUid: parts[0], legacyMode: parts[1] || 'term' }
+  }
   return { tabId: null }
 }
 
@@ -1346,6 +1425,13 @@ function setHash(tabId: string) {
 export default function App() {
   const isMobile = useIsMobile()
   const [settingsOpen, setSettingsOpen] = useState(false)
+
+  // --- Terminal reconnect state (搬自原 App.tsx) ---
+  const [terminalKey, setTerminalKey] = useState(0)
+  const [terminalConnectMsg, setTerminalConnectMsg] = useState('')
+
+  // --- Handoff state (搬自原 App.tsx) ---
+  const [activePreset, setActivePreset] = useState('')
 
   // Existing stores
   const { sessions, fetch: fetchSessions } = useSessionStore()
@@ -1360,24 +1446,34 @@ export default function App() {
     removeTabFromWorkspace, findWorkspaceByTab, addWorkspace,
   } = useWorkspaceStore()
 
-  // Stream store (kept for session-events compatibility)
+  // Stream store
   const setRelayStatus = useStreamStore((s) => s.setRelayStatus)
   const setSessionStatus = useStreamStore((s) => s.setSessionStatus)
   const setHandoffProgress = useStreamStore((s) => s.setHandoffProgress)
+  const loadHistory = useStreamStore((s) => s.loadHistory)
+  const clearSession = useStreamStore((s) => s.clearSession)
 
-  // Relay WS manager (unchanged — accepts only wsBase)
+  // Relay WS manager (accepts only wsBase)
   useRelayWsManager(wsBase)
 
-  // Active tab derived state
+  // --- Derived state ---
   const activeTab = getActiveTab()
 
-  // --- Bootstrap: fetch sessions, config, connect events ---
+  // 從 activeTab 推導 activeSession（handoff 和 session-events 需要）
+  const activeSession = activeTab?.sessionName
+    ? sessions.find((s) => s.name === activeTab.sessionName) ?? null
+    : null
+
+  // Stream presets（搬自原 App.tsx）
+  const streamPresets = config?.stream?.presets ?? []
+
+  // --- Bootstrap ---
   useEffect(() => {
     fetchSessions(daemonBase)
     fetchConfig(daemonBase)
   }, [fetchSessions, fetchConfig])
 
-  // Session events WS (unchanged logic from original App.tsx)
+  // --- Session events WS（完整搬自原 App.tsx，非簡化版）---
   useEffect(() => {
     const conn = connectSessionEvents(
       `${wsBase}/ws/session-events`,
@@ -1386,16 +1482,34 @@ export default function App() {
           setSessionStatus(event.session, event.value as any)
           fetchSessions(daemonBase)
         } else if (event.type === 'relay') {
-          setRelayStatus(event.session, event.value === 'connected')
+          const connected = event.value === 'connected'
+          setRelayStatus(event.session, connected)
+          if (connected) {
+            // Relay 連線後，載入 stream 歷史
+            const session = sessions.find((s) => s.name === event.session)
+            if (session?.cc_session_id) {
+              fetchHistory(daemonBase, session.cc_session_id).then((msgs) => {
+                loadHistory(event.session, msgs)
+              })
+            }
+          }
         } else if (event.type === 'handoff') {
-          setHandoffProgress(event.session, event.value)
+          const progress = event.value
+          if (progress.startsWith('failed:')) {
+            setHandoffProgress(event.session, '')
+          } else if (progress === 'connected') {
+            setHandoffProgress(event.session, '')
+            fetchSessions(daemonBase)
+          } else {
+            setHandoffProgress(event.session, progress)
+          }
         }
       },
     )
     return () => conn.close()
-  }, [setRelayStatus, setSessionStatus, setHandoffProgress, fetchSessions])
+  }, [setRelayStatus, setSessionStatus, setHandoffProgress, fetchSessions, sessions, loadHistory])
 
-  // --- Migration: on first load, if no tabs exist, create tabs from sessions ---
+  // --- Migration: sessions → tabs (首次載入) ---
   const migrated = useRef(false)
   useEffect(() => {
     if (migrated.current || sessions.length === 0 || tabOrder.length > 0) return
@@ -1416,11 +1530,21 @@ export default function App() {
 
   // --- Hash routing ---
   useEffect(() => {
-    const { tabId } = parseHash()
+    const { tabId, legacyUid } = parseHash()
     if (tabId && tabs[tabId]) {
       setActiveTab(tabId)
+    } else if (legacyUid) {
+      // Legacy format redirect
+      const session = sessions.find((s) => s.uid === legacyUid)
+      if (session) {
+        const tab = Object.values(tabs).find((t) => t.sessionName === session.name)
+        if (tab) {
+          setActiveTab(tab.id)
+          setHash(tab.id)
+        }
+      }
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessions]) // Re-run when sessions load (for legacy redirect)
 
   useEffect(() => {
     if (activeTabId) setHash(activeTabId)
@@ -1435,7 +1559,45 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handler)
   }, [tabs, setActiveTab])
 
-  // --- Handlers ---
+  // --- Handlers (搬自原 App.tsx) ---
+
+  const handleTerminalReconnect = useCallback(() => {
+    setTerminalConnectMsg('正在套用新設定...')
+    setTerminalKey((k) => k + 1)
+    setTimeout(() => setTerminalConnectMsg(''), 5000)
+  }, [])
+
+  const handleHandoff = useCallback(
+    async (mode?: string, preset?: string) => {
+      if (!activeSession) return
+      try {
+        await handoff(daemonBase, activeSession.id, mode ?? 'stream', preset)
+        setActivePreset(preset ?? '')
+      } catch (e) {
+        console.error('Handoff failed:', e)
+      }
+    },
+    [activeSession],
+  )
+
+  const handleHandoffToTerm = useCallback(async () => {
+    if (!activeSession) return
+    try {
+      clearSession(activeSession.name)
+      await handoff(daemonBase, activeSession.id, 'term')
+      // 找到對應 tab 並切換 type 為 terminal
+      const tab = Object.values(tabs).find((t) => t.sessionName === activeSession.name)
+      if (tab) {
+        useTabStore.getState().updateTab(tab.id, { type: 'terminal', icon: 'Terminal' })
+      }
+      setTerminalConnectMsg('正在切換到終端...')
+      setTerminalKey((k) => k + 1)
+      setTimeout(() => setTerminalConnectMsg(''), 5000)
+    } catch (e) {
+      console.error('Handoff to term failed:', e)
+    }
+  }, [activeSession, clearSession, tabs])
+
   const handleSelectWorkspace = useCallback((wsId: string) => {
     setActiveWorkspace(wsId)
     const ws = workspaces.find((w) => w.id === wsId)
@@ -1456,35 +1618,34 @@ export default function App() {
   }, [findWorkspaceByTab, removeTabFromWorkspace, removeTab])
 
   const handleAddTab = useCallback(() => {
-    // Phase 1: opens Quick Switcher placeholder or creates a blank tab
-    // For now, just open settings where sessions can be managed
-    setSettingsOpen(true)
+    setSettingsOpen(true) // Phase 7: replace with Quick Switcher
   }, [])
 
   const handleAddWorkspace = useCallback(() => {
-    const ws = addWorkspace('New Workspace')
-    setActiveWorkspace(ws.id)
-  }, [addWorkspace, setActiveWorkspace])
+    // Phase 1: disabled — Phase 2 開放
+    // const ws = addWorkspace('New Workspace')
+    // setActiveWorkspace(ws.id)
+  }, [])
 
-  // --- Derive visible tabs for current context ---
+  // --- Derive visible tabs ---
   const activeWs = workspaces.find((w) => w.id === activeWorkspaceId)
   const visibleTabs: Tab[] = activeWs
     ? activeWs.tabs.map((id) => tabs[id]).filter(Boolean)
     : []
 
-  // Standalone tabs
   const standaloneTabs = tabOrder
     .filter((id) => isStandaloneTab(id, workspaces))
     .map((id) => tabs[id])
     .filter(Boolean)
 
-  // Active standalone tab
   const activeStandaloneTabId = activeTabId && isStandaloneTab(activeTabId, workspaces) ? activeTabId : null
 
-  // If viewing standalone tab, show it in TabBar too
   const displayTabs = activeStandaloneTabId
     ? [tabs[activeStandaloneTabId]].filter(Boolean)
     : visibleTabs
+
+  // All tabs to keep alive (for TabContent keep-alive rendering)
+  const allMountedTabs = [...visibleTabs, ...standaloneTabs]
 
   // StatusBar info
   const statusHost = activeTab?.hostId === 'local' ? 'mlab' : activeTab?.hostId ?? null
@@ -1516,22 +1677,19 @@ export default function App() {
           onAddTab={handleAddTab}
         />
 
-        {/* Content area (sidebar zones as empty shells for Phase 3) */}
+        {/* Content area */}
         <div className="flex-1 flex overflow-hidden">
-          {/* Left sidebar zones placeholder */}
-          {/* <div className="hidden" id="sidebar-left-outer" /> */}
-          {/* <div className="hidden" id="sidebar-left-inner" /> */}
-
-          {/* Content */}
+          {/* TabContent: keep-alive — 所有 tab 同時掛載 */}
           <TabContent
-            tab={activeTab}
+            allTabs={allMountedTabs}
+            activeTabId={activeTabId}
             wsBase={wsBase}
             daemonBase={daemonBase}
+            terminalKey={terminalKey}
+            connectingMessage={terminalConnectMsg}
+            onHandoff={() => handleHandoff()}
+            onHandoffToTerm={handleHandoffToTerm}
           />
-
-          {/* Right sidebar zones placeholder */}
-          {/* <div className="hidden" id="sidebar-right-inner" /> */}
-          {/* <div className="hidden" id="sidebar-right-outer" /> */}
         </div>
 
         {/* Status bar */}
@@ -1543,7 +1701,7 @@ export default function App() {
         />
       </div>
 
-      {/* Settings Panel — props 必須匹配實際 interface: { daemonBase, onClose, onTerminalReconnect? } */}
+      {/* Settings Panel (default import, props: daemonBase, onClose, onTerminalReconnect) */}
       {settingsOpen && (
         <SettingsPanel
           daemonBase={daemonBase}
@@ -1555,31 +1713,6 @@ export default function App() {
   )
 }
 ```
-
-> **重要實作注意事項：**
->
-> 1. **SettingsPanel** 不接受 `config` prop（它內部透過 `useConfigStore` 讀取），只需 `daemonBase`、`onClose`、`onTerminalReconnect`。
->
-> 2. **Handoff 邏輯必須完整保留。** 上方程式碼是佈局骨架，實際實作時必須從現有 `App.tsx` 搬移以下邏輯：
->    - `handleHandoff(sessionId, preset?)` — 呼叫 `handoff()` API、管理 presets、設定 progress
->    - `handleHandoffToTerm(sessionId)` — 切換 mode 為 term、呼叫 `handoff()` API
->    - `handleTerminalReconnect()` — 重置 terminalKey 觸發 TerminalView 重新掛載
->    - `activePreset` state 和 `streamPresets` 從 config 推導
->    - Session-events handler 的完整版本（包含 `fetchHistory`、`clearSession`、relay status 後的 history 載入）
->    - `terminalKey` / `connectingMessage` 機制（terminal 重連後顯示自訂訊息）
->
->    **做法：** 逐段從現有 `App.tsx` 搬移，而非從頭寫。只改佈局結構，業務邏輯原封搬移。
->
-> 3. **TabContent 必須接收 handoff callbacks。** App.tsx 需要傳遞 `onHandoff` 和 `onHandoffToTerm` 給 TabContent：
->    ```tsx
->    <TabContent
->      tab={activeTab}
->      wsBase={wsBase}
->      daemonBase={daemonBase}
->      onHandoff={() => handleHandoff(activeSession?.id)}
->      onHandoffToTerm={() => handleHandoffToTerm(activeSession?.id)}
->    />
->    ```
 
 - [ ] **Step 3: 確認 TerminalView/ConversationView 的 props 相容性**
 
@@ -1616,7 +1749,69 @@ git commit -m "feat: restructure App layout with ActivityBar + TabBar + TabConte
 
 ---
 
-## Task 10: 移除舊的 TopBar，清理引用
+## Task 10: parseHash 單元測試
+
+`parseHash` 是從 App.tsx export 的純函式，應有獨立測試。
+
+**Files:**
+- Test: `spa/src/lib/parseHash.test.ts`
+
+- [ ] **Step 1: Write tests**
+
+```typescript
+// spa/src/lib/parseHash.test.ts
+import { describe, it, expect } from 'vitest'
+import { parseHash } from '../App'
+
+describe('parseHash', () => {
+  // 注意：測試前需設定 window.location.hash
+
+  it('returns null tabId for empty hash', () => {
+    window.location.hash = ''
+    expect(parseHash().tabId).toBeNull()
+  })
+
+  it('parses new format #/tab/{id}', () => {
+    window.location.hash = '#/tab/abc-123'
+    expect(parseHash()).toEqual({ tabId: 'abc-123' })
+  })
+
+  it('returns null tabId for #/tab/ with empty id', () => {
+    window.location.hash = '#/tab/'
+    expect(parseHash().tabId).toBeNull()
+  })
+
+  it('parses legacy format #/{uid}/{mode}', () => {
+    window.location.hash = '#/abc123/stream'
+    const result = parseHash()
+    expect(result.tabId).toBeNull()
+    expect(result.legacyUid).toBe('abc123')
+    expect(result.legacyMode).toBe('stream')
+  })
+
+  it('defaults legacy mode to term', () => {
+    window.location.hash = '#/abc123'
+    const result = parseHash()
+    expect(result.legacyMode).toBe('term')
+  })
+})
+```
+
+- [ ] **Step 2: Run test to verify it passes**
+
+Run: `cd spa && npx vitest run src/lib/parseHash.test.ts`
+Expected: PASS (5 tests)
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add spa/src/lib/parseHash.test.ts
+git commit -m "test: add parseHash unit tests for hash routing"
+```
+
+---
+
+## Task 11: 移除舊的 TopBar，清理引用
 
 **Files:**
 - Modify: `spa/src/components/TopBar.tsx` — 保留檔案但標記 deprecated（Phase 完成確認後可刪除）
@@ -1649,70 +1844,9 @@ git commit -m "chore: mark TopBar as deprecated, replaced by TabBar"
 
 ---
 
-## Task 11: Hash routing 向後相容
-
-確保舊的 `#/{uid}/{mode}` hash 格式能正確 redirect 到新格式。
-
-**Files:**
-- Modify: `spa/src/App.tsx` (在 parseHash 增加 legacy 支援)
-
-- [ ] **Step 1: 更新 parseHash 支援舊格式**
-
-```typescript
-function parseHash(): { tabId: string | null; legacyUid?: string; legacyMode?: string } {
-  const hash = window.location.hash.replace(/^#\/?/, '')
-  if (!hash) return { tabId: null }
-  const parts = hash.split('/')
-
-  // New format: #/tab/{tabId}
-  if (parts[0] === 'tab' && parts[1]) return { tabId: parts[1] }
-
-  // Legacy format: #/{uid}/{mode}
-  if (parts[0] && parts[0] !== 'tab') {
-    return { tabId: null, legacyUid: parts[0], legacyMode: parts[1] || 'term' }
-  }
-
-  return { tabId: null }
-}
-```
-
-- [ ] **Step 2: 在 App.tsx 的初始化中處理 legacy hash**
-
-在 hash routing useEffect 中，若偵測到 legacyUid，找到對應的 tab（by sessionName + matching session uid）並 redirect：
-
-```typescript
-useEffect(() => {
-  const { tabId, legacyUid, legacyMode } = parseHash()
-  if (tabId && tabs[tabId]) {
-    setActiveTab(tabId)
-  } else if (legacyUid) {
-    // Find session by uid, then find tab by sessionName
-    const session = sessions.find(s => s.uid === legacyUid)
-    if (session) {
-      const tab = Object.values(tabs).find(t => t.sessionName === session.name)
-      if (tab) {
-        setActiveTab(tab.id)
-        setHash(tab.id) // Redirect to new format
-      }
-    }
-  }
-}, []) // eslint-disable-line
-```
-
-- [ ] **Step 3: 手動測試 legacy URL**
-
-在瀏覽器中輸入舊格式 URL（如 `#/abc123/term`），確認正確 redirect 到對應的 tab。
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add spa/src/App.tsx
-git commit -m "feat: add legacy hash routing backward compatibility"
-```
-
----
-
 ## Task 12: 整合測試 + 最終驗證
+
+Legacy hash routing 已在 Task 9 的 App.tsx 中完整實作（parseHash 支援 legacyUid + redirect），無需獨立 task。
 
 - [ ] **Step 1: Run full test suite**
 
