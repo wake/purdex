@@ -124,13 +124,15 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
           {/* Terminal */}
           <section>
             <h3 className="text-xs uppercase text-[#999] mb-2">Terminal</h3>
+            <span className="block text-[11px] text-[#777] mb-3">變更後需重新連線生效</span>
             <div className="space-y-3">
               <label className="flex items-center justify-between cursor-pointer">
                 <div>
                   <span className="text-xs text-[#ddd]">Auto Resize</span>
-                  <p className="text-[11px] text-[#777]">連線後自動調整 tmux 視窗尺寸</p>
+                  <span className="block text-[11px] text-[#777]">連線後自動調整 tmux 視窗尺寸</span>
                 </div>
                 <input
+                  data-testid="terminal-auto-resize"
                   type="checkbox"
                   checked={autoResize}
                   onChange={e => setAutoResize(e.target.checked)}
@@ -140,9 +142,10 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
               <label className="flex items-center justify-between cursor-pointer">
                 <div>
                   <span className="text-xs text-[#ddd]">Session Group</span>
-                  <p className="text-[11px] text-[#777]">每個連線建立獨立 grouped session</p>
+                  <span className="block text-[11px] text-[#777]">每個連線建立獨立 grouped session</span>
                 </div>
                 <input
+                  data-testid="terminal-session-group"
                   type="checkbox"
                   checked={sessionGroup}
                   onChange={e => setSessionGroup(e.target.checked)}
@@ -152,9 +155,10 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
               <label className="flex items-center justify-between cursor-pointer">
                 <div>
                   <span className="text-xs text-[#ddd]">Ignore Size</span>
-                  <p className="text-[11px] text-[#777]">relay 不影響 tmux 視窗尺寸（保護 iTerm）</p>
+                  <span className="block text-[11px] text-[#777]">relay 不影響 tmux 視窗尺寸（保護 iTerm）</span>
                 </div>
                 <input
+                  data-testid="terminal-ignore-size"
                   type="checkbox"
                   checked={ignoreSize}
                   onChange={e => setIgnoreSize(e.target.checked)}
