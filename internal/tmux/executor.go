@@ -30,6 +30,7 @@ type Executor interface {
 	PaneSize(target string) (cols, rows int, err error)
 	ResizeWindow(target string, cols, rows int) error
 	ResizeWindowAuto(target string) error
+	SetWindowOption(target, option, value string) error
 }
 
 // --- Real Executor ---
@@ -165,6 +166,10 @@ func (r *RealExecutor) ResizeWindowAuto(target string) error {
 	return exec.Command("tmux", "resize-window", "-A", "-t", target).Run()
 }
 
+func (r *RealExecutor) SetWindowOption(target, option, value string) error {
+	return exec.Command("tmux", "set-window-option", "-t", target, option, value).Run()
+}
+
 // --- Fake Executor ---
 
 type RawKeysCall struct {
@@ -177,15 +182,22 @@ type KeysCall struct {
 	Keys   string
 }
 
+type SetWindowOptionCall struct {
+	Target string
+	Option string
+	Value  string
+}
+
 type FakeExecutor struct {
-	sessions         map[string]TmuxSession
-	paneCommands     map[string]string   // target → command name
-	paneContents     map[string]string   // target → captured text
-	paneChildren     map[string][]string // target → child command names
-	paneSizes        map[string][2]int   // target → [cols, rows]
-	rawKeysCalls     []RawKeysCall
-	keysCalls        []KeysCall
-	autoResizeCalls  []string // targets passed to ResizeWindowAuto
+	sessions              map[string]TmuxSession
+	paneCommands          map[string]string   // target → command name
+	paneContents          map[string]string   // target → captured text
+	paneChildren          map[string][]string // target → child command names
+	paneSizes             map[string][2]int   // target → [cols, rows]
+	rawKeysCalls          []RawKeysCall
+	keysCalls             []KeysCall
+	autoResizeCalls       []string              // targets passed to ResizeWindowAuto
+	setWindowOptionCalls  []SetWindowOptionCall // calls to SetWindowOption
 }
 
 func NewFakeExecutor() *FakeExecutor {
@@ -315,4 +327,17 @@ func (f *FakeExecutor) ResizeWindowAuto(target string) error {
 
 func (f *FakeExecutor) AutoResizeCalls() []string {
 	return f.autoResizeCalls
+}
+
+func (f *FakeExecutor) SetWindowOption(target, option, value string) error {
+	f.setWindowOptionCalls = append(f.setWindowOptionCalls, SetWindowOptionCall{
+		Target: target,
+		Option: option,
+		Value:  value,
+	})
+	return nil
+}
+
+func (f *FakeExecutor) SetWindowOptionCalls() []SetWindowOptionCall {
+	return f.setWindowOptionCalls
 }
