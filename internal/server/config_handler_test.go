@@ -238,6 +238,83 @@ func TestPutConfigPartialDetect(t *testing.T) {
 	}
 }
 
+func TestPutConfigUpdatesTerminal(t *testing.T) {
+	srv, _ := newConfigTestServer(t)
+
+	update := map[string]any{
+		"terminal": map[string]any{
+			"sizing_mode": "terminal-first",
+		},
+	}
+	body, _ := json.Marshal(update)
+	resp := authPut(t, srv.URL+"/api/config", body)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, string(b))
+	}
+
+	var cfg config.Config
+	json.NewDecoder(resp.Body).Decode(&cfg)
+
+	if cfg.Terminal.SizingMode != "terminal-first" {
+		t.Errorf("want sizing_mode=terminal-first, got %q", cfg.Terminal.SizingMode)
+	}
+
+	// GET: verify persisted
+	getResp := authGet(t, srv.URL+"/api/config")
+	defer getResp.Body.Close()
+
+	var getCfg config.Config
+	json.NewDecoder(getResp.Body).Decode(&getCfg)
+
+	if getCfg.Terminal.SizingMode != "terminal-first" {
+		t.Errorf("GET after PUT: want sizing_mode=terminal-first, got %q", getCfg.Terminal.SizingMode)
+	}
+}
+
+func TestPutConfigPartialTerminal(t *testing.T) {
+	srv, _ := newConfigTestServer(t)
+
+	// Empty terminal object should not change sizing_mode
+	update := map[string]any{
+		"terminal": map[string]any{},
+	}
+	body, _ := json.Marshal(update)
+	resp := authPut(t, srv.URL+"/api/config", body)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+
+	var cfg config.Config
+	json.NewDecoder(resp.Body).Decode(&cfg)
+
+	// sizing_mode should remain empty (default "auto")
+	if cfg.Terminal.SizingMode != "" {
+		t.Errorf("sizing_mode should remain empty, got %q", cfg.Terminal.SizingMode)
+	}
+}
+
+func TestPutConfigRejectsInvalidSizingMode(t *testing.T) {
+	srv, _ := newConfigTestServer(t)
+
+	update := map[string]any{
+		"terminal": map[string]any{
+			"sizing_mode": "banana",
+		},
+	}
+	body, _ := json.Marshal(update)
+	resp := authPut(t, srv.URL+"/api/config", body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for invalid sizing_mode, got %d", resp.StatusCode)
+	}
+}
+
 func TestPutConfigInvalidJSON(t *testing.T) {
 	srv, _ := newConfigTestServer(t)
 

@@ -1,11 +1,13 @@
 // spa/src/components/SettingsPanel.tsx
 import { useState, useEffect } from 'react'
-import { X, Plus, Trash } from '@phosphor-icons/react'
+import { X, Plus, Trash, Question } from '@phosphor-icons/react'
+import { useFloating, useHover, useInteractions, offset, flip, shift, FloatingPortal } from '@floating-ui/react'
 import { useConfigStore } from '../stores/useConfigStore'
 
 interface Props {
   daemonBase: string
   onClose: () => void
+  onTerminalReconnect?: () => void
 }
 
 interface PresetRow {
@@ -13,15 +15,25 @@ interface PresetRow {
   command: string
 }
 
-export default function SettingsPanel({ daemonBase, onClose }: Props) {
+export default function SettingsPanel({ daemonBase, onClose, onTerminalReconnect }: Props) {
   const { config, fetch: fetchConfig, update } = useConfigStore()
 
   const [streamPresets, setStreamPresets] = useState<PresetRow[]>([])
   const [jsonlPresets, setJsonlPresets] = useState<PresetRow[]>([])
   const [ccCommands, setCcCommands] = useState<string[]>([])
   const [pollInterval, setPollInterval] = useState(5)
+  const [sizingMode, setSizingMode] = useState('auto')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [tooltipOpen, setTooltipOpen] = useState(false)
+  const { refs, floatingStyles, context } = useFloating({
+    open: tooltipOpen,
+    onOpenChange: setTooltipOpen,
+    placement: 'top',
+    middleware: [offset(6), flip(), shift({ padding: 8 })],
+  })
+  const hover = useHover(context)
+  const { getReferenceProps, getFloatingProps } = useInteractions([hover])
 
   // Seed local state from config
   useEffect(() => {
@@ -30,6 +42,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
       setJsonlPresets(config.jsonl?.presets?.map(p => ({ ...p })) || [])
       setCcCommands([...(config.detect?.cc_commands || [])])
       setPollInterval(config.detect?.poll_interval || 5)
+      setSizingMode(config.terminal?.sizing_mode || 'auto')
     }
   }, [config])
 
@@ -79,6 +92,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
     setError(null)
     try {
       await update(daemonBase, {
+        terminal: { sizing_mode: sizingMode },
         stream: { presets: streamPresets.filter(p => p.name.trim()) },
         jsonl: { presets: jsonlPresets.filter(p => p.name.trim()) },
         detect: {
@@ -86,7 +100,9 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
           poll_interval: pollInterval,
         },
       })
+      const prevSizingMode = config?.terminal?.sizing_mode || 'auto'
       onClose()
+      if (sizingMode !== prevSizingMode) onTerminalReconnect?.()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed')
     } finally {
@@ -110,9 +126,52 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
         </div>
 
         <div className="p-4 space-y-6">
+          {/* Terminal */}
+          <section>
+            <h3 className="text-xs uppercase text-[#999] mb-2">Terminal</h3>
+            <span className="block text-[11px] text-[#777] mb-3">變更後需重新連線生效</span>
+            <div>
+              <div className="flex items-center gap-1 mb-1">
+                <span className="text-xs text-[#999]">視窗尺寸模式</span>
+                <button
+                  ref={refs.setReference}
+                  {...getReferenceProps()}
+                  type="button"
+                  className="text-[#666] hover:text-[#aaa] cursor-help"
+                >
+                  <Question size={13} />
+                </button>
+                {tooltipOpen && (
+                  <FloatingPortal>
+                    <div
+                      ref={refs.setFloating}
+                      style={floatingStyles}
+                      {...getFloatingProps()}
+                      className="w-64 p-2 bg-[#333] border border-[#555] rounded text-[11px] text-[#ccc] leading-relaxed z-50 shadow-lg"
+                    >
+                      <p className="mb-1"><strong className="text-[#eee]">Auto Resize</strong> — 最近操作的 client 決定視窗大小，各端互相影響</p>
+                      <p className="mb-1"><strong className="text-[#eee]">Terminal First</strong> — Web relay 不影響視窗大小，保護 iTerm/SSH 終端的顯示</p>
+                      <p><strong className="text-[#eee]">Minimal First</strong> — 以所有連線中最小的畫面為準，確保每端都能完整顯示</p>
+                    </div>
+                  </FloatingPortal>
+                )}
+              </div>
+              <select
+                data-testid="terminal-sizing-mode"
+                value={sizingMode}
+                onChange={e => setSizingMode(e.target.value)}
+                className="w-full bg-[#2a2a2a] border border-[#404040] rounded px-2 py-1.5 text-xs text-[#ddd] cursor-pointer"
+              >
+                <option value="auto">Auto Resize</option>
+                <option value="terminal-first">Terminal First</option>
+                <option value="minimal-first">Minimal First</option>
+              </select>
+            </div>
+          </section>
+
           {/* Stream Presets */}
           <section>
-            <h3 className="text-xs uppercase text-[#888] mb-2">Stream Presets</h3>
+            <h3 className="text-xs uppercase text-[#999] mb-2">Stream Presets</h3>
             <div className="space-y-2">
               {streamPresets.map((p, i) => (
                 <div key={i} className="flex items-center gap-2">
@@ -144,7 +203,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
 
           {/* JSONL Presets */}
           <section>
-            <h3 className="text-xs uppercase text-[#888] mb-2">
+            <h3 className="text-xs uppercase text-[#999] mb-2">
               JSONL Presets
               <span className="ml-2 text-[10px] text-yellow-500 normal-case">(Phase 3)</span>
             </h3>
@@ -179,7 +238,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
 
           {/* CC Detect Commands */}
           <section>
-            <h3 className="text-xs uppercase text-[#888] mb-2">CC Detect Commands</h3>
+            <h3 className="text-xs uppercase text-[#999] mb-2">CC Detect Commands</h3>
             <div className="space-y-2">
               {ccCommands.map((cmd, i) => (
                 <div key={i} className="flex items-center gap-2">
@@ -204,7 +263,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
 
           {/* Poll Interval */}
           <section>
-            <h3 className="text-xs uppercase text-[#888] mb-2">Poll Interval (seconds)</h3>
+            <h3 className="text-xs uppercase text-[#999] mb-2">Poll Interval (seconds)</h3>
             <input
               data-testid="poll-interval"
               type="number"

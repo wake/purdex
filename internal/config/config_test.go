@@ -121,3 +121,17 @@ func TestLoadInvalidTOML(t *testing.T) {
 		t.Error("want error for invalid TOML")
 	}
 }
+
+func TestGetSizingModeDefault(t *testing.T) {
+	tc := config.TerminalConfig{}
+	if tc.GetSizingMode() != "auto" {
+		t.Errorf("expected default 'auto', got %q", tc.GetSizingMode())
+	}
+}
+
+func TestGetSizingModeExplicit(t *testing.T) {
+	tc := config.TerminalConfig{SizingMode: "terminal-first"}
+	if tc.GetSizingMode() != "terminal-first" {
+		t.Errorf("expected 'terminal-first', got %q", tc.GetSizingMode())
+	}
+}

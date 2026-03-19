@@ -78,23 +78,60 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/config", s.handlePutConfig)
 }
 
+// RestoreWindowSizing clears manual window-size set by resize-window
+// and restores automatic sizing with the given mode.
+func (s *Server) RestoreWindowSizing(target, windowSizeMode string) {
+	if err := s.tmux.ResizeWindowAuto(target); err != nil {
+		log.Printf("RestoreWindowSizing: ResizeWindowAuto(%s): %v", target, err)
+	}
+	if err := s.tmux.SetWindowOption(target, "window-size", windowSizeMode); err != nil {
+		log.Printf("RestoreWindowSizing: SetWindowOption(%s): %v", target, err)
+	}
+}
+
+// BuildTerminalRelay returns the command, args, and cleanup function for a terminal relay.
+func (s *Server) BuildTerminalRelay(name string) (cmd string, args []string, cleanup func(), err error) {
+	args = []string{"attach-session", "-t", name}
+	if s.cfg.Terminal.GetSizingMode() == "terminal-first" {
+		args = append(args, "-f", "ignore-size")
+	}
+	return "tmux", args, func() {}, nil
+}
+
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("session")
 	if !s.tmux.HasSession(name) {
 		http.Error(w, "session not found", 404)
 		return
 	}
-	// cwd doesn't matter for tmux attach-session; tmux manages its own working directory.
-	relay := terminal.NewRelay("tmux", []string{"attach-session", "-t", name}, "/")
-	if s.cfg.Terminal.IsAutoResize() {
+
+	cmd, args, cleanup, err := s.BuildTerminalRelay(name)
+	if err != nil {
+		http.Error(w, "relay setup failed: "+err.Error(), 500)
+		return
+	}
+	defer cleanup()
+
+	sizingMode := s.cfg.Terminal.GetSizingMode()
+	relay := terminal.NewRelay(cmd, args, "/")
+	switch sizingMode {
+	case "terminal-first":
+		// no OnStart — relay uses -f ignore-size, sizing handled by terminal
+	case "minimal-first":
 		relay.OnStart = func() {
-			// Clear any manual window size (e.g. set by handoff or user) so
-			// tmux auto-resizes to match the browser viewport.
-			// Delay to let: (1) tmux register the client, (2) WS I/O start,
-			// (3) browser send its viewport resize — so -A sees the real size.
 			go func() {
 				time.Sleep(1200 * time.Millisecond)
-				s.tmux.ResizeWindowAuto(name)
+				s.RestoreWindowSizing(name, "smallest")
+			}()
+		}
+	default:
+		if sizingMode != "auto" && sizingMode != "" {
+			log.Printf("handleTerminal: unknown sizing_mode %q, falling back to auto", sizingMode)
+		}
+		relay.OnStart = func() {
+			go func() {
+				time.Sleep(1200 * time.Millisecond)
+				s.RestoreWindowSizing(name, "latest")
 			}()
 		}
 	}
