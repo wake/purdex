@@ -6,7 +6,6 @@ interface Props {
   allTabs: Tab[]
   activeTabId: string | null
   wsBase: string
-  daemonBase: string
   terminalKey?: number
   connectingMessage?: string
   onHandoff?: () => void
@@ -14,7 +13,7 @@ interface Props {
 }
 
 export function TabContent({
-  allTabs, activeTabId, wsBase, daemonBase,
+  allTabs, activeTabId, wsBase,
   terminalKey, connectingMessage,
   onHandoff, onHandoffToTerm,
 }: Props) {
