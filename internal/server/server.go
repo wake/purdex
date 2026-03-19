@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log"
 	"net/http"
@@ -85,20 +86,59 @@ func (s *Server) RestoreWindowSizing(target string) {
 	s.tmux.SetWindowOption(target, "window-size", "latest")
 }
 
+// BuildTerminalRelay returns the command, args, and cleanup function for a terminal relay.
+// When session_group is enabled, it creates a grouped session for size isolation.
+func (s *Server) BuildTerminalRelay(name string) (cmd string, args []string, cleanup func(), err error) {
+	if !s.cfg.Terminal.IsSessionGroup() {
+		return "tmux", []string{"attach-session", "-t", name}, func() {}, nil
+	}
+
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", nil, nil, fmt.Errorf("generate relay ID: %w", err)
+	}
+	relaySession := fmt.Sprintf("%s-tbox-%x", name, b)
+
+	// Retry up to 3 times on name collision
+	for attempt := 0; attempt < 3; attempt++ {
+		err = s.tmux.NewGroupedSession(name, relaySession)
+		if err == nil {
+			break
+		}
+		b = make([]byte, 4)
+		rand.Read(b)
+		relaySession = fmt.Sprintf("%s-tbox-%x", name, b)
+	}
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("create grouped session: %w", err)
+	}
+
+	cleanup = func() {
+		s.tmux.KillSession(relaySession)
+	}
+
+	return "tmux", []string{"attach-session", "-t", relaySession}, cleanup, nil
+}
+
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("session")
 	if !s.tmux.HasSession(name) {
 		http.Error(w, "session not found", 404)
 		return
 	}
-	// cwd doesn't matter for tmux attach-session; tmux manages its own working directory.
-	relay := terminal.NewRelay("tmux", []string{"attach-session", "-t", name}, "/")
-	if s.cfg.Terminal.IsAutoResize() {
+
+	cmd, args, cleanup, err := s.BuildTerminalRelay(name)
+	if err != nil {
+		http.Error(w, "relay setup failed: "+err.Error(), 500)
+		return
+	}
+	defer cleanup()
+
+	relay := terminal.NewRelay(cmd, args, "/")
+	// session_group=true: each grouped session has only one client,
+	// so window-size latest auto-adjusts — no need for resize-window -A.
+	if s.cfg.Terminal.IsAutoResize() && !s.cfg.Terminal.IsSessionGroup() {
 		relay.OnStart = func() {
-			// Clear any manual window size (e.g. set by handoff or user) so
-			// tmux auto-resizes to match the browser viewport.
-			// Delay to let: (1) tmux register the client, (2) WS I/O start,
-			// (3) browser send its viewport resize — so -A sees the real size.
 			go func() {
 				time.Sleep(1200 * time.Millisecond)
 				s.RestoreWindowSizing(name)
