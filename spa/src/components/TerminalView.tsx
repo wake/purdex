@@ -42,13 +42,6 @@ export default function TerminalView({ wsUrl, visible = true }: Props) {
 
     try { term.loadAddon(new WebglAddon()) } catch { /* fallback to canvas */ }
 
-    // Filter out horizontal-dominant wheel events. macOS trackpad often produces
-    // an initial event with |deltaX| > |deltaY| when the finger lands slightly
-    // off-axis, causing the first scroll to be swallowed or misinterpreted.
-    term.attachCustomWheelEventHandler((ev: WheelEvent) => {
-      return Math.abs(ev.deltaY) >= Math.abs(ev.deltaX)
-    })
-
     requestAnimationFrame(() => fitAddon.fit())
 
     let revealed = false
@@ -132,6 +125,19 @@ export default function TerminalView({ wsUrl, visible = true }: Props) {
     const handleContextMenu = (e: MouseEvent) => e.preventDefault()
     container.addEventListener('contextmenu', handleContextMenu)
 
+    // Filter horizontal-dominant wheel events in capture phase (before xterm.js).
+    // macOS trackpad often produces an initial event with |deltaX| > |deltaY|
+    // when the finger lands slightly off-axis. attachCustomWheelEventHandler
+    // does NOT work in tmux mouse mode (xterm.js discards its return value),
+    // so we intercept at the DOM level instead.
+    const handleWheel = (ev: WheelEvent) => {
+      if (Math.abs(ev.deltaX) > Math.abs(ev.deltaY)) {
+        ev.preventDefault()
+        ev.stopPropagation()
+      }
+    }
+    container.addEventListener('wheel', handleWheel, { capture: true })
+
     let rafId = 0
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(rafId)
@@ -146,6 +152,7 @@ export default function TerminalView({ wsUrl, visible = true }: Props) {
       container.removeEventListener('keydown', handleShiftEnter, true)
       ta?.removeEventListener('compositionstart', handleCompositionStart)
       container.removeEventListener('contextmenu', handleContextMenu)
+      container.removeEventListener('wheel', handleWheel, { capture: true } as EventListenerOptions)
       conn.close()
       term.dispose()
       fitAddonRef.current = null

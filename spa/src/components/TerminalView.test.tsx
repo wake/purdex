@@ -125,28 +125,35 @@ describe('TerminalView', () => {
     expect(overlay?.textContent).toContain('reconnecting...')
   })
 
-  it('registers custom wheel handler that filters horizontal-dominant events', () => {
-    capturedWheelHandler.fn = undefined
-    TerminalSpy.mockClear()
-    render(<TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" />)
-    expect(capturedWheelHandler.fn).toBeDefined()
+  it('blocks horizontal-dominant wheel events via DOM capture phase', () => {
+    const { container } = render(
+      <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" />
+    )
+    // The wheel handler is on the outer wrapper div (containerRef).
+    // Find it: it's the div with the relative class.
+    const wrapper = container.querySelector('.relative')!
+    // Dispatch on a child so the capture-phase listener on the wrapper fires.
+    const target = wrapper.querySelector('div') || wrapper
 
-    const handler = capturedWheelHandler.fn!
+    // Horizontal-dominant event: should be stopped
+    const horizEvent = new WheelEvent('wheel', { deltaX: 10, deltaY: 1, cancelable: true, bubbles: true })
+    const stopSpy = vi.spyOn(horizEvent, 'stopPropagation')
+    const preventSpy = vi.spyOn(horizEvent, 'preventDefault')
+    target.dispatchEvent(horizEvent)
+    expect(stopSpy).toHaveBeenCalled()
+    expect(preventSpy).toHaveBeenCalled()
 
-    // Vertical-dominant: should be processed (return true)
-    expect(handler({ deltaX: 1, deltaY: 10 } as WheelEvent)).toBe(true)
+    // Vertical-dominant event: should NOT be stopped
+    const vertEvent = new WheelEvent('wheel', { deltaX: 1, deltaY: 10, cancelable: true, bubbles: true })
+    const vertStopSpy = vi.spyOn(vertEvent, 'stopPropagation')
+    target.dispatchEvent(vertEvent)
+    expect(vertStopSpy).not.toHaveBeenCalled()
 
-    // Horizontal-dominant: should be ignored (return false)
-    expect(handler({ deltaX: 10, deltaY: 1 } as WheelEvent)).toBe(false)
-
-    // Equal: vertical wins (return true)
-    expect(handler({ deltaX: 5, deltaY: 5 } as WheelEvent)).toBe(true)
-
-    // Pure vertical: processed
-    expect(handler({ deltaX: 0, deltaY: 20 } as WheelEvent)).toBe(true)
-
-    // Pure horizontal: ignored
-    expect(handler({ deltaX: 20, deltaY: 0 } as WheelEvent)).toBe(false)
+    // Pure horizontal: should be stopped
+    const pureHoriz = new WheelEvent('wheel', { deltaX: 20, deltaY: 0, cancelable: true, bubbles: true })
+    const pureStopSpy = vi.spyOn(pureHoriz, 'stopPropagation')
+    target.dispatchEvent(pureHoriz)
+    expect(pureStopSpy).toHaveBeenCalled()
   })
 
   it('hides reconnecting overlay on reconnect', async () => {
