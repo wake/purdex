@@ -10,6 +10,57 @@ import (
 	"github.com/wake/tmux-box/internal/tmux"
 )
 
+func TestBuildTerminalRelayDefault(t *testing.T) {
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.AddSession("myapp", "/tmp")
+
+	db, _ := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	defer db.Close()
+
+	srv := server.New(config.Config{}, db, fakeTmux, "")
+
+	cmd, args, cleanup, err := srv.BuildTerminalRelay("myapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	if cmd != "tmux" || args[0] != "attach-session" || args[1] != "-t" || args[2] != "myapp" {
+		t.Errorf("expected tmux attach-session -t myapp, got %s %v", cmd, args)
+	}
+}
+
+func TestBuildTerminalRelayWithIgnoreSize(t *testing.T) {
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.AddSession("myapp", "/tmp")
+
+	db, _ := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	defer db.Close()
+
+	isTrue := true
+	cfg := config.Config{
+		Terminal: config.TerminalConfig{IgnoreSize: &isTrue},
+	}
+	srv := server.New(cfg, db, fakeTmux, "")
+
+	_, args, cleanup, err := srv.BuildTerminalRelay("myapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	foundFlag := false
+	for i, a := range args {
+		if a == "-f" && i+1 < len(args) && args[i+1] == "ignore-size" {
+			foundFlag = true
+			break
+		}
+	}
+	if !foundFlag {
+		t.Errorf("expected -f ignore-size in args, got %v", args)
+	}
+}
+
 func TestRestoreWindowSizingCallsBothMethods(t *testing.T) {
 	fakeTmux := tmux.NewFakeExecutor()
 

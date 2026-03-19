@@ -89,14 +89,30 @@ func (s *Server) RestoreWindowSizing(target string) {
 	}
 }
 
+// BuildTerminalRelay returns the command, args, and cleanup function for a terminal relay.
+func (s *Server) BuildTerminalRelay(name string) (cmd string, args []string, cleanup func(), err error) {
+	args = []string{"attach-session", "-t", name}
+	if s.cfg.Terminal.IsIgnoreSize() {
+		args = append(args, "-f", "ignore-size")
+	}
+	return "tmux", args, func() {}, nil
+}
+
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("session")
 	if !s.tmux.HasSession(name) {
 		http.Error(w, "session not found", 404)
 		return
 	}
-	// cwd doesn't matter for tmux attach-session; tmux manages its own working directory.
-	relay := terminal.NewRelay("tmux", []string{"attach-session", "-t", name}, "/")
+
+	cmd, args, cleanup, err := s.BuildTerminalRelay(name)
+	if err != nil {
+		http.Error(w, "relay setup failed: "+err.Error(), 500)
+		return
+	}
+	defer cleanup()
+
+	relay := terminal.NewRelay(cmd, args, "/")
 	if s.cfg.Terminal.IsAutoResize() {
 		relay.OnStart = func() {
 			// Clear any manual window size (e.g. set by handoff or user) so

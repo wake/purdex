@@ -28,10 +28,15 @@ type DetectConfig struct {
 
 type TerminalConfig struct {
 	AutoResize *bool `toml:"auto_resize" json:"auto_resize"`
+	IgnoreSize *bool `toml:"ignore_size" json:"ignore_size"`
 }
 
 func (tc TerminalConfig) IsAutoResize() bool {
 	return tc.AutoResize == nil || *tc.AutoResize
+}
+
+func (tc TerminalConfig) IsIgnoreSize() bool {
+	return tc.IgnoreSize != nil && *tc.IgnoreSize
 }
 
 type Config struct {
