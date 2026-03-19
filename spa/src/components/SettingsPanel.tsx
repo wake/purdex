@@ -123,12 +123,12 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
         <div className="p-4 space-y-6">
           {/* Terminal */}
           <section>
-            <h3 className="text-xs uppercase text-[#888] mb-2">Terminal</h3>
+            <h3 className="text-xs uppercase text-[#999] mb-2">Terminal</h3>
             <div className="space-y-3">
               <label className="flex items-center justify-between cursor-pointer">
                 <div>
                   <span className="text-xs text-[#ddd]">Auto Resize</span>
-                  <p className="text-[10px] text-[#666]">連線後自動調整 tmux 視窗尺寸</p>
+                  <p className="text-[11px] text-[#777]">連線後自動調整 tmux 視窗尺寸</p>
                 </div>
                 <input
                   type="checkbox"
@@ -140,7 +140,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
               <label className="flex items-center justify-between cursor-pointer">
                 <div>
                   <span className="text-xs text-[#ddd]">Session Group</span>
-                  <p className="text-[10px] text-[#666]">每個連線建立獨立 grouped session</p>
+                  <p className="text-[11px] text-[#777]">每個連線建立獨立 grouped session</p>
                 </div>
                 <input
                   type="checkbox"
@@ -152,7 +152,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
               <label className="flex items-center justify-between cursor-pointer">
                 <div>
                   <span className="text-xs text-[#ddd]">Ignore Size</span>
-                  <p className="text-[10px] text-[#666]">relay 不影響 tmux 視窗尺寸（保護 iTerm）</p>
+                  <p className="text-[11px] text-[#777]">relay 不影響 tmux 視窗尺寸（保護 iTerm）</p>
                 </div>
                 <input
                   type="checkbox"
@@ -166,7 +166,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
 
           {/* Stream Presets */}
           <section>
-            <h3 className="text-xs uppercase text-[#888] mb-2">Stream Presets</h3>
+            <h3 className="text-xs uppercase text-[#999] mb-2">Stream Presets</h3>
             <div className="space-y-2">
               {streamPresets.map((p, i) => (
                 <div key={i} className="flex items-center gap-2">
@@ -198,7 +198,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
 
           {/* JSONL Presets */}
           <section>
-            <h3 className="text-xs uppercase text-[#888] mb-2">
+            <h3 className="text-xs uppercase text-[#999] mb-2">
               JSONL Presets
               <span className="ml-2 text-[10px] text-yellow-500 normal-case">(Phase 3)</span>
             </h3>
@@ -233,7 +233,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
 
           {/* CC Detect Commands */}
           <section>
-            <h3 className="text-xs uppercase text-[#888] mb-2">CC Detect Commands</h3>
+            <h3 className="text-xs uppercase text-[#999] mb-2">CC Detect Commands</h3>
             <div className="space-y-2">
               {ccCommands.map((cmd, i) => (
                 <div key={i} className="flex items-center gap-2">
@@ -258,7 +258,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
 
           {/* Poll Interval */}
           <section>
-            <h3 className="text-xs uppercase text-[#888] mb-2">Poll Interval (seconds)</h3>
+            <h3 className="text-xs uppercase text-[#999] mb-2">Poll Interval (seconds)</h3>
             <input
               data-testid="poll-interval"
               type="number"
