@@ -40,6 +40,8 @@ export default function App() {
   const { config, fetch: fetchConfig } = useConfigStore()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [activePreset, setActivePreset] = useState('')
+  const [terminalKey, setTerminalKey] = useState(0)
+  const [terminalConnectMsg, setTerminalConnectMsg] = useState('')
 
   // Hash-based routing state
   const [route, setRoute] = useState(parseHash)
@@ -170,8 +172,10 @@ export default function App() {
             <>
               <div style={{ display: currentMode === 'term' ? 'block' : 'none', height: '100%' }}>
                 <TerminalView
+                  key={terminalKey}
                   wsUrl={`${wsBase}/ws/terminal/${encodeURIComponent(active.name)}`}
                   visible={currentMode === 'term'}
+                  connectingMessage={terminalConnectMsg}
                 />
               </div>
               <div style={{
@@ -198,6 +202,11 @@ export default function App() {
         <SettingsPanel
           daemonBase={daemonBase}
           onClose={() => setSettingsOpen(false)}
+          onTerminalReconnect={() => {
+            setTerminalConnectMsg('正在套用新設定...')
+            setTerminalKey(k => k + 1)
+            setTimeout(() => setTerminalConnectMsg(''), 5000)
+          }}
         />
       )}
     </div>

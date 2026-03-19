@@ -8,9 +8,10 @@ import '@xterm/xterm/css/xterm.css'
 interface Props {
   wsUrl: string
   visible?: boolean
+  connectingMessage?: string
 }
 
-export default function TerminalView({ wsUrl, visible = true }: Props) {
+export default function TerminalView({ wsUrl, visible = true, connectingMessage }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const connRef = useRef<ReturnType<typeof connectTerminal> | null>(null)
@@ -193,7 +194,7 @@ export default function TerminalView({ wsUrl, visible = true }: Props) {
           className="text-gray-500 text-sm"
           style={{ animation: 'breathing 2s ease-in-out infinite' }}
         >
-          {disconnected ? 'reconnecting...' : 'connecting...'}
+          {disconnected ? 'reconnecting...' : (connectingMessage || 'connecting...')}
         </span>
         <style>{`
           @keyframes breathing {

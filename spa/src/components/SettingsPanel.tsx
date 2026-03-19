@@ -6,6 +6,7 @@ import { useConfigStore } from '../stores/useConfigStore'
 interface Props {
   daemonBase: string
   onClose: () => void
+  onTerminalReconnect?: () => void
 }
 
 interface PresetRow {
@@ -13,7 +14,7 @@ interface PresetRow {
   command: string
 }
 
-export default function SettingsPanel({ daemonBase, onClose }: Props) {
+export default function SettingsPanel({ daemonBase, onClose, onTerminalReconnect }: Props) {
   const { config, fetch: fetchConfig, update } = useConfigStore()
 
   const [streamPresets, setStreamPresets] = useState<PresetRow[]>([])
@@ -89,6 +90,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
           poll_interval: pollInterval,
         },
       })
+      onTerminalReconnect?.()
       onClose()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed')
