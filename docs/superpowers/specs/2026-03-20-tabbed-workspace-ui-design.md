@@ -12,38 +12,47 @@
 
 ### 核心原則
 
-- 分頁列主導佈局，側欄可折疊，內容區域最大化
+- 內容區域最大化，所有面板可折疊
 - 工作區即分頁群組，不另設獨立群組概念
-- 漸進式複雜度：單 Bar → 多 Bar，使用者自行選擇
+- Activity Bar 統一處理工作區/獨立分頁切換
+- 側欄 4 區域自由配置 + 固定/預設/縮減三模式
 - 圖示統一使用 Phosphor Icons
+- 紫色（#7a6aaa 系列）為 UI 重點色系
 
 ---
 
 ## 2. 整體佈局
 
-**選定方案：頂部分頁列主導（方案 A）**
+**選定方案：Activity Bar + 分頁列 + 4 區域側欄**
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  [Bar▾] │ ⚑ WS1 [tab][tab][tab] │ ⚑ WS2 │ [tab] + │  ← 分頁列
-├────────┬────────────────────────────────────────────┤
-│        │                                            │
-│ 側欄   │           內容區域                          │
-│ 面板   │   Terminal / Stream / Editor               │
-│        │                                            │
-│        │                                            │
-├────────┴────────────────────────────────────────────┤
-│  host │ session │ status              │ mode │ size │  ← 狀態列
-└─────────────────────────────────────────────────────┘
+┌──────┬──────┬──────────────────────────────┬──────┐
+│      │ 左   │ 分頁列                        │ 右   │
+│ Act  │ tab  │ [tab][tab][tab]            +  │ tab  │
+│ Bar  │ 外   ├──────┬───────────────┬──────┤ 外   │
+│      │      │ 左   │               │ 右   │      │
+│[WS1] │      │ tab  │   內容區域     │ tab  │      │
+│[WS2] │      │ 內   │  Terminal /   │ 內   │      │
+│[WS3] │      │      │  Stream /     │      │      │
+│      │      │      │  Editor       │      │      │
+│ [+]  │      │      │               │      │      │
+│ [⚙] │      │      │               │      │      │
+├──────┴──────┴──────┴───────────────┴──────┴──────┤
+│  host │ session │ status              │ mode │ sz │  ← 狀態列
+└──────────────────────────────────────────────────────┘
 ```
 
 ### 佈局元素
 
 | 區域 | 說明 | 可見性 |
 |------|------|--------|
-| 分頁列 | Bar 切換 + 工作區群組 + 獨立分頁 + 操作按鈕 | 常駐 |
-| 側欄面板 | 六種面板以分頁切換 | 可折疊，位置可自訂（左/右/分開） |
+| Activity Bar | 工作區/獨立分頁切換（類 Slack） | 常駐，最左側 |
+| 左 tab 外 | 系統級面板區（全高） | 可折疊/縮減/固定 |
+| 分頁列 | 當前工作區的分頁 + 群組操作 | 常駐 |
+| 左 tab 內 | 工作區級面板區（tab 下方） | 可折疊/縮減/固定 |
 | 內容區域 | 當前分頁的內容渲染 | 常駐 |
+| 右 tab 內 | 工作區級面板區（tab 下方） | 可折疊/縮減/固定 |
+| 右 tab 外 | 系統級面板區（全高） | 可折疊/縮減/固定 |
 | 狀態列 | 當前連線狀態摘要 | 常駐 |
 
 ---
@@ -101,8 +110,20 @@ interface Workspace {
   directories: PinnedItem[] // 釘選的目錄和檔案
   tabs: string[]           // tab IDs（有序）
   activeTabId: string      // 當前活躍分頁
-  sidebarState: SidebarState // 側欄面板狀態（按工作區記憶）
+  sidebarState: WorkspaceSidebarState // 側欄面板狀態（按工作區記憶）
 }
+
+// 每個工作區記憶的側欄狀態
+interface WorkspaceSidebarState {
+  // 每個區域記住：當前選中的面板、寬度、模式
+  zones: Record<SidebarZone, {
+    activePanelId?: string  // 當前選中面板
+    width: number           // 面板寬度（px）
+    mode: 'fixed' | 'default' | 'collapsed'
+  }>
+}
+
+type SidebarZone = 'left-outer' | 'left-inner' | 'right-inner' | 'right-outer'
 
 interface PinnedItem {
   type: 'directory' | 'file'
@@ -128,74 +149,36 @@ interface PinnedItem {
 
 ---
 
-## 5. Bar 系統
+## 5. Activity Bar
 
-### 5.1 三種模式
+Activity Bar 取代先前的 Bar 下拉切換系統，以垂直圖示列統一處理工作區和獨立分頁的切換，類似 Slack 的工作區切換體驗。
 
-#### 單 Bar（預設）
+### 5.1 位置與外觀
 
-所有工作區群組 + 獨立分頁在同一列。不顯示 Bar 切換下拉。
+- 固定在畫面最左側，全高
+- 垂直排列：工作區圖示 → 分隔線 → 獨立分頁圖示 → 分隔線 → 新增/設定
+- 當前活躍工作區以高亮邊框標示
+- 工作區圖示可自訂（emoji 或 Phosphor icon），背景色使用工作區色標
 
-```
-│ ⚑ WS1 [tab][tab] │ ⚑ WS2 [tab] │ [standalone] │ + │
-```
-
-群組可收合為子母層，降低橫向壓力：
-
-```
-母層: │ ⚑ WS1(3) │ ⚑ WS2(2) │ [standalone] │ + │
-子層: │ [tab1]  [tab2]  [tab3]                     │
-```
-
-#### 多 Bar（手動配置）
-
-使用者建立多個 bar，每個 bar 有自己的分頁集合。分頁列最前方增加下拉選單切換 bar。
-
-```
-│ [開發環境 ▾] │ ⚑ WS1 [tab][tab] │ [standalone] │ + │
-```
-
-下拉選單列出所有 bar，附帶內容摘要。
-
-#### 自動多 Bar
-
-每個工作區自動成為獨立 bar，獨立分頁歸入「一般」bar。等同 Vivaldi 工作區切換。
-
-```
-│ [My Project ▾] │ [tab1] [tab2] [tab3] │ + │
-```
-
-### 5.2 Bar 結構
+### 5.2 Activity Bar 項目
 
 ```typescript
-interface Bar {
-  id: string
-  name: string
-  icon?: string
-  workspaceIds: string[]  // 包含的工作區（有序）
-  standaloneTabs: string[] // 包含的獨立分頁（有序）
-}
-
-type BarMode = 'single' | 'multi' | 'auto'
+// Activity Bar 顯示的項目由 Workspace 和獨立 Tab 組合而成
+// 不需要獨立的 Bar store，直接由 WorkspaceStore + TabStore 推導
 ```
 
-**所有權規則：**
-- 每個 Workspace 只能歸屬一個 Bar（一對多）
-- 獨立分頁（不屬於任何 Workspace 的 Tab）只能歸屬一個 Bar
-- `single` 模式下只有一個 Bar，包含所有 Workspace 和獨立分頁
-- `auto` 模式下每個 Workspace 自動映射為一個 Bar，所有獨立分頁歸入名為「一般」的預設 Bar
-- `multi` 模式下使用者自由分配 Workspace 和獨立分頁到不同 Bar
+| 區塊 | 內容 | 操作 |
+|------|------|------|
+| 工作區區 | 每個 Workspace 一個圖示 | 點擊切換，右鍵選單管理 |
+| 獨立分頁區 | 不屬於任何工作區的 Tab | 點擊切換到該分頁 |
+| 操作區 | + 新增、⚙ 設定 | 新增工作區/分頁、開啟設定 |
 
-### 5.3 模式切換
+### 5.3 行為
 
-- 設定中可切換模式
-- 從單 bar 手動新增 bar 會自動進入多 bar 模式
-- 自動模式下，新建工作區自動建立對應 bar
-- 模式切換時的遷移邏輯：
-  - `single` → `multi`：現有的單 bar 成為第一個 bar，新 bar 初始為空
-  - `single` → `auto`：每個 workspace 拆出為獨立 bar，獨立分頁歸入「一般」
-  - `multi` → `single`：所有 bar 合併回一個 bar
-  - `auto` → `multi`：自動產生的 bar 保留，使用者可自由調整
+- **點擊工作區** → 切換到該工作區（tab bar 顯示其分頁，側欄切換 context）
+- **點擊獨立分頁** → 切換到該分頁
+- **拖曳** → 重新排序工作區/獨立分頁
+- **右鍵工作區** → 重新命名、變更圖示/顏色、刪除等
 
 ---
 
@@ -254,35 +237,82 @@ type BarMode = 'single' | 'multi' | 'auto'
 
 ### 7.1 六種面板
 
+面板分為兩個層級：
+
+**系統級面板（預設放 tab 外位置）：**
+
 | # | 面板 | Phosphor Icon | 說明 |
 |---|------|---------------|------|
 | 1 | Sessions | `List` | 所有 host 的 tmux session 清單，按主機分組 |
-| 2 | 目錄 | `FolderOpen` | 當前工作區的釘選目錄/檔案，即時變動標記 |
-| 3 | Git | `GitBranch` | 當前工作區目錄的 git log / changes / branches |
-| 4 | 資訊 | `Info` | 工作區摘要（host、branch、分頁數、sessions） |
-| 5 | 提示詞 | `Lightning` | 可編輯的提示詞清單，點擊注入當前分頁輸入 |
+| 2 | 提示詞 | `Lightning` | 可編輯的提示詞清單，點擊注入當前分頁輸入 |
+
+**工作區級面板（預設放 tab 內位置）：**
+
+| # | 面板 | Phosphor Icon | 說明 |
+|---|------|---------------|------|
+| 3 | 目錄 | `FolderOpen` | 當前工作區的釘選目錄/檔案，即時變動標記 |
+| 4 | Git | `GitBranch` | 當前工作區目錄的 git log / changes / branches |
+| 5 | 資訊 | `Info` | 工作區摘要（host、branch、分頁數、sessions） |
 | 6 | AI 歷史 | `ClockCounterClockwise` | 工作區的 stream 對話歷史紀錄 |
 
-### 7.2 面板位置
+### 7.2 四區域配置
 
-- 使用者可將面板放在左側或右側
-- 支援左右各開一個面板（分開模式）
-- 位置設定持久化
+面板可放置在 4 個側欄區域，使用者自由拖曳配置：
 
-### 7.3 面板操作
+| 區域 | 垂直範圍 | 預設層級 | 說明 |
+|------|----------|----------|------|
+| 左 tab 外 | 全高（與 tab bar 並列） | 系統級 | Activity Bar 右側 |
+| 左 tab 內 | tab bar 下方 | 工作區級 | 內容區左側 |
+| 右 tab 內 | tab bar 下方 | 工作區級 | 內容區右側 |
+| 右 tab 外 | 全高（與 tab bar 並列） | 系統級 | 最右側 |
 
-- 頂部分頁列（圖示）切換面板內容
+每個區域可放置一或多個面板，以圖示分頁切換。配置透過拖曳或設定面板調整（後期實作）。
+
+### 7.3 三種面板模式
+
+每個區域的面板有三種顯示模式，可快捷鍵循環切換：
+
+| 模式 | 行為 | 觸發 |
+|------|------|------|
+| **📌 固定** | 始終展開顯示，不受 context 切換影響 | 手動釘選 |
+| **⚡ 預設** | 同側 tab 外+內 智慧切換（見 7.4） | 預設行為 |
+| **◁ 縮減** | 收窄為垂直按鈕條，hover / 快捷鍵浮動展開，離開焦點自動收回 | 手動設定 / 預設自動 |
+
+### 7.4 同側智慧切換（預設模式行為）
+
+同一側的 tab 外和 tab 內面板在預設模式下，根據 context 自動切換優先級：
+
+**在工作區分頁時：**
+- tab 內面板（目錄、Git 等）→ **展開**（優先）
+- tab 外面板（Sessions 等）→ **縮減**
+
+**在獨立分頁時：**
+- tab 外面板（Sessions 等）→ **展開**（優先）
+- tab 內面板 → **縮減**（或隱藏，無工作區 context）
+
+📌 固定模式的面板不參與自動切換，始終保持展開。
+
+### 7.5 縮減模式細節
+
+- 縮減為窄條（約 24px），顯示垂直文字標籤和圖示
+- **Hover**：浮動展開面板覆蓋在內容區上方（不推擠佈局）
+- **快捷鍵**：展開面板，再次按下或焦點離開時收回
+- 類似 Visual Studio 的 auto-hide dock 行為
+
+### 7.6 面板操作
+
+- 區域內圖示列切換面板內容
 - 拖曳邊緣調整寬度
-- 拖到最小自動折疊
-- 快捷鍵 toggle 顯示/隱藏
+- 拖到最小自動進入縮減
+- 快捷鍵 toggle 模式（預設 ↔ 縮減 ↔ 固定）
 
-### 7.4 上下文感知
+### 7.7 上下文感知
 
-- 切換工作區 → 目錄/Git/資訊/AI 歷史面板跟著切換
-- 選中獨立分頁 → 顯示該分頁的相關資訊
-- 每個工作區記憶自己的側欄面板選擇
+- 切換工作區（Activity Bar）→ tab 內的目錄/Git/資訊/AI 歷史面板跟著切換
+- 選中獨立分頁 → tab 內面板縮減，tab 外面板展開
+- 每個工作區記憶自己的側欄面板選擇和寬度
 
-### 7.5 Sessions 面板細節
+### 7.8 Sessions 面板細節
 
 - 按主機分組顯示所有 session
 - 顯示 session 名稱、模式圖示、狀態（running/streaming/idle）
@@ -290,7 +320,7 @@ type BarMode = 'single' | 'multi' | 'auto'
 - 支援搜尋過濾
 - 底部「新增 Session」按鈕
 
-### 7.6 目錄面板細節
+### 7.9 目錄面板細節
 
 - 顯示當前工作區的釘選目錄和檔案
 - 樹狀展開目錄結構
@@ -299,7 +329,7 @@ type BarMode = 'single' | 'multi' | 'auto'
 - 底部「釘選」按鈕新增目錄或檔案
 - 核心用途之一：監看 AI 工作過程中的檔案變動
 
-### 7.7 提示詞注入細節
+### 7.10 提示詞注入細節
 
 - 可編輯維護的提示詞清單
 - 點擊提示詞 → 依當前分頁類型注入：
@@ -395,10 +425,11 @@ interface Host {
 | Store | 職責 |
 |-------|------|
 | `useTabStore` | 分頁狀態、排序、活躍分頁 |
-| `useWorkspaceStore` | 工作區定義、目錄、分頁群組 |
-| `useBarStore` | Bar 配置、模式、切換 |
+| `useWorkspaceStore` | 工作區定義、目錄、分頁群組、Activity Bar 排序 |
 | `useHostStore` | 多主機連線狀態 |
-| `useSidebarStore` | 側欄面板狀態、位置、寬度 |
+| `useSidebarStore` | 側欄 4 區域面板配置、模式（固定/預設/縮減）、寬度 |
+
+> **注意**：不需要獨立的 BarStore。Activity Bar 的顯示內容由 WorkspaceStore + TabStore 推導（工作區列表 + 不屬於任何工作區的獨立分頁）。
 
 ### 11.2 持久化
 
@@ -406,16 +437,16 @@ interface Host {
 
 - 分頁列表和排序
 - 工作區定義和釘選目錄
-- Bar 配置和模式
+- Activity Bar 排序
 - Host 清單
-- 側欄位置和寬度
+- 側欄 4 區域的面板配置、模式和寬度
 - Quick Switcher 快捷鍵
 
 ### 11.3 現有 Store 影響
 
 - `useSessionStore`: 保留，但 `activeId` 概念被 `useTabStore.activeTabId` 取代
 - `useStreamStore`: 保留，每個 stream 分頁對應一個 session 的 stream 狀態
-- `useConfigStore`: 擴充，增加 bar mode、sidebar position 等設定
+- `useConfigStore`: 擴充，增加 sidebar zone 配置等設定
 
 ---
 
@@ -461,10 +492,10 @@ interface Host {
 
 現有 `/api/config` 擴充支援：
 
-- Bar 模式設定
 - Host 清單
-- 側欄偏好
+- 側欄 4 區域配置和面板模式
 - 提示詞清單
+- 工作區定義
 
 ---
 
@@ -485,37 +516,41 @@ interface Host {
 - 分頁切換的手勢操作
 - 側欄面板的觸控操作
 - Terminal 在小螢幕的操作體驗
-- Bar 切換在手機上的呈現方式
+- Activity Bar 在手機上的呈現方式
 
 ---
 
 ## 15. 實作分期建議
 
-### Phase 1：分頁系統基礎
+### Phase 1：分頁系統 + Activity Bar 基礎
 - TabStore + Tab 元件
+- Activity Bar（工作區切換，暫時只有預設工作區 + 獨立分頁）
 - 分頁列渲染（無群組）
 - 多分頁切換 + 內容區域動態渲染
-- 重構現有 App.tsx 佈局
+- 重構現有 App.tsx 佈局（Activity Bar + tab bar + content + status bar，側欄 4 區域留空殼）
 
 ### Phase 2：工作區
 - WorkspaceStore + 工作區群組 UI
+- Activity Bar 完整功能（多工作區切換、拖曳排序、右鍵選單）
 - 橫列式展開/收合（子母層）
-- 工作區色標 + 右鍵選單
+- 工作區色標 + 圖示自訂
 - 分頁拖曳（群組內外）
 
-### Phase 3：側欄面板
-- SidebarStore + 面板框架
+### Phase 3：側欄面板系統
+- SidebarStore + 4 區域面板框架
+- 固定/預設/縮減三模式 + 智慧切換
+- 縮減模式的 auto-hide 浮動展開
 - Sessions 面板（重構現有 SessionPanel）
-- 目錄面板 + 檔案變動監看
-- 其餘面板逐項實作
+- 面板拖曳配置（後期優化）
 
-### Phase 4：Bar 系統
-- BarStore + Bar 切換 UI
-- 多 Bar 手動配置
-- 自動多 Bar 模式
+### Phase 4：工作區面板
+- 目錄面板 + 檔案變動監看（後端 FS watch API）
+- Git 面板（後端 Git API）
+- 工作區資訊面板
+- AI 對話歷史面板
 
 ### Phase 5：檔案編輯器
-- 後端 FS API
+- 後端 FS 讀寫 API
 - Editor 分頁元件
 - Markdown 預覽
 
@@ -526,9 +561,8 @@ interface Host {
 
 ### Phase 7：進階功能
 - Quick Switcher
-- 提示詞注入
-- AI 對話歷史面板
-- Git 面板
+- 提示詞注入面板
+- 側欄面板拖曳配置介面
 - 手機版響應式
 
 ---
