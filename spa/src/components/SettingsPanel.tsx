@@ -20,8 +20,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
   const [jsonlPresets, setJsonlPresets] = useState<PresetRow[]>([])
   const [ccCommands, setCcCommands] = useState<string[]>([])
   const [pollInterval, setPollInterval] = useState(5)
-  const [autoResize, setAutoResize] = useState(true)
-  const [ignoreSize, setIgnoreSize] = useState(false)
+  const [sizingMode, setSizingMode] = useState('auto')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -32,8 +31,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
       setJsonlPresets(config.jsonl?.presets?.map(p => ({ ...p })) || [])
       setCcCommands([...(config.detect?.cc_commands || [])])
       setPollInterval(config.detect?.poll_interval || 5)
-      setAutoResize(config.terminal?.auto_resize !== false)
-      setIgnoreSize(config.terminal?.ignore_size === true)
+      setSizingMode(config.terminal?.sizing_mode || 'auto')
     }
   }, [config])
 
@@ -83,10 +81,7 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
     setError(null)
     try {
       await update(daemonBase, {
-        terminal: {
-          auto_resize: autoResize,
-          ignore_size: ignoreSize,
-        },
+        terminal: { sizing_mode: sizingMode },
         stream: { presets: streamPresets.filter(p => p.name.trim()) },
         jsonl: { presets: jsonlPresets.filter(p => p.name.trim()) },
         detect: {
@@ -122,33 +117,18 @@ export default function SettingsPanel({ daemonBase, onClose }: Props) {
           <section>
             <h3 className="text-xs uppercase text-[#999] mb-2">Terminal</h3>
             <span className="block text-[11px] text-[#777] mb-3">變更後需重新連線生效</span>
-            <div className="space-y-3">
-              <label className="flex items-center justify-between cursor-pointer">
-                <div>
-                  <span className="text-xs text-[#ddd]">Auto Resize</span>
-                  <span className="block text-[11px] text-[#777]">連線後自動調整 tmux 視窗尺寸</span>
-                </div>
-                <input
-                  data-testid="terminal-auto-resize"
-                  type="checkbox"
-                  checked={autoResize}
-                  onChange={e => setAutoResize(e.target.checked)}
-                  className="w-4 h-4 accent-blue-500 cursor-pointer"
-                />
-              </label>
-              <label className="flex items-center justify-between cursor-pointer">
-                <div>
-                  <span className="text-xs text-[#ddd]">Ignore Size</span>
-                  <span className="block text-[11px] text-[#777]">relay 不影響 tmux 視窗尺寸（保護 iTerm）</span>
-                </div>
-                <input
-                  data-testid="terminal-ignore-size"
-                  type="checkbox"
-                  checked={ignoreSize}
-                  onChange={e => setIgnoreSize(e.target.checked)}
-                  className="w-4 h-4 accent-blue-500 cursor-pointer"
-                />
-              </label>
+            <div>
+              <label className="block text-xs text-[#ddd] mb-1">視窗尺寸模式</label>
+              <select
+                data-testid="terminal-sizing-mode"
+                value={sizingMode}
+                onChange={e => setSizingMode(e.target.value)}
+                className="w-full bg-[#2a2a2a] border border-[#404040] rounded px-2 py-1.5 text-xs text-[#ddd] cursor-pointer"
+              >
+                <option value="auto">Auto Resize — 每個 client 的 resize 都會影響視窗</option>
+                <option value="terminal-first">Terminal First — relay 不影響視窗尺寸（保護 iTerm）</option>
+                <option value="minimal-first">Minimal First — 使用所有 client 中最小的尺寸</option>
+              </select>
             </div>
           </section>
 

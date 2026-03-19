@@ -27,16 +27,15 @@ type DetectConfig struct {
 }
 
 type TerminalConfig struct {
-	AutoResize *bool `toml:"auto_resize" json:"auto_resize"`
-	IgnoreSize *bool `toml:"ignore_size" json:"ignore_size"`
+	SizingMode string `toml:"sizing_mode" json:"sizing_mode"`
 }
 
-func (tc TerminalConfig) IsAutoResize() bool {
-	return tc.AutoResize == nil || *tc.AutoResize
-}
-
-func (tc TerminalConfig) IsIgnoreSize() bool {
-	return tc.IgnoreSize != nil && *tc.IgnoreSize
+// GetSizingMode returns the sizing mode, defaulting to "auto".
+func (tc TerminalConfig) GetSizingMode() string {
+	if tc.SizingMode == "" {
+		return "auto"
+	}
+	return tc.SizingMode
 }
 
 type Config struct {

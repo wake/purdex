@@ -68,11 +68,8 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Terminal != nil {
-		if req.Terminal.AutoResize != nil {
-			s.cfg.Terminal.AutoResize = req.Terminal.AutoResize
-		}
-		if req.Terminal.IgnoreSize != nil {
-			s.cfg.Terminal.IgnoreSize = req.Terminal.IgnoreSize
+		if req.Terminal.SizingMode != "" {
+			s.cfg.Terminal.SizingMode = req.Terminal.SizingMode
 		}
 	}
 

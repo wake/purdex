@@ -241,11 +241,9 @@ func TestPutConfigPartialDetect(t *testing.T) {
 func TestPutConfigUpdatesTerminal(t *testing.T) {
 	srv, _ := newConfigTestServer(t)
 
-	// PUT: enable ignore_size, disable auto_resize
 	update := map[string]any{
 		"terminal": map[string]any{
-			"auto_resize": false,
-			"ignore_size": true,
+			"sizing_mode": "terminal-first",
 		},
 	}
 	body, _ := json.Marshal(update)
@@ -260,11 +258,8 @@ func TestPutConfigUpdatesTerminal(t *testing.T) {
 	var cfg config.Config
 	json.NewDecoder(resp.Body).Decode(&cfg)
 
-	if cfg.Terminal.AutoResize == nil || *cfg.Terminal.AutoResize != false {
-		t.Errorf("want auto_resize=false, got %v", cfg.Terminal.AutoResize)
-	}
-	if cfg.Terminal.IgnoreSize == nil || *cfg.Terminal.IgnoreSize != true {
-		t.Errorf("want ignore_size=true, got %v", cfg.Terminal.IgnoreSize)
+	if cfg.Terminal.SizingMode != "terminal-first" {
+		t.Errorf("want sizing_mode=terminal-first, got %q", cfg.Terminal.SizingMode)
 	}
 
 	// GET: verify persisted
@@ -274,19 +269,17 @@ func TestPutConfigUpdatesTerminal(t *testing.T) {
 	var getCfg config.Config
 	json.NewDecoder(getResp.Body).Decode(&getCfg)
 
-	if getCfg.Terminal.IgnoreSize == nil || *getCfg.Terminal.IgnoreSize != true {
-		t.Errorf("GET after PUT: want ignore_size=true, got %v", getCfg.Terminal.IgnoreSize)
+	if getCfg.Terminal.SizingMode != "terminal-first" {
+		t.Errorf("GET after PUT: want sizing_mode=terminal-first, got %q", getCfg.Terminal.SizingMode)
 	}
 }
 
 func TestPutConfigPartialTerminal(t *testing.T) {
 	srv, _ := newConfigTestServer(t)
 
-	// Only update ignore_size, leave auto_resize unchanged
+	// Empty terminal object should not change sizing_mode
 	update := map[string]any{
-		"terminal": map[string]any{
-			"ignore_size": true,
-		},
+		"terminal": map[string]any{},
 	}
 	body, _ := json.Marshal(update)
 	resp := authPut(t, srv.URL+"/api/config", body)
@@ -299,13 +292,9 @@ func TestPutConfigPartialTerminal(t *testing.T) {
 	var cfg config.Config
 	json.NewDecoder(resp.Body).Decode(&cfg)
 
-	// ignore_size updated
-	if cfg.Terminal.IgnoreSize == nil || *cfg.Terminal.IgnoreSize != true {
-		t.Errorf("want ignore_size=true, got %v", cfg.Terminal.IgnoreSize)
-	}
-	// auto_resize should remain nil (default true)
-	if cfg.Terminal.AutoResize != nil {
-		t.Errorf("auto_resize should remain nil (default), got %v", *cfg.Terminal.AutoResize)
+	// sizing_mode should remain empty (default "auto")
+	if cfg.Terminal.SizingMode != "" {
+		t.Errorf("sizing_mode should remain empty, got %q", cfg.Terminal.SizingMode)
 	}
 }
 

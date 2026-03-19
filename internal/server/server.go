@@ -79,12 +79,12 @@ func (s *Server) routes() {
 }
 
 // RestoreWindowSizing clears manual window-size set by resize-window
-// and restores automatic sizing based on the latest client.
-func (s *Server) RestoreWindowSizing(target string) {
+// and restores automatic sizing with the given mode.
+func (s *Server) RestoreWindowSizing(target, windowSizeMode string) {
 	if err := s.tmux.ResizeWindowAuto(target); err != nil {
 		log.Printf("RestoreWindowSizing: ResizeWindowAuto(%s): %v", target, err)
 	}
-	if err := s.tmux.SetWindowOption(target, "window-size", "latest"); err != nil {
+	if err := s.tmux.SetWindowOption(target, "window-size", windowSizeMode); err != nil {
 		log.Printf("RestoreWindowSizing: SetWindowOption(%s): %v", target, err)
 	}
 }
@@ -92,7 +92,7 @@ func (s *Server) RestoreWindowSizing(target string) {
 // BuildTerminalRelay returns the command, args, and cleanup function for a terminal relay.
 func (s *Server) BuildTerminalRelay(name string) (cmd string, args []string, cleanup func(), err error) {
 	args = []string{"attach-session", "-t", name}
-	if s.cfg.Terminal.IsIgnoreSize() {
+	if s.cfg.Terminal.GetSizingMode() == "terminal-first" {
 		args = append(args, "-f", "ignore-size")
 	}
 	return "tmux", args, func() {}, nil
@@ -112,16 +112,17 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cleanup()
 
+	sizingMode := s.cfg.Terminal.GetSizingMode()
 	relay := terminal.NewRelay(cmd, args, "/")
-	if s.cfg.Terminal.IsAutoResize() {
+	if sizingMode != "terminal-first" {
+		windowSizeValue := "latest"
+		if sizingMode == "minimal-first" {
+			windowSizeValue = "smallest"
+		}
 		relay.OnStart = func() {
-			// Clear any manual window size (e.g. set by handoff or user) so
-			// tmux auto-resizes to match the browser viewport.
-			// Delay to let: (1) tmux register the client, (2) WS I/O start,
-			// (3) browser send its viewport resize — so -A sees the real size.
 			go func() {
 				time.Sleep(1200 * time.Millisecond)
-				s.RestoreWindowSizing(name)
+				s.RestoreWindowSizing(name, windowSizeValue)
 			}()
 		}
 	}

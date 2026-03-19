@@ -122,17 +122,16 @@ func TestLoadInvalidTOML(t *testing.T) {
 	}
 }
 
-func TestIsIgnoreSizeDefaultFalse(t *testing.T) {
+func TestGetSizingModeDefault(t *testing.T) {
 	tc := config.TerminalConfig{}
-	if tc.IsIgnoreSize() {
-		t.Error("expected IsIgnoreSize() to be false by default")
+	if tc.GetSizingMode() != "auto" {
+		t.Errorf("expected default 'auto', got %q", tc.GetSizingMode())
 	}
 }
 
-func TestIsIgnoreSizeTrue(t *testing.T) {
-	v := true
-	tc := config.TerminalConfig{IgnoreSize: &v}
-	if !tc.IsIgnoreSize() {
-		t.Error("expected IsIgnoreSize() to be true when set")
+func TestGetSizingModeExplicit(t *testing.T) {
+	tc := config.TerminalConfig{SizingMode: "terminal-first"}
+	if tc.GetSizingMode() != "terminal-first" {
+		t.Errorf("expected 'terminal-first', got %q", tc.GetSizingMode())
 	}
 }

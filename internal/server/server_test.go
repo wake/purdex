@@ -28,18 +28,23 @@ func TestBuildTerminalRelayDefault(t *testing.T) {
 	if cmd != "tmux" || args[0] != "attach-session" || args[1] != "-t" || args[2] != "myapp" {
 		t.Errorf("expected tmux attach-session -t myapp, got %s %v", cmd, args)
 	}
+	// Should NOT have -f ignore-size in default mode
+	for _, a := range args {
+		if a == "ignore-size" {
+			t.Error("default mode should not have ignore-size flag")
+		}
+	}
 }
 
-func TestBuildTerminalRelayWithIgnoreSize(t *testing.T) {
+func TestBuildTerminalRelayTerminalFirst(t *testing.T) {
 	fakeTmux := tmux.NewFakeExecutor()
 	fakeTmux.AddSession("myapp", "/tmp")
 
 	db, _ := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	defer db.Close()
 
-	isTrue := true
 	cfg := config.Config{
-		Terminal: config.TerminalConfig{IgnoreSize: &isTrue},
+		Terminal: config.TerminalConfig{SizingMode: "terminal-first"},
 	}
 	srv := server.New(cfg, db, fakeTmux, "")
 
@@ -57,7 +62,7 @@ func TestBuildTerminalRelayWithIgnoreSize(t *testing.T) {
 		}
 	}
 	if !foundFlag {
-		t.Errorf("expected -f ignore-size in args, got %v", args)
+		t.Errorf("terminal-first mode should have -f ignore-size, got %v", args)
 	}
 }
 
@@ -71,7 +76,7 @@ func TestRestoreWindowSizingCallsBothMethods(t *testing.T) {
 	defer db.Close()
 
 	srv := server.New(config.Config{}, db, fakeTmux, "")
-	srv.RestoreWindowSizing("test:0")
+	srv.RestoreWindowSizing("test:0", "latest")
 
 	if len(fakeTmux.AutoResizeCalls()) != 1 || fakeTmux.AutoResizeCalls()[0] != "test:0" {
 		t.Errorf("expected ResizeWindowAuto called with test:0, got %v", fakeTmux.AutoResizeCalls())
