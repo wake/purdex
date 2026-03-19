@@ -1,6 +1,6 @@
 // spa/src/components/SettingsPanel.tsx
 import { useState, useEffect } from 'react'
-import { X, Plus, Trash } from '@phosphor-icons/react'
+import { X, Plus, Trash, Question } from '@phosphor-icons/react'
 import { useConfigStore } from '../stores/useConfigStore'
 
 interface Props {
@@ -120,16 +120,26 @@ export default function SettingsPanel({ daemonBase, onClose, onTerminalReconnect
             <h3 className="text-xs uppercase text-[#999] mb-2">Terminal</h3>
             <span className="block text-[11px] text-[#777] mb-3">變更後需重新連線生效</span>
             <div>
-              <label className="block text-xs text-[#ddd] mb-1">視窗尺寸模式</label>
+              <div className="flex items-center gap-1 mb-1">
+                <span className="text-xs text-[#ddd]">視窗尺寸模式</span>
+                <div className="relative group">
+                  <Question size={13} className="text-[#666] hover:text-[#aaa] cursor-help" />
+                  <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1 w-64 p-2 bg-[#333] border border-[#555] rounded text-[11px] text-[#ccc] leading-relaxed opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-10 pointer-events-none">
+                    <p className="mb-1"><strong className="text-[#eee]">Auto Resize</strong> — 最近操作的 client 決定視窗大小，各端互相影響</p>
+                    <p className="mb-1"><strong className="text-[#eee]">Terminal First</strong> — Web relay 不影響視窗大小，保護 iTerm/SSH 終端的顯示</p>
+                    <p><strong className="text-[#eee]">Minimal First</strong> — 以所有連線中最小的畫面為準，確保每端都能完整顯示</p>
+                  </div>
+                </div>
+              </div>
               <select
                 data-testid="terminal-sizing-mode"
                 value={sizingMode}
                 onChange={e => setSizingMode(e.target.value)}
                 className="w-full bg-[#2a2a2a] border border-[#404040] rounded px-2 py-1.5 text-xs text-[#ddd] cursor-pointer"
               >
-                <option value="auto">Auto Resize — 每個 client 的 resize 都會影響視窗</option>
-                <option value="terminal-first">Terminal First — relay 不影響視窗尺寸（保護 iTerm）</option>
-                <option value="minimal-first">Minimal First — 使用所有 client 中最小的尺寸</option>
+                <option value="auto">Auto Resize</option>
+                <option value="terminal-first">Terminal First</option>
+                <option value="minimal-first">Minimal First</option>
               </select>
             </div>
           </section>
