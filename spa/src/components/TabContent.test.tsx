@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { TabContent } from './TabContent'
 import { registerTabRenderer, clearRegistry } from '../lib/tab-registry'
