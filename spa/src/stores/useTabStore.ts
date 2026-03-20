@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Tab } from '../types/tab'
+import { getSessionName } from '../lib/tab-helpers'
 
 interface TabState {
   tabs: Record<string, Tab>
@@ -16,6 +17,7 @@ interface TabState {
   setActiveTab: (tabId: string) => void
   reorderTabs: (order: string[]) => void
   updateTab: (tabId: string, updates: Partial<Tab>) => void
+  setViewMode: (tabId: string, viewMode: string) => void
   getActiveTab: () => Tab | null
 }
 
@@ -60,8 +62,9 @@ export const useTabStore = create<TabState>()(
             const oldIndex = state.tabOrder.indexOf(tabId)
             newActiveId = newOrder[Math.min(oldIndex, newOrder.length - 1)] ?? null
           }
-          const dismissed = tab.sessionName
-            ? [...state.dismissedSessions, tab.sessionName]
+          const sessionName = getSessionName(tab)
+          const dismissed = sessionName
+            ? [...state.dismissedSessions, sessionName]
             : state.dismissedSessions
           return { tabs: remainingTabs, tabOrder: newOrder, activeTabId: newActiveId, dismissedSessions: dismissed }
         }),
@@ -90,6 +93,12 @@ export const useTabStore = create<TabState>()(
           return { tabs: { ...state.tabs, [tabId]: { ...state.tabs[tabId], ...updates } } }
         }),
 
+      setViewMode: (tabId, viewMode) =>
+        set((state) => {
+          if (!state.tabs[tabId]) return state
+          return { tabs: { ...state.tabs, [tabId]: { ...state.tabs[tabId], viewMode } } }
+        }),
+
       getActiveTab: () => {
         const { tabs, activeTabId } = get()
         return activeTabId ? tabs[activeTabId] ?? null : null
@@ -97,6 +106,35 @@ export const useTabStore = create<TabState>()(
     }),
     {
       name: 'tbox-tabs',
+      version: 1,
+      migrate: (persisted: any, version: number) => {
+        if (version < 1) {
+          const tabs: Record<string, any> = persisted.tabs ?? {}
+          const migrated: Record<string, any> = {}
+          for (const [id, tab] of Object.entries(tabs) as [string, any][]) {
+            if (tab.type === 'terminal' || tab.type === 'stream') {
+              const { sessionName, ...rest } = tab
+              migrated[id] = {
+                ...rest,
+                type: 'session',
+                viewMode: tab.type === 'stream' ? 'stream' : 'terminal',
+                data: { sessionName },
+              }
+            } else if (tab.type === 'editor') {
+              const { filePath, isDirty, ...rest } = tab
+              migrated[id] = {
+                ...rest,
+                type: 'editor',
+                data: { filePath, isDirty: isDirty ?? false },
+              }
+            } else {
+              migrated[id] = { ...tab, data: tab.data ?? {} }
+            }
+          }
+          return { ...persisted, tabs: migrated }
+        }
+        return persisted
+      },
       partialize: (state) => ({
         tabs: state.tabs,
         tabOrder: state.tabOrder,
