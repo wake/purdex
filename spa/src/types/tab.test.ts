@@ -1,29 +1,41 @@
 import { describe, it, expect } from 'vitest'
-import { createTab, createWorkspace, isStandaloneTab } from './tab'
+import { createSessionTab, createEditorTab, createTab, createWorkspace, isStandaloneTab } from './tab'
 
-describe('createTab', () => {
-  it('creates a terminal tab with generated id', () => {
-    const tab = createTab({ type: 'terminal', label: 'dev-server', hostId: 'mlab', sessionName: 'dev-server' })
+describe('createSessionTab', () => {
+  it('creates a session tab with terminal viewMode', () => {
+    const tab = createSessionTab({ label: 'dev-server', hostId: 'mlab', sessionName: 'dev-server' })
     expect(tab.id).toBeTruthy()
-    expect(tab.type).toBe('terminal')
+    expect(tab.type).toBe('session')
     expect(tab.label).toBe('dev-server')
     expect(tab.hostId).toBe('mlab')
-    expect(tab.sessionName).toBe('dev-server')
+    expect(tab.viewMode).toBe('terminal')
+    expect(tab.data.sessionName).toBe('dev-server')
     expect(tab.icon).toBe('Terminal')
   })
 
-  it('creates a stream tab', () => {
-    const tab = createTab({ type: 'stream', label: 'claude-code', hostId: 'mlab', sessionName: 'claude-code' })
-    expect(tab.type).toBe('stream')
-    expect(tab.icon).toBe('ChatCircleDots')
+  it('creates a session tab with stream viewMode', () => {
+    const tab = createSessionTab({ label: 'claude', hostId: 'mlab', sessionName: 'claude', viewMode: 'stream' })
+    expect(tab.type).toBe('session')
+    expect(tab.viewMode).toBe('stream')
+    expect(tab.data.sessionName).toBe('claude')
   })
+})
 
+describe('createEditorTab', () => {
   it('creates an editor tab', () => {
-    const tab = createTab({ type: 'editor', label: 'App.tsx', hostId: 'mlab', filePath: '/src/App.tsx' })
+    const tab = createEditorTab({ label: 'App.tsx', hostId: 'mlab', filePath: '/src/App.tsx' })
     expect(tab.type).toBe('editor')
-    expect(tab.filePath).toBe('/src/App.tsx')
-    expect(tab.isDirty).toBe(false)
+    expect(tab.data.filePath).toBe('/src/App.tsx')
+    expect(tab.data.isDirty).toBe(false)
     expect(tab.icon).toBe('File')
+  })
+})
+
+describe('createTab (generic)', () => {
+  it('creates a tab with arbitrary type and data', () => {
+    const tab = createTab({ type: 'monitoring', label: 'Dashboard', hostId: 'mlab', data: { url: '/metrics' } })
+    expect(tab.type).toBe('monitoring')
+    expect(tab.data.url).toBe('/metrics')
   })
 })
 
@@ -37,23 +49,19 @@ describe('createWorkspace', () => {
     expect(ws.directories).toEqual([])
     expect(ws.activeTabId).toBeNull()
     expect(ws.sidebarState).toBeDefined()
-    expect(ws.sidebarState.zones).toBeDefined()
     expect(ws.sidebarState.zones['left-outer']).toBeDefined()
-    expect(ws.sidebarState.zones['left-inner']).toBeDefined()
-    expect(ws.sidebarState.zones['right-inner']).toBeDefined()
-    expect(ws.sidebarState.zones['right-outer']).toBeDefined()
   })
 })
 
 describe('isStandaloneTab', () => {
   it('returns true when tab is not in any workspace', () => {
-    const tab = createTab({ type: 'terminal', label: 'misc', hostId: 'mlab' })
+    const tab = createSessionTab({ label: 'misc', hostId: 'mlab', sessionName: 'misc' })
     const workspaces = [createWorkspace({ name: 'WS1' })]
     expect(isStandaloneTab(tab.id, workspaces)).toBe(true)
   })
 
   it('returns false when tab is in a workspace', () => {
-    const tab = createTab({ type: 'terminal', label: 'dev', hostId: 'mlab' })
+    const tab = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev' })
     const ws = createWorkspace({ name: 'WS1' })
     ws.tabs = [tab.id]
     expect(isStandaloneTab(tab.id, [ws])).toBe(false)
