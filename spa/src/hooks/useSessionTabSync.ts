@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
-import { createTab } from '../types/tab'
+import { createSessionTab } from '../types/tab'
+import { getSessionName } from '../lib/tab-helpers'
 import type { Session } from '../lib/api'
 
 export function useSessionTabSync(sessions: Session[]) {
@@ -11,13 +12,13 @@ export function useSessionTabSync(sessions: Session[]) {
     // Add tabs for new sessions
     sessions.forEach((s) => {
       const currentTabs = useTabStore.getState().tabs
-      const existingTab = Object.values(currentTabs).find((t) => t.sessionName === s.name)
+      const existingTab = Object.values(currentTabs).find((t) => getSessionName(t) === s.name)
       if (!existingTab && !useTabStore.getState().isSessionDismissed(s.name)) {
-        const tab = createTab({
-          type: s.mode === 'stream' ? 'stream' : 'terminal',
+        const tab = createSessionTab({
           label: s.name,
           hostId: 'local',
           sessionName: s.name,
+          viewMode: s.mode === 'stream' ? 'stream' : 'terminal',
         })
         useTabStore.getState().addTab(tab)
         const defaultWsId = useWorkspaceStore.getState().workspaces[0]?.id
@@ -26,11 +27,11 @@ export function useSessionTabSync(sessions: Session[]) {
     })
 
     // Remove tabs for sessions that no longer exist
-    // Skip cleanup when sessions is empty (initial render before fetch resolves)
     if (sessions.length > 0) {
       const currentTabs = useTabStore.getState().tabs
       Object.values(currentTabs).forEach((tab) => {
-        if (tab.sessionName && !sessionNames.has(tab.sessionName)) {
+        const sName = getSessionName(tab)
+        if (sName && !sessionNames.has(sName)) {
           const ws = useWorkspaceStore.getState().findWorkspaceByTab(tab.id)
           if (ws) useWorkspaceStore.getState().removeTabFromWorkspace(ws.id, tab.id)
           useTabStore.getState().removeTab(tab.id)
