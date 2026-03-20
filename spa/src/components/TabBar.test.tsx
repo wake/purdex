@@ -1,17 +1,32 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { TabBar } from './TabBar'
 import type { Tab } from '../types/tab'
+import { registerTabRenderer, clearRegistry } from '../lib/tab-registry'
 
 const mockTabs: Tab[] = [
-  { id: 't1', type: 'terminal', label: 'dev-server', icon: 'Terminal', hostId: 'mlab', sessionName: 'dev' },
-  { id: 't2', type: 'stream', label: 'claude', icon: 'ChatCircleDots', hostId: 'mlab', sessionName: 'claude' },
-  { id: 't3', type: 'editor', label: 'App.tsx', icon: 'File', hostId: 'mlab', filePath: '/App.tsx', isDirty: true },
+  { id: 't1', type: 'session', label: 'dev-server', icon: 'Terminal', hostId: 'mlab', viewMode: 'terminal', data: { sessionName: 'dev' } },
+  { id: 't2', type: 'session', label: 'claude', icon: 'ChatCircleDots', hostId: 'mlab', viewMode: 'stream', data: { sessionName: 'claude' } },
+  { id: 't3', type: 'editor', label: 'App.tsx', icon: 'File', hostId: 'mlab', data: { filePath: '/App.tsx', isDirty: true } },
 ]
 
 describe('TabBar', () => {
-  it('renders all tabs', () => {
+  beforeEach(() => {
     cleanup()
+    clearRegistry()
+    registerTabRenderer('session', {
+      component: (() => null) as any,
+      viewModes: ['terminal', 'stream'],
+      defaultViewMode: 'terminal',
+      icon: (tab) => tab.viewMode === 'stream' ? 'ChatCircleDots' : 'Terminal',
+    })
+    registerTabRenderer('editor', {
+      component: (() => null) as any,
+      icon: () => 'File',
+    })
+  })
+
+  it('renders all tabs', () => {
     render(
       <TabBar tabs={mockTabs} activeTabId="t1" onSelectTab={vi.fn()} onCloseTab={vi.fn()} onAddTab={vi.fn()} />,
     )
@@ -21,7 +36,6 @@ describe('TabBar', () => {
   })
 
   it('highlights active tab', () => {
-    cleanup()
     render(
       <TabBar tabs={mockTabs} activeTabId="t1" onSelectTab={vi.fn()} onCloseTab={vi.fn()} onAddTab={vi.fn()} />,
     )
@@ -30,7 +44,6 @@ describe('TabBar', () => {
   })
 
   it('calls onSelectTab on click', () => {
-    cleanup()
     const onSelect = vi.fn()
     render(
       <TabBar tabs={mockTabs} activeTabId="t1" onSelectTab={onSelect} onCloseTab={vi.fn()} onAddTab={vi.fn()} />,
@@ -40,7 +53,6 @@ describe('TabBar', () => {
   })
 
   it('calls onCloseTab on close button click', () => {
-    cleanup()
     const onClose = vi.fn()
     render(
       <TabBar tabs={mockTabs} activeTabId="t1" onSelectTab={vi.fn()} onCloseTab={onClose} onAddTab={vi.fn()} />,
@@ -51,7 +63,6 @@ describe('TabBar', () => {
   })
 
   it('shows dirty indicator for modified editor tabs', () => {
-    cleanup()
     render(
       <TabBar tabs={mockTabs} activeTabId="t1" onSelectTab={vi.fn()} onCloseTab={vi.fn()} onAddTab={vi.fn()} />,
     )
