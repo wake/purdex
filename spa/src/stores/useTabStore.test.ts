@@ -4,7 +4,7 @@ import { createTab } from '../types/tab'
 
 describe('useTabStore', () => {
   beforeEach(() => {
-    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, dismissedSessions: [] })
   })
 
   it('adds a tab', () => {
@@ -105,5 +105,38 @@ describe('useTabStore', () => {
     useTabStore.getState().addTab(tab)
     useTabStore.getState().removeTab('nonexistent')
     expect(useTabStore.getState().tabOrder).toHaveLength(1)
+  })
+
+  it('dismissTab adds sessionName to dismissedSessions', () => {
+    const tab = createTab({ type: 'terminal', label: 'dev', hostId: 'mlab', sessionName: 'dev' })
+    useTabStore.getState().addTab(tab)
+    useTabStore.getState().dismissTab(tab.id)
+    expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
+    expect(useTabStore.getState().dismissedSessions).toContain('dev')
+  })
+
+  it('dismissTab is no-op for tab without sessionName', () => {
+    const tab = createTab({ type: 'editor', label: 'file.ts', hostId: 'mlab', filePath: '/file.ts' })
+    useTabStore.getState().addTab(tab)
+    useTabStore.getState().dismissTab(tab.id)
+    expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
+    expect(useTabStore.getState().dismissedSessions).toHaveLength(0)
+  })
+
+  it('undismissSession removes sessionName from dismissedSessions', () => {
+    const tab = createTab({ type: 'terminal', label: 'dev', hostId: 'mlab', sessionName: 'dev' })
+    useTabStore.getState().addTab(tab)
+    useTabStore.getState().dismissTab(tab.id)
+    expect(useTabStore.getState().dismissedSessions).toContain('dev')
+    useTabStore.getState().undismissSession('dev')
+    expect(useTabStore.getState().dismissedSessions).not.toContain('dev')
+  })
+
+  it('isSessionDismissed returns correct value', () => {
+    const tab = createTab({ type: 'terminal', label: 'dev', hostId: 'mlab', sessionName: 'dev' })
+    useTabStore.getState().addTab(tab)
+    expect(useTabStore.getState().isSessionDismissed('dev')).toBe(false)
+    useTabStore.getState().dismissTab(tab.id)
+    expect(useTabStore.getState().isSessionDismissed('dev')).toBe(true)
   })
 })

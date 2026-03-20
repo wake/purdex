@@ -13,12 +13,12 @@ import { useTabStore } from './stores/useTabStore'
 import { useWorkspaceStore } from './stores/useWorkspaceStore'
 import { useHostStore } from './stores/useHostStore'
 import { useRelayWsManager } from './hooks/useRelayWsManager'
-import { connectSessionEvents } from './lib/session-events'
-import { parseHash, setHash } from './lib/hash-routing'
-import { handoff, fetchHistory } from './lib/api'
+import { useSessionEventWs } from './hooks/useSessionEventWs'
+import { useSessionTabSync } from './hooks/useSessionTabSync'
+import { useHashRouting } from './hooks/useHashRouting'
+import { handoff } from './lib/api'
 import { createTab, isStandaloneTab } from './types/tab'
 import type { Tab } from './types/tab'
-import type { SessionStatus } from './components/SessionStatusBadge'
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -44,7 +44,7 @@ export default function App() {
   const tabOrder = useTabStore((s) => s.tabOrder)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const addTab = useTabStore((s) => s.addTab)
-  const removeTab = useTabStore((s) => s.removeTab)
+  const dismissTab = useTabStore((s) => s.dismissTab)
   const setActiveTab = useTabStore((s) => s.setActiveTab)
   const updateTab = useTabStore((s) => s.updateTab)
   const getActiveTab = useTabStore((s) => s.getActiveTab)
@@ -58,8 +58,11 @@ export default function App() {
   const findWorkspaceByTab = useWorkspaceStore((s) => s.findWorkspaceByTab)
   const setWorkspaceActiveTab = useWorkspaceStore((s) => s.setWorkspaceActiveTab)
 
-  // Relay WS manager — creates stream WS connections driven by relay status
+  // --- Extracted hooks ---
   useRelayWsManager(wsBase)
+  useSessionEventWs(wsBase, daemonBase)
+  useSessionTabSync(sessions)
+  useHashRouting(activeTabId, setActiveTab)
 
   // --- Derived state ---
   const activeTab = getActiveTab()
@@ -73,103 +76,6 @@ export default function App() {
     fetchSessions(daemonBase)
     fetchConfig(daemonBase)
   }, [fetchSessions, fetchConfig, daemonBase])
-
-  // --- Session events WS (ported from original App.tsx) ---
-  useEffect(() => {
-    const conn = connectSessionEvents(
-      `${wsBase}/ws/session-events`,
-      (event) => {
-        if (event.type === 'status') {
-          useStreamStore.getState().setSessionStatus(event.session, event.value as SessionStatus)
-          fetchSessions(daemonBase)
-        }
-        if (event.type === 'relay') {
-          useStreamStore.getState().setRelayStatus(event.session, event.value === 'connected')
-          // Note: history reload on relay reconnect deferred to Phase 3
-        }
-        if (event.type === 'handoff') {
-          const store = useStreamStore.getState()
-          if (event.value === 'connected') {
-            // Handoff completed — clear progress, fetch fresh data + history
-            store.setHandoffProgress(event.session, '')
-            fetchSessions(daemonBase).then(() => {
-              const sess = useSessionStore.getState().sessions.find((s) => s.name === event.session)
-              if (sess && sess.mode !== 'term') {
-                fetchHistory(daemonBase, sess.id).then((msgs) => {
-                  useStreamStore.getState().loadHistory(event.session, msgs)
-                }).catch(() => { /* history fetch failed — non-critical */ })
-              } else {
-                // Term handoff — clear stale per-session state
-                useStreamStore.getState().clearSession(event.session)
-              }
-            }).catch(() => { /* fetchSessions failed — non-critical */ })
-          } else if (event.value.startsWith('failed')) {
-            store.setHandoffProgress(event.session, '')
-            fetchSessions(daemonBase)
-          } else {
-            // Progress update (detecting, stopping-cc, etc.)
-            store.setHandoffProgress(event.session, event.value)
-          }
-        }
-      },
-    )
-    return () => conn.close()
-  }, [fetchSessions, daemonBase, wsBase])
-
-  // --- Auto tab sync: sessions → tabs (add new, remove stale) ---
-  useEffect(() => {
-    const sessionNames = new Set(sessions.map((s) => s.name))
-
-    // Add tabs for new sessions
-    sessions.forEach((s) => {
-      const currentTabs = useTabStore.getState().tabs
-      const existingTab = Object.values(currentTabs).find((t) => t.sessionName === s.name)
-      if (!existingTab) {
-        const tab = createTab({
-          type: s.mode === 'stream' ? 'stream' : 'terminal',
-          label: s.name,
-          hostId: 'local',
-          sessionName: s.name,
-        })
-        useTabStore.getState().addTab(tab)
-        const defaultWsId = useWorkspaceStore.getState().workspaces[0]?.id
-        if (defaultWsId) useWorkspaceStore.getState().addTabToWorkspace(defaultWsId, tab.id)
-      }
-    })
-
-    // Remove tabs for sessions that no longer exist
-    const currentTabs = useTabStore.getState().tabs
-    Object.values(currentTabs).forEach((tab) => {
-      if (tab.sessionName && !sessionNames.has(tab.sessionName)) {
-        const ws = useWorkspaceStore.getState().findWorkspaceByTab(tab.id)
-        if (ws) useWorkspaceStore.getState().removeTabFromWorkspace(ws.id, tab.id)
-        useTabStore.getState().removeTab(tab.id)
-      }
-    })
-  }, [sessions])
-
-  // --- Hash routing: restore tab from URL on mount ---
-  useEffect(() => {
-    const { tabId } = parseHash()
-    if (tabId && useTabStore.getState().tabs[tabId]) {
-      setActiveTab(tabId)
-    }
-  }, [setActiveTab])
-
-  // --- Hash routing: sync activeTabId → URL ---
-  useEffect(() => {
-    if (activeTabId) setHash(activeTabId)
-  }, [activeTabId])
-
-  // --- Hash routing: listen for browser back/forward ---
-  useEffect(() => {
-    const handler = () => {
-      const { tabId } = parseHash()
-      if (tabId && useTabStore.getState().tabs[tabId]) setActiveTab(tabId)
-    }
-    window.addEventListener('hashchange', handler)
-    return () => window.removeEventListener('hashchange', handler)
-  }, [setActiveTab])
 
   // --- Handlers ---
 
@@ -200,8 +106,6 @@ export default function App() {
     try {
       useStreamStore.getState().setHandoffProgress(activeSession.name, 'starting')
       await handoff(daemonBase, activeSession.id, 'term')
-      // clearSession handled by session-events handler on handoff 'connected'
-      // Update tab type to terminal
       const tab = Object.values(tabs).find((t) => t.sessionName === activeSession.name)
       if (tab) {
         updateTab(tab.id, { type: 'terminal', icon: 'Terminal' })
@@ -235,8 +139,8 @@ export default function App() {
   const handleCloseTab = useCallback((tabId: string) => {
     const ws = findWorkspaceByTab(tabId)
     if (ws) removeTabFromWorkspace(ws.id, tabId)
-    removeTab(tabId)
-  }, [findWorkspaceByTab, removeTabFromWorkspace, removeTab])
+    dismissTab(tabId)
+  }, [findWorkspaceByTab, removeTabFromWorkspace, dismissTab])
 
   const handleAddTab = useCallback(() => {
     setSessionPickerOpen(true)
@@ -244,6 +148,7 @@ export default function App() {
 
   const handleSessionSelect = useCallback((session: typeof sessions[0]) => {
     setSessionPickerOpen(false)
+    useTabStore.getState().undismissSession(session.name)
     const existing = Object.values(tabs).find((t) => t.sessionName === session.name)
     if (existing) {
       setActiveTab(existing.id)

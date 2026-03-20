@@ -140,4 +140,17 @@ describe('TerminalView', () => {
     overlay = container.querySelector('[data-testid="terminal-overlay"]')
     expect(overlay?.getAttribute('style')).toContain('opacity: 0')
   })
+
+  it('does not recreate terminal when revealDelay changes', async () => {
+    const { useUISettingsStore } = await import('../stores/useUISettingsStore')
+    mockClose.mockClear()
+    TerminalSpy.mockClear()
+    render(<TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" />)
+    expect(TerminalSpy).toHaveBeenCalledTimes(1)
+
+    // Change revealDelay — should NOT trigger terminal rebuild
+    act(() => useUISettingsStore.getState().setTerminalRevealDelay(500))
+    expect(mockClose).not.toHaveBeenCalled()
+    expect(TerminalSpy).toHaveBeenCalledTimes(1)
+  })
 })

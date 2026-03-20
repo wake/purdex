@@ -20,11 +20,12 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage 
   const [ready, setReady] = useState(false)
   const [disconnected, setDisconnected] = useState(false)
   const prevVisible = useRef(visible)
-  const revealDelay = useUISettingsStore((s) => s.terminalRevealDelay)
+  const revealDelayRef = useRef(useUISettingsStore.getState().terminalRevealDelay)
+  useUISettingsStore.subscribe((s) => { revealDelayRef.current = s.terminalRevealDelay })
 
   // Initial setup — create terminal + WS connection
   useEffect(() => {
-    setReady(false) // eslint-disable-line react-hooks/set-state-in-effect
+    setReady(false)
     setDisconnected(false)
     if (!containerRef.current) return
 
@@ -55,14 +56,14 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage 
       term.focus()
     }
 
-    // Fallback: reveal after 5× revealDelay even if no data received
-    const fallbackTimer = setTimeout(reveal, revealDelay * 5)
+    // Fallback: reveal after 5× revealDelayRef.current even if no data received
+    const fallbackTimer = setTimeout(reveal, revealDelayRef.current * 5)
 
     const conn = connectTerminal(
       wsUrl,
       (data) => {
         term.write(new Uint8Array(data))
-        if (!revealed) setTimeout(reveal, revealDelay)
+        if (!revealed) setTimeout(reveal, revealDelayRef.current)
       },
       () => setDisconnected(true),
       () => {
@@ -147,13 +148,13 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage 
       connRef.current = null
       termRef.current = null
     }
-  }, [wsUrl, revealDelay])
+  }, [wsUrl])
 
   // Re-show overlay + refit when becoming visible after being hidden
   useEffect(() => {
     if (visible && !prevVisible.current) {
       // Becoming visible — show overlay, refit, then fade out
-      setReady(false) // eslint-disable-line react-hooks/set-state-in-effect
+      setReady(false)
       requestAnimationFrame(() => {
         fitAddonRef.current?.fit()
         // Explicitly send resize even if fit() didn't change dimensions,
