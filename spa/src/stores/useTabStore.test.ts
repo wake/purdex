@@ -180,7 +180,7 @@ describe('pinTab / unpinTab', () => {
 
   it('unpinTab sets pinned=false, moves to normal zone start, keeps locked', () => {
     const a = addTab('a')
-    const b = addTab('b')
+    addTab('b') // second tab to verify zone ordering
     useTabStore.getState().pinTab(a.id)
     useTabStore.getState().unpinTab(a.id)
 
