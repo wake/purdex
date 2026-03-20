@@ -13,7 +13,7 @@ interface UISettings {
    *   自動捲動會產生可見的捲動閃爍
    * - 300ms：足夠 batcher 送完初始畫面 + tmux 渲染穩定，視覺上平滑過渡
    *
-   * fallback timeout = 此值 × 5（預設 1500ms），在完全收不到 data 時保底顯示。
+   * overlay 只在收到第一筆 data 後才開始倒數，無 fallback timer。
    */
   terminalRevealDelay: number
   setTerminalRevealDelay: (ms: number) => void
