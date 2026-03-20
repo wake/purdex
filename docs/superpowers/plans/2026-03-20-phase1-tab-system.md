@@ -4,7 +4,7 @@
 
 **Goal:** 將 tmux-box SPA 從「單 session 檢視」升級為「多分頁 + Activity Bar」架構。
 
-**Architecture:** 在 `v1` branch 上破壞式重構。加入 Tab 層——每個「session + mode」成為一個 Tab。Activity Bar 垂直排列在最左側。TabBar 水平顯示分頁。TabContent 以 keep-alive 策略同時掛載所有 tab（CSS 控制可見性）。最小版 HostStore 取代 hardcoded `daemonBase`。簡易 Session Picker 讓使用者可選擇/建立分頁。新 session 自動建立 tab。Hash routing 改為 `#/tab/{tabId}`（不需向後相容舊格式）。
+**Architecture:** 在 `v1` branch 上破壞式重構。加入 Tab 層——每個「session + mode」成為一個 Tab。Activity Bar 垂直排列在最左側。TabBar 水平顯示分頁。TabContent 只掛載 activeTab（原 keep-alive 策略因 tmux resize corruption、WebGL 耗盡、記憶體問題而移除）。最小版 HostStore 取代 hardcoded `daemonBase`。簡易 Session Picker 讓使用者可選擇/建立分頁。新 session 自動建立 tab。Hash routing 改為 `#/tab/{tabId}`（不需向後相容舊格式）。Terminal reveal delay（預設 300ms）已抽取至 `useUISettingsStore` 供調整。
 
 **Tech Stack:** React 19, Zustand 5, TypeScript 5.9, Tailwind 4, Vitest, Phosphor Icons
 
