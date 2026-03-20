@@ -1,5 +1,7 @@
 import { X, Plus, Terminal, ChatCircleDots, File as FileIcon } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
+import { getTabIcon } from '../lib/tab-registry'
+import { isDirty } from '../lib/tab-helpers'
 
 interface Props {
   tabs: Tab[]
@@ -15,8 +17,9 @@ const ICON_MAP: Record<string, React.ComponentType<{ size: number; className?: s
   File: FileIcon,
 }
 
-function TabIcon({ icon, size = 14 }: { icon: string; size?: number }) {
-  const Component = ICON_MAP[icon]
+function TabIcon({ tab, size = 14 }: { tab: Tab; size?: number }) {
+  const iconName = getTabIcon(tab)
+  const Component = ICON_MAP[iconName]
   if (!Component) return null
   return <Component size={size} className="flex-shrink-0" />
 }
@@ -36,9 +39,9 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab }:
                 : 'text-gray-500 hover:text-gray-300'
             }`}
           >
-            <TabIcon icon={tab.icon} />
+            <TabIcon tab={tab} />
             <span>{tab.label}</span>
-            {tab.isDirty && <span className="text-amber-400 text-[10px]">●</span>}
+            {isDirty(tab) && <span className="text-amber-400 text-[10px]">●</span>}
             <span
               title="關閉分頁"
               onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id) }}

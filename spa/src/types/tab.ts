@@ -1,12 +1,11 @@
 export interface Tab {
   id: string
-  type: 'terminal' | 'stream' | 'editor'
+  type: string
   label: string
   icon: string
   hostId: string
-  sessionName?: string
-  filePath?: string
-  isDirty?: boolean
+  viewMode?: string
+  data: Record<string, unknown>
 }
 
 export interface Workspace {
@@ -15,7 +14,7 @@ export interface Workspace {
   color: string
   icon?: string
   directories: PinnedItem[]
-  tabs: string[]        // tab IDs (ordered)
+  tabs: string[]
   activeTabId: string | null
   sidebarState: WorkspaceSidebarState
 }
@@ -40,16 +39,7 @@ const WORKSPACE_COLORS = ['#7a6aaa', '#6aaa7a', '#aa6a7a', '#6a8aaa', '#aa8a6a',
 
 function generateId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
-  // Fallback for insecure contexts (HTTP non-localhost)
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-}
-
-function iconForType(type: Tab['type']): string {
-  switch (type) {
-    case 'terminal': return 'Terminal'
-    case 'stream': return 'ChatCircleDots'
-    case 'editor': return 'File'
-  }
 }
 
 function defaultSidebarState(): WorkspaceSidebarState {
@@ -64,14 +54,54 @@ function defaultSidebarState(): WorkspaceSidebarState {
   }
 }
 
-export function createTab(opts: Omit<Tab, 'id' | 'icon'> & { icon?: string }): Tab {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { isDirty, ...rest } = opts
+export interface CreateSessionTabOpts {
+  label: string
+  hostId: string
+  sessionName: string
+  viewMode?: 'terminal' | 'stream'
+  icon?: string
+}
+
+export interface CreateEditorTabOpts {
+  label: string
+  hostId: string
+  filePath: string
+  isDirty?: boolean
+  icon?: string
+}
+
+export function createSessionTab(opts: CreateSessionTabOpts): Tab {
   return {
-    ...rest,
     id: generateId(),
-    icon: opts.icon ?? iconForType(opts.type),
-    isDirty: opts.type === 'editor' ? (opts.isDirty ?? false) : undefined,
+    type: 'session',
+    label: opts.label,
+    icon: opts.icon ?? 'Terminal',
+    hostId: opts.hostId,
+    viewMode: opts.viewMode ?? 'terminal',
+    data: { sessionName: opts.sessionName },
+  }
+}
+
+export function createEditorTab(opts: CreateEditorTabOpts): Tab {
+  return {
+    id: generateId(),
+    type: 'editor',
+    label: opts.label,
+    icon: opts.icon ?? 'File',
+    hostId: opts.hostId,
+    data: { filePath: opts.filePath, isDirty: opts.isDirty ?? false },
+  }
+}
+
+export function createTab(opts: { type: string; label: string; hostId: string; icon?: string; viewMode?: string; data?: Record<string, unknown> }): Tab {
+  return {
+    id: generateId(),
+    type: opts.type,
+    label: opts.label,
+    icon: opts.icon ?? '',
+    hostId: opts.hostId,
+    viewMode: opts.viewMode,
+    data: opts.data ?? {},
   }
 }
 

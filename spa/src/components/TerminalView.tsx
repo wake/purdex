@@ -69,8 +69,7 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage 
       term.focus()
     }
 
-    // Fallback: reveal after 5× revealDelayRef.current even if no data received
-    const fallbackTimer = setTimeout(reveal, revealDelayRef.current * 5)
+    // No fallback timer — overlay stays until first data arrives
 
     const conn = connectTerminal(
       wsUrl,
@@ -149,7 +148,6 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage 
     observer.observe(container)
 
     return () => {
-      clearTimeout(fallbackTimer)
       cancelAnimationFrame(rafId)
       observer.disconnect()
       container.removeEventListener('keydown', handleShiftEnter, true)
