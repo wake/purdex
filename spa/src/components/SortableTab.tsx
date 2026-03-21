@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { X, Lock } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
@@ -18,13 +17,11 @@ interface Props {
 }
 
 // Composite bg colors (pre-computed for opaque X button bg)
-const TAB_BG = '#12122a'           // inactive
-const TAB_BG_HOVER = '#1a1a32'     // inactive + hover (rgba(255,255,255,0.05) on #12122a)
-const TAB_BG_ACTIVE = '#1e1935'    // active (rgba(122,106,170,0.2) on #12122a)
+const TAB_BG_INACTIVE = '#12122a'
+const TAB_BG_ACTIVE = '#1e1935'
 
 export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onHover, iconMap }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id })
-  const [hovered, setHovered] = useState(false)
 
   const style = {
     transform: transform ? `translate3d(${Math.round(transform.x)}px, 0, 0)` : undefined,
@@ -35,8 +32,8 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const iconName = getTabIcon(tab)
   const IconComponent = iconMap[iconName]
 
-  const handleMouseEnter = () => { setHovered(true); onHover?.(tab.id) }
-  const handleMouseLeave = () => { setHovered(false); onHover?.(null) }
+  const handleMouseEnter = () => onHover?.(tab.id)
+  const handleMouseLeave = () => onHover?.(null)
   const handleMouseUp = (e: React.MouseEvent) => {
     if (e.button === 1) { e.preventDefault(); onMiddleClick(tab.id) }
   }
@@ -45,7 +42,8 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     onContextMenu(e, tab.id)
   }
 
-  const tabBg = isActive ? TAB_BG_ACTIVE : hovered ? TAB_BG_HOVER : TAB_BG
+  // Use inactive bg for X overlay (hover bg difference is negligible)
+  const tabBg = isActive ? TAB_BG_ACTIVE : TAB_BG_INACTIVE
 
   if (pinned) {
     return (
@@ -72,7 +70,6 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   }
 
   const showClose = !tab.locked
-  const closeVisible = showClose && (isActive || hovered)
 
   return (
     <button
@@ -85,7 +82,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onContextMenu={handleContextMenu}
-      className={`group relative flex items-center gap-1.5 px-2 text-xs whitespace-nowrap cursor-pointer transition-colors duration-150 ease-out rounded-[6px] overflow-hidden ${
+      className={`group relative flex items-center gap-1.5 pl-2 text-xs whitespace-nowrap cursor-pointer transition-colors duration-150 ease-out rounded-[6px] overflow-hidden ${
         isActive
           ? 'text-white bg-[rgba(122,106,170,0.2)] border border-[rgba(122,106,170,0.3)]'
           : 'text-gray-500 hover:text-gray-300 hover:bg-[rgba(255,255,255,0.05)] border border-transparent'
@@ -95,10 +92,12 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       <span className="tab-label-fade overflow-hidden">{tab.label}</span>
       {isDirty(tab) && <span className="text-amber-400 text-[10px] flex-shrink-0">●</span>}
       {tab.locked && <Lock size={10} className="text-gray-600 ml-0.5 flex-shrink-0" />}
+      {/* Spacer: reserves X button width so tab size is stable */}
+      {showClose && <span className="w-5 flex-shrink-0" />}
       {showClose && (
         <span
           className={`absolute right-0 top-0 bottom-0 flex items-center transition-opacity duration-150 ease-out ${
-            closeVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+            isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           }`}
         >
           <span className="w-3 self-stretch" style={{ background: `linear-gradient(to right, transparent, ${tabBg})` }} />
