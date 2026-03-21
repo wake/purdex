@@ -108,6 +108,9 @@ export default function App() {
 
   const handleSessionSelect = useCallback((session: typeof sessions[0]) => {
     setSessionPickerOpen(false)
+    const dismissedEntry = useTabStore.getState().dismissedSessions.find(
+      (s) => s.sessionName === session.name
+    )
     useTabStore.getState().undismissSession(session.name)
     const existing = Object.values(tabs).find((t) => getSessionName(t) === session.name)
     if (existing) {
@@ -121,6 +124,7 @@ export default function App() {
       viewMode: session.mode === 'stream' ? 'stream' : 'terminal',
     })
     addTab(tab)
+    if (dismissedEntry?.pinned) useTabStore.getState().pinTab(tab.id)
     setActiveTab(tab.id)
     if (activeWorkspaceId) {
       addTabToWorkspace(activeWorkspaceId, tab.id)
@@ -185,13 +189,13 @@ export default function App() {
       case 'reopenClosed': {
         const dismissed = store.dismissedSessions
         if (dismissed.length === 0) break
-        const sessionName = dismissed[dismissed.length - 1]
-        store.undismissSession(sessionName)
-        const existing = Object.values(store.tabs).find((t) => getSessionName(t) === sessionName)
+        const last = dismissed[dismissed.length - 1]
+        store.undismissSession(last.sessionName)
+        const existing = Object.values(store.tabs).find((t) => getSessionName(t) === last.sessionName)
         if (existing) {
           store.setActiveTab(existing.id)
         } else {
-          const session = useSessionStore.getState().sessions.find((s) => s.name === sessionName)
+          const session = useSessionStore.getState().sessions.find((s) => s.name === last.sessionName)
           if (session) {
             const newTab = createSessionTab({
               label: session.name,
@@ -200,6 +204,7 @@ export default function App() {
               viewMode: session.mode === 'stream' ? 'stream' : 'terminal',
             })
             store.addTab(newTab)
+            if (last.pinned) store.pinTab(newTab.id)
             store.setActiveTab(newTab.id)
             const wsId = useWorkspaceStore.getState().activeWorkspaceId
             if (wsId) {
