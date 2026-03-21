@@ -82,9 +82,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       onMouseEnter={() => onHover?.(tab.id)}
       onMouseLeave={() => onHover?.(null)}
       onContextMenu={handleContextMenu}
-      className={`group relative flex items-center gap-1.5 pl-2 text-xs whitespace-nowrap cursor-pointer transition-all duration-150 ease-out rounded-[6px] overflow-hidden ${
-        showClose ? 'pr-6' : 'pr-2'
-      } ${
+      className={`group relative flex items-center gap-1.5 px-2 text-xs whitespace-nowrap cursor-pointer transition-all duration-150 ease-out rounded-[6px] overflow-hidden ${
         isActive
           ? 'text-white bg-[rgba(122,106,170,0.2)] border border-[rgba(122,106,170,0.3)]'
           : 'text-gray-500 hover:text-gray-300 hover:bg-[rgba(255,255,255,0.05)] border border-transparent'
