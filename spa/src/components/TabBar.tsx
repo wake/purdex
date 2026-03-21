@@ -142,7 +142,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
               </SortableContext>
             </div>
             {/* Trailing separator + add button (outside SortableContext, inside scroll) */}
-            {normalTabs.length > 0 && <TabSeparator show={!hoveredTabId || normalTabs[normalTabs.length - 1]?.id !== hoveredTabId} />}
+            {normalTabs.length > 0 && <TabSeparator show={(() => { const lastId = normalTabs[normalTabs.length - 1]?.id; return lastId !== activeTabId && lastId !== hoveredTabId })()} />}
             <button
               onClick={onAddTab}
               className="flex items-center justify-center w-7 h-7 text-gray-600 hover:text-gray-400 cursor-pointer flex-shrink-0"
