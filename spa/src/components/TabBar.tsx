@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, horizontalListSortingStrategy } from '@dnd-kit/sortable'
 import { Plus, CaretLeft, CaretRight, TerminalWindow, ChatCircleDots, File as FileIcon } from '@phosphor-icons/react'
@@ -26,7 +26,7 @@ interface Props {
 }
 
 function TabSeparator({ show }: { show: boolean }) {
-  return <div className={`w-px h-3.5 flex-shrink-0 transition-opacity ${show ? 'bg-gray-700' : 'bg-transparent'}`} />
+  return <div className={`w-px h-3.5 flex-shrink-0 transition-opacity duration-150 ease-out ${show ? 'bg-gray-700' : 'bg-transparent'}`} />
 }
 
 export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu }: Props) {
@@ -70,7 +70,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   }
 
   return (
-    <div className="flex bg-[#12122a] border-b border-gray-800 items-center px-1 flex-shrink-0" style={{ height: 46 }}>
+    <div className="flex bg-[#12122a] border-b border-gray-800 items-center px-1 flex-shrink-0" style={{ height: 40 }}>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         {/* Pinned zone */}
         {pinnedTabs.length > 0 && (
@@ -78,7 +78,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
             <SortableContext items={pinnedIds} strategy={horizontalListSortingStrategy}>
               <div className="flex items-center h-full">
                 {pinnedTabs.map((tab, i) => (
-                  <div key={tab.id} className="flex items-center h-full">
+                  <Fragment key={tab.id}>
                     {i > 0 && <TabSeparator show={shouldShowSeparator(pinnedTabs[i - 1], tab)} />}
                     <SortableTab
                       tab={tab}
@@ -88,9 +88,10 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                       onClose={onCloseTab}
                       onMiddleClick={onMiddleClick}
                       onContextMenu={onContextMenu}
+                      onHover={setHoveredTabId}
                       iconMap={ICON_MAP}
                     />
-                  </div>
+                  </Fragment>
                 ))}
               </div>
             </SortableContext>
@@ -112,7 +113,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
           <div ref={normalZoneRef} className="flex items-center h-full overflow-x-auto scrollbar-hide">
             <SortableContext items={normalIds} strategy={horizontalListSortingStrategy}>
               {normalTabs.map((tab, i) => (
-                <div key={tab.id} className="flex items-center h-full">
+                <Fragment key={tab.id}>
                   {i > 0 && <TabSeparator show={shouldShowSeparator(normalTabs[i - 1], tab)} />}
                   <SortableTab
                     tab={tab}
@@ -124,7 +125,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                     onHover={setHoveredTabId}
                     iconMap={ICON_MAP}
                   />
-                </div>
+                </Fragment>
               ))}
             </SortableContext>
           </div>

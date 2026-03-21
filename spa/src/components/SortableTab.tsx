@@ -41,7 +41,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     return (
       <button
         ref={setNodeRef}
-        style={{ ...style, height: 26, margin: '0 1px' }}
+        style={{ ...style, height: 26, margin: '0 1px', marginTop: 2 }}
         {...attributes}
         {...listeners}
         onClick={() => onSelect(tab.id)}
@@ -49,7 +49,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         onMouseEnter={() => onHover?.(tab.id)}
         onMouseLeave={() => onHover?.(null)}
         onContextMenu={handleContextMenu}
-        className={`relative flex items-center justify-center w-9 rounded-[6px] cursor-pointer transition-all ${
+        className={`relative flex items-center justify-center w-9 rounded-[6px] cursor-pointer transition-all duration-150 ease-out ${
           isActive
             ? 'text-white bg-[rgba(122,106,170,0.2)] border border-[rgba(122,106,170,0.3)]'
             : 'text-gray-500 hover:text-gray-300 hover:bg-[rgba(255,255,255,0.05)] border border-transparent'
@@ -61,10 +61,14 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     )
   }
 
+  // Active: always show X, inactive: show X on hover only
+  const showClose = !tab.locked
+  const alwaysShowClose = isActive && showClose
+
   return (
     <button
       ref={setNodeRef}
-      style={{ ...style, height: 26, margin: '0 1px', maxWidth: 180 }}
+      style={{ ...style, height: 26, margin: '0 1px', marginTop: 2, maxWidth: 180 }}
       {...attributes}
       {...listeners}
       onClick={() => onSelect(tab.id)}
@@ -72,7 +76,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       onMouseEnter={() => onHover?.(tab.id)}
       onMouseLeave={() => onHover?.(null)}
       onContextMenu={handleContextMenu}
-      className={`group flex items-center gap-1.5 px-2 text-xs whitespace-nowrap cursor-pointer transition-all rounded-[6px] ${
+      className={`group flex items-center gap-1.5 px-2 text-xs whitespace-nowrap cursor-pointer transition-all duration-150 ease-out rounded-[6px] ${
         isActive
           ? 'text-white bg-[rgba(122,106,170,0.2)] border border-[rgba(122,106,170,0.3)]'
           : 'text-gray-500 hover:text-gray-300 hover:bg-[rgba(255,255,255,0.05)] border border-transparent'
@@ -82,12 +86,14 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       <span className="tab-label-fade overflow-hidden">{tab.label}</span>
       {isDirty(tab) && <span className="text-amber-400 text-[10px] flex-shrink-0">●</span>}
       {tab.locked && <Lock size={10} className="text-gray-600 ml-0.5 flex-shrink-0" />}
-      {!tab.locked && (
+      {showClose && (
         <button
           type="button"
           title="關閉分頁"
           onClick={(e) => { e.stopPropagation(); onClose(tab.id) }}
-          className="ml-0.5 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity cursor-pointer flex-shrink-0"
+          className={`ml-0.5 hover:text-red-400 transition-opacity duration-150 ease-out cursor-pointer flex-shrink-0 ${
+            alwaysShowClose ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+          }`}
         >
           <X size={12} />
         </button>
