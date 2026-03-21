@@ -27,6 +27,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     transform: transform ? `translate3d(${Math.round(transform.x)}px, 0, 0)` : undefined,
     transition,
     zIndex: isDragging ? 10 : undefined,
+    opacity: 1,
   }
 
   const iconName = getTabIcon(tab)
@@ -73,7 +74,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   return (
     <button
       ref={setNodeRef}
-      style={{ ...style, height: 26, margin: '0 1px', marginTop: 2, flex: '1 1 0px', maxWidth: 200, minWidth: 50 }}
+      style={{ ...style, height: 26, margin: '0 1px', marginTop: 2, flex: '1 1 0px', maxWidth: 100, minWidth: 50 }}
       {...attributes}
       {...listeners}
       onClick={() => onSelect(tab.id)}
