@@ -105,7 +105,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
             title="關閉分頁"
             role="button"
             onClick={(e) => { e.stopPropagation(); onClose(tab.id) }}
-            className="self-stretch flex items-center pr-1.5 pl-1 hover:text-red-400 cursor-pointer rounded-r-[6px]"
+            className="self-stretch flex items-center pr-1.5 pl-1 cursor-pointer rounded-r-[6px]"
             style={{ backgroundColor: tabBg }}
           >
             <X size={12} />
