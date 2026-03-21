@@ -74,7 +74,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   return (
     <button
       ref={setNodeRef}
-      style={{ ...style, height: 26, margin: '0 1px', marginTop: 2, flex: '1 1 140px', maxWidth: 140, minWidth: 80 }}
+      style={{ ...style, height: 26, margin: '0 1px', marginTop: 2, flex: '0 1 140px', width: 140, minWidth: 80 }}
       {...attributes}
       {...listeners}
       onClick={() => onSelect(tab.id)}
