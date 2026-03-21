@@ -155,7 +155,7 @@ export const useTabStore = create<TabState>()(
         set((state) => {
           const tab = state.tabs[tabId]
           if (!tab || tab.pinned) return state
-          const updated = { ...tab, pinned: true, locked: true }
+          const updated = { ...tab, pinned: true }
           const newOrder = state.tabOrder.filter((id) => id !== tabId)
           const firstNormalIdx = newOrder.findIndex((id) => !state.tabs[id]?.pinned)
           const insertIdx = firstNormalIdx === -1 ? newOrder.length : firstNormalIdx
@@ -184,7 +184,7 @@ export const useTabStore = create<TabState>()(
       unlockTab: (tabId) =>
         set((state) => {
           const tab = state.tabs[tabId]
-          if (!tab || tab.pinned) return state
+          if (!tab) return state
           return { tabs: { ...state.tabs, [tabId]: { ...tab, locked: false } } }
         }),
     }),

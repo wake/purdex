@@ -15,7 +15,7 @@ function reset() {
 describe('pinTab / unpinTab', () => {
   beforeEach(reset)
 
-  it('pinTab sets pinned=true, locked=true, moves to pinned zone end', () => {
+  it('pinTab sets pinned=true, does not change locked', () => {
     const a = addTab('a')
     const b = addTab('b')
     const c = addTab('c')
@@ -23,19 +23,28 @@ describe('pinTab / unpinTab', () => {
 
     const state = useTabStore.getState()
     expect(state.tabs[b.id].pinned).toBe(true)
-    expect(state.tabs[b.id].locked).toBe(true)
+    expect(state.tabs[b.id].locked).toBe(false) // 改：不再自動 lock
     expect(state.tabOrder).toEqual([b.id, a.id, c.id])
   })
 
-  it('unpinTab sets pinned=false, moves to normal zone start, keeps locked', () => {
+  it('pinTab preserves existing locked=true', () => {
     const a = addTab('a')
-    addTab('b') // second tab to verify zone ordering
+    useTabStore.getState().lockTab(a.id)
+    useTabStore.getState().pinTab(a.id)
+    expect(useTabStore.getState().tabs[a.id].pinned).toBe(true)
+    expect(useTabStore.getState().tabs[a.id].locked).toBe(true)
+  })
+
+  it('unpinTab sets pinned=false, does not change locked', () => {
+    const a = addTab('a')
+    addTab('b')
+    useTabStore.getState().lockTab(a.id) // 手動 lock（pinTab 不再自動 lock）
     useTabStore.getState().pinTab(a.id)
     useTabStore.getState().unpinTab(a.id)
 
     const state = useTabStore.getState()
     expect(state.tabs[a.id].pinned).toBe(false)
-    expect(state.tabs[a.id].locked).toBe(true)
+    expect(state.tabs[a.id].locked).toBe(true) // locked 不受 unpin 影響
     expect(state.tabOrder[0]).toBe(a.id)
   })
 
@@ -78,11 +87,13 @@ describe('lockTab / unlockTab', () => {
     expect(useTabStore.getState().tabs[a.id].locked).toBe(false)
   })
 
-  it('unlockTab on pinned tab is no-op', () => {
+  it('unlockTab on pinned tab sets locked=false', () => {
     const a = addTab('a')
+    useTabStore.getState().lockTab(a.id)
     useTabStore.getState().pinTab(a.id)
     useTabStore.getState().unlockTab(a.id)
-    expect(useTabStore.getState().tabs[a.id].locked).toBe(true)
+    expect(useTabStore.getState().tabs[a.id].locked).toBe(false)
+    expect(useTabStore.getState().tabs[a.id].pinned).toBe(true)
   })
 })
 
@@ -108,6 +119,21 @@ describe('locked tab blocks close', () => {
     useTabStore.getState().removeTab(a.id)
     expect(useTabStore.getState().tabs[a.id]).toBeUndefined()
   })
+
+  it('pinned + unlocked tab can be dismissed', () => {
+    const a = addTab('a')
+    useTabStore.getState().pinTab(a.id)
+    useTabStore.getState().dismissTab(a.id)
+    expect(useTabStore.getState().tabs[a.id]).toBeUndefined()
+  })
+
+  it('pinned + locked tab cannot be dismissed', () => {
+    const a = addTab('a')
+    useTabStore.getState().lockTab(a.id)
+    useTabStore.getState().pinTab(a.id)
+    useTabStore.getState().dismissTab(a.id)
+    expect(useTabStore.getState().tabs[a.id]).toBeDefined()
+  })
 })
 
 describe('updateTab invariant protection', () => {
@@ -121,6 +147,7 @@ describe('updateTab invariant protection', () => {
 
   it('updateTab ignores locked field', () => {
     const a = addTab('a')
+    useTabStore.getState().lockTab(a.id) // 明確 lock（pinTab 不再自動 lock）
     useTabStore.getState().pinTab(a.id)
     useTabStore.getState().updateTab(a.id, { locked: false } as any)
     expect(useTabStore.getState().tabs[a.id].locked).toBe(true)
