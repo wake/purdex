@@ -30,13 +30,12 @@ function TabSeparator({ show }: { show: boolean }) {
 }
 
 export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu }: Props) {
-  const pinnedTabs = tabs.filter((t) => t.pinned)
-  const normalTabs = tabs.filter((t) => !t.pinned)
+  const pinnedTabs = useMemo(() => tabs.filter((t) => t.pinned), [tabs])
+  const normalTabs = useMemo(() => tabs.filter((t) => !t.pinned), [tabs])
   const pinnedIds = useMemo(() => pinnedTabs.map((t) => t.id), [pinnedTabs])
   const normalIds = useMemo(() => normalTabs.map((t) => t.id), [normalTabs])
   const [hoveredTabId, setHoveredTabId] = useState<string | null>(null)
   const pinnedZoneRef = useRef<HTMLDivElement>(null)
-  const normalZoneTabsRef = useRef<HTMLDivElement>(null)
   const { containerRef: normalZoneRef, canScrollLeft, canScrollRight, scrollLeft, scrollRight } = useScrollOverflow()
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
@@ -125,7 +124,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
             </button>
           )}
           <div ref={normalZoneRef} className="flex items-center h-full overflow-x-auto scrollbar-hide">
-            <div ref={normalZoneTabsRef} className="flex items-center h-full">
+            <div className="flex items-center h-full">
               <SortableContext items={normalIds} strategy={horizontalListSortingStrategy}>
                 {normalTabs.map((tab, i) => (
                   <Fragment key={tab.id}>

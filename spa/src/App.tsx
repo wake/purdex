@@ -184,7 +184,30 @@ export default function App() {
       }
       case 'reopenClosed': {
         const dismissed = store.dismissedSessions
-        if (dismissed.length > 0) store.undismissSession(dismissed[dismissed.length - 1])
+        if (dismissed.length === 0) break
+        const sessionName = dismissed[dismissed.length - 1]
+        store.undismissSession(sessionName)
+        const existing = Object.values(store.tabs).find((t) => getSessionName(t) === sessionName)
+        if (existing) {
+          store.setActiveTab(existing.id)
+        } else {
+          const session = useSessionStore.getState().sessions.find((s) => s.name === sessionName)
+          if (session) {
+            const newTab = createSessionTab({
+              label: session.name,
+              hostId: 'local',
+              sessionName: session.name,
+              viewMode: session.mode === 'stream' ? 'stream' : 'terminal',
+            })
+            store.addTab(newTab)
+            store.setActiveTab(newTab.id)
+            const wsId = useWorkspaceStore.getState().activeWorkspaceId
+            if (wsId) {
+              useWorkspaceStore.getState().addTabToWorkspace(wsId, newTab.id)
+              useWorkspaceStore.getState().setWorkspaceActiveTab(wsId, newTab.id)
+            }
+          }
+        }
         break
       }
     }
