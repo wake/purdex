@@ -50,7 +50,7 @@ describe('TabBar', () => {
 
   it('highlights active tab', () => {
     render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} />)
-    const activeTab = screen.getByText('dev-server').closest('button')!
+    const activeTab = screen.getByText('dev-server').closest('[role="tab"]')!
     expect(activeTab.className).toContain('text-white')
   })
 
@@ -71,7 +71,7 @@ describe('TabBar', () => {
 
   it('shows dirty indicator for modified editor tabs', () => {
     render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} />)
-    const dirtyTab = screen.getByText('App.tsx').closest('button')!
+    const dirtyTab = screen.getByText('App.tsx').closest('[role="tab"]')!
     expect(dirtyTab.textContent).toContain('●')
   })
 
@@ -104,10 +104,24 @@ describe('TabBar', () => {
     render(<TabBar tabs={lockedTabs} activeTabId="t1" {...defaultHandlers} />)
     expect(screen.getByText('locked-tab')).toBeInTheDocument()
     // Lock icon rendered — verify SVG with Lock's aria-label or test-id presence
-    const tabBtn = screen.getByText('locked-tab').closest('button')!
+    const tabBtn = screen.getByText('locked-tab').closest('[role="tab"]')!
     const svgs = tabBtn.querySelectorAll('svg')
     // Should have at least 2 SVGs: tab icon + lock icon
     expect(svgs.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('activates tab on Enter key', () => {
+    const onSelect = vi.fn()
+    render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} onSelectTab={onSelect} />)
+    const tab = screen.getByText('claude').closest('[role="tab"]')!
+    fireEvent.keyDown(tab, { key: 'Enter' })
+    expect(onSelect).toHaveBeenCalledWith('t2')
+  })
+
+  it('close button is a real <button> element', () => {
+    render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} />)
+    const closeBtn = screen.getAllByTitle('關閉分頁')[0]
+    expect(closeBtn.tagName).toBe('BUTTON')
   })
 
   it('calls onAddTab on + button', () => {

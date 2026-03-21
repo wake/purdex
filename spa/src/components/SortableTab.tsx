@@ -71,13 +71,20 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
 
   const showClose = !tab.locked
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(tab.id) }
+  }
+
   return (
-    <button
+    <div
       ref={setNodeRef}
       style={{ ...style, height: 26, margin: '0 1px', marginTop: 2, flex: '0 1 140px', width: 140, minWidth: 80 }}
       {...attributes}
       {...listeners}
+      role="tab"
+      aria-selected={isActive}
       onClick={() => onSelect(tab.id)}
+      onKeyDown={handleKeyDown}
       onMouseUp={handleMouseUp}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
@@ -98,12 +105,13 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           <span className="w-3 self-stretch" style={{ background: `linear-gradient(to right, transparent, ${tabBg})` }} />
           {/* ② Solid padding after fade (visible when X hidden) */}
           <span className={`self-stretch ${isActive ? 'w-0' : 'w-1.5 group-hover:w-0'}`} style={{ backgroundColor: tabBg }} />
-          {/* ③ X button — hidden/shown instantly */}
-          <span
+          {/* ③ X button — real <button> for a11y (no nested interactive elements) */}
+          <button
+            type="button"
+            tabIndex={-1}
             title="關閉分頁"
-            role="button"
             onClick={(e) => { e.stopPropagation(); onClose(tab.id) }}
-            className={`self-stretch flex items-center cursor-pointer rounded-r-[6px] ${
+            className={`self-stretch flex items-center cursor-pointer rounded-r-[6px] border-none p-0 ${
               isActive
                 ? 'w-6 opacity-100'
                 : 'w-0 overflow-hidden opacity-0 group-hover:w-6 group-hover:overflow-visible group-hover:opacity-100'
@@ -111,9 +119,9 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
             style={{ backgroundColor: tabBg }}
           >
             <X size={12} className="mx-auto flex-shrink-0" />
-          </span>
+          </button>
         </span>
       )}
-    </button>
+    </div>
   )
 }
