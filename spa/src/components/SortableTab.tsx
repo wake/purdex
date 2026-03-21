@@ -82,7 +82,9 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       onMouseEnter={() => onHover?.(tab.id)}
       onMouseLeave={() => onHover?.(null)}
       onContextMenu={handleContextMenu}
-      className={`group relative flex items-center gap-1.5 px-2 text-xs whitespace-nowrap cursor-pointer transition-all duration-150 ease-out rounded-[6px] overflow-hidden ${
+      className={`group relative flex items-center gap-1.5 pl-2 text-xs whitespace-nowrap cursor-pointer transition-all duration-150 ease-out rounded-[6px] overflow-hidden ${
+        showClose ? 'pr-6' : 'pr-2'
+      } ${
         isActive
           ? 'text-white bg-[rgba(122,106,170,0.2)] border border-[rgba(122,106,170,0.3)]'
           : 'text-gray-500 hover:text-gray-300 hover:bg-[rgba(255,255,255,0.05)] border border-transparent'
@@ -94,19 +96,19 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       {tab.locked && <Lock size={10} className="text-gray-600 ml-0.5 flex-shrink-0" />}
       {showClose && (
         <span
-          className={`absolute right-0 top-0 bottom-0 flex items-center pr-1.5 transition-opacity duration-150 ease-out ${
+          className={`absolute right-0 top-0 bottom-0 flex items-center transition-opacity duration-150 ease-out ${
             alwaysShowClose ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           }`}
-          style={{
-            background: 'linear-gradient(to right, transparent, var(--tab-bg) 6px)',
-            paddingLeft: 12,
-          }}
         >
+          {/* Gradient fade zone */}
+          <span className="w-3 self-stretch" style={{ background: 'linear-gradient(to right, transparent, var(--tab-bg))' }} />
+          {/* X button with solid bg */}
           <span
             title="關閉分頁"
             role="button"
             onClick={(e) => { e.stopPropagation(); onClose(tab.id) }}
-            className="hover:text-red-400 cursor-pointer"
+            className="self-stretch flex items-center pr-1.5 pl-1 hover:text-red-400 cursor-pointer rounded-r-[6px]"
+            style={{ backgroundColor: 'var(--tab-bg)' }}
           >
             <X size={12} />
           </span>
