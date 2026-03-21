@@ -11,7 +11,7 @@ beforeEach(() => {
     component: (() => null) as React.FC,
     viewModes: ['terminal', 'stream'],
     defaultViewMode: 'terminal',
-    icon: (tab) => tab.viewMode === 'stream' ? 'ChatCircleDots' : 'Terminal',
+    icon: (tab) => tab.viewMode === 'stream' ? 'ChatCircleDots' : 'TerminalWindow',
   })
   registerTabRenderer('editor', {
     component: (() => null) as React.FC,

@@ -1,12 +1,12 @@
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, horizontalListSortingStrategy } from '@dnd-kit/sortable'
-import { Plus, CaretLeft, CaretRight, Terminal, ChatCircleDots, File as FileIcon } from '@phosphor-icons/react'
+import { Plus, CaretLeft, CaretRight, TerminalWindow, ChatCircleDots, File as FileIcon } from '@phosphor-icons/react'
 import { SortableTab } from './SortableTab'
 import { useScrollOverflow } from '../hooks/useScrollOverflow'
 import type { Tab } from '../types/tab'
 
 const ICON_MAP: Record<string, React.ComponentType<{ size: number; className?: string }>> = {
-  Terminal,
+  TerminalWindow,
   ChatCircleDots,
   File: FileIcon,
 }
@@ -65,7 +65,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   }
 
   return (
-    <div className="flex bg-[#12122a] border-b border-gray-800 h-10 items-center px-1 flex-shrink-0">
+    <div className="flex bg-[#12122a] border-b border-gray-800 h-9 items-center px-1 flex-shrink-0">
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         {/* Pinned zone */}
         {pinnedTabs.length > 0 && (

@@ -40,15 +40,15 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     return (
       <button
         ref={setNodeRef}
-        style={{ ...style, height: 28 }}
+        style={{ ...style, height: 26, margin: '0 1px' }}
         {...attributes}
         {...listeners}
         onClick={() => onSelect(tab.id)}
         onMouseUp={handleMouseUp}
         onContextMenu={handleContextMenu}
-        className={`relative flex items-center justify-center w-9 rounded-md cursor-pointer transition-all ${
+        className={`relative flex items-center justify-center w-9 rounded-[6px] cursor-pointer transition-all ${
           isActive
-            ? 'text-white bg-[rgba(122,106,170,0.3)] border border-[rgba(122,106,170,0.45)]'
+            ? 'text-white bg-[rgba(122,106,170,0.2)] border border-[rgba(122,106,170,0.3)]'
             : 'text-gray-500 hover:text-gray-300 hover:bg-[rgba(255,255,255,0.05)] border border-transparent'
         }`}
         title={tab.label}
@@ -61,15 +61,15 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   return (
     <button
       ref={setNodeRef}
-      style={{ ...style, height: 28, maxWidth: 180 }}
+      style={{ ...style, height: 26, margin: '0 1px', maxWidth: 180 }}
       {...attributes}
       {...listeners}
       onClick={() => onSelect(tab.id)}
       onMouseUp={handleMouseUp}
       onContextMenu={handleContextMenu}
-      className={`group flex items-center gap-2 px-4 text-xs whitespace-nowrap cursor-pointer transition-all rounded-md ${
+      className={`group flex items-center gap-1.5 px-2 text-xs whitespace-nowrap cursor-pointer transition-all rounded-[6px] ${
         isActive
-          ? 'text-white bg-[rgba(122,106,170,0.3)] border border-[rgba(122,106,170,0.45)]'
+          ? 'text-white bg-[rgba(122,106,170,0.2)] border border-[rgba(122,106,170,0.3)]'
           : 'text-gray-500 hover:text-gray-300 hover:bg-[rgba(255,255,255,0.05)] border border-transparent'
       }`}
     >
