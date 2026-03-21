@@ -12,10 +12,11 @@ interface Props {
   onClose: (tabId: string) => void
   onMiddleClick: (tabId: string) => void
   onContextMenu: (e: React.MouseEvent, tabId: string) => void
+  onHover?: (tabId: string | null) => void
   iconMap: Record<string, React.ComponentType<{ size: number; className?: string }>>
 }
 
-export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, iconMap }: Props) {
+export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onHover, iconMap }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id })
 
   const style = {
@@ -45,6 +46,8 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         {...listeners}
         onClick={() => onSelect(tab.id)}
         onMouseUp={handleMouseUp}
+        onMouseEnter={() => onHover?.(tab.id)}
+        onMouseLeave={() => onHover?.(null)}
         onContextMenu={handleContextMenu}
         className={`relative flex items-center justify-center w-9 rounded-[6px] cursor-pointer transition-all ${
           isActive
@@ -66,6 +69,8 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       {...listeners}
       onClick={() => onSelect(tab.id)}
       onMouseUp={handleMouseUp}
+      onMouseEnter={() => onHover?.(tab.id)}
+      onMouseLeave={() => onHover?.(null)}
       onContextMenu={handleContextMenu}
       className={`group flex items-center gap-1.5 px-2 text-xs whitespace-nowrap cursor-pointer transition-all rounded-[6px] ${
         isActive

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, horizontalListSortingStrategy } from '@dnd-kit/sortable'
 import { Plus, CaretLeft, CaretRight, TerminalWindow, ChatCircleDots, File as FileIcon } from '@phosphor-icons/react'
@@ -5,8 +6,10 @@ import { SortableTab } from './SortableTab'
 import { useScrollOverflow } from '../hooks/useScrollOverflow'
 import type { Tab } from '../types/tab'
 
+const TerminalWindowFill = (props: { size: number; className?: string }) => <TerminalWindow {...props} weight="fill" />
+
 const ICON_MAP: Record<string, React.ComponentType<{ size: number; className?: string }>> = {
-  TerminalWindow,
+  TerminalWindow: TerminalWindowFill,
   ChatCircleDots,
   File: FileIcon,
 }
@@ -31,6 +34,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   const normalTabs = tabs.filter((t) => !t.pinned)
   const pinnedIds = pinnedTabs.map((t) => t.id)
   const normalIds = normalTabs.map((t) => t.id)
+  const [hoveredTabId, setHoveredTabId] = useState<string | null>(null)
   const { containerRef: normalZoneRef, canScrollLeft, canScrollRight, scrollLeft, scrollRight } = useScrollOverflow()
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
@@ -57,15 +61,16 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
     onReorderTabs(newOrder)
   }
 
-  // Separator visibility: hide between active tab and its neighbors
+  // Separator visibility: hide near active or hovered tab
   const shouldShowSeparator = (leftTab: Tab | undefined, rightTab: Tab | undefined) => {
     if (!leftTab || !rightTab) return false
-    if (leftTab.id === activeTabId || rightTab.id === activeTabId) return false
+    const hide = [activeTabId, hoveredTabId]
+    if (hide.includes(leftTab.id) || hide.includes(rightTab.id)) return false
     return true
   }
 
   return (
-    <div className="flex bg-[#12122a] border-b border-gray-800 h-9 items-center px-1 flex-shrink-0">
+    <div className="flex bg-[#12122a] border-b border-gray-800 items-center px-1 flex-shrink-0" style={{ height: 46 }}>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         {/* Pinned zone */}
         {pinnedTabs.length > 0 && (
@@ -116,6 +121,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                     onClose={onCloseTab}
                     onMiddleClick={onMiddleClick}
                     onContextMenu={onContextMenu}
+                    onHover={setHoveredTabId}
                     iconMap={ICON_MAP}
                   />
                 </div>
