@@ -129,16 +129,8 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                 </Fragment>
               ))}
             </SortableContext>
-            {/* Trailing separator + add button */}
+            {/* Trailing separator */}
             {normalTabs.length > 0 && <TabSeparator show={!hoveredTabId || normalTabs[normalTabs.length - 1]?.id !== hoveredTabId} />}
-            <button
-              onClick={onAddTab}
-              className="flex items-center justify-center w-7 h-7 text-gray-600 hover:text-gray-400 cursor-pointer flex-shrink-0"
-              title="新增分頁"
-              style={{ marginTop: 2 }}
-            >
-              <Plus size={14} />
-            </button>
           </div>
           {canScrollRight && (
             <button
@@ -151,6 +143,15 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
           )}
         </div>
       </DndContext>
+
+      <button
+        onClick={onAddTab}
+        className="flex items-center justify-center w-7 h-7 text-gray-600 hover:text-gray-400 cursor-pointer flex-shrink-0"
+        title="新增分頁"
+        style={{ marginTop: 2 }}
+      >
+        <Plus size={14} />
+      </button>
     </div>
   )
 }
