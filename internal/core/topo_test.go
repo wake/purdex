@@ -61,6 +61,17 @@ func TestTopoSort_UnknownDependency(t *testing.T) {
 	}
 }
 
+func TestTopoSort_DuplicateName(t *testing.T) {
+	modules := []Module{
+		&topoTestModule{name: "a", deps: nil},
+		&topoTestModule{name: "a", deps: nil},
+	}
+	_, err := topoSort(modules)
+	if err == nil {
+		t.Fatal("expected duplicate name error")
+	}
+}
+
 func TestTopoSort_NoDeps(t *testing.T) {
 	modules := []Module{
 		&topoTestModule{name: "a", deps: nil},
@@ -72,5 +83,9 @@ func TestTopoSort_NoDeps(t *testing.T) {
 	}
 	if len(sorted) != 2 {
 		t.Fatalf("expected 2 modules, got %d", len(sorted))
+	}
+	// Stable order: should match original slice order
+	if sorted[0].Name() != "a" || sorted[1].Name() != "b" {
+		t.Errorf("expected stable order [a, b], got [%s, %s]", sorted[0].Name(), sorted[1].Name())
 	}
 }

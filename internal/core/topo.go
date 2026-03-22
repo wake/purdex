@@ -9,6 +9,9 @@ func topoSort(modules []Module) ([]Module, error) {
 	dependents := make(map[string][]string)
 
 	for _, m := range modules {
+		if _, exists := byName[m.Name()]; exists {
+			return nil, fmt.Errorf("duplicate module name %q", m.Name())
+		}
 		byName[m.Name()] = m
 		inDegree[m.Name()] = 0
 	}
@@ -24,9 +27,9 @@ func topoSort(modules []Module) ([]Module, error) {
 	}
 
 	var queue []string
-	for name, deg := range inDegree {
-		if deg == 0 {
-			queue = append(queue, name)
+	for _, m := range modules {
+		if inDegree[m.Name()] == 0 {
+			queue = append(queue, m.Name())
 		}
 	}
 

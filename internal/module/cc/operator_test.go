@@ -51,10 +51,8 @@ func TestInterrupt_Timeout(t *testing.T) {
 	fake.SetPaneCommand(target, "claude")
 	fake.SetPaneContent(target, "Running tool...")
 
-	// Use a short context deadline to speed up the test.
-	// The context deadline (2s) fires before the internal 10s deadline,
-	// so the error will be context.DeadlineExceeded.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Use a short context deadline — the operator relies on ctx for timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
 	err := mod.Interrupt(ctx, target)
@@ -131,9 +129,9 @@ func TestExit_Timeout(t *testing.T) {
 	fake.SetPaneCommand(target, "claude")
 	fake.SetPaneContent(target, "some output\n❯ ")
 
-	// The context deadline (2s) fires before the internal 10s deadline due to
-	// the pane preparation sleeps, so the error will be context.DeadlineExceeded.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Use a short context deadline — the operator relies on ctx for timeout.
+	// The pane preparation sleeps will consume most of this budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	err := mod.Exit(ctx, target)

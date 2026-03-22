@@ -20,15 +20,12 @@ func (m *CCModule) Interrupt(ctx context.Context, tmuxTarget string) error {
 		return fmt.Errorf("send C-c: %w", err)
 	}
 
-	deadline := time.After(10 * time.Second)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-deadline:
-			return fmt.Errorf("timeout waiting for CC idle")
 		case <-ticker.C:
 			if m.detector.Detect(tmuxTarget) == detect.StatusCCIdle {
 				return nil
@@ -42,29 +39,34 @@ func (m *CCModule) Exit(ctx context.Context, tmuxTarget string) error {
 	tx := m.core.Tmux
 
 	// Prepare pane: exit copy-mode, escape, clear
-	tx.SendKeysRaw(tmuxTarget, "-X", "cancel")
+	if err := tx.SendKeysRaw(tmuxTarget, "-X", "cancel"); err != nil {
+		log.Printf("cc: Exit pane-prep cancel (%s): %v", tmuxTarget, err)
+	}
 	sleepCtx(ctx, 500*time.Millisecond)
-	tx.SendKeysRaw(tmuxTarget, "Escape")
+	if err := tx.SendKeysRaw(tmuxTarget, "Escape"); err != nil {
+		log.Printf("cc: Exit pane-prep Escape (%s): %v", tmuxTarget, err)
+	}
 	sleepCtx(ctx, 500*time.Millisecond)
-	tx.SendKeysRaw(tmuxTarget, "C-c")
+	if err := tx.SendKeysRaw(tmuxTarget, "C-c"); err != nil {
+		log.Printf("cc: Exit pane-prep C-c (%s): %v", tmuxTarget, err)
+	}
 	sleepCtx(ctx, 500*time.Millisecond)
 
 	// Send /exit
-	tx.SendKeysRaw(tmuxTarget, "Escape")
+	if err := tx.SendKeysRaw(tmuxTarget, "Escape"); err != nil {
+		log.Printf("cc: Exit pane-prep Escape2 (%s): %v", tmuxTarget, err)
+	}
 	sleepCtx(ctx, 500*time.Millisecond)
 	if err := tx.SendKeys(tmuxTarget, "/exit"); err != nil {
 		return fmt.Errorf("send /exit: %w", err)
 	}
 
-	deadline := time.After(10 * time.Second)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-deadline:
-			return fmt.Errorf("CC did not exit")
 		case <-ticker.C:
 			if m.detector.Detect(tmuxTarget) == detect.StatusNormal {
 				return nil
@@ -112,10 +114,12 @@ func (m *CCModule) GetStatus(ctx context.Context, tmuxTarget string) (*detect.St
 
 	// Poll capture-pane for status info
 	var statusInfo detect.StatusInfo
+	var lastErr error
 	for attempt := 0; attempt < 6; attempt++ {
 		sleepCtx(ctx, 500*time.Millisecond)
 		paneContent, err := tx.CapturePaneContent(tmuxTarget, 200)
 		if err != nil {
+			lastErr = err
 			continue
 		}
 		info, err := detect.ExtractStatusInfo(paneContent)
@@ -123,6 +127,7 @@ func (m *CCModule) GetStatus(ctx context.Context, tmuxTarget string) (*detect.St
 			statusInfo = info
 			break
 		}
+		lastErr = err
 	}
 
 	if didManualResize {
@@ -130,6 +135,9 @@ func (m *CCModule) GetStatus(ctx context.Context, tmuxTarget string) (*detect.St
 	}
 
 	if statusInfo.SessionID == "" {
+		if lastErr != nil {
+			return nil, fmt.Errorf("could not extract session ID: %w", lastErr)
+		}
 		return nil, fmt.Errorf("could not extract session ID")
 	}
 	return &statusInfo, nil

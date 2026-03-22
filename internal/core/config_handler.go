@@ -47,7 +47,18 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c.CfgMu.Lock()
-	defer c.CfgMu.Unlock()
+
+	// Validate before mutating
+	if req.Terminal != nil && req.Terminal.SizingMode != "" {
+		switch req.Terminal.SizingMode {
+		case "auto", "terminal-first", "minimal-first":
+			// valid
+		default:
+			c.CfgMu.Unlock()
+			http.Error(w, "invalid sizing_mode: must be auto, terminal-first, or minimal-first", http.StatusBadRequest)
+			return
+		}
+	}
 
 	detectChanged := false
 
@@ -68,26 +79,14 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.Terminal != nil {
-		if req.Terminal.SizingMode != "" {
-			switch req.Terminal.SizingMode {
-			case "auto", "terminal-first", "minimal-first":
-				c.Cfg.Terminal.SizingMode = req.Terminal.SizingMode
-			default:
-				http.Error(w, "invalid sizing_mode: must be auto, terminal-first, or minimal-first", http.StatusBadRequest)
-				return
-			}
-		}
-	}
-
-	// Notify registered callbacks about config changes
-	if detectChanged {
-		c.NotifyConfigChange()
+	if req.Terminal != nil && req.Terminal.SizingMode != "" {
+		c.Cfg.Terminal.SizingMode = req.Terminal.SizingMode
 	}
 
 	// Write back to config file
 	if c.CfgPath != "" {
 		if err := writeConfig(c.CfgPath, *c.Cfg); err != nil {
+			c.CfgMu.Unlock()
 			http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -95,17 +94,33 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Return updated config (redacted)
 	cfg := *c.Cfg
+	c.CfgMu.Unlock()
+
+	// Notify registered callbacks about config changes (outside lock)
+	if detectChanged {
+		c.NotifyConfigChange()
+	}
+
 	cfg.Token = ""
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cfg)
 }
 
-// writeConfig serialises the config to TOML and writes it to the given path.
+// writeConfig serialises the config to TOML and writes it to the given path atomically.
 func writeConfig(path string, cfg config.Config) error {
-	f, err := os.Create(path)
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(cfg)
+	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, path)
 }

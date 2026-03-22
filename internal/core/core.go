@@ -36,8 +36,9 @@ type Core struct {
 	Tmux     tmux.Executor
 	Registry *ServiceRegistry
 	Events   *EventsBroadcaster
-	modules  []Module
-	onConfigChange []func() // config change callbacks
+	modules        []Module
+	configChangeMu sync.Mutex // protects onConfigChange
+	onConfigChange []func()   // config change callbacks
 }
 
 // New creates a Core from the given dependencies.
@@ -106,12 +107,18 @@ func (c *Core) StopModules(ctx context.Context) error {
 
 // OnConfigChange registers a callback invoked after config is updated via PUT.
 func (c *Core) OnConfigChange(fn func()) {
+	c.configChangeMu.Lock()
+	defer c.configChangeMu.Unlock()
 	c.onConfigChange = append(c.onConfigChange, fn)
 }
 
 // NotifyConfigChange invokes all registered config change callbacks.
 func (c *Core) NotifyConfigChange() {
-	for _, fn := range c.onConfigChange {
+	c.configChangeMu.Lock()
+	fns := make([]func(), len(c.onConfigChange))
+	copy(fns, c.onConfigChange)
+	c.configChangeMu.Unlock()
+	for _, fn := range fns {
 		fn()
 	}
 }
