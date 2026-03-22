@@ -65,6 +65,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         title={tab.label}
       >
         {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
+        {tab.locked && <Lock size={10} className="absolute bottom-0.5 right-0.5" />}
       </button>
     )
   }
@@ -98,7 +99,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
       <span className="overflow-hidden flex-1 min-w-0 text-left">{tab.label}</span>
       {isDirty(tab) && <span className="text-amber-400 text-[10px] flex-shrink-0">●</span>}
-      {tab.locked && <Lock size={10} className="text-gray-600 ml-0.5 flex-shrink-0" />}
+      {tab.locked && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
       {showClose && (
         <span className="absolute right-0 top-0 bottom-0 flex items-center">
           {/* ① Gradient fade — always visible */}
