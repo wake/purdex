@@ -347,3 +347,17 @@ func TestHandlerSwitchModeNotFound(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
+
+func TestHandlerTerminalWSNotFound(t *testing.T) {
+	// Setup module with no sessions
+	mod, _, _ := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	// Request with invalid code — session does not exist
+	req := httptest.NewRequest("GET", "/ws/terminal/zzzzzz", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
