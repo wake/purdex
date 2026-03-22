@@ -53,8 +53,14 @@ func (c *Core) AddModule(m Module) {
 	c.modules = append(c.modules, m)
 }
 
-// InitModules calls Init on each module in registration order.
+// InitModules sorts modules by dependency order, then calls Init on each.
 func (c *Core) InitModules() error {
+	sorted, err := topoSort(c.modules)
+	if err != nil {
+		return fmt.Errorf("dependency sort: %w", err)
+	}
+	c.modules = sorted
+
 	for _, m := range c.modules {
 		if err := m.Init(c); err != nil {
 			return fmt.Errorf("module %s init: %w", m.Name(), err)
