@@ -109,15 +109,20 @@ func runServe(args []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 11. Start modules (session module resets stale modes in MetaStore)
+	// 11. Migrate legacy session data → meta.db (once, on startup; errors are non-fatal)
+	if tmuxSessions, err := tx.ListSessions(); err == nil {
+		meta.MigrateFromLegacy(st.DB(), tmuxSessions)
+	}
+
+	// 12. Start modules (session module resets stale modes in MetaStore)
 	if err := c.StartModules(ctx); err != nil {
 		log.Fatalf("core start: %v", err)
 	}
 
-	// 12. Start status poller (on legacy server — uses legacy store)
+	// 13. Start status poller (on legacy server — uses legacy store)
 	legacySrv.StartStatusPoller(ctx)
 
-	// 13. Apply middleware chain and start HTTP server
+	// 14. Apply middleware chain and start HTTP server
 	handler := server.CORS(
 		server.IPWhitelist(cfg.Allow)(
 			server.TokenAuth(cfg.Token)(mux)))
