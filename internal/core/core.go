@@ -32,6 +32,7 @@ type Core struct {
 	Cfg      *config.Config
 	Tmux     tmux.Executor
 	Registry *ServiceRegistry
+	Events   *EventsBroadcaster
 	modules  []Module
 }
 
@@ -45,6 +46,7 @@ func New(deps CoreDeps) *Core {
 		Cfg:      deps.Config,
 		Tmux:     deps.Tmux,
 		Registry: reg,
+		Events:   NewEventsBroadcaster(),
 	}
 }
 
@@ -96,4 +98,9 @@ func (c *Core) StopModules(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// RegisterCoreRoutes registers routes owned by Core itself (not by modules).
+func (c *Core) RegisterCoreRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/ws/session-events", c.Events.HandleSessionEvents)
 }
