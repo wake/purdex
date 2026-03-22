@@ -22,6 +22,7 @@ type Server struct {
 	cfgMu        sync.RWMutex
 	cfgPath      string
 	store        *store.Store
+	meta         *store.MetaStore
 	tmux         tmux.Executor
 	bridge       *bridge.Bridge
 	events       *EventsBroadcaster
@@ -53,11 +54,12 @@ func New(cfg config.Config, st *store.Store, tx tmux.Executor, cfgPath string) *
 // NewLegacy creates a server that handles only legacy routes (handoff, history,
 // bridge, events, config). Session and terminal routes are now handled by the
 // session module. Does not call routes() or resetStaleModes().
-func NewLegacy(cfg config.Config, cfgPath string, st *store.Store, tx tmux.Executor) *Server {
+func NewLegacy(cfg config.Config, cfgPath string, st *store.Store, tx tmux.Executor, meta *store.MetaStore) *Server {
 	return &Server{
 		cfg:          cfg,
 		cfgPath:      cfgPath,
 		store:        st,
+		meta:         meta,
 		tmux:         tx,
 		bridge:       bridge.New(),
 		events:       NewEventsBroadcaster(),
@@ -90,8 +92,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/sessions", sh.Create)
 	s.mux.HandleFunc("DELETE /api/sessions/{id}", sh.Delete)
 	s.mux.HandleFunc("POST /api/sessions/{id}/mode", sh.SwitchMode)
-	s.mux.HandleFunc("POST /api/sessions/{id}/handoff", s.handleHandoff)
-	s.mux.HandleFunc("GET /api/sessions/{id}/history", s.handleHistory)
+	s.mux.HandleFunc("POST /api/sessions/{code}/handoff", s.handleHandoff)
+	s.mux.HandleFunc("GET /api/sessions/{code}/history", s.handleHistory)
 	s.mux.HandleFunc("/ws/terminal/{session}", s.handleTerminal)
 	s.mux.HandleFunc("/ws/cli-bridge/{session}", s.handleCliBridge)
 	s.mux.HandleFunc("/ws/cli-bridge-sub/{session}", s.handleCliBridgeSubscribe)
@@ -103,9 +105,9 @@ func (s *Server) routes() {
 // RegisterLegacyRoutes registers only the routes not yet migrated to modules.
 // Session and terminal routes are handled by the session module.
 func (s *Server) RegisterLegacyRoutes(mux *http.ServeMux) {
-	// Handoff + history (still use legacy store with integer id)
-	mux.HandleFunc("POST /api/sessions/{id}/handoff", s.handleHandoff)
-	mux.HandleFunc("GET /api/sessions/{id}/history", s.handleHistory)
+	// Handoff + history (use session code, decoded to tmux ID)
+	mux.HandleFunc("POST /api/sessions/{code}/handoff", s.handleHandoff)
+	mux.HandleFunc("GET /api/sessions/{code}/history", s.handleHistory)
 
 	// Bridge WS (still use session name)
 	mux.HandleFunc("/ws/cli-bridge/{session}", s.handleCliBridge)

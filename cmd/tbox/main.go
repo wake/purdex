@@ -102,7 +102,7 @@ func runServe(args []string) {
 	if resolvedCfgPath == "" {
 		resolvedCfgPath = filepath.Join(cfg.DataDir, "config.toml")
 	}
-	legacySrv := server.NewLegacy(cfg, resolvedCfgPath, st, tx)
+	legacySrv := server.NewLegacy(cfg, resolvedCfgPath, st, tx, meta)
 	legacySrv.RegisterLegacyRoutes(mux)
 
 	// Context for background goroutines (modules + status poller).
@@ -111,7 +111,9 @@ func runServe(args []string) {
 
 	// 11. Migrate legacy session data → meta.db (once, on startup; errors are non-fatal)
 	if tmuxSessions, err := tx.ListSessions(); err == nil {
-		meta.MigrateFromLegacy(st.DB(), tmuxSessions)
+		if err := meta.MigrateFromLegacy(st.DB(), tmuxSessions); err != nil {
+			log.Printf("migration warning: %v", err)
+		}
 	}
 
 	// 12. Start modules (session module resets stale modes in MetaStore)

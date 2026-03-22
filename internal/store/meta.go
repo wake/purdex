@@ -4,6 +4,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/wake/tmux-box/internal/tmux"
@@ -215,6 +216,7 @@ func (ms *MetaStore) MigrateFromLegacy(legacyDB *sql.DB, tmuxSessions []tmux.Tmu
 	for rows.Next() {
 		var name, mode, ccID, ccModel, cwd string
 		if err := rows.Scan(&name, &mode, &ccID, &ccModel, &cwd); err != nil {
+			log.Printf("migration: scan error for row: %v", err)
 			continue
 		}
 		tmuxID, ok := nameToID[name]
@@ -224,6 +226,9 @@ func (ms *MetaStore) MigrateFromLegacy(legacyDB *sql.DB, tmuxSessions []tmux.Tmu
 		ms.SetMeta(tmuxID, SessionMeta{
 			Mode: mode, CCSessionID: ccID, CCModel: ccModel, Cwd: cwd,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("migration: rows iteration error: %w", err)
 	}
 	return nil
 }

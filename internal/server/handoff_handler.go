@@ -6,14 +6,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/wake/tmux-box/internal/detect"
+	"github.com/wake/tmux-box/internal/module/session"
 	"github.com/wake/tmux-box/internal/store"
 )
 
@@ -52,7 +53,7 @@ type handoffRequest struct {
 	Preset string `json:"preset"`
 }
 
-// handleHandoff handles POST /api/sessions/{id}/handoff.
+// handleHandoff handles POST /api/sessions/{code}/handoff.
 // It validates the request, acquires a per-session lock, returns 202 immediately,
 // then orchestrates the mode switch asynchronously in a goroutine.
 func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
@@ -61,10 +62,10 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	idStr := r.PathValue("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
+	code := r.PathValue("code")
+	tmuxID, err := session.DecodeSessionID(code)
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		http.Error(w, "invalid session code", http.StatusBadRequest)
 		return
 	}
 
@@ -79,8 +80,25 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Lookup session
-	sess, err := s.store.GetSession(id)
+	// Lookup session by name from legacy store (decode tmuxID → find tmux session → lookup by name)
+	tmuxSessions, err := s.tmux.ListSessions()
+	if err != nil {
+		http.Error(w, "failed to list tmux sessions", http.StatusInternalServerError)
+		return
+	}
+	var sessionName string
+	for _, ts := range tmuxSessions {
+		if ts.ID == tmuxID {
+			sessionName = ts.Name
+			break
+		}
+	}
+	if sessionName == "" {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	sess, err := s.store.GetSessionByName(sessionName)
 	if err != nil {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
@@ -128,9 +146,9 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 
 	// Run async handoff in goroutine
 	if req.Mode == "term" {
-		go s.runHandoffToTerm(sess, handoffID)
+		go s.runHandoffToTerm(sess, tmuxID, handoffID)
 	} else {
-		go s.runHandoff(sess, req.Mode, command, handoffID, token, port, bind)
+		go s.runHandoff(sess, tmuxID, req.Mode, command, handoffID, token, port, bind)
 	}
 }
 
@@ -143,7 +161,7 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 //  6. Launch tbox relay with --resume
 //  7. Wait for relay to connect back via cli-bridge
 //  8. Update DB (mode + cc_session_id + cwd) and broadcast success
-func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token string, port int, bind string) {
+func (s *Server) runHandoff(sess store.Session, tmuxID, mode, command, handoffID, token string, port int, bind string) {
 	defer s.handoffLocks.Unlock(sess.Name)
 
 	broadcast := func(value string) {
@@ -351,12 +369,24 @@ func (s *Server) runHandoff(sess store.Session, mode, command, handoffID, token 
 		broadcast("failed:db update: " + err.Error())
 		return
 	}
+
+	// Sync MetaStore
+	if s.meta != nil {
+		metaUpdate := store.MetaUpdate{Mode: &mode, CCSessionID: &ccID}
+		if statusInfo.Cwd != "" {
+			metaUpdate.Cwd = &statusInfo.Cwd
+		}
+		if err := s.meta.UpdateMeta(tmuxID, metaUpdate); err != nil {
+			log.Printf("handoff: meta sync error: %v", err)
+		}
+	}
+
 	broadcast("connected")
 }
 
 // runHandoffToTerm handles the handoff from stream back to interactive terminal mode.
 // It shuts down the relay, waits for shell, then launches claude --resume.
-func (s *Server) runHandoffToTerm(sess store.Session, handoffID string) {
+func (s *Server) runHandoffToTerm(sess store.Session, tmuxID, handoffID string) {
 	defer s.handoffLocks.Unlock(sess.Name)
 
 	broadcast := func(value string) {
@@ -391,8 +421,17 @@ func (s *Server) runHandoffToTerm(sess store.Session, handoffID string) {
 		broadcast("failed:db pre-update error: " + err.Error())
 		return
 	}
+	// Sync MetaStore: pre-update mode
+	if s.meta != nil {
+		if err := s.meta.UpdateMeta(tmuxID, store.MetaUpdate{Mode: &termMode}); err != nil {
+			log.Printf("handoff: meta sync pre-update error: %v", err)
+		}
+	}
 	rollbackMode := func() {
 		s.store.UpdateSession(sess.ID, store.SessionUpdate{Mode: &origMode})
+		if s.meta != nil {
+			s.meta.UpdateMeta(tmuxID, store.MetaUpdate{Mode: &origMode})
+		}
 	}
 
 	// Shut down relay
@@ -463,6 +502,12 @@ func (s *Server) runHandoffToTerm(sess store.Session, handoffID string) {
 		broadcast("failed:db update error: " + err.Error())
 		return
 	}
+	// Sync MetaStore: clear cc_session_id
+	if s.meta != nil {
+		if err := s.meta.UpdateMeta(tmuxID, store.MetaUpdate{CCSessionID: &emptyID}); err != nil {
+			log.Printf("handoff: meta sync clear cc_session_id error: %v", err)
+		}
+	}
 	broadcast("connected")
 }
 
@@ -478,6 +523,20 @@ func (s *Server) revertModeOnRelayDisconnect(sessionName string) {
 		if sess.Name == sessionName && sess.Mode != "term" {
 			termMode := "term"
 			s.store.UpdateSession(sess.ID, store.SessionUpdate{Mode: &termMode})
+			// Sync MetaStore: revert mode
+			if s.meta != nil {
+				tmuxSessions, err := s.tmux.ListSessions()
+				if err == nil {
+					for _, ts := range tmuxSessions {
+						if ts.Name == sessionName {
+							if err := s.meta.UpdateMeta(ts.ID, store.MetaUpdate{Mode: &termMode}); err != nil {
+								log.Printf("revertMode: meta sync error: %v", err)
+							}
+							break
+						}
+					}
+				}
+			}
 			s.events.Broadcast(sessionName, "handoff", "failed:relay disconnected")
 			return
 		}
