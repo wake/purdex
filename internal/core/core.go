@@ -13,10 +13,11 @@ import (
 // Module is the interface all daemon modules implement.
 type Module interface {
 	Name() string
+	Dependencies() []string
 	Init(core *Core) error
 	RegisterRoutes(mux *http.ServeMux)
 	Start(ctx context.Context) error
-	Stop() error
+	Stop(ctx context.Context) error
 }
 
 // CoreDeps holds the shared infrastructure injected into Core.
@@ -81,10 +82,10 @@ func (c *Core) StartModules(ctx context.Context) error {
 
 // StopModules calls Stop on each module in reverse registration order.
 // All modules are stopped even if some return errors.
-func (c *Core) StopModules() error {
+func (c *Core) StopModules(ctx context.Context) error {
 	var errs []error
 	for i := len(c.modules) - 1; i >= 0; i-- {
-		if err := c.modules[i].Stop(); err != nil {
+		if err := c.modules[i].Stop(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("module %s stop: %w", c.modules[i].Name(), err))
 		}
 	}

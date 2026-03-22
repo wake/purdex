@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/wake/tmux-box/internal/config"
 	"github.com/wake/tmux-box/internal/core"
@@ -142,7 +143,9 @@ func runServe(args []string) {
 		<-sigCh
 		fmt.Println("\nshutting down...")
 		cancel() // stop status poller + modules
-		if err := c.StopModules(); err != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		if err := c.StopModules(shutdownCtx); err != nil {
 			log.Printf("stop modules: %v", err)
 		}
 		srv.Shutdown(context.Background())
