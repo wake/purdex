@@ -2,6 +2,7 @@ package cc
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 )
 
@@ -19,7 +20,10 @@ func (m *CCModule) handleHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messages, _ := m.GetHistory(sess.Cwd, sess.CCSessionID)
+	messages, err := m.GetHistory(sess.Cwd, sess.CCSessionID)
+	if err != nil {
+		log.Printf("history: code=%s: %v", code, err)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(messages)
 }

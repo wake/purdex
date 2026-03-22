@@ -38,12 +38,20 @@ func (m *CCModule) startPoller(ctx context.Context) {
 					continue
 				}
 
+				currentCodes := make(map[string]struct{}, len(sessions))
 				for _, sess := range sessions {
+					currentCodes[sess.Code] = struct{}{}
 					detectTarget := sess.Name + ":0"
 					status := m.detector.Detect(detectTarget)
 					if prev, ok := lastStatus[sess.Code]; !ok || prev != status {
 						lastStatus[sess.Code] = status
 						m.core.Events.Broadcast(sess.Code, "status", string(status))
+					}
+				}
+				// Prune deleted sessions to avoid unbounded map growth.
+				for code := range lastStatus {
+					if _, ok := currentCodes[code]; !ok {
+						delete(lastStatus, code)
 					}
 				}
 			}
