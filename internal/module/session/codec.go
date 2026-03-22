@@ -7,40 +7,18 @@ import (
 )
 
 const (
-	xorKey  = 0x5A3C7E1D
 	codeLen = 6
-	maxBits = 31
+	// space is 36^6 = 2,176,782,336 (fits in uint32)
+	space uint64 = 2176782336
+	// mult must be coprime to space. space = 2^12 * 3^12, so mult can't be divisible by 2 or 3.
+	// Large mult ensures consecutive IDs jump ~75% of the space apart.
+	mult    uint64 = 1640531527
+	multInv uint64 = 1777800055 // modular multiplicative inverse of mult mod space: (mult * multInv) % space == 1
+	offset uint64 = 1013904223
 )
 
-// Compile-time assertion: xorKey must fit in maxBits
-var _ = uint(xorKey >> maxBits) // panics at compile time if xorKey has bit 31+ set
-
-// bitPerm is a fixed bit permutation table for obfuscation.
-var bitPerm = [31]int{
-	17, 5, 23, 11, 29, 2, 19, 8, 26, 14, 1,
-	20, 7, 25, 13, 30, 3, 21, 9, 27, 15, 0,
-	18, 6, 24, 12, 28, 4, 22, 10, 16,
-}
-
-var bitPermInv [31]int
-
-func init() {
-	for i, p := range bitPerm {
-		bitPermInv[p] = i
-	}
-}
-
-func shuffleBits(n int, perm [31]int) int {
-	var result int
-	for i := 0; i < maxBits; i++ {
-		if n&(1<<i) != 0 {
-			result |= 1 << perm[i]
-		}
-	}
-	return result
-}
-
 // EncodeSessionID converts a tmux session ID ("$N") to a 6-char base36 code.
+// Uses multiplicative cipher + XOR for diffusion across the full code space.
 func EncodeSessionID(tmuxID string) (string, error) {
 	if !strings.HasPrefix(tmuxID, "$") || len(tmuxID) < 2 {
 		return "", fmt.Errorf("invalid tmux session ID: %q", tmuxID)
@@ -49,11 +27,12 @@ func EncodeSessionID(tmuxID string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid tmux session ID: %q: %w", tmuxID, err)
 	}
-	if n < 0 || n >= (1<<maxBits) {
+	if n < 0 || uint64(n) >= space {
 		return "", fmt.Errorf("tmux session ID out of range: %d", n)
 	}
-	scrambled := shuffleBits(n^xorKey, bitPerm)
-	code := strconv.FormatInt(int64(scrambled), 36)
+	// Multiplicative cipher: large mult ensures consecutive IDs jump ~75% of the space
+	scrambled := (uint64(n)*mult + offset) % space
+	code := strconv.FormatUint(scrambled, 36)
 	for len(code) < codeLen {
 		code = "0" + code
 	}
@@ -65,13 +44,11 @@ func DecodeSessionID(code string) (string, error) {
 	if len(code) != codeLen {
 		return "", fmt.Errorf("invalid session code: %q (must be %d chars)", code, codeLen)
 	}
-	scrambled, err := strconv.ParseInt(code, 36, 64)
+	scrambled, err := strconv.ParseUint(code, 36, 64)
 	if err != nil {
 		return "", fmt.Errorf("invalid session code: %q: %w", code, err)
 	}
-	n := shuffleBits(int(scrambled), bitPermInv) ^ xorKey
-	if n < 0 {
-		return "", fmt.Errorf("decoded negative value from code: %q", code)
-	}
+	// Reverse multiplicative cipher: n = ((scrambled - offset) * multInv) % space
+	n := (((space + scrambled - offset%space) % space) * multInv) % space
 	return fmt.Sprintf("$%d", n), nil
 }
