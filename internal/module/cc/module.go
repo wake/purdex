@@ -30,6 +30,9 @@ func (m *CCModule) Init(c *core.Core) error {
 	// Register CCDetector
 	c.Registry.Register(DetectorKey, CCDetector(m))
 
+	// Register CCOperator
+	c.Registry.Register(OperatorKey, CCOperator(m))
+
 	// Listen for config changes to update detector commands
 	c.OnConfigChange(func() {
 		m.detector.UpdateCommands(c.Cfg.Detect.CCCommands)
