@@ -46,7 +46,7 @@ func (m *SessionModule) ListSessions() ([]SessionInfo, error) {
 			Cwd:    s.Cwd,
 		}
 
-		// Merge meta from DB
+		// Merge meta from DB (Cwd always comes from tmux — SOT)
 		meta, err := m.meta.GetMeta(s.ID)
 		if err != nil {
 			return nil, err
@@ -55,9 +55,6 @@ func (m *SessionModule) ListSessions() ([]SessionInfo, error) {
 			info.Mode = meta.Mode
 			info.CCSessionID = meta.CCSessionID
 			info.CCModel = meta.CCModel
-			if meta.Cwd != "" {
-				info.Cwd = meta.Cwd
-			}
 		}
 
 		result = append(result, info)
@@ -89,6 +86,7 @@ func (m *SessionModule) GetSession(code string) (*SessionInfo, error) {
 				Cwd:    s.Cwd,
 			}
 
+			// Merge meta from DB (Cwd always comes from tmux — SOT)
 			meta, err := m.meta.GetMeta(s.ID)
 			if err != nil {
 				return nil, err
@@ -97,9 +95,6 @@ func (m *SessionModule) GetSession(code string) (*SessionInfo, error) {
 				info.Mode = meta.Mode
 				info.CCSessionID = meta.CCSessionID
 				info.CCModel = meta.CCModel
-				if meta.Cwd != "" {
-					info.Cwd = meta.Cwd
-				}
 			}
 
 			return info, nil

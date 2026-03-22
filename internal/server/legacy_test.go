@@ -24,13 +24,8 @@ func TestNewLegacyDoesNotCallRoutes(t *testing.T) {
 	}
 	defer st.Close()
 	tx := tmux.NewFakeExecutor()
-	meta, err := store.OpenMeta(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer meta.Close()
 
-	s := server.NewLegacy(cfg, "/tmp/config.toml", st, tx, meta)
+	s := server.NewLegacy(cfg, "/tmp/config.toml", st, nil, tx)
 	assert.NotNil(t, s)
 }
 
@@ -42,13 +37,8 @@ func TestRegisterLegacyRoutes(t *testing.T) {
 	}
 	defer st.Close()
 	tx := tmux.NewFakeExecutor()
-	meta, err := store.OpenMeta(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer meta.Close()
 
-	s := server.NewLegacy(cfg, "/tmp/config.toml", st, tx, meta)
+	s := server.NewLegacy(cfg, "/tmp/config.toml", st, nil, tx)
 
 	mux := http.NewServeMux()
 	s.RegisterLegacyRoutes(mux)

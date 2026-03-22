@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -79,11 +80,13 @@ func (c *Core) StartModules(ctx context.Context) error {
 }
 
 // StopModules calls Stop on each module in reverse registration order.
+// All modules are stopped even if some return errors.
 func (c *Core) StopModules() error {
+	var errs []error
 	for i := len(c.modules) - 1; i >= 0; i-- {
 		if err := c.modules[i].Stop(); err != nil {
-			return fmt.Errorf("module %s stop: %w", c.modules[i].Name(), err)
+			errs = append(errs, fmt.Errorf("module %s stop: %w", c.modules[i].Name(), err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }

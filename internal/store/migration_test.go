@@ -44,7 +44,7 @@ func TestMigrateFromLegacy(t *testing.T) {
 	m0, err := meta.GetMeta("$0")
 	require.NoError(t, err)
 	require.NotNil(t, m0)
-	assert.Equal(t, "stream", m0.Mode)
+	assert.Equal(t, "term", m0.Mode) // always "term" on migration — stale modes are meaningless after restart
 	assert.Equal(t, "sess-123", m0.CCSessionID)
 	assert.Equal(t, "opus", m0.CCModel)
 

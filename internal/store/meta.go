@@ -4,7 +4,6 @@ package store
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/wake/tmux-box/internal/tmux"
@@ -159,15 +158,11 @@ func (m *MetaStore) DeleteMeta(tmuxID string) error {
 
 // CleanOrphans deletes meta records whose tmux_id is not in liveTmuxIDs.
 // Returns the number of rows deleted.
+// If liveTmuxIDs is empty, does nothing — an empty set means "tmux unavailable",
+// not "nothing is alive".
 func (m *MetaStore) CleanOrphans(liveTmuxIDs []string) (int, error) {
 	if len(liveTmuxIDs) == 0 {
-		// Delete everything
-		res, err := m.db.Exec("DELETE FROM session_meta")
-		if err != nil {
-			return 0, err
-		}
-		n, _ := res.RowsAffected()
-		return int(n), nil
+		return 0, nil // tmux unavailable or no sessions — don't delete anything
 	}
 
 	placeholders := strings.Repeat("?,", len(liveTmuxIDs))
@@ -216,7 +211,6 @@ func (ms *MetaStore) MigrateFromLegacy(legacyDB *sql.DB, tmuxSessions []tmux.Tmu
 	for rows.Next() {
 		var name, mode, ccID, ccModel, cwd string
 		if err := rows.Scan(&name, &mode, &ccID, &ccModel, &cwd); err != nil {
-			log.Printf("migration: scan error for row: %v", err)
 			continue
 		}
 		tmuxID, ok := nameToID[name]
@@ -224,11 +218,9 @@ func (ms *MetaStore) MigrateFromLegacy(legacyDB *sql.DB, tmuxSessions []tmux.Tmu
 			continue // session no longer exists in tmux
 		}
 		ms.SetMeta(tmuxID, SessionMeta{
-			Mode: mode, CCSessionID: ccID, CCModel: ccModel, Cwd: cwd,
+			Mode: "term", // always term on migration — stale modes are meaningless after restart
+			CCSessionID: ccID, CCModel: ccModel, Cwd: cwd,
 		})
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("migration: rows iteration error: %w", err)
 	}
 	return nil
 }

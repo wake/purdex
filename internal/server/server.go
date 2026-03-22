@@ -34,11 +34,12 @@ type Server struct {
 // Deprecated: New creates a full server with all routes (session + legacy).
 // Kept for existing tests. Production code should use NewLegacy + RegisterLegacyRoutes.
 // TODO(1.6b): remove after migrating all tests to use NewLegacy + RegisterLegacyRoutes.
-func New(cfg config.Config, st *store.Store, tx tmux.Executor, cfgPath string) *Server {
+func New(cfg config.Config, st *store.Store, meta *store.MetaStore, tx tmux.Executor, cfgPath string) *Server {
 	s := &Server{
 		cfg:          cfg,
 		cfgPath:      cfgPath,
 		store:        st,
+		meta:         meta,
 		tmux:         tx,
 		bridge:       bridge.New(),
 		events:       NewEventsBroadcaster(),
@@ -54,7 +55,7 @@ func New(cfg config.Config, st *store.Store, tx tmux.Executor, cfgPath string) *
 // NewLegacy creates a server that handles only legacy routes (handoff, history,
 // bridge, events, config). Session and terminal routes are now handled by the
 // session module. Does not call routes() or resetStaleModes().
-func NewLegacy(cfg config.Config, cfgPath string, st *store.Store, tx tmux.Executor, meta *store.MetaStore) *Server {
+func NewLegacy(cfg config.Config, cfgPath string, st *store.Store, meta *store.MetaStore, tx tmux.Executor) *Server {
 	return &Server{
 		cfg:          cfg,
 		cfgPath:      cfgPath,
@@ -105,7 +106,7 @@ func (s *Server) routes() {
 // RegisterLegacyRoutes registers only the routes not yet migrated to modules.
 // Session and terminal routes are handled by the session module.
 func (s *Server) RegisterLegacyRoutes(mux *http.ServeMux) {
-	// Handoff + history (use session code, decoded to tmux ID)
+	// Handoff + history use session code
 	mux.HandleFunc("POST /api/sessions/{code}/handoff", s.handleHandoff)
 	mux.HandleFunc("GET /api/sessions/{code}/history", s.handleHistory)
 
