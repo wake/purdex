@@ -147,7 +147,7 @@ func (m *SessionModule) HandleTerminalWS(w http.ResponseWriter, r *http.Request,
 	}
 
 	// Build tmux attach-session command and args.
-	target := info.Name + ":0"
+	target := info.Name
 	args := []string{"attach-session", "-t", target}
 	if sizingMode == "terminal-first" {
 		args = append(args, "-f", "ignore-size")
