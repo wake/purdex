@@ -30,6 +30,9 @@ func (m *CCModule) Init(c *core.Core) error {
 	// Register CCDetector
 	c.Registry.Register(DetectorKey, CCDetector(m))
 
+	// Register CCHistoryProvider
+	c.Registry.Register(HistoryKey, CCHistoryProvider(m))
+
 	// Register CCOperator
 	c.Registry.Register(OperatorKey, CCOperator(m))
 
@@ -42,11 +45,12 @@ func (m *CCModule) Init(c *core.Core) error {
 }
 
 func (m *CCModule) RegisterRoutes(mux *http.ServeMux) {
-	// History route will be added in Task 8
+	mux.HandleFunc("GET /api/sessions/{code}/history", m.handleHistory)
 }
 
 func (m *CCModule) Start(ctx context.Context) error {
-	// Status poller will be added in Task 8
+	m.startPoller(ctx)
+	m.core.Events.OnSubscribe(m.sendStatusSnapshot)
 	return nil
 }
 

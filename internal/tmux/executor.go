@@ -199,6 +199,7 @@ type FakeExecutor struct {
 	sessionOrder         []string               // insertion order of session names
 	nextID               int                    // auto-incrementing ID counter
 	paneCommands         map[string]string      // target → command name
+	paneCommandCalls     map[string]int         // target → PaneCurrentCommand call count
 	paneContents         map[string]string      // target → captured text
 	paneChildren         map[string][]string    // target → child command names
 	paneSizes            map[string][2]int      // target → [cols, rows]
@@ -210,11 +211,12 @@ type FakeExecutor struct {
 
 func NewFakeExecutor() *FakeExecutor {
 	return &FakeExecutor{
-		sessions:     make(map[string]TmuxSession),
-		paneCommands: make(map[string]string),
-		paneContents: make(map[string]string),
-		paneChildren: make(map[string][]string),
-		paneSizes:    make(map[string][2]int),
+		sessions:         make(map[string]TmuxSession),
+		paneCommands:     make(map[string]string),
+		paneCommandCalls: make(map[string]int),
+		paneContents:     make(map[string]string),
+		paneChildren:     make(map[string][]string),
+		paneSizes:        make(map[string][2]int),
 	}
 }
 
@@ -344,11 +346,19 @@ func (f *FakeExecutor) PaneChildCommands(target string) ([]string, error) {
 func (f *FakeExecutor) PaneCurrentCommand(target string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.paneCommandCalls[target]++
 	cmd, ok := f.paneCommands[target]
 	if !ok {
 		return "", fmt.Errorf("no pane command for target %q", target)
 	}
 	return cmd, nil
+}
+
+// PaneCommandCallCount returns how many times PaneCurrentCommand was called for a target.
+func (f *FakeExecutor) PaneCommandCallCount(target string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.paneCommandCalls[target]
 }
 
 func (f *FakeExecutor) CapturePaneContent(target string, lastN int) (string, error) {

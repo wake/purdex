@@ -138,15 +138,17 @@ func TestCCModule_NameAndDependencies(t *testing.T) {
 	assert.Equal(t, []string{"session"}, mod.Dependencies())
 }
 
-func TestCCModule_HistoryNotRegistered(t *testing.T) {
+func TestCCModule_HistoryAndOperatorRegistered(t *testing.T) {
 	c, _ := newTestCoreWithSession(t)
 
 	mod := New()
 	require.NoError(t, mod.Init(c))
 
-	// HistoryKey should NOT be registered yet (Task 8)
-	_, ok := c.Registry.Get(HistoryKey)
-	assert.False(t, ok, "CCHistoryProvider should not be registered yet")
+	// HistoryKey SHOULD be registered (Task 8)
+	svcH, ok := c.Registry.Get(HistoryKey)
+	assert.True(t, ok, "CCHistoryProvider should be registered")
+	_, isHist := svcH.(CCHistoryProvider)
+	assert.True(t, isHist, "registered service should implement CCHistoryProvider")
 
 	// OperatorKey SHOULD be registered (Task 7)
 	svc, ok := c.Registry.Get(OperatorKey)
