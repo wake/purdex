@@ -32,6 +32,7 @@ type Server struct {
 
 // Deprecated: New creates a full server with all routes (session + legacy).
 // Kept for existing tests. Production code should use NewLegacy + RegisterLegacyRoutes.
+// TODO(1.6b): remove after migrating all tests to use NewLegacy + RegisterLegacyRoutes.
 func New(cfg config.Config, st *store.Store, tx tmux.Executor, cfgPath string) *Server {
 	s := &Server{
 		cfg:          cfg,
@@ -82,6 +83,7 @@ func (s *Server) resetStaleModes() {
 
 // Deprecated: routes registers ALL routes on the internal mux (session + legacy).
 // Kept for existing tests that use New(). Production code uses RegisterLegacyRoutes.
+// TODO(1.6b): remove after migrating all tests to use NewLegacy + RegisterLegacyRoutes.
 func (s *Server) routes() {
 	sh := NewSessionHandler(s.store, s.tmux, s.bridge)
 	s.mux.HandleFunc("GET /api/sessions", sh.List)
