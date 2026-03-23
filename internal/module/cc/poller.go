@@ -10,14 +10,20 @@ import (
 	"github.com/wake/tmux-box/internal/detect"
 )
 
-// startPoller launches a background goroutine that periodically detects CC
-// status for all sessions and broadcasts changes via core.Events.
-func (m *CCModule) startPoller(ctx context.Context) {
+func (m *CCModule) pollInterval() time.Duration {
+	m.core.CfgMu.RLock()
 	interval := m.core.Cfg.Detect.PollInterval
+	m.core.CfgMu.RUnlock()
 	if interval <= 0 {
 		interval = 2
 	}
-	ticker := time.NewTicker(time.Duration(interval) * time.Second)
+	return time.Duration(interval) * time.Second
+}
+
+// startPoller launches a background goroutine that periodically detects CC
+// status for all sessions and broadcasts changes via core.Events.
+func (m *CCModule) startPoller(ctx context.Context) {
+	ticker := time.NewTicker(m.pollInterval())
 
 	go func() {
 		defer ticker.Stop()
@@ -28,6 +34,9 @@ func (m *CCModule) startPoller(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-m.resetPollerCh:
+				ticker.Reset(m.pollInterval())
+				continue
 			case <-ticker.C:
 				if !m.core.Events.HasSubscribers() {
 					continue

@@ -67,9 +67,9 @@ func (eb *EventsBroadcaster) Add(conn *websocket.Conn) *EventSubscriber {
 	go func() {
 		for msg := range sub.send {
 			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				// Write failed — close the connection so the read loop in
-				// HandleSessionEvents unblocks and calls Remove.
-				conn.Close()
+				// Write failed — remove subscriber so it's not a zombie,
+				// then close conn to unblock the read loop in HandleSessionEvents.
+				eb.Remove(sub)
 				return
 			}
 		}

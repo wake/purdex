@@ -104,18 +104,28 @@ func (m *CCModule) GetStatus(ctx context.Context, tmuxTarget string) (*detect.St
 
 	// defer cleanup instead of repeating the check at every return point
 	if didManualResize {
-		defer restoreWindowSizing(tx, tmuxTarget)
+		sizingMode := "latest"
+		if m.core.Cfg.Terminal.GetSizingMode() == "minimal-first" {
+			sizingMode = "smallest"
+		}
+		defer restoreWindowSizing(tx, tmuxTarget, sizingMode)
 	}
 
-	// Staged /status send
+	// Staged /status send — check ctx after each sleep to avoid partial input
 	if err := tx.SendKeysRaw(tmuxTarget, "-l", "/"); err != nil {
 		return nil, fmt.Errorf("send /: %w", err)
 	}
 	sleepCtx(ctx, 1*time.Second)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if err := tx.SendKeysRaw(tmuxTarget, "-l", "status"); err != nil {
 		return nil, fmt.Errorf("send status: %w", err)
 	}
 	sleepCtx(ctx, 500*time.Millisecond)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if err := tx.SendKeysRaw(tmuxTarget, "Enter"); err != nil {
 		return nil, fmt.Errorf("send Enter: %w", err)
 	}
@@ -156,11 +166,12 @@ func (m *CCModule) Launch(ctx context.Context, tmuxTarget string, cmd string) er
 }
 
 // restoreWindowSizing clears manual window-size and restores automatic sizing.
-func restoreWindowSizing(tx tmux.Executor, target string) {
+// windowSizeMode should be "latest" (auto) or "smallest" (minimal-first).
+func restoreWindowSizing(tx tmux.Executor, target, windowSizeMode string) {
 	if err := tx.ResizeWindowAuto(target); err != nil {
 		log.Printf("restoreWindowSizing: ResizeWindowAuto(%s): %v", target, err)
 	}
-	if err := tx.SetWindowOption(target, "window-size", "latest"); err != nil {
+	if err := tx.SetWindowOption(target, "window-size", windowSizeMode); err != nil {
 		log.Printf("restoreWindowSizing: SetWindowOption(%s): %v", target, err)
 	}
 }
