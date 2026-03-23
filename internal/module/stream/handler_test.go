@@ -342,9 +342,9 @@ func TestCliBridgeSubscribe_ReceivesRelayedMessages(t *testing.T) {
 	}
 }
 
-// --- handleHandoff stub test ---
+// --- handleHandoff validation test ---
 
-func TestHandoff_ReturnsNotImplemented(t *testing.T) {
+func TestHandoff_NilBody_Returns400(t *testing.T) {
 	_, _, srv := setupStreamModule(t, map[string]*session.SessionInfo{
 		"hnd123": {Code: "hnd123", Name: "handoff-sess", Mode: "term"},
 	})
@@ -352,7 +352,7 @@ func TestHandoff_ReturnsNotImplemented(t *testing.T) {
 	resp, err := http.Post(srv.URL+"/api/sessions/hnd123/handoff", "application/json", nil)
 	require.NoError(t, err)
 	resp.Body.Close()
-	assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
 // --- sendRelaySnapshot test ---

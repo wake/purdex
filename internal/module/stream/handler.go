@@ -3,6 +3,8 @@ package stream
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -167,9 +169,91 @@ func (m *StreamModule) handleCliBridgeSubscribe(w http.ResponseWriter, r *http.R
 	}
 }
 
-// handleHandoff is a placeholder stub — full implementation in Task 10.
+// handoffRequest is the JSON body for POST /api/sessions/{code}/handoff.
+type handoffRequest struct {
+	Mode   string `json:"mode"`
+	Preset string `json:"preset"`
+}
+
+// handleHandoff handles POST /api/sessions/{code}/handoff.
+// It validates the request, acquires a per-session lock, returns 202 immediately,
+// then orchestrates the mode switch asynchronously in a goroutine.
 func (m *StreamModule) handleHandoff(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	code := r.PathValue("code")
+
+	// Resolve session
+	sess, err := m.sessions.GetSession(code)
+	if err != nil || sess == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	// Decode request body
+	var req handoffRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate mode
+	if req.Mode != "stream" && req.Mode != "jsonl" && req.Mode != "term" {
+		http.Error(w, "mode must be stream, jsonl, or term", http.StatusBadRequest)
+		return
+	}
+
+	// Snapshot config under read lock
+	m.core.CfgMu.RLock()
+	presets := m.core.Cfg.Stream.Presets
+	if req.Mode == "jsonl" {
+		presets = m.core.Cfg.JSONL.Presets
+	}
+	token := m.core.Cfg.Token
+	port := m.core.Cfg.Port
+	bind := m.core.Cfg.Bind
+	m.core.CfgMu.RUnlock()
+
+	// Find preset command (required for stream/jsonl, not for term)
+	var command string
+	if req.Mode != "term" {
+		for _, p := range presets {
+			if p.Name == req.Preset {
+				command = p.Command
+				break
+			}
+		}
+		if command == "" {
+			http.Error(w, "preset not found", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Try per-session lock (keyed by code)
+	if !m.locks.TryLock(code) {
+		http.Error(w, "handoff already in progress", http.StatusConflict)
+		return
+	}
+
+	// Generate handoff ID (16-char hex)
+	handoffID := generateHandoffID()
+
+	// Return 202 Accepted immediately
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"handoff_id": handoffID})
+
+	// Dispatch async goroutine
+	if req.Mode == "term" {
+		go m.runHandoffToTerm(*sess, code, handoffID)
+	} else {
+		go m.runHandoff(*sess, code, req.Mode, command, handoffID, token, port, bind)
+	}
+}
+
+// generateHandoffID creates a random 16-char hex string.
+func generateHandoffID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // revertModeOnRelayDisconnect reverts the session mode to "term" when a relay
