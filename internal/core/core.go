@@ -93,7 +93,7 @@ func (c *Core) StartModules(ctx context.Context) error {
 	return nil
 }
 
-// StopModules calls Stop on each module in reverse registration order.
+// StopModules calls Stop on each module in reverse dependency order.
 // All modules are stopped even if some return errors.
 func (c *Core) StopModules(ctx context.Context) error {
 	var errs []error

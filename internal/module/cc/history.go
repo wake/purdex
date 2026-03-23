@@ -3,6 +3,7 @@ package cc
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/wake/tmux-box/internal/history"
 )
@@ -12,7 +13,7 @@ const maxJSONLBytes = 2 * 1024 * 1024
 // GetHistory retrieves CC conversation history from the JSONL session file.
 // Returns an empty slice (not nil) when session ID is empty or the file is missing.
 func (m *CCModule) GetHistory(cwd string, ccSessionID string) ([]map[string]any, error) {
-	if ccSessionID == "" {
+	if ccSessionID == "" || strings.ContainsAny(ccSessionID, "/\\") {
 		return []map[string]any{}, nil
 	}
 	home, err := os.UserHomeDir()
