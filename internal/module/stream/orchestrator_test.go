@@ -851,3 +851,69 @@ func TestRunHandoff_LockReleasedAfterCompletion(t *testing.T) {
 	assert.True(t, env.module.locks.TryLock("abc123"), "lock should be released after handoff completes")
 	env.module.locks.Unlock("abc123")
 }
+
+// --- Timeout failure tests ---
+
+func TestRunHandoff_RelayConnectTimeout(t *testing.T) {
+	// CC idle → getStatus → exit → launch relay → relay never connects → timeout
+	env := setupHandoffModule(t, handoffTestOpts{
+		sessions: map[string]*session.SessionInfo{
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+		},
+		ccDetect: &fakeCCDetector{statuses: []detect.Status{
+			detect.StatusCCIdle,
+		}},
+		ccOps: &fakeCCOperator{
+			statusInfo: &detect.StatusInfo{SessionID: "uuid-1234", Cwd: "/tmp"},
+		},
+	})
+
+	eventSub := env.core.Events.AddTestSubscriber()
+	defer env.core.Events.RemoveTestSubscriber(eventSub)
+
+	resp := postHandoff(t, env.srv, "abc123", `{"mode":"stream","preset":"cc"}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	// No relay registers on the bridge — the orchestrator waits 15s then times out.
+	waitForEvent(t, eventSub, "failed:relay did not connect within 15s", 20*time.Second)
+}
+
+func TestRunHandoffToTerm_RelayShutdownTimeout(t *testing.T) {
+	// Pre-register a relay that never reads the shutdown message → timeout
+	env := setupHandoffModule(t, handoffTestOpts{
+		sessions: map[string]*session.SessionInfo{
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream", CCSessionID: "sess-uuid"},
+		},
+		ccDetect: &fakeCCDetector{statuses: []detect.Status{
+			detect.StatusNormal,
+		}},
+	})
+
+	// Register a relay but never read from its channel — shutdown message is dropped
+	_, err := env.module.bridge.RegisterRelay("abc123")
+	require.NoError(t, err)
+
+	eventSub := env.core.Events.AddTestSubscriber()
+	defer env.core.Events.RemoveTestSubscriber(eventSub)
+
+	resp := postHandoff(t, env.srv, "abc123", `{"mode":"term"}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	// Relay never disconnects → 5s timeout → broadcasts failure
+	waitForEvent(t, eventSub, "failed:relay did not disconnect", 10*time.Second)
+
+	// Verify mode was rolled back to original ("stream")
+	updates := env.provider.getUpdates()
+	var modeRolledBack bool
+	for _, u := range updates {
+		if u.Code == "abc123" && u.Update.Mode != nil && *u.Update.Mode == "stream" {
+			modeRolledBack = true
+		}
+	}
+	assert.True(t, modeRolledBack, "mode should be rolled back to stream on relay shutdown timeout")
+
+	// Clean up
+	env.module.bridge.UnregisterRelay("abc123")
+}

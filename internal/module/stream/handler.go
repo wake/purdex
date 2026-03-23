@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"sync"
 
 	"github.com/gorilla/websocket"
 	"github.com/wake/tmux-box/internal/module/session"
@@ -70,34 +69,7 @@ func (m *StreamModule) handleCliBridge(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			m.bridge.RelayToSubscribers(code, msg)
-
-			// One-shot init metadata capture: extract model from CC init message
-			if !initCaptured && bytes.Contains(msg, []byte(`"subtype":"init"`)) {
-				var init struct {
-					Type      string `json:"type"`
-					Subtype   string `json:"subtype"`
-					Model     string `json:"model"`
-					SessionID string `json:"session_id"`
-				}
-				if json.Unmarshal(msg, &init) == nil && init.Type == "system" && init.Subtype == "init" {
-					initCaptured = true
-					update := session.MetaUpdate{}
-					if init.Model != "" {
-						update.CCModel = &init.Model
-					}
-					if init.SessionID != "" {
-						update.CCSessionID = &init.SessionID
-					}
-					if update.CCModel != nil || update.CCSessionID != nil {
-						if err := m.sessions.UpdateMeta(code, update); err != nil {
-							log.Printf("stream: init metadata update error: %v", err)
-						}
-						if init.Model != "" {
-							m.core.Events.Broadcast(code, "init", init.Model)
-						}
-					}
-				}
-			}
+			m.captureInitMetadata(code, msg, &initCaptured)
 		}
 	}()
 
@@ -256,6 +228,41 @@ func generateHandoffID() string {
 	return hex.EncodeToString(b)
 }
 
+// captureInitMetadata is a one-shot extractor for CC init message metadata.
+// On the first message matching {"type":"system","subtype":"init"}, it updates
+// session meta with the model and session_id, then sets *captured to true
+// so subsequent messages skip the check.
+func (m *StreamModule) captureInitMetadata(code string, msg []byte, captured *bool) {
+	if *captured || !bytes.Contains(msg, []byte(`"subtype":"init"`)) {
+		return
+	}
+	var init struct {
+		Type      string `json:"type"`
+		Subtype   string `json:"subtype"`
+		Model     string `json:"model"`
+		SessionID string `json:"session_id"`
+	}
+	if json.Unmarshal(msg, &init) != nil || init.Type != "system" || init.Subtype != "init" {
+		return
+	}
+	*captured = true
+	update := session.MetaUpdate{}
+	if init.Model != "" {
+		update.CCModel = &init.Model
+	}
+	if init.SessionID != "" {
+		update.CCSessionID = &init.SessionID
+	}
+	if update.CCModel != nil || update.CCSessionID != nil {
+		if err := m.sessions.UpdateMeta(code, update); err != nil {
+			log.Printf("stream: init metadata update error: %v", err)
+		}
+		if init.Model != "" {
+			m.core.Events.Broadcast(code, "init", init.Model)
+		}
+	}
+}
+
 // revertModeOnRelayDisconnect reverts the session mode to "term" when a relay
 // disconnects, preventing sessions from being stuck in stream mode.
 func (m *StreamModule) revertModeOnRelayDisconnect(code string) {
@@ -270,33 +277,4 @@ func (m *StreamModule) revertModeOnRelayDisconnect(code string) {
 		}
 		m.core.Events.Broadcast(code, "handoff", "failed:relay disconnected")
 	}
-}
-
-// handoffLocks provides per-session mutual exclusion for handoff operations.
-type handoffLocks struct {
-	mu    sync.Mutex
-	locks map[string]struct{}
-}
-
-func newHandoffLocks() *handoffLocks {
-	return &handoffLocks{locks: make(map[string]struct{})}
-}
-
-// TryLock attempts to acquire a lock for the given key.
-// Returns true if the lock was acquired, false if already held.
-func (h *handoffLocks) TryLock(key string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if _, ok := h.locks[key]; ok {
-		return false
-	}
-	h.locks[key] = struct{}{}
-	return true
-}
-
-// Unlock releases the lock for the given key.
-func (h *handoffLocks) Unlock(key string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	delete(h.locks, key)
 }

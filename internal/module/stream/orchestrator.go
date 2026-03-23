@@ -31,24 +31,29 @@ func (m *StreamModule) runHandoff(sess session.SessionInfo, code, mode, command,
 
 	target := sess.Name + ":0"
 
-	// Step 1: Disconnect existing relay if present
+	// Step 1: Disconnect existing relay if present.
+	// Pre-update mode to "term" so handleCliBridge's defer (revertModeOnRelayDisconnect)
+	// sees mode=="term" and skips the spurious "failed:relay disconnected" broadcast.
+	// Step 9 will set the correct mode after relay connects successfully.
 	if m.bridge.HasRelay(code) {
-		broadcast("stopping-relay")
-		m.bridge.SubscriberToRelay(code, []byte(`{"type":"shutdown"}`))
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			if !m.bridge.HasRelay(code) {
-				break
+		if sess.Mode != "term" {
+			termMode := "term"
+			if err := m.sessions.UpdateMeta(code, session.MetaUpdate{Mode: &termMode}); err != nil {
+				broadcast("failed:meta pre-update error: " + err.Error())
+				return
 			}
-			time.Sleep(500 * time.Millisecond)
 		}
-		if m.bridge.HasRelay(code) {
+		broadcast("stopping-relay")
+		if !m.waitRelayDisconnect(code, 5*time.Second) {
 			broadcast("failed:existing relay did not disconnect")
 			return
 		}
 	}
 
-	// Step 2: Prepare pane
+	// Step 2: Prepare pane for Detect (Step 3).
+	// This is separate from Exit's internal pane prep (which prepares for /exit).
+	// Detect needs a clean pane surface to read CC status from the terminal buffer,
+	// so we exit copy-mode, dismiss any prompts, and cancel any pending input.
 	m.core.Tmux.SendKeysRaw(target, "-X", "cancel")
 	time.Sleep(500 * time.Millisecond)
 	m.core.Tmux.SendKeysRaw(target, "Escape")
@@ -101,28 +106,20 @@ func (m *StreamModule) runHandoff(sess session.SessionInfo, code, mode, command,
 		broadcast("failed:write token file: " + err.Error())
 		return
 	}
-	time.AfterFunc(30*time.Second, func() {
-		os.Remove(tokenFile)
-	})
+	// Relay reads the token file on startup (within seconds), so removing it
+	// when runHandoff returns is safe. defer covers all exit paths including
+	// daemon crash (process exit cleans deferred resources).
+	defer os.Remove(tokenFile)
 
 	relayCmd := fmt.Sprintf("tbox relay --session %s --daemon ws://%s:%d --token-file %s -- %s --resume %s",
 		code, bind, port, tokenFile, command, statusInfo.SessionID)
 	if err := m.core.Tmux.SendKeys(target, relayCmd); err != nil {
-		os.Remove(tokenFile)
 		broadcast("failed:send-keys error: " + err.Error())
 		return
 	}
 
 	// Step 8: Wait for relay to connect (15s timeout)
-	relayDeadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(relayDeadline) {
-		if m.bridge.HasRelay(code) {
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	if !m.bridge.HasRelay(code) {
-		os.Remove(tokenFile)
+	if !m.waitRelayConnect(code, 15*time.Second) {
 		broadcast("failed:relay did not connect within 15s")
 		return
 	}
@@ -183,15 +180,7 @@ func (m *StreamModule) runHandoffToTerm(sess session.SessionInfo, code, handoffI
 	// Step 3: Shutdown relay
 	if m.bridge.HasRelay(code) {
 		broadcast("stopping-relay")
-		m.bridge.SubscriberToRelay(code, []byte(`{"type":"shutdown"}`))
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			if !m.bridge.HasRelay(code) {
-				break
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
-		if m.bridge.HasRelay(code) {
+		if !m.waitRelayDisconnect(code, 5*time.Second) {
 			rollbackMode()
 			broadcast("failed:relay did not disconnect")
 			return
@@ -239,13 +228,42 @@ func (m *StreamModule) runHandoffToTerm(sess session.SessionInfo, code, handoffI
 		return
 	}
 
-	// Step 7: Clear cc_session_id (mode already set to "term" above)
+	// Step 7: Clear cc_session_id (mode already set to "term" above).
+	// At this point, CC is already running in terminal mode — the handoff
+	// functionally succeeded. Only the cleanup (clearing cc_session_id) remains,
+	// so we log any error instead of broadcasting failure.
 	emptyID := ""
 	if err := m.sessions.UpdateMeta(code, session.MetaUpdate{CCSessionID: &emptyID}); err != nil {
-		broadcast("failed:meta update error: " + err.Error())
-		return
+		log.Printf("stream: clear cc_session_id error for %s: %v", code, err)
 	}
 
 	// Step 8: Broadcast success
 	broadcast("connected")
+}
+
+// waitRelayDisconnect sends a shutdown message to the relay and polls until it
+// disconnects or the timeout expires. Returns true if the relay disconnected.
+func (m *StreamModule) waitRelayDisconnect(code string, timeout time.Duration) bool {
+	m.bridge.SubscriberToRelay(code, []byte(`{"type":"shutdown"}`))
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !m.bridge.HasRelay(code) {
+			return true
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return !m.bridge.HasRelay(code)
+}
+
+// waitRelayConnect polls until a relay registers on the bridge or the timeout expires.
+// Returns true if a relay connected within the timeout.
+func (m *StreamModule) waitRelayConnect(code string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if m.bridge.HasRelay(code) {
+			return true
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return m.bridge.HasRelay(code)
 }
