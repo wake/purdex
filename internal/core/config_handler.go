@@ -76,6 +76,7 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Detect.PollInterval != nil && *req.Detect.PollInterval > 0 {
 			c.Cfg.Detect.PollInterval = *req.Detect.PollInterval
+			detectChanged = true
 		}
 	}
 

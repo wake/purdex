@@ -33,6 +33,11 @@ func (sub *EventSubscriber) Send(data []byte) {
 	}
 }
 
+// SendCh returns the send channel for reading in tests.
+func (sub *EventSubscriber) SendCh() <-chan []byte {
+	return sub.send
+}
+
 // EventsBroadcaster manages WebSocket subscribers for session events.
 type EventsBroadcaster struct {
 	mu          sync.RWMutex
@@ -62,9 +67,9 @@ func (eb *EventsBroadcaster) Add(conn *websocket.Conn) *EventSubscriber {
 	go func() {
 		for msg := range sub.send {
 			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				// Write failed — close the connection so the read loop in
-				// HandleSessionEvents unblocks and calls Remove.
-				conn.Close()
+				// Write failed — remove subscriber so it's not a zombie,
+				// then close conn to unblock the read loop in HandleSessionEvents.
+				eb.Remove(sub)
 				return
 			}
 		}
@@ -106,6 +111,30 @@ func (eb *EventsBroadcaster) Broadcast(session, eventType, value string) {
 		default:
 			// Subscriber too slow — drop this message.
 		}
+	}
+}
+
+// AddTestSubscriber creates a subscriber without a WebSocket connection.
+// The subscriber is registered in the subscriber set (HasSubscribers returns true)
+// but has no write pump — messages accumulate in SendCh() for test assertions.
+// Caller must call RemoveTestSubscriber when done.
+func (eb *EventsBroadcaster) AddTestSubscriber() *EventSubscriber {
+	sub := &EventSubscriber{
+		send: make(chan []byte, 64),
+	}
+	eb.mu.Lock()
+	eb.subscribers[sub] = struct{}{}
+	eb.mu.Unlock()
+	return sub
+}
+
+// RemoveTestSubscriber unregisters a test subscriber (no conn to close).
+func (eb *EventsBroadcaster) RemoveTestSubscriber(sub *EventSubscriber) {
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
+	if _, ok := eb.subscribers[sub]; ok {
+		delete(eb.subscribers, sub)
+		close(sub.send)
 	}
 }
 
