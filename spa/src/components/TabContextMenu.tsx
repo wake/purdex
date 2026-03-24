@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Tab } from '../types/tab'
+import { getPrimaryPane } from '../lib/pane-tree'
 
 export type ContextMenuAction =
   | 'viewMode-terminal' | 'viewMode-stream'
@@ -54,11 +55,14 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
     }
   }, [onClose])
 
-  const isSession = tab.type === 'session'
+  const primary = getPrimaryPane(tab.layout)
+  const isSession = primary.content.kind === 'session'
+  const currentMode = isSession ? (primary.content as { kind: 'session'; mode: string }).mode : undefined
+
   const items: (MenuItem | 'separator')[] = [
     // ViewMode section
-    ...(isSession && tab.viewMode !== 'terminal' ? [{ label: '切換至 Terminal', action: 'viewMode-terminal' as const, show: true }] : []),
-    ...(isSession && tab.viewMode !== 'stream' ? [{ label: '切換至 Stream', action: 'viewMode-stream' as const, show: true }] : []),
+    ...(isSession && currentMode !== 'terminal' ? [{ label: '切換至 Terminal', action: 'viewMode-terminal' as const, show: true }] : []),
+    ...(isSession && currentMode !== 'stream' ? [{ label: '切換至 Stream', action: 'viewMode-stream' as const, show: true }] : []),
     ...(isSession ? ['separator' as const] : []),
     // Lock/Pin section
     { label: '鎖定分頁', action: 'lock' as const, show: !tab.locked },

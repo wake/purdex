@@ -1,8 +1,10 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { X, Lock } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
-import { getTabIcon } from '../lib/tab-registry'
-import { isDirty } from '../lib/tab-helpers'
+import { getPaneIcon, getPaneLabel } from '../lib/pane-labels'
+import { getPrimaryPane } from '../lib/pane-tree'
+import { useSessionStore } from '../stores/useSessionStore'
+import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 
 interface Props {
   tab: Tab
@@ -30,8 +32,15 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     opacity: 1,
   }
 
-  const iconName = getTabIcon(tab)
+  const primaryContent = getPrimaryPane(tab.layout).content
+  const iconName = getPaneIcon(primaryContent)
   const IconComponent = iconMap[iconName]
+
+  const sessions = useSessionStore((s) => s.sessions)
+  const workspaces = useWorkspaceStore((s) => s.workspaces)
+  const sessionLookup = { getByCode: (code: string) => sessions.find((s) => s.code === code) }
+  const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
+  const label = getPaneLabel(primaryContent, sessionLookup, workspaceLookup)
 
   const handleMouseEnter = () => onHover?.(tab.id)
   const handleMouseLeave = () => onHover?.(null)
@@ -62,7 +71,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
             ? 'text-white bg-[#272444] border border-[rgba(122,106,170,0.3)]'
             : 'text-gray-500 hover:text-gray-300 bg-[#12122a] hover:bg-[#1a1a32] border border-transparent'
         }`}
-        title={tab.label}
+        title={label}
       >
         {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
         {tab.locked && <Lock size={10} className="absolute bottom-0.5 right-0.5" />}
@@ -97,16 +106,15 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       }`}
     >
       {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
-      <span className="overflow-hidden flex-1 min-w-0 text-left">{tab.label}</span>
-      {isDirty(tab) && <span className="text-amber-400 text-[10px] flex-shrink-0">●</span>}
+      <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
       {tab.locked && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
       {showClose && (
         <span className="absolute right-0 top-0 bottom-0 flex items-center">
-          {/* ① Gradient fade — always visible */}
+          {/* Gradient fade -- always visible */}
           <span className="w-3 self-stretch" style={{ background: `linear-gradient(to right, transparent, ${tabBg})` }} />
-          {/* ② Solid padding after fade (visible when X hidden) */}
+          {/* Solid padding after fade (visible when X hidden) */}
           <span className={`self-stretch ${isActive ? 'w-0' : 'w-1.5 group-hover:w-0'}`} style={{ backgroundColor: tabBg }} />
-          {/* ③ X button — real <button> for a11y (no nested interactive elements) */}
+          {/* X button -- real <button> for a11y (no nested interactive elements) */}
           <button
             type="button"
             tabIndex={-1}
