@@ -1,15 +1,13 @@
-import { getTabRenderer } from '../lib/tab-registry'
+import { PaneLayoutRenderer } from './PaneLayoutRenderer'
 import { useTabAlivePool } from '../hooks/useTabAlivePool'
 import type { Tab } from '../types/tab'
 
 interface Props {
   activeTab: Tab | null
   allTabs: Tab[]
-  wsBase: string
-  daemonBase: string
 }
 
-export function TabContent({ activeTab, allTabs, wsBase, daemonBase }: Props) {
+export function TabContent({ activeTab, allTabs }: Props) {
   const { aliveIds, poolVersion } = useTabAlivePool(
     activeTab?.id ?? null,
     allTabs.map((t) => ({ id: t.id, pinned: t.pinned })),
@@ -31,12 +29,6 @@ export function TabContent({ activeTab, allTabs, wsBase, daemonBase }: Props) {
       {aliveIds.map((id) => {
         const tab = tabMap.get(id)
         if (!tab) return null
-        const config = getTabRenderer(tab.type)
-        if (!config) {
-          if (import.meta.env.DEV) console.warn(`No renderer for tab type: ${tab.type}`)
-          return null
-        }
-        const Renderer = config.component
         const isActive = id === activeTab?.id
         return (
           <div
@@ -44,7 +36,7 @@ export function TabContent({ activeTab, allTabs, wsBase, daemonBase }: Props) {
             className="absolute inset-0"
             style={{ display: isActive ? 'block' : 'none' }}
           >
-            <Renderer tab={tab} isActive={isActive} wsBase={wsBase} daemonBase={daemonBase} />
+            <PaneLayoutRenderer layout={tab.layout} isActive={isActive} />
           </div>
         )
       })}
