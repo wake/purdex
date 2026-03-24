@@ -14,6 +14,14 @@ describe('parseRoute', () => {
     expect(parseRoute('/settings')).toEqual({ kind: 'settings', scope: 'global' })
   })
 
+  it('parses /settings/appearance as global settings', () => {
+    expect(parseRoute('/settings/appearance')).toEqual({ kind: 'settings', scope: 'global' })
+  })
+
+  it('parses /settings/terminal as global settings', () => {
+    expect(parseRoute('/settings/terminal')).toEqual({ kind: 'settings', scope: 'global' })
+  })
+
   it('parses /t/:tabId/:mode', () => {
     expect(parseRoute('/t/abc123/terminal')).toEqual({
       kind: 'session-tab', tabId: 'abc123', mode: 'terminal',

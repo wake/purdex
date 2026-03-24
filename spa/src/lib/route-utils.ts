@@ -18,7 +18,7 @@ function validateMode(mode: string): 'terminal' | 'stream' {
 export function parseRoute(path: string): ParsedRoute | null {
   if (path === '/') return null // no-op — preserves persisted tab state
   if (path === '/history') return { kind: 'history' }
-  if (path === '/settings') return { kind: 'settings', scope: 'global' }
+  if (path === '/settings' || path.startsWith('/settings/')) return { kind: 'settings', scope: 'global' }
 
   const segments = path.split('/').filter(Boolean)
 
