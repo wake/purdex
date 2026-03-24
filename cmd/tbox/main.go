@@ -133,7 +133,7 @@ func runServe(args []string) {
 		if err := c.StopModules(shutdownCtx); err != nil {
 			log.Printf("stop modules: %v", err)
 		}
-		srv.Shutdown(context.Background())
+		srv.Shutdown(shutdownCtx)
 	}()
 
 	log.Printf("tbox daemon listening on %s", addr)

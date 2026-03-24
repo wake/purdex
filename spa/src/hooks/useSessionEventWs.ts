@@ -28,11 +28,11 @@ export function useSessionEventWs(wsBase: string, daemonBase: string) {
               if (sess && sess.mode !== 'term') {
                 fetchHistory(daemonBase, sess.code).then((msgs) => {
                   useStreamStore.getState().loadHistory(event.session, msgs)
-                }).catch(() => { /* history fetch failed — non-critical */ })
+                }).catch((e) => { console.warn('history fetch failed:', e) })
               } else {
                 useStreamStore.getState().clearSession(event.session)
               }
-            }).catch(() => { /* fetchSessions failed — non-critical */ })
+            }).catch((e) => { console.warn('fetchSessions failed:', e) })
           } else if (event.value.startsWith('failed')) {
             store.setHandoffProgress(event.session, '')
             fetchSessions(daemonBase)
