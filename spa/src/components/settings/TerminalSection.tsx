@@ -1,7 +1,12 @@
 import { useUISettingsStore, type TerminalRenderer } from '../../stores/useUISettingsStore'
 import { SettingItem } from './SettingItem'
+import { SegmentControl } from './SegmentControl'
+import { ToggleSwitch } from './ToggleSwitch'
 
-const RENDERER_LABELS: Record<TerminalRenderer, string> = { webgl: 'WebGL', dom: 'DOM' }
+const RENDERER_OPTIONS = [
+  { value: 'webgl' as TerminalRenderer, label: 'WebGL' },
+  { value: 'dom' as TerminalRenderer, label: 'DOM' },
+]
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
@@ -21,12 +26,9 @@ export function TerminalSection() {
   const setRevealDelay = useUISettingsStore((s) => s.setTerminalRevealDelay)
 
   const handleRenderer = (r: TerminalRenderer) => {
-    if (r === renderer) return
     setRenderer(r)
     bumpVersion()
   }
-
-  const renderers: TerminalRenderer[] = ['webgl', 'dom']
 
   return (
     <div>
@@ -34,21 +36,7 @@ export function TerminalSection() {
       <p className="text-xs text-gray-400 mb-6">Terminal rendering and connection settings</p>
 
       <SettingItem label="Renderer" description="WebGL is faster but limited to ~16 instances. DOM has no limit.">
-        <div className="flex">
-          {renderers.map((r) => (
-            <button
-              key={r}
-              onClick={() => handleRenderer(r)}
-              className={`px-4 py-1.5 text-xs border transition-colors cursor-pointer ${
-                r === renderer
-                  ? 'bg-[#1e1e3e] border-[#7a6aaa] text-gray-200'
-                  : 'bg-transparent border-[#404040] text-gray-500 hover:text-gray-300 hover:border-gray-600'
-              } ${r === renderers[0] ? 'rounded-l-md' : ''} ${r === renderers[renderers.length - 1] ? 'rounded-r-md' : ''}`}
-            >
-              {RENDERER_LABELS[r]}
-            </button>
-          ))}
-        </div>
+        <SegmentControl options={RENDERER_OPTIONS} value={renderer} onChange={handleRenderer} />
       </SettingItem>
 
       <SettingItem label="Keep-alive Count" description="Number of background tabs to keep connected (0 = active only)">
@@ -65,21 +53,7 @@ export function TerminalSection() {
       </SettingItem>
 
       <SettingItem label="Keep-alive Pinned" description="Always keep pinned tabs connected">
-        <button
-          role="switch"
-          aria-label="Keep-alive Pinned"
-          aria-checked={keepAlivePinned}
-          onClick={() => setKeepAlivePinned(!keepAlivePinned)}
-          className={`w-9 h-5 rounded-full relative transition-all duration-150 cursor-pointer ${
-            keepAlivePinned ? 'bg-[#7a6aaa]' : 'bg-gray-700'
-          }`}
-        >
-          <span
-            className={`absolute top-0.5 w-4 h-4 rounded-full transition-all duration-150 ${
-              keepAlivePinned ? 'left-[18px] bg-white' : 'left-0.5 bg-gray-400'
-            }`}
-          />
-        </button>
+        <ToggleSwitch label="Keep-alive Pinned" checked={keepAlivePinned} onChange={setKeepAlivePinned} />
       </SettingItem>
 
       <SettingItem label="Reveal Delay" description="Delay before showing terminal content after connection (ms)">
