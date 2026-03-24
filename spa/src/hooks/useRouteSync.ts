@@ -1,5 +1,5 @@
 // spa/src/hooks/useRouteSync.ts
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLocation } from 'wouter'
 import { useTabStore } from '../stores/useTabStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
@@ -12,9 +12,8 @@ export function useRouteSync() {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const setActiveTab = useTabStore((s) => s.setActiveTab)
   const openSingletonTab = useTabStore((s) => s.openSingletonTab)
-  const suppressSync = useRef(false)
 
-  // Fix 1: hydration guard — don't run URL→Tab until persist has hydrated
+  // Hydration guard — don't run URL→Tab until persist has hydrated
   const [hydrated, setHydrated] = useState(useTabStore.persist.hasHydrated())
 
   useEffect(() => {
@@ -22,7 +21,7 @@ export function useRouteSync() {
     return useTabStore.persist.onFinishHydration(() => setHydrated(true))
   }, [hydrated])
 
-  // Fix 3: Tab → URL via derived activeUrl selector
+  // Tab → URL: derived activeUrl selector (idempotent — only sets if URL differs)
   const activeUrl = useTabStore((s) => {
     if (!s.activeTabId) return null
     const tab = s.tabs[s.activeTabId]
@@ -33,14 +32,11 @@ export function useRouteSync() {
   })
 
   useEffect(() => {
-    if (suppressSync.current) {
-      suppressSync.current = false
-      return
-    }
+    if (!hydrated) return
     if (activeUrl && location !== activeUrl) setLocation(activeUrl, { replace: true })
-  }, [activeUrl])
+  }, [activeUrl, hydrated])
 
-  // Fix 5: record visit when activeTab changes
+  // Record visit when activeTab changes
   useEffect(() => {
     if (!hydrated) return
     if (!activeTabId) return
@@ -53,46 +49,55 @@ export function useRouteSync() {
 
   // URL → Tab: when URL changes (back/forward/direct), find or create tab
   useEffect(() => {
-    if (!hydrated) return // Fix 1: guard
+    if (!hydrated) return
 
     const parsed = parseRoute(location)
     if (!parsed) return
 
-    // Fix 2: only set suppressSync inside cases that actually change state
+    // Check if URL already matches the current active tab — avoid redundant state changes
+    const currentTabId = useTabStore.getState().activeTabId
+    if (currentTabId) {
+      const currentTab = useTabStore.getState().tabs[currentTabId]
+      if (currentTab) {
+        const primary = getPrimaryPane(currentTab.layout)
+        if (primary) {
+          const currentUrl = tabToUrl(currentTabId, primary.content)
+          if (currentUrl === location) return // already in sync
+        }
+      }
+    }
+
     switch (parsed.kind) {
       case 'dashboard':
-        suppressSync.current = true
         openSingletonTab({ kind: 'dashboard' })
         break
       case 'history':
-        suppressSync.current = true
         openSingletonTab({ kind: 'history' })
         break
       case 'settings':
-        suppressSync.current = true
         openSingletonTab({ kind: 'settings', scope: 'global' })
         break
       case 'session-tab': {
-        const tab = tabs[parsed.tabId]
+        const tab = useTabStore.getState().tabs[parsed.tabId]
         if (tab) {
-          suppressSync.current = true
           setActiveTab(parsed.tabId)
+        } else {
+          setActiveTab(null) // show empty state
         }
-        // else: tab not found → don't suppress, content area shows new-tab page
         break
       }
       case 'workspace':
         // Workspace activation handled by App — no state change here
         break
       case 'workspace-settings':
-        suppressSync.current = true
         openSingletonTab({ kind: 'settings', scope: { workspaceId: parsed.workspaceId } })
         break
       case 'workspace-session-tab': {
-        const tab = tabs[parsed.tabId]
+        const tab = useTabStore.getState().tabs[parsed.tabId]
         if (tab) {
-          suppressSync.current = true
           setActiveTab(parsed.tabId)
+        } else {
+          setActiveTab(null) // show empty state
         }
         break
       }

@@ -53,6 +53,40 @@ describe('parseRoute', () => {
   it('returns null for unknown routes', () => {
     expect(parseRoute('/unknown/path')).toBeNull()
   })
+
+  describe('ID format validation', () => {
+    it('rejects tabId with uppercase letters', () => {
+      expect(parseRoute('/t/ABC123/terminal')).toBeNull()
+    })
+
+    it('rejects tabId with wrong length', () => {
+      expect(parseRoute('/t/abc12/terminal')).toBeNull()
+      expect(parseRoute('/t/abc1234/terminal')).toBeNull()
+    })
+
+    it('rejects tabId with special characters', () => {
+      expect(parseRoute('/t/abc-23/terminal')).toBeNull()
+    })
+
+    it('rejects workspaceId with invalid format', () => {
+      expect(parseRoute('/w/INVALID')).toBeNull()
+      expect(parseRoute('/w/ws000/settings')).toBeNull()
+    })
+
+    it('rejects workspace-session-tab with invalid IDs', () => {
+      expect(parseRoute('/w/BADID!/t/abc123/terminal')).toBeNull()
+      expect(parseRoute('/w/abc123/t/BADID!/terminal')).toBeNull()
+    })
+
+    it('accepts valid base36 6-char IDs', () => {
+      expect(parseRoute('/t/a1b2c3/terminal')).toEqual({
+        kind: 'session-tab', tabId: 'a1b2c3', mode: 'terminal',
+      })
+      expect(parseRoute('/w/x9y8z7')).toEqual({
+        kind: 'workspace', workspaceId: 'x9y8z7',
+      })
+    })
+  })
 })
 
 describe('tabToUrl', () => {
@@ -83,7 +117,7 @@ describe('tabToUrl', () => {
       .toBe('/w/ws0001/t/abc123/terminal')
   })
 
-  it('generates new-tab fallback URL', () => {
-    expect(tabToUrl('abc123', { kind: 'new-tab' })).toBe('/t/abc123/terminal')
+  it('generates new-tab URL as dashboard', () => {
+    expect(tabToUrl('abc123', { kind: 'new-tab' })).toBe('/')
   })
 })

@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import type { Tab, PaneContent } from '../types/tab'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, findPane, updatePaneInLayout } from '../lib/pane-tree'
+import { contentMatches } from '../lib/pane-utils'
 
 interface TabState {
   tabs: Record<string, Tab>
@@ -12,7 +13,7 @@ interface TabState {
   addTab: (tab: Tab) => void
   openSingletonTab: (content: PaneContent) => string
   closeTab: (id: string) => void
-  setActiveTab: (id: string) => void
+  setActiveTab: (id: string | null) => void
   setViewMode: (tabId: string, paneId: string, mode: 'terminal' | 'stream') => void
   setPaneContent: (tabId: string, paneId: string, content: PaneContent) => void
   splitPane: (tabId: string, paneId: string, direction: 'h' | 'v', content: PaneContent) => void
@@ -20,20 +21,6 @@ interface TabState {
   reorderTabs: (order: string[]) => void
   togglePin: (id: string) => void
   toggleLock: (id: string) => void
-}
-
-function contentMatches(a: PaneContent, b: PaneContent): boolean {
-  if (a.kind !== b.kind) return false
-  if (a.kind === 'session' && b.kind === 'session') {
-    return a.sessionCode === b.sessionCode && a.mode === b.mode
-  }
-  if (a.kind === 'settings' && b.kind === 'settings') {
-    if (typeof a.scope === 'string' && typeof b.scope === 'string') return a.scope === b.scope
-    if (typeof a.scope === 'object' && typeof b.scope === 'object') return a.scope.workspaceId === b.scope.workspaceId
-    return false
-  }
-  // For new-tab, dashboard, history — kind match is sufficient
-  return true
 }
 
 export const useTabStore = create<TabState>()(
@@ -44,11 +31,14 @@ export const useTabStore = create<TabState>()(
       activeTabId: null,
 
       addTab: (tab) =>
-        set((state) => ({
-          tabs: { ...state.tabs, [tab.id]: tab },
-          tabOrder: [...state.tabOrder, tab.id],
-          activeTabId: state.activeTabId ?? tab.id,
-        })),
+        set((state) => {
+          if (state.tabs[tab.id]) return state // dedup guard
+          return {
+            tabs: { ...state.tabs, [tab.id]: tab },
+            tabOrder: [...state.tabOrder, tab.id],
+            activeTabId: state.activeTabId ?? tab.id,
+          }
+        }),
 
       openSingletonTab: (content) => {
         const state = get()
@@ -86,6 +76,7 @@ export const useTabStore = create<TabState>()(
 
       setActiveTab: (id) =>
         set((state) => {
+          if (id === null) return { activeTabId: null }
           if (!state.tabs[id]) return state
           return { activeTabId: id }
         }),
