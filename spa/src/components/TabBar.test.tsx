@@ -1,22 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { TabBar } from './TabBar'
+import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
-import { registerTabRenderer, clearRegistry } from '../lib/tab-registry'
+import { registerPaneRenderer, clearPaneRegistry } from '../lib/pane-registry'
 
 beforeEach(() => {
   cleanup()
-  clearRegistry()
-  registerTabRenderer('session', {
-    component: (() => null) as React.FC,
-    viewModes: ['terminal', 'stream'],
-    defaultViewMode: 'terminal',
-    icon: (tab) => tab.viewMode === 'stream' ? 'ChatCircleDots' : 'TerminalWindow',
-  })
-  registerTabRenderer('editor', {
-    component: (() => null) as React.FC,
-    icon: () => 'File',
-  })
+  clearPaneRegistry()
+  registerPaneRenderer('session', { component: () => null })
+  registerPaneRenderer('dashboard', { component: () => null })
 })
 
 const defaultHandlers = {
@@ -28,36 +21,43 @@ const defaultHandlers = {
   onContextMenu: vi.fn(),
 }
 
+// Helper: create a Tab with a fixed id and specific content
+function makeTab(id: string, content: import('../types/tab').PaneContent, opts?: { pinned?: boolean; locked?: boolean }): Tab {
+  const tab = createTab(content, { pinned: opts?.pinned })
+  return { ...tab, id, locked: opts?.locked ?? false }
+}
+
 const mockTabs: Tab[] = [
-  { id: 't1', type: 'session', label: 'dev-server', icon: 'TerminalWindow', hostId: 'mlab', viewMode: 'terminal', data: { sessionName: 'dev', sessionCode: 'dev001' }, pinned: false, locked: false },
-  { id: 't2', type: 'session', label: 'claude', icon: 'ChatCircleDots', hostId: 'mlab', viewMode: 'stream', data: { sessionName: 'claude', sessionCode: 'cld001' }, pinned: false, locked: false },
-  { id: 't3', type: 'editor', label: 'App.tsx', icon: 'File', hostId: 'mlab', data: { filePath: '/App.tsx', isDirty: true }, pinned: false, locked: false },
+  makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' }),
+  makeTab('t2', { kind: 'session', sessionCode: 'cld001', mode: 'stream' }),
+  makeTab('t3', { kind: 'dashboard' }),
 ]
 
 const pinnedTabs: Tab[] = [
-  { id: 'p1', type: 'session', label: 'pinned-a', icon: 'TerminalWindow', hostId: 'local', viewMode: 'terminal', data: { sessionName: 'a', sessionCode: 'aaa001' }, pinned: true, locked: false },
-  { id: 't1', type: 'session', label: 'normal-b', icon: 'TerminalWindow', hostId: 'local', viewMode: 'terminal', data: { sessionName: 'b', sessionCode: 'bbb001' }, pinned: false, locked: false },
-  { id: 't2', type: 'session', label: 'normal-c', icon: 'TerminalWindow', hostId: 'local', viewMode: 'terminal', data: { sessionName: 'c', sessionCode: 'ccc001' }, pinned: false, locked: false },
+  makeTab('p1', { kind: 'session', sessionCode: 'aaa001', mode: 'terminal' }, { pinned: true }),
+  makeTab('t1', { kind: 'session', sessionCode: 'bbb001', mode: 'terminal' }),
+  makeTab('t2', { kind: 'session', sessionCode: 'ccc001', mode: 'terminal' }),
 ]
 
 describe('TabBar', () => {
   it('renders all tabs', () => {
     render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} />)
-    expect(screen.getByText('dev-server')).toBeTruthy()
-    expect(screen.getByText('claude')).toBeTruthy()
-    expect(screen.getByText('App.tsx')).toBeTruthy()
+    // Session tabs show sessionCode as fallback label (no session store data)
+    expect(screen.getByText('dev001')).toBeTruthy()
+    expect(screen.getByText('cld001')).toBeTruthy()
+    expect(screen.getByText('Dashboard')).toBeTruthy()
   })
 
   it('highlights active tab', () => {
     render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} />)
-    const activeTab = screen.getByText('dev-server').closest('[role="tab"]')!
+    const activeTab = screen.getByText('dev001').closest('[role="tab"]')!
     expect(activeTab.className).toContain('text-white')
   })
 
   it('calls onSelectTab on click', () => {
     const onSelect = vi.fn()
     render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} onSelectTab={onSelect} />)
-    fireEvent.click(screen.getByText('claude'))
+    fireEvent.click(screen.getByText('cld001'))
     expect(onSelect).toHaveBeenCalledWith('t2')
   })
 
@@ -69,29 +69,24 @@ describe('TabBar', () => {
     expect(onClose).toHaveBeenCalledWith('t1')
   })
 
-  it('shows dirty indicator for modified editor tabs', () => {
-    render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} />)
-    const dirtyTab = screen.getByText('App.tsx').closest('[role="tab"]')!
-    expect(dirtyTab.textContent).toContain('●')
-  })
-
   it('renders pinned tabs as icon-only with title', () => {
     render(<TabBar tabs={pinnedTabs} activeTabId="t1" {...defaultHandlers} />)
-    const pinnedBtn = screen.getByTitle('pinned-a')
+    // Pinned tab shows label as title attribute (sessionCode fallback)
+    const pinnedBtn = screen.getByTitle('aaa001')
     expect(pinnedBtn).toBeInTheDocument()
     // Pinned tab should not render label text in the button content
-    expect(pinnedBtn.textContent).not.toContain('pinned-a')
+    expect(pinnedBtn.textContent).not.toContain('aaa001')
   })
 
   it('renders normal tabs with label', () => {
     render(<TabBar tabs={pinnedTabs} activeTabId="t1" {...defaultHandlers} />)
-    expect(screen.getByText('normal-b')).toBeInTheDocument()
-    expect(screen.getByText('normal-c')).toBeInTheDocument()
+    expect(screen.getByText('bbb001')).toBeInTheDocument()
+    expect(screen.getByText('ccc001')).toBeInTheDocument()
   })
 
   it('locked tab hides close button', () => {
     const lockedTabs: Tab[] = [
-      { id: 't1', type: 'session', label: 'locked-tab', icon: 'TerminalWindow', hostId: 'local', viewMode: 'terminal', data: { sessionName: 'x', sessionCode: 'xxx001' }, pinned: false, locked: true },
+      makeTab('t1', { kind: 'session', sessionCode: 'xxx001', mode: 'terminal' }, { locked: true }),
     ]
     render(<TabBar tabs={lockedTabs} activeTabId="t1" {...defaultHandlers} />)
     expect(screen.queryByTitle('關閉分頁')).not.toBeInTheDocument()
@@ -99,12 +94,12 @@ describe('TabBar', () => {
 
   it('shows lock icon on locked non-pinned tab', () => {
     const lockedTabs: Tab[] = [
-      { id: 't1', type: 'session', label: 'locked-tab', icon: 'TerminalWindow', hostId: 'local', viewMode: 'terminal', data: { sessionName: 'x', sessionCode: 'xxx001' }, pinned: false, locked: true },
+      makeTab('t1', { kind: 'session', sessionCode: 'xxx001', mode: 'terminal' }, { locked: true }),
     ]
     render(<TabBar tabs={lockedTabs} activeTabId="t1" {...defaultHandlers} />)
-    expect(screen.getByText('locked-tab')).toBeInTheDocument()
-    // Lock icon rendered — verify SVG with Lock's aria-label or test-id presence
-    const tabBtn = screen.getByText('locked-tab').closest('[role="tab"]')!
+    expect(screen.getByText('xxx001')).toBeInTheDocument()
+    // Lock icon rendered — verify SVG with Lock's presence
+    const tabBtn = screen.getByText('xxx001').closest('[role="tab"]')!
     const svgs = tabBtn.querySelectorAll('svg')
     // Should have at least 2 SVGs: tab icon + lock icon
     expect(svgs.length).toBeGreaterThanOrEqual(2)
@@ -113,7 +108,7 @@ describe('TabBar', () => {
   it('activates tab on Enter key', () => {
     const onSelect = vi.fn()
     render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} onSelectTab={onSelect} />)
-    const tab = screen.getByText('claude').closest('[role="tab"]')!
+    const tab = screen.getByText('cld001').closest('[role="tab"]')!
     fireEvent.keyDown(tab, { key: 'Enter' })
     expect(onSelect).toHaveBeenCalledWith('t2')
   })

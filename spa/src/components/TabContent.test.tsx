@@ -1,53 +1,47 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { TabContent } from './TabContent'
-import { registerTabRenderer, clearRegistry } from '../lib/tab-registry'
-import type { Tab } from '../types/tab'
+import { registerPaneRenderer, clearPaneRegistry } from '../lib/pane-registry'
+import { createTab } from '../types/tab'
+import type { Tab, Pane } from '../types/tab'
 
-const MockSessionRenderer = ({ tab }: { tab: Tab }) => (
-  <div data-testid="session-renderer">Session: {tab.data.sessionName as string}</div>
+const MockSessionRenderer = ({ pane }: { pane: Pane }) => (
+  <div data-testid="session-renderer">Session: {pane.content.kind === 'session' ? pane.content.sessionCode : ''}</div>
 )
-const MockEditorRenderer = ({ tab }: { tab: Tab }) => (
-  <div data-testid="editor-renderer">Editor: {tab.data.filePath as string}</div>
+const MockDashboardRenderer = () => (
+  <div data-testid="dashboard-renderer">Dashboard</div>
 )
 
 beforeEach(() => {
   cleanup()
-  clearRegistry()
-  registerTabRenderer('session', {
-    component: MockSessionRenderer as any,
-    viewModes: ['terminal', 'stream'],
-    defaultViewMode: 'terminal',
-    icon: (tab) => tab.viewMode === 'stream' ? 'ChatCircleDots' : 'Terminal',
-  })
-  registerTabRenderer('editor', {
-    component: MockEditorRenderer as any,
-    icon: () => 'File',
-  })
+  clearPaneRegistry()
+  registerPaneRenderer('session', { component: MockSessionRenderer })
+  registerPaneRenderer('dashboard', { component: MockDashboardRenderer })
 })
 
 const sessionTab: Tab = {
-  id: 't1', type: 'session', label: 'dev', icon: 'Terminal', hostId: 'mlab',
-  viewMode: 'terminal', data: { sessionName: 'dev', sessionCode: 'dev001' }, pinned: false, locked: false,
+  ...createTab({ kind: 'session', sessionCode: 'dev001', mode: 'terminal' }),
+  id: 't1',
 }
-const editorTab: Tab = {
-  id: 't3', type: 'editor', label: 'file.ts', icon: 'File', hostId: 'mlab',
-  data: { filePath: '/file.ts', isDirty: false }, pinned: false, locked: false,
+
+const dashboardTab: Tab = {
+  ...createTab({ kind: 'dashboard' }),
+  id: 't3',
 }
 
 describe('TabContent', () => {
   it('renders registered session renderer', () => {
-    render(<TabContent activeTab={sessionTab} allTabs={[sessionTab]} wsBase="ws://test" daemonBase="http://test" />)
+    render(<TabContent activeTab={sessionTab} allTabs={[sessionTab]} />)
     expect(screen.getByTestId('session-renderer')).toBeTruthy()
   })
 
-  it('renders registered editor renderer', () => {
-    render(<TabContent activeTab={editorTab} allTabs={[editorTab]} wsBase="ws://test" daemonBase="http://test" />)
-    expect(screen.getByTestId('editor-renderer')).toBeTruthy()
+  it('renders registered dashboard renderer', () => {
+    render(<TabContent activeTab={dashboardTab} allTabs={[dashboardTab]} />)
+    expect(screen.getByTestId('dashboard-renderer')).toBeTruthy()
   })
 
   it('renders empty state when no active tab', () => {
-    render(<TabContent activeTab={null} allTabs={[]} wsBase="ws://test" daemonBase="http://test" />)
+    render(<TabContent activeTab={null} allTabs={[]} />)
     expect(screen.getByText(/選擇或建立/)).toBeTruthy()
   })
 })

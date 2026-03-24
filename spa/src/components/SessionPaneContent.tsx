@@ -1,24 +1,27 @@
 import { useCallback } from 'react'
 import TerminalView from './TerminalView'
 import ConversationView from './ConversationView'
-import { getSessionName, getSessionCode } from '../lib/tab-helpers'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useConfigStore } from '../stores/useConfigStore'
 import { handoff } from '../lib/api'
-import type { TabRendererProps } from '../lib/tab-registry'
+import { useHostStore } from '../stores/useHostStore'
+import type { PaneRendererProps } from '../lib/pane-registry'
 
 const EMPTY_PRESETS: Array<{ name: string; command: string }> = []
 
-export function SessionTabContent({ tab, isActive, wsBase, daemonBase }: TabRendererProps) {
-  const sessionName = getSessionName(tab)
-  const sessionCode = getSessionCode(tab)
-  const viewMode = tab.viewMode ?? 'terminal'
+export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
+  const content = pane.content
+  const sessionCode = content.kind === 'session' ? content.sessionCode : ''
+  const mode = content.kind === 'session' ? content.mode : 'terminal'
+
+  const daemonBase = useHostStore((s) => s.getDaemonBase('local'))
+  const wsBase = useHostStore((s) => s.getWsBase('local'))
   const fetchSessions = useSessionStore((s) => s.fetch)
   const streamPresets = useConfigStore((s) => s.config?.stream?.presets ?? EMPTY_PRESETS)
 
   const session = useSessionStore((s) =>
-    s.sessions.find((sess) => sess.name === sessionName) ?? null,
+    s.sessions.find((sess) => sess.code === sessionCode) ?? null,
   )
 
   const handleHandoff = useCallback(async () => {
@@ -46,15 +49,9 @@ export function SessionTabContent({ tab, isActive, wsBase, daemonBase }: TabRend
     }
   }, [session, daemonBase, fetchSessions])
 
-  if (!sessionName || !sessionCode) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-gray-600 text-sm">
-        No session
-      </div>
-    )
-  }
+  if (content.kind !== 'session') return null
 
-  if (viewMode === 'stream') {
+  if (mode === 'stream') {
     return (
       <ConversationView
         sessionCode={sessionCode}
@@ -66,7 +63,7 @@ export function SessionTabContent({ tab, isActive, wsBase, daemonBase }: TabRend
 
   return (
     <TerminalView
-      key={`${tab.id}-${viewMode}`}
+      key={`${pane.id}-${mode}`}
       wsUrl={`${wsBase}/ws/terminal/${encodeURIComponent(sessionCode)}`}
       visible={isActive}
     />

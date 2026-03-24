@@ -1,23 +1,27 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { TabContextMenu } from './TabContextMenu'
+import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
 
-const baseTab: Tab = {
-  id: '1', type: 'session', label: 'test', icon: 'TerminalWindow',
-  hostId: 'local', viewMode: 'terminal', data: { sessionName: 'test', sessionCode: 'tst001' },
-  pinned: false, locked: false,
+function makeSessionTab(mode: 'terminal' | 'stream' = 'terminal', opts?: { pinned?: boolean; locked?: boolean }): Tab {
+  const tab = createTab({ kind: 'session', sessionCode: 'tst001', mode }, { pinned: opts?.pinned })
+  if (opts?.locked) return { ...tab, locked: true }
+  return tab
 }
 
-function renderMenu(overrides?: { tab?: Partial<Tab>; hasDismissedSessions?: boolean; hasOtherUnlocked?: boolean; hasRightUnlocked?: boolean }) {
+function makeNonSessionTab(): Tab {
+  return createTab({ kind: 'new-tab' })
+}
+
+function renderMenu(overrides?: { tab?: Tab; hasOtherUnlocked?: boolean; hasRightUnlocked?: boolean }) {
   const props = {
-    tab: { ...baseTab, ...overrides?.tab } as Tab,
+    tab: overrides?.tab ?? makeSessionTab(),
     position: { x: 100, y: 100 },
     onClose: vi.fn(),
     onAction: vi.fn(),
     hasOtherUnlocked: overrides?.hasOtherUnlocked ?? true,
     hasRightUnlocked: overrides?.hasRightUnlocked ?? true,
-    hasDismissedSessions: overrides?.hasDismissedSessions ?? true,
   }
   render(<TabContextMenu {...props} />)
   return props
@@ -34,13 +38,13 @@ describe('TabContextMenu', () => {
   })
 
   it('shows "切換至 Terminal" for session tab in stream mode', () => {
-    renderMenu({ tab: { viewMode: 'stream' } })
+    renderMenu({ tab: makeSessionTab('stream') })
     expect(screen.getByText('切換至 Terminal')).toBeInTheDocument()
     expect(screen.queryByText('切換至 Stream')).not.toBeInTheDocument()
   })
 
   it('hides viewMode toggle for non-session tab', () => {
-    renderMenu({ tab: { type: 'editor', viewMode: undefined } })
+    renderMenu({ tab: makeNonSessionTab() })
     expect(screen.queryByText('切換至 Stream')).not.toBeInTheDocument()
     expect(screen.queryByText('切換至 Terminal')).not.toBeInTheDocument()
   })
@@ -53,13 +57,13 @@ describe('TabContextMenu', () => {
   })
 
   it('shows "解鎖分頁" for locked non-pinned tab', () => {
-    renderMenu({ tab: { locked: true } })
+    renderMenu({ tab: makeSessionTab('terminal', { locked: true }) })
     expect(screen.getByText('解鎖分頁')).toBeInTheDocument()
     expect(screen.queryByText('鎖定分頁')).not.toBeInTheDocument()
   })
 
   it('shows "解鎖分頁" for pinned + locked tab', () => {
-    renderMenu({ tab: { pinned: true, locked: true } })
+    renderMenu({ tab: makeSessionTab('terminal', { pinned: true, locked: true }) })
     expect(screen.getByText('解鎖分頁')).toBeInTheDocument()
   })
 
@@ -71,14 +75,14 @@ describe('TabContextMenu', () => {
   })
 
   it('shows "取消固定" for pinned tab', () => {
-    renderMenu({ tab: { pinned: true } })
+    renderMenu({ tab: makeSessionTab('terminal', { pinned: true }) })
     expect(screen.getByText('取消固定')).toBeInTheDocument()
     expect(screen.queryByText('固定分頁')).not.toBeInTheDocument()
   })
 
   // --- Close section ---
   it('"關閉分頁" is disabled when locked', () => {
-    renderMenu({ tab: { locked: true } })
+    renderMenu({ tab: makeSessionTab('terminal', { locked: true }) })
     const closeBtn = screen.getByText('關閉分頁').closest('button')!
     expect(closeBtn).toBeDisabled()
   })
@@ -109,17 +113,6 @@ describe('TabContextMenu', () => {
     expect(screen.queryByText('關閉右側分頁')).not.toBeInTheDocument()
   })
 
-  // --- Reopen ---
-  it('shows "重新開啟已關閉的分頁" when hasDismissedSessions', () => {
-    renderMenu({ hasDismissedSessions: true })
-    expect(screen.getByText('重新開啟已關閉的分頁')).toBeInTheDocument()
-  })
-
-  it('hides "重新開啟已關閉的分頁" when no dismissed sessions', () => {
-    renderMenu({ hasDismissedSessions: false })
-    expect(screen.queryByText('重新開啟已關閉的分頁')).not.toBeInTheDocument()
-  })
-
   // --- Action callbacks ---
   it('calls onAction with correct action on click', () => {
     const props = renderMenu()
@@ -129,7 +122,7 @@ describe('TabContextMenu', () => {
   })
 
   it('disabled item does not fire onAction', () => {
-    const props = renderMenu({ tab: { locked: true } })
+    const props = renderMenu({ tab: makeSessionTab('terminal', { locked: true }) })
     fireEvent.click(screen.getByText('關閉分頁'))
     expect(props.onAction).not.toHaveBeenCalled()
   })

@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Tab } from '../types/tab'
+import { getPrimaryPane } from '../lib/pane-tree'
+import { useClickOutside } from '../hooks/useClickOutside'
 
 export type ContextMenuAction =
   | 'viewMode-terminal' | 'viewMode-stream'
   | 'lock' | 'unlock' | 'pin' | 'unpin'
   | 'close' | 'closeOthers' | 'closeRight'
-  | 'reopenClosed'
 
 interface Props {
   tab: Tab
@@ -14,7 +15,6 @@ interface Props {
   onAction: (action: ContextMenuAction) => void
   hasOtherUnlocked: boolean
   hasRightUnlocked: boolean
-  hasDismissedSessions: boolean
 }
 
 interface MenuItem {
@@ -24,7 +24,7 @@ interface MenuItem {
   disabled?: boolean
 }
 
-export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnlocked, hasRightUnlocked, hasDismissedSessions }: Props) {
+export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnlocked, hasRightUnlocked }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const [adjustedPos, setAdjustedPos] = useState(position)
 
@@ -41,24 +41,22 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
     setAdjustedPos({ x, y })
   }, [position])
 
+  useClickOutside(ref, onClose)
+
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
-    }
     const escHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('mousedown', handler)
     document.addEventListener('keydown', escHandler)
-    return () => {
-      document.removeEventListener('mousedown', handler)
-      document.removeEventListener('keydown', escHandler)
-    }
+    return () => document.removeEventListener('keydown', escHandler)
   }, [onClose])
 
-  const isSession = tab.type === 'session'
+  const primary = getPrimaryPane(tab.layout)
+  const isSession = primary.content.kind === 'session'
+  const currentMode = isSession ? (primary.content as { kind: 'session'; mode: string }).mode : undefined
+
   const items: (MenuItem | 'separator')[] = [
     // ViewMode section
-    ...(isSession && tab.viewMode !== 'terminal' ? [{ label: '切換至 Terminal', action: 'viewMode-terminal' as const, show: true }] : []),
-    ...(isSession && tab.viewMode !== 'stream' ? [{ label: '切換至 Stream', action: 'viewMode-stream' as const, show: true }] : []),
+    ...(isSession && currentMode !== 'terminal' ? [{ label: '切換至 Terminal', action: 'viewMode-terminal' as const, show: true }] : []),
+    ...(isSession && currentMode !== 'stream' ? [{ label: '切換至 Stream', action: 'viewMode-stream' as const, show: true }] : []),
     ...(isSession ? ['separator' as const] : []),
     // Lock/Pin section
     { label: '鎖定分頁', action: 'lock' as const, show: !tab.locked },
@@ -70,9 +68,6 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
     { label: '關閉分頁', action: 'close' as const, show: true, disabled: tab.locked },
     { label: '關閉其他分頁', action: 'closeOthers' as const, show: hasOtherUnlocked },
     { label: '關閉右側分頁', action: 'closeRight' as const, show: hasRightUnlocked },
-    'separator',
-    // Reopen
-    { label: '重新開啟已關閉的分頁', action: 'reopenClosed' as const, show: hasDismissedSessions },
   ]
 
   const visibleItems = items.filter((item) => item === 'separator' || item.show)
