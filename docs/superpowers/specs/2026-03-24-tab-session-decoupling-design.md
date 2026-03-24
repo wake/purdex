@@ -91,7 +91,7 @@ type PaneContent =
 | dashboard | 全域唯一 | 建立前掃所有 tab 的所有 pane |
 | history | 全域唯一 | 同上 |
 | settings (global) | 全域唯一 | 同上 |
-| settings (workspace) | 每 workspace 唯一 | 掃該 workspace 的 tabs |
+| settings (workspace) | 每 workspace 唯一 | 全域掃描，以 content deep equal 匹配（scope 含 workspaceId） |
 | session | 不限 | 同一 session 可開多個 pane |
 
 Singleton 檢查封裝在 `openSingletonTab(content: PaneContent)` 中：
@@ -104,7 +104,11 @@ Singleton 檢查封裝在 `openSingletonTab(content: PaneContent)` 中：
 Tab 不儲存 label 和 icon，由 primary pane（layout tree 第一個 leaf）的 content 推導：
 
 ```ts
-function getPaneLabel(content: PaneContent, sessionStore: SessionStore): string {
+function getPaneLabel(
+  content: PaneContent,
+  sessionStore: SessionStore,
+  workspaceStore: WorkspaceStore,
+): string {
   switch (content.kind) {
     case 'session':
       const session = sessionStore.getByCode(content.sessionCode)
@@ -112,7 +116,9 @@ function getPaneLabel(content: PaneContent, sessionStore: SessionStore): string 
     case 'dashboard': return 'Dashboard'
     case 'history': return 'History'
     case 'settings':
-      return content.scope === 'global' ? 'Settings' : `Settings (${content.scope.workspaceId})`
+      if (content.scope === 'global') return 'Settings'
+      const ws = workspaceStore.getById(content.scope.workspaceId)
+      return `Settings — ${ws?.name ?? content.scope.workspaceId}`
   }
 }
 
@@ -292,14 +298,18 @@ Dashboard 為按需建立 — 訪問 `/` 時若不存在就建，不是永遠預
 ### wouter Routes
 
 ```tsx
-<Route path="/history" />
-<Route path="/settings" />
-<Route path="/t/:tabId/:mode" />
-<Route path="/w/:workspaceId" />
-<Route path="/w/:workspaceId/settings" />
-<Route path="/w/:workspaceId/t/:tabId/:mode" />
-<Route path="/" />
+<Route path="/history" />           {/* → openSingletonTab({ kind: 'history' }) */}
+<Route path="/settings" />          {/* → openSingletonTab({ kind: 'settings', scope: 'global' }) */}
+<Route path="/t/:tabId/:mode" />    {/* → findOrCreateSessionTab(tabId, mode) */}
+<Route path="/w/:workspaceId" />    {/* → activateWorkspace → its activeTab */}
+<Route path="/w/:workspaceId/settings" />       {/* → openSingletonTab(workspace settings) */}
+<Route path="/w/:workspaceId/t/:tabId/:mode" /> {/* → activateWorkspace + findOrCreateSessionTab */}
+<Route path="/" />                  {/* → openSingletonTab({ kind: 'dashboard' }) */}
 ```
+
+### URL 參數驗證
+
+`:mode` 值域為 `terminal` | `stream`。無效值 fallback 到 `terminal`。`:tabId` 和 `:workspaceId` 預期為 6 碼 base36，格式不符時顯示 404 或 redirect 到 `/`。
 
 ### 雙向同步（Tab-driven）
 
@@ -420,6 +430,7 @@ App
 
 ```
 使用者關閉 tab
+  → 若 tab.locked → 拒絕關閉，不做任何事
   → historyStore.recordClose(tab, workspaceId?)
   → tabStore.closeTab(id)
   → workspaceStore.removeTab(workspaceId, id)
