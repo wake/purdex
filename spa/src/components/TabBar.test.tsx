@@ -22,7 +22,7 @@ const defaultHandlers = {
 }
 
 // Helper: create a Tab with a fixed id and specific content
-function makeTab(id: string, content: Tab['layout']['type'] extends 'leaf' ? Tab['layout']['pane']['content'] : never, opts?: { pinned?: boolean; locked?: boolean }): Tab {
+function makeTab(id: string, content: import('../types/tab').PaneContent, opts?: { pinned?: boolean; locked?: boolean }): Tab {
   const tab = createTab(content, { pinned: opts?.pinned })
   return { ...tab, id, locked: opts?.locked ?? false }
 }

@@ -4,10 +4,13 @@ import { createTab } from '../types/tab'
 import type { PaneContent } from '../types/tab'
 
 function makeContent(kind: PaneContent['kind'] = 'dashboard'): PaneContent {
-  if (kind === 'session') {
-    return { kind: 'session', sessionCode: 'dev001', mode: 'terminal' }
+  switch (kind) {
+    case 'session': return { kind: 'session', sessionCode: 'dev001', mode: 'terminal' }
+    case 'settings': return { kind: 'settings', scope: 'global' }
+    case 'new-tab': return { kind: 'new-tab' }
+    case 'dashboard': return { kind: 'dashboard' }
+    case 'history': return { kind: 'history' }
   }
-  return { kind }
 }
 
 describe('useHistoryStore', () => {

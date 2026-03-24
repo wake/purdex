@@ -24,10 +24,11 @@ export function getPaneLabel(
       return 'Dashboard'
     case 'history':
       return 'History'
-    case 'settings':
+    case 'settings': {
       if (content.scope === 'global') return 'Settings'
       const ws = workspaceStore.getById(content.scope.workspaceId)
       return `Settings — ${ws?.name ?? content.scope.workspaceId}`
+    }
   }
 }
 

@@ -116,11 +116,11 @@ describe('useTabStore', () => {
   it('setViewMode updates pane mode', () => {
     const tab = makeSessionTab('dev001')
     useTabStore.getState().addTab(tab)
-    const paneId = (tab.layout as any).pane.id
+    const paneId = tab.layout.type === 'leaf' ? tab.layout.pane.id : ''
     useTabStore.getState().setViewMode(tab.id, paneId, 'stream')
     const updated = useTabStore.getState().tabs[tab.id]
-    const content = (updated.layout as any).pane.content
-    expect(content.mode).toBe('stream')
+    const content = updated.layout.type === 'leaf' ? updated.layout.pane.content : undefined
+    expect(content?.kind === 'session' && content.mode).toBe('stream')
   })
 
   it('setViewMode is no-op for nonexistent tab', () => {
