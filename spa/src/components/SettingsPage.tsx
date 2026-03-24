@@ -1,32 +1,32 @@
 import { useLocation } from 'wouter'
 import type { PaneRendererProps } from '../lib/pane-registry'
-import { SettingsSidebar, type SettingsSection } from './settings/SettingsSidebar'
-import { AppearanceSection } from './settings/AppearanceSection'
-import { TerminalSection } from './settings/TerminalSection'
+import { getSettingsSections } from '../lib/settings-section-registry'
+import { SettingsSidebar } from './settings/SettingsSidebar'
 
-const VALID_SECTIONS: SettingsSection[] = ['appearance', 'terminal']
-
-function parseSectionFromPath(path: string): SettingsSection {
+function parseSectionFromPath(path: string): string {
   const segment = path.replace(/^\/settings\/?/, '').split('/')[0]
-  if (VALID_SECTIONS.includes(segment as SettingsSection)) return segment as SettingsSection
-  return 'appearance'
+  const validIds = getSettingsSections().filter((s) => s.component).map((s) => s.id)
+  if (validIds.includes(segment)) return segment
+  return validIds[0] ?? ''
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function SettingsPage(_props: PaneRendererProps) {
   const [location, setLocation] = useLocation()
   const activeSection = parseSectionFromPath(location)
+  const sections = getSettingsSections()
 
-  const handleSelectSection = (section: SettingsSection) => {
+  const handleSelectSection = (section: string) => {
     setLocation(`/settings/${section}`)
   }
+
+  const ActiveComponent = sections.find((s) => s.id === activeSection)?.component
 
   return (
     <div className="flex h-full">
       <SettingsSidebar activeSection={activeSection} onSelectSection={handleSelectSection} />
       <div className="flex-1 overflow-y-auto p-6">
-        {activeSection === 'appearance' && <AppearanceSection />}
-        {activeSection === 'terminal' && <TerminalSection />}
+        {ActiveComponent && <ActiveComponent />}
       </div>
     </div>
   )

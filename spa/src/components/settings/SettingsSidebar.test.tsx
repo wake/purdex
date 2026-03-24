@@ -1,8 +1,19 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { SettingsSidebar } from './SettingsSidebar'
+import { registerSettingsSection, clearSettingsSectionRegistry } from '../../lib/settings-section-registry'
+
+const FakeComponent = () => null
 
 describe('SettingsSidebar', () => {
+  beforeEach(() => {
+    clearSettingsSectionRegistry()
+    registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: FakeComponent })
+    registerSettingsSection({ id: 'terminal', label: 'Terminal', order: 1, component: FakeComponent })
+    registerSettingsSection({ id: 'workspace', label: 'Workspace', order: 10 })
+    registerSettingsSection({ id: 'sync', label: 'Sync', order: 11 })
+  })
+
   it('renders all section items', () => {
     render(<SettingsSidebar activeSection="appearance" onSelectSection={vi.fn()} />)
     expect(screen.getByText('Appearance')).toBeTruthy()
