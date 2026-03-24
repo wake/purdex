@@ -3,8 +3,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { createTab } from '../types/tab'
 import type { PaneRendererProps } from '../lib/pane-registry'
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function HistoryPage({ pane, isActive }: PaneRendererProps) {
+export function HistoryPage({ pane: _pane, isActive: _isActive }: PaneRendererProps) {
   const browseHistory = useHistoryStore((s) => s.browseHistory)
   const tabs = useTabStore((s) => s.tabs)
   const setActiveTab = useTabStore((s) => s.setActiveTab)

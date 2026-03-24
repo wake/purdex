@@ -1,5 +1,10 @@
 import { Plus, GearSix } from '@phosphor-icons/react'
 import type { Tab, Workspace } from '../types/tab'
+import { getPrimaryPane } from '../lib/pane-tree'
+import { getPaneLabel } from '../lib/pane-labels'
+
+const emptySessionLookup = { getByCode: () => undefined }
+const emptyWorkspaceLookup = { getById: () => undefined }
 
 interface Props {
   workspaces: Workspace[]
@@ -47,20 +52,27 @@ export function ActivityBar({
       )}
 
       {/* Standalone tabs */}
-      {standaloneTabs.map((tab) => (
-        <button
-          key={tab.id}
-          title={tab.label}
-          onClick={() => onSelectStandaloneTab(tab.id)}
-          className={`w-8 h-8 rounded-md flex items-center justify-center text-xs cursor-pointer transition-all ${
-            activeStandaloneTabId === tab.id
-              ? 'ring-2 ring-purple-400 bg-gray-800'
-              : 'bg-gray-900 opacity-70 hover:opacity-100'
-          }`}
-        >
-          {tab.label.charAt(0).toUpperCase()}
-        </button>
-      ))}
+      {standaloneTabs.map((tab) => {
+        const label = getPaneLabel(
+          getPrimaryPane(tab.layout).content,
+          emptySessionLookup,
+          emptyWorkspaceLookup,
+        )
+        return (
+          <button
+            key={tab.id}
+            title={label}
+            onClick={() => onSelectStandaloneTab(tab.id)}
+            className={`w-8 h-8 rounded-md flex items-center justify-center text-xs cursor-pointer transition-all ${
+              activeStandaloneTabId === tab.id
+                ? 'ring-2 ring-purple-400 bg-gray-800'
+                : 'bg-gray-900 opacity-70 hover:opacity-100'
+            }`}
+          >
+            {label.charAt(0).toUpperCase()}
+          </button>
+        )
+      })}
 
       {/* Add + Settings */}
       <div className="mt-auto flex flex-col items-center gap-2 pb-1">

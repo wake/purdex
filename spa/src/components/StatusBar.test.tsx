@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { StatusBar } from './StatusBar'
 import { createTab } from '../types/tab'
-import type { Tab } from '../types/tab'
+import type { Tab, PaneContent } from '../types/tab'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 
@@ -10,8 +10,8 @@ import { useHostStore } from '../stores/useHostStore'
 function setupStores() {
   useSessionStore.setState({
     sessions: [
-      { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '' },
-    ] as any,
+      { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+    ],
     activeId: null,
   })
   useHostStore.setState({
@@ -22,7 +22,7 @@ function setupStores() {
   })
 }
 
-function makeTab(id: string, content: Tab['layout']['type'] extends 'leaf' ? Tab['layout']['pane']['content'] : never): Tab {
+function makeTab(id: string, content: PaneContent): Tab {
   const tab = createTab(content)
   return { ...tab, id }
 }

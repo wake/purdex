@@ -1,15 +1,16 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { ActivityBar } from './ActivityBar'
-import type { Workspace } from '../types/tab'
+import { createTab } from '../types/tab'
+import type { Tab, Workspace } from '../types/tab'
 
 const mockWorkspaces: Workspace[] = [
-  { id: 'ws-1', name: 'Project A', color: '#7a6aaa', icon: '🔧', tabs: ['t1', 't2'], activeTabId: 't1', directories: [], sidebarState: { zones: { 'left-outer': { width: 200, mode: 'default' }, 'left-inner': { width: 200, mode: 'default' }, 'right-inner': { width: 200, mode: 'default' }, 'right-outer': { width: 200, mode: 'default' } } } },
-  { id: 'ws-2', name: 'Server', color: '#6aaa7a', icon: '🖥', tabs: ['t3'], activeTabId: 't3', directories: [], sidebarState: { zones: { 'left-outer': { width: 200, mode: 'default' }, 'left-inner': { width: 200, mode: 'default' }, 'right-inner': { width: 200, mode: 'default' }, 'right-outer': { width: 200, mode: 'default' } } } },
+  { id: 'ws-1', name: 'Project A', color: '#7a6aaa', icon: '🔧', tabs: ['t1', 't2'], activeTabId: 't1' },
+  { id: 'ws-2', name: 'Server', color: '#6aaa7a', icon: '🖥', tabs: ['t3'], activeTabId: 't3' },
 ]
 
-const mockStandaloneTabs = [
-  { id: 'st-1', type: 'session' as const, label: 'misc', icon: 'Terminal', hostId: 'mlab', pinned: false, locked: false, data: {} },
+const mockStandaloneTabs: Tab[] = [
+  { ...createTab({ kind: 'session', sessionCode: 'misc', mode: 'terminal' }), id: 'st-1' },
 ]
 
 describe('ActivityBar', () => {
