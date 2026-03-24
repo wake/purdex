@@ -25,7 +25,7 @@ interface UISettings {
    *   （瀏覽器限制通常 8-16 個）
    * - dom：DOM 渲染，效能較低但相容性最好，無 WebGL context 限制，適合 Electron 或低負載場景
    *
-   * 變更後需重啟 terminal 連線（SettingsPanel 的「套用」會自動處理）。
+   * 變更後需重啟 terminal 連線（Settings Terminal section 切換時自動 bump version）。
    */
   terminalRenderer: TerminalRenderer
   setTerminalRenderer: (renderer: TerminalRenderer) => void

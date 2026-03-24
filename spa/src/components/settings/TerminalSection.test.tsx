@@ -53,4 +53,24 @@ describe('TerminalSection', () => {
     fireEvent.change(input, { target: { value: '500' } })
     expect(useUISettingsStore.getState().terminalRevealDelay).toBe(500)
   })
+
+  it('clamps negative keep-alive count to 0', () => {
+    render(<TerminalSection />)
+    const input = screen.getByLabelText('Keep-alive Count')
+    fireEvent.change(input, { target: { value: '-5' } })
+    expect(useUISettingsStore.getState().keepAliveCount).toBe(0)
+  })
+
+  it('clamps reveal delay to 0-2000', () => {
+    render(<TerminalSection />)
+    const input = screen.getByLabelText('Reveal Delay')
+    fireEvent.change(input, { target: { value: '5000' } })
+    expect(useUISettingsStore.getState().terminalRevealDelay).toBe(2000)
+  })
+
+  it('does not bump version when selecting same renderer', () => {
+    render(<TerminalSection />)
+    fireEvent.click(screen.getByText('WebGL')) // already selected
+    expect(useUISettingsStore.getState().terminalSettingsVersion).toBe(0)
+  })
 })

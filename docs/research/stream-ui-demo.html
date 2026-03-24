@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tmux-box Stream Message UI Demo</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, 'SF Pro Text', system-ui, sans-serif;
+    background: #191919; color: #ececec;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    background: #232323; border-bottom: 1px solid #333;
+    padding: 12px 20px; display: flex; align-items: center; gap: 16px;
+  }
+  header h1 { font-size: 14px; font-weight: 600; color: #ccc; }
+  header .badge {
+    font-size: 11px; background: #2a4a2a; color: #6f6; padding: 2px 8px;
+    border-radius: 10px;
+  }
+  .container {
+    flex: 1; overflow-y: auto; padding: 20px 24px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .section-label {
+    font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 1px;
+    margin-top: 28px; padding-bottom: 4px; border-bottom: 1px solid #2a2a2a;
+  }
+
+  /* === User Message Bubble === */
+  .msg-user {
+    align-self: flex-end; max-width: 75%;
+    background: #334a5e; border-radius: 12px 12px 4px 12px;
+    padding: 6px 12px 6px 10px; font-size: 14px; line-height: 1.5;
+    color: #dde8f5;
+  }
+  .msg-command {
+    align-self: flex-end;
+    background: #4a4028; border-radius: 12px 12px 4px 12px;
+    padding: 6px 12px 6px 10px; font-size: 13px; line-height: 1.5;
+    color: #e0d0a0; font-style: italic;
+    font-family: 'SF Mono', Menlo, monospace;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .msg-interrupted {
+    align-self: flex-start;
+    background: #4a3038; border-radius: 12px 12px 4px 12px;
+    padding: 6px 12px 6px 10px; font-size: 13px;
+    color: #eaa; font-style: italic;
+    display: flex; align-items: center;
+  }
+
+  /* === Assistant Message — NO bubble, direct output === */
+  .msg-assistant {
+    align-self: flex-start; max-width: 90%;
+    padding: 2px 0;
+  }
+  .msg-assistant .text-content {
+    font-size: 14px; line-height: 1.7; color: #e0e0e0;
+  }
+  .msg-assistant .text-content p { margin-bottom: 10px; }
+  .msg-assistant .text-content p:last-child { margin-bottom: 0; }
+  .msg-assistant .text-content code {
+    background: #252525; padding: 2px 6px; border-radius: 4px;
+    font-family: 'SF Mono', Menlo, monospace; font-size: 13px;
+    color: #e8a060;
+  }
+  .msg-assistant .text-content pre {
+    background: #1a1a1a; padding: 12px 14px; border-radius: 8px;
+    overflow-x: auto; margin: 10px 0; border: 1px solid #2a2a2a;
+  }
+  .msg-assistant .text-content pre code {
+    padding: 0; background: none; color: #e0e0e0;
+  }
+  .msg-assistant.synthetic .text-content {
+    color: #777; font-style: italic;
+  }
+
+  /* === Thinking Block === */
+  .thinking-block {
+    border-left: 2px solid #444; margin: 6px 0;
+  }
+  .thinking-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; cursor: pointer; user-select: none;
+    font-size: 12px; color: #888;
+  }
+  .thinking-header:hover { color: #bbb; }
+  .thinking-header .chevron {
+    margin-left: auto; transition: transform 0.2s;
+    font-size: 10px;
+  }
+  .thinking-header .chevron.open { transform: rotate(90deg); }
+  .thinking-content {
+    display: none; padding: 4px 10px 8px 10px;
+    font-size: 12px; color: #999; line-height: 1.5;
+    white-space: pre-wrap; font-family: 'SF Mono', Menlo, monospace;
+  }
+  .thinking-content.open { display: block; }
+
+  /* === Tool Use Block — unified icon === */
+  .tool-block {
+    margin: 4px 0; border: 1px solid #2a2a2a; border-radius: 8px;
+    background: #1e1e1e; overflow: hidden;
+  }
+  .tool-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 12px; cursor: pointer; user-select: none;
+    font-size: 13px;
+  }
+  .tool-header:hover { background: #252525; }
+  .tool-header .tool-ph-icon { color: #aaa; font-size: 16px; flex-shrink: 0; }
+  .tool-name { font-weight: 600; color: #ddd; }
+  .tool-summary {
+    font-size: 12px; color: #888; flex: 1;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .tool-chevron {
+    font-size: 10px; color: #777; transition: transform 0.2s;
+  }
+  .tool-chevron.open { transform: rotate(90deg); }
+  .tool-detail {
+    display: none; border-top: 1px solid #2a2a2a;
+    padding: 10px 12px; font-size: 12px;
+    font-family: 'SF Mono', Menlo, monospace;
+    color: #aaa; white-space: pre-wrap; max-height: 300px;
+    overflow-y: auto;
+  }
+  .tool-detail.open { display: block; }
+
+  /* === Tool Result Block === */
+  .tool-result {
+    margin: 4px 0; border: 1px solid #2a302a; border-radius: 8px;
+    background: #1b1f1b; overflow: hidden;
+  }
+  .tool-result-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px; cursor: pointer; user-select: none;
+    font-size: 12px; color: #8bc;
+  }
+  .tool-result-header:hover { background: #1f251f; }
+  .tool-result-content {
+    display: none; border-top: 1px solid #2a302a;
+    padding: 8px 12px; font-size: 12px;
+    font-family: 'SF Mono', Menlo, monospace;
+    color: #9b9; white-space: pre-wrap; max-height: 300px;
+    overflow-y: auto; line-height: 1.4;
+  }
+  .tool-result-content.open { display: block; }
+  .tool-result.error { border-color: #302a2a; background: #1f1b1b; }
+  .tool-result.error .tool-result-header { color: #c77; }
+  .tool-result.error .tool-result-content { color: #c99; }
+
+  /* === Image Block === */
+  .image-block {
+    margin: 4px 0; max-width: 400px;
+  }
+  .image-block .placeholder {
+    width: 300px; height: 180px; background: #252530;
+    border-radius: 8px; border: 1px solid #333;
+    display: flex; align-items: center; justify-content: center;
+    color: #778; font-size: 12px; gap: 8px;
+  }
+  .image-block .label {
+    font-size: 11px; color: #777; margin-top: 4px;
+  }
+
+  /* === System / Status Messages === */
+  .msg-system {
+    align-self: center; background: #1e1e1e; border: 1px solid #2a2a2a;
+    border-radius: 8px; padding: 5px 14px;
+    font-size: 12px; color: #999; text-align: center;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .msg-system.compacting {
+    border-color: #443; color: #cc9;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  /* === Result Summary (in toolbar) === */
+  .result-bar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 20px 5px 20px;
+    font-size: 11.5px; color: #aaa;
+  }
+  .result-bar .stat {
+    display: flex; align-items: center; gap: 3px;
+  }
+  .result-bar .stat .value { font-weight: 600; color: #ccc; }
+  .result-bar .stat .label { color: #aaa; }
+  .result-bar.error .stat .value { color: #e99; }
+  .result-bar.error .stat .label { color: #aaa; }
+  .result-bar .sep { color: #333; }
+
+  /* === Tool Progress === */
+  .tool-progress {
+    align-self: flex-start; display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: #999; padding: 4px 0;
+  }
+  .tool-progress .spinner {
+    width: 14px; height: 14px; border: 2px solid #444;
+    border-top-color: #999; border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Input area — matches StreamInput.tsx */
+  .input-wrapper {
+    margin: 0 8px 8px 8px;
+    border: 1px solid #404040; border-radius: 12px;
+    background: #242424; overflow: hidden;
+    transition: border-color 0.15s;
+  }
+  .input-wrapper:focus-within { border-color: #60a5fa; }
+  .input-wrapper textarea {
+    width: 100%; background: transparent; color: #f5f5f5;
+    padding: 10px 12px; font-size: 14px; outline: none;
+    resize: none; border: none; font-family: inherit;
+    line-height: 1.5;
+  }
+  .input-wrapper textarea::placeholder { color: #666; }
+  .input-toolbar {
+    display: flex; align-items: center; padding: 0 8px 6px 8px;
+  }
+  .input-toolbar .icon-btn {
+    width: 28px; height: 28px; border-radius: 6px; border: none;
+    background: none; color: #666; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+  }
+  .input-toolbar .icon-btn:hover { color: #ddd; background: #333; }
+  .input-toolbar .text-btn {
+    display: flex; align-items: center; gap: 4px;
+    padding: 4px 8px; border-radius: 4px; border: none;
+    background: none; color: #888; cursor: pointer;
+    font-size: 12px; transition: all 0.15s;
+  }
+  .input-toolbar .text-btn:hover { color: #ddd; background: #333; }
+
+  /* Result bar (below input) */
+  .result-bar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 20px 5px 20px;
+    font-size: 11.5px; color: #aaa;
+  }
+  .result-bar .stat {
+    display: flex; align-items: center; gap: 3px;
+  }
+  .result-bar .stat .value { font-weight: 600; color: #ccc; }
+  .result-bar .stat .label { color: #aaa; }
+  .result-bar.error .stat .value { color: #e99; }
+  .result-bar.error .stat .label { color: #aaa; }
+  .result-bar .sep { color: #333; }
+</style>
+</head>
+<body>
+<header>
+  <h1>客服中心</h1>
+  <span class="badge">stream</span>
+  <span style="flex:1"></span>
+  <span style="font-size:11px;color:#777">Stream Message UI Demo v2</span>
+</header>
+
+<div class="container" id="messages">
+
+  <!-- ===== A: ASSISTANT CONTENT BLOCKS ===== -->
+  <div class="section-label">A1: Assistant — Text (Markdown, 無氣泡)</div>
+
+  <div class="msg-assistant">
+    <div class="text-content" id="md1"></div>
+  </div>
+
+  <div class="section-label">A2: Assistant — Tool Use (統一 Phosphor icon)</div>
+
+  <div class="msg-assistant">
+    <div class="tool-block">
+      <div class="tool-header" onclick="toggleDetail(this)">
+        <i class="ph ph-wrench tool-ph-icon"></i>
+        <span class="tool-name">Bash</span>
+        <span class="tool-summary">git status</span>
+        <span class="tool-chevron">▶</span>
+      </div>
+      <div class="tool-detail">{
+  "command": "git status",
+  "description": "Show working tree status"
+}</div>
+    </div>
+  </div>
+
+  <div class="msg-assistant">
+    <div class="tool-block">
+      <div class="tool-header" onclick="toggleDetail(this)">
+        <i class="ph ph-wrench tool-ph-icon"></i>
+        <span class="tool-name">Read</span>
+        <span class="tool-summary">spa/src/components/ConversationView.tsx</span>
+        <span class="tool-chevron">▶</span>
+      </div>
+      <div class="tool-detail">{
+  "file_path": "/Users/wake/Workspace/wake/tmux-box/spa/src/components/ConversationView.tsx"
+}</div>
+    </div>
+  </div>
+
+  <div class="msg-assistant">
+    <div class="tool-block">
+      <div class="tool-header" onclick="toggleDetail(this)">
+        <i class="ph ph-wrench tool-ph-icon"></i>
+        <span class="tool-name">Edit</span>
+        <span class="tool-summary">spa/src/App.tsx — old_string → new_string</span>
+        <span class="tool-chevron">▶</span>
+      </div>
+      <div class="tool-detail">{
+  "file_path": "spa/src/App.tsx",
+  "old_string": "const x = 1",
+  "new_string": "const x = 2"
+}</div>
+    </div>
+  </div>
+
+  <div class="msg-assistant">
+    <div class="tool-block">
+      <div class="tool-header" onclick="toggleDetail(this)">
+        <i class="ph ph-wrench tool-ph-icon"></i>
+        <span class="tool-name">WebFetch</span>
+        <span class="tool-summary">https://dpr.wake.gs/i/PVnJe6+</span>
+        <span class="tool-chevron">▶</span>
+      </div>
+      <div class="tool-detail">{
+  "url": "https://dpr.wake.gs/i/PVnJe6+",
+  "prompt": "Describe the screenshot in detail"
+}</div>
+    </div>
+  </div>
+
+  <div class="msg-assistant">
+    <div class="tool-block">
+      <div class="tool-header" onclick="toggleDetail(this)">
+        <i class="ph ph-wrench tool-ph-icon"></i>
+        <span class="tool-name">Agent</span>
+        <span class="tool-summary">Explore handoff code</span>
+        <span class="tool-chevron">▶</span>
+      </div>
+      <div class="tool-detail">{
+  "description": "Explore handoff code",
+  "prompt": "Thoroughly explore the tmux-box project...",
+  "subagent_type": "Explore"
+}</div>
+    </div>
+  </div>
+
+  <div class="section-label">A3: Assistant — Thinking (可摺疊)</div>
+
+  <div class="msg-assistant">
+    <div class="thinking-block">
+      <div class="thinking-header" onclick="toggleThinking(this)">
+        <i class="ph ph-brain" style="font-size:14px"></i>
+        <span>Thinking...</span>
+        <span class="chevron">▶</span>
+      </div>
+      <div class="thinking-content">The user is asking me to check a screenshot at a URL. Let me fetch that image to understand what they're showing me. They're asking about whether something related to Claude (without tmux) is causing uploads to not work correctly.
+
+Let me first check the screenshot and also understand the project structure.</div>
+    </div>
+    <div class="text-content" id="md2"></div>
+  </div>
+
+  <!-- ===== B: USER CONTENT BLOCKS ===== -->
+  <div class="section-label">B1: User — 純文字 (氣泡)</div>
+
+  <div class="msg-user">
+    檢查一下，這是目前運作中的 claude，是否是這個因素導致沒有正確轉成上傳
+  </div>
+
+  <div class="section-label">B2: User — Tool Result (成功)</div>
+
+  <div class="tool-result">
+    <div class="tool-result-header" onclick="toggleToolResult(this)">
+      <i class="ph ph-check-circle" style="font-size:14px"></i>
+      <span>WebFetch result</span>
+      <span style="margin-left:auto;font-size:10px;color:#698">543 bytes · 1.9s</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-result-content">REDIRECT DETECTED: The URL redirects to a different host.
+
+Original URL: https://dpr.wake.gs/i/PVnJe6+
+Redirect URL: https://cdn-std.droplr.net/files/acc_172661/PVnJe6
+Status: 302 Found
+
+To complete your request, I need to fetch content from the redirected URL.</div>
+  </div>
+
+  <div class="section-label">B2: User — Tool Result (錯誤)</div>
+
+  <div class="tool-result error">
+    <div class="tool-result-header" onclick="toggleToolResult(this)">
+      <i class="ph ph-x-circle" style="font-size:14px"></i>
+      <span>Bash error</span>
+      <span style="margin-left:auto;font-size:10px;color:#987">exit code 1</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-result-content">Error: ENOENT: no such file or directory, open '/Users/wake/nonexistent.txt'</div>
+  </div>
+
+  <div class="section-label">B3: User — Image</div>
+
+  <div class="msg-user">
+    <div class="image-block">
+      <div class="placeholder">
+        <i class="ph ph-image" style="font-size:18px"></i>
+        image/png (35.8 KB)
+      </div>
+      <div class="label">截圖附件</div>
+    </div>
+  </div>
+
+  <div class="section-label">B4: CC Slash Command (使用者輸入，指令樣式)</div>
+
+  <div class="msg-command"><i class="ph-bold ph-terminal-window" style="font-size:14px;color:#c0a060"></i> /exit</div>
+
+  <div class="msg-command"><i class="ph-bold ph-terminal-window" style="font-size:14px;color:#c0a060"></i> /status</div>
+
+  <div class="section-label">B4: User — Interrupted</div>
+
+  <div class="msg-interrupted">
+    <i class="ph ph-prohibit" style="font-size:13px;margin-right:2px"></i> Request interrupted by user
+  </div>
+
+  <!-- ===== C: REAL-TIME STREAM MESSAGES ===== -->
+  <div class="section-label">C6: System — Compacting 狀態</div>
+
+  <div class="msg-system compacting">
+    <i class="ph ph-arrows-clockwise" style="font-size:14px"></i> Context compacting...
+  </div>
+
+  <div class="msg-system">
+    <i class="ph ph-check" style="font-size:14px"></i> Context compacted — 128K → 32K tokens
+  </div>
+
+  <div class="section-label">C8: Tool Progress — 長工具計時</div>
+
+  <div class="tool-progress">
+    <div class="spinner"></div>
+    <span><strong>Bash</strong> running... 12s</span>
+  </div>
+
+  <div class="tool-progress">
+    <div class="spinner"></div>
+    <span><strong>Agent</strong> (Explore) running... 45s</span>
+  </div>
+
+  <div class="section-label">C7: Stream Event — Token 串流 (即時逐字)</div>
+
+  <div class="msg-assistant">
+    <div class="text-content">
+      <span id="streaming-text"></span><span class="cursor" style="display:inline-block;width:2px;height:16px;background:#888;animation:blink 1s infinite;vertical-align:text-bottom;margin-left:1px"></span>
+    </div>
+  </div>
+
+  <div style="height:40px"></div>
+</div>
+
+<!-- Input area (matches StreamInput.tsx) -->
+<div class="input-wrapper">
+  <textarea rows="1" placeholder="Reply..."></textarea>
+  <div class="input-toolbar">
+    <button class="icon-btn" title="Attach file"><i class="ph ph-plus" style="font-size:16px"></i></button>
+    <span style="flex:1"></span>
+    <button class="text-btn"><i class="ph-bold ph-terminal-window-window" style="font-size:14px"></i> Handoff to Term</button>
+  </div>
+</div>
+<!-- C3: Result bar (below input) -->
+<div class="result-bar" id="result-bar-success">
+  <i class="ph ph-folder-open" style="color:#aaa;font-size:13px"></i>
+  <span style="color:#aaa;font-size:11.5px">~/Workspace/tangency/csp-plugin</span>
+  <span class="sep">·</span>
+  <i class="ph ph-git-branch" style="color:#aaa;font-size:13px"></i>
+  <span style="color:#aaa;font-size:11.5px">feature/api-test-tool</span>
+  <span class="sep">·</span>
+  <div class="stat"><span class="value">$0.045</span> <span class="label">cost</span></div>
+  <span class="sep">·</span>
+  <div class="stat"><span class="value">3</span> <span class="label">turns</span></div>
+  <span class="sep">·</span>
+  <div class="stat"><span class="value">12.3s</span></div>
+  <span class="sep">·</span>
+  <div class="stat"><span class="value">5.8K</span> <span class="label">tok (0.6%)</span></div>
+  <span style="flex:1"></span>
+  <button onclick="toggleResultBar()" style="background:none;border:none;color:#555;cursor:pointer;font-size:11px" title="Toggle error example"><i class="ph ph-swap"></i></button>
+</div>
+<div class="result-bar error" id="result-bar-error" style="display:none">
+  <i class="ph ph-folder-open" style="color:#aaa;font-size:13px"></i>
+  <span style="color:#aaa;font-size:11.5px">~/Workspace/tangency/csp-plugin</span>
+  <span class="sep">·</span>
+  <i class="ph ph-git-branch" style="color:#aaa;font-size:13px"></i>
+  <span style="color:#aaa;font-size:11.5px">feature/api-test-tool</span>
+  <span class="sep">·</span>
+  <i class="ph ph-warning" style="color:#d88;font-size:13px"></i>
+  <div class="stat"><span class="value">max_turns</span></div>
+  <span class="sep">·</span>
+  <div class="stat"><span class="value">$0.12</span> <span class="label">cost</span></div>
+  <span class="sep">·</span>
+  <div class="stat"><span class="value">10</span> <span class="label">turns</span></div>
+  <span style="flex:1"></span>
+  <button onclick="toggleResultBar()" style="background:none;border:none;color:#555;cursor:pointer;font-size:11px" title="Toggle success example"><i class="ph ph-swap"></i></button>
+</div>
+
+<style>
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+</style>
+
+<script>
+marked.setOptions({ breaks: true });
+
+document.getElementById('md1').innerHTML = marked.parse(
+  'Let me look at the screenshot and understand the project context.\n\n' +
+  'The issue seems to be related to how `iterm-auto-upload` handles the terminal naming. ' +
+  'Let me check the configuration:\n\n' +
+  '```bash\ncat ~/.config/iterm-auto-upload/config.toml\n```\n\n' +
+  'Based on the screenshot, the process is running **without tmux**, which means the upload trigger might not fire correctly.'
+);
+
+document.getElementById('md2').innerHTML = marked.parse(
+  'Let me look at the screenshot and understand the project context.'
+);
+
+// Streaming text simulation
+const streamText = "讓我分析一下這個問題。首先，我需要確認目前的設定是否正確...";
+let streamIdx = 0;
+const streamEl = document.getElementById('streaming-text');
+function typeChar() {
+  if (streamIdx < streamText.length) {
+    streamEl.textContent += streamText[streamIdx++];
+    setTimeout(typeChar, 40 + Math.random() * 60);
+  }
+}
+setTimeout(typeChar, 1000);
+
+document.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+
+function toggleDetail(header) {
+  const detail = header.nextElementSibling;
+  const chevron = header.querySelector('.tool-chevron');
+  detail.classList.toggle('open');
+  chevron.classList.toggle('open');
+}
+function toggleThinking(header) {
+  const content = header.nextElementSibling;
+  const chevron = header.querySelector('.chevron');
+  content.classList.toggle('open');
+  chevron.classList.toggle('open');
+}
+function toggleResultBar() {
+  const s = document.getElementById('result-bar-success');
+  const e = document.getElementById('result-bar-error');
+  if (s.style.display === 'none') { s.style.display = 'flex'; e.style.display = 'none'; }
+  else { s.style.display = 'none'; e.style.display = 'flex'; }
+}
+function toggleToolResult(header) {
+  const content = header.nextElementSibling;
+  const chevron = header.querySelector('.tool-chevron');
+  content.classList.toggle('open');
+  chevron.classList.toggle('open');
+}
+</script>
+</body>
+</html>

@@ -21,6 +21,7 @@ export function TerminalSection() {
   const setRevealDelay = useUISettingsStore((s) => s.setTerminalRevealDelay)
 
   const handleRenderer = (r: TerminalRenderer) => {
+    if (r === renderer) return
     setRenderer(r)
     bumpVersion()
   }

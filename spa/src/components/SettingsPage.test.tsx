@@ -45,4 +45,10 @@ describe('SettingsPage', () => {
     fireEvent.click(screen.getByText('Terminal'))
     expect(mem.history).toContain('/settings/terminal')
   })
+
+  it('falls back to appearance for invalid section', () => {
+    const mem = memoryLocation({ path: '/settings/nonexistent', record: true })
+    render(<SettingsPage pane={settingsPane} isActive />, { wrapper: createWrapper(mem) })
+    expect(screen.getByText('Visual preferences for the application')).toBeTruthy()
+  })
 })

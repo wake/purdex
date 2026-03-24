@@ -118,6 +118,8 @@ export default function App() {
               useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tabId)
               useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tabId)
             }
+            // Ensure we switch to workspace view (not standalone tab view)
+            handleSelectTab(tabId)
           }}
         />
         <div className="flex-1 flex flex-col min-w-0">
