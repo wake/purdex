@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { parseRoute, tabToUrl } from './route-utils'
 
 describe('parseRoute', () => {
-  it('parses / as dashboard', () => {
-    expect(parseRoute('/')).toEqual({ kind: 'dashboard' })
+  it('/ returns null (no-op, preserves persisted state)', () => {
+    expect(parseRoute('/')).toBeNull()
   })
 
   it('parses /history', () => {
@@ -12,6 +12,14 @@ describe('parseRoute', () => {
 
   it('parses /settings', () => {
     expect(parseRoute('/settings')).toEqual({ kind: 'settings', scope: 'global' })
+  })
+
+  it('parses /settings/appearance as global settings', () => {
+    expect(parseRoute('/settings/appearance')).toEqual({ kind: 'settings', scope: 'global' })
+  })
+
+  it('parses /settings/terminal as global settings', () => {
+    expect(parseRoute('/settings/terminal')).toEqual({ kind: 'settings', scope: 'global' })
   })
 
   it('parses /t/:tabId/:mode', () => {

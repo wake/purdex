@@ -79,14 +79,14 @@ export function ActivityBar({
         <button
           title="新增工作區"
           onClick={onAddWorkspace}
-          className="w-8 h-8 rounded-md flex items-center justify-center text-gray-600 hover:text-gray-400 hover:bg-gray-800 cursor-pointer"
+          className="w-8 h-8 rounded-md flex items-center justify-center text-gray-400 hover:text-gray-300 hover:bg-gray-800 cursor-pointer"
         >
           <Plus size={16} />
         </button>
         <button
           title="設定"
           onClick={onOpenSettings}
-          className="w-8 h-8 rounded-md flex items-center justify-center text-gray-600 hover:text-gray-400 hover:bg-gray-800 cursor-pointer"
+          className="w-8 h-8 rounded-md flex items-center justify-center text-gray-400 hover:text-gray-300 hover:bg-gray-800 cursor-pointer"
         >
           <GearSix size={16} />
         </button>

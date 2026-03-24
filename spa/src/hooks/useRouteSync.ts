@@ -31,9 +31,13 @@ export function useRouteSync() {
     return tabToUrl(s.activeTabId, primary.content)
   })
 
+  // Note: location is intentionally excluded from deps to prevent loops.
+  // The startsWith check prevents overwriting sub-path sections (e.g. /settings/terminal).
   useEffect(() => {
     if (!hydrated) return
-    if (activeUrl && location !== activeUrl) setLocation(activeUrl, { replace: true })
+    if (activeUrl && location !== activeUrl && !location.startsWith(activeUrl + '/')) {
+      setLocation(activeUrl, { replace: true })
+    }
   }, [activeUrl, hydrated])
 
   // Record visit when activeTab changes
@@ -62,15 +66,12 @@ export function useRouteSync() {
         const primary = getPrimaryPane(currentTab.layout)
         if (primary) {
           const currentUrl = tabToUrl(currentTabId, primary.content)
-          if (currentUrl === location) return // already in sync
+          if (currentUrl === location || location.startsWith(currentUrl + '/')) return // already in sync (includes sub-paths)
         }
       }
     }
 
     switch (parsed.kind) {
-      case 'dashboard':
-        openSingletonTab({ kind: 'dashboard' })
-        break
       case 'history':
         openSingletonTab({ kind: 'history' })
         break

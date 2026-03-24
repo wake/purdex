@@ -55,7 +55,7 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
   const viewModes: ('terminal' | 'stream')[] = ['terminal', 'stream']
 
   return (
-    <div className="h-6 bg-[#12122a] border-t border-gray-800 flex items-center px-3 text-[10px] text-gray-600 gap-3 flex-shrink-0">
+    <div className="h-6 bg-[#12122a] border-t border-gray-800 flex items-center px-3 text-[10px] text-gray-600 gap-3 flex-shrink-0 relative z-10">
       <span>{hostName}</span>
       <span>{sessionName}</span>
       <span className={status === 'connected' ? 'text-green-500' : 'text-gray-600'}>
@@ -80,7 +80,7 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
                     onViewModeChange?.(activeTab.id, primary.id, vm)
                     setMenuOpen(false)
                   }}
-                  className={`w-full px-3 py-1 text-left text-[10px] cursor-pointer transition-colors hover:bg-[#2a2a5a] ${vm === viewMode ? 'text-white' : 'text-gray-400'}`}
+                  className={`w-full px-3 py-1 text-left text-[10px] cursor-pointer transition-colors hover:bg-[#3a3a6a] ${vm === viewMode ? 'text-white' : 'text-gray-400'}`}
                 >
                   {vm} {vm === viewMode && '\u2713'}
                 </button>

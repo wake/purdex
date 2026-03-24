@@ -84,12 +84,20 @@ describe('useTabStore', () => {
     expect(useTabStore.getState().activeTabId).toBe(tab.id)
   })
 
-  it('openSingletonTab returns existing tab id if content matches', () => {
-    const content: PaneContent = { kind: 'session', sessionCode: 'dev001', mode: 'terminal' }
+  it('openSingletonTab returns existing tab id if content matches (singleton kinds)', () => {
+    const content: PaneContent = { kind: 'dashboard' }
     const tab = createTab(content)
     useTabStore.getState().addTab(tab)
     const returnedId = useTabStore.getState().openSingletonTab(content)
     expect(returnedId).toBe(tab.id)
+  })
+
+  it('openSingletonTab always creates new tab for session (non-singleton)', () => {
+    const content: PaneContent = { kind: 'session', sessionCode: 'dev001', mode: 'terminal' }
+    const tab = createTab(content)
+    useTabStore.getState().addTab(tab)
+    const returnedId = useTabStore.getState().openSingletonTab(content)
+    expect(returnedId).not.toBe(tab.id) // sessions are never singletons
   })
 
   it('openSingletonTab creates new tab if no match', () => {

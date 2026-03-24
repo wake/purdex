@@ -1,7 +1,6 @@
 import type { PaneContent } from '../types/tab'
 
 export type ParsedRoute =
-  | { kind: 'dashboard' }
   | { kind: 'history' }
   | { kind: 'settings'; scope: 'global' }
   | { kind: 'session-tab'; tabId: string; mode: 'terminal' | 'stream' }
@@ -16,9 +15,9 @@ function validateMode(mode: string): 'terminal' | 'stream' {
 }
 
 export function parseRoute(path: string): ParsedRoute | null {
-  if (path === '/') return { kind: 'dashboard' }
+  if (path === '/') return null // no-op — preserves persisted tab state
   if (path === '/history') return { kind: 'history' }
-  if (path === '/settings') return { kind: 'settings', scope: 'global' }
+  if (path === '/settings' || path.startsWith('/settings/')) return { kind: 'settings', scope: 'global' }
 
   const segments = path.split('/').filter(Boolean)
 

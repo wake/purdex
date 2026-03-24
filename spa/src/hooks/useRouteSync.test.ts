@@ -9,10 +9,12 @@ import { useTabStore } from '../stores/useTabStore'
 import { getPrimaryPane } from '../lib/pane-tree'
 import type { Tab } from '../types/tab'
 
-function makeTab(id: string, contentKind: 'session' | 'dashboard' | 'history', mode?: 'terminal' | 'stream'): Tab {
+function makeTab(id: string, contentKind: 'session' | 'dashboard' | 'history' | 'settings', mode?: 'terminal' | 'stream'): Tab {
   const content = contentKind === 'session'
     ? { kind: 'session' as const, sessionCode: 'test', mode: mode ?? 'terminal' as const }
-    : { kind: contentKind as 'dashboard' | 'history' }
+    : contentKind === 'settings'
+      ? { kind: 'settings' as const, scope: 'global' as const }
+      : { kind: contentKind as 'dashboard' | 'history' }
   return {
     id,
     pinned: false,
@@ -123,18 +125,14 @@ describe('useRouteSync', () => {
     expect(mem.history).toContain('/t/abc123/stream')
   })
 
-  it('dashboard route opens dashboard singleton', () => {
+  it('/ route does not open any tab (no-op)', () => {
     const mem = memoryLocation({ path: '/', record: true })
 
     renderHook(() => useRouteSync(), { wrapper: createWrapper(mem) })
 
     const state = useTabStore.getState()
-    expect(state.tabOrder.length).toBeGreaterThanOrEqual(1)
-    const tabId = state.activeTabId!
-    expect(tabId).toBeTruthy()
-    const tab = state.tabs[tabId]
-    const primary = getPrimaryPane(tab.layout)
-    expect(primary.content.kind).toBe('dashboard')
+    expect(state.tabOrder).toHaveLength(0)
+    expect(state.activeTabId).toBeNull()
   })
 
   it('invalid ID format in URL does not activate any tab', () => {
@@ -144,5 +142,27 @@ describe('useRouteSync', () => {
 
     // parseRoute returns null for invalid IDs — no tab should be activated
     expect(useTabStore.getState().activeTabId).toBeNull()
+  })
+
+  it('does not overwrite /settings/terminal back to /settings', () => {
+    const settingsTab: Tab = {
+      id: 'set001',
+      pinned: false,
+      locked: false,
+      createdAt: Date.now(),
+      layout: { type: 'leaf', pane: { id: 'pane-set001', content: { kind: 'settings', scope: 'global' } } },
+    }
+    resetStore({
+      tabs: { set001: settingsTab },
+      tabOrder: ['set001'],
+      activeTabId: 'set001',
+    })
+
+    const mem = memoryLocation({ path: '/settings/terminal', record: true })
+    renderHook(() => useRouteSync(), { wrapper: createWrapper(mem) })
+
+    // Tab→URL should NOT replace /settings/terminal with /settings
+    const lastPath = mem.history[mem.history.length - 1]
+    expect(lastPath).toBe('/settings/terminal')
   })
 })
