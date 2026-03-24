@@ -1,11 +1,10 @@
 // spa/src/App.tsx — v2 重構：wouter Router + Tab/Pane model
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { Router } from 'wouter'
 import { ActivityBar } from './components/ActivityBar'
 import { TabBar } from './components/TabBar'
 import { TabContent } from './components/TabContent'
 import { StatusBar } from './components/StatusBar'
-import SettingsPanel from './components/SettingsPanel'
 import { useSessionStore } from './stores/useSessionStore'
 import { useConfigStore } from './stores/useConfigStore'
 import { useTabStore } from './stores/useTabStore'
@@ -21,8 +20,6 @@ import { TabContextMenu } from './components/TabContextMenu'
 import type { Tab } from './types/tab'
 
 export default function App() {
-  const [settingsOpen, setSettingsOpen] = useState(false)
-
   // Host store (replaces hardcoded daemonBase)
   const getDaemonBase = useHostStore((s) => s.getDaemonBase)
   const getWsBase = useHostStore((s) => s.getWsBase)
@@ -115,7 +112,7 @@ export default function App() {
           onSelectWorkspace={handleSelectWorkspace}
           onSelectStandaloneTab={handleSelectTab}
           onAddWorkspace={() => {}}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={() => useTabStore.getState().openSingletonTab({ kind: 'settings', scope: 'global' })}
         />
         <div className="flex-1 flex flex-col min-w-0">
           <TabBar
@@ -141,12 +138,6 @@ export default function App() {
             }}
           />
         </div>
-        {settingsOpen && (
-          <SettingsPanel
-            daemonBase={daemonBase}
-            onClose={() => setSettingsOpen(false)}
-          />
-        )}
         {contextMenu && (
           <TabContextMenu
             tab={contextMenu.tab}
