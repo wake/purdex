@@ -22,13 +22,18 @@ describe('SettingItem', () => {
     expect(screen.getByText('Some help text')).toBeTruthy()
   })
 
-  it('applies disabled styling', () => {
+  it('applies disabled styling only to children', () => {
     const { container } = render(
       <SettingItem label="X" disabled>
-        <span />
+        <span data-testid="ctrl" />
       </SettingItem>,
     )
     const wrapper = container.firstChild as HTMLElement
-    expect(wrapper.className).toContain('opacity-50')
+    // Wrapper gets pointer-events-none but NOT opacity-50
+    expect(wrapper.className).toContain('pointer-events-none')
+    expect(wrapper.className).not.toContain('opacity-50')
+    // Children wrapper gets opacity-50
+    const childrenWrapper = screen.getByTestId('ctrl').parentElement!
+    expect(childrenWrapper.className).toContain('opacity-50')
   })
 })

@@ -112,7 +112,13 @@ export default function App() {
           onSelectWorkspace={handleSelectWorkspace}
           onSelectStandaloneTab={handleSelectTab}
           onAddWorkspace={() => {}}
-          onOpenSettings={() => useTabStore.getState().openSingletonTab({ kind: 'settings', scope: 'global' })}
+          onOpenSettings={() => {
+            const tabId = useTabStore.getState().openSingletonTab({ kind: 'settings', scope: 'global' })
+            if (activeWorkspaceId) {
+              useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tabId)
+              useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tabId)
+            }
+          }}
         />
         <div className="flex-1 flex flex-col min-w-0">
           <TabBar
