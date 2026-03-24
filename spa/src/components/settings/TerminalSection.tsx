@@ -14,8 +14,6 @@ function clamp(value: number, min: number, max: number): number {
 
 export function TerminalSection() {
   const renderer = useUISettingsStore((s) => s.terminalRenderer)
-  const setRenderer = useUISettingsStore((s) => s.setTerminalRenderer)
-  const bumpVersion = useUISettingsStore((s) => s.bumpTerminalSettingsVersion)
 
   const keepAliveCount = useUISettingsStore((s) => s.keepAliveCount)
   const setKeepAliveCount = useUISettingsStore((s) => s.setKeepAliveCount)
@@ -26,8 +24,11 @@ export function TerminalSection() {
   const setRevealDelay = useUISettingsStore((s) => s.setTerminalRevealDelay)
 
   const handleRenderer = (r: TerminalRenderer) => {
-    setRenderer(r)
-    bumpVersion()
+    // Atomic: update renderer + bump version in single set() to avoid intermediate state
+    useUISettingsStore.setState((s) => ({
+      terminalRenderer: r,
+      terminalSettingsVersion: s.terminalSettingsVersion + 1,
+    }))
   }
 
   return (

@@ -12,7 +12,7 @@ export function SettingItem({ label, description, disabled, children }: SettingI
         <span className="text-sm text-gray-300">{label}</span>
         {description && <span className="text-xs text-gray-400">{description}</span>}
       </div>
-      <div className={`flex-shrink-0 ${disabled ? 'opacity-50' : ''}`}>{children}</div>
+      <div className={`flex-shrink-0 ${disabled ? 'opacity-50' : ''}`} {...(disabled ? { inert: '' } : {})}>{children}</div>
     </div>
   )
 }

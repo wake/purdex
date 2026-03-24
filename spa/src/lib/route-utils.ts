@@ -1,7 +1,6 @@
 import type { PaneContent } from '../types/tab'
 
 export type ParsedRoute =
-  | { kind: 'dashboard' }
   | { kind: 'history' }
   | { kind: 'settings'; scope: 'global' }
   | { kind: 'session-tab'; tabId: string; mode: 'terminal' | 'stream' }
