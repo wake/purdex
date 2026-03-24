@@ -1,72 +1,137 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useTabStore } from './useTabStore'
-import { createSessionTab, createEditorTab } from '../types/tab'
+import { createTab } from '../types/tab'
+import type { PaneContent } from '../types/tab'
+
+function makeSessionTab(code: string, mode: 'terminal' | 'stream' = 'terminal') {
+  return createTab({ kind: 'session', sessionCode: code, mode })
+}
 
 describe('useTabStore', () => {
   beforeEach(() => {
-    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, dismissedSessions: [] })
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
   })
 
-  it('adds a tab', () => {
-    const tab = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
+  it('addTab adds tab to tabs + tabOrder', () => {
+    const tab = makeSessionTab('dev001')
     useTabStore.getState().addTab(tab)
     const state = useTabStore.getState()
     expect(state.tabs[tab.id]).toEqual(tab)
     expect(state.tabOrder).toContain(tab.id)
   })
 
-  it('sets active tab on add if none active', () => {
-    const tab = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
+  it('addTab sets activeTabId if none active', () => {
+    const tab = makeSessionTab('dev001')
     useTabStore.getState().addTab(tab)
     expect(useTabStore.getState().activeTabId).toBe(tab.id)
   })
 
-  it('does not change active tab when adding second tab', () => {
-    const tab1 = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
-    const tab2 = createSessionTab({ label: 'claude', hostId: 'mlab', sessionName: 'claude', sessionCode: 'cld001', viewMode: 'stream' })
+  it('addTab does not change activeTabId when adding second tab', () => {
+    const tab1 = makeSessionTab('dev001')
+    const tab2 = makeSessionTab('cld001', 'stream')
     useTabStore.getState().addTab(tab1)
     useTabStore.getState().addTab(tab2)
     expect(useTabStore.getState().activeTabId).toBe(tab1.id)
   })
 
-  it('removes a tab', () => {
-    const tab = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
+  it('closeTab removes from tabs + tabOrder', () => {
+    const tab = makeSessionTab('dev001')
     useTabStore.getState().addTab(tab)
-    useTabStore.getState().removeTab(tab.id)
+    useTabStore.getState().closeTab(tab.id)
     expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
     expect(useTabStore.getState().tabOrder).not.toContain(tab.id)
   })
 
-  it('activates next tab when removing active tab', () => {
-    const tab1 = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
-    const tab2 = createSessionTab({ label: 'claude', hostId: 'mlab', sessionName: 'claude', sessionCode: 'cld001', viewMode: 'stream' })
+  it('closeTab on locked tab is no-op', () => {
+    const tab = makeSessionTab('dev001')
+    useTabStore.getState().addTab(tab)
+    useTabStore.getState().toggleLock(tab.id)
+    useTabStore.getState().closeTab(tab.id)
+    expect(useTabStore.getState().tabs[tab.id]).toBeDefined()
+    expect(useTabStore.getState().tabOrder).toContain(tab.id)
+  })
+
+  it('closeTab activates adjacent tab when removing active', () => {
+    const tab1 = makeSessionTab('dev001')
+    const tab2 = makeSessionTab('cld001')
     useTabStore.getState().addTab(tab1)
     useTabStore.getState().addTab(tab2)
     useTabStore.getState().setActiveTab(tab1.id)
-    useTabStore.getState().removeTab(tab1.id)
+    useTabStore.getState().closeTab(tab1.id)
     expect(useTabStore.getState().activeTabId).toBe(tab2.id)
   })
 
-  it('sets activeTabId to null when removing last tab', () => {
-    const tab = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
+  it('closeTab sets null when removing last tab', () => {
+    const tab = makeSessionTab('dev001')
     useTabStore.getState().addTab(tab)
-    useTabStore.getState().removeTab(tab.id)
+    useTabStore.getState().closeTab(tab.id)
     expect(useTabStore.getState().activeTabId).toBeNull()
   })
 
-  it('switches active tab', () => {
-    const tab1 = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
-    const tab2 = createSessionTab({ label: 'claude', hostId: 'mlab', sessionName: 'claude', sessionCode: 'cld001', viewMode: 'stream' })
+  it('setActiveTab updates activeTabId', () => {
+    const tab1 = makeSessionTab('dev001')
+    const tab2 = makeSessionTab('cld001')
     useTabStore.getState().addTab(tab1)
     useTabStore.getState().addTab(tab2)
     useTabStore.getState().setActiveTab(tab2.id)
     expect(useTabStore.getState().activeTabId).toBe(tab2.id)
   })
 
-  it('reorders tabs', () => {
-    const tab1 = createSessionTab({ label: 'a', hostId: 'mlab', sessionName: 'a', sessionCode: 'aaa001' })
-    const tab2 = createSessionTab({ label: 'b', hostId: 'mlab', sessionName: 'b', sessionCode: 'bbb001' })
-    const tab3 = createSessionTab({ label: 'c', hostId: 'mlab', sessionName: 'c', sessionCode: 'ccc001' })
+  it('setActiveTab ignores nonexistent id', () => {
+    const tab = makeSessionTab('dev001')
+    useTabStore.getState().addTab(tab)
+    useTabStore.getState().setActiveTab('nonexistent')
+    expect(useTabStore.getState().activeTabId).toBe(tab.id)
+  })
+
+  it('openSingletonTab returns existing tab id if content matches', () => {
+    const content: PaneContent = { kind: 'session', sessionCode: 'dev001', mode: 'terminal' }
+    const tab = createTab(content)
+    useTabStore.getState().addTab(tab)
+    const returnedId = useTabStore.getState().openSingletonTab(content)
+    expect(returnedId).toBe(tab.id)
+  })
+
+  it('openSingletonTab creates new tab if no match', () => {
+    const content: PaneContent = { kind: 'dashboard' }
+    const returnedId = useTabStore.getState().openSingletonTab(content)
+    expect(useTabStore.getState().tabs[returnedId]).toBeDefined()
+    expect(useTabStore.getState().tabOrder).toContain(returnedId)
+  })
+
+  it('openSingletonTab activates existing tab', () => {
+    const content: PaneContent = { kind: 'dashboard' }
+    const tab = createTab(content)
+    useTabStore.getState().addTab(tab)
+    // add another tab and make it active
+    const tab2 = makeSessionTab('dev001')
+    useTabStore.getState().addTab(tab2)
+    useTabStore.getState().setActiveTab(tab2.id)
+    expect(useTabStore.getState().activeTabId).toBe(tab2.id)
+    // openSingletonTab should activate the existing dashboard tab
+    useTabStore.getState().openSingletonTab(content)
+    expect(useTabStore.getState().activeTabId).toBe(tab.id)
+  })
+
+  it('setViewMode updates pane mode', () => {
+    const tab = makeSessionTab('dev001')
+    useTabStore.getState().addTab(tab)
+    const paneId = (tab.layout as any).pane.id
+    useTabStore.getState().setViewMode(tab.id, paneId, 'stream')
+    const updated = useTabStore.getState().tabs[tab.id]
+    const content = (updated.layout as any).pane.content
+    expect(content.mode).toBe('stream')
+  })
+
+  it('setViewMode is no-op for nonexistent tab', () => {
+    useTabStore.getState().setViewMode('nonexistent', 'pane1', 'stream')
+    expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(0)
+  })
+
+  it('reorderTabs updates tabOrder', () => {
+    const tab1 = makeSessionTab('a')
+    const tab2 = makeSessionTab('b')
+    const tab3 = makeSessionTab('c')
     useTabStore.getState().addTab(tab1)
     useTabStore.getState().addTab(tab2)
     useTabStore.getState().addTab(tab3)
@@ -74,81 +139,10 @@ describe('useTabStore', () => {
     expect(useTabStore.getState().tabOrder).toEqual([tab3.id, tab1.id, tab2.id])
   })
 
-  it('updates tab properties', () => {
-    const tab = createEditorTab({ label: 'file.ts', hostId: 'mlab', filePath: '/file.ts' })
+  it('closeTab is no-op for nonexistent id', () => {
+    const tab = makeSessionTab('dev001')
     useTabStore.getState().addTab(tab)
-    useTabStore.getState().updateTab(tab.id, { data: { ...tab.data, isDirty: true }, label: 'file.ts *' })
-    expect(useTabStore.getState().tabs[tab.id].data.isDirty).toBe(true)
-    expect(useTabStore.getState().tabs[tab.id].label).toBe('file.ts *')
-  })
-
-  it('returns active tab via getActiveTab', () => {
-    const tab = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
-    useTabStore.getState().addTab(tab)
-    expect(useTabStore.getState().getActiveTab()).toEqual(tab)
-  })
-
-  it('ignores setActiveTab with nonexistent id', () => {
-    const tab = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
-    useTabStore.getState().addTab(tab)
-    useTabStore.getState().setActiveTab('nonexistent')
-    expect(useTabStore.getState().activeTabId).toBe(tab.id)
-  })
-
-  it('ignores updateTab with nonexistent id', () => {
-    useTabStore.getState().updateTab('nonexistent', { label: 'ghost' })
-    expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(0)
-  })
-
-  it('removeTab is no-op for nonexistent id', () => {
-    const tab = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
-    useTabStore.getState().addTab(tab)
-    useTabStore.getState().removeTab('nonexistent')
+    useTabStore.getState().closeTab('nonexistent')
     expect(useTabStore.getState().tabOrder).toHaveLength(1)
-  })
-
-  it('dismissTab adds sessionName to dismissedSessions', () => {
-    const tab = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
-    useTabStore.getState().addTab(tab)
-    useTabStore.getState().dismissTab(tab.id)
-    expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
-    expect(useTabStore.getState().dismissedSessions).toContainEqual({ sessionName: 'dev', pinned: false })
-  })
-
-  it('dismissTab is no-op for tab without sessionName', () => {
-    const tab = createEditorTab({ label: 'file.ts', hostId: 'mlab', filePath: '/file.ts' })
-    useTabStore.getState().addTab(tab)
-    useTabStore.getState().dismissTab(tab.id)
-    expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
-    expect(useTabStore.getState().dismissedSessions).toHaveLength(0)
-  })
-
-  it('undismissSession removes sessionName from dismissedSessions', () => {
-    const tab = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
-    useTabStore.getState().addTab(tab)
-    useTabStore.getState().dismissTab(tab.id)
-    expect(useTabStore.getState().dismissedSessions).toContainEqual({ sessionName: 'dev', pinned: false })
-    useTabStore.getState().undismissSession('dev')
-    expect(useTabStore.getState().dismissedSessions).not.toContainEqual({ sessionName: 'dev', pinned: false })
-  })
-
-  it('isSessionDismissed returns correct value', () => {
-    const tab = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
-    useTabStore.getState().addTab(tab)
-    expect(useTabStore.getState().isSessionDismissed('dev')).toBe(false)
-    useTabStore.getState().dismissTab(tab.id)
-    expect(useTabStore.getState().isSessionDismissed('dev')).toBe(true)
-  })
-
-  it('setViewMode updates tab viewMode', () => {
-    const tab = createSessionTab({ label: 'dev', hostId: 'mlab', sessionName: 'dev', sessionCode: 'dev001' })
-    useTabStore.getState().addTab(tab)
-    useTabStore.getState().setViewMode(tab.id, 'stream')
-    expect(useTabStore.getState().tabs[tab.id].viewMode).toBe('stream')
-  })
-
-  it('setViewMode is no-op for nonexistent tab', () => {
-    useTabStore.getState().setViewMode('nonexistent', 'stream')
-    expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(0)
   })
 })
