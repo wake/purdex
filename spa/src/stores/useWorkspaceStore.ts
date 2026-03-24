@@ -18,7 +18,7 @@ interface WorkspaceState {
 }
 
 function createDefaultState() {
-  const defaultWs = createWorkspace({ name: 'Default', color: '#7a6aaa' })
+  const defaultWs = createWorkspace('Default', '#7a6aaa')
   return { workspaces: [defaultWs], activeWorkspaceId: defaultWs.id }
 }
 
@@ -28,7 +28,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       ...createDefaultState(),
 
       addWorkspace: (name, opts) => {
-        const ws = createWorkspace({ name, ...opts })
+        const ws = createWorkspace(name, opts?.color)
         set((state) => ({ workspaces: [...state.workspaces, ws] }))
         return ws
       },
@@ -87,7 +87,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       reset: () => set(createDefaultState()),
     }),
     {
-      name: 'tbox-workspaces',
+      name: 'tbox-v2-workspaces',
+      version: 1,
       partialize: (state) => ({
         workspaces: state.workspaces,
         activeWorkspaceId: state.activeWorkspaceId,
