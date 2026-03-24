@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
+import { useClickOutside } from '../hooks/useClickOutside'
 
 export type ContextMenuAction =
   | 'viewMode-terminal' | 'viewMode-stream'
@@ -40,17 +41,12 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
     setAdjustedPos({ x, y })
   }, [position])
 
+  useClickOutside(ref, onClose)
+
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
-    }
     const escHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('mousedown', handler)
     document.addEventListener('keydown', escHandler)
-    return () => {
-      document.removeEventListener('mousedown', handler)
-      document.removeEventListener('keydown', escHandler)
-    }
+    return () => document.removeEventListener('keydown', escHandler)
   }, [onClose])
 
   const primary = getPrimaryPane(tab.layout)

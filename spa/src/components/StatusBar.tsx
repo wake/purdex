@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { CaretUp } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
+import { useClickOutside } from '../hooks/useClickOutside'
 
 interface Props {
   activeTab: Tab | null
@@ -22,16 +23,8 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
   const sessions = useSessionStore((s) => s.sessions)
   const defaultHost = useHostStore((s) => s.defaultHost)
 
-  useEffect(() => {
-    if (!menuOpen) return
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [menuOpen])
+  const closeMenu = useCallback(() => setMenuOpen(false), [])
+  useClickOutside(menuRef, closeMenu)
 
   if (!activeTab) {
     return (
