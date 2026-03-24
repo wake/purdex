@@ -25,24 +25,24 @@ export function SessionTabContent({ tab, isActive, wsBase, daemonBase }: TabRend
     if (!session) return
     try {
       const preset = streamPresets[0]?.name ?? 'cc'
-      useStreamStore.getState().setHandoffProgress(session.name, 'starting')
+      useStreamStore.getState().setHandoffProgress(session.code, 'starting')
       await handoff(daemonBase, session.code, 'stream', preset)
       await fetchSessions(daemonBase)
     } catch (e) {
       console.error('Handoff failed:', e)
-      useStreamStore.getState().setHandoffProgress(session.name, '')
+      useStreamStore.getState().setHandoffProgress(session.code, '')
     }
   }, [session, daemonBase, fetchSessions, streamPresets])
 
   const handleHandoffToTerm = useCallback(async () => {
     if (!session) return
     try {
-      useStreamStore.getState().setHandoffProgress(session.name, 'starting')
+      useStreamStore.getState().setHandoffProgress(session.code, 'starting')
       await handoff(daemonBase, session.code, 'term')
       await fetchSessions(daemonBase)
     } catch (e) {
       console.error('Handoff to term failed:', e)
-      useStreamStore.getState().setHandoffProgress(session.name, '')
+      useStreamStore.getState().setHandoffProgress(session.code, '')
     }
   }, [session, daemonBase, fetchSessions])
 
@@ -57,7 +57,7 @@ export function SessionTabContent({ tab, isActive, wsBase, daemonBase }: TabRend
   if (viewMode === 'stream') {
     return (
       <ConversationView
-        sessionName={sessionName}
+        sessionCode={sessionCode}
         onHandoff={handleHandoff}
         onHandoffToTerm={handleHandoffToTerm}
       />

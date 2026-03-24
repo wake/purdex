@@ -57,8 +57,8 @@ export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSe
         <div className="space-y-1">
           {sessions.length === 0 && <p className="text-sm text-gray-500">No sessions</p>}
           {sessions.map((s) => {
-            const status = sessionStatus[s.name]
-              ? mapStatus(sessionStatus[s.name])
+            const status = sessionStatus[s.code]
+              ? mapStatus(sessionStatus[s.code])
               : deriveStatus(s.mode)
             return (
               <button
