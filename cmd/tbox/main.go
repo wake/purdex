@@ -166,7 +166,7 @@ func runRelay(args []string) {
 	wsURL := fmt.Sprintf("%s/ws/cli-bridge/%s", *daemon, *session)
 
 	r := &relay.Relay{
-		SessionName: *session,
+		SessionCode: *session,
 		DaemonURL:   wsURL,
 		Token:       token,
 		TokenFile:   *tokenFile,

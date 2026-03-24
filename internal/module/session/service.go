@@ -139,10 +139,7 @@ func (m *SessionModule) HandleTerminalWS(w http.ResponseWriter, r *http.Request,
 
 	// Build tmux attach-session command and args.
 	target := info.Name
-	args := []string{"attach-session", "-t", target}
-	if sizingMode == "terminal-first" {
-		args = append(args, "-f", "ignore-size")
-	}
+	args := buildTerminalRelayArgs(target, sizingMode)
 
 	relay := terminal.NewRelay("tmux", args, "/")
 
@@ -179,4 +176,23 @@ func (m *SessionModule) HandleTerminalWS(w http.ResponseWriter, r *http.Request,
 	}
 
 	relay.HandleWebSocket(w, r)
+}
+
+// buildTerminalRelayArgs returns the tmux attach-session args for the given sizing mode.
+func buildTerminalRelayArgs(target, sizingMode string) []string {
+	args := []string{"attach-session", "-t", target}
+	if sizingMode == "terminal-first" {
+		args = append(args, "-f", "ignore-size")
+	}
+	return args
+}
+
+// windowSizeForMode returns the window-size option value for the given sizing mode.
+func windowSizeForMode(sizingMode string) string {
+	switch sizingMode {
+	case "minimal-first":
+		return "smallest"
+	default:
+		return "latest"
+	}
 }
