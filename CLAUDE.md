@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Repo: `git@github.com:wake/tmux-box.git`
 - 主分支: `main`
-- 開發分支: `v1`（Phase 1 完成，Phase 2 待規劃）
+- 開發分支: `v1`（Phase 1.6b 完成，下一步 1.6c 多 Host 管理）
 
 ## 開發環境
 

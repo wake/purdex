@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { parseRoute, tabToUrl } from './route-utils'
 
 describe('parseRoute', () => {
-  it('parses / as dashboard', () => {
-    expect(parseRoute('/')).toEqual({ kind: 'dashboard' })
+  it('/ returns null (no-op, preserves persisted state)', () => {
+    expect(parseRoute('/')).toBeNull()
   })
 
   it('parses /history', () => {

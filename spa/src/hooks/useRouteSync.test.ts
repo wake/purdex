@@ -123,18 +123,14 @@ describe('useRouteSync', () => {
     expect(mem.history).toContain('/t/abc123/stream')
   })
 
-  it('dashboard route opens dashboard singleton', () => {
+  it('/ route does not open any tab (no-op)', () => {
     const mem = memoryLocation({ path: '/', record: true })
 
     renderHook(() => useRouteSync(), { wrapper: createWrapper(mem) })
 
     const state = useTabStore.getState()
-    expect(state.tabOrder.length).toBeGreaterThanOrEqual(1)
-    const tabId = state.activeTabId!
-    expect(tabId).toBeTruthy()
-    const tab = state.tabs[tabId]
-    const primary = getPrimaryPane(tab.layout)
-    expect(primary.content.kind).toBe('dashboard')
+    expect(state.tabOrder).toHaveLength(0)
+    expect(state.activeTabId).toBeNull()
   })
 
   it('invalid ID format in URL does not activate any tab', () => {

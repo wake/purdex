@@ -157,7 +157,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
             {normalTabs.length > 0 && <TabSeparator show={(() => { const lastId = normalTabs[normalTabs.length - 1]?.id; return lastId !== activeTabId && lastId !== hoveredTabId })()} />}
             <button
               onClick={onAddTab}
-              className="flex items-center justify-center w-7 h-7 text-gray-600 hover:text-gray-400 cursor-pointer flex-shrink-0"
+              className="flex items-center justify-center w-7 h-7 rounded-md text-gray-400 hover:text-gray-300 hover:bg-white/10 cursor-pointer flex-shrink-0"
               title="新增分頁"
               style={{ marginTop: 2 }}
             >

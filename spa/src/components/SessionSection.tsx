@@ -14,14 +14,14 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
       {sessions.map((session) => (
         <button
           key={session.code}
-          className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/5 text-left text-sm text-gray-300 transition-colors"
+          className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/10 text-left text-sm text-gray-300 cursor-pointer transition-colors"
           onClick={() =>
             onSelect({ kind: 'session', sessionCode: session.code, mode: 'terminal' })
           }
         >
-          <TerminalWindow size={16} className="text-gray-500 flex-shrink-0" />
+          <TerminalWindow size={16} className="text-gray-400 flex-shrink-0" />
           <span className="truncate">{session.name}</span>
-          <span className="text-xs text-gray-600 ml-auto">{session.code}</span>
+          <span className="text-xs text-gray-400 ml-auto">{session.code}</span>
         </button>
       ))}
     </div>

@@ -68,9 +68,6 @@ export function useRouteSync() {
     }
 
     switch (parsed.kind) {
-      case 'dashboard':
-        openSingletonTab({ kind: 'dashboard' })
-        break
       case 'history':
         openSingletonTab({ kind: 'history' })
         break
