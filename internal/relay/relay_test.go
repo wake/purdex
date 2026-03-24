@@ -44,7 +44,7 @@ func TestRelayBridgesStdinStdout(t *testing.T) {
 	defer cancel()
 
 	r := &Relay{
-		SessionName: "test",
+		SessionCode: "test",
 		DaemonURL:   wsURL,
 		Token:       "",
 		Command:     []string{"cat"},

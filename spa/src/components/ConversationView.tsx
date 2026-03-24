@@ -20,7 +20,7 @@ import HandoffButton from './HandoffButton'
 import { Prohibit, TerminalWindow } from '@phosphor-icons/react'
 
 interface Props {
-  sessionName: string
+  sessionCode: string
   onHandoff?: () => void
   onHandoffToTerm?: () => void
 }
@@ -28,21 +28,21 @@ interface Props {
 const EMPTY_MESSAGES: StreamMessage[] = []
 const EMPTY_CONTROLS: ControlRequest[] = []
 
-export default function ConversationView({ sessionName, onHandoff, onHandoffToTerm }: Props) {
+export default function ConversationView({ sessionCode, onHandoff, onHandoffToTerm }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const dragCounter = useRef(0)
 
-  // Read per-session state from store
-  const messages = useStreamStore((s) => s.sessions[sessionName]?.messages ?? EMPTY_MESSAGES)
-  const pendingControlRequests = useStreamStore((s) => s.sessions[sessionName]?.pendingControlRequests ?? EMPTY_CONTROLS)
-  const isStreaming = useStreamStore((s) => s.sessions[sessionName]?.isStreaming ?? false)
-  const conn = useStreamStore((s) => s.sessions[sessionName]?.conn ?? null)
-  const relayConnected = useStreamStore((s) => s.relayStatus[sessionName] ?? false)
-  const handoffProgress = useStreamStore((s) => s.handoffProgress[sessionName] ?? '')
-  const sessionStatus = useStreamStore((s) => s.sessionStatus[sessionName])
+  // Read per-session state from store (keyed by session code)
+  const messages = useStreamStore((s) => s.sessions[sessionCode]?.messages ?? EMPTY_MESSAGES)
+  const pendingControlRequests = useStreamStore((s) => s.sessions[sessionCode]?.pendingControlRequests ?? EMPTY_CONTROLS)
+  const isStreaming = useStreamStore((s) => s.sessions[sessionCode]?.isStreaming ?? false)
+  const conn = useStreamStore((s) => s.sessions[sessionCode]?.conn ?? null)
+  const relayConnected = useStreamStore((s) => s.relayStatus[sessionCode] ?? false)
+  const handoffProgress = useStreamStore((s) => s.handoffProgress[sessionCode] ?? '')
+  const sessionStatus = useStreamStore((s) => s.sessionStatus[sessionCode])
 
   // ThinkingIndicator: visible when streaming and no assistant messages yet
   const hasAssistantMessage = messages.some((m) => m.type === 'assistant')
@@ -60,7 +60,7 @@ export default function ConversationView({ sessionName, onHandoff, onHandoffToTe
       type: 'user',
       message: { role: 'user', content: text },
     })
-    useStreamStore.getState().addMessage(sessionName, {
+    useStreamStore.getState().addMessage(sessionCode, {
       type: 'user' as const,
       message: {
         role: 'user',
@@ -68,25 +68,25 @@ export default function ConversationView({ sessionName, onHandoff, onHandoffToTe
         stop_reason: null,
       },
     } as StreamMessage)
-    useStreamStore.getState().setStreaming(sessionName, true)
+    useStreamStore.getState().setStreaming(sessionCode, true)
     setAttachedFiles([])
-  }, [conn, sessionName])
+  }, [conn, sessionCode])
 
   const handleAllow = useCallback((req: ControlRequest) => {
     conn?.sendControlResponse(req.request_id, {
       behavior: 'allow',
       updatedInput: req.request.input,
     })
-    useStreamStore.getState().resolveControlRequest(sessionName, req.request_id)
-  }, [conn, sessionName])
+    useStreamStore.getState().resolveControlRequest(sessionCode, req.request_id)
+  }, [conn, sessionCode])
 
   const handleDeny = useCallback((req: ControlRequest) => {
     conn?.sendControlResponse(req.request_id, {
       behavior: 'deny',
       message: 'User denied',
     })
-    useStreamStore.getState().resolveControlRequest(sessionName, req.request_id)
-  }, [conn, sessionName])
+    useStreamStore.getState().resolveControlRequest(sessionCode, req.request_id)
+  }, [conn, sessionCode])
 
   const handleAskAnswer = useCallback((req: ControlRequest, answer: string) => {
     const input = req.request.input as Record<string, unknown> | undefined
@@ -101,8 +101,8 @@ export default function ConversationView({ sessionName, onHandoff, onHandoffToTe
         answers: { [questionText]: answer },
       },
     })
-    useStreamStore.getState().resolveControlRequest(sessionName, req.request_id)
-  }, [conn, sessionName])
+    useStreamStore.getState().resolveControlRequest(sessionCode, req.request_id)
+  }, [conn, sessionCode])
 
   const handleRemoveFile = useCallback((index: number) => {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index))
@@ -171,9 +171,9 @@ export default function ConversationView({ sessionName, onHandoff, onHandoffToTe
     if (onHandoff) {
       onHandoff()
     } else {
-      useStreamStore.getState().setHandoffProgress(sessionName, 'starting')
+      useStreamStore.getState().setHandoffProgress(sessionCode, 'starting')
     }
-  }, [onHandoff, sessionName])
+  }, [onHandoff, sessionCode])
 
   // Show HandoffButton when relay is not connected (idle or handoff in progress)
   if (!relayConnected) {
@@ -221,7 +221,7 @@ export default function ConversationView({ sessionName, onHandoff, onHandoffToTe
           </div>
         )}
         {messages.map((msg, i) => {
-          const key = `${sessionName}-${i}`
+          const key = `${sessionCode}-${i}`
 
           // --- Assistant messages ---
           if (msg.type === 'assistant' && 'message' in msg) {

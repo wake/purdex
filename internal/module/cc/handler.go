@@ -23,6 +23,8 @@ func (m *CCModule) handleHistory(w http.ResponseWriter, r *http.Request) {
 	messages, err := m.GetHistory(sess.Cwd, sess.CCSessionID)
 	if err != nil {
 		log.Printf("history: code=%s: %v", code, err)
+		http.Error(w, "failed to read history", http.StatusInternalServerError)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(messages)

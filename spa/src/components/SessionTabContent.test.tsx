@@ -9,8 +9,8 @@ vi.mock('./TerminalView', () => ({
   ),
 }))
 vi.mock('./ConversationView', () => ({
-  default: ({ sessionName }: { sessionName: string }) => (
-    <div data-testid="conversation-view">Stream: {sessionName}</div>
+  default: ({ sessionCode }: { sessionCode: string }) => (
+    <div data-testid="conversation-view">Stream: {sessionCode}</div>
   ),
 }))
 

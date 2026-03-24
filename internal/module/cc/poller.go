@@ -74,6 +74,7 @@ func (m *CCModule) startPoller(ctx context.Context) {
 func (m *CCModule) sendStatusSnapshot(sub *core.EventSubscriber) {
 	sessions, err := m.sessions.ListSessions()
 	if err != nil {
+		log.Printf("status snapshot: list sessions: %v", err)
 		return
 	}
 	for _, sess := range sessions {

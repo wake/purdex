@@ -19,7 +19,7 @@ import (
 // via WebSocket. Subprocess stdout is read line-by-line to preserve NDJSON
 // boundaries and tee'd to stderr for terminal visibility.
 type Relay struct {
-	SessionName string
+	SessionCode string
 	DaemonURL   string
 	Token       string
 	TokenFile   string // If set and Token is empty, read token from this file then delete it.

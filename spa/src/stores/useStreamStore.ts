@@ -28,7 +28,7 @@ interface StreamStore {
   // Per-session state
   sessions: Record<string, PerSessionState>
 
-  // Global state (keyed by session name but not part of PerSessionState)
+  // Global state (keyed by session code but not part of PerSessionState)
   sessionStatus: Record<string, SessionStatus>
   relayStatus: Record<string, boolean>
   handoffProgress: Record<string, string>

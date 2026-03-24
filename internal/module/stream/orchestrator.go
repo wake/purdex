@@ -54,11 +54,17 @@ func (m *StreamModule) runHandoff(sess session.SessionInfo, code, mode, command,
 	// This is separate from Exit's internal pane prep (which prepares for /exit).
 	// Detect needs a clean pane surface to read CC status from the terminal buffer,
 	// so we exit copy-mode, dismiss any prompts, and cancel any pending input.
-	m.core.Tmux.SendKeysRaw(target, "-X", "cancel")
+	if err := m.core.Tmux.SendKeysRaw(target, "-X", "cancel"); err != nil {
+		log.Printf("handoff: pane prep cancel (%s): %v", target, err)
+	}
 	time.Sleep(500 * time.Millisecond)
-	m.core.Tmux.SendKeysRaw(target, "Escape")
+	if err := m.core.Tmux.SendKeysRaw(target, "Escape"); err != nil {
+		log.Printf("handoff: pane prep escape (%s): %v", target, err)
+	}
 	time.Sleep(500 * time.Millisecond)
-	m.core.Tmux.SendKeysRaw(target, "C-c")
+	if err := m.core.Tmux.SendKeysRaw(target, "C-c"); err != nil {
+		log.Printf("handoff: pane prep C-c (%s): %v", target, err)
+	}
 	time.Sleep(500 * time.Millisecond)
 
 	// Step 3: Detect CC status — must be running

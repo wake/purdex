@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/wake/tmux-box/internal/tmux"
 	_ "modernc.org/sqlite"
 )
 
@@ -189,38 +188,3 @@ func (m *MetaStore) ResetStaleModes() error {
 	return err
 }
 
-// MigrateFromLegacy reads session data from the old sessions table and populates session_meta.
-// If legacyDB is nil or tmuxSessions is empty, it's a no-op.
-func (ms *MetaStore) MigrateFromLegacy(legacyDB *sql.DB, tmuxSessions []tmux.TmuxSession) error {
-	if legacyDB == nil || len(tmuxSessions) == 0 {
-		return nil
-	}
-
-	// Build name→tmuxID map
-	nameToID := make(map[string]string)
-	for _, ts := range tmuxSessions {
-		nameToID[ts.Name] = ts.ID
-	}
-
-	rows, err := legacyDB.Query(`SELECT name, mode, cc_session_id, cc_model, cwd FROM sessions`)
-	if err != nil {
-		return nil // legacy table might not exist — not an error
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var name, mode, ccID, ccModel, cwd string
-		if err := rows.Scan(&name, &mode, &ccID, &ccModel, &cwd); err != nil {
-			continue
-		}
-		tmuxID, ok := nameToID[name]
-		if !ok {
-			continue // session no longer exists in tmux
-		}
-		ms.SetMeta(tmuxID, SessionMeta{
-			Mode: "term", // always term on migration — stale modes are meaningless after restart
-			CCSessionID: ccID, CCModel: ccModel, Cwd: cwd,
-		})
-	}
-	return nil
-}

@@ -23,7 +23,7 @@ beforeEach(() => {
 
 describe('ConversationView', () => {
   it('shows conversation UI when relay is connected', () => {
-    render(<ConversationView sessionName={SESSION} />)
+    render(<ConversationView sessionCode={SESSION} />)
     act(() => {
       useStreamStore.getState().setRelayStatus(SESSION, true)
     })
@@ -33,12 +33,12 @@ describe('ConversationView', () => {
 
   it('shows HandoffButton when relay is not connected', () => {
     useStreamStore.getState().setSessionStatus(SESSION, 'cc-idle')
-    render(<ConversationView sessionName={SESSION} />)
+    render(<ConversationView sessionCode={SESSION} />)
     expect(screen.getByText('Handoff')).toBeInTheDocument()
   })
 
   it('shows progress when handoff is in progress', () => {
-    render(<ConversationView sessionName={SESSION} />)
+    render(<ConversationView sessionCode={SESSION} />)
     act(() => {
       useStreamStore.getState().setHandoffProgress(SESSION, 'detecting')
     })
@@ -46,7 +46,7 @@ describe('ConversationView', () => {
   })
 
   it('renders messages when relay connected', () => {
-    render(<ConversationView sessionName={SESSION} />)
+    render(<ConversationView sessionCode={SESSION} />)
     act(() => {
       useStreamStore.getState().setRelayStatus(SESSION, true)
       useStreamStore.getState().addMessage(SESSION, {
@@ -62,7 +62,7 @@ describe('ConversationView', () => {
   })
 
   it('shows ThinkingIndicator when streaming with no assistant messages', () => {
-    render(<ConversationView sessionName={SESSION} />)
+    render(<ConversationView sessionCode={SESSION} />)
     act(() => {
       useStreamStore.getState().setRelayStatus(SESSION, true)
       useStreamStore.getState().setStreaming(SESSION, true)
@@ -71,7 +71,7 @@ describe('ConversationView', () => {
   })
 
   it('transitions from HandoffButton to conversation when relay connects', () => {
-    render(<ConversationView sessionName={SESSION} />)
+    render(<ConversationView sessionCode={SESSION} />)
     // Initially: no relay → show Handoff
     expect(screen.getByText('Handoff')).toBeInTheDocument()
     // Relay connects → show conversation
@@ -109,7 +109,7 @@ describe('ConversationView message rendering', () => {
       relayStatus: { [SESSION]: true },
     })
 
-    render(<ConversationView sessionName={SESSION} />)
+    render(<ConversationView sessionCode={SESSION} />)
 
     expect(screen.getByTestId('thinking-header')).toBeInTheDocument()
     expect(screen.getByText('Here is my answer.')).toBeInTheDocument()
@@ -139,7 +139,7 @@ describe('ConversationView message rendering', () => {
       relayStatus: { [SESSION]: true },
     })
 
-    render(<ConversationView sessionName={SESSION} />)
+    render(<ConversationView sessionCode={SESSION} />)
 
     expect(screen.getByTestId('tool-result-header')).toBeInTheDocument()
   })
@@ -166,7 +166,7 @@ describe('ConversationView message rendering', () => {
       relayStatus: { [SESSION]: true },
     })
 
-    render(<ConversationView sessionName={SESSION} />)
+    render(<ConversationView sessionCode={SESSION} />)
 
     expect(screen.getByTestId('interrupted-msg')).toBeInTheDocument()
   })
@@ -193,7 +193,7 @@ describe('ConversationView message rendering', () => {
       relayStatus: { [SESSION]: true },
     })
 
-    render(<ConversationView sessionName={SESSION} />)
+    render(<ConversationView sessionCode={SESSION} />)
 
     expect(screen.getByTestId('command-bubble')).toBeInTheDocument()
     expect(screen.getByTestId('command-bubble')).toHaveTextContent('/exit')
@@ -225,7 +225,7 @@ describe('ConversationView message rendering', () => {
       relayStatus: { [SESSION]: true },
     })
 
-    render(<ConversationView sessionName={SESSION} />)
+    render(<ConversationView sessionCode={SESSION} />)
 
     expect(screen.getByTestId('thinking-header')).toBeInTheDocument()
     expect(screen.getByText('My response')).toBeInTheDocument()
@@ -257,7 +257,7 @@ describe('ConversationView message rendering', () => {
       relayStatus: { [SESSION]: true },
     })
 
-    render(<ConversationView sessionName={SESSION} />)
+    render(<ConversationView sessionCode={SESSION} />)
 
     const block = screen.getByTestId('tool-result-block')
     expect(block.className).toContain('border-[#302a2a]')

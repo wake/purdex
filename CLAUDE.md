@@ -17,8 +17,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **SPA main**: `100.64.0.2:5173`（worktree `.worktrees/main/spa`）
 - **SPA v1**: `100.64.0.2:5174`（主 repo `spa/`）
 - **測試**: `cd spa && npx vitest run`
-- **Lint**: `cd spa && npm run lint`
-- **Build**: `cd spa && npm run build`
+- **Lint**: `cd spa && pnpm run lint`
+- **Build**: `cd spa && pnpm run build`
 
 ## 技術棧
 

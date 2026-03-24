@@ -24,15 +24,15 @@ export function useSessionEventWs(wsBase: string, daemonBase: string) {
           if (event.value === 'connected') {
             store.setHandoffProgress(event.session, '')
             fetchSessions(daemonBase).then(() => {
-              const sess = useSessionStore.getState().sessions.find((s) => s.name === event.session)
+              const sess = useSessionStore.getState().sessions.find((s) => s.code === event.session)
               if (sess && sess.mode !== 'term') {
                 fetchHistory(daemonBase, sess.code).then((msgs) => {
                   useStreamStore.getState().loadHistory(event.session, msgs)
-                }).catch(() => { /* history fetch failed — non-critical */ })
+                }).catch((e) => { console.warn('history fetch failed:', e) })
               } else {
                 useStreamStore.getState().clearSession(event.session)
               }
-            }).catch(() => { /* fetchSessions failed — non-critical */ })
+            }).catch((e) => { console.warn('fetchSessions failed:', e) })
           } else if (event.value.startsWith('failed')) {
             store.setHandoffProgress(event.session, '')
             fetchSessions(daemonBase)
