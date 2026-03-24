@@ -40,9 +40,11 @@ Tab ID 和 Pane ID 統一使用 6 碼隨機 base36（`[0-9a-z]`），空間 36^6
 ```ts
 function generateId(): string {
   const chars = '0123456789abcdefghijklmnopqrstuvwxyz'
-  const bytes = crypto.getRandomValues(new Uint8Array(6))
   let id = ''
-  for (const b of bytes) id += chars[b % 36]
+  while (id.length < 6) {
+    const [b] = crypto.getRandomValues(new Uint8Array(1))
+    if (b < 252) id += chars[b % 36]  // rejection sampling: 252 = 36*7, 避免 modulo bias
+  }
   return id
 }
 ```
@@ -62,7 +64,7 @@ interface Tab {
 // === Pane Layout（tab 內部分割樹）===
 type PaneLayout =
   | { type: 'leaf'; pane: Pane }
-  | { type: 'split'; direction: 'h' | 'v'
+  | { type: 'split'; id: string; direction: 'h' | 'v'
       children: PaneLayout[]; sizes: number[] }
 
 // === Pane（內容槽）===
@@ -92,6 +94,38 @@ type PaneContent =
 | settings (workspace) | 每 workspace 唯一 | 掃該 workspace 的 tabs |
 | session | 不限 | 同一 session 可開多個 pane |
 
+Singleton 檢查封裝在 `openSingletonTab(content: PaneContent)` 中：
+1. 掃描所有 tab 的 pane tree，找是否已存在匹配的 content
+2. 已存在 → activate 該 tab
+3. 不存在 → createTab → activate
+
+### Tab 顯示推導
+
+Tab 不儲存 label 和 icon，由 primary pane（layout tree 第一個 leaf）的 content 推導：
+
+```ts
+function getPaneLabel(content: PaneContent, sessionStore: SessionStore): string {
+  switch (content.kind) {
+    case 'session':
+      const session = sessionStore.getByCode(content.sessionCode)
+      return session?.name ?? content.sessionCode  // fallback 到 code
+    case 'dashboard': return 'Dashboard'
+    case 'history': return 'History'
+    case 'settings':
+      return content.scope === 'global' ? 'Settings' : `Settings (${content.scope.workspaceId})`
+  }
+}
+
+function getPaneIcon(content: PaneContent): string {
+  switch (content.kind) {
+    case 'session': return content.mode === 'terminal' ? 'TerminalWindow' : 'ChatCircleDots'
+    case 'dashboard': return 'House'
+    case 'history': return 'ClockCounterClockwise'
+    case 'settings': return 'GearSix'
+  }
+}
+```
+
 ### Pane Registry
 
 取代現有 tab-registry，key 改為 `pane.content.kind`：
@@ -116,9 +150,10 @@ interface TabState {
   activeTabId: string | null
 
   createTab(layout: PaneLayout, opts?: { pinned?: boolean }): Tab
+  openSingletonTab(content: PaneContent): Tab  // singleton 檢查 + 建立或 activate
   closeTab(id: string): void
   setActiveTab(id: string): void
-  setViewMode(tabId: string, paneId: string, mode: string): void
+  setViewMode(tabId: string, paneId: string, mode: 'terminal' | 'stream'): void
   splitPane(tabId: string, paneId: string, direction: 'h' | 'v', content: PaneContent): void
   closePane(tabId: string, paneId: string): void
   reorderTabs(newOrder: string[]): void
@@ -142,11 +177,14 @@ interface Workspace {
   color: string
   icon?: string
   tabs: string[]        // tab IDs（有序）
-  activeTabId: string
+  activeTabId: string | null
+  // 以下欄位在側欄 4 zones 實作時加回（參見 tabbed-workspace-ui-design.md）：
+  // directories: PinnedItem[]
+  // sidebarState: WorkspaceSidebarState
 }
 ```
 
-Workspace 管 tab IDs，不管 pane 細節。
+Workspace 管 tab IDs，不管 pane 細節。`activeTabId` 為 nullable — workspace 無 tab 時為 `null`。
 
 ### useHistoryStore（新增）
 
@@ -161,7 +199,7 @@ interface ClosedTabRecord {
   tab: Tab                    // 完整快照（含 layout）
   closedAt: number
   fromWorkspaceId?: string
-  reopened: boolean
+  reopenedAt?: number         // null = 未重開，有值 = 重開時間
 }
 
 interface HistoryState {
@@ -170,7 +208,7 @@ interface HistoryState {
 
   recordVisit(tabId: string, content: PaneContent): void
   recordClose(tab: Tab, workspaceId?: string): void
-  reopenTab(index: number): Tab       // 沿用原 tab id + pane ids
+  reopenLast(): Tab | null             // 沿用原 tab id + pane ids，取最近未重開的
   clearBrowseHistory(): void
   clearClosedTabs(): void
 }
@@ -180,7 +218,25 @@ interface HistoryState {
 - **瀏覽紀錄**：顯示在 History 頁面，記錄每次 tab 訪問
 - **關閉紀錄**：不顯示在 UI，只供 `⌘+Shift+T` reopen 使用
 
-Reopen 時沿用原 tab ID 和 pane IDs，讓書籤持續有效。
+Reopen 時沿用原 tab ID 和 pane IDs，讓書籤持續有效。同一 session 允許同時存在多個 tab/pane，reopen 不做重複檢查。
+
+### `BrowseRecord.tabId` 用途
+
+History 頁面顯示瀏覽紀錄時，`tabId` 用於判斷 tab 是否仍開啟：
+- 仍開啟 → 點擊切到該 tab
+- 已關閉 → 點擊用 `paneContent` 開新 tab
+
+### Tab 排序：tabOrder vs workspace.tabs
+
+`tabOrder` 是全域排序（所有 tab，含 workspace 內的和獨立的）。`workspace.tabs` 是該 workspace 的 tab 子集，順序獨立管理。判斷獨立 tab：不被任何 `workspace.tabs` 包含。
+
+### 跨 store 操作
+
+關閉 tab 涉及三個 store（history、tab、workspace），在單一 action handler 中循序呼叫，不用 middleware。Zustand 的 `set()` 是同步的，不會出現中間狀態。
+
+### 持久化
+
+所有 store persist 到 localStorage，使用新 key name（`tbox-v2-tabs`、`tbox-v2-workspaces`、`tbox-v2-history`）避免與舊版衝突。
 
 ### 不動的 stores
 
@@ -218,6 +274,14 @@ pnpm add wouter
 | `/w/:workspaceId` | Workspace 入口 → active tab | — |
 | `/w/:workspaceId/settings` | 工作區設定 | 每 workspace |
 | `/w/:workspaceId/t/:tabId/:mode` | Workspace 內 session tab | 否 |
+
+### 路由分類
+
+Singleton tab types（dashboard、history、settings）使用**命名路由**，不走 `/t/:tabId` 形式。只有 session tab 使用 `/t/:tabId/:mode`。
+
+訪問命名路由時，透過 `openSingletonTab()` 建立或 activate 對應的 singleton tab。
+
+Dashboard 為按需建立 — 訪問 `/` 時若不存在就建，不是永遠預設存在。
 
 ### 無歧義保證
 
@@ -319,8 +383,8 @@ function PaneLayoutRenderer({ layout }: { layout: PaneLayout }) {
 
   return (
     <SplitContainer direction={layout.direction} sizes={layout.sizes}>
-      {layout.children.map((child, i) => (
-        <PaneLayoutRenderer key={i} layout={child} />
+      {layout.children.map((child) => (
+        <PaneLayoutRenderer key={getLayoutKey(child)} layout={child} />
       ))}
     </SplitContainer>
   )
@@ -370,7 +434,7 @@ App
   → 直接把快照的 tab（含原 id + 原 pane ids）放回 tabStore
   → 加回原 workspace（如果還存在）或 standalone
   → activate
-  → 標記記錄為 reopened
+  → 標記記錄 reopenedAt = now
 ```
 
 沿用原 ID，讓書籤持續有效。
@@ -465,6 +529,8 @@ App
 | `spa/src/lib/pane-registry.ts` | Pane renderer 註冊 |
 | `spa/src/lib/route-utils.ts` | URL 解析 / 生成工具 |
 | `spa/src/lib/id.ts` | 6-char base36 ID 生成 |
+| `spa/src/lib/pane-tree.ts` | PaneLayout tree traversal 工具（findPane, updatePane, getLayoutKey） |
+| `spa/src/lib/pane-labels.ts` | getPaneLabel / getPaneIcon 推導函式 |
 
 ### 修改
 
