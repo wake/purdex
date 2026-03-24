@@ -30,7 +30,7 @@ export function TerminalSection() {
   return (
     <div>
       <h2 className="text-lg text-gray-200">Terminal</h2>
-      <p className="text-xs text-gray-500 mb-6">Terminal rendering and connection settings</p>
+      <p className="text-xs text-gray-400 mb-6">Terminal rendering and connection settings</p>
 
       <SettingItem label="Renderer" description="WebGL is faster but limited to ~16 instances. DOM has no limit.">
         <div className="flex">

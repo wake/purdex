@@ -4,7 +4,7 @@ export function AppearanceSection() {
   return (
     <div>
       <h2 className="text-lg text-gray-200">Appearance</h2>
-      <p className="text-xs text-gray-500 mb-6">Visual preferences for the application</p>
+      <p className="text-xs text-gray-400 mb-6">Visual preferences for the application</p>
 
       <SettingItem label="Theme" description="Application color scheme" disabled>
         <div className="flex gap-2">
