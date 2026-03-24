@@ -57,6 +57,22 @@ export default function App() {
   useSessionEventWs(wsBase, daemonBase)
   useRouteSync()
 
+  // --- Keybinding: ⌘+Shift+T / Ctrl+Shift+T — reopen last closed tab ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'T') {
+        e.preventDefault()
+        const tab = useHistoryStore.getState().reopenLast()
+        if (tab) {
+          useTabStore.getState().addTab(tab)
+          useTabStore.getState().setActiveTab(tab.id)
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   // --- Derived state ---
   const activeTab = activeTabId ? tabs[activeTabId] : undefined
 
