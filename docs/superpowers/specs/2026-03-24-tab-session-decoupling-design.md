@@ -320,11 +320,17 @@ Tab activate → URL update（replace）
 URL change  → Tab 查找/建立 → activate
 ```
 
-**URL 自足原則**：直接訪問任何合法 URL 時，即使 tab store 是空的：
-1. 解析 URL 得到 PaneContent
-2. 搜尋現有 tabs 有沒有匹配的
-3. 有 → activate
-4. 沒有 → 建立新 tab → activate
+**URL 解析分兩層**：
+
+Singleton 路由（`/`、`/history`、`/settings`）**完全自足** — 不需 store，直接建立或 activate singleton tab。
+
+Session 路由（`/t/:tabId/:mode`）**需要 persist** — tabId → Tab store 查 sessionCode：
+1. 解析 URL 取得 tabId
+2. 在 tab store 查找 tabs[tabId]
+3. 找到 → activate
+4. 找不到（store 空或 tab 不存在）→ **保留 URL 不變，內容區顯示空狀態**（未來放 session picker menu）
+
+Workspace 路由（`/w/:workspaceId`）同樣需要 persist，找不到時保留 URL 顯示空狀態。
 
 **Split 狀態不編碼在 URL 中**，URL 只反映 active tab 的 primary pane（第一個 leaf）。Split 靠 persist 恢復。
 
