@@ -75,6 +75,7 @@ interface Pane {
 
 // === Pane Content（內容類型，discriminated union）===
 type PaneContent =
+  | { kind: 'new-tab' }       // 內容選擇頁面（新建 tab 時的初始狀態）
   | { kind: 'session'; sessionCode: string; mode: 'terminal' | 'stream' }
   | { kind: 'dashboard' }
   | { kind: 'history' }
@@ -84,10 +85,38 @@ type PaneContent =
   // | { kind: 'editor'; hostId: string; filePath: string }
 ```
 
+### New Tab 頁面
+
+新建 tab 時，pane 初始內容為 `{ kind: 'new-tab' }`，顯示內容選擇頁面。使用者點選後，pane content 被替換為對應類型（如 session）。
+
+**NewTab Provider Registry**：各 content type 可註冊自己的 section 到 new-tab 頁面：
+
+```ts
+interface NewTabProvider {
+  id: string
+  label: string
+  icon: string
+  order: number
+  component: React.ComponentType<NewTabProviderProps>
+}
+
+interface NewTabProviderProps {
+  onSelect: (content: PaneContent) => void
+}
+
+registerNewTabProvider(provider: NewTabProvider): void
+getNewTabProviders(): NewTabProvider[]  // 按 order 排序
+```
+
+內建註冊 `sessions` section（從 useSessionStore 讀取列表）。每個 provider 自行渲染 section UI，點擊後 `onSelect(content)` 替換 pane content。
+
+URL 找不到對應 tab 時，也顯示此 new-tab 頁面。
+
 ### Singleton 規則
 
 | kind | 規則 | 判斷方式 |
 |---|---|---|
+| new-tab | 不限 | 每次新建 tab 都是一個新的 new-tab |
 | dashboard | 全域唯一 | 建立前掃所有 tab 的所有 pane |
 | history | 全域唯一 | 同上 |
 | settings (global) | 全域唯一 | 同上 |

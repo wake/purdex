@@ -47,7 +47,12 @@
 | `spa/src/components/HistoryPage.test.tsx` | Renders records, click behavior |
 | `spa/src/components/SettingsPage.tsx` | Empty settings placeholder |
 | `spa/src/components/SessionPaneContent.tsx` | Refactored from SessionTabContent for Pane model |
-| `spa/src/lib/register-panes.tsx` | Register all built-in pane renderers |
+| `spa/src/lib/register-panes.tsx` | Register all built-in pane renderers + new-tab providers |
+| `spa/src/lib/new-tab-registry.ts` | NewTab Provider Registry (register/get providers) |
+| `spa/src/lib/new-tab-registry.test.ts` | Registry CRUD tests |
+| `spa/src/components/NewTabPage.tsx` | Content picker page — renders registered providers |
+| `spa/src/components/NewTabPage.test.tsx` | Renders providers, onSelect replaces content |
+| `spa/src/components/SessionSection.tsx` | New-tab provider: session list from useSessionStore |
 
 ### Modified Files
 
@@ -190,6 +195,7 @@ export interface Pane {
 
 // === Pane Content (discriminated union) ===
 export type PaneContent =
+  | { kind: 'new-tab' }
   | { kind: 'session'; sessionCode: string; mode: 'terminal' | 'stream' }
   | { kind: 'dashboard' }
   | { kind: 'history' }
@@ -457,6 +463,10 @@ describe('getPaneIcon', () => {
 
   it('returns ChatCircleDots for stream session', () => {
     expect(getPaneIcon({ kind: 'session', sessionCode: 'x', mode: 'stream' })).toBe('ChatCircleDots')
+  })
+
+  it('returns Plus for new-tab', () => {
+    expect(getPaneIcon({ kind: 'new-tab' })).toBe('Plus')
   })
 
   it('returns House for dashboard', () => {
@@ -1006,7 +1016,7 @@ export function useRouteSync() {
         if (tab) {
           setActiveTab(parsed.tabId)
         }
-        // else: tab not found → stay on URL, App shows empty state
+        // else: tab not found → stay on URL, content area shows new-tab page
         break
       }
       case 'workspace':
@@ -1020,7 +1030,7 @@ export function useRouteSync() {
         if (tab) {
           setActiveTab(parsed.tabId)
         }
-        // else: tab not found → stay on URL, App shows empty state
+        // else: tab not found → stay on URL, content area shows new-tab page
         break
       }
     }
@@ -1129,13 +1139,51 @@ export function PaneLayoutRenderer({ layout, isActive }: Props) {
 }
 ```
 
-- [ ] **Step 4: Create stub pages**
+- [ ] **Step 4: Create NewTab Provider Registry**
+
+```ts
+// spa/src/lib/new-tab-registry.ts
+export interface NewTabProviderProps {
+  onSelect: (content: PaneContent) => void
+}
+
+export interface NewTabProvider {
+  id: string
+  label: string
+  icon: string
+  order: number
+  component: React.ComponentType<NewTabProviderProps>
+}
+
+const providers: NewTabProvider[] = []
+
+export function registerNewTabProvider(provider: NewTabProvider): void {
+  providers.push(provider)
+  providers.sort((a, b) => a.order - b.order)
+}
+
+export function getNewTabProviders(): NewTabProvider[] {
+  return [...providers]
+}
+
+export function clearNewTabRegistry(): void {
+  providers.length = 0
+}
+```
+
+- [ ] **Step 5: Create NewTabPage + SessionSection**
+
+NewTabPage.tsx — renders all registered providers. Each provider gets `onSelect` callback that replaces the current pane's content via `useTabStore.getState().setPaneContent(tabId, paneId, content)`.
+
+SessionSection.tsx — reads `useSessionStore` and renders session list. Click → `onSelect({ kind: 'session', sessionCode, mode: 'terminal' })`.
+
+- [ ] **Step 6: Create stub pages + SessionPaneContent**
 
 DashboardPage.tsx — empty placeholder with centered text.
 SettingsPage.tsx — empty placeholder with centered text.
 HistoryPage.tsx — reads useHistoryStore.browseHistory and renders list. Click on entry → if tab still open, setActiveTab; if closed, create new tab from paneContent.
-SessionPaneContent.tsx — refactor from existing SessionTabContent, adapting props from `{ tab }` to `{ pane }`. Keep TerminalView and ConversationView rendering logic. Reference existing `spa/src/components/SessionTabContent.tsx`.
-register-panes.tsx — register all 4 pane renderers (session, dashboard, history, settings).
+SessionPaneContent.tsx — refactor from existing SessionTabContent, adapting props from `{ tab }` to `{ pane }`. Keep TerminalView and ConversationView rendering logic. Gets `wsBase`/`daemonBase` from `useHostStore()` internally. Reference existing `spa/src/components/SessionTabContent.tsx`.
+register-panes.tsx — register all 5 pane renderers (new-tab, session, dashboard, history, settings) + register sessions new-tab provider.
 
 - [ ] **Step 5: Run PaneLayoutRenderer test**
 
@@ -1269,7 +1317,7 @@ Major changes:
 5. Remove `useSessionTabSync()` call
 6. Remove `SessionPicker` modal — users add sessions from Sessions sidebar panel (future) or direct URL
 7. ActivityBar settings button → navigate to `/settings`
-8. Add tab button → open a session picker (simplified — can be a basic list from useSessionStore for now)
+8. Add tab button → `addTab(createTab({ kind: 'new-tab' }))` — opens new-tab content picker page
 9. Keep workspace switching logic
 10. Keep tab event handlers (close, reorder, pin, lock, context menu)
 11. Update all handlers to work with new Tab shape
@@ -1412,5 +1460,6 @@ git commit -m "fix: final cleanup and test fixes for tab-session decoupling"
 - **Factory vs Store action naming**: `createTab(content)` in `types/tab.ts` builds a Tab object. `addTab(tab)` in store inserts it. No naming conflict.
 - **SessionPaneContent** gets `wsBase`/`daemonBase` from `useHostStore()` internally, not via props.
 - **useTabAlivePool** is preserved in TabContent — keeps pinned + active tabs mounted.
-- **New tab flow**: new tab opens with a content picker page (session menu etc.), not a pre-connected session. Content picker is a future enhancement; for now show empty state.
-- **Unresolvable URLs**: session tab URLs that can't find their tabId in store → stay on URL, show empty state in content area.
+- **New tab flow**: `[+]` button creates a tab with `{ kind: 'new-tab' }`, which renders NewTabPage (content picker). User selects from registered providers → pane content replaced. No pre-connected session.
+- **NewTab Provider Registry**: content types register sections into the new-tab page via `registerNewTabProvider()`. Built-in: sessions list. Future: recent files, recent closed, etc.
+- **Unresolvable URLs**: session tab URLs that can't find their tabId in store → stay on URL, content area shows NewTabPage as fallback.
