@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import SessionPanel from './SessionPanel'
 import { useSessionStore } from '../stores/useSessionStore'
+import { useStreamStore } from '../stores/useStreamStore'
 
 vi.mock('../lib/api', () => ({
   listSessions: vi.fn().mockResolvedValue([]),
@@ -11,6 +12,7 @@ vi.mock('../lib/api', () => ({
 beforeEach(() => {
   cleanup()
   useSessionStore.setState({ sessions: [], activeId: null })
+  useStreamStore.setState({ sessions: {}, sessionStatus: {}, relayStatus: {}, handoffProgress: {} })
 })
 
 describe('SessionPanel', () => {
@@ -68,5 +70,31 @@ describe('SessionPanel', () => {
     render(<SessionPanel />)
     // Terminal icon should be present (Phosphor Terminal icon)
     expect(screen.getByTestId('session-icon-abc001')).toBeInTheDocument()
+  })
+
+  it('uses sessionStatus keyed by code (not name)', () => {
+    useSessionStore.setState({
+      sessions: [
+        { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
+      ],
+      activeId: null,
+    })
+    // Set status keyed by code
+    useStreamStore.getState().setSessionStatus('abc001', 'cc-idle')
+    render(<SessionPanel />)
+    // Should show cc-idle badge (from code-keyed status), not 'not-in-cc' (from mode fallback)
+    expect(screen.getByTestId('status-badge')).toHaveAttribute('title', 'cc-idle')
+  })
+
+  it('falls back to mode-derived status when sessionStatus has no entry', () => {
+    useSessionStore.setState({
+      sessions: [
+        { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
+      ],
+      activeId: null,
+    })
+    // No sessionStatus set — should derive from mode
+    render(<SessionPanel />)
+    expect(screen.getByTestId('status-badge')).toHaveAttribute('title', 'cc-running')
   })
 })

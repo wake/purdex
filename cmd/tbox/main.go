@@ -61,7 +61,9 @@ func runServe(args []string) {
 		cfg.Port = *portOverride
 	}
 
-	os.MkdirAll(cfg.DataDir, 0755)
+	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
+		log.Fatalf("data dir: %v", err)
+	}
 
 	// 2. Open MetaStore
 	meta, err := store.OpenMeta(filepath.Join(cfg.DataDir, "meta.db"))

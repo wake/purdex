@@ -196,6 +196,44 @@ func TestPutConfigNoCfgPathSkipsPersistence(t *testing.T) {
 	c.CfgMu.RUnlock()
 }
 
+func TestPutConfigUpdatesTerminalSizingMode(t *testing.T) {
+	c := newTestCore()
+
+	body := `{"terminal":{"sizing_mode":"terminal-first"}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	c.CfgMu.RLock()
+	assert.Equal(t, "terminal-first", c.Cfg.Terminal.SizingMode)
+	c.CfgMu.RUnlock()
+
+	// Verify response reflects update
+	var got config.Config
+	err := json.NewDecoder(rec.Body).Decode(&got)
+	require.NoError(t, err)
+	assert.Equal(t, "terminal-first", got.Terminal.SizingMode)
+}
+
+func TestPutConfigIgnoresZeroPollInterval(t *testing.T) {
+	c := newTestCore()
+	c.Cfg.Detect.PollInterval = 5
+
+	body := `{"detect":{"poll_interval":0}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Zero poll_interval should be ignored — original value preserved
+	c.CfgMu.RLock()
+	assert.Equal(t, 5, c.Cfg.Detect.PollInterval)
+	c.CfgMu.RUnlock()
+}
+
 func TestRegisterCoreRoutesIncludesConfigEndpoints(t *testing.T) {
 	c := newTestCore()
 	mux := http.NewServeMux()
