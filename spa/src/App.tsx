@@ -1,29 +1,27 @@
-// spa/src/App.tsx — v1 重構：ActivityBar + TabBar + TabContent + StatusBar
+// spa/src/App.tsx — v2 重構：wouter Router + Tab/Pane model
 import { useEffect, useState, useCallback } from 'react'
+import { Router } from 'wouter'
 import { ActivityBar } from './components/ActivityBar'
 import { TabBar } from './components/TabBar'
 import { TabContent } from './components/TabContent'
 import { StatusBar } from './components/StatusBar'
 import SettingsPanel from './components/SettingsPanel'
-import { SessionPicker } from './components/SessionPicker'
 import { useSessionStore } from './stores/useSessionStore'
 import { useConfigStore } from './stores/useConfigStore'
 import { useTabStore } from './stores/useTabStore'
 import { useWorkspaceStore } from './stores/useWorkspaceStore'
 import { useHostStore } from './stores/useHostStore'
+import { useHistoryStore } from './stores/useHistoryStore'
 import { useRelayWsManager } from './hooks/useRelayWsManager'
 import { useSessionEventWs } from './hooks/useSessionEventWs'
-import { useSessionTabSync } from './hooks/useSessionTabSync'
-import { useHashRouting } from './hooks/useHashRouting'
-import { createSessionTab, isStandaloneTab } from './types/tab'
-import { getSessionName } from './lib/tab-helpers'
-import { getTabRenderer } from './lib/tab-registry'
+import { useRouteSync } from './hooks/useRouteSync'
+import { createTab, isStandaloneTab } from './types/tab'
+import { getPrimaryPane } from './lib/pane-tree'
 import { TabContextMenu, type ContextMenuAction } from './components/TabContextMenu'
 import type { Tab } from './types/tab'
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [sessionPickerOpen, setSessionPickerOpen] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ tab: Tab; position: { x: number; y: number } } | null>(null)
 
   // Host store (replaces hardcoded daemonBase)
@@ -33,7 +31,6 @@ export default function App() {
   const wsBase = getWsBase('local')
 
   // Existing stores
-  const sessions = useSessionStore((s) => s.sessions)
   const fetchSessions = useSessionStore((s) => s.fetch)
   const fetchConfig = useConfigStore((s) => s.fetch)
 
@@ -41,10 +38,9 @@ export default function App() {
   const tabs = useTabStore((s) => s.tabs)
   const tabOrder = useTabStore((s) => s.tabOrder)
   const activeTabId = useTabStore((s) => s.activeTabId)
-  const dismissTab = useTabStore((s) => s.dismissTab)
-  const dismissedSessions = useTabStore((s) => s.dismissedSessions)
   const setActiveTab = useTabStore((s) => s.setActiveTab)
-  const getActiveTab = useTabStore((s) => s.getActiveTab)
+  const addTab = useTabStore((s) => s.addTab)
+  const closeTab = useTabStore((s) => s.closeTab)
   const reorderTabs = useTabStore((s) => s.reorderTabs)
 
   // Workspace store
@@ -59,11 +55,10 @@ export default function App() {
   // --- Extracted hooks ---
   useRelayWsManager(wsBase)
   useSessionEventWs(wsBase, daemonBase)
-  useSessionTabSync(sessions)
-  useHashRouting(activeTabId, setActiveTab)
+  useRouteSync()
 
   // --- Derived state ---
-  const activeTab = getActiveTab()
+  const activeTab = activeTabId ? tabs[activeTabId] : undefined
 
   // --- Bootstrap: fetch sessions + config ---
   useEffect(() => {
@@ -90,47 +85,27 @@ export default function App() {
   }, [setActiveTab, findWorkspaceByTab, setActiveWorkspace, setWorkspaceActiveTab])
 
   const handleCloseTab = useCallback((tabId: string) => {
+    const tab = tabs[tabId]
+    if (tab) useHistoryStore.getState().recordClose(tab, findWorkspaceByTab(tabId)?.id)
     const ws = findWorkspaceByTab(tabId)
     if (ws) removeTabFromWorkspace(ws.id, tabId)
-    dismissTab(tabId)
-  }, [findWorkspaceByTab, removeTabFromWorkspace, dismissTab])
+    closeTab(tabId)
+  }, [tabs, findWorkspaceByTab, removeTabFromWorkspace, closeTab])
 
   const handleAddTab = useCallback(() => {
-    setSessionPickerOpen(true)
-  }, [])
+    const tab = createTab({ kind: 'new-tab' })
+    addTab(tab)
+    setActiveTab(tab.id)
+    if (activeWorkspaceId) {
+      useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tab.id)
+      useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tab.id)
+    }
+  }, [addTab, setActiveTab, activeWorkspaceId])
 
   const handleReorderTabs = useCallback((order: string[]) => {
     reorderTabs(order)
     if (activeWorkspaceId) reorderWorkspaceTabs(activeWorkspaceId, order)
   }, [reorderTabs, activeWorkspaceId, reorderWorkspaceTabs])
-
-  const handleSessionSelect = useCallback((session: typeof sessions[0]) => {
-    setSessionPickerOpen(false)
-    const store = useTabStore.getState()
-    const dismissedEntry = store.dismissedSessions.find(
-      (s) => s.sessionName === session.name
-    )
-    store.undismissSession(session.name)
-    const existing = Object.values(store.tabs).find((t) => getSessionName(t) === session.name)
-    if (existing) {
-      store.setActiveTab(existing.id)
-      return
-    }
-    const tab = createSessionTab({
-      label: session.name,
-      hostId: 'local',
-      sessionName: session.name,
-      sessionCode: session.code,
-      viewMode: session.mode === 'stream' ? 'stream' : 'terminal',
-    })
-    store.addTab(tab)
-    if (dismissedEntry?.pinned) store.pinTab(tab.id)
-    store.setActiveTab(tab.id)
-    if (activeWorkspaceId) {
-      useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tab.id)
-      useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tab.id)
-    }
-  }, [activeWorkspaceId])
 
   // --- Derive visible tabs for display ---
   const activeWs = workspaces.find((w) => w.id === activeWorkspaceId)
@@ -164,13 +139,12 @@ export default function App() {
     if (!contextMenu) return
     const { tab } = contextMenu
     const store = useTabStore.getState()
+    const primaryPaneId = getPrimaryPane(tab.layout).id
     switch (action) {
-      case 'viewMode-terminal': store.setViewMode(tab.id, 'terminal'); break
-      case 'viewMode-stream': store.setViewMode(tab.id, 'stream'); break
-      case 'lock': store.lockTab(tab.id); break
-      case 'unlock': store.unlockTab(tab.id); break
-      case 'pin': store.pinTab(tab.id); break
-      case 'unpin': store.unpinTab(tab.id); break
+      case 'viewMode-terminal': store.setViewMode(tab.id, primaryPaneId, 'terminal'); break
+      case 'viewMode-stream': store.setViewMode(tab.id, primaryPaneId, 'stream'); break
+      case 'lock': case 'unlock': store.toggleLock(tab.id); break
+      case 'pin': case 'unpin': store.togglePin(tab.id); break
       case 'close': handleCloseTab(tab.id); break
       case 'closeOthers': {
         const displayIds = displayTabs.map((t) => t.id)
@@ -186,36 +160,6 @@ export default function App() {
         toClose.forEach((id) => handleCloseTab(id))
         break
       }
-      case 'reopenClosed': {
-        const dismissed = store.dismissedSessions
-        if (dismissed.length === 0) break
-        const last = dismissed[dismissed.length - 1]
-        store.undismissSession(last.sessionName)
-        const existing = Object.values(store.tabs).find((t) => getSessionName(t) === last.sessionName)
-        if (existing) {
-          store.setActiveTab(existing.id)
-        } else {
-          const session = useSessionStore.getState().sessions.find((s) => s.name === last.sessionName)
-          if (session) {
-            const newTab = createSessionTab({
-              label: session.name,
-              hostId: 'local',
-              sessionName: session.name,
-              sessionCode: session.code,
-              viewMode: session.mode === 'stream' ? 'stream' : 'terminal',
-            })
-            store.addTab(newTab)
-            if (last.pinned) store.pinTab(newTab.id)
-            store.setActiveTab(newTab.id)
-            const wsId = useWorkspaceStore.getState().activeWorkspaceId
-            if (wsId) {
-              useWorkspaceStore.getState().addTabToWorkspace(wsId, newTab.id)
-              useWorkspaceStore.getState().setWorkspaceActiveTab(wsId, newTab.id)
-            }
-          }
-        }
-        break
-      }
     }
   }, [contextMenu, tabs, displayTabs, handleCloseTab])
 
@@ -227,80 +171,60 @@ export default function App() {
     return idx !== -1 && ids.slice(idx + 1).some((id) => !tabs[id]?.locked)
   })()
 
-  // StatusBar info
-  const statusHost = activeTab?.hostId === 'local' ? 'mlab' : activeTab?.hostId ?? null
-  const statusSession = activeTab ? getSessionName(activeTab) ?? activeTab?.label : null
-  const statusViewMode = activeTab?.viewMode ?? null
-  const activeTabConfig = activeTab ? getTabRenderer(activeTab.type) : null
-  const statusViewModes = activeTabConfig?.viewModes ?? null
-
   return (
-    <div className="h-screen flex bg-[#0a0a1a] text-gray-200">
-      <ActivityBar
-        workspaces={workspaces}
-        standaloneTabs={standaloneTabs}
-        activeWorkspaceId={activeStandaloneTabId ? null : activeWorkspaceId}
-        activeStandaloneTabId={activeStandaloneTabId}
-        onSelectWorkspace={handleSelectWorkspace}
-        onSelectStandaloneTab={handleSelectTab}
-        onAddWorkspace={() => {}}
-        onOpenSettings={() => setSettingsOpen(true)}
-      />
-      <div className="flex-1 flex flex-col min-w-0">
-        <TabBar
-          tabs={displayTabs}
-          activeTabId={activeTabId}
-          onSelectTab={handleSelectTab}
-          onCloseTab={handleCloseTab}
-          onAddTab={handleAddTab}
-          onReorderTabs={handleReorderTabs}
-          onMiddleClick={handleMiddleClick}
-          onContextMenu={handleContextMenu}
+    <Router>
+      <div className="h-screen flex bg-[#0a0a1a] text-gray-200">
+        <ActivityBar
+          workspaces={workspaces}
+          standaloneTabs={standaloneTabs}
+          activeWorkspaceId={activeStandaloneTabId ? null : activeWorkspaceId}
+          activeStandaloneTabId={activeStandaloneTabId}
+          onSelectWorkspace={handleSelectWorkspace}
+          onSelectStandaloneTab={handleSelectTab}
+          onAddWorkspace={() => {}}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
-        <div className="flex-1 flex overflow-hidden">
-          <TabContent
+        <div className="flex-1 flex flex-col min-w-0">
+          <TabBar
+            tabs={displayTabs}
+            activeTabId={activeTabId}
+            onSelectTab={handleSelectTab}
+            onCloseTab={handleCloseTab}
+            onAddTab={handleAddTab}
+            onReorderTabs={handleReorderTabs}
+            onMiddleClick={handleMiddleClick}
+            onContextMenu={handleContextMenu}
+          />
+          <div className="flex-1 flex overflow-hidden">
+            <TabContent
+              activeTab={activeTab ?? null}
+              allTabs={tabOrder.map((id) => tabs[id]).filter(Boolean)}
+            />
+          </div>
+          <StatusBar
             activeTab={activeTab ?? null}
-            allTabs={tabOrder.map((id) => tabs[id]).filter(Boolean)}
-            wsBase={wsBase}
-            daemonBase={daemonBase}
+            onViewModeChange={(tabId, paneId, mode) => {
+              useTabStore.getState().setViewMode(tabId, paneId, mode)
+            }}
           />
         </div>
-        <StatusBar
-          hostName={statusHost}
-          sessionName={statusSession}
-          status={activeTab ? 'connected' : null}
-          viewMode={statusViewMode}
-          viewModes={statusViewModes}
-          onViewModeChange={(vm) => {
-            if (activeTabId) useTabStore.getState().setViewMode(activeTabId, vm)
-          }}
-        />
+        {settingsOpen && (
+          <SettingsPanel
+            daemonBase={daemonBase}
+            onClose={() => setSettingsOpen(false)}
+          />
+        )}
+        {contextMenu && (
+          <TabContextMenu
+            tab={contextMenu.tab}
+            position={contextMenu.position}
+            onClose={() => setContextMenu(null)}
+            onAction={handleContextAction}
+            hasOtherUnlocked={displayTabs.some((t) => t.id !== contextMenu.tab.id && !t.locked)}
+            hasRightUnlocked={contextMenuHasRightUnlocked}
+          />
+        )}
       </div>
-      {settingsOpen && (
-        <SettingsPanel
-          daemonBase={daemonBase}
-          onClose={() => setSettingsOpen(false)}
-        />
-      )}
-      {sessionPickerOpen && (
-        <SessionPicker
-          sessions={sessions}
-          existingTabSessionNames={Object.values(tabs).map((t) => getSessionName(t)).filter(Boolean) as string[]}
-          onSelect={handleSessionSelect}
-          onClose={() => setSessionPickerOpen(false)}
-        />
-      )}
-      {contextMenu && (
-        <TabContextMenu
-          tab={contextMenu.tab}
-          position={contextMenu.position}
-          onClose={() => setContextMenu(null)}
-          onAction={handleContextAction}
-          hasOtherUnlocked={displayTabs.some((t) => t.id !== contextMenu.tab.id && !t.locked)}
-          hasRightUnlocked={contextMenuHasRightUnlocked}
-          hasDismissedSessions={dismissedSessions.length > 0}
-        />
-      )}
-    </div>
+    </Router>
   )
 }

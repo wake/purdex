@@ -6,7 +6,6 @@ export type ContextMenuAction =
   | 'viewMode-terminal' | 'viewMode-stream'
   | 'lock' | 'unlock' | 'pin' | 'unpin'
   | 'close' | 'closeOthers' | 'closeRight'
-  | 'reopenClosed'
 
 interface Props {
   tab: Tab
@@ -15,7 +14,6 @@ interface Props {
   onAction: (action: ContextMenuAction) => void
   hasOtherUnlocked: boolean
   hasRightUnlocked: boolean
-  hasDismissedSessions: boolean
 }
 
 interface MenuItem {
@@ -25,7 +23,7 @@ interface MenuItem {
   disabled?: boolean
 }
 
-export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnlocked, hasRightUnlocked, hasDismissedSessions }: Props) {
+export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnlocked, hasRightUnlocked }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const [adjustedPos, setAdjustedPos] = useState(position)
 
@@ -74,9 +72,6 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
     { label: '關閉分頁', action: 'close' as const, show: true, disabled: tab.locked },
     { label: '關閉其他分頁', action: 'closeOthers' as const, show: hasOtherUnlocked },
     { label: '關閉右側分頁', action: 'closeRight' as const, show: hasRightUnlocked },
-    'separator',
-    // Reopen
-    { label: '重新開啟已關閉的分頁', action: 'reopenClosed' as const, show: hasDismissedSessions },
   ]
 
   const visibleItems = items.filter((item) => item === 'separator' || item.show)
