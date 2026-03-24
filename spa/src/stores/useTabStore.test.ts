@@ -145,4 +145,36 @@ describe('useTabStore', () => {
     useTabStore.getState().closeTab('nonexistent')
     expect(useTabStore.getState().tabOrder).toHaveLength(1)
   })
+
+  describe('setPaneContent', () => {
+    it('updates pane content by tabId and paneId', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      const paneId = tab.layout.type === 'leaf' ? tab.layout.pane.id : ''
+      const newContent: PaneContent = { kind: 'dashboard' }
+      useTabStore.getState().setPaneContent(tab.id, paneId, newContent)
+      const updated = useTabStore.getState().tabs[tab.id]
+      expect(updated.layout.type).toBe('leaf')
+      if (updated.layout.type === 'leaf') {
+        expect(updated.layout.pane.content).toEqual({ kind: 'dashboard' })
+      }
+    })
+
+    it('is no-op for nonexistent tab', () => {
+      useTabStore.getState().setPaneContent('nonexistent', 'pane1', { kind: 'dashboard' })
+      expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(0)
+    })
+
+    it('is no-op for nonexistent pane (layout unchanged)', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      const before = useTabStore.getState().tabs[tab.id].layout
+      useTabStore.getState().setPaneContent(tab.id, 'nonexistent-pane', { kind: 'dashboard' })
+      const after = useTabStore.getState().tabs[tab.id].layout
+      // Layout should be structurally the same (content unchanged)
+      if (before.type === 'leaf' && after.type === 'leaf') {
+        expect(after.pane.content).toEqual(before.pane.content)
+      }
+    })
+  })
 })

@@ -14,6 +14,7 @@ interface TabState {
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
   setViewMode: (tabId: string, paneId: string, mode: 'terminal' | 'stream') => void
+  setPaneContent: (tabId: string, paneId: string, content: PaneContent) => void
   splitPane: (tabId: string, paneId: string, direction: 'h' | 'v', content: PaneContent) => void
   closePane: (tabId: string, paneId: string) => void
   reorderTabs: (order: string[]) => void
@@ -100,6 +101,14 @@ export const useTabStore = create<TabState>()(
             sessionCode: pane.content.sessionCode,
             mode,
           })
+          return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
+        }),
+
+      setPaneContent: (tabId, paneId, content) =>
+        set((state) => {
+          const tab = state.tabs[tabId]
+          if (!tab) return state
+          const newLayout = updatePaneInLayout(tab.layout, paneId, content)
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
 

@@ -20,6 +20,16 @@ describe('getPrimaryPane', () => {
   it('returns first leaf pane from split layout', () => {
     expect(getPrimaryPane(split)).toBe(paneA)
   })
+
+  it('returns placeholder pane for corrupted split with empty children', () => {
+    const corrupted: PaneLayout = {
+      type: 'split', id: 'broken', direction: 'h',
+      children: [], sizes: [],
+    }
+    const result = getPrimaryPane(corrupted)
+    expect(result.id).toBe('corrupted')
+    expect(result.content).toEqual({ kind: 'new-tab' })
+  })
 })
 
 describe('findPane', () => {

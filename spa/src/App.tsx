@@ -102,7 +102,8 @@ export default function App() {
 
   const handleCloseTab = useCallback((tabId: string) => {
     const tab = tabs[tabId]
-    if (tab) useHistoryStore.getState().recordClose(tab, findWorkspaceByTab(tabId)?.id)
+    if (!tab || tab.locked) return // locked guard
+    useHistoryStore.getState().recordClose(tab, findWorkspaceByTab(tabId)?.id)
     const ws = findWorkspaceByTab(tabId)
     if (ws) removeTabFromWorkspace(ws.id, tabId)
     closeTab(tabId)

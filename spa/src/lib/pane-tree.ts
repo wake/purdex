@@ -2,6 +2,10 @@ import type { Pane, PaneContent, PaneLayout } from '../types/tab'
 
 export function getPrimaryPane(layout: PaneLayout): Pane {
   if (layout.type === 'leaf') return layout.pane
+  if (!layout.children.length) {
+    // Corrupted layout — return a placeholder to prevent crash
+    return { id: 'corrupted', content: { kind: 'new-tab' } }
+  }
   return getPrimaryPane(layout.children[0])
 }
 

@@ -7,7 +7,6 @@ import { HistoryPage } from '../components/HistoryPage'
 import { SettingsPage } from '../components/SettingsPage'
 import { SessionSection } from '../components/SessionSection'
 import { useTabStore } from '../stores/useTabStore'
-import { updatePaneInLayout } from './pane-tree'
 import type { PaneContent } from '../types/tab'
 
 export function registerBuiltinPanes(): void {
@@ -15,15 +14,9 @@ export function registerBuiltinPanes(): void {
   registerPaneRenderer('new-tab', {
     component: ({ pane }) => {
       const handleSelect = (content: PaneContent) => {
-        // Replace this pane's content with the selected content
-        const { tabs, activeTabId } = useTabStore.getState()
+        const { activeTabId } = useTabStore.getState()
         if (!activeTabId) return
-        const tab = tabs[activeTabId]
-        if (!tab) return
-        const newLayout = updatePaneInLayout(tab.layout, pane.id, content)
-        useTabStore.setState({
-          tabs: { ...tabs, [activeTabId]: { ...tab, layout: newLayout } },
-        })
+        useTabStore.getState().setPaneContent(activeTabId, pane.id, content)
       }
       return <NewTabPage onSelect={handleSelect} />
     },
