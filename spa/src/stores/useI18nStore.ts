@@ -39,7 +39,7 @@ function deduplicateName(name: string, existingNames: Set<string>): string {
 function makeT(activeLocaleId: string, customLocales: Record<string, LocaleDef>) {
   return (key: string, params?: Record<string, string | number>): string => {
     const active = getLocale(activeLocaleId) ?? customLocales[activeLocaleId]
-    let value = active?.translations[key]
+    let value: string | undefined = active?.translations[key]
     if (value === undefined) {
       const en = getLocale('en')
       value = en?.translations[key]
