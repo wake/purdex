@@ -105,3 +105,30 @@
   --status-warning: #ebcb8b33;
   --status-success: #a3be8c33;
 }
+
+/* === Dracula === */
+[data-theme="dracula"] {
+  --surface-primary: #282a36;
+  --surface-secondary: #21222c;
+  --surface-tertiary: #191a21;
+  --surface-elevated: #44475a;
+  --surface-hover: #44475a;
+  --surface-active: #6272a4;
+  --surface-input: #21222c;
+  --text-primary: #f8f8f2;
+  --text-secondary: #bfbfbf;
+  --text-muted: #6272a4;
+  --text-inverse: #282a36;
+  --border-default: #44475a;
+  --border-active: #bd93f9;
+  --border-subtle: #21222c;
+  --accent: #bd93f9;
+  --accent-hover: #caa9fa;
+  --accent-muted: rgba(189, 147, 249, 0.2);
+  --terminal-bg: #282a36;
+  --terminal-fg: #f8f8f2;
+  --terminal-cursor: #f8f8f2;
+  --status-error: #ff555533;
+  --status-warning: #f1fa8c33;
+  --status-success: #50fa7b33;
+}
