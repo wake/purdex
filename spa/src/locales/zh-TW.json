@@ -144,7 +144,6 @@
   "status.no_active": "無使用中的 Session",
 
   "stream.thinking": "思考中...",
-  "stream.starting": "啟動中...",
   "stream.waiting": "等待訊息...",
   "stream.handoff.button": "Handoff",
   "stream.handoff.no_cc": "CC 未執行",

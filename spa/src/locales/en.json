@@ -144,7 +144,6 @@
   "status.no_active": "No active session",
 
   "stream.thinking": "Thinking...",
-  "stream.starting": "Starting...",
   "stream.waiting": "Waiting for messages...",
   "stream.handoff.button": "Handoff",
   "stream.handoff.no_cc": "No CC running",
