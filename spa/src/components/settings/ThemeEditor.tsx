@@ -72,12 +72,13 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
     style.setAttribute('data-theme-editor', 'true')
     document.head.appendChild(style)
     styleRef.current = style
+    const savedTheme = originalThemeRef.current
 
     return () => {
       style.remove()
       // Restore original theme attr
-      if (originalThemeRef.current !== undefined) {
-        document.documentElement.dataset.theme = originalThemeRef.current
+      if (savedTheme !== undefined) {
+        document.documentElement.dataset.theme = savedTheme
       }
     }
   }, [])

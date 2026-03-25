@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { ThemeImportModal, parseAndValidate } from './ThemeImportModal'
+import { ThemeImportModal } from './ThemeImportModal'
+import { parseAndValidate } from '../../lib/theme-import'
 import { useThemeStore } from '../../stores/useThemeStore'
 import { registerTheme, clearThemeRegistry } from '../../lib/theme-registry'
 import type { ThemeTokens } from '../../lib/theme-tokens'

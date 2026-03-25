@@ -95,4 +95,18 @@ describe('AppearanceSection', () => {
     fireEvent.click(screen.getByLabelText('Delete theme'))
     expect(useThemeStore.getState().activeThemeId).toBe('dark')
   })
+
+  it('shows export button for custom themes', () => {
+    const customId = useThemeStore.getState().createCustomTheme('My Theme', 'dark', {})
+    useThemeStore.getState().setActiveTheme(customId)
+
+    render(<AppearanceSection />)
+    expect(screen.getByLabelText('Export theme')).toBeTruthy()
+  })
+
+  it('does not show export/delete buttons for preset themes', () => {
+    render(<AppearanceSection />)
+    expect(screen.queryByLabelText('Export theme')).toBeNull()
+    expect(screen.queryByLabelText('Delete theme')).toBeNull()
+  })
 })
