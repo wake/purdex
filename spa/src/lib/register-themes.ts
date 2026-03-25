@@ -28,6 +28,33 @@ const darkTokens: ThemeTokens = {
   'status-success': '#2a4a3a',
 }
 
+const lightTokens: ThemeTokens = {
+  'surface-primary': '#f5f5f5',
+  'surface-secondary': '#e8e8e8',
+  'surface-tertiary': '#f0f0f0',
+  'surface-elevated': '#ffffff',
+  'surface-hover': '#e0e0e0',
+  'surface-active': '#d4d0e8',
+  'surface-input': '#ffffff',
+  'text-primary': '#1a1a2e',
+  'text-secondary': '#4a4a5a',
+  'text-muted': '#8a8a9a',
+  'text-inverse': '#f5f5f5',
+  'border-default': '#d0d0d0',
+  'border-active': '#6a5a9a',
+  'border-subtle': '#e0e0e0',
+  'accent': '#6a5a9a',
+  'accent-hover': '#5a4a8a',
+  'accent-muted': 'rgba(106, 90, 154, 0.15)',
+  'terminal-bg': '#f5f5f5',
+  'terminal-fg': '#1a1a2e',
+  'terminal-cursor': '#1a1a2e',
+  'status-error': '#fce4e4',
+  'status-warning': '#fef3cd',
+  'status-success': '#d4edda',
+}
+
 export function registerBuiltinThemes(): void {
   registerTheme({ id: 'dark', name: 'Dark', tokens: darkTokens, builtin: true })
+  registerTheme({ id: 'light', name: 'Light', tokens: lightTokens, builtin: true })
 }
