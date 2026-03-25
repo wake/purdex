@@ -2,6 +2,7 @@ import { Plus, GearSix } from '@phosphor-icons/react'
 import type { Tab, Workspace } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { getPaneLabel } from '../lib/pane-labels'
+import { useI18nStore } from '../stores/useI18nStore'
 
 const emptySessionLookup = { getByCode: () => undefined }
 const emptyWorkspaceLookup = { getById: () => undefined }
@@ -27,6 +28,7 @@ export function ActivityBar({
   onAddWorkspace,
   onOpenSettings,
 }: Props) {
+  const t = useI18nStore((s) => s.t)
   return (
     <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 gap-2 flex-shrink-0">
       {/* Workspaces */}
@@ -57,6 +59,7 @@ export function ActivityBar({
           getPrimaryPane(tab.layout).content,
           emptySessionLookup,
           emptyWorkspaceLookup,
+          t,
         )
         return (
           <button
@@ -77,14 +80,14 @@ export function ActivityBar({
       {/* Add + Settings */}
       <div className="mt-auto flex flex-col items-center gap-2 pb-1">
         <button
-          title="新增工作區"
+          title={t('nav.new_workspace')}
           onClick={onAddWorkspace}
           className="w-8 h-8 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
         >
           <Plus size={16} />
         </button>
         <button
-          title="設定"
+          title={t('nav.settings')}
           onClick={onOpenSettings}
           className="w-8 h-8 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
         >

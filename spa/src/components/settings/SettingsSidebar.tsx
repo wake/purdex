@@ -1,4 +1,5 @@
 import { getSettingsSections } from '../../lib/settings-section-registry'
+import { useI18nStore } from '../../stores/useI18nStore'
 
 interface Props {
   activeSection: string
@@ -6,12 +7,13 @@ interface Props {
 }
 
 export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
+  const t = useI18nStore((s) => s.t)
   const sections = getSettingsSections()
   const reservedStart = sections.findIndex((s) => !s.component)
 
   return (
     <div className="w-48 border-r border-border-subtle bg-surface-primary py-3 flex-shrink-0">
-      <div className="px-4 mb-2 text-[10px] text-text-muted uppercase tracking-wider">Settings</div>
+      <div className="px-4 mb-2 text-[10px] text-text-muted uppercase tracking-wider">{t('settings.title')}</div>
       {sections.map((item, i) => {
         const isActive = item.id === activeSection
         const enabled = !!item.component
@@ -34,9 +36,9 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
                     : 'text-text-secondary cursor-pointer hover:bg-white/5'
               }`}
             >
-              <span>{item.label}</span>
+              <span>{t(item.label)}</span>
               {!enabled && (
-                <span className="text-[10px] text-text-muted ml-auto">coming soon</span>
+                <span className="text-[10px] text-text-muted ml-auto">{t('settings.coming_soon')}</span>
               )}
             </button>
           </div>

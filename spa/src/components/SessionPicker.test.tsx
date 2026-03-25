@@ -35,7 +35,7 @@ describe('SessionPicker', () => {
       />,
     )
     const devItem = screen.getByText('dev-server').closest('button')!
-    expect(devItem.textContent).toContain('已開啟')
+    expect(devItem.textContent).toContain('Already open')
   })
 
   it('calls onSelect with session info', () => {
@@ -61,7 +61,7 @@ describe('SessionPicker', () => {
         onClose={vi.fn()}
       />,
     )
-    const input = screen.getByPlaceholderText('搜尋 session...')
+    const input = screen.getByPlaceholderText('Search sessions...')
     fireEvent.change(input, { target: { value: 'claude' } })
     expect(screen.queryByText('dev-server')).toBeNull()
     expect(screen.getByText('claude-code')).toBeTruthy()

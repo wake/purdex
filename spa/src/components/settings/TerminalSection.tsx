@@ -2,11 +2,7 @@ import { useUISettingsStore, type TerminalRenderer } from '../../stores/useUISet
 import { SettingItem } from './SettingItem'
 import { SegmentControl } from './SegmentControl'
 import { ToggleSwitch } from './ToggleSwitch'
-
-const RENDERER_OPTIONS = [
-  { value: 'webgl' as TerminalRenderer, label: 'WebGL' },
-  { value: 'dom' as TerminalRenderer, label: 'DOM' },
-]
+import { useI18nStore } from '../../stores/useI18nStore'
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
@@ -23,6 +19,13 @@ export function TerminalSection() {
   const revealDelay = useUISettingsStore((s) => s.terminalRevealDelay)
   const setRevealDelay = useUISettingsStore((s) => s.setTerminalRevealDelay)
 
+  const t = useI18nStore((s) => s.t)
+
+  const RENDERER_OPTIONS = [
+    { value: 'webgl' as TerminalRenderer, label: t('settings.terminal.renderer.webgl') },
+    { value: 'dom' as TerminalRenderer, label: t('settings.terminal.renderer.dom') },
+  ]
+
   const handleRenderer = (r: TerminalRenderer) => {
     // Atomic: update renderer + bump version in single set() to avoid intermediate state
     useUISettingsStore.setState((s) => ({
@@ -33,17 +36,17 @@ export function TerminalSection() {
 
   return (
     <div>
-      <h2 className="text-lg text-text-primary">Terminal</h2>
-      <p className="text-xs text-text-secondary mb-6">Terminal rendering and connection settings</p>
+      <h2 className="text-lg text-text-primary">{t('settings.terminal.title')}</h2>
+      <p className="text-xs text-text-secondary mb-6">{t('settings.terminal.desc')}</p>
 
-      <SettingItem label="Renderer" description="WebGL is faster but limited to ~16 instances. DOM has no limit.">
+      <SettingItem label={t('settings.terminal.renderer.label')} description={t('settings.terminal.renderer.desc')}>
         <SegmentControl options={RENDERER_OPTIONS} value={renderer} onChange={handleRenderer} />
       </SettingItem>
 
-      <SettingItem label="Keep-alive Count" description="Number of background tabs to keep connected (0 = active only)">
+      <SettingItem label={t('settings.terminal.keepalive.label')} description={t('settings.terminal.keepalive.desc')}>
         <input
           type="number"
-          aria-label="Keep-alive Count"
+          aria-label={t('settings.terminal.keepalive.aria')}
           min={0}
           max={10}
           step={1}
@@ -53,14 +56,14 @@ export function TerminalSection() {
         />
       </SettingItem>
 
-      <SettingItem label="Keep-alive Pinned" description="Always keep pinned tabs connected">
-        <ToggleSwitch label="Keep-alive Pinned" checked={keepAlivePinned} onChange={setKeepAlivePinned} />
+      <SettingItem label={t('settings.terminal.keepalive_pinned.label')} description={t('settings.terminal.keepalive_pinned.desc')}>
+        <ToggleSwitch label={t('settings.terminal.keepalive_pinned.label')} checked={keepAlivePinned} onChange={setKeepAlivePinned} />
       </SettingItem>
 
-      <SettingItem label="Reveal Delay" description="Delay before showing terminal content after connection (ms)">
+      <SettingItem label={t('settings.terminal.reveal_delay.label')} description={t('settings.terminal.reveal_delay.desc')}>
         <input
           type="number"
-          aria-label="Reveal Delay"
+          aria-label={t('settings.terminal.reveal_delay.aria')}
           min={0}
           max={2000}
           step={50}

@@ -1,12 +1,14 @@
 // spa/src/components/ThinkingBlock.tsx
 import { useState } from 'react'
 import { Brain, CaretRight, CaretDown } from '@phosphor-icons/react'
+import { useI18nStore } from '../stores/useI18nStore'
 
 interface Props {
   content: string
 }
 
 export default function ThinkingBlock({ content }: Props) {
+  const t = useI18nStore((s) => s.t)
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -18,7 +20,7 @@ export default function ThinkingBlock({ content }: Props) {
         onClick={() => setExpanded(v => !v)}
       >
         <Brain size={14} />
-        <span>Thinking...</span>
+        <span>{t('stream.thinking')}</span>
         <span className="ml-auto">
           {expanded ? <CaretDown size={10} /> : <CaretRight size={10} />}
         </span>

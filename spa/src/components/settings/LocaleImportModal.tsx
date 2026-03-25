@@ -1,17 +1,16 @@
 import { useState, useRef } from 'react'
 import { X, Upload, LinkSimple, ClipboardText } from '@phosphor-icons/react'
-import { useThemeStore, type ThemeImportPayload } from '../../stores/useThemeStore'
-import { parseAndValidate } from '../../lib/theme-import'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { parseAndValidateLocale, type LocaleImportPayload } from '../../lib/locale-import'
 
-interface ThemeImportModalProps {
+interface LocaleImportModalProps {
   onClose: () => void
-  onImported: (themeId: string) => void
+  onImported: (localeId: string) => void
 }
 
 type ImportTab = 'paste' | 'file' | 'url'
 
-export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps) {
+export function LocaleImportModal({ onClose, onImported }: LocaleImportModalProps) {
   const [activeTab, setActiveTab] = useState<ImportTab>('paste')
   const [jsonText, setJsonText] = useState('')
   const [urlText, setUrlText] = useState('')
@@ -19,12 +18,12 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
   const [loading, setLoading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const importTheme = useThemeStore((s) => s.importTheme)
+  const importLocale = useI18nStore((s) => s.importLocale)
   const t = useI18nStore((s) => s.t)
 
-  const handleImport = (payload: ThemeImportPayload) => {
+  const handleImport = (payload: LocaleImportPayload) => {
     try {
-      const id = importTheme(payload)
+      const id = importLocale(payload)
       onImported(id)
       onClose()
     } catch (e) {
@@ -41,7 +40,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
       setError(t('error.json.invalid'))
       return
     }
-    const result = parseAndValidate(parsed)
+    const result = parseAndValidateLocale(parsed)
     if (typeof result === 'string') {
       setError(result)
       return
@@ -62,7 +61,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
         setError(t('error.json.invalid_file'))
         return
       }
-      const result = parseAndValidate(parsed)
+      const result = parseAndValidateLocale(parsed)
       if (typeof result === 'string') {
         setError(result)
         return
@@ -95,7 +94,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
         setLoading(false)
         return
       }
-      const result = parseAndValidate(parsed)
+      const result = parseAndValidateLocale(parsed)
       if (typeof result === 'string') {
         setError(result)
         setLoading(false)
@@ -111,22 +110,22 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
   }
 
   const tabs: { id: ImportTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'paste', label: t('theme.import.tab.paste'), icon: <ClipboardText size={14} /> },
-    { id: 'file', label: t('theme.import.tab.file'), icon: <Upload size={14} /> },
-    { id: 'url', label: t('theme.import.tab.url'), icon: <LinkSimple size={14} /> },
+    { id: 'paste', label: t('locale.import.tab.paste'), icon: <ClipboardText size={14} /> },
+    { id: 'file', label: t('locale.import.tab.file'), icon: <Upload size={14} /> },
+    { id: 'url', label: t('locale.import.tab.url'), icon: <LinkSimple size={14} /> },
   ]
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      data-testid="theme-import-modal"
+      data-testid="locale-import-modal"
     >
       <div className="bg-surface-primary border border-border-default rounded-lg shadow-lg w-[480px] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
-          <h3 className="text-sm font-medium text-text-primary">{t('theme.import.title')}</h3>
+          <h3 className="text-sm font-medium text-text-primary">{t('locale.import.title')}</h3>
           <button
-            aria-label={t('theme.import.close')}
+            aria-label={t('locale.import.close')}
             onClick={onClose}
             className="p-1 rounded text-text-muted hover:text-text-primary"
           >
@@ -157,10 +156,10 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
           {activeTab === 'paste' && (
             <div className="space-y-3">
               <textarea
-                aria-label={t('theme.import.paste.aria')}
+                aria-label={t('locale.import.paste.aria')}
                 value={jsonText}
                 onChange={(e) => setJsonText(e.target.value)}
-                placeholder={t('theme.import.paste.placeholder')}
+                placeholder={t('locale.import.paste.placeholder')}
                 className="w-full h-32 bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-2 font-mono resize-none focus:border-border-active focus:outline-none"
               />
               <button
@@ -179,7 +178,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
                 onClick={() => fileInputRef.current?.click()}
               >
                 <Upload size={24} className="text-text-muted mb-2" />
-                <span className="text-xs text-text-secondary">{t('theme.import.file.hint')}</span>
+                <span className="text-xs text-text-secondary">{t('locale.import.file.hint')}</span>
               </div>
               <input
                 ref={fileInputRef}
@@ -187,7 +186,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
                 accept=".json"
                 onChange={handleFileChange}
                 className="hidden"
-                aria-label={t('theme.import.file.aria')}
+                aria-label={t('locale.import.file.aria')}
               />
             </div>
           )}
@@ -196,10 +195,10 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
             <div className="space-y-3">
               <input
                 type="url"
-                aria-label={t('theme.import.url.aria')}
+                aria-label={t('locale.import.url.aria')}
                 value={urlText}
                 onChange={(e) => setUrlText(e.target.value)}
-                placeholder={t('theme.import.url.placeholder')}
+                placeholder={t('locale.import.url.placeholder')}
                 className="w-full bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 font-mono focus:border-border-active focus:outline-none"
               />
               <button
@@ -207,7 +206,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
                 disabled={loading}
                 className="px-4 py-1.5 text-xs text-text-inverse bg-accent hover:bg-accent-hover rounded-md disabled:opacity-50"
               >
-                {loading ? t('theme.import.url.fetching') : t('theme.import.url.fetch_button')}
+                {loading ? t('locale.import.url.fetching') : t('locale.import.url.fetch_button')}
               </button>
             </div>
           )}

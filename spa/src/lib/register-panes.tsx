@@ -36,15 +36,15 @@ export function registerBuiltinPanes(): void {
   registerPaneRenderer('settings', { component: SettingsPage })
 
   // Settings sections
-  registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: AppearanceSection })
-  registerSettingsSection({ id: 'terminal', label: 'Terminal', order: 1, component: TerminalSection })
-  registerSettingsSection({ id: 'workspace', label: 'Workspace', order: 10 }) // reserved
-  registerSettingsSection({ id: 'sync', label: 'Sync', order: 11 }) // reserved
+  registerSettingsSection({ id: 'appearance', label: 'settings.section.appearance', order: 0, component: AppearanceSection })
+  registerSettingsSection({ id: 'terminal', label: 'settings.section.terminal', order: 1, component: TerminalSection })
+  registerSettingsSection({ id: 'workspace', label: 'settings.section.workspace', order: 10 }) // reserved
+  registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: 11 }) // reserved
 
   // New-tab providers
   registerNewTabProvider({
     id: 'sessions',
-    label: 'Sessions',
+    label: 'session.provider_label',
     icon: 'List',
     order: 0,
     component: SessionSection,

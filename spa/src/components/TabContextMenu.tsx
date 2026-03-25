@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useClickOutside } from '../hooks/useClickOutside'
+import { useI18nStore } from '../stores/useI18nStore'
 
 export type ContextMenuAction =
   | 'viewMode-terminal' | 'viewMode-stream'
@@ -25,6 +26,7 @@ interface MenuItem {
 }
 
 export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnlocked, hasRightUnlocked }: Props) {
+  const t = useI18nStore((s) => s.t)
   const ref = useRef<HTMLDivElement>(null)
   const [adjustedPos, setAdjustedPos] = useState(position)
 
@@ -55,19 +57,19 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
 
   const items: (MenuItem | 'separator')[] = [
     // ViewMode section
-    ...(isSession && currentMode !== 'terminal' ? [{ label: '切換至 Terminal', action: 'viewMode-terminal' as const, show: true }] : []),
-    ...(isSession && currentMode !== 'stream' ? [{ label: '切換至 Stream', action: 'viewMode-stream' as const, show: true }] : []),
+    ...(isSession && currentMode !== 'terminal' ? [{ label: t('tab.switch_terminal'), action: 'viewMode-terminal' as const, show: true }] : []),
+    ...(isSession && currentMode !== 'stream' ? [{ label: t('tab.switch_stream'), action: 'viewMode-stream' as const, show: true }] : []),
     ...(isSession ? ['separator' as const] : []),
     // Lock/Pin section
-    { label: '鎖定分頁', action: 'lock' as const, show: !tab.locked },
-    { label: '解鎖分頁', action: 'unlock' as const, show: tab.locked },
-    { label: '固定分頁', action: 'pin' as const, show: !tab.pinned },
-    { label: '取消固定', action: 'unpin' as const, show: tab.pinned },
+    { label: t('tab.lock'), action: 'lock' as const, show: !tab.locked },
+    { label: t('tab.unlock'), action: 'unlock' as const, show: tab.locked },
+    { label: t('tab.pin'), action: 'pin' as const, show: !tab.pinned },
+    { label: t('tab.unpin'), action: 'unpin' as const, show: tab.pinned },
     'separator',
     // Close section
-    { label: '關閉分頁', action: 'close' as const, show: true, disabled: tab.locked },
-    { label: '關閉其他分頁', action: 'closeOthers' as const, show: hasOtherUnlocked },
-    { label: '關閉右側分頁', action: 'closeRight' as const, show: hasRightUnlocked },
+    { label: t('tab.close'), action: 'close' as const, show: true, disabled: tab.locked },
+    { label: t('tab.close_others'), action: 'closeOthers' as const, show: hasOtherUnlocked },
+    { label: t('tab.close_right'), action: 'closeRight' as const, show: hasRightUnlocked },
   ]
 
   const visibleItems = items.filter((item) => item === 'separator' || item.show)

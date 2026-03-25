@@ -1,5 +1,6 @@
 // spa/src/components/FileAttachment.tsx
 import { File, X } from '@phosphor-icons/react'
+import { useI18nStore } from '../stores/useI18nStore'
 
 export interface AttachedFile {
   name: string
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export default function FileAttachment({ files, onRemove }: Props) {
+  const t = useI18nStore((s) => s.t)
   if (files.length === 0) return null
 
   return (
@@ -32,7 +34,7 @@ export default function FileAttachment({ files, onRemove }: Props) {
           )}
           <span className="max-w-[100px] truncate">{file.name}</span>
           <button
-            aria-label="remove"
+            aria-label={t('common.remove')}
             onClick={() => onRemove(i)}
             className="text-text-muted hover:text-red-400 ml-0.5 cursor-pointer"
           >

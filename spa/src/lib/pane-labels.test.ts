@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { getPaneLabel, getPaneIcon } from './pane-labels'
+import type { TFunction } from './pane-labels'
 import type { PaneContent } from '../types/tab'
+
+const mockT: TFunction = (key, params) => {
+  if (params) {
+    return key.replace(/\{\{(\w+)\}\}/g, (_, k) => String(params[k] ?? ''))
+  }
+  return key
+}
 
 describe('getPaneLabel', () => {
   const mockSessionStore = {
@@ -12,41 +20,41 @@ describe('getPaneLabel', () => {
       id === 'ws0001' ? { name: 'My Project' } : undefined,
   }
 
-  it('returns New Tab for new-tab', () => {
-    expect(getPaneLabel({ kind: 'new-tab' }, mockSessionStore, mockWorkspaceStore)).toBe('New Tab')
+  it('returns i18n key for new-tab', () => {
+    expect(getPaneLabel({ kind: 'new-tab' }, mockSessionStore, mockWorkspaceStore, mockT)).toBe('page.pane.new_tab')
   })
 
   it('returns session name for session content', () => {
     const c: PaneContent = { kind: 'session', sessionCode: 'abc123', mode: 'terminal' }
-    expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore)).toBe('dev-server')
+    expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore, mockT)).toBe('dev-server')
   })
 
   it('falls back to sessionCode if session not found', () => {
     const c: PaneContent = { kind: 'session', sessionCode: 'zzz999', mode: 'terminal' }
-    expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore)).toBe('zzz999')
+    expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore, mockT)).toBe('zzz999')
   })
 
-  it('returns Dashboard for dashboard', () => {
-    expect(getPaneLabel({ kind: 'dashboard' }, mockSessionStore, mockWorkspaceStore)).toBe('Dashboard')
+  it('returns i18n key for dashboard', () => {
+    expect(getPaneLabel({ kind: 'dashboard' }, mockSessionStore, mockWorkspaceStore, mockT)).toBe('page.pane.dashboard')
   })
 
-  it('returns History for history', () => {
-    expect(getPaneLabel({ kind: 'history' }, mockSessionStore, mockWorkspaceStore)).toBe('History')
+  it('returns i18n key for history', () => {
+    expect(getPaneLabel({ kind: 'history' }, mockSessionStore, mockWorkspaceStore, mockT)).toBe('page.pane.history')
   })
 
-  it('returns Settings for global settings', () => {
+  it('returns i18n key for global settings', () => {
     const c: PaneContent = { kind: 'settings', scope: 'global' }
-    expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore)).toBe('Settings')
+    expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore, mockT)).toBe('page.pane.settings')
   })
 
-  it('returns workspace name for workspace settings', () => {
+  it('returns interpolated workspace name for workspace settings', () => {
     const c: PaneContent = { kind: 'settings', scope: { workspaceId: 'ws0001' } }
-    expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore)).toBe('Settings — My Project')
+    expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore, mockT)).toBe('page.pane.settings_ws')
   })
 
   it('falls back to workspace id if not found', () => {
     const c: PaneContent = { kind: 'settings', scope: { workspaceId: 'zzzzzz' } }
-    expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore)).toBe('Settings — zzzzzz')
+    expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore, mockT)).toBe('page.pane.settings_ws')
   })
 })
 

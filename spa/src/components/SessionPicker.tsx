@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Terminal, Lightning } from '@phosphor-icons/react'
 import type { Session } from '../lib/api'
+import { useI18nStore } from '../stores/useI18nStore'
 
 interface Props {
   sessions: Session[]
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function SessionPicker({ sessions, existingTabSessionNames, onSelect, onClose }: Props) {
+  const t = useI18nStore((s) => s.t)
   const [search, setSearch] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -35,7 +37,7 @@ export function SessionPicker({ sessions, existingTabSessionNames, onSelect, onC
           <input
             ref={inputRef}
             type="text"
-            placeholder="搜尋 session..."
+            placeholder={t('session.search')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full bg-surface-primary border border-border-default rounded-md px-3 py-2 text-sm text-white placeholder-text-muted outline-none focus:border-accent"
@@ -52,11 +54,11 @@ export function SessionPicker({ sessions, existingTabSessionNames, onSelect, onC
               {s.mode === 'stream' ? <Lightning size={16} className="text-blue-400 flex-shrink-0" /> : <Terminal size={16} className="text-text-secondary flex-shrink-0" />}
               <span className="flex-1 text-text-primary">{s.name}</span>
               <span className="text-xs text-text-muted">{s.mode}</span>
-              {hasTab(s.name) && <span className="text-xs text-purple-400">已開啟</span>}
+              {hasTab(s.name) && <span className="text-xs text-purple-400">{t('session.picker.already_open')}</span>}
             </button>
           ))}
           {filtered.length === 0 && (
-            <div className="px-4 py-6 text-center text-text-muted text-sm">無符合的 session</div>
+            <div className="px-4 py-6 text-center text-text-muted text-sm">{t('session.picker.no_match')}</div>
           )}
         </div>
       </div>

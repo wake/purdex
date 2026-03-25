@@ -5,6 +5,7 @@ import { Plus, CaretLeft, CaretRight, TerminalWindow, ChatCircleDots, House, Clo
 import { SortableTab } from './SortableTab'
 import { useScrollOverflow } from '../hooks/useScrollOverflow'
 import type { Tab } from '../types/tab'
+import { useI18nStore } from '../stores/useI18nStore'
 
 const TerminalWindowFill = (props: { size: number; className?: string }) => <TerminalWindow {...props} weight="fill" />
 
@@ -33,6 +34,7 @@ function TabSeparator({ show }: { show: boolean }) {
 }
 
 export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu }: Props) {
+  const t = useI18nStore((s) => s.t)
   const pinnedTabs = useMemo(() => tabs.filter((t) => t.pinned), [tabs])
   const normalTabs = useMemo(() => tabs.filter((t) => !t.pinned), [tabs])
   const pinnedIds = useMemo(() => pinnedTabs.map((t) => t.id), [pinnedTabs])
@@ -128,7 +130,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
             <button
               onClick={scrollLeft}
               className="absolute left-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-gradient-to-r from-surface-secondary to-transparent cursor-pointer"
-              aria-label="向左捲動"
+              aria-label={t('nav.scroll_left')}
             >
               <CaretLeft size={14} className="text-text-secondary" />
             </button>
@@ -158,7 +160,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
             <button
               onClick={onAddTab}
               className="flex items-center justify-center w-7 h-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-white/10 cursor-pointer flex-shrink-0"
-              title="新增分頁"
+              title={t('nav.new_tab')}
               style={{ marginTop: 2 }}
             >
               <Plus size={14} />
@@ -168,7 +170,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
             <button
               onClick={scrollRight}
               className="absolute right-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-gradient-to-l from-surface-secondary to-transparent cursor-pointer"
-              aria-label="向右捲動"
+              aria-label={t('nav.scroll_right')}
             >
               <CaretRight size={14} className="text-text-secondary" />
             </button>

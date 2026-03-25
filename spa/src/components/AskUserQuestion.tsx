@@ -1,6 +1,7 @@
 // spa/src/components/AskUserQuestion.tsx
 import { useState, useRef } from 'react'
 import { ChatCircleDots, Check } from '@phosphor-icons/react'
+import { useI18nStore } from '../stores/useI18nStore'
 
 export interface QuestionItem {
   question: string
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export default function AskUserQuestion({ questions, onSubmit, onCancel }: Props) {
+  const t = useI18nStore((s) => s.t)
   const q = questions[0] || { question: 'Please answer:', options: [], multiSelect: false }
   const options = q.options || []
   const multiSelect = q.multiSelect || false
@@ -80,7 +82,7 @@ export default function AskUserQuestion({ questions, onSubmit, onCancel }: Props
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={handleInputKeyDown}
-          placeholder="Type your answer…"
+          placeholder={t('stream.ask_user.placeholder')}
           className="w-full rounded-lg border border-border-default/50 bg-surface-secondary/60 px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none focus:border-blue-500/50"
           autoFocus
         />

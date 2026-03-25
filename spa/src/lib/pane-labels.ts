@@ -1,5 +1,7 @@
 import type { PaneContent } from '../types/tab'
 
+export type TFunction = (key: string, params?: Record<string, string | number>) => string
+
 interface SessionLookup {
   getByCode(code: string): { name: string } | undefined
 }
@@ -12,22 +14,23 @@ export function getPaneLabel(
   content: PaneContent,
   sessionStore: SessionLookup,
   workspaceStore: WorkspaceLookup,
+  t: TFunction,
 ): string {
   switch (content.kind) {
     case 'new-tab':
-      return 'New Tab'
+      return t('page.pane.new_tab')
     case 'session': {
       const session = sessionStore.getByCode(content.sessionCode)
       return session?.name ?? content.sessionCode
     }
     case 'dashboard':
-      return 'Dashboard'
+      return t('page.pane.dashboard')
     case 'history':
-      return 'History'
+      return t('page.pane.history')
     case 'settings': {
-      if (content.scope === 'global') return 'Settings'
+      if (content.scope === 'global') return t('page.pane.settings')
       const ws = workspaceStore.getById(content.scope.workspaceId)
-      return `Settings — ${ws?.name ?? content.scope.workspaceId}`
+      return t('page.pane.settings_ws', { name: ws?.name ?? content.scope.workspaceId })
     }
   }
 }
