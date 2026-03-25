@@ -1,6 +1,7 @@
 // spa/src/components/ConversationView.tsx
 import { useRef, useCallback, useState, useEffect } from 'react'
 import { useStreamStore } from '../stores/useStreamStore'
+import { useI18nStore } from '../stores/useI18nStore'
 import {
   type StreamMessage,
   type AssistantMessage,
@@ -29,6 +30,7 @@ const EMPTY_MESSAGES: StreamMessage[] = []
 const EMPTY_CONTROLS: ControlRequest[] = []
 
 export default function ConversationView({ sessionCode, onHandoff, onHandoffToTerm }: Props) {
+  const t = useI18nStore((s) => s.t)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
@@ -200,7 +202,7 @@ export default function ConversationView({ sessionCode, onHandoff, onHandoffToTe
       {/* Drag overlay */}
       {isDragging && (
         <div className="absolute inset-0 bg-blue-500/10 border-2 border-dashed border-blue-400 z-20 flex items-center justify-center pointer-events-none">
-          <span className="text-blue-400 font-medium">Drop files here</span>
+          <span className="text-blue-400 font-medium">{t('stream.drop_files')}</span>
         </div>
       )}
 
@@ -217,7 +219,7 @@ export default function ConversationView({ sessionCode, onHandoff, onHandoffToTe
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && !isStreaming && (
           <div className="flex items-center justify-center h-full text-text-muted text-sm">
-            Waiting for messages...
+            {t('stream.waiting')}
           </div>
         )}
         {messages.map((msg, i) => {
@@ -266,7 +268,7 @@ export default function ConversationView({ sessionCode, onHandoff, onHandoffToTe
                         <div key={j} data-testid="interrupted-msg"
                           className="flex items-center gap-1.5 bg-status-error rounded-[12px_12px_4px_12px] px-3 py-1.5 text-sm text-[#eaa] italic"> {/* TODO: theme token for text-[#eaa] */}
                           <Prohibit size={14} />
-                          <span>Request interrupted by user</span>
+                          <span>{t('stream.interrupted')}</span>
                         </div>
                       )
                     }

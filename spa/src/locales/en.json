@@ -165,6 +165,7 @@
   "stream.permission.deny": "Deny",
   "stream.drop_files": "Drop files here",
   "stream.interrupted": "Request interrupted by user",
+  "stream.ask_user.placeholder": "Type your answer…",
 
   "error.json.invalid": "Invalid JSON syntax",
   "error.json.invalid_file": "Invalid JSON syntax in file",

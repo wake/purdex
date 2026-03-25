@@ -165,6 +165,7 @@
   "stream.permission.deny": "拒絕",
   "stream.drop_files": "將檔案拖放至此",
   "stream.interrupted": "請求已被使用者中斷",
+  "stream.ask_user.placeholder": "輸入你的回答…",
 
   "error.json.invalid": "JSON 語法無效",
   "error.json.invalid_file": "檔案中的 JSON 語法無效",

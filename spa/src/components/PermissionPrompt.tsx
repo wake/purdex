@@ -1,5 +1,6 @@
 // spa/src/components/PermissionPrompt.tsx
 import { WarningCircle } from '@phosphor-icons/react'
+import { useI18nStore } from '../stores/useI18nStore'
 
 interface Props {
   tool: string
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export default function PermissionPrompt({ tool, description, onAllow, onDeny }: Props) {
+  const t = useI18nStore((s) => s.t)
   return (
     <div className="flex items-center gap-3 rounded-lg border border-yellow-800/60 bg-yellow-950/30 px-3 py-2.5 my-1">
       <div className="flex-1 min-w-0">
@@ -28,13 +30,13 @@ export default function PermissionPrompt({ tool, description, onAllow, onDeny }:
           onClick={onAllow}
           className="px-3 py-1 rounded-md text-xs font-medium bg-green-900 text-green-400 hover:bg-green-800 cursor-pointer"
         >
-          Allow
+          {t('stream.permission.allow')}
         </button>
         <button
           onClick={onDeny}
           className="px-3 py-1 rounded-md text-xs font-medium bg-red-900 text-red-400 hover:bg-red-800 cursor-pointer"
         >
-          Deny
+          {t('stream.permission.deny')}
         </button>
       </div>
     </div>

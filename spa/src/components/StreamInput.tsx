@@ -1,6 +1,7 @@
 // spa/src/components/StreamInput.tsx
 import { useState, useRef, useCallback } from 'react'
 import { Plus, Terminal } from '@phosphor-icons/react'
+import { useI18nStore } from '../stores/useI18nStore'
 
 interface Props {
   onSend: (text: string) => void
@@ -10,7 +11,9 @@ interface Props {
   placeholder?: string
 }
 
-export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disabled = false, placeholder = 'Reply...' }: Props) {
+export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disabled = false, placeholder }: Props) {
+  const t = useI18nStore((s) => s.t)
+  const resolvedPlaceholder = placeholder ?? t('stream.input.placeholder')
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -50,7 +53,7 @@ export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disable
         onChange={e => { setValue(e.target.value); autoGrow() }}
         onKeyDown={handleKeyDown}
         disabled={disabled}
-        placeholder={placeholder}
+        placeholder={resolvedPlaceholder}
         rows={1}
         className="w-full bg-transparent text-text-primary placeholder-text-muted px-3 py-2.5 text-sm outline-none resize-none"
       />
@@ -69,11 +72,11 @@ export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disable
             type="button"
             onClick={onHandoffToTerm}
             disabled={disabled}
-            title="Handoff to Term"
+            title={t('stream.handoff_to_term')}
             className="flex items-center gap-1 px-2 py-1 rounded text-xs text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-40"
           >
             <Terminal size={14} />
-            <span>Handoff to Term</span>
+            <span>{t('stream.handoff_to_term')}</span>
           </button>
         )}
       </div>
