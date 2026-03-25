@@ -82,6 +82,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
       const response = await fetch(urlText.trim())
       if (!response.ok) {
         setError(`HTTP ${response.status}: ${response.statusText}`)
+        setLoading(false)
         return
       }
       let parsed: unknown
@@ -89,17 +90,20 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
         parsed = await response.json()
       } catch {
         setError('Response is not valid JSON')
+        setLoading(false)
         return
       }
       const result = parseAndValidate(parsed)
       if (typeof result === 'string') {
         setError(result)
+        setLoading(false)
         return
       }
       handleImport(result)
+      // Don't setLoading(false) — component will unmount via onClose()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch URL (CORS error?)')
-    } finally {
+      const msg = e instanceof Error ? e.message : 'Fetch failed'
+      setError(msg.includes('Failed to fetch') ? 'Unable to fetch URL. The server may not allow cross-origin requests. Try pasting the JSON directly.' : msg)
       setLoading(false)
     }
   }

@@ -238,7 +238,8 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
             </button>
             <button
               onClick={handleSave}
-              className="flex items-center gap-1 px-3 py-1.5 text-xs text-text-inverse bg-accent hover:bg-accent-hover rounded-md"
+              disabled={!name.trim()}
+              className="flex items-center gap-1 px-3 py-1.5 text-xs text-text-inverse bg-accent hover:bg-accent-hover rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
               aria-label="Save theme"
             >
               <FloppyDisk size={14} />

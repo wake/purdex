@@ -113,7 +113,11 @@ export const useThemeStore = create<ThemeState>()(
         for (const def of Object.values(state.customThemes)) {
           registerTheme(def)
         }
-        applyThemeToDom(state.activeThemeId)
+        const themeId = getTheme(state.activeThemeId) ? state.activeThemeId : 'dark'
+        applyThemeToDom(themeId)
+        if (themeId !== state.activeThemeId) {
+          useThemeStore.setState({ activeThemeId: themeId })
+        }
       },
     },
   ),

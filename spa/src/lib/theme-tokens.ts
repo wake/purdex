@@ -48,9 +48,14 @@ export const TOKEN_METADATA: Record<ThemeTokenKey, TokenMeta> = {
   'status-success':    { label: 'Success',                group: 'status' },
 }
 
+/** Strip characters that could escape a CSS custom property context */
+function sanitizeCssValue(value: string): string {
+  return value.replace(/[{}<>]/g, '').replace(/;/g, '')
+}
+
 /** Convert ThemeTokens to CSS variable declarations */
 export function tokensToCss(tokens: ThemeTokens): string {
   return Object.entries(tokens)
-    .map(([key, value]) => `--${key}: ${value};`)
+    .map(([key, value]) => `--${key}: ${sanitizeCssValue(value)};`)
     .join(' ')
 }

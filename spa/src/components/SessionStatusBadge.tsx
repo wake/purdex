@@ -3,8 +3,8 @@
 export type SessionStatus = 'normal' | 'not-in-cc' | 'cc-idle' | 'cc-running' | 'cc-waiting' | 'cc-unread'
 
 const STATUS_COLORS: Record<SessionStatus, string> = {
-  'normal': 'bg-text-muted',
-  'not-in-cc': 'bg-text-muted',
+  'normal': 'bg-border-default',
+  'not-in-cc': 'bg-border-default',
   'cc-idle': 'bg-emerald-700',
   'cc-running': 'bg-green-400',
   'cc-waiting': 'bg-yellow-400',
@@ -18,7 +18,7 @@ interface Props {
 export default function SessionStatusBadge({ status }: Props) {
   return (
     <span data-testid="status-badge"
-      className={`inline-block w-2 h-2 rounded-full ${STATUS_COLORS[status] || 'bg-text-muted'}`}
+      className={`inline-block w-2 h-2 rounded-full ${STATUS_COLORS[status] || 'bg-border-default'}`}
       title={status}
     />
   )
