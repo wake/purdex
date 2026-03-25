@@ -145,6 +145,10 @@
   "session.picker.already_open": "已開啟",
   "session.picker.no_match": "找不到符合的 Session",
 
+  "browser.provider_label": "瀏覽器",
+  "browser.requires_app": "需要安裝桌面版本",
+  "browser.url_placeholder": "輸入網址...",
+
   "status.no_active": "無使用中的 Session",
 
   "stream.thinking": "思考中...",
