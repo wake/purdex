@@ -216,7 +216,7 @@ export default function ConversationView({ sessionCode, onHandoff, onHandoffToTe
       {/* Messages area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && !isStreaming && (
-          <div className="flex items-center justify-center h-full text-gray-500 text-sm">
+          <div className="flex items-center justify-center h-full text-text-muted text-sm">
             Waiting for messages...
           </div>
         )}
@@ -264,7 +264,7 @@ export default function ConversationView({ sessionCode, onHandoff, onHandoffToTe
                     if (block.text === '[Request interrupted by user]') {
                       return (
                         <div key={j} data-testid="interrupted-msg"
-                          className="flex items-center gap-1.5 bg-[#4a3038] rounded-[12px_12px_4px_12px] px-3 py-1.5 text-sm text-[#eaa] italic">
+                          className="flex items-center gap-1.5 bg-status-error rounded-[12px_12px_4px_12px] px-3 py-1.5 text-sm text-[#eaa] italic"> {/* TODO: theme token for text-[#eaa] */}
                           <Prohibit size={14} />
                           <span>Request interrupted by user</span>
                         </div>
@@ -276,8 +276,8 @@ export default function ConversationView({ sessionCode, onHandoff, onHandoffToTe
                       return (
                         <div key={j} className="flex justify-end">
                           <div data-testid="command-bubble"
-                            className="flex items-center gap-1.5 bg-[#4a4028] rounded-[12px_12px_4px_12px] px-3 py-1.5 text-[13px] text-[#e0d0a0] italic font-mono">
-                            <TerminalWindow size={14} weight="bold" className="text-[#c0a060]" />
+                            className="flex items-center gap-1.5 bg-status-warning rounded-[12px_12px_4px_12px] px-3 py-1.5 text-[13px] text-[#e0d0a0] italic font-mono"> {/* TODO: theme token for text-[#e0d0a0] */}
+                            <TerminalWindow size={14} weight="bold" className="text-[#c0a060]" /> {/* TODO: theme token */}
                             <span>{block.text}</span>
                           </div>
                         </div>

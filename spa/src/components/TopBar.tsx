@@ -10,8 +10,8 @@ interface Props {
 
 export default function TopBar({ sessionName, mode, onModeChange }: Props) {
   return (
-    <div className="h-10 bg-[#242424] border-b border-[#404040] flex items-center px-3 gap-3 relative">
-      <span className="text-sm text-[#e5e5e5] font-medium truncate">{sessionName}</span>
+    <div className="h-10 bg-surface-input border-b border-border-default flex items-center px-3 gap-3 relative">
+      <span className="text-sm text-text-primary font-medium truncate">{sessionName}</span>
       <div className="flex-1" />
 
       <div className="flex items-center gap-1" data-testid="mode-switch">
@@ -20,7 +20,7 @@ export default function TopBar({ sessionName, mode, onModeChange }: Props) {
           onClick={() => onModeChange('term')}
           data-testid="mode-btn-term"
           className={`flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer transition-colors ${
-            mode === 'term' ? 'bg-[#404040] text-[#f0f0f0]' : 'text-[#888] hover:text-[#ccc] hover:bg-[#333]'
+            mode === 'term' ? 'bg-border-default text-text-primary' : 'text-text-muted hover:text-text-secondary hover:bg-surface-hover'
           }`}
         >
           <Terminal size={14} weight={mode === 'term' ? 'fill' : 'regular'} />
@@ -32,7 +32,7 @@ export default function TopBar({ sessionName, mode, onModeChange }: Props) {
           onClick={() => onModeChange('stream')}
           data-testid="mode-btn-stream"
           className={`flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer transition-colors ${
-            mode === 'stream' ? 'bg-[#404040] text-[#f0f0f0]' : 'text-[#888] hover:text-[#ccc] hover:bg-[#333]'
+            mode === 'stream' ? 'bg-border-default text-text-primary' : 'text-text-muted hover:text-text-secondary hover:bg-surface-hover'
           }`}
         >
           <Lightning size={14} weight={mode === 'stream' ? 'fill' : 'regular'} />

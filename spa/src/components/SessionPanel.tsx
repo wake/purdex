@@ -9,7 +9,7 @@ function SessionIcon({ mode, code }: { mode: string; code: string }) {
   switch (mode) {
     case 'stream': return <Lightning {...props} weight="fill" className="text-blue-400" />
     case 'jsonl': return <CircleDashed {...props} className="text-yellow-400" />
-    default: return <Terminal {...props} className="text-gray-400" />
+    default: return <Terminal {...props} className="text-text-secondary" />
   }
 }
 
@@ -51,11 +51,11 @@ export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSe
     activeSessionCode != null ? s.code === activeSessionCode : activeId === s.code
 
   return (
-    <div className="w-56 bg-gray-900 border-r border-gray-800 flex flex-col">
+    <div className="w-56 bg-surface-tertiary border-r border-border-subtle flex flex-col">
       <div className="p-3 flex-1 overflow-y-auto">
-        <h2 className="text-xs uppercase text-gray-400 mb-3">Sessions</h2>
+        <h2 className="text-xs uppercase text-text-secondary mb-3">Sessions</h2>
         <div className="space-y-1">
-          {sessions.length === 0 && <p className="text-sm text-gray-500">No sessions</p>}
+          {sessions.length === 0 && <p className="text-sm text-text-muted">No sessions</p>}
           {sessions.map((s) => {
             const status = sessionStatus[s.code]
               ? mapStatus(sessionStatus[s.code])
@@ -65,23 +65,23 @@ export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSe
                 key={s.code}
                 onClick={() => handleClick(s.code)}
                 className={`w-full text-left px-2 py-1.5 rounded text-sm cursor-pointer flex items-center gap-2 ${
-                  isActive(s) ? 'bg-gray-800 text-gray-100' : 'text-gray-400 hover:bg-gray-800/50'
+                  isActive(s) ? 'bg-surface-secondary text-text-primary' : 'text-text-secondary hover:bg-surface-secondary/50'
                 }`}
               >
                 <SessionIcon mode={s.mode} code={s.code} />
                 <SessionStatusBadge status={status} />
                 <span className="flex-1 truncate">{s.name}</span>
-                <span className="text-xs text-gray-500">{s.mode}</span>
+                <span className="text-xs text-text-muted">{s.mode}</span>
               </button>
             )
           })}
         </div>
       </div>
-      <div className="p-3 border-t border-gray-800">
+      <div className="p-3 border-t border-border-subtle">
         <button
           data-testid="settings-btn"
           onClick={onSettingsOpen}
-          className="flex items-center gap-2 text-gray-400 hover:text-gray-300 text-sm cursor-pointer w-full"
+          className="flex items-center gap-2 text-text-secondary hover:text-text-primary text-sm cursor-pointer w-full"
         >
           <GearSix size={16} />
           <span>Settings</span>

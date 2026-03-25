@@ -1,4 +1,5 @@
 // spa/src/components/ToolResultBlock.tsx
+// TODO: theme tokens for tool-result error/success color variants
 import { useState } from 'react'
 import { CheckCircle, XCircle, CaretRight, CaretDown } from '@phosphor-icons/react'
 
@@ -16,14 +17,14 @@ export default function ToolResultBlock({ content, isError }: Props) {
       data-testid="tool-result-block"
       className={`rounded-lg border my-1 overflow-hidden ${
         isError ? 'border-[#302a2a] bg-[#1f1b1b]' : 'border-[#2a302a] bg-[#1b1f1b]'
-      }`}
+      }`} /* TODO: theme token */
     >
       <button
         data-testid="tool-result-header"
         aria-expanded={expanded}
         className={`w-full flex items-center gap-2 px-3 py-1.5 cursor-pointer text-left text-xs ${
           isError ? 'text-[#c77] hover:bg-[#251f1f]' : 'text-[#8bc] hover:bg-[#1f251f]'
-        }`}
+        }`} /* TODO: theme token */
         onClick={() => setExpanded(v => !v)}
       >
         {expanded ? <CaretDown size={10} /> : <CaretRight size={10} />}
@@ -35,7 +36,7 @@ export default function ToolResultBlock({ content, isError }: Props) {
           data-testid="tool-result-content"
           className={`border-t px-3 py-2 text-xs font-mono whitespace-pre-wrap max-h-60 overflow-auto ${
             isError ? 'border-[#302a2a] text-[#c99]' : 'border-[#2a302a] text-[#9b9]'
-          }`}
+          }`} /* TODO: theme token */
         >
           {content}
         </div>

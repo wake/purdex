@@ -14,7 +14,7 @@ export default function MessageBubble({ role, content }: Props) {
       <div className="flex justify-end">
         <div
           data-testid="user-bubble"
-          className="max-w-[75%] bg-[#334a5e] text-[#dde8f5] text-sm rounded-[12px_12px_4px_12px] px-3 py-1.5 pl-2.5"
+          className="max-w-[75%] bg-[#334a5e] text-[#dde8f5] text-sm rounded-[12px_12px_4px_12px] px-3 py-1.5 pl-2.5" /* TODO: theme tokens for user bubble bg/text */
         >
           <p className="whitespace-pre-wrap break-words">{content}</p>
         </div>
@@ -23,7 +23,7 @@ export default function MessageBubble({ role, content }: Props) {
   }
 
   return (
-    <div data-testid="assistant-text" className="max-w-[90%] text-sm leading-[1.7] text-[#e0e0e0]">
+    <div data-testid="assistant-text" className="max-w-[90%] text-sm leading-[1.7] text-text-primary">
       <div className="prose prose-invert prose-sm max-w-none">
         <ReactMarkdown rehypePlugins={[rehypeHighlight]}>
           {content}

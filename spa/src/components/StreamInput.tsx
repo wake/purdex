@@ -41,7 +41,7 @@ export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disable
 
   return (
     <div className={`mx-2 mb-2 border rounded-xl overflow-hidden transition-colors ${
-      disabled ? 'opacity-40 border-[#404040] bg-[#242424]' : 'border-[#404040] bg-[#242424] focus-within:border-blue-400'
+      disabled ? 'opacity-40 border-border-default bg-surface-input' : 'border-border-default bg-surface-input focus-within:border-blue-400'
     }`}>
       <textarea
         ref={textareaRef}
@@ -52,14 +52,14 @@ export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disable
         disabled={disabled}
         placeholder={placeholder}
         rows={1}
-        className="w-full bg-transparent text-[#f5f5f5] placeholder-[#666] px-3 py-2.5 text-sm outline-none resize-none"
+        className="w-full bg-transparent text-text-primary placeholder-text-muted px-3 py-2.5 text-sm outline-none resize-none"
       />
       <div className="flex items-center px-2 pb-1.5">
         <button
           type="button"
           disabled={disabled}
           onClick={onAttach}
-          className="w-7 h-7 rounded-md flex items-center justify-center text-[#666] hover:text-[#ddd] hover:bg-[#333] transition-colors disabled:opacity-40"
+          className="w-7 h-7 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-40"
         >
           <Plus size={16} />
         </button>
@@ -70,7 +70,7 @@ export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disable
             onClick={onHandoffToTerm}
             disabled={disabled}
             title="Handoff to Term"
-            className="flex items-center gap-1 px-2 py-1 rounded text-xs text-[#888] hover:text-[#ddd] hover:bg-[#333] transition-colors disabled:opacity-40"
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-40"
           >
             <Terminal size={14} />
             <span>Handoff to Term</span>

@@ -18,7 +18,7 @@ export function TabContent({ activeTab, allTabs }: Props) {
 
   if (!activeTab && !hasAliveTab) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
+      <div className="flex-1 flex items-center justify-center text-text-secondary text-sm">
         選擇或建立一個分頁開始使用
       </div>
     )

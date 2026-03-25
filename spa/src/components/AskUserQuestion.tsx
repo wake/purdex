@@ -81,7 +81,7 @@ export default function AskUserQuestion({ questions, onSubmit, onCancel }: Props
           onChange={e => setText(e.target.value)}
           onKeyDown={handleInputKeyDown}
           placeholder="Type your answer…"
-          className="w-full rounded-lg border border-gray-700/50 bg-gray-800/60 px-3 py-2 text-sm text-gray-200 placeholder-gray-500 outline-none focus:border-blue-500/50"
+          className="w-full rounded-lg border border-border-default/50 bg-surface-secondary/60 px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none focus:border-blue-500/50"
           autoFocus
         />
       ) : (
@@ -96,16 +96,16 @@ export default function AskUserQuestion({ questions, onSubmit, onCancel }: Props
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left cursor-pointer transition-colors ${
                   isSelected
                     ? 'bg-blue-600/30 border border-blue-500/50 text-blue-100'
-                    : 'bg-gray-800/60 border border-gray-700/50 text-gray-300 hover:bg-gray-700/60'
+                    : 'bg-surface-secondary/60 border border-border-default/50 text-text-primary hover:bg-border-default/60'
                 }`}
               >
-                <span className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 ${isSelected ? 'bg-blue-500' : 'bg-gray-700'}`}>
+                <span className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 ${isSelected ? 'bg-blue-500' : 'bg-border-default'}`}>
                   {isSelected && <Check size={10} weight="bold" className="text-white" />}
                 </span>
                 <span>
                   {opt.label}
                   {opt.description && (
-                    <span className="text-gray-400 text-xs ml-1.5">— {opt.description}</span>
+                    <span className="text-text-secondary text-xs ml-1.5">— {opt.description}</span>
                   )}
                 </span>
               </button>
