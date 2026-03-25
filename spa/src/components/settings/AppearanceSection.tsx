@@ -165,13 +165,13 @@ export function AppearanceSection() {
             onChange={handleLocaleChange}
             className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-40 hover:border-text-muted focus:border-border-active focus:outline-none"
           >
-            <optgroup label={t('settings.appearance.theme.preset')}>
+            <optgroup label={t('settings.appearance.language.preset')}>
               {builtinLocales.map((l) => (
                 <option key={l.id} value={l.id}>{l.name}</option>
               ))}
             </optgroup>
             {customLocaleList.length > 0 && (
-              <optgroup label={t('settings.appearance.theme.custom')}>
+              <optgroup label={t('settings.appearance.language.custom')}>
                 {customLocaleList.map((l) => (
                   <option key={l.id} value={l.id}>{l.name}</option>
                 ))}
