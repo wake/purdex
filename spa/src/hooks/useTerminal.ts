@@ -5,11 +5,21 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
+import { useThemeStore } from '../stores/useThemeStore'
 
 export interface UseTerminalResult {
   termRef: React.RefObject<Terminal | null>
   fitAddonRef: React.RefObject<FitAddon | null>
   containerRef: React.RefObject<HTMLDivElement | null>
+}
+
+function getTerminalTheme() {
+  const style = getComputedStyle(document.documentElement)
+  return {
+    background: style.getPropertyValue('--terminal-bg').trim() || '#0a0a1a',
+    foreground: style.getPropertyValue('--terminal-fg').trim() || '#e0e0e0',
+    cursor: style.getPropertyValue('--terminal-cursor').trim() || '#e0e0e0',
+  }
 }
 
 /**
@@ -26,7 +36,7 @@ export function useTerminal(): UseTerminalResult {
     if (!containerRef.current) return
 
     const term = new Terminal({
-      theme: { background: '#0a0a1a', foreground: '#e0e0e0' },
+      theme: getTerminalTheme(),
       fontSize: 14,
       fontFamily: 'Menlo, Monaco, monospace',
       cursorBlink: true,
@@ -79,6 +89,21 @@ export function useTerminal(): UseTerminalResult {
       fitAddonRef.current = null
       termRef.current = null
     }
+  }, [])
+
+  useEffect(() => {
+    let prevThemeId = useThemeStore.getState().activeThemeId
+    const unsub = useThemeStore.subscribe((state) => {
+      if (state.activeThemeId === prevThemeId) return
+      prevThemeId = state.activeThemeId
+      if (!termRef.current) return
+      requestAnimationFrame(() => {
+        if (termRef.current) {
+          termRef.current.options.theme = getTerminalTheme()
+        }
+      })
+    })
+    return unsub
   }, [])
 
   return { termRef, fitAddonRef, containerRef }
