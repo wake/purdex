@@ -4,16 +4,17 @@ import { THEME_TOKEN_KEYS, TOKEN_METADATA, tokensToCss } from '../../lib/theme-t
 import type { ThemeTokens, ThemeTokenKey } from '../../lib/theme-tokens'
 import { getTheme } from '../../lib/theme-registry'
 import { useThemeStore } from '../../stores/useThemeStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 
 const TEMP_THEME_ATTR = '__theme-editor-preview'
 
-const GROUP_LABELS: Record<string, string> = {
-  surface: 'Surface',
-  text: 'Text',
-  border: 'Border',
-  accent: 'Accent',
-  terminal: 'Terminal',
-  status: 'Status',
+const GROUP_I18N_KEYS: Record<string, string> = {
+  surface: 'theme.group.surface',
+  text: 'theme.group.text',
+  border: 'theme.group.border',
+  accent: 'theme.group.accent',
+  terminal: 'theme.group.terminal',
+  status: 'theme.group.status',
 }
 
 interface ThemeEditorProps {
@@ -55,6 +56,7 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
   const baseTheme = getTheme(baseThemeId)
   const createCustomTheme = useThemeStore((s) => s.createCustomTheme)
   const setActiveTheme = useThemeStore((s) => s.setActiveTheme)
+  const t = useI18nStore((s) => s.t)
 
   const [name, setName] = useState(() => `${baseTheme?.name ?? 'Custom'} (Custom)`)
   const [tokens, setTokens] = useState<ThemeTokens>(() => ({ ...baseTheme!.tokens }))
@@ -145,9 +147,9 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
       <div className="bg-surface-primary border border-border-default rounded-lg shadow-lg w-[520px] max-h-[80vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
-          <h3 className="text-sm font-medium text-text-primary">Theme Editor</h3>
+          <h3 className="text-sm font-medium text-text-primary">{t('theme.editor.title')}</h3>
           <button
-            aria-label="Close editor"
+            aria-label={t('theme.editor.close')}
             onClick={handleCancel}
             className="p-1 rounded text-text-muted hover:text-text-primary"
           >
@@ -157,10 +159,10 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
 
         {/* Name input */}
         <div className="px-4 py-3 border-b border-border-subtle">
-          <label className="block text-xs text-text-secondary mb-1">Theme Name</label>
+          <label className="block text-xs text-text-secondary mb-1">{t('theme.editor.name_label')}</label>
           <input
             type="text"
-            aria-label="Theme name"
+            aria-label={t('theme.editor.name_aria')}
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="w-full bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 focus:border-border-active focus:outline-none"
@@ -171,15 +173,16 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
         <div className="flex-1 overflow-y-auto px-4 py-2">
           {Object.entries(groups).map(([group, keys]) => {
             const collapsed = collapsedGroups.has(group)
+            const groupKey = GROUP_I18N_KEYS[group] ?? group
             return (
               <div key={group} className="mb-2">
                 <button
                   onClick={() => toggleGroup(group)}
                   className="flex items-center gap-1 w-full py-1.5 text-xs font-medium text-text-secondary hover:text-text-primary"
-                  aria-label={`Toggle ${GROUP_LABELS[group]} group`}
+                  aria-label={t('theme.editor.toggle_group', { group: t(groupKey) })}
                 >
                   {collapsed ? <CaretRight size={12} /> : <CaretDown size={12} />}
-                  {GROUP_LABELS[group] ?? group}
+                  {t(groupKey)}
                 </button>
                 {!collapsed && (
                   <div className="ml-4 space-y-1">
@@ -199,7 +202,7 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
                             value={hexValue}
                             onChange={(e) => handleTokenChange(key, e.target.value)}
                             className="w-6 h-6 cursor-pointer flex-shrink-0"
-                            aria-label={`${meta.label} color picker`}
+                            aria-label={t('theme.editor.color_picker', { label: meta.label })}
                           />
                           )}
                           <input
@@ -207,7 +210,7 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
                             value={tokens[key]}
                             onChange={(e) => handleTokenChange(key, e.target.value)}
                             className="bg-surface-input border border-border-default rounded text-text-primary text-xs px-2 py-0.5 w-32 font-mono focus:border-border-active focus:outline-none"
-                            aria-label={`${meta.label} hex value`}
+                            aria-label={t('theme.editor.hex_value', { label: meta.label })}
                           />
                         </div>
                       )
@@ -224,26 +227,26 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
           <button
             onClick={handleReset}
             className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary"
-            aria-label="Reset to base"
+            aria-label={t('theme.editor.reset')}
           >
             <ArrowCounterClockwise size={14} />
-            Reset
+            {t('common.reset')}
           </button>
           <div className="flex items-center gap-2">
             <button
               onClick={handleCancel}
               className="px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary rounded-md border border-border-default"
             >
-              Cancel
+              {t('common.cancel')}
             </button>
             <button
               onClick={handleSave}
               disabled={!name.trim()}
               className="flex items-center gap-1 px-3 py-1.5 text-xs text-text-inverse bg-accent hover:bg-accent-hover rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
-              aria-label="Save theme"
+              aria-label={t('theme.editor.save')}
             >
               <FloppyDisk size={14} />
-              Save
+              {t('common.save')}
             </button>
           </div>
         </div>

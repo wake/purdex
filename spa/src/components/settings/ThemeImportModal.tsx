@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import { X, Upload, LinkSimple, ClipboardText } from '@phosphor-icons/react'
 import { useThemeStore, type ThemeImportPayload } from '../../stores/useThemeStore'
 import { parseAndValidate } from '../../lib/theme-import'
+import { useI18nStore } from '../../stores/useI18nStore'
 
 interface ThemeImportModalProps {
   onClose: () => void
@@ -19,6 +20,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const importTheme = useThemeStore((s) => s.importTheme)
+  const t = useI18nStore((s) => s.t)
 
   const handleImport = (payload: ThemeImportPayload) => {
     try {
@@ -26,7 +28,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
       onImported(id)
       onClose()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Import failed')
+      setError(e instanceof Error ? e.message : t('error.import.failed'))
     }
   }
 
@@ -36,7 +38,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
     try {
       parsed = JSON.parse(jsonText)
     } catch {
-      setError('Invalid JSON syntax')
+      setError(t('error.json.invalid'))
       return
     }
     const result = parseAndValidate(parsed)
@@ -57,7 +59,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
       try {
         parsed = JSON.parse(reader.result as string)
       } catch {
-        setError('Invalid JSON syntax in file')
+        setError(t('error.json.invalid_file'))
         return
       }
       const result = parseAndValidate(parsed)
@@ -67,21 +69,21 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
       }
       handleImport(result)
     }
-    reader.onerror = () => setError('Failed to read file')
+    reader.onerror = () => setError(t('error.file.read_failed'))
     reader.readAsText(file)
   }
 
   const handleUrlFetch = async () => {
     setError(null)
     if (!urlText.trim()) {
-      setError('Please enter a URL')
+      setError(t('error.url.empty'))
       return
     }
     setLoading(true)
     try {
       const response = await fetch(urlText.trim())
       if (!response.ok) {
-        setError(`HTTP ${response.status}: ${response.statusText}`)
+        setError(t('error.url.http', { status: response.status, statusText: response.statusText }))
         setLoading(false)
         return
       }
@@ -89,7 +91,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
       try {
         parsed = await response.json()
       } catch {
-        setError('Response is not valid JSON')
+        setError(t('error.url.not_json'))
         setLoading(false)
         return
       }
@@ -102,16 +104,16 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
       handleImport(result)
       // Don't setLoading(false) — component will unmount via onClose()
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Fetch failed'
-      setError(msg.includes('Failed to fetch') ? 'Unable to fetch URL. The server may not allow cross-origin requests. Try pasting the JSON directly.' : msg)
+      const msg = e instanceof Error ? e.message : t('error.import.failed')
+      setError(msg.includes('Failed to fetch') ? t('error.url.fetch_failed') : msg)
       setLoading(false)
     }
   }
 
   const tabs: { id: ImportTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'paste', label: 'Paste JSON', icon: <ClipboardText size={14} /> },
-    { id: 'file', label: 'File', icon: <Upload size={14} /> },
-    { id: 'url', label: 'URL', icon: <LinkSimple size={14} /> },
+    { id: 'paste', label: t('theme.import.tab.paste'), icon: <ClipboardText size={14} /> },
+    { id: 'file', label: t('theme.import.tab.file'), icon: <Upload size={14} /> },
+    { id: 'url', label: t('theme.import.tab.url'), icon: <LinkSimple size={14} /> },
   ]
 
   return (
@@ -122,9 +124,9 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
       <div className="bg-surface-primary border border-border-default rounded-lg shadow-lg w-[480px] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
-          <h3 className="text-sm font-medium text-text-primary">Import Theme</h3>
+          <h3 className="text-sm font-medium text-text-primary">{t('theme.import.title')}</h3>
           <button
-            aria-label="Close import modal"
+            aria-label={t('theme.import.close')}
             onClick={onClose}
             className="p-1 rounded text-text-muted hover:text-text-primary"
           >
@@ -155,17 +157,17 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
           {activeTab === 'paste' && (
             <div className="space-y-3">
               <textarea
-                aria-label="Theme JSON"
+                aria-label={t('theme.import.paste.aria')}
                 value={jsonText}
                 onChange={(e) => setJsonText(e.target.value)}
-                placeholder='{"name": "My Theme", "tokens": {...}}'
+                placeholder={t('theme.import.paste.placeholder')}
                 className="w-full h-32 bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-2 font-mono resize-none focus:border-border-active focus:outline-none"
               />
               <button
                 onClick={handlePasteImport}
                 className="px-4 py-1.5 text-xs text-text-inverse bg-accent hover:bg-accent-hover rounded-md"
               >
-                Import
+                {t('common.import')}
               </button>
             </div>
           )}
@@ -177,7 +179,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
                 onClick={() => fileInputRef.current?.click()}
               >
                 <Upload size={24} className="text-text-muted mb-2" />
-                <span className="text-xs text-text-secondary">Click to select a .json file</span>
+                <span className="text-xs text-text-secondary">{t('theme.import.file.hint')}</span>
               </div>
               <input
                 ref={fileInputRef}
@@ -185,7 +187,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
                 accept=".json"
                 onChange={handleFileChange}
                 className="hidden"
-                aria-label="Theme file input"
+                aria-label={t('theme.import.file.aria')}
               />
             </div>
           )}
@@ -194,10 +196,10 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
             <div className="space-y-3">
               <input
                 type="url"
-                aria-label="Theme URL"
+                aria-label={t('theme.import.url.aria')}
                 value={urlText}
                 onChange={(e) => setUrlText(e.target.value)}
-                placeholder="https://example.com/theme.json"
+                placeholder={t('theme.import.url.placeholder')}
                 className="w-full bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 font-mono focus:border-border-active focus:outline-none"
               />
               <button
@@ -205,7 +207,7 @@ export function ThemeImportModal({ onClose, onImported }: ThemeImportModalProps)
                 disabled={loading}
                 className="px-4 py-1.5 text-xs text-text-inverse bg-accent hover:bg-accent-hover rounded-md disabled:opacity-50"
               >
-                {loading ? 'Fetching...' : 'Fetch & Import'}
+                {loading ? t('theme.import.url.fetching') : t('theme.import.url.fetch_button')}
               </button>
             </div>
           )}

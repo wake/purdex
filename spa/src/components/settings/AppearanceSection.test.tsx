@@ -67,7 +67,7 @@ describe('AppearanceSection', () => {
 
   it('shows Customize and Import buttons', () => {
     render(<AppearanceSection />)
-    expect(screen.getByLabelText('Customize theme')).toBeTruthy()
+    expect(screen.getByLabelText('Customize')).toBeTruthy()
     expect(screen.getByLabelText('Import theme')).toBeTruthy()
   })
 
