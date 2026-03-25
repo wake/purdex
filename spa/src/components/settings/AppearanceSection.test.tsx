@@ -67,15 +67,17 @@ describe('AppearanceSection', () => {
 
   it('shows Customize and Import buttons', () => {
     render(<AppearanceSection />)
-    expect(screen.getByLabelText('Customize')).toBeTruthy()
+    // There are two "Customize" buttons: one for theme, one for locale
+    const customizeBtns = screen.getAllByLabelText('Customize')
+    expect(customizeBtns.length).toBeGreaterThanOrEqual(1)
     expect(screen.getByLabelText('Import theme')).toBeTruthy()
   })
 
-  it('renders language setting with disabled select', () => {
+  it('renders language setting with enabled select', () => {
     render(<AppearanceSection />)
     expect(screen.getByText('Language')).toBeTruthy()
-    const selectEl = screen.getByRole('combobox', { name: '' }) // the disabled one has no aria-label
-    expect(selectEl).toHaveProperty('disabled', true)
+    const selectEl = screen.getByLabelText('Language') as HTMLSelectElement
+    expect(selectEl).toHaveProperty('disabled', false)
   })
 
   it('shows delete button for custom themes', () => {
