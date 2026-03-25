@@ -19,7 +19,7 @@ const darkTokens: ThemeTokens = {
   'border-subtle': '#2a2a2a',
   'accent': '#7a6aaa',
   'accent-hover': '#8a7aba',
-  'accent-muted': 'rgba(122, 106, 170, 0.2)',
+  'accent-muted': 'rgba(122, 106, 170, 0.3)',
   'terminal-bg': '#0a0a1a',
   'terminal-fg': '#e0e0e0',
   'terminal-cursor': '#e0e0e0',

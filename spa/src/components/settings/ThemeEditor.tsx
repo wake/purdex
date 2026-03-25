@@ -33,24 +33,22 @@ function groupTokens(): Record<string, ThemeTokenKey[]> {
 
 /** Normalize a color value to 6-digit hex for <input type="color"> */
 function toHex6(value: string): string {
-  // Only convert simple #rgb or #rrggbb hex values
-  if (/^#[0-9a-fA-F]{6}$/.test(value)) return value
-  if (/^#[0-9a-fA-F]{3}$/.test(value)) {
+  // Already hex
+  if (/^#[0-9a-f]{6}$/i.test(value)) return value.toLowerCase()
+  if (/^#[0-9a-f]{3}$/i.test(value)) {
     const [, r, g, b] = value.match(/^#(.)(.)(.)$/)!
-    return `#${r}${r}${g}${g}${b}${b}`
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase()
   }
-  // For rgba or other formats, try the canvas approach
-  try {
-    const ctx = document.createElement('canvas').getContext('2d')
-    if (ctx) {
-      ctx.fillStyle = value
-      const result = ctx.fillStyle
-      if (/^#[0-9a-fA-F]{6}$/.test(result)) return result
-    }
-  } catch {
-    // Fallback
+  // Has alpha component — can't represent as hex6, keep original
+  if (/rgba|hsla/i.test(value) || /\/\s*[\d.]+/.test(value)) return value
+  // Use canvas for other formats (rgb, hsl, named colors)
+  const ctx = document.createElement('canvas').getContext('2d')
+  if (ctx) {
+    ctx.fillStyle = value
+    const result = ctx.fillStyle
+    if (result.startsWith('#')) return result.toLowerCase()
   }
-  return '#000000'
+  return value
 }
 
 export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
@@ -63,6 +61,7 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const styleRef = useRef<HTMLStyleElement | null>(null)
   const originalThemeRef = useRef(document.documentElement.dataset.theme)
+  const savedRef = useRef(false)
 
   const groups = useMemo(() => groupTokens(), [])
 
@@ -76,8 +75,8 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
 
     return () => {
       style.remove()
-      // Restore original theme attr
-      if (savedTheme !== undefined) {
+      // Restore original theme attr — skip if user saved a new theme
+      if (!savedRef.current && savedTheme !== undefined) {
         document.documentElement.dataset.theme = savedTheme
       }
     }
@@ -114,6 +113,7 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
 
     const newId = createCustomTheme(name, baseThemeId, overrides)
     setActiveTheme(newId)
+    savedRef.current = true
     onClose()
   }
 
@@ -193,6 +193,7 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
                             className="w-6 h-6 rounded border border-border-default flex-shrink-0"
                             style={{ backgroundColor: tokens[key] }}
                           />
+                          {/^#[0-9a-f]{6}$/i.test(hexValue) && (
                           <input
                             type="color"
                             value={hexValue}
@@ -200,6 +201,7 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
                             className="w-6 h-6 cursor-pointer flex-shrink-0"
                             aria-label={`${meta.label} color picker`}
                           />
+                          )}
                           <input
                             type="text"
                             value={tokens[key]}
