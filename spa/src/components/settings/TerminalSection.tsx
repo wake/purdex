@@ -33,8 +33,8 @@ export function TerminalSection() {
 
   return (
     <div>
-      <h2 className="text-lg text-gray-200">Terminal</h2>
-      <p className="text-xs text-gray-400 mb-6">Terminal rendering and connection settings</p>
+      <h2 className="text-lg text-text-primary">Terminal</h2>
+      <p className="text-xs text-text-secondary mb-6">Terminal rendering and connection settings</p>
 
       <SettingItem label="Renderer" description="WebGL is faster but limited to ~16 instances. DOM has no limit.">
         <SegmentControl options={RENDERER_OPTIONS} value={renderer} onChange={handleRenderer} />
@@ -49,7 +49,7 @@ export function TerminalSection() {
           step={1}
           value={keepAliveCount}
           onChange={(e) => setKeepAliveCount(clamp(Number(e.target.value) || 0, 0, 10))}
-          className="bg-[#2a2a2a] border border-[#404040] rounded-md text-gray-200 text-xs px-3 py-1.5 w-20 hover:border-gray-500 focus:border-[#7a6aaa] focus:outline-none"
+          className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-20 hover:border-text-muted focus:border-border-active focus:outline-none"
         />
       </SettingItem>
 
@@ -66,7 +66,7 @@ export function TerminalSection() {
           step={50}
           value={revealDelay}
           onChange={(e) => setRevealDelay(clamp(Number(e.target.value) || 0, 0, 2000))}
-          className="bg-[#2a2a2a] border border-[#404040] rounded-md text-gray-200 text-xs px-3 py-1.5 w-20 hover:border-gray-500 focus:border-[#7a6aaa] focus:outline-none"
+          className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-20 hover:border-text-muted focus:border-border-active focus:outline-none"
         />
       </SettingItem>
     </div>

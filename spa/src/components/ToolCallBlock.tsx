@@ -32,27 +32,27 @@ export default function ToolCallBlock({ tool, input }: Props) {
   const summary = getSummary(tool, input)
 
   return (
-    <div className="rounded-lg border border-[#2a2a2a] bg-[#1e1e1e] text-sm my-1 overflow-hidden">
+    <div className="rounded-lg border border-border-subtle bg-[#1e1e1e] text-sm my-1 overflow-hidden"> {/* TODO: theme token for bg-[#1e1e1e] */}
       <button
         data-testid="tool-header"
         aria-expanded={expanded}
-        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#252525] cursor-pointer text-left"
+        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#252525] cursor-pointer text-left" /* TODO: theme token for hover */
         onClick={() => setExpanded(v => !v)}
       >
         {expanded ? (
-          <CaretDown size={12} className="text-[#777] flex-shrink-0" />
+          <CaretDown size={12} className="text-text-muted flex-shrink-0" />
         ) : (
-          <CaretRight size={12} className="text-[#777] flex-shrink-0" />
+          <CaretRight size={12} className="text-text-muted flex-shrink-0" />
         )}
-        <Wrench size={16} data-testid="tool-icon-wrench" className="text-[#aaa] flex-shrink-0" />
-        <span className="text-[#ddd] font-semibold">{tool}</span>
+        <Wrench size={16} data-testid="tool-icon-wrench" className="text-text-secondary flex-shrink-0" />
+        <span className="text-text-primary font-semibold">{tool}</span>
         {summary && (
-          <span className="text-[#888] truncate flex-1 min-w-0">{summary}</span>
+          <span className="text-text-muted truncate flex-1 min-w-0">{summary}</span>
         )}
       </button>
       {expanded && (
-        <div data-testid="tool-detail" className="border-t border-[#2a2a2a] px-3 py-2 bg-[#161616]">
-          <pre className="text-xs text-[#aaa] whitespace-pre-wrap break-all overflow-auto max-h-60">
+        <div data-testid="tool-detail" className="border-t border-border-subtle px-3 py-2 bg-[#161616]"> {/* TODO: theme token for bg-[#161616] */}
+          <pre className="text-xs text-text-secondary whitespace-pre-wrap break-all overflow-auto max-h-60">
             {JSON.stringify(input, null, 2)}
           </pre>
         </div>

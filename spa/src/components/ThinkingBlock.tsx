@@ -10,11 +10,11 @@ export default function ThinkingBlock({ content }: Props) {
   const [expanded, setExpanded] = useState(false)
 
   return (
-    <div className="border-l-2 border-[#444] my-1">
+    <div className="border-l-2 border-border-default my-1">
       <button
         data-testid="thinking-header"
         aria-expanded={expanded}
-        className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-[#888] hover:text-[#bbb] cursor-pointer w-full text-left"
+        className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-text-muted hover:text-text-secondary cursor-pointer w-full text-left"
         onClick={() => setExpanded(v => !v)}
       >
         <Brain size={14} />
@@ -26,7 +26,7 @@ export default function ThinkingBlock({ content }: Props) {
       {expanded && (
         <div
           data-testid="thinking-content"
-          className="px-2.5 pb-2 text-xs text-[#999] leading-relaxed whitespace-pre-wrap font-mono"
+          className="px-2.5 pb-2 text-xs text-text-secondary leading-relaxed whitespace-pre-wrap font-mono"
         >
           {content}
         </div>

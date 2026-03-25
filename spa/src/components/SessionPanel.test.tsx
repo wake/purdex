@@ -43,7 +43,7 @@ describe('SessionPanel', () => {
     })
     render(<SessionPanel />)
     const btn = screen.getByRole('button', { name: /dev/i })
-    expect(btn.className).toContain('bg-gray-800')
+    expect(btn.className).toContain('bg-surface-secondary')
   })
 
   it('sets active on click', () => {

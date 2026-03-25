@@ -43,7 +43,7 @@ export default function HandoffButton({ inProgress, progress = '', sessionStatus
         {inProgress ? progressLabel(progress) : 'Handoff'}
       </button>
       {!ccAvailable && !inProgress && (
-        <p className="text-xs text-gray-500">No CC running</p>
+        <p className="text-xs text-text-muted">No CC running</p>
       )}
     </div>
   )

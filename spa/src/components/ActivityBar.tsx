@@ -28,7 +28,7 @@ export function ActivityBar({
   onOpenSettings,
 }: Props) {
   return (
-    <div className="hidden lg:flex w-11 flex-col items-center bg-[#08081a] border-r border-gray-800 py-2 gap-2 flex-shrink-0">
+    <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 gap-2 flex-shrink-0">
       {/* Workspaces */}
       {workspaces.map((ws) => (
         <button
@@ -48,7 +48,7 @@ export function ActivityBar({
 
       {/* Separator */}
       {standaloneTabs.length > 0 && (
-        <div className="w-5 h-px bg-gray-700 my-1" />
+        <div className="w-5 h-px bg-border-default my-1" />
       )}
 
       {/* Standalone tabs */}
@@ -65,8 +65,8 @@ export function ActivityBar({
             onClick={() => onSelectStandaloneTab(tab.id)}
             className={`w-8 h-8 rounded-md flex items-center justify-center text-xs cursor-pointer transition-all ${
               activeStandaloneTabId === tab.id
-                ? 'ring-2 ring-purple-400 bg-gray-800'
-                : 'bg-gray-900 opacity-70 hover:opacity-100'
+                ? 'ring-2 ring-accent bg-surface-secondary'
+                : 'bg-surface-tertiary opacity-70 hover:opacity-100'
             }`}
           >
             {label.charAt(0).toUpperCase()}
@@ -79,14 +79,14 @@ export function ActivityBar({
         <button
           title="新增工作區"
           onClick={onAddWorkspace}
-          className="w-8 h-8 rounded-md flex items-center justify-center text-gray-400 hover:text-gray-300 hover:bg-gray-800 cursor-pointer"
+          className="w-8 h-8 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
         >
           <Plus size={16} />
         </button>
         <button
           title="設定"
           onClick={onOpenSettings}
-          className="w-8 h-8 rounded-md flex items-center justify-center text-gray-400 hover:text-gray-300 hover:bg-gray-800 cursor-pointer"
+          className="w-8 h-8 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
         >
           <GearSix size={16} />
         </button>

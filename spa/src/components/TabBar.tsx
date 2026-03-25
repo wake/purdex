@@ -29,7 +29,7 @@ interface Props {
 }
 
 function TabSeparator({ show }: { show: boolean }) {
-  return <div className={`w-px h-3.5 flex-shrink-0 transition-opacity duration-150 ease-out ${show ? 'bg-gray-700' : 'bg-transparent'}`} />
+  return <div className={`w-px h-3.5 flex-shrink-0 transition-opacity duration-150 ease-out ${show ? 'bg-border-default' : 'bg-transparent'}`} />
 }
 
 export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu }: Props) {
@@ -93,7 +93,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   }
 
   return (
-    <div className="flex bg-[#12122a] border-b border-gray-800 items-center px-1 flex-shrink-0" style={{ height: 41 }}>
+    <div className="flex bg-surface-secondary border-b border-border-subtle items-center px-1 flex-shrink-0" style={{ height: 41 }}>
       <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToTabZone]} onDragEnd={handleDragEnd}>
         {/* Pinned zone */}
         {pinnedTabs.length > 0 && (
@@ -118,7 +118,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                 ))}
               </div>
             </SortableContext>
-            <div className="w-px h-4 bg-gray-700 mx-1 flex-shrink-0" />
+            <div className="w-px h-4 bg-border-default mx-1 flex-shrink-0" />
           </>
         )}
 
@@ -127,10 +127,10 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
           {canScrollLeft && (
             <button
               onClick={scrollLeft}
-              className="absolute left-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-gradient-to-r from-[#12122a] to-transparent cursor-pointer"
+              className="absolute left-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-gradient-to-r from-surface-secondary to-transparent cursor-pointer"
               aria-label="向左捲動"
             >
-              <CaretLeft size={14} className="text-gray-400" />
+              <CaretLeft size={14} className="text-text-secondary" />
             </button>
           )}
           <div ref={normalZoneRef} className="flex items-center h-full overflow-x-auto scrollbar-hide">
@@ -157,7 +157,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
             {normalTabs.length > 0 && <TabSeparator show={(() => { const lastId = normalTabs[normalTabs.length - 1]?.id; return lastId !== activeTabId && lastId !== hoveredTabId })()} />}
             <button
               onClick={onAddTab}
-              className="flex items-center justify-center w-7 h-7 rounded-md text-gray-400 hover:text-gray-300 hover:bg-white/10 cursor-pointer flex-shrink-0"
+              className="flex items-center justify-center w-7 h-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-white/10 cursor-pointer flex-shrink-0"
               title="新增分頁"
               style={{ marginTop: 2 }}
             >
@@ -167,10 +167,10 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
           {canScrollRight && (
             <button
               onClick={scrollRight}
-              className="absolute right-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-gradient-to-l from-[#12122a] to-transparent cursor-pointer"
+              className="absolute right-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-gradient-to-l from-surface-secondary to-transparent cursor-pointer"
               aria-label="向右捲動"
             >
-              <CaretRight size={14} className="text-gray-400" />
+              <CaretRight size={14} className="text-text-secondary" />
             </button>
           )}
         </div>

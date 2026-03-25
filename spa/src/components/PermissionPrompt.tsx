@@ -21,7 +21,7 @@ export default function PermissionPrompt({ tool, description, onAllow, onDeny }:
           />
           <span className="text-sm font-medium text-yellow-300">{tool}</span>
         </div>
-        <p className="text-xs text-gray-400 font-mono truncate mt-0.5">{description}</p>
+        <p className="text-xs text-text-secondary font-mono truncate mt-0.5">{description}</p>
       </div>
       <div className="flex gap-2 flex-shrink-0">
         <button

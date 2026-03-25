@@ -28,7 +28,7 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
 
   if (!activeTab) {
     return (
-      <div className="h-6 bg-[#12122a] border-t border-gray-800 flex items-center px-3 text-[10px] text-gray-600 flex-shrink-0">
+      <div className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted flex-shrink-0">
         No active session
       </div>
     )
@@ -39,7 +39,7 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
 
   if (content.kind !== 'session') {
     return (
-      <div className="h-6 bg-[#12122a] border-t border-gray-800 flex items-center px-3 text-[10px] text-gray-600 flex-shrink-0">
+      <div className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted flex-shrink-0">
         <span>{content.kind}</span>
       </div>
     )
@@ -55,10 +55,10 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
   const viewModes: ('terminal' | 'stream')[] = ['terminal', 'stream']
 
   return (
-    <div className="h-6 bg-[#12122a] border-t border-gray-800 flex items-center px-3 text-[10px] text-gray-600 gap-3 flex-shrink-0 relative z-10">
+    <div className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted gap-3 flex-shrink-0 relative z-10">
       <span>{hostName}</span>
       <span>{sessionName}</span>
-      <span className={status === 'connected' ? 'text-green-500' : 'text-gray-600'}>
+      <span className={status === 'connected' ? 'text-green-500' : 'text-text-muted'}>
         {status}
       </span>
       <span className="ml-auto flex items-center">
@@ -66,13 +66,13 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
           <button
             title="切換檢視模式"
             onClick={() => setMenuOpen((v) => !v)}
-            className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] cursor-pointer transition-colors ${VIEW_MODE_COLORS[viewMode] ?? 'bg-gray-800 text-gray-400 border-gray-700'}`}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] cursor-pointer transition-colors ${VIEW_MODE_COLORS[viewMode] ?? 'bg-surface-secondary text-text-secondary border-border-default'}`}
           >
             {viewMode}
             <CaretUp size={10} className={`transition-transform ${menuOpen ? '' : 'rotate-180'}`} />
           </button>
           {menuOpen && (
-            <div className="absolute bottom-full right-0 mb-1 bg-[#1e1e3e] border border-gray-700 rounded-md shadow-lg py-1 min-w-[100px]">
+            <div className="absolute bottom-full right-0 mb-1 bg-surface-elevated border border-border-default rounded-md shadow-lg py-1 min-w-[100px]">
               {viewModes.map((vm) => (
                 <button
                   key={vm}
@@ -80,7 +80,7 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
                     onViewModeChange?.(activeTab.id, primary.id, vm)
                     setMenuOpen(false)
                   }}
-                  className={`w-full px-3 py-1 text-left text-[10px] cursor-pointer transition-colors hover:bg-[#3a3a6a] ${vm === viewMode ? 'text-white' : 'text-gray-400'}`}
+                  className={`w-full px-3 py-1 text-left text-[10px] cursor-pointer transition-colors hover:bg-surface-hover ${vm === viewMode ? 'text-white' : 'text-text-secondary'}`}
                 >
                   {vm} {vm === viewMode && '\u2713'}
                 </button>

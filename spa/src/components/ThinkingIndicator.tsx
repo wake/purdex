@@ -9,7 +9,7 @@ export default function ThinkingIndicator({ visible }: Props) {
 
   return (
     <div data-testid="thinking-indicator" className="flex justify-start">
-      <div className="bg-[#2a2f38] rounded-xl px-4 py-3 flex items-center gap-1.5">
+      <div className="bg-surface-input rounded-xl px-4 py-3 flex items-center gap-1.5">
         {[0, 1, 2].map(i => (
           <span
             key={i}

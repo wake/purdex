@@ -12,7 +12,7 @@ export function PaneLayoutRenderer({ layout, isActive }: Props) {
     const config = getPaneRenderer(layout.pane.content.kind)
     if (!config) {
       return (
-        <div className="flex-1 flex items-center justify-center text-gray-500">
+        <div className="flex-1 flex items-center justify-center text-text-muted">
           No renderer for &quot;{layout.pane.content.kind}&quot;
         </div>
       )

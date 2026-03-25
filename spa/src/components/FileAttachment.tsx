@@ -20,7 +20,7 @@ export default function FileAttachment({ files, onRemove }: Props) {
       {files.map((file, i) => (
         <div
           key={i}
-          className="flex items-center gap-1.5 bg-[#2a2f38] border border-[#484f5a] rounded-lg px-2 py-1 text-xs text-[#dde0e5]"
+          className="flex items-center gap-1.5 bg-surface-input border border-border-default rounded-lg px-2 py-1 text-xs text-text-primary"
         >
           {file.type.startsWith('image/') && file.url ? (
             <div
@@ -28,13 +28,13 @@ export default function FileAttachment({ files, onRemove }: Props) {
               style={{ backgroundImage: `url(${file.url})` }}
             />
           ) : (
-            <File size={14} className="text-gray-400" data-testid="file-icon" />
+            <File size={14} className="text-text-secondary" data-testid="file-icon" />
           )}
           <span className="max-w-[100px] truncate">{file.name}</span>
           <button
             aria-label="remove"
             onClick={() => onRemove(i)}
-            className="text-gray-500 hover:text-red-400 ml-0.5 cursor-pointer"
+            className="text-text-muted hover:text-red-400 ml-0.5 cursor-pointer"
           >
             <X size={12} />
           </button>

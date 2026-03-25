@@ -85,12 +85,12 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
   return (
     <div
       ref={ref}
-      className="fixed z-50 bg-[#1e1e2e] border border-gray-700 rounded-lg shadow-xl py-1 min-w-[200px] text-xs"
+      className="fixed z-50 bg-surface-elevated border border-border-default rounded-lg shadow-xl py-1 min-w-[200px] text-xs"
       style={{ left: adjustedPos.x, top: adjustedPos.y }}
     >
       {cleaned.map((item, i) => {
         if (item === 'separator') {
-          return <div key={`sep-${i}`} className="border-t border-gray-700 my-1" />
+          return <div key={`sep-${i}`} className="border-t border-border-default my-1" />
         }
         return (
           <button
@@ -98,7 +98,7 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
             disabled={item.disabled}
             onClick={() => { onAction(item.action); onClose() }}
             className={`w-full text-left px-3 py-1.5 transition-colors ${
-              item.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-[#2a2a3e]'
+              item.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-surface-hover'
             }`}
           >
             {item.label}

@@ -27,6 +27,6 @@ describe('ToggleSwitch', () => {
 
   it('applies active color when checked', () => {
     render(<ToggleSwitch label="Test" checked={true} onChange={vi.fn()} />)
-    expect(screen.getByRole('switch').className).toContain('bg-[#7a6aaa]')
+    expect(screen.getByRole('switch').className).toContain('bg-accent')
   })
 })

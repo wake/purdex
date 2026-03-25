@@ -22,8 +22,8 @@ export function SegmentControl<T extends string>({ options, value, onChange }: P
             onClick={() => { if (!isActive) onChange(opt.value) }}
             className={`px-4 py-1.5 text-xs border transition-colors cursor-pointer ${
               isActive
-                ? 'bg-[#1e1e3e] border-[#7a6aaa] text-gray-200'
-                : 'bg-transparent border-[#404040] text-gray-500 hover:text-gray-300 hover:border-gray-600'
+                ? 'bg-surface-elevated border-border-active text-text-primary'
+                : 'bg-transparent border-border-default text-text-muted hover:text-text-primary hover:border-text-muted'
             } ${isFirst ? 'rounded-l-md' : ''} ${isLast ? 'rounded-r-md' : ''}`}
           >
             {opt.label}

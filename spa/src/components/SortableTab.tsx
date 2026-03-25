@@ -19,8 +19,9 @@ interface Props {
 }
 
 // Composite bg colors (canvas-verified for opaque X button bg)
-const TAB_BG_INACTIVE = '#12122a'
-const TAB_BG_ACTIVE = '#272444'   // rgba(122,106,170,0.2) on #12122a
+// Uses CSS vars so they follow the current theme.
+const TAB_BG_INACTIVE = 'var(--surface-secondary)'
+const TAB_BG_ACTIVE = 'var(--surface-active)'
 
 export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onHover, iconMap }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id })
@@ -68,8 +69,8 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         onContextMenu={handleContextMenu}
         className={`relative flex items-center justify-center w-9 rounded-[6px] cursor-pointer transition-colors duration-150 ease-out ${
           isActive
-            ? 'text-white bg-[#272444] border border-[rgba(122,106,170,0.3)]'
-            : 'text-gray-500 hover:text-gray-300 bg-[#12122a] hover:bg-[#1a1a32] border border-transparent'
+            ? 'text-white bg-surface-active border border-accent-muted'
+            : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
         }`}
         title={label}
       >
@@ -101,8 +102,8 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       onContextMenu={handleContextMenu}
       className={`group relative flex items-center gap-1.5 pl-2 pr-1 text-xs whitespace-nowrap cursor-pointer transition-colors duration-150 ease-out rounded-[6px] overflow-hidden ${
         isActive
-          ? 'text-white bg-[#272444] border border-[rgba(122,106,170,0.3)]'
-          : 'text-gray-500 hover:text-gray-300 bg-[#12122a] hover:bg-[#1a1a32] border border-transparent'
+          ? 'text-white bg-surface-active border border-accent-muted'
+          : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
       }`}
     >
       {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}

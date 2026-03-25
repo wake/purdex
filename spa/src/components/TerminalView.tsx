@@ -63,18 +63,18 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage 
   const showOverlay = !ready || disconnected
 
   return (
-    <div className="w-full h-full relative" style={{ background: '#0a0a1a' }}>
+    <div className="w-full h-full relative bg-terminal-bg">
       <div ref={containerRef} className="w-full h-full" />
       <div
         data-testid="terminal-overlay"
         className="absolute inset-0 flex items-center justify-center pointer-events-none"
         style={{
-          background: disconnected ? 'rgba(10, 10, 26, 0.5)' : '#0a0a1a',
+          background: disconnected ? 'color-mix(in srgb, var(--terminal-bg) 50%, transparent)' : 'var(--terminal-bg)',
           opacity: showOverlay ? 1 : 0,
           transition: 'opacity 0.3s ease-out',
         }}
       >
-        <span className="text-gray-500 text-sm" style={{ animation: 'breathing 2s ease-in-out infinite' }}>
+        <span className="text-text-muted text-sm" style={{ animation: 'breathing 2s ease-in-out infinite' }}>
           {disconnected ? 'reconnecting...' : (connectingMessage || 'connecting...')}
         </span>
         <style>{`@keyframes breathing { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }`}</style>
