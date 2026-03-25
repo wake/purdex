@@ -18,8 +18,13 @@ export function NewTabPage({ onSelect }: Props) {
       )}
       {providers.map((p) => (
         <section key={p.id} className="w-full max-w-md">
-          <h3 className="text-sm font-medium text-text-secondary mb-2 px-2">{t(p.label)}</h3>
-          <p.component onSelect={onSelect} />
+          <h3 className="text-sm font-medium text-text-secondary mb-2 px-2">
+            {t(p.label)}
+            {p.disabled && p.disabledReason && (
+              <span className="text-text-muted text-xs ml-2">— {t(p.disabledReason)}</span>
+            )}
+          </h3>
+          {!p.disabled && <p.component onSelect={onSelect} />}
         </section>
       ))}
     </div>
