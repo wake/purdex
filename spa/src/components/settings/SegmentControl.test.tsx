@@ -19,7 +19,7 @@ describe('SegmentControl', () => {
   it('highlights active option', () => {
     render(<SegmentControl options={OPTIONS} value="b" onChange={vi.fn()} />)
     const btn = screen.getByText('Beta')
-    expect(btn.className).toContain('border-[#7a6aaa]')
+    expect(btn.className).toContain('border-border-active')
   })
 
   it('calls onChange with selected value', () => {

@@ -28,8 +28,8 @@ describe('TopBar', () => {
 
   it('highlights active mode', () => {
     render(<TopBar {...defaultProps} mode="stream" />)
-    expect(screen.getByTestId('mode-btn-stream').className).toContain('bg-[#404040]')
-    expect(screen.getByTestId('mode-btn-term').className).toContain('text-[#888]')
+    expect(screen.getByTestId('mode-btn-stream').className).toContain('bg-border-default')
+    expect(screen.getByTestId('mode-btn-term').className).toContain('text-text-muted')
   })
 
   it('calls onModeChange when clicking term', () => {

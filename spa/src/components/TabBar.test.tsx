@@ -128,14 +128,14 @@ describe('TabBar', () => {
 
   it('shows separator between pinned and normal zones', () => {
     const { container } = render(<TabBar tabs={pinnedTabs} activeTabId="t1" {...defaultHandlers} />)
-    const separator = container.querySelector('.bg-gray-700')
+    const separator = container.querySelector('.bg-border-default')
     expect(separator).toBeInTheDocument()
   })
 
   it('no pinned-zone separator when no pinned tabs', () => {
     const { container } = render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} />)
     // No pinned/normal zone divider (h-4 height, distinct from tab separators which are h-3.5)
-    const zoneDividers = container.querySelectorAll('.w-px.h-4.bg-gray-700')
+    const zoneDividers = container.querySelectorAll('.w-px.h-4.bg-border-default')
     expect(zoneDividers.length).toBe(0)
   })
 })

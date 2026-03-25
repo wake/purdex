@@ -127,8 +127,8 @@ describe('TerminalView', () => {
     const overlay = container.querySelector('[data-testid="terminal-overlay"]')
     expect(overlay).toBeInTheDocument()
     expect(overlay?.getAttribute('style')).toContain('opacity: 1')
-    // 50% transparent background, not fully opaque
-    expect(overlay?.getAttribute('style')).toContain('0.5')
+    // 50% transparent background via color-mix
+    expect(overlay?.getAttribute('style')).toContain('50%')
     expect(overlay?.textContent).toContain('reconnecting...')
   })
 

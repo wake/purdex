@@ -5,8 +5,8 @@ import SessionStatusBadge, { type SessionStatus } from './SessionStatusBadge'
 
 describe('SessionStatusBadge', () => {
   const cases: [SessionStatus, string][] = [
-    ['normal', 'bg-gray-500'],
-    ['not-in-cc', 'bg-gray-500'],
+    ['normal', 'bg-text-muted'],
+    ['not-in-cc', 'bg-text-muted'],
     ['cc-idle', 'bg-emerald-700'],
     ['cc-running', 'bg-green-400'],
     ['cc-waiting', 'bg-yellow-400'],
