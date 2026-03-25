@@ -85,7 +85,8 @@ export const useThemeStore = create<ThemeState>()(
       deleteCustomTheme: (id) => {
         unregisterTheme(id)
         set((s) => {
-          const { [id]: _, ...rest } = s.customThemes
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { [id]: _removed, ...rest } = s.customThemes
           const newActiveId = s.activeThemeId === id ? 'dark' : s.activeThemeId
           if (s.activeThemeId === id) applyThemeToDom('dark')
           return { customThemes: rest, activeThemeId: newActiveId }
