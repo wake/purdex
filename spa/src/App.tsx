@@ -17,6 +17,7 @@ import { useRouteSync } from './hooks/useRouteSync'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { isStandaloneTab } from './types/tab'
 import { TabContextMenu } from './components/TabContextMenu'
+import { ThemeInjector } from './components/ThemeInjector'
 import type { Tab } from './types/tab'
 
 export default function App() {
@@ -103,6 +104,7 @@ export default function App() {
 
   return (
     <Router>
+      <ThemeInjector />
       <div className="h-screen flex bg-[#0a0a1a] text-gray-200">
         <ActivityBar
           workspaces={workspaces}
