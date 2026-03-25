@@ -201,7 +201,7 @@ function ThemeInjector() {
 interface ThemeDefinition {
   id: string;           // 'dark' | 'light' | 'nord' | 'dracula' | custom-id
   name: string;         // 顯示名稱
-  tokens: ThemeTokens;  // 全部 ~25 個 token 鍵值對
+  tokens: ThemeTokens;  // 全部 23 個 token 鍵值對
   builtin: boolean;     // 預設主題不可刪除/重命名
 }
 
@@ -366,6 +366,14 @@ ANSI 16 色 palette 不在 Theme 範圍內，歸 Host 管理（per-daemon 設定
 - 再逐元件替換硬編碼為 token class
 - 最後加入其他 3 個預設主題 + 編輯器 + 匯入匯出
 
+### 未覆蓋色彩的遷移決策原則
+
+現有 codebase 有許多一次性色彩（如 `#334a5e` MessageBubble、`#1e1e1e` ToolCallBlock、`#c77` status 文字色等）不直接對應 23 個語義 token。遷移時遵循以下原則：
+
+1. **優先映射**：找語義最接近的現有 token 使用
+2. **新增元件 token**：若多個元件共用同一語義且現有 token 無法表達，新增元件特化 token（如 `--status-error-text`）
+3. **保留 + TODO**：若僅單一元件使用且語義模糊，暫時保留硬編碼並加 `/* TODO: theme token */` 註解，後續主題配色時再決定歸屬
+
 ### 影響範圍（依探索結果）
 
 | 元件 | 主要色彩 | 遷移對象 |
@@ -396,14 +404,15 @@ ANSI 16 色 palette 不在 Theme 範圍內，歸 Host 管理（per-daemon 設定
 | `spa/src/components/settings/ThemeEditor.tsx` | 色彩編輯器元件 |
 | `spa/src/components/settings/ThemeImportModal.tsx` | 匯入 modal（JSON/檔案/URL） |
 | `spa/src/components/ThemeInjector.tsx` | Active 自訂主題 runtime `<style>` 注入 |
-| `spa/src/register-themes.ts` | 預設主題註冊（與 register-panes.tsx 同層級） |
+| `spa/src/lib/register-themes.ts` | 預設主題註冊（與 register-panes.tsx 同層級） |
 
 ### 異動
 
 | 檔案 | 變更 |
 |------|------|
 | `spa/src/index.css` | 加 `@import "./styles/themes.css"` + `body` 背景改用 `var(--surface-primary)` |
-| `spa/src/App.tsx` | 根元素加 `data-theme` + 掛載 ThemeInjector |
+| `spa/src/App.tsx` | 掛載 ThemeInjector |
+| `spa/src/main.tsx` | 加 `import` + 呼叫 `registerBuiltinThemes()` |
 | `spa/src/components/settings/AppearanceSection.tsx` | 啟用 Theme selector + 自訂按鈕 + 匯入按鈕 |
 | `spa/src/hooks/useTerminal.ts` | 從 CSS variables 讀取 terminal theme |
 | 所有含硬編碼色彩的元件 | `bg-[#xxx]` / `text-gray-*` → 語義 token class |
