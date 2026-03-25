@@ -10,8 +10,8 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
   const reservedStart = sections.findIndex((s) => !s.component)
 
   return (
-    <div className="w-48 border-r border-gray-800 bg-[#0a0a1a] py-3 flex-shrink-0">
-      <div className="px-4 mb-2 text-[10px] text-gray-600 uppercase tracking-wider">Settings</div>
+    <div className="w-48 border-r border-border-subtle bg-surface-primary py-3 flex-shrink-0">
+      <div className="px-4 mb-2 text-[10px] text-text-muted uppercase tracking-wider">Settings</div>
       {sections.map((item, i) => {
         const isActive = item.id === activeSection
         const enabled = !!item.component
@@ -19,7 +19,7 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
 
         return (
           <div key={item.id}>
-            {showDivider && <div className="mx-3 my-2 border-t border-gray-800" />}
+            {showDivider && <div className="mx-3 my-2 border-t border-border-subtle" />}
             <button
               data-section={item.id}
               data-active={isActive ? 'true' : undefined}
@@ -28,15 +28,15 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
               }}
               className={`w-full text-left px-4 py-2 text-sm flex items-center transition-colors ${
                 !enabled
-                  ? 'text-gray-600 cursor-not-allowed'
+                  ? 'text-text-muted cursor-not-allowed'
                   : isActive
-                    ? 'bg-[#1e1e3e] text-gray-200 border-l-2 border-[#7a6aaa]'
-                    : 'text-gray-400 cursor-pointer hover:bg-white/5'
+                    ? 'bg-surface-elevated text-text-primary border-l-2 border-border-active'
+                    : 'text-text-secondary cursor-pointer hover:bg-white/5'
               }`}
             >
               <span>{item.label}</span>
               {!enabled && (
-                <span className="text-[10px] text-gray-600 ml-auto">coming soon</span>
+                <span className="text-[10px] text-text-muted ml-auto">coming soon</span>
               )}
             </button>
           </div>
