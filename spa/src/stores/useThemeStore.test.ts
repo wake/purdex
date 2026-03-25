@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useThemeStore } from './useThemeStore'
-import { clearThemeRegistry, getTheme, registerTheme, getAllThemes } from '../lib/theme-registry'
+import { clearThemeRegistry, getTheme, registerTheme } from '../lib/theme-registry'
 import { THEME_TOKEN_KEYS, type ThemeTokens } from '../lib/theme-tokens'
 
 function makeTokens(base = '#000000'): ThemeTokens {

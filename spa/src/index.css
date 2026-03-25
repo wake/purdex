@@ -1,8 +1,9 @@
 @import "tailwindcss";
+@import "./styles/themes.css";
 @plugin "@tailwindcss/typography";
 
 body {
-  background-color: #191919;
+  background-color: var(--surface-primary);
 }
 
 /* Hide scrollbar for tab overflow */
