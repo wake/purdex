@@ -54,7 +54,34 @@ const lightTokens: ThemeTokens = {
   'status-success': '#d4edda',
 }
 
+const nordTokens: ThemeTokens = {
+  'surface-primary': '#2e3440',
+  'surface-secondary': '#3b4252',
+  'surface-tertiary': '#2e3440',
+  'surface-elevated': '#434c5e',
+  'surface-hover': '#434c5e',
+  'surface-active': '#4c566a',
+  'surface-input': '#3b4252',
+  'text-primary': '#eceff4',
+  'text-secondary': '#d8dee9',
+  'text-muted': '#7b88a1',
+  'text-inverse': '#2e3440',
+  'border-default': '#4c566a',
+  'border-active': '#88c0d0',
+  'border-subtle': '#3b4252',
+  'accent': '#88c0d0',
+  'accent-hover': '#8fbcbb',
+  'accent-muted': 'rgba(136, 192, 208, 0.2)',
+  'terminal-bg': '#2e3440',
+  'terminal-fg': '#d8dee9',
+  'terminal-cursor': '#d8dee9',
+  'status-error': '#bf616a33',
+  'status-warning': '#ebcb8b33',
+  'status-success': '#a3be8c33',
+}
+
 export function registerBuiltinThemes(): void {
   registerTheme({ id: 'dark', name: 'Dark', tokens: darkTokens, builtin: true })
   registerTheme({ id: 'light', name: 'Light', tokens: lightTokens, builtin: true })
+  registerTheme({ id: 'nord', name: 'Nord', tokens: nordTokens, builtin: true })
 }
