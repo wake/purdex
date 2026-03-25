@@ -32,6 +32,9 @@ export function getPaneLabel(
       const ws = workspaceStore.getById(content.scope.workspaceId)
       return t('page.pane.settings_ws', { name: ws?.name ?? content.scope.workspaceId })
     }
+    case 'browser': {
+      try { return new URL(content.url).hostname } catch { return content.url }
+    }
   }
 }
 
@@ -47,5 +50,7 @@ export function getPaneIcon(content: PaneContent): string {
       return 'ClockCounterClockwise'
     case 'settings':
       return 'GearSix'
+    case 'browser':
+      return 'Globe'
   }
 }
