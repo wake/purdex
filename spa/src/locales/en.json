@@ -104,6 +104,8 @@
   "locale.import.file.aria": "Locale file input",
   "locale.import.url.aria": "Locale URL",
   "locale.import.url.placeholder": "https://example.com/locale.json",
+  "locale.import.url.fetching": "Fetching...",
+  "locale.import.url.fetch_button": "Fetch & Import",
 
   "tab.switch_terminal": "Switch to Terminal",
   "tab.switch_stream": "Switch to Stream",

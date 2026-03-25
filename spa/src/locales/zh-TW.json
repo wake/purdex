@@ -104,6 +104,8 @@
   "locale.import.file.aria": "語系檔案輸入",
   "locale.import.url.aria": "語系 URL",
   "locale.import.url.placeholder": "https://example.com/locale.json",
+  "locale.import.url.fetching": "擷取中...",
+  "locale.import.url.fetch_button": "擷取並匯入",
 
   "tab.switch_terminal": "切換至 Terminal",
   "tab.switch_stream": "切換至 Stream",

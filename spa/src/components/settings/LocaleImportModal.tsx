@@ -206,7 +206,7 @@ export function LocaleImportModal({ onClose, onImported }: LocaleImportModalProp
                 disabled={loading}
                 className="px-4 py-1.5 text-xs text-text-inverse bg-accent hover:bg-accent-hover rounded-md disabled:opacity-50"
               >
-                {loading ? t('theme.import.url.fetching') : t('theme.import.url.fetch_button')}
+                {loading ? t('locale.import.url.fetching') : t('locale.import.url.fetch_button')}
               </button>
             </div>
           )}
