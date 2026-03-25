@@ -105,7 +105,7 @@ export default function App() {
   return (
     <Router>
       <ThemeInjector />
-      <div className="h-screen flex bg-[#0a0a1a] text-gray-200">
+      <div className="h-screen flex bg-surface-primary text-text-primary">
         <ActivityBar
           workspaces={workspaces}
           standaloneTabs={standaloneTabs}
