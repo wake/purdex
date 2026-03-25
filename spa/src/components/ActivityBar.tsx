@@ -80,14 +80,14 @@ export function ActivityBar({
       {/* Add + Settings */}
       <div className="mt-auto flex flex-col items-center gap-2 pb-1">
         <button
-          title="新增工作區"
+          title={t('nav.new_workspace')}
           onClick={onAddWorkspace}
           className="w-8 h-8 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
         >
           <Plus size={16} />
         </button>
         <button
-          title="設定"
+          title={t('nav.settings')}
           onClick={onOpenSettings}
           className="w-8 h-8 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
         >

@@ -31,99 +31,99 @@ describe('TabContextMenu', () => {
   beforeEach(() => { cleanup(); vi.clearAllMocks() })
 
   // --- ViewMode section ---
-  it('shows "切換至 Stream" for session tab in terminal mode', () => {
+  it('shows "Switch to Stream" for session tab in terminal mode', () => {
     renderMenu()
-    expect(screen.getByText('切換至 Stream')).toBeInTheDocument()
-    expect(screen.queryByText('切換至 Terminal')).not.toBeInTheDocument()
+    expect(screen.getByText('Switch to Stream')).toBeInTheDocument()
+    expect(screen.queryByText('Switch to Terminal')).not.toBeInTheDocument()
   })
 
-  it('shows "切換至 Terminal" for session tab in stream mode', () => {
+  it('shows "Switch to Terminal" for session tab in stream mode', () => {
     renderMenu({ tab: makeSessionTab('stream') })
-    expect(screen.getByText('切換至 Terminal')).toBeInTheDocument()
-    expect(screen.queryByText('切換至 Stream')).not.toBeInTheDocument()
+    expect(screen.getByText('Switch to Terminal')).toBeInTheDocument()
+    expect(screen.queryByText('Switch to Stream')).not.toBeInTheDocument()
   })
 
   it('hides viewMode toggle for non-session tab', () => {
     renderMenu({ tab: makeNonSessionTab() })
-    expect(screen.queryByText('切換至 Stream')).not.toBeInTheDocument()
-    expect(screen.queryByText('切換至 Terminal')).not.toBeInTheDocument()
+    expect(screen.queryByText('Switch to Stream')).not.toBeInTheDocument()
+    expect(screen.queryByText('Switch to Terminal')).not.toBeInTheDocument()
   })
 
   // --- Lock/Unlock ---
-  it('shows "鎖定分頁" for unlocked tab', () => {
+  it('shows "Lock tab" for unlocked tab', () => {
     renderMenu()
-    expect(screen.getByText('鎖定分頁')).toBeInTheDocument()
-    expect(screen.queryByText('解鎖分頁')).not.toBeInTheDocument()
+    expect(screen.getByText('Lock tab')).toBeInTheDocument()
+    expect(screen.queryByText('Unlock tab')).not.toBeInTheDocument()
   })
 
-  it('shows "解鎖分頁" for locked non-pinned tab', () => {
+  it('shows "Unlock tab" for locked non-pinned tab', () => {
     renderMenu({ tab: makeSessionTab('terminal', { locked: true }) })
-    expect(screen.getByText('解鎖分頁')).toBeInTheDocument()
-    expect(screen.queryByText('鎖定分頁')).not.toBeInTheDocument()
+    expect(screen.getByText('Unlock tab')).toBeInTheDocument()
+    expect(screen.queryByText('Lock tab')).not.toBeInTheDocument()
   })
 
-  it('shows "解鎖分頁" for pinned + locked tab', () => {
+  it('shows "Unlock tab" for pinned + locked tab', () => {
     renderMenu({ tab: makeSessionTab('terminal', { pinned: true, locked: true }) })
-    expect(screen.getByText('解鎖分頁')).toBeInTheDocument()
+    expect(screen.getByText('Unlock tab')).toBeInTheDocument()
   })
 
   // --- Pin/Unpin ---
-  it('shows "固定分頁" for unpinned tab', () => {
+  it('shows "Pin tab" for unpinned tab', () => {
     renderMenu()
-    expect(screen.getByText('固定分頁')).toBeInTheDocument()
-    expect(screen.queryByText('取消固定')).not.toBeInTheDocument()
+    expect(screen.getByText('Pin tab')).toBeInTheDocument()
+    expect(screen.queryByText('Unpin tab')).not.toBeInTheDocument()
   })
 
-  it('shows "取消固定" for pinned tab', () => {
+  it('shows "Unpin tab" for pinned tab', () => {
     renderMenu({ tab: makeSessionTab('terminal', { pinned: true }) })
-    expect(screen.getByText('取消固定')).toBeInTheDocument()
-    expect(screen.queryByText('固定分頁')).not.toBeInTheDocument()
+    expect(screen.getByText('Unpin tab')).toBeInTheDocument()
+    expect(screen.queryByText('Pin tab')).not.toBeInTheDocument()
   })
 
   // --- Close section ---
-  it('"關閉分頁" is disabled when locked', () => {
+  it('"Close tab" is disabled when locked', () => {
     renderMenu({ tab: makeSessionTab('terminal', { locked: true }) })
-    const closeBtn = screen.getByText('關閉分頁').closest('button')!
+    const closeBtn = screen.getByText('Close tab').closest('button')!
     expect(closeBtn).toBeDisabled()
   })
 
-  it('"關閉分頁" is enabled when unlocked', () => {
+  it('"Close tab" is enabled when unlocked', () => {
     renderMenu()
-    const closeItem = screen.getByText('關閉分頁')
+    const closeItem = screen.getByText('Close tab')
     expect(closeItem.closest('button')).not.toHaveClass('opacity-40')
   })
 
-  it('shows "關閉其他分頁" when hasOtherUnlocked', () => {
+  it('shows "Close other tabs" when hasOtherUnlocked', () => {
     renderMenu({ hasOtherUnlocked: true })
-    expect(screen.getByText('關閉其他分頁')).toBeInTheDocument()
+    expect(screen.getByText('Close other tabs')).toBeInTheDocument()
   })
 
-  it('hides "關閉其他分頁" when no other unlocked', () => {
+  it('hides "Close other tabs" when no other unlocked', () => {
     renderMenu({ hasOtherUnlocked: false })
-    expect(screen.queryByText('關閉其他分頁')).not.toBeInTheDocument()
+    expect(screen.queryByText('Close other tabs')).not.toBeInTheDocument()
   })
 
-  it('shows "關閉右側分頁" when hasRightUnlocked', () => {
+  it('shows "Close tabs to the right" when hasRightUnlocked', () => {
     renderMenu({ hasRightUnlocked: true })
-    expect(screen.getByText('關閉右側分頁')).toBeInTheDocument()
+    expect(screen.getByText('Close tabs to the right')).toBeInTheDocument()
   })
 
-  it('hides "關閉右側分頁" when no right unlocked', () => {
+  it('hides "Close tabs to the right" when no right unlocked', () => {
     renderMenu({ hasRightUnlocked: false })
-    expect(screen.queryByText('關閉右側分頁')).not.toBeInTheDocument()
+    expect(screen.queryByText('Close tabs to the right')).not.toBeInTheDocument()
   })
 
   // --- Action callbacks ---
   it('calls onAction with correct action on click', () => {
     const props = renderMenu()
-    fireEvent.click(screen.getByText('鎖定分頁'))
+    fireEvent.click(screen.getByText('Lock tab'))
     expect(props.onAction).toHaveBeenCalledWith('lock')
     expect(props.onClose).toHaveBeenCalled()
   })
 
   it('disabled item does not fire onAction', () => {
     const props = renderMenu({ tab: makeSessionTab('terminal', { locked: true }) })
-    fireEvent.click(screen.getByText('關閉分頁'))
+    fireEvent.click(screen.getByText('Close tab'))
     expect(props.onAction).not.toHaveBeenCalled()
   })
 })

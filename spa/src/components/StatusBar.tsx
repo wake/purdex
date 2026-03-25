@@ -5,6 +5,7 @@ import { getPrimaryPane } from '../lib/pane-tree'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useClickOutside } from '../hooks/useClickOutside'
+import { useI18nStore } from '../stores/useI18nStore'
 
 interface Props {
   activeTab: Tab | null
@@ -17,6 +18,7 @@ const VIEW_MODE_COLORS: Record<string, string> = {
 }
 
 export function StatusBar({ activeTab, onViewModeChange }: Props) {
+  const t = useI18nStore((s) => s.t)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -29,7 +31,7 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
   if (!activeTab) {
     return (
       <div className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted flex-shrink-0">
-        No active session
+        {t('status.no_active')}
       </div>
     )
   }
@@ -64,7 +66,7 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
       <span className="ml-auto flex items-center">
         <div className="relative" ref={menuRef}>
           <button
-            title="切換檢視模式"
+            title={t('nav.toggle_view')}
             onClick={() => setMenuOpen((v) => !v)}
             className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] cursor-pointer transition-colors ${VIEW_MODE_COLORS[viewMode] ?? 'bg-surface-secondary text-text-secondary border-border-default'}`}
           >

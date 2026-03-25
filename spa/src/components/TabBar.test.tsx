@@ -122,7 +122,7 @@ describe('TabBar', () => {
   it('calls onAddTab on + button', () => {
     const onAdd = vi.fn()
     render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} onAddTab={onAdd} />)
-    fireEvent.click(screen.getByTitle('新增分頁'))
+    fireEvent.click(screen.getByTitle('New tab'))
     expect(onAdd).toHaveBeenCalled()
   })
 

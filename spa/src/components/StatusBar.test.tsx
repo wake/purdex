@@ -56,14 +56,14 @@ describe('StatusBar', () => {
     const tab = makeTab('t1', { kind: 'dashboard' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.getByText('dashboard')).toBeTruthy()
-    expect(screen.queryByTitle('切換檢視模式')).toBeNull()
+    expect(screen.queryByTitle('Toggle view mode')).toBeNull()
   })
 
   it('opens popup on badge click and calls onViewModeChange', () => {
     const onChange = vi.fn()
     const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={onChange} />)
-    fireEvent.click(screen.getByTitle('切換檢視模式'))
+    fireEvent.click(screen.getByTitle('Toggle view mode'))
     // popup should show both options
     const streamOption = screen.getAllByText('stream')
     fireEvent.click(streamOption[streamOption.length - 1])
