@@ -64,7 +64,7 @@ describe('TabBar', () => {
   it('calls onCloseTab on close button click', () => {
     const onClose = vi.fn()
     render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} onCloseTab={onClose} />)
-    const closeButtons = screen.getAllByTitle('關閉分頁')
+    const closeButtons = screen.getAllByTitle('Close tab')
     fireEvent.click(closeButtons[0])
     expect(onClose).toHaveBeenCalledWith('t1')
   })
@@ -89,7 +89,7 @@ describe('TabBar', () => {
       makeTab('t1', { kind: 'session', sessionCode: 'xxx001', mode: 'terminal' }, { locked: true }),
     ]
     render(<TabBar tabs={lockedTabs} activeTabId="t1" {...defaultHandlers} />)
-    expect(screen.queryByTitle('關閉分頁')).not.toBeInTheDocument()
+    expect(screen.queryByTitle('Close tab')).not.toBeInTheDocument()
   })
 
   it('shows lock icon on locked non-pinned tab', () => {
@@ -115,7 +115,7 @@ describe('TabBar', () => {
 
   it('close button is a real <button> element', () => {
     render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} />)
-    const closeBtn = screen.getAllByTitle('關閉分頁')[0]
+    const closeBtn = screen.getAllByTitle('Close tab')[0]
     expect(closeBtn.tagName).toBe('BUTTON')
   })
 

@@ -2,6 +2,7 @@ import { Plus, GearSix } from '@phosphor-icons/react'
 import type { Tab, Workspace } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { getPaneLabel } from '../lib/pane-labels'
+import { useI18nStore } from '../stores/useI18nStore'
 
 const emptySessionLookup = { getByCode: () => undefined }
 const emptyWorkspaceLookup = { getById: () => undefined }
@@ -27,6 +28,7 @@ export function ActivityBar({
   onAddWorkspace,
   onOpenSettings,
 }: Props) {
+  const t = useI18nStore((s) => s.t)
   return (
     <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 gap-2 flex-shrink-0">
       {/* Workspaces */}
@@ -57,6 +59,7 @@ export function ActivityBar({
           getPrimaryPane(tab.layout).content,
           emptySessionLookup,
           emptyWorkspaceLookup,
+          t,
         )
         return (
           <button

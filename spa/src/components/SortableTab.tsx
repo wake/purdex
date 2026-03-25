@@ -5,6 +5,7 @@ import { getPaneIcon, getPaneLabel } from '../lib/pane-labels'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
+import { useI18nStore } from '../stores/useI18nStore'
 
 interface Props {
   tab: Tab
@@ -37,11 +38,12 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const iconName = getPaneIcon(primaryContent)
   const IconComponent = iconMap[iconName]
 
+  const t = useI18nStore((s) => s.t)
   const sessions = useSessionStore((s) => s.sessions)
   const workspaces = useWorkspaceStore((s) => s.workspaces)
   const sessionLookup = { getByCode: (code: string) => sessions.find((s) => s.code === code) }
   const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
-  const label = getPaneLabel(primaryContent, sessionLookup, workspaceLookup)
+  const label = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
 
   const handleMouseEnter = () => onHover?.(tab.id)
   const handleMouseLeave = () => onHover?.(null)
@@ -119,7 +121,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           <button
             type="button"
             tabIndex={-1}
-            title="關閉分頁"
+            title={t('tab.close')}
             onClick={(e) => { e.stopPropagation(); onClose(tab.id) }}
             className={`self-stretch flex items-center cursor-pointer rounded-r-[6px] border-none p-0 ${
               isActive
