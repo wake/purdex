@@ -12,7 +12,7 @@ describe('browser provider registration', () => {
   })
 
   afterEach(() => {
-    delete (window as Record<string, unknown>).electronAPI
+    delete (window as unknown as Record<string, unknown>).electronAPI
     clearNewTabRegistry()
     clearPaneRegistry()
     clearSettingsSectionRegistry()
@@ -27,7 +27,7 @@ describe('browser provider registration', () => {
   })
 
   it('registers browser provider as enabled when electronAPI present', () => {
-    ;(window as Record<string, unknown>).electronAPI = { tearOffTab: async () => {} }
+    ;(window as unknown as Record<string, unknown>).electronAPI = { tearOffTab: async () => {} }
     registerBuiltinPanes()
     const browser = getNewTabProviders().find((p) => p.id === 'browser')
     expect(browser).toBeDefined()

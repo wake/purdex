@@ -3,7 +3,7 @@ import { getPlatformCapabilities } from './platform'
 
 describe('getPlatformCapabilities', () => {
   afterEach(() => {
-    delete (window as Record<string, unknown>).electronAPI
+    delete (window as unknown as Record<string, unknown>).electronAPI
   })
 
   it('returns all false when no electronAPI', () => {
@@ -15,7 +15,7 @@ describe('getPlatformCapabilities', () => {
   })
 
   it('returns all true when electronAPI exists', () => {
-    ;(window as Record<string, unknown>).electronAPI = {
+    ;(window as unknown as Record<string, unknown>).electronAPI = {
       tearOffTab: async () => {},
       mergeTab: async () => {},
       openBrowserView: async () => {},
