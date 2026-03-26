@@ -17,6 +17,7 @@ import (
 	"github.com/wake/tmux-box/internal/core"
 	"github.com/wake/tmux-box/internal/middleware"
 	"github.com/wake/tmux-box/internal/module/cc"
+	"github.com/wake/tmux-box/internal/module/dev"
 	"github.com/wake/tmux-box/internal/module/session"
 	"github.com/wake/tmux-box/internal/module/stream"
 	"github.com/wake/tmux-box/internal/relay"
@@ -92,6 +93,10 @@ func runServe(args []string) {
 	c.AddModule(session.NewSessionModule(meta))
 	c.AddModule(cc.New())
 	c.AddModule(stream.New())
+	if c.Cfg.Dev.Update {
+		wd, _ := os.Getwd()
+		c.AddModule(dev.New(wd))
+	}
 
 	// 6. Init all modules
 	if err := c.InitModules(); err != nil {
