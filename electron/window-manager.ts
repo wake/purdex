@@ -1,0 +1,100 @@
+import { BrowserWindow } from 'electron'
+import { join } from 'path'
+import { is } from '@electron-toolkit/utils'
+
+interface WindowInfo {
+  id: string
+  title: string
+}
+
+export class WindowManager {
+  private windows = new Map<string, BrowserWindow>()
+  private nextId = 1
+
+  createWindow(opts?: { tabJson?: string }): BrowserWindow {
+    const id = String(this.nextId++)
+    const win = new BrowserWindow({
+      width: 1200,
+      height: 800,
+      titleBarStyle: 'hiddenInset',
+      trafficLightPosition: { x: 12, y: 12 },
+      webPreferences: {
+        contextIsolation: true,
+        sandbox: true,
+        nodeIntegration: false,
+        preload: join(__dirname, '../preload/index.js'),
+      },
+    })
+
+    this.windows.set(id, win)
+
+    // Load SPA
+    if (is.dev) {
+      win.loadURL('http://100.64.0.2:5174')
+    } else {
+      win.loadFile(join(__dirname, '../renderer/index.html'))
+    }
+
+    // If tab data provided, send after SPA is ready
+    if (opts?.tabJson) {
+      win.webContents.once('did-finish-load', () => {
+        // Small delay to let React hydrate
+        setTimeout(() => {
+          win.webContents.send('tab:received', opts.tabJson)
+        }, 500)
+      })
+    }
+
+    win.on('closed', () => {
+      this.windows.delete(id)
+    })
+
+    // Store window ID for IPC identification
+    ;(win as unknown as Record<string, unknown>).__windowId = id
+
+    return win
+  }
+
+  closeWindow(windowId: string): void {
+    const win = this.windows.get(windowId)
+    if (win && !win.isDestroyed()) {
+      win.close()
+    }
+  }
+
+  getAll(): WindowInfo[] {
+    return Array.from(this.windows.entries()).map(([id, win]) => ({
+      id,
+      title: win.isDestroyed() ? '' : win.getTitle(),
+    }))
+  }
+
+  getAllWindows(): BrowserWindow[] {
+    return Array.from(this.windows.values()).filter((w) => !w.isDestroyed())
+  }
+
+  showOrCreate(): void {
+    const wins = this.getAllWindows()
+    if (wins.length > 0) {
+      const win = wins[0]
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+    } else {
+      this.createWindow()
+    }
+  }
+
+  handleTearOff(tabJson: string): void {
+    this.createWindow({ tabJson })
+  }
+
+  handleMerge(tabJson: string, targetWindowId: string): void {
+    const target = this.windows.get(targetWindowId)
+    if (target && !target.isDestroyed()) {
+      target.webContents.send('tab:received', tabJson)
+      target.show()
+      target.focus()
+    }
+  }
+}
