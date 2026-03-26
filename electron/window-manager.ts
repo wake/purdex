@@ -25,7 +25,7 @@ export class WindowManager {
         contextIsolation: true,
         sandbox: true,
         nodeIntegration: false,
-        preload: join(__dirname, '../preload/index.js'),
+        preload: join(__dirname, '../preload/index.mjs'),
       },
     })
 
