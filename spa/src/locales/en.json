@@ -177,6 +177,7 @@
   "monitor.state.background": "Background",
   "monitor.state.discarded": "Discarded",
   "monitor.shared": "shared",
+  "monitor.empty": "No active views",
   "monitor.summary.renderer": "Renderer process",
   "monitor.summary.views": "Browser views",
   "monitor.summary.total": "Total app",

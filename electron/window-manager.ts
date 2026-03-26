@@ -9,10 +9,14 @@ interface WindowInfo {
 
 export class WindowManager {
   private windows = new Map<string, BrowserWindow>()
-  private nextId = 1
+  private onWindowClosed?: (win: BrowserWindow) => void
+
+  setOnWindowClosed(cb: (win: BrowserWindow) => void): void {
+    this.onWindowClosed = cb
+  }
 
   createWindow(opts?: { tabJson?: string }): BrowserWindow {
-    const id = String(this.nextId++)
+    const id = globalThis.crypto.randomUUID().slice(0, 8)
     const win = new BrowserWindow({
       width: 1200,
       height: 800,
@@ -46,11 +50,9 @@ export class WindowManager {
     }
 
     win.on('closed', () => {
+      this.onWindowClosed?.(win)
       this.windows.delete(id)
     })
-
-    // Store window ID for IPC identification
-    ;(win as unknown as Record<string, unknown>).__windowId = id
 
     return win
   }

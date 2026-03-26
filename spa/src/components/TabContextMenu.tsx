@@ -71,7 +71,7 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
     // Tear-off section (Electron only)
     ...(caps.canTearOffTab ? [
       'separator' as const,
-      { label: t('tab.move_new_window'), action: 'tearOff' as const, show: true },
+      { label: t('tab.move_new_window'), action: 'tearOff' as const, show: true, disabled: tab.locked },
     ] : []),
     'separator',
     // Close section

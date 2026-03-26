@@ -33,7 +33,7 @@ export function BrowserPane({ paneId, url }: BrowserPaneProps) {
     })
     observer.observe(ref.current)
     return () => observer.disconnect()
-  }, [paneId])
+  }, [paneId, url])
 
   // SPA fallback
   if (!window.electronAPI) {

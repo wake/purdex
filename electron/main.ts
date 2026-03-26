@@ -5,6 +5,7 @@ import { createTray } from './tray'
 
 const windowManager = new WindowManager()
 const browserViewManager = new BrowserViewManager()
+windowManager.setOnWindowClosed((win) => browserViewManager.cleanupForWindow(win))
 let metricsInterval: ReturnType<typeof setInterval> | null = null
 
 function registerIpcHandlers(): void {
@@ -44,7 +45,7 @@ function startMetricsPolling(): void {
   metricsInterval = setInterval(() => {
     const metrics = browserViewManager.getMetrics()
     for (const win of windowManager.getAllWindows()) {
-      win.webContents.send('metrics:update', metrics)
+      if (!win.isDestroyed()) win.webContents.send('metrics:update', metrics)
     }
   }, 30_000) // 30 seconds
 }

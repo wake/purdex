@@ -63,6 +63,13 @@ export class BrowserViewManager {
       return
     }
 
+    // Check for snapshot (discarded view) — use saved URL instead of prop
+    const snapshot = this.snapshots.get(paneId)
+    const loadUrl = snapshot ? snapshot.url : url
+    this.snapshots.delete(paneId)
+
+    if (!isAllowedUrl(loadUrl)) return
+
     const view = new WebContentsView({
       webPreferences: {
         contextIsolation: true,
@@ -73,23 +80,22 @@ export class BrowserViewManager {
 
     // Security: restrict navigation to http/https
     view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    view.webContents.on('will-navigate', (event, navUrl) => {
+      if (!isAllowedUrl(navUrl)) event.preventDefault()
+    })
 
     win.contentView.addChildView(view)
-    if (isAllowedUrl(url)) {
-      view.webContents.loadURL(url)
-    }
+    view.webContents.loadURL(loadUrl)
 
     this.views.set(paneId, {
       view,
       paneId,
-      url,
+      url: loadUrl,
       window: win,
       state: 'active',
       lastActiveAt: Date.now(),
     })
 
-    // Clear any existing snapshot
-    this.snapshots.delete(paneId)
     this.clearTimer(paneId)
   }
 
@@ -166,6 +172,14 @@ export class BrowserViewManager {
     const entry = this.views.get(paneId)
     if (!entry) return
 
+    if (entry.window.isDestroyed()) {
+      // Window already closed — just clean up our references
+      entry.view.webContents.close()
+      this.views.delete(paneId)
+      this.clearTimer(paneId)
+      return
+    }
+
     // Save snapshot
     this.snapshots.set(paneId, {
       url: entry.view.webContents.getURL() || entry.url,
@@ -195,6 +209,7 @@ export class BrowserViewManager {
     let totalViewMemoryKB = 0
 
     for (const entry of this.views.values()) {
+      if (entry.view.webContents.isDestroyed()) continue
       const pid = entry.view.webContents.getOSProcessId()
       const metric = metrics.find((m) => m.pid === pid)
       if (metric?.memory) {
@@ -220,12 +235,13 @@ export class BrowserViewManager {
     const result: TabMetrics[] = []
 
     for (const entry of this.views.values()) {
+      if (entry.view.webContents.isDestroyed()) continue
       const pid = entry.view.webContents.getOSProcessId()
       const metric = appMetrics.find((m) => m.pid === pid)
       result.push({
         paneId: entry.paneId,
         kind: 'browser',
-        memoryKB: metric?.memory?.privateBytes ?? 0,
+        memoryKB: metric?.memory?.workingSetSize ?? 0,
         cpuPercent: metric?.cpu?.percentCPUUsage ?? 0,
       })
     }
@@ -233,8 +249,23 @@ export class BrowserViewManager {
     return result
   }
 
+  cleanupForWindow(win: BrowserWindow): void {
+    for (const [paneId, entry] of this.views) {
+      if (entry.window === win) {
+        this.clearTimer(paneId)
+        if (!entry.view.webContents.isDestroyed()) {
+          entry.view.webContents.close()
+        }
+        this.views.delete(paneId)
+      }
+    }
+  }
+
   destroyAll(): void {
-    if (this.checkInterval) clearInterval(this.checkInterval)
+    if (this.checkInterval) {
+      clearInterval(this.checkInterval)
+      this.checkInterval = null
+    }
     for (const paneId of [...this.views.keys()]) {
       const entry = this.views.get(paneId)!
       entry.window.contentView.removeChildView(entry.view)

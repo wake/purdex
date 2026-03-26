@@ -53,7 +53,7 @@ export function MemoryMonitorPage() {
           </div>
         ))}
         {metrics.length === 0 && (
-          <div className="px-3 py-4 text-text-muted text-center">{t('monitor.shared')}</div>
+          <div className="px-3 py-4 text-text-muted text-center">{t('monitor.empty')}</div>
         )}
       </div>
     </div>

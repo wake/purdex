@@ -51,9 +51,15 @@ export default function App() {
     return window.electronAPI.onTabReceived((tabJson: string) => {
       try {
         const tab = JSON.parse(tabJson)
-        if (tab && tab.id) {
+        if (tab && tab.id && tab.layout) {
           useTabStore.getState().addTab(tab)
           useTabStore.getState().setActiveTab(tab.id)
+          // Restore workspace membership if receiving window has an active workspace
+          const wsId = useWorkspaceStore.getState().activeWorkspaceId
+          if (wsId) {
+            useWorkspaceStore.getState().addTabToWorkspace(wsId, tab.id)
+            useWorkspaceStore.getState().setWorkspaceActiveTab(wsId, tab.id)
+          }
         }
       } catch { /* ignore malformed tab JSON */ }
     })

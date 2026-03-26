@@ -177,6 +177,7 @@
   "monitor.state.background": "背景",
   "monitor.state.discarded": "已釋放",
   "monitor.shared": "共用",
+  "monitor.empty": "沒有使用中的分頁",
   "monitor.summary.renderer": "渲染程序",
   "monitor.summary.views": "瀏覽器分頁",
   "monitor.summary.total": "應用程式總計",

@@ -5,8 +5,8 @@ import type { WindowManager } from './window-manager'
 let tray: Tray | null = null
 
 export function createTray(windowManager: WindowManager): Tray {
-  // macOS Template image (auto dark/light)
-  const iconPath = join(__dirname, '../../spa/public/favicon.svg')
+  // macOS Template image (auto dark/light) — nativeImage does not support SVG
+  const iconPath = join(__dirname, '../../spa/public/icons/icon-192.png')
   const icon = nativeImage.createFromPath(iconPath).resize({ width: 18, height: 18 })
   icon.setTemplateImage(true)
 
