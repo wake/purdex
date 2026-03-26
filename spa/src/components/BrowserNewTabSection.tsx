@@ -11,6 +11,12 @@ export function BrowserNewTabSection({ onSelect }: NewTabProviderProps) {
     e.preventDefault()
     if (!url.trim()) return
     const finalUrl = url.includes('://') ? url : `https://${url}`
+    try {
+      const parsed = new URL(finalUrl)
+      if (!['http:', 'https:'].includes(parsed.protocol)) return
+    } catch {
+      return
+    }
     onSelect({ kind: 'browser', url: finalUrl })
   }
 
