@@ -110,11 +110,12 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
         if (!window.electronAPI) break
         const tabData = tabs[tab.id]
         if (!tabData) break
-        window.electronAPI.tearOffTab(JSON.stringify(tabData))
-        // Source removes tab immediately — use handleCloseTab for workspace cleanup
-        // Note: locked tabs won't be removed (closeTab is a no-op for locked).
-        // This is acceptable — users should unlock before tear-off.
+        // Must remove tab BEFORE IPC to avoid duplication if locked
         handleCloseTab(tab.id)
+        // Only send to new window if tab was actually removed
+        if (!useTabStore.getState().tabs[tab.id]) {
+          window.electronAPI.tearOffTab(JSON.stringify(tabData))
+        }
         break
       }
     }
