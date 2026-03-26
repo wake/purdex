@@ -106,6 +106,17 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
         toClose.forEach((id) => handleCloseTab(id))
         break
       }
+      case 'tearOff': {
+        if (!window.electronAPI) break
+        const tabData = tabs[tab.id]
+        if (!tabData) break
+        window.electronAPI.tearOffTab(JSON.stringify(tabData))
+        // Source removes tab immediately — use handleCloseTab for workspace cleanup
+        // Note: locked tabs won't be removed (closeTab is a no-op for locked).
+        // This is acceptable — users should unlock before tear-off.
+        handleCloseTab(tab.id)
+        break
+      }
     }
   }, [contextMenu, tabs, displayTabs, handleCloseTab])
 
