@@ -4,18 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概述
 
-**tmux-box** (v1.0.0-alpha.1) — tmux session 的遠端管理工具，含 Go daemon + React SPA。支援 Terminal、Stream（Claude Code `-p` 串流）、JSONL 三種模式。
+**tmux-box** (v1.0.0-alpha.20) — tmux session 的遠端管理工具，含 Go daemon + React SPA + Electron shell。支援 Terminal、Stream（Claude Code `-p` 串流）、JSONL 三種模式。
 
 - Repo: `git@github.com:wake/tmux-box.git`
-- 主分支: `main`
-- 開發分支: `v1`（Phase 1.6b 完成，下一步 1.6c 多 Host 管理）
+- 主分支: `main`（v0 備份在 `v0` 分支）
+- 版本: `VERSION` 檔案為 SOT，每個 PR bump
 
 ## 開發環境
 
 - **Package manager**: pnpm（不是 npm）
 - **Daemon**: `100.64.0.2:7860`（Go binary `bin/tbox`）
-- **SPA main**: `100.64.0.2:5173`（worktree `.worktrees/main/spa`）
-- **SPA v1**: `100.64.0.2:5174`（主 repo `spa/`）
+- **SPA**: `100.64.0.2:5174`（`spa/`）
 - **測試**: `cd spa && npx vitest run`
 - **Lint**: `cd spa && pnpm run lint`
 - **Build**: `cd spa && pnpm run build`
