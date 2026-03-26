@@ -9,6 +9,48 @@ import (
 	"testing"
 )
 
+func TestHandleDownload(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create fake out/ structure
+	outMain := filepath.Join(dir, "out", "main")
+	outPreload := filepath.Join(dir, "out", "preload")
+	os.MkdirAll(outMain, 0755)
+	os.MkdirAll(outPreload, 0755)
+	os.WriteFile(filepath.Join(outMain, "index.mjs"), []byte("// main"), 0644)
+	os.WriteFile(filepath.Join(outPreload, "index.js"), []byte("// preload"), 0644)
+
+	m := &DevModule{repoRoot: dir}
+
+	req := httptest.NewRequest("GET", "/api/dev/update/download", nil)
+	w := httptest.NewRecorder()
+	m.handleDownload(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/gzip" {
+		t.Errorf("content-type: want application/gzip, got %s", ct)
+	}
+	if w.Body.Len() == 0 {
+		t.Error("body is empty")
+	}
+}
+
+func TestHandleDownloadMissingOut(t *testing.T) {
+	dir := t.TempDir() // no out/ directory
+
+	m := &DevModule{repoRoot: dir}
+
+	req := httptest.NewRequest("GET", "/api/dev/update/download", nil)
+	w := httptest.NewRecorder()
+	m.handleDownload(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status: want 404, got %d", w.Code)
+	}
+}
+
 func TestHandleCheck(t *testing.T) {
 	dir := t.TempDir()
 	versionFile := filepath.Join(dir, "VERSION")
