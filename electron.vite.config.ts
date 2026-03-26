@@ -14,8 +14,11 @@ export default defineConfig({
   preload: {
     build: {
       outDir: 'out/preload',
+      // Preload must be CJS (.js) — Electron sandbox does not support ESM preloads
       rollupOptions: {
         input: { index: resolve(__dirname, 'electron/preload.ts') },
+        external: ['electron'],
+        output: { format: 'cjs', entryFileNames: '[name].js' },
       },
     },
   },
