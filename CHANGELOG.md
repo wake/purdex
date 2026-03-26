@@ -1,5 +1,206 @@
 # Changelog
 
+## [1.0.0-alpha.20] - 2026-03-26
+
+Electron shell — 桌面應用完整實作（PR #76）
+
+### 新增
+
+- **Electron desktop shell** — electron-vite + pnpm workspace monorepo 架構
+- **多視窗管理** — tear-off / merge via context menu
+- **WebContentsView browser pane** — 生命週期管理（ACTIVE → BACKGROUND → DISCARDED）
+- **System tray** — 最小化到系統匣
+- **Memory monitor** — process metrics 監控頁面
+
+## [1.0.0-alpha.19] - 2026-03-26
+
+PWA + Platform capabilities + Browser pane（PR #75）
+
+### 新增
+
+- **PWA installability** — manifest.json + icons（192/512/maskable）+ Apple meta tags
+- **Platform capabilities** — `getPlatformCapabilities()` + ambient `electron.d.ts` 型別宣告
+- **PaneContent `browser` kind** — labels + route mapping + i18n keys
+- **NewTabProvider disabled 支援** — disabled provider 顯示說明文字
+
+## [1.0.0-alpha.18] - 2026-03-25
+
+i18n 系統 — 自建多語系 + 自訂語系 + 編輯器/匯入（PR #72）
+
+### 新增
+
+- **Locale Registry** — Map-based，與 Theme Registry 同架構
+- **useI18nStore** — `t(key, params?)` 翻譯函式，persist `tbox-i18n`
+- **Fallback chain** — active locale → en → key itself
+- **LocaleEditor / LocaleImportModal** — fork builtin → 編輯 → 另存
+- **locale-completeness.test.ts** — en/zh-TW key 完全對稱守門測試
+
+## [1.0.0-alpha.17] - 2026-03-25
+
+Theme 系統 — 多主題 + 自訂主題 + 匯入匯出（PR #71）
+
+### 新增
+
+- **23 語義 CSS token** — Tailwind v4 `@theme` + CSS Variables，分 6 組
+- **4 預設主題** — Dark / Light / Nord / Dracula
+- **Theme Registry** — Map-based + Zustand Theme Store（localStorage persist）
+- **ThemeEditor** — 即時預覽 + fork / export / import
+- **ThemeInjector** — runtime 注入自訂主題 `<style>`
+
+## [1.0.0-alpha.16] - 2026-03-24
+
+Settings UI — VSCode 風格 sidebar + content pane（PR #70）
+
+### 新增
+
+- **Settings pane** — 取代 overlay，以 singleton tab 呈現
+- **Settings Section Registry** — 動態註冊，新增 section 只需 2 檔
+- **通用元件** — SegmentControl / ToggleSwitch / SettingItem
+- **Appearance section** — Theme / Language（disabled, 待 Phase 2/3）
+- **Terminal section** — Renderer / Keep-alive / Reveal Delay
+
+## [1.0.0-alpha.15] - 2026-03-24
+
+Tab/Session 解耦 + Pane 模型 + wouter 路由（PR #69）
+
+### 新增
+
+- **Tab/Session 解耦** — Tab 從 Session 1:1 容器改為通用容器
+- **Pane 模型** — PaneLayout tree + PaneContent discriminated union（new-tab / session / dashboard / history / settings）
+- **Pane Registry** — `registerPaneRenderer(kind, { component })`
+- **NewTab Provider Registry** — 可擴充的 content picker
+- **wouter 路由** — hash → path-based（`/t/:tabId/:mode`、`/w/:workspaceId`）
+- **useRouteSync** — 雙向路由同步（Tab ↔ URL）
+
+## [1.0.0-alpha.14] - 2026-03-24
+
+整合 CC + Stream modules，刪除 legacy server（PR #68）
+
+### 變更
+
+- **Module 整合** — `cc.New()` + `stream.New()` 接入 main.go
+- **Legacy 清除** — 刪除 `internal/server/`（18 檔、~4600 LOC）+ legacy store + migration
+- **Session code 統一** — SPA 全面從 session name 改用 session code
+
+## [1.0.0-alpha.13] - 2026-03-23
+
+Phase 1.6b Tasks 9-10 — Stream module（PR #66）
+
+### 新增
+
+- **Stream module** — relay WS 管理、SPA subscriber fan-out、handoff 編排
+- **Bridge 改用 session code** 作為 key
+- **Handoff 改用 CCOperator methods** — 取代重複的 raw tmux send-keys
+
+## [1.0.0-alpha.12] - 2026-03-23
+
+Phase 1.6b Tasks 1-8 — Core 擴充 + CC module（PR #65）
+
+### 新增
+
+- **Core 擴充** — Module `Dependencies()` + `Stop(ctx)`、Kahn's algorithm 拓撲排序
+- **EventsBroadcaster** — fire-and-forget + OnSubscribe snapshot
+- **Config handler** — OnConfigChange callback
+- **CC module** — CCDetector + CCOperator + CCHistoryProvider + Status Poller
+- **Middleware 搬遷** — `internal/middleware/` 獨立 package
+
+## [1.0.0-alpha.11] - 2026-03-22
+
+Phase 1.6b Part 1 — Core 擴充 + CC module 基礎（PR #63）
+
+### 新增
+
+- Core layer 擴充基礎建設
+- CC module 初始結構（後續 PR #65 完成）
+
+## [1.0.0-alpha.10] - 2026-03-22
+
+修復 MetaStore 冗餘寫入（PR #60）
+
+### 修正
+
+- Handoff Step 8 移除 `SetMeta` 後重複的 `UpdateMeta`
+- `MigrateFromLegacy` 錯誤改為 log 輸出
+
+## [1.0.0-alpha.9] - 2026-03-22
+
+Phase 1.6a — Daemon Module 架構 + Session 重設計（PR #59）
+
+### 新增
+
+- **Module 架構** — Core + ServiceRegistry + Module interface，支援可插拔模組
+- **Session 重設計** — tmux 為 SOT，DB 降級為 meta cache
+- **Session ID 編碼** — 6 碼 base36 code（multiplicative cipher）
+
+## [1.0.0-alpha.8] - 2026-03-22
+
+修復 Tab 拖曳右邊界（PR #58）
+
+### 修正
+
+- Tab 拖曳右邊界限制在最後一個 tab，不再進入 + 按鈕區域
+
+## [1.0.0-alpha.7] - 2026-03-22
+
+Pin/Lock 獨立化（PR #57）
+
+### 變更
+
+- Pin 和 Lock 解耦為獨立旗標：pin 只負責定位，lock 只負責擋關閉
+- Pinned tab 可被關閉（除非同時 locked）
+- Reopen 恢復 pinned 狀態
+
+## [1.0.0-alpha.6] - 2026-03-21
+
+Tab 互動強化 — 拖曳排序 + 溢出箭頭 + 右鍵選單（PR #56）
+
+### 新增
+
+- **拖曳排序** — @dnd-kit 雙區（pinned / normal）+ restrictToTabZone modifier
+- **溢出箭頭** — tab 超出可視範圍時顯示左右捲動按鈕
+- **右鍵選單** — Pin / Lock / Close / Close Others
+- **中鍵關閉** — 中鍵點擊 tab 關閉
+
+## [1.0.0-alpha.5] - 2026-03-20
+
+Phase 1.5 Task 2 — TerminalView 拆分 + Keep-Alive（PR #55）
+
+### 新增
+
+- **TerminalView 拆分** — 222 → 79 行，抽出 `useTerminal` + `useTerminalWs` hooks
+- **useTabAlivePool** — LRU keep-alive pool 管理
+- **TabContent pool 渲染** — `display: none` 隱藏非活躍 tab
+
+## [1.0.0-alpha.4] - 2026-03-20
+
+Phase 1.5 Task 1 — Tab 模型擴充（PR #54）
+
+### 新增
+
+- Tab interface 加入 `pinned` / `locked` 欄位
+- useTabStore 新增 pin / unpin / lock / unlock 方法
+- `removeTab` / `dismissTab` 加入 locked guard
+
+## [1.0.0-alpha.3] - 2026-03-20
+
+Phase 1.1 — Tab 模型修正 + view toggle（PR #48）
+
+### 變更
+
+- Tab 模型從封閉 union 改為開放式 `type: string` + `viewMode` + `data` bag
+- 新增 Tab Renderer Registry
+- 還原 v0 的檢視/handoff 分離設計
+
+## [1.0.0-alpha.2] - 2026-03-20
+
+xterm addons + terminal renderer toggle（PR #47）
+
+### 新增
+
+- **@xterm/addon-unicode11** — CJK 字元寬度支援
+- **@xterm/addon-web-links** — 可點擊 URL
+- **Terminal 渲染器切換** — WebGL / DOM 下拉選單
+
 ## [1.0.0-alpha.1] - 2026-03-20
 
 Phase 1: 分頁系統 + Activity Bar — SPA 架構從「單 session 檢視」升級為「多分頁 + 工作區」
