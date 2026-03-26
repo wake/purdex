@@ -31,6 +31,10 @@ type FeaturesConfig struct {
 	Git bool `toml:"git"`
 }
 
+type DevConfig struct {
+	Update bool `toml:"update" json:"update"`
+}
+
 type TerminalConfig struct {
 	SizingMode string `toml:"sizing_mode" json:"sizing_mode"`
 }
@@ -55,6 +59,7 @@ type Config struct {
 	JSONL        JSONLConfig    `toml:"jsonl"          json:"jsonl"`
 	Detect       DetectConfig   `toml:"detect"         json:"detect"`
 	Features     FeaturesConfig `toml:"features"       json:"features"`
+	Dev          DevConfig      `toml:"dev"            json:"dev"`
 }
 
 func defaults() Config {
