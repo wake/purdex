@@ -17,6 +17,7 @@ interface ElectronTabMetrics {
   kind: string
   memoryKB: number
   cpuPercent: number
+  state: 'active' | 'background' | 'discarded'
 }
 
 interface Window {
@@ -27,6 +28,7 @@ interface Window {
     closeBrowserView: (paneId: string) => Promise<void>
     navigateBrowserView: (paneId: string, url: string) => Promise<void>
     onTabReceived: (callback: (tabJson: string) => void) => () => void
+    signalReady: () => void
 
     // Window Management
     getWindows: () => Promise<ElectronWindowInfo[]>

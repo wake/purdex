@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resizeBrowserView: (paneId: string, bounds: { x: number; y: number; width: number; height: number }) =>
     ipcRenderer.invoke('browser-view:resize', paneId, JSON.stringify(bounds)),
 
+  // SPA ready signal
+  signalReady: () => ipcRenderer.send('spa:ready'),
+
   // Memory Monitor
   getProcessMetrics: () => ipcRenderer.invoke('metrics:get'),
   onMetricsUpdate: (callback: (metrics: unknown[]) => void) => {

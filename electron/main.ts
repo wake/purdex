@@ -26,13 +26,21 @@ function registerIpcHandlers(): void {
     if (win) browserViewManager.open(win, url, paneId)
   })
   ipcMain.handle('browser-view:close', (_event, paneId: string) => {
-    browserViewManager.close(paneId)
+    browserViewManager.background(paneId)
   })
   ipcMain.handle('browser-view:navigate', (_event, paneId: string, url: string) => {
     browserViewManager.navigate(paneId, url)
   })
   ipcMain.handle('browser-view:resize', (_event, paneId: string, boundsJson: string) => {
-    browserViewManager.resize(paneId, JSON.parse(boundsJson))
+    try {
+      const raw = JSON.parse(boundsJson)
+      browserViewManager.resize(paneId, {
+        x: Math.round(Number(raw.x)) || 0,
+        y: Math.round(Number(raw.y)) || 0,
+        width: Math.max(1, Math.round(Number(raw.width)) || 1),
+        height: Math.max(1, Math.round(Number(raw.height)) || 1),
+      })
+    } catch { /* ignore malformed bounds JSON */ }
   })
 
   // Memory Monitor

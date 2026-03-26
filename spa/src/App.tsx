@@ -45,6 +45,11 @@ export default function App() {
   useSessionEventWs(wsBase, daemonBase)
   useRouteSync()
 
+  // --- Electron: signal SPA ready (replaces 500ms setTimeout) ---
+  useEffect(() => {
+    window.electronAPI?.signalReady()
+  }, [])
+
   // --- Electron IPC: receive tab from tear-off/merge ---
   useEffect(() => {
     if (!window.electronAPI) return

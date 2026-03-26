@@ -36,6 +36,7 @@ interface TabMetrics {
   kind: string
   memoryKB: number
   cpuPercent: number
+  state: 'active' | 'background' | 'discarded'
 }
 
 // Default settings — can be overridden via IPC from SPA settings
@@ -99,7 +100,8 @@ export class BrowserViewManager {
     this.clearTimer(paneId)
   }
 
-  close(paneId: string): void {
+  /** Move view to background (not destroyed — idle timer will discard later). */
+  background(paneId: string): void {
     this.deactivate(paneId)
   }
 
@@ -200,7 +202,9 @@ export class BrowserViewManager {
 
     while (bgEntries.length > DEFAULTS.maxBackground) {
       const oldest = bgEntries.shift()!
-      this.discard(oldest.paneId)
+      try {
+        this.discard(oldest.paneId)
+      } catch { /* view or window may have been destroyed concurrently */ }
     }
   }
 
@@ -243,6 +247,18 @@ export class BrowserViewManager {
         kind: 'browser',
         memoryKB: metric?.memory?.workingSetSize ?? 0,
         cpuPercent: metric?.cpu?.percentCPUUsage ?? 0,
+        state: entry.state,
+      })
+    }
+
+    // Add discarded snapshots
+    for (const snapshot of this.snapshots.values()) {
+      result.push({
+        paneId: snapshot.paneId,
+        kind: 'browser',
+        memoryKB: 0,
+        cpuPercent: 0,
+        state: 'discarded',
       })
     }
 

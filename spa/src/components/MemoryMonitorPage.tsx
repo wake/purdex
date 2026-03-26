@@ -6,6 +6,7 @@ interface TabMetrics {
   kind: string
   memoryKB: number
   cpuPercent: number
+  state: 'active' | 'background' | 'discarded'
 }
 
 export function MemoryMonitorPage() {
@@ -49,7 +50,7 @@ export function MemoryMonitorPage() {
             <div className="text-text-primary">
               {m.cpuPercent > 0 ? `${m.cpuPercent.toFixed(1)}%` : t('monitor.shared')}
             </div>
-            <div className="text-text-muted">{t('monitor.state.active')}</div>
+            <div className="text-text-muted">{t(`monitor.state.${m.state}`)}</div>
           </div>
         ))}
         {metrics.length === 0 && (

@@ -9,12 +9,21 @@ interface BrowserPaneProps {
 export function BrowserPane({ paneId, url }: BrowserPaneProps) {
   const t = useI18nStore((s) => s.t)
   const ref = useRef<HTMLDivElement>(null)
+  const initialUrlRef = useRef(url)
 
-  // Open/close lifecycle
+  // Open/close lifecycle — mount/unmount only
   useEffect(() => {
     if (!window.electronAPI) return
-    window.electronAPI.openBrowserView(url, paneId)
+    window.electronAPI.openBrowserView(initialUrlRef.current, paneId)
     return () => { window.electronAPI?.closeBrowserView(paneId) }
+  }, [paneId])
+
+  // Navigate on URL change (skip initial mount)
+  useEffect(() => {
+    if (!window.electronAPI) return
+    if (url === initialUrlRef.current) return
+    initialUrlRef.current = url
+    window.electronAPI.navigateBrowserView(paneId, url)
   }, [url, paneId])
 
   // Bounds sync via ResizeObserver

@@ -14,9 +14,10 @@ export function createTray(windowManager: WindowManager): Tray {
   tray.setToolTip('tmux-box')
   tray.setContextMenu(
     Menu.buildFromTemplate([
+      // TODO: i18n — main process has no access to SPA i18n store; wire via IPC when needed
       { label: 'Show Window', click: () => windowManager.showOrCreate() },
       { type: 'separator' },
-      { label: 'Quit', click: () => app.quit() },
+      { label: 'Quit tmux-box', click: () => app.quit() },
     ]),
   )
 

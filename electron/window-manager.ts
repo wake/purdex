@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 
@@ -39,14 +39,15 @@ export class WindowManager {
       win.loadFile(join(__dirname, '../renderer/index.html'))
     }
 
-    // If tab data provided, send after SPA is ready
+    // If tab data provided, send after SPA signals ready
     if (opts?.tabJson) {
-      win.webContents.once('did-finish-load', () => {
-        // Small delay to let React hydrate
-        setTimeout(() => {
+      const handler = (event: Electron.IpcMainEvent) => {
+        if (event.sender === win.webContents) {
           win.webContents.send('tab:received', opts.tabJson)
-        }, 500)
-      })
+          ipcMain.removeListener('spa:ready', handler)
+        }
+      }
+      ipcMain.on('spa:ready', handler)
     }
 
     win.on('closed', () => {
