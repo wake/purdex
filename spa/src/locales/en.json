@@ -145,6 +145,10 @@
   "session.picker.already_open": "Already open",
   "session.picker.no_match": "No matching sessions",
 
+  "browser.provider_label": "Browser",
+  "browser.requires_app": "Requires desktop app",
+  "browser.url_placeholder": "Enter URL...",
+
   "status.no_active": "No active session",
 
   "stream.thinking": "Thinking...",

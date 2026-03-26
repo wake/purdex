@@ -10,6 +10,7 @@ function makeContent(kind: PaneContent['kind'] = 'dashboard'): PaneContent {
     case 'new-tab': return { kind: 'new-tab' }
     case 'dashboard': return { kind: 'dashboard' }
     case 'history': return { kind: 'history' }
+    case 'browser': return { kind: 'browser', url: 'https://example.com' }
   }
 }
 

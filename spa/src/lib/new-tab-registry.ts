@@ -10,6 +10,8 @@ export interface NewTabProvider {
   icon: string
   order: number
   component: React.ComponentType<NewTabProviderProps>
+  disabled?: boolean
+  disabledReason?: string // i18n key
 }
 
 const providers: NewTabProvider[] = []

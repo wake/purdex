@@ -60,5 +60,7 @@ export function tabToUrl(tabId: string, content: PaneContent, workspaceId?: stri
     case 'session':
       if (workspaceId) return `/w/${workspaceId}/t/${tabId}/${content.mode}`
       return `/t/${tabId}/${content.mode}`
+    case 'browser':
+      return '/'
   }
 }

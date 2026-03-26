@@ -2,12 +2,15 @@ import { registerPaneRenderer } from './pane-registry'
 import { registerNewTabProvider } from './new-tab-registry'
 import { registerSettingsSection } from './settings-section-registry'
 import { findPane } from './pane-tree'
+import { getPlatformCapabilities } from './platform'
 import { SessionPaneContent } from '../components/SessionPaneContent'
 import { NewTabPage } from '../components/NewTabPage'
 import { DashboardPage } from '../components/DashboardPage'
 import { HistoryPage } from '../components/HistoryPage'
 import { SettingsPage } from '../components/SettingsPage'
 import { SessionSection } from '../components/SessionSection'
+import { BrowserPane } from '../components/BrowserPane'
+import { BrowserNewTabSection } from '../components/BrowserNewTabSection'
 import { AppearanceSection } from '../components/settings/AppearanceSection'
 import { TerminalSection } from '../components/settings/TerminalSection'
 import { useTabStore } from '../stores/useTabStore'
@@ -34,6 +37,13 @@ export function registerBuiltinPanes(): void {
   registerPaneRenderer('dashboard', { component: DashboardPage })
   registerPaneRenderer('history', { component: HistoryPage })
   registerPaneRenderer('settings', { component: SettingsPage })
+  registerPaneRenderer('browser', {
+    component: ({ pane }) => {
+      const content = pane.content
+      if (content.kind !== 'browser') return null
+      return <BrowserPane paneId={pane.id} url={content.url} />
+    },
+  })
 
   // Settings sections
   registerSettingsSection({ id: 'appearance', label: 'settings.section.appearance', order: 0, component: AppearanceSection })
@@ -48,5 +58,17 @@ export function registerBuiltinPanes(): void {
     icon: 'List',
     order: 0,
     component: SessionSection,
+  })
+
+  const caps = getPlatformCapabilities()
+
+  registerNewTabProvider({
+    id: 'browser',
+    label: 'browser.provider_label',
+    icon: 'Globe',
+    order: 10,
+    component: BrowserNewTabSection,
+    disabled: !caps.canBrowserPane,
+    disabledReason: 'browser.requires_app',
   })
 }

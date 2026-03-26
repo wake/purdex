@@ -56,6 +56,16 @@ describe('getPaneLabel', () => {
     const c: PaneContent = { kind: 'settings', scope: { workspaceId: 'zzzzzz' } }
     expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore, mockT)).toBe('page.pane.settings_ws')
   })
+
+  it('returns hostname for browser pane', () => {
+    const content: PaneContent = { kind: 'browser', url: 'https://example.com/path' }
+    expect(getPaneLabel(content, mockSessionStore, mockWorkspaceStore, mockT)).toBe('example.com')
+  })
+
+  it('returns raw url for browser pane with invalid url', () => {
+    const content: PaneContent = { kind: 'browser', url: 'not-a-url' }
+    expect(getPaneLabel(content, mockSessionStore, mockWorkspaceStore, mockT)).toBe('not-a-url')
+  })
 })
 
 describe('getPaneIcon', () => {
@@ -81,5 +91,10 @@ describe('getPaneIcon', () => {
 
   it('returns GearSix for settings', () => {
     expect(getPaneIcon({ kind: 'settings', scope: 'global' })).toBe('GearSix')
+  })
+
+  it('returns Globe icon for browser pane', () => {
+    const content: PaneContent = { kind: 'browser', url: 'https://example.com' }
+    expect(getPaneIcon(content)).toBe('Globe')
   })
 })

@@ -27,6 +27,7 @@ export type PaneContent =
   | { kind: 'dashboard' }
   | { kind: 'history' }
   | { kind: 'settings'; scope: 'global' | { workspaceId: string } }
+  | { kind: 'browser'; url: string }
 
 // === Workspace ===
 export interface Workspace {
