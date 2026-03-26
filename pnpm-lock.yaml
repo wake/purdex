@@ -7,10 +7,17 @@ settings:
 importers:
 
   .:
+    dependencies:
+      tar:
+        specifier: ^7.5.13
+        version: 7.5.13
     devDependencies:
       '@electron-toolkit/utils':
         specifier: ^4.0.0
         version: 4.0.0(electron@41.0.4)
+      '@types/tar':
+        specifier: ^7.0.87
+        version: 7.0.87
       electron:
         specifier: ^41.0.4
         version: 41.0.4
@@ -940,6 +947,10 @@ packages:
 
   '@types/responselike@1.0.3':
     resolution: {integrity: sha512-H/+L+UkTV33uf49PH5pCAUBVPNj2nDBXTN+qS1dOwyyg24l3CcicicCA7ca+HMvJBZcFgl5r8e+RR6elsb4Lyw==}
+
+  '@types/tar@7.0.87':
+    resolution: {integrity: sha512-3IxNBV8LeY5oi2ZFpvAhOtW1+mHswkzM7BuisVrwJgPv67GBO2rkLPQlEKtzfHuLdhDDczhkCZeT+RuizMay4A==}
+    deprecated: This is a stub types definition. tar provides its own type definitions, so you do not need this installed.
 
   '@types/unist@2.0.11':
     resolution: {integrity: sha512-CmBKiL6NNo/OqgmMn95Fk9Whlp2mtvIv+KNpQKN2F4SjvrEesubTRWGYSg+BnWZOnlCaSTU1sMpsBOzgbYhnsA==}
@@ -3911,6 +3922,10 @@ snapshots:
   '@types/responselike@1.0.3':
     dependencies:
       '@types/node': 24.12.0
+
+  '@types/tar@7.0.87':
+    dependencies:
+      tar: 7.5.13
 
   '@types/unist@2.0.11': {}
 
