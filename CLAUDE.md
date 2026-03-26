@@ -30,7 +30,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - TDD：先寫測試再實作
 - 每個 task 獨立 commit
 - 圖示統一使用 Phosphor Icons
-- 每個 PR merge 時 bump `VERSION`，同步更新 `CHANGELOG.md`
+- 每個 PR merge 後，必須更新 `VERSION` + `CHANGELOG.md` 並 commit push
 
 ### PR Review 兩輪制
 
