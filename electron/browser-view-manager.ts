@@ -1,5 +1,15 @@
 import { WebContentsView, BrowserWindow, app } from 'electron'
 
+const ALLOWED_SCHEMES = new Set(['http:', 'https:'])
+
+function isAllowedUrl(url: string): boolean {
+  try {
+    return ALLOWED_SCHEMES.has(new URL(url).protocol)
+  } catch {
+    return false
+  }
+}
+
 interface Bounds {
   x: number
   y: number
@@ -61,8 +71,13 @@ export class BrowserViewManager {
       },
     })
 
+    // Security: restrict navigation to http/https
+    view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+
     win.contentView.addChildView(view)
-    view.webContents.loadURL(url)
+    if (isAllowedUrl(url)) {
+      view.webContents.loadURL(url)
+    }
 
     this.views.set(paneId, {
       view,
@@ -84,7 +99,7 @@ export class BrowserViewManager {
 
   navigate(paneId: string, url: string): void {
     const entry = this.views.get(paneId)
-    if (entry) {
+    if (entry && isAllowedUrl(url)) {
       entry.url = url
       entry.view.webContents.loadURL(url)
     }
@@ -183,7 +198,7 @@ export class BrowserViewManager {
       const pid = entry.view.webContents.getOSProcessId()
       const metric = metrics.find((m) => m.pid === pid)
       if (metric?.memory) {
-        totalViewMemoryKB += metric.memory.privateBytes ?? 0
+        totalViewMemoryKB += metric.memory.workingSetSize ?? 0
       }
     }
 
