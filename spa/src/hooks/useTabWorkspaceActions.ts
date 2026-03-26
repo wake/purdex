@@ -106,6 +106,18 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
         toClose.forEach((id) => handleCloseTab(id))
         break
       }
+      case 'tearOff': {
+        if (!window.electronAPI) break
+        const tabData = tabs[tab.id]
+        if (!tabData) break
+        // Must remove tab BEFORE IPC to avoid duplication if locked
+        handleCloseTab(tab.id)
+        // Only send to new window if tab was actually removed
+        if (!useTabStore.getState().tabs[tab.id]) {
+          window.electronAPI.tearOffTab(JSON.stringify(tabData))
+        }
+        break
+      }
     }
   }, [contextMenu, tabs, displayTabs, handleCloseTab])
 

@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "scripts": {
+    "electron:dev": "electron-vite dev",
+    "electron:build": "electron-vite build && electron-builder",
+    "electron:preview": "electron-vite preview"
+  },
+  "devDependencies": {
+    "@electron-toolkit/utils": "^4.0.0",
+    "electron": "^41.0.4",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^5.0.0"
+  }
+}

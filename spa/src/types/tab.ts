@@ -28,6 +28,7 @@ export type PaneContent =
   | { kind: 'history' }
   | { kind: 'settings'; scope: 'global' | { workspaceId: string } }
   | { kind: 'browser'; url: string }
+  | { kind: 'memory-monitor' }
 
 // === Workspace ===
 export interface Workspace {

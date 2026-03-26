@@ -1,8 +1,14 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { TabContextMenu } from './TabContextMenu'
 import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
+
+vi.mock('../lib/platform', () => ({
+  getPlatformCapabilities: vi.fn(() => ({ canTearOffTab: false, canMergeWindow: false, canBrowserPane: false, canSystemTray: false })),
+}))
+
+import { getPlatformCapabilities } from '../lib/platform'
 
 function makeSessionTab(mode: 'terminal' | 'stream' = 'terminal', opts?: { pinned?: boolean; locked?: boolean }): Tab {
   const tab = createTab({ kind: 'session', sessionCode: 'tst001', mode }, { pinned: opts?.pinned })
@@ -29,6 +35,9 @@ function renderMenu(overrides?: { tab?: Tab; hasOtherUnlocked?: boolean; hasRigh
 
 describe('TabContextMenu', () => {
   beforeEach(() => { cleanup(); vi.clearAllMocks() })
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).electronAPI
+  })
 
   // --- ViewMode section ---
   it('shows "Switch to Stream" for session tab in terminal mode', () => {
@@ -125,5 +134,25 @@ describe('TabContextMenu', () => {
     const props = renderMenu({ tab: makeSessionTab('terminal', { locked: true }) })
     fireEvent.click(screen.getByText('Close tab'))
     expect(props.onAction).not.toHaveBeenCalled()
+  })
+
+  // --- Tear-off section (Electron only) ---
+  it('shows "Move to New Window" when caps.canTearOffTab is true', () => {
+    vi.mocked(getPlatformCapabilities).mockReturnValue({ canTearOffTab: true, canMergeWindow: false, canBrowserPane: false, canSystemTray: false })
+    renderMenu()
+    expect(screen.getByText('Move to New Window')).toBeInTheDocument()
+  })
+
+  it('does not show "Move to New Window" when no electronAPI (canTearOffTab false)', () => {
+    vi.mocked(getPlatformCapabilities).mockReturnValue({ canTearOffTab: false, canMergeWindow: false, canBrowserPane: false, canSystemTray: false })
+    renderMenu()
+    expect(screen.queryByText('Move to New Window')).not.toBeInTheDocument()
+  })
+
+  it('"Move to New Window" is disabled when tab is locked', () => {
+    vi.mocked(getPlatformCapabilities).mockReturnValue({ canTearOffTab: true, canMergeWindow: false, canBrowserPane: false, canSystemTray: false })
+    renderMenu({ tab: makeSessionTab('terminal', { locked: true }) })
+    const tearOffBtn = screen.getByText('Move to New Window').closest('button')!
+    expect(tearOffBtn).toBeDisabled()
   })
 })

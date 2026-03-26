@@ -11,8 +11,11 @@ import { SettingsPage } from '../components/SettingsPage'
 import { SessionSection } from '../components/SessionSection'
 import { BrowserPane } from '../components/BrowserPane'
 import { BrowserNewTabSection } from '../components/BrowserNewTabSection'
+import { MemoryMonitorPage } from '../components/MemoryMonitorPage'
+import { MemoryMonitorNewTabSection } from '../components/MemoryMonitorNewTabSection'
 import { AppearanceSection } from '../components/settings/AppearanceSection'
 import { TerminalSection } from '../components/settings/TerminalSection'
+import { ElectronSection } from '../components/settings/ElectronSection'
 import { useTabStore } from '../stores/useTabStore'
 import type { PaneContent } from '../types/tab'
 
@@ -44,6 +47,9 @@ export function registerBuiltinPanes(): void {
       return <BrowserPane paneId={pane.id} url={content.url} />
     },
   })
+  registerPaneRenderer('memory-monitor', {
+    component: () => <MemoryMonitorPage />,
+  })
 
   // Settings sections
   registerSettingsSection({ id: 'appearance', label: 'settings.section.appearance', order: 0, component: AppearanceSection })
@@ -71,4 +77,23 @@ export function registerBuiltinPanes(): void {
     disabled: !caps.canBrowserPane,
     disabledReason: 'browser.requires_app',
   })
+
+  registerNewTabProvider({
+    id: 'memory-monitor',
+    label: 'monitor.provider_label',
+    icon: 'ChartBar',
+    order: 20,
+    component: MemoryMonitorNewTabSection,
+    disabled: !caps.canSystemTray,
+    disabledReason: 'monitor.requires_app',
+  })
+
+  if (caps.canSystemTray) {
+    registerSettingsSection({
+      id: 'electron',
+      label: 'settings.section.electron',
+      order: 5,
+      component: ElectronSection,
+    })
+  }
 }
