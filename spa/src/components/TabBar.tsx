@@ -27,13 +27,15 @@ interface Props {
   onReorderTabs: (newOrder: string[]) => void
   onMiddleClick: (tabId: string) => void
   onContextMenu: (e: React.MouseEvent, tabId: string) => void
+  /** When embedded in Electron title bar — no border, no fixed height */
+  embedded?: boolean
 }
 
 function TabSeparator({ show }: { show: boolean }) {
   return <div className={`w-px h-3.5 flex-shrink-0 transition-opacity duration-150 ease-out ${show ? 'bg-border-default' : 'bg-transparent'}`} />
 }
 
-export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu }: Props) {
+export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, embedded }: Props) {
   const t = useI18nStore((s) => s.t)
   const pinnedTabs = useMemo(() => tabs.filter((t) => t.pinned), [tabs])
   const normalTabs = useMemo(() => tabs.filter((t) => !t.pinned), [tabs])
@@ -95,7 +97,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   }
 
   return (
-    <div className="flex bg-surface-secondary border-b border-border-subtle items-center px-1 flex-shrink-0" style={{ height: 41 }}>
+    <div className={`flex items-center px-1 flex-shrink-0 ${embedded ? 'h-full' : 'bg-surface-secondary border-b border-border-subtle'}`} style={embedded ? undefined : { height: 41 }}>
       <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToTabZone]} onDragEnd={handleDragEnd}>
         {/* Pinned zone */}
         {pinnedTabs.length > 0 && (

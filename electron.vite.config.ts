@@ -7,7 +7,7 @@ export default defineConfig({
       outDir: 'out/main',
       rollupOptions: {
         input: { index: resolve(__dirname, 'electron/main.ts') },
-        external: ['electron', '@electron-toolkit/utils'],
+        external: ['electron'],
       },
     },
   },

@@ -1,6 +1,5 @@
-import { BrowserWindow, ipcMain } from 'electron'
+import { BrowserWindow, app, ipcMain } from 'electron'
 import { join } from 'path'
-import { is } from '@electron-toolkit/utils'
 
 interface WindowInfo {
   id: string
@@ -33,7 +32,7 @@ export class WindowManager {
     this.windows.set(id, win)
 
     // Load SPA
-    if (is.dev) {
+    if (!app.isPackaged) {
       win.loadURL('http://100.64.0.2:5174')
     } else {
       win.loadFile(join(__dirname, '../renderer/index.html'))

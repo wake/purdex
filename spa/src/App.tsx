@@ -18,9 +18,12 @@ import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { isStandaloneTab } from './types/tab'
 import { TabContextMenu } from './components/TabContextMenu'
 import { ThemeInjector } from './components/ThemeInjector'
+import { getPlatformCapabilities } from './lib/platform'
 import type { Tab } from './types/tab'
 
 export default function App() {
+  const isElectron = getPlatformCapabilities().isElectron
+
   // Host store (replaces hardcoded daemonBase)
   const getDaemonBase = useHostStore((s) => s.getDaemonBase)
   const getWsBase = useHostStore((s) => s.getWsBase)
@@ -130,7 +133,33 @@ export default function App() {
   return (
     <Router>
       <ThemeInjector />
-      <div className="h-screen flex bg-surface-primary text-text-primary">
+      <div className="h-screen flex flex-col bg-surface-primary text-text-primary">
+        {/* Electron: title bar row — traffic lights + tabs + drag fill */}
+        {isElectron && (
+          <div
+            className="shrink-0 flex items-center bg-surface-secondary border-b border-border-subtle"
+            style={{ height: 44, WebkitAppRegion: 'drag' } as React.CSSProperties}
+          >
+            {/* Traffic light safe zone (78px ≈ 3 buttons + padding) */}
+            <div className="shrink-0" style={{ width: 78 }} />
+            {/* Tabs — no-drag so clicks work */}
+            <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+              <TabBar
+                tabs={displayTabs}
+                activeTabId={activeTabId}
+                onSelectTab={handleSelectTab}
+                onCloseTab={handleCloseTab}
+                onAddTab={handleAddTab}
+                onReorderTabs={handleReorderTabs}
+                onMiddleClick={handleMiddleClick}
+                onContextMenu={handleContextMenu}
+                embedded
+              />
+            </div>
+            {/* Remaining space — drag region inherited from parent */}
+          </div>
+        )}
+        <div className="flex-1 flex min-h-0">
         <ActivityBar
           workspaces={workspaces}
           standaloneTabs={standaloneTabs}
@@ -145,21 +174,23 @@ export default function App() {
               useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tabId)
               useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tabId)
             }
-            // Ensure we switch to workspace view (not standalone tab view)
             handleSelectTab(tabId)
           }}
         />
         <div className="flex-1 flex flex-col min-w-0">
-          <TabBar
-            tabs={displayTabs}
-            activeTabId={activeTabId}
-            onSelectTab={handleSelectTab}
-            onCloseTab={handleCloseTab}
-            onAddTab={handleAddTab}
-            onReorderTabs={handleReorderTabs}
-            onMiddleClick={handleMiddleClick}
-            onContextMenu={handleContextMenu}
-          />
+          {/* SPA: TabBar in normal position */}
+          {!isElectron && (
+            <TabBar
+              tabs={displayTabs}
+              activeTabId={activeTabId}
+              onSelectTab={handleSelectTab}
+              onCloseTab={handleCloseTab}
+              onAddTab={handleAddTab}
+              onReorderTabs={handleReorderTabs}
+              onMiddleClick={handleMiddleClick}
+              onContextMenu={handleContextMenu}
+            />
+          )}
           <div className="flex-1 flex overflow-hidden">
             <TabContent
               activeTab={activeTab ?? null}
@@ -183,6 +214,7 @@ export default function App() {
             hasRightUnlocked={contextMenuHasRightUnlocked}
           />
         )}
+        </div>
       </div>
     </Router>
   )
