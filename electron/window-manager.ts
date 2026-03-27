@@ -31,12 +31,11 @@ export class WindowManager {
 
     this.windows.set(id, win)
 
-    // Load SPA
-    if (!app.isPackaged) {
-      win.loadURL('http://100.64.0.2:5174')
-    } else {
-      win.loadFile(join(__dirname, '../renderer/index.html'))
-    }
+    // Load SPA: try dev server first, fallback to bundled renderer
+    const devServer = 'http://100.64.0.2:5174'
+    fetch(devServer, { signal: AbortSignal.timeout(500) })
+      .then(() => win.loadURL(devServer))
+      .catch(() => win.loadFile(join(__dirname, '../renderer/index.html')))
 
     // If tab data provided, send after SPA signals ready
     if (opts?.tabJson) {
