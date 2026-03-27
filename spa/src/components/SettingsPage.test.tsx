@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { createElement, type ReactNode } from 'react'
-import { Router } from 'wouter'
-import { memoryLocation } from 'wouter/memory-location'
-import { SettingsPage } from './SettingsPage'
+import { SettingsPage, resetLastSection } from './SettingsPage'
 import { registerSettingsSection, clearSettingsSectionRegistry } from '../lib/settings-section-registry'
 import { AppearanceSection } from './settings/AppearanceSection'
 import { TerminalSection } from './settings/TerminalSection'
@@ -14,14 +11,9 @@ const settingsPane: Pane = {
   content: { kind: 'settings', scope: 'global' },
 }
 
-function createWrapper(mem: ReturnType<typeof memoryLocation>) {
-  return function Wrapper({ children }: { children: ReactNode }) {
-    return createElement(Router, { hook: mem.hook, children })
-  }
-}
-
 describe('SettingsPage', () => {
   beforeEach(() => {
+    resetLastSection()
     clearSettingsSectionRegistry()
     registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: AppearanceSection })
     registerSettingsSection({ id: 'terminal', label: 'Terminal', order: 1, component: TerminalSection })
@@ -30,36 +22,26 @@ describe('SettingsPage', () => {
   })
 
   it('renders sidebar and default appearance section', () => {
-    const mem = memoryLocation({ path: '/settings', record: true })
-    render(<SettingsPage pane={settingsPane} isActive />, { wrapper: createWrapper(mem) })
+    render(<SettingsPage pane={settingsPane} isActive />)
     expect(screen.getAllByText('Appearance').length).toBeGreaterThan(0)
     expect(screen.getByText('Terminal')).toBeTruthy()
     expect(screen.getByText('Visual preferences for the application')).toBeTruthy()
   })
 
   it('switches to terminal section on sidebar click', () => {
-    const mem = memoryLocation({ path: '/settings', record: true })
-    render(<SettingsPage pane={settingsPane} isActive />, { wrapper: createWrapper(mem) })
+    render(<SettingsPage pane={settingsPane} isActive />)
     fireEvent.click(screen.getByText('Terminal'))
     expect(screen.getByText('Terminal rendering and connection settings')).toBeTruthy()
   })
 
-  it('reads section from URL', () => {
-    const mem = memoryLocation({ path: '/settings/terminal', record: true })
-    render(<SettingsPage pane={settingsPane} isActive />, { wrapper: createWrapper(mem) })
-    expect(screen.getByText('Terminal rendering and connection settings')).toBeTruthy()
-  })
-
-  it('updates URL on section switch', () => {
-    const mem = memoryLocation({ path: '/settings', record: true })
-    render(<SettingsPage pane={settingsPane} isActive />, { wrapper: createWrapper(mem) })
+  it('preserves section across unmount/remount', () => {
+    const { unmount } = render(<SettingsPage pane={settingsPane} isActive />)
     fireEvent.click(screen.getByText('Terminal'))
-    expect(mem.history).toContain('/settings/terminal')
-  })
-
-  it('falls back to appearance for invalid section', () => {
-    const mem = memoryLocation({ path: '/settings/nonexistent', record: true })
-    render(<SettingsPage pane={settingsPane} isActive />, { wrapper: createWrapper(mem) })
-    expect(screen.getByText('Visual preferences for the application')).toBeTruthy()
+    const desc = 'Terminal rendering and connection settings'
+    expect(screen.getByText(desc)).toBeTruthy()
+    unmount()
+    // Remount — should restore last section via module-level cache
+    render(<SettingsPage pane={settingsPane} isActive />)
+    expect(screen.getByText(desc)).toBeTruthy()
   })
 })

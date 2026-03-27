@@ -1,23 +1,27 @@
-import { useLocation } from 'wouter'
+import { useState } from 'react'
 import type { PaneRendererProps } from '../lib/pane-registry'
 import { getSettingsSections } from '../lib/settings-section-registry'
 import { SettingsSidebar } from './settings/SettingsSidebar'
 
-function parseSectionFromPath(path: string): string {
-  const segment = path.replace(/^\/settings\/?/, '').split('/')[0]
-  const validIds = getSettingsSections().filter((s) => s.component).map((s) => s.id)
-  if (validIds.includes(segment)) return segment
-  return validIds[0] ?? ''
-}
+// Persists across unmount/remount (keepAliveCount=0 destroys component on tab switch)
+let lastSection: string | null = null
+
+/** @internal test-only */
+export function resetLastSection() { lastSection = null }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function SettingsPage(_props: PaneRendererProps) {
-  const [location, setLocation] = useLocation()
-  const activeSection = parseSectionFromPath(location)
   const sections = getSettingsSections()
+  const [activeSection, setActiveSection] = useState(
+    () => {
+      if (lastSection && sections.some((s) => s.id === lastSection)) return lastSection
+      return sections.find((s) => s.component)?.id ?? ''
+    },
+  )
 
-  const handleSelectSection = (section: string) => {
-    setLocation(`/settings/${section}`)
+  const handleSelectSection = (id: string) => {
+    lastSection = id
+    setActiveSection(id)
   }
 
   const ActiveComponent = sections.find((s) => s.id === activeSection)?.component
