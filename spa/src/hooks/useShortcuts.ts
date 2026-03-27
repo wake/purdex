@@ -68,6 +68,19 @@ export function useShortcuts(): void {
         return
       }
 
+      if (action === 'close-tab') {
+        const { activeTabId, tabs } = tabState
+        if (!activeTabId) return
+        const tab = tabs[activeTabId]
+        if (!tab || tab.locked) return
+        const wsStore = useWorkspaceStore.getState()
+        useHistoryStore.getState().recordClose(tab, wsStore.findWorkspaceByTab(activeTabId)?.id)
+        const ws = wsStore.findWorkspaceByTab(activeTabId)
+        if (ws) wsStore.removeTabFromWorkspace(ws.id, activeTabId)
+        tabState.closeTab(activeTabId)
+        return
+      }
+
       if (action === 'new-tab') {
         const tab = createTab({ kind: 'new-tab' })
         tabState.addTab(tab)
