@@ -47,5 +47,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getAppInfo: () => ipcRenderer.invoke('dev:app-info'),
     checkUpdate: (daemonUrl: string) => ipcRenderer.invoke('dev:check-update', daemonUrl),
     applyUpdate: (daemonUrl: string) => ipcRenderer.invoke('dev:apply-update', daemonUrl),
+    onUpdateProgress: (callback: (step: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, step: string) => callback(step)
+      ipcRenderer.on('dev:update-progress', handler)
+      return () => ipcRenderer.removeListener('dev:update-progress', handler)
+    },
   } : {}),
 })

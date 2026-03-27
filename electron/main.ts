@@ -53,7 +53,14 @@ function registerIpcHandlers(): void {
   // Dev Update
   ipcMain.handle('dev:app-info', () => getAppInfo())
   ipcMain.handle('dev:check-update', (_event, daemonUrl: string) => checkUpdate(daemonUrl))
-  ipcMain.handle('dev:apply-update', (_event, daemonUrl: string) => applyUpdate(daemonUrl))
+  ipcMain.handle('dev:apply-update', (event, daemonUrl: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    return applyUpdate(daemonUrl, (step) => {
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('dev:update-progress', step)
+      }
+    })
+  })
 }
 
 function startMetricsPolling(): void {

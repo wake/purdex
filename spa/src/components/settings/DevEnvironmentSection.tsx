@@ -25,6 +25,8 @@ export function DevEnvironmentSection() {
   const [remoteInfo, setRemoteInfo] = useState<RemoteInfo | null>(null)
   const [status, setStatus] = useState<UpdateStatus>('idle')
   const [updating, setUpdating] = useState(false)
+  const [updateStep, setUpdateStep] = useState<string | null>(null)
+  const [updateError, setUpdateError] = useState<string | null>(null)
 
   useEffect(() => {
     window.electronAPI?.getAppInfo().then(setAppInfo)
@@ -49,10 +51,28 @@ export function DevEnvironmentSection() {
     if (appInfo) checkUpdate()
   }, [appInfo, checkUpdate])
 
+  useEffect(() => {
+    if (!window.electronAPI?.onUpdateProgress) return
+    return window.electronAPI.onUpdateProgress((step) => setUpdateStep(step))
+  }, [])
+
   const handleUpdate = () => {
     setUpdating(true)
+    setUpdateStep(null)
+    setUpdateError(null)
     // Fire and forget — app.exit(0) kills the process before the promise resolves
-    window.electronAPI!.applyUpdate(daemonBase).catch(() => setUpdating(false))
+    window.electronAPI!.applyUpdate(daemonBase).catch((err) => {
+      setUpdating(false)
+      setUpdateStep(null)
+      setUpdateError(err instanceof Error ? err.message : String(err))
+    })
+  }
+
+  const stepLabels: Record<string, string> = {
+    downloading: 'Downloading update…',
+    extracting: 'Extracting…',
+    applying: 'Applying update…',
+    restarting: 'Restarting…',
   }
 
   const hasElectronUpdate = remoteInfo && appInfo && remoteInfo.electronHash !== appInfo.electronHash
@@ -97,6 +117,18 @@ export function DevEnvironmentSection() {
       {status !== 'idle' && (
         <div className={`text-xs ${status === 'error' ? 'text-status-error' : status === 'update_available' ? 'text-status-warning' : 'text-text-muted'}`}>
           {statusText[status]}
+        </div>
+      )}
+
+      {updating && updateStep && (
+        <div className="text-xs text-accent font-mono">
+          {stepLabels[updateStep] ?? updateStep}
+        </div>
+      )}
+
+      {updateError && (
+        <div className="text-xs text-status-error font-mono">
+          Error: {updateError}
         </div>
       )}
 
