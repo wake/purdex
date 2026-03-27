@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useTabStore } from '../stores/useTabStore'
+import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { createTab } from '../types/tab'
 import { useShortcuts } from './useShortcuts'
@@ -21,19 +22,24 @@ function mockElectronAPI() {
   }
 }
 
-function seedTabs(count: number) {
+function seedTabs(count: number, { addToWorkspace = true } = {}) {
   const store = useTabStore.getState()
   const tabs = Array.from({ length: count }, () =>
     createTab({ kind: 'new-tab' }),
   )
   tabs.forEach((t) => store.addTab(t))
   store.setActiveTab(tabs[0].id)
+  if (addToWorkspace) {
+    const wsId = useWorkspaceStore.getState().activeWorkspaceId
+    tabs.forEach((t) => useWorkspaceStore.getState().addTabToWorkspace(wsId, t.id))
+  }
   return tabs
 }
 
 describe('useShortcuts', () => {
   beforeEach(() => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    useWorkspaceStore.getState().reset()
     useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
   })
 
@@ -70,6 +76,24 @@ describe('useShortcuts', () => {
       renderHook(() => useShortcuts())
 
       fire('switch-tab-5')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
+    })
+
+    it('uses workspace tab order instead of global tabOrder', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(4, { addToWorkspace: false })
+      // Add only tabs[2] and tabs[0] to workspace (reversed vs global order)
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId
+      useWorkspaceStore.getState().addTabToWorkspace(wsId, tabs[2].id)
+      useWorkspaceStore.getState().addTabToWorkspace(wsId, tabs[0].id)
+      useTabStore.getState().setActiveTab(tabs[2].id)
+      renderHook(() => useShortcuts())
+
+      // Cmd+1 should switch to workspace's first tab (tabs[2]), not global first (tabs[0])
+      fire('switch-tab-1')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[2].id)
+      // Cmd+2 should switch to workspace's second tab (tabs[0])
+      fire('switch-tab-2')
       expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
     })
   })
@@ -125,6 +149,20 @@ describe('useShortcuts', () => {
       fire('next-tab')
       expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
     })
+
+    it('goes to first tab when activeTabId is not in visible tabs', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(3)
+      useTabStore.getState().setActiveTab(null)
+      renderHook(() => useShortcuts())
+
+      fire('prev-tab')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
+
+      useTabStore.getState().setActiveTab(null)
+      fire('next-tab')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
+    })
   })
 
   describe('open-settings', () => {
@@ -173,6 +211,23 @@ describe('useShortcuts', () => {
       fire('reopen-closed-tab')
       expect(useTabStore.getState().tabs[closedTab.id]).toBeDefined()
       expect(useTabStore.getState().activeTabId).toBe(closedTab.id)
+    })
+
+    it('adds reopened tab to active workspace', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(2)
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId
+      useWorkspaceStore.getState().addTabToWorkspace(wsId, tabs[0].id)
+      useWorkspaceStore.getState().addTabToWorkspace(wsId, tabs[1].id)
+
+      const closedTab = tabs[1]
+      useHistoryStore.getState().recordClose(closedTab)
+      useTabStore.getState().closeTab(closedTab.id)
+      renderHook(() => useShortcuts())
+
+      fire('reopen-closed-tab')
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)
+      expect(ws?.tabs).toContain(closedTab.id)
     })
   })
 })
