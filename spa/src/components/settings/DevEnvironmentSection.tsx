@@ -115,7 +115,7 @@ export function DevEnvironmentSection() {
       </div>
 
       {status !== 'idle' && (
-        <div className={`text-xs ${status === 'error' ? 'text-status-error' : 'text-text-secondary'}`}>
+        <div className={`text-xs ${status === 'error' ? 'text-status-error' : status === 'update_available' ? 'text-status-warning' : 'text-text-secondary'}`}>
           {statusText[status]}
         </div>
       )}
