@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.23] - 2026-03-28
+
+Dev update 進度回饋（PR #85）
+
+### 新增
+
+- **Update 進度顯示** — 點 Update App 後即時顯示 Downloading → Extracting → Applying 各階段
+- **錯誤訊息顯示** — 更新失敗時顯示具體錯誤（之前完全無回饋）
+- **`dev:update-progress` IPC** — main process 透過 push 事件回報步驟
+
+### 修正
+
+- Error 跨 contextBridge 序列化失敗 — 改在 main process catch 後轉為 string re-throw
+- 加入 `updateInProgress` lock 防止重複呼叫 `applyUpdate` 導致檔案競態
+- 移除不可達的 `progress('restarting')` 呼叫（app.exit 前 IPC 來不及送達）
+
 ## [1.0.0-alpha.22] - 2026-03-28
 
 Electron 快捷鍵系統 + tear-off 修正（PR #84）
