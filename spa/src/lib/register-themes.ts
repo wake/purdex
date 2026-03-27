@@ -23,7 +23,7 @@ const darkTokens: ThemeTokens = {
   'terminal-bg': '#0a0a1a',
   'terminal-fg': '#e0e0e0',
   'terminal-cursor': '#e0e0e0',
-  'status-error': '#4a3038',
+  'status-error': '#e06c75',
   'status-warning': '#c8b560',
   'status-success': '#2a4a3a',
 }
