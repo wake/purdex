@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.22] - 2026-03-28
+
+Electron 快捷鍵系統 + tear-off 修正（PR #84）
+
+### 新增
+
+- **Keybinding registry** — `electron/keybindings.ts` 集中定義快捷鍵，`menuGroup` 分組，為未來自定義擴充預留
+- **Electron Menu** — App / File / Edit / Tab / View 五層選單，含快捷鍵提示
+- **快捷鍵** — `Cmd+T` 新增分頁、`Cmd+N` 新增視窗、`Cmd+1~9` 切換 tab、`Cmd+Option+←/→` 前後切換、`Cmd+,` Settings、`Cmd+Y` History、`Cmd+Shift+T` 重開 tab
+- **useShortcuts hook** — 統一 `shortcut:execute` IPC listener，workspace-aware tab 切換
+- **17 個單元測試** — 含 workspace 整合、邊界情況
+
+### 修正
+
+- **Tear-off 帶走所有 tab** — 新視窗從 localStorage persist 恢復出全部 tab。改用 `replace` 旗標，tear-off 時清空再加入
+- **reopen-closed-tab 不加入 workspace** — 重開的 tab 現在加入 active workspace
+- **prev-tab/next-tab 用全域 tabOrder** — 改用 workspace visible tabs，與 TabBar 顯示一致
+- 移除 `App.tsx` 硬編碼 `Cmd+Shift+T`，統一由 Menu accelerator 驅動
+
 ## [1.0.0-alpha.21] - 2026-03-27
 
 Dev auto-update system（PR #77）
