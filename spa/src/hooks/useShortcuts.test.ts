@@ -165,6 +165,29 @@ describe('useShortcuts', () => {
     })
   })
 
+  describe('close-tab', () => {
+    it('closes the active tab', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(3)
+      useTabStore.getState().setActiveTab(tabs[1].id)
+      renderHook(() => useShortcuts())
+
+      fire('close-tab')
+      expect(useTabStore.getState().tabs[tabs[1].id]).toBeUndefined()
+    })
+
+    it('does not close a locked tab', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(2)
+      useTabStore.getState().toggleLock(tabs[0].id)
+      useTabStore.getState().setActiveTab(tabs[0].id)
+      renderHook(() => useShortcuts())
+
+      fire('close-tab')
+      expect(useTabStore.getState().tabs[tabs[0].id]).toBeDefined()
+    })
+  })
+
   describe('new-tab', () => {
     it('creates a new tab and activates it', () => {
       const { fire } = mockElectronAPI()
