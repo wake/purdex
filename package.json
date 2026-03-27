@@ -11,6 +11,7 @@
   "build": {
     "appId": "dev.wake.tmux-box",
     "productName": "tmux-box",
+    "asar": false,
     "directories": {
       "output": "dist"
     },
