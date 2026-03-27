@@ -39,7 +39,7 @@ interface Window {
     openBrowserView: (url: string, paneId: string) => Promise<void>
     closeBrowserView: (paneId: string) => Promise<void>
     navigateBrowserView: (paneId: string, url: string) => Promise<void>
-    onTabReceived: (callback: (tabJson: string) => void) => () => void
+    onTabReceived: (callback: (tabJson: string, replace: boolean) => void) => () => void
     signalReady: () => void
 
     // Keyboard Shortcuts

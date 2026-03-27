@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
-import { isStandaloneTab } from '../types/tab'
+import { createTab, isStandaloneTab } from '../types/tab'
 
 /** Get the tab IDs currently visible in the TabBar (workspace-aware). */
 function getVisibleTabIds(): string[] {
@@ -65,6 +65,14 @@ export function useShortcuts(): void {
         const delta = action === 'next-tab' ? 1 : -1
         const nextIdx = (currentIdx + delta + visibleIds.length) % visibleIds.length
         tabState.setActiveTab(visibleIds[nextIdx])
+        return
+      }
+
+      if (action === 'new-tab') {
+        const tab = createTab({ kind: 'new-tab' })
+        tabState.addTab(tab)
+        tabState.setActiveTab(tab.id)
+        addToActiveWorkspace(tab.id)
         return
       }
 

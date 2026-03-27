@@ -70,12 +70,16 @@ app.whenReady().then(() => {
   createTray(windowManager)
 
   const keybindings = getDefaultKeybindings()
-  const menuTemplate = buildMenuTemplate(keybindings, (action) => {
-    const focused = BrowserWindow.getFocusedWindow()
-    if (focused && !focused.isDestroyed()) {
-      focused.webContents.send('shortcut:execute', { action })
-    }
-  })
+  const menuTemplate = buildMenuTemplate(
+    keybindings,
+    (action) => {
+      const focused = BrowserWindow.getFocusedWindow()
+      if (focused && !focused.isDestroyed()) {
+        focused.webContents.send('shortcut:execute', { action })
+      }
+    },
+    { 'new-window': () => windowManager.createWindow() },
+  )
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate))
 
   windowManager.createWindow()

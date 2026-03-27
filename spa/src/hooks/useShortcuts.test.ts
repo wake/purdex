@@ -165,6 +165,33 @@ describe('useShortcuts', () => {
     })
   })
 
+  describe('new-tab', () => {
+    it('creates a new tab and activates it', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      renderHook(() => useShortcuts())
+
+      const beforeCount = useTabStore.getState().tabOrder.length
+      fire('new-tab')
+      const state = useTabStore.getState()
+      expect(state.tabOrder.length).toBe(beforeCount + 1)
+      const newTabId = state.tabOrder[state.tabOrder.length - 1]
+      expect(state.activeTabId).toBe(newTabId)
+    })
+
+    it('adds new tab to active workspace', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      renderHook(() => useShortcuts())
+
+      fire('new-tab')
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)
+      const newTabId = useTabStore.getState().activeTabId!
+      expect(ws?.tabs).toContain(newTabId)
+    })
+  })
+
   describe('open-settings', () => {
     it('opens a settings singleton tab', () => {
       const { fire } = mockElectronAPI()

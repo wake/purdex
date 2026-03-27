@@ -57,10 +57,14 @@ export default function App() {
   // --- Electron IPC: receive tab from tear-off/merge ---
   useEffect(() => {
     if (!window.electronAPI) return
-    return window.electronAPI.onTabReceived((tabJson: string) => {
+    return window.electronAPI.onTabReceived((tabJson: string, replace: boolean) => {
       try {
         const tab = JSON.parse(tabJson)
         if (tab && tab.id && tab.layout) {
+          if (replace) {
+            // Tear-off: new window — clear persisted tabs, keep only the received one
+            useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+          }
           useTabStore.getState().addTab(tab)
           useTabStore.getState().setActiveTab(tab.id)
           // Restore workspace membership if receiving window has an active workspace

@@ -1,12 +1,12 @@
 import type { MenuItemConstructorOptions } from 'electron'
 
-export type MenuGroup = 'tab-index' | 'tab-nav' | 'tab-action' | 'app' | 'view'
+export type MenuGroup = 'tab-index' | 'tab-nav' | 'tab-action' | 'app' | 'view' | 'file'
 
 export interface KeybindingDef {
   action: string
   accelerator: string
   label: string
-  menuCategory: 'App' | 'Tab' | 'View' | 'Edit'
+  menuCategory: 'App' | 'File' | 'Tab' | 'View' | 'Edit'
   menuGroup: MenuGroup
 }
 
@@ -22,9 +22,12 @@ const DEFAULT_KEYBINDINGS: readonly KeybindingDef[] = [
   { action: 'switch-tab-last', accelerator: 'CommandOrControl+9', label: 'Last Tab', menuCategory: 'Tab', menuGroup: 'tab-index' },
   { action: 'prev-tab', accelerator: 'CommandOrControl+Alt+Left', label: 'Previous Tab', menuCategory: 'Tab', menuGroup: 'tab-nav' },
   { action: 'next-tab', accelerator: 'CommandOrControl+Alt+Right', label: 'Next Tab', menuCategory: 'Tab', menuGroup: 'tab-nav' },
+  { action: 'new-tab', accelerator: 'CommandOrControl+T', label: 'New Tab', menuCategory: 'Tab', menuGroup: 'tab-action' },
   { action: 'reopen-closed-tab', accelerator: 'CommandOrControl+Shift+T', label: 'Reopen Closed Tab', menuCategory: 'Tab', menuGroup: 'tab-action' },
   { action: 'open-settings', accelerator: 'CommandOrControl+,', label: 'Settings', menuCategory: 'App', menuGroup: 'app' },
   { action: 'open-history', accelerator: 'CommandOrControl+Y', label: 'History', menuCategory: 'View', menuGroup: 'view' },
+  // File
+  { action: 'new-window', accelerator: 'CommandOrControl+N', label: 'New Window', menuCategory: 'File', menuGroup: 'file' },
 ]
 
 export function getDefaultKeybindings(): KeybindingDef[] {
@@ -34,14 +37,16 @@ export function getDefaultKeybindings(): KeybindingDef[] {
 export function buildMenuTemplate(
   bindings: KeybindingDef[],
   send: (action: string) => void,
+  mainHandlers?: Record<string, () => void>,
 ): MenuItemConstructorOptions[] {
   const byGroup = new Map<MenuGroup, MenuItemConstructorOptions[]>()
   const byCategory = new Map<string, MenuItemConstructorOptions[]>()
   for (const b of bindings) {
+    const handler = mainHandlers?.[b.action]
     const item: MenuItemConstructorOptions = {
       label: b.label,
       accelerator: b.accelerator,
-      click: () => send(b.action),
+      click: handler ?? (() => send(b.action)),
     }
     // Group by menuGroup for ordered submenu assembly
     const groupItems = byGroup.get(b.menuGroup) ?? []
@@ -84,6 +89,11 @@ export function buildMenuTemplate(
     ],
   }
 
+  const fileMenu: MenuItemConstructorOptions = {
+    label: 'File',
+    submenu: [...(byGroup.get('file') ?? [])],
+  }
+
   const viewMenu: MenuItemConstructorOptions = {
     label: 'View',
     submenu: [...(byCategory.get('View') ?? [])],
@@ -102,5 +112,5 @@ export function buildMenuTemplate(
     ],
   }
 
-  return [appMenu, editMenu, tabMenu, viewMenu]
+  return [appMenu, fileMenu, editMenu, tabMenu, viewMenu]
 }

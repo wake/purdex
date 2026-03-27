@@ -6,8 +6,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   mergeTab: (tabJson: string, targetWindowId: string) =>
     ipcRenderer.invoke('window:merge', tabJson, targetWindowId),
   getWindows: () => ipcRenderer.invoke('window:get-all'),
-  onTabReceived: (callback: (tabJson: string) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, tabJson: string) => callback(tabJson)
+  onTabReceived: (callback: (tabJson: string, replace: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, tabJson: string, replace?: boolean) =>
+      callback(tabJson, replace ?? false)
     ipcRenderer.on('tab:received', handler)
     return () => ipcRenderer.removeListener('tab:received', handler)
   },
