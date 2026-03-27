@@ -138,7 +138,7 @@ describe('useShortcuts', () => {
       const state = useTabStore.getState()
       const settingsTab = Object.values(state.tabs).find((t) => {
         const pane = t.layout
-        return pane.type === 'leaf' && pane.content.kind === 'settings'
+        return pane.type === 'leaf' && pane.pane.content.kind === 'settings'
       })
       expect(settingsTab).toBeDefined()
       expect(state.activeTabId).toBe(settingsTab!.id)
@@ -155,7 +155,7 @@ describe('useShortcuts', () => {
       const state = useTabStore.getState()
       const historyTab = Object.values(state.tabs).find((t) => {
         const pane = t.layout
-        return pane.type === 'leaf' && pane.content.kind === 'history'
+        return pane.type === 'leaf' && pane.pane.content.kind === 'history'
       })
       expect(historyTab).toBeDefined()
       expect(state.activeTabId).toBe(historyTab!.id)
