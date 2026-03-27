@@ -49,13 +49,10 @@ export function DevEnvironmentSection() {
     if (appInfo) checkUpdate()
   }, [appInfo, checkUpdate])
 
-  const handleUpdate = async () => {
+  const handleUpdate = () => {
     setUpdating(true)
-    try {
-      await window.electronAPI!.applyUpdate(daemonBase)
-    } catch {
-      setUpdating(false)
-    }
+    // Fire and forget — app.exit(0) kills the process before the promise resolves
+    window.electronAPI!.applyUpdate(daemonBase).catch(() => setUpdating(false))
   }
 
   const hasElectronUpdate = remoteInfo && appInfo && remoteInfo.electronHash !== appInfo.electronHash
@@ -106,7 +103,7 @@ export function DevEnvironmentSection() {
       <div className="flex gap-2">
         <button
           onClick={checkUpdate}
-          disabled={status === 'checking'}
+          disabled={!appInfo || status === 'checking'}
           className="px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default"
         >
           {t('settings.dev.btn.check')}
