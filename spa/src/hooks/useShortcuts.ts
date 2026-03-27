@@ -62,6 +62,10 @@ export function useShortcuts(): void {
         }
         return
       }
+
+      if (import.meta.env.DEV) {
+        console.warn(`[useShortcuts] unknown action: ${action}`)
+      }
     })
 
     return cleanup

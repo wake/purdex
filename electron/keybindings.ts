@@ -1,46 +1,56 @@
 import type { MenuItemConstructorOptions } from 'electron'
 
+export type MenuGroup = 'tab-index' | 'tab-nav' | 'tab-action' | 'app' | 'view'
+
 export interface KeybindingDef {
   action: string
   accelerator: string
   label: string
   menuCategory: 'App' | 'Tab' | 'View' | 'Edit'
+  menuGroup: MenuGroup
 }
 
-const DEFAULT_KEYBINDINGS: KeybindingDef[] = [
-  { action: 'switch-tab-1', accelerator: 'CommandOrControl+1', label: 'Tab 1', menuCategory: 'Tab' },
-  { action: 'switch-tab-2', accelerator: 'CommandOrControl+2', label: 'Tab 2', menuCategory: 'Tab' },
-  { action: 'switch-tab-3', accelerator: 'CommandOrControl+3', label: 'Tab 3', menuCategory: 'Tab' },
-  { action: 'switch-tab-4', accelerator: 'CommandOrControl+4', label: 'Tab 4', menuCategory: 'Tab' },
-  { action: 'switch-tab-5', accelerator: 'CommandOrControl+5', label: 'Tab 5', menuCategory: 'Tab' },
-  { action: 'switch-tab-6', accelerator: 'CommandOrControl+6', label: 'Tab 6', menuCategory: 'Tab' },
-  { action: 'switch-tab-7', accelerator: 'CommandOrControl+7', label: 'Tab 7', menuCategory: 'Tab' },
-  { action: 'switch-tab-8', accelerator: 'CommandOrControl+8', label: 'Tab 8', menuCategory: 'Tab' },
-  { action: 'switch-tab-last', accelerator: 'CommandOrControl+9', label: 'Last Tab', menuCategory: 'Tab' },
-  { action: 'prev-tab', accelerator: 'CommandOrControl+Alt+Left', label: 'Previous Tab', menuCategory: 'Tab' },
-  { action: 'next-tab', accelerator: 'CommandOrControl+Alt+Right', label: 'Next Tab', menuCategory: 'Tab' },
-  { action: 'reopen-closed-tab', accelerator: 'CommandOrControl+Shift+T', label: 'Reopen Closed Tab', menuCategory: 'Tab' },
-  { action: 'open-settings', accelerator: 'CommandOrControl+,', label: 'Settings', menuCategory: 'App' },
-  { action: 'open-history', accelerator: 'CommandOrControl+Y', label: 'History', menuCategory: 'View' },
+const DEFAULT_KEYBINDINGS: readonly KeybindingDef[] = [
+  { action: 'switch-tab-1', accelerator: 'CommandOrControl+1', label: 'Tab 1', menuCategory: 'Tab', menuGroup: 'tab-index' },
+  { action: 'switch-tab-2', accelerator: 'CommandOrControl+2', label: 'Tab 2', menuCategory: 'Tab', menuGroup: 'tab-index' },
+  { action: 'switch-tab-3', accelerator: 'CommandOrControl+3', label: 'Tab 3', menuCategory: 'Tab', menuGroup: 'tab-index' },
+  { action: 'switch-tab-4', accelerator: 'CommandOrControl+4', label: 'Tab 4', menuCategory: 'Tab', menuGroup: 'tab-index' },
+  { action: 'switch-tab-5', accelerator: 'CommandOrControl+5', label: 'Tab 5', menuCategory: 'Tab', menuGroup: 'tab-index' },
+  { action: 'switch-tab-6', accelerator: 'CommandOrControl+6', label: 'Tab 6', menuCategory: 'Tab', menuGroup: 'tab-index' },
+  { action: 'switch-tab-7', accelerator: 'CommandOrControl+7', label: 'Tab 7', menuCategory: 'Tab', menuGroup: 'tab-index' },
+  { action: 'switch-tab-8', accelerator: 'CommandOrControl+8', label: 'Tab 8', menuCategory: 'Tab', menuGroup: 'tab-index' },
+  { action: 'switch-tab-last', accelerator: 'CommandOrControl+9', label: 'Last Tab', menuCategory: 'Tab', menuGroup: 'tab-index' },
+  { action: 'prev-tab', accelerator: 'CommandOrControl+Alt+Left', label: 'Previous Tab', menuCategory: 'Tab', menuGroup: 'tab-nav' },
+  { action: 'next-tab', accelerator: 'CommandOrControl+Alt+Right', label: 'Next Tab', menuCategory: 'Tab', menuGroup: 'tab-nav' },
+  { action: 'reopen-closed-tab', accelerator: 'CommandOrControl+Shift+T', label: 'Reopen Closed Tab', menuCategory: 'Tab', menuGroup: 'tab-action' },
+  { action: 'open-settings', accelerator: 'CommandOrControl+,', label: 'Settings', menuCategory: 'App', menuGroup: 'app' },
+  { action: 'open-history', accelerator: 'CommandOrControl+Y', label: 'History', menuCategory: 'View', menuGroup: 'view' },
 ]
 
 export function getDefaultKeybindings(): KeybindingDef[] {
-  return DEFAULT_KEYBINDINGS
+  return [...DEFAULT_KEYBINDINGS]
 }
 
 export function buildMenuTemplate(
   bindings: KeybindingDef[],
   send: (action: string) => void,
 ): MenuItemConstructorOptions[] {
+  const byGroup = new Map<MenuGroup, MenuItemConstructorOptions[]>()
   const byCategory = new Map<string, MenuItemConstructorOptions[]>()
   for (const b of bindings) {
-    const items = byCategory.get(b.menuCategory) ?? []
-    items.push({
+    const item: MenuItemConstructorOptions = {
       label: b.label,
       accelerator: b.accelerator,
       click: () => send(b.action),
-    })
-    byCategory.set(b.menuCategory, items)
+    }
+    // Group by menuGroup for ordered submenu assembly
+    const groupItems = byGroup.get(b.menuGroup) ?? []
+    groupItems.push(item)
+    byGroup.set(b.menuGroup, groupItems)
+    // Group by menuCategory for non-Tab menus
+    const catItems = byCategory.get(b.menuCategory) ?? []
+    catItems.push(item)
+    byCategory.set(b.menuCategory, catItems)
   }
 
   const isMac = process.platform === 'darwin'
@@ -63,18 +73,14 @@ export function buildMenuTemplate(
     ],
   }
 
-  const tabItems = byCategory.get('Tab') ?? []
   const tabMenu: MenuItemConstructorOptions = {
     label: 'Tab',
     submenu: [
-      ...tabItems.filter((i) => /^Tab \d$/.test((i as { label: string }).label)),
-      ...tabItems.filter((i) => (i as { label: string }).label === 'Last Tab'),
+      ...(byGroup.get('tab-index') ?? []),
       { type: 'separator' as const },
-      ...tabItems.filter((i) =>
-        ['Previous Tab', 'Next Tab'].includes((i as { label: string }).label),
-      ),
+      ...(byGroup.get('tab-nav') ?? []),
       { type: 'separator' as const },
-      ...tabItems.filter((i) => (i as { label: string }).label === 'Reopen Closed Tab'),
+      ...(byGroup.get('tab-action') ?? []),
     ],
   }
 
