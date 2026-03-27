@@ -102,32 +102,32 @@ export function DevEnvironmentSection() {
           <span className="text-sm text-text-primary">{t('settings.dev.spa_hash')}</span>
           <div className="flex items-center gap-2">
             <span className="text-xs text-text-secondary font-mono">{appInfo?.spaHash ?? '...'}</span>
-            {hasSPAUpdate && <span className="text-xs text-status-warning font-mono">→ {remoteInfo.spaHash}</span>}
+            {hasSPAUpdate && <span className="text-xs text-text-secondary font-mono">→ {remoteInfo.spaHash}</span>}
           </div>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-sm text-text-primary">{t('settings.dev.electron_hash')}</span>
           <div className="flex items-center gap-2">
             <span className="text-xs text-text-secondary font-mono">{appInfo?.electronHash ?? '...'}</span>
-            {hasElectronUpdate && <span className="text-xs text-status-warning font-mono">→ {remoteInfo.electronHash}</span>}
+            {hasElectronUpdate && <span className="text-xs text-text-secondary font-mono">→ {remoteInfo.electronHash}</span>}
           </div>
         </div>
       </div>
 
       {status !== 'idle' && (
-        <div className={`text-sm ${status === 'error' ? 'text-status-error' : status === 'update_available' ? 'text-text-primary' : 'text-text-secondary'}`}>
+        <div className={`text-xs ${status === 'error' ? 'text-status-error' : 'text-text-secondary'}`}>
           {statusText[status]}
         </div>
       )}
 
       {updating && updateStep && (
-        <div className="text-sm text-accent font-mono">
+        <div className="text-xs text-text-secondary font-mono">
           {stepLabels[updateStep] ?? updateStep}
         </div>
       )}
 
       {updateError && (
-        <div className="text-sm text-status-error">
+        <div className="text-xs text-status-error">
           Error: {updateError}
         </div>
       )}
