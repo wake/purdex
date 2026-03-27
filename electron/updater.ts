@@ -1,8 +1,7 @@
 import { app } from 'electron'
-import { existsSync, mkdirSync, rmSync, renameSync, createWriteStream } from 'fs'
+import { existsSync, mkdirSync, rmSync, renameSync, cpSync, createWriteStream } from 'fs'
 import { join } from 'path'
 import { pipeline } from 'stream/promises'
-import { createGunzip } from 'zlib'
 import { extract } from 'tar'
 
 declare const __APP_VERSION__: string
@@ -63,13 +62,35 @@ export async function applyUpdate(daemonUrl: string): Promise<{ success: boolean
   const mainSrc = join(extractDir, 'main')
   const preloadSrc = join(extractDir, 'preload')
 
-  if (existsSync(mainSrc)) {
-    if (existsSync(mainDst)) rmSync(mainDst, { recursive: true })
-    renameSync(mainSrc, mainDst)
-  }
-  if (existsSync(preloadSrc)) {
-    if (existsSync(preloadDst)) rmSync(preloadDst, { recursive: true })
-    renameSync(preloadSrc, preloadDst)
+  // Backup current files before replacing
+  const backupDir = join(tmpDir, 'backup')
+  mkdirSync(backupDir, { recursive: true })
+  if (existsSync(mainDst)) cpSync(mainDst, join(backupDir, 'main'), { recursive: true })
+  if (existsSync(preloadDst)) cpSync(preloadDst, join(backupDir, 'preload'), { recursive: true })
+
+  try {
+    if (existsSync(mainSrc)) {
+      if (existsSync(mainDst)) rmSync(mainDst, { recursive: true })
+      renameSync(mainSrc, mainDst)
+    }
+    if (existsSync(preloadSrc)) {
+      if (existsSync(preloadDst)) rmSync(preloadDst, { recursive: true })
+      renameSync(preloadSrc, preloadDst)
+    }
+  } catch (err) {
+    // Rollback: restore from backup
+    const mainBackup = join(backupDir, 'main')
+    const preloadBackup = join(backupDir, 'preload')
+    if (existsSync(mainBackup)) {
+      if (existsSync(mainDst)) rmSync(mainDst, { recursive: true })
+      renameSync(mainBackup, mainDst)
+    }
+    if (existsSync(preloadBackup)) {
+      if (existsSync(preloadDst)) rmSync(preloadDst, { recursive: true })
+      renameSync(preloadBackup, preloadDst)
+    }
+    rmSync(tmpDir, { recursive: true })
+    throw err
   }
 
   // Cleanup temp
