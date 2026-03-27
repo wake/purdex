@@ -9,6 +9,7 @@ const windowManager = new WindowManager()
 const browserViewManager = new BrowserViewManager()
 windowManager.setOnWindowClosed((win) => browserViewManager.cleanupForWindow(win))
 let metricsInterval: ReturnType<typeof setInterval> | null = null
+let updateInProgress = false
 
 function registerIpcHandlers(): void {
   // Window Management
@@ -53,7 +54,23 @@ function registerIpcHandlers(): void {
   // Dev Update
   ipcMain.handle('dev:app-info', () => getAppInfo())
   ipcMain.handle('dev:check-update', (_event, daemonUrl: string) => checkUpdate(daemonUrl))
-  ipcMain.handle('dev:apply-update', (_event, daemonUrl: string) => applyUpdate(daemonUrl))
+  ipcMain.handle('dev:apply-update', async (event, daemonUrl: string) => {
+    if (updateInProgress) throw 'Update already in progress'
+    updateInProgress = true
+    const win = BrowserWindow.fromWebContents(event.sender)
+    try {
+      return await applyUpdate(daemonUrl, (step) => {
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('dev:update-progress', step)
+        }
+      })
+    } catch (err) {
+      updateInProgress = false
+      // Error objects lose their message across contextBridge serialization.
+      // Re-throw as a plain string so the renderer gets a useful message.
+      throw String(err instanceof Error ? err.message : err)
+    }
+  })
 }
 
 function startMetricsPolling(): void {

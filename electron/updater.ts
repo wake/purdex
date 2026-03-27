@@ -36,7 +36,15 @@ export async function checkUpdate(daemonUrl: string): Promise<RemoteVersionInfo>
   return resp.json()
 }
 
-export async function applyUpdate(daemonUrl: string): Promise<{ success: boolean; message: string }> {
+export type UpdateProgressFn = (step: string) => void
+
+export async function applyUpdate(
+  daemonUrl: string,
+  onProgress?: UpdateProgressFn,
+): Promise<{ success: boolean; message: string }> {
+  const progress = onProgress ?? (() => {})
+
+  progress('downloading')
   const resp = await fetch(`${daemonUrl}/api/dev/update/download`)
   if (!resp.ok) throw new Error(`download failed: ${resp.status}`)
 
@@ -49,10 +57,13 @@ export async function applyUpdate(daemonUrl: string): Promise<{ success: boolean
   const fileStream = createWriteStream(tarPath)
   await pipeline(resp.body as any, fileStream)
 
+  progress('extracting')
   // Extract to temp dir
   const extractDir = join(tmpDir, 'extracted')
   mkdirSync(extractDir, { recursive: true })
   await extract({ file: tarPath, cwd: extractDir })
+
+  progress('applying')
 
   // Replace out/main and out/preload in app directory
   // __dirname is out/main/ in the built output, so parent is out/
@@ -96,7 +107,8 @@ export async function applyUpdate(daemonUrl: string): Promise<{ success: boolean
   // Cleanup temp
   rmSync(tmpDir, { recursive: true })
 
-  // Relaunch
+  // Relaunch — no progress('restarting') here because app.exit(0)
+  // kills the process before the IPC message reaches the renderer.
   app.relaunch()
   app.exit(0)
 
