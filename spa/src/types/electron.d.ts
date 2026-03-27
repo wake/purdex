@@ -42,6 +42,9 @@ interface Window {
     onTabReceived: (callback: (tabJson: string) => void) => () => void
     signalReady: () => void
 
+    // Keyboard Shortcuts
+    onShortcut: (callback: (payload: { action: string }) => void) => () => void
+
     // Window Management
     getWindows: () => Promise<ElectronWindowInfo[]>
 
