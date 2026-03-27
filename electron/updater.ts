@@ -107,8 +107,8 @@ export async function applyUpdate(
   // Cleanup temp
   rmSync(tmpDir, { recursive: true })
 
-  // Relaunch
-  progress('restarting')
+  // Relaunch — no progress('restarting') here because app.exit(0)
+  // kills the process before the IPC message reaches the renderer.
   app.relaunch()
   app.exit(0)
 
