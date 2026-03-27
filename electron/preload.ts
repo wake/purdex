@@ -25,6 +25,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // SPA ready signal
   signalReady: () => ipcRenderer.send('spa:ready'),
 
+  // Keyboard Shortcuts
+  onShortcut: (callback: (payload: { action: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { action: string }) =>
+      callback(payload)
+    ipcRenderer.on('shortcut:execute', handler)
+    return () => ipcRenderer.removeListener('shortcut:execute', handler)
+  },
+
   // Memory Monitor
   getProcessMetrics: () => ipcRenderer.invoke('metrics:get'),
   onMetricsUpdate: (callback: (metrics: unknown[]) => void) => {
