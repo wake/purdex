@@ -1,8 +1,9 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu } from 'electron'
 import { WindowManager } from './window-manager'
 import { BrowserViewManager } from './browser-view-manager'
 import { createTray } from './tray'
 import { getAppInfo, checkUpdate, applyUpdate } from './updater'
+import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
 
 const windowManager = new WindowManager()
 const browserViewManager = new BrowserViewManager()
@@ -67,6 +68,15 @@ function startMetricsPolling(): void {
 app.whenReady().then(() => {
   registerIpcHandlers()
   createTray(windowManager)
+
+  const keybindings = getDefaultKeybindings()
+  const menuTemplate = buildMenuTemplate(keybindings, (action) => {
+    const focused = BrowserWindow.getFocusedWindow()
+    if (focused && !focused.isDestroyed()) {
+      focused.webContents.send('shortcut:execute', { action })
+    }
+  })
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate))
 
   windowManager.createWindow()
 
