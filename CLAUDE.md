@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Repo: `git@github.com:wake/tmux-box.git`
 - 主分支: `main`（v0 備份在 `v0` 分支）
-- 版本: `VERSION` 檔案為 SOT，每個 PR bump
+- 版本: `VERSION` 檔案為 SOT，bump 時須同步 `package.json` + `spa/package.json`
 
 ## 開發環境
 
