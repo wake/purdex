@@ -14,7 +14,7 @@ export class WindowManager {
     this.onWindowClosed = cb
   }
 
-  createWindow(opts?: { tabJson?: string }): BrowserWindow {
+  createWindow(opts?: { tabJson?: string; replace?: boolean }): BrowserWindow {
     const id = globalThis.crypto.randomUUID().slice(0, 8)
     const win = new BrowserWindow({
       width: 1200,
@@ -39,9 +39,10 @@ export class WindowManager {
 
     // If tab data provided, send after SPA signals ready
     if (opts?.tabJson) {
+      const replace = opts.replace ?? false
       const handler = (event: Electron.IpcMainEvent) => {
         if (event.sender === win.webContents) {
-          win.webContents.send('tab:received', opts.tabJson)
+          win.webContents.send('tab:received', opts.tabJson, replace)
           ipcMain.removeListener('spa:ready', handler)
         }
       }
@@ -87,7 +88,7 @@ export class WindowManager {
   }
 
   handleTearOff(tabJson: string): void {
-    this.createWindow({ tabJson })
+    this.createWindow({ tabJson, replace: true })
   }
 
   handleMerge(tabJson: string, targetWindowId: string): void {

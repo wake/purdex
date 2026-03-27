@@ -1,0 +1,260 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { renderHook } from '@testing-library/react'
+import { useTabStore } from '../stores/useTabStore'
+import { useWorkspaceStore } from '../stores/useWorkspaceStore'
+import { useHistoryStore } from '../stores/useHistoryStore'
+import { createTab } from '../types/tab'
+import { useShortcuts } from './useShortcuts'
+
+function mockElectronAPI() {
+  let shortcutCallback: ((payload: { action: string }) => void) | null = null
+  const cleanup = vi.fn()
+  ;(window as unknown as Record<string, unknown>).electronAPI = {
+    onShortcut: (cb: (payload: { action: string }) => void) => {
+      shortcutCallback = cb
+      return cleanup
+    },
+    signalReady: () => {},
+  }
+  return {
+    fire: (action: string) => shortcutCallback?.({ action }),
+    cleanup,
+  }
+}
+
+function seedTabs(count: number, { addToWorkspace = true } = {}) {
+  const store = useTabStore.getState()
+  const tabs = Array.from({ length: count }, () =>
+    createTab({ kind: 'new-tab' }),
+  )
+  tabs.forEach((t) => store.addTab(t))
+  store.setActiveTab(tabs[0].id)
+  if (addToWorkspace) {
+    const wsId = useWorkspaceStore.getState().activeWorkspaceId
+    tabs.forEach((t) => useWorkspaceStore.getState().addTabToWorkspace(wsId, t.id))
+  }
+  return tabs
+}
+
+describe('useShortcuts', () => {
+  beforeEach(() => {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    useWorkspaceStore.getState().reset()
+    useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
+  })
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).electronAPI
+  })
+
+  it('does nothing when electronAPI is not available', () => {
+    const { unmount } = renderHook(() => useShortcuts())
+    unmount()
+  })
+
+  it('cleans up listener on unmount', () => {
+    const { cleanup } = mockElectronAPI()
+    const { unmount } = renderHook(() => useShortcuts())
+    unmount()
+    expect(cleanup).toHaveBeenCalled()
+  })
+
+  describe('switch-tab-{n}', () => {
+    it('switches to tab by index', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(5)
+      renderHook(() => useShortcuts())
+
+      fire('switch-tab-3')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[2].id)
+    })
+
+    it('ignores out-of-range index', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(2)
+      useTabStore.getState().setActiveTab(tabs[0].id)
+      renderHook(() => useShortcuts())
+
+      fire('switch-tab-5')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
+    })
+
+    it('uses workspace tab order instead of global tabOrder', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(4, { addToWorkspace: false })
+      // Add only tabs[2] and tabs[0] to workspace (reversed vs global order)
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId
+      useWorkspaceStore.getState().addTabToWorkspace(wsId, tabs[2].id)
+      useWorkspaceStore.getState().addTabToWorkspace(wsId, tabs[0].id)
+      useTabStore.getState().setActiveTab(tabs[2].id)
+      renderHook(() => useShortcuts())
+
+      // Cmd+1 should switch to workspace's first tab (tabs[2]), not global first (tabs[0])
+      fire('switch-tab-1')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[2].id)
+      // Cmd+2 should switch to workspace's second tab (tabs[0])
+      fire('switch-tab-2')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
+    })
+  })
+
+  describe('switch-tab-last', () => {
+    it('switches to the last tab', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(4)
+      renderHook(() => useShortcuts())
+
+      fire('switch-tab-last')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[3].id)
+    })
+  })
+
+  describe('prev-tab / next-tab', () => {
+    it('cycles to previous tab', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(3)
+      useTabStore.getState().setActiveTab(tabs[1].id)
+      renderHook(() => useShortcuts())
+
+      fire('prev-tab')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
+    })
+
+    it('wraps around from first to last', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(3)
+      useTabStore.getState().setActiveTab(tabs[0].id)
+      renderHook(() => useShortcuts())
+
+      fire('prev-tab')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[2].id)
+    })
+
+    it('cycles to next tab', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(3)
+      useTabStore.getState().setActiveTab(tabs[0].id)
+      renderHook(() => useShortcuts())
+
+      fire('next-tab')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[1].id)
+    })
+
+    it('wraps around from last to first', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(3)
+      useTabStore.getState().setActiveTab(tabs[2].id)
+      renderHook(() => useShortcuts())
+
+      fire('next-tab')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
+    })
+
+    it('goes to first tab when activeTabId is not in visible tabs', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(3)
+      useTabStore.getState().setActiveTab(null)
+      renderHook(() => useShortcuts())
+
+      fire('prev-tab')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
+
+      useTabStore.getState().setActiveTab(null)
+      fire('next-tab')
+      expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
+    })
+  })
+
+  describe('new-tab', () => {
+    it('creates a new tab and activates it', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      renderHook(() => useShortcuts())
+
+      const beforeCount = useTabStore.getState().tabOrder.length
+      fire('new-tab')
+      const state = useTabStore.getState()
+      expect(state.tabOrder.length).toBe(beforeCount + 1)
+      const newTabId = state.tabOrder[state.tabOrder.length - 1]
+      expect(state.activeTabId).toBe(newTabId)
+    })
+
+    it('adds new tab to active workspace', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      renderHook(() => useShortcuts())
+
+      fire('new-tab')
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)
+      const newTabId = useTabStore.getState().activeTabId!
+      expect(ws?.tabs).toContain(newTabId)
+    })
+  })
+
+  describe('open-settings', () => {
+    it('opens a settings singleton tab', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      renderHook(() => useShortcuts())
+
+      fire('open-settings')
+      const state = useTabStore.getState()
+      const settingsTab = Object.values(state.tabs).find((t) => {
+        const pane = t.layout
+        return pane.type === 'leaf' && pane.pane.content.kind === 'settings'
+      })
+      expect(settingsTab).toBeDefined()
+      expect(state.activeTabId).toBe(settingsTab!.id)
+    })
+  })
+
+  describe('open-history', () => {
+    it('opens a history singleton tab', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      renderHook(() => useShortcuts())
+
+      fire('open-history')
+      const state = useTabStore.getState()
+      const historyTab = Object.values(state.tabs).find((t) => {
+        const pane = t.layout
+        return pane.type === 'leaf' && pane.pane.content.kind === 'history'
+      })
+      expect(historyTab).toBeDefined()
+      expect(state.activeTabId).toBe(historyTab!.id)
+    })
+  })
+
+  describe('reopen-closed-tab', () => {
+    it('reopens the last closed tab', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(2)
+      const closedTab = tabs[1]
+      useHistoryStore.getState().recordClose(closedTab)
+      useTabStore.getState().closeTab(closedTab.id)
+      renderHook(() => useShortcuts())
+
+      fire('reopen-closed-tab')
+      expect(useTabStore.getState().tabs[closedTab.id]).toBeDefined()
+      expect(useTabStore.getState().activeTabId).toBe(closedTab.id)
+    })
+
+    it('adds reopened tab to active workspace', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(2)
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId
+      useWorkspaceStore.getState().addTabToWorkspace(wsId, tabs[0].id)
+      useWorkspaceStore.getState().addTabToWorkspace(wsId, tabs[1].id)
+
+      const closedTab = tabs[1]
+      useHistoryStore.getState().recordClose(closedTab)
+      useTabStore.getState().closeTab(closedTab.id)
+      renderHook(() => useShortcuts())
+
+      fire('reopen-closed-tab')
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)
+      expect(ws?.tabs).toContain(closedTab.id)
+    })
+  })
+})

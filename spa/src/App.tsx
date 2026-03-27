@@ -10,10 +10,10 @@ import { useConfigStore } from './stores/useConfigStore'
 import { useTabStore } from './stores/useTabStore'
 import { useWorkspaceStore } from './stores/useWorkspaceStore'
 import { useHostStore } from './stores/useHostStore'
-import { useHistoryStore } from './stores/useHistoryStore'
 import { useRelayWsManager } from './hooks/useRelayWsManager'
 import { useSessionEventWs } from './hooks/useSessionEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
+import { useShortcuts } from './hooks/useShortcuts'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { isStandaloneTab } from './types/tab'
 import { TabContextMenu } from './components/TabContextMenu'
@@ -47,6 +47,7 @@ export default function App() {
   useRelayWsManager(wsBase)
   useSessionEventWs(wsBase, daemonBase)
   useRouteSync()
+  useShortcuts()
 
   // --- Electron: signal SPA ready (replaces 500ms setTimeout) ---
   useEffect(() => {
@@ -56,10 +57,14 @@ export default function App() {
   // --- Electron IPC: receive tab from tear-off/merge ---
   useEffect(() => {
     if (!window.electronAPI) return
-    return window.electronAPI.onTabReceived((tabJson: string) => {
+    return window.electronAPI.onTabReceived((tabJson: string, replace: boolean) => {
       try {
         const tab = JSON.parse(tabJson)
         if (tab && tab.id && tab.layout) {
+          if (replace) {
+            // Tear-off: new window — clear persisted tabs, keep only the received one
+            useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+          }
           useTabStore.getState().addTab(tab)
           useTabStore.getState().setActiveTab(tab.id)
           // Restore workspace membership if receiving window has an active workspace
@@ -71,22 +76,6 @@ export default function App() {
         }
       } catch { /* ignore malformed tab JSON */ }
     })
-  }, [])
-
-  // --- Keybinding: ⌘+Shift+T / Ctrl+Shift+T — reopen last closed tab ---
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'T') {
-        e.preventDefault()
-        const tab = useHistoryStore.getState().reopenLast()
-        if (tab) {
-          useTabStore.getState().addTab(tab)
-          useTabStore.getState().setActiveTab(tab.id)
-        }
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
   // --- Derived state ---
