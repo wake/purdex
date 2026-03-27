@@ -89,26 +89,26 @@ export function DevEnvironmentSection() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-sm font-medium text-text-primary">{t('settings.dev.title')}</h3>
-        <p className="text-xs text-text-muted mt-1">{t('settings.dev.desc')}</p>
+        <h2 className="text-lg text-text-primary">{t('settings.dev.title')}</h2>
+        <p className="text-xs text-text-secondary mb-6">{t('settings.dev.desc')}</p>
       </div>
 
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-sm text-text-primary">{t('settings.dev.app_version')}</span>
-          <span className="text-xs text-text-muted font-mono">{appInfo?.version ?? '...'}</span>
+          <span className="text-xs text-text-secondary font-mono">{appInfo?.version ?? '...'}</span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-sm text-text-primary">{t('settings.dev.spa_hash')}</span>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-text-muted font-mono">{appInfo?.spaHash ?? '...'}</span>
+            <span className="text-xs text-text-secondary font-mono">{appInfo?.spaHash ?? '...'}</span>
             {hasSPAUpdate && <span className="text-xs text-status-warning font-mono">→ {remoteInfo.spaHash}</span>}
           </div>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-sm text-text-primary">{t('settings.dev.electron_hash')}</span>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-text-muted font-mono">{appInfo?.electronHash ?? '...'}</span>
+            <span className="text-xs text-text-secondary font-mono">{appInfo?.electronHash ?? '...'}</span>
             {hasElectronUpdate && <span className="text-xs text-status-warning font-mono">→ {remoteInfo.electronHash}</span>}
           </div>
         </div>
