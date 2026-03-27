@@ -76,7 +76,7 @@ const nordTokens: ThemeTokens = {
   'terminal-fg': '#d8dee9',
   'terminal-cursor': '#d8dee9',
   'status-error': '#bf616a33',
-  'status-warning': '#ebcb8b33',
+  'status-warning': '#ebcb8b',
   'status-success': '#a3be8c33',
 }
 
@@ -102,7 +102,7 @@ const draculaTokens: ThemeTokens = {
   'terminal-fg': '#f8f8f2',
   'terminal-cursor': '#f8f8f2',
   'status-error': '#ff555533',
-  'status-warning': '#f1fa8c33',
+  'status-warning': '#f1fa8c',
   'status-success': '#50fa7b33',
 }
 
