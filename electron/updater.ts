@@ -54,7 +54,7 @@ export async function applyUpdate(daemonUrl: string): Promise<{ success: boolean
   mkdirSync(extractDir, { recursive: true })
   await extract({ file: tarPath, cwd: extractDir })
 
-  // Replace out/main and out/preload in app directory
+  // Replace out/main and out/preload in app directory (v2)
   // __dirname is out/main/ in the built output, so parent is out/
   const appOutDir = join(__dirname, '..')
   const mainDst = join(appOutDir, 'main')
