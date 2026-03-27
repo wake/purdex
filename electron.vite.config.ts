@@ -2,6 +2,8 @@ import { defineConfig } from 'electron-vite'
 import { resolve } from 'path'
 import { execSync } from 'child_process'
 import { readFileSync } from 'fs'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 function gitHash(...paths: string[]): string {
   try {
@@ -49,6 +51,7 @@ export default defineConfig({
   },
   renderer: {
     root: 'spa',
+    plugins: [react(), tailwindcss()],
     build: {
       outDir: resolve(__dirname, 'out/renderer'),
       rollupOptions: {

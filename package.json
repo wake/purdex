@@ -1,17 +1,44 @@
 {
   "private": true,
+  "name": "tmux-box",
+  "version": "1.0.0-alpha.21",
   "main": "out/main/index.mjs",
   "scripts": {
     "electron:dev": "electron-vite dev",
     "electron:build": "electron-vite build && electron-builder",
     "electron:preview": "electron-vite preview"
   },
+  "build": {
+    "appId": "dev.wake.tmux-box",
+    "productName": "tmux-box",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "mac": {
+      "identity": null,
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
+    }
+  },
   "devDependencies": {
     "@electron-toolkit/utils": "^4.0.0",
+    "@tailwindcss/vite": "^4.2.2",
     "@types/tar": "^7.0.87",
+    "@vitejs/plugin-react": "^6.0.1",
     "electron": "^41.0.4",
     "electron-builder": "^26.8.1",
-    "electron-vite": "^5.0.0"
+    "electron-vite": "^5.0.0",
+    "tailwindcss": "^4.2.2"
   },
   "dependencies": {
     "tar": "^7.5.13"
