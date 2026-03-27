@@ -16,6 +16,7 @@ import { MemoryMonitorNewTabSection } from '../components/MemoryMonitorNewTabSec
 import { AppearanceSection } from '../components/settings/AppearanceSection'
 import { TerminalSection } from '../components/settings/TerminalSection'
 import { ElectronSection } from '../components/settings/ElectronSection'
+import { DevEnvironmentSection } from '../components/settings/DevEnvironmentSection'
 import { useTabStore } from '../stores/useTabStore'
 import type { PaneContent } from '../types/tab'
 
@@ -94,6 +95,15 @@ export function registerBuiltinPanes(): void {
       label: 'settings.section.electron',
       order: 5,
       component: ElectronSection,
+    })
+  }
+
+  if (caps.devUpdateEnabled) {
+    registerSettingsSection({
+      id: 'dev-environment',
+      label: 'settings.section.dev_environment',
+      order: 20,
+      component: DevEnvironmentSection,
     })
   }
 }

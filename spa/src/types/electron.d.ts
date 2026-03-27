@@ -20,6 +20,18 @@ interface ElectronTabMetrics {
   state: 'active' | 'background' | 'discarded'
 }
 
+interface ElectronAppInfo {
+  version: string
+  electronHash: string
+  spaHash: string
+  devUpdateEnabled: boolean
+}
+
+interface ElectronUpdateResult {
+  success: boolean
+  message: string
+}
+
 interface Window {
   electronAPI?: {
     tearOffTab: (tabJson: string) => Promise<void>
@@ -39,5 +51,10 @@ interface Window {
     // Memory Monitor
     getProcessMetrics: () => Promise<ElectronTabMetrics[]>
     onMetricsUpdate: (callback: (metrics: ElectronTabMetrics[]) => void) => () => void
+
+    // Dev Update
+    getAppInfo: () => Promise<ElectronAppInfo>
+    checkUpdate: (daemonUrl: string) => Promise<{ version: string; spaHash: string; electronHash: string }>
+    applyUpdate: (daemonUrl: string) => Promise<ElectronUpdateResult>
   }
 }

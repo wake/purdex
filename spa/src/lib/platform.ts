@@ -6,15 +6,18 @@ export interface PlatformCapabilities {
   canMergeWindow: boolean
   canBrowserPane: boolean
   canSystemTray: boolean
+  devUpdateEnabled: boolean
 }
 
 export function getPlatformCapabilities(): PlatformCapabilities {
   const isElectron = !!window.electronAPI
+  const devUpdateEnabled = isElectron && !!window.electronAPI?.getAppInfo
   return {
     isElectron,
     canTearOffTab: isElectron,
     canMergeWindow: isElectron,
     canBrowserPane: isElectron,
     canSystemTray: isElectron,
+    devUpdateEnabled,
   }
 }

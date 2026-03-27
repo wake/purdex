@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { WindowManager } from './window-manager'
 import { BrowserViewManager } from './browser-view-manager'
 import { createTray } from './tray'
+import { getAppInfo, checkUpdate, applyUpdate } from './updater'
 
 const windowManager = new WindowManager()
 const browserViewManager = new BrowserViewManager()
@@ -47,6 +48,11 @@ function registerIpcHandlers(): void {
   ipcMain.handle('metrics:get', () => {
     return browserViewManager.getMetrics()
   })
+
+  // Dev Update
+  ipcMain.handle('dev:app-info', () => getAppInfo())
+  ipcMain.handle('dev:check-update', (_event, daemonUrl: string) => checkUpdate(daemonUrl))
+  ipcMain.handle('dev:apply-update', (_event, daemonUrl: string) => applyUpdate(daemonUrl))
 }
 
 function startMetricsPolling(): void {
@@ -65,6 +71,19 @@ app.whenReady().then(() => {
   windowManager.createWindow()
 
   startMetricsPolling()
+
+  // Dev: background update check on startup
+  if (getAppInfo().devUpdateEnabled) {
+    const daemonUrl = 'http://100.64.0.2:7860'
+    checkUpdate(daemonUrl).then((remote) => {
+      const local = getAppInfo()
+      if (remote.electronHash !== local.electronHash || remote.spaHash !== local.spaHash) {
+        for (const win of windowManager.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send('dev:update-available', remote)
+        }
+      }
+    }).catch(() => { /* silent — daemon may not be reachable */ })
+  }
 
   app.on('activate', () => {
     windowManager.showOrCreate()
