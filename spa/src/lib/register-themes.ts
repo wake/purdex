@@ -24,7 +24,7 @@ const darkTokens: ThemeTokens = {
   'terminal-fg': '#e0e0e0',
   'terminal-cursor': '#e0e0e0',
   'status-error': '#4a3038',
-  'status-warning': '#4a4028',
+  'status-warning': '#c8b560',
   'status-success': '#2a4a3a',
 }
 

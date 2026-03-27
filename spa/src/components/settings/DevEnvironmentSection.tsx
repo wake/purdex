@@ -102,14 +102,14 @@ export function DevEnvironmentSection() {
           <span className="text-sm text-text-primary">{t('settings.dev.spa_hash')}</span>
           <div className="flex items-center gap-2">
             <span className="text-xs text-text-secondary font-mono">{appInfo?.spaHash ?? '...'}</span>
-            {hasSPAUpdate && <span className="text-xs text-text-secondary font-mono">→ {remoteInfo.spaHash}</span>}
+            {hasSPAUpdate && <span className="text-xs text-status-warning font-mono">→ {remoteInfo.spaHash}</span>}
           </div>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-sm text-text-primary">{t('settings.dev.electron_hash')}</span>
           <div className="flex items-center gap-2">
             <span className="text-xs text-text-secondary font-mono">{appInfo?.electronHash ?? '...'}</span>
-            {hasElectronUpdate && <span className="text-xs text-text-secondary font-mono">→ {remoteInfo.electronHash}</span>}
+            {hasElectronUpdate && <span className="text-xs text-status-warning font-mono">→ {remoteInfo.electronHash}</span>}
           </div>
         </div>
       </div>
