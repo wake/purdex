@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概述
 
-**tmux-box** (v1.0.0-alpha.20) — tmux session 的遠端管理工具，含 Go daemon + React SPA + Electron shell。支援 Terminal、Stream（Claude Code `-p` 串流）、JSONL 三種模式。
+**tmux-box** (v1.0.0-alpha.21) — tmux session 的遠端管理工具，含 Go daemon + React SPA + Electron shell。支援 Terminal、Stream（Claude Code `-p` 串流）、JSONL 三種模式。
 
 - Repo: `git@github.com:wake/tmux-box.git`
 - 主分支: `main`（v0 備份在 `v0` 分支）
@@ -23,6 +23,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Daemon**: Go / net/http / gorilla/websocket / creack/pty / modernc.org/sqlite
 - **SPA**: React 19 / Vite 8 / Zustand 5 / Tailwind 4 / Vitest / Phosphor Icons / xterm.js 6
+- **Electron**: electron-vite / electron-builder / contextBridge IPC
+
+## 打包與更新
+
+- **Electron 打包**：`pnpm run electron:build` → `dist/mac/`（x64）+ `dist/mac-arm64/`（ARM）
+- **SPA 更新**：`.app` 啟動時偵測 Mini dev server，可達則 `loadURL`（HMR 即時），不可達則 fallback 到 bundled renderer
+- **Electron 更新**：daemon `/api/dev/update/check` + `/api/dev/update/download`，Settings → Development 頁面操作（需 `TBOX_DEV_UPDATE=1`）
+- **跨機開發**：Mini（100.64.0.2）編譯，Air 執行 `.app`，SPA 改動即時生效，Electron 改動透過 dev update 機制
 
 ## 開發流程
 
