@@ -115,19 +115,19 @@ export function DevEnvironmentSection() {
       </div>
 
       {status !== 'idle' && (
-        <div className={`text-xs ${status === 'error' ? 'text-status-error' : status === 'update_available' ? 'text-status-warning' : 'text-text-muted'}`}>
+        <div className={`text-sm ${status === 'error' ? 'text-status-error' : status === 'update_available' ? 'text-text-primary' : 'text-text-secondary'}`}>
           {statusText[status]}
         </div>
       )}
 
       {updating && updateStep && (
-        <div className="text-xs text-accent font-mono">
+        <div className="text-sm text-accent font-mono">
           {stepLabels[updateStep] ?? updateStep}
         </div>
       )}
 
       {updateError && (
-        <div className="text-xs text-status-error font-mono">
+        <div className="text-sm text-status-error">
           Error: {updateError}
         </div>
       )}
