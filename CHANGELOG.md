@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.21] - 2026-03-27
+
+Dev auto-update system（PR #77）
+
+### 新增
+
+- **Daemon dev module** — `/api/dev/update/check` + `/api/dev/update/download` 端點，`[dev] update = true` config 控制
+- **Build hash 注入** — `__APP_VERSION__`、`__ELECTRON_HASH__`、`__SPA_HASH__` 透過 Vite define 編譯時注入
+- **Electron updater** — 下載 tar.gz、解壓、備份 + rollback、替換 out/、重啟
+- **Settings「Development」section** — 版本資訊 + 檢查更新 / 更新 App / 重新載入 SPA
+- **啟動時背景檢查** — main process 啟動後靜默查詢 daemon 有無新版
+
+### 修正
+
+- `devUpdateEnabled` 改由 `TBOX_DEV_UPDATE` 環境變數控制（preload 條件性暴露 IPC）
+- 更新流程加入 backup + rollback 防止 partial update 損壞
+
 ## [1.0.0-alpha.20] - 2026-03-26
 
 Electron shell — 桌面應用完整實作（PR #76）
