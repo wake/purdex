@@ -140,7 +140,7 @@ export function DevEnvironmentSection() {
         >
           {t('settings.dev.btn.check')}
         </button>
-        {hasElectronUpdate && (
+        {(hasElectronUpdate || hasSPAUpdate) && (
           <button
             onClick={handleUpdate}
             disabled={updating}
