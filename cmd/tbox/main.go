@@ -29,7 +29,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: tbox <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, relay, hook\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, relay, hook, setup\n")
 		os.Exit(1)
 	}
 
@@ -40,6 +40,8 @@ func main() {
 		runRelay(os.Args[2:])
 	case "hook":
 		runHook(os.Args[2:])
+	case "setup":
+		runSetup(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
