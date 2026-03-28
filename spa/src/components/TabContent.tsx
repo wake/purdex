@@ -25,7 +25,7 @@ export function TabContent({ activeTab, allTabs }: Props) {
   }
 
   return (
-    <div className="flex-1 relative">
+    <div className="flex-1 relative overflow-hidden">
       {aliveIds.map((id) => {
         const tab = tabMap.get(id)
         if (!tab) return null
@@ -33,8 +33,8 @@ export function TabContent({ activeTab, allTabs }: Props) {
         return (
           <div
             key={`${id}-${poolVersion}`}
-            className="absolute inset-0"
-            style={{ display: isActive ? 'block' : 'none' }}
+            className="absolute"
+            style={isActive ? { inset: 0 } : { top: 0, left: '-9999em', width: '100%', height: '100%' }}
           >
             <PaneLayoutRenderer layout={tab.layout} isActive={isActive} />
           </div>

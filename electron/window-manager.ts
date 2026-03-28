@@ -32,10 +32,7 @@ export class WindowManager {
     this.windows.set(id, win)
 
     // Load SPA: try dev server first, fallback to bundled renderer
-    const devServer = 'http://100.64.0.2:5174'
-    fetch(devServer, { signal: AbortSignal.timeout(500) })
-      .then(() => win.loadURL(devServer))
-      .catch(() => win.loadFile(join(__dirname, '../renderer/index.html')))
+    this.loadSPA(win)
 
     // If tab data provided, send after SPA signals ready
     if (opts?.tabJson) {
@@ -55,6 +52,19 @@ export class WindowManager {
     })
 
     return win
+  }
+
+  private static readonly DEV_SERVER = 'http://100.64.0.2:5174'
+
+  loadSPA(win: BrowserWindow): void {
+    fetch(WindowManager.DEV_SERVER, { signal: AbortSignal.timeout(500) })
+      .then(() => win.loadURL(WindowManager.DEV_SERVER))
+      .catch(() => win.loadFile(join(__dirname, '../renderer/index.html')))
+  }
+
+  reloadSPA(webContents: Electron.WebContents): void {
+    const win = BrowserWindow.fromWebContents(webContents)
+    if (win && !win.isDestroyed()) this.loadSPA(win)
   }
 
   closeWindow(windowId: string): void {

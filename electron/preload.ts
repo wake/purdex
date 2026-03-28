@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // SPA ready signal
   signalReady: () => ipcRenderer.send('spa:ready'),
 
+  // SPA reload (re-detect dev server via main process)
+  reloadSPA: () => ipcRenderer.invoke('spa:reload'),
+
   // Keyboard Shortcuts
   onShortcut: (callback: (payload: { action: string }) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: { action: string }) =>

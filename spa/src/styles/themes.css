@@ -101,9 +101,9 @@
   --terminal-bg: #2e3440;
   --terminal-fg: #d8dee9;
   --terminal-cursor: #d8dee9;
-  --status-error: #bf616a33;
-  --status-warning: #ebcb8b33;
-  --status-success: #a3be8c33;
+  --status-error: #bf616a;
+  --status-warning: #ebcb8b;
+  --status-success: #a3be8c;
 }
 
 /* === Dracula === */
@@ -128,7 +128,7 @@
   --terminal-bg: #282a36;
   --terminal-fg: #f8f8f2;
   --terminal-cursor: #f8f8f2;
-  --status-error: #ff555533;
-  --status-warning: #f1fa8c33;
-  --status-success: #50fa7b33;
+  --status-error: #ff5555;
+  --status-warning: #f1fa8c;
+  --status-success: #50fa7b;
 }

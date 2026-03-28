@@ -51,6 +51,11 @@ function registerIpcHandlers(): void {
     return browserViewManager.getMetrics()
   })
 
+  // SPA Reload (re-detect dev server, not just location.reload)
+  ipcMain.handle('spa:reload', (event) => {
+    windowManager.reloadSPA(event.sender)
+  })
+
   // Dev Update
   ipcMain.handle('dev:app-info', () => getAppInfo())
   ipcMain.handle('dev:check-update', (_event, daemonUrl: string) => checkUpdate(daemonUrl))

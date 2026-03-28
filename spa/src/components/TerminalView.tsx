@@ -36,26 +36,18 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage 
     setDisconnected(false)
   }, [wsUrl])
 
-  // Re-show overlay + refit when becoming visible after being hidden
+  // Refit + focus when becoming visible after being hidden (keep-alive).
+  // With offscreen positioning (left: -9999em) the terminal kept correct
+  // dimensions the whole time, so no overlay or delay is needed.
   useEffect(() => {
     if (visible && !prevVisible.current) {
-      // Becoming visible — show overlay, refit, then fade out
-      setReady(false)
       requestAnimationFrame(() => {
         fitAddonRef.current?.fit()
-        // Explicitly send resize even if fit() didn't change dimensions,
-        // because tmux window may have been resized during stream mode
-        // and onResize won't fire when cols/rows stay the same.
         const term = termRef.current
         const conn = connRef.current
         if (term && conn) conn.resize(term.cols, term.rows)
-      })
-      const timer = setTimeout(() => {
-        setReady(true)
         termRef.current?.focus()
-      }, 500)
-      prevVisible.current = visible
-      return () => clearTimeout(timer)
+      })
     }
     prevVisible.current = visible
   }, [visible, termRef, fitAddonRef, connRef])

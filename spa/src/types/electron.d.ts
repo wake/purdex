@@ -41,6 +41,7 @@ interface Window {
     navigateBrowserView: (paneId: string, url: string) => Promise<void>
     onTabReceived: (callback: (tabJson: string, replace: boolean) => void) => () => void
     signalReady: () => void
+    reloadSPA: () => Promise<void>
 
     // Keyboard Shortcuts
     onShortcut: (callback: (payload: { action: string }) => void) => () => void

@@ -151,7 +151,7 @@ export function DevEnvironmentSection() {
         )}
         {hasSPAUpdate && !hasElectronUpdate && (
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => window.electronAPI?.reloadSPA() ?? window.location.reload()}
             className="px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover cursor-pointer"
           >
             {t('settings.dev.btn.reload_spa')}
