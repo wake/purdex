@@ -63,8 +63,11 @@ export const useAgentStore = create<AgentState>()(
         if (derived === 'clear') {
           // SessionEnd: remove session from all maps
           set((s) => {
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const { [session]: _e, ...restEvents } = s.events
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const { [session]: _s, ...restStatuses } = s.statuses
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const { [session]: _u, ...restUnread } = s.unread
             return { events: restEvents, statuses: restStatuses, unread: restUnread }
           })
@@ -87,6 +90,7 @@ export const useAgentStore = create<AgentState>()(
       },
 
       markRead: (session) => set((s) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { [session]: _, ...rest } = s.unread
         return { unread: rest }
       }),
