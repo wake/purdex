@@ -5,7 +5,7 @@ import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
 
 vi.mock('../lib/platform', () => ({
-  getPlatformCapabilities: vi.fn(() => ({ canTearOffTab: false, canMergeWindow: false, canBrowserPane: false, canSystemTray: false })),
+  getPlatformCapabilities: vi.fn(() => ({ canTearOffTab: false, canMergeWindow: false, canBrowserPane: false, canSystemTray: false, isElectron: false, devUpdateEnabled: false })),
 }))
 
 import { getPlatformCapabilities } from '../lib/platform'
@@ -138,19 +138,19 @@ describe('TabContextMenu', () => {
 
   // --- Tear-off section (Electron only) ---
   it('shows "Move to New Window" when caps.canTearOffTab is true', () => {
-    vi.mocked(getPlatformCapabilities).mockReturnValue({ canTearOffTab: true, canMergeWindow: false, canBrowserPane: false, canSystemTray: false })
+    vi.mocked(getPlatformCapabilities).mockReturnValue({ canTearOffTab: true, canMergeWindow: false, canBrowserPane: false, canSystemTray: false, isElectron: true, devUpdateEnabled: false })
     renderMenu()
     expect(screen.getByText('Move to New Window')).toBeInTheDocument()
   })
 
   it('does not show "Move to New Window" when no electronAPI (canTearOffTab false)', () => {
-    vi.mocked(getPlatformCapabilities).mockReturnValue({ canTearOffTab: false, canMergeWindow: false, canBrowserPane: false, canSystemTray: false })
+    vi.mocked(getPlatformCapabilities).mockReturnValue({ canTearOffTab: false, canMergeWindow: false, canBrowserPane: false, canSystemTray: false, isElectron: false, devUpdateEnabled: false })
     renderMenu()
     expect(screen.queryByText('Move to New Window')).not.toBeInTheDocument()
   })
 
   it('"Move to New Window" is disabled when tab is locked', () => {
-    vi.mocked(getPlatformCapabilities).mockReturnValue({ canTearOffTab: true, canMergeWindow: false, canBrowserPane: false, canSystemTray: false })
+    vi.mocked(getPlatformCapabilities).mockReturnValue({ canTearOffTab: true, canMergeWindow: false, canBrowserPane: false, canSystemTray: false, isElectron: true, devUpdateEnabled: false })
     renderMenu({ tab: makeSessionTab('terminal', { locked: true }) })
     const tearOffBtn = screen.getByText('Move to New Window').closest('button')!
     expect(tearOffBtn).toBeDisabled()
