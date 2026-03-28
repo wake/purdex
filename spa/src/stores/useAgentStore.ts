@@ -41,6 +41,13 @@ function deriveStatus(eventName: string): AgentStatus | 'clear' | null {
   }
 }
 
+/** Extract a display label from an agent hook event (centralises CC-specific field access). */
+export function getAgentLabel(event: AgentHookEvent | undefined): string | null {
+  if (!event) return null
+  const model = event.raw_event?.modelName as string | undefined
+  return model || 'Agent'
+}
+
 export const useAgentStore = create<AgentState>()(
   persist(
     (set, get) => ({

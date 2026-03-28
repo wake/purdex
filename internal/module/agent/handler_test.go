@@ -82,7 +82,7 @@ func TestHandleEvent_MissingTmuxSession(t *testing.T) {
 
 	m.handleEvent(w, req)
 
-	// Spec: empty tmux_session is still OK (returns 200)
+	// Spec: empty tmux_session is still OK (returns 200) but skips DB storage.
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
 	}
@@ -95,15 +95,12 @@ func TestHandleEvent_MissingTmuxSession(t *testing.T) {
 		t.Errorf("status field: want ok, got %s", resp["status"])
 	}
 
-	// Verify stored with empty key
+	// Verify NOT stored — empty tmux_session should be skipped.
 	ev, err := m.events.Get("")
 	if err != nil {
 		t.Fatalf("events.Get: %v", err)
 	}
-	if ev == nil {
-		t.Fatal("event not found in store for empty tmux_session")
-	}
-	if ev.EventName != "agent:lifecycle:stop" {
-		t.Errorf("event_name: want agent:lifecycle:stop, got %s", ev.EventName)
+	if ev != nil {
+		t.Error("event with empty tmux_session should not be stored in DB, but was found")
 	}
 }

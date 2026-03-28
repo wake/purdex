@@ -75,7 +75,7 @@ func TestMergeHooks_EmptyFile(t *testing.T) {
 		if hookObj["type"] != "command" {
 			t.Errorf("event %q: type = %v, want command", event, hookObj["type"])
 		}
-		expectedCmd := tboxPath + " hook " + event
+		expectedCmd := `"` + tboxPath + `" hook ` + event
 		if hookObj["command"] != expectedCmd {
 			t.Errorf("event %q: command = %v, want %q", event, hookObj["command"], expectedCmd)
 		}
@@ -181,11 +181,11 @@ func TestMergeHooks_PreservesExisting(t *testing.T) {
 		t.Errorf("first entry command = %q, want tsm-hook.sh", firstCmd)
 	}
 
-	// Second entry should be tbox
+	// Second entry should be tbox (quoted path)
 	second := stopEntries[1].(map[string]any)
 	secondHooks := second["hooks"].([]any)
 	secondCmd := secondHooks[0].(map[string]any)["command"].(string)
-	expectedCmd := tboxPath + " hook Stop"
+	expectedCmd := `"` + tboxPath + `" hook Stop`
 	if secondCmd != expectedCmd {
 		t.Errorf("second entry command = %q, want %q", secondCmd, expectedCmd)
 	}
@@ -272,5 +272,78 @@ func TestMergeHooks_Remove(t *testing.T) {
 		if len(arr) != 0 {
 			t.Errorf("event %q: got %d entries after remove, want 0", event, len(arr))
 		}
+	}
+}
+
+func TestEntryMatchesTbox_NoFalsePositive(t *testing.T) {
+	tboxPath := "/usr/local/bin/tbox"
+
+	// An entry from a different tool whose path merely contains tboxPath as a substring
+	otherEntry := map[string]any{
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": "/usr/local/bin/tbox-extra hook Stop",
+			},
+		},
+	}
+	if entryMatchesTbox(otherEntry, tboxPath) {
+		t.Error("entryMatchesTbox incorrectly matched a different tool with a similar path prefix")
+	}
+
+	// Quoted tbox entry (new format) should match
+	quotedEntry := map[string]any{
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": `"/usr/local/bin/tbox" hook Stop`,
+			},
+		},
+	}
+	if !entryMatchesTbox(quotedEntry, tboxPath) {
+		t.Error("entryMatchesTbox failed to match quoted tbox entry")
+	}
+
+	// Unquoted tbox entry (legacy format) should still match
+	unquotedEntry := map[string]any{
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": "/usr/local/bin/tbox hook Stop",
+			},
+		},
+	}
+	if !entryMatchesTbox(unquotedEntry, tboxPath) {
+		t.Error("entryMatchesTbox failed to match unquoted (legacy) tbox entry")
+	}
+}
+
+func TestMergeHooks_SpacePath(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	tboxPath := "/Users/my user/bin/tbox"
+
+	if err := mergeHooks(settingsPath, tboxPath, false); err != nil {
+		t.Fatalf("mergeHooks: %v", err)
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	hooks := settings["hooks"].(map[string]any)
+	arr := hooks["Stop"].([]any)
+	entry := arr[0].(map[string]any)
+	innerHooks := entry["hooks"].([]any)
+	cmd := innerHooks[0].(map[string]any)["command"].(string)
+	expectedCmd := `"/Users/my user/bin/tbox" hook Stop`
+	if cmd != expectedCmd {
+		t.Errorf("command = %q, want %q", cmd, expectedCmd)
 	}
 }

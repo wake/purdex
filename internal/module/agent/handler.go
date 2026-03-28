@@ -22,20 +22,22 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store latest event per tmux session.
-	if err := m.events.Set(req.TmuxSession, req.EventName, req.RawEvent); err != nil {
-		log.Printf("[agent] store event: %v", err)
-		http.Error(w, `{"error":"store failed"}`, http.StatusInternalServerError)
-		return
-	}
+	// Store event (skip if no tmux session — can't map to anything useful).
+	if req.TmuxSession != "" {
+		if err := m.events.Set(req.TmuxSession, req.EventName, req.RawEvent); err != nil {
+			log.Printf("[agent] store event: %v", err)
+			http.Error(w, `{"error":"store failed"}`, http.StatusInternalServerError)
+			return
+		}
 
-	// Broadcast to WS subscribers if we can resolve session code.
-	if m.core != nil {
-		code := m.resolveSessionCode(req.TmuxSession)
-		if code != "" {
-			ev := m.buildAgentEvent(req.TmuxSession, req.EventName, req.RawEvent)
-			payload, _ := json.Marshal(ev)
-			m.core.Events.Broadcast(code, "hook", string(payload))
+		// Broadcast to WS subscribers if we can resolve session code.
+		if m.core != nil {
+			code := m.resolveSessionCode(req.TmuxSession)
+			if code != "" {
+				ev := m.buildAgentEvent(req.TmuxSession, req.EventName, req.RawEvent)
+				payload, _ := json.Marshal(ev)
+				m.core.Events.Broadcast(code, "hook", string(payload))
+			}
 		}
 	}
 

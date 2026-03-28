@@ -114,12 +114,13 @@ func mergeHooks(path, tboxPath string, remove bool) error {
 }
 
 // makeTboxEntry creates a hook entry for the given event.
+// The tboxPath is quoted to handle paths containing spaces.
 func makeTboxEntry(tboxPath, event string) map[string]any {
 	return map[string]any{
 		"hooks": []any{
 			map[string]any{
 				"type":    "command",
-				"command": tboxPath + " hook " + event,
+				"command": fmt.Sprintf(`"%s" hook %s`, tboxPath, event),
 			},
 		},
 	}
@@ -159,7 +160,9 @@ func filterOutTbox(entries []any, tboxPath string) []any {
 	return result
 }
 
-// entryMatchesTbox checks if an entry's hooks[].command contains tboxPath.
+// entryMatchesTbox checks if an entry's hooks[].command belongs to tboxPath.
+// It matches both quoted (`"path" hook Event`) and unquoted (`path hook Event`)
+// forms for backward compatibility with entries created before quoting was added.
 func entryMatchesTbox(entry any, tboxPath string) bool {
 	m, ok := entry.(map[string]any)
 	if !ok {
@@ -173,6 +176,7 @@ func entryMatchesTbox(entry any, tboxPath string) bool {
 	if !ok {
 		return false
 	}
+	quoted := `"` + tboxPath + `"`
 	for _, h := range arr {
 		hookObj, ok := h.(map[string]any)
 		if !ok {
@@ -182,7 +186,8 @@ func entryMatchesTbox(entry any, tboxPath string) bool {
 		if !ok {
 			continue
 		}
-		if strings.Contains(cmd, tboxPath) {
+		// Exact prefix match: unquoted "path hook ..." or quoted `"path" hook ...`
+		if strings.HasPrefix(cmd, tboxPath+" ") || strings.HasPrefix(cmd, quoted+" ") {
 			return true
 		}
 	}

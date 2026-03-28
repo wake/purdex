@@ -7,7 +7,34 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import type { AgentStatus, TabIndicatorStyle } from '../stores/useAgentStore'
 import { TabStatusDot } from './TabStatusDot'
+
+function renderTabIcon(
+  IconComponent: React.ComponentType<{ size: number; className?: string }> | undefined,
+  agentStatus: AgentStatus | undefined,
+  tabIndicatorStyle: TabIndicatorStyle,
+  isActive: boolean,
+  iconSize: number,
+) {
+  if (tabIndicatorStyle === 'replace' && agentStatus) {
+    return <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
+  }
+  if (tabIndicatorStyle === 'inline') {
+    return (
+      <>
+        {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
+        <TabStatusDot status={agentStatus} style="inline" isActive={isActive} />
+      </>
+    )
+  }
+  return (
+    <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
+      {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
+      <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
+    </span>
+  )
+}
 
 interface Props {
   tab: Tab
@@ -83,19 +110,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         }`}
         title={label}
       >
-        {tabIndicatorStyle === 'replace' && agentStatus ? (
-          <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
-        ) : tabIndicatorStyle === 'inline' ? (
-          <>
-            {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
-            <TabStatusDot status={agentStatus} style="inline" isActive={isActive} />
-          </>
-        ) : (
-          <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
-            {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
-            <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
-          </span>
-        )}
+        {renderTabIcon(IconComponent, agentStatus, tabIndicatorStyle, isActive, 14)}
         {tab.locked && <Lock size={10} className="absolute bottom-0.5 right-0.5" />}
         {!isActive && isUnread && (
           <span className="absolute top-0.5 right-1 w-[5px] h-[5px] rounded-full"
@@ -131,19 +146,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
       }`}
     >
-      {tabIndicatorStyle === 'replace' && agentStatus ? (
-        <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
-      ) : tabIndicatorStyle === 'inline' ? (
-        <>
-          {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
-          <TabStatusDot status={agentStatus} style="inline" isActive={isActive} />
-        </>
-      ) : (
-        <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
-          {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
-          <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
-        </span>
-      )}
+      {renderTabIcon(IconComponent, agentStatus, tabIndicatorStyle, isActive, 14)}
       <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
       {tab.locked && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
       {!isActive && isUnread && (
