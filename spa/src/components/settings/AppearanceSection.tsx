@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { DownloadSimple, Upload, Trash, PaintBrush, Translate } from '@phosphor-icons/react'
 import { SettingItem } from './SettingItem'
+import { useAgentStore } from '../../stores/useAgentStore'
+import type { TabIndicatorStyle } from '../../stores/useAgentStore'
 import { getAllThemes } from '../../lib/theme-registry'
 import type { ThemeDefinition } from '../../lib/theme-registry'
 import { useThemeStore } from '../../stores/useThemeStore'
@@ -49,6 +51,8 @@ export function AppearanceSection() {
   const [showImportModal, setShowImportModal] = useState(false)
   const [showLocaleEditor, setShowLocaleEditor] = useState(false)
   const [showLocaleImport, setShowLocaleImport] = useState(false)
+  const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
+  const setTabIndicatorStyle = useAgentStore((s) => s.setTabIndicatorStyle)
 
   const allThemes = getAllThemes()
   const presetThemes = allThemes.filter((th) => th.builtin)
@@ -222,6 +226,20 @@ export function AppearanceSection() {
             {t('common.import')}
           </button>
         </div>
+      </SettingItem>
+
+      {/* Tab indicator style */}
+      <SettingItem label={t('settings.appearance.tab_indicator.label')} description={t('settings.appearance.tab_indicator.desc')}>
+        <select
+          aria-label={t('settings.appearance.tab_indicator.aria')}
+          value={tabIndicatorStyle}
+          onChange={(e) => setTabIndicatorStyle(e.target.value as TabIndicatorStyle)}
+          className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-40 hover:border-text-muted focus:border-border-active focus:outline-none"
+        >
+          <option value="overlay">{t('settings.appearance.tab_indicator.overlay')}</option>
+          <option value="replace">{t('settings.appearance.tab_indicator.replace')}</option>
+          <option value="inline">{t('settings.appearance.tab_indicator.inline')}</option>
+        </select>
       </SettingItem>
 
       {showEditor && (

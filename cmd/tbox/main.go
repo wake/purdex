@@ -16,6 +16,7 @@ import (
 	"github.com/wake/tmux-box/internal/config"
 	"github.com/wake/tmux-box/internal/core"
 	"github.com/wake/tmux-box/internal/middleware"
+	"github.com/wake/tmux-box/internal/module/agent"
 	"github.com/wake/tmux-box/internal/module/cc"
 	"github.com/wake/tmux-box/internal/module/dev"
 	"github.com/wake/tmux-box/internal/module/session"
@@ -28,7 +29,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: tbox <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, relay\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, relay, hook, setup\n")
 		os.Exit(1)
 	}
 
@@ -37,6 +38,10 @@ func main() {
 		runServe(os.Args[2:])
 	case "relay":
 		runRelay(os.Args[2:])
+	case "hook":
+		runHook(os.Args[2:])
+	case "setup":
+		runSetup(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -73,6 +78,13 @@ func runServe(args []string) {
 	}
 	defer meta.Close()
 
+	// 2b. Open AgentEventStore
+	agentEvents, err := store.OpenAgentEvent(filepath.Join(cfg.DataDir, "agent_events.db"))
+	if err != nil {
+		log.Fatalf("agent event store: %v", err)
+	}
+	defer agentEvents.Close()
+
 	// 3. Create tmux executor
 	tx := tmux.NewRealExecutor()
 
@@ -93,6 +105,7 @@ func runServe(args []string) {
 	c.AddModule(session.NewSessionModule(meta))
 	c.AddModule(cc.New())
 	c.AddModule(stream.New())
+	c.AddModule(agent.New(agentEvents))
 	if c.Cfg.Dev.Update {
 		wd, _ := os.Getwd()
 		c.AddModule(dev.New(wd))
@@ -112,7 +125,7 @@ func runServe(args []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 8. Start modules (session resets stale modes, cc starts poller, stream registers snapshot)
+	// 8. Start modules (session resets stale modes, cc starts poller, agent registers snapshot)
 	if err := c.StartModules(ctx); err != nil {
 		log.Fatalf("core start: %v", err)
 	}

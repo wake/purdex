@@ -5,7 +5,6 @@ import type { StreamConnection } from '../lib/stream-ws'
 
 const emptyState = {
   sessions: {},
-  sessionStatus: {},
   relayStatus: {},
   handoffProgress: {},
 }

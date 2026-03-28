@@ -14,3 +14,13 @@ body {
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
+
+/* Breathe animation for agent status dots */
+@keyframes breathe {
+  0%, 100% { background-color: var(--breathe-color); }
+  50% { background-color: var(--breathe-bg); }
+}
+
+@utility animate-breathe {
+  animation: breathe 2s ease-in-out infinite;
+}

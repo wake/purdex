@@ -5,7 +5,6 @@ import type { StreamMessage, ControlRequest, StreamConnection } from '../lib/str
 
 const emptyState = {
   sessions: {},
-  sessionStatus: {},
   relayStatus: {},
   handoffProgress: {},
 }
@@ -118,17 +117,4 @@ describe('useStreamStore (per-session)', () => {
     expect(useStreamStore.getState().relayStatus['sess-b']).toBe(false)
   })
 
-  it('sessionStatus persists across clearSession', () => {
-    const { setSessionStatus, clearSession } = useStreamStore.getState()
-    setSessionStatus('sess-a', 'cc-idle')
-    clearSession('sess-a')
-    expect(useStreamStore.getState().sessionStatus['sess-a']).toBe('cc-idle')
-  })
-
-  it('sessionStatus accumulates by key', () => {
-    const { setSessionStatus } = useStreamStore.getState()
-    setSessionStatus('dev', 'cc-running')
-    setSessionStatus('prod', 'cc-idle')
-    expect(useStreamStore.getState().sessionStatus).toEqual({ dev: 'cc-running', prod: 'cc-idle' })
-  })
 })

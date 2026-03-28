@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
+import { useAgentStore } from '../stores/useAgentStore'
 import { createTab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import type { Tab } from '../types/tab'
@@ -40,7 +41,16 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
       setActiveWorkspace(ws.id)
       setWorkspaceActiveTab(ws.id, tabId)
     }
-  }, [setActiveTab, findWorkspaceByTab, setActiveWorkspace, setWorkspaceActiveTab])
+
+    // Clear unread badge when user focuses a session tab
+    const tab = tabs[tabId]
+    if (tab) {
+      const primary = getPrimaryPane(tab.layout)
+      if (primary.content.kind === 'session') {
+        useAgentStore.getState().setFocusedSession(primary.content.sessionCode)
+      }
+    }
+  }, [tabs, setActiveTab, findWorkspaceByTab, setActiveWorkspace, setWorkspaceActiveTab])
 
   const handleCloseTab = useCallback((tabId: string) => {
     const tab = tabs[tabId]

@@ -1,8 +1,8 @@
 // spa/src/components/SessionPanel.tsx
 import { useSessionStore } from '../stores/useSessionStore'
-import { useStreamStore } from '../stores/useStreamStore'
+import { useAgentStore } from '../stores/useAgentStore'
 import { Terminal, Lightning, CircleDashed, GearSix } from '@phosphor-icons/react'
-import SessionStatusBadge, { type SessionStatus } from './SessionStatusBadge'
+import SessionStatusBadge from './SessionStatusBadge'
 import { useI18nStore } from '../stores/useI18nStore'
 
 function SessionIcon({ mode, code }: { mode: string; code: string }) {
@@ -11,25 +11,6 @@ function SessionIcon({ mode, code }: { mode: string; code: string }) {
     case 'stream': return <Lightning {...props} weight="fill" className="text-blue-400" />
     case 'jsonl': return <CircleDashed {...props} className="text-yellow-400" />
     default: return <Terminal {...props} className="text-text-secondary" />
-  }
-}
-
-function deriveStatus(mode: string): SessionStatus {
-  switch (mode) {
-    case 'stream': return 'cc-running'
-    case 'jsonl': return 'cc-running'
-    default: return 'not-in-cc'
-  }
-}
-
-function mapStatus(raw: string): SessionStatus {
-  switch (raw) {
-    case 'cc-idle': return 'cc-idle'
-    case 'cc-running': return 'cc-running'
-    case 'cc-waiting': return 'cc-waiting'
-    case 'cc-unread': return 'cc-unread'
-    case 'not-in-cc': return 'not-in-cc'
-    default: return 'normal'
   }
 }
 
@@ -42,7 +23,7 @@ interface Props {
 export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSessionCode }: Props) {
   const t = useI18nStore((s) => s.t)
   const { sessions, activeId, setActive } = useSessionStore()
-  const sessionStatus = useStreamStore((s) => s.sessionStatus)
+  const agentStatuses = useAgentStore((s) => s.statuses)
 
   function handleClick(code: string) {
     setActive(code)
@@ -59,9 +40,7 @@ export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSe
         <div className="space-y-1">
           {sessions.length === 0 && <p className="text-sm text-text-muted">{t('session.empty')}</p>}
           {sessions.map((s) => {
-            const status = sessionStatus[s.code]
-              ? mapStatus(sessionStatus[s.code])
-              : deriveStatus(s.mode)
+            const status = agentStatuses[s.code]
             return (
               <button
                 key={s.code}
@@ -71,8 +50,8 @@ export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSe
                 }`}
               >
                 <SessionIcon mode={s.mode} code={s.code} />
-                <SessionStatusBadge status={status} />
                 <span className="flex-1 truncate">{s.name}</span>
+                {status && <SessionStatusBadge status={status} />}
                 <span className="text-xs text-text-muted">{s.mode}</span>
               </button>
             )

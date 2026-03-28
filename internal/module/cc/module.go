@@ -9,19 +9,21 @@ import (
 	"github.com/wake/tmux-box/internal/module/session"
 )
 
+// NOTE: The CC status detection poller was removed in favour of the agent hook
+// system (internal/module/agent). Status is now pushed by tbox hook commands
+// rather than polled. The cc module still provides detector, operator, and
+// history services for use by other modules.
+
 // CCModule groups Claude Code-related functionality: detection, history, and operations.
 type CCModule struct {
-	core          *core.Core
-	detector      *detect.Detector
-	sessions      session.SessionProvider
-	resetPollerCh chan struct{} // signals poller to rebuild ticker with new interval
+	core     *core.Core
+	detector *detect.Detector
+	sessions session.SessionProvider
 }
 
 // New creates a new CCModule.
 func New() *CCModule {
-	return &CCModule{
-		resetPollerCh: make(chan struct{}, 1),
-	}
+	return &CCModule{}
 }
 
 func (m *CCModule) Name() string          { return "cc" }
@@ -41,17 +43,12 @@ func (m *CCModule) Init(c *core.Core) error {
 	// Register CCOperator
 	c.Registry.Register(OperatorKey, CCOperator(m))
 
-	// Listen for config changes to update detector commands and poller interval
+	// Listen for config changes to update detector commands
 	c.OnConfigChange(func() {
 		c.CfgMu.RLock()
 		cmds := c.Cfg.Detect.CCCommands
 		c.CfgMu.RUnlock()
 		m.detector.UpdateCommands(cmds)
-		// Signal poller to rebuild ticker with new interval
-		select {
-		case m.resetPollerCh <- struct{}{}:
-		default: // already signalled
-		}
 	})
 
 	return nil
@@ -61,9 +58,7 @@ func (m *CCModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{code}/history", m.handleHistory)
 }
 
-func (m *CCModule) Start(ctx context.Context) error {
-	m.startPoller(ctx)
-	m.core.Events.OnSubscribe(m.sendStatusSnapshot)
+func (m *CCModule) Start(_ context.Context) error {
 	return nil
 }
 

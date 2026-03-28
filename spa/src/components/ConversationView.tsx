@@ -1,6 +1,7 @@
 // spa/src/components/ConversationView.tsx
 import { useRef, useCallback, useState, useEffect } from 'react'
 import { useStreamStore } from '../stores/useStreamStore'
+import { useAgentStore } from '../stores/useAgentStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import {
   type StreamMessage,
@@ -44,7 +45,7 @@ export default function ConversationView({ sessionCode, onHandoff, onHandoffToTe
   const conn = useStreamStore((s) => s.sessions[sessionCode]?.conn ?? null)
   const relayConnected = useStreamStore((s) => s.relayStatus[sessionCode] ?? false)
   const handoffProgress = useStreamStore((s) => s.handoffProgress[sessionCode] ?? '')
-  const sessionStatus = useStreamStore((s) => s.sessionStatus[sessionCode])
+  const agentStatus = useAgentStore((s) => s.statuses[sessionCode])
 
   // ThinkingIndicator: visible when streaming and no assistant messages yet
   const hasAssistantMessage = messages.some((m) => m.type === 'assistant')
@@ -184,7 +185,7 @@ export default function ConversationView({ sessionCode, onHandoff, onHandoffToTe
         <HandoffButton
           inProgress={handoffProgress !== ''}
           progress={handoffProgress}
-          sessionStatus={sessionStatus}
+          agentStatus={agentStatus}
           onHandoff={handleHandoff}
         />
       </div>

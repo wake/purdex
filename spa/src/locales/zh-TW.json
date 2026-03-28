@@ -41,6 +41,12 @@
   "settings.appearance.locale_customize.desc": "以目前語系為基礎建立自訂語系",
   "settings.appearance.locale_customize.button": "自訂",
   "settings.appearance.locale_customize.import": "匯入語系",
+  "settings.appearance.tab_indicator.label": "分頁指示器樣式",
+  "settings.appearance.tab_indicator.desc": "Agent 狀態在分頁上的顯示方式",
+  "settings.appearance.tab_indicator.aria": "分頁指示器樣式",
+  "settings.appearance.tab_indicator.overlay": "覆蓋",
+  "settings.appearance.tab_indicator.replace": "取代圖示",
+  "settings.appearance.tab_indicator.inline": "內嵌",
 
   "settings.terminal.title": "終端機",
   "settings.terminal.desc": "終端機渲染與連線設定",
