@@ -1,23 +1,21 @@
 // spa/src/components/SessionStatusBadge.tsx
+import type { AgentStatus } from '../stores/useAgentStore'
 
-export type SessionStatus = 'normal' | 'not-in-cc' | 'cc-idle' | 'cc-running' | 'cc-waiting' | 'cc-unread'
-
-const STATUS_COLORS: Record<SessionStatus, string> = {
-  'normal': 'bg-border-default',
-  'not-in-cc': 'bg-border-default',
-  'cc-idle': 'bg-emerald-700',
-  'cc-running': 'bg-green-400',
-  'cc-waiting': 'bg-yellow-400',
-  'cc-unread': 'bg-blue-400',
+const STATUS_COLORS: Record<AgentStatus, string> = {
+  running: 'bg-green-400',
+  waiting: 'bg-yellow-400',
+  idle: 'bg-gray-500',
 }
 
 interface Props {
-  status: SessionStatus
+  status: AgentStatus | undefined
 }
 
 export default function SessionStatusBadge({ status }: Props) {
+  if (!status) return null
   return (
-    <span data-testid="status-badge"
+    <span
+      data-testid="status-badge"
       className={`inline-block w-2 h-2 rounded-full ${STATUS_COLORS[status] || 'bg-border-default'}`}
       title={status}
     />

@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, cleanup, act } from '@testing-library/react'
 import ConversationView from './ConversationView'
 import { useStreamStore } from '../stores/useStreamStore'
+import { useAgentStore } from '../stores/useAgentStore'
 import type { StreamMessage } from '../lib/stream-ws'
 
 // No WS mock needed — ConversationView no longer manages WS connections
@@ -11,7 +12,6 @@ const SESSION = 'test-session'
 
 const emptyState = {
   sessions: {},
-  sessionStatus: {},
   relayStatus: {},
   handoffProgress: {},
 }
@@ -32,7 +32,7 @@ describe('ConversationView', () => {
   })
 
   it('shows HandoffButton when relay is not connected', () => {
-    useStreamStore.getState().setSessionStatus(SESSION, 'cc-idle')
+    useAgentStore.setState({ statuses: { [SESSION]: 'idle' } })
     render(<ConversationView sessionCode={SESSION} />)
     expect(screen.getByText('Handoff')).toBeInTheDocument()
   })

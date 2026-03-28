@@ -1,22 +1,22 @@
 // spa/src/components/HandoffButton.tsx
 import { Terminal } from '@phosphor-icons/react'
-import type { SessionStatus } from './SessionStatusBadge'
+import type { AgentStatus } from '../stores/useAgentStore'
 import { useI18nStore } from '../stores/useI18nStore'
 
 interface Props {
   inProgress: boolean
   progress?: string
-  sessionStatus?: SessionStatus
+  agentStatus?: AgentStatus
   onHandoff: () => void
 }
 
-function isCCRunning(status?: SessionStatus): boolean {
-  return status === 'cc-idle' || status === 'cc-running' || status === 'cc-waiting'
+function isAgentActive(status?: AgentStatus): boolean {
+  return status === 'idle' || status === 'running' || status === 'waiting'
 }
 
-export default function HandoffButton({ inProgress, progress = '', sessionStatus, onHandoff }: Props) {
+export default function HandoffButton({ inProgress, progress = '', agentStatus, onHandoff }: Props) {
   const t = useI18nStore((s) => s.t)
-  const ccAvailable = isCCRunning(sessionStatus)
+  const ccAvailable = isAgentActive(agentStatus)
   const disabled = inProgress || !ccAvailable
 
   function progressLabel(p: string): string {

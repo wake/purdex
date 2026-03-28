@@ -4,6 +4,7 @@ import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
+import { useAgentStore } from '../stores/useAgentStore'
 import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
 
@@ -24,6 +25,13 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
 
   const sessions = useSessionStore((s) => s.sessions)
   const defaultHost = useHostStore((s) => s.defaultHost)
+
+  // Read agent event for the active session (hooks must be called unconditionally)
+  const sessionCode = activeTab?.layout
+    ? getPrimaryPane(activeTab.layout).content
+    : null
+  const agentSessionCode = sessionCode && 'sessionCode' in sessionCode ? sessionCode.sessionCode : null
+  const agentEvent = useAgentStore((s) => agentSessionCode ? s.events[agentSessionCode] : undefined)
 
   const closeMenu = useCallback(() => setMenuOpen(false), [])
   useClickOutside(menuRef, closeMenu)
@@ -63,6 +71,11 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
       <span className={status === 'connected' ? 'text-green-500' : 'text-text-muted'}>
         {status}
       </span>
+      {agentEvent && (
+        <span className="text-text-muted" data-testid="agent-label">
+          {(agentEvent.raw_event?.modelName as string) || 'Agent'}
+        </span>
+      )}
       <span className="ml-auto flex items-center">
         <div className="relative" ref={menuRef}>
           <button

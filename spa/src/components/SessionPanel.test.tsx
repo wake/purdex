@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import SessionPanel from './SessionPanel'
 import { useSessionStore } from '../stores/useSessionStore'
-import { useStreamStore } from '../stores/useStreamStore'
+import { useAgentStore } from '../stores/useAgentStore'
 
 vi.mock('../lib/api', () => ({
   listSessions: vi.fn().mockResolvedValue([]),
@@ -12,7 +12,7 @@ vi.mock('../lib/api', () => ({
 beforeEach(() => {
   cleanup()
   useSessionStore.setState({ sessions: [], activeId: null })
-  useStreamStore.setState({ sessions: {}, sessionStatus: {}, relayStatus: {}, handoffProgress: {} })
+  useAgentStore.setState({ statuses: {}, events: {}, unread: {}, focusedSession: null })
 })
 
 describe('SessionPanel', () => {
@@ -72,29 +72,28 @@ describe('SessionPanel', () => {
     expect(screen.getByTestId('session-icon-abc001')).toBeInTheDocument()
   })
 
-  it('uses sessionStatus keyed by code (not name)', () => {
+  it('shows agent status badge when agent is active', () => {
     useSessionStore.setState({
       sessions: [
         { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
       ],
       activeId: null,
     })
-    // Set status keyed by code
-    useStreamStore.getState().setSessionStatus('abc001', 'cc-idle')
+    // Set agent status
+    useAgentStore.setState({ statuses: { abc001: 'idle' } })
     render(<SessionPanel />)
-    // Should show cc-idle badge (from code-keyed status), not 'not-in-cc' (from mode fallback)
-    expect(screen.getByTestId('status-badge')).toHaveAttribute('title', 'cc-idle')
+    expect(screen.getByTestId('status-badge')).toHaveAttribute('title', 'idle')
   })
 
-  it('falls back to mode-derived status when sessionStatus has no entry', () => {
+  it('shows no badge when no agent status exists for session', () => {
     useSessionStore.setState({
       sessions: [
         { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
       ],
       activeId: null,
     })
-    // No sessionStatus set — should derive from mode
+    // No agent status set
     render(<SessionPanel />)
-    expect(screen.getByTestId('status-badge')).toHaveAttribute('title', 'cc-running')
+    expect(screen.queryByTestId('status-badge')).toBeNull()
   })
 })
