@@ -125,7 +125,7 @@ func runServe(args []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 8. Start modules (session resets stale modes, cc starts poller, stream registers snapshot)
+	// 8. Start modules (session resets stale modes, cc starts poller, agent registers snapshot)
 	if err := c.StartModules(ctx); err != nil {
 		log.Fatalf("core start: %v", err)
 	}

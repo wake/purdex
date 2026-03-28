@@ -33,14 +33,15 @@ func runHook(args []string) {
 	payload := buildHookPayload(tmuxSession, eventName, os.Stdin)
 
 	cfg, err := config.Load("")
-	var url string
+	var url, token string
 	if err != nil {
 		url = "http://127.0.0.1:7860/api/agent/event"
 	} else {
 		url = fmt.Sprintf("http://%s:%d/api/agent/event", cfg.Bind, cfg.Port)
+		token = cfg.Token
 	}
 
-	_ = postHookEvent(url, payload)
+	_ = postHookEvent(url, token, payload)
 }
 
 // queryTmuxSession runs `tmux display-message -p '#{session_name}'` and returns
@@ -68,14 +69,24 @@ func buildHookPayload(tmuxSession, eventName string, stdin io.Reader) hookPayloa
 }
 
 // postHookEvent POSTs the payload as JSON to the given URL with a 2-second timeout.
-func postHookEvent(url string, payload hookPayload) error {
+// If token is non-empty, it is sent as a Bearer Authorization header.
+func postHookEvent(url, token string, payload hookPayload) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal payload: %w", err)
 	}
 
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("post event: %w", err)
 	}

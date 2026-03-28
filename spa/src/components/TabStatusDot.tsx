@@ -37,7 +37,7 @@ export function TabStatusDot({ status, style, isActive }: Props) {
           position: 'absolute',
           top: 0,
           right: '-1px',
-          backgroundColor: isRunning ? undefined : color,
+          backgroundColor: color,
           boxShadow: `0 0 0 1.5px ${breatheBg}`,
           '--breathe-color': color,
           '--breathe-bg': breatheBg,
@@ -54,7 +54,7 @@ export function TabStatusDot({ status, style, isActive }: Props) {
         style={{
           width: '8px',
           height: '8px',
-          backgroundColor: isRunning ? undefined : color,
+          backgroundColor: color,
           '--breathe-color': color,
           '--breathe-bg': breatheBg,
         } as React.CSSProperties}
@@ -70,7 +70,7 @@ export function TabStatusDot({ status, style, isActive }: Props) {
       style={{
         width: '6px',
         height: '6px',
-        backgroundColor: isRunning ? undefined : color,
+        backgroundColor: color,
         '--breathe-color': color,
         '--breathe-bg': breatheBg,
       } as React.CSSProperties}

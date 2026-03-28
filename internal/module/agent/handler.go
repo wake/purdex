@@ -62,7 +62,7 @@ func (m *Module) resolveSessionCode(tmuxName string) string {
 	return ""
 }
 
-// buildAgentEvent creates a store.AgentEvent for JSON marshalling.
+// buildAgentEvent builds a JSON-serializable map matching AgentEvent fields.
 func (m *Module) buildAgentEvent(tmuxSession, eventName string, rawEvent json.RawMessage) map[string]any {
 	return map[string]any{
 		"tmux_session": tmuxSession,

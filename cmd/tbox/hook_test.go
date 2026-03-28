@@ -47,6 +47,7 @@ func TestBuildHookPayload_EmptyStdin(t *testing.T) {
 
 func TestPostHookEvent(t *testing.T) {
 	var received hookPayload
+	var receivedAuth string
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -55,6 +56,7 @@ func TestPostHookEvent(t *testing.T) {
 		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
 			t.Errorf("Content-Type = %q, want application/json", ct)
 		}
+		receivedAuth = r.Header.Get("Authorization")
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -73,7 +75,7 @@ func TestPostHookEvent(t *testing.T) {
 		RawEvent:    json.RawMessage(`{"foo":"bar"}`),
 	}
 
-	if err := postHookEvent(ts.URL+"/api/agent/event", p); err != nil {
+	if err := postHookEvent(ts.URL+"/api/agent/event", "my-secret", p); err != nil {
 		t.Fatalf("postHookEvent: %v", err)
 	}
 
@@ -86,6 +88,32 @@ func TestPostHookEvent(t *testing.T) {
 	if string(received.RawEvent) != `{"foo":"bar"}` {
 		t.Errorf("received RawEvent = %s, want %s", string(received.RawEvent), `{"foo":"bar"}`)
 	}
+	if receivedAuth != "Bearer my-secret" {
+		t.Errorf("Authorization = %q, want %q", receivedAuth, "Bearer my-secret")
+	}
+}
+
+func TestPostHookEvent_NoToken(t *testing.T) {
+	var receivedAuth string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	p := hookPayload{
+		TmuxSession: "x",
+		EventName:   "Stop",
+		RawEvent:    json.RawMessage(`{}`),
+	}
+
+	if err := postHookEvent(ts.URL+"/api/agent/event", "", p); err != nil {
+		t.Fatalf("postHookEvent: %v", err)
+	}
+	if receivedAuth != "" {
+		t.Errorf("Authorization = %q, want empty (no token)", receivedAuth)
+	}
 }
 
 func TestPostHookEvent_ServerDown(t *testing.T) {
@@ -96,7 +124,7 @@ func TestPostHookEvent_ServerDown(t *testing.T) {
 	}
 
 	// Use a port that is almost certainly not listening
-	err := postHookEvent("http://127.0.0.1:1/api/agent/event", p)
+	err := postHookEvent("http://127.0.0.1:1/api/agent/event", "", p)
 	if err == nil {
 		t.Fatal("expected error for unreachable server, got nil")
 	}
