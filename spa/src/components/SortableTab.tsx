@@ -47,7 +47,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const sessionCode = primaryContent.kind === 'session' ? primaryContent.sessionCode : undefined
   const agentStatus = useAgentStore((s) => sessionCode ? s.statuses[sessionCode] : undefined)
   const isUnread = useAgentStore((s) => sessionCode ? !!s.unread[sessionCode] : false)
-  // TODO: Task 9 replaces hardcoded 'overlay' with store-driven tabIndicatorStyle
+  const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
   const sessionLookup = { getByCode: (code: string) => sessions.find((s) => s.code === code) }
   const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
   const label = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
@@ -83,10 +83,19 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         }`}
         title={label}
       >
-        <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
-          {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
-          <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
-        </span>
+        {tabIndicatorStyle === 'replace' && agentStatus ? (
+          <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
+        ) : tabIndicatorStyle === 'inline' ? (
+          <>
+            {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
+            <TabStatusDot status={agentStatus} style="inline" isActive={isActive} />
+          </>
+        ) : (
+          <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
+            {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
+            <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
+          </span>
+        )}
         {tab.locked && <Lock size={10} className="absolute bottom-0.5 right-0.5" />}
         {!isActive && isUnread && (
           <span className="absolute top-0.5 right-1 w-[5px] h-[5px] rounded-full"
@@ -122,10 +131,19 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
       }`}
     >
-      <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
-        {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
-        <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
-      </span>
+      {tabIndicatorStyle === 'replace' && agentStatus ? (
+        <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
+      ) : tabIndicatorStyle === 'inline' ? (
+        <>
+          {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
+          <TabStatusDot status={agentStatus} style="inline" isActive={isActive} />
+        </>
+      ) : (
+        <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
+          {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
+          <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
+        </span>
+      )}
       <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
       {tab.locked && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
       {!isActive && isUnread && (

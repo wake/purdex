@@ -41,6 +41,12 @@
   "settings.appearance.locale_customize.desc": "Create a custom locale based on the current one",
   "settings.appearance.locale_customize.button": "Customize",
   "settings.appearance.locale_customize.import": "Import locale",
+  "settings.appearance.tab_indicator.label": "Tab Indicator Style",
+  "settings.appearance.tab_indicator.desc": "How agent status is shown on tabs",
+  "settings.appearance.tab_indicator.aria": "Tab Indicator Style",
+  "settings.appearance.tab_indicator.overlay": "Overlay",
+  "settings.appearance.tab_indicator.replace": "Replace Icon",
+  "settings.appearance.tab_indicator.inline": "Inline",
 
   "settings.terminal.title": "Terminal",
   "settings.terminal.desc": "Terminal rendering and connection settings",
