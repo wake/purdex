@@ -6,6 +6,8 @@ import { getPrimaryPane } from '../lib/pane-tree'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useI18nStore } from '../stores/useI18nStore'
+import { useAgentStore } from '../stores/useAgentStore'
+import { TabStatusDot } from './TabStatusDot'
 
 interface Props {
   tab: Tab
@@ -41,6 +43,11 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const t = useI18nStore((s) => s.t)
   const sessions = useSessionStore((s) => s.sessions)
   const workspaces = useWorkspaceStore((s) => s.workspaces)
+
+  const sessionCode = primaryContent.kind === 'session' ? primaryContent.sessionCode : undefined
+  const agentStatus = useAgentStore((s) => sessionCode ? s.statuses[sessionCode] : undefined)
+  const isUnread = useAgentStore((s) => sessionCode ? !!s.unread[sessionCode] : false)
+  // TODO: Task 9 replaces hardcoded 'overlay' with store-driven tabIndicatorStyle
   const sessionLookup = { getByCode: (code: string) => sessions.find((s) => s.code === code) }
   const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
   const label = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
@@ -76,8 +83,15 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         }`}
         title={label}
       >
-        {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
+        <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
+          {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
+          <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
+        </span>
         {tab.locked && <Lock size={10} className="absolute bottom-0.5 right-0.5" />}
+        {!isActive && isUnread && (
+          <span className="absolute top-0.5 right-1 w-[5px] h-[5px] rounded-full"
+            style={{ backgroundColor: '#b91c1c' }} />
+        )}
       </button>
     )
   }
@@ -108,9 +122,16 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
       }`}
     >
-      {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
+      <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
+        {IconComponent && <IconComponent size={14} className="flex-shrink-0" />}
+        <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
+      </span>
       <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
       {tab.locked && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
+      {!isActive && isUnread && (
+        <span className="absolute top-0.5 right-1 w-[5px] h-[5px] rounded-full"
+          style={{ backgroundColor: '#b91c1c' }} />
+      )}
       {showClose && (
         <span className="absolute right-0 top-0 bottom-0 flex items-center">
           {/* Gradient fade -- always visible */}
