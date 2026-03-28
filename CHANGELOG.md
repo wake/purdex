@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.0.0-alpha.24] - 2026-03-29
+
+Agent Hook 狀態偵測（PR #91）
+
+### 新增
+
+- **`tbox hook` 子命令** — CC hook 觸發時讀取 stdin + tmux session name，POST 到 daemon `/api/agent/event`
+- **`tbox setup` 子命令** — 自動配置 `~/.claude/settings.json` hook entries（冪等、支援 `--remove`）
+- **Agent module（daemon）** — 純 relay：存 raw event + WS broadcast，不解析 payload
+- **AgentEventStore** — 獨立 SQLite 儲存每 session 最近一筆 hook event，新 WS subscriber 自動 snapshot
+- **useAgentStore（SPA）** — hook event → running/waiting/idle 狀態機 + unread 管理
+- **TabStatusDot** — 三種 tab 指示器樣式（overlay / replace / inline），Settings 可切換，預設 overlay
+- **呼吸燈動畫** — running 狀態 `background-color` fade 到 tab 底色
+- **未讀紅點** — 5px 暗紅圓點在 inactive tab 右上角
+- **Session Panel 燈號** — 狀態 dot 在 code 前方（running/waiting/idle）
+- **StatusBar agent 資訊** — 有 agent 時顯示名稱（`getAgentLabel` 集中化）
+
+### 變更
+
+- **移除 CC status poller** — 完全移除 `poller.go`，CC 狀態改為 hook 驅動
+- **WS "hook" 事件取代 "status"** — `SessionEvent.type` 不再包含 `'status'`
+- **SessionStatusBadge** — 改用 `AgentStatus`（running/waiting/idle），非 agent session 不顯示 badge
+- **HandoffButton** — `sessionStatus` prop 改為 `agentStatus`，語意等價
+- **useStreamStore** — 移除 `sessionStatus` 欄位，agent 狀態獨立管理
+
+### 修正
+
+- Hook POST 加入 `Authorization: Bearer` header（token 環境下不再 401）
+- TabStatusDot running 加 fallback `backgroundColor`（CSS animation 不生效時仍可見）
+- `tbox setup` 路徑含空格時加引號、`entryMatchesTbox` 改用 `HasPrefix` 避免誤刪
+- 空 `tmux_session` 不存入 DB（避免 garbage row）
+- SortableTab 抽出 `renderTabIcon` 消除 pinned/normal 重複邏輯
+
 ## [1.0.0-alpha.23] - 2026-03-28
 
 Dev update 進度回饋（PR #85）
