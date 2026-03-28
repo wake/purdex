@@ -39,8 +39,11 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage 
   // Refit + focus when becoming visible after being hidden (keep-alive).
   // With offscreen positioning (left: -9999em) the terminal kept correct
   // dimensions the whole time, so no overlay or delay is needed.
+  // Force ready=true to suppress any lingering connecting overlay —
+  // the terminal was alive and connected the whole time.
   useEffect(() => {
     if (visible && !prevVisible.current) {
+      setReady(true)
       requestAnimationFrame(() => {
         fitAddonRef.current?.fit()
         const term = termRef.current
