@@ -16,6 +16,7 @@ import (
 	"github.com/wake/tmux-box/internal/config"
 	"github.com/wake/tmux-box/internal/core"
 	"github.com/wake/tmux-box/internal/middleware"
+	"github.com/wake/tmux-box/internal/module/agent"
 	"github.com/wake/tmux-box/internal/module/cc"
 	"github.com/wake/tmux-box/internal/module/dev"
 	"github.com/wake/tmux-box/internal/module/session"
@@ -73,6 +74,13 @@ func runServe(args []string) {
 	}
 	defer meta.Close()
 
+	// 2b. Open AgentEventStore
+	agentEvents, err := store.OpenAgentEvent(filepath.Join(cfg.DataDir, "agent_events.db"))
+	if err != nil {
+		log.Fatalf("agent event store: %v", err)
+	}
+	defer agentEvents.Close()
+
 	// 3. Create tmux executor
 	tx := tmux.NewRealExecutor()
 
@@ -93,6 +101,7 @@ func runServe(args []string) {
 	c.AddModule(session.NewSessionModule(meta))
 	c.AddModule(cc.New())
 	c.AddModule(stream.New())
+	c.AddModule(agent.New(agentEvents))
 	if c.Cfg.Dev.Update {
 		wd, _ := os.Getwd()
 		c.AddModule(dev.New(wd))
