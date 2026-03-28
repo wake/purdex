@@ -10,7 +10,6 @@ import type { StreamMessage } from '../lib/stream-ws'
 
 const emptyState = {
   sessions: {},
-  sessionStatus: {},
   relayStatus: {},
   handoffProgress: {},
 }
@@ -21,14 +20,6 @@ beforeEach(() => {
 })
 
 describe('session event handler logic', () => {
-  it('status event sets sessionStatus keyed by code', () => {
-    const code = 'abc001'
-    useStreamStore.getState().setSessionStatus(code, 'cc-idle')
-    expect(useStreamStore.getState().sessionStatus[code]).toBe('cc-idle')
-    // Should NOT be keyed by name
-    expect(useStreamStore.getState().sessionStatus['dev-server']).toBeUndefined()
-  })
-
   it('relay event sets relayStatus keyed by code', () => {
     const code = 'abc001'
     useStreamStore.getState().setRelayStatus(code, true)

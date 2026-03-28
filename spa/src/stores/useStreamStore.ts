@@ -2,7 +2,6 @@
 import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
 import type { StreamMessage, ControlRequest, StreamConnection } from '../lib/stream-ws'
-import type { SessionStatus } from '../components/SessionStatusBadge'
 
 export interface PerSessionState {
   messages: StreamMessage[]
@@ -29,7 +28,6 @@ interface StreamStore {
   sessions: Record<string, PerSessionState>
 
   // Global state (keyed by session code but not part of PerSessionState)
-  sessionStatus: Record<string, SessionStatus>
   relayStatus: Record<string, boolean>
   handoffProgress: Record<string, string>
 
@@ -47,7 +45,6 @@ interface StreamStore {
   // Global-keyed actions
   setHandoffProgress: (session: string, progress: string) => void
   setRelayStatus: (session: string, connected: boolean) => void
-  setSessionStatus: (session: string, status: SessionStatus) => void
 }
 
 function getOrCreate(sessions: Record<string, PerSessionState>, name: string): PerSessionState {
@@ -56,7 +53,6 @@ function getOrCreate(sessions: Record<string, PerSessionState>, name: string): P
 
 export const useStreamStore = create<StreamStore>()(subscribeWithSelector((set) => ({
   sessions: {},
-  sessionStatus: {},
   relayStatus: {},
   handoffProgress: {},
 
@@ -119,9 +115,5 @@ export const useStreamStore = create<StreamStore>()(subscribeWithSelector((set) 
 
   setRelayStatus: (session, connected) => set((s) => ({
     relayStatus: { ...s.relayStatus, [session]: connected },
-  })),
-
-  setSessionStatus: (session, status) => set((s) => ({
-    sessionStatus: { ...s.sessionStatus, [session]: status },
   })),
 })))
