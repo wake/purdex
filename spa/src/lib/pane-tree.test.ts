@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey } from './pane-tree'
+import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode } from './pane-tree'
 import type { PaneLayout, Pane } from '../types/tab'
 
 const paneA: Pane = { id: 'aaaaaa', content: { kind: 'session', sessionCode: 'abc123', mode: 'terminal' } }
@@ -79,5 +79,44 @@ describe('getLayoutKey', () => {
 
   it('returns split id for split', () => {
     expect(getLayoutKey(split)).toBe('ssssss')
+  })
+})
+
+describe('findTabBySessionCode', () => {
+  it('returns undefined when tabs is empty', () => {
+    expect(findTabBySessionCode({}, 'abc123')).toBeUndefined()
+  })
+
+  it('returns tabId when session code matches', () => {
+    const tabs = {
+      tab1: { layout: { type: 'leaf', pane: paneA } as PaneLayout },
+    }
+    expect(findTabBySessionCode(tabs, 'abc123')).toBe('tab1')
+  })
+
+  it('returns undefined when no session code matches', () => {
+    const tabs = {
+      tab1: { layout: { type: 'leaf', pane: paneA } as PaneLayout },
+    }
+    expect(findTabBySessionCode(tabs, 'zzz999')).toBeUndefined()
+  })
+
+  it('returns first matching tabId when multiple tabs have different sessions', () => {
+    const paneC: Pane = { id: 'cccccc', content: { kind: 'session', sessionCode: 'xyz789', mode: 'terminal' } }
+    const tabs = {
+      tab1: { layout: { type: 'leaf', pane: paneA } as PaneLayout },
+      tab2: { layout: { type: 'leaf', pane: paneC } as PaneLayout },
+    }
+    expect(findTabBySessionCode(tabs, 'xyz789')).toBe('tab2')
+  })
+
+  it('returns undefined for non-session pane kinds', () => {
+    const paneSettings: Pane = { id: 'dddddd', content: { kind: 'settings' } }
+    const paneDashboard: Pane = { id: 'eeeeee', content: { kind: 'dashboard' } }
+    const tabs = {
+      tab1: { layout: { type: 'leaf', pane: paneSettings } as PaneLayout },
+      tab2: { layout: { type: 'leaf', pane: paneDashboard } as PaneLayout },
+    }
+    expect(findTabBySessionCode(tabs, 'abc123')).toBeUndefined()
   })
 })
