@@ -28,15 +28,24 @@ interface AgentState {
   setHooksInstalled: (installed: boolean) => void
 }
 
-export function deriveStatus(eventName: string): AgentStatus | 'clear' | null {
+export function deriveStatus(eventName: string, rawEvent?: Record<string, unknown>): AgentStatus | 'clear' | null {
   switch (eventName) {
     case 'SessionStart':
+      // compact is background auto-compaction, not user activity
+      if (rawEvent?.source === 'compact') return null
+      return 'running'
     case 'UserPromptSubmit':
       return 'running'
-    case 'Notification':
+    case 'Notification': {
+      const nt = rawEvent?.notification_type
+      if (nt === 'permission_prompt' || nt === 'elicitation_dialog') return 'waiting'
+      // idle_prompt, auth_success, or unknown → don't change status
+      return null
+    }
     case 'PermissionRequest':
       return 'waiting'
     case 'Stop':
+    case 'StopFailure':
       return 'idle'
     case 'SessionEnd':
       return 'clear'
@@ -63,7 +72,7 @@ export const useAgentStore = create<AgentState>()(
       hooksInstalled: false,
 
       handleHookEvent: (session, event) => {
-        const derived = deriveStatus(event.event_name)
+        const derived = deriveStatus(event.event_name, event.raw_event)
 
         if (derived === 'clear') {
           // SessionEnd: remove session from all maps
