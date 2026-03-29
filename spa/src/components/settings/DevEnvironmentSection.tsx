@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostStore } from '../../stores/useHostStore'
 
-type UpdateStatus = 'idle' | 'checking' | 'up_to_date' | 'update_available' | 'error'
+type UpdateStatus = 'idle' | 'checking' | 'building' | 'up_to_date' | 'update_available' | 'error'
 
 interface AppInfo {
   version: string
@@ -14,6 +14,9 @@ interface RemoteInfo {
   version: string
   spaHash: string
   electronHash: string
+  source: { spaHash: string; electronHash: string }
+  building: boolean
+  buildError: string
 }
 
 export function DevEnvironmentSection() {
@@ -28,24 +31,67 @@ export function DevEnvironmentSection() {
   const [updateStep, setUpdateStep] = useState<string | null>(null)
   const [updateError, setUpdateError] = useState<string | null>(null)
 
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }, [])
+
+  useEffect(() => () => stopPolling(), [stopPolling])
+
   useEffect(() => {
     window.electronAPI?.getAppInfo().then(setAppInfo)
   }, [])
 
-  const checkUpdate = useCallback(async () => {
-    setStatus('checking')
-    try {
-      const remote = await window.electronAPI!.checkUpdate(daemonBase)
+  const processCheckResult = useCallback(
+    (remote: RemoteInfo) => {
       setRemoteInfo(remote)
+      if (remote.buildError) {
+        setUpdateError(remote.buildError)
+        setStatus('error')
+        return
+      }
       if (remote.electronHash !== appInfo?.electronHash || remote.spaHash !== appInfo?.spaHash) {
         setStatus('update_available')
       } else {
         setStatus('up_to_date')
       }
+    },
+    [appInfo],
+  )
+
+  const checkUpdate = useCallback(async () => {
+    setStatus('checking')
+    setUpdateError(null)
+    try {
+      const remote = await window.electronAPI!.checkUpdate(daemonBase)
+      if (remote.building) {
+        setStatus('building')
+        if (!pollRef.current) {
+          pollRef.current = setInterval(async () => {
+            try {
+              const r = await window.electronAPI!.checkUpdate(daemonBase)
+              if (!r.building) {
+                stopPolling()
+                processCheckResult(r)
+              }
+            } catch {
+              stopPolling()
+              setStatus('error')
+            }
+          }, 3000)
+        }
+      } else {
+        stopPolling()
+        processCheckResult(remote)
+      }
     } catch {
       setStatus('error')
     }
-  }, [daemonBase, appInfo])
+  }, [daemonBase, stopPolling, processCheckResult])
 
   useEffect(() => {
     if (appInfo) checkUpdate()
@@ -81,6 +127,7 @@ export function DevEnvironmentSection() {
   const statusText: Record<UpdateStatus, string> = {
     idle: '',
     checking: t('settings.dev.status.checking'),
+    building: t('settings.dev.status.building'),
     up_to_date: t('settings.dev.status.up_to_date'),
     update_available: t('settings.dev.status.update_available'),
     error: t('settings.dev.status.error'),
@@ -115,8 +162,8 @@ export function DevEnvironmentSection() {
       </div>
 
       {status !== 'idle' && (
-        <div className={`text-sm ${status === 'error' ? 'text-status-error' : status === 'update_available' ? 'text-status-warning' : 'text-text-secondary'}`}>
-          {statusText[status]}
+        <div className={`text-sm ${status === 'error' ? 'text-status-error' : status === 'building' ? 'text-accent' : status === 'update_available' ? 'text-status-warning' : 'text-text-secondary'}`}>
+          {status === 'error' && updateError ? updateError : statusText[status]}
         </div>
       )}
 
@@ -126,16 +173,10 @@ export function DevEnvironmentSection() {
         </div>
       )}
 
-      {updateError && (
-        <div className="text-sm text-status-error">
-          Error: {updateError}
-        </div>
-      )}
-
       <div className="flex gap-2">
         <button
           onClick={checkUpdate}
-          disabled={!appInfo || status === 'checking'}
+          disabled={!appInfo || status === 'checking' || status === 'building'}
           className="px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default"
         >
           {t('settings.dev.btn.check')}

@@ -58,7 +58,7 @@ interface Window {
 
     // Dev Update
     getAppInfo: () => Promise<ElectronAppInfo>
-    checkUpdate: (daemonUrl: string) => Promise<{ version: string; spaHash: string; electronHash: string }>
+    checkUpdate: (daemonUrl: string) => Promise<{ version: string; spaHash: string; electronHash: string; source: { spaHash: string; electronHash: string }; building: boolean; buildError: string }>
     applyUpdate: (daemonUrl: string) => Promise<ElectronUpdateResult>
     onUpdateProgress: (callback: (step: string) => void) => () => void
   }
