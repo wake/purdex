@@ -85,7 +85,7 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 		if !ok {
 			continue
 		}
-		enriched := m.buildAgentEvent(ev.TmuxSession, ev.EventName, ev.RawEvent, ev.AgentType)
+		enriched := m.buildAgentEvent(ev.TmuxSession, ev.EventName, ev.RawEvent, ev.AgentType, ev.BroadcastTs)
 		payload, _ := json.Marshal(enriched)
 		event := core.SessionEvent{Type: "hook", Session: code, Value: string(payload)}
 		data, _ := json.Marshal(event)

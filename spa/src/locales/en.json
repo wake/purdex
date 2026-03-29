@@ -262,5 +262,11 @@
   "error.locale.missing_name": "Missing \"name\" field",
   "error.locale.missing_translations": "Missing \"translations\" field",
   "error.locale.no_valid_keys": "No valid translation keys found",
-  "error.locale.values_must_be_strings": "All translation values must be strings"
+  "error.locale.values_must_be_strings": "All translation values must be strings",
+
+  "notification.fallback.new": "New notification",
+  "notification.fallback.permission": "Permission required: unknown tool",
+  "notification.fallback.stop": "Task completed",
+
+  "settings.agent.cc.name": "Claude Code"
 }

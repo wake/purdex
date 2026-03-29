@@ -48,6 +48,8 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
       const primary = getPrimaryPane(tab.layout)
       if (primary.content.kind === 'session') {
         useAgentStore.getState().setFocusedSession(primary.content.sessionCode)
+      } else {
+        useAgentStore.getState().setFocusedSession(null)
       }
     }
   }, [tabs, setActiveTab, findWorkspaceByTab, setActiveWorkspace, setWorkspaceActiveTab])

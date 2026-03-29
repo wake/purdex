@@ -262,5 +262,11 @@
   "error.locale.missing_name": "缺少 \"name\" 欄位",
   "error.locale.missing_translations": "缺少 \"translations\" 欄位",
   "error.locale.no_valid_keys": "找不到有效的翻譯鍵",
-  "error.locale.values_must_be_strings": "所有翻譯值必須為字串"
+  "error.locale.values_must_be_strings": "所有翻譯值必須為字串",
+
+  "notification.fallback.new": "新通知",
+  "notification.fallback.permission": "需要授權：未知工具",
+  "notification.fallback.stop": "任務完成",
+
+  "settings.agent.cc.name": "Claude Code"
 }

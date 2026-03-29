@@ -1,8 +1,10 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useAgentStore, deriveStatus } from '../stores/useAgentStore'
+import { useI18nStore } from '../stores/useI18nStore'
 import { useNotificationSettingsStore } from '../stores/useNotificationSettingsStore'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
 import { useTabStore } from '../stores/useTabStore'
+import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { buildNotificationContent } from '../lib/notification-content'
 import { findTabBySessionCode } from '../lib/pane-tree'
@@ -29,6 +31,8 @@ export function shouldNotify(params: ShouldNotifyParams): boolean {
 }
 
 export function useNotificationDispatcher(): void {
+  const notifiedRef = useRef(new Set<number>())
+
   useEffect(() => {
     const unsubscribe = useAgentStore.subscribe((state, prevState) => {
       const prevEvents = prevState.events
@@ -37,6 +41,10 @@ export function useNotificationDispatcher(): void {
       for (const [sessionCode, event] of Object.entries(currentEvents)) {
         const prev = prevEvents[sessionCode]
         if (prev && prev.broadcast_ts === event.broadcast_ts) continue
+
+        // Double protection: skip if this broadcast_ts was already notified
+        // (guards against DB fix edge cases and initial snapshot replays)
+        if (notifiedRef.current.has(event.broadcast_ts)) continue
 
         const derived = deriveStatus(event.event_name)
         const tabs = useTabStore.getState().tabs
@@ -52,6 +60,8 @@ export function useNotificationDispatcher(): void {
 
         const content = buildNotificationContent(event.event_name, event.raw_event, sessionName)
         if (!content) continue
+
+        notifiedRef.current.add(event.broadcast_ts)
 
         const capabilities = getPlatformCapabilities()
         if (capabilities.canNotification && window.electronAPI?.showNotification) {
@@ -95,6 +105,11 @@ function handleNotificationClick(sessionCode: string): void {
     const newTab = createTab({ kind: 'session', sessionCode, mode: 'stream' })
     useTabStore.getState().addTab(newTab)
     useTabStore.getState().setActiveTab(newTab.id)
+    const activeWorkspaceId = useWorkspaceStore.getState().activeWorkspaceId
+    if (activeWorkspaceId) {
+      useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, newTab.id)
+      useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, newTab.id)
+    }
     useAgentStore.getState().setFocusedSession(sessionCode)
     handled = true
   }

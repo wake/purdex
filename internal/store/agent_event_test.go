@@ -20,7 +20,8 @@ func TestAgentEventStore_SetAndGet(t *testing.T) {
 	s := openTestAgentEventStore(t)
 
 	raw := json.RawMessage(`{"sessionId":"abc","hook_event_name":"Stop"}`)
-	if err := s.Set("my-project", "Stop", raw, "cc"); err != nil {
+	const ts int64 = 1700000000000000000
+	if err := s.Set("my-project", "Stop", raw, "cc", ts); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 
@@ -40,13 +41,16 @@ func TestAgentEventStore_SetAndGet(t *testing.T) {
 	if ev.AgentType != "cc" {
 		t.Errorf("agent_type: want cc, got %s", ev.AgentType)
 	}
+	if ev.BroadcastTs != ts {
+		t.Errorf("broadcast_ts: want %d, got %d", ts, ev.BroadcastTs)
+	}
 }
 
 func TestAgentEventStore_AgentTypeDefault(t *testing.T) {
 	s := openTestAgentEventStore(t)
 
 	raw := json.RawMessage(`{}`)
-	if err := s.Set("proj", "Stop", raw, ""); err != nil {
+	if err := s.Set("proj", "Stop", raw, "", 0); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 
@@ -64,8 +68,9 @@ func TestAgentEventStore_Overwrite(t *testing.T) {
 
 	raw1 := json.RawMessage(`{"hook_event_name":"SessionStart"}`)
 	raw2 := json.RawMessage(`{"hook_event_name":"Stop"}`)
-	s.Set("proj", "SessionStart", raw1, "cc")
-	s.Set("proj", "Stop", raw2, "codex")
+	const ts2 int64 = 1700000000000000002
+	s.Set("proj", "SessionStart", raw1, "cc", 1700000000000000001)
+	s.Set("proj", "Stop", raw2, "codex", ts2)
 
 	ev, _ := s.Get("proj")
 	if ev.EventName != "Stop" {
@@ -73,6 +78,9 @@ func TestAgentEventStore_Overwrite(t *testing.T) {
 	}
 	if ev.AgentType != "codex" {
 		t.Errorf("want codex after overwrite, got %s", ev.AgentType)
+	}
+	if ev.BroadcastTs != ts2 {
+		t.Errorf("broadcast_ts: want %d, got %d", ts2, ev.BroadcastTs)
 	}
 }
 
@@ -89,8 +97,9 @@ func TestAgentEventStore_GetMissing(t *testing.T) {
 
 func TestAgentEventStore_ListAll(t *testing.T) {
 	s := openTestAgentEventStore(t)
-	s.Set("proj-a", "Stop", json.RawMessage(`{}`), "cc")
-	s.Set("proj-b", "SessionStart", json.RawMessage(`{}`), "")
+	const tsA int64 = 1700000000000000010
+	s.Set("proj-a", "Stop", json.RawMessage(`{}`), "cc", tsA)
+	s.Set("proj-b", "SessionStart", json.RawMessage(`{}`), "", 0)
 
 	all, err := s.ListAll()
 	if err != nil {
@@ -99,10 +108,15 @@ func TestAgentEventStore_ListAll(t *testing.T) {
 	if len(all) != 2 {
 		t.Fatalf("want 2, got %d", len(all))
 	}
-	// Verify agent_type is persisted in list
+	// Verify agent_type and broadcast_ts are persisted in list
 	for _, ev := range all {
-		if ev.TmuxSession == "proj-a" && ev.AgentType != "cc" {
-			t.Errorf("proj-a agent_type: want cc, got %s", ev.AgentType)
+		if ev.TmuxSession == "proj-a" {
+			if ev.AgentType != "cc" {
+				t.Errorf("proj-a agent_type: want cc, got %s", ev.AgentType)
+			}
+			if ev.BroadcastTs != tsA {
+				t.Errorf("proj-a broadcast_ts: want %d, got %d", tsA, ev.BroadcastTs)
+			}
 		}
 	}
 }

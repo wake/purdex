@@ -65,15 +65,12 @@ function registerIpcHandlers(): void {
     const notification = new Notification({ title: opts.title, body: opts.body })
     notification.on('click', () => {
       // Broadcast to all renderers — SPA decides which one has the tab
+      // The SPA will call focusMyWindow IPC when it handles the click
       for (const win of windowManager.getAllWindows()) {
         if (!win.isDestroyed()) {
           win.webContents.send('notification:clicked', { sessionCode: opts.sessionCode })
-          win.show()
         }
       }
-      // Focus the first available window (SPA with the right tab will activate it)
-      const focused = windowManager.getAllWindows().find((w) => !w.isDestroyed())
-      focused?.focus()
     })
     notification.show()
   })
