@@ -67,13 +67,13 @@ export class WindowManager {
     if (win && !win.isDestroyed()) this.loadSPA(win)
   }
 
-  forceLoadSPA(webContents: Electron.WebContents, mode: 'dev' | 'bundled'): void {
+  async forceLoadSPA(webContents: Electron.WebContents, mode: 'dev' | 'bundled'): Promise<void> {
     const win = BrowserWindow.fromWebContents(webContents)
     if (!win || win.isDestroyed()) return
     if (mode === 'dev') {
-      win.loadURL(WindowManager.DEV_SERVER)
-    } else {
-      win.loadURL('app://./index.html')
+      await win.loadURL(WindowManager.DEV_SERVER)
+    } else if (mode === 'bundled') {
+      await win.loadURL('app://./index.html')
     }
   }
 

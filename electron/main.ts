@@ -99,7 +99,7 @@ function registerIpcHandlers(): void {
 
   // SPA Force Load (skip detection, load specific mode)
   ipcMain.handle('spa:force-load', (event, mode: 'dev' | 'bundled') => {
-    windowManager.forceLoadSPA(event.sender, mode)
+    return windowManager.forceLoadSPA(event.sender, mode)
   })
 
   // Dev Update
@@ -135,10 +135,15 @@ function startMetricsPolling(): void {
 
 app.whenReady().then(() => {
   // Serve bundled renderer files via app:// protocol
+  const rendererRoot = join(__dirname, '../renderer')
   protocol.handle('app', (req) => {
     let pathname = new URL(req.url).pathname
     if (pathname === '/') pathname = '/index.html'
-    return net.fetch('file://' + join(__dirname, '../renderer', pathname))
+    const resolved = join(rendererRoot, pathname)
+    if (!resolved.startsWith(rendererRoot)) {
+      return new Response('Forbidden', { status: 403 })
+    }
+    return net.fetch('file://' + resolved)
   })
 
   registerIpcHandlers()

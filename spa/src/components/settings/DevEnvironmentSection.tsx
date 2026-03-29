@@ -17,7 +17,7 @@ export function DevEnvironmentSection() {
   const getDaemonBase = useHostStore((s) => s.getDaemonBase)
   const daemonBase = getDaemonBase('local')
 
-  const spaSource: 'dev' | 'bundled' = window.location.protocol === 'http:' ? 'dev' : 'bundled'
+  const spaSource: 'dev' | 'bundled' = window.location.protocol === 'app:' ? 'bundled' : 'dev'
 
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
   const [remoteInfo, setRemoteInfo] = useState<RemoteInfo | null>(null)

@@ -143,7 +143,7 @@ describe('DevEnvironmentSection', () => {
       }
     })
 
-    it('shows switch button and calls forceLoadSPA on click', async () => {
+    it('shows switch button and calls forceLoadSPA("bundled") from dev mode', async () => {
       mockCheckUpdate.mockResolvedValue(upToDateRemote)
       // Default is http: → dev server, so button should offer "Switch to Bundled"
       await act(async () => {
@@ -155,6 +155,31 @@ describe('DevEnvironmentSection', () => {
       const switchBtn = screen.getByRole('button', { name: /Bundled/i })
       fireEvent.click(switchBtn)
       expect(mockForceLoadSPA).toHaveBeenCalledWith('bundled')
+    })
+
+    it('shows switch button and calls forceLoadSPA("dev") from bundled mode', async () => {
+      mockCheckUpdate.mockResolvedValue(upToDateRemote)
+      const originalProtocol = window.location.protocol
+      Object.defineProperty(window, 'location', {
+        value: { ...window.location, protocol: 'app:' },
+        writable: true,
+      })
+      try {
+        await act(async () => {
+          render(<DevEnvironmentSection />)
+        })
+        await waitFor(() => {
+          expect(screen.getByText('Bundled')).toBeTruthy()
+        })
+        const switchBtn = screen.getByRole('button', { name: /Dev Server/i })
+        fireEvent.click(switchBtn)
+        expect(mockForceLoadSPA).toHaveBeenCalledWith('dev')
+      } finally {
+        Object.defineProperty(window, 'location', {
+          value: { ...window.location, protocol: originalProtocol },
+          writable: true,
+        })
+      }
     })
   })
 
