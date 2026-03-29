@@ -17,24 +17,13 @@ export function AgentSection() {
 
   const { hookStatus, hookLoading, runAction } = useHookStatus()
 
-  // Collect known agent types from events
-  const agentTypes = [...new Set(
-    Object.values(events)
+  // Always include 'cc' as default, plus any other agent types from events
+  const agentTypes = [...new Set([
+    'cc',
+    ...Object.values(events)
       .map((e) => e.agent_type)
       .filter((type): type is string => !!type),
-  )]
-
-  if (agentTypes.length === 0) {
-    return (
-      <div className="space-y-4">
-        <div>
-          <h3 className="text-sm font-medium text-text-primary">{t('settings.agent.title')}</h3>
-          <p className="text-xs text-text-muted mt-1">{t('settings.agent.desc')}</p>
-        </div>
-        <p className="text-xs text-text-muted">{t('settings.agent.no_agents')}</p>
-      </div>
-    )
-  }
+  ])]
 
   return (
     <div className="space-y-4">
