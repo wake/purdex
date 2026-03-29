@@ -180,6 +180,7 @@
   "settings.dev.status.checking": "檢查中...",
   "settings.dev.status.up_to_date": "已是最新",
   "settings.dev.status.update_available": "有新版本",
+  "settings.dev.status.building": "建置中…",
   "settings.dev.status.error": "檢查失敗",
   "settings.dev.btn.check": "檢查更新",
   "settings.dev.btn.update_app": "更新 App",
