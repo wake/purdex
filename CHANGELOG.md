@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.29] - 2026-03-30
+
+Dev Update 包含 Renderer（PR #115）
+
+### 修正
+
+- **Dev update 包含 renderer** — download tar 現在打包 `out/renderer/`，updater 也替換它，SPA 改動不再需要重裝 `.app`
+- Rollback 各目標獨立 try-catch，防止連鎖失敗
+- 測試 tar reader 區分 `io.EOF` 和真實錯誤
+
 ## [1.0.0-alpha.28] - 2026-03-30
 
 Electron CORS 修復 + SPA 來源切換（PR #113）
