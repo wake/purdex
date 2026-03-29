@@ -98,8 +98,12 @@ function registerIpcHandlers(): void {
   })
 
   // SPA Force Load (skip detection, load specific mode)
-  ipcMain.handle('spa:force-load', (event, mode: 'dev' | 'bundled') => {
-    return windowManager.forceLoadSPA(event.sender, mode)
+  ipcMain.handle('spa:force-load', async (event, mode: 'dev' | 'bundled') => {
+    try {
+      return await windowManager.forceLoadSPA(event.sender, mode)
+    } catch (err) {
+      throw String(err instanceof Error ? err.message : err)
+    }
   })
 
   // Dev Update
