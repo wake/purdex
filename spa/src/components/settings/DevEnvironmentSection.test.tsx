@@ -182,9 +182,9 @@ describe('DevEnvironmentSection', () => {
       }
     })
 
-    it('shows error when forceLoadSPA rejects', async () => {
+    it('shows error when switching to bundled fails', async () => {
       mockCheckUpdate.mockResolvedValue(upToDateRemote)
-      mockForceLoadSPA.mockRejectedValueOnce(new Error('ERR_CONNECTION_REFUSED'))
+      mockForceLoadSPA.mockRejectedValueOnce('protocol error')
       await act(async () => {
         render(<DevEnvironmentSection />)
       })
@@ -196,8 +196,38 @@ describe('DevEnvironmentSection', () => {
         fireEvent.click(switchBtn)
       })
       await waitFor(() => {
-        expect(screen.getByText(/Failed to load bundled SPA/)).toBeTruthy()
+        expect(screen.getByText(/Failed to load bundled SPA.*protocol error/)).toBeTruthy()
       })
+    })
+
+    it('shows error when switching to dev server fails', async () => {
+      mockCheckUpdate.mockResolvedValue(upToDateRemote)
+      mockForceLoadSPA.mockRejectedValueOnce('ERR_CONNECTION_REFUSED')
+      const originalProtocol = window.location.protocol
+      Object.defineProperty(window, 'location', {
+        value: { ...window.location, protocol: 'app:' },
+        writable: true,
+      })
+      try {
+        await act(async () => {
+          render(<DevEnvironmentSection />)
+        })
+        await waitFor(() => {
+          expect(screen.getByText('Bundled')).toBeTruthy()
+        })
+        const switchBtn = screen.getByRole('button', { name: /Dev Server/i })
+        await act(async () => {
+          fireEvent.click(switchBtn)
+        })
+        await waitFor(() => {
+          expect(screen.getByText(/Dev server is not reachable.*ERR_CONNECTION_REFUSED/)).toBeTruthy()
+        })
+      } finally {
+        Object.defineProperty(window, 'location', {
+          value: { ...window.location, protocol: originalProtocol },
+          writable: true,
+        })
+      }
     })
   })
 

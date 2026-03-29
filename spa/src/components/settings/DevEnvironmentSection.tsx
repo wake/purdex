@@ -145,8 +145,11 @@ export function DevEnvironmentSection() {
             <button
               onClick={() => {
                 const target = spaSource === 'dev' ? 'bundled' : 'dev'
-                window.electronAPI?.forceLoadSPA(target)?.catch(() => {
-                  setUpdateError(target === 'dev' ? 'Dev server is not reachable' : 'Failed to load bundled SPA')
+                window.electronAPI?.forceLoadSPA(target)?.catch((err: unknown) => {
+                  const detail = typeof err === 'string' ? err : (err instanceof Error ? err.message : String(err))
+                  setUpdateError(target === 'dev'
+                    ? `${t('settings.dev.error.dev_unreachable')}: ${detail}`
+                    : `${t('settings.dev.error.bundled_failed')}: ${detail}`)
                   setStatus('error')
                 })
               }}
