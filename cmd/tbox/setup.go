@@ -120,7 +120,7 @@ func makeTboxEntry(tboxPath, event string) map[string]any {
 		"hooks": []any{
 			map[string]any{
 				"type":    "command",
-				"command": fmt.Sprintf(`"%s" hook %s`, tboxPath, event),
+				"command": fmt.Sprintf(`"%s" hook --agent cc %s`, tboxPath, event),
 			},
 		},
 	}

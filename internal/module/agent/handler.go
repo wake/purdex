@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 )
 
 // EventRequest is the JSON body expected by POST /api/agent/event.
@@ -11,6 +12,7 @@ type EventRequest struct {
 	TmuxSession string          `json:"tmux_session"`
 	EventName   string          `json:"event_name"`
 	RawEvent    json.RawMessage `json:"raw_event"`
+	AgentType   string          `json:"agent_type"`
 }
 
 // handleEvent handles POST /api/agent/event.
@@ -24,7 +26,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 
 	// Store event (skip if no tmux session — can't map to anything useful).
 	if req.TmuxSession != "" {
-		if err := m.events.Set(req.TmuxSession, req.EventName, req.RawEvent); err != nil {
+		if err := m.events.Set(req.TmuxSession, req.EventName, req.RawEvent, req.AgentType); err != nil {
 			log.Printf("[agent] store event: %v", err)
 			http.Error(w, `{"error":"store failed"}`, http.StatusInternalServerError)
 			return
@@ -34,7 +36,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		if m.core != nil {
 			code := m.resolveSessionCode(req.TmuxSession)
 			if code != "" {
-				ev := m.buildAgentEvent(req.TmuxSession, req.EventName, req.RawEvent)
+				ev := m.buildAgentEvent(req.TmuxSession, req.EventName, req.RawEvent, req.AgentType)
 				payload, _ := json.Marshal(ev)
 				m.core.Events.Broadcast(code, "hook", string(payload))
 			}
@@ -65,10 +67,12 @@ func (m *Module) resolveSessionCode(tmuxName string) string {
 }
 
 // buildAgentEvent builds a JSON-serializable map matching AgentEvent fields.
-func (m *Module) buildAgentEvent(tmuxSession, eventName string, rawEvent json.RawMessage) map[string]any {
+func (m *Module) buildAgentEvent(tmuxSession, eventName string, rawEvent json.RawMessage, agentType string) map[string]any {
 	return map[string]any{
 		"tmux_session": tmuxSession,
 		"event_name":   eventName,
 		"raw_event":    rawEvent,
+		"agent_type":   agentType,
+		"broadcast_ts": time.Now().UnixNano(),
 	}
 }

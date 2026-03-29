@@ -14,6 +14,7 @@ type AgentEvent struct {
 	TmuxSession string          `json:"tmux_session"`
 	EventName   string          `json:"event_name"`
 	RawEvent    json.RawMessage `json:"raw_event"`
+	AgentType   string          `json:"agent_type"`
 }
 
 // AgentEventStore persists the latest agent hook event per tmux session.
@@ -46,22 +47,28 @@ func migrateAgentEventDB(db *sql.DB) error {
 			updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Idempotent migration: add agent_type column if not exists.
+	_, _ = db.Exec(`ALTER TABLE agent_events ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''`)
+	return nil
 }
 
 // Close closes the underlying DB connection.
 func (s *AgentEventStore) Close() error { return s.db.Close() }
 
 // Set upserts the latest agent hook event for a tmux session.
-func (s *AgentEventStore) Set(tmuxSession, eventName string, rawEvent json.RawMessage) error {
+func (s *AgentEventStore) Set(tmuxSession, eventName string, rawEvent json.RawMessage, agentType string) error {
 	_, err := s.db.Exec(`
-		INSERT INTO agent_events (tmux_session, event_name, raw_event, updated_at)
-		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		INSERT INTO agent_events (tmux_session, event_name, raw_event, agent_type, updated_at)
+		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(tmux_session) DO UPDATE SET
 			event_name = excluded.event_name,
 			raw_event  = excluded.raw_event,
+			agent_type = excluded.agent_type,
 			updated_at = CURRENT_TIMESTAMP
-	`, tmuxSession, eventName, string(rawEvent))
+	`, tmuxSession, eventName, string(rawEvent), agentType)
 	return err
 }
 
@@ -70,9 +77,9 @@ func (s *AgentEventStore) Get(tmuxSession string) (*AgentEvent, error) {
 	var ev AgentEvent
 	var raw string
 	err := s.db.QueryRow(`
-		SELECT tmux_session, event_name, raw_event
+		SELECT tmux_session, event_name, raw_event, agent_type
 		FROM agent_events WHERE tmux_session = ?
-	`, tmuxSession).Scan(&ev.TmuxSession, &ev.EventName, &raw)
+	`, tmuxSession).Scan(&ev.TmuxSession, &ev.EventName, &raw, &ev.AgentType)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -86,7 +93,7 @@ func (s *AgentEventStore) Get(tmuxSession string) (*AgentEvent, error) {
 // ListAll returns all stored agent events ordered by tmux_session.
 func (s *AgentEventStore) ListAll() ([]AgentEvent, error) {
 	rows, err := s.db.Query(`
-		SELECT tmux_session, event_name, raw_event
+		SELECT tmux_session, event_name, raw_event, agent_type
 		FROM agent_events ORDER BY tmux_session
 	`)
 	if err != nil {
@@ -97,7 +104,7 @@ func (s *AgentEventStore) ListAll() ([]AgentEvent, error) {
 	for rows.Next() {
 		var ev AgentEvent
 		var raw string
-		if err := rows.Scan(&ev.TmuxSession, &ev.EventName, &raw); err != nil {
+		if err := rows.Scan(&ev.TmuxSession, &ev.EventName, &raw, &ev.AgentType); err != nil {
 			return nil, err
 		}
 		ev.RawEvent = json.RawMessage(raw)
