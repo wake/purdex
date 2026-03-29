@@ -40,3 +40,19 @@ export function updatePaneInLayout(
 export function getLayoutKey(layout: PaneLayout): string {
   return layout.type === 'leaf' ? layout.pane.id : layout.id
 }
+
+/**
+ * Find the tab ID containing a session pane matching the given session code.
+ */
+export function findTabBySessionCode(
+  tabs: Record<string, { layout: PaneLayout }>,
+  sessionCode: string,
+): string | undefined {
+  for (const [tabId, tab] of Object.entries(tabs)) {
+    const primary = getPrimaryPane(tab.layout)
+    if (primary.content.kind === 'session' && primary.content.sessionCode === sessionCode) {
+      return tabId
+    }
+  }
+  return undefined
+}

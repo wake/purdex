@@ -9,6 +9,8 @@ export interface AgentHookEvent {
   tmux_session: string
   event_name: string
   raw_event: Record<string, unknown>
+  agent_type: string
+  broadcast_ts: number
 }
 
 interface AgentState {
@@ -24,7 +26,7 @@ interface AgentState {
   setTabIndicatorStyle: (style: TabIndicatorStyle) => void
 }
 
-function deriveStatus(eventName: string): AgentStatus | 'clear' | null {
+export function deriveStatus(eventName: string): AgentStatus | 'clear' | null {
   switch (eventName) {
     case 'SessionStart':
     case 'UserPromptSubmit':

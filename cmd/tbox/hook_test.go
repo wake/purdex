@@ -11,7 +11,7 @@ import (
 
 func TestBuildHookPayload(t *testing.T) {
 	stdin := strings.NewReader(`{"type":"Stop","session_id":"abc123"}`)
-	p := buildHookPayload("my-session", "Stop", stdin)
+	p := buildHookPayload("my-session", "Stop", stdin, "")
 
 	if p.TmuxSession != "my-session" {
 		t.Errorf("TmuxSession = %q, want %q", p.TmuxSession, "my-session")
@@ -35,13 +35,31 @@ func TestBuildHookPayload(t *testing.T) {
 
 func TestBuildHookPayload_EmptyStdin(t *testing.T) {
 	stdin := strings.NewReader("")
-	p := buildHookPayload("sess", "Start", stdin)
+	p := buildHookPayload("sess", "Start", stdin, "")
 
 	if p.EventName != "Start" {
 		t.Errorf("EventName = %q, want %q", p.EventName, "Start")
 	}
 	if string(p.RawEvent) != "{}" {
 		t.Errorf("RawEvent = %s, want {}", string(p.RawEvent))
+	}
+}
+
+func TestBuildHookPayload_WithAgentType(t *testing.T) {
+	stdin := strings.NewReader(`{"hook_event_name":"Stop"}`)
+	p := buildHookPayload("sess", "Stop", stdin, "cc")
+
+	if p.AgentType != "cc" {
+		t.Errorf("AgentType = %q, want %q", p.AgentType, "cc")
+	}
+}
+
+func TestBuildHookPayload_EmptyAgent(t *testing.T) {
+	stdin := strings.NewReader(`{}`)
+	p := buildHookPayload("sess", "Stop", stdin, "")
+
+	if p.AgentType != "" {
+		t.Errorf("AgentType = %q, want empty", p.AgentType)
 	}
 }
 

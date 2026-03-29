@@ -45,6 +45,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('metrics:update', handler)
   },
 
+  // Notifications
+  showNotification: (opts: { title: string; body: string; sessionCode: string; eventName: string; broadcastTs: number }) =>
+    ipcRenderer.invoke('notification:show', JSON.stringify(opts)),
+  onNotificationClicked: (callback: (payload: { sessionCode: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { sessionCode: string }) =>
+      callback(payload)
+    ipcRenderer.on('notification:clicked', handler)
+    return () => ipcRenderer.removeListener('notification:clicked', handler)
+  },
+  focusMyWindow: () => ipcRenderer.send('notification:focus-window'),
+
   // Dev Update (only exposed when TBOX_DEV_UPDATE=1)
   ...(process.env.TBOX_DEV_UPDATE ? {
     getAppInfo: () => ipcRenderer.invoke('dev:app-info'),

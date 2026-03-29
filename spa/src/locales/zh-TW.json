@@ -16,6 +16,25 @@
   "settings.section.terminal": "終端機",
   "settings.section.workspace": "工作區",
   "settings.section.sync": "同步",
+  "settings.section.agent": "Agent",
+
+  "settings.agent.title": "Agent",
+  "settings.agent.desc": "Agent 通知與 Hook 設定",
+  "settings.agent.notifications.enabled": "啟用通知",
+  "settings.agent.notifications.enabled_desc": "顯示 Agent 事件的系統通知",
+  "settings.agent.notifications.notify_without_tab": "無分頁時仍通知",
+  "settings.agent.notifications.notify_without_tab_desc": "即使 Session 分頁已關閉，仍接收通知",
+  "settings.agent.notifications.reopen_tab": "點擊通知重開分頁",
+  "settings.agent.notifications.reopen_tab_desc": "點擊通知時重新開啟 Session 分頁",
+  "settings.agent.event.Notification": "通知",
+  "settings.agent.event.PermissionRequest": "權限請求",
+  "settings.agent.event.Stop": "任務完成",
+  "settings.agent.hook.status": "Hook 狀態",
+  "settings.agent.hook.installed": "已安裝",
+  "settings.agent.hook.not_installed": "未安裝",
+  "settings.agent.hook.install": "安裝 Hook",
+  "settings.agent.hook.remove": "移除 Hook",
+  "settings.agent.no_agents": "尚未偵測到任何 Agent。啟動 Claude Code 後會出現設定。",
 
   "settings.appearance.title": "外觀",
   "settings.appearance.desc": "應用程式視覺偏好設定",
@@ -243,5 +262,11 @@
   "error.locale.missing_name": "缺少 \"name\" 欄位",
   "error.locale.missing_translations": "缺少 \"translations\" 欄位",
   "error.locale.no_valid_keys": "找不到有效的翻譯鍵",
-  "error.locale.values_must_be_strings": "所有翻譯值必須為字串"
+  "error.locale.values_must_be_strings": "所有翻譯值必須為字串",
+
+  "notification.fallback.new": "新通知",
+  "notification.fallback.permission": "需要授權：未知工具",
+  "notification.fallback.stop": "任務完成",
+
+  "settings.agent.cc.name": "Claude Code"
 }

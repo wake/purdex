@@ -18,6 +18,7 @@ type hookPayload struct {
 	TmuxSession string          `json:"tmux_session"`
 	EventName   string          `json:"event_name"`
 	RawEvent    json.RawMessage `json:"raw_event"`
+	AgentType   string          `json:"agent_type"`
 }
 
 // runHook is the entry point for `tbox hook <event_name>`.
@@ -27,10 +28,25 @@ func runHook(args []string) {
 	if len(args) < 1 {
 		os.Exit(0)
 	}
-	eventName := args[0]
+
+	// Parse --agent flag manually; remaining positional arg is event_name.
+	var agentType string
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--agent" && i+1 < len(args) {
+			agentType = args[i+1]
+			i++ // skip value
+		} else {
+			positional = append(positional, args[i])
+		}
+	}
+	if len(positional) < 1 {
+		os.Exit(0)
+	}
+	eventName := positional[0]
 
 	tmuxSession := queryTmuxSession()
-	payload := buildHookPayload(tmuxSession, eventName, os.Stdin)
+	payload := buildHookPayload(tmuxSession, eventName, os.Stdin, agentType)
 
 	cfg, err := config.Load("")
 	var url, token string
@@ -56,7 +72,7 @@ func queryTmuxSession() string {
 
 // buildHookPayload constructs a hookPayload from the given parameters.
 // If stdin is empty or cannot be read, raw_event defaults to {}.
-func buildHookPayload(tmuxSession, eventName string, stdin io.Reader) hookPayload {
+func buildHookPayload(tmuxSession, eventName string, stdin io.Reader, agentType string) hookPayload {
 	raw, err := io.ReadAll(stdin)
 	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
 		raw = []byte("{}")
@@ -65,6 +81,7 @@ func buildHookPayload(tmuxSession, eventName string, stdin io.Reader) hookPayloa
 		TmuxSession: tmuxSession,
 		EventName:   eventName,
 		RawEvent:    json.RawMessage(raw),
+		AgentType:   agentType,
 	}
 }
 

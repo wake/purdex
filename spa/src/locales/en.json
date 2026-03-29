@@ -16,6 +16,25 @@
   "settings.section.terminal": "Terminal",
   "settings.section.workspace": "Workspace",
   "settings.section.sync": "Sync",
+  "settings.section.agent": "Agent",
+
+  "settings.agent.title": "Agent",
+  "settings.agent.desc": "Agent notification and hook settings",
+  "settings.agent.notifications.enabled": "Enable Notifications",
+  "settings.agent.notifications.enabled_desc": "Show system notifications for agent events",
+  "settings.agent.notifications.notify_without_tab": "Notify Without Tab",
+  "settings.agent.notifications.notify_without_tab_desc": "Receive notifications even when the session tab is closed",
+  "settings.agent.notifications.reopen_tab": "Reopen Tab on Click",
+  "settings.agent.notifications.reopen_tab_desc": "Clicking a notification reopens the session tab",
+  "settings.agent.event.Notification": "Notification",
+  "settings.agent.event.PermissionRequest": "Permission Request",
+  "settings.agent.event.Stop": "Task Completed",
+  "settings.agent.hook.status": "Hook Status",
+  "settings.agent.hook.installed": "Installed",
+  "settings.agent.hook.not_installed": "Not Installed",
+  "settings.agent.hook.install": "Install Hook",
+  "settings.agent.hook.remove": "Remove Hook",
+  "settings.agent.no_agents": "No agents detected yet. Start a Claude Code session to see agent settings.",
 
   "settings.appearance.title": "Appearance",
   "settings.appearance.desc": "Visual preferences for the application",
@@ -243,5 +262,11 @@
   "error.locale.missing_name": "Missing \"name\" field",
   "error.locale.missing_translations": "Missing \"translations\" field",
   "error.locale.no_valid_keys": "No valid translation keys found",
-  "error.locale.values_must_be_strings": "All translation values must be strings"
+  "error.locale.values_must_be_strings": "All translation values must be strings",
+
+  "notification.fallback.new": "New notification",
+  "notification.fallback.permission": "Permission required: unknown tool",
+  "notification.fallback.stop": "Task completed",
+
+  "settings.agent.cc.name": "Claude Code"
 }

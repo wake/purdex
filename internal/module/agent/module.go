@@ -41,9 +41,11 @@ func (m *Module) Init(c *core.Core) error {
 	return nil
 }
 
-// RegisterRoutes registers the POST /api/agent/event endpoint.
+// RegisterRoutes registers the agent API endpoints.
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/event", m.handleEvent)
+	mux.HandleFunc("GET /api/agent/hook-status", m.handleHookStatus)
+	mux.HandleFunc("POST /api/agent/hook-setup", m.handleHookSetup)
 }
 
 // Start registers an OnSubscribe callback to send snapshot data on WS connect.
@@ -83,7 +85,8 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 		if !ok {
 			continue
 		}
-		payload, _ := json.Marshal(ev)
+		enriched := m.buildAgentEvent(ev.TmuxSession, ev.EventName, ev.RawEvent, ev.AgentType, ev.BroadcastTs)
+		payload, _ := json.Marshal(enriched)
 		event := core.SessionEvent{Type: "hook", Session: code, Value: string(payload)}
 		data, _ := json.Marshal(event)
 		sub.Send(data)

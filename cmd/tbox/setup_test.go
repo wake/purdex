@@ -75,7 +75,7 @@ func TestMergeHooks_EmptyFile(t *testing.T) {
 		if hookObj["type"] != "command" {
 			t.Errorf("event %q: type = %v, want command", event, hookObj["type"])
 		}
-		expectedCmd := `"` + tboxPath + `" hook ` + event
+		expectedCmd := `"` + tboxPath + `" hook --agent cc ` + event
 		if hookObj["command"] != expectedCmd {
 			t.Errorf("event %q: command = %v, want %q", event, hookObj["command"], expectedCmd)
 		}
@@ -181,11 +181,11 @@ func TestMergeHooks_PreservesExisting(t *testing.T) {
 		t.Errorf("first entry command = %q, want tsm-hook.sh", firstCmd)
 	}
 
-	// Second entry should be tbox (quoted path)
+	// Second entry should be tbox (quoted path with --agent cc)
 	second := stopEntries[1].(map[string]any)
 	secondHooks := second["hooks"].([]any)
 	secondCmd := secondHooks[0].(map[string]any)["command"].(string)
-	expectedCmd := `"` + tboxPath + `" hook Stop`
+	expectedCmd := `"` + tboxPath + `" hook --agent cc Stop`
 	if secondCmd != expectedCmd {
 		t.Errorf("second entry command = %q, want %q", secondCmd, expectedCmd)
 	}
@@ -342,7 +342,7 @@ func TestMergeHooks_SpacePath(t *testing.T) {
 	entry := arr[0].(map[string]any)
 	innerHooks := entry["hooks"].([]any)
 	cmd := innerHooks[0].(map[string]any)["command"].(string)
-	expectedCmd := `"/Users/my user/bin/tbox" hook Stop`
+	expectedCmd := `"/Users/my user/bin/tbox" hook --agent cc Stop`
 	if cmd != expectedCmd {
 		t.Errorf("command = %q, want %q", cmd, expectedCmd)
 	}

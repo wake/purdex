@@ -65,6 +65,11 @@ interface Window {
     getProcessMetrics: () => Promise<ElectronTabMetrics[]>
     onMetricsUpdate: (callback: (metrics: ElectronTabMetrics[]) => void) => () => void
 
+    // Notifications
+    showNotification: (opts: { title: string; body: string; sessionCode: string; eventName: string; broadcastTs: number }) => Promise<void>
+    onNotificationClicked: (callback: (payload: { sessionCode: string }) => void) => () => void
+    focusMyWindow: () => void
+
     // Dev Update
     getAppInfo: () => Promise<ElectronAppInfo>
     checkUpdate: (daemonUrl: string) => Promise<ElectronRemoteVersionInfo>
