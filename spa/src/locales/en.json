@@ -180,6 +180,7 @@
   "settings.dev.status.checking": "Checking...",
   "settings.dev.status.up_to_date": "Up to date",
   "settings.dev.status.update_available": "Update available",
+  "settings.dev.status.building": "Building…",
   "settings.dev.status.error": "Check failed",
   "settings.dev.btn.check": "Check for Updates",
   "settings.dev.btn.update_app": "Update App",
