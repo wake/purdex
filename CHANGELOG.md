@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.28] - 2026-03-30
+
+Electron CORS 修復 + SPA 來源切換（PR #113）
+
+### 新增
+
+- **`app://` custom protocol** — bundled SPA 改用 `app://` 取代 `file://`，啟用標準 CORS 行為
+- **SPA Source 顯示** — Development Settings 顯示當前 SPA 來源（Dev Server / Bundled）
+- **SPA 來源切換** — 一鍵切換 Dev Server ↔ Bundled，即時 reload
+- **`forceLoadSPA` IPC** — Electron preload 暴露（`TBOX_DEV_UPDATE` gate 內）
+
+### 修正
+
+- Protocol handler 路徑遍歷防護（`startsWith` 驗證 + 403）
+- `forceLoadSPA` 改 async、await `loadURL`、IPC handler return promise
+- `spaSource` 偵測改正向匹配 `app:` protocol
+
 ## [1.0.0-alpha.27] - 2026-03-30
 
 Agent Hook 子類別狀態判斷（PR #107）
