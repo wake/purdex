@@ -49,9 +49,8 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().statuses['dev']).toBe('waiting')
   })
 
-  it('Notification(idle_prompt) → does not change status', () => {
-    // Pre-set to idle (as Stop would have done)
-    useAgentStore.setState({ statuses: { dev: 'idle' } })
+  it('Notification(idle_prompt) → status = idle (from running)', () => {
+    useAgentStore.setState({ statuses: { dev: 'running' } })
     const event: AgentHookEvent = {
       tmux_session: 'dev',
       event_name: 'Notification',
@@ -156,6 +155,30 @@ describe('useAgentStore', () => {
       tmux_session: 'dev',
       event_name: 'Stop',
       raw_event: {},
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().unread['dev']).toBe(true)
+  })
+
+  it('Notification(idle_prompt) → does not mark unread', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'Notification',
+      raw_event: { notification_type: 'idle_prompt' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().unread['dev']).toBeUndefined()
+  })
+
+  it('Notification(permission_prompt) → marks unread when not focused', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'Notification',
+      raw_event: { notification_type: 'permission_prompt' },
       agent_type: 'cc',
       broadcast_ts: Date.now(),
     }

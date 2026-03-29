@@ -46,7 +46,7 @@ export function useNotificationDispatcher(): void {
         // (guards against DB fix edge cases and initial snapshot replays)
         if (notifiedRef.current.has(event.broadcast_ts)) continue
 
-        const derived = deriveStatus(event.event_name)
+        const derived = deriveStatus(event.event_name, event.raw_event)
         const tabs = useTabStore.getState().tabs
         const hasTab = findTabBySessionCode(tabs, sessionCode) !== undefined
         const settings = useNotificationSettingsStore.getState().getSettingsForAgent(event.agent_type || '')

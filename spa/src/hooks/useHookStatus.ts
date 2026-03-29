@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useHostStore } from '../stores/useHostStore'
+import { useAgentStore } from '../stores/useAgentStore'
 
 interface HookEventStatus {
   installed: boolean
@@ -39,8 +40,9 @@ export function useHookStatus() {
         setHookLoading(false)
         return
       }
-      const data = await res.json()
-      setHookStatus(data as HookStatus)
+      const data = await res.json() as HookStatus
+      setHookStatus(data)
+      useAgentStore.getState().setHooksInstalled(!!data.installed)
     } catch { /* ignore */ }
     setHookLoading(false)
   }

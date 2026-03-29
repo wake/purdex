@@ -104,7 +104,7 @@ func (m *Module) handleHookStatus(w http.ResponseWriter, r *http.Request) {
 	var issues []string
 	allInstalled := true
 
-	hookEvents := []string{"SessionStart", "UserPromptSubmit", "Stop", "Notification", "PermissionRequest", "SessionEnd"}
+	hookEvents := []string{"SessionStart", "UserPromptSubmit", "Stop", "StopFailure", "Notification", "PermissionRequest", "SessionEnd"}
 	for _, eventName := range hookEvents {
 		entries, ok := hooks[eventName]
 		if !ok {

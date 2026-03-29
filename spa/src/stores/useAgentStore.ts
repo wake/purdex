@@ -96,9 +96,11 @@ export const useAgentStore = create<AgentState>()(
           // Update status
           set((s) => ({ statuses: { ...s.statuses, [session]: derived } }))
 
-          // Mark unread on Stop or waiting events when not focused
-          const isWaitingOrIdle = derived === 'idle' || derived === 'waiting'
-          if (isWaitingOrIdle && get().focusedSession !== session) {
+          // Mark unread on actionable events (waiting, Stop/StopFailure) when not focused.
+          // Informational notifications (idle_prompt, auth_success) are excluded.
+          const isActionable = derived === 'waiting' ||
+            (derived === 'idle' && event.event_name !== 'Notification')
+          if (isActionable && get().focusedSession !== session) {
             set((s) => ({ unread: { ...s.unread, [session]: true } }))
           }
         }
