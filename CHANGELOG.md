@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0-alpha.26] - 2026-03-29
+
+1.6c-pre2: CC 通知系統（PR #102）
+
+### 新增
+
+- **Electron 系統通知** — Agent hook 事件（waiting + idle）觸發 macOS 系統通知，點擊跳轉對應 tab
+- **`agent_type` 欄位** — `tbox hook --agent cc` 識別 agent 類型，daemon 儲存並廣播
+- **`broadcast_ts` 持久化** — 多視窗去重 + 防止 WS 重連通知爆發
+- **Agent Settings section** — Settings 內新增 Agent 區塊，per-agent 通知開關 + per-event toggle
+- **Hook 狀態檢視** — Agent Settings 顯示 hook 安裝狀態 + 一鍵安裝/移除按鈕
+- **`GET /api/agent/hook-status`** — 讀取 CC settings.json 回報 hook 安裝狀態
+- **`POST /api/agent/hook-setup`** — 執行 `tbox setup` 安裝或移除 hook
+- **`useNotificationDispatcher`** — SPA 通知判斷 + Electron/PWA 雙路徑分發
+- **`useNotificationSettingsStore`** — Per-agent 通知設定（Zustand + persist）
+- **`useHookStatus`** — Hook 狀態查詢 custom hook
+- **i18n** — 新增 19 個 Agent 相關 locale key（en + zh-TW）
+- **三層級設定預留** — system → host → workspace 覆寫架構（先做 system 層）
+
+### 修正
+
+- `focusedSession` 切到非 session tab 時正確清除
+- 通知點擊重開 tab 時正確加入 workspace
+- 多視窗通知點擊只聚焦有 tab 的視窗（不閃現所有視窗）
+
 ## [1.0.0-alpha.25] - 2026-03-29
 
 Dev Update Auto-Build（PR #96）
