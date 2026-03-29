@@ -68,40 +68,37 @@ export async function applyUpdate(
 
   progress('applying')
 
-  // Replace out/main and out/preload in app directory
+  // Replace out/main, out/preload, and out/renderer in app directory
   // __dirname is out/main/ in the built output, so parent is out/
   const appOutDir = join(__dirname, '..')
-  const mainDst = join(appOutDir, 'main')
-  const preloadDst = join(appOutDir, 'preload')
-  const mainSrc = join(extractDir, 'main')
-  const preloadSrc = join(extractDir, 'preload')
+  const targets = ['main', 'preload', 'renderer'] as const
 
   // Backup current files before replacing
   const backupDir = join(tmpDir, 'backup')
   mkdirSync(backupDir, { recursive: true })
-  if (existsSync(mainDst)) cpSync(mainDst, join(backupDir, 'main'), { recursive: true })
-  if (existsSync(preloadDst)) cpSync(preloadDst, join(backupDir, 'preload'), { recursive: true })
+  for (const name of targets) {
+    const dst = join(appOutDir, name)
+    if (existsSync(dst)) cpSync(dst, join(backupDir, name), { recursive: true })
+  }
 
   try {
-    if (existsSync(mainSrc)) {
-      if (existsSync(mainDst)) rmSync(mainDst, { recursive: true })
-      renameSync(mainSrc, mainDst)
-    }
-    if (existsSync(preloadSrc)) {
-      if (existsSync(preloadDst)) rmSync(preloadDst, { recursive: true })
-      renameSync(preloadSrc, preloadDst)
+    for (const name of targets) {
+      const src = join(extractDir, name)
+      const dst = join(appOutDir, name)
+      if (existsSync(src)) {
+        if (existsSync(dst)) rmSync(dst, { recursive: true })
+        renameSync(src, dst)
+      }
     }
   } catch (err) {
     // Rollback: restore from backup
-    const mainBackup = join(backupDir, 'main')
-    const preloadBackup = join(backupDir, 'preload')
-    if (existsSync(mainBackup)) {
-      if (existsSync(mainDst)) rmSync(mainDst, { recursive: true })
-      renameSync(mainBackup, mainDst)
-    }
-    if (existsSync(preloadBackup)) {
-      if (existsSync(preloadDst)) rmSync(preloadDst, { recursive: true })
-      renameSync(preloadBackup, preloadDst)
+    for (const name of targets) {
+      const backup = join(backupDir, name)
+      const dst = join(appOutDir, name)
+      if (existsSync(backup)) {
+        if (existsSync(dst)) rmSync(dst, { recursive: true })
+        renameSync(backup, dst)
+      }
     }
     rmSync(tmpDir, { recursive: true })
     throw err
