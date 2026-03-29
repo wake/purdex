@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.0-alpha.27] - 2026-03-30
+
+Agent Hook 子類別狀態判斷（PR #107）
+
+### 新增
+
+- **`deriveStatus` 子類別判斷** — Notification 依 `notification_type`、SessionStart 依 `source` 精確判斷狀態
+- **`StopFailure` 事件處理** — daemon 註冊 hook + SPA 狀態映射（idle）+ 桌面通知（error_details）
+- **`hooksInstalled` fallback** — hooks 已安裝但尚無事件的 session tab 預設顯示 idle 狀態點
+- **CC Hook Event Reference 文件** — `docs/cc-hook-event-reference.md`，完整事件映射與設計決策
+
+### 修正
+
+- `Notification(idle_prompt)` 不再覆蓋 `Stop` 設定的 idle 狀態為 waiting
+- `SessionStart(compact)` 背景壓縮不再錯誤觸發 running 狀態
+- `shouldNotify` 排除 idle Notification（避免 idle_prompt 重複通知）
+- `useNotificationDispatcher` 傳入 `rawEvent` 給 `deriveStatus`（修正通知靜默 regression）
+- `useHookStatus` install/remove 後同步 `hooksInstalled` 到全域 store
+- `App.tsx` hook-status fetch 加入 `res.ok` 檢查
+- 未知 `notification_type` 記錄 console.warn
+- Unread dot 排除資訊性 Notification（idle_prompt / auth_success）
+- 新增 `notification.fallback.stopFailure` i18n key（en + zh-TW）
+
 ## [1.0.0-alpha.26] - 2026-03-29
 
 1.6c-pre2: CC 通知系統（PR #102）
