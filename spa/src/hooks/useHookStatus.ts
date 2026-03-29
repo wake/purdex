@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useHostStore } from '../stores/useHostStore'
+import { useAgentStore } from '../stores/useAgentStore'
 
 interface HookEventStatus {
   installed: boolean
@@ -23,7 +24,11 @@ export function useHookStatus() {
   useEffect(() => {
     fetch(`${daemonBase}/api/agent/hook-status`)
       .then((r) => r.json())
-      .then((data) => setHookStatus(data as HookStatus))
+      .then((data) => {
+        const status = data as HookStatus
+        setHookStatus(status)
+        useAgentStore.getState().setHooksInstalled(!!status.installed)
+      })
       .catch(() => setHookStatus(null))
   }, [daemonBase])
 
@@ -39,8 +44,9 @@ export function useHookStatus() {
         setHookLoading(false)
         return
       }
-      const data = await res.json()
-      setHookStatus(data as HookStatus)
+      const data = await res.json() as HookStatus
+      setHookStatus(data)
+      useAgentStore.getState().setHooksInstalled(!!data.installed)
     } catch { /* ignore */ }
     setHookLoading(false)
   }

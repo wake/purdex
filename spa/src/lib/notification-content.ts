@@ -15,6 +15,8 @@ export function buildNotificationContent(
       return { title: sessionName, body: (rawEvent.tool_name as string) ? `Permission required: ${rawEvent.tool_name}` : (t?.('notification.fallback.permission') ?? 'Permission required: unknown tool') }
     case 'Stop':
       return { title: sessionName, body: (rawEvent.last_assistant_message as string) || (t?.('notification.fallback.stop') ?? 'Task completed') }
+    case 'StopFailure':
+      return { title: sessionName, body: (rawEvent.error_details as string) || (rawEvent.error as string) || (t?.('notification.fallback.stopFailure') ?? 'Task stopped unexpectedly') }
     default:
       return null
   }

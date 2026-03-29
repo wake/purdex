@@ -34,4 +34,10 @@ describe('shouldNotify', () => {
   it('event defaults to true when not in events map', () => {
     expect(shouldNotify({ derived: 'idle', eventName: 'Stop', sessionCode: 'abc', focusedSession: null, hasTab: true, settings: { ...defaultSettings, events: {} } })).toBe(true)
   })
+  it('returns false for idle Notification (idle_prompt/auth_success are informational)', () => {
+    expect(shouldNotify({ derived: 'idle', eventName: 'Notification', sessionCode: 'abc', focusedSession: null, hasTab: true, settings: defaultSettings })).toBe(false)
+  })
+  it('returns true for waiting Notification (permission_prompt/elicitation_dialog)', () => {
+    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', sessionCode: 'abc', focusedSession: null, hasTab: true, settings: defaultSettings })).toBe(true)
+  })
 })

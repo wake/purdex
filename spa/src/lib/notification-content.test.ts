@@ -18,6 +18,18 @@ describe('buildNotificationContent', () => {
     const result = buildNotificationContent('Stop', {}, 'my-session')
     expect(result).toEqual({ title: 'my-session', body: 'Task completed' })
   })
+  it('StopFailure → uses error_details', () => {
+    const result = buildNotificationContent('StopFailure', { error: 'rate_limit', error_details: '429 Too Many Requests' }, 'my-session')
+    expect(result).toEqual({ title: 'my-session', body: '429 Too Many Requests' })
+  })
+  it('StopFailure without error_details → uses error', () => {
+    const result = buildNotificationContent('StopFailure', { error: 'rate_limit' }, 'my-session')
+    expect(result).toEqual({ title: 'my-session', body: 'rate_limit' })
+  })
+  it('StopFailure without any fields → fallback', () => {
+    const result = buildNotificationContent('StopFailure', {}, 'my-session')
+    expect(result).toEqual({ title: 'my-session', body: 'Task stopped unexpectedly' })
+  })
   it('unknown event → null', () => {
     expect(buildNotificationContent('SessionStart', {}, 'x')).toBeNull()
   })

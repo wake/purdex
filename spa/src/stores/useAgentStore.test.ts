@@ -9,6 +9,7 @@ beforeEach(() => {
     statuses: {},
     unread: {},
     focusedSession: null,
+    hooksInstalled: false,
   })
 })
 
@@ -25,7 +26,58 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().statuses['dev']).toBe('running')
   })
 
-  it('Notification → status = waiting', () => {
+  it('Notification(permission_prompt) → status = waiting', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'Notification',
+      raw_event: { notification_type: 'permission_prompt' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().statuses['dev']).toBe('waiting')
+  })
+
+  it('Notification(elicitation_dialog) → status = waiting', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'Notification',
+      raw_event: { notification_type: 'elicitation_dialog' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().statuses['dev']).toBe('waiting')
+  })
+
+  it('Notification(idle_prompt) → status = idle (from running)', () => {
+    useAgentStore.setState({ statuses: { dev: 'running' } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'Notification',
+      raw_event: { notification_type: 'idle_prompt' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().statuses['dev']).toBe('idle')
+  })
+
+  it('Notification(auth_success) → status = idle', () => {
+    useAgentStore.setState({ statuses: { dev: 'running' } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'Notification',
+      raw_event: { notification_type: 'auth_success' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().statuses['dev']).toBe('idle')
+  })
+
+  it('Notification without notification_type → does not change status', () => {
+    useAgentStore.setState({ statuses: { dev: 'idle' } })
     const event: AgentHookEvent = {
       tmux_session: 'dev',
       event_name: 'Notification',
@@ -34,7 +86,57 @@ describe('useAgentStore', () => {
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleHookEvent('dev', event)
-    expect(useAgentStore.getState().statuses['dev']).toBe('waiting')
+    expect(useAgentStore.getState().statuses['dev']).toBe('idle')
+  })
+
+  it('SessionStart(compact) → does not change status', () => {
+    useAgentStore.setState({ statuses: { dev: 'idle' } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SessionStart',
+      raw_event: { source: 'compact' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().statuses['dev']).toBe('idle')
+  })
+
+  it('SessionStart(startup) → status = running', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SessionStart',
+      raw_event: { source: 'startup' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().statuses['dev']).toBe('running')
+  })
+
+  it('SessionStart(resume) → status = running', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SessionStart',
+      raw_event: { source: 'resume' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().statuses['dev']).toBe('running')
+  })
+
+  it('StopFailure → status = idle', () => {
+    useAgentStore.setState({ statuses: { dev: 'running' } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'StopFailure',
+      raw_event: { error: 'rate_limit' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().statuses['dev']).toBe('idle')
   })
 
   it('Stop → status = idle', () => {
@@ -54,6 +156,54 @@ describe('useAgentStore', () => {
       tmux_session: 'dev',
       event_name: 'Stop',
       raw_event: {},
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().unread['dev']).toBe(true)
+  })
+
+  it('Notification(idle_prompt) → does not mark unread', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'Notification',
+      raw_event: { notification_type: 'idle_prompt' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().unread['dev']).toBeUndefined()
+  })
+
+  it('Notification(auth_success) → does not mark unread', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'Notification',
+      raw_event: { notification_type: 'auth_success' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().unread['dev']).toBeUndefined()
+  })
+
+  it('StopFailure → marks unread when not focused', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'StopFailure',
+      raw_event: { error: 'rate_limit' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().unread['dev']).toBe(true)
+  })
+
+  it('Notification(permission_prompt) → marks unread when not focused', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'Notification',
+      raw_event: { notification_type: 'permission_prompt' },
       agent_type: 'cc',
       broadcast_ts: Date.now(),
     }

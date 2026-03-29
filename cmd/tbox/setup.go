@@ -13,6 +13,7 @@ var hookEvents = []string{
 	"SessionStart",
 	"UserPromptSubmit",
 	"Stop",
+	"StopFailure",
 	"Notification",
 	"PermissionRequest",
 	"SessionEnd",
