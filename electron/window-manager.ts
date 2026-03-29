@@ -59,12 +59,22 @@ export class WindowManager {
   loadSPA(win: BrowserWindow): void {
     fetch(WindowManager.DEV_SERVER, { signal: AbortSignal.timeout(500) })
       .then(() => win.loadURL(WindowManager.DEV_SERVER))
-      .catch(() => win.loadFile(join(__dirname, '../renderer/index.html')))
+      .catch(() => win.loadURL('app://./index.html'))
   }
 
   reloadSPA(webContents: Electron.WebContents): void {
     const win = BrowserWindow.fromWebContents(webContents)
     if (win && !win.isDestroyed()) this.loadSPA(win)
+  }
+
+  async forceLoadSPA(webContents: Electron.WebContents, mode: 'dev' | 'bundled'): Promise<void> {
+    const win = BrowserWindow.fromWebContents(webContents)
+    if (!win || win.isDestroyed()) return
+    if (mode === 'dev') {
+      await win.loadURL(WindowManager.DEV_SERVER)
+    } else if (mode === 'bundled') {
+      await win.loadURL('app://./index.html')
+    }
   }
 
   closeWindow(windowId: string): void {

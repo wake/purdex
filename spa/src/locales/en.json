@@ -206,6 +206,9 @@
   "settings.dev.btn.update_app": "Update App",
   "settings.dev.btn.reload_spa": "Reload SPA",
   "settings.dev.btn.updating": "Updating...",
+  "settings.dev.spa_source": "SPA Source",
+  "settings.dev.btn.switch_bundled": "Switch to Bundled",
+  "settings.dev.btn.switch_dev": "Switch to Dev Server",
 
   "monitor.provider_label": "Memory Monitor",
   "monitor.requires_app": "Requires desktop app",
