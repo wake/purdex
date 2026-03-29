@@ -1,7 +1,10 @@
 package dev
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,6 +37,60 @@ func TestHandleDownload(t *testing.T) {
 	}
 	if w.Body.Len() == 0 {
 		t.Error("body is empty")
+	}
+}
+
+func TestHandleDownloadIncludesRenderer(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create fake out/ structure with main, preload, renderer
+	for _, sub := range []string{"main", "preload", "renderer"} {
+		p := filepath.Join(dir, "out", sub)
+		os.MkdirAll(p, 0755)
+		os.WriteFile(filepath.Join(p, "index.js"), []byte("// "+sub), 0644)
+	}
+	// Also create a directory that should be excluded
+	excluded := filepath.Join(dir, "out", "other")
+	os.MkdirAll(excluded, 0755)
+	os.WriteFile(filepath.Join(excluded, "skip.js"), []byte("// skip"), 0644)
+
+	m := &DevModule{repoRoot: dir}
+
+	req := httptest.NewRequest("GET", "/api/dev/update/download", nil)
+	w := httptest.NewRecorder()
+	m.handleDownload(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", w.Code)
+	}
+
+	// Extract tar and collect file names
+	gr, err := gzip.NewReader(w.Body)
+	if err != nil {
+		t.Fatalf("gzip: %v", err)
+	}
+	defer gr.Close()
+	tr := tar.NewReader(gr)
+
+	files := map[string]bool{}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("unexpected tar read error: %v", err)
+		}
+		files[hdr.Name] = true
+	}
+
+	for _, want := range []string{"main/index.js", "preload/index.js", "renderer/index.js"} {
+		if !files[want] {
+			t.Errorf("tar missing %s, got: %v", want, files)
+		}
+	}
+	if files["other/skip.js"] {
+		t.Error("tar should not contain other/skip.js")
 	}
 }
 
