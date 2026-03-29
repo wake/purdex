@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, Notification } from 'electron'
 import { WindowManager } from './window-manager'
 import { BrowserViewManager } from './browser-view-manager'
 import { createTray } from './tray'
@@ -49,6 +49,42 @@ function registerIpcHandlers(): void {
   // Memory Monitor
   ipcMain.handle('metrics:get', () => {
     return browserViewManager.getMetrics()
+  })
+
+  // Notifications
+  const recentBroadcasts = new Set<number>()
+  ipcMain.handle('notification:show', (_event, optsJson: string) => {
+    const opts = JSON.parse(optsJson) as {
+      title: string; body: string; sessionCode: string; eventName: string; broadcastTs: number
+    }
+    // Dedup: same broadcast received by multiple windows
+    if (recentBroadcasts.has(opts.broadcastTs)) return
+    recentBroadcasts.add(opts.broadcastTs)
+    setTimeout(() => recentBroadcasts.delete(opts.broadcastTs), 5000)
+
+    const notification = new Notification({ title: opts.title, body: opts.body })
+    notification.on('click', () => {
+      // Broadcast to all renderers — SPA decides which one has the tab
+      for (const win of windowManager.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send('notification:clicked', { sessionCode: opts.sessionCode })
+          win.show()
+        }
+      }
+      // Focus the first available window (SPA with the right tab will activate it)
+      const focused = windowManager.getAllWindows().find((w) => !w.isDestroyed())
+      focused?.focus()
+    })
+    notification.show()
+  })
+
+  // SPA requests its window to be focused (after handling notification click)
+  ipcMain.on('notification:focus-window', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (win && !win.isDestroyed()) {
+      win.show()
+      win.focus()
+    }
   })
 
   // SPA Reload (re-detect dev server, not just location.reload)
