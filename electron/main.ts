@@ -97,6 +97,11 @@ function registerIpcHandlers(): void {
     windowManager.reloadSPA(event.sender)
   })
 
+  // SPA Force Load (skip detection, load specific mode)
+  ipcMain.handle('spa:force-load', (event, mode: 'dev' | 'bundled') => {
+    windowManager.forceLoadSPA(event.sender, mode)
+  })
+
   // Dev Update
   ipcMain.handle('dev:app-info', () => getAppInfo())
   ipcMain.handle('dev:check-update', (_event, daemonUrl: string) => checkUpdate(daemonUrl))

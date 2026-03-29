@@ -51,6 +51,7 @@ interface Window {
     onTabReceived: (callback: (tabJson: string, replace: boolean) => void) => () => void
     signalReady: () => void
     reloadSPA: () => Promise<void>
+    forceLoadSPA: (mode: 'dev' | 'bundled') => Promise<void>
 
     // Keyboard Shortcuts
     onShortcut: (callback: (payload: { action: string }) => void) => () => void

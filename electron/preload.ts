@@ -29,6 +29,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // SPA reload (re-detect dev server via main process)
   reloadSPA: () => ipcRenderer.invoke('spa:reload'),
 
+  // SPA force load (skip detection, load specific mode)
+  forceLoadSPA: (mode: 'dev' | 'bundled') => ipcRenderer.invoke('spa:force-load', mode),
+
   // Keyboard Shortcuts
   onShortcut: (callback: (payload: { action: string }) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: { action: string }) =>

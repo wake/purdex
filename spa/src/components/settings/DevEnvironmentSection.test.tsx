@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, act } from '@testing-library/react'
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { DevEnvironmentSection } from './DevEnvironmentSection'
 
 const mockGetAppInfo = vi.fn().mockResolvedValue({
@@ -11,6 +11,7 @@ const mockGetAppInfo = vi.fn().mockResolvedValue({
 
 const mockCheckUpdate = vi.fn()
 const mockApplyUpdate = vi.fn()
+const mockForceLoadSPA = vi.fn().mockResolvedValue(undefined)
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -19,6 +20,7 @@ beforeEach(() => {
     getAppInfo: mockGetAppInfo,
     checkUpdate: mockCheckUpdate,
     applyUpdate: mockApplyUpdate,
+    forceLoadSPA: mockForceLoadSPA,
   } as any
 })
 
@@ -94,6 +96,65 @@ describe('DevEnvironmentSection', () => {
     // After poll, building is done — should show update_available
     await waitFor(() => {
       expect(screen.getByText(/Update available|有新版本/)).toBeTruthy()
+    })
+  })
+
+  describe('SPA source mode', () => {
+    const upToDateRemote = {
+      version: '1.0.0-alpha.21',
+      spaHash: 'def5678',
+      electronHash: 'abc1234',
+      source: { spaHash: 'src111', electronHash: 'src222' },
+      building: false,
+      buildError: '',
+    }
+
+    it('shows "Dev Server" when loaded from http: protocol', async () => {
+      mockCheckUpdate.mockResolvedValue(upToDateRemote)
+      // jsdom default is http://localhost — which means dev server
+      await act(async () => {
+        render(<DevEnvironmentSection />)
+      })
+      await waitFor(() => {
+        expect(screen.getByText('Dev Server')).toBeTruthy()
+      })
+    })
+
+    it('shows "Bundled" when loaded from app: protocol', async () => {
+      mockCheckUpdate.mockResolvedValue(upToDateRemote)
+      // Simulate app:// protocol by overriding location.protocol
+      const originalProtocol = window.location.protocol
+      Object.defineProperty(window, 'location', {
+        value: { ...window.location, protocol: 'app:' },
+        writable: true,
+      })
+      try {
+        await act(async () => {
+          render(<DevEnvironmentSection />)
+        })
+        await waitFor(() => {
+          expect(screen.getByText('Bundled')).toBeTruthy()
+        })
+      } finally {
+        Object.defineProperty(window, 'location', {
+          value: { ...window.location, protocol: originalProtocol },
+          writable: true,
+        })
+      }
+    })
+
+    it('shows switch button and calls forceLoadSPA on click', async () => {
+      mockCheckUpdate.mockResolvedValue(upToDateRemote)
+      // Default is http: → dev server, so button should offer "Switch to Bundled"
+      await act(async () => {
+        render(<DevEnvironmentSection />)
+      })
+      await waitFor(() => {
+        expect(screen.getByText('Dev Server')).toBeTruthy()
+      })
+      const switchBtn = screen.getByRole('button', { name: /Bundled/i })
+      fireEvent.click(switchBtn)
+      expect(mockForceLoadSPA).toHaveBeenCalledWith('bundled')
     })
   })
 

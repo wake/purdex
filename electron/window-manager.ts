@@ -67,6 +67,16 @@ export class WindowManager {
     if (win && !win.isDestroyed()) this.loadSPA(win)
   }
 
+  forceLoadSPA(webContents: Electron.WebContents, mode: 'dev' | 'bundled'): void {
+    const win = BrowserWindow.fromWebContents(webContents)
+    if (!win || win.isDestroyed()) return
+    if (mode === 'dev') {
+      win.loadURL(WindowManager.DEV_SERVER)
+    } else {
+      win.loadURL('app://./index.html')
+    }
+  }
+
   closeWindow(windowId: string): void {
     const win = this.windows.get(windowId)
     if (win && !win.isDestroyed()) {

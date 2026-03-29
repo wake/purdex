@@ -17,6 +17,8 @@ export function DevEnvironmentSection() {
   const getDaemonBase = useHostStore((s) => s.getDaemonBase)
   const daemonBase = getDaemonBase('local')
 
+  const spaSource: 'dev' | 'bundled' = window.location.protocol === 'http:' ? 'dev' : 'bundled'
+
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
   const [remoteInfo, setRemoteInfo] = useState<RemoteInfo | null>(null)
   const [status, setStatus] = useState<UpdateStatus>('idle')
@@ -134,6 +136,20 @@ export function DevEnvironmentSection() {
       </div>
 
       <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-text-primary">{t('settings.dev.spa_source')}</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-text-secondary font-mono">
+              {spaSource === 'dev' ? 'Dev Server' : 'Bundled'}
+            </span>
+            <button
+              onClick={() => window.electronAPI?.forceLoadSPA(spaSource === 'dev' ? 'bundled' : 'dev')}
+              className="px-2 py-0.5 text-xs rounded bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover cursor-pointer"
+            >
+              {spaSource === 'dev' ? t('settings.dev.btn.switch_bundled') : t('settings.dev.btn.switch_dev')}
+            </button>
+          </div>
+        </div>
         <div className="flex items-center justify-between">
           <span className="text-sm text-text-primary">{t('settings.dev.app_version')}</span>
           <span className="text-xs text-text-secondary font-mono">{appInfo?.version ?? '...'}</span>

@@ -206,6 +206,9 @@
   "settings.dev.btn.update_app": "更新 App",
   "settings.dev.btn.reload_spa": "重新載入 SPA",
   "settings.dev.btn.updating": "更新中...",
+  "settings.dev.spa_source": "SPA 來源",
+  "settings.dev.btn.switch_bundled": "切換為 Bundled",
+  "settings.dev.btn.switch_dev": "切換為 Dev Server",
 
   "monitor.provider_label": "記憶體監控",
   "monitor.requires_app": "需要安裝桌面版本",
