@@ -181,6 +181,24 @@ describe('DevEnvironmentSection', () => {
         })
       }
     })
+
+    it('shows error when forceLoadSPA rejects', async () => {
+      mockCheckUpdate.mockResolvedValue(upToDateRemote)
+      mockForceLoadSPA.mockRejectedValueOnce(new Error('ERR_CONNECTION_REFUSED'))
+      await act(async () => {
+        render(<DevEnvironmentSection />)
+      })
+      await waitFor(() => {
+        expect(screen.getByText('Dev Server')).toBeTruthy()
+      })
+      const switchBtn = screen.getByRole('button', { name: /Bundled/i })
+      await act(async () => {
+        fireEvent.click(switchBtn)
+      })
+      await waitFor(() => {
+        expect(screen.getByText(/Failed to load bundled SPA/)).toBeTruthy()
+      })
+    })
   })
 
   it('shows build error', async () => {

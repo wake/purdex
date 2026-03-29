@@ -71,6 +71,9 @@ export class WindowManager {
     const win = BrowserWindow.fromWebContents(webContents)
     if (!win || win.isDestroyed()) return
     if (mode === 'dev') {
+      // Verify dev server is reachable before navigating — loadURL navigates
+      // immediately, so a failure would strand the user on an error page.
+      await fetch(WindowManager.DEV_SERVER, { signal: AbortSignal.timeout(2000) })
       await win.loadURL(WindowManager.DEV_SERVER)
     } else if (mode === 'bundled') {
       await win.loadURL('app://./index.html')

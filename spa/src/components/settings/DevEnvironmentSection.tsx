@@ -143,7 +143,13 @@ export function DevEnvironmentSection() {
               {spaSource === 'dev' ? 'Dev Server' : 'Bundled'}
             </span>
             <button
-              onClick={() => window.electronAPI?.forceLoadSPA(spaSource === 'dev' ? 'bundled' : 'dev')}
+              onClick={() => {
+                const target = spaSource === 'dev' ? 'bundled' : 'dev'
+                window.electronAPI?.forceLoadSPA(target)?.catch(() => {
+                  setUpdateError(target === 'dev' ? 'Dev server is not reachable' : 'Failed to load bundled SPA')
+                  setStatus('error')
+                })
+              }}
               className="px-2 py-0.5 text-xs rounded bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover cursor-pointer"
             >
               {spaSource === 'dev' ? t('settings.dev.btn.switch_bundled') : t('settings.dev.btn.switch_dev')}
