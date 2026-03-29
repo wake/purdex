@@ -1,9 +1,17 @@
-import { app, BrowserWindow, ipcMain, Menu, Notification } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, Notification, protocol, net } from 'electron'
+import { join } from 'path'
 import { WindowManager } from './window-manager'
 import { BrowserViewManager } from './browser-view-manager'
 import { createTray } from './tray'
 import { getAppInfo, checkUpdate, applyUpdate } from './updater'
 import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
+
+// Register custom protocol before app is ready (Electron requirement).
+// 'app://' replaces 'file://' for bundled SPA, enabling standard CORS behavior.
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'app',
+  privileges: { standard: true, secure: true, supportFetchAPI: true },
+}])
 
 const windowManager = new WindowManager()
 const browserViewManager = new BrowserViewManager()
@@ -121,6 +129,13 @@ function startMetricsPolling(): void {
 }
 
 app.whenReady().then(() => {
+  // Serve bundled renderer files via app:// protocol
+  protocol.handle('app', (req) => {
+    let pathname = new URL(req.url).pathname
+    if (pathname === '/') pathname = '/index.html'
+    return net.fetch('file://' + join(__dirname, '../renderer', pathname))
+  })
+
   registerIpcHandlers()
   createTray(windowManager)
 

@@ -59,7 +59,7 @@ export class WindowManager {
   loadSPA(win: BrowserWindow): void {
     fetch(WindowManager.DEV_SERVER, { signal: AbortSignal.timeout(500) })
       .then(() => win.loadURL(WindowManager.DEV_SERVER))
-      .catch(() => win.loadFile(join(__dirname, '../renderer/index.html')))
+      .catch(() => win.loadURL('app://./index.html'))
   }
 
   reloadSPA(webContents: Electron.WebContents): void {
