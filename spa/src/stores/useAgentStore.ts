@@ -39,7 +39,8 @@ export function deriveStatus(eventName: string, rawEvent?: Record<string, unknow
     case 'Notification': {
       const nt = rawEvent?.notification_type
       if (nt === 'permission_prompt' || nt === 'elicitation_dialog') return 'waiting'
-      // idle_prompt, auth_success, or unknown → don't change status
+      if (nt === 'idle_prompt' || nt === 'auth_success') return 'idle'
+      // unknown notification_type → don't change status
       return null
     }
     case 'PermissionRequest':

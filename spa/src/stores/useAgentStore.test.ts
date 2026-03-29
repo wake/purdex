@@ -63,7 +63,7 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().statuses['dev']).toBe('idle')
   })
 
-  it('Notification(auth_success) → does not change status', () => {
+  it('Notification(auth_success) → status = idle', () => {
     useAgentStore.setState({ statuses: { dev: 'running' } })
     const event: AgentHookEvent = {
       tmux_session: 'dev',
@@ -73,7 +73,7 @@ describe('useAgentStore', () => {
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleHookEvent('dev', event)
-    expect(useAgentStore.getState().statuses['dev']).toBe('running')
+    expect(useAgentStore.getState().statuses['dev']).toBe('idle')
   })
 
   it('Notification without notification_type → does not change status', () => {
