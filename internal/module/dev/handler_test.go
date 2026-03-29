@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -74,8 +75,11 @@ func TestHandleDownloadIncludesRenderer(t *testing.T) {
 	files := map[string]bool{}
 	for {
 		hdr, err := tr.Next()
-		if err != nil {
+		if err == io.EOF {
 			break
+		}
+		if err != nil {
+			t.Fatalf("unexpected tar read error: %v", err)
 		}
 		files[hdr.Name] = true
 	}

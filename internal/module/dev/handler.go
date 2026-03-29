@@ -120,7 +120,7 @@ func (m *DevModule) handleDownload(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
-		// Top-level entries: only allow main/ and preload/ directories
+		// Top-level entries: only allow main/, preload/, and renderer/ directories
 		parts := strings.SplitN(rel, string(filepath.Separator), 2)
 		topLevel := parts[0]
 		if topLevel != "main" && topLevel != "preload" && topLevel != "renderer" {

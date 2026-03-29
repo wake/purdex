@@ -91,16 +91,21 @@ export async function applyUpdate(
       }
     }
   } catch (err) {
-    // Rollback: restore from backup
+    // Rollback: restore from backup — each target independently so one
+    // failure does not prevent restoring the others
     for (const name of targets) {
-      const backup = join(backupDir, name)
-      const dst = join(appOutDir, name)
-      if (existsSync(backup)) {
-        if (existsSync(dst)) rmSync(dst, { recursive: true })
-        renameSync(backup, dst)
+      try {
+        const backup = join(backupDir, name)
+        const dst = join(appOutDir, name)
+        if (existsSync(backup)) {
+          if (existsSync(dst)) rmSync(dst, { recursive: true })
+          renameSync(backup, dst)
+        }
+      } catch (rollbackErr) {
+        console.error(`[updater] rollback failed for ${name}:`, rollbackErr)
       }
     }
-    rmSync(tmpDir, { recursive: true })
+    try { rmSync(tmpDir, { recursive: true }) } catch { /* best effort */ }
     throw err
   }
 
