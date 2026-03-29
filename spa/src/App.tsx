@@ -14,6 +14,7 @@ import { useRelayWsManager } from './hooks/useRelayWsManager'
 import { useSessionEventWs } from './hooks/useSessionEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
 import { useShortcuts } from './hooks/useShortcuts'
+import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { isStandaloneTab } from './types/tab'
 import { TabContextMenu } from './components/TabContextMenu'
@@ -48,6 +49,7 @@ export default function App() {
   useSessionEventWs(wsBase, daemonBase)
   useRouteSync()
   useShortcuts()
+  useNotificationDispatcher()
 
   // --- Electron: signal SPA ready (replaces 500ms setTimeout) ---
   useEffect(() => {
