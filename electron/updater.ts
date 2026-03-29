@@ -19,6 +19,9 @@ export interface RemoteVersionInfo {
   version: string
   spaHash: string
   electronHash: string
+  source: { spaHash: string; electronHash: string }
+  building: boolean
+  buildError: string
 }
 
 export function getAppInfo(): AppInfo {
