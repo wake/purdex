@@ -151,7 +151,7 @@ func findTboxCommand(entries any) string {
 				continue
 			}
 			cmd, _ := hookMap["command"].(string)
-			if strings.Contains(cmd, "tbox hook") || strings.Contains(cmd, `tbox" hook`) {
+			if strings.Contains(cmd, "tbox hook") {
 				return cmd
 			}
 		}
