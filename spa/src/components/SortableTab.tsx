@@ -72,7 +72,10 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const workspaces = useWorkspaceStore((s) => s.workspaces)
 
   const sessionCode = primaryContent.kind === 'session' ? primaryContent.sessionCode : undefined
-  const agentStatus = useAgentStore((s) => sessionCode ? s.statuses[sessionCode] : undefined)
+  const agentStatus = useAgentStore((s) => {
+    if (!sessionCode) return undefined
+    return s.statuses[sessionCode] ?? (s.hooksInstalled ? 'idle' : undefined)
+  })
   const isUnread = useAgentStore((s) => sessionCode ? !!s.unread[sessionCode] : false)
   const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
   const sessionLookup = { getByCode: (code: string) => sessions.find((s) => s.code === code) }

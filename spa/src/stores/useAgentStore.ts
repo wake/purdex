@@ -19,11 +19,13 @@ interface AgentState {
   unread: Record<string, boolean>              // unread flag per session
   focusedSession: string | null
   tabIndicatorStyle: TabIndicatorStyle
+  hooksInstalled: boolean                      // whether CC hooks are installed
 
   handleHookEvent: (session: string, event: AgentHookEvent) => void
   markRead: (session: string) => void
   setFocusedSession: (session: string | null) => void
   setTabIndicatorStyle: (style: TabIndicatorStyle) => void
+  setHooksInstalled: (installed: boolean) => void
 }
 
 export function deriveStatus(eventName: string): AgentStatus | 'clear' | null {
@@ -58,6 +60,7 @@ export const useAgentStore = create<AgentState>()(
       unread: {},
       focusedSession: null,
       tabIndicatorStyle: 'overlay' as TabIndicatorStyle,
+      hooksInstalled: false,
 
       handleHookEvent: (session, event) => {
         const derived = deriveStatus(event.event_name)
@@ -105,6 +108,7 @@ export const useAgentStore = create<AgentState>()(
       },
 
       setTabIndicatorStyle: (style) => set({ tabIndicatorStyle: style }),
+      setHooksInstalled: (installed) => set({ hooksInstalled: installed }),
     }),
     {
       name: 'tbox-agent',

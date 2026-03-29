@@ -15,6 +15,7 @@ import { useSessionEventWs } from './hooks/useSessionEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
+import { useAgentStore } from './stores/useAgentStore'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { isStandaloneTab } from './types/tab'
 import { TabContextMenu } from './components/TabContextMenu'
@@ -50,6 +51,16 @@ export default function App() {
   useRouteSync()
   useShortcuts()
   useNotificationDispatcher()
+
+  // --- Fetch hook installation status on mount ---
+  useEffect(() => {
+    fetch(`${daemonBase}/api/agent/hook-status`)
+      .then((r) => r.json())
+      .then((data: { installed?: boolean }) => {
+        useAgentStore.getState().setHooksInstalled(!!data.installed)
+      })
+      .catch(() => { /* ignore */ })
+  }, [daemonBase])
 
   // --- Electron: signal SPA ready (replaces 500ms setTimeout) ---
   useEffect(() => {
