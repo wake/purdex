@@ -268,6 +268,7 @@
   "notification.fallback.new": "New notification",
   "notification.fallback.permission": "Permission required: unknown tool",
   "notification.fallback.stop": "Task completed",
+  "notification.fallback.stopFailure": "Task stopped unexpectedly",
 
   "settings.agent.cc.name": "Claude Code"
 }

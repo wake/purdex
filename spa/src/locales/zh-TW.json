@@ -268,6 +268,7 @@
   "notification.fallback.new": "新通知",
   "notification.fallback.permission": "需要授權：未知工具",
   "notification.fallback.stop": "任務完成",
+  "notification.fallback.stopFailure": "任務異常中斷",
 
   "settings.agent.cc.name": "Claude Code"
 }
