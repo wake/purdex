@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.30] - 2026-03-30
+
+SPA 來源切換 Preflight（PR #116）
+
+### 修正
+
+- **forceLoadSPA preflight** — 切換至 Dev Server 前先驗證可達性（2s timeout + `response.ok`），避免用戶困在錯誤頁
+- IPC error 序列化為 plain string（contextBridge 相容）
+- 錯誤訊息顯示具體原因 + i18n 化
+
 ## [1.0.0-alpha.29] - 2026-03-30
 
 Dev Update 包含 Renderer（PR #115）
