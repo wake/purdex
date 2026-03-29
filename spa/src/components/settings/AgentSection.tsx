@@ -32,6 +32,10 @@ export function AgentSection() {
         <p className="text-xs text-text-muted mt-1">{t('settings.agent.desc')}</p>
       </div>
 
+      <p className="text-xs text-text-muted border border-border-subtle rounded px-3 py-2">
+        {t('settings.agent.host_note')}
+      </p>
+
       {agentTypes.map((agentType) => {
         const settings = getSettings(agentType)
         const label = agentType === 'cc' ? t('settings.agent.cc.name') : agentType

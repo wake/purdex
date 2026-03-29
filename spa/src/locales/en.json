@@ -20,6 +20,7 @@
 
   "settings.agent.title": "Agent",
   "settings.agent.desc": "Agent notification and hook settings",
+  "settings.agent.host_note": "Hook installation and agent settings are per-host. Configure and enable hooks within each host.",
   "settings.agent.notifications.enabled": "Enable Notifications",
   "settings.agent.notifications.enabled_desc": "Show system notifications for agent events",
   "settings.agent.notifications.notify_without_tab": "Notify Without Tab",

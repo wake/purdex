@@ -20,6 +20,7 @@
 
   "settings.agent.title": "Agent",
   "settings.agent.desc": "Agent 通知與 Hook 設定",
+  "settings.agent.host_note": "Hook 的安裝與 Agent 設定為各主機獨立配置。請在每個 Host 中設定和啟用 Hooks。",
   "settings.agent.notifications.enabled": "啟用通知",
   "settings.agent.notifications.enabled_desc": "顯示 Agent 事件的系統通知",
   "settings.agent.notifications.notify_without_tab": "無分頁時仍通知",
