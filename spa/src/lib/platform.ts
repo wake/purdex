@@ -6,6 +6,7 @@ export interface PlatformCapabilities {
   canMergeWindow: boolean
   canBrowserPane: boolean
   canSystemTray: boolean
+  canNotification: boolean
   devUpdateEnabled: boolean
 }
 
@@ -18,6 +19,7 @@ export function getPlatformCapabilities(): PlatformCapabilities {
     canMergeWindow: isElectron,
     canBrowserPane: isElectron,
     canSystemTray: isElectron,
+    canNotification: isElectron,
     devUpdateEnabled,
   }
 }

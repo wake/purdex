@@ -18,6 +18,8 @@ describe('useAgentStore', () => {
       tmux_session: 'dev',
       event_name: 'UserPromptSubmit',
       raw_event: { foo: 'bar' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleHookEvent('dev', event)
     expect(useAgentStore.getState().statuses['dev']).toBe('running')
@@ -28,6 +30,8 @@ describe('useAgentStore', () => {
       tmux_session: 'dev',
       event_name: 'Notification',
       raw_event: {},
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleHookEvent('dev', event)
     expect(useAgentStore.getState().statuses['dev']).toBe('waiting')
@@ -38,6 +42,8 @@ describe('useAgentStore', () => {
       tmux_session: 'dev',
       event_name: 'Stop',
       raw_event: {},
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleHookEvent('dev', event)
     expect(useAgentStore.getState().statuses['dev']).toBe('idle')
@@ -48,6 +54,8 @@ describe('useAgentStore', () => {
       tmux_session: 'dev',
       event_name: 'Stop',
       raw_event: {},
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleHookEvent('dev', event)
     expect(useAgentStore.getState().unread['dev']).toBe(true)
@@ -63,7 +71,7 @@ describe('useAgentStore', () => {
   it('SessionEnd → clears status', () => {
     // Set up some state for the session
     useAgentStore.setState({
-      events: { dev: { tmux_session: 'dev', event_name: 'Stop', raw_event: {} } },
+      events: { dev: { tmux_session: 'dev', event_name: 'Stop', raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now() } },
       statuses: { dev: 'idle' },
       unread: { dev: true },
     })
@@ -71,6 +79,8 @@ describe('useAgentStore', () => {
       tmux_session: 'dev',
       event_name: 'SessionEnd',
       raw_event: {},
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleHookEvent('dev', event)
     expect(useAgentStore.getState().statuses['dev']).toBeUndefined()
@@ -84,6 +94,8 @@ describe('useAgentStore', () => {
       tmux_session: 'dev',
       event_name: 'UserPromptSubmit',
       raw_event: rawEvent,
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleHookEvent('dev', event)
     expect(useAgentStore.getState().events['dev'].raw_event).toEqual(rawEvent)
