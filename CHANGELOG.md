@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.25] - 2026-03-29
+
+Dev Update Auto-Build（PR #96）
+
+### 新增
+
+- **`out/.build-info.json`** — `electron-vite build` 完成後寫入 build metadata（version + hash + timestamp）
+- **check/download 一致性** — `check` 端點改讀 `.build-info.json` 作為 build hash，頂層回傳 build hash + `source` 回傳 git hash
+- **Auto-build** — source ≠ build 時 daemon 背景自動觸發 `electron-vite build`，回傳 `building: true`
+- **Build 失敗退避** — 同一 source hash 失敗後不重複觸發，source 改變才重試
+- **Download 建置鎖** — build 進行中 download 回傳 409 Conflict
+- **SPA Building 狀態** — 顯示「建置中…」+ 每 3 秒 poll，完成後自動比對
+
+### 修正
+
+- Partial build 不再污染 `.build-info.json`（build 前先刪除）
+- `pnpm exec` 取代 `npx`，符合 pnpm-only 規範
+- `RemoteInfo` 型別從 `electron.d.ts` derive，消除三處重複定義
+
+### 關閉 Issue
+
+- #78（feat: dev update — auto-build before download）
+- #98（refactor: unify RemoteVersionInfo type）
+
 ## [1.0.0-alpha.24] - 2026-03-29
 
 Agent Hook 狀態偵測（PR #91）
