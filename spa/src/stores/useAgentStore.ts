@@ -40,7 +40,8 @@ export function deriveStatus(eventName: string, rawEvent?: Record<string, unknow
       const nt = rawEvent?.notification_type
       if (nt === 'permission_prompt' || nt === 'elicitation_dialog') return 'waiting'
       if (nt === 'idle_prompt' || nt === 'auth_success') return 'idle'
-      // unknown notification_type → don't change status
+      // unrecognized or missing notification_type → don't change status
+      if (nt !== undefined) console.warn('[deriveStatus] unknown notification_type:', nt)
       return null
     }
     case 'PermissionRequest':
@@ -96,8 +97,9 @@ export const useAgentStore = create<AgentState>()(
           // Update status
           set((s) => ({ statuses: { ...s.statuses, [session]: derived } }))
 
-          // Mark unread on actionable events (waiting, Stop/StopFailure) when not focused.
-          // Informational notifications (idle_prompt, auth_success) are excluded.
+          // Mark unread when not focused: all 'waiting' statuses are actionable;
+          // 'idle' statuses are actionable only if they don't come from a Notification event
+          // (idle_prompt/auth_success are informational and should not trigger the red dot).
           const isActionable = derived === 'waiting' ||
             (derived === 'idle' && event.event_name !== 'Notification')
           if (isActionable && get().focusedSession !== session) {

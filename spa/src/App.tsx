@@ -53,13 +53,17 @@ export default function App() {
   useNotificationDispatcher()
 
   // --- Fetch hook installation status on mount ---
+  // Sets global hooksInstalled flag (used by SortableTab for idle fallback).
   useEffect(() => {
     fetch(`${daemonBase}/api/agent/hook-status`)
-      .then((r) => r.json())
-      .then((data: { installed?: boolean }) => {
-        useAgentStore.getState().setHooksInstalled(!!data.installed)
+      .then((r) => {
+        if (!r.ok) return
+        return r.json()
       })
-      .catch(() => { /* ignore */ })
+      .then((data: { installed?: boolean } | undefined) => {
+        if (data) useAgentStore.getState().setHooksInstalled(!!data.installed)
+      })
+      .catch(() => { /* daemon unreachable — hooksInstalled stays false */ })
   }, [daemonBase])
 
   // --- Electron: signal SPA ready (replaces 500ms setTimeout) ---

@@ -9,6 +9,7 @@ beforeEach(() => {
     statuses: {},
     unread: {},
     focusedSession: null,
+    hooksInstalled: false,
   })
 })
 
@@ -172,6 +173,30 @@ describe('useAgentStore', () => {
     }
     useAgentStore.getState().handleHookEvent('dev', event)
     expect(useAgentStore.getState().unread['dev']).toBeUndefined()
+  })
+
+  it('Notification(auth_success) → does not mark unread', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'Notification',
+      raw_event: { notification_type: 'auth_success' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().unread['dev']).toBeUndefined()
+  })
+
+  it('StopFailure → marks unread when not focused', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'StopFailure',
+      raw_event: { error: 'rate_limit' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().unread['dev']).toBe(true)
   })
 
   it('Notification(permission_prompt) → marks unread when not focused', () => {
