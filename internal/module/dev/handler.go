@@ -11,17 +11,68 @@ import (
 	"strings"
 )
 
-type UpdateCheckResponse struct {
-	Version      string `json:"version"`
+type SourceHashes struct {
 	SPAHash      string `json:"spaHash"`
 	ElectronHash string `json:"electronHash"`
 }
 
+type UpdateCheckResponse struct {
+	Version      string       `json:"version"`
+	SPAHash      string       `json:"spaHash"`
+	ElectronHash string       `json:"electronHash"`
+	Source       SourceHashes `json:"source"`
+	Building     bool         `json:"building"`
+	BuildError   string       `json:"buildError"`
+}
+
+type BuildInfo struct {
+	Version      string `json:"version"`
+	SPAHash      string `json:"spaHash"`
+	ElectronHash string `json:"electronHash"`
+	BuiltAt      string `json:"builtAt"`
+}
+
+func (m *DevModule) readBuildInfo() BuildInfo {
+	path := filepath.Join(m.repoRoot, "out", ".build-info.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return BuildInfo{SPAHash: "unknown", ElectronHash: "unknown"}
+	}
+	var info BuildInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return BuildInfo{SPAHash: "unknown", ElectronHash: "unknown"}
+	}
+	return info
+}
+
 func (m *DevModule) handleCheck(w http.ResponseWriter, r *http.Request) {
+	build := m.readBuildInfo()
+	spaSource := m.hashFn("spa/")
+	electronSource := m.hashFn("electron/", "electron.vite.config.ts")
+
+	// Determine if source differs from build
+	sourceChanged := build.SPAHash != spaSource || build.ElectronHash != electronSource
+
+	m.mu.Lock()
+	if sourceChanged && !m.building {
+		m.building = true
+		m.buildError = ""
+		go m.runBuild()
+	}
+	building := m.building
+	buildError := m.buildError
+	m.mu.Unlock()
+
 	resp := UpdateCheckResponse{
 		Version:      m.readVersion(),
-		SPAHash:      m.hashFn("spa/"),
-		ElectronHash: m.hashFn("electron/", "electron.vite.config.ts"),
+		SPAHash:      build.SPAHash,
+		ElectronHash: build.ElectronHash,
+		Source: SourceHashes{
+			SPAHash:      spaSource,
+			ElectronHash: electronSource,
+		},
+		Building:   building,
+		BuildError: buildError,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
