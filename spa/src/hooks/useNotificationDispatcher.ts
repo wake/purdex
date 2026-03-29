@@ -23,6 +23,9 @@ interface ShouldNotifyParams {
 export function shouldNotify(params: ShouldNotifyParams): boolean {
   const { derived, eventName, sessionCode, focusedSession, hasTab, settings } = params
   if (derived !== 'waiting' && derived !== 'idle') return false
+  // Informational Notification subtypes (idle_prompt, auth_success) derive to 'idle'
+  // but should not trigger desktop notifications — consistent with unread marking logic.
+  if (derived === 'idle' && eventName === 'Notification') return false
   if (!settings.enabled) return false
   if (settings.events[eventName] === false) return false
   if (!hasTab && !settings.notifyWithoutTab) return false

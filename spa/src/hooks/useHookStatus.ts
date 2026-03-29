@@ -24,7 +24,11 @@ export function useHookStatus() {
   useEffect(() => {
     fetch(`${daemonBase}/api/agent/hook-status`)
       .then((r) => r.json())
-      .then((data) => setHookStatus(data as HookStatus))
+      .then((data) => {
+        const status = data as HookStatus
+        setHookStatus(status)
+        useAgentStore.getState().setHooksInstalled(!!status.installed)
+      })
       .catch(() => setHookStatus(null))
   }, [daemonBase])
 
