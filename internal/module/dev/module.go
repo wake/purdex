@@ -14,14 +14,16 @@ import (
 )
 
 type DevModule struct {
-	core        *core.Core
-	repoRoot    string
-	versionFile string
-	hashFn      func(paths ...string) string
-	mu          sync.Mutex
-	building    bool
-	buildError  string
-	buildCmd    func() error
+	core               *core.Core
+	repoRoot           string
+	versionFile        string
+	hashFn             func(paths ...string) string
+	mu                 sync.Mutex
+	building           bool
+	buildError         string
+	buildCmd           func() error
+	lastFailedSPA      string
+	lastFailedElectron string
 }
 
 func New(repoRoot string) *DevModule {
@@ -47,6 +49,10 @@ func (m *DevModule) Init(c *core.Core) error {
 }
 
 func (m *DevModule) runBuild() {
+	// Remove stale build info so a partial build doesn't leave source hashes
+	// that prevent re-triggering on next check
+	os.Remove(filepath.Join(m.repoRoot, "out", ".build-info.json"))
+
 	err := m.buildCmd()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -56,6 +62,8 @@ func (m *DevModule) runBuild() {
 		log.Printf("[dev] build failed: %v", err)
 	} else {
 		m.buildError = ""
+		m.lastFailedSPA = ""
+		m.lastFailedElectron = ""
 		log.Println("[dev] build completed successfully")
 	}
 }

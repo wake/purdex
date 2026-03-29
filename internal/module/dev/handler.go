@@ -54,9 +54,12 @@ func (m *DevModule) handleCheck(w http.ResponseWriter, r *http.Request) {
 	sourceChanged := build.SPAHash != spaSource || build.ElectronHash != electronSource
 
 	m.mu.Lock()
-	if sourceChanged && !m.building {
+	failedSameSource := m.buildError != "" && m.lastFailedSPA == spaSource && m.lastFailedElectron == electronSource
+	if sourceChanged && !m.building && !failedSameSource {
 		m.building = true
 		m.buildError = ""
+		m.lastFailedSPA = spaSource
+		m.lastFailedElectron = electronSource
 		go m.runBuild()
 	}
 	building := m.building
@@ -79,6 +82,14 @@ func (m *DevModule) handleCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *DevModule) handleDownload(w http.ResponseWriter, r *http.Request) {
+	m.mu.Lock()
+	building := m.building
+	m.mu.Unlock()
+	if building {
+		http.Error(w, "build in progress", http.StatusConflict)
+		return
+	}
+
 	outDir := filepath.Join(m.repoRoot, "out")
 	if _, err := os.Stat(outDir); os.IsNotExist(err) {
 		http.Error(w, "out/ directory not found", http.StatusNotFound)

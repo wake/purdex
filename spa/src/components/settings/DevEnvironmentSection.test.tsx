@@ -93,7 +93,7 @@ describe('DevEnvironmentSection', () => {
 
     // After poll, building is done — should show update_available
     await waitFor(() => {
-      expect(screen.getByText(/Update available|有可用更新/)).toBeTruthy()
+      expect(screen.getByText(/Update available|有新版本/)).toBeTruthy()
     })
   })
 
