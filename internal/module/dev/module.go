@@ -69,7 +69,7 @@ func (m *DevModule) runBuild() {
 }
 
 func (m *DevModule) defaultBuild() error {
-	cmd := exec.Command("npx", "electron-vite", "build")
+	cmd := exec.Command("pnpm", "exec", "electron-vite", "build")
 	cmd.Dir = m.repoRoot
 	out, err := cmd.CombinedOutput()
 	if err != nil {
