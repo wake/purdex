@@ -32,6 +32,15 @@ interface ElectronUpdateResult {
   message: string
 }
 
+interface ElectronRemoteVersionInfo {
+  version: string
+  spaHash: string
+  electronHash: string
+  source: { spaHash: string; electronHash: string }
+  building: boolean
+  buildError: string
+}
+
 interface Window {
   electronAPI?: {
     tearOffTab: (tabJson: string) => Promise<void>
@@ -58,7 +67,7 @@ interface Window {
 
     // Dev Update
     getAppInfo: () => Promise<ElectronAppInfo>
-    checkUpdate: (daemonUrl: string) => Promise<{ version: string; spaHash: string; electronHash: string; source: { spaHash: string; electronHash: string }; building: boolean; buildError: string }>
+    checkUpdate: (daemonUrl: string) => Promise<ElectronRemoteVersionInfo>
     applyUpdate: (daemonUrl: string) => Promise<ElectronUpdateResult>
     onUpdateProgress: (callback: (step: string) => void) => () => void
   }

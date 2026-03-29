@@ -10,14 +10,7 @@ interface AppInfo {
   spaHash: string
 }
 
-interface RemoteInfo {
-  version: string
-  spaHash: string
-  electronHash: string
-  source: { spaHash: string; electronHash: string }
-  building: boolean
-  buildError: string
-}
+type RemoteInfo = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['checkUpdate']>>
 
 export function DevEnvironmentSection() {
   const t = useI18nStore((s) => s.t)
