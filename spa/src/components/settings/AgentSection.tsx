@@ -24,10 +24,7 @@ export function AgentSection() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h3 className="text-sm font-medium text-text-primary">{t('settings.agent.title')}</h3>
-        <p className="text-xs text-text-muted mt-1">{t('settings.agent.desc')}</p>
-      </div>
+      <h2 className="text-lg text-text-primary">{t('settings.agent.title')}</h2>
 
       <p className="text-xs text-text-muted border border-border-subtle rounded px-3 py-2">
         {t('settings.agent.host_note')}
