@@ -123,7 +123,7 @@ func TestAgentEventStore_ListAll(t *testing.T) {
 
 func TestAgentEventStore_Delete(t *testing.T) {
 	s := openTestAgentEventStore(t)
-	s.Set("proj", "Stop", json.RawMessage(`{}`), "cc")
+	s.Set("proj", "Stop", json.RawMessage(`{}`), "cc", 0)
 	s.Delete("proj")
 
 	ev, _ := s.Get("proj")

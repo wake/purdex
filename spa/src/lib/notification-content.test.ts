@@ -21,4 +21,14 @@ describe('buildNotificationContent', () => {
   it('unknown event → null', () => {
     expect(buildNotificationContent('SessionStart', {}, 'x')).toBeNull()
   })
+  it('Stop without message → uses t() when provided', () => {
+    const t = (key: string) => key === 'notification.fallback.stop' ? 'Aufgabe abgeschlossen' : key
+    const result = buildNotificationContent('Stop', {}, 'my-session', t)
+    expect(result).toEqual({ title: 'my-session', body: 'Aufgabe abgeschlossen' })
+  })
+  it('Notification without message → uses t() fallback', () => {
+    const t = (key: string) => key === 'notification.fallback.new' ? '新通知' : key
+    const result = buildNotificationContent('Notification', {}, 'my-session', t)
+    expect(result).toEqual({ title: 'my-session', body: '新通知' })
+  })
 })

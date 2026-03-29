@@ -45,7 +45,7 @@ export function AgentSection() {
 
       {agentTypes.map((agentType) => {
         const settings = getSettings(agentType)
-        const label = agentType === 'cc' ? 'Claude Code' : agentType
+        const label = agentType === 'cc' ? t('settings.agent.cc.name') : agentType
 
         return (
           <div key={agentType} className="border border-border-default rounded-md p-3 space-y-3">

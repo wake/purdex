@@ -58,7 +58,7 @@ export function useNotificationDispatcher(): void {
         const session = sessions.find((s) => s.code === sessionCode)
         const sessionName = session?.name || sessionCode
 
-        const content = buildNotificationContent(event.event_name, event.raw_event, sessionName)
+        const content = buildNotificationContent(event.event_name, event.raw_event, sessionName, useI18nStore.getState().t)
         if (!content) continue
 
         notifiedRef.current.add(event.broadcast_ts)
