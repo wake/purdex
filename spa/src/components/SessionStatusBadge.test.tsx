@@ -9,6 +9,7 @@ describe('SessionStatusBadge', () => {
     ['running', 'bg-green-400'],
     ['waiting', 'bg-yellow-400'],
     ['idle', 'bg-gray-500'],
+    ['error', 'bg-red-500'],
   ]
 
   cases.forEach(([status, expectedClass]) => {

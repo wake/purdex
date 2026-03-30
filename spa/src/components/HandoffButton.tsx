@@ -11,7 +11,7 @@ interface Props {
 }
 
 function isAgentActive(status?: AgentStatus): boolean {
-  return status === 'idle' || status === 'running' || status === 'waiting'
+  return status === 'idle' || status === 'running' || status === 'waiting' || status === 'error'
 }
 
 export default function HandoffButton({ inProgress, progress = '', agentStatus, onHandoff }: Props) {

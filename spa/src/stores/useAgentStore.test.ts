@@ -367,6 +367,19 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().activeSubagents['dev']).toBeUndefined()
   })
 
+  it('SessionStart(compact) → does NOT clear activeSubagents', () => {
+    useAgentStore.setState({ activeSubagents: { dev: ['agent-A'] } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SessionStart',
+      raw_event: { source: 'compact' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().activeSubagents['dev']).toEqual(['agent-A'])
+  })
+
   it('SubagentStart without agent_id → ignored', () => {
     const event: AgentHookEvent = {
       tmux_session: 'dev',

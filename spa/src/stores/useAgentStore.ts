@@ -129,8 +129,9 @@ export const useAgentStore = create<AgentState>()(
           return
         }
 
-        // Safety net: clear subagents on SessionStart (fresh/resumed session)
-        if (event.event_name === 'SessionStart') {
+        // Safety net: clear subagents on SessionStart (fresh/resumed session).
+        // Skip compact — that's mid-work auto-compaction, subagents may still be running.
+        if (event.event_name === 'SessionStart' && event.raw_event?.source !== 'compact') {
           set((s) => {
             if (!s.activeSubagents[session]) return s
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
