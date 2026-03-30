@@ -73,9 +73,8 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
     const files = Array.from(e.dataTransfer.files)
     if (files.length === 0) return
 
-    const { startUpload, fileCompleted, fileFailed, nextFile, dismiss } = useUploadStore.getState()
-    dismiss(sessionCode) // clear any previous error/done state
-    startUpload(sessionCode, files.length, files[0].name)
+    const { startUpload, fileCompleted, fileFailed, nextFile } = useUploadStore.getState()
+    startUpload(sessionCode, files.length, files[0].name) // overwrites any previous done/error state
 
     for (let i = 0; i < files.length; i++) {
       if (i > 0) nextFile(sessionCode, files[i].name)

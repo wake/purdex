@@ -53,9 +53,17 @@ describe('useUploadStore', () => {
     expect(useUploadStore.getState().sessions['dev'].currentFile).toBe('b.png')
   })
 
-  it('dismiss clears session state', () => {
+  it('dismiss clears done/error state', () => {
     useUploadStore.getState().startUpload('dev', 1, 'a.png')
+    useUploadStore.getState().fileCompleted('dev') // status → done
     useUploadStore.getState().dismiss('dev')
     expect(useUploadStore.getState().sessions['dev']).toBeUndefined()
+  })
+
+  it('dismiss does not clear uploading state', () => {
+    useUploadStore.getState().startUpload('dev', 3, 'a.png')
+    useUploadStore.getState().dismiss('dev')
+    expect(useUploadStore.getState().sessions['dev']).toBeDefined()
+    expect(useUploadStore.getState().sessions['dev'].status).toBe('uploading')
   })
 })

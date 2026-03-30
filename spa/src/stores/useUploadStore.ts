@@ -77,6 +77,9 @@ export const useUploadStore = create<UploadState>((set) => ({
 
   dismiss: (session) =>
     set((s) => {
+      const prev = s.sessions[session]
+      // Don't dismiss while uploading — prevents concurrent drop from corrupting state.
+      if (prev?.status === 'uploading') return s
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { [session]: _, ...rest } = s.sessions
       return { sessions: rest }
