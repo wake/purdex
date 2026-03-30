@@ -43,6 +43,10 @@ export function useSessionEventWs(wsBase: string, daemonBase: string) {
           }
         }
       },
+      undefined, // onClose
+      // onOpen (initial + reconnect): clear ephemeral subagent tracking —
+      // DB snapshot won't contain SubagentStart/Stop events.
+      () => { useAgentStore.getState().clearAllSubagents() },
     )
     return () => conn.close()
   }, [fetchSessions, daemonBase, wsBase])

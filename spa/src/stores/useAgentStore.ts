@@ -24,6 +24,7 @@ interface AgentState {
 
   handleHookEvent: (session: string, event: AgentHookEvent) => void
   markRead: (session: string) => void
+  clearAllSubagents: () => void
   setTabIndicatorStyle: (style: TabIndicatorStyle) => void
   setHooksInstalled: (installed: boolean) => void
 }
@@ -166,6 +167,8 @@ export const useAgentStore = create<AgentState>()(
         const { [session]: _, ...rest } = s.unread
         return { unread: rest }
       }),
+
+      clearAllSubagents: () => set({ activeSubagents: {} }),
 
       setTabIndicatorStyle: (style) => set({ tabIndicatorStyle: style }),
       setHooksInstalled: (installed) => set({ hooksInstalled: installed }),
