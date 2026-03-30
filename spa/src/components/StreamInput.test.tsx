@@ -73,4 +73,20 @@ describe('StreamInput', () => {
     render(<StreamInput onSend={vi.fn()} onHandoffToTerm={vi.fn()} disabled />)
     expect(screen.getByTitle('Handoff to Term')).toBeDisabled()
   })
+
+  it('focuses textarea when focused prop becomes true', async () => {
+    const { rerender } = render(<StreamInput onSend={vi.fn()} focused={false} />)
+    const textarea = screen.getByRole('textbox')
+    expect(document.activeElement).not.toBe(textarea)
+    rerender(<StreamInput onSend={vi.fn()} focused={true} />)
+    // requestAnimationFrame delay
+    await new Promise((r) => requestAnimationFrame(r))
+    expect(document.activeElement).toBe(textarea)
+  })
+
+  it('does not focus textarea when disabled even if focused=true', async () => {
+    render(<StreamInput onSend={vi.fn()} focused={true} disabled />)
+    await new Promise((r) => requestAnimationFrame(r))
+    expect(document.activeElement).not.toBe(screen.getByRole('textbox'))
+  })
 })

@@ -12,7 +12,7 @@ vi.mock('../lib/api', () => ({
 beforeEach(() => {
   cleanup()
   useSessionStore.setState({ sessions: [], activeId: null })
-  useAgentStore.setState({ statuses: {}, events: {}, unread: {}, focusedSession: null })
+  useAgentStore.setState({ statuses: {}, events: {}, unread: {} })
 })
 
 describe('SessionPanel', () => {

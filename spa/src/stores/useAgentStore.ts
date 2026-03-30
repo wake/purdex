@@ -1,6 +1,7 @@
 // spa/src/stores/useAgentStore.ts
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { getActiveSessionCode } from '../lib/active-session'
 
 export type AgentStatus = 'running' | 'waiting' | 'idle'
 export type TabIndicatorStyle = 'overlay' | 'replace' | 'inline'
@@ -17,13 +18,11 @@ interface AgentState {
   events: Record<string, AgentHookEvent>       // latest event per session code
   statuses: Record<string, AgentStatus>        // derived status per session
   unread: Record<string, boolean>              // unread flag per session
-  focusedSession: string | null
   tabIndicatorStyle: TabIndicatorStyle
   hooksInstalled: boolean                      // whether CC hooks are installed
 
   handleHookEvent: (session: string, event: AgentHookEvent) => void
   markRead: (session: string) => void
-  setFocusedSession: (session: string | null) => void
   setTabIndicatorStyle: (style: TabIndicatorStyle) => void
   setHooksInstalled: (installed: boolean) => void
 }
@@ -69,7 +68,6 @@ export const useAgentStore = create<AgentState>()(
       events: {},
       statuses: {},
       unread: {},
-      focusedSession: null,
       tabIndicatorStyle: 'overlay' as TabIndicatorStyle,
       hooksInstalled: false,
 
@@ -102,7 +100,7 @@ export const useAgentStore = create<AgentState>()(
           // (idle_prompt/auth_success are informational and should not trigger the red dot).
           const isActionable = derived === 'waiting' ||
             (derived === 'idle' && event.event_name !== 'Notification')
-          if (isActionable && get().focusedSession !== session) {
+          if (isActionable && getActiveSessionCode() !== session) {
             set((s) => ({ unread: { ...s.unread, [session]: true } }))
           }
         }
@@ -113,13 +111,6 @@ export const useAgentStore = create<AgentState>()(
         const { [session]: _, ...rest } = s.unread
         return { unread: rest }
       }),
-
-      setFocusedSession: (session) => {
-        set({ focusedSession: session })
-        if (session !== null) {
-          get().markRead(session)
-        }
-      },
 
       setTabIndicatorStyle: (style) => set({ tabIndicatorStyle: style }),
       setHooksInstalled: (installed) => set({ hooksInstalled: installed }),

@@ -55,6 +55,7 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
     return (
       <ConversationView
         sessionCode={sessionCode}
+        isActive={isActive}
         onHandoff={handleHandoff}
         onHandoffToTerm={handleHandoffToTerm}
       />
