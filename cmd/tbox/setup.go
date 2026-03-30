@@ -88,12 +88,13 @@ func mergeHooks(path, tboxPath string, remove bool) error {
 	for _, event := range hookEvents {
 		entries := toEntrySlice(hooks[event])
 
-		if remove {
-			entries = filterOutTbox(entries, tboxPath)
-		} else {
-			if !hasTboxEntry(entries, tboxPath) {
-				entries = append(entries, makeTboxEntry(tboxPath, event))
-			}
+		// Always remove ALL existing tbox entries (any path) first.
+		// This prevents duplicates when setup is re-run from a different
+		// binary path (e.g. ./tbox vs ./bin/tbox).
+		entries = filterOutAnyTbox(entries)
+
+		if !remove {
+			entries = append(entries, makeTboxEntry(tboxPath, event))
 		}
 
 		hooks[event] = entries
@@ -149,7 +150,7 @@ func hasTboxEntry(entries []any, tboxPath string) bool {
 	return false
 }
 
-// filterOutTbox returns entries with tbox entries removed.
+// filterOutTbox returns entries with tbox entries for a specific path removed.
 // Always returns a non-nil slice (empty []any{} when all removed).
 func filterOutTbox(entries []any, tboxPath string) []any {
 	result := []any{}
@@ -159,6 +160,48 @@ func filterOutTbox(entries []any, tboxPath string) []any {
 		}
 	}
 	return result
+}
+
+// filterOutAnyTbox returns entries with ALL tbox hook entries removed,
+// regardless of binary path. Detects commands containing "tbox" + "hook".
+func filterOutAnyTbox(entries []any) []any {
+	result := []any{}
+	for _, e := range entries {
+		if !entryIsTbox(e) {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// entryIsTbox checks if an entry contains a tbox hook command (any path).
+func entryIsTbox(entry any) bool {
+	m, ok := entry.(map[string]any)
+	if !ok {
+		return false
+	}
+	innerHooks, ok := m["hooks"]
+	if !ok {
+		return false
+	}
+	arr, ok := innerHooks.([]any)
+	if !ok {
+		return false
+	}
+	for _, h := range arr {
+		hookObj, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		cmd, ok := hookObj["command"].(string)
+		if !ok {
+			continue
+		}
+		if strings.Contains(cmd, "tbox") && strings.Contains(cmd, "hook") {
+			return true
+		}
+	}
+	return false
 }
 
 // entryMatchesTbox checks if an entry's hooks[].command belongs to tboxPath.

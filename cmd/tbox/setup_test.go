@@ -318,6 +318,47 @@ func TestEntryMatchesTbox_NoFalsePositive(t *testing.T) {
 	}
 }
 
+func TestMergeHooks_DifferentPaths(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+
+	// First setup with one path
+	if err := mergeHooks(settingsPath, "/project/tbox", false); err != nil {
+		t.Fatalf("first mergeHooks: %v", err)
+	}
+	// Second setup with a different path (simulates ./tbox vs ./bin/tbox)
+	if err := mergeHooks(settingsPath, "/project/bin/tbox", false); err != nil {
+		t.Fatalf("second mergeHooks: %v", err)
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	hooks := settings["hooks"].(map[string]any)
+
+	for _, event := range hookEvents {
+		arr := hooks[event].([]any)
+		if len(arr) != 1 {
+			t.Errorf("event %q: got %d entries, want 1 (old path should be replaced)", event, len(arr))
+		}
+		// Should be the second path
+		entry := arr[0].(map[string]any)
+		innerHooks := entry["hooks"].([]any)
+		cmd := innerHooks[0].(map[string]any)["command"].(string)
+		expectedCmd := `"/project/bin/tbox" hook --agent cc ` + event
+		if cmd != expectedCmd {
+			t.Errorf("event %q: command = %q, want %q", event, cmd, expectedCmd)
+		}
+	}
+}
+
 func TestMergeHooks_SpacePath(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "settings.json")
