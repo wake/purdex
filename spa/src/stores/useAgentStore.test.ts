@@ -1,6 +1,8 @@
 // spa/src/stores/useAgentStore.test.ts
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useAgentStore } from './useAgentStore'
+import { useTabStore } from './useTabStore'
+import { createTab } from '../types/tab'
 import type { AgentHookEvent } from './useAgentStore'
 
 beforeEach(() => {
@@ -8,9 +10,9 @@ beforeEach(() => {
     events: {},
     statuses: {},
     unread: {},
-    focusedSession: null,
     hooksInstalled: false,
   })
+  useTabStore.setState({ tabs: {}, activeTabId: null, tabOrder: [] })
 })
 
 describe('useAgentStore', () => {
@@ -151,7 +153,7 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().statuses['dev']).toBe('idle')
   })
 
-  it('Stop → marks unread when focusedSession is null', () => {
+  it('Stop → marks unread when active tab is not this session', () => {
     const event: AgentHookEvent = {
       tmux_session: 'dev',
       event_name: 'Stop',
@@ -161,6 +163,20 @@ describe('useAgentStore', () => {
     }
     useAgentStore.getState().handleHookEvent('dev', event)
     expect(useAgentStore.getState().unread['dev']).toBe(true)
+  })
+
+  it('Stop → does NOT mark unread when active tab is this session', () => {
+    const tab = { ...createTab({ kind: 'session', sessionCode: 'dev', mode: 'terminal' }), id: 't1' }
+    useTabStore.setState({ tabs: { t1: tab }, activeTabId: 't1' })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'Stop',
+      raw_event: {},
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().unread['dev']).toBeUndefined()
   })
 
   it('Notification(idle_prompt) → does not mark unread', () => {

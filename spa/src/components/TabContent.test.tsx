@@ -44,4 +44,25 @@ describe('TabContent', () => {
     render(<TabContent activeTab={null} allTabs={[]} />)
     expect(screen.getByText(/選擇或建立/)).toBeTruthy()
   })
+
+  it('sets inert on non-active keep-alive tabs', () => {
+    // First render with dashboard active to put it in the alive pool
+    const { container, rerender } = render(
+      <TabContent activeTab={dashboardTab} allTabs={[sessionTab, dashboardTab]} />,
+    )
+    // Switch to session tab — dashboard stays in pool but becomes inactive
+    rerender(
+      <TabContent activeTab={sessionTab} allTabs={[sessionTab, dashboardTab]} />,
+    )
+    const wrappers = container.querySelectorAll('[class*="absolute"]')
+    // Active tab (session) should NOT have inert
+    const activeWrapper = Array.from(wrappers).find((w) => w.querySelector('[data-testid="session-renderer"]'))
+    expect(activeWrapper).not.toBeNull()
+    expect(activeWrapper?.getAttribute('inert')).toBeNull()
+    // Inactive tab (dashboard) should have inert
+    const inactiveWrapper = Array.from(wrappers).find((w) => w.querySelector('[data-testid="dashboard-renderer"]'))
+    expect(inactiveWrapper).not.toBeNull()
+    // jsdom may not reflect `inert` as an HTML attribute; check the React prop via data attribute fallback
+    expect(inactiveWrapper?.getAttribute('inert')).not.toBeNull()
+  })
 })

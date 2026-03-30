@@ -1,5 +1,5 @@
 // spa/src/components/StreamInput.tsx
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { Plus, Terminal } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 
@@ -9,13 +9,20 @@ interface Props {
   onHandoffToTerm?: () => void
   disabled?: boolean
   placeholder?: string
+  focused?: boolean
 }
 
-export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disabled = false, placeholder }: Props) {
+export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disabled = false, placeholder, focused = false }: Props) {
   const t = useI18nStore((s) => s.t)
   const resolvedPlaceholder = placeholder ?? t('stream.input.placeholder')
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    if (focused && !disabled) {
+      requestAnimationFrame(() => textareaRef.current?.focus())
+    }
+  }, [focused, disabled])
 
   const autoGrow = useCallback(() => {
     const ta = textareaRef.current

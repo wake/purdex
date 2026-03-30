@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useAgentStore, deriveStatus } from '../stores/useAgentStore'
+import { getActiveSessionCode } from '../lib/active-session'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useNotificationSettingsStore } from '../stores/useNotificationSettingsStore'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
@@ -85,7 +86,7 @@ export function useNotificationDispatcher(): void {
 
         // Dedup layer 1: localStorage-based persistent dedup (handles restart/snapshot).
         // New sessions use Infinity sentinel — first event is recorded but not dispatched.
-        // Layer 2: shouldNotify checks focusedSession + document.hasFocus().
+        // Layer 2: shouldNotify checks active session (derived from activeTabId) + document.hasFocus().
         // Layer 3: Electron main process recentBroadcasts dedup (5s window, multi-window).
         if (!shouldDispatch(sessionCode, event.broadcast_ts)) continue
 
@@ -93,7 +94,7 @@ export function useNotificationDispatcher(): void {
         const tabs = useTabStore.getState().tabs
         const hasTab = findTabBySessionCode(tabs, sessionCode) !== undefined
         const settings = useNotificationSettingsStore.getState().getSettingsForAgent(event.agent_type || '')
-        const focusedSession = state.focusedSession
+        const focusedSession = getActiveSessionCode()
 
         if (!shouldNotify({ derived, eventName: event.event_name, sessionCode, focusedSession, hasTab, settings })) continue
 
@@ -140,7 +141,6 @@ function handleNotificationClick(sessionCode: string): void {
   let handled = false
   if (tabId) {
     useTabStore.getState().setActiveTab(tabId)
-    useAgentStore.getState().setFocusedSession(sessionCode)
     handled = true
   } else if (agentSettings.reopenTabOnClick) {
     const newTab = createTab({ kind: 'session', sessionCode, mode: 'stream' })
@@ -151,8 +151,13 @@ function handleNotificationClick(sessionCode: string): void {
       useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, newTab.id)
       useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, newTab.id)
     }
-    useAgentStore.getState().setFocusedSession(sessionCode)
     handled = true
+  }
+
+  // Always markRead — cross-store subscription only fires on tab *change*,
+  // but notification click on the already-active tab still needs to clear unread.
+  if (handled) {
+    useAgentStore.getState().markRead(sessionCode)
   }
 
   if (handled && window.electronAPI?.focusMyWindow) {

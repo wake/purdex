@@ -23,6 +23,7 @@ import { Prohibit, TerminalWindow } from '@phosphor-icons/react'
 
 interface Props {
   sessionCode: string
+  isActive?: boolean
   onHandoff?: () => void
   onHandoffToTerm?: () => void
 }
@@ -30,7 +31,7 @@ interface Props {
 const EMPTY_MESSAGES: StreamMessage[] = []
 const EMPTY_CONTROLS: ControlRequest[] = []
 
-export default function ConversationView({ sessionCode, onHandoff, onHandoffToTerm }: Props) {
+export default function ConversationView({ sessionCode, isActive = false, onHandoff, onHandoffToTerm }: Props) {
   const t = useI18nStore((s) => s.t)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -342,7 +343,7 @@ export default function ConversationView({ sessionCode, onHandoff, onHandoffToTe
       <FileAttachment files={attachedFiles} onRemove={handleRemoveFile} />
 
       {/* Input area */}
-      <StreamInput onSend={handleSend} onAttach={handleAttach} onHandoffToTerm={onHandoffToTerm} disabled={isStreaming} />
+      <StreamInput onSend={handleSend} onAttach={handleAttach} onHandoffToTerm={onHandoffToTerm} disabled={isStreaming} focused={isActive} />
     </div>
   )
 }
