@@ -31,12 +31,7 @@ func TestMergeHooks_EmptyFile(t *testing.T) {
 		t.Fatal("hooks key missing or not object")
 	}
 
-	expectedEvents := []string{
-		"SessionStart", "UserPromptSubmit", "Stop",
-		"Notification", "PermissionRequest", "SessionEnd",
-	}
-
-	for _, event := range expectedEvents {
+	for _, event := range hookEvents {
 		entries, ok := hooks[event]
 		if !ok {
 			t.Errorf("event %q missing", event)
@@ -107,12 +102,7 @@ func TestMergeHooks_Idempotent(t *testing.T) {
 
 	hooks := settings["hooks"].(map[string]any)
 
-	expectedEvents := []string{
-		"SessionStart", "UserPromptSubmit", "Stop",
-		"Notification", "PermissionRequest", "SessionEnd",
-	}
-
-	for _, event := range expectedEvents {
+	for _, event := range hookEvents {
 		arr := hooks[event].([]any)
 		if len(arr) != 1 {
 			t.Errorf("event %q: got %d entries after double run, want 1", event, len(arr))
@@ -190,12 +180,8 @@ func TestMergeHooks_PreservesExisting(t *testing.T) {
 		t.Errorf("second entry command = %q, want %q", secondCmd, expectedCmd)
 	}
 
-	// All 6 events must be present
-	expectedEvents := []string{
-		"SessionStart", "UserPromptSubmit", "Stop",
-		"Notification", "PermissionRequest", "SessionEnd",
-	}
-	for _, event := range expectedEvents {
+	// All events must be present
+	for _, event := range hookEvents {
 		if _, ok := hooks[event]; !ok {
 			t.Errorf("event %q missing after merge", event)
 		}
@@ -275,46 +261,41 @@ func TestMergeHooks_Remove(t *testing.T) {
 	}
 }
 
-func TestEntryMatchesTbox_NoFalsePositive(t *testing.T) {
-	tboxPath := "/usr/local/bin/tbox"
-
-	// An entry from a different tool whose path merely contains tboxPath as a substring
-	otherEntry := map[string]any{
-		"hooks": []any{
-			map[string]any{
-				"type":    "command",
-				"command": "/usr/local/bin/tbox-extra hook Stop",
+func TestEntryIsTbox(t *testing.T) {
+	mkEntry := func(cmd string) map[string]any {
+		return map[string]any{
+			"hooks": []any{
+				map[string]any{"type": "command", "command": cmd},
 			},
-		},
-	}
-	if entryMatchesTbox(otherEntry, tboxPath) {
-		t.Error("entryMatchesTbox incorrectly matched a different tool with a similar path prefix")
+		}
 	}
 
-	// Quoted tbox entry (new format) should match
-	quotedEntry := map[string]any{
-		"hooks": []any{
-			map[string]any{
-				"type":    "command",
-				"command": `"/usr/local/bin/tbox" hook Stop`,
-			},
-		},
+	// Should match: various tbox command forms
+	shouldMatch := []string{
+		`"/usr/local/bin/tbox" hook --agent cc Stop`,           // quoted absolute
+		`/usr/local/bin/tbox hook --agent cc Stop`,             // unquoted absolute
+		`"/Users/wake/Workspace/wake/tmux-box/bin/tbox" hook --agent cc Notification`, // real-world path
+		`"tbox" hook --agent cc SessionStart`,                  // bare quoted
+		`tbox hook --agent cc SessionEnd`,                      // bare unquoted
+		`"/Users/my user/bin/tbox" hook --agent cc Stop`,       // path with spaces
 	}
-	if !entryMatchesTbox(quotedEntry, tboxPath) {
-		t.Error("entryMatchesTbox failed to match quoted tbox entry")
+	for _, cmd := range shouldMatch {
+		if !entryIsTbox(mkEntry(cmd)) {
+			t.Errorf("entryIsTbox should match %q", cmd)
+		}
 	}
 
-	// Unquoted tbox entry (legacy format) should still match
-	unquotedEntry := map[string]any{
-		"hooks": []any{
-			map[string]any{
-				"type":    "command",
-				"command": "/usr/local/bin/tbox hook Stop",
-			},
-		},
+	// Should NOT match: similar but different tools
+	shouldReject := []string{
+		`/usr/local/bin/tbox-extra hook Stop`,          // tbox-extra, not tbox
+		`/usr/local/bin/mytbox hook Stop`,              // mytbox
+		`/Users/wake/.config/tsm/hooks/tsm-hook.sh`,   // completely unrelated
+		`/usr/local/bin/toolbox hook-handler Stop`,     // toolbox contains "tbox"
 	}
-	if !entryMatchesTbox(unquotedEntry, tboxPath) {
-		t.Error("entryMatchesTbox failed to match unquoted (legacy) tbox entry")
+	for _, cmd := range shouldReject {
+		if entryIsTbox(mkEntry(cmd)) {
+			t.Errorf("entryIsTbox should NOT match %q", cmd)
+		}
 	}
 }
 
