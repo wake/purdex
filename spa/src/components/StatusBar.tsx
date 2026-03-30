@@ -1,10 +1,11 @@
-import { useState, useRef, useCallback } from 'react'
-import { CaretUp } from '@phosphor-icons/react'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { CaretUp, CircleNotch, CheckCircle, XCircle } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useAgentStore, getAgentLabel } from '../stores/useAgentStore'
+import { useUploadStore } from '../stores/useUploadStore'
 import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
 
@@ -16,6 +17,64 @@ interface Props {
 const VIEW_MODE_COLORS: Record<string, string> = {
   terminal: 'bg-green-900/40 text-green-400 border-green-700/50',
   stream: 'bg-blue-900/40 text-blue-400 border-blue-700/50',
+}
+
+function UploadStatus({ sessionCode }: { sessionCode: string | null }) {
+  const uploadState = useUploadStore((s) => sessionCode ? s.sessions[sessionCode] : undefined)
+  const dismiss = useUploadStore((s) => s.dismiss)
+  const uploadStatus = uploadState?.status
+
+  // Auto-dismiss "done" after 3 seconds
+  useEffect(() => {
+    if (uploadStatus !== 'done' || !sessionCode) return
+    const timer = setTimeout(() => dismiss(sessionCode), 3000)
+    return () => clearTimeout(timer)
+  }, [uploadStatus, sessionCode, dismiss])
+
+  // Auto-dismiss "error" after 30 seconds
+  useEffect(() => {
+    if (uploadStatus !== 'error' || !sessionCode) return
+    const timer = setTimeout(() => dismiss(sessionCode), 30000)
+    return () => clearTimeout(timer)
+  }, [uploadStatus, sessionCode, dismiss])
+
+  if (!uploadState || !sessionCode) return null
+
+  if (uploadState.status === 'uploading') {
+    return (
+      <span className="flex items-center gap-1 text-yellow-400" data-testid="upload-status">
+        <CircleNotch size={12} className="animate-spin" />
+        <span>Uploading {uploadState.currentFile} ({uploadState.completed + 1}/{uploadState.total})...</span>
+      </span>
+    )
+  }
+
+  if (uploadState.status === 'done') {
+    return (
+      <span className="flex items-center gap-1 text-green-400" data-testid="upload-status">
+        <CheckCircle size={12} />
+        <span>{uploadState.total} files uploaded</span>
+      </span>
+    )
+  }
+
+  if (uploadState.status === 'error') {
+    const message = uploadState.completed > 0
+      ? `${uploadState.completed} uploaded, ${uploadState.failed} failed`
+      : `Upload failed: ${uploadState.error}`
+    return (
+      <span
+        className="flex items-center gap-1 text-red-400 cursor-pointer"
+        data-testid="upload-status"
+        onClick={() => dismiss(sessionCode)}
+      >
+        <XCircle size={12} />
+        <span>{message}</span>
+      </span>
+    )
+  }
+
+  return null
 }
 
 export function StatusBar({ activeTab, onViewModeChange }: Props) {
@@ -71,11 +130,19 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
       <span className={status === 'connected' ? 'text-green-500' : 'text-text-muted'}>
         {status}
       </span>
-      {getAgentLabel(agentEvent) && (
-        <span className="text-text-muted" data-testid="agent-label">
-          {getAgentLabel(agentEvent)}
-        </span>
-      )}
+      {getAgentLabel(agentEvent) && (() => {
+        const label = getAgentLabel(agentEvent)!
+        const hasModelName = label !== 'Agent'
+        const badgeClass = hasModelName
+          ? 'bg-[rgba(154,96,56,0.15)] text-[#e8956a] border-[rgba(180,110,65,0.3)]'
+          : 'bg-white/8 text-white/70 border-white/15'
+        return (
+          <span className={`px-[7px] rounded-[3px] border text-[10px] leading-4 ${badgeClass}`} data-testid="agent-label">
+            {label}
+          </span>
+        )
+      })()}
+      <UploadStatus sessionCode={agentSessionCode} />
       <span className="ml-auto flex items-center">
         <div className="relative" ref={menuRef}>
           <button
