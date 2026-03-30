@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.34] - 2026-03-30
+
+防止 tbox setup 重複 hook entries（PR #120）
+
+### 修正
+
+- **setup 防重複 hook** — 從不同路徑執行 `tbox setup`（如 `./tbox` vs `./bin/tbox`）不再累積重複 entries，每次 setup 先清除所有既有 tbox entries 再加入當前路徑
+- **`entryIsTbox` 精確比對** — 用 binary basename 邊界檢查（`/tbox"` / `/tbox `）取代寬鬆的 `Contains`，避免誤刪 `tbox-extra` 等第三方工具的 hooks
+- **移除死碼** — 清除不再使用的 `hasTboxEntry`、`filterOutTbox`、`entryMatchesTbox`
+- **測試 `expectedEvents` 改用 `hookEvents`** — 補齊遺漏的 `StopFailure` 事件覆蓋
+
 ## [1.0.0-alpha.33] - 2026-03-30
 
 移除 tab 燈號 fallback（PR #119）
