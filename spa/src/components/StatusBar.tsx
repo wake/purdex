@@ -19,7 +19,7 @@ const VIEW_MODE_COLORS: Record<string, string> = {
   stream: 'bg-blue-900/40 text-blue-400 border-blue-700/50',
 }
 
-function UploadStatus({ sessionCode }: { sessionCode: string | null }) {
+function UploadStatus({ sessionCode, t }: { sessionCode: string | null; t: (key: string, params?: Record<string, string | number>) => string }) {
   const uploadState = useUploadStore((s) => sessionCode ? s.sessions[sessionCode] : undefined)
   const dismiss = useUploadStore((s) => s.dismiss)
   const uploadStatus = uploadState?.status
@@ -44,24 +44,25 @@ function UploadStatus({ sessionCode }: { sessionCode: string | null }) {
     return (
       <span className="flex items-center gap-1 text-yellow-400" data-testid="upload-status">
         <CircleNotch size={12} className="animate-spin" />
-        <span>Uploading {uploadState.currentFile} ({uploadState.completed + 1}/{uploadState.total})...</span>
+        <span>{t('upload.uploading', { file: uploadState.currentFile, current: uploadState.completed + 1, total: uploadState.total })}</span>
       </span>
     )
   }
 
   if (uploadState.status === 'done') {
+    const key = uploadState.total === 1 ? 'upload.done_one' : 'upload.done_many'
     return (
       <span className="flex items-center gap-1 text-green-400" data-testid="upload-status">
         <CheckCircle size={12} />
-        <span>{uploadState.total} files uploaded</span>
+        <span>{t(key, { count: uploadState.total })}</span>
       </span>
     )
   }
 
   if (uploadState.status === 'error') {
     const message = uploadState.completed > 0
-      ? `${uploadState.completed} uploaded, ${uploadState.failed} failed`
-      : `Upload failed: ${uploadState.error}`
+      ? t('upload.partial', { uploaded: uploadState.completed, failed: uploadState.failed })
+      : t('upload.failed', { file: uploadState.error ?? '' })
     return (
       <span
         className="flex items-center gap-1 text-red-400 cursor-pointer"
@@ -142,7 +143,7 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
           </span>
         )
       })()}
-      <UploadStatus sessionCode={agentSessionCode} />
+      <UploadStatus sessionCode={agentSessionCode} t={t} />
       <span className="ml-auto flex items-center">
         <div className="relative" ref={menuRef}>
           <button

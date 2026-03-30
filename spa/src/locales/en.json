@@ -277,5 +277,10 @@
 
   "settings.agent.cc.name": "Claude Code",
 
-  "upload.drop_files": "Drop files to upload"
+  "upload.drop_files": "Drop files to upload",
+  "upload.uploading": "Uploading {{file}} ({{current}}/{{total}})...",
+  "upload.done_one": "{{count}} file uploaded",
+  "upload.done_many": "{{count}} files uploaded",
+  "upload.failed": "Upload failed: {{file}}",
+  "upload.partial": "{{uploaded}} uploaded, {{failed}} failed"
 }
