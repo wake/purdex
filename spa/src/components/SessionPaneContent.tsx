@@ -67,6 +67,7 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
       key={`${pane.id}-${mode}`}
       wsUrl={`${wsBase}/ws/terminal/${encodeURIComponent(sessionCode)}`}
       visible={isActive}
+      sessionCode={sessionCode}
     />
   )
 }

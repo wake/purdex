@@ -275,5 +275,7 @@
   "notification.fallback.stop": "Task completed",
   "notification.fallback.stopFailure": "Task stopped unexpectedly",
 
-  "settings.agent.cc.name": "Claude Code"
+  "settings.agent.cc.name": "Claude Code",
+
+  "upload.drop_files": "Drop files to upload"
 }

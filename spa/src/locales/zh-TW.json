@@ -275,5 +275,7 @@
   "notification.fallback.stop": "任務完成",
   "notification.fallback.stopFailure": "任務異常中斷",
 
-  "settings.agent.cc.name": "Claude Code"
+  "settings.agent.cc.name": "Claude Code",
+
+  "upload.drop_files": "拖放檔案以上傳"
 }
