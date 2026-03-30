@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.31] - 2026-03-30
+
+Hook 引號路徑匹配修復（PR #117）
+
+### 修正
+
+- **`findTboxCommand` 支援引號路徑** — strip `"` 後匹配 `tbox hook`，修復 `hooksInstalled` 在引號路徑下回傳 false 的問題
+
 ## [1.0.0-alpha.30] - 2026-03-30
 
 SPA 來源切換 Preflight（PR #116）
