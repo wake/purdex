@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.33] - 2026-03-30
+
+移除 tab 燈號 fallback（PR #119）
+
+### 修正
+
+- **移除無 snapshot 時的 idle fallback** — 原本 hooksInstalled 為 true 時預設顯示灰色燈號，無法區分「agent 在跑但尚未送出 event」與「沒有 agent」，現在只在收到實際 hook event 後才顯示燈號
+
 ## [1.0.0-alpha.32] - 2026-03-30
 
 通知去重 + 視窗焦點感知（PR #118）
