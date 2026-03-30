@@ -64,8 +64,8 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Save file with dedup.
-	filename := deduplicateFilename(dir, header.Filename)
+	// Save file with dedup. Strip directory components to prevent path traversal.
+	filename := deduplicateFilename(dir, filepath.Base(header.Filename))
 	destPath := filepath.Join(dir, filename)
 	dst, err := os.Create(destPath)
 	if err != nil {
@@ -81,8 +81,9 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Inject path into tmux pane via send-keys (space prefix, literal mode).
-	if err := m.core.Tmux.SendKeysRaw(tmuxName, "-l", " "+destPath); err != nil {
+	// Inject path into tmux pane via send-keys (space prefix, quoted, literal mode).
+	// Quoting handles filenames with spaces so CC receives the full path as one token.
+	if err := m.core.Tmux.SendKeysRaw(tmuxName, "-l", ` "`+destPath+`"`); err != nil {
 		log.Printf("[agent] send-keys: %v", err)
 		http.Error(w, `{"error":"inject failed"}`, http.StatusInternalServerError)
 		return

@@ -100,11 +100,43 @@ func TestHandleUpload_Success(t *testing.T) {
 	_, err := os.Stat(filepath.Join(m.uploadDir, "my-sess", "test.png"))
 	assert.NoError(t, err)
 
-	// send-keys should have been called with space prefix + literal flag.
+	// send-keys should have been called with quoted path + literal flag.
 	calls := fake.RawKeysSent()
 	require.Len(t, calls, 1)
 	assert.Equal(t, "my-sess", calls[0].Target)
 	assert.Contains(t, calls[0].Keys, "-l")
+	// Path should be quoted and space-prefixed.
+	injected := calls[0].Keys[len(calls[0].Keys)-1]
+	assert.True(t, injected[0] == ' ', "should start with space")
+	assert.Contains(t, injected, `"`)
+
+}
+
+func TestHandleUpload_PathTraversal(t *testing.T) {
+	m, _ := newUploadTestModule(t)
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	w.WriteField("session", "my-sess")
+	fw, _ := w.CreateFormFile("file", "../../etc/passwd")
+	fw.Write([]byte("malicious"))
+	w.Close()
+
+	req := httptest.NewRequest("POST", "/api/agent/upload", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	m.handleUpload(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// File should be saved with base name only, not traversing.
+	_, err := os.Stat(filepath.Join(m.uploadDir, "my-sess", "passwd"))
+	assert.NoError(t, err)
+
+	// Should NOT exist outside upload dir.
+	_, err = os.Stat(filepath.Join(m.uploadDir, "..", "..", "etc", "passwd"))
+	assert.True(t, os.IsNotExist(err))
 }
 
 func TestHandleUpload_MissingSession(t *testing.T) {
