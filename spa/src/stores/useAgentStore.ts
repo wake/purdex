@@ -64,7 +64,7 @@ export function getAgentLabel(event: AgentHookEvent | undefined): string | null 
 
 export const useAgentStore = create<AgentState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       events: {},
       statuses: {},
       unread: {},

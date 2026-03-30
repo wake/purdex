@@ -141,7 +141,6 @@ function handleNotificationClick(sessionCode: string): void {
   let handled = false
   if (tabId) {
     useTabStore.getState().setActiveTab(tabId)
-    // markRead handled by cross-store subscription in active-session.ts
     handled = true
   } else if (agentSettings.reopenTabOnClick) {
     const newTab = createTab({ kind: 'session', sessionCode, mode: 'stream' })
@@ -153,6 +152,12 @@ function handleNotificationClick(sessionCode: string): void {
       useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, newTab.id)
     }
     handled = true
+  }
+
+  // Always markRead — cross-store subscription only fires on tab *change*,
+  // but notification click on the already-active tab still needs to clear unread.
+  if (handled) {
+    useAgentStore.getState().markRead(sessionCode)
   }
 
   if (handled && window.electronAPI?.focusMyWindow) {
