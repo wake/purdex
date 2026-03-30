@@ -77,6 +77,7 @@ export const useUploadStore = create<UploadState>((set) => ({
 
   dismiss: (session) =>
     set((s) => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { [session]: _, ...rest } = s.sessions
       return { sessions: rest }
     }),
