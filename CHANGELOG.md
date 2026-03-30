@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.36] - 2026-03-31
+
+Agent Hook 增強 — error 狀態、subagent 追蹤、unread 修正（PR #123）
+
+### 新功能
+
+- **error 狀態** — `StopFailure` 推導為新的 `error` 狀態，紅色燈號（`#ef4444`），觸發 unread 紅點和桌面通知
+- **Subagent 追蹤** — 註冊 `SubagentStart`/`SubagentStop` hooks，以 `agent_id` 追蹤 active subagents（ephemeral，不存 DB）
+- **SubagentDots 元件** — tab icon 左側顯示 1-3 顆藍色呼吸燈（`#60a5fa`），依 subagent 數量遞減尺寸
+- **通知 newline 壓縮** — 彈窗 body 連續換行壓成單個
+
+### 修正
+
+- **Unread 紅點不可見** — 移除 tab `overflow-hidden`，重新定位到右上角框線上（`-top-[4px] -right-[4px]`、`z-20`），不再被 close 按鈕 gradient 遮蔽
+- **SessionStart 推導修正** — `startup`/`resume`/`clear` → `idle`（等待輸入），非 `running`
+- **shouldNotify 遺漏 error** — `StopFailure` 現在正確觸發桌面通知
+- **error 不被 idle Notification 降級** — `idle_prompt`/`auth_success` 不會覆蓋 error 燈號
+- **HandoffButton error 支援** — `isAgentActive` 加入 `error`，StopFailure 後 Handoff 按鈕不會 disabled
+- **SessionStart(compact) 不清空 subagents** — compact 是工作中途壓縮，subagent 可能還在跑
+- **WS 重連清空 subagents** — `onOpen` callback 清除 ephemeral 追蹤，避免斷線後殘留
+- **SessionStatusBadge 加 error 顏色** — `bg-red-500`
+
+### 追蹤 Issues
+
+- #124 PermissionRequest 可覆寫 error 狀態
+- #125 HandoffButton isAgentActive error 測試
+- #126 SubagentStop orphan event 覆寫 events map
+
 ## [1.0.0-alpha.35] - 2026-03-30
 
 衍生 focusedSession + tab 切換 auto-focus（PR #122）
