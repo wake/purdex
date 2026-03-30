@@ -78,35 +78,37 @@ export const useAgentStore = create<AgentState>()(
       handleHookEvent: (session, event) => {
         const derived = deriveStatus(event.event_name, event.raw_event)
 
-        // Subagent tracking (before status derivation — does not affect main status)
+        // Subagent tracking — does not affect main status.
+        // Ignore events without agent_id (malformed or future CC changes).
         if (event.event_name === 'SubagentStart') {
           const agentId = event.raw_event?.agent_id as string | undefined
-          if (agentId) {
-            set((s) => {
-              const current = s.activeSubagents[session] || []
-              if (current.includes(agentId)) return s
-              return { activeSubagents: { ...s.activeSubagents, [session]: [...current, agentId] } }
-            })
-          }
-          // Store event but don't change main status
-          set((s) => ({ events: { ...s.events, [session]: event } }))
+          if (!agentId) return
+          set((s) => {
+            const current = s.activeSubagents[session] || []
+            if (current.includes(agentId)) return { events: { ...s.events, [session]: event } }
+            return {
+              activeSubagents: { ...s.activeSubagents, [session]: [...current, agentId] },
+              events: { ...s.events, [session]: event },
+            }
+          })
           return
         }
         if (event.event_name === 'SubagentStop') {
           const agentId = event.raw_event?.agent_id as string | undefined
-          if (agentId) {
-            set((s) => {
-              const current = s.activeSubagents[session] || []
-              const filtered = current.filter((id) => id !== agentId)
-              if (filtered.length === 0) {
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                const { [session]: _, ...rest } = s.activeSubagents
-                return { activeSubagents: rest }
-              }
-              return { activeSubagents: { ...s.activeSubagents, [session]: filtered } }
-            })
-          }
-          set((s) => ({ events: { ...s.events, [session]: event } }))
+          if (!agentId) return
+          set((s) => {
+            const current = s.activeSubagents[session] || []
+            const filtered = current.filter((id) => id !== agentId)
+            if (filtered.length === 0) {
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
+              const { [session]: _, ...rest } = s.activeSubagents
+              return { activeSubagents: rest, events: { ...s.events, [session]: event } }
+            }
+            return {
+              activeSubagents: { ...s.activeSubagents, [session]: filtered },
+              events: { ...s.events, [session]: event },
+            }
+          })
           return
         }
 
@@ -140,8 +142,13 @@ export const useAgentStore = create<AgentState>()(
         set((s) => ({ events: { ...s.events, [session]: event } }))
 
         if (derived !== null) {
-          // Update status
-          set((s) => ({ statuses: { ...s.statuses, [session]: derived } }))
+          // Don't let informational Notification subtypes (idle_prompt, auth_success)
+          // downgrade an error status — the user should see the error until a real
+          // state change (UserPromptSubmit, SessionStart, Stop) clears it.
+          set((s) => {
+            if (s.statuses[session] === 'error' && derived === 'idle' && event.event_name === 'Notification') return s
+            return { statuses: { ...s.statuses, [session]: derived } }
+          })
 
           // Mark unread when not focused: all 'waiting' statuses are actionable;
           // 'idle' statuses are actionable only if they don't come from a Notification event

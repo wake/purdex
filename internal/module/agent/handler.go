@@ -31,10 +31,18 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// Store event (skip if no tmux session — can't map to anything useful).
 	if req.TmuxSession != "" {
 		broadcastTs := time.Now().UnixNano()
-		if err := m.events.Set(req.TmuxSession, req.EventName, req.RawEvent, req.AgentType, broadcastTs); err != nil {
-			log.Printf("[agent] store event: %v", err)
-			http.Error(w, `{"error":"store failed"}`, http.StatusInternalServerError)
-			return
+
+		// SubagentStart/SubagentStop are transient — broadcast only, do not
+		// overwrite the DB record.  This prevents sendSnapshot from replaying
+		// a SubagentStop instead of the real Stop/StopFailure on WS reconnect.
+		ephemeral := req.EventName == "SubagentStart" || req.EventName == "SubagentStop"
+
+		if !ephemeral {
+			if err := m.events.Set(req.TmuxSession, req.EventName, req.RawEvent, req.AgentType, broadcastTs); err != nil {
+				log.Printf("[agent] store event: %v", err)
+				http.Error(w, `{"error":"store failed"}`, http.StatusInternalServerError)
+				return
+			}
 		}
 
 		// Broadcast to WS subscribers if we can resolve session code.

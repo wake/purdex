@@ -47,6 +47,9 @@ describe('shouldNotify', () => {
   it('returns true for waiting Notification (permission_prompt/elicitation_dialog)', () => {
     expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', sessionCode: 'abc', focusedSession: null, hasTab: true, settings: defaultSettings })).toBe(true)
   })
+  it('returns true for error event (StopFailure)', () => {
+    expect(shouldNotify({ derived: 'error', eventName: 'StopFailure', sessionCode: 'abc', focusedSession: null, hasTab: true, settings: defaultSettings })).toBe(true)
+  })
 })
 
 describe('shouldDispatch', () => {
