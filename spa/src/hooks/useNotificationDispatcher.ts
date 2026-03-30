@@ -33,6 +33,14 @@ export function shouldDispatch(sessionCode: string, broadcastTs: number): boolea
   return true
 }
 
+/** Remove a session's lastSeenTs entry (called on SessionEnd to prevent
+ *  stale timestamps from blocking notifications if the code is reused). */
+export function clearSeenTs(sessionCode: string): void {
+  const data: Record<string, number> = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}')
+  delete data[sessionCode]
+  localStorage.setItem(SEEN_KEY, JSON.stringify(data))
+}
+
 interface ShouldNotifyParams {
   derived: string | null
   eventName: string
@@ -63,12 +71,22 @@ export function useNotificationDispatcher(): void {
       const prevEvents = prevState.events
       const currentEvents = state.events
 
+      // Clean up lastSeenTs for sessions that ended (prevents stale ts
+      // blocking notifications if the session code is reused).
+      for (const sessionCode of Object.keys(prevEvents)) {
+        if (!currentEvents[sessionCode]) {
+          clearSeenTs(sessionCode)
+        }
+      }
+
       for (const [sessionCode, event] of Object.entries(currentEvents)) {
         const prev = prevEvents[sessionCode]
         if (prev && prev.broadcast_ts === event.broadcast_ts) continue
 
-        // Persistent dedup: skip already-seen events (handles restart/snapshot replay).
+        // Dedup layer 1: localStorage-based persistent dedup (handles restart/snapshot).
         // New sessions use Infinity sentinel — first event is recorded but not dispatched.
+        // Layer 2: shouldNotify checks focusedSession + document.hasFocus().
+        // Layer 3: Electron main process recentBroadcasts dedup (5s window, multi-window).
         if (!shouldDispatch(sessionCode, event.broadcast_ts)) continue
 
         const derived = deriveStatus(event.event_name, event.raw_event)

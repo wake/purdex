@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { shouldNotify, shouldDispatch } from './useNotificationDispatcher'
+import { shouldNotify, shouldDispatch, clearSeenTs } from './useNotificationDispatcher'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
 
 const defaultSettings: NotificationSettings = {
@@ -92,5 +92,14 @@ describe('shouldDispatch', () => {
     // Simulate restart: shouldDispatch is called fresh but localStorage persists
     expect(shouldDispatch('abc', 2000)).toBe(false) // same ts
     expect(shouldDispatch('abc', 3000)).toBe(true)  // newer
+  })
+
+  it('clearSeenTs resets session so next event is sentinel again', () => {
+    shouldDispatch('abc', 1000) // sentinel → record
+    shouldDispatch('abc', 2000) // dispatch
+    clearSeenTs('abc')
+    // After clear, session is new again — sentinel behavior
+    expect(shouldDispatch('abc', 500)).toBe(false) // sentinel → record (even older ts)
+    expect(shouldDispatch('abc', 600)).toBe(true)  // newer than 500 → dispatch
   })
 })
