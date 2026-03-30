@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.35] - 2026-03-30
+
+衍生 focusedSession + tab 切換 auto-focus（PR #122）
+
+### 修正
+
+- **通知在 active tab 仍彈出** — `focusedSession` 從手動同步改為從 `activeTabId` 即時衍生（`getActiveSessionCode()`），鍵盤快捷鍵切 tab 時通知正確抑制
+- **隱藏 tab 攔截鍵盤輸入** — 非 active 的 keep-alive tab 加上 `inert` attribute，阻止 offscreen terminal 捕獲 focus
+- **Stream tab 切換後自動 focus** — `StreamInput` 加 `focused` prop，切到 stream tab 時 textarea 自動 focus
+- **通知點擊 active tab 未清 unread** — `handleNotificationClick` 補 `markRead` 保底
+
+### 重構
+
+- 移除 `focusedSession` / `setFocusedSession` 狀態，改用 cross-store subscription 自動 markRead
+- 移除 `useTabWorkspaceActions` 中的手動 focus 同步邏輯
+
 ## [1.0.0-alpha.34] - 2026-03-30
 
 防止 tbox setup 重複 hook entries（PR #120）
