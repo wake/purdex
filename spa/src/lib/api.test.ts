@@ -123,3 +123,41 @@ describe('handoff', () => {
       .rejects.toThrow('handoff failed: 500')
   })
 })
+
+describe('agentUpload', () => {
+  it('sends multipart form and returns result', async () => {
+    const mockResponse = { filename: 'test.png', injected: true }
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockResponse),
+    })
+
+    const { agentUpload } = await import('./api')
+    const file = new File(['data'], 'test.png', { type: 'image/png' })
+    const result = await agentUpload('http://localhost:7860', file, 'dev001')
+
+    expect(result).toEqual(mockResponse)
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://localhost:7860/api/agent/upload',
+      expect.objectContaining({ method: 'POST' }),
+    )
+
+    // Verify FormData contents.
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    const body = call[1].body as FormData
+    expect(body.get('session')).toBe('dev001')
+    expect(body.get('file')).toBeInstanceOf(File)
+  })
+
+  it('throws on non-ok response', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+    })
+
+    const { agentUpload } = await import('./api')
+    const file = new File(['data'], 'test.png')
+    await expect(agentUpload('http://localhost:7860', file, 'dev001')).rejects.toThrow('404')
+  })
+})

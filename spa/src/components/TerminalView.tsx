@@ -1,15 +1,22 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
+import { UploadSimple } from '@phosphor-icons/react'
 import { useTerminal } from '../hooks/useTerminal'
 import { useTerminalWs } from '../hooks/useTerminalWs'
+import { useAgentStore } from '../stores/useAgentStore'
+import { useUploadStore } from '../stores/useUploadStore'
+import { useHostStore } from '../stores/useHostStore'
+import { useI18nStore } from '../stores/useI18nStore'
+import { agentUpload } from '../lib/api'
 import '@xterm/xterm/css/xterm.css'
 
 interface Props {
   wsUrl: string
   visible?: boolean
   connectingMessage?: string
+  sessionCode?: string
 }
 
-export default function TerminalView({ wsUrl, visible = true, connectingMessage }: Props) {
+export default function TerminalView({ wsUrl, visible = true, connectingMessage, sessionCode }: Props) {
   const { termRef, fitAddonRef, containerRef } = useTerminal()
   const [ready, setReady] = useState(false)
   const [disconnected, setDisconnected] = useState(false)
@@ -28,6 +35,57 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage 
     onDisconnect: handleDisconnect,
     onReconnect: handleReconnect,
   })
+
+  // Drag-drop state
+  const [isDragging, setIsDragging] = useState(false)
+  const dragCounter = useRef(0)
+  const agentStatus = useAgentStore((s) => sessionCode ? s.statuses[sessionCode] : undefined)
+  const agentActive = agentStatus != null
+  const daemonBase = useHostStore((s) => s.getDaemonBase('local'))
+  const t = useI18nStore((s) => s.t)
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    if (!agentActive) return
+    dragCounter.current++
+    if (dragCounter.current === 1) setIsDragging(true)
+  }, [agentActive])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    dragCounter.current--
+    if (dragCounter.current <= 0) {
+      dragCounter.current = 0
+      setIsDragging(false)
+    }
+  }, [])
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    dragCounter.current = 0
+    if (!agentActive || !sessionCode) return
+
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length === 0) return
+
+    const { startUpload, fileCompleted, fileFailed, nextFile } = useUploadStore.getState()
+    startUpload(sessionCode, files.length, files[0].name) // overwrites any previous done/error state
+
+    for (let i = 0; i < files.length; i++) {
+      if (i > 0) nextFile(sessionCode, files[i].name)
+      try {
+        await agentUpload(daemonBase, files[i], sessionCode)
+        fileCompleted(sessionCode)
+      } catch {
+        fileFailed(sessionCode, files[i].name)
+      }
+    }
+  }, [agentActive, sessionCode, daemonBase])
 
   // Reset state on wsUrl change. React guarantees effects fire in declaration
   // order, so useTerminal (mount) → useTerminalWs (connect) → this reset.
@@ -58,7 +116,13 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage 
   const showOverlay = !ready || disconnected
 
   return (
-    <div className="w-full h-full relative bg-terminal-bg">
+    <div
+      className="w-full h-full relative bg-terminal-bg"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <div ref={containerRef} className="w-full h-full" />
       <div
         data-testid="terminal-overlay"
@@ -74,6 +138,16 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage 
         </span>
         <style>{`@keyframes breathing { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }`}</style>
       </div>
+      {isDragging && (
+        <div
+          data-testid="drop-overlay"
+          className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none z-20"
+          style={{ background: 'rgba(0, 0, 0, 0.6)' }}
+        >
+          <UploadSimple size={32} className="text-text-secondary" />
+          <span className="text-text-secondary text-sm">{t('upload.drop_files')}</span>
+        </div>
+      )}
     </div>
   )
 }

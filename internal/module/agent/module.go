@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/wake/tmux-box/internal/core"
 	"github.com/wake/tmux-box/internal/module/session"
@@ -16,9 +18,10 @@ import (
 
 // Module is the agent hook event module.
 type Module struct {
-	core     *core.Core
-	events   *store.AgentEventStore
-	sessions session.SessionProvider
+	core      *core.Core
+	events    *store.AgentEventStore
+	sessions  session.SessionProvider
+	uploadDir string
 }
 
 // New creates a new agent Module backed by the given AgentEventStore.
@@ -38,6 +41,11 @@ func (m *Module) Init(c *core.Core) error {
 		return nil
 	}
 	m.sessions = svc.(session.SessionProvider)
+
+	if m.uploadDir == "" {
+		home, _ := os.UserHomeDir()
+		m.uploadDir = filepath.Join(home, "tmp", "tbox-upload")
+	}
 	return nil
 }
 
@@ -46,6 +54,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/event", m.handleEvent)
 	mux.HandleFunc("GET /api/agent/hook-status", m.handleHookStatus)
 	mux.HandleFunc("POST /api/agent/hook-setup", m.handleHookSetup)
+	mux.HandleFunc("POST /api/agent/upload", m.handleUpload)
 }
 
 // Start registers an OnSubscribe callback to send snapshot data on WS connect.

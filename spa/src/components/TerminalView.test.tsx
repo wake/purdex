@@ -1,6 +1,8 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, act } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, act, fireEvent } from '@testing-library/react'
 import TerminalView from './TerminalView'
+import { useAgentStore } from '../stores/useAgentStore'
+import { useHostStore } from '../stores/useHostStore'
 
 const { mockClose, TerminalSpy, capturedCallbacks } = vi.hoisted(() => {
   const mockClose = vi.fn()
@@ -163,5 +165,62 @@ describe('TerminalView', () => {
     act(() => useUISettingsStore.getState().setTerminalRevealDelay(500))
     expect(mockClose).not.toHaveBeenCalled()
     expect(TerminalSpy).toHaveBeenCalledTimes(1)
+  })
+
+  describe('drag-drop', () => {
+    const SESSION = 'dev001'
+
+    function setAgentActive(active: boolean) {
+      useAgentStore.setState({
+        statuses: active ? { [SESSION]: 'idle' } : {},
+      })
+    }
+
+    beforeEach(() => {
+      // Ensure host store has a daemon base
+      useHostStore.getState().reset()
+    })
+
+    afterEach(() => {
+      useAgentStore.setState({ statuses: {}, events: {}, unread: {}, activeSubagents: {} })
+    })
+
+    it('shows drop overlay on drag-enter when agent is active', () => {
+      setAgentActive(true)
+      const { container } = render(
+        <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" sessionCode={SESSION} />,
+      )
+
+      const root = container.firstElementChild!
+      fireEvent.dragEnter(root, { dataTransfer: { types: ['Files'] } })
+
+      expect(container.querySelector('[data-testid="drop-overlay"]')).toBeInTheDocument()
+    })
+
+    it('does NOT show drop overlay when agent is not active', () => {
+      setAgentActive(false)
+      const { container } = render(
+        <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" sessionCode={SESSION} />,
+      )
+
+      const root = container.firstElementChild!
+      fireEvent.dragEnter(root, { dataTransfer: { types: ['Files'] } })
+
+      expect(container.querySelector('[data-testid="drop-overlay"]')).not.toBeInTheDocument()
+    })
+
+    it('hides drop overlay on drag-leave', () => {
+      setAgentActive(true)
+      const { container } = render(
+        <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" sessionCode={SESSION} />,
+      )
+
+      const root = container.firstElementChild!
+      fireEvent.dragEnter(root, { dataTransfer: { types: ['Files'] } })
+      expect(container.querySelector('[data-testid="drop-overlay"]')).toBeInTheDocument()
+
+      fireEvent.dragLeave(root, { dataTransfer: { types: ['Files'] } })
+      expect(container.querySelector('[data-testid="drop-overlay"]')).not.toBeInTheDocument()
+    })
   })
 })

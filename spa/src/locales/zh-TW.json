@@ -275,5 +275,12 @@
   "notification.fallback.stop": "任務完成",
   "notification.fallback.stopFailure": "任務異常中斷",
 
-  "settings.agent.cc.name": "Claude Code"
+  "settings.agent.cc.name": "Claude Code",
+
+  "upload.drop_files": "拖放檔案以上傳",
+  "upload.uploading": "上傳中 {{file}}（{{current}}/{{total}}）...",
+  "upload.done_one": "已上傳 {{count}} 個檔案",
+  "upload.done_many": "已上傳 {{count}} 個檔案",
+  "upload.failed": "上傳失敗：{{file}}",
+  "upload.partial": "已上傳 {{uploaded}} 個，{{failed}} 個失敗"
 }

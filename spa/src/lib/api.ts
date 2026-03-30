@@ -102,3 +102,21 @@ export async function updateConfig(
   if (!res.ok) throw new Error(`update config failed: ${res.status}`)
   return res.json()
 }
+
+// --- Agent Upload API ---
+
+export async function agentUpload(
+  base: string,
+  file: File,
+  session: string,
+): Promise<{ filename: string; injected: boolean }> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('session', session)
+  const res = await fetch(`${base}/api/agent/upload`, {
+    method: 'POST',
+    body: form,
+  })
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  return res.json()
+}
