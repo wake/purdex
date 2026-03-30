@@ -348,6 +348,17 @@ func TestFindTboxCommand(t *testing.T) {
 			want: "/usr/local/bin/tbox hook Notification",
 		},
 		{
+			name: "quoted tbox path",
+			entries: []any{
+				map[string]any{
+					"hooks": []any{
+						map[string]any{"type": "command", "command": `"/Users/wake/Workspace/tmux-box/tbox" hook --agent cc Stop`},
+					},
+				},
+			},
+			want: `"/Users/wake/Workspace/tmux-box/tbox" hook --agent cc Stop`,
+		},
+		{
 			name: "hook map has no command field",
 			entries: []any{
 				map[string]any{
