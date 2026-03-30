@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.32] - 2026-03-30
+
+通知去重 + 視窗焦點感知（PR #118）
+
+### 修正
+
+- **通知持久化去重** — 用 localStorage `lastSeenTs`（Infinity sentinel）取代 in-memory `notifiedRef`，跨重啟不重複通知
+- **視窗焦點感知** — 只在 App 視窗有焦點且正看該 tab 時抑制通知，App 在背景時仍發通知
+- **SessionEnd 清理** — 清除 `lastSeenTs` 防止 session code 重用時舊 ts 阻擋通知
+- 三層 dedup 架構文件化（localStorage → shouldNotify focus → Electron main recentBroadcasts）
+
 ## [1.0.0-alpha.31] - 2026-03-30
 
 Hook 引號路徑匹配修復（PR #117）
