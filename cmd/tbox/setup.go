@@ -88,12 +88,13 @@ func mergeHooks(path, tboxPath string, remove bool) error {
 	for _, event := range hookEvents {
 		entries := toEntrySlice(hooks[event])
 
-		if remove {
-			entries = filterOutTbox(entries, tboxPath)
-		} else {
-			if !hasTboxEntry(entries, tboxPath) {
-				entries = append(entries, makeTboxEntry(tboxPath, event))
-			}
+		// Always remove ALL existing tbox entries (any path) first.
+		// This prevents duplicates when setup is re-run from a different
+		// binary path (e.g. ./tbox vs ./bin/tbox).
+		entries = filterOutAnyTbox(entries)
+
+		if !remove {
+			entries = append(entries, makeTboxEntry(tboxPath, event))
 		}
 
 		hooks[event] = entries
@@ -139,32 +140,22 @@ func toEntrySlice(v any) []any {
 	return []any{}
 }
 
-// hasTboxEntry checks if any entry in the slice contains a tbox command.
-func hasTboxEntry(entries []any, tboxPath string) bool {
-	for _, e := range entries {
-		if entryMatchesTbox(e, tboxPath) {
-			return true
-		}
-	}
-	return false
-}
-
-// filterOutTbox returns entries with tbox entries removed.
-// Always returns a non-nil slice (empty []any{} when all removed).
-func filterOutTbox(entries []any, tboxPath string) []any {
+// filterOutAnyTbox returns entries with ALL tbox hook entries removed,
+// regardless of binary path.
+func filterOutAnyTbox(entries []any) []any {
 	result := []any{}
 	for _, e := range entries {
-		if !entryMatchesTbox(e, tboxPath) {
+		if !entryIsTbox(e) {
 			result = append(result, e)
 		}
 	}
 	return result
 }
 
-// entryMatchesTbox checks if an entry's hooks[].command belongs to tboxPath.
-// It matches both quoted (`"path" hook Event`) and unquoted (`path hook Event`)
-// forms for backward compatibility with entries created before quoting was added.
-func entryMatchesTbox(entry any, tboxPath string) bool {
+// entryIsTbox checks if an entry contains a tbox hook command (any path).
+// Requires "tbox" to be the exact binary basename — rejects substrings
+// like "tbox-extra" by checking for /tbox or ^tbox boundary.
+func entryIsTbox(entry any) bool {
 	m, ok := entry.(map[string]any)
 	if !ok {
 		return false
@@ -177,7 +168,6 @@ func entryMatchesTbox(entry any, tboxPath string) bool {
 	if !ok {
 		return false
 	}
-	quoted := `"` + tboxPath + `"`
 	for _, h := range arr {
 		hookObj, ok := h.(map[string]any)
 		if !ok {
@@ -187,10 +177,24 @@ func entryMatchesTbox(entry any, tboxPath string) bool {
 		if !ok {
 			continue
 		}
-		// Exact prefix match: unquoted "path hook ..." or quoted `"path" hook ...`
-		if strings.HasPrefix(cmd, tboxPath+" ") || strings.HasPrefix(cmd, quoted+" ") {
+		if isTboxCommand(cmd) {
 			return true
 		}
+	}
+	return false
+}
+
+// isTboxCommand checks if cmd is a tbox hook invocation.
+// Matches quoted ("/path/tbox" hook ...) and unquoted (/path/tbox hook ...)
+// forms while rejecting similar names like "tbox-extra".
+func isTboxCommand(cmd string) bool {
+	// Quoted path: ..."/path/tbox" hook ... or "tbox" hook ...
+	if strings.Contains(cmd, `/tbox" hook`) || strings.HasPrefix(cmd, `"tbox" hook`) {
+		return true
+	}
+	// Unquoted path: .../path/tbox hook ... or tbox hook ...
+	if strings.Contains(cmd, `/tbox hook`) || strings.HasPrefix(cmd, `tbox hook`) {
+		return true
 	}
 	return false
 }
