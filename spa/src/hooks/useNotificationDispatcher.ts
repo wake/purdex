@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { useAgentStore, deriveStatus } from '../stores/useAgentStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useNotificationSettingsStore } from '../stores/useNotificationSettingsStore'
@@ -10,6 +10,28 @@ import { buildNotificationContent } from '../lib/notification-content'
 import { findTabBySessionCode } from '../lib/pane-tree'
 import { getPlatformCapabilities } from '../lib/platform'
 import { createTab } from '../types/tab'
+
+const SEEN_KEY = 'tbox-notification-seen'
+
+/** Check if a notification should be dispatched based on broadcast_ts dedup.
+ *  New sessions default to Infinity (sentinel), so their first event is recorded
+ *  but not dispatched — prevents snapshot flooding on new/restarted clients. */
+export function shouldDispatch(sessionCode: string, broadcastTs: number): boolean {
+  const data: Record<string, number> = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}')
+  const stored = data[sessionCode] ?? Infinity
+
+  if (broadcastTs <= stored) {
+    if (stored === Infinity) {
+      data[sessionCode] = broadcastTs
+      localStorage.setItem(SEEN_KEY, JSON.stringify(data))
+    }
+    return false
+  }
+
+  data[sessionCode] = broadcastTs
+  localStorage.setItem(SEEN_KEY, JSON.stringify(data))
+  return true
+}
 
 interface ShouldNotifyParams {
   derived: string | null
@@ -29,13 +51,13 @@ export function shouldNotify(params: ShouldNotifyParams): boolean {
   if (!settings.enabled) return false
   if (settings.events[eventName] === false) return false
   if (!hasTab && !settings.notifyWithoutTab) return false
-  if (focusedSession === sessionCode) return false
+  // Only suppress when user is actively looking at this session:
+  // both the app window must be focused AND the session tab must be active.
+  if (focusedSession === sessionCode && document.hasFocus()) return false
   return true
 }
 
 export function useNotificationDispatcher(): void {
-  const notifiedRef = useRef(new Set<number>())
-
   useEffect(() => {
     const unsubscribe = useAgentStore.subscribe((state, prevState) => {
       const prevEvents = prevState.events
@@ -45,9 +67,9 @@ export function useNotificationDispatcher(): void {
         const prev = prevEvents[sessionCode]
         if (prev && prev.broadcast_ts === event.broadcast_ts) continue
 
-        // Double protection: skip if this broadcast_ts was already notified
-        // (guards against DB fix edge cases and initial snapshot replays)
-        if (notifiedRef.current.has(event.broadcast_ts)) continue
+        // Persistent dedup: skip already-seen events (handles restart/snapshot replay).
+        // New sessions use Infinity sentinel — first event is recorded but not dispatched.
+        if (!shouldDispatch(sessionCode, event.broadcast_ts)) continue
 
         const derived = deriveStatus(event.event_name, event.raw_event)
         const tabs = useTabStore.getState().tabs
@@ -63,8 +85,6 @@ export function useNotificationDispatcher(): void {
 
         const content = buildNotificationContent(event.event_name, event.raw_event, sessionName, useI18nStore.getState().t)
         if (!content) continue
-
-        notifiedRef.current.add(event.broadcast_ts)
 
         const capabilities = getPlatformCapabilities()
         if (capabilities.canNotification && window.electronAPI?.showNotification) {

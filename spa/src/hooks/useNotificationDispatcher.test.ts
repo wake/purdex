@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { shouldNotify } from './useNotificationDispatcher'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { shouldNotify, shouldDispatch } from './useNotificationDispatcher'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
 
 const defaultSettings: NotificationSettings = {
@@ -16,8 +16,15 @@ describe('shouldNotify', () => {
   it('returns false for running event', () => {
     expect(shouldNotify({ derived: 'running', eventName: 'UserPromptSubmit', sessionCode: 'abc', focusedSession: null, hasTab: true, settings: defaultSettings })).toBe(false)
   })
-  it('returns false when focused on same session', () => {
+  it('returns false when focused on same session and window has focus', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
     expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', sessionCode: 'abc', focusedSession: 'abc', hasTab: true, settings: defaultSettings })).toBe(false)
+    vi.restoreAllMocks()
+  })
+  it('returns true when focused on same session but window is in background', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', sessionCode: 'abc', focusedSession: 'abc', hasTab: true, settings: defaultSettings })).toBe(true)
+    vi.restoreAllMocks()
   })
   it('returns false when no tab and notifyWithoutTab=false', () => {
     expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', sessionCode: 'abc', focusedSession: null, hasTab: false, settings: defaultSettings })).toBe(false)
@@ -39,5 +46,51 @@ describe('shouldNotify', () => {
   })
   it('returns true for waiting Notification (permission_prompt/elicitation_dialog)', () => {
     expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', sessionCode: 'abc', focusedSession: null, hasTab: true, settings: defaultSettings })).toBe(true)
+  })
+})
+
+describe('shouldDispatch', () => {
+  beforeEach(() => {
+    localStorage.removeItem('tbox-notification-seen')
+  })
+
+  it('returns false for new session (sentinel Infinity) but records ts', () => {
+    // First event for a session the client has never seen
+    expect(shouldDispatch('abc', 1000)).toBe(false)
+    // ts is now recorded, so a newer event should dispatch
+    expect(shouldDispatch('abc', 2000)).toBe(true)
+  })
+
+  it('returns false for duplicate broadcast_ts', () => {
+    shouldDispatch('abc', 1000) // sentinel → record
+    shouldDispatch('abc', 2000) // first real → dispatch
+    expect(shouldDispatch('abc', 2000)).toBe(false) // same ts → skip
+  })
+
+  it('returns false for older broadcast_ts', () => {
+    shouldDispatch('abc', 1000) // sentinel → record
+    shouldDispatch('abc', 2000) // dispatch
+    expect(shouldDispatch('abc', 1500)).toBe(false) // older → skip
+  })
+
+  it('returns true for newer broadcast_ts after recorded', () => {
+    shouldDispatch('abc', 1000) // sentinel → record
+    expect(shouldDispatch('abc', 2000)).toBe(true) // newer → dispatch
+    expect(shouldDispatch('abc', 3000)).toBe(true) // newer again → dispatch
+  })
+
+  it('isolates sessions', () => {
+    shouldDispatch('abc', 1000) // record abc
+    shouldDispatch('def', 5000) // record def
+    expect(shouldDispatch('abc', 2000)).toBe(true) // abc newer
+    expect(shouldDispatch('def', 3000)).toBe(false) // def older than 5000
+  })
+
+  it('persists across calls (simulates restart)', () => {
+    shouldDispatch('abc', 1000) // sentinel → record
+    shouldDispatch('abc', 2000) // dispatch + record
+    // Simulate restart: shouldDispatch is called fresh but localStorage persists
+    expect(shouldDispatch('abc', 2000)).toBe(false) // same ts
+    expect(shouldDispatch('abc', 3000)).toBe(true)  // newer
   })
 })
