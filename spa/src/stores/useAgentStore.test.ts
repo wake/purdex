@@ -10,6 +10,7 @@ beforeEach(() => {
     events: {},
     statuses: {},
     unread: {},
+    activeSubagents: {},
     hooksInstalled: false,
   })
   useTabStore.setState({ tabs: {}, activeTabId: null, tabOrder: [] })
@@ -104,7 +105,7 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().statuses['dev']).toBe('idle')
   })
 
-  it('SessionStart(startup) → status = running', () => {
+  it('SessionStart(startup) → status = idle', () => {
     const event: AgentHookEvent = {
       tmux_session: 'dev',
       event_name: 'SessionStart',
@@ -113,10 +114,10 @@ describe('useAgentStore', () => {
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleHookEvent('dev', event)
-    expect(useAgentStore.getState().statuses['dev']).toBe('running')
+    expect(useAgentStore.getState().statuses['dev']).toBe('idle')
   })
 
-  it('SessionStart(resume) → status = running', () => {
+  it('SessionStart(resume) → status = idle', () => {
     const event: AgentHookEvent = {
       tmux_session: 'dev',
       event_name: 'SessionStart',
@@ -125,10 +126,22 @@ describe('useAgentStore', () => {
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleHookEvent('dev', event)
-    expect(useAgentStore.getState().statuses['dev']).toBe('running')
+    expect(useAgentStore.getState().statuses['dev']).toBe('idle')
   })
 
-  it('StopFailure → status = idle', () => {
+  it('SessionStart → marks unread when not focused', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SessionStart',
+      raw_event: { source: 'startup' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().unread['dev']).toBe(true)
+  })
+
+  it('StopFailure → status = error', () => {
     useAgentStore.setState({ statuses: { dev: 'running' } })
     const event: AgentHookEvent = {
       tmux_session: 'dev',
@@ -138,7 +151,7 @@ describe('useAgentStore', () => {
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleHookEvent('dev', event)
-    expect(useAgentStore.getState().statuses['dev']).toBe('idle')
+    expect(useAgentStore.getState().statuses['dev']).toBe('error')
   })
 
   it('Stop → status = idle', () => {
@@ -252,6 +265,185 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().statuses['dev']).toBeUndefined()
     expect(useAgentStore.getState().events['dev']).toBeUndefined()
     expect(useAgentStore.getState().unread['dev']).toBeUndefined()
+  })
+
+  it('SessionEnd → clears activeSubagents', () => {
+    useAgentStore.setState({ activeSubagents: { dev: ['agent-A'] } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SessionEnd',
+      raw_event: {},
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().activeSubagents['dev']).toBeUndefined()
+  })
+
+  it('SubagentStart → adds agent_id to activeSubagents', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SubagentStart',
+      raw_event: { agent_id: 'agent-A', agent_type: 'Explore' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().activeSubagents['dev']).toEqual(['agent-A'])
+  })
+
+  it('SubagentStart → does not duplicate agent_id', () => {
+    useAgentStore.setState({ activeSubagents: { dev: ['agent-A'] } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SubagentStart',
+      raw_event: { agent_id: 'agent-A', agent_type: 'Explore' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().activeSubagents['dev']).toEqual(['agent-A'])
+  })
+
+  it('SubagentStop → removes agent_id from activeSubagents', () => {
+    useAgentStore.setState({ activeSubagents: { dev: ['agent-A', 'agent-B'] } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SubagentStop',
+      raw_event: { agent_id: 'agent-A', agent_type: 'Explore' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().activeSubagents['dev']).toEqual(['agent-B'])
+  })
+
+  it('SubagentStop → removes session key when last agent removed', () => {
+    useAgentStore.setState({ activeSubagents: { dev: ['agent-A'] } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SubagentStop',
+      raw_event: { agent_id: 'agent-A', agent_type: 'Explore' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().activeSubagents['dev']).toBeUndefined()
+  })
+
+  it('SubagentStart/Stop → does not change main status', () => {
+    useAgentStore.setState({ statuses: { dev: 'idle' } })
+    const start: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SubagentStart',
+      raw_event: { agent_id: 'agent-A', agent_type: 'Explore' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', start)
+    expect(useAgentStore.getState().statuses['dev']).toBe('idle')
+
+    const stop: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SubagentStop',
+      raw_event: { agent_id: 'agent-A', agent_type: 'Explore' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', stop)
+    expect(useAgentStore.getState().statuses['dev']).toBe('idle')
+  })
+
+  it('SessionStart → clears stale activeSubagents', () => {
+    useAgentStore.setState({ activeSubagents: { dev: ['agent-A'] } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SessionStart',
+      raw_event: { source: 'startup' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().activeSubagents['dev']).toBeUndefined()
+  })
+
+  it('SessionStart(compact) → does NOT clear activeSubagents', () => {
+    useAgentStore.setState({ activeSubagents: { dev: ['agent-A'] } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SessionStart',
+      raw_event: { source: 'compact' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().activeSubagents['dev']).toEqual(['agent-A'])
+  })
+
+  it('SubagentStart without agent_id → ignored', () => {
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SubagentStart',
+      raw_event: { agent_type: 'Explore' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().activeSubagents['dev']).toBeUndefined()
+    expect(useAgentStore.getState().events['dev']).toBeUndefined()
+  })
+
+  it('SubagentStop without agent_id → ignored', () => {
+    useAgentStore.setState({ activeSubagents: { dev: ['agent-A'] } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'SubagentStop',
+      raw_event: { agent_type: 'Explore' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    // activeSubagents unchanged — agent-A still there
+    expect(useAgentStore.getState().activeSubagents['dev']).toEqual(['agent-A'])
+  })
+
+  it('error status is not downgraded by Notification(idle_prompt)', () => {
+    useAgentStore.setState({ statuses: { dev: 'error' } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'Notification',
+      raw_event: { notification_type: 'idle_prompt' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().statuses['dev']).toBe('error')
+  })
+
+  it('error status is not downgraded by Notification(auth_success)', () => {
+    useAgentStore.setState({ statuses: { dev: 'error' } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'Notification',
+      raw_event: { notification_type: 'auth_success' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().statuses['dev']).toBe('error')
+  })
+
+  it('error status IS cleared by UserPromptSubmit', () => {
+    useAgentStore.setState({ statuses: { dev: 'error' } })
+    const event: AgentHookEvent = {
+      tmux_session: 'dev',
+      event_name: 'UserPromptSubmit',
+      raw_event: {},
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent('dev', event)
+    expect(useAgentStore.getState().statuses['dev']).toBe('running')
   })
 
   it('stores raw_event data', () => {

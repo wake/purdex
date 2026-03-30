@@ -12,6 +12,8 @@ import (
 var hookEvents = []string{
 	"SessionStart",
 	"UserPromptSubmit",
+	"SubagentStart",
+	"SubagentStop",
 	"Stop",
 	"StopFailure",
 	"Notification",

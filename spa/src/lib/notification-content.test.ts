@@ -43,4 +43,8 @@ describe('buildNotificationContent', () => {
     const result = buildNotificationContent('Notification', {}, 'my-session', t)
     expect(result).toEqual({ title: 'my-session', body: '新通知' })
   })
+  it('collapses consecutive newlines in body', () => {
+    const result = buildNotificationContent('Stop', { last_assistant_message: 'Line 1\n\n\nLine 2\n\nLine 3' }, 'my-session')
+    expect(result).toEqual({ title: 'my-session', body: 'Line 1\nLine 2\nLine 3' })
+  })
 })

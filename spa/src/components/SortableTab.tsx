@@ -9,6 +9,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import type { AgentStatus, TabIndicatorStyle } from '../stores/useAgentStore'
 import { TabStatusDot } from './TabStatusDot'
+import { SubagentDots } from './SubagentDots'
 
 function renderTabIcon(
   IconComponent: React.ComponentType<{ size: number; className?: string }> | undefined,
@@ -16,22 +17,30 @@ function renderTabIcon(
   tabIndicatorStyle: TabIndicatorStyle,
   isActive: boolean,
   iconSize: number,
+  subagentCount: number,
 ) {
   if (tabIndicatorStyle === 'replace' && agentStatus) {
-    return <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
+    return (
+      <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
+        <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
+        {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
+      </span>
+    )
   }
   if (tabIndicatorStyle === 'inline') {
     return (
-      <>
+      <span className="relative inline-flex items-center justify-center flex-shrink-0" style={{ minWidth: 16 }}>
         {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
         <TabStatusDot status={agentStatus} style="inline" isActive={isActive} />
-      </>
+        {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
+      </span>
     )
   }
   return (
     <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
       {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
       <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
+      {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
     </span>
   )
 }
@@ -81,6 +90,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     return s.statuses[sessionCode]
   })
   const isUnread = useAgentStore((s) => sessionCode ? !!s.unread[sessionCode] : false)
+  const subagentCount = useAgentStore((s) => sessionCode ? (s.activeSubagents[sessionCode]?.length ?? 0) : 0)
   const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
   const sessionLookup = { getByCode: (code: string) => sessions.find((s) => s.code === code) }
   const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
@@ -117,10 +127,10 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         }`}
         title={label}
       >
-        {renderTabIcon(IconComponent, agentStatus, tabIndicatorStyle, isActive, 14)}
+        {renderTabIcon(IconComponent, agentStatus, tabIndicatorStyle, isActive, 14, subagentCount)}
         {tab.locked && <Lock size={10} className="absolute bottom-0.5 right-0.5" />}
         {!isActive && isUnread && (
-          <span className="absolute top-0.5 right-1 w-[5px] h-[5px] rounded-full"
+          <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
             style={{ backgroundColor: '#b91c1c' }} />
         )}
       </button>
@@ -147,17 +157,17 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onContextMenu={handleContextMenu}
-      className={`group relative flex items-center gap-1.5 pl-2 pr-1 text-xs whitespace-nowrap cursor-pointer transition-colors duration-150 ease-out rounded-[6px] overflow-hidden ${
+      className={`group relative flex items-center gap-1.5 pl-2 pr-1 text-xs whitespace-nowrap cursor-pointer transition-colors duration-150 ease-out rounded-[6px] ${
         isActive
           ? 'text-white bg-surface-active border border-accent-muted'
           : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
       }`}
     >
-      {renderTabIcon(IconComponent, agentStatus, tabIndicatorStyle, isActive, 14)}
+      {renderTabIcon(IconComponent, agentStatus, tabIndicatorStyle, isActive, 14, subagentCount)}
       <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
       {tab.locked && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
       {!isActive && isUnread && (
-        <span className="absolute top-0.5 right-1 w-[5px] h-[5px] rounded-full"
+        <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
           style={{ backgroundColor: '#b91c1c' }} />
       )}
       {showClose && (
