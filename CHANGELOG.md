@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.37] - 2026-03-31
+
+Agent File Upload — 拖曳檔案上傳到 CC agent（PR #129）
+
+### 新功能
+
+- **Daemon upload endpoint** — `POST /api/agent/upload`，multipart 上傳 → 存到 `~/tmp/tbox-upload/{session}/` → `tmux send-keys` 注入路徑
+- **TerminalView drag-drop** — CC agent 活躍時攔截拖曳，逐一上傳逐一注入，drop overlay 提示
+- **StatusBar 上傳進度** — uploading（黃色 spinner + 檔名）/ done（綠色勾）/ error（紅色叉，可點擊消除）
+- **Agent label badge** — 有 model name 時橘棕色 badge，fallback 白色帶框
+- **useUploadStore** — per-session 上傳狀態管理（Zustand，不 persist）
+- **i18n** — 上傳相關文字支援 en/zh-TW，含單複數處理
+
+### 安全修復
+
+- **Path traversal 防護** — `filepath.Base()` sanitize 上傳檔名
+- **路徑引號包裹** — send-keys 注入路徑以雙引號包裹，處理含空格檔名
+
+### 修正
+
+- **並發 Drop 保護** — `dismiss()` 不清除 uploading 狀態，防止重複拖曳污染 store
+
+### 追蹤 Issues
+
+- #127 StatusBar agent label modelName 被 latest event 覆蓋
+- #130 upload send-keys 失敗時清理孤立暫存檔案
+- #131 deduplicateFilename TOCTOU race condition
+
 ## [1.0.0-alpha.36] - 2026-03-31
 
 Agent Hook 增強 — error 狀態、subagent 追蹤、unread 修正（PR #123）
