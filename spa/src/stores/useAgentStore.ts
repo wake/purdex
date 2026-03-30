@@ -3,7 +3,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { getActiveSessionCode } from '../lib/active-session'
 
-export type AgentStatus = 'running' | 'waiting' | 'idle'
+export type AgentStatus = 'running' | 'waiting' | 'idle' | 'error'
 export type TabIndicatorStyle = 'overlay' | 'replace' | 'inline'
 
 export interface AgentHookEvent {
@@ -18,6 +18,7 @@ interface AgentState {
   events: Record<string, AgentHookEvent>       // latest event per session code
   statuses: Record<string, AgentStatus>        // derived status per session
   unread: Record<string, boolean>              // unread flag per session
+  activeSubagents: Record<string, string[]>    // active subagent IDs per session
   tabIndicatorStyle: TabIndicatorStyle
   hooksInstalled: boolean                      // whether CC hooks are installed
 
@@ -32,7 +33,8 @@ export function deriveStatus(eventName: string, rawEvent?: Record<string, unknow
     case 'SessionStart':
       // compact is background auto-compaction, not user activity
       if (rawEvent?.source === 'compact') return null
-      return 'running'
+      // startup/resume/clear = CC waiting for user input
+      return 'idle'
     case 'UserPromptSubmit':
       return 'running'
     case 'Notification': {
@@ -46,8 +48,9 @@ export function deriveStatus(eventName: string, rawEvent?: Record<string, unknow
     case 'PermissionRequest':
       return 'waiting'
     case 'Stop':
-    case 'StopFailure':
       return 'idle'
+    case 'StopFailure':
+      return 'error'
     case 'SessionEnd':
       return 'clear'
     default:
@@ -68,11 +71,44 @@ export const useAgentStore = create<AgentState>()(
       events: {},
       statuses: {},
       unread: {},
+      activeSubagents: {},
       tabIndicatorStyle: 'overlay' as TabIndicatorStyle,
       hooksInstalled: false,
 
       handleHookEvent: (session, event) => {
         const derived = deriveStatus(event.event_name, event.raw_event)
+
+        // Subagent tracking (before status derivation — does not affect main status)
+        if (event.event_name === 'SubagentStart') {
+          const agentId = event.raw_event?.agent_id as string | undefined
+          if (agentId) {
+            set((s) => {
+              const current = s.activeSubagents[session] || []
+              if (current.includes(agentId)) return s
+              return { activeSubagents: { ...s.activeSubagents, [session]: [...current, agentId] } }
+            })
+          }
+          // Store event but don't change main status
+          set((s) => ({ events: { ...s.events, [session]: event } }))
+          return
+        }
+        if (event.event_name === 'SubagentStop') {
+          const agentId = event.raw_event?.agent_id as string | undefined
+          if (agentId) {
+            set((s) => {
+              const current = s.activeSubagents[session] || []
+              const filtered = current.filter((id) => id !== agentId)
+              if (filtered.length === 0) {
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                const { [session]: _, ...rest } = s.activeSubagents
+                return { activeSubagents: rest }
+              }
+              return { activeSubagents: { ...s.activeSubagents, [session]: filtered } }
+            })
+          }
+          set((s) => ({ events: { ...s.events, [session]: event } }))
+          return
+        }
 
         if (derived === 'clear') {
           // SessionEnd: remove session from all maps
@@ -83,9 +119,21 @@ export const useAgentStore = create<AgentState>()(
             const { [session]: _s, ...restStatuses } = s.statuses
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const { [session]: _u, ...restUnread } = s.unread
-            return { events: restEvents, statuses: restStatuses, unread: restUnread }
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { [session]: _a, ...restSubagents } = s.activeSubagents
+            return { events: restEvents, statuses: restStatuses, unread: restUnread, activeSubagents: restSubagents }
           })
           return
+        }
+
+        // Safety net: clear subagents on SessionStart (fresh/resumed session)
+        if (event.event_name === 'SessionStart') {
+          set((s) => {
+            if (!s.activeSubagents[session]) return s
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { [session]: _, ...rest } = s.activeSubagents
+            return { activeSubagents: rest }
+          })
         }
 
         // Store the latest event
@@ -98,7 +146,7 @@ export const useAgentStore = create<AgentState>()(
           // Mark unread when not focused: all 'waiting' statuses are actionable;
           // 'idle' statuses are actionable only if they don't come from a Notification event
           // (idle_prompt/auth_success are informational and should not trigger the red dot).
-          const isActionable = derived === 'waiting' ||
+          const isActionable = derived === 'waiting' || derived === 'error' ||
             (derived === 'idle' && event.event_name !== 'Notification')
           if (isActionable && getActiveSessionCode() !== session) {
             set((s) => ({ unread: { ...s.unread, [session]: true } }))
