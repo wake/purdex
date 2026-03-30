@@ -74,11 +74,11 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const sessionCode = primaryContent.kind === 'session' ? primaryContent.sessionCode : undefined
   const agentStatus = useAgentStore((s) => {
     if (!sessionCode) return undefined
-    // Fallback to idle only when hooks installed and session has never had events.
-    // After SessionEnd both statuses and events are cleared — fallback triggers
-    // again, but this is a brief transient state (session tab disappears shortly
-    // after tmux session is destroyed and session list refreshes).
-    return s.statuses[sessionCode] ?? (s.hooksInstalled ? 'idle' : undefined)
+    // No fallback — only show indicator when we have an actual hook event.
+    // Previously fell back to 'idle' when hooksInstalled was true, but that
+    // made it impossible to distinguish "agent running, first event pending"
+    // from "no agent running at all".
+    return s.statuses[sessionCode]
   })
   const isUnread = useAgentStore((s) => sessionCode ? !!s.unread[sessionCode] : false)
   const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
