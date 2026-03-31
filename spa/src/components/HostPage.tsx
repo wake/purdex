@@ -4,6 +4,8 @@ import { useHostStore } from '../stores/useHostStore'
 import { HostSidebar } from './hosts/HostSidebar'
 import { OverviewSection } from './hosts/OverviewSection'
 import { SessionsSection } from './hosts/SessionsSection'
+import { HooksSection } from './hosts/HooksSection'
+import { UploadSection } from './hosts/UploadSection'
 
 export type HostSubPage = 'overview' | 'sessions' | 'hooks' | 'uploads'
 
@@ -32,8 +34,9 @@ export function HostPage(_props: PaneRendererProps) {
       case 'sessions':
         return <SessionsSection hostId={selection.hostId} />
       case 'hooks':
+        return <HooksSection hostId={selection.hostId} />
       case 'uploads':
-        return <p className="text-text-muted">Coming soon.</p>
+        return <UploadSection hostId={selection.hostId} />
     }
   }
 
