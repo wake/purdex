@@ -46,6 +46,11 @@ export class WindowManager {
       ipcMain.on('spa:ready', handler)
     }
 
+    win.webContents.on('render-process-gone', (_event, details) => {
+      console.error(`[WindowManager] renderer crashed: ${details.reason}`)
+      if (!win.isDestroyed()) this.loadSPA(win)
+    })
+
     win.on('closed', () => {
       this.onWindowClosed?.(win)
       this.windows.delete(id)
