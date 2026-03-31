@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/wake/tmux-box/internal/core"
@@ -11,9 +13,10 @@ import (
 
 // SessionModule manages tmux sessions, meta cache, and HTTP API.
 type SessionModule struct {
-	meta *store.MetaStore
-	tmux tmux.Executor
-	core *core.Core
+	meta        *store.MetaStore
+	tmux        tmux.Executor
+	core        *core.Core
+	cancelWatch context.CancelFunc
 }
 
 // NewSessionModule creates a SessionModule with the given MetaStore.
@@ -38,12 +41,55 @@ func (m *SessionModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/sessions/{code}", m.handleDelete)
 	mux.HandleFunc("POST /api/sessions/{code}/mode", m.handleSwitchMode)
 	mux.HandleFunc("/ws/terminal/{code}", m.handleTerminalWS)
+	mux.HandleFunc("GET /api/hooks/status", m.handleHooksStatus)
+	mux.HandleFunc("POST /api/hooks/install", m.handleHooksInstall)
+	mux.HandleFunc("POST /api/hooks/remove", m.handleHooksRemove)
 }
 
 func (m *SessionModule) Start(ctx context.Context) error {
-	return m.meta.ResetStaleModes()
+	if err := m.meta.ResetStaleModes(); err != nil {
+		return err
+	}
+
+	// Install tmux hooks (log warning on error, don't fail startup).
+	if err := m.installTmuxHooks(); err != nil {
+		log.Printf("session: failed to install tmux hooks: %v (continuing without push)", err)
+	}
+
+	// Start session watcher with a child context.
+	watchCtx, cancel := context.WithCancel(ctx)
+	m.cancelWatch = cancel
+	m.watchSessions(watchCtx)
+
+	// Register OnSubscribe callback to send initial sessions snapshot.
+	m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
+		sessions, err := m.ListSessions()
+		if err != nil {
+			log.Printf("session: OnSubscribe list error: %v", err)
+			return
+		}
+		if sessions == nil {
+			sessions = []SessionInfo{}
+		}
+		data, err := json.Marshal(core.SessionEvent{
+			Type:  "sessions",
+			Value: mustMarshal(sessions),
+		})
+		if err != nil {
+			return
+		}
+		sub.Send(data)
+	})
+
+	return nil
 }
 
 func (m *SessionModule) Stop(_ context.Context) error {
+	// Cancel watcher goroutines.
+	if m.cancelWatch != nil {
+		m.cancelWatch()
+	}
+	// Remove tmux hooks (best-effort).
+	m.removeTmuxHooks()
 	return nil
 }

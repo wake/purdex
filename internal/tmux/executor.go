@@ -32,6 +32,9 @@ type Executor interface {
 	ResizeWindow(target string, cols, rows int) error
 	ResizeWindowAuto(target string) error
 	SetWindowOption(target, option, value string) error
+	SetHookGlobal(event, command string) error
+	RemoveHookGlobal(event string) error
+	ShowHooksGlobal() (string, error)
 }
 
 // --- Real Executor ---
@@ -172,5 +175,29 @@ func (r *RealExecutor) ResizeWindowAuto(target string) error {
 
 func (r *RealExecutor) SetWindowOption(target, option, value string) error {
 	return exec.Command("tmux", "set-window-option", "-t", target, option, value).Run()
+}
+
+func (r *RealExecutor) SetHookGlobal(event, command string) error {
+	return exec.Command("tmux", "set-hook", "-g", event, command).Run()
+}
+
+func (r *RealExecutor) RemoveHookGlobal(event string) error {
+	return exec.Command("tmux", "set-hook", "-gu", event).Run()
+}
+
+func (r *RealExecutor) ShowHooksGlobal() (string, error) {
+	out, err := exec.Command("tmux", "show-hooks", "-g").Output()
+	if err != nil {
+		// "no hooks" is a normal condition — return empty string
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr := string(exitErr.Stderr)
+			if strings.Contains(stderr, "no hooks") ||
+				strings.Contains(stderr, "no server running") {
+				return "", nil
+			}
+		}
+		return "", fmt.Errorf("tmux show-hooks: %w", err)
+	}
+	return string(out), nil
 }
 

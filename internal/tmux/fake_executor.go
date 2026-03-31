@@ -260,3 +260,7 @@ func (f *FakeExecutor) SetWindowOptionCalls() []SetWindowOptionCall {
 	defer f.mu.Unlock()
 	return f.setWindowOptionCalls
 }
+
+func (f *FakeExecutor) SetHookGlobal(event, command string) error { return nil }
+func (f *FakeExecutor) RemoveHookGlobal(event string) error      { return nil }
+func (f *FakeExecutor) ShowHooksGlobal() (string, error)          { return "", nil }
