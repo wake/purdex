@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CaretDown, CaretRight, ArrowsClockwise, Trash, Plugs } from '@phosphor-icons/react'
+import { CaretDown, CaretRight, ArrowsClockwise, Trash, Plugs, Eye, EyeSlash, Check, X } from '@phosphor-icons/react'
 import { useHostStore, type HostInfo, type HostRuntime } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { hostFetch, fetchInfo, fetchHealth } from '../../lib/host-api'
@@ -81,6 +81,126 @@ function EditableField({ label, value, onSave }: { label: string; value: string;
         }}
         autoFocus
       />
+    </Field>
+  )
+}
+
+/* ─── Token field with validation ─── */
+
+function TokenField({ token, ip, port, onSave, t }: {
+  token?: string
+  ip: string
+  port: number
+  onSave: (token: string) => void
+  t: (key: string) => string
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(token ?? '')
+  const [visible, setVisible] = useState(false)
+  const [validating, setValidating] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSave = async () => {
+    if (draft === (token ?? '')) {
+      setEditing(false)
+      return
+    }
+    // Validate token by testing /api/sessions with it
+    setValidating(true)
+    setError('')
+    try {
+      const base = `http://${ip}:${port}`
+      const headers: Record<string, string> = {}
+      if (draft) headers['Authorization'] = `Bearer ${draft}`
+      const res = await fetch(`${base}/api/sessions`, { headers })
+      if (res.ok) {
+        onSave(draft)
+        setEditing(false)
+        setVisible(false)
+      } else if (res.status === 401) {
+        setError(t('hosts.invalid_token'))
+      } else {
+        setError(`HTTP ${res.status}`)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Connection failed')
+    } finally {
+      setValidating(false)
+    }
+  }
+
+  const handleCancel = () => {
+    setDraft(token ?? '')
+    setEditing(false)
+    setError('')
+  }
+
+  if (!editing) {
+    return (
+      <Field label={t('hosts.token')}>
+        <span className="inline-flex items-center gap-2">
+          <span className="text-sm text-text-muted font-mono">
+            {token ? (visible ? token : '••••••••') : '—'}
+          </span>
+          {token && (
+            <button
+              onClick={() => setVisible(!visible)}
+              className="text-text-muted hover:text-text-secondary cursor-pointer"
+            >
+              {visible ? <EyeSlash size={14} /> : <Eye size={14} />}
+            </button>
+          )}
+          <button
+            onClick={() => { setDraft(token ?? ''); setEditing(true) }}
+            className="text-xs text-accent hover:text-accent/80 cursor-pointer"
+          >
+            {t('common.edit')}
+          </button>
+        </span>
+      </Field>
+    )
+  }
+
+  return (
+    <Field label={t('hosts.token')}>
+      <div className="space-y-1">
+        <div className="flex items-center gap-1">
+          <input
+            type={visible ? 'text' : 'password'}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="tbox_..."
+            className="bg-surface-secondary border border-border-default rounded px-2 py-1 text-sm text-text-primary font-mono w-full max-w-xs"
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleSave()
+              if (e.key === 'Escape') handleCancel()
+            }}
+          />
+          <button
+            onClick={() => setVisible(!visible)}
+            className="text-text-muted hover:text-text-secondary cursor-pointer p-1"
+          >
+            {visible ? <EyeSlash size={14} /> : <Eye size={14} />}
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={validating}
+            className="text-green-400 hover:text-green-300 cursor-pointer p-1 disabled:opacity-50"
+          >
+            <Check size={14} />
+          </button>
+          <button
+            onClick={handleCancel}
+            className="text-text-muted hover:text-text-secondary cursor-pointer p-1"
+          >
+            <X size={14} />
+          </button>
+        </div>
+        {validating && <p className="text-xs text-text-muted">{t('hosts.validating_token')}</p>}
+        {error && <p className="text-xs text-red-400">{error}</p>}
+        <p className="text-xs text-text-muted">{t('hosts.token_hint')}</p>
+      </div>
     </Field>
   )
 }
@@ -182,11 +302,13 @@ export function OverviewSection({ hostId }: Props) {
           value={String(host.port)}
           onSave={(v) => updateHost(hostId, { port: parseInt(v, 10) || 7860 })}
         />
-        <Field label={t('hosts.token')}>
-          <span className="text-sm text-text-muted font-mono">
-            {host.token ? '••••••••' : '—'}
-          </span>
-        </Field>
+        <TokenField
+          token={host.token}
+          ip={host.ip}
+          port={host.port}
+          onSave={(token) => updateHost(hostId, { token: token || undefined })}
+          t={t}
+        />
         <Field label={t('hosts.status')}>
           <span className={`text-sm ${
             runtime?.status === 'connected' ? 'text-green-400'

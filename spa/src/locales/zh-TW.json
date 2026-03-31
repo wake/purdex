@@ -346,5 +346,7 @@
   "hosts.token_hint": "在主機上執行 'tbox token generate' 取得 token",
   "hosts.requires_token": "此 Daemon 需要驗證，請輸入 token。",
   "hosts.invalid_token": "Token 無效",
-  "hosts.save": "儲存"
+  "hosts.validating_token": "驗證 Token 中...",
+  "hosts.save": "儲存",
+  "common.edit": "編輯"
 }

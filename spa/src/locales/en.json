@@ -346,5 +346,7 @@
   "hosts.token_hint": "Run 'tbox token generate' on the host to get a token",
   "hosts.requires_token": "This daemon requires authentication. Enter a token.",
   "hosts.invalid_token": "Invalid token",
-  "hosts.save": "Save"
+  "hosts.validating_token": "Validating token...",
+  "hosts.save": "Save",
+  "common.edit": "Edit"
 }
