@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useAgentStore, deriveStatus } from '../stores/useAgentStore'
-import { getActiveSessionCode } from '../lib/active-session'
+import { getActiveSessionInfo } from '../lib/active-session'
+import { compositeKey } from '../lib/composite-key'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useNotificationSettingsStore } from '../stores/useNotificationSettingsStore'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
@@ -46,14 +47,14 @@ export function clearSeenTs(sessionCode: string): void {
 interface ShouldNotifyParams {
   derived: string | null
   eventName: string
-  sessionCode: string
-  focusedSession: string | null
+  compositeKey: string
+  focusedCompositeKey: string
   hasTab: boolean
   settings: NotificationSettings
 }
 
 export function shouldNotify(params: ShouldNotifyParams): boolean {
-  const { derived, eventName, sessionCode, focusedSession, hasTab, settings } = params
+  const { derived, eventName, compositeKey: ck, focusedCompositeKey, hasTab, settings } = params
   if (derived !== 'waiting' && derived !== 'idle' && derived !== 'error') return false
   // Informational Notification subtypes (idle_prompt, auth_success) derive to 'idle'
   // but should not trigger desktop notifications — consistent with unread marking logic.
@@ -63,7 +64,7 @@ export function shouldNotify(params: ShouldNotifyParams): boolean {
   if (!hasTab && !settings.notifyWithoutTab) return false
   // Only suppress when user is actively looking at this session:
   // both the app window must be focused AND the session tab must be active.
-  if (focusedSession === sessionCode && document.hasFocus()) return false
+  if (focusedCompositeKey === ck && document.hasFocus()) return false
   return true
 }
 
@@ -100,9 +101,10 @@ export function useNotificationDispatcher(): void {
         const tabs = useTabStore.getState().tabs
         const hasTab = findTabBySessionCode(tabs, sessionCode) !== undefined
         const settings = useNotificationSettingsStore.getState().getSettingsForAgent(event.agent_type || '')
-        const focusedSession = getActiveSessionCode()
+        const activeInfo = getActiveSessionInfo()
+        const focusedCompositeKey = activeInfo ? compositeKey(activeInfo.hostId, activeInfo.sessionCode) : ''
 
-        if (!shouldNotify({ derived, eventName: event.event_name, sessionCode, focusedSession, hasTab, settings })) continue
+        if (!shouldNotify({ derived, eventName: event.event_name, compositeKey: compositeKeyStr, focusedCompositeKey, hasTab, settings })) continue
 
         const sessionsMap = useSessionStore.getState().sessions
         const hostSessions = sessionsMap[hostId] ?? []

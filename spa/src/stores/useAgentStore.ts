@@ -1,7 +1,7 @@
 // spa/src/stores/useAgentStore.ts
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { getActiveSessionCode } from '../lib/active-session'
+import { getActiveSessionInfo } from '../lib/active-session'
 import { compositeKey } from '../lib/composite-key'
 
 export type AgentStatus = 'running' | 'waiting' | 'idle' | 'error'
@@ -160,7 +160,9 @@ export const useAgentStore = create<AgentState>()(
           // (idle_prompt/auth_success are informational and should not trigger the red dot).
           const isActionable = derived === 'waiting' || derived === 'error' ||
             (derived === 'idle' && event.event_name !== 'Notification')
-          if (isActionable && getActiveSessionCode() !== sessionCode) {
+          const activeInfo = getActiveSessionInfo()
+          const activeKey = activeInfo ? compositeKey(activeInfo.hostId, activeInfo.sessionCode) : ''
+          if (isActionable && activeKey !== key) {
             set((s) => ({ unread: { ...s.unread, [key]: true } }))
           }
         }
