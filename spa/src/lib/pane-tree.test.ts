@@ -111,7 +111,7 @@ describe('findTabBySessionCode', () => {
   })
 
   it('returns undefined for non-session pane kinds', () => {
-    const paneSettings: Pane = { id: 'dddddd', content: { kind: 'settings' } }
+    const paneSettings: Pane = { id: 'dddddd', content: { kind: 'settings', scope: 'global' } }
     const paneDashboard: Pane = { id: 'eeeeee', content: { kind: 'dashboard' } }
     const tabs = {
       tab1: { layout: { type: 'leaf', pane: paneSettings } as PaneLayout },

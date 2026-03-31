@@ -145,7 +145,7 @@ export const useHostStore = create<HostState>()(
 
       getAuthHeaders: (hostId) => {
         const host = get().hosts[hostId]
-        if (!host?.token) return {}
+        if (!host?.token) return {} as Record<string, string>
         return { Authorization: `Bearer ${host.token}` }
       },
 

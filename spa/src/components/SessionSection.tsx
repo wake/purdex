@@ -1,13 +1,10 @@
 import { useMemo } from 'react'
 import { useSessionStore } from '../stores/useSessionStore'
-import { useHostStore } from '../stores/useHostStore'
 import type { NewTabProviderProps } from '../lib/new-tab-registry'
 import { TerminalWindow } from '@phosphor-icons/react'
 
 export function SessionSection({ onSelect }: NewTabProviderProps) {
   const sessionsMap = useSessionStore((s) => s.sessions)
-  const defaultHostId = useHostStore((s) => s.hostOrder[0] ?? '')
-
   // Flatten all hosts' sessions for the new-tab picker
   const sessions = useMemo(() => {
     const result: Array<{ hostId: string; code: string; name: string }> = []

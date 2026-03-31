@@ -4,6 +4,7 @@ import type { Tab, PaneContent } from '../types/tab'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, findPane, updatePaneInLayout } from '../lib/pane-tree'
 import { contentMatches } from '../lib/pane-utils'
+import { useHostStore } from './useHostStore'
 
 interface TabState {
   tabs: Record<string, Tab>
@@ -149,8 +150,10 @@ export const useTabStore = create<TabState>()(
       migrate: (persisted: any, version: number) => {
         if (version < 2) {
           // v1 → v2: add hostId to session PaneContent
-          const { useHostStore } = require('./useHostStore')
-          const defaultHostId = useHostStore.getState().hostOrder[0] ?? 'local'
+          let defaultHostId = 'local'
+          try {
+            defaultHostId = useHostStore.getState().hostOrder[0] ?? 'local'
+          } catch { /* hostStore not yet initialized */ }
           const tabs = persisted?.tabs ?? {}
           for (const tab of Object.values(tabs) as any[]) {
             addHostIdToLayout(tab?.layout, defaultHostId)
