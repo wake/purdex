@@ -6,6 +6,7 @@ import { OverviewSection } from './hosts/OverviewSection'
 import { SessionsSection } from './hosts/SessionsSection'
 import { HooksSection } from './hosts/HooksSection'
 import { UploadSection } from './hosts/UploadSection'
+import { AddHostDialog } from './hosts/AddHostDialog'
 
 export type HostSubPage = 'overview' | 'sessions' | 'hooks' | 'uploads'
 
@@ -23,6 +24,7 @@ export function HostPage(_props: PaneRendererProps) {
     hostId: activeHostId ?? hostOrder[0] ?? '',
     subPage: 'overview',
   }))
+  const [showAddHost, setShowAddHost] = useState(false)
 
   const renderContent = () => {
     if (!selection.hostId) {
@@ -46,10 +48,12 @@ export function HostPage(_props: PaneRendererProps) {
         selectedHostId={selection.hostId}
         selectedSubPage={selection.subPage}
         onSelect={(hostId, subPage) => setSelection({ hostId, subPage })}
+        onAddHost={() => setShowAddHost(true)}
       />
       <div className="flex-1 overflow-y-auto p-6">
         {renderContent()}
       </div>
+      {showAddHost && <AddHostDialog onClose={() => setShowAddHost(false)} />}
     </div>
   )
 }
