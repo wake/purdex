@@ -127,22 +127,20 @@ export const useHostStore = create<HostState>()(
 
       getDaemonBase: (hostId) => {
         const host = get().hosts[hostId]
-        if (!host) {
-          const fallbackId = get().activeHostId ?? get().hostOrder[0]
-          const fallback = get().hosts[fallbackId]
-          return `http://${fallback.ip}:${fallback.port}`
-        }
-        return `http://${host.ip}:${host.port}`
+        if (host) return `http://${host.ip}:${host.port}`
+        const fallbackId = get().activeHostId ?? get().hostOrder[0]
+        const fallback = fallbackId ? get().hosts[fallbackId] : undefined
+        if (!fallback) return 'http://127.0.0.1:7860'
+        return `http://${fallback.ip}:${fallback.port}`
       },
 
       getWsBase: (hostId) => {
         const host = get().hosts[hostId]
-        if (!host) {
-          const fallbackId = get().activeHostId ?? get().hostOrder[0]
-          const fallback = get().hosts[fallbackId]
-          return `ws://${fallback.ip}:${fallback.port}`
-        }
-        return `ws://${host.ip}:${host.port}`
+        if (host) return `ws://${host.ip}:${host.port}`
+        const fallbackId = get().activeHostId ?? get().hostOrder[0]
+        const fallback = fallbackId ? get().hosts[fallbackId] : undefined
+        if (!fallback) return 'ws://127.0.0.1:7860'
+        return `ws://${fallback.ip}:${fallback.port}`
       },
 
       getAuthHeaders: (hostId) => {
