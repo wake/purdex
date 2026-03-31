@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CaretDown, CaretRight, ArrowsClockwise, Trash, Plugs } from '@phosphor-icons/react'
 import { useHostStore, type HostInfo, type HostRuntime } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -43,8 +43,17 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function EditableField({ label, value, onSave }: { label: string; value: string; onSave: (v: string) => void }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
+  const savedRef = useRef(false)
 
   useEffect(() => { setDraft(value) }, [value])
+  useEffect(() => { if (editing) savedRef.current = false }, [editing])
+
+  const save = () => {
+    if (savedRef.current) return
+    savedRef.current = true
+    onSave(draft)
+    setEditing(false)
+  }
 
   if (!editing) {
     return (
@@ -65,9 +74,9 @@ function EditableField({ label, value, onSave }: { label: string; value: string;
         className="bg-surface-secondary border border-border-default rounded px-2 py-1 text-sm text-text-primary w-full max-w-xs"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => { onSave(draft); setEditing(false) }}
+        onBlur={save}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') { onSave(draft); setEditing(false) }
+          if (e.key === 'Enter') save()
           if (e.key === 'Escape') { setDraft(value); setEditing(false) }
         }}
         autoFocus
@@ -140,13 +149,9 @@ export function OverviewSection({ hostId }: Props) {
 
   const handleConfigSave = async (updates: Partial<ConfigData>) => {
     try {
-      const daemonBase = useHostStore.getState().getDaemonBase(hostId)
-      const res = await fetch(`${daemonBase}/api/config`, {
+      const res = await hostFetch(hostId, '/api/config', {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...useHostStore.getState().getAuthHeaders(hostId),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
       })
       if (res.ok) {
@@ -183,7 +188,11 @@ export function OverviewSection({ hostId }: Props) {
           </span>
         </Field>
         <Field label={t('hosts.status')}>
-          <span className={`text-sm ${runtime?.status === 'connected' ? 'text-green-400' : 'text-red-400'}`}>
+          <span className={`text-sm ${
+            runtime?.status === 'connected' ? 'text-green-400'
+              : runtime?.status === 'reconnecting' ? 'text-yellow-400'
+              : 'text-red-400'
+          }`}>
             {statusLabel(runtime)}
             {runtime?.latency != null && ` (${runtime.latency}ms)`}
           </span>
@@ -244,13 +253,13 @@ export function OverviewSection({ hostId }: Props) {
           <>
             <Field label={t('hosts.sizing_mode')}>
               <select
-                value={config.terminal?.sizing_mode ?? 'fit'}
+                value={config.terminal?.sizing_mode ?? 'auto'}
                 onChange={(e) => handleConfigSave({ terminal: { sizing_mode: e.target.value } })}
                 className="bg-surface-secondary border border-border-default rounded px-2 py-1 text-sm text-text-primary"
               >
-                <option value="fit">fit</option>
-                <option value="fixed">fixed</option>
-                <option value="manual">manual</option>
+                <option value="auto">auto</option>
+                <option value="terminal-first">terminal-first</option>
+                <option value="minimal-first">minimal-first</option>
               </select>
             </Field>
             <Field label={t('hosts.stream_presets')}>

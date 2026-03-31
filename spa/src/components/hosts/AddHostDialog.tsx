@@ -102,7 +102,7 @@ export function AddHostDialog({ onClose }: Props) {
               <label className="text-xs text-text-secondary block mb-1">{t('hosts.ip')} *</label>
               <input
                 value={ip}
-                onChange={(e) => setIp(e.target.value)}
+                onChange={(e) => { setIp(e.target.value); if (stage === 'success') setStage('idle') }}
                 placeholder="100.64.0.1"
                 className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono"
               />
@@ -111,7 +111,7 @@ export function AddHostDialog({ onClose }: Props) {
               <label className="text-xs text-text-secondary block mb-1">{t('hosts.port')}</label>
               <input
                 value={port}
-                onChange={(e) => setPort(e.target.value)}
+                onChange={(e) => { setPort(e.target.value); if (stage === 'success') setStage('idle') }}
                 placeholder="7860"
                 className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono"
               />

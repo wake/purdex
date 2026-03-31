@@ -37,8 +37,10 @@ export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSe
     onSelectSession?.(code)
   }
 
-  const isActiveSession = (s: { code: string }) =>
-    activeSessionCode != null ? s.code === activeSessionCode : activeCode === s.code
+  const activeHostId = useSessionStore((s) => s.activeHostId)
+
+  const isActiveSession = (hostId: string, s: { code: string }) =>
+    activeSessionCode != null ? s.code === activeSessionCode : (activeHostId === hostId && activeCode === s.code)
 
   return (
     <div className="w-56 bg-surface-tertiary border-r border-border-subtle flex flex-col">
@@ -86,7 +88,7 @@ export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSe
                         onClick={() => handleClick(hostId, s.code)}
                         disabled={!!isOffline}
                         className={`w-full text-left px-2 py-1.5 rounded text-sm cursor-pointer flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-                          isActiveSession(s) ? 'bg-surface-secondary text-text-primary' : 'text-text-secondary hover:bg-surface-secondary/50'
+                          isActiveSession(hostId, s) ? 'bg-surface-secondary text-text-primary' : 'text-text-secondary hover:bg-surface-secondary/50'
                         }`}
                       >
                         <SessionIcon mode={s.mode} code={s.code} />

@@ -28,7 +28,8 @@ function StatusBadge({ installed, t }: { installed: boolean; t: (key: string) =>
 export function HooksSection({ hostId }: Props) {
   const t = useI18nStore((s) => s.t)
   const runtime = useHostStore((s) => s.runtime[hostId])
-  const isOffline = runtime?.status !== 'connected'
+  const host = useHostStore((s) => s.hosts[hostId])
+  const isOffline = runtime != null && runtime.status !== 'connected'
   const [status, setStatus] = useState<HooksStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(false)
@@ -50,6 +51,8 @@ export function HooksSection({ hostId }: Props) {
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [hostId])
+
+  if (!host) return null
 
   const handleInstall = async () => {
     setActionLoading(true)

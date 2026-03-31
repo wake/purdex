@@ -19,7 +19,10 @@ interface Props {
 }
 
 function StatusIcon({ runtime }: { runtime?: HostRuntime }) {
-  if (!runtime || runtime.status === 'connected') {
+  if (!runtime) {
+    return <Circle size={8} weight="fill" className="text-text-muted" />
+  }
+  if (runtime.status === 'connected') {
     return <Circle size={8} weight="fill" className="text-green-400" />
   }
   if (runtime.status === 'reconnecting') {

@@ -31,7 +31,8 @@ function formatBytes(bytes: number): string {
 export function UploadSection({ hostId }: Props) {
   const t = useI18nStore((s) => s.t)
   const runtime = useHostStore((s) => s.runtime[hostId])
-  const isOffline = runtime?.status !== 'connected'
+  const host = useHostStore((s) => s.hosts[hostId])
+  const isOffline = runtime != null && runtime.status !== 'connected'
   const [stats, setStats] = useState<UploadStats | null>(null)
   const [files, setFiles] = useState<UploadFile[]>([])
   const [loading, setLoading] = useState(true)
@@ -68,18 +69,26 @@ export function UploadSection({ hostId }: Props) {
     return () => { cancelled = true }
   }, [hostId])
 
+  if (!host) return null
+
   const handleDeleteFile = async (session: string, filename: string) => {
-    await deleteUploadFile(hostId, session, filename)
+    try {
+      await deleteUploadFile(hostId, session, filename)
+    } catch { /* ignore */ }
     await refresh()
   }
 
   const handleDeleteSession = async (session: string) => {
-    await deleteUploadSession(hostId, session)
+    try {
+      await deleteUploadSession(hostId, session)
+    } catch { /* ignore */ }
     await refresh()
   }
 
   const handleClearAll = async () => {
-    await deleteAllUploads(hostId)
+    try {
+      await deleteAllUploads(hostId)
+    } catch { /* ignore */ }
     setConfirmClearAll(false)
     await refresh()
   }

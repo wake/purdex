@@ -129,10 +129,11 @@ export function SessionsSection({ hostId }: Props) {
   const t = useI18nStore((s) => s.t)
   const sessions = useSessionStore((s) => s.sessions[hostId] ?? [])
   const runtime = useHostStore((s) => s.runtime[hostId])
-  const isOffline = runtime?.status !== 'connected'
+  const isOffline = runtime != null && runtime.status !== 'connected'
   const [showNew, setShowNew] = useState(false)
   const [renamingCode, setRenamingCode] = useState<string | null>(null)
   const [deletingCode, setDeletingCode] = useState<string | null>(null)
+  const agentStatuses = useAgentStore((s) => s.statuses)
 
   const handleOpen = (session: Session, mode: string) => {
     const tabId = useTabStore.getState().openSingletonTab({
@@ -154,11 +155,6 @@ export function SessionsSection({ hostId }: Props) {
       await hostFetch(hostId, `/api/sessions/${code}`, { method: 'DELETE' })
     } catch { /* will be removed by next WS sync */ }
     setDeletingCode(null)
-  }
-
-  const getAgentStatus = (session: Session) => {
-    const key = compositeKey(hostId, session.code)
-    return useAgentStore.getState().statuses[key]
   }
 
   return (
@@ -193,7 +189,7 @@ export function SessionsSection({ hostId }: Props) {
             </thead>
             <tbody>
               {sessions.map((session) => {
-                const agent = getAgentStatus(session)
+                const agent = agentStatuses[compositeKey(hostId, session.code)]
                 return (
                   <tr key={session.code} className="border-t border-border-subtle hover:bg-surface-secondary/30">
                     <td className="px-3 py-2">

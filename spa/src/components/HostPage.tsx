@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { PaneRendererProps } from '../lib/pane-registry'
 import { useHostStore } from '../stores/useHostStore'
 import { HostSidebar } from './hosts/HostSidebar'
@@ -26,27 +26,35 @@ export function HostPage(_props: PaneRendererProps) {
   }))
   const [showAddHost, setShowAddHost] = useState(false)
 
+  // Derive effective selection: reset when selected host no longer exists
+  const effectiveSelection = useMemo<Selection>(() => {
+    if (selection.hostId && !hostOrder.includes(selection.hostId)) {
+      return { hostId: hostOrder[0] ?? '', subPage: 'overview' }
+    }
+    return selection
+  }, [hostOrder, selection])
+
   const renderContent = () => {
-    if (!selection.hostId) {
+    if (!effectiveSelection.hostId) {
       return <p className="text-text-muted">No host selected.</p>
     }
-    switch (selection.subPage) {
+    switch (effectiveSelection.subPage) {
       case 'overview':
-        return <OverviewSection hostId={selection.hostId} />
+        return <OverviewSection hostId={effectiveSelection.hostId} />
       case 'sessions':
-        return <SessionsSection hostId={selection.hostId} />
+        return <SessionsSection hostId={effectiveSelection.hostId} />
       case 'hooks':
-        return <HooksSection hostId={selection.hostId} />
+        return <HooksSection hostId={effectiveSelection.hostId} />
       case 'uploads':
-        return <UploadSection hostId={selection.hostId} />
+        return <UploadSection hostId={effectiveSelection.hostId} />
     }
   }
 
   return (
     <div className="flex h-full">
       <HostSidebar
-        selectedHostId={selection.hostId}
-        selectedSubPage={selection.subPage}
+        selectedHostId={effectiveSelection.hostId}
+        selectedSubPage={effectiveSelection.subPage}
         onSelect={(hostId, subPage) => setSelection({ hostId, subPage })}
         onAddHost={() => setShowAddHost(true)}
       />
