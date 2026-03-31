@@ -1,6 +1,7 @@
 // spa/src/stores/useStreamStore.ts
 import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
+import { compositeKey } from '../lib/composite-key'
 import type { StreamMessage, ControlRequest, StreamConnection } from '../lib/stream-ws'
 
 export interface PerSessionState {
@@ -27,28 +28,28 @@ interface StreamStore {
   // Per-session state
   sessions: Record<string, PerSessionState>
 
-  // Global state (keyed by session code but not part of PerSessionState)
+  // Global state (keyed by composite key but not part of PerSessionState)
   relayStatus: Record<string, boolean>
   handoffProgress: Record<string, string>
 
   // Per-session actions
-  addMessage: (session: string, msg: StreamMessage) => void
-  addControlRequest: (session: string, req: ControlRequest) => void
-  resolveControlRequest: (session: string, requestId: string) => void
-  setStreaming: (session: string, v: boolean) => void
-  setSessionInfo: (session: string, ccSessionId: string, model: string) => void
-  addCost: (session: string, usd: number) => void
-  setConn: (session: string, conn: StreamConnection | null) => void
-  loadHistory: (session: string, messages: StreamMessage[]) => void
-  clearSession: (session: string) => void
+  addMessage: (hostId: string, sessionCode: string, msg: StreamMessage) => void
+  addControlRequest: (hostId: string, sessionCode: string, req: ControlRequest) => void
+  resolveControlRequest: (hostId: string, sessionCode: string, requestId: string) => void
+  setStreaming: (hostId: string, sessionCode: string, v: boolean) => void
+  setSessionInfo: (hostId: string, sessionCode: string, ccSessionId: string, model: string) => void
+  addCost: (hostId: string, sessionCode: string, usd: number) => void
+  setConn: (hostId: string, sessionCode: string, conn: StreamConnection | null) => void
+  loadHistory: (hostId: string, sessionCode: string, messages: StreamMessage[]) => void
+  clearSession: (hostId: string, sessionCode: string) => void
 
   // Global-keyed actions
-  setHandoffProgress: (session: string, progress: string) => void
-  setRelayStatus: (session: string, connected: boolean) => void
+  setHandoffProgress: (hostId: string, sessionCode: string, progress: string) => void
+  setRelayStatus: (hostId: string, sessionCode: string, connected: boolean) => void
 }
 
-function getOrCreate(sessions: Record<string, PerSessionState>, name: string): PerSessionState {
-  return sessions[name] ?? defaultPerSession()
+function getOrCreate(sessions: Record<string, PerSessionState>, key: string): PerSessionState {
+  return sessions[key] ?? defaultPerSession()
 }
 
 export const useStreamStore = create<StreamStore>()(subscribeWithSelector((set) => ({
@@ -56,64 +57,75 @@ export const useStreamStore = create<StreamStore>()(subscribeWithSelector((set) 
   relayStatus: {},
   handoffProgress: {},
 
-  addMessage: (session, msg) => set((s) => {
-    const cur = getOrCreate(s.sessions, session)
-    return { sessions: { ...s.sessions, [session]: { ...cur, messages: [...cur.messages, msg] } } }
+  addMessage: (hostId, sessionCode, msg) => set((s) => {
+    const key = compositeKey(hostId, sessionCode)
+    const cur = getOrCreate(s.sessions, key)
+    return { sessions: { ...s.sessions, [key]: { ...cur, messages: [...cur.messages, msg] } } }
   }),
 
-  addControlRequest: (session, req) => set((s) => {
-    const cur = getOrCreate(s.sessions, session)
-    return { sessions: { ...s.sessions, [session]: { ...cur, pendingControlRequests: [...cur.pendingControlRequests, req] } } }
+  addControlRequest: (hostId, sessionCode, req) => set((s) => {
+    const key = compositeKey(hostId, sessionCode)
+    const cur = getOrCreate(s.sessions, key)
+    return { sessions: { ...s.sessions, [key]: { ...cur, pendingControlRequests: [...cur.pendingControlRequests, req] } } }
   }),
 
-  resolveControlRequest: (session, requestId) => set((s) => {
-    const cur = getOrCreate(s.sessions, session)
-    return { sessions: { ...s.sessions, [session]: { ...cur, pendingControlRequests: cur.pendingControlRequests.filter((r) => r.request_id !== requestId) } } }
+  resolveControlRequest: (hostId, sessionCode, requestId) => set((s) => {
+    const key = compositeKey(hostId, sessionCode)
+    const cur = getOrCreate(s.sessions, key)
+    return { sessions: { ...s.sessions, [key]: { ...cur, pendingControlRequests: cur.pendingControlRequests.filter((r) => r.request_id !== requestId) } } }
   }),
 
-  setStreaming: (session, v) => set((s) => {
-    const cur = getOrCreate(s.sessions, session)
-    return { sessions: { ...s.sessions, [session]: { ...cur, isStreaming: v } } }
+  setStreaming: (hostId, sessionCode, v) => set((s) => {
+    const key = compositeKey(hostId, sessionCode)
+    const cur = getOrCreate(s.sessions, key)
+    return { sessions: { ...s.sessions, [key]: { ...cur, isStreaming: v } } }
   }),
 
-  setSessionInfo: (session, ccSessionId, model) => set((s) => {
-    const cur = getOrCreate(s.sessions, session)
-    return { sessions: { ...s.sessions, [session]: { ...cur, sessionInfo: { ccSessionId, model } } } }
+  setSessionInfo: (hostId, sessionCode, ccSessionId, model) => set((s) => {
+    const key = compositeKey(hostId, sessionCode)
+    const cur = getOrCreate(s.sessions, key)
+    return { sessions: { ...s.sessions, [key]: { ...cur, sessionInfo: { ccSessionId, model } } } }
   }),
 
-  addCost: (session, usd) => set((s) => {
-    const cur = getOrCreate(s.sessions, session)
-    return { sessions: { ...s.sessions, [session]: { ...cur, cost: cur.cost + usd } } }
+  addCost: (hostId, sessionCode, usd) => set((s) => {
+    const key = compositeKey(hostId, sessionCode)
+    const cur = getOrCreate(s.sessions, key)
+    return { sessions: { ...s.sessions, [key]: { ...cur, cost: cur.cost + usd } } }
   }),
 
-  setConn: (session, conn) => set((s) => {
-    const cur = getOrCreate(s.sessions, session)
-    return { sessions: { ...s.sessions, [session]: { ...cur, conn } } }
+  setConn: (hostId, sessionCode, conn) => set((s) => {
+    const key = compositeKey(hostId, sessionCode)
+    const cur = getOrCreate(s.sessions, key)
+    return { sessions: { ...s.sessions, [key]: { ...cur, conn } } }
   }),
 
   // Note: loadHistory replaces all messages. If live messages arrived via
   // addMessage before history loads, they will be lost. In practice this race
   // is narrow (CC waits for user input after --resume), but be aware.
-  loadHistory: (session, messages) => set((s) => {
-    const cur = getOrCreate(s.sessions, session)
-    return { sessions: { ...s.sessions, [session]: { ...cur, messages } } }
+  loadHistory: (hostId, sessionCode, messages) => set((s) => {
+    const key = compositeKey(hostId, sessionCode)
+    const cur = getOrCreate(s.sessions, key)
+    return { sessions: { ...s.sessions, [key]: { ...cur, messages } } }
   }),
 
-  clearSession: (session) => {
+  clearSession: (hostId, sessionCode) => {
+    const key = compositeKey(hostId, sessionCode)
     // Close conn outside set() to avoid re-entrant mutations
-    const cur = useStreamStore.getState().sessions[session]
+    const cur = useStreamStore.getState().sessions[key]
     cur?.conn?.close()
     set((s) => {
-      const { [session]: _cleared, ...rest } = s.sessions // eslint-disable-line @typescript-eslint/no-unused-vars
+      const { [key]: _cleared, ...rest } = s.sessions // eslint-disable-line @typescript-eslint/no-unused-vars
       return { sessions: rest }
     })
   },
 
-  setHandoffProgress: (session, progress) => set((s) => ({
-    handoffProgress: { ...s.handoffProgress, [session]: progress },
-  })),
+  setHandoffProgress: (hostId, sessionCode, progress) => set((s) => {
+    const key = compositeKey(hostId, sessionCode)
+    return { handoffProgress: { ...s.handoffProgress, [key]: progress } }
+  }),
 
-  setRelayStatus: (session, connected) => set((s) => ({
-    relayStatus: { ...s.relayStatus, [session]: connected },
-  })),
+  setRelayStatus: (hostId, sessionCode, connected) => set((s) => {
+    const key = compositeKey(hostId, sessionCode)
+    return { relayStatus: { ...s.relayStatus, [key]: connected } }
+  }),
 })))

@@ -4,12 +4,15 @@ import { TabBar } from './TabBar'
 import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
 import { registerPaneRenderer, clearPaneRegistry } from '../lib/pane-registry'
+import { useSessionStore } from '../stores/useSessionStore'
 
 beforeEach(() => {
   cleanup()
   clearPaneRegistry()
   registerPaneRenderer('session', { component: () => null })
   registerPaneRenderer('dashboard', { component: () => null })
+  // Provide sessions keyed by hostId for SortableTab's label lookups
+  useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
 })
 
 const defaultHandlers = {
@@ -28,15 +31,15 @@ function makeTab(id: string, content: import('../types/tab').PaneContent, opts?:
 }
 
 const mockTabs: Tab[] = [
-  makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' }),
-  makeTab('t2', { kind: 'session', sessionCode: 'cld001', mode: 'stream' }),
+  makeTab('t1', { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' }),
+  makeTab('t2', { kind: 'session', hostId: 'test-host', sessionCode: 'cld001', mode: 'stream' }),
   makeTab('t3', { kind: 'dashboard' }),
 ]
 
 const pinnedTabs: Tab[] = [
-  makeTab('p1', { kind: 'session', sessionCode: 'aaa001', mode: 'terminal' }, { pinned: true }),
-  makeTab('t1', { kind: 'session', sessionCode: 'bbb001', mode: 'terminal' }),
-  makeTab('t2', { kind: 'session', sessionCode: 'ccc001', mode: 'terminal' }),
+  makeTab('p1', { kind: 'session', hostId: 'test-host', sessionCode: 'aaa001', mode: 'terminal' }, { pinned: true }),
+  makeTab('t1', { kind: 'session', hostId: 'test-host', sessionCode: 'bbb001', mode: 'terminal' }),
+  makeTab('t2', { kind: 'session', hostId: 'test-host', sessionCode: 'ccc001', mode: 'terminal' }),
 ]
 
 describe('TabBar', () => {
@@ -86,7 +89,7 @@ describe('TabBar', () => {
 
   it('locked tab hides close button', () => {
     const lockedTabs: Tab[] = [
-      makeTab('t1', { kind: 'session', sessionCode: 'xxx001', mode: 'terminal' }, { locked: true }),
+      makeTab('t1', { kind: 'session', hostId: 'test-host', sessionCode: 'xxx001', mode: 'terminal' }, { locked: true }),
     ]
     render(<TabBar tabs={lockedTabs} activeTabId="t1" {...defaultHandlers} />)
     expect(screen.queryByTitle('Close tab')).not.toBeInTheDocument()
@@ -94,7 +97,7 @@ describe('TabBar', () => {
 
   it('shows lock icon on locked non-pinned tab', () => {
     const lockedTabs: Tab[] = [
-      makeTab('t1', { kind: 'session', sessionCode: 'xxx001', mode: 'terminal' }, { locked: true }),
+      makeTab('t1', { kind: 'session', hostId: 'test-host', sessionCode: 'xxx001', mode: 'terminal' }, { locked: true }),
     ]
     render(<TabBar tabs={lockedTabs} activeTabId="t1" {...defaultHandlers} />)
     expect(screen.getByText('xxx001')).toBeInTheDocument()

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode } from './pane-tree'
 import type { PaneLayout, Pane } from '../types/tab'
 
-const paneA: Pane = { id: 'aaaaaa', content: { kind: 'session', sessionCode: 'abc123', mode: 'terminal' } }
+const paneA: Pane = { id: 'aaaaaa', content: { kind: 'session', hostId: 'test-host', sessionCode: 'abc123', mode: 'terminal' } }
 const paneB: Pane = { id: 'bbbbbb', content: { kind: 'dashboard' } }
 
 const leaf: PaneLayout = { type: 'leaf', pane: paneA }
@@ -102,7 +102,7 @@ describe('findTabBySessionCode', () => {
   })
 
   it('returns first matching tabId when multiple tabs have different sessions', () => {
-    const paneC: Pane = { id: 'cccccc', content: { kind: 'session', sessionCode: 'xyz789', mode: 'terminal' } }
+    const paneC: Pane = { id: 'cccccc', content: { kind: 'session', hostId: 'test-host', sessionCode: 'xyz789', mode: 'terminal' } }
     const tabs = {
       tab1: { layout: { type: 'leaf', pane: paneA } as PaneLayout },
       tab2: { layout: { type: 'leaf', pane: paneC } as PaneLayout },
@@ -111,7 +111,7 @@ describe('findTabBySessionCode', () => {
   })
 
   it('returns undefined for non-session pane kinds', () => {
-    const paneSettings: Pane = { id: 'dddddd', content: { kind: 'settings' } }
+    const paneSettings: Pane = { id: 'dddddd', content: { kind: 'settings', scope: 'global' } }
     const paneDashboard: Pane = { id: 'eeeeee', content: { kind: 'dashboard' } }
     const tabs = {
       tab1: { layout: { type: 'leaf', pane: paneSettings } as PaneLayout },

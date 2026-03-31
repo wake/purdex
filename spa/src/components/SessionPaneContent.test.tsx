@@ -15,19 +15,13 @@ vi.mock('./ConversationView', () => ({
   default: () => <div data-testid="conversation-view" />,
 }))
 
+const HOST_ID = 'test-host'
+
 const makePane = (overrides?: Partial<Pane>): Pane => ({
   id: 'pane-1',
-  content: { kind: 'session', sessionCode: 'dev001', mode: 'terminal' },
+  content: { kind: 'session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal' },
   ...overrides,
 })
-
-const defaultHost = {
-  id: 'local',
-  name: 'mlab',
-  address: '100.64.0.2',
-  port: 7860,
-  status: 'connected' as const,
-}
 
 const defaultConfig: ConfigData = {
   bind: '0.0.0.0',
@@ -40,14 +34,19 @@ const defaultConfig: ConfigData = {
 beforeEach(() => {
   cleanup()
   useHostStore.setState({
-    hosts: { local: defaultHost },
-    defaultHost,
+    hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 } },
+    hostOrder: [HOST_ID],
+    activeHostId: HOST_ID,
   })
   useSessionStore.setState({
-    sessions: [{
-      code: 'dev001', name: 'dev001', cwd: '/tmp', mode: 'terminal',
-      cc_session_id: '', cc_model: '', has_relay: false,
-    }],
+    sessions: {
+      [HOST_ID]: [{
+        code: 'dev001', name: 'dev001', cwd: '/tmp', mode: 'terminal',
+        cc_session_id: '', cc_model: '', has_relay: false,
+      }],
+    },
+    activeHostId: HOST_ID,
+    activeCode: null,
   })
   useConfigStore.setState({ config: defaultConfig })
 })
@@ -67,7 +66,7 @@ describe('SessionPaneContent', () => {
 
   it('renders ConversationView for stream mode', () => {
     const pane = makePane({
-      content: { kind: 'session', sessionCode: 'dev001', mode: 'stream' },
+      content: { kind: 'session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'stream' },
     })
     render(<SessionPaneContent pane={pane} isActive={true} />)
     expect(screen.getByTestId('conversation-view')).toBeInTheDocument()

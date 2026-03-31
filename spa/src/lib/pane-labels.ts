@@ -35,6 +35,8 @@ export function getPaneLabel(
     case 'browser': {
       try { return new URL(content.url).hostname } catch { return content.url }
     }
+    case 'hosts':
+      return t('page.pane.hosts')
     case 'memory-monitor':
       return t('monitor.title')
   }
@@ -52,6 +54,8 @@ export function getPaneIcon(content: PaneContent): string {
       return 'ClockCounterClockwise'
     case 'settings':
       return 'GearSix'
+    case 'hosts':
+      return 'HardDrives'
     case 'browser':
       return 'Globe'
     case 'memory-monitor':

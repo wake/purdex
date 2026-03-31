@@ -2,6 +2,7 @@ import type { PaneContent } from '../types/tab'
 
 export type ParsedRoute =
   | { kind: 'history' }
+  | { kind: 'hosts' }
   | { kind: 'settings'; scope: 'global' }
   | { kind: 'session-tab'; tabId: string; mode: 'terminal' | 'stream' }
   | { kind: 'workspace'; workspaceId: string }
@@ -17,6 +18,7 @@ function validateMode(mode: string): 'terminal' | 'stream' {
 export function parseRoute(path: string): ParsedRoute | null {
   if (path === '/') return null // no-op — preserves persisted tab state
   if (path === '/history') return { kind: 'history' }
+  if (path === '/hosts') return { kind: 'hosts' }
   if (path === '/settings' || path.startsWith('/settings/')) return { kind: 'settings', scope: 'global' }
 
   const segments = path.split('/').filter(Boolean)
@@ -60,6 +62,8 @@ export function tabToUrl(tabId: string, content: PaneContent, workspaceId?: stri
     case 'session':
       if (workspaceId) return `/w/${workspaceId}/t/${tabId}/${content.mode}`
       return `/t/${tabId}/${content.mode}`
+    case 'hosts':
+      return '/hosts'
     case 'browser':
       return '/'
     case 'memory-monitor':

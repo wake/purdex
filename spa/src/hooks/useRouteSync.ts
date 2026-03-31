@@ -75,6 +75,9 @@ export function useRouteSync() {
       case 'history':
         openSingletonTab({ kind: 'history' })
         break
+      case 'hosts':
+        openSingletonTab({ kind: 'hosts' })
+        break
       case 'settings':
         openSingletonTab({ kind: 'settings', scope: 'global' })
         break

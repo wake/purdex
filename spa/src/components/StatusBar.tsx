@@ -6,6 +6,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useAgentStore, getAgentLabel } from '../stores/useAgentStore'
 import { useUploadStore } from '../stores/useUploadStore'
+import { compositeKey } from '../lib/composite-key'
 import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
 
@@ -19,26 +20,27 @@ const VIEW_MODE_COLORS: Record<string, string> = {
   stream: 'bg-blue-900/40 text-blue-400 border-blue-700/50',
 }
 
-function UploadStatus({ sessionCode, t }: { sessionCode: string | null; t: (key: string, params?: Record<string, string | number>) => string }) {
-  const uploadState = useUploadStore((s) => sessionCode ? s.sessions[sessionCode] : undefined)
+function UploadStatus({ hostId, sessionCode, t }: { hostId: string | null; sessionCode: string | null; t: (key: string, params?: Record<string, string | number>) => string }) {
+  const ck = hostId && sessionCode ? compositeKey(hostId, sessionCode) : null
+  const uploadState = useUploadStore((s) => ck ? s.sessions[ck] : undefined)
   const dismiss = useUploadStore((s) => s.dismiss)
   const uploadStatus = uploadState?.status
 
   // Auto-dismiss "done" after 3 seconds
   useEffect(() => {
-    if (uploadStatus !== 'done' || !sessionCode) return
-    const timer = setTimeout(() => dismiss(sessionCode), 3000)
+    if (uploadStatus !== 'done' || !hostId || !sessionCode) return
+    const timer = setTimeout(() => dismiss(hostId, sessionCode), 3000)
     return () => clearTimeout(timer)
-  }, [uploadStatus, sessionCode, dismiss])
+  }, [uploadStatus, hostId, sessionCode, dismiss])
 
   // Auto-dismiss "error" after 30 seconds
   useEffect(() => {
-    if (uploadStatus !== 'error' || !sessionCode) return
-    const timer = setTimeout(() => dismiss(sessionCode), 30000)
+    if (uploadStatus !== 'error' || !hostId || !sessionCode) return
+    const timer = setTimeout(() => dismiss(hostId, sessionCode), 30000)
     return () => clearTimeout(timer)
-  }, [uploadStatus, sessionCode, dismiss])
+  }, [uploadStatus, hostId, sessionCode, dismiss])
 
-  if (!uploadState || !sessionCode) return null
+  if (!uploadState || !hostId || !sessionCode) return null
 
   if (uploadState.status === 'uploading') {
     return (
@@ -67,7 +69,7 @@ function UploadStatus({ sessionCode, t }: { sessionCode: string | null; t: (key:
       <span
         className="flex items-center gap-1 text-red-400 cursor-pointer"
         data-testid="upload-status"
-        onClick={() => dismiss(sessionCode)}
+        onClick={() => dismiss(hostId!, sessionCode!)}
       >
         <XCircle size={12} />
         <span>{message}</span>
@@ -83,15 +85,22 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  const sessions = useSessionStore((s) => s.sessions)
-  const defaultHost = useHostStore((s) => s.defaultHost)
-
   // Read agent event for the active session (hooks must be called unconditionally)
-  const sessionCode = activeTab?.layout
+  const primaryContent = activeTab?.layout
     ? getPrimaryPane(activeTab.layout).content
     : null
-  const agentSessionCode = sessionCode && 'sessionCode' in sessionCode ? sessionCode.sessionCode : null
-  const agentEvent = useAgentStore((s) => agentSessionCode ? s.events[agentSessionCode] : undefined)
+  const agentHostId = primaryContent && primaryContent.kind === 'session' ? primaryContent.hostId : null
+  const agentSessionCode = primaryContent && 'sessionCode' in primaryContent ? primaryContent.sessionCode : null
+  const agentCk = agentHostId && agentSessionCode ? compositeKey(agentHostId, agentSessionCode) : null
+
+  const session = useSessionStore((s) =>
+    agentHostId && agentSessionCode
+      ? (s.sessions[agentHostId] ?? []).find((sess) => sess.code === agentSessionCode) ?? null
+      : null,
+  )
+  const hostConfig = useHostStore((s) => agentHostId ? s.hosts[agentHostId] : null)
+  const hostRuntime = useHostStore((s) => agentHostId ? s.runtime[agentHostId] : null)
+  const agentEvent = useAgentStore((s) => agentCk ? s.events[agentCk] : undefined)
 
   const closeMenu = useCallback(() => setMenuOpen(false), [])
   useClickOutside(menuRef, closeMenu)
@@ -116,10 +125,9 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
   }
 
   // Session pane — show host, session name, status, viewMode toggle
-  const session = sessions.find((s) => s.code === content.sessionCode)
   const sessionName = session?.name ?? content.sessionCode
-  const hostName = defaultHost.name
-  const status = defaultHost.status
+  const hostName = hostConfig?.name ?? 'Unknown'
+  const status = hostRuntime?.status ?? 'disconnected'
 
   const viewMode = content.mode
   const viewModes: ('terminal' | 'stream')[] = ['terminal', 'stream']
@@ -143,7 +151,7 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
           </span>
         )
       })()}
-      <UploadStatus sessionCode={agentSessionCode} t={t} />
+      <UploadStatus hostId={agentHostId} sessionCode={agentSessionCode} t={t} />
       <span className="ml-auto flex items-center">
         <div className="relative" ref={menuRef}>
           <button

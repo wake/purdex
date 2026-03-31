@@ -36,6 +36,7 @@ type Core struct {
 	Tmux     tmux.Executor
 	Registry *ServiceRegistry
 	Events   *EventsBroadcaster
+	Tickets  *TicketStore
 	modules        []Module
 	configChangeMu sync.Mutex // protects onConfigChange
 	onConfigChange []func()   // config change callbacks
@@ -52,6 +53,7 @@ func New(deps CoreDeps) *Core {
 		Tmux:     deps.Tmux,
 		Registry: reg,
 		Events:   NewEventsBroadcaster(),
+		Tickets:  NewTicketStore(),
 	}
 }
 
@@ -129,4 +131,5 @@ func (c *Core) RegisterCoreRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/info", c.handleInfo)
 	mux.HandleFunc("GET /api/config", c.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", c.handlePutConfig)
+	mux.HandleFunc("POST /api/ws-ticket", c.handleWsTicket)
 }

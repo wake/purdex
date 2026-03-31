@@ -2,28 +2,69 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { type Session, listSessions } from '../lib/api'
+import { useHostStore } from './useHostStore'
 
 interface SessionState {
-  sessions: Session[]
-  activeId: string | null
-  fetch: (base: string) => Promise<void>
-  setActive: (code: string | null) => void
+  sessions: Record<string, Session[]> // hostId → sessions
+  activeHostId: string | null
+  activeCode: string | null
+  fetchHost: (hostId: string, base: string) => Promise<void>
+  replaceHost: (hostId: string, sessions: Session[]) => void
+  removeHost: (hostId: string) => void
+  setActive: (hostId: string | null, code: string | null) => void
 }
 
 export const useSessionStore = create<SessionState>()(
   persist(
     (set) => ({
-      sessions: [],
-      activeId: null,
-      fetch: async (base: string) => {
-        const sessions = await listSessions(base)
-        set({ sessions })
+      sessions: {},
+      activeHostId: null,
+      activeCode: null,
+      fetchHost: async (hostId: string, base: string) => {
+        const list = await listSessions(base)
+        set((state) => ({
+          sessions: { ...state.sessions, [hostId]: list },
+        }))
       },
-      setActive: (code) => set({ activeId: code }),
+      replaceHost: (hostId, sessions) =>
+        set((state) => ({
+          sessions: { ...state.sessions, [hostId]: sessions },
+        })),
+      removeHost: (hostId) =>
+        set((state) => {
+          const { [hostId]: _, ...rest } = state.sessions
+          const activeHostId = state.activeHostId === hostId ? null : state.activeHostId
+          const activeCode = state.activeHostId === hostId ? null : state.activeCode
+          return { sessions: rest, activeHostId, activeCode }
+        }),
+      setActive: (hostId, code) => set({ activeHostId: hostId, activeCode: code }),
     }),
     {
       name: 'tbox-sessions',
-      partialize: (state) => ({ activeId: state.activeId }),
+      version: 2,
+      partialize: (state) => ({
+        activeHostId: state.activeHostId,
+        activeCode: state.activeCode,
+      }),
+      migrate: (persisted, version) => {
+        if (version < 2) {
+          const old = persisted as Record<string, unknown>
+          // Defensive: hostStore may not have hydrated yet
+          let defaultHostId = 'local'
+          try {
+            const hostState = useHostStore.getState()
+            if (hostState.hostOrder.length > 0) {
+              defaultHostId = hostState.hostOrder[0]
+            }
+          } catch { /* hostStore not yet initialized */ }
+          return {
+            sessions: {},
+            activeHostId: defaultHostId,
+            activeCode: (old.activeId as string) ?? null,
+          }
+        }
+        return persisted
+      },
     },
   ),
 )

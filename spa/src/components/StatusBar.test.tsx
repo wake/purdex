@@ -7,20 +7,30 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useUploadStore } from '../stores/useUploadStore'
+import { compositeKey } from '../lib/composite-key'
+
+const HOST_ID = 'test-host'
 
 // Pre-populate stores for tests
 function setupStores() {
   useSessionStore.setState({
-    sessions: [
-      { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
-    ],
-    activeId: null,
+    sessions: {
+      [HOST_ID]: [
+        { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+      ],
+    },
+    activeHostId: HOST_ID,
+    activeCode: null,
   })
   useHostStore.setState({
     hosts: {
-      local: { id: 'local', name: 'mlab', address: '100.64.0.2', port: 7860, status: 'connected' as const },
+      [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 },
     },
-    defaultHost: { id: 'local', name: 'mlab', address: '100.64.0.2', port: 7860, status: 'connected' as const },
+    hostOrder: [HOST_ID],
+    runtime: {
+      [HOST_ID]: { status: 'connected' as const },
+    },
+    activeHostId: HOST_ID,
   })
 }
 
@@ -36,7 +46,7 @@ beforeEach(() => {
 
 describe('StatusBar', () => {
   it('renders host and session info', () => {
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.getByText('mlab')).toBeTruthy()
     expect(screen.getByText('dev-server')).toBeTruthy()
@@ -49,7 +59,7 @@ describe('StatusBar', () => {
   })
 
   it('shows viewMode badge for session tabs', () => {
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.getByText('terminal')).toBeTruthy()
   })
@@ -63,7 +73,7 @@ describe('StatusBar', () => {
 
   it('opens popup on badge click and calls onViewModeChange', () => {
     const onChange = vi.fn()
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={onChange} />)
     fireEvent.click(screen.getByTitle('Toggle view mode'))
     // popup should show both options
@@ -74,8 +84,8 @@ describe('StatusBar', () => {
   })
 
   it('falls back to sessionCode when session not in store', () => {
-    useSessionStore.setState({ sessions: [], activeId: null })
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'unknown999', mode: 'terminal' })
+    useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+    const tab = makeTab('t1', { kind: 'session', hostId: HOST_ID, sessionCode: 'unknown999', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.getByText('unknown999')).toBeTruthy()
   })
@@ -89,10 +99,11 @@ describe('StatusBar upload progress', () => {
   })
 
   it('shows uploading progress', () => {
+    const ck = compositeKey(HOST_ID, 'dev001')
     useUploadStore.setState({
-      sessions: { dev001: { total: 5, completed: 1, failed: 0, currentFile: 'photo.png', status: 'uploading' } },
+      sessions: { [ck]: { total: 5, completed: 1, failed: 0, currentFile: 'photo.png', status: 'uploading' } },
     })
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.getByTestId('upload-status')).toBeTruthy()
     expect(screen.getByText(/photo\.png/)).toBeTruthy()
@@ -100,19 +111,21 @@ describe('StatusBar upload progress', () => {
   })
 
   it('shows upload done', () => {
+    const ck = compositeKey(HOST_ID, 'dev001')
     useUploadStore.setState({
-      sessions: { dev001: { total: 3, completed: 3, failed: 0, currentFile: '', status: 'done' } },
+      sessions: { [ck]: { total: 3, completed: 3, failed: 0, currentFile: '', status: 'done' } },
     })
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.getByText(/3 files uploaded/)).toBeTruthy()
   })
 
   it('shows upload error', () => {
+    const ck = compositeKey(HOST_ID, 'dev001')
     useUploadStore.setState({
-      sessions: { dev001: { total: 1, completed: 0, failed: 1, currentFile: '', error: 'bad.mp4', status: 'error' } },
+      sessions: { [ck]: { total: 1, completed: 0, failed: 1, currentFile: '', error: 'bad.mp4', status: 'error' } },
     })
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.getByText(/bad\.mp4/)).toBeTruthy()
   })
@@ -125,14 +138,15 @@ describe('StatusBar agent label badge', () => {
   })
 
   it('renders agent label as badge with model name', () => {
+    const ck = compositeKey(HOST_ID, 'dev001')
     useAgentStore.setState({
-      events: { dev001: { tmux_session: 'dev', event_name: 'SessionStart', raw_event: { modelName: 'Claude Opus 4' }, agent_type: 'cc', broadcast_ts: Date.now() } },
-      statuses: { dev001: 'idle' },
+      events: { [ck]: { tmux_session: 'dev', event_name: 'SessionStart', raw_event: { modelName: 'Claude Opus 4' }, agent_type: 'cc', broadcast_ts: Date.now() } },
+      statuses: { [ck]: 'idle' },
       unread: {},
       activeSubagents: {},
       hooksInstalled: true,
     })
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     const badge = screen.getByTestId('agent-label')
     expect(badge.textContent).toBe('Claude Opus 4')
@@ -140,14 +154,15 @@ describe('StatusBar agent label badge', () => {
   })
 
   it('renders fallback Agent badge with white styling', () => {
+    const ck = compositeKey(HOST_ID, 'dev001')
     useAgentStore.setState({
-      events: { dev001: { tmux_session: 'dev', event_name: 'UserPromptSubmit', raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now() } },
-      statuses: { dev001: 'running' },
+      events: { [ck]: { tmux_session: 'dev', event_name: 'UserPromptSubmit', raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now() } },
+      statuses: { [ck]: 'running' },
       unread: {},
       activeSubagents: {},
       hooksInstalled: true,
     })
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     const badge = screen.getByTestId('agent-label')
     expect(badge.textContent).toBe('Agent')
