@@ -1,5 +1,53 @@
 # Changelog
 
+## [1.0.0-alpha.38] - 2026-03-31
+
+Host Page UI + Multi-Host Integration — Phase 1.6c C+D (PR #136)
+
+### 新功能
+
+- **Host Page** — 完整主機管理頁面（ActivityBar HardDrives 按鈕），含 sidebar accordion 導覽 + 4 個子頁面
+- **Overview** — 連線設定（editable name/ip/port/token with validation）、Daemon Config（sizing mode）、System Info
+- **Sessions** — Session CRUD table（New/Open/Rename/Delete）+ agent status badge
+- **Hooks** — tmux hooks + agent hooks 安裝狀態、install/remove 操作、per-event indicator
+- **Uploads** — 暫存檔案按 session 分組、stats 顯示、個別/批次刪除
+- **Add Host dialog** — health check → 401 偵測 → token 輸入 onboarding 流程
+- **Token editing** — show/hide toggle、儲存前 /api/sessions 驗證、401 error handling
+- **Multi-host grouping** — SessionPanel + SessionSection 按 host 分組、single host 時隱藏 header
+- **Offline handling** — SortableTab WifiSlash icon、StatusBar 三色狀態、離線 disable
+- **ErrorBoundary** — React error boundary 防止全畫面崩潰
+- **Electron crash recovery** — render-process-gone 自動重載 SPA
+
+### 修正
+
+- sizing_mode 選項值對齊 daemon（auto/terminal-first/minimal-first）
+- isOffline 邏輯統一（runtime undefined = not offline）
+- isActiveSession 檢查 activeHostId（multi-host 防衝突）
+- getAgentStatus 改用 reactive hook（非 getState）
+- StatusIcon grey for undefined runtime
+- AddHostDialog stage reset 涵蓋 needs-token/error
+- HooksSection schema 對齊 daemon（tmux_hooks map）
+- EditableField double-save 防護（savedRef）
+- ws?.close() null safety + onerror handler (#137)
+- fetchHost unhandled promise .catch() (#137)
+- i18n 全面覆蓋（9 hardcoded strings 修正）
+- a11y: AddHostDialog aria-modal + Escape、Section aria-expanded、TokenField aria-label
+- InlineRename onBlur 防止編輯卡住
+
+### 測試
+
+- 63 個新測試（7 個 test files），734/735 pass
+
+### 追蹤 Issues
+
+- #138 OverviewSection 拆檔
+- #139 HostSidebar expanded 同步
+- #140 TokenField 清除 UX
+- #141 Terminal palette 顯示
+- #142 Hook 最後觸發時間
+- #143 Upload 暫存目錄編輯
+- #144 SessionPanel host header 可收合
+
 ## [1.0.0-alpha.37] - 2026-03-31
 
 Agent File Upload — 拖曳檔案上傳到 CC agent（PR #129）
