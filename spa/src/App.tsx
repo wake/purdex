@@ -28,8 +28,10 @@ export default function App() {
   // Host store (replaces hardcoded daemonBase)
   const getDaemonBase = useHostStore((s) => s.getDaemonBase)
   const getWsBase = useHostStore((s) => s.getWsBase)
-  const daemonBase = getDaemonBase('local')
-  const wsBase = getWsBase('local')
+  const hostOrder = useHostStore((s) => s.hostOrder)
+  const firstHostId = hostOrder[0] ?? ''
+  const daemonBase = getDaemonBase(firstHostId)
+  const wsBase = getWsBase(firstHostId)
 
   // Existing stores
   const fetchConfig = useConfigStore((s) => s.fetch)
