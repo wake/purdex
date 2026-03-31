@@ -1,13 +1,15 @@
 // spa/src/hooks/useRelayWsManager.ts
 import { useEffect, useRef } from 'react'
+import { useHostStore } from '../stores/useHostStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { connectStream, type StreamMessage, type ControlRequest } from '../lib/stream-ws'
 
 /**
  * Manages stream WS connections driven by relayStatus changes.
  * Creates a WS when relay connects, destroys it when relay disconnects.
+ * Derives wsBase per-host from hostStore — no params needed.
  */
-export function useRelayWsManager(wsBase: string) {
+export function useRelayWsManager() {
   const prevRelay = useRef<Record<string, boolean>>({})
 
   useEffect(() => {
@@ -25,6 +27,8 @@ export function useRelayWsManager(wsBase: string) {
           const sessionCode = colonIdx >= 0 ? ck.slice(colonIdx + 1) : ck
 
           if (connected && !wasConnected) {
+            // Derive wsBase for this specific host
+            const wsBase = useHostStore.getState().getWsBase(hostId)
             // Relay just connected — create stream WS
             const conn = connectStream(
               `${wsBase}/ws/cli-bridge-sub/${encodeURIComponent(sessionCode)}`,
@@ -88,5 +92,5 @@ export function useRelayWsManager(wsBase: string) {
       activeConns.forEach((conn) => conn.close())
       activeConns.clear()
     }
-  }, [wsBase])
+  }, [])
 }

@@ -27,11 +27,9 @@ export default function App() {
 
   // Host store (replaces hardcoded daemonBase)
   const getDaemonBase = useHostStore((s) => s.getDaemonBase)
-  const getWsBase = useHostStore((s) => s.getWsBase)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const firstHostId = hostOrder[0] ?? ''
   const daemonBase = getDaemonBase(firstHostId)
-  const wsBase = getWsBase(firstHostId)
 
   // Existing stores
   const fetchConfig = useConfigStore((s) => s.fetch)
@@ -46,7 +44,7 @@ export default function App() {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
 
   // --- Extracted hooks ---
-  useRelayWsManager(wsBase)
+  useRelayWsManager()
   useMultiHostEventWs()
   useRouteSync()
   useShortcuts()
