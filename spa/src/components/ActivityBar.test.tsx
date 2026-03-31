@@ -25,6 +25,7 @@ describe('ActivityBar', () => {
         onSelectWorkspace={vi.fn()}
         onSelectStandaloneTab={vi.fn()}
         onAddWorkspace={vi.fn()}
+        onOpenHosts={vi.fn()}
         onOpenSettings={vi.fn()}
       />,
     )
@@ -43,6 +44,7 @@ describe('ActivityBar', () => {
         onSelectWorkspace={vi.fn()}
         onSelectStandaloneTab={vi.fn()}
         onAddWorkspace={vi.fn()}
+        onOpenHosts={vi.fn()}
         onOpenSettings={vi.fn()}
       />,
     )
@@ -62,6 +64,7 @@ describe('ActivityBar', () => {
         onSelectWorkspace={onSelect}
         onSelectStandaloneTab={vi.fn()}
         onAddWorkspace={vi.fn()}
+        onOpenHosts={vi.fn()}
         onOpenSettings={vi.fn()}
       />,
     )
@@ -80,6 +83,7 @@ describe('ActivityBar', () => {
         onSelectWorkspace={vi.fn()}
         onSelectStandaloneTab={vi.fn()}
         onAddWorkspace={vi.fn()}
+        onOpenHosts={vi.fn()}
         onOpenSettings={vi.fn()}
       />,
     )

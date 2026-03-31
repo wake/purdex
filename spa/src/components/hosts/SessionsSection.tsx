@@ -207,7 +207,7 @@ export function SessionsSection({ hostId }: Props) {
                     <td className="px-3 py-2">
                       {agent ? (
                         <span className={`text-xs px-1.5 py-0.5 rounded ${
-                          agent === 'active' ? 'bg-green-500/20 text-green-400'
+                          agent === 'running' ? 'bg-green-500/20 text-green-400'
                             : agent === 'error' ? 'bg-red-500/20 text-red-400'
                             : 'bg-surface-tertiary text-text-muted'
                         }`}>
