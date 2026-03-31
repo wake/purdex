@@ -3,6 +3,7 @@ import type { PaneRendererProps } from '../lib/pane-registry'
 import { useHostStore } from '../stores/useHostStore'
 import { HostSidebar } from './hosts/HostSidebar'
 import { OverviewSection } from './hosts/OverviewSection'
+import { SessionsSection } from './hosts/SessionsSection'
 
 export type HostSubPage = 'overview' | 'sessions' | 'hooks' | 'uploads'
 
@@ -29,6 +30,7 @@ export function HostPage(_props: PaneRendererProps) {
       case 'overview':
         return <OverviewSection hostId={selection.hostId} />
       case 'sessions':
+        return <SessionsSection hostId={selection.hostId} />
       case 'hooks':
       case 'uploads':
         return <p className="text-text-muted">Coming soon.</p>
