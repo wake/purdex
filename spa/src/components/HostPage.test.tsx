@@ -10,22 +10,22 @@ vi.mock('../lib/api', () => ({
 }))
 
 vi.mock('./hosts/HostSidebar', () => ({
-  HostSidebar: (props: any) => <div data-testid="host-sidebar" data-host={props.selectedHostId} data-subpage={props.selectedSubPage} />,
+  HostSidebar: (props: { selectedHostId: string; selectedSubPage: string }) => <div data-testid="host-sidebar" data-host={props.selectedHostId} data-subpage={props.selectedSubPage} />,
 }))
 vi.mock('./hosts/OverviewSection', () => ({
-  OverviewSection: (props: any) => <div data-testid="overview-section" data-host={props.hostId} />,
+  OverviewSection: (props: { hostId: string }) => <div data-testid="overview-section" data-host={props.hostId} />,
 }))
 vi.mock('./hosts/SessionsSection', () => ({
-  SessionsSection: (props: any) => <div data-testid="sessions-section" data-host={props.hostId} />,
+  SessionsSection: (props: { hostId: string }) => <div data-testid="sessions-section" data-host={props.hostId} />,
 }))
 vi.mock('./hosts/HooksSection', () => ({
-  HooksSection: (props: any) => <div data-testid="hooks-section" data-host={props.hostId} />,
+  HooksSection: (props: { hostId: string }) => <div data-testid="hooks-section" data-host={props.hostId} />,
 }))
 vi.mock('./hosts/UploadSection', () => ({
-  UploadSection: (props: any) => <div data-testid="upload-section" data-host={props.hostId} />,
+  UploadSection: (props: { hostId: string }) => <div data-testid="upload-section" data-host={props.hostId} />,
 }))
 vi.mock('./hosts/AddHostDialog', () => ({
-  AddHostDialog: (props: any) => <div data-testid="add-host-dialog" onClick={props.onClose} />,
+  AddHostDialog: (props: { onClose: () => void }) => <div data-testid="add-host-dialog" onClick={props.onClose} />,
 }))
 
 const HOST_ID = 'test-host'

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import { HooksSection } from './HooksSection'
 import { useHostStore } from '../../stores/useHostStore'
-import { fetchHooksStatus, installHooks, removeHooks } from '../../lib/host-api'
+import { fetchHooksStatus } from '../../lib/host-api'
 
 const mockHooksStatus = {
   tmux_hooks: {
