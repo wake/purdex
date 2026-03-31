@@ -19,6 +19,7 @@ import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { isStandaloneTab } from './types/tab'
 import { TabContextMenu } from './components/TabContextMenu'
 import { ThemeInjector } from './components/ThemeInjector'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { getPlatformCapabilities } from './lib/platform'
 import type { Tab } from './types/tab'
 
@@ -134,6 +135,7 @@ export default function App() {
   } = useTabWorkspaceActions(displayTabs)
 
   return (
+    <ErrorBoundary>
     <Router>
       <ThemeInjector />
       <div className="h-screen flex flex-col bg-surface-primary text-text-primary">
@@ -228,5 +230,6 @@ export default function App() {
         </div>
       </div>
     </Router>
+    </ErrorBoundary>
   )
 }

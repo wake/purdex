@@ -62,7 +62,7 @@ export function useMultiHostEventWs() {
               }).catch(() => {})
             } else if (event.value.startsWith('failed')) {
               store.setHandoffProgress(hostId, event.session, '')
-              useSessionStore.getState().fetchHost(hostId, daemonBase)
+              useSessionStore.getState().fetchHost(hostId, daemonBase).catch(() => {})
             } else {
               store.setHandoffProgress(hostId, event.session, event.value)
             }
@@ -75,7 +75,7 @@ export function useMultiHostEventWs() {
           useHostStore.getState().setRuntime(hostId, { status: 'connected' })
           useAgentStore.getState().clearSubagentsForHost(hostId)
           const daemonBase = useHostStore.getState().getDaemonBase(hostId)
-          useSessionStore.getState().fetchHost(hostId, daemonBase)
+          useSessionStore.getState().fetchHost(hostId, daemonBase).catch(() => {})
         },
         // getTicket — fetch one-time WS ticket for this host
         () => fetchWsTicket(hostId),

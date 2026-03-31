@@ -44,6 +44,7 @@ export function connectSessionEvents(
         onEvent(event)
       } catch { /* ignore parse errors */ }
     }
+    ws.onerror = () => { /* handled by onclose */ }
     ws.onclose = () => {
       if (closed) return
       onClose?.()
@@ -56,5 +57,5 @@ export function connectSessionEvents(
   }
 
   connect()
-  return { close: () => { closed = true; ws.close() } }
+  return { close: () => { closed = true; ws?.close() } }
 }
