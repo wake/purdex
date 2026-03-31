@@ -4,9 +4,11 @@ import { useStreamStore } from '../stores/useStreamStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import type { StreamMessage } from '../lib/stream-ws'
 
-// Test the event handler logic that useSessionEventWs uses.
+// Test the event handler logic that useMultiHostEventWs uses.
 // We test the store operations directly since the hook is a thin wrapper
 // around connectSessionEvents + store dispatches.
+
+const HOST = 'local'
 
 const emptyState = {
   sessions: {},
@@ -16,31 +18,34 @@ const emptyState = {
 
 beforeEach(() => {
   useStreamStore.setState(emptyState)
-  useSessionStore.setState({ sessions: [], activeId: null })
+  useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
 })
 
 describe('session event handler logic', () => {
-  it('relay event sets relayStatus keyed by code', () => {
+  it('relay event sets relayStatus keyed by composite key', () => {
     const code = 'abc001'
-    useStreamStore.getState().setRelayStatus(code, true)
-    expect(useStreamStore.getState().relayStatus[code]).toBe(true)
+    useStreamStore.getState().setRelayStatus(HOST, code, true)
+    expect(useStreamStore.getState().relayStatus[`${HOST}:${code}`]).toBe(true)
   })
 
   it('handoff connected clears progress and finds session by code', () => {
     const code = 'abc001'
-    // Set up session with code
+    // Set up session with code (nested under hostId)
     useSessionStore.setState({
-      sessions: [
-        { code, name: 'dev', cwd: '/tmp', mode: 'stream', cc_session_id: 'sid1', cc_model: '', has_relay: false },
-      ],
-      activeId: null,
+      sessions: {
+        [HOST]: [
+          { code, name: 'dev', cwd: '/tmp', mode: 'stream', cc_session_id: 'sid1', cc_model: '', has_relay: false },
+        ],
+      },
+      activeHostId: HOST,
+      activeCode: null,
     })
 
     // Simulate handoff:connected event behavior
-    useStreamStore.getState().setHandoffProgress(code, '')
+    useStreamStore.getState().setHandoffProgress(HOST, code, '')
 
-    // Verify the .find() by code works (this is the critical change in the PR)
-    const sess = useSessionStore.getState().sessions.find((s) => s.code === code)
+    // Verify the .find() by code works within host's sessions
+    const sess = (useSessionStore.getState().sessions[HOST] ?? []).find((s) => s.code === code)
     expect(sess).toBeDefined()
     expect(sess!.name).toBe('dev')
     expect(sess!.mode).toBe('stream')
@@ -48,39 +53,41 @@ describe('session event handler logic', () => {
 
   it('handoff connected with term mode clears session', () => {
     const code = 'abc001'
-    useStreamStore.getState().addMessage(code, { type: 'assistant' } as StreamMessage)
+    useStreamStore.getState().addMessage(HOST, code, { type: 'assistant' } as StreamMessage)
 
     // Session is in term mode — should clear
     useSessionStore.setState({
-      sessions: [
-        { code, name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
-      ],
+      sessions: {
+        [HOST]: [
+          { code, name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
+        ],
+      },
     })
 
-    const sess = useSessionStore.getState().sessions.find((s) => s.code === code)
+    const sess = (useSessionStore.getState().sessions[HOST] ?? []).find((s) => s.code === code)
     if (!sess || sess.mode === 'term') {
-      useStreamStore.getState().clearSession(code)
+      useStreamStore.getState().clearSession(HOST, code)
     }
 
-    expect(useStreamStore.getState().sessions[code]).toBeUndefined()
+    expect(useStreamStore.getState().sessions[`${HOST}:${code}`]).toBeUndefined()
   })
 
-  it('handoff progress event updates handoffProgress by code', () => {
+  it('handoff progress event updates handoffProgress by composite key', () => {
     const code = 'abc001'
-    useStreamStore.getState().setHandoffProgress(code, 'detecting')
-    expect(useStreamStore.getState().handoffProgress[code]).toBe('detecting')
+    useStreamStore.getState().setHandoffProgress(HOST, code, 'detecting')
+    expect(useStreamStore.getState().handoffProgress[`${HOST}:${code}`]).toBe('detecting')
   })
 
   it('handoff failed clears progress', () => {
     const code = 'abc001'
-    useStreamStore.getState().setHandoffProgress(code, 'detecting')
+    useStreamStore.getState().setHandoffProgress(HOST, code, 'detecting')
 
     // Simulate failed event
     const value = 'failed:no CC running'
     if (value.startsWith('failed')) {
-      useStreamStore.getState().setHandoffProgress(code, '')
+      useStreamStore.getState().setHandoffProgress(HOST, code, '')
     }
 
-    expect(useStreamStore.getState().handoffProgress[code]).toBe('')
+    expect(useStreamStore.getState().handoffProgress[`${HOST}:${code}`]).toBe('')
   })
 })

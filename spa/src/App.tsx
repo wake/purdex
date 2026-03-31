@@ -5,13 +5,12 @@ import { ActivityBar } from './components/ActivityBar'
 import { TabBar } from './components/TabBar'
 import { TabContent } from './components/TabContent'
 import { StatusBar } from './components/StatusBar'
-import { useSessionStore } from './stores/useSessionStore'
 import { useConfigStore } from './stores/useConfigStore'
 import { useTabStore } from './stores/useTabStore'
 import { useWorkspaceStore } from './stores/useWorkspaceStore'
 import { useHostStore } from './stores/useHostStore'
 import { useRelayWsManager } from './hooks/useRelayWsManager'
-import { useSessionEventWs } from './hooks/useSessionEventWs'
+import { useMultiHostEventWs } from './hooks/useMultiHostEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
@@ -33,7 +32,6 @@ export default function App() {
   const wsBase = getWsBase('local')
 
   // Existing stores
-  const fetchSessions = useSessionStore((s) => s.fetch)
   const fetchConfig = useConfigStore((s) => s.fetch)
 
   // Tab store
@@ -47,7 +45,7 @@ export default function App() {
 
   // --- Extracted hooks ---
   useRelayWsManager(wsBase)
-  useSessionEventWs(wsBase, daemonBase)
+  useMultiHostEventWs()
   useRouteSync()
   useShortcuts()
   useNotificationDispatcher()
@@ -98,11 +96,10 @@ export default function App() {
   // --- Derived state ---
   const activeTab = activeTabId ? tabs[activeTabId] : undefined
 
-  // --- Bootstrap: fetch sessions + config ---
+  // --- Bootstrap: fetch config (sessions fetched by multi-host WS onOpen) ---
   useEffect(() => {
-    fetchSessions(daemonBase)
     fetchConfig(daemonBase)
-  }, [fetchSessions, fetchConfig, daemonBase])
+  }, [fetchConfig, daemonBase])
 
   // --- Derive visible tabs for display ---
   const activeWs = workspaces.find((w) => w.id === activeWorkspaceId)
