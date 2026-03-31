@@ -21,6 +21,7 @@ type Executor interface {
 	ListSessions() ([]TmuxSession, error)
 	NewSession(name, cwd string) error
 	KillSession(name string) error
+	RenameSession(oldName, newName string) error
 	HasSession(name string) bool
 	SendKeys(target, keys string) error
 	SendKeysRaw(target string, keys ...string) error
@@ -85,6 +86,14 @@ func (r *RealExecutor) KillSession(name string) error {
 	err := exec.Command("tmux", "kill-session", "-t", name).Run()
 	if err != nil {
 		return ErrNoSession
+	}
+	return nil
+}
+
+func (r *RealExecutor) RenameSession(oldName, newName string) error {
+	err := exec.Command("tmux", "rename-session", "-t", oldName, newName).Run()
+	if err != nil {
+		return fmt.Errorf("tmux rename-session: %w", err)
 	}
 	return nil
 }

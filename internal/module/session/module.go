@@ -38,6 +38,7 @@ func (m *SessionModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions", m.handleList)
 	mux.HandleFunc("GET /api/sessions/{code}", m.handleGet)
 	mux.HandleFunc("POST /api/sessions", m.handleCreate)
+	mux.HandleFunc("PATCH /api/sessions/{code}", m.handleRename)
 	mux.HandleFunc("DELETE /api/sessions/{code}", m.handleDelete)
 	mux.HandleFunc("POST /api/sessions/{code}/mode", m.handleSwitchMode)
 	mux.HandleFunc("/ws/terminal/{code}", m.handleTerminalWS)

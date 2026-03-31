@@ -108,6 +108,25 @@ func (f *FakeExecutor) KillSession(name string) error {
 	return nil
 }
 
+func (f *FakeExecutor) RenameSession(oldName, newName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.sessions[oldName]
+	if !ok {
+		return ErrNoSession
+	}
+	delete(f.sessions, oldName)
+	s.Name = newName
+	f.sessions[newName] = s
+	for i, n := range f.sessionOrder {
+		if n == oldName {
+			f.sessionOrder[i] = newName
+			break
+		}
+	}
+	return nil
+}
+
 func (f *FakeExecutor) HasSession(name string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
