@@ -3,6 +3,7 @@ import { render, act, fireEvent } from '@testing-library/react'
 import TerminalView from './TerminalView'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useHostStore } from '../stores/useHostStore'
+import { compositeKey } from '../lib/composite-key'
 
 const { mockClose, TerminalSpy, capturedCallbacks } = vi.hoisted(() => {
   const mockClose = vi.fn()
@@ -168,11 +169,13 @@ describe('TerminalView', () => {
   })
 
   describe('drag-drop', () => {
+    const HOST = 'test-host'
     const SESSION = 'dev001'
+    const CK = compositeKey(HOST, SESSION)
 
     function setAgentActive(active: boolean) {
       useAgentStore.setState({
-        statuses: active ? { [SESSION]: 'idle' } : {},
+        statuses: active ? { [CK]: 'idle' } : {},
       })
     }
 
@@ -188,7 +191,7 @@ describe('TerminalView', () => {
     it('shows drop overlay on drag-enter when agent is active', () => {
       setAgentActive(true)
       const { container } = render(
-        <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" sessionCode={SESSION} />,
+        <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" hostId={HOST} sessionCode={SESSION} />,
       )
 
       const root = container.firstElementChild!
@@ -200,7 +203,7 @@ describe('TerminalView', () => {
     it('does NOT show drop overlay when agent is not active', () => {
       setAgentActive(false)
       const { container } = render(
-        <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" sessionCode={SESSION} />,
+        <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" hostId={HOST} sessionCode={SESSION} />,
       )
 
       const root = container.firstElementChild!
@@ -212,7 +215,7 @@ describe('TerminalView', () => {
     it('hides drop overlay on drag-leave', () => {
       setAgentActive(true)
       const { container } = render(
-        <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" sessionCode={SESSION} />,
+        <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" hostId={HOST} sessionCode={SESSION} />,
       )
 
       const root = container.firstElementChild!

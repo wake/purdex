@@ -6,6 +6,7 @@ import { useAgentStore } from '../stores/useAgentStore'
 import { useUploadStore } from '../stores/useUploadStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
+import { compositeKey } from '../lib/composite-key'
 import { agentUpload } from '../lib/api'
 import '@xterm/xterm/css/xterm.css'
 
@@ -13,10 +14,11 @@ interface Props {
   wsUrl: string
   visible?: boolean
   connectingMessage?: string
+  hostId?: string
   sessionCode?: string
 }
 
-export default function TerminalView({ wsUrl, visible = true, connectingMessage, sessionCode }: Props) {
+export default function TerminalView({ wsUrl, visible = true, connectingMessage, hostId, sessionCode }: Props) {
   const { termRef, fitAddonRef, containerRef } = useTerminal()
   const [ready, setReady] = useState(false)
   const [disconnected, setDisconnected] = useState(false)
@@ -39,9 +41,10 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
   // Drag-drop state
   const [isDragging, setIsDragging] = useState(false)
   const dragCounter = useRef(0)
-  const agentStatus = useAgentStore((s) => sessionCode ? s.statuses[sessionCode] : undefined)
+  const ck = hostId && sessionCode ? compositeKey(hostId, sessionCode) : undefined
+  const agentStatus = useAgentStore((s) => ck ? s.statuses[ck] : undefined)
   const agentActive = agentStatus != null
-  const daemonBase = useHostStore((s) => s.getDaemonBase('local'))
+  const daemonBase = useHostStore((s) => s.getDaemonBase(hostId ?? s.hostOrder[0] ?? ''))
   const t = useI18nStore((s) => s.t)
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
@@ -68,24 +71,24 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
     e.preventDefault()
     setIsDragging(false)
     dragCounter.current = 0
-    if (!agentActive || !sessionCode) return
+    if (!agentActive || !hostId || !sessionCode) return
 
     const files = Array.from(e.dataTransfer.files)
     if (files.length === 0) return
 
     const { startUpload, fileCompleted, fileFailed, nextFile } = useUploadStore.getState()
-    startUpload(sessionCode, files.length, files[0].name) // overwrites any previous done/error state
+    startUpload(hostId, sessionCode, files.length, files[0].name) // overwrites any previous done/error state
 
     for (let i = 0; i < files.length; i++) {
-      if (i > 0) nextFile(sessionCode, files[i].name)
+      if (i > 0) nextFile(hostId, sessionCode, files[i].name)
       try {
         await agentUpload(daemonBase, files[i], sessionCode)
-        fileCompleted(sessionCode)
+        fileCompleted(hostId, sessionCode)
       } catch {
-        fileFailed(sessionCode, files[i].name)
+        fileFailed(hostId, sessionCode, files[i].name)
       }
     }
-  }, [agentActive, sessionCode, daemonBase])
+  }, [agentActive, hostId, sessionCode, daemonBase])
 
   // Reset state on wsUrl change. React guarantees effects fire in declaration
   // order, so useTerminal (mount) → useTerminalWs (connect) → this reset.

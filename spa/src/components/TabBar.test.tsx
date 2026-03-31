@@ -4,12 +4,15 @@ import { TabBar } from './TabBar'
 import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
 import { registerPaneRenderer, clearPaneRegistry } from '../lib/pane-registry'
+import { useSessionStore } from '../stores/useSessionStore'
 
 beforeEach(() => {
   cleanup()
   clearPaneRegistry()
   registerPaneRenderer('session', { component: () => null })
   registerPaneRenderer('dashboard', { component: () => null })
+  // Provide sessions keyed by hostId for SortableTab's label lookups
+  useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
 })
 
 const defaultHandlers = {

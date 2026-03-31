@@ -4,15 +4,24 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import SessionPanel from './SessionPanel'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useHostStore } from '../stores/useHostStore'
+import { compositeKey } from '../lib/composite-key'
 
 vi.mock('../lib/api', () => ({
   listSessions: vi.fn().mockResolvedValue([]),
 }))
 
+const HOST_ID = 'test-host'
+
 beforeEach(() => {
   cleanup()
-  useSessionStore.setState({ sessions: [], activeId: null })
+  useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
   useAgentStore.setState({ statuses: {}, events: {}, unread: {} })
+  useHostStore.setState({
+    hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 } },
+    hostOrder: [HOST_ID],
+    activeHostId: HOST_ID,
+  })
 })
 
 describe('SessionPanel', () => {
@@ -23,11 +32,14 @@ describe('SessionPanel', () => {
 
   it('renders session list', () => {
     useSessionStore.setState({
-      sessions: [
-        { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
-        { code: 'abc002', name: 'prod', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
-      ],
-      activeId: null,
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc002', name: 'prod', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
+        ],
+      },
+      activeHostId: HOST_ID,
+      activeCode: null,
     })
     render(<SessionPanel />)
     expect(screen.getByText('dev')).toBeInTheDocument()
@@ -36,10 +48,13 @@ describe('SessionPanel', () => {
 
   it('highlights active session', () => {
     useSessionStore.setState({
-      sessions: [
-        { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
-      ],
-      activeId: 'abc001',
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
+        ],
+      },
+      activeHostId: HOST_ID,
+      activeCode: 'abc001',
     })
     render(<SessionPanel />)
     const btn = screen.getByRole('button', { name: /dev/i })
@@ -49,23 +64,29 @@ describe('SessionPanel', () => {
   it('sets active on click', () => {
     const setActive = vi.fn()
     useSessionStore.setState({
-      sessions: [
-        { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
-      ],
-      activeId: null,
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
+        ],
+      },
+      activeHostId: HOST_ID,
+      activeCode: null,
       setActive,
     })
     render(<SessionPanel />)
     fireEvent.click(screen.getByRole('button', { name: /dev/i }))
-    expect(setActive).toHaveBeenCalledWith('abc001')
+    expect(setActive).toHaveBeenCalledWith(HOST_ID, 'abc001')
   })
 
   it('shows terminal icon for term mode', () => {
     useSessionStore.setState({
-      sessions: [
-        { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
-      ],
-      activeId: null,
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
+        ],
+      },
+      activeHostId: HOST_ID,
+      activeCode: null,
     })
     render(<SessionPanel />)
     // Terminal icon should be present (Phosphor Terminal icon)
@@ -74,23 +95,30 @@ describe('SessionPanel', () => {
 
   it('shows agent status badge when agent is active', () => {
     useSessionStore.setState({
-      sessions: [
-        { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
-      ],
-      activeId: null,
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'term', cc_session_id: '', cc_model: '', has_relay: false },
+        ],
+      },
+      activeHostId: HOST_ID,
+      activeCode: null,
     })
-    // Set agent status
-    useAgentStore.setState({ statuses: { abc001: 'idle' } })
+    // Set agent status with composite key
+    const ck = compositeKey(HOST_ID, 'abc001')
+    useAgentStore.setState({ statuses: { [ck]: 'idle' } })
     render(<SessionPanel />)
     expect(screen.getByTestId('status-badge')).toHaveAttribute('title', 'idle')
   })
 
   it('shows no badge when no agent status exists for session', () => {
     useSessionStore.setState({
-      sessions: [
-        { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
-      ],
-      activeId: null,
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
+        ],
+      },
+      activeHostId: HOST_ID,
+      activeCode: null,
     })
     // No agent status set
     render(<SessionPanel />)

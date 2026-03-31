@@ -9,6 +9,7 @@ import {
   type UserMessage,
   type ControlRequest,
 } from '../lib/stream-ws'
+import { compositeKey } from '../lib/composite-key'
 import MessageBubble from './MessageBubble'
 import ToolCallBlock from './ToolCallBlock'
 import ThinkingBlock from './ThinkingBlock'
@@ -22,6 +23,7 @@ import HandoffButton from './HandoffButton'
 import { Prohibit, TerminalWindow } from '@phosphor-icons/react'
 
 interface Props {
+  hostId: string
   sessionCode: string
   isActive?: boolean
   onHandoff?: () => void
@@ -31,22 +33,23 @@ interface Props {
 const EMPTY_MESSAGES: StreamMessage[] = []
 const EMPTY_CONTROLS: ControlRequest[] = []
 
-export default function ConversationView({ sessionCode, isActive = false, onHandoff, onHandoffToTerm }: Props) {
+export default function ConversationView({ hostId, sessionCode, isActive = false, onHandoff, onHandoffToTerm }: Props) {
   const t = useI18nStore((s) => s.t)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const dragCounter = useRef(0)
+  const ck = compositeKey(hostId, sessionCode)
 
-  // Read per-session state from store (keyed by session code)
-  const messages = useStreamStore((s) => s.sessions[sessionCode]?.messages ?? EMPTY_MESSAGES)
-  const pendingControlRequests = useStreamStore((s) => s.sessions[sessionCode]?.pendingControlRequests ?? EMPTY_CONTROLS)
-  const isStreaming = useStreamStore((s) => s.sessions[sessionCode]?.isStreaming ?? false)
-  const conn = useStreamStore((s) => s.sessions[sessionCode]?.conn ?? null)
-  const relayConnected = useStreamStore((s) => s.relayStatus[sessionCode] ?? false)
-  const handoffProgress = useStreamStore((s) => s.handoffProgress[sessionCode] ?? '')
-  const agentStatus = useAgentStore((s) => s.statuses[sessionCode])
+  // Read per-session state from store (keyed by composite key)
+  const messages = useStreamStore((s) => s.sessions[ck]?.messages ?? EMPTY_MESSAGES)
+  const pendingControlRequests = useStreamStore((s) => s.sessions[ck]?.pendingControlRequests ?? EMPTY_CONTROLS)
+  const isStreaming = useStreamStore((s) => s.sessions[ck]?.isStreaming ?? false)
+  const conn = useStreamStore((s) => s.sessions[ck]?.conn ?? null)
+  const relayConnected = useStreamStore((s) => s.relayStatus[ck] ?? false)
+  const handoffProgress = useStreamStore((s) => s.handoffProgress[ck] ?? '')
+  const agentStatus = useAgentStore((s) => s.statuses[ck])
 
   // ThinkingIndicator: visible when streaming and no assistant messages yet
   const hasAssistantMessage = messages.some((m) => m.type === 'assistant')
@@ -64,7 +67,7 @@ export default function ConversationView({ sessionCode, isActive = false, onHand
       type: 'user',
       message: { role: 'user', content: text },
     })
-    useStreamStore.getState().addMessage(sessionCode, {
+    useStreamStore.getState().addMessage(hostId, sessionCode, {
       type: 'user' as const,
       message: {
         role: 'user',
@@ -72,25 +75,25 @@ export default function ConversationView({ sessionCode, isActive = false, onHand
         stop_reason: null,
       },
     } as StreamMessage)
-    useStreamStore.getState().setStreaming(sessionCode, true)
+    useStreamStore.getState().setStreaming(hostId, sessionCode, true)
     setAttachedFiles([])
-  }, [conn, sessionCode])
+  }, [conn, hostId, sessionCode])
 
   const handleAllow = useCallback((req: ControlRequest) => {
     conn?.sendControlResponse(req.request_id, {
       behavior: 'allow',
       updatedInput: req.request.input,
     })
-    useStreamStore.getState().resolveControlRequest(sessionCode, req.request_id)
-  }, [conn, sessionCode])
+    useStreamStore.getState().resolveControlRequest(hostId, sessionCode, req.request_id)
+  }, [conn, hostId, sessionCode])
 
   const handleDeny = useCallback((req: ControlRequest) => {
     conn?.sendControlResponse(req.request_id, {
       behavior: 'deny',
       message: 'User denied',
     })
-    useStreamStore.getState().resolveControlRequest(sessionCode, req.request_id)
-  }, [conn, sessionCode])
+    useStreamStore.getState().resolveControlRequest(hostId, sessionCode, req.request_id)
+  }, [conn, hostId, sessionCode])
 
   const handleAskAnswer = useCallback((req: ControlRequest, answer: string) => {
     const input = req.request.input as Record<string, unknown> | undefined
@@ -105,8 +108,8 @@ export default function ConversationView({ sessionCode, isActive = false, onHand
         answers: { [questionText]: answer },
       },
     })
-    useStreamStore.getState().resolveControlRequest(sessionCode, req.request_id)
-  }, [conn, sessionCode])
+    useStreamStore.getState().resolveControlRequest(hostId, sessionCode, req.request_id)
+  }, [conn, hostId, sessionCode])
 
   const handleRemoveFile = useCallback((index: number) => {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index))
@@ -175,9 +178,9 @@ export default function ConversationView({ sessionCode, isActive = false, onHand
     if (onHandoff) {
       onHandoff()
     } else {
-      useStreamStore.getState().setHandoffProgress(sessionCode, 'starting')
+      useStreamStore.getState().setHandoffProgress(hostId, sessionCode, 'starting')
     }
-  }, [onHandoff, sessionCode])
+  }, [onHandoff, hostId, sessionCode])
 
   // Show HandoffButton when relay is not connected (idle or handoff in progress)
   if (!relayConnected) {

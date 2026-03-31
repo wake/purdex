@@ -8,6 +8,10 @@ import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import type { AgentStatus, TabIndicatorStyle } from '../stores/useAgentStore'
+import { compositeKey } from '../lib/composite-key'
+import type { Session } from '../lib/api'
+
+const EMPTY_SESSIONS: Session[] = []
 import { TabStatusDot } from './TabStatusDot'
 import { SubagentDots } from './SubagentDots'
 
@@ -77,20 +81,22 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const IconComponent = iconMap[iconName]
 
   const t = useI18nStore((s) => s.t)
-  const sessions = useSessionStore((s) => s.sessions)
+  const hostId = primaryContent.kind === 'session' ? primaryContent.hostId : ''
+  const sessions = useSessionStore((s) => (hostId ? s.sessions[hostId] : undefined) ?? EMPTY_SESSIONS)
   const workspaces = useWorkspaceStore((s) => s.workspaces)
 
   const sessionCode = primaryContent.kind === 'session' ? primaryContent.sessionCode : undefined
+  const ck = sessionCode && hostId ? compositeKey(hostId, sessionCode) : undefined
   const agentStatus = useAgentStore((s) => {
-    if (!sessionCode) return undefined
+    if (!ck) return undefined
     // No fallback — only show indicator when we have an actual hook event.
     // Previously fell back to 'idle' when hooksInstalled was true, but that
     // made it impossible to distinguish "agent running, first event pending"
     // from "no agent running at all".
-    return s.statuses[sessionCode]
+    return s.statuses[ck]
   })
-  const isUnread = useAgentStore((s) => sessionCode ? !!s.unread[sessionCode] : false)
-  const subagentCount = useAgentStore((s) => sessionCode ? (s.activeSubagents[sessionCode]?.length ?? 0) : 0)
+  const isUnread = useAgentStore((s) => ck ? !!s.unread[ck] : false)
+  const subagentCount = useAgentStore((s) => ck ? (s.activeSubagents[ck]?.length ?? 0) : 0)
   const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
   const sessionLookup = { getByCode: (code: string) => sessions.find((s) => s.code === code) }
   const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }

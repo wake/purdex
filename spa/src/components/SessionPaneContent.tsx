@@ -13,47 +13,49 @@ const EMPTY_PRESETS: Array<{ name: string; command: string }> = []
 export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
   const content = pane.content
   const sessionCode = content.kind === 'session' ? content.sessionCode : ''
+  const hostId = content.kind === 'session' ? content.hostId : ''
   const mode = content.kind === 'session' ? content.mode : 'terminal'
 
-  const daemonBase = useHostStore((s) => s.getDaemonBase('local'))
-  const wsBase = useHostStore((s) => s.getWsBase('local'))
-  const fetchSessions = useSessionStore((s) => s.fetch)
+  const daemonBase = useHostStore((s) => s.getDaemonBase(hostId))
+  const wsBase = useHostStore((s) => s.getWsBase(hostId))
+  const fetchHost = useSessionStore((s) => s.fetchHost)
   const streamPresets = useConfigStore((s) => s.config?.stream?.presets ?? EMPTY_PRESETS)
 
   const session = useSessionStore((s) =>
-    s.sessions.find((sess) => sess.code === sessionCode) ?? null,
+    (s.sessions[hostId] ?? []).find((sess) => sess.code === sessionCode) ?? null,
   )
 
   const handleHandoff = useCallback(async () => {
     if (!session) return
     try {
       const preset = streamPresets[0]?.name ?? 'cc'
-      useStreamStore.getState().setHandoffProgress(session.code, 'starting')
+      useStreamStore.getState().setHandoffProgress(hostId, session.code, 'starting')
       await handoff(daemonBase, session.code, 'stream', preset)
-      await fetchSessions(daemonBase)
+      await fetchHost(hostId, daemonBase)
     } catch (e) {
       console.error('Handoff failed:', e)
-      useStreamStore.getState().setHandoffProgress(session.code, '')
+      useStreamStore.getState().setHandoffProgress(hostId, session.code, '')
     }
-  }, [session, daemonBase, fetchSessions, streamPresets])
+  }, [session, hostId, daemonBase, fetchHost, streamPresets])
 
   const handleHandoffToTerm = useCallback(async () => {
     if (!session) return
     try {
-      useStreamStore.getState().setHandoffProgress(session.code, 'starting')
+      useStreamStore.getState().setHandoffProgress(hostId, session.code, 'starting')
       await handoff(daemonBase, session.code, 'term')
-      await fetchSessions(daemonBase)
+      await fetchHost(hostId, daemonBase)
     } catch (e) {
       console.error('Handoff to term failed:', e)
-      useStreamStore.getState().setHandoffProgress(session.code, '')
+      useStreamStore.getState().setHandoffProgress(hostId, session.code, '')
     }
-  }, [session, daemonBase, fetchSessions])
+  }, [session, hostId, daemonBase, fetchHost])
 
   if (content.kind !== 'session') return null
 
   if (mode === 'stream') {
     return (
       <ConversationView
+        hostId={hostId}
         sessionCode={sessionCode}
         isActive={isActive}
         onHandoff={handleHandoff}
@@ -67,6 +69,7 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
       key={`${pane.id}-${mode}`}
       wsUrl={`${wsBase}/ws/terminal/${encodeURIComponent(sessionCode)}`}
       visible={isActive}
+      hostId={hostId}
       sessionCode={sessionCode}
     />
   )

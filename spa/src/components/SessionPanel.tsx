@@ -1,9 +1,11 @@
 // spa/src/components/SessionPanel.tsx
+import { useMemo } from 'react'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { Terminal, Lightning, CircleDashed, GearSix } from '@phosphor-icons/react'
 import SessionStatusBadge from './SessionStatusBadge'
 import { useI18nStore } from '../stores/useI18nStore'
+import { compositeKey } from '../lib/composite-key'
 
 function SessionIcon({ mode, code }: { mode: string; code: string }) {
   const props = { size: 16, 'data-testid': `session-icon-${code}` }
@@ -22,16 +24,29 @@ interface Props {
 
 export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSessionCode }: Props) {
   const t = useI18nStore((s) => s.t)
-  const { sessions, activeId, setActive } = useSessionStore()
+  const sessionsMap = useSessionStore((s) => s.sessions)
+  const activeCode = useSessionStore((s) => s.activeCode)
+  const setActive = useSessionStore((s) => s.setActive)
   const agentStatuses = useAgentStore((s) => s.statuses)
 
-  function handleClick(code: string) {
-    setActive(code)
+  // Flatten all hosts' sessions for display (multi-host grouping comes in Task 17)
+  const sessions = useMemo(() => {
+    const result: Array<{ hostId: string; code: string; name: string; cwd: string; mode: string; cc_session_id: string; cc_model: string; has_relay: boolean }> = []
+    for (const [hostId, list] of Object.entries(sessionsMap)) {
+      for (const s of list) {
+        result.push({ ...s, hostId })
+      }
+    }
+    return result
+  }, [sessionsMap])
+
+  function handleClick(hostId: string, code: string) {
+    setActive(hostId, code)
     onSelectSession?.(code)
   }
 
-  const isActive = (s: { code: string }) =>
-    activeSessionCode != null ? s.code === activeSessionCode : activeId === s.code
+  const isActiveSession = (s: { code: string }) =>
+    activeSessionCode != null ? s.code === activeSessionCode : activeCode === s.code
 
   return (
     <div className="w-56 bg-surface-tertiary border-r border-border-subtle flex flex-col">
@@ -40,13 +55,14 @@ export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSe
         <div className="space-y-1">
           {sessions.length === 0 && <p className="text-sm text-text-muted">{t('session.empty')}</p>}
           {sessions.map((s) => {
-            const status = agentStatuses[s.code]
+            const ck = compositeKey(s.hostId, s.code)
+            const status = agentStatuses[ck]
             return (
               <button
-                key={s.code}
-                onClick={() => handleClick(s.code)}
+                key={ck}
+                onClick={() => handleClick(s.hostId, s.code)}
                 className={`w-full text-left px-2 py-1.5 rounded text-sm cursor-pointer flex items-center gap-2 ${
-                  isActive(s) ? 'bg-surface-secondary text-text-primary' : 'text-text-secondary hover:bg-surface-secondary/50'
+                  isActiveSession(s) ? 'bg-surface-secondary text-text-primary' : 'text-text-secondary hover:bg-surface-secondary/50'
                 }`}
               >
                 <SessionIcon mode={s.mode} code={s.code} />

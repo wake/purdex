@@ -4,11 +4,14 @@ import { render, screen, cleanup, act } from '@testing-library/react'
 import ConversationView from './ConversationView'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import { compositeKey } from '../lib/composite-key'
 import type { StreamMessage } from '../lib/stream-ws'
 
 // No WS mock needed — ConversationView no longer manages WS connections
 
+const HOST = 'test-host'
 const SESSION = 'test-session'
+const CK = compositeKey(HOST, SESSION)
 
 const emptyState = {
   sessions: {},
@@ -23,33 +26,33 @@ beforeEach(() => {
 
 describe('ConversationView', () => {
   it('shows conversation UI when relay is connected', () => {
-    render(<ConversationView sessionCode={SESSION} />)
+    render(<ConversationView hostId={HOST} sessionCode={SESSION} />)
     act(() => {
-      useStreamStore.getState().setRelayStatus(SESSION, true)
+      useStreamStore.getState().setRelayStatus(HOST, SESSION, true)
     })
     expect(screen.getByText(/waiting/i)).toBeInTheDocument()
     expect(screen.queryByText('Handoff')).not.toBeInTheDocument()
   })
 
   it('shows HandoffButton when relay is not connected', () => {
-    useAgentStore.setState({ statuses: { [SESSION]: 'idle' } })
-    render(<ConversationView sessionCode={SESSION} />)
+    useAgentStore.setState({ statuses: { [CK]: 'idle' } })
+    render(<ConversationView hostId={HOST} sessionCode={SESSION} />)
     expect(screen.getByText('Handoff')).toBeInTheDocument()
   })
 
   it('shows progress when handoff is in progress', () => {
-    render(<ConversationView sessionCode={SESSION} />)
+    render(<ConversationView hostId={HOST} sessionCode={SESSION} />)
     act(() => {
-      useStreamStore.getState().setHandoffProgress(SESSION, 'detecting')
+      useStreamStore.getState().setHandoffProgress(HOST, SESSION, 'detecting')
     })
     expect(screen.getByText(/Detecting/i)).toBeInTheDocument()
   })
 
   it('renders messages when relay connected', () => {
-    render(<ConversationView sessionCode={SESSION} />)
+    render(<ConversationView hostId={HOST} sessionCode={SESSION} />)
     act(() => {
-      useStreamStore.getState().setRelayStatus(SESSION, true)
-      useStreamStore.getState().addMessage(SESSION, {
+      useStreamStore.getState().setRelayStatus(HOST, SESSION, true)
+      useStreamStore.getState().addMessage(HOST, SESSION, {
         type: 'assistant',
         message: {
           role: 'assistant',
@@ -62,21 +65,21 @@ describe('ConversationView', () => {
   })
 
   it('shows ThinkingIndicator when streaming with no assistant messages', () => {
-    render(<ConversationView sessionCode={SESSION} />)
+    render(<ConversationView hostId={HOST} sessionCode={SESSION} />)
     act(() => {
-      useStreamStore.getState().setRelayStatus(SESSION, true)
-      useStreamStore.getState().setStreaming(SESSION, true)
+      useStreamStore.getState().setRelayStatus(HOST, SESSION, true)
+      useStreamStore.getState().setStreaming(HOST, SESSION, true)
     })
     expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
   })
 
   it('transitions from HandoffButton to conversation when relay connects', () => {
-    render(<ConversationView sessionCode={SESSION} />)
+    render(<ConversationView hostId={HOST} sessionCode={SESSION} />)
     // Initially: no relay → show Handoff
     expect(screen.getByText('Handoff')).toBeInTheDocument()
     // Relay connects → show conversation
     act(() => {
-      useStreamStore.getState().setRelayStatus(SESSION, true)
+      useStreamStore.getState().setRelayStatus(HOST, SESSION, true)
     })
     expect(screen.queryByText('Handoff')).not.toBeInTheDocument()
     expect(screen.getByText(/waiting/i)).toBeInTheDocument()
@@ -87,7 +90,7 @@ describe('ConversationView message rendering', () => {
   it('renders thinking block for assistant thinking content', () => {
     useStreamStore.setState({
       sessions: {
-        [SESSION]: {
+        [CK]: {
           messages: [{
             type: 'assistant',
             message: {
@@ -106,10 +109,10 @@ describe('ConversationView message rendering', () => {
           cost: 0,
         },
       },
-      relayStatus: { [SESSION]: true },
+      relayStatus: { [CK]: true },
     })
 
-    render(<ConversationView sessionCode={SESSION} />)
+    render(<ConversationView hostId={HOST} sessionCode={SESSION} />)
 
     expect(screen.getByTestId('thinking-header')).toBeInTheDocument()
     expect(screen.getByText('Here is my answer.')).toBeInTheDocument()
@@ -118,7 +121,7 @@ describe('ConversationView message rendering', () => {
   it('renders tool_result block for user tool results', () => {
     useStreamStore.setState({
       sessions: {
-        [SESSION]: {
+        [CK]: {
           messages: [{
             type: 'user',
             message: {
@@ -136,10 +139,10 @@ describe('ConversationView message rendering', () => {
           cost: 0,
         },
       },
-      relayStatus: { [SESSION]: true },
+      relayStatus: { [CK]: true },
     })
 
-    render(<ConversationView sessionCode={SESSION} />)
+    render(<ConversationView hostId={HOST} sessionCode={SESSION} />)
 
     expect(screen.getByTestId('tool-result-header')).toBeInTheDocument()
   })
@@ -147,7 +150,7 @@ describe('ConversationView message rendering', () => {
   it('renders interrupted message with prohibit style', () => {
     useStreamStore.setState({
       sessions: {
-        [SESSION]: {
+        [CK]: {
           messages: [{
             type: 'user',
             message: {
@@ -163,10 +166,10 @@ describe('ConversationView message rendering', () => {
           cost: 0,
         },
       },
-      relayStatus: { [SESSION]: true },
+      relayStatus: { [CK]: true },
     })
 
-    render(<ConversationView sessionCode={SESSION} />)
+    render(<ConversationView hostId={HOST} sessionCode={SESSION} />)
 
     expect(screen.getByTestId('interrupted-msg')).toBeInTheDocument()
   })
@@ -174,7 +177,7 @@ describe('ConversationView message rendering', () => {
   it('renders slash command with command bubble style', () => {
     useStreamStore.setState({
       sessions: {
-        [SESSION]: {
+        [CK]: {
           messages: [{
             type: 'user',
             message: {
@@ -190,10 +193,10 @@ describe('ConversationView message rendering', () => {
           cost: 0,
         },
       },
-      relayStatus: { [SESSION]: true },
+      relayStatus: { [CK]: true },
     })
 
-    render(<ConversationView sessionCode={SESSION} />)
+    render(<ConversationView hostId={HOST} sessionCode={SESSION} />)
 
     expect(screen.getByTestId('command-bubble')).toBeInTheDocument()
     expect(screen.getByTestId('command-bubble')).toHaveTextContent('/exit')
@@ -202,7 +205,7 @@ describe('ConversationView message rendering', () => {
   it('renders mixed assistant content blocks correctly', () => {
     useStreamStore.setState({
       sessions: {
-        [SESSION]: {
+        [CK]: {
           messages: [{
             type: 'assistant',
             message: {
@@ -222,10 +225,10 @@ describe('ConversationView message rendering', () => {
           cost: 0,
         },
       },
-      relayStatus: { [SESSION]: true },
+      relayStatus: { [CK]: true },
     })
 
-    render(<ConversationView sessionCode={SESSION} />)
+    render(<ConversationView hostId={HOST} sessionCode={SESSION} />)
 
     expect(screen.getByTestId('thinking-header')).toBeInTheDocument()
     expect(screen.getByText('My response')).toBeInTheDocument()
@@ -236,7 +239,7 @@ describe('ConversationView message rendering', () => {
   it('renders user tool_result with error state', () => {
     useStreamStore.setState({
       sessions: {
-        [SESSION]: {
+        [CK]: {
           messages: [{
             type: 'user',
             message: {
@@ -254,10 +257,10 @@ describe('ConversationView message rendering', () => {
           cost: 0,
         },
       },
-      relayStatus: { [SESSION]: true },
+      relayStatus: { [CK]: true },
     })
 
-    render(<ConversationView sessionCode={SESSION} />)
+    render(<ConversationView hostId={HOST} sessionCode={SESSION} />)
 
     const block = screen.getByTestId('tool-result-block')
     expect(block.className).toContain('border-[#302a2a]')
