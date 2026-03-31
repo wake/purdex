@@ -15,12 +15,9 @@ import (
 func TestHealthEndpoint(t *testing.T) {
 	c := New(CoreDeps{Config: &config.Config{}})
 
-	mux := http.NewServeMux()
-	c.RegisterCoreRoutes(mux)
-
 	req := httptest.NewRequest("GET", "/api/health", nil)
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
+	c.HandleHealth(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
