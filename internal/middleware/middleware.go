@@ -47,10 +47,15 @@ func IPWhitelist(allowed []string) func(http.Handler) http.Handler {
 	}
 }
 
-// TokenAuth checks Bearer token or ?token= query param. Empty token = allow all.
+// TicketValidator validates one-time WS authentication tickets.
+type TicketValidator interface {
+	Validate(ticket string) bool
+}
+
+// TokenAuth checks Bearer token, one-time ticket, or ?token= query param.
 // Bearer prefix is case-insensitive, token value is case-sensitive.
-// Query param fallback enables WebSocket auth (WS API cannot send custom headers).
-func TokenAuth(token string) func(http.Handler) http.Handler {
+// If tickets is non-nil, ?ticket= is checked before the legacy ?token= fallback.
+func TokenAuth(token string, tickets TicketValidator) func(http.Handler) http.Handler {
 	if token == "" {
 		return func(next http.Handler) http.Handler { return next }
 	}
@@ -61,7 +66,14 @@ func TokenAuth(token string) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			// Fallback: ?token= query param (for WebSocket)
+			// Check one-time ticket (for WebSocket)
+			if tickets != nil {
+				if ticket := r.URL.Query().Get("ticket"); tickets.Validate(ticket) {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			// Fallback: ?token= query param (legacy, will be removed)
 			if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(token)) == 1 {
 				next.ServeHTTP(w, r)
 				return
