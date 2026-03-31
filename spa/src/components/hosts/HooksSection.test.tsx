@@ -6,9 +6,12 @@ import { useHostStore } from '../../stores/useHostStore'
 import { fetchHooksStatus, installHooks, removeHooks } from '../../lib/host-api'
 
 const mockHooksStatus = {
-  tmux_hooks_installed: true,
-  agent_hooks_installed: false,
-  hooks: [{ event: 'session-created', command: 'run-shell ...' }],
+  tmux_hooks: {
+    'session-created': true,
+    'session-closed': true,
+    'session-renamed': true,
+  },
+  agent_hooks: false,
 }
 
 vi.mock('../../lib/host-api', () => ({
@@ -46,17 +49,21 @@ describe('HooksSection', () => {
   it('shows hooks status after fetch resolves', async () => {
     render(<HooksSection hostId={HOST_ID} />)
     await waitFor(() => {
-      expect(screen.getByText('Installed')).toBeInTheDocument()
+      // tmux hooks badge + 3 event rows all show "Installed"
+      expect(screen.getAllByText('Installed').length).toBeGreaterThanOrEqual(1)
     })
+    // agent_hooks is false → "Not Installed" badge
     expect(screen.getByText('Not Installed')).toBeInTheDocument()
-    // Hook events displayed
+    // Hook events displayed from tmux_hooks map
     expect(screen.getByText('session-created')).toBeInTheDocument()
+    expect(screen.getByText('session-closed')).toBeInTheDocument()
+    expect(screen.getByText('session-renamed')).toBeInTheDocument()
   })
 
   it('Install button disabled when tmux hooks already installed', async () => {
     render(<HooksSection hostId={HOST_ID} />)
     await waitFor(() => {
-      expect(screen.getByText('Installed')).toBeInTheDocument()
+      expect(screen.getAllByText('Installed').length).toBeGreaterThanOrEqual(1)
     })
     const installBtn = screen.getByRole('button', { name: /Install/i })
     expect(installBtn).toBeDisabled()
@@ -65,7 +72,7 @@ describe('HooksSection', () => {
   it('Remove button enabled when tmux hooks are installed', async () => {
     render(<HooksSection hostId={HOST_ID} />)
     await waitFor(() => {
-      expect(screen.getByText('Installed')).toBeInTheDocument()
+      expect(screen.getAllByText('Installed').length).toBeGreaterThanOrEqual(1)
     })
     const removeBtn = screen.getByRole('button', { name: /Remove/i })
     expect(removeBtn).not.toBeDisabled()
@@ -79,7 +86,7 @@ describe('HooksSection', () => {
     })
     render(<HooksSection hostId={HOST_ID} />)
     await waitFor(() => {
-      expect(screen.getByText('Installed')).toBeInTheDocument()
+      expect(screen.getAllByText('Installed').length).toBeGreaterThanOrEqual(1)
     })
     const installBtn = screen.getByRole('button', { name: /Install/i })
     const removeBtn = screen.getByRole('button', { name: /Remove/i })

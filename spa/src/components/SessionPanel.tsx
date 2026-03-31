@@ -61,12 +61,12 @@ export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSe
                   <div className="flex items-center gap-1.5 mb-1 px-1">
                     {hostRuntime?.status === 'reconnecting' ? (
                       <Spinner size={8} className="text-yellow-400 animate-spin" />
+                    ) : hostRuntime?.status === 'connected' ? (
+                      <Circle size={8} weight="fill" className="text-green-400" />
+                    ) : hostRuntime ? (
+                      <Circle size={8} weight="fill" className="text-red-400" />
                     ) : (
-                      <Circle
-                        size={8}
-                        weight="fill"
-                        className={isOffline ? 'text-red-400' : 'text-green-400'}
-                      />
+                      <Circle size={8} weight="fill" className="text-text-muted" />
                     )}
                     <span className="text-xs text-text-muted font-semibold truncate">{host.name}</span>
                   </div>

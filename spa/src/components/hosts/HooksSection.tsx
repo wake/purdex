@@ -9,9 +9,8 @@ interface Props {
 }
 
 interface HooksStatus {
-  tmux_hooks_installed: boolean
-  agent_hooks_installed: boolean
-  hooks?: Array<{ event: string; command: string }>
+  tmux_hooks: Record<string, boolean>
+  agent_hooks: boolean
 }
 
 function StatusBadge({ installed, t }: { installed: boolean; t: (key: string) => string }) {
@@ -87,58 +86,68 @@ export function HooksSection({ hostId }: Props) {
       </div>
 
       {status ? (
-        <div className="space-y-4">
-          {/* tmux hooks */}
-          <div className="p-4 bg-surface-secondary rounded-lg border border-border-subtle">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold">{t('hosts.tmux_hooks')}</h3>
-              <StatusBadge installed={status.tmux_hooks_installed} t={t} />
-            </div>
-            <p className="text-xs text-text-muted mb-3">{t('hosts.tmux_hooks_desc')}</p>
-            <div className="flex gap-2">
-              <button
-                onClick={handleInstall}
-                disabled={isOffline || actionLoading || status.tmux_hooks_installed}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50"
-              >
-                <DownloadSimple size={14} />
-                {t('hosts.install')}
-              </button>
-              <button
-                onClick={handleRemove}
-                disabled={isOffline || actionLoading || !status.tmux_hooks_installed}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-red-500/10 text-red-400 border border-red-500/30 cursor-pointer disabled:opacity-50"
-              >
-                <Trash size={14} />
-                {t('hosts.remove')}
-              </button>
-            </div>
-          </div>
-
-          {/* Agent hooks */}
-          <div className="p-4 bg-surface-secondary rounded-lg border border-border-subtle">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold">{t('hosts.agent_hooks')}</h3>
-              <StatusBadge installed={status.agent_hooks_installed} t={t} />
-            </div>
-            <p className="text-xs text-text-muted">{t('hosts.agent_hooks_desc')}</p>
-          </div>
-
-          {/* Hook events list */}
-          {status.hooks && status.hooks.length > 0 && (
+        (() => {
+          const tmuxEntries = Object.entries(status.tmux_hooks)
+          const tmuxHooksInstalled = tmuxEntries.some(([, v]) => v)
+          return (
+          <div className="space-y-4">
+            {/* tmux hooks */}
             <div className="p-4 bg-surface-secondary rounded-lg border border-border-subtle">
-              <h3 className="text-sm font-semibold mb-2">{t('hosts.hook_events')}</h3>
-              <div className="space-y-1">
-                {status.hooks.map((hook, i) => (
-                  <div key={i} className="flex items-center gap-3 text-xs py-1">
-                    <span className="text-text-secondary w-40 shrink-0 font-mono">{hook.event}</span>
-                    <span className="text-text-muted font-mono truncate">{hook.command}</span>
-                  </div>
-                ))}
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold">{t('hosts.tmux_hooks')}</h3>
+                <StatusBadge installed={tmuxHooksInstalled} t={t} />
+              </div>
+              <p className="text-xs text-text-muted mb-3">{t('hosts.tmux_hooks_desc')}</p>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleInstall}
+                  disabled={isOffline || actionLoading || tmuxHooksInstalled}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50"
+                >
+                  <DownloadSimple size={14} />
+                  {t('hosts.install')}
+                </button>
+                <button
+                  onClick={handleRemove}
+                  disabled={isOffline || actionLoading || !tmuxHooksInstalled}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-red-500/10 text-red-400 border border-red-500/30 cursor-pointer disabled:opacity-50"
+                >
+                  <Trash size={14} />
+                  {t('hosts.remove')}
+                </button>
               </div>
             </div>
-          )}
-        </div>
+
+            {/* Agent hooks */}
+            <div className="p-4 bg-surface-secondary rounded-lg border border-border-subtle">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold">{t('hosts.agent_hooks')}</h3>
+                <StatusBadge installed={status.agent_hooks} t={t} />
+              </div>
+              <p className="text-xs text-text-muted">{t('hosts.agent_hooks_desc')}</p>
+            </div>
+
+            {/* Hook events list */}
+            {tmuxEntries.length > 0 && (
+              <div className="p-4 bg-surface-secondary rounded-lg border border-border-subtle">
+                <h3 className="text-sm font-semibold mb-2">{t('hosts.hook_events')}</h3>
+                <div className="space-y-1">
+                  {tmuxEntries.map(([event, active]) => (
+                    <div key={event} className="flex items-center gap-3 text-xs py-1">
+                      <span className="text-text-secondary w-40 shrink-0 font-mono">{event}</span>
+                      <span className={`inline-flex items-center gap-1 ${active ? 'text-green-400' : 'text-text-muted'}`}>
+                        {active ? <CheckCircle size={12} /> : <XCircle size={12} />}
+                        {active ? t('hosts.installed') : t('hosts.not_installed')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          )
+        })()
+
       ) : (
         <div className="flex items-center gap-2 text-xs text-text-muted">
           <ArrowsClockwise size={12} className={loading ? 'animate-spin' : ''} />

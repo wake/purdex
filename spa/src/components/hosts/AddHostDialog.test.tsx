@@ -82,6 +82,27 @@ describe('AddHostDialog', () => {
     expect(screen.getByText('Test Connection')).toBeInTheDocument()
   })
 
+  it('changing IP after needs-token resets stage to idle', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) } as Response)
+      .mockResolvedValueOnce({ ok: false, status: 401 } as Response)
+
+    render(<AddHostDialog onClose={vi.fn()} />)
+    fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '10.0.0.1' } })
+    fireEvent.click(screen.getByText('Test Connection'))
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('tbox_...')).toBeInTheDocument()
+    })
+
+    // Change IP — should reset back to idle, hiding the token field and warning
+    fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '10.0.0.2' } })
+
+    expect(screen.queryByPlaceholderText('tbox_...')).toBeNull()
+    expect(screen.queryByText('This daemon requires authentication. Enter a token.')).toBeNull()
+    expect(screen.getByText('Test Connection')).toBeInTheDocument()
+  })
+
   it('close button calls onClose', () => {
     const onClose = vi.fn()
     render(<AddHostDialog onClose={onClose} />)
