@@ -49,7 +49,14 @@ export const useSessionStore = create<SessionState>()(
       migrate: (persisted, version) => {
         if (version < 2) {
           const old = persisted as Record<string, unknown>
-          const defaultHostId = useHostStore.getState().hostOrder[0] ?? 'local'
+          // Defensive: hostStore may not have hydrated yet
+          let defaultHostId = 'local'
+          try {
+            const hostState = useHostStore.getState()
+            if (hostState.hostOrder.length > 0) {
+              defaultHostId = hostState.hostOrder[0]
+            }
+          } catch { /* hostStore not yet initialized */ }
           return {
             sessions: {},
             activeHostId: defaultHostId,
