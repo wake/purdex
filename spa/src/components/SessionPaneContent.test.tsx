@@ -17,7 +17,7 @@ vi.mock('./ConversationView', () => ({
 
 const makePane = (overrides?: Partial<Pane>): Pane => ({
   id: 'pane-1',
-  content: { kind: 'session', sessionCode: 'dev001', mode: 'terminal' },
+  content: { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' },
   ...overrides,
 })
 
@@ -67,7 +67,7 @@ describe('SessionPaneContent', () => {
 
   it('renders ConversationView for stream mode', () => {
     const pane = makePane({
-      content: { kind: 'session', sessionCode: 'dev001', mode: 'stream' },
+      content: { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'stream' },
     })
     render(<SessionPaneContent pane={pane} isActive={true} />)
     expect(screen.getByTestId('conversation-view')).toBeInTheDocument()

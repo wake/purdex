@@ -20,7 +20,7 @@ beforeEach(() => {
 })
 
 const sessionTab: Tab = {
-  ...createTab({ kind: 'session', sessionCode: 'dev001', mode: 'terminal' }),
+  ...createTab({ kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' }),
   id: 't1',
 }
 

@@ -10,6 +10,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { buildNotificationContent } from '../lib/notification-content'
 import { findTabBySessionCode } from '../lib/pane-tree'
 import { getPlatformCapabilities } from '../lib/platform'
+import { useHostStore } from '../stores/useHostStore'
 import { createTab } from '../types/tab'
 
 const SEEN_KEY = 'tbox-notification-seen'
@@ -143,7 +144,8 @@ function handleNotificationClick(sessionCode: string): void {
     useTabStore.getState().setActiveTab(tabId)
     handled = true
   } else if (agentSettings.reopenTabOnClick) {
-    const newTab = createTab({ kind: 'session', sessionCode, mode: 'stream' })
+    const hostId = useHostStore.getState().hostOrder[0]
+    const newTab = createTab({ kind: 'session', hostId, sessionCode, mode: 'stream' })
     useTabStore.getState().addTab(newTab)
     useTabStore.getState().setActiveTab(newTab.id)
     const activeWorkspaceId = useWorkspaceStore.getState().activeWorkspaceId

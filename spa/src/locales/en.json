@@ -161,6 +161,7 @@
   "page.pane.dashboard": "Dashboard",
   "page.pane.history": "History",
   "page.pane.settings": "Settings",
+  "page.pane.hosts": "Hosts",
   "page.pane.settings_ws": "Settings — {{name}}",
 
   "session.title": "Sessions",

@@ -89,6 +89,7 @@ export const useTabStore = create<TabState>()(
           if (!pane || pane.content.kind !== 'session') return state
           const newLayout = updatePaneInLayout(tab.layout, paneId, {
             kind: 'session',
+            hostId: pane.content.hostId,
             sessionCode: pane.content.sessionCode,
             mode,
           })

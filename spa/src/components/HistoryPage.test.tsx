@@ -26,7 +26,7 @@ describe('HistoryPage', () => {
 
   it('renders browse records in reverse chronological order', () => {
     const content1: PaneContent = { kind: 'dashboard' }
-    const content2: PaneContent = { kind: 'session', sessionCode: 'dev001', mode: 'terminal' }
+    const content2: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' }
     useHistoryStore.setState({
       browseHistory: [
         { tabId: 't1', paneContent: content1, visitedAt: 1000 },

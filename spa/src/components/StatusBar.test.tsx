@@ -36,7 +36,7 @@ beforeEach(() => {
 
 describe('StatusBar', () => {
   it('renders host and session info', () => {
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.getByText('mlab')).toBeTruthy()
     expect(screen.getByText('dev-server')).toBeTruthy()
@@ -49,7 +49,7 @@ describe('StatusBar', () => {
   })
 
   it('shows viewMode badge for session tabs', () => {
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.getByText('terminal')).toBeTruthy()
   })
@@ -63,7 +63,7 @@ describe('StatusBar', () => {
 
   it('opens popup on badge click and calls onViewModeChange', () => {
     const onChange = vi.fn()
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={onChange} />)
     fireEvent.click(screen.getByTitle('Toggle view mode'))
     // popup should show both options
@@ -75,7 +75,7 @@ describe('StatusBar', () => {
 
   it('falls back to sessionCode when session not in store', () => {
     useSessionStore.setState({ sessions: [], activeId: null })
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'unknown999', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: 'test-host', sessionCode: 'unknown999', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.getByText('unknown999')).toBeTruthy()
   })
@@ -92,7 +92,7 @@ describe('StatusBar upload progress', () => {
     useUploadStore.setState({
       sessions: { dev001: { total: 5, completed: 1, failed: 0, currentFile: 'photo.png', status: 'uploading' } },
     })
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.getByTestId('upload-status')).toBeTruthy()
     expect(screen.getByText(/photo\.png/)).toBeTruthy()
@@ -103,7 +103,7 @@ describe('StatusBar upload progress', () => {
     useUploadStore.setState({
       sessions: { dev001: { total: 3, completed: 3, failed: 0, currentFile: '', status: 'done' } },
     })
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.getByText(/3 files uploaded/)).toBeTruthy()
   })
@@ -112,7 +112,7 @@ describe('StatusBar upload progress', () => {
     useUploadStore.setState({
       sessions: { dev001: { total: 1, completed: 0, failed: 1, currentFile: '', error: 'bad.mp4', status: 'error' } },
     })
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.getByText(/bad\.mp4/)).toBeTruthy()
   })
@@ -132,7 +132,7 @@ describe('StatusBar agent label badge', () => {
       activeSubagents: {},
       hooksInstalled: true,
     })
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     const badge = screen.getByTestId('agent-label')
     expect(badge.textContent).toBe('Claude Opus 4')
@@ -147,7 +147,7 @@ describe('StatusBar agent label badge', () => {
       activeSubagents: {},
       hooksInstalled: true,
     })
-    const tab = makeTab('t1', { kind: 'session', sessionCode: 'dev001', mode: 'terminal' })
+    const tab = makeTab('t1', { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     const badge = screen.getByTestId('agent-label')
     expect(badge.textContent).toBe('Agent')

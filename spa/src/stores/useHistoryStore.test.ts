@@ -5,10 +5,11 @@ import type { PaneContent } from '../types/tab'
 
 function makeContent(kind: PaneContent['kind'] = 'dashboard'): PaneContent {
   switch (kind) {
-    case 'session': return { kind: 'session', sessionCode: 'dev001', mode: 'terminal' }
+    case 'session': return { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' }
     case 'settings': return { kind: 'settings', scope: 'global' }
     case 'new-tab': return { kind: 'new-tab' }
     case 'dashboard': return { kind: 'dashboard' }
+    case 'hosts': return { kind: 'hosts' }
     case 'history': return { kind: 'history' }
     case 'browser': return { kind: 'browser', url: 'https://example.com' }
     case 'memory-monitor': return { kind: 'memory-monitor' }

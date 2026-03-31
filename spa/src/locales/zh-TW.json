@@ -161,6 +161,7 @@
   "page.pane.dashboard": "儀表板",
   "page.pane.history": "歷史記錄",
   "page.pane.settings": "設定",
+  "page.pane.hosts": "主機管理",
   "page.pane.settings_ws": "設定 — {{name}}",
 
   "session.title": "Sessions",

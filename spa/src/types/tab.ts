@@ -23,8 +23,9 @@ export interface Pane {
 // === Pane Content (discriminated union) ===
 export type PaneContent =
   | { kind: 'new-tab' }
-  | { kind: 'session'; sessionCode: string; mode: 'terminal' | 'stream' }
+  | { kind: 'session'; hostId: string; sessionCode: string; mode: 'terminal' | 'stream' }
   | { kind: 'dashboard' }
+  | { kind: 'hosts' }
   | { kind: 'history' }
   | { kind: 'settings'; scope: 'global' | { workspaceId: string } }
   | { kind: 'browser'; url: string }

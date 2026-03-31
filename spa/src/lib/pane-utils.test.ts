@@ -10,14 +10,14 @@ describe('contentMatches', () => {
   })
 
   it('returns false for session kind (sessions are never singletons)', () => {
-    const a: PaneContent = { kind: 'session', sessionCode: 'dev001', mode: 'terminal' }
-    const b: PaneContent = { kind: 'session', sessionCode: 'dev001', mode: 'terminal' }
+    const a: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' }
+    const b: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' }
     expect(contentMatches(a, b)).toBe(false)
   })
 
   it('returns false for session kind even with different codes', () => {
-    const a: PaneContent = { kind: 'session', sessionCode: 'dev001', mode: 'terminal' }
-    const b: PaneContent = { kind: 'session', sessionCode: 'dev002', mode: 'stream' }
+    const a: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' }
+    const b: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev002', mode: 'stream' }
     expect(contentMatches(a, b)).toBe(false)
   })
 
@@ -73,6 +73,12 @@ describe('contentMatches', () => {
     const a: PaneContent = { kind: 'browser', url: 'https://a.com' }
     const b: PaneContent = { kind: 'browser', url: 'https://b.com' }
     expect(contentMatches(a, b)).toBe(false)
+  })
+
+  it('returns true for hosts kind (singleton)', () => {
+    const a: PaneContent = { kind: 'hosts' }
+    const b: PaneContent = { kind: 'hosts' }
+    expect(contentMatches(a, b)).toBe(true)
   })
 
   it('returns true for memory-monitor kind (singleton)', () => {

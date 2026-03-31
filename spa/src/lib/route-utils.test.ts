@@ -10,6 +10,10 @@ describe('parseRoute', () => {
     expect(parseRoute('/history')).toEqual({ kind: 'history' })
   })
 
+  it('parses /hosts', () => {
+    expect(parseRoute('/hosts')).toEqual({ kind: 'hosts' })
+  })
+
   it('parses /settings', () => {
     expect(parseRoute('/settings')).toEqual({ kind: 'settings', scope: 'global' })
   })
@@ -99,7 +103,7 @@ describe('parseRoute', () => {
 
 describe('tabToUrl', () => {
   it('generates session tab URL', () => {
-    expect(tabToUrl('abc123', { kind: 'session', sessionCode: 'x', mode: 'terminal' }))
+    expect(tabToUrl('abc123', { kind: 'session', hostId: 'test-host', sessionCode: 'x', mode: 'terminal' }))
       .toBe('/t/abc123/terminal')
   })
 
@@ -121,8 +125,12 @@ describe('tabToUrl', () => {
   })
 
   it('generates session tab URL within workspace', () => {
-    expect(tabToUrl('abc123', { kind: 'session', sessionCode: 'x', mode: 'terminal' }, 'ws0001'))
+    expect(tabToUrl('abc123', { kind: 'session', hostId: 'test-host', sessionCode: 'x', mode: 'terminal' }, 'ws0001'))
       .toBe('/w/ws0001/t/abc123/terminal')
+  })
+
+  it('generates hosts URL', () => {
+    expect(tabToUrl('abc123', { kind: 'hosts' })).toBe('/hosts')
   })
 
   it('generates new-tab URL as dashboard', () => {
