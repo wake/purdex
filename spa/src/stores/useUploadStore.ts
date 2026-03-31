@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { compositeKey } from '../lib/composite-key'
 
 interface SessionUploadState {
   total: number
@@ -11,52 +12,57 @@ interface SessionUploadState {
 
 interface UploadState {
   sessions: Record<string, SessionUploadState>
-  startUpload: (session: string, total: number, firstFile: string) => void
-  fileCompleted: (session: string) => void
-  fileFailed: (session: string, filename: string) => void
-  nextFile: (session: string, filename: string) => void
-  dismiss: (session: string) => void
+  startUpload: (hostId: string, sessionCode: string, total: number, firstFile: string) => void
+  fileCompleted: (hostId: string, sessionCode: string) => void
+  fileFailed: (hostId: string, sessionCode: string, filename: string) => void
+  nextFile: (hostId: string, sessionCode: string, filename: string) => void
+  dismiss: (hostId: string, sessionCode: string) => void
 }
 
 export const useUploadStore = create<UploadState>((set) => ({
   sessions: {},
 
-  startUpload: (session, total, firstFile) =>
+  startUpload: (hostId, sessionCode, total, firstFile) => {
+    const key = compositeKey(hostId, sessionCode)
     set((s) => ({
       sessions: {
         ...s.sessions,
-        [session]: { total, completed: 0, failed: 0, currentFile: firstFile, status: 'uploading' },
+        [key]: { total, completed: 0, failed: 0, currentFile: firstFile, status: 'uploading' },
       },
-    })),
+    }))
+  },
 
-  fileCompleted: (session) =>
+  fileCompleted: (hostId, sessionCode) => {
+    const key = compositeKey(hostId, sessionCode)
     set((s) => {
-      const prev = s.sessions[session]
+      const prev = s.sessions[key]
       if (!prev) return s
       const completed = prev.completed + 1
       const allDone = completed + prev.failed >= prev.total
       return {
         sessions: {
           ...s.sessions,
-          [session]: {
+          [key]: {
             ...prev,
             completed,
             status: allDone ? (prev.failed > 0 ? 'error' : 'done') : 'uploading',
           },
         },
       }
-    }),
+    })
+  },
 
-  fileFailed: (session, filename) =>
+  fileFailed: (hostId, sessionCode, filename) => {
+    const key = compositeKey(hostId, sessionCode)
     set((s) => {
-      const prev = s.sessions[session]
+      const prev = s.sessions[key]
       if (!prev) return s
       const failed = prev.failed + 1
       const allDone = prev.completed + failed >= prev.total
       return {
         sessions: {
           ...s.sessions,
-          [session]: {
+          [key]: {
             ...prev,
             failed,
             error: filename,
@@ -64,24 +70,29 @@ export const useUploadStore = create<UploadState>((set) => ({
           },
         },
       }
-    }),
+    })
+  },
 
-  nextFile: (session, filename) =>
+  nextFile: (hostId, sessionCode, filename) => {
+    const key = compositeKey(hostId, sessionCode)
     set((s) => {
-      const prev = s.sessions[session]
+      const prev = s.sessions[key]
       if (!prev) return s
       return {
-        sessions: { ...s.sessions, [session]: { ...prev, currentFile: filename } },
+        sessions: { ...s.sessions, [key]: { ...prev, currentFile: filename } },
       }
-    }),
+    })
+  },
 
-  dismiss: (session) =>
+  dismiss: (hostId, sessionCode) => {
+    const key = compositeKey(hostId, sessionCode)
     set((s) => {
-      const prev = s.sessions[session]
+      const prev = s.sessions[key]
       // Don't dismiss while uploading — prevents concurrent drop from corrupting state.
       if (prev?.status === 'uploading') return s
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { [session]: _, ...rest } = s.sessions
+      const { [key]: _, ...rest } = s.sessions
       return { sessions: rest }
-    }),
+    })
+  },
 }))

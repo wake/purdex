@@ -2,6 +2,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { getActiveSessionCode } from '../lib/active-session'
+import { compositeKey } from '../lib/composite-key'
 
 export type AgentStatus = 'running' | 'waiting' | 'idle' | 'error'
 export type TabIndicatorStyle = 'overlay' | 'replace' | 'inline'
@@ -15,16 +16,17 @@ export interface AgentHookEvent {
 }
 
 interface AgentState {
-  events: Record<string, AgentHookEvent>       // latest event per session code
-  statuses: Record<string, AgentStatus>        // derived status per session
-  unread: Record<string, boolean>              // unread flag per session
-  activeSubagents: Record<string, string[]>    // active subagent IDs per session
+  events: Record<string, AgentHookEvent>       // latest event per composite key
+  statuses: Record<string, AgentStatus>        // derived status per composite key
+  unread: Record<string, boolean>              // unread flag per composite key
+  activeSubagents: Record<string, string[]>    // active subagent IDs per composite key
   tabIndicatorStyle: TabIndicatorStyle
   hooksInstalled: boolean                      // whether CC hooks are installed
 
-  handleHookEvent: (session: string, event: AgentHookEvent) => void
-  markRead: (session: string) => void
+  handleHookEvent: (hostId: string, sessionCode: string, event: AgentHookEvent) => void
+  markRead: (hostId: string, sessionCode: string) => void
   clearAllSubagents: () => void
+  clearSubagentsForHost: (hostId: string) => void
   setTabIndicatorStyle: (style: TabIndicatorStyle) => void
   setHooksInstalled: (installed: boolean) => void
 }
@@ -76,7 +78,8 @@ export const useAgentStore = create<AgentState>()(
       tabIndicatorStyle: 'overlay' as TabIndicatorStyle,
       hooksInstalled: false,
 
-      handleHookEvent: (session, event) => {
+      handleHookEvent: (hostId, sessionCode, event) => {
+        const key = compositeKey(hostId, sessionCode)
         const derived = deriveStatus(event.event_name, event.raw_event)
 
         // Subagent tracking — does not affect main status.
@@ -85,11 +88,11 @@ export const useAgentStore = create<AgentState>()(
           const agentId = event.raw_event?.agent_id as string | undefined
           if (!agentId) return
           set((s) => {
-            const current = s.activeSubagents[session] || []
-            if (current.includes(agentId)) return { events: { ...s.events, [session]: event } }
+            const current = s.activeSubagents[key] || []
+            if (current.includes(agentId)) return { events: { ...s.events, [key]: event } }
             return {
-              activeSubagents: { ...s.activeSubagents, [session]: [...current, agentId] },
-              events: { ...s.events, [session]: event },
+              activeSubagents: { ...s.activeSubagents, [key]: [...current, agentId] },
+              events: { ...s.events, [key]: event },
             }
           })
           return
@@ -98,16 +101,16 @@ export const useAgentStore = create<AgentState>()(
           const agentId = event.raw_event?.agent_id as string | undefined
           if (!agentId) return
           set((s) => {
-            const current = s.activeSubagents[session] || []
+            const current = s.activeSubagents[key] || []
             const filtered = current.filter((id) => id !== agentId)
             if (filtered.length === 0) {
               // eslint-disable-next-line @typescript-eslint/no-unused-vars
-              const { [session]: _, ...rest } = s.activeSubagents
-              return { activeSubagents: rest, events: { ...s.events, [session]: event } }
+              const { [key]: _, ...rest } = s.activeSubagents
+              return { activeSubagents: rest, events: { ...s.events, [key]: event } }
             }
             return {
-              activeSubagents: { ...s.activeSubagents, [session]: filtered },
-              events: { ...s.events, [session]: event },
+              activeSubagents: { ...s.activeSubagents, [key]: filtered },
+              events: { ...s.events, [key]: event },
             }
           })
           return
@@ -117,13 +120,13 @@ export const useAgentStore = create<AgentState>()(
           // SessionEnd: remove session from all maps
           set((s) => {
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { [session]: _e, ...restEvents } = s.events
+            const { [key]: _e, ...restEvents } = s.events
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { [session]: _s, ...restStatuses } = s.statuses
+            const { [key]: _s, ...restStatuses } = s.statuses
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { [session]: _u, ...restUnread } = s.unread
+            const { [key]: _u, ...restUnread } = s.unread
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { [session]: _a, ...restSubagents } = s.activeSubagents
+            const { [key]: _a, ...restSubagents } = s.activeSubagents
             return { events: restEvents, statuses: restStatuses, unread: restUnread, activeSubagents: restSubagents }
           })
           return
@@ -133,23 +136,23 @@ export const useAgentStore = create<AgentState>()(
         // Skip compact — that's mid-work auto-compaction, subagents may still be running.
         if (event.event_name === 'SessionStart' && event.raw_event?.source !== 'compact') {
           set((s) => {
-            if (!s.activeSubagents[session]) return s
+            if (!s.activeSubagents[key]) return s
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { [session]: _, ...rest } = s.activeSubagents
+            const { [key]: _, ...rest } = s.activeSubagents
             return { activeSubagents: rest }
           })
         }
 
         // Store the latest event
-        set((s) => ({ events: { ...s.events, [session]: event } }))
+        set((s) => ({ events: { ...s.events, [key]: event } }))
 
         if (derived !== null) {
           // Don't let informational Notification subtypes (idle_prompt, auth_success)
           // downgrade an error status — the user should see the error until a real
           // state change (UserPromptSubmit, SessionStart, Stop) clears it.
           set((s) => {
-            if (s.statuses[session] === 'error' && derived === 'idle' && event.event_name === 'Notification') return s
-            return { statuses: { ...s.statuses, [session]: derived } }
+            if (s.statuses[key] === 'error' && derived === 'idle' && event.event_name === 'Notification') return s
+            return { statuses: { ...s.statuses, [key]: derived } }
           })
 
           // Mark unread when not focused: all 'waiting' statuses are actionable;
@@ -157,19 +160,29 @@ export const useAgentStore = create<AgentState>()(
           // (idle_prompt/auth_success are informational and should not trigger the red dot).
           const isActionable = derived === 'waiting' || derived === 'error' ||
             (derived === 'idle' && event.event_name !== 'Notification')
-          if (isActionable && getActiveSessionCode() !== session) {
-            set((s) => ({ unread: { ...s.unread, [session]: true } }))
+          if (isActionable && getActiveSessionCode() !== sessionCode) {
+            set((s) => ({ unread: { ...s.unread, [key]: true } }))
           }
         }
       },
 
-      markRead: (session) => set((s) => {
+      markRead: (hostId, sessionCode) => set((s) => {
+        const key = compositeKey(hostId, sessionCode)
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { [session]: _, ...rest } = s.unread
+        const { [key]: _, ...rest } = s.unread
         return { unread: rest }
       }),
 
       clearAllSubagents: () => set({ activeSubagents: {} }),
+
+      clearSubagentsForHost: (hostId) => set((s) => {
+        const prefix = `${hostId}:`
+        const filtered: Record<string, string[]> = {}
+        for (const [k, v] of Object.entries(s.activeSubagents)) {
+          if (!k.startsWith(prefix)) filtered[k] = v
+        }
+        return { activeSubagents: filtered }
+      }),
 
       setTabIndicatorStyle: (style) => set({ tabIndicatorStyle: style }),
       setHooksInstalled: (installed) => set({ hooksInstalled: installed }),
