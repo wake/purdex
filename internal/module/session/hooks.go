@@ -50,9 +50,21 @@ func (m *SessionModule) handleHooksStatus(w http.ResponseWriter, r *http.Request
 	}
 
 	// Check which of our events are present in the output.
+	// Parse line-by-line: each line is "event-name[N] -> command".
+	// We match lines that start with the event name AND contain our channel,
+	// avoiding false positives from other hooks whose commands contain the event name.
 	tmuxHooks := make(map[string]bool, len(tmuxHookEvents))
 	for _, event := range tmuxHookEvents {
-		tmuxHooks[event] = strings.Contains(hookOutput, event)
+		for _, line := range strings.Split(hookOutput, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, event) && strings.Contains(line, waitForChannel) {
+				tmuxHooks[event] = true
+				break
+			}
+		}
+		if !tmuxHooks[event] {
+			tmuxHooks[event] = false
+		}
 	}
 
 	resp := map[string]any{
