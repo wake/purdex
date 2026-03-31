@@ -131,14 +131,19 @@ func runServe(args []string) {
 	}
 
 	// 9. Apply middleware chain and start HTTP server
-	handler := middleware.CORS(
+	// Health endpoint bypasses auth (used for connection testing).
+	// It still needs CORS so cross-origin SPA requests succeed.
+	outerMux := http.NewServeMux()
+	outerMux.Handle("GET /api/health", middleware.CORS(
+		http.HandlerFunc(c.HandleHealth)))
+	outerMux.Handle("/", middleware.CORS(
 		middleware.IPWhitelist(cfg.Allow)(
-			middleware.TokenAuth(cfg.Token)(mux)))
+			middleware.TokenAuth(cfg.Token)(mux))))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: handler,
+		Handler: outerMux,
 	}
 
 	sigCh := make(chan os.Signal, 1)
