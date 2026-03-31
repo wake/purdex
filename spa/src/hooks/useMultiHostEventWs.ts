@@ -77,6 +77,8 @@ export function useMultiHostEventWs() {
           const daemonBase = useHostStore.getState().getDaemonBase(hostId)
           useSessionStore.getState().fetchHost(hostId, daemonBase)
         },
+        // getTicket — fetch one-time WS ticket for this host
+        () => fetchWsTicket(hostId),
       )
       connections.set(hostId, conn)
     }

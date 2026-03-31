@@ -15,12 +15,15 @@ export function hostFetch(hostId: string, path: string, init?: RequestInit): Pro
 }
 
 export function hostWsUrl(hostId: string, path: string): string {
-  const { getWsBase, hosts } = useHostStore.getState()
-  const base = getWsBase(hostId)
-  const url = new URL(`${base}${path}`)
-  const host = hosts[hostId]
-  if (host?.token) url.searchParams.set('token', host.token)
-  return url.toString()
+  const base = useHostStore.getState().getWsBase(hostId)
+  return `${base}${path}`
+}
+
+export async function fetchWsTicket(hostId: string): Promise<string> {
+  const res = await hostFetch(hostId, '/api/ws-ticket', { method: 'POST' })
+  if (!res.ok) throw new Error(`ws-ticket failed: ${res.status}`)
+  const data = await res.json()
+  return data.ticket
 }
 
 /* ─── API functions ─── */

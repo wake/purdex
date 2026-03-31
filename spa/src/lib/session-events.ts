@@ -15,13 +15,28 @@ export function connectSessionEvents(
   onEvent: (event: SessionEvent) => void,
   onClose?: () => void,
   onOpen?: () => void,
+  getTicket?: () => Promise<string>,
 ): EventConnection {
   let ws: WebSocket
   let retryMs = 1000
   let closed = false
 
-  function connect() {
-    ws = new WebSocket(url)
+  async function connect() {
+    let wsUrl = url
+    if (getTicket) {
+      try {
+        const ticket = await getTicket()
+        const u = new URL(wsUrl)
+        u.searchParams.set('ticket', ticket)
+        wsUrl = u.toString()
+      } catch {
+        // Ticket fetch failed — retry after delay
+        if (!closed) setTimeout(connect, retryMs)
+        retryMs = Math.min(retryMs * 2, 30000)
+        return
+      }
+    }
+    ws = new WebSocket(wsUrl)
     ws.onopen = () => { retryMs = 1000; onOpen?.() }
     ws.onmessage = (e) => {
       try {
