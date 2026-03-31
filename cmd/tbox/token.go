@@ -34,13 +34,13 @@ func runToken(args []string) {
 	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/tbox/config.toml)")
 	fs.Parse(flagArgs)
 
-	// Generate 20-byte random token → "tbox_" + first 20 hex chars
+	// Generate 20-byte random token → "tbox_" + 40 hex chars (160-bit entropy)
 	raw := make([]byte, 20)
 	if _, err := rand.Read(raw); err != nil {
 		fmt.Fprintf(os.Stderr, "token: failed to generate random bytes: %v\n", err)
 		os.Exit(1)
 	}
-	token := "tbox_" + hex.EncodeToString(raw)[:20]
+	token := "tbox_" + hex.EncodeToString(raw)
 
 	// Resolve config path
 	path := *cfgPath
@@ -70,7 +70,7 @@ func runToken(args []string) {
 
 	// Atomic write: write to .tmp then rename
 	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "token: cannot create temp file: %v\n", err)
 		os.Exit(1)
