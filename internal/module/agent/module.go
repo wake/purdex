@@ -42,6 +42,9 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.sessions = svc.(session.SessionProvider)
 
+	// Expose event store so other modules (e.g. session rename) can update it.
+	c.Registry.Register("agent.events", m.events)
+
 	if m.uploadDir == "" {
 		home, _ := os.UserHomeDir()
 		m.uploadDir = filepath.Join(home, "tmp", "tbox-upload")
@@ -55,6 +58,13 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agent/hook-status", m.handleHookStatus)
 	mux.HandleFunc("POST /api/agent/hook-setup", m.handleHookSetup)
 	mux.HandleFunc("POST /api/agent/upload", m.handleUpload)
+
+	// Upload management
+	mux.HandleFunc("GET /api/upload/stats", m.handleUploadStats)
+	mux.HandleFunc("GET /api/upload/files", m.handleUploadFiles)
+	mux.HandleFunc("DELETE /api/upload/files/{session}/{filename}", m.handleDeleteUploadFile)
+	mux.HandleFunc("DELETE /api/upload/files/{session}", m.handleDeleteUploadSession)
+	mux.HandleFunc("DELETE /api/upload/files", m.handleDeleteAllUploads)
 }
 
 // Start registers an OnSubscribe callback to send snapshot data on WS connect.

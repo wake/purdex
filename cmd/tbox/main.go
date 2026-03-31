@@ -29,7 +29,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: tbox <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, relay, hook, setup\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, relay, hook, setup, token\n")
 		os.Exit(1)
 	}
 
@@ -42,6 +42,8 @@ func main() {
 		runHook(os.Args[2:])
 	case "setup":
 		runSetup(os.Args[2:])
+	case "token":
+		runToken(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -131,14 +133,19 @@ func runServe(args []string) {
 	}
 
 	// 9. Apply middleware chain and start HTTP server
-	handler := middleware.CORS(
+	// Health endpoint bypasses auth (used for connection testing).
+	// It still needs CORS so cross-origin SPA requests succeed.
+	outerMux := http.NewServeMux()
+	outerMux.Handle("GET /api/health", middleware.CORS(
+		http.HandlerFunc(c.HandleHealth)))
+	outerMux.Handle("/", middleware.CORS(
 		middleware.IPWhitelist(cfg.Allow)(
-			middleware.TokenAuth(cfg.Token)(mux)))
+			middleware.TokenAuth(cfg.Token)(mux))))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: handler,
+		Handler: outerMux,
 	}
 
 	sigCh := make(chan os.Signal, 1)

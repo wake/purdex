@@ -116,6 +116,52 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(info)
 }
 
+type renameRequest struct {
+	Name string `json:"name"`
+}
+
+func (m *SessionModule) handleRename(w http.ResponseWriter, r *http.Request) {
+	code := r.PathValue("code")
+
+	var req renameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" || !nameRegex.MatchString(req.Name) {
+		http.Error(w, "invalid session name: must match ^[a-zA-Z0-9_-]+$", http.StatusBadRequest)
+		return
+	}
+
+	info, err := m.GetSession(code)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if info == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	if err := m.tmux.RenameSession(info.Name, req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Update agent event store so stored events follow the new session name.
+	if svc, ok := m.core.Registry.Get("agent.events"); ok {
+		if renamer, ok := svc.(interface{ Rename(old, new string) error }); ok {
+			_ = renamer.Rename(info.Name, req.Name)
+		}
+	}
+
+	// Return updated info with new name
+	info.Name = req.Name
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
+}
+
 func (m *SessionModule) handleDelete(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
 
