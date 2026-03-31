@@ -42,7 +42,7 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
                 )}
                 <span className="text-xs text-text-muted font-semibold">{host.name}</span>
                 {isOffline && (
-                  <span className="text-xs text-text-muted ml-auto">reconnecting...</span>
+                  <span className="text-xs text-text-muted ml-auto">{t('session.reconnecting')}</span>
                 )}
               </div>
             )}
