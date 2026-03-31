@@ -5,15 +5,16 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { connectSessionEvents } from '../lib/session-events'
-import { hostWsUrl } from '../lib/host-api'
+import { hostWsUrl, fetchWsTicket } from '../lib/host-api'
 import { fetchHistory } from '../lib/api'
 import type { Session } from '../lib/api'
 
 export function useMultiHostEventWs() {
-  const hosts = useHostStore((s) => s.hosts)
-  const hostOrder = useHostStore((s) => s.hostOrder)
+  // Stable dep: only re-run when the list of host IDs changes (add/remove host)
+  const hostOrderKey = useHostStore((s) => s.hostOrder.join(','))
 
   useEffect(() => {
+    const { hosts, hostOrder } = useHostStore.getState()
     const connections = new Map<string, { close: () => void }>()
 
     for (const hostId of hostOrder) {
@@ -80,5 +81,5 @@ export function useMultiHostEventWs() {
       connections.set(hostId, conn)
     }
     return () => { connections.forEach((c) => c.close()) }
-  }, [hosts, hostOrder])
+  }, [hostOrderKey])
 }
