@@ -1,4 +1,4 @@
-import { Plus, GearSix } from '@phosphor-icons/react'
+import { Plus, GearSix, HardDrives } from '@phosphor-icons/react'
 import type { Tab, Workspace } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { getPaneLabel } from '../lib/pane-labels'
@@ -15,6 +15,7 @@ interface Props {
   onSelectWorkspace: (wsId: string) => void
   onSelectStandaloneTab: (tabId: string) => void
   onAddWorkspace: () => void
+  onOpenHosts: () => void
   onOpenSettings: () => void
 }
 
@@ -26,6 +27,7 @@ export function ActivityBar({
   onSelectWorkspace,
   onSelectStandaloneTab,
   onAddWorkspace,
+  onOpenHosts,
   onOpenSettings,
 }: Props) {
   const t = useI18nStore((s) => s.t)
@@ -85,6 +87,13 @@ export function ActivityBar({
           className="w-8 h-8 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
         >
           <Plus size={16} />
+        </button>
+        <button
+          title={t('nav.hosts')}
+          onClick={onOpenHosts}
+          className="w-8 h-8 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
+        >
+          <HardDrives size={16} />
         </button>
         <button
           title={t('nav.settings')}

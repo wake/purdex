@@ -171,6 +171,14 @@ export default function App() {
           onSelectWorkspace={handleSelectWorkspace}
           onSelectStandaloneTab={handleSelectTab}
           onAddWorkspace={() => {}}
+          onOpenHosts={() => {
+            const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
+            if (activeWorkspaceId) {
+              useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tabId)
+              useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tabId)
+            }
+            handleSelectTab(tabId)
+          }}
           onOpenSettings={() => {
             const tabId = useTabStore.getState().openSingletonTab({ kind: 'settings', scope: 'global' })
             if (activeWorkspaceId) {
