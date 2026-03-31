@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { PaneRendererProps } from '../lib/pane-registry'
 import { useHostStore } from '../stores/useHostStore'
 import { HostSidebar } from './hosts/HostSidebar'
+import { OverviewSection } from './hosts/OverviewSection'
 
 export type HostSubPage = 'overview' | 'sessions' | 'hooks' | 'uploads'
 
@@ -20,6 +21,20 @@ export function HostPage(_props: PaneRendererProps) {
     subPage: 'overview',
   }))
 
+  const renderContent = () => {
+    if (!selection.hostId) {
+      return <p className="text-text-muted">No host selected.</p>
+    }
+    switch (selection.subPage) {
+      case 'overview':
+        return <OverviewSection hostId={selection.hostId} />
+      case 'sessions':
+      case 'hooks':
+      case 'uploads':
+        return <p className="text-text-muted">Coming soon.</p>
+    }
+  }
+
   return (
     <div className="flex h-full">
       <HostSidebar
@@ -28,8 +43,7 @@ export function HostPage(_props: PaneRendererProps) {
         onSelect={(hostId, subPage) => setSelection({ hostId, subPage })}
       />
       <div className="flex-1 overflow-y-auto p-6">
-        {/* Content sections will be added in subsequent tasks */}
-        <p className="text-text-muted">Select a host and section from the sidebar.</p>
+        {renderContent()}
       </div>
     </div>
   )
