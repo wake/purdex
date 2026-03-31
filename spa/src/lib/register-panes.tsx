@@ -12,6 +12,7 @@ import { SessionSection } from '../components/SessionSection'
 import { BrowserPane } from '../components/BrowserPane'
 import { BrowserNewTabSection } from '../components/BrowserNewTabSection'
 import { MemoryMonitorPage } from '../components/MemoryMonitorPage'
+import { HostPage } from '../components/HostPage'
 import { MemoryMonitorNewTabSection } from '../components/MemoryMonitorNewTabSection'
 import { AppearanceSection } from '../components/settings/AppearanceSection'
 import { AgentSection } from '../components/settings/AgentSection'
@@ -52,6 +53,7 @@ export function registerBuiltinPanes(): void {
   registerPaneRenderer('memory-monitor', {
     component: () => <MemoryMonitorPage />,
   })
+  registerPaneRenderer('hosts', { component: HostPage })
 
   // Settings sections
   registerSettingsSection({ id: 'appearance', label: 'settings.section.appearance', order: 0, component: AppearanceSection })

@@ -136,7 +136,11 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
     <div className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted gap-3 flex-shrink-0 relative z-10">
       <span>{hostName}</span>
       <span>{sessionName}</span>
-      <span className={status === 'connected' ? 'text-green-500' : 'text-text-muted'}>
+      <span className={
+        status === 'connected' ? 'text-green-500'
+          : status === 'reconnecting' ? 'text-yellow-400'
+          : 'text-red-400'
+      }>
         {status}
       </span>
       {getAgentLabel(agentEvent) && (() => {

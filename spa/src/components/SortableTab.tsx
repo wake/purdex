@@ -1,9 +1,10 @@
 import { useSortable } from '@dnd-kit/sortable'
-import { X, Lock } from '@phosphor-icons/react'
+import { X, Lock, WifiSlash } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
 import { getPaneIcon, getPaneLabel } from '../lib/pane-labels'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useSessionStore } from '../stores/useSessionStore'
+import { useHostStore } from '../stores/useHostStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useAgentStore } from '../stores/useAgentStore'
@@ -98,6 +99,11 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const isUnread = useAgentStore((s) => ck ? !!s.unread[ck] : false)
   const subagentCount = useAgentStore((s) => ck ? (s.activeSubagents[ck]?.length ?? 0) : 0)
   const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
+  const isHostOffline = useHostStore((s) => {
+    if (!hostId) return false
+    const rt = s.runtime[hostId]
+    return rt ? rt.status !== 'connected' : false
+  })
   const sessionLookup = { getByCode: (code: string) => sessions.find((s) => s.code === code) }
   const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
   const label = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
@@ -171,6 +177,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     >
       {renderTabIcon(IconComponent, agentStatus, tabIndicatorStyle, isActive, 14, subagentCount)}
       <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
+      {isHostOffline && <WifiSlash size={12} className="text-red-400 flex-shrink-0" />}
       {tab.locked && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
       {!isActive && isUnread && (
         <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
