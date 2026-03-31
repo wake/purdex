@@ -15,14 +15,18 @@ registerBuiltinPanes()
 
 // Cross-store subscription: auto-markRead when active tab changes to a session.
 // Inlined here to avoid circular dependency between active-session.ts and useAgentStore.
-let prevSessionCode = getActiveSessionInfo()?.sessionCode ?? null
-useTabStore.subscribe(() => {
+// Compare composite keys (hostId:sessionCode) for cross-host correctness.
+let prevKey: string | null = (() => {
   const info = getActiveSessionInfo()
-  const currentCode = info?.sessionCode ?? null
-  if (currentCode !== prevSessionCode) {
-    prevSessionCode = currentCode
-    if (info) {
-      useAgentStore.getState().markRead(info.hostId, info.sessionCode)
+  return info ? `${info.hostId}:${info.sessionCode}` : null
+})()
+useTabStore.subscribe(() => {
+  const currentInfo = getActiveSessionInfo()
+  const currentKey = currentInfo ? `${currentInfo.hostId}:${currentInfo.sessionCode}` : null
+  if (currentKey !== prevKey) {
+    prevKey = currentKey
+    if (currentInfo) {
+      useAgentStore.getState().markRead(currentInfo.hostId, currentInfo.sessionCode)
     }
   }
 })
