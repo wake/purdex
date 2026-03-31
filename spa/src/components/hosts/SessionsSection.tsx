@@ -112,6 +112,7 @@ function InlineRename({ hostId, session, onDone }: { hostId: string; session: Se
         onChange={(e) => setDraft(e.target.value)}
         className="bg-surface-primary border border-border-default rounded px-1 py-0.5 text-sm w-32"
         autoFocus
+        onBlur={handleSave}
         onKeyDown={(e) => {
           if (e.key === 'Enter') handleSave()
           if (e.key === 'Escape') onDone()

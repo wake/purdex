@@ -348,5 +348,16 @@
   "hosts.invalid_token": "Invalid token",
   "hosts.validating_token": "Validating token...",
   "hosts.save": "Save",
-  "common.edit": "Edit"
+  "hosts.show_token": "Show token",
+  "hosts.hide_token": "Hide token",
+  "hosts.no_host_selected": "No host selected.",
+  "hosts.preset_count": "{{count}} preset(s)",
+  "hosts.connection_failed": "Connection failed",
+  "common.edit": "Edit",
+
+  "error.boundary.title": "Something went wrong",
+  "error.boundary.message": "An unexpected error occurred.",
+  "error.boundary.reload": "Reload",
+
+  "session.no_sessions": "No sessions available"
 }

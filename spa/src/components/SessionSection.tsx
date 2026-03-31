@@ -1,5 +1,6 @@
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
+import { useI18nStore } from '../stores/useI18nStore'
 import type { NewTabProviderProps } from '../lib/new-tab-registry'
 import { TerminalWindow, Circle, Spinner } from '@phosphor-icons/react'
 
@@ -8,11 +9,12 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const runtime = useHostStore((s) => s.runtime)
+  const t = useI18nStore((s) => s.t)
 
   const hasAnySessions = hostOrder.some((hid) => (sessionsMap[hid] ?? []).length > 0)
 
   if (!hasAnySessions) {
-    return <p className="text-sm text-text-muted px-2">No sessions available</p>
+    return <p className="text-sm text-text-muted px-2">{t('session.no_sessions')}</p>
   }
 
   return (

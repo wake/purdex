@@ -348,5 +348,16 @@
   "hosts.invalid_token": "Token 無效",
   "hosts.validating_token": "驗證 Token 中...",
   "hosts.save": "儲存",
-  "common.edit": "編輯"
+  "hosts.show_token": "顯示 Token",
+  "hosts.hide_token": "隱藏 Token",
+  "hosts.no_host_selected": "未選取主機。",
+  "hosts.preset_count": "{{count}} 個預設",
+  "hosts.connection_failed": "連線失敗",
+  "common.edit": "編輯",
+
+  "error.boundary.title": "發生錯誤",
+  "error.boundary.message": "發生了未預期的錯誤。",
+  "error.boundary.reload": "重新載入",
+
+  "session.no_sessions": "沒有可用的 Session"
 }

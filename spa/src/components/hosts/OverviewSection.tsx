@@ -17,6 +17,7 @@ function Section({ title, defaultOpen = true, children }: { title: string; defau
     <div className="mb-6">
       <button
         onClick={() => setOpen(!open)}
+        aria-expanded={open}
         className="flex items-center gap-2 text-sm font-semibold text-text-primary mb-3 cursor-pointer"
       >
         {open ? <CaretDown size={12} /> : <CaretRight size={12} />}
@@ -123,7 +124,7 @@ function TokenField({ token, ip, port, onSave, t }: {
         setError(`HTTP ${res.status}`)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Connection failed')
+      setError(err instanceof Error ? err.message : t('hosts.connection_failed'))
     } finally {
       setValidating(false)
     }
@@ -145,6 +146,7 @@ function TokenField({ token, ip, port, onSave, t }: {
           {token && (
             <button
               onClick={() => setVisible(!visible)}
+              aria-label={visible ? t('hosts.hide_token') : t('hosts.show_token')}
               className="text-text-muted hover:text-text-secondary cursor-pointer"
             >
               {visible ? <EyeSlash size={14} /> : <Eye size={14} />}
@@ -179,6 +181,7 @@ function TokenField({ token, ip, port, onSave, t }: {
           />
           <button
             onClick={() => setVisible(!visible)}
+            aria-label={visible ? t('hosts.hide_token') : t('hosts.show_token')}
             className="text-text-muted hover:text-text-secondary cursor-pointer p-1"
           >
             {visible ? <EyeSlash size={14} /> : <Eye size={14} />}
@@ -186,12 +189,14 @@ function TokenField({ token, ip, port, onSave, t }: {
           <button
             onClick={handleSave}
             disabled={validating}
+            aria-label={t('common.save')}
             className="text-green-400 hover:text-green-300 cursor-pointer p-1 disabled:opacity-50"
           >
             <Check size={14} />
           </button>
           <button
             onClick={handleCancel}
+            aria-label={t('common.cancel')}
             className="text-text-muted hover:text-text-secondary cursor-pointer p-1"
           >
             <X size={14} />
@@ -252,7 +257,7 @@ export function OverviewSection({ hostId }: Props) {
         setTestResult({ ok: false, error: `HTTP ${res.status}` })
       }
     } catch (err) {
-      setTestResult({ ok: false, error: err instanceof Error ? err.message : 'Connection failed' })
+      setTestResult({ ok: false, error: err instanceof Error ? err.message : t('hosts.connection_failed') })
     } finally {
       setTesting(false)
     }
@@ -386,7 +391,7 @@ export function OverviewSection({ hostId }: Props) {
             </Field>
             <Field label={t('hosts.stream_presets')}>
               <span className="text-sm text-text-muted">
-                {config.stream?.presets?.length ?? 0} preset(s)
+                {t('hosts.preset_count', { count: config.stream?.presets?.length ?? 0 })}
               </span>
             </Field>
             <Field label={t('hosts.detect_commands')}>
