@@ -117,6 +117,13 @@ func (s *AgentEventStore) ListAll() ([]AgentEvent, error) {
 	return out, rows.Err()
 }
 
+// Rename updates the primary key from oldName to newName so that stored
+// events follow a tmux session rename and don't become orphaned.
+func (s *AgentEventStore) Rename(oldName, newName string) error {
+	_, err := s.db.Exec("UPDATE agent_events SET tmux_session = ? WHERE tmux_session = ?", newName, oldName)
+	return err
+}
+
 // Delete removes the event for tmuxSession (no-op if not found).
 func (s *AgentEventStore) Delete(tmuxSession string) error {
 	_, err := s.db.Exec("DELETE FROM agent_events WHERE tmux_session = ?", tmuxSession)

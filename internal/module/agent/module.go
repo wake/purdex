@@ -42,6 +42,9 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.sessions = svc.(session.SessionProvider)
 
+	// Expose event store so other modules (e.g. session rename) can update it.
+	c.Registry.Register("agent.events", m.events)
+
 	if m.uploadDir == "" {
 		home, _ := os.UserHomeDir()
 		m.uploadDir = filepath.Join(home, "tmp", "tbox-upload")

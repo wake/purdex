@@ -149,6 +149,13 @@ func (m *SessionModule) handleRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Update agent event store so stored events follow the new session name.
+	if svc, ok := m.core.Registry.Get("agent.events"); ok {
+		if renamer, ok := svc.(interface{ Rename(old, new string) error }); ok {
+			_ = renamer.Rename(info.Name, req.Name)
+		}
+	}
+
 	// Return updated info with new name
 	info.Name = req.Name
 	w.Header().Set("Content-Type", "application/json")
