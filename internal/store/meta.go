@@ -52,7 +52,7 @@ func migrateMetaDB(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS session_meta (
 			tmux_id       TEXT PRIMARY KEY,
-			mode          TEXT DEFAULT 'term',
+			mode          TEXT DEFAULT 'terminal',
 			cc_session_id TEXT DEFAULT '',
 			cc_model      TEXT DEFAULT '',
 			cwd           TEXT DEFAULT '',

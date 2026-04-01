@@ -70,10 +70,10 @@ func TestSessionModuleStartResetsStaleModes(t *testing.T) {
 	require.NoError(t, err)
 	defer meta.Close()
 
-	// Pre-populate stale meta
+	// Pre-populate stale meta (includes legacy "term" and "jsonl" values for upgrade path)
 	require.NoError(t, meta.SetMeta("$0", store.SessionMeta{Mode: "stream"}))
-	require.NoError(t, meta.SetMeta("$1", store.SessionMeta{Mode: "stream"}))
-	require.NoError(t, meta.SetMeta("$2", store.SessionMeta{Mode: "terminal"}))
+	require.NoError(t, meta.SetMeta("$1", store.SessionMeta{Mode: "term"}))
+	require.NoError(t, meta.SetMeta("$2", store.SessionMeta{Mode: "jsonl"}))
 
 	fake := tmux.NewFakeExecutor()
 	mod := NewSessionModule(meta)
