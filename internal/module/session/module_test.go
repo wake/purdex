@@ -72,8 +72,8 @@ func TestSessionModuleStartResetsStaleModes(t *testing.T) {
 
 	// Pre-populate stale meta
 	require.NoError(t, meta.SetMeta("$0", store.SessionMeta{Mode: "stream"}))
-	require.NoError(t, meta.SetMeta("$1", store.SessionMeta{Mode: "jsonl"}))
-	require.NoError(t, meta.SetMeta("$2", store.SessionMeta{Mode: "term"}))
+	require.NoError(t, meta.SetMeta("$1", store.SessionMeta{Mode: "stream"}))
+	require.NoError(t, meta.SetMeta("$2", store.SessionMeta{Mode: "terminal"}))
 
 	fake := tmux.NewFakeExecutor()
 	mod := NewSessionModule(meta)
@@ -91,7 +91,7 @@ func TestSessionModuleStartResetsStaleModes(t *testing.T) {
 	m0, _ := meta.GetMeta("$0")
 	m1, _ := meta.GetMeta("$1")
 	m2, _ := meta.GetMeta("$2")
-	assert.Equal(t, "term", m0.Mode)
-	assert.Equal(t, "term", m1.Mode)
-	assert.Equal(t, "term", m2.Mode)
+	assert.Equal(t, "terminal", m0.Mode)
+	assert.Equal(t, "terminal", m1.Mode)
+	assert.Equal(t, "terminal", m2.Mode)
 }

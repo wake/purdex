@@ -5,7 +5,7 @@ import TopBar from './TopBar'
 
 const defaultProps = {
   sessionName: 'test',
-  mode: 'term',
+  mode: 'terminal',
   onModeChange: vi.fn(),
 }
 
@@ -35,7 +35,7 @@ describe('TopBar', () => {
   it('calls onModeChange when clicking term', () => {
     render(<TopBar {...defaultProps} />)
     fireEvent.click(screen.getByTestId('mode-btn-term'))
-    expect(defaultProps.onModeChange).toHaveBeenCalledWith('term')
+    expect(defaultProps.onModeChange).toHaveBeenCalledWith('terminal')
   })
 
   it('calls onModeChange when clicking stream', () => {
@@ -48,7 +48,7 @@ describe('TopBar', () => {
     render(<TopBar {...defaultProps} />)
     const modeSwitch = screen.getByTestId('mode-switch')
     const buttons = modeSwitch.querySelectorAll('button')
-    expect(buttons[0].textContent).toContain('term')
+    expect(buttons[0].textContent).toContain('terminal')
     expect(buttons[1].textContent).toContain('stream')
   })
 })

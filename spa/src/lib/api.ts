@@ -80,7 +80,6 @@ export interface ConfigData {
   port: number
   terminal?: { sizing_mode: string }
   stream: { presets: Array<{ name: string; command: string }> }
-  jsonl: { presets: Array<{ name: string; command: string }> }
   detect: { cc_commands: string[]; poll_interval: number }
 }
 

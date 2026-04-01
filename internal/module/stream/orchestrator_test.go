@@ -118,9 +118,6 @@ func setupHandoffModule(t *testing.T, opts handoffTestOpts) *handoffTestEnv {
 			Stream: config.StreamConfig{
 				Presets: []config.Preset{{Name: "cc", Command: "claude -p --verbose --input-format stream-json --output-format stream-json"}},
 			},
-			JSONL: config.JSONLConfig{
-				Presets: []config.Preset{{Name: "jcc", Command: "claude -p --output-format jsonl"}},
-			},
 		}
 	}
 
@@ -229,7 +226,7 @@ func TestHandoff_SessionNotFound_Returns404(t *testing.T) {
 func TestHandoff_InvalidMode_Returns400(t *testing.T) {
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 	})
 
@@ -241,7 +238,7 @@ func TestHandoff_InvalidMode_Returns400(t *testing.T) {
 func TestHandoff_PresetNotFound_Returns400(t *testing.T) {
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 	})
 
@@ -258,7 +255,7 @@ func TestHandoff_TermMode_NoPresetNeeded(t *testing.T) {
 		ccDetect: &fakeCCDetector{statuses: []detect.Status{detect.StatusNormal}},
 	})
 
-	resp := postHandoff(t, env.srv, "abc123", `{"mode":"term"}`)
+	resp := postHandoff(t, env.srv, "abc123", `{"mode":"terminal"}`)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
 
@@ -270,7 +267,7 @@ func TestHandoff_TermMode_NoPresetNeeded(t *testing.T) {
 func TestHandoff_ConcurrentLock_Returns409(t *testing.T) {
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 		// Slow ccDetect — keeps handoff running while we try second request
 		ccDetect: &fakeCCDetector{statuses: []detect.Status{detect.StatusCCRunning}},
@@ -296,7 +293,7 @@ func TestHandoff_ConcurrentLock_Returns409(t *testing.T) {
 func TestHandoff_Returns202WithHandoffID(t *testing.T) {
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 		ccDetect: &fakeCCDetector{statuses: []detect.Status{detect.StatusCCIdle}},
 		ccOps: &fakeCCOperator{
@@ -316,7 +313,7 @@ func TestHandoff_Returns202WithHandoffID(t *testing.T) {
 func TestHandoff_InvalidBody_Returns400(t *testing.T) {
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 	})
 
@@ -325,29 +322,13 @@ func TestHandoff_InvalidBody_Returns400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
-func TestHandoff_JSONLPreset(t *testing.T) {
-	env := setupHandoffModule(t, handoffTestOpts{
-		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
-		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{detect.StatusCCIdle}},
-		ccOps: &fakeCCOperator{
-			statusInfo: &detect.StatusInfo{SessionID: "uuid-1234", Cwd: "/home/user"},
-		},
-	})
-
-	resp := postHandoff(t, env.srv, "abc123", `{"mode":"jsonl","preset":"jcc"}`)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
-}
-
 // --- runHandoff orchestration tests ---
 
 func TestRunHandoff_FullSequence(t *testing.T) {
 	// CC is running (not idle) → interrupt → getStatus → exit → launch relay → relay connects → update meta → broadcast connected
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 		ccDetect: &fakeCCDetector{statuses: []detect.Status{
 			detect.StatusCCRunning, // initial detect: CC is running
@@ -419,7 +400,7 @@ func TestRunHandoff_FullSequence(t *testing.T) {
 func TestRunHandoff_CCIdle_SkipsInterrupt(t *testing.T) {
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 		ccDetect: &fakeCCDetector{statuses: []detect.Status{
 			detect.StatusCCIdle, // already idle
@@ -457,7 +438,7 @@ func TestRunHandoff_CCIdle_SkipsInterrupt(t *testing.T) {
 func TestRunHandoff_NoCCRunning_BroadcastsFailed(t *testing.T) {
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 		ccDetect: &fakeCCDetector{statuses: []detect.Status{
 			detect.StatusNormal, // no CC running
@@ -477,7 +458,7 @@ func TestRunHandoff_NoCCRunning_BroadcastsFailed(t *testing.T) {
 func TestRunHandoff_InterruptFails_BroadcastsFailed(t *testing.T) {
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 		ccDetect: &fakeCCDetector{statuses: []detect.Status{
 			detect.StatusCCRunning, // CC busy
@@ -500,7 +481,7 @@ func TestRunHandoff_InterruptFails_BroadcastsFailed(t *testing.T) {
 func TestRunHandoff_GetStatusFails_BroadcastsFailed(t *testing.T) {
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 		ccDetect: &fakeCCDetector{statuses: []detect.Status{
 			detect.StatusCCIdle,
@@ -523,7 +504,7 @@ func TestRunHandoff_GetStatusFails_BroadcastsFailed(t *testing.T) {
 func TestRunHandoff_ExitFails_BroadcastsFailed(t *testing.T) {
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 		ccDetect: &fakeCCDetector{statuses: []detect.Status{
 			detect.StatusCCIdle,
@@ -562,7 +543,7 @@ func TestRunHandoffToTerm_FullSequence(t *testing.T) {
 	eventSub := env.core.Events.AddTestSubscriber()
 	defer env.core.Events.RemoveTestSubscriber(eventSub)
 
-	resp := postHandoff(t, env.srv, "abc123", `{"mode":"term"}`)
+	resp := postHandoff(t, env.srv, "abc123", `{"mode":"terminal"}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
 
@@ -595,7 +576,7 @@ func TestRunHandoffToTerm_NoCCSessionID_Fails(t *testing.T) {
 	eventSub := env.core.Events.AddTestSubscriber()
 	defer env.core.Events.RemoveTestSubscriber(eventSub)
 
-	resp := postHandoff(t, env.srv, "abc123", `{"mode":"term"}`)
+	resp := postHandoff(t, env.srv, "abc123", `{"mode":"terminal"}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
 
@@ -615,7 +596,7 @@ func TestRunHandoffToTerm_ShellNotRecovered_RollsBack(t *testing.T) {
 	eventSub := env.core.Events.AddTestSubscriber()
 	defer env.core.Events.RemoveTestSubscriber(eventSub)
 
-	resp := postHandoff(t, env.srv, "abc123", `{"mode":"term"}`)
+	resp := postHandoff(t, env.srv, "abc123", `{"mode":"terminal"}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
 
@@ -647,7 +628,7 @@ func TestRunHandoffToTerm_CCDidNotStart_RollsBack(t *testing.T) {
 	eventSub := env.core.Events.AddTestSubscriber()
 	defer env.core.Events.RemoveTestSubscriber(eventSub)
 
-	resp := postHandoff(t, env.srv, "abc123", `{"mode":"term"}`)
+	resp := postHandoff(t, env.srv, "abc123", `{"mode":"terminal"}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
 
@@ -681,19 +662,19 @@ func TestRunHandoffToTerm_PreUpdatesMode(t *testing.T) {
 	eventSub := env.core.Events.AddTestSubscriber()
 	defer env.core.Events.RemoveTestSubscriber(eventSub)
 
-	resp := postHandoff(t, env.srv, "abc123", `{"mode":"term"}`)
+	resp := postHandoff(t, env.srv, "abc123", `{"mode":"terminal"}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
 
 	waitForEvent(t, eventSub, "connected", 5*time.Second)
 
-	// Verify mode was pre-updated to "term" (should be the first update)
+	// Verify mode was pre-updated to "terminal" (should be the first update)
 	updates := env.provider.getUpdates()
 	require.NotEmpty(t, updates)
 	first := updates[0]
 	assert.Equal(t, "abc123", first.Code)
 	require.NotNil(t, first.Update.Mode)
-	assert.Equal(t, "term", *first.Update.Mode)
+	assert.Equal(t, "terminal", *first.Update.Mode)
 }
 
 // --- Handoff with existing relay tests ---
@@ -769,7 +750,7 @@ func TestRunHandoff_DisconnectsExistingRelay(t *testing.T) {
 func TestRunHandoff_BroadcastsUseSessionCode(t *testing.T) {
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 		ccDetect: &fakeCCDetector{statuses: []detect.Status{
 			detect.StatusNormal, // no CC → triggers "failed:no CC running"
@@ -798,7 +779,7 @@ func TestRunHandoff_BroadcastsUseSessionCode(t *testing.T) {
 func TestRunHandoff_UsesCorrectTmuxTarget(t *testing.T) {
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "my-app", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "my-app", Mode: "terminal"},
 		},
 		ccDetect: &fakeCCDetector{statuses: []detect.Status{
 			detect.StatusCCIdle,
@@ -827,7 +808,7 @@ func TestRunHandoff_UsesCorrectTmuxTarget(t *testing.T) {
 func TestRunHandoff_LockReleasedAfterCompletion(t *testing.T) {
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 		ccDetect: &fakeCCDetector{statuses: []detect.Status{
 			detect.StatusNormal, // no CC → fails after pane prep (~1.5s)
@@ -858,7 +839,7 @@ func TestRunHandoff_RelayConnectTimeout(t *testing.T) {
 	// CC idle → getStatus → exit → launch relay → relay never connects → timeout
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
-			"abc123": {Code: "abc123", Name: "test-sess", Mode: "term"},
+			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 		ccDetect: &fakeCCDetector{statuses: []detect.Status{
 			detect.StatusCCIdle,
@@ -897,7 +878,7 @@ func TestRunHandoffToTerm_RelayShutdownTimeout(t *testing.T) {
 	eventSub := env.core.Events.AddTestSubscriber()
 	defer env.core.Events.RemoveTestSubscriber(eventSub)
 
-	resp := postHandoff(t, env.srv, "abc123", `{"mode":"term"}`)
+	resp := postHandoff(t, env.srv, "abc123", `{"mode":"terminal"}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
 

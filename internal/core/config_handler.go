@@ -26,7 +26,6 @@ func (c *Core) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // configUpdateRequest defines the fields that can be updated via PUT /api/config.
 type configUpdateRequest struct {
 	Stream   *config.StreamConfig   `json:"stream,omitempty"`
-	JSONL    *config.JSONLConfig    `json:"jsonl,omitempty"`
 	Detect   *detectUpdateRequest   `json:"detect,omitempty"`
 	Terminal *config.TerminalConfig `json:"terminal,omitempty"`
 }
@@ -65,9 +64,6 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// Apply updates — only the allowed fields
 	if req.Stream != nil {
 		c.Cfg.Stream = *req.Stream
-	}
-	if req.JSONL != nil {
-		c.Cfg.JSONL = *req.JSONL
 	}
 	if req.Detect != nil {
 		if req.Detect.CCCommands != nil {

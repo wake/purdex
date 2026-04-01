@@ -2,7 +2,7 @@
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useHostStore } from '../stores/useHostStore'
-import { Terminal, Lightning, CircleDashed, GearSix, Circle, Spinner } from '@phosphor-icons/react'
+import { Terminal, Lightning, GearSix, Circle, Spinner } from '@phosphor-icons/react'
 import SessionStatusBadge from './SessionStatusBadge'
 import { useI18nStore } from '../stores/useI18nStore'
 import { compositeKey } from '../lib/composite-key'
@@ -11,7 +11,6 @@ function SessionIcon({ mode, code }: { mode: string; code: string }) {
   const props = { size: 16, 'data-testid': `session-icon-${code}` }
   switch (mode) {
     case 'stream': return <Lightning {...props} weight="fill" className="text-blue-400" />
-    case 'jsonl': return <CircleDashed {...props} className="text-yellow-400" />
     default: return <Terminal {...props} className="text-text-secondary" />
   }
 }

@@ -4,7 +4,7 @@ import { listSessions, createSession, deleteSession, switchMode, handoff, type S
 
 const mockSession: Session = {
   code: 'abc123', name: 'test',
-  cwd: '/tmp', mode: 'term', cc_session_id: '',
+  cwd: '/tmp', mode: 'terminal', cc_session_id: '',
   cc_model: '', has_relay: false,
 }
 
@@ -34,7 +34,7 @@ describe('createSession', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify(mockSession), { status: 201 })
     )
-    const s = await createSession('http://localhost:7860', 'test', '/tmp', 'term')
+    const s = await createSession('http://localhost:7860', 'test', '/tmp', 'terminal')
     expect(s.name).toBe('test')
   })
 })
@@ -98,11 +98,11 @@ describe('handoff', () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ handoff_id: 'def456' }), { status: 202 })
     )
-    await handoff('http://localhost:7860', 'abc123', 'term')
+    await handoff('http://localhost:7860', 'abc123', 'terminal')
     expect(spy).toHaveBeenCalledWith(
       'http://localhost:7860/api/sessions/abc123/handoff',
       expect.objectContaining({
-        body: JSON.stringify({ mode: 'term' }),
+        body: JSON.stringify({ mode: 'terminal' }),
       })
     )
   })

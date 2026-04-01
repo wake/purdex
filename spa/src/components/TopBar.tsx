@@ -17,14 +17,14 @@ export default function TopBar({ sessionName, mode, onModeChange }: Props) {
       <div className="flex items-center gap-1" data-testid="mode-switch">
         {/* Term */}
         <button
-          onClick={() => onModeChange('term')}
+          onClick={() => onModeChange('terminal')}
           data-testid="mode-btn-term"
           className={`flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer transition-colors ${
-            mode === 'term' ? 'bg-border-default text-text-primary' : 'text-text-muted hover:text-text-secondary hover:bg-surface-hover'
+            mode === 'terminal' ? 'bg-border-default text-text-primary' : 'text-text-muted hover:text-text-secondary hover:bg-surface-hover'
           }`}
         >
-          <Terminal size={14} weight={mode === 'term' ? 'fill' : 'regular'} />
-          <span>term</span>
+          <Terminal size={14} weight={mode === 'terminal' ? 'fill' : 'regular'} />
+          <span>terminal</span>
         </button>
 
         {/* Stream */}

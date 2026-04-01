@@ -293,16 +293,16 @@ func TestCliBridge_ModeRevertOnRelayDisconnect(t *testing.T) {
 	relay.Close()
 	time.Sleep(200 * time.Millisecond)
 
-	// Verify mode was reverted to "term"
+	// Verify mode was reverted to "terminal"
 	updates := fp.getUpdates()
 	found := false
 	for _, u := range updates {
-		if u.Code == "rev123" && u.Update.Mode != nil && *u.Update.Mode == "term" {
+		if u.Code == "rev123" && u.Update.Mode != nil && *u.Update.Mode == "terminal" {
 			found = true
 			break
 		}
 	}
-	assert.True(t, found, "expected mode revert to term, got %+v", updates)
+	assert.True(t, found, "expected mode revert to terminal, got %+v", updates)
 }
 
 // --- handleCliBridgeSubscribe tests ---
@@ -346,7 +346,7 @@ func TestCliBridgeSubscribe_ReceivesRelayedMessages(t *testing.T) {
 
 func TestHandoff_NilBody_Returns400(t *testing.T) {
 	_, _, srv := setupStreamModule(t, map[string]*session.SessionInfo{
-		"hnd123": {Code: "hnd123", Name: "handoff-sess", Mode: "term"},
+		"hnd123": {Code: "hnd123", Name: "handoff-sess", Mode: "terminal"},
 	})
 
 	resp, err := http.Post(srv.URL+"/api/sessions/hnd123/handoff", "application/json", nil)

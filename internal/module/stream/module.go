@@ -11,7 +11,7 @@ import (
 	"github.com/wake/tmux-box/internal/module/session"
 )
 
-// StreamModule manages stream/jsonl mode data pipelines:
+// StreamModule manages stream mode data pipelines:
 // relay connection management, SPA subscriber fan-out, and mode switching.
 type StreamModule struct {
 	core     *core.Core

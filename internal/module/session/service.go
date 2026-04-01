@@ -38,7 +38,7 @@ func (m *SessionModule) ListSessions() ([]SessionInfo, error) {
 			TmuxID: s.ID,
 			Name:   s.Name,
 			Exists: true,
-			Mode:   "term", // default
+			Mode:   "terminal", // default
 			Cwd:    s.Cwd,
 		}
 
@@ -78,7 +78,7 @@ func (m *SessionModule) GetSession(code string) (*SessionInfo, error) {
 				TmuxID: s.ID,
 				Name:   s.Name,
 				Exists: true,
-				Mode:   "term",
+				Mode:   "terminal",
 				Cwd:    s.Cwd,
 			}
 

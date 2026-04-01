@@ -181,10 +181,10 @@ func (m *MetaStore) CleanOrphans(liveTmuxIDs []string) (int, error) {
 	return int(n), nil
 }
 
-// ResetStaleModes resets all sessions with a non-'term' mode back to 'term'.
+// ResetStaleModes resets all sessions with a non-'terminal' mode back to 'terminal'.
 // Called on daemon startup to clear modes that were active when the daemon last stopped.
 func (m *MetaStore) ResetStaleModes() error {
-	_, err := m.db.Exec("UPDATE session_meta SET mode = 'term' WHERE mode != 'term'")
+	_, err := m.db.Exec("UPDATE session_meta SET mode = 'terminal' WHERE mode != 'terminal'")
 	return err
 }
 
