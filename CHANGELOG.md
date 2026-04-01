@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.39] - 2026-04-02
+
+Unify session mode naming + remove JSONL mode (PR #151)
+
+### 重構
+
+- **Mode 命名統一** — Daemon 和 SPA 統一使用 `"terminal"` / `"stream"`（原 daemon 回傳 `"term"`，導致 StatusBar 顯示不一致）
+- **移除 JSONL session mode** — 移除未使用的 JSONL mode（`JSONLConfig`、jsonl preset、jsonl icon），保留 CC 歷史記錄 `.jsonl` 檔案格式解析
+- **DDL schema 同步** — SQLite `DEFAULT 'term'` → `'terminal'`
+- **升級遷移** — `ResetStaleModes()` 啟動時自動將舊的 `"term"` / `"jsonl"` 記錄遷移為 `"terminal"`
+
+### 清理
+
+- **刪除 TopBar** — Phase 1 遺留的 deprecated 元件（已被 TabBar + StatusBar 取代，無任何引用）
+
 ## [1.0.0-alpha.38] - 2026-03-31
 
 Host Page UI + Multi-Host Integration — Phase 1.6c C+D (PR #136)
