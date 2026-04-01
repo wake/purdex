@@ -52,7 +52,7 @@ export function useMultiHostEventWs() {
               useSessionStore.getState().fetchHost(hostId, daemonBase).then(() => {
                 const sess = (useSessionStore.getState().sessions[hostId] ?? [])
                   .find((s) => s.code === event.session)
-                if (sess && sess.mode !== 'term') {
+                if (sess && sess.mode !== 'terminal') {
                   fetchHistory(daemonBase, sess.code).then((msgs) => {
                     useStreamStore.getState().loadHistory(hostId, event.session, msgs)
                   }).catch(() => {})

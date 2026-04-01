@@ -12,7 +12,7 @@ import (
 	"github.com/wake/tmux-box/internal/module/session"
 )
 
-// runHandoff executes the handoff-to-stream/jsonl sequence asynchronously:
+// runHandoff executes the handoff-to-stream sequence asynchronously:
 //  1. Disconnect existing relay if present (send shutdown, wait 5s)
 //  2. Prepare pane (exit copy-mode, Escape, C-c)
 //  3. Detect CC status — must be running (not normal/not-in-cc)
@@ -32,12 +32,12 @@ func (m *StreamModule) runHandoff(sess session.SessionInfo, code, mode, command,
 	target := sess.Name + ":0"
 
 	// Step 1: Disconnect existing relay if present.
-	// Pre-update mode to "term" so handleCliBridge's defer (revertModeOnRelayDisconnect)
-	// sees mode=="term" and skips the spurious "failed:relay disconnected" broadcast.
+	// Pre-update mode to "terminal" so handleCliBridge's defer (revertModeOnRelayDisconnect)
+	// sees mode=="terminal" and skips the spurious "failed:relay disconnected" broadcast.
 	// Step 9 will set the correct mode after relay connects successfully.
 	if m.bridge.HasRelay(code) {
-		if sess.Mode != "term" {
-			termMode := "term"
+		if sess.Mode != "terminal" {
+			termMode := "terminal"
 			if err := m.sessions.UpdateMeta(code, session.MetaUpdate{Mode: &termMode}); err != nil {
 				broadcast("failed:meta pre-update error: " + err.Error())
 				return
@@ -145,7 +145,7 @@ func (m *StreamModule) runHandoff(sess session.SessionInfo, code, mode, command,
 
 // runHandoffToTerm handles the handoff from stream back to interactive terminal mode:
 //  1. Get CCSessionID from session info
-//  2. Pre-update mode to "term" (prevents spurious revert on relay disconnect)
+//  2. Pre-update mode to "terminal" (prevents spurious revert on relay disconnect)
 //  3. Shutdown relay (send shutdown, wait 5s)
 //  4. Wait for shell (detect StatusNormal, 10s timeout)
 //  5. Launch claude --resume via SendKeys
@@ -169,10 +169,10 @@ func (m *StreamModule) runHandoffToTerm(sess session.SessionInfo, code, handoffI
 	}
 	origMode := sess.Mode
 
-	// Step 2: Pre-update mode to "term" before shutting down relay.
+	// Step 2: Pre-update mode to "terminal" before shutting down relay.
 	// This prevents revertModeOnRelayDisconnect from firing a spurious
 	// "failed:relay disconnected" event during an intentional handoff.
-	termMode := "term"
+	termMode := "terminal"
 	if err := m.sessions.UpdateMeta(code, session.MetaUpdate{Mode: &termMode}); err != nil {
 		broadcast("failed:meta pre-update error: " + err.Error())
 		return
@@ -234,7 +234,7 @@ func (m *StreamModule) runHandoffToTerm(sess session.SessionInfo, code, handoffI
 		return
 	}
 
-	// Step 7: Clear cc_session_id (mode already set to "term" above).
+	// Step 7: Clear cc_session_id (mode already set to "terminal" above).
 	// At this point, CC is already running in terminal mode — the handoff
 	// functionally succeeded. Only the cleanup (clearing cc_session_id) remains,
 	// so we log any error instead of broadcasting failure.

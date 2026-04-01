@@ -39,7 +39,7 @@ func TestListSessionsMergesMeta(t *testing.T) {
 
 	// Second session should have default mode
 	assert.Equal(t, "prod", sessions[1].Name)
-	assert.Equal(t, "term", sessions[1].Mode)
+	assert.Equal(t, "terminal", sessions[1].Mode)
 	assert.NotEmpty(t, sessions[1].Code)
 }
 
@@ -99,7 +99,7 @@ func TestUpdateMeta(t *testing.T) {
 	// Ensure meta exists first
 	require.NoError(t, meta.SetMeta("$0", store.SessionMeta{
 		TmuxID: "$0",
-		Mode:   "term",
+		Mode:   "terminal",
 	}))
 
 	// Get code
@@ -220,7 +220,7 @@ func TestHandlerCreateSession(t *testing.T) {
 	err := json.NewDecoder(w.Body).Decode(&info)
 	require.NoError(t, err)
 	assert.Equal(t, "new-session", info.Name)
-	assert.Equal(t, "term", info.Mode)
+	assert.Equal(t, "terminal", info.Mode)
 	assert.NotEmpty(t, info.Code)
 
 	// Verify session exists via ListSessions

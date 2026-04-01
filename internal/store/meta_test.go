@@ -20,14 +20,14 @@ func TestMetaStoreGetSetDelete(t *testing.T) {
 	assert.Empty(t, metas)
 
 	// Set meta
-	err = ms.SetMeta("$0", store.SessionMeta{Mode: "term"})
+	err = ms.SetMeta("$0", store.SessionMeta{Mode: "terminal"})
 	require.NoError(t, err)
 
 	// Get meta
 	meta, err := ms.GetMeta("$0")
 	require.NoError(t, err)
 	require.NotNil(t, meta)
-	assert.Equal(t, "term", meta.Mode)
+	assert.Equal(t, "terminal", meta.Mode)
 
 	// Update meta
 	mode := "stream"
@@ -58,9 +58,9 @@ func TestMetaStoreCleanOrphans(t *testing.T) {
 	ms, err := store.OpenMeta(":memory:")
 	require.NoError(t, err)
 	defer ms.Close()
-	ms.SetMeta("$0", store.SessionMeta{Mode: "term"})
+	ms.SetMeta("$0", store.SessionMeta{Mode: "terminal"})
 	ms.SetMeta("$1", store.SessionMeta{Mode: "stream"})
-	ms.SetMeta("$2", store.SessionMeta{Mode: "term"})
+	ms.SetMeta("$2", store.SessionMeta{Mode: "terminal"})
 	removed, err := ms.CleanOrphans([]string{"$0", "$2"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, removed)
@@ -74,7 +74,7 @@ func TestMetaStoreCleanOrphansEmptySlice(t *testing.T) {
 	defer ms.Close()
 
 	// Populate some meta
-	ms.SetMeta("$0", store.SessionMeta{Mode: "term", CCSessionID: "abc"})
+	ms.SetMeta("$0", store.SessionMeta{Mode: "terminal", CCSessionID: "abc"})
 	ms.SetMeta("$1", store.SessionMeta{Mode: "stream", CCSessionID: "def"})
 
 	// Empty liveTmuxIDs means tmux unavailable — should NOT delete anything
@@ -94,7 +94,7 @@ func TestMetaStoreCleanOrphansNilSlice(t *testing.T) {
 	require.NoError(t, err)
 	defer ms.Close()
 
-	ms.SetMeta("$0", store.SessionMeta{Mode: "term"})
+	ms.SetMeta("$0", store.SessionMeta{Mode: "terminal"})
 
 	// nil also means tmux unavailable
 	removed, err := ms.CleanOrphans(nil)
@@ -110,14 +110,14 @@ func TestMetaStoreResetStaleModes(t *testing.T) {
 	require.NoError(t, err)
 	defer ms.Close()
 	ms.SetMeta("$0", store.SessionMeta{Mode: "stream"})
-	ms.SetMeta("$1", store.SessionMeta{Mode: "jsonl"})
-	ms.SetMeta("$2", store.SessionMeta{Mode: "term"})
+	ms.SetMeta("$1", store.SessionMeta{Mode: "term"})
+	ms.SetMeta("$2", store.SessionMeta{Mode: "jsonl"})
 	err = ms.ResetStaleModes()
 	require.NoError(t, err)
 	m0, _ := ms.GetMeta("$0")
 	m1, _ := ms.GetMeta("$1")
 	m2, _ := ms.GetMeta("$2")
-	assert.Equal(t, "term", m0.Mode)
-	assert.Equal(t, "term", m1.Mode)
-	assert.Equal(t, "term", m2.Mode)
+	assert.Equal(t, "terminal", m0.Mode)
+	assert.Equal(t, "terminal", m1.Mode)
+	assert.Equal(t, "terminal", m2.Mode)
 }

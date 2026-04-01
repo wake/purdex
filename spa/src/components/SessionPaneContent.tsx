@@ -42,7 +42,7 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
     if (!session) return
     try {
       useStreamStore.getState().setHandoffProgress(hostId, session.code, 'starting')
-      await handoff(daemonBase, session.code, 'term')
+      await handoff(daemonBase, session.code, 'terminal')
       await fetchHost(hostId, daemonBase)
     } catch (e) {
       console.error('Handoff to term failed:', e)

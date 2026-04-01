@@ -44,7 +44,6 @@ beforeEach(() => {
       port: 7860,
       terminal: { sizing_mode: 'auto' },
       stream: { presets: [] },
-      jsonl: { presets: [] },
       detect: { cc_commands: ['claude'], poll_interval: 5 },
     }),
   } as Response)

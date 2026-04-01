@@ -74,10 +74,6 @@ command = "claude -p --input-format stream-json --output-format stream-json"
 name = "dangerous"
 command = "claude -p --input-format stream-json --output-format stream-json --dangerously-skip-permissions"
 
-[[jsonl.presets]]
-name = "cc"
-command = ""
-
 [detect]
 cc_commands = ["claude", "cld"]
 poll_interval = 3

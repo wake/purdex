@@ -87,7 +87,7 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 			// Set initial meta
 			if err := m.meta.SetMeta(s.ID, store.SessionMeta{
 				TmuxID: s.ID,
-				Mode:   "term",
+				Mode:   "terminal",
 				Cwd:    req.Cwd,
 			}); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -99,7 +99,7 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 				TmuxID: s.ID,
 				Name:   s.Name,
 				Exists: true,
-				Mode:   "term",
+				Mode:   "terminal",
 				Cwd:    req.Cwd,
 			}
 			break
@@ -202,10 +202,10 @@ func (m *SessionModule) handleSwitchMode(w http.ResponseWriter, r *http.Request)
 
 	// Validate mode
 	switch req.Mode {
-	case "term", "stream", "jsonl":
+	case "terminal", "stream":
 		// valid
 	default:
-		http.Error(w, "invalid mode: must be term, stream, or jsonl", http.StatusBadRequest)
+		http.Error(w, "invalid mode: must be terminal or stream", http.StatusBadRequest)
 		return
 	}
 

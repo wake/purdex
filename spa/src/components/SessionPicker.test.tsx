@@ -5,7 +5,7 @@ import { SessionPicker } from './SessionPicker'
 import type { Session } from '../lib/api'
 
 const mockSessions: Session[] = [
-  { code: 'abc001', name: 'dev-server', mode: 'term', cwd: '/home', cc_session_id: '', cc_model: '', has_relay: false },
+  { code: 'abc001', name: 'dev-server', mode: 'terminal', cwd: '/home', cc_session_id: '', cc_model: '', has_relay: false },
   { code: 'def002', name: 'claude-code', mode: 'stream', cwd: '/home', cc_session_id: '', cc_model: '', has_relay: true },
 ]
 
@@ -49,7 +49,7 @@ describe('SessionPicker', () => {
       />,
     )
     fireEvent.click(screen.getByText('dev-server'))
-    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ name: 'dev-server', mode: 'term' }))
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ name: 'dev-server', mode: 'terminal' }))
   })
 
   it('filters sessions by search text', () => {

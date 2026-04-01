@@ -17,10 +17,6 @@ type StreamConfig struct {
 	Presets []Preset `toml:"presets" json:"presets"`
 }
 
-type JSONLConfig struct {
-	Presets []Preset `toml:"presets" json:"presets"`
-}
-
 type DetectConfig struct {
 	CCCommands   []string `toml:"cc_commands"   json:"cc_commands"`
 	PollInterval int      `toml:"poll_interval" json:"poll_interval"`
@@ -56,7 +52,6 @@ type Config struct {
 	AllowedPaths []string       `toml:"allowed_paths"  json:"allowed_paths"`
 	Terminal     TerminalConfig `toml:"terminal"       json:"terminal"`
 	Stream       StreamConfig   `toml:"stream"         json:"stream"`
-	JSONL        JSONLConfig    `toml:"jsonl"          json:"jsonl"`
 	Detect       DetectConfig   `toml:"detect"         json:"detect"`
 	Features     FeaturesConfig `toml:"features"       json:"features"`
 	Dev          DevConfig      `toml:"dev"            json:"dev"`

@@ -168,25 +168,22 @@ func (m *StreamModule) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate mode
-	if req.Mode != "stream" && req.Mode != "jsonl" && req.Mode != "term" {
-		http.Error(w, "mode must be stream, jsonl, or term", http.StatusBadRequest)
+	if req.Mode != "stream" && req.Mode != "terminal" {
+		http.Error(w, "mode must be stream or terminal", http.StatusBadRequest)
 		return
 	}
 
 	// Snapshot config under read lock
 	m.core.CfgMu.RLock()
 	presets := m.core.Cfg.Stream.Presets
-	if req.Mode == "jsonl" {
-		presets = m.core.Cfg.JSONL.Presets
-	}
 	token := m.core.Cfg.Token
 	port := m.core.Cfg.Port
 	bind := m.core.Cfg.Bind
 	m.core.CfgMu.RUnlock()
 
-	// Find preset command (required for stream/jsonl, not for term)
+	// Find preset command (required for stream, not for terminal)
 	var command string
-	if req.Mode != "term" {
+	if req.Mode != "terminal" {
 		for _, p := range presets {
 			if p.Name == req.Preset {
 				command = p.Command
@@ -214,7 +211,7 @@ func (m *StreamModule) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"handoff_id": handoffID})
 
 	// Dispatch async goroutine
-	if req.Mode == "term" {
+	if req.Mode == "terminal" {
 		go m.runHandoffToTerm(*sess, code, handoffID)
 	} else {
 		go m.runHandoff(*sess, code, req.Mode, command, handoffID, token, port, bind)
@@ -263,15 +260,15 @@ func (m *StreamModule) captureInitMetadata(code string, msg []byte, captured *bo
 	}
 }
 
-// revertModeOnRelayDisconnect reverts the session mode to "term" when a relay
+// revertModeOnRelayDisconnect reverts the session mode to "terminal" when a relay
 // disconnects, preventing sessions from being stuck in stream mode.
 func (m *StreamModule) revertModeOnRelayDisconnect(code string) {
 	sess, err := m.sessions.GetSession(code)
 	if err != nil || sess == nil {
 		return
 	}
-	if sess.Mode != "term" {
-		termMode := "term"
+	if sess.Mode != "terminal" {
+		termMode := "terminal"
 		if err := m.sessions.UpdateMeta(code, session.MetaUpdate{Mode: &termMode}); err != nil {
 			log.Printf("stream: mode revert error for %s: %v", code, err)
 		}
