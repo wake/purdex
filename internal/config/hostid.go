@@ -4,11 +4,22 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 )
+
+// GetTmuxInstance returns the tmux server's "pid:startTime" identifier.
+// Returns empty string if tmux is not running.
+func GetTmuxInstance() string {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{pid}:#{start_time}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
 
 // EnsureHostID generates a stable host ID if not already set, persists it to the
 // config file, and updates cfg.HostID in place. Format: "hostname:6-char-code".
