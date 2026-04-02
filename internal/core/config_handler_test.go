@@ -84,11 +84,12 @@ func TestPutConfigUpdatesStreamAndPersists(t *testing.T) {
 	assert.Equal(t, "new-cmd", c.Cfg.Stream.Presets[0].Command)
 	c.CfgMu.RUnlock()
 
-	// Verify response has redacted token
+	// Verify response has redacted sensitive fields
 	var got config.Config
 	err = json.NewDecoder(rec.Body).Decode(&got)
 	require.NoError(t, err)
-	assert.Empty(t, got.Token)
+	assert.Empty(t, got.Token, "PUT response should redact token")
+	assert.Empty(t, got.HostID, "PUT response should redact host_id")
 	assert.Equal(t, "new", got.Stream.Presets[0].Name)
 
 	// Verify file was written

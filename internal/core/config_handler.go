@@ -100,6 +100,7 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg.Token = ""
+	cfg.HostID = ""
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cfg)
 }
