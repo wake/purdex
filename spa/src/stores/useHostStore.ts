@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 /* ─── Interfaces ─── */
 
@@ -152,32 +153,9 @@ export const useHostStore = create<HostState>()(
       reset: () => set(createDefaultState()),
     }),
     {
-      name: 'tbox-hosts',
+      name: STORAGE_KEYS.HOSTS,
+      storage: purdexStorage,
       version: 1,
-      migrate: (persisted: any, version: number) => {
-        if (version === 0 || version === undefined) {
-          // v0 → v1: address→ip, fixed 'local' key → keep as-is but restructure
-          const oldHosts = persisted?.hosts ?? {}
-          const newHosts: Record<string, any> = {}
-          const hostOrder: string[] = []
-          let order = 0
-          for (const [id, host] of Object.entries(oldHosts) as any[]) {
-            newHosts[id] = {
-              id,
-              name: host.name ?? 'Host',
-              ip: host.address ?? host.ip ?? '127.0.0.1',
-              port: host.port ?? 7860,
-              token: host.token,
-              order: order++,
-            }
-            hostOrder.push(id)
-          }
-          // If empty, let createDefaultState handle it
-          if (hostOrder.length === 0) return {}
-          return { hosts: newHosts, hostOrder, activeHostId: hostOrder[0] }
-        }
-        return persisted
-      },
       partialize: (state) => ({
         hosts: state.hosts,
         hostOrder: state.hostOrder,
@@ -186,3 +164,5 @@ export const useHostStore = create<HostState>()(
     },
   ),
 )
+
+syncManager.register(STORAGE_KEYS.HOSTS, useHostStore)

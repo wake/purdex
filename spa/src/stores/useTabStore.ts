@@ -4,7 +4,7 @@ import type { Tab, PaneContent } from '../types/tab'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, findPane, updatePaneInLayout } from '../lib/pane-tree'
 import { contentMatches } from '../lib/pane-utils'
-import { useHostStore } from './useHostStore'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 interface TabState {
   tabs: Record<string, Tab>
@@ -22,16 +22,6 @@ interface TabState {
   reorderTabs: (order: string[]) => void
   togglePin: (id: string) => void
   toggleLock: (id: string) => void
-}
-
-function addHostIdToLayout(layout: any, hostId: string) {
-  if (!layout) return
-  if (layout.type === 'leaf' && layout.pane?.content?.kind === 'session' && !layout.pane.content.hostId) {
-    layout.pane.content.hostId = hostId
-  }
-  if (layout.type === 'split' && Array.isArray(layout.children)) {
-    layout.children.forEach((child: any) => addHostIdToLayout(child, hostId))
-  }
 }
 
 export const useTabStore = create<TabState>()(
@@ -145,23 +135,9 @@ export const useTabStore = create<TabState>()(
         }),
     }),
     {
-      name: 'tbox-v2-tabs',
-      version: 2,
-      migrate: (persisted: any, version: number) => {
-        if (version < 2) {
-          // v1 → v2: add hostId to session PaneContent
-          let defaultHostId = 'local'
-          try {
-            defaultHostId = useHostStore.getState().hostOrder[0] ?? 'local'
-          } catch { /* hostStore not yet initialized */ }
-          const tabs = persisted?.tabs ?? {}
-          for (const tab of Object.values(tabs) as any[]) {
-            addHostIdToLayout(tab?.layout, defaultHostId)
-          }
-          return { ...persisted, tabs }
-        }
-        return persisted
-      },
+      name: STORAGE_KEYS.TABS,
+      storage: purdexStorage,
+      version: 1,
       partialize: (state) => ({
         tabs: state.tabs,
         tabOrder: state.tabOrder,
@@ -170,3 +146,5 @@ export const useTabStore = create<TabState>()(
     },
   ),
 )
+
+syncManager.register(STORAGE_KEYS.TABS, useTabStore)

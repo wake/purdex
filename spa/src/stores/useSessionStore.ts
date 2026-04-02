@@ -2,7 +2,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { type Session, listSessions } from '../lib/api'
-import { useHostStore } from './useHostStore'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 interface SessionState {
   sessions: Record<string, Session[]> // hostId → sessions
@@ -40,31 +40,15 @@ export const useSessionStore = create<SessionState>()(
       setActive: (hostId, code) => set({ activeHostId: hostId, activeCode: code }),
     }),
     {
-      name: 'tbox-sessions',
-      version: 2,
+      name: STORAGE_KEYS.SESSIONS,
+      storage: purdexStorage,
+      version: 1,
       partialize: (state) => ({
         activeHostId: state.activeHostId,
         activeCode: state.activeCode,
       }),
-      migrate: (persisted, version) => {
-        if (version < 2) {
-          const old = persisted as Record<string, unknown>
-          // Defensive: hostStore may not have hydrated yet
-          let defaultHostId = 'local'
-          try {
-            const hostState = useHostStore.getState()
-            if (hostState.hostOrder.length > 0) {
-              defaultHostId = hostState.hostOrder[0]
-            }
-          } catch { /* hostStore not yet initialized */ }
-          return {
-            sessions: {},
-            activeHostId: defaultHostId,
-            activeCode: (old.activeId as string) ?? null,
-          }
-        }
-        return persisted
-      },
     },
   ),
 )
+
+syncManager.register(STORAGE_KEYS.SESSIONS, useSessionStore)
