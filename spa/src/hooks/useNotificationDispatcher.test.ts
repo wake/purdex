@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { shouldNotify, shouldDispatch, clearSeenTs } from './useNotificationDispatcher'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
+import { STORAGE_KEYS } from '../lib/storage'
 
 const defaultSettings: NotificationSettings = {
   enabled: true, events: {}, notifyWithoutTab: false, reopenTabOnClick: false,
@@ -54,7 +55,7 @@ describe('shouldNotify', () => {
 
 describe('shouldDispatch', () => {
   beforeEach(() => {
-    localStorage.removeItem('tbox-notification-seen')
+    localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN)
   })
 
   it('returns false for new session (sentinel Infinity) but records ts', () => {
