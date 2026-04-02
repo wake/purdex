@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0-alpha.40] - 2026-04-03
+
+Storage 抽象層 + Key 遷移 — Phase 1a (PR #152)
+
+### 新功能
+
+- **Storage 抽象層** — 新增 `spa/src/lib/storage/` 模組，以 Zustand `StateStorage` 介面為基礎建立可替換的 storage backend
+- **BrowserBackend** — localStorage 包裝 + BroadcastChannel 跨 tab 狀態同步
+- **STORAGE_KEYS 常數** — 11 個 localStorage key 的 single source of truth
+
+### 重構
+
+- **Key 遷移** — 所有 10 個 persist store 的 key 從 `tbox-*` → `purdex-*`，統一使用 `STORAGE_KEYS` 常數
+- **移除死碼 migrate** — useHostStore（v0→v1）、useSessionStore（v1→v2）、useTabStore（v1→v2）的 migrate 函式及 `addHostIdToLayout` helper（-92 行）
+- **Version 統一** — 所有 store 重設為 `version: 1`
+
+### 修復
+
+- **Rehydration 迴圈** — `browserStorage.setItem` 加入 equality check，防止 `onRehydrateStorage` callback 觸發無限 BroadcastChannel ping-pong
+- **BC null guard** — `sync.ts` onmessage 加入型別檢查，防止非預期訊息格式導致 TypeError
+
+### Breaking Changes
+
+- 所有 localStorage key 更名（alpha 階段不向下相容），升級後本地 persist 資料重置
+
 ## [1.0.0-alpha.39] - 2026-04-02
 
 Unify session mode naming + remove JSONL mode (PR #151)
