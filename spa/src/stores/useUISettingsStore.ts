@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 export type TerminalRenderer = 'webgl' | 'dom'
 
@@ -53,6 +54,8 @@ export const useUISettingsStore = create<UISettings>()(
       terminalSettingsVersion: 0,
       bumpTerminalSettingsVersion: () => set((s) => ({ terminalSettingsVersion: s.terminalSettingsVersion + 1 })),
     }),
-    { name: 'tbox-ui-settings' },
+    { name: STORAGE_KEYS.UI_SETTINGS, storage: purdexStorage, version: 1 },
   ),
 )
+
+syncManager.register(STORAGE_KEYS.UI_SETTINGS, useUISettingsStore)

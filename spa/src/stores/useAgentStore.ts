@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { getActiveSessionInfo } from '../lib/active-session'
 import { compositeKey } from '../lib/composite-key'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 export type AgentStatus = 'running' | 'waiting' | 'idle' | 'error'
 export type TabIndicatorStyle = 'overlay' | 'replace' | 'inline'
@@ -190,8 +191,12 @@ export const useAgentStore = create<AgentState>()(
       setHooksInstalled: (installed) => set({ hooksInstalled: installed }),
     }),
     {
-      name: 'tbox-agent',
+      name: STORAGE_KEYS.AGENT,
+      storage: purdexStorage,
+      version: 1,
       partialize: (state) => ({ tabIndicatorStyle: state.tabIndicatorStyle }),
     },
   ),
 )
+
+syncManager.register(STORAGE_KEYS.AGENT, useAgentStore)

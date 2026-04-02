@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import { useSessionStore } from './useSessionStore'
 import { useHostStore } from './useHostStore'
+import { STORAGE_KEYS } from '../lib/storage'
 
 const MOCK_SESSIONS = [
   { code: 'abc123', name: 'test', cwd: '/tmp', mode: 'terminal' as const, cc_session_id: '', cc_model: '', has_relay: false },
@@ -107,7 +108,7 @@ describe('useSessionStore', () => {
     act(() => {
       result.current.setActive(HOST_ID, 'abc123')
     })
-    const stored = JSON.parse(localStorage.getItem('tbox-sessions') || '{}')
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.SESSIONS) || '{}')
     expect(stored.state?.activeHostId).toBe(HOST_ID)
     expect(stored.state?.activeCode).toBe('abc123')
   })
@@ -117,7 +118,7 @@ describe('useSessionStore', () => {
     act(() => {
       result.current.replaceHost(HOST_ID, MOCK_SESSIONS)
     })
-    const stored = JSON.parse(localStorage.getItem('tbox-sessions') || '{}')
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.SESSIONS) || '{}')
     expect(stored.state?.sessions).toBeUndefined()
   })
 })
