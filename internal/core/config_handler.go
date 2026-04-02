@@ -10,14 +10,15 @@ import (
 	"github.com/wake/tmux-box/internal/config"
 )
 
-// handleGetConfig returns the current config as JSON with the token field redacted.
+// handleGetConfig returns the current config as JSON with sensitive fields redacted.
 func (c *Core) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.RLock()
 	defer c.CfgMu.RUnlock()
 
-	// Shallow copy to redact token; encode under lock to avoid slice race
+	// Shallow copy to redact sensitive fields; encode under lock to avoid slice race
 	cfg := *c.Cfg
 	cfg.Token = ""
+	cfg.HostID = ""
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cfg)
