@@ -33,8 +33,9 @@ func EnsureHostID(cfg *Config, cfgPath string) (string, error) {
 	code := randomCode(6)
 	cfg.HostID = hostname + ":" + code
 
-	if err := persistConfig(cfgPath, *cfg); err != nil {
-		return cfg.HostID, fmt.Errorf("persist host_id: %w", err)
+	if err := WriteFile(cfgPath, *cfg); err != nil {
+		cfg.HostID = "" // rollback — don't use unstable ID
+		return "", fmt.Errorf("persist host_id: %w", err)
 	}
 	return cfg.HostID, nil
 }
@@ -60,7 +61,8 @@ func randomCode(n int) string {
 	return string(buf)
 }
 
-func persistConfig(path string, cfg Config) error {
+// WriteFile serialises the config to TOML and writes it to the given path atomically.
+func WriteFile(path string, cfg Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}

@@ -59,6 +59,21 @@ func TestEnsureHostID_PreservesExisting(t *testing.T) {
 	}
 }
 
+func TestEnsureHostID_RollbackOnPersistFailure(t *testing.T) {
+	cfg := config.Config{DataDir: "/nonexistent"}
+	// Use a path that will fail (unwritable root-level directory)
+	id, err := config.EnsureHostID(&cfg, "/nonexistent/deep/nested/config.toml")
+	if err == nil {
+		t.Fatal("expected error for unwritable path")
+	}
+	if id != "" {
+		t.Fatalf("expected empty id on failure, got %q", id)
+	}
+	if cfg.HostID != "" {
+		t.Fatalf("expected HostID rolled back to empty, got %q", cfg.HostID)
+	}
+}
+
 func TestEnsureHostID_AppendsToExistingConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

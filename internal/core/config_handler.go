@@ -4,9 +4,7 @@ package core
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 
-	"github.com/BurntSushi/toml"
 	"github.com/wake/tmux-box/internal/config"
 )
 
@@ -83,7 +81,7 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Write back to config file
 	if c.CfgPath != "" {
-		if err := writeConfig(c.CfgPath, *c.Cfg); err != nil {
+		if err := config.WriteFile(c.CfgPath, *c.Cfg); err != nil {
 			c.CfgMu.Unlock()
 			http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -105,21 +103,3 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(cfg)
 }
 
-// writeConfig serialises the config to TOML and writes it to the given path atomically.
-func writeConfig(path string, cfg config.Config) error {
-	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return err
-	}
-	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return os.Rename(tmp, path)
-}

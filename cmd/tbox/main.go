@@ -80,9 +80,10 @@ func runServe(args []string) {
 	}
 	hostID, err := config.EnsureHostID(&cfg, resolvedCfgPath)
 	if err != nil {
-		log.Printf("host_id: %v (continuing with generated ID)", err)
+		log.Printf("host_id: %v (running without stable host ID)", err)
+	} else {
+		log.Printf("host_id: %s", hostID)
 	}
-	log.Printf("host_id: %s", hostID)
 
 	// 2. Open MetaStore
 	meta, err := store.OpenMeta(filepath.Join(cfg.DataDir, "meta.db"))
