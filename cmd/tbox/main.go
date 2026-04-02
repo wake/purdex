@@ -73,6 +73,17 @@ func runServe(args []string) {
 		log.Fatalf("data dir: %v", err)
 	}
 
+	// 1b. Ensure stable host ID
+	resolvedCfgPath := *cfgPath
+	if resolvedCfgPath == "" {
+		resolvedCfgPath = filepath.Join(cfg.DataDir, "config.toml")
+	}
+	hostID, err := config.EnsureHostID(&cfg, resolvedCfgPath)
+	if err != nil {
+		log.Printf("host_id: %v (continuing with generated ID)", err)
+	}
+	log.Printf("host_id: %s", hostID)
+
 	// 2. Open MetaStore
 	meta, err := store.OpenMeta(filepath.Join(cfg.DataDir, "meta.db"))
 	if err != nil {
@@ -97,10 +108,6 @@ func runServe(args []string) {
 	})
 
 	// Set config path for persistence via PUT /api/config
-	resolvedCfgPath := *cfgPath
-	if resolvedCfgPath == "" {
-		resolvedCfgPath = filepath.Join(cfg.DataDir, "config.toml")
-	}
 	c.CfgPath = resolvedCfgPath
 
 	// 5. Add modules (order doesn't matter — topoSort handles dependencies)
