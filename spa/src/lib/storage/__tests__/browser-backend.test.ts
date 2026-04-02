@@ -43,4 +43,15 @@ describe('browserStorage', () => {
     browserStorage.removeItem('purdex-tabs')
     expect(syncManager.notify).toHaveBeenCalledWith('purdex-tabs')
   })
+
+  it('setItem does not write or notify when value is unchanged', () => {
+    localStorage.setItem('key', '"same"')
+    vi.clearAllMocks()
+
+    browserStorage.setItem('key', '"same"')
+
+    expect(syncManager.notify).not.toHaveBeenCalled()
+    // Verify localStorage value is still the same (no unnecessary write)
+    expect(localStorage.getItem('key')).toBe('"same"')
+  })
 })

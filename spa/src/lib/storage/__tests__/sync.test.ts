@@ -100,4 +100,19 @@ describe('createSyncManager', () => {
 
     expect(instances[0].close).toHaveBeenCalledOnce()
   })
+
+  it('incoming message with invalid data does not throw', async () => {
+    const { createSyncManager } = await import('../sync')
+    const manager = createSyncManager()
+    const store = { persist: { rehydrate: vi.fn() } }
+    manager.register('purdex-tabs', store)
+
+    // Should not throw
+    instances[0].onmessage!({ data: null } as MessageEvent)
+    instances[0].onmessage!({ data: {} } as MessageEvent)
+    instances[0].onmessage!({ data: 'garbage' } as MessageEvent)
+
+    expect(store.persist.rehydrate).not.toHaveBeenCalled()
+    manager.destroy()
+  })
 })

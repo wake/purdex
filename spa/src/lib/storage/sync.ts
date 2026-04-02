@@ -12,8 +12,9 @@ export function createSyncManager() {
     if (channel) return channel
     if (typeof BroadcastChannel === 'undefined') return null
     channel = new BroadcastChannel(CHANNEL_NAME)
-    channel.onmessage = (event: MessageEvent<{ key: string }>) => {
-      registry.get(event.data.key)?.persist.rehydrate()
+    channel.onmessage = (event: MessageEvent) => {
+      const key = (event.data as { key?: string })?.key
+      if (key) registry.get(key)?.persist.rehydrate()
     }
     return channel
   }

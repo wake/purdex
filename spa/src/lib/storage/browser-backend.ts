@@ -6,6 +6,8 @@ export const browserStorage: StateStorage = {
     return localStorage.getItem(name)
   },
   setItem(name: string, value: string) {
+    const prev = localStorage.getItem(name)
+    if (prev === value) return
     localStorage.setItem(name, value)
     syncManager.notify(name)
   },
