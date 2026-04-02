@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { registerTheme, unregisterTheme, getTheme, getAllThemes } from '../lib/theme-registry'
 import type { ThemeDefinition } from '../lib/theme-registry'
 import type { ThemeTokens } from '../lib/theme-tokens'
@@ -103,7 +104,9 @@ export const useThemeStore = create<ThemeState>()(
       },
     }),
     {
-      name: 'tbox-themes',
+      name: STORAGE_KEYS.THEMES,
+      storage: purdexStorage,
+      version: 1,
       partialize: (state) => ({
         activeThemeId: state.activeThemeId,
         customThemes: state.customThemes,
@@ -122,3 +125,5 @@ export const useThemeStore = create<ThemeState>()(
     },
   ),
 )
+
+syncManager.register(STORAGE_KEYS.THEMES, useThemeStore)

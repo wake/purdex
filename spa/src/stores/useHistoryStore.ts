@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Tab, PaneContent } from '../types/tab'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 // === Types ===
 
@@ -95,8 +96,11 @@ export const useHistoryStore = create<HistoryState>()(
       },
     }),
     {
-      name: 'tbox-v2-history',
+      name: STORAGE_KEYS.HISTORY,
+      storage: purdexStorage,
       version: 1,
     },
   ),
 )
+
+syncManager.register(STORAGE_KEYS.HISTORY, useHistoryStore)

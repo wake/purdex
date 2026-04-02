@@ -1,6 +1,7 @@
 // spa/src/stores/useNotificationSettingsStore.ts
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 export interface NotificationSettings {
   enabled: boolean
@@ -44,6 +45,8 @@ export const useNotificationSettingsStore = create<NotificationSettingsState>()(
       setNotifyWithoutTab: (agentType, value) => set((s) => ({ agents: updateAgent(s.agents, agentType, { notifyWithoutTab: value }) })),
       setReopenTabOnClick: (agentType, value) => set((s) => ({ agents: updateAgent(s.agents, agentType, { reopenTabOnClick: value }) })),
     }),
-    { name: 'tbox-notification-settings', partialize: (state) => ({ agents: state.agents }) },
+    { name: STORAGE_KEYS.NOTIFICATION_SETTINGS, storage: purdexStorage, version: 1, partialize: (state) => ({ agents: state.agents }) },
   ),
 )
+
+syncManager.register(STORAGE_KEYS.NOTIFICATION_SETTINGS, useNotificationSettingsStore)

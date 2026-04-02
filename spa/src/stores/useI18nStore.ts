@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { registerLocale, unregisterLocale, getLocale, getAllLocales } from '../lib/locale-registry'
 import type { LocaleDef } from '../lib/locale-registry'
 import { detectLocale } from '../lib/detect-locale'
@@ -103,7 +104,9 @@ export const useI18nStore = create<I18nState>()(
       },
     }),
     {
-      name: 'tbox-i18n',
+      name: STORAGE_KEYS.I18N,
+      storage: purdexStorage,
+      version: 1,
       partialize: (state) => ({
         activeLocaleId: state.activeLocaleId,
         customLocales: state.customLocales,
@@ -126,3 +129,5 @@ export const useI18nStore = create<I18nState>()(
     },
   ),
 )
+
+syncManager.register(STORAGE_KEYS.I18N, useI18nStore)

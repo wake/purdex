@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createWorkspace, type Workspace } from '../types/tab'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 interface WorkspaceState {
   workspaces: Workspace[]
@@ -87,7 +88,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       reset: () => set(createDefaultState()),
     }),
     {
-      name: 'tbox-v2-workspaces',
+      name: STORAGE_KEYS.WORKSPACES,
+      storage: purdexStorage,
       version: 1,
       partialize: (state) => ({
         workspaces: state.workspaces,
@@ -96,3 +98,5 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     },
   ),
 )
+
+syncManager.register(STORAGE_KEYS.WORKSPACES, useWorkspaceStore)
