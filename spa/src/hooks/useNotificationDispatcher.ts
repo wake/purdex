@@ -13,35 +13,34 @@ import { findTabBySessionCode, getPrimaryPane } from '../lib/pane-tree'
 import { getPlatformCapabilities } from '../lib/platform'
 import { useHostStore } from '../stores/useHostStore'
 import { createTab } from '../types/tab'
-
-const SEEN_KEY = 'tbox-notification-seen'
+import { STORAGE_KEYS } from '../lib/storage'
 
 /** Check if a notification should be dispatched based on broadcast_ts dedup.
  *  New sessions default to Infinity (sentinel), so their first event is recorded
  *  but not dispatched — prevents snapshot flooding on new/restarted clients. */
 export function shouldDispatch(sessionCode: string, broadcastTs: number): boolean {
-  const data: Record<string, number> = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}')
+  const data: Record<string, number> = JSON.parse(localStorage.getItem(STORAGE_KEYS.NOTIFICATION_SEEN) || '{}')
   const stored = data[sessionCode] ?? Infinity
 
   if (broadcastTs <= stored) {
     if (stored === Infinity) {
       data[sessionCode] = broadcastTs
-      localStorage.setItem(SEEN_KEY, JSON.stringify(data))
+      localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify(data))
     }
     return false
   }
 
   data[sessionCode] = broadcastTs
-  localStorage.setItem(SEEN_KEY, JSON.stringify(data))
+  localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify(data))
   return true
 }
 
 /** Remove a session's lastSeenTs entry (called on SessionEnd to prevent
  *  stale timestamps from blocking notifications if the code is reused). */
 export function clearSeenTs(sessionCode: string): void {
-  const data: Record<string, number> = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}')
+  const data: Record<string, number> = JSON.parse(localStorage.getItem(STORAGE_KEYS.NOTIFICATION_SEEN) || '{}')
   delete data[sessionCode]
-  localStorage.setItem(SEEN_KEY, JSON.stringify(data))
+  localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify(data))
 }
 
 interface ShouldNotifyParams {
