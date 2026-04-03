@@ -165,7 +165,8 @@ function handleNotificationClick(sessionCode: string): void {
     useTabStore.getState().setActiveTab(tabId)
     handled = true
   } else if (agentSettings.reopenTabOnClick) {
-    const newTab = createTab({ kind: 'session', hostId, sessionCode, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    const sessionName = useSessionStore.getState().sessions[hostId]?.find(s => s.code === sessionCode)?.name ?? ''
+    const newTab = createTab({ kind: 'session', hostId, sessionCode, mode: 'stream', cachedName: sessionName, tmuxInstance: '' })
     useTabStore.getState().addTab(newTab)
     useTabStore.getState().setActiveTab(newTab.id)
     const activeWorkspaceId = useWorkspaceStore.getState().activeWorkspaceId

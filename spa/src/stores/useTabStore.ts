@@ -147,7 +147,7 @@ export const useTabStore = create<TabState>()(
             if (c.kind === 'session' && c.hostId === hostId && c.sessionCode === sessionCode && c.cachedName !== cachedName) {
               tabs[id] = {
                 ...tab,
-                layout: { type: 'leaf', pane: { ...primary, content: { ...c, cachedName } } },
+                layout: updatePaneInLayout(tab.layout, primary.id, { ...c, cachedName }),
               }
               changed = true
             }

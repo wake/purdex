@@ -113,4 +113,14 @@ describe('useHostStore', () => {
     expect(useHostStore.getState().hosts['mlab:abc123']).toBeDefined()
     expect(useHostStore.getState().hosts['mlab:abc123'].name).toBe('Test')
   })
+
+  it('addHost with duplicate id returns existing id without adding duplicate', () => {
+    const state = useHostStore.getState()
+    state.addHost({ id: 'dup:test01', name: 'First', ip: '1.1.1.1', port: 7860 })
+    state.addHost({ id: 'dup:test01', name: 'Second', ip: '2.2.2.2', port: 7860 })
+
+    const updated = useHostStore.getState()
+    expect(updated.hostOrder.filter(id => id === 'dup:test01')).toHaveLength(1)
+    expect(updated.hosts['dup:test01'].name).toBe('First')
+  })
 })

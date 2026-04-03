@@ -74,6 +74,8 @@ export const useHostStore = create<HostState>()(
 
       addHost: (opts) => {
         const id = opts.id ?? generateId()
+        // Dedup: if host already exists, just return existing id
+        if (get().hosts[id]) return id
         const order = get().hostOrder.length
         const { id: _discardId, ...restOpts } = opts
         const host: HostConfig = { id, ...restOpts, order }
