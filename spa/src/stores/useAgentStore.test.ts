@@ -474,4 +474,43 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().activeSubagents[`${H}:staging`]).toBeUndefined()
     expect(useAgentStore.getState().activeSubagents['other-host:dev']).toEqual(['agent-C'])
   })
+
+  it('removeHost → clears all 4 fields for matching host, preserves others', () => {
+    useAgentStore.setState({
+      events: {
+        [`${H}:dev`]: { tmux_session: 'dev', event_name: 'Stop', raw_event: {}, agent_type: 'cc', broadcast_ts: 1 },
+        [`${H}:staging`]: { tmux_session: 'staging', event_name: 'Stop', raw_event: {}, agent_type: 'cc', broadcast_ts: 2 },
+        ['other-host:dev']: { tmux_session: 'dev', event_name: 'Stop', raw_event: {}, agent_type: 'cc', broadcast_ts: 3 },
+      },
+      statuses: {
+        [`${H}:dev`]: 'idle',
+        [`${H}:staging`]: 'running',
+        ['other-host:dev']: 'waiting',
+      },
+      unread: {
+        [`${H}:dev`]: true,
+        ['other-host:dev']: true,
+      },
+      activeSubagents: {
+        [`${H}:dev`]: ['agent-A'],
+        ['other-host:dev']: ['agent-B'],
+      },
+    })
+
+    useAgentStore.getState().removeHost(H)
+
+    const state = useAgentStore.getState()
+    // Host entries cleared
+    expect(state.events[`${H}:dev`]).toBeUndefined()
+    expect(state.events[`${H}:staging`]).toBeUndefined()
+    expect(state.statuses[`${H}:dev`]).toBeUndefined()
+    expect(state.statuses[`${H}:staging`]).toBeUndefined()
+    expect(state.unread[`${H}:dev`]).toBeUndefined()
+    expect(state.activeSubagents[`${H}:dev`]).toBeUndefined()
+    // Other host preserved
+    expect(state.events['other-host:dev']).toBeDefined()
+    expect(state.statuses['other-host:dev']).toBe('waiting')
+    expect(state.unread['other-host:dev']).toBe(true)
+    expect(state.activeSubagents['other-host:dev']).toEqual(['agent-B'])
+  })
 })
