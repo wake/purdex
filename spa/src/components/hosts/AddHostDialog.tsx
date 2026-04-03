@@ -20,6 +20,7 @@ export function AddHostDialog({ onClose }: Props) {
   const [stage, setStage] = useState<Stage>('idle')
   const [error, setError] = useState('')
   const [latency, setLatency] = useState<number | null>(null)
+  const [daemonHostId, setDaemonHostId] = useState<string | null>(null)
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -54,6 +55,14 @@ export function AddHostDialog({ onClose }: Props) {
 
       const sessionsRes = await fetch(`${base}/api/sessions`, { headers })
       if (sessionsRes.ok) {
+        // Fetch daemon info to get host_id
+        try {
+          const infoRes = await fetch(`${base}/api/info`, { headers })
+          if (infoRes.ok) {
+            const info = await infoRes.json()
+            if (info.host_id) setDaemonHostId(info.host_id)
+          }
+        } catch { /* non-critical — fall back to generated ID */ }
         setStage('success')
       } else if (sessionsRes.status === 401) {
         if (token) {
@@ -74,7 +83,8 @@ export function AddHostDialog({ onClose }: Props) {
 
   const handleSave = () => {
     addHost({
-      name: name.trim() || ip,
+      id: daemonHostId || undefined,
+      name: name.trim() || daemonHostId?.split(':')[0] || ip,
       ip,
       port: parseInt(port, 10) || 7860,
       token: token || undefined,
@@ -110,7 +120,7 @@ export function AddHostDialog({ onClose }: Props) {
               <label className="text-xs text-text-secondary block mb-1">{t('hosts.ip')} *</label>
               <input
                 value={ip}
-                onChange={(e) => { setIp(e.target.value); if (stage !== 'idle' && stage !== 'testing') setStage('idle') }}
+                onChange={(e) => { setIp(e.target.value); if (stage !== 'idle' && stage !== 'testing') { setStage('idle'); setDaemonHostId(null) } }}
                 placeholder="100.64.0.1"
                 className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono"
               />
@@ -119,7 +129,7 @@ export function AddHostDialog({ onClose }: Props) {
               <label className="text-xs text-text-secondary block mb-1">{t('hosts.port')}</label>
               <input
                 value={port}
-                onChange={(e) => { setPort(e.target.value); if (stage !== 'idle' && stage !== 'testing') setStage('idle') }}
+                onChange={(e) => { setPort(e.target.value); if (stage !== 'idle' && stage !== 'testing') { setStage('idle'); setDaemonHostId(null) } }}
                 placeholder="7860"
                 className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono"
               />
