@@ -1,7 +1,7 @@
-// spa/src/lib/session-events.ts
+// spa/src/lib/host-events.ts
 
-export interface SessionEvent {
-  type: 'handoff' | 'relay' | 'hook' | 'sessions'
+export interface HostEvent {
+  type: 'handoff' | 'relay' | 'hook' | 'sessions' | 'tmux'
   session: string
   value: string
 }
@@ -10,9 +10,9 @@ export interface EventConnection {
   close: () => void
 }
 
-export function connectSessionEvents(
+export function connectHostEvents(
   url: string,
-  onEvent: (event: SessionEvent) => void,
+  onEvent: (event: HostEvent) => void,
   onClose?: () => void,
   onOpen?: () => void,
   getTicket?: () => Promise<string>,
@@ -30,7 +30,6 @@ export function connectSessionEvents(
         u.searchParams.set('ticket', ticket)
         wsUrl = u.toString()
       } catch {
-        // Ticket fetch failed — retry after delay
         if (!closed) setTimeout(connect, retryMs)
         retryMs = Math.min(retryMs * 2, 30000)
         return
@@ -40,7 +39,7 @@ export function connectSessionEvents(
     ws.onopen = () => { retryMs = 1000; onOpen?.() }
     ws.onmessage = (e) => {
       try {
-        const event = JSON.parse(e.data) as SessionEvent
+        const event = JSON.parse(e.data) as HostEvent
         onEvent(event)
       } catch { /* ignore parse errors */ }
     }
@@ -48,7 +47,6 @@ export function connectSessionEvents(
     ws.onclose = () => {
       if (closed) return
       onClose?.()
-      // Reconnect with exponential backoff (max 30s)
       setTimeout(() => {
         if (!closed) connect()
       }, retryMs)

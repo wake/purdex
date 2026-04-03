@@ -1,11 +1,11 @@
-// spa/src/hooks/useMultiHostEventWs.ts — Multi-host session event WebSocket
+// spa/src/hooks/useMultiHostEventWs.ts — Multi-host event WebSocket
 import { useEffect } from 'react'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useTabStore } from '../stores/useTabStore'
-import { connectSessionEvents } from '../lib/session-events'
+import { connectHostEvents } from '../lib/host-events'
 import { hostWsUrl, fetchWsTicket } from '../lib/host-api'
 import { fetchHistory } from '../lib/api'
 import type { Session } from '../lib/api'
@@ -20,9 +20,9 @@ export function useMultiHostEventWs() {
 
     for (const hostId of hostOrder) {
       if (!hosts[hostId]) continue
-      const wsUrl = hostWsUrl(hostId, '/ws/session-events')
+      const wsUrl = hostWsUrl(hostId, '/ws/host-events')
 
-      const conn = connectSessionEvents(
+      const conn = connectHostEvents(
         wsUrl,
         (event) => {
           // Handle 'sessions' event (from session watcher)
