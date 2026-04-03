@@ -4,7 +4,7 @@ import { createTab } from '../types/tab'
 import type { PaneContent } from '../types/tab'
 
 function makeSessionTab(code: string, mode: 'terminal' | 'stream' = 'terminal') {
-  return createTab({ kind: 'session', hostId: 'test-host', sessionCode: code, mode })
+  return createTab({ kind: 'session', hostId: 'test-host', sessionCode: code, mode, cachedName: '', tmuxInstance: '' })
 }
 
 describe('useTabStore', () => {
@@ -93,7 +93,7 @@ describe('useTabStore', () => {
   })
 
   it('openSingletonTab always creates new tab for session (non-singleton)', () => {
-    const content: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' }
+    const content: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }
     const tab = createTab(content)
     useTabStore.getState().addTab(tab)
     const returnedId = useTabStore.getState().openSingletonTab(content)

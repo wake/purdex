@@ -93,6 +93,8 @@ export const useTabStore = create<TabState>()(
             hostId: pane.content.hostId,
             sessionCode: pane.content.sessionCode,
             mode,
+            cachedName: pane.content.cachedName,
+            tmuxInstance: pane.content.tmuxInstance,
           })
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),

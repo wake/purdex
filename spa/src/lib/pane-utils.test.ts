@@ -10,14 +10,14 @@ describe('contentMatches', () => {
   })
 
   it('returns false for session kind (sessions are never singletons)', () => {
-    const a: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' }
-    const b: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' }
+    const a: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }
+    const b: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }
     expect(contentMatches(a, b)).toBe(false)
   })
 
   it('returns false for session kind even with different codes', () => {
-    const a: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' }
-    const b: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev002', mode: 'stream' }
+    const a: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }
+    const b: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev002', mode: 'stream', cachedName: '', tmuxInstance: '' }
     expect(contentMatches(a, b)).toBe(false)
   })
 
