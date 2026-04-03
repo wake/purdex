@@ -118,6 +118,13 @@ function TokenField({ token, ip, port, onSave, t }: {
       setEditing(false)
       return
     }
+    // Empty token: skip validation, just save
+    if (!draft.trim()) {
+      setError('')
+      onSave(draft)
+      setEditing(false)
+      return
+    }
     // Validate token by testing /api/sessions with it
     setValidating(true)
     setError('')
