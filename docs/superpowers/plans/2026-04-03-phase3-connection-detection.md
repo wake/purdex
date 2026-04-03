@@ -41,8 +41,8 @@
 | Modify | `spa/src/stores/useHostStore.test.ts` | Test new HostRuntime fields |
 | Create | `spa/src/lib/host-connection.ts` | checkHealth with AbortController + classifyResult |
 | Create | `spa/src/lib/host-connection.test.ts` | Health check classification tests |
-| Create | `spa/src/hooks/useHostConnection.ts` | Per-host connection state machine hook |
-| Create | `spa/src/hooks/useHostConnection.test.ts` | Connection state machine tests |
+| Create | `spa/src/lib/connection-state-machine.ts` | ConnectionStateMachine pure class (no React) |
+| Create | `spa/src/lib/connection-state-machine.test.ts` | State machine tests |
 | Modify | `spa/src/lib/host-events.ts` | Remove self-reconnect, add gateOpen param |
 | Modify | `spa/src/lib/ws.ts` | Add gateOpen check to connectTerminal |
 | Modify | `spa/src/lib/ws.test.ts` | Gate test for connectTerminal |
@@ -320,8 +320,6 @@ import (
 	"os/exec"
 	"sync"
 	"time"
-
-	"github.com/wake/tmux-box/internal/core"
 )
 
 // watcherState tracks the NORMAL / TMUX_DOWN state machine.
@@ -369,8 +367,8 @@ func (m *SessionModule) tickNormal() {
 		return
 	}
 
-	if sessions == nil {
-		// nil,nil — could be "no server" or "no sessions"
+	if len(sessions) == 0 {
+		// Empty — could be "no server" or "no sessions" (service layer never returns nil)
 		if !m.tmux.TmuxAlive() {
 			// tmux is down → transition to TMUX_DOWN
 			if m.wstate.setTmuxAlive(false) {
@@ -379,8 +377,7 @@ func (m *SessionModule) tickNormal() {
 			m.notifyWaitFor(false) // pause wait-for goroutine
 			return
 		}
-		// tmux alive but 0 sessions → broadcast empty sessions
-		sessions = []SessionInfo{}
+		// tmux alive but 0 sessions → continue with empty slice
 	}
 
 	hash := hashSessions(sessions)
@@ -567,7 +564,7 @@ git commit -m "feat(daemon): watcher NORMAL/TMUX_DOWN state machine"
 
 - [ ] **Step 1: Write failing test**
 
-In `internal/core/info_handler_test.go`, replace `TestHealthEndpoint`:
+In `internal/core/info_handler_test.go`, **delete** the existing `TestHealthEndpoint` and replace with three new tests:
 
 ```go
 func TestHealthEndpointWithTmuxTrue(t *testing.T) {
@@ -866,12 +863,11 @@ func (eb *EventsBroadcaster) Add(conn *websocket.Conn) *EventSubscriber {
 					return
 				}
 			case <-ticker.C:
-				conn.SetWriteDeadline(time.Now().Add(eb.PongTimeout))
 				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 					eb.Remove(sub)
 					return
 				}
-				conn.SetWriteDeadline(time.Time{}) // clear deadline for data messages
+				// Pong timeout is handled by read-side deadline in HandleHostEvents
 			}
 		}
 	}()
@@ -920,21 +916,21 @@ func (eb *EventsBroadcaster) HandleSessionEvents(w http.ResponseWriter, r *http.
 }
 ```
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 6: Run tests**
 
 Run: `cd /Users/wake/Workspace/wake/tmux-box && go test ./internal/core/ -run TestPing -v -timeout 10s`
 Expected: PASS
 
-- [ ] **Step 6: Run all core tests**
+- [ ] **Step 7: Run all core tests**
 
 Run: `cd /Users/wake/Workspace/wake/tmux-box && go test ./internal/core/ -v`
 Expected: all PASS
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add internal/core/events.go internal/core/events_test.go
-git commit -m "feat(daemon): WS ping/pong on session-events endpoint"
+git commit -m "feat(daemon): WS ping/pong on host-events endpoint"
 ```
 
 ---
@@ -942,11 +938,14 @@ git commit -m "feat(daemon): WS ping/pong on session-events endpoint"
 ### Task 5: Rename session-events → host-events
 
 **Files:**
-- Modify: `internal/core/events.go:13-17` (SessionEvent → HostEvent)
+- Modify: `internal/core/events.go:13-17` (SessionEvent → HostEvent, HandleSessionEvents → HandleHostEvents)
 - Modify: `internal/core/core.go:130` (route path)
-- Modify: `internal/core/events_test.go` (struct references)
-- Modify: `internal/module/session/watcher.go` (if any SessionEvent references)
+- Modify: `internal/core/events_test.go` (struct refs, `dialWS` helper URL, `HandleSessionEvents` refs)
 - Modify: `internal/module/session/module.go:75-78` (OnSubscribe callback)
+- Modify: `internal/module/stream/module.go:61` (relay snapshot)
+- Modify: `internal/module/agent/module.go:109` (hook snapshot)
+- Modify: `internal/module/stream/handler_test.go:221,235,379` (test assertions)
+- Modify: `internal/module/stream/orchestrator_test.go:181-204` (test helper + assertions)
 
 - [ ] **Step 1: Rename SessionEvent to HostEvent in events.go**
 
@@ -961,18 +960,7 @@ type HostEvent struct {
 
 Update all references in the same file (Broadcast method).
 
-- [ ] **Step 2: Update route path in core.go**
-
-In `internal/core/core.go:130`:
-
-```go
-// Replace:
-mux.HandleFunc("/ws/session-events", c.Events.HandleSessionEvents)
-// With:
-mux.HandleFunc("/ws/host-events", c.Events.HandleHostEvents)
-```
-
-- [ ] **Step 3: Rename HandleSessionEvents to HandleHostEvents**
+- [ ] **Step 2: Rename HandleSessionEvents to HandleHostEvents**
 
 In `internal/core/events.go`, rename the method:
 
@@ -983,14 +971,28 @@ func (eb *EventsBroadcaster) HandleSessionEvents(
 func (eb *EventsBroadcaster) HandleHostEvents(
 ```
 
-- [ ] **Step 4: Update all test references**
+- [ ] **Step 3: Update route path in core.go**
+
+In `internal/core/core.go:130`:
+
+```go
+// Replace:
+mux.HandleFunc("/ws/session-events", c.Events.HandleSessionEvents)
+// With:
+mux.HandleFunc("/ws/host-events", c.Events.HandleHostEvents)
+```
+
+- [ ] **Step 4: Update events_test.go — all references**
 
 In `internal/core/events_test.go`, update:
-- All `SessionEvent` → `HostEvent`
-- All `HandleSessionEvents` → `HandleHostEvents`
-- All `session-events` → `host-events`
+- `dialWS` helper (line 20): `/ws/session-events` → `/ws/host-events`
+- All `HandleSessionEvents` → `HandleHostEvents` (lines 29,58,85,106,139,184)
+- All `SessionEvent` → `HostEvent` (lines 48,134,149,171,179,197)
+- `TestRegisterCoreRoutes` (line 245): `/ws/session-events` → `/ws/host-events`
 
-In `internal/module/session/module.go:75-78`, update the OnSubscribe callback:
+- [ ] **Step 5: Update session module OnSubscribe**
+
+In `internal/module/session/module.go:75-78`:
 
 ```go
 // Replace:
@@ -999,15 +1001,44 @@ data, err := json.Marshal(core.SessionEvent{
 data, err := json.Marshal(core.HostEvent{
 ```
 
-- [ ] **Step 5: Run all tests**
+- [ ] **Step 6: Update stream and agent modules**
+
+In `internal/module/stream/module.go:61`:
+```go
+// Replace: core.SessionEvent{Type: "relay", ...}
+// With:    core.HostEvent{Type: "relay", ...}
+```
+
+In `internal/module/agent/module.go:109`:
+```go
+// Replace: core.SessionEvent{Type: "hook", ...}
+// With:    core.HostEvent{Type: "hook", ...}
+```
+
+In `internal/module/stream/handler_test.go` (lines 221, 235, 379):
+```go
+// Replace: var evt core.SessionEvent
+// With:    var evt core.HostEvent
+```
+
+In `internal/module/stream/orchestrator_test.go` (lines 181-204):
+```go
+// Replace all: core.SessionEvent
+// With:        core.HostEvent
+```
+
+- [ ] **Step 7: Run all tests**
 
 Run: `cd /Users/wake/Workspace/wake/tmux-box && go test ./internal/... -v`
 Expected: all PASS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add internal/core/events.go internal/core/events_test.go internal/core/core.go internal/module/session/module.go
+git add internal/core/events.go internal/core/events_test.go internal/core/core.go \
+  internal/module/session/module.go internal/module/stream/module.go \
+  internal/module/agent/module.go internal/module/stream/handler_test.go \
+  internal/module/stream/orchestrator_test.go
 git commit -m "refactor(daemon): rename session-events to host-events"
 ```
 
@@ -1346,20 +1377,22 @@ git commit -m "feat(spa): checkHealth with L1/L2/L3 classification"
 
 ---
 
-### Task 9: useHostConnection hook
+### Task 9: ConnectionStateMachine — 重連狀態機
+
+**Note:** `ConnectionStateMachine` 是純 class，不是 React hook。它在 `useMultiHostEventWs` 的 `useEffect` 中被直接實例化和管理（Task 10），避免���反 Rules of Hooks（hook 不能在 for loop 中呼叫）。
 
 **Files:**
-- Create: `spa/src/hooks/useHostConnection.ts`
-- Create: `spa/src/hooks/useHostConnection.test.ts`
+- Create: `spa/src/lib/connection-state-machine.ts`
+- Create: `spa/src/lib/connection-state-machine.test.ts`
 
 - [ ] **Step 1: Write failing tests**
 
-Create `spa/src/hooks/useHostConnection.test.ts`:
+Create `spa/src/lib/connection-state-machine.test.ts`:
 
 ```typescript
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { ConnectionStateMachine } from '../hooks/useHostConnection'
-import type { HealthResult } from '../lib/host-connection'
+import { ConnectionStateMachine } from './connection-state-machine'
+import type { HealthResult } from './host-connection'
 
 describe('ConnectionStateMachine', () => {
   let checkFn: ReturnType<typeof vi.fn<() => Promise<HealthResult>>>
@@ -1474,18 +1507,16 @@ describe('ConnectionStateMachine', () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/wake/Workspace/wake/tmux-box/spa && npx vitest run src/hooks/useHostConnection.test.ts`
+Run: `cd /Users/wake/Workspace/wake/tmux-box/spa && npx vitest run src/lib/connection-state-machine.test.ts`
 Expected: FAIL — module not found
 
 - [ ] **Step 3: Implement ConnectionStateMachine**
 
-Create `spa/src/hooks/useHostConnection.ts`:
+Create `spa/src/lib/connection-state-machine.ts`:
 
 ```typescript
-// spa/src/hooks/useHostConnection.ts — Per-host connection state machine
-import { useEffect, useRef, useCallback } from 'react'
-import { checkHealth, type HealthResult } from '../lib/host-connection'
-import { useHostStore } from '../stores/useHostStore'
+// spa/src/lib/connection-state-machine.ts — Pure class, no React dependency
+import type { HealthResult } from './host-connection'
 
 const FAST_RETRY_COUNT = 3
 
@@ -1561,68 +1592,48 @@ export class ConnectionStateMachine {
   }
 }
 
-/**
- * useHostConnection — per-host connection detection hook.
- * Call triggerCheck when host-events WS closes or first connection fails.
- */
-export function useHostConnection(hostId: string) {
-  const smRef = useRef<ConnectionStateMachine | null>(null)
-
-  useEffect(() => {
-    const baseUrl = useHostStore.getState().getDaemonBase(hostId)
-    const sm = new ConnectionStateMachine(
-      () => checkHealth(baseUrl),
-      (result) => {
-        const status = result.daemon === 'connected' ? 'connected' : (
-          smRef.current ? 'disconnected' : 'reconnecting'
-        )
-        useHostStore.getState().setRuntime(hostId, {
-          status: result.daemon === 'connected' ? 'connected' : 'disconnected',
-          latency: result.latency ?? undefined,
-          daemonState: result.daemon,
-          tmuxState: result.tmux,
-        })
-      },
-    )
-    smRef.current = sm
-    return () => { sm.stop(); smRef.current = null }
-  }, [hostId])
-
-  const triggerCheck = useCallback(() => {
-    // Set reconnecting immediately
-    useHostStore.getState().setRuntime(hostId, { status: 'reconnecting' })
-    smRef.current?.trigger()
-  }, [hostId])
-
-  return { triggerCheck }
-}
 ```
 
 - [ ] **Step 4: Run tests**
 
-Run: `cd /Users/wake/Workspace/wake/tmux-box/spa && npx vitest run src/hooks/useHostConnection.test.ts`
+Run: `cd /Users/wake/Workspace/wake/tmux-box/spa && npx vitest run src/lib/connection-state-machine.test.ts`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/hooks/useHostConnection.ts spa/src/hooks/useHostConnection.test.ts
-git commit -m "feat(spa): useHostConnection with L1/L2 state machine"
+git add spa/src/lib/connection-state-machine.ts spa/src/lib/connection-state-machine.test.ts
+git commit -m "feat(spa): ConnectionStateMachine for L1/L2 reconnection"
 ```
 
 ---
 
-### Task 10: WS 閘控 — host-events 停止自身 reconnect
+### Task 10: WS 閘控 — host-events 停止自身 reconnect + SM 整合
+
+**Key design:** `ConnectionStateMachine` 是純 class（Task 9），直接在 `useMultiHostEventWs` 的 `useEffect` 中 per-host 實例化，避免 Rules of Hooks 問題（hook 不能在 for loop 中呼叫）。
 
 **Files:**
-- Modify: `spa/src/lib/host-events.ts` (add disableAutoReconnect option)
-- Modify: `spa/src/hooks/useMultiHostEventWs.ts` (integrate useHostConnection)
+- Modify: `spa/src/lib/host-events.ts` (disable autoReconnect, add `reconnect()`)
+- Modify: `spa/src/hooks/useMultiHostEventWs.ts` (integrate ConnectionStateMachine)
 
-- [ ] **Step 1: Modify connectHostEvents to support disabling auto-reconnect**
+- [ ] **Step 1: Modify connectHostEvents — disable auto-reconnect + add reconnect()**
 
-In `spa/src/lib/host-events.ts`, update the function signature and onclose handler:
+In `spa/src/lib/host-events.ts`, replace the entire file content:
 
 ```typescript
+// spa/src/lib/host-events.ts
+
+export interface HostEvent {
+  type: 'handoff' | 'relay' | 'hook' | 'sessions' | 'tmux'
+  session: string
+  value: string
+}
+
+export interface EventConnection {
+  close: () => void
+  reconnect: () => void
+}
+
 export function connectHostEvents(
   url: string,
   onEvent: (event: HostEvent) => void,
@@ -1681,22 +1692,15 @@ export function connectHostEvents(
     },
   }
 }
-
-export interface EventConnection {
-  close: () => void
-  reconnect: () => void
-}
 ```
 
-- [ ] **Step 2: Integrate useHostConnection into useMultiHostEventWs**
+- [ ] **Step 2: Rewrite useMultiHostEventWs with SM integration**
 
-In `spa/src/hooks/useMultiHostEventWs.ts`, update to:
-- Pass `autoReconnect: false` to `connectHostEvents`
-- Call `triggerCheck` on WS close
-- Call `reconnect` when useHostConnection reports connected
+In `spa/src/hooks/useMultiHostEventWs.ts`, replace the entire file:
 
 ```typescript
-import { useEffect, useRef } from 'react'
+// spa/src/hooks/useMultiHostEventWs.ts — Multi-host event WS + connection state machine
+import { useEffect } from 'react'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useStreamStore } from '../stores/useStreamStore'
@@ -1705,31 +1709,45 @@ import { useTabStore } from '../stores/useTabStore'
 import { connectHostEvents, type EventConnection } from '../lib/host-events'
 import { hostWsUrl, fetchWsTicket } from '../lib/host-api'
 import { fetchHistory } from '../lib/api'
-import { useHostConnection } from './useHostConnection'
+import { checkHealth } from '../lib/host-connection'
+import { ConnectionStateMachine } from '../lib/connection-state-machine'
 import type { Session } from '../lib/api'
 
 export function useMultiHostEventWs() {
   const hostOrderKey = useHostStore((s) => s.hostOrder.join(','))
-  const connectionsRef = useRef<Map<string, EventConnection>>(new Map())
-
-  // useHostConnection for each host — subscribe to status changes
-  const runtimeStatus = useHostStore((s) => {
-    const result: Record<string, string> = {}
-    for (const id of s.hostOrder) {
-      result[id] = s.runtime[id]?.status ?? 'disconnected'
-    }
-    return JSON.stringify(result)
-  })
 
   useEffect(() => {
     const { hosts, hostOrder } = useHostStore.getState()
     const connections = new Map<string, EventConnection>()
+    const stateMachines = new Map<string, ConnectionStateMachine>()
 
     for (const hostId of hostOrder) {
       if (!hosts[hostId]) continue
       const wsUrl = hostWsUrl(hostId, '/ws/host-events')
+      const baseUrl = useHostStore.getState().getDaemonBase(hostId)
 
-      const conn = connectHostEvents(
+      // --- Connection state machine (per host) ---
+      let conn: EventConnection | undefined
+
+      const sm = new ConnectionStateMachine(
+        () => checkHealth(baseUrl),
+        (result) => {
+          useHostStore.getState().setRuntime(hostId, {
+            status: result.daemon === 'connected' ? 'connected' : 'disconnected',
+            latency: result.latency ?? undefined,
+            daemonState: result.daemon,
+            tmuxState: result.tmux,
+          })
+          // On recovery → reconnect WS
+          if (result.daemon === 'connected' && conn) {
+            conn.reconnect()
+          }
+        },
+      )
+      stateMachines.set(hostId, sm)
+
+      // --- WS connection (per host) ---
+      conn = connectHostEvents(
         wsUrl,
         (event) => {
           if (event.type === 'sessions') {
@@ -1780,45 +1798,41 @@ export function useMultiHostEventWs() {
             })
           }
         },
-        // onClose — don't auto-reconnect, let useHostConnection manage
+        // onClose — trigger SM health check (no auto-reconnect)
         () => {
           useHostStore.getState().setRuntime(hostId, { status: 'reconnecting' })
+          sm.trigger()
         },
         // onOpen
         () => {
-          useHostStore.getState().setRuntime(hostId, { status: 'connected', daemonState: 'connected' })
+          useHostStore.getState().setRuntime(hostId, {
+            status: 'connected',
+            daemonState: 'connected',
+          })
           useAgentStore.getState().clearSubagentsForHost(hostId)
           const daemonBase = useHostStore.getState().getDaemonBase(hostId)
           useSessionStore.getState().fetchHost(hostId, daemonBase).catch(() => {})
         },
         () => fetchWsTicket(hostId),
-        false, // autoReconnect disabled — useHostConnection manages reconnection
+        false, // autoReconnect disabled — SM manages reconnection
       )
       connections.set(hostId, conn)
     }
 
-    connectionsRef.current = connections
-    return () => { connections.forEach((c) => c.close()) }
-  }, [hostOrderKey])
-
-  // When a host transitions from non-connected to connected, reconnect its WS
-  useEffect(() => {
-    const statuses = JSON.parse(runtimeStatus) as Record<string, string>
-    for (const [hostId, status] of Object.entries(statuses)) {
-      if (status === 'connected') {
-        const conn = connectionsRef.current.get(hostId)
-        conn?.reconnect()
-      }
+    return () => {
+      connections.forEach((c) => c.close())
+      stateMachines.forEach((sm) => sm.stop())
     }
-  }, [runtimeStatus])
+  }, [hostOrderKey])
 }
 ```
 
-Note: The `useHostConnection` hook integration into `useMultiHostEventWs` requires careful wiring. The `triggerCheck` function from `useHostConnection` needs to be called from the WS onClose handler. This will be refined during implementation — the exact React lifecycle integration will depend on how the hooks compose. The key contract is:
-
-1. WS onClose → call `triggerCheck(hostId)` 
-2. `useHostConnection` determines L1/L2 → updates `runtime`
-3. `runtime.status` becomes `'connected'` → reconnect WS
+**Key design points:**
+- `ConnectionStateMachine` 在 `useEffect` 內 per-host 實例化（純 class，不是 hook，不違反 Rules of Hooks）
+- WS `onClose` → 直接呼叫 `sm.trigger()`（同一 closure 內，不需跨 hook）
+- SM `onStateChange` 回 `connected` → 直接呼叫 `conn.reconnect()`（同一 closure 內）
+- Cleanup: `connections.forEach(close)` + `stateMachines.forEach(stop)`
+- 不需要第二個 `useEffect` 監聽 `runtimeStatus`（避免水平觸發重複連線循環）
 
 - [ ] **Step 3: Run lint and tests**
 
@@ -1829,7 +1843,7 @@ Expected: PASS
 
 ```bash
 git add spa/src/lib/host-events.ts spa/src/hooks/useMultiHostEventWs.ts
-git commit -m "feat(spa): WS gating — host-events stops self-reconnect, useHostConnection manages"
+git commit -m "feat(spa): WS gating — SM manages host-events reconnection"
 ```
 
 ---
@@ -1933,21 +1947,36 @@ export function connectTerminal(
 }
 ```
 
-- [ ] **Step 4: Pass gate function from useTerminalWs**
+- [ ] **Step 4: Add hostId to UseTerminalWsOpts and pass gate function**
 
-In `spa/src/hooks/useTerminalWs.ts`, update the `connectTerminal` call to pass a gate function that checks host runtime status:
+In `spa/src/hooks/useTerminalWs.ts`:
 
+1. Add `hostId` to the opts interface:
 ```typescript
-// In the connectTerminal call, add 5th argument:
-const canReconnect = () => {
-  const runtime = useHostStore.getState().runtime[hostId]
-  return !runtime || runtime.status === 'connected'
-}
-
-const conn = connectTerminal(wsUrl, ..., onOpenCb, canReconnect)
+// In UseTerminalWsOpts, add:
+hostId?: string
 ```
 
-Note: `useTerminalWs` will need a `hostId` parameter added. This is a natural extension since the hook already works per-tab and the tab content knows its hostId.
+2. Destructure `hostId` from opts and build the gate function:
+```typescript
+const { hostId, wsUrl, termRef, fitAddonRef, containerRef } = opts
+// ...
+const canReconnect = hostId
+  ? () => {
+      const runtime = useHostStore.getState().runtime[hostId]
+      return !runtime || runtime.status === 'connected'
+    }
+  : undefined
+
+const conn = connectTerminal(wsUrl, onDataCb, onCloseCb, onOpenCb, canReconnect)
+```
+
+3. Add `useHostStore` import:
+```typescript
+import { useHostStore } from '../stores/useHostStore'
+```
+
+Note: `hostId` is optional for backward compatibility. Callers that pass `hostId` get gate protection; callers that don't keep existing behavior (always reconnect). The calling component (e.g., `SessionPaneContent`) already knows the `hostId` from `PaneContent` and passes it through.
 
 - [ ] **Step 5: Run tests**
 
