@@ -19,8 +19,12 @@ var Version = "dev"
 // Exported because main.go registers it on the outer mux to bypass auth middleware,
 // allowing the SPA to test reachability before knowing whether a token is required.
 func (c *Core) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	tmuxAlive := false
+	if c.TmuxAliveFunc != nil {
+		tmuxAlive = c.TmuxAliveFunc()
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "tmux": tmuxAlive})
 }
 
 // handleInfo returns daemon metadata: host ID, tmux instance, version, OS, and architecture.

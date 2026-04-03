@@ -37,6 +37,7 @@ type Core struct {
 	Registry *ServiceRegistry
 	Events   *EventsBroadcaster
 	Tickets  *TicketStore
+	TmuxAliveFunc  func() bool // injected by session module; returns cached tmux reachability
 	modules        []Module
 	configChangeMu sync.Mutex // protects onConfigChange
 	onConfigChange []func()   // config change callbacks

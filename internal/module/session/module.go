@@ -63,6 +63,7 @@ func (m *SessionModule) Start(ctx context.Context) error {
 	watchCtx, cancel := context.WithCancel(ctx)
 	m.cancelWatch = cancel
 	m.wstate.setTmuxAlive(m.tmux.TmuxAlive())
+	m.core.TmuxAliveFunc = m.TmuxAlive
 	m.watchSessions(watchCtx)
 
 	// Register OnSubscribe callback to send initial sessions snapshot.

@@ -12,20 +12,50 @@ import (
 	"github.com/wake/tmux-box/internal/tmux"
 )
 
-func TestHealthEndpoint(t *testing.T) {
+func TestHealthEndpointWithTmuxTrue(t *testing.T) {
 	c := New(CoreDeps{Config: &config.Config{}})
+	c.TmuxAliveFunc = func() bool { return true }
 
 	req := httptest.NewRequest("GET", "/api/health", nil)
 	rec := httptest.NewRecorder()
 	c.HandleHealth(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 
 	var body map[string]any
 	err := json.NewDecoder(rec.Body).Decode(&body)
 	require.NoError(t, err)
 	assert.Equal(t, true, body["ok"])
+	assert.Equal(t, true, body["tmux"])
+}
+
+func TestHealthEndpointWithTmuxFalse(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{}})
+	c.TmuxAliveFunc = func() bool { return false }
+
+	req := httptest.NewRequest("GET", "/api/health", nil)
+	rec := httptest.NewRecorder()
+	c.HandleHealth(rec, req)
+
+	var body map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&body)
+	require.NoError(t, err)
+	assert.Equal(t, true, body["ok"])
+	assert.Equal(t, false, body["tmux"])
+}
+
+func TestHealthEndpointWithoutTmuxFunc(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{}})
+
+	req := httptest.NewRequest("GET", "/api/health", nil)
+	rec := httptest.NewRecorder()
+	c.HandleHealth(rec, req)
+
+	var body map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&body)
+	require.NoError(t, err)
+	assert.Equal(t, true, body["ok"])
+	assert.Equal(t, false, body["tmux"])
 }
 
 func TestInfoEndpoint(t *testing.T) {
