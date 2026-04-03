@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.0.0-alpha.43] - 2026-04-03
+
+Phase 3 連線偵測 — Watcher 狀態機 + WS ping/pong + useHostConnection 閘控 (PR #158)
+
+### 新功能
+
+- **Watcher 狀態機** — NORMAL/TMUX_DOWN 雙模式，tmux 斷線自動偵測 + broadcast `tmux` event，wait-for goroutine 在 TMUX_DOWN 時暫停
+- **WS ping/pong** — host-events WS 加入 30s ping / 10s pong timeout，整合 write pump（one-writer rule）
+- **API 三層分離** — `/api/health`（無 auth, liveness）、`/api/ready`（有 auth, readiness + tmux 狀態）、`/api/info`（有 auth, identity）
+- **ConnectionStateMachine** — 純 class 重連狀態機，L1 不間斷背景重試 + L2 停止 + epoch counter 防止 stale callback
+- **checkHealth** — AbortController 3s timeout，L1（unreachable）/ L2（refused）分類
+- **WS 閘控** — host-events WS 停止自身 reconnect 由 SM 管理，terminal WS 受 `canReconnect` gate 閘控
+- **HostRuntime 擴充** — 新增 `daemonState`（connected/refused/unreachable）+ `tmuxState`（ok/unavailable）
+- **TmuxAlive** — Executor interface 新增 `TmuxAlive() bool`，RealExecutor 用 `tmux info`（5s timeout）
+
+### 重構
+
+- **Rename** — `SessionEvent` → `HostEvent`、`/ws/session-events` → `/ws/host-events`（Go + SPA 全面更新）
+
+### 修復
+
+- **notifyWaitFor drain** — 先清空 channel 再寫入，防止 stale signal 阻塞 resume
+- **wstate 封裝** — `updateHash` accessor 取代 tickNormal 直接操作 mutex
+- **SM stopped guard** — await 後檢查 stopped + epoch，防止 unmount 後 state mutation
+- **reconnect ws close** — 重連前關閉既有 WS，防止 duplicate connection
+
 ## [1.0.0-alpha.42] - 2026-04-03
 
 SPA 識別系統整合 — Phase 2b (PR #155)
