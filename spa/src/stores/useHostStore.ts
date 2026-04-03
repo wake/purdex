@@ -18,6 +18,8 @@ export interface HostRuntime {
   status: 'connected' | 'disconnected' | 'reconnecting'
   latency?: number
   info?: HostInfo
+  daemonState?: 'connected' | 'refused' | 'unreachable'
+  tmuxState?: 'ok' | 'unavailable'
 }
 
 export interface HostInfo {

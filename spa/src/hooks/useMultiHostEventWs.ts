@@ -48,6 +48,12 @@ export function useMultiHostEventWs() {
           if (event.type === 'relay') {
             useStreamStore.getState().setRelayStatus(hostId, event.session, event.value === 'connected')
           }
+          // Handle 'tmux' event
+          if (event.type === 'tmux') {
+            useHostStore.getState().setRuntime(hostId, {
+              tmuxState: event.value === 'ok' ? 'ok' : 'unavailable',
+            })
+          }
           // Handle 'handoff' event
           if (event.type === 'handoff') {
             const store = useStreamStore.getState()

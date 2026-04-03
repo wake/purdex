@@ -123,4 +123,30 @@ describe('useHostStore', () => {
     expect(updated.hostOrder.filter(id => id === 'dup:test01')).toHaveLength(1)
     expect(updated.hosts['dup:test01'].name).toBe('First')
   })
+
+  it('setRuntime updates daemonState and tmuxState', () => {
+    const state = useHostStore.getState()
+    const defaultId = state.activeHostId!
+    state.setRuntime(defaultId, {
+      status: 'disconnected',
+      daemonState: 'refused',
+      tmuxState: 'unavailable',
+    })
+
+    const updated = useHostStore.getState()
+    expect(updated.runtime[defaultId].daemonState).toBe('refused')
+    expect(updated.runtime[defaultId].tmuxState).toBe('unavailable')
+  })
+
+  it('setRuntime partial update preserves existing fields', () => {
+    const state = useHostStore.getState()
+    const defaultId = state.activeHostId!
+    state.setRuntime(defaultId, { status: 'connected', daemonState: 'connected', tmuxState: 'ok' })
+    state.setRuntime(defaultId, { tmuxState: 'unavailable' })
+
+    const updated = useHostStore.getState()
+    expect(updated.runtime[defaultId].status).toBe('connected')
+    expect(updated.runtime[defaultId].daemonState).toBe('connected')
+    expect(updated.runtime[defaultId].tmuxState).toBe('unavailable')
+  })
 })
