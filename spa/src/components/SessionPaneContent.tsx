@@ -1,11 +1,14 @@
 import { useCallback } from 'react'
 import TerminalView from './TerminalView'
 import ConversationView from './ConversationView'
+import { TerminatedPane } from './TerminatedPane'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useConfigStore } from '../stores/useConfigStore'
+import { useTabStore } from '../stores/useTabStore'
 import { handoff } from '../lib/api'
 import { useHostStore } from '../stores/useHostStore'
+import { findPane } from '../lib/pane-tree'
 import type { PaneRendererProps } from '../lib/pane-registry'
 
 const EMPTY_PRESETS: Array<{ name: string; command: string }> = []
@@ -49,6 +52,18 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
       useStreamStore.getState().setHandoffProgress(hostId, session.code, '')
     }
   }, [session, hostId, daemonBase, fetchHost])
+
+  // Look up tabId from store (pane renderers don't receive tabId as a prop)
+  const tabId = useTabStore((s) => {
+    for (const id of Object.keys(s.tabs)) {
+      if (findPane(s.tabs[id].layout, pane.id)) return id
+    }
+    return ''
+  })
+
+  if (content.kind === 'tmux-session' && content.terminated) {
+    return <TerminatedPane content={content} tabId={tabId} paneId={pane.id} />
+  }
 
   if (content.kind !== 'tmux-session') return null
 
