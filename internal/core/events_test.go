@@ -236,6 +236,80 @@ func TestEventSubscriberSendDropsWhenFull(t *testing.T) {
 	assert.Len(t, sub.send, 64)
 }
 
+func TestPingIsSent(t *testing.T) {
+	eb := NewEventsBroadcaster()
+	eb.PingInterval = 100 * time.Millisecond
+	eb.PongTimeout = 50 * time.Millisecond
+
+	srv := httptest.NewServer(http.HandlerFunc(eb.HandleSessionEvents))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+
+	pingReceived := make(chan struct{}, 1)
+	conn.SetPingHandler(func(msg string) error {
+		select {
+		case pingReceived <- struct{}{}:
+		default:
+		}
+		return conn.WriteControl(websocket.PongMessage, []byte(msg), time.Now().Add(time.Second))
+	})
+
+	go func() {
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-pingReceived:
+		// OK
+	case <-time.After(time.Second):
+		t.Fatal("expected ping within 1s")
+	}
+
+	conn.Close()
+}
+
+func TestPongTimeoutClosesConnection(t *testing.T) {
+	eb := NewEventsBroadcaster()
+	eb.PingInterval = 100 * time.Millisecond
+	eb.PongTimeout = 50 * time.Millisecond
+
+	srv := httptest.NewServer(http.HandlerFunc(eb.HandleSessionEvents))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+
+	// Don't respond to pings — server should close us
+	conn.SetPingHandler(func(string) error {
+		return nil // swallow ping, don't send pong
+	})
+
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-closed:
+		// OK — connection was closed by server
+	case <-time.After(time.Second):
+		t.Fatal("expected server to close connection after pong timeout")
+	}
+}
+
 func TestRegisterCoreRoutes(t *testing.T) {
 	c := New(CoreDeps{})
 	mux := http.NewServeMux()
