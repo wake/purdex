@@ -36,6 +36,7 @@ type Executor interface {
 	SetHookGlobal(event, command string) error
 	RemoveHookGlobal(event string) error
 	ShowHooksGlobal() (string, error)
+	TmuxAlive() bool
 }
 
 // --- Real Executor ---
@@ -208,5 +209,9 @@ func (r *RealExecutor) ShowHooksGlobal() (string, error) {
 		return "", fmt.Errorf("tmux show-hooks: %w", err)
 	}
 	return string(out), nil
+}
+
+func (r *RealExecutor) TmuxAlive() bool {
+	return exec.Command("tmux", "info").Run() == nil
 }
 

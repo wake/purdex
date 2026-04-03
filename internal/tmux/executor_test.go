@@ -179,3 +179,19 @@ func TestNewSessionAssignsID(t *testing.T) {
 		t.Errorf("ID should start with $, got %q", sessions[0].ID)
 	}
 }
+
+func TestTmuxAliveDefault(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	// Default should be true (tmux assumed alive)
+	if !fake.TmuxAlive() {
+		t.Error("TmuxAlive() default = false, want true")
+	}
+}
+
+func TestTmuxAliveSetFalse(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	fake.SetAlive(false)
+	if fake.TmuxAlive() {
+		t.Error("TmuxAlive() = true after SetAlive(false), want false")
+	}
+}
