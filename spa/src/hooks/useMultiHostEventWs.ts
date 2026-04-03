@@ -45,6 +45,7 @@ export function useMultiHostEventWs() {
         },
       )
       stateMachines.set(hostId, sm)
+      useHostStore.getState().setRuntime(hostId, { manualRetry: () => sm.trigger() })
 
       // --- WS connection (per host) ---
       const conn = connectHostEvents(
