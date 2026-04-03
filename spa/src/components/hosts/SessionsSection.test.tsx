@@ -113,6 +113,8 @@ describe('SessionsSection', () => {
       hostId: HOST_ID,
       sessionCode: 'abc',
       mode: 'terminal',
+      cachedName: 'dev',
+      tmuxInstance: '',
     })
     expect(mockSetActiveTab).toHaveBeenCalledWith('tab-1')
   })

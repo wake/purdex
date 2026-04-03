@@ -23,7 +23,7 @@ export interface Pane {
 // === Pane Content (discriminated union) ===
 export type PaneContent =
   | { kind: 'new-tab' }
-  | { kind: 'session'; hostId: string; sessionCode: string; mode: 'terminal' | 'stream' }
+  | { kind: 'session'; hostId: string; sessionCode: string; mode: 'terminal' | 'stream'; cachedName: string; tmuxInstance: string }
   | { kind: 'dashboard' }
   | { kind: 'hosts' }
   | { kind: 'history' }

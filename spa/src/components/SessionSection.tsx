@@ -52,7 +52,7 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
                 className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/10 text-left text-sm text-text-primary cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={!!isOffline}
                 onClick={() =>
-                  onSelect({ kind: 'session', hostId, sessionCode: session.code, mode: 'terminal' })
+                  onSelect({ kind: 'session', hostId, sessionCode: session.code, mode: 'terminal', cachedName: session.name, tmuxInstance: '' })
                 }
               >
                 <TerminalWindow size={16} className="text-text-secondary flex-shrink-0" />

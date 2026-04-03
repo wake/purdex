@@ -142,6 +142,8 @@ export function SessionsSection({ hostId }: Props) {
       hostId,
       sessionCode: session.code,
       mode: mode as 'terminal' | 'stream',
+      cachedName: session.name,
+      tmuxInstance: '',
     })
     const wsId = useWorkspaceStore.getState().activeWorkspaceId
     if (wsId) {

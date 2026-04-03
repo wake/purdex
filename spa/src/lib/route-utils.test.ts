@@ -103,7 +103,7 @@ describe('parseRoute', () => {
 
 describe('tabToUrl', () => {
   it('generates session tab URL', () => {
-    expect(tabToUrl('abc123', { kind: 'session', hostId: 'test-host', sessionCode: 'x', mode: 'terminal' }))
+    expect(tabToUrl('abc123', { kind: 'session', hostId: 'test-host', sessionCode: 'x', mode: 'terminal', cachedName: '', tmuxInstance: '' }))
       .toBe('/t/abc123/terminal')
   })
 
@@ -125,7 +125,7 @@ describe('tabToUrl', () => {
   })
 
   it('generates session tab URL within workspace', () => {
-    expect(tabToUrl('abc123', { kind: 'session', hostId: 'test-host', sessionCode: 'x', mode: 'terminal' }, 'ws0001'))
+    expect(tabToUrl('abc123', { kind: 'session', hostId: 'test-host', sessionCode: 'x', mode: 'terminal', cachedName: '', tmuxInstance: '' }, 'ws0001'))
       .toBe('/w/ws0001/t/abc123/terminal')
   })
 

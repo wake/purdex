@@ -21,6 +21,8 @@ export interface HostRuntime {
 }
 
 export interface HostInfo {
+  host_id: string
+  tmux_instance: string
   tbox_version: string
   tmux_version: string
   os: string
@@ -35,7 +37,7 @@ interface HostState {
   runtime: Record<string, HostRuntime>
   activeHostId: string | null
 
-  addHost: (opts: { name: string; ip: string; port: number; token?: string }) => string
+  addHost: (opts: { id?: string; name: string; ip: string; port: number; token?: string }) => string
   updateHost: (hostId: string, updates: Partial<Pick<HostConfig, 'name' | 'ip' | 'port' | 'token'>>) => void
   removeHost: (hostId: string) => void
   reorderHosts: (orderedIds: string[]) => void
@@ -71,9 +73,12 @@ export const useHostStore = create<HostState>()(
       ...createDefaultState(),
 
       addHost: (opts) => {
-        const id = generateId()
+        const id = opts.id ?? generateId()
+        // Dedup: if host already exists, just return existing id
+        if (get().hosts[id]) return id
         const order = get().hostOrder.length
-        const host: HostConfig = { id, ...opts, order }
+        const { id: _discardId, ...restOpts } = opts
+        const host: HostConfig = { id, ...restOpts, order }
         set((state) => ({
           hosts: { ...state.hosts, [id]: host },
           hostOrder: [...state.hostOrder, id],

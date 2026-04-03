@@ -11,7 +11,7 @@ import type { Tab } from '../types/tab'
 
 function makeTab(id: string, contentKind: 'session' | 'dashboard' | 'history' | 'settings', mode?: 'terminal' | 'stream'): Tab {
   const content = contentKind === 'session'
-    ? { kind: 'session' as const, hostId: 'test-host', sessionCode: 'test', mode: mode ?? 'terminal' as const }
+    ? { kind: 'session' as const, hostId: 'test-host', sessionCode: 'test', mode: mode ?? 'terminal' as const, cachedName: '', tmuxInstance: '' }
     : contentKind === 'settings'
       ? { kind: 'settings' as const, scope: 'global' as const }
       : { kind: contentKind as 'dashboard' | 'history' }

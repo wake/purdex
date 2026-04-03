@@ -2,9 +2,10 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { useTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
 import type { PaneContent } from '../types/tab'
+import { getPrimaryPane } from '../lib/pane-tree'
 
 function makeSessionTab(code: string, mode: 'terminal' | 'stream' = 'terminal') {
-  return createTab({ kind: 'session', hostId: 'test-host', sessionCode: code, mode })
+  return createTab({ kind: 'session', hostId: 'test-host', sessionCode: code, mode, cachedName: '', tmuxInstance: '' })
 }
 
 describe('useTabStore', () => {
@@ -93,7 +94,7 @@ describe('useTabStore', () => {
   })
 
   it('openSingletonTab always creates new tab for session (non-singleton)', () => {
-    const content: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' }
+    const content: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }
     const tab = createTab(content)
     useTabStore.getState().addTab(tab)
     const returnedId = useTabStore.getState().openSingletonTab(content)
@@ -182,6 +183,79 @@ describe('useTabStore', () => {
       // Layout should be structurally the same (content unchanged)
       if (before.type === 'leaf' && after.type === 'leaf') {
         expect(after.pane.content).toEqual(before.pane.content)
+      }
+    })
+  })
+
+  describe('updateSessionCache', () => {
+    it('updates cachedName for matching session tab', () => {
+      const tab = makeSessionTab('dev001', 'terminal')
+      useTabStore.getState().addTab(tab)
+      const tabId = useTabStore.getState().tabOrder[0]
+
+      useTabStore.getState().updateSessionCache('test-host', 'dev001', 'renamed-session')
+
+      const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
+      expect(content.kind).toBe('session')
+      if (content.kind === 'session') {
+        expect(content.cachedName).toBe('renamed-session')
+      }
+    })
+
+    it('does not update tab with different sessionCode', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      const tabId = useTabStore.getState().tabOrder[0]
+
+      useTabStore.getState().updateSessionCache('test-host', 'dev999', 'renamed')
+
+      const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
+      expect(content.kind).toBe('session')
+      if (content.kind === 'session') {
+        expect(content.cachedName).toBe('')
+      }
+    })
+
+    it('does not update tab with different hostId', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      const tabId = useTabStore.getState().tabOrder[0]
+
+      useTabStore.getState().updateSessionCache('other-host', 'dev001', 'renamed')
+
+      const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
+      expect(content.kind).toBe('session')
+      if (content.kind === 'session') {
+        expect(content.cachedName).toBe('')
+      }
+    })
+
+    it('is no-op when cachedName is already the same', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      const tabId = useTabStore.getState().tabOrder[0]
+      const before = useTabStore.getState().tabs[tabId]
+
+      useTabStore.getState().updateSessionCache('test-host', 'dev001', '')
+
+      const after = useTabStore.getState().tabs[tabId]
+      expect(after).toBe(before) // same reference — no update
+    })
+
+    it('updates multiple matching tabs', () => {
+      const tab1 = makeSessionTab('dev001')
+      const tab2 = makeSessionTab('dev001', 'stream')
+      useTabStore.getState().addTab(tab1)
+      useTabStore.getState().addTab(tab2)
+
+      useTabStore.getState().updateSessionCache('test-host', 'dev001', 'new-name')
+
+      for (const tabId of useTabStore.getState().tabOrder) {
+        const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
+        expect(content.kind).toBe('session')
+        if (content.kind === 'session') {
+          expect(content.cachedName).toBe('new-name')
+        }
       }
     })
   })

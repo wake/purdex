@@ -9,13 +9,13 @@ beforeEach(() => {
 
 describe('getActiveSessionCode', () => {
   it('returns sessionCode when active tab is a session', () => {
-    const tab = { ...createTab({ kind: 'session', hostId: 'test-host', sessionCode: 'dev', mode: 'terminal' }), id: 't1' }
+    const tab = { ...createTab({ kind: 'session', hostId: 'test-host', sessionCode: 'dev', mode: 'terminal', cachedName: '', tmuxInstance: '' }), id: 't1' }
     useTabStore.setState({ tabs: { t1: tab }, activeTabId: 't1' })
     expect(getActiveSessionCode()).toBe('dev')
   })
 
   it('returns sessionCode for stream-mode session tab', () => {
-    const tab = { ...createTab({ kind: 'session', hostId: 'test-host', sessionCode: 'box', mode: 'stream' }), id: 't2' }
+    const tab = { ...createTab({ kind: 'session', hostId: 'test-host', sessionCode: 'box', mode: 'stream', cachedName: '', tmuxInstance: '' }), id: 't2' }
     useTabStore.setState({ tabs: { t2: tab }, activeTabId: 't2' })
     expect(getActiveSessionCode()).toBe('box')
   })

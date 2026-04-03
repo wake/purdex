@@ -21,7 +21,7 @@ export function getPaneLabel(
       return t('page.pane.new_tab')
     case 'session': {
       const session = sessionStore.getByCode(content.sessionCode)
-      return session?.name ?? content.sessionCode
+      return session?.name ?? (content.cachedName || content.sessionCode)
     }
     case 'dashboard':
       return t('page.pane.dashboard')

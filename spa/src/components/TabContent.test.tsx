@@ -20,7 +20,7 @@ beforeEach(() => {
 })
 
 const sessionTab: Tab = {
-  ...createTab({ kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal' }),
+  ...createTab({ kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }),
   id: 't1',
 }
 
