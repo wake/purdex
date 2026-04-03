@@ -8,6 +8,7 @@ export interface HostEvent {
 
 export interface EventConnection {
   close: () => void
+  reconnect: () => void
 }
 
 export function connectHostEvents(
@@ -16,6 +17,7 @@ export function connectHostEvents(
   onClose?: () => void,
   onOpen?: () => void,
   getTicket?: () => Promise<string>,
+  autoReconnect = true,
 ): EventConnection {
   let ws: WebSocket
   let retryMs = 1000
@@ -30,7 +32,7 @@ export function connectHostEvents(
         u.searchParams.set('ticket', ticket)
         wsUrl = u.toString()
       } catch {
-        if (!closed) setTimeout(connect, retryMs)
+        if (!closed && autoReconnect) setTimeout(connect, retryMs)
         retryMs = Math.min(retryMs * 2, 30000)
         return
       }
@@ -47,13 +49,23 @@ export function connectHostEvents(
     ws.onclose = () => {
       if (closed) return
       onClose?.()
-      setTimeout(() => {
-        if (!closed) connect()
-      }, retryMs)
-      retryMs = Math.min(retryMs * 2, 30000)
+      if (autoReconnect) {
+        setTimeout(() => {
+          if (!closed) connect()
+        }, retryMs)
+        retryMs = Math.min(retryMs * 2, 30000)
+      }
     }
   }
 
   connect()
-  return { close: () => { closed = true; ws?.close() } }
+  return {
+    close: () => { closed = true; ws?.close() },
+    reconnect: () => {
+      if (!closed) {
+        retryMs = 1000
+        connect()
+      }
+    },
+  }
 }
