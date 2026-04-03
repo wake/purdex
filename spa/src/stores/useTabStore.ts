@@ -1,10 +1,43 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { Tab, PaneContent } from '../types/tab'
+import type { Tab, PaneContent, PaneLayout } from '../types/tab'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, findPane, updatePaneInLayout } from '../lib/pane-tree'
 import { contentMatches } from '../lib/pane-utils'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
+
+// --- Persist migration helpers ---
+// These functions handle legacy persisted data whose shape no longer matches
+// current TypeScript types, so `any` casts are unavoidable.
+
+function migrateLayout(layout: PaneLayout): PaneLayout {
+  if (layout.type === 'leaf') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const content = layout.pane.content as any
+    if (content.kind === 'session') {
+      return {
+        ...layout,
+        pane: { ...layout.pane, content: { ...content, kind: 'tmux-session' } },
+      }
+    }
+    return layout
+  }
+  return { ...layout, children: layout.children.map(migrateLayout) }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function migrateTabStore(state: any, version: number): any {
+  if (version < 2) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tabs: Record<string, any> = {}
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const [id, tab] of Object.entries(state.tabs as Record<string, any>)) {
+      tabs[id] = { ...tab, layout: migrateLayout(tab.layout) }
+    }
+    return { ...state, tabs }
+  }
+  return state
+}
 
 interface TabState {
   tabs: Record<string, Tab>
@@ -158,7 +191,8 @@ export const useTabStore = create<TabState>()(
     {
       name: STORAGE_KEYS.TABS,
       storage: purdexStorage,
-      version: 1,
+      version: 2,
+      migrate: migrateTabStore,
       partialize: (state) => ({
         tabs: state.tabs,
         tabOrder: state.tabOrder,
