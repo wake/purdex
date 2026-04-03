@@ -61,7 +61,10 @@ Run: `cd spa && grep -rn "kind.*['\"]session['\"]" src/ --include='*.ts' --inclu
 - `kind !== 'session'` → `kind !== 'tmux-session'`
 - `case 'session'` → `case 'tmux-session'`
 
-注意：不要替換 `kind: 'session-tab'`（route-utils 中的 route kind）或其他非 PaneContent 的 `session` 字串。只替換 PaneContent union member 的 `kind` 值。
+注意：
+- 不要替換 `kind: 'session-tab'`（route-utils 中的 route kind）或其他非 PaneContent 的 `session` 字串。只替換 PaneContent union member 的 `kind` 值。
+- **`register-panes.tsx`** 的 `registerPaneRenderer('session', ...)` 是 registry key，不含 `kind` 關鍵字，grep 不會命中。必須手動改為 `registerPaneRenderer('tmux-session', ...)`。
+- **`active-session.ts`** 的 `kind !== 'session'` 和 `kind === 'session'` 是核心 session 判斷邏輯，必須確認有被替換，否則 `getActiveSessionInfo()` 會永遠回傳 `null`。
 
 - [ ] **Step 3: 確認 TypeScript 編譯通過**
 
@@ -128,6 +131,30 @@ describe('persist migration', () => {
     const migrated = migrateTabStore(v1State, 1)
     const pane = (migrated as any).tabs.tab1.layout.pane
     expect(pane.content.kind).toBe('tmux-session')
+  })
+
+  it('migrates kind "session" inside split layouts', () => {
+    const v1State = {
+      tabs: {
+        tab1: {
+          id: 'tab1', pinned: false, locked: false, createdAt: 1000,
+          layout: {
+            type: 'split' as const, id: 'split1', direction: 'h' as const,
+            children: [
+              { type: 'leaf' as const, pane: { id: 'p1', content: { kind: 'session', hostId: 'h1', sessionCode: 'a', mode: 'terminal', cachedName: 'A', tmuxInstance: '1:2' } } },
+              { type: 'leaf' as const, pane: { id: 'p2', content: { kind: 'dashboard' } } },
+            ],
+            sizes: [50, 50],
+          },
+        },
+      },
+      tabOrder: ['tab1'],
+      activeTabId: 'tab1',
+    }
+    const migrated = migrateTabStore(v1State, 1)
+    const children = (migrated as any).tabs.tab1.layout.children
+    expect(children[0].pane.content.kind).toBe('tmux-session')
+    expect(children[1].pane.content.kind).toBe('dashboard')
   })
 
   it('preserves non-session tabs during migration', () => {
@@ -481,7 +508,7 @@ Run: `cd spa && npx vitest run src/components/SessionPickerList.test.tsx`
 // spa/src/components/SessionPickerList.tsx
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
-import { useTranslation } from '../hooks/useTranslation'
+import { useI18nStore } from '../stores/useI18nStore'
 
 interface SessionSelection {
   hostId: string
@@ -495,7 +522,7 @@ interface Props {
 }
 
 export function SessionPickerList({ onSelect }: Props) {
-  const { t } = useTranslation()
+  const t = useI18nStore((s) => s.t)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const runtime = useHostStore((s) => s.runtime)
@@ -533,7 +560,7 @@ export function SessionPickerList({ onSelect }: Props) {
                       hostId,
                       sessionCode: s.code,
                       cachedName: s.name,
-                      tmuxInstance: runtime[hostId]?.info?.tmux_instance ?? '',
+                      tmuxInstance: runtime[hostId]?.info?.tmux_instance ?? '', // info 未載入時為空字串，tmux-restarted 偵測會在下次 sessions event 時自然校正
                     })
                   }
                 >
@@ -571,10 +598,52 @@ git commit -m "feat: SessionPickerList — cross-host session picker for termina
 
 - [ ] **Step 1: 寫測試**
 
-測試要覆蓋：
-- 三種 reason 各自顯示對應訊息
-- 關閉按鈕呼叫 closeTab
-- SessionPickerList 的 onSelect 覆寫 PaneContent（清除 terminated）
+```typescript
+// spa/src/components/TerminatedPane.test.tsx
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { TerminatedPane } from './TerminatedPane'
+import type { PaneContent } from '../types/tab'
+
+vi.mock('../stores/useTabStore', () => ({
+  useTabStore: vi.fn((sel) => sel({
+    closeTab: vi.fn(),
+    setPaneContent: vi.fn(),
+  })),
+}))
+vi.mock('../stores/useI18nStore', () => ({
+  useI18nStore: vi.fn((sel) => sel({ t: (key: string) => key })),
+}))
+vi.mock('./SessionPickerList', () => ({
+  SessionPickerList: ({ onSelect }: any) => (
+    <button data-testid="pick" onClick={() => onSelect({ hostId: 'h2', sessionCode: 'x', cachedName: 'X', tmuxInstance: 't2' })}>pick</button>
+  ),
+}))
+
+const baseContent: Extract<PaneContent, { kind: 'tmux-session' }> = {
+  kind: 'tmux-session', hostId: 'h1', sessionCode: 'c1',
+  mode: 'terminal', cachedName: 'my-session', tmuxInstance: 't1',
+  terminated: 'session-closed',
+}
+
+describe('TerminatedPane', () => {
+  it('renders correct message for session-closed', () => {
+    render(<TerminatedPane content={baseContent} tabId="t1" paneId="p1" />)
+    expect(screen.getByText('terminated.session_closed')).toBeInTheDocument()
+  })
+
+  it('renders correct message for host-removed', () => {
+    render(<TerminatedPane content={{ ...baseContent, terminated: 'host-removed' }} tabId="t1" paneId="p1" />)
+    expect(screen.getByText('terminated.host_removed')).toBeInTheDocument()
+  })
+
+  it('renders close tab button', () => {
+    render(<TerminatedPane content={baseContent} tabId="t1" paneId="p1" />)
+    expect(screen.getByText('terminated.close_tab')).toBeInTheDocument()
+  })
+})
+```
 
 - [ ] **Step 2: 確認測試失敗**
 
@@ -586,7 +655,7 @@ Run: `cd spa && npx vitest run src/components/TerminatedPane.test.tsx`
 // spa/src/components/TerminatedPane.tsx
 import { SmileySad, X } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
-import { useTranslation } from '../hooks/useTranslation'
+import { useI18nStore } from '../stores/useI18nStore'
 import { SessionPickerList } from './SessionPickerList'
 import type { PaneContent, TerminatedReason } from '../types/tab'
 
@@ -603,7 +672,7 @@ const REASON_KEYS: Record<TerminatedReason, { title: string; desc: string }> = {
 }
 
 export function TerminatedPane({ content, tabId, paneId }: Props) {
-  const { t } = useTranslation()
+  const t = useI18nStore((s) => s.t)
   const closeTab = useTabStore((s) => s.closeTab)
   const setPaneContent = useTabStore((s) => s.setPaneContent)
   const reason = content.terminated!
@@ -655,11 +724,10 @@ git commit -m "feat: TerminatedPane — error page for terminated tabs"
 
 ---
 
-### Task 9: SessionPaneContent terminated 分支 + WS guard
+### Task 9: SessionPaneContent terminated 分支
 
 **Files:**
 - Modify: `spa/src/components/SessionPaneContent.tsx`
-- Modify: `spa/src/hooks/useTerminalWs.ts`
 
 - [ ] **Step 1: SessionPaneContent 加入 terminated 判斷**
 
@@ -674,25 +742,18 @@ if (content.terminated) {
 }
 ```
 
-- [ ] **Step 2: useTerminalWs 加入 terminated guard**
+> 注：`useTerminalWs` 不需要額外 guard — `SessionPaneContent` 的 terminated 判斷在最頂層，當 `content.terminated` 為 true 時，`TerminalView`（含 `useTerminalWs`）不會被渲染，WS 自然不會建立。
 
-在 `spa/src/hooks/useTerminalWs.ts` 的 WS 連線建立之前加入 guard：
-
-```typescript
-// 在 useEffect 內，ws 連線建立前
-if (content.terminated) return
-```
-
-- [ ] **Step 3: 確認 lint + 測試通過**
+- [ ] **Step 2: 確認 lint + 測試通過**
 
 Run: `cd spa && pnpm run lint && npx vitest run`
 Expected: PASS
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add spa/src/components/SessionPaneContent.tsx spa/src/hooks/useTerminalWs.ts
-git commit -m "feat: terminated tab rendering + WS isolation guard"
+git add spa/src/components/SessionPaneContent.tsx
+git commit -m "feat: terminated tab rendering in SessionPaneContent"
 ```
 
 ---
@@ -803,17 +864,20 @@ Run: `cd spa && npx vitest run src/stores/useTabStore.test.ts`
 在 `useMultiHostEventWs.ts` 的 `sessions` 事件 handler 中，在 `replaceHost` 之後加入：
 
 ```typescript
-// session-closed detection: compare new list with open tabs
+// session-closed detection: collect unique closed sessionCodes, then mark once each
 const newCodes = new Set(data.map((s: any) => s.code))
+const closedCodes = new Set<string>()
 const { tabs } = useTabStore.getState()
 for (const tab of Object.values(tabs)) {
-  // Scan full pane tree for matching tmux-session panes
   scanPaneTree(tab.layout, (pane) => {
     const c = pane.content
     if (c.kind === 'tmux-session' && c.hostId === hostId && !c.terminated && !newCodes.has(c.sessionCode)) {
-      useTabStore.getState().markTerminated(hostId, c.sessionCode, 'session-closed')
+      closedCodes.add(c.sessionCode)
     }
   })
+}
+for (const code of closedCodes) {
+  useTabStore.getState().markTerminated(hostId, code, 'session-closed')
 }
 ```
 
@@ -837,20 +901,25 @@ export function scanPaneTree(layout: PaneLayout, fn: (pane: Pane) => void): void
 // sessions event handler，在 session-closed 偵測之前
 const incomingTmuxInstance = (rawEvent as any).tmuxInstance // daemon 新增欄位
 if (incomingTmuxInstance) {
+  // Check if any open tab has a different tmuxInstance — if so, mark all as tmux-restarted
+  let needsTerminate = false
   const { tabs } = useTabStore.getState()
   for (const tab of Object.values(tabs)) {
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
       if (c.kind === 'tmux-session' && c.hostId === hostId && !c.terminated
           && c.tmuxInstance && c.tmuxInstance !== incomingTmuxInstance) {
-        useTabStore.getState().markHostTerminated(hostId, 'tmux-restarted')
+        needsTerminate = true
       }
     })
+  }
+  if (needsTerminate) {
+    useTabStore.getState().markHostTerminated(hostId, 'tmux-restarted')
   }
 }
 ```
 
-> 注：此步驟依賴 daemon 端修改 sessions 廣播格式。若 daemon 尚未支援，先跳過此步驟，Phase 4b 的 session-closed 偵測仍可獨立運作。
+> 注：此步驟依賴 daemon 端修改 sessions 廣播格式（在 sessions event payload 附帶 `tmuxInstance` 欄位）。若 daemon 尚未支援，先跳過此步驟，Phase 4b 的 session-closed 偵測仍可獨立運作。需建立 GitHub issue 追蹤 daemon 端修改。
 
 - [ ] **Step 7: 確認全部測試通過**
 
@@ -885,7 +954,7 @@ export interface HostRuntime {
   info?: HostInfo
   daemonState?: 'connected' | 'refused' | 'unreachable'
   tmuxState?: 'ok' | 'unavailable'
-  manualRetry?: () => void  // 新增
+  manualRetry?: () => void  // 新增。安全：runtime 不在 persist partialize 範圍內，函式不會被序列化
 }
 ```
 
@@ -979,7 +1048,8 @@ const statusLabel =
 在 OverviewSection 的 connection status 區域加入條件訊息：
 
 ```typescript
-function connectionErrorMessage(runtime?: HostRuntime): string | null {
+// 定義在元件外部，接收 t 參數
+function connectionErrorMessage(runtime: HostRuntime | undefined, t: (key: string) => string): string | null {
   if (!runtime || runtime.status === 'connected') {
     if (runtime?.tmuxState === 'unavailable') return t('hosts.error_tmux_down')
     return null
@@ -988,6 +1058,10 @@ function connectionErrorMessage(runtime?: HostRuntime): string | null {
   if (runtime.daemonState === 'refused') return t('hosts.error_refused')
   return null
 }
+
+// 在元件內使用：
+const t = useI18nStore((s) => s.t)
+const errorMsg = connectionErrorMessage(runtime, t)
 ```
 
 - [ ] **Step 4: SessionsSection disable 行為**
@@ -1097,7 +1171,7 @@ removeHost: (hostId: string) =>
   }),
 ```
 
-更新所有呼叫 `clearSubagentsForHost` 的地方改用 `removeHost`（或在連線建立時只清 subagents，視情況保留特化版本）。
+**重要**：`useMultiHostEventWs` 的 `onOpen` handler 中有 `clearSubagentsForHost(hostId)` 呼叫，這是 WS 重連時只清 subagents 的正確行為，**不可替換為 `removeHost`**（否則每次 WS 重連都會清掉 events/statuses/unread）。保留 `clearSubagentsForHost` 給 WS onOpen 使用，新增的 `removeHost` 只在 host 刪除 cascade 中呼叫。
 
 - [ ] **Step 2: StreamStore.clearHost**
 
@@ -1219,10 +1293,30 @@ const handleDeleteHost = (withCloseTabs: boolean) => {
   streamStore.clearHost(hostId)
   hostStore.removeHost(hostId)
 
-  // Show undo toast
-  showUndoToast(hostStore.hosts[hostId]?.name ?? hostId, () => {
+  // Show undo toast（用 snapshot 取 host name，因為 removeHost 後 store 已清空）
+  showUndoToast(snapshot.host?.name ?? hostId, () => {
     // Restore from snapshot
-    // ... restore logic
+    if (snapshot.host) {
+      useHostStore.getState().addHost(snapshot.host)
+    }
+    if (snapshot.sessions) {
+      useSessionStore.getState().replaceHost(hostId, snapshot.sessions)
+    }
+    // Restore agent store entries
+    const agentState = useAgentStore.getState()
+    for (const [k, v] of Object.entries(snapshot.agentEvents)) agentState.events[k] = v
+    for (const [k, v] of Object.entries(snapshot.agentStatuses)) agentState.statuses[k] = v
+    // Restore tabs: only if they haven't been overwritten by user during undo window
+    if (snapshot.tabsState) {
+      const currentTabs = useTabStore.getState().tabs
+      for (const [tabId, tab] of Object.entries(snapshot.tabsState.tabs as Record<string, any>)) {
+        if (!currentTabs[tabId]) {
+          // Tab was closed — restore it
+          useTabStore.getState().addTab(tab)
+        }
+        // Tab still exists but was modified by user — skip (don't overwrite user's choice)
+      }
+    }
   })
 }
 ```
@@ -1300,7 +1394,22 @@ function handleNotificationClick(action: NotificationAction) {
 }
 ```
 
-- [ ] **Step 3: 加入 L2/L3 連線通知**
+- [ ] **Step 3: 更新現有 agent notification 的 click call sites**
+
+現有兩處呼叫 `handleNotificationClick(sessionCode)` 的地方需改為傳遞 `NotificationAction`：
+
+```typescript
+// Electron path (約 line 138)：
+// 舊：handleNotificationClick(payload.sessionCode)
+// 新：需從 payload 取得 hostId，若無法取得則從 TabStore 掃描
+const info = getActiveSessionInfo() // 或從 tab 找出 hostId
+handleNotificationClick({ kind: 'open-session', hostId: info?.hostId ?? '', sessionCode: payload.sessionCode })
+
+// Browser Notification path (約 line 127)：
+// 同上改法
+```
+
+- [ ] **Step 4: 加入 L2/L3 連線通知**
 
 在 hook 中監聽 `HostRuntime.daemonState` 和 `tmuxState` 變化：
 
