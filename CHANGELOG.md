@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0-alpha.42] - 2026-04-03
+
+SPA 識別系統整合 — Phase 2b (PR #155)
+
+### 新功能
+
+- **PaneContent 擴充** — session kind 新增 `cachedName`（斷線後仍顯示名稱）+ `tmuxInstance`（偵測 tmux 重啟）
+- **Daemon Host ID 整合** — AddHostDialog 連線成功後 fetch `/api/info` 取得 daemon 的 `host_id` 作為 store key
+- **cachedName 即時同步** — WS session 更新時自動同步 tab 的 cachedName（rename 即時反映）
+- **Tab label fallback 鏈** — live name → cachedName → sessionCode
+
+### 修復
+
+- **addHost dedup** — 重複 daemon `host_id` 不再造成 `hostOrder` 重複
+- **updateSessionCache layout 安全** — 使用 `updatePaneInLayout` 取代 hardcoded leaf，保護未來 split pane 結構
+- **notification cachedName** — 從 notification 重開 tab 時從 sessionStore 查 name，避免空窗期顯示 sessionCode
+
+### Breaking Changes
+
+- PaneContent session 新增 required 欄位，既有 persisted tabs 資料重置
+
 ## [1.0.0-alpha.41] - 2026-04-03
 
 Daemon Host ID 產生 + /api/info 擴充 — Phase 2a (PR #153)
