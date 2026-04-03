@@ -1,4 +1,8 @@
 // spa/src/lib/host-connection.ts — Health check with L1/L2/L3 classification
+//
+// /api/health is a pure liveness endpoint (no auth, returns {"ok": true}).
+// tmux status is NOT included here — it comes via /api/ready (behind auth)
+// or via host-events WS "tmux" event during normal operation.
 
 export interface HealthResult {
   daemon: 'connected' | 'refused' | 'unreachable'
@@ -16,10 +20,11 @@ export async function checkHealth(baseUrl: string): Promise<HealthResult> {
     const start = performance.now()
     const res = await fetch(`${baseUrl}/api/health`, { signal: controller.signal })
     const latency = Math.round(performance.now() - start)
-    const data = await res.json()
+    await res.json() // consume body
     return {
       daemon: 'connected',
-      tmux: data.tmux ? 'ok' : 'unavailable',
+      // tmux status unknown from health — will be updated via WS or /api/ready
+      tmux: 'unavailable',
       latency,
     }
   } catch (err: unknown) {

@@ -133,4 +133,5 @@ func (c *Core) RegisterCoreRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/config", c.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", c.handlePutConfig)
 	mux.HandleFunc("POST /api/ws-ticket", c.handleWsTicket)
+	mux.HandleFunc("GET /api/ready", c.handleReady)
 }

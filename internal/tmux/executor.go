@@ -2,10 +2,12 @@
 package tmux
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 var ErrNoSession = errors.New("no such session")
@@ -212,6 +214,8 @@ func (r *RealExecutor) ShowHooksGlobal() (string, error) {
 }
 
 func (r *RealExecutor) TmuxAlive() bool {
-	return exec.Command("tmux", "info").Run() == nil
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "tmux", "info").Run() == nil
 }
 

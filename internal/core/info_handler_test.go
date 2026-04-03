@@ -12,9 +12,8 @@ import (
 	"github.com/wake/tmux-box/internal/tmux"
 )
 
-func TestHealthEndpointWithTmuxTrue(t *testing.T) {
+func TestHealthEndpoint(t *testing.T) {
 	c := New(CoreDeps{Config: &config.Config{}})
-	c.TmuxAliveFunc = func() bool { return true }
 
 	req := httptest.NewRequest("GET", "/api/health", nil)
 	rec := httptest.NewRecorder()
@@ -26,35 +25,58 @@ func TestHealthEndpointWithTmuxTrue(t *testing.T) {
 	err := json.NewDecoder(rec.Body).Decode(&body)
 	require.NoError(t, err)
 	assert.Equal(t, true, body["ok"])
+	assert.NotContains(t, body, "tmux", "health should not expose tmux status")
+}
+
+func TestReadyEndpointWithTmuxTrue(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{}})
+	c.TmuxAliveFunc = func() bool { return true }
+
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/ready", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&body)
+	require.NoError(t, err)
 	assert.Equal(t, true, body["tmux"])
 }
 
-func TestHealthEndpointWithTmuxFalse(t *testing.T) {
+func TestReadyEndpointWithTmuxFalse(t *testing.T) {
 	c := New(CoreDeps{Config: &config.Config{}})
 	c.TmuxAliveFunc = func() bool { return false }
 
-	req := httptest.NewRequest("GET", "/api/health", nil)
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/ready", nil)
 	rec := httptest.NewRecorder()
-	c.HandleHealth(rec, req)
+	mux.ServeHTTP(rec, req)
 
 	var body map[string]any
 	err := json.NewDecoder(rec.Body).Decode(&body)
 	require.NoError(t, err)
-	assert.Equal(t, true, body["ok"])
 	assert.Equal(t, false, body["tmux"])
 }
 
-func TestHealthEndpointWithoutTmuxFunc(t *testing.T) {
+func TestReadyEndpointWithoutTmuxFunc(t *testing.T) {
 	c := New(CoreDeps{Config: &config.Config{}})
 
-	req := httptest.NewRequest("GET", "/api/health", nil)
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/ready", nil)
 	rec := httptest.NewRecorder()
-	c.HandleHealth(rec, req)
+	mux.ServeHTTP(rec, req)
 
 	var body map[string]any
 	err := json.NewDecoder(rec.Body).Decode(&body)
 	require.NoError(t, err)
-	assert.Equal(t, true, body["ok"])
 	assert.Equal(t, false, body["tmux"])
 }
 

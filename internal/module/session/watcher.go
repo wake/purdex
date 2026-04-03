@@ -32,6 +32,17 @@ func (ws *watcherState) setTmuxAlive(v bool) (changed bool) {
 	return
 }
 
+// updateHash compares and updates the hash, returns true if changed.
+func (ws *watcherState) updateHash(newHash string) bool {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	if newHash == ws.lastHash {
+		return false
+	}
+	ws.lastHash = newHash
+	return true
+}
+
 // TmuxAlive returns the cached tmux status (thread-safe).
 func (m *SessionModule) TmuxAlive() bool {
 	return m.wstate.getTmuxAlive()
@@ -64,12 +75,7 @@ func (m *SessionModule) tickNormal() {
 	}
 
 	hash := hashSessions(sessions)
-	m.wstate.mu.Lock()
-	changed := hash != m.wstate.lastHash
-	m.wstate.lastHash = hash
-	m.wstate.mu.Unlock()
-
-	if changed && m.core.Events.HasSubscribers() {
+	if m.wstate.updateHash(hash) && m.core.Events.HasSubscribers() {
 		data := mustMarshal(sessions)
 		m.core.Events.Broadcast("", "sessions", data)
 	}
@@ -168,6 +174,11 @@ func (m *SessionModule) watchSessions(ctx context.Context) {
 }
 
 func (m *SessionModule) notifyWaitFor(active bool) {
+	// Drain any pending signal to ensure the new one is delivered
+	select {
+	case <-m.waitForGate:
+	default:
+	}
 	select {
 	case m.waitForGate <- active:
 	default:
