@@ -64,6 +64,7 @@ export function connectHostEvents(
     reconnect: () => {
       if (!closed) {
         retryMs = 1000
+        ws?.close()
         connect()
       }
     },

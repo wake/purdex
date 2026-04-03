@@ -8,6 +8,7 @@ export class ConnectionStateMachine {
   private onStateChange: (result: HealthResult) => void
   private stopped = false
   private backgroundTimer: ReturnType<typeof setTimeout> | null = null
+  private epoch = 0
 
   constructor(
     checkFn: () => Promise<HealthResult>,
@@ -20,14 +21,17 @@ export class ConnectionStateMachine {
   /** Trigger a FAST_RETRY cycle (called on WS close or manual retry). */
   async trigger(): Promise<void> {
     this.stopBackground()
+    this.epoch++
+    const myEpoch = this.epoch
     this.stopped = false
 
     let lastResult: HealthResult | null = null
 
     // FAST_RETRY: up to 3 immediate attempts
     for (let i = 0; i < FAST_RETRY_COUNT; i++) {
-      if (this.stopped) return
+      if (this.stopped || this.epoch !== myEpoch) return
       lastResult = await this.checkFn()
+      if (this.stopped || this.epoch !== myEpoch) return
       this.onStateChange(lastResult)
 
       if (lastResult.daemon === 'connected') {
@@ -35,7 +39,7 @@ export class ConnectionStateMachine {
       }
     }
 
-    if (!lastResult || this.stopped) return
+    if (!lastResult || this.stopped || this.epoch !== myEpoch) return
 
     // Classify by last result
     if (lastResult.daemon === 'unreachable') {
@@ -48,9 +52,11 @@ export class ConnectionStateMachine {
   /** Start background continuous retry for L1. */
   private startBackground() {
     if (this.stopped) return
+    const myEpoch = this.epoch
     this.backgroundTimer = setTimeout(async () => {
-      if (this.stopped) return
+      if (this.stopped || this.epoch !== myEpoch) return
       const result = await this.checkFn()
+      if (this.stopped || this.epoch !== myEpoch) return
       this.onStateChange(result)
 
       if (result.daemon === 'connected') {
