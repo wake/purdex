@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { UploadSimple } from '@phosphor-icons/react'
+import { UploadSimple, Spinner } from '@phosphor-icons/react'
 import { useTerminal } from '../hooks/useTerminal'
 import { useTerminalWs } from '../hooks/useTerminalWs'
+import { useHostConnection } from '../hooks/useHostConnection'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useUploadStore } from '../stores/useUploadStore'
 import { useHostStore } from '../stores/useHostStore'
@@ -38,6 +39,12 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
     onDisconnect: handleDisconnect,
     onReconnect: handleReconnect,
   })
+
+  // Manual reconnect
+  const { manualRetry, status: hostStatus } = useHostConnection(hostId ?? '')
+  const [retrying, setRetrying] = useState(false)
+  const handleRetry = useCallback(() => { setRetrying(true); manualRetry() }, [manualRetry])
+  useEffect(() => { setRetrying(false) }, [hostStatus])
 
   // Drag-drop state
   const [isDragging, setIsDragging] = useState(false)
@@ -130,7 +137,7 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
       <div ref={containerRef} className="w-full h-full" />
       <div
         data-testid="terminal-overlay"
-        className="absolute inset-0 flex items-center justify-center pointer-events-none"
+        className={`absolute inset-0 flex flex-col items-center justify-center ${disconnected ? '' : 'pointer-events-none'}`}
         style={{
           background: disconnected ? 'color-mix(in srgb, var(--terminal-bg) 50%, transparent)' : 'var(--terminal-bg)',
           opacity: showOverlay ? 1 : 0,
@@ -140,6 +147,16 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
         <span className="text-text-muted text-sm" style={{ animation: 'breathing 2s ease-in-out infinite' }}>
           {disconnected ? 'reconnecting...' : (connectingMessage || 'connecting...')}
         </span>
+        {disconnected && (
+          <button
+            data-testid="reconnect-btn"
+            className="mt-4 px-4 py-2 rounded bg-zinc-700 hover:bg-zinc-600 text-sm text-text-secondary cursor-pointer disabled:opacity-50"
+            onClick={handleRetry}
+            disabled={retrying}
+          >
+            {retrying ? <Spinner size={16} className="animate-spin" /> : t('connection.reconnect')}
+          </button>
+        )}
         <style>{`@keyframes breathing { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }`}</style>
       </div>
       {isDragging && (
