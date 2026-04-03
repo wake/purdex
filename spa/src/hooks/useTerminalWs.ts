@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import type { Terminal } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import { connectTerminal } from '../lib/ws'
+import { useHostStore } from '../stores/useHostStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 
 interface UseTerminalWsOpts {
@@ -9,12 +10,13 @@ interface UseTerminalWsOpts {
   termRef: React.RefObject<Terminal | null>
   fitAddonRef: React.RefObject<FitAddon | null>
   containerRef: React.RefObject<HTMLDivElement | null>
+  hostId?: string
   onReady: () => void
   onDisconnect: () => void
   onReconnect: () => void
 }
 
-export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, onReady, onDisconnect, onReconnect }: UseTerminalWsOpts) {
+export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostId, onReady, onDisconnect, onReconnect }: UseTerminalWsOpts) {
   const connRef = useRef<ReturnType<typeof connectTerminal> | null>(null)
   const revealDelayRef = useRef(useUISettingsStore.getState().terminalRevealDelay)
 
@@ -45,6 +47,13 @@ export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, onRea
       term.focus()
     }
 
+    const canReconnect = hostId
+      ? () => {
+          const runtime = useHostStore.getState().runtime[hostId]
+          return !runtime || runtime.status === 'connected'
+        }
+      : undefined
+
     const conn = connectTerminal(
       wsUrl,
       (data) => {
@@ -60,6 +69,7 @@ export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, onRea
         fitAddonRef.current?.fit()
         conn.resize(term.cols, term.rows)
       },
+      canReconnect,
     )
     connRef.current = conn
 
