@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.41] - 2026-04-03
+
+Daemon Host ID 產生 + /api/info 擴充 — Phase 2a (PR #153)
+
+### 新功能
+
+- **Host ID** — Daemon 啟動時產生穩定的 `hostname:6-char-code` 識別碼，持久化到 `config.toml`
+- **/api/info 擴充** — 回傳 `host_id`（daemon 自報 ID）+ `tmux_instance`（`pid:startTime`，偵測 tmux server 重啟）
+- **config.WriteFile** — 統一的 config 原子寫入函式（取代重複的 `persistConfig` / `writeConfig`）
+
+### 修復
+
+- **HostID rollback** — `EnsureHostID` 持久化失敗時回滾 `cfg.HostID`，避免使用不穩定的 ID
+- **PUT /api/config redact** — 回應與 GET 一致，隱藏 `host_id` + `token`
+
 ## [1.0.0-alpha.40] - 2026-04-03
 
 Storage 抽象層 + Key 遷移 — Phase 1a (PR #152)
