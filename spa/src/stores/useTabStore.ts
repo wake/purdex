@@ -22,6 +22,7 @@ interface TabState {
   reorderTabs: (order: string[]) => void
   togglePin: (id: string) => void
   toggleLock: (id: string) => void
+  updateSessionCache: (hostId: string, sessionCode: string, cachedName: string) => void
 }
 
 export const useTabStore = create<TabState>()(
@@ -134,6 +135,24 @@ export const useTabStore = create<TabState>()(
           const tab = state.tabs[id]
           if (!tab) return state
           return { tabs: { ...state.tabs, [id]: { ...tab, locked: !tab.locked } } }
+        }),
+
+      updateSessionCache: (hostId, sessionCode, cachedName) =>
+        set((state) => {
+          let changed = false
+          const tabs = { ...state.tabs }
+          for (const [id, tab] of Object.entries(tabs)) {
+            const primary = getPrimaryPane(tab.layout)
+            const c = primary.content
+            if (c.kind === 'session' && c.hostId === hostId && c.sessionCode === sessionCode && c.cachedName !== cachedName) {
+              tabs[id] = {
+                ...tab,
+                layout: { type: 'leaf', pane: { ...primary, content: { ...c, cachedName } } },
+              }
+              changed = true
+            }
+          }
+          return changed ? { tabs } : state
         }),
     }),
     {

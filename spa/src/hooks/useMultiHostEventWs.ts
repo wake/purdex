@@ -4,6 +4,7 @@ import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useTabStore } from '../stores/useTabStore'
 import { connectSessionEvents } from '../lib/session-events'
 import { hostWsUrl, fetchWsTicket } from '../lib/host-api'
 import { fetchHistory } from '../lib/api'
@@ -29,6 +30,10 @@ export function useMultiHostEventWs() {
             try {
               const data: Session[] = JSON.parse(event.value)
               useSessionStore.getState().replaceHost(hostId, data)
+              // Sync cachedName for existing tabs
+              for (const s of data) {
+                useTabStore.getState().updateSessionCache(hostId, s.code, s.name)
+              }
             } catch { /* ignore */ }
             return
           }
