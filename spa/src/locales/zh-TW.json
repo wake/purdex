@@ -354,7 +354,7 @@
   "hosts.preset_count": "{{count}} 個預設",
   "hosts.connection_failed": "連線失敗",
   "hosts.confirm_delete_tabs": "一併關閉所有此 Host 的分頁",
-  "hosts.deleted_toast": "已刪除 {name}",
+  "hosts.deleted_toast": "已刪除 {{name}}",
   "hosts.undo": "復原",
   "hosts.error_unreachable": "主機無法連線",
   "hosts.error_refused": "Daemon 未啟動",
@@ -368,7 +368,7 @@
   "session.no_sessions": "沒有可用的 Session",
 
   "terminated.session_closed": "Session 已關閉",
-  "terminated.session_closed_desc": "{name} 已不存在",
+  "terminated.session_closed_desc": "{{name}} 已不存在",
   "terminated.tmux_restarted": "tmux 已重啟",
   "terminated.tmux_restarted_desc": "原有 session 已失效",
   "terminated.host_removed": "Host 已移除",
@@ -379,6 +379,6 @@
 
   "connection.reconnect": "重新連線",
 
-  "notification.daemon_refused": "{name} — Daemon 未啟動",
-  "notification.tmux_down": "{name} — tmux 環境無法連線"
+  "notification.daemon_refused": "{{name}} — Daemon 未啟動",
+  "notification.tmux_down": "{{name}} — tmux 環境無法連線"
 }

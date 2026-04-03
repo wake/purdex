@@ -354,7 +354,7 @@
   "hosts.preset_count": "{{count}} preset(s)",
   "hosts.connection_failed": "Connection failed",
   "hosts.confirm_delete_tabs": "Also close all tabs for this host",
-  "hosts.deleted_toast": "{name} deleted",
+  "hosts.deleted_toast": "{{name}} deleted",
   "hosts.undo": "Undo",
   "hosts.error_unreachable": "Host unreachable",
   "hosts.error_refused": "Daemon not running",
@@ -368,7 +368,7 @@
   "session.no_sessions": "No sessions available",
 
   "terminated.session_closed": "Session closed",
-  "terminated.session_closed_desc": "{name} no longer exists",
+  "terminated.session_closed_desc": "{{name}} no longer exists",
   "terminated.tmux_restarted": "tmux restarted",
   "terminated.tmux_restarted_desc": "Previous sessions are no longer valid",
   "terminated.host_removed": "Host removed",
@@ -379,6 +379,6 @@
 
   "connection.reconnect": "Reconnect",
 
-  "notification.daemon_refused": "{name} — Daemon not running",
-  "notification.tmux_down": "{name} — tmux environment unreachable"
+  "notification.daemon_refused": "{{name}} — Daemon not running",
+  "notification.tmux_down": "{{name}} — tmux environment unreachable"
 }
