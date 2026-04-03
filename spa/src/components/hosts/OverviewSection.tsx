@@ -1,12 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
 import { CaretDown, CaretRight, ArrowsClockwise, Trash, Plugs, Eye, EyeSlash, Check, X } from '@phosphor-icons/react'
-import { useHostStore, type HostInfo, type HostRuntime } from '../../stores/useHostStore'
+import { useHostStore, type HostConfig, type HostInfo, type HostRuntime } from '../../stores/useHostStore'
+import { useSessionStore } from '../../stores/useSessionStore'
+import { useTabStore } from '../../stores/useTabStore'
+import { useAgentStore } from '../../stores/useAgentStore'
+import { useStreamStore } from '../../stores/useStreamStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { hostFetch, fetchInfo, fetchHealth } from '../../lib/host-api'
+import { getPrimaryPane } from '../../lib/pane-tree'
 import type { ConfigData } from '../../lib/api'
+import type { Session } from '../../lib/api'
+
+export interface UndoToastInfo {
+  name: string
+  restore: () => void
+}
 
 interface Props {
   hostId: string
+  onShowUndoToast?: (info: UndoToastInfo) => void
 }
 
 /* ─── Collapsible section wrapper ─── */
@@ -224,12 +236,11 @@ function connectionErrorMessage(runtime: HostRuntime | undefined, t: (key: strin
 
 /* ─── Main component ─── */
 
-export function OverviewSection({ hostId }: Props) {
+export function OverviewSection({ hostId, onShowUndoToast }: Props) {
   const t = useI18nStore((s) => s.t)
   const host = useHostStore((s) => s.hosts[hostId])
   const runtime = useHostStore((s) => s.runtime[hostId])
   const updateHost = useHostStore((s) => s.updateHost)
-  const removeHost = useHostStore((s) => s.removeHost)
   const hostOrder = useHostStore((s) => s.hostOrder)
 
   const [info, setInfo] = useState<HostInfo | null>(null)
@@ -237,6 +248,7 @@ export function OverviewSection({ hostId }: Props) {
   const [testResult, setTestResult] = useState<{ ok: boolean; latency?: number; error?: string } | null>(null)
   const [testing, setTesting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [closeTabs, setCloseTabs] = useState(true)
 
   // Fetch info + config on mount or hostId change
   useEffect(() => {
@@ -276,7 +288,62 @@ export function OverviewSection({ hostId }: Props) {
   }
 
   const handleDeleteHost = () => {
-    removeHost(hostId)
+    const hostStore = useHostStore.getState()
+    const tabStore = useTabStore.getState()
+    const sessionStore = useSessionStore.getState()
+
+    const hostName = hostStore.hosts[hostId]?.name ?? hostId
+
+    // Snapshot for undo (serializable data only)
+    const snapshot: {
+      host: HostConfig | undefined
+      hostOrder: string[]
+      sessions: Session[] | undefined
+      activeHostId: string | null
+    } = {
+      host: hostStore.hosts[hostId],
+      hostOrder: [...hostStore.hostOrder],
+      sessions: sessionStore.sessions[hostId],
+      activeHostId: hostStore.activeHostId,
+    }
+
+    // Execute cascade: tabs -> sessions -> agent -> stream -> host
+    if (closeTabs) {
+      // Close all tmux-session tabs for this host
+      for (const [tabId, tab] of Object.entries(tabStore.tabs)) {
+        const primary = getPrimaryPane(tab.layout)
+        if (primary.content.kind === 'tmux-session' && primary.content.hostId === hostId) {
+          tabStore.closeTab(tabId)
+        }
+      }
+    } else {
+      // Mark all tmux-session tabs as terminated
+      tabStore.markHostTerminated(hostId, 'host-removed')
+    }
+
+    sessionStore.removeHost(hostId)
+    useAgentStore.getState().removeHost(hostId)
+    useStreamStore.getState().clearHost(hostId)
+    hostStore.removeHost(hostId)
+
+    setConfirmDelete(false)
+
+    // Show undo toast via parent
+    onShowUndoToast?.({
+      name: hostName,
+      restore: () => {
+        if (snapshot.host) {
+          useHostStore.getState().addHost(snapshot.host)
+          // Restore activeHostId if it was this host
+          if (snapshot.activeHostId === hostId) {
+            useHostStore.getState().setActiveHost(hostId)
+          }
+        }
+        if (snapshot.sessions) {
+          useSessionStore.getState().replaceHost(hostId, snapshot.sessions)
+        }
+      },
+    })
   }
 
   const statusLabel = (r?: HostRuntime) => {
@@ -374,6 +441,15 @@ export function OverviewSection({ hostId }: Props) {
         {confirmDelete && (
           <div className="mt-3 p-3 bg-red-500/10 border border-red-500/30 rounded">
             <p className="text-xs text-red-400 mb-2">{t('hosts.confirm_delete')}</p>
+            <label className="flex items-center gap-2 text-xs text-zinc-400 mb-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={closeTabs}
+                onChange={(e) => setCloseTabs(e.target.checked)}
+                className="rounded"
+              />
+              {t('hosts.confirm_delete_tabs')}
+            </label>
             <div className="flex gap-2">
               <button
                 onClick={handleDeleteHost}
