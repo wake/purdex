@@ -20,6 +20,10 @@ export function getPaneLabel(
     case 'new-tab':
       return t('page.pane.new_tab')
     case 'tmux-session': {
+      if (content.terminated) {
+        const name = content.cachedName || content.sessionCode
+        return `${name}（Terminated）`
+      }
       const session = sessionStore.getByCode(content.sessionCode)
       return session?.name ?? (content.cachedName || content.sessionCode)
     }
@@ -47,6 +51,7 @@ export function getPaneIcon(content: PaneContent): string {
     case 'new-tab':
       return 'Plus'
     case 'tmux-session':
+      if (content.terminated) return 'SmileySad'
       return content.mode === 'terminal' ? 'TerminalWindow' : 'ChatCircleDots'
     case 'dashboard':
       return 'House'

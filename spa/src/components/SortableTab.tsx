@@ -99,8 +99,9 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const isUnread = useAgentStore((s) => ck ? !!s.unread[ck] : false)
   const subagentCount = useAgentStore((s) => ck ? (s.activeSubagents[ck]?.length ?? 0) : 0)
   const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
+  const isTerminated = primaryContent.kind === 'tmux-session' && !!primaryContent.terminated
   const isHostOffline = useHostStore((s) => {
-    if (!hostId) return false
+    if (!hostId || isTerminated) return false
     const rt = s.runtime[hostId]
     return rt ? rt.status !== 'connected' : false
   })
