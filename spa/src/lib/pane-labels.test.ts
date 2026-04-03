@@ -29,7 +29,12 @@ describe('getPaneLabel', () => {
     expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore, mockT)).toBe('dev-server')
   })
 
-  it('falls back to sessionCode if session not found', () => {
+  it('falls back to cachedName if session not found', () => {
+    const c: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'zzz999', mode: 'terminal', cachedName: 'my-session', tmuxInstance: '' }
+    expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore, mockT)).toBe('my-session')
+  })
+
+  it('falls back to sessionCode if session not found and cachedName empty', () => {
     const c: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'zzz999', mode: 'terminal', cachedName: '', tmuxInstance: '' }
     expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore, mockT)).toBe('zzz999')
   })
