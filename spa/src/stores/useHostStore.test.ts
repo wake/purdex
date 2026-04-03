@@ -104,4 +104,13 @@ describe('useHostStore', () => {
     const headers = useHostStore.getState().getAuthHeaders(defaultId)
     expect(headers).toEqual({ Authorization: 'Bearer my-secret-token' })
   })
+
+  it('addHost with explicit id uses provided id', () => {
+    const state = useHostStore.getState()
+    const id = state.addHost({ id: 'mlab:abc123', name: 'Test', ip: '1.2.3.4', port: 7860 })
+
+    expect(id).toBe('mlab:abc123')
+    expect(useHostStore.getState().hosts['mlab:abc123']).toBeDefined()
+    expect(useHostStore.getState().hosts['mlab:abc123'].name).toBe('Test')
+  })
 })
