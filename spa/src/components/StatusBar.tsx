@@ -137,11 +137,14 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
       <span>{hostName}</span>
       <span>{sessionName}</span>
       <span className={
-        status === 'connected' ? 'text-green-500'
+        status === 'connected' && hostRuntime?.tmuxState === 'unavailable' ? 'text-yellow-400'
+          : status === 'connected' ? 'text-green-500'
           : status === 'reconnecting' ? 'text-yellow-400'
           : 'text-red-400'
       }>
-        {status}
+        {status === 'connected' && hostRuntime?.tmuxState === 'unavailable'
+          ? t('hosts.error_tmux_down')
+          : status}
       </span>
       {getAgentLabel(agentEvent) && (() => {
         const label = getAgentLabel(agentEvent)!

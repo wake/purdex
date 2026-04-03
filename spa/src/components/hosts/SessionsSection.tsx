@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Plus, Play, Trash, PencilSimple, Check, X } from '@phosphor-icons/react'
 import { useSessionStore } from '../../stores/useSessionStore'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -124,13 +124,25 @@ function InlineRename({ hostId, session, onDone }: { hostId: string; session: Se
   )
 }
 
+/* ─── Connection error message ─── */
+
+function connectionErrorMessage(runtime: HostRuntime | undefined, t: (key: string) => string): string | null {
+  if (!runtime || runtime.status !== 'connected') {
+    if (runtime?.daemonState === 'unreachable') return t('hosts.error_unreachable')
+    if (runtime?.daemonState === 'refused') return t('hosts.error_refused')
+    return null
+  }
+  if (runtime.tmuxState === 'unavailable') return t('hosts.error_tmux_down')
+  return null
+}
+
 /* ─── Main component ─── */
 
 export function SessionsSection({ hostId }: Props) {
   const t = useI18nStore((s) => s.t)
   const sessions = useSessionStore((s) => s.sessions[hostId] ?? [])
   const runtime = useHostStore((s) => s.runtime[hostId])
-  const isOffline = runtime != null && runtime.status !== 'connected'
+  const isOffline = !runtime || runtime.status !== 'connected' || runtime.tmuxState === 'unavailable'
   const [showNew, setShowNew] = useState(false)
   const [renamingCode, setRenamingCode] = useState<string | null>(null)
   const [deletingCode, setDeletingCode] = useState<string | null>(null)
@@ -175,6 +187,12 @@ export function SessionsSection({ hostId }: Props) {
       </div>
 
       {showNew && <NewSessionDialog hostId={hostId} onClose={() => setShowNew(false)} />}
+
+      {isOffline && connectionErrorMessage(runtime, t) && (
+        <div className="text-xs text-red-400 px-3 py-2 mb-2">
+          {connectionErrorMessage(runtime, t)}
+        </div>
+      )}
 
       {sessions.length === 0 ? (
         <p className="text-sm text-text-muted">{t('hosts.no_sessions')}</p>

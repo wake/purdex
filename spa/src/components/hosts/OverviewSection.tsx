@@ -210,6 +210,18 @@ function TokenField({ token, ip, port, onSave, t }: {
   )
 }
 
+/* ─── Connection error message ─── */
+
+function connectionErrorMessage(runtime: HostRuntime | undefined, t: (key: string) => string): string | null {
+  if (!runtime || runtime.status !== 'connected') {
+    if (runtime?.daemonState === 'unreachable') return t('hosts.error_unreachable')
+    if (runtime?.daemonState === 'refused') return t('hosts.error_refused')
+    return null
+  }
+  if (runtime.tmuxState === 'unavailable') return t('hosts.error_tmux_down')
+  return null
+}
+
 /* ─── Main component ─── */
 
 export function OverviewSection({ hostId }: Props) {
@@ -316,7 +328,8 @@ export function OverviewSection({ hostId }: Props) {
         />
         <Field label={t('hosts.status')}>
           <span className={`text-sm ${
-            runtime?.status === 'connected' ? 'text-green-400'
+            runtime?.status === 'connected' && runtime?.tmuxState === 'unavailable' ? 'text-yellow-400'
+              : runtime?.status === 'connected' ? 'text-green-400'
               : runtime?.status === 'reconnecting' ? 'text-yellow-400'
               : 'text-red-400'
           }`}>
@@ -324,6 +337,11 @@ export function OverviewSection({ hostId }: Props) {
             {runtime?.latency != null && ` (${runtime.latency}ms)`}
           </span>
         </Field>
+        {connectionErrorMessage(runtime, t) && (
+          <div className="text-xs text-red-400 px-1 py-1">
+            {connectionErrorMessage(runtime, t)}
+          </div>
+        )}
 
         <div className="flex gap-2 mt-3">
           <button

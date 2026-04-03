@@ -1,4 +1,4 @@
-import { Plus, CaretDown, CaretRight, Circle, Spinner } from '@phosphor-icons/react'
+import { Plus, CaretDown, CaretRight, Circle, Spinner, Warning } from '@phosphor-icons/react'
 import { useState } from 'react'
 import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -19,15 +19,11 @@ interface Props {
 }
 
 function StatusIcon({ runtime }: { runtime?: HostRuntime }) {
-  if (!runtime) {
-    return <Circle size={8} weight="fill" className="text-text-muted" />
-  }
-  if (runtime.status === 'connected') {
-    return <Circle size={8} weight="fill" className="text-green-400" />
-  }
-  if (runtime.status === 'reconnecting') {
-    return <Spinner size={10} className="text-yellow-400 animate-spin" />
-  }
+  if (!runtime) return <Circle size={8} weight="fill" className="text-text-muted" />
+  if (runtime.status === 'connected' && runtime.tmuxState === 'unavailable')
+    return <Warning size={12} weight="fill" className="text-yellow-400" />
+  if (runtime.status === 'connected') return <Circle size={8} weight="fill" className="text-green-400" />
+  if (runtime.status === 'reconnecting') return <Spinner size={10} className="text-yellow-400 animate-spin" />
   return <Circle size={8} weight="fill" className="text-red-400" />
 }
 
