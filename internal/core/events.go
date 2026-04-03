@@ -10,8 +10,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// SessionEvent is the JSON structure broadcast to all WS subscribers.
-type SessionEvent struct {
+// HostEvent is the JSON structure broadcast to all WS subscribers.
+type HostEvent struct {
 	Type    string `json:"type"`
 	Session string `json:"session"`
 	Value   string `json:"value"`
@@ -39,7 +39,7 @@ func (sub *EventSubscriber) SendCh() <-chan []byte {
 	return sub.send
 }
 
-// EventsBroadcaster manages WebSocket subscribers for session events.
+// EventsBroadcaster manages WebSocket subscribers for host events.
 type EventsBroadcaster struct {
 	mu           sync.RWMutex
 	subscribers  map[*EventSubscriber]struct{}
@@ -88,7 +88,7 @@ func (eb *EventsBroadcaster) Add(conn *websocket.Conn) *EventSubscriber {
 					eb.Remove(sub)
 					return
 				}
-				// Pong timeout is handled by read-side deadline in HandleSessionEvents
+				// Pong timeout is handled by read-side deadline in HandleHostEvents
 			}
 		}
 	}()
@@ -110,7 +110,7 @@ func (eb *EventsBroadcaster) Remove(sub *EventSubscriber) {
 // Broadcast sends a JSON event to all subscribers.
 // Messages are sent non-blocking; slow subscribers that have a full buffer are dropped.
 func (eb *EventsBroadcaster) Broadcast(session, eventType, value string) {
-	msg, err := json.Marshal(SessionEvent{
+	msg, err := json.Marshal(HostEvent{
 		Type:    eventType,
 		Session: session,
 		Value:   value,
@@ -171,9 +171,9 @@ func (eb *EventsBroadcaster) OnSubscribe(fn func(sub *EventSubscriber)) {
 	eb.onSubscribe = append(eb.onSubscribe, fn)
 }
 
-// HandleSessionEvents handles /ws/session-events — SPA subscribes for
+// HandleHostEvents handles /ws/host-events — SPA subscribes for
 // status, relay, handoff, and init events.
-func (eb *EventsBroadcaster) HandleSessionEvents(w http.ResponseWriter, r *http.Request) {
+func (eb *EventsBroadcaster) HandleHostEvents(w http.ResponseWriter, r *http.Request) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {

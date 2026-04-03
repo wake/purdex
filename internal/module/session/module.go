@@ -76,7 +76,7 @@ func (m *SessionModule) Start(ctx context.Context) error {
 		if sessions == nil {
 			sessions = []SessionInfo{}
 		}
-		data, err := json.Marshal(core.SessionEvent{
+		data, err := json.Marshal(core.HostEvent{
 			Type:  "sessions",
 			Value: mustMarshal(sessions),
 		})

@@ -128,7 +128,7 @@ func (c *Core) NotifyConfigChange() {
 
 // RegisterCoreRoutes registers routes owned by Core itself (not by modules).
 func (c *Core) RegisterCoreRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/ws/session-events", c.Events.HandleSessionEvents)
+	mux.HandleFunc("/ws/host-events", c.Events.HandleHostEvents)
 	mux.HandleFunc("GET /api/info", c.handleInfo)
 	mux.HandleFunc("GET /api/config", c.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", c.handlePutConfig)

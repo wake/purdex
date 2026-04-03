@@ -17,7 +17,7 @@ import (
 // dialWS is a test helper that connects to a WS endpoint via httptest.Server.
 func dialWS(t *testing.T, server *httptest.Server) *websocket.Conn {
 	t.Helper()
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/session-events"
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/host-events"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { conn.Close() })
@@ -26,7 +26,7 @@ func dialWS(t *testing.T, server *httptest.Server) *websocket.Conn {
 
 func TestBroadcastSendsToAllSubscribers(t *testing.T) {
 	eb := NewEventsBroadcaster()
-	server := httptest.NewServer(http.HandlerFunc(eb.HandleSessionEvents))
+	server := httptest.NewServer(http.HandlerFunc(eb.HandleHostEvents))
 	defer server.Close()
 
 	const numClients = 3
@@ -45,7 +45,7 @@ func TestBroadcastSendsToAllSubscribers(t *testing.T) {
 		_, msg, err := conn.ReadMessage()
 		require.NoError(t, err, "client %d should receive message", i)
 
-		var evt SessionEvent
+		var evt HostEvent
 		require.NoError(t, json.Unmarshal(msg, &evt))
 		assert.Equal(t, "status", evt.Type)
 		assert.Equal(t, "my-session", evt.Session)
@@ -55,7 +55,7 @@ func TestBroadcastSendsToAllSubscribers(t *testing.T) {
 
 func TestSlowSubscriberBroadcastNeverBlocks(t *testing.T) {
 	eb := NewEventsBroadcaster()
-	server := httptest.NewServer(http.HandlerFunc(eb.HandleSessionEvents))
+	server := httptest.NewServer(http.HandlerFunc(eb.HandleHostEvents))
 	defer server.Close()
 
 	_ = dialWS(t, server)
@@ -82,7 +82,7 @@ func TestSlowSubscriberBroadcastNeverBlocks(t *testing.T) {
 
 func TestRemoveCleansUpSubscriber(t *testing.T) {
 	eb := NewEventsBroadcaster()
-	server := httptest.NewServer(http.HandlerFunc(eb.HandleSessionEvents))
+	server := httptest.NewServer(http.HandlerFunc(eb.HandleHostEvents))
 	defer server.Close()
 
 	conn := dialWS(t, server)
@@ -103,7 +103,7 @@ func TestHasSubscribersReturnsCorrectState(t *testing.T) {
 
 	assert.False(t, eb.HasSubscribers(), "no subscribers initially")
 
-	server := httptest.NewServer(http.HandlerFunc(eb.HandleSessionEvents))
+	server := httptest.NewServer(http.HandlerFunc(eb.HandleHostEvents))
 	defer server.Close()
 
 	conn := dialWS(t, server)
@@ -131,12 +131,12 @@ func TestOnSubscribeCallbackCalledOnConnect(t *testing.T) {
 		lastSub = sub
 
 		// Push a snapshot event to the new subscriber
-		evt := SessionEvent{Type: "status", Session: "test-sess", Value: "idle"}
+		evt := HostEvent{Type: "status", Session: "test-sess", Value: "idle"}
 		data, _ := json.Marshal(evt)
 		sub.Send(data)
 	})
 
-	server := httptest.NewServer(http.HandlerFunc(eb.HandleSessionEvents))
+	server := httptest.NewServer(http.HandlerFunc(eb.HandleHostEvents))
 	defer server.Close()
 
 	conn := dialWS(t, server)
@@ -146,7 +146,7 @@ func TestOnSubscribeCallbackCalledOnConnect(t *testing.T) {
 	_, msg, err := conn.ReadMessage()
 	require.NoError(t, err)
 
-	var evt SessionEvent
+	var evt HostEvent
 	require.NoError(t, json.Unmarshal(msg, &evt))
 	assert.Equal(t, "status", evt.Type)
 	assert.Equal(t, "test-sess", evt.Session)
@@ -168,7 +168,7 @@ func TestOnSubscribeMultipleCallbacks(t *testing.T) {
 		mu.Lock()
 		order = append(order, "callback-1")
 		mu.Unlock()
-		evt := SessionEvent{Type: "status", Session: "s1", Value: "running"}
+		evt := HostEvent{Type: "status", Session: "s1", Value: "running"}
 		data, _ := json.Marshal(evt)
 		sub.Send(data)
 	})
@@ -176,12 +176,12 @@ func TestOnSubscribeMultipleCallbacks(t *testing.T) {
 		mu.Lock()
 		order = append(order, "callback-2")
 		mu.Unlock()
-		evt := SessionEvent{Type: "relay", Session: "s2", Value: "connected"}
+		evt := HostEvent{Type: "relay", Session: "s2", Value: "connected"}
 		data, _ := json.Marshal(evt)
 		sub.Send(data)
 	})
 
-	server := httptest.NewServer(http.HandlerFunc(eb.HandleSessionEvents))
+	server := httptest.NewServer(http.HandlerFunc(eb.HandleHostEvents))
 	defer server.Close()
 
 	conn := dialWS(t, server)
@@ -194,7 +194,7 @@ func TestOnSubscribeMultipleCallbacks(t *testing.T) {
 	_, msg2, err := conn.ReadMessage()
 	require.NoError(t, err)
 
-	var evt1, evt2 SessionEvent
+	var evt1, evt2 HostEvent
 	require.NoError(t, json.Unmarshal(msg1, &evt1))
 	require.NoError(t, json.Unmarshal(msg2, &evt2))
 
@@ -241,7 +241,7 @@ func TestPingIsSent(t *testing.T) {
 	eb.PingInterval = 100 * time.Millisecond
 	eb.PongTimeout = 50 * time.Millisecond
 
-	srv := httptest.NewServer(http.HandlerFunc(eb.HandleSessionEvents))
+	srv := httptest.NewServer(http.HandlerFunc(eb.HandleHostEvents))
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
@@ -280,7 +280,7 @@ func TestPongTimeoutClosesConnection(t *testing.T) {
 	eb.PingInterval = 100 * time.Millisecond
 	eb.PongTimeout = 50 * time.Millisecond
 
-	srv := httptest.NewServer(http.HandlerFunc(eb.HandleSessionEvents))
+	srv := httptest.NewServer(http.HandlerFunc(eb.HandleHostEvents))
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
@@ -316,7 +316,7 @@ func TestRegisterCoreRoutes(t *testing.T) {
 	c.RegisterCoreRoutes(mux)
 
 	// Verify the route is registered by making a non-WS request (should get upgrade error, not 404)
-	req := httptest.NewRequest("GET", "/ws/session-events", nil)
+	req := httptest.NewRequest("GET", "/ws/host-events", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
