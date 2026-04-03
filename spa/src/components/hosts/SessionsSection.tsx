@@ -138,7 +138,7 @@ export function SessionsSection({ hostId }: Props) {
 
   const handleOpen = (session: Session, mode: string) => {
     const tabId = useTabStore.getState().openSingletonTab({
-      kind: 'session',
+      kind: 'tmux-session',
       hostId,
       sessionCode: session.code,
       mode: mode as 'terminal' | 'stream',

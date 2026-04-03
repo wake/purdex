@@ -50,7 +50,7 @@ export function findTabBySessionCode(
 ): string | undefined {
   for (const [tabId, tab] of Object.entries(tabs)) {
     const primary = getPrimaryPane(tab.layout)
-    if (primary.content.kind === 'session' && primary.content.sessionCode === sessionCode) {
+    if (primary.content.kind === 'tmux-session' && primary.content.sessionCode === sessionCode) {
       return tabId
     }
   }

@@ -9,7 +9,7 @@ export function getActiveSessionCode(): string | null {
   const tab = tabs[activeTabId]
   if (!tab) return null
   const primary = getPrimaryPane(tab.layout)
-  return primary.content.kind === 'session' ? primary.content.sessionCode : null
+  return primary.content.kind === 'tmux-session' ? primary.content.sessionCode : null
 }
 
 /** Derive both hostId and sessionCode from the current active tab.
@@ -20,6 +20,6 @@ export function getActiveSessionInfo(): { hostId: string; sessionCode: string } 
   const tab = tabs[activeTabId]
   if (!tab) return null
   const primary = getPrimaryPane(tab.layout)
-  if (primary.content.kind !== 'session') return null
+  if (primary.content.kind !== 'tmux-session') return null
   return { hostId: primary.content.hostId, sessionCode: primary.content.sessionCode }
 }

@@ -21,9 +21,11 @@ export interface Pane {
 }
 
 // === Pane Content (discriminated union) ===
+export type TerminatedReason = 'session-closed' | 'tmux-restarted' | 'host-removed'
+
 export type PaneContent =
   | { kind: 'new-tab' }
-  | { kind: 'session'; hostId: string; sessionCode: string; mode: 'terminal' | 'stream'; cachedName: string; tmuxInstance: string }
+  | { kind: 'tmux-session'; hostId: string; sessionCode: string; mode: 'terminal' | 'stream'; cachedName: string; tmuxInstance: string; terminated?: TerminatedReason }
   | { kind: 'dashboard' }
   | { kind: 'hosts' }
   | { kind: 'history' }

@@ -88,9 +88,9 @@ export const useTabStore = create<TabState>()(
           const tab = state.tabs[tabId]
           if (!tab) return state
           const pane = findPane(tab.layout, paneId)
-          if (!pane || pane.content.kind !== 'session') return state
+          if (!pane || pane.content.kind !== 'tmux-session') return state
           const newLayout = updatePaneInLayout(tab.layout, paneId, {
-            kind: 'session',
+            kind: 'tmux-session',
             hostId: pane.content.hostId,
             sessionCode: pane.content.sessionCode,
             mode,
@@ -144,7 +144,7 @@ export const useTabStore = create<TabState>()(
           for (const [id, tab] of Object.entries(tabs)) {
             const primary = getPrimaryPane(tab.layout)
             const c = primary.content
-            if (c.kind === 'session' && c.hostId === hostId && c.sessionCode === sessionCode && c.cachedName !== cachedName) {
+            if (c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode && c.cachedName !== cachedName) {
               tabs[id] = {
                 ...tab,
                 layout: updatePaneInLayout(tab.layout, primary.id, { ...c, cachedName }),

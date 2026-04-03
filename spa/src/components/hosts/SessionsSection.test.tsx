@@ -109,7 +109,7 @@ describe('SessionsSection', () => {
     const openBtn = screen.getByTitle('Open')
     fireEvent.click(openBtn)
     expect(mockOpenSingletonTab).toHaveBeenCalledWith({
-      kind: 'session',
+      kind: 'tmux-session',
       hostId: HOST_ID,
       sessionCode: 'abc',
       mode: 'terminal',

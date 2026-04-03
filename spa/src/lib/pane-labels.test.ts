@@ -25,17 +25,17 @@ describe('getPaneLabel', () => {
   })
 
   it('returns session name for session content', () => {
-    const c: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'abc123', mode: 'terminal', cachedName: '', tmuxInstance: '' }
+    const c: PaneContent = { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'abc123', mode: 'terminal', cachedName: '', tmuxInstance: '' }
     expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore, mockT)).toBe('dev-server')
   })
 
   it('falls back to cachedName if session not found', () => {
-    const c: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'zzz999', mode: 'terminal', cachedName: 'my-session', tmuxInstance: '' }
+    const c: PaneContent = { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'zzz999', mode: 'terminal', cachedName: 'my-session', tmuxInstance: '' }
     expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore, mockT)).toBe('my-session')
   })
 
   it('falls back to sessionCode if session not found and cachedName empty', () => {
-    const c: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'zzz999', mode: 'terminal', cachedName: '', tmuxInstance: '' }
+    const c: PaneContent = { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'zzz999', mode: 'terminal', cachedName: '', tmuxInstance: '' }
     expect(getPaneLabel(c, mockSessionStore, mockWorkspaceStore, mockT)).toBe('zzz999')
   })
 
@@ -87,11 +87,11 @@ describe('getPaneIcon', () => {
   })
 
   it('returns TerminalWindow for terminal session', () => {
-    expect(getPaneIcon({ kind: 'session', hostId: 'test-host', sessionCode: 'x', mode: 'terminal', cachedName: '', tmuxInstance: '' })).toBe('TerminalWindow')
+    expect(getPaneIcon({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'x', mode: 'terminal', cachedName: '', tmuxInstance: '' })).toBe('TerminalWindow')
   })
 
   it('returns ChatCircleDots for stream session', () => {
-    expect(getPaneIcon({ kind: 'session', hostId: 'test-host', sessionCode: 'x', mode: 'stream', cachedName: '', tmuxInstance: '' })).toBe('ChatCircleDots')
+    expect(getPaneIcon({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'x', mode: 'stream', cachedName: '', tmuxInstance: '' })).toBe('ChatCircleDots')
   })
 
   it('returns House for dashboard', () => {

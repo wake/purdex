@@ -6,7 +6,7 @@ import { createTab } from '../types/tab'
 import type { Tab, Pane } from '../types/tab'
 
 const MockSessionRenderer = ({ pane }: { pane: Pane }) => (
-  <div data-testid="session-renderer">Session: {pane.content.kind === 'session' ? pane.content.sessionCode : ''}</div>
+  <div data-testid="session-renderer">Session: {pane.content.kind === 'tmux-session' ? pane.content.sessionCode : ''}</div>
 )
 const MockDashboardRenderer = () => (
   <div data-testid="dashboard-renderer">Dashboard</div>
@@ -15,12 +15,12 @@ const MockDashboardRenderer = () => (
 beforeEach(() => {
   cleanup()
   clearPaneRegistry()
-  registerPaneRenderer('session', { component: MockSessionRenderer })
+  registerPaneRenderer('tmux-session', { component: MockSessionRenderer })
   registerPaneRenderer('dashboard', { component: MockDashboardRenderer })
 })
 
 const sessionTab: Tab = {
-  ...createTab({ kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }),
+  ...createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }),
   id: 't1',
 }
 

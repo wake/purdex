@@ -150,7 +150,7 @@ function handleNotificationClick(sessionCode: string): void {
     const tab = tabs[tabId]
     if (tab) {
       const primary = getPrimaryPane(tab.layout)
-      if (primary.content.kind === 'session') {
+      if (primary.content.kind === 'tmux-session') {
         hostId = primary.content.hostId
       }
     }
@@ -166,7 +166,7 @@ function handleNotificationClick(sessionCode: string): void {
     handled = true
   } else if (agentSettings.reopenTabOnClick) {
     const sessionName = useSessionStore.getState().sessions[hostId]?.find(s => s.code === sessionCode)?.name ?? ''
-    const newTab = createTab({ kind: 'session', hostId, sessionCode, mode: 'stream', cachedName: sessionName, tmuxInstance: '' })
+    const newTab = createTab({ kind: 'tmux-session', hostId, sessionCode, mode: 'stream', cachedName: sessionName, tmuxInstance: '' })
     useTabStore.getState().addTab(newTab)
     useTabStore.getState().setActiveTab(newTab.id)
     const activeWorkspaceId = useWorkspaceStore.getState().activeWorkspaceId

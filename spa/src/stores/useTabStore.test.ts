@@ -5,7 +5,7 @@ import type { PaneContent } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 
 function makeSessionTab(code: string, mode: 'terminal' | 'stream' = 'terminal') {
-  return createTab({ kind: 'session', hostId: 'test-host', sessionCode: code, mode, cachedName: '', tmuxInstance: '' })
+  return createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: code, mode, cachedName: '', tmuxInstance: '' })
 }
 
 describe('useTabStore', () => {
@@ -94,7 +94,7 @@ describe('useTabStore', () => {
   })
 
   it('openSingletonTab always creates new tab for session (non-singleton)', () => {
-    const content: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }
+    const content: PaneContent = { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }
     const tab = createTab(content)
     useTabStore.getState().addTab(tab)
     const returnedId = useTabStore.getState().openSingletonTab(content)
@@ -129,7 +129,7 @@ describe('useTabStore', () => {
     useTabStore.getState().setViewMode(tab.id, paneId, 'stream')
     const updated = useTabStore.getState().tabs[tab.id]
     const content = updated.layout.type === 'leaf' ? updated.layout.pane.content : undefined
-    expect(content?.kind === 'session' && content.mode).toBe('stream')
+    expect(content?.kind === 'tmux-session' && content.mode).toBe('stream')
   })
 
   it('setViewMode is no-op for nonexistent tab', () => {
@@ -196,8 +196,8 @@ describe('useTabStore', () => {
       useTabStore.getState().updateSessionCache('test-host', 'dev001', 'renamed-session')
 
       const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
-      expect(content.kind).toBe('session')
-      if (content.kind === 'session') {
+      expect(content.kind).toBe('tmux-session')
+      if (content.kind === 'tmux-session') {
         expect(content.cachedName).toBe('renamed-session')
       }
     })
@@ -210,8 +210,8 @@ describe('useTabStore', () => {
       useTabStore.getState().updateSessionCache('test-host', 'dev999', 'renamed')
 
       const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
-      expect(content.kind).toBe('session')
-      if (content.kind === 'session') {
+      expect(content.kind).toBe('tmux-session')
+      if (content.kind === 'tmux-session') {
         expect(content.cachedName).toBe('')
       }
     })
@@ -224,8 +224,8 @@ describe('useTabStore', () => {
       useTabStore.getState().updateSessionCache('other-host', 'dev001', 'renamed')
 
       const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
-      expect(content.kind).toBe('session')
-      if (content.kind === 'session') {
+      expect(content.kind).toBe('tmux-session')
+      if (content.kind === 'tmux-session') {
         expect(content.cachedName).toBe('')
       }
     })
@@ -252,8 +252,8 @@ describe('useTabStore', () => {
 
       for (const tabId of useTabStore.getState().tabOrder) {
         const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
-        expect(content.kind).toBe('session')
-        if (content.kind === 'session') {
+        expect(content.kind).toBe('tmux-session')
+        if (content.kind === 'tmux-session') {
           expect(content.cachedName).toBe('new-name')
         }
       }

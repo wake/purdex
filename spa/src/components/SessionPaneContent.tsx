@@ -12,9 +12,9 @@ const EMPTY_PRESETS: Array<{ name: string; command: string }> = []
 
 export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
   const content = pane.content
-  const sessionCode = content.kind === 'session' ? content.sessionCode : ''
-  const hostId = content.kind === 'session' ? content.hostId : ''
-  const mode = content.kind === 'session' ? content.mode : 'terminal'
+  const sessionCode = content.kind === 'tmux-session' ? content.sessionCode : ''
+  const hostId = content.kind === 'tmux-session' ? content.hostId : ''
+  const mode = content.kind === 'tmux-session' ? content.mode : 'terminal'
 
   const daemonBase = useHostStore((s) => s.getDaemonBase(hostId))
   const wsBase = useHostStore((s) => s.getWsBase(hostId))
@@ -50,7 +50,7 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
     }
   }, [session, hostId, daemonBase, fetchHost])
 
-  if (content.kind !== 'session') return null
+  if (content.kind !== 'tmux-session') return null
 
   if (mode === 'stream') {
     return (

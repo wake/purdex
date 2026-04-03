@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode } from './pane-tree'
 import type { PaneLayout, Pane } from '../types/tab'
 
-const paneA: Pane = { id: 'aaaaaa', content: { kind: 'session', hostId: 'test-host', sessionCode: 'abc123', mode: 'terminal', cachedName: '', tmuxInstance: '' } }
+const paneA: Pane = { id: 'aaaaaa', content: { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'abc123', mode: 'terminal', cachedName: '', tmuxInstance: '' } }
 const paneB: Pane = { id: 'bbbbbb', content: { kind: 'dashboard' } }
 
 const leaf: PaneLayout = { type: 'leaf', pane: paneA }
@@ -102,7 +102,7 @@ describe('findTabBySessionCode', () => {
   })
 
   it('returns first matching tabId when multiple tabs have different sessions', () => {
-    const paneC: Pane = { id: 'cccccc', content: { kind: 'session', hostId: 'test-host', sessionCode: 'xyz789', mode: 'terminal', cachedName: '', tmuxInstance: '' } }
+    const paneC: Pane = { id: 'cccccc', content: { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'xyz789', mode: 'terminal', cachedName: '', tmuxInstance: '' } }
     const tabs = {
       tab1: { layout: { type: 'leaf', pane: paneA } as PaneLayout },
       tab2: { layout: { type: 'leaf', pane: paneC } as PaneLayout },

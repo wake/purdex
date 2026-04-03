@@ -19,7 +19,7 @@ const HOST_ID = 'test-host'
 
 const makePane = (overrides?: Partial<Pane>): Pane => ({
   id: 'pane-1',
-  content: { kind: 'session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' },
+  content: { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' },
   ...overrides,
 })
 
@@ -65,7 +65,7 @@ describe('SessionPaneContent', () => {
 
   it('renders ConversationView for stream mode', () => {
     const pane = makePane({
-      content: { kind: 'session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'stream', cachedName: '', tmuxInstance: '' },
+      content: { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'stream', cachedName: '', tmuxInstance: '' },
     })
     render(<SessionPaneContent pane={pane} isActive={true} />)
     expect(screen.getByTestId('conversation-view')).toBeInTheDocument()

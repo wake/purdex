@@ -181,7 +181,7 @@ describe('useAgentStore', () => {
   })
 
   it('Stop → does NOT mark unread when active tab is this session', () => {
-    const tab = { ...createTab({ kind: 'session', hostId: 'test-host', sessionCode: 'dev', mode: 'terminal', cachedName: '', tmuxInstance: '' }), id: 't1' }
+    const tab = { ...createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'dev', mode: 'terminal', cachedName: '', tmuxInstance: '' }), id: 't1' }
     useTabStore.setState({ tabs: { t1: tab }, activeTabId: 't1' })
     const event: AgentHookEvent = {
       tmux_session: 'dev',

@@ -10,7 +10,7 @@ const mockWorkspaces: Workspace[] = [
 ]
 
 const mockStandaloneTabs: Tab[] = [
-  { ...createTab({ kind: 'session', hostId: 'test-host', sessionCode: 'misc', mode: 'terminal', cachedName: '', tmuxInstance: '' }), id: 'st-1' },
+  { ...createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'misc', mode: 'terminal', cachedName: '', tmuxInstance: '' }), id: 'st-1' },
 ]
 
 describe('ActivityBar', () => {
