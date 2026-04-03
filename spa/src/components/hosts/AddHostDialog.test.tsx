@@ -37,6 +37,7 @@ describe('AddHostDialog', () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) } as Response)
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) } as Response)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ host_id: 'test:abc123' }) } as Response)
 
     render(<AddHostDialog onClose={vi.fn()} />)
     fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '10.0.0.1' } })
@@ -66,6 +67,7 @@ describe('AddHostDialog', () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) } as Response)
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) } as Response)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ host_id: 'test:abc123' }) } as Response)
 
     render(<AddHostDialog onClose={vi.fn()} />)
     fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '10.0.0.1' } })
@@ -115,6 +117,7 @@ describe('AddHostDialog', () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) } as Response)
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) } as Response)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ host_id: 'test:abc123' }) } as Response)
 
     const onClose = vi.fn()
     render(<AddHostDialog onClose={onClose} />)
