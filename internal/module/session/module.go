@@ -17,6 +17,8 @@ type SessionModule struct {
 	tmux        tmux.Executor
 	core        *core.Core
 	cancelWatch context.CancelFunc
+	wstate      watcherState
+	waitForGate chan bool
 }
 
 // NewSessionModule creates a SessionModule with the given MetaStore.
@@ -60,6 +62,7 @@ func (m *SessionModule) Start(ctx context.Context) error {
 	// Start session watcher with a child context.
 	watchCtx, cancel := context.WithCancel(ctx)
 	m.cancelWatch = cancel
+	m.wstate.setTmuxAlive(m.tmux.TmuxAlive())
 	m.watchSessions(watchCtx)
 
 	// Register OnSubscribe callback to send initial sessions snapshot.
