@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { Tab, PaneContent, PaneLayout } from '../types/tab'
+import type { Tab, PaneContent, PaneLayout, TerminatedReason } from '../types/tab'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, findPane, updatePaneInLayout } from '../lib/pane-tree'
 import { contentMatches } from '../lib/pane-utils'
@@ -39,6 +39,32 @@ export function migrateTabStore(state: any, version: number): any {
   return state
 }
 
+// --- Terminated marking helpers ---
+
+function markPanesInLayout(layout: PaneLayout, hostId: string, sessionCode: string, reason: TerminatedReason): PaneLayout {
+  if (layout.type === 'leaf') {
+    const c = layout.pane.content
+    if (c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode && !c.terminated) {
+      return { ...layout, pane: { ...layout.pane, content: { ...c, terminated: reason } } }
+    }
+    return layout
+  }
+  const children = layout.children.map((child) => markPanesInLayout(child, hostId, sessionCode, reason))
+  return children.some((c, i) => c !== layout.children[i]) ? { ...layout, children } : layout
+}
+
+function markHostPanesInLayout(layout: PaneLayout, hostId: string, reason: TerminatedReason): PaneLayout {
+  if (layout.type === 'leaf') {
+    const c = layout.pane.content
+    if (c.kind === 'tmux-session' && c.hostId === hostId && !c.terminated) {
+      return { ...layout, pane: { ...layout.pane, content: { ...c, terminated: reason } } }
+    }
+    return layout
+  }
+  const children = layout.children.map((child) => markHostPanesInLayout(child, hostId, reason))
+  return children.some((c, i) => c !== layout.children[i]) ? { ...layout, children } : layout
+}
+
 interface TabState {
   tabs: Record<string, Tab>
   tabOrder: string[]
@@ -56,6 +82,8 @@ interface TabState {
   togglePin: (id: string) => void
   toggleLock: (id: string) => void
   updateSessionCache: (hostId: string, sessionCode: string, cachedName: string) => void
+  markTerminated: (hostId: string, sessionCode: string, reason: TerminatedReason) => void
+  markHostTerminated: (hostId: string, reason: TerminatedReason) => void
 }
 
 export const useTabStore = create<TabState>()(
@@ -182,6 +210,34 @@ export const useTabStore = create<TabState>()(
                 ...tab,
                 layout: updatePaneInLayout(tab.layout, primary.id, { ...c, cachedName }),
               }
+              changed = true
+            }
+          }
+          return changed ? { tabs } : state
+        }),
+
+      markTerminated: (hostId, sessionCode, reason) =>
+        set((state) => {
+          let changed = false
+          const tabs = { ...state.tabs }
+          for (const [id, tab] of Object.entries(tabs)) {
+            const newLayout = markPanesInLayout(tab.layout, hostId, sessionCode, reason)
+            if (newLayout !== tab.layout) {
+              tabs[id] = { ...tab, layout: newLayout }
+              changed = true
+            }
+          }
+          return changed ? { tabs } : state
+        }),
+
+      markHostTerminated: (hostId, reason) =>
+        set((state) => {
+          let changed = false
+          const tabs = { ...state.tabs }
+          for (const [id, tab] of Object.entries(tabs)) {
+            const newLayout = markHostPanesInLayout(tab.layout, hostId, reason)
+            if (newLayout !== tab.layout) {
+              tabs[id] = { ...tab, layout: newLayout }
               changed = true
             }
           }

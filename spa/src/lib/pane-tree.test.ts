@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode } from './pane-tree'
+import { describe, it, expect, vi } from 'vitest'
+import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree } from './pane-tree'
 import type { PaneLayout, Pane } from '../types/tab'
 
 const paneA: Pane = { id: 'aaaaaa', content: { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'abc123', mode: 'terminal', cachedName: '', tmuxInstance: '' } }
@@ -118,5 +118,38 @@ describe('findTabBySessionCode', () => {
       tab2: { layout: { type: 'leaf', pane: paneDashboard } as PaneLayout },
     }
     expect(findTabBySessionCode(tabs, 'abc123')).toBeUndefined()
+  })
+})
+
+describe('scanPaneTree', () => {
+  it('calls fn for leaf pane', () => {
+    const fn = vi.fn()
+    scanPaneTree(leaf, fn)
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(fn).toHaveBeenCalledWith(paneA)
+  })
+
+  it('calls fn for all panes in split layout', () => {
+    const fn = vi.fn()
+    scanPaneTree(split, fn)
+    expect(fn).toHaveBeenCalledTimes(2)
+    expect(fn).toHaveBeenCalledWith(paneA)
+    expect(fn).toHaveBeenCalledWith(paneB)
+  })
+
+  it('calls fn for nested split layouts', () => {
+    const paneC: Pane = { id: 'cccccc', content: { kind: 'history' } }
+    const nested: PaneLayout = {
+      type: 'split', id: 'outer', direction: 'v',
+      children: [
+        split,
+        { type: 'leaf', pane: paneC },
+      ],
+      sizes: [70, 30],
+    }
+    const fn = vi.fn()
+    scanPaneTree(nested, fn)
+    expect(fn).toHaveBeenCalledTimes(3)
+    expect(fn).toHaveBeenCalledWith(paneC)
   })
 })

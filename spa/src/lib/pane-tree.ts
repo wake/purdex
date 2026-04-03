@@ -37,6 +37,14 @@ export function updatePaneInLayout(
   }
 }
 
+export function scanPaneTree(layout: PaneLayout, fn: (pane: Pane) => void): void {
+  if (layout.type === 'leaf') {
+    fn(layout.pane)
+  } else {
+    layout.children.forEach((child) => scanPaneTree(child, fn))
+  }
+}
+
 export function getLayoutKey(layout: PaneLayout): string {
   return layout.type === 'leaf' ? layout.pane.id : layout.id
 }

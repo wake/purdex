@@ -6,6 +6,7 @@ import { useStreamStore } from '../stores/useStreamStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useTabStore } from '../stores/useTabStore'
 import { connectHostEvents, type EventConnection } from '../lib/host-events'
+import { scanPaneTree } from '../lib/pane-tree'
 import { hostWsUrl, fetchWsTicket } from '../lib/host-api'
 import { fetchHistory } from '../lib/api'
 import { checkHealth } from '../lib/host-connection'
@@ -55,6 +56,22 @@ export function useMultiHostEventWs() {
               useSessionStore.getState().replaceHost(hostId, data)
               for (const s of data) {
                 useTabStore.getState().updateSessionCache(hostId, s.code, s.name)
+              }
+
+              // session-closed detection: collect unique closed codes, then mark once each
+              const newCodes = new Set(data.map((s: Session) => s.code))
+              const closedCodes = new Set<string>()
+              const { tabs } = useTabStore.getState()
+              for (const tab of Object.values(tabs)) {
+                scanPaneTree(tab.layout, (pane) => {
+                  const c = pane.content
+                  if (c.kind === 'tmux-session' && c.hostId === hostId && !c.terminated && !newCodes.has(c.sessionCode)) {
+                    closedCodes.add(c.sessionCode)
+                  }
+                })
+              }
+              for (const code of closedCodes) {
+                useTabStore.getState().markTerminated(hostId, code, 'session-closed')
               }
             } catch { /* ignore */ }
             return
