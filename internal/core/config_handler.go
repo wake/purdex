@@ -4,20 +4,19 @@ package core
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 
-	"github.com/BurntSushi/toml"
 	"github.com/wake/tmux-box/internal/config"
 )
 
-// handleGetConfig returns the current config as JSON with the token field redacted.
+// handleGetConfig returns the current config as JSON with sensitive fields redacted.
 func (c *Core) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.RLock()
 	defer c.CfgMu.RUnlock()
 
-	// Shallow copy to redact token; encode under lock to avoid slice race
+	// Shallow copy to redact sensitive fields; encode under lock to avoid slice race
 	cfg := *c.Cfg
 	cfg.Token = ""
+	cfg.HostID = ""
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cfg)
@@ -82,7 +81,7 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Write back to config file
 	if c.CfgPath != "" {
-		if err := writeConfig(c.CfgPath, *c.Cfg); err != nil {
+		if err := config.WriteFile(c.CfgPath, *c.Cfg); err != nil {
 			c.CfgMu.Unlock()
 			http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -99,25 +98,8 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg.Token = ""
+	cfg.HostID = ""
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cfg)
 }
 
-// writeConfig serialises the config to TOML and writes it to the given path atomically.
-func writeConfig(path string, cfg config.Config) error {
-	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return err
-	}
-	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return os.Rename(tmp, path)
-}

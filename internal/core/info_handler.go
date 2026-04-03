@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/wake/tmux-box/internal/config"
 )
 
 // Version is the tbox daemon version, set via ldflags at build time.
@@ -21,13 +23,19 @@ func (c *Core) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
-// handleInfo returns daemon metadata: version, tmux version, OS, and architecture.
+// handleInfo returns daemon metadata: host ID, tmux instance, version, OS, and architecture.
 func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
+	c.CfgMu.RLock()
+	hostID := c.Cfg.HostID
+	c.CfgMu.RUnlock()
+
 	info := map[string]string{
-		"tbox_version": Version,
-		"tmux_version": getTmuxVersion(),
-		"os":           runtime.GOOS,
-		"arch":         runtime.GOARCH,
+		"host_id":       hostID,
+		"tmux_instance": config.GetTmuxInstance(),
+		"tbox_version":  Version,
+		"tmux_version":  getTmuxVersion(),
+		"os":            runtime.GOOS,
+		"arch":          runtime.GOARCH,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)

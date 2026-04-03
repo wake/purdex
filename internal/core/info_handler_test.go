@@ -32,7 +32,7 @@ func TestInfoEndpoint(t *testing.T) {
 	fakeTmux := tmux.NewFakeExecutor()
 
 	c := New(CoreDeps{
-		Config: &config.Config{},
+		Config: &config.Config{HostID: "test-host:abc123"},
 		Tmux:   fakeTmux,
 	})
 
@@ -51,12 +51,10 @@ func TestInfoEndpoint(t *testing.T) {
 	require.NoError(t, err)
 
 	// Must contain expected fields
+	assert.Equal(t, "test-host:abc123", body["host_id"])
+	assert.Contains(t, body, "tmux_instance")
 	assert.Contains(t, body, "tbox_version")
 	assert.Contains(t, body, "tmux_version")
-	assert.Contains(t, body, "os")
-	assert.Contains(t, body, "arch")
-
-	// os and arch should be non-empty strings from runtime
 	assert.NotEmpty(t, body["os"])
 	assert.NotEmpty(t, body["arch"])
 }

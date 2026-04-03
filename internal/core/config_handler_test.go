@@ -17,9 +17,10 @@ import (
 // newTestCore creates a Core with a default config for handler tests.
 func newTestCore() *Core {
 	cfg := &config.Config{
-		Bind:  "127.0.0.1",
-		Port:  7860,
-		Token: "secret-token-123",
+		HostID: "test:abc123",
+		Bind:   "127.0.0.1",
+		Port:   7860,
+		Token:  "secret-token-123",
 		Stream: config.StreamConfig{
 			Presets: []config.Preset{{Name: "cc", Command: "claude -p"}},
 		},
@@ -49,8 +50,9 @@ func TestGetConfigReturnsRedactedToken(t *testing.T) {
 	err := json.NewDecoder(rec.Body).Decode(&got)
 	require.NoError(t, err)
 
-	// Token must be redacted
+	// Sensitive fields must be redacted
 	assert.Empty(t, got.Token, "token should be redacted in GET response")
+	assert.Empty(t, got.HostID, "host_id should be redacted in GET response")
 
 	// Other fields should be present
 	assert.Equal(t, "127.0.0.1", got.Bind)
@@ -82,11 +84,12 @@ func TestPutConfigUpdatesStreamAndPersists(t *testing.T) {
 	assert.Equal(t, "new-cmd", c.Cfg.Stream.Presets[0].Command)
 	c.CfgMu.RUnlock()
 
-	// Verify response has redacted token
+	// Verify response has redacted sensitive fields
 	var got config.Config
 	err = json.NewDecoder(rec.Body).Decode(&got)
 	require.NoError(t, err)
-	assert.Empty(t, got.Token)
+	assert.Empty(t, got.Token, "PUT response should redact token")
+	assert.Empty(t, got.HostID, "PUT response should redact host_id")
 	assert.Equal(t, "new", got.Stream.Presets[0].Name)
 
 	// Verify file was written

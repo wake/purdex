@@ -44,6 +44,7 @@ func (tc TerminalConfig) GetSizingMode() string {
 }
 
 type Config struct {
+	HostID       string         `toml:"host_id"        json:"host_id"`
 	Bind         string         `toml:"bind"           json:"bind"`
 	Port         int            `toml:"port"           json:"port"`
 	Token        string         `toml:"token"          json:"token"`
