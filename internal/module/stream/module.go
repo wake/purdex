@@ -58,7 +58,7 @@ func (m *StreamModule) Stop(_ context.Context) error {
 // sendRelaySnapshot pushes current relay state to a newly connected event subscriber.
 func (m *StreamModule) sendRelaySnapshot(sub *core.EventSubscriber) {
 	for _, key := range m.bridge.RelaySessionNames() {
-		msg, err := json.Marshal(core.SessionEvent{Type: "relay", Session: key, Value: "connected"})
+		msg, err := json.Marshal(core.HostEvent{Type: "relay", Session: key, Value: "connected"})
 		if err != nil {
 			continue
 		}

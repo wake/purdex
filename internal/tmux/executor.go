@@ -2,10 +2,12 @@
 package tmux
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 var ErrNoSession = errors.New("no such session")
@@ -36,6 +38,7 @@ type Executor interface {
 	SetHookGlobal(event, command string) error
 	RemoveHookGlobal(event string) error
 	ShowHooksGlobal() (string, error)
+	TmuxAlive() bool
 }
 
 // --- Real Executor ---
@@ -208,5 +211,11 @@ func (r *RealExecutor) ShowHooksGlobal() (string, error) {
 		return "", fmt.Errorf("tmux show-hooks: %w", err)
 	}
 	return string(out), nil
+}
+
+func (r *RealExecutor) TmuxAlive() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "tmux", "info").Run() == nil
 }
 

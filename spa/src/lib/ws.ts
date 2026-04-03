@@ -9,6 +9,7 @@ export function connectTerminal(
   onData: (data: ArrayBuffer) => void,
   onClose: () => void,
   onOpen?: () => void,
+  canReconnect?: () => boolean,
 ): TerminalConnection {
   let closed = false
   let retryMs = 1000
@@ -30,7 +31,9 @@ export function connectTerminal(
       if (closed) return // manual close — don't notify or reconnect
       onClose()
       setTimeout(() => {
-        if (!closed) connect()
+        if (closed) return
+        if (canReconnect && !canReconnect()) return // gate check
+        connect()
       }, retryMs)
       retryMs = Math.min(retryMs * 2, 30000)
     }

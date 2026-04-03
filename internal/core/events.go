@@ -5,12 +5,13 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-// SessionEvent is the JSON structure broadcast to all WS subscribers.
-type SessionEvent struct {
+// HostEvent is the JSON structure broadcast to all WS subscribers.
+type HostEvent struct {
 	Type    string `json:"type"`
 	Session string `json:"session"`
 	Value   string `json:"value"`
@@ -38,17 +39,21 @@ func (sub *EventSubscriber) SendCh() <-chan []byte {
 	return sub.send
 }
 
-// EventsBroadcaster manages WebSocket subscribers for session events.
+// EventsBroadcaster manages WebSocket subscribers for host events.
 type EventsBroadcaster struct {
-	mu          sync.RWMutex
-	subscribers map[*EventSubscriber]struct{}
-	onSubscribe []func(*EventSubscriber)
+	mu           sync.RWMutex
+	subscribers  map[*EventSubscriber]struct{}
+	onSubscribe  []func(*EventSubscriber)
+	PingInterval time.Duration
+	PongTimeout  time.Duration
 }
 
 // NewEventsBroadcaster creates a new EventsBroadcaster.
 func NewEventsBroadcaster() *EventsBroadcaster {
 	return &EventsBroadcaster{
-		subscribers: make(map[*EventSubscriber]struct{}),
+		subscribers:  make(map[*EventSubscriber]struct{}),
+		PingInterval: 30 * time.Second,
+		PongTimeout:  10 * time.Second,
 	}
 }
 
@@ -63,14 +68,27 @@ func (eb *EventsBroadcaster) Add(conn *websocket.Conn) *EventSubscriber {
 	eb.subscribers[sub] = struct{}{}
 	eb.mu.Unlock()
 
-	// Start write pump — the only goroutine that calls WriteMessage on this conn.
+	// Write pump — the ONLY goroutine that calls WriteMessage on this conn.
+	// Handles both data messages and periodic pings.
 	go func() {
-		for msg := range sub.send {
-			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				// Write failed — remove subscriber so it's not a zombie,
-				// then close conn to unblock the read loop in HandleSessionEvents.
-				eb.Remove(sub)
-				return
+		ticker := time.NewTicker(eb.PingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case msg, ok := <-sub.send:
+				if !ok {
+					return // channel closed by Remove
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+					eb.Remove(sub)
+					return
+				}
+			case <-ticker.C:
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					eb.Remove(sub)
+					return
+				}
+				// Pong timeout is handled by read-side deadline in HandleHostEvents
 			}
 		}
 	}()
@@ -92,7 +110,7 @@ func (eb *EventsBroadcaster) Remove(sub *EventSubscriber) {
 // Broadcast sends a JSON event to all subscribers.
 // Messages are sent non-blocking; slow subscribers that have a full buffer are dropped.
 func (eb *EventsBroadcaster) Broadcast(session, eventType, value string) {
-	msg, err := json.Marshal(SessionEvent{
+	msg, err := json.Marshal(HostEvent{
 		Type:    eventType,
 		Session: session,
 		Value:   value,
@@ -153,14 +171,21 @@ func (eb *EventsBroadcaster) OnSubscribe(fn func(sub *EventSubscriber)) {
 	eb.onSubscribe = append(eb.onSubscribe, fn)
 }
 
-// HandleSessionEvents handles /ws/session-events — SPA subscribes for
+// HandleHostEvents handles /ws/host-events — SPA subscribes for
 // status, relay, handoff, and init events.
-func (eb *EventsBroadcaster) HandleSessionEvents(w http.ResponseWriter, r *http.Request) {
+func (eb *EventsBroadcaster) HandleHostEvents(w http.ResponseWriter, r *http.Request) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
+
+	// Pong handling — reset read deadline on each pong received
+	conn.SetReadDeadline(time.Now().Add(eb.PingInterval + eb.PongTimeout))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(eb.PingInterval + eb.PongTimeout))
+		return nil
+	})
 
 	sub := eb.Add(conn)
 	defer eb.Remove(sub)
@@ -174,7 +199,7 @@ func (eb *EventsBroadcaster) HandleSessionEvents(w http.ResponseWriter, r *http.
 		fn(sub)
 	}
 
-	// Keep connection alive — read (and discard) messages to detect disconnect.
+	// Read loop — exits on disconnect or pong timeout (ReadDeadline exceeded)
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			return

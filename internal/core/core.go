@@ -37,6 +37,7 @@ type Core struct {
 	Registry *ServiceRegistry
 	Events   *EventsBroadcaster
 	Tickets  *TicketStore
+	TmuxAliveFunc  func() bool // injected by session module; returns cached tmux reachability
 	modules        []Module
 	configChangeMu sync.Mutex // protects onConfigChange
 	onConfigChange []func()   // config change callbacks
@@ -127,9 +128,10 @@ func (c *Core) NotifyConfigChange() {
 
 // RegisterCoreRoutes registers routes owned by Core itself (not by modules).
 func (c *Core) RegisterCoreRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/ws/session-events", c.Events.HandleSessionEvents)
+	mux.HandleFunc("/ws/host-events", c.Events.HandleHostEvents)
 	mux.HandleFunc("GET /api/info", c.handleInfo)
 	mux.HandleFunc("GET /api/config", c.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", c.handlePutConfig)
 	mux.HandleFunc("POST /api/ws-ticket", c.handleWsTicket)
+	mux.HandleFunc("GET /api/ready", c.handleReady)
 }

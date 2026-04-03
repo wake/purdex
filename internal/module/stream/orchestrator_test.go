@@ -178,13 +178,13 @@ func postHandoff(t *testing.T, srv *httptest.Server, code, body string) *http.Re
 }
 
 // drainEvents collects events from a test subscriber until timeout.
-func drainEvents(sub *core.EventSubscriber, timeout time.Duration) []core.SessionEvent {
-	var events []core.SessionEvent
+func drainEvents(sub *core.EventSubscriber, timeout time.Duration) []core.HostEvent {
+	var events []core.HostEvent
 	deadline := time.After(timeout)
 	for {
 		select {
 		case msg := <-sub.SendCh():
-			var evt core.SessionEvent
+			var evt core.HostEvent
 			if json.Unmarshal(msg, &evt) == nil {
 				events = append(events, evt)
 			}
@@ -201,7 +201,7 @@ func waitForEvent(t *testing.T, sub *core.EventSubscriber, wantValue string, tim
 	for {
 		select {
 		case msg := <-sub.SendCh():
-			var evt core.SessionEvent
+			var evt core.HostEvent
 			if json.Unmarshal(msg, &evt) == nil && evt.Type == "handoff" && evt.Value == wantValue {
 				return
 			}

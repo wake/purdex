@@ -23,6 +23,16 @@ func (c *Core) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
+// handleReady returns tmux readiness status, registered on the inner mux (behind auth).
+func (c *Core) handleReady(w http.ResponseWriter, r *http.Request) {
+	tmuxAlive := false
+	if c.TmuxAliveFunc != nil {
+		tmuxAlive = c.TmuxAliveFunc()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"tmux": tmuxAlive})
+}
+
 // handleInfo returns daemon metadata: host ID, tmux instance, version, OS, and architecture.
 func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.RLock()

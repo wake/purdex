@@ -218,7 +218,7 @@ func TestCliBridge_BroadcastsRelayConnectedAndDisconnected(t *testing.T) {
 	// Should receive "relay connected" event
 	select {
 	case msg := <-eventSub.SendCh():
-		var evt core.SessionEvent
+		var evt core.HostEvent
 		require.NoError(t, json.Unmarshal(msg, &evt))
 		assert.Equal(t, "relay", evt.Type)
 		assert.Equal(t, "evt123", evt.Session)
@@ -232,7 +232,7 @@ func TestCliBridge_BroadcastsRelayConnectedAndDisconnected(t *testing.T) {
 
 	select {
 	case msg := <-eventSub.SendCh():
-		var evt core.SessionEvent
+		var evt core.HostEvent
 		require.NoError(t, json.Unmarshal(msg, &evt))
 		assert.Equal(t, "relay", evt.Type)
 		assert.Equal(t, "evt123", evt.Session)
@@ -376,7 +376,7 @@ func TestSendRelaySnapshot(t *testing.T) {
 
 	select {
 	case msg := <-eventSub.SendCh():
-		var evt core.SessionEvent
+		var evt core.HostEvent
 		require.NoError(t, json.Unmarshal(msg, &evt))
 		assert.Equal(t, "relay", evt.Type)
 		assert.Equal(t, "snp123", evt.Session)

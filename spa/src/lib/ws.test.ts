@@ -152,3 +152,25 @@ describe('connectTerminal auto-reconnect', () => {
     expect(wsInstances).toHaveLength(2) // still retries initial connect
   })
 })
+
+describe('connectTerminal gate', () => {
+  it('does not reconnect when gate returns false', () => {
+    const gate = vi.fn().mockReturnValue(false)
+    connectTerminal('ws://test', vi.fn(), vi.fn(), undefined, gate)
+    wsInstances[0].simulateOpen()
+    wsInstances[0].simulateClose()
+
+    vi.advanceTimersByTime(1000)
+    expect(wsInstances).toHaveLength(1) // no reconnect — gate blocked
+  })
+
+  it('reconnects when gate returns true', () => {
+    const gate = vi.fn().mockReturnValue(true)
+    connectTerminal('ws://test', vi.fn(), vi.fn(), undefined, gate)
+    wsInstances[0].simulateOpen()
+    wsInstances[0].simulateClose()
+
+    vi.advanceTimersByTime(1000)
+    expect(wsInstances).toHaveLength(2) // reconnected — gate allowed
+  })
+})
