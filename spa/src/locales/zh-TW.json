@@ -300,7 +300,7 @@
   "hosts.port": "連接埠",
   "hosts.token": "Token",
   "hosts.status": "連線狀態",
-  "hosts.test_connection": "測試連線",
+  "hosts.test_connection": "嘗試連線",
   "hosts.testing": "測試中...",
   "hosts.connected": "已連線",
   "hosts.delete": "刪除主機",
