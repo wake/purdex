@@ -269,6 +269,9 @@ export function OverviewSection({ hostId }: Props) {
       const latency = Math.round(performance.now() - start)
       if (res.ok) {
         setTestResult({ ok: true, latency })
+        // Test succeeded — also trigger SM reconnect so WS recovers
+        const rt = useHostStore.getState().runtime[hostId]
+        if (rt?.manualRetry) rt.manualRetry()
       } else {
         setTestResult({ ok: false, error: `HTTP ${res.status}` })
       }
