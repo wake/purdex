@@ -36,7 +36,8 @@ export function useMultiHostEventWs() {
             status: result.daemon === 'connected' ? 'connected' : 'disconnected',
             latency: result.latency ?? undefined,
             daemonState: result.daemon,
-            tmuxState: result.tmux,
+            // tmuxState 不在此設定 — checkHealth 的 tmux 永遠是 'unavailable'（硬編碼），
+            // 真正的 tmux 狀態由 WS 'tmux' event 推送，在 onOpen/onMessage 中更新。
           })
           // On recovery → reconnect WS
           if (result.daemon === 'connected' && connRef.current) {
