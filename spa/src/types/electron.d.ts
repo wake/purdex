@@ -67,8 +67,8 @@ interface Window {
     onMetricsUpdate: (callback: (metrics: ElectronTabMetrics[]) => void) => () => void
 
     // Notifications
-    showNotification: (opts: { title: string; body: string; sessionCode: string; eventName: string; broadcastTs: number }) => Promise<void>
-    onNotificationClicked: (callback: (payload: { sessionCode: string }) => void) => () => void
+    showNotification: (opts: { title: string; body: string; sessionCode: string; eventName: string; broadcastTs: number; action?: { kind: string; hostId: string; sessionCode?: string } }) => Promise<void>
+    onNotificationClicked: (callback: (payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string } }) => void) => () => void
     focusMyWindow: () => void
 
     // Dev Update

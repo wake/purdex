@@ -3,22 +3,19 @@ import { CaretDown, CaretRight, ArrowsClockwise, Trash, Plugs, Eye, EyeSlash, Ch
 import { useHostStore, type HostConfig, type HostInfo, type HostRuntime } from '../../stores/useHostStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useTabStore } from '../../stores/useTabStore'
-import { useAgentStore } from '../../stores/useAgentStore'
-import { useStreamStore } from '../../stores/useStreamStore'
+import { useAgentStore, type AgentHookEvent, type AgentStatus } from '../../stores/useAgentStore'
+import { useStreamStore, type PerSessionState } from '../../stores/useStreamStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useUndoToast } from '../../stores/useUndoToast'
 import { hostFetch, fetchInfo, fetchHealth } from '../../lib/host-api'
-import { getPrimaryPane } from '../../lib/pane-tree'
+import { scanPaneTree } from '../../lib/pane-tree'
+import { connectionErrorMessage } from '../../lib/host-utils'
 import type { ConfigData } from '../../lib/api'
 import type { Session } from '../../lib/api'
-
-export interface UndoToastInfo {
-  name: string
-  restore: () => void
-}
+import type { Tab } from '../../types/tab'
 
 interface Props {
   hostId: string
-  onShowUndoToast?: (info: UndoToastInfo) => void
 }
 
 /* ─── Collapsible section wrapper ─── */
@@ -229,21 +226,9 @@ function TokenField({ token, ip, port, onSave, t }: {
   )
 }
 
-/* ─── Connection error message ─── */
-
-function connectionErrorMessage(runtime: HostRuntime | undefined, t: (key: string) => string): string | null {
-  if (!runtime || runtime.status !== 'connected') {
-    if (runtime?.daemonState === 'unreachable') return t('hosts.error_unreachable')
-    if (runtime?.daemonState === 'refused') return t('hosts.error_refused')
-    return null
-  }
-  if (runtime.tmuxState === 'unavailable') return t('hosts.error_tmux_down')
-  return null
-}
-
 /* ─── Main component ─── */
 
-export function OverviewSection({ hostId, onShowUndoToast }: Props) {
+export function OverviewSection({ hostId }: Props) {
   const t = useI18nStore((s) => s.t)
   const host = useHostStore((s) => s.hosts[hostId])
   const runtime = useHostStore((s) => s.runtime[hostId])
@@ -298,59 +283,169 @@ export function OverviewSection({ hostId, onShowUndoToast }: Props) {
     const hostStore = useHostStore.getState()
     const tabStore = useTabStore.getState()
     const sessionStore = useSessionStore.getState()
+    const agentStore = useAgentStore.getState()
+    const streamStore = useStreamStore.getState()
 
     const hostName = hostStore.hosts[hostId]?.name ?? hostId
+    const prefix = `${hostId}:`
 
-    // Snapshot for undo (serializable data only)
+    // --- Snapshot for undo (serializable data only) ---
     const snapshot: {
       host: HostConfig | undefined
       hostOrder: string[]
       sessions: Session[] | undefined
       activeHostId: string | null
+      // AgentStore data (exclude transient activeSubagents)
+      agentEvents: Record<string, AgentHookEvent>
+      agentStatuses: Record<string, AgentStatus>
+      agentUnread: Record<string, boolean>
+      // StreamStore data (exclude non-serializable conn)
+      streamSessions: Record<string, Omit<PerSessionState, 'conn'>>
+      // Tab data for undo
+      closedTabs: Tab[]
+      terminatedTabPaneIds: { tabId: string; paneId: string }[]
     } = {
       host: hostStore.hosts[hostId],
       hostOrder: [...hostStore.hostOrder],
       sessions: sessionStore.sessions[hostId],
       activeHostId: hostStore.activeHostId,
+      agentEvents: {},
+      agentStatuses: {},
+      agentUnread: {},
+      streamSessions: {},
+      closedTabs: [],
+      terminatedTabPaneIds: [],
+    }
+
+    // Snapshot AgentStore entries for this host
+    for (const [k, v] of Object.entries(agentStore.events)) {
+      if (k.startsWith(prefix)) snapshot.agentEvents[k] = v
+    }
+    for (const [k, v] of Object.entries(agentStore.statuses)) {
+      if (k.startsWith(prefix)) snapshot.agentStatuses[k] = v
+    }
+    for (const [k, v] of Object.entries(agentStore.unread)) {
+      if (k.startsWith(prefix)) snapshot.agentUnread[k] = v
+    }
+
+    // Snapshot StreamStore entries for this host (exclude conn)
+    for (const [k, v] of Object.entries(streamStore.sessions)) {
+      if (k.startsWith(prefix)) {
+        const { conn: _, ...serializable } = v // eslint-disable-line @typescript-eslint/no-unused-vars
+        snapshot.streamSessions[k] = serializable
+      }
     }
 
     // Execute cascade: tabs -> sessions -> agent -> stream -> host
     if (closeTabs) {
-      // Close all tmux-session tabs for this host
+      // Close all tmux-session tabs for this host (scan ALL panes, not just primary)
       for (const [tabId, tab] of Object.entries(tabStore.tabs)) {
-        const primary = getPrimaryPane(tab.layout)
-        if (primary.content.kind === 'tmux-session' && primary.content.hostId === hostId) {
+        let hasHostPane = false
+        scanPaneTree(tab.layout, (pane) => {
+          if (pane.content.kind === 'tmux-session' && pane.content.hostId === hostId) {
+            hasHostPane = true
+          }
+        })
+        if (hasHostPane) {
+          snapshot.closedTabs.push(tab)
           tabStore.closeTab(tabId)
         }
       }
     } else {
+      // Track which panes will be marked terminated (for undo)
+      for (const [tabId, tab] of Object.entries(tabStore.tabs)) {
+        scanPaneTree(tab.layout, (pane) => {
+          if (pane.content.kind === 'tmux-session' && pane.content.hostId === hostId && !pane.content.terminated) {
+            snapshot.terminatedTabPaneIds.push({ tabId, paneId: pane.id })
+          }
+        })
+      }
       // Mark all tmux-session tabs as terminated
       tabStore.markHostTerminated(hostId, 'host-removed')
     }
 
     sessionStore.removeHost(hostId)
-    useAgentStore.getState().removeHost(hostId)
-    useStreamStore.getState().clearHost(hostId)
+    agentStore.removeHost(hostId)
+    streamStore.clearHost(hostId)
     hostStore.removeHost(hostId)
 
     setConfirmDelete(false)
 
-    // Show undo toast via parent
-    onShowUndoToast?.({
-      name: hostName,
-      restore: () => {
+    // Show undo toast via global store
+    useUndoToast.getState().show(
+      t('hosts.deleted_toast', { name: hostName }),
+      () => {
+        // --- Restore host + hostOrder position ---
         if (snapshot.host) {
           useHostStore.getState().addHost(snapshot.host)
-          // Restore activeHostId if it was this host
+          // Restore original hostOrder position
+          useHostStore.getState().reorderHosts(snapshot.hostOrder)
           if (snapshot.activeHostId === hostId) {
             useHostStore.getState().setActiveHost(hostId)
           }
         }
+
+        // --- Restore sessions ---
         if (snapshot.sessions) {
           useSessionStore.getState().replaceHost(hostId, snapshot.sessions)
         }
+
+        // --- Restore AgentStore data ---
+        const ag = useAgentStore.getState()
+        if (Object.keys(snapshot.agentEvents).length > 0) {
+          useAgentStore.setState({
+            events: { ...ag.events, ...snapshot.agentEvents },
+            statuses: { ...ag.statuses, ...snapshot.agentStatuses },
+            unread: { ...ag.unread, ...snapshot.agentUnread },
+          })
+        }
+
+        // --- Restore StreamStore data (conn set to null) ---
+        if (Object.keys(snapshot.streamSessions).length > 0) {
+          const st = useStreamStore.getState()
+          const restored: Record<string, PerSessionState> = {}
+          for (const [k, v] of Object.entries(snapshot.streamSessions)) {
+            restored[k] = { ...v, conn: null }
+          }
+          useStreamStore.setState({
+            sessions: { ...st.sessions, ...restored },
+          })
+        }
+
+        // --- Restore tabs ---
+        if (closeTabs && snapshot.closedTabs.length > 0) {
+          const ts = useTabStore.getState()
+          for (const tab of snapshot.closedTabs) {
+            // Only restore if tab wasn't re-created by user during undo window
+            if (!ts.tabs[tab.id]) {
+              useTabStore.getState().addTab(tab)
+            }
+          }
+        } else if (!closeTabs && snapshot.terminatedTabPaneIds.length > 0) {
+          // Clear terminated marking on panes that were marked by this delete
+          for (const { tabId, paneId } of snapshot.terminatedTabPaneIds) {
+            const currentTab = useTabStore.getState().tabs[tabId]
+            if (!currentTab) continue
+            // Find the pane and clear its terminated field
+            let found = false
+            scanPaneTree(currentTab.layout, (pane) => {
+              if (pane.id === paneId && pane.content.kind === 'tmux-session' && pane.content.terminated === 'host-removed') {
+                found = true
+              }
+            })
+            if (found) {
+              // Re-read to get current content and remove terminated
+              scanPaneTree(useTabStore.getState().tabs[tabId].layout, (pane) => {
+                if (pane.id === paneId && pane.content.kind === 'tmux-session' && pane.content.terminated === 'host-removed') {
+                  const { terminated: _, ...contentWithoutTerminated } = pane.content // eslint-disable-line @typescript-eslint/no-unused-vars
+                  useTabStore.getState().setPaneContent(tabId, paneId, contentWithoutTerminated as typeof pane.content)
+                }
+              })
+            }
+          }
+        }
       },
-    })
+    )
   }
 
   const statusLabel = (r?: HostRuntime) => {
@@ -411,11 +506,14 @@ export function OverviewSection({ hostId, onShowUndoToast }: Props) {
             {runtime?.latency != null && ` (${runtime.latency}ms)`}
           </span>
         </Field>
-        {connectionErrorMessage(runtime, t) && (
-          <div className="text-xs text-red-400 px-1 py-1">
-            {connectionErrorMessage(runtime, t)}
-          </div>
-        )}
+        {(() => {
+          const errorMsg = connectionErrorMessage(runtime, t)
+          return errorMsg && (
+            <div className="text-xs text-red-400 px-1 py-1">
+              {errorMsg}
+            </div>
+          )
+        })()}
 
         <div className="flex gap-2 mt-3">
           <button

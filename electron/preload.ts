@@ -46,10 +46,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Notifications
-  showNotification: (opts: { title: string; body: string; sessionCode: string; eventName: string; broadcastTs: number }) =>
+  showNotification: (opts: { title: string; body: string; sessionCode: string; eventName: string; broadcastTs: number; action?: { kind: string; hostId: string; sessionCode?: string } }) =>
     ipcRenderer.invoke('notification:show', JSON.stringify(opts)),
-  onNotificationClicked: (callback: (payload: { sessionCode: string }) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, payload: { sessionCode: string }) =>
+  onNotificationClicked: (callback: (payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string } }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string } }) =>
       callback(payload)
     ipcRenderer.on('notification:clicked', handler)
     return () => ipcRenderer.removeListener('notification:clicked', handler)

@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { Plus, Play, Trash, PencilSimple, Check, X } from '@phosphor-icons/react'
 import { useSessionStore } from '../../stores/useSessionStore'
-import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
+import { useHostStore } from '../../stores/useHostStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { hostFetch, renameSession } from '../../lib/host-api'
 import { compositeKey } from '../../lib/composite-key'
+import { connectionErrorMessage } from '../../lib/host-utils'
 import type { Session } from '../../lib/api'
 
 interface Props {
@@ -124,18 +125,6 @@ function InlineRename({ hostId, session, onDone }: { hostId: string; session: Se
   )
 }
 
-/* ─── Connection error message ─── */
-
-function connectionErrorMessage(runtime: HostRuntime | undefined, t: (key: string) => string): string | null {
-  if (!runtime || runtime.status !== 'connected') {
-    if (runtime?.daemonState === 'unreachable') return t('hosts.error_unreachable')
-    if (runtime?.daemonState === 'refused') return t('hosts.error_refused')
-    return null
-  }
-  if (runtime.tmuxState === 'unavailable') return t('hosts.error_tmux_down')
-  return null
-}
-
 /* ─── Main component ─── */
 
 export function SessionsSection({ hostId }: Props) {
@@ -188,11 +177,14 @@ export function SessionsSection({ hostId }: Props) {
 
       {showNew && <NewSessionDialog hostId={hostId} onClose={() => setShowNew(false)} />}
 
-      {isOffline && connectionErrorMessage(runtime, t) && (
-        <div className="text-xs text-red-400 px-3 py-2 mb-2">
-          {connectionErrorMessage(runtime, t)}
-        </div>
-      )}
+      {(() => {
+        const errorMsg = isOffline ? connectionErrorMessage(runtime, t) : null
+        return errorMsg && (
+          <div className="text-xs text-red-400 px-3 py-2 mb-2">
+            {errorMsg}
+          </div>
+        )
+      })()}
 
       {sessions.length === 0 ? (
         <p className="text-sm text-text-muted">{t('hosts.no_sessions')}</p>

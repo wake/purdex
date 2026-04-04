@@ -125,6 +125,7 @@ export function useNotificationDispatcher(): void {
             sessionCode,
             eventName: event.event_name,
             broadcastTs: event.broadcast_ts,
+            action: { kind: 'open-session', hostId, sessionCode },
           })
         } else if ('Notification' in window && Notification.permission === 'granted') {
           const n = new Notification(content.title, { body: content.body })
@@ -139,6 +140,20 @@ export function useNotificationDispatcher(): void {
   useEffect(() => {
     if (!window.electronAPI?.onNotificationClicked) return
     return window.electronAPI.onNotificationClicked((payload) => {
+      // If the payload carries an explicit action, use it directly
+      if (payload.action) {
+        if (payload.action.kind === 'open-host') {
+          handleNotificationClick({ kind: 'open-host', hostId: payload.action.hostId })
+        } else {
+          handleNotificationClick({
+            kind: 'open-session',
+            hostId: payload.action.hostId,
+            sessionCode: payload.action.sessionCode ?? payload.sessionCode,
+          })
+        }
+        return
+      }
+      // Backwards compat: no action field — fall back to open-session
       const tabs = useTabStore.getState().tabs
       const tabId = findTabBySessionCode(tabs, payload.sessionCode)
       let hostId = useHostStore.getState().hostOrder[0] ?? ''
@@ -240,6 +255,9 @@ function sendConnectionNotification(message: string, action: NotificationAction)
       sessionCode: '',
       eventName: 'ConnectionStatus',
       broadcastTs: Date.now(),
+      action: action.kind === 'open-host'
+        ? { kind: 'open-host', hostId: action.hostId }
+        : { kind: 'open-session', hostId: action.hostId, sessionCode: action.sessionCode },
     })
   } else if ('Notification' in window && Notification.permission === 'granted') {
     const n = new Notification(message)

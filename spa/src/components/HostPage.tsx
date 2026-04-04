@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { PaneRendererProps } from '../lib/pane-registry'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { HostSidebar } from './hosts/HostSidebar'
-import { OverviewSection, type UndoToastInfo } from './hosts/OverviewSection'
+import { OverviewSection } from './hosts/OverviewSection'
 import { SessionsSection } from './hosts/SessionsSection'
 import { HooksSection } from './hosts/HooksSection'
 import { UploadSection } from './hosts/UploadSection'
@@ -26,18 +26,7 @@ export function HostPage(_props: PaneRendererProps) {
     subPage: 'overview',
   }))
   const [showAddHost, setShowAddHost] = useState(false)
-  const [undoToast, setUndoToast] = useState<UndoToastInfo | null>(null)
-  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const t = useI18nStore((s) => s.t)
-
-  // Auto-dismiss undo toast after 5 seconds
-  useEffect(() => {
-    if (!undoToast) return
-    undoTimerRef.current = setTimeout(() => setUndoToast(null), 5000)
-    return () => {
-      if (undoTimerRef.current) clearTimeout(undoTimerRef.current)
-    }
-  }, [undoToast])
 
   // Derive effective selection: reset when selected host no longer exists
   const effectiveSelection = useMemo<Selection>(() => {
@@ -53,7 +42,7 @@ export function HostPage(_props: PaneRendererProps) {
     }
     switch (effectiveSelection.subPage) {
       case 'overview':
-        return <OverviewSection hostId={effectiveSelection.hostId} onShowUndoToast={setUndoToast} />
+        return <OverviewSection hostId={effectiveSelection.hostId} />
       case 'sessions':
         return <SessionsSection hostId={effectiveSelection.hostId} />
       case 'hooks':
@@ -75,22 +64,6 @@ export function HostPage(_props: PaneRendererProps) {
         {renderContent()}
       </div>
       {showAddHost && <AddHostDialog onClose={() => setShowAddHost(false)} />}
-      {undoToast && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-3 flex items-center gap-3 shadow-lg z-50">
-          <span className="text-sm text-zinc-300">
-            {t('hosts.deleted_toast', { name: undoToast.name })}
-          </span>
-          <button
-            className="text-sm text-blue-400 hover:text-blue-300 font-medium cursor-pointer"
-            onClick={() => {
-              undoToast.restore()
-              setUndoToast(null)
-            }}
-          >
-            {t('hosts.undo')}
-          </button>
-        </div>
-      )}
     </div>
   )
 }

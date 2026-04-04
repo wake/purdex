@@ -64,6 +64,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('notification:show', (_event, optsJson: string) => {
     const opts = JSON.parse(optsJson) as {
       title: string; body: string; sessionCode: string; eventName: string; broadcastTs: number
+      action?: { kind: string; hostId: string; sessionCode?: string }
     }
     // Dedup: same broadcast received by multiple windows
     if (recentBroadcasts.has(opts.broadcastTs)) return
@@ -74,9 +75,13 @@ function registerIpcHandlers(): void {
     notification.on('click', () => {
       // Broadcast to all renderers — SPA decides which one has the tab
       // The SPA will call focusMyWindow IPC when it handles the click
+      const payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string } } = {
+        sessionCode: opts.sessionCode,
+      }
+      if (opts.action) payload.action = opts.action
       for (const win of windowManager.getAllWindows()) {
         if (!win.isDestroyed()) {
-          win.webContents.send('notification:clicked', { sessionCode: opts.sessionCode })
+          win.webContents.send('notification:clicked', payload)
         }
       }
     })
