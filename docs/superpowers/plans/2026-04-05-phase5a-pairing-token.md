@@ -417,7 +417,11 @@ Expected: all packages PASS
 
 ```bash
 git add internal/middleware/middleware.go internal/middleware/middleware_test.go cmd/tbox/main.go
-git commit -m "refactor(middleware): TokenAuth accepts getter func for runtime token changes"
+git commit -m "refactor(middleware): TokenAuth accepts getter func for runtime token changes
+
+BREAKING: TokenAuth now evaluates token on each request (dynamic activation).
+Previously, empty token was a static decision at middleware creation time.
+Now, tokenFn returning empty = pass-through, returning non-empty = enforce auth."
 ```
 
 ---
@@ -656,7 +660,6 @@ git commit -m "feat(core): integrate PairingState + SetupSecrets + register pair
 package core
 
 import (
-	"encoding/binary"
 	"net"
 	"testing"
 )
@@ -936,7 +939,7 @@ import (
 	"github.com/wake/tmux-box/internal/config"
 )
 
-func newTestCore() *Core {
+func newPairingTestCore() *Core {
 	cfg := &config.Config{}
 	c := &Core{
 		Cfg:          cfg,
@@ -1103,10 +1106,20 @@ func (c *Core) handlePairVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate hex format
+	expected, err := hex.DecodeString(c.PairingSecret)
+	if err != nil || len(expected) == 0 {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	given, err := hex.DecodeString(req.Secret)
+	if err != nil {
+		http.Error(w, "bad request: secret must be hex", http.StatusBadRequest)
+		return
+	}
+
 	// Constant-time compare
-	expected, _ := hex.DecodeString(c.PairingSecret)
-	given, _ := hex.DecodeString(req.Secret)
-	if subtle.ConstantTimeCompare(expected, given) != 1 || len(expected) == 0 {
+	if subtle.ConstantTimeCompare(expected, given) != 1 {
 		count := atomic.AddInt32(&c.failedVerify, 1)
 		if count >= maxVerifyFailures {
 			c.regeneratePairingSecret()
@@ -1178,34 +1191,7 @@ func (c *Core) handlePairSetup(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
-// regeneratePairingSecret creates a new 3-byte secret and logs a warning.
-func (c *Core) regeneratePairingSecret() {
-	secret := make([]byte, 3)
-	if _, err := cryptoRandRead(secret); err != nil {
-		log.Printf("regenerate pairing secret: %v", err)
-		return
-	}
-	c.PairingSecret = hex.EncodeToString(secret)
-	atomic.StoreInt32(&c.failedVerify, 0)
-	log.Printf("⚠ 配對碼已失效（過多失敗嘗試），新 secret: %s", c.PairingSecret)
-}
-
-// cryptoRandRead is a variable for testing.
-var cryptoRandRead = cryptoRandReadReal
-
-func cryptoRandReadReal(b []byte) (int, error) {
-	return _cryptoRand.Read(b)
-}
-```
-
-Add to imports at top: `"crypto/rand"` and add:
-```go
-import _cryptoRand "crypto/rand"
-```
-
-Actually, simpler approach — use `crypto/rand` directly:
-
-```go
+// regeneratePairingSecret creates a new 3-byte secret, updates the pairing code, and logs a warning.
 func (c *Core) regeneratePairingSecret() {
 	secret := make([]byte, 3)
 	if _, err := rand.Read(secret); err != nil {
@@ -1214,11 +1200,19 @@ func (c *Core) regeneratePairingSecret() {
 	}
 	c.PairingSecret = hex.EncodeToString(secret)
 	atomic.StoreInt32(&c.failedVerify, 0)
-	log.Printf("⚠ 配對碼已失效（過多失敗嘗試），新 secret: %s", c.PairingSecret)
+
+	// Reconstruct full pairing code from cfg bind IP/Port + new secret
+	c.CfgMu.RLock()
+	ip := net.ParseIP(c.Cfg.Bind).To4()
+	port := uint16(c.Cfg.Port)
+	c.CfgMu.RUnlock()
+	code := EncodePairingCode(ip, port, secret)
+	log.Printf("⚠ 配對碼已失效（過多失敗嘗試），新配對碼：%s", code)
+	fmt.Printf("\n新配對碼: %s\n\n", code)
 }
 ```
 
-Add `"crypto/rand"` to imports.
+Add `"crypto/rand"`, `"fmt"`, `"net"` to imports.
 
 - [ ] **Step 4: Run test — expect PASS**
 
@@ -1312,6 +1306,10 @@ import (
 	"github.com/wake/tmux-box/internal/config"
 )
 
+// handleTokenAuth confirms the runtime token and persists it to config.
+// NOTE: Token validation is performed by TokenAuth middleware in the chain.
+// This handler MUST be behind TokenAuth — moving it to an unprotected route
+// would allow unauthenticated callers to persist arbitrary tokens.
 func (c *Core) handleTokenAuth(w http.ResponseWriter, r *http.Request) {
 	// Already confirmed — idempotent success
 	if c.Pairing.Get() == StateNormal {
@@ -1468,6 +1466,7 @@ After Core creation (after line 112), add pairing initialization:
 if cfg.Token == "" {
     if *quick {
         // Quick mode: interactive IP selection if needed
+        // 127.0.0.1 is unusable for remote SPA in Quick mode, treat as unset.
         if cfg.Bind == "" || cfg.Bind == "127.0.0.1" {
             cfg.Bind = selectBindIP()
             c.Cfg.Bind = cfg.Bind
@@ -1494,9 +1493,10 @@ if cfg.Token == "" {
             log.Fatalf("generate token: %v", err)
         }
         token := "purdex_" + hex.EncodeToString(tokenBytes)
+        // Write runtime token to c.Cfg.Token — TokenAuth getter reads this directly.
+        // Do NOT write to local cfg; middleware getter uses c.Cfg, not cfg.
         c.CfgMu.Lock()
         c.Cfg.Token = token
-        cfg.Token = token  // for middleware chain below
         c.CfgMu.Unlock()
         c.Pairing.Set(core.StatePending)
 
@@ -1639,9 +1639,10 @@ function base58Decode(s: string): Uint8Array | null {
     n = n * 58n + val
   }
 
-  // Convert bigint to bytes
-  const hex = n.toString(16).padStart(2, '0')
-  const bytes = new Uint8Array(Math.ceil(hex.length / 2))
+  // Convert bigint to bytes (ensure even-length hex)
+  const rawHex = n.toString(16)
+  const hex = rawHex.length % 2 ? '0' + rawHex : rawHex
+  const bytes = new Uint8Array(hex.length / 2)
   for (let i = 0; i < bytes.length; i++) {
     bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
   }
@@ -1820,7 +1821,7 @@ git commit -m "feat(spa): add pairing and token auth API functions"
 
 - [ ] **Step 1: Add i18n keys to en.json**
 
-Add under the `hosts` key in `spa/src/locales/en.json`:
+Add the following key-value pairs at the root level of `spa/src/locales/en.json` (flat key format, alongside existing `"hosts.*"` entries):
 
 ```json
 "hosts.pairing_code": "Pairing Code",
@@ -1839,7 +1840,7 @@ Add under the `hosts` key in `spa/src/locales/en.json`:
 
 - [ ] **Step 2: Add i18n keys to zh-TW.json**
 
-Add under the `hosts` key in `spa/src/locales/zh-TW.json`:
+Add the following key-value pairs at the root level of `spa/src/locales/zh-TW.json`:
 
 ```json
 "hosts.pairing_code": "配對碼",
@@ -1932,7 +1933,9 @@ export function AddHostDialog({ onClose }: Props) {
       setToken(generatePurdexToken())
       setStage('paired')
     } catch (err) {
-      setStage('error')
+      // pairing → error: go back to idle so user can re-enter pairing code
+      setStage('idle')
+      setPairingCode('')
       if (err instanceof PairingError) {
         setError(`${t('hosts.pairing_failed')}: HTTP ${err.status}`)
       } else {
@@ -2116,8 +2119,8 @@ export function AddHostDialog({ onClose }: Props) {
           {error && (
             <div className="flex items-center gap-2 text-xs text-red-400">
               <Warning size={14} />
-              {error}
-              {stage === 'idle' && isPairingRoute && (
+              <span>{error}</span>
+              {isPairingRoute && (
                 <span className="text-text-muted ml-1">— {t('hosts.pairing_retry')}</span>
               )}
             </div>
@@ -2215,7 +2218,7 @@ curl http://127.0.0.1:7860/api/health
 # Expected: {"ok":true,"mode":"normal"}
 ```
 
-- [ ] **Step 6: Manual smoke test — Quick mode**
+- [ ] **Step 6: Manual smoke test — Quick mode (no token)**
 
 ```bash
 # Terminal 1: Start daemon in quick mode
@@ -2227,4 +2230,18 @@ curl http://127.0.0.1:7860/api/health
 
 curl http://127.0.0.1:7860/api/sessions
 # Expected: 503 {"reason":"pairing_mode"}
+```
+
+- [ ] **Step 7: Manual smoke test — Quick mode (existing token)**
+
+```bash
+# Ensure config.toml has a token, then:
+cd /Users/wake/Workspace/wake/tmux-box && go run ./cmd/tbox serve --quick
+# Expected: normal startup (--quick has no effect when token exists)
+
+curl http://<bind-ip>:7860/api/health
+# Expected: {"ok":true,"mode":"normal"}
+
+curl http://<bind-ip>:7860/api/sessions -H "Authorization: Bearer <token>"
+# Expected: 200 (normal operation, NOT 503)
 ```
