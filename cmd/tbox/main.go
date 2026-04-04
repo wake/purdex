@@ -3,9 +3,12 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -55,6 +58,7 @@ func runServe(args []string) {
 	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/tbox/config.toml)")
 	bindOverride := fs.String("bind", "", "override bind address")
 	portOverride := fs.Int("port", 0, "override port")
+	quick := fs.Bool("quick", false, "quick setup mode with pairing code")
 	fs.Parse(args)
 
 	// 1. Load config
@@ -111,6 +115,44 @@ func runServe(args []string) {
 	// Set config path for persistence via PUT /api/config
 	c.CfgPath = resolvedCfgPath
 
+	// Phase 5a: Pairing initialization
+	if cfg.Token == "" {
+		if *quick {
+			// Quick mode: interactive IP selection if needed
+			if cfg.Bind == "" || cfg.Bind == "127.0.0.1" {
+				cfg.Bind = selectBindIP()
+				c.Cfg.Bind = cfg.Bind
+				if err := config.WriteFile(resolvedCfgPath, cfg); err != nil {
+					log.Printf("save bind config: %v", err)
+				}
+			}
+			// Generate pairing secret
+			secret := make([]byte, 3)
+			if _, err := rand.Read(secret); err != nil {
+				log.Fatalf("generate pairing secret: %v", err)
+			}
+			c.PairingSecret = hex.EncodeToString(secret)
+			c.Pairing.Set(core.StatePairing)
+
+			ip := net.ParseIP(cfg.Bind).To4()
+			code := core.EncodePairingCode(ip, uint16(cfg.Port), secret)
+			fmt.Printf("\n配對碼: %s\n\n", code)
+		} else {
+			// General mode: generate runtime token
+			tokenBytes := make([]byte, 20)
+			if _, err := rand.Read(tokenBytes); err != nil {
+				log.Fatalf("generate token: %v", err)
+			}
+			token := "purdex_" + hex.EncodeToString(tokenBytes)
+			c.CfgMu.Lock()
+			c.Cfg.Token = token
+			c.CfgMu.Unlock()
+			c.Pairing.Set(core.StatePending)
+
+			fmt.Printf("\nToken: %s\n\n", token)
+		}
+	}
+
 	// 5. Add modules (order doesn't matter — topoSort handles dependencies)
 	c.AddModule(session.NewSessionModule(meta))
 	c.AddModule(cc.New())
@@ -148,11 +190,14 @@ func runServe(args []string) {
 		http.HandlerFunc(c.HandleHealth)))
 	outerMux.Handle("/", middleware.CORS(
 		middleware.IPWhitelist(cfg.Allow)(
-			middleware.TokenAuth(func() string {
-				c.CfgMu.RLock()
-				defer c.CfgMu.RUnlock()
-				return c.Cfg.Token
-			}, c.Tickets)(mux))))
+			middleware.PairingGuard(func() bool {
+				return c.Pairing.Get() == core.StatePairing
+			})(
+				middleware.TokenAuth(func() string {
+					c.CfgMu.RLock()
+					defer c.CfgMu.RUnlock()
+					return c.Cfg.Token
+				}, c.Tickets)(mux)))))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
 	srv := &http.Server{
