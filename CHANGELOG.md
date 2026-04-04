@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.0.0-alpha.44] - 2026-04-04
+
+Phase 4 錯誤 UI — Terminated Tab + Host Error Display + Cascade Delete (PR #162)
+
+### 新功能
+
+- **Tab 狀態模型** — PaneContent `kind: 'session'` 改名為 `kind: 'tmux-session'`，新增 `terminated?: TerminatedReason` 欄位（event-sourced）
+- **TerminatedPane 錯誤頁** — session 關閉 / tmux 重啟 / host 刪除三種情境，顯示對應訊息 + 關閉按鈕 + 跨 host SessionPickerList
+- **SessionPickerList** — 列出所有已連線 host 的 session，按 host 分組，可用於 tab 重新綁定
+- **deriveTabState** — 從 PaneContent + HostRuntime 推導 tab 顯示狀態（active / reconnecting / terminated）
+- **Host 層級 L1-L3 錯誤 UI** — StatusBar / HostSidebar / OverviewSection / SessionsSection 各自顯示連線錯誤狀態
+- **useHostConnection hook** — 封裝 ConnectionStateMachine 存取，提供 `manualRetry()` 手動重連
+- **Reconnecting overlay 手動重連按鈕** — TerminalView 斷線覆蓋層新增重連按鈕 + spinner
+- **Host 刪除 cascade cleanup** — checkbox 選擇是否關閉分頁，多 store cascade（AgentStore.removeHost + StreamStore.clearHost）+ 全域 undo toast（5s snapshot 復原）
+- **NotificationAction 模組化** — 通知 click handler 改為 action payload dispatch 模式，支援 `open-session` / `open-host`
+- **L2/L3 系統通知** — daemon refused / tmux unavailable 狀態轉換時發送桌面通知
+
+### 重構
+
+- **PaneContent kind rename** — `'session'` → `'tmux-session'`，含 Zustand persist migration v1→v2
+- **connectionErrorMessage 共用** — 抽取到 `lib/host-utils.ts`，OverviewSection 和 SessionsSection 共用
+- **Undo toast 全域化** — `useUndoToast` store + `GlobalUndoToast` 元件，跨頁面導航持續顯示
+
+### 修復
+
+- **#156** — AddHostDialog 顯示具體 L1/L2/401 錯誤訊息
+- **#140** — TokenField 清空時不觸發驗證
+- **health timeout** — checkHealth timeout 從 3s 調整為 6s
+
 ## [1.0.0-alpha.43] - 2026-04-03
 
 Phase 3 連線偵測 — Watcher 狀態機 + WS ping/pong + useHostConnection 閘控 (PR #158)
