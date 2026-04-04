@@ -45,7 +45,7 @@ func TestIPWhitelistEmptyAllowsAll(t *testing.T) {
 }
 
 func TestTokenAuthValid(t *testing.T) {
-	h := middleware.TokenAuth("secret", nil)(ok)
+	h := middleware.TokenAuth(func() string { return "secret" }, nil)(ok)
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
@@ -56,7 +56,7 @@ func TestTokenAuthValid(t *testing.T) {
 }
 
 func TestTokenAuthInvalid(t *testing.T) {
-	h := middleware.TokenAuth("secret", nil)(ok)
+	h := middleware.TokenAuth(func() string { return "secret" }, nil)(ok)
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer wrong")
 	rec := httptest.NewRecorder()
@@ -67,7 +67,7 @@ func TestTokenAuthInvalid(t *testing.T) {
 }
 
 func TestTokenAuthCaseSensitive(t *testing.T) {
-	h := middleware.TokenAuth("Secret", nil)(ok)
+	h := middleware.TokenAuth(func() string { return "Secret" }, nil)(ok)
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
@@ -78,7 +78,7 @@ func TestTokenAuthCaseSensitive(t *testing.T) {
 }
 
 func TestTokenAuthQueryParam(t *testing.T) {
-	h := middleware.TokenAuth("secret", nil)(ok)
+	h := middleware.TokenAuth(func() string { return "secret" }, nil)(ok)
 	req := httptest.NewRequest("GET", "/?token=secret", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -88,7 +88,7 @@ func TestTokenAuthQueryParam(t *testing.T) {
 }
 
 func TestTokenAuthEmptyAllowsAll(t *testing.T) {
-	h := middleware.TokenAuth("", nil)(ok)
+	h := middleware.TokenAuth(func() string { return "" }, nil)(ok)
 	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -112,7 +112,7 @@ func (f *fakeTickets) Validate(ticket string) bool {
 
 func TestTokenAuthTicketValid(t *testing.T) {
 	tv := &fakeTickets{valid: map[string]bool{"abc123": true}}
-	h := middleware.TokenAuth("secret", tv)(ok)
+	h := middleware.TokenAuth(func() string { return "secret" }, tv)(ok)
 	req := httptest.NewRequest("GET", "/?ticket=abc123", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -123,7 +123,7 @@ func TestTokenAuthTicketValid(t *testing.T) {
 
 func TestTokenAuthTicketInvalid(t *testing.T) {
 	tv := &fakeTickets{valid: map[string]bool{}}
-	h := middleware.TokenAuth("secret", tv)(ok)
+	h := middleware.TokenAuth(func() string { return "secret" }, tv)(ok)
 	req := httptest.NewRequest("GET", "/?ticket=wrong", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -134,7 +134,7 @@ func TestTokenAuthTicketInvalid(t *testing.T) {
 
 func TestTokenAuthTicketConsumed(t *testing.T) {
 	tv := &fakeTickets{valid: map[string]bool{"once": true}}
-	h := middleware.TokenAuth("secret", tv)(ok)
+	h := middleware.TokenAuth(func() string { return "secret" }, tv)(ok)
 
 	// First request should succeed
 	req1 := httptest.NewRequest("GET", "/?ticket=once", nil)

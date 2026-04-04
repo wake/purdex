@@ -53,14 +53,17 @@ type TicketValidator interface {
 }
 
 // TokenAuth checks Bearer token, one-time ticket, or ?token= query param.
+// tokenFn is called on each request to support runtime token changes.
 // Bearer prefix is case-insensitive, token value is case-sensitive.
 // If tickets is non-nil, ?ticket= is checked before the legacy ?token= fallback.
-func TokenAuth(token string, tickets TicketValidator) func(http.Handler) http.Handler {
-	if token == "" {
-		return func(next http.Handler) http.Handler { return next }
-	}
+func TokenAuth(tokenFn func() string, tickets TicketValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token := tokenFn()
+			if token == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
 			// Check Authorization header first
 			if auth := r.Header.Get("Authorization"); len(auth) >= 7 && strings.EqualFold(auth[:7], "bearer ") && subtle.ConstantTimeCompare([]byte(auth[7:]), []byte(token)) == 1 {
 				next.ServeHTTP(w, r)

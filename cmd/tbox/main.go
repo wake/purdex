@@ -148,7 +148,11 @@ func runServe(args []string) {
 		http.HandlerFunc(c.HandleHealth)))
 	outerMux.Handle("/", middleware.CORS(
 		middleware.IPWhitelist(cfg.Allow)(
-			middleware.TokenAuth(cfg.Token, c.Tickets)(mux))))
+			middleware.TokenAuth(func() string {
+				c.CfgMu.RLock()
+				defer c.CfgMu.RUnlock()
+				return c.Cfg.Token
+			}, c.Tickets)(mux))))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
 	srv := &http.Server{
