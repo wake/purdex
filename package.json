@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "tmux-box",
-  "version": "1.0.0-alpha.44",
+  "version": "1.0.0-alpha.45",
   "main": "out/main/index.mjs",
   "scripts": {
     "electron:dev": "electron-vite dev",

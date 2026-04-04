@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.45] - 2026-04-04
+
+Phase 4 Hotfix — SM tmuxState 覆寫 + L2 背景重連 + Test Connection 重連
+
+### 修復
+
+- **SM onStateChange 不覆寫 tmuxState** — `checkHealth` 的 tmux 是硬編碼 `unavailable`，不應覆蓋 WS event 推送的正確狀態
+- **Test Connection 觸發 SM reconnect** — 成功時呼叫 `manualRetry()` 讓 WS 恢復連線
+- **i18n** — 「測試連線」→「嘗試連線」
+
+### 新功能
+
+- **L2 refused 背景重連** — FAST_RETRY 後每 3 秒嘗試連線，3 分鐘後停止。Daemon 重啟後不再需要手動操作
+
 ## [1.0.0-alpha.44] - 2026-04-04
 
 Phase 4 錯誤 UI — Terminated Tab + Host Error Display + Cascade Delete (PR #162)
