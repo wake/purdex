@@ -1,10 +1,69 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { Tab, PaneContent } from '../types/tab'
+import type { Tab, PaneContent, PaneLayout, TerminatedReason } from '../types/tab'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, findPane, updatePaneInLayout } from '../lib/pane-tree'
 import { contentMatches } from '../lib/pane-utils'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
+
+// --- Persist migration helpers ---
+// These functions handle legacy persisted data whose shape no longer matches
+// current TypeScript types, so `any` casts are unavoidable.
+
+function migrateLayout(layout: PaneLayout): PaneLayout {
+  if (layout.type === 'leaf') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const content = layout.pane.content as any
+    if (content.kind === 'session') {
+      return {
+        ...layout,
+        pane: { ...layout.pane, content: { ...content, kind: 'tmux-session' } },
+      }
+    }
+    return layout
+  }
+  return { ...layout, children: layout.children.map(migrateLayout) }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function migrateTabStore(state: any, version: number): any {
+  if (version < 2) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tabs: Record<string, any> = {}
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const [id, tab] of Object.entries(state.tabs as Record<string, any>)) {
+      tabs[id] = { ...tab, layout: migrateLayout(tab.layout) }
+    }
+    return { ...state, tabs }
+  }
+  return state
+}
+
+// --- Terminated marking helpers ---
+
+function markPanesInLayout(layout: PaneLayout, hostId: string, sessionCode: string, reason: TerminatedReason): PaneLayout {
+  if (layout.type === 'leaf') {
+    const c = layout.pane.content
+    if (c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode && !c.terminated) {
+      return { ...layout, pane: { ...layout.pane, content: { ...c, terminated: reason } } }
+    }
+    return layout
+  }
+  const children = layout.children.map((child) => markPanesInLayout(child, hostId, sessionCode, reason))
+  return children.some((c, i) => c !== layout.children[i]) ? { ...layout, children } : layout
+}
+
+function markHostPanesInLayout(layout: PaneLayout, hostId: string, reason: TerminatedReason): PaneLayout {
+  if (layout.type === 'leaf') {
+    const c = layout.pane.content
+    if (c.kind === 'tmux-session' && c.hostId === hostId && !c.terminated) {
+      return { ...layout, pane: { ...layout.pane, content: { ...c, terminated: reason } } }
+    }
+    return layout
+  }
+  const children = layout.children.map((child) => markHostPanesInLayout(child, hostId, reason))
+  return children.some((c, i) => c !== layout.children[i]) ? { ...layout, children } : layout
+}
 
 interface TabState {
   tabs: Record<string, Tab>
@@ -23,6 +82,8 @@ interface TabState {
   togglePin: (id: string) => void
   toggleLock: (id: string) => void
   updateSessionCache: (hostId: string, sessionCode: string, cachedName: string) => void
+  markTerminated: (hostId: string, sessionCode: string, reason: TerminatedReason) => void
+  markHostTerminated: (hostId: string, reason: TerminatedReason) => void
 }
 
 export const useTabStore = create<TabState>()(
@@ -88,9 +149,9 @@ export const useTabStore = create<TabState>()(
           const tab = state.tabs[tabId]
           if (!tab) return state
           const pane = findPane(tab.layout, paneId)
-          if (!pane || pane.content.kind !== 'session') return state
+          if (!pane || pane.content.kind !== 'tmux-session') return state
           const newLayout = updatePaneInLayout(tab.layout, paneId, {
-            kind: 'session',
+            kind: 'tmux-session',
             hostId: pane.content.hostId,
             sessionCode: pane.content.sessionCode,
             mode,
@@ -144,7 +205,7 @@ export const useTabStore = create<TabState>()(
           for (const [id, tab] of Object.entries(tabs)) {
             const primary = getPrimaryPane(tab.layout)
             const c = primary.content
-            if (c.kind === 'session' && c.hostId === hostId && c.sessionCode === sessionCode && c.cachedName !== cachedName) {
+            if (c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode && c.cachedName !== cachedName) {
               tabs[id] = {
                 ...tab,
                 layout: updatePaneInLayout(tab.layout, primary.id, { ...c, cachedName }),
@@ -154,11 +215,40 @@ export const useTabStore = create<TabState>()(
           }
           return changed ? { tabs } : state
         }),
+
+      markTerminated: (hostId, sessionCode, reason) =>
+        set((state) => {
+          let changed = false
+          const tabs = { ...state.tabs }
+          for (const [id, tab] of Object.entries(tabs)) {
+            const newLayout = markPanesInLayout(tab.layout, hostId, sessionCode, reason)
+            if (newLayout !== tab.layout) {
+              tabs[id] = { ...tab, layout: newLayout }
+              changed = true
+            }
+          }
+          return changed ? { tabs } : state
+        }),
+
+      markHostTerminated: (hostId, reason) =>
+        set((state) => {
+          let changed = false
+          const tabs = { ...state.tabs }
+          for (const [id, tab] of Object.entries(tabs)) {
+            const newLayout = markHostPanesInLayout(tab.layout, hostId, reason)
+            if (newLayout !== tab.layout) {
+              tabs[id] = { ...tab, layout: newLayout }
+              changed = true
+            }
+          }
+          return changed ? { tabs } : state
+        }),
     }),
     {
       name: STORAGE_KEYS.TABS,
       storage: purdexStorage,
-      version: 1,
+      version: 2,
+      migrate: migrateTabStore,
       partialize: (state) => ({
         tabs: state.tabs,
         tabOrder: state.tabOrder,

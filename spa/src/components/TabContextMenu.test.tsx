@@ -11,7 +11,7 @@ vi.mock('../lib/platform', () => ({
 import { getPlatformCapabilities } from '../lib/platform'
 
 function makeSessionTab(mode: 'terminal' | 'stream' = 'terminal', opts?: { pinned?: boolean; locked?: boolean }): Tab {
-  const tab = createTab({ kind: 'session', hostId: 'test-host', sessionCode: 'tst001', mode, cachedName: '', tmuxInstance: '' }, { pinned: opts?.pinned })
+  const tab = createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'tst001', mode, cachedName: '', tmuxInstance: '' }, { pinned: opts?.pinned })
   if (opts?.locked) return { ...tab, locked: true }
   return tab
 }

@@ -181,7 +181,7 @@ describe('useAgentStore', () => {
   })
 
   it('Stop → does NOT mark unread when active tab is this session', () => {
-    const tab = { ...createTab({ kind: 'session', hostId: 'test-host', sessionCode: 'dev', mode: 'terminal', cachedName: '', tmuxInstance: '' }), id: 't1' }
+    const tab = { ...createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'dev', mode: 'terminal', cachedName: '', tmuxInstance: '' }), id: 't1' }
     useTabStore.setState({ tabs: { t1: tab }, activeTabId: 't1' })
     const event: AgentHookEvent = {
       tmux_session: 'dev',
@@ -473,5 +473,44 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().activeSubagents[`${H}:dev`]).toBeUndefined()
     expect(useAgentStore.getState().activeSubagents[`${H}:staging`]).toBeUndefined()
     expect(useAgentStore.getState().activeSubagents['other-host:dev']).toEqual(['agent-C'])
+  })
+
+  it('removeHost → clears all 4 fields for matching host, preserves others', () => {
+    useAgentStore.setState({
+      events: {
+        [`${H}:dev`]: { tmux_session: 'dev', event_name: 'Stop', raw_event: {}, agent_type: 'cc', broadcast_ts: 1 },
+        [`${H}:staging`]: { tmux_session: 'staging', event_name: 'Stop', raw_event: {}, agent_type: 'cc', broadcast_ts: 2 },
+        ['other-host:dev']: { tmux_session: 'dev', event_name: 'Stop', raw_event: {}, agent_type: 'cc', broadcast_ts: 3 },
+      },
+      statuses: {
+        [`${H}:dev`]: 'idle',
+        [`${H}:staging`]: 'running',
+        ['other-host:dev']: 'waiting',
+      },
+      unread: {
+        [`${H}:dev`]: true,
+        ['other-host:dev']: true,
+      },
+      activeSubagents: {
+        [`${H}:dev`]: ['agent-A'],
+        ['other-host:dev']: ['agent-B'],
+      },
+    })
+
+    useAgentStore.getState().removeHost(H)
+
+    const state = useAgentStore.getState()
+    // Host entries cleared
+    expect(state.events[`${H}:dev`]).toBeUndefined()
+    expect(state.events[`${H}:staging`]).toBeUndefined()
+    expect(state.statuses[`${H}:dev`]).toBeUndefined()
+    expect(state.statuses[`${H}:staging`]).toBeUndefined()
+    expect(state.unread[`${H}:dev`]).toBeUndefined()
+    expect(state.activeSubagents[`${H}:dev`]).toBeUndefined()
+    // Other host preserved
+    expect(state.events['other-host:dev']).toBeDefined()
+    expect(state.statuses['other-host:dev']).toBe('waiting')
+    expect(state.unread['other-host:dev']).toBe(true)
+    expect(state.activeSubagents['other-host:dev']).toEqual(['agent-B'])
   })
 })

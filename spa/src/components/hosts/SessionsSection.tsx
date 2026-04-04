@@ -8,6 +8,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { hostFetch, renameSession } from '../../lib/host-api'
 import { compositeKey } from '../../lib/composite-key'
+import { connectionErrorMessage } from '../../lib/host-utils'
 import type { Session } from '../../lib/api'
 
 interface Props {
@@ -130,7 +131,7 @@ export function SessionsSection({ hostId }: Props) {
   const t = useI18nStore((s) => s.t)
   const sessions = useSessionStore((s) => s.sessions[hostId] ?? [])
   const runtime = useHostStore((s) => s.runtime[hostId])
-  const isOffline = runtime != null && runtime.status !== 'connected'
+  const isOffline = !runtime || runtime.status !== 'connected' || runtime.tmuxState === 'unavailable'
   const [showNew, setShowNew] = useState(false)
   const [renamingCode, setRenamingCode] = useState<string | null>(null)
   const [deletingCode, setDeletingCode] = useState<string | null>(null)
@@ -138,7 +139,7 @@ export function SessionsSection({ hostId }: Props) {
 
   const handleOpen = (session: Session, mode: string) => {
     const tabId = useTabStore.getState().openSingletonTab({
-      kind: 'session',
+      kind: 'tmux-session',
       hostId,
       sessionCode: session.code,
       mode: mode as 'terminal' | 'stream',
@@ -175,6 +176,15 @@ export function SessionsSection({ hostId }: Props) {
       </div>
 
       {showNew && <NewSessionDialog hostId={hostId} onClose={() => setShowNew(false)} />}
+
+      {(() => {
+        const errorMsg = isOffline ? connectionErrorMessage(runtime, t) : null
+        return errorMsg && (
+          <div className="text-xs text-red-400 px-3 py-2 mb-2">
+            {errorMsg}
+          </div>
+        )
+      })()}
 
       {sessions.length === 0 ? (
         <p className="text-sm text-text-muted">{t('hosts.no_sessions')}</p>

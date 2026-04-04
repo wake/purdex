@@ -28,6 +28,7 @@ interface AgentState {
   markRead: (hostId: string, sessionCode: string) => void
   clearAllSubagents: () => void
   clearSubagentsForHost: (hostId: string) => void
+  removeHost: (hostId: string) => void
   setTabIndicatorStyle: (style: TabIndicatorStyle) => void
   setHooksInstalled: (installed: boolean) => void
 }
@@ -185,6 +186,23 @@ export const useAgentStore = create<AgentState>()(
           if (!k.startsWith(prefix)) filtered[k] = v
         }
         return { activeSubagents: filtered }
+      }),
+
+      removeHost: (hostId) => set((s) => {
+        const prefix = `${hostId}:`
+        const filterKeys = <T,>(record: Record<string, T>): Record<string, T> => {
+          const result: Record<string, T> = {}
+          for (const [k, v] of Object.entries(record)) {
+            if (!k.startsWith(prefix)) result[k] = v
+          }
+          return result
+        }
+        return {
+          events: filterKeys(s.events),
+          statuses: filterKeys(s.statuses),
+          unread: filterKeys(s.unread),
+          activeSubagents: filterKeys(s.activeSubagents),
+        }
       }),
 
       setTabIndicatorStyle: (style) => set({ tabIndicatorStyle: style }),

@@ -59,7 +59,7 @@ export function tabToUrl(tabId: string, content: PaneContent, workspaceId?: stri
     case 'settings':
       if (content.scope === 'global') return '/settings'
       return `/w/${content.scope.workspaceId}/settings`
-    case 'session':
+    case 'tmux-session':
       if (workspaceId) return `/w/${workspaceId}/t/${tabId}/${content.mode}`
       return `/t/${tabId}/${content.mode}`
     case 'hosts':

@@ -353,11 +353,32 @@
   "hosts.no_host_selected": "No host selected.",
   "hosts.preset_count": "{{count}} preset(s)",
   "hosts.connection_failed": "Connection failed",
+  "hosts.confirm_delete_tabs": "Also close all tabs for this host",
+  "hosts.deleted_toast": "{{name}} deleted",
+  "hosts.undo": "Undo",
+  "hosts.error_unreachable": "Host unreachable",
+  "hosts.error_refused": "Daemon not running",
+  "hosts.error_tmux_down": "tmux environment unreachable",
   "common.edit": "Edit",
 
   "error.boundary.title": "Something went wrong",
   "error.boundary.message": "An unexpected error occurred.",
   "error.boundary.reload": "Reload",
 
-  "session.no_sessions": "No sessions available"
+  "session.no_sessions": "No sessions available",
+
+  "terminated.session_closed": "Session closed",
+  "terminated.session_closed_desc": "{{name}} no longer exists",
+  "terminated.tmux_restarted": "tmux restarted",
+  "terminated.tmux_restarted_desc": "Previous sessions are no longer valid",
+  "terminated.host_removed": "Host removed",
+  "terminated.host_removed_desc": "This host has been removed",
+  "terminated.no_sessions": "No available connections",
+  "terminated.close_tab": "Close tab",
+  "terminated.select_session": "Select a session to reconnect",
+
+  "connection.reconnect": "Reconnect",
+
+  "notification.daemon_refused": "{{name}} — Daemon not running",
+  "notification.tmux_down": "{{name}} — tmux environment unreachable"
 }

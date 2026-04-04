@@ -37,6 +37,14 @@ export function updatePaneInLayout(
   }
 }
 
+export function scanPaneTree(layout: PaneLayout, fn: (pane: Pane) => void): void {
+  if (layout.type === 'leaf') {
+    fn(layout.pane)
+  } else {
+    layout.children.forEach((child) => scanPaneTree(child, fn))
+  }
+}
+
 export function getLayoutKey(layout: PaneLayout): string {
   return layout.type === 'leaf' ? layout.pane.id : layout.id
 }
@@ -50,7 +58,7 @@ export function findTabBySessionCode(
 ): string | undefined {
   for (const [tabId, tab] of Object.entries(tabs)) {
     const primary = getPrimaryPane(tab.layout)
-    if (primary.content.kind === 'session' && primary.content.sessionCode === sessionCode) {
+    if (primary.content.kind === 'tmux-session' && primary.content.sessionCode === sessionCode) {
       return tabId
     }
   }

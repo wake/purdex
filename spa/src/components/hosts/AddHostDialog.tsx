@@ -77,7 +77,13 @@ export function AddHostDialog({ onClose }: Props) {
       }
     } catch (err) {
       setStage('error')
-      setError(err instanceof Error ? err.message : 'Connection failed')
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setError(t('hosts.error_unreachable'))
+      } else if (err instanceof TypeError) {
+        setError(t('hosts.error_refused'))
+      } else {
+        setError(err instanceof Error ? err.message : t('hosts.connection_failed'))
+      }
     }
   }
 

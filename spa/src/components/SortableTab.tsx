@@ -82,11 +82,11 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const IconComponent = iconMap[iconName]
 
   const t = useI18nStore((s) => s.t)
-  const hostId = primaryContent.kind === 'session' ? primaryContent.hostId : ''
+  const hostId = primaryContent.kind === 'tmux-session' ? primaryContent.hostId : ''
   const sessions = useSessionStore((s) => (hostId ? s.sessions[hostId] : undefined) ?? EMPTY_SESSIONS)
   const workspaces = useWorkspaceStore((s) => s.workspaces)
 
-  const sessionCode = primaryContent.kind === 'session' ? primaryContent.sessionCode : undefined
+  const sessionCode = primaryContent.kind === 'tmux-session' ? primaryContent.sessionCode : undefined
   const ck = sessionCode && hostId ? compositeKey(hostId, sessionCode) : undefined
   const agentStatus = useAgentStore((s) => {
     if (!ck) return undefined
@@ -99,8 +99,9 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const isUnread = useAgentStore((s) => ck ? !!s.unread[ck] : false)
   const subagentCount = useAgentStore((s) => ck ? (s.activeSubagents[ck]?.length ?? 0) : 0)
   const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
+  const isTerminated = primaryContent.kind === 'tmux-session' && !!primaryContent.terminated
   const isHostOffline = useHostStore((s) => {
-    if (!hostId) return false
+    if (!hostId || isTerminated) return false
     const rt = s.runtime[hostId]
     return rt ? rt.status !== 'connected' : false
   })

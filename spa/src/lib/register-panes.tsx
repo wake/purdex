@@ -39,7 +39,7 @@ export function registerBuiltinPanes(): void {
       return <NewTabPage onSelect={handleSelect} />
     },
   })
-  registerPaneRenderer('session', { component: SessionPaneContent })
+  registerPaneRenderer('tmux-session', { component: SessionPaneContent })
   registerPaneRenderer('dashboard', { component: DashboardPage })
   registerPaneRenderer('history', { component: HistoryPage })
   registerPaneRenderer('settings', { component: SettingsPage })

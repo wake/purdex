@@ -119,4 +119,44 @@ describe('useStreamStore (per-session)', () => {
     expect(useStreamStore.getState().relayStatus[`${H}:sess-b`]).toBe(false)
   })
 
+  it('clearHost closes connections and removes all entries for host', () => {
+    const { setConn, addMessage, setRelayStatus, setHandoffProgress } = useStreamStore.getState()
+    const closedConns: string[] = []
+    const mockConn = (label: string) => ({
+      send: () => {},
+      close: () => { closedConns.push(label) },
+    }) as unknown as StreamConnection
+
+    // Set up data for target host
+    setConn(H, 'sess-a', mockConn('a'))
+    addMessage(H, 'sess-a', { type: 'user' } as StreamMessage)
+    setConn(H, 'sess-b', mockConn('b'))
+    addMessage(H, 'sess-b', { type: 'assistant' } as StreamMessage)
+    setRelayStatus(H, 'sess-a', true)
+    setHandoffProgress(H, 'sess-b', 'detecting')
+
+    // Set up data for other host
+    setConn('other-host', 'sess-c', mockConn('c'))
+    addMessage('other-host', 'sess-c', { type: 'user' } as StreamMessage)
+    setRelayStatus('other-host', 'sess-c', true)
+    setHandoffProgress('other-host', 'sess-c', 'launching')
+
+    useStreamStore.getState().clearHost(H)
+
+    const state = useStreamStore.getState()
+    // Target host entries cleared
+    expect(state.sessions[`${H}:sess-a`]).toBeUndefined()
+    expect(state.sessions[`${H}:sess-b`]).toBeUndefined()
+    expect(state.relayStatus[`${H}:sess-a`]).toBeUndefined()
+    expect(state.handoffProgress[`${H}:sess-b`]).toBeUndefined()
+    // Connections closed
+    expect(closedConns).toContain('a')
+    expect(closedConns).toContain('b')
+    expect(closedConns).not.toContain('c')
+    // Other host preserved
+    expect(state.sessions['other-host:sess-c']).toBeDefined()
+    expect(state.relayStatus['other-host:sess-c']).toBe(true)
+    expect(state.handoffProgress['other-host:sess-c']).toBe('launching')
+  })
+
 })

@@ -55,8 +55,8 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
   }, [onClose])
 
   const primary = getPrimaryPane(tab.layout)
-  const isSession = primary.content.kind === 'session'
-  const currentMode = isSession ? (primary.content as { kind: 'session'; mode: string }).mode : undefined
+  const isSession = primary.content.kind === 'tmux-session'
+  const currentMode = isSession ? (primary.content as { kind: 'tmux-session'; mode: string }).mode : undefined
 
   const items: (MenuItem | 'separator')[] = [
     // ViewMode section

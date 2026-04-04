@@ -20,6 +20,7 @@ export interface HostRuntime {
   info?: HostInfo
   daemonState?: 'connected' | 'refused' | 'unreachable'
   tmuxState?: 'ok' | 'unavailable'
+  manualRetry?: () => void  // safe: runtime excluded from persist partialize
 }
 
 export interface HostInfo {

@@ -89,7 +89,7 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
   const primaryContent = activeTab?.layout
     ? getPrimaryPane(activeTab.layout).content
     : null
-  const agentHostId = primaryContent && primaryContent.kind === 'session' ? primaryContent.hostId : null
+  const agentHostId = primaryContent && primaryContent.kind === 'tmux-session' ? primaryContent.hostId : null
   const agentSessionCode = primaryContent && 'sessionCode' in primaryContent ? primaryContent.sessionCode : null
   const agentCk = agentHostId && agentSessionCode ? compositeKey(agentHostId, agentSessionCode) : null
 
@@ -116,7 +116,7 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
   const primary = getPrimaryPane(activeTab.layout)
   const { content } = primary
 
-  if (content.kind !== 'session') {
+  if (content.kind !== 'tmux-session') {
     return (
       <div className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted flex-shrink-0">
         <span>{content.kind}</span>
@@ -137,11 +137,14 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
       <span>{hostName}</span>
       <span>{sessionName}</span>
       <span className={
-        status === 'connected' ? 'text-green-500'
+        status === 'connected' && hostRuntime?.tmuxState === 'unavailable' ? 'text-yellow-400'
+          : status === 'connected' ? 'text-green-500'
           : status === 'reconnecting' ? 'text-yellow-400'
           : 'text-red-400'
       }>
-        {status}
+        {status === 'connected' && hostRuntime?.tmuxState === 'unavailable'
+          ? t('hosts.error_tmux_down')
+          : status}
       </span>
       {getAgentLabel(agentEvent) && (() => {
         const label = getAgentLabel(agentEvent)!

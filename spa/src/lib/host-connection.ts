@@ -10,7 +10,7 @@ export interface HealthResult {
   latency: number | null
 }
 
-const HEALTH_TIMEOUT_MS = 3000
+const HEALTH_TIMEOUT_MS = 6000
 
 export async function checkHealth(baseUrl: string): Promise<HealthResult> {
   const controller = new AbortController()

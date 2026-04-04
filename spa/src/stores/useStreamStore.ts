@@ -43,6 +43,9 @@ interface StreamStore {
   loadHistory: (hostId: string, sessionCode: string, messages: StreamMessage[]) => void
   clearSession: (hostId: string, sessionCode: string) => void
 
+  // Host-level actions
+  clearHost: (hostId: string) => void
+
   // Global-keyed actions
   setHandoffProgress: (hostId: string, sessionCode: string, progress: string) => void
   setRelayStatus: (hostId: string, sessionCode: string, connected: boolean) => void
@@ -116,6 +119,29 @@ export const useStreamStore = create<StreamStore>()(subscribeWithSelector((set) 
     set((s) => {
       const { [key]: _cleared, ...rest } = s.sessions // eslint-disable-line @typescript-eslint/no-unused-vars
       return { sessions: rest }
+    })
+  },
+
+  clearHost: (hostId) => {
+    const prefix = `${hostId}:`
+    // Close connections outside set() to avoid re-entrant mutations
+    const currentSessions = useStreamStore.getState().sessions
+    for (const [k, v] of Object.entries(currentSessions)) {
+      if (k.startsWith(prefix)) v.conn?.close()
+    }
+    set((s) => {
+      const filterKeys = <T,>(record: Record<string, T>): Record<string, T> => {
+        const result: Record<string, T> = {}
+        for (const [k, v] of Object.entries(record)) {
+          if (!k.startsWith(prefix)) result[k] = v
+        }
+        return result
+      }
+      return {
+        sessions: filterKeys(s.sessions),
+        relayStatus: filterKeys(s.relayStatus),
+        handoffProgress: filterKeys(s.handoffProgress),
+      }
     })
   },
 

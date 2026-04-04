@@ -15,6 +15,10 @@ import { useHostStore } from '../stores/useHostStore'
 import { createTab } from '../types/tab'
 import { STORAGE_KEYS } from '../lib/storage'
 
+export type NotificationAction =
+  | { kind: 'open-session'; hostId: string; sessionCode: string }
+  | { kind: 'open-host'; hostId: string }
+
 /** Check if a notification should be dispatched based on broadcast_ts dedup.
  *  New sessions default to Infinity (sentinel), so their first event is recorded
  *  but not dispatched — prevents snapshot flooding on new/restarted clients. */
@@ -121,10 +125,11 @@ export function useNotificationDispatcher(): void {
             sessionCode,
             eventName: event.event_name,
             broadcastTs: event.broadcast_ts,
+            action: { kind: 'open-session', hostId, sessionCode },
           })
         } else if ('Notification' in window && Notification.permission === 'granted') {
           const n = new Notification(content.title, { body: content.body })
-          n.onclick = () => handleNotificationClick(sessionCode)
+          n.onclick = () => handleNotificationClick({ kind: 'open-session', hostId, sessionCode })
         }
       }
     })
@@ -135,55 +140,127 @@ export function useNotificationDispatcher(): void {
   useEffect(() => {
     if (!window.electronAPI?.onNotificationClicked) return
     return window.electronAPI.onNotificationClicked((payload) => {
-      handleNotificationClick(payload.sessionCode)
+      // If the payload carries an explicit action, use it directly
+      if (payload.action) {
+        if (payload.action.kind === 'open-host') {
+          handleNotificationClick({ kind: 'open-host', hostId: payload.action.hostId })
+        } else {
+          handleNotificationClick({
+            kind: 'open-session',
+            hostId: payload.action.hostId,
+            sessionCode: payload.action.sessionCode ?? payload.sessionCode,
+          })
+        }
+        return
+      }
+      // Backwards compat: no action field — fall back to open-session
+      const tabs = useTabStore.getState().tabs
+      const tabId = findTabBySessionCode(tabs, payload.sessionCode)
+      let hostId = useHostStore.getState().hostOrder[0] ?? ''
+      if (tabId) {
+        const tab = tabs[tabId]
+        const primary = getPrimaryPane(tab.layout)
+        if (primary.content.kind === 'tmux-session') hostId = primary.content.hostId
+      }
+      handleNotificationClick({ kind: 'open-session', hostId, sessionCode: payload.sessionCode })
     })
+  }, [])
+
+  // L2/L3 connection notifications (daemon refused, tmux down)
+  useEffect(() => {
+    const prevState: Record<string, { daemon?: string; tmux?: string }> = {}
+
+    const unsubscribe = useHostStore.subscribe((state) => {
+      const t = useI18nStore.getState().t
+
+      for (const hostId of state.hostOrder) {
+        const rt = state.runtime[hostId]
+        const prev = prevState[hostId]
+        const hostName = state.hosts[hostId]?.name ?? hostId
+
+        // L2: daemon refused (was connected, now refused)
+        if (prev?.daemon === 'connected' && rt?.daemonState === 'refused') {
+          sendConnectionNotification(
+            t('notification.daemon_refused', { name: hostName }),
+            { kind: 'open-host', hostId },
+          )
+        }
+        // L3: tmux down (was ok, now unavailable)
+        if (prev?.tmux === 'ok' && rt?.tmuxState === 'unavailable') {
+          sendConnectionNotification(
+            t('notification.tmux_down', { name: hostName }),
+            { kind: 'open-host', hostId },
+          )
+        }
+
+        prevState[hostId] = { daemon: rt?.daemonState, tmux: rt?.tmuxState }
+      }
+    })
+    return unsubscribe
   }, [])
 }
 
-function handleNotificationClick(sessionCode: string): void {
-  const tabs = useTabStore.getState().tabs
-  const tabId = findTabBySessionCode(tabs, sessionCode)
+function handleNotificationClick(action: NotificationAction): void {
+  switch (action.kind) {
+    case 'open-session': {
+      const { hostId, sessionCode } = action
+      const tabs = useTabStore.getState().tabs
+      const tabId = findTabBySessionCode(tabs, sessionCode)
+      const ck = `${hostId}:${sessionCode}`
+      const event = useAgentStore.getState().events[ck]
+      const agentSettings = useNotificationSettingsStore.getState().getSettingsForAgent(event?.agent_type || '')
 
-  // Resolve hostId: try to find from the tab's pane content, fallback to first host
-  let hostId = useHostStore.getState().hostOrder[0] ?? ''
-  if (tabId) {
-    const tab = tabs[tabId]
-    if (tab) {
-      const primary = getPrimaryPane(tab.layout)
-      if (primary.content.kind === 'session') {
-        hostId = primary.content.hostId
+      let handled = false
+      if (tabId) {
+        useTabStore.getState().setActiveTab(tabId)
+        handled = true
+      } else if (agentSettings.reopenTabOnClick) {
+        const sessionName = useSessionStore.getState().sessions[hostId]?.find(s => s.code === sessionCode)?.name ?? ''
+        const newTab = createTab({ kind: 'tmux-session', hostId, sessionCode, mode: 'stream', cachedName: sessionName, tmuxInstance: '' })
+        useTabStore.getState().addTab(newTab)
+        useTabStore.getState().setActiveTab(newTab.id)
+        const activeWorkspaceId = useWorkspaceStore.getState().activeWorkspaceId
+        if (activeWorkspaceId) {
+          useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, newTab.id)
+          useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, newTab.id)
+        }
+        handled = true
       }
+
+      if (handled) {
+        useAgentStore.getState().markRead(hostId, sessionCode)
+      }
+      if (handled && window.electronAPI?.focusMyWindow) {
+        window.electronAPI.focusMyWindow()
+      }
+      break
+    }
+    case 'open-host': {
+      useTabStore.getState().openSingletonTab({ kind: 'hosts' })
+      useHostStore.getState().setActiveHost(action.hostId)
+      if (window.electronAPI?.focusMyWindow) {
+        window.electronAPI.focusMyWindow()
+      }
+      break
     }
   }
+}
 
-  const ck = `${hostId}:${sessionCode}`
-  const event = useAgentStore.getState().events[ck]
-  const agentSettings = useNotificationSettingsStore.getState().getSettingsForAgent(event?.agent_type || '')
-
-  let handled = false
-  if (tabId) {
-    useTabStore.getState().setActiveTab(tabId)
-    handled = true
-  } else if (agentSettings.reopenTabOnClick) {
-    const sessionName = useSessionStore.getState().sessions[hostId]?.find(s => s.code === sessionCode)?.name ?? ''
-    const newTab = createTab({ kind: 'session', hostId, sessionCode, mode: 'stream', cachedName: sessionName, tmuxInstance: '' })
-    useTabStore.getState().addTab(newTab)
-    useTabStore.getState().setActiveTab(newTab.id)
-    const activeWorkspaceId = useWorkspaceStore.getState().activeWorkspaceId
-    if (activeWorkspaceId) {
-      useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, newTab.id)
-      useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, newTab.id)
-    }
-    handled = true
-  }
-
-  // Always markRead — cross-store subscription only fires on tab *change*,
-  // but notification click on the already-active tab still needs to clear unread.
-  if (handled) {
-    useAgentStore.getState().markRead(hostId, sessionCode)
-  }
-
-  if (handled && window.electronAPI?.focusMyWindow) {
-    window.electronAPI.focusMyWindow()
+function sendConnectionNotification(message: string, action: NotificationAction): void {
+  const capabilities = getPlatformCapabilities()
+  if (capabilities.canNotification && window.electronAPI?.showNotification) {
+    window.electronAPI.showNotification({
+      title: message,
+      body: '',
+      sessionCode: '',
+      eventName: 'ConnectionStatus',
+      broadcastTs: Date.now(),
+      action: action.kind === 'open-host'
+        ? { kind: 'open-host', hostId: action.hostId }
+        : { kind: 'open-session', hostId: action.hostId, sessionCode: action.sessionCode },
+    })
+  } else if ('Notification' in window && Notification.permission === 'granted') {
+    const n = new Notification(message)
+    n.onclick = () => handleNotificationClick(action)
   }
 }

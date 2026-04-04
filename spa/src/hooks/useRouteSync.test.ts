@@ -9,9 +9,9 @@ import { useTabStore } from '../stores/useTabStore'
 import { getPrimaryPane } from '../lib/pane-tree'
 import type { Tab } from '../types/tab'
 
-function makeTab(id: string, contentKind: 'session' | 'dashboard' | 'history' | 'settings', mode?: 'terminal' | 'stream'): Tab {
-  const content = contentKind === 'session'
-    ? { kind: 'session' as const, hostId: 'test-host', sessionCode: 'test', mode: mode ?? 'terminal' as const, cachedName: '', tmuxInstance: '' }
+function makeTab(id: string, contentKind: 'tmux-session' | 'dashboard' | 'history' | 'settings', mode?: 'terminal' | 'stream'): Tab {
+  const content = contentKind === 'tmux-session'
+    ? { kind: 'tmux-session' as const, hostId: 'test-host', sessionCode: 'test', mode: mode ?? 'terminal' as const, cachedName: '', tmuxInstance: '' }
     : contentKind === 'settings'
       ? { kind: 'settings' as const, scope: 'global' as const }
       : { kind: contentKind as 'dashboard' | 'history' }
@@ -60,7 +60,7 @@ describe('useRouteSync', () => {
   })
 
   it('session route /t/abc123/terminal with existing tab activates it', () => {
-    const tab = makeTab('abc123', 'session', 'terminal')
+    const tab = makeTab('abc123', 'tmux-session', 'terminal')
     resetStore({
       tabs: { abc123: tab },
       tabOrder: ['abc123'],
@@ -88,7 +88,7 @@ describe('useRouteSync', () => {
   })
 
   it('tab activation updates URL', () => {
-    const tab = makeTab('abc123', 'session', 'terminal')
+    const tab = makeTab('abc123', 'tmux-session', 'terminal')
     resetStore({
       tabs: { abc123: tab },
       tabOrder: ['abc123'],
@@ -107,7 +107,7 @@ describe('useRouteSync', () => {
   })
 
   it('viewMode change updates URL', () => {
-    const tab = makeTab('abc123', 'session', 'terminal')
+    const tab = makeTab('abc123', 'tmux-session', 'terminal')
     resetStore({
       tabs: { abc123: tab },
       tabOrder: ['abc123'],

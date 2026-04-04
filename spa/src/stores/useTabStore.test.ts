@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useTabStore } from './useTabStore'
+import { useTabStore, migrateTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
 import type { PaneContent } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 
 function makeSessionTab(code: string, mode: 'terminal' | 'stream' = 'terminal') {
-  return createTab({ kind: 'session', hostId: 'test-host', sessionCode: code, mode, cachedName: '', tmuxInstance: '' })
+  return createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: code, mode, cachedName: '', tmuxInstance: '' })
 }
 
 describe('useTabStore', () => {
@@ -94,7 +94,7 @@ describe('useTabStore', () => {
   })
 
   it('openSingletonTab always creates new tab for session (non-singleton)', () => {
-    const content: PaneContent = { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }
+    const content: PaneContent = { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }
     const tab = createTab(content)
     useTabStore.getState().addTab(tab)
     const returnedId = useTabStore.getState().openSingletonTab(content)
@@ -129,7 +129,7 @@ describe('useTabStore', () => {
     useTabStore.getState().setViewMode(tab.id, paneId, 'stream')
     const updated = useTabStore.getState().tabs[tab.id]
     const content = updated.layout.type === 'leaf' ? updated.layout.pane.content : undefined
-    expect(content?.kind === 'session' && content.mode).toBe('stream')
+    expect(content?.kind === 'tmux-session' && content.mode).toBe('stream')
   })
 
   it('setViewMode is no-op for nonexistent tab', () => {
@@ -196,8 +196,8 @@ describe('useTabStore', () => {
       useTabStore.getState().updateSessionCache('test-host', 'dev001', 'renamed-session')
 
       const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
-      expect(content.kind).toBe('session')
-      if (content.kind === 'session') {
+      expect(content.kind).toBe('tmux-session')
+      if (content.kind === 'tmux-session') {
         expect(content.cachedName).toBe('renamed-session')
       }
     })
@@ -210,8 +210,8 @@ describe('useTabStore', () => {
       useTabStore.getState().updateSessionCache('test-host', 'dev999', 'renamed')
 
       const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
-      expect(content.kind).toBe('session')
-      if (content.kind === 'session') {
+      expect(content.kind).toBe('tmux-session')
+      if (content.kind === 'tmux-session') {
         expect(content.cachedName).toBe('')
       }
     })
@@ -224,8 +224,8 @@ describe('useTabStore', () => {
       useTabStore.getState().updateSessionCache('other-host', 'dev001', 'renamed')
 
       const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
-      expect(content.kind).toBe('session')
-      if (content.kind === 'session') {
+      expect(content.kind).toBe('tmux-session')
+      if (content.kind === 'tmux-session') {
         expect(content.cachedName).toBe('')
       }
     })
@@ -252,11 +252,186 @@ describe('useTabStore', () => {
 
       for (const tabId of useTabStore.getState().tabOrder) {
         const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
-        expect(content.kind).toBe('session')
-        if (content.kind === 'session') {
+        expect(content.kind).toBe('tmux-session')
+        if (content.kind === 'tmux-session') {
           expect(content.cachedName).toBe('new-name')
         }
       }
+    })
+  })
+
+  describe('markTerminated', () => {
+    it('marks matching pane as terminated', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      useTabStore.getState().markTerminated('test-host', 'dev001', 'session-closed')
+      const content = getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content
+      expect(content.kind).toBe('tmux-session')
+      if (content.kind === 'tmux-session') {
+        expect(content.terminated).toBe('session-closed')
+      }
+    })
+
+    it('does not mark pane with different sessionCode', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      useTabStore.getState().markTerminated('test-host', 'dev999', 'session-closed')
+      const content = getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content
+      if (content.kind === 'tmux-session') {
+        expect(content.terminated).toBeUndefined()
+      }
+    })
+
+    it('does not mark pane with different hostId', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      useTabStore.getState().markTerminated('other-host', 'dev001', 'session-closed')
+      const content = getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content
+      if (content.kind === 'tmux-session') {
+        expect(content.terminated).toBeUndefined()
+      }
+    })
+
+    it('does not double-mark already-terminated panes', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      useTabStore.getState().markTerminated('test-host', 'dev001', 'session-closed')
+      const before = useTabStore.getState().tabs[tab.id]
+      // Mark again with different reason — should be no-op (already terminated)
+      useTabStore.getState().markTerminated('test-host', 'dev001', 'tmux-restarted')
+      const after = useTabStore.getState().tabs[tab.id]
+      expect(after).toBe(before) // same reference — no update
+      const content = getPrimaryPane(after.layout).content
+      if (content.kind === 'tmux-session') {
+        expect(content.terminated).toBe('session-closed') // original reason preserved
+      }
+    })
+
+    it('marks multiple matching tabs', () => {
+      const tab1 = makeSessionTab('dev001')
+      const tab2 = makeSessionTab('dev001', 'stream')
+      useTabStore.getState().addTab(tab1)
+      useTabStore.getState().addTab(tab2)
+      useTabStore.getState().markTerminated('test-host', 'dev001', 'session-closed')
+      for (const tabId of useTabStore.getState().tabOrder) {
+        const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
+        if (content.kind === 'tmux-session') {
+          expect(content.terminated).toBe('session-closed')
+        }
+      }
+    })
+
+    it('is no-op when no panes match (returns same state)', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      const before = useTabStore.getState().tabs
+      useTabStore.getState().markTerminated('test-host', 'no-match', 'session-closed')
+      const after = useTabStore.getState().tabs
+      expect(after).toBe(before)
+    })
+  })
+
+  describe('markHostTerminated', () => {
+    it('marks all panes for a host', () => {
+      const tab1 = makeSessionTab('dev001')
+      const tab2 = makeSessionTab('dev002', 'stream')
+      useTabStore.getState().addTab(tab1)
+      useTabStore.getState().addTab(tab2)
+      useTabStore.getState().markHostTerminated('test-host', 'tmux-restarted')
+      for (const tabId of useTabStore.getState().tabOrder) {
+        const content = getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
+        if (content.kind === 'tmux-session') {
+          expect(content.terminated).toBe('tmux-restarted')
+        }
+      }
+    })
+
+    it('does not mark panes for different host', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      useTabStore.getState().markHostTerminated('other-host', 'host-removed')
+      const content = getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content
+      if (content.kind === 'tmux-session') {
+        expect(content.terminated).toBeUndefined()
+      }
+    })
+
+    it('does not double-mark already-terminated panes', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      useTabStore.getState().markHostTerminated('test-host', 'session-closed')
+      const before = useTabStore.getState().tabs[tab.id]
+      useTabStore.getState().markHostTerminated('test-host', 'tmux-restarted')
+      const after = useTabStore.getState().tabs[tab.id]
+      expect(after).toBe(before)
+      const content = getPrimaryPane(after.layout).content
+      if (content.kind === 'tmux-session') {
+        expect(content.terminated).toBe('session-closed')
+      }
+    })
+  })
+
+  describe('persist migration', () => {
+    it('migrates kind "session" to "tmux-session" in version 2', () => {
+      const v1State = {
+        tabs: {
+          tab1: {
+            id: 'tab1', pinned: false, locked: false, createdAt: 1000,
+            layout: {
+              type: 'leaf' as const,
+              pane: {
+                id: 'pane1',
+                content: { kind: 'session', hostId: 'h1', sessionCode: 'abc123', mode: 'terminal', cachedName: 'test', tmuxInstance: '123:456' },
+              },
+            },
+          },
+        },
+        tabOrder: ['tab1'],
+        activeTabId: 'tab1',
+      }
+      const migrated = migrateTabStore(v1State, 1)
+      const pane = migrated.tabs.tab1.layout.pane
+      expect(pane.content.kind).toBe('tmux-session')
+    })
+
+    it('migrates kind "session" inside split layouts', () => {
+      const v1State = {
+        tabs: {
+          tab1: {
+            id: 'tab1', pinned: false, locked: false, createdAt: 1000,
+            layout: {
+              type: 'split' as const, id: 'split1', direction: 'h' as const,
+              children: [
+                { type: 'leaf' as const, pane: { id: 'p1', content: { kind: 'session', hostId: 'h1', sessionCode: 'a', mode: 'terminal', cachedName: 'A', tmuxInstance: '1:2' } } },
+                { type: 'leaf' as const, pane: { id: 'p2', content: { kind: 'dashboard' } } },
+              ],
+              sizes: [50, 50],
+            },
+          },
+        },
+        tabOrder: ['tab1'],
+        activeTabId: 'tab1',
+      }
+      const migrated = migrateTabStore(v1State, 1)
+      const children = migrated.tabs.tab1.layout.children
+      expect(children[0].pane.content.kind).toBe('tmux-session')
+      expect(children[1].pane.content.kind).toBe('dashboard')
+    })
+
+    it('preserves non-session tabs during migration', () => {
+      const v1State = {
+        tabs: {
+          tab1: {
+            id: 'tab1', pinned: false, locked: false, createdAt: 1000,
+            layout: { type: 'leaf' as const, pane: { id: 'pane1', content: { kind: 'dashboard' } } },
+          },
+        },
+        tabOrder: ['tab1'],
+        activeTabId: 'tab1',
+      }
+      const migrated = migrateTabStore(v1State, 1)
+      const pane = migrated.tabs.tab1.layout.pane
+      expect(pane.content.kind).toBe('dashboard')
     })
   })
 })

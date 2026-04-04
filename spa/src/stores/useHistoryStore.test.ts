@@ -5,7 +5,7 @@ import type { PaneContent } from '../types/tab'
 
 function makeContent(kind: PaneContent['kind'] = 'dashboard'): PaneContent {
   switch (kind) {
-    case 'session': return { kind: 'session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }
+    case 'tmux-session': return { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }
     case 'settings': return { kind: 'settings', scope: 'global' }
     case 'new-tab': return { kind: 'new-tab' }
     case 'dashboard': return { kind: 'dashboard' }
