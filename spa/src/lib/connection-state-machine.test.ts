@@ -72,14 +72,36 @@ describe('ConnectionStateMachine', () => {
     expect(checkFn.mock.calls.length).toBeGreaterThan(countAfterTrigger)
   })
 
-  it('L2 does NOT continue retrying', async () => {
+  it('L2 retries every 3s in background', async () => {
+    checkFn.mockResolvedValue({ daemon: 'refused', tmux: 'unavailable', latency: null })
+    sm = new ConnectionStateMachine(checkFn, onStateChange)
+    await sm.trigger()
+
+    const countAfterTrigger = checkFn.mock.calls.length // 3 (FAST_RETRY)
+
+    // After 3s, should have retried once
+    await vi.advanceTimersByTimeAsync(3100)
+    expect(checkFn.mock.calls.length).toBe(countAfterTrigger + 1)
+
+    // After another 3s, should have retried again
+    await vi.advanceTimersByTimeAsync(3100)
+    expect(checkFn.mock.calls.length).toBe(countAfterTrigger + 2)
+  })
+
+  it('L2 stops retrying after 3 minutes', async () => {
     checkFn.mockResolvedValue({ daemon: 'refused', tmux: 'unavailable', latency: null })
     sm = new ConnectionStateMachine(checkFn, onStateChange)
     await sm.trigger()
 
     const countAfterTrigger = checkFn.mock.calls.length
-    await vi.advanceTimersByTimeAsync(10000)
-    expect(checkFn.mock.calls.length).toBe(countAfterTrigger)
+
+    // Advance past 3 minute deadline
+    await vi.advanceTimersByTimeAsync(181_000)
+    const countAfterDeadline = checkFn.mock.calls.length
+
+    // No more retries after deadline
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(checkFn.mock.calls.length).toBe(countAfterDeadline)
   })
 
   it('manual retry restarts FAST_RETRY for L2', async () => {
