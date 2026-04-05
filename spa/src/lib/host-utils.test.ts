@@ -34,4 +34,9 @@ describe('connectionErrorMessage', () => {
     const runtime: HostRuntime = { status: 'reconnecting' }
     expect(connectionErrorMessage(runtime, t)).toBeNull()
   })
+
+  it('returns auth error message for auth-error status', () => {
+    const runtime: HostRuntime = { status: 'auth-error', daemonState: 'auth-error' }
+    expect(connectionErrorMessage(runtime, t)).toBe('hosts.error_auth')
+  })
 })

@@ -41,6 +41,9 @@ export class ConnectionStateMachine {
       if (lastResult.daemon === 'connected') {
         return // recovered
       }
+      if (lastResult.daemon === 'auth-error') {
+        return // permanent error, don't retry
+      }
     }
 
     if (!lastResult || this.stopped || this.epoch !== myEpoch) return
@@ -75,6 +78,9 @@ export class ConnectionStateMachine {
 
       if (result.daemon === 'connected') {
         return // recovered
+      }
+      if (result.daemon === 'auth-error') {
+        return // permanent error, stop background retry
       }
       this.startBackground(delayMs)
     }, delayMs)

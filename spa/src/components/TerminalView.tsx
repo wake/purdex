@@ -17,9 +17,10 @@ interface Props {
   connectingMessage?: string
   hostId?: string
   sessionCode?: string
+  getTicket?: () => Promise<string>
 }
 
-export default function TerminalView({ wsUrl, visible = true, connectingMessage, hostId, sessionCode }: Props) {
+export default function TerminalView({ wsUrl, visible = true, connectingMessage, hostId, sessionCode, getTicket }: Props) {
   const { termRef, fitAddonRef, containerRef } = useTerminal()
   const [ready, setReady] = useState(false)
   const [disconnected, setDisconnected] = useState(false)
@@ -38,6 +39,7 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
     onReady: handleReady,
     onDisconnect: handleDisconnect,
     onReconnect: handleReconnect,
+    getTicket,
   })
 
   // Manual reconnect

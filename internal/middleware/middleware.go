@@ -52,10 +52,10 @@ type TicketValidator interface {
 	Validate(ticket string) bool
 }
 
-// TokenAuth checks Bearer token, one-time ticket, or ?token= query param.
+// TokenAuth checks Bearer token or one-time ticket (?ticket=).
 // tokenFn is called on each request to support runtime token changes.
 // Bearer prefix is case-insensitive, token value is case-sensitive.
-// If tickets is non-nil, ?ticket= is checked before the legacy ?token= fallback.
+// If tickets is non-nil, ?ticket= is checked for WebSocket authentication.
 func TokenAuth(tokenFn func() string, tickets TicketValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -75,11 +75,6 @@ func TokenAuth(tokenFn func() string, tickets TicketValidator) func(http.Handler
 					next.ServeHTTP(w, r)
 					return
 				}
-			}
-			// Fallback: ?token= query param (legacy, will be removed)
-			if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(token)) == 1 {
-				next.ServeHTTP(w, r)
-				return
 			}
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 		})

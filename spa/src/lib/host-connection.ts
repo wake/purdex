@@ -1,38 +1,67 @@
-// spa/src/lib/host-connection.ts — Health check with L1/L2/L3 classification
-//
-// /api/health is a pure liveness endpoint (no auth, returns {"ok": true}).
-// tmux status is NOT included here — it comes via /api/ready (behind auth)
-// or via host-events WS "tmux" event during normal operation.
+// spa/src/lib/host-connection.ts — Health check with two-phase negotiation
 
 export interface HealthResult {
-  daemon: 'connected' | 'refused' | 'unreachable'
+  daemon: 'connected' | 'refused' | 'unreachable' | 'auth-error'
   tmux: 'ok' | 'unavailable'
   latency: number | null
+  mode: 'pairing' | 'pending' | 'normal'
+  ticket?: string
 }
 
-const HEALTH_TIMEOUT_MS = 6000
+const PHASE1_TIMEOUT_MS = 6000
+const PHASE2_TIMEOUT_MS = 5000
 
-export async function checkHealth(baseUrl: string): Promise<HealthResult> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS)
-
+export async function checkHealth(
+  baseUrl: string,
+  getToken?: () => string | undefined,
+): Promise<HealthResult> {
+  const ctrl1 = new AbortController()
+  const timer1 = setTimeout(() => ctrl1.abort(), PHASE1_TIMEOUT_MS)
   try {
     const start = performance.now()
-    const res = await fetch(`${baseUrl}/api/health`, { signal: controller.signal })
+    const res = await fetch(`${baseUrl}/api/health`, { signal: ctrl1.signal })
     const latency = Math.round(performance.now() - start)
-    await res.json() // consume body
-    return {
-      daemon: 'connected',
-      // tmux status unknown from health — will be updated via WS or /api/ready
-      tmux: 'unavailable',
-      latency,
+    const body = await res.json()
+    const mode = (body.mode ?? 'normal') as 'pairing' | 'pending' | 'normal'
+
+    const token = getToken?.()
+    if (!token) {
+      if (mode === 'pairing') {
+        return { daemon: 'connected', tmux: 'unavailable', latency, mode }
+      }
+      return { daemon: 'auth-error', tmux: 'unavailable', latency, mode }
+    }
+
+    const ctrl2 = new AbortController()
+    const timer2 = setTimeout(() => ctrl2.abort(), PHASE2_TIMEOUT_MS)
+    try {
+      const ticketRes = await fetch(`${baseUrl}/api/ws-ticket`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: ctrl2.signal,
+      })
+      if (ticketRes.status === 401) {
+        return { daemon: 'auth-error', tmux: 'unavailable', latency, mode }
+      }
+      if (ticketRes.status === 503) {
+        return { daemon: 'auth-error', tmux: 'unavailable', latency, mode }
+      }
+      if (!ticketRes.ok) {
+        return { daemon: 'connected', tmux: 'unavailable', latency, mode }
+      }
+      const { ticket } = await ticketRes.json()
+      return { daemon: 'connected', tmux: 'unavailable', latency, mode, ticket }
+    } catch {
+      return { daemon: 'connected', tmux: 'unavailable', latency, mode }
+    } finally {
+      clearTimeout(timer2)
     }
   } catch (err: unknown) {
     if (err instanceof Error && err.name === 'AbortError') {
-      return { daemon: 'unreachable', tmux: 'unavailable', latency: null }
+      return { daemon: 'unreachable', tmux: 'unavailable', latency: null, mode: 'normal' }
     }
-    return { daemon: 'refused', tmux: 'unavailable', latency: null }
+    return { daemon: 'refused', tmux: 'unavailable', latency: null, mode: 'normal' }
   } finally {
-    clearTimeout(timer)
+    clearTimeout(timer1)
   }
 }

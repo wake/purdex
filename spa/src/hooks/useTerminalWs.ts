@@ -14,9 +14,10 @@ interface UseTerminalWsOpts {
   onReady: () => void
   onDisconnect: () => void
   onReconnect: () => void
+  getTicket?: () => Promise<string>
 }
 
-export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostId, onReady, onDisconnect, onReconnect }: UseTerminalWsOpts) {
+export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostId, onReady, onDisconnect, onReconnect, getTicket }: UseTerminalWsOpts) {
   const connRef = useRef<ReturnType<typeof connectTerminal> | null>(null)
   const revealDelayRef = useRef(useUISettingsStore.getState().terminalRevealDelay)
 
@@ -70,6 +71,7 @@ export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostI
         conn.resize(term.cols, term.rows)
       },
       canReconnect,
+      getTicket,
     )
     connRef.current = conn
 

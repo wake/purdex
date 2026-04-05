@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CaretDown, CaretRight, ArrowsClockwise, Trash, Plugs, Eye, EyeSlash, Check, X } from '@phosphor-icons/react'
+import { CaretDown, CaretRight, ArrowsClockwise, Trash, Plugs, Eye, EyeSlash, Check, X, LockSimple } from '@phosphor-icons/react'
 import { useHostStore, type HostConfig, type HostInfo, type HostRuntime } from '../../stores/useHostStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -474,6 +474,16 @@ export function OverviewSection({ hostId }: Props) {
     <div className="max-w-2xl space-y-2">
       <h2 className="text-lg font-semibold mb-4">{host.name}</h2>
 
+      {runtime?.status === 'auth-error' && (
+        <div className="flex items-start gap-3 px-3 py-2.5 rounded-md mb-4 bg-red-500/10 border border-red-500/20">
+          <LockSimple size={16} weight="fill" className="text-red-400 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm text-red-400 font-medium">{t('hosts.auth_error')}</p>
+            <p className="text-xs text-text-muted mt-0.5">{t('hosts.auth_error_hint')}</p>
+          </div>
+        </div>
+      )}
+
       {/* ─── Connection ─── */}
       <Section title={t('hosts.connection')}>
         <EditableField
@@ -495,12 +505,19 @@ export function OverviewSection({ hostId }: Props) {
           token={host.token}
           ip={host.ip}
           port={host.port}
-          onSave={(token) => updateHost(hostId, { token: token || undefined })}
+          onSave={(token) => {
+            updateHost(hostId, { token: token || undefined })
+            // Auto-retry: set reconnecting then trigger SM
+            useHostStore.getState().setRuntime(hostId, { status: 'reconnecting' })
+            const rt = useHostStore.getState().runtime[hostId]
+            if (rt?.manualRetry) rt.manualRetry()
+          }}
           t={t}
         />
         <Field label={t('hosts.status')}>
           <span className={`text-sm ${
-            runtime?.status === 'connected' && runtime?.tmuxState === 'unavailable' ? 'text-yellow-400'
+            runtime?.status === 'auth-error' ? 'text-red-400'
+              : runtime?.status === 'connected' && runtime?.tmuxState === 'unavailable' ? 'text-yellow-400'
               : runtime?.status === 'connected' ? 'text-green-400'
               : runtime?.status === 'reconnecting' ? 'text-yellow-400'
               : 'text-red-400'
