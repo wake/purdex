@@ -175,19 +175,6 @@ app.whenReady().then(() => {
 
   startMetricsPolling()
 
-  // Dev: background update check on startup
-  if (getAppInfo().devUpdateEnabled) {
-    const daemonUrl = 'http://100.64.0.2:7860'
-    checkUpdate(daemonUrl).then((remote) => {
-      if (remote.building) return // build in progress, SPA will poll
-      const local = getAppInfo()
-      if (remote.electronHash !== local.electronHash || remote.spaHash !== local.spaHash) {
-        for (const win of windowManager.getAllWindows()) {
-          if (!win.isDestroyed()) win.webContents.send('dev:update-available', remote)
-        }
-      }
-    }).catch(() => { /* silent — daemon may not be reachable */ })
-  }
 
   app.on('activate', () => {
     windowManager.showOrCreate()
