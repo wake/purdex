@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/wake/tmux-box/internal/config"
+	"github.com/wake/tmux-box/internal/pairing"
 )
 
 const (
@@ -155,7 +156,7 @@ func (c *Core) regeneratePairingSecret() {
 	ip := net.ParseIP(c.Cfg.Bind).To4()
 	port := uint16(c.Cfg.Port)
 	c.CfgMu.RUnlock()
-	code := EncodePairingCode(ip, port, secret)
+	code := pairing.EncodePairingCode(ip, port, secret)
 	log.Printf("⚠ 配對碼已失效（過多失敗嘗試），新配對碼：%s", code)
 	fmt.Printf("\n新配對碼: %s\n\n", code)
 }

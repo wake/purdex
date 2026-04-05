@@ -12,6 +12,7 @@ import (
 
 	"github.com/wake/tmux-box/internal/config"
 	"github.com/wake/tmux-box/internal/core"
+	"github.com/wake/tmux-box/internal/pairing"
 )
 
 type ifaceEntry struct {
@@ -119,7 +120,7 @@ func initPairing(c *core.Core, cfg *config.Config, cfgPath string, quick bool) {
 		c.Pairing.Set(core.StatePairing)
 
 		ip := net.ParseIP(cfg.Bind).To4()
-		code := core.EncodePairingCode(ip, uint16(cfg.Port), secret)
+		code := pairing.EncodePairingCode(ip, uint16(cfg.Port), secret)
 		fmt.Printf("\n配對碼: %s\n\n", code)
 	} else {
 		// General mode: generate runtime token
