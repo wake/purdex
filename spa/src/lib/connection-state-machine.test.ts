@@ -19,7 +19,7 @@ describe('ConnectionStateMachine', () => {
   })
 
   it('transitions to connected on first successful check', async () => {
-    checkFn.mockResolvedValue({ daemon: 'connected', tmux: 'ok', latency: 10 })
+    checkFn.mockResolvedValue({ daemon: 'connected', tmux: 'ok', latency: 10, mode: 'normal' })
     sm = new ConnectionStateMachine(checkFn, onStateChange)
     await sm.trigger()
     expect(onStateChange).toHaveBeenCalledWith(
@@ -28,7 +28,7 @@ describe('ConnectionStateMachine', () => {
   })
 
   it('enters FAST_RETRY then L1 on 3 timeouts', async () => {
-    checkFn.mockResolvedValue({ daemon: 'unreachable', tmux: 'unavailable', latency: null })
+    checkFn.mockResolvedValue({ daemon: 'unreachable', tmux: 'unavailable', latency: null, mode: 'normal' })
     sm = new ConnectionStateMachine(checkFn, onStateChange)
     await sm.trigger()
 
@@ -38,7 +38,7 @@ describe('ConnectionStateMachine', () => {
   })
 
   it('enters FAST_RETRY then L2 on 3 refused', async () => {
-    checkFn.mockResolvedValue({ daemon: 'refused', tmux: 'unavailable', latency: null })
+    checkFn.mockResolvedValue({ daemon: 'refused', tmux: 'unavailable', latency: null, mode: 'normal' })
     sm = new ConnectionStateMachine(checkFn, onStateChange)
     await sm.trigger()
 
@@ -49,8 +49,8 @@ describe('ConnectionStateMachine', () => {
 
   it('recovers during FAST_RETRY if second attempt succeeds', async () => {
     checkFn
-      .mockResolvedValueOnce({ daemon: 'unreachable', tmux: 'unavailable', latency: null })
-      .mockResolvedValueOnce({ daemon: 'connected', tmux: 'ok', latency: 5 })
+      .mockResolvedValueOnce({ daemon: 'unreachable', tmux: 'unavailable', latency: null, mode: 'normal' })
+      .mockResolvedValueOnce({ daemon: 'connected', tmux: 'ok', latency: 5, mode: 'normal' })
     sm = new ConnectionStateMachine(checkFn, onStateChange)
     await sm.trigger()
 
@@ -60,20 +60,20 @@ describe('ConnectionStateMachine', () => {
   })
 
   it('L1 continues retrying in background', async () => {
-    checkFn.mockResolvedValue({ daemon: 'unreachable', tmux: 'unavailable', latency: null })
+    checkFn.mockResolvedValue({ daemon: 'unreachable', tmux: 'unavailable', latency: null, mode: 'normal' })
     sm = new ConnectionStateMachine(checkFn, onStateChange)
     await sm.trigger()
 
     const countAfterTrigger = checkFn.mock.calls.length
 
-    checkFn.mockResolvedValueOnce({ daemon: 'connected', tmux: 'ok', latency: 15 })
+    checkFn.mockResolvedValueOnce({ daemon: 'connected', tmux: 'ok', latency: 15, mode: 'normal' })
     await vi.advanceTimersByTimeAsync(3100)
 
     expect(checkFn.mock.calls.length).toBeGreaterThan(countAfterTrigger)
   })
 
   it('L2 retries every 3s in background', async () => {
-    checkFn.mockResolvedValue({ daemon: 'refused', tmux: 'unavailable', latency: null })
+    checkFn.mockResolvedValue({ daemon: 'refused', tmux: 'unavailable', latency: null, mode: 'normal' })
     sm = new ConnectionStateMachine(checkFn, onStateChange)
     await sm.trigger()
 
@@ -89,7 +89,7 @@ describe('ConnectionStateMachine', () => {
   })
 
   it('L2 stops retrying after 3 minutes', async () => {
-    checkFn.mockResolvedValue({ daemon: 'refused', tmux: 'unavailable', latency: null })
+    checkFn.mockResolvedValue({ daemon: 'refused', tmux: 'unavailable', latency: null, mode: 'normal' })
     sm = new ConnectionStateMachine(checkFn, onStateChange)
     await sm.trigger()
 
@@ -105,12 +105,12 @@ describe('ConnectionStateMachine', () => {
   })
 
   it('manual retry restarts FAST_RETRY for L2', async () => {
-    checkFn.mockResolvedValue({ daemon: 'refused', tmux: 'unavailable', latency: null })
+    checkFn.mockResolvedValue({ daemon: 'refused', tmux: 'unavailable', latency: null, mode: 'normal' })
     sm = new ConnectionStateMachine(checkFn, onStateChange)
     await sm.trigger()
 
     const countBefore = checkFn.mock.calls.length
-    checkFn.mockResolvedValue({ daemon: 'connected', tmux: 'ok', latency: 8 })
+    checkFn.mockResolvedValue({ daemon: 'connected', tmux: 'ok', latency: 8, mode: 'normal' })
     await sm.trigger()
 
     expect(checkFn.mock.calls.length).toBeGreaterThan(countBefore)
@@ -118,9 +118,9 @@ describe('ConnectionStateMachine', () => {
 
   it('uses last attempt result for classification', async () => {
     checkFn
-      .mockResolvedValueOnce({ daemon: 'unreachable', tmux: 'unavailable', latency: null })
-      .mockResolvedValueOnce({ daemon: 'unreachable', tmux: 'unavailable', latency: null })
-      .mockResolvedValueOnce({ daemon: 'refused', tmux: 'unavailable', latency: null })
+      .mockResolvedValueOnce({ daemon: 'unreachable', tmux: 'unavailable', latency: null, mode: 'normal' })
+      .mockResolvedValueOnce({ daemon: 'unreachable', tmux: 'unavailable', latency: null, mode: 'normal' })
+      .mockResolvedValueOnce({ daemon: 'refused', tmux: 'unavailable', latency: null, mode: 'normal' })
     sm = new ConnectionStateMachine(checkFn, onStateChange)
     await sm.trigger()
 
