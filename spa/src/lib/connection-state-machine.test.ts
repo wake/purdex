@@ -93,8 +93,6 @@ describe('ConnectionStateMachine', () => {
     sm = new ConnectionStateMachine(checkFn, onStateChange)
     await sm.trigger()
 
-    const countAfterTrigger = checkFn.mock.calls.length
-
     // Advance past 3 minute deadline
     await vi.advanceTimersByTimeAsync(181_000)
     const countAfterDeadline = checkFn.mock.calls.length
