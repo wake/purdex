@@ -10,8 +10,8 @@ import { useUndoToast } from '../../stores/useUndoToast'
 import { hostFetch, fetchInfo, fetchHealth } from '../../lib/host-api'
 import { scanPaneTree } from '../../lib/pane-tree'
 import { connectionErrorMessage } from '../../lib/host-utils'
-import type { ConfigData } from '../../lib/api'
-import type { Session } from '../../lib/api'
+import type { ConfigData } from '../../lib/host-api'
+import type { Session } from '../../lib/host-api'
 import type { Tab } from '../../types/tab'
 
 interface Props {

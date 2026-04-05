@@ -10,7 +10,7 @@ import { createTab } from '../types/tab'
 import { getPrimaryPane, scanPaneTree } from './pane-tree'
 import type { Tab, PaneContent } from '../types/tab'
 import type { StreamMessage } from './stream-ws'
-import type { Session } from './api'
+import type { Session } from './host-api'
 
 function makeSession(code: string, name: string = code): Session {
   return { code, name, mode: 'terminal', cwd: '~', cc_session_id: '', cc_model: '', has_relay: false }

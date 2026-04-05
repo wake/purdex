@@ -5,10 +5,9 @@ import { useTerminalWs } from '../hooks/useTerminalWs'
 import { useHostConnection } from '../hooks/useHostConnection'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useUploadStore } from '../stores/useUploadStore'
-import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { compositeKey } from '../lib/composite-key'
-import { agentUpload } from '../lib/api'
+import { agentUpload } from '../lib/host-api'
 import '@xterm/xterm/css/xterm.css'
 
 interface Props {
@@ -54,7 +53,6 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
   const ck = hostId && sessionCode ? compositeKey(hostId, sessionCode) : undefined
   const agentStatus = useAgentStore((s) => ck ? s.statuses[ck] : undefined)
   const agentActive = agentStatus != null
-  const daemonBase = useHostStore((s) => s.getDaemonBase(hostId ?? s.hostOrder[0] ?? ''))
   const t = useI18nStore((s) => s.t)
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
@@ -92,13 +90,13 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
     for (let i = 0; i < files.length; i++) {
       if (i > 0) nextFile(hostId, sessionCode, files[i].name)
       try {
-        await agentUpload(daemonBase, files[i], sessionCode)
+        await agentUpload(hostId, files[i], sessionCode)
         fileCompleted(hostId, sessionCode)
       } catch {
         fileFailed(hostId, sessionCode, files[i].name)
       }
     }
-  }, [agentActive, hostId, sessionCode, daemonBase])
+  }, [agentActive, hostId, sessionCode])
 
   // Reset state on wsUrl change. React guarantees effects fire in declaration
   // order, so useTerminal (mount) → useTerminalWs (connect) → this reset.

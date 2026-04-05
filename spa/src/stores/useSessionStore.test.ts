@@ -10,11 +10,15 @@ const MOCK_SESSIONS = [
   { code: 'def456', name: 'dev', cwd: '/home', mode: 'stream' as const, cc_session_id: '', cc_model: '', has_relay: false },
 ]
 
-vi.mock('../lib/api', () => ({
-  listSessions: vi.fn().mockResolvedValue([
-    { code: 'abc123', name: 'test', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
-  ]),
-}))
+vi.mock('../lib/host-api', async (importOriginal) => {
+  const actual = await importOriginal() as Record<string, unknown>
+  return {
+    ...actual,
+    listSessions: vi.fn().mockResolvedValue([
+      { code: 'abc123', name: 'test', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+    ]),
+  }
+})
 
 const HOST_ID = useHostStore.getState().hostOrder[0]
 
@@ -26,7 +30,7 @@ describe('useSessionStore', () => {
   it('fetchHost populates sessions for a host', async () => {
     const { result } = renderHook(() => useSessionStore())
     await act(async () => {
-      await result.current.fetchHost(HOST_ID, 'http://localhost:7860')
+      await result.current.fetchHost(HOST_ID)
     })
     expect(result.current.sessions[HOST_ID]).toHaveLength(1)
     expect(result.current.sessions[HOST_ID][0].name).toBe('test')

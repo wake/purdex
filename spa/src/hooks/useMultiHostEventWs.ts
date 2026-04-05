@@ -7,11 +7,9 @@ import { useAgentStore } from '../stores/useAgentStore'
 import { useTabStore } from '../stores/useTabStore'
 import { connectHostEvents, type EventConnection } from '../lib/host-events'
 import { scanPaneTree } from '../lib/pane-tree'
-import { hostWsUrl, fetchWsTicket } from '../lib/host-api'
-import { fetchHistory } from '../lib/api'
+import { hostWsUrl, fetchWsTicket, fetchHistory, type Session } from '../lib/host-api'
 import { checkHealth, type HealthResult } from '../lib/host-connection'
 import { ConnectionStateMachine } from '../lib/connection-state-machine'
-import type { Session } from '../lib/api'
 
 interface HostEntry {
   conn: EventConnection
@@ -140,14 +138,13 @@ export function useMultiHostEventWs() {
           }
           if (event.type === 'handoff') {
             const store = useStreamStore.getState()
-            const daemonBase = useHostStore.getState().getDaemonBase(hostId)
             if (event.value === 'connected') {
               store.setHandoffProgress(hostId, event.session, '')
-              useSessionStore.getState().fetchHost(hostId, daemonBase).then(() => {
+              useSessionStore.getState().fetchHost(hostId).then(() => {
                 const sess = (useSessionStore.getState().sessions[hostId] ?? [])
                   .find((s) => s.code === event.session)
                 if (sess && sess.mode !== 'terminal') {
-                  fetchHistory(daemonBase, sess.code).then((msgs) => {
+                  fetchHistory(hostId, sess.code).then((msgs) => {
                     useStreamStore.getState().loadHistory(hostId, event.session, msgs)
                   }).catch(() => {})
                 } else {
@@ -156,7 +153,7 @@ export function useMultiHostEventWs() {
               }).catch(() => {})
             } else if (event.value.startsWith('failed')) {
               store.setHandoffProgress(hostId, event.session, '')
-              useSessionStore.getState().fetchHost(hostId, daemonBase).catch(() => {})
+              useSessionStore.getState().fetchHost(hostId).catch(() => {})
             } else {
               store.setHandoffProgress(hostId, event.session, event.value)
             }
@@ -174,8 +171,7 @@ export function useMultiHostEventWs() {
             daemonState: 'connected',
           })
           useAgentStore.getState().clearSubagentsForHost(hostId)
-          const daemonBase = useHostStore.getState().getDaemonBase(hostId)
-          useSessionStore.getState().fetchHost(hostId, daemonBase).catch(() => {})
+          useSessionStore.getState().fetchHost(hostId).catch(() => {})
         },
         () => fetchWsTicket(hostId),
         false, // autoReconnect disabled — SM manages reconnection

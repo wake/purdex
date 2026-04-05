@@ -10,7 +10,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import type { AgentStatus, TabIndicatorStyle } from '../stores/useAgentStore'
 import { compositeKey } from '../lib/composite-key'
-import type { Session } from '../lib/api'
+import type { Session } from '../lib/host-api'
 
 const EMPTY_SESSIONS: Session[] = []
 import { TabStatusDot } from './TabStatusDot'

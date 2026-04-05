@@ -73,8 +73,8 @@ interface Window {
 
     // Dev Update
     getAppInfo: () => Promise<ElectronAppInfo>
-    checkUpdate: (daemonUrl: string) => Promise<ElectronRemoteVersionInfo>
-    applyUpdate: (daemonUrl: string) => Promise<ElectronUpdateResult>
+    checkUpdate: (daemonUrl: string, token?: string) => Promise<ElectronRemoteVersionInfo>
+    applyUpdate: (daemonUrl: string, token?: string) => Promise<ElectronUpdateResult>
     onUpdateProgress: (callback: (step: string) => void) => () => void
   }
 }

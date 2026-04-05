@@ -15,6 +15,7 @@ import { useRouteSync } from './hooks/useRouteSync'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useAgentStore } from './stores/useAgentStore'
+import { fetchAgentHookStatus } from './lib/host-api'
 import { useUndoToast } from './stores/useUndoToast'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { isStandaloneTab } from './types/tab'
@@ -62,11 +63,9 @@ function GlobalUndoToast() {
 export default function App() {
   const isElectron = getPlatformCapabilities().isElectron
 
-  // Host store (replaces hardcoded daemonBase)
-  const getDaemonBase = useHostStore((s) => s.getDaemonBase)
+  // Host store
   const hostOrder = useHostStore((s) => s.hostOrder)
   const firstHostId = hostOrder[0] ?? ''
-  const daemonBase = getDaemonBase(firstHostId)
 
   // Existing stores
   const fetchConfig = useConfigStore((s) => s.fetch)
@@ -90,7 +89,8 @@ export default function App() {
   // --- Fetch hook installation status on mount ---
   // Sets global hooksInstalled flag (used by SortableTab for idle fallback).
   useEffect(() => {
-    fetch(`${daemonBase}/api/agent/hook-status`)
+    if (!firstHostId) return
+    fetchAgentHookStatus(firstHostId)
       .then((r) => {
         if (!r.ok) return
         return r.json()
@@ -99,7 +99,7 @@ export default function App() {
         if (data) useAgentStore.getState().setHooksInstalled(!!data.installed)
       })
       .catch(() => { /* daemon unreachable — hooksInstalled stays false */ })
-  }, [daemonBase])
+  }, [firstHostId])
 
   // --- Electron: signal SPA ready (replaces 500ms setTimeout) ---
   useEffect(() => {
@@ -135,8 +135,8 @@ export default function App() {
 
   // --- Bootstrap: fetch config (sessions fetched by multi-host WS onOpen) ---
   useEffect(() => {
-    fetchConfig(daemonBase)
-  }, [fetchConfig, daemonBase])
+    if (firstHostId) fetchConfig(firstHostId)
+  }, [fetchConfig, firstHostId])
 
   // --- Derive visible tabs for display ---
   const activeWs = workspaces.find((w) => w.id === activeWorkspaceId)

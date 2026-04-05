@@ -1,28 +1,28 @@
 // spa/src/stores/useConfigStore.ts
 import { create } from 'zustand'
-import { getConfig, updateConfig, type ConfigData } from '../lib/api'
+import { getConfig, updateConfig, type ConfigData } from '../lib/host-api'
 
 interface ConfigState {
   config: ConfigData | null
   loading: boolean
-  fetch: (base: string) => Promise<void>
-  update: (base: string, updates: Partial<ConfigData>) => Promise<void>
+  fetch: (hostId: string) => Promise<void>
+  update: (hostId: string, updates: Partial<ConfigData>) => Promise<void>
 }
 
 export const useConfigStore = create<ConfigState>((set) => ({
   config: null,
   loading: false,
-  fetch: async (base) => {
+  fetch: async (hostId) => {
     set({ loading: true })
     try {
-      const config = await getConfig(base)
+      const config = await getConfig(hostId)
       set({ config, loading: false })
     } catch {
       set({ loading: false })
     }
   },
-  update: async (base, updates) => {
-    const config = await updateConfig(base, updates)
+  update: async (hostId, updates) => {
+    const config = await updateConfig(hostId, updates)
     set({ config })
   },
 }))

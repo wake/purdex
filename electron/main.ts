@@ -113,8 +113,8 @@ function registerIpcHandlers(): void {
 
   // Dev Update
   ipcMain.handle('dev:app-info', () => getAppInfo())
-  ipcMain.handle('dev:check-update', (_event, daemonUrl: string) => checkUpdate(daemonUrl))
-  ipcMain.handle('dev:apply-update', async (event, daemonUrl: string) => {
+  ipcMain.handle('dev:check-update', (_event, daemonUrl: string, token?: string) => checkUpdate(daemonUrl, token))
+  ipcMain.handle('dev:apply-update', async (event, daemonUrl: string, token?: string) => {
     if (updateInProgress) throw 'Update already in progress'
     updateInProgress = true
     const win = BrowserWindow.fromWebContents(event.sender)
@@ -123,7 +123,7 @@ function registerIpcHandlers(): void {
         if (win && !win.isDestroyed()) {
           win.webContents.send('dev:update-progress', step)
         }
-      })
+      }, token)
     } catch (err) {
       updateInProgress = false
       // Error objects lose their message across contextBridge serialization.
@@ -174,20 +174,6 @@ app.whenReady().then(() => {
   windowManager.createWindow()
 
   startMetricsPolling()
-
-  // Dev: background update check on startup
-  if (getAppInfo().devUpdateEnabled) {
-    const daemonUrl = 'http://100.64.0.2:7860'
-    checkUpdate(daemonUrl).then((remote) => {
-      if (remote.building) return // build in progress, SPA will poll
-      const local = getAppInfo()
-      if (remote.electronHash !== local.electronHash || remote.spaHash !== local.spaHash) {
-        for (const win of windowManager.getAllWindows()) {
-          if (!win.isDestroyed()) win.webContents.send('dev:update-available', remote)
-        }
-      }
-    }).catch(() => { /* silent — daemon may not be reachable */ })
-  }
 
   app.on('activate', () => {
     windowManager.showOrCreate()

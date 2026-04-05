@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { useHostStore } from '../stores/useHostStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import { fetchAgentHookStatus, setupAgentHook } from '../lib/host-api'
 
 interface HookEventStatus {
   installed: boolean
@@ -14,15 +14,12 @@ export interface HookStatus {
   issues: string[]
 }
 
-export function useHookStatus() {
-  const getDaemonBase = useHostStore((s) => s.getDaemonBase)
-  const daemonBase = getDaemonBase('local')
-
+export function useHookStatus(hostId = 'local') {
   const [hookStatus, setHookStatus] = useState<HookStatus | null>(null)
   const [hookLoading, setHookLoading] = useState(false)
 
   useEffect(() => {
-    fetch(`${daemonBase}/api/agent/hook-status`)
+    fetchAgentHookStatus(hostId)
       .then((r) => r.json())
       .then((data) => {
         const status = data as HookStatus
@@ -30,16 +27,12 @@ export function useHookStatus() {
         useAgentStore.getState().setHooksInstalled(!!status.installed)
       })
       .catch(() => setHookStatus(null))
-  }, [daemonBase])
+  }, [hostId])
 
   const runAction = async (action: 'install' | 'remove') => {
     setHookLoading(true)
     try {
-      const res = await fetch(`${daemonBase}/api/agent/hook-setup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent_type: 'cc', action }),
-      })
+      const res = await setupAgentHook(hostId, 'cc', action)
       if (!res.ok) {
         setHookLoading(false)
         return

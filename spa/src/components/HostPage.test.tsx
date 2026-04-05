@@ -5,9 +5,10 @@ import { HostPage } from './HostPage'
 import { useHostStore } from '../stores/useHostStore'
 import type { Pane } from '../types/tab'
 
-vi.mock('../lib/api', () => ({
-  listSessions: vi.fn().mockResolvedValue([]),
-}))
+vi.mock('../lib/host-api', async (importOriginal) => {
+  const actual = await importOriginal() as Record<string, unknown>
+  return { ...actual, listSessions: vi.fn().mockResolvedValue([]) }
+})
 
 vi.mock('./hosts/HostSidebar', () => ({
   HostSidebar: (props: { selectedHostId: string; selectedSubPage: string }) => <div data-testid="host-sidebar" data-host={props.selectedHostId} data-subpage={props.selectedSubPage} />,
