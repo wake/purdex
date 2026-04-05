@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.0.0-alpha.46] - 2026-04-05
+
+Phase 5a — 配對系統 + Token 認證 (PR #164)
+
+### 新功能
+
+- **Quick 模式** — `tbox serve --quick`：13 碼 Base58 配對碼（IP+Port+Secret 編碼），PairingGuard 攔截非配對 API，verify → setupSecret → setup 三步完成
+- **一般模式** — `tbox serve`（無 token）：daemon 產生 `purdex_` runtime token 印到 terminal，client 用 `POST /api/token/auth` 確認後持久化
+- **PairingState 狀態機** — pairing/pending/normal 三態，thread-safe（atomic.Int32）
+- **SetupSecretStore** — 128-bit one-time secret，5 分鐘 TTL，constant-time 比較
+- **TokenAuth getter** — 每請求動態讀取 token，支援 runtime token 變更
+- **PairingGuard middleware** — Quick 模式下只放行 `/api/pair/*`，其餘回 503
+- **Base58 codec** — `internal/pairing/` 獨立 package，encode/decode 配對碼（9 bytes → 13 chars, 4-4-5 格式）
+- **Pairing handlers** — `/api/pair/verify` + `/api/pair/setup`，brute-force 保護（10 次失敗 regenerate）
+- **Token auth handler** — `/api/token/auth`，confirm 後持久化到 config.toml
+- **`/api/health` mode 欄位** — 回傳 `{"ok":true,"mode":"pairing"|"pending"|"normal"}`
+- **SPA AddHostDialog 重寫** — 配對碼 + Token 雙路線，stage state machine，IP:port 去重
+- **SPA pairing-codec** — TypeScript Base58 解碼 + `purdex_` token 產生
+- **i18n** — 新增 12 個配對相關翻譯 key（en + zh-TW）
+
+### 安全性
+
+- **persist-first** — `handlePairSetup` 先 WriteFile 成功才設 runtime token，失敗不污染 state
+- **config.toml 權限** — `WriteFile` 改用 `0600`（原為 `0666`），保護明文 token
+- **concurrent verify 序列化** — CfgMu.Lock + TOCTOU guard 防止並發 verify 覆蓋 setupSecret
+- **PairingSecret 鎖保護** — CfgMu RLock/Lock 保護讀寫，消除 data race
+
+### 重構
+
+- `internal/core/base58.go` → `internal/pairing/base58.go`（獨立 package）
+- `cmd/tbox/main.go` 配對初始化抽取至 `cmd/tbox/quick.go:initPairing()`
+- PairingGuard 移除 OPTIONS dead code（CORS 已處理）
+
 ## [1.0.0-alpha.45] - 2026-04-04
 
 Phase 4 Hotfix — SM tmuxState 覆寫 + L2 背景重連 + Test Connection 重連
