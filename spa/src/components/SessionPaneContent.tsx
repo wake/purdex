@@ -7,6 +7,7 @@ import { useStreamStore } from '../stores/useStreamStore'
 import { useConfigStore } from '../stores/useConfigStore'
 import { useTabStore } from '../stores/useTabStore'
 import { handoff } from '../lib/api'
+import { fetchWsTicket } from '../lib/host-api'
 import { useHostStore } from '../stores/useHostStore'
 import { findPane } from '../lib/pane-tree'
 import type { PaneRendererProps } from '../lib/pane-registry'
@@ -86,6 +87,7 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
       visible={isActive}
       hostId={hostId}
       sessionCode={sessionCode}
+      getTicket={() => fetchWsTicket(hostId)}
     />
   )
 }
