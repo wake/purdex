@@ -69,6 +69,7 @@ git commit -m "feat(middleware): remove legacy ?token= query param fallback"
 **Files:**
 - Modify: `spa/src/lib/host-connection.ts`
 - Modify: `spa/src/lib/host-connection.test.ts`
+- Modify: `spa/src/lib/connection-state-machine.test.ts`（補 `mode` 欄位避免 TS 型別錯誤）
 
 - [ ] **Step 1: 寫 10 個 failing tests**
 
@@ -254,10 +255,28 @@ export async function checkHealth(
 Run: `cd spa && npx vitest run src/lib/host-connection.test.ts`
 Expected: 10 tests PASS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: 更新 SM test mocks 補 `mode` 欄位**
+
+`HealthResult.mode` 改為必填後，`connection-state-machine.test.ts` 的既有 mock 缺少 `mode` 會導致 TS 型別錯誤。在所有 `checkFn.mockResolvedValue(...)` 的回傳物件中加入 `mode: 'normal'`。例如：
+
+```typescript
+// 每個 mock 都補 mode，例：
+checkFn.mockResolvedValue({ daemon: 'connected', tmux: 'ok', latency: 10, mode: 'normal' })
+checkFn.mockResolvedValue({ daemon: 'unreachable', tmux: 'unavailable', latency: null, mode: 'normal' })
+checkFn.mockResolvedValue({ daemon: 'refused', tmux: 'unavailable', latency: null, mode: 'normal' })
+```
+
+共 9 個既有 test 的 mock 需更新（所有 `checkFn.mockResolvedValue` 和 `mockResolvedValueOnce` 呼叫）。
+
+- [ ] **Step 6: 執行全部 SPA test 確認無 breakage**
+
+Run: `cd spa && npx vitest run`
+Expected: 全部 PASS（含 SM 的 9 個既有 test）
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add spa/src/lib/host-connection.ts spa/src/lib/host-connection.test.ts
+git add spa/src/lib/host-connection.ts spa/src/lib/host-connection.test.ts spa/src/lib/connection-state-machine.test.ts
 git commit -m "feat: checkHealth two-phase negotiation (health + ws-ticket)"
 ```
 
@@ -605,12 +624,18 @@ export function connectHostEvents(
   if (!lazy) connect()
   return {
     close: () => { closed = true; ws?.close() },
-    reconnect: () => { if (!closed) { retryMs = 1000; ws?.close(); connect() } },
+    reconnect: () => {
+      if (!closed) {
+        retryMs = 1000
+        if (ws) { ws.onclose = null; ws.close() }  // 清除 onclose 防止 double-trigger
+        connect()
+      }
+    },
     reconnectWithTicket: (ticket) => {
       if (!closed) {
         pendingTicket = ticket
         retryMs = 1000
-        ws?.close()
+        if (ws) { ws.onclose = null; ws.close() }  // 清除 onclose 防止 double-trigger
         connect()
       }
     },
@@ -696,7 +721,9 @@ Expected: 新增的 3 個 test FAIL
 
 - [ ] **Step 3: 實作 connectTerminal getTicket**
 
-修改 `spa/src/lib/ws.ts`，`connectTerminal` 加入 `getTicket` 參數，`connect()` 改為 async，按 spec 4.3 實作。
+修改 `spa/src/lib/ws.ts`，`connectTerminal` 加入 `getTicket` 參數。
+
+**重要：`connect()` 必須保持同步**，否則既有 8 個 test 因 WebSocket 建立延遲一 microtask 而全部 crash。使用雙函式設計：
 
 函式簽名改為：
 ```typescript
@@ -710,27 +737,57 @@ export function connectTerminal(
 ): TerminalConnection {
 ```
 
-`connect()` 改為 `async function connect()`，開頭加入：
+在既有 `connect()` 函式前新增 async 版本，`connect()` 根據是否有 `getTicket` 分流：
+
 ```typescript
+  // Async ticket path — separate from sync connect to avoid breaking existing sync callers
+  async function connectWithTicket() {
     let wsUrl = url
-    if (getTicket) {
-      try {
-        const ticket = await getTicket()
-        const u = new URL(wsUrl)
-        u.searchParams.set('ticket', ticket)
-        wsUrl = u.toString()
-      } catch {
-        setTimeout(() => {
-          if (closed) return
-          if (canReconnect && !canReconnect()) return
-          connect()
-        }, retryMs)
-        retryMs = Math.min(retryMs * 2, 30000)
-        return
-      }
+    try {
+      const ticket = await getTicket!()
+      const u = new URL(wsUrl)
+      u.searchParams.set('ticket', ticket)
+      wsUrl = u.toString()
+    } catch {
+      setTimeout(() => {
+        if (closed) return
+        if (canReconnect && !canReconnect()) return
+        connect()
+      }, retryMs)
+      retryMs = Math.min(retryMs * 2, 30000)
+      return
     }
+    setupWs(wsUrl)
+  }
+
+  function setupWs(wsUrl: string) {
     ws = new WebSocket(wsUrl)
+    ws.binaryType = 'arraybuffer'
+    ws.onopen = () => { retryMs = 1000; onOpen?.() }
+    ws.onmessage = (e) => { if (e.data instanceof ArrayBuffer) onData(e.data) }
+    ws.onerror = () => {}
+    ws.onclose = () => {
+      if (closed) return
+      onClose()
+      setTimeout(() => {
+        if (closed) return
+        if (canReconnect && !canReconnect()) return
+        connect()
+      }, retryMs)
+      retryMs = Math.min(retryMs * 2, 30000)
+    }
+  }
+
+  function connect() {
+    if (getTicket) {
+      connectWithTicket()
+      return
+    }
+    setupWs(url)
+  }
 ```
+
+`connect()` 本身保持同步：無 `getTicket` → 直接 `setupWs(url)`（同步建立 WebSocket）。有 `getTicket` → 轉呼叫 async `connectWithTicket()`。既有 test 不傳 `getTicket`，走同步路徑，不受影響。
 
 - [ ] **Step 4: 執行 test 確認通過**
 
@@ -766,7 +823,7 @@ git commit -m "feat: connectTerminal getTicket param for WS ticket auth"
       // --- Connection state machine (per host) ---
       const connRef: { current: EventConnection | undefined } = { current: undefined }
 
-      const statusMap: Record<string, string> = {
+      const statusMap: Record<HealthResult['daemon'], HostRuntime['status']> = {
         connected: 'connected',
         unreachable: 'disconnected',
         refused: 'disconnected',
@@ -777,7 +834,7 @@ git commit -m "feat: connectTerminal getTicket param for WS ticket auth"
         () => checkHealth(baseUrl, () => useHostStore.getState().hosts[hostId]?.token),
         (result) => {
           useHostStore.getState().setRuntime(hostId, {
-            status: (statusMap[result.daemon] ?? 'disconnected') as HostRuntime['status'],
+            status: statusMap[result.daemon],
             latency: result.latency ?? undefined,
             daemonState: result.daemon,
           })
@@ -795,9 +852,11 @@ git commit -m "feat: connectTerminal getTicket param for WS ticket auth"
       useHostStore.getState().setRuntime(hostId, { manualRetry: () => sm.trigger() })
 
       // --- WS connection (per host, lazy — waits for SM) ---
+      // IMPORTANT: 完整保留現有 onEvent handler（L54-117 的 sessions/hook/relay/tmux/handoff 處理）。
+      // 只修改 connectHostEvents 的後三個參數（onClose/onOpen/getTicket）和新增 autoReconnect/lazy。
       const conn = connectHostEvents(
         wsUrl,
-        (event) => { /* ... 既有 event handler 不變 ... */ },
+        (event) => { /* 完整保留現有 L54-117 的 event handler，不做任何修改 */ },
         () => {
           useHostStore.getState().setRuntime(hostId, { status: 'reconnecting' })
           sm.trigger()
@@ -822,9 +881,13 @@ git commit -m "feat: connectTerminal getTicket param for WS ticket auth"
       sm.trigger()
 ```
 
-- [ ] **Step 2: 加入 HostRuntime type import**
+- [ ] **Step 2: 加入 type imports**
 
-在 imports 區加入：`import type { HostRuntime } from '../stores/useHostStore'`
+在 imports 區加入：
+```typescript
+import type { HostRuntime } from '../stores/useHostStore'
+import type { HealthResult } from '../lib/host-connection'
+```
 
 - [ ] **Step 3: 執行 lint + test**
 
@@ -859,6 +922,8 @@ import { fetchWsTicket } from '../lib/host-api'
           if (connected && !wasConnected) {
             const wsBase = useHostStore.getState().getWsBase(hostId)
 
+            // IMPORTANT: 完整保留現有 onMessage handler（L35-58 的 assistant/user/result/control_request/system 處理）。
+            // 只修改外層包裝（fetchWsTicket + guard）和 URL 構建。
             fetchWsTicket(hostId).then((ticket) => {
               if (!useStreamStore.getState().relayStatus[ck]) return
 
@@ -867,7 +932,7 @@ import { fetchWsTicket } from '../lib/host-api'
 
               const conn = connectStream(
                 url.toString(),
-                (msg: StreamMessage) => { /* ... 既有 onMessage 不變 ... */ },
+                (msg: StreamMessage) => { /* 完整保留現有 L35-58 的 onMessage handler，不做任何修改 */ },
                 () => {
                   useStreamStore.getState().setConn(hostId, sessionCode, null)
                   activeConns.delete(ck)
@@ -897,51 +962,67 @@ git commit -m "feat: useRelayWsManager ticket fetch before stream WS"
 
 ---
 
-### Task 9: SessionPaneContent — 傳入 getTicket
+### Task 9: Terminal WS ticket — 完整 prop chain
 
 **Files:**
-- Modify: `spa/src/components/SessionPaneContent.tsx`
 - Modify: `spa/src/hooks/useTerminalWs.ts`
+- Modify: `spa/src/components/TerminalView.tsx`
+- Modify: `spa/src/components/SessionPaneContent.tsx`
 
-- [ ] **Step 1: useTerminalWs 加 getTicket prop**
+Prop chain: `SessionPaneContent` → `TerminalView` (props) → `useTerminalWs` (opts) → `connectTerminal` (param)
+
+- [ ] **Step 1: useTerminalWs 加 getTicket**
 
 修改 `spa/src/hooks/useTerminalWs.ts`：
 
-介面加入 `getTicket?: () => Promise<string>`：
+`UseTerminalWsOpts` 介面加入：
 ```typescript
-interface UseTerminalWsOpts {
-  wsUrl: string
-  // ... 既有 props ...
-  hostId?: string
-  getTicket?: () => Promise<string>  // 新增
-  // ...
-}
+  getTicket?: () => Promise<string>
 ```
 
 解構時加入 `getTicket`，傳入 `connectTerminal`：
 ```typescript
     const conn = connectTerminal(
       wsUrl,
-      (data) => { /* ... */ },
+      (data) => { /* 既有 */ },
       () => onDisconnectRef.current(),
-      () => { /* ... */ },
+      () => { /* 既有 */ },
       canReconnect,
-      getTicket,  // 新增
+      getTicket,  // 新增：第六參數
     )
 ```
 
-- [ ] **Step 2: SessionPaneContent 傳入 getTicket**
+- [ ] **Step 2: TerminalView 加 getTicket prop**
 
-修改 `spa/src/components/SessionPaneContent.tsx`，在 `<TerminalView>` 或直接傳給 `useTerminalWs`：
+修改 `spa/src/components/TerminalView.tsx`：
+
+Props 介面加入：
+```typescript
+  getTicket?: () => Promise<string>
+```
+
+傳給 `useTerminalWs`：
+```typescript
+  useTerminalWs({ wsUrl, ..., getTicket })
+```
+
+- [ ] **Step 3: SessionPaneContent 傳入 getTicket**
+
+修改 `spa/src/components/SessionPaneContent.tsx`：
 
 加入 import：
 ```typescript
 import { fetchWsTicket } from '../lib/host-api'
 ```
 
-在呼叫 `useTerminalWs` 或傳給 `TerminalView` 的 props 中加入：
+在 `<TerminalView>` JSX 加入 prop：
 ```typescript
-getTicket={() => fetchWsTicket(hostId)}
+<TerminalView
+  wsUrl={`${wsBase}/ws/terminal/${encodeURIComponent(sessionCode)}`}
+  hostId={hostId}
+  getTicket={() => fetchWsTicket(hostId)}
+  // ... 其餘既有 props
+/>
 ```
 
 - [ ] **Step 3: 執行 lint + test**
@@ -1040,7 +1121,25 @@ import { CaretUp, CircleNotch, CheckCircle, XCircle, LockSimple } from '@phospho
 
 - [ ] **Step 2: App.tsx 傳入 onNavigateToHost**
 
-在 `App.tsx` 中，`StatusBar` 的 props 加入 `onNavigateToHost` callback，觸發切換到 HostPage 的 OverviewSection。具體實作取決於 App 的路由/頁面切換機制（查看 App.tsx 既有的頁面切換 state）。
+`App.tsx` 已有 `onOpenHosts` callback（使用 `openSingletonTab({ kind: 'hosts' })`）。`onNavigateToHost` 用相同機制：
+
+```typescript
+<StatusBar
+  activeTab={activeTab}
+  onViewModeChange={handleViewModeChange}
+  onNavigateToHost={(hostId) => {
+    // 開啟/切換到 hosts tab（singleton）
+    const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
+    if (activeWorkspaceId) {
+      useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tabId)
+      useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tabId)
+    }
+    handleSelectTab(tabId)
+    // HostPage 會從 useHostStore.activeHostId 讀取初始選中的 host
+    useHostStore.getState().setActiveHost(hostId)
+  }}
+/>
+```
 
 - [ ] **Step 3: 執行 lint**
 
