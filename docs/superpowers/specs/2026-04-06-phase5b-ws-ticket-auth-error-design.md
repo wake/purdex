@@ -75,10 +75,12 @@ interface HealthResult {
   daemon: 'connected' | 'refused' | 'unreachable' | 'auth-error'
   tmux: 'ok' | 'unavailable'
   latency: number | null
-  mode?: 'pairing' | 'pending' | 'normal'
+  mode: 'pairing' | 'pending' | 'normal'  // daemon 永遠回傳，非 optional
   ticket?: string  // Phase 2 成功時附帶
 }
 ```
+
+`mode` 為非 optional。`checkHealth` 解析時使用 `body.mode ?? 'normal'` fallback 保護。
 
 ### 3.2 checkHealth 兩階段
 
@@ -108,7 +110,7 @@ async function checkHealth(
     const res = await fetch(`${baseUrl}/api/health`, { signal: ctrl1.signal })
     const latency = Math.round(performance.now() - start)
     const body = await res.json()
-    const mode = body.mode as 'pairing' | 'pending' | 'normal' | undefined
+    const mode = (body.mode ?? 'normal') as 'pairing' | 'pending' | 'normal'
 
     // Phase 2: auth probe (獨立 timeout)
     const token = getToken?.()
@@ -230,7 +232,13 @@ interface HostRuntime {
   WS 連線
 ```
 
-**關鍵**：effect 建立後**立即呼叫 `sm.trigger()`**。這確保新 host 加入時狀態機主動跑一次 negotiation，即使 WS 從未建立也能偵測 auth-error。
+**關鍵設計**：
+
+1. `connectHostEvents` 以 `lazy: true` 建立 — **不立即呼叫 `connect()`**，等待 SM 指令
+2. Effect 建立後立即 `sm.trigger()` — SM 先跑完 negotiation
+3. SM 完成後透過 `onStateChange` → `reconnectWithTicket(ticket)` 啟動第一次 WS 連線
+
+這避免了 SM 與 `connectHostEvents` 初始 `connect()` 並行的 race condition（兩個 `connect()` 同時跑會建立兩個 WebSocket）。`connectHostEvents` 只有在 SM 明確說 connected 後才建立連線。
 
 ### 3.6 HostRuntime 狀態映射規則
 
@@ -269,7 +277,22 @@ setRuntime(hostId, {
 | UploadSection | `UploadSection.tsx` L35 | `!== 'connected'` | 同上 |
 | useTerminalWs | `useTerminalWs.ts` L50-54 | canReconnect gate | auth-error 時 `status !== 'connected'` → 不重連，正確 |
 
-前三個需主動加 `auth-error` 分支；後六個的 `!== 'connected'` 邏輯自然排除 auth-error，行為正確無需改動。
+| SessionSection | `SessionSection.tsx` L27,34,36 | `status === 'reconnecting'` / else | auth-error 落入 else → 紅色圓圈，行為同 disconnected，可接受 |
+| SessionPanel | `SessionPanel.tsx` L54,61-68 | `!== 'connected'` / `=== 'reconnecting'` | 同上 |
+
+前三個（HostSidebar、StatusBar、OverviewSection）需主動加 `auth-error` 分支。其餘八個的 `!== 'connected'` 邏輯自然排除 auth-error，行為正確無需改動。
+
+### 3.8 Terminal WS 在 auth-error 時的行為
+
+auth-error 只在 WS upgrade 時偵測。**已建立的 WS 連線不受影響**（WebSocket 協議在 upgrade 後不再驗 auth）。
+
+場景：使用者正在使用 terminal，daemon 端 token 變更：
+- Terminal WS **仍然連通**，使用者可繼續操作（預期行為）
+- Host-events WS 若因其他原因斷線 → SM 偵測 auth-error → status = 'auth-error'
+- Terminal 下次斷線時，`canReconnect()` 回傳 false → 暫停重連
+- 使用者修改 token → status 回到 connected → terminal 下次可重連
+
+此為 WebSocket 協議的本質限制，不強制中斷已建立的連線。
 
 ---
 
@@ -307,39 +330,47 @@ export function connectHostEvents(
   onOpen?: ...,
   getTicket?: () => Promise<string>,
   autoReconnect = true,
+  lazy = false,            // 新增：true 時不立即連線
 ): EventConnection {
   let ws: WebSocket
   let retryMs = 1000
   let closed = false
-  let pendingTicket: string | undefined  // 新增：一次性 pre-fetched ticket
+  let connecting = false   // 防止並發 connect()
+  let pendingTicket: string | undefined
 
   async function connect() {
-    let wsUrl = url
-    // 優先消費 pendingTicket（由 reconnectWithTicket 注入）
-    // 若無，回退到 getTicket callback
-    const ticket = pendingTicket ?? (getTicket ? await getTicket().catch(() => null) : null)
-    pendingTicket = undefined  // 一次性消費，用完清空
+    if (connecting) return  // 防止雙重 connect
+    connecting = true
+    try {
+      let wsUrl = url
+      // 優先消費 pendingTicket（由 reconnectWithTicket 注入）
+      // 若無，回退到 getTicket callback
+      const ticket = pendingTicket ?? (getTicket ? await getTicket().catch(() => null) : null)
+      pendingTicket = undefined
 
-    if (ticket) {
-      const u = new URL(wsUrl)
-      u.searchParams.set('ticket', ticket)
-      wsUrl = u.toString()
-    } else if (getTicket) {
-      // getTicket 失敗且無 pendingTicket → 通知上層
-      if (!closed) onClose?.()
-      return
+      if (ticket) {
+        const u = new URL(wsUrl)
+        u.searchParams.set('ticket', ticket)
+        wsUrl = u.toString()
+      } else if (getTicket) {
+        // getTicket 失敗且無 pendingTicket → 通知上層
+        if (!closed) onClose?.()
+        return
+      }
+      ws = new WebSocket(wsUrl)
+      // ... 其餘不變
+    } finally {
+      connecting = false
     }
-    ws = new WebSocket(wsUrl)
-    // ... 其餘不變
   }
 
-  connect()
+  if (!lazy) connect()     // lazy=true 時等 reconnectWithTicket 觸發
   return {
     close: () => { closed = true; ws?.close() },
     reconnect: () => { if (!closed) { retryMs = 1000; ws?.close(); connect() } },
     reconnectWithTicket: (ticket) => {
       if (!closed) {
-        pendingTicket = ticket    // 注入一次性 ticket
+        pendingTicket = ticket
         retryMs = 1000
         ws?.close()
         connect()
@@ -349,13 +380,40 @@ export function connectHostEvents(
 }
 ```
 
+**`connecting` flag**：防止 `reconnectWithTicket` 觸發的 `connect()` 與前一個仍在飛行的 `connect()` 並行。若前者仍在 `await getTicket()` 階段，後者直接 return。前者完成後，透過 ws.onclose → onClose → SM trigger → 下一輪 reconnectWithTicket 再啟動。
+
 #### useMultiHostEventWs 呼叫方式
 
 ```typescript
-// onStateChange callback:
+// SM onStateChange callback:
 if (result.daemon === 'connected' && connRef.current) {
-  connRef.current.reconnectWithTicket(result.ticket)
+  if (result.ticket) {
+    connRef.current.reconnectWithTicket(result.ticket)
+  } else {
+    // Phase 2 timeout 等情況 — ticket 不存在
+    // 用普通 reconnect，讓 getTicket callback 自行取 ticket
+    connRef.current.reconnect()
+  }
 }
+```
+
+**重要**：`reconnectWithTicket(undefined)` 會清空 `pendingTicket`，導致 `connect()` 呼叫 `getTicket()`，若 getTicket 也 timeout → `onClose` → SM trigger → Phase 2 再次 timeout → 無限循環。必須只在 `result.ticket` 有值時才用 `reconnectWithTicket`。
+
+#### useMultiHostEventWs 初始化流程
+
+```typescript
+// 1. 建立 connectHostEvents（lazy mode，不立即連線）
+const conn = connectHostEvents(
+  wsUrl, onEvent, onClose, onOpen,
+  () => fetchWsTicket(hostId),
+  false,  // autoReconnect = false（SM 管重連）
+  true,   // lazy = true（等 SM 指令）
+)
+
+// 2. 立即觸發 SM negotiation
+sm.trigger()
+
+// SM 完成後 onStateChange 自動呼叫 reconnectWithTicket 或 reconnect
 ```
 
 **一次性消費語意**：`pendingTicket` 在 `connect()` 內消費後清空。若 WS 在使用 pre-fetched ticket 後斷線再重連，`pendingTicket` 已空，回退到 `getTicket()` callback（觸發新的 `fetchWsTicket`）。若 `getTicket` 也失敗，通知 `onClose` → 狀態機重新 negotiate。
@@ -422,10 +480,12 @@ async function connect() {
 // useRelayWsManager.ts — relay connected 時
 if (connected && !wasConnected) {
   const wsBase = useHostStore.getState().getWsBase(hostId)
-  const baseUrl = `${wsBase.replace('ws:', 'http:')}`
 
   // 外層 await ticket，再帶入 URL
   fetchWsTicket(hostId).then((ticket) => {
+    // Guard: relay 可能在 ticket fetch 期間已斷線
+    if (!useStreamStore.getState().relayStatus[ck]) return
+
     const url = new URL(`${wsBase}/ws/cli-bridge-sub/${encodeURIComponent(sessionCode)}`)
     url.searchParams.set('ticket', ticket)
 
@@ -435,9 +495,14 @@ if (connected && !wasConnected) {
     )
     useStreamStore.getState().setConn(hostId, sessionCode, conn)
     activeConns.set(ck, conn)
-  }).catch(() => {
-    // ticket fetch 失敗 — 不建立 WS
-    // 狀態機會從 host-events 路徑偵測 auth-error
+  }).catch((err) => {
+    // 區分 ticket fetch 失敗（預期）與程式錯誤（非預期）
+    if (err instanceof Error && err.message.includes('ws-ticket')) {
+      // ticket fetch 失敗 — 不建立 WS
+      // 狀態機會從 host-events 路徑偵測 auth-error
+    } else {
+      console.error('[useRelayWsManager] stream WS setup error', err)
+    }
   })
 }
 ```
@@ -559,7 +624,7 @@ Phase 1 health check 解析 response body 的 `mode` 欄位，存入 `HealthResu
 | `normal` | 維持 Token 路線 + 提示「Daemon 運作中，請輸入已設定的 Token」 |
 | health 失敗 | 無提示，兩條路線都開放（使用者手動選） |
 
-使用者仍可手動覆蓋自動導流的結果（例如重新勾選/取消 Token checkbox）。
+**Auto-switch 保護**：只在 `stage === 'manual'` 且 token 欄位尚未填入時才自動切換。若使用者已填入 token（`token.length > 0`），不觸發自動切換，避免打斷已完成的配置。使用者仍可手動覆蓋。
 
 此為 UX 優化，不影響核心認證流程。
 
