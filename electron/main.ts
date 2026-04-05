@@ -175,7 +175,6 @@ app.whenReady().then(() => {
 
   startMetricsPolling()
 
-
   app.on('activate', () => {
     windowManager.showOrCreate()
   })
