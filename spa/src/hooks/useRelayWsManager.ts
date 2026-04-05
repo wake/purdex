@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import { useHostStore } from '../stores/useHostStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { connectStream, type StreamMessage, type ControlRequest } from '../lib/stream-ws'
+import { fetchWsTicket } from '../lib/host-api'
 
 /**
  * Manages stream WS connections driven by relayStatus changes.
@@ -29,36 +30,50 @@ export function useRelayWsManager() {
           if (connected && !wasConnected) {
             // Derive wsBase for this specific host
             const wsBase = useHostStore.getState().getWsBase(hostId)
-            // Relay just connected — create stream WS
-            const conn = connectStream(
-              `${wsBase}/ws/cli-bridge-sub/${encodeURIComponent(sessionCode)}`,
-              (msg: StreamMessage) => {
-                const store = useStreamStore.getState()
-                if (msg.type === 'assistant' || msg.type === 'user') {
-                  store.addMessage(hostId, sessionCode, msg)
-                }
-                if (msg.type === 'result' && 'total_cost_usd' in msg) {
-                  store.addCost(hostId, sessionCode, (msg as { total_cost_usd?: number }).total_cost_usd || 0)
-                  store.setStreaming(hostId, sessionCode, false)
-                }
-                if (msg.type === 'control_request') {
-                  store.addControlRequest(hostId, sessionCode, msg as ControlRequest)
-                }
-                if (msg.type === 'system') {
-                  const sys = msg as { subtype?: string; session_id?: string; model?: string }
-                  if (sys.subtype === 'init') {
-                    store.setSessionInfo(hostId, sessionCode, sys.session_id ?? '', sys.model ?? '')
+
+            // Fetch ticket before opening stream WS
+            fetchWsTicket(hostId).then((ticket) => {
+              // Guard: relay may have disconnected during async ticket fetch
+              if (!useStreamStore.getState().relayStatus[ck]) return
+
+              const url = new URL(`${wsBase}/ws/cli-bridge-sub/${encodeURIComponent(sessionCode)}`)
+              url.searchParams.set('ticket', ticket)
+
+              // Relay just connected — create stream WS
+              const conn = connectStream(
+                url.toString(),
+                (msg: StreamMessage) => {
+                  const store = useStreamStore.getState()
+                  if (msg.type === 'assistant' || msg.type === 'user') {
+                    store.addMessage(hostId, sessionCode, msg)
                   }
-                }
-              },
-              () => {
-                // WS closed — clear conn (relay:disconnected event will handle UI state)
-                useStreamStore.getState().setConn(hostId, sessionCode, null)
-                activeConns.delete(ck)
-              },
-            )
-            useStreamStore.getState().setConn(hostId, sessionCode, conn)
-            activeConns.set(ck, conn)
+                  if (msg.type === 'result' && 'total_cost_usd' in msg) {
+                    store.addCost(hostId, sessionCode, (msg as { total_cost_usd?: number }).total_cost_usd || 0)
+                    store.setStreaming(hostId, sessionCode, false)
+                  }
+                  if (msg.type === 'control_request') {
+                    store.addControlRequest(hostId, sessionCode, msg as ControlRequest)
+                  }
+                  if (msg.type === 'system') {
+                    const sys = msg as { subtype?: string; session_id?: string; model?: string }
+                    if (sys.subtype === 'init') {
+                      store.setSessionInfo(hostId, sessionCode, sys.session_id ?? '', sys.model ?? '')
+                    }
+                  }
+                },
+                () => {
+                  // WS closed — clear conn (relay:disconnected event will handle UI state)
+                  useStreamStore.getState().setConn(hostId, sessionCode, null)
+                  activeConns.delete(ck)
+                },
+              )
+              useStreamStore.getState().setConn(hostId, sessionCode, conn)
+              activeConns.set(ck, conn)
+            }).catch((err) => {
+              if (!(err instanceof Error && err.message.includes('ws-ticket'))) {
+                console.error('[useRelayWsManager] stream WS setup error', err)
+              }
+            })
           }
 
           if (!connected && wasConnected) {
