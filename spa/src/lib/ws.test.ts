@@ -8,6 +8,7 @@ class MockWebSocket {
   static CLOSING = 2
   static CLOSED = 3
 
+  url = ''
   readyState = MockWebSocket.CONNECTING
   binaryType = ''
   onopen: (() => void) | null = null
@@ -37,8 +38,9 @@ let wsInstances: MockWebSocket[] = []
 beforeEach(() => {
   wsInstances = []
   vi.stubGlobal('WebSocket', class extends MockWebSocket {
-    constructor() {
+    constructor(url: string) {
       super()
+      this.url = url
       wsInstances.push(this)
     }
   })
@@ -172,5 +174,36 @@ describe('connectTerminal gate', () => {
 
     vi.advanceTimersByTime(1000)
     expect(wsInstances).toHaveLength(2) // reconnected — gate allowed
+  })
+})
+
+describe('connectTerminal with getTicket', () => {
+  it('appends ticket to WS URL on success', async () => {
+    const getTicket = vi.fn().mockResolvedValue('tk_term')
+    connectTerminal('ws://test/ws/terminal/abc', vi.fn(), vi.fn(), undefined, undefined, getTicket)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(wsInstances[0].url).toContain('ticket=tk_term')
+  })
+
+  it('retries with backoff on getTicket failure', async () => {
+    const getTicket = vi.fn().mockRejectedValue(new Error('401'))
+    const onClose = vi.fn()
+    connectTerminal('ws://test/ws/terminal/abc', vi.fn(), onClose, undefined, undefined, getTicket)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(wsInstances).toHaveLength(0) // no WS created
+    expect(onClose).not.toHaveBeenCalled() // no onClose — self backoff
+    // After 1s backoff, retry
+    getTicket.mockResolvedValueOnce('tk_retry')
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(wsInstances).toHaveLength(1)
+    expect(wsInstances[0].url).toContain('ticket=tk_retry')
+  })
+
+  it('stops retrying when canReconnect returns false', async () => {
+    const getTicket = vi.fn().mockRejectedValue(new Error('401'))
+    connectTerminal('ws://test/ws/terminal/abc', vi.fn(), vi.fn(), undefined, () => false, getTicket)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(getTicket).toHaveBeenCalledTimes(1) // no retry
   })
 })

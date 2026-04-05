@@ -10,13 +10,34 @@ export function connectTerminal(
   onClose: () => void,
   onOpen?: () => void,
   canReconnect?: () => boolean,
+  getTicket?: () => Promise<string>,
 ): TerminalConnection {
   let closed = false
   let retryMs = 1000
   let ws: WebSocket
 
-  function connect() {
-    ws = new WebSocket(url)
+  // Async ticket path — separate from sync connect to avoid breaking existing sync callers
+  async function connectWithTicket() {
+    let wsUrl = url
+    try {
+      const ticket = await getTicket!()
+      const u = new URL(wsUrl)
+      u.searchParams.set('ticket', ticket)
+      wsUrl = u.toString()
+    } catch {
+      setTimeout(() => {
+        if (closed) return
+        if (canReconnect && !canReconnect()) return
+        connect()
+      }, retryMs)
+      retryMs = Math.min(retryMs * 2, 30000)
+      return
+    }
+    setupWs(wsUrl)
+  }
+
+  function setupWs(wsUrl: string) {
+    ws = new WebSocket(wsUrl)
     ws.binaryType = 'arraybuffer'
 
     ws.onopen = () => {
@@ -37,6 +58,14 @@ export function connectTerminal(
       }, retryMs)
       retryMs = Math.min(retryMs * 2, 30000)
     }
+  }
+
+  function connect() {
+    if (getTicket) {
+      connectWithTicket()
+      return
+    }
+    setupWs(url)
   }
 
   connect()
