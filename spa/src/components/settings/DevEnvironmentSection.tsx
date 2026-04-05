@@ -14,9 +14,9 @@ type RemoteInfo = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['che
 
 export function DevEnvironmentSection() {
   const t = useI18nStore((s) => s.t)
-  const getDaemonBase = useHostStore((s) => s.getDaemonBase)
-  const daemonBase = getDaemonBase('local')
-  const token = useHostStore((s) => s.hosts['local']?.token)
+  const firstHostId = useHostStore((s) => s.hostOrder[0] ?? '')
+  const daemonBase = useHostStore((s) => s.getDaemonBase(firstHostId))
+  const token = useHostStore((s) => firstHostId ? s.hosts[firstHostId]?.token : undefined)
 
   const spaSource: 'dev' | 'bundled' = window.location.protocol === 'app:' ? 'bundled' : 'dev'
 
