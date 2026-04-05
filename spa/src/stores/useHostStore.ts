@@ -15,10 +15,10 @@ export interface HostConfig {
 }
 
 export interface HostRuntime {
-  status: 'connected' | 'disconnected' | 'reconnecting'
+  status: 'connected' | 'disconnected' | 'reconnecting' | 'auth-error'
   latency?: number
   info?: HostInfo
-  daemonState?: 'connected' | 'refused' | 'unreachable'
+  daemonState?: 'connected' | 'refused' | 'unreachable' | 'auth-error'
   tmuxState?: 'ok' | 'unavailable'
   manualRetry?: () => void  // safe: runtime excluded from persist partialize
 }

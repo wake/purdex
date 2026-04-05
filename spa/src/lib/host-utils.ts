@@ -9,6 +9,7 @@ export function connectionErrorMessage(
   runtime: HostRuntime | undefined,
   t: (key: string) => string,
 ): string | null {
+  if (runtime?.status === 'auth-error') return t('hosts.error_auth')
   if (!runtime || runtime.status !== 'connected') {
     if (runtime?.daemonState === 'unreachable') return t('hosts.error_unreachable')
     if (runtime?.daemonState === 'refused') return t('hosts.error_refused')

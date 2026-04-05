@@ -359,6 +359,10 @@
   "hosts.error_unreachable": "主機無法連線",
   "hosts.error_refused": "Daemon 未啟動",
   "hosts.error_tmux_down": "tmux 環境無法連線",
+  "hosts.error_auth": "Token 無效，請確認 Token 與 daemon 設定一致",
+  "hosts.auth_error": "Token 無效",
+  "hosts.auth_error_hint": "請確認 Token 與 daemon 設定一致，修改後自動重新連線",
+  "status.auth_error": "Token 無效，點擊設定",
   "common.edit": "編輯",
 
   "error.boundary.title": "發生錯誤",

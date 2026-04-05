@@ -359,6 +359,10 @@
   "hosts.error_unreachable": "Host unreachable",
   "hosts.error_refused": "Daemon not running",
   "hosts.error_tmux_down": "tmux environment unreachable",
+  "hosts.error_auth": "Invalid token — check that the token matches the daemon config",
+  "hosts.auth_error": "Invalid token",
+  "hosts.auth_error_hint": "Verify the token matches the daemon config. Changes reconnect automatically.",
+  "status.auth_error": "Invalid token — click to configure",
   "common.edit": "Edit",
 
   "error.boundary.title": "Something went wrong",
