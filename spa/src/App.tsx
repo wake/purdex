@@ -251,6 +251,15 @@ export default function App() {
             onViewModeChange={(tabId, paneId, mode) => {
               useTabStore.getState().setViewMode(tabId, paneId, mode)
             }}
+            onNavigateToHost={(hostId) => {
+              const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
+              if (activeWorkspaceId) {
+                useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tabId)
+                useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tabId)
+              }
+              handleSelectTab(tabId)
+              useHostStore.getState().setActiveHost(hostId)
+            }}
           />
         </div>
         {contextMenu && (

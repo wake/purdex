@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { CaretUp, CircleNotch, CheckCircle, XCircle } from '@phosphor-icons/react'
+import { CaretUp, CircleNotch, CheckCircle, XCircle, LockSimple } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useSessionStore } from '../stores/useSessionStore'
@@ -13,6 +13,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 interface Props {
   activeTab: Tab | null
   onViewModeChange?: (tabId: string, paneId: string, mode: 'terminal' | 'stream') => void
+  onNavigateToHost?: (hostId: string) => void
 }
 
 const VIEW_MODE_COLORS: Record<string, string> = {
@@ -80,7 +81,7 @@ function UploadStatus({ hostId, sessionCode, t }: { hostId: string | null; sessi
   return null
 }
 
-export function StatusBar({ activeTab, onViewModeChange }: Props) {
+export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost }: Props) {
   const t = useI18nStore((s) => s.t)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -136,15 +137,21 @@ export function StatusBar({ activeTab, onViewModeChange }: Props) {
     <div className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted gap-3 flex-shrink-0 relative z-10">
       <span>{hostName}</span>
       <span>{sessionName}</span>
-      <span className={
-        status === 'connected' && hostRuntime?.tmuxState === 'unavailable' ? 'text-yellow-400'
-          : status === 'connected' ? 'text-green-500'
-          : status === 'reconnecting' ? 'text-yellow-400'
-          : 'text-red-400'
-      }>
-        {status === 'connected' && hostRuntime?.tmuxState === 'unavailable'
-          ? t('hosts.error_tmux_down')
-          : status}
+      <span
+        className={
+          status === 'auth-error' ? 'text-red-400 cursor-pointer flex items-center gap-1'
+            : status === 'connected' && hostRuntime?.tmuxState === 'unavailable' ? 'text-yellow-400'
+            : status === 'connected' ? 'text-green-500'
+            : status === 'reconnecting' ? 'text-yellow-400'
+            : 'text-red-400'
+        }
+        onClick={status === 'auth-error' && agentHostId ? () => onNavigateToHost?.(agentHostId) : undefined}
+      >
+        {status === 'auth-error' && <LockSimple size={10} weight="fill" />}
+        {status === 'auth-error' ? t('hosts.auth_error')
+          : status === 'connected' && hostRuntime?.tmuxState === 'unavailable'
+            ? t('hosts.error_tmux_down')
+            : status}
       </span>
       {getAgentLabel(agentEvent) && (() => {
         const label = getAgentLabel(agentEvent)!
