@@ -8,7 +8,8 @@ import (
 )
 
 // PairingGuard blocks non-pairing requests when isPairing returns true.
-// Only /api/pair/* paths and OPTIONS requests are allowed through.
+// Only /api/pair/* paths are allowed through.
+// Note: OPTIONS (CORS preflight) is handled by the CORS middleware before this point.
 func PairingGuard(isPairing func() bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -16,12 +17,6 @@ func PairingGuard(isPairing func() bool) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			// Always allow OPTIONS (CORS preflight)
-			if r.Method == "OPTIONS" {
-				next.ServeHTTP(w, r)
-				return
-			}
-			// Allow /api/pair/* paths
 			if strings.HasPrefix(r.URL.Path, "/api/pair/") {
 				next.ServeHTTP(w, r)
 				return

@@ -2,10 +2,16 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strings"
+
+	"github.com/wake/tmux-box/internal/config"
+	"github.com/wake/tmux-box/internal/core"
 )
 
 type ifaceEntry struct {
@@ -82,4 +88,51 @@ func selectBindIP() string {
 	selected := entries[idx-1]
 	fmt.Printf("Using %s (%s)\n", selected.IP, selected.Name)
 	return selected.IP.String()
+}
+
+// initPairing sets up the daemon's pairing mode based on config and flags.
+// Called before modules init and HTTP server start.
+func initPairing(c *core.Core, cfg *config.Config, cfgPath string, quick bool) {
+	if cfg.Token != "" {
+		return
+	}
+
+	if quick {
+		// Quick mode: interactive IP selection if needed
+		if cfg.Bind == "" || cfg.Bind == "127.0.0.1" || cfg.Bind == "0.0.0.0" {
+			cfg.Bind = selectBindIP()
+			c.CfgMu.Lock()
+			c.Cfg.Bind = cfg.Bind
+			c.CfgMu.Unlock()
+			if err := config.WriteFile(cfgPath, *cfg); err != nil {
+				log.Printf("save bind config: %v", err)
+			}
+		}
+		// Generate pairing secret
+		secret := make([]byte, 3)
+		if _, err := rand.Read(secret); err != nil {
+			log.Fatalf("generate pairing secret: %v", err)
+		}
+		c.CfgMu.Lock()
+		c.PairingSecret = hex.EncodeToString(secret)
+		c.CfgMu.Unlock()
+		c.Pairing.Set(core.StatePairing)
+
+		ip := net.ParseIP(cfg.Bind).To4()
+		code := core.EncodePairingCode(ip, uint16(cfg.Port), secret)
+		fmt.Printf("\n配對碼: %s\n\n", code)
+	} else {
+		// General mode: generate runtime token
+		tokenBytes := make([]byte, 20)
+		if _, err := rand.Read(tokenBytes); err != nil {
+			log.Fatalf("generate token: %v", err)
+		}
+		token := "purdex_" + hex.EncodeToString(tokenBytes)
+		c.CfgMu.Lock()
+		c.Cfg.Token = token
+		c.CfgMu.Unlock()
+		c.Pairing.Set(core.StatePending)
+
+		fmt.Printf("\nToken: %s\n\n", token)
+	}
 }

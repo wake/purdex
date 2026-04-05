@@ -3,12 +3,9 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -116,42 +113,7 @@ func runServe(args []string) {
 	c.CfgPath = resolvedCfgPath
 
 	// Phase 5a: Pairing initialization
-	if cfg.Token == "" {
-		if *quick {
-			// Quick mode: interactive IP selection if needed
-			if cfg.Bind == "" || cfg.Bind == "127.0.0.1" {
-				cfg.Bind = selectBindIP()
-				c.Cfg.Bind = cfg.Bind
-				if err := config.WriteFile(resolvedCfgPath, cfg); err != nil {
-					log.Printf("save bind config: %v", err)
-				}
-			}
-			// Generate pairing secret
-			secret := make([]byte, 3)
-			if _, err := rand.Read(secret); err != nil {
-				log.Fatalf("generate pairing secret: %v", err)
-			}
-			c.PairingSecret = hex.EncodeToString(secret)
-			c.Pairing.Set(core.StatePairing)
-
-			ip := net.ParseIP(cfg.Bind).To4()
-			code := core.EncodePairingCode(ip, uint16(cfg.Port), secret)
-			fmt.Printf("\n配對碼: %s\n\n", code)
-		} else {
-			// General mode: generate runtime token
-			tokenBytes := make([]byte, 20)
-			if _, err := rand.Read(tokenBytes); err != nil {
-				log.Fatalf("generate token: %v", err)
-			}
-			token := "purdex_" + hex.EncodeToString(tokenBytes)
-			c.CfgMu.Lock()
-			c.Cfg.Token = token
-			c.CfgMu.Unlock()
-			c.Pairing.Set(core.StatePending)
-
-			fmt.Printf("\nToken: %s\n\n", token)
-		}
-	}
+	initPairing(c, &cfg, resolvedCfgPath, *quick)
 
 	// 5. Add modules (order doesn't matter — topoSort handles dependencies)
 	c.AddModule(session.NewSessionModule(meta))

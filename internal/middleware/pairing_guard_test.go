@@ -51,15 +51,3 @@ func TestPairingGuardPassThroughWhenNotPairing(t *testing.T) {
 		t.Errorf("want 200 pass-through, got %d", rec.Code)
 	}
 }
-
-func TestPairingGuardAllowsOptions(t *testing.T) {
-	isPairing := func() bool { return true }
-	h := middleware.PairingGuard(isPairing)(ok)
-
-	req := httptest.NewRequest("OPTIONS", "/api/sessions", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != 200 {
-		t.Errorf("want 200 for OPTIONS, got %d", rec.Code)
-	}
-}
