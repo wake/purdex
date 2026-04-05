@@ -127,4 +127,33 @@ describe('ConnectionStateMachine', () => {
     const lastCall = onStateChange.mock.calls[onStateChange.mock.calls.length - 1][0]
     expect(lastCall.daemon).toBe('refused')
   })
+
+  it('auth-error exits FAST_RETRY on first attempt', async () => {
+    checkFn.mockResolvedValue({ daemon: 'auth-error', tmux: 'unavailable', latency: 5, mode: 'normal' })
+    sm = new ConnectionStateMachine(checkFn, onStateChange)
+    await sm.trigger()
+    expect(checkFn).toHaveBeenCalledTimes(1) // not 3
+    expect(onStateChange).toHaveBeenCalledWith(
+      expect.objectContaining({ daemon: 'auth-error' })
+    )
+  })
+
+  it('auth-error does not start background retry', async () => {
+    checkFn.mockResolvedValue({ daemon: 'auth-error', tmux: 'unavailable', latency: 5, mode: 'normal' })
+    sm = new ConnectionStateMachine(checkFn, onStateChange)
+    await sm.trigger()
+    const countAfter = checkFn.mock.calls.length
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(checkFn.mock.calls.length).toBe(countAfter) // no background retries
+  })
+
+  it('manual trigger recovers from auth-error', async () => {
+    checkFn.mockResolvedValue({ daemon: 'auth-error', tmux: 'unavailable', latency: 5, mode: 'normal' })
+    sm = new ConnectionStateMachine(checkFn, onStateChange)
+    await sm.trigger()
+    checkFn.mockResolvedValue({ daemon: 'connected', tmux: 'ok', latency: 3, mode: 'normal' })
+    await sm.trigger()
+    const lastCall = onStateChange.mock.calls[onStateChange.mock.calls.length - 1][0]
+    expect(lastCall.daemon).toBe('connected')
+  })
 })
