@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.48] - 2026-04-06
+
+api.ts 舊 API 層缺 auth — 遷移至 hostFetch 統一認證 (PR #180, #177)
+
+### 修正
+
+- **API 層統一認證** — 將 `api.ts` 全部 9 個函式遷移至 `host-api.ts`，改用 `hostFetch` 自動帶 Bearer token，解決 daemon 設 token 後所有 API 呼叫 401 的問題
+- **Raw fetch 修正** — `App.tsx`、`useHookStatus.ts` 的 3 處 raw fetch 改用 `fetchAgentHookStatus` / `setupAgentHook`
+- **Electron updater auth** — `checkUpdate` / `applyUpdate` 新增 `token?` 參數，透過 IPC 傳遞
+
+### 改善
+
+- **Store 簽名簡化** — `useSessionStore.fetchHost(hostId, base)` → `fetchHost(hostId)`、`useConfigStore.fetch/update(base)` → `fetch/update(hostId)`，消除 caller 傳錯 base URL 的可能
+- **Dead code 清理** — 移除 `electron/main.ts` 啟動時的 background update check（`dev:update-available` 無 listener、main process 無法取得 auth token）
+- **測試補充** — 新增 `host-api.test.ts`（21 個測試），覆蓋所有遷移函式含 auth header 驗證
+
+### 刪除
+
+- `spa/src/lib/api.ts` — 舊 API 層，已完全由 `host-api.ts` 取代
+
 ## [1.0.0-alpha.47] - 2026-04-06
 
 Phase 5b — WS Ticket 統一 + Auth Error UI (PR #168)
