@@ -96,7 +96,6 @@ func FormatPairingCode(raw string) string {
 // DecodePairingCode decodes a pairing code string into IP, port, and secret.
 // Strips dashes, slashes, and whitespace before decoding.
 func DecodePairingCode(code string) (ip net.IP, port uint16, secret []byte, err error) {
-	// Clean input
 	cleaned := strings.Map(func(r rune) rune {
 		if r == '-' || r == '/' || r == ' ' || r == '\t' {
 			return -1
@@ -104,18 +103,24 @@ func DecodePairingCode(code string) (ip net.IP, port uint16, secret []byte, err 
 		return r
 	}, code)
 
-	data, err := base58Decode(cleaned)
-	if err != nil {
-		return nil, 0, nil, errPairingDecode
+	// Decode to big.Int directly — do NOT use base58Decode's leading-1 semantics,
+	// because base58EncodeFixed pads with '1' and those are not real zero bytes.
+	n := new(big.Int)
+	for _, c := range cleaned {
+		idx := strings.IndexRune(base58Alphabet, c)
+		if idx < 0 {
+			return nil, 0, nil, errPairingDecode
+		}
+		n.Mul(n, big58)
+		n.Add(n, big.NewInt(int64(idx)))
 	}
 
-	// Pad to 9 bytes if shorter (leading zeros lost in encoding)
-	for len(data) < 9 {
-		data = append([]byte{0}, data...)
-	}
-	if len(data) != 9 {
+	// Fixed 9-byte output
+	if n.BitLen() > 72 { // 9 bytes = 72 bits
 		return nil, 0, nil, errPairingDecode
 	}
+	data := make([]byte, 9)
+	n.FillBytes(data)
 
 	ip = net.IP(data[0:4])
 	port = binary.BigEndian.Uint16(data[4:6])

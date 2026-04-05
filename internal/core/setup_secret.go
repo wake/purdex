@@ -2,6 +2,7 @@ package core
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"sync"
 	"time"
@@ -42,7 +43,7 @@ func (ss *SetupSecretStore) Validate(secret string) bool {
 	}
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
-	if ss.secret == "" || ss.secret != secret {
+	if ss.secret == "" || subtle.ConstantTimeCompare([]byte(ss.secret), []byte(secret)) != 1 {
 		return false
 	}
 	if time.Since(ss.born) > ss.ttl {

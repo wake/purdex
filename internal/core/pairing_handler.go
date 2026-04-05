@@ -36,7 +36,10 @@ func (c *Core) handlePairVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate hex format
-	expected, err := hex.DecodeString(c.PairingSecret)
+	c.CfgMu.RLock()
+	pairingSecret := c.PairingSecret
+	c.CfgMu.RUnlock()
+	expected, err := hex.DecodeString(pairingSecret)
 	if err != nil || len(expected) == 0 {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -54,8 +57,20 @@ func (c *Core) handlePairVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate setup secret
+	// Reset brute-force counter on success
+	atomic.StoreInt32(&c.failedVerify, 0)
+
+	// Serialize concurrent verify successes — only one setupSecret active at a time
+	c.CfgMu.Lock()
+	if c.Pairing.Get() != StatePairing {
+		c.CfgMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]string{"reason": "already_paired"})
+		return
+	}
 	setupSecret, err := c.SetupSecrets.Generate()
+	c.CfgMu.Unlock()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -96,12 +111,13 @@ func (c *Core) handlePairSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Persist token
-	c.CfgMu.Lock()
-	c.Cfg.Token = req.Token
+	// Build config copy for persistence (don't modify runtime yet)
+	c.CfgMu.RLock()
 	cfgCopy := *c.Cfg
-	c.CfgMu.Unlock()
+	c.CfgMu.RUnlock()
+	cfgCopy.Token = req.Token
 
+	// Persist FIRST — if this fails, runtime state is unchanged
 	if c.CfgPath != "" {
 		if err := config.WriteFile(c.CfgPath, cfgCopy); err != nil {
 			log.Printf("pair setup: write config: %v", err)
@@ -109,6 +125,11 @@ func (c *Core) handlePairSetup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// Only after successful persistence, update runtime
+	c.CfgMu.Lock()
+	c.Cfg.Token = req.Token
+	c.CfgMu.Unlock()
 
 	c.Pairing.Set(StateNormal)
 	log.Println("pairing complete — token set, switching to normal mode")
@@ -124,7 +145,9 @@ func (c *Core) regeneratePairingSecret() {
 		log.Printf("regenerate pairing secret: %v", err)
 		return
 	}
+	c.CfgMu.Lock()
 	c.PairingSecret = hex.EncodeToString(secret)
+	c.CfgMu.Unlock()
 	atomic.StoreInt32(&c.failedVerify, 0)
 
 	// Reconstruct full pairing code from cfg bind IP/Port + new secret

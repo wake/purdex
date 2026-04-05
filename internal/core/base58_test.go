@@ -105,3 +105,41 @@ func TestFormatPairingCode(t *testing.T) {
 		t.Errorf("want 1234-5678-90abc, got %s", formatted)
 	}
 }
+
+func TestDecodePairingCode10Network(t *testing.T) {
+	ip := net.ParseIP("10.0.0.1").To4()
+	port := uint16(7860)
+	secret := []byte{0xab, 0xcd, 0xef}
+
+	code := EncodePairingCode(ip, port, secret)
+	gotIP, gotPort, gotSecret, err := DecodePairingCode(code)
+	if err != nil {
+		t.Fatalf("10.x.x.x round-trip failed: %v (code=%s)", err, code)
+	}
+	if !gotIP.Equal(ip) {
+		t.Errorf("ip: want %s, got %s", ip, gotIP)
+	}
+	if gotPort != port {
+		t.Errorf("port: want %d, got %d", port, gotPort)
+	}
+	for i := range secret {
+		if gotSecret[i] != secret[i] {
+			t.Errorf("secret byte %d: want %d, got %d", i, secret[i], gotSecret[i])
+		}
+	}
+}
+
+func TestDecodePairingCodeAllZeros(t *testing.T) {
+	ip := net.IP{0, 0, 0, 0}
+	code := EncodePairingCode(ip, 0, []byte{0, 0, 0})
+	gotIP, gotPort, _, err := DecodePairingCode(code)
+	if err != nil {
+		t.Fatalf("all-zeros round-trip failed: %v", err)
+	}
+	if !gotIP.Equal(ip) {
+		t.Errorf("ip: want %s, got %s", ip, gotIP)
+	}
+	if gotPort != 0 {
+		t.Errorf("port: want 0, got %d", gotPort)
+	}
+}
