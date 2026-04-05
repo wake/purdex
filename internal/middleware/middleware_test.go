@@ -77,13 +77,13 @@ func TestTokenAuthCaseSensitive(t *testing.T) {
 	}
 }
 
-func TestTokenAuthQueryParam(t *testing.T) {
+func TestTokenAuthQueryParamRemoved(t *testing.T) {
 	h := middleware.TokenAuth(func() string { return "secret" }, nil)(ok)
 	req := httptest.NewRequest("GET", "/?token=secret", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != 200 {
-		t.Errorf("want 200 for valid query param token, got %d", rec.Code)
+	if rec.Code != 401 {
+		t.Errorf("want 401 for removed query param token, got %d", rec.Code)
 	}
 }
 
