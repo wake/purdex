@@ -51,7 +51,7 @@ func (c *Core) handlePairVerify(w http.ResponseWriter, r *http.Request) {
 	// to avoid leaking format hints to potential attackers.
 	if decErr != nil || subtle.ConstantTimeCompare(expected, given) != 1 {
 		count := atomic.AddInt32(&c.failedVerify, 1)
-		if count >= maxVerifyFailures {
+		if count == maxVerifyFailures {
 			c.regeneratePairingSecret()
 		}
 		http.Error(w, "unauthorized", http.StatusUnauthorized)

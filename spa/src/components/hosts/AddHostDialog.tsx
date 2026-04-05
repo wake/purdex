@@ -222,7 +222,7 @@ export function AddHostDialog({ onClose }: Props) {
           </div>
 
           <div>
-            <label className="text-xs text-text-secondary block mb-1">Token</label>
+            <label className="text-xs text-text-secondary block mb-1">{t('hosts.token')}</label>
             <div className="flex gap-2">
               <input
                 value={token}

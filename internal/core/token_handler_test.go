@@ -42,3 +42,21 @@ func TestTokenAuthAlreadyConfirmed(t *testing.T) {
 		t.Errorf("want reason=already_confirmed, got %s", body["reason"])
 	}
 }
+
+func TestTokenAuthWriteFileFailure(t *testing.T) {
+	c := newTestCore()
+	c.Pairing.Set(StatePending)
+	c.Cfg.Token = "purdex_test_token_that_is_long_enough_for_validation"
+	c.CfgPath = "/nonexistent/deep/path/config.toml"
+
+	req := httptest.NewRequest("POST", "/api/token/auth", nil)
+	rec := httptest.NewRecorder()
+	c.handleTokenAuth(rec, req)
+
+	if rec.Code != 500 {
+		t.Fatalf("want 500, got %d", rec.Code)
+	}
+	if c.Pairing.Get() != StatePending {
+		t.Error("pairing state should still be pending after WriteFile failure")
+	}
+}

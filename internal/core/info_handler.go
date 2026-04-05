@@ -15,7 +15,7 @@ import (
 // Defaults to "dev" for local development builds.
 var Version = "dev"
 
-// HandleHealth returns a simple {"ok": true} for connectivity checks.
+// HandleHealth returns {"ok": true, "mode": "pairing"|"pending"|"normal"} for connectivity checks.
 // Exported because main.go registers it on the outer mux to bypass auth middleware,
 // allowing the SPA to test reachability before knowing whether a token is required.
 func (c *Core) HandleHealth(w http.ResponseWriter, r *http.Request) {

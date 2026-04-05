@@ -10,6 +10,25 @@ import (
 	"github.com/wake/tmux-box/internal/config"
 )
 
+func TestWriteFilePermissions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	cfg := config.Config{Bind: "127.0.0.1", Port: 7860, Token: "secret"}
+
+	if err := config.WriteFile(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perm := info.Mode().Perm()
+	if perm&0077 != 0 {
+		t.Errorf("config file should not be group/other readable, got %o", perm)
+	}
+}
+
 func TestEnsureHostID_GeneratesWhenEmpty(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
