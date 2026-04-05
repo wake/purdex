@@ -15,59 +15,39 @@ export function cleanPairingInput(input: string): string {
   return input.replace(/[-/\s]/g, '')
 }
 
-/** Decode a Base58 string to bytes. Returns null on invalid input. */
-function base58Decode(s: string): Uint8Array | null {
-  let n = 0n
-  for (const c of s) {
-    const val = BASE58_MAP.get(c)
-    if (val === undefined) return null
-    n = n * 58n + val
-  }
-
-  // Convert bigint to bytes (ensure even-length hex)
-  const rawHex = n.toString(16)
-  const hex = rawHex.length % 2 ? '0' + rawHex : rawHex
-  const bytes = new Uint8Array(hex.length / 2)
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
-  }
-
-  // Count leading '1's → leading zero bytes
-  let leadingZeros = 0
-  for (const c of s) {
-    if (c !== '1') break
-    leadingZeros++
-  }
-
-  if (leadingZeros > 0) {
-    const padded = new Uint8Array(leadingZeros + bytes.length)
-    padded.set(bytes, leadingZeros)
-    return padded
-  }
-
-  return bytes
-}
 
 /**
  * Decode a 13-char pairing code into IP, port, and secret.
  * Returns null if the code is invalid.
  * The Go encoder always produces exactly 13 Base58 chars for a 9-byte payload.
+ *
+ * NOTE: We decode to bigint directly and use fixed 9-byte output, NOT the
+ * leading-'1'-as-zero-bytes semantics of base58Decode. The Go encoder pads
+ * with '1' characters, which are NOT real zero bytes — they are padding.
+ * For small IPs like 10.x.x.x, misinterpreting them would create extra bytes.
  */
 export function decodePairingCode(input: string): PairingCodeData | null {
   const cleaned = cleanPairingInput(input)
   if (cleaned.length !== 13) return null
 
-  const decoded = base58Decode(cleaned)
-  if (!decoded) return null
-
-  // Pad to 9 bytes if shorter
-  let data = decoded
-  if (data.length < 9) {
-    const padded = new Uint8Array(9)
-    padded.set(data, 9 - data.length)
-    data = padded
+  // Decode to bigint directly — do NOT use base58Decode's leading-1 semantics,
+  // because the Go encoder pads with '1' and those are not real zero bytes.
+  let n = 0n
+  for (const c of cleaned) {
+    const val = BASE58_MAP.get(c)
+    if (val === undefined) return null
+    n = n * 58n + val
   }
-  if (data.length !== 9) return null
+
+  // Check overflow (9 bytes = 72 bits)
+  if (n >= 1n << 72n) return null
+
+  // Fixed 9-byte output
+  const data = new Uint8Array(9)
+  for (let i = 8; i >= 0; i--) {
+    data[i] = Number(n & 0xFFn)
+    n >>= 8n
+  }
 
   const ip = `${data[0]}.${data[1]}.${data[2]}.${data[3]}`
   const port = (data[4] << 8) | data[5]

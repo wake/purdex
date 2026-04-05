@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  X, LinkSimple, ArrowsClockwise, CheckCircle, Warning, DiceSix,
+  X, LinkSimple, ArrowsClockwise, CheckCircle, Warning, ArrowCounterClockwise,
 } from '@phosphor-icons/react'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -79,12 +79,25 @@ export function AddHostDialog({ onClose }: Props) {
         await fetchPairSetup(base, setupSecret, token)
       }
 
-      addHost({
-        name: ip,
-        ip,
-        port: parseInt(port, 10) || 7860,
-        token: token || undefined,
+      // Check for existing host with same IP:port
+      const portNum = parseInt(port, 10) || 7860
+      const existingHosts = useHostStore.getState().hosts
+      const existingId = Object.keys(existingHosts).find((id) => {
+        const h = existingHosts[id]
+        return h.ip === ip && h.port === portNum
       })
+
+      if (existingId) {
+        // Update existing host's token instead of creating a duplicate
+        useHostStore.getState().updateHost(existingId, { token: token || undefined })
+      } else {
+        addHost({
+          name: ip,
+          ip,
+          port: portNum,
+          token: token || undefined,
+        })
+      }
       setStage('done')
       onClose()
     } catch (err) {
@@ -219,14 +232,16 @@ export function AddHostDialog({ onClose }: Props) {
                 disabled={!fieldsEnabled}
                 className="flex-1 bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono disabled:opacity-50"
               />
-              <button
-                onClick={handleGenerateToken}
-                disabled={!fieldsEnabled}
-                title={t('hosts.token_generate_hint')}
-                className="px-2 py-2 rounded text-text-muted hover:text-text-primary cursor-pointer disabled:opacity-50"
-              >
-                <DiceSix size={16} />
-              </button>
+              {!useToken && (
+                <button
+                  onClick={handleGenerateToken}
+                  disabled={!fieldsEnabled}
+                  title={t('hosts.token_generate_hint')}
+                  className="px-2 py-2 rounded text-xs text-text-muted hover:text-text-primary cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                >
+                  <ArrowCounterClockwise size={14} />
+                </button>
+              )}
             </div>
             {fieldsEnabled && token && !tokenValid && (
               <p className="text-xs text-yellow-400 mt-1">{t('hosts.token_too_short')}</p>
