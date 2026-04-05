@@ -59,8 +59,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Dev Update (only exposed when TBOX_DEV_UPDATE=1)
   ...(process.env.TBOX_DEV_UPDATE ? {
     getAppInfo: () => ipcRenderer.invoke('dev:app-info'),
-    checkUpdate: (daemonUrl: string) => ipcRenderer.invoke('dev:check-update', daemonUrl),
-    applyUpdate: (daemonUrl: string) => ipcRenderer.invoke('dev:apply-update', daemonUrl),
+    checkUpdate: (daemonUrl: string, token?: string) => ipcRenderer.invoke('dev:check-update', daemonUrl, token),
+    applyUpdate: (daemonUrl: string, token?: string) => ipcRenderer.invoke('dev:apply-update', daemonUrl, token),
     forceLoadSPA: (mode: 'dev' | 'bundled') => ipcRenderer.invoke('spa:force-load', mode),
     onUpdateProgress: (callback: (step: string) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, step: string) => callback(step)

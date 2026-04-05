@@ -1,7 +1,7 @@
 // spa/src/components/SessionPicker.tsx
 import { useState, useRef, useEffect } from 'react'
 import { Terminal, Lightning } from '@phosphor-icons/react'
-import type { Session } from '../lib/api'
+import type { Session } from '../lib/host-api'
 import { useI18nStore } from '../stores/useI18nStore'
 
 interface Props {

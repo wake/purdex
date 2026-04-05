@@ -6,8 +6,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useConfigStore } from '../stores/useConfigStore'
 import { useTabStore } from '../stores/useTabStore'
-import { handoff } from '../lib/api'
-import { fetchWsTicket } from '../lib/host-api'
+import { handoff, fetchWsTicket } from '../lib/host-api'
 import { useHostStore } from '../stores/useHostStore'
 import { findPane } from '../lib/pane-tree'
 import type { PaneRendererProps } from '../lib/pane-registry'
@@ -20,7 +19,6 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
   const hostId = content.kind === 'tmux-session' ? content.hostId : ''
   const mode = content.kind === 'tmux-session' ? content.mode : 'terminal'
 
-  const daemonBase = useHostStore((s) => s.getDaemonBase(hostId))
   const wsBase = useHostStore((s) => s.getWsBase(hostId))
   const fetchHost = useSessionStore((s) => s.fetchHost)
   const streamPresets = useConfigStore((s) => s.config?.stream?.presets ?? EMPTY_PRESETS)
@@ -34,25 +32,25 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
     try {
       const preset = streamPresets[0]?.name ?? 'cc'
       useStreamStore.getState().setHandoffProgress(hostId, session.code, 'starting')
-      await handoff(daemonBase, session.code, 'stream', preset)
-      await fetchHost(hostId, daemonBase)
+      await handoff(hostId, session.code, 'stream', preset)
+      await fetchHost(hostId)
     } catch (e) {
       console.error('Handoff failed:', e)
       useStreamStore.getState().setHandoffProgress(hostId, session.code, '')
     }
-  }, [session, hostId, daemonBase, fetchHost, streamPresets])
+  }, [session, hostId, fetchHost, streamPresets])
 
   const handleHandoffToTerm = useCallback(async () => {
     if (!session) return
     try {
       useStreamStore.getState().setHandoffProgress(hostId, session.code, 'starting')
-      await handoff(daemonBase, session.code, 'terminal')
-      await fetchHost(hostId, daemonBase)
+      await handoff(hostId, session.code, 'terminal')
+      await fetchHost(hostId)
     } catch (e) {
       console.error('Handoff to term failed:', e)
       useStreamStore.getState().setHandoffProgress(hostId, session.code, '')
     }
-  }, [session, hostId, daemonBase, fetchHost])
+  }, [session, hostId, fetchHost])
 
   // Look up tabId from store (pane renderers don't receive tabId as a prop)
   const tabId = useTabStore((s) => {

@@ -7,9 +7,10 @@ import { useAgentStore } from '../stores/useAgentStore'
 import { useHostStore } from '../stores/useHostStore'
 import { compositeKey } from '../lib/composite-key'
 
-vi.mock('../lib/api', () => ({
-  listSessions: vi.fn().mockResolvedValue([]),
-}))
+vi.mock('../lib/host-api', async (importOriginal) => {
+  const actual = await importOriginal() as Record<string, unknown>
+  return { ...actual, listSessions: vi.fn().mockResolvedValue([]) }
+})
 
 const HOST_ID = 'test-host'
 

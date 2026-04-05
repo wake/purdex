@@ -33,8 +33,12 @@ export function getAppInfo(): AppInfo {
   }
 }
 
-export async function checkUpdate(daemonUrl: string): Promise<RemoteVersionInfo> {
-  const resp = await fetch(`${daemonUrl}/api/dev/update/check`)
+function authHeaders(token?: string): Record<string, string> {
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+export async function checkUpdate(daemonUrl: string, token?: string): Promise<RemoteVersionInfo> {
+  const resp = await fetch(`${daemonUrl}/api/dev/update/check`, { headers: authHeaders(token) })
   if (!resp.ok) throw new Error(`check failed: ${resp.status}`)
   return resp.json()
 }
@@ -44,11 +48,12 @@ export type UpdateProgressFn = (step: string) => void
 export async function applyUpdate(
   daemonUrl: string,
   onProgress?: UpdateProgressFn,
+  token?: string,
 ): Promise<{ success: boolean; message: string }> {
   const progress = onProgress ?? (() => {})
 
   progress('downloading')
-  const resp = await fetch(`${daemonUrl}/api/dev/update/download`)
+  const resp = await fetch(`${daemonUrl}/api/dev/update/download`, { headers: authHeaders(token) })
   if (!resp.ok) throw new Error(`download failed: ${resp.status}`)
 
   const tmpDir = join(app.getPath('temp'), 'tbox-update')

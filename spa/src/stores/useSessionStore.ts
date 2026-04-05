@@ -1,14 +1,14 @@
 // spa/src/stores/useSessionStore.ts
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { type Session, listSessions } from '../lib/api'
+import { type Session, listSessions } from '../lib/host-api'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 interface SessionState {
   sessions: Record<string, Session[]> // hostId → sessions
   activeHostId: string | null
   activeCode: string | null
-  fetchHost: (hostId: string, base: string) => Promise<void>
+  fetchHost: (hostId: string) => Promise<void>
   replaceHost: (hostId: string, sessions: Session[]) => void
   removeHost: (hostId: string) => void
   setActive: (hostId: string | null, code: string | null) => void
@@ -20,8 +20,8 @@ export const useSessionStore = create<SessionState>()(
       sessions: {},
       activeHostId: null,
       activeCode: null,
-      fetchHost: async (hostId: string, base: string) => {
-        const list = await listSessions(base)
+      fetchHost: async (hostId: string) => {
+        const list = await listSessions(hostId)
         set((state) => ({
           sessions: { ...state.sessions, [hostId]: list },
         }))

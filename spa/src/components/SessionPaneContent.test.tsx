@@ -6,7 +6,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useConfigStore } from '../stores/useConfigStore'
 import type { Pane, Tab } from '../types/tab'
-import type { ConfigData } from '../lib/api'
+import type { ConfigData } from '../lib/host-api'
 
 vi.mock('./TerminalView', () => ({
   default: () => <div data-testid="terminal-view" />,

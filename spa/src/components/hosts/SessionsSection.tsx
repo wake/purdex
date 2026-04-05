@@ -9,7 +9,7 @@ import { useAgentStore } from '../../stores/useAgentStore'
 import { hostFetch, renameSession } from '../../lib/host-api'
 import { compositeKey } from '../../lib/composite-key'
 import { connectionErrorMessage } from '../../lib/host-utils'
-import type { Session } from '../../lib/api'
+import type { Session } from '../../lib/host-api'
 
 interface Props {
   hostId: string

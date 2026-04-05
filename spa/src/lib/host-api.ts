@@ -1,5 +1,27 @@
-// spa/src/lib/host-api.ts — Host-aware API layer
+// spa/src/lib/host-api.ts — Host-aware API layer (unified)
 import { useHostStore } from '../stores/useHostStore'
+import type { StreamMessage } from './stream-ws'
+
+/* ─── Shared types ─── */
+
+export interface Session {
+  code: string
+  name: string
+  cwd: string
+  mode: string
+  cc_session_id: string
+  cc_model: string
+  has_relay: boolean
+  current_command?: string
+}
+
+export interface ConfigData {
+  bind: string
+  port: number
+  terminal?: { sizing_mode: string }
+  stream: { presets: Array<{ name: string; command: string }> }
+  detect: { cc_commands: string[]; poll_interval: number }
+}
 
 /* ─── Core helpers ─── */
 
@@ -73,6 +95,128 @@ export function renameSession(hostId: string, code: string, name: string) {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
+  })
+}
+
+/* ─── Session API ─── */
+
+export async function listSessions(hostId: string): Promise<Session[]> {
+  const res = await hostFetch(hostId, '/api/sessions')
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  return res.json()
+}
+
+export async function createSession(
+  hostId: string, name: string, cwd: string, mode: string,
+): Promise<Session> {
+  const res = await hostFetch(hostId, '/api/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, cwd, mode }),
+  })
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  return res.json()
+}
+
+export async function deleteSession(hostId: string, code: string): Promise<void> {
+  const res = await hostFetch(hostId, `/api/sessions/${code}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+}
+
+export async function switchMode(hostId: string, code: string, mode: string): Promise<Session> {
+  const res = await hostFetch(hostId, `/api/sessions/${code}/mode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  })
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  return res.json()
+}
+
+/* ─── Handoff API ─── */
+
+export async function handoff(
+  hostId: string,
+  code: string,
+  mode: string,
+  preset?: string,
+): Promise<{ handoff_id: string }> {
+  const body: Record<string, string> = { mode }
+  if (preset) body.preset = preset
+  const res = await hostFetch(hostId, `/api/sessions/${code}/handoff`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`handoff failed: ${res.status} ${text}`.trim())
+  }
+  return res.json()
+}
+
+/* ─── History API ─── */
+
+export async function fetchHistory(hostId: string, sessionCode: string): Promise<StreamMessage[]> {
+  const res = await hostFetch(hostId, `/api/sessions/${sessionCode}/history`)
+  if (!res.ok) return []
+  return res.json()
+}
+
+/* ─── Config API ─── */
+
+export async function getConfig(hostId: string): Promise<ConfigData> {
+  const res = await hostFetch(hostId, '/api/config')
+  if (!res.ok) throw new Error(`get config failed: ${res.status}`)
+  return res.json()
+}
+
+export async function updateConfig(
+  hostId: string,
+  updates: Partial<ConfigData>,
+): Promise<ConfigData> {
+  const res = await hostFetch(hostId, '/api/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  })
+  if (!res.ok) throw new Error(`update config failed: ${res.status}`)
+  return res.json()
+}
+
+/* ─── Agent Upload API ─── */
+
+export async function agentUpload(
+  hostId: string,
+  file: File,
+  session: string,
+): Promise<{ filename: string; injected: boolean }> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('session', session)
+  const res = await hostFetch(hostId, '/api/agent/upload', {
+    method: 'POST',
+    body: form,
+  })
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  return res.json()
+}
+
+/* ─── Hook Status API ─── */
+
+export async function fetchAgentHookStatus(hostId: string): Promise<Response> {
+  return hostFetch(hostId, '/api/agent/hook-status')
+}
+
+export async function setupAgentHook(
+  hostId: string,
+  agentType: string,
+  action: 'install' | 'remove',
+): Promise<Response> {
+  return hostFetch(hostId, '/api/agent/hook-setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent_type: agentType, action }),
   })
 }
 

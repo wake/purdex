@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { SessionPicker } from './SessionPicker'
-import type { Session } from '../lib/api'
+import type { Session } from '../lib/host-api'
 
 const mockSessions: Session[] = [
   { code: 'abc001', name: 'dev-server', mode: 'terminal', cwd: '/home', cc_session_id: '', cc_model: '', has_relay: false },

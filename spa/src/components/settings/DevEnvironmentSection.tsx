@@ -16,6 +16,7 @@ export function DevEnvironmentSection() {
   const t = useI18nStore((s) => s.t)
   const getDaemonBase = useHostStore((s) => s.getDaemonBase)
   const daemonBase = getDaemonBase('local')
+  const token = useHostStore((s) => s.hosts['local']?.token)
 
   const spaSource: 'dev' | 'bundled' = window.location.protocol === 'app:' ? 'bundled' : 'dev'
 
@@ -62,13 +63,13 @@ export function DevEnvironmentSection() {
     setStatus('checking')
     setUpdateError(null)
     try {
-      const remote = await window.electronAPI!.checkUpdate(daemonBase)
+      const remote = await window.electronAPI!.checkUpdate(daemonBase, token)
       if (remote.building) {
         setStatus('building')
         if (!pollRef.current) {
           pollRef.current = setInterval(async () => {
             try {
-              const r = await window.electronAPI!.checkUpdate(daemonBase)
+              const r = await window.electronAPI!.checkUpdate(daemonBase, token)
               if (!r.building) {
                 stopPolling()
                 processCheckResult(r)
@@ -86,7 +87,7 @@ export function DevEnvironmentSection() {
     } catch {
       setStatus('error')
     }
-  }, [daemonBase, stopPolling, processCheckResult])
+  }, [daemonBase, token, stopPolling, processCheckResult])
 
   useEffect(() => {
     if (appInfo) checkUpdate()
@@ -102,7 +103,7 @@ export function DevEnvironmentSection() {
     setUpdateStep(null)
     setUpdateError(null)
     // Fire and forget — app.exit(0) kills the process before the promise resolves
-    window.electronAPI!.applyUpdate(daemonBase).catch((err) => {
+    window.electronAPI!.applyUpdate(daemonBase, token).catch((err) => {
       setUpdating(false)
       setUpdateStep(null)
       setUpdateError(err instanceof Error ? err.message : String(err))
