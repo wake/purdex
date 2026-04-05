@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.0.0-alpha.47] - 2026-04-06
+
+Phase 5b — WS Ticket 統一 + Auth Error UI (PR #168)
+
+### 新功能
+
+- **Negotiation-First 狀態機** — `checkHealth` 升級為兩階段（GET /api/health + POST /api/ws-ticket），同時驗證 daemon reachability 與 token auth
+- **WS Ticket 統一** — terminal、stream、host-events 三條 WS 全面使用 ticket auth
+- **Auth Error 狀態** — `HostRuntime.status` 新增 `'auth-error'`，狀態機偵測 401/503 後不重試
+- **Auth Error UI** — HostSidebar 鎖頭圖示（animate-pulse）、StatusBar 可點擊導航至設定頁、OverviewSection 紅色 banner + Token 自動重試
+- **Health Mode 消費（#167）** — AddHostDialog 根據 daemon mode 自動導流（pairing → 配對碼、pending/normal → Token）
+- **Per-host diff 更新** — 修改單一 host 的 IP/Port 只重建該 host 連線，不影響其他 host
+- **connectHostEvents lazy mode** — WS 不立即連線，等待狀態機 negotiation 完成後由 `reconnectWithTicket` 啟動
+- **connectTerminal 雙函式設計** — sync `connect()` + async `connectWithTicket()`，既有同步呼叫端不受影響
+
+### 安全性
+
+- **移除 `?token=` query param fallback** — 消除 token 出現在 URL/log/瀏覽器歷史的風險
+- **Token-less host 偵測** — SPA 無 token 時回傳 `auth-error`（daemon pairing mode 除外），避免 WS 被 daemon 401 拒絕後的死循環
+- **PairingGuard 503 偵測** — daemon 在 pairing mode 時 ws-ticket 回 503，狀態機正確判定為 auth-error
+
+### 修正
+
+- **狀態機 + Auth 死循環** — health endpoint 不驗 auth → 誤判 connected → WS 靜默失敗。兩階段 negotiation 解決
+- **新 host token 錯時靜默失敗** — 狀態機不自動啟動 → 灰色圓圈無回饋。lazy mode + 立即 `sm.trigger()` 解決
+- **`startBackground` auth-error guard** — L1 背景重試遇 auth-error 正確停止，不再無限循環
+- **`ws.close()`/`send()`/`resize()` 安全性** — async getTicket 期間 ws 未初始化時加 optional chaining
+- **Relay 雙重 stream WS** — `pendingFetches` Set 防止快速 reconnect 建立重複 WS
+- **`reconnect()`/`reconnectWithTicket()` double-trigger** — `ws.onclose = null` 後再 close，防止 onclose handler 重複觸發
+
+### 關聯 Issues
+
+- #148 pt.2 — Terminal/Stream WS auth（統一用 ticket）
+- #148 pt.3 — WS 401 auth error 提示
+- #167 — health mode SPA 消費
+
 ## [1.0.0-alpha.46] - 2026-04-05
 
 Phase 5a — 配對系統 + Token 認證 (PR #164)

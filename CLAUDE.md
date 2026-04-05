@@ -72,3 +72,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **低複雜**：修復成本低、可快速解決的項目
 
 符合以上任一條件即優先處理。需要討論的項目先討論完再修。當下不修的問題建立 `gh issue` 追蹤。
+
+### Issue 管理
+
+**Labels — 兩個維度**
+
+| 維度 | Labels | 規則 |
+|------|--------|------|
+| Type（必選一，互斥） | `bug` `feature` `refactor` `perf` `test` `chore` | 每個 issue 恰好一個 |
+| Scope（選填，可多選） | `daemon` `spa` `electron` | 跨元件的 issue 標多個 |
+
+**Milestones — 管時程**
+
+- 活躍開發的 phase 建 milestone（如 `Phase 5b`），完成後 close
+- 其餘放 `Backlog`，開工時再移入對應 milestone
+- 不回溯建已完成 phase 的 milestone
