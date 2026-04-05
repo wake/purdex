@@ -145,6 +145,27 @@ describe('ConnectionStateMachine', () => {
     expect(checkFn.mock.calls.length).toBe(countAfter) // no background retries
   })
 
+  it('background retry stops on auth-error after initial unreachable', async () => {
+    // Start as unreachable → enters L1 background
+    checkFn.mockResolvedValue({ daemon: 'unreachable', tmux: 'unavailable', latency: null, mode: 'normal' })
+    sm = new ConnectionStateMachine(checkFn, onStateChange)
+    await sm.trigger()
+    const countAfterTrigger = checkFn.mock.calls.length
+
+    // Background retry returns auth-error → should stop
+    checkFn.mockResolvedValue({ daemon: 'auth-error', tmux: 'unavailable', latency: 5, mode: 'normal' })
+    await vi.advanceTimersByTimeAsync(200) // L1 delay is 100ms
+    const countAfterAuthError = checkFn.mock.calls.length
+    expect(countAfterAuthError).toBe(countAfterTrigger + 1)
+
+    // Verify no more retries after auth-error
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(checkFn.mock.calls.length).toBe(countAfterAuthError)
+    // Verify auth-error was reported
+    const lastCall = onStateChange.mock.calls[onStateChange.mock.calls.length - 1][0]
+    expect(lastCall.daemon).toBe('auth-error')
+  })
+
   it('manual trigger recovers from auth-error', async () => {
     checkFn.mockResolvedValue({ daemon: 'auth-error', tmux: 'unavailable', latency: 5, mode: 'normal' })
     sm = new ConnectionStateMachine(checkFn, onStateChange)

@@ -81,7 +81,7 @@ export function connectTerminal(
     },
     close: () => {
       closed = true
-      ws.close()
+      ws?.close()
     },
   }
 }

@@ -15,6 +15,7 @@ export function useRelayWsManager() {
 
   useEffect(() => {
     const activeConns = new Map<string, { close: () => void }>()
+    const pendingFetches = new Set<string>()
 
     const unsub = useStreamStore.subscribe(
       (s) => s.relayStatus,
@@ -28,11 +29,15 @@ export function useRelayWsManager() {
           const sessionCode = colonIdx >= 0 ? ck.slice(colonIdx + 1) : ck
 
           if (connected && !wasConnected) {
+            if (pendingFetches.has(ck)) continue // ticket fetch already in flight
+
             // Derive wsBase for this specific host
             const wsBase = useHostStore.getState().getWsBase(hostId)
 
             // Fetch ticket before opening stream WS
+            pendingFetches.add(ck)
             fetchWsTicket(hostId).then((ticket) => {
+              pendingFetches.delete(ck)
               // Guard: relay may have disconnected during async ticket fetch
               if (!useStreamStore.getState().relayStatus[ck]) return
 
@@ -70,6 +75,7 @@ export function useRelayWsManager() {
               useStreamStore.getState().setConn(hostId, sessionCode, conn)
               activeConns.set(ck, conn)
             }).catch((err) => {
+              pendingFetches.delete(ck)
               if (!(err instanceof Error && err.message.includes('ws-ticket'))) {
                 console.error('[useRelayWsManager] stream WS setup error', err)
               }

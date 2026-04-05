@@ -25,7 +25,7 @@ function StatusIcon({ runtime }: { runtime?: HostRuntime }) {
   if (runtime.status === 'connected') return <Circle size={8} weight="fill" className="text-green-400" />
   if (runtime.status === 'reconnecting') return <Spinner size={10} className="text-yellow-400 animate-spin" />
   if (runtime.status === 'auth-error')
-    return <LockSimple size={12} weight="fill" className="text-red-400" />
+    return <LockSimple size={12} weight="fill" className="text-red-400 animate-pulse" />
   return <Circle size={8} weight="fill" className="text-red-400" />
 }
 
