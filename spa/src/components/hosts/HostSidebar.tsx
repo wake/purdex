@@ -1,4 +1,4 @@
-import { Plus, CaretDown, CaretRight, Circle, Spinner, Warning } from '@phosphor-icons/react'
+import { Plus, CaretDown, CaretRight, Circle, LockSimple, Spinner, Warning } from '@phosphor-icons/react'
 import { useState } from 'react'
 import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -24,6 +24,8 @@ function StatusIcon({ runtime }: { runtime?: HostRuntime }) {
     return <Warning size={12} weight="fill" className="text-yellow-400" />
   if (runtime.status === 'connected') return <Circle size={8} weight="fill" className="text-green-400" />
   if (runtime.status === 'reconnecting') return <Spinner size={10} className="text-yellow-400 animate-spin" />
+  if (runtime.status === 'auth-error')
+    return <LockSimple size={12} weight="fill" className="text-red-400" />
   return <Circle size={8} weight="fill" className="text-red-400" />
 }
 
@@ -65,7 +67,11 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
               >
                 {isExpanded ? <CaretDown size={10} /> : <CaretRight size={10} />}
                 <StatusIcon runtime={runtime[hostId]} />
-                <span className="truncate flex-1">{host.name}</span>
+                <span
+                  className={`truncate flex-1 ${runtime[hostId]?.status === 'auth-error' ? 'text-red-400' : ''}`}
+                >
+                  {host.name}
+                </span>
               </button>
               {isExpanded && (
                 <div className="ml-4 border-l-2 border-border-subtle pl-2 mt-1">
