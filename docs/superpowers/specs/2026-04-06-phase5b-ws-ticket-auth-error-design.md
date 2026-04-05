@@ -82,62 +82,112 @@ interface HealthResult {
 
 ### 3.2 checkHealth 兩階段
 
+**重要**：`getToken` 必須是**動態 closure**，每次呼叫時從 store 讀取最新值。
+若寫成靜態快照，使用者修改 token 後狀態機仍用舊 token，Phase 2 永遠 401。
+
+呼叫端範例：
 ```typescript
+() => checkHealth(baseUrl, () => useHostStore.getState().hosts[hostId]?.token)
+```
+
+完整實作：
+
+```typescript
+const PHASE1_TIMEOUT_MS = 6000
+const PHASE2_TIMEOUT_MS = 5000
+
 async function checkHealth(
   baseUrl: string,
   getToken?: () => string | undefined,
 ): Promise<HealthResult> {
   // Phase 1: health (no auth, 6s timeout)
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 6000)
+  const ctrl1 = new AbortController()
+  const timer1 = setTimeout(() => ctrl1.abort(), PHASE1_TIMEOUT_MS)
   try {
     const start = performance.now()
-    const res = await fetch(`${baseUrl}/api/health`, { signal: controller.signal })
+    const res = await fetch(`${baseUrl}/api/health`, { signal: ctrl1.signal })
     const latency = Math.round(performance.now() - start)
     const body = await res.json()
     const mode = body.mode as 'pairing' | 'pending' | 'normal' | undefined
 
-    // Phase 2: auth probe (only if token available)
+    // Phase 2: auth probe (獨立 timeout)
     const token = getToken?.()
     if (!token) {
-      return { daemon: 'connected', tmux: 'unavailable', latency, mode }
-    }
-    const ticketRes = await fetch(`${baseUrl}/api/ws-ticket`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    if (ticketRes.status === 401) {
+      // SPA 無 token → 視為 auth-error（daemon 可能有 token，WS 會被拒）
+      // 除非 mode=pairing（daemon 尚未設定 token，不需要 auth）
+      if (mode === 'pairing') {
+        return { daemon: 'connected', tmux: 'unavailable', latency, mode }
+      }
       return { daemon: 'auth-error', tmux: 'unavailable', latency, mode }
     }
-    if (!ticketRes.ok) {
-      // ws-ticket endpoint 異常但非 auth → 視為 connected
+
+    const ctrl2 = new AbortController()
+    const timer2 = setTimeout(() => ctrl2.abort(), PHASE2_TIMEOUT_MS)
+    try {
+      const ticketRes = await fetch(`${baseUrl}/api/ws-ticket`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: ctrl2.signal,
+      })
+      if (ticketRes.status === 401) {
+        return { daemon: 'auth-error', tmux: 'unavailable', latency, mode }
+      }
+      if (ticketRes.status === 503) {
+        // PairingGuard 攔截 — daemon 處於 pairing mode，不重試
+        return { daemon: 'auth-error', tmux: 'unavailable', latency, mode }
+      }
+      if (!ticketRes.ok) {
+        // ws-ticket endpoint 異常但非 auth/pairing → 視為 connected
+        return { daemon: 'connected', tmux: 'unavailable', latency, mode }
+      }
+      const { ticket } = await ticketRes.json()
+      return { daemon: 'connected', tmux: 'unavailable', latency, mode, ticket }
+    } catch {
+      // Phase 2 timeout 或 network error → 回退用 Phase 1 結果
       return { daemon: 'connected', tmux: 'unavailable', latency, mode }
+    } finally {
+      clearTimeout(timer2)
     }
-    const { ticket } = await ticketRes.json()
-    return { daemon: 'connected', tmux: 'unavailable', latency, mode, ticket }
   } catch (err: unknown) {
     if (err instanceof Error && err.name === 'AbortError') {
       return { daemon: 'unreachable', tmux: 'unavailable', latency: null }
     }
     return { daemon: 'refused', tmux: 'unavailable', latency: null }
   } finally {
-    clearTimeout(timer)
+    clearTimeout(timer1)
   }
 }
 ```
 
+#### 設計決策說明
+
+- **無 token 時回傳 `auth-error`**（非 `connected`）：SPA 無 token 但 daemon 有 token 時，WS 會被 daemon 401 拒絕。只有 `mode=pairing` 例外（daemon 尚未設定 token）。
+- **503 → `auth-error`**：PairingGuard 回 503 代表 daemon 在 pairing mode，此時 token 認證不可用。UI 顯示與 401 相同（引導使用者設定）。
+- **Phase 2 獨立 timeout（5 秒）**：Phase 1 成功後 daemon 可能在 Phase 2 前掉線。獨立 AbortController 防止掛起。
+- **Phase 2 的非 401/503 錯誤回退**：ws-ticket endpoint 本身故障（500 等）不是 auth 問題，回退用 Phase 1 結果。
+
 ### 3.3 狀態機新增 auth-error 分支
 
-```typescript
-// connection-state-machine.ts — trigger() 分類邏輯
+FAST_RETRY 迴圈中，`auth-error` 在**第一次 checkFn 回傳時就跳出**（不跑滿 3 次），因為重試也不會改變結果（token 不會自己變對），且每次 Phase 2 成功會消耗一個 ticket。
 
-if (lastResult.daemon === 'connected') return    // recovered
-if (lastResult.daemon === 'auth-error') return   // 永久錯誤，不背景重試
+```typescript
+// connection-state-machine.ts — trigger() 的 FAST_RETRY 迴圈
+
+for (let i = 0; i < FAST_RETRY_COUNT; i++) {
+  if (this.stopped || this.epoch !== myEpoch) return
+  lastResult = await this.checkFn()
+  if (this.stopped || this.epoch !== myEpoch) return
+  this.onStateChange(lastResult)
+
+  if (lastResult.daemon === 'connected') return    // recovered
+  if (lastResult.daemon === 'auth-error') return   // 永久錯誤，立即跳出
+}
+
+// FAST_RETRY 結束後的分類（只有 unreachable / refused 會走到這）
 if (lastResult.daemon === 'unreachable') {       // L1: 不間斷重連
   this.backgroundDeadline = null
   this.startBackground(L1_RETRY_DELAY_MS)
-}
-if (lastResult.daemon === 'refused') {           // L2: 3s 間隔，3 分鐘停止
+} else if (lastResult.daemon === 'refused') {    // L2: 3s 間隔，3 分鐘停止
   this.backgroundDeadline = Date.now() + L2_RETRY_TIMEOUT_MS
   this.startBackground(L2_RETRY_DELAY_MS)
 }
@@ -162,7 +212,7 @@ interface HostRuntime {
                     ┌──────────────┐
                     │   (initial)  │
                     └──────┬───────┘
-                           │ effect 啟動
+                           │ effect 啟動 → 立即 sm.trigger()
                            ▼
                     ┌──────────────┐
            ┌───────│  negotiating  │◄──── 手動重試 / WS close
@@ -180,6 +230,47 @@ interface HostRuntime {
   WS 連線
 ```
 
+**關鍵**：effect 建立後**立即呼叫 `sm.trigger()`**。這確保新 host 加入時狀態機主動跑一次 negotiation，即使 WS 從未建立也能偵測 auth-error。
+
+### 3.6 HostRuntime 狀態映射規則
+
+狀態機 `onStateChange(result)` 的映射：
+
+```typescript
+const statusMap: Record<HealthResult['daemon'], HostRuntime['status']> = {
+  'connected': 'connected',
+  'unreachable': 'disconnected',
+  'refused': 'disconnected',
+  'auth-error': 'auth-error',
+}
+
+setRuntime(hostId, {
+  status: statusMap[result.daemon],
+  daemonState: result.daemon,
+  latency: result.latency ?? undefined,
+})
+```
+
+`status` 和 `daemonState` 都會反映 `auth-error`。
+
+### 3.7 所有 HostRuntime.status 消費者
+
+以下元件消費 `runtime.status`，必須處理新的 `'auth-error'` 值：
+
+| 元件 | 檔案 | 現有邏輯 | Phase 5b 調整 |
+|------|------|---------|--------------|
+| StatusIcon | `HostSidebar.tsx` L21-28 | switch on status | 加 `auth-error` → Lock 圖示 |
+| StatusBar | `StatusBar.tsx` L139-148 | status className | 加 `auth-error` → 紅色 + 鎖頭文字 |
+| OverviewSection | `OverviewSection.tsx` L502-506 | status className | 加 `auth-error` → 紅色 + banner |
+| SessionPickerList | `SessionPickerList.tsx` L23 | `=== 'connected'` | auth-error ≠ connected → 不顯示 session，行為正確 |
+| SessionPanel | `SessionPanel.tsx` L54 | `!== 'connected'` | auth-error 視為 offline → 行為正確，但可加提示 |
+| SortableTab | `SortableTab.tsx` L106 | `!== 'connected'` | 同上 |
+| HooksSection | `HooksSection.tsx` L31 | `!== 'connected'` | 同上 |
+| UploadSection | `UploadSection.tsx` L35 | `!== 'connected'` | 同上 |
+| useTerminalWs | `useTerminalWs.ts` L50-54 | canReconnect gate | auth-error 時 `status !== 'connected'` → 不重連，正確 |
+
+前三個需主動加 `auth-error` 分支；後六個的 `!== 'connected'` 邏輯自然排除 auth-error，行為正確無需改動。
+
 ---
 
 ## 四、WS Ticket 統一
@@ -194,15 +285,80 @@ interface HostRuntime {
 
 ### 4.2 host-events：pre-fetched ticket
 
-狀態機 Phase 2 成功時已拿到 ticket。`useMultiHostEventWs` 的 `onStateChange` callback 將 ticket 傳給 `connectHostEvents`：
+狀態機 Phase 2 成功時已拿到 ticket。`useMultiHostEventWs` 的 `onStateChange` 透過 `pendingTicket` 機制傳給 `connectHostEvents`。
+
+#### EventConnection 介面擴充
 
 ```typescript
+export interface EventConnection {
+  close: () => void
+  reconnect: () => void
+  reconnectWithTicket: (ticket?: string) => void  // 新增
+}
+```
+
+#### connectHostEvents 內部實作
+
+```typescript
+export function connectHostEvents(
+  url: string,
+  onEvent: ...,
+  onClose?: ...,
+  onOpen?: ...,
+  getTicket?: () => Promise<string>,
+  autoReconnect = true,
+): EventConnection {
+  let ws: WebSocket
+  let retryMs = 1000
+  let closed = false
+  let pendingTicket: string | undefined  // 新增：一次性 pre-fetched ticket
+
+  async function connect() {
+    let wsUrl = url
+    // 優先消費 pendingTicket（由 reconnectWithTicket 注入）
+    // 若無，回退到 getTicket callback
+    const ticket = pendingTicket ?? (getTicket ? await getTicket().catch(() => null) : null)
+    pendingTicket = undefined  // 一次性消費，用完清空
+
+    if (ticket) {
+      const u = new URL(wsUrl)
+      u.searchParams.set('ticket', ticket)
+      wsUrl = u.toString()
+    } else if (getTicket) {
+      // getTicket 失敗且無 pendingTicket → 通知上層
+      if (!closed) onClose?.()
+      return
+    }
+    ws = new WebSocket(wsUrl)
+    // ... 其餘不變
+  }
+
+  connect()
+  return {
+    close: () => { closed = true; ws?.close() },
+    reconnect: () => { if (!closed) { retryMs = 1000; ws?.close(); connect() } },
+    reconnectWithTicket: (ticket) => {
+      if (!closed) {
+        pendingTicket = ticket    // 注入一次性 ticket
+        retryMs = 1000
+        ws?.close()
+        connect()
+      }
+    },
+  }
+}
+```
+
+#### useMultiHostEventWs 呼叫方式
+
+```typescript
+// onStateChange callback:
 if (result.daemon === 'connected' && connRef.current) {
   connRef.current.reconnectWithTicket(result.ticket)
 }
 ```
 
-`connectHostEvents` 介面調整：接受 `ticket?: string` 直接使用（跳過 `getTicket` callback）。若 ticket 已過期（WS upgrade 失敗），觸發狀態機重新 negotiate。
+**一次性消費語意**：`pendingTicket` 在 `connect()` 內消費後清空。若 WS 在使用 pre-fetched ticket 後斷線再重連，`pendingTicket` 已空，回退到 `getTicket()` callback（觸發新的 `fetchWsTicket`）。若 `getTicket` 也失敗，通知 `onClose` → 狀態機重新 negotiate。
 
 ### 4.3 connectTerminal 加 getTicket
 
@@ -220,47 +376,96 @@ export function connectTerminal(
 
 連線流程：
 
-```
-connect() {
+```typescript
+async function connect() {
+  let wsUrl = url
   if (getTicket) {
-    try { ticket = await getTicket() → append ?ticket= to URL }
-    catch { onClose() → 通知上層 → 觸發狀態機; return }
+    try {
+      const ticket = await getTicket()
+      const u = new URL(wsUrl)
+      u.searchParams.set('ticket', ticket)
+      wsUrl = u.toString()
+    } catch {
+      // getTicket 失敗 → 沿用現有 backoff 自行重試，不呼叫 onClose
+      // （避免與 ws.onclose 的 retry timer 雙重觸發）
+      setTimeout(() => {
+        if (closed) return
+        if (canReconnect && !canReconnect()) return
+        connect()
+      }, retryMs)
+      retryMs = Math.min(retryMs * 2, 30000)
+      return
+    }
   }
   ws = new WebSocket(wsUrl)
-  ...
+  // ... 其餘不變
 }
 ```
 
+**設計決策**：`getTicket` 失敗時不呼叫 `onClose()`，而是沿用 `connectTerminal` 自身的 backoff 重試。原因：
+- Terminal 的 `onClose` → `TerminalView.setDisconnected(true)`，只更新 React 元件 state，不觸發狀態機
+- 如果同時呼叫 `onClose` + 排程 retry timer，會產生雙重觸發
+- Terminal WS 的 backoff 最終會因 `canReconnect()` gate 停止（當狀態機偵測到 auth-error，host status ≠ connected → canReconnect 回傳 false）
+
+**狀態機觸發路徑**（間接）：
+1. Terminal getTicket 401 → 自行 backoff 重試
+2. 同時，host-events WS 也在嘗試連線 → getTicket 也失敗 → 觸發 `onClose` → 狀態機 trigger
+3. 狀態機 negotiate → Phase 2 401 → `auth-error` → `canReconnect()` 回傳 false → terminal 停止重試
+
 `useTerminalWs` 和 `SessionPaneContent` 傳入 `() => fetchWsTicket(hostId)`。
 
-### 4.4 connectStream 加 getTicket
+### 4.4 connectStream：外層 await ticket
+
+`connectStream` 保持同步介面不變（內部直接 `new WebSocket(url)`）。Ticket 取得在 `useRelayWsManager` 外層完成：
 
 ```typescript
-// stream-ws.ts
-export function connectStream(
-  url: string,
-  onMessage: (msg: StreamMessage) => void,
-  onClose: () => void,
-  onOpen?: () => void,
-  getTicket?: () => Promise<string>,  // 新增
-): StreamConnection
+// useRelayWsManager.ts — relay connected 時
+if (connected && !wasConnected) {
+  const wsBase = useHostStore.getState().getWsBase(hostId)
+  const baseUrl = `${wsBase.replace('ws:', 'http:')}`
+
+  // 外層 await ticket，再帶入 URL
+  fetchWsTicket(hostId).then((ticket) => {
+    const url = new URL(`${wsBase}/ws/cli-bridge-sub/${encodeURIComponent(sessionCode)}`)
+    url.searchParams.set('ticket', ticket)
+
+    const conn = connectStream(
+      url.toString(),
+      onMessage, onClose, onOpen,
+    )
+    useStreamStore.getState().setConn(hostId, sessionCode, conn)
+    activeConns.set(ck, conn)
+  }).catch(() => {
+    // ticket fetch 失敗 — 不建立 WS
+    // 狀態機會從 host-events 路徑偵測 auth-error
+  })
+}
 ```
 
-`useRelayWsManager` 在建立 stream WS 前取 ticket：
+**設計決策**：不改 `connectStream` 簽名。原因：
+- `connectStream` 是同步函式，內部直接 `new WebSocket(url)`，塞 async getTicket 需要重構整個函式
+- Stream WS 的生命週期由 relay event 驅動（relay connected → 建立 WS），與 terminal 的長連線模式不同
+- 在外層 await 更清晰：ticket 取得是 `useRelayWsManager` 的職責，不應耦合到通用的 `connectStream`
 
-```typescript
-const conn = connectStream(
-  `${wsBase}/ws/cli-bridge-sub/${encodeURIComponent(sessionCode)}`,
-  onMessage, onClose, onOpen,
-  () => fetchWsTicket(hostId),
-)
-```
+**Race condition 防護**：如果 ticket fetch 還在進行中，relay 斷開了（`!connected && wasConnected`），cleanup 邏輯會執行 `existing?.close()`。但此時 conn 尚未建立（`then` 未執行），`activeConns.get(ck)` 為 undefined，安全。Ticket fetch 完成後的 `then` callback 會建立一個新的 conn，但此時 `relayStatus[ck]` 已為 false，下一輪 subscribe 會清理它。
 
 ### 4.5 Ticket fetch 401 處理
 
-Terminal / Stream 的 `getTicket` 失敗時呼叫 `onClose()`，通知上層。`useMultiHostEventWs` 的 WS close handler 觸發狀態機 → 狀態機重跑 negotiation → Phase 2 偵測 401 → 設 `auth-error`。
+**狀態機是唯一的 auth 狀態擁有者**。Terminal / Stream 不自行判斷 auth error。
 
-**狀態機是唯一的 auth 狀態擁有者**。Terminal / Stream 只回報失敗，不自行判斷 auth error。
+觸發路徑統一為：
+
+```
+任何 WS 的 ticket fetch 401
+  → host-events WS 也在 401（同一 host 的所有 WS 共用 token）
+  → host-events onClose 觸發狀態機（或 effect 初始 trigger）
+  → 狀態機 negotiate Phase 2 → 偵測 401 → 設 auth-error
+  → HostRuntime.status = 'auth-error'
+  → Terminal canReconnect() 回傳 false → 停止重試
+  → Stream 不建立新連線（ticket fetch 失敗直接 catch）
+```
+
+Terminal 和 Stream 不需要自己觸發狀態機，因為同一 host 的 host-events WS **一定也會遇到相同的 auth 問題**，而 host-events 的失敗路徑已與狀態機連結。
 
 ---
 
@@ -282,10 +487,12 @@ auth-error 用鎖頭圖示（Phosphor `LockSimple`）而非紅色圓圈，視覺
 ### 5.2 StatusBar
 
 ```
-auth-error → 紅色鎖頭 + "Token 無效" + "— 點擊設定 Token"
+auth-error → 紅色鎖頭 + "Token 無效" + "— 點擊設定 Token"（可點擊）
 ```
 
-不顯示「重新連線中」等暫時性語言。可點擊引導到 OverviewSection。
+不顯示「重新連線中」等暫時性語言。
+
+**導航機制**：StatusBar 新增 `onNavigateToHost?: (hostId: string) => void` prop，由外層 App/Layout 注入。點擊 auth-error 文字觸發 `onNavigateToHost(hostId)` → 切換到 HostPage → 選中該 host 的 OverviewSection。此 prop 模式與現有 `onViewModeChange` 一致。
 
 ### 5.3 OverviewSection
 
@@ -298,14 +505,15 @@ auth-error 時顯示：
 ### 5.4 Token 修改 → 自動重試
 
 ```
-使用者修改 token → updateHost(hostId, { token: newToken })
-  → onSave callback 呼叫 manualRetry()
-  → 狀態機重新 negotiate（Phase 1 + Phase 2）
+使���者修改 token → updateHost(hostId, { token: newToken })
+  → 先 setRuntime(hostId, { status: 'reconnecting' })  // 避免 auth-error 閃爍
+  → 再呼叫 manualRetry()
+  → 狀態機��新 negotiate（Phase 1 + Phase 2）
   → 成功 → 'connected'
   → 仍失敗 → 'auth-error'
 ```
 
-OverviewSection 的 TokenField `onSave` 後自動觸發 `manualRetry()`，使用者不需額外操作。
+OverviewSection 的 TokenField `onSave` 先設 `reconnecting`（讓 UI 立即從紅色鎖頭切換為黃色旋轉），再觸發 `manualRetry()`。避免舊的 auth-error 在新的 negotiate 完成前短暫閃現。
 
 ### 5.5 connectionErrorMessage 擴充
 
@@ -340,16 +548,20 @@ Phase 1 health check 解析 response body 的 `mode` 欄位，存入 `HealthResu
 
 ### 6.2 AddHostDialog 自動導流
 
-AddHostDialog 開啟時，若使用者已輸入 IP:port，可選擇先打 `GET /api/health`：
+**僅在 manual route（勾選 Token）時觸發**。Pairing route 不需要 health check — IP 從配對碼解碼而來，daemon 一定在 pairing mode。
+
+**觸發時機**：使用者在 IP + port 欄位都有值後，debounced（300ms）自動打 `GET http://{ip}:{port}/api/health`。欄位變更時重新觸發。
 
 | health mode | 行為 |
 |-------------|------|
-| `pairing` | 自動進入配對碼路線 + badge "daemon 等待配對中" |
-| `pending` | 自動進入 Token 路線 + 提示「請輸入 daemon 終端機顯示的 Token」 |
-| `normal` | Token 路線 + 提示「Daemon 運作中，請輸入已設定的 Token」 |
-| health 失敗 | 兩條路線都開放 |
+| `pairing` | 自動切換到配對碼路線（取消 Token 勾選）+ badge "daemon 等待配對中" |
+| `pending` | 維持 Token 路線 + 提示「請輸入 daemon 終端機顯示的 Token」 |
+| `normal` | 維持 Token 路線 + 提示「Daemon 運作中，請輸入已設定的 Token」 |
+| health 失敗 | 無提示，兩條路線都開放（使用者手動選） |
 
-此為 UX 優化，不影響核心流程。使用者仍可手動切換。
+使用者仍可手動覆蓋自動導流的結果（例如重新勾選/取消 Token checkbox）。
+
+此為 UX 優化，不影響核心認證流程。
 
 ---
 
@@ -359,16 +571,19 @@ AddHostDialog 開啟時，若使用者已輸入 IP:port，可選擇先打 `GET /
 
 `internal/middleware/middleware.go` L79-83 的 `?token=` fallback 移除。Phase 5b 後所有 WS 連線統一用 `?ticket=`，HTTP API 用 Bearer header。
 
+**Go 測試同步修改**：`internal/middleware/middleware_test.go` 的 `TestTokenAuthQueryParam` 目前驗證 `?token=secret` 回傳 200。移除 `?token=` 後此 test 必紅。改為驗證 `?token=` 回傳 **401**（確認 fallback 已移除）。
+
 ---
 
 ## 八、影響範圍
 
-### 8.1 Daemon（Go）— 極小
+### 8.1 Daemon（Go��— 極小
 
 | 項目 | 改動 |
 |------|------|
 | middleware.go | 刪除 `?token=` fallback（~5 行） |
-| 其他 | 無 — 不需新端點、不改 WS handler |
+| middleware_test.go | `TestTokenAuthQueryParam` 改為驗證 401 |
+| 其他 | 無 — 不需���端點、不改 WS handler |
 
 ### 8.2 SPA — 中等
 
@@ -397,11 +612,12 @@ AddHostDialog 開啟時，若使用者已輸入 IP:port，可選擇先打 `GET /
 | 檔案 | 改動 |
 |------|------|
 | `HostSidebar.tsx` | auth-error 圖示（LockSimple） |
-| `StatusBar.tsx` | auth-error 顯示 |
-| `OverviewSection.tsx` | auth-error banner + TokenField 標紅 + 自動 manualRetry |
+| `StatusBar.tsx` | auth-error 顯示 + `onNavigateToHost` prop |
+| `OverviewSection.tsx` | auth-error banner + TokenField 標紅 + 儲存後 setRuntime reconnecting + manualRetry |
 | `host-utils.ts` | `connectionErrorMessage` 加 auth-error |
-| `AddHostDialog.tsx` | health mode 自動導流 |
+| `AddHostDialog.tsx` | health mode debounced 自動導流 |
 | i18n JSON | 新增 keys |
+| App/Layout | 提供 `onNavigateToHost` callback 給 StatusBar |
 
 ### 8.3 不受影響
 
@@ -415,23 +631,79 @@ AddHostDialog 開啟時，若使用者已輸入 IP:port，可選擇先打 `GET /
 
 | 風險 | 緩解 |
 |------|------|
-| Phase 2 非 401 失敗（network error） | 只有 HTTP 401 判定 auth-error，其他回退用 Phase 1 結果 |
+| Phase 2 非 401/503 失敗 | 回退用 Phase 1 結果，不誤判為 auth-error |
 | 重連延遲（多一次 HTTP） | 僅在重連路徑，本地網路 < 10ms |
 | Pre-fetched ticket 過期 | TTL 30 秒，negotiate → WS 連線通常 < 1 秒 |
+| `stop()` 無法中止 mid-Phase-2 fetch | fetch 完成後 epoch 檢查 → 結果被丟棄，不影響正確性（殭屍 fetch 可接受） |
+| Stream ticket fetch 與 relay disconnect race | `then` callback 建立的 conn 會被下一輪 subscribe 清理（見 4.4 說明） |
 
 ---
 
-## 九、測試範圍
+## 九、��試範圍
 
-| 層面 | 測試項目 |
+### 9.1 SPA 測試
+
+**`host-connection.test.ts`**（現有，需擴充）：
+
+用 `vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce()` 鏈式 mock 序列呼叫。
+
+| 測試 case | Phase 1 | Phase 2 | 預期 daemon |
+|-----------|---------|---------|------------|
+| Phase 1 only（無 token） | 200 | 不呼叫 | `auth-error`（非 pairing 時無 token 視為 auth 問題） |
+| Phase 1 only（pairing mode 無 token） | 200 `mode:pairing` | 不呼叫 | `connected` |
+| Phase 2 成功 | 200 | 200 + ticket | `connected` + ticket |
+| Phase 2 返回 401 | 200 | 401 | `auth-error` |
+| Phase 2 返回 503（PairingGuard）| 200 | 503 | `auth-error` |
+| Phase 2 network error | 200 | throw | `connected`（回退 Phase 1） |
+| Phase 2 timeout | 200 | 掛起 >5s | `connected`（Phase 2 abort） |
+| Phase 1 timeout | 掛起 >6s | — | `unreachable` |
+| Phase 1 network error | throw TypeError | — | `refused` |
+| Mode 欄位解析 | 200 `mode:pending` | 200 | mode = `'pending'` |
+
+**`connection-state-machine.test.ts`**（現有，需擴充）：
+
+用 `vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync()`。
+
+| 測試 case | 說明 |
+|-----------|------|
+| auth-error 第一次就跳出 FAST_RETRY | checkFn 只被呼叫 1 次（非 3 次） |
+| auth-error 不啟動背景重試 | advanceTimers 後 checkFn 不再被呼叫 |
+| 手動 trigger 從 auth-error 恢復 | checkFn 改回 connected → onStateChange 被呼叫 |
+
+**`ws.test.ts`**（現有，需擴充）：
+
+MockWebSocket 需補 `this.url = url` 以驗證 ticket 附加。
+
+| 測試 case | 說明 |
+|-----------|------|
+| getTicket 成功 → URL 含 `?ticket=` | 檢查 `wsInstances[0].url` |
+| getTicket 失敗 → backoff 重試 | 用 fake timer 確認 setTimeout 排程 |
+| getTicket 失敗 + canReconnect false → 停止 | 確認不再排程 |
+
+**`stream-ws.test.ts`**（現有只測 parseStreamMessage，需從零建立 WS 連線測試）：
+
+從 `ws.test.ts` 移植 MockWebSocket 基礎架構。但 `connectStream` 簽名不變（不加 getTicket），只需確認既有行為不被 Phase 5b 改動影響。
+
+**`host-events.test.ts`**（新建）：
+
+| 測試 case | 說明 |
+|-----------|------|
+| reconnectWithTicket(ticket) → URL 含 ticket | pendingTicket 一次性消費 |
+| reconnectWithTicket 後 WS 斷線 → 回退 getTicket | pendingTicket 已清空 |
+| getTicket 失敗 + 無 pendingTicket → 呼叫 onClose | 觸發狀態機路徑 |
+
+**`host-utils.test.ts`**（現有，需加 1 case）：
+
+| 測試 case | 說明 |
+|-----------|------|
+| `status: 'auth-error'` → `t('hosts.error_auth')` | 新狀態 |
+
+### 9.2 Go 測試
+
+| 檔案 | 測試項目 |
 |------|---------|
-| `checkHealth` | Phase 1 only（無 token）/ Phase 2 成功 / Phase 2 返回 401 / Phase 2 network error 回退 |
-| `ConnectionStateMachine` | auth-error 不進入 L1/L2 / 手動重試可從 auth-error 恢復到 connected |
-| `connectTerminal` | getTicket 成功帶 ticket / getTicket 失敗觸發 onClose |
-| `connectStream` | getTicket 成功帶 ticket / getTicket 失敗觸發 onClose |
-| `connectionErrorMessage` | auth-error 回傳正確 i18n key |
-| `host-utils` | 新狀態的 error message |
-| Daemon middleware | 移除 `?token=` 後既有 test 通過 |
+| `middleware_test.go` | `TestTokenAuthQueryParam` 改為：`?token=secret` → 401（確認 fallback 已移除） |
+| `middleware_test.go` | 確認 Bearer header + `?ticket=` 仍正常通過 |
 
 ---
 
