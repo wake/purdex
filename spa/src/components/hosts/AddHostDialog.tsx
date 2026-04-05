@@ -25,6 +25,32 @@ export function AddHostDialog({ onClose }: Props) {
   const [error, setError] = useState('')
   const [useToken, setUseToken] = useState(false)
   const [setupSecret, setSetupSecret] = useState('')
+  const [healthMode, setHealthMode] = useState<'pairing' | 'pending' | 'normal' | null>(null)
+
+  // Debounced health check in manual (token) mode
+  useEffect(() => {
+    if (!useToken || !ip || stage === 'saving' || stage === 'done') {
+      setHealthMode(null)
+      return
+    }
+    const portNum = port || '7860'
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`http://${ip}:${portNum}/api/health`)
+        const body = await res.json()
+        const mode = body.mode ?? 'normal'
+        setHealthMode(mode)
+        // Auto-switch to pairing route if daemon is in pairing mode and no token entered yet
+        if (mode === 'pairing' && !token) {
+          handleToggleToken(false)
+        }
+      } catch {
+        setHealthMode(null)
+      }
+    }, 300)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [useToken, ip, port, stage])
 
   // Escape to close
   useEffect(() => {
@@ -196,6 +222,19 @@ export function AddHostDialog({ onClose }: Props) {
             />
             {t('hosts.use_token')}
           </label>
+
+          {/* Mode badge */}
+          {healthMode && useToken && (
+            <div className={`flex items-start gap-2 px-2 py-2 rounded text-xs ${
+              healthMode === 'pairing' ? 'bg-yellow-500/10 border border-yellow-500/20 text-yellow-400'
+                : healthMode === 'pending' ? 'bg-blue-500/10 border border-blue-500/20 text-blue-400'
+                : 'bg-green-500/10 border border-green-500/20 text-green-400'
+            }`}>
+              {healthMode === 'pairing' && t('hosts.mode_pairing_hint')}
+              {healthMode === 'pending' && t('hosts.mode_pending_hint')}
+              {healthMode === 'normal' && t('hosts.mode_normal_hint')}
+            </div>
+          )}
 
           {/* Host / Port / Token fields */}
           <div className="grid grid-cols-3 gap-2">

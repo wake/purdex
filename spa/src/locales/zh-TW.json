@@ -397,5 +397,8 @@
   "hosts.invalid_pairing_code": "無效的配對碼",
   "hosts.token_too_short": "Token 長度至少需要 20 字元",
   "hosts.saving": "儲存中…",
-  "hosts.confirm": "確認"
+  "hosts.confirm": "確認",
+  "hosts.mode_pairing_hint": "Daemon 等待配對中",
+  "hosts.mode_pending_hint": "請輸入 daemon 終端機顯示的 Token",
+  "hosts.mode_normal_hint": "Daemon 運作中，請輸入已設定的 Token"
 }
