@@ -1,6 +1,6 @@
 // spa/src/hooks/useMultiHostEventWs.ts — Multi-host event WS + connection state machine
 import { useEffect } from 'react'
-import { useHostStore } from '../stores/useHostStore'
+import { useHostStore, type HostRuntime } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useAgentStore } from '../stores/useAgentStore'
@@ -9,7 +9,7 @@ import { connectHostEvents, type EventConnection } from '../lib/host-events'
 import { scanPaneTree } from '../lib/pane-tree'
 import { hostWsUrl, fetchWsTicket } from '../lib/host-api'
 import { fetchHistory } from '../lib/api'
-import { checkHealth } from '../lib/host-connection'
+import { checkHealth, type HealthResult } from '../lib/host-connection'
 import { ConnectionStateMachine } from '../lib/connection-state-machine'
 import type { Session } from '../lib/api'
 
@@ -29,19 +29,28 @@ export function useMultiHostEventWs() {
       // --- Connection state machine (per host) ---
       const connRef: { current: EventConnection | undefined } = { current: undefined }
 
+      const statusMap: Record<HealthResult['daemon'], HostRuntime['status']> = {
+        connected: 'connected',
+        unreachable: 'disconnected',
+        refused: 'disconnected',
+        'auth-error': 'auth-error',
+      }
+
       const sm = new ConnectionStateMachine(
-        () => checkHealth(baseUrl),
+        () => checkHealth(baseUrl, () => useHostStore.getState().hosts[hostId]?.token),
         (result) => {
           useHostStore.getState().setRuntime(hostId, {
-            status: result.daemon === 'connected' ? 'connected' : 'disconnected',
+            status: statusMap[result.daemon],
             latency: result.latency ?? undefined,
             daemonState: result.daemon,
-            // tmuxState 不在此設定 — checkHealth 的 tmux 永遠是 'unavailable'（硬編碼），
-            // 真正的 tmux 狀態由 WS 'tmux' event 推送，在 onOpen/onMessage 中更新。
           })
-          // On recovery → reconnect WS
+          // On recovery → reconnect WS with pre-fetched ticket
           if (result.daemon === 'connected' && connRef.current) {
-            connRef.current.reconnect()
+            if (result.ticket) {
+              connRef.current.reconnectWithTicket(result.ticket)
+            } else {
+              connRef.current.reconnect()
+            }
           }
         },
       )
@@ -133,9 +142,13 @@ export function useMultiHostEventWs() {
         },
         () => fetchWsTicket(hostId),
         false, // autoReconnect disabled — SM manages reconnection
+        true,  // lazy — waits for SM to trigger first connection
       )
       connRef.current = conn
       connections.set(hostId, conn)
+
+      // Start negotiation — SM will trigger reconnectWithTicket on success
+      sm.trigger()
     }
 
     return () => {
