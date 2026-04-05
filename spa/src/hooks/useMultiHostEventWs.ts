@@ -188,7 +188,13 @@ export function useMultiHostEventWs() {
       // Start negotiation — SM will trigger reconnectWithTicket on success
       sm.trigger()
     }
+    // No cleanup here — diff logic handles teardown of changed/removed hosts.
+    // Unmount cleanup is handled by the separate effect below.
+  }, [hostConfigKey])
 
+  // Unmount-only cleanup: close all entries when the component unmounts
+  useEffect(() => {
+    const entries = entriesRef.current
     return () => {
       entries.forEach((entry) => {
         entry.conn.close()
@@ -196,5 +202,5 @@ export function useMultiHostEventWs() {
       })
       entries.clear()
     }
-  }, [hostConfigKey])
+  }, [])
 }
