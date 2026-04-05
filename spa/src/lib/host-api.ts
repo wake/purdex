@@ -75,3 +75,69 @@ export function renameSession(hostId: string, code: string, name: string) {
     body: JSON.stringify({ name }),
   })
 }
+
+/* ─── Pairing API (Phase 5a) ─── */
+
+/** POST /api/pair/verify — Quick mode: verify pairing secret, get setupSecret. */
+export async function fetchPairVerify(
+  base: string,
+  secret: string,
+): Promise<{ setupSecret: string }> {
+  const res = await fetch(`${base}/api/pair/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ secret }),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new PairingError(res.status, text)
+  }
+  return res.json()
+}
+
+/** POST /api/pair/setup — Quick mode: set token on daemon. */
+export async function fetchPairSetup(
+  base: string,
+  setupSecret: string,
+  token: string,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`${base}/api/pair/setup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ setupSecret, token }),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new PairingError(res.status, text)
+  }
+  return res.json()
+}
+
+/** POST /api/token/auth — General mode: confirm runtime token. */
+export async function fetchTokenAuth(
+  base: string,
+  token: string,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`${base}/api/token/auth`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (res.status === 409) {
+    // already_confirmed — treat as success per spec
+    return { ok: true }
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new PairingError(res.status, text)
+  }
+  return res.json()
+}
+
+export class PairingError extends Error {
+  constructor(
+    public status: number,
+    public body: string,
+  ) {
+    super(`Pairing failed: HTTP ${status}`)
+  }
+}

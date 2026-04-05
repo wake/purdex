@@ -1,27 +1,32 @@
 import { useEffect, useState } from 'react'
-import { X, Plugs, ArrowsClockwise, CheckCircle, Warning } from '@phosphor-icons/react'
+import {
+  X, LinkSimple, ArrowsClockwise, CheckCircle, Warning, ArrowCounterClockwise,
+} from '@phosphor-icons/react'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { decodePairingCode, cleanPairingInput, generatePurdexToken } from '../../lib/pairing-codec'
+import { fetchPairVerify, fetchPairSetup, fetchTokenAuth, PairingError } from '../../lib/host-api'
 
 interface Props {
   onClose: () => void
 }
 
-type Stage = 'idle' | 'testing' | 'success' | 'needs-token' | 'error'
+type Stage = 'idle' | 'pairing' | 'paired' | 'manual' | 'saving' | 'done' | 'error'
 
 export function AddHostDialog({ onClose }: Props) {
   const t = useI18nStore((s) => s.t)
   const addHost = useHostStore((s) => s.addHost)
 
-  const [name, setName] = useState('')
+  const [pairingCode, setPairingCode] = useState('')
   const [ip, setIp] = useState('')
   const [port, setPort] = useState('7860')
   const [token, setToken] = useState('')
   const [stage, setStage] = useState<Stage>('idle')
   const [error, setError] = useState('')
-  const [latency, setLatency] = useState<number | null>(null)
-  const [daemonHostId, setDaemonHostId] = useState<string | null>(null)
+  const [useToken, setUseToken] = useState(false)
+  const [setupSecret, setSetupSecret] = useState('')
 
+  // Escape to close
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -30,73 +35,108 @@ export function AddHostDialog({ onClose }: Props) {
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [onClose])
 
-  const handleTest = async () => {
-    const base = `http://${ip}:${port || '7860'}`
-    setStage('testing')
+  const handlePair = async () => {
     setError('')
-    setLatency(null)
-
-    const start = performance.now()
-    try {
-      // Step 1: health check (no auth needed)
-      const healthRes = await fetch(`${base}/api/health`)
-      const ms = Math.round(performance.now() - start)
-      setLatency(ms)
-
-      if (!healthRes.ok) {
-        setStage('error')
-        setError(`Health check failed: HTTP ${healthRes.status}`)
-        return
-      }
-
-      // Step 2: try sessions to detect auth requirement
-      const headers: Record<string, string> = {}
-      if (token) headers['Authorization'] = `Bearer ${token}`
-
-      const sessionsRes = await fetch(`${base}/api/sessions`, { headers })
-      if (sessionsRes.ok) {
-        // Fetch daemon info to get host_id
-        try {
-          const infoRes = await fetch(`${base}/api/info`, { headers })
-          if (infoRes.ok) {
-            const info = await infoRes.json()
-            if (info.host_id) setDaemonHostId(info.host_id)
-          }
-        } catch { /* non-critical — fall back to generated ID */ }
-        setStage('success')
-      } else if (sessionsRes.status === 401) {
-        if (token) {
-          setStage('error')
-          setError(t('hosts.invalid_token'))
-        } else {
-          setStage('needs-token')
-        }
-      } else {
-        setStage('error')
-        setError(`HTTP ${sessionsRes.status}`)
-      }
-    } catch (err) {
+    const cleaned = cleanPairingInput(pairingCode)
+    const decoded = decodePairingCode(cleaned)
+    if (!decoded) {
       setStage('error')
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        setError(t('hosts.error_unreachable'))
-      } else if (err instanceof TypeError) {
-        setError(t('hosts.error_refused'))
+      setError(t('hosts.invalid_pairing_code'))
+      return
+    }
+
+    setStage('pairing')
+    const base = `http://${decoded.ip}:${decoded.port}`
+
+    try {
+      const res = await fetchPairVerify(base, decoded.secret)
+      setSetupSecret(res.setupSecret)
+      setIp(decoded.ip)
+      setPort(String(decoded.port))
+      setToken(generatePurdexToken())
+      setStage('paired')
+    } catch (err) {
+      setStage('idle')
+      setPairingCode('')
+      if (err instanceof PairingError) {
+        setError(`${t('hosts.pairing_failed')}: HTTP ${err.status}`)
+      } else {
+        setError(err instanceof Error ? err.message : t('hosts.pairing_failed'))
+      }
+    }
+  }
+
+  const handleConfirm = async () => {
+    setStage('saving')
+    setError('')
+
+    try {
+      if (useToken) {
+        const base = `http://${ip}:${port || '7860'}`
+        await fetchTokenAuth(base, token)
+      } else {
+        const base = `http://${ip}:${port || '7860'}`
+        await fetchPairSetup(base, setupSecret, token)
+      }
+
+      // Check for existing host with same IP:port
+      const portNum = parseInt(port, 10) || 7860
+      const existingHosts = useHostStore.getState().hosts
+      const existingId = Object.keys(existingHosts).find((id) => {
+        const h = existingHosts[id]
+        return h.ip === ip && h.port === portNum
+      })
+
+      if (existingId) {
+        // Update existing host's token instead of creating a duplicate
+        useHostStore.getState().updateHost(existingId, { token: token || undefined })
+      } else {
+        addHost({
+          name: ip,
+          ip,
+          port: portNum,
+          token: token || undefined,
+        })
+      }
+      setStage('done')
+      onClose()
+    } catch (err) {
+      if (useToken) {
+        setStage('manual')
+      } else {
+        setStage('idle')
+        setPairingCode('')
+        setSetupSecret('')
+      }
+      if (err instanceof PairingError) {
+        setError(`HTTP ${err.status}`)
       } else {
         setError(err instanceof Error ? err.message : t('hosts.connection_failed'))
       }
     }
   }
 
-  const handleSave = () => {
-    addHost({
-      id: daemonHostId || undefined,
-      name: name.trim() || daemonHostId?.split(':')[0] || ip,
-      ip,
-      port: parseInt(port, 10) || 7860,
-      token: token || undefined,
-    })
-    onClose()
+  const handleToggleToken = (checked: boolean) => {
+    setUseToken(checked)
+    if (checked) {
+      setStage('manual')
+      setPairingCode('')
+      setSetupSecret('')
+    } else {
+      setStage('idle')
+    }
   }
+
+  const handleGenerateToken = () => {
+    setToken(generatePurdexToken())
+  }
+
+  const isPairingRoute = !useToken
+  const isSaving = stage === 'saving'
+  const pairingDisabled = stage === 'pairing' || stage === 'paired' || isSaving || useToken
+  const fieldsEnabled = stage === 'paired' || stage === 'manual'
+  const confirmDisabled = stage !== 'paired' && stage !== 'manual'
+  const tokenValid = token.length >= 20
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true" onClick={onClose}>
@@ -111,76 +151,111 @@ export function AddHostDialog({ onClose }: Props) {
 
         {/* Body */}
         <div className="p-4 space-y-3">
+          {/* Pairing Code Section */}
           <div>
-            <label className="text-xs text-text-secondary block mb-1">{t('hosts.name')} ({t('hosts.optional')})</label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="My Server"
-              className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary"
-            />
+            <label className="text-xs text-text-secondary block mb-1">{t('hosts.pairing_code')}</label>
+            <div className="flex gap-2">
+              <input
+                value={pairingCode}
+                onChange={(e) => setPairingCode(e.target.value)}
+                placeholder="XXXX-XXXX-XXXXX"
+                disabled={pairingDisabled}
+                className="flex-1 bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono disabled:opacity-50"
+              />
+              <button
+                onClick={handlePair}
+                disabled={pairingDisabled || cleanPairingInput(pairingCode).length < 13}
+                className="px-4 py-2 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {stage === 'pairing' && <ArrowsClockwise size={14} className="animate-spin" />}
+                <LinkSimple size={14} />
+                {t('hosts.pair_button')}
+              </button>
+            </div>
           </div>
 
+          {/* Pairing status */}
+          {stage === 'paired' && isPairingRoute && (
+            <div className="flex items-center gap-2 text-xs text-green-400">
+              <CheckCircle size={14} />
+              {t('hosts.pairing_success')}
+            </div>
+          )}
+
+          {/* Divider */}
+          <div className="border-t border-border-subtle" />
+
+          {/* Token checkbox */}
+          <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={useToken}
+              onChange={(e) => handleToggleToken(e.target.checked)}
+              disabled={isSaving}
+              className="rounded"
+            />
+            {t('hosts.use_token')}
+          </label>
+
+          {/* Host / Port / Token fields */}
           <div className="grid grid-cols-3 gap-2">
             <div className="col-span-2">
-              <label className="text-xs text-text-secondary block mb-1">{t('hosts.ip')} *</label>
+              <label className="text-xs text-text-secondary block mb-1">{t('hosts.ip')}</label>
               <input
                 value={ip}
-                onChange={(e) => { setIp(e.target.value); if (stage !== 'idle' && stage !== 'testing') { setStage('idle'); setDaemonHostId(null) } }}
+                onChange={(e) => setIp(e.target.value)}
                 placeholder="100.64.0.1"
-                className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono"
+                disabled={!fieldsEnabled}
+                className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono disabled:opacity-50"
               />
             </div>
             <div>
               <label className="text-xs text-text-secondary block mb-1">{t('hosts.port')}</label>
               <input
                 value={port}
-                onChange={(e) => { setPort(e.target.value); if (stage !== 'idle' && stage !== 'testing') { setStage('idle'); setDaemonHostId(null) } }}
+                onChange={(e) => setPort(e.target.value)}
                 placeholder="7860"
-                className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono"
+                disabled={!fieldsEnabled}
+                className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono disabled:opacity-50"
               />
             </div>
           </div>
 
-          {/* Token field — shown after 401 or always if user wants to provide it */}
-          {(stage === 'needs-token' || token) && (
-            <div>
-              <label className="text-xs text-text-secondary block mb-1">{t('hosts.token')} *</label>
+          <div>
+            <label className="text-xs text-text-secondary block mb-1">{t('hosts.token')}</label>
+            <div className="flex gap-2">
               <input
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
-                placeholder="tbox_..."
+                placeholder="purdex_..."
                 type="password"
-                className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono"
-                autoFocus={stage === 'needs-token'}
+                disabled={!fieldsEnabled}
+                className="flex-1 bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono disabled:opacity-50"
               />
-              <p className="text-xs text-text-muted mt-1">{t('hosts.token_hint')}</p>
+              {!useToken && (
+                <button
+                  onClick={handleGenerateToken}
+                  disabled={!fieldsEnabled}
+                  title={t('hosts.token_generate_hint')}
+                  className="px-2 py-2 rounded text-xs text-text-muted hover:text-text-primary cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                >
+                  <ArrowCounterClockwise size={14} />
+                </button>
+              )}
             </div>
-          )}
+            {fieldsEnabled && token && !tokenValid && (
+              <p className="text-xs text-yellow-400 mt-1">{t('hosts.token_too_short')}</p>
+            )}
+          </div>
 
-          {/* Status feedback */}
-          {stage === 'testing' && (
-            <div className="flex items-center gap-2 text-xs text-text-muted">
-              <ArrowsClockwise size={14} className="animate-spin" />
-              {t('hosts.testing')}
-            </div>
-          )}
-          {stage === 'success' && (
-            <div className="flex items-center gap-2 text-xs text-green-400">
-              <CheckCircle size={14} />
-              {t('hosts.connected')}{latency != null && ` (${latency}ms)`}
-            </div>
-          )}
-          {stage === 'needs-token' && !error && (
-            <div className="flex items-center gap-2 text-xs text-yellow-400">
-              <Warning size={14} />
-              {t('hosts.requires_token')}
-            </div>
-          )}
-          {stage === 'error' && (
+          {/* Error feedback */}
+          {error && (
             <div className="flex items-center gap-2 text-xs text-red-400">
               <Warning size={14} />
-              {error}
+              <span>{error}</span>
+              {isPairingRoute && stage !== 'paired' && (
+                <span className="text-text-muted ml-1">— {t('hosts.pairing_retry')}</span>
+              )}
             </div>
           )}
         </div>
@@ -193,23 +268,14 @@ export function AddHostDialog({ onClose }: Props) {
           >
             {t('common.cancel')}
           </button>
-          {stage === 'success' ? (
-            <button
-              onClick={handleSave}
-              className="px-4 py-2 rounded text-xs bg-accent text-white cursor-pointer"
-            >
-              {t('hosts.save')}
-            </button>
-          ) : (
-            <button
-              onClick={handleTest}
-              disabled={!ip || stage === 'testing'}
-              className="flex items-center gap-1.5 px-4 py-2 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50"
-            >
-              <Plugs size={14} />
-              {t('hosts.test_connection')}
-            </button>
-          )}
+          <button
+            onClick={handleConfirm}
+            disabled={confirmDisabled || !ip || !tokenValid || isSaving}
+            className="px-4 py-2 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+          >
+            {isSaving && <ArrowsClockwise size={14} className="animate-spin" />}
+            {t('hosts.confirm')}
+          </button>
         </div>
       </div>
     </div>

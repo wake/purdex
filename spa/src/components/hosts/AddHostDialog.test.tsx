@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AddHostDialog } from './AddHostDialog'
 import { useHostStore } from '../../stores/useHostStore'
+import * as hostApi from '../../lib/host-api'
+import * as pairingCodec from '../../lib/pairing-codec'
 
 beforeEach(() => {
   vi.restoreAllMocks()
@@ -13,132 +15,176 @@ beforeEach(() => {
 })
 
 describe('AddHostDialog', () => {
-  it('renders form with IP, Port, Name fields', () => {
+  it('renders pairing code input and pair button', () => {
     render(<AddHostDialog onClose={vi.fn()} />)
-    expect(screen.getByPlaceholderText('My Server')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('100.64.0.1')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('7860')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('XXXX-XXXX-XXXXX')).toBeInTheDocument()
+    expect(screen.getByText('Pair')).toBeInTheDocument()
   })
 
-  it('Test Connection button disabled when IP is empty', () => {
+  it('Pair button disabled when pairing code is too short', () => {
     render(<AddHostDialog onClose={vi.fn()} />)
-    const btn = screen.getByText('Test Connection').closest('button')!
+    const btn = screen.getByText('Pair').closest('button')!
     expect(btn).toBeDisabled()
   })
 
-  it('Test Connection button enabled when IP is filled', () => {
+  it('Confirm button disabled initially', () => {
     render(<AddHostDialog onClose={vi.fn()} />)
-    fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '10.0.0.1' } })
-    const btn = screen.getByText('Test Connection').closest('button')!
-    expect(btn).not.toBeDisabled()
+    const btn = screen.getByText('Confirm').closest('button')!
+    expect(btn).toBeDisabled()
   })
 
-  it('successful health check + sessions check shows Save button', async () => {
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) } as Response)
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) } as Response)
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ host_id: 'test:abc123' }) } as Response)
-
-    render(<AddHostDialog onClose={vi.fn()} />)
-    fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '10.0.0.1' } })
-    fireEvent.click(screen.getByText('Test Connection'))
-
-    await waitFor(() => {
-      expect(screen.getByText('Save')).toBeInTheDocument()
-    })
-  })
-
-  it('401 response shows token field', async () => {
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) } as Response)
-      .mockResolvedValueOnce({ ok: false, status: 401 } as Response)
-
-    render(<AddHostDialog onClose={vi.fn()} />)
-    fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '10.0.0.1' } })
-    fireEvent.click(screen.getByText('Test Connection'))
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('tbox_...')).toBeInTheDocument()
-      expect(screen.getByText('This daemon requires authentication. Enter a token.')).toBeInTheDocument()
-    })
-  })
-
-  it('changing IP after success resets stage to idle', async () => {
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) } as Response)
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) } as Response)
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ host_id: 'test:abc123' }) } as Response)
-
-    render(<AddHostDialog onClose={vi.fn()} />)
-    fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '10.0.0.1' } })
-    fireEvent.click(screen.getByText('Test Connection'))
-
-    await waitFor(() => {
-      expect(screen.getByText('Save')).toBeInTheDocument()
-    })
-
-    // Change IP — should reset back to idle / Test Connection button
-    fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '10.0.0.2' } })
-
-    expect(screen.queryByText('Save')).toBeNull()
-    expect(screen.getByText('Test Connection')).toBeInTheDocument()
-  })
-
-  it('changing IP after needs-token resets stage to idle', async () => {
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) } as Response)
-      .mockResolvedValueOnce({ ok: false, status: 401 } as Response)
-
-    render(<AddHostDialog onClose={vi.fn()} />)
-    fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '10.0.0.1' } })
-    fireEvent.click(screen.getByText('Test Connection'))
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('tbox_...')).toBeInTheDocument()
-    })
-
-    // Change IP — should reset back to idle, hiding the token field and warning
-    fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '10.0.0.2' } })
-
-    expect(screen.queryByPlaceholderText('tbox_...')).toBeNull()
-    expect(screen.queryByText('This daemon requires authentication. Enter a token.')).toBeNull()
-    expect(screen.getByText('Test Connection')).toBeInTheDocument()
-  })
-
-  it('close button calls onClose', () => {
+  it('Cancel button calls onClose', () => {
     const onClose = vi.fn()
     render(<AddHostDialog onClose={onClose} />)
-    // The Cancel button in the footer
     fireEvent.click(screen.getByText('Cancel'))
     expect(onClose).toHaveBeenCalled()
   })
 
-  it('Save button calls addHost and onClose', async () => {
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) } as Response)
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) } as Response)
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ host_id: 'test:abc123' }) } as Response)
-
+  it('Escape key calls onClose', () => {
     const onClose = vi.fn()
     render(<AddHostDialog onClose={onClose} />)
-    fireEvent.change(screen.getByPlaceholderText('My Server'), { target: { value: 'My Host' } })
-    fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '10.0.0.1' } })
-    fireEvent.click(screen.getByText('Test Connection'))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('clicking backdrop calls onClose', () => {
+    const onClose = vi.fn()
+    render(<AddHostDialog onClose={onClose} />)
+    // The outer div is the backdrop
+    fireEvent.click(screen.getByRole('dialog'))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('successful pairing shows success message and enables Confirm', async () => {
+    vi.spyOn(hostApi, 'fetchPairVerify').mockResolvedValue({ setupSecret: 'secret123' })
+    vi.spyOn(pairingCodec, 'generatePurdexToken').mockReturnValue('purdex_' + 'a'.repeat(40))
+    vi.spyOn(pairingCodec, 'decodePairingCode').mockReturnValue({
+      ip: '10.0.0.1',
+      port: 7860,
+      secret: 'abc123',
+    })
+    vi.spyOn(pairingCodec, 'cleanPairingInput').mockReturnValue('ABCDEFGHIJKLM')
+
+    render(<AddHostDialog onClose={vi.fn()} />)
+    fireEvent.change(screen.getByPlaceholderText('XXXX-XXXX-XXXXX'), {
+      target: { value: 'ABCD-EFGH-IJKLM' },
+    })
+    fireEvent.click(screen.getByText('Pair'))
 
     await waitFor(() => {
-      expect(screen.getByText('Save')).toBeInTheDocument()
+      expect(screen.getByText('Paired successfully')).toBeInTheDocument()
     })
 
-    fireEvent.click(screen.getByText('Save'))
-    expect(onClose).toHaveBeenCalled()
+    const confirmBtn = screen.getByText('Confirm').closest('button')!
+    expect(confirmBtn).not.toBeDisabled()
+  })
 
-    // Verify host was added to store
+  it('failed pairing shows error and resets to idle', async () => {
+    vi.spyOn(hostApi, 'fetchPairVerify').mockRejectedValue(new hostApi.PairingError(403, 'forbidden'))
+    vi.spyOn(pairingCodec, 'decodePairingCode').mockReturnValue({
+      ip: '10.0.0.1',
+      port: 7860,
+      secret: 'abc123',
+    })
+    vi.spyOn(pairingCodec, 'cleanPairingInput').mockReturnValue('ABCDEFGHIJKLM')
+
+    render(<AddHostDialog onClose={vi.fn()} />)
+    fireEvent.change(screen.getByPlaceholderText('XXXX-XXXX-XXXXX'), {
+      target: { value: 'ABCD-EFGH-IJKLM' },
+    })
+    fireEvent.click(screen.getByText('Pair'))
+
+    await waitFor(() => {
+      expect(screen.getByText(/Pairing failed: HTTP 403/)).toBeInTheDocument()
+    })
+  })
+
+  it('invalid pairing code shows error immediately', () => {
+    vi.spyOn(pairingCodec, 'decodePairingCode').mockReturnValue(null)
+    vi.spyOn(pairingCodec, 'cleanPairingInput').mockReturnValue('ABCDEFGHIJKLM')
+
+    render(<AddHostDialog onClose={vi.fn()} />)
+    fireEvent.change(screen.getByPlaceholderText('XXXX-XXXX-XXXXX'), {
+      target: { value: 'ABCD-EFGH-IJKLM' },
+    })
+    fireEvent.click(screen.getByText('Pair'))
+
+    expect(screen.getByText('Invalid pairing code')).toBeInTheDocument()
+  })
+
+  it('Use Token checkbox enables host/port/token fields', () => {
+    render(<AddHostDialog onClose={vi.fn()} />)
+    const checkbox = screen.getByRole('checkbox')
+    fireEvent.click(checkbox)
+
+    const ipInput = screen.getByPlaceholderText('100.64.0.1')
+    expect(ipInput).not.toBeDisabled()
+    const portInput = screen.getByPlaceholderText('7860')
+    expect(portInput).not.toBeDisabled()
+  })
+
+  it('confirms with token route: calls fetchTokenAuth + addHost + onClose', async () => {
+    vi.spyOn(hostApi, 'fetchTokenAuth').mockResolvedValue({ ok: true })
+    const onClose = vi.fn()
+
+    render(<AddHostDialog onClose={onClose} />)
+
+    // Switch to token route
+    fireEvent.click(screen.getByRole('checkbox'))
+
+    // Fill IP and token
+    fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '10.0.0.1' } })
+    const tokenInput = screen.getByPlaceholderText('purdex_...')
+    fireEvent.change(tokenInput, { target: { value: 'purdex_' + 'a'.repeat(40) } })
+
+    fireEvent.click(screen.getByText('Confirm'))
+
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalled()
+    })
+
     const { hosts } = useHostStore.getState()
     const hostIds = Object.keys(hosts)
     expect(hostIds.length).toBe(1)
-    const addedHost = hosts[hostIds[0]]
-    expect(addedHost.name).toBe('My Host')
-    expect(addedHost.ip).toBe('10.0.0.1')
-    expect(addedHost.port).toBe(7860)
+    expect(hosts[hostIds[0]].ip).toBe('10.0.0.1')
+    expect(hosts[hostIds[0]].port).toBe(7860)
+  })
+
+  it('confirms with pairing route: calls fetchPairSetup + addHost + onClose', async () => {
+    vi.spyOn(hostApi, 'fetchPairVerify').mockResolvedValue({ setupSecret: 'secret123' })
+    vi.spyOn(hostApi, 'fetchPairSetup').mockResolvedValue({ ok: true })
+    vi.spyOn(pairingCodec, 'generatePurdexToken').mockReturnValue('purdex_' + 'a'.repeat(40))
+    vi.spyOn(pairingCodec, 'decodePairingCode').mockReturnValue({
+      ip: '10.0.0.1',
+      port: 7860,
+      secret: 'abc123',
+    })
+    vi.spyOn(pairingCodec, 'cleanPairingInput').mockReturnValue('ABCDEFGHIJKLM')
+
+    const onClose = vi.fn()
+    render(<AddHostDialog onClose={onClose} />)
+
+    // Enter pairing code and pair
+    fireEvent.change(screen.getByPlaceholderText('XXXX-XXXX-XXXXX'), {
+      target: { value: 'ABCD-EFGH-IJKLM' },
+    })
+    fireEvent.click(screen.getByText('Pair'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Paired successfully')).toBeInTheDocument()
+    })
+
+    // Confirm
+    fireEvent.click(screen.getByText('Confirm'))
+
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalled()
+    })
+
+    const { hosts } = useHostStore.getState()
+    const hostIds = Object.keys(hosts)
+    expect(hostIds.length).toBe(1)
+    expect(hosts[hostIds[0]].ip).toBe('10.0.0.1')
+    expect(hosts[hostIds[0]].port).toBe(7860)
   })
 })

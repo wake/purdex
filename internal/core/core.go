@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/wake/tmux-box/internal/config"
 	"github.com/wake/tmux-box/internal/tmux"
@@ -36,7 +37,11 @@ type Core struct {
 	Tmux     tmux.Executor
 	Registry *ServiceRegistry
 	Events   *EventsBroadcaster
-	Tickets  *TicketStore
+	Tickets      *TicketStore
+	Pairing      PairingState
+	SetupSecrets *SetupSecretStore
+	PairingSecret string  // hex(3 bytes), used for /api/pair/verify
+	failedVerify  int32   // atomic counter for brute-force protection
 	TmuxAliveFunc  func() bool // injected by session module; returns cached tmux reachability
 	modules        []Module
 	configChangeMu sync.Mutex // protects onConfigChange
@@ -53,8 +58,9 @@ func New(deps CoreDeps) *Core {
 		Cfg:      deps.Config,
 		Tmux:     deps.Tmux,
 		Registry: reg,
-		Events:   NewEventsBroadcaster(),
-		Tickets:  NewTicketStore(),
+		Events:       NewEventsBroadcaster(),
+		Tickets:      NewTicketStore(),
+		SetupSecrets: NewSetupSecretStore(5 * time.Minute),
 	}
 }
 
@@ -134,4 +140,7 @@ func (c *Core) RegisterCoreRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/config", c.handlePutConfig)
 	mux.HandleFunc("POST /api/ws-ticket", c.handleWsTicket)
 	mux.HandleFunc("GET /api/ready", c.handleReady)
+	mux.HandleFunc("POST /api/pair/verify", c.handlePairVerify)
+	mux.HandleFunc("POST /api/pair/setup", c.handlePairSetup)
+	mux.HandleFunc("POST /api/token/auth", c.handleTokenAuth)
 }

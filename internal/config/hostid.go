@@ -67,7 +67,7 @@ func WriteFile(path string, cfg Config) error {
 		return err
 	}
 	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}

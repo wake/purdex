@@ -55,6 +55,7 @@ func runServe(args []string) {
 	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/tbox/config.toml)")
 	bindOverride := fs.String("bind", "", "override bind address")
 	portOverride := fs.Int("port", 0, "override port")
+	quick := fs.Bool("quick", false, "quick setup mode with pairing code")
 	fs.Parse(args)
 
 	// 1. Load config
@@ -111,6 +112,9 @@ func runServe(args []string) {
 	// Set config path for persistence via PUT /api/config
 	c.CfgPath = resolvedCfgPath
 
+	// Phase 5a: Pairing initialization
+	initPairing(c, &cfg, resolvedCfgPath, *quick)
+
 	// 5. Add modules (order doesn't matter — topoSort handles dependencies)
 	c.AddModule(session.NewSessionModule(meta))
 	c.AddModule(cc.New())
@@ -148,7 +152,14 @@ func runServe(args []string) {
 		http.HandlerFunc(c.HandleHealth)))
 	outerMux.Handle("/", middleware.CORS(
 		middleware.IPWhitelist(cfg.Allow)(
-			middleware.TokenAuth(cfg.Token, c.Tickets)(mux))))
+			middleware.PairingGuard(func() bool {
+				return c.Pairing.Get() == core.StatePairing
+			})(
+				middleware.TokenAuth(func() string {
+					c.CfgMu.RLock()
+					defer c.CfgMu.RUnlock()
+					return c.Cfg.Token
+				}, c.Tickets)(mux)))))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
 	srv := &http.Server{

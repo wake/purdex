@@ -380,5 +380,18 @@
   "connection.reconnect": "重新連線",
 
   "notification.daemon_refused": "{{name}} — Daemon 未啟動",
-  "notification.tmux_down": "{{name}} — tmux 環境無法連線"
+  "notification.tmux_down": "{{name}} — tmux 環境無法連線",
+
+  "hosts.pairing_code": "配對碼",
+  "hosts.pair_button": "配對",
+  "hosts.use_token": "使用 Token 連線（已有 Token）",
+  "hosts.token_generate_hint": "隨機產生 Token",
+  "hosts.pairing_connecting": "驗證配對碼中…",
+  "hosts.pairing_success": "配對成功",
+  "hosts.pairing_failed": "配對失敗",
+  "hosts.pairing_retry": "請重新輸入配對碼",
+  "hosts.invalid_pairing_code": "無效的配對碼",
+  "hosts.token_too_short": "Token 長度至少需要 20 字元",
+  "hosts.saving": "儲存中…",
+  "hosts.confirm": "確認"
 }
