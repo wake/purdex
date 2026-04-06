@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0-alpha.51] - 2026-04-07
+
+Phase 7.2 — UI 元件修正 (PR #187, #139, #179)
+
+### 修正
+
+- **HostSidebar auto-expand (#139)** — selectedHostId 變更時（如 host 刪除 fallback）自動展開新 host，用 derived state（`||`）取代 useEffect
+- **WebGL context loss handler (#179 L1)** — `onContextLoss` → dispose addon → fallback DomRenderer → re-fit，防止 terminal 切離再切回時縮小
+- **TabContent visibility:hidden (#179 L2)** — 取代 `left:-9999em` off-screen hack，語意更正確
+- **keepAliveCount WebGL cap (#179 L3)** — WebGL 上限 6、DOM 上限 10，DOM→WebGL 切換時 auto-clamp，settings 顯示 hint
+
+### 關閉（無需修復）
+
+- **#140** — 已在 commit `e8cfe7ff` 修復（empty draft 跳過驗證）
+- **#157** — storage key 切換早於欄位新增，舊資料已遺棄
+- **#176** — 架構上場景不成立（inactive tab off-screen）
+
+### 測試
+
+- Tests: 906 → **912**（新增 HostSidebar auto-expand、TabContent visibility、TerminalSection WebGL cap、WebGL context loss 行為測試）
+
 ## [1.0.0-alpha.50] - 2026-04-06
 
 Phase 7.1 — Lint + Agent Store 修正 (PR #183, #175, #105, #92, #93, #94, #126, #124, #110, #169)
