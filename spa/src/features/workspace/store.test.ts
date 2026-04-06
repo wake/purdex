@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useWorkspaceStore } from './useWorkspaceStore'
+import { useWorkspaceStore } from './store'
 
 describe('useWorkspaceStore', () => {
   beforeEach(() => {
@@ -80,5 +80,15 @@ describe('useWorkspaceStore', () => {
     useWorkspaceStore.getState().setActiveWorkspace(ws2.id)
     useWorkspaceStore.getState().removeWorkspace(ws2.id)
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(useWorkspaceStore.getState().workspaces[0].id)
+  })
+
+  it('addWorkspace passes icon to createWorkspace', () => {
+    const ws = useWorkspaceStore.getState().addWorkspace('WithIcon', { icon: 'R' })
+    expect(ws.icon).toBe('R')
+  })
+
+  it('addWorkspace passes color to createWorkspace', () => {
+    const ws = useWorkspaceStore.getState().addWorkspace('WithColor', { color: '#ff0000' })
+    expect(ws.color).toBe('#ff0000')
   })
 })

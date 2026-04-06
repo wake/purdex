@@ -56,11 +56,12 @@ export function createTab(content: PaneContent, opts?: { pinned?: boolean }): Ta
   }
 }
 
-export function createWorkspace(name: string, color?: string): Workspace {
+export function createWorkspace(name: string, color?: string, icon?: string): Workspace {
   return {
     id: generateId(),
     name,
     color: color ?? WORKSPACE_COLORS[Math.floor(Math.random() * WORKSPACE_COLORS.length)],
+    icon,
     tabs: [],
     activeTabId: null,
   }
