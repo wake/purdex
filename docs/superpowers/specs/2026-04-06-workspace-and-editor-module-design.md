@@ -11,79 +11,42 @@
 
 本文件是對既有 UI 設計 spec 的補充修訂，涵蓋三個面向：
 
-1. **Workspace 強化** — 新增預設 host/path、快捷鍵切換、quick actions
+1. **Workspace 強化** — 模組化、設定 UI、位置制快捷鍵切換
 2. **Editor Module 擴充** — 完整 Monaco editor 整合、明確存檔機制、二進制檔案預覽
 3. **File Opener Registry** — 模組化的檔案開啟機制，解耦 file tree 與 editor
 
-實作順序：Workspace 強化 → Side Panel 系統（Phase 3 照既有設計）→ Editor Module。
+實作順序：Workspace 強化（Phase 7）→ Side Panel 系統（Phase 8）→ Editor Module（Phase 9）。
 
 ---
 
 ## 2. Workspace 強化（修訂 Section 4）
 
-### 2.1 擴充 Workspace Interface
+### 2.1 Workspace 模組化
 
-```typescript
-interface Workspace {
-  // 既有欄位
-  id: string
-  name: string
-  color: string
-  icon?: string
-  tabs: string[]
-  activeTabId: string | null
-  sidebarState: WorkspaceSidebarState
-  directories: PinnedItem[]
+Workspace type 不需新增欄位，既有 `id/name/color/icon/tabs/activeTabId` 已足夠。
+重點在模組完整性：Tab 生命週期管理、設定 UI、位置制快捷鍵。
 
-  // 新增欄位
-  defaultHostId?: string   // 快速操作預設 host
-  defaultPath?: string     // 快速操作預設工作目錄
-  hotkey?: string          // 切換快捷鍵（如 ⌘1, ⌘2）
-}
-```
+### 2.2 設定 UI
 
-### 2.2 預設 Host / Path
+進入方式：Activity Bar 工作區圖示右鍵 →「設定」
 
-- 工作區可設定一組預設的 `hostId` + `path`，作為快速操作的 context
-- 不影響工作區內 tab 的歸屬——workspace 與 host/tab 之間沒有耦合關係
-- 用途：一鍵在指定目錄啟動 agent session（Claude Code CLI、Codex CLI 等）
+設定面板內容：
+- 名稱編輯
+- 顏色選擇器（既有色盤 + 自訂色碼）
+- Icon 選擇（Phosphor Icons 列表或 emoji）
 
-**設定入口：**
-- 工作區右鍵選單 → 「設定」
-- 工作區 dashboard（進階功能）
+### 2.3 快捷鍵切換（位置制）
 
-### 2.3 快捷鍵切換
+與既有 tab 切換快捷鍵並存，不衝突：
 
-- 每個工作區可綁定一個快捷鍵（如 `⌘1`、`⌘2`、自訂組合鍵）
-- 按下快捷鍵 → 切換到該工作區（等同點擊 Activity Bar）
-- 快捷鍵衝突偵測：設定時檢查是否與系統/其他工作區快捷鍵衝突
-- 儲存在 workspace store，持久化
-
-### 2.4 Quick Actions
-
-基於 `defaultHostId` + `defaultPath` 的快速操作：
-
-| Action | 說明 |
+| 快捷鍵 | 動作 |
 |--------|------|
-| 新增 Terminal Session | 在預設 host/path 建立 tmux session，自動加入工作區 |
-| 啟動 Claude Code | 在預設 path 啟動 `claude -p` stream session |
-| 啟動 Codex | 在預設 path 啟動 codex CLI stream session |
-| 開啟目錄 | 在 file tree panel 開啟預設 path |
+| `⌘1`-`⌘8` | 切換 tab（既有，不動） |
+| `⌘9` | 最後一個 tab（既有，不動） |
+| `⌘⌥1`-`⌘⌥9` | 跳至第 N 個 workspace |
+| `⌘⌥↑` / `⌘⌥↓` | 前/後 workspace 循環切換 |
 
-Quick actions 的觸發方式：
-- Activity Bar 工作區圖示右鍵選單
-- 工作區 dashboard
-- Command palette（未來）
-
-### 2.5 Workspace Dashboard（進階）
-
-每個工作區可選擇性地有自己的 dashboard tab，顯示：
-- 工作區內 session 狀態總覽
-- 預設 host 連線狀態
-- Quick actions 按鈕
-- 最近操作的檔案
-
-Dashboard 為選用功能，不是必要的。
+位置根據 `workspaces` 陣列順序（即 Activity Bar 排列順序）。
 
 ---
 
@@ -341,23 +304,17 @@ Buffer 在 tab 關閉時清除。未存檔的 tab 關閉前需確認。
 
 ## 7. 實作順序
 
-### Phase A：Workspace 強化
+### Phase 7：Workspace 強化
 
-對應既有 spec Phase 2 的延伸。
+1. Workspace 模組化（tab 生命週期、store API 完備性）
+2. Workspace 設定 UI（右鍵選單 → 名稱/顏色/icon）
+3. 位置制快捷鍵（⌘⌥1-9 + ⌘⌥↑/↓）
 
-1. 擴充 `Workspace` type（`defaultHostId`、`defaultPath`、`hotkey`）
-2. Workspace 設定 UI（右鍵選單 → 設定面板）
-3. 快捷鍵註冊與切換邏輯
-4. Quick actions（基於 defaultHost/Path 建立 session）
-5. Workspace dashboard tab（選用）
+### Phase 8：Side Panel 系統
 
-### Phase B：Side Panel 系統
+照既有 UI spec Phase 3，無修訂。
 
-照既有 spec Phase 3，無修訂。
-
-### Phase C：Editor Module
-
-對應既有 spec Phase 4 的擴充。
+### Phase 9：Editor Module
 
 1. Daemon `fs` module — CRUD API（list/read/write/stat/mkdir/delete/rename）
 2. SPA `fs-api.ts` 封裝層
