@@ -9,8 +9,7 @@ import { compositeKey } from '../../lib/composite-key'
 
 const mockOpenSingletonTab = vi.fn(() => 'tab-1')
 const mockSetActiveTab = vi.fn()
-const mockAddTabToWorkspace = vi.fn()
-const mockSetWorkspaceActiveTab = vi.fn()
+const mockInsertTab = vi.fn()
 
 vi.mock('../../stores/useTabStore', () => ({
   useTabStore: {
@@ -24,9 +23,7 @@ vi.mock('../../stores/useTabStore', () => ({
 vi.mock('../../stores/useWorkspaceStore', () => ({
   useWorkspaceStore: {
     getState: () => ({
-      activeWorkspaceId: null,
-      addTabToWorkspace: mockAddTabToWorkspace,
-      setWorkspaceActiveTab: mockSetWorkspaceActiveTab,
+      insertTab: mockInsertTab,
     }),
   },
 }))
@@ -45,6 +42,7 @@ beforeEach(() => {
   cleanup()
   mockOpenSingletonTab.mockClear()
   mockSetActiveTab.mockClear()
+  mockInsertTab.mockClear()
   useSessionStore.setState({ sessions: { [HOST_ID]: SESSIONS } })
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 } },

@@ -104,11 +104,7 @@ export default function App() {
           useTabStore.getState().addTab(tab)
           useTabStore.getState().setActiveTab(tab.id)
           // Restore workspace membership if receiving window has an active workspace
-          const wsId = useWorkspaceStore.getState().activeWorkspaceId
-          if (wsId) {
-            useWorkspaceStore.getState().addTabToWorkspace(wsId, tab.id)
-            useWorkspaceStore.getState().setWorkspaceActiveTab(wsId, tab.id)
-          }
+          useWorkspaceStore.getState().insertTab(tab.id)
         }
       } catch { /* ignore malformed tab JSON */ }
     })
@@ -195,18 +191,12 @@ export default function App() {
           onAddWorkspace={() => {}}
           onOpenHosts={() => {
             const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
-            if (activeWorkspaceId) {
-              useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tabId)
-              useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tabId)
-            }
+            useWorkspaceStore.getState().insertTab(tabId)
             handleSelectTab(tabId)
           }}
           onOpenSettings={() => {
             const tabId = useTabStore.getState().openSingletonTab({ kind: 'settings', scope: 'global' })
-            if (activeWorkspaceId) {
-              useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tabId)
-              useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tabId)
-            }
+            useWorkspaceStore.getState().insertTab(tabId)
             handleSelectTab(tabId)
           }}
         />
@@ -237,10 +227,7 @@ export default function App() {
             }}
             onNavigateToHost={(hostId) => {
               const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
-              if (activeWorkspaceId) {
-                useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tabId)
-                useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tabId)
-              }
+              useWorkspaceStore.getState().insertTab(tabId)
               handleSelectTab(tabId)
               useHostStore.getState().setActiveHost(hostId)
             }}

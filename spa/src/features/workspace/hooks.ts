@@ -57,11 +57,8 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     const tab = createTab({ kind: 'new-tab' })
     addTab(tab)
     setActiveTab(tab.id)
-    if (activeWorkspaceId) {
-      useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tab.id)
-      useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tab.id)
-    }
-  }, [addTab, setActiveTab, activeWorkspaceId])
+    useWorkspaceStore.getState().insertTab(tab.id)
+  }, [addTab, setActiveTab])
 
   const handleReorderTabs = useCallback((order: string[]) => {
     if (activeWorkspaceId) {

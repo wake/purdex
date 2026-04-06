@@ -219,11 +219,7 @@ function handleNotificationClick(action: NotificationAction): void {
         const newTab = createTab({ kind: 'tmux-session', hostId, sessionCode, mode: 'stream', cachedName: sessionName, tmuxInstance: '' })
         useTabStore.getState().addTab(newTab)
         useTabStore.getState().setActiveTab(newTab.id)
-        const activeWorkspaceId = useWorkspaceStore.getState().activeWorkspaceId
-        if (activeWorkspaceId) {
-          useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, newTab.id)
-          useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, newTab.id)
-        }
+        useWorkspaceStore.getState().insertTab(newTab.id)
         handled = true
       }
 
