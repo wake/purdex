@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.0.0-alpha.49] - 2026-04-06
+
+Phase 6 — Hooks 統一架構 (PR #181, #150, #109, #108, #103, #142, #127)
+
+### 新功能
+
+- **Daemon API 統一** — tmux 和 CC hooks 統一為 `/api/hooks/{module}/status` + `/setup` 路由模式
+- **HookModule 介面** — 新增模組化架構，新 hook module 只需加一個 config 物件
+- **HookModuleCard 元件** — 通用 card 元件，含安裝/移除按鈕、事件狀態、loading spinner
+- **Agent Hooks UI 完成** — CC hooks 從 stub 升級為完整的安裝/移除/狀態/錯誤 UI
+- **Model Name 持久化 (#127)** — `models` map 防止 model name 被後續事件覆寫
+- **觸發時間顯示 (#142)** — `getLastTrigger` API + 相對時間顯示（剛剛 / Nm ago / Nh ago）
+
+### 修正
+
+- **StatusBar reactivity** — model badge 改用 reactive store selector，確保 hook event 到達後即時更新
+- **getLastTrigger 解耦** — 從 lib 層移除 store 依賴，改為純函式 + `useMemo` 穩定引用
+- **setup() unmount guard** — `mountedRef` 防止 unmount 後 setState
+- **exec.Command timeout** — CC hook setup 加入 30s context timeout
+- **Response agent_type 移除** — hook status/setup API 回應不再包含多餘的 `agent_type` 欄位
+- **i18n placeholder** — 修正 `{n}` → `{{n}}` 格式
+
+### 改善
+
+- **useModuleHook** — 共用 data-fetching hook，管理 loading/error/status 生命週期
+- **死路徑清除** — 移除 `useHookStatus`、`App.tsx` init fetch、`hooksInstalled` 欄位、舊 API 函式
+- **測試覆蓋** — 新增 `HookModuleCard.test.tsx`（13 tests）、`useModuleHook.test.ts`（9 tests）、`hooks_test.go`（5 tests）、setup handler tests（4 tests）、reactive tests
+
+### 關閉 Issues
+
+- #150, #109, #108, #103, #142, #127, #114, #64
+
 ## [1.0.0-alpha.48] - 2026-04-06
 
 api.ts 舊 API 層缺 auth — 遷移至 hostFetch 統一認證 (PR #180, #177)
