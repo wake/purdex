@@ -45,7 +45,7 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	info := map[string]string{
 		"host_id":       hostID,
 		"tmux_instance": config.GetTmuxInstance(),
-		"tbox_version":  Version,
+		"purdex_version": Version,
 		"tmux_version":  getTmuxVersion(),
 		"os":            runtime.GOOS,
 		"arch":          runtime.GOARCH,

@@ -26,7 +26,7 @@ export interface HostRuntime {
 export interface HostInfo {
   host_id: string
   tmux_instance: string
-  tbox_version: string
+  purdex_version: string
   tmux_version: string
   os: string
   arch: string

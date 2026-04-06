@@ -9,7 +9,7 @@ import {
 
 const HOST_ID = 'test-host'
 const BASE = 'http://100.64.0.2:7860'
-const TOKEN = 'tbox_test_token'
+const TOKEN = 'purdex_test_token'
 
 const mockSession: Session = {
   code: 'abc123', name: 'test', cwd: '/tmp', mode: 'terminal',
