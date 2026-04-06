@@ -38,12 +38,14 @@
 
 - 允許 0 個 workspace，workspace 為可選的分組機制
 - `activeWorkspaceId` 型別從 `string` 改為 `string | null`，0 workspace 時為 `null`
+- `setActiveWorkspace` 參數型別同步改為 `string | null`
 - 無 workspace 時：
   - Activity Bar workspace 區塊為空
   - Tab bar 顯示所有 tab（fallback 到 `tabOrder`）
   - Titlebar chip 隱藏
 - 建立第一個 workspace 時：若已有 standalone tab，詢問使用者是否要把現有 tab 移入
 - Workspace 刪除時：若有分頁，顯示確認對話框，列出所有分頁供勾選關閉，未勾選的回歸 standalone
+- 刪除 workspace 時關閉的 tab **記錄到 history**（可透過 reopen-closed-tab 恢復為 standalone）
 - 刪除最後一個 workspace 後，`activeWorkspaceId` 設為 `null`
 
 ### 3.2 Feature Module 架構
@@ -90,20 +92,25 @@ spa/src/features/{name}/
 **需更新 import path 的檔案：**
 - `spa/src/App.tsx`
 - `spa/src/hooks/useShortcuts.ts`
+- `spa/src/hooks/useShortcuts.test.ts`
 - `spa/src/hooks/useNotificationDispatcher.ts`
 - `spa/src/components/hosts/SessionsSection.tsx`
-- `spa/src/components/SortableTab.tsx`
-- `spa/src/stores/useWorkspaceStore.test.ts`（隨 store 搬遷）
-- `spa/src/hooks/useShortcuts.test.ts`
 - `spa/src/components/hosts/SessionsSection.test.tsx`
+- `spa/src/components/SortableTab.tsx`
+- `spa/src/components/ActivityBar.test.tsx`（隨 ActivityBar 搬遷）
+- `spa/src/stores/useWorkspaceStore.test.ts`（隨 store 搬遷）
 
 **建立：**
 - `features/workspace/index.ts`：匯出 public API（store、hooks、re-export 共用型別）
+
+**既有 bug 修正（順便處理）：**
+- `createWorkspace(name, color?)` 加入 `icon?` 參數（目前 `addWorkspace` 接收 `icon` 但未傳給工廠函式）
 
 ### 10.1 Workspace 模組化（全自由制）
 
 **Store 型別變更：**
 - `activeWorkspaceId: string` → `activeWorkspaceId: string | null`
+- `setActiveWorkspace(wsId: string)` → `setActiveWorkspace(wsId: string | null)`
 - `createDefaultState()` 改為 `{ workspaces: [], activeWorkspaceId: null }`
 - `removeWorkspace` 移除 `workspaces.length <= 1` 守衛，刪除最後一個時設 `activeWorkspaceId: null`
 - `reset()` 對應修改
@@ -113,9 +120,18 @@ spa/src/features/{name}/
 - 既有使用者：保留原有 workspace 和 activeWorkspaceId 不變（向下相容）
 - 新裝置：初始為 `workspaces: []`、`activeWorkspaceId: null`
 
-**Tab 生命週期 helper：**
-- `insertTab(tabId, workspaceId?)` 封裝「加入 workspace + set active」邏輯
-- `workspaceId` 為 `undefined/null` 時 tab 成為 standalone
+**Tab 生命週期 helper——`insertTab` store action：**
+
+```typescript
+// store action，可直接讀取自身 state
+insertTab: (tabId: string, workspaceId?: string | null) => void
+```
+
+- 定義為 **store action**（非 hooks utility），因為需要讀取 `activeWorkspaceId`
+- `workspaceId` 省略時：自動讀取 `activeWorkspaceId`，若有則加入該 workspace，若為 `null` 則 tab 成為 standalone
+- `workspaceId` 明確傳入 `null`：強制 standalone
+- `workspaceId` 明確傳入字串：加入指定 workspace
+- 內部邏輯：`addTabToWorkspace(wsId, tabId)` + `setWorkspaceActiveTab(wsId, tabId)`
 - 替換以下散落的重複呼叫：
   - `App.tsx`（3 處：tearOff tab、onOpenHosts、onOpenSettings）
   - `useShortcuts.ts`（3 處：open-settings、open-history、reopen-closed-tab）
@@ -123,24 +139,24 @@ spa/src/features/{name}/
   - `hooks/useNotificationDispatcher.ts`
   - `components/hosts/SessionsSection.tsx`
 
-**0 workspace 時的 displayTabs 邏輯：**
-- 目前 `App.tsx` 在 `activeWs` 為 `undefined` 時 `visibleTabs` 為 `[]`，需修正
-- 0 workspace 時 fallback 為 `tabOrder` 全部 tab
+**統一 displayTabs 邏輯——提取 `getVisibleTabIds`：**
+- 目前 `App.tsx` 和 `useShortcuts.ts` 各有一份 `displayTabs` / `getVisibleTabIds` 邏輯，行為分叉
+- 提取為共用函式 `features/workspace/lib/getVisibleTabIds.ts`
+- 統一行為：有 active workspace → 該 workspace 的 tabs；有 active standalone tab → 僅該 tab；0 workspace → fallback 到 `tabOrder` 全部 tab
+- `App.tsx` 和 `useShortcuts.ts` 共用此函式
 
 **首個 workspace 建立詢問：**
-- 觸發位置：`addWorkspace` action 或 ActivityBar 的 `onAddWorkspace` callback
-- 條件：`workspaces.length === 0 && tabOrder.length > 0` 時彈出
-- 選「是」→ 批次 `addTabToWorkspace`，選「否」→ 建空 workspace
-
-**既有 bug 修正：**
-- `createWorkspace(name, color?)` 加入 `icon?` 參數（目前 `addWorkspace` 接收 `icon` 但未傳給工廠函式）
+- 觸發位置：ActivityBar 的 `onAddWorkspace` callback（**UI 層**，非 store action）
+- 實作在 App.tsx 或 ActivityBar 的 wrapper 元件中
+- 條件：`workspaces.length === 0 && tabOrder.length > 0` 時彈出對話框
+- 選「是」→ 建立 workspace + 批次 `addTabToWorkspace`，選「否」→ 建空 workspace
 
 ### 10.2 Workspace 刪除確認 UI
 
 - `WorkspaceDeleteDialog` 元件
 - Props：接收 `workspaceId`，內部讀取 `useWorkspaceStore` 取 tab ID 列表 + `useTabStore` 解析 tab 顯示名稱（透過 `getPaneLabel`）
 - 顯示 workspace 內所有分頁清單，每個分頁前方有「關閉」checkbox（預設 checked）
-- 確認後：checked 的 tab 關閉，unchecked 的回歸 standalone
+- 確認後：checked 的 tab 走 `handleCloseTab`（**記錄到 history**，可 reopen），unchecked 的回歸 standalone
 - 無分頁時直接刪除，不彈對話框
 
 ### 10.3 Workspace 設定 UI
@@ -148,7 +164,7 @@ spa/src/features/{name}/
 **Titlebar Chip + 右鍵選單（方案 3+5）：**
 
 - **Electron 模式**：Titlebar 左側（traffic lights 右、tabs 左）顯示 workspace chip：色點 + 名稱 + 下拉箭頭
-- **SPA 模式**（瀏覽器）：chip 放在 TabBar 最左側（同位置，但無 traffic lights）
+- **SPA 模式**（瀏覽器）：chip 放在 TabBar 元件內部最左側（TabBar 的 props 擴充 `workspaceChip`）
 - 無 workspace 時 chip 隱藏，tab 佔滿全寬
 - 操作透過右鍵選單（Activity Bar icon 或 chip 皆可觸發）：
   - 重新命名
@@ -171,7 +187,9 @@ spa/src/features/{name}/
 
 實作要點：
 - Electron 端：`keybindings.ts` 新增 `switch-workspace-1` ~ `switch-workspace-9` + `prev-workspace` / `next-workspace`
-- `menuCategory: 'Tab'`、`menuGroup: 'workspace-nav'`（新增 group，需更新 `MenuGroup` type）
+- `menuGroup: 'workspace-nav'`（新增 group，需更新 `MenuGroup` type union）
+- `buildMenuTemplate` 的 Tab submenu 需加入 `workspace-nav` group 的分隔線和項目
+- Native menu label 固定為「Workspace 1」~「Workspace 9」，不動態反映 workspace 名稱
 - SPA 端：workspace hooks 新增快捷鍵切換 handler
 - 位置根據 `workspaces` 陣列順序（即 Activity Bar 的排列順序）
 - 無 workspace 時快捷鍵靜默忽略
@@ -195,14 +213,16 @@ spa/src/features/{name}/
 ## 6. 測試策略
 
 - 10.0：搬遷後全 test suite pass（純 refactor，無行為變更）
-  - 既有 `useWorkspaceStore.test.ts` 隨 store 搬遷，更新 import path
+  - 既有 `useWorkspaceStore.test.ts`、`ActivityBar.test.tsx` 隨搬遷更新 import path
+  - `createWorkspace` icon 參數 bug 修正 + 對應測試
 - 10.1：store unit test
   - `activeWorkspaceId: string | null` 型別驗證
-  - 0 workspace 狀態（初始化、刪除最後一個）
-  - `insertTab` helper（有/無 workspaceId）
-  - migration v1→v2（既有資料保留）
-  - displayTabs fallback（0 workspace 時顯示 tabOrder）
+  - `setActiveWorkspace(null)` 行為正確
+  - 0 workspace 狀態（初始化、刪除最後一個、`removeWorkspace` 不 crash）
+  - `insertTab` store action（省略 wsId → 用 active；null → standalone；明確 wsId → 指定）
+  - migration v1→v2（既有資料保留、新裝置空陣列）
+  - `getVisibleTabIds` 共用函式（0 workspace fallback tabOrder）
   - 反轉既有「cannot remove last workspace」測試
-- 10.2：WorkspaceDeleteDialog component test（checkbox 切換、確認/取消、tab 狀態）
-- 10.3：chip 渲染 + 右鍵選單觸發 + 名稱/顏色/icon 儲存
-- 10.4：快捷鍵 action dispatch + workspace 切換正確性 + 0 workspace 時靜默
+- 10.2：WorkspaceDeleteDialog component test（checkbox 切換、確認/取消、tab 走 history）
+- 10.3：chip 渲染（Electron/SPA 模式）+ 右鍵選單觸發 + 名稱/顏色/icon 儲存
+- 10.4：快捷鍵 action dispatch + workspace 切換正確性 + 0 workspace 時靜默 + `buildMenuTemplate` 產出正確選單結構
