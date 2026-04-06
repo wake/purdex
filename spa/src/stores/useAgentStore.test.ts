@@ -1,6 +1,6 @@
 // spa/src/stores/useAgentStore.test.ts
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useAgentStore, getAgentLabel } from './useAgentStore'
+import { useAgentStore } from './useAgentStore'
 import { useTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
 import type { AgentHookEvent } from './useAgentStore'
@@ -464,17 +464,17 @@ describe('useAgentStore', () => {
       expect(useAgentStore.getState().models['other:dev']).toBe('claude-opus-4-6')
     })
 
-    it('getAgentLabel returns model from models map', () => {
+    it('models map is accessible via getState()', () => {
       useAgentStore.getState().handleHookEvent(H, 'dev', {
         tmux_session: 'dev', event_name: 'SessionStart',
         raw_event: { modelName: 'claude-sonnet-4-6' },
         agent_type: 'cc', broadcast_ts: Date.now(),
       })
-      expect(getAgentLabel(`${H}:dev`)).toBe('claude-sonnet-4-6')
+      expect(useAgentStore.getState().models[`${H}:dev`]).toBe('claude-sonnet-4-6')
     })
 
-    it('getAgentLabel returns null when no model', () => {
-      expect(getAgentLabel(`${H}:unknown`)).toBeNull()
+    it('models map returns undefined for unknown key', () => {
+      expect(useAgentStore.getState().models[`${H}:unknown`]).toBeUndefined()
     })
   })
 

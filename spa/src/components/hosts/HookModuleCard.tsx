@@ -1,4 +1,4 @@
-import { CheckCircle, XCircle, DownloadSimple, Trash, WarningCircle } from '@phosphor-icons/react'
+import { CheckCircle, XCircle, DownloadSimple, Trash, WarningCircle, CircleNotch } from '@phosphor-icons/react'
 import { useModuleHook } from '../../hooks/useModuleHook'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -49,6 +49,13 @@ export function HookModuleCard({ module, hostId, refreshKey }: Props) {
         {status && <StatusBadge installed={status.installed} t={t} />}
       </div>
       <p className="text-xs text-text-muted mb-3">{t(module.descKey)}</p>
+
+      {loading && !status && !error && (
+        <div className="flex items-center gap-1.5 text-xs text-text-muted mb-3">
+          <CircleNotch size={14} className="animate-spin" />
+          <span>{t('hosts.loading')}</span>
+        </div>
+      )}
 
       {error && (
         <div className="flex items-center gap-1.5 text-xs text-red-400 mb-3">

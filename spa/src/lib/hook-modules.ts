@@ -1,5 +1,4 @@
 import { hostFetch } from './host-api'
-import { useAgentStore } from '../stores/useAgentStore'
 
 /* ─── Types ─── */
 
@@ -20,7 +19,7 @@ export interface HookModule {
   descKey: string
   fetchStatus: (hostId: string) => Promise<HookModuleStatus>
   setup: (hostId: string, action: 'install' | 'remove') => Promise<HookModuleStatus>
-  getLastTrigger?: (hostId: string) => Record<string, number> | null
+  getLastTrigger?: (hostId: string, events: Record<string, { event_name: string; broadcast_ts: number }>) => Record<string, number> | null
 }
 
 /* ─── Shared fetch helper ─── */
@@ -57,9 +56,7 @@ const CC_HOOKS: HookModule = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action }),
     }),
-  getLastTrigger: (hostId) => {
-    // Non-React context: use getState(), not hook syntax
-    const events = useAgentStore.getState().events
+  getLastTrigger: (hostId, events) => {
     const prefix = `${hostId}:`
     const result: Record<string, number> = {}
     for (const [key, event] of Object.entries(events)) {

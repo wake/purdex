@@ -76,6 +76,23 @@ describe('useModuleHook', () => {
     expect(mod.setup).toHaveBeenCalledWith('host-1', 'remove')
   })
 
+  it('setup() does not update state after unmount', async () => {
+    let resolveSetup: (v: HookModuleStatus) => void
+    const setupPromise = new Promise<HookModuleStatus>((r) => { resolveSetup = r })
+    const mod = mockModule({
+      setup: vi.fn(() => setupPromise),
+    })
+    const { result, unmount } = renderHook(() => useModuleHook(mod, 'host-1', 0))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    // Start setup, then unmount before it resolves
+    const setupPromiseRef = act(async () => { await result.current.setup('install') })
+    unmount()
+    resolveSetup!(PARTIAL_STATUS)
+    await setupPromiseRef
+    // Status should remain from initial fetch, not from setup
+    expect(result.current.status).toEqual(OK_STATUS)
+  })
+
   it('setup() failure shows error', async () => {
     const mod = mockModule({
       setup: vi.fn(() => Promise.reject(new Error('500 Internal Server Error'))),
@@ -100,7 +117,7 @@ describe('useModuleHook', () => {
 
   it('returns lastTrigger from module.getLastTrigger', async () => {
     const triggers = { SessionStart: 1700000000000 }
-    const mod = mockModule({ getLastTrigger: () => triggers })
+    const mod = mockModule({ getLastTrigger: (_hostId, _events) => triggers })
     const { result } = renderHook(() => useModuleHook(mod, 'host-1', 0))
     await waitFor(() => expect(result.current.loading).toBe(false))
     expect(result.current.lastTrigger).toEqual(triggers)

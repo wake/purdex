@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react'
 import { StatusBar } from './StatusBar'
 import { createTab } from '../types/tab'
 import type { Tab, PaneContent } from '../types/tab'
@@ -151,6 +151,21 @@ describe('StatusBar agent label badge', () => {
     const badge = screen.getByTestId('agent-label')
     expect(badge.textContent).toBe('Claude Opus 4')
     expect(badge.className).toContain('border')
+  })
+
+  it('reactively shows badge when models updates after mount', async () => {
+    const ck = compositeKey(HOST_ID, 'dev001')
+    useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, models: {} })
+    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    expect(screen.queryByTestId('agent-label')).toBeNull()
+    act(() => {
+      useAgentStore.setState({ models: { [ck]: 'Claude Sonnet 4' } })
+    })
+    await waitFor(() => {
+      const badge = screen.getByTestId('agent-label')
+      expect(badge.textContent).toBe('Claude Sonnet 4')
+    })
   })
 
   it('does not render badge when no model in models map', () => {

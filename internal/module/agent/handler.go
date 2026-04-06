@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -93,10 +94,9 @@ func (m *Module) handleHookStatus(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"agent_type": "cc",
-			"installed":  false,
-			"events":     map[string]any{},
-			"issues":     []string{"settings.json not found"},
+			"installed": false,
+			"events":    map[string]any{},
+			"issues":    []string{"settings.json not found"},
 		})
 		return
 	}
@@ -131,10 +131,9 @@ func (m *Module) handleHookStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"agent_type": "cc",
-		"installed":  allInstalled,
-		"events":     events,
-		"issues":     issues,
+		"installed": allInstalled,
+		"events":    events,
+		"issues":    issues,
 	})
 }
 
@@ -198,7 +197,9 @@ func (m *Module) handleHookSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := exec.Command(tboxPath, args...)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, tboxPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")

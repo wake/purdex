@@ -4,7 +4,7 @@ import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
-import { getAgentLabel } from '../stores/useAgentStore'
+import { useAgentStore } from '../stores/useAgentStore'
 import { useUploadStore } from '../stores/useUploadStore'
 import { compositeKey } from '../lib/composite-key'
 import { useClickOutside } from '../hooks/useClickOutside'
@@ -101,6 +101,7 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost }: Pro
   )
   const hostConfig = useHostStore((s) => agentHostId ? s.hosts[agentHostId] : null)
   const hostRuntime = useHostStore((s) => agentHostId ? s.runtime[agentHostId] : null)
+  const agentLabel = useAgentStore((s) => agentCk ? s.models[agentCk] ?? null : null)
   const closeMenu = useCallback(() => setMenuOpen(false), [])
   useClickOutside(menuRef, closeMenu)
 
@@ -151,15 +152,11 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost }: Pro
             ? t('hosts.error_tmux_down')
             : status}
       </span>
-      {agentCk && getAgentLabel(agentCk) && (() => {
-        const label = getAgentLabel(agentCk)!
-        const badgeClass = 'bg-[rgba(154,96,56,0.15)] text-[#e8956a] border-[rgba(180,110,65,0.3)]'
-        return (
-          <span className={`px-[7px] rounded-[3px] border text-[10px] leading-4 ${badgeClass}`} data-testid="agent-label">
-            {label}
-          </span>
-        )
-      })()}
+      {agentLabel && (
+        <span className="px-[7px] rounded-[3px] border text-[10px] leading-4 bg-[rgba(154,96,56,0.15)] text-[#e8956a] border-[rgba(180,110,65,0.3)]" data-testid="agent-label">
+          {agentLabel}
+        </span>
+      )}
       <UploadStatus hostId={agentHostId} sessionCode={agentSessionCode} t={t} />
       <span className="ml-auto flex items-center">
         <div className="relative" ref={menuRef}>

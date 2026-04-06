@@ -62,12 +62,6 @@ export function deriveStatus(eventName: string, rawEvent?: Record<string, unknow
   }
 }
 
-/** Extract a display label from the models map (centralises CC-specific field access — #127). */
-export function getAgentLabel(key: string): string | null {
-  const model = useAgentStore.getState().models[key]
-  return model || null
-}
-
 export const useAgentStore = create<AgentState>()(
   persist(
     (set) => ({

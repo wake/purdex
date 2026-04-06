@@ -129,7 +129,7 @@ func TestHandleHookStatus_NoSettingsFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	req := httptest.NewRequest("GET", "/api/agent/hook-status", nil)
+	req := httptest.NewRequest("GET", "/api/hooks/cc/status", nil)
 	w := httptest.NewRecorder()
 	m.handleHookStatus(w, req)
 
@@ -193,7 +193,7 @@ func TestHandleHookStatus_WithHooks(t *testing.T) {
 	}
 	writeSettingsJSON(t, tmp, string(data))
 
-	req := httptest.NewRequest("GET", "/api/agent/hook-status", nil)
+	req := httptest.NewRequest("GET", "/api/hooks/cc/status", nil)
 	w := httptest.NewRecorder()
 	m.handleHookStatus(w, req)
 
@@ -245,7 +245,7 @@ func TestHandleHookStatus_EmptyHooks(t *testing.T) {
 
 	writeSettingsJSON(t, tmp, `{"hooks":{}}`)
 
-	req := httptest.NewRequest("GET", "/api/agent/hook-status", nil)
+	req := httptest.NewRequest("GET", "/api/hooks/cc/status", nil)
 	w := httptest.NewRecorder()
 	m.handleHookStatus(w, req)
 
@@ -406,5 +406,64 @@ func TestHandleEvent_StoresAgentType(t *testing.T) {
 	}
 	if ev.AgentType != "cc" {
 		t.Errorf("agent_type: want cc, got %q", ev.AgentType)
+	}
+}
+
+// TestHandleHookSetup_BadJSON — invalid JSON body returns 400.
+func TestHandleHookSetup_BadJSON(t *testing.T) {
+	m := newTestModule(t)
+	req := httptest.NewRequest("POST", "/api/hooks/cc/setup", strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleHookSetup(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleHookSetup_InvalidAction — action other than install/remove returns 400.
+func TestHandleHookSetup_InvalidAction(t *testing.T) {
+	m := newTestModule(t)
+	req := httptest.NewRequest("POST", "/api/hooks/cc/setup", strings.NewReader(`{"action":"nuke"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleHookSetup(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleHookSetup_EmptyAction — empty action string returns 400.
+func TestHandleHookSetup_EmptyAction(t *testing.T) {
+	m := newTestModule(t)
+	req := httptest.NewRequest("POST", "/api/hooks/cc/setup", strings.NewReader(`{"action":""}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleHookSetup(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleHookSetup_ExecFailure — valid action but tbox binary doesn't support
+// "setup" subcommand (running under go test), returns 500 with error detail.
+func TestHandleHookSetup_ExecFailure(t *testing.T) {
+	m := newTestModule(t)
+	req := httptest.NewRequest("POST", "/api/hooks/cc/setup", strings.NewReader(`{"action":"install"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleHookSetup(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status: want 500, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["error"] != "setup failed" {
+		t.Errorf("error field: want 'setup failed', got %v", resp["error"])
+	}
+	if _, ok := resp["detail"]; !ok {
+		t.Error("response should contain 'detail' field with exec output")
 	}
 }
