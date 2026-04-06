@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react'
 import { StatusBar } from './StatusBar'
 import { createTab } from '../types/tab'
 import type { Tab, PaneContent } from '../types/tab'
@@ -95,7 +95,7 @@ describe('StatusBar upload progress', () => {
   beforeEach(() => {
     setupStores()
     useUploadStore.setState({ sessions: {} })
-    useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, hooksInstalled: false })
+    useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, models: {} })
   })
 
   it('shows uploading progress', () => {
@@ -144,7 +144,7 @@ describe('StatusBar agent label badge', () => {
       statuses: { [ck]: 'idle' },
       unread: {},
       activeSubagents: {},
-      hooksInstalled: true,
+      models: { [ck]: 'Claude Opus 4' },
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
@@ -153,19 +153,32 @@ describe('StatusBar agent label badge', () => {
     expect(badge.className).toContain('border')
   })
 
-  it('renders fallback Agent badge with white styling', () => {
+  it('reactively shows badge when models updates after mount', async () => {
+    const ck = compositeKey(HOST_ID, 'dev001')
+    useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, models: {} })
+    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    expect(screen.queryByTestId('agent-label')).toBeNull()
+    act(() => {
+      useAgentStore.setState({ models: { [ck]: 'Claude Sonnet 4' } })
+    })
+    await waitFor(() => {
+      const badge = screen.getByTestId('agent-label')
+      expect(badge.textContent).toBe('Claude Sonnet 4')
+    })
+  })
+
+  it('does not render badge when no model in models map', () => {
     const ck = compositeKey(HOST_ID, 'dev001')
     useAgentStore.setState({
       events: { [ck]: { tmux_session: 'dev', event_name: 'UserPromptSubmit', raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now() } },
       statuses: { [ck]: 'running' },
       unread: {},
       activeSubagents: {},
-      hooksInstalled: true,
+      models: {},
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
-    const badge = screen.getByTestId('agent-label')
-    expect(badge.textContent).toBe('Agent')
-    expect(badge.className).toContain('border')
+    expect(screen.queryByTestId('agent-label')).toBeNull()
   })
 })

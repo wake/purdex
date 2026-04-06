@@ -21,8 +21,8 @@ interface AgentState {
   statuses: Record<string, AgentStatus>        // derived status per composite key
   unread: Record<string, boolean>              // unread flag per composite key
   activeSubagents: Record<string, string[]>    // active subagent IDs per composite key
+  models: Record<string, string>              // composite key → model name (#127)
   tabIndicatorStyle: TabIndicatorStyle
-  hooksInstalled: boolean                      // whether CC hooks are installed
 
   handleHookEvent: (hostId: string, sessionCode: string, event: AgentHookEvent) => void
   markRead: (hostId: string, sessionCode: string) => void
@@ -30,7 +30,6 @@ interface AgentState {
   clearSubagentsForHost: (hostId: string) => void
   removeHost: (hostId: string) => void
   setTabIndicatorStyle: (style: TabIndicatorStyle) => void
-  setHooksInstalled: (installed: boolean) => void
 }
 
 export function deriveStatus(eventName: string, rawEvent?: Record<string, unknown>): AgentStatus | 'clear' | null {
@@ -63,13 +62,6 @@ export function deriveStatus(eventName: string, rawEvent?: Record<string, unknow
   }
 }
 
-/** Extract a display label from an agent hook event (centralises CC-specific field access). */
-export function getAgentLabel(event: AgentHookEvent | undefined): string | null {
-  if (!event) return null
-  const model = event.raw_event?.modelName as string | undefined
-  return model || 'Agent'
-}
-
 export const useAgentStore = create<AgentState>()(
   persist(
     (set) => ({
@@ -77,8 +69,8 @@ export const useAgentStore = create<AgentState>()(
       statuses: {},
       unread: {},
       activeSubagents: {},
+      models: {},
       tabIndicatorStyle: 'overlay' as TabIndicatorStyle,
-      hooksInstalled: false,
 
       handleHookEvent: (hostId, sessionCode, event) => {
         const key = compositeKey(hostId, sessionCode)
@@ -129,7 +121,9 @@ export const useAgentStore = create<AgentState>()(
             const { [key]: _u, ...restUnread } = s.unread
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const { [key]: _a, ...restSubagents } = s.activeSubagents
-            return { events: restEvents, statuses: restStatuses, unread: restUnread, activeSubagents: restSubagents }
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { [key]: _m, ...restModels } = s.models
+            return { events: restEvents, statuses: restStatuses, unread: restUnread, activeSubagents: restSubagents, models: restModels }
           })
           return
         }
@@ -147,6 +141,12 @@ export const useAgentStore = create<AgentState>()(
 
         // Store the latest event
         set((s) => ({ events: { ...s.events, [key]: event } }))
+
+        // Extract modelName if present (persists across event overwrites — #127)
+        const modelName = event.raw_event?.modelName as string | undefined
+        if (modelName) {
+          set((s) => ({ models: { ...s.models, [key]: modelName } }))
+        }
 
         if (derived !== null) {
           // Don't let informational Notification subtypes (idle_prompt, auth_success)
@@ -202,11 +202,11 @@ export const useAgentStore = create<AgentState>()(
           statuses: filterKeys(s.statuses),
           unread: filterKeys(s.unread),
           activeSubagents: filterKeys(s.activeSubagents),
+          models: filterKeys(s.models),
         }
       }),
 
       setTabIndicatorStyle: (style) => set({ tabIndicatorStyle: style }),
-      setHooksInstalled: (installed) => set({ hooksInstalled: installed }),
     }),
     {
       name: STORAGE_KEYS.AGENT,

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -79,7 +80,7 @@ func (m *Module) resolveSessionCode(tmuxName string) string {
 	return ""
 }
 
-// handleHookStatus handles GET /api/agent/hook-status.
+// handleHookStatus handles GET /api/hooks/cc/status.
 // It reads ~/.claude/settings.json and checks if tbox hooks are installed for each event.
 func (m *Module) handleHookStatus(w http.ResponseWriter, r *http.Request) {
 	home, err := os.UserHomeDir()
@@ -93,10 +94,9 @@ func (m *Module) handleHookStatus(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"agent_type": "cc",
-			"installed":  false,
-			"events":     map[string]any{},
-			"issues":     []string{"settings.json not found"},
+			"installed": false,
+			"events":    map[string]any{},
+			"issues":    []string{"settings.json not found"},
 		})
 		return
 	}
@@ -131,10 +131,9 @@ func (m *Module) handleHookStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"agent_type": "cc",
-		"installed":  allInstalled,
-		"events":     events,
-		"issues":     issues,
+		"installed": allInstalled,
+		"events":    events,
+		"issues":    issues,
 	})
 }
 
@@ -167,13 +166,12 @@ func findTboxCommand(entries any) string {
 	return ""
 }
 
-// hookSetupRequest is the JSON body expected by POST /api/agent/hook-setup.
+// hookSetupRequest is the JSON body expected by POST /api/hooks/cc/setup.
 type hookSetupRequest struct {
-	AgentType string `json:"agent_type"`
-	Action    string `json:"action"`
+	Action string `json:"action"`
 }
 
-// handleHookSetup handles POST /api/agent/hook-setup.
+// handleHookSetup handles POST /api/hooks/cc/setup.
 // It runs `tbox setup` or `tbox setup --remove` and returns the updated hook status.
 func (m *Module) handleHookSetup(w http.ResponseWriter, r *http.Request) {
 	var req hookSetupRequest
@@ -199,7 +197,9 @@ func (m *Module) handleHookSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := exec.Command(tboxPath, args...)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, tboxPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")

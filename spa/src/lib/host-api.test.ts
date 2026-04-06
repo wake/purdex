@@ -4,7 +4,6 @@ import { useHostStore } from '../stores/useHostStore'
 import {
   listSessions, createSession, deleteSession, switchMode,
   handoff, fetchHistory, getConfig, updateConfig, agentUpload,
-  fetchAgentHookStatus, setupAgentHook,
   type Session,
 } from './host-api'
 
@@ -207,28 +206,6 @@ describe('agentUpload', () => {
     )
     const file = new File(['data'], 'test.png')
     await expect(agentUpload(HOST_ID, file, 'dev001')).rejects.toThrow('404')
-  })
-})
-
-describe('fetchAgentHookStatus', () => {
-  it('fetches with auth', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ installed: true }), { status: 200 }),
-    )
-    const res = await fetchAgentHookStatus(HOST_ID)
-    expect(res.ok).toBe(true)
-    expectAuthFetch(`${BASE}/api/agent/hook-status`)
-  })
-})
-
-describe('setupAgentHook', () => {
-  it('sends POST with auth', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ installed: true }), { status: 200 }),
-    )
-    const res = await setupAgentHook(HOST_ID, 'cc', 'install')
-    expect(res.ok).toBe(true)
-    expectAuthFetch(`${BASE}/api/agent/hook-setup`, { method: 'POST' })
   })
 })
 

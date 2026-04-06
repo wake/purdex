@@ -38,6 +38,7 @@ type FakeExecutor struct {
 	autoResizeCalls      []string              // targets passed to ResizeWindowAuto
 	setWindowOptionCalls []SetWindowOptionCall // calls to SetWindowOption
 	alive                bool                  // whether tmux server is "alive"
+	HooksOutput          string                // returned by ShowHooksGlobal
 }
 
 func NewFakeExecutor() *FakeExecutor {
@@ -284,7 +285,12 @@ func (f *FakeExecutor) SetWindowOptionCalls() []SetWindowOptionCall {
 
 func (f *FakeExecutor) SetHookGlobal(event, command string) error { return nil }
 func (f *FakeExecutor) RemoveHookGlobal(event string) error      { return nil }
-func (f *FakeExecutor) ShowHooksGlobal() (string, error)          { return "", nil }
+
+func (f *FakeExecutor) ShowHooksGlobal() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.HooksOutput, nil
+}
 
 func (f *FakeExecutor) SetAlive(v bool) {
 	f.mu.Lock()

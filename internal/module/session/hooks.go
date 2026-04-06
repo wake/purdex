@@ -8,17 +8,14 @@ import (
 	"strings"
 )
 
-// tmux hook events that trigger session list refresh.
 var tmuxHookEvents = []string{
 	"session-created",
 	"session-closed",
 	"session-renamed",
 }
 
-// waitForChannel is the tmux wait-for channel name used to signal session changes.
 const waitForChannel = "tbox_sess_evt"
 
-// installTmuxHooks sets global tmux hooks that signal waitForChannel on session events.
 func (m *SessionModule) installTmuxHooks() error {
 	cmd := fmt.Sprintf("run-shell -b 'tmux wait-for -S %s'", waitForChannel)
 	for _, event := range tmuxHookEvents {
@@ -30,7 +27,6 @@ func (m *SessionModule) installTmuxHooks() error {
 	return nil
 }
 
-// removeTmuxHooks removes previously installed global hooks (best-effort).
 func (m *SessionModule) removeTmuxHooks() {
 	for _, event := range tmuxHookEvents {
 		if err := m.tmux.RemoveHookGlobal(event); err != nil {
@@ -40,55 +36,85 @@ func (m *SessionModule) removeTmuxHooks() {
 	log.Printf("session: removed tmux hooks")
 }
 
-// handleHooksStatus returns JSON with tmux_hooks status (map of event → bool)
-// and an agent_hooks bool (stub returning false for now).
-func (m *SessionModule) handleHooksStatus(w http.ResponseWriter, r *http.Request) {
+type tmuxHookEventStatus struct {
+	Installed bool `json:"installed"`
+}
+
+type tmuxHookStatusResponse struct {
+	Installed bool                           `json:"installed"`
+	Events    map[string]tmuxHookEventStatus `json:"events"`
+	Issues    []string                       `json:"issues"`
+}
+
+func (m *SessionModule) buildTmuxHookStatus() (*tmuxHookStatusResponse, error) {
 	hookOutput, err := m.tmux.ShowHooksGlobal()
+	if err != nil {
+		return nil, err
+	}
+
+	events := make(map[string]tmuxHookEventStatus, len(tmuxHookEvents))
+	allInstalled := true
+	for _, event := range tmuxHookEvents {
+		installed := false
+		for _, line := range strings.Split(hookOutput, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, event) && strings.Contains(line, waitForChannel) {
+				installed = true
+				break
+			}
+		}
+		events[event] = tmuxHookEventStatus{Installed: installed}
+		if !installed {
+			allInstalled = false
+		}
+	}
+
+	return &tmuxHookStatusResponse{
+		Installed: allInstalled,
+		Events:    events,
+		Issues:    []string{},
+	}, nil
+}
+
+func (m *SessionModule) handleTmuxHookStatus(w http.ResponseWriter, r *http.Request) {
+	resp, err := m.buildTmuxHookStatus()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	// Check which of our events are present in the output.
-	// Parse line-by-line: each line is "event-name[N] -> command".
-	// We match lines that start with the event name AND contain our channel,
-	// avoiding false positives from other hooks whose commands contain the event name.
-	tmuxHooks := make(map[string]bool, len(tmuxHookEvents))
-	for _, event := range tmuxHookEvents {
-		for _, line := range strings.Split(hookOutput, "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, event) && strings.Contains(line, waitForChannel) {
-				tmuxHooks[event] = true
-				break
-			}
-		}
-		if !tmuxHooks[event] {
-			tmuxHooks[event] = false
-		}
-	}
-
-	resp := map[string]any{
-		"tmux_hooks":  tmuxHooks,
-		"agent_hooks": false, // stub — will be implemented later
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-// handleHooksInstall installs tmux hooks and returns {"installed": true}.
-func (m *SessionModule) handleHooksInstall(w http.ResponseWriter, r *http.Request) {
-	if err := m.installTmuxHooks(); err != nil {
+type tmuxHookSetupRequest struct {
+	Action string `json:"action"`
+}
+
+func (m *SessionModule) handleTmuxHookSetup(w http.ResponseWriter, r *http.Request) {
+	var req tmuxHookSetupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	switch req.Action {
+	case "install":
+		if err := m.installTmuxHooks(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	case "remove":
+		m.removeTmuxHooks()
+	default:
+		http.Error(w, `{"error":"action must be install or remove"}`, http.StatusBadRequest)
+		return
+	}
+
+	resp, err := m.buildTmuxHookStatus()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"installed": true})
-}
-
-// handleHooksRemove removes tmux hooks and returns {"removed": true}.
-func (m *SessionModule) handleHooksRemove(w http.ResponseWriter, r *http.Request) {
-	m.removeTmuxHooks()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"removed": true})
+	json.NewEncoder(w).Encode(resp)
 }
