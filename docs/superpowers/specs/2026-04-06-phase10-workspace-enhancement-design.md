@@ -1,7 +1,7 @@
 # Phase 10：Workspace 強化
 
 **日期**: 2026-04-06
-**狀態**: Draft
+**狀態**: Review
 **前置**: Phase 6（Hooks Unification）完成
 **基於**: [tabbed-workspace-ui-design.md](2026-03-20-tabbed-workspace-ui-design.md) Section 4-5
 
