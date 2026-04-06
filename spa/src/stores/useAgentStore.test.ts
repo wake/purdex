@@ -1,6 +1,6 @@
 // spa/src/stores/useAgentStore.test.ts
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useAgentStore } from './useAgentStore'
+import { useAgentStore, getAgentLabel } from './useAgentStore'
 import { useTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
 import type { AgentHookEvent } from './useAgentStore'
@@ -13,6 +13,7 @@ beforeEach(() => {
     statuses: {},
     unread: {},
     activeSubagents: {},
+    models: {},
   })
   useTabStore.setState({ tabs: {}, activeTabId: null, tabOrder: [] })
 })
@@ -406,6 +407,75 @@ describe('useAgentStore', () => {
     useAgentStore.getState().handleHookEvent(H, 'dev', event)
     // activeSubagents unchanged — agent-A still there
     expect(useAgentStore.getState().activeSubagents[`${H}:dev`]).toEqual(['agent-A'])
+  })
+
+  describe('models map (#127)', () => {
+    it('SessionStart with modelName populates models', () => {
+      const event: AgentHookEvent = {
+        tmux_session: 'dev',
+        event_name: 'SessionStart',
+        raw_event: { modelName: 'claude-sonnet-4-6' },
+        agent_type: 'cc',
+        broadcast_ts: Date.now(),
+      }
+      useAgentStore.getState().handleHookEvent(H, 'dev', event)
+      expect(useAgentStore.getState().models[`${H}:dev`]).toBe('claude-sonnet-4-6')
+    })
+
+    it('subsequent events do not overwrite models', () => {
+      useAgentStore.getState().handleHookEvent(H, 'dev', {
+        tmux_session: 'dev', event_name: 'SessionStart',
+        raw_event: { modelName: 'claude-sonnet-4-6' },
+        agent_type: 'cc', broadcast_ts: Date.now(),
+      })
+      useAgentStore.getState().handleHookEvent(H, 'dev', {
+        tmux_session: 'dev', event_name: 'UserPromptSubmit',
+        raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+      })
+      expect(useAgentStore.getState().models[`${H}:dev`]).toBe('claude-sonnet-4-6')
+    })
+
+    it('SessionEnd clears models entry', () => {
+      useAgentStore.getState().handleHookEvent(H, 'dev', {
+        tmux_session: 'dev', event_name: 'SessionStart',
+        raw_event: { modelName: 'claude-sonnet-4-6' },
+        agent_type: 'cc', broadcast_ts: Date.now(),
+      })
+      useAgentStore.getState().handleHookEvent(H, 'dev', {
+        tmux_session: 'dev', event_name: 'SessionEnd',
+        raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+      })
+      expect(useAgentStore.getState().models[`${H}:dev`]).toBeUndefined()
+    })
+
+    it('removeHost clears models for that host', () => {
+      useAgentStore.getState().handleHookEvent(H, 'dev', {
+        tmux_session: 'dev', event_name: 'SessionStart',
+        raw_event: { modelName: 'claude-sonnet-4-6' },
+        agent_type: 'cc', broadcast_ts: Date.now(),
+      })
+      useAgentStore.getState().handleHookEvent('other', 'dev', {
+        tmux_session: 'dev', event_name: 'SessionStart',
+        raw_event: { modelName: 'claude-opus-4-6' },
+        agent_type: 'cc', broadcast_ts: Date.now(),
+      })
+      useAgentStore.getState().removeHost(H)
+      expect(useAgentStore.getState().models[`${H}:dev`]).toBeUndefined()
+      expect(useAgentStore.getState().models['other:dev']).toBe('claude-opus-4-6')
+    })
+
+    it('getAgentLabel returns model from models map', () => {
+      useAgentStore.getState().handleHookEvent(H, 'dev', {
+        tmux_session: 'dev', event_name: 'SessionStart',
+        raw_event: { modelName: 'claude-sonnet-4-6' },
+        agent_type: 'cc', broadcast_ts: Date.now(),
+      })
+      expect(getAgentLabel(`${H}:dev`)).toBe('claude-sonnet-4-6')
+    })
+
+    it('getAgentLabel returns null when no model', () => {
+      expect(getAgentLabel(`${H}:unknown`)).toBeNull()
+    })
   })
 
   it('error status is not downgraded by Notification(idle_prompt)', () => {

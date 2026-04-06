@@ -95,7 +95,7 @@ describe('StatusBar upload progress', () => {
   beforeEach(() => {
     setupStores()
     useUploadStore.setState({ sessions: {} })
-    useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {} })
+    useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, models: {} })
   })
 
   it('shows uploading progress', () => {
@@ -144,6 +144,7 @@ describe('StatusBar agent label badge', () => {
       statuses: { [ck]: 'idle' },
       unread: {},
       activeSubagents: {},
+      models: { [ck]: 'Claude Opus 4' },
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
@@ -152,18 +153,17 @@ describe('StatusBar agent label badge', () => {
     expect(badge.className).toContain('border')
   })
 
-  it('renders fallback Agent badge with white styling', () => {
+  it('does not render badge when no model in models map', () => {
     const ck = compositeKey(HOST_ID, 'dev001')
     useAgentStore.setState({
       events: { [ck]: { tmux_session: 'dev', event_name: 'UserPromptSubmit', raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now() } },
       statuses: { [ck]: 'running' },
       unread: {},
       activeSubagents: {},
+      models: {},
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
-    const badge = screen.getByTestId('agent-label')
-    expect(badge.textContent).toBe('Agent')
-    expect(badge.className).toContain('border')
+    expect(screen.queryByTestId('agent-label')).toBeNull()
   })
 })
