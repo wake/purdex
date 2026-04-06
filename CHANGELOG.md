@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.0-alpha.50] - 2026-04-06
+
+Phase 7.1 — Lint + Agent Store 修正 (PR #183, #175, #105, #92, #93, #94, #126, #124, #110, #169)
+
+### 修正
+
+- **SubagentStop events 保護 (#126)** — SubagentStart/Stop 不再覆寫 events map，只更新 activeSubagents
+- **Error 狀態白名單 (#124)** — 只有 UserPromptSubmit/SessionStart/Stop 可清除 error，非白名單事件完全跳過（events + status 都不更新）
+- **PermissionRequest i18n (#105)** — 通知 body 改用 `{{tool}}` 參數
+- **Notification body (#110)** — permission_prompt/elicitation_dialog 顯示特定 body
+- **SubagentDots 同步 (#169)** — negative CSS animation-delay 同步呼吸動畫相位
+- **Rename tbox_ → purdex_ (#175)** — user-facing 字串 + `tbox_version` → `purdex_version` API 欄位
+- **setState-in-useEffect (#92)** — useReducer、render-time state、direct DOM、ref deps
+- **useCallback deps (#93)** — 修復遺漏 deps + justified eslint-disable
+- **Lint cleanup (#94)** — fast-refresh、explicit-any、globals-reassign
+- **TerminalView retrying** — SM cycle 完成後 `Promise.resolve().finally()` 清除 spinner
+- **manualRetry 型別** — `() => void` → `() => Promise<void> | void`
+
+### 改善
+
+- Lint: 31 errors/warnings → **0**
+- Tests: 904 → **906**（新增 error guard + events 一致性測試）
+
 ## [1.0.0-alpha.49] - 2026-04-06
 
 Phase 6 — Hooks 統一架構 (PR #181, #150, #109, #108, #103, #142, #127)
