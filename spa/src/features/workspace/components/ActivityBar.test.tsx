@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { ActivityBar } from './ActivityBar'
-import { createTab } from '../types/tab'
-import type { Tab, Workspace } from '../types/tab'
+import { createTab } from '../../../types/tab'
+import type { Tab, Workspace } from '../../../types/tab'
 
 const mockWorkspaces: Workspace[] = [
   { id: 'ws-1', name: 'Project A', color: '#7a6aaa', icon: '🔧', tabs: ['t1', 't2'], activeTabId: 't1' },
