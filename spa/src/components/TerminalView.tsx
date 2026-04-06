@@ -41,13 +41,14 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
     getTicket,
   })
 
-  // Manual reconnect — retrying resets when SM fast-retry cycle completes
+  // Manual reconnect — retrying resets when SM fast-retry cycle completes,
+  // or when hostStatus changes (fallback: retryAtStatus !== hostStatus).
   const { manualRetry, status: hostStatus } = useHostConnection(hostId ?? '')
   const [retryAtStatus, setRetryAtStatus] = useState<string | null>(null)
   const retrying = retryAtStatus !== null && retryAtStatus === hostStatus
   const handleRetry = useCallback(() => {
     setRetryAtStatus(hostStatus)
-    manualRetry()?.then(() => setRetryAtStatus(null))
+    Promise.resolve(manualRetry()).finally(() => setRetryAtStatus(null))
   }, [hostStatus, manualRetry])
 
   // Drag-drop state

@@ -64,7 +64,7 @@ export function deriveStatus(eventName: string, rawEvent?: Record<string, unknow
 
 export const useAgentStore = create<AgentState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       events: {},
       statuses: {},
       unread: {},
@@ -138,6 +138,20 @@ export const useAgentStore = create<AgentState>()(
           })
         }
 
+        // Error guard: when in error state, only whitelisted events can
+        // clear it. Non-whitelisted events are suppressed entirely (both
+        // events map and status) to keep the two in sync.
+        if (derived !== null && derived !== 'error') {
+          const currentStatus = get().statuses[key]
+          if (currentStatus === 'error') {
+            const canClearError =
+              event.event_name === 'UserPromptSubmit' ||
+              event.event_name === 'SessionStart' ||
+              event.event_name === 'Stop'
+            if (!canClearError) return
+          }
+        }
+
         // Store the latest event
         set((s) => ({ events: { ...s.events, [key]: event } }))
 
@@ -148,17 +162,7 @@ export const useAgentStore = create<AgentState>()(
         }
 
         if (derived !== null) {
-          set((s) => {
-            if (s.statuses[key] === 'error' && derived !== 'error') {
-              // Only real state transitions can clear error — not external wait requests
-              const canClearError =
-                event.event_name === 'UserPromptSubmit' ||
-                event.event_name === 'SessionStart' ||
-                event.event_name === 'Stop'
-              if (!canClearError) return s
-            }
-            return { statuses: { ...s.statuses, [key]: derived } }
-          })
+          set((s) => ({ statuses: { ...s.statuses, [key]: derived } }))
 
           // Mark unread when not focused: all 'waiting' statuses are actionable;
           // 'idle' statuses are actionable only if they don't come from a Notification event

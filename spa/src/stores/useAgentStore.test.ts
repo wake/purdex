@@ -592,29 +592,32 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().activeSubagents[`${H}:dev`]).toBeUndefined()
   })
 
-  it('PermissionRequest does not overwrite error status', () => {
-    useAgentStore.getState().handleHookEvent(H, 'dev', {
+  it('PermissionRequest does not overwrite error status or events', () => {
+    const stopEvent = {
       tmux_session: 'dev', event_name: 'StopFailure',
-      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
-    })
+      raw_event: { error: 'crash' }, agent_type: 'cc' as const, broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent(H, 'dev', stopEvent)
     expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('error')
     useAgentStore.getState().handleHookEvent(H, 'dev', {
       tmux_session: 'dev', event_name: 'PermissionRequest',
       raw_event: { tool_name: 'Bash' }, agent_type: 'cc', broadcast_ts: Date.now(),
     })
     expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('error')
+    expect(useAgentStore.getState().events[`${H}:dev`].event_name).toBe('StopFailure')
   })
 
-  it('Notification(permission_prompt) does not overwrite error status', () => {
+  it('Notification(permission_prompt) does not overwrite error status or events', () => {
     useAgentStore.getState().handleHookEvent(H, 'dev', {
       tmux_session: 'dev', event_name: 'StopFailure',
-      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+      raw_event: { error: 'crash' }, agent_type: 'cc', broadcast_ts: Date.now(),
     })
     useAgentStore.getState().handleHookEvent(H, 'dev', {
       tmux_session: 'dev', event_name: 'Notification',
       raw_event: { notification_type: 'permission_prompt' }, agent_type: 'cc', broadcast_ts: Date.now(),
     })
     expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('error')
+    expect(useAgentStore.getState().events[`${H}:dev`].event_name).toBe('StopFailure')
   })
 
   it('UserPromptSubmit clears error status', () => {
