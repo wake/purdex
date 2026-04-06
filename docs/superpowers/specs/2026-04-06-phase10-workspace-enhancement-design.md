@@ -1,7 +1,7 @@
 # Phase 10：Workspace 強化
 
 **日期**: 2026-04-06
-**狀態**: Review
+**狀態**: Approved
 **前置**: Phase 6（Hooks Unification）完成
 **基於**: [tabbed-workspace-ui-design.md](2026-03-20-tabbed-workspace-ui-design.md) Section 4-5
 **取代**: tabbed-workspace-ui-design.md Section 6（橫列式群組行為）改為 Titlebar Chip 方案
@@ -143,7 +143,8 @@ insertTab: (tabId: string, workspaceId?: string | null) => void
 - 目前 `App.tsx` 和 `useShortcuts.ts` 各有一份 `displayTabs` / `getVisibleTabIds` 邏輯，行為分叉
 - 提取為共用函式 `features/workspace/lib/getVisibleTabIds.ts`
 - 統一行為：有 active workspace → 該 workspace 的 tabs；有 active standalone tab → 僅該 tab；0 workspace → fallback 到 `tabOrder` 全部 tab
-- `App.tsx` 和 `useShortcuts.ts` 共用此函式
+- `App.tsx` 的 `displayTabs` 三段計算（`activeWs` / `visibleTabs` / `displayTabs`）整體替換為 `getVisibleTabIds` 的結果（回傳 `string[]`，再 map 為 `Tab[]`）
+- `useShortcuts.ts` 的內部 `getVisibleTabIds` 函式移除，改用共用版本
 
 **首個 workspace 建立詢問：**
 - 觸發位置：ActivityBar 的 `onAddWorkspace` callback（**UI 層**，非 store action）
@@ -157,6 +158,7 @@ insertTab: (tabId: string, workspaceId?: string | null) => void
 - Props：接收 `workspaceId`，內部讀取 `useWorkspaceStore` 取 tab ID 列表 + `useTabStore` 解析 tab 顯示名稱（透過 `getPaneLabel`）
 - 顯示 workspace 內所有分頁清單，每個分頁前方有「關閉」checkbox（預設 checked）
 - 確認後：checked 的 tab 走 `handleCloseTab`（**記錄到 history**，可 reopen），unchecked 的回歸 standalone
+- `WorkspaceDeleteDialog` 透過 `onCloseTab: (tabId: string) => void` callback prop 接收關閉行為（由父元件傳入 `handleCloseTab`），不直接操作 store
 - 無分頁時直接刪除，不彈對話框
 
 ### 10.3 Workspace 設定 UI
@@ -188,7 +190,7 @@ insertTab: (tabId: string, workspaceId?: string | null) => void
 實作要點：
 - Electron 端：`keybindings.ts` 新增 `switch-workspace-1` ~ `switch-workspace-9` + `prev-workspace` / `next-workspace`
 - `menuGroup: 'workspace-nav'`（新增 group，需更新 `MenuGroup` type union）
-- `buildMenuTemplate` 的 Tab submenu 需加入 `workspace-nav` group 的分隔線和項目
+- `buildMenuTemplate` 的 Tab submenu 需加入 `workspace-nav` group，插入位置在 `tab-action` 之後作為末尾區塊（分隔線 + workspace-nav items）
 - Native menu label 固定為「Workspace 1」~「Workspace 9」，不動態反映 workspace 名稱
 - SPA 端：workspace hooks 新增快捷鍵切換 handler
 - 位置根據 `workspaces` 陣列順序（即 Activity Bar 的排列順序）
