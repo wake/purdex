@@ -83,10 +83,9 @@ export const useAgentStore = create<AgentState>()(
           if (!agentId) return
           set((s) => {
             const current = s.activeSubagents[key] || []
-            if (current.includes(agentId)) return { events: { ...s.events, [key]: event } }
+            if (current.includes(agentId)) return s
             return {
               activeSubagents: { ...s.activeSubagents, [key]: [...current, agentId] },
-              events: { ...s.events, [key]: event },
             }
           })
           return
@@ -97,14 +96,14 @@ export const useAgentStore = create<AgentState>()(
           set((s) => {
             const current = s.activeSubagents[key] || []
             const filtered = current.filter((id) => id !== agentId)
+            if (filtered.length === current.length) return s // orphan: agent_id not tracked
             if (filtered.length === 0) {
               // eslint-disable-next-line @typescript-eslint/no-unused-vars
               const { [key]: _, ...rest } = s.activeSubagents
-              return { activeSubagents: rest, events: { ...s.events, [key]: event } }
+              return { activeSubagents: rest }
             }
             return {
               activeSubagents: { ...s.activeSubagents, [key]: filtered },
-              events: { ...s.events, [key]: event },
             }
           })
           return
@@ -149,11 +148,15 @@ export const useAgentStore = create<AgentState>()(
         }
 
         if (derived !== null) {
-          // Don't let informational Notification subtypes (idle_prompt, auth_success)
-          // downgrade an error status — the user should see the error until a real
-          // state change (UserPromptSubmit, SessionStart, Stop) clears it.
           set((s) => {
-            if (s.statuses[key] === 'error' && derived === 'idle' && event.event_name === 'Notification') return s
+            if (s.statuses[key] === 'error' && derived !== 'error') {
+              // Only real state transitions can clear error — not external wait requests
+              const canClearError =
+                event.event_name === 'UserPromptSubmit' ||
+                event.event_name === 'SessionStart' ||
+                event.event_name === 'Stop'
+              if (!canClearError) return s
+            }
             return { statuses: { ...s.statuses, [key]: derived } }
           })
 
