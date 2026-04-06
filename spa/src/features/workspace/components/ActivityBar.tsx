@@ -15,6 +15,7 @@ interface Props {
   onSelectWorkspace: (wsId: string) => void
   onSelectStandaloneTab: (tabId: string) => void
   onAddWorkspace: () => void
+  onContextMenuWorkspace?: (e: React.MouseEvent, wsId: string) => void
   onOpenHosts: () => void
   onOpenSettings: () => void
 }
@@ -27,6 +28,7 @@ export function ActivityBar({
   onSelectWorkspace,
   onSelectStandaloneTab,
   onAddWorkspace,
+  onContextMenuWorkspace,
   onOpenHosts,
   onOpenSettings,
 }: Props) {
@@ -39,6 +41,10 @@ export function ActivityBar({
           key={ws.id}
           title={ws.name}
           onClick={() => onSelectWorkspace(ws.id)}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            onContextMenuWorkspace?.(e, ws.id)
+          }}
           className={`w-8 h-8 rounded-md flex items-center justify-center text-xs cursor-pointer transition-all ${
             activeWorkspaceId === ws.id && !activeStandaloneTabId
               ? 'ring-2 ring-purple-400'

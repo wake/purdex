@@ -411,5 +411,9 @@
 
   "workspace.delete_title": "刪除 {{name}}",
   "workspace.delete_description": "選擇要一併關閉的分頁：",
-  "workspace.delete_confirm": "刪除"
+  "workspace.delete_confirm": "刪除",
+  "workspace.rename": "重新命名",
+  "workspace.change_color": "變更顏色",
+  "workspace.change_icon": "變更圖示",
+  "workspace.delete": "刪除工作區"
 }

@@ -1,5 +1,5 @@
 // spa/src/App.tsx — v2 重構：wouter Router + Tab/Pane model
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Router } from 'wouter'
 import { ActivityBar } from './components/ActivityBar'
 import { TabBar } from './components/TabBar'
@@ -17,11 +17,21 @@ import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useUndoToast } from './stores/useUndoToast'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { isStandaloneTab } from './types/tab'
-import { getVisibleTabIds } from './features/workspace'
+import {
+  getVisibleTabIds,
+  WorkspaceChip,
+  WorkspaceContextMenu,
+  WorkspaceDeleteDialog,
+  WorkspaceRenameDialog,
+  WorkspaceColorPicker,
+  WorkspaceIconPicker,
+} from './features/workspace'
 import { TabContextMenu } from './components/TabContextMenu'
 import { ThemeInjector } from './components/ThemeInjector'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { getPlatformCapabilities } from './lib/platform'
+import { getPrimaryPane } from './lib/pane-tree'
+import { getPaneLabel } from './lib/pane-labels'
 import { useI18nStore } from './stores/useI18nStore'
 import type { Tab } from './types/tab'
 
@@ -150,6 +160,36 @@ export default function App() {
     handleContextAction,
   } = useTabWorkspaceActions(displayTabs)
 
+  // --- Workspace UI state ---
+  const [wsContextMenu, setWsContextMenu] = useState<{ wsId: string; position: { x: number; y: number } } | null>(null)
+  const [wsDeleteTarget, setWsDeleteTarget] = useState<string | null>(null)
+  const [wsRenameTarget, setWsRenameTarget] = useState<string | null>(null)
+  const [wsColorTarget, setWsColorTarget] = useState<string | null>(null)
+  const [wsIconTarget, setWsIconTarget] = useState<string | null>(null)
+
+  const activeWs = workspaces.find((w) => w.id === activeWorkspaceId)
+
+  const handleWsContextMenu = (e: React.MouseEvent, wsId: string) => {
+    setWsContextMenu({ wsId, position: { x: e.clientX, y: e.clientY } })
+  }
+
+  const handleWsDelete = (wsId: string) => {
+    const ws = workspaces.find((w) => w.id === wsId)
+    if (!ws) return
+    if (ws.tabs.length === 0) {
+      useWorkspaceStore.getState().removeWorkspace(wsId)
+    } else {
+      setWsDeleteTarget(wsId)
+    }
+  }
+
+  const handleWsDeleteConfirm = (closedTabIds: string[]) => {
+    if (!wsDeleteTarget) return
+    closedTabIds.forEach((tabId) => handleCloseTab(tabId))
+    useWorkspaceStore.getState().removeWorkspace(wsDeleteTarget)
+    setWsDeleteTarget(null)
+  }
+
   return (
     <ErrorBoundary>
     <Router>
@@ -164,7 +204,15 @@ export default function App() {
             {/* Traffic light safe zone (78px ≈ 3 buttons + padding) */}
             <div className="shrink-0" style={{ width: 78 }} />
             {/* Tabs — no-drag so clicks work */}
-            <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+            <div className="flex items-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+              {activeWs && !activeStandaloneTabId && (
+                <WorkspaceChip
+                  name={activeWs.name}
+                  color={activeWs.color}
+                  onClick={() => {}}
+                  onContextMenu={(e) => handleWsContextMenu(e, activeWs.id)}
+                />
+              )}
               <TabBar
                 tabs={displayTabs}
                 activeTabId={activeTabId}
@@ -189,6 +237,7 @@ export default function App() {
           onSelectWorkspace={handleSelectWorkspace}
           onSelectStandaloneTab={handleSelectTab}
           onAddWorkspace={() => {}}
+          onContextMenuWorkspace={handleWsContextMenu}
           onOpenHosts={() => {
             const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
             useWorkspaceStore.getState().insertTab(tabId)
@@ -203,16 +252,28 @@ export default function App() {
         <div className="flex-1 flex flex-col min-w-0">
           {/* SPA: TabBar in normal position */}
           {!isElectron && (
-            <TabBar
-              tabs={displayTabs}
-              activeTabId={activeTabId}
-              onSelectTab={handleSelectTab}
-              onCloseTab={handleCloseTab}
-              onAddTab={handleAddTab}
-              onReorderTabs={handleReorderTabs}
-              onMiddleClick={handleMiddleClick}
-              onContextMenu={handleContextMenu}
-            />
+            <div className="flex items-center bg-surface-secondary border-b border-border-subtle">
+              {activeWs && !activeStandaloneTabId && (
+                <WorkspaceChip
+                  name={activeWs.name}
+                  color={activeWs.color}
+                  onClick={() => {}}
+                  onContextMenu={(e) => handleWsContextMenu(e, activeWs.id)}
+                />
+              )}
+              <div className="flex-1 min-w-0">
+                <TabBar
+                  tabs={displayTabs}
+                  activeTabId={activeTabId}
+                  onSelectTab={handleSelectTab}
+                  onCloseTab={handleCloseTab}
+                  onAddTab={handleAddTab}
+                  onReorderTabs={handleReorderTabs}
+                  onMiddleClick={handleMiddleClick}
+                  onContextMenu={handleContextMenu}
+                />
+              </div>
+            </div>
           )}
           <div className="flex-1 flex overflow-hidden">
             <TabContent
@@ -241,6 +302,60 @@ export default function App() {
             onAction={handleContextAction}
             hasOtherUnlocked={displayTabs.some((t) => t.id !== contextMenu.tab.id && !t.locked)}
             hasRightUnlocked={contextMenuHasRightUnlocked}
+          />
+        )}
+        {wsContextMenu && (
+          <WorkspaceContextMenu
+            position={wsContextMenu.position}
+            workspaceName={workspaces.find((w) => w.id === wsContextMenu.wsId)?.name ?? ''}
+            onRename={() => { setWsRenameTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
+            onChangeColor={() => { setWsColorTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
+            onChangeIcon={() => { setWsIconTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
+            onDelete={() => { handleWsDelete(wsContextMenu.wsId); setWsContextMenu(null) }}
+            onClose={() => setWsContextMenu(null)}
+          />
+        )}
+        {wsDeleteTarget && (() => {
+          const ws = workspaces.find((w) => w.id === wsDeleteTarget)
+          if (!ws) return null
+          const t = useI18nStore.getState().t
+          const tabItems = ws.tabs
+            .map((tabId) => {
+              const tab = tabs[tabId]
+              if (!tab) return null
+              const content = getPrimaryPane(tab.layout).content
+              const label = getPaneLabel(content, { getByCode: () => undefined }, { getById: () => undefined }, t)
+              return { id: tabId, label }
+            })
+            .filter(Boolean) as { id: string; label: string }[]
+          return (
+            <WorkspaceDeleteDialog
+              workspaceName={ws.name}
+              tabs={tabItems}
+              onConfirm={handleWsDeleteConfirm}
+              onCancel={() => setWsDeleteTarget(null)}
+            />
+          )
+        })()}
+        {wsRenameTarget && (
+          <WorkspaceRenameDialog
+            currentName={workspaces.find((w) => w.id === wsRenameTarget)?.name ?? ''}
+            onConfirm={(name) => { useWorkspaceStore.getState().renameWorkspace(wsRenameTarget, name); setWsRenameTarget(null) }}
+            onCancel={() => setWsRenameTarget(null)}
+          />
+        )}
+        {wsColorTarget && (
+          <WorkspaceColorPicker
+            currentColor={workspaces.find((w) => w.id === wsColorTarget)?.color ?? '#888'}
+            onSelect={(color) => { useWorkspaceStore.getState().setWorkspaceColor(wsColorTarget, color); setWsColorTarget(null) }}
+            onCancel={() => setWsColorTarget(null)}
+          />
+        )}
+        {wsIconTarget && (
+          <WorkspaceIconPicker
+            currentIcon={workspaces.find((w) => w.id === wsIconTarget)?.icon}
+            onSelect={(icon) => { useWorkspaceStore.getState().setWorkspaceIcon(wsIconTarget, icon); setWsIconTarget(null) }}
+            onCancel={() => setWsIconTarget(null)}
           />
         )}
         </div>

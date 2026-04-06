@@ -7,6 +7,11 @@ export { useTabWorkspaceActions } from './hooks'
 // Components
 export { ActivityBar } from './components/ActivityBar'
 export { WorkspaceDeleteDialog } from './components/WorkspaceDeleteDialog'
+export { WorkspaceContextMenu } from './components/WorkspaceContextMenu'
+export { WorkspaceChip } from './components/WorkspaceChip'
+export { WorkspaceRenameDialog } from './components/WorkspaceRenameDialog'
+export { WorkspaceColorPicker } from './components/WorkspaceColorPicker'
+export { WorkspaceIconPicker } from './components/WorkspaceIconPicker'
 
 // Lib
 export { getVisibleTabIds } from './lib/getVisibleTabIds'
