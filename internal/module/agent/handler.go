@@ -79,7 +79,7 @@ func (m *Module) resolveSessionCode(tmuxName string) string {
 	return ""
 }
 
-// handleHookStatus handles GET /api/agent/hook-status.
+// handleHookStatus handles GET /api/hooks/cc/status.
 // It reads ~/.claude/settings.json and checks if tbox hooks are installed for each event.
 func (m *Module) handleHookStatus(w http.ResponseWriter, r *http.Request) {
 	home, err := os.UserHomeDir()
@@ -167,13 +167,12 @@ func findTboxCommand(entries any) string {
 	return ""
 }
 
-// hookSetupRequest is the JSON body expected by POST /api/agent/hook-setup.
+// hookSetupRequest is the JSON body expected by POST /api/hooks/cc/setup.
 type hookSetupRequest struct {
-	AgentType string `json:"agent_type"`
-	Action    string `json:"action"`
+	Action string `json:"action"`
 }
 
-// handleHookSetup handles POST /api/agent/hook-setup.
+// handleHookSetup handles POST /api/hooks/cc/setup.
 // It runs `tbox setup` or `tbox setup --remove` and returns the updated hook status.
 func (m *Module) handleHookSetup(w http.ResponseWriter, r *http.Request) {
 	var req hookSetupRequest

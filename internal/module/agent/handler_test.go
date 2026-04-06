@@ -170,7 +170,7 @@ func TestHandleHookStatus_WithHooks(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	hookEvents := []string{"SessionStart", "UserPromptSubmit", "Stop", "StopFailure", "Notification", "PermissionRequest", "SessionEnd"}
+	hookEvents := []string{"SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "StopFailure", "Notification", "PermissionRequest", "SessionEnd"}
 
 	// Build hooks map with a tbox hook entry for each event.
 	hooksMap := map[string]any{}
@@ -267,7 +267,7 @@ func TestHandleHookStatus_EmptyHooks(t *testing.T) {
 		t.Fatal("events field missing or wrong type")
 	}
 
-	hookEvents := []string{"SessionStart", "UserPromptSubmit", "Stop", "StopFailure", "Notification", "PermissionRequest", "SessionEnd"}
+	hookEvents := []string{"SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "StopFailure", "Notification", "PermissionRequest", "SessionEnd"}
 	for _, ev := range hookEvents {
 		evData, ok := events[ev].(map[string]any)
 		if !ok {
