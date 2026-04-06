@@ -93,13 +93,17 @@ spa/src/features/{name}/
 
 ### 10.3 Workspace 設定 UI
 
-進入方式：
-- Activity Bar 工作區圖示右鍵 →「設定」
+**Titlebar Chip + 右鍵選單（方案 3+5）：**
 
-設定面板內容：
-- 名稱編輯
-- 顏色選擇器（既有色盤 + 自訂色碼）
-- Icon 選擇（Phosphor Icons 列表或 emoji）
+- Titlebar 左側（traffic lights 右、tabs 左）顯示 workspace chip：色點 + 名稱 + 下拉箭頭
+- 無 workspace 時 chip 隱藏，tab 佔滿全寬
+- 操作透過右鍵選單（Activity Bar icon 或 chip 皆可觸發）：
+  - 重新命名
+  - 變更顏色
+  - 變更圖示
+  - 分隔線
+  - 刪除工作區（觸發 10.2 確認 UI）
+- 詳細樣式（chip 尺寸、顏色、hover 效果等）留實作階段定案
 
 ### 10.4 快捷鍵切換（位置制）
 
