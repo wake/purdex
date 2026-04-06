@@ -6,6 +6,7 @@ export { useTabWorkspaceActions } from './hooks'
 
 // Components
 export { ActivityBar } from './components/ActivityBar'
+export { WorkspaceDeleteDialog } from './components/WorkspaceDeleteDialog'
 
 // Lib
 export { getVisibleTabIds } from './lib/getVisibleTabIds'

@@ -407,5 +407,9 @@
   "hosts.confirm": "確認",
   "hosts.mode_pairing_hint": "Daemon 等待配對中",
   "hosts.mode_pending_hint": "請輸入 daemon 終端機顯示的 Token",
-  "hosts.mode_normal_hint": "Daemon 運作中，請輸入已設定的 Token"
+  "hosts.mode_normal_hint": "Daemon 運作中，請輸入已設定的 Token",
+
+  "workspace.delete_title": "刪除 {{name}}",
+  "workspace.delete_description": "選擇要一併關閉的分頁：",
+  "workspace.delete_confirm": "刪除"
 }
