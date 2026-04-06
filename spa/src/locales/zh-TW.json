@@ -277,6 +277,9 @@
   "notification.fallback.permission": "需要授權：未知工具",
   "notification.fallback.stop": "任務完成",
   "notification.fallback.stopFailure": "任務異常中斷",
+  "notification.permission_request": "需要授權：{{tool}}",
+  "notification.permission_prompt": "需要授權核准",
+  "notification.elicitation_dialog": "需要輸入資訊（MCP）",
 
   "settings.agent.cc.name": "Claude Code",
 
