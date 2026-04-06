@@ -64,7 +64,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
       maxX = Math.min(maxX, tabsRight - activeNodeRect.right)
     }
     return { ...transform, x: Math.min(Math.max(transform.x, minX), maxX), y: 0 }
-  }, [pinnedIds])
+  }, [pinnedIds, normalZoneRef])
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event

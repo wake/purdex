@@ -110,7 +110,7 @@ describe('HookModuleCard', () => {
   it('renders last trigger time for events with getLastTrigger', async () => {
     const now = Date.now() * 1_000_000 // nanoseconds
     const mod = mockModule({
-      getLastTrigger: (_hostId, _events) => ({ SessionStart: now }),
+      getLastTrigger: () => ({ SessionStart: now }),
     })
     render(<HookModuleCard module={mod} hostId={HOST_ID} refreshKey={0} />)
     await waitFor(() => expect(screen.getByText('just now')).toBeInTheDocument())
@@ -152,7 +152,7 @@ describe('formatRelativeTime via HookModuleCard', () => {
   it('shows minutes ago', async () => {
     const fiveMinAgo = (Date.now() - 5 * 60 * 1000) * 1_000_000
     const mod = mockModule({
-      getLastTrigger: (_hostId, _events) => ({ SessionStart: fiveMinAgo }),
+      getLastTrigger: () => ({ SessionStart: fiveMinAgo }),
     })
     render(<HookModuleCard module={mod} hostId={HOST_ID} refreshKey={0} />)
     await waitFor(() => expect(screen.getByText(/5m ago/)).toBeInTheDocument())
@@ -161,7 +161,7 @@ describe('formatRelativeTime via HookModuleCard', () => {
   it('shows hours ago', async () => {
     const twoHoursAgo = (Date.now() - 2 * 60 * 60 * 1000) * 1_000_000
     const mod = mockModule({
-      getLastTrigger: (_hostId, _events) => ({ SessionStart: twoHoursAgo }),
+      getLastTrigger: () => ({ SessionStart: twoHoursAgo }),
     })
     render(<HookModuleCard module={mod} hostId={HOST_ID} refreshKey={0} />)
     await waitFor(() => expect(screen.getByText(/2h ago/)).toBeInTheDocument())

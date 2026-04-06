@@ -31,16 +31,18 @@ export function useRouteSync() {
     return tabToUrl(s.activeTabId, primary.content)
   })
 
-  // Note: location is intentionally excluded from deps to prevent loops.
-  // The startsWith check prevents overwriting sub-path sections (e.g. /settings/terminal).
+  // location excluded: including it would create navigate→location→navigate loop.
+  // setLocation excluded: stable function from wouter.
   useEffect(() => {
     if (!hydrated) return
     if (activeUrl && location !== activeUrl && !location.startsWith(activeUrl + '/')) {
       setLocation(activeUrl, { replace: true })
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeUrl, hydrated])
 
-  // Record visit when activeTab changes
+  // Record visit when activeTab changes.
+  // tabs excluded: only activeTabId change should trigger a visit record; tabs object changes frequently.
   useEffect(() => {
     if (!hydrated) return
     if (!activeTabId) return
@@ -49,6 +51,7 @@ export function useRouteSync() {
     const primary = getPrimaryPane(tab.layout)
     if (!primary) return
     useHistoryStore.getState().recordVisit(activeTabId, primary.content)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTabId, hydrated])
 
   // URL → Tab: when URL changes (back/forward/direct), find or create tab
@@ -106,5 +109,6 @@ export function useRouteSync() {
         break
       }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- openSingletonTab, setActiveTab: stable Zustand selectors
   }, [location, hydrated])
 }

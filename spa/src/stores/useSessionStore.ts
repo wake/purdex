@@ -32,6 +32,7 @@ export const useSessionStore = create<SessionState>()(
         })),
       removeHost: (hostId) =>
         set((state) => {
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           const { [hostId]: _, ...rest } = state.sessions
           const activeHostId = state.activeHostId === hostId ? null : state.activeHostId
           const activeCode = state.activeHostId === hostId ? null : state.activeCode

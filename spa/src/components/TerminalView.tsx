@@ -100,7 +100,11 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
 
   // Reset state on wsUrl change. React guarantees effects fire in declaration
   // order, so useTerminal (mount) → useTerminalWs (connect) → this reset.
+  // Sync setState is intentional: the effect acts as a state-reset synchronizer
+  // when the wsUrl prop changes, ensuring stale ready/disconnected state from
+  // the previous connection doesn't leak into the new one.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setReady(false)
     setDisconnected(false)
   }, [wsUrl])
@@ -112,6 +116,7 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
   // the terminal was alive and connected the whole time.
   useEffect(() => {
     if (visible && !prevVisible.current) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync reset for keep-alive tab re-show
       setReady(true)
       requestAnimationFrame(() => {
         fitAddonRef.current?.fit()

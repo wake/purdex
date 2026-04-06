@@ -3,16 +3,16 @@ import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/re
 import { HooksSection } from './HooksSection'
 import { useHostStore } from '../../stores/useHostStore'
 
-const mockFetchStatus = vi.fn((_hostId: string) => Promise.resolve({
+const mockFetchStatus = vi.fn(() => Promise.resolve({
   installed: true,
   events: { 'event-a': { installed: true } },
-  issues: [],
+  issues: [] as string[],
 }))
 
-const mockSetup = vi.fn((_hostId: string, _action: string) => Promise.resolve({
+const mockSetup = vi.fn(() => Promise.resolve({
   installed: true,
   events: { 'event-a': { installed: true } },
-  issues: [],
+  issues: [] as string[],
 }))
 
 vi.mock('../../lib/hook-modules', () => ({
