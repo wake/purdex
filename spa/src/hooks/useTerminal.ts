@@ -52,7 +52,16 @@ export function useTerminal(): UseTerminalResult {
 
     const renderer = useUISettingsStore.getState().terminalRenderer
     if (renderer === 'webgl') {
-      try { term.loadAddon(new WebglAddon()) } catch { /* fallback to DOM */ }
+      try {
+        const webglAddon = new WebglAddon()
+        webglAddon.onContextLoss(() => {
+          webglAddon.dispose()
+          // xterm auto-creates DomRenderer on WebglAddon dispose.
+          // Re-fit to recalculate dimensions with the new renderer.
+          requestAnimationFrame(() => fitAddon.fit())
+        })
+        term.loadAddon(webglAddon)
+      } catch { /* fallback to DOM */ }
     }
     // DOM renderer is the default — no addon needed
     try {
