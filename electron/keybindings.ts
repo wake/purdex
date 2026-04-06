@@ -1,6 +1,6 @@
 import type { MenuItemConstructorOptions } from 'electron'
 
-export type MenuGroup = 'tab-index' | 'tab-nav' | 'tab-action' | 'app' | 'view' | 'file'
+export type MenuGroup = 'tab-index' | 'tab-nav' | 'tab-action' | 'workspace-nav' | 'app' | 'view' | 'file'
 
 export interface KeybindingDef {
   action: string
@@ -27,6 +27,18 @@ const DEFAULT_KEYBINDINGS: readonly KeybindingDef[] = [
   { action: 'reopen-closed-tab', accelerator: 'CommandOrControl+Shift+T', label: 'Reopen Closed Tab', menuCategory: 'Tab', menuGroup: 'tab-action' },
   { action: 'open-settings', accelerator: 'CommandOrControl+,', label: 'Settings', menuCategory: 'App', menuGroup: 'app' },
   { action: 'open-history', accelerator: 'CommandOrControl+Y', label: 'History', menuCategory: 'View', menuGroup: 'view' },
+  // Workspace navigation
+  { action: 'switch-workspace-1', accelerator: 'CommandOrControl+Alt+1', label: 'Workspace 1', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
+  { action: 'switch-workspace-2', accelerator: 'CommandOrControl+Alt+2', label: 'Workspace 2', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
+  { action: 'switch-workspace-3', accelerator: 'CommandOrControl+Alt+3', label: 'Workspace 3', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
+  { action: 'switch-workspace-4', accelerator: 'CommandOrControl+Alt+4', label: 'Workspace 4', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
+  { action: 'switch-workspace-5', accelerator: 'CommandOrControl+Alt+5', label: 'Workspace 5', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
+  { action: 'switch-workspace-6', accelerator: 'CommandOrControl+Alt+6', label: 'Workspace 6', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
+  { action: 'switch-workspace-7', accelerator: 'CommandOrControl+Alt+7', label: 'Workspace 7', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
+  { action: 'switch-workspace-8', accelerator: 'CommandOrControl+Alt+8', label: 'Workspace 8', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
+  { action: 'switch-workspace-9', accelerator: 'CommandOrControl+Alt+9', label: 'Workspace 9', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
+  { action: 'prev-workspace', accelerator: 'CommandOrControl+Alt+Up', label: 'Previous Workspace', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
+  { action: 'next-workspace', accelerator: 'CommandOrControl+Alt+Down', label: 'Next Workspace', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
   // File
   { action: 'new-window', accelerator: 'CommandOrControl+N', label: 'New Window', menuCategory: 'File', menuGroup: 'file' },
 ]
@@ -87,6 +99,8 @@ export function buildMenuTemplate(
       ...(byGroup.get('tab-nav') ?? []),
       { type: 'separator' as const },
       ...(byGroup.get('tab-action') ?? []),
+      { type: 'separator' as const },
+      ...(byGroup.get('workspace-nav') ?? []),
     ],
   }
 

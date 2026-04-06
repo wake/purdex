@@ -284,4 +284,82 @@ describe('useShortcuts', () => {
       expect(ws?.tabs).toContain(closedTab.id)
     })
   })
+
+  describe('switch-workspace-{n}', () => {
+    it('switches to workspace by index', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+      useWorkspaceStore.getState().addTabToWorkspace(ws2.id, seedTabs(1, { addToWorkspace: false })[0].id)
+      renderHook(() => useShortcuts())
+
+      fire('switch-workspace-2')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(ws2.id)
+    })
+
+    it('ignores out-of-range workspace index', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      const currentWsId = useWorkspaceStore.getState().activeWorkspaceId
+      renderHook(() => useShortcuts())
+
+      fire('switch-workspace-5')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(currentWsId)
+    })
+
+    it('does nothing with 0 workspaces', () => {
+      const { fire } = mockElectronAPI()
+      useWorkspaceStore.getState().reset()
+      renderHook(() => useShortcuts())
+
+      fire('switch-workspace-1')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+    })
+  })
+
+  describe('prev-workspace / next-workspace', () => {
+    it('cycles to next workspace', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      const ws1Id = useWorkspaceStore.getState().activeWorkspaceId
+      const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+      renderHook(() => useShortcuts())
+
+      fire('next-workspace')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(ws2.id)
+    })
+
+    it('wraps from last to first workspace', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      const ws1Id = useWorkspaceStore.getState().activeWorkspaceId!
+      const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+      useWorkspaceStore.getState().setActiveWorkspace(ws2.id)
+      renderHook(() => useShortcuts())
+
+      fire('next-workspace')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(ws1Id)
+    })
+
+    it('cycles to prev workspace', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      const ws1Id = useWorkspaceStore.getState().activeWorkspaceId!
+      const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+      useWorkspaceStore.getState().setActiveWorkspace(ws2.id)
+      renderHook(() => useShortcuts())
+
+      fire('prev-workspace')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(ws1Id)
+    })
+
+    it('does nothing with 0 workspaces', () => {
+      const { fire } = mockElectronAPI()
+      useWorkspaceStore.getState().reset()
+      renderHook(() => useShortcuts())
+
+      fire('next-workspace')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+    })
+  })
 })
