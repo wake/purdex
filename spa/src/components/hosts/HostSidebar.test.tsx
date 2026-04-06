@@ -135,4 +135,32 @@ describe('HostSidebar', () => {
     render(<HostSidebar {...defaultProps} />)
     expect(screen.getByText('Hosts')).toBeInTheDocument()
   })
+
+  it('auto-expands new selectedHostId on prop change (e.g. host deletion fallback)', () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Test Host', ip: '1.2.3.4', port: 7860, order: 0 },
+        [HOST_B]: { id: HOST_B, name: 'Second Host', ip: '5.6.7.8', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, HOST_B],
+      runtime: {},
+    })
+
+    // Initial: HOST_ID selected and expanded, HOST_B collapsed
+    const { rerender } = render(<HostSidebar {...defaultProps} />)
+    expect(screen.getAllByText('Overview')).toHaveLength(1) // only HOST_ID expanded
+
+    // Collapse HOST_ID first by clicking it, then HOST_B remains collapsed
+    fireEvent.click(screen.getByText('Test Host'))
+    // Now both should be collapsed — no sub-pages visible
+    expect(screen.queryAllByText('Overview')).toHaveLength(0)
+
+    // Simulate host deletion fallback: selectedHostId changes to HOST_B
+    rerender(<HostSidebar {...defaultProps} selectedHostId={HOST_B} />)
+
+    // HOST_B should now be auto-expanded, showing its sub-pages
+    // With no useEffect, HOST_B stays collapsed → Overview count stays 0 → test fails
+    expect(screen.getAllByText('Overview')).toHaveLength(1)
+    expect(screen.getAllByText('Sessions')).toHaveLength(1)
+  })
 })
