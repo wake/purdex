@@ -17,6 +17,7 @@ import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useUndoToast } from './stores/useUndoToast'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { isStandaloneTab } from './types/tab'
+import { getVisibleTabIds } from './features/workspace'
 import { TabContextMenu } from './components/TabContextMenu'
 import { ThemeInjector } from './components/ThemeInjector'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -122,10 +123,14 @@ export default function App() {
   }, [fetchConfig, firstHostId])
 
   // --- Derive visible tabs for display ---
-  const activeWs = workspaces.find((w) => w.id === activeWorkspaceId)
-  const visibleTabs: Tab[] = activeWs
-    ? activeWs.tabs.map((id) => tabs[id]).filter(Boolean)
-    : []
+  const visibleTabIds = getVisibleTabIds({
+    tabs,
+    tabOrder,
+    activeTabId,
+    workspaces,
+    activeWorkspaceId,
+  })
+  const displayTabs: Tab[] = visibleTabIds.map((id) => tabs[id]).filter(Boolean)
 
   const standaloneTabs = tabOrder
     .filter((id) => isStandaloneTab(id, workspaces))
@@ -133,10 +138,6 @@ export default function App() {
     .filter(Boolean)
 
   const activeStandaloneTabId = activeTabId && isStandaloneTab(activeTabId, workspaces) ? activeTabId : null
-
-  const displayTabs = activeStandaloneTabId
-    ? [tabs[activeStandaloneTabId]].filter(Boolean)
-    : visibleTabs
 
   // --- Tab/Workspace action handlers ---
   const {

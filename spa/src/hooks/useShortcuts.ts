@@ -2,35 +2,8 @@ import { useEffect } from 'react'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
-import { createTab, isStandaloneTab } from '../types/tab'
-
-/** Get the tab IDs currently visible in the TabBar (workspace-aware). */
-function getVisibleTabIds(): string[] {
-  const { tabs, tabOrder, activeTabId } = useTabStore.getState()
-  const { workspaces, activeWorkspaceId } = useWorkspaceStore.getState()
-
-  // Standalone tab selected — only that tab is visible
-  if (activeTabId && isStandaloneTab(activeTabId, workspaces)) {
-    return [activeTabId]
-  }
-
-  // Active workspace — use its tab order
-  const activeWs = workspaces.find((w) => w.id === activeWorkspaceId)
-  if (activeWs) {
-    return activeWs.tabs.filter((id) => !!tabs[id])
-  }
-
-  // Fallback to global tabOrder
-  return tabOrder
-}
-
-function addToActiveWorkspace(tabId: string): void {
-  const wsId = useWorkspaceStore.getState().activeWorkspaceId
-  if (wsId) {
-    useWorkspaceStore.getState().addTabToWorkspace(wsId, tabId)
-    useWorkspaceStore.getState().setWorkspaceActiveTab(wsId, tabId)
-  }
-}
+import { createTab } from '../types/tab'
+import { getVisibleTabIds as getVisibleTabIdsShared } from '../features/workspace'
 
 export function useShortcuts(): void {
   useEffect(() => {
@@ -38,7 +11,13 @@ export function useShortcuts(): void {
 
     const cleanup = window.electronAPI.onShortcut(({ action }) => {
       const tabState = useTabStore.getState()
-      const visibleIds = getVisibleTabIds()
+      const visibleIds = getVisibleTabIdsShared({
+        tabs: tabState.tabs,
+        tabOrder: tabState.tabOrder,
+        activeTabId: tabState.activeTabId,
+        workspaces: useWorkspaceStore.getState().workspaces,
+        activeWorkspaceId: useWorkspaceStore.getState().activeWorkspaceId,
+      })
 
       if (action.startsWith('switch-tab-')) {
         if (action === 'switch-tab-last') {
@@ -85,19 +64,19 @@ export function useShortcuts(): void {
         const tab = createTab({ kind: 'new-tab' })
         tabState.addTab(tab)
         tabState.setActiveTab(tab.id)
-        addToActiveWorkspace(tab.id)
+        useWorkspaceStore.getState().insertTab(tab.id)
         return
       }
 
       if (action === 'open-settings') {
         const tabId = tabState.openSingletonTab({ kind: 'settings', scope: 'global' })
-        addToActiveWorkspace(tabId)
+        useWorkspaceStore.getState().insertTab(tabId)
         return
       }
 
       if (action === 'open-history') {
         const tabId = tabState.openSingletonTab({ kind: 'history' })
-        addToActiveWorkspace(tabId)
+        useWorkspaceStore.getState().insertTab(tabId)
         return
       }
 
@@ -106,7 +85,7 @@ export function useShortcuts(): void {
         if (tab) {
           tabState.addTab(tab)
           tabState.setActiveTab(tab.id)
-          addToActiveWorkspace(tab.id)
+          useWorkspaceStore.getState().insertTab(tab.id)
         }
         return
       }
