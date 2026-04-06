@@ -15,7 +15,7 @@
 2. **Editor Module 擴充** — 完整 Monaco editor 整合、明確存檔機制、二進制檔案預覽
 3. **File Opener Registry** — 模組化的檔案開啟機制，解耦 file tree 與 editor
 
-實作順序：Workspace 強化（Phase 7）→ Side Panel 系統（Phase 8）→ Editor Module（Phase 9）。
+實作順序：Workspace 強化（Phase 10）→ Side Panel 系統（Phase 11）→ Editor Module（Phase 12）。
 
 ---
 
@@ -304,17 +304,17 @@ Buffer 在 tab 關閉時清除。未存檔的 tab 關閉前需確認。
 
 ## 7. 實作順序
 
-### Phase 7：Workspace 強化
+### Phase 10：Workspace 強化
 
 1. Workspace 模組化（tab 生命週期、store API 完備性）
 2. Workspace 設定 UI（右鍵選單 → 名稱/顏色/icon）
 3. 位置制快捷鍵（⌘⌥1-9 + ⌘⌥↑/↓）
 
-### Phase 8：Side Panel 系統
+### Phase 11：Side Panel 系統
 
 照既有 UI spec Phase 3，無修訂。
 
-### Phase 9：Editor Module
+### Phase 12：Editor Module
 
 1. Daemon `fs` module — CRUD API（list/read/write/stat/mkdir/delete/rename）
 2. SPA `fs-api.ts` 封裝層

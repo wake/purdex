@@ -64,9 +64,10 @@
 
 | Phase | 主題 | Spec | 說明 |
 |-------|------|------|------|
-| **7** | **Workspace 強化** | [spec](superpowers/specs/2026-04-06-phase7-workspace-enhancement-design.md) | defaultHost/Path、快捷鍵切換、quick actions、dashboard |
-| **8** | **Side Panel 系統** | [spec](superpowers/specs/2026-04-06-phase8-side-panel-system-design.md) | 4 zone 框架、panel registry、三模式（固定/預設/縮減） |
-| **9** | **Editor Module** | [spec](superpowers/specs/2026-04-06-phase9-editor-module-design.md) | daemon FS API、Monaco editor、file opener registry、file tree、grep、diff |
+| **7-9** | *（保留）* | — | 保留給其他執行端 |
+| **10** | **Workspace 強化** | [spec](superpowers/specs/2026-04-06-phase10-workspace-enhancement-design.md) | features/ 架構、全自由制、設定 UI、位置制快捷鍵 |
+| **11** | **Side Panel 系統** | [spec](superpowers/specs/2026-04-06-phase11-side-panel-system-design.md) | 4 zone 框架、panel registry、三模式（固定/預設/縮減） |
+| **12** | **Editor Module** | [spec](superpowers/specs/2026-04-06-phase12-editor-module-design.md) | daemon FS API、Monaco editor、file opener registry、file tree、grep、diff |
 
 ---
 
