@@ -210,6 +210,20 @@ insertTab: (tabId: string, workspaceId?: string | null) => void
 
 10.2、10.3、10.4 彼此無依賴，可並行。
 
+## 5.1 Sub-phase 拆分
+
+為降低 review 與開發負擔，拆為 5 個 sub-phase，各自獨立 PR：
+
+| Sub-phase | Tasks | 主題 | 性質 |
+|-----------|-------|------|------|
+| **10a** | Task 1-2 | features/ 架構搬遷 | 純 refactor，零行為變更 |
+| **10b** | Task 3-5 | 全自由制 store + helpers | 核心行為改動 |
+| **10c** | Task 6, 9 | 刪除確認 + 首個 workspace 詢問 | 新 UI 對話框 |
+| **10d** | Task 7 | 右鍵選單 + Titlebar Chip | 設定 UI |
+| **10e** | Task 8 | 快捷鍵 | Electron + SPA |
+
+依賴鏈：`10a → 10b → 10c/10d/10e`（後三者可並行）
+
 ---
 
 ## 6. 測試策略

@@ -65,7 +65,11 @@
 | Phase | 主題 | Spec | 說明 |
 |-------|------|------|------|
 | **7-9** | *（保留）* | — | 保留給其他執行端 |
-| **10** | **Workspace 強化** | [spec](superpowers/specs/2026-04-06-phase10-workspace-enhancement-design.md) | features/ 架構、全自由制、設定 UI、位置制快捷鍵 |
+| **10a** | **Workspace — 架構搬遷** | [spec](superpowers/specs/2026-04-06-phase10-workspace-enhancement-design.md) | features/ 結構 + store/hooks/ActivityBar 搬遷 |
+| **10b** | **Workspace — 全自由制** | 同上 | activeWorkspaceId nullable + insertTab + getVisibleTabIds |
+| **10c** | **Workspace — 對話框** | 同上 | 刪除確認 UI + 首個 workspace 詢問 |
+| **10d** | **Workspace — 設定 UI** | 同上 | 右鍵選單 + Titlebar Chip + 重新命名/顏色/icon |
+| **10e** | **Workspace — 快捷鍵** | 同上 | ⌘⌥1-9 + ⌘⌥↑/↓ 位置制切換 |
 | **11** | **Side Panel 系統** | [spec](superpowers/specs/2026-04-06-phase11-side-panel-system-design.md) | 4 zone 框架、panel registry、三模式（固定/預設/縮減） |
 | **12** | **Editor Module** | [spec](superpowers/specs/2026-04-06-phase12-editor-module-design.md) | daemon FS API、Monaco editor、file opener registry、file tree、grep、diff |
 
