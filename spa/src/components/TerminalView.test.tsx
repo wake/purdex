@@ -47,7 +47,7 @@ vi.mock('@xterm/addon-fit', () => ({
 
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn(function () {
-    return { dispose: vi.fn() }
+    return { dispose: vi.fn(), onContextLoss: vi.fn() }
   }),
 }))
 
