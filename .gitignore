@@ -1,6 +1,7 @@
 .superpowers/
 .worktrees/
 bin/
+node_modules/
 spa/node_modules/
 spa/dist/
 .playwright-mcp/
