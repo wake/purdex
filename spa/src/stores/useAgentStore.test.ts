@@ -630,6 +630,32 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('running')
   })
 
+  it('SessionStart clears error status', () => {
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'StopFailure',
+      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('error')
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'SessionStart',
+      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('idle')
+  })
+
+  it('Stop clears error status', () => {
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'StopFailure',
+      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('error')
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'Stop',
+      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('idle')
+  })
+
   it('consecutive StopFailure updates error status', () => {
     useAgentStore.getState().handleHookEvent(H, 'dev', {
       tmux_session: 'dev', event_name: 'StopFailure',

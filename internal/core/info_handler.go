@@ -11,7 +11,7 @@ import (
 	"github.com/wake/tmux-box/internal/config"
 )
 
-// Version is the tbox daemon version, set via ldflags at build time.
+// Version is the purdex daemon version, set via ldflags at build time.
 // Defaults to "dev" for local development builds.
 var Version = "dev"
 
