@@ -124,7 +124,10 @@ export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostI
       conn.close()
       connRef.current = null
     }
-  }, [wsUrl]) // Only re-run on wsUrl change; callbacks stabilized via refs
+  // Other deps (containerRef, fitAddonRef, getTicket, hostId, termRef) are stable refs or
+  // props captured once at mount; callbacks stabilized via refs above.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wsUrl])
 
   return connRef
 }

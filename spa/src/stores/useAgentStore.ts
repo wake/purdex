@@ -64,7 +64,7 @@ export function deriveStatus(eventName: string, rawEvent?: Record<string, unknow
 
 export const useAgentStore = create<AgentState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       events: {},
       statuses: {},
       unread: {},
@@ -83,10 +83,9 @@ export const useAgentStore = create<AgentState>()(
           if (!agentId) return
           set((s) => {
             const current = s.activeSubagents[key] || []
-            if (current.includes(agentId)) return { events: { ...s.events, [key]: event } }
+            if (current.includes(agentId)) return s
             return {
               activeSubagents: { ...s.activeSubagents, [key]: [...current, agentId] },
-              events: { ...s.events, [key]: event },
             }
           })
           return
@@ -97,14 +96,14 @@ export const useAgentStore = create<AgentState>()(
           set((s) => {
             const current = s.activeSubagents[key] || []
             const filtered = current.filter((id) => id !== agentId)
+            if (filtered.length === current.length) return s // orphan: agent_id not tracked
             if (filtered.length === 0) {
               // eslint-disable-next-line @typescript-eslint/no-unused-vars
               const { [key]: _, ...rest } = s.activeSubagents
-              return { activeSubagents: rest, events: { ...s.events, [key]: event } }
+              return { activeSubagents: rest }
             }
             return {
               activeSubagents: { ...s.activeSubagents, [key]: filtered },
-              events: { ...s.events, [key]: event },
             }
           })
           return
@@ -139,6 +138,20 @@ export const useAgentStore = create<AgentState>()(
           })
         }
 
+        // Error guard: when in error state, only whitelisted events can
+        // clear it. Non-whitelisted events are suppressed entirely (both
+        // events map and status) to keep the two in sync.
+        if (derived !== null && derived !== 'error') {
+          const currentStatus = get().statuses[key]
+          if (currentStatus === 'error') {
+            const canClearError =
+              event.event_name === 'UserPromptSubmit' ||
+              event.event_name === 'SessionStart' ||
+              event.event_name === 'Stop'
+            if (!canClearError) return
+          }
+        }
+
         // Store the latest event
         set((s) => ({ events: { ...s.events, [key]: event } }))
 
@@ -149,13 +162,7 @@ export const useAgentStore = create<AgentState>()(
         }
 
         if (derived !== null) {
-          // Don't let informational Notification subtypes (idle_prompt, auth_success)
-          // downgrade an error status — the user should see the error until a real
-          // state change (UserPromptSubmit, SessionStart, Stop) clears it.
-          set((s) => {
-            if (s.statuses[key] === 'error' && derived === 'idle' && event.event_name === 'Notification') return s
-            return { statuses: { ...s.statuses, [key]: derived } }
-          })
+          set((s) => ({ statuses: { ...s.statuses, [key]: derived } }))
 
           // Mark unread when not focused: all 'waiting' statuses are actionable;
           // 'idle' statuses are actionable only if they don't come from a Notification event

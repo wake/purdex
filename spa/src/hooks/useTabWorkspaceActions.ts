@@ -42,7 +42,7 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     }
 
     // markRead is handled by the cross-store subscription in active-session.ts
-  }, [tabs, setActiveTab, findWorkspaceByTab, setActiveWorkspace, setWorkspaceActiveTab])
+  }, [setActiveTab, findWorkspaceByTab, setActiveWorkspace, setWorkspaceActiveTab])
 
   const handleCloseTab = useCallback((tabId: string) => {
     const tab = tabs[tabId]

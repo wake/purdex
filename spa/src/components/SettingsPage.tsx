@@ -6,7 +6,8 @@ import { SettingsSidebar } from './settings/SettingsSidebar'
 // Persists across unmount/remount (keepAliveCount=0 destroys component on tab switch)
 let lastSection: string | null = null
 
-/** @internal test-only */
+/** @internal test-only — must co-locate to access module-scoped variable */
+// eslint-disable-next-line react-refresh/only-export-components
 export function resetLastSection() { lastSection = null }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

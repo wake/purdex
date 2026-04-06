@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useClickOutside } from '../hooks/useClickOutside'
@@ -31,9 +31,8 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
   const t = useI18nStore((s) => s.t)
   const caps = getPlatformCapabilities()
   const ref = useRef<HTMLDivElement>(null)
-  const [adjustedPos, setAdjustedPos] = useState(position)
 
-  // Viewport boundary correction — adjust position before paint
+  // Viewport boundary correction — directly adjust DOM before paint (no state needed)
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
@@ -43,7 +42,8 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
     if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 4
     if (x < 0) x = 4
     if (y < 0) y = 4
-    setAdjustedPos({ x, y })
+    el.style.left = `${x}px`
+    el.style.top = `${y}px`
   }, [position])
 
   useClickOutside(ref, onClose)
@@ -96,7 +96,7 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
     <div
       ref={ref}
       className="fixed z-50 bg-surface-elevated border border-border-default rounded-lg shadow-xl py-1 min-w-[200px] text-xs"
-      style={{ left: adjustedPos.x, top: adjustedPos.y }}
+      style={{ left: position.x, top: position.y }}
     >
       {cleaned.map((item, i) => {
         if (item === 'separator') {

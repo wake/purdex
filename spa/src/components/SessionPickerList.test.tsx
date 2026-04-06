@@ -103,7 +103,7 @@ describe('SessionPickerList', () => {
       runtime: {
         [HOST_A]: {
           status: 'connected',
-          info: { host_id: HOST_A, tmux_instance: '12345:67890', tbox_version: '1.0', tmux_version: '3.6', os: 'darwin', arch: 'arm64' },
+          info: { host_id: HOST_A, tmux_instance: '12345:67890', purdex_version: '1.0', tmux_version: '3.6', os: 'darwin', arch: 'arm64' },
         },
       },
     })

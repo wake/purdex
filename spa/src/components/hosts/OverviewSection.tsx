@@ -187,7 +187,7 @@ function TokenField({ token, ip, port, onSave, t }: {
             type={visible ? 'text' : 'password'}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="tbox_..."
+            placeholder="purdex_..."
             className="bg-surface-secondary border border-border-default rounded px-2 py-1 text-sm text-text-primary font-mono w-full max-w-xs"
             autoFocus
             onKeyDown={(e) => {
@@ -633,8 +633,8 @@ export function OverviewSection({ hostId }: Props) {
       <Section title={t('hosts.system_info')}>
         {info ? (
           <>
-            <Field label="tbox">
-              <span className="text-sm text-text-muted font-mono">{info.tbox_version}</span>
+            <Field label="purdex">
+              <span className="text-sm text-text-muted font-mono">{info.purdex_version}</span>
             </Field>
             <Field label="tmux">
               <span className="text-sm text-text-muted font-mono">{info.tmux_version}</span>

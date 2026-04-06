@@ -11,7 +11,7 @@ import (
 	"github.com/wake/tmux-box/internal/config"
 )
 
-// Version is the tbox daemon version, set via ldflags at build time.
+// Version is the purdex daemon version, set via ldflags at build time.
 // Defaults to "dev" for local development builds.
 var Version = "dev"
 
@@ -45,7 +45,7 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	info := map[string]string{
 		"host_id":       hostID,
 		"tmux_instance": config.GetTmuxInstance(),
-		"tbox_version":  Version,
+		"purdex_version": Version,
 		"tmux_version":  getTmuxVersion(),
 		"os":            runtime.GOOS,
 		"arch":          runtime.GOARCH,

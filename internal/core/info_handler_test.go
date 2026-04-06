@@ -105,7 +105,7 @@ func TestInfoEndpoint(t *testing.T) {
 	// Must contain expected fields
 	assert.Equal(t, "test-host:abc123", body["host_id"])
 	assert.Contains(t, body, "tmux_instance")
-	assert.Contains(t, body, "tbox_version")
+	assert.Contains(t, body, "purdex_version")
 	assert.Contains(t, body, "tmux_version")
 	assert.NotEmpty(t, body["os"])
 	assert.NotEmpty(t, body["arch"])

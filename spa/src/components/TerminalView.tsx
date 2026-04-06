@@ -41,11 +41,15 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
     getTicket,
   })
 
-  // Manual reconnect
+  // Manual reconnect — retrying resets when SM fast-retry cycle completes,
+  // or when hostStatus changes (fallback: retryAtStatus !== hostStatus).
   const { manualRetry, status: hostStatus } = useHostConnection(hostId ?? '')
-  const [retrying, setRetrying] = useState(false)
-  const handleRetry = useCallback(() => { setRetrying(true); manualRetry() }, [manualRetry])
-  useEffect(() => { setRetrying(false) }, [hostStatus])
+  const [retryAtStatus, setRetryAtStatus] = useState<string | null>(null)
+  const retrying = retryAtStatus !== null && retryAtStatus === hostStatus
+  const handleRetry = useCallback(() => {
+    setRetryAtStatus(hostStatus)
+    Promise.resolve(manualRetry()).finally(() => setRetryAtStatus(null))
+  }, [hostStatus, manualRetry])
 
   // Drag-drop state
   const [isDragging, setIsDragging] = useState(false)
@@ -100,7 +104,11 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
 
   // Reset state on wsUrl change. React guarantees effects fire in declaration
   // order, so useTerminal (mount) → useTerminalWs (connect) → this reset.
+  // Sync setState is intentional: the effect acts as a state-reset synchronizer
+  // when the wsUrl prop changes, ensuring stale ready/disconnected state from
+  // the previous connection doesn't leak into the new one.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setReady(false)
     setDisconnected(false)
   }, [wsUrl])
@@ -112,6 +120,7 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
   // the terminal was alive and connected the whole time.
   useEffect(() => {
     if (visible && !prevVisible.current) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync reset for keep-alive tab re-show
       setReady(true)
       requestAnimationFrame(() => {
         fitAddonRef.current?.fit()

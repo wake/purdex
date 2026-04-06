@@ -21,7 +21,7 @@ const HOST_ID = 'test-host'
 beforeEach(() => {
   vi.clearAllMocks()
   useHostStore.setState({
-    hosts: { [HOST_ID]: { id: HOST_ID, name: 'Test', ip: '1.2.3.4', port: 7860, order: 0, token: 'tbox_testtoken' } },
+    hosts: { [HOST_ID]: { id: HOST_ID, name: 'Test', ip: '1.2.3.4', port: 7860, order: 0, token: 'purdex_testtoken' } },
     hostOrder: [HOST_ID],
     runtime: { [HOST_ID]: { status: 'connected' } },
   })
@@ -30,7 +30,7 @@ beforeEach(() => {
   mockFetchInfo.mockResolvedValue({
     ok: true,
     json: () => Promise.resolve({
-      tbox_version: '1.0.0',
+      purdex_version: '1.0.0',
       tmux_version: '3.6',
       os: 'darwin',
       arch: 'arm64',
@@ -101,7 +101,7 @@ describe('OverviewSection', () => {
     // Need more than 1 host for delete button to appear
     useHostStore.setState({
       hosts: {
-        [HOST_ID]: { id: HOST_ID, name: 'Test', ip: '1.2.3.4', port: 7860, order: 0, token: 'tbox_testtoken' },
+        [HOST_ID]: { id: HOST_ID, name: 'Test', ip: '1.2.3.4', port: 7860, order: 0, token: 'purdex_testtoken' },
         'other-host': { id: 'other-host', name: 'Other', ip: '5.6.7.8', port: 7860, order: 1 },
       },
       hostOrder: [HOST_ID, 'other-host'],
@@ -189,13 +189,13 @@ describe('TokenField', () => {
     fireEvent.click(tokenEditBtn)
 
     // Should show a password input with the current token value
-    const input = screen.getByPlaceholderText('tbox_...')
+    const input = screen.getByPlaceholderText('purdex_...')
     expect(input).toBeInTheDocument()
     expect(input).toHaveAttribute('type', 'password')
-    expect(input).toHaveValue('tbox_testtoken')
+    expect(input).toHaveValue('purdex_testtoken')
 
     // Should show the token hint text
-    expect(screen.getByText("Run 'tbox token generate' on the host to get a token")).toBeInTheDocument()
+    expect(screen.getByText("Token is auto-generated during pairing or startup")).toBeInTheDocument()
   })
 
   it('eye toggle switches input between password and text', async () => {
@@ -205,7 +205,7 @@ describe('TokenField', () => {
     const editButtons = screen.getAllByText('Edit')
     fireEvent.click(editButtons[editButtons.length - 1])
 
-    const input = screen.getByPlaceholderText('tbox_...')
+    const input = screen.getByPlaceholderText('purdex_...')
     expect(input).toHaveAttribute('type', 'password')
 
     // Click the eye toggle button (in editing mode, it's a sibling of input)
@@ -235,8 +235,8 @@ describe('TokenField', () => {
     fireEvent.click(editButtons[editButtons.length - 1])
 
     // Change the token value
-    const input = screen.getByPlaceholderText('tbox_...')
-    fireEvent.change(input, { target: { value: 'tbox_newtoken' } })
+    const input = screen.getByPlaceholderText('purdex_...')
+    fireEvent.change(input, { target: { value: 'purdex_newtoken' } })
 
     // Click save (check mark button)
     const actionButtons = input.parentElement!.querySelectorAll('button')
@@ -250,7 +250,7 @@ describe('TokenField', () => {
       // fetch was called with correct URL and auth header
       expect(fetchSpy).toHaveBeenCalledWith(
         'http://1.2.3.4:7860/api/sessions',
-        { headers: { Authorization: 'Bearer tbox_newtoken' } },
+        { headers: { Authorization: 'Bearer purdex_newtoken' } },
       )
     })
 
@@ -261,7 +261,7 @@ describe('TokenField', () => {
 
     // Store should be updated with new token
     const updatedHost = useHostStore.getState().hosts[HOST_ID]
-    expect(updatedHost.token).toBe('tbox_newtoken')
+    expect(updatedHost.token).toBe('purdex_newtoken')
   })
 
   it('401 response shows "Invalid token" error', async () => {
@@ -278,8 +278,8 @@ describe('TokenField', () => {
     fireEvent.click(editButtons[editButtons.length - 1])
 
     // Change the token
-    const input = screen.getByPlaceholderText('tbox_...')
-    fireEvent.change(input, { target: { value: 'tbox_bad' } })
+    const input = screen.getByPlaceholderText('purdex_...')
+    fireEvent.change(input, { target: { value: 'purdex_bad' } })
 
     // Click save
     const actionButtons = input.parentElement!.querySelectorAll('button')
@@ -291,7 +291,7 @@ describe('TokenField', () => {
     })
 
     // Should still be in editing mode
-    expect(screen.getByPlaceholderText('tbox_...')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('purdex_...')).toBeInTheDocument()
   })
 
   it('cancel resets to original value and exits editing mode', async () => {
@@ -302,9 +302,9 @@ describe('TokenField', () => {
     fireEvent.click(editButtons[editButtons.length - 1])
 
     // Change the token
-    const input = screen.getByPlaceholderText('tbox_...')
-    fireEvent.change(input, { target: { value: 'tbox_changed' } })
-    expect(input).toHaveValue('tbox_changed')
+    const input = screen.getByPlaceholderText('purdex_...')
+    fireEvent.change(input, { target: { value: 'purdex_changed' } })
+    expect(input).toHaveValue('purdex_changed')
 
     // Click cancel (X button)
     const actionButtons = input.parentElement!.querySelectorAll('button')
@@ -313,10 +313,10 @@ describe('TokenField', () => {
 
     // Should exit editing mode and show masked token
     expect(screen.getByText('••••••••')).toBeInTheDocument()
-    expect(screen.queryByPlaceholderText('tbox_...')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('purdex_...')).not.toBeInTheDocument()
 
     // Store token should be unchanged
-    expect(useHostStore.getState().hosts[HOST_ID].token).toBe('tbox_testtoken')
+    expect(useHostStore.getState().hosts[HOST_ID].token).toBe('purdex_testtoken')
   })
 
   it('save with unchanged token closes editing without fetch', async () => {
@@ -327,7 +327,7 @@ describe('TokenField', () => {
     fireEvent.click(editButtons[editButtons.length - 1])
 
     // Don't change the value — just save
-    const input = screen.getByPlaceholderText('tbox_...')
+    const input = screen.getByPlaceholderText('purdex_...')
     const actionButtons = input.parentElement!.querySelectorAll('button')
     const saveBtn = actionButtons[1]
     fireEvent.click(saveBtn)
@@ -349,8 +349,8 @@ describe('TokenField', () => {
     fireEvent.click(editButtons[editButtons.length - 1])
 
     // Change token and save
-    const input = screen.getByPlaceholderText('tbox_...')
-    fireEvent.change(input, { target: { value: 'tbox_fail' } })
+    const input = screen.getByPlaceholderText('purdex_...')
+    fireEvent.change(input, { target: { value: 'purdex_fail' } })
 
     const actionButtons = input.parentElement!.querySelectorAll('button')
     const saveBtn = actionButtons[1]
@@ -361,7 +361,7 @@ describe('TokenField', () => {
     })
 
     // Should still be in editing mode
-    expect(screen.getByPlaceholderText('tbox_...')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('purdex_...')).toBeInTheDocument()
   })
 
   it('non-401 error shows HTTP status', async () => {
@@ -378,8 +378,8 @@ describe('TokenField', () => {
     fireEvent.click(editButtons[editButtons.length - 1])
 
     // Change token and save
-    const input = screen.getByPlaceholderText('tbox_...')
-    fireEvent.change(input, { target: { value: 'tbox_server_err' } })
+    const input = screen.getByPlaceholderText('purdex_...')
+    fireEvent.change(input, { target: { value: 'purdex_server_err' } })
 
     const actionButtons = input.parentElement!.querySelectorAll('button')
     const saveBtn = actionButtons[1]
@@ -397,15 +397,15 @@ describe('TokenField', () => {
     const editButtons = screen.getAllByText('Edit')
     fireEvent.click(editButtons[editButtons.length - 1])
 
-    const input = screen.getByPlaceholderText('tbox_...')
-    fireEvent.change(input, { target: { value: 'tbox_changed' } })
+    const input = screen.getByPlaceholderText('purdex_...')
+    fireEvent.change(input, { target: { value: 'purdex_changed' } })
 
     // Press Escape
     fireEvent.keyDown(input, { key: 'Escape' })
 
     // Should exit editing mode
     expect(screen.getByText('••••••••')).toBeInTheDocument()
-    expect(screen.queryByPlaceholderText('tbox_...')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('purdex_...')).not.toBeInTheDocument()
   })
 
   it('Enter key triggers save', async () => {
@@ -421,8 +421,8 @@ describe('TokenField', () => {
     const editButtons = screen.getAllByText('Edit')
     fireEvent.click(editButtons[editButtons.length - 1])
 
-    const input = screen.getByPlaceholderText('tbox_...')
-    fireEvent.change(input, { target: { value: 'tbox_enter' } })
+    const input = screen.getByPlaceholderText('purdex_...')
+    fireEvent.change(input, { target: { value: 'purdex_enter' } })
 
     // Press Enter
     fireEvent.keyDown(input, { key: 'Enter' })
@@ -431,7 +431,7 @@ describe('TokenField', () => {
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         'http://1.2.3.4:7860/api/sessions',
-        { headers: { Authorization: 'Bearer tbox_enter' } },
+        { headers: { Authorization: 'Bearer purdex_enter' } },
       )
     })
   })

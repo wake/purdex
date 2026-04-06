@@ -21,6 +21,7 @@ export function DevEnvironmentSection() {
   const spaSource: 'dev' | 'bundled' = window.location.protocol === 'app:' ? 'bundled' : 'dev'
 
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
+  const appInfoRef = useRef<AppInfo | null>(null)
   const [remoteInfo, setRemoteInfo] = useState<RemoteInfo | null>(null)
   const [status, setStatus] = useState<UpdateStatus>('idle')
   const [updating, setUpdating] = useState(false)
@@ -38,9 +39,7 @@ export function DevEnvironmentSection() {
 
   useEffect(() => () => stopPolling(), [stopPolling])
 
-  useEffect(() => {
-    window.electronAPI?.getAppInfo().then(setAppInfo)
-  }, [])
+  useEffect(() => { appInfoRef.current = appInfo }, [appInfo])
 
   const processCheckResult = useCallback(
     (remote: RemoteInfo) => {
@@ -50,13 +49,14 @@ export function DevEnvironmentSection() {
         setStatus('error')
         return
       }
-      if (remote.electronHash !== appInfo?.electronHash || remote.spaHash !== appInfo?.spaHash) {
+      const ai = appInfoRef.current
+      if (remote.electronHash !== ai?.electronHash || remote.spaHash !== ai?.spaHash) {
         setStatus('update_available')
       } else {
         setStatus('up_to_date')
       }
     },
-    [appInfo],
+    [], // deps now empty — reads appInfo from ref
   )
 
   const checkUpdate = useCallback(async () => {
@@ -89,9 +89,18 @@ export function DevEnvironmentSection() {
     }
   }, [daemonBase, token, stopPolling, processCheckResult])
 
+  // Keep ref in sync so the mount effect can call the latest version
+  const checkUpdateRef = useRef(checkUpdate)
+  useEffect(() => { checkUpdateRef.current = checkUpdate }, [checkUpdate])
+
+  // Fetch appInfo on mount, then auto-check for updates (event-driven, not effect cascade)
   useEffect(() => {
-    if (appInfo) checkUpdate()
-  }, [appInfo, checkUpdate])
+    window.electronAPI?.getAppInfo().then((info) => {
+      setAppInfo(info)
+      appInfoRef.current = info
+      checkUpdateRef.current()
+    })
+  }, [])
 
   useEffect(() => {
     if (!window.electronAPI?.onUpdateProgress) return

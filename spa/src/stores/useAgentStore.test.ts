@@ -544,6 +544,135 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().activeSubagents['other-host:dev']).toEqual(['agent-C'])
   })
 
+  it('SubagentStart does not overwrite events map', () => {
+    const mainEvent: AgentHookEvent = {
+      tmux_session: 'dev', event_name: 'UserPromptSubmit',
+      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent(H, 'dev', mainEvent)
+    expect(useAgentStore.getState().events[`${H}:dev`].event_name).toBe('UserPromptSubmit')
+
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'SubagentStart',
+      raw_event: { agent_id: 'sub-1' }, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().events[`${H}:dev`].event_name).toBe('UserPromptSubmit')
+    expect(useAgentStore.getState().activeSubagents[`${H}:dev`]).toEqual(['sub-1'])
+  })
+
+  it('SubagentStop does not overwrite events map', () => {
+    const mainEvent: AgentHookEvent = {
+      tmux_session: 'dev', event_name: 'UserPromptSubmit',
+      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent(H, 'dev', mainEvent)
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'SubagentStart',
+      raw_event: { agent_id: 'sub-1' }, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'SubagentStop',
+      raw_event: { agent_id: 'sub-1' }, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().events[`${H}:dev`].event_name).toBe('UserPromptSubmit')
+    expect(useAgentStore.getState().activeSubagents[`${H}:dev`]).toBeUndefined()
+  })
+
+  it('orphan SubagentStop (no prior start) is a no-op', () => {
+    const mainEvent: AgentHookEvent = {
+      tmux_session: 'dev', event_name: 'Stop',
+      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent(H, 'dev', mainEvent)
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'SubagentStop',
+      raw_event: { agent_id: 'orphan-1' }, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().events[`${H}:dev`].event_name).toBe('Stop')
+    expect(useAgentStore.getState().activeSubagents[`${H}:dev`]).toBeUndefined()
+  })
+
+  it('PermissionRequest does not overwrite error status or events', () => {
+    const stopEvent = {
+      tmux_session: 'dev', event_name: 'StopFailure',
+      raw_event: { error: 'crash' }, agent_type: 'cc' as const, broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent(H, 'dev', stopEvent)
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('error')
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'PermissionRequest',
+      raw_event: { tool_name: 'Bash' }, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('error')
+    expect(useAgentStore.getState().events[`${H}:dev`].event_name).toBe('StopFailure')
+  })
+
+  it('Notification(permission_prompt) does not overwrite error status or events', () => {
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'StopFailure',
+      raw_event: { error: 'crash' }, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'Notification',
+      raw_event: { notification_type: 'permission_prompt' }, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('error')
+    expect(useAgentStore.getState().events[`${H}:dev`].event_name).toBe('StopFailure')
+  })
+
+  it('UserPromptSubmit clears error status', () => {
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'StopFailure',
+      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('error')
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'UserPromptSubmit',
+      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('running')
+  })
+
+  it('SessionStart clears error status', () => {
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'StopFailure',
+      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('error')
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'SessionStart',
+      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('idle')
+  })
+
+  it('Stop clears error status', () => {
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'StopFailure',
+      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('error')
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'Stop',
+      raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('idle')
+  })
+
+  it('consecutive StopFailure updates error status', () => {
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'StopFailure',
+      raw_event: { error: 'first' }, agent_type: 'cc', broadcast_ts: Date.now(),
+    })
+    const ts2 = Date.now() + 1000
+    useAgentStore.getState().handleHookEvent(H, 'dev', {
+      tmux_session: 'dev', event_name: 'StopFailure',
+      raw_event: { error: 'second' }, agent_type: 'cc', broadcast_ts: ts2,
+    })
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('error')
+    expect(useAgentStore.getState().events[`${H}:dev`].raw_event.error).toBe('second')
+  })
+
   it('removeHost → clears all 4 fields for matching host, preserves others', () => {
     useAgentStore.setState({
       events: {

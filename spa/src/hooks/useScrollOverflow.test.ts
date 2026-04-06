@@ -32,14 +32,16 @@ describe('useScrollOverflow', () => {
 
   // Wrapper component to attach containerRef to a real DOM element
   function createWrapper() {
-    let latest: ReturnType<typeof useScrollOverflow>
+    const resultRef = { current: null as ReturnType<typeof useScrollOverflow> | null }
     const Wrapper: FC = () => {
-      latest = useScrollOverflow()
-      return createElement('div', { ref: latest.containerRef, 'data-testid': 'scroll-container' })
+      const result = useScrollOverflow()
+      // eslint-disable-next-line react-hooks/immutability -- test helper: capture hook result for assertions
+      resultRef.current = result
+      return createElement('div', { ref: result.containerRef, 'data-testid': 'scroll-container' })
     }
     return {
       Wrapper,
-      getResult: () => latest!,
+      getResult: () => resultRef.current!,
     }
   }
 

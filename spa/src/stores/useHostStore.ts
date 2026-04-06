@@ -20,13 +20,13 @@ export interface HostRuntime {
   info?: HostInfo
   daemonState?: 'connected' | 'refused' | 'unreachable' | 'auth-error'
   tmuxState?: 'ok' | 'unavailable'
-  manualRetry?: () => void  // safe: runtime excluded from persist partialize
+  manualRetry?: () => Promise<void> | void  // safe: runtime excluded from persist partialize
 }
 
 export interface HostInfo {
   host_id: string
   tmux_instance: string
-  tbox_version: string
+  purdex_version: string
   tmux_version: string
   os: string
   arch: string
@@ -80,6 +80,7 @@ export const useHostStore = create<HostState>()(
         // Dedup: if host already exists, just return existing id
         if (get().hosts[id]) return id
         const order = get().hostOrder.length
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { id: _discardId, ...restOpts } = opts
         const host: HostConfig = { id, ...restOpts, order }
         set((state) => ({
@@ -101,8 +102,10 @@ export const useHostStore = create<HostState>()(
       removeHost: (hostId) =>
         set((state) => {
           if (Object.keys(state.hosts).length <= 1) return state
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           const { [hostId]: _, ...rest } = state.hosts
           const newOrder = state.hostOrder.filter((id) => id !== hostId)
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           const { [hostId]: __, ...restRuntime } = state.runtime
           const activeHostId =
             state.activeHostId === hostId ? newOrder[0] ?? null : state.activeHostId

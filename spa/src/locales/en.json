@@ -277,6 +277,9 @@
   "notification.fallback.permission": "Permission required: unknown tool",
   "notification.fallback.stop": "Task completed",
   "notification.fallback.stopFailure": "Task stopped unexpectedly",
+  "notification.permission_request": "Permission required: {{tool}}",
+  "notification.permission_prompt": "Permission approval required",
+  "notification.elicitation_dialog": "Input required (MCP)",
 
   "settings.agent.cc.name": "Claude Code",
 
@@ -346,7 +349,7 @@
   "hosts.file_count": "Files",
   "hosts.no_uploads": "No upload files",
   "hosts.optional": "optional",
-  "hosts.token_hint": "Run 'tbox token generate' on the host to get a token",
+  "hosts.token_hint": "Token is auto-generated during pairing or startup",
   "hosts.requires_token": "This daemon requires authentication. Enter a token.",
   "hosts.invalid_token": "Invalid token",
   "hosts.validating_token": "Validating token...",

@@ -21,7 +21,7 @@ beforeEach(() => {
     checkUpdate: mockCheckUpdate,
     applyUpdate: mockApplyUpdate,
     forceLoadSPA: mockForceLoadSPA,
-  } as any
+  } as typeof window.electronAPI
 })
 
 afterEach(() => {

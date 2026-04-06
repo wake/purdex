@@ -277,6 +277,9 @@
   "notification.fallback.permission": "需要授權：未知工具",
   "notification.fallback.stop": "任務完成",
   "notification.fallback.stopFailure": "任務異常中斷",
+  "notification.permission_request": "需要授權：{{tool}}",
+  "notification.permission_prompt": "需要授權核准",
+  "notification.elicitation_dialog": "需要輸入資訊（MCP）",
 
   "settings.agent.cc.name": "Claude Code",
 
@@ -346,7 +349,7 @@
   "hosts.file_count": "檔案數",
   "hosts.no_uploads": "沒有上傳檔案",
   "hosts.optional": "選填",
-  "hosts.token_hint": "在主機上執行 'tbox token generate' 取得 token",
+  "hosts.token_hint": "Token 在配對或啟動時自動產生",
   "hosts.requires_token": "此 Daemon 需要驗證，請輸入 token。",
   "hosts.invalid_token": "Token 無效",
   "hosts.validating_token": "驗證 Token 中...",
