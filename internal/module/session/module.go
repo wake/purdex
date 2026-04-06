@@ -44,9 +44,8 @@ func (m *SessionModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/sessions/{code}", m.handleDelete)
 	mux.HandleFunc("POST /api/sessions/{code}/mode", m.handleSwitchMode)
 	mux.HandleFunc("/ws/terminal/{code}", m.handleTerminalWS)
-	mux.HandleFunc("GET /api/hooks/status", m.handleHooksStatus)
-	mux.HandleFunc("POST /api/hooks/install", m.handleHooksInstall)
-	mux.HandleFunc("POST /api/hooks/remove", m.handleHooksRemove)
+	mux.HandleFunc("GET /api/hooks/tmux/status", m.handleTmuxHookStatus)
+	mux.HandleFunc("POST /api/hooks/tmux/setup", m.handleTmuxHookSetup)
 }
 
 func (m *SessionModule) Start(ctx context.Context) error {
