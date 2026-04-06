@@ -58,18 +58,6 @@ export function fetchInfo(hostId: string) {
   return hostFetch(hostId, '/api/info')
 }
 
-export function fetchHooksStatus(hostId: string) {
-  return hostFetch(hostId, '/api/hooks/status')
-}
-
-export function installHooks(hostId: string) {
-  return hostFetch(hostId, '/api/hooks/install', { method: 'POST' })
-}
-
-export function removeHooks(hostId: string) {
-  return hostFetch(hostId, '/api/hooks/remove', { method: 'POST' })
-}
-
 export function fetchUploadStats(hostId: string) {
   return hostFetch(hostId, '/api/upload/stats')
 }
@@ -200,24 +188,6 @@ export async function agentUpload(
   })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   return res.json()
-}
-
-/* ─── Hook Status API ─── */
-
-export async function fetchAgentHookStatus(hostId: string): Promise<Response> {
-  return hostFetch(hostId, '/api/agent/hook-status')
-}
-
-export async function setupAgentHook(
-  hostId: string,
-  agentType: string,
-  action: 'install' | 'remove',
-): Promise<Response> {
-  return hostFetch(hostId, '/api/agent/hook-setup', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agent_type: agentType, action }),
-  })
 }
 
 /* ─── Pairing API (Phase 5a) ─── */

@@ -95,7 +95,7 @@ describe('StatusBar upload progress', () => {
   beforeEach(() => {
     setupStores()
     useUploadStore.setState({ sessions: {} })
-    useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, hooksInstalled: false })
+    useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {} })
   })
 
   it('shows uploading progress', () => {
@@ -144,7 +144,6 @@ describe('StatusBar agent label badge', () => {
       statuses: { [ck]: 'idle' },
       unread: {},
       activeSubagents: {},
-      hooksInstalled: true,
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
@@ -160,7 +159,6 @@ describe('StatusBar agent label badge', () => {
       statuses: { [ck]: 'running' },
       unread: {},
       activeSubagents: {},
-      hooksInstalled: true,
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)

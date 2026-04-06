@@ -14,8 +14,6 @@ import { useMultiHostEventWs } from './hooks/useMultiHostEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
-import { useAgentStore } from './stores/useAgentStore'
-import { fetchAgentHookStatus } from './lib/host-api'
 import { useUndoToast } from './stores/useUndoToast'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { isStandaloneTab } from './types/tab'
@@ -85,21 +83,6 @@ export default function App() {
   useRouteSync()
   useShortcuts()
   useNotificationDispatcher()
-
-  // --- Fetch hook installation status on mount ---
-  // Sets global hooksInstalled flag (used by SortableTab for idle fallback).
-  useEffect(() => {
-    if (!firstHostId) return
-    fetchAgentHookStatus(firstHostId)
-      .then((r) => {
-        if (!r.ok) return
-        return r.json()
-      })
-      .then((data: { installed?: boolean } | undefined) => {
-        if (data) useAgentStore.getState().setHooksInstalled(!!data.installed)
-      })
-      .catch(() => { /* daemon unreachable — hooksInstalled stays false */ })
-  }, [firstHostId])
 
   // --- Electron: signal SPA ready (replaces 500ms setTimeout) ---
   useEffect(() => {

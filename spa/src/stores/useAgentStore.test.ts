@@ -13,7 +13,6 @@ beforeEach(() => {
     statuses: {},
     unread: {},
     activeSubagents: {},
-    hooksInstalled: false,
   })
   useTabStore.setState({ tabs: {}, activeTabId: null, tabOrder: [] })
 })

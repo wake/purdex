@@ -35,7 +35,7 @@ function resetAllStores() {
   })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
-  useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, hooksInstalled: false })
+  useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {} })
   useStreamStore.setState({ sessions: {}, relayStatus: {}, handoffProgress: {} })
   useUndoToast.setState({ toast: null })
 }

@@ -22,7 +22,6 @@ interface AgentState {
   unread: Record<string, boolean>              // unread flag per composite key
   activeSubagents: Record<string, string[]>    // active subagent IDs per composite key
   tabIndicatorStyle: TabIndicatorStyle
-  hooksInstalled: boolean                      // whether CC hooks are installed
 
   handleHookEvent: (hostId: string, sessionCode: string, event: AgentHookEvent) => void
   markRead: (hostId: string, sessionCode: string) => void
@@ -30,7 +29,6 @@ interface AgentState {
   clearSubagentsForHost: (hostId: string) => void
   removeHost: (hostId: string) => void
   setTabIndicatorStyle: (style: TabIndicatorStyle) => void
-  setHooksInstalled: (installed: boolean) => void
 }
 
 export function deriveStatus(eventName: string, rawEvent?: Record<string, unknown>): AgentStatus | 'clear' | null {
@@ -78,7 +76,6 @@ export const useAgentStore = create<AgentState>()(
       unread: {},
       activeSubagents: {},
       tabIndicatorStyle: 'overlay' as TabIndicatorStyle,
-      hooksInstalled: false,
 
       handleHookEvent: (hostId, sessionCode, event) => {
         const key = compositeKey(hostId, sessionCode)
@@ -206,7 +203,6 @@ export const useAgentStore = create<AgentState>()(
       }),
 
       setTabIndicatorStyle: (style) => set({ tabIndicatorStyle: style }),
-      setHooksInstalled: (installed) => set({ hooksInstalled: installed }),
     }),
     {
       name: STORAGE_KEYS.AGENT,
