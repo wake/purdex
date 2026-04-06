@@ -123,15 +123,19 @@ func initPairing(c *core.Core, cfg *config.Config, cfgPath string, quick bool) {
 		code := pairing.EncodePairingCode(ip, uint16(cfg.Port), secret)
 		fmt.Printf("\n配對碼: %s\n\n", code)
 	} else {
-		// General mode: generate runtime token
+		// General mode: generate token and persist to config file
 		tokenBytes := make([]byte, 20)
 		if _, err := rand.Read(tokenBytes); err != nil {
 			log.Fatalf("generate token: %v", err)
 		}
 		token := "purdex_" + hex.EncodeToString(tokenBytes)
+		cfg.Token = token
 		c.CfgMu.Lock()
 		c.Cfg.Token = token
 		c.CfgMu.Unlock()
+		if err := config.WriteFile(cfgPath, *cfg); err != nil {
+			log.Printf("persist generated token: %v", err)
+		}
 		c.Pairing.Set(core.StatePending)
 
 		fmt.Printf("\nToken: %s\n\n", token)
