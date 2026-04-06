@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { TabContent } from './TabContent'
 import { registerPaneRenderer, clearPaneRegistry } from '../lib/pane-registry'
+import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { createTab } from '../types/tab'
 import type { Tab, Pane } from '../types/tab'
 
@@ -17,6 +18,7 @@ beforeEach(() => {
   clearPaneRegistry()
   registerPaneRenderer('tmux-session', { component: MockSessionRenderer })
   registerPaneRenderer('dashboard', { component: MockDashboardRenderer })
+  useUISettingsStore.setState({ keepAliveCount: 0 })
 })
 
 const sessionTab: Tab = {
@@ -43,6 +45,25 @@ describe('TabContent', () => {
   it('renders empty state when no active tab', () => {
     render(<TabContent activeTab={null} allTabs={[]} />)
     expect(screen.getByText(/選擇或建立/)).toBeTruthy()
+  })
+
+  it('uses visibility:hidden for inactive keep-alive tabs (not left:-9999em)', () => {
+    // keepAliveCount must be > 0 so inactive tabs remain in the alive pool
+    useUISettingsStore.setState({ keepAliveCount: 3 })
+    const { container, rerender } = render(
+      <TabContent activeTab={dashboardTab} allTabs={[sessionTab, dashboardTab]} />,
+    )
+    rerender(
+      <TabContent activeTab={sessionTab} allTabs={[sessionTab, dashboardTab]} />,
+    )
+    const wrappers = container.querySelectorAll('[class*="absolute"]')
+    const inactiveWrapper = Array.from(wrappers).find((w) => w.querySelector('[data-testid="dashboard-renderer"]'))
+    expect(inactiveWrapper).not.toBeNull()
+    expect((inactiveWrapper as HTMLElement).style.visibility).toBe('hidden')
+    expect((inactiveWrapper as HTMLElement).style.left).not.toBe('-9999em')
+    // Active tab should be visible
+    const activeWrapper = Array.from(wrappers).find((w) => w.querySelector('[data-testid="session-renderer"]'))
+    expect((activeWrapper as HTMLElement).style.visibility).toBe('visible')
   })
 
   it('sets inert on non-active keep-alive tabs', () => {
