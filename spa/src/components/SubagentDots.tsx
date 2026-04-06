@@ -40,7 +40,7 @@ export function SubagentDots({ count, isActive }: Props) {
             transform: 'translate(-50%, -50%)',
             '--breathe-color': COLOR,
             '--breathe-bg': breatheBg,
-            animationDelay: `${i * 0.3}s`,
+            animationDelay: `${i * 0.3 - (performance.now() / 1000) % 2}s`,
           } as React.CSSProperties}
         />
       ))}
