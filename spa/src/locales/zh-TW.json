@@ -77,6 +77,7 @@
   "settings.terminal.keepalive.label": "背景保持連線數",
   "settings.terminal.keepalive.desc": "背景分頁保持連線的數量（0 = 僅限使用中）",
   "settings.terminal.keepalive.aria": "背景保持連線數",
+  "settings.terminal.keepalive.webgl_hint": "WebGL 渲染器：上限 6（GPU context 限制）",
   "settings.terminal.keepalive_pinned.label": "固定分頁保持連線",
   "settings.terminal.keepalive_pinned.desc": "固定分頁永遠保持連線",
   "settings.terminal.reveal_delay.label": "顯示延遲",

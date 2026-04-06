@@ -77,6 +77,7 @@
   "settings.terminal.keepalive.label": "Keep-alive Count",
   "settings.terminal.keepalive.desc": "Number of background tabs to keep connected (0 = active only)",
   "settings.terminal.keepalive.aria": "Keep-alive Count",
+  "settings.terminal.keepalive.webgl_hint": "WebGL renderer: max 6 (GPU context limit)",
   "settings.terminal.keepalive_pinned.label": "Keep-alive Pinned",
   "settings.terminal.keepalive_pinned.desc": "Always keep pinned tabs connected",
   "settings.terminal.reveal_delay.label": "Reveal Delay",

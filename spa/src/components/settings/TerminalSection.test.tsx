@@ -34,11 +34,33 @@ describe('TerminalSection', () => {
     expect(useUISettingsStore.getState().keepAliveCount).toBe(3)
   })
 
-  it('clamps keep-alive count to 0-10', () => {
+  it('clamps keep-alive count to 0-6 when renderer is webgl', () => {
+    useUISettingsStore.setState({ terminalRenderer: 'webgl', keepAliveCount: 0 })
+    render(<TerminalSection />)
+    const input = screen.getByLabelText('Keep-alive Count')
+    fireEvent.change(input, { target: { value: '15' } })
+    expect(useUISettingsStore.getState().keepAliveCount).toBe(6)
+  })
+
+  it('clamps keep-alive count to 0-10 when renderer is dom', () => {
+    useUISettingsStore.setState({ terminalRenderer: 'dom', keepAliveCount: 0 })
     render(<TerminalSection />)
     const input = screen.getByLabelText('Keep-alive Count')
     fireEvent.change(input, { target: { value: '15' } })
     expect(useUISettingsStore.getState().keepAliveCount).toBe(10)
+  })
+
+  it('auto-clamps keepAliveCount when switching from dom to webgl', () => {
+    useUISettingsStore.setState({ terminalRenderer: 'dom', keepAliveCount: 8 })
+    render(<TerminalSection />)
+    fireEvent.click(screen.getByText('WebGL'))
+    expect(useUISettingsStore.getState().keepAliveCount).toBe(6)
+  })
+
+  it('shows webgl hint when renderer is webgl', () => {
+    useUISettingsStore.setState({ terminalRenderer: 'webgl' })
+    render(<TerminalSection />)
+    expect(screen.getByText(/GPU context/i)).toBeTruthy()
   })
 
   it('toggles keep-alive pinned', () => {
