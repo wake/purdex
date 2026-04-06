@@ -25,6 +25,7 @@ import {
   WorkspaceRenameDialog,
   WorkspaceColorPicker,
   WorkspaceIconPicker,
+  MigrateTabsDialog,
 } from './features/workspace'
 import { TabContextMenu } from './components/TabContextMenu'
 import { ThemeInjector } from './components/ThemeInjector'
@@ -166,6 +167,7 @@ export default function App() {
   const [wsRenameTarget, setWsRenameTarget] = useState<string | null>(null)
   const [wsColorTarget, setWsColorTarget] = useState<string | null>(null)
   const [wsIconTarget, setWsIconTarget] = useState<string | null>(null)
+  const [migrateDialog, setMigrateDialog] = useState<{ wsId: string; wsName: string } | null>(null)
 
   const activeWs = workspaces.find((w) => w.id === activeWorkspaceId)
 
@@ -236,7 +238,15 @@ export default function App() {
           activeStandaloneTabId={activeStandaloneTabId}
           onSelectWorkspace={handleSelectWorkspace}
           onSelectStandaloneTab={handleSelectTab}
-          onAddWorkspace={() => {}}
+          onAddWorkspace={() => {
+            if (workspaces.length === 0 && tabOrder.length > 0) {
+              const ws = useWorkspaceStore.getState().addWorkspace('Workspace 1')
+              setMigrateDialog({ wsId: ws.id, wsName: ws.name })
+            } else {
+              const count = workspaces.length + 1
+              useWorkspaceStore.getState().addWorkspace(`Workspace ${count}`)
+            }
+          }}
           onContextMenuWorkspace={handleWsContextMenu}
           onOpenHosts={() => {
             const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
@@ -356,6 +366,21 @@ export default function App() {
             currentIcon={workspaces.find((w) => w.id === wsIconTarget)?.icon}
             onSelect={(icon) => { useWorkspaceStore.getState().setWorkspaceIcon(wsIconTarget, icon); setWsIconTarget(null) }}
             onCancel={() => setWsIconTarget(null)}
+          />
+        )}
+        {migrateDialog && (
+          <MigrateTabsDialog
+            tabCount={tabOrder.length}
+            workspaceName={migrateDialog.wsName}
+            onMigrate={() => {
+              tabOrder.forEach((tabId) => {
+                useWorkspaceStore.getState().insertTab(tabId, migrateDialog.wsId)
+              })
+              setMigrateDialog(null)
+            }}
+            onSkip={() => {
+              setMigrateDialog(null)
+            }}
           />
         )}
         </div>

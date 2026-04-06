@@ -7,9 +7,9 @@ describe('workspace shortcut handlers', () => {
   })
 
   it('switch-workspace-N jumps to Nth workspace by position', () => {
-    const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
+    useWorkspaceStore.getState().addWorkspace('WS1')
     const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
-    const ws3 = useWorkspaceStore.getState().addWorkspace('WS3')
+    useWorkspaceStore.getState().addWorkspace('WS3')
     const workspaces = useWorkspaceStore.getState().workspaces
     const target = workspaces[1]
     expect(target.id).toBe(ws2.id)
@@ -27,7 +27,7 @@ describe('workspace shortcut handlers', () => {
 
   it('prev-workspace wraps from first to last', () => {
     const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
-    const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+    useWorkspaceStore.getState().addWorkspace('WS2')
     const ws3 = useWorkspaceStore.getState().addWorkspace('WS3')
     useWorkspaceStore.getState().setActiveWorkspace(ws1.id)
     const workspaces = useWorkspaceStore.getState().workspaces
@@ -39,7 +39,7 @@ describe('workspace shortcut handlers', () => {
 
   it('next-workspace wraps from last to first', () => {
     const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
-    const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+    useWorkspaceStore.getState().addWorkspace('WS2')
     const ws3 = useWorkspaceStore.getState().addWorkspace('WS3')
     useWorkspaceStore.getState().setActiveWorkspace(ws3.id)
     const workspaces = useWorkspaceStore.getState().workspaces

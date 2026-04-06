@@ -248,10 +248,11 @@ export async function fetchTokenAuth(
 }
 
 export class PairingError extends Error {
-  constructor(
-    public status: number,
-    public body: string,
-  ) {
+  status: number
+  body: string
+  constructor(status: number, body: string) {
     super(`Pairing failed: HTTP ${status}`)
+    this.status = status
+    this.body = body
   }
 }

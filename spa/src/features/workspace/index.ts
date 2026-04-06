@@ -12,6 +12,7 @@ export { WorkspaceChip } from './components/WorkspaceChip'
 export { WorkspaceRenameDialog } from './components/WorkspaceRenameDialog'
 export { WorkspaceColorPicker } from './components/WorkspaceColorPicker'
 export { WorkspaceIconPicker } from './components/WorkspaceIconPicker'
+export { MigrateTabsDialog } from './components/MigrateTabsDialog'
 
 // Lib
 export { getVisibleTabIds } from './lib/getVisibleTabIds'

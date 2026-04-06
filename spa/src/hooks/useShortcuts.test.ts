@@ -87,7 +87,7 @@ describe('useShortcuts', () => {
       const { fire } = mockElectronAPI()
       const tabs = seedTabs(4, { addToWorkspace: false })
       // Add only tabs[2] and tabs[0] to workspace (reversed vs global order)
-      const wsId = useWorkspaceStore.getState().activeWorkspaceId
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId!
       useWorkspaceStore.getState().addTabToWorkspace(wsId, tabs[2].id)
       useWorkspaceStore.getState().addTabToWorkspace(wsId, tabs[0].id)
       useTabStore.getState().setActiveTab(tabs[2].id)
@@ -270,7 +270,7 @@ describe('useShortcuts', () => {
     it('adds reopened tab to active workspace', () => {
       const { fire } = mockElectronAPI()
       const tabs = seedTabs(2)
-      const wsId = useWorkspaceStore.getState().activeWorkspaceId
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId!
       useWorkspaceStore.getState().addTabToWorkspace(wsId, tabs[0].id)
       useWorkspaceStore.getState().addTabToWorkspace(wsId, tabs[1].id)
 
@@ -321,7 +321,6 @@ describe('useShortcuts', () => {
     it('cycles to next workspace', () => {
       const { fire } = mockElectronAPI()
       seedTabs(1)
-      const ws1Id = useWorkspaceStore.getState().activeWorkspaceId
       const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
       renderHook(() => useShortcuts())
 

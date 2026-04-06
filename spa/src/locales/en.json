@@ -415,5 +415,10 @@
   "workspace.rename": "Rename",
   "workspace.change_color": "Change Color",
   "workspace.change_icon": "Change Icon",
-  "workspace.delete": "Delete Workspace"
+  "workspace.delete": "Delete Workspace",
+
+  "workspace.migrate_title": "Move Existing Tabs?",
+  "workspace.migrate_description": "You have {{count}} open tab(s). Move them into \"{{name}}\"?",
+  "workspace.migrate_move": "Move",
+  "workspace.migrate_skip": "Skip"
 }
