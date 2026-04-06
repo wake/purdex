@@ -41,11 +41,11 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
     getTicket,
   })
 
-  // Manual reconnect
+  // Manual reconnect — retrying auto-resets when hostStatus changes
   const { manualRetry, status: hostStatus } = useHostConnection(hostId ?? '')
-  const [retrying, setRetrying] = useState(false)
-  const handleRetry = useCallback(() => { setRetrying(true); manualRetry() }, [manualRetry])
-  useEffect(() => { setRetrying(false) }, [hostStatus])
+  const [retryAtStatus, setRetryAtStatus] = useState<string | null>(null)
+  const retrying = retryAtStatus !== null && retryAtStatus === hostStatus
+  const handleRetry = useCallback(() => { setRetryAtStatus(hostStatus); manualRetry() }, [hostStatus, manualRetry])
 
   // Drag-drop state
   const [isDragging, setIsDragging] = useState(false)

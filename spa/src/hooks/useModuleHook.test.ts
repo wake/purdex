@@ -117,7 +117,7 @@ describe('useModuleHook', () => {
 
   it('returns lastTrigger from module.getLastTrigger', async () => {
     const triggers = { SessionStart: 1700000000000 }
-    const mod = mockModule({ getLastTrigger: (_hostId, _events) => triggers })
+    const mod = mockModule({ getLastTrigger: () => triggers })
     const { result } = renderHook(() => useModuleHook(mod, 'host-1', 0))
     await waitFor(() => expect(result.current.loading).toBe(false))
     expect(result.current.lastTrigger).toEqual(triggers)

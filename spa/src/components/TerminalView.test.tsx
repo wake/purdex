@@ -108,15 +108,15 @@ describe('TerminalView', () => {
     expect(opts.rightClickSelectsWord).toBe(true)
   })
 
-  it('shows overlay when visible changes from false to true', () => {
+  it('suppresses overlay when visible changes from false to true', () => {
     const { container, rerender } = render(
       <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" visible={false} />
     )
-    // Rerender with visible=true — overlay should be visible (opacity 1)
+    // Rerender with visible=true — effect forces ready=true (terminal was alive the whole time)
     rerender(<TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" visible={true} />)
     const overlay = container.querySelector('[data-testid="terminal-overlay"]')
     expect(overlay).toBeInTheDocument()
-    expect(overlay?.getAttribute('style')).toContain('opacity: 1')
+    expect(overlay?.getAttribute('style')).toContain('opacity: 0')
   })
 
   it('shows reconnecting overlay on disconnect', () => {
