@@ -47,7 +47,7 @@ vi.mock('@xterm/addon-fit', () => ({
 
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn(function () {
-    return { dispose: vi.fn() }
+    return { dispose: vi.fn(), onContextLoss: vi.fn() }
   }),
 }))
 
@@ -166,6 +166,37 @@ describe('TerminalView', () => {
     act(() => useUISettingsStore.getState().setTerminalRevealDelay(500))
     expect(mockClose).not.toHaveBeenCalled()
     expect(TerminalSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('WebGL context loss disposes addon and re-fits terminal', async () => {
+    const { WebglAddon } = await import('@xterm/addon-webgl')
+    const { FitAddon } = await import('@xterm/addon-fit')
+    const { useUISettingsStore } = await import('../stores/useUISettingsStore')
+
+    useUISettingsStore.setState({ terminalRenderer: 'webgl' })
+    vi.mocked(WebglAddon).mockClear()
+    vi.mocked(FitAddon).mockClear()
+
+    render(<TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" />)
+
+    // Verify onContextLoss callback was registered
+    const webgl = vi.mocked(WebglAddon).mock.results[0]?.value
+    expect(webgl.onContextLoss).toHaveBeenCalledTimes(1)
+    const onLoss = webgl.onContextLoss.mock.calls[0][0] as () => void
+
+    // Get FitAddon instance and clear prior fit() calls from mount
+    const fit = vi.mocked(FitAddon).mock.results[0]?.value
+    fit.fit.mockClear()
+
+    // Trigger context loss
+    act(() => { onLoss() })
+
+    // dispose should be called synchronously
+    expect(webgl.dispose).toHaveBeenCalled()
+
+    // fit() is called in next rAF — flush it
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    expect(fit.fit).toHaveBeenCalled()
   })
 
   describe('drag-drop', () => {

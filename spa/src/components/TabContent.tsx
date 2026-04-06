@@ -34,7 +34,7 @@ export function TabContent({ activeTab, allTabs }: Props) {
           <div
             key={`${id}-${poolVersion}`}
             className="absolute"
-            style={isActive ? { inset: 0 } : { top: 0, left: '-9999em', width: '100%', height: '100%' }}
+            style={{ inset: 0, visibility: isActive ? 'visible' : 'hidden' }}
             inert={!isActive || undefined}
           >
             <PaneLayoutRenderer layout={tab.layout} isActive={isActive} />

@@ -52,7 +52,16 @@ export function useTerminal(): UseTerminalResult {
 
     const renderer = useUISettingsStore.getState().terminalRenderer
     if (renderer === 'webgl') {
-      try { term.loadAddon(new WebglAddon()) } catch { /* fallback to DOM */ }
+      try {
+        const webglAddon = new WebglAddon()
+        webglAddon.onContextLoss(() => {
+          webglAddon.dispose()
+          // xterm auto-creates DomRenderer on WebglAddon dispose.
+          // Re-fit to recalculate dimensions with the new renderer.
+          requestAnimationFrame(() => { if (fitAddonRef.current) fitAddonRef.current.fit() })
+        })
+        term.loadAddon(webglAddon)
+      } catch { /* fallback to DOM */ }
     }
     // DOM renderer is the default — no addon needed
     try {
@@ -61,7 +70,7 @@ export function useTerminal(): UseTerminalResult {
     } catch { /* fallback to unicode 6 */ }
     try { term.loadAddon(new WebLinksAddon()) } catch { /* non-critical */ }
 
-    // Guard: skip initial fit if container is hidden (display:none in keep-alive pool)
+    // Guard: skip initial fit if container is hidden (visibility:hidden in keep-alive pool)
     requestAnimationFrame(() => {
       const { width, height } = container.getBoundingClientRect()
       if (width && height) fitAddon.fit()
@@ -70,7 +79,7 @@ export function useTerminal(): UseTerminalResult {
     const container = containerRef.current
     let rafId = 0
     const observer = new ResizeObserver((entries) => {
-      // Guard against display:none (keep-alive hidden tabs) sending 0-cols resize
+      // Guard against hidden tabs (visibility:hidden) sending stale resize
       const { width, height } = entries[0]?.contentRect ?? {}
       if (!width || !height) return
       cancelAnimationFrame(rafId)

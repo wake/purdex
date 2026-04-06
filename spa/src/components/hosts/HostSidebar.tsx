@@ -51,7 +51,7 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
         {hostOrder.map((hostId) => {
           const host = hosts[hostId]
           if (!host) return null
-          const isExpanded = expanded[hostId] ?? false
+          const isExpanded = expanded[hostId] || hostId === selectedHostId
           return (
             <div key={hostId} className="mb-1">
               <button

@@ -4,6 +4,9 @@ import { SegmentControl } from './SegmentControl'
 import { ToggleSwitch } from './ToggleSwitch'
 import { useI18nStore } from '../../stores/useI18nStore'
 
+const KEEPALIVE_MAX_WEBGL = 6
+const KEEPALIVE_MAX_DOM = 10
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
@@ -26,11 +29,14 @@ export function TerminalSection() {
     { value: 'dom' as TerminalRenderer, label: t('settings.terminal.renderer.dom') },
   ]
 
+  // Atomic: renderer + version + optional keepAlive clamp in one setState()
   const handleRenderer = (r: TerminalRenderer) => {
-    // Atomic: update renderer + bump version in single set() to avoid intermediate state
     useUISettingsStore.setState((s) => ({
       terminalRenderer: r,
       terminalSettingsVersion: s.terminalSettingsVersion + 1,
+      ...(r === 'webgl' && s.keepAliveCount > KEEPALIVE_MAX_WEBGL
+        ? { keepAliveCount: KEEPALIVE_MAX_WEBGL }
+        : {}),
     }))
   }
 
@@ -44,16 +50,24 @@ export function TerminalSection() {
       </SettingItem>
 
       <SettingItem label={t('settings.terminal.keepalive.label')} description={t('settings.terminal.keepalive.desc')}>
-        <input
-          type="number"
-          aria-label={t('settings.terminal.keepalive.aria')}
-          min={0}
-          max={10}
-          step={1}
-          value={keepAliveCount}
-          onChange={(e) => setKeepAliveCount(clamp(Number(e.target.value) || 0, 0, 10))}
-          className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-20 hover:border-text-muted focus:border-border-active focus:outline-none"
-        />
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            aria-label={t('settings.terminal.keepalive.aria')}
+            min={0}
+            max={renderer === 'webgl' ? KEEPALIVE_MAX_WEBGL : KEEPALIVE_MAX_DOM}
+            step={1}
+            value={keepAliveCount}
+            onChange={(e) => {
+              const max = renderer === 'webgl' ? KEEPALIVE_MAX_WEBGL : KEEPALIVE_MAX_DOM
+              setKeepAliveCount(clamp(Number(e.target.value) || 0, 0, max))
+            }}
+            className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-20 hover:border-text-muted focus:border-border-active focus:outline-none"
+          />
+          {renderer === 'webgl' && (
+            <span className="text-xs text-text-muted">{t('settings.terminal.keepalive.webgl_hint')}</span>
+          )}
+        </div>
       </SettingItem>
 
       <SettingItem label={t('settings.terminal.keepalive_pinned.label')} description={t('settings.terminal.keepalive_pinned.desc')}>
