@@ -1,8 +1,9 @@
-import { WebContentsView, BrowserWindow, app } from 'electron'
+import { WebContentsView, BrowserWindow, app, type WebContents } from 'electron'
+import { join } from 'node:path'
 
 const ALLOWED_SCHEMES = new Set(['http:', 'https:'])
 
-function isAllowedUrl(url: string): boolean {
+export function isAllowedUrl(url: string): boolean {
   try {
     return ALLOWED_SCHEMES.has(new URL(url).protocol)
   } catch {
@@ -24,6 +25,7 @@ interface ViewEntry {
   window: BrowserWindow
   state: 'active' | 'background'
   lastActiveAt: number
+  cleanupListeners?: () => void
 }
 
 interface Snapshot {
@@ -76,6 +78,7 @@ export class BrowserViewManager {
         contextIsolation: true,
         sandbox: true,
         backgroundThrottling: false, // Active — no throttling
+        preload: join(__dirname, '../preload/browserViewPreload.js'),
       },
     })
 
@@ -88,14 +91,43 @@ export class BrowserViewManager {
     win.contentView.addChildView(view)
     view.webContents.loadURL(loadUrl)
 
-    this.views.set(paneId, {
+    const entry: ViewEntry = {
       view,
       paneId,
       url: loadUrl,
       window: win,
       state: 'active',
       lastActiveAt: Date.now(),
-    })
+    }
+    this.views.set(paneId, entry)
+
+    // Push state updates to the SPA in the owning window
+    const wc = view.webContents
+    const pushState = () => {
+      try {
+        if (entry.window.isDestroyed() || wc.isDestroyed()) return
+        entry.window.webContents.send('browser-view:state-update', paneId, {
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          canGoBack: wc.canGoBack(),
+          canGoForward: wc.canGoForward(),
+          isLoading: wc.isLoading(),
+        })
+      } catch { /* window or webContents may be closed */ }
+    }
+    wc.on('did-navigate', pushState)
+    wc.on('did-navigate-in-page', pushState)
+    wc.on('did-start-loading', pushState)
+    wc.on('did-stop-loading', pushState)
+    wc.on('page-title-updated', pushState)
+
+    entry.cleanupListeners = () => {
+      wc.off('did-navigate', pushState)
+      wc.off('did-navigate-in-page', pushState)
+      wc.off('did-start-loading', pushState)
+      wc.off('did-stop-loading', pushState)
+      wc.off('page-title-updated', pushState)
+    }
 
     this.clearTimer(paneId)
   }
@@ -117,6 +149,60 @@ export class BrowserViewManager {
     const entry = this.views.get(paneId)
     if (entry) {
       entry.view.setBounds(bounds)
+    }
+  }
+
+  goBack(paneId: string): void {
+    const entry = this.views.get(paneId)
+    if (entry?.view.webContents.canGoBack()) {
+      entry.view.webContents.goBack()
+    }
+  }
+
+  goForward(paneId: string): void {
+    const entry = this.views.get(paneId)
+    if (entry?.view.webContents.canGoForward()) {
+      entry.view.webContents.goForward()
+    }
+  }
+
+  reload(paneId: string): void {
+    const entry = this.views.get(paneId)
+    entry?.view.webContents.reload()
+  }
+
+  stop(paneId: string): void {
+    const entry = this.views.get(paneId)
+    entry?.view.webContents.stop()
+  }
+
+  destroy(paneId: string): void {
+    const entry = this.views.get(paneId)
+    if (!entry) return
+    this.clearTimer(paneId)
+    entry.cleanupListeners?.()
+    try {
+      entry.window.contentView.removeChildView(entry.view)
+    } catch { /* already removed */ }
+    try {
+      entry.view.webContents.close()
+    } catch { /* already closed */ }
+    this.views.delete(paneId)
+  }
+
+  getEntryByWebContents(wc: WebContents): ViewEntry | undefined {
+    for (const entry of this.views.values()) {
+      if (entry.view.webContents === wc) return entry
+    }
+    return undefined
+  }
+
+  getCurrentState(paneId: string): { url: string; title: string } | undefined {
+    const entry = this.views.get(paneId)
+    if (!entry || entry.view.webContents.isDestroyed()) return undefined
+    return {
+      url: entry.view.webContents.getURL(),
+      title: entry.view.webContents.getTitle(),
     }
   }
 
@@ -173,6 +259,8 @@ export class BrowserViewManager {
   private discard(paneId: string): void {
     const entry = this.views.get(paneId)
     if (!entry) return
+
+    entry.cleanupListeners?.()
 
     if (entry.window.isDestroyed()) {
       // Window already closed — just clean up our references

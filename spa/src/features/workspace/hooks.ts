@@ -47,6 +47,14 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
   const handleCloseTab = useCallback((tabId: string) => {
     const tab = tabs[tabId]
     if (!tab || tab.locked) return // locked guard
+
+    // Browser tabs: destroy the view before removing the tab.
+    // This calls destroy() (real cleanup) instead of background() (keep-alive).
+    const primary = getPrimaryPane(tab.layout)
+    if (primary.content.kind === 'browser') {
+      window.electronAPI?.destroyBrowserView(primary.id)
+    }
+
     useHistoryStore.getState().recordClose(tab, findWorkspaceByTab(tabId)?.id)
     const ws = findWorkspaceByTab(tabId)
     if (ws) removeTabFromWorkspace(ws.id, tabId)

@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('tab:received', handler)
   },
 
-  // Browser View
+  // Browser View — existing
   openBrowserView: (url: string, paneId: string) =>
     ipcRenderer.invoke('browser-view:open', url, paneId),
   closeBrowserView: (paneId: string) =>
@@ -22,6 +22,41 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('browser-view:navigate', paneId, url),
   resizeBrowserView: (paneId: string, bounds: { x: number; y: number; width: number; height: number }) =>
     ipcRenderer.invoke('browser-view:resize', paneId, JSON.stringify(bounds)),
+
+  // Browser View — navigation
+  browserViewGoBack: (paneId: string) =>
+    ipcRenderer.invoke('browser-view:go-back', paneId),
+  browserViewGoForward: (paneId: string) =>
+    ipcRenderer.invoke('browser-view:go-forward', paneId),
+  browserViewReload: (paneId: string) =>
+    ipcRenderer.invoke('browser-view:reload', paneId),
+  browserViewStop: (paneId: string) =>
+    ipcRenderer.invoke('browser-view:stop', paneId),
+
+  // Browser View — lifecycle
+  destroyBrowserView: (paneId: string) =>
+    ipcRenderer.invoke('browser-view:destroy', paneId),
+
+  // Browser View — mini window
+  browserViewOpenMiniWindow: (url: string) =>
+    ipcRenderer.invoke('browser-view:open-mini-window', url),
+  browserViewMoveToTab: (paneId: string) =>
+    ipcRenderer.invoke('browser-view:move-to-tab', paneId),
+
+  // Browser View — state subscription (Electron → SPA)
+  onBrowserViewStateUpdate: (callback: (paneId: string, state: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, paneId: string, state: unknown) =>
+      callback(paneId, state)
+    ipcRenderer.on('browser-view:state-update', handler)
+    return () => ipcRenderer.removeListener('browser-view:state-update', handler)
+  },
+
+  // Browser View — open in tab (from mini browser or WebContentsView link click)
+  onBrowserViewOpenInTab: (callback: (url: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, url: string) => callback(url)
+    ipcRenderer.on('browser-view:open-in-tab', handler)
+    return () => ipcRenderer.removeListener('browser-view:open-in-tab', handler)
+  },
 
   // SPA ready signal
   signalReady: () => ipcRenderer.send('spa:ready'),

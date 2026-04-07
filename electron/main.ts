@@ -2,6 +2,8 @@ import { app, BrowserWindow, ipcMain, Menu, Notification, protocol, net } from '
 import { join } from 'path'
 import { WindowManager } from './window-manager'
 import { BrowserViewManager } from './browser-view-manager'
+import { MiniWindowManager } from './mini-browser-window'
+import { registerBrowserViewIpc } from './browser-view-ipc'
 import { createTray } from './tray'
 import { getAppInfo, checkUpdate, applyUpdate } from './updater'
 import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
@@ -15,6 +17,7 @@ protocol.registerSchemesAsPrivileged([{
 
 const windowManager = new WindowManager()
 const browserViewManager = new BrowserViewManager()
+const miniWindowManager = new MiniWindowManager(browserViewManager)
 windowManager.setOnWindowClosed((win) => browserViewManager.cleanupForWindow(win))
 let metricsInterval: ReturnType<typeof setInterval> | null = null
 let updateInProgress = false
@@ -31,28 +34,8 @@ function registerIpcHandlers(): void {
     return windowManager.getAll()
   })
 
-  // Browser View
-  ipcMain.handle('browser-view:open', (event, url: string, paneId: string) => {
-    const win = BrowserWindow.fromWebContents(event.sender)
-    if (win) browserViewManager.open(win, url, paneId)
-  })
-  ipcMain.handle('browser-view:close', (_event, paneId: string) => {
-    browserViewManager.background(paneId)
-  })
-  ipcMain.handle('browser-view:navigate', (_event, paneId: string, url: string) => {
-    browserViewManager.navigate(paneId, url)
-  })
-  ipcMain.handle('browser-view:resize', (_event, paneId: string, boundsJson: string) => {
-    try {
-      const raw = JSON.parse(boundsJson)
-      browserViewManager.resize(paneId, {
-        x: Math.round(Number(raw.x)) || 0,
-        y: Math.round(Number(raw.y)) || 0,
-        width: Math.max(1, Math.round(Number(raw.width)) || 1),
-        height: Math.max(1, Math.round(Number(raw.height)) || 1),
-      })
-    } catch { /* ignore malformed bounds JSON */ }
-  })
+  // Browser View — delegated to browser-view-ipc.ts
+  registerBrowserViewIpc(browserViewManager, miniWindowManager)
 
   // Memory Monitor
   ipcMain.handle('metrics:get', () => {
@@ -187,5 +170,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   if (metricsInterval) clearInterval(metricsInterval)
+  miniWindowManager.closeAll()
   browserViewManager.destroyAll()
 })

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { UploadSimple, Spinner } from '@phosphor-icons/react'
 import { useTerminal } from '../hooks/useTerminal'
 import { useTerminalWs } from '../hooks/useTerminalWs'
@@ -8,6 +8,9 @@ import { useUploadStore } from '../stores/useUploadStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { compositeKey } from '../lib/composite-key'
 import { agentUpload } from '../lib/host-api'
+import { createLinkHandler } from '../lib/link-handler'
+import { getPlatformCapabilities } from '../lib/platform'
+import { openBrowserTab } from '../lib/open-browser-tab'
 import '@xterm/xterm/css/xterm.css'
 
 interface Props {
@@ -20,7 +23,17 @@ interface Props {
 }
 
 export default function TerminalView({ wsUrl, visible = true, connectingMessage, hostId, sessionCode, getTicket }: Props) {
-  const { termRef, fitAddonRef, containerRef } = useTerminal()
+  const caps = useMemo(() => getPlatformCapabilities(), [])
+  const linkHandler = useMemo(
+    () =>
+      createLinkHandler({
+        isElectron: caps.isElectron,
+        openBrowserTab,
+        openMiniWindow: (url) => window.electronAPI?.browserViewOpenMiniWindow(url),
+      }),
+    [caps.isElectron],
+  )
+  const { termRef, fitAddonRef, containerRef } = useTerminal({ linkHandler })
   const [ready, setReady] = useState(false)
   const [disconnected, setDisconnected] = useState(false)
   const prevVisible = useRef(visible)

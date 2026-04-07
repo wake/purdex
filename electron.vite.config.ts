@@ -61,7 +61,10 @@ export default defineConfig({
       outDir: 'out/preload',
       // Preload must be CJS (.js) — Electron sandbox does not support ESM preloads
       rollupOptions: {
-        input: { index: resolve(__dirname, 'electron/preload.ts') },
+        input: {
+          index: resolve(__dirname, 'electron/preload.ts'),
+          browserViewPreload: resolve(__dirname, 'electron/browser-view-preload.ts'),
+        },
         external: ['electron'],
         output: { format: 'cjs', entryFileNames: '[name].js' },
       },
@@ -73,7 +76,10 @@ export default defineConfig({
     build: {
       outDir: resolve(__dirname, 'out/renderer'),
       rollupOptions: {
-        input: resolve(__dirname, 'spa/index.html'),
+        input: {
+          index: resolve(__dirname, 'spa/index.html'),
+          'mini-browser': resolve(__dirname, 'spa/mini-browser.html'),
+        },
       },
     },
   },

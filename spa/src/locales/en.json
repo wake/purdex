@@ -179,6 +179,10 @@
   "browser.provider_label": "Browser",
   "browser.requires_app": "Requires desktop app",
   "browser.url_placeholder": "Enter URL...",
+  "browser.open_external": "Open in browser",
+  "browser.copy_url": "Copy URL",
+  "browser.pop_out": "Open in mini browser",
+  "browser.move_to_tab": "Open in main window",
 
   "tray.show_window": "Show Window",
   "tray.quit": "Quit tmux-box",
