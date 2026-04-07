@@ -226,6 +226,7 @@ export default function App() {
                 <WorkspaceChip
                   name={activeWs.name}
                   color={activeWs.color}
+                  icon={activeWs.icon}
                   onClick={() => {}}
                   onContextMenu={(e) => handleWsContextMenu(e, activeWs.id)}
                 />
@@ -286,6 +287,7 @@ export default function App() {
                 <WorkspaceChip
                   name={activeWs.name}
                   color={activeWs.color}
+                  icon={activeWs.icon}
                   onClick={() => {}}
                   onContextMenu={(e) => handleWsContextMenu(e, activeWs.id)}
                 />

@@ -1,6 +1,7 @@
 import { Plus, GearSix, HardDrives, SquaresFour } from '@phosphor-icons/react'
 import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { WorkspaceIcon } from './WorkspaceIcon'
 
 interface Props {
   workspaces: Workspace[]
@@ -67,7 +68,7 @@ export function ActivityBar({
           }`}
           style={{ backgroundColor: ws.color + '33', color: ws.color }}
         >
-          {ws.icon ?? ws.name.charAt(0)}
+          <WorkspaceIcon icon={ws.icon} name={ws.name} size={14} />
         </button>
       ))}
 
