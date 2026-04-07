@@ -50,6 +50,8 @@ export function useShortcuts(): void {
       if (action === 'close-tab') {
         const { activeTabId, tabs } = tabState
         if (!activeTabId) return
+        // Guard: only close tabs visible in current workspace scope
+        if (!visibleIds.includes(activeTabId)) return
         const tab = tabs[activeTabId]
         if (!tab || tab.locked) return
         const wsStore = useWorkspaceStore.getState()
@@ -57,6 +59,20 @@ export function useShortcuts(): void {
         const ws = wsStore.findWorkspaceByTab(activeTabId)
         if (ws) wsStore.removeTabFromWorkspace(ws.id, activeTabId)
         tabState.closeTab(activeTabId)
+        // Post-close: ensure activeTab stays within workspace scope
+        const newState = useTabStore.getState()
+        if (newState.activeTabId) {
+          const newVisibleIds = getVisibleTabIdsShared({
+            tabs: newState.tabs,
+            tabOrder: newState.tabOrder,
+            activeTabId: newState.activeTabId,
+            workspaces: wsStore.workspaces,
+            activeWorkspaceId: wsStore.activeWorkspaceId,
+          })
+          if (!newVisibleIds.includes(newState.activeTabId)) {
+            newState.setActiveTab(newVisibleIds[0] ?? null)
+          }
+        }
         return
       }
 
