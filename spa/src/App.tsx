@@ -333,7 +333,7 @@ export default function App() {
             onRename={() => { setWsRenameTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
             onChangeColor={() => { setWsColorTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
             onChangeIcon={() => { setWsIconTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
-            onSettings={() => openWsSettings(wsContextMenu.wsId)}
+            onSettings={() => { openWsSettings(wsContextMenu.wsId); setWsContextMenu(null) }}
             onDelete={() => { handleWsDelete(wsContextMenu.wsId); setWsContextMenu(null) }}
             onClose={() => setWsContextMenu(null)}
           />
