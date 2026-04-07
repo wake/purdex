@@ -14,7 +14,7 @@ export const CURATED_ICON_CATEGORIES: Record<string, string[]> = {
   development: [
     'Terminal', 'Code', 'GitBranch', 'GitCommit', 'GitPullRequest', 'Bug',
     'Database', 'CloudArrowUp', 'Cpu', 'HardDrive', 'Plugs', 'Robot',
-    'Atom', 'Brackets', 'BracketsAngle', 'BracketsSquare', 'CodeBlock',
+    'Atom', 'BracketsCurly', 'BracketsAngle', 'BracketsSquare', 'CodeBlock',
     'DeviceMobile', 'Flask', 'Function', 'Hash', 'Infinity', 'Plug',
     'Pulse', 'WebhooksLogo',
   ],
@@ -33,7 +33,7 @@ export const CURATED_ICON_CATEGORIES: Record<string, string[]> = {
   ],
   media: [
     'Play', 'Pause', 'Stop', 'Camera', 'MusicNote', 'MusicNotes',
-    'Image', 'FilmSlate', 'Monitor', 'Desktop', 'Tv', 'Radio',
+    'Image', 'FilmSlate', 'Monitor', 'Desktop', 'Television', 'Radio',
     'Headphones', 'SpeakerHigh', 'Microphone', 'Record', 'Disc',
     'Playlist', 'Queue', 'Repeat', 'Shuffle', 'SkipForward',
     'Screencast', 'PictureInPicture', 'Aperture',
