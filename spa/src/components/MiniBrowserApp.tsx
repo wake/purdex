@@ -1,6 +1,7 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useRef, useCallback } from 'react'
 import { BrowserToolbar } from './BrowserToolbar'
 import { useBrowserViewState } from '../hooks/useBrowserViewState'
+import { useBrowserViewResize } from '../hooks/useBrowserViewResize'
 
 interface Props {
   paneId: string
@@ -10,32 +11,7 @@ export function MiniBrowserApp({ paneId }: Props) {
   const contentRef = useRef<HTMLDivElement>(null)
   const state = useBrowserViewState(paneId)
 
-  // ResizeObserver for content area
-  useEffect(() => {
-    const el = contentRef.current
-    if (!el || !window.electronAPI) return
-
-    let rafId = 0
-    const observer = new ResizeObserver(() => {
-      cancelAnimationFrame(rafId)
-      rafId = requestAnimationFrame(() => {
-        const rect = el.getBoundingClientRect()
-        if (!rect.width || !rect.height) return
-        window.electronAPI!.resizeBrowserView(paneId, {
-          x: Math.round(rect.x),
-          y: Math.round(rect.y),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
-        })
-      })
-    })
-    observer.observe(el)
-
-    return () => {
-      cancelAnimationFrame(rafId)
-      observer.disconnect()
-    }
-  }, [paneId])
+  useBrowserViewResize(paneId, contentRef)
 
   const handleGoBack = useCallback(() => window.electronAPI?.browserViewGoBack(paneId), [paneId])
   const handleGoForward = useCallback(() => window.electronAPI?.browserViewGoForward(paneId), [paneId])
@@ -61,7 +37,6 @@ export function MiniBrowserApp({ paneId }: Props) {
       />
       <BrowserToolbar
         url={state.url}
-        title={state.title}
         canGoBack={state.canGoBack}
         canGoForward={state.canGoForward}
         isLoading={state.isLoading}

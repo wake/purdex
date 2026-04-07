@@ -11,7 +11,6 @@ import { BrowserToolbarMenu } from './BrowserToolbarMenu'
 
 export interface BrowserToolbarProps {
   url: string
-  title: string
   canGoBack: boolean
   canGoForward: boolean
   isLoading: boolean

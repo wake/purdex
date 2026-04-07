@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback } from 'react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { BrowserToolbar } from './BrowserToolbar'
 import { useBrowserViewState } from '../hooks/useBrowserViewState'
+import { useBrowserViewResize } from '../hooks/useBrowserViewResize'
 
 interface BrowserPaneProps {
   paneId: string
@@ -33,31 +34,7 @@ export function BrowserPane({ paneId, url }: BrowserPaneProps) {
   }, [url, paneId])
 
   // Bounds sync via ResizeObserver — observe content area (below toolbar)
-  useEffect(() => {
-    const el = contentRef.current
-    if (!window.electronAPI || !el) return
-
-    let rafId = 0
-    const observer = new ResizeObserver(() => {
-      cancelAnimationFrame(rafId)
-      rafId = requestAnimationFrame(() => {
-        const rect = el.getBoundingClientRect()
-        if (!rect.width || !rect.height) return
-        window.electronAPI!.resizeBrowserView(paneId, {
-          x: Math.round(rect.x),
-          y: Math.round(rect.y),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
-        })
-      })
-    })
-    observer.observe(el)
-
-    return () => {
-      cancelAnimationFrame(rafId)
-      observer.disconnect()
-    }
-  }, [paneId])
+  useBrowserViewResize(paneId, contentRef)
 
   // Toolbar callbacks
   const handleGoBack = useCallback(() => window.electronAPI?.browserViewGoBack(paneId), [paneId])
@@ -88,7 +65,6 @@ export function BrowserPane({ paneId, url }: BrowserPaneProps) {
     <div className="flex flex-col h-full" data-browser-pane={paneId}>
       <BrowserToolbar
         url={currentUrl}
-        title={state.title}
         canGoBack={state.canGoBack}
         canGoForward={state.canGoForward}
         isLoading={state.isLoading}

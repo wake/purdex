@@ -5,7 +5,6 @@ import { BrowserToolbar } from '../BrowserToolbar'
 function makeProps(overrides: Partial<Parameters<typeof BrowserToolbar>[0]> = {}) {
   return {
     url: 'https://github.com/',
-    title: 'GitHub',
     canGoBack: true,
     canGoForward: false,
     isLoading: false,
