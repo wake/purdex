@@ -127,7 +127,8 @@ export function BrowserNewTabSection({ onSelect }: NewTabProviderProps) {
       {showDropdown && filtered.length > 0 && (
         <div
           ref={dropdownRef}
-          className="absolute left-2 right-2 mt-1 bg-surface-elevated border border-border-default rounded-md shadow-lg max-h-48 overflow-y-auto z-10"
+          className="absolute right-2 mt-1 bg-surface-elevated border border-border-default rounded-md shadow-lg max-h-48 overflow-y-auto z-10"
+          style={{ left: `${8 + 16 + 8}px` }}
         >
           {filtered.map((historyUrl, i) => (
             <button
