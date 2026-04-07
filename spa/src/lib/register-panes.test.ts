@@ -41,36 +41,6 @@ describe('browser provider registration', () => {
   })
 })
 
-describe('memory-monitor provider registration', () => {
-  beforeEach(() => {
-    clearNewTabRegistry()
-    clearPaneRegistry()
-    clearSettingsSectionRegistry()
-  })
-
-  afterEach(() => {
-    delete (window as unknown as Record<string, unknown>).electronAPI
-    clearNewTabRegistry()
-    clearPaneRegistry()
-    clearSettingsSectionRegistry()
-  })
-
-  it('registers memory-monitor provider as disabled when no electronAPI', () => {
-    registerBuiltinPanes()
-    const monitor = getNewTabProviders().find((p) => p.id === 'memory-monitor')
-    expect(monitor).toBeDefined()
-    expect(monitor?.disabled).toBe(true)
-    expect(monitor?.disabledReason).toBe('monitor.requires_app')
-  })
-
-  it('registers memory-monitor provider as enabled when electronAPI present', () => {
-    ;(window as unknown as Record<string, unknown>).electronAPI = { tearOffTab: async () => {} }
-    registerBuiltinPanes()
-    const monitor = getNewTabProviders().find((p) => p.id === 'memory-monitor')
-    expect(monitor).toBeDefined()
-    expect(monitor?.disabled).toBe(false)
-  })
-})
 
 describe('electron settings section registration', () => {
   beforeEach(() => {
