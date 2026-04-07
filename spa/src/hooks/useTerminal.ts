@@ -105,6 +105,7 @@ export function useTerminal(options: UseTerminalOptions = {}): UseTerminalResult
       fitAddonRef.current = null
       termRef.current = null
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- lifecycle bound to mount/unmount only
   }, [])
 
   useEffect(() => {

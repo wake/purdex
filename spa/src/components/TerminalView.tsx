@@ -31,7 +31,7 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
         openBrowserTab,
         openMiniWindow: (url) => window.electronAPI?.browserViewOpenMiniWindow(url),
       }),
-    [caps.isElectron, openBrowserTab],
+    [caps.isElectron],
   )
   const { termRef, fitAddonRef, containerRef } = useTerminal({ linkHandler })
   const [ready, setReady] = useState(false)

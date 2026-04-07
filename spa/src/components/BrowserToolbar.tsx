@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -43,31 +43,29 @@ export function BrowserToolbar({
   onPopOut,
   onMoveToTab,
 }: BrowserToolbarProps) {
-  const [inputValue, setInputValue] = useState(url)
+  const [editValue, setEditValue] = useState('')
   const [isEditing, setIsEditing] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
-    if (!isEditing) setInputValue(url)
-  }, [url, isEditing])
+  // When not editing, display the prop URL directly. When editing, show editValue.
+  const displayValue = isEditing ? editValue : url
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Enter') {
-        const normalized = normalizeUrl(inputValue)
+        const normalized = normalizeUrl(editValue)
         if (normalized) {
           onNavigate(normalized)
           setIsEditing(false)
           inputRef.current?.blur()
         }
       } else if (e.key === 'Escape') {
-        setInputValue(url)
         setIsEditing(false)
         inputRef.current?.blur()
       }
     },
-    [inputValue, url, onNavigate],
+    [editValue, onNavigate],
   )
 
   const navBtnClass = 'p-1 rounded hover:bg-surface-hover disabled:opacity-30 transition-colors'
@@ -112,10 +110,10 @@ export function BrowserToolbar({
         ref={inputRef}
         role="textbox"
         className="flex-1 mx-1 px-2 py-0.5 rounded bg-surface-input text-xs font-mono text-text-primary outline-none focus:border-border-active focus:ring-1 focus:ring-border-active"
-        value={inputValue}
-        onChange={(e) => { setInputValue(e.target.value); setIsEditing(true) }}
-        onFocus={() => { setIsEditing(true); inputRef.current?.select() }}
-        onBlur={() => { setIsEditing(false); setInputValue(url) }}
+        value={displayValue}
+        onChange={(e) => { setEditValue(e.target.value); setIsEditing(true) }}
+        onFocus={() => { setEditValue(url); setIsEditing(true); inputRef.current?.select() }}
+        onBlur={() => setIsEditing(false)}
         onKeyDown={handleKeyDown}
       />
 
