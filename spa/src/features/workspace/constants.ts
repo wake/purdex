@@ -1,6 +1,6 @@
 export const WORKSPACE_COLORS = [
-  '#7a6aaa', '#6aaa7a', '#aa6a7a', '#6a8aaa', '#aa8a6a', '#8a6aaa',
-  '#5b8c5a', '#c75050', '#d4a843', '#5a7fbf', '#bf5a9d', '#4abfbf',
+  '#e75a5a', '#eb8b47', '#e4b444', '#e7d355', '#8ccb4d', '#4dcb8c',
+  '#3bcec2', '#49b9df', '#5e8eed', '#7c67e4', '#b164d8', '#e25a9e',
 ]
 
 /** Curated Phosphor icon names by category */
