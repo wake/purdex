@@ -39,6 +39,7 @@ type FakeExecutor struct {
 	setWindowOptionCalls []SetWindowOptionCall // calls to SetWindowOption
 	alive                bool                  // whether tmux server is "alive"
 	HooksOutput          string                // returned by ShowHooksGlobal
+	FailSendKeys         bool                  // if true, SendKeysRaw returns an error
 }
 
 func NewFakeExecutor() *FakeExecutor {
@@ -154,6 +155,9 @@ func (f *FakeExecutor) SendKeysRaw(target string, keys ...string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rawKeysCalls = append(f.rawKeysCalls, RawKeysCall{Target: target, Keys: keys})
+	if f.FailSendKeys {
+		return fmt.Errorf("send-keys: simulated failure")
+	}
 	return nil
 }
 

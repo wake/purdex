@@ -173,3 +173,30 @@ func TestHandleUpload_SessionNotFound(t *testing.T) {
 	m.handleUpload(rec, req)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
+
+// TestHandleUpload_SendKeysFail verifies that when SendKeysRaw fails the
+// uploaded file is removed from disk (no orphaned files).
+func TestHandleUpload_SendKeysFail(t *testing.T) {
+	m, fake := newUploadTestModule(t)
+	fake.FailSendKeys = true
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("session", "my-sess")
+	fw, _ := mw.CreateFormFile("file", "inject.txt")
+	fw.Write([]byte("content"))
+	mw.Close()
+
+	req := httptest.NewRequest("POST", "/api/agent/upload", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	m.handleUpload(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, rec.Body.String(), "inject failed")
+
+	// The uploaded file must not remain on disk.
+	_, err := os.Stat(filepath.Join(m.uploadDir, "my-sess", "inject.txt"))
+	assert.True(t, os.IsNotExist(err), "orphaned file should have been removed")
+}

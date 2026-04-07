@@ -84,6 +84,7 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 	// Inject path into tmux pane via send-keys (space prefix, quoted, literal mode).
 	// Quoting handles filenames with spaces so CC receives the full path as one token.
 	if err := m.core.Tmux.SendKeysRaw(tmuxName, "-l", ` "`+destPath+`"`); err != nil {
+		os.Remove(destPath) // Clean up orphaned file
 		log.Printf("[agent] send-keys: %v", err)
 		http.Error(w, `{"error":"inject failed"}`, http.StatusInternalServerError)
 		return
