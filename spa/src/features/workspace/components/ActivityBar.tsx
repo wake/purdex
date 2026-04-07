@@ -35,12 +35,12 @@ export function ActivityBar({
         title={t('nav.home')}
         onClick={onSelectHome}
         className={`relative w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer transition-all ${
-          !activeWorkspaceId && !activeStandaloneTabId
+          !activeWorkspaceId
             ? 'bg-accent text-white'
             : 'bg-surface-secondary text-text-secondary hover:text-text-primary hover:bg-surface-tertiary'
         }`}
       >
-        <SquaresFour size={18} weight={!activeWorkspaceId && !activeStandaloneTabId ? 'fill' : 'regular'} />
+        <SquaresFour size={18} weight={!activeWorkspaceId ? 'fill' : 'regular'} />
         {activeWorkspaceId && standaloneTabCount > 0 && (
           <span className="absolute -top-1 -right-1 min-w-[16px] h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-0.5">
             {standaloneTabCount}

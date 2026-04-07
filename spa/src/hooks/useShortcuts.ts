@@ -109,7 +109,7 @@ export function useShortcuts(): void {
         const currentIdx = workspaces.findIndex((w) => w.id === currentWsId)
         const delta = action === 'next-workspace' ? 1 : -1
         const nextIdx = currentIdx === -1
-          ? 0
+          ? (delta > 0 ? 0 : workspaces.length - 1)
           : (currentIdx + delta + workspaces.length) % workspaces.length
         const targetWs = workspaces[nextIdx]
         useWorkspaceStore.getState().setActiveWorkspace(targetWs.id)

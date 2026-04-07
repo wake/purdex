@@ -1,10 +1,9 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { PencilSimple, Palette, Smiley, Trash } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 
 interface Props {
   position: { x: number; y: number }
-  workspaceName: string
   onRename: () => void
   onChangeColor: () => void
   onChangeIcon: () => void
@@ -14,8 +13,6 @@ interface Props {
 
 export function WorkspaceContextMenu({ position, onRename, onChangeColor, onChangeIcon, onDelete, onClose }: Props) {
   const t = useI18nStore((s) => s.t)
-  const menuRef = useRef<HTMLDivElement>(null)
-
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -35,7 +32,7 @@ export function WorkspaceContextMenu({ position, onRename, onChangeColor, onChan
   return (
     <>
       <div data-testid="context-menu-backdrop" className="fixed inset-0 z-40" onMouseDown={onClose} />
-      <div ref={menuRef} className="fixed z-50 min-w-44 bg-surface-secondary border border-border-default rounded-lg shadow-xl py-1"
+      <div className="fixed z-50 min-w-44 bg-surface-secondary border border-border-default rounded-lg shadow-xl py-1"
         style={{ left: position.x, top: position.y }}>
         {menuItems.map((item, i) => {
           if ('type' in item && item.type === 'separator') {

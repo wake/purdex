@@ -175,11 +175,19 @@ export default function App() {
     setWsContextMenu({ wsId, position: { x: e.clientX, y: e.clientY } })
   }
 
+  const syncActiveTabAfterWsRemove = () => {
+    const { activeWorkspaceId: newWsId, workspaces: remaining } = useWorkspaceStore.getState()
+    const newWs = remaining.find((w) => w.id === newWsId)
+    const nextTab = newWs?.activeTabId ?? newWs?.tabs[0]
+    if (nextTab) useTabStore.getState().setActiveTab(nextTab)
+  }
+
   const handleWsDelete = (wsId: string) => {
     const ws = workspaces.find((w) => w.id === wsId)
     if (!ws) return
     if (ws.tabs.length === 0) {
       useWorkspaceStore.getState().removeWorkspace(wsId)
+      syncActiveTabAfterWsRemove()
     } else {
       setWsDeleteTarget(wsId)
     }
@@ -191,9 +199,10 @@ export default function App() {
     const hasPreservedTabs = ws && closedTabIds.length < ws.tabs.length
     closedTabIds.forEach((tabId) => handleCloseTab(tabId))
     useWorkspaceStore.getState().removeWorkspace(wsDeleteTarget)
-    // Switch to Home if some tabs were preserved (now standalone)
     if (hasPreservedTabs) {
       useWorkspaceStore.getState().setActiveWorkspace(null)
+    } else {
+      syncActiveTabAfterWsRemove()
     }
     setWsDeleteTarget(null)
   }
@@ -327,7 +336,6 @@ export default function App() {
         {wsContextMenu && (
           <WorkspaceContextMenu
             position={wsContextMenu.position}
-            workspaceName={workspaces.find((w) => w.id === wsContextMenu.wsId)?.name ?? ''}
             onRename={() => { setWsRenameTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
             onChangeColor={() => { setWsColorTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
             onChangeIcon={() => { setWsIconTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
@@ -390,6 +398,7 @@ export default function App() {
             }}
             onSkip={() => {
               setMigrateDialog(null)
+              useWorkspaceStore.getState().setActiveWorkspace(null)
             }}
           />
         )}
