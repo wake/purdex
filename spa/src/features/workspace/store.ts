@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { createWorkspace, type Workspace } from '../../types/tab'
+import { createWorkspace, type Workspace, type IconWeight } from '../../types/tab'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../../lib/storage'
 
 interface WorkspaceState {
@@ -19,6 +19,7 @@ interface WorkspaceState {
   renameWorkspace: (wsId: string, name: string) => void
   setWorkspaceColor: (wsId: string, color: string) => void
   setWorkspaceIcon: (wsId: string, icon: string) => void
+  setWorkspaceIconWeight: (wsId: string, weight: IconWeight) => void
   reset: () => void
 }
 
@@ -138,6 +139,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set((state) => ({
           workspaces: state.workspaces.map((ws) =>
             ws.id === wsId ? { ...ws, icon: icon || undefined } : ws,
+          ),
+        })),
+
+      setWorkspaceIconWeight: (wsId, weight) =>
+        set((state) => ({
+          workspaces: state.workspaces.map((ws) =>
+            ws.id === wsId ? { ...ws, iconWeight: weight } : ws,
           ),
         })),
 

@@ -74,7 +74,7 @@ export function ActivityBar({
               ...(isActive ? { '--tw-ring-color': cs.border } as React.CSSProperties : {}),
             }}
           >
-            <WorkspaceIcon icon={ws.icon} name={ws.name} size={14} />
+            <WorkspaceIcon icon={ws.icon} name={ws.name} size={14} weight={ws.iconWeight} />
           </button>
         )
       })}

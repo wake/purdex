@@ -234,6 +234,7 @@ export default function App() {
                   name={activeWs.name}
                   color={activeWs.color}
                   icon={activeWs.icon}
+                  iconWeight={activeWs.iconWeight}
                   onClick={() => openWsSettings(activeWs.id)}
                   onContextMenu={(e) => handleWsContextMenu(e, activeWs.id)}
                 />
@@ -296,6 +297,7 @@ export default function App() {
                   name={activeWs.name}
                   color={activeWs.color}
                   icon={activeWs.icon}
+                  iconWeight={activeWs.iconWeight}
                   onClick={() => openWsSettings(activeWs.id)}
                   onContextMenu={(e) => handleWsContextMenu(e, activeWs.id)}
                 />

@@ -1,5 +1,6 @@
 import { Suspense, lazy, useMemo } from 'react'
 import type { Icon } from '@phosphor-icons/react'
+import type { IconWeight } from '../../../types/tab'
 import { iconLoaders } from '../generated/icon-loader'
 
 /** Cache of resolved lazy components to avoid re-creating on every render */
@@ -22,10 +23,11 @@ interface Props {
   icon: string | undefined
   name: string
   size: number
+  weight?: IconWeight
   className?: string
 }
 
-export function WorkspaceIcon({ icon, name, size, className }: Props) {
+export function WorkspaceIcon({ icon, name, size, weight = 'bold', className }: Props) {
   const fallbackChar = name.charAt(0) || '?'
 
   // No icon → first char
@@ -47,7 +49,7 @@ export function WorkspaceIcon({ icon, name, size, className }: Props) {
 
   return (
     <Suspense fallback={<span className={className} style={{ fontSize: size * 0.85 }}>{fallbackChar}</span>}>
-      <LazyIcon size={size} className={className} />
+      <LazyIcon size={size} weight={weight} className={className} />
     </Suspense>
   )
 }

@@ -1,4 +1,5 @@
 import { CaretDown } from '@phosphor-icons/react'
+import type { IconWeight } from '../../../types/tab'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { workspaceColorStyle } from '../lib/workspace-colors'
 
@@ -6,11 +7,12 @@ interface Props {
   name: string | null
   color: string | null
   icon: string | undefined
+  iconWeight?: IconWeight
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
 }
 
-export function WorkspaceChip({ name, color, icon, onClick, onContextMenu }: Props) {
+export function WorkspaceChip({ name, color, icon, iconWeight, onClick, onContextMenu }: Props) {
   if (!name) return null
   const cs = workspaceColorStyle(color ?? '#888')
   return (
@@ -26,7 +28,7 @@ export function WorkspaceChip({ name, color, icon, onClick, onContextMenu }: Pro
           className="w-5 h-5 rounded flex items-center justify-center"
           style={{ backgroundColor: cs.bg, color: cs.fg }}
         >
-          <WorkspaceIcon icon={icon} name={name} size={12} />
+          <WorkspaceIcon icon={icon} name={name} size={12} weight={iconWeight} />
         </div>
         {/* Name */}
         <span className="truncate max-w-28 text-[13px] font-semibold" style={{ color: cs.fg }}>
