@@ -10,8 +10,8 @@ import { ActivityBar } from './ActivityBar'
 import type { Workspace } from '../../../types/tab'
 
 const mockWorkspaces: Workspace[] = [
-  { id: 'ws-1', name: 'Project A', color: '#7a6aaa', icon: '🔧', tabs: ['t1', 't2'], activeTabId: 't1' },
-  { id: 'ws-2', name: 'Server', color: '#6aaa7a', icon: '🖥', tabs: ['t3'], activeTabId: 't3' },
+  { id: 'ws-1', name: 'Project A', icon: '🔧', tabs: ['t1', 't2'], activeTabId: 't1' },
+  { id: 'ws-2', name: 'Server', icon: '🖥', tabs: ['t3'], activeTabId: 't3' },
 ]
 
 const defaultProps = {

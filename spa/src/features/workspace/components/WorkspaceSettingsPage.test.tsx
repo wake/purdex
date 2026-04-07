@@ -17,7 +17,7 @@ describe('WorkspaceSettingsPage', () => {
   beforeEach(() => {
     cleanup()
     useWorkspaceStore.getState().reset()
-    const ws = useWorkspaceStore.getState().addWorkspace('Test WS', { color: '#7a6aaa' })
+    const ws = useWorkspaceStore.getState().addWorkspace('Test WS')
     wsId = ws.id
   })
 

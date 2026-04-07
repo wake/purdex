@@ -5,7 +5,7 @@ import type { Workspace } from '../../../types/tab'
 describe('getVisibleTabIds', () => {
   it('returns workspace tabs when active workspace exists', () => {
     const workspaces: Workspace[] = [
-      { id: 'ws-1', name: 'WS1', color: '#aaa', tabs: ['t1', 't2'], activeTabId: 't1' },
+      { id: 'ws-1', name: 'WS1', tabs: ['t1', 't2'], activeTabId: 't1' },
     ]
     const tabs: Record<string, unknown> = { t1: {}, t2: {}, t3: {} }
     const result = getVisibleTabIds({
@@ -20,7 +20,7 @@ describe('getVisibleTabIds', () => {
 
   it('filters out tabs not in tab store', () => {
     const workspaces: Workspace[] = [
-      { id: 'ws-1', name: 'WS1', color: '#aaa', tabs: ['t1', 't2', 't3'], activeTabId: 't1' },
+      { id: 'ws-1', name: 'WS1', tabs: ['t1', 't2', 't3'], activeTabId: 't1' },
     ]
     const tabs: Record<string, unknown> = { t1: {}, t3: {} }
     const result = getVisibleTabIds({
@@ -35,7 +35,7 @@ describe('getVisibleTabIds', () => {
 
   it('returns only standalone tab when active tab is standalone', () => {
     const workspaces: Workspace[] = [
-      { id: 'ws-1', name: 'WS1', color: '#aaa', tabs: ['t1'], activeTabId: 't1' },
+      { id: 'ws-1', name: 'WS1', tabs: ['t1'], activeTabId: 't1' },
     ]
     const tabs: Record<string, unknown> = { t1: {}, t2: {} }
     const result = getVisibleTabIds({
@@ -61,7 +61,7 @@ describe('getVisibleTabIds', () => {
 
   it('returns only standalone tabs when activeWorkspaceId is null (Home mode)', () => {
     const workspaces: Workspace[] = [
-      { id: 'ws-1', name: 'WS1', color: '#aaa', tabs: ['t1'], activeTabId: 't1' },
+      { id: 'ws-1', name: 'WS1', tabs: ['t1'], activeTabId: 't1' },
     ]
     const result = getVisibleTabIds({
       tabs: { t1: {}, t2: {} },
@@ -76,8 +76,8 @@ describe('getVisibleTabIds', () => {
 
   it('returns all standalone tabs in Home mode with multiple workspaces', () => {
     const workspaces: Workspace[] = [
-      { id: 'ws-1', name: 'WS1', color: '#aaa', tabs: ['t1', 't2'], activeTabId: 't1' },
-      { id: 'ws-2', name: 'WS2', color: '#bbb', tabs: ['t3'], activeTabId: 't3' },
+      { id: 'ws-1', name: 'WS1', tabs: ['t1', 't2'], activeTabId: 't1' },
+      { id: 'ws-2', name: 'WS2', tabs: ['t3'], activeTabId: 't3' },
     ]
     const result = getVisibleTabIds({
       tabs: { t1: {}, t2: {}, t3: {}, t4: {}, t5: {} },

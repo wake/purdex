@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { createWorkspace, type IconWeight } from '../../types/tab'
+import { createWorkspace, type Workspace, type IconWeight } from '../../types/tab'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../../lib/storage'
 
 interface WorkspaceState {
