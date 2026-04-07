@@ -65,8 +65,8 @@ export function ActivityBar({
             }}
             className={`w-8 h-8 rounded-md flex items-center justify-center text-sm cursor-pointer transition-all ${
               isActive
-                ? 'bg-[#8b5cf6]/35 text-text-primary ring-2 ring-purple-400'
-                : 'bg-white/12 text-text-secondary hover:bg-[#8b5cf6]/25 hover:text-text-primary'
+                ? 'bg-surface-secondary text-text-primary ring-2 ring-purple-400'
+                : 'bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary'
             }`}
           >
             <WorkspaceIcon icon={ws.icon} name={ws.name} size={16} weight={ws.iconWeight} />
