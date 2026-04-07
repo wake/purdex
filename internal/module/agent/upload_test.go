@@ -19,26 +19,32 @@ import (
 	"github.com/wake/tmux-box/internal/tmux"
 )
 
-func TestDeduplicateFilename(t *testing.T) {
+func TestCreateDedupFile(t *testing.T) {
 	dir := t.TempDir()
 
-	// No conflict — returns original name.
-	got := deduplicateFilename(dir, "photo.png")
+	// No conflict — returns original name and creates the file.
+	f, got, err := createDedupFile(dir, "photo.png")
+	require.NoError(t, err)
+	f.Close()
 	assert.Equal(t, "photo.png", got)
 
-	// Create file to trigger conflict.
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "photo.png"), []byte("x"), 0644))
-	got = deduplicateFilename(dir, "photo.png")
+	// File already exists (created above) — should return "photo-1.png".
+	f, got, err = createDedupFile(dir, "photo.png")
+	require.NoError(t, err)
+	f.Close()
 	assert.Equal(t, "photo-1.png", got)
 
-	// Second conflict.
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "photo-1.png"), []byte("x"), 0644))
-	got = deduplicateFilename(dir, "photo.png")
+	// Second conflict — "photo-1.png" now exists too, expect "photo-2.png".
+	f, got, err = createDedupFile(dir, "photo.png")
+	require.NoError(t, err)
+	f.Close()
 	assert.Equal(t, "photo-2.png", got)
 
 	// No extension.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README"), []byte("x"), 0644))
-	got = deduplicateFilename(dir, "README")
+	f, got, err = createDedupFile(dir, "README")
+	require.NoError(t, err)
+	f.Close()
 	assert.Equal(t, "README-1", got)
 }
 

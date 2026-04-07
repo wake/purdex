@@ -11,19 +11,29 @@ import (
 	"strings"
 )
 
-// deduplicateFilename returns a filename that does not conflict with
-// existing files in dir. If "photo.png" exists it tries "photo-1.png",
-// "photo-2.png", etc.
-func deduplicateFilename(dir, name string) string {
-	if _, err := os.Stat(filepath.Join(dir, name)); os.IsNotExist(err) {
-		return name
+// createDedupFile atomically creates a file in dir using O_CREATE|O_EXCL to
+// avoid TOCTOU races. If "photo.png" already exists it tries "photo-1.png",
+// "photo-2.png", etc. Returns the open file and the chosen filename.
+func createDedupFile(dir, name string) (*os.File, string, error) {
+	path := filepath.Join(dir, name)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err == nil {
+		return f, name, nil
+	}
+	if !os.IsExist(err) {
+		return nil, "", err
 	}
 	ext := filepath.Ext(name)
 	base := strings.TrimSuffix(name, ext)
 	for i := 1; ; i++ {
 		candidate := fmt.Sprintf("%s-%d%s", base, i, ext)
-		if _, err := os.Stat(filepath.Join(dir, candidate)); os.IsNotExist(err) {
-			return candidate
+		path = filepath.Join(dir, candidate)
+		f, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		if err == nil {
+			return f, candidate, nil
+		}
+		if !os.IsExist(err) {
+			return nil, "", err
 		}
 	}
 }
@@ -64,18 +74,18 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Save file with dedup. Strip directory components to prevent path traversal.
-	filename := deduplicateFilename(dir, filepath.Base(header.Filename))
-	destPath := filepath.Join(dir, filename)
-	dst, err := os.Create(destPath)
+	// Save file with atomic dedup. Strip directory components to prevent path traversal.
+	dst, filename, err := createDedupFile(dir, filepath.Base(header.Filename))
 	if err != nil {
 		log.Printf("[agent] create file: %v", err)
 		http.Error(w, `{"error":"cannot save file"}`, http.StatusInternalServerError)
 		return
 	}
 	defer dst.Close()
+	destPath := filepath.Join(dir, filename)
 
 	if _, err := io.Copy(dst, file); err != nil {
+		os.Remove(destPath) // Clean up atomically-created but partially-written file
 		log.Printf("[agent] write file: %v", err)
 		http.Error(w, `{"error":"write failed"}`, http.StatusInternalServerError)
 		return
