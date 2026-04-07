@@ -146,6 +146,7 @@
   "tab.close_others": "關閉其他分頁",
   "tab.close_right": "關閉右側分頁",
   "tab.rename_session": "重新命名 Session",
+  "tab.rename_placeholder": "Session 名稱",
 
   "nav.scroll_left": "向左捲動",
   "nav.scroll_right": "向右捲動",
