@@ -322,6 +322,30 @@ describe('useShortcuts', () => {
       const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)
       expect(ws?.tabs).toContain(closedTab.id)
     })
+
+    it('reopens tab into current workspace, not original workspace', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(2)
+      const wsAId = useWorkspaceStore.getState().activeWorkspaceId!
+
+      // Close a tab from WS A
+      const closedTab = tabs[1]
+      useHistoryStore.getState().recordClose(closedTab, wsAId)
+      useWorkspaceStore.getState().removeTabFromWorkspace(wsAId, closedTab.id)
+      useTabStore.getState().closeTab(closedTab.id)
+
+      // Switch to WS B
+      const wsB = useWorkspaceStore.getState().addWorkspace('WS B')
+      useWorkspaceStore.getState().setActiveWorkspace(wsB.id)
+      renderHook(() => useShortcuts())
+
+      // Reopen — should go to WS B (current), not WS A (original)
+      fire('reopen-closed-tab')
+      const wsBState = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsB.id)
+      const wsAState = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsAId)
+      expect(wsBState?.tabs).toContain(closedTab.id)
+      expect(wsAState?.tabs).not.toContain(closedTab.id)
+    })
   })
 
   describe('switch-workspace-{n}', () => {
