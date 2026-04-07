@@ -2,7 +2,6 @@ import { Plus, GearSix, HardDrives, SquaresFour } from '@phosphor-icons/react'
 import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
-import { workspaceColorStyle } from '../lib/workspace-colors'
 
 interface Props {
   workspaces: Workspace[]
@@ -54,7 +53,6 @@ export function ActivityBar({
 
       {/* Workspaces */}
       {workspaces.map((ws) => {
-        const cs = workspaceColorStyle(ws.color)
         const isActive = activeWorkspaceId === ws.id && !activeStandaloneTabId
         return (
           <button
@@ -66,13 +64,10 @@ export function ActivityBar({
               onContextMenuWorkspace?.(e, ws.id)
             }}
             className={`w-8 h-8 rounded-md flex items-center justify-center text-sm cursor-pointer transition-all ${
-              isActive ? 'ring-2' : 'opacity-80 hover:opacity-100'
+              isActive
+                ? 'bg-surface-secondary text-text-primary ring-2 ring-accent'
+                : 'bg-surface-secondary text-text-secondary opacity-80 hover:opacity-100 hover:text-text-primary'
             }`}
-            style={{
-              backgroundColor: cs.bg,
-              color: cs.fg,
-              ...(isActive ? { '--tw-ring-color': cs.border } as React.CSSProperties : {}),
-            }}
           >
             <WorkspaceIcon icon={ws.icon} name={ws.name} size={16} weight={ws.iconWeight} />
           </button>
