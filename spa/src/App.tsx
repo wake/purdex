@@ -1,5 +1,5 @@
 // spa/src/App.tsx — v2 重構：wouter Router + Tab/Pane model
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Router } from 'wouter'
 import { ActivityBar } from './components/ActivityBar'
 import { TabBar } from './components/TabBar'
@@ -161,6 +161,12 @@ export default function App() {
     handleContextAction,
   } = useTabWorkspaceActions(displayTabs)
 
+  const openWsSettings = useCallback((wsId: string) => {
+    const tabId = useTabStore.getState().openSingletonTab({ kind: 'settings', scope: { workspaceId: wsId } })
+    useWorkspaceStore.getState().insertTab(tabId, wsId)
+    handleSelectTab(tabId)
+  }, [handleSelectTab])
+
   // --- Workspace UI state ---
   const [wsContextMenu, setWsContextMenu] = useState<{ wsId: string; position: { x: number; y: number } } | null>(null)
   const [wsDeleteTarget, setWsDeleteTarget] = useState<string | null>(null)
@@ -227,7 +233,7 @@ export default function App() {
                   name={activeWs.name}
                   color={activeWs.color}
                   icon={activeWs.icon}
-                  onClick={() => {}}
+                  onClick={() => openWsSettings(activeWs.id)}
                   onContextMenu={(e) => handleWsContextMenu(e, activeWs.id)}
                 />
               )}
@@ -264,7 +270,8 @@ export default function App() {
               setMigrateDialog({ wsId: ws.id, wsName: ws.name })
             } else {
               const count = workspaces.length + 1
-              useWorkspaceStore.getState().addWorkspace(`Workspace ${count}`)
+              const ws = useWorkspaceStore.getState().addWorkspace(`Workspace ${count}`)
+              openWsSettings(ws.id)
             }
           }}
           onContextMenuWorkspace={handleWsContextMenu}
@@ -288,7 +295,7 @@ export default function App() {
                   name={activeWs.name}
                   color={activeWs.color}
                   icon={activeWs.icon}
-                  onClick={() => {}}
+                  onClick={() => openWsSettings(activeWs.id)}
                   onContextMenu={(e) => handleWsContextMenu(e, activeWs.id)}
                 />
               )}
@@ -341,6 +348,7 @@ export default function App() {
             onRename={() => { setWsRenameTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
             onChangeColor={() => { setWsColorTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
             onChangeIcon={() => { setWsIconTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
+            onSettings={() => openWsSettings(wsContextMenu.wsId)}
             onDelete={() => { handleWsDelete(wsContextMenu.wsId); setWsContextMenu(null) }}
             onClose={() => setWsContextMenu(null)}
           />
@@ -397,6 +405,7 @@ export default function App() {
                 useWorkspaceStore.getState().insertTab(tabId, migrateDialog.wsId)
               })
               setMigrateDialog(null)
+              openWsSettings(migrateDialog.wsId)
             }}
             onSkip={() => {
               setMigrateDialog(null)

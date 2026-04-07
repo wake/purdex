@@ -13,6 +13,7 @@ describe('WorkspaceContextMenu', () => {
         onRename={vi.fn()}
         onChangeColor={vi.fn()}
         onChangeIcon={vi.fn()}
+        onSettings={vi.fn()}
         onDelete={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -20,6 +21,7 @@ describe('WorkspaceContextMenu', () => {
     expect(screen.getByText(/rename/i)).toBeInTheDocument()
     expect(screen.getByText(/color/i)).toBeInTheDocument()
     expect(screen.getByText(/icon/i)).toBeInTheDocument()
+    expect(screen.getByText(/settings/i)).toBeInTheDocument()
     expect(screen.getByText(/delete/i)).toBeInTheDocument()
   })
 
@@ -27,7 +29,7 @@ describe('WorkspaceContextMenu', () => {
     const onRename = vi.fn()
     render(
       <WorkspaceContextMenu position={{ x: 100, y: 200 }} workspaceName="WS"
-        onRename={onRename} onChangeColor={vi.fn()} onChangeIcon={vi.fn()} onDelete={vi.fn()} onClose={vi.fn()} />,
+        onRename={onRename} onChangeColor={vi.fn()} onChangeIcon={vi.fn()} onSettings={vi.fn()} onDelete={vi.fn()} onClose={vi.fn()} />,
     )
     fireEvent.click(screen.getByText(/rename/i))
     expect(onRename).toHaveBeenCalled()
@@ -37,7 +39,7 @@ describe('WorkspaceContextMenu', () => {
     const onDelete = vi.fn()
     render(
       <WorkspaceContextMenu position={{ x: 100, y: 200 }} workspaceName="WS"
-        onRename={vi.fn()} onChangeColor={vi.fn()} onChangeIcon={vi.fn()} onDelete={onDelete} onClose={vi.fn()} />,
+        onRename={vi.fn()} onChangeColor={vi.fn()} onChangeIcon={vi.fn()} onSettings={vi.fn()} onDelete={onDelete} onClose={vi.fn()} />,
     )
     fireEvent.click(screen.getByText(/delete/i))
     expect(onDelete).toHaveBeenCalled()
@@ -47,7 +49,7 @@ describe('WorkspaceContextMenu', () => {
     const onClose = vi.fn()
     render(
       <WorkspaceContextMenu position={{ x: 100, y: 200 }} workspaceName="WS"
-        onRename={vi.fn()} onChangeColor={vi.fn()} onChangeIcon={vi.fn()} onDelete={vi.fn()} onClose={onClose} />,
+        onRename={vi.fn()} onChangeColor={vi.fn()} onChangeIcon={vi.fn()} onSettings={vi.fn()} onDelete={vi.fn()} onClose={onClose} />,
     )
     fireEvent.mouseDown(screen.getByTestId('context-menu-backdrop'))
     expect(onClose).toHaveBeenCalled()
