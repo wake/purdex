@@ -171,17 +171,12 @@ describe('useWorkspaceStore', () => {
     expect(ws.color).toBe('#ff0000')
   })
 
-  // === Migration ===
+  // === insertTab edge cases ===
 
-  it('migrate v1 data preserves existing workspaces', () => {
-    const v1Data = {
-      workspaces: [{ id: 'ws-old', name: 'Old', color: '#aaa', tabs: ['t1'], activeTabId: 't1' }],
-      activeWorkspaceId: 'ws-old',
-    }
-    useWorkspaceStore.setState(v1Data)
-    const state = useWorkspaceStore.getState()
-    expect(state.workspaces).toHaveLength(1)
-    expect(state.workspaces[0].id).toBe('ws-old')
-    expect(state.activeWorkspaceId).toBe('ws-old')
+  it('insertTab with nonexistent wsId is a no-op', () => {
+    useWorkspaceStore.getState().addWorkspace('WS')
+    useWorkspaceStore.getState().insertTab('tab-1', 'deleted-ws')
+    // tab-1 not added to any workspace
+    expect(useWorkspaceStore.getState().workspaces[0].tabs).not.toContain('tab-1')
   })
 })

@@ -92,20 +92,21 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       },
 
       insertTab: (tabId, workspaceId) => {
-        const state = get()
-        let targetWsId: string | null
-        if (workspaceId === null) {
-          targetWsId = null
-        } else if (workspaceId !== undefined) {
-          targetWsId = workspaceId
-        } else {
-          targetWsId = state.activeWorkspaceId
-        }
+        const targetWsId = workspaceId === null
+          ? null
+          : workspaceId !== undefined
+            ? workspaceId
+            : get().activeWorkspaceId
 
-        if (targetWsId) {
-          state.addTabToWorkspace(targetWsId, tabId)
-          state.setWorkspaceActiveTab(targetWsId, tabId)
-        }
+        if (!targetWsId) return
+
+        set((state) => ({
+          workspaces: state.workspaces.map((ws) => {
+            if (ws.id !== targetWsId) return ws
+            if (ws.tabs.includes(tabId)) return { ...ws, activeTabId: tabId }
+            return { ...ws, tabs: [...ws.tabs, tabId], activeTabId: tabId }
+          }),
+        }))
       },
 
       reset: () => set(createDefaultState()),
@@ -113,17 +114,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     {
       name: STORAGE_KEYS.WORKSPACES,
       storage: purdexStorage,
-      version: 2,
-      migrate: (persisted, version) => {
-        if (version === 1) {
-          const old = persisted as { workspaces?: Workspace[]; activeWorkspaceId?: string }
-          return {
-            workspaces: old.workspaces ?? [],
-            activeWorkspaceId: old.activeWorkspaceId ?? null,
-          }
-        }
-        return persisted as { workspaces: Workspace[]; activeWorkspaceId: string | null }
-      },
+      version: 1,
       partialize: (state) => ({
         workspaces: state.workspaces,
         activeWorkspaceId: state.activeWorkspaceId,
