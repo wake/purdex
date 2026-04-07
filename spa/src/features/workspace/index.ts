@@ -15,6 +15,7 @@ export { WorkspaceIconPicker } from './components/WorkspaceIconPicker'
 export { MigrateTabsDialog } from './components/MigrateTabsDialog'
 export { WorkspaceSettingsPage } from './components/WorkspaceSettingsPage'
 export { WorkspaceIcon } from './components/WorkspaceIcon'
+export { WorkspaceEmptyState } from './components/WorkspaceEmptyState'
 export { ColorGrid } from './components/WorkspaceColorPicker'
 
 // Lib

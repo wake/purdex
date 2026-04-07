@@ -26,6 +26,7 @@ import {
   WorkspaceColorPicker,
   WorkspaceIconPicker,
   MigrateTabsDialog,
+  WorkspaceEmptyState,
 } from './features/workspace'
 import { TabContextMenu } from './components/TabContextMenu'
 import { ThemeInjector } from './components/ThemeInjector'
@@ -314,10 +315,14 @@ export default function App() {
             </div>
           )}
           <div className="flex-1 flex overflow-hidden">
-            <TabContent
-              activeTab={activeTab ?? null}
-              allTabs={tabOrder.map((id) => tabs[id]).filter(Boolean)}
-            />
+            {visibleTabIds.length === 0 && activeWorkspaceId !== null ? (
+              <WorkspaceEmptyState />
+            ) : (
+              <TabContent
+                activeTab={activeTab ?? null}
+                allTabs={tabOrder.map((id) => tabs[id]).filter(Boolean)}
+              />
+            )}
           </div>
           <StatusBar
             activeTab={activeTab ?? null}
