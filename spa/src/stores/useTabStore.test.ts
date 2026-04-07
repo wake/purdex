@@ -52,14 +52,14 @@ describe('useTabStore', () => {
     expect(useTabStore.getState().tabOrder).toContain(tab.id)
   })
 
-  it('closeTab activates adjacent tab when removing active', () => {
+  it('closeTab sets activeTabId to null when removing active tab', () => {
     const tab1 = makeSessionTab('dev001')
     const tab2 = makeSessionTab('cld001')
     useTabStore.getState().addTab(tab1)
     useTabStore.getState().addTab(tab2)
     useTabStore.getState().setActiveTab(tab1.id)
     useTabStore.getState().closeTab(tab1.id)
-    expect(useTabStore.getState().activeTabId).toBe(tab2.id)
+    expect(useTabStore.getState().activeTabId).toBeNull()
   })
 
   it('closeTab sets null when removing last tab', () => {
