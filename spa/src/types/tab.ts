@@ -39,7 +39,6 @@ export type IconWeight = 'bold' | 'duotone' | 'fill'
 export interface Workspace {
   id: string
   name: string
-  color: string
   icon?: string
   iconWeight?: IconWeight
   tabs: string[]
@@ -47,7 +46,6 @@ export interface Workspace {
 }
 
 // === Factories ===
-const WORKSPACE_COLORS = ['#e75a5a', '#eb8b47', '#e4b444', '#8ccb4d', '#4dcb8c', '#3bcec2', '#49b9df', '#5e8eed', '#7c67e4', '#b164d8', '#e25a9e']
 
 export function createTab(content: PaneContent, opts?: { pinned?: boolean }): Tab {
   return {
@@ -59,11 +57,10 @@ export function createTab(content: PaneContent, opts?: { pinned?: boolean }): Ta
   }
 }
 
-export function createWorkspace(name: string, color?: string, icon?: string): Workspace {
+export function createWorkspace(name: string, icon?: string): Workspace {
   return {
     id: generateId(),
     name,
-    color: color ?? WORKSPACE_COLORS[Math.floor(Math.random() * WORKSPACE_COLORS.length)],
     icon,
     tabs: [],
     activeTabId: null,

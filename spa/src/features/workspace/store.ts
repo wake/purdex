@@ -1,13 +1,13 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { createWorkspace, type Workspace, type IconWeight } from '../../types/tab'
+import { createWorkspace, type IconWeight } from '../../types/tab'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../../lib/storage'
 
 interface WorkspaceState {
   workspaces: Workspace[]
   activeWorkspaceId: string | null
 
-  addWorkspace: (name: string, opts?: { color?: string; icon?: string }) => Workspace
+  addWorkspace: (name: string, opts?: { icon?: string }) => Workspace
   removeWorkspace: (wsId: string) => void
   setActiveWorkspace: (wsId: string | null) => void
   addTabToWorkspace: (wsId: string, tabId: string) => void
@@ -17,7 +17,6 @@ interface WorkspaceState {
   findWorkspaceByTab: (tabId: string) => Workspace | null
   insertTab: (tabId: string, workspaceId?: string | null) => void
   renameWorkspace: (wsId: string, name: string) => void
-  setWorkspaceColor: (wsId: string, color: string) => void
   setWorkspaceIcon: (wsId: string, icon: string) => void
   setWorkspaceIconWeight: (wsId: string, weight: IconWeight) => void
   reset: () => void
@@ -33,7 +32,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       ...createDefaultState(),
 
       addWorkspace: (name, opts) => {
-        const ws = createWorkspace(name, opts?.color, opts?.icon)
+        const ws = createWorkspace(name, opts?.icon)
         set((state) => ({
           workspaces: [...state.workspaces, ws],
           // Auto-activate if this is the first workspace
@@ -125,13 +124,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set((state) => ({
           workspaces: state.workspaces.map((ws) =>
             ws.id === wsId ? { ...ws, name } : ws,
-          ),
-        })),
-
-      setWorkspaceColor: (wsId, color) =>
-        set((state) => ({
-          workspaces: state.workspaces.map((ws) =>
-            ws.id === wsId ? { ...ws, color } : ws,
           ),
         })),
 
