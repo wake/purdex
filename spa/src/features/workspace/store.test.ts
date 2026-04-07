@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useWorkspaceStore } from './store'
+import { useTabStore } from '../../stores/useTabStore'
+import { useHistoryStore } from '../../stores/useHistoryStore'
+import { createTab } from '../../types/tab'
+
+function makeTab() {
+  return createTab({ kind: 'new-tab' })
+}
 
 describe('useWorkspaceStore', () => {
   beforeEach(() => {
@@ -209,5 +216,124 @@ describe('useWorkspaceStore', () => {
     // Move to ws2 — ws1.activeTabId should clear
     useWorkspaceStore.getState().insertTab('tab-1', ws2.id)
     expect(useWorkspaceStore.getState().workspaces.find(w => w.id === ws1.id)!.activeTabId).toBeNull()
+  })
+
+  describe('closeTabInWorkspace', () => {
+    beforeEach(() => {
+      useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+      useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
+    })
+
+    it('closes middle tab and selects right-adjacent tab', () => {
+      const ws = useWorkspaceStore.getState().addWorkspace('Test')
+      const tabs = [makeTab(), makeTab(), makeTab()]
+      tabs.forEach((t) => {
+        useTabStore.getState().addTab(t)
+        useWorkspaceStore.getState().addTabToWorkspace(ws.id, t.id)
+      })
+      useTabStore.getState().setActiveTab(tabs[1].id)
+      useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabs[1].id)
+
+      useWorkspaceStore.getState().closeTabInWorkspace(tabs[1].id)
+
+      expect(useTabStore.getState().tabs[tabs[1].id]).toBeUndefined()
+      expect(useTabStore.getState().activeTabId).toBe(tabs[2].id)
+      const updatedWs = useWorkspaceStore.getState().workspaces[0]
+      expect(updatedWs.tabs).toEqual([tabs[0].id, tabs[2].id])
+      expect(updatedWs.activeTabId).toBe(tabs[2].id)
+    })
+
+    it('closes last-index tab and selects left-adjacent tab', () => {
+      const ws = useWorkspaceStore.getState().addWorkspace('Test')
+      const tabs = [makeTab(), makeTab(), makeTab()]
+      tabs.forEach((t) => {
+        useTabStore.getState().addTab(t)
+        useWorkspaceStore.getState().addTabToWorkspace(ws.id, t.id)
+      })
+      useTabStore.getState().setActiveTab(tabs[2].id)
+      useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabs[2].id)
+
+      useWorkspaceStore.getState().closeTabInWorkspace(tabs[2].id)
+
+      expect(useTabStore.getState().activeTabId).toBe(tabs[1].id)
+      const updatedWs = useWorkspaceStore.getState().workspaces[0]
+      expect(updatedWs.activeTabId).toBe(tabs[1].id)
+    })
+
+    it('closes only tab in workspace → activeTabId null', () => {
+      const ws = useWorkspaceStore.getState().addWorkspace('Test')
+      const tab = makeTab()
+      useTabStore.getState().addTab(tab)
+      useWorkspaceStore.getState().addTabToWorkspace(ws.id, tab.id)
+      useTabStore.getState().setActiveTab(tab.id)
+      useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tab.id)
+
+      useWorkspaceStore.getState().closeTabInWorkspace(tab.id)
+
+      expect(useTabStore.getState().activeTabId).toBeNull()
+      const updatedWs = useWorkspaceStore.getState().workspaces[0]
+      expect(updatedWs.tabs).toEqual([])
+      expect(updatedWs.activeTabId).toBeNull()
+    })
+
+    it('does not close locked tab', () => {
+      const ws = useWorkspaceStore.getState().addWorkspace('Test')
+      const tab = makeTab()
+      useTabStore.getState().addTab(tab)
+      useWorkspaceStore.getState().addTabToWorkspace(ws.id, tab.id)
+      useTabStore.getState().toggleLock(tab.id)
+      useTabStore.getState().setActiveTab(tab.id)
+
+      useWorkspaceStore.getState().closeTabInWorkspace(tab.id)
+
+      expect(useTabStore.getState().tabs[tab.id]).toBeDefined()
+    })
+
+    it('no-op for nonexistent tab', () => {
+      useWorkspaceStore.getState().addWorkspace('Test')
+      useWorkspaceStore.getState().closeTabInWorkspace('nonexistent')
+      // Should not throw
+    })
+
+    it('records close in history store', () => {
+      const ws = useWorkspaceStore.getState().addWorkspace('Test')
+      const tab = makeTab()
+      useTabStore.getState().addTab(tab)
+      useWorkspaceStore.getState().addTabToWorkspace(ws.id, tab.id)
+      useTabStore.getState().setActiveTab(tab.id)
+
+      useWorkspaceStore.getState().closeTabInWorkspace(tab.id)
+
+      const { closedTabs } = useHistoryStore.getState()
+      expect(closedTabs).toHaveLength(1)
+      expect(closedTabs[0].tab.id).toBe(tab.id)
+      expect(closedTabs[0].fromWorkspaceId).toBe(ws.id)
+    })
+
+    it('does not change activeTabId when closing non-active tab', () => {
+      const ws = useWorkspaceStore.getState().addWorkspace('Test')
+      const tabs = [makeTab(), makeTab()]
+      tabs.forEach((t) => {
+        useTabStore.getState().addTab(t)
+        useWorkspaceStore.getState().addTabToWorkspace(ws.id, t.id)
+      })
+      useTabStore.getState().setActiveTab(tabs[0].id)
+
+      useWorkspaceStore.getState().closeTabInWorkspace(tabs[1].id)
+
+      expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
+    })
+
+    it('closes standalone tab with global tabOrder adjacency', () => {
+      // No workspace — standalone tab
+      const tabs = [makeTab(), makeTab(), makeTab()]
+      tabs.forEach((t) => useTabStore.getState().addTab(t))
+      useTabStore.getState().setActiveTab(tabs[1].id)
+
+      useWorkspaceStore.getState().closeTabInWorkspace(tabs[1].id)
+
+      expect(useTabStore.getState().tabs[tabs[1].id]).toBeUndefined()
+      expect(useTabStore.getState().activeTabId).toBe(tabs[2].id)
+    })
   })
 })
