@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.52] - 2026-04-07
+
+Phase 7.3 — Refactor 拆檔 (PR #192, #163, #138, #185, #182)
+
+### 重構
+
+- **deleteHostCascade 提取 (#163)** — 從 OverviewSection.tsx 提取 cascade delete + undo 邏輯至 `lib/host-lifecycle.ts`，同時修正原本遺漏的 `models` snapshot/restore
+- **form-fields 提取 (#138, #185)** — Section / Field / EditableField / TokenField 提取至 `hosts/form-fields.tsx`，OverviewSection 655→280 行
+- **cc_hooks 拆分 (#182)** — handler.go CC hook 邏輯移至 `cc_hooks.go`，與 session/hooks.go 結構對稱，handler.go 227→87 行
+
+### 關閉（無需修復）
+
+- **#184** — deriveStatus 已是獨立 exported pure function，提取無實質改善
+
+### 測試
+
+- Tests: 913 → **914**（新增 agentModels undo 測試）
+
 ## [1.0.0-alpha.51] - 2026-04-07
 
 Phase 7.2 — UI 元件修正 (PR #187, #139, #179)
