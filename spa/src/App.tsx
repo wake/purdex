@@ -19,7 +19,6 @@ import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { isStandaloneTab } from './types/tab'
 import {
   getVisibleTabIds,
-  WorkspaceChip,
   WorkspaceContextMenu,
   WorkspaceDeleteDialog,
   WorkspaceRenameDialog,
@@ -176,7 +175,6 @@ export default function App() {
   const [wsIconTarget, setWsIconTarget] = useState<string | null>(null)
   const [migrateDialog, setMigrateDialog] = useState<{ wsId: string; wsName: string } | null>(null)
 
-  const activeWs = workspaces.find((w) => w.id === activeWorkspaceId)
 
   const handleWsContextMenu = (e: React.MouseEvent, wsId: string) => {
     setWsContextMenu({ wsId, position: { x: e.clientX, y: e.clientY } })
@@ -229,16 +227,6 @@ export default function App() {
             <div className="shrink-0" style={{ width: 78 }} />
             {/* Tabs — no-drag so clicks work */}
             <div className="flex items-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-              {activeWs && !activeStandaloneTabId && (
-                <WorkspaceChip
-                  name={activeWs.name}
-                  color={activeWs.color}
-                  icon={activeWs.icon}
-                  iconWeight={activeWs.iconWeight}
-                  onClick={() => openWsSettings(activeWs.id)}
-                  onContextMenu={(e) => handleWsContextMenu(e, activeWs.id)}
-                />
-              )}
               <TabBar
                 tabs={displayTabs}
                 activeTabId={activeTabId}
@@ -292,16 +280,6 @@ export default function App() {
           {/* SPA: TabBar in normal position */}
           {!isElectron && (
             <div className="flex items-center bg-surface-secondary border-b border-border-subtle">
-              {activeWs && !activeStandaloneTabId && (
-                <WorkspaceChip
-                  name={activeWs.name}
-                  color={activeWs.color}
-                  icon={activeWs.icon}
-                  iconWeight={activeWs.iconWeight}
-                  onClick={() => openWsSettings(activeWs.id)}
-                  onContextMenu={(e) => handleWsContextMenu(e, activeWs.id)}
-                />
-              )}
               <div className="flex-1 min-w-0">
                 <TabBar
                   tabs={displayTabs}

@@ -35,12 +35,6 @@ describe('WorkspaceSettingsPage', () => {
     expect(useWorkspaceStore.getState().workspaces[0].name).toBe('Renamed')
   })
 
-  it('renders color grid', () => {
-    render(<WorkspaceSettingsPage workspaceId={wsId} />)
-    const colorBtns = screen.getAllByRole('button').filter((b) => b.getAttribute('data-color'))
-    expect(colorBtns.length).toBe(12)
-  })
-
   it('renders delete button and shows confirm dialog', () => {
     render(<WorkspaceSettingsPage workspaceId={wsId} />)
     fireEvent.click(screen.getByTestId('delete-workspace-btn'))

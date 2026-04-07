@@ -65,8 +65,8 @@ export function ActivityBar({
               e.preventDefault()
               onContextMenuWorkspace?.(e, ws.id)
             }}
-            className={`w-8 h-8 rounded-md flex items-center justify-center text-xs cursor-pointer transition-all ${
-              isActive ? 'ring-2' : 'opacity-70 hover:opacity-100'
+            className={`w-8 h-8 rounded-md flex items-center justify-center text-sm cursor-pointer transition-all ${
+              isActive ? 'ring-2' : 'opacity-80 hover:opacity-100'
             }`}
             style={{
               backgroundColor: cs.bg,
@@ -74,7 +74,7 @@ export function ActivityBar({
               ...(isActive ? { '--tw-ring-color': cs.border } as React.CSSProperties : {}),
             }}
           >
-            <WorkspaceIcon icon={ws.icon} name={ws.name} size={14} weight={ws.iconWeight} />
+            <WorkspaceIcon icon={ws.icon} name={ws.name} size={16} weight={ws.iconWeight} />
           </button>
         )
       })}

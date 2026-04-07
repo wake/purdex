@@ -7,7 +7,6 @@ import { getPrimaryPane } from '../../../lib/pane-tree'
 import { getPaneLabel } from '../../../lib/pane-labels'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { workspaceColorStyle } from '../lib/workspace-colors'
-import { ColorGrid } from './WorkspaceColorPicker'
 import { WorkspaceIconPicker } from './WorkspaceIconPicker'
 import { WorkspaceDeleteDialog } from './WorkspaceDeleteDialog'
 
@@ -19,7 +18,7 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
   const t = useI18nStore((s) => s.t)
   const ws = useWorkspaceStore((s) => s.workspaces.find((w) => w.id === workspaceId))
   const renameWorkspace = useWorkspaceStore((s) => s.renameWorkspace)
-  const setWorkspaceColor = useWorkspaceStore((s) => s.setWorkspaceColor)
+
   const setWorkspaceIcon = useWorkspaceStore((s) => s.setWorkspaceIcon)
   const setWorkspaceIconWeight = useWorkspaceStore((s) => s.setWorkspaceIconWeight)
   const tabs = useTabStore((s) => s.tabs)
@@ -81,14 +80,6 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
             className="text-center text-lg font-semibold bg-transparent text-text-primary border-b border-transparent hover:border-border-default focus:border-accent focus:outline-none px-2 py-1 transition-colors"
           />
         </div>
-
-        {/* Color */}
-        <section className="mb-8">
-          <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">
-            {t('workspace.change_color') ?? 'Color'}
-          </h3>
-          <ColorGrid currentColor={ws.color} onSelect={(color) => setWorkspaceColor(workspaceId, color)} />
-        </section>
 
         {/* Icon */}
         <section className="mb-8">
