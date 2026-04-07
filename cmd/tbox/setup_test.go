@@ -340,6 +340,39 @@ func TestMergeHooks_DifferentPaths(t *testing.T) {
 	}
 }
 
+func TestMergeHooks_AtomicWrite(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	tboxPath := "/usr/local/bin/tbox"
+
+	if err := mergeHooks(settingsPath, tboxPath, false); err != nil {
+		t.Fatalf("mergeHooks: %v", err)
+	}
+
+	// .tmp file must NOT exist after successful write
+	tmpPath := settingsPath + ".tmp"
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Errorf("temp file %q should not exist after mergeHooks, got stat err: %v", tmpPath, err)
+	}
+
+	// settings.json must exist
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("settings file missing after mergeHooks: %v", err)
+	}
+
+	// Content must be valid JSON
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("settings.json is not valid JSON: %v", err)
+	}
+
+	// Sanity-check that hooks were written
+	if _, ok := settings["hooks"]; !ok {
+		t.Error("hooks key missing in written JSON")
+	}
+}
+
 func TestMergeHooks_SpacePath(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "settings.json")

@@ -19,26 +19,32 @@ import (
 	"github.com/wake/tmux-box/internal/tmux"
 )
 
-func TestDeduplicateFilename(t *testing.T) {
+func TestCreateDedupFile(t *testing.T) {
 	dir := t.TempDir()
 
-	// No conflict — returns original name.
-	got := deduplicateFilename(dir, "photo.png")
+	// No conflict — returns original name and creates the file.
+	f, got, err := createDedupFile(dir, "photo.png")
+	require.NoError(t, err)
+	f.Close()
 	assert.Equal(t, "photo.png", got)
 
-	// Create file to trigger conflict.
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "photo.png"), []byte("x"), 0644))
-	got = deduplicateFilename(dir, "photo.png")
+	// File already exists (created above) — should return "photo-1.png".
+	f, got, err = createDedupFile(dir, "photo.png")
+	require.NoError(t, err)
+	f.Close()
 	assert.Equal(t, "photo-1.png", got)
 
-	// Second conflict.
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "photo-1.png"), []byte("x"), 0644))
-	got = deduplicateFilename(dir, "photo.png")
+	// Second conflict — "photo-1.png" now exists too, expect "photo-2.png".
+	f, got, err = createDedupFile(dir, "photo.png")
+	require.NoError(t, err)
+	f.Close()
 	assert.Equal(t, "photo-2.png", got)
 
 	// No extension.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README"), []byte("x"), 0644))
-	got = deduplicateFilename(dir, "README")
+	f, got, err = createDedupFile(dir, "README")
+	require.NoError(t, err)
+	f.Close()
 	assert.Equal(t, "README-1", got)
 }
 
@@ -172,4 +178,31 @@ func TestHandleUpload_SessionNotFound(t *testing.T) {
 
 	m.handleUpload(rec, req)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// TestHandleUpload_SendKeysFail verifies that when SendKeysRaw fails the
+// uploaded file is removed from disk (no orphaned files).
+func TestHandleUpload_SendKeysFail(t *testing.T) {
+	m, fake := newUploadTestModule(t)
+	fake.FailSendKeys = true
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("session", "my-sess")
+	fw, _ := mw.CreateFormFile("file", "inject.txt")
+	fw.Write([]byte("content"))
+	mw.Close()
+
+	req := httptest.NewRequest("POST", "/api/agent/upload", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	m.handleUpload(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, rec.Body.String(), "inject failed")
+
+	// The uploaded file must not remain on disk.
+	_, err := os.Stat(filepath.Join(m.uploadDir, "my-sess", "inject.txt"))
+	assert.True(t, os.IsNotExist(err), "orphaned file should have been removed")
 }

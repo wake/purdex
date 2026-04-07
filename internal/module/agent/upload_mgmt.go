@@ -115,13 +115,12 @@ func (m *Module) handleDeleteUploadFile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if _, err := os.Stat(target); os.IsNotExist(err) {
-		http.Error(w, "file not found", http.StatusNotFound)
-		return
-	}
-
 	if err := os.Remove(target); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if os.IsNotExist(err) {
+			http.Error(w, "file not found", http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
