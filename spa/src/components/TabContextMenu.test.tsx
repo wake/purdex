@@ -136,6 +136,29 @@ describe('TabContextMenu', () => {
     expect(props.onAction).not.toHaveBeenCalled()
   })
 
+  // --- Rename section ---
+  it('shows "Rename Session" for non-terminated session tab', () => {
+    renderMenu()
+    expect(screen.getByText('Rename Session')).toBeInTheDocument()
+  })
+
+  it('hides "Rename Session" for non-session tab', () => {
+    renderMenu({ tab: makeNonSessionTab() })
+    expect(screen.queryByText('Rename Session')).not.toBeInTheDocument()
+  })
+
+  it('hides "Rename Session" for terminated session tab', () => {
+    const tab = createTab({ kind: 'tmux-session', hostId: 'h', sessionCode: 'c', mode: 'terminal', cachedName: '', tmuxInstance: '', terminated: 'session-closed' })
+    renderMenu({ tab })
+    expect(screen.queryByText('Rename Session')).not.toBeInTheDocument()
+  })
+
+  it('calls onAction with "rename" when clicking Rename Session', () => {
+    const props = renderMenu()
+    fireEvent.click(screen.getByText('Rename Session'))
+    expect(props.onAction).toHaveBeenCalledWith('rename')
+  })
+
   // --- Tear-off section (Electron only) ---
   it('shows "Move to New Window" when caps.canTearOffTab is true', () => {
     vi.mocked(getPlatformCapabilities).mockReturnValue({ canTearOffTab: true, canMergeWindow: false, canBrowserPane: false, canSystemTray: false, canNotification: true, isElectron: true, devUpdateEnabled: false })

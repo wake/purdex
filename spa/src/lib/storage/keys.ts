@@ -10,6 +10,7 @@ export const STORAGE_KEYS = {
   THEMES: 'purdex-themes',
   UI_SETTINGS: 'purdex-ui-settings',
   NOTIFICATION_SETTINGS: 'purdex-notification-settings',
+  BROWSER_HISTORY: 'purdex-browser-history',
   /** 手動管理（非 Zustand store），直接操作 localStorage，不走 browserStorage/syncManager */
   NOTIFICATION_SEEN: 'purdex-notification-seen',
 } as const

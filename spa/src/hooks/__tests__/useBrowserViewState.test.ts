@@ -19,7 +19,6 @@ describe('useBrowserViewState', () => {
   })
 
   afterEach(() => {
-    // @ts-expect-error cleanup
     window.electronAPI = undefined
   })
 
@@ -75,7 +74,6 @@ describe('useBrowserViewState', () => {
   })
 
   it('returns empty state when electronAPI not available', () => {
-    // @ts-expect-error cleanup
     window.electronAPI = undefined
     const { result } = renderHook(() => useBrowserViewState('pane-1'))
     expect(result.current.url).toBe('')

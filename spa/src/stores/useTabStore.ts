@@ -69,6 +69,7 @@ interface TabState {
   tabs: Record<string, Tab>
   tabOrder: string[]
   activeTabId: string | null
+  visitHistory: string[]
 
   addTab: (tab: Tab) => void
   openSingletonTab: (content: PaneContent) => string
@@ -92,6 +93,7 @@ export const useTabStore = create<TabState>()(
       tabs: {},
       tabOrder: [],
       activeTabId: null,
+      visitHistory: [],
 
       addTab: (tab) =>
         set((state) => {
@@ -129,19 +131,43 @@ export const useTabStore = create<TabState>()(
           // eslint-disable-next-line @typescript-eslint/no-unused-vars
           const { [id]: _removed, ...remainingTabs } = state.tabs
           const newOrder = state.tabOrder.filter((tid) => tid !== id)
+          // Remove the closed tab from visit history
+          let newHistory = state.visitHistory.filter((tid) => tid !== id)
           let newActiveId = state.activeTabId
           if (state.activeTabId === id) {
-            const oldIndex = state.tabOrder.indexOf(id)
-            newActiveId = newOrder[Math.min(oldIndex, newOrder.length - 1)] ?? null
+            // Try visitHistory first (pop from end, skipping non-existent tabs)
+            let foundInHistory: string | null = null
+            const remainingHistory = [...newHistory]
+            while (remainingHistory.length > 0) {
+              const candidate = remainingHistory.pop()!
+              if (remainingTabs[candidate]) {
+                foundInHistory = candidate
+                break
+              }
+            }
+            if (foundInHistory !== null) {
+              newActiveId = foundInHistory
+              // Remove the found tab from history (stack pop semantics)
+              newHistory = newHistory.filter((h) => h !== foundInHistory)
+            } else {
+              // Fallback to adjacent tab
+              const oldIndex = state.tabOrder.indexOf(id)
+              newActiveId = newOrder[Math.min(oldIndex, newOrder.length - 1)] ?? null
+            }
           }
-          return { tabs: remainingTabs, tabOrder: newOrder, activeTabId: newActiveId }
+          return { tabs: remainingTabs, tabOrder: newOrder, activeTabId: newActiveId, visitHistory: newHistory }
         }),
 
       setActiveTab: (id) =>
         set((state) => {
           if (id === null) return { activeTabId: null }
           if (!state.tabs[id]) return state
-          return { activeTabId: id }
+          if (id === state.activeTabId) return state
+          // Record current tab in visitHistory (dedup: remove newId from history first)
+          const newHistory = state.activeTabId !== null
+            ? [...state.visitHistory.filter((tid) => tid !== id), state.activeTabId]
+            : state.visitHistory.filter((tid) => tid !== id)
+          return { activeTabId: id, visitHistory: newHistory }
         }),
 
       setViewMode: (tabId, paneId, mode) =>
