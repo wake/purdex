@@ -1,4 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+vi.mock('../features/workspace/generated/icon-loader', () => ({
+  ALL_ICON_NAMES: [],
+  iconLoaders: {},
+}))
+
 import { renderHook, act } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { createElement } from 'react'

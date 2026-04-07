@@ -1,4 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+vi.mock('../features/workspace/generated/icon-loader', () => ({
+  ALL_ICON_NAMES: [],
+  iconLoaders: {},
+}))
+
 import { renderHook } from '@testing-library/react'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
