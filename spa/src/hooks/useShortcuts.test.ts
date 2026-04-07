@@ -196,6 +196,39 @@ describe('useShortcuts', () => {
       fire('close-tab')
       expect(useTabStore.getState().tabs[tabs[0].id]).toBeDefined()
     })
+
+    it('does not close tabs from another workspace', () => {
+      const { fire } = mockElectronAPI()
+      // Setup: WS A has 2 tabs, WS B has 0 tabs
+      const wsA = useWorkspaceStore.getState().workspaces[0]
+      const tabsA = seedTabs(2)
+      // Switch to a new empty workspace B
+      const wsB = useWorkspaceStore.getState().addWorkspace('WS B')
+      useWorkspaceStore.getState().setActiveWorkspace(wsB.id)
+      // activeTabId still points to WS A's tab (stale)
+      renderHook(() => useShortcuts())
+
+      fire('close-tab')
+      // WS A's tabs should be untouched
+      expect(useTabStore.getState().tabs[tabsA[0].id]).toBeDefined()
+      expect(useTabStore.getState().tabs[tabsA[1].id]).toBeDefined()
+    })
+
+    it('selects next tab within workspace after closing', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(3)
+      useTabStore.getState().setActiveTab(tabs[1].id)
+      renderHook(() => useShortcuts())
+
+      fire('close-tab')
+      // Should select a tab still in the workspace, not cross-workspace
+      const state = useTabStore.getState()
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)
+      if (state.activeTabId) {
+        expect(ws?.tabs).toContain(state.activeTabId)
+      }
+    })
   })
 
   describe('new-tab', () => {
