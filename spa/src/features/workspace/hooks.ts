@@ -1,10 +1,10 @@
 import { useState, useCallback } from 'react'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from './store'
-import { useHistoryStore } from '../../stores/useHistoryStore'
 import { createTab } from '../../types/tab'
 import { getPrimaryPane } from '../../lib/pane-tree'
 import { renameSession } from '../../lib/host-api'
+import { destroyBrowserViewIfNeeded } from '../../lib/browser-cleanup'
 import type { Tab } from '../../types/tab'
 import type { ContextMenuAction } from '../../components/TabContextMenu'
 
@@ -17,13 +17,11 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
   const tabs = useTabStore((s) => s.tabs)
   const setActiveTab = useTabStore((s) => s.setActiveTab)
   const addTab = useTabStore((s) => s.addTab)
-  const closeTab = useTabStore((s) => s.closeTab)
   const reorderTabs = useTabStore((s) => s.reorderTabs)
 
   // Workspace store
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
   const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace)
-  const removeTabFromWorkspace = useWorkspaceStore((s) => s.removeTabFromWorkspace)
   const findWorkspaceByTab = useWorkspaceStore((s) => s.findWorkspaceByTab)
   const setWorkspaceActiveTab = useWorkspaceStore((s) => s.setWorkspaceActiveTab)
   const reorderWorkspaceTabs = useWorkspaceStore((s) => s.reorderWorkspaceTabs)
@@ -49,32 +47,16 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
 
   const handleCloseTab = useCallback((tabId: string) => {
     const tab = tabs[tabId]
-    if (!tab || tab.locked) return // locked guard
-
-    // Browser tabs: destroy the view before removing the tab.
-    // This calls destroy() (real cleanup) instead of background() (keep-alive).
-    const primary = getPrimaryPane(tab.layout)
-    if (primary.content.kind === 'browser') {
-      window.electronAPI?.destroyBrowserView(primary.id)
-    }
-
-    useHistoryStore.getState().recordClose(tab, findWorkspaceByTab(tabId)?.id)
-    const ws = findWorkspaceByTab(tabId)
-    if (ws) removeTabFromWorkspace(ws.id, tabId)
-    closeTab(tabId)
-    // Sync workspace activeTabId with the tab store's new active tab
-    // (closeTab may pick from visitHistory, which workspace store doesn't know about)
-    if (ws) {
-      const newActiveTabId = useTabStore.getState().activeTabId
-      if (newActiveTabId) setWorkspaceActiveTab(ws.id, newActiveTabId)
-    }
+    if (!tab || tab.locked) return
+    destroyBrowserViewIfNeeded(tab)
+    useWorkspaceStore.getState().closeTabInWorkspace(tabId)
 
     // Clear rename popover if the renamed tab was closed
     if (renameTarget?.tabId === tabId) {
       setRenameTarget(null)
       setRenameError(undefined)
     }
-  }, [tabs, findWorkspaceByTab, removeTabFromWorkspace, closeTab, setWorkspaceActiveTab, renameTarget])
+  }, [tabs, renameTarget])
 
   const handleAddTab = useCallback(() => {
     const tab = createTab({ kind: 'new-tab' })
