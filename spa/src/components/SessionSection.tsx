@@ -18,7 +18,7 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
   }
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1" data-session-list>
       {hostOrder.map((hostId) => {
         const host = hosts[hostId]
         if (!host) return null
@@ -49,11 +49,31 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
             {sessions.map((session) => (
               <button
                 key={`${hostId}:${session.code}`}
-                className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/10 text-left text-sm text-text-primary cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/10 text-left text-sm text-text-primary cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-accent-muted"
                 disabled={!!isOffline}
+                tabIndex={0}
                 onClick={() =>
                   onSelect({ kind: 'tmux-session', hostId, sessionCode: session.code, mode: 'terminal', cachedName: session.name, tmuxInstance: '' })
                 }
+                onKeyDown={(e) => {
+                  const container = e.currentTarget.closest('[data-session-list]')
+                  if (!container) return
+                  const buttons = Array.from(container.querySelectorAll('button:not(:disabled)')) as HTMLElement[]
+                  const currentIndex = buttons.indexOf(e.currentTarget)
+                  if (currentIndex === -1) return
+                  switch (e.key) {
+                    case 'ArrowDown':
+                    case 'j':
+                      e.preventDefault()
+                      buttons[Math.min(currentIndex + 1, buttons.length - 1)]?.focus()
+                      break
+                    case 'ArrowUp':
+                    case 'k':
+                      e.preventDefault()
+                      buttons[Math.max(currentIndex - 1, 0)]?.focus()
+                      break
+                  }
+                }}
               >
                 <TerminalWindow size={16} className="text-text-secondary flex-shrink-0" />
                 <span className="truncate">{session.name}</span>
