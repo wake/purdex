@@ -3,12 +3,13 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { useHostStore } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
-import { useAgentStore, type AgentHookEvent, type AgentStatus } from '../stores/useAgentStore'
+import { useAgentStore, type AgentHookEvent } from '../stores/useAgentStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, scanPaneTree } from './pane-tree'
-import type { Tab, PaneContent } from '../types/tab'
+import { deleteHostCascade } from './host-lifecycle'
+import type { Tab } from '../types/tab'
 import type { StreamMessage } from './stream-ws'
 import type { Session } from './host-api'
 
@@ -35,139 +36,9 @@ function resetAllStores() {
   })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
-  useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {} })
+  useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, models: {} })
   useStreamStore.setState({ sessions: {}, relayStatus: {}, handoffProgress: {} })
   useUndoToast.setState({ toast: null })
-}
-
-/**
- * Simulate handleDeleteHost cascade (mirrors the logic in OverviewSection).
- * Extracted here to test as a pure function operating on stores.
- */
-function simulateDeleteHost(hostId: string, closeTabs: boolean): () => void {
-  const hostStore = useHostStore.getState()
-  const tabStore = useTabStore.getState()
-  const sessionStore = useSessionStore.getState()
-  const agentStore = useAgentStore.getState()
-  const streamStore = useStreamStore.getState()
-  const prefix = `${hostId}:`
-
-  // Snapshot host + hostOrder
-  const snapshotHost = hostStore.hosts[hostId]
-  const snapshotHostOrder = [...hostStore.hostOrder]
-  const snapshotSessions = sessionStore.sessions[hostId]
-  const snapshotActiveHostId = hostStore.activeHostId
-
-  // Snapshot agent data
-  const snapshotEvents: Record<string, AgentHookEvent> = {}
-  const snapshotStatuses: Record<string, AgentStatus> = {}
-  const snapshotUnread: Record<string, boolean> = {}
-  for (const [k, v] of Object.entries(agentStore.events)) {
-    if (k.startsWith(prefix)) snapshotEvents[k] = v
-  }
-  for (const [k, v] of Object.entries(agentStore.statuses)) {
-    if (k.startsWith(prefix)) snapshotStatuses[k] = v
-  }
-  for (const [k, v] of Object.entries(agentStore.unread)) {
-    if (k.startsWith(prefix)) snapshotUnread[k] = v
-  }
-
-  // Snapshot stream data
-  const snapshotStreamSessions: Record<string, { messages: StreamMessage[]; isStreaming: boolean }> = {}
-  for (const [k, v] of Object.entries(streamStore.sessions)) {
-    if (k.startsWith(prefix)) {
-      snapshotStreamSessions[k] = { messages: v.messages, isStreaming: v.isStreaming }
-    }
-  }
-
-  // Snapshot tab data
-  const closedTabs: Tab[] = []
-  const terminatedPanes: { tabId: string; paneId: string }[] = []
-
-  if (closeTabs) {
-    for (const [tabId, tab] of Object.entries(tabStore.tabs)) {
-      let hasHostPane = false
-      scanPaneTree(tab.layout, (pane) => {
-        if (pane.content.kind === 'tmux-session' && pane.content.hostId === hostId) {
-          hasHostPane = true
-        }
-      })
-      if (hasHostPane) {
-        closedTabs.push(tab)
-        tabStore.closeTab(tabId)
-      }
-    }
-  } else {
-    for (const [tabId, tab] of Object.entries(tabStore.tabs)) {
-      scanPaneTree(tab.layout, (pane) => {
-        if (pane.content.kind === 'tmux-session' && pane.content.hostId === hostId && !pane.content.terminated) {
-          terminatedPanes.push({ tabId, paneId: pane.id })
-        }
-      })
-    }
-    tabStore.markHostTerminated(hostId, 'host-removed')
-  }
-
-  sessionStore.removeHost(hostId)
-  agentStore.removeHost(hostId)
-  streamStore.clearHost(hostId)
-  hostStore.removeHost(hostId)
-
-  // Return undo function
-  return () => {
-    if (snapshotHost) {
-      useHostStore.getState().addHost(snapshotHost)
-      useHostStore.getState().reorderHosts(snapshotHostOrder)
-      if (snapshotActiveHostId === hostId) {
-        useHostStore.getState().setActiveHost(hostId)
-      }
-    }
-    if (snapshotSessions) {
-      useSessionStore.getState().replaceHost(hostId, snapshotSessions)
-    }
-    // Restore agent data
-    if (Object.keys(snapshotEvents).length > 0) {
-      const ag = useAgentStore.getState()
-      useAgentStore.setState({
-        events: { ...ag.events, ...snapshotEvents },
-        statuses: { ...ag.statuses, ...snapshotStatuses },
-        unread: { ...ag.unread, ...snapshotUnread },
-      })
-    }
-    // Restore stream data
-    if (Object.keys(snapshotStreamSessions).length > 0) {
-      const st = useStreamStore.getState()
-      const restored: Record<string, typeof st.sessions[string]> = {}
-      for (const [k, v] of Object.entries(snapshotStreamSessions)) {
-        restored[k] = {
-          messages: v.messages,
-          pendingControlRequests: [],
-          isStreaming: v.isStreaming,
-          conn: null,
-          sessionInfo: { ccSessionId: '', model: '' },
-          cost: 0,
-        }
-      }
-      useStreamStore.setState({ sessions: { ...st.sessions, ...restored } })
-    }
-    // Restore tabs
-    if (closeTabs && closedTabs.length > 0) {
-      for (const tab of closedTabs) {
-        if (!useTabStore.getState().tabs[tab.id]) {
-          useTabStore.getState().addTab(tab)
-        }
-      }
-    } else if (!closeTabs && terminatedPanes.length > 0) {
-      for (const { tabId, paneId } of terminatedPanes) {
-        scanPaneTree(useTabStore.getState().tabs[tabId]?.layout ?? { type: 'leaf', pane: { id: '', content: { kind: 'new-tab' } } }, (pane) => {
-          if (pane.id === paneId && pane.content.kind === 'tmux-session' && pane.content.terminated === 'host-removed') {
-            const { terminated: _, ...clean } = pane.content // eslint-disable-line @typescript-eslint/no-unused-vars
-            useTabStore.getState().setPaneContent(tabId, paneId, clean as PaneContent)
-          }
-        })
-      }
-    }
-  }
 }
 
 describe('host delete cascade', () => {
@@ -179,7 +50,7 @@ describe('host delete cascade', () => {
     useTabStore.getState().addTab(tab1)
     useTabStore.getState().addTab(tab2)
 
-    simulateDeleteHost(HOST_A, true)
+    deleteHostCascade(HOST_A, true)
 
     expect(useTabStore.getState().tabs[tab1.id]).toBeUndefined()
     expect(useTabStore.getState().tabs[tab2.id]).toBeDefined()
@@ -189,7 +60,7 @@ describe('host delete cascade', () => {
     const tab = makeSessionTab(HOST_A, 'dev001')
     useTabStore.getState().addTab(tab)
 
-    simulateDeleteHost(HOST_A, false)
+    deleteHostCascade(HOST_A, false)
 
     const content = getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content
     expect(content.kind).toBe('tmux-session')
@@ -209,7 +80,7 @@ describe('host delete cascade', () => {
     useAgentStore.getState().handleHookEvent(HOST_A, 'dev001', event)
     expect(useAgentStore.getState().statuses[`${HOST_A}:dev001`]).toBe('idle')
 
-    simulateDeleteHost(HOST_A, true)
+    deleteHostCascade(HOST_A, true)
 
     expect(useAgentStore.getState().events[`${HOST_A}:dev001`]).toBeUndefined()
     expect(useAgentStore.getState().statuses[`${HOST_A}:dev001`]).toBeUndefined()
@@ -219,7 +90,7 @@ describe('host delete cascade', () => {
     useStreamStore.getState().addMessage(HOST_A, 'dev001', { type: 'assistant' } as StreamMessage)
     expect(useStreamStore.getState().sessions[`${HOST_A}:dev001`]).toBeDefined()
 
-    simulateDeleteHost(HOST_A, true)
+    deleteHostCascade(HOST_A, true)
 
     expect(useStreamStore.getState().sessions[`${HOST_A}:dev001`]).toBeUndefined()
   })
@@ -229,13 +100,13 @@ describe('host delete cascade', () => {
     useSessionStore.getState().replaceHost(HOST_A, sessions)
     expect(useSessionStore.getState().sessions[HOST_A]).toBeDefined()
 
-    simulateDeleteHost(HOST_A, true)
+    deleteHostCascade(HOST_A, true)
 
     expect(useSessionStore.getState().sessions[HOST_A]).toBeUndefined()
   })
 
   it('undo restores host at original position', () => {
-    const restore = simulateDeleteHost(HOST_A, true)
+    const restore = deleteHostCascade(HOST_A, true)
     expect(useHostStore.getState().hostOrder).toEqual([HOST_B])
 
     restore()
@@ -247,7 +118,7 @@ describe('host delete cascade', () => {
     const sessions: Session[] = [makeSession('dev001', 'Dev')]
     useSessionStore.getState().replaceHost(HOST_A, sessions)
 
-    const restore = simulateDeleteHost(HOST_A, true)
+    const restore = deleteHostCascade(HOST_A, true)
     expect(useSessionStore.getState().sessions[HOST_A]).toBeUndefined()
 
     restore()
@@ -264,7 +135,7 @@ describe('host delete cascade', () => {
     }
     useAgentStore.getState().handleHookEvent(HOST_A, 'dev001', event)
 
-    const restore = simulateDeleteHost(HOST_A, true)
+    const restore = deleteHostCascade(HOST_A, true)
     expect(useAgentStore.getState().statuses[`${HOST_A}:dev001`]).toBeUndefined()
 
     restore()
@@ -272,11 +143,30 @@ describe('host delete cascade', () => {
     expect(useAgentStore.getState().events[`${HOST_A}:dev001`]).toBeDefined()
   })
 
+  it('undo restores AgentStore models', () => {
+    // Seed a model entry via handleHookEvent with modelName in raw_event
+    const event: AgentHookEvent = {
+      tmux_session: 'dev001',
+      event_name: 'UserPromptSubmit',
+      raw_event: { modelName: 'claude-sonnet-4-20250514' },
+      agent_type: 'cc',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleHookEvent(HOST_A, 'dev001', event)
+    expect(useAgentStore.getState().models[`${HOST_A}:dev001`]).toBe('claude-sonnet-4-20250514')
+
+    const restore = deleteHostCascade(HOST_A, true)
+    expect(useAgentStore.getState().models[`${HOST_A}:dev001`]).toBeUndefined()
+
+    restore()
+    expect(useAgentStore.getState().models[`${HOST_A}:dev001`]).toBe('claude-sonnet-4-20250514')
+  })
+
   it('undo restores StreamStore data', () => {
     const msg = { type: 'assistant' } as StreamMessage
     useStreamStore.getState().addMessage(HOST_A, 'dev001', msg)
 
-    const restore = simulateDeleteHost(HOST_A, true)
+    const restore = deleteHostCascade(HOST_A, true)
     expect(useStreamStore.getState().sessions[`${HOST_A}:dev001`]).toBeUndefined()
 
     restore()
@@ -290,7 +180,7 @@ describe('host delete cascade', () => {
     const tab = makeSessionTab(HOST_A, 'dev001')
     useTabStore.getState().addTab(tab)
 
-    const restore = simulateDeleteHost(HOST_A, true)
+    const restore = deleteHostCascade(HOST_A, true)
     expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
 
     restore()
@@ -301,7 +191,7 @@ describe('host delete cascade', () => {
     const tab = makeSessionTab(HOST_A, 'dev001')
     useTabStore.getState().addTab(tab)
 
-    const restore = simulateDeleteHost(HOST_A, false)
+    const restore = deleteHostCascade(HOST_A, false)
     const terminated = getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content
     if (terminated.kind === 'tmux-session') {
       expect(terminated.terminated).toBe('host-removed')
@@ -327,7 +217,7 @@ describe('host delete cascade', () => {
     useAgentStore.getState().handleHookEvent(HOST_B, 'stg001', eventB)
     useStreamStore.getState().addMessage(HOST_B, 'stg001', { type: 'user' } as StreamMessage)
 
-    simulateDeleteHost(HOST_A, true)
+    deleteHostCascade(HOST_A, true)
 
     // HOST_B data should be untouched
     expect(useTabStore.getState().tabs[tabB.id]).toBeDefined()
