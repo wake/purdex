@@ -41,15 +41,18 @@
 - Modify: `spa/src/features/workspace/hooks.ts:29-34`
 - Test: `spa/src/features/workspace/hooks.test.ts` (new)
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Write test using renderHook to verify stale closure fix**
 
 Create `spa/src/features/workspace/hooks.test.ts`:
 
 ```typescript
 import { describe, it, expect, beforeEach } from 'vitest'
+import { renderHook, act } from '@testing-library/react'
 import { useWorkspaceStore } from './store'
 import { useTabStore } from '../../stores/useTabStore'
+import { useTabWorkspaceActions } from './hooks'
 import { createTab } from '../../types/tab'
+import type { Tab } from '../../types/tab'
 
 describe('workspace tab recall', () => {
   beforeEach(() => {
@@ -57,7 +60,7 @@ describe('workspace tab recall', () => {
     useTabStore.getState().reset()
   })
 
-  it('handleSelectWorkspace reads latest activeTabId from store', () => {
+  it('handleSelectWorkspace uses latest store state, not stale closure', () => {
     // Setup: 2 workspaces, each with a tab
     const tab1 = createTab({ kind: 'dashboard' })
     const tab2 = createTab({ kind: 'hosts' })
@@ -70,12 +73,21 @@ describe('workspace tab recall', () => {
     useWorkspaceStore.getState().setWorkspaceActiveTab(ws1.id, tab1.id)
     useWorkspaceStore.getState().setWorkspaceActiveTab(ws2.id, tab2.id)
 
-    // Switch to ws1 — should activate tab1
-    useWorkspaceStore.getState().setActiveWorkspace(ws1.id)
-    const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === ws1.id)
-    const allTabs = useTabStore.getState().tabs
-    expect(ws?.activeTabId).toBe(tab1.id)
-    expect(allTabs[ws!.activeTabId!]).toBeDefined()
+    // Render hook with initial displayTabs
+    const displayTabs = [tab1, tab2]
+    const { result } = renderHook(() => useTabWorkspaceActions(displayTabs))
+
+    // Switch to ws2 — should recall tab2
+    act(() => { result.current.handleSelectWorkspace(ws2.id) })
+    expect(useTabStore.getState().activeTabId).toBe(tab2.id)
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(ws2.id)
+
+    // Modify ws1's activeTab via store (simulating tab selection in ws1)
+    act(() => { useWorkspaceStore.getState().setWorkspaceActiveTab(ws1.id, tab1.id) })
+
+    // Switch back to ws1 — must read latest store, not stale closure
+    act(() => { result.current.handleSelectWorkspace(ws1.id) })
+    expect(useTabStore.getState().activeTabId).toBe(tab1.id)
   })
 
   it('falls back to first tab when activeTabId points to closed tab', () => {
@@ -88,21 +100,25 @@ describe('workspace tab recall', () => {
     useWorkspaceStore.getState().addTabToWorkspace(ws.id, tab2.id)
     useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tab1.id)
 
-    // Close tab1 — activeTabId becomes null
+    const displayTabs = [tab1, tab2]
+    const { result } = renderHook(() => useTabWorkspaceActions(displayTabs))
+
+    // Close tab1 — workspace activeTabId becomes null
     useWorkspaceStore.getState().removeTabFromWorkspace(ws.id, tab1.id)
     useTabStore.getState().closeTab(tab1.id)
 
-    const updated = useWorkspaceStore.getState().workspaces.find((w) => w.id === ws.id)
-    expect(updated?.activeTabId).toBeNull()
-    // Fallback: first remaining tab
-    expect(updated?.tabs[0]).toBe(tab2.id)
+    // Switch to ws — should fallback to tab2 (first remaining tab)
+    act(() => { result.current.handleSelectWorkspace(ws.id) })
+    expect(useTabStore.getState().activeTabId).toBe(tab2.id)
   })
 })
 ```
 
-- [ ] **Step 2: Run test to verify it passes** (these are store-level tests, they should pass already — the bug is in the React hook)
+- [ ] **Step 2: Run test — first test should FAIL (stale closure), second should pass**
 
 Run: `cd spa && npx vitest run src/features/workspace/hooks.test.ts`
+
+Expected: First test may fail because the current implementation reads from closure `workspaces` which could be stale between `act()` calls.
 
 - [ ] **Step 3: Fix handleSelectWorkspace**
 
@@ -258,13 +274,13 @@ export const CURATED_ICON_CATEGORIES: Record<string, string[]> = {
     'Database', 'CloudArrowUp', 'Cpu', 'HardDrive', 'Plugs', 'Robot',
     'Atom', 'Brackets', 'BracketsAngle', 'BracketsSquare', 'CodeBlock',
     'DeviceMobile', 'Flask', 'Function', 'Hash', 'Infinity', 'Plug',
-    'Pulse', 'Webhook',
+    'Pulse', 'WebhooksLogo',
   ],
   objects: [
     'Folder', 'FolderOpen', 'File', 'FileText', 'Clipboard', 'Book',
     'BookOpen', 'Lock', 'LockOpen', 'Wrench', 'Gear', 'Hammer',
     'Scissors', 'Pencil', 'Pen', 'Eraser', 'Paperclip', 'Archive',
-    'Bag', 'Basket', 'Box', 'Briefcase', 'Package', 'Suitcase', 'Wallet',
+    'Bag', 'Basket', 'Cube', 'Briefcase', 'Package', 'Suitcase', 'Wallet',
   ],
   communication: [
     'ChatCircle', 'ChatDots', 'ChatText', 'Envelope', 'EnvelopeOpen',
@@ -291,7 +307,7 @@ export const CURATED_ICON_CATEGORIES: Record<string, string[]> = {
   nature: [
     'Sun', 'Moon', 'Cloud', 'CloudSun', 'CloudRain', 'Snowflake',
     'Tree', 'Leaf', 'Flower', 'Drop', 'Wind', 'Thermometer',
-    'Mountains', 'Wave', 'Rainbow', 'Planet', 'Grains', 'Paw',
+    'Mountains', 'Waves', 'Rainbow', 'Planet', 'Grains', 'PawPrint',
     'Bird', 'Butterfly', 'Cat', 'Dog', 'Fish', 'Horse',
     'Bug', 'Cactus',
   ],
@@ -315,8 +331,16 @@ export const CURATED_ICON_SET = new Set(
 Create `spa/src/features/workspace/components/WorkspaceIcon.test.tsx`:
 
 ```typescript
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
+
+// Mock icon-loader so lazy imports never resolve — Suspense fallback is stable
+vi.mock('../generated/icon-loader', () => ({
+  iconLoaders: {
+    Rocket: () => new Promise(() => {}), // never resolves
+  },
+}))
+
 import { WorkspaceIcon } from './WorkspaceIcon'
 
 describe('WorkspaceIcon', () => {
@@ -337,11 +361,15 @@ describe('WorkspaceIcon', () => {
     expect(screen.getByText('🚀')).toBeInTheDocument()
   })
 
-  it('shows first char as fallback for Phosphor icon name (suspense)', () => {
-    // Phosphor icon names are multi-char — during lazy load, fallback to name.charAt(0)
+  it('shows first char as Suspense fallback for Phosphor icon name', () => {
     render(<WorkspaceIcon icon="Rocket" name="Test" size={18} />)
-    // In test env, lazy import won't resolve — should show fallback
+    // Loader never resolves (mocked) — Suspense shows fallback
     expect(screen.getByText('T')).toBeInTheDocument()
+  })
+
+  it('shows fallback when icon name has no loader', () => {
+    render(<WorkspaceIcon icon="NonExistentIcon" name="Foo" size={18} />)
+    expect(screen.getByText('F')).toBeInTheDocument()
   })
 })
 ```
@@ -948,9 +976,11 @@ describe('WorkspaceSettingsPage', () => {
     expect(colorBtns.length).toBe(12) // WORKSPACE_COLORS.length
   })
 
-  it('renders delete button', () => {
+  it('renders delete button and shows confirm dialog', () => {
     render(<WorkspaceSettingsPage workspaceId={wsId} />)
-    expect(screen.getByTestId('delete-workspace-btn')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('delete-workspace-btn'))
+    // WorkspaceDeleteDialog should appear
+    expect(screen.getByText(/confirm/i)).toBeInTheDocument()
   })
 
   it('shows "not found" when workspace does not exist', () => {
@@ -972,12 +1002,15 @@ Create `spa/src/features/workspace/components/WorkspaceSettingsPage.tsx`:
 
 ```tsx
 import { useState, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { Trash } from '@phosphor-icons/react'
 import { useWorkspaceStore } from '../store'
+import { useTabStore } from '../../../stores/useTabStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { ColorGrid } from './WorkspaceColorPicker'
 import { WorkspaceIconPicker } from './WorkspaceIconPicker'
+import { WorkspaceDeleteDialog } from './WorkspaceDeleteDialog'
 
 interface Props {
   workspaceId: string
@@ -991,7 +1024,7 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
   const setWorkspaceIcon = useWorkspaceStore((s) => s.setWorkspaceIcon)
 
   const [nameInput, setNameInput] = useState(ws?.name ?? '')
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [showDelete, setShowDelete] = useState(false)
 
   const handleNameBlur = useCallback(() => {
     const trimmed = nameInput.trim()
@@ -1072,13 +1105,24 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
           </h3>
           <button
             data-testid="delete-workspace-btn"
-            onClick={() => setShowDeleteConfirm(true)}
+            onClick={() => setShowDelete(true)}
             className="flex items-center gap-2 px-4 py-2 rounded-md border border-red-500/30 text-red-400 text-sm hover:bg-red-500/10 cursor-pointer transition-colors"
           >
             <Trash size={16} />
             {t('workspace.delete') ?? 'Delete Workspace'}
           </button>
-          {/* Delete confirmation is handled by parent (App.tsx) via onDelete callback */}
+          {showDelete && (
+            <WorkspaceDeleteDialog
+              workspaceName={ws.name}
+              tabIds={ws.tabs}
+              onConfirm={(closedTabIds) => {
+                closedTabIds.forEach((id) => useTabStore.getState().closeTab(id))
+                useWorkspaceStore.getState().removeWorkspace(workspaceId)
+                setShowDelete(false)
+              }}
+              onCancel={() => setShowDelete(false)}
+            />
+          )}
         </section>
       </div>
     </div>
@@ -1104,9 +1148,9 @@ export function resetLastSection() { lastSection = null }
 
 export function SettingsPage(props: PaneRendererProps) {
   // Workspace-scoped settings → delegate to WorkspaceSettingsPage
-  const scope = props.pane.content.kind === 'settings' ? (props.pane.content as any).scope : 'global'
-  if (typeof scope === 'object' && scope.workspaceId) {
-    return <WorkspaceSettingsPage workspaceId={scope.workspaceId} />
+  const content = props.pane.content
+  if (content.kind === 'settings' && typeof content.scope === 'object') {
+    return <WorkspaceSettingsPage workspaceId={content.scope.workspaceId} />
   }
 
   // Global settings → existing logic
@@ -1215,7 +1259,7 @@ case 'workspace-settings': {
 }
 ```
 
-Add import at top if not present: `import { useWorkspaceStore } from '../features/workspace'`
+**Must add import** (currently not present): `import { useWorkspaceStore } from '../features/workspace'`
 
 - [ ] **Step 3: Update workspace index.ts exports**
 
@@ -1268,23 +1312,23 @@ onAddWorkspace={() => {
 }}
 ```
 
-**e) MigrateDialog callbacks** — in App.tsx, find the MigrateTabsDialog's `onMigrate` and `onSkip` callbacks. Add `openWsSettings(migrateDialog!.wsId)` as the last line of each callback, after `setMigrateDialog(null)`:
+**e) MigrateDialog onMigrate callback** — in App.tsx, find the MigrateTabsDialog's `onMigrate` callback. Add `openWsSettings(migrateDialog!.wsId)` after `setMigrateDialog(null)`:
 
 ```typescript
 // In onMigrate callback, after existing logic:
 setMigrateDialog(null)
 openWsSettings(migrateDialog!.wsId)  // ← add this line
-
-// In onSkip callback, after existing logic:
-setMigrateDialog(null)
-openWsSettings(migrateDialog!.wsId)  // ← add this line
 ```
 
-- [ ] **Step 5: Run context menu test**
+**onSkip does NOT open settings** — skip means the user chose not to migrate and goes to Home (`setActiveWorkspace(null)`). Opening workspace settings would contradict skip semantics.
+
+- [ ] **Step 5: Update WorkspaceContextMenu test — add onSettings prop**
+
+`WorkspaceContextMenu.test.tsx` has 4 `render(...)` calls, all missing the new required `onSettings` prop. Add `onSettings={vi.fn()}` to every render call. Search for `render(<WorkspaceContextMenu` and add the prop to each.
 
 Run: `cd spa && npx vitest run src/features/workspace/components/WorkspaceContextMenu.test.tsx`
 
-If test references old props, update to include `onSettings={vi.fn()}`.
+Expected: All pass.
 
 - [ ] **Step 6: Run full test suite**
 
