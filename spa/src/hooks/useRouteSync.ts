@@ -98,9 +98,10 @@ export function useRouteSync() {
         // Workspace activation handled by App — no state change here
         break
       case 'workspace-settings': {
-        const { setActiveWorkspace } = useWorkspaceStore.getState()
-        setActiveWorkspace(parsed.workspaceId)
-        openSingletonTab({ kind: 'settings', scope: { workspaceId: parsed.workspaceId } })
+        const wsStore = useWorkspaceStore.getState()
+        wsStore.setActiveWorkspace(parsed.workspaceId)
+        const tabId = openSingletonTab({ kind: 'settings', scope: { workspaceId: parsed.workspaceId } })
+        wsStore.insertTab(tabId, parsed.workspaceId)
         break
       }
       case 'workspace-session-tab': {
