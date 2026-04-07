@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.0.0-alpha.56] - 2026-04-08
+
+Phase 11 — Workspace UI 改善 (PR #201)
+
+### 新功能
+
+- **Workspace 設定頁** — 前台式單頁設定（名稱編輯、Phosphor Icon picker、icon weight toggle、刪除）
+- **Phosphor Icons Picker** — 8 分類精選 + 搜尋完整 1512 icon 庫，lazy loading per-icon chunk
+- **Icon Weight** — bold / duotone / fill 三種風格切換
+- **Empty workspace state** — 切換到無 tab workspace 時顯示空白引導頁
+- **WorkspaceContextMenu** — 新增 Settings 項目
+- **Vibrant color palette** — S=55-80% L=55-65% 取代舊 S=36% 色板（12 色）
+
+### 改善
+
+- **ActivityBar** — 系統配色（白前景/深背景）、active 紫色背景 + ring-purple-400
+- **WorkspaceChip 移除** — tab bar 不再顯示 workspace 標題，上下文完全由 ActivityBar 提供
+- **Tab recall fix** — 切換 workspace 時正確回到上次瀏覽的 tab（getState 取代 stale closure）
+- **useRouteSync** — workspace-settings 路由補 setActiveWorkspace + insertTab
+
+### Review 修正
+
+- WorkspaceIcon rules-of-hooks — useMemo 移到 early return 前避免條件式 hook 呼叫
+- WorkspaceIcon ErrorBoundary — icon import 失敗時 fallback 至文字而非 crash 整個 app
+- WorkspaceSettingsPage delete — 濾除 settings tab、記錄 history、sync activeTab
+- Context menu 點 Settings 後正確關閉
+- 搜尋去重：curated icons 跨 category 重複時不再產生 React key 警告
+- 修正無效 Phosphor icon 名稱（Tv → Television, Brackets → BracketsCurly）
+- workspaceColorStyle JSDoc 修正
+
+### 測試
+
+- 997 tests pass / lint clean
+
 ## [1.0.0-alpha.55] - 2026-04-07
 
 Browser Tab 強化 (PR #200)
