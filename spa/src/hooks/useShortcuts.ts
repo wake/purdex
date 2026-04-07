@@ -90,6 +90,34 @@ export function useShortcuts(): void {
         return
       }
 
+      if (action.startsWith('switch-workspace-')) {
+        const workspaces = useWorkspaceStore.getState().workspaces
+        if (workspaces.length === 0) return
+        const index = parseInt(action.replace('switch-workspace-', ''), 10) - 1
+        const targetWs = workspaces[index]
+        if (!targetWs) return
+        useWorkspaceStore.getState().setActiveWorkspace(targetWs.id)
+        const activeTab = targetWs.activeTabId ?? targetWs.tabs[0]
+        if (activeTab) tabState.setActiveTab(activeTab)
+        return
+      }
+
+      if (action === 'prev-workspace' || action === 'next-workspace') {
+        const workspaces = useWorkspaceStore.getState().workspaces
+        if (workspaces.length === 0) return
+        const currentWsId = useWorkspaceStore.getState().activeWorkspaceId
+        const currentIdx = workspaces.findIndex((w) => w.id === currentWsId)
+        const delta = action === 'next-workspace' ? 1 : -1
+        const nextIdx = currentIdx === -1
+          ? (delta > 0 ? 0 : workspaces.length - 1)
+          : (currentIdx + delta + workspaces.length) % workspaces.length
+        const targetWs = workspaces[nextIdx]
+        useWorkspaceStore.getState().setActiveWorkspace(targetWs.id)
+        const activeTab = targetWs.activeTabId ?? targetWs.tabs[0]
+        if (activeTab) tabState.setActiveTab(activeTab)
+        return
+      }
+
       if (import.meta.env.DEV) {
         console.warn(`[useShortcuts] unknown action: ${action}`)
       }

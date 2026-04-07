@@ -149,6 +149,7 @@
   "nav.scroll_left": "Scroll left",
   "nav.scroll_right": "Scroll right",
   "nav.new_tab": "New tab",
+  "nav.home": "Home",
   "nav.new_workspace": "New workspace",
   "nav.settings": "Settings",
   "nav.hosts": "Hosts",
@@ -411,5 +412,14 @@
 
   "workspace.delete_title": "Delete {{name}}",
   "workspace.delete_description": "Select tabs to close with the workspace:",
-  "workspace.delete_confirm": "Delete"
+  "workspace.delete_confirm": "Delete",
+  "workspace.rename": "Rename",
+  "workspace.change_color": "Change Color",
+  "workspace.change_icon": "Change Icon",
+  "workspace.delete": "Delete Workspace",
+
+  "workspace.migrate_title": "Move Existing Tabs?",
+  "workspace.migrate_description": "You have {{count}} open tab(s). Move them into \"{{name}}\"?",
+  "workspace.migrate_move": "Move",
+  "workspace.migrate_skip": "Skip"
 }

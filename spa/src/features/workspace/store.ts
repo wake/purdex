@@ -16,6 +16,9 @@ interface WorkspaceState {
   reorderWorkspaceTabs: (wsId: string, tabIds: string[]) => void
   findWorkspaceByTab: (tabId: string) => Workspace | null
   insertTab: (tabId: string, workspaceId?: string | null) => void
+  renameWorkspace: (wsId: string, name: string) => void
+  setWorkspaceColor: (wsId: string, color: string) => void
+  setWorkspaceIcon: (wsId: string, icon: string) => void
   reset: () => void
 }
 
@@ -116,6 +119,27 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }),
         }))
       },
+
+      renameWorkspace: (wsId, name) =>
+        set((state) => ({
+          workspaces: state.workspaces.map((ws) =>
+            ws.id === wsId ? { ...ws, name } : ws,
+          ),
+        })),
+
+      setWorkspaceColor: (wsId, color) =>
+        set((state) => ({
+          workspaces: state.workspaces.map((ws) =>
+            ws.id === wsId ? { ...ws, color } : ws,
+          ),
+        })),
+
+      setWorkspaceIcon: (wsId, icon) =>
+        set((state) => ({
+          workspaces: state.workspaces.map((ws) =>
+            ws.id === wsId ? { ...ws, icon } : ws,
+          ),
+        })),
 
       reset: () => set(createDefaultState()),
     }),

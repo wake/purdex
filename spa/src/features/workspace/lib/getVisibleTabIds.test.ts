@@ -59,7 +59,7 @@ describe('getVisibleTabIds', () => {
     expect(result).toEqual(['t1', 't2', 't3'])
   })
 
-  it('returns all tabs from tabOrder when activeWorkspaceId is null', () => {
+  it('returns only standalone tabs when activeWorkspaceId is null (Home mode)', () => {
     const workspaces: Workspace[] = [
       { id: 'ws-1', name: 'WS1', color: '#aaa', tabs: ['t1'], activeTabId: 't1' },
     ]
@@ -70,7 +70,24 @@ describe('getVisibleTabIds', () => {
       workspaces,
       activeWorkspaceId: null,
     })
-    expect(result).toEqual(['t1', 't2'])
+    // t1 belongs to ws-1, only t2 is standalone
+    expect(result).toEqual(['t2'])
+  })
+
+  it('returns all standalone tabs in Home mode with multiple workspaces', () => {
+    const workspaces: Workspace[] = [
+      { id: 'ws-1', name: 'WS1', color: '#aaa', tabs: ['t1', 't2'], activeTabId: 't1' },
+      { id: 'ws-2', name: 'WS2', color: '#bbb', tabs: ['t3'], activeTabId: 't3' },
+    ]
+    const result = getVisibleTabIds({
+      tabs: { t1: {}, t2: {}, t3: {}, t4: {}, t5: {} },
+      tabOrder: ['t1', 't2', 't3', 't4', 't5'],
+      activeTabId: 't4',
+      workspaces,
+      activeWorkspaceId: null,
+    })
+    // t1,t2 in ws-1; t3 in ws-2; t4,t5 are standalone
+    expect(result).toEqual(['t4', 't5'])
   })
 
   it('returns empty array when no tabs exist', () => {

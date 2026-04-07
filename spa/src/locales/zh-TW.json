@@ -149,6 +149,7 @@
   "nav.scroll_left": "向左捲動",
   "nav.scroll_right": "向右捲動",
   "nav.new_tab": "新增分頁",
+  "nav.home": "首頁",
   "nav.new_workspace": "新增工作區",
   "nav.settings": "設定",
   "nav.hosts": "主機管理",
@@ -411,5 +412,14 @@
 
   "workspace.delete_title": "刪除 {{name}}",
   "workspace.delete_description": "選擇要一併關閉的分頁：",
-  "workspace.delete_confirm": "刪除"
+  "workspace.delete_confirm": "刪除",
+  "workspace.rename": "重新命名",
+  "workspace.change_color": "變更顏色",
+  "workspace.change_icon": "變更圖示",
+  "workspace.delete": "刪除工作區",
+
+  "workspace.migrate_title": "移動現有分頁？",
+  "workspace.migrate_description": "您有 {{count}} 個開啟的分頁。要移入「{{name}}」嗎？",
+  "workspace.migrate_move": "移入",
+  "workspace.migrate_skip": "跳過"
 }
