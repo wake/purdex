@@ -33,6 +33,7 @@ interface Props {
   className?: string
 }
 
+/* eslint-disable react-hooks/static-components -- lazyCache guarantees stable reference per icon name */
 export function WorkspaceIcon({ icon, name, size, weight = 'bold', className }: Props) {
   const fallbackChar = name.charAt(0) || '?'
   const phosphorName = icon && isPhosphorName(icon) ? icon : null
@@ -60,3 +61,4 @@ export function WorkspaceIcon({ icon, name, size, weight = 'bold', className }: 
     </IconErrorBoundary>
   )
 }
+/* eslint-enable react-hooks/static-components */
