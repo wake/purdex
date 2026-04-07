@@ -2,6 +2,7 @@ import { Plus, GearSix, HardDrives, SquaresFour } from '@phosphor-icons/react'
 import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
+import { workspaceColorStyle } from '../lib/workspace-colors'
 
 interface Props {
   workspaces: Workspace[]
@@ -52,25 +53,31 @@ export function ActivityBar({
       {workspaces.length > 0 && <div className="w-5 h-px bg-border-default my-0.5" />}
 
       {/* Workspaces */}
-      {workspaces.map((ws) => (
-        <button
-          key={ws.id}
-          title={ws.name}
-          onClick={() => onSelectWorkspace(ws.id)}
-          onContextMenu={(e) => {
-            e.preventDefault()
-            onContextMenuWorkspace?.(e, ws.id)
-          }}
-          className={`w-8 h-8 rounded-md flex items-center justify-center text-xs cursor-pointer transition-all ${
-            activeWorkspaceId === ws.id && !activeStandaloneTabId
-              ? 'ring-2 ring-purple-400'
-              : 'opacity-70 hover:opacity-100'
-          }`}
-          style={{ backgroundColor: ws.color + '55', color: ws.color }}
-        >
-          <WorkspaceIcon icon={ws.icon} name={ws.name} size={14} />
-        </button>
-      ))}
+      {workspaces.map((ws) => {
+        const cs = workspaceColorStyle(ws.color)
+        const isActive = activeWorkspaceId === ws.id && !activeStandaloneTabId
+        return (
+          <button
+            key={ws.id}
+            title={ws.name}
+            onClick={() => onSelectWorkspace(ws.id)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              onContextMenuWorkspace?.(e, ws.id)
+            }}
+            className={`w-8 h-8 rounded-md flex items-center justify-center text-xs cursor-pointer transition-all ${
+              isActive ? 'ring-2' : 'opacity-70 hover:opacity-100'
+            }`}
+            style={{
+              backgroundColor: cs.bg,
+              color: cs.fg,
+              ...(isActive ? { '--tw-ring-color': cs.border } as React.CSSProperties : {}),
+            }}
+          >
+            <WorkspaceIcon icon={ws.icon} name={ws.name} size={14} />
+          </button>
+        )
+      })}
 
       {/* Add + Settings */}
       <div className="mt-auto flex flex-col items-center gap-2 pb-1">

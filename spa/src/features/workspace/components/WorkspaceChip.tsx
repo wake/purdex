@@ -1,5 +1,6 @@
 import { CaretDown } from '@phosphor-icons/react'
 import { WorkspaceIcon } from './WorkspaceIcon'
+import { workspaceColorStyle } from '../lib/workspace-colors'
 
 interface Props {
   name: string | null
@@ -11,7 +12,7 @@ interface Props {
 
 export function WorkspaceChip({ name, color, icon, onClick, onContextMenu }: Props) {
   if (!name) return null
-  const c = color ?? '#888'
+  const cs = workspaceColorStyle(color ?? '#888')
   return (
     <div className="flex items-center flex-shrink-0">
       <button
@@ -23,12 +24,12 @@ export function WorkspaceChip({ name, color, icon, onClick, onContextMenu }: Pro
         <div
           data-testid="workspace-chip-icon"
           className="w-5 h-5 rounded flex items-center justify-center"
-          style={{ backgroundColor: c + '99', color: c }}
+          style={{ backgroundColor: cs.bg, color: cs.fg }}
         >
           <WorkspaceIcon icon={icon} name={name} size={12} />
         </div>
         {/* Name */}
-        <span className="truncate max-w-28 text-[13px] font-semibold" style={{ color: c }}>
+        <span className="truncate max-w-28 text-[13px] font-semibold" style={{ color: cs.fg }}>
           {name}
         </span>
         {/* Chevron */}

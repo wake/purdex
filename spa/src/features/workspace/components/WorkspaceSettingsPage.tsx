@@ -6,6 +6,7 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import { getPrimaryPane } from '../../../lib/pane-tree'
 import { getPaneLabel } from '../../../lib/pane-labels'
 import { WorkspaceIcon } from './WorkspaceIcon'
+import { workspaceColorStyle } from '../lib/workspace-colors'
 import { ColorGrid } from './WorkspaceColorPicker'
 import { WorkspaceIconPicker } from './WorkspaceIconPicker'
 import { WorkspaceDeleteDialog } from './WorkspaceDeleteDialog'
@@ -67,7 +68,7 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
         <div className="flex flex-col items-center gap-3 mb-8">
           <div
             className="w-16 h-16 rounded-xl flex items-center justify-center text-2xl"
-            style={{ backgroundColor: ws.color + '44', color: ws.color }}
+            style={{ backgroundColor: workspaceColorStyle(ws.color).bg, color: workspaceColorStyle(ws.color).fg }}
           >
             <WorkspaceIcon icon={ws.icon} name={ws.name} size={32} />
           </div>
