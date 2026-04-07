@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.59] - 2026-04-08
+
+Tab UX 改善 (PR #209)
+
+### 新功能
+
+- **Rename Session** — tab 右鍵選單新增 Rename Session，popover 出現在 tab 正下方 inline 編輯，API 失敗時顯示錯誤訊息
+- **URL 歷史下拉** — new tab 頁面 URL 欄位帶出歷史紀錄，輸入時 auto-filter，鍵盤 ↑↓ 選擇，最多 100 筆持久化
+- **Session 鍵盤導航** — Tab 鍵進入 session list，↑↓/jk 移動，Enter 選擇
+- **瀏覽紀錄回退** — 關閉 tab 時回到上一個瀏覽的 tab（visitHistory stack），而非相鄰 tab
+
+### 改善
+
+- **New Tab 頁面** — browser URL 欄位移到最上方並自動 focus，移除 Memory Monitor 區段
+- **Focus 保持** — 點擊已 active 的 tab 不搶走 content 區域的 focus
+
+### 測試
+
+- 1047 tests pass / lint clean / build OK
+
 ## [1.0.0-alpha.58] - 2026-04-08
 
 Tab 操作 workspace 隔離 (PR #208)
