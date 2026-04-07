@@ -20,25 +20,22 @@ export function WorkspaceChip({ name, color, icon, iconWeight, onClick, onContex
       <button
         onClick={onClick}
         onContextMenu={onContextMenu}
-        className="flex items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer transition-colors hover:bg-surface-hover"
+        className="flex items-center gap-2 px-2 py-1 rounded-md cursor-pointer transition-colors hover:bg-surface-hover"
       >
-        {/* Icon square */}
-        <div
-          data-testid="workspace-chip-icon"
-          className="w-5 h-5 rounded flex items-center justify-center"
-          style={{ backgroundColor: cs.bg, color: cs.fg }}
-        >
-          <WorkspaceIcon icon={icon} name={name} size={12} weight={iconWeight} />
-        </div>
+        {/* Icon — no background, bare */}
+        <span data-testid="workspace-chip-icon" style={{ color: cs.fg }}>
+          <WorkspaceIcon icon={icon} name={name} size={16} weight={iconWeight} />
+        </span>
         {/* Name */}
-        <span className="truncate max-w-28 text-[13px] font-semibold" style={{ color: cs.fg }}>
+        <span className="truncate max-w-28 text-[14px] font-bold" style={{ color: cs.fg }}>
           {name}
         </span>
-        {/* Chevron */}
         <CaretDown size={10} className="flex-shrink-0 opacity-30" />
       </button>
-      {/* Separator */}
-      <div data-testid="workspace-chip-separator" className="w-px h-5.5 bg-border-default mx-2 flex-shrink-0" />
+      {/* Breadcrumb separator */}
+      <span data-testid="workspace-chip-separator" className="text-[14px] font-bold mx-1 flex-shrink-0" style={{ color: cs.fg }}>
+        /
+      </span>
     </div>
   )
 }
