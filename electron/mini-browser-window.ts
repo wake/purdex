@@ -45,6 +45,7 @@ export class MiniWindowManager {
 
     // Once SPA is ready, open the WebContentsView
     win.webContents.once('did-finish-load', () => {
+      if (win.isDestroyed()) return
       this.viewManager.open(win, url, paneId)
     })
 
@@ -60,7 +61,8 @@ export class MiniWindowManager {
     if (!entry) return
 
     const state = this.viewManager.getCurrentState(paneId)
-    const url = state?.url || ''
+    const url = state?.url
+    if (!url) return  // View not yet loaded — nothing to move
 
     // Notify parent window SPA to open new tab
     try {

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 
 const ALLOWED_SCHEMES = new Set(['http:', 'https:'])
 
-function isAllowedUrl(url: string): boolean {
+export function isAllowedUrl(url: string): boolean {
   try {
     return ALLOWED_SCHEMES.has(new URL(url).protocol)
   } catch {
@@ -25,6 +25,7 @@ interface ViewEntry {
   window: BrowserWindow
   state: 'active' | 'background'
   lastActiveAt: number
+  cleanupListeners?: () => void
 }
 
 interface Snapshot {
@@ -120,6 +121,14 @@ export class BrowserViewManager {
     wc.on('did-stop-loading', pushState)
     wc.on('page-title-updated', pushState)
 
+    entry.cleanupListeners = () => {
+      wc.off('did-navigate', pushState)
+      wc.off('did-navigate-in-page', pushState)
+      wc.off('did-start-loading', pushState)
+      wc.off('did-stop-loading', pushState)
+      wc.off('page-title-updated', pushState)
+    }
+
     this.clearTimer(paneId)
   }
 
@@ -171,6 +180,7 @@ export class BrowserViewManager {
     const entry = this.views.get(paneId)
     if (!entry) return
     this.clearTimer(paneId)
+    entry.cleanupListeners?.()
     try {
       entry.window.contentView.removeChildView(entry.view)
     } catch { /* already removed */ }
@@ -249,6 +259,8 @@ export class BrowserViewManager {
   private discard(paneId: string): void {
     const entry = this.views.get(paneId)
     if (!entry) return
+
+    entry.cleanupListeners?.()
 
     if (entry.window.isDestroyed()) {
       // Window already closed — just clean up our references

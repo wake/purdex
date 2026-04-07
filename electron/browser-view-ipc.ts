@@ -1,4 +1,5 @@
 import { ipcMain, BrowserWindow } from 'electron'
+import { isAllowedUrl } from './browser-view-manager'
 import type { BrowserViewManager } from './browser-view-manager'
 import type { MiniWindowManager } from './mini-browser-window'
 
@@ -71,6 +72,7 @@ export function registerBrowserViewIpc(
   ipcMain.on('browser-view:link-click', (event, data: { url: string; shiftKey: boolean; targetBlank: boolean }) => {
     const entry = manager.getEntryByWebContents(event.sender)
     if (!entry) return
+    if (!isAllowedUrl(data.url)) return
 
     if (data.shiftKey) {
       miniWindowManager.open(entry.window, data.url)

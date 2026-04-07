@@ -17,7 +17,7 @@ protocol.registerSchemesAsPrivileged([{
 
 const windowManager = new WindowManager()
 const browserViewManager = new BrowserViewManager()
-const miniWindowManager = new MiniWindowManager(browserViewManager, windowManager)
+const miniWindowManager = new MiniWindowManager(browserViewManager)
 windowManager.setOnWindowClosed((win) => browserViewManager.cleanupForWindow(win))
 let metricsInterval: ReturnType<typeof setInterval> | null = null
 let updateInProgress = false
