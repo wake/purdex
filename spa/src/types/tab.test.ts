@@ -40,14 +40,8 @@ describe('createWorkspace', () => {
     const ws = createWorkspace('My Project')
     expect(ws.id).toMatch(/^[0-9a-z]{6}$/)
     expect(ws.name).toBe('My Project')
-    expect(ws.color).toBeTruthy()
     expect(ws.tabs).toEqual([])
     expect(ws.activeTabId).toBeNull()
-  })
-
-  it('creates a workspace with a custom color', () => {
-    const ws = createWorkspace('Custom', '#ff0000')
-    expect(ws.color).toBe('#ff0000')
   })
 })
 

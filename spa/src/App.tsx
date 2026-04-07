@@ -21,10 +21,6 @@ import { isStandaloneTab } from './types/tab'
 import {
   getVisibleTabIds,
   WorkspaceContextMenu,
-  WorkspaceDeleteDialog,
-  WorkspaceRenameDialog,
-  WorkspaceColorPicker,
-  WorkspaceIconPicker,
   MigrateTabsDialog,
   WorkspaceEmptyState,
 } from './features/workspace'
@@ -32,8 +28,6 @@ import { TabContextMenu } from './components/TabContextMenu'
 import { ThemeInjector } from './components/ThemeInjector'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { getPlatformCapabilities } from './lib/platform'
-import { getPrimaryPane } from './lib/pane-tree'
-import { getPaneLabel } from './lib/pane-labels'
 import { useI18nStore } from './stores/useI18nStore'
 import type { Tab } from './types/tab'
 
@@ -178,47 +172,10 @@ export default function App() {
 
   // --- Workspace UI state ---
   const [wsContextMenu, setWsContextMenu] = useState<{ wsId: string; position: { x: number; y: number } } | null>(null)
-  const [wsDeleteTarget, setWsDeleteTarget] = useState<string | null>(null)
-  const [wsRenameTarget, setWsRenameTarget] = useState<string | null>(null)
-  const [wsColorTarget, setWsColorTarget] = useState<string | null>(null)
-  const [wsIconTarget, setWsIconTarget] = useState<string | null>(null)
   const [migrateDialog, setMigrateDialog] = useState<{ wsId: string; wsName: string } | null>(null)
-
 
   const handleWsContextMenu = (e: React.MouseEvent, wsId: string) => {
     setWsContextMenu({ wsId, position: { x: e.clientX, y: e.clientY } })
-  }
-
-  const syncActiveTabAfterWsRemove = () => {
-    const { activeWorkspaceId: newWsId, workspaces: remaining } = useWorkspaceStore.getState()
-    const newWs = remaining.find((w) => w.id === newWsId)
-    const nextTab = newWs?.activeTabId ?? newWs?.tabs[0]
-    if (nextTab) useTabStore.getState().setActiveTab(nextTab)
-  }
-
-  const handleWsDelete = (wsId: string) => {
-    const ws = workspaces.find((w) => w.id === wsId)
-    if (!ws) return
-    if (ws.tabs.length === 0) {
-      useWorkspaceStore.getState().removeWorkspace(wsId)
-      syncActiveTabAfterWsRemove()
-    } else {
-      setWsDeleteTarget(wsId)
-    }
-  }
-
-  const handleWsDeleteConfirm = (closedTabIds: string[]) => {
-    if (!wsDeleteTarget) return
-    const ws = workspaces.find((w) => w.id === wsDeleteTarget)
-    const hasPreservedTabs = ws && closedTabIds.length < ws.tabs.length
-    closedTabIds.forEach((tabId) => handleCloseTab(tabId))
-    useWorkspaceStore.getState().removeWorkspace(wsDeleteTarget)
-    if (hasPreservedTabs) {
-      useWorkspaceStore.getState().setActiveWorkspace(null)
-    } else {
-      syncActiveTabAfterWsRemove()
-    }
-    setWsDeleteTarget(null)
   }
 
   return (
@@ -339,55 +296,8 @@ export default function App() {
         {wsContextMenu && (
           <WorkspaceContextMenu
             position={wsContextMenu.position}
-            onRename={() => { setWsRenameTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
-            onChangeColor={() => { setWsColorTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
-            onChangeIcon={() => { setWsIconTarget(wsContextMenu.wsId); setWsContextMenu(null) }}
             onSettings={() => { openWsSettings(wsContextMenu.wsId); setWsContextMenu(null) }}
-            onDelete={() => { handleWsDelete(wsContextMenu.wsId); setWsContextMenu(null) }}
             onClose={() => setWsContextMenu(null)}
-          />
-        )}
-        {wsDeleteTarget && (() => {
-          const ws = workspaces.find((w) => w.id === wsDeleteTarget)
-          if (!ws) return null
-          const t = useI18nStore.getState().t
-          const tabItems = ws.tabs
-            .map((tabId) => {
-              const tab = tabs[tabId]
-              if (!tab) return null
-              const content = getPrimaryPane(tab.layout).content
-              const label = getPaneLabel(content, { getByCode: () => undefined }, { getById: () => undefined }, t)
-              return { id: tabId, label }
-            })
-            .filter(Boolean) as { id: string; label: string }[]
-          return (
-            <WorkspaceDeleteDialog
-              workspaceName={ws.name}
-              tabs={tabItems}
-              onConfirm={handleWsDeleteConfirm}
-              onCancel={() => setWsDeleteTarget(null)}
-            />
-          )
-        })()}
-        {wsRenameTarget && (
-          <WorkspaceRenameDialog
-            currentName={workspaces.find((w) => w.id === wsRenameTarget)?.name ?? ''}
-            onConfirm={(name) => { useWorkspaceStore.getState().renameWorkspace(wsRenameTarget, name); setWsRenameTarget(null) }}
-            onCancel={() => setWsRenameTarget(null)}
-          />
-        )}
-        {wsColorTarget && (
-          <WorkspaceColorPicker
-            currentColor={workspaces.find((w) => w.id === wsColorTarget)?.color ?? '#888'}
-            onSelect={(color) => { useWorkspaceStore.getState().setWorkspaceColor(wsColorTarget, color); setWsColorTarget(null) }}
-            onCancel={() => setWsColorTarget(null)}
-          />
-        )}
-        {wsIconTarget && (
-          <WorkspaceIconPicker
-            currentIcon={workspaces.find((w) => w.id === wsIconTarget)?.icon}
-            onSelect={(icon) => { useWorkspaceStore.getState().setWorkspaceIcon(wsIconTarget, icon); setWsIconTarget(null) }}
-            onCancel={() => setWsIconTarget(null)}
           />
         )}
         {migrateDialog && (

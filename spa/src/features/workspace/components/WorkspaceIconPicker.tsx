@@ -108,8 +108,8 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline }:
         </div>
       )}
 
-      {/* Icon grid */}
-      <div className="grid grid-cols-8 gap-1.5 max-h-48 overflow-y-auto">
+      {/* Icon grid — p-0.5 prevents ring-2 from being clipped by overflow */}
+      <div className="grid grid-cols-8 gap-1.5 max-h-48 overflow-y-auto p-0.5">
         {displayIcons.map((name) => (
           <IconCell
             key={name}

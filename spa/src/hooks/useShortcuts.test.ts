@@ -49,7 +49,7 @@ describe('useShortcuts', () => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
     useWorkspaceStore.getState().reset()
     // Create a default workspace for tests (since reset() now starts empty)
-    useWorkspaceStore.getState().addWorkspace('Default', { color: '#7a6aaa' })
+    useWorkspaceStore.getState().addWorkspace('Default')
     useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
   })
 

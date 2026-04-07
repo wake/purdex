@@ -1,8 +1,3 @@
-export const WORKSPACE_COLORS = [
-  '#e75a5a', '#eb8b47', '#e4b444', '#e7d355', '#8ccb4d', '#4dcb8c',
-  '#3bcec2', '#49b9df', '#5e8eed', '#7c67e4', '#b164d8', '#e25a9e',
-]
-
 /** Curated Phosphor icon names by category */
 export const CURATED_ICON_CATEGORIES: Record<string, string[]> = {
   general: [

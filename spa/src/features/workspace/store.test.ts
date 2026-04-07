@@ -166,23 +166,12 @@ describe('useWorkspaceStore', () => {
     expect(ws.icon).toBe('R')
   })
 
-  it('addWorkspace passes color to createWorkspace', () => {
-    const ws = useWorkspaceStore.getState().addWorkspace('WithColor', { color: '#ff0000' })
-    expect(ws.color).toBe('#ff0000')
-  })
-
   // === Workspace settings ===
 
   it('renameWorkspace updates workspace name', () => {
     const ws = useWorkspaceStore.getState().addWorkspace('Old Name')
     useWorkspaceStore.getState().renameWorkspace(ws.id, 'New Name')
     expect(useWorkspaceStore.getState().workspaces[0].name).toBe('New Name')
-  })
-
-  it('setWorkspaceColor updates workspace color', () => {
-    const ws = useWorkspaceStore.getState().addWorkspace('Test')
-    useWorkspaceStore.getState().setWorkspaceColor(ws.id, '#ff0000')
-    expect(useWorkspaceStore.getState().workspaces[0].color).toBe('#ff0000')
   })
 
   it('setWorkspaceIcon updates workspace icon', () => {
