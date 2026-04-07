@@ -128,7 +128,7 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline }:
           className="flex items-center gap-1 px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
         >
           <X size={12} />
-          {t('common.clear') ?? 'Clear'}
+          Clear
         </button>
         {!inline && (
           <button onClick={onCancel} className="px-3 py-1.5 rounded text-xs bg-surface-tertiary text-text-secondary hover:text-text-primary cursor-pointer">

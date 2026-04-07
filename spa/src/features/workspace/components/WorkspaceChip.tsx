@@ -23,7 +23,7 @@ export function WorkspaceChip({ name, color, icon, onClick, onContextMenu }: Pro
         <div
           data-testid="workspace-chip-icon"
           className="w-5 h-5 rounded flex items-center justify-center"
-          style={{ backgroundColor: c + '66', color: c }}
+          style={{ backgroundColor: c + '99', color: c }}
         >
           <WorkspaceIcon icon={icon} name={name} size={12} />
         </div>

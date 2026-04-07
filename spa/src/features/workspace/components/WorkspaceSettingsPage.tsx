@@ -67,7 +67,7 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
         <div className="flex flex-col items-center gap-3 mb-8">
           <div
             className="w-16 h-16 rounded-xl flex items-center justify-center text-2xl"
-            style={{ backgroundColor: ws.color + '33', color: ws.color }}
+            style={{ backgroundColor: ws.color + '44', color: ws.color }}
           >
             <WorkspaceIcon icon={ws.icon} name={ws.name} size={32} />
           </div>

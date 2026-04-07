@@ -66,7 +66,7 @@ export function ActivityBar({
               ? 'ring-2 ring-purple-400'
               : 'opacity-70 hover:opacity-100'
           }`}
-          style={{ backgroundColor: ws.color + '33', color: ws.color }}
+          style={{ backgroundColor: ws.color + '55', color: ws.color }}
         >
           <WorkspaceIcon icon={ws.icon} name={ws.name} size={14} />
         </button>

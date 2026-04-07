@@ -30,23 +30,23 @@ export function WorkspaceIcon({ icon, name, size, className }: Props) {
 
   // No icon → first char
   if (!icon) {
-    return <span className={className} style={{ fontSize: size * 0.6 }}>{fallbackChar}</span>
+    return <span className={className} style={{ fontSize: size * 0.85 }}>{fallbackChar}</span>
   }
 
   // Legacy single-char or emoji → render as text
   if (!isPhosphorName(icon)) {
-    return <span className={className} style={{ fontSize: size * 0.6 }}>{icon}</span>
+    return <span className={className} style={{ fontSize: size * 0.85 }}>{icon}</span>
   }
 
   // Phosphor icon name → lazy load (useMemo to satisfy react-hooks/static-components)
   // eslint-disable-next-line react-hooks/rules-of-hooks -- icon is stable per render path (early returns above guarantee it's a Phosphor name)
   const LazyIcon = useMemo(() => getLazyIcon(icon), [icon])
   if (!LazyIcon) {
-    return <span className={className} style={{ fontSize: size * 0.6 }}>{fallbackChar}</span>
+    return <span className={className} style={{ fontSize: size * 0.85 }}>{fallbackChar}</span>
   }
 
   return (
-    <Suspense fallback={<span className={className} style={{ fontSize: size * 0.6 }}>{fallbackChar}</span>}>
+    <Suspense fallback={<span className={className} style={{ fontSize: size * 0.85 }}>{fallbackChar}</span>}>
       <LazyIcon size={size} className={className} />
     </Suspense>
   )
