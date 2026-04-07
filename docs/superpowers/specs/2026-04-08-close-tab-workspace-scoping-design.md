@@ -57,11 +57,18 @@ closeTabInWorkspace(tabId: string): void {
 
   const ws = get().findWorkspaceByTab(tabId)
 
-  // 1. Workspace-scoped 鄰近 tab 預算（mutation 前）
+  // 1. 鄰近 tab 預算（mutation 前，使用 get() 當下狀態）
   let nextTabId: string | null = null
   if (ws) {
+    // Workspace-scoped：在 ws.tabs 中找鄰近
     const idx = ws.tabs.indexOf(tabId)
     const remaining = ws.tabs.filter(id => id !== tabId)
+    nextTabId = remaining[Math.min(idx, remaining.length - 1)] ?? null
+  } else {
+    // Standalone tab：在全域 tabOrder 中找鄰近
+    const { tabOrder } = useTabStore.getState()
+    const idx = tabOrder.indexOf(tabId)
+    const remaining = tabOrder.filter(id => id !== tabId)
     nextTabId = remaining[Math.min(idx, remaining.length - 1)] ?? null
   }
 
@@ -154,6 +161,24 @@ export function destroyBrowserViewIfNeeded(tab: Tab): void {
 - 保留 "reopens tab into current workspace"
 - 修改 "selects next tab within workspace after closing"：移除 `if` guard，改為硬性 assertion
 - 新增 "closes last tab in workspace → activeTabId null"
+
+#### 7. 其他 `closeTab` 呼叫端遷移
+
+以下 3 處直接呼叫 `useTabStore.closeTab()`，需改為 `closeTabInWorkspace`：
+
+| 檔案 | 用途 | 改法 |
+|------|------|------|
+| `TerminatedPane.tsx` | 點「關閉」按鈕 | 改呼叫 `closeTabInWorkspace`，加 `destroyBrowserViewIfNeeded` |
+| `WorkspaceSettingsPage.tsx` | 刪除 workspace 時批次關閉 | 改呼叫 `closeTabInWorkspace`（loop 中逐一關閉） |
+| `host-lifecycle.ts` | cascade delete 批次關閉 | 改呼叫 `closeTabInWorkspace`（loop 中逐一關閉） |
+
+這些都是用戶可觸發的路徑，改為 composite action 確保 workspace activeTabId 同步、history 記錄一致。
+
+#### 8. `useTabStore.test.ts` 既有測試更新
+
+`closeTab` 簡化後不再自動選鄰近 tab，以下測試需更新：
+- "closeTab activates adjacent tab when removing active" → 改為斷言 `activeTabId === null`
+- "closeTab sets null when removing last tab" → 保留（行為不變）
 
 ### 不改的部分
 
