@@ -12,7 +12,7 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
   const reservedStart = sections.findIndex((s) => !s.component)
 
   return (
-    <div className="w-48 border-r border-border-subtle bg-surface-primary py-3 flex-shrink-0">
+    <div className="w-48 border-r border-border-subtle bg-surface-primary py-3 pl-2 flex-shrink-0">
       <div className="px-4 mb-2 text-[10px] text-text-muted uppercase tracking-wider">{t('settings.title')}</div>
       {sections.map((item, i) => {
         const isActive = item.id === activeSection
