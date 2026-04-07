@@ -66,7 +66,7 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline }:
   const displayIcons = useMemo(() => {
     if (!search.trim()) return CURATED_ICON_CATEGORIES[activeCategory] ?? []
     const q = search.trim().toLowerCase()
-    const curated = Object.values(CURATED_ICON_CATEGORIES).flat()
+    const curated = [...new Set(Object.values(CURATED_ICON_CATEGORIES).flat())]
       .filter((n) => n.toLowerCase().includes(q))
     const full = ALL_ICON_NAMES
       .filter((n) => n.toLowerCase().includes(q) && !CURATED_ICON_SET.has(n))
