@@ -29,6 +29,7 @@ import {
   WorkspaceEmptyState,
 } from './features/workspace'
 import { TabContextMenu } from './components/TabContextMenu'
+import { RenamePopover } from './components/RenamePopover'
 import { ThemeInjector } from './components/ThemeInjector'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { getPlatformCapabilities } from './lib/platform'
@@ -168,6 +169,10 @@ export default function App() {
     handleContextMenu,
     handleMiddleClick,
     handleContextAction,
+    renameTarget,
+    renameError,
+    handleRenameConfirm,
+    handleRenameCancel,
   } = useTabWorkspaceActions(displayTabs)
 
   const openWsSettings = useCallback((wsId: string) => {
@@ -334,6 +339,15 @@ export default function App() {
             onAction={handleContextAction}
             hasOtherUnlocked={displayTabs.some((t) => t.id !== contextMenu.tab.id && !t.locked)}
             hasRightUnlocked={contextMenuHasRightUnlocked}
+          />
+        )}
+        {renameTarget && (
+          <RenamePopover
+            anchorRect={renameTarget.anchorRect}
+            currentName={renameTarget.currentName}
+            onConfirm={handleRenameConfirm}
+            onCancel={handleRenameCancel}
+            error={renameError}
           />
         )}
         {wsContextMenu && (

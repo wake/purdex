@@ -125,6 +125,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     return (
       <button
         ref={setNodeRef}
+        data-tab-id={tab.id}
         style={{ ...style, height: 26, margin: '0 1px', marginTop: 2 }}
         {...attributes}
         {...listeners}
@@ -160,6 +161,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   return (
     <div
       ref={setNodeRef}
+      data-tab-id={tab.id}
       style={{ ...style, height: 26, margin: '0 1px', marginTop: 2, flex: '0 1 140px', width: 140, minWidth: 80 }}
       {...attributes}
       {...listeners}

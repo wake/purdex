@@ -4,11 +4,14 @@ import { useWorkspaceStore } from './store'
 import { useHistoryStore } from '../../stores/useHistoryStore'
 import { createTab } from '../../types/tab'
 import { getPrimaryPane } from '../../lib/pane-tree'
+import { renameSession } from '../../lib/host-api'
 import type { Tab } from '../../types/tab'
 import type { ContextMenuAction } from '../../components/TabContextMenu'
 
 export function useTabWorkspaceActions(displayTabs: Tab[]) {
   const [contextMenu, setContextMenu] = useState<{ tab: Tab; position: { x: number; y: number } } | null>(null)
+  const [renameTarget, setRenameTarget] = useState<{ tabId: string; hostId: string; sessionCode: string; currentName: string; anchorRect: DOMRect } | null>(null)
+  const [renameError, setRenameError] = useState<string | undefined>()
 
   // Tab store
   const tabs = useTabStore((s) => s.tabs)
@@ -125,8 +128,46 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
         }
         break
       }
+      case 'rename': {
+        const primary = getPrimaryPane(tab.layout)
+        const c = primary.content
+        if (c.kind !== 'tmux-session' || c.terminated) break
+        const tabEl = document.querySelector(`[data-tab-id="${tab.id}"]`)
+        if (!tabEl) break
+        const rect = tabEl.getBoundingClientRect()
+        setRenameTarget({
+          tabId: tab.id,
+          hostId: c.hostId,
+          sessionCode: c.sessionCode,
+          currentName: c.cachedName || c.sessionCode,
+          anchorRect: rect,
+        })
+        setRenameError(undefined)
+        break
+      }
     }
   }, [contextMenu, tabs, displayTabs, handleCloseTab])
+
+  const handleRenameConfirm = useCallback(async (name: string) => {
+    if (!renameTarget) return
+    try {
+      const res = await renameSession(renameTarget.hostId, renameTarget.sessionCode, name)
+      if (!res.ok) {
+        const text = await res.text().catch(() => 'Unknown error')
+        setRenameError(text)
+        return
+      }
+      setRenameTarget(null)
+      setRenameError(undefined)
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : 'Unknown error')
+    }
+  }, [renameTarget])
+
+  const handleRenameCancel = useCallback(() => {
+    setRenameTarget(null)
+    setRenameError(undefined)
+  }, [])
 
   // Context menu derived state
   const contextMenuHasRightUnlocked = (() => {
@@ -148,5 +189,9 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     handleContextMenu,
     handleMiddleClick,
     handleContextAction,
+    renameTarget,
+    renameError,
+    handleRenameConfirm,
+    handleRenameCancel,
   }
 }
