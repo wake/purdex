@@ -114,7 +114,16 @@ func mergeHooks(path, tboxPath string, remove bool) error {
 		return fmt.Errorf("marshal settings: %w", err)
 	}
 
-	return os.WriteFile(path, out, 0644)
+	// Write to a temp file in the same directory, then atomically rename.
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, out, 0644); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath) // Best-effort cleanup
+		return fmt.Errorf("rename: %w", err)
+	}
+	return nil
 }
 
 // makeTboxEntry creates a hook entry for the given event.
