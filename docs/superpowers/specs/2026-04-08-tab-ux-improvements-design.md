@@ -24,6 +24,7 @@
 - Enter 確認 → 呼叫 `renameSession(hostId, code, newName)`
 - Escape / click outside → 取消
 - 成功後 daemon session watcher 透過 WS 推送更新，`updateSessionCache` 自動同步所有 tab
+- **錯誤處理**: API 失敗時在 popover 內顯示紅色錯誤訊息，不關閉 popover，使用者可重試或 Escape 取消
 
 ### 元件
 
@@ -57,7 +58,8 @@
 
 ### 設計
 
-- `BrowserNewTabSection` 的 `<input>` 加上 `autoFocus` 屬性
+- `BrowserNewTabSection` 的 `<input>` 使用 `ref` + `useEffect` 聚焦（不用 `autoFocus`，因為 `autoFocus` 只在首次 mount 生效，tab 切換回來時不會重新觸發）
+- 監聯方式：`NewTabPage` 每次 render 時觸發子元件重新 mount（因 `setPaneContent` 切換 content kind 會卸載/掛載），所以 `useEffect(() => ref.current?.focus(), [])` 即可
 - 配合 item 2（browser 在最上方），視覺上開新 tab 就直接可以打字
 
 ---
@@ -68,9 +70,9 @@
 
 ### 設計
 
-- 移除 `register-panes.tsx` 中 `memory-monitor` 的 `registerNewTabProvider` 呼叫
-- `MemoryMonitorNewTabSection.tsx` 元件檔案保留（pane renderer 仍需要 `MemoryMonitorPage`）
-- `MemoryMonitorNewTabSection.tsx` 元件檔案可刪除（已無引用處）
+- 移除 `register-panes.tsx` 中 `memory-monitor` 的 `registerNewTabProvider` 呼叫及其 import
+- 刪除 `MemoryMonitorNewTabSection.tsx`（移除 provider 後已無引用處）
+- `MemoryMonitorPage.tsx` 保留（pane renderer 仍使用）
 
 ---
 
@@ -84,11 +86,12 @@
 - State: `{ urls: string[] }`
 - Actions:
   - `addUrl(url: string)`: 去重後加到陣列頭部，上限 100 筆（FIFO）
-- 持久化 key: `STORAGE_KEYS.BROWSER_HISTORY`
+- 持久化 key: `STORAGE_KEYS.BROWSER_HISTORY`（需在 `storage/keys.ts` 新增）
+- 不需 `syncManager.register`（browser history 不需跨視窗同步）
 
 ### 記錄時機
 
-- Browser pane 成功載入 URL 時記錄（在 `BrowserNewTabSection` 的 `onSelect` 回調中）
+- 在 `BrowserNewTabSection` 的 `onSelect` 回調中記錄（URL 已通過 `new URL()` 驗證，使用者意圖明確即可記錄）
 
 ### UI
 
@@ -115,7 +118,8 @@
   - `↓` / `j`: 下移 focus
   - `Enter`: 選擇該 session（觸發 `onSelect`）
   - `Shift+Tab`: 回到 URL input
-- 實作方式：session buttons 設定 `tabIndex={0}`，用 `onKeyDown` + DOM focus management（`previousElementSibling` / `nextElementSibling`）
+- 實作方式：session buttons 設定 `tabIndex={0}`，用 `onKeyDown` + DOM focus management
+- 導航方式：用 `parentElement.querySelectorAll('button')` 取得所有可互動按鈕（避免 `previousElementSibling` 在多 host 場景下 focus 到 header div）
 
 ---
 
@@ -161,9 +165,10 @@ if (closedTabId === activeTabId) {
 
 ### 設計
 
-- `SortableTab` 的 `onMouseDown`：若該 tab 已是 active，呼叫 `e.preventDefault()` 阻止 focus 移動到 tab button
+- `SortableTab` 的 `onPointerDown`（配合 dnd-kit 的事件模型，不用 `onMouseDown`）：若該 tab 已是 active 且非拖曳中，呼叫 `e.preventDefault()` 阻止 focus 移動到 tab button
 - 這樣 focus 自然留在 content area（terminal、browser 等）
 - 點擊非 active tab 則正常切換（focus 會在切換後由 content 元件接管）
+- **兩個 render path 都要處理**：pinned tab（`<button>`）和 normal tab 都需加上相同邏輯
 
 ---
 
