@@ -67,7 +67,7 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
         {/* Header: Icon + Name */}
         <div className="flex flex-col items-center gap-3 mb-8">
           <div
-            className="w-16 h-16 rounded-xl flex items-center justify-center text-2xl bg-surface-hover text-text-primary"
+            className="w-16 h-16 rounded-xl flex items-center justify-center text-2xl bg-white/12 text-text-primary"
           >
             <WorkspaceIcon icon={ws.icon} name={ws.name} size={32} weight={ws.iconWeight} />
           </div>

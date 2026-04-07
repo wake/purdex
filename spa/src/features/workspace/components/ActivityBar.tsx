@@ -30,7 +30,7 @@ export function ActivityBar({
 }: Props) {
   const t = useI18nStore((s) => s.t)
   return (
-    <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 gap-2 flex-shrink-0">
+    <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 gap-2.5 flex-shrink-0">
       {/* Home — standalone tabs */}
       <button
         title={t('nav.home')}
