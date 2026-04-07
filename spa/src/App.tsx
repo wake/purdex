@@ -187,8 +187,14 @@ export default function App() {
 
   const handleWsDeleteConfirm = (closedTabIds: string[]) => {
     if (!wsDeleteTarget) return
+    const ws = workspaces.find((w) => w.id === wsDeleteTarget)
+    const hasPreservedTabs = ws && closedTabIds.length < ws.tabs.length
     closedTabIds.forEach((tabId) => handleCloseTab(tabId))
     useWorkspaceStore.getState().removeWorkspace(wsDeleteTarget)
+    // Switch to Home if some tabs were preserved (now standalone)
+    if (hasPreservedTabs) {
+      useWorkspaceStore.getState().setActiveWorkspace(null)
+    }
     setWsDeleteTarget(null)
   }
 
@@ -233,11 +239,15 @@ export default function App() {
         <div className="flex-1 flex min-h-0">
         <ActivityBar
           workspaces={workspaces}
-          standaloneTabs={standaloneTabs}
           activeWorkspaceId={activeStandaloneTabId ? null : activeWorkspaceId}
           activeStandaloneTabId={activeStandaloneTabId}
           onSelectWorkspace={handleSelectWorkspace}
-          onSelectStandaloneTab={handleSelectTab}
+          onSelectHome={() => {
+            useWorkspaceStore.getState().setActiveWorkspace(null)
+            const firstStandalone = standaloneTabs[0]
+            if (firstStandalone) handleSelectTab(firstStandalone.id)
+          }}
+          standaloneTabCount={standaloneTabs.length}
           onAddWorkspace={() => {
             if (workspaces.length === 0 && tabOrder.length > 0) {
               const ws = useWorkspaceStore.getState().addWorkspace('Workspace 1')

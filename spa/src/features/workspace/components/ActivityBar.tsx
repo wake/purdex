@@ -1,19 +1,14 @@
-import { Plus, GearSix, HardDrives } from '@phosphor-icons/react'
-import type { Tab, Workspace } from '../../../types/tab'
-import { getPrimaryPane } from '../../../lib/pane-tree'
-import { getPaneLabel } from '../../../lib/pane-labels'
+import { Plus, GearSix, HardDrives, SquaresFour } from '@phosphor-icons/react'
+import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
-
-const emptySessionLookup = { getByCode: () => undefined }
-const emptyWorkspaceLookup = { getById: () => undefined }
 
 interface Props {
   workspaces: Workspace[]
-  standaloneTabs: Tab[]
   activeWorkspaceId: string | null
   activeStandaloneTabId: string | null
   onSelectWorkspace: (wsId: string) => void
-  onSelectStandaloneTab: (tabId: string) => void
+  onSelectHome: () => void
+  standaloneTabCount: number
   onAddWorkspace: () => void
   onContextMenuWorkspace?: (e: React.MouseEvent, wsId: string) => void
   onOpenHosts: () => void
@@ -22,11 +17,11 @@ interface Props {
 
 export function ActivityBar({
   workspaces,
-  standaloneTabs,
   activeWorkspaceId,
   activeStandaloneTabId,
   onSelectWorkspace,
-  onSelectStandaloneTab,
+  onSelectHome,
+  standaloneTabCount,
   onAddWorkspace,
   onContextMenuWorkspace,
   onOpenHosts,
@@ -35,6 +30,26 @@ export function ActivityBar({
   const t = useI18nStore((s) => s.t)
   return (
     <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 gap-2 flex-shrink-0">
+      {/* Home — standalone tabs */}
+      <button
+        title={t('nav.home')}
+        onClick={onSelectHome}
+        className={`relative w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer transition-all ${
+          !activeWorkspaceId && !activeStandaloneTabId
+            ? 'bg-accent text-white'
+            : 'bg-surface-secondary text-text-secondary hover:text-text-primary hover:bg-surface-tertiary'
+        }`}
+      >
+        <SquaresFour size={18} weight={!activeWorkspaceId && !activeStandaloneTabId ? 'fill' : 'regular'} />
+        {activeWorkspaceId && standaloneTabCount > 0 && (
+          <span className="absolute -top-1 -right-1 min-w-[16px] h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-0.5">
+            {standaloneTabCount}
+          </span>
+        )}
+      </button>
+
+      {workspaces.length > 0 && <div className="w-5 h-px bg-border-default my-0.5" />}
+
       {/* Workspaces */}
       {workspaces.map((ws) => (
         <button
@@ -55,35 +70,6 @@ export function ActivityBar({
           {ws.icon ?? ws.name.charAt(0)}
         </button>
       ))}
-
-      {/* Separator */}
-      {standaloneTabs.length > 0 && (
-        <div className="w-5 h-px bg-border-default my-1" />
-      )}
-
-      {/* Standalone tabs */}
-      {standaloneTabs.map((tab) => {
-        const label = getPaneLabel(
-          getPrimaryPane(tab.layout).content,
-          emptySessionLookup,
-          emptyWorkspaceLookup,
-          t,
-        )
-        return (
-          <button
-            key={tab.id}
-            title={label}
-            onClick={() => onSelectStandaloneTab(tab.id)}
-            className={`w-8 h-8 rounded-md flex items-center justify-center text-xs cursor-pointer transition-all ${
-              activeStandaloneTabId === tab.id
-                ? 'ring-2 ring-accent bg-surface-secondary'
-                : 'bg-surface-tertiary opacity-70 hover:opacity-100'
-            }`}
-          >
-            {label.charAt(0).toUpperCase()}
-          </button>
-        )
-      })}
 
       {/* Add + Settings */}
       <div className="mt-auto flex flex-col items-center gap-2 pb-1">
