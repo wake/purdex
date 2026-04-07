@@ -40,7 +40,7 @@ WorkspaceChip 和 tabs 在同一列，膠囊樣式幾乎一樣，用戶無法快
 ### 影響檔案
 
 - `spa/src/features/workspace/components/WorkspaceChip.tsx` — 重寫
-- `spa/src/App.tsx` — WorkspaceChip `onClick` 改為開啟設定頁
+- `spa/src/App.tsx` — WorkspaceChip `onClick` 改為開啟設定頁（**兩處**：Electron titlebar L226 + SPA tabbar L286，邏輯相同）
 
 ---
 
@@ -80,8 +80,8 @@ WorkspaceChip 和 tabs 在同一列，膠囊樣式幾乎一樣，用戶無法快
 ```
 
 - **頂部**：workspace icon（大尺寸，如 48px）+ 名稱 inline editable（click-to-edit 或直接 input field）
-- **Color section**：沿用現有 `WorkspaceColorPicker`（12 色 grid）
-- **Icon section**：新 Phosphor Icons Picker（見 Section 4）
+- **Color section**：從現有 `WorkspaceColorPicker` 抽出 inline `ColorGrid` 子元件（現有元件是 modal overlay `fixed inset-0 z-50`，無法直接 inline 使用）。Context menu 繼續用 modal 版，設定頁用 inline 版。
+- **Icon section**：新 Phosphor Icons Picker（見 Section 4），同樣需 inline 版本
 - **Danger Zone**：紅色「刪除 Workspace」按鈕，觸發現有 `WorkspaceDeleteDialog`
 
 ### 進入方式
@@ -92,6 +92,8 @@ WorkspaceChip 和 tabs 在同一列，膠囊樣式幾乎一樣，用戶無法快
 | ActivityBar workspace 右鍵選單 | 新增「設定」項目 |
 | 新增 workspace（+按鈕） | 自動開啟新 workspace 設定頁作為 creation flow |
 
+**新增 workspace 與 MigrateTabsDialog 的衝突處理**：首次建立 workspace 時若有現有 tabs，現有流程會彈出 MigrateTabsDialog。順序為：先完成 MigrateDialog 流程（migrate 或 skip），再自動開啟設定頁。
+
 ### Singleton 行為
 
 - 使用 `openSingletonTab({ kind: 'settings', scope: { workspaceId: wsId } })`
@@ -100,17 +102,23 @@ WorkspaceChip 和 tabs 在同一列，膠囊樣式幾乎一樣，用戶無法快
 
 ### 渲染整合
 
-`SettingsPage` 已註冊為 `kind: 'settings'` 的 pane renderer，接收 `PaneRendererProps`（含 `pane.content`）。修改 `SettingsPage`：當 `content.scope` 是 `{ workspaceId }` 時，渲染 `WorkspaceSettingsPage`；`scope === 'global'` 時走現有邏輯。
+`SettingsPage` 已註冊為 `kind: 'settings'` 的 pane renderer，接收 `PaneRendererProps`（含 `pane.content`）。目前 `_props` 被丟棄。修改方式：
 
-路由同步（`useRouteSync.ts`）已處理 `workspace-settings` case，無需修改。
+1. 從 `props.pane.content` 解構 `scope`
+2. `scope === 'global'` → 現有 global settings 邏輯（sidebar + sections）
+3. `scope` 是 `{ workspaceId }` → 渲染 `WorkspaceSettingsPage`
+4. **注意**：module-level `lastSection` 變數僅用於 global settings，workspace settings 不受影響（兩者渲染路徑完全獨立）
+
+路由同步（`useRouteSync.ts`）已處理 `workspace-settings` case，但**缺少 `setActiveWorkspace` 呼叫**。需補修：開啟 workspace settings 時同步激活該 workspace，確保 ActivityBar 顯示正確的 active state。
 
 ### 影響檔案
 
 - `spa/src/features/workspace/components/WorkspaceSettingsPage.tsx` — **新增**
 - `spa/src/features/workspace/components/ActivityBar.tsx` — 右鍵選單加入「設定」
-- `spa/src/features/workspace/components/WorkspaceContextMenu.tsx` — 加入「設定」項目
+- `spa/src/features/workspace/components/WorkspaceContextMenu.tsx` — 加入「設定」項目（新增 `onSettings` callback prop）
 - `spa/src/components/SettingsPage.tsx` — scope 分流：global → 現有, workspace → WorkspaceSettingsPage
-- `spa/src/App.tsx` — 新增 workspace + WorkspaceChip onClick 開啟設定頁
+- `spa/src/App.tsx` — 新增 workspace + WorkspaceChip onClick 開啟設定頁 + WorkspaceContextMenu `onSettings` 接線
+- `spa/src/hooks/useRouteSync.ts` — `workspace-settings` case 補 `setActiveWorkspace`
 
 ---
 
@@ -129,6 +137,8 @@ WorkspaceChip 和 tabs 在同一列，膠囊樣式幾乎一樣，用戶無法快
 ### 實作位置
 
 在 `App.tsx` 的 content area，當 `visibleTabIds.length === 0 && activeWorkspaceId !== null` 時渲染 empty state 元件。不需要新的 PaneContent kind。
+
+**注意**：若 workspace 內有 singleton tab（如 settings 頁），`visibleTabIds` 不為空，empty state 不顯示。這是預期行為 — 有 tab 就不是空 workspace。
 
 ### 影響檔案
 
@@ -182,15 +192,35 @@ WorkspaceChip 和 tabs 在同一列，膠囊樣式幾乎一樣，用戶無法快
 | Nature & Weather | Sun, Moon, Tree, Leaf, Cloud, Drop, Snowflake |
 | Business | ChartBar, Calendar, Money, Briefcase, Buildings |
 
-### 手動輸入
+### 兩層架構：精選（靜態 import）+ 完整庫（Vite glob import）
+
+**第一層：精選 icon（~600 個）**
+- 全部靜態 import 並 re-export 為 `Record<string, Icon>` map
+- 打包進主 bundle，無 lazy loading，確保 picker grid 即時渲染
+- 分類 tabs 僅顯示精選 icon
+
+**第二層：完整 Phosphor 庫（~1500 個 icon name）**
+- 使用 Vite glob import 建立 lazy map：
+  ```typescript
+  const allIcons = import.meta.glob(
+    '/node_modules/@phosphor-icons/react/dist/csr/*.mjs',
+    { import: 'default', eager: false }
+  )
+  ```
+- 這讓 Vite 在 build time 靜態分析所有 entry，自動 code-split 為獨立 chunks
+- 搜尋欄輸入 icon 名稱時，從 glob map 的 key 提取名稱進行模糊匹配
+- 選中後 lazy load 該 icon 的 chunk
+
+**注意**：精選列表需手動維護，這是有意的取捨 — 確保精選品質且不引入自動化複雜度。
+
+### 搜尋行為
 
 搜尋欄輸入 icon 名稱時：
 1. 先從精選列表中 filter（名稱模糊匹配）
-2. 若精選列表無匹配，對完整 Phosphor 匯出名稱列表進行匹配（建立靜態名稱陣列，不 dynamic import）
-3. 匹配成功 → grid 顯示匹配結果，可點選
-4. 確認選擇 → 存入 workspace `icon` 欄位（存 icon 名稱字串，如 `"Rocket"`）
-
-完整名稱列表從 `@phosphor-icons/react` 的 CSR 匯出中靜態提取（build time 或手動維護），用於搜尋匹配。渲染時使用 `React.lazy(() => import(...))` 按需載入非精選 icon 元件。
+2. 同時從完整 glob map key 列表中匹配
+3. 精選結果優先顯示，後接完整庫結果（去重）
+4. Grid 顯示匹配結果，精選 icon 即時渲染，非精選 icon 顯示 loading placeholder 後 lazy 載入
+5. 確認選擇 → 存入 workspace `icon` 欄位（存 icon 名稱字串，如 `"Rocket"`）
 
 ### Icon 儲存格式
 
@@ -202,10 +232,18 @@ WorkspaceChip 和 tabs 在同一列，膠囊樣式幾乎一樣，用戶無法快
 
 ### 渲染輔助
 
-新增 `renderWorkspaceIcon(icon: string | undefined, name: string)` 工具函式：
-- 若 `icon` 是 Phosphor icon 名稱 → lazy render 對應元件
-- 若 `icon` 是單字元 → 直接顯示文字
-- 若 `icon` 是 undefined → `name.charAt(0)`
+新增 `WorkspaceIcon` React 元件（非純函式，因需管理 Suspense）：
+
+```tsx
+<WorkspaceIcon icon={ws.icon} name={ws.name} size={18} />
+```
+
+邏輯：
+- `icon` 是 undefined → 顯示 `name.charAt(0)` 文字
+- `icon` 是單字元（legacy letter/emoji） → 直接顯示文字
+- `icon` 是 Phosphor icon 名稱 → 先查精選 map（同步），miss 則從 glob map lazy load
+- **Suspense fallback**：顯示 `name.charAt(0)` 文字（與 undefined 一致），載入完成後自動替換為 icon。不使用 spinner，避免 ActivityBar 閃爍。
+- 每個使用處自帶 `<Suspense>` boundary（ActivityBar button、WorkspaceChip、SettingsPage header）
 
 用於 ActivityBar、WorkspaceChip、WorkspaceSettingsPage 等所有顯示 workspace icon 的位置。
 
@@ -213,7 +251,8 @@ WorkspaceChip 和 tabs 在同一列，膠囊樣式幾乎一樣，用戶無法快
 
 - `spa/src/features/workspace/components/WorkspaceIconPicker.tsx` — **重寫**
 - `spa/src/features/workspace/constants.ts` — 精選 icon 列表取代舊 `WORKSPACE_ICONS`
-- `spa/src/features/workspace/lib/renderWorkspaceIcon.tsx` — **新增** icon 渲染工具
+- `spa/src/features/workspace/components/WorkspaceIcon.tsx` — **新增** icon 元件（含 Suspense）
+- `spa/src/features/workspace/lib/icon-map.ts` — **新增** 精選 static map + glob lazy map
 - `spa/src/features/workspace/components/ActivityBar.tsx` — 使用 `renderWorkspaceIcon`
 - `spa/src/features/workspace/components/WorkspaceChip.tsx` — 使用 `renderWorkspaceIcon`
 
@@ -242,18 +281,21 @@ const handleSelectWorkspace = useCallback((wsId: string) => {
 
 ### 修正
 
-改用 `useWorkspaceStore.getState()` 直接讀取最新 store state：
+改用 `getState()` 直接讀取最新 store state（workspace 和 tabs 皆從 store 即時讀取，不依賴 closure）：
 
 ```typescript
 const handleSelectWorkspace = useCallback((wsId: string) => {
   setActiveWorkspace(wsId)
   const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)
-  if (ws?.activeTabId && tabs[ws.activeTabId]) setActiveTab(ws.activeTabId)
+  const allTabs = useTabStore.getState().tabs
+  if (ws?.activeTabId && allTabs[ws.activeTabId]) setActiveTab(ws.activeTabId)
   else if (ws?.tabs[0]) setActiveTab(ws.tabs[0])
-}, [setActiveWorkspace, setActiveTab, tabs])
+}, [setActiveWorkspace, setActiveTab])
 ```
 
-額外加入 `tabs[ws.activeTabId]` 存在性檢查，防止 `activeTabId` 指向已關閉的 tab。
+重點：
+- `workspaces` 和 `tabs` 都從 `getState()` 讀取，deps 僅保留 stable setter
+- `allTabs[ws.activeTabId]` 存在性檢查，防止 `activeTabId` 指向已關閉的 tab
 
 ### 影響檔案
 
