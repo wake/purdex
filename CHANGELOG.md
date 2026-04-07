@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.60] - 2026-04-08
+
+URL history dropdown 對齊修正
+
+### 修正
+
+- **dropdown 位置** — URL 歷史下拉選單左邊界對齊 input 左側，不再包含 Globe icon 的空間
+
 ## [1.0.0-alpha.59] - 2026-04-08
 
 Tab UX 改善 (PR #209)
