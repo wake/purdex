@@ -371,6 +371,99 @@ describe('useTabStore', () => {
     })
   })
 
+  describe('visitHistory', () => {
+    beforeEach(() => {
+      useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    })
+
+    it('records previous tab when switching', () => {
+      const tab1 = makeSessionTab('dev001')
+      const tab2 = makeSessionTab('dev002')
+      useTabStore.getState().addTab(tab1)
+      useTabStore.getState().addTab(tab2)
+      // tab1 is active (first tab added), switch to tab2
+      useTabStore.getState().setActiveTab(tab2.id)
+      expect(useTabStore.getState().visitHistory).toContain(tab1.id)
+    })
+
+    it('does not record when switching to same tab', () => {
+      const tab1 = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab1)
+      useTabStore.getState().setActiveTab(tab1.id)
+      // switching to the same tab should not push to history
+      useTabStore.getState().setActiveTab(tab1.id)
+      expect(useTabStore.getState().visitHistory).toHaveLength(0)
+    })
+
+    it('does not record null activeTabId', () => {
+      const tab1 = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab1)
+      // set null active, then switch to tab1 — null should not be recorded
+      useTabStore.setState({ activeTabId: null })
+      useTabStore.getState().setActiveTab(tab1.id)
+      expect(useTabStore.getState().visitHistory).toHaveLength(0)
+    })
+
+    it('closeTab activates last visited tab instead of adjacent', () => {
+      const tab1 = makeSessionTab('dev001')
+      const tab2 = makeSessionTab('dev002')
+      const tab3 = makeSessionTab('dev003')
+      useTabStore.getState().addTab(tab1)
+      useTabStore.getState().addTab(tab2)
+      useTabStore.getState().addTab(tab3)
+      // Visit order: tab1 → tab3 → tab2
+      useTabStore.getState().setActiveTab(tab3.id) // history: [tab1]
+      useTabStore.getState().setActiveTab(tab2.id) // history: [tab1, tab3]
+      // Close tab2 (active), should go back to tab3 (last visited)
+      useTabStore.getState().closeTab(tab2.id)
+      expect(useTabStore.getState().activeTabId).toBe(tab3.id)
+    })
+
+    it('closeTab skips closed tabs in visitHistory', () => {
+      const tab1 = makeSessionTab('dev001')
+      const tab2 = makeSessionTab('dev002')
+      const tab3 = makeSessionTab('dev003')
+      useTabStore.getState().addTab(tab1)
+      useTabStore.getState().addTab(tab2)
+      useTabStore.getState().addTab(tab3)
+      // Visit: tab1 → tab2 → tab3
+      useTabStore.getState().setActiveTab(tab2.id) // history: [tab1]
+      useTabStore.getState().setActiveTab(tab3.id) // history: [tab1, tab2]
+      // Close tab2 (not active) — it's now in history but removed
+      useTabStore.getState().closeTab(tab2.id)
+      // Now close tab3 (active), last in history is tab2 (closed), should skip to tab1
+      useTabStore.getState().closeTab(tab3.id)
+      expect(useTabStore.getState().activeTabId).toBe(tab1.id)
+    })
+
+    it('closeTab falls back to adjacent when visitHistory empty', () => {
+      const tab1 = makeSessionTab('dev001')
+      const tab2 = makeSessionTab('dev002')
+      useTabStore.getState().addTab(tab1)
+      useTabStore.getState().addTab(tab2)
+      // Don't use setActiveTab (which records history), manually set active
+      useTabStore.setState({ activeTabId: tab1.id, visitHistory: [] })
+      // Close tab1 with empty history — should fall back to adjacent (tab2)
+      useTabStore.getState().closeTab(tab1.id)
+      expect(useTabStore.getState().activeTabId).toBe(tab2.id)
+    })
+
+    it('closeTab removes closed tab id from visitHistory', () => {
+      const tab1 = makeSessionTab('dev001')
+      const tab2 = makeSessionTab('dev002')
+      const tab3 = makeSessionTab('dev003')
+      useTabStore.getState().addTab(tab1)
+      useTabStore.getState().addTab(tab2)
+      useTabStore.getState().addTab(tab3)
+      // Build up history with tab1 in it
+      useTabStore.getState().setActiveTab(tab2.id) // history: [tab1]
+      useTabStore.getState().setActiveTab(tab3.id) // history: [tab1, tab2]
+      // Close tab1 (not active) — should remove tab1 from history
+      useTabStore.getState().closeTab(tab1.id)
+      expect(useTabStore.getState().visitHistory).not.toContain(tab1.id)
+    })
+  })
+
   describe('persist migration', () => {
     it('migrates kind "session" to "tmux-session" in version 2', () => {
       const v1State = {
