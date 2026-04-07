@@ -1,7 +1,13 @@
-import { Suspense, lazy, useMemo } from 'react'
+import { Component, Suspense, lazy, useMemo, type ReactNode } from 'react'
 import type { Icon } from '@phosphor-icons/react'
 import type { IconWeight } from '../../../types/tab'
 import { iconLoaders } from '../generated/icon-loader'
+
+class IconErrorBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { hasError: boolean }> {
+  state = { hasError: false }
+  static getDerivedStateFromError() { return { hasError: true } }
+  render() { return this.state.hasError ? this.props.fallback : this.props.children }
+}
 
 /** Cache of resolved lazy components to avoid re-creating on every render */
 const lazyCache = new Map<string, React.LazyExoticComponent<Icon>>()
@@ -45,9 +51,12 @@ export function WorkspaceIcon({ icon, name, size, weight = 'bold', className }: 
     return <span className={className} style={textStyle}>{fallbackChar}</span>
   }
 
+  const fallback = <span className={className} style={textStyle}>{fallbackChar}</span>
   return (
-    <Suspense fallback={<span className={className} style={textStyle}>{fallbackChar}</span>}>
-      <LazyIcon size={size} weight={weight} className={className} />
-    </Suspense>
+    <IconErrorBoundary fallback={fallback}>
+      <Suspense fallback={fallback}>
+        <LazyIcon size={size} weight={weight} className={className} />
+      </Suspense>
+    </IconErrorBoundary>
   )
 }
