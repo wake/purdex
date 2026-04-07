@@ -129,6 +129,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         {...attributes}
         {...listeners}
         onClick={() => onSelect(tab.id)}
+        onPointerDown={(e) => { if (isActive) e.preventDefault() }}
         onMouseUp={handleMouseUp}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
@@ -165,6 +166,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       role="tab"
       aria-selected={isActive}
       onClick={() => onSelect(tab.id)}
+      onPointerDown={(e) => { if (isActive) e.preventDefault() }}
       onKeyDown={handleKeyDown}
       onMouseUp={handleMouseUp}
       onMouseEnter={handleMouseEnter}
