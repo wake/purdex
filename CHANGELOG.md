@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.55] - 2026-04-07
+
+Browser Tab 強化 (PR #200)
+
+### 新功能
+
+- **Browser tab toolbar** — 導航按鈕（← → ↻/✕）、可編輯 URL 欄位、⋯ 更多選單
+- **Mini browser 獨立視窗** — Shift+click 連結彈出獨立視窗，共用同一套 BrowserToolbar
+- **Terminal 連結統一處理** — click 開新 browser tab、shift+click 開 mini browser（SPA fallback 為 window.open）
+- **WebContentsView preload 注入** — 攔截頁面連結點擊，回報 shiftKey 給 main process
+- **MiniWindowManager** — 管理 mini browser BrowserWindow 生命週期
+- **browser-view-ipc.ts** — 集中管理所有 browser-view IPC handler
+- **useBrowserViewState hook** — 訂閱 Electron state-update（URL、title、canGoBack、isLoading）
+- **useBrowserViewResize hook** — 共用 ResizeObserver 邏輯
+- **link-handler factory** — createLinkHandler 根據 platform + shiftKey 分派
+- **URL 正規化** — normalizeUrl utility（自動補 https://、scheme 白名單）
+- **Browser tab close → destroy** — 主動關閉走 destroy 路徑，tab 切換走 background
+
+### 測試
+
+- 1011 tests pass / lint clean
+
 ## [1.0.0-alpha.54] - 2026-04-07
 
 Phase 10 — Workspace 強化 (PR #189, #190, #191)
