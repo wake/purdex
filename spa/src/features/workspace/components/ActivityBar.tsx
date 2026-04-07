@@ -1,6 +1,7 @@
 import { Plus, GearSix, HardDrives, SquaresFour } from '@phosphor-icons/react'
 import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { WorkspaceIcon } from './WorkspaceIcon'
 
 interface Props {
   workspaces: Workspace[]
@@ -29,7 +30,7 @@ export function ActivityBar({
 }: Props) {
   const t = useI18nStore((s) => s.t)
   return (
-    <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 gap-2 flex-shrink-0">
+    <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 gap-2.5 flex-shrink-0">
       {/* Home — standalone tabs */}
       <button
         title={t('nav.home')}
@@ -51,25 +52,27 @@ export function ActivityBar({
       {workspaces.length > 0 && <div className="w-5 h-px bg-border-default my-0.5" />}
 
       {/* Workspaces */}
-      {workspaces.map((ws) => (
-        <button
-          key={ws.id}
-          title={ws.name}
-          onClick={() => onSelectWorkspace(ws.id)}
-          onContextMenu={(e) => {
-            e.preventDefault()
-            onContextMenuWorkspace?.(e, ws.id)
-          }}
-          className={`w-8 h-8 rounded-md flex items-center justify-center text-xs cursor-pointer transition-all ${
-            activeWorkspaceId === ws.id && !activeStandaloneTabId
-              ? 'ring-2 ring-purple-400'
-              : 'opacity-70 hover:opacity-100'
-          }`}
-          style={{ backgroundColor: ws.color + '33', color: ws.color }}
-        >
-          {ws.icon ?? ws.name.charAt(0)}
-        </button>
-      ))}
+      {workspaces.map((ws) => {
+        const isActive = activeWorkspaceId === ws.id && !activeStandaloneTabId
+        return (
+          <button
+            key={ws.id}
+            title={ws.name}
+            onClick={() => onSelectWorkspace(ws.id)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              onContextMenuWorkspace?.(e, ws.id)
+            }}
+            className={`w-8 h-8 rounded-md flex items-center justify-center text-sm cursor-pointer transition-all ${
+              isActive
+                ? 'bg-[#8b5cf6]/35 text-text-primary ring-2 ring-purple-400'
+                : 'bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary'
+            }`}
+          >
+            <WorkspaceIcon icon={ws.icon} name={ws.name} size={16} weight={ws.iconWeight} />
+          </button>
+        )
+      })}
 
       {/* Add + Settings */}
       <div className="mt-auto flex flex-col items-center gap-2 pb-1">

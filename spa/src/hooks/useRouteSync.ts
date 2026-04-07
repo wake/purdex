@@ -5,6 +5,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { parseRoute, tabToUrl } from '../lib/route-utils'
 import { getPrimaryPane } from '../lib/pane-tree'
+import { useWorkspaceStore } from '../features/workspace'
 
 export function useRouteSync() {
   const [location, setLocation] = useLocation()
@@ -96,9 +97,13 @@ export function useRouteSync() {
       case 'workspace':
         // Workspace activation handled by App — no state change here
         break
-      case 'workspace-settings':
-        openSingletonTab({ kind: 'settings', scope: { workspaceId: parsed.workspaceId } })
+      case 'workspace-settings': {
+        const wsStore = useWorkspaceStore.getState()
+        wsStore.setActiveWorkspace(parsed.workspaceId)
+        const tabId = openSingletonTab({ kind: 'settings', scope: { workspaceId: parsed.workspaceId } })
+        wsStore.insertTab(tabId, parsed.workspaceId)
         break
+      }
       case 'workspace-session-tab': {
         const tab = useTabStore.getState().tabs[parsed.tabId]
         if (tab) {

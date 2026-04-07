@@ -1,20 +1,40 @@
-import { CaretDown } from '@phosphor-icons/react'
+import { LineVertical } from '@phosphor-icons/react'
+import type { IconWeight } from '../../../types/tab'
+import { WorkspaceIcon } from './WorkspaceIcon'
+import { workspaceColorStyle } from '../lib/workspace-colors'
 
 interface Props {
   name: string | null
   color: string | null
+  icon: string | undefined
+  iconWeight?: IconWeight
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
 }
 
-export function WorkspaceChip({ name, color, onClick, onContextMenu }: Props) {
+export function WorkspaceChip({ name, color, icon, iconWeight, onClick, onContextMenu }: Props) {
   if (!name) return null
+  const cs = workspaceColorStyle(color ?? '#888')
   return (
-    <button onClick={onClick} onContextMenu={onContextMenu}
-      className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer transition-colors flex-shrink-0">
-      <span data-testid="workspace-color-dot" className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: color ?? '#888' }} />
-      <span className="truncate max-w-24">{name}</span>
-      <CaretDown size={10} className="flex-shrink-0 opacity-60" />
-    </button>
+    <div className="flex items-center flex-shrink-0">
+      <button
+        onClick={onClick}
+        onContextMenu={onContextMenu}
+        className="flex items-center gap-2 px-2 py-1 rounded-md cursor-pointer transition-colors hover:bg-surface-hover"
+      >
+        {/* Icon — no background, bare */}
+        <span data-testid="workspace-chip-icon" style={{ color: cs.fg }}>
+          <WorkspaceIcon icon={icon} name={name} size={16} weight={iconWeight} />
+        </span>
+        {/* Name */}
+        <span className="truncate max-w-28 text-[14px] font-bold" style={{ color: cs.fg }}>
+          {name}
+        </span>
+        {/* Breadcrumb separator — LineVertical rotated as slash */}
+        <span data-testid="workspace-chip-separator" className="flex-shrink-0" style={{ color: cs.fg, transform: 'rotate(25deg)' }}>
+          <LineVertical size={14} weight="bold" />
+        </span>
+      </button>
+    </div>
   )
 }

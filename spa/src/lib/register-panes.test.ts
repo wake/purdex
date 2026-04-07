@@ -1,4 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+
+vi.mock('../features/workspace/generated/icon-loader', () => ({
+  ALL_ICON_NAMES: [],
+  iconLoaders: {},
+}))
+
 import { clearNewTabRegistry, getNewTabProviders } from './new-tab-registry'
 import { clearPaneRegistry } from './pane-registry'
 import { clearSettingsSectionRegistry, getSettingsSections } from './settings-section-registry'

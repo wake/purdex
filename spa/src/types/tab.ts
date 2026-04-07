@@ -34,17 +34,20 @@ export type PaneContent =
   | { kind: 'memory-monitor' }
 
 // === Workspace ===
+export type IconWeight = 'bold' | 'duotone' | 'fill'
+
 export interface Workspace {
   id: string
   name: string
   color: string
   icon?: string
+  iconWeight?: IconWeight
   tabs: string[]
   activeTabId: string | null
 }
 
 // === Factories ===
-const WORKSPACE_COLORS = ['#7a6aaa', '#6aaa7a', '#aa6a7a', '#6a8aaa', '#aa8a6a', '#8a6aaa']
+const WORKSPACE_COLORS = ['#e75a5a', '#eb8b47', '#e4b444', '#8ccb4d', '#4dcb8c', '#3bcec2', '#49b9df', '#5e8eed', '#7c67e4', '#b164d8', '#e25a9e']
 
 export function createTab(content: PaneContent, opts?: { pinned?: boolean }): Tab {
   return {

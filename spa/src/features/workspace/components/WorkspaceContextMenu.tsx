@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { PencilSimple, Palette, Smiley, Trash } from '@phosphor-icons/react'
+import { PencilSimple, Palette, Smiley, Trash, GearSix } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 
 interface Props {
@@ -7,11 +7,12 @@ interface Props {
   onRename: () => void
   onChangeColor: () => void
   onChangeIcon: () => void
+  onSettings: () => void
   onDelete: () => void
   onClose: () => void
 }
 
-export function WorkspaceContextMenu({ position, onRename, onChangeColor, onChangeIcon, onDelete, onClose }: Props) {
+export function WorkspaceContextMenu({ position, onRename, onChangeColor, onChangeIcon, onSettings, onDelete, onClose }: Props) {
   const t = useI18nStore((s) => s.t)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -25,6 +26,7 @@ export function WorkspaceContextMenu({ position, onRename, onChangeColor, onChan
     { label: t('workspace.rename'), icon: PencilSimple, onClick: onRename },
     { label: t('workspace.change_color'), icon: Palette, onClick: onChangeColor },
     { label: t('workspace.change_icon'), icon: Smiley, onClick: onChangeIcon },
+    { label: t('nav.settings') ?? 'Settings', icon: GearSix, onClick: onSettings },
     { type: 'separator' as const },
     { label: t('workspace.delete'), icon: Trash, onClick: onDelete, danger: true },
   ]

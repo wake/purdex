@@ -1,3 +1,13 @@
+import { vi } from 'vitest'
+
+vi.mock('../features/workspace/generated/icon-loader', () => ({
+  ALL_ICON_NAMES: ['House', 'Star'],
+  iconLoaders: {
+    House: () => new Promise(() => {}),
+    Star: () => new Promise(() => {}),
+  },
+}))
+
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { SettingsPage, resetLastSection } from './SettingsPage'
