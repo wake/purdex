@@ -17,6 +17,7 @@ import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useUndoToast } from './stores/useUndoToast'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { isStandaloneTab } from './types/tab'
+import { getVisibleTabIds } from './features/workspace'
 import { TabContextMenu } from './components/TabContextMenu'
 import { ThemeInjector } from './components/ThemeInjector'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -103,11 +104,7 @@ export default function App() {
           useTabStore.getState().addTab(tab)
           useTabStore.getState().setActiveTab(tab.id)
           // Restore workspace membership if receiving window has an active workspace
-          const wsId = useWorkspaceStore.getState().activeWorkspaceId
-          if (wsId) {
-            useWorkspaceStore.getState().addTabToWorkspace(wsId, tab.id)
-            useWorkspaceStore.getState().setWorkspaceActiveTab(wsId, tab.id)
-          }
+          useWorkspaceStore.getState().insertTab(tab.id)
         }
       } catch { /* ignore malformed tab JSON */ }
     })
@@ -122,10 +119,14 @@ export default function App() {
   }, [fetchConfig, firstHostId])
 
   // --- Derive visible tabs for display ---
-  const activeWs = workspaces.find((w) => w.id === activeWorkspaceId)
-  const visibleTabs: Tab[] = activeWs
-    ? activeWs.tabs.map((id) => tabs[id]).filter(Boolean)
-    : []
+  const visibleTabIds = getVisibleTabIds({
+    tabs,
+    tabOrder,
+    activeTabId,
+    workspaces,
+    activeWorkspaceId,
+  })
+  const displayTabs: Tab[] = visibleTabIds.map((id) => tabs[id]).filter(Boolean)
 
   const standaloneTabs = tabOrder
     .filter((id) => isStandaloneTab(id, workspaces))
@@ -133,10 +134,6 @@ export default function App() {
     .filter(Boolean)
 
   const activeStandaloneTabId = activeTabId && isStandaloneTab(activeTabId, workspaces) ? activeTabId : null
-
-  const displayTabs = activeStandaloneTabId
-    ? [tabs[activeStandaloneTabId]].filter(Boolean)
-    : visibleTabs
 
   // --- Tab/Workspace action handlers ---
   const {
@@ -194,18 +191,12 @@ export default function App() {
           onAddWorkspace={() => {}}
           onOpenHosts={() => {
             const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
-            if (activeWorkspaceId) {
-              useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tabId)
-              useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tabId)
-            }
+            useWorkspaceStore.getState().insertTab(tabId)
             handleSelectTab(tabId)
           }}
           onOpenSettings={() => {
             const tabId = useTabStore.getState().openSingletonTab({ kind: 'settings', scope: 'global' })
-            if (activeWorkspaceId) {
-              useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tabId)
-              useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tabId)
-            }
+            useWorkspaceStore.getState().insertTab(tabId)
             handleSelectTab(tabId)
           }}
         />
@@ -236,10 +227,7 @@ export default function App() {
             }}
             onNavigateToHost={(hostId) => {
               const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
-              if (activeWorkspaceId) {
-                useWorkspaceStore.getState().addTabToWorkspace(activeWorkspaceId, tabId)
-                useWorkspaceStore.getState().setWorkspaceActiveTab(activeWorkspaceId, tabId)
-              }
+              useWorkspaceStore.getState().insertTab(tabId)
               handleSelectTab(tabId)
               useHostStore.getState().setActiveHost(hostId)
             }}

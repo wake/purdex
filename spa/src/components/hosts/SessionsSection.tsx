@@ -146,11 +146,7 @@ export function SessionsSection({ hostId }: Props) {
       cachedName: session.name,
       tmuxInstance: '',
     })
-    const wsId = useWorkspaceStore.getState().activeWorkspaceId
-    if (wsId) {
-      useWorkspaceStore.getState().addTabToWorkspace(wsId, tabId)
-      useWorkspaceStore.getState().setWorkspaceActiveTab(wsId, tabId)
-    }
+    useWorkspaceStore.getState().insertTab(tabId)
     useTabStore.getState().setActiveTab(tabId)
   }
 

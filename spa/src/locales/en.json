@@ -407,5 +407,9 @@
   "hosts.confirm": "Confirm",
   "hosts.mode_pairing_hint": "Daemon is waiting for pairing",
   "hosts.mode_pending_hint": "Enter the token shown in the daemon terminal",
-  "hosts.mode_normal_hint": "Daemon is running — enter the configured token"
+  "hosts.mode_normal_hint": "Daemon is running — enter the configured token",
+
+  "workspace.delete_title": "Delete {{name}}",
+  "workspace.delete_description": "Select tabs to close with the workspace:",
+  "workspace.delete_confirm": "Delete"
 }
