@@ -1,4 +1,4 @@
-import { CaretRight } from '@phosphor-icons/react'
+import { LineVertical } from '@phosphor-icons/react'
 import type { IconWeight } from '../../../types/tab'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { workspaceColorStyle } from '../lib/workspace-colors'
@@ -30,11 +30,11 @@ export function WorkspaceChip({ name, color, icon, iconWeight, onClick, onContex
         <span className="truncate max-w-28 text-[14px] font-bold" style={{ color: cs.fg }}>
           {name}
         </span>
+        {/* Breadcrumb separator — LineVertical rotated as slash */}
+        <span data-testid="workspace-chip-separator" className="flex-shrink-0" style={{ color: cs.fg, transform: 'rotate(25deg)' }}>
+          <LineVertical size={14} weight="bold" />
+        </span>
       </button>
-      {/* Breadcrumb separator */}
-      <span data-testid="workspace-chip-separator" className="mx-1 flex-shrink-0" style={{ color: cs.fg }}>
-        <CaretRight size={12} weight="bold" />
-      </span>
     </div>
   )
 }
