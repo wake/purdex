@@ -137,7 +137,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setWorkspaceIcon: (wsId, icon) =>
         set((state) => ({
           workspaces: state.workspaces.map((ws) =>
-            ws.id === wsId ? { ...ws, icon } : ws,
+            ws.id === wsId ? { ...ws, icon: icon || undefined } : ws,
           ),
         })),
 

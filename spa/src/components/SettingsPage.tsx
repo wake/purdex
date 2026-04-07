@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { PaneRendererProps } from '../lib/pane-registry'
 import { getSettingsSections } from '../lib/settings-section-registry'
 import { SettingsSidebar } from './settings/SettingsSidebar'
+import { WorkspaceSettingsPage } from '../features/workspace/components/WorkspaceSettingsPage'
 
 // Persists across unmount/remount (keepAliveCount=0 destroys component on tab switch)
 let lastSection: string | null = null
@@ -10,8 +11,16 @@ let lastSection: string | null = null
 // eslint-disable-next-line react-refresh/only-export-components
 export function resetLastSection() { lastSection = null }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function SettingsPage(_props: PaneRendererProps) {
+export function SettingsPage(props: PaneRendererProps) {
+  const content = props.pane.content
+  if (content.kind === 'settings' && typeof content.scope === 'object') {
+    return <WorkspaceSettingsPage workspaceId={content.scope.workspaceId} />
+  }
+
+  return <GlobalSettingsPage />
+}
+
+function GlobalSettingsPage() {
   const sections = getSettingsSections()
   const [activeSection, setActiveSection] = useState(
     () => {
