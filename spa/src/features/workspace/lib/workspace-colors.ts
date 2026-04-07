@@ -1,8 +1,6 @@
 /**
  * Derive consistent workspace color variants from a single base color.
- * Used by ActivityBar, WorkspaceSettingsPage, etc.
- *
- * All locations share the same derivation to ensure visual consistency.
+ * Used by WorkspaceSettingsPage and WorkspaceChip.
  */
 export function workspaceColorStyle(color: string) {
   return {
