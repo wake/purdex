@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.53] - 2026-04-07
+
+Phase 7.4 — Daemon 品質改善 (PR #196, #133, #130, #131, #121, #134)
+
+### 修正
+
+- **upload delete TOCTOU (#133)** — 移除 `os.Stat` check-then-act，直接 `os.Remove` + `IsNotExist` 判斷
+- **send-keys 失敗清理 (#130)** — `SendKeysRaw` 失敗時 `os.Remove(destPath)` 清理孤立檔案
+- **dedup filename TOCTOU (#131)** — `deduplicateFilename` 改為 `createDedupFile` 使用 `O_CREATE|O_EXCL` 原子佔檔名
+- **settings.json atomic write (#121)** — `mergeHooks` 改用 tmp + `os.Rename` 原子寫入
+
+### 效能
+
+- **session watcher debounce (#134)** — `broadcastSessions()` 加 500ms debounce，防止 wait-for + ticker 重複廣播
+
+### 測試
+
+- 新增 6 個 Go 測試（upload delete 404/success、send-keys fail cleanup、atomic write、debounce、debounce expiry）
+
 ## [1.0.0-alpha.52] - 2026-04-07
 
 Phase 7.3 — Refactor 拆檔 (PR #192, #163, #138, #185, #182)
