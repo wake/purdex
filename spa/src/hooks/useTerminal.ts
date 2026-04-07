@@ -27,7 +27,11 @@ function getTerminalTheme() {
  * wsUrl 變更或 settings 變更導致的重建由 TabContent 的 pool key
  * (`key={id}-${poolVersion}`) 觸發 remount，不在此 hook 處理。
  */
-export function useTerminal(): UseTerminalResult {
+export interface UseTerminalOptions {
+  linkHandler?: (event: MouseEvent, uri: string) => void
+}
+
+export function useTerminal(options: UseTerminalOptions = {}): UseTerminalResult {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -68,7 +72,10 @@ export function useTerminal(): UseTerminalResult {
       term.loadAddon(new Unicode11Addon())
       term.unicode.activeVersion = '11'
     } catch { /* fallback to unicode 6 */ }
-    try { term.loadAddon(new WebLinksAddon()) } catch { /* non-critical */ }
+    try {
+      const lh = options.linkHandler
+      term.loadAddon(lh ? new WebLinksAddon(lh) : new WebLinksAddon())
+    } catch { /* non-critical */ }
 
     // Guard: skip initial fit if container is hidden (visibility:hidden in keep-alive pool)
     requestAnimationFrame(() => {

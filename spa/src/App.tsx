@@ -13,6 +13,7 @@ import { useRelayWsManager } from './hooks/useRelayWsManager'
 import { useMultiHostEventWs } from './hooks/useMultiHostEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
 import { useShortcuts } from './hooks/useShortcuts'
+import { openBrowserTab } from './lib/open-browser-tab'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useUndoToast } from './stores/useUndoToast'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
@@ -118,6 +119,14 @@ export default function App() {
           useWorkspaceStore.getState().insertTab(tab.id)
         }
       } catch { /* ignore malformed tab JSON */ }
+    })
+  }, [])
+
+  // --- Electron IPC: open browser tab from mini browser / WebContentsView link click ---
+  useEffect(() => {
+    if (!window.electronAPI?.onBrowserViewOpenInTab) return
+    return window.electronAPI.onBrowserViewOpenInTab((url: string) => {
+      openBrowserTab(url)
     })
   }, [])
 
