@@ -176,7 +176,29 @@ describe('useWorkspaceStore', () => {
   it('insertTab with nonexistent wsId is a no-op', () => {
     useWorkspaceStore.getState().addWorkspace('WS')
     useWorkspaceStore.getState().insertTab('tab-1', 'deleted-ws')
-    // tab-1 not added to any workspace
     expect(useWorkspaceStore.getState().workspaces[0].tabs).not.toContain('tab-1')
+  })
+
+  it('insertTab removes tab from previous workspace (singleton dedup)', () => {
+    const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
+    const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+    useWorkspaceStore.getState().insertTab('tab-1', ws1.id)
+    // Move to ws2
+    useWorkspaceStore.getState().insertTab('tab-1', ws2.id)
+    const updated1 = useWorkspaceStore.getState().workspaces.find(w => w.id === ws1.id)!
+    const updated2 = useWorkspaceStore.getState().workspaces.find(w => w.id === ws2.id)!
+    expect(updated1.tabs).not.toContain('tab-1')
+    expect(updated2.tabs).toContain('tab-1')
+    expect(updated2.activeTabId).toBe('tab-1')
+  })
+
+  it('insertTab dedup clears activeTabId in source workspace', () => {
+    const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
+    const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+    useWorkspaceStore.getState().insertTab('tab-1', ws1.id)
+    expect(useWorkspaceStore.getState().workspaces.find(w => w.id === ws1.id)!.activeTabId).toBe('tab-1')
+    // Move to ws2 — ws1.activeTabId should clear
+    useWorkspaceStore.getState().insertTab('tab-1', ws2.id)
+    expect(useWorkspaceStore.getState().workspaces.find(w => w.id === ws1.id)!.activeTabId).toBeNull()
   })
 })

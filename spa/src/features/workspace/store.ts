@@ -102,9 +102,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         set((state) => ({
           workspaces: state.workspaces.map((ws) => {
-            if (ws.id !== targetWsId) return ws
-            if (ws.tabs.includes(tabId)) return { ...ws, activeTabId: tabId }
-            return { ...ws, tabs: [...ws.tabs, tabId], activeTabId: tabId }
+            if (ws.id === targetWsId) {
+              if (ws.tabs.includes(tabId)) return { ...ws, activeTabId: tabId }
+              return { ...ws, tabs: [...ws.tabs, tabId], activeTabId: tabId }
+            }
+            // Remove from other workspaces (singleton tab dedup)
+            if (!ws.tabs.includes(tabId)) return ws
+            return {
+              ...ws,
+              tabs: ws.tabs.filter((id) => id !== tabId),
+              activeTabId: ws.activeTabId === tabId ? null : ws.activeTabId,
+            }
           }),
         }))
       },
