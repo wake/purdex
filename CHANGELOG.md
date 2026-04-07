@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.0.0-alpha.54] - 2026-04-07
+
+Phase 10 — Workspace 強化 (PR #189, #190, #191)
+
+### 新功能
+
+- **Workspace 全自由制** — 移除預設 workspace，支援 0 workspace 模式，`activeWorkspaceId` 可為 null
+- **Feature module 架構** — workspace 相關程式碼搬遷至 `features/workspace/`（store、hooks、components、lib）
+- **insertTab store action** — 原子化操作 + singleton dedup（跨 workspace 移除重複 tab）
+- **getVisibleTabIds 共用函式** — 純函式，含 Home mode 支援
+- **insertTab 收斂** — 所有 `addTabToWorkspace + setWorkspaceActiveTab` 模式統一為 `insertTab`
+- **WorkspaceDeleteDialog** — 刪除確認 UI + tab 勾選清單
+- **右鍵選單 + Chip** — WorkspaceContextMenu + Titlebar WorkspaceChip
+- **重新命名/顏色/圖示設定** — RenameDialog、ColorPicker、IconPicker
+- **Electron 快捷鍵** — ⌘⌥1-9 位置切換 + ⌘⌥↑/↓ 循環切換
+- **MigrateTabsDialog** — 首個 workspace 建立時詢問遷移既有 tab
+- **Standalone Tabs Home 入口** — ActivityBar 頂部 Home 按鈕
+
+### 修正
+
+- deleteWs 後同步 activeTabId 到新 workspace
+- Home 按鈕高亮條件修正
+- MigrateTabsDialog Skip 後自動切回 Home
+- prev-workspace 從 Home 出發跳到最後一個 workspace
+
+### 測試
+
+- 981 tests pass / lint clean
+
 ## [1.0.0-alpha.53] - 2026-04-07
 
 Phase 7.4 — Daemon 品質改善 (PR #196, #133, #130, #131, #121, #134)
