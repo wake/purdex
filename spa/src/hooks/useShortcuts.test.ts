@@ -218,16 +218,31 @@ describe('useShortcuts', () => {
       const { fire } = mockElectronAPI()
       const tabs = seedTabs(3)
       useTabStore.getState().setActiveTab(tabs[1].id)
+      useWorkspaceStore.getState().setWorkspaceActiveTab(
+        useWorkspaceStore.getState().activeWorkspaceId!,
+        tabs[1].id,
+      )
       renderHook(() => useShortcuts())
 
       fire('close-tab')
-      // Should select a tab still in the workspace, not cross-workspace
       const state = useTabStore.getState()
-      const wsId = useWorkspaceStore.getState().activeWorkspaceId
-      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)
-      if (state.activeTabId) {
-        expect(ws?.tabs).toContain(state.activeTabId)
-      }
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId!
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)!
+      // Must select adjacent tab within workspace — no conditional
+      expect(state.activeTabId).toBe(tabs[2].id)
+      expect(ws.tabs).toContain(state.activeTabId)
+      expect(ws.activeTabId).toBe(tabs[2].id)
+    })
+
+    it('closes last tab in workspace → activeTabId null', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(1)
+      useTabStore.getState().setActiveTab(tabs[0].id)
+      renderHook(() => useShortcuts())
+
+      fire('close-tab')
+      expect(useTabStore.getState().activeTabId).toBeNull()
+      expect(useTabStore.getState().tabs[tabs[0].id]).toBeUndefined()
     })
   })
 
