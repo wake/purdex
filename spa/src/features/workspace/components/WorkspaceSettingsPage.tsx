@@ -2,7 +2,6 @@ import { useState, useCallback } from 'react'
 import { Trash } from '@phosphor-icons/react'
 import { useWorkspaceStore } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
-import { useHistoryStore } from '../../../stores/useHistoryStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { getPrimaryPane } from '../../../lib/pane-tree'
 import { getPaneLabel } from '../../../lib/pane-labels'
@@ -132,24 +131,19 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
               workspaceName={ws.name}
               tabs={tabItems}
               onConfirm={(closedTabIds) => {
-                const tabStore = useTabStore.getState()
                 const wsStore = useWorkspaceStore.getState()
-                const hasPreservedTabs = closedTabIds.length < tabItems.length
                 closedTabIds.forEach((id) => {
-                  const tab = tabStore.tabs[id]
-                  if (tab && !tab.locked) {
-                    useHistoryStore.getState().recordClose(tab, workspaceId)
-                    tabStore.closeTab(id)
-                  }
+                  wsStore.closeTabInWorkspace(id)
                 })
                 wsStore.removeWorkspace(workspaceId)
+                const hasPreservedTabs = closedTabIds.length < tabItems.length
                 if (hasPreservedTabs) {
-                  wsStore.setActiveWorkspace(null)
+                  useWorkspaceStore.getState().setActiveWorkspace(null)
                 } else {
                   const { activeWorkspaceId: newWsId, workspaces: remaining } = useWorkspaceStore.getState()
                   const newWs = remaining.find((w) => w.id === newWsId)
                   const nextTab = newWs?.activeTabId ?? newWs?.tabs[0]
-                  if (nextTab) tabStore.setActiveTab(nextTab)
+                  if (nextTab) useTabStore.getState().setActiveTab(nextTab)
                 }
                 setShowDelete(false)
               }}
