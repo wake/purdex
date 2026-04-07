@@ -29,26 +29,24 @@ interface Props {
 
 export function WorkspaceIcon({ icon, name, size, weight = 'bold', className }: Props) {
   const fallbackChar = name.charAt(0) || '?'
+  const phosphorName = icon && isPhosphorName(icon) ? icon : null
+  const LazyIcon = useMemo(() => phosphorName ? getLazyIcon(phosphorName) : null, [phosphorName])
+  const textStyle = { fontSize: size * 0.75 }
 
-  // No icon → first char
   if (!icon) {
-    return <span className={className} style={{ fontSize: size * 0.75 }}>{fallbackChar}</span>
+    return <span className={className} style={textStyle}>{fallbackChar}</span>
   }
 
-  // Legacy single-char or emoji → render as text
-  if (!isPhosphorName(icon)) {
-    return <span className={className} style={{ fontSize: size * 0.75 }}>{icon}</span>
+  if (!phosphorName) {
+    return <span className={className} style={textStyle}>{icon}</span>
   }
 
-  // Phosphor icon name → lazy load (useMemo to satisfy react-hooks/static-components)
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- icon is stable per render path (early returns above guarantee it's a Phosphor name)
-  const LazyIcon = useMemo(() => getLazyIcon(icon), [icon])
   if (!LazyIcon) {
-    return <span className={className} style={{ fontSize: size * 0.75 }}>{fallbackChar}</span>
+    return <span className={className} style={textStyle}>{fallbackChar}</span>
   }
 
   return (
-    <Suspense fallback={<span className={className} style={{ fontSize: size * 0.75 }}>{fallbackChar}</span>}>
+    <Suspense fallback={<span className={className} style={textStyle}>{fallbackChar}</span>}>
       <LazyIcon size={size} weight={weight} className={className} />
     </Suspense>
   )
