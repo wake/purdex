@@ -132,7 +132,7 @@ export const useTabStore = create<TabState>()(
           const { [id]: _removed, ...remainingTabs } = state.tabs
           const newOrder = state.tabOrder.filter((tid) => tid !== id)
           // Remove the closed tab from visit history
-          const newHistory = state.visitHistory.filter((tid) => tid !== id)
+          let newHistory = state.visitHistory.filter((tid) => tid !== id)
           let newActiveId = state.activeTabId
           if (state.activeTabId === id) {
             // Try visitHistory first (pop from end, skipping non-existent tabs)
@@ -147,6 +147,8 @@ export const useTabStore = create<TabState>()(
             }
             if (foundInHistory !== null) {
               newActiveId = foundInHistory
+              // Remove the found tab from history (stack pop semantics)
+              newHistory = newHistory.filter((h) => h !== foundInHistory)
             } else {
               // Fallback to adjacent tab
               const oldIndex = state.tabOrder.indexOf(id)

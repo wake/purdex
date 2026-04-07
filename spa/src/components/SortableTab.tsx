@@ -109,6 +109,15 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
   const label = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
 
+  // Prevent focus theft when clicking the already-active tab.
+  // Must wrap dnd-kit's onPointerDown to avoid overriding it.
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (isActive) e.preventDefault()
+    // Forward to dnd-kit's listener so drag still works
+    const dndHandler = listeners?.onPointerDown as ((e: React.PointerEvent) => void) | undefined
+    dndHandler?.(e)
+  }
+
   const handleMouseEnter = () => onHover?.(tab.id)
   const handleMouseLeave = () => onHover?.(null)
   const handleMouseUp = (e: React.MouseEvent) => {
@@ -130,7 +139,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         {...attributes}
         {...listeners}
         onClick={() => onSelect(tab.id)}
-        onPointerDown={(e) => { if (isActive) e.preventDefault() }}
+        onPointerDown={handlePointerDown}
         onMouseUp={handleMouseUp}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
@@ -168,7 +177,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       role="tab"
       aria-selected={isActive}
       onClick={() => onSelect(tab.id)}
-      onPointerDown={(e) => { if (isActive) e.preventDefault() }}
+      onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
       onMouseUp={handleMouseUp}
       onMouseEnter={handleMouseEnter}

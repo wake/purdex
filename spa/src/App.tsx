@@ -173,6 +173,7 @@ export default function App() {
     renameError,
     handleRenameConfirm,
     handleRenameCancel,
+    handleClearRenameError,
   } = useTabWorkspaceActions(displayTabs)
 
   const openWsSettings = useCallback((wsId: string) => {
@@ -348,6 +349,7 @@ export default function App() {
             onConfirm={handleRenameConfirm}
             onCancel={handleRenameCancel}
             error={renameError}
+            onClearError={handleClearRenameError}
           />
         )}
         {wsContextMenu && (

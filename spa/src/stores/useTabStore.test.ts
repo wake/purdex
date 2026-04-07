@@ -448,6 +448,28 @@ describe('useTabStore', () => {
       expect(useTabStore.getState().activeTabId).toBe(tab2.id)
     })
 
+    it('closeTab traverses full history stack on repeated closes', () => {
+      const tab1 = makeSessionTab('dev001')
+      const tab2 = makeSessionTab('dev002')
+      const tab3 = makeSessionTab('dev003')
+      const tab4 = makeSessionTab('dev004')
+      useTabStore.getState().addTab(tab1)
+      useTabStore.getState().addTab(tab2)
+      useTabStore.getState().addTab(tab3)
+      useTabStore.getState().addTab(tab4)
+      // Visit: tab1 → tab2 → tab3 → tab4
+      useTabStore.getState().setActiveTab(tab2.id)
+      useTabStore.getState().setActiveTab(tab3.id)
+      useTabStore.getState().setActiveTab(tab4.id)
+      // Close tab4 → tab3, close tab3 → tab2, close tab2 → tab1
+      useTabStore.getState().closeTab(tab4.id)
+      expect(useTabStore.getState().activeTabId).toBe(tab3.id)
+      useTabStore.getState().closeTab(tab3.id)
+      expect(useTabStore.getState().activeTabId).toBe(tab2.id)
+      useTabStore.getState().closeTab(tab2.id)
+      expect(useTabStore.getState().activeTabId).toBe(tab1.id)
+    })
+
     it('closeTab removes closed tab id from visitHistory', () => {
       const tab1 = makeSessionTab('dev001')
       const tab2 = makeSessionTab('dev002')

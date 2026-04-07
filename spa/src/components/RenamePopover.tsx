@@ -8,12 +8,13 @@ interface Props {
   onConfirm: (name: string) => Promise<void>
   onCancel: () => void
   error?: string
+  onClearError?: () => void
 }
 
 const POPOVER_WIDTH = 240
 const PADDING = 4
 
-export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, error }: Props) {
+export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, error, onClearError }: Props) {
   const t = useI18nStore((s) => s.t)
   const [draft, setDraft] = useState(currentName)
   const [submitting, setSubmitting] = useState(false)
@@ -66,7 +67,7 @@ export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, er
         ref={inputRef}
         type="text"
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => { setDraft(e.target.value); onClearError?.() }}
         onKeyDown={handleKeyDown}
         disabled={submitting}
         placeholder={t('tab.rename_placeholder')}

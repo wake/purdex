@@ -62,7 +62,19 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     const ws = findWorkspaceByTab(tabId)
     if (ws) removeTabFromWorkspace(ws.id, tabId)
     closeTab(tabId)
-  }, [tabs, findWorkspaceByTab, removeTabFromWorkspace, closeTab])
+    // Sync workspace activeTabId with the tab store's new active tab
+    // (closeTab may pick from visitHistory, which workspace store doesn't know about)
+    if (ws) {
+      const newActiveTabId = useTabStore.getState().activeTabId
+      if (newActiveTabId) setWorkspaceActiveTab(ws.id, newActiveTabId)
+    }
+
+    // Clear rename popover if the renamed tab was closed
+    if (renameTarget?.tabId === tabId) {
+      setRenameTarget(null)
+      setRenameError(undefined)
+    }
+  }, [tabs, findWorkspaceByTab, removeTabFromWorkspace, closeTab, setWorkspaceActiveTab, renameTarget])
 
   const handleAddTab = useCallback(() => {
     const tab = createTab({ kind: 'new-tab' })
@@ -157,6 +169,8 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
         setRenameError(text)
         return
       }
+      // Immediately update tab label (don't wait for WS session event)
+      useTabStore.getState().updateSessionCache(renameTarget.hostId, renameTarget.sessionCode, name)
       setRenameTarget(null)
       setRenameError(undefined)
     } catch (err) {
@@ -166,6 +180,10 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
 
   const handleRenameCancel = useCallback(() => {
     setRenameTarget(null)
+    setRenameError(undefined)
+  }, [])
+
+  const handleClearRenameError = useCallback(() => {
     setRenameError(undefined)
   }, [])
 
@@ -193,5 +211,6 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     renameError,
     handleRenameConfirm,
     handleRenameCancel,
+    handleClearRenameError,
   }
 }
