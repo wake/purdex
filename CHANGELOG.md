@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.57] - 2026-04-08
+
+Workspace UI 微調 (PR #207)
+
+### 改善
+
+- **Context menu 精簡** — 只保留 Settings，移除 rename/color/icon/delete（已在設定頁可用）
+- **Settings sidebar 左邊距** — active 指示線不再緊貼 ActivityBar
+- **Icon picker ring 修正** — 選中 icon 的紫色邊框不再被裁切
+
+### 清理
+
+- **移除 workspace 顏色系統** — 刪除 WorkspaceColorPicker、WorkspaceRenameDialog、WorkspaceChip、workspaceColorStyle、WORKSPACE_COLORS 等死碼（7 檔 302 行）
+- Workspace interface 移除 `color` 欄位
+- 清理 App.tsx ~80 行 dialog state
+
+### 測試
+
+- 1009 tests pass / lint clean
+
 ## [1.0.0-alpha.56] - 2026-04-08
 
 Phase 11 — Workspace UI 改善 (PR #201)
