@@ -200,7 +200,6 @@ describe('useShortcuts', () => {
     it('does not close tabs from another workspace', () => {
       const { fire } = mockElectronAPI()
       // Setup: WS A has 2 tabs, WS B has 0 tabs
-      const wsA = useWorkspaceStore.getState().workspaces[0]
       const tabsA = seedTabs(2)
       // Switch to a new empty workspace B
       const wsB = useWorkspaceStore.getState().addWorkspace('WS B')
