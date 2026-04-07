@@ -31,7 +31,9 @@ function seedTabs(count: number, { addToWorkspace = true } = {}) {
   store.setActiveTab(tabs[0].id)
   if (addToWorkspace) {
     const wsId = useWorkspaceStore.getState().activeWorkspaceId
-    tabs.forEach((t) => useWorkspaceStore.getState().addTabToWorkspace(wsId, t.id))
+    if (wsId) {
+      tabs.forEach((t) => useWorkspaceStore.getState().addTabToWorkspace(wsId, t.id))
+    }
   }
   return tabs
 }
@@ -40,6 +42,8 @@ describe('useShortcuts', () => {
   beforeEach(() => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
     useWorkspaceStore.getState().reset()
+    // Create a default workspace for tests (since reset() now starts empty)
+    useWorkspaceStore.getState().addWorkspace('Default', { color: '#7a6aaa' })
     useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
   })
 
