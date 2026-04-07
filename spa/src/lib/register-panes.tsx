@@ -13,7 +13,6 @@ import { BrowserPane } from '../components/BrowserPane'
 import { BrowserNewTabSection } from '../components/BrowserNewTabSection'
 import { MemoryMonitorPage } from '../components/MemoryMonitorPage'
 import { HostPage } from '../components/HostPage'
-import { MemoryMonitorNewTabSection } from '../components/MemoryMonitorNewTabSection'
 import { AppearanceSection } from '../components/settings/AppearanceSection'
 import { AgentSection } from '../components/settings/AgentSection'
 import { TerminalSection } from '../components/settings/TerminalSection'
@@ -77,20 +76,10 @@ export function registerBuiltinPanes(): void {
     id: 'browser',
     label: 'browser.provider_label',
     icon: 'Globe',
-    order: 10,
+    order: -10,
     component: BrowserNewTabSection,
     disabled: !caps.canBrowserPane,
     disabledReason: 'browser.requires_app',
-  })
-
-  registerNewTabProvider({
-    id: 'memory-monitor',
-    label: 'monitor.provider_label',
-    icon: 'ChartBar',
-    order: 20,
-    component: MemoryMonitorNewTabSection,
-    disabled: !caps.canSystemTray,
-    disabledReason: 'monitor.requires_app',
   })
 
   if (caps.canSystemTray) {
