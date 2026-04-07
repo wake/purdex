@@ -65,7 +65,7 @@ export function ActivityBar({
             }}
             className={`w-8 h-8 rounded-md flex items-center justify-center text-sm cursor-pointer transition-all ${
               isActive
-                ? 'bg-surface-secondary text-text-primary ring-2 ring-purple-400'
+                ? 'bg-[#8b5cf6]/35 text-text-primary ring-2 ring-purple-400'
                 : 'bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary'
             }`}
           >
