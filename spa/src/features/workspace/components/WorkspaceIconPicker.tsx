@@ -17,8 +17,9 @@ function getLazy(name: string): React.LazyExoticComponent<Icon> | null {
   return L
 }
 
+/* eslint-disable react-hooks/static-components -- lazyCache guarantees stable reference per icon name */
 function IconCell({ name, selected, onSelect }: { name: string; selected: boolean; onSelect: () => void }) {
-  const LazyIcon = getLazy(name)
+  const LazyIcon = useMemo(() => getLazy(name), [name])
   return (
     <button
       data-icon={name}
@@ -41,6 +42,7 @@ function IconCell({ name, selected, onSelect }: { name: string; selected: boolea
     </button>
   )
 }
+/* eslint-enable react-hooks/static-components */
 
 const categoryLabels: Record<string, string> = {
   general: 'General', development: 'Dev', objects: 'Objects',

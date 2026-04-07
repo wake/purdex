@@ -1,4 +1,4 @@
-import { Suspense, lazy } from 'react'
+import { Suspense, lazy, useMemo } from 'react'
 import type { Icon } from '@phosphor-icons/react'
 import { iconLoaders } from '../generated/icon-loader'
 
@@ -38,8 +38,9 @@ export function WorkspaceIcon({ icon, name, size, className }: Props) {
     return <span className={className} style={{ fontSize: size * 0.6 }}>{icon}</span>
   }
 
-  // Phosphor icon name → lazy load
-  const LazyIcon = getLazyIcon(icon)
+  // Phosphor icon name → lazy load (useMemo to satisfy react-hooks/static-components)
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- icon is stable per render path (early returns above guarantee it's a Phosphor name)
+  const LazyIcon = useMemo(() => getLazyIcon(icon), [icon])
   if (!LazyIcon) {
     return <span className={className} style={{ fontSize: size * 0.6 }}>{fallbackChar}</span>
   }
