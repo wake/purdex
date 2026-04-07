@@ -18,7 +18,6 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
   const reorderTabs = useTabStore((s) => s.reorderTabs)
 
   // Workspace store
-  const workspaces = useWorkspaceStore((s) => s.workspaces)
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
   const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace)
   const removeTabFromWorkspace = useWorkspaceStore((s) => s.removeTabFromWorkspace)
@@ -28,10 +27,11 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
 
   const handleSelectWorkspace = useCallback((wsId: string) => {
     setActiveWorkspace(wsId)
-    const ws = workspaces.find((w) => w.id === wsId)
-    if (ws?.activeTabId) setActiveTab(ws.activeTabId)
+    const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)
+    const allTabs = useTabStore.getState().tabs
+    if (ws?.activeTabId && allTabs[ws.activeTabId]) setActiveTab(ws.activeTabId)
     else if (ws?.tabs[0]) setActiveTab(ws.tabs[0])
-  }, [workspaces, setActiveWorkspace, setActiveTab])
+  }, [setActiveWorkspace, setActiveTab])
 
   const handleSelectTab = useCallback((tabId: string) => {
     setActiveTab(tabId)
