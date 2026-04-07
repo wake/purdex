@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.58] - 2026-04-08
+
+Tab 操作 workspace 隔離 (PR #208)
+
+### 修正
+
+- **close-tab 跨 workspace 防護** — cmd+w 只能關閉當前 workspace 可見的 tab，空 workspace 時不會誤刪其他 workspace 的 tab
+- **post-close scoping** — 關閉後若 closeTab 自動選了其他 workspace 的 tab，重設為當前 workspace 內的 tab 或 null
+
+### 測試
+
+- 1012 tests pass / lint clean
+- 新增跨 workspace close-tab 和 reopen-closed-tab 測試
+
 ## [1.0.0-alpha.57] - 2026-04-08
 
 Workspace UI 微調 (PR #207)
