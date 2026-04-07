@@ -13,9 +13,10 @@ import (
 
 // watcherState tracks the NORMAL / TMUX_DOWN state machine.
 type watcherState struct {
-	mu        sync.RWMutex
-	tmuxAlive bool
-	lastHash  string
+	mu            sync.RWMutex
+	tmuxAlive     bool
+	lastHash      string
+	lastBroadcast time.Time // debounce: tracks last broadcastSessions call time
 }
 
 func (ws *watcherState) getTmuxAlive() bool {
@@ -100,6 +101,18 @@ func (m *SessionModule) broadcastSessions() {
 	if !m.core.Events.HasSubscribers() {
 		return
 	}
+
+	// Debounce: skip if last broadcast was within 500ms to prevent duplicate
+	// broadcasts when goroutine A (wait-for) and goroutine B (5s ticker) fire
+	// nearly simultaneously.
+	m.wstate.mu.Lock()
+	if time.Since(m.wstate.lastBroadcast) < 500*time.Millisecond {
+		m.wstate.mu.Unlock()
+		return
+	}
+	m.wstate.lastBroadcast = time.Now()
+	m.wstate.mu.Unlock()
+
 	sessions, err := m.ListSessions()
 	if err != nil {
 		log.Printf("session: broadcast list error: %v", err)

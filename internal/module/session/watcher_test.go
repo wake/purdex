@@ -101,6 +101,79 @@ func TestWatcherNilSessionsWithTmuxAlive(t *testing.T) {
 	assert.True(t, mod.TmuxAlive())
 }
 
+// TestBroadcastSessionsDebounce verifies that rapid concurrent calls to
+// broadcastSessions() within the 500ms window result in only one broadcast.
+func TestBroadcastSessionsDebounce(t *testing.T) {
+	mod, fake, events := newWatcherTestModule(t)
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fake.AddSession("s1", "/tmp")
+	require.NoError(t, mod.Start(ctx))
+
+	// Call broadcastSessions twice back-to-back within the debounce window.
+	mod.broadcastSessions()
+	mod.broadcastSessions()
+
+	// Only one broadcast should have been sent.
+	count := 0
+	timeout := time.After(100 * time.Millisecond)
+drain:
+	for {
+		select {
+		case msg := <-sub.SendCh():
+			if len(msg) > 0 {
+				count++
+			}
+		case <-timeout:
+			break drain
+		}
+	}
+	assert.Equal(t, 1, count, "debounce should suppress second broadcast within 500ms window")
+}
+
+// TestBroadcastSessionsDebounceExpiry verifies that a second call after the
+// debounce window has passed DOES produce a broadcast.
+func TestBroadcastSessionsDebounceExpiry(t *testing.T) {
+	mod, fake, events := newWatcherTestModule(t)
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fake.AddSession("s1", "/tmp")
+	require.NoError(t, mod.Start(ctx))
+
+	// First call sets the lastBroadcast timestamp.
+	mod.broadcastSessions()
+
+	// Drain first broadcast.
+	select {
+	case <-sub.SendCh():
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected first broadcast")
+	}
+
+	// Manually expire the debounce window by backdating lastBroadcast.
+	mod.wstate.mu.Lock()
+	mod.wstate.lastBroadcast = mod.wstate.lastBroadcast.Add(-600 * time.Millisecond)
+	mod.wstate.mu.Unlock()
+
+	// Second call after window expiry should go through.
+	mod.broadcastSessions()
+
+	select {
+	case msg := <-sub.SendCh():
+		assert.Contains(t, string(msg), `"type":"sessions"`, "second broadcast should contain sessions event")
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected second broadcast after debounce expiry")
+	}
+}
+
 func TestWatcherNoRepeatBroadcastInTmuxDown(t *testing.T) {
 	mod, fake, events := newWatcherTestModule(t)
 	sub := events.AddTestSubscriber()
