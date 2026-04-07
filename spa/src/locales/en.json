@@ -145,6 +145,7 @@
   "tab.close": "Close tab",
   "tab.close_others": "Close other tabs",
   "tab.close_right": "Close tabs to the right",
+  "tab.rename_session": "Rename Session",
 
   "nav.scroll_left": "Scroll left",
   "nav.scroll_right": "Scroll right",
