@@ -30,12 +30,12 @@ export function ActivityBar({
 }: Props) {
   const t = useI18nStore((s) => s.t)
   return (
-    <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 gap-2.5 flex-shrink-0">
+    <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 px-px gap-2.5 flex-shrink-0">
       {/* Home — standalone tabs */}
       <button
         title={t('nav.home')}
         onClick={onSelectHome}
-        className={`relative w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer transition-all ${
+        className={`relative w-[30px] h-[30px] rounded-lg flex items-center justify-center cursor-pointer transition-all ${
           !activeWorkspaceId
             ? 'bg-accent text-white'
             : 'bg-surface-secondary text-text-secondary hover:text-text-primary hover:bg-surface-tertiary'
@@ -63,7 +63,7 @@ export function ActivityBar({
               e.preventDefault()
               onContextMenuWorkspace?.(e, ws.id)
             }}
-            className={`w-8 h-8 rounded-md flex items-center justify-center text-sm cursor-pointer transition-all ${
+            className={`w-[30px] h-[30px] rounded-md flex items-center justify-center text-sm cursor-pointer transition-all ${
               isActive
                 ? 'bg-[#8b5cf6]/35 text-text-primary ring-2 ring-purple-400'
                 : 'bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary'
@@ -79,21 +79,21 @@ export function ActivityBar({
         <button
           title={t('nav.new_workspace')}
           onClick={onAddWorkspace}
-          className="w-8 h-8 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
+          className="w-[30px] h-[30px] rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
         >
           <Plus size={16} />
         </button>
         <button
           title={t('nav.hosts')}
           onClick={onOpenHosts}
-          className="w-8 h-8 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
+          className="w-[30px] h-[30px] rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
         >
           <HardDrives size={16} />
         </button>
         <button
           title={t('nav.settings')}
           onClick={onOpenSettings}
-          className="w-8 h-8 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
+          className="w-[30px] h-[30px] rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
         >
           <GearSix size={16} />
         </button>

@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createWorkspace, type Workspace, type IconWeight } from '../../types/tab'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../../lib/storage'
+import { useTabStore } from '../../stores/useTabStore'
+import { useHistoryStore } from '../../stores/useHistoryStore'
 
 interface WorkspaceState {
   workspaces: Workspace[]
@@ -16,6 +18,7 @@ interface WorkspaceState {
   reorderWorkspaceTabs: (wsId: string, tabIds: string[]) => void
   findWorkspaceByTab: (tabId: string) => Workspace | null
   insertTab: (tabId: string, workspaceId?: string | null) => void
+  closeTabInWorkspace: (tabId: string, opts?: { skipHistory?: boolean }) => void
   renameWorkspace: (wsId: string, name: string) => void
   setWorkspaceIcon: (wsId: string, icon: string) => void
   setWorkspaceIconWeight: (wsId: string, weight: IconWeight) => void
@@ -118,6 +121,60 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
           }),
         }))
+      },
+
+      closeTabInWorkspace: (tabId, opts) => {
+        const tabStore = useTabStore.getState()
+        const tab = tabStore.tabs[tabId]
+        if (!tab || tab.locked) return
+
+        const ws = get().findWorkspaceByTab(tabId)
+
+        // 1. Pre-compute next tab (before any mutation)
+        //    Priority: visitHistory (scoped) → adjacent in workspace/tabOrder
+        const scopeIds = ws
+          ? new Set(ws.tabs.filter((id) => id !== tabId))
+          : new Set(tabStore.tabOrder.filter((id) => id !== tabId))
+
+        let nextTabId: string | null = null
+        // Try visitHistory first (most recent visited tab still in scope)
+        const { visitHistory } = tabStore
+        for (let i = visitHistory.length - 1; i >= 0; i--) {
+          if (scopeIds.has(visitHistory[i])) {
+            nextTabId = visitHistory[i]
+            break
+          }
+        }
+        // Fallback to adjacent
+        if (nextTabId === null) {
+          const ordered = ws ? ws.tabs : tabStore.tabOrder
+          const idx = ordered.indexOf(tabId)
+          const remaining = ordered.filter((id) => id !== tabId)
+          nextTabId = remaining[Math.min(idx, remaining.length - 1)] ?? null
+        }
+
+        // Pre-compute wasActive flags before any mutation
+        const wasActive = tabStore.activeTabId === tabId
+        const wasWorkspaceActive = ws ? ws.activeTabId === tabId : false
+
+        // 2. Record history (before mutation — tab object still exists)
+        if (!opts?.skipHistory) {
+          useHistoryStore.getState().recordClose(tab, ws?.id)
+        }
+
+        // 3. Remove from workspace
+        if (ws) get().removeTabFromWorkspace(ws.id, tabId)
+
+        // 4. Remove from tab store
+        useTabStore.getState().closeTab(tabId)
+
+        // 5. Sync active tab
+        if (wasActive) {
+          useTabStore.getState().setActiveTab(nextTabId)
+        }
+        if (ws && wasWorkspaceActive && nextTabId) {
+          get().setWorkspaceActiveTab(ws.id, nextTabId)
+        }
       },
 
       renameWorkspace: (wsId, name) =>

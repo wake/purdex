@@ -4,6 +4,7 @@ import { TerminatedPane } from './TerminatedPane'
 import { useTabStore } from '../stores/useTabStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
+import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import type { PaneContent, Tab } from '../types/tab'
 
 vi.mock('./SessionPickerList', () => ({
@@ -88,6 +89,9 @@ describe('TerminatedPane', () => {
   it('has a close tab button that calls closeTab', () => {
     const content = makeContent('session-closed')
     setupTab(content)
+    useWorkspaceStore.getState().reset()
+    const ws = useWorkspaceStore.getState().addWorkspace('Test')
+    useWorkspaceStore.getState().addTabToWorkspace(ws.id, TAB_ID)
     render(<TerminatedPane content={content} tabId={TAB_ID} paneId={PANE_ID} />)
 
     const closeBtn = screen.getByText('Close tab')

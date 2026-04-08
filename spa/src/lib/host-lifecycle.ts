@@ -4,6 +4,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type AgentHookEvent, type AgentStatus } from '../stores/useAgentStore'
 import { useStreamStore, type PerSessionState } from '../stores/useStreamStore'
+import { useWorkspaceStore } from '../features/workspace/store'
 import { scanPaneTree } from './pane-tree'
 import type { Session } from './host-api'
 import type { Tab } from '../types/tab'
@@ -36,6 +37,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     streamSessions: Record<string, Omit<PerSessionState, 'conn'>>
     // Tab data for undo
     closedTabs: Tab[]
+    tabWorkspaces: Record<string, string>  // tabId -> workspaceId
     terminatedTabPaneIds: { tabId: string; paneId: string }[]
   } = {
     host: hostStore.hosts[hostId],
@@ -48,6 +50,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     agentModels: {},
     streamSessions: {},
     closedTabs: [],
+    tabWorkspaces: {},
     terminatedTabPaneIds: [],
   }
 
@@ -75,6 +78,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
 
   // Execute cascade: tabs -> sessions -> agent -> stream -> host
   if (closeTabs) {
+    const wsStore = useWorkspaceStore.getState()
     // Close all tmux-session tabs for this host (scan ALL panes, not just primary)
     for (const [tabId, tab] of Object.entries(tabStore.tabs)) {
       let hasHostPane = false
@@ -85,7 +89,9 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
       })
       if (hasHostPane) {
         snapshot.closedTabs.push(tab)
-        tabStore.closeTab(tabId)
+        const tabWs = wsStore.findWorkspaceByTab(tabId)
+        if (tabWs) snapshot.tabWorkspaces[tabId] = tabWs.id
+        wsStore.closeTabInWorkspace(tabId, { skipHistory: true })
       }
     }
   } else {
@@ -153,6 +159,14 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
         // Only restore if tab wasn't re-created by user during undo window
         if (!ts.tabs[tab.id]) {
           useTabStore.getState().addTab(tab)
+        }
+      }
+      // Restore workspace membership
+      const currentWsStore = useWorkspaceStore.getState()
+      for (const [tabId, wsId] of Object.entries(snapshot.tabWorkspaces)) {
+        const wsExists = currentWsStore.workspaces.some((w) => w.id === wsId)
+        if (wsExists && useTabStore.getState().tabs[tabId]) {
+          useWorkspaceStore.getState().addTabToWorkspace(wsId, tabId)
         }
       }
     } else if (!closeTabs && snapshot.terminatedTabPaneIds.length > 0) {

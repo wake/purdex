@@ -52,14 +52,14 @@ describe('useTabStore', () => {
     expect(useTabStore.getState().tabOrder).toContain(tab.id)
   })
 
-  it('closeTab activates adjacent tab when removing active', () => {
+  it('closeTab sets activeTabId to null when removing active tab', () => {
     const tab1 = makeSessionTab('dev001')
     const tab2 = makeSessionTab('cld001')
     useTabStore.getState().addTab(tab1)
     useTabStore.getState().addTab(tab2)
     useTabStore.getState().setActiveTab(tab1.id)
     useTabStore.getState().closeTab(tab1.id)
-    expect(useTabStore.getState().activeTabId).toBe(tab2.id)
+    expect(useTabStore.getState().activeTabId).toBeNull()
   })
 
   it('closeTab sets null when removing last tab', () => {
@@ -402,72 +402,6 @@ describe('useTabStore', () => {
       useTabStore.setState({ activeTabId: null })
       useTabStore.getState().setActiveTab(tab1.id)
       expect(useTabStore.getState().visitHistory).toHaveLength(0)
-    })
-
-    it('closeTab activates last visited tab instead of adjacent', () => {
-      const tab1 = makeSessionTab('dev001')
-      const tab2 = makeSessionTab('dev002')
-      const tab3 = makeSessionTab('dev003')
-      useTabStore.getState().addTab(tab1)
-      useTabStore.getState().addTab(tab2)
-      useTabStore.getState().addTab(tab3)
-      // Visit order: tab1 → tab3 → tab2
-      useTabStore.getState().setActiveTab(tab3.id) // history: [tab1]
-      useTabStore.getState().setActiveTab(tab2.id) // history: [tab1, tab3]
-      // Close tab2 (active), should go back to tab3 (last visited)
-      useTabStore.getState().closeTab(tab2.id)
-      expect(useTabStore.getState().activeTabId).toBe(tab3.id)
-    })
-
-    it('closeTab skips closed tabs in visitHistory', () => {
-      const tab1 = makeSessionTab('dev001')
-      const tab2 = makeSessionTab('dev002')
-      const tab3 = makeSessionTab('dev003')
-      useTabStore.getState().addTab(tab1)
-      useTabStore.getState().addTab(tab2)
-      useTabStore.getState().addTab(tab3)
-      // Visit: tab1 → tab2 → tab3
-      useTabStore.getState().setActiveTab(tab2.id) // history: [tab1]
-      useTabStore.getState().setActiveTab(tab3.id) // history: [tab1, tab2]
-      // Close tab2 (not active) — it's now in history but removed
-      useTabStore.getState().closeTab(tab2.id)
-      // Now close tab3 (active), last in history is tab2 (closed), should skip to tab1
-      useTabStore.getState().closeTab(tab3.id)
-      expect(useTabStore.getState().activeTabId).toBe(tab1.id)
-    })
-
-    it('closeTab falls back to adjacent when visitHistory empty', () => {
-      const tab1 = makeSessionTab('dev001')
-      const tab2 = makeSessionTab('dev002')
-      useTabStore.getState().addTab(tab1)
-      useTabStore.getState().addTab(tab2)
-      // Don't use setActiveTab (which records history), manually set active
-      useTabStore.setState({ activeTabId: tab1.id, visitHistory: [] })
-      // Close tab1 with empty history — should fall back to adjacent (tab2)
-      useTabStore.getState().closeTab(tab1.id)
-      expect(useTabStore.getState().activeTabId).toBe(tab2.id)
-    })
-
-    it('closeTab traverses full history stack on repeated closes', () => {
-      const tab1 = makeSessionTab('dev001')
-      const tab2 = makeSessionTab('dev002')
-      const tab3 = makeSessionTab('dev003')
-      const tab4 = makeSessionTab('dev004')
-      useTabStore.getState().addTab(tab1)
-      useTabStore.getState().addTab(tab2)
-      useTabStore.getState().addTab(tab3)
-      useTabStore.getState().addTab(tab4)
-      // Visit: tab1 → tab2 → tab3 → tab4
-      useTabStore.getState().setActiveTab(tab2.id)
-      useTabStore.getState().setActiveTab(tab3.id)
-      useTabStore.getState().setActiveTab(tab4.id)
-      // Close tab4 → tab3, close tab3 → tab2, close tab2 → tab1
-      useTabStore.getState().closeTab(tab4.id)
-      expect(useTabStore.getState().activeTabId).toBe(tab3.id)
-      useTabStore.getState().closeTab(tab3.id)
-      expect(useTabStore.getState().activeTabId).toBe(tab2.id)
-      useTabStore.getState().closeTab(tab2.id)
-      expect(useTabStore.getState().activeTabId).toBe(tab1.id)
     })
 
     it('closeTab removes closed tab id from visitHistory', () => {

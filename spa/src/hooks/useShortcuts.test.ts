@@ -200,7 +200,6 @@ describe('useShortcuts', () => {
     it('does not close tabs from another workspace', () => {
       const { fire } = mockElectronAPI()
       // Setup: WS A has 2 tabs, WS B has 0 tabs
-      const wsA = useWorkspaceStore.getState().workspaces[0]
       const tabsA = seedTabs(2)
       // Switch to a new empty workspace B
       const wsB = useWorkspaceStore.getState().addWorkspace('WS B')
@@ -214,20 +213,37 @@ describe('useShortcuts', () => {
       expect(useTabStore.getState().tabs[tabsA[1].id]).toBeDefined()
     })
 
-    it('selects next tab within workspace after closing', () => {
+    it('selects last-visited tab within workspace after closing', () => {
       const { fire } = mockElectronAPI()
       const tabs = seedTabs(3)
+      // seedTabs sets activeTab to tabs[0], then we switch to tabs[1]
+      // visitHistory = [tabs[0]]
       useTabStore.getState().setActiveTab(tabs[1].id)
+      useWorkspaceStore.getState().setWorkspaceActiveTab(
+        useWorkspaceStore.getState().activeWorkspaceId!,
+        tabs[1].id,
+      )
       renderHook(() => useShortcuts())
 
       fire('close-tab')
-      // Should select a tab still in the workspace, not cross-workspace
       const state = useTabStore.getState()
-      const wsId = useWorkspaceStore.getState().activeWorkspaceId
-      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)
-      if (state.activeTabId) {
-        expect(ws?.tabs).toContain(state.activeTabId)
-      }
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId!
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)!
+      // Should go back to tabs[0] (last visited), not tabs[2] (adjacent)
+      expect(state.activeTabId).toBe(tabs[0].id)
+      expect(ws.tabs).toContain(state.activeTabId)
+      expect(ws.activeTabId).toBe(tabs[0].id)
+    })
+
+    it('closes last tab in workspace → activeTabId null', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(1)
+      useTabStore.getState().setActiveTab(tabs[0].id)
+      renderHook(() => useShortcuts())
+
+      fire('close-tab')
+      expect(useTabStore.getState().activeTabId).toBeNull()
+      expect(useTabStore.getState().tabs[tabs[0].id]).toBeUndefined()
     })
   })
 

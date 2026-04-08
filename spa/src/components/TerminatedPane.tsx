@@ -1,6 +1,8 @@
 import { SmileySad } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
+import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useI18nStore } from '../stores/useI18nStore'
+import { destroyBrowserViewIfNeeded } from '../lib/browser-cleanup'
 import { SessionPickerList } from './SessionPickerList'
 import type { PaneContent, TerminatedReason } from '../types/tab'
 
@@ -18,7 +20,7 @@ const REASON_KEYS: Record<TerminatedReason, { title: string; desc: string }> = {
 
 export function TerminatedPane({ content, tabId, paneId }: Props) {
   const t = useI18nStore((s) => s.t)
-  const closeTab = useTabStore((s) => s.closeTab)
+  const closeTabInWorkspace = useWorkspaceStore((s) => s.closeTabInWorkspace)
   const setPaneContent = useTabStore((s) => s.setPaneContent)
   const reason = content.terminated!
   const keys = REASON_KEYS[reason]
@@ -39,7 +41,11 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
       <SmileySad size={48} className="text-zinc-500 mb-4" />
       <h2 className="text-lg font-medium text-zinc-300 mb-1">{t(keys.title)}</h2>
       <p className="text-sm text-zinc-500 mb-6">{t(keys.desc, { name: content.cachedName })}</p>
-      <button className="text-sm text-zinc-400 hover:text-zinc-200 mb-8" onClick={() => closeTab(tabId)}>
+      <button className="text-sm text-zinc-400 hover:text-zinc-200 mb-8" onClick={() => {
+        const tab = useTabStore.getState().tabs[tabId]
+        if (tab) destroyBrowserViewIfNeeded(tab)
+        closeTabInWorkspace(tabId)
+      }}>
         {t('terminated.close_tab')}
       </button>
       <div className="w-full max-w-sm">
