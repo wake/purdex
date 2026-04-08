@@ -36,9 +36,11 @@ Menu accelerator
 **修改 `spa/src/hooks/useShortcuts.ts`**：
 
 在現有全域 action handler（close-tab, new-tab, switch-tab-* 等）之後、`unknown action` fallback 之前，加入 registry dispatch：
-1. 取得 active tab + primary pane
+1. 取得 active tab + primary pane（`getPrimaryPane(tab.layout)`）
 2. `getTabShortcutHandler(pane.content.kind, action)`
 3. 有 handler → 呼叫；無 handler → 走原本的 unknown action log
+
+**Split pane 策略**：dispatch 一律以 primary pane（最左/最上）為準。目前 codebase 沒有 focused pane 追蹤機制，若需精確到 focused pane 的 dispatch，屬於 split pane 進階功能，另案處理。
 
 ### 2. Browser Tab Shortcuts 註冊
 
@@ -54,7 +56,7 @@ Menu accelerator
 | `focus-url` | `document.dispatchEvent(new CustomEvent('browser:focus-url'))` |
 | `print` | `electronAPI.browserViewPrint(pane.id)` |
 
-此檔案需在 app 啟動時 import，確保 registry 有內容。
+此檔案需在 app 啟動時 import，確保 registry 有內容。進入點：在 `spa/src/App.tsx` 加入 `import './lib/browser-shortcuts'`。
 
 ### 3. Keybindings 擴充
 
@@ -84,24 +86,38 @@ platform?: 'darwin' | 'win32' | 'linux'  // 省略 = 全平台
 
 注意 `go-back` / `go-forward` 各有兩組 accelerator（`Cmd+[` 和 `Cmd+←`）。
 
+**風險備注**：`Cmd+[/]` 是 Chromium 的 back/forward 快捷鍵。當 WebContentsView 有 focus 時，可能被 Chromium 先行攔截而非觸發 menu accelerator。macOS 的 NSMenu accelerator 應在 application event loop 層級優先處理，但需在實作時驗證。若確認被攔截，需在 `BrowserViewManager.open()` 中為 WebContentsView 加入 `before-input-event` fallback。
+
+**風險備注**：`Cmd+R` 不在現有 `viewMenu` 中（沒有 `role: 'reload'`），可安全新增。但若未來有人加入 `role: 'reload'` 到 viewMenu 會靜默衝突，需注意。
+
 **修改 `buildMenuTemplate()`**：
 
-- 過濾不符合當前 `process.platform` 的項目
-- 同一 action 多個 accelerator 時，menu 只顯示一個項目，但所有 accelerator 都要註冊。做法：第一個 entry 正常放入 menu item，後續同 action 的 entry 設為 `visible: false` 的隱藏 menu item（仍註冊 accelerator）
+- 先過濾不符合當前 `process.platform` 的項目
+- 再處理同 action 多 accelerator：以 platform 過濾後的陣列中 first-seen 為準，第一個 entry 正常放入 menu item，後續同 action 的 entry 設為 `visible: false` 的隱藏 menu item（仍註冊 accelerator）
 - 新增 Browser 子選單
 
 ### 4. Mini Window Theme 修復
 
 **修改 `spa/src/mini-browser.tsx`**：
 
-- Import `useThemeStore`（模組載入觸發 Zustand persist rehydrate → `applyThemeToDom(themeId)`）
 - 渲染 `<ThemeInjector />` 支援自訂主題 CSS 注入
+
+**修改 `spa/src/components/MiniBrowserApp.tsx`**：
+
+- 在 component 內用 `useThemeStore` hook 訂閱 `activeThemeId`，搭配 `useEffect` 確保 DOM 同步：
+  ```ts
+  const activeThemeId = useThemeStore(s => s.activeThemeId)
+  useEffect(() => { document.documentElement.dataset.theme = activeThemeId }, [activeThemeId])
+  ```
+- 原因：Zustand persist v5 的 rehydration 是 async，單純 import module 不保證 `applyThemeToDom` 在首次 render 前執行。用 hook 訂閱確保 rehydration 完成後觸發 DOM 更新。
 
 效果：mini window 的 `<html>` 取得 `data-theme` 屬性，CSS 變數生效，toolbar 可見。
 
 ### 5. Mini Window 快捷鍵
 
 Mini window 不走 `useShortcuts`（那是主視窗的 tab/workspace 管理邏輯），改用獨立的精簡 hook。
+
+**架構決策**：`useMiniWindowShortcuts` 與 `browser-shortcuts.ts` 的 browser handler 邏輯有部分重複（go-back, go-forward, reload, focus-url, print）。這是有意的取捨——mini window 不是 tab 系統的一部分，不走 registry，用一個 flat handler 更清晰。代價是新增 browser action 時需同步兩處。
 
 **新檔 `spa/src/hooks/useMiniWindowShortcuts.ts`**：
 
@@ -126,6 +142,8 @@ Shortcut handler 無法直接 reference toolbar 的 `<input>`，改用 custom DO
 - **修改 `spa/src/components/BrowserToolbar.tsx`**：加 `useEffect` 監聽 `browser:focus-url` event → `inputRef.current?.focus()` + `inputRef.current?.select()`
 
 主視窗和 mini window 共用同一個 `BrowserToolbar` component，自動受益。
+
+**Split layout 備注**：若 split layout 中有多個 browser pane，多個 `BrowserToolbar` 同時監聯 document-level event，`Cmd+L` 會同時 focus 所有 toolbar。目前 split layout 中同時顯示多個 browser pane 的場景罕見，暫不處理。
 
 ### 7. 新增 IPC — Print
 
