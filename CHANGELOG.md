@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.62] - 2026-04-08
+
+Workspace activeTabId 同步修正
+
+### 修正
+
+- **快捷鍵 tab 切換同步 workspace** — switch-tab-*、prev/next-tab、switch-workspace 快捷鍵現在正確同步 `ws.activeTabId`，切回 workspace 時恢復最後瀏覽的 tab
+- **冗餘寫入優化** — `activateTab` helper 在值未改變時跳過 `setWorkspaceActiveTab`
+
 ## [1.0.0-alpha.61] - 2026-04-08
 
 Close-tab workspace scoping 重構 + ActivityBar 間距 (PR #216)
