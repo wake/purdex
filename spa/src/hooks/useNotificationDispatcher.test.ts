@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { shouldNotify, shouldDispatch, clearSeenTs } from './useNotificationDispatcher'
+import { shouldNotify, shouldDispatch, clearSeenTs, handleNotificationClick } from './useNotificationDispatcher'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
 import { STORAGE_KEYS } from '../lib/storage'
+import { useTabStore } from '../stores/useTabStore'
+import { useWorkspaceStore } from '../stores/useWorkspaceStore'
+import { useAgentStore } from '../stores/useAgentStore'
+import { useNotificationSettingsStore } from '../stores/useNotificationSettingsStore'
+import { useSessionStore } from '../stores/useSessionStore'
+import { createTab } from '../types/tab'
 
 const defaultSettings: NotificationSettings = {
   enabled: true, events: {}, notifyWithoutTab: false, reopenTabOnClick: false,
@@ -105,5 +111,96 @@ describe('shouldDispatch', () => {
     // After clear, session is new again — sentinel behavior
     expect(shouldDispatch('abc', 500)).toBe(false) // sentinel → record (even older ts)
     expect(shouldDispatch('abc', 600)).toBe(true)  // newer than 500 → dispatch
+  })
+})
+
+describe('handleNotificationClick workspace switching', () => {
+  const HOST_ID = 'host-a'
+  const SESSION_CODE = 'ses001'
+
+  beforeEach(() => {
+    // Reset all stores
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.getState().reset()
+    useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, models: {}, tabIndicatorStyle: 'overlay' })
+    useNotificationSettingsStore.setState({ agents: {} })
+    useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+    // Mock window.electronAPI as undefined (not in Electron in tests)
+    Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+  })
+
+  it('switches to workspace containing the tab', () => {
+    // Setup: create a tab in workspace B, active workspace is A
+    const tab = createTab({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    useTabStore.getState().addTab(tab)
+
+    const wsA = useWorkspaceStore.getState().addWorkspace('Workspace A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('Workspace B')
+    useWorkspaceStore.getState().addTabToWorkspace(wsB.id, tab.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+
+    // Action: handleNotificationClick open-session
+    handleNotificationClick({ kind: 'open-session', hostId: HOST_ID, sessionCode: SESSION_CODE })
+
+    // Assert: activeWorkspaceId switched to wsB, workspaceActiveTab is tab.id
+    const state = useWorkspaceStore.getState()
+    expect(state.activeWorkspaceId).toBe(wsB.id)
+    const wsState = state.workspaces.find(w => w.id === wsB.id)
+    expect(wsState?.activeTabId).toBe(tab.id)
+  })
+
+  it('switches to Home when tab is standalone (not in any workspace)', () => {
+    // Setup: tab not in any workspace, active workspace is wsA
+    const tab = createTab({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    useTabStore.getState().addTab(tab)
+
+    const wsA = useWorkspaceStore.getState().addWorkspace('Workspace A')
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+    // Tab is NOT added to any workspace (standalone)
+
+    // Action: handleNotificationClick open-session
+    handleNotificationClick({ kind: 'open-session', hostId: HOST_ID, sessionCode: SESSION_CODE })
+
+    // Assert: activeWorkspaceId is null (Home)
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+  })
+
+  it('reopenTabOnClick adds tab to active workspace and stays in that workspace', () => {
+    // Setup: no existing tab, activeWorkspaceId is wsA (non-null), reopenTabOnClick=true
+    const wsA = useWorkspaceStore.getState().addWorkspace('Workspace A')
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+
+    // Enable reopenTabOnClick for the default agent type
+    useNotificationSettingsStore.getState().setReopenTabOnClick('', true)
+
+    // Action: handleNotificationClick with reopenTabOnClick
+    handleNotificationClick({ kind: 'open-session', hostId: HOST_ID, sessionCode: SESSION_CODE })
+
+    // Assert: new tab added to wsA via insertTab, activeWorkspaceId stays wsA
+    const wsState = useWorkspaceStore.getState()
+    expect(wsState.activeWorkspaceId).toBe(wsA.id)
+    const ws = wsState.workspaces.find(w => w.id === wsA.id)
+    expect(ws?.tabs).toHaveLength(1)
+  })
+
+  it('reopenTabOnClick at Home (null workspace) keeps tab standalone', () => {
+    // Setup: no existing tab, activeWorkspaceId is null (Home), reopenTabOnClick=true
+    // Workspaces exist but active is null
+    useWorkspaceStore.getState().addWorkspace('Workspace A')
+    useWorkspaceStore.getState().setActiveWorkspace(null)
+
+    // Enable reopenTabOnClick
+    useNotificationSettingsStore.getState().setReopenTabOnClick('', true)
+
+    // Action: handleNotificationClick with reopenTabOnClick
+    handleNotificationClick({ kind: 'open-session', hostId: HOST_ID, sessionCode: SESSION_CODE })
+
+    // Assert: insertTab is no-op (null wsId), tab is standalone, activeWorkspaceId stays null
+    const wsState = useWorkspaceStore.getState()
+    expect(wsState.activeWorkspaceId).toBeNull()
+    // All workspaces should have no tabs (tab is standalone)
+    for (const ws of wsState.workspaces) {
+      expect(ws.tabs).toHaveLength(0)
+    }
   })
 })

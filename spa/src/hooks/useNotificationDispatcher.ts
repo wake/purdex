@@ -200,7 +200,7 @@ export function useNotificationDispatcher(): void {
   }, [])
 }
 
-function handleNotificationClick(action: NotificationAction): void {
+export function handleNotificationClick(action: NotificationAction): void {
   switch (action.kind) {
     case 'open-session': {
       const { hostId, sessionCode } = action
@@ -213,6 +213,13 @@ function handleNotificationClick(action: NotificationAction): void {
       let handled = false
       if (tabId) {
         useTabStore.getState().setActiveTab(tabId)
+        const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
+        if (ws) {
+          useWorkspaceStore.getState().setActiveWorkspace(ws.id)
+          useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabId)
+        } else {
+          useWorkspaceStore.getState().setActiveWorkspace(null)
+        }
         handled = true
       } else if (agentSettings.reopenTabOnClick) {
         const sessionName = useSessionStore.getState().sessions[hostId]?.find(s => s.code === sessionCode)?.name ?? ''
@@ -220,6 +227,12 @@ function handleNotificationClick(action: NotificationAction): void {
         useTabStore.getState().addTab(newTab)
         useTabStore.getState().setActiveTab(newTab.id)
         useWorkspaceStore.getState().insertTab(newTab.id)
+        const ws = useWorkspaceStore.getState().findWorkspaceByTab(newTab.id)
+        if (ws) {
+          useWorkspaceStore.getState().setActiveWorkspace(ws.id)
+        } else {
+          useWorkspaceStore.getState().setActiveWorkspace(null)
+        }
         handled = true
       }
 
