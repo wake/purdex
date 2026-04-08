@@ -12,6 +12,14 @@ export function useShortcuts(): void {
 
     const cleanup = window.electronAPI.onShortcut(({ action }) => {
       const tabState = useTabStore.getState()
+
+      // Set active tab and sync workspace activeTabId in one step
+      const activateTab = (tabId: string) => {
+        tabState.setActiveTab(tabId)
+        const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
+        if (ws) useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabId)
+      }
+
       const visibleIds = getVisibleTabIdsShared({
         tabs: tabState.tabs,
         tabOrder: tabState.tabOrder,
@@ -23,11 +31,11 @@ export function useShortcuts(): void {
       if (action.startsWith('switch-tab-')) {
         if (action === 'switch-tab-last') {
           const lastId = visibleIds[visibleIds.length - 1]
-          if (lastId) tabState.setActiveTab(lastId)
+          if (lastId) activateTab(lastId)
         } else {
           const index = parseInt(action.replace('switch-tab-', ''), 10) - 1
           const targetId = visibleIds[index]
-          if (targetId) tabState.setActiveTab(targetId)
+          if (targetId) activateTab(targetId)
         }
         return
       }
@@ -38,13 +46,12 @@ export function useShortcuts(): void {
           ? visibleIds.indexOf(tabState.activeTabId)
           : -1
         if (currentIdx === -1) {
-          // No valid active tab — go to first tab
-          tabState.setActiveTab(visibleIds[0])
+          activateTab(visibleIds[0])
           return
         }
         const delta = action === 'next-tab' ? 1 : -1
         const nextIdx = (currentIdx + delta + visibleIds.length) % visibleIds.length
-        tabState.setActiveTab(visibleIds[nextIdx])
+        activateTab(visibleIds[nextIdx])
         return
       }
 
@@ -96,7 +103,7 @@ export function useShortcuts(): void {
         if (!targetWs) return
         useWorkspaceStore.getState().setActiveWorkspace(targetWs.id)
         const activeTab = targetWs.activeTabId ?? targetWs.tabs[0]
-        if (activeTab) tabState.setActiveTab(activeTab)
+        if (activeTab) activateTab(activeTab)
         return
       }
 
@@ -112,7 +119,7 @@ export function useShortcuts(): void {
         const targetWs = workspaces[nextIdx]
         useWorkspaceStore.getState().setActiveWorkspace(targetWs.id)
         const activeTab = targetWs.activeTabId ?? targetWs.tabs[0]
-        if (activeTab) tabState.setActiveTab(activeTab)
+        if (activeTab) activateTab(activeTab)
         return
       }
 
