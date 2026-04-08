@@ -3,6 +3,7 @@ import { useWorkspaceStore } from './store'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHistoryStore } from '../../stores/useHistoryStore'
 import { createTab } from '../../types/tab'
+import type { Workspace } from '../../types/tab'
 
 function makeTab() {
   return createTab({ kind: 'new-tab' })
@@ -460,6 +461,35 @@ describe('useWorkspaceStore', () => {
       expect(useTabStore.getState().activeTabId).toBe(tabs[1].id)
       useWorkspaceStore.getState().closeTabInWorkspace(tabs[1].id)
       expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
+    })
+  })
+
+  // === importWorkspace ===
+
+  describe('importWorkspace', () => {
+    it('imports workspace preserving original id and tabs', () => {
+      const ws: Workspace = { id: 'imported-1', name: 'Imported', tabs: ['t1', 't2'], activeTabId: 't1' }
+      useWorkspaceStore.getState().importWorkspace(ws)
+      const result = useWorkspaceStore.getState().workspaces[0]
+      expect(result.id).toBe('imported-1')
+      expect(result.tabs).toEqual(['t1', 't2'])
+      expect(result.activeTabId).toBe('t1')
+    })
+
+    it('does not change activeWorkspaceId', () => {
+      const ws1 = useWorkspaceStore.getState().addWorkspace('Existing')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(ws1.id)
+      const ws: Workspace = { id: 'imported-2', name: 'Imported', tabs: [], activeTabId: null }
+      useWorkspaceStore.getState().importWorkspace(ws)
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(ws1.id) // 不變
+    })
+
+    it('imports with icon and iconWeight', () => {
+      const ws: Workspace = { id: 'imported-3', name: 'Dev', icon: 'Code', iconWeight: 'bold', tabs: [], activeTabId: null }
+      useWorkspaceStore.getState().importWorkspace(ws)
+      const result = useWorkspaceStore.getState().workspaces[0]
+      expect(result.icon).toBe('Code')
+      expect(result.iconWeight).toBe('bold')
     })
   })
 })
