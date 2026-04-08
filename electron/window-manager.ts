@@ -35,6 +35,8 @@ export class WindowManager {
     this.loadSPA(win)
 
     // If tab data provided, send after SPA signals ready
+    const pendingHandlers: Array<(event: Electron.IpcMainEvent) => void> = []
+
     if (opts?.tabJson) {
       const replace = opts.replace ?? false
       const handler = (event: Electron.IpcMainEvent) => {
@@ -43,6 +45,7 @@ export class WindowManager {
           ipcMain.removeListener('spa:ready', handler)
         }
       }
+      pendingHandlers.push(handler)
       ipcMain.on('spa:ready', handler)
     }
 
@@ -54,6 +57,7 @@ export class WindowManager {
           ipcMain.removeListener('spa:ready', handler)
         }
       }
+      pendingHandlers.push(handler)
       ipcMain.on('spa:ready', handler)
     }
 
@@ -63,6 +67,7 @@ export class WindowManager {
     })
 
     win.on('closed', () => {
+      for (const h of pendingHandlers) ipcMain.removeListener('spa:ready', h)
       this.onWindowClosed?.(win)
       this.windows.delete(id)
     })
@@ -145,12 +150,12 @@ export class WindowManager {
     this.createWindow({ workspaceJson: payload, replace: true })
   }
 
-  handleMergeWorkspace(payload: string, targetWindowId: string): void {
+  handleMergeWorkspace(payload: string, targetWindowId: string): boolean {
     const target = this.windows.get(targetWindowId)
-    if (target && !target.isDestroyed()) {
-      target.webContents.send('workspace:received', payload)
-      target.show()
-      target.focus()
-    }
+    if (!target || target.isDestroyed()) return false
+    target.webContents.send('workspace:received', payload)
+    target.show()
+    target.focus()
+    return true
   }
 }

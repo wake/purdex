@@ -139,8 +139,13 @@ export default function App() {
         }
 
         useWorkspaceStore.getState().importWorkspace(workspace)
-        useWorkspaceStore.getState().setActiveWorkspace(workspace.id)
-        const activeTab = workspace.activeTabId ?? workspace.tabs[0]
+        // Only force-switch workspace on tear-off (replace); merge adds silently
+        if (replace) {
+          useWorkspaceStore.getState().setActiveWorkspace(workspace.id)
+        }
+        const activeTab = (workspace.activeTabId && tabMap.has(workspace.activeTabId))
+          ? workspace.activeTabId
+          : workspace.tabs[0]
         if (activeTab) useTabStore.getState().setActiveTab(activeTab)
       } catch { /* ignore malformed payload */ }
     })
@@ -213,42 +218,50 @@ export default function App() {
     setWsContextMenu({ wsId, position: { x: e.clientX, y: e.clientY } })
   }
 
-  const cleanupWorkspace = useCallback((wsId: string) => {
+  const prepareWorkspacePayload = useCallback((wsId: string) => {
     const ws = workspaces.find(w => w.id === wsId)
-    if (!ws) return null
+    if (!ws || ws.tabs.length === 0) return null
     const tabData = ws.tabs.map(id => tabs[id]).filter(Boolean)
-    const payload = JSON.stringify({ workspace: ws, tabData })
-    return { ws, payload }
+    if (tabData.length === 0) return null
+    return { ws, payload: JSON.stringify({ workspace: ws, tabData }) }
   }, [workspaces, tabs])
 
-  const removeWorkspaceFromStore = useCallback((ws: { tabs: string[] }, wsId: string) => {
-    const newTabs = { ...tabs }
-    const newTabOrder = tabOrder.filter(id => !ws.tabs.includes(id))
-    for (const id of ws.tabs) delete newTabs[id]
-    const newActiveTabId = newTabOrder[0] ?? null
-    useTabStore.setState({ tabs: newTabs, tabOrder: newTabOrder, activeTabId: newActiveTabId })
+  const removeWorkspaceFromStore = useCallback((tabIds: string[], wsId: string) => {
+    // Read fresh state to avoid stale closure after async IPC
+    const { tabs: currentTabs, tabOrder: currentTabOrder } = useTabStore.getState()
+    const newTabs = { ...currentTabs }
+    const newTabOrder = currentTabOrder.filter(id => !tabIds.includes(id))
+    for (const id of tabIds) delete newTabs[id]
+    useTabStore.setState({ tabs: newTabs, tabOrder: newTabOrder, activeTabId: null })
     useWorkspaceStore.getState().removeWorkspace(wsId)
-  }, [tabs, tabOrder])
+    // Sync activeTabId with the new active workspace's activeTabId
+    const wsState = useWorkspaceStore.getState()
+    const newActiveWs = wsState.activeWorkspaceId
+      ? wsState.workspaces.find(w => w.id === wsState.activeWorkspaceId)
+      : null
+    const syncedTabId = newActiveWs?.activeTabId ?? newActiveWs?.tabs[0] ?? newTabOrder[0] ?? null
+    if (syncedTabId) useTabStore.getState().setActiveTab(syncedTabId)
+  }, [])
 
   const handleWsTearOff = useCallback(async (wsId: string) => {
     if (!window.electronAPI) return
-    const prepared = cleanupWorkspace(wsId)
+    const prepared = prepareWorkspacePayload(wsId)
     if (!prepared) return
     try {
       await window.electronAPI.tearOffWorkspace(prepared.payload)
-      removeWorkspaceFromStore(prepared.ws, wsId)
+      removeWorkspaceFromStore(prepared.ws.tabs, wsId)
     } catch { /* IPC failed — keep data intact */ }
-  }, [cleanupWorkspace, removeWorkspaceFromStore])
+  }, [prepareWorkspacePayload, removeWorkspaceFromStore])
 
   const handleWsMergeTo = useCallback(async (wsId: string, targetWindowId: string) => {
     if (!window.electronAPI) return
-    const prepared = cleanupWorkspace(wsId)
+    const prepared = prepareWorkspacePayload(wsId)
     if (!prepared) return
     try {
       await window.electronAPI.mergeWorkspace(prepared.payload, targetWindowId)
-      removeWorkspaceFromStore(prepared.ws, wsId)
+      removeWorkspaceFromStore(prepared.ws.tabs, wsId)
     } catch { /* IPC failed — keep data intact */ }
-  }, [cleanupWorkspace, removeWorkspaceFromStore])
+  }, [prepareWorkspacePayload, removeWorkspaceFromStore])
 
   return (
     <ErrorBoundary>

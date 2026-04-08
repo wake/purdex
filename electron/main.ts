@@ -34,7 +34,8 @@ function registerIpcHandlers(): void {
     windowManager.handleTearOffWorkspace(payload)
   })
   ipcMain.handle('window:merge-workspace', (_event, payload: string, targetWindowId: string) => {
-    windowManager.handleMergeWorkspace(payload, targetWindowId)
+    const ok = windowManager.handleMergeWorkspace(payload, targetWindowId)
+    if (!ok) throw 'Target window not found'
   })
   ipcMain.handle('window:get-all', (event) => {
     return windowManager.getAll(event.sender)

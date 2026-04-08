@@ -26,7 +26,7 @@ export function WorkspaceContextMenu({ position, onSettings, onTearOff, onMergeT
   useEffect(() => {
     if (!onMergeTo) return
     if (!window.electronAPI?.getWindows) return
-    window.electronAPI.getWindows().then(setWindowList)
+    window.electronAPI.getWindows().then(setWindowList).catch(() => setWindowList([]))
   }, [onMergeTo])
 
   const showTearOff = !!onTearOff
