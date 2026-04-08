@@ -213,9 +213,11 @@ describe('useShortcuts', () => {
       expect(useTabStore.getState().tabs[tabsA[1].id]).toBeDefined()
     })
 
-    it('selects next tab within workspace after closing', () => {
+    it('selects last-visited tab within workspace after closing', () => {
       const { fire } = mockElectronAPI()
       const tabs = seedTabs(3)
+      // seedTabs sets activeTab to tabs[0], then we switch to tabs[1]
+      // visitHistory = [tabs[0]]
       useTabStore.getState().setActiveTab(tabs[1].id)
       useWorkspaceStore.getState().setWorkspaceActiveTab(
         useWorkspaceStore.getState().activeWorkspaceId!,
@@ -227,10 +229,10 @@ describe('useShortcuts', () => {
       const state = useTabStore.getState()
       const wsId = useWorkspaceStore.getState().activeWorkspaceId!
       const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)!
-      // Must select adjacent tab within workspace — no conditional
-      expect(state.activeTabId).toBe(tabs[2].id)
+      // Should go back to tabs[0] (last visited), not tabs[2] (adjacent)
+      expect(state.activeTabId).toBe(tabs[0].id)
       expect(ws.tabs).toContain(state.activeTabId)
-      expect(ws.activeTabId).toBe(tabs[2].id)
+      expect(ws.activeTabId).toBe(tabs[0].id)
     })
 
     it('closes last tab in workspace → activeTabId null', () => {

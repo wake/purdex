@@ -233,6 +233,7 @@ describe('useWorkspaceStore', () => {
       })
       useTabStore.getState().setActiveTab(tabs[1].id)
       useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabs[1].id)
+      useTabStore.setState({ visitHistory: [] }) // clear to test adjacent fallback
 
       useWorkspaceStore.getState().closeTabInWorkspace(tabs[1].id)
 
@@ -252,6 +253,7 @@ describe('useWorkspaceStore', () => {
       })
       useTabStore.getState().setActiveTab(tabs[2].id)
       useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabs[2].id)
+      useTabStore.setState({ visitHistory: [] }) // clear to test adjacent fallback
 
       useWorkspaceStore.getState().closeTabInWorkspace(tabs[2].id)
 
@@ -355,11 +357,109 @@ describe('useWorkspaceStore', () => {
       const tabs = [makeTab(), makeTab(), makeTab()]
       tabs.forEach((t) => useTabStore.getState().addTab(t))
       useTabStore.getState().setActiveTab(tabs[1].id)
+      useTabStore.setState({ visitHistory: [] }) // clear to test adjacent fallback
 
       useWorkspaceStore.getState().closeTabInWorkspace(tabs[1].id)
 
       expect(useTabStore.getState().tabs[tabs[1].id]).toBeUndefined()
       expect(useTabStore.getState().activeTabId).toBe(tabs[2].id)
+    })
+
+    it('prefers visitHistory over adjacent when selecting next tab', () => {
+      const ws = useWorkspaceStore.getState().addWorkspace('Test')
+      const tabs = [makeTab(), makeTab(), makeTab()]
+      tabs.forEach((t) => {
+        useTabStore.getState().addTab(t)
+        useWorkspaceStore.getState().addTabToWorkspace(ws.id, t.id)
+      })
+      // Visit order: tabs[0] → tabs[2] → tabs[1] (tabs[1] is active)
+      useTabStore.getState().setActiveTab(tabs[0].id)
+      useTabStore.getState().setActiveTab(tabs[2].id)
+      useTabStore.getState().setActiveTab(tabs[1].id)
+      useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabs[1].id)
+
+      useWorkspaceStore.getState().closeTabInWorkspace(tabs[1].id)
+
+      // Should go to tabs[2] (last visited in workspace), not tabs[2] by adjacent
+      // In this case the result is the same, but verify the mechanism:
+      // visitHistory = [tabs[0], tabs[2]] → tabs[2] is most recent in scope
+      expect(useTabStore.getState().activeTabId).toBe(tabs[2].id)
+    })
+
+    it('falls back to adjacent when visitHistory has no in-scope tabs', () => {
+      const ws = useWorkspaceStore.getState().addWorkspace('Test')
+      const tabs = [makeTab(), makeTab(), makeTab()]
+      tabs.forEach((t) => {
+        useTabStore.getState().addTab(t)
+        useWorkspaceStore.getState().addTabToWorkspace(ws.id, t.id)
+      })
+      // Set active directly without building visitHistory
+      useTabStore.setState({ visitHistory: [] })
+      useTabStore.getState().setActiveTab(tabs[1].id)
+      // visitHistory now only has one entry (the previous null→tabs[1] doesn't push)
+      // Clear it explicitly to test fallback
+      useTabStore.setState({ visitHistory: [] })
+      useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabs[1].id)
+
+      useWorkspaceStore.getState().closeTabInWorkspace(tabs[1].id)
+
+      // No visitHistory → fallback to adjacent (tabs[2])
+      expect(useTabStore.getState().activeTabId).toBe(tabs[2].id)
+    })
+
+    it('visitHistory skips tabs from other workspaces', () => {
+      const wsA = useWorkspaceStore.getState().addWorkspace('WS A')
+      const wsB = useWorkspaceStore.getState().addWorkspace('WS B')
+      const tabA1 = makeTab()
+      const tabA2 = makeTab()
+      const tabB1 = makeTab()
+      ;[tabA1, tabA2, tabB1].forEach((t) => useTabStore.getState().addTab(t))
+      useWorkspaceStore.getState().addTabToWorkspace(wsA.id, tabA1.id)
+      useWorkspaceStore.getState().addTabToWorkspace(wsA.id, tabA2.id)
+      useWorkspaceStore.getState().addTabToWorkspace(wsB.id, tabB1.id)
+
+      // Visit: tabA1 → tabB1 → tabA2 (tabA2 is active, in WS A)
+      useTabStore.getState().setActiveTab(tabA1.id)
+      useTabStore.getState().setActiveTab(tabB1.id)
+      useTabStore.getState().setActiveTab(tabA2.id)
+      useWorkspaceStore.getState().setWorkspaceActiveTab(wsA.id, tabA2.id)
+
+      useWorkspaceStore.getState().closeTabInWorkspace(tabA2.id)
+
+      // visitHistory = [tabA1, tabB1]; scoped to WS A = [tabA1]
+      // Should select tabA1, NOT tabB1
+      expect(useTabStore.getState().activeTabId).toBe(tabA1.id)
+    })
+
+    it('skips already-closed tabs in visitHistory', () => {
+      // Standalone — no workspace
+      const tabs = [makeTab(), makeTab(), makeTab()]
+      tabs.forEach((t) => useTabStore.getState().addTab(t))
+      // Visit: tabs[0] → tabs[1] → tabs[2]
+      useTabStore.getState().setActiveTab(tabs[1].id)
+      useTabStore.getState().setActiveTab(tabs[2].id)
+      // Close tabs[1] (not active) — removed from store but was in history
+      useWorkspaceStore.getState().closeTabInWorkspace(tabs[1].id)
+      // Close tabs[2] (active) — history has tabs[0] (tabs[1] already cleaned)
+      useWorkspaceStore.getState().closeTabInWorkspace(tabs[2].id)
+      expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
+    })
+
+    it('traverses full history stack on repeated closes', () => {
+      // Standalone — no workspace
+      const tabs = [makeTab(), makeTab(), makeTab(), makeTab()]
+      tabs.forEach((t) => useTabStore.getState().addTab(t))
+      // Visit: tabs[0] → tabs[1] → tabs[2] → tabs[3]
+      useTabStore.getState().setActiveTab(tabs[1].id)
+      useTabStore.getState().setActiveTab(tabs[2].id)
+      useTabStore.getState().setActiveTab(tabs[3].id)
+      // Close tabs[3] → tabs[2], close tabs[2] → tabs[1], close tabs[1] → tabs[0]
+      useWorkspaceStore.getState().closeTabInWorkspace(tabs[3].id)
+      expect(useTabStore.getState().activeTabId).toBe(tabs[2].id)
+      useWorkspaceStore.getState().closeTabInWorkspace(tabs[2].id)
+      expect(useTabStore.getState().activeTabId).toBe(tabs[1].id)
+      useWorkspaceStore.getState().closeTabInWorkspace(tabs[1].id)
+      expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
     })
   })
 })

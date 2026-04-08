@@ -130,16 +130,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         const ws = get().findWorkspaceByTab(tabId)
 
-        // 1. Pre-compute adjacent tab (before any mutation)
+        // 1. Pre-compute next tab (before any mutation)
+        //    Priority: visitHistory (scoped) → adjacent in workspace/tabOrder
+        const scopeIds = ws
+          ? new Set(ws.tabs.filter((id) => id !== tabId))
+          : new Set(tabStore.tabOrder.filter((id) => id !== tabId))
+
         let nextTabId: string | null = null
-        if (ws) {
-          const idx = ws.tabs.indexOf(tabId)
-          const remaining = ws.tabs.filter((id) => id !== tabId)
-          nextTabId = remaining[Math.min(idx, remaining.length - 1)] ?? null
-        } else {
-          const { tabOrder } = tabStore
-          const idx = tabOrder.indexOf(tabId)
-          const remaining = tabOrder.filter((id) => id !== tabId)
+        // Try visitHistory first (most recent visited tab still in scope)
+        const { visitHistory } = tabStore
+        for (let i = visitHistory.length - 1; i >= 0; i--) {
+          if (scopeIds.has(visitHistory[i])) {
+            nextTabId = visitHistory[i]
+            break
+          }
+        }
+        // Fallback to adjacent
+        if (nextTabId === null) {
+          const ordered = ws ? ws.tabs : tabStore.tabOrder
+          const idx = ordered.indexOf(tabId)
+          const remaining = ordered.filter((id) => id !== tabId)
           nextTabId = remaining[Math.min(idx, remaining.length - 1)] ?? null
         }
 
