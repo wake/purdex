@@ -71,6 +71,7 @@ interface Window {
     browserViewGoForward: (paneId: string) => Promise<void>
     browserViewReload: (paneId: string) => Promise<void>
     browserViewStop: (paneId: string) => Promise<void>
+    browserViewPrint: (paneId: string) => Promise<void>
     destroyBrowserView: (paneId: string) => Promise<void>
     browserViewOpenMiniWindow: (url: string) => Promise<void>
     browserViewMoveToTab: (paneId: string) => Promise<void>

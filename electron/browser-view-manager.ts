@@ -176,6 +176,11 @@ export class BrowserViewManager {
     entry?.view.webContents.stop()
   }
 
+  print(paneId: string): void {
+    const entry = this.views.get(paneId)
+    entry?.view.webContents.print()
+  }
+
   destroy(paneId: string): void {
     const entry = this.views.get(paneId)
     if (!entry) return
