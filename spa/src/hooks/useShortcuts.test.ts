@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { registerTabShortcuts, clearTabShortcutRegistry } from '../lib/tab-shortcut-registry'
 
 vi.mock('../features/workspace/generated/icon-loader', () => ({
   ALL_ICON_NAMES: [],
@@ -467,6 +468,41 @@ describe('useShortcuts', () => {
 
       fire('next-workspace')
       expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+    })
+  })
+
+  describe('tab shortcut registry dispatch', () => {
+    afterEach(() => clearTabShortcutRegistry())
+
+    it('dispatches to registered handler for active tab kind', () => {
+      const handler = vi.fn()
+      registerTabShortcuts('browser', { reload: handler })
+
+      const { fire } = mockElectronAPI()
+      const tab = createTab({ kind: 'browser', url: 'https://example.com' })
+      useTabStore.getState().addTab(tab)
+      useTabStore.getState().setActiveTab(tab.id)
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId!
+      useWorkspaceStore.getState().addTabToWorkspace(wsId, tab.id)
+      renderHook(() => useShortcuts())
+
+      fire('reload')
+      expect(handler).toHaveBeenCalledOnce()
+      expect(handler).toHaveBeenCalledWith(
+        tab,
+        expect.objectContaining({
+          content: { kind: 'browser', url: 'https://example.com' },
+        }),
+      )
+    })
+
+    it('does not dispatch when active tab kind has no handler', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1) // kind: 'new-tab'
+      renderHook(() => useShortcuts())
+
+      fire('reload')
+      // Should not throw — falls through to unknown action log
     })
   })
 })
