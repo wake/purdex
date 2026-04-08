@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -66,6 +66,15 @@ export function BrowserToolbar({
     },
     [editValue, onNavigate],
   )
+
+  useEffect(() => {
+    const handler = () => {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }
+    document.addEventListener('browser:focus-url', handler)
+    return () => document.removeEventListener('browser:focus-url', handler)
+  }, [])
 
   const navBtnClass = 'p-1 rounded hover:bg-surface-hover disabled:opacity-30 transition-colors'
 
