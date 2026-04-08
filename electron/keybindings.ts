@@ -22,6 +22,8 @@ const DEFAULT_KEYBINDINGS: readonly KeybindingDef[] = [
   { action: 'switch-tab-last', accelerator: 'CommandOrControl+9', label: 'Last Tab', menuCategory: 'Tab', menuGroup: 'tab-index' },
   { action: 'prev-tab', accelerator: 'CommandOrControl+Alt+Left', label: 'Previous Tab', menuCategory: 'Tab', menuGroup: 'tab-nav' },
   { action: 'next-tab', accelerator: 'CommandOrControl+Alt+Right', label: 'Next Tab', menuCategory: 'Tab', menuGroup: 'tab-nav' },
+  { action: 'next-tab', accelerator: 'Control+Tab', label: 'Next Tab (Ctrl)', menuCategory: 'Tab', menuGroup: 'tab-nav' },
+  { action: 'prev-tab', accelerator: 'Control+Shift+Tab', label: 'Previous Tab (Ctrl)', menuCategory: 'Tab', menuGroup: 'tab-nav' },
   { action: 'new-tab', accelerator: 'CommandOrControl+T', label: 'New Tab', menuCategory: 'Tab', menuGroup: 'tab-action' },
   { action: 'close-tab', accelerator: 'CommandOrControl+W', label: 'Close Tab', menuCategory: 'Tab', menuGroup: 'tab-action' },
   { action: 'reopen-closed-tab', accelerator: 'CommandOrControl+Shift+T', label: 'Reopen Closed Tab', menuCategory: 'Tab', menuGroup: 'tab-action' },
