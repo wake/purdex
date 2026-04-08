@@ -18,7 +18,7 @@ interface WorkspaceState {
   reorderWorkspaceTabs: (wsId: string, tabIds: string[]) => void
   findWorkspaceByTab: (tabId: string) => Workspace | null
   insertTab: (tabId: string, workspaceId?: string | null) => void
-  closeTabInWorkspace: (tabId: string) => void
+  closeTabInWorkspace: (tabId: string, opts?: { skipHistory?: boolean }) => void
   renameWorkspace: (wsId: string, name: string) => void
   setWorkspaceIcon: (wsId: string, icon: string) => void
   setWorkspaceIconWeight: (wsId: string, weight: IconWeight) => void
@@ -123,7 +123,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }))
       },
 
-      closeTabInWorkspace: (tabId) => {
+      closeTabInWorkspace: (tabId, opts) => {
         const tabStore = useTabStore.getState()
         const tab = tabStore.tabs[tabId]
         if (!tab || tab.locked) return
@@ -143,21 +143,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           nextTabId = remaining[Math.min(idx, remaining.length - 1)] ?? null
         }
 
+        // Pre-compute wasActive flags before any mutation
+        const wasActive = tabStore.activeTabId === tabId
+        const wasWorkspaceActive = ws ? ws.activeTabId === tabId : false
+
         // 2. Record history (before mutation — tab object still exists)
-        useHistoryStore.getState().recordClose(tab, ws?.id)
+        if (!opts?.skipHistory) {
+          useHistoryStore.getState().recordClose(tab, ws?.id)
+        }
 
         // 3. Remove from workspace
         if (ws) get().removeTabFromWorkspace(ws.id, tabId)
 
         // 4. Remove from tab store
-        const wasActive = tabStore.activeTabId === tabId
         useTabStore.getState().closeTab(tabId)
 
         // 5. Sync active tab
         if (wasActive) {
           useTabStore.getState().setActiveTab(nextTabId)
         }
-        if (ws && nextTabId) {
+        if (ws && wasWorkspaceActive && nextTabId) {
           get().setWorkspaceActiveTab(ws.id, nextTabId)
         }
       },

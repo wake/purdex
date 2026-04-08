@@ -310,18 +310,44 @@ describe('useWorkspaceStore', () => {
       expect(closedTabs[0].fromWorkspaceId).toBe(ws.id)
     })
 
+    it('skipHistory option skips recording to history store', () => {
+      const ws = useWorkspaceStore.getState().addWorkspace('Test')
+      const tab = makeTab()
+      useTabStore.getState().addTab(tab)
+      useWorkspaceStore.getState().addTabToWorkspace(ws.id, tab.id)
+      useTabStore.getState().setActiveTab(tab.id)
+
+      useWorkspaceStore.getState().closeTabInWorkspace(tab.id, { skipHistory: true })
+
+      const { closedTabs } = useHistoryStore.getState()
+      expect(closedTabs).toHaveLength(0)
+      // Tab should still be closed
+      expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
+    })
+
     it('does not change activeTabId when closing non-active tab', () => {
       const ws = useWorkspaceStore.getState().addWorkspace('Test')
-      const tabs = [makeTab(), makeTab()]
+      // 3 tabs: active is tabs[1] (middle), we close tabs[2] (last)
+      // Without the wasActive guard, nextTabId for tabs[2] is tabs[1] — no-op coincidence.
+      // Use tabs[0] as active, close tabs[2] (last): nextTabId = tabs[1] which ≠ tabs[0].
+      // This exposes the bug: ws.activeTabId gets overwritten to tabs[1].
+      const tabs = [makeTab(), makeTab(), makeTab()]
       tabs.forEach((t) => {
         useTabStore.getState().addTab(t)
         useWorkspaceStore.getState().addTabToWorkspace(ws.id, t.id)
       })
+      // tabs[0] is active in both tabStore and workspace
       useTabStore.getState().setActiveTab(tabs[0].id)
+      useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabs[0].id)
 
-      useWorkspaceStore.getState().closeTabInWorkspace(tabs[1].id)
+      // Close tabs[2] (non-active); nextTabId = tabs[1] ≠ tabs[0]
+      useWorkspaceStore.getState().closeTabInWorkspace(tabs[2].id)
 
+      // tabStore.activeTabId must remain tabs[0]
       expect(useTabStore.getState().activeTabId).toBe(tabs[0].id)
+      // ws.activeTabId must also remain tabs[0] — not be overwritten to tabs[1]
+      const updatedWs = useWorkspaceStore.getState().workspaces[0]
+      expect(updatedWs.activeTabId).toBe(tabs[0].id)
     })
 
     it('closes standalone tab with global tabOrder adjacency', () => {
