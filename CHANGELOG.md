@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.0-alpha.63] - 2026-04-09
+
+Workspace 增強 — Ctrl+Tab、通知導航、workspace tear-off/merge (PR #218)
+
+### 新功能
+
+- **Ctrl+Tab / Ctrl+Shift+Tab** — 切換 tab 的替代快捷鍵（macOS 部分鍵盤設定可能衝突）
+- **通知點擊切 workspace** — 點擊通知自動切換到含有該 tab 的 workspace（或回到 Home）
+- **Workspace tear-off** — 右鍵 workspace context menu「獨立到新視窗」，整個 workspace 搬到新 Electron 視窗
+- **Workspace merge** — 右鍵「合併到視窗」，將 workspace 合併到另一個已開啟的視窗
+- **importWorkspace store action** — 跨視窗 workspace 傳輸，含 ID 去重
+
+### 修正
+
+- merge 視窗清單過濾當前視窗（避免 self-merge）
+- IPC 呼叫成功後才清理 store（防止失敗時資料遺失）
+- merge 目標消失時正確 throw（不再靜默失敗）
+- workspace 接收端驗證 activeTabId 存在性
+- tear-off/merge 後全域 activeTabId 與 workspace activeTabId 同步
+- spa:ready listener 在視窗關閉時清除（防止洩漏）
+- 禁止 tear-off 空 workspace（0 tabs guard）
+- getWindows() IPC 加 .catch() 防止永久 Loading
+
 ## [1.0.0-alpha.62] - 2026-04-08
 
 Workspace activeTabId 同步修正
