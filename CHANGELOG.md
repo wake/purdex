@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.65] - 2026-04-09
+
+Home tab 殘留修復 + workspace icon tooltip (PR #221)
+
+### 修正
+
+- **Home tab 殘留**：切回 Home 時若無 standalone tabs，`activeTabId` 現在正確清除為 null，不再殘留前一個 workspace 的 tab
+- **Workspace icon tooltip**：ActivityBar workspace icon hover 即時顯示名稱（CSS tooltip），取代原生 title 延遲；改用 `aria-label` 避免雙重 tooltip
+
 ## [1.0.0-alpha.64] - 2026-04-09
 
 新增 ⌘⇧H 快捷鍵開啟 Host 管理面板 (#178)
