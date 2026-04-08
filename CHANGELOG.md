@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.64] - 2026-04-09
+
+新增 ⌘⇧H 快捷鍵開啟 Host 管理面板 (#178)
+
+### 新功能
+
+- **⌘⇧H 開啟 Hosts 面板** — 以 singleton tab 方式開啟 Host 管理頁面，與 ⌘, (Settings)、⌘Y (History) 操作模式一致
+
 ## [1.0.0-alpha.63] - 2026-04-09
 
 Workspace 增強 — Ctrl+Tab、通知導航、workspace tear-off/merge (PR #218)
