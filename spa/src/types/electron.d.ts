@@ -45,10 +45,16 @@ interface Window {
   electronAPI?: {
     tearOffTab: (tabJson: string) => Promise<void>
     mergeTab: (tabJson: string, targetWindowId: string) => Promise<void>
+    onTabReceived: (callback: (tabJson: string, replace: boolean) => void) => () => void
+
+    // Workspace Management
+    tearOffWorkspace: (payload: string) => Promise<void>
+    mergeWorkspace: (payload: string, targetWindowId: string) => Promise<void>
+    onWorkspaceReceived: (callback: (payload: string, replace: boolean) => void) => () => void
+
     openBrowserView: (url: string, paneId: string) => Promise<void>
     closeBrowserView: (paneId: string) => Promise<void>
     navigateBrowserView: (paneId: string, url: string) => Promise<void>
-    onTabReceived: (callback: (tabJson: string, replace: boolean) => void) => () => void
     signalReady: () => void
     reloadSPA: () => Promise<void>
     forceLoadSPA: (mode: 'dev' | 'bundled') => Promise<void>

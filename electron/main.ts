@@ -30,6 +30,12 @@ function registerIpcHandlers(): void {
   ipcMain.handle('window:merge', (_event, tabJson: string, targetWindowId: string) => {
     windowManager.handleMerge(tabJson, targetWindowId)
   })
+  ipcMain.handle('window:tear-off-workspace', (_event, payload: string) => {
+    windowManager.handleTearOffWorkspace(payload)
+  })
+  ipcMain.handle('window:merge-workspace', (_event, payload: string, targetWindowId: string) => {
+    windowManager.handleMergeWorkspace(payload, targetWindowId)
+  })
   ipcMain.handle('window:get-all', () => {
     return windowManager.getAll()
   })

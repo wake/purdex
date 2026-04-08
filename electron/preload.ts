@@ -13,6 +13,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('tab:received', handler)
   },
 
+  // Workspace Management
+  tearOffWorkspace: (payload: string) => ipcRenderer.invoke('window:tear-off-workspace', payload),
+  mergeWorkspace: (payload: string, targetWindowId: string) =>
+    ipcRenderer.invoke('window:merge-workspace', payload, targetWindowId),
+  onWorkspaceReceived: (callback: (payload: string, replace: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: string, replace?: boolean) =>
+      callback(payload, replace ?? false)
+    ipcRenderer.on('workspace:received', handler)
+    return () => ipcRenderer.removeListener('workspace:received', handler)
+  },
+
   // Browser View — existing
   openBrowserView: (url: string, paneId: string) =>
     ipcRenderer.invoke('browser-view:open', url, paneId),

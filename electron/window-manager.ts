@@ -14,7 +14,7 @@ export class WindowManager {
     this.onWindowClosed = cb
   }
 
-  createWindow(opts?: { tabJson?: string; replace?: boolean }): BrowserWindow {
+  createWindow(opts?: { tabJson?: string; workspaceJson?: string; replace?: boolean }): BrowserWindow {
     const id = globalThis.crypto.randomUUID().slice(0, 8)
     const win = new BrowserWindow({
       width: 1200,
@@ -40,6 +40,17 @@ export class WindowManager {
       const handler = (event: Electron.IpcMainEvent) => {
         if (event.sender === win.webContents) {
           win.webContents.send('tab:received', opts.tabJson, replace)
+          ipcMain.removeListener('spa:ready', handler)
+        }
+      }
+      ipcMain.on('spa:ready', handler)
+    }
+
+    if (opts?.workspaceJson) {
+      const replace = opts.replace ?? false
+      const handler = (event: Electron.IpcMainEvent) => {
+        if (event.sender === win.webContents) {
+          win.webContents.send('workspace:received', opts.workspaceJson, replace)
           ipcMain.removeListener('spa:ready', handler)
         }
       }
@@ -125,6 +136,19 @@ export class WindowManager {
     const target = this.windows.get(targetWindowId)
     if (target && !target.isDestroyed()) {
       target.webContents.send('tab:received', tabJson)
+      target.show()
+      target.focus()
+    }
+  }
+
+  handleTearOffWorkspace(payload: string): void {
+    this.createWindow({ workspaceJson: payload, replace: true })
+  }
+
+  handleMergeWorkspace(payload: string, targetWindowId: string): void {
+    const target = this.windows.get(targetWindowId)
+    if (target && !target.isDestroyed()) {
+      target.webContents.send('workspace:received', payload)
       target.show()
       target.focus()
     }
