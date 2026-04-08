@@ -117,6 +117,40 @@ export default function App() {
     })
   }, [])
 
+  // --- Electron IPC: receive workspace from tear-off/merge ---
+  useEffect(() => {
+    if (!window.electronAPI?.onWorkspaceReceived) return
+    return window.electronAPI.onWorkspaceReceived((payload: string, replace: boolean) => {
+      try {
+        const { workspace, tabData } = JSON.parse(payload)
+        if (!workspace?.id || !Array.isArray(tabData)) return
+
+        // 校驗 tab ids
+        const tabMap = new Map(tabData.map((t: Tab) => [t.id, t]))
+        workspace.tabs = workspace.tabs.filter((id: string) => tabMap.has(id))
+
+        if (replace) {
+          useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+          useWorkspaceStore.getState().reset()
+        }
+
+        for (const tab of tabData) {
+          if (tab?.id && tab?.layout) useTabStore.getState().addTab(tab)
+        }
+
+        useWorkspaceStore.getState().importWorkspace(workspace)
+        // Only force-switch workspace on tear-off (replace); merge adds silently
+        if (replace) {
+          useWorkspaceStore.getState().setActiveWorkspace(workspace.id)
+        }
+        const activeTab = (workspace.activeTabId && tabMap.has(workspace.activeTabId))
+          ? workspace.activeTabId
+          : workspace.tabs[0]
+        if (activeTab) useTabStore.getState().setActiveTab(activeTab)
+      } catch { /* ignore malformed payload */ }
+    })
+  }, [])
+
   // --- Electron IPC: open browser tab from mini browser / WebContentsView link click ---
   useEffect(() => {
     if (!window.electronAPI?.onBrowserViewOpenInTab) return
@@ -183,6 +217,51 @@ export default function App() {
   const handleWsContextMenu = (e: React.MouseEvent, wsId: string) => {
     setWsContextMenu({ wsId, position: { x: e.clientX, y: e.clientY } })
   }
+
+  const prepareWorkspacePayload = useCallback((wsId: string) => {
+    const ws = workspaces.find(w => w.id === wsId)
+    if (!ws || ws.tabs.length === 0) return null
+    const tabData = ws.tabs.map(id => tabs[id]).filter(Boolean)
+    if (tabData.length === 0) return null
+    return { ws, payload: JSON.stringify({ workspace: ws, tabData }) }
+  }, [workspaces, tabs])
+
+  const removeWorkspaceFromStore = useCallback((tabIds: string[], wsId: string) => {
+    // Read fresh state to avoid stale closure after async IPC
+    const { tabs: currentTabs, tabOrder: currentTabOrder } = useTabStore.getState()
+    const newTabs = { ...currentTabs }
+    const newTabOrder = currentTabOrder.filter(id => !tabIds.includes(id))
+    for (const id of tabIds) delete newTabs[id]
+    useTabStore.setState({ tabs: newTabs, tabOrder: newTabOrder, activeTabId: null })
+    useWorkspaceStore.getState().removeWorkspace(wsId)
+    // Sync activeTabId with the new active workspace's activeTabId
+    const wsState = useWorkspaceStore.getState()
+    const newActiveWs = wsState.activeWorkspaceId
+      ? wsState.workspaces.find(w => w.id === wsState.activeWorkspaceId)
+      : null
+    const syncedTabId = newActiveWs?.activeTabId ?? newActiveWs?.tabs[0] ?? newTabOrder[0] ?? null
+    if (syncedTabId) useTabStore.getState().setActiveTab(syncedTabId)
+  }, [])
+
+  const handleWsTearOff = useCallback(async (wsId: string) => {
+    if (!window.electronAPI) return
+    const prepared = prepareWorkspacePayload(wsId)
+    if (!prepared) return
+    try {
+      await window.electronAPI.tearOffWorkspace(prepared.payload)
+      removeWorkspaceFromStore(prepared.ws.tabs, wsId)
+    } catch { /* IPC failed — keep data intact */ }
+  }, [prepareWorkspacePayload, removeWorkspaceFromStore])
+
+  const handleWsMergeTo = useCallback(async (wsId: string, targetWindowId: string) => {
+    if (!window.electronAPI) return
+    const prepared = prepareWorkspacePayload(wsId)
+    if (!prepared) return
+    try {
+      await window.electronAPI.mergeWorkspace(prepared.payload, targetWindowId)
+      removeWorkspaceFromStore(prepared.ws.tabs, wsId)
+    } catch { /* IPC failed — keep data intact */ }
+  }, [prepareWorkspacePayload, removeWorkspaceFromStore])
 
   return (
     <ErrorBoundary>
@@ -312,7 +391,9 @@ export default function App() {
         {wsContextMenu && (
           <WorkspaceContextMenu
             position={wsContextMenu.position}
-            onSettings={() => { openWsSettings(wsContextMenu.wsId); setWsContextMenu(null) }}
+            onSettings={() => openWsSettings(wsContextMenu.wsId)}
+            onTearOff={window.electronAPI ? () => handleWsTearOff(wsContextMenu.wsId) : undefined}
+            onMergeTo={window.electronAPI ? (targetWindowId) => handleWsMergeTo(wsContextMenu.wsId, targetWindowId) : undefined}
             onClose={() => setWsContextMenu(null)}
           />
         )}

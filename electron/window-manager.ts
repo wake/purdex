@@ -14,7 +14,7 @@ export class WindowManager {
     this.onWindowClosed = cb
   }
 
-  createWindow(opts?: { tabJson?: string; replace?: boolean }): BrowserWindow {
+  createWindow(opts?: { tabJson?: string; workspaceJson?: string; replace?: boolean }): BrowserWindow {
     const id = globalThis.crypto.randomUUID().slice(0, 8)
     const win = new BrowserWindow({
       width: 1200,
@@ -35,6 +35,8 @@ export class WindowManager {
     this.loadSPA(win)
 
     // If tab data provided, send after SPA signals ready
+    const pendingHandlers: Array<(event: Electron.IpcMainEvent) => void> = []
+
     if (opts?.tabJson) {
       const replace = opts.replace ?? false
       const handler = (event: Electron.IpcMainEvent) => {
@@ -43,6 +45,19 @@ export class WindowManager {
           ipcMain.removeListener('spa:ready', handler)
         }
       }
+      pendingHandlers.push(handler)
+      ipcMain.on('spa:ready', handler)
+    }
+
+    if (opts?.workspaceJson) {
+      const replace = opts.replace ?? false
+      const handler = (event: Electron.IpcMainEvent) => {
+        if (event.sender === win.webContents) {
+          win.webContents.send('workspace:received', opts.workspaceJson, replace)
+          ipcMain.removeListener('spa:ready', handler)
+        }
+      }
+      pendingHandlers.push(handler)
       ipcMain.on('spa:ready', handler)
     }
 
@@ -52,6 +67,7 @@ export class WindowManager {
     })
 
     win.on('closed', () => {
+      for (const h of pendingHandlers) ipcMain.removeListener('spa:ready', h)
       this.onWindowClosed?.(win)
       this.windows.delete(id)
     })
@@ -94,11 +110,11 @@ export class WindowManager {
     }
   }
 
-  getAll(): WindowInfo[] {
-    return Array.from(this.windows.entries()).map(([id, win]) => ({
-      id,
-      title: win.isDestroyed() ? '' : win.getTitle(),
-    }))
+  getAll(excludeWebContents?: Electron.WebContents): WindowInfo[] {
+    const excludeWin = excludeWebContents ? BrowserWindow.fromWebContents(excludeWebContents) : null
+    return Array.from(this.windows.entries())
+      .filter(([, win]) => !win.isDestroyed() && win !== excludeWin)
+      .map(([id, win]) => ({ id, title: win.getTitle() }))
   }
 
   getAllWindows(): BrowserWindow[] {
@@ -128,5 +144,18 @@ export class WindowManager {
       target.show()
       target.focus()
     }
+  }
+
+  handleTearOffWorkspace(payload: string): void {
+    this.createWindow({ workspaceJson: payload, replace: true })
+  }
+
+  handleMergeWorkspace(payload: string, targetWindowId: string): boolean {
+    const target = this.windows.get(targetWindowId)
+    if (!target || target.isDestroyed()) return false
+    target.webContents.send('workspace:received', payload)
+    target.show()
+    target.focus()
+    return true
   }
 }

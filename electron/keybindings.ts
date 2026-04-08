@@ -8,6 +8,7 @@ export interface KeybindingDef {
   label: string
   menuCategory: 'App' | 'File' | 'Tab' | 'View' | 'Edit'
   menuGroup: MenuGroup
+  hidden?: boolean
 }
 
 const DEFAULT_KEYBINDINGS: readonly KeybindingDef[] = [
@@ -22,6 +23,10 @@ const DEFAULT_KEYBINDINGS: readonly KeybindingDef[] = [
   { action: 'switch-tab-last', accelerator: 'CommandOrControl+9', label: 'Last Tab', menuCategory: 'Tab', menuGroup: 'tab-index' },
   { action: 'prev-tab', accelerator: 'CommandOrControl+Alt+Left', label: 'Previous Tab', menuCategory: 'Tab', menuGroup: 'tab-nav' },
   { action: 'next-tab', accelerator: 'CommandOrControl+Alt+Right', label: 'Next Tab', menuCategory: 'Tab', menuGroup: 'tab-nav' },
+  // Note: Control+Tab may conflict with macOS "Move focus to next window" in some keyboard settings
+  // hidden: true registers the accelerator without showing a duplicate menu item
+  { action: 'next-tab', accelerator: 'Control+Tab', label: 'Next Tab (Ctrl)', menuCategory: 'Tab', menuGroup: 'tab-nav', hidden: true },
+  { action: 'prev-tab', accelerator: 'Control+Shift+Tab', label: 'Previous Tab (Ctrl)', menuCategory: 'Tab', menuGroup: 'tab-nav', hidden: true },
   { action: 'new-tab', accelerator: 'CommandOrControl+T', label: 'New Tab', menuCategory: 'Tab', menuGroup: 'tab-action' },
   { action: 'close-tab', accelerator: 'CommandOrControl+W', label: 'Close Tab', menuCategory: 'Tab', menuGroup: 'tab-action' },
   { action: 'reopen-closed-tab', accelerator: 'CommandOrControl+Shift+T', label: 'Reopen Closed Tab', menuCategory: 'Tab', menuGroup: 'tab-action' },
@@ -60,6 +65,7 @@ export function buildMenuTemplate(
       label: b.label,
       accelerator: b.accelerator,
       click: handler ?? (() => send(b.action)),
+      ...(b.hidden && { visible: false }),
     }
     // Group by menuGroup for ordered submenu assembly
     const groupItems = byGroup.get(b.menuGroup) ?? []

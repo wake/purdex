@@ -427,5 +427,9 @@
   "workspace.migrate_title": "移動現有分頁？",
   "workspace.migrate_description": "您有 {{count}} 個開啟的分頁。要移入「{{name}}」嗎？",
   "workspace.migrate_move": "移入",
-  "workspace.migrate_skip": "跳過"
+  "workspace.migrate_skip": "跳過",
+
+  "workspace.tear_off": "獨立到新視窗",
+  "workspace.merge_to": "合併到視窗",
+  "workspace.merge_loading": "載入中..."
 }

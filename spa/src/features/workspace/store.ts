@@ -22,6 +22,7 @@ interface WorkspaceState {
   renameWorkspace: (wsId: string, name: string) => void
   setWorkspaceIcon: (wsId: string, icon: string) => void
   setWorkspaceIconWeight: (wsId: string, weight: IconWeight) => void
+  importWorkspace: (ws: Workspace) => void
   reset: () => void
 }
 
@@ -196,6 +197,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           workspaces: state.workspaces.map((ws) =>
             ws.id === wsId ? { ...ws, iconWeight: weight } : ws,
           ),
+        })),
+
+      importWorkspace: (ws) =>
+        set((state) => ({
+          workspaces: state.workspaces.some((w) => w.id === ws.id)
+            ? state.workspaces
+            : [...state.workspaces, ws],
         })),
 
       reset: () => set(createDefaultState()),

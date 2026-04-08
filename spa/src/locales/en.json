@@ -427,5 +427,9 @@
   "workspace.migrate_title": "Move Existing Tabs?",
   "workspace.migrate_description": "You have {{count}} open tab(s). Move them into \"{{name}}\"?",
   "workspace.migrate_move": "Move",
-  "workspace.migrate_skip": "Skip"
+  "workspace.migrate_skip": "Skip",
+
+  "workspace.tear_off": "Move to New Window",
+  "workspace.merge_to": "Move to Window",
+  "workspace.merge_loading": "Loading..."
 }
