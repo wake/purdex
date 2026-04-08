@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.0.0-alpha.61] - 2026-04-08
+
+Close-tab workspace scoping 重構 + ActivityBar 間距 (PR #216)
+
+### 重構
+
+- **`closeTabInWorkspace` composite action** — 取代 hook 層 post-close 補丁，在 workspace store 一次完成 recordClose → removeFromWorkspace → closeTab → workspace-scoped active tab 選取（visitHistory 優先 → adjacent fallback）
+- **`closeTab` 簡化** — 移除全域 tabOrder auto-select，只負責刪除 tab + 清理 visitHistory
+- **5 個 caller 統一遷移** — useShortcuts、hooks.ts、TerminatedPane、WorkspaceSettingsPage、host-lifecycle
+- **`destroyBrowserViewIfNeeded` 共用 helper** — 修正 useShortcuts close-tab 缺少 browser view cleanup
+
+### 修正
+
+- **`ws.activeTabId` 同步** — close-tab 後正確同步 workspace 的 activeTabId（修 PR #208 review issue）
+- **`ws.activeTabId` 覆寫** — 關閉非 active tab 不再錯誤覆寫 workspace activeTabId
+- **host-lifecycle undo 還原 workspace** — cascade delete undo 現在同時還原 tab 的 workspace 歸屬
+- **host-lifecycle skipHistory** — cascade delete 不再污染「最近關閉」記錄
+
+### 改善
+
+- **ActivityBar 按鈕尺寸** — 32px → 30px + 容器 px-px，減少側邊欄擠壓
+
+### 測試
+
+- 1045 tests pass / lint clean / build OK
+
 ## [1.0.0-alpha.60] - 2026-04-08
 
 URL history dropdown 對齊修正
