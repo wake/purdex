@@ -17,7 +17,7 @@ export function useShortcuts(): void {
       const activateTab = (tabId: string) => {
         tabState.setActiveTab(tabId)
         const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
-        if (ws) useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabId)
+        if (ws && ws.activeTabId !== tabId) useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabId)
       }
 
       const visibleIds = getVisibleTabIdsShared({
