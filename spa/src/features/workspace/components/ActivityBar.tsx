@@ -57,7 +57,7 @@ export function ActivityBar({
         return (
           <div key={ws.id} className="relative group">
             <button
-              title={ws.name}
+              aria-label={ws.name}
               onClick={() => onSelectWorkspace(ws.id)}
               onContextMenu={(e) => {
                 e.preventDefault()

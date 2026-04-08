@@ -34,20 +34,20 @@ describe('ActivityBar', () => {
 
   it('renders workspace icons', () => {
     render(<ActivityBar {...defaultProps} />)
-    expect(screen.getByTitle('Project A')).toBeTruthy()
-    expect(screen.getByTitle('Server')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Project A' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Server' })).toBeTruthy()
   })
 
   it('highlights active workspace', () => {
     render(<ActivityBar {...defaultProps} />)
-    const activeBtn = screen.getByTitle('Project A')
+    const activeBtn = screen.getByRole('button', { name: 'Project A' })
     expect(activeBtn.className).toContain('ring')
   })
 
   it('calls onSelectWorkspace on click', () => {
     const onSelect = vi.fn()
     render(<ActivityBar {...defaultProps} onSelectWorkspace={onSelect} />)
-    fireEvent.click(screen.getByTitle('Server'))
+    fireEvent.click(screen.getByRole('button', { name: 'Server' }))
     expect(onSelect).toHaveBeenCalledWith('ws-2')
   })
 
