@@ -31,6 +31,7 @@ const DEFAULT_KEYBINDINGS: readonly KeybindingDef[] = [
   { action: 'close-tab', accelerator: 'CommandOrControl+W', label: 'Close Tab', menuCategory: 'Tab', menuGroup: 'tab-action' },
   { action: 'reopen-closed-tab', accelerator: 'CommandOrControl+Shift+T', label: 'Reopen Closed Tab', menuCategory: 'Tab', menuGroup: 'tab-action' },
   { action: 'open-settings', accelerator: 'CommandOrControl+,', label: 'Settings', menuCategory: 'App', menuGroup: 'app' },
+  { action: 'open-hosts', accelerator: 'CommandOrControl+Shift+H', label: 'Hosts', menuCategory: 'View', menuGroup: 'view' },
   { action: 'open-history', accelerator: 'CommandOrControl+Y', label: 'History', menuCategory: 'View', menuGroup: 'view' },
   // Workspace navigation
   { action: 'switch-workspace-1', accelerator: 'CommandOrControl+Alt+1', label: 'Workspace 1', menuCategory: 'Tab', menuGroup: 'workspace-nav' },

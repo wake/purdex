@@ -79,6 +79,12 @@ export function useShortcuts(): void {
         return
       }
 
+      if (action === 'open-hosts') {
+        const tabId = tabState.openSingletonTab({ kind: 'hosts' })
+        useWorkspaceStore.getState().insertTab(tabId)
+        return
+      }
+
       if (action === 'open-history') {
         const tabId = tabState.openSingletonTab({ kind: 'history' })
         useWorkspaceStore.getState().insertTab(tabId)

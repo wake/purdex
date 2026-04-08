@@ -308,6 +308,35 @@ describe('useShortcuts', () => {
     })
   })
 
+  describe('open-hosts', () => {
+    it('opens a hosts singleton tab', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      renderHook(() => useShortcuts())
+
+      fire('open-hosts')
+      const state = useTabStore.getState()
+      const hostsTab = Object.values(state.tabs).find((t) => {
+        const pane = t.layout
+        return pane.type === 'leaf' && pane.pane.content.kind === 'hosts'
+      })
+      expect(hostsTab).toBeDefined()
+      expect(state.activeTabId).toBe(hostsTab!.id)
+    })
+
+    it('adds hosts tab to active workspace', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      renderHook(() => useShortcuts())
+
+      fire('open-hosts')
+      const wsId = useWorkspaceStore.getState().activeWorkspaceId
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)
+      const hostsTabId = useTabStore.getState().activeTabId!
+      expect(ws?.tabs).toContain(hostsTabId)
+    })
+  })
+
   describe('reopen-closed-tab', () => {
     it('reopens the last closed tab', () => {
       const { fire } = mockElectronAPI()
