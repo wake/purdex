@@ -37,6 +37,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     streamSessions: Record<string, Omit<PerSessionState, 'conn'>>
     // Tab data for undo
     closedTabs: Tab[]
+    tabWorkspaces: Record<string, string>  // tabId -> workspaceId
     terminatedTabPaneIds: { tabId: string; paneId: string }[]
   } = {
     host: hostStore.hosts[hostId],
@@ -49,6 +50,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     agentModels: {},
     streamSessions: {},
     closedTabs: [],
+    tabWorkspaces: {},
     terminatedTabPaneIds: [],
   }
 
@@ -87,7 +89,9 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
       })
       if (hasHostPane) {
         snapshot.closedTabs.push(tab)
-        wsStore.closeTabInWorkspace(tabId)
+        const tabWs = wsStore.findWorkspaceByTab(tabId)
+        if (tabWs) snapshot.tabWorkspaces[tabId] = tabWs.id
+        wsStore.closeTabInWorkspace(tabId, { skipHistory: true })
       }
     }
   } else {
@@ -155,6 +159,14 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
         // Only restore if tab wasn't re-created by user during undo window
         if (!ts.tabs[tab.id]) {
           useTabStore.getState().addTab(tab)
+        }
+      }
+      // Restore workspace membership
+      const currentWsStore = useWorkspaceStore.getState()
+      for (const [tabId, wsId] of Object.entries(snapshot.tabWorkspaces)) {
+        const wsExists = currentWsStore.workspaces.some((w) => w.id === wsId)
+        if (wsExists && useTabStore.getState().tabs[tabId]) {
+          useWorkspaceStore.getState().addTabToWorkspace(wsId, tabId)
         }
       }
     } else if (!closeTabs && snapshot.terminatedTabPaneIds.length > 0) {

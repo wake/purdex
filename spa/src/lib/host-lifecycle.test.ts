@@ -5,6 +5,8 @@ import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type AgentHookEvent } from '../stores/useAgentStore'
 import { useStreamStore } from '../stores/useStreamStore'
+import { useHistoryStore } from '../stores/useHistoryStore'
+import { useWorkspaceStore } from '../features/workspace/store'
 import { useUndoToast } from '../stores/useUndoToast'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, scanPaneTree } from './pane-tree'
@@ -38,6 +40,8 @@ function resetAllStores() {
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
   useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, models: {} })
   useStreamStore.setState({ sessions: {}, relayStatus: {}, handoffProgress: {} })
+  useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
+  useWorkspaceStore.getState().reset()
   useUndoToast.setState({ toast: null })
 }
 
@@ -223,6 +227,31 @@ describe('host delete cascade', () => {
     expect(useTabStore.getState().tabs[tabB.id]).toBeDefined()
     expect(useAgentStore.getState().statuses[`${HOST_B}:stg001`]).toBe('running')
     expect(useStreamStore.getState().sessions[`${HOST_B}:stg001`]).toBeDefined()
+  })
+
+  it('cascade (closeTabs=true) does not record to history store', () => {
+    const tab = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(tab)
+
+    deleteHostCascade(HOST_A, true)
+
+    expect(useHistoryStore.getState().closedTabs).toHaveLength(0)
+  })
+
+  it('undo restores workspace membership (closeTabs=true)', () => {
+    const ws = useWorkspaceStore.getState().addWorkspace('Dev WS')
+    const tab = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(tab)
+    useWorkspaceStore.getState().addTabToWorkspace(ws.id, tab.id)
+    expect(useWorkspaceStore.getState().findWorkspaceByTab(tab.id)).not.toBeNull()
+
+    const restore = deleteHostCascade(HOST_A, true)
+    expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
+    expect(useWorkspaceStore.getState().findWorkspaceByTab(tab.id)).toBeNull()
+
+    restore()
+    expect(useTabStore.getState().tabs[tab.id]).toBeDefined()
+    expect(useWorkspaceStore.getState().findWorkspaceByTab(tab.id)?.id).toBe(ws.id)
   })
 })
 
