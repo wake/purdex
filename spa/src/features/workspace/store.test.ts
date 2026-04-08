@@ -491,5 +491,13 @@ describe('useWorkspaceStore', () => {
       expect(result.icon).toBe('Code')
       expect(result.iconWeight).toBe('bold')
     })
+
+    it('deduplicates by id — importing same id twice is a no-op', () => {
+      const ws: Workspace = { id: 'dedup-1', name: 'First', tabs: [], activeTabId: null }
+      useWorkspaceStore.getState().importWorkspace(ws)
+      useWorkspaceStore.getState().importWorkspace({ ...ws, name: 'Duplicate' })
+      expect(useWorkspaceStore.getState().workspaces).toHaveLength(1)
+      expect(useWorkspaceStore.getState().workspaces[0].name).toBe('First')
+    })
   })
 })

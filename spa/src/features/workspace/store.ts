@@ -201,7 +201,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       importWorkspace: (ws) =>
         set((state) => ({
-          workspaces: [...state.workspaces, ws],
+          workspaces: state.workspaces.some((w) => w.id === ws.id)
+            ? state.workspaces
+            : [...state.workspaces, ws],
         })),
 
       reset: () => set(createDefaultState()),

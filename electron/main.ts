@@ -36,8 +36,8 @@ function registerIpcHandlers(): void {
   ipcMain.handle('window:merge-workspace', (_event, payload: string, targetWindowId: string) => {
     windowManager.handleMergeWorkspace(payload, targetWindowId)
   })
-  ipcMain.handle('window:get-all', () => {
-    return windowManager.getAll()
+  ipcMain.handle('window:get-all', (event) => {
+    return windowManager.getAll(event.sender)
   })
 
   // Browser View — delegated to browser-view-ipc.ts

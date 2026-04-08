@@ -105,11 +105,11 @@ export class WindowManager {
     }
   }
 
-  getAll(): WindowInfo[] {
-    return Array.from(this.windows.entries()).map(([id, win]) => ({
-      id,
-      title: win.isDestroyed() ? '' : win.getTitle(),
-    }))
+  getAll(excludeWebContents?: Electron.WebContents): WindowInfo[] {
+    const excludeWin = excludeWebContents ? BrowserWindow.fromWebContents(excludeWebContents) : null
+    return Array.from(this.windows.entries())
+      .filter(([, win]) => !win.isDestroyed() && win !== excludeWin)
+      .map(([id, win]) => ({ id, title: win.getTitle() }))
   }
 
   getAllWindows(): BrowserWindow[] {
