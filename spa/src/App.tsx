@@ -302,7 +302,11 @@ export default function App() {
           onSelectHome={() => {
             useWorkspaceStore.getState().setActiveWorkspace(null)
             const firstStandalone = standaloneTabs[0]
-            if (firstStandalone) handleSelectTab(firstStandalone.id)
+            if (firstStandalone) {
+              handleSelectTab(firstStandalone.id)
+            } else {
+              useTabStore.getState().setActiveTab(null)
+            }
           }}
           standaloneTabCount={standaloneTabs.length}
           onAddWorkspace={() => {

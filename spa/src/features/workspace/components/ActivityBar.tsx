@@ -55,22 +55,26 @@ export function ActivityBar({
       {workspaces.map((ws) => {
         const isActive = activeWorkspaceId === ws.id && !activeStandaloneTabId
         return (
-          <button
-            key={ws.id}
-            title={ws.name}
-            onClick={() => onSelectWorkspace(ws.id)}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              onContextMenuWorkspace?.(e, ws.id)
-            }}
-            className={`w-[30px] h-[30px] rounded-md flex items-center justify-center text-sm cursor-pointer transition-all ${
-              isActive
-                ? 'bg-[#8b5cf6]/35 text-text-primary ring-2 ring-purple-400'
-                : 'bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary'
-            }`}
-          >
-            <WorkspaceIcon icon={ws.icon} name={ws.name} size={16} weight={ws.iconWeight} />
-          </button>
+          <div key={ws.id} className="relative group">
+            <button
+              title={ws.name}
+              onClick={() => onSelectWorkspace(ws.id)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                onContextMenuWorkspace?.(e, ws.id)
+              }}
+              className={`w-[30px] h-[30px] rounded-md flex items-center justify-center text-sm cursor-pointer transition-all ${
+                isActive
+                  ? 'bg-[#8b5cf6]/35 text-text-primary ring-2 ring-purple-400'
+                  : 'bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary'
+              }`}
+            >
+              <WorkspaceIcon icon={ws.icon} name={ws.name} size={16} weight={ws.iconWeight} />
+            </button>
+            <span className="pointer-events-none absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-surface-secondary border border-border-default px-2 py-1 text-xs text-text-primary shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-50">
+              {ws.name}
+            </span>
+          </div>
         )
       })}
 
