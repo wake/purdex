@@ -388,7 +388,7 @@ MODULE_CONFIG: 'purdex-module-config',
 // spa/src/stores/useModuleConfigStore.ts
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { browserStorage } from '../lib/storage'
+import { purdexStorage } from '../lib/storage'
 import { STORAGE_KEYS } from '../lib/storage/keys'
 
 interface ModuleConfigState {
@@ -419,7 +419,7 @@ export const useModuleConfigStore = create<ModuleConfigState>()(
     }),
     {
       name: STORAGE_KEYS.MODULE_CONFIG,
-      storage: browserStorage,
+      storage: purdexStorage,
       version: 1,
     },
   ),
@@ -666,7 +666,23 @@ registerModule({
 
 更新 `spa/src/components/FileTreeView.test.tsx` 和 `spa/src/lib/register-modules.test.ts`，修正因 view id 從 `'file-tree'` 改為 `'file-tree-workspace'` / `'file-tree-session'` 造成的失敗。
 
-同時檢查 `spa/src/main.tsx` 是否有 hardcoded `'file-tree'` view id 需要更新。
+**必須修改 `spa/src/main.tsx`**：將 hardcoded `'file-tree'` view ID 更新為新 ID：
+
+```typescript
+// spa/src/main.tsx — 將原本的:
+useLayoutStore.getState().setRegionViews('primary-panel', ['file-tree'])
+useLayoutStore.getState().setActiveView('primary-panel', 'file-tree')
+
+// 改為:
+useLayoutStore.getState().setRegionViews('primary-panel', ['file-tree-session'])
+useLayoutStore.getState().setActiveView('primary-panel', 'file-tree-session')
+// 同時新增 sidebar 的初始化:
+const sidebarState = useLayoutStore.getState().regions['primary-sidebar']
+if (sidebarState.views.length === 0) {
+  useLayoutStore.getState().setRegionViews('primary-sidebar', ['file-tree-workspace'])
+  useLayoutStore.getState().setActiveView('primary-sidebar', 'file-tree-workspace')
+}
+```
 
 - [ ] **Step 5: 執行測試確認通過**
 
@@ -676,7 +692,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add spa/src/components/FileTreeView.tsx spa/src/components/FileTreeSessionView.tsx spa/src/lib/register-modules.tsx spa/src/components/FileTreeView.test.tsx spa/src/lib/register-modules.test.ts
+git add spa/src/components/FileTreeView.tsx spa/src/components/FileTreeSessionView.tsx spa/src/lib/register-modules.tsx spa/src/components/FileTreeView.test.tsx spa/src/lib/register-modules.test.ts spa/src/main.tsx
 git commit -m "feat: split files module into workspace and session views"
 ```
 
@@ -1171,11 +1187,14 @@ if (showHeader) {
 }
 ```
 
-注意：需要在 `useTabStore` 中確認是否有 `setTabLayout` action。如果沒有，需新增一個簡單的 setter：
+- [ ] **Step 4b: 新增 `setTabLayout` action（`useTabStore` 中不存在此 action，必須新增）**
 
 ```typescript
-// useTabStore — 如果不存在 setTabLayout:
-setTabLayout: (tabId: string, layout: PaneLayout) =>
+// spa/src/stores/useTabStore.ts — TabState interface 新增:
+setTabLayout: (tabId: string, layout: PaneLayout) => void
+
+// 實作（在 applyLayout 附近）:
+setTabLayout: (tabId, layout) =>
   set((state) => {
     const tab = state.tabs[tabId]
     if (!tab) return state
@@ -1324,13 +1343,16 @@ git commit -m "feat: grid-4 synchronized horizontal splitter resize"
 - [ ] **Step 1: 寫測試**
 
 ```typescript
-// spa/src/components/TabContextMenu.test.tsx — 追加
+// spa/src/components/TabContextMenu.test.tsx — 追加（import applyLayoutPattern from pane-tree）
 
 it('shows mergeToTab submenu when targetTabs are provided', () => {
   const targetTab = createTab({ kind: 'dashboard' })
   const splitLayout = applyLayoutPattern(targetTab.layout, 'split-h')
   const targetTabWithSplit = { ...targetTab, layout: splitLayout }
 
+  // 使用現有的 renderMenu helper 並加入 targetTabs
+  const props = renderMenu()
+  cleanup()
   render(
     <TabContextMenu
       {...props}
@@ -1342,7 +1364,7 @@ it('shows mergeToTab submenu when targetTabs are provided', () => {
 })
 
 it('does not show mergeToTab when no targetTabs', () => {
-  render(<TabContextMenu {...props} />)
+  renderMenu()
   expect(screen.queryByText(/加入.*成為 pane/i)).toBeNull()
 })
 ```
