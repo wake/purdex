@@ -18,7 +18,7 @@ describe('useUploadStore', () => {
     expect(s.currentFile).toBe('a.png')
   })
 
-  it('fileCompleted increments count and sets done when all complete', () => {
+  it('fileCompleted increments count and sets typing when all complete', () => {
     useUploadStore.getState().startUpload(H, 'dev', 2, 'a.png')
     useUploadStore.getState().fileCompleted(H, 'dev')
     expect(useUploadStore.getState().sessions[`${H}:dev`].completed).toBe(1)
@@ -26,6 +26,14 @@ describe('useUploadStore', () => {
 
     useUploadStore.getState().fileCompleted(H, 'dev')
     expect(useUploadStore.getState().sessions[`${H}:dev`].completed).toBe(2)
+    expect(useUploadStore.getState().sessions[`${H}:dev`].status).toBe('typing')
+  })
+
+  it('setDone transitions typing to done', () => {
+    useUploadStore.getState().startUpload(H, 'dev', 1, 'a.png')
+    useUploadStore.getState().fileCompleted(H, 'dev')
+    expect(useUploadStore.getState().sessions[`${H}:dev`].status).toBe('typing')
+    useUploadStore.getState().setDone(H, 'dev')
     expect(useUploadStore.getState().sessions[`${H}:dev`].status).toBe('done')
   })
 
@@ -57,7 +65,8 @@ describe('useUploadStore', () => {
 
   it('dismiss clears done/error state', () => {
     useUploadStore.getState().startUpload(H, 'dev', 1, 'a.png')
-    useUploadStore.getState().fileCompleted(H, 'dev') // status → done
+    useUploadStore.getState().fileCompleted(H, 'dev') // status → typing
+    useUploadStore.getState().setDone(H, 'dev') // status → done
     useUploadStore.getState().dismiss(H, 'dev')
     expect(useUploadStore.getState().sessions[`${H}:dev`]).toBeUndefined()
   })
@@ -67,5 +76,14 @@ describe('useUploadStore', () => {
     useUploadStore.getState().dismiss(H, 'dev')
     expect(useUploadStore.getState().sessions[`${H}:dev`]).toBeDefined()
     expect(useUploadStore.getState().sessions[`${H}:dev`].status).toBe('uploading')
+  })
+
+  it('dismiss does not clear typing state', () => {
+    useUploadStore.getState().startUpload(H, 'dev', 1, 'a.png')
+    useUploadStore.getState().fileCompleted(H, 'dev')
+    expect(useUploadStore.getState().sessions[`${H}:dev`].status).toBe('typing')
+    useUploadStore.getState().dismiss(H, 'dev')
+    expect(useUploadStore.getState().sessions[`${H}:dev`]).toBeDefined()
+    expect(useUploadStore.getState().sessions[`${H}:dev`].status).toBe('typing')
   })
 })

@@ -99,7 +99,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   }
 
   return (
-    <div className={`flex items-center px-1 flex-shrink-0 ${embedded ? 'h-full' : 'bg-surface-secondary border-b border-border-subtle'}`} style={embedded ? undefined : { height: 41 }}>
+    <div className={`flex items-center px-1 ${embedded ? 'h-full flex-1 min-w-0' : 'flex-shrink-0 bg-surface-secondary border-b border-border-subtle'}`} style={embedded ? undefined : { height: 41 }}>
       <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToTabZone]} onDragEnd={handleDragEnd}>
         {/* Pinned zone */}
         {pinnedTabs.length > 0 && (
@@ -140,7 +140,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
             </button>
           )}
           <div ref={normalZoneRef} className="flex items-center h-full overflow-x-auto scrollbar-hide">
-            <div ref={normalTabsRef} className="flex items-center h-full">
+            <div ref={normalTabsRef} className="flex items-center h-full flex-1" style={{ minWidth: 'min-content' }}>
               <SortableContext items={normalIds} strategy={horizontalListSortingStrategy}>
                 {normalTabs.map((tab, i) => (
                   <Fragment key={tab.id}>

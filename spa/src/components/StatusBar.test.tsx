@@ -110,6 +110,17 @@ describe('StatusBar upload progress', () => {
     expect(screen.getByText(/2\/5/)).toBeTruthy()
   })
 
+  it('shows typing status after upload completes', () => {
+    const ck = compositeKey(HOST_ID, 'dev001')
+    useUploadStore.setState({
+      sessions: { [ck]: { total: 2, completed: 2, failed: 0, currentFile: '', status: 'typing' } },
+    })
+    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTestId('upload-status')).toBeTruthy()
+    expect(screen.getByText('Typing into session...')).toBeTruthy()
+  })
+
   it('shows upload done', () => {
     const ck = compositeKey(HOST_ID, 'dev001')
     useUploadStore.setState({

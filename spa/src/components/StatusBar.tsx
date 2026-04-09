@@ -24,8 +24,16 @@ const VIEW_MODE_COLORS: Record<string, string> = {
 function UploadStatus({ hostId, sessionCode, t }: { hostId: string | null; sessionCode: string | null; t: (key: string, params?: Record<string, string | number>) => string }) {
   const ck = hostId && sessionCode ? compositeKey(hostId, sessionCode) : null
   const uploadState = useUploadStore((s) => ck ? s.sessions[ck] : undefined)
+  const setDone = useUploadStore((s) => s.setDone)
   const dismiss = useUploadStore((s) => s.dismiss)
   const uploadStatus = uploadState?.status
+
+  // Auto-transition "typing" → "done" after 1.5 seconds
+  useEffect(() => {
+    if (uploadStatus !== 'typing' || !hostId || !sessionCode) return
+    const timer = setTimeout(() => setDone(hostId, sessionCode), 1500)
+    return () => clearTimeout(timer)
+  }, [uploadStatus, hostId, sessionCode, setDone])
 
   // Auto-dismiss "done" after 3 seconds
   useEffect(() => {
@@ -48,6 +56,15 @@ function UploadStatus({ hostId, sessionCode, t }: { hostId: string | null; sessi
       <span className="flex items-center gap-1 text-yellow-400" data-testid="upload-status">
         <CircleNotch size={12} className="animate-spin" />
         <span>{t('upload.uploading', { file: uploadState.currentFile, current: uploadState.completed + 1, total: uploadState.total })}</span>
+      </span>
+    )
+  }
+
+  if (uploadState.status === 'typing') {
+    return (
+      <span className="flex items-center gap-1 text-blue-400" data-testid="upload-status">
+        <CircleNotch size={12} className="animate-spin" />
+        <span>{t('upload.typing')}</span>
       </span>
     )
   }

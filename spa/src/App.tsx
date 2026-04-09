@@ -277,8 +277,8 @@ export default function App() {
           >
             {/* Traffic light safe zone (78px ≈ 3 buttons + padding) */}
             <div className="shrink-0" style={{ width: 78 }} />
-            {/* Tabs — no-drag so clicks work */}
-            <div className="flex items-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+            {/* Tabs — no-drag so clicks work; flex-1 min-w-0 constrains width to prevent app-wide overflow */}
+            <div className="flex-1 min-w-0 flex items-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
               <TabBar
                 tabs={displayTabs}
                 activeTabId={activeTabId}

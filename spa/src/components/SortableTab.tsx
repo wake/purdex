@@ -112,10 +112,11 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   // Prevent focus theft when clicking the already-active tab.
   // Must wrap dnd-kit's onPointerDown to avoid overriding it.
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (isActive) e.preventDefault()
-    // Forward to dnd-kit's listener so drag still works
+    // Forward to dnd-kit FIRST — dnd-kit checks nativeEvent.defaultPrevented
+    // and silently aborts if true, so we must call it before preventDefault.
     const dndHandler = listeners?.onPointerDown as ((e: React.PointerEvent) => void) | undefined
     dndHandler?.(e)
+    if (isActive) e.preventDefault()
   }
 
   const handleMouseEnter = () => onHover?.(tab.id)

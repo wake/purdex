@@ -7,7 +7,7 @@ interface SessionUploadState {
   failed: number
   currentFile: string
   error?: string
-  status: 'uploading' | 'done' | 'error'
+  status: 'uploading' | 'typing' | 'done' | 'error'
 }
 
 interface UploadState {
@@ -16,6 +16,7 @@ interface UploadState {
   fileCompleted: (hostId: string, sessionCode: string) => void
   fileFailed: (hostId: string, sessionCode: string, filename: string) => void
   nextFile: (hostId: string, sessionCode: string, filename: string) => void
+  setDone: (hostId: string, sessionCode: string) => void
   dismiss: (hostId: string, sessionCode: string) => void
 }
 
@@ -45,7 +46,7 @@ export const useUploadStore = create<UploadState>((set) => ({
           [key]: {
             ...prev,
             completed,
-            status: allDone ? (prev.failed > 0 ? 'error' : 'done') : 'uploading',
+            status: allDone ? (prev.failed > 0 ? 'error' : 'typing') : 'uploading',
           },
         },
       }
@@ -84,12 +85,24 @@ export const useUploadStore = create<UploadState>((set) => ({
     })
   },
 
+  setDone: (hostId, sessionCode) => {
+    const key = compositeKey(hostId, sessionCode)
+    set((s) => {
+      const prev = s.sessions[key]
+      if (!prev || prev.status !== 'typing') return s
+      return {
+        sessions: { ...s.sessions, [key]: { ...prev, status: 'done' } },
+      }
+    })
+  },
+
   dismiss: (hostId, sessionCode) => {
     const key = compositeKey(hostId, sessionCode)
     set((s) => {
       const prev = s.sessions[key]
-      // Don't dismiss while uploading — prevents concurrent drop from corrupting state.
-      if (prev?.status === 'uploading') return s
+      // Don't dismiss while uploading or typing — prevents concurrent drop from
+      // corrupting state and ensures the typing→done transition completes.
+      if (prev?.status === 'uploading' || prev?.status === 'typing') return s
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { [key]: _, ...rest } = s.sessions
       return { sessions: rest }
