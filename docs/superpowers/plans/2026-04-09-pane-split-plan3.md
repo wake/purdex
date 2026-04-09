@@ -35,6 +35,14 @@
 | Create | `spa/src/components/FileTreeView.tsx` | File tree sidebar view |
 | Create | `spa/src/components/FileTreeView.test.tsx` | Tests |
 | Modify | `spa/src/lib/register-modules.tsx` | Register files module with FileTreeView |
+| Create | `spa/src/components/PaneHeader.tsx` | Pane header bar with close/detach buttons |
+| Create | `spa/src/components/PaneHeader.test.tsx` | Tests |
+| Modify | `spa/src/components/TabContent.tsx` | Pass tabId to PaneLayoutRenderer |
+
+**Not in scope (deferred):**
+- `attachToTab` — cross-tab merge operation, needs target-selection UI (future)
+- Per-workspace sidebar overrides — spec 3.4, no store wiring yet
+- Pane drag-to-split (Phase 2) / Pane drag-swap (Phase 3)
 
 ---
 
@@ -848,12 +856,32 @@ Add to `spa/src/components/PaneLayoutRenderer.test.tsx`:
   })
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 2: Update existing tests and TabContent.tsx to pass tabId**
+
+**Before** implementing, update all existing `PaneLayoutRenderer` call sites:
+
+In `spa/src/components/TabContent.tsx` line 40, change:
+```tsx
+<PaneLayoutRenderer layout={tab.layout} isActive={isActive} />
+```
+to:
+```tsx
+<PaneLayoutRenderer layout={tab.layout} tabId={id} isActive={isActive} />
+```
+
+In `spa/src/components/PaneLayoutRenderer.test.tsx`, update ALL existing test renders to include `tabId="t1"`:
+```tsx
+// Every existing <PaneLayoutRenderer layout={layout} isActive={...} />
+// becomes:
+<PaneLayoutRenderer layout={layout} tabId="t1" isActive={...} />
+```
+
+- [ ] **Step 3: Run tests to verify new split tests fail, existing tests still pass**
 
 Run: `cd spa && npx vitest run src/components/PaneLayoutRenderer.test.tsx`
-Expected: FAIL — new test expects `tabId` prop which doesn't exist yet, and both children should render
+Expected: New split tests FAIL (both children not rendered), existing tests PASS with tabId
 
-- [ ] **Step 3: Implement split rendering**
+- [ ] **Step 4: Implement split rendering**
 
 Rewrite `spa/src/components/PaneLayoutRenderer.tsx`:
 
@@ -928,12 +956,6 @@ export function PaneLayoutRenderer({ layout, tabId, isActive }: Props) {
   )
 }
 ```
-
-- [ ] **Step 4: Update callers of PaneLayoutRenderer to pass tabId**
-
-In `spa/src/components/TabContent.tsx`, find where `PaneLayoutRenderer` is called and add `tabId` prop. Search for `<PaneLayoutRenderer` and add `tabId={tab.id}` (or similar — the active tab's id).
-
-Also update existing tests in `PaneLayoutRenderer.test.tsx` to include `tabId="t1"` prop.
 
 - [ ] **Step 5: Run all tests**
 
@@ -1142,8 +1164,11 @@ interface Props {
   onSelect: (content: PaneContent) => void
 }
 
+// Only kinds that need no extra parameters (no hostId, url, etc.)
+const SIMPLE_KINDS = new Set(['dashboard', 'history', 'hosts', 'memory-monitor'])
+
 export function NewPanePage({ onSelect }: Props) {
-  const paneModules = getModules().filter((m) => m.pane)
+  const paneModules = getModules().filter((m) => m.pane && SIMPLE_KINDS.has(m.pane.kind))
 
   return (
     <div className="flex-1 flex flex-col items-center justify-center p-8">
@@ -1361,6 +1386,12 @@ const mockEntries = [
 
 beforeEach(() => {
   vi.restoreAllMocks()
+  // Must set host state — FileTreeView reads baseUrl from useHostStore
+  const { useHostStore } = await import('../stores/useHostStore')
+  useHostStore.setState({
+    hostOrder: ['test-host'],
+    hosts: { 'test-host': { id: 'test-host', name: 'Test', url: 'http://localhost:7860', status: 'connected' } } as any,
+  })
 })
 
 describe('FileTreeView', () => {
@@ -1586,14 +1617,17 @@ Add inside `registerBuiltinModules()`, after the existing module registrations:
 
 - [ ] **Step 4: Wire FileTreeView to Layout Store on startup**
 
-In `spa/src/main.tsx` (or wherever `registerBuiltinModules` is called), after registration, set the region views:
+In `spa/src/main.tsx`, after `registerBuiltinModules()`, set default region views **only if empty** (to not overwrite persisted state):
 
 ```tsx
 import { useLayoutStore } from './stores/useLayoutStore'
 
 // After registerBuiltinModules():
-useLayoutStore.getState().setRegionViews('primary-panel', ['file-tree'])
-useLayoutStore.getState().setActiveView('primary-panel', 'file-tree')
+const panelState = useLayoutStore.getState().regions['primary-panel']
+if (panelState.views.length === 0) {
+  useLayoutStore.getState().setRegionViews('primary-panel', ['file-tree'])
+  useLayoutStore.getState().setActiveView('primary-panel', 'file-tree')
+}
 ```
 
 - [ ] **Step 5: Run tests**
@@ -1613,19 +1647,154 @@ git commit -m "feat: add Files Module with FileTreeView sidebar view"
 
 ---
 
+### Task 9: PaneHeader (Close / Detach UI)
+
+**Files:**
+- Create: `spa/src/components/PaneHeader.tsx`
+- Create: `spa/src/components/PaneHeader.test.tsx`
+- Modify: `spa/src/components/PaneLayoutRenderer.tsx`
+
+- [ ] **Step 1: Write failing tests**
+
+Create `spa/src/components/PaneHeader.test.tsx`:
+
+```tsx
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { PaneHeader } from './PaneHeader'
+
+describe('PaneHeader', () => {
+  it('renders close button', () => {
+    render(<PaneHeader title="Dashboard" onClose={vi.fn()} />)
+    expect(screen.getByTitle('Close pane')).toBeTruthy()
+  })
+
+  it('calls onClose when close button clicked', () => {
+    const onClose = vi.fn()
+    render(<PaneHeader title="Dashboard" onClose={onClose} />)
+    fireEvent.click(screen.getByTitle('Close pane'))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders detach button when onDetach is provided', () => {
+    render(<PaneHeader title="Dashboard" onClose={vi.fn()} onDetach={vi.fn()} />)
+    expect(screen.getByTitle('Detach to tab')).toBeTruthy()
+  })
+
+  it('does not render detach button when onDetach is not provided', () => {
+    render(<PaneHeader title="Dashboard" onClose={vi.fn()} />)
+    expect(screen.queryByTitle('Detach to tab')).toBeNull()
+  })
+
+  it('hides header when isSinglePane is true', () => {
+    const { container } = render(
+      <PaneHeader title="Dashboard" onClose={vi.fn()} isSinglePane={true} />
+    )
+    expect(container.innerHTML).toBe('')
+  })
+})
+```
+
+- [ ] **Step 2: Implement PaneHeader**
+
+Create `spa/src/components/PaneHeader.tsx`:
+
+```tsx
+import { X, ArrowSquareOut } from '@phosphor-icons/react'
+
+interface Props {
+  title: string
+  onClose: () => void
+  onDetach?: () => void
+  isSinglePane?: boolean
+}
+
+export function PaneHeader({ title, onClose, onDetach, isSinglePane }: Props) {
+  if (isSinglePane) return null
+
+  return (
+    <div className="shrink-0 flex items-center h-6 px-2 bg-surface-secondary border-b border-border-subtle">
+      <span className="flex-1 text-xs text-text-muted truncate">{title}</span>
+      <div className="flex items-center gap-0.5">
+        {onDetach && (
+          <button
+            className="p-0.5 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors"
+            title="Detach to tab"
+            onClick={onDetach}
+          >
+            <ArrowSquareOut size={12} />
+          </button>
+        )}
+        <button
+          className="p-0.5 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors"
+          title="Close pane"
+          onClick={onClose}
+        >
+          <X size={12} />
+        </button>
+      </div>
+    </div>
+  )
+}
+```
+
+- [ ] **Step 3: Integrate PaneHeader into PaneLayoutRenderer**
+
+In `PaneLayoutRenderer.tsx`, wrap each leaf pane render with `PaneHeader`:
+
+```tsx
+import { PaneHeader } from './PaneHeader'
+import { countLeaves } from '../lib/pane-tree'
+
+// Inside the leaf branch, after getting Component:
+const isSinglePane = /* pass from parent or check layout context */
+const paneTitle = config.kind // or a better display name
+
+return (
+  <div className="flex-1 flex flex-col overflow-hidden">
+    <PaneHeader
+      title={layout.pane.content.kind}
+      isSinglePane={isSinglePane}
+      onClose={() => useTabStore.getState().closePane(tabId, layout.pane.id)}
+      onDetach={() => useTabStore.getState().detachPane(tabId, layout.pane.id)}
+    />
+    <Component pane={layout.pane} isActive={isActive} />
+  </div>
+)
+```
+
+Pass `isSinglePane` by checking `layout === rootLayout` or adding a prop. Simplest: pass a `showPaneHeader` boolean prop from the split branch (true when there are siblings).
+
+- [ ] **Step 4: Run tests**
+
+Run: `cd spa && npx vitest run src/components/PaneHeader.test.tsx`
+Expected: All PASS
+
+Run: `cd spa && npx vitest run`
+Expected: All PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add spa/src/components/PaneHeader.tsx spa/src/components/PaneHeader.test.tsx spa/src/components/PaneLayoutRenderer.tsx
+git commit -m "feat: add PaneHeader with close/detach buttons for split panes"
+```
+
+---
+
 ## Execution Order
 
 ```
 Task 1 (pane-tree utils)
   └─► Task 2 (Tab Store actions)
-        ├─► Task 4 (PaneLayoutRenderer) ◄── Task 3 (PaneSplitter)
+        ├─► Task 3 (PaneSplitter) ─► Task 4 (PaneLayoutRenderer) ─► Task 9 (PaneHeader)
         └─► Task 5 (TitleBar wiring)
 Task 6 (New Pane Page) — independent
 Task 7 (Daemon files) → Task 8 (FileTreeView)
 ```
 
 **Parallelizable groups:**
-- Group A: Tasks 1 → 2 → 3 → 4 → 5 (critical path)
+- Group A: Tasks 1 → 2 → 3 → 4 → 9 → 5 (critical path)
 - Group B: Task 6 (independent)
 - Group C: Tasks 7 → 8 (daemon + SPA)
 
