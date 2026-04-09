@@ -501,6 +501,29 @@ describe('useWorkspaceStore', () => {
     })
   })
 
+  describe('insertTab with afterTabId', () => {
+    it('inserts tab after specified tab in workspace', () => {
+      useWorkspaceStore.getState().addWorkspace('test')
+      const wsId = useWorkspaceStore.getState().workspaces[0].id
+      useWorkspaceStore.getState().insertTab('a', wsId)
+      useWorkspaceStore.getState().insertTab('b', wsId)
+      useWorkspaceStore.getState().insertTab('c', wsId)
+      // Insert 'x' after 'a'
+      useWorkspaceStore.getState().insertTab('x', wsId, 'a')
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)!
+      expect(ws.tabs).toEqual(['a', 'x', 'b', 'c'])
+    })
+
+    it('appends if afterTabId not found in workspace', () => {
+      useWorkspaceStore.getState().addWorkspace('test')
+      const wsId = useWorkspaceStore.getState().workspaces[0].id
+      useWorkspaceStore.getState().insertTab('a', wsId)
+      useWorkspaceStore.getState().insertTab('x', wsId, 'missing')
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)!
+      expect(ws.tabs).toEqual(['a', 'x'])
+    })
+  })
+
   describe('setModuleConfig', () => {
     it('sets a module config value on a workspace', () => {
       const { workspaces } = useWorkspaceStore.getState()
