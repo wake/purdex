@@ -1,4 +1,4 @@
-import type { PaneRendererProps } from '../lib/pane-registry'
+import type { PaneRendererProps } from '../lib/module-registry'
 import { useI18nStore } from '../stores/useI18nStore'
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

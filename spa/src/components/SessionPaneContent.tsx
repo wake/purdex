@@ -9,7 +9,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { handoff, fetchWsTicket } from '../lib/host-api'
 import { useHostStore } from '../stores/useHostStore'
 import { findPane } from '../lib/pane-tree'
-import type { PaneRendererProps } from '../lib/pane-registry'
+import type { PaneRendererProps } from '../lib/module-registry'
 
 const EMPTY_PRESETS: Array<{ name: string; command: string }> = []
 

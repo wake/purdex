@@ -1,4 +1,4 @@
-import { registerPaneRenderer } from './pane-registry'
+import { registerModule } from './module-registry'
 import { registerNewTabProvider } from './new-tab-registry'
 import { registerSettingsSection } from './settings-section-registry'
 import { findPane } from './pane-tree'
@@ -21,38 +21,73 @@ import { DevEnvironmentSection } from '../components/settings/DevEnvironmentSect
 import { useTabStore } from '../stores/useTabStore'
 import type { PaneContent } from '../types/tab'
 
-export function registerBuiltinPanes(): void {
-  // Pane renderers
-  registerPaneRenderer('new-tab', {
-    component: ({ pane }) => {
-      const handleSelect = (content: PaneContent) => {
-        const { tabs } = useTabStore.getState()
-        // Find which tab contains this pane (not necessarily activeTabId)
-        const tabId = Object.keys(tabs).find((id) =>
-          findPane(tabs[id].layout, pane.id) !== undefined,
-        )
-        if (!tabId) return
-        useTabStore.getState().setPaneContent(tabId, pane.id, content)
-        useTabStore.getState().setActiveTab(tabId)
-      }
-      return <NewTabPage onSelect={handleSelect} />
+export function registerBuiltinModules(): void {
+  // Modules with pane renderers
+  registerModule({
+    id: 'new-tab',
+    name: 'New Tab',
+    pane: {
+      kind: 'new-tab',
+      component: ({ pane }) => {
+        const handleSelect = (content: PaneContent) => {
+          const { tabs } = useTabStore.getState()
+          // Find which tab contains this pane (not necessarily activeTabId)
+          const tabId = Object.keys(tabs).find((id) =>
+            findPane(tabs[id].layout, pane.id) !== undefined,
+          )
+          if (!tabId) return
+          useTabStore.getState().setPaneContent(tabId, pane.id, content)
+          useTabStore.getState().setActiveTab(tabId)
+        }
+        return <NewTabPage onSelect={handleSelect} />
+      },
     },
   })
-  registerPaneRenderer('tmux-session', { component: SessionPaneContent })
-  registerPaneRenderer('dashboard', { component: DashboardPage })
-  registerPaneRenderer('history', { component: HistoryPage })
-  registerPaneRenderer('settings', { component: SettingsPage })
-  registerPaneRenderer('browser', {
-    component: ({ pane }) => {
-      const content = pane.content
-      if (content.kind !== 'browser') return null
-      return <BrowserPane paneId={pane.id} url={content.url} />
+  registerModule({
+    id: 'session',
+    name: 'Session',
+    pane: { kind: 'tmux-session', component: SessionPaneContent },
+  })
+  registerModule({
+    id: 'dashboard',
+    name: 'Dashboard',
+    pane: { kind: 'dashboard', component: DashboardPage },
+  })
+  registerModule({
+    id: 'history',
+    name: 'History',
+    pane: { kind: 'history', component: HistoryPage },
+  })
+  registerModule({
+    id: 'settings',
+    name: 'Settings',
+    pane: { kind: 'settings', component: SettingsPage },
+  })
+  registerModule({
+    id: 'browser',
+    name: 'Browser',
+    pane: {
+      kind: 'browser',
+      component: ({ pane }) => {
+        const content = pane.content
+        if (content.kind !== 'browser') return null
+        return <BrowserPane paneId={pane.id} url={content.url} />
+      },
     },
   })
-  registerPaneRenderer('memory-monitor', {
-    component: () => <MemoryMonitorPage />,
+  registerModule({
+    id: 'memory-monitor',
+    name: 'Memory Monitor',
+    pane: {
+      kind: 'memory-monitor',
+      component: () => <MemoryMonitorPage />,
+    },
   })
-  registerPaneRenderer('hosts', { component: HostPage })
+  registerModule({
+    id: 'hosts',
+    name: 'Hosts',
+    pane: { kind: 'hosts', component: HostPage },
+  })
 
   // Settings sections
   registerSettingsSection({ id: 'appearance', label: 'settings.section.appearance', order: 0, component: AppearanceSection })

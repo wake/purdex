@@ -11,6 +11,7 @@ import {
 } from './module-registry'
 import type { ModuleDefinition } from './module-registry'
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const DummyComponent = (() => null) as React.FC<any>
 
 const sessionModule: ModuleDefinition = {

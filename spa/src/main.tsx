@@ -4,14 +4,14 @@ import './index.css'
 import App from './App.tsx'
 import { registerBuiltinLocales } from './lib/register-locales'
 import { registerBuiltinThemes } from './lib/register-themes'
-import { registerBuiltinPanes } from './lib/register-panes'
+import { registerBuiltinModules } from './lib/register-modules'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
 
 registerBuiltinLocales()
 registerBuiltinThemes()
-registerBuiltinPanes()
+registerBuiltinModules()
 
 // Cross-store subscription: auto-markRead when active tab changes to a session.
 // Inlined here to avoid circular dependency between active-session.ts and useAgentStore.
