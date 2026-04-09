@@ -3,6 +3,8 @@ import { useLayoutStore } from '../stores/useLayoutStore'
 import { getViewDefinition } from '../lib/module-registry'
 import { RegionResize } from './RegionResize'
 import type { SidebarRegion as SidebarRegionType } from '../types/tab'
+import { useWorkspaceStore } from '../features/workspace/store'
+import { useHostStore } from '../stores/useHostStore'
 
 interface Props {
   region: SidebarRegionType
@@ -16,6 +18,8 @@ export function SidebarRegion({ region, resizeEdge }: Props) {
   const setActiveView = useLayoutStore((s) => s.setActiveView)
 
   const { views, activeViewId, width, mode } = regionState
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
+  const activeHostId = useHostStore((s) => s.activeHostId ?? s.hostOrder[0] ?? '')
 
   if (views.length === 0) return null
 
@@ -96,7 +100,14 @@ export function SidebarRegion({ region, resizeEdge }: Props) {
           </button>
         </div>
         <div className="flex-1 overflow-hidden">
-          {ActiveComponent && <ActiveComponent isActive={true} />}
+          {ActiveComponent && (
+            <ActiveComponent
+              isActive={true}
+              region={region}
+              workspaceId={activeWorkspaceId ?? undefined}
+              hostId={activeHostId || undefined}
+            />
+          )}
         </div>
       </div>
       {resizeEdge === 'right' && resizeHandle}

@@ -20,6 +20,7 @@ export interface ViewProps {
   hostId?: string
   workspaceId?: string
   isActive: boolean
+  region?: SidebarRegion
 }
 
 export interface ViewDefinition {
