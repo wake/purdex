@@ -43,8 +43,8 @@ export class MiniWindowManager {
     // Load mini browser SPA entry (runs in parallel with URL load above)
     const query = `?paneId=${encodeURIComponent(paneId)}`
     fetch(DEV_SERVER, { signal: AbortSignal.timeout(500) })
-      .then(() => win.loadURL(`${DEV_SERVER}/mini-browser.html${query}`))
-      .catch(() => win.loadURL(`app://./mini-browser.html${query}`))
+      .then(() => { if (!win.isDestroyed()) win.loadURL(`${DEV_SERVER}/mini-browser.html${query}`) })
+      .catch(() => { if (!win.isDestroyed()) win.loadURL(`app://./mini-browser.html${query}`) })
 
     // Cleanup on window close
     win.on('closed', () => {

@@ -102,8 +102,15 @@ export const useTabStore = create<TabState>()(
           if (afterTabId) {
             const idx = state.tabOrder.indexOf(afterTabId)
             if (idx !== -1) {
+              // If afterTabId is pinned and new tab is not, skip past pinned group
+              let insertIdx = idx + 1
+              if (!tab.pinned && state.tabs[afterTabId]?.pinned) {
+                while (insertIdx < state.tabOrder.length && state.tabs[state.tabOrder[insertIdx]]?.pinned) {
+                  insertIdx++
+                }
+              }
               newOrder = [...state.tabOrder]
-              newOrder.splice(idx + 1, 0, tab.id)
+              newOrder.splice(insertIdx, 0, tab.id)
             } else {
               newOrder = [...state.tabOrder, tab.id]
             }

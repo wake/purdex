@@ -269,8 +269,9 @@
     }
 
     // --- State subscription ---
+    var unsubState = null
     if (api && api.onBrowserViewStateUpdate) {
-      api.onBrowserViewStateUpdate(function (id, state) {
+      unsubState = api.onBrowserViewStateUpdate(function (id, state) {
         if (id !== paneId) return
         currentUrl = state.url || ''
         if (!isEditing) $url.value = currentUrl
@@ -286,9 +287,10 @@
     if (api && api.requestBrowserViewState) api.requestBrowserViewState(paneId)
 
     // --- Resize observer (sync WebContentsView bounds) ---
+    var resizeObserver = null
     if (api && api.resizeBrowserView && $content) {
       var rafId = 0
-      new ResizeObserver(function () {
+      resizeObserver = new ResizeObserver(function () {
         cancelAnimationFrame(rafId)
         rafId = requestAnimationFrame(function () {
           var r = $content.getBoundingClientRect()
@@ -298,12 +300,14 @@
             width: Math.round(r.width), height: Math.round(r.height)
           })
         })
-      }).observe($content)
+      })
+      resizeObserver.observe($content)
     }
 
     // --- Keyboard shortcuts ---
+    var unsubShortcut = null
     if (api && api.onShortcut) {
-      api.onShortcut(function (payload) {
+      unsubShortcut = api.onShortcut(function (payload) {
         switch (payload.action) {
           case 'close-tab':  window.close(); break
           case 'go-back':    api.browserViewGoBack(paneId); break
@@ -314,6 +318,13 @@
         }
       })
     }
+
+    // --- Cleanup on window close ---
+    window.addEventListener('beforeunload', function () {
+      if (unsubState) unsubState()
+      if (unsubShortcut) unsubShortcut()
+      if (resizeObserver) resizeObserver.disconnect()
+    })
   </script>
 </body>
 </html>

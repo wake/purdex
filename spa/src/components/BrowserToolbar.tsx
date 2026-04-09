@@ -14,7 +14,6 @@ export interface BrowserToolbarProps {
   canGoBack: boolean
   canGoForward: boolean
   isLoading: boolean
-  context: 'tab' | 'mini-window'
   onGoBack: () => void
   onGoForward: () => void
   onReload: () => void
@@ -23,7 +22,6 @@ export interface BrowserToolbarProps {
   onOpenExternal: () => void
   onCopyUrl: () => void
   onPopOut?: () => void
-  onMoveToTab?: () => void
 }
 
 export function BrowserToolbar({
@@ -31,7 +29,6 @@ export function BrowserToolbar({
   canGoBack,
   canGoForward,
   isLoading,
-  context,
   onGoBack,
   onGoForward,
   onReload,
@@ -40,7 +37,6 @@ export function BrowserToolbar({
   onOpenExternal,
   onCopyUrl,
   onPopOut,
-  onMoveToTab,
 }: BrowserToolbarProps) {
   const [editValue, setEditValue] = useState('')
   const [isEditing, setIsEditing] = useState(false)
@@ -135,11 +131,9 @@ export function BrowserToolbar({
         </button>
         {menuOpen && (
           <BrowserToolbarMenu
-            context={context}
             onOpenExternal={onOpenExternal}
             onCopyUrl={onCopyUrl}
             onPopOut={onPopOut}
-            onMoveToTab={onMoveToTab}
             onClose={() => setMenuOpen(false)}
           />
         )}
