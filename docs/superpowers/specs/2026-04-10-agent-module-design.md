@@ -170,13 +170,22 @@ const (
     StatusClear   Status = "clear"   // session 結束，清除所有狀態
 )
 
+// DeriveResult is the output of AgentProvider.DeriveStatus.
+type DeriveResult struct {
+    Status Status
+    Valid  bool              // false = event should be ignored
+    Model  string            // extracted model name (if any)
+    Detail map[string]any    // event-specific data for frontend (notification content, etc.)
+}
+
 type NormalizedEvent struct {
-    AgentType        string   `json:"agent_type"`
-    Status           string   `json:"status"`
-    Model            string   `json:"model,omitempty"`
-    Subagents        []string `json:"subagents,omitempty"`
-    RawEventName     string   `json:"raw_event_name"`
-    NotificationType string   `json:"notification_type,omitempty"` // 給前端通知系統用
+    AgentType    string         `json:"agent_type"`
+    Status       string         `json:"status"`
+    Model        string         `json:"model,omitempty"`
+    Subagents    []string       `json:"subagents,omitempty"`
+    RawEventName string         `json:"raw_event_name"`
+    BroadcastTs  int64          `json:"broadcast_ts"`
+    Detail       map[string]any `json:"detail,omitempty"` // 給前端通知系統用
 }
 ```
 
@@ -355,7 +364,12 @@ Unread 判斷邏輯（agent-agnostic）：
 
 ### Notification Dispatcher 調整
 
-`useNotificationDispatcher.ts` 和 `notification-content.ts` 現在直接讀 `raw_event.notification_type`。改為從 NormalizedEvent 的 `notification_type` 欄位讀取，不再依賴 raw event。
+`useNotificationDispatcher.ts` 和 `notification-content.ts` 現在直接讀 `raw_event.notification_type`。改為從 NormalizedEvent 的 `detail` map 讀取。後端 provider 在 DeriveResult.Detail 中放入前端通知所需的欄位：
+
+- CC Notification: `{ notification_type, message }`
+- CC PermissionRequest: `{ tool_name }`
+- CC Stop: `{ last_assistant_message }`
+- CC StopFailure: `{ error_details, error }`
 
 ### Agent Icon Map
 
