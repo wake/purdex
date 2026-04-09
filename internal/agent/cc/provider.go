@@ -6,6 +6,7 @@ import (
 
 	"github.com/wake/tmux-box/internal/agent"
 	"github.com/wake/tmux-box/internal/config"
+	"github.com/wake/tmux-box/internal/core"
 	"github.com/wake/tmux-box/internal/tmux"
 )
 
@@ -50,4 +51,11 @@ func (p *Provider) IsAlive(tmuxTarget string) bool {
 	}
 	status := p.detector.Detect(tmuxTarget)
 	return status == StatusCCIdle || status == StatusCCRunning || status == StatusCCWaiting
+}
+
+// RegisterServices registers this provider's services into the core service registry.
+func (p *Provider) RegisterServices(registry *core.ServiceRegistry) {
+	registry.Register(DetectorKey, CCDetector(p.detector))
+	registry.Register(HistoryKey, CCHistoryProvider(p))
+	registry.Register(OperatorKey, CCOperator(p))
 }
