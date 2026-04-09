@@ -14,6 +14,8 @@ export type PaneLayout =
   | { type: 'leaf'; pane: Pane }
   | { type: 'split'; id: string; direction: 'h' | 'v'; children: PaneLayout[]; sizes: number[] }
 
+export type LayoutPattern = 'single' | 'split-h' | 'split-v' | 'grid-4'
+
 // === Pane (content slot) ===
 export interface Pane {
   id: string
