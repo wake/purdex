@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.67] - 2026-04-09
+
+Tab 拖曳 / Rename CORS / 通知 GC / Tab 溢出 / 上傳階段修復 (PR #224)
+
+### 修正
+
+- **Active tab 無法拖曳**：dnd-kit 檢查 `nativeEvent.defaultPrevented` 會靜默中止拖曳；調整 `handlePointerDown` 順序，先呼叫 dnd-kit handler 再 `preventDefault()`
+- **Rename session "Failed to fetch"**：CORS middleware 缺少 `PATCH` method，瀏覽器 preflight 被拒
+- **通知點擊無反應**：Electron `Notification` JS wrapper 在 `show()` 後被 GC 回收（C++ 層不使用 `SelfKeepAlive`），用 `Set<Notification>` 保持強引用
+- **Tab 溢出整個 app**：Electron title bar tab 容器缺少寬度約束；加入 `flex-1 min-w-0` 並讓 `normalTabsRef` 使用 `flex-1` + `min-content` 讓 tab 先縮減再捲動
+
+### 新功能
+
+- **上傳「輸入中…」階段**：圖片上傳流程新增 `typing` 狀態，完整流程為 `uploading → typing(1.5s) → done(3s) → dismiss`
+
 ## [1.0.0-alpha.66] - 2026-04-09
 
 Browser UX 修復 — mini window theme + tab shortcuts (PR #223)
