@@ -68,7 +68,6 @@ export function BrowserPane({ paneId, url }: BrowserPaneProps) {
         canGoBack={state.canGoBack}
         canGoForward={state.canGoForward}
         isLoading={state.isLoading}
-        context="tab"
         onGoBack={handleGoBack}
         onGoForward={handleGoForward}
         onReload={handleReload}

@@ -202,6 +202,23 @@ export class BrowserViewManager {
     return undefined
   }
 
+  /** Force-push current state to the SPA (used when SPA loads after view was created). */
+  pushStateNow(paneId: string): void {
+    const entry = this.views.get(paneId)
+    if (!entry || entry.view.webContents.isDestroyed()) return
+    try {
+      if (entry.window.isDestroyed()) return
+      const wc = entry.view.webContents
+      entry.window.webContents.send('browser-view:state-update', paneId, {
+        url: wc.getURL(),
+        title: wc.getTitle(),
+        canGoBack: wc.canGoBack(),
+        canGoForward: wc.canGoForward(),
+        isLoading: wc.isLoading(),
+      })
+    } catch { /* window or webContents may be closed */ }
+  }
+
   getCurrentState(paneId: string): { url: string; title: string } | undefined {
     const entry = this.views.get(paneId)
     if (!entry || entry.view.webContents.isDestroyed()) return undefined

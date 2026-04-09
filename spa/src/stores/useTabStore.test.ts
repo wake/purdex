@@ -35,6 +35,37 @@ describe('useTabStore', () => {
     expect(useTabStore.getState().activeTabId).toBe(tab1.id)
   })
 
+  it('addTab with afterTabId inserts after specified tab', () => {
+    const tab1 = makeSessionTab('dev001')
+    const tab2 = makeSessionTab('dev002')
+    const tab3 = makeSessionTab('dev003')
+    useTabStore.getState().addTab(tab1)
+    useTabStore.getState().addTab(tab2)
+    useTabStore.getState().addTab(tab3, tab1.id)
+    expect(useTabStore.getState().tabOrder).toEqual([tab1.id, tab3.id, tab2.id])
+  })
+
+  it('addTab with afterTabId appends when afterTabId not found', () => {
+    const tab1 = makeSessionTab('dev001')
+    const tab2 = makeSessionTab('dev002')
+    useTabStore.getState().addTab(tab1)
+    useTabStore.getState().addTab(tab2, 'nonexistent')
+    expect(useTabStore.getState().tabOrder).toEqual([tab1.id, tab2.id])
+  })
+
+  it('addTab with afterTabId pointing to pinned tab inserts after pinned group', () => {
+    const tab1 = makeSessionTab('dev001')
+    const tab2 = makeSessionTab('dev002')
+    const tab3 = makeSessionTab('dev003')
+    useTabStore.getState().addTab(tab1)
+    useTabStore.getState().addTab(tab2)
+    useTabStore.getState().togglePin(tab1.id)
+    useTabStore.getState().togglePin(tab2.id)
+    // tab1 and tab2 are pinned; insert after tab1 should skip past all pinned
+    useTabStore.getState().addTab(tab3, tab1.id)
+    expect(useTabStore.getState().tabOrder).toEqual([tab1.id, tab2.id, tab3.id])
+  })
+
   it('closeTab removes from tabs + tabOrder', () => {
     const tab = makeSessionTab('dev001')
     useTabStore.getState().addTab(tab)

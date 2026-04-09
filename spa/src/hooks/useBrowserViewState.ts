@@ -29,6 +29,9 @@ export function useBrowserViewState(paneId: string): BrowserViewState {
       },
     )
 
+    // Request current state — catches up if view was created before SPA loaded
+    api.requestBrowserViewState?.(paneId)
+
     return unsubscribe
   }, [paneId])
 

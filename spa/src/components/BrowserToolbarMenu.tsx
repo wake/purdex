@@ -3,7 +3,6 @@ import {
   ArrowSquareOut,
   Copy,
   ArrowSquareUpRight,
-  ArrowLineRight,
 } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 
@@ -15,20 +14,16 @@ interface MenuItem {
 }
 
 interface BrowserToolbarMenuProps {
-  context: 'tab' | 'mini-window'
   onOpenExternal: () => void
   onCopyUrl: () => void
   onPopOut?: () => void
-  onMoveToTab?: () => void
   onClose: () => void
 }
 
 export function BrowserToolbarMenu({
-  context,
   onOpenExternal,
   onCopyUrl,
   onPopOut,
-  onMoveToTab,
   onClose,
 }: BrowserToolbarMenuProps) {
   const t = useI18nStore((s) => s.t)
@@ -66,13 +61,7 @@ export function BrowserToolbarMenu({
       label: t('browser.pop_out'),
       icon: <ArrowSquareUpRight size={14} />,
       onClick: () => { onPopOut?.(); onClose() },
-      show: context === 'tab' && !!onPopOut,
-    },
-    {
-      label: t('browser.move_to_tab'),
-      icon: <ArrowLineRight size={14} />,
-      onClick: () => { onMoveToTab?.(); onClose() },
-      show: context === 'mini-window' && !!onMoveToTab,
+      show: !!onPopOut,
     },
   ]
 
