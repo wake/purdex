@@ -81,6 +81,7 @@ interface TabState {
   closePane: (tabId: string, paneId: string) => void
   resizePanes: (tabId: string, splitId: string, sizes: number[]) => void
   applyLayout: (tabId: string, pattern: LayoutPattern) => void
+  setTabLayout: (tabId: string, layout: PaneLayout) => void
   detachPane: (tabId: string, paneId: string, afterTabId?: string) => string | null
   reorderTabs: (order: string[]) => void
   togglePin: (id: string) => void
@@ -244,6 +245,13 @@ export const useTabStore = create<TabState>()(
           if (!tab) return state
           const newLayout = applyLayoutPattern(tab.layout, pattern)
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
+        }),
+
+      setTabLayout: (tabId, layout) =>
+        set((state) => {
+          const tab = state.tabs[tabId]
+          if (!tab) return state
+          return { tabs: { ...state.tabs, [tabId]: { ...tab, layout } } }
         }),
 
       detachPane: (tabId, paneId, afterTabId) => {

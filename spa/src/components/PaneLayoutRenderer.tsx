@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { getPaneRenderer } from '../lib/module-registry'
-import { getLayoutKey } from '../lib/pane-tree'
+import { getLayoutKey, collectLeaves, swapPaneContent } from '../lib/pane-tree'
 import { PaneSplitter } from './PaneSplitter'
 import { PaneHeader } from './PaneHeader'
 import { useTabStore } from '../stores/useTabStore'
@@ -28,6 +28,14 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
     }
     const Component = config.component
     if (showHeader) {
+      const allLeaves = (() => {
+        const tab = useTabStore.getState().tabs[tabId]
+        return tab ? collectLeaves(tab.layout) : []
+      })()
+      const swapTargets = allLeaves
+        .filter((p) => p.id !== layout.pane.id)
+        .map((p) => ({ id: p.id, label: p.content.kind }))
+
       return (
         <div className="flex-1 flex flex-col overflow-hidden">
           <PaneHeader
@@ -37,12 +45,17 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
               const newTabId = useTabStore.getState().detachPane(tabId, layout.pane.id, tabId)
               if (newTabId) {
                 const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
-                if (ws) {
-                  useWorkspaceStore.getState().insertTab(newTabId, ws.id, tabId)
-                }
+                if (ws) useWorkspaceStore.getState().insertTab(newTabId, ws.id, tabId)
                 useTabStore.getState().setActiveTab(newTabId)
               }
             }}
+            onSwap={(targetPaneId) => {
+              const tab = useTabStore.getState().tabs[tabId]
+              if (!tab) return
+              const newLayout = swapPaneContent(tab.layout, layout.pane.id, targetPaneId)
+              useTabStore.getState().setTabLayout(tabId, newLayout)
+            }}
+            swapTargets={swapTargets}
           />
           <Component pane={layout.pane} isActive={isActive} />
         </div>
