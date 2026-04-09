@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.73] - 2026-04-10
+
+Agent Module Provider Pattern 重構 (#247)
+
+### 新增
+
+- **AgentProvider 介面**：capability-based composition（HookInstaller、HistoryProvider、StreamCapable），支援多 agent 擴充
+- **Agent Registry**：thread-safe provider 註冊/查詢，hook event 路由依 agent_type 分派
+- **CC Provider**：從散落的 cc/detect 模組整合為 `internal/agent/cc/`（detector、operator、history、hooks、status derivation）
+- **Codex Provider**：新增 `internal/agent/codex/`（status derivation、process detection、hook installer）
+- **NormalizedEvent**：後端推導 status/model/subagents，前端零 per-agent 邏輯
+- **Per-agent hook 管理**：`GET/POST /api/hooks/{agent}/status|setup` 參數化 API
+- **Agent icons**：`spa/src/lib/agent-icons.ts` icon + name mapping
+- **AgentSection UI**：Settings 頁面顯示每個 agent 的 hook 安裝狀態與操作按鈕
+
+### 改善
+
+- **CLI `--agent` flag**：`tbox hook` 和 `tbox setup` 必須指定 agent type
+- **useAgentStore 簡化**：移除前端 `deriveStatus`，store 只接收後端 pre-derived 狀態
+- **Frontend agent-agnostic**：新增 agent 只需後端加 provider + 前端加一行 icon mapping
+
+### 移除
+
+- `internal/module/cc/`（整個目錄）— 合併至 `internal/agent/cc/`
+- `internal/detect/`（整個目錄）— 合併至 `internal/agent/cc/`
+- `internal/module/agent/cc_hooks.go` — 移至 `internal/agent/cc/hooks.go`
+- 前端 `deriveStatus` 函式、`AgentHookEvent` 型別、`clearSubagentsForHost` action
+
 ## [1.0.0-alpha.72] - 2026-04-10
 
 Sidebar/Panel/Pane 修正 + Module Config 系統 (#245)
