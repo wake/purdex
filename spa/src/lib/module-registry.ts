@@ -20,6 +20,7 @@ export interface ViewProps {
   hostId?: string
   workspaceId?: string
   isActive: boolean
+  region?: SidebarRegion
 }
 
 export interface ViewDefinition {
@@ -31,11 +32,21 @@ export interface ViewDefinition {
   component: React.ComponentType<ViewProps>
 }
 
+export interface ConfigDef {
+  key: string
+  type: 'string' | 'boolean' | 'number'
+  label: string
+  required?: boolean
+  defaultValue?: unknown
+}
+
 export interface ModuleDefinition {
   id: string
   name: string
   pane?: PaneDefinition
   views?: ViewDefinition[]
+  workspaceConfig?: ConfigDef[]
+  globalConfig?: ConfigDef[]
 }
 
 // === Registry ===
@@ -90,6 +101,14 @@ export function getViewsByRegion(
     }
   }
   return result
+}
+
+export function getModulesWithWorkspaceConfig(): ModuleDefinition[] {
+  return [...modules.values()].filter((m) => m.workspaceConfig && m.workspaceConfig.length > 0)
+}
+
+export function getModulesWithGlobalConfig(): ModuleDefinition[] {
+  return [...modules.values()].filter((m) => m.globalConfig && m.globalConfig.length > 0)
 }
 
 export function clearModuleRegistry(): void {

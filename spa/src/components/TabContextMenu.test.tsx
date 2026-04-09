@@ -126,7 +126,7 @@ describe('TabContextMenu', () => {
   it('calls onAction with correct action on click', () => {
     const props = renderMenu()
     fireEvent.click(screen.getByText('Lock tab'))
-    expect(props.onAction).toHaveBeenCalledWith('lock')
+    expect(props.onAction).toHaveBeenCalledWith('lock', undefined)
     expect(props.onClose).toHaveBeenCalled()
   })
 
@@ -156,7 +156,7 @@ describe('TabContextMenu', () => {
   it('calls onAction with "rename" when clicking Rename Session', () => {
     const props = renderMenu()
     fireEvent.click(screen.getByText('Rename Session'))
-    expect(props.onAction).toHaveBeenCalledWith('rename')
+    expect(props.onAction).toHaveBeenCalledWith('rename', undefined)
   })
 
   // --- Tear-off section (Electron only) ---

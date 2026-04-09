@@ -537,4 +537,54 @@ describe('useWorkspaceStore', () => {
       expect(useWorkspaceStore.getState().workspaces[0].name).toBe('First')
     })
   })
+
+  describe('insertTab with afterTabId', () => {
+    it('inserts tab after specified tab in workspace', () => {
+      useWorkspaceStore.getState().addWorkspace('test')
+      const wsId = useWorkspaceStore.getState().workspaces[0].id
+      useWorkspaceStore.getState().insertTab('a', wsId)
+      useWorkspaceStore.getState().insertTab('b', wsId)
+      useWorkspaceStore.getState().insertTab('c', wsId)
+      // Insert 'x' after 'a'
+      useWorkspaceStore.getState().insertTab('x', wsId, 'a')
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)!
+      expect(ws.tabs).toEqual(['a', 'x', 'b', 'c'])
+    })
+
+    it('appends if afterTabId not found in workspace', () => {
+      useWorkspaceStore.getState().addWorkspace('test')
+      const wsId = useWorkspaceStore.getState().workspaces[0].id
+      useWorkspaceStore.getState().insertTab('a', wsId)
+      useWorkspaceStore.getState().insertTab('x', wsId, 'missing')
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)!
+      expect(ws.tabs).toEqual(['a', 'x'])
+    })
+  })
+
+  describe('setModuleConfig', () => {
+    it('sets a module config value on a workspace', () => {
+      const { workspaces } = useWorkspaceStore.getState()
+      const wsId = workspaces[0]?.id
+      if (!wsId) {
+        useWorkspaceStore.getState().addWorkspace('test-ws')
+      }
+      const ws0 = useWorkspaceStore.getState().workspaces[0]
+      useWorkspaceStore.getState().setModuleConfig(ws0.id, 'files', 'projectPath', '/home/user/project')
+      const updated = useWorkspaceStore.getState().workspaces.find((w) => w.id === ws0.id)!
+      expect(updated.moduleConfig?.files?.projectPath).toBe('/home/user/project')
+    })
+
+    it('preserves existing config when setting a new key', () => {
+      const { workspaces } = useWorkspaceStore.getState()
+      if (!workspaces[0]) {
+        useWorkspaceStore.getState().addWorkspace('test-ws')
+      }
+      const ws0 = useWorkspaceStore.getState().workspaces[0]
+      useWorkspaceStore.getState().setModuleConfig(ws0.id, 'files', 'projectPath', '/path1')
+      useWorkspaceStore.getState().setModuleConfig(ws0.id, 'files', 'showHidden', true)
+      const updated = useWorkspaceStore.getState().workspaces.find((w) => w.id === ws0.id)!
+      expect(updated.moduleConfig?.files?.projectPath).toBe('/path1')
+      expect(updated.moduleConfig?.files?.showHidden).toBe(true)
+    })
+  })
 })

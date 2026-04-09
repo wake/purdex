@@ -113,6 +113,17 @@ function newTabPane(): Pane {
   return { id: generateId(), content: { kind: 'new-tab' } }
 }
 
+export function swapPaneContent(layout: PaneLayout, paneIdA: string, paneIdB: string): PaneLayout {
+  const paneA = findPane(layout, paneIdA)
+  const paneB = findPane(layout, paneIdB)
+  if (!paneA || !paneB) return layout
+  const contentA = paneA.content
+  const contentB = paneB.content
+  let result = updatePaneInLayout(layout, paneIdA, contentB)
+  result = updatePaneInLayout(result, paneIdB, contentA)
+  return result
+}
+
 export function applyLayoutPattern(layout: PaneLayout, pattern: LayoutPattern): PaneLayout {
   const leaves = collectLeaves(layout)
   const p = (i: number): Pane => leaves[i] ?? newTabPane()

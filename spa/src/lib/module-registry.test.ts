@@ -7,6 +7,8 @@ import {
   getPaneRenderer,
   getViewDefinition,
   getViewsByRegion,
+  getModulesWithWorkspaceConfig,
+  getModulesWithGlobalConfig,
   clearModuleRegistry,
 } from './module-registry'
 import type { ModuleDefinition } from './module-registry'
@@ -149,5 +151,34 @@ describe('module-registry', () => {
       expect(getModules()).toEqual([])
       expect(getPaneRenderer('tmux-session')).toBeUndefined()
     })
+  })
+})
+
+describe('workspaceConfig / globalConfig', () => {
+  it('getModulesWithWorkspaceConfig returns modules that declared workspaceConfig', () => {
+    registerModule({
+      id: 'files',
+      name: 'Files',
+      workspaceConfig: [{ key: 'projectPath', type: 'string', label: '專案路徑' }],
+    })
+    registerModule({ id: 'browser', name: 'Browser' })
+
+    const result = getModulesWithWorkspaceConfig()
+    expect(result).toHaveLength(1)
+    expect(result[0].id).toBe('files')
+    expect(result[0].workspaceConfig![0].key).toBe('projectPath')
+  })
+
+  it('getModulesWithGlobalConfig returns modules that declared globalConfig', () => {
+    registerModule({
+      id: 'theme-mod',
+      name: 'Theme Module',
+      globalConfig: [{ key: 'darkMode', type: 'boolean', label: 'Dark Mode', defaultValue: true }],
+    })
+    registerModule({ id: 'other', name: 'Other' })
+
+    const result = getModulesWithGlobalConfig()
+    expect(result).toHaveLength(1)
+    expect(result[0].id).toBe('theme-mod')
   })
 })

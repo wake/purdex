@@ -9,16 +9,17 @@ export type ContextMenuAction =
   | 'viewMode-terminal' | 'viewMode-stream'
   | 'lock' | 'unlock' | 'pin' | 'unpin'
   | 'close' | 'closeOthers' | 'closeRight'
-  | 'tearOff' | 'mergeTo'
+  | 'tearOff' | 'mergeTo' | 'mergeToTab'
   | 'rename'
 
 interface Props {
   tab: Tab
   position: { x: number; y: number }
   onClose: () => void
-  onAction: (action: ContextMenuAction) => void
+  onAction: (action: ContextMenuAction, payload?: string) => void
   hasOtherUnlocked: boolean
   hasRightUnlocked: boolean
+  targetTabs?: Tab[]
 }
 
 interface MenuItem {
@@ -26,9 +27,10 @@ interface MenuItem {
   action: ContextMenuAction
   show: boolean
   disabled?: boolean
+  payload?: string
 }
 
-export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnlocked, hasRightUnlocked }: Props) {
+export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnlocked, hasRightUnlocked, targetTabs }: Props) {
   const t = useI18nStore((s) => s.t)
   const caps = getPlatformCapabilities()
   const ref = useRef<HTMLDivElement>(null)
@@ -77,6 +79,16 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
       'separator' as const,
       { label: t('tab.move_new_window'), action: 'tearOff' as const, show: true, disabled: tab.locked },
     ] : []),
+    // MergeToTab section
+    ...(targetTabs && targetTabs.length > 0 ? [
+      'separator' as const,
+      ...targetTabs.map((targetTab) => ({
+        label: `加入 ${getPrimaryPane(targetTab.layout).content.kind} tab 成為 pane`,
+        action: 'mergeToTab' as const,
+        show: true,
+        payload: targetTab.id,
+      })),
+    ] : []),
     'separator',
     // Close section
     { label: t('tab.close'), action: 'close' as const, show: true, disabled: tab.locked },
@@ -108,9 +120,9 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
         }
         return (
           <button
-            key={item.action}
+            key={item.payload ? `${item.action}-${item.payload}` : item.action}
             disabled={item.disabled}
-            onClick={() => { onAction(item.action); onClose() }}
+            onClick={() => { onAction(item.action, item.payload); onClose() }}
             className={`w-full text-left px-3 py-1.5 transition-colors ${
               item.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-surface-hover'
             }`}

@@ -81,7 +81,8 @@ interface TabState {
   closePane: (tabId: string, paneId: string) => void
   resizePanes: (tabId: string, splitId: string, sizes: number[]) => void
   applyLayout: (tabId: string, pattern: LayoutPattern) => void
-  detachPane: (tabId: string, paneId: string) => string | null
+  setTabLayout: (tabId: string, layout: PaneLayout) => void
+  detachPane: (tabId: string, paneId: string, afterTabId?: string) => string | null
   reorderTabs: (order: string[]) => void
   togglePin: (id: string) => void
   toggleLock: (id: string) => void
@@ -246,7 +247,14 @@ export const useTabStore = create<TabState>()(
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
 
-      detachPane: (tabId, paneId) => {
+      setTabLayout: (tabId, layout) =>
+        set((state) => {
+          const tab = state.tabs[tabId]
+          if (!tab) return state
+          return { tabs: { ...state.tabs, [tabId]: { ...tab, layout } } }
+        }),
+
+      detachPane: (tabId, paneId, afterTabId) => {
         const state = get()
         const tab = state.tabs[tabId]
         if (!tab) return null
@@ -256,9 +264,21 @@ export const useTabStore = create<TabState>()(
         const newLayout = removePane(tab.layout, paneId)
         if (!newLayout) return null
         const newTab = createTab(pane.content)
+        let newOrder: string[]
+        if (afterTabId) {
+          const idx = state.tabOrder.indexOf(afterTabId)
+          if (idx !== -1) {
+            newOrder = [...state.tabOrder]
+            newOrder.splice(idx + 1, 0, newTab.id)
+          } else {
+            newOrder = [...state.tabOrder, newTab.id]
+          }
+        } else {
+          newOrder = [...state.tabOrder, newTab.id]
+        }
         set({
           tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout }, [newTab.id]: newTab },
-          tabOrder: [...state.tabOrder, newTab.id],
+          tabOrder: newOrder,
         })
         return newTab.id
       },

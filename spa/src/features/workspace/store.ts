@@ -17,12 +17,13 @@ interface WorkspaceState {
   setWorkspaceActiveTab: (wsId: string, tabId: string) => void
   reorderWorkspaceTabs: (wsId: string, tabIds: string[]) => void
   findWorkspaceByTab: (tabId: string) => Workspace | null
-  insertTab: (tabId: string, workspaceId?: string | null) => void
+  insertTab: (tabId: string, workspaceId?: string | null, afterTabId?: string) => void
   closeTabInWorkspace: (tabId: string, opts?: { skipHistory?: boolean }) => void
   renameWorkspace: (wsId: string, name: string) => void
   setWorkspaceIcon: (wsId: string, icon: string) => void
   setWorkspaceIconWeight: (wsId: string, weight: IconWeight) => void
   importWorkspace: (ws: Workspace) => void
+  setModuleConfig: (wsId: string, moduleId: string, key: string, value: unknown) => void
   reset: () => void
 }
 
@@ -98,7 +99,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         return get().workspaces.find((ws) => ws.tabs.includes(tabId)) ?? null
       },
 
-      insertTab: (tabId, workspaceId) => {
+      insertTab: (tabId, workspaceId, afterTabId) => {
         const targetWsId = workspaceId === null
           ? null
           : workspaceId !== undefined
@@ -111,7 +112,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           workspaces: state.workspaces.map((ws) => {
             if (ws.id === targetWsId) {
               if (ws.tabs.includes(tabId)) return { ...ws, activeTabId: tabId }
-              return { ...ws, tabs: [...ws.tabs, tabId], activeTabId: tabId }
+              let newTabs: string[]
+              if (afterTabId) {
+                const idx = ws.tabs.indexOf(afterTabId)
+                if (idx !== -1) {
+                  newTabs = [...ws.tabs]
+                  newTabs.splice(idx + 1, 0, tabId)
+                } else {
+                  newTabs = [...ws.tabs, tabId]
+                }
+              } else {
+                newTabs = [...ws.tabs, tabId]
+              }
+              return { ...ws, tabs: newTabs, activeTabId: tabId }
             }
             // Remove from other workspaces (singleton tab dedup)
             if (!ws.tabs.includes(tabId)) return ws
@@ -209,6 +222,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           workspaces: state.workspaces.some((w) => w.id === ws.id)
             ? state.workspaces
             : [...state.workspaces, ws],
+        })),
+
+      setModuleConfig: (wsId, moduleId, key, value) =>
+        set((state) => ({
+          workspaces: state.workspaces.map((ws) => {
+            if (ws.id !== wsId) return ws
+            return {
+              ...ws,
+              moduleConfig: {
+                ...(ws.moduleConfig ?? {}),
+                [moduleId]: {
+                  ...(ws.moduleConfig?.[moduleId] ?? {}),
+                  [key]: value,
+                },
+              },
+            }
+          }),
         })),
 
       reset: () => set(createDefaultState()),
