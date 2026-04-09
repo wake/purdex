@@ -1,12 +1,14 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 interface Props {
   onResize: (delta: number) => void
-  side: 'left' | 'right'
+  resizeEdge: 'left' | 'right'
 }
 
-export function RegionResize({ onResize, side }: Props) {
+export function RegionResize({ onResize, resizeEdge }: Props) {
   const startX = useRef(0)
+  const onResizeRef = useRef(onResize)
+  useEffect(() => { onResizeRef.current = onResize })
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -14,8 +16,8 @@ export function RegionResize({ onResize, side }: Props) {
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       const rawDelta = moveEvent.clientX - startX.current
-      const delta = side === 'left' ? -rawDelta : rawDelta
-      onResize(delta)
+      const delta = resizeEdge === 'left' ? -rawDelta : rawDelta
+      onResizeRef.current(delta)
       startX.current = moveEvent.clientX
     }
 
@@ -30,7 +32,7 @@ export function RegionResize({ onResize, side }: Props) {
     document.addEventListener('mouseup', handleMouseUp)
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
-  }, [onResize, side])
+  }, [resizeEdge])
 
   return (
     <div

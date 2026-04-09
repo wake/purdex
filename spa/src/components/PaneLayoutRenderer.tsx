@@ -22,6 +22,14 @@ export function PaneLayoutRenderer({ layout, isActive }: Props) {
   }
 
   // Split — future: render split container. For now, render first child.
+  if (layout.children.length === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-text-muted">
+        Empty split layout
+      </div>
+    )
+  }
+
   return (
     <PaneLayoutRenderer
       key={getLayoutKey(layout.children[0])}

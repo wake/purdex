@@ -57,7 +57,7 @@ export interface WorkspaceSidebarState {
   regions: Partial<Record<SidebarRegion, {
     activeViewId?: string
     width: number
-    mode: 'pinned' | 'default' | 'collapsed'
+    mode: 'pinned' | 'collapsed'
   }>>
 }
 

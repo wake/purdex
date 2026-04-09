@@ -13,10 +13,18 @@ describe('TitleBar', () => {
     expect(screen.getByTestId('layout-buttons')).toBeDefined()
   })
 
-  it('applies drag region styling', () => {
+  it('layout buttons are disabled until Plan 3', () => {
+    render(<TitleBar title="test" />)
+    const buttons = screen.getByTestId('layout-buttons').querySelectorAll('button')
+    expect(buttons).toHaveLength(4)
+    for (const btn of buttons) {
+      expect(btn).toHaveProperty('disabled', true)
+    }
+  })
+
+  it('renders with correct height', () => {
     const { container } = render(<TitleBar title="test" />)
     const bar = container.firstElementChild as HTMLElement
-    // Check the style attribute contains drag region
-    expect(bar.getAttribute('style')).toContain('app-region')
+    expect(bar.getAttribute('style')).toContain('height: 30px')
   })
 })

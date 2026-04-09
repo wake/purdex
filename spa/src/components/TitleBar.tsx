@@ -8,7 +8,7 @@ export function TitleBar({ title }: Props) {
   return (
     <div
       className="shrink-0 flex items-center bg-surface-secondary border-b border-border-subtle px-2"
-      style={{ height: 30, WebkitAppRegion: 'drag', '--app-region': 'drag' } as React.CSSProperties}
+      style={{ height: 30, WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       {/* Traffic light safe zone */}
       <div className="shrink-0" style={{ width: 70 }} />
@@ -24,16 +24,16 @@ export function TitleBar({ title }: Props) {
         className="shrink-0 flex items-center gap-0.5"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        <button className="p-1 rounded hover:bg-surface-hover text-text-muted hover:text-text-primary" title="Single pane">
+        <button disabled className="p-1 rounded text-text-muted disabled:opacity-40" title="Single pane">
           <Square size={14} />
         </button>
-        <button className="p-1 rounded hover:bg-surface-hover text-text-muted hover:text-text-primary" title="Split horizontal">
+        <button disabled className="p-1 rounded text-text-muted disabled:opacity-40" title="Split horizontal">
           <Columns size={14} />
         </button>
-        <button className="p-1 rounded hover:bg-surface-hover text-text-muted hover:text-text-primary" title="Split vertical">
+        <button disabled className="p-1 rounded text-text-muted disabled:opacity-40" title="Split vertical">
           <Rows size={14} />
         </button>
-        <button className="p-1 rounded hover:bg-surface-hover text-text-muted hover:text-text-primary" title="Grid">
+        <button disabled className="p-1 rounded text-text-muted disabled:opacity-40" title="Grid">
           <GridFour size={14} />
         </button>
       </div>

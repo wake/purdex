@@ -57,6 +57,18 @@ describe('PaneLayoutRenderer', () => {
     expect(screen.getByTestId('history').textContent).toBe('inactive')
   })
 
+  it('shows fallback for empty split children', () => {
+    const layout: PaneLayout = {
+      type: 'split',
+      id: 's1',
+      direction: 'h',
+      children: [],
+      sizes: [],
+    }
+    render(<PaneLayoutRenderer layout={layout} isActive={true} />)
+    expect(screen.getByText(/Empty split layout/)).toBeTruthy()
+  })
+
   it('renders first child of a split layout', () => {
     registerModule({
       id: 'dashboard-split',

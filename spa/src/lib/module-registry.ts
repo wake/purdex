@@ -25,7 +25,7 @@ export interface ViewProps {
 export interface ViewDefinition {
   id: string
   label: string
-  icon: string
+  icon: React.ComponentType<{ size?: number; className?: string }>
   scope: 'system' | 'workspace'
   defaultRegion: SidebarRegion
   component: React.ComponentType<ViewProps>
