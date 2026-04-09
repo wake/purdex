@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.0.0-alpha.69] - 2026-04-09
+
+Module Layout Foundation (Plan 1+2) + Review 修正
+
+### 新功能
+
+- **Module Registry**：統一 pane + view 註冊系統（`module-registry.ts`），取代舊 `pane-registry.ts`
+- **Layout Store**：4-region sidebar/panel 狀態管理（`useLayoutStore`），持久化到 `purdex-layout`
+- **TitleBar**：Electron 標題列元件，含 traffic light safe zone + layout pattern 按鈕 placeholder
+- **SidebarRegion**：可折疊/展開的 sidebar 容器，支援 view 切換 + 拖曳調整寬度
+- **RegionResize**：拖曳調整 region 寬度的把手元件
+- **App 佈局重構**：統一 TabBar 位置 + 4 SidebarRegion 整合
+
+### 修正（Review）
+
+- **RegionResize stale closure**：drag 時 `onResize` callback 使用 `useRef` 保持最新引用
+- **syncManager 註冊遺漏**：`useLayoutStore` 現在正確註冊 syncManager，跨 tab/視窗同步
+- **ViewDefinition icon 型別**：`icon` 從 `string` 改為 React component type，collapsed bar 渲染 Phosphor Icon
+- **activeViewId fallback**：展開 region 時若 activeViewId 未設定，自動 fallback 到第一個 view
+- **移除 `mode: 'default'`**：移除從未使用的 mode 值，RegionState 只保留 `'pinned' | 'collapsed'`
+- **`side` → `resizeEdge`**：prop 更名為更清晰的語義
+- **TitleBar layout 按鈕加 disabled**：Plan 3 前 placeholder 按鈕標記為 disabled
+- **移除 `--app-region` 死碼**：TitleBar 移除無效的 CSS custom property
+- **PaneLayoutRenderer 空 children 防護**：split layout children 為空時顯示 fallback
+- **SidebarRegion 收合按鈕**：展開狀態新增 collapse button
+
+## [1.0.0-alpha.68] - 2026-04-09
+
+Workspace icon indicators — unread badge + status pill (PR #226)
+
 ## [1.0.0-alpha.67] - 2026-04-09
 
 Tab 拖曳 / Rename CORS / 通知 GC / Tab 溢出 / 上傳階段修復 (PR #224)
