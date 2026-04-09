@@ -100,8 +100,9 @@ export const useUploadStore = create<UploadState>((set) => ({
     const key = compositeKey(hostId, sessionCode)
     set((s) => {
       const prev = s.sessions[key]
-      // Don't dismiss while uploading — prevents concurrent drop from corrupting state.
-      if (prev?.status === 'uploading') return s
+      // Don't dismiss while uploading or typing — prevents concurrent drop from
+      // corrupting state and ensures the typing→done transition completes.
+      if (prev?.status === 'uploading' || prev?.status === 'typing') return s
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { [key]: _, ...rest } = s.sessions
       return { sessions: rest }

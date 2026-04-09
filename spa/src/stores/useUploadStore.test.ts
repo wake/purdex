@@ -77,4 +77,13 @@ describe('useUploadStore', () => {
     expect(useUploadStore.getState().sessions[`${H}:dev`]).toBeDefined()
     expect(useUploadStore.getState().sessions[`${H}:dev`].status).toBe('uploading')
   })
+
+  it('dismiss does not clear typing state', () => {
+    useUploadStore.getState().startUpload(H, 'dev', 1, 'a.png')
+    useUploadStore.getState().fileCompleted(H, 'dev')
+    expect(useUploadStore.getState().sessions[`${H}:dev`].status).toBe('typing')
+    useUploadStore.getState().dismiss(H, 'dev')
+    expect(useUploadStore.getState().sessions[`${H}:dev`]).toBeDefined()
+    expect(useUploadStore.getState().sessions[`${H}:dev`].status).toBe('typing')
+  })
 })

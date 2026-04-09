@@ -4,6 +4,7 @@ package middleware_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/wake/tmux-box/internal/middleware"
@@ -164,5 +165,11 @@ func TestCORSHeaders(t *testing.T) {
 	}
 	if rec.Code != 204 {
 		t.Errorf("want 204 for OPTIONS, got %d", rec.Code)
+	}
+	methods := rec.Header().Get("Access-Control-Allow-Methods")
+	for _, m := range []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"} {
+		if !strings.Contains(methods, m) {
+			t.Errorf("want %s in Allow-Methods, got %s", m, methods)
+		}
 	}
 }
