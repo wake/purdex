@@ -4,6 +4,7 @@ import { getLayoutKey } from '../lib/pane-tree'
 import { PaneSplitter } from './PaneSplitter'
 import { PaneHeader } from './PaneHeader'
 import { useTabStore } from '../stores/useTabStore'
+import { useWorkspaceStore } from '../features/workspace/store'
 import type { PaneLayout } from '../types/tab'
 
 interface Props {
@@ -33,8 +34,14 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
             title={layout.pane.content.kind}
             onClose={() => useTabStore.getState().closePane(tabId, layout.pane.id)}
             onDetach={() => {
-              const newTabId = useTabStore.getState().detachPane(tabId, layout.pane.id)
-              if (newTabId) useTabStore.getState().setActiveTab(newTabId)
+              const newTabId = useTabStore.getState().detachPane(tabId, layout.pane.id, tabId)
+              if (newTabId) {
+                const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
+                if (ws) {
+                  useWorkspaceStore.getState().insertTab(newTabId, ws.id, tabId)
+                }
+                useTabStore.getState().setActiveTab(newTabId)
+              }
             }}
           />
           <Component pane={layout.pane} isActive={isActive} />
