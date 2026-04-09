@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.70] - 2026-04-09
+
+Workspace 狀態指示器迭代
+
+### 變更
+
+- **Status dot**：workspace icon 狀態指示器從 3px 左側 pill 改為 5px 圓點，與 TabStatusDot 風格一致
+- **Active 隱藏**：active workspace 不顯示狀態圓點（狀態已可在 tab bar 看到）
+- **Aria-label 強化**：workspace 按鈕的 aria-label 現在包含 agent 狀態（running/waiting/error）
+- **測試補強**：新增 4 個 status dot 測試（顯示/隱藏/waiting 靜態/aria-label）
+
 ## [1.0.0-alpha.69] - 2026-04-09
 
 Module Layout Foundation (Plan 1+2) + Review 修正
