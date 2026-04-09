@@ -293,6 +293,7 @@
 
   "upload.drop_files": "拖放檔案以上傳",
   "upload.uploading": "上傳中 {{file}}（{{current}}/{{total}}）...",
+  "upload.typing": "輸入中…",
   "upload.done_one": "已上傳 {{count}} 個檔案",
   "upload.done_many": "已上傳 {{count}} 個檔案",
   "upload.failed": "上傳失敗：{{file}}",

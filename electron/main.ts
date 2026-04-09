@@ -49,8 +49,15 @@ function registerIpcHandlers(): void {
     return browserViewManager.getMetrics()
   })
 
-  // Notifications
+  // Notifications — prevent GC from collecting Notification objects before
+  // the user clicks them. Without this Set, the local `notification` variable
+  // goes out of scope after show(), V8 can GC the JS wrapper, and the click
+  // handler is silently lost. Electron's C++ layer does NOT use SelfKeepAlive
+  // for Notification (unlike Tray), so userland must hold the reference.
+  // No TTL — notification frequency is low and each object is ~hundreds of
+  // bytes; a slow leak from missing close events is negligible.
   const recentBroadcasts = new Set<number>()
+  const activeNotifications = new Set<Notification>()
   ipcMain.handle('notification:show', (_event, optsJson: string) => {
     const opts = JSON.parse(optsJson) as {
       title: string; body: string; sessionCode: string; eventName: string; broadcastTs: number
@@ -62,7 +69,10 @@ function registerIpcHandlers(): void {
     setTimeout(() => recentBroadcasts.delete(opts.broadcastTs), 5000)
 
     const notification = new Notification({ title: opts.title, body: opts.body })
+    activeNotifications.add(notification)
+    const release = () => { activeNotifications.delete(notification) }
     notification.on('click', () => {
+      release()
       // Broadcast to all renderers — SPA decides which one has the tab
       // The SPA will call focusMyWindow IPC when it handles the click
       const payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string } } = {
@@ -75,6 +85,7 @@ function registerIpcHandlers(): void {
         }
       }
     })
+    notification.on('close', release)
     notification.show()
   })
 
