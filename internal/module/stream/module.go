@@ -6,8 +6,8 @@ import (
 	"net/http"
 
 	"github.com/wake/tmux-box/internal/bridge"
+	agentcc "github.com/wake/tmux-box/internal/agent/cc"
 	"github.com/wake/tmux-box/internal/core"
-	"github.com/wake/tmux-box/internal/module/cc"
 	"github.com/wake/tmux-box/internal/module/session"
 )
 
@@ -17,8 +17,8 @@ type StreamModule struct {
 	core     *core.Core
 	bridge   *bridge.Bridge
 	sessions session.SessionProvider
-	ccOps    cc.CCOperator
-	ccDetect cc.CCDetector
+	ccOps    agentcc.CCOperator
+	ccDetect agentcc.CCDetector
 	locks    *handoffLocks
 }
 
@@ -28,14 +28,14 @@ func New() *StreamModule {
 }
 
 func (m *StreamModule) Name() string           { return "stream" }
-func (m *StreamModule) Dependencies() []string { return []string{"session", "cc"} }
+func (m *StreamModule) Dependencies() []string { return []string{"session", "agent"} }
 
 func (m *StreamModule) Init(c *core.Core) error {
 	m.core = c
 	m.bridge = bridge.New()
 	m.sessions = c.Registry.MustGet(session.RegistryKey).(session.SessionProvider)
-	m.ccOps = c.Registry.MustGet(cc.OperatorKey).(cc.CCOperator)
-	m.ccDetect = c.Registry.MustGet(cc.DetectorKey).(cc.CCDetector)
+	m.ccOps = c.Registry.MustGet(agentcc.OperatorKey).(agentcc.CCOperator)
+	m.ccDetect = c.Registry.MustGet(agentcc.DetectorKey).(agentcc.CCDetector)
 	m.locks = newHandoffLocks()
 	return nil
 }

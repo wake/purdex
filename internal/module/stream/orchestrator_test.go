@@ -16,7 +16,7 @@ import (
 	"github.com/wake/tmux-box/internal/bridge"
 	"github.com/wake/tmux-box/internal/config"
 	"github.com/wake/tmux-box/internal/core"
-	"github.com/wake/tmux-box/internal/detect"
+	agentcc "github.com/wake/tmux-box/internal/agent/cc"
 	"github.com/wake/tmux-box/internal/module/session"
 	"github.com/wake/tmux-box/internal/tmux"
 )
@@ -29,7 +29,7 @@ type fakeCCOperator struct {
 	exitErr       error
 	getStatusErr  error
 	launchErr     error
-	statusInfo    *detect.StatusInfo
+	statusInfo    *agentcc.StatusInfo
 	interruptCalls int
 	exitCalls      int
 	getStatusCalls int
@@ -50,7 +50,7 @@ func (f *fakeCCOperator) Exit(_ context.Context, _ string) error {
 	return f.exitErr
 }
 
-func (f *fakeCCOperator) GetStatus(_ context.Context, _ string) (*detect.StatusInfo, error) {
+func (f *fakeCCOperator) GetStatus(_ context.Context, _ string) (*agentcc.StatusInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.getStatusCalls++
@@ -71,15 +71,15 @@ func (f *fakeCCOperator) Launch(_ context.Context, _ string, cmd string) error {
 
 type fakeCCDetector struct {
 	mu       sync.Mutex
-	statuses []detect.Status // returns statuses in sequence; last one repeats
+	statuses []agentcc.Status // returns statuses in sequence; last one repeats
 	callIdx  int
 }
 
-func (f *fakeCCDetector) Detect(_ string) detect.Status {
+func (f *fakeCCDetector) Detect(_ string) agentcc.Status {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.statuses) == 0 {
-		return detect.StatusNormal
+		return agentcc.StatusNormal
 	}
 	idx := f.callIdx
 	if idx >= len(f.statuses) {
@@ -252,7 +252,7 @@ func TestHandoff_TermMode_NoPresetNeeded(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream", CCSessionID: "sess-uuid"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{detect.StatusNormal}},
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{agentcc.StatusNormal}},
 	})
 
 	resp := postHandoff(t, env.srv, "abc123", `{"mode":"terminal"}`)
@@ -270,7 +270,7 @@ func TestHandoff_ConcurrentLock_Returns409(t *testing.T) {
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
 		// Slow ccDetect — keeps handoff running while we try second request
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{detect.StatusCCRunning}},
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{agentcc.StatusCCRunning}},
 		ccOps: &fakeCCOperator{
 			interruptErr: fmt.Errorf("context deadline exceeded"), // will stall
 		},
@@ -295,9 +295,9 @@ func TestHandoff_Returns202WithHandoffID(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{detect.StatusCCIdle}},
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{agentcc.StatusCCIdle}},
 		ccOps: &fakeCCOperator{
-			statusInfo: &detect.StatusInfo{SessionID: "uuid-1234", Cwd: "/home/user"},
+			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-1234", Cwd: "/home/user"},
 		},
 	})
 
@@ -330,11 +330,11 @@ func TestRunHandoff_FullSequence(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusCCRunning, // initial detect: CC is running
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusCCRunning, // initial detect: CC is running
 		}},
 		ccOps: &fakeCCOperator{
-			statusInfo: &detect.StatusInfo{SessionID: "uuid-1234", Cwd: "/home/user/project"},
+			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-1234", Cwd: "/home/user/project"},
 		},
 	})
 
@@ -402,11 +402,11 @@ func TestRunHandoff_CCIdle_SkipsInterrupt(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusCCIdle, // already idle
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusCCIdle, // already idle
 		}},
 		ccOps: &fakeCCOperator{
-			statusInfo: &detect.StatusInfo{SessionID: "uuid-5678", Cwd: "/tmp"},
+			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-5678", Cwd: "/tmp"},
 		},
 	})
 
@@ -440,8 +440,8 @@ func TestRunHandoff_NoCCRunning_BroadcastsFailed(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusNormal, // no CC running
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusNormal, // no CC running
 		}},
 	})
 
@@ -460,8 +460,8 @@ func TestRunHandoff_InterruptFails_BroadcastsFailed(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusCCRunning, // CC busy
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusCCRunning, // CC busy
 		}},
 		ccOps: &fakeCCOperator{
 			interruptErr: fmt.Errorf("context deadline exceeded"),
@@ -483,8 +483,8 @@ func TestRunHandoff_GetStatusFails_BroadcastsFailed(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusCCIdle,
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusCCIdle,
 		}},
 		ccOps: &fakeCCOperator{
 			getStatusErr: fmt.Errorf("could not extract session ID"),
@@ -506,11 +506,11 @@ func TestRunHandoff_ExitFails_BroadcastsFailed(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusCCIdle,
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusCCIdle,
 		}},
 		ccOps: &fakeCCOperator{
-			statusInfo: &detect.StatusInfo{SessionID: "uuid-1234", Cwd: "/tmp"},
+			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-1234", Cwd: "/tmp"},
 			exitErr:    fmt.Errorf("CC did not exit"),
 		},
 	})
@@ -532,11 +532,11 @@ func TestRunHandoffToTerm_FullSequence(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream", CCSessionID: "sess-uuid"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusNormal,  // shell wait loop: first check
-			detect.StatusNormal,  // shell wait: final check after loop
-			detect.StatusCCIdle,  // CC verify: detected CC started
-			detect.StatusCCIdle,  // (extra for safety)
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusNormal,  // shell wait loop: first check
+			agentcc.StatusNormal,  // shell wait: final check after loop
+			agentcc.StatusCCIdle,  // CC verify: detected CC started
+			agentcc.StatusCCIdle,  // (extra for safety)
 		}},
 	})
 
@@ -588,8 +588,8 @@ func TestRunHandoffToTerm_ShellNotRecovered_RollsBack(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream", CCSessionID: "sess-uuid"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusNotInCC, // shell doesn't recover — keeps returning not-in-cc
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusNotInCC, // shell doesn't recover — keeps returning not-in-cc
 		}},
 	})
 
@@ -618,10 +618,10 @@ func TestRunHandoffToTerm_CCDidNotStart_RollsBack(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream", CCSessionID: "sess-uuid"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusNormal, // shell wait: passes
-			detect.StatusNormal, // shell final check: passes
-			detect.StatusNormal, // CC verify: stays normal — CC never starts
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusNormal, // shell wait: passes
+			agentcc.StatusNormal, // shell final check: passes
+			agentcc.StatusNormal, // CC verify: stays normal — CC never starts
 		}},
 	})
 
@@ -651,11 +651,11 @@ func TestRunHandoffToTerm_PreUpdatesMode(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream", CCSessionID: "sess-uuid"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusNormal,  // shell wait loop
-			detect.StatusNormal,  // shell wait final check
-			detect.StatusCCIdle,  // CC verify
-			detect.StatusCCIdle,  // extra
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusNormal,  // shell wait loop
+			agentcc.StatusNormal,  // shell wait final check
+			agentcc.StatusCCIdle,  // CC verify
+			agentcc.StatusCCIdle,  // extra
 		}},
 	})
 
@@ -684,11 +684,11 @@ func TestRunHandoff_DisconnectsExistingRelay(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusCCIdle,
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusCCIdle,
 		}},
 		ccOps: &fakeCCOperator{
-			statusInfo: &detect.StatusInfo{SessionID: "uuid-1234", Cwd: "/tmp"},
+			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-1234", Cwd: "/tmp"},
 		},
 	})
 
@@ -752,8 +752,8 @@ func TestRunHandoff_BroadcastsUseSessionCode(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusNormal, // no CC → triggers "failed:no CC running"
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusNormal, // no CC → triggers "failed:no CC running"
 		}},
 	})
 
@@ -781,11 +781,11 @@ func TestRunHandoff_UsesCorrectTmuxTarget(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "my-app", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusCCIdle,
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusCCIdle,
 		}},
 		ccOps: &fakeCCOperator{
-			statusInfo: &detect.StatusInfo{SessionID: "uuid-9999", Cwd: "/tmp"},
+			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-9999", Cwd: "/tmp"},
 		},
 	})
 
@@ -810,8 +810,8 @@ func TestRunHandoff_LockReleasedAfterCompletion(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusNormal, // no CC → fails after pane prep (~1.5s)
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusNormal, // no CC → fails after pane prep (~1.5s)
 		}},
 	})
 
@@ -841,11 +841,11 @@ func TestRunHandoff_RelayConnectTimeout(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusCCIdle,
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusCCIdle,
 		}},
 		ccOps: &fakeCCOperator{
-			statusInfo: &detect.StatusInfo{SessionID: "uuid-1234", Cwd: "/tmp"},
+			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-1234", Cwd: "/tmp"},
 		},
 	})
 
@@ -866,8 +866,8 @@ func TestRunHandoffToTerm_RelayShutdownTimeout(t *testing.T) {
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream", CCSessionID: "sess-uuid"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []detect.Status{
-			detect.StatusNormal,
+		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
+			agentcc.StatusNormal,
 		}},
 	})
 

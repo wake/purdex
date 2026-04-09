@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/wake/tmux-box/internal/detect"
+	agentcc "github.com/wake/tmux-box/internal/agent/cc"
 	"github.com/wake/tmux-box/internal/module/session"
 )
 
@@ -70,13 +70,13 @@ func (m *StreamModule) runHandoff(sess session.SessionInfo, code, mode, command,
 	// Step 3: Detect CC status — must be running
 	broadcast("detecting")
 	status := m.ccDetect.Detect(target)
-	if status == detect.StatusNormal || status == detect.StatusNotInCC {
+	if status == agentcc.StatusNormal || status == agentcc.StatusNotInCC {
 		broadcast("failed:no CC running")
 		return
 	}
 
 	// Step 4: If CC is busy (not idle), interrupt to idle
-	if status != detect.StatusCCIdle {
+	if status != agentcc.StatusCCIdle {
 		broadcast("stopping-cc")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -197,12 +197,12 @@ func (m *StreamModule) runHandoffToTerm(sess session.SessionInfo, code, handoffI
 	broadcast("waiting-shell")
 	shellDeadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(shellDeadline) {
-		if m.ccDetect.Detect(target) == detect.StatusNormal {
+		if m.ccDetect.Detect(target) == agentcc.StatusNormal {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	if m.ccDetect.Detect(target) != detect.StatusNormal {
+	if m.ccDetect.Detect(target) != agentcc.StatusNormal {
 		rollbackMode()
 		broadcast("failed:shell did not recover")
 		return
@@ -222,7 +222,7 @@ func (m *StreamModule) runHandoffToTerm(sess session.SessionInfo, code, handoffI
 	ccStarted := false
 	for time.Now().Before(ccDeadline) {
 		st := m.ccDetect.Detect(target)
-		if st == detect.StatusCCIdle || st == detect.StatusCCRunning || st == detect.StatusCCWaiting {
+		if st == agentcc.StatusCCIdle || st == agentcc.StatusCCRunning || st == agentcc.StatusCCWaiting {
 			ccStarted = true
 			break
 		}
