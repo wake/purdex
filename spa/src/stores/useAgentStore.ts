@@ -8,167 +8,100 @@ import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 export type AgentStatus = 'running' | 'waiting' | 'idle' | 'error'
 export type TabIndicatorStyle = 'overlay' | 'replace' | 'inline'
 
-export interface AgentHookEvent {
-  tmux_session: string
-  event_name: string
-  raw_event: Record<string, unknown>
+/** Normalized event from backend (replaces AgentHookEvent). */
+export interface NormalizedEvent {
   agent_type: string
+  status: string             // running | waiting | idle | error | clear
+  model?: string
+  subagents?: string[]
+  raw_event_name: string
   broadcast_ts: number
+  detail?: Record<string, unknown>
 }
 
 interface AgentState {
-  events: Record<string, AgentHookEvent>       // latest event per composite key
-  statuses: Record<string, AgentStatus>        // derived status per composite key
-  unread: Record<string, boolean>              // unread flag per composite key
-  activeSubagents: Record<string, string[]>    // active subagent IDs per composite key
-  models: Record<string, string>              // composite key → model name (#127)
+  // Backend-derived state
+  statuses: Record<string, AgentStatus>
+  agentTypes: Record<string, string>
+  models: Record<string, string>
+  subagents: Record<string, string[]>
+  lastEvents: Record<string, NormalizedEvent>  // for notification dispatcher
+
+  // UI state
+  unread: Record<string, boolean>
   tabIndicatorStyle: TabIndicatorStyle
 
-  handleHookEvent: (hostId: string, sessionCode: string, event: AgentHookEvent) => void
+  // Actions
+  handleNormalizedEvent: (hostId: string, sessionCode: string, event: NormalizedEvent) => void
   markRead: (hostId: string, sessionCode: string) => void
-  clearAllSubagents: () => void
-  clearSubagentsForHost: (hostId: string) => void
   removeHost: (hostId: string) => void
   setTabIndicatorStyle: (style: TabIndicatorStyle) => void
 }
 
-export function deriveStatus(eventName: string, rawEvent?: Record<string, unknown>): AgentStatus | 'clear' | null {
-  switch (eventName) {
-    case 'SessionStart':
-      // compact is background auto-compaction, not user activity
-      if (rawEvent?.source === 'compact') return null
-      // startup/resume/clear = CC waiting for user input
-      return 'idle'
-    case 'UserPromptSubmit':
-      return 'running'
-    case 'Notification': {
-      const nt = rawEvent?.notification_type
-      if (nt === 'permission_prompt' || nt === 'elicitation_dialog') return 'waiting'
-      if (nt === 'idle_prompt' || nt === 'auth_success') return 'idle'
-      // unrecognized or missing notification_type → don't change status
-      if (nt !== undefined) console.warn('[deriveStatus] unknown notification_type:', nt)
-      return null
-    }
-    case 'PermissionRequest':
-      return 'waiting'
-    case 'Stop':
-      return 'idle'
-    case 'StopFailure':
-      return 'error'
-    case 'SessionEnd':
-      return 'clear'
-    default:
-      return null
-  }
-}
-
 export const useAgentStore = create<AgentState>()(
   persist(
-    (set, get) => ({
-      events: {},
+    (set) => ({
       statuses: {},
-      unread: {},
-      activeSubagents: {},
+      agentTypes: {},
       models: {},
+      subagents: {},
+      lastEvents: {},
+      unread: {},
       tabIndicatorStyle: 'overlay' as TabIndicatorStyle,
 
-      handleHookEvent: (hostId, sessionCode, event) => {
+      handleNormalizedEvent: (hostId, sessionCode, event) => {
         const key = compositeKey(hostId, sessionCode)
-        const derived = deriveStatus(event.event_name, event.raw_event)
 
-        // Subagent tracking — does not affect main status.
-        // Ignore events without agent_id (malformed or future CC changes).
-        if (event.event_name === 'SubagentStart') {
-          const agentId = event.raw_event?.agent_id as string | undefined
-          if (!agentId) return
+        if (event.status === 'clear') {
           set((s) => {
-            const current = s.activeSubagents[key] || []
-            if (current.includes(agentId)) return s
-            return {
-              activeSubagents: { ...s.activeSubagents, [key]: [...current, agentId] },
-            }
-          })
-          return
-        }
-        if (event.event_name === 'SubagentStop') {
-          const agentId = event.raw_event?.agent_id as string | undefined
-          if (!agentId) return
-          set((s) => {
-            const current = s.activeSubagents[key] || []
-            const filtered = current.filter((id) => id !== agentId)
-            if (filtered.length === current.length) return s // orphan: agent_id not tracked
-            if (filtered.length === 0) {
+            const filterOut = <T,>(rec: Record<string, T>): Record<string, T> => {
               // eslint-disable-next-line @typescript-eslint/no-unused-vars
-              const { [key]: _, ...rest } = s.activeSubagents
-              return { activeSubagents: rest }
+              const { [key]: _, ...rest } = rec
+              return rest
             }
             return {
-              activeSubagents: { ...s.activeSubagents, [key]: filtered },
+              statuses: filterOut(s.statuses),
+              agentTypes: filterOut(s.agentTypes),
+              models: filterOut(s.models),
+              subagents: filterOut(s.subagents),
+              lastEvents: filterOut(s.lastEvents),
+              unread: filterOut(s.unread),
             }
           })
           return
         }
 
-        if (derived === 'clear') {
-          // SessionEnd: remove session from all maps
-          set((s) => {
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { [key]: _e, ...restEvents } = s.events
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { [key]: _s, ...restStatuses } = s.statuses
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { [key]: _u, ...restUnread } = s.unread
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { [key]: _a, ...restSubagents } = s.activeSubagents
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { [key]: _m, ...restModels } = s.models
-            return { events: restEvents, statuses: restStatuses, unread: restUnread, activeSubagents: restSubagents, models: restModels }
-          })
-          return
+        // Store last event (for notification dispatcher)
+        set((s) => ({ lastEvents: { ...s.lastEvents, [key]: event } }))
+
+        // Store agent type
+        if (event.agent_type) {
+          set((s) => ({ agentTypes: { ...s.agentTypes, [key]: event.agent_type } }))
         }
 
-        // Safety net: clear subagents on SessionStart (fresh/resumed session).
-        // Skip compact — that's mid-work auto-compaction, subagents may still be running.
-        if (event.event_name === 'SessionStart' && event.raw_event?.source !== 'compact') {
-          set((s) => {
-            if (!s.activeSubagents[key]) return s
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { [key]: _, ...rest } = s.activeSubagents
-            return { activeSubagents: rest }
-          })
+        // Store model (persist across events)
+        if (event.model) {
+          set((s) => ({ models: { ...s.models, [key]: event.model! } }))
         }
 
-        // Error guard: when in error state, only whitelisted events can
-        // clear it. Non-whitelisted events are suppressed entirely (both
-        // events map and status) to keep the two in sync.
-        if (derived !== null && derived !== 'error') {
-          const currentStatus = get().statuses[key]
-          if (currentStatus === 'error') {
-            const canClearError =
-              event.event_name === 'UserPromptSubmit' ||
-              event.event_name === 'SessionStart' ||
-              event.event_name === 'Stop'
-            if (!canClearError) return
-          }
+        // Store subagents
+        if (event.subagents) {
+          set((s) => ({
+            subagents: event.subagents!.length > 0
+              ? { ...s.subagents, [key]: event.subagents! }
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
+              : (() => { const { [key]: _, ...rest } = s.subagents; return rest })(),
+          }))
         }
 
-        // Store the latest event
-        set((s) => ({ events: { ...s.events, [key]: event } }))
+        // Store status (skip events with no status, e.g. SubagentStart/Stop)
+        const status = event.status as AgentStatus
+        if (status && status !== '') {
+          set((s) => ({ statuses: { ...s.statuses, [key]: status } }))
 
-        // Extract modelName if present (persists across event overwrites — #127)
-        const modelName = event.raw_event?.modelName as string | undefined
-        if (modelName) {
-          set((s) => ({ models: { ...s.models, [key]: modelName } }))
-        }
-
-        if (derived !== null) {
-          set((s) => ({ statuses: { ...s.statuses, [key]: derived } }))
-
-          // Mark unread when not focused: all 'waiting' statuses are actionable;
-          // 'idle' statuses are actionable only if they don't come from a Notification event
-          // (idle_prompt/auth_success are informational and should not trigger the red dot).
-          const isActionable = derived === 'waiting' || derived === 'error' ||
-            (derived === 'idle' && event.event_name !== 'Notification')
+          // Mark unread when not focused
+          const isActionable = status === 'waiting' || status === 'error' ||
+            (status === 'idle' && event.raw_event_name !== 'Notification')
           const activeInfo = getActiveSessionInfo()
           const activeKey = activeInfo ? compositeKey(activeInfo.hostId, activeInfo.sessionCode) : ''
           if (isActionable && activeKey !== key) {
@@ -184,17 +117,6 @@ export const useAgentStore = create<AgentState>()(
         return { unread: rest }
       }),
 
-      clearAllSubagents: () => set({ activeSubagents: {} }),
-
-      clearSubagentsForHost: (hostId) => set((s) => {
-        const prefix = `${hostId}:`
-        const filtered: Record<string, string[]> = {}
-        for (const [k, v] of Object.entries(s.activeSubagents)) {
-          if (!k.startsWith(prefix)) filtered[k] = v
-        }
-        return { activeSubagents: filtered }
-      }),
-
       removeHost: (hostId) => set((s) => {
         const prefix = `${hostId}:`
         const filterKeys = <T,>(record: Record<string, T>): Record<string, T> => {
@@ -205,11 +127,12 @@ export const useAgentStore = create<AgentState>()(
           return result
         }
         return {
-          events: filterKeys(s.events),
           statuses: filterKeys(s.statuses),
-          unread: filterKeys(s.unread),
-          activeSubagents: filterKeys(s.activeSubagents),
+          agentTypes: filterKeys(s.agentTypes),
           models: filterKeys(s.models),
+          subagents: filterKeys(s.subagents),
+          lastEvents: filterKeys(s.lastEvents),
+          unread: filterKeys(s.unread),
         }
       }),
 
@@ -218,7 +141,7 @@ export const useAgentStore = create<AgentState>()(
     {
       name: STORAGE_KEYS.AGENT,
       storage: purdexStorage,
-      version: 1,
+      version: 2,  // bumped from 1
       partialize: (state) => ({ tabIndicatorStyle: state.tabIndicatorStyle }),
     },
   ),
