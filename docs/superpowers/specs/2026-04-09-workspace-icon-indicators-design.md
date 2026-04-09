@@ -81,7 +81,8 @@ useAgentStore.unread[ck] === true → 計數
 | 檔案 | 變更 |
 |------|------|
 | `spa/src/features/workspace/components/ActivityBar.tsx` | workspace button 內加入 badge + pill 渲染 |
-| `spa/src/features/workspace/hooks/useWorkspaceIndicators.ts` | **新增** — 封裝 tabId→compositeKey 橋接、unread 聚合、狀態優先級計算 |
+| `spa/src/features/workspace/workspace-indicators.ts` | **新增** — 純函式：tabId→compositeKey 橋接、狀態優先級計算 |
+| `spa/src/features/workspace/useWorkspaceIndicators.ts` | **新增** — React hook：封裝 store 訂閱、unread 聚合 |
 | `spa/src/stores/useTabStore.ts` | 讀取依賴（hook 內訂閱） |
 | `spa/src/stores/useAgentStore.ts` | 讀取依賴（hook 內訂閱） |
 | `spa/src/features/workspace/components/ActivityBar.test.tsx` | 補測 badge 顯示/隱藏、數字計算 |

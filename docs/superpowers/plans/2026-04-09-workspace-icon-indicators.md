@@ -481,19 +481,23 @@ it('shows unread badge on inactive workspace', () => {
   expect(badges[0].textContent).toBe('1')
 })
 
-it('hides unread badge on active workspace', () => {
+it('hides unread badge on active workspace even when it has unread tabs', () => {
   useTabStore.setState({
     tabs: {
       t1: mockSessionTab('t1', 'h1', 's1'),
       t2: mockSessionTab('t2', 'h1', 's2'),
+      t3: mockSessionTab('t3', 'h1', 's3'),
     },
   })
-  useAgentStore.setState({ unread: { 'h1:s1': true } })
+  // ws-1 (active) has t1 unread, ws-2 (inactive) has t3 unread
+  useAgentStore.setState({ unread: { 'h1:s1': true, 'h1:s3': true } })
 
   render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" />)
 
-  // ws-1 is active → no badge even though t1 is unread
-  expect(screen.queryAllByTestId('ws-unread-badge')).toHaveLength(0)
+  // Only ws-2's badge should show — ws-1 is active so its badge is suppressed
+  const badges = screen.getAllByTestId('ws-unread-badge')
+  expect(badges).toHaveLength(1)
+  expect(badges[0].textContent).toBe('1')
 })
 
 it('includes unread count in aria-label', () => {
