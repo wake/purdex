@@ -85,7 +85,7 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     if (tab && !tab.locked) handleCloseTab(tabId)
   }, [tabs, handleCloseTab])
 
-  const handleContextAction = useCallback((action: ContextMenuAction) => {
+  const handleContextAction = useCallback((action: ContextMenuAction, payload?: string) => {
     if (!contextMenu) return
     const { tab } = contextMenu
     const store = useTabStore.getState()
@@ -137,6 +137,17 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
           anchorRect: rect,
         })
         setRenameError(undefined)
+        break
+      }
+      case 'mergeToTab': {
+        if (!payload) break
+        const sourceTab = tabs[tab.id]
+        const targetTab = tabs[payload]
+        if (!sourceTab || !targetTab) break
+        const sourcePrimary = getPrimaryPane(sourceTab.layout)
+        const targetPrimary = getPrimaryPane(targetTab.layout)
+        useTabStore.getState().splitPane(payload, targetPrimary.id, 'h', sourcePrimary.content)
+        handleCloseTab(tab.id)
         break
       }
     }

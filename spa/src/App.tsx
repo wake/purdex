@@ -357,6 +357,9 @@ export default function App() {
             onAction={handleContextAction}
             hasOtherUnlocked={displayTabs.some((t) => t.id !== contextMenu.tab.id && !t.locked)}
             hasRightUnlocked={contextMenuHasRightUnlocked}
+            targetTabs={displayTabs.filter((t) =>
+              t.id !== contextMenu.tab.id && t.layout.type === 'split'
+            )}
           />
         )}
         {renameTarget && (
