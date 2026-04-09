@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, Notification, protocol, net } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, protocol, net } from 'electron'
 import { join } from 'path'
 import { WindowManager } from './window-manager'
 import { BrowserViewManager } from './browser-view-manager'
@@ -39,6 +39,18 @@ function registerIpcHandlers(): void {
   })
   ipcMain.handle('window:get-all', (event) => {
     return windowManager.getAll(event.sender)
+  })
+  ipcMain.handle('window:close', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win || win.isDestroyed()) return
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'question',
+      buttons: ['Close', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+      message: 'Close this window?',
+    })
+    if (response === 0) win.close()
   })
 
   // Browser View — delegated to browser-view-ipc.ts

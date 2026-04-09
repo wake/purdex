@@ -59,7 +59,13 @@ export function useShortcuts(): void {
 
       if (action === 'close-tab') {
         const { activeTabId, tabs } = tabState
-        if (!activeTabId || !visibleIds.includes(activeTabId)) return
+        if (!activeTabId || !visibleIds.includes(activeTabId)) {
+          // No active/visible tab — ask to close the window if it's empty
+          const allEmpty = tabState.tabOrder.length === 0
+            || useWorkspaceStore.getState().workspaces.every((ws) => ws.tabs.length === 0)
+          if (allEmpty) window.electronAPI?.closeWindow()
+          return
+        }
         const tab = tabs[activeTabId]
         if (!tab || tab.locked) return
         destroyBrowserViewIfNeeded(tab)
