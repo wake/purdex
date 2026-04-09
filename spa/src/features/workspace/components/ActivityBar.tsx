@@ -11,8 +11,14 @@ interface WorkspaceButtonProps {
   onContextMenu?: (e: React.MouseEvent, wsId: string) => void
 }
 
+const PILL_COLORS: Record<string, string> = {
+  running: '#4ade80',
+  waiting: '#facc15',
+  error: '#ef4444',
+}
+
 function WorkspaceButton({ workspace: ws, isActive, onSelect, onContextMenu }: WorkspaceButtonProps) {
-  const { unreadCount } = useWorkspaceIndicators(ws.tabs)
+  const { unreadCount, aggregatedStatus } = useWorkspaceIndicators(ws.tabs)
   const showBadge = !isActive && unreadCount > 0
 
   return (
@@ -32,6 +38,21 @@ function WorkspaceButton({ workspace: ws, isActive, onSelect, onContextMenu }: W
       >
         <WorkspaceIcon icon={ws.icon} name={ws.name} size={16} weight={ws.iconWeight} />
       </button>
+      {aggregatedStatus && (
+        <span
+          className={`absolute rounded-r-sm ${aggregatedStatus === 'running' ? 'animate-breathe' : ''}`}
+          style={{
+            left: '-7px',
+            top: '50%',
+            transform: 'translateY(-50%)',
+            width: '3px',
+            height: aggregatedStatus === 'error' || aggregatedStatus === 'waiting' ? '60%' : '40%',
+            backgroundColor: PILL_COLORS[aggregatedStatus],
+            '--breathe-color': PILL_COLORS[aggregatedStatus],
+            '--breathe-bg': 'transparent',
+          } as React.CSSProperties}
+        />
+      )}
       {showBadge && (
         <span
           data-testid="ws-unread-badge"
