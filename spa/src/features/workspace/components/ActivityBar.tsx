@@ -81,7 +81,7 @@ interface Props {
   activeStandaloneTabId: string | null
   onSelectWorkspace: (wsId: string) => void
   onSelectHome: () => void
-  standaloneTabCount: number
+  standaloneTabIds: string[]
   onAddWorkspace: () => void
   onContextMenuWorkspace?: (e: React.MouseEvent, wsId: string) => void
   onOpenHosts: () => void
@@ -94,32 +94,57 @@ export function ActivityBar({
   activeStandaloneTabId,
   onSelectWorkspace,
   onSelectHome,
-  standaloneTabCount,
+  standaloneTabIds,
   onAddWorkspace,
   onContextMenuWorkspace,
   onOpenHosts,
   onOpenSettings,
 }: Props) {
   const t = useI18nStore((s) => s.t)
+  const { unreadCount: homeUnreadCount, aggregatedStatus: homeStatus } = useWorkspaceIndicators(standaloneTabIds)
+  const isHomeActive = !activeWorkspaceId
+  const showHomeBadge = !isHomeActive && homeUnreadCount > 0
   return (
     <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 px-px gap-2.5 flex-shrink-0">
       {/* Home — standalone tabs */}
-      <button
-        title={t('nav.home')}
-        onClick={onSelectHome}
-        className={`relative w-[30px] h-[30px] rounded-lg flex items-center justify-center cursor-pointer transition-all ${
-          !activeWorkspaceId
-            ? 'bg-accent text-white'
-            : 'bg-surface-secondary text-text-secondary hover:text-text-primary hover:bg-surface-tertiary'
-        }`}
-      >
-        <SquaresFour size={18} weight={!activeWorkspaceId ? 'fill' : 'regular'} />
-        {activeWorkspaceId && standaloneTabCount > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[16px] h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-0.5">
-            {standaloneTabCount}
+      <div className="relative group">
+        {homeStatus && !isHomeActive && (
+          <span
+            className={`absolute rounded-full ${homeStatus === 'running' ? 'animate-breathe' : ''}`}
+            style={{
+              width: '5px',
+              height: '5px',
+              left: '-1px',
+              top: '50%',
+              transform: 'translateY(calc(-50% - 1px))',
+              backgroundColor: PILL_COLORS[homeStatus],
+              boxShadow: '0 0 0 1.5px var(--surface-tertiary)',
+              '--breathe-color': PILL_COLORS[homeStatus],
+              '--breathe-bg': 'var(--surface-tertiary)',
+            } as React.CSSProperties}
+          />
+        )}
+        <button
+          title={t('nav.home')}
+          onClick={onSelectHome}
+          className={`relative w-[30px] h-[30px] rounded-lg flex items-center justify-center cursor-pointer transition-all ${
+            isHomeActive
+              ? 'bg-accent text-white'
+              : 'bg-surface-secondary text-text-secondary hover:text-text-primary hover:bg-surface-tertiary'
+          }`}
+        >
+          <SquaresFour size={18} weight={isHomeActive ? 'fill' : 'regular'} />
+        </button>
+        {showHomeBadge && (
+          <span
+            data-testid="home-unread-badge"
+            className="absolute -top-[5px] -right-[6px] min-w-[15px] h-[15px] rounded-full flex items-center justify-center text-white text-[9px] font-bold px-[3px] leading-none z-10"
+            style={{ backgroundColor: '#dc2626', boxShadow: '0 0 0 2px var(--surface-tertiary)' }}
+          >
+            {homeUnreadCount}
           </span>
         )}
-      </button>
+      </div>
 
       {workspaces.length > 0 && <div className="w-5 h-px bg-border-default my-0.5" />}
 

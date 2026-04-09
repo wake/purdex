@@ -39,7 +39,7 @@ const defaultProps = {
   activeStandaloneTabId: null as string | null,
   onSelectWorkspace: vi.fn(),
   onSelectHome: vi.fn(),
-  standaloneTabCount: 0,
+  standaloneTabIds: [] as string[],
   onAddWorkspace: vi.fn(),
   onOpenHosts: vi.fn(),
   onOpenSettings: vi.fn(),
@@ -90,17 +90,39 @@ describe('ActivityBar', () => {
     expect(onSelectHome).toHaveBeenCalled()
   })
 
-  it('shows badge on Home when standalone tabs exist and workspace is active', () => {
-    const { container } = render(<ActivityBar {...defaultProps} standaloneTabCount={3} />)
-    const badge = container.querySelector('.bg-red-500')
-    expect(badge).toBeTruthy()
-    expect(badge!.textContent).toBe('3')
+  it('shows unread badge on Home when standalone tabs have unreads and workspace is active', () => {
+    useTabStore.setState({
+      tabs: {
+        s1: mockSessionTab('s1', 'h1', 'sa'),
+        s2: mockSessionTab('s2', 'h1', 'sb'),
+        s3: mockSessionTab('s3', 'h1', 'sc'),
+      },
+    })
+    useAgentStore.setState({ unread: { 'h1:sa': true, 'h1:sb': true } })
+
+    render(<ActivityBar {...defaultProps} standaloneTabIds={['s1', 's2', 's3']} />)
+    const badge = screen.getByTestId('home-unread-badge')
+    expect(badge.textContent).toBe('2')
   })
 
-  it('hides badge on Home when in Home mode', () => {
-    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId={null} standaloneTabCount={3} />)
-    const badge = container.querySelector('.bg-red-500')
-    expect(badge).toBeNull()
+  it('hides Home badge when standalone tabs have no unreads', () => {
+    useTabStore.setState({
+      tabs: { s1: mockSessionTab('s1', 'h1', 'sa') },
+    })
+    useAgentStore.setState({ unread: {} })
+
+    const { container } = render(<ActivityBar {...defaultProps} standaloneTabIds={['s1']} />)
+    expect(container.querySelector('[data-testid="home-unread-badge"]')).toBeNull()
+  })
+
+  it('hides Home unread badge when in Home mode', () => {
+    useTabStore.setState({
+      tabs: { s1: mockSessionTab('s1', 'h1', 'sa') },
+    })
+    useAgentStore.setState({ unread: { 'h1:sa': true } })
+
+    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId={null} standaloneTabIds={['s1']} />)
+    expect(container.querySelector('[data-testid="home-unread-badge"]')).toBeNull()
   })
 
   it('shows unread badge on inactive workspace', () => {

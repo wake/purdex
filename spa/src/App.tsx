@@ -181,10 +181,8 @@ export default function App() {
   })
   const displayTabs: Tab[] = visibleTabIds.map((id) => tabs[id]).filter(Boolean)
 
-  const standaloneTabs = tabOrder
-    .filter((id) => isStandaloneTab(id, workspaces))
-    .map((id) => tabs[id])
-    .filter(Boolean)
+  const standaloneTabIds = tabOrder.filter((id) => isStandaloneTab(id, workspaces))
+  const standaloneTabs = standaloneTabIds.map((id) => tabs[id]).filter(Boolean)
 
   const activeStandaloneTabId = activeTabId && isStandaloneTab(activeTabId, workspaces) ? activeTabId : null
 
@@ -288,7 +286,7 @@ export default function App() {
                 useTabStore.getState().setActiveTab(null)
               }
             }}
-            standaloneTabCount={standaloneTabs.length}
+            standaloneTabIds={standaloneTabIds}
             onAddWorkspace={() => {
               if (workspaces.length === 0 && tabOrder.length > 0) {
                 const ws = useWorkspaceStore.getState().addWorkspace('Workspace 1')

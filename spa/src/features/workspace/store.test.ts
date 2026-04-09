@@ -366,6 +366,23 @@ describe('useWorkspaceStore', () => {
       expect(useTabStore.getState().activeTabId).toBe(tabs[2].id)
     })
 
+    it('closing last standalone tab sets activeTabId to null (does not leak to workspace tabs)', () => {
+      const ws = useWorkspaceStore.getState().addWorkspace('WS')
+      const wsTab = makeTab()
+      useTabStore.getState().addTab(wsTab)
+      useWorkspaceStore.getState().addTabToWorkspace(ws.id, wsTab.id)
+
+      const standalone = makeTab()
+      useTabStore.getState().addTab(standalone)
+      useTabStore.getState().setActiveTab(standalone.id)
+      useTabStore.setState({ visitHistory: [] })
+
+      useWorkspaceStore.getState().closeTabInWorkspace(standalone.id)
+
+      // Should be null — not the workspace tab
+      expect(useTabStore.getState().activeTabId).toBeNull()
+    })
+
     it('prefers visitHistory over adjacent when selecting next tab', () => {
       const ws = useWorkspaceStore.getState().addWorkspace('Test')
       const tabs = [makeTab(), makeTab(), makeTab()]
