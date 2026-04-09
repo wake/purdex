@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { createWorkspace, type Workspace, type IconWeight } from '../../types/tab'
+import { createWorkspace, isStandaloneTab, type Workspace, type IconWeight } from '../../types/tab'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../../lib/storage'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHistoryStore } from '../../stores/useHistoryStore'
@@ -130,12 +130,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (!tab || tab.locked) return
 
         const ws = get().findWorkspaceByTab(tabId)
+        const workspaces = get().workspaces
 
         // 1. Pre-compute next tab (before any mutation)
         //    Priority: visitHistory (scoped) → adjacent in workspace/tabOrder
+        //    Standalone tabs only scope to other standalone tabs (not workspace tabs)
+        const standaloneOrder = tabStore.tabOrder.filter(
+          (id) => isStandaloneTab(id, workspaces),
+        )
         const scopeIds = ws
           ? new Set(ws.tabs.filter((id) => id !== tabId))
-          : new Set(tabStore.tabOrder.filter((id) => id !== tabId))
+          : new Set(standaloneOrder.filter((id) => id !== tabId))
 
         let nextTabId: string | null = null
         // Try visitHistory first (most recent visited tab still in scope)
@@ -148,7 +153,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
         // Fallback to adjacent
         if (nextTabId === null) {
-          const ordered = ws ? ws.tabs : tabStore.tabOrder
+          const ordered = ws ? ws.tabs : standaloneOrder
           const idx = ordered.indexOf(tabId)
           const remaining = ordered.filter((id) => id !== tabId)
           nextTabId = remaining[Math.min(idx, remaining.length - 1)] ?? null
