@@ -18,6 +18,7 @@ import { AgentSection } from '../components/settings/AgentSection'
 import { TerminalSection } from '../components/settings/TerminalSection'
 import { ElectronSection } from '../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../components/settings/DevEnvironmentSection'
+import { ModuleConfigSection } from '../components/settings/ModuleConfigSection'
 import { FileTreeWorkspaceView } from '../components/FileTreeView'
 import { FileTreeSessionView } from '../components/FileTreeSessionView'
 import { FolderOpen } from '@phosphor-icons/react'
@@ -123,6 +124,12 @@ export function registerBuiltinModules(): void {
   registerSettingsSection({ id: 'agent', label: 'settings.section.agent', order: 2, component: AgentSection })
   registerSettingsSection({ id: 'workspace', label: 'settings.section.workspace', order: 10 }) // reserved
   registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: 11 }) // reserved
+  registerSettingsSection({
+    id: 'module-config',
+    label: 'settings.section.modules',
+    order: 8,
+    component: () => <ModuleConfigSection scope="global" />,
+  })
 
   // New-tab providers
   registerNewTabProvider({
