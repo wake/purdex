@@ -35,6 +35,8 @@
 
 - `ViewProps` 新增 `region` 欄位
 - `SidebarRegion.tsx` 呼叫 `<ActiveComponent>` 時補傳 `region` / `workspaceId` / `hostId`
+  - `workspaceId` 取自 `useWorkspaceStore(s => s.activeWorkspaceId)`
+  - `hostId` 取自 `useHostStore(s => s.activeHostId)`
 
 ### 不改動的部分
 
@@ -70,6 +72,11 @@ interface Workspace {
   // ...existing fields
   moduleConfig: Record<string, Record<string, unknown>>  // moduleId → config
 }
+
+// createWorkspace() 初始化
+function createWorkspace(name: string): Workspace {
+  return { ...existingFields, moduleConfig: {} }
+}
 ```
 
 ### Workspace 層級
@@ -78,11 +85,17 @@ interface Workspace {
 
 **Store Action：** `setModuleConfig: (wsId: string, moduleId: string, key: string, value: unknown) => void`
 
+**Safe spread（相容舊 persist 資料）：** `setModuleConfig` 實作須使用安全 spread，因為舊 persist 資料的 workspace 不含 `moduleConfig` 欄位：
+```typescript
+{ ...ws, moduleConfig: { ...(ws.moduleConfig ?? {}), [moduleId]: { ...(ws.moduleConfig?.[moduleId] ?? {}), [key]: value } } }
+```
+所有讀取也一律使用 optional chaining（如 `workspace.moduleConfig?.files?.projectPath`）。
+
 **Settings UI：** Workspace settings 頁面根據 registry 的 `workspaceConfig` 定義**自動產生**表單欄位。
 
 ### 全域層級
 
-**儲存：** 獨立的 `moduleGlobalConfig: Record<string, Record<string, unknown>>`，存放在 settings store（或新建專用 store），persist 到 storage。
+**儲存：** 新建 `useModuleConfigStore.ts`，內含 `globalConfig: Record<string, Record<string, unknown>>`，persist 到 storage（新增 `STORAGE_KEYS.MODULE_CONFIG`）。
 
 **Store Action：** `setGlobalModuleConfig: (moduleId: string, key: string, value: unknown) => void`
 
@@ -158,9 +171,10 @@ registerModule({
 修正：在 `PaneLayoutRenderer` 層級偵測 grid-4 結構（外層 `split-v` 包含兩個 `split-h` 子節點），讓兩個 `split-h` 的 splitter **聯動**。拖曳任一側的水平 splitter 時，同步調整另一側的 `sizes`。
 
 實作方式：
-- `PaneLayoutRenderer` 在頂層偵測 grid pattern，傳入 shared resize callback
-- `PaneSplitter` 新增 optional `onSyncResize?: (sizes: number[]) => void` prop
-- 拖曳時同時更新兩個 `split-h` 節點的 `sizes` 陣列
+- `PaneLayoutRenderer` 在頂層偵測 grid pattern（外層 `split-v` 含兩個 `split-h` children）
+- 偵測到 grid 時，不走遞迴渲染，改用專用 `GridRenderer` 邏輯：統一管理兩個 `split-h` 的水平 splitter
+- 拖曳任一水平 splitter 時，透過 `useTabStore.resizePanes` 同時更新兩個 `split-h` 節點的 `sizes`（用各自的 splitId）
+- 兩個 container 的 `offsetWidth` 各自計算百分比，但 sizes 值保持同步
 
 ### 4.3 Pane 彈出位置
 
@@ -168,7 +182,8 @@ registerModule({
 
 修正：
 1. `useTabStore.detachPane` 接受 optional `afterTabId` 參數，新 tab 插入到 `tabOrder` 中 `afterTabId` 的下一個位置（而非 append 到尾端）
-2. `PaneLayoutRenderer.tsx` 的 `onDetach` handler 呼叫 detach 後，呼叫 `useWorkspaceStore.insertTab(newTabId, workspaceId)` 將新 tab 加入當前 workspace，插入到當前 tab 的下一位
+2. `workspace/store.ts` 的 `insertTab` 新增 optional `afterTabId` 參數，在 `ws.tabs` 陣列中正確插入位置（而非 append）
+3. `PaneLayoutRenderer.tsx` 的 `onDetach` handler 呼叫 detach 後，呼叫 `useWorkspaceStore.insertTab(newTabId, workspaceId, afterTabId)` 將新 tab 加入當前 workspace，插入到當前 tab 的下一位
 
 **邊界情況：** 若當前 tab 為 pinned，detach 出的新 tab 預設為 unpinned，插入到 pinned group 之後的第一個位置。
 
@@ -183,7 +198,11 @@ registerModule({
   2. 使用 `splitAtPane(targetLayout, targetPrimaryPaneId, 'h', content)` 在目標 tab 的 primary pane 旁新增
   3. 關閉原 tab
 
-**介面變更：** `ContextMenuAction` 新增 `'mergeToTab'`。`onAction` callback 簽名改為 `(action: ContextMenuAction, payload?: string) => void`，`mergeToTab` 時 `payload` 為目標 tab ID。`TabContextMenu` 新增 `targetTabs?: Tab[]` prop，由呼叫方從 workspace store 過濾含 split layout 的 tab 後傳入。
+**介面變更：**
+- `ContextMenuAction` 新增 `'mergeToTab'`
+- `onAction` callback 簽名改為 `(action: ContextMenuAction, payload?: string) => void`，`mergeToTab` 時 `payload` 為目標 tab ID
+- `TabContextMenu` 新增 `targetTabs?: Tab[]` prop，由呼叫方從 workspace store 過濾含 split layout 的 tab（排除自身）後傳入
+- 所有使用 `TabContextMenu` 的父元件（`TabBar.tsx` 等）需更新 `onAction` handler 簽名以接受 `payload` 參數，並處理 `mergeToTab` action
 
 ### 4.5 Pane 內容交換（移動）
 
@@ -224,16 +243,18 @@ registerModule({
 |------|------|------|
 | Module Registry | `module-registry.ts` | `ViewProps` 新增 `region`；新增 `ConfigDef` 型別 + `ModuleDefinition.workspaceConfig` / `globalConfig`；新增查詢函數 |
 | Module Registry | `register-modules.tsx` | files 拆成 2 個 view + 宣告 `workspaceConfig` |
-| Workspace Store | `workspace/store.ts`, `types/tab.ts` | `Workspace` 新增 `moduleConfig` 欄位 + `setModuleConfig` action |
-| Global Config | settings store 或新建 store | 新增 `moduleGlobalConfig` 儲存 + `setGlobalModuleConfig` action |
+| Workspace Store | `workspace/store.ts`, `types/tab.ts` | `Workspace` 新增 `moduleConfig` 欄位 + `setModuleConfig` action + `createWorkspace` 初始化 + `insertTab` 新增 `afterTabId` 參數 |
+| Module Config Store | 新建 `useModuleConfigStore.ts` | 全域 module config 儲存 + `setGlobalModuleConfig` action |
+| Storage Keys | `storage.ts` | 新增 `MODULE_CONFIG` key |
 | Settings UI | settings 相關元件 | Workspace / Global settings 頁面自動產生 module config 表單 |
 | FileTreeView | `FileTreeView.tsx` → 拆成兩個 component | `FileTreeWorkspaceView` + `FileTreeSessionView` |
 | SidebarRegion | `SidebarRegion.tsx` | 補傳 `region` / `workspaceId` / `hostId` 給 view component |
-| PaneSplitter | `PaneSplitter.tsx` | 加強視覺 + 新增 `onSyncResize` prop |
-| PaneLayoutRenderer | `PaneLayoutRenderer.tsx` | grid-4 偵測 + 水平 splitter 聯動 + detach handler 補 workspace insertTab |
+| PaneSplitter | `PaneSplitter.tsx` | 加強視覺 |
+| PaneLayoutRenderer | `PaneLayoutRenderer.tsx` | grid-4 偵測 + 專用 GridRenderer + detach handler 補 workspace insertTab |
 | PaneHeader | `PaneHeader.tsx` | 工具按鈕視覺加強 + swap 功能 |
 | Pane detach | `useTabStore.ts` | `detachPane` 新增 `afterTabId` 參數 |
-| TabContextMenu | `TabContextMenu.tsx` | 新增 `mergeToTab` action + `targetTabs` prop |
+| TabContextMenu | `TabContextMenu.tsx` | 新增 `mergeToTab` action + `targetTabs` prop + `onAction` 簽名變更 |
+| TabContextMenu 父元件 | `TabBar.tsx` 等 | 更新 `onAction` handler 簽名 + 處理 `mergeToTab` + 傳入 `targetTabs` |
 | TitleBar | `TitleBar.tsx` | 新增 4 個 region toggle 按鈕 |
 | Pane tree utils | `pane-tree.ts` | 新增 `swapPaneContent` 工具函數 |
 | Tests | `useTabStore.split.test.ts`, `pane-tree.test.ts` | 更新 detachPane 測試 + 新增 swapPaneContent 測試 |
@@ -246,7 +267,7 @@ registerModule({
 
 ## 8. 風險點
 
-- **Grid-4 水平聯動**：需要讓兩個獨立 `split-h` 節點的 splitter 共享 resize 事件，透過 `PaneLayoutRenderer` 頂層偵測 grid pattern 並傳入 shared callback
+- **Grid-4 水平聯動**：頂層偵測 grid pattern 後需跳過遞迴渲染，改用專用 GridRenderer 統一管理兩個 `split-h` 的 splitter
 - **Tab 右鍵 submenu**：`TabContextMenu` 需透過 `targetTabs` prop 存取其他 tab 的 layout 資訊
 - **Daemon cwd API**：`file-tree-session` 依賴尚未實作的 daemon 端 API，若 daemon 未準備好則此 view 需 defer
 - **Pinned tab detach**：detach 出的新 tab 預設 unpinned，插入位置需跳過 pinned group
