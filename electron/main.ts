@@ -43,14 +43,18 @@ function registerIpcHandlers(): void {
   ipcMain.handle('window:close', async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win || win.isDestroyed()) return
-    const { response } = await dialog.showMessageBox(win, {
-      type: 'question',
-      buttons: ['Close', 'Cancel'],
-      defaultId: 0,
-      cancelId: 1,
-      message: 'Close this window?',
-    })
-    if (response === 0) win.close()
+    try {
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'question',
+        buttons: ['Close', 'Cancel'],
+        defaultId: 0,
+        cancelId: 1,
+        message: 'Close this window?',
+      })
+      if (response === 0 && !win.isDestroyed()) win.close()
+    } catch {
+      // Window destroyed while dialog was showing — nothing to do
+    }
   })
 
   // Browser View — delegated to browser-view-ipc.ts

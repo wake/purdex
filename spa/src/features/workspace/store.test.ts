@@ -483,6 +483,16 @@ describe('useWorkspaceStore', () => {
       const ids = useWorkspaceStore.getState().workspaces.map(w => w.id)
       expect(ids).toEqual([ws2.id, ws1.id])
     })
+
+    it('preserves workspaces missing from orderedIds', () => {
+      const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
+      const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+      const ws3 = useWorkspaceStore.getState().addWorkspace('WS3')
+      // Only pass 2 of 3 — ws1 should be appended at the end
+      useWorkspaceStore.getState().reorderWorkspaces([ws3.id, ws2.id])
+      const ids = useWorkspaceStore.getState().workspaces.map(w => w.id)
+      expect(ids).toEqual([ws3.id, ws2.id, ws1.id])
+    })
   })
 
   // === importWorkspace ===

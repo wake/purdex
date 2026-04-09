@@ -30,6 +30,7 @@ import { RenamePopover } from './components/RenamePopover'
 import { ThemeInjector } from './components/ThemeInjector'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { getPlatformCapabilities } from './lib/platform'
+import { scanPaneTree } from './lib/pane-tree'
 import { useI18nStore } from './stores/useI18nStore'
 import type { Tab } from './types/tab'
 
@@ -233,13 +234,14 @@ export default function App() {
     if (!ws || ws.tabs.length === 0) return null
     const tabData = ws.tabs.map(id => tabs[id]).filter(Boolean)
     if (tabData.length === 0) return null
-    // Collect host configs referenced by tabs so the receiving window
-    // has them immediately (before localStorage hydration completes)
+    // Collect host configs referenced by tabs (including split-layout panes)
+    // so the receiving window has them immediately
     const hostState = useHostStore.getState()
     const hostIds = new Set<string>()
     for (const tab of tabData) {
-      const pane = tab.layout?.type === 'leaf' ? tab.layout.pane : null
-      if (pane?.content.kind === 'tmux-session') hostIds.add(pane.content.hostId)
+      scanPaneTree(tab.layout, (pane) => {
+        if (pane.content.kind === 'tmux-session') hostIds.add(pane.content.hostId)
+      })
     }
     const hostConfigs: Record<string, import('./stores/useHostStore').HostConfig> = {}
     for (const hid of hostIds) {

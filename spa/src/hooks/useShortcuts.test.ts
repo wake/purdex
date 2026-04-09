@@ -248,7 +248,7 @@ describe('useShortcuts', () => {
     })
 
     it('calls closeWindow when window is empty (no tabs)', () => {
-      const closeWindow = vi.fn()
+      const closeWindow = vi.fn().mockResolvedValue(undefined)
       ;(window as unknown as Record<string, unknown>).electronAPI = {
         ...(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI,
         onShortcut: (cb: (payload: { action: string }) => void) => {

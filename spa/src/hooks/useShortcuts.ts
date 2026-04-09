@@ -60,10 +60,10 @@ export function useShortcuts(): void {
       if (action === 'close-tab') {
         const { activeTabId, tabs } = tabState
         if (!activeTabId || !visibleIds.includes(activeTabId)) {
-          // No active/visible tab — ask to close the window if it's empty
-          const allEmpty = tabState.tabOrder.length === 0
-            || useWorkspaceStore.getState().workspaces.every((ws) => ws.tabs.length === 0)
-          if (allEmpty) window.electronAPI?.closeWindow()
+          // No active/visible tab — ask to close the window if truly empty
+          if (visibleIds.length === 0 && tabState.tabOrder.length === 0) {
+            window.electronAPI?.closeWindow().catch(() => {})
+          }
           return
         }
         const tab = tabs[activeTabId]
