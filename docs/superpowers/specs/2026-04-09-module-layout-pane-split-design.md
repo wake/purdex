@@ -61,7 +61,7 @@
   - 中：視窗標題（當前 workspace 或 session 名稱）
   - 右：Layout pattern 按鈕（pane split 操作）
   - 整條為 `-webkit-app-region: drag`，按鈕為 `no-drag`
-- **SPA 模式**：不顯示 Title Bar，layout 按鈕移至 Tab Bar 右側
+- **SPA 模式**：不顯示 Title Bar，layout 按鈕移至 `TabBar` 元件內部的右側區域（與 + 按鈕同列）
 
 ---
 
@@ -118,10 +118,25 @@ function getModules(): ModuleDefinition[]
 // 便捷查詢
 function getPaneRenderer(kind: string): React.ComponentType<PaneRendererProps> | undefined
 function getViewDefinition(viewId: string): ViewDefinition | undefined
-function getViewsByRegion(region: SidebarRegion): ViewDefinition[]
+function getViewsByRegion(region: SidebarRegion, scope?: 'system' | 'workspace'): ViewDefinition[]
 ```
 
-### 2.4 現有 Module 盤點
+> **Module ID vs Pane kind**：兩者允許不同。Module ID 是模組識別（如 `session`），
+> Pane kind 是 `PaneContent.kind` 的值（如 `tmux-session`），需對應既有的 content type 定義。
+
+### 2.4 與現有 Registry 的關係
+
+現有 `register-panes.tsx` 中除了 pane renderer 外，還有兩個獨立 registry：
+
+| Registry | 用途 | 遷移方式 |
+|----------|------|----------|
+| `pane-registry` | Pane renderer 註冊 | 整合進 Module Registry |
+| `new-tab-registry` | New Tab Page 的 provider sections | **維持獨立**，不納入 Module 系統 |
+| `settings-section-registry` | Settings 頁面的 section 註冊 | **維持獨立**，不納入 Module 系統 |
+
+New-tab-registry 和 settings-section-registry 是頁面內部的 section 註冊，與 Module 的粒度不同，不適合塞進 Module 抽象。
+
+### 2.5 現有 Module 盤點
 
 | Module ID | Pane | Views | 備註 |
 |-----------|------|-------|------|
@@ -205,7 +220,10 @@ type SidebarRegion =
 | **default** | 同側 Sidebar + Panel 智慧切換 |
 | **collapsed** | 收窄為按鈕條（~24px），hover/快捷鍵浮動展開 |
 
-### 3.3 智慧切換（default 模式）
+### 3.3 智慧切換（default 模式）⚠️ 延後實作
+
+> 本次先實作手動切換（pinned / collapsed），智慧切換邏輯後續加上。
+> 以下為目標行為定義，供後續實作參考。
 
 **在工作區 tab 時：**
 - Panel（workspace scope）→ 展開
@@ -236,6 +254,9 @@ interface WorkspaceSidebarState {
 ```
 
 切換 workspace 時套用該 workspace 的 sidebarState。
+
+> **遷移策略**：`sidebarState` 為 optional 欄位，直接加到現有 `Workspace` 介面。
+> 未設定的 workspace 使用全域 `LayoutState` 作為 fallback。Alpha 階段不需向下相容遷移。
 
 ### 3.5 持久化
 

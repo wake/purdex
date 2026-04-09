@@ -125,7 +125,7 @@ interface WorkspaceSidebarState {
   regions: Record<SidebarRegion, {
     activeViewId?: string   // 當前選中 view
     width: number           // 寬度（px）
-    mode: 'fixed' | 'default' | 'collapsed'
+    mode: 'pinned' | 'default' | 'collapsed'
   }>
 }
 
