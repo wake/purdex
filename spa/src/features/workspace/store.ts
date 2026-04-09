@@ -23,6 +23,7 @@ interface WorkspaceState {
   setWorkspaceIcon: (wsId: string, icon: string) => void
   setWorkspaceIconWeight: (wsId: string, weight: IconWeight) => void
   importWorkspace: (ws: Workspace) => void
+  setModuleConfig: (wsId: string, moduleId: string, key: string, value: unknown) => void
   reset: () => void
 }
 
@@ -204,6 +205,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           workspaces: state.workspaces.some((w) => w.id === ws.id)
             ? state.workspaces
             : [...state.workspaces, ws],
+        })),
+
+      setModuleConfig: (wsId, moduleId, key, value) =>
+        set((state) => ({
+          workspaces: state.workspaces.map((ws) => {
+            if (ws.id !== wsId) return ws
+            return {
+              ...ws,
+              moduleConfig: {
+                ...(ws.moduleConfig ?? {}),
+                [moduleId]: {
+                  ...(ws.moduleConfig?.[moduleId] ?? {}),
+                  [key]: value,
+                },
+              },
+            }
+          }),
         })),
 
       reset: () => set(createDefaultState()),

@@ -46,6 +46,7 @@ export interface Workspace {
   tabs: string[]
   activeTabId: string | null
   sidebarState?: WorkspaceSidebarState
+  moduleConfig?: Record<string, Record<string, unknown>>
 }
 
 // === Sidebar Region (layout system) ===
@@ -82,6 +83,7 @@ export function createWorkspace(name: string, icon?: string): Workspace {
     icon,
     tabs: [],
     activeTabId: null,
+    moduleConfig: {},
   }
 }
 
