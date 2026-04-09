@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { TabContent } from './TabContent'
-import { registerPaneRenderer, clearPaneRegistry } from '../lib/pane-registry'
+import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { createTab } from '../types/tab'
 import type { Tab, Pane } from '../types/tab'
@@ -15,9 +15,9 @@ const MockDashboardRenderer = () => (
 
 beforeEach(() => {
   cleanup()
-  clearPaneRegistry()
-  registerPaneRenderer('tmux-session', { component: MockSessionRenderer })
-  registerPaneRenderer('dashboard', { component: MockDashboardRenderer })
+  clearModuleRegistry()
+  registerModule({ id: 'session', name: 'Session', pane: { kind: 'tmux-session', component: MockSessionRenderer } })
+  registerModule({ id: 'dashboard', name: 'Dashboard', pane: { kind: 'dashboard', component: MockDashboardRenderer } })
   useUISettingsStore.setState({ keepAliveCount: 0 })
 })
 

@@ -1,18 +1,23 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { PaneLayoutRenderer } from './PaneLayoutRenderer'
-import { registerPaneRenderer, clearPaneRegistry } from '../lib/pane-registry'
+import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import type { PaneLayout } from '../types/tab'
 
 beforeEach(() => {
   cleanup()
-  clearPaneRegistry()
+  clearModuleRegistry()
 })
 
 describe('PaneLayoutRenderer', () => {
   it('renders the correct component for a registered kind', () => {
-    registerPaneRenderer('dashboard', {
-      component: ({ pane }) => <div data-testid="dashboard">Dashboard:{pane.id}</div>,
+    registerModule({
+      id: 'dashboard',
+      name: 'Dashboard',
+      pane: {
+        kind: 'dashboard',
+        component: ({ pane }) => <div data-testid="dashboard">Dashboard:{pane.id}</div>,
+      },
     })
     const layout: PaneLayout = {
       type: 'leaf',
@@ -34,10 +39,15 @@ describe('PaneLayoutRenderer', () => {
   })
 
   it('passes isActive prop to the rendered component', () => {
-    registerPaneRenderer('history', {
-      component: ({ isActive }) => (
-        <div data-testid="history">{isActive ? 'active' : 'inactive'}</div>
-      ),
+    registerModule({
+      id: 'history',
+      name: 'History',
+      pane: {
+        kind: 'history',
+        component: ({ isActive }) => (
+          <div data-testid="history">{isActive ? 'active' : 'inactive'}</div>
+        ),
+      },
     })
     const layout: PaneLayout = {
       type: 'leaf',
@@ -48,8 +58,13 @@ describe('PaneLayoutRenderer', () => {
   })
 
   it('renders first child of a split layout', () => {
-    registerPaneRenderer('dashboard', {
-      component: ({ pane }) => <div data-testid="dash">{pane.id}</div>,
+    registerModule({
+      id: 'dashboard-split',
+      name: 'Dashboard',
+      pane: {
+        kind: 'dashboard',
+        component: ({ pane }) => <div data-testid="dash">{pane.id}</div>,
+      },
     })
     const layout: PaneLayout = {
       type: 'split',

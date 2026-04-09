@@ -3,14 +3,14 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { TabBar } from './TabBar'
 import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
-import { registerPaneRenderer, clearPaneRegistry } from '../lib/pane-registry'
+import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { useSessionStore } from '../stores/useSessionStore'
 
 beforeEach(() => {
   cleanup()
-  clearPaneRegistry()
-  registerPaneRenderer('tmux-session', { component: () => null })
-  registerPaneRenderer('dashboard', { component: () => null })
+  clearModuleRegistry()
+  registerModule({ id: 'session', name: 'Session', pane: { kind: 'tmux-session', component: () => null } })
+  registerModule({ id: 'dashboard', name: 'Dashboard', pane: { kind: 'dashboard', component: () => null } })
   // Provide sessions keyed by hostId for SortableTab's label lookups
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
 })

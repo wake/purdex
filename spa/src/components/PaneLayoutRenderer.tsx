@@ -1,4 +1,4 @@
-import { getPaneRenderer } from '../lib/pane-registry'
+import { getPaneRenderer } from '../lib/module-registry'
 import { getLayoutKey } from '../lib/pane-tree'
 import type { PaneLayout } from '../types/tab'
 
