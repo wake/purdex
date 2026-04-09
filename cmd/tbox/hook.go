@@ -45,6 +45,11 @@ func runHook(args []string) {
 	}
 	eventName := positional[0]
 
+	if agentType == "" {
+		fmt.Fprintf(os.Stderr, "tbox hook: --agent flag is required\n")
+		os.Exit(1)
+	}
+
 	tmuxSession := queryTmuxSession()
 	payload := buildHookPayload(tmuxSession, eventName, os.Stdin, agentType)
 

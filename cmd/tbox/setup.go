@@ -1,211 +1,82 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
+	"time"
+
+	"github.com/wake/tmux-box/internal/config"
 )
 
-// hookEvents lists all CC hook events that tbox registers.
-var hookEvents = []string{
-	"SessionStart",
-	"UserPromptSubmit",
-	"SubagentStart",
-	"SubagentStop",
-	"Stop",
-	"StopFailure",
-	"Notification",
-	"PermissionRequest",
-	"SessionEnd",
-}
-
-// runSetup is the entry point for `tbox setup` and `tbox setup --remove`.
 func runSetup(args []string) {
+	var agentType string
 	remove := false
-	for _, a := range args {
-		if a == "--remove" {
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--agent":
+			if i+1 < len(args) {
+				agentType = args[i+1]
+				i++
+			}
+		case "--remove":
 			remove = true
 		}
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "setup: cannot determine home directory: %v\n", err)
-		os.Exit(1)
-	}
-	settingsPath := filepath.Join(home, ".claude", "settings.json")
-
-	// Resolve absolute path to tbox executable
-	exe, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "setup: cannot determine executable path: %v\n", err)
-		os.Exit(1)
-	}
-	tboxPath, err := filepath.EvalSymlinks(exe)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "setup: cannot resolve executable symlink: %v\n", err)
+	if agentType == "" {
+		fmt.Fprintf(os.Stderr, "tbox setup: --agent flag is required (e.g. --agent cc, --agent codex)\n")
 		os.Exit(1)
 	}
 
-	if err := mergeHooks(settingsPath, tboxPath, remove); err != nil {
+	cfg, err := config.Load("")
+	var baseURL, token string
+	if err != nil {
+		baseURL = "http://127.0.0.1:7860"
+	} else {
+		baseURL = fmt.Sprintf("http://%s:%d", cfg.Bind, cfg.Port)
+		token = cfg.Token
+	}
+
+	action := "install"
+	if remove {
+		action = "remove"
+	}
+
+	body, _ := json.Marshal(map[string]string{"action": action})
+	url := fmt.Sprintf("%s/api/hooks/%s/setup", baseURL, agentType)
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "setup: %v\n", err)
+		os.Exit(1)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "setup: cannot reach daemon: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		fmt.Fprintf(os.Stderr, "setup: failed (%d): %s\n", resp.StatusCode, string(respBody))
 		os.Exit(1)
 	}
 
 	if remove {
-		fmt.Println("tbox hooks removed from", settingsPath)
+		fmt.Printf("tbox hooks for %s removed\n", agentType)
 	} else {
-		fmt.Println("tbox hooks installed to", settingsPath)
+		fmt.Printf("tbox hooks for %s installed\n", agentType)
 	}
-	fmt.Println("Please restart Claude Code for changes to take effect.")
-}
-
-// mergeHooks reads the settings file at path, adds or removes tbox hook entries,
-// and writes the result back. If the file does not exist, it creates a new one.
-func mergeHooks(path, tboxPath string, remove bool) error {
-	settings := make(map[string]any)
-
-	data, err := os.ReadFile(path)
-	if err == nil {
-		if err := json.Unmarshal(data, &settings); err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-
-	// Get or create "hooks" object
-	var hooks map[string]any
-	if h, ok := settings["hooks"]; ok {
-		hooks, ok = h.(map[string]any)
-		if !ok {
-			hooks = make(map[string]any)
-		}
-	} else {
-		hooks = make(map[string]any)
-	}
-
-	for _, event := range hookEvents {
-		entries := toEntrySlice(hooks[event])
-
-		// Always remove ALL existing tbox entries (any path) first.
-		// This prevents duplicates when setup is re-run from a different
-		// binary path (e.g. ./tbox vs ./bin/tbox).
-		entries = filterOutAnyTbox(entries)
-
-		if !remove {
-			entries = append(entries, makeTboxEntry(tboxPath, event))
-		}
-
-		hooks[event] = entries
-	}
-
-	settings["hooks"] = hooks
-
-	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("create directory: %w", err)
-	}
-
-	out, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal settings: %w", err)
-	}
-
-	// Write to a temp file in the same directory, then atomically rename.
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, out, 0644); err != nil {
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath) // Best-effort cleanup
-		return fmt.Errorf("rename: %w", err)
-	}
-	return nil
-}
-
-// makeTboxEntry creates a hook entry for the given event.
-// The tboxPath is quoted to handle paths containing spaces.
-func makeTboxEntry(tboxPath, event string) map[string]any {
-	return map[string]any{
-		"hooks": []any{
-			map[string]any{
-				"type":    "command",
-				"command": fmt.Sprintf(`"%s" hook --agent cc %s`, tboxPath, event),
-			},
-		},
-	}
-}
-
-// toEntrySlice safely converts an interface value to []any.
-// Returns an empty slice if v is nil or not a slice.
-func toEntrySlice(v any) []any {
-	if v == nil {
-		return []any{}
-	}
-	if arr, ok := v.([]any); ok {
-		return arr
-	}
-	return []any{}
-}
-
-// filterOutAnyTbox returns entries with ALL tbox hook entries removed,
-// regardless of binary path.
-func filterOutAnyTbox(entries []any) []any {
-	result := []any{}
-	for _, e := range entries {
-		if !entryIsTbox(e) {
-			result = append(result, e)
-		}
-	}
-	return result
-}
-
-// entryIsTbox checks if an entry contains a tbox hook command (any path).
-// Requires "tbox" to be the exact binary basename — rejects substrings
-// like "tbox-extra" by checking for /tbox or ^tbox boundary.
-func entryIsTbox(entry any) bool {
-	m, ok := entry.(map[string]any)
-	if !ok {
-		return false
-	}
-	innerHooks, ok := m["hooks"]
-	if !ok {
-		return false
-	}
-	arr, ok := innerHooks.([]any)
-	if !ok {
-		return false
-	}
-	for _, h := range arr {
-		hookObj, ok := h.(map[string]any)
-		if !ok {
-			continue
-		}
-		cmd, ok := hookObj["command"].(string)
-		if !ok {
-			continue
-		}
-		if isTboxCommand(cmd) {
-			return true
-		}
-	}
-	return false
-}
-
-// isTboxCommand checks if cmd is a tbox hook invocation.
-// Matches quoted ("/path/tbox" hook ...) and unquoted (/path/tbox hook ...)
-// forms while rejecting similar names like "tbox-extra".
-func isTboxCommand(cmd string) bool {
-	// Quoted path: ..."/path/tbox" hook ... or "tbox" hook ...
-	if strings.Contains(cmd, `/tbox" hook`) || strings.HasPrefix(cmd, `"tbox" hook`) {
-		return true
-	}
-	// Unquoted path: .../path/tbox hook ... or tbox hook ...
-	if strings.Contains(cmd, `/tbox hook`) || strings.HasPrefix(cmd, `tbox hook`) {
-		return true
-	}
-	return false
 }

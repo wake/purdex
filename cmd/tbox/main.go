@@ -17,7 +17,6 @@ import (
 	"github.com/wake/tmux-box/internal/core"
 	"github.com/wake/tmux-box/internal/middleware"
 	"github.com/wake/tmux-box/internal/module/agent"
-	"github.com/wake/tmux-box/internal/module/cc"
 	"github.com/wake/tmux-box/internal/module/dev"
 	"github.com/wake/tmux-box/internal/module/files"
 	"github.com/wake/tmux-box/internal/module/session"
@@ -118,7 +117,6 @@ func runServe(args []string) {
 
 	// 5. Add modules (order doesn't matter — topoSort handles dependencies)
 	c.AddModule(session.NewSessionModule(meta))
-	c.AddModule(cc.New())
 	c.AddModule(stream.New())
 	c.AddModule(agent.New(agentEvents))
 	c.AddModule(files.New())
