@@ -125,6 +125,48 @@ describe('ActivityBar', () => {
     expect(container.querySelector('[data-testid="home-unread-badge"]')).toBeNull()
   })
 
+  it('shows Home status dot when standalone tab has running agent', () => {
+    useTabStore.setState({
+      tabs: { s1: mockSessionTab('s1', 'h1', 'sa') },
+    })
+    useAgentStore.setState({ statuses: { 'h1:sa': 'running' } })
+
+    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" standaloneTabIds={['s1']} />)
+
+    const dots = container.querySelectorAll('.animate-breathe')
+    // One for Home button — workspace dots won't render since ws-1 has no matching tab status
+    expect(dots.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('hides Home status dot when in Home mode', () => {
+    useTabStore.setState({
+      tabs: { s1: mockSessionTab('s1', 'h1', 'sa') },
+    })
+    useAgentStore.setState({ statuses: { 'h1:sa': 'running' } })
+
+    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId={null} standaloneTabIds={['s1']} />)
+
+    // Home is active — dot should not render for Home
+    const dots = container.querySelectorAll('.animate-breathe')
+    expect(dots).toHaveLength(0)
+  })
+
+  it('shows Home static dot for waiting status', () => {
+    useTabStore.setState({
+      tabs: { s1: mockSessionTab('s1', 'h1', 'sa') },
+    })
+    useAgentStore.setState({ statuses: { 'h1:sa': 'waiting' } })
+
+    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" standaloneTabIds={['s1']} />)
+
+    const dots = container.querySelectorAll('.rounded-full[style]')
+    const waitingDot = Array.from(dots).find(d =>
+      (d as HTMLElement).style.backgroundColor === 'rgb(250, 204, 21)'
+    )
+    expect(waitingDot).toBeTruthy()
+    expect(waitingDot!.className).not.toContain('animate-breathe')
+  })
+
   it('shows unread badge on inactive workspace', () => {
     useTabStore.setState({
       tabs: {

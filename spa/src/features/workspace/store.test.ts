@@ -383,6 +383,26 @@ describe('useWorkspaceStore', () => {
       expect(useTabStore.getState().activeTabId).toBeNull()
     })
 
+    it('visitHistory skips workspace tabs when closing standalone tab', () => {
+      const ws = useWorkspaceStore.getState().addWorkspace('WS')
+      const wsTab = makeTab()
+      useTabStore.getState().addTab(wsTab)
+      useWorkspaceStore.getState().addTabToWorkspace(ws.id, wsTab.id)
+
+      const s1 = makeTab()
+      const s2 = makeTab()
+      useTabStore.getState().addTab(s1)
+      useTabStore.getState().addTab(s2)
+      useTabStore.getState().setActiveTab(s2.id)
+      // visitHistory has workspace tab more recently than standalone tab
+      useTabStore.setState({ visitHistory: [s1.id, wsTab.id] })
+
+      useWorkspaceStore.getState().closeTabInWorkspace(s2.id)
+
+      // Should pick s1 (standalone) from visitHistory, skipping wsTab
+      expect(useTabStore.getState().activeTabId).toBe(s1.id)
+    })
+
     it('prefers visitHistory over adjacent when selecting next tab', () => {
       const ws = useWorkspaceStore.getState().addWorkspace('Test')
       const tabs = [makeTab(), makeTab(), makeTab()]

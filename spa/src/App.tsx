@@ -1,5 +1,5 @@
 // spa/src/App.tsx — v2 重構：wouter Router + Tab/Pane model
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Router } from 'wouter'
 import { ActivityBar } from './components/ActivityBar'
 import { TabBar } from './components/TabBar'
@@ -181,7 +181,10 @@ export default function App() {
   })
   const displayTabs: Tab[] = visibleTabIds.map((id) => tabs[id]).filter(Boolean)
 
-  const standaloneTabIds = tabOrder.filter((id) => isStandaloneTab(id, workspaces))
+  const standaloneTabIds = useMemo(
+    () => tabOrder.filter((id) => isStandaloneTab(id, workspaces)),
+    [tabOrder, workspaces],
+  )
   const standaloneTabs = standaloneTabIds.map((id) => tabs[id]).filter(Boolean)
 
   const activeStandaloneTabId = activeTabId && isStandaloneTab(activeTabId, workspaces) ? activeTabId : null

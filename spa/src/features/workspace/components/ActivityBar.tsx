@@ -127,7 +127,7 @@ export function ActivityBar({
         <button
           title={t('nav.home')}
           onClick={onSelectHome}
-          className={`relative w-[30px] h-[30px] rounded-lg flex items-center justify-center cursor-pointer transition-all ${
+          className={`w-[30px] h-[30px] rounded-lg flex items-center justify-center cursor-pointer transition-all ${
             isHomeActive
               ? 'bg-accent text-white'
               : 'bg-surface-secondary text-text-secondary hover:text-text-primary hover:bg-surface-tertiary'
