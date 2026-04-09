@@ -246,6 +246,27 @@ describe('useShortcuts', () => {
       expect(useTabStore.getState().activeTabId).toBeNull()
       expect(useTabStore.getState().tabs[tabs[0].id]).toBeUndefined()
     })
+
+    it('calls closeWindow when window is empty (no tabs)', () => {
+      const closeWindow = vi.fn()
+      ;(window as unknown as Record<string, unknown>).electronAPI = {
+        ...(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI,
+        onShortcut: (cb: (payload: { action: string }) => void) => {
+          const shortcutCb = cb
+          ;(window as unknown as { __fire: (a: string) => void }).__fire = (a: string) => shortcutCb({ action: a })
+          return vi.fn()
+        },
+        signalReady: () => {},
+        closeWindow,
+      }
+      // Reset: empty workspace, no tabs
+      useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+      useWorkspaceStore.getState().reset()
+      renderHook(() => useShortcuts())
+
+      ;(window as unknown as { __fire: (a: string) => void }).__fire('close-tab')
+      expect(closeWindow).toHaveBeenCalled()
+    })
   })
 
   describe('new-tab', () => {

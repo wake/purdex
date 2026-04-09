@@ -64,6 +64,7 @@ interface Window {
 
     // Window Management
     getWindows: () => Promise<ElectronWindowInfo[]>
+    closeWindow: () => Promise<void>
 
     // Browser View
     resizeBrowserView: (paneId: string, bounds: ElectronBounds) => Promise<void>

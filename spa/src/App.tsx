@@ -123,8 +123,17 @@ export default function App() {
     if (!window.electronAPI?.onWorkspaceReceived) return
     return window.electronAPI.onWorkspaceReceived((payload: string, replace: boolean) => {
       try {
-        const { workspace, tabData } = JSON.parse(payload)
+        const { workspace, tabData, hostConfigs } = JSON.parse(payload)
         if (!workspace?.id || !Array.isArray(tabData)) return
+
+        // Restore host configs so the receiving window can display
+        // host names and establish connections immediately
+        if (hostConfigs && typeof hostConfigs === 'object') {
+          const hs = useHostStore.getState()
+          for (const [hid, cfg] of Object.entries(hostConfigs)) {
+            if (!hs.hosts[hid]) hs.addHost(cfg as { id: string; name: string; ip: string; port: number; token?: string })
+          }
+        }
 
         // 校驗 tab ids
         const tabMap = new Map(tabData.map((t: Tab) => [t.id, t]))
@@ -224,7 +233,20 @@ export default function App() {
     if (!ws || ws.tabs.length === 0) return null
     const tabData = ws.tabs.map(id => tabs[id]).filter(Boolean)
     if (tabData.length === 0) return null
-    return { ws, payload: JSON.stringify({ workspace: ws, tabData }) }
+    // Collect host configs referenced by tabs so the receiving window
+    // has them immediately (before localStorage hydration completes)
+    const hostState = useHostStore.getState()
+    const hostIds = new Set<string>()
+    for (const tab of tabData) {
+      const pane = tab.layout?.type === 'leaf' ? tab.layout.pane : null
+      if (pane?.content.kind === 'tmux-session') hostIds.add(pane.content.hostId)
+    }
+    const hostConfigs: Record<string, import('./stores/useHostStore').HostConfig> = {}
+    for (const hid of hostIds) {
+      const cfg = hostState.hosts[hid]
+      if (cfg) hostConfigs[hid] = cfg
+    }
+    return { ws, payload: JSON.stringify({ workspace: ws, tabData, hostConfigs }) }
   }, [workspaces, tabs])
 
   const removeWorkspaceFromStore = useCallback((tabIds: string[], wsId: string) => {
@@ -300,6 +322,7 @@ export default function App() {
           activeWorkspaceId={activeStandaloneTabId ? null : activeWorkspaceId}
           activeStandaloneTabId={activeStandaloneTabId}
           onSelectWorkspace={handleSelectWorkspace}
+          onReorderWorkspaces={(orderedIds) => useWorkspaceStore.getState().reorderWorkspaces(orderedIds)}
           onSelectHome={() => {
             useWorkspaceStore.getState().setActiveWorkspace(null)
             const firstStandalone = standaloneTabs[0]

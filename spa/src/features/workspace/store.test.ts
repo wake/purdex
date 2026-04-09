@@ -464,6 +464,27 @@ describe('useWorkspaceStore', () => {
     })
   })
 
+  // === reorderWorkspaces ===
+
+  describe('reorderWorkspaces', () => {
+    it('reorders workspaces by given id array', () => {
+      const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
+      const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+      const ws3 = useWorkspaceStore.getState().addWorkspace('WS3')
+      useWorkspaceStore.getState().reorderWorkspaces([ws3.id, ws1.id, ws2.id])
+      const ids = useWorkspaceStore.getState().workspaces.map(w => w.id)
+      expect(ids).toEqual([ws3.id, ws1.id, ws2.id])
+    })
+
+    it('filters out unknown ids', () => {
+      const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
+      const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+      useWorkspaceStore.getState().reorderWorkspaces([ws2.id, 'nonexistent', ws1.id])
+      const ids = useWorkspaceStore.getState().workspaces.map(w => w.id)
+      expect(ids).toEqual([ws2.id, ws1.id])
+    })
+  })
+
   // === importWorkspace ===
 
   describe('importWorkspace', () => {

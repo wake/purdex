@@ -1,3 +1,6 @@
+import { useCallback, useMemo } from 'react'
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent, type Modifier } from '@dnd-kit/core'
+import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { Plus, GearSix, HardDrives, SquaresFour } from '@phosphor-icons/react'
 import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -11,9 +14,49 @@ interface Props {
   onSelectHome: () => void
   standaloneTabCount: number
   onAddWorkspace: () => void
+  onReorderWorkspaces?: (orderedIds: string[]) => void
   onContextMenuWorkspace?: (e: React.MouseEvent, wsId: string) => void
   onOpenHosts: () => void
   onOpenSettings: () => void
+}
+
+function SortableWorkspaceButton({ ws, isActive, onSelect, onContextMenu }: {
+  ws: Workspace
+  isActive: boolean
+  onSelect: (wsId: string) => void
+  onContextMenu?: (e: React.MouseEvent, wsId: string) => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: ws.id })
+
+  const style = {
+    transform: transform ? `translate3d(0, ${Math.round(transform.y)}px, 0)` : undefined,
+    transition,
+    zIndex: isDragging ? 10 : undefined,
+    opacity: isDragging ? 0.8 : 1,
+  }
+
+  return (
+    <div ref={setNodeRef} style={style} className="relative group" {...attributes} {...listeners}>
+      <button
+        aria-label={ws.name}
+        onClick={() => onSelect(ws.id)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          onContextMenu?.(e, ws.id)
+        }}
+        className={`w-[30px] h-[30px] rounded-md flex items-center justify-center text-sm cursor-pointer transition-all ${
+          isActive
+            ? 'bg-[#8b5cf6]/35 text-text-primary ring-2 ring-purple-400'
+            : 'bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary'
+        }`}
+      >
+        <WorkspaceIcon icon={ws.icon} name={ws.name} size={16} weight={ws.iconWeight} />
+      </button>
+      <span className="pointer-events-none absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-surface-secondary border border-border-default px-2 py-1 text-xs text-text-primary shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-50">
+        {ws.name}
+      </span>
+    </div>
+  )
 }
 
 export function ActivityBar({
@@ -24,11 +67,31 @@ export function ActivityBar({
   onSelectHome,
   standaloneTabCount,
   onAddWorkspace,
+  onReorderWorkspaces,
   onContextMenuWorkspace,
   onOpenHosts,
   onOpenSettings,
 }: Props) {
   const t = useI18nStore((s) => s.t)
+  const wsIds = useMemo(() => workspaces.map((ws) => ws.id), [workspaces])
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+
+  const restrictToVertical: Modifier = useCallback(({ transform }) => {
+    return { ...transform, x: 0 }
+  }, [])
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIdx = wsIds.indexOf(String(active.id))
+    const newIdx = wsIds.indexOf(String(over.id))
+    if (oldIdx === -1 || newIdx === -1) return
+    const newOrder = [...wsIds]
+    newOrder.splice(oldIdx, 1)
+    newOrder.splice(newIdx, 0, String(active.id))
+    onReorderWorkspaces?.(newOrder)
+  }, [wsIds, onReorderWorkspaces])
+
   return (
     <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 px-px gap-2.5 flex-shrink-0">
       {/* Home — standalone tabs */}
@@ -51,32 +114,20 @@ export function ActivityBar({
 
       {workspaces.length > 0 && <div className="w-5 h-px bg-border-default my-0.5" />}
 
-      {/* Workspaces */}
-      {workspaces.map((ws) => {
-        const isActive = activeWorkspaceId === ws.id && !activeStandaloneTabId
-        return (
-          <div key={ws.id} className="relative group">
-            <button
-              aria-label={ws.name}
-              onClick={() => onSelectWorkspace(ws.id)}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                onContextMenuWorkspace?.(e, ws.id)
-              }}
-              className={`w-[30px] h-[30px] rounded-md flex items-center justify-center text-sm cursor-pointer transition-all ${
-                isActive
-                  ? 'bg-[#8b5cf6]/35 text-text-primary ring-2 ring-purple-400'
-                  : 'bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary'
-              }`}
-            >
-              <WorkspaceIcon icon={ws.icon} name={ws.name} size={16} weight={ws.iconWeight} />
-            </button>
-            <span className="pointer-events-none absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-surface-secondary border border-border-default px-2 py-1 text-xs text-text-primary shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-50">
-              {ws.name}
-            </span>
-          </div>
-        )
-      })}
+      {/* Workspaces — sortable */}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVertical]} onDragEnd={handleDragEnd}>
+        <SortableContext items={wsIds} strategy={verticalListSortingStrategy}>
+          {workspaces.map((ws) => (
+            <SortableWorkspaceButton
+              key={ws.id}
+              ws={ws}
+              isActive={activeWorkspaceId === ws.id && !activeStandaloneTabId}
+              onSelect={onSelectWorkspace}
+              onContextMenu={onContextMenuWorkspace}
+            />
+          ))}
+        </SortableContext>
+      </DndContext>
 
       {/* Add + Settings */}
       <div className="mt-auto flex flex-col items-center gap-2 pb-1">

@@ -71,6 +71,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('browser-view:open-in-tab', handler)
   },
 
+  // Window Management — close current window
+  closeWindow: () => ipcRenderer.invoke('window:close'),
+
   // SPA ready signal
   signalReady: () => ipcRenderer.send('spa:ready'),
 
