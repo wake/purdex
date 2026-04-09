@@ -95,8 +95,8 @@ export const useAgentStore = create<AgentState>()(
         }
 
         // Store status (skip events with no status, e.g. SubagentStart/Stop)
-        const status = event.status as AgentStatus
-        if (status && status !== '') {
+        const status = event.status as AgentStatus | ''
+        if (status) {
           set((s) => ({ statuses: { ...s.statuses, [key]: status } }))
 
           // Mark unread when not focused

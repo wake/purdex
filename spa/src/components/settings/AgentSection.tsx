@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { AGENT_NAMES } from '../../lib/agent-icons'
@@ -33,23 +33,22 @@ function HookToggle({ agentType }: { agentType: string }) {
   const [loading, setLoading] = useState(false)
   const activeHostId = useHostStore((s) => s.activeHostId ?? s.hostOrder[0])
   const getDaemonBase = useHostStore((s) => s.getDaemonBase)
-  const getToken = useCallback(() => {
-    return useHostStore.getState().hosts[activeHostId]?.token
-  }, [activeHostId])
 
-  const fetchStatus = useCallback(async () => {
-    if (!activeHostId) return
-    try {
-      const base = getDaemonBase(activeHostId)
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      const token = getToken()
-      if (token) headers['Authorization'] = `Bearer ${token}`
-      const res = await fetch(`${base}/api/hooks/${agentType}/status`, { headers })
-      if (res.ok) setStatus(await res.json())
-    } catch { /* ignore */ }
-  }, [activeHostId, agentType, getDaemonBase, getToken])
-
-  useEffect(() => { fetchStatus() }, [fetchStatus])
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      if (!activeHostId) return
+      try {
+        const base = getDaemonBase(activeHostId)
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+        const token = useHostStore.getState().hosts[activeHostId]?.token
+        if (token) headers['Authorization'] = `Bearer ${token}`
+        const res = await fetch(`${base}/api/hooks/${agentType}/status`, { headers })
+        if (res.ok && !cancelled) setStatus(await res.json())
+      } catch { /* ignore */ }
+    })()
+    return () => { cancelled = true }
+  }, [activeHostId, agentType, getDaemonBase])
 
   const handleAction = async (action: 'install' | 'remove') => {
     if (!activeHostId) return
@@ -57,7 +56,7 @@ function HookToggle({ agentType }: { agentType: string }) {
     try {
       const base = getDaemonBase(activeHostId)
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      const token = getToken()
+      const token = useHostStore.getState().hosts[activeHostId]?.token
       if (token) headers['Authorization'] = `Bearer ${token}`
       const res = await fetch(`${base}/api/hooks/${agentType}/setup`, {
         method: 'POST',

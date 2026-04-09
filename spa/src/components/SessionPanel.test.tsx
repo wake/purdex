@@ -17,7 +17,7 @@ const HOST_ID = 'test-host'
 beforeEach(() => {
   cleanup()
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
-  useAgentStore.setState({ statuses: {}, events: {}, unread: {} })
+  useAgentStore.setState({ statuses: {}, lastEvents: {}, unread: {} })
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 } },
     hostOrder: [HOST_ID],

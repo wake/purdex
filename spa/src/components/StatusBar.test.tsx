@@ -95,7 +95,7 @@ describe('StatusBar upload progress', () => {
   beforeEach(() => {
     setupStores()
     useUploadStore.setState({ sessions: {} })
-    useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, models: {} })
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {} })
   })
 
   it('shows uploading progress', () => {
@@ -151,10 +151,10 @@ describe('StatusBar agent label badge', () => {
   it('renders agent label as badge with model name', () => {
     const ck = compositeKey(HOST_ID, 'dev001')
     useAgentStore.setState({
-      events: { [ck]: { tmux_session: 'dev', event_name: 'SessionStart', raw_event: { modelName: 'Claude Opus 4' }, agent_type: 'cc', broadcast_ts: Date.now() } },
+      lastEvents: { [ck]: { raw_event_name: 'SessionStart', status: 'idle', agent_type: 'cc', broadcast_ts: Date.now(), model: 'Claude Opus 4' } },
       statuses: { [ck]: 'idle' },
       unread: {},
-      activeSubagents: {},
+      subagents: {},
       models: { [ck]: 'Claude Opus 4' },
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
@@ -166,7 +166,7 @@ describe('StatusBar agent label badge', () => {
 
   it('reactively shows badge when models updates after mount', async () => {
     const ck = compositeKey(HOST_ID, 'dev001')
-    useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, models: {} })
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {} })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.queryByTestId('agent-label')).toBeNull()
@@ -182,10 +182,10 @@ describe('StatusBar agent label badge', () => {
   it('does not render badge when no model in models map', () => {
     const ck = compositeKey(HOST_ID, 'dev001')
     useAgentStore.setState({
-      events: { [ck]: { tmux_session: 'dev', event_name: 'UserPromptSubmit', raw_event: {}, agent_type: 'cc', broadcast_ts: Date.now() } },
+      lastEvents: { [ck]: { raw_event_name: 'UserPromptSubmit', status: 'running', agent_type: 'cc', broadcast_ts: Date.now() } },
       statuses: { [ck]: 'running' },
       unread: {},
-      activeSubagents: {},
+      subagents: {},
       models: {},
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })

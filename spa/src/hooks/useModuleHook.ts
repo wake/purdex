@@ -59,7 +59,7 @@ export function useModuleHook(module: HookModule, hostId: string, refreshKey: nu
     }
   }
 
-  const events = useAgentStore((s) => s.events)
+  const events = useAgentStore((s) => s.lastEvents)
   const lastTrigger = useMemo(
     () => module.getLastTrigger?.(hostId, events) ?? null,
     [module, hostId, events],
