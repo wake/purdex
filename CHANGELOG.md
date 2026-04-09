@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.69] - 2026-04-09
+
+Mini browser 啟動速度優化 + 新 tab 插入順序修正 (PR #233)
+
+### 效能
+
+- **Mini browser 啟動從 ~4-5s 降到 <200ms**：將 React SPA 替換為輕量靜態 HTML + vanilla JS toolbar，WebContentsView 與 HTML 平行載入
+
+### 修正
+
+- **新 tab 插入位置**：URL 點擊建立的新 browser tab 現在插入在當前 tab 之後，而非 append 到最末端
+- **Pinned tab 排序不變式**：`addTab afterTabId` 指向 pinned tab 時，自動跳過 pinned 區域再插入
+- **Mini browser window 關閉 race**：fetch 期間關閉視窗不再拋出 "Object has been destroyed" 錯誤
+- **IPC listener 清理**：mini-browser 加入 `beforeunload` 清理 ResizeObserver + IPC subscription
+
+### 清理
+
+- **移除 BrowserToolbar mini-window dead code**：`context` prop 和 `onMoveToTab` 分支（功能已移入 vanilla JS）
+- **新增 `requestBrowserViewState` IPC**：解決 WebContentsView 比 HTML 先載入時的狀態同步
+
 ## [1.0.0-alpha.67] - 2026-04-09
 
 Tab 拖曳 / Rename CORS / 通知 GC / Tab 溢出 / 上傳階段修復 (PR #224)
