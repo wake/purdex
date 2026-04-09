@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.66] - 2026-04-09
+
+Browser UX 修復 — mini window theme + tab shortcuts (PR #223)
+
+### 修正
+
+- **Mini window toolbar 不可見**：獨立瀏覽器視窗現在正確初始化 theme（ThemeInjector + useThemeStore hook），toolbar 可見
+- **Mini window Cmd+W**：獨立視窗現在可用 Cmd+W 關閉
+
+### 新功能
+
+- **Tab shortcut handler registry**：不同 tab type 可註冊各自的快捷鍵 handler，useShortcuts 作為 dispatcher
+- **Browser 導航快捷鍵**：Cmd+[/] (back/forward)、Cmd+←/→ (macOS)、Cmd+R (reload)、Cmd+L (focus URL)、Cmd+P (print)
+- **Print IPC**：新增 browser-view:print channel，支援 Cmd+P 列印
+
 ## [1.0.0-alpha.65] - 2026-04-09
 
 Home tab 殘留修復 + workspace icon tooltip (PR #221)
