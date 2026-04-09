@@ -1,7 +1,9 @@
-import { useRef, useCallback } from 'react'
+import { useRef, useCallback, useEffect } from 'react'
 import { BrowserToolbar } from './BrowserToolbar'
 import { useBrowserViewState } from '../hooks/useBrowserViewState'
 import { useBrowserViewResize } from '../hooks/useBrowserViewResize'
+import { useMiniWindowShortcuts } from '../hooks/useMiniWindowShortcuts'
+import { useThemeStore } from '../stores/useThemeStore'
 
 interface Props {
   paneId: string
@@ -10,8 +12,13 @@ interface Props {
 export function MiniBrowserApp({ paneId }: Props) {
   const contentRef = useRef<HTMLDivElement>(null)
   const state = useBrowserViewState(paneId)
+  const activeThemeId = useThemeStore((s) => s.activeThemeId)
+  useEffect(() => {
+    document.documentElement.dataset.theme = activeThemeId
+  }, [activeThemeId])
 
   useBrowserViewResize(paneId, contentRef)
+  useMiniWindowShortcuts(paneId)
 
   const handleGoBack = useCallback(() => window.electronAPI?.browserViewGoBack(paneId), [paneId])
   const handleGoForward = useCallback(() => window.electronAPI?.browserViewGoForward(paneId), [paneId])

@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('browser-view:reload', paneId),
   browserViewStop: (paneId: string) =>
     ipcRenderer.invoke('browser-view:stop', paneId),
+  browserViewPrint: (paneId: string) =>
+    ipcRenderer.invoke('browser-view:print', paneId),
 
   // Browser View — lifecycle
   destroyBrowserView: (paneId: string) =>

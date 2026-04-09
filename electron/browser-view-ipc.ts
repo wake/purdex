@@ -52,6 +52,10 @@ export function registerBrowserViewIpc(
     manager.stop(paneId)
   })
 
+  ipcMain.handle('browser-view:print', (_event, paneId: string) => {
+    manager.print(paneId)
+  })
+
   ipcMain.handle('browser-view:destroy', (_event, paneId: string) => {
     manager.destroy(paneId)
   })

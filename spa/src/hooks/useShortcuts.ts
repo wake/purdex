@@ -5,6 +5,8 @@ import { useHistoryStore } from '../stores/useHistoryStore'
 import { createTab } from '../types/tab'
 import { getVisibleTabIds as getVisibleTabIdsShared } from '../features/workspace'
 import { destroyBrowserViewIfNeeded } from '../lib/browser-cleanup'
+import { getTabShortcutHandler } from '../lib/tab-shortcut-registry'
+import { getPrimaryPane } from '../lib/pane-tree'
 
 export function useShortcuts(): void {
   useEffect(() => {
@@ -127,6 +129,20 @@ export function useShortcuts(): void {
         const activeTab = targetWs.activeTabId ?? targetWs.tabs[0]
         if (activeTab) activateTab(activeTab)
         return
+      }
+
+      // Tab-level shortcut dispatch via registry
+      const { activeTabId, tabs } = tabState
+      if (activeTabId) {
+        const tab = tabs[activeTabId]
+        if (tab) {
+          const pane = getPrimaryPane(tab.layout)
+          const handler = getTabShortcutHandler(pane.content.kind, action)
+          if (handler) {
+            handler(tab, pane)
+            return
+          }
+        }
       }
 
       if (import.meta.env.DEV) {
