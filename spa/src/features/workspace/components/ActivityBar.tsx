@@ -2,6 +2,51 @@ import { Plus, GearSix, HardDrives, SquaresFour } from '@phosphor-icons/react'
 import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
+import { useWorkspaceIndicators } from '../useWorkspaceIndicators'
+
+interface WorkspaceButtonProps {
+  workspace: Workspace
+  isActive: boolean
+  onSelect: (wsId: string) => void
+  onContextMenu?: (e: React.MouseEvent, wsId: string) => void
+}
+
+function WorkspaceButton({ workspace: ws, isActive, onSelect, onContextMenu }: WorkspaceButtonProps) {
+  const { unreadCount } = useWorkspaceIndicators(ws.tabs)
+  const showBadge = !isActive && unreadCount > 0
+
+  return (
+    <div className="relative group">
+      <button
+        aria-label={showBadge ? `${ws.name}, ${unreadCount} unread` : ws.name}
+        onClick={() => onSelect(ws.id)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          onContextMenu?.(e, ws.id)
+        }}
+        className={`w-[30px] h-[30px] rounded-md flex items-center justify-center text-sm cursor-pointer transition-all ${
+          isActive
+            ? 'bg-[#8b5cf6]/35 text-text-primary ring-2 ring-purple-400'
+            : 'bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary'
+        }`}
+      >
+        <WorkspaceIcon icon={ws.icon} name={ws.name} size={16} weight={ws.iconWeight} />
+      </button>
+      {showBadge && (
+        <span
+          data-testid="ws-unread-badge"
+          className="absolute -top-[5px] -right-[6px] min-w-[15px] h-[15px] rounded-full flex items-center justify-center text-white text-[9px] font-bold px-[3px] leading-none z-10"
+          style={{ backgroundColor: '#dc2626', boxShadow: '0 0 0 2px var(--surface-tertiary)' }}
+        >
+          {unreadCount}
+        </span>
+      )}
+      <span className="pointer-events-none absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-surface-secondary border border-border-default px-2 py-1 text-xs text-text-primary shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-50">
+        {ws.name}
+      </span>
+    </div>
+  )
+}
 
 interface Props {
   workspaces: Workspace[]
@@ -52,31 +97,15 @@ export function ActivityBar({
       {workspaces.length > 0 && <div className="w-5 h-px bg-border-default my-0.5" />}
 
       {/* Workspaces */}
-      {workspaces.map((ws) => {
-        const isActive = activeWorkspaceId === ws.id && !activeStandaloneTabId
-        return (
-          <div key={ws.id} className="relative group">
-            <button
-              aria-label={ws.name}
-              onClick={() => onSelectWorkspace(ws.id)}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                onContextMenuWorkspace?.(e, ws.id)
-              }}
-              className={`w-[30px] h-[30px] rounded-md flex items-center justify-center text-sm cursor-pointer transition-all ${
-                isActive
-                  ? 'bg-[#8b5cf6]/35 text-text-primary ring-2 ring-purple-400'
-                  : 'bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary'
-              }`}
-            >
-              <WorkspaceIcon icon={ws.icon} name={ws.name} size={16} weight={ws.iconWeight} />
-            </button>
-            <span className="pointer-events-none absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-surface-secondary border border-border-default px-2 py-1 text-xs text-text-primary shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-50">
-              {ws.name}
-            </span>
-          </div>
-        )
-      })}
+      {workspaces.map((ws) => (
+        <WorkspaceButton
+          key={ws.id}
+          workspace={ws}
+          isActive={activeWorkspaceId === ws.id && !activeStandaloneTabId}
+          onSelect={onSelectWorkspace}
+          onContextMenu={onContextMenuWorkspace}
+        />
+      ))}
 
       {/* Add + Settings */}
       <div className="mt-auto flex flex-col items-center gap-2 pb-1">
