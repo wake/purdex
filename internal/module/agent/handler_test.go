@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	agentpkg "github.com/wake/tmux-box/internal/agent"
 	"github.com/wake/tmux-box/internal/store"
 )
 
@@ -17,7 +18,9 @@ func newTestModule(t *testing.T) *Module {
 		t.Fatalf("open agent event store: %v", err)
 	}
 	t.Cleanup(func() { events.Close() })
-	return &Module{events: events}
+	m := New(events)
+	m.registry = agentpkg.NewRegistry()
+	return m
 }
 
 func TestHandleEvent_StoresAndReturns(t *testing.T) {
