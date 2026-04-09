@@ -146,6 +146,7 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
         if (!sourceTab || !targetTab) break
         if (sourceTab.layout.type === 'split') break  // Don't merge multi-pane tabs
         if (sourceTab.locked) break  // Don't merge locked tabs
+        if (targetTab.locked) break  // Don't merge into locked tabs
         const sourcePrimary = getPrimaryPane(sourceTab.layout)
         const targetPrimary = getPrimaryPane(targetTab.layout)
         useTabStore.getState().splitPane(payload, targetPrimary.id, 'h', sourcePrimary.content)
@@ -154,7 +155,7 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
         break
       }
     }
-  }, [contextMenu, tabs, displayTabs, handleCloseTab])
+  }, [contextMenu, tabs, displayTabs, handleCloseTab, handleSelectTab])
 
   const handleRenameConfirm = useCallback(async (name: string) => {
     if (!renameTarget) return

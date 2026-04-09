@@ -41,6 +41,7 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
 
   useEffect(() => {
     if (!baseUrl || !projectPath) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync reset before async fetch
     setLoading(true)
     setError(null)
     setExpandedDirs({})
@@ -48,7 +49,6 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
       .then((data) => setRootEntries(data.entries))
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-fetch on baseUrl/projectPath/fetchDir change
   }, [baseUrl, projectPath, fetchDir])
 
   const toggleDir = useCallback(async (fullPath: string) => {
