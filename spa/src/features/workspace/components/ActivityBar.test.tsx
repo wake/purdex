@@ -149,4 +149,58 @@ describe('ActivityBar', () => {
 
     expect(screen.getByLabelText('Server, 1 unread')).toBeTruthy()
   })
+
+  it('shows status dot on inactive workspace with running agent', () => {
+    useTabStore.setState({
+      tabs: { t3: mockSessionTab('t3', 'h1', 's3') },
+    })
+    useAgentStore.setState({ statuses: { 'h1:s3': 'running' } })
+
+    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" />)
+
+    const dot = container.querySelector('.animate-breathe')
+    expect(dot).toBeTruthy()
+    expect(dot!.className).toContain('rounded-full')
+  })
+
+  it('hides status dot on active workspace', () => {
+    useTabStore.setState({
+      tabs: { t1: mockSessionTab('t1', 'h1', 's1') },
+    })
+    useAgentStore.setState({ statuses: { 'h1:s1': 'running' } })
+
+    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" />)
+
+    // ws-1 is active — dot should not render
+    const dots = container.querySelectorAll('.animate-breathe')
+    expect(dots).toHaveLength(0)
+  })
+
+  it('shows static dot (no breathe) for waiting status', () => {
+    useTabStore.setState({
+      tabs: { t3: mockSessionTab('t3', 'h1', 's3') },
+    })
+    useAgentStore.setState({ statuses: { 'h1:s3': 'waiting' } })
+
+    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" />)
+
+    const dots = container.querySelectorAll('.rounded-full[style]')
+    // Should have a dot but without animate-breathe
+    const statusDot = Array.from(dots).find(d =>
+      (d as HTMLElement).style.backgroundColor === 'rgb(250, 204, 21)'
+    )
+    expect(statusDot).toBeTruthy()
+    expect(statusDot!.className).not.toContain('animate-breathe')
+  })
+
+  it('includes status in aria-label', () => {
+    useTabStore.setState({
+      tabs: { t3: mockSessionTab('t3', 'h1', 's3') },
+    })
+    useAgentStore.setState({ statuses: { 'h1:s3': 'running' } })
+
+    render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" />)
+
+    expect(screen.getByLabelText('Server, running')).toBeTruthy()
+  })
 })
