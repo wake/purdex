@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useRef } from 'react'
 import { FolderSimple, File, CaretRight, CaretDown } from '@phosphor-icons/react'
 import { useHostStore } from '../stores/useHostStore'
+import { useWorkspaceStore } from '../features/workspace/store'
 import type { ViewProps } from '../lib/module-registry'
 
 interface FileEntry {
@@ -15,40 +16,47 @@ interface DirState {
   loading: boolean
 }
 
-export function FileTreeView({ isActive }: ViewProps) {
+export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
   void isActive
   const activeHostId = useHostStore((s) => s.activeHostId ?? s.hostOrder[0] ?? '')
   const baseUrl = useHostStore((s) => (activeHostId ? s.getDaemonBase(activeHostId) : ''))
 
-  const [rootPath, setRootPath] = useState<string>('')
+  const workspace = useWorkspaceStore((s) => s.workspaces.find((ws) => ws.id === workspaceId))
+  const projectPath = workspace?.moduleConfig?.['files']?.['projectPath'] as string | undefined
+  const setModuleConfig = useWorkspaceStore((s) => s.setModuleConfig)
+
+  const [inputValue, setInputValue] = useState('')
   const [rootEntries, setRootEntries] = useState<FileEntry[]>([])
   const [expandedDirs, setExpandedDirs] = useState<Record<string, DirState>>({})
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
 
-  const fetchDir = useCallback(async (path?: string): Promise<{ path: string; entries: FileEntry[] }> => {
-    const url = path
-      ? `${baseUrl}/api/files?path=${encodeURIComponent(path)}`
-      : `${baseUrl}/api/files`
+  const fetchDir = useCallback(async (path: string): Promise<{ path: string; entries: FileEntry[] }> => {
+    const url = `${baseUrl}/api/files?path=${encodeURIComponent(path)}`
     const authHeaders = useHostStore.getState().getAuthHeaders(activeHostId)
     const res = await fetch(url, { headers: authHeaders })
     if (!res.ok) throw new Error(`Failed to fetch: ${res.statusText}`)
     return res.json()
   }, [baseUrl, activeHostId])
 
+  // Track previous projectPath to avoid stale fetches
+  const prevProjectPath = useRef<string | undefined>(undefined)
+
   useEffect(() => {
-    if (!baseUrl) return
+    if (!baseUrl || !projectPath) return
+    if (projectPath === prevProjectPath.current) return
+    prevProjectPath.current = projectPath
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sync reset before async fetch
     setLoading(true)
     setError(null)
-    fetchDir()
+    setExpandedDirs({})
+    fetchDir(projectPath)
       .then((data) => {
-        setRootPath(data.path)
         setRootEntries(data.entries)
       })
-      .catch((err) => setError(err.message))
+      .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false))
-  }, [baseUrl, fetchDir])
+  }, [baseUrl, projectPath, fetchDir])
 
   const toggleDir = useCallback(async (fullPath: string) => {
     const existing = expandedDirs[fullPath]
@@ -70,6 +78,37 @@ export function FileTreeView({ isActive }: ViewProps) {
   }, [expandedDirs, fetchDir])
 
   if (!baseUrl) return <div className="p-3 text-xs text-text-muted">No host connected</div>
+
+  if (!projectPath) {
+    const handleSubmit = (e: React.FormEvent) => {
+      e.preventDefault()
+      const trimmed = inputValue.trim()
+      if (!trimmed || !workspaceId) return
+      setModuleConfig(workspaceId, 'files', 'projectPath', trimmed)
+    }
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-4 gap-2">
+        <p className="text-xs text-text-muted text-center">設定專案路徑以顯示檔案樹</p>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-2 w-full max-w-48">
+          <input
+            type="text"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            placeholder="/home/user/project"
+            className="px-2 py-1 text-xs bg-surface-secondary border border-border-subtle rounded outline-none focus:border-border-focus text-text-primary"
+          />
+          <button
+            type="submit"
+            disabled={!inputValue.trim()}
+            className="px-2 py-1 text-xs bg-accent text-white rounded disabled:opacity-40"
+          >
+            確認
+          </button>
+        </form>
+      </div>
+    )
+  }
+
   if (loading) return <div className="p-3 text-xs text-text-muted">Loading...</div>
   if (error) return <div className="p-3 text-xs text-red-400">Error: {error}</div>
 
@@ -109,8 +148,11 @@ export function FileTreeView({ isActive }: ViewProps) {
 
   return (
     <div className="flex-1 overflow-auto text-xs">
-      <div className="px-2 py-1 text-text-muted font-medium truncate border-b border-border-subtle">{rootPath}</div>
-      {renderEntries(rootEntries, rootPath, 0)}
+      <div className="px-2 py-1 text-text-muted font-medium truncate border-b border-border-subtle">{projectPath}</div>
+      {renderEntries(rootEntries, projectPath, 0)}
     </div>
   )
 }
+
+// Backward-compat alias
+export { FileTreeWorkspaceView as FileTreeView }

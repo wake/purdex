@@ -17,8 +17,13 @@ registerBuiltinModules()
 // Only set defaults if not already persisted
 const panelState = useLayoutStore.getState().regions['primary-panel']
 if (panelState.views.length === 0) {
-  useLayoutStore.getState().setRegionViews('primary-panel', ['file-tree'])
-  useLayoutStore.getState().setActiveView('primary-panel', 'file-tree')
+  useLayoutStore.getState().setRegionViews('primary-panel', ['file-tree-session'])
+  useLayoutStore.getState().setActiveView('primary-panel', 'file-tree-session')
+}
+const sidebarState = useLayoutStore.getState().regions['primary-sidebar']
+if (sidebarState.views.length === 0) {
+  useLayoutStore.getState().setRegionViews('primary-sidebar', ['file-tree-workspace'])
+  useLayoutStore.getState().setActiveView('primary-sidebar', 'file-tree-workspace')
 }
 
 // Cross-store subscription: auto-markRead when active tab changes to a session.

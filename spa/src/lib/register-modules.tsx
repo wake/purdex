@@ -18,7 +18,8 @@ import { AgentSection } from '../components/settings/AgentSection'
 import { TerminalSection } from '../components/settings/TerminalSection'
 import { ElectronSection } from '../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../components/settings/DevEnvironmentSection'
-import { FileTreeView } from '../components/FileTreeView'
+import { FileTreeWorkspaceView } from '../components/FileTreeView'
+import { FileTreeSessionView } from '../components/FileTreeSessionView'
 import { FolderOpen } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
 import type { PaneContent } from '../types/tab'
@@ -93,14 +94,27 @@ export function registerBuiltinModules(): void {
   registerModule({
     id: 'files',
     name: 'Files',
-    views: [{
-      id: 'file-tree',
-      label: 'Files',
-      icon: FolderOpen,
-      scope: 'workspace',
-      defaultRegion: 'primary-panel',
-      component: FileTreeView,
-    }],
+    workspaceConfig: [
+      { key: 'projectPath', type: 'string', label: '專案路徑' },
+    ],
+    views: [
+      {
+        id: 'file-tree-workspace',
+        label: 'Files (Workspace)',
+        icon: FolderOpen,
+        scope: 'workspace',
+        defaultRegion: 'primary-sidebar',
+        component: FileTreeWorkspaceView,
+      },
+      {
+        id: 'file-tree-session',
+        label: 'Files (Session)',
+        icon: FolderOpen,
+        scope: 'workspace',
+        defaultRegion: 'primary-panel',
+        component: FileTreeSessionView,
+      },
+    ],
   })
 
   // Settings sections
