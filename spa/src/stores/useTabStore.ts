@@ -71,7 +71,7 @@ interface TabState {
   activeTabId: string | null
   visitHistory: string[]
 
-  addTab: (tab: Tab) => void
+  addTab: (tab: Tab, afterTabId?: string) => void
   openSingletonTab: (content: PaneContent) => string
   closeTab: (id: string) => void
   setActiveTab: (id: string | null) => void
@@ -95,12 +95,31 @@ export const useTabStore = create<TabState>()(
       activeTabId: null,
       visitHistory: [],
 
-      addTab: (tab) =>
+      addTab: (tab, afterTabId) =>
         set((state) => {
           if (state.tabs[tab.id]) return state // dedup guard
+          let newOrder: string[]
+          if (afterTabId) {
+            const idx = state.tabOrder.indexOf(afterTabId)
+            if (idx !== -1) {
+              // If afterTabId is pinned and new tab is not, skip past pinned group
+              let insertIdx = idx + 1
+              if (!tab.pinned && state.tabs[afterTabId]?.pinned) {
+                while (insertIdx < state.tabOrder.length && state.tabs[state.tabOrder[insertIdx]]?.pinned) {
+                  insertIdx++
+                }
+              }
+              newOrder = [...state.tabOrder]
+              newOrder.splice(insertIdx, 0, tab.id)
+            } else {
+              newOrder = [...state.tabOrder, tab.id]
+            }
+          } else {
+            newOrder = [...state.tabOrder, tab.id]
+          }
           return {
             tabs: { ...state.tabs, [tab.id]: tab },
-            tabOrder: [...state.tabOrder, tab.id],
+            tabOrder: newOrder,
             activeTabId: state.activeTabId ?? tab.id,
           }
         }),

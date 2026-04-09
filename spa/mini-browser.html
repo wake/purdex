@@ -1,12 +1,330 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Mini Browser</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/mini-browser.tsx"></script>
-  </body>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mini Browser</title>
+  <style>
+    /* === Theme variables === */
+    [data-theme="dark"] {
+      --surface-primary: #0a0a1a; --surface-secondary: #12122a;
+      --surface-elevated: #1e1e3e; --surface-hover: #1a1a32;
+      --surface-input: #2a2a2a; --text-primary: #e0e0e0;
+      --text-muted: #6b7280; --border-default: #404040;
+      --border-active: #7a6aaa; --border-subtle: #2a2a2a;
+    }
+    [data-theme="light"] {
+      --surface-primary: #f5f5f5; --surface-secondary: #e8e8e8;
+      --surface-elevated: #ffffff; --surface-hover: #e0e0e0;
+      --surface-input: #ffffff; --text-primary: #1a1a2e;
+      --text-muted: #8a8a9a; --border-default: #d0d0d0;
+      --border-active: #6a5a9a; --border-subtle: #e0e0e0;
+    }
+    [data-theme="nord"] {
+      --surface-primary: #2e3440; --surface-secondary: #3b4252;
+      --surface-elevated: #434c5e; --surface-hover: #434c5e;
+      --surface-input: #3b4252; --text-primary: #eceff4;
+      --text-muted: #7b88a1; --border-default: #4c566a;
+      --border-active: #88c0d0; --border-subtle: #3b4252;
+    }
+    [data-theme="dracula"] {
+      --surface-primary: #282a36; --surface-secondary: #21222c;
+      --surface-elevated: #44475a; --surface-hover: #44475a;
+      --surface-input: #21222c; --text-primary: #f8f8f2;
+      --text-muted: #6272a4; --border-default: #44475a;
+      --border-active: #bd93f9; --border-subtle: #21222c;
+    }
+
+    /* === Layout === */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--surface-primary);
+      color: var(--text-primary);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #drag-region {
+      height: 40px;
+      -webkit-app-region: drag;
+      flex-shrink: 0;
+      display: flex;
+      align-items: flex-end;
+    }
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--surface-secondary);
+      flex-shrink: 0;
+      -webkit-app-region: no-drag;
+    }
+    #content { flex: 1; }
+
+    /* === Buttons === */
+    .nav-btn {
+      padding: 4px; border-radius: 4px; border: none;
+      background: transparent; color: var(--text-primary);
+      cursor: pointer; display: flex; align-items: center;
+      justify-content: center; transition: background 0.15s;
+      -webkit-app-region: no-drag;
+    }
+    .nav-btn:hover { background: var(--surface-hover); }
+    .nav-btn:disabled { opacity: 0.3; cursor: default; }
+    .nav-btn:disabled:hover { background: transparent; }
+
+    /* === URL input === */
+    #url-input {
+      flex: 1; margin: 0 4px; padding: 2px 8px;
+      border-radius: 4px; border: 1px solid transparent;
+      background: var(--surface-input); color: var(--text-primary);
+      font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      outline: none;
+    }
+    #url-input:focus {
+      border-color: var(--border-active);
+      box-shadow: 0 0 0 1px var(--border-active);
+    }
+
+    /* === Menu === */
+    .menu-wrap { position: relative; }
+    #menu {
+      position: absolute; right: 0; top: 100%; margin-top: 4px;
+      z-index: 50; min-width: 192px;
+      background: var(--surface-elevated); border: 1px solid var(--border-default);
+      border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+      padding: 4px 0; font-size: 12px; display: none;
+    }
+    #menu.open { display: block; }
+    .menu-item {
+      display: flex; width: 100%; align-items: center; gap: 8px;
+      padding: 6px 12px; border: none; background: transparent;
+      color: var(--text-primary); cursor: pointer; font-size: 12px;
+      text-align: left; transition: background 0.15s;
+    }
+    .menu-item:hover { background: var(--surface-hover); }
+
+    .icon { width: 16px; height: 16px; }
+    .icon-sm { width: 14px; height: 14px; }
+  </style>
+  <script>
+    // Apply theme before first paint
+    try {
+      var raw = localStorage.getItem('purdex-themes')
+      var data = raw ? JSON.parse(raw) : null
+      var tid = (data && data.state && data.state.activeThemeId) || 'dark'
+      document.documentElement.dataset.theme = tid
+      // Inject custom theme tokens if active theme is user-created
+      var customs = (data && data.state && data.state.customThemes) || {}
+      var ct = customs[tid]
+      if (ct && ct.tokens) {
+        var css = '[data-theme="' + tid + '"] {'
+        for (var k in ct.tokens) {
+          var v = ct.tokens[k].replace(/[{}<>]/g, '').replace(/;/g, '')
+          css += ' --' + k + ': ' + v + ';'
+        }
+        css += ' }'
+        var s = document.createElement('style')
+        s.textContent = css
+        document.head.appendChild(s)
+      }
+    } catch (e) { document.documentElement.dataset.theme = 'dark' }
+  </script>
+</head>
+<body>
+  <div id="drag-region"></div>
+  <div id="toolbar">
+    <button id="btn-back" class="nav-btn" disabled aria-label="Go back">
+      <svg class="icon" viewBox="0 0 256 256" fill="currentColor"><path d="M224,128a8,8,0,0,1-8,8H59.31l58.35,58.34a8,8,0,0,1-11.32,11.32l-72-72a8,8,0,0,1,0-11.32l72-72a8,8,0,0,1,11.32,11.32L59.31,120H216A8,8,0,0,1,224,128Z"/></svg>
+    </button>
+    <button id="btn-forward" class="nav-btn" disabled aria-label="Go forward">
+      <svg class="icon" viewBox="0 0 256 256" fill="currentColor"><path d="M221.66,133.66l-72,72a8,8,0,0,1-11.32-11.32L196.69,136H40a8,8,0,0,1,0-16H196.69l-58.35-58.34a8,8,0,0,1,11.32-11.32l72,72A8,8,0,0,1,221.66,133.66Z"/></svg>
+    </button>
+    <button id="btn-reload" class="nav-btn" aria-label="Reload">
+      <svg class="icon" viewBox="0 0 256 256" fill="currentColor"><path d="M240,56v48a8,8,0,0,1-8,8H184a8,8,0,0,1,0-16h30.19A96,96,0,1,0,224,128a8,8,0,0,1,16,0A112,112,0,1,1,214.19,64H232A8,8,0,0,1,240,56Z"/></svg>
+    </button>
+    <button id="btn-stop" class="nav-btn" aria-label="Stop" style="display:none">
+      <svg class="icon" viewBox="0 0 256 256" fill="currentColor"><path d="M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z"/></svg>
+    </button>
+    <input id="url-input" type="text" value="">
+    <div class="menu-wrap">
+      <button id="btn-menu" class="nav-btn" aria-label="More">
+        <svg class="icon" viewBox="0 0 256 256" fill="currentColor"><path d="M64,128a16,16,0,1,1-16-16A16,16,0,0,1,64,128Zm64-16a16,16,0,1,0,16,16A16,16,0,0,0,128,112Zm64,0a16,16,0,1,0,16,16A16,16,0,0,0,192,112Z"/></svg>
+      </button>
+      <div id="menu">
+        <button class="menu-item" id="menu-external">
+          <svg class="icon-sm" viewBox="0 0 256 256" fill="currentColor"><path d="M224,104a8,8,0,0,1-16,0V59.31l-66.34,66.35a8,8,0,0,1-11.32-11.32L196.69,48H152a8,8,0,0,1,0-16h64a8,8,0,0,1,8,8Zm-40,24a8,8,0,0,0-8,8v72H48V80h72a8,8,0,0,0,0-16H48A16,16,0,0,0,32,80V208a16,16,0,0,0,16,16H176a16,16,0,0,0,16-16V136A8,8,0,0,0,184,128Z"/></svg>
+          <span data-i18n="open_external">Open in browser</span>
+        </button>
+        <button class="menu-item" id="menu-copy">
+          <svg class="icon-sm" viewBox="0 0 256 256" fill="currentColor"><path d="M216,32H88a8,8,0,0,0-8,8V80H40a8,8,0,0,0-8,8V216a8,8,0,0,0,8,8H168a8,8,0,0,0,8-8V176h40a8,8,0,0,0,8-8V40A8,8,0,0,0,216,32ZM160,208H48V96H160Zm48-48H176V88a8,8,0,0,0-8-8H96V48H208Z"/></svg>
+          <span data-i18n="copy_url">Copy URL</span>
+        </button>
+        <button class="menu-item" id="menu-move">
+          <svg class="icon-sm" viewBox="0 0 256 256" fill="currentColor"><path d="M189.66,122.34a8,8,0,0,1,0,11.32l-48,48a8,8,0,0,1-11.32-11.32L164.69,136H32a8,8,0,0,1,0-16H164.69l-34.35-34.34a8,8,0,0,1,11.32-11.32ZM216,40a8,8,0,0,0-8,8V208a8,8,0,0,0,16,0V48A8,8,0,0,0,216,40Z"/></svg>
+          <span data-i18n="move_to_tab">Open in main window</span>
+        </button>
+      </div>
+    </div>
+  </div>
+  <div id="content"></div>
+
+  <script>
+    // --- i18n labels ---
+    ;(function () {
+      var labels = {
+        open_external: { 'zh-TW': '在瀏覽器中開啟' },
+        copy_url:      { 'zh-TW': '複製網址' },
+        move_to_tab:   { 'zh-TW': '在主視窗重新開啟此網址' }
+      }
+      try {
+        var raw = localStorage.getItem('purdex-i18n')
+        var lang = raw ? (JSON.parse(raw).state?.activeLocaleId || 'en') : 'en'
+        document.querySelectorAll('[data-i18n]').forEach(function (el) {
+          var key = el.getAttribute('data-i18n')
+          if (labels[key] && labels[key][lang]) el.textContent = labels[key][lang]
+        })
+      } catch (e) { /* keep English defaults */ }
+    })()
+
+    // --- Toolbar logic ---
+    var params = new URLSearchParams(location.search)
+    var paneId = params.get('paneId') || ''
+    var api = window.electronAPI
+
+    var $back    = document.getElementById('btn-back')
+    var $forward = document.getElementById('btn-forward')
+    var $reload  = document.getElementById('btn-reload')
+    var $stop    = document.getElementById('btn-stop')
+    var $url     = document.getElementById('url-input')
+    var $menu    = document.getElementById('menu')
+    var $content = document.getElementById('content')
+
+    var currentUrl = ''
+    var isEditing = false
+
+    // Navigation buttons
+    $back.onclick    = function () { api && api.browserViewGoBack(paneId) }
+    $forward.onclick = function () { api && api.browserViewGoForward(paneId) }
+    $reload.onclick  = function () { api && api.browserViewReload(paneId) }
+    $stop.onclick    = function () { api && api.browserViewStop(paneId) }
+
+    // URL input
+    $url.addEventListener('focus', function () {
+      isEditing = true
+      $url.value = currentUrl
+      $url.select()
+    })
+    $url.addEventListener('blur', function () {
+      isEditing = false
+      $url.value = currentUrl
+    })
+    $url.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        var val = $url.value.trim()
+        if (!val) return
+        var url = val.includes('://') ? val : 'https://' + val
+        try {
+          var parsed = new URL(url)
+          if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+            api && api.navigateBrowserView(paneId, parsed.href)
+            isEditing = false
+            $url.blur()
+          }
+        } catch (err) { /* invalid URL */ }
+      } else if (e.key === 'Escape') {
+        isEditing = false
+        $url.blur()
+      }
+    })
+
+    // Menu
+    document.getElementById('btn-menu').addEventListener('click', function (e) {
+      e.stopPropagation()
+      $menu.classList.toggle('open')
+    })
+    document.addEventListener('mousedown', function (e) {
+      if (!$menu.contains(e.target) && e.target.id !== 'btn-menu') {
+        $menu.classList.remove('open')
+      }
+    })
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') $menu.classList.remove('open')
+    })
+    document.getElementById('menu-external').onclick = function () {
+      if (currentUrl) window.open(currentUrl, '_blank')
+      $menu.classList.remove('open')
+    }
+    document.getElementById('menu-copy').onclick = function () {
+      if (currentUrl) navigator.clipboard.writeText(currentUrl)
+      $menu.classList.remove('open')
+    }
+    document.getElementById('menu-move').onclick = function () {
+      api && api.browserViewMoveToTab(paneId)
+      $menu.classList.remove('open')
+    }
+
+    // --- State subscription ---
+    var unsubState = null
+    if (api && api.onBrowserViewStateUpdate) {
+      unsubState = api.onBrowserViewStateUpdate(function (id, state) {
+        if (id !== paneId) return
+        currentUrl = state.url || ''
+        if (!isEditing) $url.value = currentUrl
+        $back.disabled = !state.canGoBack
+        $forward.disabled = !state.canGoForward
+        $reload.style.display = state.isLoading ? 'none' : ''
+        $stop.style.display = state.isLoading ? '' : 'none'
+        if (state.title) document.title = state.title
+      })
+    }
+
+    // Catch up state if view was created before this page loaded
+    if (api && api.requestBrowserViewState) api.requestBrowserViewState(paneId)
+
+    // --- Resize observer (sync WebContentsView bounds) ---
+    var resizeObserver = null
+    if (api && api.resizeBrowserView && $content) {
+      var rafId = 0
+      resizeObserver = new ResizeObserver(function () {
+        cancelAnimationFrame(rafId)
+        rafId = requestAnimationFrame(function () {
+          var r = $content.getBoundingClientRect()
+          if (!r.width || !r.height) return
+          api.resizeBrowserView(paneId, {
+            x: Math.round(r.x), y: Math.round(r.y),
+            width: Math.round(r.width), height: Math.round(r.height)
+          })
+        })
+      })
+      resizeObserver.observe($content)
+    }
+
+    // --- Keyboard shortcuts ---
+    var unsubShortcut = null
+    if (api && api.onShortcut) {
+      unsubShortcut = api.onShortcut(function (payload) {
+        switch (payload.action) {
+          case 'close-tab':  window.close(); break
+          case 'go-back':    api.browserViewGoBack(paneId); break
+          case 'go-forward': api.browserViewGoForward(paneId); break
+          case 'reload':     api.browserViewReload(paneId); break
+          case 'focus-url':  $url.focus(); $url.select(); break
+          case 'print':      api.browserViewPrint(paneId); break
+        }
+      })
+    }
+
+    // --- Cleanup on window close ---
+    window.addEventListener('beforeunload', function () {
+      if (unsubState) unsubState()
+      if (unsubShortcut) unsubShortcut()
+      if (resizeObserver) resizeObserver.disconnect()
+    })
+  </script>
+</body>
 </html>

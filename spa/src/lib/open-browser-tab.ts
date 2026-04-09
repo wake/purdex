@@ -9,7 +9,8 @@ import { createTab } from '../types/tab'
  */
 export function openBrowserTab(url: string): void {
   const tab = createTab({ kind: 'browser', url })
-  useTabStore.getState().addTab(tab)
+  const activeTabId = useTabStore.getState().activeTabId
+  useTabStore.getState().addTab(tab, activeTabId ?? undefined)
   useTabStore.getState().setActiveTab(tab.id)
 
   const wsId = useWorkspaceStore.getState().activeWorkspaceId

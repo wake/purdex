@@ -8,7 +8,6 @@ function makeProps(overrides: Partial<Parameters<typeof BrowserToolbar>[0]> = {}
     canGoBack: true,
     canGoForward: false,
     isLoading: false,
-    context: 'tab' as const,
     onGoBack: vi.fn(),
     onGoForward: vi.fn(),
     onReload: vi.fn(),
@@ -83,10 +82,9 @@ describe('BrowserToolbar', () => {
     expect(screen.getByText('Open in mini browser')).toBeInTheDocument()
   })
 
-  it('shows moveToTab in menu for mini-window context', () => {
-    const onMoveToTab = vi.fn()
-    render(<BrowserToolbar {...makeProps({ context: 'mini-window', onMoveToTab })} />)
+  it('hides popOut when onPopOut is not provided', () => {
+    render(<BrowserToolbar {...makeProps()} />)
     fireEvent.click(screen.getByLabelText('More'))
-    expect(screen.getByText('Open in main window')).toBeInTheDocument()
+    expect(screen.queryByText('Open in mini browser')).not.toBeInTheDocument()
   })
 })

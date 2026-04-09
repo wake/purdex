@@ -2,7 +2,7 @@ import { useEffect, type RefObject } from 'react'
 
 /**
  * Observes the given element and pushes its bounds to Electron's BrowserViewManager
- * via the resizeBrowserView IPC. Used by both BrowserPane and MiniBrowserApp.
+ * via the resizeBrowserView IPC. Used by BrowserPane (tab context).
  */
 export function useBrowserViewResize(paneId: string, ref: RefObject<HTMLDivElement | null>): void {
   useEffect(() => {
