@@ -122,6 +122,12 @@ func mergeCodexHooks(path, tboxPath string, remove bool) error {
 	return nil
 }
 
+func isTboxCommandCodex(cmd string) bool {
+	// Match both quoted ("/path/tbox" hook) and unquoted (/path/tbox hook) forms.
+	normalized := strings.ReplaceAll(cmd, `"`, "")
+	return strings.Contains(normalized, "tbox hook")
+}
+
 func findTboxCommandInCodex(entries any) string {
 	arr, ok := entries.([]any)
 	if !ok {
@@ -133,7 +139,7 @@ func findTboxCommandInCodex(entries any) string {
 			continue
 		}
 		cmd, _ := m["command"].(string)
-		if strings.Contains(cmd, "tbox hook") {
+		if isTboxCommandCodex(cmd) {
 			return cmd
 		}
 	}
@@ -159,7 +165,7 @@ func filterOutTboxCodex(entries []any) []any {
 			continue
 		}
 		cmd, _ := m["command"].(string)
-		if !strings.Contains(cmd, "tbox hook") {
+		if !isTboxCommandCodex(cmd) {
 			result = append(result, e)
 		}
 	}
