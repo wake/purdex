@@ -1,6 +1,7 @@
 import { getPaneRenderer } from '../lib/module-registry'
 import { getLayoutKey } from '../lib/pane-tree'
 import { PaneSplitter } from './PaneSplitter'
+import { PaneHeader } from './PaneHeader'
 import { useTabStore } from '../stores/useTabStore'
 import type { PaneLayout } from '../types/tab'
 
@@ -8,9 +9,10 @@ interface Props {
   layout: PaneLayout
   tabId: string
   isActive: boolean
+  showHeader?: boolean
 }
 
-export function PaneLayoutRenderer({ layout, tabId, isActive }: Props) {
+export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false }: Props) {
   if (layout.type === 'leaf') {
     const config = getPaneRenderer(layout.pane.content.kind)
     if (!config) {
@@ -21,6 +23,18 @@ export function PaneLayoutRenderer({ layout, tabId, isActive }: Props) {
       )
     }
     const Component = config.component
+    if (showHeader) {
+      return (
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <PaneHeader
+            title={layout.pane.content.kind}
+            onClose={() => useTabStore.getState().closePane(tabId, layout.pane.id)}
+            onDetach={() => useTabStore.getState().detachPane(tabId, layout.pane.id)}
+          />
+          <Component pane={layout.pane} isActive={isActive} />
+        </div>
+      )
+    }
     return <Component pane={layout.pane} isActive={isActive} />
   }
 
@@ -54,7 +68,7 @@ export function PaneLayoutRenderer({ layout, tabId, isActive }: Props) {
             />
           )}
           <div style={{ flex: `${layout.sizes[i]} 0 0%` }} className="min-w-0 min-h-0 flex overflow-hidden">
-            <PaneLayoutRenderer layout={child} tabId={tabId} isActive={isActive} />
+            <PaneLayoutRenderer layout={child} tabId={tabId} isActive={isActive} showHeader={true} />
           </div>
         </div>
       ))}
