@@ -216,7 +216,7 @@ describe('TerminalView', () => {
     })
 
     afterEach(() => {
-      useAgentStore.setState({ statuses: {}, events: {}, unread: {}, activeSubagents: {} })
+      useAgentStore.setState({ statuses: {}, lastEvents: {}, unread: {}, subagents: {} })
     })
 
     it('shows drop overlay on drag-enter when agent is active', () => {

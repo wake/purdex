@@ -2,7 +2,7 @@
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
-import { useAgentStore, type AgentHookEvent, type AgentStatus } from '../stores/useAgentStore'
+import { useAgentStore, type NormalizedEvent, type AgentStatus } from '../stores/useAgentStore'
 import { useStreamStore, type PerSessionState } from '../stores/useStreamStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { scanPaneTree } from './pane-tree'
@@ -29,7 +29,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     sessions: Session[] | undefined
     activeHostId: string | null
     // AgentStore data (exclude transient activeSubagents)
-    agentEvents: Record<string, AgentHookEvent>
+    agentEvents: Record<string, NormalizedEvent>
     agentStatuses: Record<string, AgentStatus>
     agentUnread: Record<string, boolean>
     agentModels: Record<string, string>
@@ -55,7 +55,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   }
 
   // Snapshot AgentStore entries for this host
-  for (const [k, v] of Object.entries(agentStore.events)) {
+  for (const [k, v] of Object.entries(agentStore.lastEvents)) {
     if (k.startsWith(prefix)) snapshot.agentEvents[k] = v
   }
   for (const [k, v] of Object.entries(agentStore.statuses)) {
@@ -133,7 +133,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     const ag = useAgentStore.getState()
     if (Object.keys(snapshot.agentEvents).length > 0) {
       useAgentStore.setState({
-        events: { ...ag.events, ...snapshot.agentEvents },
+        lastEvents: { ...ag.lastEvents, ...snapshot.agentEvents },
         statuses: { ...ag.statuses, ...snapshot.agentStatuses },
         unread: { ...ag.unread, ...snapshot.agentUnread },
         models: { ...ag.models, ...snapshot.agentModels },

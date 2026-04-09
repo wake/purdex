@@ -41,7 +41,7 @@ beforeEach(() => {
     hostOrder: [HOST_ID],
     runtime: { [HOST_ID]: { status: 'connected' } },
   })
-  useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, models: {} })
+  useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {} })
 })
 
 describe('HookModuleCard', () => {
@@ -136,10 +136,10 @@ describe('HookModuleCard lastTrigger reactivity', () => {
     // Simulate a hook event arriving
     act(() => {
       useAgentStore.setState({
-        events: {
+        lastEvents: {
           [`${HOST_ID}:sess1`]: {
-            tmux_session: 'sess1', event_name: 'SessionStart',
-            raw_event: {}, agent_type: 'cc', broadcast_ts: now,
+            raw_event_name: 'SessionStart',
+            status: 'idle', agent_type: 'cc', broadcast_ts: now,
           },
         },
       })

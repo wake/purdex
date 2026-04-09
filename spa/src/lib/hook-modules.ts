@@ -1,4 +1,5 @@
 import { hostFetch } from './host-api'
+import type { NormalizedEvent } from '../stores/useAgentStore'
 
 /* ─── Types ─── */
 
@@ -19,7 +20,7 @@ export interface HookModule {
   descKey: string
   fetchStatus: (hostId: string) => Promise<HookModuleStatus>
   setup: (hostId: string, action: 'install' | 'remove') => Promise<HookModuleStatus>
-  getLastTrigger?: (hostId: string, events: Record<string, { event_name: string; broadcast_ts: number }>) => Record<string, number> | null
+  getLastTrigger?: (hostId: string, events: Record<string, NormalizedEvent>) => Record<string, number> | null
 }
 
 /* ─── Shared fetch helper ─── */
@@ -61,9 +62,9 @@ const CC_HOOKS: HookModule = {
     const result: Record<string, number> = {}
     for (const [key, event] of Object.entries(events)) {
       if (!key.startsWith(prefix)) continue
-      const existing = result[event.event_name]
+      const existing = result[event.raw_event_name]
       if (!existing || event.broadcast_ts > existing) {
-        result[event.event_name] = event.broadcast_ts
+        result[event.raw_event_name] = event.broadcast_ts
       }
     }
     return Object.keys(result).length > 0 ? result : null

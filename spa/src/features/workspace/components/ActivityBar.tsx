@@ -44,7 +44,7 @@ function WorkspaceButton({ workspace: ws, isActive, onSelect, onContextMenu }: W
         aria-label={[
           ws.name,
           showBadge && `${unreadCount} unread`,
-          aggregatedStatus && aggregatedStatus !== 'idle' && aggregatedStatus,
+          aggregatedStatus && aggregatedStatus,
         ].filter(Boolean).join(', ')}
         onClick={() => onSelect(ws.id)}
         onContextMenu={(e) => {
