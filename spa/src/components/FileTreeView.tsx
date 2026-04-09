@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { FolderSimple, File, CaretRight, CaretDown } from '@phosphor-icons/react'
 import { useHostStore } from '../stores/useHostStore'
 import { useWorkspaceStore } from '../features/workspace/store'
@@ -39,23 +39,16 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
     return res.json()
   }, [baseUrl, activeHostId])
 
-  // Track previous projectPath to avoid stale fetches
-  const prevProjectPath = useRef<string | undefined>(undefined)
-
   useEffect(() => {
     if (!baseUrl || !projectPath) return
-    if (projectPath === prevProjectPath.current) return
-    prevProjectPath.current = projectPath
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync reset before async fetch
     setLoading(true)
     setError(null)
     setExpandedDirs({})
     fetchDir(projectPath)
-      .then((data) => {
-        setRootEntries(data.entries)
-      })
+      .then((data) => setRootEntries(data.entries))
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-fetch on baseUrl/projectPath/fetchDir change
   }, [baseUrl, projectPath, fetchDir])
 
   const toggleDir = useCallback(async (fullPath: string) => {

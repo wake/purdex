@@ -144,10 +144,13 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
         const sourceTab = tabs[tab.id]
         const targetTab = tabs[payload]
         if (!sourceTab || !targetTab) break
+        if (sourceTab.layout.type === 'split') break  // Don't merge multi-pane tabs
+        if (sourceTab.locked) break  // Don't merge locked tabs
         const sourcePrimary = getPrimaryPane(sourceTab.layout)
         const targetPrimary = getPrimaryPane(targetTab.layout)
         useTabStore.getState().splitPane(payload, targetPrimary.id, 'h', sourcePrimary.content)
         handleCloseTab(tab.id)
+        handleSelectTab(payload)  // Focus target tab
         break
       }
     }

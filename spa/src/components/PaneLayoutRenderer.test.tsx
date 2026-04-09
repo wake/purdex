@@ -112,4 +112,46 @@ describe('PaneLayoutRenderer', () => {
     expect(screen.getByTestId('dash-bl')).toBeTruthy()
     expect(screen.getByTestId('dash-br')).toBeTruthy()
   })
+
+  it('renders grid-4 layout with 4 pane areas', () => {
+    registerModule({
+      id: 'dashboard-grid4',
+      name: 'Dashboard',
+      pane: { kind: 'dashboard', component: ({ pane }) => <div data-testid={`dash-${pane.id}`}>{pane.id}</div> },
+    })
+    // Grid-4: vertical split of two horizontal splits → 2x2 grid
+    const layout: PaneLayout = {
+      type: 'split', id: 'outer', direction: 'v',
+      children: [
+        {
+          type: 'split', id: 'top-row', direction: 'h',
+          children: [
+            { type: 'leaf', pane: { id: 'tl', content: { kind: 'dashboard' } } },
+            { type: 'leaf', pane: { id: 'tr', content: { kind: 'dashboard' } } },
+          ],
+          sizes: [50, 50],
+        },
+        {
+          type: 'split', id: 'bot-row', direction: 'h',
+          children: [
+            { type: 'leaf', pane: { id: 'bl', content: { kind: 'dashboard' } } },
+            { type: 'leaf', pane: { id: 'br', content: { kind: 'dashboard' } } },
+          ],
+          sizes: [50, 50],
+        },
+      ],
+      sizes: [50, 50],
+    }
+    render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
+    // All 4 pane leaf areas must be rendered
+    expect(screen.getByTestId('dash-tl')).toBeTruthy()
+    expect(screen.getByTestId('dash-tr')).toBeTruthy()
+    expect(screen.getByTestId('dash-bl')).toBeTruthy()
+    expect(screen.getByTestId('dash-br')).toBeTruthy()
+    // Verify text content of each pane
+    expect(screen.getByTestId('dash-tl').textContent).toBe('tl')
+    expect(screen.getByTestId('dash-tr').textContent).toBe('tr')
+    expect(screen.getByTestId('dash-bl').textContent).toBe('bl')
+    expect(screen.getByTestId('dash-br').textContent).toBe('br')
+  })
 })

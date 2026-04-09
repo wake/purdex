@@ -15,11 +15,7 @@ registerBuiltinThemes()
 registerBuiltinModules()
 
 // Only set defaults if not already persisted
-const panelState = useLayoutStore.getState().regions['primary-panel']
-if (panelState.views.length === 0) {
-  useLayoutStore.getState().setRegionViews('primary-panel', ['file-tree-session'])
-  useLayoutStore.getState().setActiveView('primary-panel', 'file-tree-session')
-}
+// Note: file-tree-session is a placeholder — do not set it as default for primary-panel
 const sidebarState = useLayoutStore.getState().regions['primary-sidebar']
 if (sidebarState.views.length === 0) {
   useLayoutStore.getState().setRegionViews('primary-sidebar', ['file-tree-workspace'])

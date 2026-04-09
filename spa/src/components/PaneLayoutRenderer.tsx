@@ -89,8 +89,12 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       const containerWidth = container.offsetWidth
       if (containerWidth === 0) return
       const percentDelta = (deltaPx / containerWidth) * 100
-      // Sync both horizontal splits
-      for (const split of [topSplit, bottomSplit]) {
+      // Read fresh layout from store to avoid stale closure
+      const currentTab = useTabStore.getState().tabs[tabId]
+      if (!currentTab || !isGrid4(currentTab.layout)) return
+      const freshTop = currentTab.layout.children[0] as Extract<PaneLayout, { type: 'split' }>
+      const freshBottom = currentTab.layout.children[1] as Extract<PaneLayout, { type: 'split' }>
+      for (const split of [freshTop, freshBottom]) {
         const totalPercent = split.sizes[index] + split.sizes[index + 1]
         const newLeft = Math.max(10, Math.min(totalPercent - 10, split.sizes[index] + percentDelta))
         const newRight = totalPercent - newLeft
@@ -104,10 +108,14 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       const containerHeight = container.offsetHeight
       if (containerHeight === 0) return
       const percentDelta = (deltaPx / containerHeight) * 100
-      const totalPercent = layout.sizes[index] + layout.sizes[index + 1]
-      const newTop = Math.max(10, Math.min(totalPercent - 10, layout.sizes[index] + percentDelta))
+      // Read fresh layout from store to avoid stale closure
+      const currentTab = useTabStore.getState().tabs[tabId]
+      if (!currentTab || !isGrid4(currentTab.layout)) return
+      const outerLayout = currentTab.layout as Extract<PaneLayout, { type: 'split' }>
+      const totalPercent = outerLayout.sizes[index] + outerLayout.sizes[index + 1]
+      const newTop = Math.max(10, Math.min(totalPercent - 10, outerLayout.sizes[index] + percentDelta))
       const newBottom = totalPercent - newTop
-      useTabStore.getState().resizePanes(tabId, layout.id, [newTop, newBottom])
+      useTabStore.getState().resizePanes(tabId, outerLayout.id, [newTop, newBottom])
     }
 
     return (

@@ -358,7 +358,7 @@ export default function App() {
             hasOtherUnlocked={displayTabs.some((t) => t.id !== contextMenu.tab.id && !t.locked)}
             hasRightUnlocked={contextMenuHasRightUnlocked}
             targetTabs={displayTabs.filter((t) =>
-              t.id !== contextMenu.tab.id && t.layout.type === 'split'
+              t.id !== contextMenu.tab.id && t.layout.type === 'split' && !t.locked
             )}
           />
         )}

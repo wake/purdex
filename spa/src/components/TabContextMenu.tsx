@@ -82,11 +82,11 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
     // MergeToTab section
     ...(targetTabs && targetTabs.length > 0 ? [
       'separator' as const,
-      ...targetTabs.map((t) => ({
-        label: `加入 ${getPrimaryPane(t.layout).content.kind} tab 成為 pane`,
+      ...targetTabs.map((targetTab) => ({
+        label: `加入 ${getPrimaryPane(targetTab.layout).content.kind} tab 成為 pane`,
         action: 'mergeToTab' as const,
         show: true,
-        payload: t.id,
+        payload: targetTab.id,
       })),
     ] : []),
     'separator',
@@ -120,7 +120,7 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
         }
         return (
           <button
-            key={item.action}
+            key={item.payload ? `${item.action}-${item.payload}` : item.action}
             disabled={item.disabled}
             onClick={() => { onAction(item.action, item.payload); onClose() }}
             className={`w-full text-left px-3 py-1.5 transition-colors ${
