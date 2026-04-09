@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.71] - 2026-04-10
+
+Home 按鈕未讀指示修正 + standalone tab 關閉 scope 修正
+
+### 修正
+
+- **Home badge 未讀數**：Home 按鈕 badge 改用 `useWorkspaceIndicators` 計算未讀數，而非顯示 standalone tab 總數
+- **Home status dot**：Home 按鈕新增 status dot indicator（running/waiting/error），與 workspace 按鈕一致
+- **standalone tab 關閉 scope**：關閉 standalone tab 時，nextTab 候選範圍改為只包含其他 standalone tabs，避免跳到 workspace tab
+- **standaloneTabIds memoize**：`useMemo` 穩定 `standaloneTabIds` 陣列引用，避免每次 render 重算 indicator
+
 ## [1.0.0-alpha.70] - 2026-04-09
 
 Workspace 狀態指示器迭代
