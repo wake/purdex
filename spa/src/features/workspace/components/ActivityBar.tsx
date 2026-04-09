@@ -24,8 +24,28 @@ function WorkspaceButton({ workspace: ws, isActive, onSelect, onContextMenu }: W
 
   return (
     <div className="relative group">
+      {aggregatedStatus && !isActive && (
+        <span
+          className={`absolute rounded-full ${aggregatedStatus === 'running' ? 'animate-breathe' : ''}`}
+          style={{
+            width: '5px',
+            height: '5px',
+            left: '-1px',
+            top: '50%',
+            transform: 'translateY(calc(-50% - 1px))',
+            backgroundColor: PILL_COLORS[aggregatedStatus],
+            boxShadow: '0 0 0 1.5px var(--surface-tertiary)',
+            '--breathe-color': PILL_COLORS[aggregatedStatus],
+            '--breathe-bg': 'var(--surface-tertiary)',
+          } as React.CSSProperties}
+        />
+      )}
       <button
-        aria-label={showBadge ? `${ws.name}, ${unreadCount} unread` : ws.name}
+        aria-label={[
+          ws.name,
+          showBadge && `${unreadCount} unread`,
+          aggregatedStatus && aggregatedStatus !== 'idle' && aggregatedStatus,
+        ].filter(Boolean).join(', ')}
         onClick={() => onSelect(ws.id)}
         onContextMenu={(e) => {
           e.preventDefault()
@@ -39,21 +59,6 @@ function WorkspaceButton({ workspace: ws, isActive, onSelect, onContextMenu }: W
       >
         <WorkspaceIcon icon={ws.icon} name={ws.name} size={16} weight={ws.iconWeight} />
       </button>
-      {aggregatedStatus && (
-        <span
-          className={`absolute rounded-r-sm ${aggregatedStatus === 'running' ? 'animate-breathe' : ''}`}
-          style={{
-            left: '-7px',
-            top: '50%',
-            transform: 'translateY(-50%)',
-            width: '3px',
-            height: aggregatedStatus === 'error' || aggregatedStatus === 'waiting' ? '60%' : '40%',
-            backgroundColor: PILL_COLORS[aggregatedStatus],
-            '--breathe-color': PILL_COLORS[aggregatedStatus],
-            '--breathe-bg': 'var(--surface-tertiary)',
-          } as React.CSSProperties}
-        />
-      )}
       {showBadge && (
         <span
           data-testid="ws-unread-badge"
