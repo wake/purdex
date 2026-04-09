@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern } from './pane-tree'
+import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern, swapPaneContent } from './pane-tree'
 import type { PaneLayout, Pane, PaneContent } from '../types/tab'
 
 // ── helpers for new tests ──────────────────────────────────────────────────
@@ -260,6 +260,36 @@ describe('collectLeaves', () => {
     const layout = mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2'), mkLeaf('p3')])
     const panes = collectLeaves(layout)
     expect(panes.map((p) => p.id)).toEqual(['p1', 'p2', 'p3'])
+  })
+})
+
+// ── swapPaneContent ───────────────────────────────────────────────────────────
+describe('swapPaneContent', () => {
+  it('swaps content between two leaf panes', () => {
+    const layout = mkSplit('s1', 'h', [mkLeaf('p1', 'dashboard'), mkLeaf('p2', 'history')])
+    const result = swapPaneContent(layout, 'p1', 'p2')
+    const leaves = collectLeaves(result)
+    expect(leaves[0].id).toBe('p1')
+    expect(leaves[0].content.kind).toBe('history')
+    expect(leaves[1].id).toBe('p2')
+    expect(leaves[1].content.kind).toBe('dashboard')
+  })
+
+  it('returns same layout if either pane not found', () => {
+    const layout = mkSplit('s1', 'h', [mkLeaf('p1', 'dashboard'), mkLeaf('p2', 'history')])
+    expect(swapPaneContent(layout, 'p1', 'missing')).toBe(layout)
+    expect(swapPaneContent(layout, 'missing', 'p2')).toBe(layout)
+  })
+
+  it('works in nested split layouts', () => {
+    const layout = mkSplit('s1', 'v', [
+      mkSplit('s2', 'h', [mkLeaf('p1', 'dashboard'), mkLeaf('p2', 'history')]),
+      mkLeaf('p3', 'hosts'),
+    ])
+    const result = swapPaneContent(layout, 'p1', 'p3')
+    const leaves = collectLeaves(result)
+    expect(leaves.find((l) => l.id === 'p1')!.content.kind).toBe('hosts')
+    expect(leaves.find((l) => l.id === 'p3')!.content.kind).toBe('dashboard')
   })
 })
 
