@@ -5,6 +5,8 @@ import { ActivityBar } from './components/ActivityBar'
 import { TabBar } from './components/TabBar'
 import { TabContent } from './components/TabContent'
 import { StatusBar } from './components/StatusBar'
+import { TitleBar } from './components/TitleBar'
+import { SidebarRegion } from './components/SidebarRegion'
 import { useConfigStore } from './stores/useConfigStore'
 import { useTabStore } from './stores/useTabStore'
 import { useWorkspaceStore } from './stores/useWorkspaceStore'
@@ -162,6 +164,7 @@ export default function App() {
 
   // --- Derived state ---
   const activeTab = activeTabId ? tabs[activeTabId] : undefined
+  const titleText = activeWorkspaceId ? (workspaces.find(w => w.id === activeWorkspaceId)?.name ?? 'tmux-box') : 'tmux-box'
 
   // --- Bootstrap: fetch config (sessions fetched by multi-host WS onOpen) ---
   useEffect(() => {
@@ -269,110 +272,83 @@ export default function App() {
     <Router>
       <ThemeInjector />
       <div className="h-screen flex flex-col bg-surface-primary text-text-primary">
-        {/* Electron: title bar row — traffic lights + tabs + drag fill */}
-        {isElectron && (
-          <div
-            className="shrink-0 flex items-center bg-surface-secondary border-b border-border-subtle"
-            style={{ height: 44, WebkitAppRegion: 'drag' } as React.CSSProperties}
-          >
-            {/* Traffic light safe zone (78px ≈ 3 buttons + padding) */}
-            <div className="shrink-0" style={{ width: 78 }} />
-            {/* Tabs — no-drag so clicks work; flex-1 min-w-0 constrains width to prevent app-wide overflow */}
-            <div className="flex-1 min-w-0 flex items-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-              <TabBar
-                tabs={displayTabs}
-                activeTabId={activeTabId}
-                onSelectTab={handleSelectTab}
-                onCloseTab={handleCloseTab}
-                onAddTab={handleAddTab}
-                onReorderTabs={handleReorderTabs}
-                onMiddleClick={handleMiddleClick}
-                onContextMenu={handleContextMenu}
-                embedded
-              />
-            </div>
-            {/* Remaining space — drag region inherited from parent */}
-          </div>
-        )}
+        {isElectron && <TitleBar title={titleText} />}
         <div className="flex-1 flex min-h-0">
-        <ActivityBar
-          workspaces={workspaces}
-          activeWorkspaceId={activeStandaloneTabId ? null : activeWorkspaceId}
-          activeStandaloneTabId={activeStandaloneTabId}
-          onSelectWorkspace={handleSelectWorkspace}
-          onSelectHome={() => {
-            useWorkspaceStore.getState().setActiveWorkspace(null)
-            const firstStandalone = standaloneTabs[0]
-            if (firstStandalone) {
-              handleSelectTab(firstStandalone.id)
-            } else {
-              useTabStore.getState().setActiveTab(null)
-            }
-          }}
-          standaloneTabCount={standaloneTabs.length}
-          onAddWorkspace={() => {
-            if (workspaces.length === 0 && tabOrder.length > 0) {
-              const ws = useWorkspaceStore.getState().addWorkspace('Workspace 1')
-              setMigrateDialog({ wsId: ws.id, wsName: ws.name })
-            } else {
-              const count = workspaces.length + 1
-              const ws = useWorkspaceStore.getState().addWorkspace(`Workspace ${count}`)
-              openWsSettings(ws.id)
-            }
-          }}
-          onContextMenuWorkspace={handleWsContextMenu}
-          onOpenHosts={() => {
-            const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
-            useWorkspaceStore.getState().insertTab(tabId)
-            handleSelectTab(tabId)
-          }}
-          onOpenSettings={() => {
-            const tabId = useTabStore.getState().openSingletonTab({ kind: 'settings', scope: 'global' })
-            useWorkspaceStore.getState().insertTab(tabId)
-            handleSelectTab(tabId)
-          }}
-        />
-        <div className="flex-1 flex flex-col min-w-0">
-          {/* SPA: TabBar in normal position */}
-          {!isElectron && (
-            <div className="flex items-center bg-surface-secondary border-b border-border-subtle">
-              <div className="flex-1 min-w-0">
-                <TabBar
-                  tabs={displayTabs}
-                  activeTabId={activeTabId}
-                  onSelectTab={handleSelectTab}
-                  onCloseTab={handleCloseTab}
-                  onAddTab={handleAddTab}
-                  onReorderTabs={handleReorderTabs}
-                  onMiddleClick={handleMiddleClick}
-                  onContextMenu={handleContextMenu}
-                />
-              </div>
-            </div>
-          )}
-          <div className="flex-1 flex overflow-hidden">
-            {visibleTabIds.length === 0 && activeWorkspaceId !== null ? (
-              <WorkspaceEmptyState />
-            ) : (
-              <TabContent
-                activeTab={activeTab ?? null}
-                allTabs={tabOrder.map((id) => tabs[id]).filter(Boolean)}
-              />
-            )}
-          </div>
-          <StatusBar
-            activeTab={activeTab ?? null}
-            onViewModeChange={(tabId, paneId, mode) => {
-              useTabStore.getState().setViewMode(tabId, paneId, mode)
+          <ActivityBar
+            workspaces={workspaces}
+            activeWorkspaceId={activeStandaloneTabId ? null : activeWorkspaceId}
+            activeStandaloneTabId={activeStandaloneTabId}
+            onSelectWorkspace={handleSelectWorkspace}
+            onSelectHome={() => {
+              useWorkspaceStore.getState().setActiveWorkspace(null)
+              const firstStandalone = standaloneTabs[0]
+              if (firstStandalone) {
+                handleSelectTab(firstStandalone.id)
+              } else {
+                useTabStore.getState().setActiveTab(null)
+              }
             }}
-            onNavigateToHost={(hostId) => {
+            standaloneTabCount={standaloneTabs.length}
+            onAddWorkspace={() => {
+              if (workspaces.length === 0 && tabOrder.length > 0) {
+                const ws = useWorkspaceStore.getState().addWorkspace('Workspace 1')
+                setMigrateDialog({ wsId: ws.id, wsName: ws.name })
+              } else {
+                const count = workspaces.length + 1
+                const ws = useWorkspaceStore.getState().addWorkspace(`Workspace ${count}`)
+                openWsSettings(ws.id)
+              }
+            }}
+            onContextMenuWorkspace={handleWsContextMenu}
+            onOpenHosts={() => {
               const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
               useWorkspaceStore.getState().insertTab(tabId)
               handleSelectTab(tabId)
-              useHostStore.getState().setActiveHost(hostId)
+            }}
+            onOpenSettings={() => {
+              const tabId = useTabStore.getState().openSingletonTab({ kind: 'settings', scope: 'global' })
+              useWorkspaceStore.getState().insertTab(tabId)
+              handleSelectTab(tabId)
             }}
           />
-        </div>
+          <SidebarRegion region="primary-sidebar" side="right" />
+          <div className="flex-1 flex flex-col min-w-0">
+            <TabBar
+              tabs={displayTabs}
+              activeTabId={activeTabId}
+              onSelectTab={handleSelectTab}
+              onCloseTab={handleCloseTab}
+              onAddTab={handleAddTab}
+              onReorderTabs={handleReorderTabs}
+              onMiddleClick={handleMiddleClick}
+              onContextMenu={handleContextMenu}
+            />
+            <div className="flex-1 flex overflow-hidden">
+              <SidebarRegion region="primary-panel" side="right" />
+              {visibleTabIds.length === 0 && activeWorkspaceId !== null ? (
+                <WorkspaceEmptyState />
+              ) : (
+                <TabContent
+                  activeTab={activeTab ?? null}
+                  allTabs={tabOrder.map((id) => tabs[id]).filter(Boolean)}
+                />
+              )}
+              <SidebarRegion region="secondary-panel" side="left" />
+            </div>
+            <StatusBar
+              activeTab={activeTab ?? null}
+              onViewModeChange={(tabId, paneId, mode) => {
+                useTabStore.getState().setViewMode(tabId, paneId, mode)
+              }}
+              onNavigateToHost={(hostId) => {
+                const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
+                useWorkspaceStore.getState().insertTab(tabId)
+                handleSelectTab(tabId)
+                useHostStore.getState().setActiveHost(hostId)
+              }}
+            />
+          </div>
+          <SidebarRegion region="secondary-sidebar" side="left" />
         {contextMenu && (
           <TabContextMenu
             tab={contextMenu.tab}
