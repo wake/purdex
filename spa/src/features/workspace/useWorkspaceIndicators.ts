@@ -2,11 +2,11 @@ import { useCallback, useMemo } from 'react'
 import { useTabStore } from '../../stores/useTabStore'
 import { useAgentStore } from '../../stores/useAgentStore'
 import type { AgentStatus } from '../../stores/useAgentStore'
-import { getWorkspaceCompositeKeys, aggregateStatus } from './workspace-indicators'
+import { getWorkspaceCompositeKeys, aggregateStatus, type ActiveStatus } from './workspace-indicators'
 
 interface WorkspaceIndicators {
   unreadCount: number
-  aggregatedStatus: AgentStatus | undefined
+  aggregatedStatus: ActiveStatus | undefined
 }
 
 export function useWorkspaceIndicators(tabIds: string[]): WorkspaceIndicators {

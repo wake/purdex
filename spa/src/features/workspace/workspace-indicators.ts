@@ -23,8 +23,10 @@ const STATUS_PRIORITY: Record<AgentStatus, number> = {
   idle: 0,
 }
 
+export type ActiveStatus = Exclude<AgentStatus, 'idle'>
+
 /** Returns highest-priority status across tabs, or undefined if all idle/absent. */
-export function aggregateStatus(statuses: (AgentStatus | undefined)[]): AgentStatus | undefined {
+export function aggregateStatus(statuses: (AgentStatus | undefined)[]): ActiveStatus | undefined {
   let highest: AgentStatus | undefined
   let highestPri = -1
   for (const s of statuses) {

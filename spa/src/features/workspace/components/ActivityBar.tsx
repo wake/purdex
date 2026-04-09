@@ -3,6 +3,7 @@ import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { useWorkspaceIndicators } from '../useWorkspaceIndicators'
+import type { ActiveStatus } from '../workspace-indicators'
 
 interface WorkspaceButtonProps {
   workspace: Workspace
@@ -11,7 +12,7 @@ interface WorkspaceButtonProps {
   onContextMenu?: (e: React.MouseEvent, wsId: string) => void
 }
 
-const PILL_COLORS: Record<string, string> = {
+const PILL_COLORS: Record<ActiveStatus, string> = {
   running: '#4ade80',
   waiting: '#facc15',
   error: '#ef4444',
@@ -49,7 +50,7 @@ function WorkspaceButton({ workspace: ws, isActive, onSelect, onContextMenu }: W
             height: aggregatedStatus === 'error' || aggregatedStatus === 'waiting' ? '60%' : '40%',
             backgroundColor: PILL_COLORS[aggregatedStatus],
             '--breathe-color': PILL_COLORS[aggregatedStatus],
-            '--breathe-bg': 'transparent',
+            '--breathe-bg': 'var(--surface-tertiary)',
           } as React.CSSProperties}
         />
       )}
