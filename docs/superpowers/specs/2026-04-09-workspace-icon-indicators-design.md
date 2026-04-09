@@ -25,25 +25,30 @@
 - 外框：`box-shadow: 0 0 0 2px` sidebar 背景色，確保深色背景下可辨識
 - 數字 ≥ 10 時 badge 自動撐寬（`min-width` + `padding: 0 3px`）
 
+### tabId → compositeKey 橋接
+
+ActivityBar 只有 `workspace.tabs[]`（tab ID 陣列）。要取得 compositeKey 需要：
+
+1. 從 `useTabStore` 取得 `Tab` 物件
+2. 用 `getPrimaryPane(tab.layout)` 取得主要 pane
+3. 檢查 `content.kind === 'tmux-session'`（非 session 的 tab 如 dashboard/settings/hosts 直接跳過）
+4. 取 `content.hostId` + `content.sessionCode` → `compositeKey()`
+
+Split-pane tab 只取 primary pane 的 compositeKey，與 `SortableTab` 的現有做法一致。
+
 ### 資料流
 
 ```
-useAgentStore.unread (Record<compositeKey, boolean>)
+useTabStore.tabs (Tab[])
+  ↓ 過濾 workspace.tabs[] 中的 tabId
+  ↓ getPrimaryPane(tab.layout).content
+  ↓ guard: kind === 'tmux-session'
+  ↓ compositeKey(hostId, sessionCode)
   ↓
-ActivityBar 讀取 workspace.tabs[]
-  ↓ 對每個 tabId 取得 hostId:sessionCode → compositeKey
-  ↓ 計算 unread count
+useAgentStore.unread[ck] === true → 計數
   ↓
 條件渲染 badge（!isActive && count > 0）
 ```
-
-### 涉及檔案
-
-| 檔案 | 變更 |
-|------|------|
-| `spa/src/features/workspace/components/ActivityBar.tsx` | workspace button 內加入 badge 渲染邏輯 |
-| `spa/src/stores/useAgentStore.ts` | 可能新增 selector helper（依複雜度決定） |
-| `spa/src/types/tab.ts` | 無變更（Tab 已有 layout → hostId/sessionCode） |
 
 ## 功能二：狀態 Pill（方向定義，UI 實作階段迭代）
 
@@ -69,25 +74,27 @@ ActivityBar 讀取 workspace.tabs[]
 
 ### 資料流
 
-```
-useAgentStore.statuses (Record<compositeKey, AgentStatus>)
-  ↓
-ActivityBar 讀取 workspace.tabs[]
-  ↓ 對每個 tabId 取得 compositeKey → status
-  ↓ 取最高優先級狀態
-  ↓
-條件渲染 pill（status !== 'idle' && status !== undefined）
-```
+同未讀 badge 的 tabId → compositeKey 橋接流程，最後改為讀 `useAgentStore.statuses[ck]` 並取最高優先級。
 
-### 涉及檔案
+## 涉及檔案
 
 | 檔案 | 變更 |
 |------|------|
-| `spa/src/features/workspace/components/ActivityBar.tsx` | 加入 pill 渲染 + 狀態彙整邏輯 |
-| `spa/src/stores/useAgentStore.ts` | 可能新增 workspace-level status selector |
+| `spa/src/features/workspace/components/ActivityBar.tsx` | workspace button 內加入 badge + pill 渲染 |
+| `spa/src/features/workspace/hooks/useWorkspaceIndicators.ts` | **新增** — 封裝 tabId→compositeKey 橋接、unread 聚合、狀態優先級計算 |
+| `spa/src/stores/useTabStore.ts` | 讀取依賴（hook 內訂閱） |
+| `spa/src/stores/useAgentStore.ts` | 讀取依賴（hook 內訂閱） |
+| `spa/src/features/workspace/components/ActivityBar.test.tsx` | 補測 badge 顯示/隱藏、數字計算 |
+
+## 實作注意事項
+
+- **效能**：`useWorkspaceIndicators` hook 須用精準 selector 訂閱 store，避免整個 `unread` 物件變動觸發全量重算。用 `useMemo` 將 tabIds 轉為 compositeKeys，再逐 key 訂閱。
+- **元件職責**：聚合邏輯全部放在 `useWorkspaceIndicators` hook，ActivityBar 維持純渲染層。
+- **Accessibility**：workspace button 的 `aria-label` 需包含未讀數（如 `"Workspace Foo, 3 unread"`），與 commit `4c5661f6` 的 aria-label 方向一致。
 
 ## 不做的事
 
 - 不改變現有 tab 級別的 unread/status 行為
 - 不改變 `markRead()` 的觸發時機
 - Home 按鈕維持現有的 `standaloneTabCount` badge，不套用新的 unread 計算
+- 不處理斷線 host 的特殊視覺狀態（`clearHost()` 已清除狀態，行為合理）
