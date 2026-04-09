@@ -43,6 +43,22 @@ export interface Workspace {
   iconWeight?: IconWeight
   tabs: string[]
   activeTabId: string | null
+  sidebarState?: WorkspaceSidebarState
+}
+
+// === Sidebar Region (layout system) ===
+export type SidebarRegion =
+  | 'primary-sidebar'
+  | 'primary-panel'
+  | 'secondary-panel'
+  | 'secondary-sidebar'
+
+export interface WorkspaceSidebarState {
+  regions: Partial<Record<SidebarRegion, {
+    activeViewId?: string
+    width: number
+    mode: 'pinned' | 'default' | 'collapsed'
+  }>>
 }
 
 // === Factories ===

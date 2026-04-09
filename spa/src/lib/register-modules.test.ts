@@ -5,27 +5,39 @@ vi.mock('../features/workspace/generated/icon-loader', () => ({
   iconLoaders: {},
 }))
 
+import { clearModuleRegistry, getModules, getPaneRenderer } from './module-registry'
 import { clearNewTabRegistry, getNewTabProviders } from './new-tab-registry'
-import { clearPaneRegistry } from './pane-registry'
 import { clearSettingsSectionRegistry, getSettingsSections } from './settings-section-registry'
-import { registerBuiltinPanes } from './register-panes'
+import { registerBuiltinModules } from './register-modules'
 
-describe('browser provider registration', () => {
+function clearAll() {
+  clearModuleRegistry()
+  clearNewTabRegistry()
+  clearSettingsSectionRegistry()
+}
+
+describe('registerBuiltinModules', () => {
   beforeEach(() => {
-    clearNewTabRegistry()
-    clearPaneRegistry()
-    clearSettingsSectionRegistry()
+    clearAll()
   })
 
   afterEach(() => {
     delete (window as unknown as Record<string, unknown>).electronAPI
-    clearNewTabRegistry()
-    clearPaneRegistry()
-    clearSettingsSectionRegistry()
+    clearAll()
+  })
+
+  it('registers all built-in modules', () => {
+    registerBuiltinModules()
+    const modules = getModules()
+    expect(modules.length).toBeGreaterThanOrEqual(8)
+    expect(getPaneRenderer('tmux-session')).toBeDefined()
+    expect(getPaneRenderer('new-tab')).toBeDefined()
+    expect(getPaneRenderer('browser')).toBeDefined()
+    expect(getPaneRenderer('hosts')).toBeDefined()
   })
 
   it('registers browser provider as disabled when no electronAPI', () => {
-    registerBuiltinPanes()
+    registerBuiltinModules()
     const browser = getNewTabProviders().find((p) => p.id === 'browser')
     expect(browser).toBeDefined()
     expect(browser?.disabled).toBe(true)
@@ -34,37 +46,21 @@ describe('browser provider registration', () => {
 
   it('registers browser provider as enabled when electronAPI present', () => {
     ;(window as unknown as Record<string, unknown>).electronAPI = { tearOffTab: async () => {} }
-    registerBuiltinPanes()
+    registerBuiltinModules()
     const browser = getNewTabProviders().find((p) => p.id === 'browser')
     expect(browser).toBeDefined()
     expect(browser?.disabled).toBe(false)
   })
-})
-
-
-describe('electron settings section registration', () => {
-  beforeEach(() => {
-    clearNewTabRegistry()
-    clearPaneRegistry()
-    clearSettingsSectionRegistry()
-  })
-
-  afterEach(() => {
-    delete (window as unknown as Record<string, unknown>).electronAPI
-    clearNewTabRegistry()
-    clearPaneRegistry()
-    clearSettingsSectionRegistry()
-  })
 
   it('does not register electron section when no electronAPI', () => {
-    registerBuiltinPanes()
+    registerBuiltinModules()
     const electron = getSettingsSections().find((s) => s.id === 'electron')
     expect(electron).toBeUndefined()
   })
 
   it('registers electron section when electronAPI present', () => {
     ;(window as unknown as Record<string, unknown>).electronAPI = { tearOffTab: async () => {} }
-    registerBuiltinPanes()
+    registerBuiltinModules()
     const electron = getSettingsSections().find((s) => s.id === 'electron')
     expect(electron).toBeDefined()
   })

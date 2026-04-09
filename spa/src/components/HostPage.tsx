@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { PaneRendererProps } from '../lib/pane-registry'
+import type { PaneRendererProps } from '../lib/module-registry'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { HostSidebar } from './hosts/HostSidebar'

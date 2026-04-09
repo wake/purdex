@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { PaneRendererProps } from '../lib/pane-registry'
+import type { PaneRendererProps } from '../lib/module-registry'
 import { getSettingsSections } from '../lib/settings-section-registry'
 import { SettingsSidebar } from './settings/SettingsSidebar'
 import { WorkspaceSettingsPage } from '../features/workspace/components/WorkspaceSettingsPage'
