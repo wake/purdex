@@ -81,11 +81,15 @@ interface ViewDefinition {
 interface ViewProps {
   hostId?: string
   workspaceId?: string
+  isActive: boolean               // 當前是否為 region 中的選中 view
 }
 
 function registerView(view: ViewDefinition): void
 function unregisterView(id: string): void
 function getViews(): ViewDefinition[]
+
+// ⚠️ 本 spec 已被 2026-04-09-module-layout-pane-split-design.md 擴充。
+// View Registry 整合進 Module Registry，介面以該 spec 為準。
 ```
 
 ### 3.3 三種模式
@@ -133,11 +137,13 @@ Per-workspace 覆寫存在 `Workspace.sidebarState`（既有 type）。
 
 ### 11.2 View Registry
 
+- ⚠️ 已整合進 Module Registry，見 `2026-04-09-module-layout-pane-split-design.md` Section 2.3
 - `registerView` / `unregisterView` / `getViews`
 - 內建 view 註冊（Sessions、Prompts 先行，File Tree 在後續 Phase）
 
 ### 11.3 Layout Store
 
+- ⚠️ 取代先前規劃的 `useSidebarStore`，統一命名為 `useLayoutStore`
 - `useLayoutStore`：全域 region 配置
 - Per-workspace sidebar state 整合（切換工作區時套用）
 - 持久化（`purdex-layout`）
