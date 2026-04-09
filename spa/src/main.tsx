@@ -8,10 +8,18 @@ import { registerBuiltinModules } from './lib/register-modules'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
+import { useLayoutStore } from './stores/useLayoutStore'
 
 registerBuiltinLocales()
 registerBuiltinThemes()
 registerBuiltinModules()
+
+// Only set defaults if not already persisted
+const panelState = useLayoutStore.getState().regions['primary-panel']
+if (panelState.views.length === 0) {
+  useLayoutStore.getState().setRegionViews('primary-panel', ['file-tree'])
+  useLayoutStore.getState().setActiveView('primary-panel', 'file-tree')
+}
 
 // Cross-store subscription: auto-markRead when active tab changes to a session.
 // Inlined here to avoid circular dependency between active-session.ts and useAgentStore.

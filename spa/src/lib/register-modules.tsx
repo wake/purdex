@@ -18,6 +18,8 @@ import { AgentSection } from '../components/settings/AgentSection'
 import { TerminalSection } from '../components/settings/TerminalSection'
 import { ElectronSection } from '../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../components/settings/DevEnvironmentSection'
+import { FileTreeView } from '../components/FileTreeView'
+import { FolderOpen } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
 import type { PaneContent } from '../types/tab'
 
@@ -87,6 +89,18 @@ export function registerBuiltinModules(): void {
     id: 'hosts',
     name: 'Hosts',
     pane: { kind: 'hosts', component: HostPage },
+  })
+  registerModule({
+    id: 'files',
+    name: 'Files',
+    views: [{
+      id: 'file-tree',
+      label: 'Files',
+      icon: FolderOpen,
+      scope: 'workspace',
+      defaultRegion: 'primary-panel',
+      component: FileTreeView,
+    }],
   })
 
   // Settings sections
