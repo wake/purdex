@@ -21,7 +21,7 @@ const sessionModule: ModuleDefinition = {
   views: [{
     id: 'session-list',
     label: 'Sessions',
-    icon: 'List',
+    icon: DummyComponent,
     scope: 'system',
     defaultRegion: 'primary-sidebar',
     component: DummyComponent,
@@ -34,7 +34,7 @@ const filesModule: ModuleDefinition = {
   views: [{
     id: 'file-tree',
     label: 'Files',
-    icon: 'FolderOpen',
+    icon: DummyComponent,
     scope: 'workspace',
     defaultRegion: 'primary-panel',
     component: DummyComponent,

@@ -23,7 +23,7 @@ describe('PaneLayoutRenderer', () => {
       type: 'leaf',
       pane: { id: 'p1', content: { kind: 'dashboard' } },
     }
-    render(<PaneLayoutRenderer layout={layout} isActive={true} />)
+    render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
     expect(screen.getByTestId('dashboard')).toBeTruthy()
     expect(screen.getByTestId('dashboard').textContent).toBe('Dashboard:p1')
   })
@@ -33,7 +33,7 @@ describe('PaneLayoutRenderer', () => {
       type: 'leaf',
       pane: { id: 'p1', content: { kind: 'settings', scope: 'global' } },
     }
-    render(<PaneLayoutRenderer layout={layout} isActive={false} />)
+    render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={false} />)
     expect(screen.getByText(/No renderer for/)).toBeTruthy()
     expect(screen.getByText(/settings/)).toBeTruthy()
   })
@@ -53,30 +53,63 @@ describe('PaneLayoutRenderer', () => {
       type: 'leaf',
       pane: { id: 'p2', content: { kind: 'history' } },
     }
-    render(<PaneLayoutRenderer layout={layout} isActive={false} />)
+    render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={false} />)
     expect(screen.getByTestId('history').textContent).toBe('inactive')
   })
 
-  it('renders first child of a split layout', () => {
-    registerModule({
-      id: 'dashboard-split',
-      name: 'Dashboard',
-      pane: {
-        kind: 'dashboard',
-        component: ({ pane }) => <div data-testid="dash">{pane.id}</div>,
-      },
-    })
+  it('shows fallback for empty split children', () => {
     const layout: PaneLayout = {
       type: 'split',
       id: 's1',
       direction: 'h',
+      children: [],
+      sizes: [],
+    }
+    render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
+    expect(screen.getByText(/Empty split layout/)).toBeTruthy()
+  })
+
+  it('renders all children of a split layout', () => {
+    registerModule({
+      id: 'dashboard-multi',
+      name: 'Dashboard',
+      pane: { kind: 'dashboard', component: ({ pane }) => <div data-testid={`dash-${pane.id}`}>{pane.id}</div> },
+    })
+    const layout: PaneLayout = {
+      type: 'split', id: 's1', direction: 'h',
       children: [
         { type: 'leaf', pane: { id: 'left', content: { kind: 'dashboard' } } },
         { type: 'leaf', pane: { id: 'right', content: { kind: 'dashboard' } } },
       ],
       sizes: [50, 50],
     }
-    render(<PaneLayoutRenderer layout={layout} isActive={true} />)
-    expect(screen.getByTestId('dash').textContent).toBe('left')
+    render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
+    expect(screen.getByTestId('dash-left')).toBeTruthy()
+    expect(screen.getByTestId('dash-right')).toBeTruthy()
+  })
+
+  it('renders nested splits', () => {
+    registerModule({
+      id: 'dashboard-nested',
+      name: 'Dashboard',
+      pane: { kind: 'dashboard', component: ({ pane }) => <div data-testid={`dash-${pane.id}`}>{pane.id}</div> },
+    })
+    const layout: PaneLayout = {
+      type: 'split', id: 's1', direction: 'v',
+      children: [
+        { type: 'leaf', pane: { id: 'top', content: { kind: 'dashboard' } } },
+        { type: 'split', id: 's2', direction: 'h',
+          children: [
+            { type: 'leaf', pane: { id: 'bl', content: { kind: 'dashboard' } } },
+            { type: 'leaf', pane: { id: 'br', content: { kind: 'dashboard' } } },
+          ],
+          sizes: [50, 50] },
+      ],
+      sizes: [50, 50],
+    }
+    render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
+    expect(screen.getByTestId('dash-top')).toBeTruthy()
+    expect(screen.getByTestId('dash-bl')).toBeTruthy()
+    expect(screen.getByTestId('dash-br')).toBeTruthy()
   })
 })

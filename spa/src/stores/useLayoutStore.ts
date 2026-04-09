@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { SidebarRegion } from '../types/tab'
-import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 const MIN_WIDTH = 120
 const MAX_WIDTH = 600
@@ -10,7 +10,7 @@ interface RegionState {
   views: string[]
   activeViewId?: string
   width: number
-  mode: 'pinned' | 'default' | 'collapsed'
+  mode: 'pinned' | 'collapsed'
 }
 
 interface LayoutState {
@@ -80,3 +80,5 @@ export const useLayoutStore = create<LayoutState>()(
     },
   ),
 )
+
+syncManager.register(STORAGE_KEYS.LAYOUT, useLayoutStore)

@@ -311,7 +311,7 @@ export default function App() {
               handleSelectTab(tabId)
             }}
           />
-          <SidebarRegion region="primary-sidebar" side="right" />
+          <SidebarRegion region="primary-sidebar" resizeEdge="right" />
           <div className="flex-1 flex flex-col min-w-0">
             <TabBar
               tabs={displayTabs}
@@ -324,7 +324,7 @@ export default function App() {
               onContextMenu={handleContextMenu}
             />
             <div className="flex-1 flex overflow-hidden">
-              <SidebarRegion region="primary-panel" side="right" />
+              <SidebarRegion region="primary-panel" resizeEdge="right" />
               {visibleTabIds.length === 0 && activeWorkspaceId !== null ? (
                 <WorkspaceEmptyState />
               ) : (
@@ -333,7 +333,7 @@ export default function App() {
                   allTabs={tabOrder.map((id) => tabs[id]).filter(Boolean)}
                 />
               )}
-              <SidebarRegion region="secondary-panel" side="left" />
+              <SidebarRegion region="secondary-panel" resizeEdge="left" />
             </div>
             <StatusBar
               activeTab={activeTab ?? null}
@@ -348,7 +348,7 @@ export default function App() {
               }}
             />
           </div>
-          <SidebarRegion region="secondary-sidebar" side="left" />
+          <SidebarRegion region="secondary-sidebar" resizeEdge="left" />
         {contextMenu && (
           <TabContextMenu
             tab={contextMenu.tab}

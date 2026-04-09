@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
-import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree } from './pane-tree'
-import type { PaneLayout, Pane } from '../types/tab'
+import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern } from './pane-tree'
+import type { PaneLayout, Pane, PaneContent } from '../types/tab'
+
+// ── helpers for new tests ──────────────────────────────────────────────────
+const mkLeaf = (id: string, kind: string = 'dashboard'): PaneLayout => ({ type: 'leaf', pane: { id, content: { kind } as PaneContent } })
+const mkSplit = (id: string, dir: 'h' | 'v', children: PaneLayout[], sizes?: number[]): PaneLayout => ({ type: 'split', id, direction: dir, children, sizes: sizes ?? children.map(() => 100 / children.length) })
 
 const paneA: Pane = { id: 'aaaaaa', content: { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'abc123', mode: 'terminal', cachedName: '', tmuxInstance: '' } }
 const paneB: Pane = { id: 'bbbbbb', content: { kind: 'dashboard' } }
@@ -151,5 +155,158 @@ describe('scanPaneTree', () => {
     scanPaneTree(nested, fn)
     expect(fn).toHaveBeenCalledTimes(3)
     expect(fn).toHaveBeenCalledWith(paneC)
+  })
+})
+
+// ── splitAtPane ─────────────────────────────────────────────────────────────
+describe('splitAtPane', () => {
+  it('splits a leaf pane into horizontal split', () => {
+    const layout = mkLeaf('p1')
+    const result = splitAtPane(layout, 'p1', 'h', { kind: 'dashboard' })
+    expect(result.type).toBe('split')
+    if (result.type === 'split') {
+      expect(result.direction).toBe('h')
+      expect(result.children).toHaveLength(2)
+      expect(result.children[0]).toBe(layout)
+      expect(result.children[1].type).toBe('leaf')
+      expect(result.sizes).toEqual([50, 50])
+    }
+  })
+
+  it('splits nested pane by traversing tree', () => {
+    const layout = mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2')])
+    const result = splitAtPane(layout, 'p2', 'v', { kind: 'history' })
+    expect(result.type).toBe('split')
+    if (result.type === 'split') {
+      const second = result.children[1]
+      expect(second.type).toBe('split')
+      if (second.type === 'split') {
+        expect(second.direction).toBe('v')
+        expect(second.children).toHaveLength(2)
+      }
+    }
+  })
+
+  it('returns layout unchanged when paneId not found', () => {
+    const layout = mkLeaf('p1')
+    const result = splitAtPane(layout, 'notexist', 'h', { kind: 'dashboard' })
+    expect(result).toBe(layout)
+  })
+})
+
+// ── removePane ───────────────────────────────────────────────────────────────
+describe('removePane', () => {
+  it('returns null when removing the only leaf', () => {
+    expect(removePane(mkLeaf('p1'), 'p1')).toBeNull()
+  })
+
+  it('promotes sibling when one child is removed from a 2-child split', () => {
+    const layout = mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2')])
+    const result = removePane(layout, 'p1')
+    expect(result).toEqual(mkLeaf('p2'))
+  })
+
+  it('redistributes sizes for 3-child split after removal', () => {
+    const layout = mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2'), mkLeaf('p3')], [20, 40, 40])
+    const result = removePane(layout, 'p1')
+    expect(result?.type).toBe('split')
+    if (result?.type === 'split') {
+      expect(result.children).toHaveLength(2)
+      // sizes should be normalized to sum 100
+      const total = result.sizes.reduce((a, b) => a + b, 0)
+      expect(Math.round(total)).toBe(100)
+    }
+  })
+
+  it('returns layout unchanged when paneId not found', () => {
+    const layout = mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2')])
+    const result = removePane(layout, 'notexist')
+    expect(result).toBe(layout)
+  })
+
+  it('removes a pane deep in nested split', () => {
+    const layout = mkSplit('s1', 'h', [
+      mkLeaf('p1'),
+      mkSplit('s2', 'v', [mkLeaf('p2'), mkLeaf('p3')]),
+    ])
+    const result = removePane(layout, 'p3')
+    expect(result).not.toBeNull()
+    if (!result || result.type !== 'split') throw new Error('expected split')
+    expect(result.children).toHaveLength(2)
+    // p1 untouched, s2 collapsed to just p2
+    expect(result.children[0]).toEqual(mkLeaf('p1'))
+    expect(result.children[1]).toEqual(mkLeaf('p2'))
+  })
+})
+
+// ── countLeaves ──────────────────────────────────────────────────────────────
+describe('countLeaves', () => {
+  it('returns 1 for a leaf', () => {
+    expect(countLeaves(mkLeaf('p1'))).toBe(1)
+  })
+
+  it('counts leaves in nested splits', () => {
+    const layout = mkSplit('s1', 'v', [
+      mkSplit('s2', 'h', [mkLeaf('p1'), mkLeaf('p2')]),
+      mkLeaf('p3'),
+    ])
+    expect(countLeaves(layout)).toBe(3)
+  })
+})
+
+// ── collectLeaves ─────────────────────────────────────────────────────────────
+describe('collectLeaves', () => {
+  it('collects all leaf panes in order', () => {
+    const layout = mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2'), mkLeaf('p3')])
+    const panes = collectLeaves(layout)
+    expect(panes.map((p) => p.id)).toEqual(['p1', 'p2', 'p3'])
+  })
+})
+
+// ── applyLayoutPattern ────────────────────────────────────────────────────────
+describe('applyLayoutPattern', () => {
+  it('single flattens to first leaf', () => {
+    const layout = mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2')])
+    const result = applyLayoutPattern(layout, 'single')
+    expect(result.type).toBe('leaf')
+    if (result.type === 'leaf') {
+      expect(result.pane.id).toBe('p1')
+    }
+  })
+
+  it('split-h creates a 2-child horizontal split', () => {
+    const result = applyLayoutPattern(mkLeaf('p1'), 'split-h')
+    expect(result.type).toBe('split')
+    if (result.type === 'split') {
+      expect(result.direction).toBe('h')
+      expect(result.children).toHaveLength(2)
+      expect(result.sizes).toEqual([50, 50])
+    }
+  })
+
+  it('split-h preserves existing pane ids', () => {
+    const layout = mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2')])
+    const result = applyLayoutPattern(layout, 'split-h')
+    if (result.type === 'split') {
+      const ids = result.children.map((c) => c.type === 'leaf' ? c.pane.id : null)
+      expect(ids).toEqual(['p1', 'p2'])
+    }
+  })
+
+  it('grid-4 creates a 2x2 layout', () => {
+    const layout = mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2'), mkLeaf('p3'), mkLeaf('p4')])
+    const result = applyLayoutPattern(layout, 'grid-4')
+    expect(result.type).toBe('split')
+    if (result.type === 'split') {
+      expect(result.direction).toBe('v')
+      expect(result.children).toHaveLength(2)
+      result.children.forEach((row) => {
+        expect(row.type).toBe('split')
+        if (row.type === 'split') {
+          expect(row.direction).toBe('h')
+          expect(row.children).toHaveLength(2)
+        }
+      })
+    }
   })
 })

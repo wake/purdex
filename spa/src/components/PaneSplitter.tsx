@@ -1,24 +1,24 @@
 import { useCallback, useEffect, useRef } from 'react'
 
 interface Props {
-  onResize: (delta: number) => void
-  resizeEdge: 'left' | 'right'
+  direction: 'h' | 'v'
+  onResize: (deltaPx: number) => void
 }
 
-export function RegionResize({ onResize, resizeEdge }: Props) {
-  const startX = useRef(0)
+export function PaneSplitter({ direction, onResize }: Props) {
+  const startPos = useRef(0)
   const onResizeRef = useRef(onResize)
   useEffect(() => { onResizeRef.current = onResize })
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
-    startX.current = e.clientX
+    startPos.current = direction === 'h' ? e.clientX : e.clientY
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
-      const rawDelta = moveEvent.clientX - startX.current
-      const delta = resizeEdge === 'left' ? -rawDelta : rawDelta
+      const current = direction === 'h' ? moveEvent.clientX : moveEvent.clientY
+      const delta = current - startPos.current
       onResizeRef.current(delta)
-      startX.current = moveEvent.clientX
+      startPos.current = current
     }
 
     const handleMouseUp = () => {
@@ -30,13 +30,13 @@ export function RegionResize({ onResize, resizeEdge }: Props) {
 
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-    document.body.style.cursor = 'col-resize'
+    document.body.style.cursor = direction === 'h' ? 'col-resize' : 'row-resize'
     document.body.style.userSelect = 'none'
-  }, [resizeEdge])
+  }, [direction])
 
   return (
     <div
-      className="w-1 shrink-0 cursor-col-resize hover:bg-accent-base/30 active:bg-accent-base/50 transition-colors"
+      className={`shrink-0 ${direction === 'h' ? 'w-1 cursor-col-resize' : 'h-1 cursor-row-resize'} hover:bg-accent-base/30 active:bg-accent-base/50 transition-colors`}
       onMouseDown={handleMouseDown}
     />
   )

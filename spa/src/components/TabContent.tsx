@@ -37,7 +37,7 @@ export function TabContent({ activeTab, allTabs }: Props) {
             style={{ inset: 0, visibility: isActive ? 'visible' : 'hidden' }}
             inert={!isActive || undefined}
           >
-            <PaneLayoutRenderer layout={tab.layout} isActive={isActive} />
+            <PaneLayoutRenderer layout={tab.layout} tabId={id} isActive={isActive} />
           </div>
         )
       })}

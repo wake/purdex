@@ -1,4 +1,5 @@
-import type { Pane, PaneContent, PaneLayout } from '../types/tab'
+import type { Pane, PaneContent, PaneLayout, LayoutPattern } from '../types/tab'
+import { generateId } from './id'
 
 export function getPrimaryPane(layout: PaneLayout): Pane {
   if (layout.type === 'leaf') return layout.pane
@@ -63,4 +64,65 @@ export function findTabBySessionCode(
     }
   }
   return undefined
+}
+
+export function splitAtPane(layout: PaneLayout, paneId: string, direction: 'h' | 'v', newContent: PaneContent): PaneLayout {
+  if (layout.type === 'leaf') {
+    if (layout.pane.id === paneId) {
+      return { type: 'split', id: generateId(), direction, children: [layout, { type: 'leaf', pane: { id: generateId(), content: newContent } }], sizes: [50, 50] }
+    }
+    return layout
+  }
+  const newChildren = layout.children.map((child) => splitAtPane(child, paneId, direction, newContent))
+  return newChildren.some((c, i) => c !== layout.children[i]) ? { ...layout, children: newChildren } : layout
+}
+
+export function removePane(layout: PaneLayout, paneId: string): PaneLayout | null {
+  if (layout.type === 'leaf') return layout.pane.id === paneId ? null : layout
+
+  const mapped = layout.children.map((child) => removePane(child, paneId))
+  const newChildren = mapped.filter((c): c is PaneLayout => c !== null)
+
+  if (newChildren.length === layout.children.length) {
+    // No child was removed (null), but a child might have been modified internally
+    const anyChanged = newChildren.some((c, i) => c !== layout.children[i])
+    if (!anyChanged) return layout
+    // Children were modified but not removed — return updated layout with same sizes
+    return { ...layout, children: newChildren }
+  }
+  if (newChildren.length === 0) return null
+  if (newChildren.length === 1) return newChildren[0]
+
+  const keptSizes = layout.sizes.filter((_, i) => mapped[i] !== null)
+  const total = keptSizes.reduce((a, b) => a + b, 0)
+  const normalizedSizes = keptSizes.map((s) => (s / total) * 100)
+  return { ...layout, children: newChildren, sizes: normalizedSizes }
+}
+
+export function countLeaves(layout: PaneLayout): number {
+  if (layout.type === 'leaf') return 1
+  return layout.children.reduce((sum, child) => sum + countLeaves(child), 0)
+}
+
+export function collectLeaves(layout: PaneLayout): Pane[] {
+  if (layout.type === 'leaf') return [layout.pane]
+  return layout.children.flatMap((child) => collectLeaves(child))
+}
+
+function newTabPane(): Pane {
+  return { id: generateId(), content: { kind: 'new-tab' } }
+}
+
+export function applyLayoutPattern(layout: PaneLayout, pattern: LayoutPattern): PaneLayout {
+  const leaves = collectLeaves(layout)
+  const p = (i: number): Pane => leaves[i] ?? newTabPane()
+  switch (pattern) {
+    case 'single': return { type: 'leaf', pane: p(0) }
+    case 'split-h': return { type: 'split', id: generateId(), direction: 'h', children: [{ type: 'leaf', pane: p(0) }, { type: 'leaf', pane: p(1) }], sizes: [50, 50] }
+    case 'split-v': return { type: 'split', id: generateId(), direction: 'v', children: [{ type: 'leaf', pane: p(0) }, { type: 'leaf', pane: p(1) }], sizes: [50, 50] }
+    case 'grid-4': return { type: 'split', id: generateId(), direction: 'v', children: [
+      { type: 'split', id: generateId(), direction: 'h', children: [{ type: 'leaf', pane: p(0) }, { type: 'leaf', pane: p(1) }], sizes: [50, 50] },
+      { type: 'split', id: generateId(), direction: 'h', children: [{ type: 'leaf', pane: p(2) }, { type: 'leaf', pane: p(3) }], sizes: [50, 50] },
+    ], sizes: [50, 50] }
+  }
 }

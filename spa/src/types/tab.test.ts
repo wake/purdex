@@ -67,7 +67,7 @@ describe('Workspace.sidebarState', () => {
   it('accepts a WorkspaceSidebarState value', () => {
     const state: WorkspaceSidebarState = {
       regions: {
-        'primary-sidebar': { width: 240, mode: 'pinned' },
+        'primary-sidebar': { width: 240, mode: 'pinned' as const },
       },
     }
     const ws = createWorkspace('test')

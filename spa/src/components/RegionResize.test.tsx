@@ -4,13 +4,13 @@ import { RegionResize } from './RegionResize'
 
 describe('RegionResize', () => {
   it('renders a drag handle', () => {
-    const { container } = render(<RegionResize onResize={vi.fn()} side="right" />)
+    const { container } = render(<RegionResize onResize={vi.fn()} resizeEdge="right" />)
     expect(container.firstElementChild).toBeDefined()
   })
 
   it('calls onResize with delta on mouse drag', () => {
     const onResize = vi.fn()
-    const { container } = render(<RegionResize onResize={onResize} side="right" />)
+    const { container } = render(<RegionResize onResize={onResize} resizeEdge="right" />)
     const handle = container.firstElementChild as HTMLElement
 
     fireEvent.mouseDown(handle, { clientX: 100 })
@@ -20,9 +20,9 @@ describe('RegionResize', () => {
     expect(onResize).toHaveBeenCalledWith(50)
   })
 
-  it('negates delta for left side', () => {
+  it('negates delta for left resizeEdge', () => {
     const onResize = vi.fn()
-    const { container } = render(<RegionResize onResize={onResize} side="left" />)
+    const { container } = render(<RegionResize onResize={onResize} resizeEdge="left" />)
     const handle = container.firstElementChild as HTMLElement
 
     fireEvent.mouseDown(handle, { clientX: 200 })
@@ -30,5 +30,30 @@ describe('RegionResize', () => {
     fireEvent.mouseUp(document)
 
     expect(onResize).toHaveBeenCalledWith(50)
+  })
+
+  it('uses latest onResize callback during drag (no stale closure)', () => {
+    const onResize1 = vi.fn()
+    const onResize2 = vi.fn()
+
+    const { container, rerender } = render(<RegionResize onResize={onResize1} resizeEdge="right" />)
+    const handle = container.firstElementChild as HTMLElement
+
+    // Start drag
+    fireEvent.mouseDown(handle, { clientX: 100 })
+
+    // First move uses onResize1
+    fireEvent.mouseMove(document, { clientX: 110 })
+    expect(onResize1).toHaveBeenCalledTimes(1)
+
+    // Re-render with new onResize (simulates parent re-render after width change)
+    rerender(<RegionResize onResize={onResize2} resizeEdge="right" />)
+
+    // Second move should use onResize2, not the stale onResize1
+    fireEvent.mouseMove(document, { clientX: 120 })
+    expect(onResize2).toHaveBeenCalledTimes(1)
+    expect(onResize1).toHaveBeenCalledTimes(1) // should NOT have been called again
+
+    fireEvent.mouseUp(document)
   })
 })
