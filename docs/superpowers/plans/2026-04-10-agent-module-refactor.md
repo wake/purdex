@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-04-10-agent-module-design.md`
 
+**Spec 偏離說明：** Spec 的 `DeriveStatus` 回傳 `(Status, bool)`，本計畫改為回傳 `DeriveResult` struct（含 Status, Valid, Model, Detail），以減少多次解析 raw event。這是刻意的改進，不影響 spec 的設計意圖。
+
 ---
 
 ## File Map
@@ -54,6 +56,8 @@
 | `spa/src/hooks/useMultiHostEventWs.ts` | Parse NormalizedEvent |
 | `spa/src/hooks/useNotificationDispatcher.ts` | Use pre-derived status |
 | `spa/src/lib/notification-content.ts` | Read from `detail` instead of `raw_event` |
+| `spa/src/lib/host-lifecycle.ts` | Replace `AgentHookEvent` / `events` with `NormalizedEvent` / `lastEvents` |
+| `spa/src/lib/host-lifecycle.test.ts` | Update test fixtures |
 | `spa/src/components/StatusBar.tsx` | Read model from store |
 | `spa/src/components/SessionPanel.tsx` | Agent icon from store |
 | `spa/src/components/SortableTab.tsx` | Agent icon integration |
@@ -99,7 +103,8 @@ type AgentProvider interface {
 // ClaimContext provides information for agent detection.
 type ClaimContext struct {
 	HookEvent   *HookEvent
-	ProcessName string
+	ProcessName string // pane_current_command value (e.g. "claude", "codex")
+	TmuxTarget  string // tmux target for detailed detection (e.g. "mySession:")
 }
 
 // HookEvent is the raw hook event received from tbox hook CLI.
@@ -309,15 +314,15 @@ func TestRegistryClaimPriority(t *testing.T) {
 		return ctx.ProcessName == "codex"
 	}})
 
-	p, ok := r.Claim(agent.ClaimContext{ProcessName: "codex"})
+	p, ok := r.Claim(agent.ClaimContext{ProcessName: "codex", TmuxTarget: "sess:"})
 	if !ok || p.Type() != "codex" {
 		t.Fatal("expected codex to claim")
 	}
-	p, ok = r.Claim(agent.ClaimContext{ProcessName: "claude"})
+	p, ok = r.Claim(agent.ClaimContext{ProcessName: "claude", TmuxTarget: "sess:"})
 	if !ok || p.Type() != "cc" {
 		t.Fatal("expected cc to claim")
 	}
-	_, ok = r.Claim(agent.ClaimContext{ProcessName: "bash"})
+	_, ok = r.Claim(agent.ClaimContext{ProcessName: "bash", TmuxTarget: "sess:"})
 	if ok {
 		t.Fatal("expected no provider to claim bash")
 	}
@@ -515,7 +520,7 @@ import (
 // testDeriveStatus creates a temporary provider to access deriveCCStatus.
 // Since deriveCCStatus is unexported, test via the provider's DeriveStatus.
 func deriveViaProvider(eventName string, rawEvent map[string]any) agent.DeriveResult {
-	p := cc.NewProvider(nil, nil)
+	p := cc.NewProvider(nil, nil, nil, nil)
 	raw, _ := json.Marshal(rawEvent)
 	return p.DeriveStatus(eventName, raw)
 }
@@ -611,7 +616,7 @@ func TestCCDeriveStatus_ModelExtraction(t *testing.T) {
 }
 ```
 
-Note: This test creates the provider via `cc.NewProvider(nil, nil)` which will be created in the next step. Write the test file now; it won't compile until Task 2 Step 7.
+Note: This test uses `cc.NewProvider(nil, nil, nil, nil)` which is created in the next step. Create both files before running tests.
 
 - [ ] **Step 7: Create `internal/agent/cc/provider.go` (minimal, expanded in Task 3)**
 
@@ -620,8 +625,10 @@ package cc
 
 import (
 	"encoding/json"
+	"sync"
 
 	"github.com/wake/tmux-box/internal/agent"
+	"github.com/wake/tmux-box/internal/config"
 	"github.com/wake/tmux-box/internal/tmux"
 )
 
@@ -629,11 +636,13 @@ import (
 type Provider struct {
 	detector *Detector
 	tmuxExec tmux.Executor
+	cfg      *config.Config // for operator (e.g. terminal sizing mode)
+	cfgMu    *sync.RWMutex  // protects cfg reads
 }
 
 // NewProvider creates a CC provider. Pass nil for detector/tmuxExec during testing.
-func NewProvider(detector *Detector, tmuxExec tmux.Executor) *Provider {
-	return &Provider{detector: detector, tmuxExec: tmuxExec}
+func NewProvider(detector *Detector, tmuxExec tmux.Executor, cfg *config.Config, cfgMu *sync.RWMutex) *Provider {
+	return &Provider{detector: detector, tmuxExec: tmuxExec, cfg: cfg, cfgMu: cfgMu}
 }
 
 func (p *Provider) Type() string        { return "cc" }
@@ -647,7 +656,11 @@ func (p *Provider) Claim(ctx agent.ClaimContext) bool {
 	if p.detector == nil {
 		return false
 	}
-	status := p.detector.Detect(ctx.ProcessName)
+	// Use TmuxTarget for full detection (reads pane content via tmux)
+	if ctx.TmuxTarget == "" {
+		return false
+	}
+	status := p.detector.Detect(ctx.TmuxTarget)
 	return status != StatusNormal && status != StatusNotInCC
 }
 
@@ -990,28 +1003,18 @@ func isTboxCommand(cmd string) bool {
 }
 ```
 
-- [ ] **Step 5: Update provider.go — add operator/history fields + RegisterServices**
+- [ ] **Step 5: Add RegisterServices to provider.go**
+
+Add method for agent module to call during Init, exposing CC services to stream module:
 
 ```go
-// Add to Provider struct:
-type Provider struct {
-	detector *Detector
-	tmuxExec tmux.Executor
-	sessions interface{ ListSessions() ([]session.SessionInfo, error) } // for history handler
-}
+// Add to provider.go:
+import "github.com/wake/tmux-box/internal/core"
 
-// Add RegisterServices method for agent module to call during Init:
 func (p *Provider) RegisterServices(registry *core.ServiceRegistry) {
 	registry.Register(DetectorKey, CCDetector(p))
 	registry.Register(HistoryKey, CCHistoryProvider(p))
 	registry.Register(OperatorKey, CCOperator(p))
-}
-```
-
-Update `NewProvider` signature:
-```go
-func NewProvider(detector *Detector, tmuxExec tmux.Executor) *Provider {
-	return &Provider{detector: detector, tmuxExec: tmuxExec}
 }
 ```
 
@@ -1304,6 +1307,7 @@ func (p *Provider) Claim(ctx agent.ClaimContext) bool {
 	if ctx.HookEvent != nil {
 		return ctx.HookEvent.AgentType == "codex"
 	}
+	// Fast path: check process name directly (no tmux call needed)
 	return isCodexProcess(ctx.ProcessName)
 }
 
@@ -1385,7 +1389,15 @@ git commit -m "feat: add Codex provider with status, detector, and hook installe
 - Modify: `internal/module/agent/handler.go`
 - Delete: `internal/module/agent/cc_hooks.go`
 
-- [ ] **Step 1: Rewrite `internal/module/agent/module.go`**
+- [ ] **Step 1: Delete `internal/module/agent/cc_hooks.go`**
+
+Must happen BEFORE rewriting handler.go to avoid duplicate method definitions.
+
+```bash
+rm internal/module/agent/cc_hooks.go
+```
+
+- [ ] **Step 2: Rewrite `internal/module/agent/module.go`**
 
 Add registry, providers init, in-memory state, DB replay on Start, isAlive on snapshot.
 
@@ -1458,7 +1470,7 @@ func (m *Module) Init(c *core.Core) error {
 
 	// CC provider
 	ccDetector := agentcc.NewDetector(c.Tmux, c.Cfg.Detect.CCCommands)
-	ccProvider := agentcc.NewProvider(ccDetector, c.Tmux)
+	ccProvider := agentcc.NewProvider(ccDetector, c.Tmux, c.Cfg, &c.CfgMu)
 	ccProvider.RegisterServices(c.Registry)
 	m.registry.Register(ccProvider)
 
@@ -1560,8 +1572,11 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 		if !ok {
 			continue
 		}
-		provider, _ := m.registry.Get(ev.AgentType)
-		normalized := m.buildNormalized(ev.TmuxSession, ev.EventName, ev.RawEvent, ev.AgentType, ev.BroadcastTs, provider)
+		var result agent.DeriveResult
+		if provider, ok := m.registry.Get(ev.AgentType); ok {
+			result = provider.DeriveStatus(ev.EventName, ev.RawEvent)
+		}
+		normalized := m.buildNormalized(ev.TmuxSession, ev.EventName, ev.AgentType, ev.BroadcastTs, result)
 		payload, _ := json.Marshal(normalized)
 		event := core.HostEvent{Type: "hook", Session: code, Value: string(payload)}
 		data, _ := json.Marshal(event)
@@ -1680,7 +1695,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// Handle subagent events (transient — broadcast only, don't persist)
 	if req.EventName == "SubagentStart" || req.EventName == "SubagentStop" {
 		m.handleSubagentEvent(req.TmuxSession, req.EventName, result)
-		normalized := m.buildNormalized(req.TmuxSession, req.EventName, req.RawEvent, req.AgentType, broadcastTs, provider)
+		normalized := m.buildNormalized(req.TmuxSession, req.EventName, req.AgentType, broadcastTs, result)
 		m.broadcastToSession(req.TmuxSession, normalized)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -1731,7 +1746,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build and broadcast normalized event
-	normalized := m.buildNormalized(req.TmuxSession, req.EventName, req.RawEvent, req.AgentType, broadcastTs, provider)
+	normalized := m.buildNormalized(req.TmuxSession, req.EventName, req.AgentType, broadcastTs, result)
 	m.broadcastToSession(req.TmuxSession, normalized)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1769,12 +1784,7 @@ func (m *Module) handleSubagentEvent(tmuxSession, eventName string, result agent
 	}
 }
 
-func (m *Module) buildNormalized(tmuxSession, eventName string, rawEvent json.RawMessage, agentType string, broadcastTs int64, provider agent.AgentProvider) agent.NormalizedEvent {
-	var result agent.DeriveResult
-	if provider != nil {
-		result = provider.DeriveStatus(eventName, rawEvent)
-	}
-
+func (m *Module) buildNormalized(tmuxSession, eventName, agentType string, broadcastTs int64, result agent.DeriveResult) agent.NormalizedEvent {
 	m.mu.Lock()
 	subs := make([]string, len(m.subagents[tmuxSession]))
 	copy(subs, m.subagents[tmuxSession])
@@ -1995,12 +2005,6 @@ func (m *Module) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"alive": alive})
 }
-```
-
-- [ ] **Step 3: Delete `internal/module/agent/cc_hooks.go`**
-
-```bash
-rm internal/module/agent/cc_hooks.go
 ```
 
 - [ ] **Step 4: Run agent module tests**
@@ -2496,15 +2500,25 @@ Change model reading from `events[key].raw_event.modelName` to `models[key]`:
 // Verify and fix if it reads from events.
 ```
 
-- [ ] **Step 5: Run frontend tests**
+- [ ] **Step 5: Update `spa/src/lib/host-lifecycle.ts`**
+
+This file imports `AgentHookEvent` and reads `events` map from useAgentStore. Replace:
+- `AgentHookEvent` type → `NormalizedEvent`
+- `agentEvents: Record<string, AgentHookEvent>` → `agentEvents: Record<string, NormalizedEvent>`
+- `useAgentStore.getState().events` → `useAgentStore.getState().lastEvents`
+- Any `setState({ events: ... })` → `setState({ lastEvents: ... })`
+
+Update `spa/src/lib/host-lifecycle.test.ts` test fixtures to use `NormalizedEvent` shape instead of `AgentHookEvent`.
+
+- [ ] **Step 6: Run frontend tests**
 
 Run: `cd /Users/wake/Workspace/wake/tmux-box/.claude/worktrees/agent-module-design/spa && npx vitest run`
 Expected: PASS (fix any remaining compilation errors from removed types)
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add spa/src/hooks/ spa/src/lib/notification-content.ts spa/src/components/StatusBar.tsx
+git add spa/src/hooks/ spa/src/lib/notification-content.ts spa/src/lib/host-lifecycle.ts spa/src/lib/host-lifecycle.test.ts spa/src/components/StatusBar.tsx
 git commit -m "refactor: frontend WS parsing and notifications for normalized events"
 ```
 
