@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { useHostStore } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
-import { useAgentStore, type AgentHookEvent } from '../stores/useAgentStore'
+import { useAgentStore, type NormalizedEvent } from '../stores/useAgentStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { useWorkspaceStore } from '../features/workspace/store'
@@ -38,7 +38,7 @@ function resetAllStores() {
   })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
-  useAgentStore.setState({ events: {}, statuses: {}, unread: {}, activeSubagents: {}, models: {} })
+  useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, agentTypes: {}, models: {} })
   useStreamStore.setState({ sessions: {}, relayStatus: {}, handoffProgress: {} })
   useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
   useWorkspaceStore.getState().reset()
@@ -74,19 +74,18 @@ describe('host delete cascade', () => {
   })
 
   it('cascade cleans AgentStore entries', () => {
-    const event: AgentHookEvent = {
-      tmux_session: 'dev001',
-      event_name: 'Stop',
-      raw_event: {},
+    const event: NormalizedEvent = {
       agent_type: 'cc',
+      status: 'idle',
+      raw_event_name: 'Stop',
       broadcast_ts: Date.now(),
     }
-    useAgentStore.getState().handleHookEvent(HOST_A, 'dev001', event)
+    useAgentStore.getState().handleNormalizedEvent(HOST_A, 'dev001', event)
     expect(useAgentStore.getState().statuses[`${HOST_A}:dev001`]).toBe('idle')
 
     deleteHostCascade(HOST_A, true)
 
-    expect(useAgentStore.getState().events[`${HOST_A}:dev001`]).toBeUndefined()
+    expect(useAgentStore.getState().lastEvents[`${HOST_A}:dev001`]).toBeUndefined()
     expect(useAgentStore.getState().statuses[`${HOST_A}:dev001`]).toBeUndefined()
   })
 
@@ -130,33 +129,32 @@ describe('host delete cascade', () => {
   })
 
   it('undo restores AgentStore data', () => {
-    const event: AgentHookEvent = {
-      tmux_session: 'dev001',
-      event_name: 'UserPromptSubmit',
-      raw_event: {},
+    const event: NormalizedEvent = {
       agent_type: 'cc',
+      status: 'running',
+      raw_event_name: 'UserPromptSubmit',
       broadcast_ts: Date.now(),
     }
-    useAgentStore.getState().handleHookEvent(HOST_A, 'dev001', event)
+    useAgentStore.getState().handleNormalizedEvent(HOST_A, 'dev001', event)
 
     const restore = deleteHostCascade(HOST_A, true)
     expect(useAgentStore.getState().statuses[`${HOST_A}:dev001`]).toBeUndefined()
 
     restore()
     expect(useAgentStore.getState().statuses[`${HOST_A}:dev001`]).toBe('running')
-    expect(useAgentStore.getState().events[`${HOST_A}:dev001`]).toBeDefined()
+    expect(useAgentStore.getState().lastEvents[`${HOST_A}:dev001`]).toBeDefined()
   })
 
   it('undo restores AgentStore models', () => {
-    // Seed a model entry via handleHookEvent with modelName in raw_event
-    const event: AgentHookEvent = {
-      tmux_session: 'dev001',
-      event_name: 'UserPromptSubmit',
-      raw_event: { modelName: 'claude-sonnet-4-20250514' },
+    // Seed a model entry via handleNormalizedEvent with model field
+    const event: NormalizedEvent = {
       agent_type: 'cc',
+      status: 'running',
+      model: 'claude-sonnet-4-20250514',
+      raw_event_name: 'UserPromptSubmit',
       broadcast_ts: Date.now(),
     }
-    useAgentStore.getState().handleHookEvent(HOST_A, 'dev001', event)
+    useAgentStore.getState().handleNormalizedEvent(HOST_A, 'dev001', event)
     expect(useAgentStore.getState().models[`${HOST_A}:dev001`]).toBe('claude-sonnet-4-20250514')
 
     const restore = deleteHostCascade(HOST_A, true)
@@ -211,14 +209,13 @@ describe('host delete cascade', () => {
   it('does not affect other hosts during cascade', () => {
     const tabB = makeSessionTab(HOST_B, 'stg001')
     useTabStore.getState().addTab(tabB)
-    const eventB: AgentHookEvent = {
-      tmux_session: 'stg001',
-      event_name: 'UserPromptSubmit',
-      raw_event: {},
+    const eventB: NormalizedEvent = {
       agent_type: 'cc',
+      status: 'running',
+      raw_event_name: 'UserPromptSubmit',
       broadcast_ts: Date.now(),
     }
-    useAgentStore.getState().handleHookEvent(HOST_B, 'stg001', eventB)
+    useAgentStore.getState().handleNormalizedEvent(HOST_B, 'stg001', eventB)
     useStreamStore.getState().addMessage(HOST_B, 'stg001', { type: 'user' } as StreamMessage)
 
     deleteHostCascade(HOST_A, true)

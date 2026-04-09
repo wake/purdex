@@ -125,7 +125,7 @@ export function useMultiHostEventWs() {
           if (event.type === 'hook') {
             try {
               const hookData = JSON.parse(event.value)
-              useAgentStore.getState().handleHookEvent(hostId, event.session, hookData)
+              useAgentStore.getState().handleNormalizedEvent(hostId, event.session, hookData)
             } catch { /* ignore */ }
           }
           if (event.type === 'relay') {
@@ -170,7 +170,6 @@ export function useMultiHostEventWs() {
             status: 'connected',
             daemonState: 'connected',
           })
-          useAgentStore.getState().clearSubagentsForHost(hostId)
           useSessionStore.getState().fetchHost(hostId).catch(() => {})
         },
         () => fetchWsTicket(hostId),

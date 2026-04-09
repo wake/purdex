@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useAgentStore, deriveStatus } from '../stores/useAgentStore'
+import { useAgentStore } from '../stores/useAgentStore'
 import { getActiveSessionInfo } from '../lib/active-session'
 import { compositeKey } from '../lib/composite-key'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -74,8 +74,8 @@ export function shouldNotify(params: ShouldNotifyParams): boolean {
 export function useNotificationDispatcher(): void {
   useEffect(() => {
     const unsubscribe = useAgentStore.subscribe((state, prevState) => {
-      const prevEvents = prevState.events
-      const currentEvents = state.events
+      const prevEvents = prevState.lastEvents
+      const currentEvents = state.lastEvents
 
       // Clean up lastSeenTs for sessions that ended (prevents stale ts
       // blocking notifications if the session code is reused).
@@ -100,21 +100,21 @@ export function useNotificationDispatcher(): void {
         // Layer 3: Electron main process recentBroadcasts dedup (5s window, multi-window).
         if (!shouldDispatch(compositeKeyStr, event.broadcast_ts)) continue
 
-        const derived = deriveStatus(event.event_name, event.raw_event)
+        const derived = event.status || null
         const tabs = useTabStore.getState().tabs
         const hasTab = findTabBySessionCode(tabs, sessionCode) !== undefined
         const settings = useNotificationSettingsStore.getState().getSettingsForAgent(event.agent_type || '')
         const activeInfo = getActiveSessionInfo()
         const focusedCompositeKey = activeInfo ? compositeKey(activeInfo.hostId, activeInfo.sessionCode) : ''
 
-        if (!shouldNotify({ derived, eventName: event.event_name, compositeKey: compositeKeyStr, focusedCompositeKey, hasTab, settings })) continue
+        if (!shouldNotify({ derived, eventName: event.raw_event_name, compositeKey: compositeKeyStr, focusedCompositeKey, hasTab, settings })) continue
 
         const sessionsMap = useSessionStore.getState().sessions
         const hostSessions = sessionsMap[hostId] ?? []
         const session = hostSessions.find((s) => s.code === sessionCode)
         const sessionName = session?.name || sessionCode
 
-        const content = buildNotificationContent(event.event_name, event.raw_event, sessionName, useI18nStore.getState().t)
+        const content = buildNotificationContent(event.raw_event_name, (event.detail ?? {}) as Record<string, unknown>, sessionName, useI18nStore.getState().t)
         if (!content) continue
 
         const capabilities = getPlatformCapabilities()
@@ -123,7 +123,7 @@ export function useNotificationDispatcher(): void {
             title: content.title,
             body: content.body,
             sessionCode,
-            eventName: event.event_name,
+            eventName: event.raw_event_name,
             broadcastTs: event.broadcast_ts,
             action: { kind: 'open-session', hostId, sessionCode },
           })
@@ -207,7 +207,7 @@ export function handleNotificationClick(action: NotificationAction): void {
       const tabs = useTabStore.getState().tabs
       const tabId = findTabBySessionCode(tabs, sessionCode)
       const ck = `${hostId}:${sessionCode}`
-      const event = useAgentStore.getState().events[ck]
+      const event = useAgentStore.getState().lastEvents[ck]
       const agentSettings = useNotificationSettingsStore.getState().getSettingsForAgent(event?.agent_type || '')
 
       let handled = false
