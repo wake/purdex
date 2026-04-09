@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.72] - 2026-04-10
+
+Sidebar/Panel/Pane 修正 + Module Config 系統 (#245)
+
+### 新增
+
+- **Module Config 系統**（#244）：Module 透過 registry 宣告 workspace/global 層級設定，Workspace 提供泛用 `moduleConfig` 儲存，Settings 頁面自動產生表單
+- **Files Module 拆分**：workspace view（以 projectPath 為根）+ session view（placeholder，待 daemon cwd API）
+- **Pane swap 功能**：PaneHeader 新增交換按鈕，可在同 tab 的不同 pane 間交換內容
+- **Tab mergeToTab**：Tab 右鍵選單新增「加入 Tab 成為 pane」功能
+- **TitleBar Region Toggle**：4 個 sidebar/panel 切換按鈕，僅在 region 有 view 時顯示
+- **Global Module Config Store**：`useModuleConfigStore` 支援全域 module 設定持久化
+
+### 改善
+
+- **PaneSplitter 視覺**：hover 加寬、顏色加深、hit area 擴大
+- **PaneHeader 視覺**：按鈕加大、邊框加強
+- **Grid-4 水平聯動**：四宮格水平 splitter 同步 resize
+- **Pane detach 位置**：彈出的 tab 插入到來源 tab 的下一位（而非尾端）
+- **SidebarRegion props**：正確傳遞 region/workspaceId/hostId 給 view component
+- **insertTab afterTabId**：workspace store 支援指定位置插入 tab
+
 ## [1.0.0-alpha.71] - 2026-04-10
 
 Home 按鈕未讀指示修正 + standalone tab 關閉 scope 修正
