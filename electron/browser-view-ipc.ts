@@ -71,6 +71,12 @@ export function registerBrowserViewIpc(
     miniWindowManager.moveToTab(paneId)
   })
 
+  // --- State request (SPA loaded after view was created) ---
+
+  ipcMain.handle('browser-view:request-state', (_event, paneId: string) => {
+    manager.pushStateNow(paneId)
+  })
+
   // --- Link click from WebContentsView preload ---
 
   ipcMain.on('browser-view:link-click', (event, data: { url: string; shiftKey: boolean; targetBlank: boolean }) => {

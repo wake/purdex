@@ -37,17 +37,14 @@ export class MiniWindowManager {
 
     this.entries.set(paneId, { window: win, paneId, parentWindow })
 
-    // Load mini browser SPA entry
+    // Create WebContentsView immediately — start loading URL in parallel with SPA
+    this.viewManager.open(win, url, paneId)
+
+    // Load mini browser SPA entry (runs in parallel with URL load above)
     const query = `?paneId=${encodeURIComponent(paneId)}`
     fetch(DEV_SERVER, { signal: AbortSignal.timeout(500) })
       .then(() => win.loadURL(`${DEV_SERVER}/mini-browser.html${query}`))
       .catch(() => win.loadURL(`app://./mini-browser.html${query}`))
-
-    // Once SPA is ready, open the WebContentsView
-    win.webContents.once('did-finish-load', () => {
-      if (win.isDestroyed()) return
-      this.viewManager.open(win, url, paneId)
-    })
 
     // Cleanup on window close
     win.on('closed', () => {

@@ -56,6 +56,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   browserViewMoveToTab: (paneId: string) =>
     ipcRenderer.invoke('browser-view:move-to-tab', paneId),
 
+  // Browser View — request state (SPA catches up after late mount)
+  requestBrowserViewState: (paneId: string) =>
+    ipcRenderer.invoke('browser-view:request-state', paneId),
+
   // Browser View — state subscription (Electron → SPA)
   onBrowserViewStateUpdate: (callback: (paneId: string, state: unknown) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, paneId: string, state: unknown) =>
