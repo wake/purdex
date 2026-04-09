@@ -72,6 +72,17 @@ internal/
 | `internal/module/cc/` | 整併進 `internal/agent/cc/`，模組刪除 |
 | `internal/module/agent/cc_hooks.go` | 搬入 `internal/agent/cc/hooks.go` |
 | `internal/module/agent/` 其餘 | 保留，改造 |
+| `cmd/tbox/main.go` 的 `cc.New()` | 刪除，CC 改由 agent module 初始化 provider |
+
+### Stream Module 整合（重要）
+
+Stream module（`internal/module/stream/`）的 handoff orchestrator 直接使用 `CCDetector` 和 `CCOperator`。本次不抽象化 stream handoff（StreamCapable 預留），但必須處理 import path 變更：
+
+1. CC provider 初始化時，將 detector 和 operator 註冊到 `core.Registry`（key 不變，只是由 agent module 代替舊 cc module 註冊）
+2. Stream module 的 `Init()` 從 registry 取得時，型別改為從 `internal/agent/cc` 引入
+3. `detect.Status*` 常數跟著搬到 `internal/agent/cc`，stream module 的 import path 更新
+
+效果：stream module 的邏輯完全不動，只改 import path。未來做 StreamCapable 抽象時再改 stream module 的內部實作。
 
 ## 後端設計
 
@@ -160,11 +171,12 @@ const (
 )
 
 type NormalizedEvent struct {
-    AgentType    string   `json:"agent_type"`
-    Status       string   `json:"status"`
-    Model        string   `json:"model,omitempty"`
-    Subagents    []string `json:"subagents,omitempty"`
-    RawEventName string   `json:"raw_event_name"`
+    AgentType        string   `json:"agent_type"`
+    Status           string   `json:"status"`
+    Model            string   `json:"model,omitempty"`
+    Subagents        []string `json:"subagents,omitempty"`
+    RawEventName     string   `json:"raw_event_name"`
+    NotificationType string   `json:"notification_type,omitempty"` // 給前端通知系統用
 }
 ```
 
@@ -181,6 +193,10 @@ func (r *Registry) Get(agentType string) (AgentProvider, bool)   // 依 type 找
 func (r *Registry) Claim(ctx ClaimContext) (AgentProvider, bool)  // 遍歷，第一個 claim 的贏
 func (r *Registry) All() []AgentProvider
 ```
+
+**路由語意：**
+- `Get(agentType)`：hook event 進來時使用（agent_type 已知）
+- `Claim(ctx)`：只用在 process detection path（無 hook、需辨識 session 裡跑什麼）
 
 ### CC Provider
 
@@ -222,7 +238,35 @@ func (r *Registry) All() []AgentProvider
 
 **IsAlive：** 檢查 `pane_current_command` 是否為 `codex`。準確度有限，為最佳可用方案。
 
-**HookInstaller：** 改寫 `~/.codex/hooks.json`。
+**HookInstaller：** 改寫 `~/.codex/hooks.json`。格式範例：
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "/path/to/tbox hook --agent codex SessionStart",
+        "timeout": 5
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "command": "/path/to/tbox hook --agent codex UserPromptSubmit",
+        "timeout": 5
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "/path/to/tbox hook --agent codex Stop",
+        "timeout": 5
+      }
+    ]
+  }
+}
+```
 
 **HistoryProvider：** 本次不實作。
 
@@ -242,12 +286,14 @@ POST /api/agent/event { agent_type, event_name, raw_event, tmux_session }
 
 - module 內部維護 `map[string][]string`（tmuxSession → activeSubagentIDs）
 - SubagentStart / SubagentStop 不存 DB（維持現有行為），更新 in-memory map
-- 廣播 NormalizedEvent 時帶上 `subagents` 欄位
+- 廣播 NormalizedEvent 時帶上 `subagents` 欄位（subagent ID 為 CC 的 `agent_id` UUID）
+- StatusClear 時同步清除該 session 的 subagent map entry
 
 **Error guard** 從前端搬到後端：
 
 - module 維護 per-session 的 current status（in-memory）
 - 在 error 狀態下，只有 UserPromptSubmit / SessionStart / Stop 能清除
+- **Daemon restart 恢復：** `Start()` 時從 DB replay 所有 session 的最後一筆 raw event，經 provider.DeriveStatus 重建 in-memory status map（包含 error guard 狀態）
 
 **Route 變化：**
 
@@ -262,7 +308,7 @@ GET  /api/sessions/{code}/history
 
 **isAlive 觸發時機（不做 polling）：**
 
-1. SPA reconnect（sendSnapshot 時）：遍歷所有 session，呼叫 provider.IsAlive()，已死的廣播 StatusClear
+1. SPA reconnect（sendSnapshot 時）：遍歷所有 session，呼叫 provider.IsAlive()，已死的廣播 StatusClear。**非同步執行**，不阻塞 WS handshake，設 5 秒 timeout budget。
 2. 前端主動請求：`POST /api/agent/check-alive/{session}`
 
 ## 前端設計
@@ -306,6 +352,10 @@ Unread 判斷邏輯（agent-agnostic）：
 - `waiting` / `error` → 一律 actionable
 - `idle` 且 `raw_event_name !== 'Notification'` → actionable
 - 非當前 active session → 標 unread
+
+### Notification Dispatcher 調整
+
+`useNotificationDispatcher.ts` 和 `notification-content.ts` 現在直接讀 `raw_event.notification_type`。改為從 NormalizedEvent 的 `notification_type` 欄位讀取，不再依賴 raw event。
 
 ### Agent Icon Map
 
