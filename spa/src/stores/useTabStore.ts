@@ -1,8 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { Tab, PaneContent, PaneLayout, TerminatedReason } from '../types/tab'
+import type { Tab, PaneContent, PaneLayout, TerminatedReason, LayoutPattern } from '../types/tab'
 import { createTab } from '../types/tab'
-import { getPrimaryPane, findPane, updatePaneInLayout } from '../lib/pane-tree'
+import { getPrimaryPane, findPane, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern } from '../lib/pane-tree'
 import { contentMatches } from '../lib/pane-utils'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
@@ -79,6 +79,9 @@ interface TabState {
   setPaneContent: (tabId: string, paneId: string, content: PaneContent) => void
   splitPane: (tabId: string, paneId: string, direction: 'h' | 'v', content: PaneContent) => void
   closePane: (tabId: string, paneId: string) => void
+  resizePanes: (tabId: string, splitId: string, sizes: number[]) => void
+  applyLayout: (tabId: string, pattern: LayoutPattern) => void
+  detachPane: (tabId: string, paneId: string) => string | null
   reorderTabs: (order: string[]) => void
   togglePin: (id: string) => void
   toggleLock: (id: string) => void
@@ -178,11 +181,68 @@ export const useTabStore = create<TabState>()(
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
 
-      // Stub — no-op for now
-      splitPane: () => {},
+      splitPane: (tabId, paneId, direction, content) =>
+        set((state) => {
+          const tab = state.tabs[tabId]
+          if (!tab) return state
+          const newLayout = splitAtPane(tab.layout, paneId, direction, content)
+          if (newLayout === tab.layout) return state
+          return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
+        }),
 
-      // Stub — no-op for now
-      closePane: () => {},
+      closePane: (tabId, paneId) => {
+        const state = get()
+        const tab = state.tabs[tabId]
+        if (!tab) return
+        const newLayout = removePane(tab.layout, paneId)
+        if (newLayout === null) {
+          get().closeTab(tabId)
+          return
+        }
+        set({ tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } })
+      },
+
+      resizePanes: (tabId, splitId, sizes) =>
+        set((state) => {
+          const tab = state.tabs[tabId]
+          if (!tab) return state
+          const update = (layout: PaneLayout): PaneLayout => {
+            if (layout.type === 'leaf') return layout
+            if (layout.id === splitId) return { ...layout, sizes }
+            const newChildren = layout.children.map(update)
+            return newChildren.some((c, i) => c !== layout.children[i])
+              ? { ...layout, children: newChildren }
+              : layout
+          }
+          const newLayout = update(tab.layout)
+          if (newLayout === tab.layout) return state
+          return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
+        }),
+
+      applyLayout: (tabId, pattern) =>
+        set((state) => {
+          const tab = state.tabs[tabId]
+          if (!tab) return state
+          const newLayout = applyLayoutPattern(tab.layout, pattern)
+          return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
+        }),
+
+      detachPane: (tabId, paneId) => {
+        const state = get()
+        const tab = state.tabs[tabId]
+        if (!tab) return null
+        const pane = findPane(tab.layout, paneId)
+        if (!pane) return null
+        if (tab.layout.type === 'leaf') return null
+        const newLayout = removePane(tab.layout, paneId)
+        if (!newLayout) return null
+        const newTab = createTab(pane.content)
+        set({
+          tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout }, [newTab.id]: newTab },
+          tabOrder: [...state.tabOrder, newTab.id],
+        })
+        return newTab.id
+      },
 
       reorderTabs: (order) =>
         set({ tabOrder: order }),
