@@ -38,36 +38,101 @@
 
 ### 不改動的部分
 
-- `ModuleDefinition` / `ViewDefinition` 介面不需修改
+- `ViewDefinition` 介面不需修改
 - `defaultRegion` 已足夠指定預設 placement
 
-## 3. Workspace 專案路徑
+## 3. Module Config 系統（#244）
 
-### 型別變更
+### 設計原則
+
+Module 的設定參數不是 workspace 或 settings 本身的屬性，而是各 module 透過 registry 宣告的設定需求。系統提供泛用儲存介面，分為 workspace 層級和全域層級兩層。
+
+### 型別定義
 
 ```typescript
+// module-registry.ts — 共用 config 定義
+interface ConfigDef {
+  key: string                              // e.g. 'projectPath'
+  type: 'string' | 'boolean' | 'number'   // 欄位型別
+  label: string                            // UI 顯示名稱
+  required?: boolean
+  defaultValue?: unknown
+}
+
+interface ModuleDefinition {
+  // ...existing fields
+  workspaceConfig?: ConfigDef[]            // per-workspace 設定
+  globalConfig?: ConfigDef[]               // 全域設定
+}
+
+// types/tab.ts — Workspace 泛用儲存
 interface Workspace {
   // ...existing fields
-  projectPath?: string  // 新增：workspace 專案根目錄
+  moduleConfig: Record<string, Record<string, unknown>>  // moduleId → config
 }
 ```
 
-`projectPath` 存在 workspace store，persist 到 storage。
+### Workspace 層級
 
-### Store Action
+**儲存：** `Workspace.moduleConfig`，persist 到 workspace store。
 
-`WorkspaceState` 新增 `setProjectPath: (wsId: string, path: string) => void`。
+**Store Action：** `setModuleConfig: (wsId: string, moduleId: string, key: string, value: unknown) => void`
+
+**Settings UI：** Workspace settings 頁面根據 registry 的 `workspaceConfig` 定義**自動產生**表單欄位。
+
+### 全域層級
+
+**儲存：** 獨立的 `moduleGlobalConfig: Record<string, Record<string, unknown>>`，存放在 settings store（或新建專用 store），persist 到 storage。
+
+**Store Action：** `setGlobalModuleConfig: (moduleId: string, key: string, value: unknown) => void`
+
+**Settings UI：** Settings 頁面（global scope）根據 registry 的 `globalConfig` 定義，自動在各 module 名稱下產生設定區塊。
+
+### 存取方式
+
+```typescript
+// Workspace 層級 — 讀取 / 寫入
+const path = workspace.moduleConfig?.files?.projectPath as string
+setModuleConfig(wsId, 'files', 'projectPath', '/some/path')
+
+// 全域層級 — 讀取 / 寫入
+const val = getGlobalModuleConfig('files', 'someKey')
+setGlobalModuleConfig('files', 'someKey', value)
+```
+
+### Registry 查詢
+
+```typescript
+// 取得所有有 workspaceConfig 的 module
+getModulesWithWorkspaceConfig(): ModuleDefinition[]
+
+// 取得所有有 globalConfig 的 module
+getModulesWithGlobalConfig(): ModuleDefinition[]
+```
+
+### Files Module 註冊範例
+
+```typescript
+registerModule({
+  id: 'files',
+  workspaceConfig: [
+    { key: 'projectPath', type: 'string', label: '專案路徑' }
+  ],
+  views: [...]
+})
+```
 
 ### 設定入口
 
-- **Files sidebar view**：開啟時若 `projectPath` 為空 → 顯示引導畫面（路徑輸入 + 確認按鈕）
-- **Workspace settings 頁面**：可編輯 `projectPath` 欄位
+- **Files sidebar view**：開啟時若 `moduleConfig.files.projectPath` 為空 → 顯示引導畫面（路徑輸入 + 確認按鈕）
+- **Workspace settings 頁面**：自動產生各 module 的 workspace config 表單
+- **Global settings 頁面**：自動產生各 module 的 global config 表單
 
 ### View 行為
 
 | View | 路徑來源 | 無路徑時 |
 |------|----------|----------|
-| `file-tree-workspace` | `workspace.projectPath` | 顯示「請設定專案路徑」引導 UI |
+| `file-tree-workspace` | `workspace.moduleConfig.files.projectPath` | 顯示「請設定專案路徑」引導 UI |
 | `file-tree-session` | Active terminal 的 cwd（透過 tmux `display-message -p '#{pane_current_path}'`，需 daemon 新增 API） | 顯示「無可用路徑」提示 |
 
 **Daemon API 需求：** 需新增端點（如 `GET /api/sessions/:code/cwd`）回傳 tmux session 當前工作目錄。若 daemon 端尚未實作，`file-tree-session` 先 defer，優先完成其餘項目。
@@ -157,9 +222,11 @@ interface Workspace {
 
 | 區域 | 檔案 | 改動 |
 |------|------|------|
-| Module Registry | `module-registry.ts` | `ViewProps` 新增 `region` 欄位 |
-| Module Registry | `register-modules.tsx` | files 拆成 2 個 view |
-| Workspace Store | `workspace/store.ts`, `types/tab.ts` | 新增 `projectPath` 欄位 + `setProjectPath` action |
+| Module Registry | `module-registry.ts` | `ViewProps` 新增 `region`；新增 `ConfigDef` 型別 + `ModuleDefinition.workspaceConfig` / `globalConfig`；新增查詢函數 |
+| Module Registry | `register-modules.tsx` | files 拆成 2 個 view + 宣告 `workspaceConfig` |
+| Workspace Store | `workspace/store.ts`, `types/tab.ts` | `Workspace` 新增 `moduleConfig` 欄位 + `setModuleConfig` action |
+| Global Config | settings store 或新建 store | 新增 `moduleGlobalConfig` 儲存 + `setGlobalModuleConfig` action |
+| Settings UI | settings 相關元件 | Workspace / Global settings 頁面自動產生 module config 表單 |
 | FileTreeView | `FileTreeView.tsx` → 拆成兩個 component | `FileTreeWorkspaceView` + `FileTreeSessionView` |
 | SidebarRegion | `SidebarRegion.tsx` | 補傳 `region` / `workspaceId` / `hostId` 給 view component |
 | PaneSplitter | `PaneSplitter.tsx` | 加強視覺 + 新增 `onSyncResize` prop |
@@ -173,7 +240,7 @@ interface Workspace {
 
 ## 7. 不改動的部分
 
-- `ModuleDefinition` / `ViewDefinition` 介面（除 `ViewProps` 新增 `region` 外）
+- `ViewDefinition` 介面
 - Sidebar / Panel region 架構（4-region layout）
 - Pane layout pattern 系統（`LayoutPattern` type）
 
