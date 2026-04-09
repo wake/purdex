@@ -223,6 +223,20 @@ describe('removePane', () => {
     const result = removePane(layout, 'notexist')
     expect(result).toBe(layout)
   })
+
+  it('removes a pane deep in nested split', () => {
+    const layout = mkSplit('s1', 'h', [
+      mkLeaf('p1'),
+      mkSplit('s2', 'v', [mkLeaf('p2'), mkLeaf('p3')]),
+    ])
+    const result = removePane(layout, 'p3')
+    expect(result).not.toBeNull()
+    if (!result || result.type !== 'split') throw new Error('expected split')
+    expect(result.children).toHaveLength(2)
+    // p1 untouched, s2 collapsed to just p2
+    expect(result.children[0]).toEqual(mkLeaf('p1'))
+    expect(result.children[1]).toEqual(mkLeaf('p2'))
+  })
 })
 
 // ── countLeaves ──────────────────────────────────────────────────────────────

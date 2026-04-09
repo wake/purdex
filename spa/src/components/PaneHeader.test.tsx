@@ -25,10 +25,4 @@ describe('PaneHeader', () => {
     expect(screen.queryByTitle('Detach to tab')).toBeNull()
   })
 
-  it('hides header when isSinglePane is true', () => {
-    const { container } = render(
-      <PaneHeader title="Dashboard" onClose={vi.fn()} isSinglePane={true} />
-    )
-    expect(container.innerHTML).toBe('')
-  })
 })

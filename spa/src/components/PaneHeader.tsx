@@ -4,12 +4,9 @@ interface Props {
   title: string
   onClose: () => void
   onDetach?: () => void
-  isSinglePane?: boolean
 }
 
-export function PaneHeader({ title, onClose, onDetach, isSinglePane }: Props) {
-  if (isSinglePane) return null
-
+export function PaneHeader({ title, onClose, onDetach }: Props) {
   return (
     <div className="shrink-0 flex items-center h-6 px-2 bg-surface-secondary border-b border-border-subtle">
       <span className="flex-1 text-xs text-text-muted truncate">{title}</span>

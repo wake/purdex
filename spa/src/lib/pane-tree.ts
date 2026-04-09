@@ -79,13 +79,21 @@ export function splitAtPane(layout: PaneLayout, paneId: string, direction: 'h' |
 
 export function removePane(layout: PaneLayout, paneId: string): PaneLayout | null {
   if (layout.type === 'leaf') return layout.pane.id === paneId ? null : layout
-  const newChildren = layout.children.map((child) => removePane(child, paneId)).filter((c): c is PaneLayout => c !== null)
-  if (newChildren.length === layout.children.length) return layout
+
+  const mapped = layout.children.map((child) => removePane(child, paneId))
+  const newChildren = mapped.filter((c): c is PaneLayout => c !== null)
+
+  if (newChildren.length === layout.children.length) {
+    // No child was removed (null), but a child might have been modified internally
+    const anyChanged = newChildren.some((c, i) => c !== layout.children[i])
+    if (!anyChanged) return layout
+    // Children were modified but not removed — return updated layout with same sizes
+    return { ...layout, children: newChildren }
+  }
   if (newChildren.length === 0) return null
   if (newChildren.length === 1) return newChildren[0]
-  // Recalculate sizes for remaining children
-  const removedIndices = new Set(layout.children.map((child, i) => (removePane(child, paneId) === null ? i : -1)).filter((i) => i >= 0))
-  const keptSizes = layout.sizes.filter((_, i) => !removedIndices.has(i))
+
+  const keptSizes = layout.sizes.filter((_, i) => mapped[i] !== null)
   const total = keptSizes.reduce((a, b) => a + b, 0)
   const normalizedSizes = keptSizes.map((s) => (s / total) * 100)
   return { ...layout, children: newChildren, sizes: normalizedSizes }
@@ -109,7 +117,7 @@ export function applyLayoutPattern(layout: PaneLayout, pattern: LayoutPattern): 
   const leaves = collectLeaves(layout)
   const p = (i: number): Pane => leaves[i] ?? newTabPane()
   switch (pattern) {
-    case 'single': return { type: 'leaf', pane: leaves[0] }
+    case 'single': return { type: 'leaf', pane: p(0) }
     case 'split-h': return { type: 'split', id: generateId(), direction: 'h', children: [{ type: 'leaf', pane: p(0) }, { type: 'leaf', pane: p(1) }], sizes: [50, 50] }
     case 'split-v': return { type: 'split', id: generateId(), direction: 'v', children: [{ type: 'leaf', pane: p(0) }, { type: 'leaf', pane: p(1) }], sizes: [50, 50] }
     case 'grid-4': return { type: 'split', id: generateId(), direction: 'v', children: [

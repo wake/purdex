@@ -17,9 +17,8 @@ interface DirState {
 
 export function FileTreeView({ isActive }: ViewProps) {
   void isActive
-  const hostOrder = useHostStore((s) => s.hostOrder)
-  const firstHostId = hostOrder[0] ?? ''
-  const baseUrl = useHostStore((s) => (firstHostId ? s.getDaemonBase(firstHostId) : ''))
+  const activeHostId = useHostStore((s) => s.activeHostId ?? s.hostOrder[0] ?? '')
+  const baseUrl = useHostStore((s) => (activeHostId ? s.getDaemonBase(activeHostId) : ''))
 
   const [rootPath, setRootPath] = useState<string>('')
   const [rootEntries, setRootEntries] = useState<FileEntry[]>([])
@@ -31,10 +30,11 @@ export function FileTreeView({ isActive }: ViewProps) {
     const url = path
       ? `${baseUrl}/api/files?path=${encodeURIComponent(path)}`
       : `${baseUrl}/api/files`
-    const res = await fetch(url)
+    const authHeaders = useHostStore.getState().getAuthHeaders(activeHostId)
+    const res = await fetch(url, { headers: authHeaders })
     if (!res.ok) throw new Error(`Failed to fetch: ${res.statusText}`)
     return res.json()
-  }, [baseUrl])
+  }, [baseUrl, activeHostId])
 
   useEffect(() => {
     if (!baseUrl) return
@@ -76,7 +76,7 @@ export function FileTreeView({ isActive }: ViewProps) {
   const renderEntries = (entries: FileEntry[], parentPath: string, depth: number) => (
     <div>
       {entries.map((entry) => {
-        const fullPath = `${parentPath}/${entry.name}`
+        const fullPath = parentPath === '/' ? `/${entry.name}` : `${parentPath}/${entry.name}`
         const dirState = expandedDirs[fullPath]
         const isExpanded = dirState?.expanded ?? false
         return (
