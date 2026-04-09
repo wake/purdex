@@ -328,6 +328,10 @@ func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 // handleCheckAlive handles POST /api/agent/check-alive/{session}.
 func (m *Module) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
+	if m.sessions == nil {
+		http.Error(w, `{"error":"no session provider"}`, http.StatusInternalServerError)
+		return
+	}
 	sessionCode := r.PathValue("session")
 
 	sessions, err := m.sessions.ListSessions()

@@ -38,6 +38,7 @@ type Module struct {
 func New(events *store.AgentEventStore) *Module {
 	return &Module{
 		events:        events,
+		registry:      agentpkg.NewRegistry(),
 		currentStatus: make(map[string]agentpkg.Status),
 		subagents:     make(map[string][]string),
 	}
@@ -64,9 +65,6 @@ func (m *Module) Init(c *core.Core) error {
 		home, _ := os.UserHomeDir()
 		m.uploadDir = filepath.Join(home, "tmp", "tbox-upload")
 	}
-
-	// Initialize provider registry
-	m.registry = agentpkg.NewRegistry()
 
 	// CC provider
 	ccDetector := agentcc.NewDetector(c.Tmux, c.Cfg.Detect.CCCommands)
@@ -149,6 +147,9 @@ func (m *Module) replayFromDB() {
 
 // sendSnapshot sends the latest hook event for each known session to a new WS subscriber.
 func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
+	if m.sessions == nil {
+		return
+	}
 	all, err := m.events.ListAll()
 	if err != nil {
 		log.Printf("[agent] snapshot: %v", err)
@@ -187,6 +188,9 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 
 // checkAliveAll checks all tracked sessions for liveness and broadcasts clear events for dead ones.
 func (m *Module) checkAliveAll(sub *core.EventSubscriber) {
+	if m.sessions == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
