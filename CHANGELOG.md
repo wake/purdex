@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.78] - 2026-04-10
+
+Quick Commands + Host Agents + tmux 精確匹配修正 (#269)
+
+### 新增
+
+- **Quick Commands Module**：可插拔指令快捷系統 — module registry `commands` extension point、QuickCommandStore（global + per-host persist）、`useCommands()` hook、QuickCommandMenu 下拉選單
+- **POST /api/sessions/{code}/send-keys**：透過 `SendKeysRaw` 送指令到 tmux session
+- **GET /api/agents/detect**：偵測 host 上 claude/codex CLI 安裝狀態（path + version）
+- **Host > Agents 子頁面**：顯示各 agent CLI 的安裝狀態
+- **Codex Hooks**：HOOK_MODULES 加入 CODEX_HOOKS，Hooks 頁面顯示 tmux/CC/Codex 三區
+
+### 修正
+
+- **tmux 精確匹配**：RenameSession / KillSession / send-keys target 加 `=` 前綴避免 prefix matching 誤判
+- **handleRename 重名 409**：rename 前檢查目標名稱是否已存在
+- **CC getLastTrigger**：加 `agent_type` 過濾，避免 codex event 被算進 CC
+
+### 移除
+
+- **Settings > Agent 區塊**：hooks 統一走 Host > Hooks 管理
+
 ## [1.0.0-alpha.77] - 2026-04-10
 
 Sidebar / Panel View Management (#266)
