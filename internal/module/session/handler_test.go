@@ -449,7 +449,7 @@ func TestHandlerSendKeys(t *testing.T) {
 	// Verify keys were sent via SendKeysRaw
 	calls := fake.RawKeysSent()
 	require.Len(t, calls, 1)
-	assert.Equal(t, "target:", calls[0].Target)
+	assert.Equal(t, "=target:", calls[0].Target)
 	assert.Equal(t, []string{"echo hello\n"}, calls[0].Keys)
 }
 

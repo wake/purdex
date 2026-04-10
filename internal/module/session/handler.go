@@ -292,7 +292,7 @@ func (m *SessionModule) handleSendKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := m.tmux.SendKeysRaw(info.Name+":", req.Keys); err != nil {
+	if err := m.tmux.SendKeysRaw("="+info.Name+":", req.Keys); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

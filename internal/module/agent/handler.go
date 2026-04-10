@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -374,7 +375,7 @@ func (m *Module) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 
 // handleDetect handles GET /api/agents/detect.
 // Checks if agent CLIs (claude, codex) are available on the host.
-func (m *Module) handleDetect(w http.ResponseWriter, _ *http.Request) {
+func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
 	type agentInfo struct {
 		Installed bool   `json:"installed"`
 		Path      string `json:"path,omitempty"`
@@ -388,7 +389,9 @@ func (m *Module) handleDetect(w http.ResponseWriter, _ *http.Request) {
 		}
 		info := agentInfo{Installed: true, Path: path}
 		if len(versionArgs) > 0 {
-			out, err := exec.Command(path, versionArgs...).Output()
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer cancel()
+			out, err := exec.CommandContext(ctx, path, versionArgs...).Output()
 			if err == nil {
 				info.Version = strings.TrimSpace(string(out))
 			}
