@@ -19,6 +19,7 @@ import './lib/browser-shortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useElectronIpc } from './hooks/useElectronIpc'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
+import { useWorkspaceWindowActions } from './hooks/useWorkspaceWindowActions'
 import { isStandaloneTab } from './types/tab'
 import {
   getVisibleTabIds,
@@ -60,6 +61,7 @@ export default function App() {
   useShortcuts()
   useNotificationDispatcher()
   useElectronIpc()
+  const { handleWsTearOff, handleWsMergeTo } = useWorkspaceWindowActions()
 
   // --- Derived state ---
   const activeTab = activeTabId ? tabs[activeTabId] : undefined
@@ -121,51 +123,6 @@ export default function App() {
   const handleWsContextMenu = (e: React.MouseEvent, wsId: string) => {
     setWsContextMenu({ wsId, position: { x: e.clientX, y: e.clientY } })
   }
-
-  const prepareWorkspacePayload = useCallback((wsId: string) => {
-    const ws = workspaces.find(w => w.id === wsId)
-    if (!ws || ws.tabs.length === 0) return null
-    const tabData = ws.tabs.map(id => tabs[id]).filter(Boolean)
-    if (tabData.length === 0) return null
-    return { ws, payload: JSON.stringify({ workspace: ws, tabData }) }
-  }, [workspaces, tabs])
-
-  const removeWorkspaceFromStore = useCallback((tabIds: string[], wsId: string) => {
-    // Read fresh state to avoid stale closure after async IPC
-    const { tabs: currentTabs, tabOrder: currentTabOrder } = useTabStore.getState()
-    const newTabs = { ...currentTabs }
-    const newTabOrder = currentTabOrder.filter(id => !tabIds.includes(id))
-    for (const id of tabIds) delete newTabs[id]
-    useTabStore.setState({ tabs: newTabs, tabOrder: newTabOrder, activeTabId: null })
-    useWorkspaceStore.getState().removeWorkspace(wsId)
-    // Sync activeTabId with the new active workspace's activeTabId
-    const wsState = useWorkspaceStore.getState()
-    const newActiveWs = wsState.activeWorkspaceId
-      ? wsState.workspaces.find(w => w.id === wsState.activeWorkspaceId)
-      : null
-    const syncedTabId = newActiveWs?.activeTabId ?? newActiveWs?.tabs[0] ?? newTabOrder[0] ?? null
-    if (syncedTabId) useTabStore.getState().setActiveTab(syncedTabId)
-  }, [])
-
-  const handleWsTearOff = useCallback(async (wsId: string) => {
-    if (!window.electronAPI) return
-    const prepared = prepareWorkspacePayload(wsId)
-    if (!prepared) return
-    try {
-      await window.electronAPI.tearOffWorkspace(prepared.payload)
-      removeWorkspaceFromStore(prepared.ws.tabs, wsId)
-    } catch { /* IPC failed — keep data intact */ }
-  }, [prepareWorkspacePayload, removeWorkspaceFromStore])
-
-  const handleWsMergeTo = useCallback(async (wsId: string, targetWindowId: string) => {
-    if (!window.electronAPI) return
-    const prepared = prepareWorkspacePayload(wsId)
-    if (!prepared) return
-    try {
-      await window.electronAPI.mergeWorkspace(prepared.payload, targetWindowId)
-      removeWorkspaceFromStore(prepared.ws.tabs, wsId)
-    } catch { /* IPC failed — keep data intact */ }
-  }, [prepareWorkspacePayload, removeWorkspaceFromStore])
 
   return (
     <ErrorBoundary>
