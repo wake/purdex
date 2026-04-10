@@ -9,6 +9,7 @@ import { WorkspaceIcon } from './WorkspaceIcon'
 
 import { WorkspaceIconPicker } from './WorkspaceIconPicker'
 import { WorkspaceDeleteDialog } from './WorkspaceDeleteDialog'
+import { ModuleConfigSection } from '../../../components/settings/ModuleConfigSection'
 
 interface Props {
   workspaceId: string
@@ -113,8 +114,11 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
           />
         </section>
 
+        {/* Module Settings */}
+        <ModuleConfigSection scope={{ workspaceId }} />
+
         {/* Danger Zone */}
-        <section className="border-t border-border-subtle pt-6">
+        <section className="border-t border-border-subtle pt-6 mt-8">
           <h3 className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-3">
             Danger Zone
           </h3>
