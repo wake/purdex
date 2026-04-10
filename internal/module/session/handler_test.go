@@ -427,6 +427,46 @@ func TestHandlerSwitchModeNotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+func TestHandlerSendKeys(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	fake.AddSession("target", "/tmp")
+
+	sessions, err := mod.ListSessions()
+	require.NoError(t, err)
+	code := sessions[0].Code
+
+	body := `{"keys":"echo hello\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+code+"/send-keys", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNoContent, w.Code)
+
+	// Verify keys were sent via SendKeysRaw
+	calls := fake.RawKeysSent()
+	require.Len(t, calls, 1)
+	assert.Equal(t, "target:", calls[0].Target)
+	assert.Equal(t, []string{"echo hello\n"}, calls[0].Keys)
+}
+
+func TestHandlerSendKeysNotFound(t *testing.T) {
+	mod, _, _ := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	body := `{"keys":"echo hello\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/zzzzzz/send-keys", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
 func TestHandlerTerminalWSNotFound(t *testing.T) {
 	// Setup module with no sessions
 	mod, _, _ := newTestModule(t)

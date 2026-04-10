@@ -264,6 +264,42 @@ func (m *SessionModule) handleSwitchMode(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type sendKeysRequest struct {
+	Keys string `json:"keys"`
+}
+
+func (m *SessionModule) handleSendKeys(w http.ResponseWriter, r *http.Request) {
+	code := r.PathValue("code")
+
+	var req sendKeysRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Keys == "" {
+		http.Error(w, "keys must not be empty", http.StatusBadRequest)
+		return
+	}
+
+	info, err := m.GetSession(code)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if info == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	if err := m.tmux.SendKeysRaw(info.Name+":", req.Keys); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (m *SessionModule) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
 	m.HandleTerminalWS(w, r, code)
