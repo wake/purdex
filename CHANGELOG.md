@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.80] - 2026-04-10
+
+fix: SubagentDots 相位同步 + terminal reconnect 自動恢復 (#279)
+
+### 修正
+
+- **SubagentDots 動畫相位同步**：`useMemo` dependency 改為 `[clamped]` + key 強制 remount，修正新 subagent dot 與既有 dot 相位不同步的雜亂閃爍
+- **Terminal reconnect gate 持續重試**：`canReconnect()` gate 回 false 時改為固定間隔輪詢（不累積 backoff），host 恢復後自動重連
+- **connectWithTicket 殭屍 WS 防護**：await getTicket 後加 `closed` guard，防止 unmount 後建立多餘 WebSocket
+
 ## [1.0.0-alpha.79] - 2026-04-10
 
 fix: topbar cursor pointer + host 子分頁切換保留 (#276)
