@@ -9,6 +9,8 @@ import { useAgentStore } from '../../stores/useAgentStore'
 import { hostFetch, renameSession } from '../../lib/host-api'
 import { compositeKey } from '../../lib/composite-key'
 import { connectionErrorMessage } from '../../lib/host-utils'
+import { QuickCommandMenu } from '../QuickCommandMenu'
+import { executeCommand } from '../../lib/execute-command'
 import type { Session } from '../../lib/host-api'
 
 interface Props {
@@ -226,6 +228,15 @@ export function SessionsSection({ hostId }: Props) {
                     <td className="px-3 py-2 text-text-muted font-mono text-xs truncate max-w-[200px]">{session.cwd}</td>
                     <td className="px-3 py-2 text-right">
                       <div className="flex items-center justify-end gap-1">
+                        <QuickCommandMenu
+                          hostId={hostId}
+                          onExecute={async (cmd) => {
+                            try {
+                              await executeCommand(hostId, session.code, cmd.command)
+                            } catch { /* ignore */ }
+                          }}
+                          disabled={isOffline}
+                        />
                         <button
                           onClick={() => handleOpen(session, session.mode)}
                           disabled={isOffline}
