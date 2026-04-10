@@ -6,7 +6,7 @@ import {
   getModules,
   getPaneRenderer,
   getViewDefinition,
-  getViewsByRegion,
+  getAllViews,
   getModulesWithWorkspaceConfig,
   getModulesWithGlobalConfig,
   clearModuleRegistry,
@@ -15,6 +15,9 @@ import type { ModuleDefinition } from './module-registry'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const DummyComponent = (() => null) as React.FC<any>
+
+const DummyIcon = DummyComponent
+const DummyView = DummyComponent
 
 const sessionModule: ModuleDefinition = {
   id: 'session',
@@ -25,7 +28,6 @@ const sessionModule: ModuleDefinition = {
     label: 'Sessions',
     icon: DummyComponent,
     scope: 'system',
-    defaultRegion: 'primary-sidebar',
     component: DummyComponent,
   }],
 }
@@ -38,7 +40,6 @@ const filesModule: ModuleDefinition = {
     label: 'Files',
     icon: DummyComponent,
     scope: 'workspace',
-    defaultRegion: 'primary-panel',
     component: DummyComponent,
   }],
 }
@@ -120,26 +121,27 @@ describe('module-registry', () => {
     })
   })
 
-  describe('getViewsByRegion', () => {
-    it('returns views matching region', () => {
-      registerModule(sessionModule)
-      registerModule(filesModule)
-      const sidebarViews = getViewsByRegion('primary-sidebar')
-      expect(sidebarViews).toHaveLength(1)
-      expect(sidebarViews[0].id).toBe('session-list')
+  describe('getAllViews', () => {
+    it('returns all views from all modules', () => {
+      registerModule({
+        id: 'mod-a', name: 'A',
+        views: [{ id: 'view-1', label: 'V1', icon: DummyIcon, scope: 'system', component: DummyView }],
+      })
+      registerModule({
+        id: 'mod-b', name: 'B',
+        views: [
+          { id: 'view-2', label: 'V2', icon: DummyIcon, scope: 'workspace', component: DummyView },
+          { id: 'view-3', label: 'V3', icon: DummyIcon, scope: 'tab', component: DummyView },
+        ],
+      })
+      registerModule({ id: 'mod-c', name: 'C' })
+      const views = getAllViews()
+      expect(views).toHaveLength(3)
+      expect(views.map((v) => v.id)).toEqual(['view-1', 'view-2', 'view-3'])
     })
-
-    it('filters by scope when provided', () => {
-      registerModule(sessionModule)
-      registerModule(filesModule)
-      const systemViews = getViewsByRegion('primary-sidebar', 'system')
-      expect(systemViews).toHaveLength(1)
-      const wsViews = getViewsByRegion('primary-sidebar', 'workspace')
-      expect(wsViews).toHaveLength(0)
-    })
-
-    it('returns empty array for region with no views', () => {
-      expect(getViewsByRegion('secondary-sidebar')).toEqual([])
+    it('returns empty array when no modules have views', () => {
+      registerModule({ id: 'mod-x', name: 'X' })
+      expect(getAllViews()).toEqual([])
     })
   })
 

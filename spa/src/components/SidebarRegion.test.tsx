@@ -18,7 +18,6 @@ function registerTestModule(id = 'test', viewId = 'test-view') {
       label: 'Test View',
       icon: List,
       scope: 'system',
-      defaultRegion: 'primary-sidebar',
       component: DummyView,
     }],
   })

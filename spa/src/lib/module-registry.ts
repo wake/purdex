@@ -19,6 +19,7 @@ export interface PaneDefinition {
 export interface ViewProps {
   hostId?: string
   workspaceId?: string
+  tabId?: string
   isActive: boolean
   region?: SidebarRegion
 }
@@ -27,8 +28,7 @@ export interface ViewDefinition {
   id: string
   label: string
   icon: React.ComponentType<{ size?: number; className?: string }>
-  scope: 'system' | 'workspace'
-  defaultRegion: SidebarRegion
+  scope: 'system' | 'workspace' | 'tab'
   component: React.ComponentType<ViewProps>
 }
 
@@ -87,20 +87,8 @@ export function getViewDefinition(viewId: string): ViewDefinition | undefined {
   return undefined
 }
 
-export function getViewsByRegion(
-  region: SidebarRegion,
-  scope?: 'system' | 'workspace',
-): ViewDefinition[] {
-  const result: ViewDefinition[] = []
-  for (const m of modules.values()) {
-    if (!m.views) continue
-    for (const v of m.views) {
-      if (v.defaultRegion === region && (!scope || v.scope === scope)) {
-        result.push(v)
-      }
-    }
-  }
-  return result
+export function getAllViews(): ViewDefinition[] {
+  return [...modules.values()].flatMap((m) => m.views ?? [])
 }
 
 export function getModulesWithWorkspaceConfig(): ModuleDefinition[] {
