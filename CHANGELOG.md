@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.75] - 2026-04-10
+
+### 修正
+
+- **Session 建立重名 409**：`handleCreate` 建 session 前先 `HasSession` 檢查，回 409 Conflict + 明確訊息；`HasSession` 改用 `=` 前綴精確匹配避免 tmux prefix matching 誤判 (#260)
+- **createRequest 加 Mode 欄位**：前端傳的 mode 不再被 JSON decoder 靜默忽略，新建 session 正確套用 terminal/stream (#260)
+- **Workspace icon 拖曳排序恢復**：恢復在 status pill refactor 中遺失的 `@dnd-kit` DnD（`SortableWorkspaceButton`、`reorderWorkspaces` store action）；加防禦性 guard 防止 stale orderedIds 丟失 workspace (#260)
+- **Tab bar + 按鈕位置**：移除 `normalTabsRef` 的 `flex-1`，+ 按鈕緊鄰最後一個 tab (#260)
+- **前端錯誤訊息改善**：NewSessionDialog 顯示 response body 而非僅 HTTP status code (#260)
+
 ## [1.0.0-alpha.74] - 2026-04-10
 
 ### 修正
