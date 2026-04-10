@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent, type Modifier } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { Plus, GearSix, HardDrives, SquaresFour } from '@phosphor-icons/react'
@@ -114,9 +114,14 @@ export function ActivityBar({
   const t = useI18nStore((s) => s.t)
   const wsIds = useMemo(() => workspaces.map((ws) => ws.id), [workspaces])
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+  const wsZoneRef = useRef<HTMLDivElement>(null)
 
-  const restrictToVertical: Modifier = useCallback(({ transform }) => {
-    return { ...transform, x: 0 }
+  const restrictToVertical: Modifier = useCallback(({ transform, activeNodeRect }) => {
+    if (!activeNodeRect || !wsZoneRef.current) return { ...transform, x: 0 }
+    const zoneRect = wsZoneRef.current.getBoundingClientRect()
+    const minY = zoneRect.top - activeNodeRect.top
+    const maxY = zoneRect.bottom - activeNodeRect.bottom
+    return { ...transform, x: 0, y: Math.min(Math.max(transform.y, minY), maxY) }
   }, [])
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
@@ -181,15 +186,17 @@ export function ActivityBar({
       {/* Workspaces — sortable */}
       <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVertical]} onDragEnd={handleDragEnd}>
         <SortableContext items={wsIds} strategy={verticalListSortingStrategy}>
-          {workspaces.map((ws) => (
-            <SortableWorkspaceButton
-              key={ws.id}
-              workspace={ws}
-              isActive={activeWorkspaceId === ws.id && !activeStandaloneTabId}
-              onSelect={onSelectWorkspace}
-              onContextMenu={onContextMenuWorkspace}
-            />
-          ))}
+          <div ref={wsZoneRef} className="flex flex-col items-center gap-2.5">
+            {workspaces.map((ws) => (
+              <SortableWorkspaceButton
+                key={ws.id}
+                workspace={ws}
+                isActive={activeWorkspaceId === ws.id && !activeStandaloneTabId}
+                onSelect={onSelectWorkspace}
+                onContextMenu={onContextMenuWorkspace}
+              />
+            ))}
+          </div>
         </SortableContext>
       </DndContext>
 

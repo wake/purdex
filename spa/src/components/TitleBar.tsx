@@ -35,11 +35,14 @@ export function TitleBar({ title }: Props) {
 
   return (
     <div
-      className="shrink-0 flex items-center bg-surface-secondary border-b border-border-subtle px-2"
+      className="shrink-0 relative flex items-center bg-surface-secondary border-b border-border-subtle px-2"
       style={{ height: 30, WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
-      <div className="shrink-0" style={{ width: 70 }} />
-      <div className="flex-1 text-center text-xs text-text-muted truncate select-none">{title}</div>
+      {/* Title — absolute positioned for true center across full window width */}
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
+        <span className="text-xs text-text-muted truncate px-20">{title}</span>
+      </div>
+      <div className="flex-1" />
       <div
         data-testid="layout-buttons"
         className="shrink-0 flex items-center gap-0.5"
