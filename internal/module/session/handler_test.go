@@ -229,6 +229,46 @@ func TestHandlerCreateSession(t *testing.T) {
 	assert.Len(t, sessions, 1)
 }
 
+func TestHandlerCreateSessionWithMode(t *testing.T) {
+	mod, meta, _ := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	body := `{"name": "stream-session", "cwd": "/tmp", "mode": "stream"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	var info SessionInfo
+	err := json.NewDecoder(w.Body).Decode(&info)
+	require.NoError(t, err)
+	assert.Equal(t, "stream", info.Mode)
+
+	// Verify meta persisted with correct mode
+	stored, err := meta.GetMeta("$0")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "stream", stored.Mode)
+}
+
+func TestHandlerCreateSessionInvalidMode(t *testing.T) {
+	mod, _, _ := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	body := `{"name": "bad-mode", "cwd": "/tmp", "mode": "invalid"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid mode")
+}
+
 func TestHandlerCreateSessionDuplicate(t *testing.T) {
 	mod, _, fake := newTestModule(t)
 	mux := http.NewServeMux()
