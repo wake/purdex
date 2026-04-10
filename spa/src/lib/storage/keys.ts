@@ -15,4 +15,5 @@ export const STORAGE_KEYS = {
   /** 手動管理（非 Zustand store），直接操作 localStorage，不走 browserStorage/syncManager */
   NOTIFICATION_SEEN: 'purdex-notification-seen',
   MODULE_CONFIG: 'purdex-module-config',
+  QUICK_COMMANDS: 'purdex-quick-commands',
 } as const
