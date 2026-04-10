@@ -56,4 +56,15 @@ describe('TitleBar', () => {
       expect(buttons[i]).toHaveProperty('disabled', true)
     }
   })
+
+  it('all enabled buttons have cursor-pointer class', () => {
+    const tab = createTab({ kind: 'dashboard' })
+    useTabStore.setState({ tabs: { [tab.id]: tab }, tabOrder: [tab.id], activeTabId: tab.id, visitHistory: [] })
+    render(<TitleBar title="test" />)
+    const buttons = screen.getByTestId('layout-buttons').querySelectorAll('button:not(:disabled)')
+    expect(buttons.length).toBeGreaterThan(0)
+    for (const btn of buttons) {
+      expect(btn.className).toContain('cursor-pointer')
+    }
+  })
 })

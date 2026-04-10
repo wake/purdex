@@ -54,7 +54,7 @@ export function TitleBar({ title }: Props) {
           return (
             <button
               key={region}
-              className={`p-1 rounded transition-colors ${
+              className={`p-1 rounded transition-colors cursor-pointer ${
                 isVisible
                   ? 'text-accent-base bg-accent-base/10 hover:bg-accent-base/20'
                   : 'text-text-muted hover:text-text-primary hover:bg-surface-hover'
@@ -74,7 +74,7 @@ export function TitleBar({ title }: Props) {
           <button
             key={pattern}
             disabled={!activeTabId}
-            className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:pointer-events-none"
+            className="p-1 rounded cursor-pointer text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:pointer-events-none"
             title={label}
             onClick={() => handlePattern(pattern)}
           >
