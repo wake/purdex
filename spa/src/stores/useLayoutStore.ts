@@ -10,7 +10,7 @@ interface RegionState {
   views: string[]
   activeViewId?: string
   width: number
-  mode: 'pinned' | 'collapsed'
+  mode: 'pinned' | 'collapsed' | 'hidden'
 }
 
 interface LayoutState {
@@ -21,6 +21,7 @@ interface LayoutState {
   setActiveView: (region: SidebarRegion, viewId: string | undefined) => void
   setRegionViews: (region: SidebarRegion, views: string[]) => void
   toggleRegion: (region: SidebarRegion) => void
+  toggleVisibility: (region: SidebarRegion) => void
 }
 
 function createDefaultRegions(): Record<SidebarRegion, RegionState> {
@@ -70,6 +71,13 @@ export const useLayoutStore = create<LayoutState>()(
         set((state) => {
           const current = state.regions[region].mode
           const next = current === 'collapsed' ? 'pinned' : 'collapsed'
+          return updateRegion(state, region, { mode: next })
+        }),
+
+      toggleVisibility: (region) =>
+        set((state) => {
+          const current = state.regions[region].mode
+          const next = current === 'hidden' ? 'pinned' : 'hidden'
           return updateRegion(state, region, { mode: next })
         }),
     }),

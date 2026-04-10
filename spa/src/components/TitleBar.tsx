@@ -24,7 +24,7 @@ const regionToggles: { region: SidebarRegion; icon: typeof SidebarSimple; label:
 export function TitleBar({ title }: Props) {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const regions = useLayoutStore((s) => s.regions)
-  const toggleRegion = useLayoutStore((s) => s.toggleRegion)
+  const toggleVisibility = useLayoutStore((s) => s.toggleVisibility)
 
   const handlePattern = (pattern: LayoutPattern) => {
     if (!activeTabId) return
@@ -47,17 +47,17 @@ export function TitleBar({ title }: Props) {
       >
         {/* Region toggles */}
         {visibleToggles.map(({ region, icon: Icon, label, mirror }) => {
-          const isPinned = regions[region].mode === 'pinned'
+          const isVisible = regions[region].mode !== 'hidden'
           return (
             <button
               key={region}
               className={`p-1 rounded transition-colors ${
-                isPinned
+                isVisible
                   ? 'text-accent-base bg-accent-base/10 hover:bg-accent-base/20'
                   : 'text-text-muted hover:text-text-primary hover:bg-surface-hover'
               }`}
               title={label}
-              onClick={() => toggleRegion(region)}
+              onClick={() => toggleVisibility(region)}
               style={mirror ? { transform: 'scaleX(-1)' } : undefined}
             >
               <Icon size={14} />

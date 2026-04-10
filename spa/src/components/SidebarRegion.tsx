@@ -21,7 +21,7 @@ export function SidebarRegion({ region, resizeEdge }: Props) {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
   const activeHostId = useHostStore((s) => s.activeHostId ?? s.hostOrder[0] ?? '')
 
-  if (views.length === 0) return null
+  if (views.length === 0 || mode === 'hidden') return null
 
   // Fallback to first view if activeViewId is unset
   const resolvedActiveViewId = activeViewId ?? views[0]

@@ -89,4 +89,26 @@ describe('useLayoutStore', () => {
       expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('collapsed')
     })
   })
+
+  describe('toggleVisibility', () => {
+    it('toggles between hidden and pinned', () => {
+      // Start from collapsed, toggle visibility → hidden
+      useLayoutStore.getState().toggleVisibility('primary-sidebar')
+      expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('hidden')
+
+      // Toggle again → pinned
+      useLayoutStore.getState().toggleVisibility('primary-sidebar')
+      expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('pinned')
+
+      // Toggle again → hidden
+      useLayoutStore.getState().toggleVisibility('primary-sidebar')
+      expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('hidden')
+    })
+
+    it('hides a pinned region', () => {
+      useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
+      useLayoutStore.getState().toggleVisibility('primary-sidebar')
+      expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('hidden')
+    })
+  })
 })
