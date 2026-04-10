@@ -3,6 +3,8 @@ import { getPaneRenderer } from '../lib/module-registry'
 import { getLayoutKey, collectLeaves, swapPaneContent } from '../lib/pane-tree'
 import { PaneSplitter } from './PaneSplitter'
 import { PaneHeader } from './PaneHeader'
+import { QuickCommandMenu } from './QuickCommandMenu'
+import { executeCommand } from '../lib/execute-command'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import type { PaneLayout } from '../types/tab'
@@ -43,10 +45,12 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
         .filter((p) => p.id !== layout.pane.id)
         .map((p) => ({ id: p.id, label: p.content.kind }))
 
+      const content = layout.pane.content
+
       return (
         <div className="flex-1 flex flex-col overflow-hidden">
           <PaneHeader
-            title={layout.pane.content.kind}
+            title={content.kind}
             onClose={() => useTabStore.getState().closePane(tabId, layout.pane.id)}
             onDetach={() => {
               const newTabId = useTabStore.getState().detachPane(tabId, layout.pane.id, tabId)
@@ -63,6 +67,15 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
               useTabStore.getState().setTabLayout(tabId, newLayout)
             }}
             swapTargets={swapTargets}
+            extraActions={content.kind === 'tmux-session' ? (
+              <QuickCommandMenu
+                hostId={content.hostId}
+                workspaceId={useWorkspaceStore.getState().activeWorkspaceId}
+                onExecute={async (cmd) => {
+                  try { await executeCommand(content.hostId, content.sessionCode, cmd.command) } catch { /* ignore */ }
+                }}
+              />
+            ) : undefined}
           />
           <Component pane={layout.pane} isActive={isActive} />
         </div>

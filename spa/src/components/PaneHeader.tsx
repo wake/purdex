@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { X, ArrowSquareOut, ArrowsLeftRight } from '@phosphor-icons/react'
 
 interface SwapTarget {
@@ -12,15 +12,17 @@ interface Props {
   onDetach?: () => void
   onSwap?: (targetPaneId: string) => void
   swapTargets?: SwapTarget[]
+  extraActions?: ReactNode
 }
 
-export function PaneHeader({ title, onClose, onDetach, onSwap, swapTargets }: Props) {
+export function PaneHeader({ title, onClose, onDetach, onSwap, swapTargets, extraActions }: Props) {
   const [showSwapMenu, setShowSwapMenu] = useState(false)
 
   return (
     <div className="shrink-0 flex items-center h-7 px-2 bg-surface-secondary border-b border-border-default">
       <span className="flex-1 text-xs text-text-muted truncate font-medium">{title}</span>
       <div className="flex items-center gap-0.5">
+        {extraActions}
         {onSwap && swapTargets && swapTargets.length > 0 && (
           <div className="relative">
             <button
