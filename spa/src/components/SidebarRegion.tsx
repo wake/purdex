@@ -19,7 +19,6 @@ export function SidebarRegion({ region, resizeEdge }: Props) {
   const regionState = useLayoutStore((s) => s.regions[region])
   const setRegionWidth = useLayoutStore((s) => s.setRegionWidth)
   const toggleRegion = useLayoutStore((s) => s.toggleRegion)
-  const setRegionMode = useLayoutStore((s) => s.setRegionMode)
   const setActiveView = useLayoutStore((s) => s.setActiveView)
 
   const { views, activeViewId, width, mode } = regionState
@@ -39,7 +38,7 @@ export function SidebarRegion({ region, resizeEdge }: Props) {
 
   const openManageMode = () => {
     if (mode === 'collapsed') {
-      setRegionMode(region, 'pinned')
+      toggleRegion(region)
     }
     setManaging(true)
   }
@@ -135,7 +134,11 @@ export function SidebarRegion({ region, resizeEdge }: Props) {
           <div className="flex-1" />
           <button
             data-testid="manage-button"
-            className="p-0.5 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors"
+            className={`p-0.5 rounded transition-colors ${
+              managing
+                ? 'text-accent-base bg-accent-base/10'
+                : 'text-text-muted hover:text-text-primary hover:bg-surface-hover'
+            }`}
             onClick={() => setManaging((m) => !m)}
             title="管理 views"
           >
