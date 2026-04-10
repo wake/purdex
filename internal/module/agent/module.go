@@ -95,6 +95,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/hooks/{agent}/status", m.handleHookStatus)
 	mux.HandleFunc("POST /api/hooks/{agent}/setup", m.handleHookSetup)
 	mux.HandleFunc("POST /api/agent/check-alive/{session}", m.handleCheckAlive)
+	mux.HandleFunc("GET /api/agents/detect", m.handleDetect)
 
 	// History (delegates to provider)
 	mux.HandleFunc("GET /api/sessions/{code}/history", m.handleHistory)

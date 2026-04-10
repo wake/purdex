@@ -43,6 +43,7 @@ func (m *SessionModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/sessions/{code}", m.handleRename)
 	mux.HandleFunc("DELETE /api/sessions/{code}", m.handleDelete)
 	mux.HandleFunc("POST /api/sessions/{code}/mode", m.handleSwitchMode)
+	mux.HandleFunc("POST /api/sessions/{code}/send-keys", m.handleSendKeys)
 	mux.HandleFunc("/ws/terminal/{code}", m.handleTerminalWS)
 	mux.HandleFunc("GET /api/hooks/tmux/status", m.handleTmuxHookStatus)
 	mux.HandleFunc("POST /api/hooks/tmux/setup", m.handleTmuxHookSetup)

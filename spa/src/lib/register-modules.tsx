@@ -14,7 +14,6 @@ import { BrowserNewTabSection } from '../components/BrowserNewTabSection'
 import { MemoryMonitorPage } from '../components/MemoryMonitorPage'
 import { HostPage } from '../components/HostPage'
 import { AppearanceSection } from '../components/settings/AppearanceSection'
-import { AgentSection } from '../components/settings/AgentSection'
 import { TerminalSection } from '../components/settings/TerminalSection'
 import { ElectronSection } from '../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../components/settings/DevEnvironmentSection'
@@ -119,7 +118,6 @@ export function registerBuiltinModules(): void {
   // Settings sections
   registerSettingsSection({ id: 'appearance', label: 'settings.section.appearance', order: 0, component: AppearanceSection })
   registerSettingsSection({ id: 'terminal', label: 'settings.section.terminal', order: 1, component: TerminalSection })
-  registerSettingsSection({ id: 'agent', label: 'settings.section.agent', order: 2, component: AgentSection })
   registerSettingsSection({ id: 'workspace', label: 'settings.section.workspace', order: 10 }) // reserved
   registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: 11 }) // reserved
   registerSettingsSection({

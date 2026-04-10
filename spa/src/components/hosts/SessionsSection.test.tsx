@@ -20,12 +20,30 @@ vi.mock('../../stores/useTabStore', () => ({
   },
 }))
 
-vi.mock('../../stores/useWorkspaceStore', () => ({
-  useWorkspaceStore: {
-    getState: () => ({
-      insertTab: mockInsertTab,
-    }),
-  },
+vi.mock('../../stores/useWorkspaceStore', () => {
+  const store = Object.assign(
+    (selector: (s: Record<string, unknown>) => unknown) =>
+      selector({ workspaces: [], insertTab: mockInsertTab }),
+    { getState: () => ({ insertTab: mockInsertTab, workspaces: [] }) },
+  )
+  return { useWorkspaceStore: store }
+})
+
+vi.mock('../../stores/useQuickCommandStore', () => {
+  const store = Object.assign(
+    (selector: (s: Record<string, unknown>) => unknown) =>
+      selector({ global: [], byHost: {}, getCommands: () => [] }),
+    { getState: () => ({ global: [], byHost: {}, getCommands: () => [] }), setState: vi.fn() },
+  )
+  return { useQuickCommandStore: store }
+})
+
+vi.mock('../../lib/module-registry', () => ({
+  getModulesWithCommands: () => [],
+}))
+
+vi.mock('../../lib/execute-command', () => ({
+  executeCommand: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('../../lib/host-api', () => ({
