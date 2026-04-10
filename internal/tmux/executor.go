@@ -102,7 +102,9 @@ func (r *RealExecutor) RenameSession(oldName, newName string) error {
 }
 
 func (r *RealExecutor) HasSession(name string) bool {
-	return exec.Command("tmux", "has-session", "-t", name).Run() == nil
+	// Use "=" prefix for exact name matching (tmux 3.2+).
+	// Without it, "has-session -t foo" matches "foobar" via prefix.
+	return exec.Command("tmux", "has-session", "-t", "="+name).Run() == nil
 }
 
 func (r *RealExecutor) SendKeys(target, keys string) error {

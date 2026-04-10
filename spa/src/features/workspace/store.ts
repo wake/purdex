@@ -100,6 +100,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set((state) => {
           const byId = new Map(state.workspaces.map((ws) => [ws.id, ws]))
           const reordered = orderedIds.map((id) => byId.get(id)).filter(Boolean) as Workspace[]
+          // Guard: if orderedIds is a stale subset, preserve missing workspaces at end
+          if (reordered.length < state.workspaces.length) {
+            const seen = new Set(orderedIds)
+            for (const ws of state.workspaces) {
+              if (!seen.has(ws.id)) reordered.push(ws)
+            }
+          }
           return { workspaces: reordered }
         }),
 

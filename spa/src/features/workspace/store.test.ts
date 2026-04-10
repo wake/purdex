@@ -91,6 +91,27 @@ describe('useWorkspaceStore', () => {
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(ws1.id)
   })
 
+  // === Workspace reorder ===
+
+  it('reorderWorkspaces changes order', () => {
+    const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
+    const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+    const ws3 = useWorkspaceStore.getState().addWorkspace('WS3')
+    useWorkspaceStore.getState().reorderWorkspaces([ws3.id, ws1.id, ws2.id])
+    const names = useWorkspaceStore.getState().workspaces.map((ws) => ws.name)
+    expect(names).toEqual(['WS3', 'WS1', 'WS2'])
+  })
+
+  it('reorderWorkspaces preserves workspaces missing from orderedIds', () => {
+    const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
+    const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+    useWorkspaceStore.getState().addWorkspace('WS3')
+    // Only pass ws2 and ws1 — ws3 should be appended at end
+    useWorkspaceStore.getState().reorderWorkspaces([ws2.id, ws1.id])
+    const names = useWorkspaceStore.getState().workspaces.map((ws) => ws.name)
+    expect(names).toEqual(['WS2', 'WS1', 'WS3'])
+  })
+
   // === Tab operations ===
 
   it('adds a tab to workspace', () => {

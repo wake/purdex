@@ -229,6 +229,23 @@ func TestHandlerCreateSession(t *testing.T) {
 	assert.Len(t, sessions, 1)
 }
 
+func TestHandlerCreateSessionDuplicate(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	fake.AddSession("existing", "/tmp")
+
+	body := `{"name": "existing", "cwd": "/tmp"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "session already exists")
+}
+
 func TestHandlerCreateSessionInvalidName(t *testing.T) {
 	mod, _, _ := newTestModule(t)
 	mux := http.NewServeMux()
