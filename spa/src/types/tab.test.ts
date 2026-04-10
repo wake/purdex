@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createTab, createWorkspace, isStandaloneTab } from './tab'
-import type { SidebarRegion, WorkspaceSidebarState } from './tab'
+import type { SidebarRegion } from './tab'
 
 describe('createTab', () => {
   it('creates a tab with session content', () => {
@@ -55,24 +55,6 @@ describe('SidebarRegion type', () => {
       'secondary-sidebar',
     ]
     expect(regions).toHaveLength(4)
-  })
-})
-
-describe('Workspace.sidebarState', () => {
-  it('is optional on Workspace', () => {
-    const ws = createWorkspace('test')
-    expect(ws.sidebarState).toBeUndefined()
-  })
-
-  it('accepts a WorkspaceSidebarState value', () => {
-    const state: WorkspaceSidebarState = {
-      regions: {
-        'primary-sidebar': { width: 240, mode: 'pinned' as const },
-      },
-    }
-    const ws = createWorkspace('test')
-    ws.sidebarState = state
-    expect(ws.sidebarState).toBe(state)
   })
 })
 
