@@ -163,6 +163,12 @@ func (m *SessionModule) handleRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check for duplicate target name
+	if req.Name != info.Name && m.tmux.HasSession(req.Name) {
+		http.Error(w, "session already exists: "+req.Name, http.StatusConflict)
+		return
+	}
+
 	if err := m.tmux.RenameSession(info.Name, req.Name); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -310,6 +310,28 @@ func TestHandlerCreateSessionInvalidName(t *testing.T) {
 	}
 }
 
+func TestHandlerRenameSessionDuplicate(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	fake.AddSession("alpha", "/tmp")
+	fake.AddSession("beta", "/tmp")
+
+	sessions, err := mod.ListSessions()
+	require.NoError(t, err)
+	code := sessions[0].Code // alpha
+
+	body := `{"name": "beta"}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/sessions/"+code, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "session already exists")
+}
+
 func TestHandlerDeleteSession(t *testing.T) {
 	mod, _, fake := newTestModule(t)
 	mux := http.NewServeMux()

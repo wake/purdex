@@ -86,7 +86,7 @@ func (r *RealExecutor) NewSession(name, cwd string) error {
 }
 
 func (r *RealExecutor) KillSession(name string) error {
-	err := exec.Command("tmux", "kill-session", "-t", name).Run()
+	err := exec.Command("tmux", "kill-session", "-t", "="+name).Run()
 	if err != nil {
 		return ErrNoSession
 	}
@@ -94,7 +94,7 @@ func (r *RealExecutor) KillSession(name string) error {
 }
 
 func (r *RealExecutor) RenameSession(oldName, newName string) error {
-	err := exec.Command("tmux", "rename-session", "-t", oldName, newName).Run()
+	err := exec.Command("tmux", "rename-session", "-t", "="+oldName, newName).Run()
 	if err != nil {
 		return fmt.Errorf("tmux rename-session: %w", err)
 	}
