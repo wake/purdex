@@ -17,14 +17,15 @@ const ARC_POSITIONS: Record<number, [number, number][]> = {
 }
 
 export function SubagentDots({ count, isActive }: Props) {
-  // Capture phase offset once at mount time so the animation-delay stays
-  // deterministic across re-renders without calling impure performance.now()
-  // on every render.
-  // eslint-disable-next-line react-hooks/purity
-  const phaseOffset = useMemo(() => performance.now(), [])
+  const clamped = Math.min(Math.max(count, 0), 3)
 
-  if (count <= 0) return null
-  const clamped = Math.min(count, 3)
+  // Recalculate phase offset when dot count changes so all dots restart
+  // with correctly synchronized animation phases.  When count stays the
+  // same, useMemo keeps the value stable across re-renders.
+  // eslint-disable-next-line react-hooks/purity, react-hooks/exhaustive-deps
+  const phaseOffset = useMemo(() => performance.now(), [clamped])
+
+  if (clamped <= 0) return null
   const positions = ARC_POSITIONS[clamped]
   const dotSize = DOT_SIZES[clamped]
 
@@ -36,7 +37,7 @@ export function SubagentDots({ count, isActive }: Props) {
     <>
       {positions.map(([left, top], i) => (
         <span
-          key={i}
+          key={`${clamped}-${i}`}
           className="absolute rounded-full animate-breathe"
           style={{
             width: dotSize,

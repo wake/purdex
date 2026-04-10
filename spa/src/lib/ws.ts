@@ -25,15 +25,24 @@ export function connectTerminal(
       u.searchParams.set('ticket', ticket)
       wsUrl = u.toString()
     } catch {
-      setTimeout(() => {
-        if (closed) return
-        if (canReconnect && !canReconnect()) return
-        connect()
-      }, retryMs)
-      retryMs = Math.min(retryMs * 2, 30000)
+      scheduleRetry()
       return
     }
     setupWs(wsUrl)
+  }
+
+  function scheduleRetry() {
+    setTimeout(() => {
+      if (closed) return
+      if (canReconnect && !canReconnect()) {
+        // Gate closed — don't connect yet, but keep polling so we resume
+        // automatically once the host comes back online.
+        scheduleRetry()
+        return
+      }
+      connect()
+    }, retryMs)
+    retryMs = Math.min(retryMs * 2, 30000)
   }
 
   function setupWs(wsUrl: string) {
@@ -51,12 +60,7 @@ export function connectTerminal(
     ws.onclose = () => {
       if (closed) return // manual close — don't notify or reconnect
       onClose()
-      setTimeout(() => {
-        if (closed) return
-        if (canReconnect && !canReconnect()) return // gate check
-        connect()
-      }, retryMs)
-      retryMs = Math.min(retryMs * 2, 30000)
+      scheduleRetry()
     }
   }
 
