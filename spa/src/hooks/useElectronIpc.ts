@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { openBrowserTab } from '../lib/open-browser-tab'
-import type { Tab } from '../types/tab'
+import type { Tab, Workspace } from '../types/tab'
 
 /**
  * Registers all Electron IPC listeners as React effects.
@@ -37,7 +37,7 @@ export function useElectronIpc() {
   useEffect(() => {
     if (!window.electronAPI?.onWorkspaceReceived) return
     return window.electronAPI.onWorkspaceReceived((payload: string, replace: boolean) => {
-      let parsed: { workspace: { id: string; tabs: string[]; activeTabId?: string }; tabData: Tab[] }
+      let parsed: { workspace: Workspace; tabData: Tab[] }
       try {
         parsed = JSON.parse(payload)
       } catch {
