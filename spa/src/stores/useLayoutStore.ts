@@ -23,6 +23,9 @@ interface LayoutState {
   setRegionViews: (region: SidebarRegion, views: string[]) => void
   toggleRegion: (region: SidebarRegion) => void
   toggleVisibility: (region: SidebarRegion) => void
+  addView: (region: SidebarRegion, viewId: string) => void
+  removeView: (region: SidebarRegion, viewId: string) => void
+  reorderViews: (region: SidebarRegion, views: string[]) => void
 }
 
 function createDefaultRegions(): Record<SidebarRegion, RegionState> {
@@ -88,6 +91,36 @@ export const useLayoutStore = create<LayoutState>()(
             mode: 'hidden',
             previousMode: mode,
           })
+        }),
+
+      addView: (region, viewId) =>
+        set((state) => {
+          const current = state.regions[region].views
+          if (current.includes(viewId)) return state
+          return updateRegion(state, region, { views: [...current, viewId] })
+        }),
+
+      removeView: (region, viewId) =>
+        set((state) => {
+          const { views, activeViewId } = state.regions[region]
+          const next = views.filter((id) => id !== viewId)
+          const patch: Partial<RegionState> = { views: next }
+          if (activeViewId === viewId) {
+            patch.activeViewId = next[0]
+          }
+          return updateRegion(state, region, patch)
+        }),
+
+      reorderViews: (region, newOrder) =>
+        set((state) => {
+          const current = state.regions[region].views
+          const currentSet = new Set(current)
+          const reordered = newOrder.filter((id) => currentSet.has(id))
+          const reorderedSet = new Set(reordered)
+          for (const id of current) {
+            if (!reorderedSet.has(id)) reordered.push(id)
+          }
+          return updateRegion(state, region, { views: reordered })
         }),
     }),
     {

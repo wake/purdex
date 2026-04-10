@@ -123,3 +123,59 @@ describe('useLayoutStore', () => {
     })
   })
 })
+
+describe('addView', () => {
+  it('appends a view to the region', () => {
+    useLayoutStore.getState().addView('primary-sidebar', 'view-a')
+    expect(useLayoutStore.getState().regions['primary-sidebar'].views).toEqual(['view-a'])
+  })
+  it('appends to existing views', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['view-a'])
+    useLayoutStore.getState().addView('primary-sidebar', 'view-b')
+    expect(useLayoutStore.getState().regions['primary-sidebar'].views).toEqual(['view-a', 'view-b'])
+  })
+  it('ignores duplicate view', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['view-a'])
+    useLayoutStore.getState().addView('primary-sidebar', 'view-a')
+    expect(useLayoutStore.getState().regions['primary-sidebar'].views).toEqual(['view-a'])
+  })
+})
+
+describe('removeView', () => {
+  it('removes a view from the region', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['view-a', 'view-b'])
+    useLayoutStore.getState().removeView('primary-sidebar', 'view-a')
+    expect(useLayoutStore.getState().regions['primary-sidebar'].views).toEqual(['view-b'])
+  })
+  it('resets activeViewId to first when active view is removed', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['view-a', 'view-b'])
+    useLayoutStore.getState().setActiveView('primary-sidebar', 'view-a')
+    useLayoutStore.getState().removeView('primary-sidebar', 'view-a')
+    expect(useLayoutStore.getState().regions['primary-sidebar'].activeViewId).toBe('view-b')
+  })
+  it('sets activeViewId to undefined when last view removed', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['view-a'])
+    useLayoutStore.getState().setActiveView('primary-sidebar', 'view-a')
+    useLayoutStore.getState().removeView('primary-sidebar', 'view-a')
+    expect(useLayoutStore.getState().regions['primary-sidebar'].activeViewId).toBeUndefined()
+  })
+  it('does not change activeViewId when non-active view is removed', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['view-a', 'view-b'])
+    useLayoutStore.getState().setActiveView('primary-sidebar', 'view-b')
+    useLayoutStore.getState().removeView('primary-sidebar', 'view-a')
+    expect(useLayoutStore.getState().regions['primary-sidebar'].activeViewId).toBe('view-b')
+  })
+})
+
+describe('reorderViews', () => {
+  it('reorders views', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['a', 'b', 'c'])
+    useLayoutStore.getState().reorderViews('primary-sidebar', ['c', 'a', 'b'])
+    expect(useLayoutStore.getState().regions['primary-sidebar'].views).toEqual(['c', 'a', 'b'])
+  })
+  it('discards extra ids and appends missing ids', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['a', 'b', 'c'])
+    useLayoutStore.getState().reorderViews('primary-sidebar', ['b', 'x'])
+    expect(useLayoutStore.getState().regions['primary-sidebar'].views).toEqual(['b', 'a', 'c'])
+  })
+})
