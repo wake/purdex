@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.79] - 2026-04-10
+
+fix: topbar cursor pointer + host 子分頁切換保留 (#276)
+
+### 修正
+
+- **TitleBar 按鈕 cursor pointer**：明確加 `cursor-pointer` class 修正 Electron drag region 覆蓋 cursor 樣式的問題
+- **Host 子分頁切換保留**：展開不同 host 時保留當前選中的 subPage，不再 hardcode reset 到 overview
+
 ## [1.0.0-alpha.78] - 2026-04-10
 
 Quick Commands + Host Agents + tmux 精確匹配修正 (#269)
