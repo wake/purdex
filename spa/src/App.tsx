@@ -86,7 +86,6 @@ export default function App() {
     () => tabOrder.filter((id) => isStandaloneTab(id, workspaces)),
     [tabOrder, workspaces],
   )
-  const standaloneTabs = standaloneTabIds.map((id) => tabs[id]).filter(Boolean)
 
   const activeStandaloneTabId = activeTabId && isStandaloneTab(activeTabId, workspaces) ? activeTabId : null
 
@@ -108,13 +107,12 @@ export default function App() {
     handleRenameConfirm,
     handleRenameCancel,
     handleClearRenameError,
+    openSingletonAndSelect,
   } = useTabWorkspaceActions(displayTabs)
 
   const openWsSettings = useCallback((wsId: string) => {
-    const tabId = useTabStore.getState().openSingletonTab({ kind: 'settings', scope: { workspaceId: wsId } })
-    useWorkspaceStore.getState().insertTab(tabId, wsId)
-    handleSelectTab(tabId)
-  }, [handleSelectTab])
+    openSingletonAndSelect({ kind: 'settings', scope: { workspaceId: wsId } })
+  }, [openSingletonAndSelect])
 
   // --- Workspace UI state ---
   const [wsContextMenu, setWsContextMenu] = useState<{ wsId: string; position: { x: number; y: number } } | null>(null)
@@ -123,6 +121,58 @@ export default function App() {
   const handleWsContextMenu = (e: React.MouseEvent, wsId: string) => {
     setWsContextMenu({ wsId, position: { x: e.clientX, y: e.clientY } })
   }
+
+  const handleSelectHome = useCallback(() => {
+    useWorkspaceStore.getState().setActiveWorkspace(null)
+    const firstStandalone = standaloneTabIds[0]
+    if (firstStandalone) {
+      handleSelectTab(firstStandalone)
+    } else {
+      useTabStore.getState().setActiveTab(null)
+    }
+  }, [standaloneTabIds, handleSelectTab])
+
+  const handleAddWorkspace = useCallback(() => {
+    if (workspaces.length === 0 && tabOrder.length > 0) {
+      const ws = useWorkspaceStore.getState().addWorkspace('Workspace 1')
+      setMigrateDialog({ wsId: ws.id, wsName: ws.name })
+    } else {
+      const count = workspaces.length + 1
+      const ws = useWorkspaceStore.getState().addWorkspace(`Workspace ${count}`)
+      openWsSettings(ws.id)
+    }
+  }, [workspaces.length, tabOrder.length, openWsSettings])
+
+  const handleOpenHosts = useCallback(() => {
+    openSingletonAndSelect({ kind: 'hosts' })
+  }, [openSingletonAndSelect])
+
+  const handleOpenSettings = useCallback(() => {
+    openSingletonAndSelect({ kind: 'settings', scope: 'global' })
+  }, [openSingletonAndSelect])
+
+  const handleViewModeChange = useCallback((tabId: string, paneId: string, mode: 'terminal' | 'stream') => {
+    useTabStore.getState().setViewMode(tabId, paneId, mode)
+  }, [])
+
+  const handleNavigateToHost = useCallback((hostId: string) => {
+    openSingletonAndSelect({ kind: 'hosts' })
+    useHostStore.getState().setActiveHost(hostId)
+  }, [openSingletonAndSelect])
+
+  const handleMigrateConfirm = useCallback(() => {
+    if (!migrateDialog) return
+    tabOrder.forEach((tabId) => {
+      useWorkspaceStore.getState().insertTab(tabId, migrateDialog.wsId)
+    })
+    setMigrateDialog(null)
+    openWsSettings(migrateDialog.wsId)
+  }, [migrateDialog, tabOrder, openWsSettings])
+
+  const handleMigrateSkip = useCallback(() => {
+    setMigrateDialog(null)
+    useWorkspaceStore.getState().setActiveWorkspace(null)
+  }, [])
 
   return (
     <ErrorBoundary>
@@ -136,38 +186,13 @@ export default function App() {
             activeWorkspaceId={activeStandaloneTabId ? null : activeWorkspaceId}
             activeStandaloneTabId={activeStandaloneTabId}
             onSelectWorkspace={handleSelectWorkspace}
-            onSelectHome={() => {
-              useWorkspaceStore.getState().setActiveWorkspace(null)
-              const firstStandalone = standaloneTabs[0]
-              if (firstStandalone) {
-                handleSelectTab(firstStandalone.id)
-              } else {
-                useTabStore.getState().setActiveTab(null)
-              }
-            }}
+            onSelectHome={handleSelectHome}
             standaloneTabIds={standaloneTabIds}
-            onAddWorkspace={() => {
-              if (workspaces.length === 0 && tabOrder.length > 0) {
-                const ws = useWorkspaceStore.getState().addWorkspace('Workspace 1')
-                setMigrateDialog({ wsId: ws.id, wsName: ws.name })
-              } else {
-                const count = workspaces.length + 1
-                const ws = useWorkspaceStore.getState().addWorkspace(`Workspace ${count}`)
-                openWsSettings(ws.id)
-              }
-            }}
+            onAddWorkspace={handleAddWorkspace}
             onReorderWorkspaces={(ids) => useWorkspaceStore.getState().reorderWorkspaces(ids)}
             onContextMenuWorkspace={handleWsContextMenu}
-            onOpenHosts={() => {
-              const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
-              useWorkspaceStore.getState().insertTab(tabId)
-              handleSelectTab(tabId)
-            }}
-            onOpenSettings={() => {
-              const tabId = useTabStore.getState().openSingletonTab({ kind: 'settings', scope: 'global' })
-              useWorkspaceStore.getState().insertTab(tabId)
-              handleSelectTab(tabId)
-            }}
+            onOpenHosts={handleOpenHosts}
+            onOpenSettings={handleOpenSettings}
           />
           <SidebarRegion region="primary-sidebar" resizeEdge="right" />
           <div className="flex-1 flex flex-col min-w-0">
@@ -195,15 +220,8 @@ export default function App() {
             </div>
             <StatusBar
               activeTab={activeTab ?? null}
-              onViewModeChange={(tabId, paneId, mode) => {
-                useTabStore.getState().setViewMode(tabId, paneId, mode)
-              }}
-              onNavigateToHost={(hostId) => {
-                const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
-                useWorkspaceStore.getState().insertTab(tabId)
-                handleSelectTab(tabId)
-                useHostStore.getState().setActiveHost(hostId)
-              }}
+              onViewModeChange={handleViewModeChange}
+              onNavigateToHost={handleNavigateToHost}
             />
           </div>
           <SidebarRegion region="secondary-sidebar" resizeEdge="left" />
@@ -243,17 +261,8 @@ export default function App() {
           <MigrateTabsDialog
             tabCount={tabOrder.length}
             workspaceName={migrateDialog.wsName}
-            onMigrate={() => {
-              tabOrder.forEach((tabId) => {
-                useWorkspaceStore.getState().insertTab(tabId, migrateDialog.wsId)
-              })
-              setMigrateDialog(null)
-              openWsSettings(migrateDialog.wsId)
-            }}
-            onSkip={() => {
-              setMigrateDialog(null)
-              useWorkspaceStore.getState().setActiveWorkspace(null)
-            }}
+            onMigrate={handleMigrateConfirm}
+            onSkip={handleMigrateSkip}
           />
         )}
         </div>
