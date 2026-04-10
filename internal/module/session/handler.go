@@ -44,6 +44,7 @@ func (m *SessionModule) handleGet(w http.ResponseWriter, r *http.Request) {
 type createRequest struct {
 	Name string `json:"name"`
 	Cwd  string `json:"cwd"`
+	Mode string `json:"mode"`
 }
 
 func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +61,24 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	if req.Cwd == "" {
 		req.Cwd = "/"
+	}
+
+	// Default and validate mode
+	if req.Mode == "" {
+		req.Mode = "terminal"
+	}
+	switch req.Mode {
+	case "terminal", "stream":
+		// valid
+	default:
+		http.Error(w, "invalid mode: must be terminal or stream", http.StatusBadRequest)
+		return
+	}
+
+	// Check for duplicate session name
+	if m.tmux.HasSession(req.Name) {
+		http.Error(w, "session already exists: "+req.Name, http.StatusConflict)
+		return
 	}
 
 	// Create the tmux session
@@ -87,7 +106,7 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 			// Set initial meta
 			if err := m.meta.SetMeta(s.ID, store.SessionMeta{
 				TmuxID: s.ID,
-				Mode:   "terminal",
+				Mode:   req.Mode,
 				Cwd:    req.Cwd,
 			}); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -99,7 +118,7 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 				TmuxID: s.ID,
 				Name:   s.Name,
 				Exists: true,
-				Mode:   "terminal",
+				Mode:   req.Mode,
 				Cwd:    req.Cwd,
 			}
 			break

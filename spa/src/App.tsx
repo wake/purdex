@@ -300,6 +300,7 @@ export default function App() {
                 openWsSettings(ws.id)
               }
             }}
+            onReorderWorkspaces={(ids) => useWorkspaceStore.getState().reorderWorkspaces(ids)}
             onContextMenuWorkspace={handleWsContextMenu}
             onOpenHosts={() => {
               const tabId = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
