@@ -1,3 +1,6 @@
+import { useCallback, useMemo } from 'react'
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent, type Modifier } from '@dnd-kit/core'
+import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { Plus, GearSix, HardDrives, SquaresFour } from '@phosphor-icons/react'
 import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -5,25 +8,31 @@ import { WorkspaceIcon } from './WorkspaceIcon'
 import { useWorkspaceIndicators } from '../useWorkspaceIndicators'
 import type { ActiveStatus } from '../workspace-indicators'
 
-interface WorkspaceButtonProps {
-  workspace: Workspace
-  isActive: boolean
-  onSelect: (wsId: string) => void
-  onContextMenu?: (e: React.MouseEvent, wsId: string) => void
-}
-
 const PILL_COLORS: Record<ActiveStatus, string> = {
   running: '#4ade80',
   waiting: '#facc15',
   error: '#ef4444',
 }
 
-function WorkspaceButton({ workspace: ws, isActive, onSelect, onContextMenu }: WorkspaceButtonProps) {
+function SortableWorkspaceButton({ workspace: ws, isActive, onSelect, onContextMenu }: {
+  workspace: Workspace
+  isActive: boolean
+  onSelect: (wsId: string) => void
+  onContextMenu?: (e: React.MouseEvent, wsId: string) => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: ws.id })
   const { unreadCount, aggregatedStatus } = useWorkspaceIndicators(ws.tabs)
   const showBadge = !isActive && unreadCount > 0
 
+  const style = {
+    transform: transform ? `translate3d(0, ${Math.round(transform.y)}px, 0)` : undefined,
+    transition,
+    zIndex: isDragging ? 10 : undefined,
+    opacity: isDragging ? 0.8 : 1,
+  }
+
   return (
-    <div className="relative group">
+    <div ref={setNodeRef} style={style} className="relative group" {...attributes} {...listeners}>
       {aggregatedStatus && !isActive && (
         <span
           className={`absolute rounded-full ${aggregatedStatus === 'running' ? 'animate-breathe' : ''}`}
@@ -83,6 +92,7 @@ interface Props {
   onSelectHome: () => void
   standaloneTabIds: string[]
   onAddWorkspace: () => void
+  onReorderWorkspaces?: (orderedIds: string[]) => void
   onContextMenuWorkspace?: (e: React.MouseEvent, wsId: string) => void
   onOpenHosts: () => void
   onOpenSettings: () => void
@@ -96,11 +106,31 @@ export function ActivityBar({
   onSelectHome,
   standaloneTabIds,
   onAddWorkspace,
+  onReorderWorkspaces,
   onContextMenuWorkspace,
   onOpenHosts,
   onOpenSettings,
 }: Props) {
   const t = useI18nStore((s) => s.t)
+  const wsIds = useMemo(() => workspaces.map((ws) => ws.id), [workspaces])
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+
+  const restrictToVertical: Modifier = useCallback(({ transform }) => {
+    return { ...transform, x: 0 }
+  }, [])
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIdx = wsIds.indexOf(String(active.id))
+    const newIdx = wsIds.indexOf(String(over.id))
+    if (oldIdx === -1 || newIdx === -1) return
+    const newOrder = [...wsIds]
+    newOrder.splice(oldIdx, 1)
+    newOrder.splice(newIdx, 0, String(active.id))
+    onReorderWorkspaces?.(newOrder)
+  }, [wsIds, onReorderWorkspaces])
+
   const { unreadCount: homeUnreadCount, aggregatedStatus: homeStatus } = useWorkspaceIndicators(standaloneTabIds)
   const isHomeActive = !activeWorkspaceId
   const showHomeBadge = !isHomeActive && homeUnreadCount > 0
@@ -148,16 +178,20 @@ export function ActivityBar({
 
       {workspaces.length > 0 && <div className="w-5 h-px bg-border-default my-0.5" />}
 
-      {/* Workspaces */}
-      {workspaces.map((ws) => (
-        <WorkspaceButton
-          key={ws.id}
-          workspace={ws}
-          isActive={activeWorkspaceId === ws.id && !activeStandaloneTabId}
-          onSelect={onSelectWorkspace}
-          onContextMenu={onContextMenuWorkspace}
-        />
-      ))}
+      {/* Workspaces — sortable */}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVertical]} onDragEnd={handleDragEnd}>
+        <SortableContext items={wsIds} strategy={verticalListSortingStrategy}>
+          {workspaces.map((ws) => (
+            <SortableWorkspaceButton
+              key={ws.id}
+              workspace={ws}
+              isActive={activeWorkspaceId === ws.id && !activeStandaloneTabId}
+              onSelect={onSelectWorkspace}
+              onContextMenu={onContextMenuWorkspace}
+            />
+          ))}
+        </SortableContext>
+      </DndContext>
 
       {/* Add + Settings */}
       <div className="mt-auto flex flex-col items-center gap-2 pb-1">

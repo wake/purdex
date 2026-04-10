@@ -36,7 +36,8 @@ function NewSessionDialog({ hostId, onClose }: { hostId: string; onClose: () => 
         body: JSON.stringify({ name: name.trim(), cwd, mode }),
       })
       if (!res.ok) {
-        setError(`HTTP ${res.status}`)
+        const body = await res.text().catch(() => '')
+        setError(body || `HTTP ${res.status}`)
         return
       }
       onClose()

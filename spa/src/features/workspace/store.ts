@@ -16,6 +16,7 @@ interface WorkspaceState {
   removeTabFromWorkspace: (wsId: string, tabId: string) => void
   setWorkspaceActiveTab: (wsId: string, tabId: string) => void
   reorderWorkspaceTabs: (wsId: string, tabIds: string[]) => void
+  reorderWorkspaces: (orderedIds: string[]) => void
   findWorkspaceByTab: (tabId: string) => Workspace | null
   insertTab: (tabId: string, workspaceId?: string | null, afterTabId?: string) => void
   closeTabInWorkspace: (tabId: string, opts?: { skipHistory?: boolean }) => void
@@ -94,6 +95,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ws.id === wsId ? { ...ws, tabs: tabIds } : ws,
           ),
         })),
+
+      reorderWorkspaces: (orderedIds) =>
+        set((state) => {
+          const byId = new Map(state.workspaces.map((ws) => [ws.id, ws]))
+          const reordered = orderedIds.map((id) => byId.get(id)).filter(Boolean) as Workspace[]
+          return { workspaces: reordered }
+        }),
 
       findWorkspaceByTab: (tabId) => {
         return get().workspaces.find((ws) => ws.tabs.includes(tabId)) ?? null

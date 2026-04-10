@@ -140,7 +140,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
             </button>
           )}
           <div ref={normalZoneRef} className="flex items-center h-full overflow-x-auto scrollbar-hide">
-            <div ref={normalTabsRef} className="flex items-center h-full flex-1" style={{ minWidth: 'min-content' }}>
+            <div ref={normalTabsRef} className="flex items-center h-full" style={{ minWidth: 'min-content' }}>
               <SortableContext items={normalIds} strategy={horizontalListSortingStrategy}>
                 {normalTabs.map((tab, i) => (
                   <Fragment key={tab.id}>

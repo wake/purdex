@@ -62,6 +62,12 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 		req.Cwd = "/"
 	}
 
+	// Check for duplicate session name
+	if m.tmux.HasSession(req.Name) {
+		http.Error(w, "session already exists: "+req.Name, http.StatusConflict)
+		return
+	}
+
 	// Create the tmux session
 	if err := m.tmux.NewSession(req.Name, req.Cwd); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
