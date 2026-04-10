@@ -40,6 +40,20 @@ export interface ConfigDef {
   defaultValue?: unknown
 }
 
+export interface CommandContribution {
+  id: string
+  name: string
+  command: string | ((ctx: CommandContext) => string)
+  icon?: string
+  category?: string
+}
+
+export interface CommandContext {
+  hostId: string
+  workspaceId?: string | null
+  moduleConfig?: Record<string, unknown>
+}
+
 export interface ModuleDefinition {
   id: string
   name: string
@@ -47,6 +61,7 @@ export interface ModuleDefinition {
   views?: ViewDefinition[]
   workspaceConfig?: ConfigDef[]
   globalConfig?: ConfigDef[]
+  commands?: CommandContribution[]
 }
 
 // === Registry ===
@@ -109,6 +124,10 @@ export function getModulesWithWorkspaceConfig(): ModuleDefinition[] {
 
 export function getModulesWithGlobalConfig(): ModuleDefinition[] {
   return [...modules.values()].filter((m) => m.globalConfig && m.globalConfig.length > 0)
+}
+
+export function getModulesWithCommands(): ModuleDefinition[] {
+  return [...modules.values()].filter((m) => m.commands && m.commands.length > 0)
 }
 
 export function clearModuleRegistry(): void {

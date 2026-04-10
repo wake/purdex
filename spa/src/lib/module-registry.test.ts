@@ -9,6 +9,7 @@ import {
   getViewsByRegion,
   getModulesWithWorkspaceConfig,
   getModulesWithGlobalConfig,
+  getModulesWithCommands,
   clearModuleRegistry,
 } from './module-registry'
 import type { ModuleDefinition } from './module-registry'
@@ -180,5 +181,31 @@ describe('workspaceConfig / globalConfig', () => {
     const result = getModulesWithGlobalConfig()
     expect(result).toHaveLength(1)
     expect(result[0].id).toBe('theme-mod')
+  })
+})
+
+describe('module-registry commands', () => {
+  it('getModulesWithCommands returns modules that have commands', () => {
+    registerModule({ id: 'no-cmds', name: 'No Commands' })
+    registerModule({
+      id: 'has-cmds',
+      name: 'Has Commands',
+      commands: [{ id: 'test', name: 'Test', command: 'echo test' }],
+    })
+    const result = getModulesWithCommands()
+    expect(result).toHaveLength(1)
+    expect(result[0].id).toBe('has-cmds')
+  })
+
+  it('supports function commands', () => {
+    registerModule({
+      id: 'dynamic',
+      name: 'Dynamic',
+      commands: [{ id: 'dyn', name: 'Dynamic', command: (ctx) => `cd ${ctx.moduleConfig?.path ?? '~'}` }],
+    })
+    const result = getModulesWithCommands()
+    expect(result).toHaveLength(1)
+    const cmd = result[0].commands![0]
+    expect(typeof cmd.command).toBe('function')
   })
 })
