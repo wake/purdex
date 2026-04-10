@@ -15,9 +15,9 @@ import { useRelayWsManager } from './hooks/useRelayWsManager'
 import { useMultiHostEventWs } from './hooks/useMultiHostEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
 import { useShortcuts } from './hooks/useShortcuts'
-import { openBrowserTab } from './lib/open-browser-tab'
 import './lib/browser-shortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
+import { useElectronIpc } from './hooks/useElectronIpc'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { isStandaloneTab } from './types/tab'
 import {
@@ -59,73 +59,7 @@ export default function App() {
   useRouteSync()
   useShortcuts()
   useNotificationDispatcher()
-
-  // --- Electron: signal SPA ready (replaces 500ms setTimeout) ---
-  useEffect(() => {
-    window.electronAPI?.signalReady()
-  }, [])
-
-  // --- Electron IPC: receive tab from tear-off/merge ---
-  useEffect(() => {
-    if (!window.electronAPI) return
-    return window.electronAPI.onTabReceived((tabJson: string, replace: boolean) => {
-      try {
-        const tab = JSON.parse(tabJson)
-        if (tab && tab.id && tab.layout) {
-          if (replace) {
-            // Tear-off: new window — clear persisted tabs, keep only the received one
-            useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
-          }
-          useTabStore.getState().addTab(tab)
-          useTabStore.getState().setActiveTab(tab.id)
-          // Restore workspace membership if receiving window has an active workspace
-          useWorkspaceStore.getState().insertTab(tab.id)
-        }
-      } catch { /* ignore malformed tab JSON */ }
-    })
-  }, [])
-
-  // --- Electron IPC: receive workspace from tear-off/merge ---
-  useEffect(() => {
-    if (!window.electronAPI?.onWorkspaceReceived) return
-    return window.electronAPI.onWorkspaceReceived((payload: string, replace: boolean) => {
-      try {
-        const { workspace, tabData } = JSON.parse(payload)
-        if (!workspace?.id || !Array.isArray(tabData)) return
-
-        // 校驗 tab ids
-        const tabMap = new Map(tabData.map((t: Tab) => [t.id, t]))
-        workspace.tabs = workspace.tabs.filter((id: string) => tabMap.has(id))
-
-        if (replace) {
-          useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
-          useWorkspaceStore.getState().reset()
-        }
-
-        for (const tab of tabData) {
-          if (tab?.id && tab?.layout) useTabStore.getState().addTab(tab)
-        }
-
-        useWorkspaceStore.getState().importWorkspace(workspace)
-        // Only force-switch workspace on tear-off (replace); merge adds silently
-        if (replace) {
-          useWorkspaceStore.getState().setActiveWorkspace(workspace.id)
-        }
-        const activeTab = (workspace.activeTabId && tabMap.has(workspace.activeTabId))
-          ? workspace.activeTabId
-          : workspace.tabs[0]
-        if (activeTab) useTabStore.getState().setActiveTab(activeTab)
-      } catch { /* ignore malformed payload */ }
-    })
-  }, [])
-
-  // --- Electron IPC: open browser tab from mini browser / WebContentsView link click ---
-  useEffect(() => {
-    if (!window.electronAPI?.onBrowserViewOpenInTab) return
-    return window.electronAPI.onBrowserViewOpenInTab((url: string) => {
-      openBrowserTab(url)
-    })
-  }, [])
+  useElectronIpc()
 
   // --- Derived state ---
   const activeTab = activeTabId ? tabs[activeTabId] : undefined
