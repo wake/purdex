@@ -14,10 +14,10 @@ registerBuiltinLocales()
 registerBuiltinThemes()
 registerBuiltinModules()
 
-// Only set defaults if not already persisted
-// Note: file-tree-session is a placeholder — do not set it as default for primary-panel
-const sidebarState = useLayoutStore.getState().regions['primary-sidebar']
-if (sidebarState.views.length === 0) {
+// Only set defaults if not already persisted (first install)
+const regions = useLayoutStore.getState().regions
+const hasAnyView = Object.values(regions).some((r) => r.views.length > 0)
+if (!hasAnyView) {
   useLayoutStore.getState().setRegionViews('primary-sidebar', ['file-tree-workspace'])
   useLayoutStore.getState().setActiveView('primary-sidebar', 'file-tree-workspace')
 }

@@ -4,6 +4,7 @@ import { SidebarRegion } from './SidebarRegion'
 import { useLayoutStore } from '../stores/useLayoutStore'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { List } from '@phosphor-icons/react'
+import { useTabStore } from '../stores/useTabStore'
 
 const DummyView = ({ isActive }: { isActive: boolean }) => (
   <div data-testid="dummy-view">{isActive ? 'active' : 'inactive'}</div>
@@ -18,7 +19,6 @@ function registerTestModule(id = 'test', viewId = 'test-view') {
       label: 'Test View',
       icon: List,
       scope: 'system',
-      defaultRegion: 'primary-sidebar',
       component: DummyView,
     }],
   })
@@ -26,13 +26,16 @@ function registerTestModule(id = 'test', viewId = 'test-view') {
 
 beforeEach(() => {
   useLayoutStore.setState(useLayoutStore.getInitialState())
+  useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
   clearModuleRegistry()
 })
 
 describe('SidebarRegion', () => {
-  it('renders nothing when collapsed and no views', () => {
+  it('renders collapsed bar with plus button when collapsed and no views', () => {
     const { container } = render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
-    expect(container.innerHTML).toBe('')
+    // Empty collapsed region still renders (with add-view-button), it no longer returns null
+    expect(container.innerHTML).not.toBe('')
+    expect(screen.getByTestId('add-view-button')).toBeInTheDocument()
   })
 
   it('renders collapsed bar when collapsed with views', () => {
@@ -99,5 +102,37 @@ describe('SidebarRegion', () => {
 
     fireEvent.click(collapseBtn)
     expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('collapsed')
+  })
+
+  it('renders empty pinned region with gear button', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', [])
+    useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
+    render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+    expect(screen.getByTestId('manage-button')).toBeInTheDocument()
+    expect(screen.getByText(/加入 views/i)).toBeInTheDocument()
+  })
+
+  it('renders collapsed empty region with plus button', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', [])
+    useLayoutStore.getState().setRegionMode('primary-sidebar', 'collapsed')
+    render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+    expect(screen.getByTestId('add-view-button')).toBeInTheDocument()
+  })
+
+  it('clicking plus on collapsed bar expands and opens manage mode', () => {
+    registerTestModule()
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['test-view'])
+    useLayoutStore.getState().setRegionMode('primary-sidebar', 'collapsed')
+    render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+    fireEvent.click(screen.getByTestId('add-view-button'))
+    expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('pinned')
+    expect(screen.getByTestId('region-manager')).toBeInTheDocument()
+  })
+
+  it('returns null when hidden regardless of views', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['test-view'])
+    useLayoutStore.getState().setRegionMode('primary-sidebar', 'hidden')
+    const { container } = render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+    expect(container.firstChild).toBeNull()
   })
 })

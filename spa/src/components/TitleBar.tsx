@@ -31,7 +31,7 @@ export function TitleBar({ title }: Props) {
     useTabStore.getState().applyLayout(activeTabId, pattern)
   }
 
-  const visibleToggles = regionToggles.filter((t) => regions[t.region].views.length > 0)
+  const visibleToggles = regionToggles
 
   return (
     <div
@@ -68,9 +68,7 @@ export function TitleBar({ title }: Props) {
           )
         })}
         {/* Separator */}
-        {visibleToggles.length > 0 && (
-          <div className="w-px h-3.5 bg-border-subtle mx-0.5" />
-        )}
+        <div className="w-px h-3.5 bg-border-subtle mx-0.5" />
         {/* Layout pattern buttons */}
         {patterns.map(({ pattern, icon: Icon, label }) => (
           <button
