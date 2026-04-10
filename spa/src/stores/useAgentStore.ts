@@ -47,7 +47,7 @@ export const useAgentStore = create<AgentState>()(
       subagents: {},
       lastEvents: {},
       unread: {},
-      tabIndicatorStyle: 'overlay' as TabIndicatorStyle,
+      tabIndicatorStyle: 'replace' as TabIndicatorStyle,
 
       handleNormalizedEvent: (hostId, sessionCode, event) => {
         const key = compositeKey(hostId, sessionCode)

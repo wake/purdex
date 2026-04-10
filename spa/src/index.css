@@ -6,6 +6,16 @@ body {
   background-color: var(--surface-primary);
 }
 
+/* All interactive elements default to pointer cursor */
+button,
+[role="tab"],
+[role="button"] {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+}
+
 /* Hide scrollbar for tab overflow */
 .scrollbar-hide {
   -ms-overflow-style: none;
