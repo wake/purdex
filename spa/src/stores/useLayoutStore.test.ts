@@ -91,24 +91,35 @@ describe('useLayoutStore', () => {
   })
 
   describe('toggleVisibility', () => {
-    it('toggles between hidden and pinned', () => {
-      // Start from collapsed, toggle visibility → hidden
-      useLayoutStore.getState().toggleVisibility('primary-sidebar')
-      expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('hidden')
-
-      // Toggle again → pinned
-      useLayoutStore.getState().toggleVisibility('primary-sidebar')
-      expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('pinned')
-
-      // Toggle again → hidden
-      useLayoutStore.getState().toggleVisibility('primary-sidebar')
-      expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('hidden')
-    })
-
-    it('hides a pinned region', () => {
+    it('hides a pinned region and remembers previousMode', () => {
       useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
       useLayoutStore.getState().toggleVisibility('primary-sidebar')
-      expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('hidden')
+      const region = useLayoutStore.getState().regions['primary-sidebar']
+      expect(region.mode).toBe('hidden')
+      expect(region.previousMode).toBe('pinned')
+    })
+
+    it('hides a collapsed region and remembers previousMode', () => {
+      // default is collapsed
+      useLayoutStore.getState().toggleVisibility('primary-sidebar')
+      const region = useLayoutStore.getState().regions['primary-sidebar']
+      expect(region.mode).toBe('hidden')
+      expect(region.previousMode).toBe('collapsed')
+    })
+
+    it('restores to previousMode when unhiding', () => {
+      useLayoutStore.getState().setRegionMode('primary-sidebar', 'collapsed')
+      useLayoutStore.getState().toggleVisibility('primary-sidebar') // hide
+      useLayoutStore.getState().toggleVisibility('primary-sidebar') // restore
+      const region = useLayoutStore.getState().regions['primary-sidebar']
+      expect(region.mode).toBe('collapsed')
+      expect(region.previousMode).toBeUndefined()
+    })
+
+    it('defaults to pinned when no previousMode', () => {
+      useLayoutStore.getState().setRegionMode('primary-sidebar', 'hidden')
+      useLayoutStore.getState().toggleVisibility('primary-sidebar')
+      expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('pinned')
     })
   })
 })

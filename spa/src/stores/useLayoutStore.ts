@@ -11,6 +11,7 @@ interface RegionState {
   activeViewId?: string
   width: number
   mode: 'pinned' | 'collapsed' | 'hidden'
+  previousMode?: 'pinned' | 'collapsed'
 }
 
 interface LayoutState {
@@ -76,9 +77,17 @@ export const useLayoutStore = create<LayoutState>()(
 
       toggleVisibility: (region) =>
         set((state) => {
-          const current = state.regions[region].mode
-          const next = current === 'hidden' ? 'pinned' : 'hidden'
-          return updateRegion(state, region, { mode: next })
+          const { mode, previousMode } = state.regions[region]
+          if (mode === 'hidden') {
+            return updateRegion(state, region, {
+              mode: previousMode ?? 'pinned',
+              previousMode: undefined,
+            })
+          }
+          return updateRegion(state, region, {
+            mode: 'hidden',
+            previousMode: mode,
+          })
         }),
     }),
     {
