@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.76] - 2026-04-10
+
+### 修正
+
+- **Topbar 標題置中**：改用 absolute 定位，以完整視窗寬度置中，不受右側按鈕影響 (#262)
+- **全域 cursor: pointer**：全域 CSS 規則讓所有 button、[role="tab"]、[role="button"] 預設顯示 pointer cursor (#263)
+- **Workspace icon 拖曳範圍限制**：restrictToVertical modifier 增加 Y 軸邊界計算，限制拖曳在列表範圍內 (#264)
+
+### 變更
+
+- **Tab Indicator Style 設定隱藏**：從 Settings UI 移除選項，預設改為 replace，保留 store 架構
+
 ## [1.0.0-alpha.75] - 2026-04-10
 
 ### 修正
