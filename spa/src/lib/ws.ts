@@ -28,21 +28,27 @@ export function connectTerminal(
       scheduleRetry()
       return
     }
+    if (closed) return
     setupWs(wsUrl)
   }
 
   function scheduleRetry() {
-    setTimeout(() => {
-      if (closed) return
-      if (canReconnect && !canReconnect()) {
-        // Gate closed — don't connect yet, but keep polling so we resume
-        // automatically once the host comes back online.
-        scheduleRetry()
-        return
-      }
-      connect()
-    }, retryMs)
+    const delay = retryMs
     retryMs = Math.min(retryMs * 2, 30000)
+    // Inner loop: poll at fixed `delay` while gate is closed, then connect
+    // once the gate opens.  backoff only advances on the next scheduleRetry
+    // call (i.e. after a real connection failure), not during gate polling.
+    function attempt() {
+      setTimeout(() => {
+        if (closed) return
+        if (canReconnect && !canReconnect()) {
+          attempt()
+          return
+        }
+        connect()
+      }, delay)
+    }
+    attempt()
   }
 
   function setupWs(wsUrl: string) {
