@@ -25,15 +25,30 @@ export function connectTerminal(
       u.searchParams.set('ticket', ticket)
       wsUrl = u.toString()
     } catch {
-      setTimeout(() => {
-        if (closed) return
-        if (canReconnect && !canReconnect()) return
-        connect()
-      }, retryMs)
-      retryMs = Math.min(retryMs * 2, 30000)
+      scheduleRetry()
       return
     }
+    if (closed) return
     setupWs(wsUrl)
+  }
+
+  function scheduleRetry() {
+    const delay = retryMs
+    retryMs = Math.min(retryMs * 2, 30000)
+    // Inner loop: poll at fixed `delay` while gate is closed, then connect
+    // once the gate opens.  backoff only advances on the next scheduleRetry
+    // call (i.e. after a real connection failure), not during gate polling.
+    function attempt() {
+      setTimeout(() => {
+        if (closed) return
+        if (canReconnect && !canReconnect()) {
+          attempt()
+          return
+        }
+        connect()
+      }, delay)
+    }
+    attempt()
   }
 
   function setupWs(wsUrl: string) {
@@ -51,12 +66,7 @@ export function connectTerminal(
     ws.onclose = () => {
       if (closed) return // manual close — don't notify or reconnect
       onClose()
-      setTimeout(() => {
-        if (closed) return
-        if (canReconnect && !canReconnect()) return // gate check
-        connect()
-      }, retryMs)
-      retryMs = Math.min(retryMs * 2, 30000)
+      scheduleRetry()
     }
   }
 

@@ -156,7 +156,7 @@ describe('connectTerminal auto-reconnect', () => {
 })
 
 describe('connectTerminal gate', () => {
-  it('does not reconnect when gate returns false', () => {
+  it('does not reconnect while gate returns false', () => {
     const gate = vi.fn().mockReturnValue(false)
     connectTerminal('ws://test', vi.fn(), vi.fn(), undefined, gate)
     wsInstances[0].simulateOpen()
@@ -174,6 +174,23 @@ describe('connectTerminal gate', () => {
 
     vi.advanceTimersByTime(1000)
     expect(wsInstances).toHaveLength(2) // reconnected — gate allowed
+  })
+
+  it('resumes reconnect when gate changes from false to true', () => {
+    let gateOpen = false
+    const gate = () => gateOpen
+    connectTerminal('ws://test', vi.fn(), vi.fn(), undefined, gate)
+    wsInstances[0].simulateOpen()
+    wsInstances[0].simulateClose()
+
+    // t=1s: 1st poll — gate closed, no WS created, polls again at same 1s interval
+    vi.advanceTimersByTime(1000)
+    expect(wsInstances).toHaveLength(1)
+
+    // Open gate; t=2s: 2nd poll — gate open, reconnects
+    gateOpen = true
+    vi.advanceTimersByTime(1000)
+    expect(wsInstances).toHaveLength(2) // reconnected after gate opened
   })
 })
 
@@ -199,11 +216,20 @@ describe('connectTerminal with getTicket', () => {
     expect(wsInstances[0].url).toContain('ticket=tk_retry')
   })
 
-  it('stops retrying when canReconnect returns false', async () => {
-    const getTicket = vi.fn().mockRejectedValue(new Error('401'))
-    connectTerminal('ws://test/ws/terminal/abc', vi.fn(), vi.fn(), undefined, () => false, getTicket)
+  it('keeps polling when canReconnect returns false, resumes when true', async () => {
+    let gateOpen = false
+    const getTicket = vi.fn().mockRejectedValueOnce(new Error('401')).mockResolvedValue('tk_ok')
+    connectTerminal('ws://test/ws/terminal/abc', vi.fn(), vi.fn(), undefined, () => gateOpen, getTicket)
     await vi.advanceTimersByTimeAsync(0)
+    // t=1s: 1st poll — gate closed, getTicket not called again, polls at same 1s interval
     await vi.advanceTimersByTimeAsync(1100)
-    expect(getTicket).toHaveBeenCalledTimes(1) // no retry
+    expect(getTicket).toHaveBeenCalledTimes(1)
+
+    // Open gate; t=2s: 2nd poll — gate open, retries getTicket
+    gateOpen = true
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(getTicket).toHaveBeenCalledTimes(2) // retried after gate opened
+    expect(wsInstances).toHaveLength(1)
+    expect(wsInstances[0].url).toContain('ticket=tk_ok')
   })
 })
