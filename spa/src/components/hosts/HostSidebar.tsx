@@ -8,6 +8,7 @@ const SUB_PAGES: { id: HostSubPage; labelKey: string }[] = [
   { id: 'overview', labelKey: 'hosts.overview' },
   { id: 'sessions', labelKey: 'hosts.sessions' },
   { id: 'hooks', labelKey: 'hosts.hooks' },
+  { id: 'agents', labelKey: 'hosts.agents' },
   { id: 'uploads', labelKey: 'hosts.uploads' },
 ]
 

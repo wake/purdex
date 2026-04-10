@@ -5,7 +5,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	agentpkg "github.com/wake/tmux-box/internal/agent"
@@ -368,4 +370,37 @@ func (m *Module) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 	alive := provider.IsAlive(tmuxName + ":")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"alive": alive})
+}
+
+// handleDetect handles GET /api/agents/detect.
+// Checks if agent CLIs (claude, codex) are available on the host.
+func (m *Module) handleDetect(w http.ResponseWriter, _ *http.Request) {
+	type agentInfo struct {
+		Installed bool   `json:"installed"`
+		Path      string `json:"path,omitempty"`
+		Version   string `json:"version,omitempty"`
+	}
+
+	detect := func(cmd string, versionArgs ...string) agentInfo {
+		path, err := exec.LookPath(cmd)
+		if err != nil {
+			return agentInfo{}
+		}
+		info := agentInfo{Installed: true, Path: path}
+		if len(versionArgs) > 0 {
+			out, err := exec.Command(path, versionArgs...).Output()
+			if err == nil {
+				info.Version = strings.TrimSpace(string(out))
+			}
+		}
+		return info
+	}
+
+	result := map[string]agentInfo{
+		"cc":    detect("claude", "--version"),
+		"codex": detect("codex", "--version"),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }

@@ -48,8 +48,8 @@ const TMUX_HOOKS: HookModule = {
 
 const CC_HOOKS: HookModule = {
   id: 'cc',
-  labelKey: 'hosts.agent_hooks',
-  descKey: 'hosts.agent_hooks_desc',
+  labelKey: 'hosts.cc_hooks',
+  descKey: 'hosts.cc_hooks_desc',
   fetchStatus: (hostId) => hookFetch(hostId, '/api/hooks/cc/status'),
   setup: (hostId, action) =>
     hookFetch(hostId, '/api/hooks/cc/setup', {
@@ -61,7 +61,7 @@ const CC_HOOKS: HookModule = {
     const prefix = `${hostId}:`
     const result: Record<string, number> = {}
     for (const [key, event] of Object.entries(events)) {
-      if (!key.startsWith(prefix)) continue
+      if (!key.startsWith(prefix) || event.agent_type !== 'cc') continue
       const existing = result[event.raw_event_name]
       if (!existing || event.broadcast_ts > existing) {
         result[event.raw_event_name] = event.broadcast_ts
@@ -71,4 +71,29 @@ const CC_HOOKS: HookModule = {
   },
 }
 
-export const HOOK_MODULES: HookModule[] = [TMUX_HOOKS, CC_HOOKS]
+const CODEX_HOOKS: HookModule = {
+  id: 'codex',
+  labelKey: 'hosts.codex_hooks',
+  descKey: 'hosts.codex_hooks_desc',
+  fetchStatus: (hostId) => hookFetch(hostId, '/api/hooks/codex/status'),
+  setup: (hostId, action) =>
+    hookFetch(hostId, '/api/hooks/codex/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    }),
+  getLastTrigger: (hostId, events) => {
+    const prefix = `${hostId}:`
+    const result: Record<string, number> = {}
+    for (const [key, event] of Object.entries(events)) {
+      if (!key.startsWith(prefix) || event.agent_type !== 'codex') continue
+      const existing = result[event.raw_event_name]
+      if (!existing || event.broadcast_ts > existing) {
+        result[event.raw_event_name] = event.broadcast_ts
+      }
+    }
+    return Object.keys(result).length > 0 ? result : null
+  },
+}
+
+export const HOOK_MODULES: HookModule[] = [TMUX_HOOKS, CC_HOOKS, CODEX_HOOKS]
