@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-alpha.74] - 2026-04-10
+
+### 修正
+
+- **Topbar region toggle**：從展開/收合改為完全顯示/隱藏，新增 `toggleVisibility` action (#259)
+- **Workspace module settings**：WorkspaceSettingsPage 加入 ModuleConfigSection，workspace 範圍模組設定現在可見 (#259)
+
 ## [1.0.0-alpha.73] - 2026-04-10
 
 Agent Module Provider Pattern 重構 (#247)
