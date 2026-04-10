@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0-alpha.77] - 2026-04-10
+
+Sidebar / Panel View Management (#266)
+
+### 新增
+
+- **Region 管理 UI**：每個 sidebar/panel 可自行管理啟用哪些 view、拖曳排序
+- **三個管理入口**：⚙ 按鈕（pinned header）、+ 按鈕（collapsed bar）、右鍵 context menu
+- **RegionManager 元件**：替換 region 內容的管理畫面，@dnd-kit drag-to-reorder
+- **RegionContextMenu 元件**：右鍵 checkbox 清單快速開關 view
+- **View scope 三層模型**：ViewDefinition.scope 支援 `'system' | 'workspace' | 'tab'`
+- **Layout Store 新 actions**：`addView`、`removeView`、`reorderViews`
+
+### 改善
+
+- **toggleVisibility 記憶狀態**：TitleBar toggle 隱藏後恢復時記住之前是 pinned 或 collapsed
+- **Region 空狀態**：空 region 仍渲染管理入口（不再完全消失）
+- **TitleBar**：始終顯示全部 4 個 region toggle 按鈕
+
+### 移除
+
+- `ViewDefinition.defaultRegion`（view 不再綁定特定 region）
+- `getViewsByRegion()` 查詢函式（改為 `getAllViews()`）
+- `WorkspaceSidebarState` 型別（未被使用）
+
 ## [1.0.0-alpha.76] - 2026-04-10
 
 ### 修正
