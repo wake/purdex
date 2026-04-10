@@ -58,7 +58,7 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
               <button
                 onClick={() => {
                   toggleExpand(hostId)
-                  if (!isExpanded) onSelect(hostId, 'overview')
+                  if (!isExpanded) onSelect(hostId, selectedSubPage)
                 }}
                 className={`w-full text-left px-2 py-1.5 rounded text-sm cursor-pointer flex items-center gap-1.5 ${
                   selectedHostId === hostId

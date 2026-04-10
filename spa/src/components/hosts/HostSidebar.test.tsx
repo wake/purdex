@@ -161,6 +161,23 @@ describe('HostSidebar', () => {
     expect(sessionsButtons.length).toBeGreaterThanOrEqual(1)
   })
 
+  it('preserves current subPage when expanding a collapsed host', () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Test Host', ip: '1.2.3.4', port: 7860, order: 0 },
+        [HOST_B]: { id: HOST_B, name: 'Second Host', ip: '5.6.7.8', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, HOST_B],
+      runtime: {},
+    })
+    // Current selectedSubPage is 'hooks'
+    render(<HostSidebar {...defaultProps} selectedSubPage="hooks" />)
+
+    // Click collapsed HOST_B — should call onSelect with 'hooks', not 'overview'
+    fireEvent.click(screen.getByText('Second Host'))
+    expect(defaultProps.onSelect).toHaveBeenCalledWith(HOST_B, 'hooks')
+  })
+
   it('auto-expands new selectedHostId on prop change (e.g. host deletion fallback)', () => {
     useHostStore.setState({
       hosts: {
