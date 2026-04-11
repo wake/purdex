@@ -48,7 +48,8 @@ export function TitleBar({ title }: Props) {
       />
       <div
         data-testid="layout-buttons"
-        className="shrink-0 flex items-center gap-0.5"
+        className="relative z-10 shrink-0 flex items-center gap-0.5"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         {/* Region toggles */}
         {visibleToggles.map(({ region, icon: Icon, label, mirror }) => {
@@ -56,7 +57,7 @@ export function TitleBar({ title }: Props) {
           return (
             <button
               key={region}
-              className={`p-1 rounded transition-colors cursor-pointer ${
+              className={`p-1 rounded transition-colors cursor-pointer! ${
                 isVisible
                   ? 'text-accent-base bg-accent-base/10 hover:bg-accent-base/20'
                   : 'text-text-muted hover:text-text-primary hover:bg-surface-hover'
@@ -76,7 +77,7 @@ export function TitleBar({ title }: Props) {
           <button
             key={pattern}
             disabled={!activeTabId}
-            className="p-1 rounded cursor-pointer text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:pointer-events-none"
+            className="p-1 rounded cursor-pointer! text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:pointer-events-none disabled:cursor-default!"
             title={label}
             onClick={() => handlePattern(pattern)}
           >
