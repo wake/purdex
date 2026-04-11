@@ -19,6 +19,9 @@ export function useWorkspaceWindowActions() {
   }, [workspaces, tabs])
 
   const removeWorkspaceFromStore = useCallback((tabIds: string[], wsId: string) => {
+    // Read fresh state via getState() to avoid stale closure after async IPC.
+    // The IPC await in handleWsTearOff/handleWsMergeTo may take long enough for
+    // store state to change; using closure values would cause lost updates.
     const { tabs: currentTabs, tabOrder: currentTabOrder } = useTabStore.getState()
     const newTabs = { ...currentTabs }
     const newTabOrder = currentTabOrder.filter(id => !tabIds.includes(id))
