@@ -58,9 +58,18 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Snapshot before any mutation so writeConfig failure can roll back the
+	// in-memory state, keeping c.Cfg and disk consistent. Shallow copy is
+	// sufficient because every mutation below replaces fields wholesale
+	// (slice headers reassigned, never appended into). Future fields must
+	// follow the same whole-field-assignment rule or rollback will break.
+	snapshot := *c.Cfg
+
 	detectChanged := false
 
-	// Apply updates — only the allowed fields
+	// Invariant: every mutation below must replace the field wholesale.
+	// Do NOT append into c.Cfg slices or write into c.Cfg maps — rollback
+	// relies on whole-field assignment to restore `snapshot` correctly.
 	if req.Stream != nil {
 		c.Cfg.Stream = *req.Stream
 	}
@@ -82,6 +91,7 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// Write back to config file
 	if c.CfgPath != "" {
 		if err := config.WriteFile(c.CfgPath, *c.Cfg); err != nil {
+			*c.Cfg = snapshot // rollback: preserve pointer identity for other goroutines
 			c.CfgMu.Unlock()
 			http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -102,4 +112,3 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cfg)
 }
-
