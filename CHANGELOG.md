@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.86] - 2026-04-12
+
+- fix(spa): force cursor pointer on TitleBar buttons (#297)
+
+### 修正
+
+- **TitleBar 按鈕 cursor pointer 強制生效**：#296 只把 `-webkit-app-region: drag` 從容器移到 spacer，但 absolute `inset-0 pointer-events-none` 的 title 層在 paint order 上仍高於未定位的 buttons（CSS positioned siblings 不論 DOM 順序皆覆於 non-positioned siblings 上），Electron/Chromium 的 cursor fall-through 在此情境下不穩。將 buttons 容器升入 positioned stacking layer（`relative z-10`）讓它確實畫在 title 之上、重新加回 `WebkitAppRegion: 'no-drag'` 雙保險、每顆 button 改用 Tailwind v4 的 `cursor-pointer!`（產生 `!important`）硬覆寫任何競爭的 cursor 規則，disabled 態對應 `disabled:cursor-default!`
+
 ## [1.0.0-alpha.85] - 2026-04-12
 
 - fix(spa): restore cursor pointer on TitleBar buttons (#296)
