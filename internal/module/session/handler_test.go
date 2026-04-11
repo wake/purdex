@@ -299,7 +299,11 @@ func TestHandlerCreateSessionConcurrentSameName(t *testing.T) {
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
 
-	const N = 50
+	// N chosen generously: FakeExecutor serializes each individual tmux
+	// op with its own mutex, so the handler-level TOCTOU window is just
+	// the scheduler gap between HasSession and NewSession. N=100 keeps
+	// the test reliably RED before the fix on modern multi-core hosts.
+	const N = 100
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	codes := make([]int, N)
@@ -342,6 +346,9 @@ func TestHandlerCreateSessionConcurrentSameName(t *testing.T) {
 	assert.Equal(t, 0, other, "no unexpected statuses")
 
 	// Underlying store must contain exactly one session named "dup".
+	// FakeExecutor.NewSession appends to sessionOrder on every call (it
+	// overwrites the sessions map but never dedupes the slice), so a
+	// lost race is deterministically visible here as length > 1.
 	sessions, err := mod.ListSessions()
 	require.NoError(t, err)
 	assert.Len(t, sessions, 1, "no duplicate session should exist in store")
