@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.81] - 2026-04-11
+
+fix: SubagentDots 燈號殘留 (5 root cause + 3 輪 review follow-up) (#283)
+
+### 修正
+
+- **Bug 0 (主因)**：移除 `Subagents` 的 `omitempty` tag，最後一筆 `SubagentStop` 永遠送 `subagents:[]`，前端不再卡住
+- **Bug 0b**：新增 `RenameSessionAtomic(old, new, doRename)` API，把 tmux + DB + in-memory rename 包進單一 lock，修復 rename 後 hook 用新名查空 map 的問題
+- **Bug 1**：新增 `useAgentStore.clearSession(hostId, code)` action，session-closed 時集中清理
+- **Bug 2**：`checkAliveAll` orphan 分支改用 `tmux.HasSession()` 二次確認，防止 `ListSessions` 暫時性失敗時誤刪
+- **Bug 3**：`SubagentStart` guard 改用 `events.Get + DeriveStatus(StatusClear)` 持久化 DB state，修復 daemon restart + compact `SessionStart` 邊界
+- **rename rollback**：`renameSessionAtomic` 改為 DB-first，tmux 失敗時 best-effort 回滾 DB，確保三方一致
+
 ## [1.0.0-alpha.80] - 2026-04-10
 
 fix: SubagentDots 相位同步 + terminal reconnect 自動恢復 (#279)
