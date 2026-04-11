@@ -111,16 +111,28 @@ export default function App() {
   } = useTabWorkspaceActions(displayTabs)
 
   const openWsSettings = useCallback((wsId: string) => {
-    openSingletonAndSelect({ kind: 'settings', scope: { workspaceId: wsId } })
+    openSingletonAndSelect({ kind: 'settings', scope: { workspaceId: wsId } }, wsId)
   }, [openSingletonAndSelect])
 
   // --- Workspace UI state ---
   const [wsContextMenu, setWsContextMenu] = useState<{ wsId: string; position: { x: number; y: number } } | null>(null)
   const [migrateDialog, setMigrateDialog] = useState<{ wsId: string; wsName: string } | null>(null)
 
-  const handleWsContextMenu = (e: React.MouseEvent, wsId: string) => {
+  const handleWsContextMenu = useCallback((e: React.MouseEvent, wsId: string) => {
     setWsContextMenu({ wsId, position: { x: e.clientX, y: e.clientY } })
-  }
+  }, [])
+
+  const handleReorderWorkspaces = useCallback((ids: string[]) => {
+    useWorkspaceStore.getState().reorderWorkspaces(ids)
+  }, [])
+
+  const handleCloseTabContextMenu = useCallback(() => {
+    setContextMenu(null)
+  }, [setContextMenu])
+
+  const handleCloseWsContextMenu = useCallback(() => {
+    setWsContextMenu(null)
+  }, [])
 
   const handleSelectHome = useCallback(() => {
     useWorkspaceStore.getState().setActiveWorkspace(null)
@@ -189,7 +201,7 @@ export default function App() {
             onSelectHome={handleSelectHome}
             standaloneTabIds={standaloneTabIds}
             onAddWorkspace={handleAddWorkspace}
-            onReorderWorkspaces={(ids) => useWorkspaceStore.getState().reorderWorkspaces(ids)}
+            onReorderWorkspaces={handleReorderWorkspaces}
             onContextMenuWorkspace={handleWsContextMenu}
             onOpenHosts={handleOpenHosts}
             onOpenSettings={handleOpenSettings}
@@ -229,7 +241,7 @@ export default function App() {
           <TabContextMenu
             tab={contextMenu.tab}
             position={contextMenu.position}
-            onClose={() => setContextMenu(null)}
+            onClose={handleCloseTabContextMenu}
             onAction={handleContextAction}
             hasOtherUnlocked={displayTabs.some((t) => t.id !== contextMenu.tab.id && !t.locked)}
             hasRightUnlocked={contextMenuHasRightUnlocked}
@@ -254,7 +266,7 @@ export default function App() {
             onSettings={() => openWsSettings(wsContextMenu.wsId)}
             onTearOff={window.electronAPI ? () => handleWsTearOff(wsContextMenu.wsId) : undefined}
             onMergeTo={window.electronAPI ? (targetWindowId) => handleWsMergeTo(wsContextMenu.wsId, targetWindowId) : undefined}
-            onClose={() => setWsContextMenu(null)}
+            onClose={handleCloseWsContextMenu}
           />
         )}
         {migrateDialog && (

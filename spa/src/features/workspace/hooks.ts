@@ -184,9 +184,9 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     setRenameError(undefined)
   }, [])
 
-  const openSingletonAndSelect = useCallback((content: PaneContent) => {
+  const openSingletonAndSelect = useCallback((content: PaneContent, wsId?: string) => {
     const tabId = useTabStore.getState().openSingletonTab(content)
-    useWorkspaceStore.getState().insertTab(tabId)
+    useWorkspaceStore.getState().insertTab(tabId, wsId)
     handleSelectTab(tabId)
     return tabId
   }, [handleSelectTab])
