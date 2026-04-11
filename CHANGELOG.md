@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.83] - 2026-04-12
+
+- fix: rollback in-memory config on writeConfig failure (#28) (#293)
+
+### 修正
+
+- **#28 atomic config update**：`internal/core/config_handler.go` 的 `handlePutConfig` 原本先更新記憶體 `c.Cfg`、再寫檔；若 `config.WriteFile` 失敗則回 500 但記憶體已變，造成執行中的 daemon 使用新設定、重啟後讀回舊設定的不一致。改在 mutation 前 `snapshot := *c.Cfg`，寫檔失敗時 `*c.Cfg = snapshot`（透過指標寫回，保留其他 goroutine 持有的 `c.Cfg` 指標身分），整段都在 `CfgMu.Lock` 範圍內；`NotifyConfigChange` 仍只在成功分支觸發
+- **新增 rollback 回歸測試**：`TestPutConfigRollsBackOnWriteFailure` 將 `CfgPath` 指向「父路徑是一般檔案」的位置，觸發 `MkdirAll` ENOTDIR（跨平台可靠、無需 chmod cleanup），驗證 500 + 錯誤訊息含 "not a directory"、Stream/Detect/Terminal 全數 rollback、callback 未觸發、`c.Cfg` 指標身分未變、rollback 後再發一次正常 PUT 仍可成功
+- **新增 invariant 註解**：snapshot 與 mutation block 各有一段註解明確要求所有 mutation 必須整個欄位指派，禁止 `append` 或 map in-place 寫入（shallow snapshot rollback 正確性的前提）
+
 ## [1.0.0-alpha.82] - 2026-04-12
 
 - fix: lock CfgMu when reading sizing mode in HandleTerminalWS (#26) (#292)
