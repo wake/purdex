@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.89] - 2026-04-12
+
+- fix(electron): restore renderer focus when backgrounding BrowserView (#301)
+
+### 修正
+
+- **切回 Terminal tab 後 terminal 無法 auto-focus**：使用者點過 Browser tab 的 `WebContentsView` 內容後，OS 鍵盤 focus 會留在那個 webContents；切回 Terminal tab 時 `BrowserPane` unmount → `closeBrowserView` → `BrowserViewManager.deactivate()` 只把 view 移到 off-screen，沒把 focus 交回主視窗 renderer，導致 `TerminalView` 在 visible-effect 中呼叫的 `termRef.current.focus()` 形同無效（DOM element focus 撈不到鍵盤輸入），使用者必須手動點一下 terminal 才能恢復輸入。修法在 `deactivate()` 移 off-screen 後呼叫 `entry.window.webContents.focus()` 把鍵盤 focus 交回 host renderer；以 `entry.window.isFocused()` 守衛避免 multi-window 場景搶奪其他 window 的 focus。後續在 #302/#303/#304 追蹤 destroy/discard 路徑、pop-out 流程、反向 activate focus 等延伸問題
+
 ## [1.0.0-alpha.88] - 2026-04-12
 
 - revert: undo ineffective TitleBar cursor-pointer attempts (#296, #297) (#299)
