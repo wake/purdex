@@ -41,6 +41,15 @@ func OpenMeta(path string) (*MetaStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open meta db: %w", err)
 	}
+	// :memory: is a test-only DSN (production always uses a file path from
+	// cfg.DataDir). Go's database/sql pool can open multiple connections to
+	// the same DSN, and each :memory: connection is an independent database
+	// — so a second pool connection would see an empty schema. Pin the pool
+	// to a single connection so all goroutines share the same in-memory DB.
+	// File-backed DBs are unaffected (WAL mode handles concurrency natively).
+	if path == ":memory:" {
+		db.SetMaxOpenConns(1)
+	}
 	if err := migrateMetaDB(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate meta db: %w", err)
@@ -187,4 +196,3 @@ func (m *MetaStore) ResetStaleModes() error {
 	_, err := m.db.Exec("UPDATE session_meta SET mode = 'terminal' WHERE mode != 'terminal'")
 	return err
 }
-

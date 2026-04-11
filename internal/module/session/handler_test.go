@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,8 +24,8 @@ func TestListSessionsMergesMeta(t *testing.T) {
 
 	// Set meta for first session only
 	require.NoError(t, meta.SetMeta("$0", store.SessionMeta{
-		TmuxID: "$0",
-		Mode:   "stream",
+		TmuxID:  "$0",
+		Mode:    "stream",
 		CCModel: "opus",
 	}))
 
@@ -287,6 +288,75 @@ func TestHandlerCreateSessionDuplicate(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "session already exists")
 }
 
+// TestHandlerCreateSessionConcurrentSameName asserts that N simultaneous POSTs
+// for the same session name result in exactly one 201 and N-1 409s, with no
+// duplicate entry in the underlying store. Without createMu, the
+// HasSession→NewSession TOCTOU window lets two (or more) creates slip past
+// the duplicate check and FakeExecutor appends repeat entries to sessionOrder,
+// which is deterministically visible via ListSessions length > 1.
+func TestHandlerCreateSessionConcurrentSameName(t *testing.T) {
+	mod, _, _ := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	// N chosen generously: FakeExecutor serializes each individual tmux
+	// op with its own mutex, so the handler-level TOCTOU window is just
+	// the scheduler gap between HasSession and NewSession. N=100 keeps
+	// the test reliably RED before the fix on modern multi-core hosts.
+	const N = 100
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	codes := make([]int, N)
+	bodies := make([]string, N)
+
+	for i := 0; i < N; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // release all goroutines simultaneously
+			req := httptest.NewRequest(
+				http.MethodPost, "/api/sessions",
+				strings.NewReader(`{"name":"dup","cwd":"/tmp"}`),
+			)
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+			codes[i] = w.Code
+			bodies[i] = w.Body.String()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	var created, conflict, other int
+	for i, c := range codes {
+		switch c {
+		case http.StatusCreated:
+			created++
+		case http.StatusConflict:
+			conflict++
+		default:
+			other++
+			t.Logf("unexpected status %d body=%q", c, bodies[i])
+		}
+	}
+	assert.Equal(t, 1, created, "exactly one request should succeed")
+	assert.Equal(t, N-1, conflict, "other requests should return 409")
+	assert.Equal(t, 0, other, "no unexpected statuses")
+
+	// Underlying store must contain exactly one session named "dup".
+	// FakeExecutor.NewSession appends to sessionOrder on every call (it
+	// overwrites the sessions map but never dedupes the slice), so a
+	// lost race is deterministically visible here as length > 1.
+	sessions, err := mod.ListSessions()
+	require.NoError(t, err)
+	assert.Len(t, sessions, 1, "no duplicate session should exist in store")
+	if len(sessions) == 1 {
+		assert.Equal(t, "dup", sessions[0].Name)
+	}
+}
+
 func TestHandlerCreateSessionInvalidName(t *testing.T) {
 	mod, _, _ := newTestModule(t)
 	mux := http.NewServeMux()
@@ -352,8 +422,8 @@ func TestRenameSessionAtomic_HardErrorNoAgentModule(t *testing.T) {
 
 // spyEventRenamer records Rename calls and can be configured to fail.
 type spyEventRenamer struct {
-	calls   [][2]string
-	failOn  string // if non-empty, Rename("old", "new") where old == failOn returns error
+	calls  [][2]string
+	failOn string // if non-empty, Rename("old", "new") where old == failOn returns error
 }
 
 func (s *spyEventRenamer) Rename(oldName, newName string) error {
