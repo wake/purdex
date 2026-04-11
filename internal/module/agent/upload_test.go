@@ -3,7 +3,6 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wake/tmux-box/internal/core"
-	"github.com/wake/tmux-box/internal/module/session"
 	"github.com/wake/tmux-box/internal/tmux"
 )
 
@@ -48,22 +46,8 @@ func TestCreateDedupFile(t *testing.T) {
 	assert.Equal(t, "README-1", got)
 }
 
-// --- fakeSessionProvider for upload handler tests ---
-
-type fakeSessionProvider struct{}
-
-func (f *fakeSessionProvider) ListSessions() ([]session.SessionInfo, error) {
-	return []session.SessionInfo{{Code: "my-sess", Name: "my-sess"}}, nil
-}
-func (f *fakeSessionProvider) GetSession(code string) (*session.SessionInfo, error) {
-	if code == "my-sess" {
-		return &session.SessionInfo{Code: "my-sess", Name: "my-sess"}, nil
-	}
-	return nil, fmt.Errorf("not found")
-}
-func (f *fakeSessionProvider) UpdateMeta(code string, update session.MetaUpdate) error { return nil }
-func (f *fakeSessionProvider) HandleTerminalWS(w http.ResponseWriter, r *http.Request, code string) {
-}
+// --- fakeSessionProvider for tests ---
+// Defined in handler_test.go (shared across test files in this package).
 
 // newUploadTestModule creates a Module with a fake session provider and tmux executor for upload tests.
 func newUploadTestModule(t *testing.T) (*Module, *tmux.FakeExecutor) {

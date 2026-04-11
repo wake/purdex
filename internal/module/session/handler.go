@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 
@@ -169,16 +170,9 @@ func (m *SessionModule) handleRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := m.tmux.RenameSession(info.Name, req.Name); err != nil {
+	if err := m.renameSessionAtomic(info.Name, req.Name); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-
-	// Update agent event store so stored events follow the new session name.
-	if svc, ok := m.core.Registry.Get("agent.events"); ok {
-		if renamer, ok := svc.(interface{ Rename(old, new string) error }); ok {
-			_ = renamer.Rename(info.Name, req.Name)
-		}
 	}
 
 	// Return updated info with new name
@@ -303,4 +297,67 @@ func (m *SessionModule) handleSendKeys(w http.ResponseWriter, r *http.Request) {
 func (m *SessionModule) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
 	m.HandleTerminalWS(w, r, code)
+}
+
+// agentEventsRenamer is the optional interface implemented by the agent
+// events store, used to rename stored events when a tmux session is renamed.
+type agentEventsRenamer interface {
+	Rename(oldName, newName string) error
+}
+
+// atomicRenamer is the optional interface implemented by the agent module,
+// used to perform tmux + DB + in-memory rename atomically under the agent
+// module's lock.
+type atomicRenamer interface {
+	RenameSessionAtomic(oldName, newName string, doRename func() error) error
+}
+
+// renameSessionAtomic runs the complete rename flow (tmux + agent events DB
+// + agent module in-memory state) atomically under the agent module's lock.
+//
+// Ordering: DB rename first, then tmux rename.  This ordering allows tmux
+// rename failure (the most likely failure mode — e.g. tmux server unavailable)
+// to trigger a best-effort DB rollback, since the DB UPDATE is trivially
+// reversible.  If the initial DB rename fails, no tmux state is mutated.
+//
+// The agent module MUST be registered at "agent.module" and implement
+// atomicRenamer — this is enforced at daemon startup, not a runtime fallback.
+func (m *SessionModule) renameSessionAtomic(oldName, newName string) error {
+	// Hard assert: agent module must be registered with the atomic rename API.
+	// Silent fallback would mask module initialization bugs.
+	svc, ok := m.core.Registry.Get("agent.module")
+	if !ok {
+		return errors.New("rename: agent.module not registered in service registry")
+	}
+	renamer, ok := svc.(atomicRenamer)
+	if !ok {
+		return errors.New("rename: agent.module does not implement atomicRenamer")
+	}
+
+	// Look up the optional DB renamer once, before entering the critical section.
+	var dbRenamer agentEventsRenamer
+	if svc, ok := m.core.Registry.Get("agent.events"); ok {
+		if r, ok := svc.(agentEventsRenamer); ok {
+			dbRenamer = r
+		}
+	}
+
+	doRename := func() error {
+		// DB first — reversible via UPDATE back to oldName.
+		if dbRenamer != nil {
+			if err := dbRenamer.Rename(oldName, newName); err != nil {
+				return err
+			}
+		}
+		// Tmux rename — if this fails, best-effort roll back the DB
+		// so the DB + in-memory + tmux state stay consistent.
+		if err := m.tmux.RenameSession(oldName, newName); err != nil {
+			if dbRenamer != nil {
+				_ = dbRenamer.Rename(newName, oldName)
+			}
+			return err
+		}
+		return nil
+	}
+	return renamer.RenameSessionAtomic(oldName, newName, doRename)
 }

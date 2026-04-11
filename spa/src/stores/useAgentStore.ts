@@ -33,6 +33,7 @@ interface AgentState {
 
   // Actions
   handleNormalizedEvent: (hostId: string, sessionCode: string, event: NormalizedEvent) => void
+  clearSession: (hostId: string, sessionCode: string) => void
   markRead: (hostId: string, sessionCode: string) => void
   removeHost: (hostId: string) => void
   setTabIndicatorStyle: (style: TabIndicatorStyle) => void
@@ -40,7 +41,7 @@ interface AgentState {
 
 export const useAgentStore = create<AgentState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       statuses: {},
       agentTypes: {},
       models: {},
@@ -49,25 +50,30 @@ export const useAgentStore = create<AgentState>()(
       unread: {},
       tabIndicatorStyle: 'replace' as TabIndicatorStyle,
 
+      clearSession: (hostId, sessionCode) => {
+        const key = compositeKey(hostId, sessionCode)
+        set((s) => {
+          const filterOut = <T,>(rec: Record<string, T>): Record<string, T> => {
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { [key]: _, ...rest } = rec
+            return rest
+          }
+          return {
+            statuses: filterOut(s.statuses),
+            agentTypes: filterOut(s.agentTypes),
+            models: filterOut(s.models),
+            subagents: filterOut(s.subagents),
+            lastEvents: filterOut(s.lastEvents),
+            unread: filterOut(s.unread),
+          }
+        })
+      },
+
       handleNormalizedEvent: (hostId, sessionCode, event) => {
         const key = compositeKey(hostId, sessionCode)
 
         if (event.status === 'clear') {
-          set((s) => {
-            const filterOut = <T,>(rec: Record<string, T>): Record<string, T> => {
-              // eslint-disable-next-line @typescript-eslint/no-unused-vars
-              const { [key]: _, ...rest } = rec
-              return rest
-            }
-            return {
-              statuses: filterOut(s.statuses),
-              agentTypes: filterOut(s.agentTypes),
-              models: filterOut(s.models),
-              subagents: filterOut(s.subagents),
-              lastEvents: filterOut(s.lastEvents),
-              unread: filterOut(s.unread),
-            }
-          })
+          get().clearSession(hostId, sessionCode)
           return
         }
 

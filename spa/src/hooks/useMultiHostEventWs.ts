@@ -118,6 +118,9 @@ export function useMultiHostEventWs() {
               }
               for (const code of closedCodes) {
                 useTabStore.getState().markTerminated(hostId, code, 'session-closed')
+                // Clear agent state (subagents, status, etc.) so indicators
+                // don't linger after the tmux session disappears.
+                useAgentStore.getState().clearSession(hostId, code)
               }
             } catch { /* ignore */ }
             return
