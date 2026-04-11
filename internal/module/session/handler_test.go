@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -330,6 +331,107 @@ func TestHandlerRenameSessionDuplicate(t *testing.T) {
 
 	assert.Equal(t, http.StatusConflict, w.Code)
 	assert.Contains(t, w.Body.String(), "session already exists")
+}
+
+// TestRenameSessionAtomic_HardErrorNoAgentModule verifies that when the
+// agent module is not registered, the rename helper returns a clear error
+// (hard-fail) instead of silently falling back to a partial rename.
+func TestRenameSessionAtomic_HardErrorNoAgentModule(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.AddSession("alpha", "/tmp")
+
+	// agent.module is deliberately NOT registered.
+	err := mod.renameSessionAtomic("alpha", "beta")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "agent.module not registered")
+
+	// tmux must NOT have been modified.
+	assert.True(t, fake.HasSession("alpha"))
+	assert.False(t, fake.HasSession("beta"))
+}
+
+// spyEventRenamer records Rename calls and can be configured to fail.
+type spyEventRenamer struct {
+	calls   [][2]string
+	failOn  string // if non-empty, Rename("old", "new") where old == failOn returns error
+}
+
+func (s *spyEventRenamer) Rename(oldName, newName string) error {
+	s.calls = append(s.calls, [2]string{oldName, newName})
+	if s.failOn != "" && oldName == s.failOn {
+		return errors.New("simulated DB rename failure")
+	}
+	return nil
+}
+
+// stubAtomicRenamer implements atomicRenamer by immediately running doRename.
+// No in-memory state to transfer in this test — we only care about doRename
+// behavior and rollback semantics.
+type stubAtomicRenamer struct{}
+
+func (stubAtomicRenamer) RenameSessionAtomic(oldName, newName string, doRename func() error) error {
+	return doRename()
+}
+
+// TestRenameSessionAtomic_RollbackOnTmuxFailure verifies that when tmux
+// rename fails after DB rename succeeded, the DB rename is rolled back
+// so all three layers (tmux, DB, in-memory) stay consistent.
+func TestRenameSessionAtomic_RollbackOnTmuxFailure(t *testing.T) {
+	mod, _, _ := newTestModule(t)
+	// Note: deliberately do NOT add "alpha" to fake → tmux.RenameSession
+	// will fail with ErrNoSession, triggering the rollback path.
+
+	spy := &spyEventRenamer{}
+	mod.core.Registry.Register("agent.events", spy)
+	mod.core.Registry.Register("agent.module", stubAtomicRenamer{})
+
+	err := mod.renameSessionAtomic("alpha", "beta")
+	require.Error(t, err)
+
+	// Expect two DB calls: forward rename + rollback
+	require.Len(t, spy.calls, 2, "expected DB rename + rollback, got %v", spy.calls)
+	assert.Equal(t, [2]string{"alpha", "beta"}, spy.calls[0], "first call should be forward rename")
+	assert.Equal(t, [2]string{"beta", "alpha"}, spy.calls[1], "second call should be rollback")
+}
+
+// TestRenameSessionAtomic_HappyPath verifies DB rename is called exactly once
+// when tmux rename succeeds (no rollback).
+func TestRenameSessionAtomic_HappyPath(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.AddSession("alpha", "/tmp")
+
+	spy := &spyEventRenamer{}
+	mod.core.Registry.Register("agent.events", spy)
+	mod.core.Registry.Register("agent.module", stubAtomicRenamer{})
+
+	err := mod.renameSessionAtomic("alpha", "beta")
+	require.NoError(t, err)
+
+	require.Len(t, spy.calls, 1, "expected single DB rename, got %v", spy.calls)
+	assert.Equal(t, [2]string{"alpha", "beta"}, spy.calls[0])
+	assert.True(t, fake.HasSession("beta"))
+	assert.False(t, fake.HasSession("alpha"))
+}
+
+// TestRenameSessionAtomic_DBRenameFailsNoTmuxChange verifies that when DB
+// rename fails first, tmux is never touched.
+func TestRenameSessionAtomic_DBRenameFailsNoTmuxChange(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.AddSession("alpha", "/tmp")
+
+	spy := &spyEventRenamer{failOn: "alpha"}
+	mod.core.Registry.Register("agent.events", spy)
+	mod.core.Registry.Register("agent.module", stubAtomicRenamer{})
+
+	err := mod.renameSessionAtomic("alpha", "beta")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "simulated DB rename failure")
+
+	// Only the forward attempt, no rollback (nothing to roll back).
+	require.Len(t, spy.calls, 1)
+	// tmux unchanged.
+	assert.True(t, fake.HasSession("alpha"))
+	assert.False(t, fake.HasSession("beta"))
 }
 
 func TestHandlerDeleteSession(t *testing.T) {

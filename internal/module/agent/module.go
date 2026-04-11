@@ -58,8 +58,9 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.sessions = svc.(session.SessionProvider)
 
-	// Expose event store so other modules (e.g. session rename) can update it.
+	// Expose event store and module so other modules (e.g. session rename) can update it.
 	c.Registry.Register("agent.events", m.events)
+	c.Registry.Register("agent.module", m)
 
 	if m.uploadDir == "" {
 		home, _ := os.UserHomeDir()
@@ -124,6 +125,54 @@ func (m *Module) Start(_ context.Context) error {
 
 // Stop is a no-op.
 func (m *Module) Stop(_ context.Context) error { return nil }
+
+// renameSessionLocked transfers in-memory agent state (subagents, currentStatus)
+// from oldName to newName.  CALLER MUST hold m.mu.
+func (m *Module) renameSessionLocked(oldName, newName string) {
+	if subs, ok := m.subagents[oldName]; ok {
+		m.subagents[newName] = subs
+		delete(m.subagents, oldName)
+	}
+	if status, ok := m.currentStatus[oldName]; ok {
+		m.currentStatus[newName] = status
+		delete(m.currentStatus, oldName)
+	}
+}
+
+// RenameSession transfers in-memory agent state from oldName to newName
+// under the module's lock.  Used by callers that don't need to coordinate
+// with other rename steps (e.g. tests).  Production callers should prefer
+// RenameSessionAtomic to make the rename atomic with tmux + DB updates.
+func (m *Module) RenameSession(oldName, newName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.renameSessionLocked(oldName, newName)
+}
+
+// RenameSessionAtomic runs doRename under the module's lock and then
+// transfers in-memory state from oldName to newName.  This makes the
+// entire rename (tmux + DB + in-memory) atomic from the perspective of
+// concurrent hook events: any handler that acquires m.mu while a rename
+// is in progress observes either the pre-rename or post-rename state,
+// never partial state.  If doRename returns an error, the in-memory
+// transfer is skipped and the error is propagated.
+//
+// Tradeoff: doRename is expected to include the tmux rename exec.Command,
+// which runs under the lock.  This can delay all concurrent hook handlers
+// by the duration of the tmux call (~50ms normally).  This is an intentional
+// choice: hook handlers are brief and renames are low-frequency (user-
+// triggered), so sacrificing a small amount of throughput during rename
+// in exchange for full atomicity is the right tradeoff.  doRename MUST NOT
+// call any method that acquires m.mu (would deadlock).
+func (m *Module) RenameSessionAtomic(oldName, newName string, doRename func() error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := doRename(); err != nil {
+		return err
+	}
+	m.renameSessionLocked(oldName, newName)
+	return nil
+}
 
 // replayFromDB rebuilds in-memory currentStatus from persisted events.
 func (m *Module) replayFromDB() {
@@ -218,6 +267,28 @@ func (m *Module) checkAliveAll(sub *core.EventSubscriber) {
 
 		code, ok := nameToCode[ev.TmuxSession]
 		if !ok {
+			// Not in current sessions list — could be a real orphan or
+			// a transient ListSessions inconsistency.  Use tmux.HasSession
+			// as the authoritative tiebreaker before deleting persistent
+			// state: this directly checks tmux session existence, unlike
+			// provider.IsAlive which only checks whether the CC/Codex
+			// process is the pane's current command (a user exiting CC
+			// in a live tmux session would wrongly trigger deletion).
+			//
+			// No broadcast is sent here: orphaned sessions have no code
+			// (resolveSessionCode would return ""), so the frontend cannot
+			// be notified by session code.  The frontend's session-closed
+			// detection (useMultiHostEventWs) handles this case via the
+			// sessions WS event, which fires whenever ListSessions output
+			// changes.
+			if m.core != nil && m.core.Tmux != nil && m.core.Tmux.HasSession(ev.TmuxSession) {
+				continue // transient — leave it alone
+			}
+			m.mu.Lock()
+			delete(m.currentStatus, ev.TmuxSession)
+			delete(m.subagents, ev.TmuxSession)
+			m.mu.Unlock()
+			_ = m.events.Delete(ev.TmuxSession)
 			continue
 		}
 		provider, ok := m.registry.Get(ev.AgentType)

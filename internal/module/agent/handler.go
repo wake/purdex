@@ -119,6 +119,26 @@ func (m *Module) handleSubagentEvent(tmuxSession, eventName string, result agent
 	if agentID == "" {
 		return
 	}
+	if eventName == "SubagentStart" {
+		// Guard: ignore SubagentStart for sessions whose latest persisted
+		// event indicates they're not active.  Two cases this rejects:
+		//   - No DB entry at all → session is unknown to the daemon
+		//     (also covers daemon restart with no replay state).
+		//   - Latest event is StatusClear (SessionEnd) → late hook arriving
+		//     after the session ended; should not re-populate state.
+		// Uses persistent DB state instead of in-memory currentStatus, so
+		// the guard survives daemon restarts and edge cases like compact
+		// SessionStart events that don't update currentStatus.
+		ev, _ := m.events.Get(tmuxSession)
+		if ev == nil {
+			return
+		}
+		if provider, ok := m.registry.Get(ev.AgentType); ok {
+			if r := provider.DeriveStatus(ev.EventName, ev.RawEvent); r.Status == agentpkg.StatusClear {
+				return
+			}
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if eventName == "SubagentStart" {
@@ -156,12 +176,10 @@ func (m *Module) buildNormalized(tmuxSession, eventName, agentType string, broad
 		AgentType:    agentType,
 		Status:       string(result.Status),
 		Model:        result.Model,
+		Subagents:    subs,
 		RawEventName: eventName,
 		BroadcastTs:  broadcastTs,
 		Detail:       result.Detail,
-	}
-	if len(subs) > 0 {
-		normalized.Subagents = subs
 	}
 	return normalized
 }

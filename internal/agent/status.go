@@ -24,7 +24,7 @@ type NormalizedEvent struct {
 	AgentType    string         `json:"agent_type"`
 	Status       string         `json:"status"`
 	Model        string         `json:"model,omitempty"`
-	Subagents    []string       `json:"subagents,omitempty"`
+	Subagents    []string       `json:"subagents"`
 	RawEventName string         `json:"raw_event_name"`
 	BroadcastTs  int64          `json:"broadcast_ts"`
 	Detail       map[string]any `json:"detail,omitempty"`

@@ -285,6 +285,31 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().models[`${H}:unknown`]).toBeUndefined()
   })
 
+  it('clearSession action wipes all keyed state for session', () => {
+    useAgentStore.setState({
+      statuses: { [`${H}:dev`]: 'idle', [`${H}:staging`]: 'running' },
+      agentTypes: { [`${H}:dev`]: 'cc' },
+      models: { [`${H}:dev`]: 'claude-sonnet-4-6' },
+      subagents: { [`${H}:dev`]: ['sub-1', 'sub-2'] },
+      lastEvents: { [`${H}:dev`]: { agent_type: 'cc', status: 'idle', raw_event_name: 'Stop', broadcast_ts: 1 } },
+      unread: { [`${H}:dev`]: true, [`${H}:staging`]: true },
+    })
+    useAgentStore.getState().clearSession(H, 'dev')
+    const state = useAgentStore.getState()
+
+    // dev session is wiped
+    expect(state.statuses[`${H}:dev`]).toBeUndefined()
+    expect(state.agentTypes[`${H}:dev`]).toBeUndefined()
+    expect(state.models[`${H}:dev`]).toBeUndefined()
+    expect(state.subagents[`${H}:dev`]).toBeUndefined()
+    expect(state.lastEvents[`${H}:dev`]).toBeUndefined()
+    expect(state.unread[`${H}:dev`]).toBeUndefined()
+
+    // staging preserved
+    expect(state.statuses[`${H}:staging`]).toBe('running')
+    expect(state.unread[`${H}:staging`]).toBe(true)
+  })
+
   it('clear status preserves other sessions', () => {
     useAgentStore.setState({
       statuses: { [`${H}:dev`]: 'idle', [`${H}:staging`]: 'running' },
