@@ -76,7 +76,7 @@ if err := config.WriteFile(c.CfgPath, *c.Cfg); err != nil {
 8. `c.Cfg` 指標身分未變（不是被整個換掉）— 透過比對操作前後 `c.Cfg` 指標相等驗證
 9. **recovery 測試**：rollback 後，將 `c.CfgPath` 改為正常可寫路徑後再發一次 PUT，必須 200 且狀態正確套用（確認 state 沒被破壞）
 
-**Cleanup**：測試結尾將目錄權限還原為 0700（否則 `t.TempDir()` cleanup 會失敗）。`t.Cleanup` 負責。
+**Cleanup**：無需額外處理。`t.TempDir()` 的 auto-cleanup 會清掉整個目錄（包含 blocker 檔與其下的失敗 config path）。
 
 ## Edge Cases
 

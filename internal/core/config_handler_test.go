@@ -287,9 +287,12 @@ func TestPutConfigRollsBackOnWriteFailure(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c.handlePutConfig(rec, req)
 
-	// 1. 500 returned with error message
+	// 1. 500 returned, and the error must contain a filesystem-y message so
+	//    future refactors can't swallow the real write error and still pass.
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Contains(t, rec.Body.String(), "failed to save config")
+	assert.Contains(t, rec.Body.String(), "not a directory",
+		"rollback must surface the underlying ENOTDIR, not a synthetic error")
 
 	// 2. In-memory state fully rolled back
 	c.CfgMu.RLock()

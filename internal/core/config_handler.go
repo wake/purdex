@@ -67,7 +67,9 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 
 	detectChanged := false
 
-	// Apply updates — only the allowed fields
+	// Invariant: every mutation below must replace the field wholesale.
+	// Do NOT append into c.Cfg slices or write into c.Cfg maps — rollback
+	// relies on whole-field assignment to restore `snapshot` correctly.
 	if req.Stream != nil {
 		c.Cfg.Stream = *req.Stream
 	}
