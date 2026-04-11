@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.82] - 2026-04-12
+
+- fix: lock CfgMu when reading sizing mode in HandleTerminalWS (#26) (#292)
+
+### 修正
+
+- **#26 race fix**：`internal/module/session/service.go` 的 `HandleTerminalWS` 讀取 `m.core.Cfg.Terminal.GetSizingMode()` 時未持 `CfgMu.RLock`，與 `handlePutConfig` 在 `CfgMu.Lock` 下寫入相同欄位產生 data race。改採 snapshot pattern：read lock 內取值後立即解鎖，仿 `internal/module/stream/handler.go:177-182` 既有 pattern
+- **新增 race 回歸測試**：`TestHandleTerminalWS_NoConfigRace`（50 reader × 20 iterations + 1 writer），於 `go test -race` 下驗證；修復前命中 DATA RACE，修復後通過。Test cleanup 用 `sync.Once + t.Cleanup` 確保 panic 時 writer goroutine 不 leak
+
 ## [1.0.0-alpha.81] - 2026-04-11
 
 - refactor: App.tsx 拆分 — 提取 hooks + 具名 callback (#282)
