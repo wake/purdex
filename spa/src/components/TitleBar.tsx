@@ -36,17 +36,19 @@ export function TitleBar({ title }: Props) {
   return (
     <div
       className="shrink-0 relative flex items-center bg-surface-secondary border-b border-border-subtle px-2"
-      style={{ height: 30, WebkitAppRegion: 'drag' } as React.CSSProperties}
+      style={{ height: 30 } as React.CSSProperties}
     >
       {/* Title — absolute positioned for true center across full window width */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
         <span className="text-xs text-text-muted truncate px-20">{title}</span>
       </div>
-      <div className="flex-1" />
+      <div
+        className="flex-1 self-stretch"
+        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+      />
       <div
         data-testid="layout-buttons"
         className="shrink-0 flex items-center gap-0.5"
-        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         {/* Region toggles */}
         {visibleToggles.map(({ region, icon: Icon, label, mirror }) => {
