@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.84] - 2026-04-12
+
+- fix(session): guard handleCreate with mutex against same-name race (#61) (#294)
+
+### 修正
+
+- **#61 handleCreate TOCTOU race**：`internal/module/session/handler.go:handleCreate` 原本從 `HasSession` 到 `SetMeta` 完全無鎖，兩個同名 POST 可以同時通過 duplicate check 然後各自呼叫 `NewSession`，在 FakeExecutor 上重現為 `sessionOrder` 重複 entry（確定性），在真實 tmux 上會讓第二次呼叫失敗並回傳 500 而非 409。新增 `SessionModule.createMu sync.Mutex`，`handleCreate` 於輸入驗證後 `Lock + defer Unlock`，涵蓋整段 `HasSession → NewSession → ListSessions → SetMeta` critical section。Watcher goroutines 不取此鎖，可能看到中間狀態但下一輪會自動修正（已追蹤為 #295）
+- **test infra — `:memory:` connection pool pinning**：`internal/store/meta.go:OpenMeta(":memory:")` 新增 `db.SetMaxOpenConns(1)`。Go `database/sql` 的 pool 可能對同一 DSN 開多條連線，而每條 `:memory:` 連線各自是一個獨立的空 DB，先前讓並發測試隨機打到 empty DB 出現 `no such table: session_meta`。只對 `:memory:` 路徑生效，production 使用 `cfg.DataDir/meta.db` 不受影響
+- **新增並發回歸測試**：`TestHandlerCreateSessionConcurrentSameName` 以 close-on-start barrier 釋放 N=100 個 goroutine 同時 POST 相同 session name，斷言恰好 1 個 201、99 個 409、`ListSessions()` 長度 == 1；於 `-race -count=20` 下穩定通過
+
 ## [1.0.0-alpha.83] - 2026-04-12
 
 - fix: rollback in-memory config on writeConfig failure (#28) (#293)
