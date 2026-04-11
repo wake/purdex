@@ -2,10 +2,20 @@
 
 ## [1.0.0-alpha.81] - 2026-04-11
 
-fix: SubagentDots 燈號殘留 (5 root cause + 3 輪 review follow-up) (#283)
+- refactor: App.tsx 拆分 — 提取 hooks + 具名 callback (#282)
+- fix: SubagentDots 燈號殘留 (5 root cause + 3 輪 review follow-up) (#283)
+
+### 重構
+
+- **App.tsx 409 → 286 行**：提取 `GlobalUndoToast` 為獨立元件、`useElectronIpc` hook（收納 4 個 IPC effect）、`useWorkspaceWindowActions` hook（workspace tear-off/merge）
+- **`openSingletonAndSelect`**：在 `useTabWorkspaceActions` 新增 helper 統一 4 處 singleton tab 開啟模式，支援可選 `wsId` 參數
+- **Inline lambda 全面具名化**：JSX 不再包含業務邏輯，所有 handler 提為 `useCallback`
+- Closes #202, #219, #225, #237, #243, #261, #281
 
 ### 修正
 
+- **#231**：`onWorkspaceReceived` catch 範圍縮窄，僅捕 `JSON.parse` 錯誤避免靜默吞掉 store mutation 錯誤
+- **`openWsSettings` cross-workspace**：修正右鍵非 active workspace 的 settings 時 tab 被插入錯誤 workspace
 - **Bug 0 (主因)**：移除 `Subagents` 的 `omitempty` tag，最後一筆 `SubagentStop` 永遠送 `subagents:[]`，前端不再卡住
 - **Bug 0b**：新增 `RenameSessionAtomic(old, new, doRename)` API，把 tmux + DB + in-memory rename 包進單一 lock，修復 rename 後 hook 用新名查空 map 的問題
 - **Bug 1**：新增 `useAgentStore.clearSession(hostId, code)` action，session-closed 時集中清理
