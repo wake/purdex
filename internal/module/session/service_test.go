@@ -63,6 +63,8 @@ func TestHandleTerminalWS_NoConfigRace(t *testing.T) {
 	require.NoError(t, err)
 
 	stop := make(chan struct{})
+	var stopOnce sync.Once
+	closeStop := func() { stopOnce.Do(func() { close(stop) }) }
 
 	// Writer goroutine: continuously flips SizingMode under CfgMu.
 	var writerWg sync.WaitGroup
@@ -83,21 +85,33 @@ func TestHandleTerminalWS_NoConfigRace(t *testing.T) {
 		}
 	}()
 
+	// Cleanup must run even if the test body panics, to prevent the writer
+	// goroutine from leaking into subsequent tests in the same package run.
+	t.Cleanup(func() {
+		closeStop()
+		writerWg.Wait()
+	})
+
 	// Reader goroutines: concurrently invoke HandleTerminalWS. The WS upgrade
 	// will fail because httptest.ResponseRecorder is not a Hijacker, but the
-	// racy read of Cfg.Terminal.SizingMode runs before the upgrade attempt.
+	// read of Cfg.Terminal.SizingMode (the field protected by the fix) runs
+	// before the upgrade attempt. Each goroutine loops several times so total
+	// reader activity is large enough to keep race-detector firing reliable
+	// on busy CI hardware.
 	var readerWg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		readerWg.Add(1)
 		go func() {
 			defer readerWg.Done()
-			req := httptest.NewRequest("GET", "/ws/terminal/"+code, nil)
-			rec := httptest.NewRecorder()
-			mod.HandleTerminalWS(rec, req, code)
+			for j := 0; j < 20; j++ {
+				req := httptest.NewRequest("GET", "/ws/terminal/"+code, nil)
+				rec := httptest.NewRecorder()
+				mod.HandleTerminalWS(rec, req, code)
+			}
 		}()
 	}
 
 	readerWg.Wait()
-	close(stop)
+	closeStop()
 	writerWg.Wait()
 }
