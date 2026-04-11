@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.87] - 2026-04-12
+
+- fix(electron): restore Toggle Developer Tools in View menu (#298)
+
+### 修正
+
+- **DevTools 快捷鍵失效**：`electron/keybindings.ts:buildMenuTemplate` 的 View menu 只收錄 `byCategory.get('View')` 的自訂項目，完全沒有 `role: 'toggleDevTools'`，自訂 menu 一旦 `Menu.setApplicationMenu` 取代預設 menu，Electron 內建的 `Cmd+Option+I` 就一併遺失。在 View submenu 尾端補上 separator + `{ role: 'toggleDevTools' }`，Electron 自動綁回預設 accelerator，`Cmd+Option+I` 與 View → Toggle Developer Tools 都可打開 DevTools
+
 ## [1.0.0-alpha.86] - 2026-04-12
 
 - fix(spa): force cursor pointer on TitleBar buttons (#297)
