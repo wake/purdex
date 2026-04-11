@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.88] - 2026-04-12
+
+- revert: undo ineffective TitleBar cursor-pointer attempts (#296, #297) (#299)
+
+### 回退
+
+- **TitleBar 右側按鈕 pointer cursor 問題無法用 CSS 解決**：`#296`（把 `-webkit-app-region: drag` 移到 flex spacer）與 `#297`（加 `relative z-10` + `cursor-pointer!` important）都已用 Electron DevTools 驗證對 macOS OS 游標毫無影響 — computed cursor 已經是 `pointer !important`，問題出在 Electron 上游（[electron/electron#5723](https://github.com/electron/electron/issues/5723)、[#21632](https://github.com/electron/electron/issues/21632)）：`titleBarStyle: 'hiddenInset'` 下 NSWindow 仍保留頂部 ~38px 的 title bar 區域並攔截 Chromium 的 cursor update，但 click event 正常。將 `spa/src/components/TitleBar.tsx` 回退到 `#296` 之前的狀態，避免保留無效的 dead code；真正的修復（結構性繞開，仿 VSCode 把按鈕放到 tracking zone 以外）改由 #300 追蹤，標 `pending` 暫擱
+
 ## [1.0.0-alpha.87] - 2026-04-12
 
 - fix(electron): restore Toggle Developer Tools in View menu (#298)
