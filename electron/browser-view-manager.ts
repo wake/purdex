@@ -260,8 +260,13 @@ export class BrowserViewManager {
     // the user clicked into the BrowserView, OS-level focus stays with that
     // WebContents even after it's moved off-screen, so the SPA's focus() calls
     // (e.g. TerminalView auto-focus on re-show) have no effect until the user
-    // clicks the main window.
-    if (!entry.window.isDestroyed() && !entry.window.webContents.isDestroyed()) {
+    // clicks the main window. Guarded on window.isFocused() so we never steal
+    // focus from another window — only return it within an already-active one.
+    if (
+      !entry.window.isDestroyed() &&
+      !entry.window.webContents.isDestroyed() &&
+      entry.window.isFocused()
+    ) {
       entry.window.webContents.focus()
     }
 
