@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/wake/tmux-box/internal/core"
 	"github.com/wake/tmux-box/internal/store"
@@ -19,6 +20,10 @@ type SessionModule struct {
 	cancelWatch context.CancelFunc
 	wstate      watcherState
 	waitForGate chan bool
+	// createMu serializes handleCreate's HasSession→NewSession→SetMeta
+	// critical section so two concurrent POSTs with the same name can't
+	// both slip past the duplicate check. See #61.
+	createMu sync.Mutex
 }
 
 // NewSessionModule creates a SessionModule with the given MetaStore.
@@ -26,7 +31,7 @@ func NewSessionModule(meta *store.MetaStore) *SessionModule {
 	return &SessionModule{meta: meta}
 }
 
-func (m *SessionModule) Name() string         { return "session" }
+func (m *SessionModule) Name() string           { return "session" }
 func (m *SessionModule) Dependencies() []string { return nil }
 
 func (m *SessionModule) Init(c *core.Core) error {

@@ -76,6 +76,12 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Serialize the HasSession→NewSession→SetMeta critical section so two
+	// concurrent POSTs with the same name can't both slip past the duplicate
+	// check. Input validation stays outside the lock.
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+
 	// Check for duplicate session name
 	if m.tmux.HasSession(req.Name) {
 		http.Error(w, "session already exists: "+req.Name, http.StatusConflict)

@@ -41,6 +41,12 @@ func OpenMeta(path string) (*MetaStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open meta db: %w", err)
 	}
+	// With :memory: every fresh connection gets an independent in-memory
+	// database. Pin the pool to a single connection so all goroutines share
+	// the same DB — required for any concurrent test that touches :memory:.
+	if path == ":memory:" {
+		db.SetMaxOpenConns(1)
+	}
 	if err := migrateMetaDB(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate meta db: %w", err)
@@ -187,4 +193,3 @@ func (m *MetaStore) ResetStaleModes() error {
 	_, err := m.db.Exec("UPDATE session_meta SET mode = 'terminal' WHERE mode != 'terminal'")
 	return err
 }
-
