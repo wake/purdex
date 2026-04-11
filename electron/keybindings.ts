@@ -137,7 +137,11 @@ export function buildMenuTemplate(
 
   const viewMenu: MenuItemConstructorOptions = {
     label: 'View',
-    submenu: [...(byCategory.get('View') ?? [])],
+    submenu: [
+      ...(byCategory.get('View') ?? []),
+      { type: 'separator' as const },
+      { role: 'toggleDevTools' as const },
+    ],
   }
 
   const editMenu: MenuItemConstructorOptions = {
