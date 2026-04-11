@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.85] - 2026-04-12
+
+- fix(spa): restore cursor pointer on TitleBar buttons (#296)
+
+### 修正
+
+- **TitleBar 右側按鈕無 pointer cursor**：原本 `spa/src/components/TitleBar.tsx` 最外層容器帶 `-webkit-app-region: drag`，Chromium 對 drag region 的所有子孫強制使用預設游標，即便按鈕 container 已設 `no-drag` 也無法覆寫 `cursor-pointer`。改為最外層不帶 drag、另外插入一個 `flex-1 self-stretch` spacer 承擔 `WebkitAppRegion: 'drag'`，讓右側按鈕脫離 drag region 祖先鏈；視窗拖曳行為由 spacer 提供，置中標題仍以 `absolute inset-0 pointer-events-none` 跨滿整條 bar
+
 ## [1.0.0-alpha.84] - 2026-04-12
 
 - fix(session): guard handleCreate with mutex against same-name race (#61) (#294)
