@@ -131,10 +131,13 @@ func (m *SessionModule) HandleTerminalWS(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	// Determine sizing mode from config (default to "auto" if no config).
+	// Snapshot sizing mode under read lock to avoid race with handlePutConfig
+	// (config_handler.go writes Terminal.SizingMode under CfgMu.Lock).
 	sizingMode := "auto"
 	if m.core != nil && m.core.Cfg != nil {
+		m.core.CfgMu.RLock()
 		sizingMode = m.core.Cfg.Terminal.GetSizingMode()
+		m.core.CfgMu.RUnlock()
 	}
 
 	// Build tmux attach-session command and args.
