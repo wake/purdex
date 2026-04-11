@@ -57,3 +57,85 @@ describe('workspace tab recall', () => {
     expect(useTabStore.getState().activeTabId).toBe(tab2.id)
   })
 })
+
+describe('openSingletonAndSelect', () => {
+  beforeEach(() => {
+    useWorkspaceStore.getState().reset()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  })
+
+  it('creates singleton tab, inserts into active workspace, and selects it', () => {
+    const ws = useWorkspaceStore.getState().addWorkspace('WS1')
+    useWorkspaceStore.getState().setActiveWorkspace(ws.id)
+
+    const { result } = renderHook(() => useTabWorkspaceActions([]))
+
+    let tabId: string
+    act(() => {
+      tabId = result.current.openSingletonAndSelect({ kind: 'hosts' })
+    })
+
+    // Tab was created
+    expect(useTabStore.getState().tabs[tabId!]).toBeDefined()
+    // Tab is active
+    expect(useTabStore.getState().activeTabId).toBe(tabId!)
+    // Tab is in workspace
+    const updatedWs = useWorkspaceStore.getState().workspaces.find(w => w.id === ws.id)
+    expect(updatedWs!.tabs).toContain(tabId!)
+    // Workspace active tab is set
+    expect(updatedWs!.activeTabId).toBe(tabId!)
+  })
+
+  it('reuses existing singleton tab instead of creating duplicate', () => {
+    const ws = useWorkspaceStore.getState().addWorkspace('WS1')
+    useWorkspaceStore.getState().setActiveWorkspace(ws.id)
+
+    const { result } = renderHook(() => useTabWorkspaceActions([]))
+
+    let tabId1: string
+    let tabId2: string
+    act(() => {
+      tabId1 = result.current.openSingletonAndSelect({ kind: 'hosts' })
+    })
+    act(() => {
+      tabId2 = result.current.openSingletonAndSelect({ kind: 'hosts' })
+    })
+
+    expect(tabId1!).toBe(tabId2!)
+    expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(1)
+  })
+
+  it('works without active workspace (standalone tabs)', () => {
+    const { result } = renderHook(() => useTabWorkspaceActions([]))
+
+    let tabId: string
+    act(() => {
+      tabId = result.current.openSingletonAndSelect({ kind: 'settings', scope: 'global' })
+    })
+
+    expect(useTabStore.getState().tabs[tabId!]).toBeDefined()
+    expect(useTabStore.getState().activeTabId).toBe(tabId!)
+  })
+
+  it('inserts tab into explicit wsId even when a different workspace is active', () => {
+    const wsA = useWorkspaceStore.getState().addWorkspace('WS-A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('WS-B')
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+
+    const { result } = renderHook(() => useTabWorkspaceActions([]))
+
+    let tabId: string
+    act(() => {
+      tabId = result.current.openSingletonAndSelect(
+        { kind: 'settings', scope: { workspaceId: wsB.id } },
+        wsB.id,
+      )
+    })
+
+    // Tab should be inserted into wsB, NOT the active wsA
+    const updatedWsB = useWorkspaceStore.getState().workspaces.find(w => w.id === wsB.id)
+    const updatedWsA = useWorkspaceStore.getState().workspaces.find(w => w.id === wsA.id)
+    expect(updatedWsB!.tabs).toContain(tabId!)
+    expect(updatedWsA!.tabs).not.toContain(tabId!)
+  })
+})

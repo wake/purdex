@@ -5,7 +5,7 @@ import { createTab } from '../../types/tab'
 import { getPrimaryPane } from '../../lib/pane-tree'
 import { renameSession } from '../../lib/host-api'
 import { destroyBrowserViewIfNeeded } from '../../lib/browser-cleanup'
-import type { Tab } from '../../types/tab'
+import type { Tab, PaneContent } from '../../types/tab'
 import type { ContextMenuAction } from '../../components/TabContextMenu'
 
 export function useTabWorkspaceActions(displayTabs: Tab[]) {
@@ -184,6 +184,13 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     setRenameError(undefined)
   }, [])
 
+  const openSingletonAndSelect = useCallback((content: PaneContent, wsId?: string) => {
+    const tabId = useTabStore.getState().openSingletonTab(content)
+    useWorkspaceStore.getState().insertTab(tabId, wsId)
+    handleSelectTab(tabId)
+    return tabId
+  }, [handleSelectTab])
+
   // Context menu derived state
   const contextMenuHasRightUnlocked = (() => {
     if (!contextMenu) return false
@@ -209,5 +216,6 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     handleRenameConfirm,
     handleRenameCancel,
     handleClearRenameError,
+    openSingletonAndSelect,
   }
 }
