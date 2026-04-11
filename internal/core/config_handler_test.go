@@ -254,3 +254,66 @@ func TestRegisterCoreRoutesIncludesConfigEndpoints(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	assert.NotEqual(t, http.StatusNotFound, rec.Code)
 }
+
+// TestPutConfigRollsBackOnWriteFailure verifies that when writeConfig fails,
+// in-memory state is restored so memory and disk stay consistent.
+func TestPutConfigRollsBackOnWriteFailure(t *testing.T) {
+	// Use a regular file as the parent of CfgPath. Any WriteFile attempt
+	// (including MkdirAll on the parent) returns ENOTDIR — portable across
+	// macOS/Linux/CI, no chmod cleanup required.
+	tmpDir := t.TempDir()
+	blocker := filepath.Join(tmpDir, "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0644))
+
+	c := newTestCore()
+	c.CfgPath = filepath.Join(blocker, "config.toml") // parent is a file → ENOTDIR
+
+	// Capture original state for rollback assertions.
+	originalPresets := append([]config.Preset(nil), c.Cfg.Stream.Presets...)
+	originalCCCommands := append([]string(nil), c.Cfg.Detect.CCCommands...)
+	originalPollInterval := c.Cfg.Detect.PollInterval
+	originalSizingMode := c.Cfg.Terminal.SizingMode
+	originalCfgPtr := c.Cfg
+
+	var callbackCalled int
+	c.OnConfigChange(func() { callbackCalled++ })
+
+	body := `{
+		"stream":{"presets":[{"name":"new","command":"new-cmd"}]},
+		"detect":{"cc_commands":["aider"],"poll_interval":99},
+		"terminal":{"sizing_mode":"terminal-first"}
+	}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	// 1. 500 returned with error message
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, rec.Body.String(), "failed to save config")
+
+	// 2. In-memory state fully rolled back
+	c.CfgMu.RLock()
+	assert.Equal(t, originalPresets, c.Cfg.Stream.Presets, "Stream.Presets must be rolled back")
+	assert.Equal(t, originalCCCommands, c.Cfg.Detect.CCCommands, "Detect.CCCommands must be rolled back")
+	assert.Equal(t, originalPollInterval, c.Cfg.Detect.PollInterval, "Detect.PollInterval must be rolled back")
+	assert.Equal(t, originalSizingMode, c.Cfg.Terminal.SizingMode, "Terminal.SizingMode must be rolled back")
+	c.CfgMu.RUnlock()
+
+	// 3. OnConfigChange callback must NOT fire on failed write
+	assert.Equal(t, 0, callbackCalled, "OnConfigChange must not fire when rollback occurs")
+
+	// 4. c.Cfg pointer identity preserved (other goroutines hold this pointer)
+	assert.Same(t, originalCfgPtr, c.Cfg, "c.Cfg pointer must not be swapped")
+
+	// 5. Recovery: state is not corrupted — a subsequent successful PUT works.
+	tmpDir2 := t.TempDir()
+	c.CfgPath = filepath.Join(tmpDir2, "config.toml")
+	body2 := `{"detect":{"cc_commands":["aider"]}}`
+	req2 := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body2))
+	rec2 := httptest.NewRecorder()
+	c.handlePutConfig(rec2, req2)
+	assert.Equal(t, http.StatusOK, rec2.Code)
+	c.CfgMu.RLock()
+	assert.Equal(t, []string{"aider"}, c.Cfg.Detect.CCCommands)
+	c.CfgMu.RUnlock()
+}
