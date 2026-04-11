@@ -256,6 +256,20 @@ export class BrowserViewManager {
     // Move off-screen
     entry.view.setBounds({ x: -10000, y: -10000, width: 1, height: 1 })
 
+    // Return keyboard focus to the host window's renderer. Without this, if
+    // the user clicked into the BrowserView, OS-level focus stays with that
+    // WebContents even after it's moved off-screen, so the SPA's focus() calls
+    // (e.g. TerminalView auto-focus on re-show) have no effect until the user
+    // clicks the main window. Guarded on window.isFocused() so we never steal
+    // focus from another window — only return it within an already-active one.
+    if (
+      !entry.window.isDestroyed() &&
+      !entry.window.webContents.isDestroyed() &&
+      entry.window.isFocused()
+    ) {
+      entry.window.webContents.focus()
+    }
+
     // Start idle timer
     this.startIdleTimer(paneId)
 
