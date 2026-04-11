@@ -2,17 +2,18 @@
 
 **Date:** 2026-04-12
 **Status:** Draft
-**Scope:** Daemon 可靠性與 UX 小改進（三個相關議題合併）
+**Scope:** Daemon 可靠性與 UX 小改進（四個相關議題合併）
 
 ## 背景
 
 目前 `tbox serve` 只能 foreground 啟動，使用者每次都要自己處理 detach（`nohup`、`&`、tmux session 等）。此外最近發生過一次 daemon crash 但沒有任何 log 可追查，前端在 daemon 復活重連後也留著舊的 "Failed to fetch" 錯誤訊息不清。
 
-本 spec 合併處理三個小而相關的改動：
+本 spec 合併處理四個小而相關的改動：
 
 1. 內建 `start/stop/status` 子命令，daemon 可背景啟動
 2. Crash log（兩層防護）+ per-host Logs 子頁查看
 3. Reconnect 後清除 stale `testResult`
+4. Agent state transition trace（daemon + frontend 雙側，解決 SubagentDots 類型的 silent miss 難以追查）
 
 ## 議題 1：`tbox start/stop/status` 子命令
 
@@ -150,7 +151,70 @@ useEffect(() => {
 - 改 `runtime.status = 'connected'`
 - 斷言 `testResult` 相關 UI 消失
 
-## 議題 2 UI：Per-Host Logs 子頁
+## 議題 4：Agent State Transition Trace
+
+### 問題背景
+
+PR #283（`fix/subagent-dots-stuck`）修了 5 個 root cause，散落在 daemon 與 frontend 兩側。這類「燈號卡住」問題的共同特徵是 **silent miss**：某個 event 該觸發更新但沒觸發（omitempty 省略、guard 誤擋、session rename 查錯 key、late event 在 clear 後重新污染）。只靠「最終狀態」debug 非常困難，需要完整的狀態轉換流水帳才能定位。
+
+### 雙側 trace
+
+由於狀態轉換橫跨 daemon 與 frontend，純 daemon log 無法覆蓋 frontend-only 的 race。兩側各有一條 trace，都收進 per-host Logs 子頁。
+
+### Daemon 側：`<cfg.DataDir>/logs/agent-state.log`
+
+NDJSON 格式，每個 mutation 一行。欄位：
+
+| 欄位 | 說明 |
+|------|------|
+| `ts` | RFC3339Nano 時間戳 |
+| `seq` | 從 `agent_events` DB 取的遞增序號（跨源對齊用） |
+| `session_code` | session code；若 `nameToCode` 對應失敗則為 `null` 並在 `tmux_session` 記 raw name |
+| `tmux_session` | tmux session 名稱 |
+| `source` | `hook` / `api` / `replay` / `check_alive` / `rename` |
+| `event` | 原始 hook event type（`SessionStart` / `SubagentStart` / `SubagentStop` / `StatusClear` / …） |
+| `trigger` | 人類可讀描述，例如 `"hook SubagentStop name=researcher"` |
+| `pre` | `{ status, subagents: [...], valid }` — mutation 前的快照 |
+| `post` | `{ status, subagents: [...], valid }` — mutation 後的快照 |
+| `diff` | 計算過的 delta（`added` / `removed` / `status_changed`），方便視覺 scan |
+| `broadcast` | `{ sent: bool, clients: N, payload: <normalized event> }` |
+| `guard` | 若 mutation 被 guard 擋下（如 Bug 3 的 StatusClear guard），記擋住的原因；否則 `null` |
+| `goroutine` | goroutine id（並發定位） |
+
+**關鍵：被 guard 跳過的 case 也必須記錄**。Silent miss 最容易漏的就是這個點 —「沒做任何事」本身也是一個 trace event。
+
+**寫入點收斂**：`internal/module/agent/handler.go` 每個 mutation path 統一呼叫 `m.logStateTransition(before, after, source, event, broadcast, guard)` helper，在 `m.mu` 內執行，確保 pre/post 一致性。
+
+**Rotation**：單檔 5MB，保留 5 份（比 `tbox.log` 嚴，避免 log spam）。
+
+### Frontend 側：in-memory ring buffer
+
+`spa/src/stores/useAgentStore.ts` 每個 mutation 寫入一個固定大小 ring buffer（500 筆），欄位對應 daemon 側但 source 分：
+
+- `ws-event`（收到 daemon 廣播的 normalized event）
+- `session-closed`（前端偵測 session 關閉觸發 clearSession）
+- `clear`（主動清除）
+- `replay-on-reconnect`（WS reconnect 後收到 replay event）
+
+Ring buffer 不持久化（daemon 重啟會 reset，但它只是 debug 工具不需要）。
+
+透過 per-host Logs 子頁提供 **"Export Frontend Trace"** 按鈕，dump 成 JSON 檔下載，方便貼回 GitHub issue。
+
+### API
+
+- `GET /api/agent-state-log?tail=N&session=CODE&event=TYPE&guard_only=1` — 讀 daemon 側 trace，支援 filter：
+  - `tail`：最後 N 筆（預設 200，上限 2000）
+  - `session`：filter session code
+  - `event`：filter event type
+  - `guard_only`：只看被 guard 擋下的
+
+Path traversal 防護同議題 2。
+
+### Log Sub 頁呈現
+
+議題 2 的 Logs 子頁擴充成四個 block（見下節更新）。
+
+## 議題 2 + 4 UI：Per-Host Logs 子頁
 
 ### 位置
 
@@ -158,25 +222,40 @@ useEffect(() => {
 
 ### 內容
 
-兩個區塊：
+四個區塊：
 
-**Daemon Log**
+**1. Daemon Log**
 
 - 顯示 `/api/daemon-log?tail=200` 的內容（monospace、pre-wrap、深色背景）
 - 右上角 refresh 按鈕 + 自動每 5 秒 refresh（可關）
 - "Load more" 按鈕（tail 參數加倍，上限 2000）
 
-**Crash Logs**
+**2. Crash Logs**
 
 - 列出 `/api/crash-logs` 的結果（filename / size / mtime）
 - 點擊展開 inline 顯示檔案內容（或 modal）
 - 每筆有刪除按鈕
+- 空狀態顯示 "No crashes recorded"
 
-空狀態（沒有 crash log）顯示友善訊息 "No crashes recorded"。
+**3. Agent State Trace（daemon 側）**
+
+- 讀 `/api/agent-state-log?tail=200`
+- 表格顯示：`ts` / `seq` / `session_code` / `source` / `event` / `trigger` / `diff`（人類可讀的 summary）
+- 點一列展開顯示完整 `pre` / `post` / `broadcast` / `guard`
+- Filter 控制：session code 下拉、event type 下拉、`guard_only` toggle
+- 被 guard 擋下的行用特別顏色標記（例如黃色 outline），一眼看得出 silent miss
+
+**4. Frontend Trace**
+
+- "Export Frontend Trace" 按鈕 → dump ring buffer 為 JSON 檔下載
+- 下方顯示最近 50 筆（精簡欄位：`ts` / `source` / `event` / `session_code`），快速預覽
+- 不用打 daemon，純 frontend debug 工具
 
 ### 路由
 
 `HostSidebar.tsx` 新增 Logs 項目，路由 key 沿用既有 sub page 機制（`overview` / `sessions` / `hooks` / `agents` / `uploads` / `logs`）。
+
+四個區塊用 collapsible section，預設展開 Daemon Log、其餘收合。
 
 ## 檔案變動彙整
 
@@ -184,13 +263,18 @@ useEffect(() => {
 
 - `cmd/tbox/daemon.go` — start/stop/status 子命令
 - `internal/middleware/recover.go` — HTTP panic recover
-- `internal/module/logs/` — crash log / daemon log API module（或併入 `dev` module）
-- `spa/src/components/hosts/LogsSection.tsx` — per-host Logs 子頁
+- `internal/module/logs/` — crash log / daemon log / agent state log API module（或併入 `dev` module）
+- `internal/module/agent/state_trace.go` — `logStateTransition` helper + rotation
+- `spa/src/components/hosts/LogsSection.tsx` — per-host Logs 子頁（四個 block）
 - `spa/src/components/hosts/LogsSection.test.tsx`
+- `spa/src/lib/agent-state-trace.ts` — frontend ring buffer + export helper
 
 ### 修改
 
 - `cmd/tbox/main.go` — 註冊 `start` / `stop` / `status` command，`runServe` 加 panic recover defer
+- `internal/module/agent/handler.go` — 每個 mutation path 呼叫 `logStateTransition`（含 guard skip 的 case）
+- `internal/module/agent/module.go` — `checkAliveAll` 的 orphan 清理也要記 trace
+- `spa/src/stores/useAgentStore.ts` — 每個 state mutation 寫入 ring buffer
 - `spa/src/components/hosts/OverviewSection.tsx` — 加 reconnect 清 `testResult` 的 effect
 - `spa/src/components/hosts/OverviewSection.test.tsx` — 新增測試
 - `spa/src/components/hosts/HostSidebar.tsx` — 加 Logs 選項
@@ -200,8 +284,9 @@ useEffect(() => {
 ## 資料路徑
 
 - PID file: `<cfg.DataDir>/tbox.pid`
-- Daemon log: `<cfg.DataDir>/logs/tbox.log`（rotated: `.1` / `.2` / `.3`）
+- Daemon log: `<cfg.DataDir>/logs/tbox.log`（rotated: `.1` / `.2` / `.3`，單檔上限 10MB）
 - Crash logs: `<cfg.DataDir>/logs/crash-YYYYMMDD-HHMMSS.log`
+- Agent state trace: `<cfg.DataDir>/logs/agent-state.log`（rotated: `.1` ~ `.5`，單檔上限 5MB）
 
 `cfg.DataDir` 預設為 `~/.config/tbox/`，第一次 `start` 時若 `logs/` 目錄不存在則建立。
 
@@ -212,11 +297,13 @@ useEffect(() => {
 - `cmd/tbox/daemon_test.go`：start/stop/status 的 happy path + stale PID file + already running + stop 無 PID file
 - `internal/middleware/recover_test.go`：handler panic 時 response 是 500 且 daemon 不死
 - `internal/module/logs` unit test：path traversal 防禦、檔案列表正確
+- `internal/module/agent/state_trace_test.go`：每個 mutation path 都有 trace、guard skip 也有 trace、pre/post 正確快照、rotation
 
 ### React
 
 - `OverviewSection.test.tsx`：reconnect 清 testResult
-- `LogsSection.test.tsx`：list + expand + delete + empty state
+- `LogsSection.test.tsx`：list + expand + delete + empty state + filter
+- `useAgentStore.test.ts`：ring buffer 寫入、overflow 後 evict 最舊、export 格式
 
 ### 手動驗證
 
@@ -227,7 +314,8 @@ useEffect(() => {
 ## Out of Scope
 
 - **launchd / systemd 整合**：可在之後獨立 phase，這次先做 manual start/stop
-- **Log rotation 精細化**：目前只做 size-based（10MB / 保留 3 份），不做 time-based 或 gzip
+- **Log rotation 精細化**：目前只做 size-based，不做 time-based 或 gzip
 - **Crash log 自動上傳**：不做
 - **完整 structured logging**：daemon 現有 `log.Printf` 不動，只確保 panic / stderr 能被捕捉
+- **Agent state trace 持久化到 DB**：只寫 NDJSON 檔案 + frontend ring buffer，不進 SQLite（避免寫入壓力）
 - **改名 Purdex 相關工作**：獨立 spec 處理
