@@ -117,4 +117,29 @@ describe('ThemeEditor', () => {
     // Token label should now be hidden
     expect(screen.queryByText('Primary Background')).toBeNull()
   })
+
+  it('save updates existing custom theme in-place', () => {
+    // First create a custom theme
+    const customId = useThemeStore.getState().createCustomTheme('My Theme', 'dark', {})
+    useThemeStore.setState({ activeThemeId: customId })
+
+    const onClose = vi.fn()
+    render(<ThemeEditor baseThemeId={customId} onClose={onClose} />)
+
+    // Change name
+    const nameInput = screen.getByLabelText('Theme name')
+    fireEvent.change(nameInput, { target: { value: 'Updated Theme' } })
+
+    // Save
+    fireEvent.click(screen.getByLabelText('Save theme'))
+
+    // Should have updated in-place, not created a new entry
+    const state = useThemeStore.getState()
+    const customIds = Object.keys(state.customThemes)
+    expect(customIds.length).toBe(1)
+    expect(customIds[0]).toBe(customId)
+    expect(state.customThemes[customId].name).toBe('Updated Theme')
+    expect(state.activeThemeId).toBe(customId)
+    expect(onClose).toHaveBeenCalled()
+  })
 })

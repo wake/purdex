@@ -56,9 +56,11 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
   const baseTheme = getTheme(baseThemeId)
   const createCustomTheme = useThemeStore((s) => s.createCustomTheme)
   const setActiveTheme = useThemeStore((s) => s.setActiveTheme)
+  const isEditingCustom = useThemeStore((s) => baseThemeId in s.customThemes)
+  const updateCustomTheme = useThemeStore((s) => s.updateCustomTheme)
   const t = useI18nStore((s) => s.t)
 
-  const [name, setName] = useState(() => `${baseTheme?.name ?? 'Custom'} (Custom)`)
+  const [name, setName] = useState(() => isEditingCustom ? (baseTheme?.name ?? 'Custom') : `${baseTheme?.name ?? 'Custom'} (Custom)`)
   const [tokens, setTokens] = useState<ThemeTokens>(() => ({ ...baseTheme!.tokens }))
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const styleRef = useRef<HTMLStyleElement | null>(null)
@@ -113,8 +115,13 @@ export function ThemeEditor({ baseThemeId, onClose }: ThemeEditorProps) {
       }
     }
 
-    const newId = createCustomTheme(name, baseThemeId, overrides)
-    setActiveTheme(newId)
+    if (isEditingCustom) {
+      updateCustomTheme(baseThemeId, { name, tokens })
+      setActiveTheme(baseThemeId)
+    } else {
+      const newId = createCustomTheme(name, baseThemeId, overrides)
+      setActiveTheme(newId)
+    }
     savedRef.current = true
     onClose()
   }
