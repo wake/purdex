@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.93] - 2026-04-12
+
+### 修正
+
+- **App icon**：改用白色圓角背景版，ActivityBar 保留透明版（`logo-transparent.png`）
+- **i18n**：補齊 `settings.section.modules` 翻譯（Modules / 模組）
+- **Legacy hooks**：清除舊 tbox hook 殘留，不做向下相容
+
 ## [1.0.0-alpha.92] - 2026-04-12
 
 - chore: rename cleanup + Purdex logo (#315)
