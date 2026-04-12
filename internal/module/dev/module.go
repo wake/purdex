@@ -26,6 +26,8 @@ type DevModule struct {
 	buildCmd           func() error
 	lastFailedSPA      string
 	lastFailedElectron string
+	stopCtx            context.Context
+	stopCancel         context.CancelFunc
 }
 
 func New(repoRoot string) *DevModule {
@@ -41,6 +43,7 @@ func (m *DevModule) Dependencies() []string { return nil }
 
 func (m *DevModule) Init(c *core.Core) error {
 	m.core = c
+	m.stopCtx, m.stopCancel = context.WithCancel(context.Background())
 	if m.hashFn == nil {
 		m.hashFn = m.gitHash
 	}
@@ -71,7 +74,11 @@ func (m *DevModule) runBuild() {
 }
 
 func (m *DevModule) defaultBuild() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	parent := m.stopCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "pnpm", "exec", "electron-vite", "build")
 	cmd.Dir = m.repoRoot
@@ -96,7 +103,12 @@ func (m *DevModule) Start(_ context.Context) error {
 	return nil
 }
 
-func (m *DevModule) Stop(_ context.Context) error { return nil }
+func (m *DevModule) Stop(_ context.Context) error {
+	if m.stopCancel != nil {
+		m.stopCancel()
+	}
+	return nil
+}
 
 func (m *DevModule) gitHash(paths ...string) string {
 	args := append([]string{"log", "-1", "--format=%h", "--"}, paths...)
