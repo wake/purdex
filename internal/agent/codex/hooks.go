@@ -16,22 +16,22 @@ var codexHookEvents = []string{
 	"Stop",
 }
 
-func (p *Provider) InstallHooks(tboxPath string) error {
+func (p *Provider) InstallHooks(pdxPath string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
 	hooksPath := filepath.Join(home, ".codex", "hooks.json")
-	return mergeCodexHooks(hooksPath, tboxPath, false)
+	return mergeCodexHooks(hooksPath, pdxPath, false)
 }
 
-func (p *Provider) RemoveHooks(tboxPath string) error {
+func (p *Provider) RemoveHooks(pdxPath string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
 	hooksPath := filepath.Join(home, ".codex", "hooks.json")
-	return mergeCodexHooks(hooksPath, tboxPath, true)
+	return mergeCodexHooks(hooksPath, pdxPath, true)
 }
 
 func (p *Provider) CheckHooks() (agent.HookStatus, error) {
@@ -64,7 +64,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			allInstalled = false
 			continue
 		}
-		command := findTboxCommandInCodex(entries)
+		command := findPdxCommandInCodex(entries)
 		events[eventName] = agent.HookEventInfo{Installed: command != "", Command: command}
 		if command == "" {
 			issues = append(issues, eventName+" hook: pdx command not found")
@@ -74,7 +74,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	return agent.HookStatus{Installed: allInstalled, Events: events, Issues: issues}, nil
 }
 
-func mergeCodexHooks(path, tboxPath string, remove bool) error {
+func mergeCodexHooks(path, pdxPath string, remove bool) error {
 	hooksFile := make(map[string]any)
 	data, err := os.ReadFile(path)
 	if err == nil {
@@ -93,11 +93,11 @@ func mergeCodexHooks(path, tboxPath string, remove bool) error {
 	}
 	for _, event := range codexHookEvents {
 		entries := toCodexEntrySlice(hooks[event])
-		entries = filterOutTboxCodex(entries)
+		entries = filterOutPdxCodex(entries)
 		if !remove {
 			entries = append(entries, map[string]any{
 				"type":    "command",
-				"command": fmt.Sprintf(`"%s" hook --agent codex %s`, tboxPath, event),
+				"command": fmt.Sprintf(`"%s" hook --agent codex %s`, pdxPath, event),
 				"timeout": 5,
 			})
 		}
@@ -122,13 +122,13 @@ func mergeCodexHooks(path, tboxPath string, remove bool) error {
 	return nil
 }
 
-func isTboxCommandCodex(cmd string) bool {
+func isPdxCommandCodex(cmd string) bool {
 	// Match both quoted ("/path/pdx" hook) and unquoted (/path/pdx hook) forms.
 	normalized := strings.ReplaceAll(cmd, `"`, "")
 	return strings.Contains(normalized, "pdx hook")
 }
 
-func findTboxCommandInCodex(entries any) string {
+func findPdxCommandInCodex(entries any) string {
 	arr, ok := entries.([]any)
 	if !ok {
 		return ""
@@ -139,7 +139,7 @@ func findTboxCommandInCodex(entries any) string {
 			continue
 		}
 		cmd, _ := m["command"].(string)
-		if isTboxCommandCodex(cmd) {
+		if isPdxCommandCodex(cmd) {
 			return cmd
 		}
 	}
@@ -156,7 +156,7 @@ func toCodexEntrySlice(v any) []any {
 	return []any{}
 }
 
-func filterOutTboxCodex(entries []any) []any {
+func filterOutPdxCodex(entries []any) []any {
 	var result []any
 	for _, e := range entries {
 		m, ok := e.(map[string]any)
@@ -165,7 +165,7 @@ func filterOutTboxCodex(entries []any) []any {
 			continue
 		}
 		cmd, _ := m["command"].(string)
-		if !isTboxCommandCodex(cmd) {
+		if !isPdxCommandCodex(cmd) {
 			result = append(result, e)
 		}
 	}

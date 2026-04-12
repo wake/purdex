@@ -10,9 +10,9 @@ import (
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
 
-// ---- isTboxCommand ----
+// ---- isPdxCommand ----
 
-func TestIsTboxCommand_Positive(t *testing.T) {
+func TestIsPdxCommand_Positive(t *testing.T) {
 	cases := []string{
 		`"/usr/local/bin/pdx" hook --agent cc SessionStart`,
 		`"pdx" hook --agent cc Stop`,
@@ -20,13 +20,13 @@ func TestIsTboxCommand_Positive(t *testing.T) {
 		`pdx hook --agent cc SessionEnd`,
 	}
 	for _, cmd := range cases {
-		if !isTboxCommand(cmd) {
-			t.Errorf("expected isTboxCommand=true for: %s", cmd)
+		if !isPdxCommand(cmd) {
+			t.Errorf("expected isPdxCommand=true for: %s", cmd)
 		}
 	}
 }
 
-func TestIsTboxCommand_Negative(t *testing.T) {
+func TestIsPdxCommand_Negative(t *testing.T) {
 	cases := []string{
 		`"sometool" hook --agent cc SessionStart`,
 		`/usr/bin/bash -c "echo hello"`,
@@ -34,8 +34,8 @@ func TestIsTboxCommand_Negative(t *testing.T) {
 		`pdx-ng hook something`,
 	}
 	for _, cmd := range cases {
-		if isTboxCommand(cmd) {
-			t.Errorf("expected isTboxCommand=false for: %s", cmd)
+		if isPdxCommand(cmd) {
+			t.Errorf("expected isPdxCommand=false for: %s", cmd)
 		}
 	}
 }
@@ -113,14 +113,14 @@ func TestMergeClaudeHooks_Idempotent(t *testing.T) {
 		if !ok {
 			t.Fatalf("event %s: not an array", event)
 		}
-		tboxCount := 0
+		pdxCount := 0
 		for _, e := range entries {
-			if entryIsTbox(e) {
-				tboxCount++
+			if entryIsPdx(e) {
+				pdxCount++
 			}
 		}
-		if tboxCount != 1 {
-			t.Errorf("event %s: expected 1 pdx entry, got %d", event, tboxCount)
+		if pdxCount != 1 {
+			t.Errorf("event %s: expected 1 pdx entry, got %d", event, pdxCount)
 		}
 	}
 }
@@ -163,10 +163,10 @@ func TestMergeClaudeHooks_PreservesExistingHooks(t *testing.T) {
 	}
 
 	hasNotifyMe := false
-	hasTbox := false
+	hasPdx := false
 	for _, e := range entries {
-		if entryIsTbox(e) {
-			hasTbox = true
+		if entryIsPdx(e) {
+			hasPdx = true
 		} else {
 			m, _ := e.(map[string]any)
 			inner, _ := m["hooks"].([]any)
@@ -181,7 +181,7 @@ func TestMergeClaudeHooks_PreservesExistingHooks(t *testing.T) {
 	if !hasNotifyMe {
 		t.Error("existing non-pdx hook was removed")
 	}
-	if !hasTbox {
+	if !hasPdx {
 		t.Error("pdx hook not added")
 	}
 }
@@ -225,7 +225,7 @@ func TestMergeClaudeHooks_RemoveMode(t *testing.T) {
 	for _, event := range ccHookEvents {
 		entries, _ := hooks[event].([]any)
 		for _, e := range entries {
-			if entryIsTbox(e) {
+			if entryIsPdx(e) {
 				t.Errorf("event %s: pdx entry should have been removed", event)
 			}
 		}
@@ -270,12 +270,12 @@ func TestMergeClaudeHooks_DifferentPathReplaces(t *testing.T) {
 
 	for _, event := range ccHookEvents {
 		entries, _ := hooks[event].([]any)
-		tboxCount := 0
+		pdxCount := 0
 		hasNewPath := false
 		hasOldPath := false
 		for _, e := range entries {
-			if entryIsTbox(e) {
-				tboxCount++
+			if entryIsPdx(e) {
+				pdxCount++
 				m, _ := e.(map[string]any)
 				inner, _ := m["hooks"].([]any)
 				for _, h := range inner {
@@ -293,8 +293,8 @@ func TestMergeClaudeHooks_DifferentPathReplaces(t *testing.T) {
 				}
 			}
 		}
-		if tboxCount != 1 {
-			t.Errorf("event %s: expected exactly 1 pdx entry after path change, got %d", event, tboxCount)
+		if pdxCount != 1 {
+			t.Errorf("event %s: expected exactly 1 pdx entry after path change, got %d", event, pdxCount)
 		}
 		if !hasNewPath {
 			t.Errorf("event %s: new pdx path not referenced in entry", event)

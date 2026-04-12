@@ -15,22 +15,22 @@ var ccHookEvents = []string{
 	"Stop", "StopFailure", "Notification", "PermissionRequest", "SessionEnd",
 }
 
-func (p *Provider) InstallHooks(tboxPath string) error {
+func (p *Provider) InstallHooks(pdxPath string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	return mergeClaudeHooks(settingsPath, tboxPath, false)
+	return mergeClaudeHooks(settingsPath, pdxPath, false)
 }
 
-func (p *Provider) RemoveHooks(tboxPath string) error {
+func (p *Provider) RemoveHooks(pdxPath string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	return mergeClaudeHooks(settingsPath, tboxPath, true)
+	return mergeClaudeHooks(settingsPath, pdxPath, true)
 }
 
 func (p *Provider) CheckHooks() (agent.HookStatus, error) {
@@ -63,7 +63,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			allInstalled = false
 			continue
 		}
-		command := findTboxCommand(entries)
+		command := findPdxCommand(entries)
 		events[eventName] = agent.HookEventInfo{Installed: command != "", Command: command}
 		if command == "" {
 			issues = append(issues, eventName+" hook: pdx command not found")
@@ -73,7 +73,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	return agent.HookStatus{Installed: allInstalled, Events: events, Issues: issues}, nil
 }
 
-func mergeClaudeHooks(path, tboxPath string, remove bool) error {
+func mergeClaudeHooks(path, pdxPath string, remove bool) error {
 	settings := make(map[string]any)
 	data, err := os.ReadFile(path)
 	if err == nil {
@@ -92,9 +92,9 @@ func mergeClaudeHooks(path, tboxPath string, remove bool) error {
 	}
 	for _, event := range ccHookEvents {
 		entries := toEntrySlice(hooks[event])
-		entries = filterOutAnyTbox(entries)
+		entries = filterOutPdx(entries)
 		if !remove {
-			entries = append(entries, makeTboxEntry(tboxPath, "cc", event))
+			entries = append(entries, makePdxEntry(pdxPath, "cc", event))
 		}
 		hooks[event] = entries
 	}
@@ -117,18 +117,18 @@ func mergeClaudeHooks(path, tboxPath string, remove bool) error {
 	return nil
 }
 
-func makeTboxEntry(tboxPath, agentType, event string) map[string]any {
+func makePdxEntry(pdxPath, agentType, event string) map[string]any {
 	return map[string]any{
 		"hooks": []any{
 			map[string]any{
 				"type":    "command",
-				"command": fmt.Sprintf(`"%s" hook --agent %s %s`, tboxPath, agentType, event),
+				"command": fmt.Sprintf(`"%s" hook --agent %s %s`, pdxPath, agentType, event),
 			},
 		},
 	}
 }
 
-func findTboxCommand(entries any) string {
+func findPdxCommand(entries any) string {
 	arr, ok := entries.([]any)
 	if !ok {
 		return ""
@@ -166,17 +166,17 @@ func toEntrySlice(v any) []any {
 	return []any{}
 }
 
-func filterOutAnyTbox(entries []any) []any {
+func filterOutPdx(entries []any) []any {
 	result := []any{}
 	for _, e := range entries {
-		if !entryIsTbox(e) {
+		if !entryIsPdx(e) {
 			result = append(result, e)
 		}
 	}
 	return result
 }
 
-func entryIsTbox(entry any) bool {
+func entryIsPdx(entry any) bool {
 	m, ok := entry.(map[string]any)
 	if !ok {
 		return false
@@ -198,14 +198,14 @@ func entryIsTbox(entry any) bool {
 		if !ok {
 			continue
 		}
-		if isTboxCommand(cmd) {
+		if isPdxCommand(cmd) {
 			return true
 		}
 	}
 	return false
 }
 
-func isTboxCommand(cmd string) bool {
+func isPdxCommand(cmd string) bool {
 	if strings.Contains(cmd, `/pdx" hook`) || strings.HasPrefix(cmd, `"pdx" hook`) {
 		return true
 	}

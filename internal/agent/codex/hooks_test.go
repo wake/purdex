@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// ---- filterOutTboxCodex ----
+// ---- filterOutPdxCodex ----
 
-func TestFilterOutTboxCodex_MatchesAndPreserves(t *testing.T) {
+func TestFilterOutPdxCodex_MatchesAndPreserves(t *testing.T) {
 	entries := []any{
 		map[string]any{
 			"type":    "command",
@@ -23,13 +23,13 @@ func TestFilterOutTboxCodex_MatchesAndPreserves(t *testing.T) {
 		},
 	}
 
-	result := filterOutTboxCodex(entries)
+	result := filterOutPdxCodex(entries)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 entry after filter, got %d", len(result))
 	}
 	m, _ := result[0].(map[string]any)
 	cmd, _ := m["command"].(string)
-	if isTboxCommandCodex(cmd) {
+	if isPdxCommandCodex(cmd) {
 		t.Error("pdx entry was not filtered out")
 	}
 	if cmd != "/usr/bin/notify-me start" {
@@ -37,9 +37,9 @@ func TestFilterOutTboxCodex_MatchesAndPreserves(t *testing.T) {
 	}
 }
 
-func TestFilterOutTboxCodex_NonMapPreserved(t *testing.T) {
+func TestFilterOutPdxCodex_NonMapPreserved(t *testing.T) {
 	entries := []any{"string-entry", 42}
-	result := filterOutTboxCodex(entries)
+	result := filterOutPdxCodex(entries)
 	if len(result) != 2 {
 		t.Errorf("expected 2 non-map entries preserved, got %d", len(result))
 	}
@@ -118,19 +118,19 @@ func TestMergeCodexHooks_Idempotent(t *testing.T) {
 		if !ok {
 			t.Fatalf("event %s: not an array", event)
 		}
-		tboxCount := 0
+		pdxCount := 0
 		for _, e := range entries {
 			em, ok := e.(map[string]any)
 			if !ok {
 				continue
 			}
 			cmd, _ := em["command"].(string)
-			if isTboxCommandCodex(cmd) {
-				tboxCount++
+			if isPdxCommandCodex(cmd) {
+				pdxCount++
 			}
 		}
-		if tboxCount != 1 {
-			t.Errorf("event %s: expected 1 pdx entry, got %d", event, tboxCount)
+		if pdxCount != 1 {
+			t.Errorf("event %s: expected 1 pdx entry, got %d", event, pdxCount)
 		}
 	}
 }
@@ -170,15 +170,15 @@ func TestMergeCodexHooks_PreservesExistingHooks(t *testing.T) {
 	}
 
 	hasNotifyMe := false
-	hasTbox := false
+	hasPdx := false
 	for _, e := range entries {
 		em, ok := e.(map[string]any)
 		if !ok {
 			continue
 		}
 		cmd, _ := em["command"].(string)
-		if isTboxCommandCodex(cmd) {
-			hasTbox = true
+		if isPdxCommandCodex(cmd) {
+			hasPdx = true
 		}
 		if cmd == "/usr/bin/notify-me start" {
 			hasNotifyMe = true
@@ -187,7 +187,7 @@ func TestMergeCodexHooks_PreservesExistingHooks(t *testing.T) {
 	if !hasNotifyMe {
 		t.Error("existing non-pdx hook was removed")
 	}
-	if !hasTbox {
+	if !hasPdx {
 		t.Error("pdx hook was not added")
 	}
 }
@@ -233,7 +233,7 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 				continue
 			}
 			cmd, _ := em["command"].(string)
-			if isTboxCommandCodex(cmd) {
+			if isPdxCommandCodex(cmd) {
 				t.Errorf("event %s: pdx entry should have been removed", event)
 			}
 		}

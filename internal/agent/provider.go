@@ -31,8 +31,8 @@ type HookEvent struct {
 
 // HookInstaller can install/remove/check hook configurations for a specific agent.
 type HookInstaller interface {
-	InstallHooks(tboxPath string) error
-	RemoveHooks(tboxPath string) error
+	InstallHooks(pdxPath string) error
+	RemoveHooks(pdxPath string) error
 	CheckHooks() (HookStatus, error)
 }
 
