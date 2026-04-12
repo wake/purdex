@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.104] - 2026-04-13
+
+### 測試
+
+- **spa**：補充 HandoffButton `agentStatus='error'` 和 `'waiting'` 測試案例（#125）
+
 ## [1.0.0-alpha.103] - 2026-04-13
 
 ### 修正
