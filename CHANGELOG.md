@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.90] - 2026-04-12
+
+- feat: daemon background mode + crash log + reconnect error clear (#307)
+
+### 新增
+
+- **`tbox start/stop/status` 子命令**：daemon 可背景啟動，使用 `flock` PID file 管理生命週期，`stop` 以 SIGTERM 優雅關閉（30 秒 timeout + SIGKILL fallback）
+- **Crash log**：`runServe` 加 panic recover defer，寫入 `~/.config/tbox/logs/crash-YYYYMMDD-HHMMSS.log`，含 secret redaction（Authorization header、purdex\_/tbox\_ token、cfg.Token）
+- **Logs 子頁**：per-host Logs sub-page 顯示 Daemon Log（`/api/logs/daemon`）+ Crash Logs（`/api/logs/crash`），含手動 refresh + offline 狀態
+
+### 修正
+
+- **Reconnect 後 testResult 殘留**：`OverviewSection` 加 transition-aware `useEffect`，只在 status 從非 connected 轉為 connected 時清除 stale 錯誤訊息，避免 `manualRetry()` 循環清掉成功 pill
+
+### 追蹤
+
+- #305 — safeGo helper for cross-goroutine panic recovery
+- #306 — HTTP recover middleware
+
 ## [1.0.0-alpha.89] - 2026-04-12
 
 - fix(electron): restore renderer focus when backgrounding BrowserView (#301)
