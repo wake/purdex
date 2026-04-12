@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wake/purdex/internal/core"
 )
@@ -69,10 +71,15 @@ func (m *DevModule) runBuild() {
 }
 
 func (m *DevModule) defaultBuild() error {
-	cmd := exec.Command("pnpm", "exec", "electron-vite", "build")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "pnpm", "exec", "electron-vite", "build")
 	cmd.Dir = m.repoRoot
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("build timed out after 5 minutes")
+		}
 		log.Printf("[dev] build output: %s", string(out))
 		return err
 	}
