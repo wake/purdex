@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.96] - 2026-04-13
+
+### 修正
+
+- **daemon**：dev update 改用 config `repo_root` 欄位取代 `os.Getwd()`，daemon 從非 repo 目錄啟動時不再失效（#79）
+
 ## [1.0.0-alpha.95] - 2026-04-13
 
 ### 修正
