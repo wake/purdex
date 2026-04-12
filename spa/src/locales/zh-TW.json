@@ -187,7 +187,7 @@
   "browser.move_to_tab": "在主視窗重新開啟此網址",
 
   "tray.show_window": "顯示視窗",
-  "tray.quit": "結束 tmux-box",
+  "tray.quit": "結束 Purdex",
 
   "settings.section.electron": "桌面應用程式",
   "settings.electron.title": "桌面應用程式",

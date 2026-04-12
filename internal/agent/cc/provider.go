@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/wake/tmux-box/internal/agent"
-	"github.com/wake/tmux-box/internal/config"
-	"github.com/wake/tmux-box/internal/core"
-	"github.com/wake/tmux-box/internal/tmux"
+	"github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // Provider implements agent.AgentProvider for Claude Code.

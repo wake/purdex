@@ -12,9 +12,9 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/wake/tmux-box/internal/bridge"
-	"github.com/wake/tmux-box/internal/core"
-	"github.com/wake/tmux-box/internal/module/session"
+	"github.com/wake/purdex/internal/bridge"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/session"
 )
 
 // fakeSessionProvider implements session.SessionProvider for testing.

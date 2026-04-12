@@ -9,7 +9,7 @@ func TestCCProjectPath(t *testing.T) {
 	tests := []struct {
 		input, want string
 	}{
-		{"/Users/wake/Workspace/wake/tmux-box", "-Users-wake-Workspace-wake-tmux-box"},
+		{"/Users/wake/Workspace/wake/purdex", "-Users-wake-Workspace-wake-purdex"},
 		{"/", "-"},
 		{"/tmp", "-tmp"},
 	}

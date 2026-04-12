@@ -7,9 +7,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/wake/tmux-box/internal/core"
-	"github.com/wake/tmux-box/internal/store"
-	"github.com/wake/tmux-box/internal/tmux"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/store"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 func newWatcherTestModule(t *testing.T) (*SessionModule, *tmux.FakeExecutor, *core.EventsBroadcaster) {

@@ -1,4 +1,4 @@
-// cmd/tbox/quick.go
+// cmd/pdx/quick.go
 package main
 
 import (
@@ -10,9 +10,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/wake/tmux-box/internal/config"
-	"github.com/wake/tmux-box/internal/core"
-	"github.com/wake/tmux-box/internal/pairing"
+	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/pairing"
 )
 
 type ifaceEntry struct {

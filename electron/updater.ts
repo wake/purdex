@@ -29,7 +29,7 @@ export function getAppInfo(): AppInfo {
     version: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'unknown',
     electronHash: typeof __ELECTRON_HASH__ !== 'undefined' ? __ELECTRON_HASH__ : 'unknown',
     spaHash: typeof __SPA_HASH__ !== 'undefined' ? __SPA_HASH__ : 'unknown',
-    devUpdateEnabled: !!process.env.TBOX_DEV_UPDATE,
+    devUpdateEnabled: !!process.env.PDX_DEV_UPDATE,
   }
 }
 
@@ -56,7 +56,7 @@ export async function applyUpdate(
   const resp = await fetch(`${daemonUrl}/api/dev/update/download`, { headers: authHeaders(token) })
   if (!resp.ok) throw new Error(`download failed: ${resp.status}`)
 
-  const tmpDir = join(app.getPath('temp'), 'tbox-update')
+  const tmpDir = join(app.getPath('temp'), 'purdex-update')
   if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true })
   mkdirSync(tmpDir, { recursive: true })
 

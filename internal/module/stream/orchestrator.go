@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	agentcc "github.com/wake/tmux-box/internal/agent/cc"
-	"github.com/wake/tmux-box/internal/module/session"
+	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/module/session"
 )
 
 // runHandoff executes the handoff-to-stream sequence asynchronously:
@@ -19,7 +19,7 @@ import (
 //  4. If CC busy (not idle), interrupt to idle
 //  5. Extract session ID + cwd via GetStatus
 //  6. Exit CC gracefully
-//  7. Launch tbox relay command via SendKeys
+//  7. Launch pdx relay command via SendKeys
 //  8. Wait for relay to connect via bridge (15s timeout)
 //  9. Update meta (mode + cc_session_id + cwd) and broadcast "connected"
 func (m *StreamModule) runHandoff(sess session.SessionInfo, code, mode, command, handoffID, token string, port int, bind string) {
@@ -105,9 +105,9 @@ func (m *StreamModule) runHandoff(sess session.SessionInfo, code, mode, command,
 		return
 	}
 
-	// Step 7: Launch tbox relay with --resume
+	// Step 7: Launch pdx relay with --resume
 	broadcast("launching")
-	tokenFile := filepath.Join(os.TempDir(), fmt.Sprintf("tbox-token-%s", handoffID))
+	tokenFile := filepath.Join(os.TempDir(), fmt.Sprintf("purdex-token-%s", handoffID))
 	if err := os.WriteFile(tokenFile, []byte(token), 0600); err != nil {
 		broadcast("failed:write token file: " + err.Error())
 		return
@@ -117,7 +117,7 @@ func (m *StreamModule) runHandoff(sess session.SessionInfo, code, mode, command,
 	// daemon crash (process exit cleans deferred resources).
 	defer os.Remove(tokenFile)
 
-	relayCmd := fmt.Sprintf("tbox relay --session %s --daemon ws://%s:%d --token-file %s -- %s --resume %s",
+	relayCmd := fmt.Sprintf("pdx relay --session %s --daemon ws://%s:%d --token-file %s -- %s --resume %s",
 		code, bind, port, tokenFile, command, statusInfo.SessionID)
 	if err := m.core.Tmux.SendKeys(target, relayCmd); err != nil {
 		broadcast("failed:send-keys error: " + err.Error())

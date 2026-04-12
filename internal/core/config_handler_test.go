@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/wake/tmux-box/internal/config"
+	"github.com/wake/purdex/internal/config"
 )
 
 // newTestCore creates a Core with a default config for handler tests.

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/wake/tmux-box/internal/agent"
-	cc "github.com/wake/tmux-box/internal/agent/cc"
+	"github.com/wake/purdex/internal/agent"
+	cc "github.com/wake/purdex/internal/agent/cc"
 )
 
 func deriveViaProvider(eventName string, rawEvent map[string]any) agent.DeriveResult {

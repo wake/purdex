@@ -1,6 +1,6 @@
 {
-  "name": "tmux-box",
-  "short_name": "tbox",
+  "name": "purdex",
+  "short_name": "pdx",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0a0a0a",

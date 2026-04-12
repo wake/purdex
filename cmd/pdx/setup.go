@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/wake/tmux-box/internal/config"
+	"github.com/wake/purdex/internal/config"
 )
 
 func runSetup(args []string) {
@@ -29,7 +29,7 @@ func runSetup(args []string) {
 	}
 
 	if agentType == "" {
-		fmt.Fprintf(os.Stderr, "tbox setup: --agent flag is required (e.g. --agent cc, --agent codex)\n")
+		fmt.Fprintf(os.Stderr, "pdx setup: --agent flag is required (e.g. --agent cc, --agent codex)\n")
 		os.Exit(1)
 	}
 
@@ -75,8 +75,8 @@ func runSetup(args []string) {
 	}
 
 	if remove {
-		fmt.Printf("tbox hooks for %s removed\n", agentType)
+		fmt.Printf("pdx hooks for %s removed\n", agentType)
 	} else {
-		fmt.Printf("tbox hooks for %s installed\n", agentType)
+		fmt.Printf("pdx hooks for %s installed\n", agentType)
 	}
 }

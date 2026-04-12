@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/wake/tmux-box/internal/store"
-	"github.com/wake/tmux-box/internal/terminal"
+	"github.com/wake/purdex/internal/store"
+	"github.com/wake/purdex/internal/terminal"
 )
 
 // --- SessionProvider implementation ---

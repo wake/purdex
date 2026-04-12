@@ -1,5 +1,5 @@
 // Package agent provides the agent hook event module.
-// It receives hook events from `tbox hook`, stores them in AgentEventStore,
+// It receives hook events from `pdx hook`, stores them in AgentEventStore,
 // and broadcasts to WS subscribers.
 package agent
 
@@ -13,12 +13,12 @@ import (
 	"sync"
 	"time"
 
-	agentpkg "github.com/wake/tmux-box/internal/agent"
-	agentcc "github.com/wake/tmux-box/internal/agent/cc"
-	"github.com/wake/tmux-box/internal/agent/codex"
-	"github.com/wake/tmux-box/internal/core"
-	"github.com/wake/tmux-box/internal/module/session"
-	"github.com/wake/tmux-box/internal/store"
+	agentpkg "github.com/wake/purdex/internal/agent"
+	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/agent/codex"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/store"
 )
 
 // Module is the agent hook event module.
@@ -64,7 +64,7 @@ func (m *Module) Init(c *core.Core) error {
 
 	if m.uploadDir == "" {
 		home, _ := os.UserHomeDir()
-		m.uploadDir = filepath.Join(home, "tmp", "tbox-upload")
+		m.uploadDir = filepath.Join(home, "tmp", "purdex-upload")
 	}
 
 	// CC provider

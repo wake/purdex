@@ -13,7 +13,7 @@ func TestFilterOutTboxCodex_MatchesAndPreserves(t *testing.T) {
 	entries := []any{
 		map[string]any{
 			"type":    "command",
-			"command": `"/usr/local/bin/tbox" hook --agent codex SessionStart`,
+			"command": `"/usr/local/bin/pdx" hook --agent codex SessionStart`,
 			"timeout": 5,
 		},
 		map[string]any{
@@ -30,7 +30,7 @@ func TestFilterOutTboxCodex_MatchesAndPreserves(t *testing.T) {
 	m, _ := result[0].(map[string]any)
 	cmd, _ := m["command"].(string)
 	if isTboxCommandCodex(cmd) {
-		t.Error("tbox entry was not filtered out")
+		t.Error("pdx entry was not filtered out")
 	}
 	if cmd != "/usr/bin/notify-me start" {
 		t.Errorf("unexpected remaining command: %s", cmd)
@@ -75,7 +75,7 @@ func TestMergeCodexHooks_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hooks.json")
 
-	if err := mergeCodexHooks(path, "/usr/local/bin/tbox", false); err != nil {
+	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
 		t.Fatalf("mergeCodexHooks: %v", err)
 	}
 
@@ -105,7 +105,7 @@ func TestMergeCodexHooks_Idempotent(t *testing.T) {
 	path := filepath.Join(dir, "hooks.json")
 
 	for i := 0; i < 2; i++ {
-		if err := mergeCodexHooks(path, "/usr/local/bin/tbox", false); err != nil {
+		if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
 			t.Fatalf("run %d: mergeCodexHooks: %v", i, err)
 		}
 	}
@@ -130,12 +130,12 @@ func TestMergeCodexHooks_Idempotent(t *testing.T) {
 			}
 		}
 		if tboxCount != 1 {
-			t.Errorf("event %s: expected 1 tbox entry, got %d", event, tboxCount)
+			t.Errorf("event %s: expected 1 pdx entry, got %d", event, tboxCount)
 		}
 	}
 }
 
-// ---- mergeCodexHooks: preserves existing non-tbox hooks ----
+// ---- mergeCodexHooks: preserves existing non-pdx hooks ----
 
 func TestMergeCodexHooks_PreservesExistingHooks(t *testing.T) {
 	dir := t.TempDir()
@@ -157,7 +157,7 @@ func TestMergeCodexHooks_PreservesExistingHooks(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	if err := mergeCodexHooks(path, "/usr/local/bin/tbox", false); err != nil {
+	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
 		t.Fatalf("mergeCodexHooks: %v", err)
 	}
 
@@ -185,10 +185,10 @@ func TestMergeCodexHooks_PreservesExistingHooks(t *testing.T) {
 		}
 	}
 	if !hasNotifyMe {
-		t.Error("existing non-tbox hook was removed")
+		t.Error("existing non-pdx hook was removed")
 	}
 	if !hasTbox {
-		t.Error("tbox hook was not added")
+		t.Error("pdx hook was not added")
 	}
 }
 
@@ -199,11 +199,11 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 	path := filepath.Join(dir, "hooks.json")
 
 	// Install first
-	if err := mergeCodexHooks(path, "/usr/local/bin/tbox", false); err != nil {
+	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
-	// Add a non-tbox entry for SessionStart
+	// Add a non-pdx entry for SessionStart
 	m := readHooksFile(t, path)
 	hooks := hooksSection(t, m)
 	sessionEntries := toCodexEntrySlice(hooks["SessionStart"])
@@ -218,7 +218,7 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 	_ = os.WriteFile(path, data, 0644)
 
 	// Remove
-	if err := mergeCodexHooks(path, "/usr/local/bin/tbox", true); err != nil {
+	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", true); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 
@@ -234,12 +234,12 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 			}
 			cmd, _ := em["command"].(string)
 			if isTboxCommandCodex(cmd) {
-				t.Errorf("event %s: tbox entry should have been removed", event)
+				t.Errorf("event %s: pdx entry should have been removed", event)
 			}
 		}
 	}
 
-	// Non-tbox entry for SessionStart must remain
+	// Non-pdx entry for SessionStart must remain
 	sessionEntries2, _ := hooks["SessionStart"].([]any)
 	found := false
 	for _, e := range sessionEntries2 {
@@ -253,6 +253,6 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("non-tbox hook was incorrectly removed")
+		t.Error("non-pdx hook was incorrectly removed")
 	}
 }

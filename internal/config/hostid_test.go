@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
-	"github.com/wake/tmux-box/internal/config"
+	"github.com/wake/purdex/internal/config"
 )
 
 func TestWriteFilePermissions(t *testing.T) {

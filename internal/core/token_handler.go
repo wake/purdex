@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/wake/tmux-box/internal/config"
+	"github.com/wake/purdex/internal/config"
 )
 
 // handleTokenAuth confirms the runtime token and persists it to config.

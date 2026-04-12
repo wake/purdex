@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/wake/tmux-box/internal/config"
+	"github.com/wake/purdex/internal/config"
 )
 
 // Version is the purdex daemon version, set via ldflags at build time.

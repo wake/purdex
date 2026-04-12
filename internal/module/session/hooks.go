@@ -14,7 +14,7 @@ var tmuxHookEvents = []string{
 	"session-renamed",
 }
 
-const waitForChannel = "tbox_sess_evt"
+const waitForChannel = "purdex_sess_evt"
 
 func (m *SessionModule) installTmuxHooks() error {
 	cmd := fmt.Sprintf("run-shell -b 'tmux wait-for -S %s'", waitForChannel)

@@ -1,10 +1,10 @@
 # Makefile
 .PHONY: build test lint clean
 
-BIN := bin/tbox
+BIN := bin/pdx
 
 build:
-	go build -o $(BIN) ./cmd/tbox
+	go build -o $(BIN) ./cmd/pdx
 
 test:
 	go test -race -count=1 ./...

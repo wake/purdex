@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/wake/tmux-box/internal/bridge"
-	agentcc "github.com/wake/tmux-box/internal/agent/cc"
-	"github.com/wake/tmux-box/internal/core"
-	"github.com/wake/tmux-box/internal/module/session"
+	"github.com/wake/purdex/internal/bridge"
+	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/session"
 )
 
 // StreamModule manages stream mode data pipelines:

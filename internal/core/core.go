@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wake/tmux-box/internal/config"
-	"github.com/wake/tmux-box/internal/tmux"
+	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // Module is the interface all daemon modules implement.

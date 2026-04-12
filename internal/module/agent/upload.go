@@ -107,7 +107,7 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// resolveSessionName maps a tbox session code to the tmux session name.
+// resolveSessionName maps a pdx session code to the tmux session name.
 func (m *Module) resolveSessionName(code string) string {
 	if m.sessions == nil {
 		return ""

@@ -14,10 +14,10 @@ func contains(s, sub string) bool { return strings.Contains(s, sub) }
 
 func TestIsTboxCommand_Positive(t *testing.T) {
 	cases := []string{
-		`"/usr/local/bin/tbox" hook --agent cc SessionStart`,
-		`"tbox" hook --agent cc Stop`,
-		`/usr/local/bin/tbox hook --agent cc UserPromptSubmit`,
-		`tbox hook --agent cc SessionEnd`,
+		`"/usr/local/bin/pdx" hook --agent cc SessionStart`,
+		`"pdx" hook --agent cc Stop`,
+		`/usr/local/bin/pdx hook --agent cc UserPromptSubmit`,
+		`pdx hook --agent cc SessionEnd`,
 	}
 	for _, cmd := range cases {
 		if !isTboxCommand(cmd) {
@@ -31,7 +31,7 @@ func TestIsTboxCommand_Negative(t *testing.T) {
 		`"sometool" hook --agent cc SessionStart`,
 		`/usr/bin/bash -c "echo hello"`,
 		``,
-		`tbox-ng hook something`,
+		`pdx-ng hook something`,
 	}
 	for _, cmd := range cases {
 		if isTboxCommand(cmd) {
@@ -70,7 +70,7 @@ func TestMergeClaudeHooks_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 
-	if err := mergeClaudeHooks(path, "/usr/local/bin/tbox", false); err != nil {
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", false); err != nil {
 		t.Fatalf("mergeClaudeHooks: %v", err)
 	}
 
@@ -100,7 +100,7 @@ func TestMergeClaudeHooks_Idempotent(t *testing.T) {
 	path := filepath.Join(dir, "settings.json")
 
 	for i := 0; i < 2; i++ {
-		if err := mergeClaudeHooks(path, "/usr/local/bin/tbox", false); err != nil {
+		if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", false); err != nil {
 			t.Fatalf("run %d: mergeClaudeHooks: %v", i, err)
 		}
 	}
@@ -120,12 +120,12 @@ func TestMergeClaudeHooks_Idempotent(t *testing.T) {
 			}
 		}
 		if tboxCount != 1 {
-			t.Errorf("event %s: expected 1 tbox entry, got %d", event, tboxCount)
+			t.Errorf("event %s: expected 1 pdx entry, got %d", event, tboxCount)
 		}
 	}
 }
 
-// ---- mergeClaudeHooks: preserves existing non-tbox hooks ----
+// ---- mergeClaudeHooks: preserves existing non-pdx hooks ----
 
 func TestMergeClaudeHooks_PreservesExistingHooks(t *testing.T) {
 	dir := t.TempDir()
@@ -150,7 +150,7 @@ func TestMergeClaudeHooks_PreservesExistingHooks(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	if err := mergeClaudeHooks(path, "/usr/local/bin/tbox", false); err != nil {
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", false); err != nil {
 		t.Fatalf("mergeClaudeHooks: %v", err)
 	}
 
@@ -179,25 +179,25 @@ func TestMergeClaudeHooks_PreservesExistingHooks(t *testing.T) {
 		}
 	}
 	if !hasNotifyMe {
-		t.Error("existing non-tbox hook was removed")
+		t.Error("existing non-pdx hook was removed")
 	}
 	if !hasTbox {
-		t.Error("tbox hook not added")
+		t.Error("pdx hook not added")
 	}
 }
 
-// ---- mergeClaudeHooks: remove mode strips tbox entries, preserves others ----
+// ---- mergeClaudeHooks: remove mode strips pdx entries, preserves others ----
 
 func TestMergeClaudeHooks_RemoveMode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 
 	// Install first
-	if err := mergeClaudeHooks(path, "/usr/local/bin/tbox", false); err != nil {
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", false); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
-	// Add a non-tbox entry for SessionStart via direct file manipulation
+	// Add a non-pdx entry for SessionStart via direct file manipulation
 	settings := readSettings(t, path)
 	hooks := hooksMap(t, settings)
 	sessionEntries := toEntrySlice(hooks["SessionStart"])
@@ -215,7 +215,7 @@ func TestMergeClaudeHooks_RemoveMode(t *testing.T) {
 	_ = os.WriteFile(path, data, 0644)
 
 	// Now remove
-	if err := mergeClaudeHooks(path, "/usr/local/bin/tbox", true); err != nil {
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", true); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 
@@ -226,12 +226,12 @@ func TestMergeClaudeHooks_RemoveMode(t *testing.T) {
 		entries, _ := hooks[event].([]any)
 		for _, e := range entries {
 			if entryIsTbox(e) {
-				t.Errorf("event %s: tbox entry should have been removed", event)
+				t.Errorf("event %s: pdx entry should have been removed", event)
 			}
 		}
 	}
 
-	// The non-tbox entry for SessionStart should remain
+	// The non-pdx entry for SessionStart should remain
 	sessionEntries2, _ := hooks["SessionStart"].([]any)
 	found := false
 	for _, e := range sessionEntries2 {
@@ -245,23 +245,23 @@ func TestMergeClaudeHooks_RemoveMode(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("non-tbox hook was incorrectly removed")
+		t.Error("non-pdx hook was incorrectly removed")
 	}
 }
 
-// ---- mergeClaudeHooks: different path replaces old tbox entry ----
+// ---- mergeClaudeHooks: different path replaces old pdx entry ----
 
 func TestMergeClaudeHooks_DifferentPathReplaces(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 
 	// Install with old path
-	if err := mergeClaudeHooks(path, "/old/path/tbox", false); err != nil {
+	if err := mergeClaudeHooks(path, "/old/path/pdx", false); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
 
 	// Re-install with new path
-	if err := mergeClaudeHooks(path, "/new/path/tbox", false); err != nil {
+	if err := mergeClaudeHooks(path, "/new/path/pdx", false); err != nil {
 		t.Fatalf("second install: %v", err)
 	}
 
@@ -284,23 +284,23 @@ func TestMergeClaudeHooks_DifferentPathReplaces(t *testing.T) {
 					if cmd == "" {
 						continue
 					}
-					if contains(cmd, "/new/path/tbox") {
+					if contains(cmd, "/new/path/pdx") {
 						hasNewPath = true
 					}
-					if contains(cmd, "/old/path/tbox") {
+					if contains(cmd, "/old/path/pdx") {
 						hasOldPath = true
 					}
 				}
 			}
 		}
 		if tboxCount != 1 {
-			t.Errorf("event %s: expected exactly 1 tbox entry after path change, got %d", event, tboxCount)
+			t.Errorf("event %s: expected exactly 1 pdx entry after path change, got %d", event, tboxCount)
 		}
 		if !hasNewPath {
-			t.Errorf("event %s: new tbox path not referenced in entry", event)
+			t.Errorf("event %s: new pdx path not referenced in entry", event)
 		}
 		if hasOldPath {
-			t.Errorf("event %s: old tbox path still present", event)
+			t.Errorf("event %s: old pdx path still present", event)
 		}
 	}
 }
@@ -311,7 +311,7 @@ func TestMergeClaudeHooks_AtomicWrite_NoTmpLeft(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 
-	if err := mergeClaudeHooks(path, "/usr/local/bin/tbox", false); err != nil {
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", false); err != nil {
 		t.Fatalf("mergeClaudeHooks: %v", err)
 	}
 

@@ -63,7 +63,7 @@ func defaults() Config {
 	return Config{
 		Bind:    "127.0.0.1",
 		Port:    7860,
-		DataDir: filepath.Join(home, ".config", "tbox"),
+		DataDir: filepath.Join(home, ".config", "pdx"),
 		Stream: StreamConfig{
 			Presets: []Preset{{
 				Name:    "cc",
@@ -77,7 +77,7 @@ func defaults() Config {
 	}
 }
 
-// Load reads config from path. Empty path → tries ~/.config/tbox/config.toml.
+// Load reads config from path. Empty path → tries ~/.config/pdx/config.toml.
 // Missing file → returns defaults (no error). Invalid TOML → returns error.
 func Load(path string) (Config, error) {
 	cfg := defaults()

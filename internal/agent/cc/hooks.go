@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wake/tmux-box/internal/agent"
+	"github.com/wake/purdex/internal/agent"
 )
 
 var ccHookEvents = []string{
@@ -66,7 +66,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		command := findTboxCommand(entries)
 		events[eventName] = agent.HookEventInfo{Installed: command != "", Command: command}
 		if command == "" {
-			issues = append(issues, eventName+" hook: tbox command not found")
+			issues = append(issues, eventName+" hook: pdx command not found")
 			allInstalled = false
 		}
 	}
@@ -148,7 +148,7 @@ func findTboxCommand(entries any) string {
 				continue
 			}
 			cmd, _ := hookMap["command"].(string)
-			if strings.Contains(strings.ReplaceAll(cmd, `"`, ""), "tbox hook") {
+			if strings.Contains(strings.ReplaceAll(cmd, `"`, ""), "pdx hook") {
 				return cmd
 			}
 		}
@@ -206,10 +206,10 @@ func entryIsTbox(entry any) bool {
 }
 
 func isTboxCommand(cmd string) bool {
-	if strings.Contains(cmd, `/tbox" hook`) || strings.HasPrefix(cmd, `"tbox" hook`) {
+	if strings.Contains(cmd, `/pdx" hook`) || strings.HasPrefix(cmd, `"pdx" hook`) {
 		return true
 	}
-	if strings.Contains(cmd, `/tbox hook`) || strings.HasPrefix(cmd, `tbox hook`) {
+	if strings.Contains(cmd, `/pdx hook`) || strings.HasPrefix(cmd, `pdx hook`) {
 		return true
 	}
 	return false

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/wake/tmux-box/internal/tmux"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // Status represents the detected state of a tmux session.

@@ -13,12 +13,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/wake/tmux-box/internal/bridge"
-	"github.com/wake/tmux-box/internal/config"
-	"github.com/wake/tmux-box/internal/core"
-	agentcc "github.com/wake/tmux-box/internal/agent/cc"
-	"github.com/wake/tmux-box/internal/module/session"
-	"github.com/wake/tmux-box/internal/tmux"
+	"github.com/wake/purdex/internal/bridge"
+	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/core"
+	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // --- Fake CCOperator ---
@@ -389,7 +389,7 @@ func TestRunHandoff_FullSequence(t *testing.T) {
 	sent := env.tmux.KeysSent()
 	require.NotEmpty(t, sent, "should have sent relay command")
 	lastCmd := sent[len(sent)-1].Keys
-	assert.Contains(t, lastCmd, "tbox relay")
+	assert.Contains(t, lastCmd, "pdx relay")
 	assert.Contains(t, lastCmd, "--session abc123")
 	assert.Contains(t, lastCmd, "--resume uuid-1234")
 

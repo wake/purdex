@@ -19,7 +19,7 @@ type ClaimContext struct {
 	TmuxTarget  string // tmux target for detailed detection (e.g. "mySession:")
 }
 
-// HookEvent is the raw hook event received from tbox hook CLI.
+// HookEvent is the raw hook event received from pdx hook CLI.
 type HookEvent struct {
 	TmuxSession string          `json:"tmux_session"`
 	EventName   string          `json:"event_name"`

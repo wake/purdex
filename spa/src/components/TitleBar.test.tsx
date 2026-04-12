@@ -6,8 +6,8 @@ import { createTab } from '../types/tab'
 
 describe('TitleBar', () => {
   it('renders the title text', () => {
-    render(<TitleBar title="tmux-box — tbox2" />)
-    expect(screen.getByText('tmux-box — tbox2')).toBeDefined()
+    render(<TitleBar title="Purdex — purdex2" />)
+    expect(screen.getByText('Purdex — purdex2')).toBeDefined()
   })
 
   it('renders layout pattern buttons', () => {

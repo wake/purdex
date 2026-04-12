@@ -3,8 +3,8 @@ package cc_test
 import (
 	"testing"
 
-	cc "github.com/wake/tmux-box/internal/agent/cc"
-	"github.com/wake/tmux-box/internal/tmux"
+	cc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 func TestDetectStatus(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wake/tmux-box/internal/middleware"
+	"github.com/wake/purdex/internal/middleware"
 )
 
 var ok = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })

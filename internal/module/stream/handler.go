@@ -10,14 +10,14 @@ import (
 	"net/http"
 
 	"github.com/gorilla/websocket"
-	"github.com/wake/tmux-box/internal/module/session"
+	"github.com/wake/purdex/internal/module/session"
 )
 
 var bridgeUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// handleCliBridge handles WebSocket from tbox relay (producer).
+// handleCliBridge handles WebSocket from pdx relay (producer).
 // Only one relay per session code is allowed.
 func (m *StreamModule) handleCliBridge(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
