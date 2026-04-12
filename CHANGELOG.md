@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.91] - 2026-04-12
+
+- refactor: brand rename from tmux-box to Purdex (#308, #309, #310, #311, #312)
+
+### 變更
+
+- **專案更名**：tmux-box → Purdex，CLI binary tbox → pdx
+- **Go module**：`github.com/wake/tmux-box` → `github.com/wake/purdex`
+- **Config 路徑**：`~/.config/tbox/` → `~/.config/pdx/`
+- **環境變數**：`TBOX_TOKEN` → `PDX_TOKEN`、`TBOX_DEV_UPDATE` → `PDX_DEV_UPDATE`
+- **tmux session channel**：`tbox_sess_evt` → `purdex_sess_evt`
+- **Electron**：appId `dev.wake.purdex`、productName `Purdex`
+
 ## [1.0.0-alpha.90] - 2026-04-12
 
 - feat: daemon background mode + crash log + reconnect error clear (#307)
