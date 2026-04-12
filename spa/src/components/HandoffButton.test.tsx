@@ -61,6 +61,20 @@ describe('HandoffButton', () => {
     expect(screen.getByText('Exiting CC...')).toBeInTheDocument()
   })
 
+  it('enables button when agentStatus is error', () => {
+    const fn = vi.fn()
+    render(<HandoffButton inProgress={false} agentStatus="error" onHandoff={fn} />)
+    const button = screen.getByRole('button')
+    expect(button).not.toBeDisabled()
+    fireEvent.click(button)
+    expect(fn).toHaveBeenCalled()
+  })
+
+  it('enables button when agentStatus is waiting', () => {
+    render(<HandoffButton inProgress={false} agentStatus="waiting" onHandoff={() => {}} />)
+    expect(screen.getByRole('button')).not.toBeDisabled()
+  })
+
   it('falls back to Connecting... with empty progress', () => {
     render(<HandoffButton inProgress={true} progress="" agentStatus="idle" onHandoff={() => {}} />)
     expect(screen.getByText('Connecting...')).toBeInTheDocument()
