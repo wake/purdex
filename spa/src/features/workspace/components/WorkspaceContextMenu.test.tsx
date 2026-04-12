@@ -172,6 +172,29 @@ describe('WorkspaceContextMenu', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  it('shows fallback label when window title is empty', async () => {
+    Object.defineProperty(window, 'electronAPI', {
+      value: {
+        getWindows: vi.fn().mockResolvedValue([
+          { id: 'win-abc', title: '' },
+        ]),
+      },
+      writable: true,
+      configurable: true,
+    })
+    render(
+      <WorkspaceContextMenu
+        position={{ x: 100, y: 200 }}
+        onSettings={vi.fn()}
+        onClose={vi.fn()}
+        onMergeTo={vi.fn()}
+      />,
+    )
+    await waitFor(() => {
+      expect(screen.getByText('win-abc')).toBeInTheDocument()
+    })
+  })
+
   it('calls onMergeTo with windowId when merge target clicked', async () => {
     Object.defineProperty(window, 'electronAPI', {
       value: {
