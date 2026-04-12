@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.103] - 2026-04-13
+
+### 修正
+
+- **daemon**：`Stop()` 取消進行中的 build goroutine，防止 daemon restart 時產生並行 build（#99）
+
 ## [1.0.0-alpha.102] - 2026-04-13
 
 ### 功能
