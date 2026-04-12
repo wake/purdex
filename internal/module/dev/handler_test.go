@@ -94,6 +94,29 @@ func TestHandleDownloadIncludesRenderer(t *testing.T) {
 	}
 }
 
+func TestHandleDownloadWalkError(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create out/main/ but make a file unreadable to trigger walk error
+	outMain := filepath.Join(dir, "out", "main")
+	os.MkdirAll(outMain, 0755)
+	badFile := filepath.Join(outMain, "index.mjs")
+	os.WriteFile(badFile, []byte("// main"), 0644)
+	// Remove read permission to trigger an error during io.Copy
+	os.Chmod(badFile, 0000)
+	defer os.Chmod(badFile, 0644) // cleanup
+
+	m := &DevModule{repoRoot: dir}
+
+	req := httptest.NewRequest("GET", "/api/dev/update/download", nil)
+	w := httptest.NewRecorder()
+	m.handleDownload(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status: want 500, got %d", w.Code)
+	}
+}
+
 func TestHandleDownloadMissingOut(t *testing.T) {
 	dir := t.TempDir() // no out/ directory
 

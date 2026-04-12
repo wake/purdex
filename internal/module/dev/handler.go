@@ -2,6 +2,7 @@ package dev
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"io"
@@ -96,15 +97,12 @@ func (m *DevModule) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/gzip")
-	w.Header().Set("Content-Disposition", "attachment; filename=\"out.tar.gz\"")
-
-	gw := gzip.NewWriter(w)
-	defer gw.Close()
+	// Buffer the tar.gz in memory so we can return an error status if Walk fails
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
-	defer tw.Close()
 
-	err := filepath.Walk(outDir, func(path string, info os.FileInfo, err error) error {
+	walkErr := filepath.Walk(outDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -155,8 +153,15 @@ func (m *DevModule) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 
-	if err != nil {
-		// Headers already sent; nothing we can do about the status code
+	tw.Close()
+	gw.Close()
+
+	if walkErr != nil {
+		http.Error(w, "tar creation failed: "+walkErr.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"out.tar.gz\"")
+	w.Write(buf.Bytes())
 }
