@@ -18,12 +18,14 @@ export function LocaleEditor({ baseLocaleId, onClose }: LocaleEditorProps) {
   const baseLocale = getLocale(baseLocaleId)
   const importLocale = useI18nStore((s) => s.importLocale)
   const setLocale = useI18nStore((s) => s.setLocale)
+  const isEditingCustom = useI18nStore((s) => baseLocaleId in s.customLocales)
+  const updateCustomLocale = useI18nStore((s) => s.updateCustomLocale)
   const t = useI18nStore((s) => s.t)
 
   const enTranslations = useMemo(() => getLocale('en')?.translations ?? {}, [])
   const allKeys = useMemo(() => Object.keys(enTranslations).sort(), [enTranslations])
 
-  const [name, setName] = useState(() => `${baseLocale?.name ?? 'Custom'} (Custom)`)
+  const [name, setName] = useState(() => isEditingCustom ? (baseLocale?.name ?? 'Custom') : `${baseLocale?.name ?? 'Custom'} (Custom)`)
   const [translations, setTranslations] = useState<Record<string, string>>(
     () => ({ ...enTranslations, ...baseLocale?.translations }),
   )
@@ -81,8 +83,13 @@ export function LocaleEditor({ baseLocaleId, onClose }: LocaleEditorProps) {
   }
 
   const handleSave = () => {
-    const newId = importLocale({ name, translations })
-    setLocale(newId)
+    if (isEditingCustom) {
+      updateCustomLocale(baseLocaleId, { name, translations })
+      setLocale(baseLocaleId)
+    } else {
+      const newId = importLocale({ name, translations })
+      setLocale(newId)
+    }
     onClose()
   }
 
