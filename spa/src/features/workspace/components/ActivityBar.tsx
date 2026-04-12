@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef } from 'react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent, type Modifier } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
-import { Plus, GearSix, HardDrives, SquaresFour } from '@phosphor-icons/react'
+import { Plus, GearSix, HardDrives } from '@phosphor-icons/react'
 import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
@@ -164,11 +164,11 @@ export function ActivityBar({
           onClick={onSelectHome}
           className={`w-[30px] h-[30px] rounded-lg flex items-center justify-center cursor-pointer transition-all ${
             isHomeActive
-              ? 'bg-accent text-white'
-              : 'bg-surface-secondary text-text-secondary hover:text-text-primary hover:bg-surface-tertiary'
+              ? 'ring-2 ring-purple-400'
+              : 'hover:bg-surface-tertiary opacity-70 hover:opacity-100'
           }`}
         >
-          <SquaresFour size={18} weight={isHomeActive ? 'fill' : 'regular'} />
+          <img src="/icons/logo.png" alt="Purdex" width={20} height={20} className="rounded-sm" />
         </button>
         {showHomeBadge && (
           <span

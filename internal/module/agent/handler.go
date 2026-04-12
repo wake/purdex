@@ -259,23 +259,23 @@ func (m *Module) handleHookSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tboxPath, err := os.Executable()
+	pdxPath, err := os.Executable()
 	if err != nil {
 		http.Error(w, `{"error":"cannot find pdx binary"}`, http.StatusInternalServerError)
 		return
 	}
-	tboxPath, _ = filepath.EvalSymlinks(tboxPath)
+	pdxPath, _ = filepath.EvalSymlinks(pdxPath)
 
 	switch req.Action {
 	case "install":
-		if err := installer.InstallHooks(tboxPath); err != nil {
+		if err := installer.InstallHooks(pdxPath); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": "setup failed", "detail": err.Error()})
 			return
 		}
 	case "remove":
-		if err := installer.RemoveHooks(tboxPath); err != nil {
+		if err := installer.RemoveHooks(pdxPath); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": "remove failed", "detail": err.Error()})

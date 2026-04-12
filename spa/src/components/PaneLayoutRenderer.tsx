@@ -7,10 +7,14 @@ import { QuickCommandMenu } from './QuickCommandMenu'
 import { executeCommand } from '../lib/execute-command'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
-import type { PaneLayout } from '../types/tab'
+import type { PaneLayout, SplitLayout } from '../types/tab'
 
-function isGrid4(layout: PaneLayout): boolean {
-  if (layout.type !== 'split' || layout.direction !== 'v' || layout.children.length !== 2) return false
+function isSplit(layout: PaneLayout): layout is SplitLayout {
+  return layout.type === 'split'
+}
+
+export function isGrid4(layout: PaneLayout): boolean {
+  if (!isSplit(layout) || layout.direction !== 'v' || layout.children.length !== 2) return false
   return layout.children.every(
     (c) => c.type === 'split' && c.direction === 'h' && c.children.length === 2,
   )
@@ -92,9 +96,9 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
     )
   }
 
-  if (isGrid4(layout)) {
-    const topSplit = layout.children[0] as Extract<PaneLayout, { type: 'split' }>
-    const bottomSplit = layout.children[1] as Extract<PaneLayout, { type: 'split' }>
+  if (isSplit(layout) && isGrid4(layout)) {
+    const topSplit = layout.children[0] as SplitLayout
+    const bottomSplit = layout.children[1] as SplitLayout
 
     const handleHorizontalResize = (index: number, deltaPx: number) => {
       const container = containerRef.current
@@ -104,9 +108,9 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       const percentDelta = (deltaPx / containerWidth) * 100
       // Read fresh layout from store to avoid stale closure
       const currentTab = useTabStore.getState().tabs[tabId]
-      if (!currentTab || !isGrid4(currentTab.layout)) return
-      const freshTop = currentTab.layout.children[0] as Extract<PaneLayout, { type: 'split' }>
-      const freshBottom = currentTab.layout.children[1] as Extract<PaneLayout, { type: 'split' }>
+      if (!currentTab || !isSplit(currentTab.layout) || !isGrid4(currentTab.layout)) return
+      const freshTop = currentTab.layout.children[0] as SplitLayout
+      const freshBottom = currentTab.layout.children[1] as SplitLayout
       for (const split of [freshTop, freshBottom]) {
         const totalPercent = split.sizes[index] + split.sizes[index + 1]
         const newLeft = Math.max(10, Math.min(totalPercent - 10, split.sizes[index] + percentDelta))
@@ -123,12 +127,11 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       const percentDelta = (deltaPx / containerHeight) * 100
       // Read fresh layout from store to avoid stale closure
       const currentTab = useTabStore.getState().tabs[tabId]
-      if (!currentTab || !isGrid4(currentTab.layout)) return
-      const outerLayout = currentTab.layout as Extract<PaneLayout, { type: 'split' }>
-      const totalPercent = outerLayout.sizes[index] + outerLayout.sizes[index + 1]
-      const newTop = Math.max(10, Math.min(totalPercent - 10, outerLayout.sizes[index] + percentDelta))
+      if (!currentTab || !isSplit(currentTab.layout) || !isGrid4(currentTab.layout)) return
+      const totalPercent = currentTab.layout.sizes[index] + currentTab.layout.sizes[index + 1]
+      const newTop = Math.max(10, Math.min(totalPercent - 10, currentTab.layout.sizes[index] + percentDelta))
       const newBottom = totalPercent - newTop
-      useTabStore.getState().resizePanes(tabId, outerLayout.id, [newTop, newBottom])
+      useTabStore.getState().resizePanes(tabId, currentTab.layout.id, [newTop, newBottom])
     }
 
     return (

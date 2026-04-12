@@ -10,9 +10,10 @@ export interface Tab {
 }
 
 // === Pane Layout (tab-internal split tree) ===
+export type SplitLayout = { type: 'split'; id: string; direction: 'h' | 'v'; children: PaneLayout[]; sizes: number[] }
 export type PaneLayout =
   | { type: 'leaf'; pane: Pane }
-  | { type: 'split'; id: string; direction: 'h' | 'v'; children: PaneLayout[]; sizes: number[] }
+  | SplitLayout
 
 export type LayoutPattern = 'single' | 'split-h' | 'split-v' | 'grid-4'
 
