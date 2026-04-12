@@ -25,7 +25,7 @@ func setRedactTokens(tokens []string) {
 
 var (
 	reAuthHeader = regexp.MustCompile(`(?i)(Authorization:\s*Bearer\s+)\S+`)
-	rePurdexTok  = regexp.MustCompile(`(?i)(purdex_|tbox_)\S+`)
+	rePurdexTok  = regexp.MustCompile(`(?i)(pdx_|purdex_|tbox_)\S+`)
 )
 
 func redactSecrets(s string) string {

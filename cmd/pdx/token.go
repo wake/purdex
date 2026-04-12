@@ -34,13 +34,13 @@ func runToken(args []string) {
 	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/pdx/config.toml)")
 	fs.Parse(flagArgs)
 
-	// Generate 20-byte random token → "tbox_" + 40 hex chars (160-bit entropy)
+	// Generate 20-byte random token → "pdx_" + 40 hex chars (160-bit entropy)
 	raw := make([]byte, 20)
 	if _, err := rand.Read(raw); err != nil {
 		fmt.Fprintf(os.Stderr, "token: failed to generate random bytes: %v\n", err)
 		os.Exit(1)
 	}
-	token := "tbox_" + hex.EncodeToString(raw)
+	token := "pdx_" + hex.EncodeToString(raw)
 
 	// Resolve config path
 	path := *cfgPath
