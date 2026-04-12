@@ -1,10 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.100] - 2026-04-13
+
+### 修正
+
+- **electron**：merge window list 在新視窗 SPA 未載入時顯示 'Purdex' fallback 而非空白按鈕（#220）
+
 ## [1.0.0-alpha.99] - 2026-04-13
 
 ### 重構
 
-- **spa**：建立 `closeTab()` helper 統一 locked guard 和 `destroyBrowserViewIfNeeded` 呼叫，修復 WorkspaceSettingsPage BrowserView 洩漏（#217）
+- **spa**：建立 `closeTab()` helper 統一 locked guard 和 `destroyBrowserViewIfNeeded` 呼叫，修��� WorkspaceSettingsPage BrowserView 洩漏（#217）
 
 ## [1.0.0-alpha.98] - 2026-04-13
 
