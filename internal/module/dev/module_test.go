@@ -57,8 +57,8 @@ func TestStop_CancelsBuild(t *testing.T) {
 	}
 	os.MkdirAll(filepath.Join(m.repoRoot, "out"), 0755)
 
-	// Start lifecycle
-	m.Start(context.Background())
+	// Init lifecycle (creates stopCtx)
+	m.Init(nil)
 
 	// Mock buildCmd that blocks until stopCtx is cancelled
 	m.buildCmd = func() error {

@@ -43,6 +43,7 @@ func (m *DevModule) Dependencies() []string { return nil }
 
 func (m *DevModule) Init(c *core.Core) error {
 	m.core = c
+	m.stopCtx, m.stopCancel = context.WithCancel(context.Background())
 	if m.hashFn == nil {
 		m.hashFn = m.gitHash
 	}
@@ -98,7 +99,6 @@ func (m *DevModule) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (m *DevModule) Start(_ context.Context) error {
-	m.stopCtx, m.stopCancel = context.WithCancel(context.Background())
 	log.Println("[dev] update endpoints enabled")
 	return nil
 }
