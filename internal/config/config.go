@@ -28,7 +28,8 @@ type FeaturesConfig struct {
 }
 
 type DevConfig struct {
-	Update bool `toml:"update" json:"update"`
+	Update   bool   `toml:"update"    json:"update"`
+	RepoRoot string `toml:"repo_root" json:"repo_root"`
 }
 
 type TerminalConfig struct {

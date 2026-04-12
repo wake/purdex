@@ -153,8 +153,11 @@ func runServe(args []string) {
 	c.AddModule(files.New())
 	c.AddModule(logs.New())
 	if c.Cfg.Dev.Update {
-		wd, _ := os.Getwd()
-		c.AddModule(dev.New(wd))
+		repoRoot := c.Cfg.Dev.RepoRoot
+		if repoRoot == "" {
+			repoRoot, _ = os.Getwd()
+		}
+		c.AddModule(dev.New(repoRoot))
 	}
 
 	// 6. Init all modules
