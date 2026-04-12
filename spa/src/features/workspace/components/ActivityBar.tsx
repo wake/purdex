@@ -168,7 +168,7 @@ export function ActivityBar({
               : 'hover:bg-surface-tertiary opacity-70 hover:opacity-100'
           }`}
         >
-          <img src="/icons/logo.png" alt="Purdex" width={20} height={20} className="rounded-sm" />
+          <img src="/icons/logo-transparent.png" alt="Purdex" width={20} height={20} className="rounded-sm" />
         </button>
         {showHomeBadge && (
           <span
