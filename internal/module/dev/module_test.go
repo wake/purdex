@@ -1,10 +1,12 @@
 package dev
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestRunBuild_Success(t *testing.T) {
@@ -44,6 +46,50 @@ func TestRunBuild_Failure(t *testing.T) {
 	}
 	if m.buildError != "build timed out after 5 minutes" {
 		t.Errorf("buildError: want timeout message, got %q", m.buildError)
+	}
+}
+
+func TestStop_CancelsBuild(t *testing.T) {
+	buildStarted := make(chan struct{})
+	m := &DevModule{
+		repoRoot: t.TempDir(),
+		building: true,
+	}
+	os.MkdirAll(filepath.Join(m.repoRoot, "out"), 0755)
+
+	// Start lifecycle
+	m.Start(context.Background())
+
+	// Mock buildCmd that blocks until stopCtx is cancelled
+	m.buildCmd = func() error {
+		close(buildStarted)
+		<-m.stopCtx.Done()
+		return m.stopCtx.Err()
+	}
+
+	// Run build in goroutine
+	done := make(chan struct{})
+	go func() {
+		m.runBuild()
+		close(done)
+	}()
+
+	// Wait for build to start
+	<-buildStarted
+
+	// Stop should cancel the build
+	m.Stop(context.Background())
+
+	// Build goroutine should finish quickly
+	select {
+	case <-done:
+		// success
+	case <-time.After(2 * time.Second):
+		t.Fatal("build goroutine did not finish after Stop()")
+	}
+
+	if m.building {
+		t.Error("building: want false after Stop()")
 	}
 }
 
