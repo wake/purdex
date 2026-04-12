@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.95] - 2026-04-13
+
+### 修正
+
+- **LocaleEditor / ThemeEditor**：編輯 custom entry 時就地更新，不再每次 Save 建立重複項目（#74）
+
 ## [1.0.0-alpha.94] - 2026-04-13
 
 ### 變更
