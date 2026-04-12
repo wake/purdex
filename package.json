@@ -19,6 +19,7 @@
       "out/**/*"
     ],
     "mac": {
+      "icon": "build/icon.icns",
       "identity": null,
       "target": [
         {

@@ -105,8 +105,9 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       // Read fresh layout from store to avoid stale closure
       const currentTab = useTabStore.getState().tabs[tabId]
       if (!currentTab || !isGrid4(currentTab.layout)) return
-      const freshTop = currentTab.layout.children[0] as Extract<PaneLayout, { type: 'split' }>
-      const freshBottom = currentTab.layout.children[1] as Extract<PaneLayout, { type: 'split' }>
+      const outerLayout = currentTab.layout as Extract<PaneLayout, { type: 'split' }>
+      const freshTop = outerLayout.children[0] as Extract<PaneLayout, { type: 'split' }>
+      const freshBottom = outerLayout.children[1] as Extract<PaneLayout, { type: 'split' }>
       for (const split of [freshTop, freshBottom]) {
         const totalPercent = split.sizes[index] + split.sizes[index + 1]
         const newLeft = Math.max(10, Math.min(totalPercent - 10, split.sizes[index] + percentDelta))
