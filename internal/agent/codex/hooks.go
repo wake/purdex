@@ -124,8 +124,9 @@ func mergeCodexHooks(path, pdxPath string, remove bool) error {
 
 func isPdxCommandCodex(cmd string) bool {
 	// Match both quoted ("/path/pdx" hook) and unquoted (/path/pdx hook) forms.
+	// Also match legacy "tbox hook" for migration cleanup.
 	normalized := strings.ReplaceAll(cmd, `"`, "")
-	return strings.Contains(normalized, "pdx hook")
+	return strings.Contains(normalized, "pdx hook") || strings.Contains(normalized, "tbox hook")
 }
 
 func findPdxCommandInCodex(entries any) string {

@@ -212,5 +212,12 @@ func isPdxCommand(cmd string) bool {
 	if strings.Contains(cmd, `/pdx hook`) || strings.HasPrefix(cmd, `pdx hook`) {
 		return true
 	}
+	// Legacy: also match old tbox binary for migration cleanup
+	if strings.Contains(cmd, `/tbox" hook`) || strings.HasPrefix(cmd, `"tbox" hook`) {
+		return true
+	}
+	if strings.Contains(cmd, `/tbox hook`) || strings.HasPrefix(cmd, `tbox hook`) {
+		return true
+	}
 	return false
 }

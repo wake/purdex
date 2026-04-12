@@ -18,6 +18,11 @@ func TestIsPdxCommand_Positive(t *testing.T) {
 		`"pdx" hook --agent cc Stop`,
 		`/usr/local/bin/pdx hook --agent cc UserPromptSubmit`,
 		`pdx hook --agent cc SessionEnd`,
+		// Legacy tbox commands must also match for migration cleanup
+		`"/usr/local/bin/tbox" hook --agent cc SessionStart`,
+		`"tbox" hook --agent cc Stop`,
+		`/usr/local/bin/tbox hook --agent cc UserPromptSubmit`,
+		`tbox hook --agent cc SessionEnd`,
 	}
 	for _, cmd := range cases {
 		if !isPdxCommand(cmd) {
