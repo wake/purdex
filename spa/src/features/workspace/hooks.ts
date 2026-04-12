@@ -4,7 +4,7 @@ import { useWorkspaceStore } from './store'
 import { createTab } from '../../types/tab'
 import { getPrimaryPane } from '../../lib/pane-tree'
 import { renameSession } from '../../lib/host-api'
-import { destroyBrowserViewIfNeeded } from '../../lib/browser-cleanup'
+import { closeTab } from '../../lib/tab-lifecycle'
 import type { Tab, PaneContent } from '../../types/tab'
 import type { ContextMenuAction } from '../../components/TabContextMenu'
 
@@ -46,17 +46,14 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
   }, [setActiveTab, findWorkspaceByTab, setActiveWorkspace, setWorkspaceActiveTab])
 
   const handleCloseTab = useCallback((tabId: string) => {
-    const tab = tabs[tabId]
-    if (!tab || tab.locked) return
-    destroyBrowserViewIfNeeded(tab)
-    useWorkspaceStore.getState().closeTabInWorkspace(tabId)
+    closeTab(tabId)
 
     // Clear rename popover if the renamed tab was closed
     if (renameTarget?.tabId === tabId) {
       setRenameTarget(null)
       setRenameError(undefined)
     }
-  }, [tabs, renameTarget])
+  }, [renameTarget])
 
   const handleAddTab = useCallback(() => {
     const tab = createTab({ kind: 'new-tab' })

@@ -4,7 +4,7 @@ import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { createTab } from '../types/tab'
 import { getVisibleTabIds as getVisibleTabIdsShared } from '../features/workspace'
-import { destroyBrowserViewIfNeeded } from '../lib/browser-cleanup'
+import { closeTab } from '../lib/tab-lifecycle'
 import { getTabShortcutHandler } from '../lib/tab-shortcut-registry'
 import { getPrimaryPane } from '../lib/pane-tree'
 
@@ -58,12 +58,9 @@ export function useShortcuts(): void {
       }
 
       if (action === 'close-tab') {
-        const { activeTabId, tabs } = tabState
+        const { activeTabId } = tabState
         if (!activeTabId || !visibleIds.includes(activeTabId)) return
-        const tab = tabs[activeTabId]
-        if (!tab || tab.locked) return
-        destroyBrowserViewIfNeeded(tab)
-        useWorkspaceStore.getState().closeTabInWorkspace(activeTabId)
+        closeTab(activeTabId)
         return
       }
 
