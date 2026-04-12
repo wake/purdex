@@ -389,7 +389,7 @@ func TestRunHandoff_FullSequence(t *testing.T) {
 	sent := env.tmux.KeysSent()
 	require.NotEmpty(t, sent, "should have sent relay command")
 	lastCmd := sent[len(sent)-1].Keys
-	assert.Contains(t, lastCmd, "tbox relay")
+	assert.Contains(t, lastCmd, "pdx relay")
 	assert.Contains(t, lastCmd, "--session abc123")
 	assert.Contains(t, lastCmd, "--resume uuid-1234")
 

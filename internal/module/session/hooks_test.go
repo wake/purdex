@@ -17,7 +17,7 @@ func newHooksTestModule(hooksOutput string) *SessionModule {
 
 func TestHandleTmuxHookStatus_AllInstalled(t *testing.T) {
 	mod := newHooksTestModule(
-		"session-created[0] -> run-shell -b 'tmux wait-for -S tbox_sess_evt'\nsession-closed[0] -> run-shell -b 'tmux wait-for -S tbox_sess_evt'\nsession-renamed[0] -> run-shell -b 'tmux wait-for -S tbox_sess_evt'\n",
+		"session-created[0] -> run-shell -b 'tmux wait-for -S purdex_sess_evt'\nsession-closed[0] -> run-shell -b 'tmux wait-for -S purdex_sess_evt'\nsession-renamed[0] -> run-shell -b 'tmux wait-for -S purdex_sess_evt'\n",
 	)
 
 	req := httptest.NewRequest("GET", "/api/hooks/tmux/status", nil)
@@ -65,7 +65,7 @@ func TestHandleTmuxHookStatus_NoneInstalled(t *testing.T) {
 
 func TestHandleTmuxHookSetup_Install(t *testing.T) {
 	mod := newHooksTestModule(
-		"session-created[0] -> run-shell -b 'tmux wait-for -S tbox_sess_evt'\nsession-closed[0] -> run-shell -b 'tmux wait-for -S tbox_sess_evt'\nsession-renamed[0] -> run-shell -b 'tmux wait-for -S tbox_sess_evt'\n",
+		"session-created[0] -> run-shell -b 'tmux wait-for -S purdex_sess_evt'\nsession-closed[0] -> run-shell -b 'tmux wait-for -S purdex_sess_evt'\nsession-renamed[0] -> run-shell -b 'tmux wait-for -S purdex_sess_evt'\n",
 	)
 
 	body := strings.NewReader(`{"action":"install"}`)

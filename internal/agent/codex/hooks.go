@@ -67,7 +67,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		command := findTboxCommandInCodex(entries)
 		events[eventName] = agent.HookEventInfo{Installed: command != "", Command: command}
 		if command == "" {
-			issues = append(issues, eventName+" hook: tbox command not found")
+			issues = append(issues, eventName+" hook: pdx command not found")
 			allInstalled = false
 		}
 	}
@@ -123,9 +123,9 @@ func mergeCodexHooks(path, tboxPath string, remove bool) error {
 }
 
 func isTboxCommandCodex(cmd string) bool {
-	// Match both quoted ("/path/tbox" hook) and unquoted (/path/tbox hook) forms.
+	// Match both quoted ("/path/pdx" hook) and unquoted (/path/pdx hook) forms.
 	normalized := strings.ReplaceAll(cmd, `"`, "")
-	return strings.Contains(normalized, "tbox hook")
+	return strings.Contains(normalized, "pdx hook")
 }
 
 func findTboxCommandInCodex(entries any) string {

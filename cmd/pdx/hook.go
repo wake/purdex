@@ -21,7 +21,7 @@ type hookPayload struct {
 	AgentType   string          `json:"agent_type"`
 }
 
-// runHook is the entry point for `tbox hook <event_name>`.
+// runHook is the entry point for `pdx hook <event_name>`.
 // It reads stdin, queries tmux for the session name, and POSTs to the daemon.
 // Any error exits 0 silently — this MUST NOT break CC.
 func runHook(args []string) {
@@ -46,7 +46,7 @@ func runHook(args []string) {
 	eventName := positional[0]
 
 	if agentType == "" {
-		fmt.Fprintf(os.Stderr, "tbox hook: --agent flag is required\n")
+		fmt.Fprintf(os.Stderr, "pdx hook: --agent flag is required\n")
 		os.Exit(1)
 	}
 

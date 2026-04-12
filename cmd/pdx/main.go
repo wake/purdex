@@ -1,4 +1,4 @@
-// cmd/tbox/main.go
+// cmd/pdx/main.go
 package main
 
 import (
@@ -30,7 +30,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: tbox <command> [flags]\n")
+		fmt.Fprintf(os.Stderr, "Usage: pdx <command> [flags]\n")
 		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, relay, hook, setup, token\n")
 		os.Exit(1)
 	}
@@ -62,14 +62,14 @@ func runServe(args []string) {
 	defer func() {
 		if r := recover(); r != nil {
 			home, _ := os.UserHomeDir()
-			logsDir := filepath.Join(home, ".config", "tbox", "logs")
+			logsDir := filepath.Join(home, ".config", "pdx", "logs")
 			writeCrashLog(logsDir, r, debug.Stack())
 			panic(r)
 		}
 	}()
 
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/tbox/config.toml)")
+	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/pdx/config.toml)")
 	bindOverride := fs.String("bind", "", "override bind address")
 	portOverride := fs.Int("port", 0, "override port")
 	quick := fs.Bool("quick", false, "quick setup mode with pairing code")
@@ -103,8 +103,8 @@ func runServe(args []string) {
 		log.Printf("host_id: %s", hostID)
 	}
 
-	// Acquire PID file lock (for tbox start/stop/status)
-	pidPath := filepath.Join(cfg.DataDir, "tbox.pid")
+	// Acquire PID file lock (for pdx start/stop/status)
+	pidPath := filepath.Join(cfg.DataDir, "pdx.pid")
 	pidFile, pidErr := acquirePidLock(pidPath, os.Getpid())
 	if pidErr != nil {
 		log.Printf("pid lock: %v (another instance may be running)", pidErr)
@@ -214,7 +214,7 @@ func runServe(args []string) {
 		srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("tbox daemon listening on %s", addr)
+	log.Printf("pdx daemon listening on %s", addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Printf("server error: %v", err)
 	}
@@ -238,7 +238,7 @@ func runRelay(args []string) {
 		os.Exit(1)
 	}
 
-	token := os.Getenv("TBOX_TOKEN")
+	token := os.Getenv("PDX_TOKEN")
 	wsURL := fmt.Sprintf("%s/ws/cli-bridge/%s", *daemon, *session)
 
 	r := &relay.Relay{

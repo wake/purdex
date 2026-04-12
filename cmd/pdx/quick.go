@@ -1,4 +1,4 @@
-// cmd/tbox/quick.go
+// cmd/pdx/quick.go
 package main
 
 import (

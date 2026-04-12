@@ -9,7 +9,7 @@ import (
 
 func TestPidFileLockAndUnlock(t *testing.T) {
 	dir := t.TempDir()
-	pidPath := filepath.Join(dir, "tbox.pid")
+	pidPath := filepath.Join(dir, "pdx.pid")
 
 	// Acquire lock
 	f, err := acquirePidLock(pidPath, os.Getpid())
@@ -43,7 +43,7 @@ func TestPidFileLockAndUnlock(t *testing.T) {
 
 func TestIsDaemonRunning(t *testing.T) {
 	dir := t.TempDir()
-	pidPath := filepath.Join(dir, "tbox.pid")
+	pidPath := filepath.Join(dir, "pdx.pid")
 
 	// No PID file — not running
 	running, pid := isDaemonRunning(pidPath)

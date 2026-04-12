@@ -197,7 +197,7 @@ func (m *Module) broadcastToSession(tmuxSession string, normalized agentpkg.Norm
 	m.core.Events.Broadcast(code, "hook", string(payload))
 }
 
-// resolveSessionCode maps a tmux session name to the tbox session code.
+// resolveSessionCode maps a tmux session name to the pdx session code.
 func (m *Module) resolveSessionCode(tmuxName string) string {
 	if m.sessions == nil {
 		return ""
@@ -261,7 +261,7 @@ func (m *Module) handleHookSetup(w http.ResponseWriter, r *http.Request) {
 
 	tboxPath, err := os.Executable()
 	if err != nil {
-		http.Error(w, `{"error":"cannot find tbox binary"}`, http.StatusInternalServerError)
+		http.Error(w, `{"error":"cannot find pdx binary"}`, http.StatusInternalServerError)
 		return
 	}
 	tboxPath, _ = filepath.EvalSymlinks(tboxPath)

@@ -11,7 +11,7 @@ import (
 // Go's chan T and <-chan T are different types that can't be compared with ==.
 type SubID uint64
 
-// Bridge manages pub-sub between tbox relay (producer) and SPA clients (consumers).
+// Bridge manages pub-sub between pdx relay (producer) and SPA clients (consumers).
 // Each session has at most one relay and zero or more subscribers.
 type Bridge struct {
 	mu       sync.RWMutex

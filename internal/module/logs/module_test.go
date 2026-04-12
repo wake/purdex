@@ -12,7 +12,7 @@ func TestHandleDaemonLog(t *testing.T) {
 	dir := t.TempDir()
 	logsDir := filepath.Join(dir, "logs")
 	os.MkdirAll(logsDir, 0700)
-	os.WriteFile(filepath.Join(logsDir, "tbox.log"), []byte("line1\nline2\nline3\nline4\nline5\n"), 0644)
+	os.WriteFile(filepath.Join(logsDir, "pdx.log"), []byte("line1\nline2\nline3\nline4\nline5\n"), 0644)
 
 	m := &LogsModule{logsDir: logsDir}
 

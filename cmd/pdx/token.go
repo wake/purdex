@@ -14,7 +14,7 @@ import (
 
 func runToken(args []string) {
 	// Extract subcommand ("generate") from args, pass the rest to flag parsing.
-	// This allows both `tbox token generate --config X` and `tbox token --config X generate`.
+	// This allows both `pdx token generate --config X` and `pdx token --config X generate`.
 	var subcmd string
 	var flagArgs []string
 	for i := 0; i < len(args); i++ {
@@ -26,12 +26,12 @@ func runToken(args []string) {
 	}
 
 	if subcmd != "generate" {
-		fmt.Fprintf(os.Stderr, "Usage: tbox token generate [--config <path>]\n")
+		fmt.Fprintf(os.Stderr, "Usage: pdx token generate [--config <path>]\n")
 		os.Exit(1)
 	}
 
 	fs := flag.NewFlagSet("token", flag.ExitOnError)
-	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/tbox/config.toml)")
+	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/pdx/config.toml)")
 	fs.Parse(flagArgs)
 
 	// Generate 20-byte random token → "tbox_" + 40 hex chars (160-bit entropy)
@@ -50,7 +50,7 @@ func runToken(args []string) {
 			fmt.Fprintf(os.Stderr, "token: cannot determine home directory: %v\n", err)
 			os.Exit(1)
 		}
-		path = filepath.Join(home, ".config", "tbox", "config.toml")
+		path = filepath.Join(home, ".config", "pdx", "config.toml")
 	}
 
 	// Load existing config (returns defaults if file doesn't exist)

@@ -46,7 +46,7 @@ func (m *LogsModule) Stop(_ context.Context) error { return nil }
 var reCrashFile = regexp.MustCompile(`^crash-\d{8}-\d{6}\.log$`)
 
 func (m *LogsModule) handleDaemonLog(w http.ResponseWriter, r *http.Request) {
-	logPath := filepath.Join(m.logsDir, "tbox.log")
+	logPath := filepath.Join(m.logsDir, "pdx.log")
 	if _, err := os.Stat(logPath); err != nil {
 		w.WriteHeader(http.StatusNoContent)
 		return

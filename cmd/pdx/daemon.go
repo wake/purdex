@@ -84,10 +84,10 @@ func parseConfigPath(args []string) (config.Config, string) {
 func runStart(args []string) {
 	cfg, _ := parseConfigPath(args)
 
-	pidPath := filepath.Join(cfg.DataDir, "tbox.pid")
+	pidPath := filepath.Join(cfg.DataDir, "pdx.pid")
 
 	if running, pid := isDaemonRunning(pidPath); running {
-		fmt.Fprintf(os.Stderr, "tbox: already running (pid %d)\n", pid)
+		fmt.Fprintf(os.Stderr, "pdx: already running (pid %d)\n", pid)
 		os.Exit(1)
 	}
 
@@ -96,7 +96,7 @@ func runStart(args []string) {
 		log.Fatalf("create logs dir: %v", err)
 	}
 
-	logFile, err := os.OpenFile(filepath.Join(logsDir, "tbox.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	logFile, err := os.OpenFile(filepath.Join(logsDir, "pdx.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		log.Fatalf("open log file: %v", err)
 	}
@@ -149,33 +149,33 @@ func runStart(args []string) {
 	}
 
 	if !healthy {
-		fmt.Fprintf(os.Stderr, "tbox: daemon started but health check failed, killing child\n")
+		fmt.Fprintf(os.Stderr, "pdx: daemon started but health check failed, killing child\n")
 		cmd.Process.Kill()
-		fmt.Fprintf(os.Stderr, "tbox: last 20 lines of %s:\n\n", filepath.Join(logsDir, "tbox.log"))
-		tailCmd := exec.Command("tail", "-n", "20", filepath.Join(logsDir, "tbox.log"))
+		fmt.Fprintf(os.Stderr, "pdx: last 20 lines of %s:\n\n", filepath.Join(logsDir, "pdx.log"))
+		tailCmd := exec.Command("tail", "-n", "20", filepath.Join(logsDir, "pdx.log"))
 		tailCmd.Stdout = os.Stderr
 		tailCmd.Run()
 		os.Exit(1)
 	}
 
-	logPath := filepath.Join(logsDir, "tbox.log")
-	fmt.Printf("tbox daemon started (pid %d, bind %s, log %s)\n", childPid, addr, logPath)
+	logPath := filepath.Join(logsDir, "pdx.log")
+	fmt.Printf("pdx daemon started (pid %d, bind %s, log %s)\n", childPid, addr, logPath)
 }
 
 func runStop(args []string) {
 	cfg, _ := parseConfigPath(args)
 
-	pidPath := filepath.Join(cfg.DataDir, "tbox.pid")
+	pidPath := filepath.Join(cfg.DataDir, "pdx.pid")
 
 	running, pid := isDaemonRunning(pidPath)
 	if !running {
-		fmt.Println("tbox: not running")
+		fmt.Println("pdx: not running")
 		return
 	}
 
 	proc, err := os.FindProcess(pid)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "tbox: cannot find process %d: %v\n", pid, err)
+		fmt.Fprintf(os.Stderr, "pdx: cannot find process %d: %v\n", pid, err)
 		os.Exit(1)
 	}
 
@@ -184,13 +184,13 @@ func runStop(args []string) {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if r, _ := isDaemonRunning(pidPath); !r {
-			fmt.Printf("tbox: stopped (pid %d)\n", pid)
+			fmt.Printf("pdx: stopped (pid %d)\n", pid)
 			return
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	fmt.Fprintf(os.Stderr, "tbox: daemon did not stop within 30s, sending SIGKILL\n")
+	fmt.Fprintf(os.Stderr, "pdx: daemon did not stop within 30s, sending SIGKILL\n")
 	proc.Signal(syscall.SIGKILL)
 	time.Sleep(1 * time.Second)
 	os.Remove(pidPath)
@@ -199,9 +199,9 @@ func runStop(args []string) {
 func runStatus(args []string) {
 	cfg, _ := parseConfigPath(args)
 
-	pidPath := filepath.Join(cfg.DataDir, "tbox.pid")
+	pidPath := filepath.Join(cfg.DataDir, "pdx.pid")
 	logsDir := filepath.Join(cfg.DataDir, "logs")
-	logPath := filepath.Join(logsDir, "tbox.log")
+	logPath := filepath.Join(logsDir, "pdx.log")
 
 	running, pid := isDaemonRunning(pidPath)
 	if !running {

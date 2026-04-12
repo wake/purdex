@@ -144,7 +144,7 @@ func (r *Relay) Run(ctx context.Context) error {
 	wg.Wait()
 
 	if cmdErr != nil {
-		fmt.Fprintf(os.Stderr, "tbox relay: subprocess exited: %v\n", cmdErr)
+		fmt.Fprintf(os.Stderr, "pdx relay: subprocess exited: %v\n", cmdErr)
 	}
 	return cmdErr
 }

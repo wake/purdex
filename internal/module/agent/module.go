@@ -1,5 +1,5 @@
 // Package agent provides the agent hook event module.
-// It receives hook events from `tbox hook`, stores them in AgentEventStore,
+// It receives hook events from `pdx hook`, stores them in AgentEventStore,
 // and broadcasts to WS subscribers.
 package agent
 
@@ -64,7 +64,7 @@ func (m *Module) Init(c *core.Core) error {
 
 	if m.uploadDir == "" {
 		home, _ := os.UserHomeDir()
-		m.uploadDir = filepath.Join(home, "tmp", "tbox-upload")
+		m.uploadDir = filepath.Join(home, "tmp", "purdex-upload")
 	}
 
 	// CC provider
