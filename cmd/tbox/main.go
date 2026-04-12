@@ -20,6 +20,7 @@ import (
 	"github.com/wake/tmux-box/internal/module/agent"
 	"github.com/wake/tmux-box/internal/module/dev"
 	"github.com/wake/tmux-box/internal/module/files"
+	"github.com/wake/tmux-box/internal/module/logs"
 	"github.com/wake/tmux-box/internal/module/session"
 	"github.com/wake/tmux-box/internal/module/stream"
 	"github.com/wake/tmux-box/internal/relay"
@@ -150,6 +151,7 @@ func runServe(args []string) {
 	c.AddModule(stream.New())
 	c.AddModule(agent.New(agentEvents))
 	c.AddModule(files.New())
+	c.AddModule(logs.New())
 	if c.Cfg.Dev.Update {
 		wd, _ := os.Getwd()
 		c.AddModule(dev.New(wd))
