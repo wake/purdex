@@ -80,7 +80,7 @@ describe('ActivityBar', () => {
   it('highlights Home when no active workspace', () => {
     render(<ActivityBar {...defaultProps} activeWorkspaceId={null} />)
     const homeBtn = screen.getByTitle('Home')
-    expect(homeBtn.className).toContain('bg-accent')
+    expect(homeBtn.className).toContain('ring-2')
   })
 
   it('calls onSelectHome on Home click', () => {
