@@ -8,9 +8,10 @@ import { SessionsSection } from './hosts/SessionsSection'
 import { HooksSection } from './hosts/HooksSection'
 import { AgentsSection } from './hosts/AgentsSection'
 import { UploadSection } from './hosts/UploadSection'
+import { LogsSection } from './hosts/LogsSection'
 import { AddHostDialog } from './hosts/AddHostDialog'
 
-export type HostSubPage = 'overview' | 'sessions' | 'hooks' | 'agents' | 'uploads'
+export type HostSubPage = 'overview' | 'sessions' | 'hooks' | 'agents' | 'uploads' | 'logs'
 
 interface Selection {
   hostId: string
@@ -52,6 +53,8 @@ export function HostPage(_props: PaneRendererProps) {
         return <AgentsSection hostId={effectiveSelection.hostId} />
       case 'uploads':
         return <UploadSection hostId={effectiveSelection.hostId} />
+      case 'logs':
+        return <LogsSection hostId={effectiveSelection.hostId} />
     }
   }
 

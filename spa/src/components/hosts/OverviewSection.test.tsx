@@ -145,6 +145,54 @@ describe('OverviewSection', () => {
       expect(screen.getByText('0 preset(s)')).toBeInTheDocument()
     })
   })
+
+  it('clears stale testResult when runtime transitions to connected', async () => {
+    mockFetchHealth.mockResolvedValue({ ok: false, status: 503 } as Response)
+
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'Test', ip: '1.2.3.4', port: 7860, order: 0, token: 'purdex_testtoken' } },
+      hostOrder: [HOST_ID],
+      runtime: { [HOST_ID]: { status: 'reconnecting' } },
+    })
+
+    const { rerender } = render(<OverviewSection hostId={HOST_ID} />)
+
+    // Simulate a failed test connection
+    fireEvent.click(screen.getByText('Test Connection'))
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to fetch|HTTP 503/)).toBeInTheDocument()
+    })
+
+    // Transition runtime to connected
+    useHostStore.setState({
+      runtime: { [HOST_ID]: { status: 'connected' } },
+    })
+    rerender(<OverviewSection hostId={HOST_ID} />)
+
+    // Error should be cleared
+    await waitFor(() => {
+      expect(screen.queryByText(/Failed to fetch|HTTP 503/)).not.toBeInTheDocument()
+    })
+  })
+
+  it('does not clear testResult when runtime stays connected', async () => {
+    mockFetchHealth.mockResolvedValue({ ok: true } as Response)
+
+    render(<OverviewSection hostId={HOST_ID} />)
+
+    fireEvent.click(screen.getByText('Test Connection'))
+    await waitFor(() => {
+      expect(screen.getByText(/Connected/)).toBeInTheDocument()
+    })
+
+    // Runtime stays connected — rerender should NOT clear the success pill
+    useHostStore.setState({
+      runtime: { [HOST_ID]: { status: 'connected' } },
+    })
+
+    // Success pill should still be visible
+    expect(screen.getByText(/Connected/)).toBeInTheDocument()
+  })
 })
 
 /* ─── TokenField tests ─── */

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/wake/tmux-box/internal/module/agent"
 	"github.com/wake/tmux-box/internal/module/dev"
 	"github.com/wake/tmux-box/internal/module/files"
+	"github.com/wake/tmux-box/internal/module/logs"
 	"github.com/wake/tmux-box/internal/module/session"
 	"github.com/wake/tmux-box/internal/module/stream"
 	"github.com/wake/tmux-box/internal/relay"
@@ -29,7 +31,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: tbox <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, relay, hook, setup, token\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, relay, hook, setup, token\n")
 		os.Exit(1)
 	}
 
@@ -44,6 +46,12 @@ func main() {
 		runSetup(os.Args[2:])
 	case "token":
 		runToken(os.Args[2:])
+	case "start":
+		runStart(os.Args[2:])
+	case "stop":
+		runStop(os.Args[2:])
+	case "status":
+		runStatus(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -51,6 +59,15 @@ func main() {
 }
 
 func runServe(args []string) {
+	defer func() {
+		if r := recover(); r != nil {
+			home, _ := os.UserHomeDir()
+			logsDir := filepath.Join(home, ".config", "tbox", "logs")
+			writeCrashLog(logsDir, r, debug.Stack())
+			panic(r)
+		}
+	}()
+
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/tbox/config.toml)")
 	bindOverride := fs.String("bind", "", "override bind address")
@@ -84,6 +101,20 @@ func runServe(args []string) {
 		log.Printf("host_id: %v (running without stable host ID)", err)
 	} else {
 		log.Printf("host_id: %s", hostID)
+	}
+
+	// Acquire PID file lock (for tbox start/stop/status)
+	pidPath := filepath.Join(cfg.DataDir, "tbox.pid")
+	pidFile, pidErr := acquirePidLock(pidPath, os.Getpid())
+	if pidErr != nil {
+		log.Printf("pid lock: %v (another instance may be running)", pidErr)
+	} else {
+		defer releasePidLock(pidFile, pidPath)
+	}
+
+	// Register token for crash log redaction
+	if cfg.Token != "" {
+		setRedactTokens([]string{cfg.Token})
 	}
 
 	// 2. Open MetaStore
@@ -120,6 +151,7 @@ func runServe(args []string) {
 	c.AddModule(stream.New())
 	c.AddModule(agent.New(agentEvents))
 	c.AddModule(files.New())
+	c.AddModule(logs.New())
 	if c.Cfg.Dev.Update {
 		wd, _ := os.Getwd()
 		c.AddModule(dev.New(wd))

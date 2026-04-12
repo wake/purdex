@@ -10,6 +10,7 @@ const SUB_PAGES: { id: HostSubPage; labelKey: string }[] = [
   { id: 'hooks', labelKey: 'hosts.hooks' },
   { id: 'agents', labelKey: 'hosts.agents' },
   { id: 'uploads', labelKey: 'hosts.uploads' },
+  { id: 'logs', labelKey: 'hosts.logs' },
 ]
 
 interface Props {

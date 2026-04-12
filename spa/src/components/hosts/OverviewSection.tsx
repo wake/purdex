@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise, Trash, Plugs, LockSimple } from '@phosphor-icons/react'
 import { useHostStore, type HostInfo, type HostRuntime } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -28,6 +28,15 @@ export function OverviewSection({ hostId }: Props) {
   const [testing, setTesting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [closeTabs, setCloseTabs] = useState(true)
+
+  const prevStatusRef = useRef(runtime?.status)
+  useEffect(() => {
+    const prev = prevStatusRef.current
+    prevStatusRef.current = runtime?.status
+    if (prev !== 'connected' && runtime?.status === 'connected') {
+      setTestResult(null)
+    }
+  }, [runtime?.status])
 
   // Fetch info + config on mount or hostId change
   useEffect(() => {
