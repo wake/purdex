@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wake/tmux-box/internal/terminal"
+	"github.com/wake/purdex/internal/terminal"
 )
 
 func TestBatcherFlushByTime(t *testing.T) {

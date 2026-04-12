@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"sync/atomic"
 
-	"github.com/wake/tmux-box/internal/config"
-	"github.com/wake/tmux-box/internal/pairing"
+	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/pairing"
 )
 
 const (

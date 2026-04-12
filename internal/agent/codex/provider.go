@@ -3,7 +3,7 @@ package codex
 import (
 	"encoding/json"
 
-	"github.com/wake/tmux-box/internal/agent"
+	"github.com/wake/purdex/internal/agent"
 )
 
 type Provider struct{}

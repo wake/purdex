@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wake/tmux-box/internal/agent"
+	"github.com/wake/purdex/internal/agent"
 )
 
 var ccHookEvents = []string{

@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/wake/tmux-box/internal/config"
+	"github.com/wake/purdex/internal/config"
 )
 
 func acquirePidLock(pidPath string, pid int) (*os.File, error) {

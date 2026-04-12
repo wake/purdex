@@ -10,7 +10,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/websocket"
-	"github.com/wake/tmux-box/internal/module/session"
+	"github.com/wake/purdex/internal/module/session"
 )
 
 var bridgeUpgrader = websocket.Upgrader{

@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/wake/tmux-box/internal/core"
-	"github.com/wake/tmux-box/internal/store"
-	"github.com/wake/tmux-box/internal/tmux"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/store"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // SessionModule manages tmux sessions, meta cache, and HTTP API.

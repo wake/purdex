@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	agentpkg "github.com/wake/tmux-box/internal/agent"
-	"github.com/wake/tmux-box/internal/module/session"
+	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/module/session"
 )
 
 // fakeSessionProvider is a shared test-only SessionProvider with a

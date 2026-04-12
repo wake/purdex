@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/wake/tmux-box/internal/core"
+	"github.com/wake/purdex/internal/core"
 )
 
 type LogsModule struct {

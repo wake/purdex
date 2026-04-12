@@ -3,7 +3,7 @@ package cc
 import (
 	"encoding/json"
 
-	"github.com/wake/tmux-box/internal/agent"
+	"github.com/wake/purdex/internal/agent"
 )
 
 func deriveCCStatus(eventName string, rawEvent json.RawMessage) agent.DeriveResult {

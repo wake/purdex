@@ -8,10 +8,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/wake/tmux-box/internal/config"
-	"github.com/wake/tmux-box/internal/core"
-	"github.com/wake/tmux-box/internal/store"
-	"github.com/wake/tmux-box/internal/tmux"
+	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/store"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 func TestBuildTerminalRelayArgs_Auto(t *testing.T) {

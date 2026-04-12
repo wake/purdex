@@ -1,4 +1,4 @@
-module github.com/wake/tmux-box
+module github.com/wake/purdex
 
 go 1.25.0
 

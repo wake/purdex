@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	agentpkg "github.com/wake/tmux-box/internal/agent"
-	"github.com/wake/tmux-box/internal/module/session"
+	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/module/session"
 )
 
 // EventRequest is the JSON body expected by POST /api/agent/event.

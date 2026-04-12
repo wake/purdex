@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	agentpkg "github.com/wake/tmux-box/internal/agent"
-	"github.com/wake/tmux-box/internal/core"
-	"github.com/wake/tmux-box/internal/module/session"
-	"github.com/wake/tmux-box/internal/store"
-	"github.com/wake/tmux-box/internal/tmux"
+	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/store"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // fakeSessionProvider is defined in fakes_test.go (shared test fixture).

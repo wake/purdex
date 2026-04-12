@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wake/tmux-box/internal/tmux"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 func TestListSessions(t *testing.T) {

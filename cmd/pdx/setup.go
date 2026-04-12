@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/wake/tmux-box/internal/config"
+	"github.com/wake/purdex/internal/config"
 )
 
 func runSetup(args []string) {

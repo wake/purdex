@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/wake/tmux-box/internal/tmux"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 func (p *Provider) Interrupt(ctx context.Context, tmuxTarget string) error {

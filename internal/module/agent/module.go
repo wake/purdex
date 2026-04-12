@@ -13,12 +13,12 @@ import (
 	"sync"
 	"time"
 
-	agentpkg "github.com/wake/tmux-box/internal/agent"
-	agentcc "github.com/wake/tmux-box/internal/agent/cc"
-	"github.com/wake/tmux-box/internal/agent/codex"
-	"github.com/wake/tmux-box/internal/core"
-	"github.com/wake/tmux-box/internal/module/session"
-	"github.com/wake/tmux-box/internal/store"
+	agentpkg "github.com/wake/purdex/internal/agent"
+	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/agent/codex"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/store"
 )
 
 // Module is the agent hook event module.

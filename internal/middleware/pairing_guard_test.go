@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/wake/tmux-box/internal/middleware"
+	"github.com/wake/purdex/internal/middleware"
 )
 
 func TestPairingGuardBlocksInPairingMode(t *testing.T) {

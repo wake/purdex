@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wake/tmux-box/internal/history"
+	"github.com/wake/purdex/internal/history"
 )
 
 const maxJSONLBytes = 2 * 1024 * 1024

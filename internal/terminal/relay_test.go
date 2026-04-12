@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/wake/tmux-box/internal/terminal"
+	"github.com/wake/purdex/internal/terminal"
 )
 
 func TestRelayEcho(t *testing.T) {

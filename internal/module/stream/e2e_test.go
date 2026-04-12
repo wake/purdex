@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/wake/tmux-box/internal/module/session"
-	"github.com/wake/tmux-box/internal/relay"
+	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/relay"
 )
 
 // TestE2EPipelineSPAThroughRelay verifies the full message pipeline:

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	agentcc "github.com/wake/tmux-box/internal/agent/cc"
-	"github.com/wake/tmux-box/internal/module/session"
+	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/module/session"
 )
 
 // runHandoff executes the handoff-to-stream sequence asynchronously:

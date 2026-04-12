@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/wake/tmux-box/internal/core"
+	"github.com/wake/purdex/internal/core"
 )
 
 type FilesModule struct{}
