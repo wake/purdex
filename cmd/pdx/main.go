@@ -155,7 +155,11 @@ func runServe(args []string) {
 	if c.Cfg.Dev.Update {
 		repoRoot := c.Cfg.Dev.RepoRoot
 		if repoRoot == "" {
-			repoRoot, _ = os.Getwd()
+			wd, err := os.Getwd()
+			if err != nil {
+				log.Fatalf("dev module: cannot determine repo root: %v", err)
+			}
+			repoRoot = wd
 		}
 		c.AddModule(dev.New(repoRoot))
 	}
