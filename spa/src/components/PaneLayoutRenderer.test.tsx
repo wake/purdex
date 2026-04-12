@@ -1,12 +1,108 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
-import { PaneLayoutRenderer } from './PaneLayoutRenderer'
+import { PaneLayoutRenderer, isGrid4 } from './PaneLayoutRenderer'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import type { PaneLayout } from '../types/tab'
 
 beforeEach(() => {
   cleanup()
   clearModuleRegistry()
+})
+
+describe('isGrid4', () => {
+  it('returns true for a valid 2x2 grid layout', () => {
+    const layout: PaneLayout = {
+      type: 'split', id: 'outer', direction: 'v',
+      children: [
+        { type: 'split', id: 'top', direction: 'h', children: [
+          { type: 'leaf', pane: { id: 'tl', content: { kind: 'dashboard' } } },
+          { type: 'leaf', pane: { id: 'tr', content: { kind: 'dashboard' } } },
+        ], sizes: [50, 50] },
+        { type: 'split', id: 'bot', direction: 'h', children: [
+          { type: 'leaf', pane: { id: 'bl', content: { kind: 'dashboard' } } },
+          { type: 'leaf', pane: { id: 'br', content: { kind: 'dashboard' } } },
+        ], sizes: [50, 50] },
+      ],
+      sizes: [50, 50],
+    }
+    expect(isGrid4(layout)).toBe(true)
+  })
+
+  it('returns false for a leaf layout', () => {
+    const layout: PaneLayout = { type: 'leaf', pane: { id: 'p1', content: { kind: 'dashboard' } } }
+    expect(isGrid4(layout)).toBe(false)
+  })
+
+  it('returns false for a horizontal split (not vertical outer)', () => {
+    const layout: PaneLayout = {
+      type: 'split', id: 's1', direction: 'h',
+      children: [
+        { type: 'split', id: 'a', direction: 'h', children: [
+          { type: 'leaf', pane: { id: 'p1', content: { kind: 'dashboard' } } },
+          { type: 'leaf', pane: { id: 'p2', content: { kind: 'dashboard' } } },
+        ], sizes: [50, 50] },
+        { type: 'split', id: 'b', direction: 'h', children: [
+          { type: 'leaf', pane: { id: 'p3', content: { kind: 'dashboard' } } },
+          { type: 'leaf', pane: { id: 'p4', content: { kind: 'dashboard' } } },
+        ], sizes: [50, 50] },
+      ],
+      sizes: [50, 50],
+    }
+    expect(isGrid4(layout)).toBe(false)
+  })
+
+  it('returns false when children are not splits', () => {
+    const layout: PaneLayout = {
+      type: 'split', id: 's1', direction: 'v',
+      children: [
+        { type: 'leaf', pane: { id: 'p1', content: { kind: 'dashboard' } } },
+        { type: 'leaf', pane: { id: 'p2', content: { kind: 'dashboard' } } },
+      ],
+      sizes: [50, 50],
+    }
+    expect(isGrid4(layout)).toBe(false)
+  })
+
+  it('returns false when outer split has 3 children', () => {
+    const makeSplit = (id: string) => ({
+      type: 'split' as const, id, direction: 'h' as const,
+      children: [
+        { type: 'leaf' as const, pane: { id: `${id}-l`, content: { kind: 'dashboard' as const } } },
+        { type: 'leaf' as const, pane: { id: `${id}-r`, content: { kind: 'dashboard' as const } } },
+      ],
+      sizes: [50, 50],
+    })
+    const layout: PaneLayout = {
+      type: 'split', id: 's1', direction: 'v',
+      children: [makeSplit('a'), makeSplit('b'), makeSplit('c')],
+      sizes: [33, 33, 34],
+    }
+    expect(isGrid4(layout)).toBe(false)
+  })
+
+  it('validates grid-4 structure completely', () => {
+    const layout: PaneLayout = {
+      type: 'split', id: 'outer', direction: 'v',
+      children: [
+        { type: 'split', id: 'top', direction: 'h', children: [
+          { type: 'leaf', pane: { id: 'tl', content: { kind: 'dashboard' } } },
+          { type: 'leaf', pane: { id: 'tr', content: { kind: 'dashboard' } } },
+        ], sizes: [50, 50] },
+        { type: 'split', id: 'bot', direction: 'h', children: [
+          { type: 'leaf', pane: { id: 'bl', content: { kind: 'dashboard' } } },
+          { type: 'leaf', pane: { id: 'br', content: { kind: 'dashboard' } } },
+        ], sizes: [50, 50] },
+      ],
+      sizes: [50, 50],
+    }
+    expect(isGrid4(layout)).toBe(true)
+    // After isSplit guard, .children is accessible
+    if (layout.type === 'split' && isGrid4(layout)) {
+      expect(layout.children.length).toBe(2)
+      expect(layout.direction).toBe('v')
+      expect(layout.id).toBe('outer')
+    }
+  })
 })
 
 describe('PaneLayoutRenderer', () => {
