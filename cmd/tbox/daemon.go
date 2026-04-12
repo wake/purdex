@@ -65,11 +65,24 @@ func isDaemonRunning(pidPath string) (bool, int) {
 	return false, pid
 }
 
-func runStart(args []string) {
-	cfg, err := config.Load("")
+// parseConfigPath extracts --config value from args and loads config accordingly.
+func parseConfigPath(args []string) (config.Config, string) {
+	var cfgPath string
+	for i, a := range args {
+		if (a == "--config" || a == "-config") && i+1 < len(args) {
+			cfgPath = args[i+1]
+			break
+		}
+	}
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	return cfg, cfgPath
+}
+
+func runStart(args []string) {
+	cfg, _ := parseConfigPath(args)
 
 	pidPath := filepath.Join(cfg.DataDir, "tbox.pid")
 
@@ -136,7 +149,8 @@ func runStart(args []string) {
 	}
 
 	if !healthy {
-		fmt.Fprintf(os.Stderr, "tbox: daemon started but health check failed\n")
+		fmt.Fprintf(os.Stderr, "tbox: daemon started but health check failed, killing child\n")
+		cmd.Process.Kill()
 		fmt.Fprintf(os.Stderr, "tbox: last 20 lines of %s:\n\n", filepath.Join(logsDir, "tbox.log"))
 		tailCmd := exec.Command("tail", "-n", "20", filepath.Join(logsDir, "tbox.log"))
 		tailCmd.Stdout = os.Stderr
@@ -148,11 +162,8 @@ func runStart(args []string) {
 	fmt.Printf("tbox daemon started (pid %d, bind %s, log %s)\n", childPid, addr, logPath)
 }
 
-func runStop(_ []string) {
-	cfg, err := config.Load("")
-	if err != nil {
-		log.Fatalf("config: %v", err)
-	}
+func runStop(args []string) {
+	cfg, _ := parseConfigPath(args)
 
 	pidPath := filepath.Join(cfg.DataDir, "tbox.pid")
 
@@ -174,7 +185,6 @@ func runStop(_ []string) {
 	for time.Now().Before(deadline) {
 		if r, _ := isDaemonRunning(pidPath); !r {
 			fmt.Printf("tbox: stopped (pid %d)\n", pid)
-			os.Remove(pidPath)
 			return
 		}
 		time.Sleep(500 * time.Millisecond)
@@ -186,11 +196,8 @@ func runStop(_ []string) {
 	os.Remove(pidPath)
 }
 
-func runStatus(_ []string) {
-	cfg, err := config.Load("")
-	if err != nil {
-		log.Fatalf("config: %v", err)
-	}
+func runStatus(args []string) {
+	cfg, _ := parseConfigPath(args)
 
 	pidPath := filepath.Join(cfg.DataDir, "tbox.pid")
 	logsDir := filepath.Join(cfg.DataDir, "logs")

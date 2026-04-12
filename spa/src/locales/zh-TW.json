@@ -317,6 +317,7 @@
   "hosts.logs_daemon": "Daemon 日誌",
   "hosts.logs_crash": "Crash 紀錄",
   "hosts.logs_no_crash": "尚無 Crash 紀錄",
+  "hosts.logs_no_daemon": "尚無 Daemon 日誌",
   "hosts.logs_refresh": "重新整理",
   "hosts.logs_offline": "主機離線中",
   "hosts.connection": "連線設定",

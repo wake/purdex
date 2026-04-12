@@ -101,7 +101,7 @@ func (m *LogsModule) handleCrashLog(w http.ResponseWriter, r *http.Request) {
 	latest := crashFiles[len(crashFiles)-1]
 
 	fullPath := filepath.Join(m.logsDir, latest)
-	if !strings.HasPrefix(fullPath, m.logsDir) {
+	if !strings.HasPrefix(fullPath, m.logsDir+string(filepath.Separator)) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}

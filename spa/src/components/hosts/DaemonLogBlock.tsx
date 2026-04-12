@@ -57,7 +57,7 @@ export function DaemonLogBlock({ hostId }: Props) {
           {content}
         </pre>
       ) : (
-        <p className="text-xs text-text-muted">{t('hosts.loading')}</p>
+        <p className="text-xs text-text-muted">{loading ? t('hosts.loading') : t('hosts.logs_no_daemon')}</p>
       )}
     </div>
   )

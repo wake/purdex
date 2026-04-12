@@ -56,9 +56,11 @@ func writeCrashLog(logsDir string, panicVal interface{}, stack []byte) {
 	if bi != nil && bi.Main.Version != "" {
 		version = bi.Main.Version
 	}
-	// Try reading VERSION file from DataDir (best-effort)
-	if vData, err := os.ReadFile(filepath.Join(filepath.Dir(logsDir), "VERSION")); err == nil {
-		version = strings.TrimSpace(string(vData))
+	// Best-effort: try reading VERSION from executable's directory (repo root)
+	if self, err := os.Executable(); err == nil {
+		if vData, err := os.ReadFile(filepath.Join(filepath.Dir(self), "VERSION")); err == nil {
+			version = strings.TrimSpace(string(vData))
+		}
 	}
 
 	content := fmt.Sprintf("Time:        %s\nVersion:     %s\nGo Runtime:  %s\nGoroutines:  %d\n\nPanic: %v\n\nStack:\n%s\n",
