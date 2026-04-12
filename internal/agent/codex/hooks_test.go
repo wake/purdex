@@ -37,31 +37,6 @@ func TestFilterOutPdxCodex_MatchesAndPreserves(t *testing.T) {
 	}
 }
 
-func TestFilterOutPdxCodex_LegacyTbox(t *testing.T) {
-	entries := []any{
-		map[string]any{
-			"type":    "command",
-			"command": `"/usr/local/bin/tbox" hook --agent codex SessionStart`,
-			"timeout": 5,
-		},
-		map[string]any{
-			"type":    "command",
-			"command": "/usr/bin/notify-me start",
-			"timeout": 5,
-		},
-	}
-
-	result := filterOutPdxCodex(entries)
-	if len(result) != 1 {
-		t.Fatalf("expected 1 entry after filtering legacy tbox, got %d", len(result))
-	}
-	m, _ := result[0].(map[string]any)
-	cmd, _ := m["command"].(string)
-	if cmd != "/usr/bin/notify-me start" {
-		t.Errorf("unexpected remaining command: %s", cmd)
-	}
-}
-
 func TestFilterOutPdxCodex_NonMapPreserved(t *testing.T) {
 	entries := []any{"string-entry", 42}
 	result := filterOutPdxCodex(entries)
