@@ -5,7 +5,7 @@
   "main": "out/main/index.mjs",
   "scripts": {
     "electron:dev": "electron-vite dev",
-    "electron:build": "electron-vite build && electron-builder",
+    "electron:build": "electron-vite build && node scripts/build-electron.mjs",
     "electron:preview": "electron-vite preview"
   },
   "build": {
