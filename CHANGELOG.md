@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.92] - 2026-04-12
+
+- chore: rename cleanup + Purdex logo (#315)
+
+### 變更
+
+- **Go 內部符號**：`tboxPath`/`makeTboxEntry`/`isTboxCommand` 等全部更名為 `pdxPath`/`makePdxEntry`/`isPdxCommand`
+- **App 圖示**：PWA icons、macOS .icns、favicon 全部替換為 Purdex logo
+- **ActivityBar**：Home 按鈕使用 Purdex logo 取代 SquaresFour icon
+- **Maskable icon**：加入紫色背景 + 70% safe zone padding
+- **型別安全**：新增 `SplitLayout` 型別 + `isSplit` type guard，移除 `PaneLayoutRenderer` 的 unsafe `as` cast
+- **測試**：新增 `isGrid4` 6 個單元測試
+
 ## [1.0.0-alpha.91] - 2026-04-12
 
 - refactor: brand rename from tmux-box to Purdex (#308, #309, #310, #311, #312)
