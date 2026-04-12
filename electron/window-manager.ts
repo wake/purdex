@@ -114,7 +114,7 @@ export class WindowManager {
     const excludeWin = excludeWebContents ? BrowserWindow.fromWebContents(excludeWebContents) : null
     return Array.from(this.windows.entries())
       .filter(([, win]) => !win.isDestroyed() && win !== excludeWin)
-      .map(([id, win]) => ({ id, title: win.getTitle() }))
+      .map(([id, win]) => ({ id, title: win.getTitle() || 'Purdex' }))
   }
 
   getAllWindows(): BrowserWindow[] {
