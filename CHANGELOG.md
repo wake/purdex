@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.101] - 2026-04-13
+
+### 重構
+
+- **spa**：拆分 `useTabStore.test.ts` (517→343 行)，獨立 `terminated` 和 `migration` 測試檔案（#213）
+
 ## [1.0.0-alpha.100] - 2026-04-13
 
 ### 修正
