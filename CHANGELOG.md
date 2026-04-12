@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.105] - 2026-04-13
+
+### 功能
+
+- **daemon + spa**：Session list 即時同步 — SPA 新增 `useSessionWatch()` ref-counted polling hook，daemon `handleList` 新增 1s TTL debounce cache（#128）
+
 ## [1.0.0-alpha.104] - 2026-04-13
 
 ### 測試
