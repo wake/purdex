@@ -1,10 +1,12 @@
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
+import { useSessionWatch } from '../hooks/useSessionWatch'
 import type { NewTabProviderProps } from '../lib/new-tab-registry'
 import { TerminalWindow, Circle, Spinner } from '@phosphor-icons/react'
 
 export function SessionSection({ onSelect }: NewTabProviderProps) {
+  useSessionWatch()
   const sessionsMap = useSessionStore((s) => s.sessions)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)

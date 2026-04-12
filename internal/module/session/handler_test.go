@@ -639,6 +639,42 @@ func TestHandlerSendKeysNotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+func TestHandleList_CacheDebounce(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+
+	fake.AddSession("test", "/tmp")
+
+	handler := http.HandlerFunc(mod.handleList)
+
+	// First call — fetches from tmux
+	req1 := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
+	w1 := httptest.NewRecorder()
+	handler.ServeHTTP(w1, req1)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first call: want 200, got %d", w1.Code)
+	}
+	// ListSessions is called once by handleList, but also internally by
+	// ListSessions → listSessions which may call tmux.ListSessions.
+	// We count tmux-level ListSessions calls via FakeExecutor.
+	firstCount := fake.ListCallCount()
+	if firstCount < 1 {
+		t.Fatalf("first call: want ≥1 tmux ListSessions calls, got %d", firstCount)
+	}
+
+	// Second call within TTL — should use cache (no additional tmux calls)
+	req2 := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+	if fake.ListCallCount() != firstCount {
+		t.Fatalf("second call: want %d tmux calls (cached), got %d", firstCount, fake.ListCallCount())
+	}
+
+	// Verify both responses are identical
+	if w1.Body.String() != w2.Body.String() {
+		t.Error("cached response differs from original")
+	}
+}
+
 func TestHandlerTerminalWSNotFound(t *testing.T) {
 	// Setup module with no sessions
 	mod, _, _ := newTestModule(t)
