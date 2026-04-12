@@ -100,7 +100,7 @@ export function buildMenuTemplate(
   const isMac = platform === 'darwin'
 
   const appMenu: MenuItemConstructorOptions = {
-    label: 'tmux-box',
+    label: 'Purdex',
     submenu: [
       ...(isMac ? [{ role: 'about' as const }] : []),
       ...(byCategory.get('App') ?? []),

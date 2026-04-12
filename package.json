@@ -1,6 +1,6 @@
 {
   "private": true,
-  "name": "tmux-box",
+  "name": "purdex",
   "version": "1.0.0-alpha.90",
   "main": "out/main/index.mjs",
   "scripts": {
@@ -9,8 +9,8 @@
     "electron:preview": "electron-vite preview"
   },
   "build": {
-    "appId": "dev.wake.tmux-box",
-    "productName": "tmux-box",
+    "appId": "dev.wake.purdex",
+    "productName": "Purdex",
     "asar": false,
     "directories": {
       "output": "dist"

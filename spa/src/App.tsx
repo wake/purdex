@@ -65,7 +65,7 @@ export default function App() {
 
   // --- Derived state ---
   const activeTab = activeTabId ? tabs[activeTabId] : undefined
-  const titleText = activeWorkspaceId ? (workspaces.find(w => w.id === activeWorkspaceId)?.name ?? 'tmux-box') : 'tmux-box'
+  const titleText = activeWorkspaceId ? (workspaces.find(w => w.id === activeWorkspaceId)?.name ?? 'Purdex') : 'Purdex'
 
   // --- Bootstrap: fetch config (sessions fetched by multi-host WS onOpen) ---
   useEffect(() => {

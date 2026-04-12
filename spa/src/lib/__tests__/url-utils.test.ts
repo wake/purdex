@@ -15,7 +15,7 @@ describe('normalizeUrl', () => {
   })
 
   it('prepends https:// for domain with path', () => {
-    expect(normalizeUrl('github.com/wake/tmux-box')).toBe('https://github.com/wake/tmux-box')
+    expect(normalizeUrl('github.com/wake/purdex')).toBe('https://github.com/wake/purdex')
   })
 
   it('returns null for javascript: scheme', () => {
