@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.99] - 2026-04-13
+
+### 重構
+
+- **spa**：建立 `closeTab()` helper 統一 locked guard 和 `destroyBrowserViewIfNeeded` 呼叫，修復 WorkspaceSettingsPage BrowserView 洩漏（#217）
+
 ## [1.0.0-alpha.98] - 2026-04-13
 
 ### 測試
