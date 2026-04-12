@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/wake/purdex/internal/store"
 )
@@ -14,7 +15,7 @@ var nameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 // --- HTTP Handlers ---
 
 func (m *SessionModule) handleList(w http.ResponseWriter, r *http.Request) {
-	sessions, err := m.ListSessions()
+	sessions, err := m.cachedListSessions()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -25,6 +26,21 @@ func (m *SessionModule) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(sessions)
+}
+
+func (m *SessionModule) cachedListSessions() ([]SessionInfo, error) {
+	m.listCacheMu.Lock()
+	defer m.listCacheMu.Unlock()
+	if time.Since(m.listCacheAt) < listCacheTTL && m.listCacheData != nil {
+		return m.listCacheData, nil
+	}
+	sessions, err := m.ListSessions()
+	if err != nil {
+		return nil, err
+	}
+	m.listCacheData = sessions
+	m.listCacheAt = time.Now()
+	return sessions, nil
 }
 
 func (m *SessionModule) handleGet(w http.ResponseWriter, r *http.Request) {

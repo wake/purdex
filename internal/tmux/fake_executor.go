@@ -37,6 +37,7 @@ type FakeExecutor struct {
 	keysCalls            []KeysCall
 	autoResizeCalls      []string              // targets passed to ResizeWindowAuto
 	setWindowOptionCalls []SetWindowOptionCall // calls to SetWindowOption
+	listCallCount        int                   // how many times ListSessions was called
 	alive                bool                  // whether tmux server is "alive"
 	HooksOutput          string                // returned by ShowHooksGlobal
 	FailSendKeys         bool                  // if true, SendKeysRaw returns an error
@@ -75,6 +76,7 @@ func (f *FakeExecutor) AddSessionWithID(id, name, cwd string) {
 func (f *FakeExecutor) ListSessions() ([]TmuxSession, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.listCallCount++
 	out := make([]TmuxSession, 0, len(f.sessionOrder))
 	for _, name := range f.sessionOrder {
 		if s, ok := f.sessions[name]; ok {
@@ -82,6 +84,13 @@ func (f *FakeExecutor) ListSessions() ([]TmuxSession, error) {
 		}
 	}
 	return out, nil
+}
+
+// ListCallCount returns how many times ListSessions was called.
+func (f *FakeExecutor) ListCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.listCallCount
 }
 
 // NewSession creates a session with an auto-assigned ID.

@@ -6,11 +6,14 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
 )
+
+const listCacheTTL = time.Second
 
 // SessionModule manages tmux sessions, meta cache, and HTTP API.
 type SessionModule struct {
@@ -24,6 +27,11 @@ type SessionModule struct {
 	// critical section so two concurrent POSTs with the same name can't
 	// both slip past the duplicate check. See #61.
 	createMu sync.Mutex
+
+	// listCache debounces rapid ListSessions calls (1s TTL). See #128.
+	listCacheMu   sync.Mutex
+	listCacheData []SessionInfo
+	listCacheAt   time.Time
 }
 
 // NewSessionModule creates a SessionModule with the given MetaStore.

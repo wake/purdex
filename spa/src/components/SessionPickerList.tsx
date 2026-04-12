@@ -1,6 +1,7 @@
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useI18nStore } from '../stores/useI18nStore'
+import { useSessionWatch } from '../hooks/useSessionWatch'
 
 export interface SessionSelection {
   hostId: string
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export function SessionPickerList({ onSelect }: Props) {
+  useSessionWatch()
   const t = useI18nStore((s) => s.t)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
