@@ -17,6 +17,7 @@
   "settings.section.workspace": "Workspace",
   "settings.section.sync": "Sync",
   "settings.section.agent": "Agent",
+  "settings.section.modules": "Modules",
 
   "settings.agent.title": "Agent",
   "settings.agent.desc": "Agent notification and hook settings",

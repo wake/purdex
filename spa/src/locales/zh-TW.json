@@ -17,6 +17,7 @@
   "settings.section.workspace": "工作區",
   "settings.section.sync": "同步",
   "settings.section.agent": "Agent",
+  "settings.section.modules": "模組",
 
   "settings.agent.title": "Agent",
   "settings.agent.desc": "Agent 通知與 Hook 設定",
