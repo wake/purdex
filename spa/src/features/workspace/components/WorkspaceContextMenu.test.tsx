@@ -191,7 +191,7 @@ describe('WorkspaceContextMenu', () => {
       />,
     )
     await waitFor(() => {
-      expect(screen.getByText('win-abc')).toBeInTheDocument()
+      expect(screen.getByText('Purdex')).toBeInTheDocument()
     })
   })
 

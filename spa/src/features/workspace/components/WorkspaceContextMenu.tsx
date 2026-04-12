@@ -92,7 +92,7 @@ export function WorkspaceContextMenu({ position, onSettings, onTearOff, onMergeT
                 onClick={() => { onMergeTo!(win.id); onClose() }}
                 className="w-full flex items-center gap-2 pl-8 pr-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer transition-colors"
               >
-                {win.title || win.id}
+                {win.title || 'Purdex'}
               </button>
             ))}
           </>
