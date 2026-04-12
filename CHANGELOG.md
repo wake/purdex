@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.97] - 2026-04-13
+
+### 修正
+
+- **daemon**：`handleDownload` 改為 buffer tar.gz 後才送出，Walk 錯誤時回傳 HTTP 500 而非產出損壞的 tar（#82）
+
 ## [1.0.0-alpha.96] - 2026-04-13
 
 ### 修正
