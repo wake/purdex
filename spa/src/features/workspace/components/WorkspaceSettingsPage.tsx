@@ -5,6 +5,7 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { getPrimaryPane } from '../../../lib/pane-tree'
 import { getPaneLabel } from '../../../lib/pane-labels'
+import { closeTab } from '../../../lib/tab-lifecycle'
 import { WorkspaceIcon } from './WorkspaceIcon'
 
 import { WorkspaceIconPicker } from './WorkspaceIconPicker'
@@ -135,11 +136,10 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
               workspaceName={ws.name}
               tabs={tabItems}
               onConfirm={(closedTabIds) => {
-                const wsStore = useWorkspaceStore.getState()
                 closedTabIds.forEach((id) => {
-                  wsStore.closeTabInWorkspace(id)
+                  closeTab(id)
                 })
-                wsStore.removeWorkspace(workspaceId)
+                useWorkspaceStore.getState().removeWorkspace(workspaceId)
                 const hasPreservedTabs = closedTabIds.length < tabItems.length
                 if (hasPreservedTabs) {
                   useWorkspaceStore.getState().setActiveWorkspace(null)
