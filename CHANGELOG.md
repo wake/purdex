@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.94] - 2026-04-13
+
+### 變更
+
+- **App icon**：符合 Apple HIG 標準（留白 100px、圓角 185.4px、陰影 Y12 blur28 @1024）
+- **Per-arch build**：`scripts/build-electron.mjs` 按 arch 切換 icon 打包
+- **i18n**：補齊 `settings.section.modules` 翻譯
+- **ActivityBar**：Home 按鈕使用 Purdex 透明 logo
+
 ## [1.0.0-alpha.93] - 2026-04-12
 
 ### 修正
