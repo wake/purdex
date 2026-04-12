@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.102] - 2026-04-13
+
+### 功能
+
+- **daemon**：dev auto-build 新增 5 分鐘逾時，防止 electron-vite 卡住導致 building 狀態永久鎖定（#97）
+
 ## [1.0.0-alpha.101] - 2026-04-13
 
 ### 重構
