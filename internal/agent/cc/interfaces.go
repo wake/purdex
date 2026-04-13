@@ -2,11 +2,6 @@ package cc
 
 import "context"
 
-// CCDetector interface for use by stream module.
-type CCDetector interface {
-	Detect(tmuxTarget string) Status
-}
-
 // CCOperator interface for use by stream module.
 type CCOperator interface {
 	Exit(ctx context.Context, tmuxTarget string) error
@@ -22,7 +17,6 @@ type CCHistoryProvider interface {
 
 // Registry keys for core.Registry (same keys as before).
 const (
-	DetectorKey = "cc.detector"
 	HistoryKey  = "cc.history"
 	OperatorKey = "cc.operator"
 )

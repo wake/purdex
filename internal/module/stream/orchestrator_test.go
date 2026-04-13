@@ -17,6 +17,7 @@ import (
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -67,26 +68,34 @@ func (f *fakeCCOperator) Launch(_ context.Context, _ string, cmd string) error {
 	return f.launchErr
 }
 
-// --- Fake CCDetector ---
+// --- Prober test helpers ---
 
-type fakeCCDetector struct {
-	mu       sync.Mutex
-	statuses []agentcc.Status // returns statuses in sequence; last one repeats
-	callIdx  int
+// setupTestProber creates a Prober backed by a FakeExecutor, with CC process names
+// and readiness checker registered (matching production wiring).
+func setupTestProber(fake *tmux.FakeExecutor) *probe.Prober {
+	p := probe.New(fake)
+	p.RegisterProcessNames("cc", []string{"claude"})
+	p.RegisterContentMatcher("cc", agentcc.NewContentMatcher())
+	p.RegisterReadiness("cc", agentcc.NewReadinessChecker(fake))
+	return p
 }
 
-func (f *fakeCCDetector) Detect(_ string) agentcc.Status {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.statuses) == 0 {
-		return agentcc.StatusNormal
-	}
-	idx := f.callIdx
-	if idx >= len(f.statuses) {
-		idx = len(f.statuses) - 1
-	}
-	f.callIdx++
-	return f.statuses[idx]
+// setPaneShell configures the FakeExecutor so the prober sees a shell (IsAliveFor = false).
+func setPaneShell(fake *tmux.FakeExecutor, target string) {
+	fake.SetPaneCommand(target, "zsh")
+	fake.SetPaneContent(target, "$ ")
+}
+
+// setPaneCCIdle configures the FakeExecutor so the prober sees CC idle.
+func setPaneCCIdle(fake *tmux.FakeExecutor, target string) {
+	fake.SetPaneCommand(target, "claude")
+	fake.SetPaneContent(target, "❯ ")
+}
+
+// setPaneCCRunning configures the FakeExecutor so the prober sees CC running.
+func setPaneCCRunning(fake *tmux.FakeExecutor, target string) {
+	fake.SetPaneCommand(target, "claude")
+	fake.SetPaneContent(target, "⠋ Working...")
 }
 
 // --- Test helpers ---
@@ -100,14 +109,12 @@ func setupHandoffModule(t *testing.T, opts handoffTestOpts) *handoffTestEnv {
 	if fakeOps == nil {
 		fakeOps = &fakeCCOperator{}
 	}
-	fakeDet := opts.ccDetect
-	if fakeDet == nil {
-		fakeDet = &fakeCCDetector{}
-	}
 	fakeTx := opts.tmux
 	if fakeTx == nil {
 		fakeTx = tmux.NewFakeExecutor()
 	}
+
+	prober := setupTestProber(fakeTx)
 
 	cfg := opts.cfg
 	if cfg == nil {
@@ -132,7 +139,7 @@ func setupHandoffModule(t *testing.T, opts handoffTestOpts) *handoffTestEnv {
 		bridge:   bridge.New(),
 		sessions: fp,
 		ccOps:    fakeOps,
-		ccDetect: fakeDet,
+		prober:   prober,
 		locks:    newHandoffLocks(),
 	}
 
@@ -145,7 +152,6 @@ func setupHandoffModule(t *testing.T, opts handoffTestOpts) *handoffTestEnv {
 		module:   m,
 		provider: fp,
 		ccOps:    fakeOps,
-		ccDetect: fakeDet,
 		tmux:     fakeTx,
 		srv:      srv,
 		core:     c,
@@ -155,7 +161,6 @@ func setupHandoffModule(t *testing.T, opts handoffTestOpts) *handoffTestEnv {
 type handoffTestOpts struct {
 	sessions map[string]*session.SessionInfo
 	ccOps    *fakeCCOperator
-	ccDetect *fakeCCDetector
 	tmux     *tmux.FakeExecutor
 	cfg      *config.Config
 }
@@ -164,7 +169,6 @@ type handoffTestEnv struct {
 	module   *StreamModule
 	provider *fakeSessionProvider
 	ccOps    *fakeCCOperator
-	ccDetect *fakeCCDetector
 	tmux     *tmux.FakeExecutor
 	srv      *httptest.Server
 	core     *core.Core
@@ -248,11 +252,13 @@ func TestHandoff_PresetNotFound_Returns400(t *testing.T) {
 }
 
 func TestHandoff_TermMode_NoPresetNeeded(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneShell(fake, "test-sess:0")
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream", CCSessionID: "sess-uuid"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{agentcc.StatusNormal}},
+		tmux: fake,
 	})
 
 	resp := postHandoff(t, env.srv, "abc123", `{"mode":"terminal"}`)
@@ -265,12 +271,13 @@ func TestHandoff_TermMode_NoPresetNeeded(t *testing.T) {
 }
 
 func TestHandoff_ConcurrentLock_Returns409(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneCCRunning(fake, "test-sess:0") // CC running — interrupt will stall
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		// Slow ccDetect — keeps handoff running while we try second request
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{agentcc.StatusCCRunning}},
+		tmux: fake,
 		ccOps: &fakeCCOperator{
 			interruptErr: fmt.Errorf("context deadline exceeded"), // will stall
 		},
@@ -291,11 +298,13 @@ func TestHandoff_ConcurrentLock_Returns409(t *testing.T) {
 }
 
 func TestHandoff_Returns202WithHandoffID(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneCCIdle(fake, "test-sess:0")
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{agentcc.StatusCCIdle}},
+		tmux: fake,
 		ccOps: &fakeCCOperator{
 			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-1234", Cwd: "/home/user"},
 		},
@@ -326,13 +335,13 @@ func TestHandoff_InvalidBody_Returns400(t *testing.T) {
 
 func TestRunHandoff_FullSequence(t *testing.T) {
 	// CC is running (not idle) → interrupt → getStatus → exit → launch relay → relay connects → update meta → broadcast connected
+	fake := tmux.NewFakeExecutor()
+	setPaneCCRunning(fake, "test-sess:0") // initial detect: CC is running (not idle)
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusCCRunning, // initial detect: CC is running
-		}},
+		tmux: fake,
 		ccOps: &fakeCCOperator{
 			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-1234", Cwd: "/home/user/project"},
 		},
@@ -398,13 +407,13 @@ func TestRunHandoff_FullSequence(t *testing.T) {
 }
 
 func TestRunHandoff_CCIdle_SkipsInterrupt(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneCCIdle(fake, "test-sess:0") // CC idle — interrupt should be skipped
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusCCIdle, // already idle
-		}},
+		tmux: fake,
 		ccOps: &fakeCCOperator{
 			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-5678", Cwd: "/tmp"},
 		},
@@ -436,13 +445,13 @@ func TestRunHandoff_CCIdle_SkipsInterrupt(t *testing.T) {
 }
 
 func TestRunHandoff_NoCCRunning_BroadcastsFailed(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneShell(fake, "test-sess:0") // no CC running
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusNormal, // no CC running
-		}},
+		tmux: fake,
 	})
 
 	eventSub := env.core.Events.AddTestSubscriber()
@@ -456,13 +465,13 @@ func TestRunHandoff_NoCCRunning_BroadcastsFailed(t *testing.T) {
 }
 
 func TestRunHandoff_InterruptFails_BroadcastsFailed(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneCCRunning(fake, "test-sess:0") // CC busy
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusCCRunning, // CC busy
-		}},
+		tmux: fake,
 		ccOps: &fakeCCOperator{
 			interruptErr: fmt.Errorf("context deadline exceeded"),
 		},
@@ -479,13 +488,13 @@ func TestRunHandoff_InterruptFails_BroadcastsFailed(t *testing.T) {
 }
 
 func TestRunHandoff_GetStatusFails_BroadcastsFailed(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneCCIdle(fake, "test-sess:0")
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusCCIdle,
-		}},
+		tmux: fake,
 		ccOps: &fakeCCOperator{
 			getStatusErr: fmt.Errorf("could not extract session ID"),
 		},
@@ -502,13 +511,13 @@ func TestRunHandoff_GetStatusFails_BroadcastsFailed(t *testing.T) {
 }
 
 func TestRunHandoff_ExitFails_BroadcastsFailed(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneCCIdle(fake, "test-sess:0")
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusCCIdle,
-		}},
+		tmux: fake,
 		ccOps: &fakeCCOperator{
 			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-1234", Cwd: "/tmp"},
 			exitErr:    fmt.Errorf("CC did not exit"),
@@ -528,17 +537,20 @@ func TestRunHandoff_ExitFails_BroadcastsFailed(t *testing.T) {
 // --- runHandoffToTerm orchestration tests ---
 
 func TestRunHandoffToTerm_FullSequence(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneShell(fake, "test-sess:0") // shell wait: passes immediately
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream", CCSessionID: "sess-uuid"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusNormal,  // shell wait loop: first check
-			agentcc.StatusNormal,  // shell wait: final check after loop
-			agentcc.StatusCCIdle,  // CC verify: detected CC started
-			agentcc.StatusCCIdle,  // (extra for safety)
-		}},
+		tmux: fake,
 	})
+	// After shell detected, orchestrator sends claude --resume, then polls for CC.
+	// Switch to CC idle after a delay so Step 6 finds CC running.
+	go func() {
+		time.Sleep(1 * time.Second)
+		setPaneCCIdle(fake, "test-sess:0")
+	}()
 
 	eventSub := env.core.Events.AddTestSubscriber()
 	defer env.core.Events.RemoveTestSubscriber(eventSub)
@@ -584,13 +596,13 @@ func TestRunHandoffToTerm_NoCCSessionID_Fails(t *testing.T) {
 }
 
 func TestRunHandoffToTerm_ShellNotRecovered_RollsBack(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneCCRunning(fake, "test-sess:0") // CC stays running — shell never recovers
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream", CCSessionID: "sess-uuid"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusNotInCC, // shell doesn't recover — keeps returning not-in-cc
-		}},
+		tmux: fake,
 	})
 
 	eventSub := env.core.Events.AddTestSubscriber()
@@ -614,15 +626,13 @@ func TestRunHandoffToTerm_ShellNotRecovered_RollsBack(t *testing.T) {
 }
 
 func TestRunHandoffToTerm_CCDidNotStart_RollsBack(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneShell(fake, "test-sess:0") // shell detected — Step 4 passes; CC never starts — Step 6 fails
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream", CCSessionID: "sess-uuid"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusNormal, // shell wait: passes
-			agentcc.StatusNormal, // shell final check: passes
-			agentcc.StatusNormal, // CC verify: stays normal — CC never starts
-		}},
+		tmux: fake,
 	})
 
 	eventSub := env.core.Events.AddTestSubscriber()
@@ -647,17 +657,19 @@ func TestRunHandoffToTerm_CCDidNotStart_RollsBack(t *testing.T) {
 }
 
 func TestRunHandoffToTerm_PreUpdatesMode(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneShell(fake, "test-sess:0") // shell wait: passes immediately
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream", CCSessionID: "sess-uuid"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusNormal,  // shell wait loop
-			agentcc.StatusNormal,  // shell wait final check
-			agentcc.StatusCCIdle,  // CC verify
-			agentcc.StatusCCIdle,  // extra
-		}},
+		tmux: fake,
 	})
+	// Switch to CC idle after delay for Step 6
+	go func() {
+		time.Sleep(1 * time.Second)
+		setPaneCCIdle(fake, "test-sess:0")
+	}()
 
 	eventSub := env.core.Events.AddTestSubscriber()
 	defer env.core.Events.RemoveTestSubscriber(eventSub)
@@ -680,13 +692,13 @@ func TestRunHandoffToTerm_PreUpdatesMode(t *testing.T) {
 // --- Handoff with existing relay tests ---
 
 func TestRunHandoff_DisconnectsExistingRelay(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneCCIdle(fake, "test-sess:0")
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusCCIdle,
-		}},
+		tmux: fake,
 		ccOps: &fakeCCOperator{
 			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-1234", Cwd: "/tmp"},
 		},
@@ -748,13 +760,13 @@ func TestRunHandoff_DisconnectsExistingRelay(t *testing.T) {
 // --- Broadcast uses session CODE test ---
 
 func TestRunHandoff_BroadcastsUseSessionCode(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneShell(fake, "test-sess:0") // no CC → triggers "failed:no CC running"
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusNormal, // no CC → triggers "failed:no CC running"
-		}},
+		tmux: fake,
 	})
 
 	eventSub := env.core.Events.AddTestSubscriber()
@@ -777,13 +789,13 @@ func TestRunHandoff_BroadcastsUseSessionCode(t *testing.T) {
 // --- Tmux target format test ---
 
 func TestRunHandoff_UsesCorrectTmuxTarget(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneCCIdle(fake, "my-app:0")
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "my-app", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusCCIdle,
-		}},
+		tmux: fake,
 		ccOps: &fakeCCOperator{
 			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-9999", Cwd: "/tmp"},
 		},
@@ -806,13 +818,13 @@ func TestRunHandoff_UsesCorrectTmuxTarget(t *testing.T) {
 // --- Lock released after handoff ---
 
 func TestRunHandoff_LockReleasedAfterCompletion(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	setPaneShell(fake, "test-sess:0") // no CC → fails after pane prep (~1.5s)
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusNormal, // no CC → fails after pane prep (~1.5s)
-		}},
+		tmux: fake,
 	})
 
 	eventSub := env.core.Events.AddTestSubscriber()
@@ -837,13 +849,13 @@ func TestRunHandoff_LockReleasedAfterCompletion(t *testing.T) {
 
 func TestRunHandoff_RelayConnectTimeout(t *testing.T) {
 	// CC idle → getStatus → exit → launch relay → relay never connects → timeout
+	fake := tmux.NewFakeExecutor()
+	setPaneCCIdle(fake, "test-sess:0")
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "terminal"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusCCIdle,
-		}},
+		tmux: fake,
 		ccOps: &fakeCCOperator{
 			statusInfo: &agentcc.StatusInfo{SessionID: "uuid-1234", Cwd: "/tmp"},
 		},
@@ -862,13 +874,13 @@ func TestRunHandoff_RelayConnectTimeout(t *testing.T) {
 
 func TestRunHandoffToTerm_RelayShutdownTimeout(t *testing.T) {
 	// Pre-register a relay that never reads the shutdown message → timeout
+	fake := tmux.NewFakeExecutor()
+	setPaneShell(fake, "test-sess:0")
 	env := setupHandoffModule(t, handoffTestOpts{
 		sessions: map[string]*session.SessionInfo{
 			"abc123": {Code: "abc123", Name: "test-sess", Mode: "stream", CCSessionID: "sess-uuid"},
 		},
-		ccDetect: &fakeCCDetector{statuses: []agentcc.Status{
-			agentcc.StatusNormal,
-		}},
+		tmux: fake,
 	})
 
 	// Register a relay but never read from its channel — shutdown message is dropped
