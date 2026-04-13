@@ -25,7 +25,7 @@ export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, er
   useClickOutside(containerRef, onCancel)
 
   const trimmedDraft = draft.trim()
-  const validationError = trimmedDraft && !isValidSessionName(trimmedDraft)
+  const validationError = trimmedDraft && trimmedDraft !== currentName && !isValidSessionName(trimmedDraft)
     ? t('tab.rename_invalid_format')
     : undefined
   const displayError = validationError ?? error

@@ -20,10 +20,10 @@ describe('RenamePopover', () => {
   })
 
   it('selects all text on mount', () => {
+    const selectSpy = vi.spyOn(HTMLInputElement.prototype, 'select')
     render(<RenamePopover {...defaultProps} />)
-    const input = screen.getByDisplayValue('my-session') as HTMLInputElement
-    expect(input.selectionStart).toBe(0)
-    expect(input.selectionEnd).toBe('my-session'.length)
+    expect(selectSpy).toHaveBeenCalled()
+    selectSpy.mockRestore()
   })
 
   it('calls onConfirm with new name on Enter', async () => {
@@ -117,6 +117,12 @@ describe('RenamePopover', () => {
       fireEvent.change(input, { target: { value: 'bad.name' } })
       expect(screen.getByText(/only letters|僅允許/i)).toBeInTheDocument()
       expect(screen.queryByText('API error message')).not.toBeInTheDocument()
+    })
+
+    it('does not show format error when name matches currentName (legacy session)', () => {
+      const props = { ...defaultProps, currentName: 'legacy.session' }
+      render(<RenamePopover {...props} />)
+      expect(screen.queryByText(/only letters|僅允許/i)).not.toBeInTheDocument()
     })
   })
 
