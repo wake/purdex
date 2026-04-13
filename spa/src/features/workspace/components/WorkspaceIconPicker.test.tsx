@@ -1,15 +1,35 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 
-vi.mock('../generated/icon-loader', () => ({
-  ALL_ICON_NAMES: ['House', 'Star', 'Heart', 'Rocket', 'Terminal'],
-  iconLoaders: {
-    House: () => new Promise(() => {}),
-    Star: () => new Promise(() => {}),
-    Heart: () => new Promise(() => {}),
-    Rocket: () => new Promise(() => {}),
-    Terminal: () => new Promise(() => {}),
-  },
+// jsdom has no layout engine, so useVirtualizer returns 0 items.
+// Mock it to render all rows without virtualization.
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getTotalSize: () => count * 38,
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, i) => ({
+        index: i,
+        key: i,
+        start: i * 38,
+        size: 38,
+      })),
+  }),
+}))
+
+vi.mock('../lib/icon-path-cache', () => ({
+  getIconPath: () => 'M0,0L10,10',
+  isWeightLoaded: () => true,
+  prefetchWeight: () => Promise.resolve(),
+}))
+
+vi.mock('../generated/icon-meta.json', () => ({
+  default: [
+    { n: 'House', t: ['home', 'building'], c: ['general'] },
+    { n: 'Star', t: ['favorite', 'rating'], c: ['general'] },
+    { n: 'Heart', t: ['love', 'like'], c: ['general'] },
+    { n: 'Envelope', t: ['mail', 'email', 'message'], c: ['communication'] },
+    { n: 'Terminal', t: ['console', 'cli', 'command'], c: ['development'] },
+  ],
 }))
 
 import { WorkspaceIconPicker } from './WorkspaceIconPicker'
@@ -19,7 +39,7 @@ const firstCategory = Object.keys(CURATED_ICON_CATEGORIES)[0]
 const firstCategoryIcons = CURATED_ICON_CATEGORIES[firstCategory]
 
 describe('WorkspaceIconPicker', () => {
-  beforeEach(() => { cleanup() })
+  beforeEach(() => cleanup())
 
   it('renders category tabs', () => {
     render(<WorkspaceIconPicker currentIcon={undefined} onSelect={vi.fn()} onCancel={vi.fn()} />)
@@ -42,20 +62,26 @@ describe('WorkspaceIconPicker', () => {
     expect(onSelect).toHaveBeenCalledWith(firstCategoryIcons[0])
   })
 
-  it('filters icons by search text', () => {
+  it('searches by tag (fuzzy) — "mail" finds Envelope', () => {
     render(<WorkspaceIconPicker currentIcon={undefined} onSelect={vi.fn()} onCancel={vi.fn()} />)
     const search = screen.getByPlaceholderText(/search/i)
-    fireEvent.change(search, { target: { value: 'House' } })
+    fireEvent.change(search, { target: { value: 'mail' } })
     const buttons = screen.getAllByRole('button').filter((b) => b.getAttribute('data-icon'))
-    expect(buttons.length).toBeGreaterThanOrEqual(1)
-    expect(buttons.some((b) => b.getAttribute('data-icon') === 'House')).toBe(true)
+    expect(buttons.some((b) => b.getAttribute('data-icon') === 'Envelope')).toBe(true)
   })
 
-  it('renders clear button and calls onSelect with empty string', () => {
+  it('searches by name — "term" finds Terminal', () => {
+    render(<WorkspaceIconPicker currentIcon={undefined} onSelect={vi.fn()} onCancel={vi.fn()} />)
+    const search = screen.getByPlaceholderText(/search/i)
+    fireEvent.change(search, { target: { value: 'term' } })
+    const buttons = screen.getAllByRole('button').filter((b) => b.getAttribute('data-icon'))
+    expect(buttons.some((b) => b.getAttribute('data-icon') === 'Terminal')).toBe(true)
+  })
+
+  it('clears icon selection', () => {
     const onSelect = vi.fn()
     render(<WorkspaceIconPicker currentIcon="Star" onSelect={onSelect} onCancel={vi.fn()} />)
-    const clearBtn = screen.getByTestId('clear-icon')
-    fireEvent.click(clearBtn)
+    fireEvent.click(screen.getByTestId('clear-icon'))
     expect(onSelect).toHaveBeenCalledWith('')
   })
 })
