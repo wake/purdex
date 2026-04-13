@@ -6,8 +6,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
@@ -440,3 +443,113 @@ func TestRenameSessionAtomic_CallbackErrorSkipsTransfer(t *testing.T) {
 type errStub string
 
 func (e errStub) Error() string { return string(e) }
+
+// --- Activity watch integration tests ---
+
+func TestActivityWatch_YellowLightRecovery(t *testing.T) {
+	m := newTestModule(t)
+
+	fake := tmux.NewFakeExecutor()
+	m.prober = probe.New(fake)
+	m.prober.RegisterProcessNames("cc", []string{"claude"})
+	m.prober.RegisterReadiness("cc", agentcc.NewReadinessChecker(fake))
+
+	provider := &fakeAgentProvider{
+		typeName: "cc",
+		derive: func(eventName string, raw json.RawMessage) agentpkg.DeriveResult {
+			if eventName == "Notification" {
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusWaiting}
+			}
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
+		},
+	}
+	m.registry.Register(provider)
+
+	m.sessions = &fakeSessionProvider{
+		sessions: []session.SessionInfo{{Code: "s1", Name: "work"}},
+	}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
+
+	fake.SetPaneCommand("work:", "claude")
+	fake.SetPaneContent("work:", "Allow  Deny")
+
+	body := `{"tmux_session":"work","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+
+	m.mu.Lock()
+	_, watching := m.activeWatchers["work"]
+	m.mu.Unlock()
+	if !watching {
+		t.Fatal("expected active watcher after waiting status")
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	fake.SetPaneContent("work:", "⠋ Processing your request...")
+
+	time.Sleep(700 * time.Millisecond)
+
+	m.mu.Lock()
+	_, stillWatching := m.activeWatchers["work"]
+	status := m.currentStatus["work"]
+	m.mu.Unlock()
+
+	if stillWatching {
+		t.Fatal("watcher should have stopped after activity detection")
+	}
+	if status != agentpkg.StatusRunning {
+		t.Fatalf("expected status running after activity, got %s", status)
+	}
+}
+
+func TestActivityWatch_HookEventSupersedes(t *testing.T) {
+	m := newTestModule(t)
+
+	fake := tmux.NewFakeExecutor()
+	m.prober = probe.New(fake)
+	m.prober.RegisterProcessNames("cc", []string{"claude"})
+
+	provider := &fakeAgentProvider{
+		typeName: "cc",
+		derive: func(eventName string, raw json.RawMessage) agentpkg.DeriveResult {
+			switch eventName {
+			case "Notification":
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusWaiting}
+			case "UserPromptSubmit":
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
+			}
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
+		},
+	}
+	m.registry.Register(provider)
+	m.sessions = &fakeSessionProvider{
+		sessions: []session.SessionInfo{{Code: "s1", Name: "work"}},
+	}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
+
+	fake.SetPaneCommand("work:", "claude")
+	fake.SetPaneContent("work:", "Allow  Deny")
+
+	body := `{"tmux_session":"work","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+
+	body2 := `{"tmux_session":"work","event_name":"UserPromptSubmit","raw_event":{},"agent_type":"cc"}`
+	req2 := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body2))
+	w2 := httptest.NewRecorder()
+	m.handleEvent(w2, req2)
+
+	m.mu.Lock()
+	_, watching := m.activeWatchers["work"]
+	status := m.currentStatus["work"]
+	m.mu.Unlock()
+
+	if watching {
+		t.Fatal("watcher should have been stopped by hook event")
+	}
+	if status != agentpkg.StatusRunning {
+		t.Fatalf("expected running after UserPromptSubmit, got %s", status)
+	}
+}

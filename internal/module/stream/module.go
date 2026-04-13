@@ -7,6 +7,7 @@ import (
 
 	"github.com/wake/purdex/internal/bridge"
 	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 )
@@ -18,7 +19,7 @@ type StreamModule struct {
 	bridge   *bridge.Bridge
 	sessions session.SessionProvider
 	ccOps    agentcc.CCOperator
-	ccDetect agentcc.CCDetector
+	prober   *probe.Prober
 	locks    *handoffLocks
 }
 
@@ -35,7 +36,7 @@ func (m *StreamModule) Init(c *core.Core) error {
 	m.bridge = bridge.New()
 	m.sessions = c.Registry.MustGet(session.RegistryKey).(session.SessionProvider)
 	m.ccOps = c.Registry.MustGet(agentcc.OperatorKey).(agentcc.CCOperator)
-	m.ccDetect = c.Registry.MustGet(agentcc.DetectorKey).(agentcc.CCDetector)
+	m.prober = c.Registry.MustGet("agent.prober").(*probe.Prober)
 	m.locks = newHandoffLocks()
 	return nil
 }

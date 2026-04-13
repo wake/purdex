@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -24,7 +25,8 @@ func (p *Provider) Interrupt(ctx context.Context, tmuxTarget string) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if p.detector.Detect(tmuxTarget) == StatusCCIdle {
+			result, ok := p.prober.CheckReadiness("cc", tmuxTarget)
+			if ok && result.Status == agent.StatusIdle {
 				return nil
 			}
 		}
@@ -71,7 +73,7 @@ func (p *Provider) Exit(ctx context.Context, tmuxTarget string) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if p.detector.Detect(tmuxTarget) == StatusNormal {
+			if !p.prober.IsAliveFor("cc", tmuxTarget) {
 				return nil
 			}
 		}

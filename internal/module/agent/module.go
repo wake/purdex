@@ -16,6 +16,7 @@ import (
 	agentpkg "github.com/wake/purdex/internal/agent"
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/agent/codex"
+	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
@@ -29,18 +30,22 @@ type Module struct {
 	registry  *agentpkg.Registry
 	uploadDir string
 
-	mu            sync.Mutex
-	currentStatus map[string]agentpkg.Status
-	subagents     map[string][]string
+	prober *probe.Prober
+
+	mu             sync.Mutex
+	currentStatus  map[string]agentpkg.Status
+	subagents      map[string][]string
+	activeWatchers map[string]string // tmuxSession → agentType
 }
 
 // New creates a new agent Module backed by the given AgentEventStore.
 func New(events *store.AgentEventStore) *Module {
 	return &Module{
-		events:        events,
-		registry:      agentpkg.NewRegistry(),
-		currentStatus: make(map[string]agentpkg.Status),
-		subagents:     make(map[string][]string),
+		events:         events,
+		registry:       agentpkg.NewRegistry(),
+		currentStatus:  make(map[string]agentpkg.Status),
+		subagents:      make(map[string][]string),
+		activeWatchers: make(map[string]string),
 	}
 }
 
@@ -67,18 +72,26 @@ func (m *Module) Init(c *core.Core) error {
 		m.uploadDir = filepath.Join(home, "tmp", "purdex-upload")
 	}
 
+	// Prober (shared across all providers)
+	m.prober = probe.New(c.Tmux)
+	m.prober.RegisterProcessNames("cc", c.Cfg.Detect.CCCommands)
+	m.prober.RegisterContentMatcher("cc", agentcc.NewContentMatcher())
+	m.prober.RegisterReadiness("cc", agentcc.NewReadinessChecker(c.Tmux))
+	m.prober.RegisterProcessNames("codex", []string{"codex"})
+	m.prober.RegisterReadiness("codex", codex.NewReadinessChecker(c.Tmux))
+	c.Registry.Register("agent.prober", m.prober)
+
 	// CC provider
-	ccDetector := agentcc.NewDetector(c.Tmux, c.Cfg.Detect.CCCommands)
-	ccProvider := agentcc.NewProvider(ccDetector, c.Tmux, c.Cfg, &c.CfgMu)
+	ccProvider := agentcc.NewProvider(m.prober, c.Tmux, c.Cfg, &c.CfgMu)
 	ccProvider.RegisterServices(c.Registry)
 	m.registry.Register(ccProvider)
 
-	// Listen for config changes to update CC detector
+	// Listen for config changes to update CC process names
 	c.OnConfigChange(func() {
 		c.CfgMu.RLock()
 		cmds := c.Cfg.Detect.CCCommands
 		c.CfgMu.RUnlock()
-		ccDetector.UpdateCommands(cmds)
+		m.prober.UpdateProcessNames("cc", cmds)
 	})
 
 	// Codex provider
@@ -123,11 +136,19 @@ func (m *Module) Start(_ context.Context) error {
 	return nil
 }
 
-// Stop is a no-op.
-func (m *Module) Stop(_ context.Context) error { return nil }
+// Stop cancels all active Activity watchers and resets transient state.
+func (m *Module) Stop(_ context.Context) error {
+	if m.prober != nil {
+		m.prober.StopAllWatches()
+	}
+	m.mu.Lock()
+	m.activeWatchers = make(map[string]string)
+	m.mu.Unlock()
+	return nil
+}
 
-// renameSessionLocked transfers in-memory agent state (subagents, currentStatus)
-// from oldName to newName.  CALLER MUST hold m.mu.
+// renameSessionLocked transfers in-memory agent state (subagents, currentStatus,
+// activeWatchers) from oldName to newName.  CALLER MUST hold m.mu.
 func (m *Module) renameSessionLocked(oldName, newName string) {
 	if subs, ok := m.subagents[oldName]; ok {
 		m.subagents[newName] = subs
@@ -136,6 +157,18 @@ func (m *Module) renameSessionLocked(oldName, newName string) {
 	if status, ok := m.currentStatus[oldName]; ok {
 		m.currentStatus[newName] = status
 		delete(m.currentStatus, oldName)
+	}
+	if agentType, ok := m.activeWatchers[oldName]; ok {
+		delete(m.activeWatchers, oldName)
+		// Stop old watcher — callback closure captured oldName, can't reuse
+		if m.prober != nil {
+			m.prober.StopWatch(oldName + ":")
+		}
+		// Restart watcher with new name
+		m.activeWatchers[newName] = agentType
+		if m.prober != nil {
+			m.prober.StartWatch(newName+":", m.onActivityDetected(newName, agentType))
+		}
 	}
 }
 
@@ -291,18 +324,20 @@ func (m *Module) checkAliveAll(sub *core.EventSubscriber) {
 			_ = m.events.Delete(ev.TmuxSession)
 			continue
 		}
-		provider, ok := m.registry.Get(ev.AgentType)
+		_, ok = m.registry.Get(ev.AgentType)
 		if !ok {
 			continue
 		}
 
 		tmuxTarget := ev.TmuxSession + ":"
-		if !provider.IsAlive(tmuxTarget) {
+		if !m.prober.IsAliveFor(ev.AgentType, tmuxTarget) {
 			m.mu.Lock()
 			delete(m.currentStatus, ev.TmuxSession)
 			delete(m.subagents, ev.TmuxSession)
+			delete(m.activeWatchers, ev.TmuxSession)
 			m.mu.Unlock()
 
+			m.prober.StopWatch(tmuxTarget)
 			_ = m.events.Delete(ev.TmuxSession)
 
 			normalized := agentpkg.NormalizedEvent{
@@ -314,5 +349,78 @@ func (m *Module) checkAliveAll(sub *core.EventSubscriber) {
 			payload, _ := json.Marshal(normalized)
 			m.core.Events.Broadcast(code, "hook", string(payload))
 		}
+	}
+}
+
+// manageActivityWatch handles starting/stopping Activity watchers in response to hook events.
+func (m *Module) manageActivityWatch(session, agentType string, newStatus agentpkg.Status) {
+	m.mu.Lock()
+	_, wasWatching := m.activeWatchers[session]
+	delete(m.activeWatchers, session)
+	m.mu.Unlock()
+	if wasWatching {
+		m.prober.StopWatch(session + ":")
+	}
+
+	if newStatus == agentpkg.StatusWaiting {
+		m.mu.Lock()
+		m.activeWatchers[session] = agentType
+		m.mu.Unlock()
+		m.prober.StartWatch(session+":", m.onActivityDetected(session, agentType))
+	}
+}
+
+// onActivityDetected returns a callback for when screen activity is detected
+// during a waiting state. The callback checks if the watcher is still active
+// (a hook event may have already superseded it), then runs Readiness to
+// determine the new status.
+func (m *Module) onActivityDetected(session, agentType string) func(string) {
+	return func(target string) {
+		m.mu.Lock()
+		if _, active := m.activeWatchers[session]; !active {
+			m.mu.Unlock()
+			return
+		}
+		delete(m.activeWatchers, session)
+		m.mu.Unlock()
+
+		if !m.prober.IsAliveFor(agentType, target) {
+			return
+		}
+
+		result, ok := m.prober.CheckReadiness(agentType, target)
+		if !ok {
+			return
+		}
+
+		// Issue #2: StatusWaiting — restart watcher to keep monitoring
+		if result.Status == agentpkg.StatusWaiting {
+			m.mu.Lock()
+			m.activeWatchers[session] = agentType
+			m.mu.Unlock()
+			m.prober.StartWatch(target, m.onActivityDetected(session, agentType))
+			return
+		}
+
+		// Issue #1: Error Guard — don't overwrite StatusError
+		m.mu.Lock()
+		if m.currentStatus[session] == agentpkg.StatusError {
+			m.mu.Unlock()
+			return // respect Error Guard
+		}
+		m.currentStatus[session] = result.Status
+		m.mu.Unlock()
+
+		// Note: probe:activity status changes are not persisted to DB.
+		// After daemon restart, replayFromDB may show stale "waiting" status,
+		// but the next hook event or checkAliveAll will correct it.
+
+		normalized := agentpkg.NormalizedEvent{
+			AgentType:    agentType,
+			Status:       string(result.Status),
+			RawEventName: "probe:activity",
+			BroadcastTs:  time.Now().UnixNano(),
+		}
+		m.broadcastToSession(session, normalized)
 	}
 }

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/module/session"
 )
 
@@ -69,14 +69,14 @@ func (m *StreamModule) runHandoff(sess session.SessionInfo, code, mode, command,
 
 	// Step 3: Detect CC status — must be running
 	broadcast("detecting")
-	status := m.ccDetect.Detect(target)
-	if status == agentcc.StatusNormal || status == agentcc.StatusNotInCC {
+	if !m.prober.IsAliveFor("cc", target) {
 		broadcast("failed:no CC running")
 		return
 	}
 
 	// Step 4: If CC is busy (not idle), interrupt to idle
-	if status != agentcc.StatusCCIdle {
+	result, _ := m.prober.CheckReadiness("cc", target)
+	if result.Status != agent.StatusIdle {
 		broadcast("stopping-cc")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -197,12 +197,12 @@ func (m *StreamModule) runHandoffToTerm(sess session.SessionInfo, code, handoffI
 	broadcast("waiting-shell")
 	shellDeadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(shellDeadline) {
-		if m.ccDetect.Detect(target) == agentcc.StatusNormal {
+		if !m.prober.IsAliveFor("cc", target) {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	if m.ccDetect.Detect(target) != agentcc.StatusNormal {
+	if m.prober.IsAliveFor("cc", target) {
 		rollbackMode()
 		broadcast("failed:shell did not recover")
 		return
@@ -221,8 +221,7 @@ func (m *StreamModule) runHandoffToTerm(sess session.SessionInfo, code, handoffI
 	ccDeadline := time.Now().Add(15 * time.Second)
 	ccStarted := false
 	for time.Now().Before(ccDeadline) {
-		st := m.ccDetect.Detect(target)
-		if st == agentcc.StatusCCIdle || st == agentcc.StatusCCRunning || st == agentcc.StatusCCWaiting {
+		if m.prober.IsAliveFor("cc", target) {
 			ccStarted = true
 			break
 		}

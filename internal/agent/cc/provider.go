@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/tmux"
@@ -12,15 +13,15 @@ import (
 
 // Provider implements agent.AgentProvider for Claude Code.
 type Provider struct {
-	detector *Detector
+	prober   *probe.Prober
 	tmuxExec tmux.Executor
 	cfg      *config.Config
 	cfgMu    *sync.RWMutex
 }
 
-// NewProvider creates a CC provider. Pass nil for detector/tmuxExec during testing.
-func NewProvider(detector *Detector, tmuxExec tmux.Executor, cfg *config.Config, cfgMu *sync.RWMutex) *Provider {
-	return &Provider{detector: detector, tmuxExec: tmuxExec, cfg: cfg, cfgMu: cfgMu}
+// NewProvider creates a CC provider. Pass nil for prober/tmuxExec during testing.
+func NewProvider(prober *probe.Prober, tmuxExec tmux.Executor, cfg *config.Config, cfgMu *sync.RWMutex) *Provider {
+	return &Provider{prober: prober, tmuxExec: tmuxExec, cfg: cfg, cfgMu: cfgMu}
 }
 
 func (p *Provider) Type() string        { return "cc" }
@@ -31,14 +32,13 @@ func (p *Provider) Claim(ctx agent.ClaimContext) bool {
 	if ctx.HookEvent != nil {
 		return ctx.HookEvent.AgentType == "cc"
 	}
-	if p.detector == nil {
+	if p.prober == nil {
 		return false
 	}
 	if ctx.TmuxTarget == "" {
 		return false
 	}
-	status := p.detector.Detect(ctx.TmuxTarget)
-	return status != StatusNormal && status != StatusNotInCC
+	return p.prober.IsAliveFor("cc", ctx.TmuxTarget)
 }
 
 func (p *Provider) DeriveStatus(eventName string, rawEvent json.RawMessage) agent.DeriveResult {
@@ -46,16 +46,14 @@ func (p *Provider) DeriveStatus(eventName string, rawEvent json.RawMessage) agen
 }
 
 func (p *Provider) IsAlive(tmuxTarget string) bool {
-	if p.detector == nil {
+	if p.prober == nil {
 		return false
 	}
-	status := p.detector.Detect(tmuxTarget)
-	return status == StatusCCIdle || status == StatusCCRunning || status == StatusCCWaiting
+	return p.prober.IsAliveFor("cc", tmuxTarget)
 }
 
 // RegisterServices registers this provider's services into the core service registry.
 func (p *Provider) RegisterServices(registry *core.ServiceRegistry) {
-	registry.Register(DetectorKey, CCDetector(p.detector))
 	registry.Register(HistoryKey, CCHistoryProvider(p))
 	registry.Register(OperatorKey, CCOperator(p))
 }

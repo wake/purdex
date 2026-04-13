@@ -98,6 +98,13 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 	}
 
+	// Activity watch management:
+	// 1. Any hook event stops an active watcher for this session
+	// 2. If new status is waiting, start a new watcher
+	if req.TmuxSession != "" && m.prober != nil && result.Valid {
+		m.manageActivityWatch(req.TmuxSession, req.AgentType, result.Status)
+	}
+
 	// Clear subagents on non-compact SessionStart
 	if req.EventName == "SessionStart" && result.Valid {
 		m.mu.Lock()
@@ -379,14 +386,14 @@ func (m *Module) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	provider, ok := m.registry.Get(ev.AgentType)
+	_, ok := m.registry.Get(ev.AgentType)
 	if !ok {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"alive": false, "reason": "unknown agent"})
 		return
 	}
 
-	alive := provider.IsAlive(tmuxName + ":")
+	alive := m.prober.IsAliveFor(ev.AgentType, tmuxName+":")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"alive": alive})
 }
@@ -425,3 +432,4 @@ func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
+

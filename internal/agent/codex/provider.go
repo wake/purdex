@@ -20,7 +20,7 @@ func (p *Provider) Claim(ctx agent.ClaimContext) bool {
 	if ctx.HookEvent != nil {
 		return ctx.HookEvent.AgentType == "codex"
 	}
-	return isCodexProcess(ctx.ProcessName)
+	return ctx.ProcessName == "codex"
 }
 
 func (p *Provider) DeriveStatus(eventName string, rawEvent json.RawMessage) agent.DeriveResult {
@@ -28,6 +28,5 @@ func (p *Provider) DeriveStatus(eventName string, rawEvent json.RawMessage) agen
 }
 
 func (p *Provider) IsAlive(tmuxTarget string) bool {
-	cmd := checkPaneProcess(tmuxTarget)
-	return isCodexProcess(cmd)
+	return false // Deprecated: agent module uses prober.IsAliveFor directly
 }
