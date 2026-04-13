@@ -98,6 +98,28 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 	}
 
+	// Activity watch management:
+	// 1. Any hook event stops an active watcher for this session
+	// 2. If new status is waiting, start a new watcher
+	if req.TmuxSession != "" && m.prober != nil {
+		m.mu.Lock()
+		_, wasWatching := m.activeWatchers[req.TmuxSession]
+		delete(m.activeWatchers, req.TmuxSession)
+		m.mu.Unlock()
+		if wasWatching {
+			m.prober.StopWatch(req.TmuxSession + ":")
+		}
+
+		if result.Valid && result.Status == agentpkg.StatusWaiting {
+			agentType := req.AgentType
+			session := req.TmuxSession
+			m.mu.Lock()
+			m.activeWatchers[session] = agentType
+			m.mu.Unlock()
+			m.prober.StartWatch(session+":", m.onActivityDetected(session, agentType))
+		}
+	}
+
 	// Clear subagents on non-compact SessionStart
 	if req.EventName == "SessionStart" && result.Valid {
 		m.mu.Lock()
@@ -379,14 +401,14 @@ func (m *Module) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	provider, ok := m.registry.Get(ev.AgentType)
+	_, ok := m.registry.Get(ev.AgentType)
 	if !ok {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"alive": false, "reason": "unknown agent"})
 		return
 	}
 
-	alive := provider.IsAlive(tmuxName + ":")
+	alive := m.prober.IsAliveFor(ev.AgentType, tmuxName+":")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"alive": alive})
 }
@@ -424,4 +446,45 @@ func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+// onActivityDetected returns a callback for when screen activity is detected
+// during a waiting state. The callback checks if the watcher is still active
+// (a hook event may have already superseded it), then runs Readiness to
+// determine the new status.
+func (m *Module) onActivityDetected(session, agentType string) func(string) {
+	return func(target string) {
+		m.mu.Lock()
+		if _, active := m.activeWatchers[session]; !active {
+			m.mu.Unlock()
+			return
+		}
+		delete(m.activeWatchers, session)
+		m.mu.Unlock()
+
+		if !m.prober.IsAliveFor(agentType, target) {
+			return
+		}
+
+		result, ok := m.prober.CheckReadiness(agentType, target)
+		if !ok {
+			return
+		}
+
+		if result.Status == agentpkg.StatusWaiting {
+			return
+		}
+
+		m.mu.Lock()
+		m.currentStatus[session] = result.Status
+		m.mu.Unlock()
+
+		normalized := agentpkg.NormalizedEvent{
+			AgentType:    agentType,
+			Status:       string(result.Status),
+			RawEventName: "probe:activity",
+			BroadcastTs:  time.Now().UnixNano(),
+		}
+		m.broadcastToSession(session, normalized)
+	}
 }

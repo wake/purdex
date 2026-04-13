@@ -16,6 +16,7 @@ import (
 	agentpkg "github.com/wake/purdex/internal/agent"
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/agent/codex"
+	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
@@ -29,18 +30,22 @@ type Module struct {
 	registry  *agentpkg.Registry
 	uploadDir string
 
-	mu            sync.Mutex
-	currentStatus map[string]agentpkg.Status
-	subagents     map[string][]string
+	prober *probe.Prober
+
+	mu             sync.Mutex
+	currentStatus  map[string]agentpkg.Status
+	subagents      map[string][]string
+	activeWatchers map[string]string // tmuxSession → agentType
 }
 
 // New creates a new agent Module backed by the given AgentEventStore.
 func New(events *store.AgentEventStore) *Module {
 	return &Module{
-		events:        events,
-		registry:      agentpkg.NewRegistry(),
-		currentStatus: make(map[string]agentpkg.Status),
-		subagents:     make(map[string][]string),
+		events:         events,
+		registry:       agentpkg.NewRegistry(),
+		currentStatus:  make(map[string]agentpkg.Status),
+		subagents:      make(map[string][]string),
+		activeWatchers: make(map[string]string),
 	}
 }
 
@@ -67,18 +72,26 @@ func (m *Module) Init(c *core.Core) error {
 		m.uploadDir = filepath.Join(home, "tmp", "purdex-upload")
 	}
 
+	// Prober (shared across all providers)
+	m.prober = probe.New(c.Tmux)
+	m.prober.RegisterProcessNames("cc", c.Cfg.Detect.CCCommands)
+	m.prober.RegisterContentMatcher("cc", agentcc.NewContentMatcher())
+	m.prober.RegisterReadiness("cc", agentcc.NewReadinessChecker(c.Tmux))
+	m.prober.RegisterProcessNames("codex", []string{"codex"})
+	m.prober.RegisterReadiness("codex", codex.NewReadinessChecker(c.Tmux))
+	c.Registry.Register("agent.prober", m.prober)
+
 	// CC provider
-	ccDetector := agentcc.NewDetector(c.Tmux, c.Cfg.Detect.CCCommands)
-	ccProvider := agentcc.NewProvider(ccDetector, c.Tmux, c.Cfg, &c.CfgMu)
+	ccProvider := agentcc.NewProvider(m.prober, c.Tmux, c.Cfg, &c.CfgMu)
 	ccProvider.RegisterServices(c.Registry)
 	m.registry.Register(ccProvider)
 
-	// Listen for config changes to update CC detector
+	// Listen for config changes to update CC process names
 	c.OnConfigChange(func() {
 		c.CfgMu.RLock()
 		cmds := c.Cfg.Detect.CCCommands
 		c.CfgMu.RUnlock()
-		ccDetector.UpdateCommands(cmds)
+		m.prober.UpdateProcessNames("cc", cmds)
 	})
 
 	// Codex provider
@@ -123,8 +136,16 @@ func (m *Module) Start(_ context.Context) error {
 	return nil
 }
 
-// Stop is a no-op.
-func (m *Module) Stop(_ context.Context) error { return nil }
+// Stop cancels all active Activity watchers and resets transient state.
+func (m *Module) Stop(_ context.Context) error {
+	if m.prober != nil {
+		m.prober.StopAllWatches()
+	}
+	m.mu.Lock()
+	m.activeWatchers = make(map[string]string)
+	m.mu.Unlock()
+	return nil
+}
 
 // renameSessionLocked transfers in-memory agent state (subagents, currentStatus)
 // from oldName to newName.  CALLER MUST hold m.mu.
@@ -291,13 +312,13 @@ func (m *Module) checkAliveAll(sub *core.EventSubscriber) {
 			_ = m.events.Delete(ev.TmuxSession)
 			continue
 		}
-		provider, ok := m.registry.Get(ev.AgentType)
+		_, ok = m.registry.Get(ev.AgentType)
 		if !ok {
 			continue
 		}
 
 		tmuxTarget := ev.TmuxSession + ":"
-		if !provider.IsAlive(tmuxTarget) {
+		if !m.prober.IsAliveFor(ev.AgentType, tmuxTarget) {
 			m.mu.Lock()
 			delete(m.currentStatus, ev.TmuxSession)
 			delete(m.subagents, ev.TmuxSession)
