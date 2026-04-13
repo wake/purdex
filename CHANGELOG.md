@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.114] - 2026-04-14
+
+### 重構
+
+- **spa**：提取 register-modules 匿名 pane wrapper 為命名元件（#338）
+
 ## [1.0.0-alpha.113] - 2026-04-14
 
 ### 修復
