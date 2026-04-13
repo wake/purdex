@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.109] - 2026-04-13
+
+### 功能
+
+- **spa**：Icon 系統重構 — React.lazy + 1,445 chunks 改為 SVG path data 架構（#333）
+  - Build-time 腳本從 `@phosphor-icons/core` 提取 SVG path，產生 6 個 per-weight 靜態 JSON
+  - `icon-path-cache` 按需 fetch + 記憶體快取 + concurrent dedup + 失敗重試
+  - `WorkspaceIcon` 同步 SVG 渲染，消除 Suspense 閃爍
+  - `WorkspaceIconPicker` 改用 Fuse.js 模糊搜尋（支援 tags/categories）+ TanStack Virtual 虛擬捲動
+  - Picker 新增 weight toggle UI，支援 6 種 Phosphor weight 即時預覽
+  - `IconWeight` 從 3 種擴充為全部 6 種（bold/regular/thin/light/fill/duotone）
+  - Build 產出：JS 檔案 1,446 → 1，dist 9.0MB → 6.1MB，main bundle 453KB → 448KB gz
+
 ## [1.0.0-alpha.108] - 2026-04-13
 
 ### 測試
