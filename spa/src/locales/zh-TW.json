@@ -148,6 +148,7 @@
   "tab.close_right": "關閉右側分頁",
   "tab.rename_session": "重新命名 Session",
   "tab.rename_placeholder": "Session 名稱",
+  "tab.rename_invalid_format": "僅允許字母、數字、連字號和底線",
 
   "nav.scroll_left": "向左捲動",
   "nav.scroll_right": "向右捲動",

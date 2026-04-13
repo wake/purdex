@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
+import { isValidSessionName } from '../lib/session-name'
 
 interface Props {
   anchorRect: DOMRect
@@ -22,6 +23,12 @@ export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, er
   const containerRef = useRef<HTMLDivElement>(null)
 
   useClickOutside(containerRef, onCancel)
+
+  const trimmedDraft = draft.trim()
+  const validationError = trimmedDraft && trimmedDraft !== currentName && !isValidSessionName(trimmedDraft)
+    ? t('tab.rename_invalid_format')
+    : undefined
+  const displayError = validationError ?? error
 
   // Focus + select all on mount
   useEffect(() => {
@@ -50,7 +57,7 @@ export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, er
     }
     el.style.left = `${left}px`
     el.style.top = `${top}px`
-  }, [anchorRect, error])
+  }, [anchorRect, displayError])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -60,7 +67,7 @@ export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, er
     if (e.key === 'Enter') {
       e.preventDefault()
       const trimmed = draft.trim()
-      if (!trimmed || trimmed === currentName || submitting) return
+      if (!trimmed || trimmed === currentName || submitting || !isValidSessionName(trimmed)) return
       setSubmitting(true)
       onConfirm(trimmed).finally(() => setSubmitting(false))
     }
@@ -82,8 +89,8 @@ export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, er
         placeholder={t('tab.rename_placeholder')}
         className="w-full bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 focus:border-border-active focus:outline-none disabled:opacity-50"
       />
-      {error && (
-        <p className="text-xs text-red-400 mt-1 px-1">{error}</p>
+      {displayError && (
+        <p className="text-xs text-red-400 mt-1 px-1">{displayError}</p>
       )}
     </div>
   )
