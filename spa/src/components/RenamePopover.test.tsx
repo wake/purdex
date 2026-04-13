@@ -62,7 +62,6 @@ describe('RenamePopover', () => {
   })
 
   describe('vertical viewport clamping', () => {
-    const PADDING = 4
     let offsetHeightDescriptor: PropertyDescriptor | undefined
     let innerHeightDescriptor: PropertyDescriptor | undefined
 
@@ -86,7 +85,7 @@ describe('RenamePopover', () => {
       const anchor = { left: 100, top: 30, width: 120, height: 26, bottom: 56, right: 220 } as DOMRect
       const { container } = render(<RenamePopover {...defaultProps} anchorRect={anchor} />)
       const el = container.firstElementChild as HTMLElement
-      expect(el.style.top).toBe(`${anchor.bottom + PADDING}px`)
+      expect(el.style.top).toBe(`${anchor.bottom + 4}px`)
     })
 
     it('flips popover above anchor when below would overflow', () => {
@@ -107,7 +106,7 @@ describe('RenamePopover', () => {
       const el = container.firstElementChild as HTMLElement
       // below: 30 + 4 = 34, 34 + 40 = 74 > 50 - 4 = 46 → flip
       // above: 10 - 4 - 40 = -34 < 4 → clamp to PADDING
-      expect(el.style.top).toBe(`${PADDING}px`)
+      expect(el.style.top).toBe('4px')
     })
 
     it('recalculates position when error changes popover height', () => {
@@ -119,7 +118,7 @@ describe('RenamePopover', () => {
       // below: 150 + 4 = 154, 154 + 40 = 194 < 200 - 4 = 196 → fits below
       const { container, rerender } = render(<RenamePopover {...defaultProps} anchorRect={anchor} />)
       const el = container.firstElementChild as HTMLElement
-      expect(el.style.top).toBe(`${anchor.bottom + PADDING}px`)
+      expect(el.style.top).toBe(`${anchor.bottom + 4}px`)
 
       // Now error appears, popover grows taller
       Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 70 })
