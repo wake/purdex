@@ -23,6 +23,30 @@ import { FileTreeSessionView } from '../components/FileTreeSessionView'
 import { FolderOpen } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
 import type { PaneContent } from '../types/tab'
+import type { PaneRendererProps } from './module-registry'
+
+function NewTabPaneWrapper({ pane }: PaneRendererProps) {
+  const handleSelect = (content: PaneContent) => {
+    const { tabs } = useTabStore.getState()
+    const tabId = Object.keys(tabs).find((id) =>
+      findPane(tabs[id].layout, pane.id) !== undefined,
+    )
+    if (!tabId) return
+    useTabStore.getState().setPaneContent(tabId, pane.id, content)
+    useTabStore.getState().setActiveTab(tabId)
+  }
+  return <NewTabPage onSelect={handleSelect} />
+}
+
+function BrowserPaneWrapper({ pane }: PaneRendererProps) {
+  const content = pane.content
+  if (content.kind !== 'browser') return null
+  return <BrowserPane paneId={pane.id} url={content.url} />
+}
+
+function MemoryMonitorPaneWrapper() {
+  return <MemoryMonitorPage />
+}
 
 export function registerBuiltinModules(): void {
   // Modules with pane renderers
@@ -31,19 +55,7 @@ export function registerBuiltinModules(): void {
     name: 'New Tab',
     pane: {
       kind: 'new-tab',
-      component: ({ pane }) => {
-        const handleSelect = (content: PaneContent) => {
-          const { tabs } = useTabStore.getState()
-          // Find which tab contains this pane (not necessarily activeTabId)
-          const tabId = Object.keys(tabs).find((id) =>
-            findPane(tabs[id].layout, pane.id) !== undefined,
-          )
-          if (!tabId) return
-          useTabStore.getState().setPaneContent(tabId, pane.id, content)
-          useTabStore.getState().setActiveTab(tabId)
-        }
-        return <NewTabPage onSelect={handleSelect} />
-      },
+      component: NewTabPaneWrapper,
     },
   })
   registerModule({
@@ -71,11 +83,7 @@ export function registerBuiltinModules(): void {
     name: 'Browser',
     pane: {
       kind: 'browser',
-      component: ({ pane }) => {
-        const content = pane.content
-        if (content.kind !== 'browser') return null
-        return <BrowserPane paneId={pane.id} url={content.url} />
-      },
+      component: BrowserPaneWrapper,
     },
   })
   registerModule({
@@ -83,7 +91,7 @@ export function registerBuiltinModules(): void {
     name: 'Memory Monitor',
     pane: {
       kind: 'memory-monitor',
-      component: () => <MemoryMonitorPage />,
+      component: MemoryMonitorPaneWrapper,
     },
   })
   registerModule({
