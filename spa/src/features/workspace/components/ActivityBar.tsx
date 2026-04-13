@@ -23,6 +23,11 @@ function SortableWorkspaceButton({ workspace: ws, isActive, onSelect, onContextM
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: ws.id })
   const { unreadCount, aggregatedStatus } = useWorkspaceIndicators(ws.tabs)
   const showBadge = !isActive && unreadCount > 0
+  const tooltipExtras = [
+    showBadge && `${unreadCount} unread`,
+    aggregatedStatus && !isActive && aggregatedStatus,
+  ].filter(Boolean)
+  const tooltipText = tooltipExtras.length > 0 ? `${ws.name} (${tooltipExtras.join(', ')})` : ws.name
 
   const style = {
     transform: transform ? `translate3d(0, ${Math.round(transform.y)}px, 0)` : undefined,
@@ -77,8 +82,8 @@ function SortableWorkspaceButton({ workspace: ws, isActive, onSelect, onContextM
           {unreadCount}
         </span>
       )}
-      <span className="pointer-events-none absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-surface-secondary border border-border-default px-2 py-1 text-xs text-text-primary shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-50">
-        {ws.name}
+      <span data-testid="ws-tooltip" className="pointer-events-none absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-surface-secondary border border-border-default px-2 py-1 text-xs text-text-primary shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-50">
+        {tooltipText}
       </span>
     </div>
   )

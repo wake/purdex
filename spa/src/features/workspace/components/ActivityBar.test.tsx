@@ -267,4 +267,28 @@ describe('ActivityBar', () => {
 
     expect(screen.getByLabelText('Server, running')).toBeTruthy()
   })
+
+  it('shows unread count in tooltip on inactive workspace', () => {
+    useTabStore.setState({
+      tabs: { t3: mockSessionTab('t3', 'h1', 's3') },
+    })
+    useAgentStore.setState({ unread: { 'h1:s3': true } })
+
+    render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" />)
+
+    expect(screen.getByText('Server (1 unread)')).toBeTruthy()
+  })
+
+  it('tooltip shows only name when no unread and no status', () => {
+    useTabStore.setState({
+      tabs: { t3: mockSessionTab('t3', 'h1', 's3') },
+    })
+    useAgentStore.setState({ unread: {}, statuses: {} })
+
+    render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" />)
+
+    const tooltips = screen.getAllByTestId('ws-tooltip')
+    const serverTooltip = tooltips.find(el => el.textContent === 'Server')
+    expect(serverTooltip).toBeTruthy()
+  })
 })
