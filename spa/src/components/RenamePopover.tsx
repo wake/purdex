@@ -36,12 +36,21 @@ export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, er
   useLayoutEffect(() => {
     const el = containerRef.current
     if (!el) return
+    // Horizontal clamping (existing)
     let left = anchorRect.left + anchorRect.width / 2 - POPOVER_WIDTH / 2
     left = Math.max(PADDING, Math.min(left, window.innerWidth - POPOVER_WIDTH - PADDING))
-    const top = anchorRect.bottom + PADDING
+    // Vertical clamping
+    const popoverHeight = el.offsetHeight
+    let top = anchorRect.bottom + PADDING
+    if (top + popoverHeight > window.innerHeight - PADDING) {
+      top = anchorRect.top - PADDING - popoverHeight
+    }
+    if (top < PADDING) {
+      top = PADDING
+    }
     el.style.left = `${left}px`
     el.style.top = `${top}px`
-  }, [anchorRect])
+  }, [anchorRect, error])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
