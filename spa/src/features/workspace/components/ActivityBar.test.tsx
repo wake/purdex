@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 
-// Mock icon-loader to avoid CSR deep-import resolution failures in test env
-vi.mock('../generated/icon-loader', () => ({
-  iconLoaders: {},
+// Mock icon-path-cache to avoid CSR deep-import resolution failures in test env
+vi.mock('../lib/icon-path-cache', () => ({
+  getIconPath: () => null,
+  isWeightLoaded: () => true,
+  prefetchWeight: () => Promise.resolve(),
 }))
 
 import { ActivityBar } from './ActivityBar'

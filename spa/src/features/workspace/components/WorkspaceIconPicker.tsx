@@ -1,25 +1,36 @@
-import { useState, useMemo, Suspense, lazy } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { MagnifyingGlass, X } from '@phosphor-icons/react'
-import type { Icon } from '@phosphor-icons/react'
+import Fuse from 'fuse.js'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { CURATED_ICON_CATEGORIES, CURATED_ICON_SET } from '../constants'
-import { ALL_ICON_NAMES, iconLoaders } from '../generated/icon-loader'
+import type { IconWeight } from '../../../types/tab'
+import { CURATED_ICON_CATEGORIES } from '../constants'
+import { getIconPath, isWeightLoaded, prefetchWeight } from '../lib/icon-path-cache'
+import { renderPaths } from '../lib/render-paths'
+import iconMetaData from '../generated/icon-meta.json'
 
-/** Cache of resolved lazy components */
-const lazyCache = new Map<string, React.LazyExoticComponent<Icon>>()
-
-function getLazy(name: string): React.LazyExoticComponent<Icon> | null {
-  if (lazyCache.has(name)) return lazyCache.get(name)!
-  const loader = iconLoaders[name]
-  if (!loader) return null
-  const L = lazy(() => loader().then((comp) => ({ default: comp })))
-  lazyCache.set(name, L)
-  return L
+interface IconMeta {
+  n: string
+  t: string[]
+  c: string[]
 }
 
-/* eslint-disable react-hooks/static-components -- lazyCache guarantees stable reference per icon name */
-function IconCell({ name, selected, onSelect }: { name: string; selected: boolean; onSelect: () => void }) {
-  const LazyIcon = useMemo(() => getLazy(name), [name])
+const iconMeta: IconMeta[] = iconMetaData as IconMeta[]
+
+const fuse = new Fuse(iconMeta, {
+  keys: ['n', 't', 'c'],
+  threshold: 0.3,
+})
+
+const COLS = 8
+const WEIGHTS: IconWeight[] = ['bold', 'regular', 'thin', 'light', 'fill', 'duotone']
+
+function IconCell({
+  name, selected, onSelect, weight,
+}: {
+  name: string; selected: boolean; onSelect: () => void; weight: string
+}) {
+  const pathData = getIconPath(name, weight)
   return (
     <button
       data-icon={name}
@@ -32,17 +43,16 @@ function IconCell({ name, selected, onSelect }: { name: string; selected: boolea
           : 'bg-surface-tertiary text-text-secondary hover:text-text-primary hover:bg-surface-hover'
       }`}
     >
-      {LazyIcon ? (
-        <Suspense fallback={<span className="text-[10px] opacity-40">{name.charAt(0)}</span>}>
-          <LazyIcon size={18} />
-        </Suspense>
+      {pathData ? (
+        <svg width={18} height={18} viewBox="0 0 256 256" fill="currentColor">
+          {renderPaths(pathData)}
+        </svg>
       ) : (
         <span className="text-xs">{name.charAt(0)}</span>
       )}
     </button>
   )
 }
-/* eslint-enable react-hooks/static-components */
 
 const categoryLabels: Record<string, string> = {
   general: 'General', development: 'Dev', objects: 'Objects',
@@ -55,23 +65,47 @@ interface Props {
   onSelect: (icon: string) => void
   onCancel: () => void
   inline?: boolean
+  currentWeight?: IconWeight
 }
 
-export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline }: Props) {
+export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline, currentWeight = 'bold' }: Props) {
   const t = useI18nStore((s) => s.t)
   const categories = Object.keys(CURATED_ICON_CATEGORIES)
   const [activeCategory, setActiveCategory] = useState(categories[0])
   const [search, setSearch] = useState('')
+  const [weight, setWeight] = useState<IconWeight>(currentWeight)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [, setTick] = useState(0)
+
+  // Prefetch weight data in useEffect (not in render body)
+  useEffect(() => {
+    if (!isWeightLoaded(weight)) {
+      prefetchWeight(weight)
+        .then(() => setTick((t) => t + 1))
+        .catch(() => {})
+    }
+  }, [weight])
+
+  // Reset scroll position when category or search changes
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
+  }, [activeCategory, search])
 
   const displayIcons = useMemo(() => {
     if (!search.trim()) return CURATED_ICON_CATEGORIES[activeCategory] ?? []
-    const q = search.trim().toLowerCase()
-    const curated = [...new Set(Object.values(CURATED_ICON_CATEGORIES).flat())]
-      .filter((n) => n.toLowerCase().includes(q))
-    const full = ALL_ICON_NAMES
-      .filter((n) => n.toLowerCase().includes(q) && !CURATED_ICON_SET.has(n))
-    return [...curated, ...full].slice(0, 100)
+    return fuse.search(search.trim()).map((r) => r.item.n)
   }, [search, activeCategory])
+
+  const rowCount = Math.ceil(displayIcons.length / COLS)
+
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual is safe here, picker is not memoized
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 38, // 32px icon + 6px gap
+    overscan: 3,
+    initialRect: { width: 300, height: 192 }, // fallback for environments without layout (jsdom)
+  })
 
   const content = (
     <div className={inline ? '' : 'bg-surface-secondary border border-border-default rounded-lg shadow-xl w-full max-w-sm mx-4 p-5'}>
@@ -86,6 +120,25 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline }:
           placeholder="Search icons..."
           className="w-full pl-8 pr-3 py-1.5 bg-surface-tertiary border border-border-subtle rounded-md text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-1 focus:ring-accent"
         />
+      </div>
+
+      {/* Weight toggle */}
+      <div className="flex items-center gap-1.5 mb-3">
+        <span className="text-[11px] text-text-tertiary mr-0.5">Style</span>
+        {WEIGHTS.map((w) => (
+          <button
+            key={w}
+            data-testid={`weight-${w}`}
+            onClick={() => setWeight(w)}
+            className={`px-2 py-0.5 rounded text-[11px] capitalize cursor-pointer transition-colors ${
+              weight === w
+                ? 'bg-accent/20 text-accent font-semibold'
+                : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+            }`}
+          >
+            {w}
+          </button>
+        ))}
       </div>
 
       {/* Category tabs (hidden during search) */}
@@ -108,16 +161,43 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline }:
         </div>
       )}
 
-      {/* Icon grid — p-0.5 prevents ring-2 from being clipped by overflow */}
-      <div className="grid grid-cols-8 gap-1.5 max-h-48 overflow-y-auto p-0.5">
-        {displayIcons.map((name) => (
-          <IconCell
-            key={name}
-            name={name}
-            selected={name === currentIcon}
-            onSelect={() => onSelect(name)}
-          />
-        ))}
+      {/* Virtualized icon grid */}
+      <div ref={scrollRef} className="max-h-48 overflow-y-auto p-0.5">
+        {displayIcons.length === 0 ? (
+          <div className="flex items-center justify-center h-24 text-xs text-text-tertiary">
+            No results found
+          </div>
+        ) : (
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+            {virtualizer.getVirtualItems().map((vRow) => {
+              const startIdx = vRow.index * COLS
+              const rowIcons = displayIcons.slice(startIdx, startIdx + COLS)
+              return (
+                <div
+                  key={vRow.key}
+                  className="flex gap-1.5"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    transform: `translateY(${vRow.start}px)`,
+                    height: vRow.size,
+                  }}
+                >
+                  {rowIcons.map((name) => (
+                    <IconCell
+                      key={name}
+                      name={name}
+                      selected={name === currentIcon}
+                      onSelect={() => onSelect(name)}
+                      weight={weight}
+                    />
+                  ))}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       {/* Clear + cancel */}

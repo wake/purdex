@@ -92,7 +92,7 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
           {ws.icon && (
             <div className="flex items-center gap-2 mb-3">
               <span className="text-xs text-text-tertiary">Style</span>
-              {(['bold', 'duotone', 'fill'] as const).map((w) => (
+              {(['bold', 'regular', 'thin', 'light', 'fill', 'duotone'] as const).map((w) => (
                 <button
                   key={w}
                   onClick={() => setWorkspaceIconWeight(workspaceId, w)}
@@ -112,6 +112,7 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
             onSelect={handleIconSelect}
             onCancel={() => {}}
             inline
+            currentWeight={ws.iconWeight}
           />
         </section>
 

@@ -22,8 +22,10 @@ vi.mock('@dnd-kit/sortable', () => ({
   }),
 }))
 
-vi.mock('../features/workspace/generated/icon-loader', () => ({
-  iconLoaders: {},
+vi.mock('../features/workspace/lib/icon-path-cache', () => ({
+  getIconPath: () => null,
+  isWeightLoaded: () => true,
+  prefetchWeight: () => Promise.resolve(),
 }))
 
 // Lazy import so mocks are applied before module resolution

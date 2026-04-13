@@ -37,7 +37,7 @@ export type PaneContent =
   | { kind: 'memory-monitor' }
 
 // === Workspace ===
-export type IconWeight = 'bold' | 'duotone' | 'fill'
+export type IconWeight = 'bold' | 'regular' | 'thin' | 'light' | 'fill' | 'duotone'
 
 export interface Workspace {
   id: string

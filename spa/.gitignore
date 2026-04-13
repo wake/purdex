@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Generated icon data (large, rebuilt at dev/build time)
+public/icons/*.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

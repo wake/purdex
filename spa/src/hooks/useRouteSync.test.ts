@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-vi.mock('../features/workspace/generated/icon-loader', () => ({
-  ALL_ICON_NAMES: [],
-  iconLoaders: {},
+vi.mock('../features/workspace/lib/icon-path-cache', () => ({
+  getIconPath: () => null,
+  isWeightLoaded: () => true,
+  prefetchWeight: () => Promise.resolve(),
 }))
 
 import { renderHook, act } from '@testing-library/react'

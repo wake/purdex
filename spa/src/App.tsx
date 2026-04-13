@@ -1,6 +1,7 @@
 // spa/src/App.tsx — v2 重構：wouter Router + Tab/Pane model
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Router } from 'wouter'
+import { prefetchWeight } from './features/workspace/lib/icon-path-cache'
 import { ActivityBar } from './components/ActivityBar'
 import { TabBar } from './components/TabBar'
 import { TabContent } from './components/TabContent'
@@ -34,6 +35,9 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { getPlatformCapabilities } from './lib/platform'
 import type { Tab } from './types/tab'
 import { GlobalUndoToast } from './components/GlobalUndoToast'
+
+// Prefetch default icon weight so WorkspaceIcon renders instantly
+prefetchWeight('bold').catch(() => {})
 
 export default function App() {
   const isElectron = getPlatformCapabilities().isElectron
