@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.113] - 2026-04-14
+
+### 修復
+
+- **spa**：Workspace name input 加入 `maxLength=64` 防止超長名稱（#337）
+
 ## [1.0.0-alpha.112] - 2026-04-14
 
 ### 修復
