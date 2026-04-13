@@ -147,8 +147,8 @@ func (m *Module) Stop(_ context.Context) error {
 	return nil
 }
 
-// renameSessionLocked transfers in-memory agent state (subagents, currentStatus)
-// from oldName to newName.  CALLER MUST hold m.mu.
+// renameSessionLocked transfers in-memory agent state (subagents, currentStatus,
+// activeWatchers) from oldName to newName.  CALLER MUST hold m.mu.
 func (m *Module) renameSessionLocked(oldName, newName string) {
 	if subs, ok := m.subagents[oldName]; ok {
 		m.subagents[newName] = subs
@@ -157,6 +157,18 @@ func (m *Module) renameSessionLocked(oldName, newName string) {
 	if status, ok := m.currentStatus[oldName]; ok {
 		m.currentStatus[newName] = status
 		delete(m.currentStatus, oldName)
+	}
+	if agentType, ok := m.activeWatchers[oldName]; ok {
+		delete(m.activeWatchers, oldName)
+		// Stop old watcher — callback closure captured oldName, can't reuse
+		if m.prober != nil {
+			m.prober.StopWatch(oldName + ":")
+		}
+		// Restart watcher with new name
+		m.activeWatchers[newName] = agentType
+		if m.prober != nil {
+			m.prober.StartWatch(newName+":", m.onActivityDetected(newName, agentType))
+		}
 	}
 }
 
@@ -322,8 +334,10 @@ func (m *Module) checkAliveAll(sub *core.EventSubscriber) {
 			m.mu.Lock()
 			delete(m.currentStatus, ev.TmuxSession)
 			delete(m.subagents, ev.TmuxSession)
+			delete(m.activeWatchers, ev.TmuxSession)
 			m.mu.Unlock()
 
+			m.prober.StopWatch(tmuxTarget)
 			_ = m.events.Delete(ev.TmuxSession)
 
 			normalized := agentpkg.NormalizedEvent{
@@ -335,5 +349,78 @@ func (m *Module) checkAliveAll(sub *core.EventSubscriber) {
 			payload, _ := json.Marshal(normalized)
 			m.core.Events.Broadcast(code, "hook", string(payload))
 		}
+	}
+}
+
+// manageActivityWatch handles starting/stopping Activity watchers in response to hook events.
+func (m *Module) manageActivityWatch(session, agentType string, newStatus agentpkg.Status) {
+	m.mu.Lock()
+	_, wasWatching := m.activeWatchers[session]
+	delete(m.activeWatchers, session)
+	m.mu.Unlock()
+	if wasWatching {
+		m.prober.StopWatch(session + ":")
+	}
+
+	if newStatus == agentpkg.StatusWaiting {
+		m.mu.Lock()
+		m.activeWatchers[session] = agentType
+		m.mu.Unlock()
+		m.prober.StartWatch(session+":", m.onActivityDetected(session, agentType))
+	}
+}
+
+// onActivityDetected returns a callback for when screen activity is detected
+// during a waiting state. The callback checks if the watcher is still active
+// (a hook event may have already superseded it), then runs Readiness to
+// determine the new status.
+func (m *Module) onActivityDetected(session, agentType string) func(string) {
+	return func(target string) {
+		m.mu.Lock()
+		if _, active := m.activeWatchers[session]; !active {
+			m.mu.Unlock()
+			return
+		}
+		delete(m.activeWatchers, session)
+		m.mu.Unlock()
+
+		if !m.prober.IsAliveFor(agentType, target) {
+			return
+		}
+
+		result, ok := m.prober.CheckReadiness(agentType, target)
+		if !ok {
+			return
+		}
+
+		// Issue #2: StatusWaiting — restart watcher to keep monitoring
+		if result.Status == agentpkg.StatusWaiting {
+			m.mu.Lock()
+			m.activeWatchers[session] = agentType
+			m.mu.Unlock()
+			m.prober.StartWatch(target, m.onActivityDetected(session, agentType))
+			return
+		}
+
+		// Issue #1: Error Guard — don't overwrite StatusError
+		m.mu.Lock()
+		if m.currentStatus[session] == agentpkg.StatusError {
+			m.mu.Unlock()
+			return // respect Error Guard
+		}
+		m.currentStatus[session] = result.Status
+		m.mu.Unlock()
+
+		// Note: probe:activity status changes are not persisted to DB.
+		// After daemon restart, replayFromDB may show stale "waiting" status,
+		// but the next hook event or checkAliveAll will correct it.
+
+		normalized := agentpkg.NormalizedEvent{
+			AgentType:    agentType,
+			Status:       string(result.Status),
+			RawEventName: "probe:activity",
+			BroadcastTs:  time.Now().UnixNano(),
+		}
+		m.broadcastToSession(session, normalized)
 	}
 }
