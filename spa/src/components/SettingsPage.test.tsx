@@ -1,11 +1,9 @@
 import { vi } from 'vitest'
 
-vi.mock('../features/workspace/generated/icon-loader', () => ({
-  ALL_ICON_NAMES: ['House', 'Star'],
-  iconLoaders: {
-    House: () => new Promise(() => {}),
-    Star: () => new Promise(() => {}),
-  },
+vi.mock('../features/workspace/lib/icon-path-cache', () => ({
+  getIconPath: () => 'M0,0',
+  isWeightLoaded: () => true,
+  prefetchWeight: () => Promise.resolve(),
 }))
 
 import { describe, it, expect, beforeEach } from 'vitest'
