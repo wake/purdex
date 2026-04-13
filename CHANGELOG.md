@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.107] - 2026-04-13
+
+### 功能
+
+- **spa**：Workspace tooltip 顯示 unread 數量與 agent 狀態，與 aria-label 一致（#228）
+
+### 修正
+
+- **spa**：修正 active workspace 的 aria-label 錯誤包含 agent status（#228 review 發現）
+
 ## [1.0.0-alpha.106] - 2026-04-13
 
 ### 功能
