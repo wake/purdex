@@ -61,6 +61,65 @@ describe('RenamePopover', () => {
     expect(screen.getByText('Rename failed')).toBeInTheDocument()
   })
 
+  describe('client-side name format validation', () => {
+    it('shows format error for names with invalid characters', () => {
+      render(<RenamePopover {...defaultProps} />)
+      const input = screen.getByDisplayValue('my-session')
+      fireEvent.change(input, { target: { value: 'has space' } })
+      expect(screen.getByText(/only letters|僅允許/i)).toBeInTheDocument()
+    })
+
+    it.each([
+      ['dot', 'my.session'],
+      ['colon', 'tmux:session'],
+      ['slash', 'path/name'],
+    ])('shows format error for %s in name', (_label, value) => {
+      render(<RenamePopover {...defaultProps} />)
+      const input = screen.getByDisplayValue('my-session')
+      fireEvent.change(input, { target: { value } })
+      expect(screen.getByText(/only letters|僅允許/i)).toBeInTheDocument()
+    })
+
+    it('does not call onConfirm when name has invalid format', () => {
+      render(<RenamePopover {...defaultProps} />)
+      const input = screen.getByDisplayValue('my-session')
+      fireEvent.change(input, { target: { value: 'bad name!' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(defaultProps.onConfirm).not.toHaveBeenCalled()
+    })
+
+    it('clears format error when corrected to valid name', () => {
+      render(<RenamePopover {...defaultProps} />)
+      const input = screen.getByDisplayValue('my-session')
+      fireEvent.change(input, { target: { value: 'bad.name' } })
+      expect(screen.getByText(/only letters|僅允許/i)).toBeInTheDocument()
+      fireEvent.change(input, { target: { value: 'good-name' } })
+      expect(screen.queryByText(/only letters|僅允許/i)).not.toBeInTheDocument()
+    })
+
+    it('does not show format error for valid names', () => {
+      render(<RenamePopover {...defaultProps} />)
+      const input = screen.getByDisplayValue('my-session')
+      fireEvent.change(input, { target: { value: 'valid_Name-01' } })
+      expect(screen.queryByText(/only letters|僅允許/i)).not.toBeInTheDocument()
+    })
+
+    it('does not show format error when input is empty', () => {
+      render(<RenamePopover {...defaultProps} />)
+      const input = screen.getByDisplayValue('my-session')
+      fireEvent.change(input, { target: { value: '' } })
+      expect(screen.queryByText(/only letters|僅允許/i)).not.toBeInTheDocument()
+    })
+
+    it('format error overrides API error prop', () => {
+      render(<RenamePopover {...defaultProps} error="API error message" />)
+      const input = screen.getByDisplayValue('my-session')
+      fireEvent.change(input, { target: { value: 'bad.name' } })
+      expect(screen.getByText(/only letters|僅允許/i)).toBeInTheDocument()
+      expect(screen.queryByText('API error message')).not.toBeInTheDocument()
+    })
+  })
+
   describe('vertical viewport clamping', () => {
     let offsetHeightDescriptor: PropertyDescriptor | undefined
     let innerHeightDescriptor: PropertyDescriptor | undefined

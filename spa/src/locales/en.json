@@ -148,6 +148,7 @@
   "tab.close_right": "Close tabs to the right",
   "tab.rename_session": "Rename Session",
   "tab.rename_placeholder": "Session name",
+  "tab.rename_invalid_format": "Only letters, numbers, hyphens, and underscores",
 
   "nav.scroll_left": "Scroll left",
   "nav.scroll_right": "Scroll right",
