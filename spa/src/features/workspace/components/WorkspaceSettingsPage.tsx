@@ -112,6 +112,7 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
             onSelect={handleIconSelect}
             onCancel={() => {}}
             inline
+            currentWeight={ws.iconWeight}
           />
         </section>
 

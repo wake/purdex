@@ -84,4 +84,33 @@ describe('WorkspaceIconPicker', () => {
     fireEvent.click(screen.getByTestId('clear-icon'))
     expect(onSelect).toHaveBeenCalledWith('')
   })
+
+  it('renders weight toggle buttons', () => {
+    render(<WorkspaceIconPicker currentIcon={undefined} onSelect={vi.fn()} onCancel={vi.fn()} />)
+    for (const w of ['bold', 'regular', 'thin', 'light', 'fill', 'duotone']) {
+      expect(screen.getByTestId(`weight-${w}`)).toBeInTheDocument()
+    }
+  })
+
+  it('defaults weight to currentWeight prop', () => {
+    render(<WorkspaceIconPicker currentIcon={undefined} onSelect={vi.fn()} onCancel={vi.fn()} currentWeight="thin" />)
+    const thinBtn = screen.getByTestId('weight-thin')
+    expect(thinBtn.className).toContain('bg-accent/20')
+  })
+
+  it('switches weight on click', () => {
+    render(<WorkspaceIconPicker currentIcon={undefined} onSelect={vi.fn()} onCancel={vi.fn()} />)
+    const regularBtn = screen.getByTestId('weight-regular')
+    fireEvent.click(regularBtn)
+    expect(regularBtn.className).toContain('bg-accent/20')
+    const boldBtn = screen.getByTestId('weight-bold')
+    expect(boldBtn.className).not.toContain('bg-accent/20')
+  })
+
+  it('shows empty state when search has no results', () => {
+    render(<WorkspaceIconPicker currentIcon={undefined} onSelect={vi.fn()} onCancel={vi.fn()} />)
+    const search = screen.getByPlaceholderText(/search/i)
+    fireEvent.change(search, { target: { value: 'xyznonexistent' } })
+    expect(screen.getByText('No results found')).toBeInTheDocument()
+  })
 })

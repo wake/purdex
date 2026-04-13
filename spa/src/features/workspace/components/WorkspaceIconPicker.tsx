@@ -1,11 +1,12 @@
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { MagnifyingGlass, X } from '@phosphor-icons/react'
 import Fuse from 'fuse.js'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import type { IconWeight } from '../../../types/tab'
 import { CURATED_ICON_CATEGORIES } from '../constants'
 import { getIconPath, isWeightLoaded, prefetchWeight } from '../lib/icon-path-cache'
-import type { PathData } from '../lib/icon-path-cache'
+import { renderPaths } from '../lib/render-paths'
 import iconMetaData from '../generated/icon-meta.json'
 
 interface IconMeta {
@@ -22,15 +23,7 @@ const fuse = new Fuse(iconMeta, {
 })
 
 const COLS = 8
-
-function renderPaths(data: PathData) {
-  if (typeof data === 'string') return <path d={data} />
-  return data.map((p, i) =>
-    typeof p === 'string'
-      ? <path key={i} d={p} />
-      : <path key={i} d={p.d} opacity={p.o} />,
-  )
-}
+const WEIGHTS: IconWeight[] = ['bold', 'regular', 'thin', 'light', 'fill', 'duotone']
 
 function IconCell({
   name, selected, onSelect, weight,
@@ -72,20 +65,31 @@ interface Props {
   onSelect: (icon: string) => void
   onCancel: () => void
   inline?: boolean
+  currentWeight?: IconWeight
 }
 
-export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline }: Props) {
+export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline, currentWeight = 'bold' }: Props) {
   const t = useI18nStore((s) => s.t)
   const categories = Object.keys(CURATED_ICON_CATEGORIES)
   const [activeCategory, setActiveCategory] = useState(categories[0])
   const [search, setSearch] = useState('')
-  const [weight] = useState('bold')
+  const [weight, setWeight] = useState<IconWeight>(currentWeight)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [, setTick] = useState(0)
 
-  // Ensure current weight is loaded
-  if (!isWeightLoaded(weight)) {
-    prefetchWeight(weight).catch(() => {})
-  }
+  // Prefetch weight data in useEffect (not in render body)
+  useEffect(() => {
+    if (!isWeightLoaded(weight)) {
+      prefetchWeight(weight)
+        .then(() => setTick((t) => t + 1))
+        .catch(() => {})
+    }
+  }, [weight])
+
+  // Reset scroll position when category or search changes
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
+  }, [activeCategory, search])
 
   const displayIcons = useMemo(() => {
     if (!search.trim()) return CURATED_ICON_CATEGORIES[activeCategory] ?? []
@@ -118,6 +122,25 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline }:
         />
       </div>
 
+      {/* Weight toggle */}
+      <div className="flex items-center gap-1.5 mb-3">
+        <span className="text-[11px] text-text-tertiary mr-0.5">Style</span>
+        {WEIGHTS.map((w) => (
+          <button
+            key={w}
+            data-testid={`weight-${w}`}
+            onClick={() => setWeight(w)}
+            className={`px-2 py-0.5 rounded text-[11px] capitalize cursor-pointer transition-colors ${
+              weight === w
+                ? 'bg-accent/20 text-accent font-semibold'
+                : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+            }`}
+          >
+            {w}
+          </button>
+        ))}
+      </div>
+
       {/* Category tabs (hidden during search) */}
       {!search.trim() && (
         <div className="flex flex-wrap gap-1 mb-3">
@@ -140,35 +163,41 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline }:
 
       {/* Virtualized icon grid */}
       <div ref={scrollRef} className="max-h-48 overflow-y-auto p-0.5">
-        <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
-          {virtualizer.getVirtualItems().map((vRow) => {
-            const startIdx = vRow.index * COLS
-            const rowIcons = displayIcons.slice(startIdx, startIdx + COLS)
-            return (
-              <div
-                key={vRow.key}
-                className="flex gap-1.5"
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  transform: `translateY(${vRow.start}px)`,
-                  height: vRow.size,
-                }}
-              >
-                {rowIcons.map((name) => (
-                  <IconCell
-                    key={name}
-                    name={name}
-                    selected={name === currentIcon}
-                    onSelect={() => onSelect(name)}
-                    weight={weight}
-                  />
-                ))}
-              </div>
-            )
-          })}
-        </div>
+        {displayIcons.length === 0 ? (
+          <div className="flex items-center justify-center h-24 text-xs text-text-tertiary">
+            No results found
+          </div>
+        ) : (
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+            {virtualizer.getVirtualItems().map((vRow) => {
+              const startIdx = vRow.index * COLS
+              const rowIcons = displayIcons.slice(startIdx, startIdx + COLS)
+              return (
+                <div
+                  key={vRow.key}
+                  className="flex gap-1.5"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    transform: `translateY(${vRow.start}px)`,
+                    height: vRow.size,
+                  }}
+                >
+                  {rowIcons.map((name) => (
+                    <IconCell
+                      key={name}
+                      name={name}
+                      selected={name === currentIcon}
+                      onSelect={() => onSelect(name)}
+                      weight={weight}
+                    />
+                  ))}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       {/* Clear + cancel */}

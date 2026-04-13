@@ -5,7 +5,6 @@
  * then outputs:
  *   - public/icons/{weight}.json      (keyed by PascalName, value = path string or [paths] for duotone)
  *   - src/features/workspace/generated/icon-meta.json   (array of {n, t, c})
- *   - src/features/workspace/generated/icon-names.ts    (exports ICON_NAMES, ICON_NAME_SET)
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
@@ -135,21 +134,5 @@ const metaArray = icons.map(icon => ({
 const metaPath = resolve(generatedDir, 'icon-meta.json');
 writeFileSync(metaPath, JSON.stringify(metaArray));
 console.log(`  icon-meta.json: ${metaArray.length} entries`);
-
-// ---- generate icon-names.ts -------------------------------------------------
-
-const iconNames = icons.map(icon => icon.pascal_name);
-
-const namesTs = `// AUTO-GENERATED — do not edit manually.
-// Run: pnpm generate:icons
-
-export const ICON_NAMES: string[] = ${JSON.stringify(iconNames, null, 2)};
-
-export const ICON_NAME_SET: Set<string> = new Set(ICON_NAMES);
-`;
-
-const namesPath = resolve(generatedDir, 'icon-names.ts');
-writeFileSync(namesPath, namesTs);
-console.log(`  icon-names.ts: ${iconNames.length} names`);
 
 console.log('Done.');

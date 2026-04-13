@@ -56,8 +56,3 @@ export const CURATED_ICON_CATEGORIES: Record<string, string[]> = {
     'Calculator', 'ClipboardText', 'Newspaper', 'Kanban', 'ListChecks',
   ],
 }
-
-/** Flat set of all curated icon names for quick lookup */
-export const CURATED_ICON_SET = new Set(
-  Object.values(CURATED_ICON_CATEGORIES).flat()
-)
