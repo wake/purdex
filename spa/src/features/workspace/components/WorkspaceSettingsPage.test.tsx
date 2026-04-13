@@ -33,6 +33,12 @@ describe('WorkspaceSettingsPage', () => {
     expect(useWorkspaceStore.getState().workspaces[0].name).toBe('Renamed')
   })
 
+  it('has maxLength on name input to prevent excessively long names', () => {
+    render(<WorkspaceSettingsPage workspaceId={wsId} />)
+    const input = screen.getByDisplayValue('Test WS') as HTMLInputElement
+    expect(input.maxLength).toBe(64)
+  })
+
   it('renders delete button and shows confirm dialog', () => {
     render(<WorkspaceSettingsPage workspaceId={wsId} />)
     fireEvent.click(screen.getByTestId('delete-workspace-btn'))
