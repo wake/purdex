@@ -24,19 +24,26 @@ function ensureDir(dir) {
 }
 
 /**
- * Extract path `d` attribute strings from an SVG file.
- * Returns an array of path strings (most icons have 1, duotone may have 2).
+ * Extract path data from an SVG file.
+ * Returns an array where each element is either:
+ *   - a plain string (no opacity attribute), or
+ *   - an object { d: string, o: number } (when opacity attribute is present)
  */
 function extractPaths(svgContent) {
   const paths = [];
-  // Match all <path ...> elements and capture the d attribute
+  // Match all <path ...> elements and capture the attributes
   const pathRe = /<path\b([^>]*)>/gi;
   let match;
   while ((match = pathRe.exec(svgContent)) !== null) {
     const attrs = match[1];
     const dMatch = /\bd="([^"]*)"/.exec(attrs);
     if (dMatch) {
-      paths.push(dMatch[1]);
+      const opacityMatch = /\bopacity="([^"]*)"/.exec(attrs);
+      if (opacityMatch) {
+        paths.push({ d: dMatch[1], o: parseFloat(opacityMatch[1]) });
+      } else {
+        paths.push(dMatch[1]);
+      }
     }
   }
   return paths;
