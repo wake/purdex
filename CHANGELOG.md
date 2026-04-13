@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.110] - 2026-04-13
+
+### 重構
+
+- **daemon**：Probe Chain 三層探測架構取代舊 CC Detector（#334）
+  - Liveness 層：process name + child process + content fallback，統一 CC/Codex 偵測
+  - Readiness 層：ReadinessChecker interface，CC/Codex 各自實作狀態辨識
+  - Activity 層：CapturePaneContent hash diff 偵測畫面變化，解決黃燈卡住問題
+  - 刪除 `cc.Detector`、`cc.CCDetector` interface、`codex.detector`
+  - Stream orchestrator 改用 `IsAliveFor` + `CheckReadiness` 組合
+
 ## [1.0.0-alpha.109] - 2026-04-13
 
 ### 功能
