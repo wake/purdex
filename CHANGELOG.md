@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.108] - 2026-04-13
+
+### 測試
+
+- **spa**：新增 SortableTab 測試 — onPointerDown focus prevention、data-tab-id attribute、onSelect/onClose 互動（#211）
+
 ## [1.0.0-alpha.107] - 2026-04-13
 
 ### 功能
