@@ -94,6 +94,7 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline }:
 
   const rowCount = Math.ceil(displayIcons.length / COLS)
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual is safe here, picker is not memoized
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollRef.current,
