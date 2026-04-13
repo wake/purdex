@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import type { Tab } from '../types/tab'
+import { createTab } from '../types/tab'
 import { clearModuleRegistry, registerModule } from '../lib/module-registry'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useI18nStore } from '../stores/useI18nStore'
 
 const mockOnPointerDown = vi.fn()
 
@@ -28,19 +30,11 @@ vi.mock('../features/workspace/generated/icon-loader', () => ({
 const { SortableTab } = await import('./SortableTab')
 
 function makeTestTab(id: string, opts?: { pinned?: boolean }): Tab {
-  return {
-    id,
-    pinned: opts?.pinned ?? false,
-    locked: false,
-    createdAt: 0,
-    layout: {
-      type: 'leaf',
-      pane: {
-        id: `pane-${id}`,
-        content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'sc1', mode: 'terminal' as const, cachedName: '', tmuxInstance: '' },
-      },
-    },
-  }
+  const tab = createTab(
+    { kind: 'tmux-session', hostId: 'h1', sessionCode: 'sc1', mode: 'terminal' as const, cachedName: '', tmuxInstance: '' },
+    { pinned: opts?.pinned },
+  )
+  return { ...tab, id }
 }
 
 const defaultProps = {
@@ -62,6 +56,7 @@ beforeEach(() => {
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
   useHostStore.setState({ runtime: {} })
   useAgentStore.setState({ unread: {}, statuses: {}, subagents: {}, tabIndicatorStyle: 'overlay' })
+  useI18nStore.setState({ t: (k: string) => k })
 })
 
 describe('SortableTab', () => {
@@ -99,5 +94,23 @@ describe('SortableTab', () => {
     const event = new PointerEvent('pointerdown', { bubbles: true, cancelable: true })
     el.dispatchEvent(event)
     expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('calls onSelect when tab is clicked', () => {
+    const onSelect = vi.fn()
+    const { container } = render(<SortableTab {...defaultProps} onSelect={onSelect} />)
+    const el = container.querySelector('[data-tab-id="t1"]')!
+    fireEvent.click(el)
+    expect(onSelect).toHaveBeenCalledWith('t1')
+  })
+
+  it('calls onClose without triggering onSelect when close button is clicked', () => {
+    const onSelect = vi.fn()
+    const onClose = vi.fn()
+    render(<SortableTab {...defaultProps} onSelect={onSelect} onClose={onClose} />)
+    const closeBtn = screen.getByTitle('tab.close')
+    fireEvent.click(closeBtn)
+    expect(onClose).toHaveBeenCalledWith('t1')
+    expect(onSelect).not.toHaveBeenCalled()
   })
 })
