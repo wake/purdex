@@ -292,6 +292,44 @@ describe('ActivityBar', () => {
     expect(screen.getByText('Server (1 unread)')).toBeTruthy()
   })
 
+  it('truncates workspace badge to 99+ when unread count exceeds 99', () => {
+    // Create 100 tabs in ws-2 with unique sessions, all unread
+    const tabIds = Array.from({ length: 100 }, (_, i) => `t-${i}`)
+    const tabs: Record<string, Tab> = {}
+    const unread: Record<string, boolean> = {}
+    tabIds.forEach((id, i) => {
+      tabs[id] = mockSessionTab(id, 'h1', `s${i}`)
+      unread[`h1:s${i}`] = true
+    })
+    const workspaces: Workspace[] = [
+      { id: 'ws-1', name: 'Active', icon: '🔧', tabs: ['t1'], activeTabId: 't1' },
+      { id: 'ws-2', name: 'Big', icon: '🖥', tabs: tabIds, activeTabId: tabIds[0] },
+    ]
+    tabs.t1 = mockSessionTab('t1', 'h1', 'active-s')
+    useTabStore.setState({ tabs })
+    useAgentStore.setState({ unread })
+
+    render(<ActivityBar {...defaultProps} workspaces={workspaces} activeWorkspaceId="ws-1" />)
+    const badge = screen.getByTestId('ws-unread-badge')
+    expect(badge.textContent).toBe('99+')
+  })
+
+  it('truncates Home badge to 99+ when unread count exceeds 99', () => {
+    const tabIds = Array.from({ length: 100 }, (_, i) => `sh-${i}`)
+    const tabs: Record<string, Tab> = {}
+    const unread: Record<string, boolean> = {}
+    tabIds.forEach((id, i) => {
+      tabs[id] = mockSessionTab(id, 'h1', `hs${i}`)
+      unread[`h1:hs${i}`] = true
+    })
+    useTabStore.setState({ tabs })
+    useAgentStore.setState({ unread })
+
+    render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" standaloneTabIds={tabIds} />)
+    const badge = screen.getByTestId('home-unread-badge')
+    expect(badge.textContent).toBe('99+')
+  })
+
   it('tooltip shows only name when no unread and no status', () => {
     useTabStore.setState({
       tabs: { t3: mockSessionTab('t3', 'h1', 's3') },
