@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.106] - 2026-04-13
+
+### 功能
+
+- **spa**：RenamePopover 新增垂直 viewport clamping — 下方空間不足時翻轉到 anchor 上方，上下皆不足時 clamp 到頂部（#212）
+
 ## [1.0.0-alpha.105] - 2026-04-13
 
 ### 功能
