@@ -79,6 +79,7 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
             onChange={(e) => setNameInput(e.target.value)}
             onBlur={handleNameBlur}
             onKeyDown={handleNameKeyDown}
+            maxLength={64}
             className="text-center text-lg font-semibold bg-transparent text-text-primary border-b border-transparent hover:border-border-default focus:border-accent focus:outline-none px-2 py-1 transition-colors"
           />
         </div>
