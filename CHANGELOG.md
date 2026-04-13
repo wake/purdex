@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.111] - 2026-04-14
+
+### 功能
+
+- **spa**：RenamePopover 新增 client-side session name 驗證（#335）
+  - 即時格式檢查，鏡像 daemon 的 `^[a-zA-Z0-9_-]+$` 正則
+  - 抽取 `isValidSessionName()` utility 至 `lib/session-name.ts`
+  - Legacy session name 不觸發 popover 打開即顯示錯誤
+  - 新增 i18n key（en + zh-TW）
+
 ## [1.0.0-alpha.110] - 2026-04-13
 
 ### 重構
