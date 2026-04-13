@@ -79,7 +79,7 @@ function SortableWorkspaceButton({ workspace: ws, isActive, onSelect, onContextM
           className="absolute -top-[5px] -right-[6px] min-w-[15px] h-[15px] rounded-full flex items-center justify-center text-white text-[9px] font-bold px-[3px] leading-none z-10"
           style={{ backgroundColor: '#dc2626', boxShadow: '0 0 0 2px var(--surface-tertiary)' }}
         >
-          {unreadCount}
+          {unreadCount > 99 ? '99+' : unreadCount}
         </span>
       )}
       <span data-testid="ws-tooltip" className="pointer-events-none absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-surface-secondary border border-border-default px-2 py-1 text-xs text-text-primary shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-50">
@@ -181,7 +181,7 @@ export function ActivityBar({
             className="absolute -top-[5px] -right-[6px] min-w-[15px] h-[15px] rounded-full flex items-center justify-center text-white text-[9px] font-bold px-[3px] leading-none z-10"
             style={{ backgroundColor: '#dc2626', boxShadow: '0 0 0 2px var(--surface-tertiary)' }}
           >
-            {homeUnreadCount}
+            {homeUnreadCount > 99 ? '99+' : homeUnreadCount}
           </span>
         )}
       </div>
