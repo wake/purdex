@@ -58,7 +58,7 @@ function SortableWorkspaceButton({ workspace: ws, isActive, onSelect, onContextM
         aria-label={[
           ws.name,
           showBadge && `${unreadCount} unread`,
-          aggregatedStatus && aggregatedStatus,
+          aggregatedStatus && !isActive && aggregatedStatus,
         ].filter(Boolean).join(', ')}
         onClick={() => onSelect(ws.id)}
         onContextMenu={(e) => {

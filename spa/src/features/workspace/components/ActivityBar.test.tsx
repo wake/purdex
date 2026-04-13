@@ -257,7 +257,7 @@ describe('ActivityBar', () => {
     expect(statusDot!.className).not.toContain('animate-breathe')
   })
 
-  it('includes status in aria-label', () => {
+  it('includes status in aria-label for inactive workspace', () => {
     useTabStore.setState({
       tabs: { t3: mockSessionTab('t3', 'h1', 's3') },
     })
@@ -266,6 +266,17 @@ describe('ActivityBar', () => {
     render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" />)
 
     expect(screen.getByLabelText('Server, running')).toBeTruthy()
+  })
+
+  it('excludes status from aria-label for active workspace', () => {
+    useTabStore.setState({
+      tabs: { t1: mockSessionTab('t1', 'h1', 's1') },
+    })
+    useAgentStore.setState({ statuses: { 'h1:s1': 'running' } })
+
+    render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" />)
+
+    expect(screen.getByLabelText('Project A')).toBeTruthy()
   })
 
   it('shows unread count in tooltip on inactive workspace', () => {
