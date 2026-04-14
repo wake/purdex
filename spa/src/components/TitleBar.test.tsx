@@ -57,6 +57,13 @@ describe('TitleBar', () => {
     }
   })
 
+  it('title span uses max-width instead of fixed padding to prevent button overlap', () => {
+    render(<TitleBar title="A very long title that could overlap with buttons" />)
+    const span = screen.getByText('A very long title that could overlap with buttons')
+    expect(span.className).toContain('max-w-')
+    expect(span.className).not.toContain('px-20')
+  })
+
   it('all enabled buttons have cursor-pointer class', () => {
     const tab = createTab({ kind: 'dashboard' })
     useTabStore.setState({ tabs: { [tab.id]: tab }, tabOrder: [tab.id], activeTabId: tab.id, visitHistory: [] })

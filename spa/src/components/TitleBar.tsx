@@ -39,8 +39,8 @@ export function TitleBar({ title }: Props) {
       style={{ height: 30, WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       {/* Title — absolute positioned for true center across full window width */}
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
-        <span className="text-xs text-text-muted truncate px-20">{title}</span>
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none px-2">
+        <span className="text-xs text-text-muted truncate max-w-[calc(100%-26rem)]">{title}</span>
       </div>
       <div className="flex-1" />
       <div
