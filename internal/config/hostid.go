@@ -1,20 +1,28 @@
 package config
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
+// tmuxExecTimeout bounds lightweight tmux metadata queries (display-message, -V).
+// Shorter than TmuxAlive's 5s because these are read-only, single-process commands.
+const tmuxExecTimeout = 3 * time.Second
+
 // GetTmuxInstance returns the tmux server's "pid:startTime" identifier.
-// Returns empty string if tmux is not running.
+// Returns empty string if tmux is not running or the command times out.
 func GetTmuxInstance() string {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{pid}:#{start_time}").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), tmuxExecTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "#{pid}:#{start_time}").Output()
 	if err != nil {
 		return ""
 	}
