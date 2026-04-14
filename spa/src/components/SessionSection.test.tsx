@@ -1,24 +1,27 @@
-// spa/src/components/SessionPanel.test.tsx
+// spa/src/components/SessionSection.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
-import SessionPanel from './SessionPanel'
+import { SessionSection } from './SessionSection'
 import { useSessionStore } from '../stores/useSessionStore'
-import { useAgentStore } from '../stores/useAgentStore'
 import { useHostStore } from '../stores/useHostStore'
-import { compositeKey } from '../lib/composite-key'
+
+vi.mock('../hooks/useSessionWatch', () => ({
+  useSessionWatch: vi.fn(),
+}))
 
 vi.mock('../lib/host-api', async (importOriginal) => {
-  const actual = await importOriginal() as Record<string, unknown>
+  const actual = (await importOriginal()) as Record<string, unknown>
   return { ...actual, listSessions: vi.fn().mockResolvedValue([]) }
 })
 
 const HOST_ID = 'test-host'
 const HOST_B = 'host-b'
+const mockOnSelect = vi.fn()
 
 beforeEach(() => {
   cleanup()
+  mockOnSelect.mockClear()
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
-  useAgentStore.setState({ statuses: {}, lastEvents: {}, unread: {} })
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 } },
     hostOrder: [HOST_ID],
@@ -26,105 +29,42 @@ beforeEach(() => {
   })
 })
 
-describe('SessionPanel', () => {
-  it('shows empty state', () => {
-    render(<SessionPanel />)
-    expect(screen.getByText('No sessions')).toBeInTheDocument()
+describe('SessionSection', () => {
+  it('shows no sessions message when empty', () => {
+    render(<SessionSection onSelect={mockOnSelect} />)
+    expect(screen.getByText('No sessions available')).toBeInTheDocument()
   })
 
-  it('renders session list', () => {
+  it('renders session buttons', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
           { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
-          { code: 'abc002', name: 'prod', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
         ],
       },
-      activeHostId: HOST_ID,
-      activeCode: null,
     })
-    render(<SessionPanel />)
+    render(<SessionSection onSelect={mockOnSelect} />)
     expect(screen.getByText('dev')).toBeInTheDocument()
-    expect(screen.getByText('prod')).toBeInTheDocument()
   })
 
-  it('highlights active session', () => {
+  it('calls onSelect when session is clicked', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
           { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
         ],
       },
-      activeHostId: HOST_ID,
-      activeCode: 'abc001',
     })
-    render(<SessionPanel />)
-    const btn = screen.getByRole('button', { name: /dev/i })
-    expect(btn.className).toContain('bg-surface-secondary')
-  })
-
-  it('sets active on click', () => {
-    const setActive = vi.fn()
-    useSessionStore.setState({
-      sessions: {
-        [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
-        ],
-      },
-      activeHostId: HOST_ID,
-      activeCode: null,
-      setActive,
+    render(<SessionSection onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByText('dev'))
+    expect(mockOnSelect).toHaveBeenCalledWith({
+      kind: 'tmux-session',
+      hostId: HOST_ID,
+      sessionCode: 'abc001',
+      mode: 'terminal',
+      cachedName: 'dev',
+      tmuxInstance: '',
     })
-    render(<SessionPanel />)
-    fireEvent.click(screen.getByRole('button', { name: /dev/i }))
-    expect(setActive).toHaveBeenCalledWith(HOST_ID, 'abc001')
-  })
-
-  it('shows terminal icon for term mode', () => {
-    useSessionStore.setState({
-      sessions: {
-        [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
-        ],
-      },
-      activeHostId: HOST_ID,
-      activeCode: null,
-    })
-    render(<SessionPanel />)
-    // Terminal icon should be present (Phosphor Terminal icon)
-    expect(screen.getByTestId('session-icon-abc001')).toBeInTheDocument()
-  })
-
-  it('shows agent status badge when agent is active', () => {
-    useSessionStore.setState({
-      sessions: {
-        [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
-        ],
-      },
-      activeHostId: HOST_ID,
-      activeCode: null,
-    })
-    // Set agent status with composite key
-    const ck = compositeKey(HOST_ID, 'abc001')
-    useAgentStore.setState({ statuses: { [ck]: 'idle' } })
-    render(<SessionPanel />)
-    expect(screen.getByTestId('status-badge')).toHaveAttribute('title', 'idle')
-  })
-
-  it('shows no badge when no agent status exists for session', () => {
-    useSessionStore.setState({
-      sessions: {
-        [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
-        ],
-      },
-      activeHostId: HOST_ID,
-      activeCode: null,
-    })
-    // No agent status set
-    render(<SessionPanel />)
-    expect(screen.queryByTestId('status-badge')).toBeNull()
   })
 
   it('does not show host header for single host', () => {
@@ -134,10 +74,8 @@ describe('SessionPanel', () => {
           { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
         ],
       },
-      activeHostId: HOST_ID,
-      activeCode: null,
     })
-    render(<SessionPanel />)
+    render(<SessionSection onSelect={mockOnSelect} />)
     expect(screen.queryByTestId(`host-header-${HOST_ID}`)).toBeNull()
   })
 
@@ -159,10 +97,8 @@ describe('SessionPanel', () => {
           { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
         ],
       },
-      activeHostId: HOST_ID,
-      activeCode: null,
     })
-    render(<SessionPanel />)
+    render(<SessionSection onSelect={mockOnSelect} />)
     const headerA = screen.getByTestId(`host-header-${HOST_ID}`)
     const headerB = screen.getByTestId(`host-header-${HOST_B}`)
     expect(headerA).toBeInTheDocument()
@@ -189,17 +125,11 @@ describe('SessionPanel', () => {
           { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
         ],
       },
-      activeHostId: HOST_ID,
-      activeCode: null,
     })
-    render(<SessionPanel />)
-    // Click HOST_B header to collapse it
+    render(<SessionSection onSelect={mockOnSelect} />)
     fireEvent.click(screen.getByTestId(`host-header-${HOST_B}`))
-    // HOST_B sessions should be hidden
     expect(screen.queryByText('air-dev')).toBeNull()
-    // HOST_B header should show collapsed state
     expect(screen.getByTestId(`host-header-${HOST_B}`)).toHaveAttribute('aria-expanded', 'false')
-    // HOST_ID sessions should still be visible
     expect(screen.getByText('dev')).toBeInTheDocument()
   })
 
@@ -221,21 +151,17 @@ describe('SessionPanel', () => {
           { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
         ],
       },
-      activeHostId: HOST_ID,
-      activeCode: null,
     })
-    render(<SessionPanel />)
+    render(<SessionSection onSelect={mockOnSelect} />)
     const headerB = screen.getByTestId(`host-header-${HOST_B}`)
-    // Click to collapse
     fireEvent.click(headerB)
     expect(screen.queryByText('air-dev')).toBeNull()
-    // Click again to expand
     fireEvent.click(headerB)
     expect(screen.getByText('air-dev')).toBeInTheDocument()
     expect(headerB).toHaveAttribute('aria-expanded', 'true')
   })
 
-  it('prevents collapsing the active host', () => {
+  it('allows collapsing any host including active', () => {
     useHostStore.setState({
       hosts: {
         [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 },
@@ -253,15 +179,40 @@ describe('SessionPanel', () => {
           { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
         ],
       },
-      activeHostId: HOST_ID,
-      activeCode: 'abc001',
     })
-    render(<SessionPanel />)
+    render(<SessionSection onSelect={mockOnSelect} />)
+    // SessionSection has no active host protection — any host can be collapsed
     const headerA = screen.getByTestId(`host-header-${HOST_ID}`)
-    // Try to collapse the active host
     fireEvent.click(headerA)
-    // Sessions should still be visible
-    expect(screen.getByText('dev')).toBeInTheDocument()
-    expect(headerA).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.queryByText('dev')).toBeNull()
+    expect(headerA).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('keyboard nav skips collapsed host sessions', () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 },
+        [HOST_B]: { id: HOST_B, name: 'air', ip: '100.64.0.1', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, HOST_B],
+      activeHostId: HOST_ID,
+    })
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+        ],
+        [HOST_B]: [
+          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+        ],
+      },
+    })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    // Collapse HOST_B
+    fireEvent.click(screen.getByTestId(`host-header-${HOST_B}`))
+    // Only HOST_ID session buttons should be navigable
+    const sessionButtons = screen.getAllByRole('button').filter((btn) => btn.hasAttribute('data-session-btn'))
+    expect(sessionButtons).toHaveLength(1)
+    expect(sessionButtons[0]).toHaveTextContent('dev')
   })
 })

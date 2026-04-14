@@ -1,9 +1,10 @@
+import { useState } from 'react'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useSessionWatch } from '../hooks/useSessionWatch'
 import type { NewTabProviderProps } from '../lib/new-tab-registry'
-import { TerminalWindow, Circle, Spinner } from '@phosphor-icons/react'
+import { TerminalWindow, Circle, Spinner, CaretDown, CaretRight } from '@phosphor-icons/react'
 
 export function SessionSection({ onSelect }: NewTabProviderProps) {
   useSessionWatch()
@@ -12,6 +13,7 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
   const hostOrder = useHostStore((s) => s.hostOrder)
   const runtime = useHostStore((s) => s.runtime)
   const t = useI18nStore((s) => s.t)
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
 
   const hasAnySessions = hostOrder.some((hid) => (sessionsMap[hid] ?? []).length > 0)
 
@@ -27,12 +29,19 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
         const sessions = sessionsMap[hostId] ?? []
         const hostRuntime = runtime[hostId]
         const isOffline = hostRuntime && hostRuntime.status !== 'connected'
+        const isExpanded = expanded[hostId] !== false
 
         return (
           <div key={hostId}>
             {/* Host header — only show when multiple hosts */}
             {hostOrder.length > 1 && (
-              <div className="flex items-center gap-1.5 px-3 py-1 mt-1">
+              <button
+                data-testid={`host-header-${hostId}`}
+                aria-expanded={isExpanded}
+                onClick={() => setExpanded((prev) => ({ ...prev, [hostId]: !isExpanded }))}
+                className="flex items-center gap-1.5 px-3 py-1 mt-1 w-full cursor-pointer"
+              >
+                {isExpanded ? <CaretDown size={10} className="text-text-muted" /> : <CaretRight size={10} className="text-text-muted" />}
                 {hostRuntime?.status === 'reconnecting' ? (
                   <Spinner size={8} className="text-yellow-400 animate-spin" />
                 ) : hostRuntime?.status === 'connected' ? (
@@ -46,11 +55,12 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
                 {isOffline && (
                   <span className="text-xs text-text-muted ml-auto">{t('session.reconnecting')}</span>
                 )}
-              </div>
+              </button>
             )}
-            {sessions.map((session) => (
+            {isExpanded && sessions.map((session) => (
               <button
                 key={`${hostId}:${session.code}`}
+                data-session-btn
                 className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/10 text-left text-sm text-text-primary cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-accent-muted"
                 disabled={!!isOffline}
                 tabIndex={0}
@@ -60,7 +70,7 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
                 onKeyDown={(e) => {
                   const container = e.currentTarget.closest('[data-session-list]')
                   if (!container) return
-                  const buttons = Array.from(container.querySelectorAll('button:not(:disabled)')) as HTMLElement[]
+                  const buttons = Array.from(container.querySelectorAll('button[data-session-btn]:not(:disabled)')) as HTMLElement[]
                   const currentIndex = buttons.indexOf(e.currentTarget)
                   if (currentIndex === -1) return
                   switch (e.key) {
