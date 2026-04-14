@@ -91,11 +91,12 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Inject path into tmux pane via send-keys (space prefix, quoted, literal mode).
-	// Quoting handles filenames with spaces so CC receives the full path as one token.
-	if err := m.core.Tmux.SendKeysRaw(tmuxName, "-l", ` "`+destPath+`"`); err != nil {
+	// Inject path into tmux pane via paste-buffer with bracketed paste markers.
+	// Using paste (not send-keys) so Claude Code's TUI recognises the event
+	// as a paste and auto-detects image file paths → [Image #N] chip.
+	if err := m.core.Tmux.PasteText(tmuxName, destPath); err != nil {
 		os.Remove(destPath) // Clean up orphaned file
-		log.Printf("[agent] send-keys: %v", err)
+		log.Printf("[agent] paste-text: %v", err)
 		http.Error(w, `{"error":"inject failed"}`, http.StatusInternalServerError)
 		return
 	}

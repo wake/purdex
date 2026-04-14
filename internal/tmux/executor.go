@@ -27,6 +27,7 @@ type Executor interface {
 	HasSession(name string) bool
 	SendKeys(target, keys string) error
 	SendKeysRaw(target string, keys ...string) error
+	PasteText(target, text string) error
 	PaneCurrentCommand(target string) (string, error)
 	PanePID(target string) (string, error)
 	PaneChildCommands(target string) ([]string, error)
@@ -115,6 +116,24 @@ func (r *RealExecutor) SendKeysRaw(target string, keys ...string) error {
 	args := []string{"send-keys", "-t", target}
 	args = append(args, keys...)
 	return exec.Command("tmux", args...).Run()
+}
+
+func (r *RealExecutor) PasteText(target, text string) error {
+	// Use a named buffer to avoid races when multiple goroutines paste
+	// concurrently (the default anonymous buffer is shared globally).
+	bufName := fmt.Sprintf("pdx-%d", time.Now().UnixNano())
+
+	cmd := exec.Command("tmux", "load-buffer", "-b", bufName, "-")
+	cmd.Stdin = strings.NewReader(text)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("tmux load-buffer: %w", err)
+	}
+	// -d  deletes the named buffer after pasting.
+	// -p  wraps content in bracketed paste markers (\e[200~ … \e[201~)
+	//     so the receiving application (e.g. Claude Code) recognises it as
+	//     a paste event rather than typed input.
+	// -r  preserves LF as-is (default converts LF → CR).
+	return exec.Command("tmux", "paste-buffer", "-b", bufName, "-t", target, "-d", "-p", "-r").Run()
 }
 
 func (r *RealExecutor) PaneCurrentCommand(target string) (string, error) {

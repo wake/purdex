@@ -23,6 +23,11 @@ type SetWindowOptionCall struct {
 	Value  string
 }
 
+type PasteCall struct {
+	Target string
+	Text   string
+}
+
 type FakeExecutor struct {
 	mu                   sync.Mutex
 	sessions             map[string]TmuxSession // keyed by name for O(1) lookup
@@ -35,12 +40,14 @@ type FakeExecutor struct {
 	paneSizes            map[string][2]int      // target → [cols, rows]
 	rawKeysCalls         []RawKeysCall
 	keysCalls            []KeysCall
+	pasteCalls           []PasteCall
 	autoResizeCalls      []string              // targets passed to ResizeWindowAuto
 	setWindowOptionCalls []SetWindowOptionCall // calls to SetWindowOption
 	listCallCount        int                   // how many times ListSessions was called
 	alive                bool                  // whether tmux server is "alive"
 	HooksOutput          string                // returned by ShowHooksGlobal
 	FailSendKeys         bool                  // if true, SendKeysRaw returns an error
+	FailPasteText        bool                  // if true, PasteText returns an error
 }
 
 func NewFakeExecutor() *FakeExecutor {
@@ -168,6 +175,22 @@ func (f *FakeExecutor) SendKeysRaw(target string, keys ...string) error {
 		return fmt.Errorf("send-keys: simulated failure")
 	}
 	return nil
+}
+
+func (f *FakeExecutor) PasteText(target, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pasteCalls = append(f.pasteCalls, PasteCall{Target: target, Text: text})
+	if f.FailPasteText {
+		return fmt.Errorf("paste-buffer: simulated failure")
+	}
+	return nil
+}
+
+func (f *FakeExecutor) PastesSent() []PasteCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pasteCalls
 }
 
 func (f *FakeExecutor) RawKeysSent() []RawKeysCall {
