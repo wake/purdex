@@ -50,7 +50,9 @@ export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostI
 
     const canReconnect = hostId
       ? () => {
-          const runtime = useHostStore.getState().runtime[hostId]
+          const state = useHostStore.getState()
+          if (!state.hosts[hostId]) return false // host deleted — stop reconnecting
+          const runtime = state.runtime[hostId]
           return !runtime || runtime.status === 'connected'
         }
       : undefined
