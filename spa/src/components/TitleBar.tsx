@@ -40,7 +40,7 @@ export function TitleBar({ title }: Props) {
     >
       {/* Title — absolute positioned for true center across full window width */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
-        <span className="text-xs text-text-muted truncate px-20">{title}</span>
+        <span className="text-xs text-text-muted truncate px-2 max-w-[calc(100%-25rem)]">{title}</span>
       </div>
       <div className="flex-1" />
       <div
