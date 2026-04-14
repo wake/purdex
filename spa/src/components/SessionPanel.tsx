@@ -63,7 +63,10 @@ export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSe
                   <button
                     data-testid={`host-header-${hostId}`}
                     aria-expanded={isExpanded}
-                    onClick={() => setExpanded((prev) => ({ ...prev, [hostId]: !isExpanded }))}
+                    onClick={() => {
+                      if (activeHostId === hostId) return
+                      setExpanded((prev) => ({ ...prev, [hostId]: !isExpanded }))
+                    }}
                     className="flex items-center gap-1.5 mb-1 px-1 w-full cursor-pointer"
                   >
                     {isExpanded ? <CaretDown size={10} className="text-text-muted" /> : <CaretRight size={10} className="text-text-muted" />}

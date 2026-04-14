@@ -264,4 +264,39 @@ describe('SessionPanel', () => {
     expect(screen.getByText('dev')).toBeInTheDocument()
     expect(headerA).toHaveAttribute('aria-expanded', 'true')
   })
+
+  it('auto-expands new active host even if it was previously collapsed', () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 },
+        [HOST_B]: { id: HOST_B, name: 'air', ip: '100.64.0.1', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, HOST_B],
+      activeHostId: HOST_ID,
+    })
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+        ],
+        [HOST_B]: [
+          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+        ],
+      },
+      activeHostId: HOST_ID,
+      activeCode: 'abc001',
+    })
+    const { rerender } = render(<SessionPanel />)
+    // Collapse HOST_B
+    fireEvent.click(screen.getByTestId(`host-header-${HOST_B}`))
+    expect(screen.queryByText('air-dev')).toBeNull()
+
+    // Switch activeHostId to HOST_B
+    useSessionStore.setState({ activeHostId: HOST_B, activeCode: 'xyz001' })
+    rerender(<SessionPanel />)
+
+    // HOST_B should auto-expand because it is now the active host
+    expect(screen.getByText('air-dev')).toBeInTheDocument()
+    expect(screen.getByTestId(`host-header-${HOST_B}`)).toHaveAttribute('aria-expanded', 'true')
+  })
 })
