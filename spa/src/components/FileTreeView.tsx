@@ -71,6 +71,7 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
   }, [expandedDirs, fetchDir])
 
   if (!baseUrl) return <div className="p-3 text-xs text-text-muted">No host connected</div>
+  if (!workspaceId) return <div className="p-3 text-xs text-text-muted">請先選擇 Workspace</div>
 
   if (!projectPath) {
     const handleSubmit = (e: React.FormEvent) => {
