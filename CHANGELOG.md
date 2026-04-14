@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.129] - 2026-04-15
+
+### 修復
+
+- **electron**：`electron:build` 前置執行 `generate-icon-data.mjs`，確保 bundled SPA 包含 icon weight JSON（#357）
+- **spa**：移除 Workspace Settings 頁面的重複 Style weight switcher，改由 IconPicker 統一管理（#357）
+- **agent**：上傳檔案注入從 `send-keys` 改為 `paste-buffer -p`（bracketed paste），讓 CC 自動偵測圖片路徑並 chip 化為 `[Image #N]`；使用具名 buffer 避免並發競態（#357）
+
 ## [1.0.0-alpha.128] - 2026-04-14
 
 ### 修復
