@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.132] - 2026-04-15
+
+### 修復
+
+- **electron/spa**：Home 模式下封鎖 Cmd+Alt+Up/Down 工作區切換；新增 Cmd+Alt+0 跳至 Home（#364）
+
 ## [1.0.0-alpha.131] - 2026-04-15
 
 ### 新增
