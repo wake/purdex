@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.121] - 2026-04-14
+
+### 修復
+
+- **spa**：`ModuleConfigSection` boolean toggle 改用 `ToggleSwitch` 元件，補齊 `role="switch"`、`aria-checked`、`type="button"` 等 a11y 屬性；text/number 欄位加上 `htmlFor`/`id` label 關聯（#258, #348）
+
 ## [1.0.0-alpha.120] - 2026-04-14
 
 ### 修復
