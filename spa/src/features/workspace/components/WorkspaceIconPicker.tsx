@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { MagnifyingGlass, X } from '@phosphor-icons/react'
 import Fuse from 'fuse.js'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -22,7 +22,9 @@ const fuse = new Fuse(iconMeta, {
   threshold: 0.3,
 })
 
-const COLS = 8
+const DEFAULT_COLS = 8
+const ICON_SIZE = 32 // w-8
+const ICON_GAP = 6  // gap-1.5
 const WEIGHTS: IconWeight[] = ['bold', 'regular', 'thin', 'light', 'fill', 'duotone']
 
 function IconCell({
@@ -77,6 +79,20 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline, c
   const [weight, setWeight] = useState<IconWeight>(currentWeight)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [, setTick] = useState(0)
+  const [cols, setCols] = useState(DEFAULT_COLS)
+
+  // Dynamically compute columns from container width
+  const measuredRef = useCallback((node: HTMLDivElement | null) => {
+    // Store in scrollRef for virtualizer
+    (scrollRef as React.MutableRefObject<HTMLDivElement | null>).current = node
+    if (!node) return
+    const observer = new ResizeObserver(([entry]) => {
+      const w = entry.contentRect.width
+      setCols(Math.max(1, Math.floor((w + ICON_GAP) / (ICON_SIZE + ICON_GAP))))
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
 
   // Prefetch weight data in useEffect (not in render body)
   useEffect(() => {
@@ -97,7 +113,7 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline, c
     return fuse.search(search.trim()).map((r) => r.item.n)
   }, [search, activeCategory])
 
-  const rowCount = Math.ceil(displayIcons.length / COLS)
+  const rowCount = Math.ceil(displayIcons.length / cols)
 
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual is safe here, picker is not memoized
   const virtualizer = useVirtualizer({
@@ -163,7 +179,7 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline, c
       )}
 
       {/* Virtualized icon grid */}
-      <div ref={scrollRef} className="max-h-48 overflow-y-auto p-0.5">
+      <div ref={measuredRef} className="max-h-48 overflow-y-auto p-0.5">
         {displayIcons.length === 0 ? (
           <div className="flex items-center justify-center h-24 text-xs text-text-tertiary">
             No results found
@@ -171,8 +187,8 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline, c
         ) : (
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map((vRow) => {
-              const startIdx = vRow.index * COLS
-              const rowIcons = displayIcons.slice(startIdx, startIdx + COLS)
+              const startIdx = vRow.index * cols
+              const rowIcons = displayIcons.slice(startIdx, startIdx + cols)
               return (
                 <div
                   key={vRow.key}
@@ -181,6 +197,7 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline, c
                     position: 'absolute',
                     top: 0,
                     left: 0,
+                    width: '100%',
                     transform: `translateY(${vRow.start}px)`,
                     height: vRow.size,
                   }}
