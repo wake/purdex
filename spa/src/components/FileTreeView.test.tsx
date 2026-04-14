@@ -89,9 +89,11 @@ describe('FileTreeWorkspaceView', () => {
   })
 
   it('shows workspace required message when workspaceId is undefined', () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
     render(<FileTreeWorkspaceView isActive={true} workspaceId={undefined} />)
     expect(screen.getByText('請先選擇 Workspace')).toBeTruthy()
     expect(screen.queryByPlaceholderText('/home/user/project')).toBeNull()
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it('shows setup prompt when projectPath is not configured', () => {
