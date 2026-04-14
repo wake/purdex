@@ -470,6 +470,68 @@ describe('useShortcuts', () => {
       fire('next-workspace')
       expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
     })
+
+    it('blocks next-workspace when in Home mode', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      useWorkspaceStore.getState().addWorkspace('WS2')
+      useWorkspaceStore.getState().setActiveWorkspace(null)
+      renderHook(() => useShortcuts())
+
+      fire('next-workspace')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+    })
+
+    it('blocks prev-workspace when in Home mode', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      useWorkspaceStore.getState().addWorkspace('WS2')
+      useWorkspaceStore.getState().setActiveWorkspace(null)
+      renderHook(() => useShortcuts())
+
+      fire('prev-workspace')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+    })
+  })
+
+  describe('switch-workspace-home', () => {
+    it('switches to Home (null activeWorkspaceId)', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+      useWorkspaceStore.getState().setActiveWorkspace(ws2.id)
+      renderHook(() => useShortcuts())
+
+      fire('switch-workspace-home')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+    })
+
+    it('activates first standalone tab when switching to Home', () => {
+      const { fire } = mockElectronAPI()
+      // Create a standalone tab (not added to any workspace)
+      const standaloneTab = createTab({ kind: 'new-tab' })
+      useTabStore.getState().addTab(standaloneTab)
+      // Create workspace and switch to it
+      const ws = useWorkspaceStore.getState().addWorkspace('WS1')
+      const wsTab = seedTabs(1, { addToWorkspace: false })[0]
+      useWorkspaceStore.getState().addTabToWorkspace(ws.id, wsTab.id)
+      useWorkspaceStore.getState().setActiveWorkspace(ws.id)
+      renderHook(() => useShortcuts())
+
+      fire('switch-workspace-home')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+      expect(useTabStore.getState().activeTabId).toBe(standaloneTab.id)
+    })
+
+    it('sets activeTabId to null when no standalone tabs exist', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      renderHook(() => useShortcuts())
+
+      fire('switch-workspace-home')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+      expect(useTabStore.getState().activeTabId).toBeNull()
+    })
   })
 
   describe('tab shortcut registry dispatch', () => {
