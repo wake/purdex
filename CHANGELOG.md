@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.116] - 2026-04-14
+
+### 功能
+
+- **spa**：SessionPanel / SessionSection 的 host header 支援點擊收合/展開，多 host 時以 CaretDown/CaretRight 指示狀態，active host 不可收合（#144, #342）
+
 ## [1.0.0-alpha.115] - 2026-04-14
 
 ### 功能
