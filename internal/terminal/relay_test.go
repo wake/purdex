@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
 	"github.com/wake/purdex/internal/terminal"
 )
 
@@ -75,5 +76,85 @@ func TestRelayResize(t *testing.T) {
 	err = ws.WriteMessage(websocket.TextMessage, []byte("ok\n"))
 	if err != nil {
 		t.Errorf("connection died after resize: %v", err)
+	}
+}
+
+func TestPingIsSentByRelay(t *testing.T) {
+	relay := terminal.NewRelay("cat", []string{}, "/tmp")
+	relay.PingInterval = 100 * time.Millisecond
+	relay.PongTimeout = 50 * time.Millisecond
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		relay.HandleWebSocket(w, r)
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer ws.Close()
+
+	pingReceived := make(chan struct{}, 1)
+	ws.SetPingHandler(func(msg string) error {
+		select {
+		case pingReceived <- struct{}{}:
+		default:
+		}
+		// Reply with pong to keep connection alive
+		return ws.WriteControl(websocket.PongMessage, []byte(msg), time.Now().Add(time.Second))
+	})
+
+	// Must drain read loop for control frames to be processed
+	go func() {
+		for {
+			if _, _, err := ws.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-pingReceived:
+		// OK — relay sent a ping
+	case <-time.After(time.Second):
+		t.Fatal("expected ping from relay within 1s")
+	}
+}
+
+func TestPongTimeoutClosesRelayConnection(t *testing.T) {
+	relay := terminal.NewRelay("cat", []string{}, "/tmp")
+	relay.PingInterval = 100 * time.Millisecond
+	relay.PongTimeout = 50 * time.Millisecond
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		relay.HandleWebSocket(w, r)
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer ws.Close()
+
+	// Swallow pings without sending pong — server should close us
+	ws.SetPingHandler(func(string) error {
+		return nil // no pong reply
+	})
+
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		for {
+			if _, _, err := ws.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-closed:
+		// OK — connection was closed by server after pong timeout
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected server to close connection after pong timeout")
 	}
 }

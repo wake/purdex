@@ -30,7 +30,9 @@ type Relay struct {
 	cmd     string
 	args    []string
 	cwd     string
-	OnStart func() // called after PTY starts, before I/O goroutines
+	OnStart      func() // called after PTY starts, before I/O goroutines
+	PingInterval time.Duration // default: 30s
+	PongTimeout  time.Duration // default: 10s
 }
 
 func NewRelay(cmd string, args []string, cwd string) *Relay {
@@ -62,8 +64,40 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 		c.Wait()
 	}()
 
+	// Resolve ping/pong durations with defaults
+	pingInterval := r.PingInterval
+	if pingInterval == 0 {
+		pingInterval = 30 * time.Second
+	}
+	pongTimeout := r.PongTimeout
+	if pongTimeout == 0 {
+		pongTimeout = 10 * time.Second
+	}
+
+	// Pong handling — reset read deadline on each pong received
+	conn.SetReadDeadline(time.Now().Add(pingInterval + pongTimeout))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pingInterval + pongTimeout))
+		return nil
+	})
+
 	var wg sync.WaitGroup
 	var writeMu sync.Mutex
+
+	// Periodic ping to keep connection alive through proxies/firewalls.
+	// WriteControl is documented as concurrent-safe with WriteMessage
+	// (gorilla/websocket: "Close and WriteControl can be called concurrently
+	// with all other methods"), so no writeMu needed here.
+	// Not in WaitGroup — exits when conn.Close() causes WriteControl error.
+	go func() {
+		ticker := time.NewTicker(pingInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(pongTimeout)); err != nil {
+				return
+			}
+		}
+	}()
 
 	// PTY → WebSocket (batched, mutex-protected writes)
 	wg.Add(1)
@@ -98,6 +132,7 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer conn.Close() // wake PTY→WS goroutine on read-deadline/disconnect
 		defer ptmx.Close() // wake PTY read goroutine on WS disconnect
 		for {
 			_, msg, err := conn.ReadMessage()
