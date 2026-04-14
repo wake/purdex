@@ -27,7 +27,7 @@ import type { PaneRendererProps } from './module-registry'
 import { EditorPane } from '../components/editor/EditorPane'
 import { EditorNewTabSection } from '../components/editor/EditorNewTabSection'
 import { InAppBackend } from './fs-backend-inapp'
-import { registerFsBackend } from './fs-backend'
+import { registerFsBackend, getFsBackend } from './fs-backend'
 import { registerFileOpener } from './file-opener-registry'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
@@ -112,9 +112,10 @@ export function registerBuiltinModules(): void {
     panes: [{ kind: 'editor', component: EditorPane }],
   })
 
-  // Register InApp FS backend
-  const inAppBackend = new InAppBackend()
-  registerFsBackend('inapp', inAppBackend)
+  // Register InApp FS backend (singleton — 避免熱重載時資料遺失)
+  if (!getFsBackend({ type: 'inapp' })) {
+    registerFsBackend('inapp', new InAppBackend())
+  }
 
   // Register file opener for text files
   registerFileOpener({

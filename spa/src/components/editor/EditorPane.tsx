@@ -1,5 +1,5 @@
 // spa/src/components/editor/EditorPane.tsx
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useRef } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { getFsBackend } from '../../lib/fs-backend'
@@ -36,26 +36,38 @@ export function EditorPane({ pane, isActive }: PaneRendererProps) {
 function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; filePath: string; isActive: boolean }) {
   const key = bufferKey(source, filePath)
   const buffer = useEditorStore((s) => s.buffers[key])
+  const saveRef = useRef<() => Promise<void>>()
 
-  // Load file on mount
+  // Load file on mount, cleanup buffer on unmount
   useEffect(() => {
+    let stale = false
     if (useEditorStore.getState().buffers[key]) return // already loaded
     const backend = getFsBackend(source)
     if (!backend) return
 
     backend.read(filePath)
       .then((data) => {
+        if (stale) return
         const text = new TextDecoder().decode(data)
         const lang = detectLanguage(filePath)
         return backend.stat(filePath).then((stat) => {
+          if (stale) return
           useEditorStore.getState().openBuffer(key, text, lang, { mtime: stat.mtime, size: stat.size })
         })
       })
       .catch(() => {
+        if (stale) return
         // New file — open empty buffer
         useEditorStore.getState().openBuffer(key, '', detectLanguage(filePath))
       })
+
+    return () => { stale = true }
   }, [key, source, filePath])
+
+  // Cleanup buffer on unmount
+  useEffect(() => {
+    return () => { useEditorStore.getState().closeBuffer(key) }
+  }, [key])
 
   const handleSave = useCallback(async () => {
     const buf = useEditorStore.getState().buffers[key]
