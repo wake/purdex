@@ -7,6 +7,7 @@ interface Props {
 export function ToggleSwitch({ label, checked, onChange }: Props) {
   return (
     <button
+      type="button"
       role="switch"
       aria-label={label}
       aria-checked={checked}
