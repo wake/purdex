@@ -19,7 +19,7 @@ import (
 	"github.com/wake/purdex/internal/middleware"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/dev"
-	"github.com/wake/purdex/internal/module/files"
+	fsmod "github.com/wake/purdex/internal/module/fs"
 	"github.com/wake/purdex/internal/module/logs"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/module/stream"
@@ -150,7 +150,7 @@ func runServe(args []string) {
 	c.AddModule(session.NewSessionModule(meta))
 	c.AddModule(stream.New())
 	c.AddModule(agent.New(agentEvents))
-	c.AddModule(files.New())
+	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	if c.Cfg.Dev.Update {
 		repoRoot := c.Cfg.Dev.RepoRoot
