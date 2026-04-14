@@ -100,6 +100,21 @@ export function useShortcuts(): void {
         return
       }
 
+      if (action === 'switch-workspace-home') {
+        useWorkspaceStore.getState().setActiveWorkspace(null)
+        const standaloneIds = getVisibleTabIdsShared({
+          tabs: tabState.tabs,
+          tabOrder: tabState.tabOrder,
+          activeTabId: tabState.activeTabId,
+          workspaces: useWorkspaceStore.getState().workspaces,
+          activeWorkspaceId: null,
+        })
+        const firstTab = standaloneIds[0]
+        if (firstTab) activateTab(firstTab)
+        else tabState.setActiveTab(null)
+        return
+      }
+
       if (action.startsWith('switch-workspace-')) {
         const workspaces = useWorkspaceStore.getState().workspaces
         if (workspaces.length === 0) return
@@ -113,14 +128,14 @@ export function useShortcuts(): void {
       }
 
       if (action === 'prev-workspace' || action === 'next-workspace') {
-        const workspaces = useWorkspaceStore.getState().workspaces
+        const wsStore = useWorkspaceStore.getState()
+        const workspaces = wsStore.workspaces
         if (workspaces.length === 0) return
-        const currentWsId = useWorkspaceStore.getState().activeWorkspaceId
-        const currentIdx = workspaces.findIndex((w) => w.id === currentWsId)
+        // Block navigation when in Home mode
+        if (wsStore.activeWorkspaceId === null) return
+        const currentIdx = workspaces.findIndex((w) => w.id === wsStore.activeWorkspaceId)
         const delta = action === 'next-workspace' ? 1 : -1
-        const nextIdx = currentIdx === -1
-          ? (delta > 0 ? 0 : workspaces.length - 1)
-          : (currentIdx + delta + workspaces.length) % workspaces.length
+        const nextIdx = (currentIdx + delta + workspaces.length) % workspaces.length
         const targetWs = workspaces[nextIdx]
         useWorkspaceStore.getState().setActiveWorkspace(targetWs.id)
         const activeTab = targetWs.activeTabId ?? targetWs.tabs[0]

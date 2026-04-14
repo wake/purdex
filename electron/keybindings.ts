@@ -35,6 +35,7 @@ const DEFAULT_KEYBINDINGS: readonly KeybindingDef[] = [
   { action: 'open-hosts', accelerator: 'CommandOrControl+Shift+H', label: 'Hosts', menuCategory: 'View', menuGroup: 'view' },
   { action: 'open-history', accelerator: 'CommandOrControl+Y', label: 'History', menuCategory: 'View', menuGroup: 'view' },
   // Workspace navigation
+  { action: 'switch-workspace-home', accelerator: 'CommandOrControl+Alt+0', label: 'Home', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
   { action: 'switch-workspace-1', accelerator: 'CommandOrControl+Alt+1', label: 'Workspace 1', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
   { action: 'switch-workspace-2', accelerator: 'CommandOrControl+Alt+2', label: 'Workspace 2', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
   { action: 'switch-workspace-3', accelerator: 'CommandOrControl+Alt+3', label: 'Workspace 3', menuCategory: 'Tab', menuGroup: 'workspace-nav' },
