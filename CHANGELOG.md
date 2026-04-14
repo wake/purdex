@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.115] - 2026-04-14
+
+### 功能
+
+- **daemon+spa**：Upload 暫存目錄路徑可在 UploadSection 中編輯，透過 daemon config 持久化（#340）
+
+### 修復
+
+- **daemon**：upload handler 的 `uploadDir` 讀寫加 mutex 保護，防止 config 變更時的 data race（#340）
+
 ## [1.0.0-alpha.114] - 2026-04-14
 
 ### 重構
