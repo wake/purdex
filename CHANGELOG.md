@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-alpha.128] - 2026-04-14
+
+### 修復
+
+- **electron**：啟動預設載入 bundled SPA，避免 dev server 模組解析問題導致 crash 白屏；mini-browser 同步修正（#356）
+- **chore**：移除殘留的 `spa/pnpm-lock.yaml`（pnpm workspace 只需 root lockfile）
+
 ## [1.0.0-alpha.127] - 2026-04-14
 
 ### 修復
