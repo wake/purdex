@@ -67,7 +67,7 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Ensure upload directory exists.
-	dir := filepath.Join(m.uploadDir, sessionCode)
+	dir := filepath.Join(m.getUploadDir(), sessionCode)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Printf("[agent] mkdir upload dir: %v", err)
 		http.Error(w, `{"error":"cannot create upload directory"}`, http.StatusInternalServerError)

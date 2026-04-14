@@ -93,7 +93,9 @@ func (m *Module) Init(c *core.Core) error {
 		c.CfgMu.RUnlock()
 		m.prober.UpdateProcessNames("cc", cmds)
 		if newDir != "" {
+			m.mu.Lock()
 			m.uploadDir = newDir
+			m.mu.Unlock()
 		}
 	})
 
@@ -137,6 +139,13 @@ func (m *Module) Start(_ context.Context) error {
 
 	log.Println("[agent] hook event endpoint registered")
 	return nil
+}
+
+// getUploadDir returns the current upload directory under lock.
+func (m *Module) getUploadDir() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.uploadDir
 }
 
 // Stop cancels all active Activity watchers and resets transient state.

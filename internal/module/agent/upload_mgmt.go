@@ -24,9 +24,10 @@ type uploadFileInfo struct {
 
 // handleUploadStats returns aggregate stats for the upload directory.
 func (m *Module) handleUploadStats(w http.ResponseWriter, r *http.Request) {
-	stats := uploadStatsResponse{Path: m.uploadDir}
+	dir := m.getUploadDir()
+	stats := uploadStatsResponse{Path: dir}
 
-	_ = filepath.Walk(m.uploadDir, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // skip inaccessible entries
 		}
@@ -44,8 +45,9 @@ func (m *Module) handleUploadStats(w http.ResponseWriter, r *http.Request) {
 // handleUploadFiles lists all uploaded files grouped by session.
 func (m *Module) handleUploadFiles(w http.ResponseWriter, r *http.Request) {
 	var files []uploadFileInfo
+	uploadDir := m.getUploadDir()
 
-	entries, err := os.ReadDir(m.uploadDir)
+	entries, err := os.ReadDir(uploadDir)
 	if err != nil {
 		// Directory doesn't exist or is unreadable — return empty array.
 		w.Header().Set("Content-Type", "application/json")
@@ -58,7 +60,7 @@ func (m *Module) handleUploadFiles(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		sessionDir := entry.Name()
-		sessionPath := filepath.Join(m.uploadDir, sessionDir)
+		sessionPath := filepath.Join(uploadDir, sessionDir)
 		fileEntries, err := os.ReadDir(sessionPath)
 		if err != nil {
 			continue
@@ -90,9 +92,10 @@ func (m *Module) handleUploadFiles(w http.ResponseWriter, r *http.Request) {
 // handleDeleteUploadSession removes an entire session upload directory.
 func (m *Module) handleDeleteUploadSession(w http.ResponseWriter, r *http.Request) {
 	session := r.PathValue("session")
-	target := filepath.Clean(filepath.Join(m.uploadDir, session))
+	uploadDir := m.getUploadDir()
+	target := filepath.Clean(filepath.Join(uploadDir, session))
 
-	if !strings.HasPrefix(target, filepath.Clean(m.uploadDir)+string(os.PathSeparator)) {
+	if !strings.HasPrefix(target, filepath.Clean(uploadDir)+string(os.PathSeparator)) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
@@ -108,9 +111,10 @@ func (m *Module) handleDeleteUploadSession(w http.ResponseWriter, r *http.Reques
 func (m *Module) handleDeleteUploadFile(w http.ResponseWriter, r *http.Request) {
 	session := r.PathValue("session")
 	filename := r.PathValue("filename")
-	target := filepath.Clean(filepath.Join(m.uploadDir, session, filename))
+	uploadDir := m.getUploadDir()
+	target := filepath.Clean(filepath.Join(uploadDir, session, filename))
 
-	if !strings.HasPrefix(target, filepath.Clean(m.uploadDir)+string(os.PathSeparator)) {
+	if !strings.HasPrefix(target, filepath.Clean(uploadDir)+string(os.PathSeparator)) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
@@ -128,7 +132,8 @@ func (m *Module) handleDeleteUploadFile(w http.ResponseWriter, r *http.Request) 
 
 // handleDeleteAllUploads removes all session subdirectories in the upload dir.
 func (m *Module) handleDeleteAllUploads(w http.ResponseWriter, r *http.Request) {
-	entries, err := os.ReadDir(m.uploadDir)
+	uploadDir := m.getUploadDir()
+	entries, err := os.ReadDir(uploadDir)
 	if err != nil {
 		// Nothing to delete.
 		w.WriteHeader(http.StatusNoContent)
@@ -136,7 +141,7 @@ func (m *Module) handleDeleteAllUploads(w http.ResponseWriter, r *http.Request) 
 	}
 
 	for _, entry := range entries {
-		path := filepath.Join(m.uploadDir, entry.Name())
+		path := filepath.Join(uploadDir, entry.Name())
 		_ = os.RemoveAll(path)
 	}
 	w.WriteHeader(http.StatusNoContent)
