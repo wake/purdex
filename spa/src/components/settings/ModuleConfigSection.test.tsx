@@ -58,9 +58,10 @@ describe('ModuleConfigSection', () => {
       expect(screen.getByRole('switch').getAttribute('type')).toBe('button')
     })
 
-    it('does not use <label> element for boolean field', () => {
-      render(<ModuleConfigSection scope="global" />)
-      expect(screen.queryByLabelText('Enable Feature')).toBeTruthy() // aria-label on ToggleSwitch
+    it('uses aria-label instead of <label> element for boolean field', () => {
+      const { container } = render(<ModuleConfigSection scope="global" />)
+      expect(container.querySelector('label')).toBeNull()
+      expect(screen.getByRole('switch').getAttribute('aria-label')).toBe('Enable Feature')
     })
   })
 
