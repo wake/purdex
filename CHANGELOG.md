@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.125] - 2026-04-14
+
+### 重構
+
+- **spa**：拆分 `store.test.ts`（611 行）為 `store-workspace.test.ts`（194 行）+ `store-tabs.test.ts`（431 行），51 tests 完整保留（#254, #354）
+
 ## [1.0.0-alpha.124] - 2026-04-14
 
 ### 修復
