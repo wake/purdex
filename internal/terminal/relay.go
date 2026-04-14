@@ -85,6 +85,9 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 	var writeMu sync.Mutex
 
 	// Periodic ping to keep connection alive through proxies/firewalls.
+	// WriteControl is documented as concurrent-safe with WriteMessage
+	// (gorilla/websocket: "Close and WriteControl can be called concurrently
+	// with all other methods"), so no writeMu needed here.
 	// Not in WaitGroup — exits when conn.Close() causes WriteControl error.
 	go func() {
 		ticker := time.NewTicker(pingInterval)
