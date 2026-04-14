@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.130] - 2026-04-15
+
+### 修復
+
+- **spa**：Icon picker grid 從固定 8 欄改為 ResizeObserver 動態計算欄數，填滿容器寬度（#358）
+
 ## [1.0.0-alpha.129] - 2026-04-15
 
 ### 修復
