@@ -141,7 +141,11 @@ export function ActivityBar({
     onReorderWorkspaces?.(newOrder)
   }, [wsIds, onReorderWorkspaces])
 
-  const { unreadCount: homeUnreadCount, aggregatedStatus: homeStatus } = useWorkspaceIndicators(standaloneTabIds)
+  const nonActiveStandaloneTabIds = useMemo(
+    () => activeStandaloneTabId ? standaloneTabIds.filter(id => id !== activeStandaloneTabId) : standaloneTabIds,
+    [standaloneTabIds, activeStandaloneTabId],
+  )
+  const { unreadCount: homeUnreadCount, aggregatedStatus: homeStatus } = useWorkspaceIndicators(nonActiveStandaloneTabIds)
   const isHomeActive = !activeWorkspaceId
   const showHomeBadge = (!isHomeActive || !!activeStandaloneTabId) && homeUnreadCount > 0
   return (

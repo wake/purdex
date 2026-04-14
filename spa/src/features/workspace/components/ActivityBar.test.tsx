@@ -181,6 +181,20 @@ describe('ActivityBar', () => {
     expect(dots.length).toBeGreaterThanOrEqual(1)
   })
 
+  it('excludes focused standalone tab from Home badge unread count', () => {
+    useTabStore.setState({
+      tabs: {
+        s1: mockSessionTab('s1', 'h1', 'sa'),
+        s2: mockSessionTab('s2', 'h1', 'sb'),
+      },
+    })
+    // s1 (focused) has unread, s2 does not — badge should NOT show
+    useAgentStore.setState({ unread: { 'h1:sa': true } })
+
+    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId={null} activeStandaloneTabId="s1" standaloneTabIds={['s1', 's2']} />)
+    expect(container.querySelector('[data-testid="home-unread-badge"]')).toBeNull()
+  })
+
   it('shows Home static dot for waiting status', () => {
     useTabStore.setState({
       tabs: { s1: mockSessionTab('s1', 'h1', 'sa') },
