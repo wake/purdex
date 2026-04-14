@@ -153,6 +153,34 @@ describe('ActivityBar', () => {
     expect(dots).toHaveLength(0)
   })
 
+  it('shows Home unread badge when standalone tab is focused and other standalone tabs have unreads', () => {
+    useTabStore.setState({
+      tabs: {
+        s1: mockSessionTab('s1', 'h1', 'sa'),
+        s2: mockSessionTab('s2', 'h1', 'sb'),
+      },
+    })
+    useAgentStore.setState({ unread: { 'h1:sb': true } })
+
+    render(<ActivityBar {...defaultProps} activeWorkspaceId={null} activeStandaloneTabId="s1" standaloneTabIds={['s1', 's2']} />)
+    const badge = screen.getByTestId('home-unread-badge')
+    expect(badge.textContent).toBe('1')
+  })
+
+  it('shows Home status dot when standalone tab is focused and other standalone tabs have running agent', () => {
+    useTabStore.setState({
+      tabs: {
+        s1: mockSessionTab('s1', 'h1', 'sa'),
+        s2: mockSessionTab('s2', 'h1', 'sb'),
+      },
+    })
+    useAgentStore.setState({ statuses: { 'h1:sb': 'running' } })
+
+    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId={null} activeStandaloneTabId="s1" standaloneTabIds={['s1', 's2']} />)
+    const dots = container.querySelectorAll('.animate-breathe')
+    expect(dots.length).toBeGreaterThanOrEqual(1)
+  })
+
   it('shows Home static dot for waiting status', () => {
     useTabStore.setState({
       tabs: { s1: mockSessionTab('s1', 'h1', 'sa') },
