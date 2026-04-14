@@ -9,6 +9,8 @@ import (
 	"os"
 	"time"
 
+	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/agent/codex"
 	"github.com/wake/purdex/internal/config"
 )
 
@@ -63,8 +65,17 @@ func runSetup(args []string) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "setup: cannot reach daemon: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "setup: daemon unreachable, installing hooks locally\n")
+		if err := localSetup(agentType, remove); err != nil {
+			fmt.Fprintf(os.Stderr, "setup: %v\n", err)
+			os.Exit(1)
+		}
+		if remove {
+			fmt.Printf("pdx hooks for %s removed\n", agentType)
+		} else {
+			fmt.Printf("pdx hooks for %s installed\n", agentType)
+		}
+		return
 	}
 	defer resp.Body.Close()
 
@@ -78,5 +89,32 @@ func runSetup(args []string) {
 		fmt.Printf("pdx hooks for %s removed\n", agentType)
 	} else {
 		fmt.Printf("pdx hooks for %s installed\n", agentType)
+	}
+}
+
+// localSetup installs or removes hooks directly without the daemon.
+// The hook methods on CC/Codex providers don't use any injected dependencies,
+// so we can construct providers with nil deps for local-only operation.
+func localSetup(agentType string, remove bool) error {
+	pdxPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot find pdx binary: %w", err)
+	}
+
+	switch agentType {
+	case "cc":
+		p := agentcc.NewProvider(nil, nil, nil, nil)
+		if remove {
+			return p.RemoveHooks(pdxPath)
+		}
+		return p.InstallHooks(pdxPath)
+	case "codex":
+		p := codex.NewProvider()
+		if remove {
+			return p.RemoveHooks(pdxPath)
+		}
+		return p.InstallHooks(pdxPath)
+	default:
+		return fmt.Errorf("unknown agent type: %s (supported: cc, codex)", agentType)
 	}
 }
