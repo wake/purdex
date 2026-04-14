@@ -1,20 +1,24 @@
 package config
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
 // GetTmuxInstance returns the tmux server's "pid:startTime" identifier.
-// Returns empty string if tmux is not running.
+// Returns empty string if tmux is not running or the command times out.
 func GetTmuxInstance() string {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{pid}:#{start_time}").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "#{pid}:#{start_time}").Output()
 	if err != nil {
 		return ""
 	}
