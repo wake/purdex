@@ -92,4 +92,34 @@ describe('contentMatches', () => {
     const b: PaneContent = { kind: 'dashboard' }
     expect(contentMatches(a, b)).toBe(false)
   })
+
+  it('returns true for editor with same inapp source and filePath', () => {
+    const a: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/buffer/test.txt' }
+    const b: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/buffer/test.txt' }
+    expect(contentMatches(a, b)).toBe(true)
+  })
+
+  it('returns false for editor with different filePath', () => {
+    const a: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/a.txt' }
+    const b: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/b.txt' }
+    expect(contentMatches(a, b)).toBe(false)
+  })
+
+  it('returns false for editor with different source types', () => {
+    const a: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/test.txt' }
+    const b: PaneContent = { kind: 'editor', source: { type: 'local' }, filePath: '/test.txt' }
+    expect(contentMatches(a, b)).toBe(false)
+  })
+
+  it('returns true for editor with same daemon source and filePath', () => {
+    const a: PaneContent = { kind: 'editor', source: { type: 'daemon', hostId: 'h1' }, filePath: '/test.txt' }
+    const b: PaneContent = { kind: 'editor', source: { type: 'daemon', hostId: 'h1' }, filePath: '/test.txt' }
+    expect(contentMatches(a, b)).toBe(true)
+  })
+
+  it('returns false for editor with same daemon filePath but different hostId', () => {
+    const a: PaneContent = { kind: 'editor', source: { type: 'daemon', hostId: 'h1' }, filePath: '/test.txt' }
+    const b: PaneContent = { kind: 'editor', source: { type: 'daemon', hostId: 'h2' }, filePath: '/test.txt' }
+    expect(contentMatches(a, b)).toBe(false)
+  })
 })

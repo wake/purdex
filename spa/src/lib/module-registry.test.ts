@@ -23,7 +23,7 @@ const DummyView = DummyComponent
 const sessionModule: ModuleDefinition = {
   id: 'session',
   name: 'Session',
-  pane: { kind: 'tmux-session', component: DummyComponent },
+  panes: [{ kind: 'tmux-session', component: DummyComponent }],
   views: [{
     id: 'session-list',
     label: 'Sessions',

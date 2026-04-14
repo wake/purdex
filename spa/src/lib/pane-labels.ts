@@ -43,6 +43,10 @@ export function getPaneLabel(
       return t('page.pane.hosts')
     case 'memory-monitor':
       return t('monitor.title')
+    case 'editor': {
+      const name = content.filePath.split('/').pop() ?? content.filePath
+      return content.diff ? `${name} (Diff)` : name
+    }
   }
 }
 
@@ -65,5 +69,7 @@ export function getPaneIcon(content: PaneContent): string {
       return 'Globe'
     case 'memory-monitor':
       return 'ChartBar'
+    case 'editor':
+      return content.diff ? 'GitDiff' : 'File'
   }
 }

@@ -110,10 +110,10 @@ describe('PaneLayoutRenderer', () => {
     registerModule({
       id: 'dashboard',
       name: 'Dashboard',
-      pane: {
+      panes: [{
         kind: 'dashboard',
         component: ({ pane }) => <div data-testid="dashboard">Dashboard:{pane.id}</div>,
-      },
+      }],
     })
     const layout: PaneLayout = {
       type: 'leaf',
@@ -138,12 +138,12 @@ describe('PaneLayoutRenderer', () => {
     registerModule({
       id: 'history',
       name: 'History',
-      pane: {
+      panes: [{
         kind: 'history',
         component: ({ isActive }) => (
           <div data-testid="history">{isActive ? 'active' : 'inactive'}</div>
         ),
-      },
+      }],
     })
     const layout: PaneLayout = {
       type: 'leaf',
@@ -169,7 +169,7 @@ describe('PaneLayoutRenderer', () => {
     registerModule({
       id: 'dashboard-multi',
       name: 'Dashboard',
-      pane: { kind: 'dashboard', component: ({ pane }) => <div data-testid={`dash-${pane.id}`}>{pane.id}</div> },
+      panes: [{ kind: 'dashboard', component: ({ pane }) => <div data-testid={`dash-${pane.id}`}>{pane.id}</div> }],
     })
     const layout: PaneLayout = {
       type: 'split', id: 's1', direction: 'h',
@@ -188,7 +188,7 @@ describe('PaneLayoutRenderer', () => {
     registerModule({
       id: 'dashboard-nested',
       name: 'Dashboard',
-      pane: { kind: 'dashboard', component: ({ pane }) => <div data-testid={`dash-${pane.id}`}>{pane.id}</div> },
+      panes: [{ kind: 'dashboard', component: ({ pane }) => <div data-testid={`dash-${pane.id}`}>{pane.id}</div> }],
     })
     const layout: PaneLayout = {
       type: 'split', id: 's1', direction: 'v',
@@ -213,7 +213,7 @@ describe('PaneLayoutRenderer', () => {
     registerModule({
       id: 'dashboard-grid4',
       name: 'Dashboard',
-      pane: { kind: 'dashboard', component: ({ pane }) => <div data-testid={`dash-${pane.id}`}>{pane.id}</div> },
+      panes: [{ kind: 'dashboard', component: ({ pane }) => <div data-testid={`dash-${pane.id}`}>{pane.id}</div> }],
     })
     // Grid-4: vertical split of two horizontal splits → 2x2 grid
     const layout: PaneLayout = {

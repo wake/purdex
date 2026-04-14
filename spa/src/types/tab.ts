@@ -1,4 +1,5 @@
 import { generateId } from '../lib/id'
+import type { FileSource } from './fs'
 
 // === Tab (tab bar unit) ===
 export interface Tab {
@@ -35,6 +36,7 @@ export type PaneContent =
   | { kind: 'settings'; scope: 'global' | { workspaceId: string } }
   | { kind: 'browser'; url: string }
   | { kind: 'memory-monitor' }
+  | { kind: 'editor'; source: FileSource; filePath: string; diff?: { against: 'saved' | string } }
 
 // === Workspace ===
 export type IconWeight = 'bold' | 'regular' | 'thin' | 'light' | 'fill' | 'duotone'
