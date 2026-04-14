@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.117] - 2026-04-14
+
+### 效能
+
+- **daemon**：`GetTmuxInstance()` 和 `getTmuxVersion()` 加入 3s exec timeout，防止 tmux server 異常時 `/api/info` handler 阻塞（#154, #343）
+
 ## [1.0.0-alpha.116] - 2026-04-14
 
 ### 功能
