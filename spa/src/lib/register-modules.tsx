@@ -27,8 +27,10 @@ import type { PaneRendererProps } from './module-registry'
 import { EditorPane } from '../components/editor/EditorPane'
 import { EditorNewTabSection } from '../components/editor/EditorNewTabSection'
 import { InAppBackend } from './fs-backend-inapp'
+import { DaemonBackend } from './fs-backend-daemon'
 import { registerFsBackend, getFsBackend } from './fs-backend'
 import { registerFileOpener } from './file-opener-registry'
+import { useHostStore } from '../stores/useHostStore'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
   const handleSelect = (content: PaneContent) => {
@@ -115,6 +117,31 @@ export function registerBuiltinModules(): void {
   // Register InApp FS backend (singleton — 避免熱重載時資料遺失)
   if (!getFsBackend({ type: 'inapp' })) {
     registerFsBackend('inapp', new InAppBackend())
+  }
+
+  // Register DaemonBackend (lazy — resolves active host on each call)
+  if (!getFsBackend({ type: 'daemon', hostId: '' })) {
+    const getDaemon = (): DaemonBackend => {
+      const state = useHostStore.getState()
+      const hostId = state.activeHostId ?? state.hostOrder[0] ?? ''
+      return new DaemonBackend(
+        state.getDaemonBase(hostId),
+        () => state.getAuthHeaders(hostId),
+      )
+    }
+
+    registerFsBackend('daemon', {
+      id: 'daemon',
+      label: 'Remote Host',
+      available: () => !!useHostStore.getState().activeHostId,
+      read: (path) => getDaemon().read(path),
+      write: (path, content) => getDaemon().write(path, content),
+      stat: (path) => getDaemon().stat(path),
+      list: (path) => getDaemon().list(path),
+      mkdir: (path, recursive) => getDaemon().mkdir(path, recursive),
+      delete: (path, recursive) => getDaemon().delete(path, recursive),
+      rename: (from, to) => getDaemon().rename(from, to),
+    })
   }
 
   // Register file opener for text files
