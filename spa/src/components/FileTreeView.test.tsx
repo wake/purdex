@@ -88,6 +88,12 @@ describe('FileTreeWorkspaceView', () => {
     expect(screen.getByText(/No host connected/)).toBeTruthy()
   })
 
+  it('shows workspace required message when workspaceId is undefined', () => {
+    render(<FileTreeWorkspaceView isActive={true} workspaceId={undefined} />)
+    expect(screen.getByText('請先選擇 Workspace')).toBeTruthy()
+    expect(screen.queryByPlaceholderText('/home/user/project')).toBeNull()
+  })
+
   it('shows setup prompt when projectPath is not configured', () => {
     useWorkspaceStore.setState({
       workspaces: [{
