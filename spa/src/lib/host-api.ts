@@ -18,6 +18,7 @@ export interface Session {
 export interface ConfigData {
   bind: string
   port: number
+  upload_dir?: string
   terminal?: { sizing_mode: string }
   stream: { presets: Array<{ name: string; command: string }> }
   detect: { cc_commands: string[]; poll_interval: number }

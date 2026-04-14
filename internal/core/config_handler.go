@@ -4,6 +4,7 @@ package core
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 
 	"github.com/wake/purdex/internal/config"
 )
@@ -24,9 +25,10 @@ func (c *Core) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 
 // configUpdateRequest defines the fields that can be updated via PUT /api/config.
 type configUpdateRequest struct {
-	Stream   *config.StreamConfig   `json:"stream,omitempty"`
-	Detect   *detectUpdateRequest   `json:"detect,omitempty"`
-	Terminal *config.TerminalConfig `json:"terminal,omitempty"`
+	Stream    *config.StreamConfig   `json:"stream,omitempty"`
+	Detect    *detectUpdateRequest   `json:"detect,omitempty"`
+	Terminal  *config.TerminalConfig `json:"terminal,omitempty"`
+	UploadDir *string                `json:"upload_dir,omitempty"`
 }
 
 // detectUpdateRequest allows partial updates to detect config.
@@ -54,6 +56,14 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		default:
 			c.CfgMu.Unlock()
 			http.Error(w, "invalid sizing_mode: must be auto, terminal-first, or minimal-first", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if req.UploadDir != nil {
+		if *req.UploadDir == "" || !filepath.IsAbs(*req.UploadDir) {
+			c.CfgMu.Unlock()
+			http.Error(w, "upload_dir must be a non-empty absolute path", http.StatusBadRequest)
 			return
 		}
 	}
@@ -88,6 +98,10 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		c.Cfg.Terminal.SizingMode = req.Terminal.SizingMode
 	}
 
+	if req.UploadDir != nil {
+		c.Cfg.UploadDir = *req.UploadDir
+	}
+
 	// Write back to config file
 	if c.CfgPath != "" {
 		if err := config.WriteFile(c.CfgPath, *c.Cfg); err != nil {
@@ -103,7 +117,7 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.Unlock()
 
 	// Notify registered callbacks about config changes (outside lock)
-	if detectChanged {
+	if detectChanged || req.UploadDir != nil {
 		c.NotifyConfigChange()
 	}
 
