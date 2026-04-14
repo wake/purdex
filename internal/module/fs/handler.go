@@ -57,14 +57,6 @@ func (m *FsModule) handleList(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			jsonError(w, "cannot determine home directory", http.StatusInternalServerError)
-			return
-		}
-		path = home
-	}
 	path = filepath.Clean(path)
 	if !validatePath(path) {
 		jsonError(w, "path must be absolute", http.StatusBadRequest)
@@ -115,6 +107,17 @@ func (m *FsModule) handleRead(w http.ResponseWriter, r *http.Request) {
 	path = filepath.Clean(path)
 	if !validatePath(path) {
 		jsonError(w, "path must be absolute", http.StatusBadRequest)
+		return
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	const maxReadSize = 10 << 20 // 10 MB
+	if info.Size() > maxReadSize {
+		jsonError(w, "file too large (max 10 MB)", http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -233,6 +236,13 @@ func (m *FsModule) handleDelete(w http.ResponseWriter, r *http.Request) {
 	req.Path = filepath.Clean(req.Path)
 	if !validatePath(req.Path) {
 		jsonError(w, "path must be absolute", http.StatusBadRequest)
+		return
+	}
+
+	// Reject recursive delete on shallow paths (depth < 3) to prevent catastrophic mistakes.
+	// e.g. /, /Users, /Users/wake are rejected; /Users/wake/projects is allowed.
+	if req.Recursive && strings.Count(req.Path, string(filepath.Separator)) < 3 {
+		jsonError(w, "recursive delete rejected: path too shallow", http.StatusForbidden)
 		return
 	}
 

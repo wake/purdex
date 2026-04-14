@@ -119,7 +119,10 @@ export function registerBuiltinModules(): void {
     registerFsBackend('inapp', new InAppBackend())
   }
 
-  // Register DaemonBackend (lazy — resolves active host on each call)
+  // Register DaemonBackend (lazy proxy — creates a new DaemonBackend per call,
+  // resolving active host at invocation time. This is intentional: the active host
+  // can change at any time and DaemonBackend is stateless. If DaemonBackend gains
+  // internal state, switch to a memoized-by-hostId pattern.)
   if (!getFsBackend({ type: 'daemon', hostId: '' })) {
     const getDaemon = (): DaemonBackend => {
       const state = useHostStore.getState()

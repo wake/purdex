@@ -13,9 +13,9 @@ import (
 
 // ── test helpers ─────────────────────────────────────────────────────────────
 
-func setupTestModule() (*FsModule, string) {
-	dir, _ := os.MkdirTemp("", "fs-test-*")
-	return New(), dir
+func setupTestModule(t *testing.T) (*FsModule, string) {
+	t.Helper()
+	return New(), t.TempDir()
 }
 
 func postJSON(handler http.HandlerFunc, body interface{}) *httptest.ResponseRecorder {
@@ -30,8 +30,7 @@ func postJSON(handler http.HandlerFunc, body interface{}) *httptest.ResponseReco
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 func TestHandleList(t *testing.T) {
-	m, dir := setupTestModule()
-	defer os.RemoveAll(dir)
+	m, dir := setupTestModule(t)
 
 	// Create a file and a subdirectory
 	if err := os.WriteFile(filepath.Join(dir, "beta.txt"), []byte("hello"), 0o644); err != nil {
@@ -72,8 +71,7 @@ func TestHandleList(t *testing.T) {
 }
 
 func TestHandleListRejectsRelativePath(t *testing.T) {
-	m, dir := setupTestModule()
-	defer os.RemoveAll(dir)
+	m, _ := setupTestModule(t)
 
 	w := postJSON(m.handleList, map[string]string{"path": "relative/path"})
 
@@ -83,8 +81,7 @@ func TestHandleListRejectsRelativePath(t *testing.T) {
 }
 
 func TestHandleListSkipsHiddenFiles(t *testing.T) {
-	m, dir := setupTestModule()
-	defer os.RemoveAll(dir)
+	m, dir := setupTestModule(t)
 
 	// Create a visible file and a hidden file
 	if err := os.WriteFile(filepath.Join(dir, "visible.txt"), []byte("hi"), 0o644); err != nil {
@@ -116,8 +113,7 @@ func TestHandleListSkipsHiddenFiles(t *testing.T) {
 }
 
 func TestHandleStat(t *testing.T) {
-	m, dir := setupTestModule()
-	defer os.RemoveAll(dir)
+	m, dir := setupTestModule(t)
 
 	content := []byte("test content")
 	filePath := filepath.Join(dir, "stat-test.txt")
@@ -156,8 +152,7 @@ func TestHandleStat(t *testing.T) {
 }
 
 func TestHandleReadWrite(t *testing.T) {
-	m, dir := setupTestModule()
-	defer os.RemoveAll(dir)
+	m, dir := setupTestModule(t)
 
 	filePath := filepath.Join(dir, "rw-test.txt")
 	originalContent := "hello, purdex"
@@ -184,8 +179,7 @@ func TestHandleReadWrite(t *testing.T) {
 }
 
 func TestHandleDelete(t *testing.T) {
-	m, dir := setupTestModule()
-	defer os.RemoveAll(dir)
+	m, dir := setupTestModule(t)
 
 	filePath := filepath.Join(dir, "to-delete.txt")
 	if err := os.WriteFile(filePath, []byte("bye"), 0o644); err != nil {
@@ -203,8 +197,7 @@ func TestHandleDelete(t *testing.T) {
 }
 
 func TestHandleRename(t *testing.T) {
-	m, dir := setupTestModule()
-	defer os.RemoveAll(dir)
+	m, dir := setupTestModule(t)
 
 	srcPath := filepath.Join(dir, "original.txt")
 	dstPath := filepath.Join(dir, "renamed.txt")
@@ -235,8 +228,7 @@ func TestHandleRename(t *testing.T) {
 }
 
 func TestHandleMkdir(t *testing.T) {
-	m, dir := setupTestModule()
-	defer os.RemoveAll(dir)
+	m, dir := setupTestModule(t)
 
 	newDir := filepath.Join(dir, "new-directory")
 
@@ -254,5 +246,38 @@ func TestHandleMkdir(t *testing.T) {
 	}
 	if !info.IsDir() {
 		t.Error("expected created path to be a directory")
+	}
+}
+
+func TestHandleReadRejectsLargeFile(t *testing.T) {
+	m, dir := setupTestModule(t)
+
+	filePath := filepath.Join(dir, "large.bin")
+	// Create a file just over 10 MB
+	f, err := os.Create(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(11 << 20); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+
+	w := postJSON(m.handleRead, map[string]string{"path": filePath})
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleDeleteRejectsShallowRecursive(t *testing.T) {
+	m, _ := setupTestModule(t)
+
+	w := postJSON(m.handleDelete, map[string]interface{}{
+		"path":      "/tmp",
+		"recursive": true,
+	})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
 	}
 }
