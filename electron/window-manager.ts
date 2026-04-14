@@ -92,7 +92,6 @@ export class WindowManager {
     if (mode === 'dev') {
       // Verify dev server is reachable before navigating — loadURL navigates
       // immediately, so a failure would strand the user on an error page.
-      // Timeout is longer than loadSPA's 500ms because this is user-initiated.
       const res = await fetch(WindowManager.DEV_SERVER, { signal: AbortSignal.timeout(2000) })
       if (!res.ok) throw new Error(`Dev server responded with ${res.status}`)
       await win.loadURL(WindowManager.DEV_SERVER)

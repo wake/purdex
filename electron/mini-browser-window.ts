@@ -8,15 +8,12 @@ interface MiniWindowEntry {
   parentWindow: BrowserWindow
 }
 
-const DEV_SERVER = 'http://100.64.0.2:5174'
-
 export class MiniWindowManager {
   private entries = new Map<string, MiniWindowEntry>()
   private nextId = 0
 
   constructor(
     private viewManager: BrowserViewManager,
-    // WindowManager type not imported to avoid circular — only need DEV_SERVER pattern
   ) {}
 
   open(parentWindow: BrowserWindow, url: string): void {
@@ -42,9 +39,7 @@ export class MiniWindowManager {
 
     // Load mini browser SPA entry (runs in parallel with URL load above)
     const query = `?paneId=${encodeURIComponent(paneId)}`
-    fetch(DEV_SERVER, { signal: AbortSignal.timeout(500) })
-      .then(() => { if (!win.isDestroyed()) win.loadURL(`${DEV_SERVER}/mini-browser.html${query}`) })
-      .catch(() => { if (!win.isDestroyed()) win.loadURL(`app://./mini-browser.html${query}`) })
+    if (!win.isDestroyed()) win.loadURL(`app://./mini-browser.html${query}`)
 
     // Cleanup on window close
     win.on('closed', () => {
