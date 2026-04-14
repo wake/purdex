@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.131] - 2026-04-15
+
+### 新增
+
+- **spa**：Editor Module Plan A — Monaco 基礎編輯器 + FS 抽象層（#359）
+  - `FsBackend` 介面 + `InAppBackend`（in-memory）+ backend registry
+  - `file-opener-registry` 解耦檔案來源與開啟行為
+  - `module-registry` `pane` → `panes` 遷移，支援多 pane kind
+  - `editor` PaneContent kind + pane utilities 更新
+  - `useEditorStore` buffer store（runtime，不 persist）
+  - `MonacoWrapper`（⌘S + cursor tracking）+ `EditorToolbar` + `EditorStatusBar`
+  - `EditorPane` 主元件：載入 → buffer → 編輯 → 存檔全流程
+  - New Tab 入口：「新增檔案」+「新增 Markdown」
+
 ## [1.0.0-alpha.130] - 2026-04-15
 
 ### 修復
