@@ -141,14 +141,18 @@ export function ActivityBar({
     onReorderWorkspaces?.(newOrder)
   }, [wsIds, onReorderWorkspaces])
 
-  const { unreadCount: homeUnreadCount, aggregatedStatus: homeStatus } = useWorkspaceIndicators(standaloneTabIds)
+  const nonActiveStandaloneTabIds = useMemo(
+    () => activeStandaloneTabId ? standaloneTabIds.filter(id => id !== activeStandaloneTabId) : standaloneTabIds,
+    [standaloneTabIds, activeStandaloneTabId],
+  )
+  const { unreadCount: homeUnreadCount, aggregatedStatus: homeStatus } = useWorkspaceIndicators(nonActiveStandaloneTabIds)
   const isHomeActive = !activeWorkspaceId
-  const showHomeBadge = !isHomeActive && homeUnreadCount > 0
+  const showHomeBadge = (!isHomeActive || !!activeStandaloneTabId) && homeUnreadCount > 0
   return (
     <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 px-px gap-2.5 flex-shrink-0">
       {/* Home — standalone tabs */}
       <div className="relative group">
-        {homeStatus && !isHomeActive && (
+        {homeStatus && (!isHomeActive || !!activeStandaloneTabId) && (
           <span
             className={`absolute rounded-full ${homeStatus === 'running' ? 'animate-breathe' : ''}`}
             style={{
