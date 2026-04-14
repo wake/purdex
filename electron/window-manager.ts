@@ -31,7 +31,7 @@ export class WindowManager {
 
     this.windows.set(id, win)
 
-    // Load SPA: try dev server first, fallback to bundled renderer
+    // Load bundled SPA (dev server can be activated via Settings > Development)
     this.loadSPA(win)
 
     // If tab data provided, send after SPA signals ready
@@ -78,9 +78,7 @@ export class WindowManager {
   private static readonly DEV_SERVER = 'http://100.64.0.2:5174'
 
   loadSPA(win: BrowserWindow): void {
-    fetch(WindowManager.DEV_SERVER, { signal: AbortSignal.timeout(500) })
-      .then(() => win.loadURL(WindowManager.DEV_SERVER))
-      .catch(() => win.loadURL('app://./index.html'))
+    win.loadURL('app://./index.html')
   }
 
   reloadSPA(webContents: Electron.WebContents): void {
@@ -94,7 +92,6 @@ export class WindowManager {
     if (mode === 'dev') {
       // Verify dev server is reachable before navigating — loadURL navigates
       // immediately, so a failure would strand the user on an error page.
-      // Timeout is longer than loadSPA's 500ms because this is user-initiated.
       const res = await fetch(WindowManager.DEV_SERVER, { signal: AbortSignal.timeout(2000) })
       if (!res.ok) throw new Error(`Dev server responded with ${res.status}`)
       await win.loadURL(WindowManager.DEV_SERVER)
