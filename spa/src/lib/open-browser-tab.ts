@@ -1,21 +1,31 @@
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { createTab } from '../types/tab'
+import { findBrowserInsertTarget } from './find-browser-insert-target'
 
 /**
  * Open a new browser tab with the given URL.
- * Integrates with workspace: adds to active workspace and sets as active tab.
- * Can be called from anywhere (not a hook — uses store.getState() directly).
+ * Inserts after the nearest browser tab to the right of the active tab.
+ * Falls back to inserting after the active tab if no browser tab is found.
  */
 export function openBrowserTab(url: string): void {
   const tab = createTab({ kind: 'browser', url })
-  const activeTabId = useTabStore.getState().activeTabId
-  useTabStore.getState().addTab(tab, activeTabId ?? undefined)
+  const tabState = useTabStore.getState()
+  const wsState = useWorkspaceStore.getState()
+  const activeTabId = tabState.activeTabId
+
+  const wsId = wsState.activeWorkspaceId
+  const ws = wsId ? wsState.workspaces.find((w) => w.id === wsId) : null
+  const visibleOrder = ws ? ws.tabs.filter((id) => !!tabState.tabs[id]) : tabState.tabOrder
+
+  const afterTabId = activeTabId
+    ? findBrowserInsertTarget(visibleOrder, activeTabId, tabState.tabs)
+    : undefined
+
+  useTabStore.getState().addTab(tab, afterTabId)
   useTabStore.getState().setActiveTab(tab.id)
 
-  const wsId = useWorkspaceStore.getState().activeWorkspaceId
   if (wsId) {
-    useWorkspaceStore.getState().addTabToWorkspace(wsId, tab.id)
-    useWorkspaceStore.getState().setWorkspaceActiveTab(wsId, tab.id)
+    wsState.insertTab(tab.id, wsId, afterTabId)
   }
 }
