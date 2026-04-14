@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.118] - 2026-04-14
+
+### 修復
+
+- **spa**：Terminal WS `canReconnect` gate 加入 host 存在性檢查，防止 host 刪除後 ghost reconnect（#159, #344）
+
 ## [1.0.0-alpha.117] - 2026-04-14
 
 ### 效能
