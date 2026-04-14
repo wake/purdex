@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.119] - 2026-04-14
+
+### 功能
+
+- **daemon**：Terminal relay WS 加入 ping/pong keep-alive（30s interval, 10s pong timeout），防止 proxy/firewall 靜默斷開閒置連線（#160, #345）
+
 ## [1.0.0-alpha.118] - 2026-04-14
 
 ### 修復
