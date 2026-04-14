@@ -25,6 +25,11 @@ describe('ToggleSwitch', () => {
     expect(screen.getByLabelText('My Toggle')).toBeTruthy()
   })
 
+  it('has type="button" to prevent form submission', () => {
+    render(<ToggleSwitch label="Test" checked={false} onChange={vi.fn()} />)
+    expect(screen.getByRole('switch').getAttribute('type')).toBe('button')
+  })
+
   it('applies active color when checked', () => {
     render(<ToggleSwitch label="Test" checked={true} onChange={vi.fn()} />)
     expect(screen.getByRole('switch').className).toContain('bg-accent')

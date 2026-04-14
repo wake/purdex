@@ -1,8 +1,10 @@
 // spa/src/components/settings/ModuleConfigSection.tsx
+import { useId } from 'react'
 import { getModulesWithGlobalConfig, getModulesWithWorkspaceConfig } from '../../lib/module-registry'
 import type { ConfigDef } from '../../lib/module-registry'
 import { useModuleConfigStore } from '../../stores/useModuleConfigStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
+import { ToggleSwitch } from './ToggleSwitch'
 
 interface Props {
   scope: 'global' | { workspaceId: string }
@@ -33,6 +35,9 @@ export function ModuleConfigSection({ scope }: Props) {
 }
 
 function ConfigField({ def, moduleId, scope }: { def: ConfigDef; moduleId: string; scope: Props['scope'] }) {
+  const id = useId()
+  const fieldId = id + '-' + def.key
+
   const globalValue = useModuleConfigStore((s) => s.globalConfig[moduleId]?.[def.key])
   const wsValue = useWorkspaceStore((s) => {
     if (scope === 'global') return undefined
@@ -53,21 +58,22 @@ function ConfigField({ def, moduleId, scope }: { def: ConfigDef; moduleId: strin
 
   return (
     <div className="flex items-center justify-between py-1">
-      <label className="text-xs text-text-secondary">{def.label}</label>
       {def.type === 'boolean' ? (
-        <button
-          className={`w-8 h-4 rounded-full transition-colors ${displayValue ? 'bg-accent-base' : 'bg-surface-hover'}`}
-          onClick={() => handleChange(!displayValue)}
-        >
-          <div className={`w-3 h-3 rounded-full bg-white transition-transform ${displayValue ? 'translate-x-4' : 'translate-x-0.5'}`} />
-        </button>
+        <>
+          <span className="text-xs text-text-secondary">{def.label}</span>
+          <ToggleSwitch label={def.label} checked={!!displayValue} onChange={(v) => handleChange(v)} />
+        </>
       ) : (
-        <input
-          className="w-48 px-2 py-0.5 rounded border border-border-default bg-surface-primary text-xs text-text-primary"
-          type={def.type === 'number' ? 'number' : 'text'}
-          value={String(displayValue)}
-          onChange={(e) => handleChange(def.type === 'number' ? Number(e.target.value) : e.target.value)}
-        />
+        <>
+          <label htmlFor={fieldId} className="text-xs text-text-secondary">{def.label}</label>
+          <input
+            id={fieldId}
+            className="w-48 px-2 py-0.5 rounded border border-border-default bg-surface-primary text-xs text-text-primary"
+            type={def.type === 'number' ? 'number' : 'text'}
+            value={String(displayValue)}
+            onChange={(e) => handleChange(def.type === 'number' ? Number(e.target.value) : e.target.value)}
+          />
+        </>
       )}
     </div>
   )
