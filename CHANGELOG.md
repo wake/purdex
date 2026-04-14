@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.126] - 2026-04-14
+
+### 修復
+
+- **spa**：browser tab 插入位置修正 — workspace 排序現在正確使用 `insertTab`（PR #233 regression），並改為插入在右側最近 browser tab 之後（#353）
+
 ## [1.0.0-alpha.125] - 2026-04-14
 
 ### 重構
