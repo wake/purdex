@@ -1,11 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useWorkspaceStore } from './store'
-import { createTab } from '../../types/tab'
 import type { Workspace } from '../../types/tab'
-
-function makeTab() {
-  return createTab({ kind: 'new-tab' })
-}
 
 describe('useWorkspaceStore', () => {
   beforeEach(() => {
