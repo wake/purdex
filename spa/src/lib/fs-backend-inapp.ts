@@ -83,7 +83,7 @@ export class InAppBackend implements FsBackend {
     })
   }
 
-  async mkdir(path: string, _recursive?: boolean): Promise<void> {
+  async mkdir(path: string, _recursive?: boolean): Promise<void> { // eslint-disable-line @typescript-eslint/no-unused-vars
     this.store.set(path, {
       path,
       content: new Uint8Array(0),
@@ -92,7 +92,7 @@ export class InAppBackend implements FsBackend {
     })
   }
 
-  async delete(path: string, _recursive?: boolean): Promise<void> {
+  async delete(path: string, _recursive?: boolean): Promise<void> { // eslint-disable-line @typescript-eslint/no-unused-vars
     this.store.delete(path)
     const prefix = path.endsWith('/') ? path : path + '/'
     for (const key of this.store.keys()) {

@@ -32,6 +32,7 @@ export function EditorPane({ pane, isActive }: PaneRendererProps) {
   return <EditorPaneInner source={content.source} filePath={content.filePath} isActive={isActive} />
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- isActive needed for future focus-based stat check
 function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; filePath: string; isActive: boolean }) {
   const key = bufferKey(source, filePath)
   const buffer = useEditorStore((s) => s.buffers[key])
@@ -75,9 +76,9 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="h-full w-full flex flex-col overflow-hidden">
       <EditorToolbar filePath={filePath} isDirty={buffer.isDirty} onSave={handleSave} />
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-hidden">
         <MonacoWrapper
           content={buffer.content}
           language={buffer.language}

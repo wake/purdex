@@ -225,6 +225,8 @@
   "settings.dev.error.dev_unreachable": "Dev server is not reachable",
   "settings.dev.error.bundled_failed": "Failed to load bundled SPA",
 
+  "editor.provider_label": "Editor",
+
   "monitor.provider_label": "Memory Monitor",
   "monitor.requires_app": "Requires desktop app",
   "monitor.title": "Memory Monitor",

@@ -225,6 +225,8 @@
   "settings.dev.error.dev_unreachable": "Dev Server 無法連線",
   "settings.dev.error.bundled_failed": "無法載入 Bundled SPA",
 
+  "editor.provider_label": "編輯器",
+
   "monitor.provider_label": "記憶體監控",
   "monitor.requires_app": "需要安裝桌面版本",
   "monitor.title": "記憶體監控",
