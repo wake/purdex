@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.120] - 2026-04-14
+
+### 修復
+
+- **spa**：`FileTreeWorkspaceView` 在 `workspaceId` 為 undefined（standalone tab 模式）時，不再渲染無法使用的 projectPath 表單，改為顯示「請先選擇 Workspace」提示（#257, #346）
+
 ## [1.0.0-alpha.119] - 2026-04-14
 
 ### 功能
