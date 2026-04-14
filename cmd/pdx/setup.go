@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	agentcc "github.com/wake/purdex/internal/agent/cc"
@@ -62,7 +63,10 @@ func runSetup(args []string) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	// Short timeout: daemon is local, responds instantly if running.
+	// Fallback only triggers on transport errors (connection refused, timeout),
+	// not on HTTP 4xx/5xx from a running daemon.
+	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "setup: daemon unreachable, installing hooks locally\n")
@@ -99,6 +103,9 @@ func localSetup(agentType string, remove bool) error {
 	pdxPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("cannot find pdx binary: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(pdxPath); err == nil {
+		pdxPath = resolved
 	}
 
 	switch agentType {
