@@ -68,5 +68,7 @@ export function tabToUrl(tabId: string, content: PaneContent, workspaceId?: stri
       return '/'
     case 'memory-monitor':
       return '/'
+    case 'editor':
+      return '/'
   }
 }
