@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.124] - 2026-04-14
+
+### 修復
+
+- **daemon**：`pdx setup` 在 daemon 不可達時加入 local fallback，直接呼叫 provider hook 安裝邏輯，不再強制要求 daemon 運行（#255, #352）
+
 ## [1.0.0-alpha.123] - 2026-04-14
 
 ### 修復
