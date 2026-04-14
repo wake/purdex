@@ -56,10 +56,14 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(info)
 }
 
+// tmuxExecTimeout bounds lightweight tmux metadata queries (display-message, -V).
+// Shorter than TmuxAlive's 5s because these are read-only, single-process commands.
+const tmuxExecTimeout = 3 * time.Second
+
 // getTmuxVersion runs `tmux -V` and returns the version string (e.g. "tmux 3.6a").
 // Returns "unknown" if tmux is not found, the command fails, or it times out.
 func getTmuxVersion() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), tmuxExecTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "tmux", "-V").Output()
 	if err != nil {
