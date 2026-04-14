@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.123] - 2026-04-14
+
+### 修復
+
+- **spa**：bump `useAgentStore` persist version 2→3，確保舊用戶的 `tabIndicatorStyle` 重設為新預設 `replace`（#268, #351）
+
 ## [1.0.0-alpha.122] - 2026-04-14
 
 ### 修復
