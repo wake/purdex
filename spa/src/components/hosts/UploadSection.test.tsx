@@ -11,8 +11,17 @@ const FILES = [
   { session: 'abc', name: 'file2.txt', size: 512, modified: '2025-01-01' },
 ]
 
+const CONFIG = {
+  upload_dir: '/tmp/purdex-upload',
+  bind: '0.0.0.0',
+  port: 7860,
+  stream: { presets: [] },
+  detect: { cc_commands: [], poll_interval: 5 },
+}
+
 // Mock the host-api module
 vi.mock('../../lib/host-api', () => ({
+  hostFetch: vi.fn(),
   fetchUploadStats: vi.fn(),
   fetchUploadFiles: vi.fn(),
   deleteUploadFile: vi.fn(),
@@ -21,11 +30,13 @@ vi.mock('../../lib/host-api', () => ({
 }))
 
 import {
+  hostFetch,
   fetchUploadStats,
   fetchUploadFiles,
   deleteAllUploads,
 } from '../../lib/host-api'
 
+const mockHostFetch = vi.mocked(hostFetch)
 const mockFetchUploadStats = vi.mocked(fetchUploadStats)
 const mockFetchUploadFiles = vi.mocked(fetchUploadFiles)
 const mockDeleteAllUploads = vi.mocked(deleteAllUploads)
@@ -41,6 +52,11 @@ beforeEach(() => {
     hostOrder: [HOST_ID],
     runtime: { [HOST_ID]: { status: 'connected' } },
   })
+  // Default: mock hostFetch for /api/config
+  mockHostFetch.mockImplementation((_hostId, path) => {
+    if (path === '/api/config') return Promise.resolve(mockOkResponse(CONFIG))
+    return Promise.resolve({ ok: false } as Response)
+  })
 })
 
 describe('UploadSection', () => {
@@ -51,8 +67,80 @@ describe('UploadSection', () => {
     render(<UploadSection hostId={HOST_ID} />)
 
     await waitFor(() => {
-      expect(screen.getByText('/tmp/uploads')).toBeInTheDocument()
+      // Should show config's upload_dir, not stats.dir
+      expect(screen.getByText('/tmp/purdex-upload')).toBeInTheDocument()
       expect(screen.getByText('2')).toBeInTheDocument()
+    })
+  })
+
+  it('renders EditableField with config upload_dir', async () => {
+    mockFetchUploadStats.mockResolvedValue(mockOkResponse(STATS))
+    mockFetchUploadFiles.mockResolvedValue(mockOkResponse(FILES))
+
+    render(<UploadSection hostId={HOST_ID} />)
+
+    await waitFor(() => {
+      expect(screen.getByText('/tmp/purdex-upload')).toBeInTheDocument()
+    })
+
+    // Click to edit the dir
+    fireEvent.click(screen.getByText('/tmp/purdex-upload'))
+
+    // Should show an input with the current dir value
+    const input = screen.getByDisplayValue('/tmp/purdex-upload')
+    expect(input).toBeInTheDocument()
+  })
+
+  it('saves new upload dir via PUT /api/config', async () => {
+    mockFetchUploadStats.mockResolvedValue(mockOkResponse(STATS))
+    mockFetchUploadFiles.mockResolvedValue(mockOkResponse(FILES))
+
+    const updatedConfig = { ...CONFIG, upload_dir: '/new/upload/path' }
+    mockHostFetch.mockImplementation((_hostId, path, init) => {
+      if (path === '/api/config' && init?.method === 'PUT') {
+        return Promise.resolve(mockOkResponse(updatedConfig))
+      }
+      if (path === '/api/config') return Promise.resolve(mockOkResponse(CONFIG))
+      return Promise.resolve({ ok: false } as Response)
+    })
+
+    render(<UploadSection hostId={HOST_ID} />)
+
+    await waitFor(() => {
+      expect(screen.getByText('/tmp/purdex-upload')).toBeInTheDocument()
+    })
+
+    // Click to edit
+    fireEvent.click(screen.getByText('/tmp/purdex-upload'))
+
+    const input = screen.getByDisplayValue('/tmp/purdex-upload')
+    fireEvent.change(input, { target: { value: '/new/upload/path' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(mockHostFetch).toHaveBeenCalledWith(
+        HOST_ID,
+        '/api/config',
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify({ upload_dir: '/new/upload/path' }),
+        }),
+      )
+    })
+  })
+
+  it('falls back to stats.dir when config has no upload_dir', async () => {
+    mockHostFetch.mockImplementation((_hostId, path) => {
+      if (path === '/api/config') return Promise.resolve(mockOkResponse({ ...CONFIG, upload_dir: undefined }))
+      return Promise.resolve({ ok: false } as Response)
+    })
+    mockFetchUploadStats.mockResolvedValue(mockOkResponse(STATS))
+    mockFetchUploadFiles.mockResolvedValue(mockOkResponse(FILES))
+
+    render(<UploadSection hostId={HOST_ID} />)
+
+    await waitFor(() => {
+      expect(screen.getByText('/tmp/uploads')).toBeInTheDocument()
     })
   })
 

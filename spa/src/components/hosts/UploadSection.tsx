@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { ArrowsClockwise, Trash, File } from '@phosphor-icons/react'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { fetchUploadStats, fetchUploadFiles, deleteUploadFile, deleteUploadSession, deleteAllUploads } from '../../lib/host-api'
+import { hostFetch, fetchUploadStats, fetchUploadFiles, deleteUploadFile, deleteUploadSession, deleteAllUploads } from '../../lib/host-api'
+import { EditableField } from './form-fields'
 
 interface Props {
   hostId: string
@@ -37,6 +38,7 @@ export function UploadSection({ hostId }: Props) {
   const [files, setFiles] = useState<UploadFile[]>([])
   const [loading, setLoading] = useState(true)
   const [confirmClearAll, setConfirmClearAll] = useState(false)
+  const [configDir, setConfigDir] = useState<string | null>(null)
 
   const refresh = async () => {
     setLoading(true)
@@ -53,17 +55,23 @@ export function UploadSection({ hostId }: Props) {
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([fetchUploadStats(hostId), fetchUploadFiles(hostId)])
-      .then(([statsRes, filesRes]) =>
+    Promise.all([
+      fetchUploadStats(hostId),
+      fetchUploadFiles(hostId),
+      hostFetch(hostId, '/api/config').then((r) => r.ok ? r.json() : null),
+    ])
+      .then(([statsRes, filesRes, configData]) =>
         Promise.all([
           statsRes.ok ? statsRes.json() : null,
           filesRes.ok ? filesRes.json() : null,
+          configData,
         ]),
       )
-      .then(([statsData, filesData]) => {
+      .then(([statsData, filesData, configData]) => {
         if (cancelled) return
         if (statsData) setStats(statsData)
         if (filesData) setFiles(filesData)
+        if (configData) setConfigDir(configData.upload_dir ?? null)
       })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
@@ -91,6 +99,21 @@ export function UploadSection({ hostId }: Props) {
     } catch { /* ignore */ }
     setConfirmClearAll(false)
     await refresh()
+  }
+
+  const handleDirSave = async (newDir: string) => {
+    try {
+      const res = await hostFetch(hostId, '/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ upload_dir: newDir }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setConfigDir(data.upload_dir ?? null)
+        await refresh()
+      }
+    } catch { /* ignore */ }
   }
 
   // Group files by session
@@ -147,12 +170,13 @@ export function UploadSection({ hostId }: Props) {
 
       {/* Stats overview */}
       {stats && (
-        <div className="p-4 bg-surface-secondary rounded-lg border border-border-subtle mb-4">
-          <div className="grid grid-cols-3 gap-4 text-center">
-            <div>
-              <p className="text-xs text-text-muted">{t('hosts.upload_dir')}</p>
-              <p className="text-sm text-text-primary font-mono truncate">{stats.dir}</p>
-            </div>
+        <div className="p-4 bg-surface-secondary rounded-lg border border-border-subtle mb-4 space-y-3">
+          <EditableField
+            label={t('hosts.upload_dir')}
+            value={configDir ?? stats.dir}
+            onSave={handleDirSave}
+          />
+          <div className="grid grid-cols-2 gap-4 text-center">
             <div>
               <p className="text-xs text-text-muted">{t('hosts.total_size')}</p>
               <p className="text-sm text-text-primary">{formatBytes(stats.total_size)}</p>

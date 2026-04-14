@@ -118,6 +118,18 @@ func TestLoadInvalidTOML(t *testing.T) {
 	}
 }
 
+func TestDefaultsHaveUploadDir(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, "tmp", "purdex-upload")
+	if cfg.UploadDir != want {
+		t.Errorf("UploadDir = %q, want %q", cfg.UploadDir, want)
+	}
+}
+
 func TestGetSizingModeDefault(t *testing.T) {
 	tc := config.TerminalConfig{}
 	if tc.GetSizingMode() != "auto" {

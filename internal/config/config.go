@@ -52,6 +52,7 @@ type Config struct {
 	Allow        []string       `toml:"allow"          json:"allow"`
 	DataDir      string         `toml:"data_dir"       json:"data_dir"`
 	AllowedPaths []string       `toml:"allowed_paths"  json:"allowed_paths"`
+	UploadDir    string         `toml:"upload_dir"     json:"upload_dir"`
 	Terminal     TerminalConfig `toml:"terminal"       json:"terminal"`
 	Stream       StreamConfig   `toml:"stream"         json:"stream"`
 	Detect       DetectConfig   `toml:"detect"         json:"detect"`
@@ -64,7 +65,8 @@ func defaults() Config {
 	return Config{
 		Bind:    "127.0.0.1",
 		Port:    7860,
-		DataDir: filepath.Join(home, ".config", "pdx"),
+		DataDir:   filepath.Join(home, ".config", "pdx"),
+		UploadDir: filepath.Join(home, "tmp", "purdex-upload"),
 		Stream: StreamConfig{
 			Presets: []Preset{{
 				Name:    "cc",

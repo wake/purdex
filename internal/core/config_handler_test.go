@@ -255,6 +255,45 @@ func TestRegisterCoreRoutesIncludesConfigEndpoints(t *testing.T) {
 	assert.NotEqual(t, http.StatusNotFound, rec.Code)
 }
 
+func TestPutConfigUpdatesUploadDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.toml")
+	err := os.WriteFile(cfgPath, []byte("bind = \"127.0.0.1\"\n"), 0644)
+	require.NoError(t, err)
+
+	c := newTestCore()
+	c.CfgPath = cfgPath
+
+	body := `{"upload_dir": "/tmp/custom-uploads"}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Verify in-memory config updated
+	c.CfgMu.RLock()
+	assert.Equal(t, "/tmp/custom-uploads", c.Cfg.UploadDir)
+	c.CfgMu.RUnlock()
+
+	// Verify file was written with the new path
+	data, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "/tmp/custom-uploads")
+}
+
+func TestPutConfigRejectsRelativeUploadDir(t *testing.T) {
+	c := newTestCore()
+
+	body := `{"upload_dir": "relative/path"}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "upload_dir must be a non-empty absolute path")
+}
+
 // TestPutConfigRollsBackOnWriteFailure verifies that when writeConfig fails,
 // in-memory state is restored so memory and disk stay consistent.
 func TestPutConfigRollsBackOnWriteFailure(t *testing.T) {

@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -68,8 +66,9 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register("agent.module", m)
 
 	if m.uploadDir == "" {
-		home, _ := os.UserHomeDir()
-		m.uploadDir = filepath.Join(home, "tmp", "purdex-upload")
+		c.CfgMu.RLock()
+		m.uploadDir = c.Cfg.UploadDir
+		c.CfgMu.RUnlock()
 	}
 
 	// Prober (shared across all providers)
@@ -90,8 +89,12 @@ func (m *Module) Init(c *core.Core) error {
 	c.OnConfigChange(func() {
 		c.CfgMu.RLock()
 		cmds := c.Cfg.Detect.CCCommands
+		newDir := c.Cfg.UploadDir
 		c.CfgMu.RUnlock()
 		m.prober.UpdateProcessNames("cc", cmds)
+		if newDir != "" {
+			m.uploadDir = newDir
+		}
 	})
 
 	// Codex provider
