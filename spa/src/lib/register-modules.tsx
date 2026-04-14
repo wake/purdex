@@ -53,51 +53,51 @@ export function registerBuiltinModules(): void {
   registerModule({
     id: 'new-tab',
     name: 'New Tab',
-    pane: {
+    panes: [{
       kind: 'new-tab',
       component: NewTabPaneWrapper,
-    },
+    }],
   })
   registerModule({
     id: 'session',
     name: 'Session',
-    pane: { kind: 'tmux-session', component: SessionPaneContent },
+    panes: [{ kind: 'tmux-session', component: SessionPaneContent }],
   })
   registerModule({
     id: 'dashboard',
     name: 'Dashboard',
-    pane: { kind: 'dashboard', component: DashboardPage },
+    panes: [{ kind: 'dashboard', component: DashboardPage }],
   })
   registerModule({
     id: 'history',
     name: 'History',
-    pane: { kind: 'history', component: HistoryPage },
+    panes: [{ kind: 'history', component: HistoryPage }],
   })
   registerModule({
     id: 'settings',
     name: 'Settings',
-    pane: { kind: 'settings', component: SettingsPage },
+    panes: [{ kind: 'settings', component: SettingsPage }],
   })
   registerModule({
     id: 'browser',
     name: 'Browser',
-    pane: {
+    panes: [{
       kind: 'browser',
       component: BrowserPaneWrapper,
-    },
+    }],
   })
   registerModule({
     id: 'memory-monitor',
     name: 'Memory Monitor',
-    pane: {
+    panes: [{
       kind: 'memory-monitor',
       component: MemoryMonitorPaneWrapper,
-    },
+    }],
   })
   registerModule({
     id: 'hosts',
     name: 'Hosts',
-    pane: { kind: 'hosts', component: HostPage },
+    panes: [{ kind: 'hosts', component: HostPage }],
   })
   registerModule({
     id: 'files',

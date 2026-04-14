@@ -57,7 +57,7 @@ export interface CommandContext {
 export interface ModuleDefinition {
   id: string
   name: string
-  pane?: PaneDefinition
+  panes?: PaneDefinition[]
   views?: ViewDefinition[]
   workspaceConfig?: ConfigDef[]
   globalConfig?: ConfigDef[]
@@ -88,7 +88,9 @@ export function getModules(): ModuleDefinition[] {
 
 export function getPaneRenderer(kind: string): PaneDefinition | undefined {
   for (const m of modules.values()) {
-    if (m.pane?.kind === kind) return m.pane
+    for (const p of m.panes ?? []) {
+      if (p.kind === kind) return p
+    }
   }
   return undefined
 }

@@ -16,8 +16,8 @@ const MockDashboardRenderer = () => (
 beforeEach(() => {
   cleanup()
   clearModuleRegistry()
-  registerModule({ id: 'session', name: 'Session', pane: { kind: 'tmux-session', component: MockSessionRenderer } })
-  registerModule({ id: 'dashboard', name: 'Dashboard', pane: { kind: 'dashboard', component: MockDashboardRenderer } })
+  registerModule({ id: 'session', name: 'Session', panes: [{ kind: 'tmux-session', component: MockSessionRenderer }] })
+  registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: MockDashboardRenderer }] })
   useUISettingsStore.setState({ keepAliveCount: 0 })
 })
 
