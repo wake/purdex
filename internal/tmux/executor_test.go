@@ -195,3 +195,34 @@ func TestTmuxAliveSetFalse(t *testing.T) {
 		t.Error("TmuxAlive() = true after SetAlive(false), want false")
 	}
 }
+
+func TestPasteText(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	fake.AddSession("test", "/tmp")
+
+	err := fake.PasteText("test", "/path/to/image.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pastes := fake.PastesSent()
+	if len(pastes) != 1 {
+		t.Fatalf("want 1 paste call, got %d", len(pastes))
+	}
+	if pastes[0].Target != "test" {
+		t.Errorf("want target 'test', got %q", pastes[0].Target)
+	}
+	if pastes[0].Text != "/path/to/image.png" {
+		t.Errorf("want text '/path/to/image.png', got %q", pastes[0].Text)
+	}
+}
+
+func TestPasteTextFail(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	fake.FailPasteText = true
+
+	err := fake.PasteText("test", "anything")
+	if err == nil {
+		t.Error("want error when FailPasteText is true")
+	}
+}

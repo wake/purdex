@@ -89,31 +89,13 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
           <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">
             {t('workspace.change_icon') ?? 'Icon'}
           </h3>
-          {/* Weight toggle */}
-          {ws.icon && (
-            <div className="flex items-center gap-2 mb-3">
-              <span className="text-xs text-text-tertiary">Style</span>
-              {(['bold', 'regular', 'thin', 'light', 'fill', 'duotone'] as const).map((w) => (
-                <button
-                  key={w}
-                  onClick={() => setWorkspaceIconWeight(workspaceId, w)}
-                  className={`px-2.5 py-1 rounded text-xs capitalize cursor-pointer transition-colors ${
-                    (ws.iconWeight ?? 'bold') === w
-                      ? 'bg-accent/20 text-accent font-semibold'
-                      : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
-                  }`}
-                >
-                  {w}
-                </button>
-              ))}
-            </div>
-          )}
           <WorkspaceIconPicker
             currentIcon={ws.icon}
             onSelect={handleIconSelect}
             onCancel={() => {}}
             inline
             currentWeight={ws.iconWeight}
+            onWeightChange={(w) => setWorkspaceIconWeight(workspaceId, w)}
           />
         </section>
 

@@ -90,15 +90,11 @@ func TestHandleUpload_Success(t *testing.T) {
 	_, err := os.Stat(filepath.Join(m.uploadDir, "my-sess", "test.png"))
 	assert.NoError(t, err)
 
-	// send-keys should have been called with quoted path + literal flag.
-	calls := fake.RawKeysSent()
-	require.Len(t, calls, 1)
-	assert.Equal(t, "my-sess", calls[0].Target)
-	assert.Contains(t, calls[0].Keys, "-l")
-	// Path should be quoted and space-prefixed.
-	injected := calls[0].Keys[len(calls[0].Keys)-1]
-	assert.True(t, injected[0] == ' ', "should start with space")
-	assert.Contains(t, injected, `"`)
+	// PasteText should have been called with the file path.
+	pastes := fake.PastesSent()
+	require.Len(t, pastes, 1)
+	assert.Equal(t, "my-sess", pastes[0].Target)
+	assert.Contains(t, pastes[0].Text, "test.png")
 
 }
 
@@ -164,11 +160,11 @@ func TestHandleUpload_SessionNotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
-// TestHandleUpload_SendKeysFail verifies that when SendKeysRaw fails the
+// TestHandleUpload_PasteTextFail verifies that when PasteText fails the
 // uploaded file is removed from disk (no orphaned files).
-func TestHandleUpload_SendKeysFail(t *testing.T) {
+func TestHandleUpload_PasteTextFail(t *testing.T) {
 	m, fake := newUploadTestModule(t)
-	fake.FailSendKeys = true
+	fake.FailPasteText = true
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
