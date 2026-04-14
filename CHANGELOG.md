@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.127] - 2026-04-14
+
+### 修復
+
+- **spa**：standalone tab 聚焦時 Home badge 正確顯示其他 standalone tabs 的未讀數，排除聚焦 tab 本身的計數（#253, #355）
+
 ## [1.0.0-alpha.126] - 2026-04-14
 
 ### 修復
