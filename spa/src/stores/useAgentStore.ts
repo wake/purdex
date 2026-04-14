@@ -147,7 +147,7 @@ export const useAgentStore = create<AgentState>()(
     {
       name: STORAGE_KEYS.AGENT,
       storage: purdexStorage,
-      version: 2,  // bumped from 1
+      version: 3,
       partialize: (state) => ({ tabIndicatorStyle: state.tabIndicatorStyle }),
     },
   ),

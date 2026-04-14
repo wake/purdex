@@ -57,7 +57,7 @@ beforeEach(() => {
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
   useHostStore.setState({ runtime: {} })
-  useAgentStore.setState({ unread: {}, statuses: {}, subagents: {}, tabIndicatorStyle: 'overlay' })
+  useAgentStore.setState({ unread: {}, statuses: {}, subagents: {}, tabIndicatorStyle: 'replace' })
   useI18nStore.setState({ t: (k: string) => k })
 })
 
