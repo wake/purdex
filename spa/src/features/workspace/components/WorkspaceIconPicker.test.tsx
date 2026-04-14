@@ -107,6 +107,15 @@ describe('WorkspaceIconPicker', () => {
     expect(boldBtn.className).not.toContain('bg-accent/20')
   })
 
+  it('calls onWeightChange when weight is switched', () => {
+    const onWeightChange = vi.fn()
+    render(<WorkspaceIconPicker currentIcon={undefined} onSelect={vi.fn()} onCancel={vi.fn()} onWeightChange={onWeightChange} />)
+    fireEvent.click(screen.getByTestId('weight-regular'))
+    expect(onWeightChange).toHaveBeenCalledWith('regular')
+    fireEvent.click(screen.getByTestId('weight-duotone'))
+    expect(onWeightChange).toHaveBeenCalledWith('duotone')
+  })
+
   it('shows empty state when search has no results', () => {
     render(<WorkspaceIconPicker currentIcon={undefined} onSelect={vi.fn()} onCancel={vi.fn()} />)
     const search = screen.getByPlaceholderText(/search/i)

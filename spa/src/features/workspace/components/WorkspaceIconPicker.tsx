@@ -66,9 +66,10 @@ interface Props {
   onCancel: () => void
   inline?: boolean
   currentWeight?: IconWeight
+  onWeightChange?: (weight: IconWeight) => void
 }
 
-export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline, currentWeight = 'bold' }: Props) {
+export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline, currentWeight = 'bold', onWeightChange }: Props) {
   const t = useI18nStore((s) => s.t)
   const categories = Object.keys(CURATED_ICON_CATEGORIES)
   const [activeCategory, setActiveCategory] = useState(categories[0])
@@ -129,7 +130,7 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline, c
           <button
             key={w}
             data-testid={`weight-${w}`}
-            onClick={() => setWeight(w)}
+            onClick={() => { setWeight(w); onWeightChange?.(w) }}
             className={`px-2 py-0.5 rounded text-[11px] capitalize cursor-pointer transition-colors ${
               weight === w
                 ? 'bg-accent/20 text-accent font-semibold'
