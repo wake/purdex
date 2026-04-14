@@ -24,6 +24,11 @@ import { FolderOpen } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
 import type { PaneContent } from '../types/tab'
 import type { PaneRendererProps } from './module-registry'
+import { EditorPane } from '../components/editor/EditorPane'
+import { EditorNewTabSection } from '../components/editor/EditorNewTabSection'
+import { InAppBackend } from './fs-backend-inapp'
+import { registerFsBackend } from './fs-backend'
+import { registerFileOpener } from './file-opener-registry'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
   const handleSelect = (content: PaneContent) => {
@@ -99,6 +104,28 @@ export function registerBuiltinModules(): void {
     name: 'Hosts',
     panes: [{ kind: 'hosts', component: HostPage }],
   })
+
+  // Editor module
+  registerModule({
+    id: 'editor',
+    name: 'Editor',
+    panes: [{ kind: 'editor', component: EditorPane }],
+  })
+
+  // Register InApp FS backend
+  const inAppBackend = new InAppBackend()
+  registerFsBackend('inapp', inAppBackend)
+
+  // Register file opener for text files
+  registerFileOpener({
+    id: 'monaco-editor',
+    label: 'Text Editor',
+    icon: 'File',
+    match: (file) => !file.isDirectory,
+    priority: 'default',
+    createContent: (source, file) => ({ kind: 'editor', source, filePath: file.path }) as PaneContent,
+  })
+
   registerModule({
     id: 'files',
     name: 'Files',
@@ -142,6 +169,14 @@ export function registerBuiltinModules(): void {
     icon: 'List',
     order: 0,
     component: SessionSection,
+  })
+
+  registerNewTabProvider({
+    id: 'editor',
+    label: 'editor.provider_label',
+    icon: 'File',
+    order: 5,
+    component: EditorNewTabSection,
   })
 
   const caps = getPlatformCapabilities()
