@@ -117,8 +117,10 @@ func TestHandleList_RelativePath(t *testing.T) {
 }
 
 func TestHandleList_NonExistentDir(t *testing.T) {
+	nonExistent := filepath.Join(t.TempDir(), "no_such_dir")
+
 	m := New()
-	r := httptest.NewRequest(http.MethodGet, "/api/files?path=/tmp/nonexistent_purdex_test_xxx", nil)
+	r := httptest.NewRequest(http.MethodGet, "/api/files?path="+nonExistent, nil)
 	w := httptest.NewRecorder()
 
 	m.handleList(w, r)
