@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.143] - 2026-04-16
+
+### 功能
+
+- **spa**：`WorkspaceIconPicker` 和 `WorkspaceDeleteDialog` 加入 Escape 鍵關閉支援，與其他 overlay 元件行為一致（#195, #378）
+
 ## [1.0.0-alpha.142] - 2026-04-16
 
 ### 修復
