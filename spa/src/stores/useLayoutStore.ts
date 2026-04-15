@@ -128,6 +128,7 @@ export const useLayoutStore = create<LayoutState>()(
       reconcileViews: () =>
         set((state) => {
           const validIds = new Set(getAllViews().map((v) => v.id))
+          if (validIds.size === 0) return state
           const reconciled = { ...state.regions }
           for (const key of Object.keys(reconciled) as SidebarRegion[]) {
             const region = reconciled[key]
@@ -135,7 +136,9 @@ export const useLayoutStore = create<LayoutState>()(
             const activeViewId =
               region.activeViewId && filtered.includes(region.activeViewId)
                 ? region.activeViewId
-                : filtered[0]
+                : region.activeViewId !== undefined
+                  ? filtered[0]
+                  : undefined
             reconciled[key] = { ...region, views: filtered, activeViewId }
           }
           const allEmpty = Object.values(reconciled).every((r) => r.views.length === 0)
