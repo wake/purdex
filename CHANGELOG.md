@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.133] - 2026-04-15
+
+### 重構
+
+- **spa**：將 `SidebarRegion` 型別從 `types/tab.ts` 搬移至 `types/layout.ts`，釐清 layout 系統與 tab 系統的型別邊界（#366）
+
 ## [1.0.0-alpha.132] - 2026-04-15
 
 ### 修復
