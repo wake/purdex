@@ -14,13 +14,7 @@ registerBuiltinLocales()
 registerBuiltinThemes()
 registerBuiltinModules()
 
-// Only set defaults if not already persisted (first install)
-const regions = useLayoutStore.getState().regions
-const hasAnyView = Object.values(regions).some((r) => r.views.length > 0)
-if (!hasAnyView) {
-  useLayoutStore.getState().setRegionViews('primary-sidebar', ['file-tree-workspace'])
-  useLayoutStore.getState().setActiveView('primary-sidebar', 'file-tree-workspace')
-}
+useLayoutStore.getState().reconcileViews()
 
 // Cross-store subscription: auto-markRead when active tab changes to a session.
 // Inlined here to avoid circular dependency between active-session.ts and useAgentStore.
