@@ -16,6 +16,7 @@ export { WorkspaceEmptyState } from './components/WorkspaceEmptyState'
 
 // Lib
 export { getVisibleTabIds } from './lib/getVisibleTabIds'
+export { nextWorkspaceName } from './lib/workspace-naming'
 
 // Re-export shared types from types/tab.ts
 export type { Workspace } from '../../types/tab'
