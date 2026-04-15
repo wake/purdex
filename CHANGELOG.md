@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.135] - 2026-04-16
+
+### 修復
+
+- **dev**：設定頁檢查更新觸發的自動編譯，改為先執行 `pnpm install --frozen-lockfile` 與 icon 生成，再跑 `electron-vite build`；同時改善步驟化錯誤訊息，避免缺依賴時反覆編譯失敗（#369）
+
 ## [1.0.0-alpha.134] - 2026-04-15
 
 ### 測試
