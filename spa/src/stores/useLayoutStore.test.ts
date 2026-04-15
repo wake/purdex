@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useLayoutStore } from './useLayoutStore'
 import type { SidebarRegion } from '../types/layout'
+import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 
 beforeEach(() => {
   useLayoutStore.setState(useLayoutStore.getInitialState())
+  clearModuleRegistry()
 })
 
 describe('useLayoutStore', () => {
@@ -177,5 +179,172 @@ describe('reorderViews', () => {
     useLayoutStore.getState().setRegionViews('primary-sidebar', ['a', 'b', 'c'])
     useLayoutStore.getState().reorderViews('primary-sidebar', ['b', 'x'])
     expect(useLayoutStore.getState().regions['primary-sidebar'].views).toEqual(['b', 'a', 'c'])
+  })
+})
+
+describe('reconcileViews', () => {
+  it('removes stale view IDs', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['valid-view', 'stale-view'])
+    registerModule({
+      id: 'test-mod',
+      name: 'Test',
+      views: [{
+        id: 'valid-view',
+        label: 'Valid',
+        icon: () => null,
+        scope: 'workspace',
+        component: () => null,
+      }],
+    })
+    useLayoutStore.getState().reconcileViews()
+    expect(useLayoutStore.getState().regions['primary-sidebar'].views).toEqual(['valid-view'])
+  })
+
+  it('fixes activeViewId when stale', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['valid-view', 'stale-view'])
+    useLayoutStore.getState().setActiveView('primary-sidebar', 'stale-view')
+    registerModule({
+      id: 'test-mod',
+      name: 'Test',
+      views: [{
+        id: 'valid-view',
+        label: 'Valid',
+        icon: () => null,
+        scope: 'workspace',
+        component: () => null,
+      }],
+    })
+    useLayoutStore.getState().reconcileViews()
+    expect(useLayoutStore.getState().regions['primary-sidebar'].activeViewId).toBe('valid-view')
+  })
+
+  it('sets defaults when all regions empty', () => {
+    registerModule({
+      id: 'test-mod',
+      name: 'Test',
+      views: [{
+        id: 'file-tree-workspace',
+        label: 'File Tree',
+        icon: () => null,
+        scope: 'workspace',
+        component: () => null,
+      }],
+    })
+    useLayoutStore.getState().reconcileViews()
+    expect(useLayoutStore.getState().regions['primary-sidebar'].views).toEqual(['file-tree-workspace'])
+    expect(useLayoutStore.getState().regions['primary-sidebar'].activeViewId).toBe('file-tree-workspace')
+  })
+
+  it('preserves valid views unchanged', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['view-a', 'view-b'])
+    registerModule({
+      id: 'test-mod',
+      name: 'Test',
+      views: [
+        {
+          id: 'view-a',
+          label: 'A',
+          icon: () => null,
+          scope: 'workspace',
+          component: () => null,
+        },
+        {
+          id: 'view-b',
+          label: 'B',
+          icon: () => null,
+          scope: 'workspace',
+          component: () => null,
+        },
+      ],
+    })
+    useLayoutStore.getState().reconcileViews()
+    expect(useLayoutStore.getState().regions['primary-sidebar'].views).toEqual(['view-a', 'view-b'])
+  })
+
+  it('preserves valid activeViewId', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['view-a', 'view-b'])
+    useLayoutStore.getState().setActiveView('primary-sidebar', 'view-b')
+    registerModule({
+      id: 'test-mod',
+      name: 'Test',
+      views: [
+        {
+          id: 'view-a',
+          label: 'A',
+          icon: () => null,
+          scope: 'workspace',
+          component: () => null,
+        },
+        {
+          id: 'view-b',
+          label: 'B',
+          icon: () => null,
+          scope: 'workspace',
+          component: () => null,
+        },
+      ],
+    })
+    useLayoutStore.getState().reconcileViews()
+    expect(useLayoutStore.getState().regions['primary-sidebar'].activeViewId).toBe('view-b')
+  })
+
+  it('no-ops when module registry is empty', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['some-view'])
+    useLayoutStore.getState().setActiveView('primary-sidebar', 'some-view')
+    // No registerModule — registry is empty
+    useLayoutStore.getState().reconcileViews()
+    expect(useLayoutStore.getState().regions['primary-sidebar'].views).toEqual(['some-view'])
+    expect(useLayoutStore.getState().regions['primary-sidebar'].activeViewId).toBe('some-view')
+  })
+
+  it('keeps allEmpty when file-tree-workspace is not registered', () => {
+    registerModule({
+      id: 'test-mod',
+      name: 'Test',
+      views: [{
+        id: 'other-view',
+        label: 'Other',
+        icon: () => null,
+        scope: 'workspace',
+        component: () => null,
+      }],
+    })
+    useLayoutStore.getState().reconcileViews()
+    expect(useLayoutStore.getState().regions['primary-sidebar'].views).toEqual([])
+  })
+
+  it('removes stale views from non-primary-sidebar regions', () => {
+    useLayoutStore.getState().setRegionViews('secondary-sidebar', ['valid-view', 'stale-view'])
+    registerModule({
+      id: 'test-mod',
+      name: 'Test',
+      views: [{
+        id: 'valid-view',
+        label: 'Valid',
+        icon: () => null,
+        scope: 'workspace',
+        component: () => null,
+      }],
+    })
+    useLayoutStore.getState().reconcileViews()
+    expect(useLayoutStore.getState().regions['secondary-sidebar'].views).toEqual(['valid-view'])
+  })
+
+  it('preserves undefined activeViewId when no stale views', () => {
+    useLayoutStore.getState().setRegionViews('primary-sidebar', ['view-a'])
+    // activeViewId is undefined by default
+    registerModule({
+      id: 'test-mod',
+      name: 'Test',
+      views: [{
+        id: 'view-a',
+        label: 'A',
+        icon: () => null,
+        scope: 'workspace',
+        component: () => null,
+      }],
+    })
+    useLayoutStore.getState().reconcileViews()
+    expect(useLayoutStore.getState().regions['primary-sidebar'].activeViewId).toBeUndefined()
   })
 })

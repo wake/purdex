@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { SidebarRegion } from '../types/layout'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
+import { getAllViews } from '../lib/module-registry'
 
 const MIN_WIDTH = 120
 const MAX_WIDTH = 600
@@ -26,6 +27,7 @@ interface LayoutState {
   addView: (region: SidebarRegion, viewId: string) => void
   removeView: (region: SidebarRegion, viewId: string) => void
   reorderViews: (region: SidebarRegion, views: string[]) => void
+  reconcileViews: () => void
 }
 
 function createDefaultRegions(): Record<SidebarRegion, RegionState> {
@@ -122,11 +124,39 @@ export const useLayoutStore = create<LayoutState>()(
           }
           return updateRegion(state, region, { views: reordered })
         }),
+
+      reconcileViews: () =>
+        set((state) => {
+          const validIds = new Set(getAllViews().map((v) => v.id))
+          if (validIds.size === 0) return state
+          const reconciled = { ...state.regions }
+          for (const key of Object.keys(reconciled) as SidebarRegion[]) {
+            const region = reconciled[key]
+            const filtered = region.views.filter((id) => validIds.has(id))
+            const activeViewId =
+              region.activeViewId && filtered.includes(region.activeViewId)
+                ? region.activeViewId
+                : region.activeViewId !== undefined
+                  ? filtered[0]
+                  : undefined
+            reconciled[key] = { ...region, views: filtered, activeViewId }
+          }
+          const allEmpty = Object.values(reconciled).every((r) => r.views.length === 0)
+          if (allEmpty && validIds.has('file-tree-workspace')) {
+            reconciled['primary-sidebar'] = {
+              ...reconciled['primary-sidebar'],
+              views: ['file-tree-workspace'],
+              activeViewId: 'file-tree-workspace',
+            }
+          }
+          return { regions: reconciled }
+        }),
     }),
     {
       name: STORAGE_KEYS.LAYOUT,
       storage: purdexStorage,
       version: 1,
+      partialize: (state) => ({ regions: state.regions }),
     },
   ),
 )
