@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.136] - 2026-04-16
+
+### 重構
+
+- **spa**：`useLayoutStore` 新增 `partialize` 明確持久化欄位 + `reconcileViews()` 啟動時驗證 views 有效性、清除 stale ID、首次安裝自動填入 defaults；移除 `main.tsx` 的 ad-hoc `hasAnyView` 邏輯（#370）
+
 ## [1.0.0-alpha.135] - 2026-04-16
 
 ### 修復
