@@ -21,7 +21,12 @@ export async function checkHealth(
     const start = performance.now()
     const res = await fetch(`${baseUrl}/api/health`, { signal: ctrl1.signal })
     const latency = Math.round(performance.now() - start)
-    const body = await res.json()
+    let body: { mode?: string } = {}
+    try {
+      body = await res.json()
+    } catch {
+      return { daemon: 'connected', tmux: 'unavailable', latency, mode: 'normal' }
+    }
     const mode = (body.mode ?? 'normal') as 'pairing' | 'pending' | 'normal'
 
     const token = getToken?.()
