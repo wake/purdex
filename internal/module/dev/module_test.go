@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,7 +98,7 @@ func TestStop_CancelsBuild(t *testing.T) {
 func TestRunBuild_ClearsErrorOnSuccess(t *testing.T) {
 	m := &DevModule{
 		repoRoot:   t.TempDir(),
-		buildCmd:    func() error { return nil },
+		buildCmd:   func() error { return nil },
 		building:   true,
 		buildError: "previous error",
 	}
@@ -106,5 +108,61 @@ func TestRunBuild_ClearsErrorOnSuccess(t *testing.T) {
 
 	if m.buildError != "" {
 		t.Errorf("buildError: want empty after success, got %q", m.buildError)
+	}
+}
+
+func TestDefaultBuild_RunsInstallGenerateAndBuild(t *testing.T) {
+	repoRoot := t.TempDir()
+	m := &DevModule{
+		repoRoot: repoRoot,
+		stopCtx:  context.Background(),
+	}
+
+	var calls [][]string
+	m.execCmd = func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
+		if dir != repoRoot {
+			t.Fatalf("dir: want %s, got %s", repoRoot, dir)
+		}
+		calls = append(calls, append([]string{name}, args...))
+		return nil, nil
+	}
+
+	if err := m.defaultBuild(); err != nil {
+		t.Fatalf("defaultBuild: %v", err)
+	}
+
+	want := [][]string{
+		{"pnpm", "install", "--frozen-lockfile"},
+		{"node", "spa/scripts/generate-icon-data.mjs"},
+		{"pnpm", "exec", "electron-vite", "build"},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("commands:\nwant %#v\ngot  %#v", want, calls)
+	}
+}
+
+func TestDefaultBuild_ReturnsStepOutputOnFailure(t *testing.T) {
+	m := &DevModule{
+		repoRoot: t.TempDir(),
+		stopCtx:  context.Background(),
+	}
+
+	m.execCmd = func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
+		if name == "pnpm" && len(args) > 0 && args[0] == "install" {
+			return []byte("ERR_PNPM_OUTDATED_LOCKFILE"), fmt.Errorf("exit status 1")
+		}
+		return nil, nil
+	}
+
+	err := m.defaultBuild()
+	if err == nil {
+		t.Fatal("defaultBuild: want error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "dependency install failed") {
+		t.Fatalf("error: want dependency install context, got %q", msg)
+	}
+	if !strings.Contains(msg, "ERR_PNPM_OUTDATED_LOCKFILE") {
+		t.Fatalf("error: want command output, got %q", msg)
 	}
 }
