@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createTab, createWorkspace, isStandaloneTab } from './tab'
-import type { SidebarRegion } from './tab'
+import type { SidebarRegion } from './layout'
 
 describe('createTab', () => {
   it('creates a tab with session content', () => {

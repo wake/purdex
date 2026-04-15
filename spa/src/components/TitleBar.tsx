@@ -1,7 +1,8 @@
 import { Columns, Rows, GridFour, Square, SidebarSimple, SquareHalfBottom } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
 import { useLayoutStore } from '../stores/useLayoutStore'
-import type { LayoutPattern, SidebarRegion } from '../types/tab'
+import type { LayoutPattern } from '../types/tab'
+import type { SidebarRegion } from '../types/layout'
 
 interface Props {
   title: string

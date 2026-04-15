@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useLayoutStore } from './useLayoutStore'
-import type { SidebarRegion } from '../types/tab'
+import type { SidebarRegion } from '../types/layout'
 
 beforeEach(() => {
   useLayoutStore.setState(useLayoutStore.getInitialState())

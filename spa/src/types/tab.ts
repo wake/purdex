@@ -50,14 +50,6 @@ export interface Workspace {
   activeTabId: string | null
   moduleConfig?: Record<string, Record<string, unknown>>
 }
-
-// === Sidebar Region (layout system) ===
-export type SidebarRegion =
-  | 'primary-sidebar'
-  | 'primary-panel'
-  | 'secondary-panel'
-  | 'secondary-sidebar'
-
 // === Factories ===
 
 export function createTab(content: PaneContent, opts?: { pinned?: boolean }): Tab {

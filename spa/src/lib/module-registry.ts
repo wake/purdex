@@ -1,8 +1,9 @@
 import type React from 'react'
-import type { Pane, SidebarRegion } from '../types/tab'
+import type { Pane } from '../types/tab'
+import type { SidebarRegion } from '../types/layout'
 
 // Re-export for convenience
-export type { SidebarRegion } from '../types/tab'
+export type { SidebarRegion } from '../types/layout'
 
 // === Types ===
 
