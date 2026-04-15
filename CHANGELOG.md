@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.140] - 2026-04-16
+
+### 雜務
+
+- **daemon**：`cmd/pdx/quick.go` 更名為 `pairing_init.go`，名稱與實際職責一致
+- **spa**：刪除 dead i18n keys（`hosts.pairing_connecting`、`hosts.saving`）
+- **spa**：AddHostDialog IP/port/token 輸入加 `.trim()` 防止空白造成 URL 錯誤
+- **spa**：AddHostDialog 加 `aria-labelledby` 改善無障礙
+- **docs**：修正 plan doc stale ref（`internal/core/base58` → `internal/pairing/base58`）及 spec L75 文字（#166, #375）
+
 ## [1.0.0-alpha.139] - 2026-04-16
 
 ### 修復
