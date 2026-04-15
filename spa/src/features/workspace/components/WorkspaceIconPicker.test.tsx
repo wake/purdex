@@ -122,4 +122,11 @@ describe('WorkspaceIconPicker', () => {
     fireEvent.change(search, { target: { value: 'xyznonexistent' } })
     expect(screen.getByText('No results found')).toBeInTheDocument()
   })
+
+  it('calls onCancel on Escape key', () => {
+    const onCancel = vi.fn()
+    render(<WorkspaceIconPicker currentIcon={undefined} onSelect={vi.fn()} onCancel={onCancel} />)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalled()
+  })
 })

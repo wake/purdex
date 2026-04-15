@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Trash, Warning } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 
@@ -17,6 +17,15 @@ interface Props {
 export function WorkspaceDeleteDialog({ workspaceName, tabs, onConfirm, onCancel }: Props) {
   const t = useI18nStore((s) => s.t)
   const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set(tabs.map((tab) => tab.id)))
+
+  // Close on Escape key
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel()
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [onCancel])
 
   const toggleTab = (tabId: string) => {
     setCheckedIds((prev) => {
