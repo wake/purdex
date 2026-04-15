@@ -22,8 +22,8 @@
 | `internal/core/pairing_state_test.go` | PairingState 測試 |
 | `internal/core/setup_secret.go` | SetupSecretStore（5 min TTL, one-time, single active） |
 | `internal/core/setup_secret_test.go` | SetupSecretStore 測試 |
-| `internal/core/base58.go` | Base58 encode/decode + 配對碼編碼 |
-| `internal/core/base58_test.go` | Base58 + 配對碼測試 |
+| `internal/pairing/base58.go` | Base58 encode/decode + 配對碼編碼 |
+| `internal/pairing/base58_test.go` | Base58 + 配對碼測試 |
 | `internal/core/pairing_handler.go` | POST /api/pair/verify + /api/pair/setup handlers |
 | `internal/core/pairing_handler_test.go` | 配對 handler 測試 |
 | `internal/core/token_handler.go` | POST /api/token/auth handler |
@@ -650,13 +650,13 @@ git commit -m "feat(core): integrate PairingState + SetupSecrets + register pair
 ## Task 6: Base58 編解碼 + 配對碼
 
 **Files:**
-- Create: `internal/core/base58.go`
-- Create: `internal/core/base58_test.go`
+- Create: `internal/pairing/base58.go`
+- Create: `internal/pairing/base58_test.go`
 
 - [ ] **Step 1: Write Base58 and pairing code tests**
 
 ```go
-// internal/core/base58_test.go
+// internal/pairing/base58_test.go
 package core
 
 import (
@@ -774,7 +774,7 @@ Expected: compilation error
 - [ ] **Step 3: Implement Base58 + pairing code**
 
 ```go
-// internal/core/base58.go
+// internal/pairing/base58.go
 package core
 
 import (
@@ -909,7 +909,7 @@ Expected: all tests PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/core/base58.go internal/core/base58_test.go
+git add internal/pairing/base58.go internal/pairing/base58_test.go
 git commit -m "feat(core): Base58 codec + pairing code encode/decode (13-char, 4-4-5)"
 ```
 

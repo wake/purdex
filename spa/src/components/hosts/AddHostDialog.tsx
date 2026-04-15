@@ -93,35 +93,38 @@ export function AddHostDialog({ onClose }: Props) {
   }
 
   const handleConfirm = async () => {
+    const trimmedIp = ip.trim()
+    const trimmedPort = port.trim()
+    const trimmedToken = token.trim()
     setStage('saving')
     setError('')
 
     try {
       if (useToken) {
-        const base = `http://${ip}:${port || '7860'}`
-        await fetchTokenAuth(base, token)
+        const base = `http://${trimmedIp}:${trimmedPort || '7860'}`
+        await fetchTokenAuth(base, trimmedToken)
       } else {
-        const base = `http://${ip}:${port || '7860'}`
-        await fetchPairSetup(base, setupSecret, token)
+        const base = `http://${trimmedIp}:${trimmedPort || '7860'}`
+        await fetchPairSetup(base, setupSecret, trimmedToken)
       }
 
       // Check for existing host with same IP:port
-      const portNum = parseInt(port, 10) || 7860
+      const portNum = parseInt(trimmedPort, 10) || 7860
       const existingHosts = useHostStore.getState().hosts
       const existingId = Object.keys(existingHosts).find((id) => {
         const h = existingHosts[id]
-        return h.ip === ip && h.port === portNum
+        return h.ip === trimmedIp && h.port === portNum
       })
 
       if (existingId) {
         // Update existing host's token instead of creating a duplicate
-        useHostStore.getState().updateHost(existingId, { token: token || undefined })
+        useHostStore.getState().updateHost(existingId, { token: trimmedToken || undefined })
       } else {
         addHost({
-          name: ip,
-          ip,
+          name: trimmedIp,
+          ip: trimmedIp,
           port: portNum,
-          token: token || undefined,
+          token: trimmedToken || undefined,
         })
       }
       setStage('done')
@@ -165,11 +168,11 @@ export function AddHostDialog({ onClose }: Props) {
   const tokenValid = token.length >= 20
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true" aria-labelledby="add-host-dialog-title" onClick={onClose}>
       <div className="bg-surface-primary border border-border-default rounded-lg shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
-          <h2 className="text-sm font-semibold">{t('hosts.add_host')}</h2>
+          <h2 id="add-host-dialog-title" className="text-sm font-semibold">{t('hosts.add_host')}</h2>
           <button onClick={onClose} className="text-text-muted hover:text-text-primary cursor-pointer">
             <X size={16} />
           </button>

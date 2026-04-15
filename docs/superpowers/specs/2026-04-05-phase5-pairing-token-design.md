@@ -72,7 +72,7 @@ Phase 1-4 完成 storage 抽象、識別系統、連線偵測、錯誤 UI。Daem
 5. 回傳 `{ ip: "x.x.x.x", port: number, secret: string(hex) }`
 6. 解碼失敗或 byte 數不為 9 → 顯示「無效的配對碼」，不發起請求
 
-**注意**：Base58 decode 時必須保留前導 `1` 作為零值 byte，不可修剪。
+**注意**：`DecodePairingCode` 直接將 Base58 字串解碼為 `big.Int`，再以 `FillBytes` 填入固定 9 bytes 陣列。`base58EncodeFixed` 的前導 `'1'` 是數值補位（不是零值 byte 語意），解碼時不採用 leading-1 → zero-byte 慣例。
 
 ### Daemon 啟動模式
 

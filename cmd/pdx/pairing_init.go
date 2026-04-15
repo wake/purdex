@@ -1,4 +1,4 @@
-// cmd/pdx/quick.go
+// cmd/pdx/pairing_init.go
 package main
 
 import (

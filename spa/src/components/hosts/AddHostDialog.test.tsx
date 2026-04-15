@@ -150,6 +150,40 @@ describe('AddHostDialog', () => {
     expect(hosts[hostIds[0]].port).toBe(7860)
   })
 
+  it('trims whitespace from IP, port, and token before saving (token route)', async () => {
+    vi.spyOn(hostApi, 'fetchTokenAuth').mockResolvedValue({ ok: true })
+    const onClose = vi.fn()
+
+    render(<AddHostDialog onClose={onClose} />)
+
+    // Switch to token route
+    fireEvent.click(screen.getByRole('checkbox'))
+
+    // Fill IP, port, and token with leading/trailing spaces
+    fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: '  10.0.0.1  ' } })
+    fireEvent.change(screen.getByPlaceholderText('7860'), { target: { value: ' 7860 ' } })
+    const tokenInput = screen.getByPlaceholderText('purdex_...')
+    fireEvent.change(tokenInput, { target: { value: '  purdex_' + 'a'.repeat(40) + '  ' } })
+
+    fireEvent.click(screen.getByText('Confirm'))
+
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalled()
+    })
+
+    // Verify fetchTokenAuth was called with trimmed values
+    expect(hostApi.fetchTokenAuth).toHaveBeenCalledWith(
+      'http://10.0.0.1:7860',
+      'purdex_' + 'a'.repeat(40),
+    )
+
+    // Verify host was saved with trimmed IP
+    const { hosts } = useHostStore.getState()
+    const hostIds = Object.keys(hosts)
+    expect(hostIds.length).toBe(1)
+    expect(hosts[hostIds[0]].ip).toBe('10.0.0.1')
+  })
+
   it('confirms with pairing route: calls fetchPairSetup + addHost + onClose', async () => {
     vi.spyOn(hostApi, 'fetchPairVerify').mockResolvedValue({ setupSecret: 'secret123' })
     vi.spyOn(hostApi, 'fetchPairSetup').mockResolvedValue({ ok: true })
