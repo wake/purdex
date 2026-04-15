@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.139] - 2026-04-16
+
+### 修復
+
+- **spa**：Workspace 自動命名改用 `nextWorkspaceName()` 尋找最小未使用的 `Workspace N`，避免刪除 workspace 後新建時產生重複名稱（#199, #374）
+
 ## [1.0.0-alpha.138] - 2026-04-16
 
 ### 修復
