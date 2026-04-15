@@ -101,6 +101,7 @@ describe('checkHealth', () => {
     )
     const result = await checkHealth('http://localhost:7860', () => 'mytoken')
     expect(result.daemon).toBe('connected')
+    expect(result.ticket).toBeUndefined()
     expect(result.latency).toBeGreaterThanOrEqual(0)
     expect(fetch).toHaveBeenCalledTimes(1) // Phase 2 not attempted
   })
