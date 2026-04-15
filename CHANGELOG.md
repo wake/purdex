@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.137] - 2026-04-16
+
+### 修復
+
+- **spa**：`checkHealth` 在 HTTP 200 但 `res.json()` 拋出 SyntaxError 時，不再錯誤歸類為 `refused`（L2），改為正確回傳 `connected`；新增 inner try-catch 包住 JSON parse，失敗時 early return 不進入 Phase 2（#372）
+
 ## [1.0.0-alpha.136] - 2026-04-16
 
 ### 重構
