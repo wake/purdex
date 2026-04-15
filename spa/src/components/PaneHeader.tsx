@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from 'react'
+import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
 import { X, ArrowSquareOut, ArrowsLeftRight } from '@phosphor-icons/react'
+import { useClickOutside } from '../hooks/useClickOutside'
 
 interface SwapTarget {
   id: string
@@ -17,6 +18,19 @@ interface Props {
 
 export function PaneHeader({ title, onClose, onDetach, onSwap, swapTargets, extraActions }: Props) {
   const [showSwapMenu, setShowSwapMenu] = useState(false)
+  const swapMenuRef = useRef<HTMLDivElement>(null)
+  const closeSwapMenu = useCallback(() => setShowSwapMenu(false), [])
+
+  useClickOutside(swapMenuRef, closeSwapMenu)
+
+  useEffect(() => {
+    if (!showSwapMenu) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeSwapMenu()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [showSwapMenu, closeSwapMenu])
 
   return (
     <div className="shrink-0 flex items-center h-7 px-2 bg-surface-secondary border-b border-border-default">
@@ -24,7 +38,7 @@ export function PaneHeader({ title, onClose, onDetach, onSwap, swapTargets, extr
       <div className="flex items-center gap-0.5">
         {extraActions}
         {onSwap && swapTargets && swapTargets.length > 0 && (
-          <div className="relative">
+          <div className="relative" ref={swapMenuRef}>
             <button
               className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors"
               title="Swap with..."

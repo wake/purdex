@@ -25,4 +25,58 @@ describe('PaneHeader', () => {
     expect(screen.queryByTitle('Detach to tab')).toBeNull()
   })
 
+  describe('swap menu', () => {
+    const swapTargets = [
+      { id: 'pane-1', label: 'Terminal' },
+      { id: 'pane-2', label: 'Editor' },
+    ]
+
+    function renderWithSwap() {
+      const onSwap = vi.fn()
+      render(
+        <PaneHeader
+          title="Dashboard"
+          onClose={vi.fn()}
+          onSwap={onSwap}
+          swapTargets={swapTargets}
+        />,
+      )
+      return { onSwap }
+    }
+
+    it('shows swap targets when toggle button clicked', () => {
+      renderWithSwap()
+      fireEvent.click(screen.getByTitle('Swap with...'))
+      expect(screen.getByText('Terminal')).toBeTruthy()
+      expect(screen.getByText('Editor')).toBeTruthy()
+    })
+
+    it('closes swap menu on click outside', () => {
+      renderWithSwap()
+      fireEvent.click(screen.getByTitle('Swap with...'))
+      expect(screen.getByText('Terminal')).toBeTruthy()
+
+      // Click outside the menu
+      fireEvent.mouseDown(document.body)
+      expect(screen.queryByText('Terminal')).toBeNull()
+    })
+
+    it('closes swap menu on Escape key', () => {
+      renderWithSwap()
+      fireEvent.click(screen.getByTitle('Swap with...'))
+      expect(screen.getByText('Terminal')).toBeTruthy()
+
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(screen.queryByText('Terminal')).toBeNull()
+    })
+
+    it('calls onSwap and closes menu when target selected', () => {
+      const { onSwap } = renderWithSwap()
+      fireEvent.click(screen.getByTitle('Swap with...'))
+      fireEvent.click(screen.getByText('Terminal'))
+      expect(onSwap).toHaveBeenCalledWith('pane-1')
+      expect(screen.queryByText('Terminal')).toBeNull()
+    })
+  })
+
 })
