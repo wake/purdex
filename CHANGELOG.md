@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.142] - 2026-04-16
+
+### 修復
+
+- **spa**：`useUISettingsStore` 新增 `onRehydrateStorage`，啟動時自動將 WebGL renderer 下的 `keepAliveCount` clamp 至上限 6，避免既有高值設定超出 GPU context 限制（#188, #377）
+
 ## [1.0.0-alpha.141] - 2026-04-16
 
 ### 修復
