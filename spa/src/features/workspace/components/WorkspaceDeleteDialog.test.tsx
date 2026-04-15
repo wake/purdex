@@ -97,4 +97,18 @@ describe('WorkspaceDeleteDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: /delete/i }))
     expect(onConfirm).toHaveBeenCalledWith([])
   })
+
+  it('calls onCancel on Escape key', () => {
+    const onCancel = vi.fn()
+    render(
+      <WorkspaceDeleteDialog
+        workspaceName="WS"
+        tabs={mockTabs}
+        onConfirm={vi.fn()}
+        onCancel={onCancel}
+      />,
+    )
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalled()
+  })
 })

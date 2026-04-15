@@ -103,6 +103,15 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline, c
     }
   }, [weight])
 
+  // Close on Escape key
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel()
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [onCancel])
+
   // Reset scroll position when category or search changes
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0
