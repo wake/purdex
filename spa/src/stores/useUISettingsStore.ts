@@ -68,8 +68,9 @@ export const useUISettingsStore = create<UISettings>()(
       version: 1,
       onRehydrateStorage: () => (state) => {
         if (!state) return
-        if (state.terminalRenderer === 'webgl' && state.keepAliveCount > KEEPALIVE_MAX_WEBGL) {
-          useUISettingsStore.setState({ keepAliveCount: KEEPALIVE_MAX_WEBGL })
+        const clamped = clampKeepAlive(state.terminalRenderer, state.keepAliveCount)
+        if (clamped !== state.keepAliveCount) {
+          useUISettingsStore.setState({ keepAliveCount: clamped })
         }
       },
     },
