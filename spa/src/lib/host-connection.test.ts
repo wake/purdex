@@ -84,6 +84,27 @@ describe('checkHealth', () => {
     expect(result.mode).toBe('pending')
   })
 
+  it('Phase 1 JSON parse error (no token) → connected, not refused', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response('not-json', { status: 200 })
+    )
+    const result = await checkHealth('http://localhost:7860')
+    expect(result.daemon).toBe('connected')
+    expect(result.latency).toBeGreaterThanOrEqual(0)
+    expect(result.mode).toBe('normal')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('Phase 1 JSON parse error (with token) → connected, Phase 2 skipped', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response('not-json', { status: 200 })
+    )
+    const result = await checkHealth('http://localhost:7860', () => 'mytoken')
+    expect(result.daemon).toBe('connected')
+    expect(result.latency).toBeGreaterThanOrEqual(0)
+    expect(fetch).toHaveBeenCalledTimes(1) // Phase 2 not attempted
+  })
+
   it('latency measured from Phase 1', async () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(healthResponse())
