@@ -16,6 +16,7 @@ export function useRelayWsManager() {
   useEffect(() => {
     const activeConns = new Map<string, { close: () => void }>()
     const pendingFetches = new Set<string>()
+    let cancelled = false
 
     const unsub = useStreamStore.subscribe(
       (s) => s.relayStatus,
@@ -38,6 +39,7 @@ export function useRelayWsManager() {
             pendingFetches.add(ck)
             fetchWsTicket(hostId).then((ticket) => {
               pendingFetches.delete(ck)
+              if (cancelled) return
               // Guard: relay may have disconnected during async ticket fetch
               if (!useStreamStore.getState().relayStatus[ck]) return
 
@@ -109,6 +111,7 @@ export function useRelayWsManager() {
     )
 
     return () => {
+      cancelled = true
       unsub()
       activeConns.forEach((conn) => conn.close())
       activeConns.clear()
