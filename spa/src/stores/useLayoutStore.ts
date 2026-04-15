@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { SidebarRegion } from '../types/tab'
+import type { SidebarRegion } from '../types/layout'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 const MIN_WIDTH = 120

@@ -3,7 +3,7 @@ import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } 
 import { DotsSixVertical, X, Plus } from '@phosphor-icons/react'
 import { useLayoutStore } from '../stores/useLayoutStore'
 import { getAllViews } from '../lib/module-registry'
-import type { SidebarRegion } from '../types/tab'
+import type { SidebarRegion } from '../types/layout'
 
 interface Props {
   region: SidebarRegion
