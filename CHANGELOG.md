@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.138] - 2026-04-16
+
+### 修復
+
+- **spa**：PaneHeader swap menu 加入 `useClickOutside` 和 Escape 鍵關閉機制，行為與 TabContextMenu 一致（#249, #373）
+
 ## [1.0.0-alpha.137] - 2026-04-16
 
 ### 修復
