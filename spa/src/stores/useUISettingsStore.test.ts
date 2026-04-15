@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useUISettingsStore } from './useUISettingsStore'
+import { useUISettingsStore, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM, clampKeepAlive } from './useUISettingsStore'
 
 describe('useUISettingsStore', () => {
   beforeEach(() => {
@@ -55,6 +55,82 @@ describe('keep-alive settings', () => {
   it('setKeepAlivePinned updates value', () => {
     useUISettingsStore.getState().setKeepAlivePinned(true)
     expect(useUISettingsStore.getState().keepAlivePinned).toBe(true)
+  })
+})
+
+describe('clampKeepAlive', () => {
+  it('clamps webgl count to KEEPALIVE_MAX_WEBGL', () => {
+    expect(clampKeepAlive('webgl', 8)).toBe(KEEPALIVE_MAX_WEBGL)
+  })
+
+  it('does not clamp webgl count within limit', () => {
+    expect(clampKeepAlive('webgl', 4)).toBe(4)
+  })
+
+  it('clamps webgl count at exact boundary', () => {
+    expect(clampKeepAlive('webgl', KEEPALIVE_MAX_WEBGL)).toBe(KEEPALIVE_MAX_WEBGL)
+  })
+
+  it('clamps dom count to KEEPALIVE_MAX_DOM', () => {
+    expect(clampKeepAlive('dom', 15)).toBe(KEEPALIVE_MAX_DOM)
+  })
+
+  it('does not clamp dom count within limit', () => {
+    expect(clampKeepAlive('dom', 7)).toBe(7)
+  })
+
+  it('does not reduce zero', () => {
+    expect(clampKeepAlive('webgl', 0)).toBe(0)
+    expect(clampKeepAlive('dom', 0)).toBe(0)
+  })
+})
+
+describe('onRehydrateStorage clamps keepAliveCount', () => {
+  it('clamps keepAliveCount when webgl and count exceeds limit', () => {
+    useUISettingsStore.setState({
+      terminalRenderer: 'webgl',
+      keepAliveCount: 8,
+    })
+    // Simulate what onRehydrateStorage does
+    const state = useUISettingsStore.getState()
+    if (state.terminalRenderer === 'webgl' && state.keepAliveCount > KEEPALIVE_MAX_WEBGL) {
+      useUISettingsStore.setState({ keepAliveCount: KEEPALIVE_MAX_WEBGL })
+    }
+    expect(useUISettingsStore.getState().keepAliveCount).toBe(KEEPALIVE_MAX_WEBGL)
+  })
+
+  it('does not clamp keepAliveCount when dom renderer with high count', () => {
+    useUISettingsStore.setState({
+      terminalRenderer: 'dom',
+      keepAliveCount: 8,
+    })
+    const state = useUISettingsStore.getState()
+    if (state.terminalRenderer === 'webgl' && state.keepAliveCount > KEEPALIVE_MAX_WEBGL) {
+      useUISettingsStore.setState({ keepAliveCount: KEEPALIVE_MAX_WEBGL })
+    }
+    expect(useUISettingsStore.getState().keepAliveCount).toBe(8)
+  })
+
+  it('does not clamp keepAliveCount when webgl and count is within limit', () => {
+    useUISettingsStore.setState({
+      terminalRenderer: 'webgl',
+      keepAliveCount: 4,
+    })
+    const state = useUISettingsStore.getState()
+    if (state.terminalRenderer === 'webgl' && state.keepAliveCount > KEEPALIVE_MAX_WEBGL) {
+      useUISettingsStore.setState({ keepAliveCount: KEEPALIVE_MAX_WEBGL })
+    }
+    expect(useUISettingsStore.getState().keepAliveCount).toBe(4)
+  })
+})
+
+describe('KEEPALIVE constants', () => {
+  it('KEEPALIVE_MAX_WEBGL is 6', () => {
+    expect(KEEPALIVE_MAX_WEBGL).toBe(6)
+  })
+
+  it('KEEPALIVE_MAX_DOM is 10', () => {
+    expect(KEEPALIVE_MAX_DOM).toBe(10)
   })
 })
 

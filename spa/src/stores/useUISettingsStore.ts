@@ -4,6 +4,14 @@ import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 export type TerminalRenderer = 'webgl' | 'dom'
 
+export const KEEPALIVE_MAX_WEBGL = 6
+export const KEEPALIVE_MAX_DOM = 10
+
+export function clampKeepAlive(renderer: TerminalRenderer, count: number): number {
+  const max = renderer === 'webgl' ? KEEPALIVE_MAX_WEBGL : KEEPALIVE_MAX_DOM
+  return Math.min(count, max)
+}
+
 interface UISettings {
   /**
    * 收到第一筆 terminal data 後，延遲多久才移除 overlay 顯示畫面（ms）。
@@ -54,7 +62,17 @@ export const useUISettingsStore = create<UISettings>()(
       terminalSettingsVersion: 0,
       bumpTerminalSettingsVersion: () => set((s) => ({ terminalSettingsVersion: s.terminalSettingsVersion + 1 })),
     }),
-    { name: STORAGE_KEYS.UI_SETTINGS, storage: purdexStorage, version: 1 },
+    {
+      name: STORAGE_KEYS.UI_SETTINGS,
+      storage: purdexStorage,
+      version: 1,
+      onRehydrateStorage: () => (state) => {
+        if (!state) return
+        if (state.terminalRenderer === 'webgl' && state.keepAliveCount > KEEPALIVE_MAX_WEBGL) {
+          useUISettingsStore.setState({ keepAliveCount: KEEPALIVE_MAX_WEBGL })
+        }
+      },
+    },
   ),
 )
 
