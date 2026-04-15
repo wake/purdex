@@ -1,11 +1,8 @@
-import { useUISettingsStore, type TerminalRenderer } from '../../stores/useUISettingsStore'
+import { useUISettingsStore, type TerminalRenderer, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
 import { SettingItem } from './SettingItem'
 import { SegmentControl } from './SegmentControl'
 import { ToggleSwitch } from './ToggleSwitch'
 import { useI18nStore } from '../../stores/useI18nStore'
-
-const KEEPALIVE_MAX_WEBGL = 6
-const KEEPALIVE_MAX_DOM = 10
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
