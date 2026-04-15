@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.141] - 2026-04-16
+
+### 修復
+
+- **spa**：`useRelayWsManager` useEffect cleanup 後，in-flight `fetchWsTicket` promise 不再建立遊離 WS 連線；加入 `cancelled` flag 阻止 cleanup 後的 `.then()` 執行（#173, #376）
+
 ## [1.0.0-alpha.140] - 2026-04-16
 
 ### 雜務
