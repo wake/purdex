@@ -24,6 +24,7 @@ import { useWorkspaceWindowActions } from './hooks/useWorkspaceWindowActions'
 import { isStandaloneTab } from './types/tab'
 import {
   getVisibleTabIds,
+  nextWorkspaceName,
   WorkspaceContextMenu,
   MigrateTabsDialog,
   WorkspaceEmptyState,
@@ -149,15 +150,15 @@ export default function App() {
   }, [standaloneTabIds, handleSelectTab])
 
   const handleAddWorkspace = useCallback(() => {
+    const names = workspaces.map(w => w.name)
     if (workspaces.length === 0 && tabOrder.length > 0) {
-      const ws = useWorkspaceStore.getState().addWorkspace('Workspace 1')
+      const ws = useWorkspaceStore.getState().addWorkspace(nextWorkspaceName(names))
       setMigrateDialog({ wsId: ws.id, wsName: ws.name })
     } else {
-      const count = workspaces.length + 1
-      const ws = useWorkspaceStore.getState().addWorkspace(`Workspace ${count}`)
+      const ws = useWorkspaceStore.getState().addWorkspace(nextWorkspaceName(names))
       openWsSettings(ws.id)
     }
-  }, [workspaces.length, tabOrder.length, openWsSettings])
+  }, [workspaces, tabOrder.length, openWsSettings])
 
   const handleOpenHosts = useCallback(() => {
     openSingletonAndSelect({ kind: 'hosts' })
