@@ -24,6 +24,7 @@ type DevModule struct {
 	building           bool
 	buildError         string
 	buildCmd           func() error
+	execCmd            func(ctx context.Context, dir string, name string, args ...string) ([]byte, error)
 	lastFailedSPA      string
 	lastFailedElectron string
 	stopCtx            context.Context
@@ -46,6 +47,9 @@ func (m *DevModule) Init(c *core.Core) error {
 	m.stopCtx, m.stopCancel = context.WithCancel(context.Background())
 	if m.hashFn == nil {
 		m.hashFn = m.gitHash
+	}
+	if m.execCmd == nil {
+		m.execCmd = runCombinedOutput
 	}
 	if m.buildCmd == nil {
 		m.buildCmd = m.defaultBuild
@@ -80,16 +84,43 @@ func (m *DevModule) defaultBuild() error {
 	}
 	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "pnpm", "exec", "electron-vite", "build")
-	cmd.Dir = m.repoRoot
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("build timed out after 5 minutes")
-		}
-		log.Printf("[dev] build output: %s", string(out))
-		return err
+
+	steps := []struct {
+		label string
+		name  string
+		args  []string
+	}{
+		{
+			label: "dependency install",
+			name:  "pnpm",
+			args:  []string{"install", "--frozen-lockfile"},
+		},
+		{
+			label: "icon generation",
+			name:  "node",
+			args:  []string{"spa/scripts/generate-icon-data.mjs"},
+		},
+		{
+			label: "renderer/main build",
+			name:  "pnpm",
+			args:  []string{"exec", "electron-vite", "build"},
+		},
 	}
+
+	for _, step := range steps {
+		out, err := m.execCmd(ctx, m.repoRoot, step.name, step.args...)
+		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				return fmt.Errorf("build timed out after 5 minutes")
+			}
+			if len(out) > 0 {
+				log.Printf("[dev] %s output: %s", step.label, string(out))
+				return fmt.Errorf("%s failed: %w\n%s", step.label, err, strings.TrimSpace(string(out)))
+			}
+			return fmt.Errorf("%s failed: %w", step.label, err)
+		}
+	}
+
 	return nil
 }
 
@@ -127,4 +158,10 @@ func (m *DevModule) readVersion() string {
 		return "unknown"
 	}
 	return strings.TrimSpace(string(data))
+}
+
+func runCombinedOutput(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	return cmd.CombinedOutput()
 }
