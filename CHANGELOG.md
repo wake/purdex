@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.145] - 2026-04-16
+
+### 修復
+
+- **spa**：補上 `settings.section.editor_buffers` i18n 翻譯（zh-TW「編輯器暫存」、en "Editor Buffers"）
+
 ## [1.0.0-alpha.144] - 2026-04-16
 
 ### 功能
