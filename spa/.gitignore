@@ -25,3 +25,4 @@ public/icons/*.json
 *.njsproj
 *.sln
 *.sw?
+pdx

@@ -16,4 +16,5 @@ export const STORAGE_KEYS = {
   NOTIFICATION_SEEN: 'purdex-notification-seen',
   MODULE_CONFIG: 'purdex-module-config',
   QUICK_COMMANDS: 'purdex-quick-commands',
+  SYNC_STATE: 'purdex-sync-state',
 } as const
