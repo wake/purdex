@@ -122,4 +122,54 @@ describe('contentMatches', () => {
     const b: PaneContent = { kind: 'editor', source: { type: 'daemon', hostId: 'h2' }, filePath: '/test.txt' }
     expect(contentMatches(a, b)).toBe(false)
   })
+
+  // image-preview
+  it('returns true for image-preview with same inapp source and filePath', () => {
+    const a: PaneContent = { kind: 'image-preview', source: { type: 'inapp' }, filePath: '/img/photo.png' }
+    const b: PaneContent = { kind: 'image-preview', source: { type: 'inapp' }, filePath: '/img/photo.png' }
+    expect(contentMatches(a, b)).toBe(true)
+  })
+
+  it('returns false for image-preview with different filePath', () => {
+    const a: PaneContent = { kind: 'image-preview', source: { type: 'inapp' }, filePath: '/a.png' }
+    const b: PaneContent = { kind: 'image-preview', source: { type: 'inapp' }, filePath: '/b.png' }
+    expect(contentMatches(a, b)).toBe(false)
+  })
+
+  it('returns false for image-preview with different source types', () => {
+    const a: PaneContent = { kind: 'image-preview', source: { type: 'inapp' }, filePath: '/test.png' }
+    const b: PaneContent = { kind: 'image-preview', source: { type: 'local' }, filePath: '/test.png' }
+    expect(contentMatches(a, b)).toBe(false)
+  })
+
+  it('returns true for image-preview with same daemon source and filePath and hostId', () => {
+    const a: PaneContent = { kind: 'image-preview', source: { type: 'daemon', hostId: 'h1' }, filePath: '/img.jpg' }
+    const b: PaneContent = { kind: 'image-preview', source: { type: 'daemon', hostId: 'h1' }, filePath: '/img.jpg' }
+    expect(contentMatches(a, b)).toBe(true)
+  })
+
+  it('returns false for image-preview with same daemon filePath but different hostId', () => {
+    const a: PaneContent = { kind: 'image-preview', source: { type: 'daemon', hostId: 'h1' }, filePath: '/img.jpg' }
+    const b: PaneContent = { kind: 'image-preview', source: { type: 'daemon', hostId: 'h2' }, filePath: '/img.jpg' }
+    expect(contentMatches(a, b)).toBe(false)
+  })
+
+  // pdf-preview
+  it('returns true for pdf-preview with same inapp source and filePath', () => {
+    const a: PaneContent = { kind: 'pdf-preview', source: { type: 'inapp' }, filePath: '/docs/report.pdf' }
+    const b: PaneContent = { kind: 'pdf-preview', source: { type: 'inapp' }, filePath: '/docs/report.pdf' }
+    expect(contentMatches(a, b)).toBe(true)
+  })
+
+  it('returns false for pdf-preview with different filePath', () => {
+    const a: PaneContent = { kind: 'pdf-preview', source: { type: 'inapp' }, filePath: '/a.pdf' }
+    const b: PaneContent = { kind: 'pdf-preview', source: { type: 'inapp' }, filePath: '/b.pdf' }
+    expect(contentMatches(a, b)).toBe(false)
+  })
+
+  it('returns false for pdf-preview with same daemon filePath but different hostId', () => {
+    const a: PaneContent = { kind: 'pdf-preview', source: { type: 'daemon', hostId: 'h1' }, filePath: '/doc.pdf' }
+    const b: PaneContent = { kind: 'pdf-preview', source: { type: 'daemon', hostId: 'h2' }, filePath: '/doc.pdf' }
+    expect(contentMatches(a, b)).toBe(false)
+  })
 })

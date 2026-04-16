@@ -54,4 +54,20 @@ describe('useEditorStore', () => {
     const buf = useEditorStore.getState().buffers['key1']
     expect(buf.cursorPosition).toEqual({ line: 10, column: 5 })
   })
+
+  it('markSaved updates lastStat when stat is provided', () => {
+    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript')
+    const stat = { mtime: 2000, size: 50 }
+    useEditorStore.getState().markSaved('key1', stat)
+    const buf = useEditorStore.getState().buffers['key1']
+    expect(buf.lastStat).toEqual({ mtime: 2000, size: 50 })
+  })
+
+  it('markSaved preserves existing lastStat when no stat provided', () => {
+    const initialStat = { mtime: 1000, size: 30 }
+    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript', initialStat)
+    useEditorStore.getState().markSaved('key1')
+    const buf = useEditorStore.getState().buffers['key1']
+    expect(buf.lastStat).toEqual({ mtime: 1000, size: 30 })
+  })
 })
