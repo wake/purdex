@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import type { Profile, ProfileKey } from '../lib/resolve-profile'
 
 export type { Profile, ProfileKey }
@@ -172,3 +172,4 @@ export const useNewTabLayoutStore = create<State>()(
   ),
 )
 
+syncManager.register(STORAGE_KEYS.NEW_TAB_LAYOUT, useNewTabLayoutStore)
