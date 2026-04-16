@@ -3,12 +3,18 @@ import { useCallback, useEffect, useRef } from 'react'
 interface Props {
   onResize: (delta: number) => void
   resizeEdge: 'left' | 'right'
+  /** Fired once on mouseup. Useful for committing throttled / ephemeral state. */
+  onResizeEnd?: () => void
 }
 
-export function RegionResize({ onResize, resizeEdge }: Props) {
+export function RegionResize({ onResize, resizeEdge, onResizeEnd }: Props) {
   const startX = useRef(0)
   const onResizeRef = useRef(onResize)
-  useEffect(() => { onResizeRef.current = onResize })
+  const onResizeEndRef = useRef(onResizeEnd)
+  useEffect(() => {
+    onResizeRef.current = onResize
+    onResizeEndRef.current = onResizeEnd
+  })
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -26,6 +32,7 @@ export function RegionResize({ onResize, resizeEdge }: Props) {
       document.removeEventListener('mouseup', handleMouseUp)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
+      onResizeEndRef.current?.()
     }
 
     document.addEventListener('mousemove', handleMouseMove)

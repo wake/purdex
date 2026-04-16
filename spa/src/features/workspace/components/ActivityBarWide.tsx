@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react'
 import { Plus, GearSix, HardDrives } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
@@ -5,6 +6,9 @@ import { WorkspaceIcon } from './WorkspaceIcon'
 import { CollapseButton } from './CollapseButton'
 import { RegionResize } from '../../../components/RegionResize'
 import type { ActivityBarProps } from './activity-bar-props'
+
+const MIN_WIDE_SIZE = 120
+const MAX_WIDE_SIZE = 600
 
 export function ActivityBarWide(props: ActivityBarProps) {
   const {
@@ -23,11 +27,17 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const setWideSize = useLayoutStore((s) => s.setActivityBarWideSize)
   const isHomeActive = !activeWorkspaceId
 
+  // Ephemeral drag state — avoid persisting + broadcasting on every mousemove.
+  // Commit to store only on mouseup (see RegionResize.onResizeEnd).
+  const [draftSize, setDraftSize] = useState<number | null>(null)
+  const draftSizeRef = useRef<number | null>(null)
+  const renderedSize = draftSize ?? wideSize
+
   return (
     <>
     <div
       className="hidden lg:flex flex-col bg-surface-tertiary border-r border-border-subtle py-2 gap-1 flex-shrink-0"
-      style={{ width: wideSize }}
+      style={{ width: renderedSize }}
     >
       {/* Home row */}
       <button
@@ -103,7 +113,21 @@ export function ActivityBarWide(props: ActivityBarProps) {
     <div data-testid="activity-bar-resize" className="hidden lg:block">
       <RegionResize
         resizeEdge="right"
-        onResize={(delta) => setWideSize(wideSize + delta)}
+        onResize={(delta) => {
+          // Read the latest committed value rather than a stale closure;
+          // accumulate into an ephemeral local value while dragging.
+          const base = draftSizeRef.current ?? useLayoutStore.getState().activityBarWideSize
+          const next = Math.max(MIN_WIDE_SIZE, Math.min(MAX_WIDE_SIZE, base + delta))
+          draftSizeRef.current = next
+          setDraftSize(next)
+        }}
+        onResizeEnd={() => {
+          if (draftSizeRef.current !== null) {
+            setWideSize(draftSizeRef.current)
+            draftSizeRef.current = null
+            setDraftSize(null)
+          }
+        }}
       />
     </div>
     </>
