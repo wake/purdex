@@ -33,6 +33,14 @@ describe('useLayoutStore', () => {
       expect(regions['primary-panel'].width).toBe(200)
       expect(regions['secondary-panel'].width).toBe(200)
     })
+
+    it('layout mode defaults: width=narrow, tabPosition=top, wideSize=240', () => {
+      const state = useLayoutStore.getState()
+      expect(state.activityBarWidth).toBe('narrow')
+      expect(state.tabPosition).toBe('top')
+      expect(state.activityBarWideSize).toBe(240)
+      expect(state.workspaceExpanded).toEqual({})
+    })
   })
 
   describe('setRegionMode', () => {

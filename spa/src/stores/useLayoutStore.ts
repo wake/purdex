@@ -7,6 +7,9 @@ import { getAllViews } from '../lib/module-registry'
 const MIN_WIDTH = 120
 const MAX_WIDTH = 600
 
+export type ActivityBarWidth = 'narrow' | 'wide'
+export type TabPosition = 'top' | 'left'
+
 interface RegionState {
   views: string[]
   activeViewId?: string
@@ -17,6 +20,10 @@ interface RegionState {
 
 interface LayoutState {
   regions: Record<SidebarRegion, RegionState>
+  activityBarWidth: ActivityBarWidth
+  tabPosition: TabPosition
+  activityBarWideSize: number
+  workspaceExpanded: Record<string, boolean>
 
   setRegionMode: (region: SidebarRegion, mode: RegionState['mode']) => void
   setRegionWidth: (region: SidebarRegion, width: number) => void
@@ -60,6 +67,10 @@ export const useLayoutStore = create<LayoutState>()(
   persist(
     (set) => ({
       regions: createDefaultRegions(),
+      activityBarWidth: 'narrow',
+      tabPosition: 'top',
+      activityBarWideSize: 240,
+      workspaceExpanded: {},
 
       setRegionMode: (region, mode) =>
         set((state) => updateRegion(state, region, { mode })),
@@ -156,7 +167,13 @@ export const useLayoutStore = create<LayoutState>()(
       name: STORAGE_KEYS.LAYOUT,
       storage: purdexStorage,
       version: 1,
-      partialize: (state) => ({ regions: state.regions }),
+      partialize: (state) => ({
+        regions: state.regions,
+        activityBarWidth: state.activityBarWidth,
+        tabPosition: state.tabPosition,
+        activityBarWideSize: state.activityBarWideSize,
+        workspaceExpanded: state.workspaceExpanded,
+      }),
     },
   ),
 )
