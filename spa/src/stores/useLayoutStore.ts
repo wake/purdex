@@ -53,6 +53,7 @@ interface LayoutState {
   reconcileViews: () => void
   setActivityBarWidth: (width: ActivityBarWidth) => void
   toggleActivityBarWidth: () => void
+  setTabPosition: (position: TabPosition) => void
   setActivityBarWideSize: (size: number) => void
   toggleWorkspaceExpanded: (wsId: string) => void
   reconcileWorkspaceExpanded: (liveWsIds: string[]) => void
@@ -195,6 +196,14 @@ export const useLayoutStore = create<LayoutState>()(
           const next: ActivityBarWidth = state.activityBarWidth === 'narrow' ? 'wide' : 'narrow'
           if (next === 'narrow' && state.tabPosition === 'left') return state
           return { activityBarWidth: next }
+        }),
+
+      setTabPosition: (position) =>
+        set(() => {
+          if (position === 'left') {
+            return { tabPosition: 'left', activityBarWidth: 'wide' }
+          }
+          return { tabPosition: 'top' }
         }),
 
       setActivityBarWideSize: (size) =>

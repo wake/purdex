@@ -90,6 +90,29 @@ describe('useLayoutStore', () => {
     })
   })
 
+  describe('setTabPosition', () => {
+    it('sets to left and forces activityBarWidth=wide', () => {
+      useLayoutStore.setState({ activityBarWidth: 'narrow', tabPosition: 'top' })
+      useLayoutStore.getState().setTabPosition('left')
+      expect(useLayoutStore.getState().tabPosition).toBe('left')
+      expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
+    })
+
+    it('sets to top without changing activityBarWidth (wide stays)', () => {
+      useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'left' })
+      useLayoutStore.getState().setTabPosition('top')
+      expect(useLayoutStore.getState().tabPosition).toBe('top')
+      expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
+    })
+
+    it('sets to top without changing activityBarWidth (narrow stays narrow)', () => {
+      useLayoutStore.setState({ activityBarWidth: 'narrow', tabPosition: 'top' })
+      useLayoutStore.getState().setTabPosition('top')
+      expect(useLayoutStore.getState().tabPosition).toBe('top')
+      expect(useLayoutStore.getState().activityBarWidth).toBe('narrow')
+    })
+  })
+
   describe('setActivityBarWideSize', () => {
     it('updates value', () => {
       useLayoutStore.getState().setActivityBarWideSize(300)
