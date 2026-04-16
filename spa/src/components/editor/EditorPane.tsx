@@ -37,7 +37,6 @@ export function EditorPane({ pane, isActive }: PaneRendererProps) {
   return <EditorPaneInner source={content.source} filePath={content.filePath} isActive={isActive} />
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- isActive needed for future focus-based stat check
 function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; filePath: string; isActive: boolean }) {
   const key = bufferKey(source, filePath)
   const buffer = useEditorStore((s) => s.buffers[key])
@@ -75,6 +74,38 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
   useEffect(() => {
     return () => { useEditorStore.getState().closeBuffer(key) }
   }, [key])
+
+  // Detect external file changes when tab becomes active
+  useEffect(() => {
+    if (!isActive) return
+
+    const buf = useEditorStore.getState().buffers[key]
+    if (!buf) return
+
+    const backend = getFsBackend(source)
+    if (!backend) return
+
+    backend.stat(filePath)
+      .then((stat) => {
+        const currentBuf = useEditorStore.getState().buffers[key]
+        if (!currentBuf?.lastStat) return
+        if (stat.mtime === currentBuf.lastStat.mtime && stat.size === currentBuf.lastStat.size) return
+
+        return backend.read(filePath).then((data) => {
+          const text = new TextDecoder().decode(data)
+          const latestBuf = useEditorStore.getState().buffers[key]
+          if (!latestBuf || text === latestBuf.savedContent) return
+
+          if (!latestBuf.isDirty) {
+            useEditorStore.getState().reloadBuffer(key, text, { mtime: stat.mtime, size: stat.size })
+          } else {
+            console.warn(`[editor] External change detected for ${filePath}, buffer is dirty`)
+          }
+        })
+      })
+      .catch(() => {}) // File may have been deleted
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-check on tab activation, not on source/filePath change
+  }, [isActive, key])
 
   const handleSave = useCallback(async () => {
     const buf = useEditorStore.getState().buffers[key]
