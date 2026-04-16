@@ -25,12 +25,15 @@ interface SyncStoreState {
   activeProviderId: string | null
   enabledModules: string[]
   clientId: string | null
+  /** Host ID to sync through when activeProviderId === 'daemon'. */
+  syncHostId: string | null
 
   // Actions
   setLastSyncedBundle: (bundle: SyncBundle) => void
   setActiveProvider: (providerId: string | null) => void
   toggleModule: (moduleId: string) => void
   getClientId: () => string
+  setSyncHostId: (hostId: string | null) => void
   reset: () => void
 }
 
@@ -44,9 +47,15 @@ const initialState = {
   activeProviderId: null,
   enabledModules: [] as string[],
   clientId: null,
+  syncHostId: null,
 } satisfies Pick<
   SyncStoreState,
-  'lastSyncedBundle' | 'lastSyncedAt' | 'activeProviderId' | 'enabledModules' | 'clientId'
+  | 'lastSyncedBundle'
+  | 'lastSyncedAt'
+  | 'activeProviderId'
+  | 'enabledModules'
+  | 'clientId'
+  | 'syncHostId'
 >
 
 // ---------------------------------------------------------------------------
@@ -108,6 +117,8 @@ export const useSyncStore = create<SyncStoreState>()(
         return id
       },
 
+      setSyncHostId: (hostId) => set({ syncHostId: hostId }),
+
       reset: () => set({ ...initialState }),
     }),
     {
@@ -119,6 +130,7 @@ export const useSyncStore = create<SyncStoreState>()(
         activeProviderId: state.activeProviderId,
         enabledModules: state.enabledModules,
         clientId: state.clientId,
+        syncHostId: state.syncHostId,
       }),
     },
   ),

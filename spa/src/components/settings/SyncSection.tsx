@@ -1,10 +1,20 @@
-import { useRef } from 'react'
-import { ArrowsClockwise, DownloadSimple, Upload } from '@phosphor-icons/react'
+import { useRef, useState } from 'react'
+import {
+  ArrowsClockwise,
+  CheckCircle,
+  DownloadSimple,
+  Upload,
+  Warning,
+  WarningCircle,
+} from '@phosphor-icons/react'
 import { SettingItem } from './SettingItem'
 import { SegmentControl } from './SegmentControl'
 import { useSyncStore } from '../../lib/sync/use-sync-store'
 import { syncEngine } from '../../lib/sync/register-sync'
 import { createManualProvider } from '../../lib/sync/providers/manual-provider'
+import { createDaemonProvider } from '../../lib/sync/providers/daemon-provider'
+import { applyImport, syncNow, type SyncActionResult } from '../../lib/sync/sync-actions'
+import { useHostStore } from '../../stores/useHostStore'
 
 // ---------------------------------------------------------------------------
 // Provider selector type
@@ -17,6 +27,19 @@ const PROVIDER_OPTIONS: { value: ProviderId; label: string }[] = [
   { value: 'daemon', label: 'Daemon' },
   { value: 'file', label: 'File' },
 ]
+
+// ---------------------------------------------------------------------------
+// Status shape (ephemeral, UI-only)
+// ---------------------------------------------------------------------------
+
+type StatusTone = 'idle' | 'busy' | 'success' | 'warn' | 'error'
+
+interface Status {
+  tone: StatusTone
+  message: string
+}
+
+const IDLE: Status = { tone: 'idle', message: '' }
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -42,6 +65,17 @@ function triggerDownload(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url)
 }
 
+function statusFromResult(result: SyncActionResult, okMessage: string): Status {
+  if (result.kind === 'ok') return { tone: 'success', message: okMessage }
+  if (result.kind === 'conflicts') {
+    return {
+      tone: 'warn',
+      message: `${result.conflicts.length} field conflict(s) detected. Resolution UI coming soon; local data preserved.`,
+    }
+  }
+  return { tone: 'error', message: result.error }
+}
+
 // ---------------------------------------------------------------------------
 // SyncSection
 // ---------------------------------------------------------------------------
@@ -50,11 +84,20 @@ export function SyncSection() {
   const activeProviderId = useSyncStore((s) => s.activeProviderId)
   const setActiveProvider = useSyncStore((s) => s.setActiveProvider)
   const lastSyncedAt = useSyncStore((s) => s.lastSyncedAt)
+  const lastSyncedBundle = useSyncStore((s) => s.lastSyncedBundle)
+  const setLastSyncedBundle = useSyncStore((s) => s.setLastSyncedBundle)
   const enabledModules = useSyncStore((s) => s.enabledModules)
   const toggleModule = useSyncStore((s) => s.toggleModule)
   const getClientId = useSyncStore((s) => s.getClientId)
+  const syncHostId = useSyncStore((s) => s.syncHostId)
+  const setSyncHostId = useSyncStore((s) => s.setSyncHostId)
+
+  const hosts = useHostStore((s) => s.hosts)
+  const hostOrder = useHostStore((s) => s.hostOrder)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [status, setStatus] = useState<Status>(IDLE)
+  const [busy, setBusy] = useState(false)
 
   // Normalise: null → 'off'
   const currentProvider: ProviderId =
@@ -62,9 +105,55 @@ export function SyncSection() {
 
   const handleProviderChange = (value: ProviderId) => {
     setActiveProvider(value === 'off' ? null : value)
+    setStatus(IDLE)
   }
 
   const contributors = syncEngine.getContributors()
+
+  // --------------------------------------------------------------------------
+  // Sync Now
+  // --------------------------------------------------------------------------
+
+  const handleSyncNow = async () => {
+    if (busy) return
+
+    if (currentProvider !== 'daemon') {
+      setStatus({
+        tone: 'warn',
+        message: 'Sync Now is only available with the Daemon provider for now.',
+      })
+      return
+    }
+
+    if (!syncHostId || !hosts[syncHostId]) {
+      setStatus({ tone: 'warn', message: 'Select a sync host first.' })
+      return
+    }
+
+    setBusy(true)
+    setStatus({ tone: 'busy', message: 'Syncing…' })
+
+    const clientId = getClientId()
+    const provider = createDaemonProvider(syncHostId, clientId)
+    const result = await syncNow({
+      provider,
+      clientId,
+      lastSyncedBundle,
+      enabledModules,
+      engine: syncEngine,
+    })
+
+    if (result.kind === 'ok') {
+      setLastSyncedBundle(result.appliedBundle)
+    } else if (result.kind === 'conflicts') {
+      // engine partial-applied non-conflicting contributors; advance their
+      // baseline so the next sync doesn't rebase them against a stale ancestor.
+      setLastSyncedBundle(result.partialBaseline)
+    }
+
+    setStatus(statusFromResult(result, 'Sync complete.'))
+    setBusy(false)
+  }
 
   // --------------------------------------------------------------------------
   // Export
@@ -77,6 +166,7 @@ export function SyncSection() {
     const blob = provider.exportToBlob(bundle)
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
     triggerDownload(blob, `purdex-sync-${timestamp}.purdex-sync`)
+    setStatus({ tone: 'success', message: 'Exported.' })
   }
 
   // --------------------------------------------------------------------------
@@ -90,17 +180,36 @@ export function SyncSection() {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    if (busy) return
+
+    setBusy(true)
+    setStatus({ tone: 'busy', message: 'Importing…' })
+
     try {
       const text = await file.text()
       const provider = createManualProvider()
       const bundle = provider.importFromText(text)
-      // Full import flow will be wired in a future task
-      console.log('[SyncSection] Imported bundle:', bundle)
+
+      const result = await applyImport({
+        bundle,
+        lastSyncedBundle,
+        enabledModules,
+        engine: syncEngine,
+      })
+
+      if (result.kind === 'ok') {
+        setLastSyncedBundle(result.appliedBundle)
+      } else if (result.kind === 'conflicts') {
+        setLastSyncedBundle(result.partialBaseline)
+      }
+
+      setStatus(statusFromResult(result, 'Import applied.'))
     } catch (err) {
-      console.error('[SyncSection] Import failed:', err)
+      const message = err instanceof Error ? err.message : String(err)
+      setStatus({ tone: 'error', message: `Import failed: ${message}` })
     } finally {
-      // Reset so the same file can be re-selected
       if (fileInputRef.current) fileInputRef.current.value = ''
+      setBusy(false)
     }
   }
 
@@ -129,6 +238,31 @@ export function SyncSection() {
 
       {currentProvider !== 'off' && (
         <>
+          {/* Sync host selector (Daemon only) */}
+          {currentProvider === 'daemon' && (
+            <SettingItem
+              label="Sync Host"
+              description="Daemon to push and pull sync data through."
+            >
+              <select
+                value={syncHostId ?? ''}
+                onChange={(e) => setSyncHostId(e.target.value || null)}
+                className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-60 hover:border-text-muted focus:border-border-active focus:outline-none"
+              >
+                <option value="">— Select —</option>
+                {hostOrder.map((id) => {
+                  const host = hosts[id]
+                  if (!host) return null
+                  return (
+                    <option key={id} value={id}>
+                      {host.name} ({host.ip}:{host.port})
+                    </option>
+                  )
+                })}
+              </select>
+            </SettingItem>
+          )}
+
           {/* Sync status */}
           <SettingItem
             label="Sync Status"
@@ -139,13 +273,11 @@ export function SyncSection() {
             }
           >
             <button
-              onClick={() => {
-                // Actual sync logic will be wired in a future task
-                console.log('[SyncSection] Sync Now triggered')
-              }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border-default text-text-secondary text-xs hover:text-text-primary hover:border-border-active"
+              onClick={handleSyncNow}
+              disabled={busy}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border-default text-text-secondary text-xs hover:text-text-primary hover:border-border-active disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <ArrowsClockwise size={14} />
+              <ArrowsClockwise size={14} className={busy ? 'animate-spin' : ''} />
               Sync Now
             </button>
           </SettingItem>
@@ -186,14 +318,16 @@ export function SyncSection() {
             <div className="flex items-center gap-2">
               <button
                 onClick={handleExportAll}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border-default text-text-secondary text-xs hover:text-text-primary hover:border-border-active"
+                disabled={busy}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border-default text-text-secondary text-xs hover:text-text-primary hover:border-border-active disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <DownloadSimple size={14} />
                 Export All
               </button>
               <button
                 onClick={handleImportClick}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border-default text-text-secondary text-xs hover:text-text-primary hover:border-border-active"
+                disabled={busy}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border-default text-text-secondary text-xs hover:text-text-primary hover:border-border-active disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Upload size={14} />
                 Import
@@ -207,8 +341,46 @@ export function SyncSection() {
               />
             </div>
           </SettingItem>
+
+          <StatusLine status={status} />
         </>
       )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// StatusLine
+// ---------------------------------------------------------------------------
+
+function StatusLine({ status }: { status: Status }) {
+  if (status.tone === 'idle' || !status.message) return null
+
+  const Icon =
+    status.tone === 'success'
+      ? CheckCircle
+      : status.tone === 'warn'
+      ? Warning
+      : status.tone === 'error'
+      ? WarningCircle
+      : ArrowsClockwise
+
+  const color =
+    status.tone === 'success'
+      ? 'text-green-500'
+      : status.tone === 'warn'
+      ? 'text-yellow-500'
+      : status.tone === 'error'
+      ? 'text-red-500'
+      : 'text-text-secondary'
+
+  return (
+    <div className={`flex items-start gap-1.5 mt-3 text-xs ${color}`}>
+      <Icon
+        size={14}
+        className={status.tone === 'busy' ? 'animate-spin mt-0.5' : 'mt-0.5'}
+      />
+      <span>{status.message}</span>
     </div>
   )
 }

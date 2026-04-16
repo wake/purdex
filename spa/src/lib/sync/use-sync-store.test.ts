@@ -21,6 +21,18 @@ describe('useSyncStore', () => {
     expect(state.activeProviderId).toBeNull()
     expect(state.enabledModules).toEqual([])
     expect(state.clientId).toBeNull()
+    expect(state.syncHostId).toBeNull()
+  })
+
+  it('setSyncHostId updates the sync host', () => {
+    useSyncStore.getState().setSyncHostId('h_aaa')
+    expect(useSyncStore.getState().syncHostId).toBe('h_aaa')
+  })
+
+  it('setSyncHostId accepts null', () => {
+    useSyncStore.getState().setSyncHostId('h_aaa')
+    useSyncStore.getState().setSyncHostId(null)
+    expect(useSyncStore.getState().syncHostId).toBeNull()
   })
 
   it('setActiveProvider updates activeProviderId', () => {
@@ -107,5 +119,6 @@ describe('useSyncStore', () => {
     expect(state.activeProviderId).toBeNull()
     expect(state.enabledModules).toEqual([])
     expect(state.clientId).toBeNull()
+    expect(state.syncHostId).toBeNull()
   })
 })
