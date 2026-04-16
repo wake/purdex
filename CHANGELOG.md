@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0-alpha.147] - 2026-04-17
+
+### 功能
+
+- **spa**：Activity bar 寬窄雙模式 — 窄版維持現況（44px icon），寬版顯示 icon + workspace 名稱（預設 240px），可拖右邊界 resize（120-600 clamp）
+- **spa**：Activity bar 底部 `CollapseButton` 切換寬窄；`tabPosition='left'`（Phase 2 上線後）時鎖定為寬版
+- **spa**：`useLayoutStore` 新增 `activityBarWidth` / `tabPosition` / `activityBarWideSize` / `workspaceExpanded` state，持久化到 `purdex-layout` 並透過既有 `syncManager` 跨視窗同步
+- **spa**：`reconcileWorkspaceExpanded` GC — workspace 刪除時清除 stale expanded 狀態，保留 `home` 保留鍵
+- **spa**：`healLayoutInvariant` rehydrate self-heal — 自動修復 `{narrow, left}` 無效組合
+- **spa**：Resize handle 新增 `onResizeEnd` 支援，拖曳期間使用 ephemeral state，釋放時才 commit 避免 localStorage 風暴
+- **spa**：i18n — `nav.collapse_activity_bar` / `nav.expand_activity_bar` / `nav.collapse_locked_tooltip`
+
+### 重構
+
+- **spa**：`ActivityBar` 拆為協調者 + `ActivityBarNarrow`（既有行為）+ `ActivityBarWide`（新）
+- **spa**：共用 `ActivityBarProps` type 抽到 `activity-bar-props.ts`
+
+### 測試
+
+- SPA 新增 54 個 layout 測試（useLayoutStore、CollapseButton、ActivityBar coordinator、Narrow/Wide 變體）
+
 ## [1.0.0-alpha.146] - 2026-04-17
 
 ### 功能
