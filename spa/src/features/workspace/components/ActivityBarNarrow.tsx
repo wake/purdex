@@ -8,6 +8,7 @@ import { WorkspaceIcon } from './WorkspaceIcon'
 import { CollapseButton } from './CollapseButton'
 import { useWorkspaceIndicators } from '../useWorkspaceIndicators'
 import type { ActiveStatus } from '../workspace-indicators'
+import type { ActivityBarProps } from './activity-bar-props'
 
 const PILL_COLORS: Record<ActiveStatus, string> = {
   running: '#4ade80',
@@ -90,20 +91,6 @@ function SortableWorkspaceButton({ workspace: ws, isActive, onSelect, onContextM
   )
 }
 
-interface ActivityBarNarrowProps {
-  workspaces: Workspace[]
-  activeWorkspaceId: string | null
-  activeStandaloneTabId: string | null
-  onSelectWorkspace: (wsId: string) => void
-  onSelectHome: () => void
-  standaloneTabIds: string[]
-  onAddWorkspace: () => void
-  onReorderWorkspaces?: (orderedIds: string[]) => void
-  onContextMenuWorkspace?: (e: React.MouseEvent, wsId: string) => void
-  onOpenHosts: () => void
-  onOpenSettings: () => void
-}
-
 export function ActivityBarNarrow({
   workspaces,
   activeWorkspaceId,
@@ -116,7 +103,7 @@ export function ActivityBarNarrow({
   onContextMenuWorkspace,
   onOpenHosts,
   onOpenSettings,
-}: ActivityBarNarrowProps) {
+}: ActivityBarProps) {
   const t = useI18nStore((s) => s.t)
   const wsIds = useMemo(() => workspaces.map((ws) => ws.id), [workspaces])
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))

@@ -1,26 +1,12 @@
 import { Plus, GearSix, HardDrives } from '@phosphor-icons/react'
-import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { CollapseButton } from './CollapseButton'
 import { RegionResize } from '../../../components/RegionResize'
+import type { ActivityBarProps } from './activity-bar-props'
 
-interface Props {
-  workspaces: Workspace[]
-  activeWorkspaceId: string | null
-  activeStandaloneTabId: string | null
-  onSelectWorkspace: (wsId: string) => void
-  onSelectHome: () => void
-  standaloneTabIds: string[]
-  onAddWorkspace: () => void
-  onReorderWorkspaces?: (orderedIds: string[]) => void
-  onContextMenuWorkspace?: (e: React.MouseEvent, wsId: string) => void
-  onOpenHosts: () => void
-  onOpenSettings: () => void
-}
-
-export function ActivityBarWide(props: Props) {
+export function ActivityBarWide(props: ActivityBarProps) {
   const {
     workspaces,
     activeWorkspaceId,
