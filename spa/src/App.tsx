@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Router } from 'wouter'
 import { prefetchWeight } from './features/workspace/lib/icon-path-cache'
+import { reorderStandaloneTabOrder } from './features/workspace/lib/reorderStandaloneTabOrder'
 import { ActivityBar } from './components/ActivityBar'
 import { TabBar } from './components/TabBar'
 import { TabContent } from './components/TabContent'
@@ -144,21 +145,7 @@ export default function App() {
 
   const handleReorderStandaloneTabs = useCallback((newOrder: string[]) => {
     const current = useTabStore.getState().tabOrder
-    const standaloneSet = new Set(newOrder)
-    const result: string[] = []
-    let insertIndex = -1
-    for (let i = 0; i < current.length; i++) {
-      const id = current[i]
-      if (standaloneSet.has(id)) {
-        if (insertIndex === -1) insertIndex = result.length
-        // skip; handled below
-      } else {
-        result.push(id)
-      }
-    }
-    if (insertIndex === -1) insertIndex = result.length
-    result.splice(insertIndex, 0, ...newOrder)
-    useTabStore.getState().reorderTabs(result)
+    useTabStore.getState().reorderTabs(reorderStandaloneTabOrder(current, newOrder))
   }, [])
 
   const handleCloseTabContextMenu = useCallback(() => {
