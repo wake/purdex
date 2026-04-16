@@ -53,7 +53,8 @@ Settings
 ```
 spa/src/lib/interface-subsection-registry.ts
 spa/src/stores/useNewTabLayoutStore.ts
-spa/src/hooks/useMediaQuery.ts                       # 新 hook（專案目前無）
+spa/src/hooks/useMediaQuery.ts                       # useIsMobile 重構而來（見下）
+spa/src/hooks/useNewTabBootstrap.ts                  # App root 層級 bootstrap hook
 spa/src/components/settings/InterfaceSection.tsx
 spa/src/components/settings/InterfaceSubNav.tsx
 spa/src/components/settings/new-tab/
@@ -66,7 +67,7 @@ spa/src/components/settings/new-tab/
 
 **命名理由**：`NewTabModulePalette` / `NewTabProfileSwitcher` 用具體名稱而非 generic `ModulePalette` / `ProfileSwitcher`，避免與現有 `ModuleConfigSection` 撞概念、也避免對未來 pane/sidebar 做出虛假的「通用性保證」。若 pane/sidebar 開工時形狀吻合，屆時再抽 generic 並 rename。
 
-**useMediaQuery**：`useMediaQuery(query: string): boolean`，以 `window.matchMedia` 實作。初值以 `useState(() => matchMedia(query).matches)` 同步取得（避免第一幀 flash）；SSR / 無 `window` 時 fallback 回 false。
+**useMediaQuery**：專案已有 `useIsMobile`（`spa/src/hooks/useIsMobile.ts`）含 `matchMedia` + SSR guard + listener cleanup 完整實作，但寫死 `max-width: 767px`。本 spec 將其重構為通用 `useMediaQuery(query: string): boolean`，原 `useIsMobile` 改為 `() => useMediaQuery('(max-width: 767px)')` 的薄包裝（保持呼叫點不變）。邏輯細節（`useState(() => matchMedia(q).matches)` 同步初值、`addEventListener('change', ...)` + cleanup）沿用既有實作。
 
 ### 變更既有檔案
 
@@ -131,9 +132,11 @@ export interface NewTabLayoutState {
 ### placeModule 語意（單一寫入 API）
 
 `placeModule(profileKey, id, colIdx, rowIdx)`：
-1. 若 id 已存在於該 profile 的任一欄：先從原位移除。
-2. 若原位與目標位於**同一欄**且 `fromRow < toRow`：`toRow--`（補償移除造成的 index shift）。
-3. 在 `(colIdx, rowIdx)` 插入。
+1. 若 id 已存在於該 profile 的任一欄：先從原位 `(fromCol, fromRow)` 移除。
+2. 若原位與目標位於**同一欄**且 `fromRow < toRow` 且 `toRow < col.length`（目標**不**是欄末）：`toRow--` 補償 index shift。
+   - 拖到欄末（`toRow === col.length` 原值，或移除後 `toRow === col.length`）不需要補償——`splice` 到末尾仍正確。
+   - 建議實作用 `clamp(toRow, 0, col.length)` 保證合法範圍。
+3. 在 `(colIdx, clampedToRow)` 插入。
 
 因此 drag/drop、palette 點擊加入、跨欄搬移都共用同一個 action；不再另有 `moveModule`。
 
@@ -191,18 +194,24 @@ export function getInterfaceSubsections(): InterfaceSubsection[]
 export function clearInterfaceSubsectionRegistry(): void
 ```
 
-與 `settings-section-registry` 同形，push 後依 `order` 排序。
+與 `settings-section-registry` 同形。`registerInterfaceSubsection` 必須是 **upsert**（依 `id` 先覆寫既有項再排序），避免 HMR 重跑 `registerBuiltinModules()` 時產生重複子項。
 
 ### InterfaceSection
 
+**controlled 模式**（與既有 `SettingsSidebar`/`activeSection` lift-up 慣例一致）：
+
 ```tsx
-export function InterfaceSection() {
+interface Props {
+  activeSubsection: string
+  onSelectSubsection: (id: string) => void
+}
+
+export function InterfaceSection({ activeSubsection, onSelectSubsection }: Props) {
   const subs = getInterfaceSubsections()
-  const [active, setActive] = useState(subs[0]?.id)
-  const selected = subs.find((s) => s.id === active)
+  const selected = subs.find((s) => s.id === activeSubsection)
   return (
     <div className="flex h-full">
-      <InterfaceSubNav items={subs} active={active} onSelect={setActive} />
+      <InterfaceSubNav items={subs} active={activeSubsection} onSelect={onSelectSubsection} />
       <div className="flex-1 overflow-auto">
         {selected && !selected.disabled && <selected.component />}
       </div>
@@ -210,6 +219,8 @@ export function InterfaceSection() {
   )
 }
 ```
+
+呼叫方（例如 `SettingsPage` 為 `interface` section render 時）持有 `activeSubsection` state（預設為 `getInterfaceSubsections()[0]?.id`），這樣未來 deep link（例如 `#settings/interface/new-tab`）或 onboarding 流程可以從外層控制選中項。
 
 Registry 為 module-level 靜態 array；render 時 snapshot。不支援 runtime 動態增減 subsection（與既有 `settings-section-registry` 同設計）。
 
@@ -222,7 +233,6 @@ Registry 為 module-level 靜態 array；render 時 snapshot。不支援 runtime
 />
 
 <NewTabProfileSwitcher
-  profiles={Array<{ key: ProfileKey; label: string; enabled: boolean; isEmpty: boolean }>}
   active={ProfileKey}
   lockedKeys={['1col']}
   onSelect={(k) => void}
@@ -232,7 +242,13 @@ Registry 為 module-level 靜態 array；render 時 snapshot。不支援 runtime
 />
 ```
 
-`isEmpty` 為 true 時在 switcher 顯示「此 profile 目前無 module」警示 badge。
+**資料流**：`NewTabProfileSwitcher` 自行以 Zustand selector 讀 `profiles`，內部計算每個 profile 的 `enabled` 與 `isEmpty = columns.flat().length === 0`（與 `enabled` 無關）。這避免 parent 做無意義的資料中繼、也符合專案「元件直接訂閱 store selector」的慣例。
+
+**`isEmpty` 語意**：
+- `isEmpty=true` 在 switcher 縮圖顯示「此 profile 目前無 module」警示 badge。
+- 首次 `ensureDefaults` 跑完後，所有 profile 都被預填，`isEmpty` 皆為 false；只有當使用者把某 profile 的 module 清空後才重新為 true。
+
+**「預填但 disabled」UX 提示**：由於首次填入的 3col/2col 預設 `enabled=false`，使用者打開設定頁會看到 3col/2col 縮圖有內容、toggle 是 off——為避免誤會，在 switcher 縮圖旁（`enabled=false && !isEmpty` 時）顯示 `settings.interface.profile_prefilled` 文案：「已預填預設佈局，啟用後即可使用」。
 
 ## New Tab Subsection（畫布）
 
@@ -256,9 +272,9 @@ Registry 為 module-level 靜態 array；render 時 snapshot。不支援 runtime
 
 ### 拖曳（`@dnd-kit`）
 
-沿用專案已有的 `@dnd-kit/core` + `@dnd-kit/sortable`（`TabBar` / `ActivityBar` / `RegionManager` 已在用）。
+沿用專案已有的 `@dnd-kit/core` + `@dnd-kit/sortable`（`TabBar` / `ActivityBar` / `RegionManager` 已在用）。**遵循既有三處的慣例**，避免 pattern 偏移：
 
-- **Sensors**：`PointerSensor`（桌/手機觸控通吃）+ `KeyboardSensor`（基本鍵盤拖曳由 dnd-kit 內建）。
+- **Sensors**：`PointerSensor` 須設 `activationConstraint: { distance: 5 }`（與 TabBar/ActivityBar/RegionManager 同），避免 palette chip 點擊被誤判為拖曳。`KeyboardSensor` 由 dnd-kit 內建。
 - **DndContext** 包住整個 NewTabSubsection。
 - **Draggables**
   - Palette chip：`useDraggable({ id: 'palette:' + providerId })`；`inUse=true` 時 `disabled` 避免重複拖
@@ -267,6 +283,7 @@ Registry 為 module-level 靜態 array；render 時 snapshot。不支援 runtime
   - 每欄（`useDroppable({ id: 'col:' + profile + ':' + colIdx })`），欄內 item 再交給 `useSortable` 處理 insertion index
   - Palette 區整塊為 droppable（drop 到此 = 從 canvas 移除）
 - **onDragEnd** dispatch 到 store 的 `placeModule` / `removeModule`。
+- **DragOverlay 必須用 portal**：Settings 頁面有 `overflow-auto` 容器會截斷預設掛在 `DndContext` 底下的 DragOverlay。必須用 `createPortal(<DragOverlay>..</DragOverlay>, document.body)` 脫離 stacking context；否則拖曳時 chip 會被 clip。
 - **Feedback**
   - Drop target 顯示 insertion line（sortable 自帶動畫 + 自訂 style）
   - `DragOverlay` 顯示拖曳中的 chip
@@ -361,28 +378,38 @@ export function NewTabPage({ onSelect }: Props) {
 
 ### Bootstrap（ensureDefaults 時機）
 
-**不**在 `register-modules.tsx` 模組頂層呼叫 store。改在應用根元件（例如 `App.tsx` 或專屬 provider）以 `useEffect` + hydration gate 觸發：
+**不**在 `register-modules.tsx` 模組頂層呼叫 store。改抽成 `useNewTabBootstrap()` hook，在 `App.tsx` 以單行呼叫（與既有 `useRouteSync` / `useShortcuts` 等慣例齊平）。
 
 ```tsx
-// 在 App root 或類似位置
-useEffect(() => {
-  const unsubscribe = useNewTabLayoutStore.persist.onFinishHydration(() => {
-    const providers = getNewTabProviders().map(p => ({ id: p.id, order: p.order, disabled: p.disabled }))
-    useNewTabLayoutStore.getState().ensureDefaults(providers)
-  })
-  // 若已 hydrated（HMR 等場景）也跑一次
-  if (useNewTabLayoutStore.persist.hasHydrated()) {
-    const providers = getNewTabProviders().map(p => ({ id: p.id, order: p.order, disabled: p.disabled }))
-    useNewTabLayoutStore.getState().ensureDefaults(providers)
-  }
-  return unsubscribe
-}, [])
+// spa/src/hooks/useNewTabBootstrap.ts
+export function useNewTabBootstrap() {
+  useEffect(() => {
+    const runDefaults = () => {
+      const providers = getNewTabProviders().map(p => ({
+        id: p.id, order: p.order, disabled: p.disabled,
+      }))
+      useNewTabLayoutStore.getState().ensureDefaults(providers)
+    }
+
+    if (useNewTabLayoutStore.persist.hasHydrated()) {
+      runDefaults()
+      return  // 不訂閱 onFinishHydration 以免 double-call
+    }
+    return useNewTabLayoutStore.persist.onFinishHydration(runDefaults)
+  }, [])
+}
+```
+
+```tsx
+// App.tsx 加一行
+useNewTabBootstrap()
 ```
 
 此時：
 - `registerBuiltinModules()` 已在 entry 執行完，provider 列表完整。
 - Hydration 完成後才讀 / 寫 store，不會覆蓋 localStorage。
-- `ensureDefaults` 只處理 knownIds 以外的 provider，重複呼叫無副作用。
+- `hasHydrated()` 為 true 時直接 runDefaults 並 early-return，避免同次 mount 因為 race 呼叫兩次。
+- StrictMode 下 effect 跑兩次、或 HMR 重跑：`ensureDefaults` 以 `knownIds` 為界，第二次呼叫為 no-op，冪等。
 
 ## 邊界情況與錯誤處理
 
@@ -399,6 +426,8 @@ useEffect(() => {
 | localStorage 寫入失敗 | Zustand persist 內建 try/catch + console.warn，不影響 runtime 渲染 |
 | 斷點附近視窗抖動 | `matchMedia` 只在跨斷點時觸發，不抖動 |
 | 空 profile（cols 全空） | runtime 顯示 `page.newtab.empty`；設定頁 switcher 顯示「此 profile 目前無 module」警示 |
+| Provider id 重用（plugin 下架後另一個 plugin 用同 id 註冊） | 視為同一 provider（knownIds 依 id 判斷，不檢查內容 hash）。開發者應避免 id 衝突；本 spec 不處理 |
+| `enabled=false` 但 `!isEmpty` 的 profile | UI 顯示「已預填預設佈局，啟用後即可使用」提示；runtime fallback 鏈跳過 |
 | Touch 裝置（iOS / Android PWA） | `@dnd-kit` `PointerSensor` 原生支援，無需 fallback |
 | Drop 到非合法目標 | dnd-kit 內建處理，chip 回彈原位 |
 
@@ -443,6 +472,29 @@ useEffect(() => {
 - dnd-kit 實際 drag gesture 在 JSDOM 不穩定 → 測試以直接呼叫 `onDragEnd` handler 或使用 `@dnd-kit` 官方的 testing utilities；真 drag E2E 留給後續 Playwright / Cypress。
 - Touch 裝置行為以 `PointerSensor` 為黑盒假設（dnd-kit 維護）。
 
+### 測試環境設定
+
+`spa/src/test-setup.ts` 需增補 `window.matchMedia` 全域 mock（目前只有 `ResizeObserver` polyfill），否則 `useMediaQuery` 的 `matchMedia(q).matches` 在 JSDOM 會 throw：
+
+```ts
+// 加到 test-setup.ts
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: (query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+  }),
+})
+```
+
+元件測試欲模擬不同視窗寬度時，以 `vi.spyOn(window, 'matchMedia')` 覆寫個別測試。
+
 ## i18n keys（新增）
 
 遵循現有 `settings.section.*` 慣例；subsection 層級的 key 用 `settings.interface.<sub-id>_*` 命名，避免深層 key（既有慣例是兩到三層）。
@@ -460,22 +512,26 @@ settings.interface.profile_empty          此配置尚未加入任何 module
 settings.interface.palette_in_use         已放
 settings.interface.palette_unavailable    此環境不可用
 settings.interface.canvas_drop_here       拖曳 module 到此
+settings.interface.profile_prefilled      已預填預設佈局，啟用後即可使用
 ```
 
 ## 實作順序建議
 
-1. `useMediaQuery` hook + test
-2. `interface-subsection-registry` + test
-3. `useNewTabLayoutStore` + test（含 `placeModule` off-by-one / knownIds / `resolveProfile` 純函式）
-4. `NewTabModulePalette` / `NewTabProfileSwitcher` + test
-5. `NewTabCanvas` / `NewTabThumbnail`（含 dnd-kit DndContext 整合）+ test
-6. `NewTabSubsection` 組裝
-7. `InterfaceSection` + `InterfaceSubNav` 殼
-8. 註冊到 `register-modules.tsx`（含 pane/sidebar 預留項；**不**呼叫 store）
-9. App root `useEffect` 掛 `onFinishHydration` → `ensureDefaults`
-10. `NewTabPage` 改寫 + 整合測試（hydration gate、matchMedia mock）
-11. i18n 補字
-12. 手動驗證：SPA 桌面 / 窄視窗 / PWA 手機實機拖曳
+1. `test-setup.ts` 加 `matchMedia` mock
+2. 純函式 `resolveProfile` + test（無依賴，最早可測）
+3. `useMediaQuery` hook（重構 `useIsMobile`）+ test
+4. `interface-subsection-registry`（含 upsert 語意）+ test
+5. `useNewTabLayoutStore` + test（含 `placeModule` off-by-one / clamp / knownIds / ensureDefaults 對所有 profile / 跳過 disabled）
+6. `NewTabModulePalette` + test
+7. `NewTabProfileSwitcher`（自己訂閱 store 算 isEmpty）+ test
+8. `NewTabCanvas` / `NewTabThumbnail`（含 dnd-kit DndContext、`activationConstraint: { distance: 5 }`、DragOverlay portal）+ test
+9. `NewTabSubsection` 組裝
+10. `InterfaceSection`（controlled props 模式）+ `InterfaceSubNav` + test
+11. 註冊到 `register-modules.tsx`（含 pane/sidebar 預留項；**不**呼叫 store）
+12. `useNewTabBootstrap` hook + 在 `App.tsx` 加一行呼叫
+13. `NewTabPage` 改寫 + 整合測試（hydration gate、matchMedia mock）
+14. i18n 補字
+15. 手動驗證：SPA 桌面 / 窄視窗 / PWA 手機實機拖曳
 
 ## Follow-up（不在本 spec）
 
@@ -485,3 +541,4 @@ settings.interface.canvas_drop_here       拖曳 module 到此
 - 接入 sync contributor 架構（等 sync 架構 phase 完成）
 - 鍵盤 DnD a11y 精修（dnd-kit `KeyboardSensor` 基本可用，細節 polish）
 - 真 drag 的 E2E 測試（Playwright）
+- `knownIds` 清理：plugin 系統開放後若發現 knownIds 膨脹，考慮在 `ensureDefaults` 結尾裁剪已不在 registry 的 id（alpha 階段 YAGNI）
