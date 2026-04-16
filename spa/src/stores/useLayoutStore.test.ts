@@ -50,6 +50,31 @@ describe('useLayoutStore', () => {
     })
   })
 
+  describe('setActivityBarWidth', () => {
+    it('narrow → wide', () => {
+      useLayoutStore.getState().setActivityBarWidth('wide')
+      expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
+    })
+
+    it('wide → narrow', () => {
+      useLayoutStore.setState({ activityBarWidth: 'wide' })
+      useLayoutStore.getState().setActivityBarWidth('narrow')
+      expect(useLayoutStore.getState().activityBarWidth).toBe('narrow')
+    })
+
+    it('refuses narrow when tabPosition=left', () => {
+      useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'left' })
+      useLayoutStore.getState().setActivityBarWidth('narrow')
+      expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
+    })
+
+    it('allows wide when tabPosition=left', () => {
+      useLayoutStore.setState({ activityBarWidth: 'narrow', tabPosition: 'left' })
+      useLayoutStore.getState().setActivityBarWidth('wide')
+      expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
+    })
+  })
+
   describe('setRegionWidth', () => {
     it('changes width for a region', () => {
       useLayoutStore.getState().setRegionWidth('primary-sidebar', 300)

@@ -35,6 +35,7 @@ interface LayoutState {
   removeView: (region: SidebarRegion, viewId: string) => void
   reorderViews: (region: SidebarRegion, views: string[]) => void
   reconcileViews: () => void
+  setActivityBarWidth: (width: ActivityBarWidth) => void
 }
 
 function createDefaultRegions(): Record<SidebarRegion, RegionState> {
@@ -161,6 +162,12 @@ export const useLayoutStore = create<LayoutState>()(
             }
           }
           return { regions: reconciled }
+        }),
+
+      setActivityBarWidth: (width) =>
+        set((state) => {
+          if (width === 'narrow' && state.tabPosition === 'left') return state
+          return { activityBarWidth: width }
         }),
     }),
     {
