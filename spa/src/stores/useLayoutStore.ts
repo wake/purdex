@@ -10,6 +10,22 @@ const MAX_WIDTH = 600
 export type ActivityBarWidth = 'narrow' | 'wide'
 export type TabPosition = 'top' | 'left'
 
+/**
+ * Reserved key for Home row in `workspaceExpanded` (not a real workspace id).
+ */
+export const HOME_WS_KEY = 'home'
+
+/**
+ * Self-heal invariant: `tabPosition='left'` requires `activityBarWidth='wide'`.
+ * Called by persist's onRehydrateStorage; also exported for direct testing.
+ */
+export function healLayoutInvariant<T extends { activityBarWidth?: ActivityBarWidth; tabPosition?: TabPosition }>(state: T): T {
+  if (state.tabPosition === 'left' && state.activityBarWidth === 'narrow') {
+    state.activityBarWidth = 'wide'
+  }
+  return state
+}
+
 interface RegionState {
   views: string[]
   activeViewId?: string
@@ -195,7 +211,7 @@ export const useLayoutStore = create<LayoutState>()(
       reconcileWorkspaceExpanded: (liveWsIds) =>
         set((state) => {
           const alive = new Set(liveWsIds)
-          alive.add('home')
+          alive.add(HOME_WS_KEY)
           const next: Record<string, boolean> = {}
           let changed = false
           for (const [key, value] of Object.entries(state.workspaceExpanded)) {
@@ -217,6 +233,9 @@ export const useLayoutStore = create<LayoutState>()(
         activityBarWideSize: state.activityBarWideSize,
         workspaceExpanded: state.workspaceExpanded,
       }),
+      onRehydrateStorage: () => (state) => {
+        if (state) healLayoutInvariant(state)
+      },
     },
   ),
 )

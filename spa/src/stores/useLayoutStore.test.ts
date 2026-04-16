@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useLayoutStore } from './useLayoutStore'
+import { useLayoutStore, healLayoutInvariant } from './useLayoutStore'
 import type { SidebarRegion } from '../types/layout'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 
@@ -157,6 +157,19 @@ describe('useLayoutStore', () => {
       const before = useLayoutStore.getState().workspaceExpanded
       useLayoutStore.getState().reconcileWorkspaceExpanded(['ws-a'])
       expect(useLayoutStore.getState().workspaceExpanded).toEqual(before)
+    })
+  })
+
+  describe('healLayoutInvariant', () => {
+    it('forces width=wide when state has {narrow, left}', () => {
+      const healed = healLayoutInvariant({ activityBarWidth: 'narrow', tabPosition: 'left' })
+      expect(healed.activityBarWidth).toBe('wide')
+    })
+
+    it('leaves valid combinations untouched', () => {
+      expect(healLayoutInvariant({ activityBarWidth: 'narrow', tabPosition: 'top' }).activityBarWidth).toBe('narrow')
+      expect(healLayoutInvariant({ activityBarWidth: 'wide', tabPosition: 'top' }).activityBarWidth).toBe('wide')
+      expect(healLayoutInvariant({ activityBarWidth: 'wide', tabPosition: 'left' }).activityBarWidth).toBe('wide')
     })
   })
 
