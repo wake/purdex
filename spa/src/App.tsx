@@ -68,11 +68,12 @@ export default function App() {
   useNotificationDispatcher()
   useElectronIpc()
 
-  // Reconcile workspaceExpanded when workspaces list changes
+  // Reconcile workspaceExpanded only when the id set actually changes
+  // (workspace rename / tab reorder replace the `workspaces` ref but preserve ids).
+  const wsIdsKey = useMemo(() => workspaces.map((w) => w.id).join(','), [workspaces])
   useEffect(() => {
-    const wsIds = workspaces.map((w) => w.id)
-    useLayoutStore.getState().reconcileWorkspaceExpanded(wsIds)
-  }, [workspaces])
+    useLayoutStore.getState().reconcileWorkspaceExpanded(wsIdsKey ? wsIdsKey.split(',') : [])
+  }, [wsIdsKey])
 
   const { handleWsTearOff, handleWsMergeTo } = useWorkspaceWindowActions()
 
