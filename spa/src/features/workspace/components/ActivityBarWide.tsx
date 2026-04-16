@@ -3,6 +3,7 @@ import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
+import { CollapseButton } from './CollapseButton'
 
 interface Props {
   workspaces: Workspace[]
@@ -81,6 +82,9 @@ export function ActivityBarWide(props: Props) {
 
       {/* Bottom controls */}
       <div className="mt-auto flex flex-col gap-1 px-2 pb-1">
+        <div className="flex items-center justify-end">
+          <CollapseButton />
+        </div>
         <button
           title={t('nav.new_workspace')}
           onClick={onAddWorkspace}

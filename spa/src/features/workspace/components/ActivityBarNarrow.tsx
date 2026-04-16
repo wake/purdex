@@ -5,6 +5,7 @@ import { Plus, GearSix, HardDrives } from '@phosphor-icons/react'
 import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
+import { CollapseButton } from './CollapseButton'
 import { useWorkspaceIndicators } from '../useWorkspaceIndicators'
 import type { ActiveStatus } from '../workspace-indicators'
 
@@ -211,6 +212,7 @@ export function ActivityBarNarrow({
 
       {/* Add + Settings */}
       <div className="mt-auto flex flex-col items-center gap-2 pb-1">
+        <CollapseButton />
         <button
           title={t('nav.new_workspace')}
           onClick={onAddWorkspace}
