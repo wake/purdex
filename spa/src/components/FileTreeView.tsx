@@ -1,14 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { FolderSimple, File, CaretRight, CaretDown } from '@phosphor-icons/react'
 import { useHostStore } from '../stores/useHostStore'
 import { useWorkspaceStore } from '../features/workspace/store'
+import { useTabStore } from '../stores/useTabStore'
+import { getFsBackend } from '../lib/fs-backend'
+import { getDefaultOpener } from '../lib/file-opener-registry'
 import type { ViewProps } from '../lib/module-registry'
-
-interface FileEntry {
-  name: string
-  isDir: boolean
-  size: number
-}
+import type { FileSource, FileInfo, FileEntry } from '../types/fs'
 
 interface DirState {
   entries: FileEntry[]
@@ -19,7 +17,8 @@ interface DirState {
 export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
   void isActive
   const activeHostId = useHostStore((s) => s.activeHostId ?? s.hostOrder[0] ?? '')
-  const baseUrl = useHostStore((s) => (activeHostId ? s.getDaemonBase(activeHostId) : ''))
+
+  const source: FileSource = useMemo(() => ({ type: 'daemon' as const, hostId: activeHostId }), [activeHostId])
 
   const workspace = useWorkspaceStore((s) => s.workspaces.find((ws) => ws.id === workspaceId))
   const projectPath = workspace?.moduleConfig?.['files']?.['projectPath'] as string | undefined
@@ -32,15 +31,14 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
   const [loading, setLoading] = useState(false)
 
   const fetchDir = useCallback(async (path: string): Promise<{ path: string; entries: FileEntry[] }> => {
-    const url = `${baseUrl}/api/files?path=${encodeURIComponent(path)}`
-    const authHeaders = useHostStore.getState().getAuthHeaders(activeHostId)
-    const res = await fetch(url, { headers: authHeaders })
-    if (!res.ok) throw new Error(`Failed to fetch: ${res.statusText}`)
-    return res.json()
-  }, [baseUrl, activeHostId])
+    const backend = getFsBackend(source)
+    if (!backend) throw new Error('No FS backend available')
+    const entries = await backend.list(path)
+    return { path, entries }
+  }, [source])
 
   useEffect(() => {
-    if (!baseUrl || !projectPath) return
+    if (!activeHostId || !projectPath) return
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sync reset before async fetch
     setLoading(true)
     setError(null)
@@ -49,7 +47,7 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
       .then((data) => setRootEntries(data.entries))
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false))
-  }, [baseUrl, projectPath, fetchDir])
+  }, [activeHostId, projectPath, fetchDir])
 
   const toggleDir = useCallback(async (fullPath: string) => {
     const existing = expandedDirs[fullPath]
@@ -70,7 +68,7 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
     }
   }, [expandedDirs, fetchDir])
 
-  if (!baseUrl) return <div className="p-3 text-xs text-text-muted">No host connected</div>
+  if (!activeHostId) return <div className="p-3 text-xs text-text-muted">No host connected</div>
   if (!workspaceId) return <div className="p-3 text-xs text-text-muted">請先選擇 Workspace</div>
 
   if (!projectPath) {
@@ -118,7 +116,25 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
               data-testid={`file-entry-${entry.name}`}
               className="w-full flex items-center gap-1 px-2 py-0.5 text-xs text-text-primary hover:bg-surface-hover transition-colors"
               style={{ paddingLeft: 8 + depth * 16 }}
-              onClick={() => entry.isDir && toggleDir(fullPath)}
+              onClick={() => {
+                if (entry.isDir) {
+                  void toggleDir(fullPath)
+                } else {
+                  const fileInfo: FileInfo = {
+                    name: entry.name,
+                    path: fullPath,
+                    extension: entry.name.split('.').pop() ?? '',
+                    size: entry.size,
+                    isDirectory: false,
+                  }
+                  const opener = getDefaultOpener(fileInfo)
+                  if (opener) {
+                    const content = opener.createContent(source, fileInfo)
+                    const tabId = useTabStore.getState().openSingletonTab(content)
+                    useWorkspaceStore.getState().insertTab(tabId, workspaceId)
+                  }
+                }
+              }}
             >
               {entry.isDir ? (
                 <>
