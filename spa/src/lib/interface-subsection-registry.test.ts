@@ -30,6 +30,13 @@ describe('interface-subsection-registry', () => {
     expect(items[0].label).toBe('New')
   })
 
+  it('upsert with changed order re-sorts correctly', () => {
+    registerInterfaceSubsection(make({ id: 'a', order: 10 }))
+    registerInterfaceSubsection(make({ id: 'b', order: 20 }))
+    registerInterfaceSubsection(make({ id: 'a', order: 5 }))  // upsert lowers a's order
+    expect(getInterfaceSubsections().map((s) => s.id)).toEqual(['a', 'b'])
+  })
+
   it('returns a copy, not the internal array', () => {
     registerInterfaceSubsection(make())
     expect(getInterfaceSubsections()).not.toBe(getInterfaceSubsections())
