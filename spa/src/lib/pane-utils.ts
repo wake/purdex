@@ -15,10 +15,18 @@ export function contentMatches(a: PaneContent, b: PaneContent): boolean {
     return a.filePath === b.filePath
   }
   if (a.kind === 'image-preview' && b.kind === 'image-preview') {
-    return a.filePath === b.filePath && a.source.type === b.source.type
+    if (a.source.type !== b.source.type) return false
+    if (a.source.type === 'daemon' && b.source.type === 'daemon') {
+      return a.filePath === b.filePath && a.source.hostId === b.source.hostId
+    }
+    return a.filePath === b.filePath
   }
   if (a.kind === 'pdf-preview' && b.kind === 'pdf-preview') {
-    return a.filePath === b.filePath && a.source.type === b.source.type
+    if (a.source.type !== b.source.type) return false
+    if (a.source.type === 'daemon' && b.source.type === 'daemon') {
+      return a.filePath === b.filePath && a.source.hostId === b.source.hostId
+    }
+    return a.filePath === b.filePath
   }
   return true
 }

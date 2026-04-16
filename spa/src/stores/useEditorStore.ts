@@ -14,7 +14,7 @@ interface EditorState {
   buffers: Record<string, EditorBuffer>
   openBuffer: (key: string, content: string, language: string, stat?: { mtime: number; size: number }) => void
   updateContent: (key: string, content: string) => void
-  markSaved: (key: string) => void
+  markSaved: (key: string, stat?: { mtime: number; size: number }) => void
   closeBuffer: (key: string) => void
   reloadBuffer: (key: string, content: string, stat?: { mtime: number; size: number }) => void
   updateCursor: (key: string, line: number, column: number) => void
@@ -53,7 +53,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
     }
   }),
 
-  markSaved: (key) => set((s) => {
+  markSaved: (key, stat) => set((s) => {
     const buf = s.buffers[key]
     if (!buf) return s
     return {
@@ -63,6 +63,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
           ...buf,
           savedContent: buf.content,
           isDirty: false,
+          lastStat: stat ?? buf.lastStat,
         },
       },
     }

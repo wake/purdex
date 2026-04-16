@@ -15,11 +15,16 @@ export function TiptapEditor({ content, onChange, onSave }: Props) {
     onSaveRef.current = onSave
   }, [onSave])
 
+  // Track whether the latest content change came from user typing (onUpdate)
+  // to prevent the sync useEffect from re-setting content that just came from the editor
+  const internalUpdateRef = useRef(false)
+
   const editor = useEditor({
     extensions: [StarterKit, Markdown],
     content,
     contentType: 'markdown',
     onUpdate: ({ editor: ed }) => {
+      internalUpdateRef.current = true
       const md = ed.getMarkdown()
       onChange(md)
     },
@@ -38,10 +43,11 @@ export function TiptapEditor({ content, onChange, onSave }: Props) {
   // Sync external content changes (e.g., reload from disk)
   useEffect(() => {
     if (!editor) return
-    const currentMd = editor.getMarkdown()
-    if (currentMd !== content) {
-      editor.commands.setContent(content, false, { contentType: 'markdown' })
+    if (internalUpdateRef.current) {
+      internalUpdateRef.current = false
+      return
     }
+    editor.commands.setContent(content, { emitUpdate: false, contentType: 'markdown' })
   }, [content, editor])
 
   if (!editor) return null

@@ -115,7 +115,9 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
     try {
       const encoded = new TextEncoder().encode(buf.content)
       await backend.write(filePath, encoded)
-      useEditorStore.getState().markSaved(key)
+      const newStat = await backend.stat(filePath)
+      useEditorStore.getState().markSaved(key, { mtime: newStat.mtime, size: newStat.size })
+      setShowDiff(false)
     } catch (err) {
       console.error('[editor] Save failed:', err)
     }

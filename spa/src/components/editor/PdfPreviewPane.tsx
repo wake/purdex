@@ -48,7 +48,7 @@ function PdfPreviewPaneInner({ source, filePath }: { source: FileSource; filePat
         {fileName}
       </div>
       <div className="flex-1 min-h-0 bg-surface-primary">
-        <iframe src={objectUrl} title={fileName} className="w-full h-full border-0" />
+        <iframe src={objectUrl} title={fileName} sandbox="" className="w-full h-full border-0" />
       </div>
     </div>
   )
