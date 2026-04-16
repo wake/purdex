@@ -1,4 +1,4 @@
-import type { Workspace } from '../../../types/tab'
+import type { Workspace, Tab } from '../../../types/tab'
 
 /**
  * Shared props for {@link ActivityBar} coordinator and its Narrow / Wide variants.
@@ -18,4 +18,15 @@ export interface ActivityBarProps {
   onContextMenuWorkspace?: (e: React.MouseEvent, wsId: string) => void
   onOpenHosts: () => void
   onOpenSettings: () => void
+
+  // Phase 2 additions — only used by ActivityBarWide when tabPosition='left'
+  tabsById?: Record<string, Tab>
+  activeTabId?: string | null
+  onSelectTab?: (tabId: string) => void
+  onCloseTab?: (tabId: string) => void
+  onMiddleClickTab?: (tabId: string) => void
+  onContextMenuTab?: (e: React.MouseEvent, tabId: string) => void
+  onReorderWorkspaceTabs?: (wsId: string, tabIds: string[]) => void
+  onReorderStandaloneTabs?: (tabIds: string[]) => void
+  onAddTabToWorkspace?: (wsId: string) => void
 }

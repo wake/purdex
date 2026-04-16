@@ -62,6 +62,17 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     useWorkspaceStore.getState().insertTab(tab.id)
   }, [addTab, setActiveTab])
 
+  const handleAddTabToWorkspace = useCallback((wsId: string) => {
+    const tab = createTab({ kind: 'new-tab' })
+    addTab(tab)
+    setActiveTab(tab.id)
+    useWorkspaceStore.getState().insertTab(tab.id, wsId)
+  }, [addTab, setActiveTab])
+
+  const handleReorderWorkspaceTabs = useCallback((wsId: string, tabIds: string[]) => {
+    useWorkspaceStore.getState().reorderWorkspaceTabs(wsId, tabIds)
+  }, [])
+
   const handleReorderTabs = useCallback((order: string[]) => {
     if (activeWorkspaceId) {
       reorderWorkspaceTabs(activeWorkspaceId, order)
@@ -204,6 +215,8 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     handleSelectTab,
     handleCloseTab,
     handleAddTab,
+    handleAddTabToWorkspace,
+    handleReorderWorkspaceTabs,
     handleReorderTabs,
     handleContextMenu,
     handleMiddleClick,

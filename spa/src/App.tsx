@@ -112,6 +112,8 @@ export default function App() {
     handleSelectTab,
     handleCloseTab,
     handleAddTab,
+    handleAddTabToWorkspace,
+    handleReorderWorkspaceTabs,
     handleReorderTabs,
     handleContextMenu,
     handleMiddleClick,
@@ -138,6 +140,25 @@ export default function App() {
 
   const handleReorderWorkspaces = useCallback((ids: string[]) => {
     useWorkspaceStore.getState().reorderWorkspaces(ids)
+  }, [])
+
+  const handleReorderStandaloneTabs = useCallback((newOrder: string[]) => {
+    const current = useTabStore.getState().tabOrder
+    const standaloneSet = new Set(newOrder)
+    const result: string[] = []
+    let insertIndex = -1
+    for (let i = 0; i < current.length; i++) {
+      const id = current[i]
+      if (standaloneSet.has(id)) {
+        if (insertIndex === -1) insertIndex = result.length
+        // skip; handled below
+      } else {
+        result.push(id)
+      }
+    }
+    if (insertIndex === -1) insertIndex = result.length
+    result.splice(insertIndex, 0, ...newOrder)
+    useTabStore.getState().reorderTabs(result)
   }, [])
 
   const handleCloseTabContextMenu = useCallback(() => {
@@ -219,6 +240,16 @@ export default function App() {
             onContextMenuWorkspace={handleWsContextMenu}
             onOpenHosts={handleOpenHosts}
             onOpenSettings={handleOpenSettings}
+            // Phase 2
+            tabsById={tabs}
+            activeTabId={activeTabId}
+            onSelectTab={handleSelectTab}
+            onCloseTab={handleCloseTab}
+            onMiddleClickTab={handleMiddleClick}
+            onContextMenuTab={handleContextMenu}
+            onReorderWorkspaceTabs={handleReorderWorkspaceTabs}
+            onReorderStandaloneTabs={handleReorderStandaloneTabs}
+            onAddTabToWorkspace={handleAddTabToWorkspace}
           />
           <SidebarRegion region="primary-sidebar" resizeEdge="right" />
           <div className="flex-1 flex flex-col min-w-0">
