@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.146] - 2026-04-17
+
+### 功能
+
+- **spa**：SyncEngine — pluggable module contributor registry + SyncBundle serialize/deserialize + 三方比對衝突偵測
+- **spa**：7 個 SyncContributor — workspaces、hosts（排除 auth token）、preferences、layout、quick-commands、i18n、notification-settings
+- **spa**：3 個 SyncProvider — Manual（匯出/匯入）、Daemon（REST push/pull）、File（iCloud/Syncthing 同步資料夾）
+- **daemon**：Sync module — SQLite 儲存（groups、canonical bundle、history、pairing codes）+ 9 個 HTTP endpoints
+- **spa**：Sync Settings UI — provider 選擇器、module checkboxes、匯出/匯入、sync status
+
+### 測試
+
+- SPA 新增 182 個 sync 測試（15 test files），全套 1626 tests 無回歸
+- Go daemon 新增 5 個 sync store 測試
+
 ## [1.0.0-alpha.145] - 2026-04-16
 
 ### 修復
