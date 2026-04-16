@@ -1,4 +1,6 @@
+import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { ActivityBarNarrow } from './ActivityBarNarrow'
+import { ActivityBarWide } from './ActivityBarWide'
 import type { Workspace } from '../../../types/tab'
 
 interface Props {
@@ -16,5 +18,7 @@ interface Props {
 }
 
 export function ActivityBar(props: Props) {
+  const width = useLayoutStore((s) => s.activityBarWidth)
+  if (width === 'wide') return <ActivityBarWide {...props} />
   return <ActivityBarNarrow {...props} />
 }
