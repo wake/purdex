@@ -12,6 +12,7 @@ import { useConfigStore } from './stores/useConfigStore'
 import { useTabStore } from './stores/useTabStore'
 import { useWorkspaceStore } from './stores/useWorkspaceStore'
 import { useHostStore } from './stores/useHostStore'
+import { useLayoutStore } from './stores/useLayoutStore'
 import { useRelayWsManager } from './hooks/useRelayWsManager'
 import { useMultiHostEventWs } from './hooks/useMultiHostEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
@@ -66,6 +67,13 @@ export default function App() {
   useShortcuts()
   useNotificationDispatcher()
   useElectronIpc()
+
+  // Reconcile workspaceExpanded when workspaces list changes
+  useEffect(() => {
+    const wsIds = workspaces.map((w) => w.id)
+    useLayoutStore.getState().reconcileWorkspaceExpanded(wsIds)
+  }, [workspaces])
+
   const { handleWsTearOff, handleWsMergeTo } = useWorkspaceWindowActions()
 
   // --- Derived state ---
