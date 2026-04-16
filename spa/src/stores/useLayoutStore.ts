@@ -37,6 +37,7 @@ interface LayoutState {
   reconcileViews: () => void
   setActivityBarWidth: (width: ActivityBarWidth) => void
   toggleActivityBarWidth: () => void
+  setActivityBarWideSize: (size: number) => void
 }
 
 function createDefaultRegions(): Record<SidebarRegion, RegionState> {
@@ -177,6 +178,9 @@ export const useLayoutStore = create<LayoutState>()(
           if (next === 'narrow' && state.tabPosition === 'left') return state
           return { activityBarWidth: next }
         }),
+
+      setActivityBarWideSize: (size) =>
+        set(() => ({ activityBarWideSize: clampWidth(size) })),
     }),
     {
       name: STORAGE_KEYS.LAYOUT,

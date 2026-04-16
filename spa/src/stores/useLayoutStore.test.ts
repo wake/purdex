@@ -90,6 +90,23 @@ describe('useLayoutStore', () => {
     })
   })
 
+  describe('setActivityBarWideSize', () => {
+    it('updates value', () => {
+      useLayoutStore.getState().setActivityBarWideSize(300)
+      expect(useLayoutStore.getState().activityBarWideSize).toBe(300)
+    })
+
+    it('clamps below 120', () => {
+      useLayoutStore.getState().setActivityBarWideSize(50)
+      expect(useLayoutStore.getState().activityBarWideSize).toBe(120)
+    })
+
+    it('clamps above 600', () => {
+      useLayoutStore.getState().setActivityBarWideSize(800)
+      expect(useLayoutStore.getState().activityBarWideSize).toBe(600)
+    })
+  })
+
   describe('setRegionWidth', () => {
     it('changes width for a region', () => {
       useLayoutStore.getState().setRegionWidth('primary-sidebar', 300)
