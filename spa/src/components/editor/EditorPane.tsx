@@ -4,6 +4,7 @@ import type { PaneRendererProps } from '../../lib/module-registry'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { getFsBackend } from '../../lib/fs-backend'
 import { MonacoWrapper } from './MonacoWrapper'
+import { DiffView } from './DiffView'
 import { EditorToolbar } from './EditorToolbar'
 import { EditorStatusBar } from './EditorStatusBar'
 import type { FileSource } from '../../types/fs'
@@ -42,6 +43,7 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
   const buffer = useEditorStore((s) => s.buffers[key])
   const isMarkdown = filePath.endsWith('.md') || filePath.endsWith('.mdx')
   const [editorMode, setEditorMode] = useState<'raw' | 'wysiwyg'>('raw')
+  const [showDiff, setShowDiff] = useState(false)
 
   // Load file on mount, cleanup buffer on unmount
   useEffect(() => {
@@ -99,11 +101,19 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
         isDirty={buffer.isDirty}
         isMarkdown={isMarkdown}
         editorMode={editorMode}
+        showDiff={showDiff}
         onSave={handleSave}
         onToggleMode={isMarkdown ? () => setEditorMode((m) => (m === 'raw' ? 'wysiwyg' : 'raw')) : undefined}
+        onDiff={() => setShowDiff((d) => !d)}
       />
       <div className="flex-1 min-h-0 overflow-hidden">
-        {editorMode === 'raw' ? (
+        {showDiff ? (
+          <DiffView
+            original={buffer.savedContent}
+            modified={buffer.content}
+            language={buffer.language}
+          />
+        ) : editorMode === 'raw' ? (
           <MonacoWrapper
             content={buffer.content}
             language={buffer.language}
