@@ -36,4 +36,21 @@ describe('CollapseButton', () => {
     expect(btn).toBeDisabled()
     expect(btn.getAttribute('title')).toMatch(/locked|left/i)
   })
+
+  it('reflects wide/narrow state via aria-pressed', () => {
+    const { unmount } = render(<CollapseButton />)
+    expect(screen.getByRole('button')).toHaveAttribute('aria-pressed', 'false')
+    unmount()
+    useLayoutStore.setState({ activityBarWidth: 'wide' })
+    render(<CollapseButton />)
+    expect(screen.getByRole('button')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('locked state does not include cursor-pointer class', () => {
+    useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'left' })
+    render(<CollapseButton />)
+    const btn = screen.getByRole('button')
+    expect(btn.className).not.toMatch(/\bcursor-pointer\b/)
+    expect(btn.className).toMatch(/\bcursor-not-allowed\b/)
+  })
 })

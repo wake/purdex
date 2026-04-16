@@ -23,11 +23,12 @@ export function CollapseButton() {
       disabled={locked}
       title={label}
       aria-label={label}
+      aria-pressed={isWide}
       onClick={toggle}
-      className={`w-[30px] h-[30px] rounded-md flex items-center justify-center cursor-pointer ${
+      className={`w-[30px] h-[30px] rounded-md flex items-center justify-center ${
         locked
           ? 'text-text-muted/50 cursor-not-allowed'
-          : 'text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
+          : 'cursor-pointer text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
       }`}
     >
       <Icon size={14} />
