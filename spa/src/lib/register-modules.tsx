@@ -35,6 +35,7 @@ import { LocalBackend } from './fs-backend-local'
 import { registerFsBackend, getFsBackend } from './fs-backend'
 import { registerFileOpener } from './file-opener-registry'
 import { useHostStore } from '../stores/useHostStore'
+import { registerSyncContributors } from './sync/register-sync'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
   const handleSelect = (content: PaneContent) => {
@@ -61,6 +62,9 @@ function MemoryMonitorPaneWrapper() {
 
 export function registerBuiltinModules(): void {
   const caps = getPlatformCapabilities()
+
+  // Sync contributors
+  registerSyncContributors()
 
   // Modules with pane renderers
   registerModule({
