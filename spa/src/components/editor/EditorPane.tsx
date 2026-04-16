@@ -1,5 +1,5 @@
 // spa/src/components/editor/EditorPane.tsx
-import { useEffect, useCallback, useRef } from 'react'
+import { lazy, Suspense, useEffect, useCallback, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { getFsBackend } from '../../lib/fs-backend'
@@ -7,6 +7,10 @@ import { MonacoWrapper } from './MonacoWrapper'
 import { EditorToolbar } from './EditorToolbar'
 import { EditorStatusBar } from './EditorStatusBar'
 import type { FileSource } from '../../types/fs'
+
+const TiptapEditor = lazy(() =>
+  import('./TiptapEditor').then((m) => ({ default: m.TiptapEditor }))
+)
 
 function bufferKey(source: FileSource, filePath: string): string {
   if (source.type === 'daemon') return `daemon:${source.hostId}:${filePath}`
@@ -36,7 +40,8 @@ export function EditorPane({ pane, isActive }: PaneRendererProps) {
 function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; filePath: string; isActive: boolean }) {
   const key = bufferKey(source, filePath)
   const buffer = useEditorStore((s) => s.buffers[key])
-  const saveRef = useRef<() => Promise<void>>()
+  const isMarkdown = filePath.endsWith('.md') || filePath.endsWith('.mdx')
+  const [editorMode, setEditorMode] = useState<'raw' | 'wysiwyg'>('raw')
 
   // Load file on mount, cleanup buffer on unmount
   useEffect(() => {
@@ -89,15 +94,32 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
 
   return (
     <div className="h-full w-full flex flex-col overflow-hidden">
-      <EditorToolbar filePath={filePath} isDirty={buffer.isDirty} onSave={handleSave} />
+      <EditorToolbar
+        filePath={filePath}
+        isDirty={buffer.isDirty}
+        isMarkdown={isMarkdown}
+        editorMode={editorMode}
+        onSave={handleSave}
+        onToggleMode={isMarkdown ? () => setEditorMode((m) => (m === 'raw' ? 'wysiwyg' : 'raw')) : undefined}
+      />
       <div className="flex-1 min-h-0 overflow-hidden">
-        <MonacoWrapper
-          content={buffer.content}
-          language={buffer.language}
-          onChange={(value) => useEditorStore.getState().updateContent(key, value)}
-          onCursorChange={(line, col) => useEditorStore.getState().updateCursor(key, line, col)}
-          onSave={handleSave}
-        />
+        {editorMode === 'raw' ? (
+          <MonacoWrapper
+            content={buffer.content}
+            language={buffer.language}
+            onChange={(value) => useEditorStore.getState().updateContent(key, value)}
+            onCursorChange={(line, col) => useEditorStore.getState().updateCursor(key, line, col)}
+            onSave={handleSave}
+          />
+        ) : (
+          <Suspense fallback={<div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading editor...</div>}>
+            <TiptapEditor
+              content={buffer.content}
+              onChange={(md) => useEditorStore.getState().updateContent(key, md)}
+              onSave={handleSave}
+            />
+          </Suspense>
+        )}
       </div>
       <EditorStatusBar
         language={buffer.language}
