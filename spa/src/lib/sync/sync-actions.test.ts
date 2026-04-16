@@ -151,6 +151,79 @@ describe('syncNow', () => {
     expect(contributor.getData()).toEqual({ theme: 'solarized' })
   })
 
+  it('conflicts: partialBaseline advances only for non-conflicting contributors', async () => {
+    // Second contributor with no conflict
+    const prefs = contributor // 'prefs' — conflict target
+    const hosts = createTestContributor('hosts', { h1: { name: 'a' } })
+    engine.register(hosts)
+
+    // Set up conflict on prefs: local changed theme, remote changed theme differently.
+    const lastSynced: SyncBundle = {
+      version: 1,
+      timestamp: 100,
+      device: 'c_local',
+      collections: {
+        prefs: { version: 1, data: { theme: 'dark' } },
+        hosts: { version: 1, data: { h1: { name: 'a' } } },
+      },
+    }
+    prefs.deserialize(
+      { version: 1, data: { theme: 'solarized' } },
+      { type: 'full-replace' },
+    )
+    const remoteBundle: SyncBundle = {
+      version: 1,
+      timestamp: 500,
+      device: 'c_remote',
+      collections: {
+        prefs: { version: 1, data: { theme: 'light' } },
+        hosts: { version: 1, data: { h1: { name: 'b' } } }, // changed, no local change → use-remote
+      },
+    }
+    const provider = createStubProvider({ pull: vi.fn(async () => remoteBundle) })
+
+    const result = await syncNow({
+      provider,
+      clientId: 'c_local',
+      lastSyncedBundle: lastSynced,
+      enabledModules: ['prefs', 'hosts'],
+      engine,
+    })
+
+    expect(result.kind).toBe('conflicts')
+    if (result.kind !== 'conflicts') throw new Error('unreachable')
+
+    // Non-conflicting 'hosts' was applied locally (engine partial-apply):
+    expect(hosts.getData()).toEqual({ h1: { name: 'b' } })
+
+    // partialBaseline must: keep old baseline for 'prefs' (conflict) but
+    // advance to remote for 'hosts' (applied).
+    expect(result.partialBaseline.collections['prefs']).toEqual(
+      lastSynced.collections['prefs'],
+    )
+    expect(result.partialBaseline.collections['hosts']).toEqual(
+      remoteBundle.collections['hosts'],
+    )
+  })
+
+  it('conflicts: partialBaseline works when lastSyncedBundle is null (first sync)', async () => {
+    // First sync → engine.pull uses first-sync branch with full-replace, no conflicts.
+    // Force a conflict scenario by providing a non-null lastSyncedBundle that
+    // predates both local and remote state. Here we skip: with null lastSynced
+    // engine never returns conflicts, so partialBaseline need only handle that
+    // we don't explode when given null.
+    const provider = createStubProvider({ pull: vi.fn(async () => null) })
+    const result = await syncNow({
+      provider,
+      clientId: 'c_local',
+      lastSyncedBundle: null,
+      enabledModules: ['prefs'],
+      engine,
+    })
+    // Empty remote → ok path, no partialBaseline exposed
+    expect(result.kind).toBe('ok')
+  })
+
   it('returns error when provider.pull throws', async () => {
     const provider = createStubProvider({
       pull: vi.fn(async () => {

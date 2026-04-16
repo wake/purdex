@@ -145,6 +145,10 @@ export function SyncSection() {
 
     if (result.kind === 'ok') {
       setLastSyncedBundle(result.appliedBundle)
+    } else if (result.kind === 'conflicts') {
+      // engine partial-applied non-conflicting contributors; advance their
+      // baseline so the next sync doesn't rebase them against a stale ancestor.
+      setLastSyncedBundle(result.partialBaseline)
     }
 
     setStatus(statusFromResult(result, 'Sync complete.'))
@@ -195,6 +199,8 @@ export function SyncSection() {
 
       if (result.kind === 'ok') {
         setLastSyncedBundle(result.appliedBundle)
+      } else if (result.kind === 'conflicts') {
+        setLastSyncedBundle(result.partialBaseline)
       }
 
       setStatus(statusFromResult(result, 'Import applied.'))
@@ -241,7 +247,7 @@ export function SyncSection() {
               <select
                 value={syncHostId ?? ''}
                 onChange={(e) => setSyncHostId(e.target.value || null)}
-                className="px-3 py-1.5 rounded-md border border-border-default bg-surface-base text-text-primary text-xs focus:border-border-active outline-none"
+                className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-60 hover:border-text-muted focus:border-border-active focus:outline-none"
               >
                 <option value="">— Select —</option>
                 {hostOrder.map((id) => {
