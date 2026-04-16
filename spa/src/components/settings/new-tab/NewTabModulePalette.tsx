@@ -4,7 +4,6 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 export interface PaletteItem {
   id: string
   label: string       // i18n key
-  icon: string
   inUse: boolean
   unavailable?: boolean
 }
@@ -36,6 +35,7 @@ function Chip({ item, onClickAdd }: { item: PaletteItem; onClickAdd: (id: string
       ref={setNodeRef}
       {...listeners}
       {...attributes}
+      aria-label={t(item.label)}
       data-testid={`palette-chip-${item.id}`}
       data-unavailable={item.unavailable ? 'true' : undefined}
       data-in-use={item.inUse ? 'true' : undefined}

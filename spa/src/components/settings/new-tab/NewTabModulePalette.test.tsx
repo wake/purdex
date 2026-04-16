@@ -9,9 +9,9 @@ function renderWithDnd(ui: React.ReactElement) {
 
 describe('NewTabModulePalette', () => {
   const items = [
-    { id: 'a', label: 'provider.a', icon: 'List', inUse: false },
-    { id: 'b', label: 'provider.b', icon: 'List', inUse: true },
-    { id: 'c', label: 'provider.c', icon: 'List', inUse: false, unavailable: true },
+    { id: 'a', label: 'provider.a', inUse: false },
+    { id: 'b', label: 'provider.b', inUse: true },
+    { id: 'c', label: 'provider.c', inUse: false, unavailable: true },
   ]
 
   it('renders a chip per item', () => {
