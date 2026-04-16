@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.148] - 2026-04-17
+
+### 功能
+
+- **spa**：Sync Now 接線 — `sync-actions.ts` 編排 `SyncEngine.pull → push` 並處理 ok / conflicts / error 三種結果
+- **spa**：Import apply 接線 — 匯入檔案透過 one-shot provider 走 `engine.pull` 三方合併，不再停留於 stub
+- **spa**：`useSyncStore.syncHostId` — Daemon provider 的目標 host（持久化）
+- **spa**：Settings → Sync 新增 Sync Host dropdown（Daemon only），Sync Now / Import 顯示 busy / success / warn / error 狀態行
+
+### 修復
+
+- **spa**：衝突分支正確推進 `lastSyncedBundle` — 對 engine 已套用的非衝突 contributor 前進 baseline，避免下次 sync 以過時 ancestor 重比（issue #388）
+
+### 測試
+
+- SPA 新增 9 個 sync wiring 測試（syncNow / applyImport / partialBaseline 各 variant），全套 1638 tests 通過
+
 ## [1.0.0-alpha.147] - 2026-04-17
 
 ### 功能
