@@ -28,6 +28,7 @@ import { EditorPane } from '../components/editor/EditorPane'
 import { ImagePreviewPane } from '../components/editor/ImagePreviewPane'
 import { PdfPreviewPane } from '../components/editor/PdfPreviewPane'
 import { EditorNewTabSection } from '../components/editor/EditorNewTabSection'
+import { BufferListSection } from '../components/editor/BufferListSection'
 import { InAppBackend } from './fs-backend-inapp'
 import { DaemonBackend } from './fs-backend-daemon'
 import { LocalBackend } from './fs-backend-local'
@@ -228,6 +229,12 @@ export function registerBuiltinModules(): void {
     label: 'settings.section.modules',
     order: 8,
     component: () => <ModuleConfigSection scope="global" />,
+  })
+  registerSettingsSection({
+    id: 'editor-buffers',
+    label: 'settings.section.editor_buffers',
+    order: 9,
+    component: BufferListSection,
   })
 
   // New-tab providers
