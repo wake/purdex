@@ -1,10 +1,8 @@
 import { CaretRight, CaretDown } from '@phosphor-icons/react'
 import type { Tab } from '../../../types/tab'
-import { useLayoutStore } from '../../../stores/useLayoutStore'
+import { useLayoutStore, HOME_WS_KEY } from '../../../stores/useLayoutStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { InlineTabList } from './InlineTabList'
-
-const HOME_KEY = 'home'
 
 interface Props {
   isActive: boolean
@@ -31,7 +29,7 @@ export function HomeRow(props: Props) {
     onContextMenuTab,
   } = props
   const t = useI18nStore((s) => s.t)
-  const expanded = useLayoutStore((s) => !!s.workspaceExpanded[HOME_KEY])
+  const expanded = useLayoutStore((s) => !!s.workspaceExpanded[HOME_WS_KEY])
   const toggleExpanded = useLayoutStore((s) => s.toggleWorkspaceExpanded)
 
   const Chevron = expanded ? CaretDown : CaretRight
@@ -52,7 +50,7 @@ export function HomeRow(props: Props) {
           aria-expanded={expanded}
           onClick={(e) => {
             e.stopPropagation()
-            toggleExpanded(HOME_KEY)
+            toggleExpanded(HOME_WS_KEY)
           }}
           className="p-1 rounded hover:bg-surface-secondary text-text-muted cursor-pointer"
         >
