@@ -44,4 +44,22 @@ describe('ActivityBarWide', () => {
     fireEvent.click(screen.getByText('Purdex'))
     expect(onSelect).toHaveBeenCalledWith('w1')
   })
+
+  it('renders a resize handle', () => {
+    render(
+      <ActivityBarWide
+        workspaces={[]}
+        activeWorkspaceId={null}
+        activeStandaloneTabId={null}
+        onSelectWorkspace={() => {}}
+        onSelectHome={() => {}}
+        standaloneTabIds={[]}
+        onAddWorkspace={() => {}}
+        onOpenHosts={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    )
+    const handle = document.querySelector('[data-testid="activity-bar-resize"]')
+    expect(handle).toBeInTheDocument()
+  })
 })

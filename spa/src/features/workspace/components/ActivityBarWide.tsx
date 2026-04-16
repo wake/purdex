@@ -4,6 +4,7 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { CollapseButton } from './CollapseButton'
+import { RegionResize } from '../../../components/RegionResize'
 
 interface Props {
   workspaces: Workspace[]
@@ -33,9 +34,11 @@ export function ActivityBarWide(props: Props) {
   } = props
   const t = useI18nStore((s) => s.t)
   const wideSize = useLayoutStore((s) => s.activityBarWideSize)
+  const setWideSize = useLayoutStore((s) => s.setActivityBarWideSize)
   const isHomeActive = !activeWorkspaceId
 
   return (
+    <>
     <div
       className="hidden lg:flex flex-col bg-surface-tertiary border-r border-border-subtle py-2 gap-1 flex-shrink-0"
       style={{ width: wideSize }}
@@ -111,5 +114,12 @@ export function ActivityBarWide(props: Props) {
         </button>
       </div>
     </div>
+    <div data-testid="activity-bar-resize" className="hidden lg:block">
+      <RegionResize
+        resizeEdge="right"
+        onResize={(delta) => setWideSize(wideSize + delta)}
+      />
+    </div>
+    </>
   )
 }
