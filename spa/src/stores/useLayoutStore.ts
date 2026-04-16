@@ -38,6 +38,7 @@ interface LayoutState {
   setActivityBarWidth: (width: ActivityBarWidth) => void
   toggleActivityBarWidth: () => void
   setActivityBarWideSize: (size: number) => void
+  toggleWorkspaceExpanded: (wsId: string) => void
 }
 
 function createDefaultRegions(): Record<SidebarRegion, RegionState> {
@@ -181,6 +182,14 @@ export const useLayoutStore = create<LayoutState>()(
 
       setActivityBarWideSize: (size) =>
         set(() => ({ activityBarWideSize: clampWidth(size) })),
+
+      toggleWorkspaceExpanded: (wsId) =>
+        set((state) => ({
+          workspaceExpanded: {
+            ...state.workspaceExpanded,
+            [wsId]: !state.workspaceExpanded[wsId],
+          },
+        })),
     }),
     {
       name: STORAGE_KEYS.LAYOUT,

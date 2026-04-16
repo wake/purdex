@@ -107,6 +107,33 @@ describe('useLayoutStore', () => {
     })
   })
 
+  describe('toggleWorkspaceExpanded', () => {
+    it('toggles from undefined → true', () => {
+      useLayoutStore.getState().toggleWorkspaceExpanded('ws-1')
+      expect(useLayoutStore.getState().workspaceExpanded['ws-1']).toBe(true)
+    })
+
+    it('toggles from true → false', () => {
+      useLayoutStore.setState({ workspaceExpanded: { 'ws-1': true } })
+      useLayoutStore.getState().toggleWorkspaceExpanded('ws-1')
+      expect(useLayoutStore.getState().workspaceExpanded['ws-1']).toBe(false)
+    })
+
+    it('per-ws isolation', () => {
+      useLayoutStore.getState().toggleWorkspaceExpanded('ws-1')
+      useLayoutStore.getState().toggleWorkspaceExpanded('ws-2')
+      expect(useLayoutStore.getState().workspaceExpanded).toEqual({
+        'ws-1': true,
+        'ws-2': true,
+      })
+    })
+
+    it('supports "home" key', () => {
+      useLayoutStore.getState().toggleWorkspaceExpanded('home')
+      expect(useLayoutStore.getState().workspaceExpanded['home']).toBe(true)
+    })
+  })
+
   describe('setRegionWidth', () => {
     it('changes width for a region', () => {
       useLayoutStore.getState().setRegionWidth('primary-sidebar', 300)
