@@ -70,5 +70,9 @@ export function tabToUrl(tabId: string, content: PaneContent, workspaceId?: stri
       return '/'
     case 'editor':
       return '/'
+    case 'image-preview':
+      return '/'
+    case 'pdf-preview':
+      return '/'
   }
 }

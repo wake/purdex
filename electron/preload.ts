@@ -108,6 +108,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   focusMyWindow: () => ipcRenderer.send('notification:focus-window'),
 
+  // Filesystem (LocalBackend)
+  fs: {
+    read: (path: string) => ipcRenderer.invoke('fs:read', path),
+    write: (path: string, content: Uint8Array) => ipcRenderer.invoke('fs:write', path, content),
+    stat: (path: string) => ipcRenderer.invoke('fs:stat', path),
+    list: (path: string) => ipcRenderer.invoke('fs:list', path),
+    mkdir: (path: string, recursive: boolean) => ipcRenderer.invoke('fs:mkdir', path, recursive),
+    delete: (path: string, recursive: boolean) => ipcRenderer.invoke('fs:delete', path, recursive),
+    rename: (from: string, to: string) => ipcRenderer.invoke('fs:rename', from, to),
+  },
+
   // Dev Update (only exposed when PDX_DEV_UPDATE=1)
   ...(process.env.PDX_DEV_UPDATE ? {
     getAppInfo: () => ipcRenderer.invoke('dev:app-info'),

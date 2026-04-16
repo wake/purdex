@@ -47,6 +47,9 @@ export function getPaneLabel(
       const name = content.filePath.split('/').pop() ?? content.filePath
       return content.diff ? `${name} (Diff)` : name
     }
+    case 'image-preview':
+    case 'pdf-preview':
+      return content.filePath.split('/').pop() ?? content.filePath
   }
 }
 
@@ -71,5 +74,9 @@ export function getPaneIcon(content: PaneContent): string {
       return 'ChartBar'
     case 'editor':
       return content.diff ? 'GitDiff' : 'File'
+    case 'image-preview':
+      return 'Image'
+    case 'pdf-preview':
+      return 'FilePdf'
   }
 }

@@ -25,9 +25,13 @@ import { useTabStore } from '../stores/useTabStore'
 import type { PaneContent } from '../types/tab'
 import type { PaneRendererProps } from './module-registry'
 import { EditorPane } from '../components/editor/EditorPane'
+import { ImagePreviewPane } from '../components/editor/ImagePreviewPane'
+import { PdfPreviewPane } from '../components/editor/PdfPreviewPane'
 import { EditorNewTabSection } from '../components/editor/EditorNewTabSection'
+import { BufferListSection } from '../components/editor/BufferListSection'
 import { InAppBackend } from './fs-backend-inapp'
 import { DaemonBackend } from './fs-backend-daemon'
+import { LocalBackend } from './fs-backend-local'
 import { registerFsBackend, getFsBackend } from './fs-backend'
 import { registerFileOpener } from './file-opener-registry'
 import { useHostStore } from '../stores/useHostStore'
@@ -56,6 +60,8 @@ function MemoryMonitorPaneWrapper() {
 }
 
 export function registerBuiltinModules(): void {
+  const caps = getPlatformCapabilities()
+
   // Modules with pane renderers
   registerModule({
     id: 'new-tab',
@@ -111,7 +117,11 @@ export function registerBuiltinModules(): void {
   registerModule({
     id: 'editor',
     name: 'Editor',
-    panes: [{ kind: 'editor', component: EditorPane }],
+    panes: [
+      { kind: 'editor', component: EditorPane },
+      { kind: 'image-preview', component: ImagePreviewPane },
+      { kind: 'pdf-preview', component: PdfPreviewPane },
+    ],
   })
 
   // Register InApp FS backend (singleton — 避免熱重載時資料遺失)
@@ -147,12 +157,40 @@ export function registerBuiltinModules(): void {
     })
   }
 
-  // Register file opener for text files
+  // Register LocalBackend (Electron IPC — local filesystem access)
+  if (caps.hasLocalFilesystem && !getFsBackend({ type: 'local' })) {
+    registerFsBackend('local', new LocalBackend())
+  }
+
+  // Register file openers for binary previews
+  const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'])
+  const PDF_EXTS = new Set(['pdf'])
+
+  registerFileOpener({
+    id: 'image-preview',
+    label: 'Image Preview',
+    icon: 'Image',
+    match: (file) => IMAGE_EXTS.has(file.extension.toLowerCase()),
+    priority: 'default',
+    createContent: (source, file) => ({ kind: 'image-preview', source, filePath: file.path }) as PaneContent,
+  })
+
+  registerFileOpener({
+    id: 'pdf-viewer',
+    label: 'PDF Viewer',
+    icon: 'FilePdf',
+    match: (file) => PDF_EXTS.has(file.extension.toLowerCase()),
+    priority: 'default',
+    createContent: (source, file) => ({ kind: 'pdf-preview', source, filePath: file.path }) as PaneContent,
+  })
+
+  // Register file opener for text files (excludes image/PDF extensions)
+  const BINARY_EXTS = new Set([...IMAGE_EXTS, ...PDF_EXTS])
   registerFileOpener({
     id: 'monaco-editor',
     label: 'Text Editor',
     icon: 'File',
-    match: (file) => !file.isDirectory,
+    match: (file) => !file.isDirectory && !BINARY_EXTS.has(file.extension.toLowerCase()),
     priority: 'default',
     createContent: (source, file) => ({ kind: 'editor', source, filePath: file.path }) as PaneContent,
   })
@@ -192,6 +230,12 @@ export function registerBuiltinModules(): void {
     order: 8,
     component: () => <ModuleConfigSection scope="global" />,
   })
+  registerSettingsSection({
+    id: 'editor-buffers',
+    label: 'settings.section.editor_buffers',
+    order: 9,
+    component: BufferListSection,
+  })
 
   // New-tab providers
   registerNewTabProvider({
@@ -209,8 +253,6 @@ export function registerBuiltinModules(): void {
     order: 5,
     component: EditorNewTabSection,
   })
-
-  const caps = getPlatformCapabilities()
 
   registerNewTabProvider({
     id: 'browser',

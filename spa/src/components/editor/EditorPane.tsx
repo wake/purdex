@@ -1,12 +1,17 @@
 // spa/src/components/editor/EditorPane.tsx
-import { useEffect, useCallback, useRef } from 'react'
+import { lazy, Suspense, useEffect, useCallback, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { getFsBackend } from '../../lib/fs-backend'
 import { MonacoWrapper } from './MonacoWrapper'
+import { DiffView } from './DiffView'
 import { EditorToolbar } from './EditorToolbar'
 import { EditorStatusBar } from './EditorStatusBar'
 import type { FileSource } from '../../types/fs'
+
+const TiptapEditor = lazy(() =>
+  import('./TiptapEditor').then((m) => ({ default: m.TiptapEditor }))
+)
 
 function bufferKey(source: FileSource, filePath: string): string {
   if (source.type === 'daemon') return `daemon:${source.hostId}:${filePath}`
@@ -32,11 +37,12 @@ export function EditorPane({ pane, isActive }: PaneRendererProps) {
   return <EditorPaneInner source={content.source} filePath={content.filePath} isActive={isActive} />
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- isActive needed for future focus-based stat check
 function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; filePath: string; isActive: boolean }) {
   const key = bufferKey(source, filePath)
   const buffer = useEditorStore((s) => s.buffers[key])
-  const saveRef = useRef<() => Promise<void>>()
+  const isMarkdown = filePath.endsWith('.md') || filePath.endsWith('.mdx')
+  const [editorMode, setEditorMode] = useState<'raw' | 'wysiwyg'>('raw')
+  const [showDiff, setShowDiff] = useState(false)
 
   // Load file on mount, cleanup buffer on unmount
   useEffect(() => {
@@ -69,6 +75,38 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
     return () => { useEditorStore.getState().closeBuffer(key) }
   }, [key])
 
+  // Detect external file changes when tab becomes active
+  useEffect(() => {
+    if (!isActive) return
+
+    const buf = useEditorStore.getState().buffers[key]
+    if (!buf) return
+
+    const backend = getFsBackend(source)
+    if (!backend) return
+
+    backend.stat(filePath)
+      .then((stat) => {
+        const currentBuf = useEditorStore.getState().buffers[key]
+        if (!currentBuf?.lastStat) return
+        if (stat.mtime === currentBuf.lastStat.mtime && stat.size === currentBuf.lastStat.size) return
+
+        return backend.read(filePath).then((data) => {
+          const text = new TextDecoder().decode(data)
+          const latestBuf = useEditorStore.getState().buffers[key]
+          if (!latestBuf || text === latestBuf.savedContent) return
+
+          if (!latestBuf.isDirty) {
+            useEditorStore.getState().reloadBuffer(key, text, { mtime: stat.mtime, size: stat.size })
+          } else {
+            console.warn(`[editor] External change detected for ${filePath}, buffer is dirty`)
+          }
+        })
+      })
+      .catch(() => {}) // File may have been deleted
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-check on tab activation, not on source/filePath change
+  }, [isActive, key])
+
   const handleSave = useCallback(async () => {
     const buf = useEditorStore.getState().buffers[key]
     if (!buf || !buf.isDirty) return
@@ -77,7 +115,9 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
     try {
       const encoded = new TextEncoder().encode(buf.content)
       await backend.write(filePath, encoded)
-      useEditorStore.getState().markSaved(key)
+      const newStat = await backend.stat(filePath)
+      useEditorStore.getState().markSaved(key, { mtime: newStat.mtime, size: newStat.size })
+      setShowDiff(false)
     } catch (err) {
       console.error('[editor] Save failed:', err)
     }
@@ -89,15 +129,40 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
 
   return (
     <div className="h-full w-full flex flex-col overflow-hidden">
-      <EditorToolbar filePath={filePath} isDirty={buffer.isDirty} onSave={handleSave} />
+      <EditorToolbar
+        filePath={filePath}
+        isDirty={buffer.isDirty}
+        isMarkdown={isMarkdown}
+        editorMode={editorMode}
+        showDiff={showDiff}
+        onSave={handleSave}
+        onToggleMode={isMarkdown ? () => setEditorMode((m) => (m === 'raw' ? 'wysiwyg' : 'raw')) : undefined}
+        onDiff={() => setShowDiff((d) => !d)}
+      />
       <div className="flex-1 min-h-0 overflow-hidden">
-        <MonacoWrapper
-          content={buffer.content}
-          language={buffer.language}
-          onChange={(value) => useEditorStore.getState().updateContent(key, value)}
-          onCursorChange={(line, col) => useEditorStore.getState().updateCursor(key, line, col)}
-          onSave={handleSave}
-        />
+        {showDiff ? (
+          <DiffView
+            original={buffer.savedContent}
+            modified={buffer.content}
+            language={buffer.language}
+          />
+        ) : editorMode === 'raw' ? (
+          <MonacoWrapper
+            content={buffer.content}
+            language={buffer.language}
+            onChange={(value) => useEditorStore.getState().updateContent(key, value)}
+            onCursorChange={(line, col) => useEditorStore.getState().updateCursor(key, line, col)}
+            onSave={handleSave}
+          />
+        ) : (
+          <Suspense fallback={<div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading editor...</div>}>
+            <TiptapEditor
+              content={buffer.content}
+              onChange={(md) => useEditorStore.getState().updateContent(key, md)}
+              onSave={handleSave}
+            />
+          </Suspense>
+        )}
       </div>
       <EditorStatusBar
         language={buffer.language}
