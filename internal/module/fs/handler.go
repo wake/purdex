@@ -3,12 +3,24 @@ package fs
 import (
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
+
+const (
+	maxBodySize  = 1 << 20  // 1 MB — general request body limit
+	maxWriteSize = 20 << 20 // 20 MB — write endpoint body limit (base64 ≈ 15 MB decoded)
+	maxReadSize  = 10 << 20 // 10 MB — read file size limit
+)
+
+// limitBody applies a MaxBytesReader to the request body.
+func limitBody(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
 
 // ── shared types ────────────────────────────────────────────────────────────
 
@@ -52,6 +64,7 @@ func jsonOK(w http.ResponseWriter, data any) {
 // handleList reads a directory and returns its entries (hidden files skipped,
 // directories sorted first then alphabetically).
 func (m *FsModule) handleList(w http.ResponseWriter, r *http.Request) {
+	limitBody(w, r, maxBodySize)
 	path, err := decodePath(r)
 	if err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -99,6 +112,7 @@ func (m *FsModule) handleList(w http.ResponseWriter, r *http.Request) {
 
 // handleRead returns the raw bytes of a file with Content-Type: application/octet-stream.
 func (m *FsModule) handleRead(w http.ResponseWriter, r *http.Request) {
+	limitBody(w, r, maxBodySize)
 	path, err := decodePath(r)
 	if err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -110,30 +124,36 @@ func (m *FsModule) handleRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := os.Stat(path)
+	f, err := os.Open(path)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	const maxReadSize = 10 << 20 // 10 MB
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if info.IsDir() {
+		jsonError(w, "path is a directory", http.StatusBadRequest)
+		return
+	}
 	if info.Size() > maxReadSize {
 		jsonError(w, "file too large (max 10 MB)", http.StatusRequestEntityTooLarge)
 		return
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusNotFound)
-		return
-	}
-
+	// Read via the open fd to avoid TOCTOU between stat and read.
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Write(data)
+	io.Copy(w, io.LimitReader(f, maxReadSize+1))
 }
 
 // handleWrite decodes base64 content and writes it to a file,
 // auto-creating parent directories as needed. Returns 204.
 func (m *FsModule) handleWrite(w http.ResponseWriter, r *http.Request) {
+	limitBody(w, r, maxWriteSize)
 	var req struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -168,6 +188,7 @@ func (m *FsModule) handleWrite(w http.ResponseWriter, r *http.Request) {
 
 // handleStat returns metadata about a file or directory.
 func (m *FsModule) handleStat(w http.ResponseWriter, r *http.Request) {
+	limitBody(w, r, maxBodySize)
 	path, err := decodePath(r)
 	if err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -195,6 +216,7 @@ func (m *FsModule) handleStat(w http.ResponseWriter, r *http.Request) {
 
 // handleMkdir creates a directory, optionally creating parents. Returns 204.
 func (m *FsModule) handleMkdir(w http.ResponseWriter, r *http.Request) {
+	limitBody(w, r, maxBodySize)
 	var req struct {
 		Path      string `json:"path"`
 		Recursive bool   `json:"recursive"`
@@ -225,6 +247,7 @@ func (m *FsModule) handleMkdir(w http.ResponseWriter, r *http.Request) {
 
 // handleDelete removes a file or directory, optionally recursive. Returns 204.
 func (m *FsModule) handleDelete(w http.ResponseWriter, r *http.Request) {
+	limitBody(w, r, maxBodySize)
 	var req struct {
 		Path      string `json:"path"`
 		Recursive bool   `json:"recursive"`
@@ -262,6 +285,7 @@ func (m *FsModule) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 // handleRename renames/moves a file or directory from → to. Returns 204.
 func (m *FsModule) handleRename(w http.ResponseWriter, r *http.Request) {
+	limitBody(w, r, maxBodySize)
 	var req struct {
 		From string `json:"from"`
 		To   string `json:"to"`

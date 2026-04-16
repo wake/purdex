@@ -270,6 +270,15 @@ func TestHandleReadRejectsLargeFile(t *testing.T) {
 	}
 }
 
+func TestHandleReadRejectsDirectory(t *testing.T) {
+	m, dir := setupTestModule(t)
+
+	w := postJSON(m.handleRead, map[string]string{"path": dir})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleDeleteRejectsShallowRecursive(t *testing.T) {
 	m, _ := setupTestModule(t)
 
