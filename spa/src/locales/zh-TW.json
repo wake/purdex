@@ -162,7 +162,7 @@
   "nav.collapse_activity_bar": "收合側邊欄",
   "nav.expand_activity_bar": "展開側邊欄",
   "nav.workspace_empty": "尚無分頁",
-  "nav.add_tab_to_workspace": "在 {name} 開新分頁",
+  "nav.add_tab_to_workspace": "在 {{name}} 開新分頁",
   "settings.appearance.tab_position.label": "分頁位置",
   "settings.appearance.tab_position.desc": "開啟的分頁顯示在哪裡",
   "settings.appearance.tab_position.top": "上方",

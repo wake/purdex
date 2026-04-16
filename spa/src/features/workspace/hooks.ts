@@ -65,9 +65,9 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
   const handleAddTabToWorkspace = useCallback((wsId: string) => {
     const tab = createTab({ kind: 'new-tab' })
     addTab(tab)
-    setActiveTab(tab.id)
     useWorkspaceStore.getState().insertTab(tab.id, wsId)
-  }, [addTab, setActiveTab])
+    handleSelectTab(tab.id)
+  }, [addTab, handleSelectTab])
 
   const handleReorderWorkspaceTabs = useCallback((wsId: string, tabIds: string[]) => {
     useWorkspaceStore.getState().reorderWorkspaceTabs(wsId, tabIds)

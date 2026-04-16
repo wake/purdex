@@ -161,6 +161,19 @@ describe('handleAddTabToWorkspace', () => {
     expect(useTabStore.getState().tabs[newTabId]).toBeDefined()
     expect(useTabStore.getState().activeTabId).toBe(newTabId)
   })
+
+  it('switches activeWorkspaceId to the target workspace', () => {
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('B')
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+
+    const { result } = renderHook(() => useTabWorkspaceActions([]))
+    act(() => {
+      result.current.handleAddTabToWorkspace(wsB.id)
+    })
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(wsB.id)
+  })
 })
 
 describe('handleReorderWorkspaceTabs', () => {

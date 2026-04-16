@@ -138,7 +138,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
           onDragEnd={handleDragEnd}
         >
           <HomeRow
-            isActive={isHomeActive && !activeStandaloneTabId}
+            isActive={isHomeActive}
             standaloneTabIds={standaloneTabIds}
             tabsById={tabsById}
             activeTabId={activeTabId}

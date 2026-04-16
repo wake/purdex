@@ -114,8 +114,8 @@ export function WorkspaceRow(props: Props) {
           />
           <button
             type="button"
-            aria-label={t('nav.add_tab_to_workspace').replace('{name}', workspace.name)}
-            title={t('nav.add_tab_to_workspace').replace('{name}', workspace.name)}
+            aria-label={t('nav.add_tab_to_workspace', { name: workspace.name })}
+            title={t('nav.add_tab_to_workspace', { name: workspace.name })}
             onClick={() => onAddTabToWorkspace(workspace.id)}
             className="mx-2 pl-5 pr-1.5 py-1 rounded-md text-xs text-text-muted hover:bg-surface-hover hover:text-text-primary flex items-center gap-1.5 cursor-pointer"
           >
