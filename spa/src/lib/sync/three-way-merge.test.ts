@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { detectConflict, mergeCollection } from './three-way-merge'
-import type { ConflictResult, MergeCollectionResult } from './three-way-merge'
+// Types ConflictResult, MergeCollectionResult are validated through usage in tests
 
 // =============================================================================
 // detectConflict

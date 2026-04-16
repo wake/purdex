@@ -7,7 +7,7 @@
 // orchestrates: serialize → push → pull → conflict detection → resolve.
 // =============================================================================
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createSyncEngine } from './engine'
 import type { SyncBundle, SyncContributor, FullPayload, MergeStrategy } from './types'
 

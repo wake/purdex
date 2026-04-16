@@ -36,12 +36,14 @@ export function createDaemonProvider(hostId: string, clientId: string): SyncProv
       return res.json() as Promise<SyncBundle | null>
     },
 
-    async pushChunks(_chunks: Record<string, Uint8Array>): Promise<void> {
-      // stub — not implemented yet
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    async pushChunks(chunks: Record<string, Uint8Array>): Promise<void> {
+      // stub — content-addressed chunked transfer not yet implemented
     },
 
-    async pullChunks(_hashes: string[]): Promise<Record<string, Uint8Array>> {
-      // stub — not implemented yet
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    async pullChunks(hashes: string[]): Promise<Record<string, Uint8Array>> {
+      // stub — content-addressed chunked transfer not yet implemented
       return {}
     },
 

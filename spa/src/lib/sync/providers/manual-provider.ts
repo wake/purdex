@@ -31,7 +31,8 @@ export function createManualProvider(): ManualProvider {
     // SyncProvider — all no-ops
     // -----------------------------------------------------------------------
 
-    async push(_bundle: SyncBundle): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    async push(bundle: SyncBundle): Promise<void> {
       // intentional no-op
     },
 
@@ -39,15 +40,18 @@ export function createManualProvider(): ManualProvider {
       return null
     },
 
-    async pushChunks(_chunks: Record<string, Uint8Array>): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    async pushChunks(chunks: Record<string, Uint8Array>): Promise<void> {
       // intentional no-op
     },
 
-    async pullChunks(_hashes: string[]): Promise<Record<string, Uint8Array>> {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    async pullChunks(hashes: string[]): Promise<Record<string, Uint8Array>> {
       return {}
     },
 
-    async listHistory(_limit: number): Promise<SyncSnapshot[]> {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    async listHistory(limit: number): Promise<SyncSnapshot[]> {
       return []
     },
 
