@@ -37,6 +37,8 @@ export type PaneContent =
   | { kind: 'browser'; url: string }
   | { kind: 'memory-monitor' }
   | { kind: 'editor'; source: FileSource; filePath: string; diff?: { against: 'saved' | string } }
+  | { kind: 'image-preview'; source: FileSource; filePath: string }
+  | { kind: 'pdf-preview'; source: FileSource; filePath: string }
 
 // === Workspace ===
 export type IconWeight = 'bold' | 'regular' | 'thin' | 'light' | 'fill' | 'duotone'

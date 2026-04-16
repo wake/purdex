@@ -14,5 +14,11 @@ export function contentMatches(a: PaneContent, b: PaneContent): boolean {
     }
     return a.filePath === b.filePath
   }
+  if (a.kind === 'image-preview' && b.kind === 'image-preview') {
+    return a.filePath === b.filePath && a.source.type === b.source.type
+  }
+  if (a.kind === 'pdf-preview' && b.kind === 'pdf-preview') {
+    return a.filePath === b.filePath && a.source.type === b.source.type
+  }
   return true
 }
