@@ -300,6 +300,66 @@ func (s *SyncStore) VerifyPairingCode(code string) (string, error) {
 	return groupID, nil
 }
 
+// GroupMember represents a single member of a sync group.
+type GroupMember struct {
+	ClientID string `json:"clientId"`
+	Device   string `json:"device"`
+	LastSeen int64  `json:"lastSeen"`
+}
+
+// ListGroupMembers returns all members of the group that clientID belongs to.
+func (s *SyncStore) ListGroupMembers(clientID string) ([]GroupMember, error) {
+	groupID, err := s.clientGroupID(clientID)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.Query(`
+		SELECT client_id, device, last_seen
+		FROM sync_groups
+		WHERE group_id = ?
+		ORDER BY last_seen DESC
+	`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []GroupMember
+	for rows.Next() {
+		var m GroupMember
+		if err := rows.Scan(&m.ClientID, &m.Device, &m.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// RemoveClientFromGroup removes targetID from the group that requesterID belongs to.
+// Returns an error if either client is not in the same group.
+func (s *SyncStore) RemoveClientFromGroup(requesterID, targetID string) error {
+	groupID, err := s.clientGroupID(requesterID)
+	if err != nil {
+		return err
+	}
+
+	// Verify target is in the same group.
+	targetGroup, err := s.clientGroupID(targetID)
+	if err != nil {
+		return fmt.Errorf("target %q not found", targetID)
+	}
+	if targetGroup != groupID {
+		return fmt.Errorf("clients not in the same group")
+	}
+
+	_, err = s.db.Exec(
+		`DELETE FROM sync_groups WHERE group_id = ? AND client_id = ?`,
+		groupID, targetID,
+	)
+	return err
+}
+
 // generateGroupID returns a new unique group identifier prefixed with "g_"
 // followed by 16 random hex characters.
 func generateGroupID() (string, error) {
