@@ -6,6 +6,7 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 
 interface Props {
   tab: Tab
+  title: string
   isActive: boolean
   sourceWsId?: string | null
   onSelect: (tabId: string) => void
@@ -16,6 +17,7 @@ interface Props {
 
 export function InlineTab({
   tab,
+  title,
   isActive,
   sourceWsId = null,
   onSelect,
@@ -34,10 +36,6 @@ export function InlineTab({
     transition,
     opacity: isDragging ? 0.5 : 1,
   }
-
-  // Tab.title is a Phase 2 forward-looking field populated by workspace logic.
-  // Cast here until the Tab type is formally extended (see Phase 2 plan).
-  const title = (tab as Tab & { title?: string }).title ?? ''
 
   const handleCloseClick = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -70,7 +68,7 @@ export function InlineTab({
       }`}
     >
       <span className="flex-1 truncate" title={title}>
-        {title || t('nav.new_tab')}
+        {title}
       </span>
       <button
         type="button"
