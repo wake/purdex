@@ -18,6 +18,7 @@
   "settings.section.sync": "同步",
   "settings.section.agent": "Agent",
   "settings.section.modules": "模組",
+  "settings.section.editor_buffers": "編輯器暫存",
 
   "settings.agent.title": "Agent",
   "settings.agent.desc": "Agent 通知與 Hook 設定",

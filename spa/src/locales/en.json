@@ -18,6 +18,7 @@
   "settings.section.sync": "Sync",
   "settings.section.agent": "Agent",
   "settings.section.modules": "Modules",
+  "settings.section.editor_buffers": "Editor Buffers",
 
   "settings.agent.title": "Agent",
   "settings.agent.desc": "Agent notification and hook settings",
