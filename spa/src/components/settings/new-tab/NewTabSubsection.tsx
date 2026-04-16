@@ -5,19 +5,13 @@ import {
   type DragEndEvent, type DragStartEvent, pointerWithin,
 } from '@dnd-kit/core'
 import { getNewTabProviders } from '../../../lib/new-tab-registry'
-import { useNewTabLayoutStore } from '../../../stores/useNewTabLayoutStore'
+import { useNewTabLayoutStore, shortestColIdx } from '../../../stores/useNewTabLayoutStore'
 import type { ProfileKey } from '../../../lib/resolve-profile'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { NewTabModulePalette, type PaletteItem } from './NewTabModulePalette'
 import { NewTabProfileSwitcher } from './NewTabProfileSwitcher'
 import { NewTabCanvas } from './NewTabCanvas'
 import { NewTabThumbnail } from './NewTabThumbnail'
-
-function shortestColIdx(cols: string[][]): number {
-  let best = 0
-  for (let i = 1; i < cols.length; i++) if (cols[i].length < cols[best].length) best = i
-  return best
-}
 
 export function NewTabSubsection() {
   const t = useI18nStore((s) => s.t)

@@ -40,7 +40,7 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n))
 }
 
-function shortestColIdx(cols: string[][]): number {
+export function shortestColIdx(cols: string[][]): number {
   let best = 0
   for (let i = 1; i < cols.length; i++) {
     if (cols[i].length < cols[best].length) best = i
