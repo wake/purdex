@@ -159,6 +159,9 @@
   "nav.settings": "設定",
   "nav.hosts": "主機管理",
   "nav.toggle_view": "切換檢視模式",
+  "nav.collapse_activity_bar": "收合側邊欄",
+  "nav.expand_activity_bar": "展開側邊欄",
+  "nav.collapse_locked_tooltip": "當分頁顯示在左側時，側邊欄會維持寬版",
 
   "page.newtab.title": "新增分頁",
   "page.newtab.empty": "尚未登錄任何內容提供者",
