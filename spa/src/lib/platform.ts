@@ -8,6 +8,7 @@ export interface PlatformCapabilities {
   canSystemTray: boolean
   canNotification: boolean
   devUpdateEnabled: boolean
+  hasLocalFilesystem: boolean
 }
 
 export function getPlatformCapabilities(): PlatformCapabilities {
@@ -21,5 +22,6 @@ export function getPlatformCapabilities(): PlatformCapabilities {
     canSystemTray: isElectron,
     canNotification: isElectron,
     devUpdateEnabled,
+    hasLocalFilesystem: isElectron && !!window.electronAPI?.fs,
   }
 }

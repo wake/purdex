@@ -4,6 +4,7 @@ import { WindowManager } from './window-manager'
 import { BrowserViewManager } from './browser-view-manager'
 import { MiniWindowManager } from './mini-browser-window'
 import { registerBrowserViewIpc } from './browser-view-ipc'
+import { registerFsIpc } from './fs-ipc'
 import { createTray } from './tray'
 import { getAppInfo, checkUpdate, applyUpdate } from './updater'
 import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
@@ -43,6 +44,9 @@ function registerIpcHandlers(): void {
 
   // Browser View — delegated to browser-view-ipc.ts
   registerBrowserViewIpc(browserViewManager, miniWindowManager)
+
+  // Filesystem — delegated to fs-ipc.ts
+  registerFsIpc()
 
   // Memory Monitor
   ipcMain.handle('metrics:get', () => {

@@ -88,6 +88,17 @@ interface Window {
     onNotificationClicked: (callback: (payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string } }) => void) => () => void
     focusMyWindow: () => void
 
+    // Filesystem (LocalBackend)
+    fs: {
+      read: (path: string) => Promise<Uint8Array>
+      write: (path: string, content: Uint8Array) => Promise<void>
+      stat: (path: string) => Promise<{ size: number; mtime: number; isDirectory: boolean; isFile: boolean }>
+      list: (path: string) => Promise<Array<{ name: string; isDir: boolean; size: number }>>
+      mkdir: (path: string, recursive: boolean) => Promise<void>
+      delete: (path: string, recursive: boolean) => Promise<void>
+      rename: (from: string, to: string) => Promise<void>
+    }
+
     // Dev Update
     getAppInfo: () => Promise<ElectronAppInfo>
     checkUpdate: (daemonUrl: string, token?: string) => Promise<ElectronRemoteVersionInfo>

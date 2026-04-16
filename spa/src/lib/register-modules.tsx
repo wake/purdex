@@ -30,6 +30,7 @@ import { PdfPreviewPane } from '../components/editor/PdfPreviewPane'
 import { EditorNewTabSection } from '../components/editor/EditorNewTabSection'
 import { InAppBackend } from './fs-backend-inapp'
 import { DaemonBackend } from './fs-backend-daemon'
+import { LocalBackend } from './fs-backend-local'
 import { registerFsBackend, getFsBackend } from './fs-backend'
 import { registerFileOpener } from './file-opener-registry'
 import { useHostStore } from '../stores/useHostStore'
@@ -58,6 +59,8 @@ function MemoryMonitorPaneWrapper() {
 }
 
 export function registerBuiltinModules(): void {
+  const caps = getPlatformCapabilities()
+
   // Modules with pane renderers
   registerModule({
     id: 'new-tab',
@@ -153,6 +156,11 @@ export function registerBuiltinModules(): void {
     })
   }
 
+  // Register LocalBackend (Electron IPC — local filesystem access)
+  if (caps.hasLocalFilesystem && !getFsBackend({ type: 'local' })) {
+    registerFsBackend('local', new LocalBackend())
+  }
+
   // Register file openers for binary previews
   const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'])
   const PDF_EXTS = new Set(['pdf'])
@@ -238,8 +246,6 @@ export function registerBuiltinModules(): void {
     order: 5,
     component: EditorNewTabSection,
   })
-
-  const caps = getPlatformCapabilities()
 
   registerNewTabProvider({
     id: 'browser',
