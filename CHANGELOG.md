@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.0.0-alpha.144] - 2026-04-16
+
+### 功能
+
+- **spa**：Tiptap v3 WYSIWYG — Markdown 檔案支援 raw/WYSIWYG 雙模式切換（lazy load）
+- **spa**：Monaco Diff View — 未存檔變更的 side-by-side diff 比較
+- **spa**：Image/PDF Preview Pane — 新增 `image-preview` / `pdf-preview` pane kind
+- **spa**：外部變更偵測 — tab focus 時比對 stat，clean buffer 靜默 reload
+- **electron**：LocalBackend — IPC fs handler（home dir sandbox + realpath）+ LocalBackend class
+- **spa**：BufferListSection — Settings 頁面 in-app buffer 管理
+
+### 修復
+
+- **spa**：修正 Tiptap v3 `setContent` API（v2 三參數 → v3 options object）
+- **spa**：PdfPreviewPane iframe 加 `sandbox=""` 防止 XSS
+- **spa**：`contentMatches` 補上 image/pdf preview daemon hostId 檢查
+- **spa**：`markSaved` 新增 stat 參數，save 後更新 `lastStat` 避免無謂 re-read
+- **electron**：`validatePath` 改用 `realpath()` 防止 symlink bypass
+- **spa**：TiptapEditor 加 `internalUpdateRef` 防止 content sync thrashing
+- **spa**：BufferListSection `handleDelete` 加 error handling
+
+### 測試
+
+- 新增 image/pdf preview `contentMatches` 測試（8 cases）
+- 新增 `LocalBackend` 測試（11 cases）
+- 新增 `markSaved` stat 更新測試（2 cases）
+
+（#380）
+
 ## [1.0.0-alpha.143] - 2026-04-16
 
 ### 功能
