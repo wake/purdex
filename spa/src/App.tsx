@@ -57,6 +57,9 @@ export default function App() {
   const tabOrder = useTabStore((s) => s.tabOrder)
   const activeTabId = useTabStore((s) => s.activeTabId)
 
+  // Layout store
+  const tabPosition = useLayoutStore((s) => s.tabPosition)
+
   // Workspace store
   const workspaces = useWorkspaceStore((s) => s.workspaces)
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
@@ -240,16 +243,18 @@ export default function App() {
           />
           <SidebarRegion region="primary-sidebar" resizeEdge="right" />
           <div className="flex-1 flex flex-col min-w-0">
-            <TabBar
-              tabs={displayTabs}
-              activeTabId={activeTabId}
-              onSelectTab={handleSelectTab}
-              onCloseTab={handleCloseTab}
-              onAddTab={handleAddTab}
-              onReorderTabs={handleReorderTabs}
-              onMiddleClick={handleMiddleClick}
-              onContextMenu={handleContextMenu}
-            />
+            {tabPosition === 'top' && (
+              <TabBar
+                tabs={displayTabs}
+                activeTabId={activeTabId}
+                onSelectTab={handleSelectTab}
+                onCloseTab={handleCloseTab}
+                onAddTab={handleAddTab}
+                onReorderTabs={handleReorderTabs}
+                onMiddleClick={handleMiddleClick}
+                onContextMenu={handleContextMenu}
+              />
+            )}
             <div className="flex-1 flex overflow-hidden">
               <SidebarRegion region="primary-panel" resizeEdge="right" />
               {visibleTabIds.length === 0 && activeWorkspaceId !== null ? (
