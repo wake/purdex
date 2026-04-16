@@ -134,6 +134,32 @@ describe('useLayoutStore', () => {
     })
   })
 
+  describe('reconcileWorkspaceExpanded', () => {
+    it('prunes keys not in provided ws list, preserves "home"', () => {
+      useLayoutStore.setState({
+        workspaceExpanded: {
+          'ws-alive': true,
+          'ws-deleted': true,
+          home: true,
+        },
+      })
+      useLayoutStore.getState().reconcileWorkspaceExpanded(['ws-alive'])
+      expect(useLayoutStore.getState().workspaceExpanded).toEqual({
+        'ws-alive': true,
+        home: true,
+      })
+    })
+
+    it('is no-op when all keys are alive or "home"', () => {
+      useLayoutStore.setState({
+        workspaceExpanded: { 'ws-a': true, home: false },
+      })
+      const before = useLayoutStore.getState().workspaceExpanded
+      useLayoutStore.getState().reconcileWorkspaceExpanded(['ws-a'])
+      expect(useLayoutStore.getState().workspaceExpanded).toEqual(before)
+    })
+  })
+
   describe('setRegionWidth', () => {
     it('changes width for a region', () => {
       useLayoutStore.getState().setRegionWidth('primary-sidebar', 300)

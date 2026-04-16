@@ -39,6 +39,7 @@ interface LayoutState {
   toggleActivityBarWidth: () => void
   setActivityBarWideSize: (size: number) => void
   toggleWorkspaceExpanded: (wsId: string) => void
+  reconcileWorkspaceExpanded: (liveWsIds: string[]) => void
 }
 
 function createDefaultRegions(): Record<SidebarRegion, RegionState> {
@@ -190,6 +191,20 @@ export const useLayoutStore = create<LayoutState>()(
             [wsId]: !state.workspaceExpanded[wsId],
           },
         })),
+
+      reconcileWorkspaceExpanded: (liveWsIds) =>
+        set((state) => {
+          const alive = new Set(liveWsIds)
+          alive.add('home')
+          const next: Record<string, boolean> = {}
+          let changed = false
+          for (const [key, value] of Object.entries(state.workspaceExpanded)) {
+            if (alive.has(key)) next[key] = value
+            else changed = true
+          }
+          if (!changed) return state
+          return { workspaceExpanded: next }
+        }),
     }),
     {
       name: STORAGE_KEYS.LAYOUT,
