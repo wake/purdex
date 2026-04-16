@@ -18,6 +18,7 @@ import { TerminalSection } from '../components/settings/TerminalSection'
 import { ElectronSection } from '../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../components/settings/DevEnvironmentSection'
 import { ModuleConfigSection } from '../components/settings/ModuleConfigSection'
+import { SyncSection } from '../components/settings/SyncSection'
 import { FileTreeWorkspaceView } from '../components/FileTreeView'
 import { FileTreeSessionView } from '../components/FileTreeSessionView'
 import { FolderOpen } from '@phosphor-icons/react'
@@ -227,7 +228,7 @@ export function registerBuiltinModules(): void {
   registerSettingsSection({ id: 'appearance', label: 'settings.section.appearance', order: 0, component: AppearanceSection })
   registerSettingsSection({ id: 'terminal', label: 'settings.section.terminal', order: 1, component: TerminalSection })
   registerSettingsSection({ id: 'workspace', label: 'settings.section.workspace', order: 10 }) // reserved
-  registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: 11 }) // reserved
+  registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: 11, component: SyncSection })
   registerSettingsSection({
     id: 'module-config',
     label: 'settings.section.modules',
