@@ -22,8 +22,12 @@ export function BufferListSection() {
   const handleDelete = async (name: string) => {
     const backend = getFsBackend({ type: 'inapp' })
     if (!backend) return
-    await backend.delete(`/buffer/${name}`)
-    refresh()  // triggers re-fetch via refreshKey
+    try {
+      await backend.delete(`/buffer/${name}`)
+    } catch (err) {
+      console.error('[editor] Failed to delete buffer:', err)
+    }
+    refresh()
   }
 
   if (files.length === 0) {
