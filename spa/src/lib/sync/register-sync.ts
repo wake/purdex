@@ -6,6 +6,7 @@ import { createLayoutContributor } from './contributors/layout'
 import { createQuickCommandsContributor } from './contributors/quick-commands'
 import { createI18nContributor } from './contributors/i18n'
 import { createNotificationSettingsContributor } from './contributors/notification-settings'
+import { setAllContributorIds } from './use-sync-store'
 
 export const syncEngine = createSyncEngine()
 
@@ -17,4 +18,7 @@ export function registerSyncContributors(): void {
   syncEngine.register(createQuickCommandsContributor())
   syncEngine.register(createI18nContributor())
   syncEngine.register(createNotificationSettingsContributor())
+
+  // Populate the default module list so setActiveProvider() can auto-enable all.
+  setAllContributorIds(syncEngine.getContributors().map((c) => c.id))
 }

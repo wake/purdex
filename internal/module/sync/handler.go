@@ -80,7 +80,7 @@ func (m *SyncModule) handleHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	entries, err := m.store.ListHistory(clientID, limit)
+	entries, err := m.store.ListHistorySummary(clientID, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -88,7 +88,7 @@ func (m *SyncModule) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 	// Return [] rather than null for an empty list.
 	if entries == nil {
-		entries = []HistoryEntry{}
+		entries = []HistorySummary{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

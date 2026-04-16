@@ -23,6 +23,14 @@ type HistoryEntry struct {
 	Timestamp int64
 }
 
+// HistorySummary is a lightweight view of a history entry (no bundle payload).
+type HistorySummary struct {
+	ID        int64  `json:"id"`
+	ClientID  string `json:"clientId"`
+	Device    string `json:"device"`
+	Timestamp int64  `json:"timestamp"`
+}
+
 // OpenSyncStore opens (or creates) a SyncStore at path and runs schema migration.
 // Use ":memory:" for tests.
 func OpenSyncStore(path string) (*SyncStore, error) {
@@ -122,7 +130,19 @@ func (s *SyncStore) CreateGroup(groupID string) error {
 
 // AddClientToGroup registers clientID as a member of groupID.
 func (s *SyncStore) AddClientToGroup(groupID, clientID, device string) error {
-	_, err := s.db.Exec(`
+	// Verify group exists before adding a member.
+	var exists int
+	err := s.db.QueryRow(
+		`SELECT 1 FROM sync_canonical WHERE group_id = ?`, groupID,
+	).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("group %s does not exist", groupID)
+	}
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.Exec(`
 		INSERT INTO sync_groups (group_id, client_id, device, last_seen)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(group_id, client_id) DO UPDATE SET
@@ -170,7 +190,18 @@ func (s *SyncStore) PushBundle(clientID, bundle string) error {
 		INSERT INTO sync_history (group_id, client_id, device, bundle, timestamp)
 		VALUES (?, ?, ?, ?, ?)
 	`, groupID, clientID, device, bundle, now)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Prune old history: keep only the most recent 100 entries per group.
+	_, _ = s.db.Exec(`
+		DELETE FROM sync_history
+		WHERE group_id = ? AND id NOT IN (
+			SELECT id FROM sync_history WHERE group_id = ? ORDER BY timestamp DESC LIMIT 100
+		)
+	`, groupID, groupID)
+	return nil
 }
 
 // PullCanonical returns the current canonical bundle for the group that
@@ -228,6 +259,36 @@ func (s *SyncStore) ListHistory(clientID string, limit int) ([]HistoryEntry, err
 	return out, rows.Err()
 }
 
+// ListHistorySummary returns lightweight history entries (without bundle payload).
+func (s *SyncStore) ListHistorySummary(clientID string, limit int) ([]HistorySummary, error) {
+	groupID, err := s.clientGroupID(clientID)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, client_id, device, timestamp
+		FROM sync_history
+		WHERE group_id = ?
+		ORDER BY id DESC
+		LIMIT ?
+	`, groupID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []HistorySummary
+	for rows.Next() {
+		var e HistorySummary
+		if err := rows.Scan(&e.ID, &e.ClientID, &e.Device, &e.Timestamp); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // pairingCharset is the unambiguous alphanumeric charset used for pairing codes
 // (no 0/O/1/I to avoid visual confusion).
 const pairingCharset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -265,8 +326,12 @@ func (s *SyncStore) CreatePairingCode(clientID string) (string, error) {
 }
 
 // VerifyPairingCode validates code and returns the associated groupID on
-// success.  On success the code is deleted (single-use).  On failure the
-// attempts counter is incremented and an error is returned.
+// success.  On success the code is deleted (single-use).
+//
+// Rate limiting: every failed attempt (wrong code, expired, or locked)
+// increments the attempts counter on ALL active pairing codes.  This prevents
+// brute-force enumeration — an attacker cannot try unlimited random codes
+// without exhausting the real code's attempt budget.
 func (s *SyncStore) VerifyPairingCode(code string) (string, error) {
 	var groupID string
 	var expiresAt int64
@@ -277,6 +342,8 @@ func (s *SyncStore) VerifyPairingCode(code string) (string, error) {
 		code,
 	).Scan(&groupID, &expiresAt, &attempts)
 	if errors.Is(err, sql.ErrNoRows) {
+		// Wrong code: increment ALL active codes' attempts (brute-force protection).
+		_, _ = s.db.Exec(`UPDATE sync_pairing SET attempts = attempts + 1`)
 		return "", fmt.Errorf("pairing code not found")
 	}
 	if err != nil {
@@ -284,11 +351,13 @@ func (s *SyncStore) VerifyPairingCode(code string) (string, error) {
 	}
 
 	if attempts >= 5 {
+		// Locked: delete the exhausted code.
+		_, _ = s.db.Exec(`DELETE FROM sync_pairing WHERE code = ?`, code)
 		return "", fmt.Errorf("pairing code locked: too many attempts")
 	}
 
 	if time.Now().Unix() > expiresAt {
-		_, _ = s.db.Exec(`UPDATE sync_pairing SET attempts = attempts + 1 WHERE code = ?`, code)
+		_, _ = s.db.Exec(`DELETE FROM sync_pairing WHERE code = ?`, code)
 		return "", fmt.Errorf("pairing code expired")
 	}
 

@@ -3,6 +3,17 @@ import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../storage'
 import type { SyncBundle } from './types'
 
+/**
+ * Registry of all known contributor IDs. Populated by registerSyncContributors()
+ * at startup, before any UI interaction triggers setActiveProvider().
+ */
+let _allContributorIds: string[] = []
+
+/** Called by register-sync.ts after all contributors are registered. */
+export function setAllContributorIds(ids: string[]): void {
+  _allContributorIds = ids
+}
+
 // ---------------------------------------------------------------------------
 // State shape
 // ---------------------------------------------------------------------------
@@ -64,10 +75,19 @@ export const useSyncStore = create<SyncStoreState>()(
         set({ lastSyncedBundle: bundle, lastSyncedAt: Date.now() }),
 
       setActiveProvider: (providerId) =>
-        set({
-          activeProviderId: providerId,
-          lastSyncedBundle: null,
-          lastSyncedAt: null,
+        set((state) => {
+          // When enabling a provider for the first time (empty modules list),
+          // auto-enable all registered contributors so sync works out of the box.
+          const modules =
+            state.enabledModules.length === 0 && providerId != null
+              ? [..._allContributorIds]
+              : state.enabledModules
+          return {
+            activeProviderId: providerId,
+            enabledModules: modules,
+            lastSyncedBundle: null,
+            lastSyncedAt: null,
+          }
         }),
 
       toggleModule: (moduleId) =>
