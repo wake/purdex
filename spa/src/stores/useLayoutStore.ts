@@ -7,6 +7,25 @@ import { getAllViews } from '../lib/module-registry'
 const MIN_WIDTH = 120
 const MAX_WIDTH = 600
 
+export type ActivityBarWidth = 'narrow' | 'wide'
+export type TabPosition = 'top' | 'left'
+
+/**
+ * Reserved key for Home row in `workspaceExpanded` (not a real workspace id).
+ */
+export const HOME_WS_KEY = 'home'
+
+/**
+ * Self-heal invariant: `tabPosition='left'` requires `activityBarWidth='wide'`.
+ * Called by persist's onRehydrateStorage; also exported for direct testing.
+ */
+export function healLayoutInvariant<T extends { activityBarWidth?: ActivityBarWidth; tabPosition?: TabPosition }>(state: T): T {
+  if (state.tabPosition === 'left' && state.activityBarWidth === 'narrow') {
+    state.activityBarWidth = 'wide'
+  }
+  return state
+}
+
 interface RegionState {
   views: string[]
   activeViewId?: string
@@ -17,6 +36,10 @@ interface RegionState {
 
 interface LayoutState {
   regions: Record<SidebarRegion, RegionState>
+  activityBarWidth: ActivityBarWidth
+  tabPosition: TabPosition
+  activityBarWideSize: number
+  workspaceExpanded: Record<string, boolean>
 
   setRegionMode: (region: SidebarRegion, mode: RegionState['mode']) => void
   setRegionWidth: (region: SidebarRegion, width: number) => void
@@ -28,6 +51,11 @@ interface LayoutState {
   removeView: (region: SidebarRegion, viewId: string) => void
   reorderViews: (region: SidebarRegion, views: string[]) => void
   reconcileViews: () => void
+  setActivityBarWidth: (width: ActivityBarWidth) => void
+  toggleActivityBarWidth: () => void
+  setActivityBarWideSize: (size: number) => void
+  toggleWorkspaceExpanded: (wsId: string) => void
+  reconcileWorkspaceExpanded: (liveWsIds: string[]) => void
 }
 
 function createDefaultRegions(): Record<SidebarRegion, RegionState> {
@@ -60,6 +88,10 @@ export const useLayoutStore = create<LayoutState>()(
   persist(
     (set) => ({
       regions: createDefaultRegions(),
+      activityBarWidth: 'narrow',
+      tabPosition: 'top',
+      activityBarWideSize: 240,
+      workspaceExpanded: {},
 
       setRegionMode: (region, mode) =>
         set((state) => updateRegion(state, region, { mode })),
@@ -151,12 +183,59 @@ export const useLayoutStore = create<LayoutState>()(
           }
           return { regions: reconciled }
         }),
+
+      setActivityBarWidth: (width) =>
+        set((state) => {
+          if (width === 'narrow' && state.tabPosition === 'left') return state
+          return { activityBarWidth: width }
+        }),
+
+      toggleActivityBarWidth: () =>
+        set((state) => {
+          const next: ActivityBarWidth = state.activityBarWidth === 'narrow' ? 'wide' : 'narrow'
+          if (next === 'narrow' && state.tabPosition === 'left') return state
+          return { activityBarWidth: next }
+        }),
+
+      setActivityBarWideSize: (size) =>
+        set(() => ({ activityBarWideSize: clampWidth(size) })),
+
+      toggleWorkspaceExpanded: (wsId) =>
+        set((state) => ({
+          workspaceExpanded: {
+            ...state.workspaceExpanded,
+            [wsId]: !state.workspaceExpanded[wsId],
+          },
+        })),
+
+      reconcileWorkspaceExpanded: (liveWsIds) =>
+        set((state) => {
+          const alive = new Set(liveWsIds)
+          alive.add(HOME_WS_KEY)
+          const next: Record<string, boolean> = {}
+          let changed = false
+          for (const [key, value] of Object.entries(state.workspaceExpanded)) {
+            if (alive.has(key)) next[key] = value
+            else changed = true
+          }
+          if (!changed) return state
+          return { workspaceExpanded: next }
+        }),
     }),
     {
       name: STORAGE_KEYS.LAYOUT,
       storage: purdexStorage,
       version: 1,
-      partialize: (state) => ({ regions: state.regions }),
+      partialize: (state) => ({
+        regions: state.regions,
+        activityBarWidth: state.activityBarWidth,
+        tabPosition: state.tabPosition,
+        activityBarWideSize: state.activityBarWideSize,
+        workspaceExpanded: state.workspaceExpanded,
+      }),
+      onRehydrateStorage: () => (state) => {
+        if (state) healLayoutInvariant(state)
+      },
     },
   ),
 )

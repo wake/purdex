@@ -12,6 +12,7 @@ import { ActivityBar } from './ActivityBar'
 import type { Workspace } from '../../../types/tab'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useAgentStore } from '../../../stores/useAgentStore'
+import { useLayoutStore } from '../../../stores/useLayoutStore'
 import type { Tab } from '../../../types/tab'
 
 function mockSessionTab(id: string, hostId: string, sessionCode: string): Tab {
@@ -383,5 +384,48 @@ describe('ActivityBar', () => {
     const tooltips = screen.getAllByTestId('ws-tooltip')
     const serverTooltip = tooltips.find(el => el.textContent === 'Server')
     expect(serverTooltip).toBeTruthy()
+  })
+})
+
+describe('ActivityBar coordinator', () => {
+  beforeEach(() => {
+    useLayoutStore.setState(useLayoutStore.getInitialState())
+  })
+
+  it('renders Narrow by default', () => {
+    render(
+      <ActivityBar
+        workspaces={[]}
+        activeWorkspaceId={null}
+        activeStandaloneTabId={null}
+        onSelectWorkspace={() => {}}
+        onSelectHome={() => {}}
+        standaloneTabIds={[]}
+        onAddWorkspace={() => {}}
+        onOpenHosts={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    )
+    // Narrow Home uses <img alt="Purdex">; Wide uses <span>Home</span>
+    expect(screen.getByAltText('Purdex')).toBeInTheDocument()
+    expect(screen.queryByText('Home')).not.toBeInTheDocument()
+  })
+
+  it('renders Wide when activityBarWidth=wide', () => {
+    useLayoutStore.setState({ activityBarWidth: 'wide' })
+    render(
+      <ActivityBar
+        workspaces={[]}
+        activeWorkspaceId={null}
+        activeStandaloneTabId={null}
+        onSelectWorkspace={() => {}}
+        onSelectHome={() => {}}
+        standaloneTabIds={[]}
+        onAddWorkspace={() => {}}
+        onOpenHosts={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    )
+    expect(screen.getByText('Home')).toBeInTheDocument()
   })
 })

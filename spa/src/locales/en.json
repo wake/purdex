@@ -159,6 +159,9 @@
   "nav.settings": "Settings",
   "nav.hosts": "Hosts",
   "nav.toggle_view": "Toggle view mode",
+  "nav.collapse_activity_bar": "Collapse activity bar",
+  "nav.expand_activity_bar": "Expand activity bar",
+  "nav.collapse_locked_tooltip": "Can't collapse while tabs are on the left",
 
   "page.newtab.title": "New Tab",
   "page.newtab.empty": "No content providers registered",

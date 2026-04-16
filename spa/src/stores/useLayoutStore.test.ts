@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useLayoutStore } from './useLayoutStore'
+import { useLayoutStore, healLayoutInvariant } from './useLayoutStore'
 import type { SidebarRegion } from '../types/layout'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 
@@ -33,12 +33,143 @@ describe('useLayoutStore', () => {
       expect(regions['primary-panel'].width).toBe(200)
       expect(regions['secondary-panel'].width).toBe(200)
     })
+
+    it('layout mode defaults: width=narrow, tabPosition=top, wideSize=240', () => {
+      const state = useLayoutStore.getState()
+      expect(state.activityBarWidth).toBe('narrow')
+      expect(state.tabPosition).toBe('top')
+      expect(state.activityBarWideSize).toBe(240)
+      expect(state.workspaceExpanded).toEqual({})
+    })
   })
 
   describe('setRegionMode', () => {
     it('changes mode for a region', () => {
       useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
       expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('pinned')
+    })
+  })
+
+  describe('setActivityBarWidth', () => {
+    it('narrow → wide', () => {
+      useLayoutStore.getState().setActivityBarWidth('wide')
+      expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
+    })
+
+    it('wide → narrow', () => {
+      useLayoutStore.setState({ activityBarWidth: 'wide' })
+      useLayoutStore.getState().setActivityBarWidth('narrow')
+      expect(useLayoutStore.getState().activityBarWidth).toBe('narrow')
+    })
+
+    it('refuses narrow when tabPosition=left', () => {
+      useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'left' })
+      useLayoutStore.getState().setActivityBarWidth('narrow')
+      expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
+    })
+
+    it('allows wide when tabPosition=left', () => {
+      useLayoutStore.setState({ activityBarWidth: 'narrow', tabPosition: 'left' })
+      useLayoutStore.getState().setActivityBarWidth('wide')
+      expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
+    })
+  })
+
+  describe('toggleActivityBarWidth', () => {
+    it('toggles narrow ↔ wide', () => {
+      useLayoutStore.getState().toggleActivityBarWidth()
+      expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
+      useLayoutStore.getState().toggleActivityBarWidth()
+      expect(useLayoutStore.getState().activityBarWidth).toBe('narrow')
+    })
+
+    it('no-op when currently wide and tabPosition=left', () => {
+      useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'left' })
+      useLayoutStore.getState().toggleActivityBarWidth()
+      expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
+    })
+  })
+
+  describe('setActivityBarWideSize', () => {
+    it('updates value', () => {
+      useLayoutStore.getState().setActivityBarWideSize(300)
+      expect(useLayoutStore.getState().activityBarWideSize).toBe(300)
+    })
+
+    it('clamps below 120', () => {
+      useLayoutStore.getState().setActivityBarWideSize(50)
+      expect(useLayoutStore.getState().activityBarWideSize).toBe(120)
+    })
+
+    it('clamps above 600', () => {
+      useLayoutStore.getState().setActivityBarWideSize(800)
+      expect(useLayoutStore.getState().activityBarWideSize).toBe(600)
+    })
+  })
+
+  describe('toggleWorkspaceExpanded', () => {
+    it('toggles from undefined → true', () => {
+      useLayoutStore.getState().toggleWorkspaceExpanded('ws-1')
+      expect(useLayoutStore.getState().workspaceExpanded['ws-1']).toBe(true)
+    })
+
+    it('toggles from true → false', () => {
+      useLayoutStore.setState({ workspaceExpanded: { 'ws-1': true } })
+      useLayoutStore.getState().toggleWorkspaceExpanded('ws-1')
+      expect(useLayoutStore.getState().workspaceExpanded['ws-1']).toBe(false)
+    })
+
+    it('per-ws isolation', () => {
+      useLayoutStore.getState().toggleWorkspaceExpanded('ws-1')
+      useLayoutStore.getState().toggleWorkspaceExpanded('ws-2')
+      expect(useLayoutStore.getState().workspaceExpanded).toEqual({
+        'ws-1': true,
+        'ws-2': true,
+      })
+    })
+
+    it('supports "home" key', () => {
+      useLayoutStore.getState().toggleWorkspaceExpanded('home')
+      expect(useLayoutStore.getState().workspaceExpanded['home']).toBe(true)
+    })
+  })
+
+  describe('reconcileWorkspaceExpanded', () => {
+    it('prunes keys not in provided ws list, preserves "home"', () => {
+      useLayoutStore.setState({
+        workspaceExpanded: {
+          'ws-alive': true,
+          'ws-deleted': true,
+          home: true,
+        },
+      })
+      useLayoutStore.getState().reconcileWorkspaceExpanded(['ws-alive'])
+      expect(useLayoutStore.getState().workspaceExpanded).toEqual({
+        'ws-alive': true,
+        home: true,
+      })
+    })
+
+    it('is no-op when all keys are alive or "home"', () => {
+      useLayoutStore.setState({
+        workspaceExpanded: { 'ws-a': true, home: false },
+      })
+      const before = useLayoutStore.getState().workspaceExpanded
+      useLayoutStore.getState().reconcileWorkspaceExpanded(['ws-a'])
+      expect(useLayoutStore.getState().workspaceExpanded).toEqual(before)
+    })
+  })
+
+  describe('healLayoutInvariant', () => {
+    it('forces width=wide when state has {narrow, left}', () => {
+      const healed = healLayoutInvariant({ activityBarWidth: 'narrow', tabPosition: 'left' })
+      expect(healed.activityBarWidth).toBe('wide')
+    })
+
+    it('leaves valid combinations untouched', () => {
+      expect(healLayoutInvariant({ activityBarWidth: 'narrow', tabPosition: 'top' }).activityBarWidth).toBe('narrow')
+      expect(healLayoutInvariant({ activityBarWidth: 'wide', tabPosition: 'top' }).activityBarWidth).toBe('wide')
+      expect(healLayoutInvariant({ activityBarWidth: 'wide', tabPosition: 'left' }).activityBarWidth).toBe('wide')
     })
   })
 

@@ -8,37 +8,39 @@
 
 目前 Purdex 的 activity bar 固定為窄版（44px、30×30 icon），tabs 固定在頂部 `TabBar`。隨著 workspace 數量成長，需要兩個新介面模式：
 
-1. **Activity bar 寬窄切換** — 窄版保留目前現況；寬版顯示 icon + workspace 名稱，類似 VSCode/Slack。
+1. **Activity bar 寬窄切換** — 窄版保留現況；寬版顯示 icon + workspace 名稱，類似 VSCode/Slack。
 2. **Tab 位置切換** — tabs 可維持在頂部 tab bar（現況），或改為顯示在寬版 activity bar 裡，每個 workspace 底下展開自己的 tab list。寬版才能選 `left`。
 
-Cross-workspace drag 在 `tab 在左`模式下是自然的 UX 延伸，本 spec 一併納入（Phase 3）。
+Cross-workspace drag 在 `tab 在左` 模式下是自然的 UX 延伸，本 spec 一併納入（Phase 3）。
 
 ## 範圍
 
 ### 包含
 
-- Layout 狀態模型與持久化
+- Layout 狀態模型、持久化、既有 `syncManager` 多視窗同步
 - Activity bar 窄/寬雙版本渲染
 - 寬版右邊界 resize handle
-- Settings → Appearance 新分頁放 tab position
+- Settings → Appearance 延伸既有分頁放 tab position
 - Activity bar 上寬窄切換按鈕
 - 寬版下每個 workspace 可獨立展開/收合，顯示 inline tabs
 - Home row 展開顯示 standalone tabs
 - `tabPosition='left'` 時頂部 `TabBar` 隱藏
 - 跨 workspace 拖曳 tab（含 standalone ↔ workspace 互轉）
+- 拖到 collapsed workspace header 的 spring-load 自動展開
 
 ### 不包含
 
-- 多視窗同步 layout 設定（每個 window 獨立）
-- 自動佈局 preset（「compact」、「spacious」之類的預設組合）
+- 完整 keyboard navigation / `KeyboardSensor`（只補 `aria-expanded`；其餘開 GH issue 追蹤）
+- 自動佈局 preset（「compact」、「spacious」等）
+- Pinned tab 跨 workspace 拖曳（**明確禁止**，見 §DnD 規則）
 - 拖曳 workspace 到另一個視窗（既有 `handleWsTearOff` 不變）
-- 窄版下 tab 的第二種排列方式
+- Persist migration（alpha 階段依 `feedback_no_alpha_migration.md` 原則，舊資料由 zustand persist + partialize 預設值補齊）
 
 ## 架構
 
 ### 狀態模型
 
-擴充 `useLayoutStore`（現有 store，已持久化到 `purdex-layout`）：
+擴充 `useLayoutStore`（`spa/src/stores/useLayoutStore.ts`，現已持久化到 `purdex-layout`、由 `syncManager` 跨視窗同步）：
 
 ```ts
 type ActivityBarWidth = 'narrow' | 'wide'
@@ -49,26 +51,45 @@ interface LayoutState {
 
   activityBarWidth: ActivityBarWidth         // default: 'narrow'
   tabPosition: TabPosition                    // default: 'top'
-  activityBarWideSize: number                 // default: 240，範圍 [180, 400]
-  workspaceExpanded: Record<string, boolean>  // key: wsId, 'home' 代表 Home row
+  activityBarWideSize: number                 // default: 240；沿用既有 clampWidth(120, 600)
+  workspaceExpanded: Record<string, boolean>  // key: wsId，'home' 代表 Home row
 }
 ```
+
+**Persistence 變更**：`partialize` 必須擴充以包含新 4 個 key：
+```ts
+partialize: (state) => ({
+  regions: state.regions,
+  activityBarWidth: state.activityBarWidth,
+  tabPosition: state.tabPosition,
+  activityBarWideSize: state.activityBarWideSize,
+  workspaceExpanded: state.workspaceExpanded,
+})
+```
+
+**跨視窗同步**：已透過 `syncManager.register(STORAGE_KEYS.LAYOUT, useLayoutStore)` 生效，新 key 自動同步，無需額外設定。
 
 ### 耦合規則（store action 內強制）
 
 - `setTabPosition('left')` → 同步將 `activityBarWidth` 設為 `'wide'`
 - `setTabPosition('top')` → 保留 `activityBarWidth` 當前值
-- `setActivityBarWidth('narrow')`：若 `tabPosition === 'left'`，動作拒絕（no-op）；UI 層的 CollapseButton 也會 disabled，雙重保險
+- `setActivityBarWidth('narrow')`：若 `tabPosition === 'left'`，動作 no-op；UI 層 `CollapseButton` 也會 disabled（雙重保險）
 - `toggleActivityBarWidth()` → 同上規則
 
-### 渲染決策（純 derive，不另存）
+### `workspaceExpanded` 垃圾回收
+
+沿用 `reconcileViews()` 模式，新增 `reconcileWorkspaceExpanded()`：訂閱 `useWorkspaceStore` 的 workspaces 變更，移除不存在於當前 workspaces 列表的 wsId（`'home'` 保留）。呼叫時機：
+- store 初始化完成後一次
+- `useWorkspaceStore.removeWorkspace` 後透過 Zustand subscribe 觸發
+
+### 渲染決策（純 derive）
 
 | 條件 | 結果 |
 |---|---|
 | `tabPosition === 'top'` | 顯示頂部 `<TabBar />` |
-| `tabPosition === 'left'` | 頂部 `<TabBar />` 不渲染；activity bar 內每個 workspace 可展開顯示 inline tabs |
-| `activityBarWidth === 'narrow'` | Activity bar 容器寬 44px，只顯示 icon |
-| `activityBarWidth === 'wide'` | Activity bar 容器寬 `activityBarWideSize`，顯示 icon + 名稱，可拖右邊界 resize |
+| `tabPosition === 'left'` | 頂部 `<TabBar />` 不渲染；activity bar 內每 ws 可展開顯示 inline tabs |
+| `activityBarWidth === 'narrow'` | Activity bar 寬 44px，只顯示 icon |
+| `activityBarWidth === 'wide'` | Activity bar 寬 `activityBarWideSize`，顯示 icon + 名稱，可拖右邊界 resize |
 
 ### 四種有效狀態
 
@@ -86,90 +107,81 @@ interface LayoutState {
 ```
 ActivityBar.tsx                 協調者；依 activityBarWidth 選擇子元件
 ├─ ActivityBarNarrow.tsx        現有 narrow 渲染抽出
-└─ ActivityBarWide.tsx          寬版容器
+└─ ActivityBarWide.tsx          寬版容器（Phase 3 持有頂層 DndContext）
     ├─ WorkspaceRow.tsx         單一 workspace 行（header + 可選展開區）
     │   └─ InlineTabList.tsx    展開後的 tab list；per-ws SortableContext
     │       └─ InlineTab.tsx    單一 tab 行（icon + title + close + unread + status dot）
     ├─ HomeRow.tsx              Home 行；tabs = standalone tabs
-    └─ CollapseButton.tsx       寬/窄切換按鈕；tabPosition='left' 時 disabled
+    └─ CollapseButton.tsx       寬/窄切換按鈕；tabPosition='left' 時 disabled + tooltip
 ```
 
 ### 其他
 
-- `ActivityBarResize.tsx`（新）— 寬版右邊界 resize handle，複用 `SidebarRegion` 的 resize 模式
-- `spa/src/components/settings/AppearanceSection.tsx`（新或延伸現有 settings 分頁）— tab position radio
-- `App.tsx` — 依 `tabPosition` 條件渲染 `<TabBar />`；Phase 3 把 activity bar 的 `DndContext` 抽成頂層
+- `ActivityBarResize.tsx`（新）— 寬版右邊界 resize handle，複用 `SidebarRegion.tsx` 的 resize 實作
+- `spa/src/components/settings/AppearanceSection.tsx`（**延伸既有**）— 新增 tab position radio group（Phase 2 才加）
+- `App.tsx` — 依 `tabPosition` 條件渲染 `<TabBar />`；Phase 3 把 activity bar 的 DndContext 抽成頂層
 
 ### 共用取捨
 
-- `SortableTab`（頂部水平）與 `InlineTab`（左側垂直）layout 差異大，**不共用元件**，避免 premature abstraction
+- `SortableTab`（頂部水平）與 `InlineTab`（左側垂直）layout 差異大，**不共用元件**
 - 只共用 presentational 子元件：`WorkspaceIcon`、`SubagentDots`、`TabStatusDot`、unread badge
 - `useWorkspaceIndicators` hook 兩處都用
 
 ## 資料流
 
 ### A. 寬窄切換（Phase 1）
-
 ```
-User 按 CollapseButton
+CollapseButton 點擊
   → useLayoutStore.toggleActivityBarWidth()
-  → 若 tabPosition='left'，no-op
-  → 否則 narrow ↔ wide 反轉
-  → ActivityBar 依新 width render
+  → 若 tabPosition='left'，no-op（UI 已 disabled）
+  → 否則 narrow ↔ wide
 ```
 
-### B. Tab position 切換（Phase 1）
-
+### B. Tab position 切換（Phase 2）
 ```
-Settings radio onChange → setTabPosition(pos)
-  → pos='left' 時，同時 setActivityBarWidth('wide')
-  → pos='top' 時，width 保留
+AppearanceSection radio → setTabPosition(pos)
+  → pos='left' 時同步 setActivityBarWidth('wide')
 App.tsx 依 tabPosition 決定是否渲染 <TabBar />
 ```
 
 ### C. Workspace 展開/收合（Phase 2）
-
 ```
-User 按 WorkspaceRow header（或 chevron icon）
+WorkspaceRow header 點擊
   → useLayoutStore.toggleWorkspaceExpanded(wsId)
   → workspaceExpanded[wsId] 反轉
   → WorkspaceRow 條件渲染 InlineTabList
 ```
-
-Home row 同邏輯，key 為 `'home'`。預設值：首次進入時 active workspace 展開、其餘收合。
+Home row 同邏輯，key 為 `'home'`。預設值：首次進入時 active workspace 展開、其餘收合（store 初始化時依 `activeWorkspaceId` 計算）。
 
 ### D. 同 workspace 內重排（Phase 2）
-
-每個 workspace 有自己的 `SortableContext`（`items = workspace.tabs`）。
-
+使用**既有** action `reorderWorkspaceTabs(wsId, tabIds)`，**不新增**。
 ```
 InlineTab dragEnd
-  → 計算 oldIdx / newIdx
-  → useWorkspaceStore.reorderTabsInWorkspace(wsId, newOrder)
+  → 計算新順序
+  → useWorkspaceStore.reorderWorkspaceTabs(wsId, newOrder)
 ```
-
-需新增 store action `reorderTabsInWorkspace(wsId: string, orderedTabIds: string[])`。
 
 ### E. 跨 workspace 拖曳（Phase 3）
 
-#### DnD 結構重構
+#### DnD 結構（**Phase 2 就建立頂層 DndContext，Phase 3 只擴充 draggable 類型**）
 
 ```
 ActivityBarWide
 └─ <DndContext onDragStart onDragOver onDragEnd collisionDetection=customDetection>
     ├─ <SortableContext items={wsIds} strategy=vertical>
     │    每個 WorkspaceRow / HomeRow（type='workspace'）
-    └─ 每個 (Workspace|Home)Row 內的 InlineTabList
+    └─ 每個 Row 內的 InlineTabList
          └─ <SortableContext items={tabIds} strategy=vertical>
               InlineTab（type='tab'，data={tabId, sourceWsId}）
 ```
 
-#### Draggable / Droppable data
+**Modifier 調整**：既有 `restrictToVertical`（clamp 到 `wsZoneRef`）不再適用跨 ws 拖曳；Phase 3 拆 ActivityBarWide 時移除此 modifier，改由 collision detection + `onDragEnd` 分派控制。
 
+#### Draggable / Droppable data
 ```ts
 type DraggableData =
   | { type: 'workspace'; wsId: string }
-  | { type: 'tab'; tabId: string; sourceWsId: string | null }  // null = standalone
+  | { type: 'tab'; tabId: string; sourceWsId: string | null; isPinned: boolean }
 
 type DroppableData =
   | { type: 'workspace-header'; wsId: string }
@@ -177,132 +189,202 @@ type DroppableData =
   | { type: 'home-header' }
 ```
 
+#### Pinned tab 規則（**明確禁止跨 ws**）
+
+- `onDragStart`：若 draggable 是 pinned tab，設 flag
+- `onDragOver`：若 flag 為 pinned，collision detection 只允許 **同 sourceWsId** 的 `tab-slot`；其他 target 不 highlight
+- `onDragEnd`：若 drop target 不在允許範圍，放棄（視覺上回彈）
+
+#### Spring-load 自動展開
+
+- `onDragOver` 命中 **collapsed** workspace-header / home-header 時啟動 500ms 計時器
+- 計時器到期呼叫 `toggleWorkspaceExpanded(wsId)` 自動展開該 row
+- 游標離開或放開清除計時器
+
+#### Collision detection（fallback chain）
+
+MultipleContainers 標準 recipe：
+```
+pointerWithin(args)
+  → rectIntersection(args)  (filter to droppables)
+  → closestCenter(args)
+```
+若命中 workspace-header 且未命中任何 tab-slot → 視為「落到該 ws 末端」。若命中 tab-slot → 依游標相對於 slot 中線決定 before / after。
+
 #### onDragEnd 分派
 
 | 來源 | 目標 | 動作 |
 |---|---|---|
-| workspace | 另一 workspace | 沿用既有 workspace reorder |
-| tab（有 wsId） | tab-slot 同 ws | `reorderTabsInWorkspace(wsId, newOrder)` |
-| tab（有 wsId） | tab-slot 他 ws | `moveTab(tabId, targetWsId, beforeTabId)` |
-| tab（有 wsId） | workspace-header 他 ws | `moveTab(tabId, targetWsId, null)` ← append |
-| tab（有 wsId） | home-header | `removeTabFromWorkspace(tabId)` ← 轉 standalone |
-| tab（無 wsId / standalone） | workspace-header/tab-slot | `insertTab(tabId, targetWsId, ...)` |
+| workspace | 另一 workspace | `reorderWorkspaces(newOrder)`（既有） |
+| tab（非 pinned） | tab-slot 同 ws | `reorderWorkspaceTabs(wsId, newOrder)`（既有） |
+| tab（非 pinned） | tab-slot 他 ws | `insertTab(tabId, targetWsId, afterTabId)`（既有，內建 cross-ws dedup） |
+| tab（非 pinned） | workspace-header 他 ws | `insertTab(tabId, targetWsId, undefined)` ← append |
+| tab（非 pinned） | home-header | 拆分：`findWorkspaceByTab(tabId)` → `removeTabFromWorkspace(wsId, tabId)`（既有兩步驟） |
+| tab（pinned） | 任何他 ws 目標 | 禁止，拖曳無效 |
+| standalone tab | workspace-header / tab-slot | `insertTab(tabId, targetWsId, ...)` |
 
-#### Collision detection
+**不新增** `moveTab`、`reorderTabsInWorkspace`、單參 `removeTabFromWorkspace`（皆與既有 action 衝突或重複）。
 
-- 先用 `pointerWithin`
-- 若命中 workspace-header 且不在任何 tab-slot 上 → 視為「落到該 ws 末端」
-- 若命中 tab-slot → 依游標相對於 slot 中線決定 insert before / after
+#### `insertTab` 擴充需求
 
-#### Active tab 處理
+既有 `insertTab(tabId, workspaceId?, afterTabId?)` 只支援 append 或「after 某 tab」；拖到目標 ws 第一個位置時無 afterTabId 可用。**Phase 3 需求**：擴充第三參數為 `{ afterTabId?: string; position?: 'start' | 'end' }` 或直接接受 `afterTabId: string | null`（`null` 代表 prepend）。實作時選一種風格即可，backwards compatible。
 
-- 拖曳過程不改變 `activeTabId`
-- 落下後 `activeTabId` 不變；若 tab 被搬到別 workspace，自動切換 active workspace 到目標 ws
+#### Active tab / active ws 處理
 
-#### `useWorkspaceStore` 需新增
-
-- `moveTab(tabId: string, targetWsId: string, beforeTabId?: string | null)` — 從任何來源（workspace / standalone）移到目標 ws，位置由 beforeTabId 決定；`null` = append
-- `reorderTabsInWorkspace(wsId: string, orderedTabIds: string[])` — 內部重排
-- `removeTabFromWorkspace(tabId: string)` — 從所屬 workspace 移除，tab 變 standalone
+- 拖曳進行中不改 `activeTabId`
+- 落下後：
+  - 若被拖的 tab **不是 active tab** → `activeWorkspaceId` 不變
+  - 若被拖的 tab **是 active tab** → 自動 `setActiveWorkspace(targetWsId)`
 
 ## Phase 拆分
 
-### Phase 1 — 狀態與寬窄切換
+### Phase 1 — 狀態與寬窄切換（僅 activity bar 外殼）
 
-- `useLayoutStore` 加入 `activityBarWidth`、`tabPosition`、`activityBarWideSize`
-- setter 耦合規則
-- `ActivityBarNarrow`（等同現況）、`ActivityBarWide`（只有 icon + 名稱，沒 tabs）
-- `CollapseButton`（寬/窄 toggle；`tabPosition='left'` 時 disabled）
+**工作量：~1–1.5 天**
+
+- `useLayoutStore` 加入 `activityBarWidth`、`activityBarWideSize`、`workspaceExpanded`；**tab position 相關延到 Phase 2**
+- setter 含 `activityBarWidth` 的耦合保護（即使 Phase 1 沒有 `setTabPosition`，也先寫好以 tabPosition 存在時阻擋 narrow 切換的邏輯）
+- `ActivityBarNarrow`（等同現況，抽出）、`ActivityBarWide`（icon + 名稱，**沒有 tabs**，**沒有 DndContext 內部 tabs**）
+- `CollapseButton`（寬/窄 toggle；Phase 1 因沒 tabPosition setter，disabled 條件是「預留」）
 - `ActivityBarResize` 右邊界 resize handle
-- Settings → Appearance：tab position radio（標註「left 將鎖定寬版」）
-- 測試：state 轉移、耦合規則、button toggle、Settings UI、resize
+- `partialize` 擴充
+- `reconcileWorkspaceExpanded` GC 邏輯
+- i18n keys（新增）：
+  - `nav.collapse_activity_bar` / `nav.expand_activity_bar`
+  - 中/英/日各一份（依既有 i18n 覆蓋）
+- 既有測試更新：`ActivityBar.test.tsx` 因拆成 Narrow/Wide 可能需改 selectors
+- 新測試見「測試策略 Phase 1」
 
-### Phase 2 — 左側 tabs（同 workspace 內拖曳）
+**Phase 1 ship 後使用者可體驗**：在 activity bar 切寬/窄，寬版顯示 workspace 名稱 + 可拖 resize。
 
-- `workspaceExpanded` state + `toggleWorkspaceExpanded`
+### Phase 2 — Tab position + Inline tabs（同 ws 內拖曳）
+
+**工作量：~2–3 天**
+
+- `useLayoutStore.tabPosition` 及 setter（含耦合到 wide）
+- `AppearanceSection.tsx` **延伸既有**，加入 tab position radio group（含「選 left 將鎖定寬版」註記）
 - `WorkspaceRow`、`HomeRow`、`InlineTabList`、`InlineTab`
-- per-ws `SortableContext`，內部重排
-- `useWorkspaceStore.reorderTabsInWorkspace`
+- `toggleWorkspaceExpanded(wsId)`
+- **頂層 DndContext 先建立**（即使 Phase 2 只做同 ws 拖曳，collision detection 與 drag-types 也先設計為可擴充）
+- per-ws `SortableContext` + 內部重排（使用既有 `reorderWorkspaceTabs`）
 - `App.tsx`：`tabPosition='left'` 時條件隱藏 `<TabBar />`
-- 空 workspace inline 空狀態、+ 按鈕放該 ws 展開區末端
-- 測試：展開/收合 per-ws、內部重排、Home 展開、TabBar 隱藏、active 樣式
+- 空 workspace inline 空狀態、`+` 按鈕放該 ws 展開區末端（需 `handleAddTabToWorkspace(wsId)` 新 handler）
+- i18n keys 新增：
+  - `settings.appearance.tab_position` / `settings.appearance.tab_position.top` / `.left` / `.left_hint`
+  - `nav.workspace_empty`（空 ws 空狀態文案）
+- 既有測試更新：可能影響 `ActivityBar.test.tsx`、間接影響 `TabBar.test.tsx`（條件渲染）
+- 新測試見「測試策略 Phase 2」
+
+**Phase 2 ship 後使用者可體驗**：Settings 切 tab 到左側，每個 workspace 底下可展開 tab list，同 ws 內可拖曳重排。
 
 ### Phase 3 — 跨 workspace 拖曳
 
-- Activity bar DnD 結構重構（單一頂層 DndContext）
-- 兩種 draggable 類型 + 三種 droppable 類型
-- Custom collision detection
-- Drop zone visual（hover workspace-header / home-header 時亮起）
-- `useWorkspaceStore.moveTab`、`removeTabFromWorkspace`
-- 邊界：拖 active tab、拖 pinned tab、從 Home 拖到 workspace、拖到 Home 變 standalone、跨 ws 拖到空 workspace
-- 回歸：workspace 本身的 reorder 不能壞
-- 測試：每個邊界至少一支 unit，跨 ws 流程至少一支 integration
+**工作量：~2.5–3.5 天**
 
-**總工作量估算**：6–8 天
+- DnD draggable 類型擴充（加上 `'tab'` 類型；`'workspace'` 類型已於 Phase 2 存在）
+- Custom collision detection fallback chain（pointerWithin → rectIntersection → closestCenter）
+- Drop zone visual（workspace-header / home-header hover 時亮起 ring + bg；透過 `useDndContext.over` 傳入 row 元件）
+- Spring-load 自動展開 collapsed row（500ms 計時器）
+- Pinned tab 跨 ws 禁止（drag-type 篩選 + drag overlay 視覺提示）
+- Active tab 在 cross-ws move 時的 `setActiveWorkspace` 邏輯
+- `insertTab` 擴充支援 `afterTabId: string | null`（null 代表 prepend）
+- 既有 `restrictToVertical` modifier 於 ActivityBarWide 中移除
+- 回歸測試：workspace reorder 本身不壞
+- 新測試見「測試策略 Phase 3」
+
+**Phase 3 ship 後使用者可體驗**：tab 可在 workspace 間拖曳搬移、可拖到 Home 變 standalone、可從 Home 拖入 workspace。
+
+**總工作量估算**：**5.5–8 天**
+
+## 檔案影響範圍
+
+### 新增
+- `spa/src/features/workspace/components/ActivityBarNarrow.tsx`
+- `spa/src/features/workspace/components/ActivityBarWide.tsx`
+- `spa/src/features/workspace/components/WorkspaceRow.tsx`
+- `spa/src/features/workspace/components/HomeRow.tsx`
+- `spa/src/features/workspace/components/InlineTabList.tsx`
+- `spa/src/features/workspace/components/InlineTab.tsx`
+- `spa/src/features/workspace/components/CollapseButton.tsx`
+- `spa/src/features/workspace/components/ActivityBarResize.tsx`
+- 對應 `.test.tsx`
+
+### 修改
+- `spa/src/stores/useLayoutStore.ts`（新 state + action + partialize + reconcile）
+- `spa/src/features/workspace/components/ActivityBar.tsx`（改為協調者）
+- `spa/src/features/workspace/components/ActivityBar.test.tsx`（更新 selectors）
+- `spa/src/components/settings/AppearanceSection.tsx`（加 tab position radio）
+- `spa/src/App.tsx`（條件渲染 TabBar、活動區新 handler 傳入）
+- `spa/src/features/workspace/store.ts`（`insertTab` 擴充支援 prepend）
+- `spa/src/stores/useTabStore.ts` 或相關（若 `handleAddTabToWorkspace` 需要新 action）
+- `spa/src/i18n/*`（新增 keys）
+
+### 不變
+- `spa/src/components/TabBar.tsx`（條件渲染由 App.tsx 控制，TabBar 本身不改）
+- `spa/src/components/SortableTab.tsx`
+- 其他 workspace 內元件邏輯
 
 ## 測試策略
 
 ### Phase 1
 
 **Unit**：
-- `useLayoutStore`：`setActivityBarWidth('narrow')` 在 `tabPosition='left'` 時被拒絕
-- `useLayoutStore`：`setTabPosition('left')` 順帶將 width 設為 wide
-- `useLayoutStore`：持久化到 `purdex-layout`、reload 後還原
-- `CollapseButton`：`tabPosition='left'` 時 disabled
-- `AppearanceSection`：選 left 即刻反映 wide
-- `ActivityBarResize`：拖曳改 `activityBarWideSize`，放開寫 store
+- `useLayoutStore`：新 field 預設值、persistence via `partialize`、`syncManager` 跨視窗事件
+- `useLayoutStore`：`setActivityBarWidth('narrow')` 在 `tabPosition='left'` 時 no-op（即使 Phase 1 預設 top，也要防禦測試）
+- `useLayoutStore`：`reconcileWorkspaceExpanded` 刪 ws 後 GC 生效
+- `CollapseButton`：點擊觸發 `toggleActivityBarWidth`
+- `ActivityBarResize`：拖曳改 `activityBarWideSize`（clamp 生效）
+- `ActivityBarNarrow` / `ActivityBarWide` 選擇式渲染
 
 **Integration**：
-- App 層：切 wide ↔ narrow 時 `<TabBar />` 仍在、容器寬度切換
-- App 層：切 `tabPosition='left'`，activity bar 寬、TabBar 消失、CollapseButton disabled
+- App 層：切 wide ↔ narrow 容器寬度切換、`<TabBar />` 照舊 render
 
 ### Phase 2
 
 **Unit**：
+- `setTabPosition('left')` 同步改 `activityBarWidth='wide'`
 - `toggleWorkspaceExpanded(wsId)` per-ws 互不干擾
 - `InlineTabList` 空狀態 + 正常 render 順序
-- `InlineTab` 點擊呼叫 `onSelectTab`、close 呼叫 `onCloseTab`
+- `InlineTab` 點擊 / close / 右鍵行為
 - `HomeRow` 顯示 standalone tabs
-- `reorderTabsInWorkspace` 正確更新 workspace.tabs 順序
+- 使用 `reorderWorkspaceTabs` 更新順序
 
 **Integration**：
-- `tabPosition='left'` 時頂部 `<TabBar />` 不 render
-- 展開多個 workspace 同時可見；內部 reorder 不影響別的 workspace
-- active tab 在 inline list 有正確 active 樣式
+- `tabPosition='left'` 時頂部 `<TabBar />` 不 render、`CollapseButton` disabled
+- 頂層 DndContext 已就位、同 ws 拖曳生效
+- `AppearanceSection` radio 選 left，activity bar 即刻變寬
 
 ### Phase 3
 
 **Unit**：
-- `moveTab`、`reorderTabsInWorkspace`、`removeTabFromWorkspace` 邊界：
-  - 目標 ws 不存在、source = target、tab 不存在、pinned tab 跨 ws
-  - 拖走 active tab 後 `activeTabId` 保持原值
 - Custom collision detection：tab over workspace-header → 落 header；tab over tab-slot → 落 slot；曖昧命中取最近
+- Spring-load 計時器：500ms 後自動 `toggleWorkspaceExpanded`，離開清除
+- Pinned tab 拖曳限制：`onDragOver` 目標為他 ws 時不 highlight
+- `insertTab` 擴充：`afterTabId = null` prepend 到 target ws 第一位
+- Active tab 在跨 ws move 時 `setActiveWorkspace(targetWsId)`；非 active tab 不切
 
-**Integration**（抓架構 regression）：
+**Integration（抓架構 regression）**：
 - 拖 workspace row：workspace 重排（既有行為不壞）
 - 拖 tab 同 ws 另一個 tab-slot：順序變
-- 拖 tab 到另一 ws 的 header：搬到該 ws 末端
-- 拖 tab 到另一 ws 的 tab-slot：搬到該 ws 指定位置
+- 拖 tab 到他 ws header：搬到該 ws 末端
+- 拖 tab 到他 ws tab-slot：搬到指定位置
 - 拖 tab 到 Home header：轉 standalone
-- 拖 standalone tab 到 workspace header：assign 到該 ws
+- 拖 standalone tab 到 ws header：assign 到該 ws
+- 拖到 collapsed workspace：spring-load 展開後可繼續拖入
 - Hover workspace row 時有 drop-zone 視覺反饋
+- Pinned tab 無法跨 ws（有嘗試落下視覺回彈）
 
 ### 回歸
 
-- 既有 `ActivityBar.test.tsx`、`TabBar.test.tsx`、`SortableTab.test.tsx` 保持綠
+- 既有 `ActivityBar.test.tsx`、`TabBar.test.tsx`、`SortableTab.test.tsx` 保持綠（可能需更新 selectors）
 - Narrow + top 的 baseline 行為不受影響
-
-## 視覺細節
-
-- 寬版 workspace 名稱：單行、超出以 `truncate`（ellipsis）處理；tooltip 顯示全名
-- Chevron（▸/▾）：寬版 workspace row 左側 14px 寬保留區，點擊 row 任一處均展開/收合
-- Drop zone 視覺：hover workspace-header 時整列加 ring/背景；hover home-header 同
-- CollapseButton 位置：寬版 activity bar 的 Settings 按鈕旁（底部區），narrow 時仍在該位置但 icon 旋轉 180°
-- Standalone tab 識別：沿用既有 `isStandaloneTab(id, workspaces)` 判定（不屬於任何 workspace.tabs 即 standalone）
 
 ## 開放議題
 
-無（所有需求皆於 brainstorming 階段對齊）。
+- **Settings 分層**：依 `project_settings_architecture.md` Settings 有三層，tab position 放在 global 層還是 workspace 層？當前假設 **global**（所有 workspace 共用），若使用者反映要 per-workspace 再調整
+- **Drop zone 視覺 spec**：ring 顏色、背景淡化程度、動畫 duration 等細節留 plan 階段依現有 theme token 決定
+- **Empty standalone 狀態**：Home 無 standalone tab 時是否顯示「None」或直接不渲染展開區？Phase 2 實作時決
+- **Keyboard accessibility**：本 spec 不做完整 KeyboardSensor，僅 `aria-expanded` 標註。完整 keyboard nav 另開 GH issue
 
 ## 後續
 

@@ -12,6 +12,7 @@ import { useConfigStore } from './stores/useConfigStore'
 import { useTabStore } from './stores/useTabStore'
 import { useWorkspaceStore } from './stores/useWorkspaceStore'
 import { useHostStore } from './stores/useHostStore'
+import { useLayoutStore } from './stores/useLayoutStore'
 import { useRelayWsManager } from './hooks/useRelayWsManager'
 import { useMultiHostEventWs } from './hooks/useMultiHostEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
@@ -66,6 +67,14 @@ export default function App() {
   useShortcuts()
   useNotificationDispatcher()
   useElectronIpc()
+
+  // Reconcile workspaceExpanded only when the id set actually changes
+  // (workspace rename / tab reorder replace the `workspaces` ref but preserve ids).
+  const wsIdsKey = useMemo(() => workspaces.map((w) => w.id).join(','), [workspaces])
+  useEffect(() => {
+    useLayoutStore.getState().reconcileWorkspaceExpanded(wsIdsKey ? wsIdsKey.split(',') : [])
+  }, [wsIdsKey])
+
   const { handleWsTearOff, handleWsMergeTo } = useWorkspaceWindowActions()
 
   // --- Derived state ---
