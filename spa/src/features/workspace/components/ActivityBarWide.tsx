@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { Plus, GearSix, HardDrives } from '@phosphor-icons/react'
 import {
   DndContext,
@@ -23,6 +23,8 @@ import type { ActivityBarProps } from './activity-bar-props'
 
 const MIN_WIDE_SIZE = 120
 const MAX_WIDE_SIZE = 600
+
+const NOOP = () => {}
 
 type WorkspaceDragData = { type: 'workspace'; wsId: string }
 type TabDragData = { type: 'tab'; tabId: string; sourceWsId: string | null }
@@ -65,8 +67,14 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   )
-  const wsIds = workspaces.map((ws) => ws.id)
+  const wsIds = useMemo(() => workspaces.map((ws) => ws.id), [workspaces])
   const isHomeActive = !activeWorkspaceId
+
+  const selectTab = onSelectTab ?? NOOP
+  const closeTab = onCloseTab ?? NOOP
+  const middleClickTab = onMiddleClickTab ?? NOOP
+  const contextMenuTab = onContextMenuTab ?? NOOP
+  const addTabToWs = onAddTabToWorkspace ?? NOOP
 
   const handleDragEnd = useCallback(
     (e: DragEndEvent) => {
@@ -135,10 +143,10 @@ export function ActivityBarWide(props: ActivityBarProps) {
             tabsById={tabsById}
             activeTabId={activeTabId}
             onSelectHome={onSelectHome}
-            onSelectTab={onSelectTab ?? (() => {})}
-            onCloseTab={onCloseTab ?? (() => {})}
-            onMiddleClickTab={onMiddleClickTab ?? (() => {})}
-            onContextMenuTab={onContextMenuTab ?? (() => {})}
+            onSelectTab={selectTab}
+            onCloseTab={closeTab}
+            onMiddleClickTab={middleClickTab}
+            onContextMenuTab={contextMenuTab}
           />
 
           {workspaces.length > 0 && (
@@ -158,11 +166,11 @@ export function ActivityBarWide(props: ActivityBarProps) {
                   activeTabId={activeTabId}
                   onSelectWorkspace={onSelectWorkspace}
                   onContextMenuWorkspace={onContextMenuWorkspace}
-                  onSelectTab={onSelectTab ?? (() => {})}
-                  onCloseTab={onCloseTab ?? (() => {})}
-                  onMiddleClickTab={onMiddleClickTab ?? (() => {})}
-                  onContextMenuTab={onContextMenuTab ?? (() => {})}
-                  onAddTabToWorkspace={onAddTabToWorkspace ?? (() => {})}
+                  onSelectTab={selectTab}
+                  onCloseTab={closeTab}
+                  onMiddleClickTab={middleClickTab}
+                  onContextMenuTab={contextMenuTab}
+                  onAddTabToWorkspace={addTabToWs}
                 />
               ))}
             </div>
