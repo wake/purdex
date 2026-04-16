@@ -64,7 +64,6 @@ export function NewTabProfileSwitcher({ active, onSelect, onToggleEnabled, rende
                   disabled={m.locked}
                   onChange={(e) => { if (!m.locked) onToggleEnabled(k, e.target.checked) }}
                   title={m.locked ? t('settings.interface.profile_locked') : undefined}
-                  aria-label={t(LABEL_KEY[k])}
                 />
                 <span>{t('settings.interface.enabled')}</span>
               </label>
