@@ -28,7 +28,7 @@
 | 欄數決定方式 | 3 個獨立 profile（3col/2col/1col），各自 enable/disable；跨 profile 可重複放同一 provider |
 | 執行期選用 | 固定斷點 ≥1024 / ≥640 / <640，沿 fallback 鏈找第一個 enabled |
 | Module 池 | 展示全部已註冊 provider，單一 profile 內每個 module 最多出現 1 次（可跨 profile 重複） |
-| 首次預設 | `activeEditingProfile = '1col'`；3 profile 皆 enabled；`ensureDefaults` 把所有已註冊 provider（排除 `disabled=true`）依 `order` 升冪、分別加入**每個 enabled profile 的最短欄**。因此首次開啟：1col 列出全部、3col/2col 也被自動排入 provider（避免首次用 ≥1024 視窗看到空 3col） |
+| 首次預設 | `activeEditingProfile = '1col'`；**僅 1col enabled**（2col/3col 預設 disabled）；`ensureDefaults` 把所有已註冊 provider（排除 `disabled=true`）依 `order` 升冪、分別加入**每個 profile**（包括 disabled）**的最短欄**——這樣使用者之後啟用 2col/3col 時就有合理預設；runtime 因為 fallback 鏈，任何視窗寬度都會落到 1col |
 | 持久化 | Zustand persist → localStorage (`purdex-newtab-layout`)；sync 架構由 follow-up issue 接入 |
 | 預覽呈現 | 主畫布 + 兩個縮圖 + profile switcher |
 | 實作取向 | α+：保留 `interface-subsection-registry`（雙層）；畫布、palette、profile switcher 為 NewTab 專用具體元件（未來抽 generic 時再 rename） |
@@ -117,16 +117,16 @@ export interface NewTabLayoutState {
 ```ts
 {
   profiles: {
-    '3col': { enabled: true, columns: [[], [], []] },
-    '2col': { enabled: true, columns: [[], []] },
-    '1col': { enabled: true, columns: [[]] },
+    '3col': { enabled: false, columns: [[], [], []] },
+    '2col': { enabled: false, columns: [[], []] },
+    '1col': { enabled: true,  columns: [[]] },
   },
   knownIds: [],
   activeEditingProfile: '1col',
 }
 ```
 
-首次 `ensureDefaults` 跑完後，每個 enabled profile 都會被填入 provider（詳見下方 ensureDefaults 行為）。
+首次 `ensureDefaults` 跑完後：3 個 profile 的 columns 都會被填入 provider（但 3col/2col 仍 disabled）。使用者之後手動啟用 3col/2col 時，就有預設佈局可用，不必從空白開始排。
 
 ### placeModule 語意（單一寫入 API）
 
@@ -145,9 +145,8 @@ ensureDefaults(providers) {
   unknown.sort((a, b) => a.order - b.order)
 
   for (const p of unknown) {
-    // 對每個 enabled 的 profile：加到「當前最短欄」底部
+    // 對**每個** profile（不論 enabled）：加到「當前最短欄」底部
     for (const key of ['3col', '2col', '1col'] as const) {
-      if (!profiles[key].enabled) continue
       const shortest = shortestColIdx(profiles[key].columns)
       profiles[key].columns[shortest].push(p.id)
     }
@@ -158,6 +157,7 @@ ensureDefaults(providers) {
 
 **特性**：
 - 「已認過」的 provider（無論使用者之後有沒有移除）都不再被自動加回。
+- 填入**所有** profile（不看 enabled），使用者之後啟用 disabled profile 時不會看到空白；`enabled` 只決定 runtime 會不會渲染該 profile。
 - 只處理 `!disabled` 的 provider；disabled 的 provider 被使用者手動放入才顯示（沿用既有 `NewTabProvider.disabled` 行為）。
 - Provider 下架（從 registry 消失）**不**主動從 profiles 清除；改由 render 時 `byId[id]` miss 即 skip。重新註冊（例如 plugin 重灌）時 id 已在 knownIds，不會被重加——這是預期行為。
 
@@ -414,7 +414,7 @@ useEffect(() => {
 - `removeModule`
 - `setEnabled('1col', false)` 被忽略
 - `ensureDefaults`：
-  - 首次呼叫把未知 provider 補進每個 enabled profile 最短欄，並記入 `knownIds`
+  - 首次呼叫把未知 provider 補進**每個** profile（不論 enabled）的最短欄，並記入 `knownIds`
   - 已在 `knownIds` 的 id 不會被再加（即使使用者已移除）
   - 跳過 `disabled=true` 的 provider
   - 已下架的 provider **不**被自動從 profiles 清除
