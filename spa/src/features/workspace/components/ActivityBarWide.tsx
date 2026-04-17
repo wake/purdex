@@ -32,6 +32,7 @@ import { HomeRow } from './HomeRow'
 import type { ActivityBarProps } from './activity-bar-props'
 import { computeDragEndAction, dispatchDragEndAction, type DragData } from '../lib/computeDragEndAction'
 import { useSpringLoad } from '../lib/useSpringLoad'
+import { useCrossWorkspaceDragOver } from '../lib/useCrossWorkspaceDragOver'
 
 const customCollisionDetection: CollisionDetection = (args) => {
   const pw = pointerWithin(args)
@@ -97,6 +98,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace)
   const toggleWorkspaceExpanded = useLayoutStore((s) => s.toggleWorkspaceExpanded)
   const springLoad = useSpringLoad(500)
+  const handleCrossWsDragOver = useCrossWorkspaceDragOver()
 
   // When switching to a mode that renders inline tabs (left/both), ensure the
   // active workspace (or Home, when a standalone tab is active) is expanded so
@@ -181,6 +183,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
 
   const handleDragOver = useCallback(
     (e: DragOverEvent) => {
+      handleCrossWsDragOver(e)
       const { over, active } = e
       if (!over || !active.data.current) {
         springLoad.cancel()
@@ -223,7 +226,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
       }
       springLoad.cancel()
     },
-    [springLoad, scheduleSpringLoad],
+    [handleCrossWsDragOver, springLoad, scheduleSpringLoad],
   )
 
   const handleDragEnd = useCallback(
