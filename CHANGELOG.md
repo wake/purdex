@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.151] - 2026-04-17
+
+### 功能
+
+- **spa**：介面設定 + 多欄 New Tab 佈局（#398）—— Settings 新增 Interface section，New Tab 支援 3col/2col/1col 三個 profile，依視窗寬度 ≥1024/≥640/<640 自動切換，可於設定頁拖曳排序欄位順序；首次啟動僅啟用 1col，2col/3col 預填但 disabled，使用者依需求開啟
+
 ## [1.0.0-alpha.150] - 2026-04-17
 
 ### 功能
