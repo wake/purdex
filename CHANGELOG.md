@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0-alpha.156] - 2026-04-17
+
+### 功能
+
+- **spa**：Agent 官方 logo + Tab indicator 樣式 + Claude Code icon 變體（#414）—— `AGENT_ICONS` 改用 `@lobehub/icons-static-svg`（MIT）的官方 Claude Code + Codex logos，透過 `vite-plugin-svgr` 以 React 元件載入並包一層 `{ size, className }` wrapper；Settings → Terminal 新增 Tab indicator style（`icon` / `dot` / `iconDot` / `badge`，預設 `badge`）與 Claude Code icon variant（`bot` / `star`，預設 `bot`，附 live preview button）；`electron.vite.config.ts` 補 `svgr()` plugin，讓 bundled fallback 在 dev server 不可達時也能渲染 SVG
+
+### 介面調整
+
+- **spa**：`@keyframes breathe` 改以 opacity 1 → 0.25 過渡（原本到 0 會短暫消失），避免 subagent dot 在深色主題下看起來像閃爍 bug；overlay dot `right: 0` 貼齊避免 ring 越界到 app 背景
+- **spa**：`dot` 模式下在 Claude Code icon 設定加入淡色提示，說明該模式不顯示圖示，此設定需切換到其他模式才會生效
+
+### 重構
+
+- **spa**：`getAgentIcon(agentType, { ccVariant })` 改採 options 物件，`ccVariant` 只對 `cc` 分支有意義，避免 codex 分支忽略參數的 API 不對稱；Codex icon 改用專用 wrapper 元件取代 `as unknown as AgentIconComponent` cast
+- **spa**：`DotStyle` 刪除不再使用的 `'inline'` 成員與 `TabStatusDot` fallback 分支；移除 dead CSS vars `--breathe-color` / `--breathe-bg` 與 `SubagentDots` 用不到的 `isActive` prop
+- **spa**：清除 `settings.appearance.tab_indicator.*` 六個廢棄 i18n key
+
+### 測試
+
+- SPA 新增 13 個測試：`getAgentIcon` 5 項、`renderTabIcon` 4 分支 + terminated session 邊界、`TerminalSection` SegmentControl 與 CC icon row 互動 3 項；刪除 `TabStatusDot` inline 測試 1 項，合計 +12，全套 1714 tests 通過
+
 ## [1.0.0-alpha.155] - 2026-04-17
 
 ### 功能
