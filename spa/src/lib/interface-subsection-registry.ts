@@ -1,13 +1,15 @@
 import type { ComponentType } from 'react'
 
-export interface InterfaceSubsection {
+interface InterfaceSubsectionBase {
   id: string
   label: string          // i18n key
   order: number
   component: ComponentType
-  disabled?: boolean
-  disabledReason?: string // i18n key
 }
+
+export type InterfaceSubsection =
+  | (InterfaceSubsectionBase & { disabled?: false; disabledReason?: never })
+  | (InterfaceSubsectionBase & { disabled: true; disabledReason: string })
 
 const subsections: InterfaceSubsection[] = []
 

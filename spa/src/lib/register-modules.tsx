@@ -68,6 +68,11 @@ function MemoryMonitorPaneWrapper() {
 function InterfaceSectionHost() {
   const subs = getInterfaceSubsections()
   const [active, setActive] = useState<string>(() => subs[0]?.id ?? '')
+  if (subs.length === 0) {
+    // Defensive: registry not populated yet (e.g. HMR ordering race).
+    // Avoid blank-area silent failure; next render should succeed.
+    return <div className="flex-1 p-6 text-sm text-text-muted">Loading...</div>
+  }
   return <InterfaceSection activeSubsection={active} onSelectSubsection={setActive} />
 }
 
