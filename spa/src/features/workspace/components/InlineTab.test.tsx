@@ -213,3 +213,27 @@ describe('InlineTab — host offline', () => {
     expect(screen.queryByTestId('inline-tab-host-offline')).not.toBeInTheDocument()
   })
 })
+
+describe('InlineTab — drag transform', () => {
+  it('omits horizontal translate from style attribute (vertical-only drag)', () => {
+    render(
+      <InlineTab
+        tab={baseTab}
+        title="work"
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    const row = screen.getByTestId('inline-tab-row')
+    const styleAttr = row.getAttribute('style') ?? ''
+    // If a translate3d is present, its first argument must be 0 (vertical-only).
+    // Match any translate3d(first-arg, ...) and assert first-arg is "0" when present.
+    const match = styleAttr.match(/translate3d\(([^,]+),/)
+    if (match) {
+      expect(match[1].trim()).toBe('0')
+    }
+  })
+})
