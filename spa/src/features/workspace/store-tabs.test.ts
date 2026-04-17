@@ -427,5 +427,24 @@ describe('useWorkspaceStore', () => {
       const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)!
       expect(ws.tabs).toEqual(['a', 'x'])
     })
+
+    it('afterTabId=null prepends to front', () => {
+      useWorkspaceStore.getState().addWorkspace('test')
+      const wsId = useWorkspaceStore.getState().workspaces[0].id
+      useWorkspaceStore.getState().insertTab('a', wsId)
+      useWorkspaceStore.getState().insertTab('b', wsId)
+      useWorkspaceStore.getState().insertTab('x', wsId, null)
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)!
+      expect(ws.tabs).toEqual(['x', 'a', 'b'])
+    })
+
+    it('afterTabId=undefined still appends (existing behavior)', () => {
+      useWorkspaceStore.getState().addWorkspace('test')
+      const wsId = useWorkspaceStore.getState().workspaces[0].id
+      useWorkspaceStore.getState().insertTab('a', wsId)
+      useWorkspaceStore.getState().insertTab('x', wsId)
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)!
+      expect(ws.tabs).toEqual(['a', 'x'])
+    })
   })
 })

@@ -18,7 +18,7 @@ interface WorkspaceState {
   reorderWorkspaceTabs: (wsId: string, tabIds: string[]) => void
   reorderWorkspaces: (orderedIds: string[]) => void
   findWorkspaceByTab: (tabId: string) => Workspace | null
-  insertTab: (tabId: string, workspaceId?: string | null, afterTabId?: string) => void
+  insertTab: (tabId: string, workspaceId?: string | null, afterTabId?: string | null) => void
   closeTabInWorkspace: (tabId: string, opts?: { skipHistory?: boolean }) => void
   renameWorkspace: (wsId: string, name: string) => void
   setWorkspaceIcon: (wsId: string, icon: string) => void
@@ -143,7 +143,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (ws.id === targetWsId) {
               if (ws.tabs.includes(tabId)) return { ...ws, activeTabId: tabId }
               let newTabs: string[]
-              if (afterTabId) {
+              if (afterTabId === null) {
+                newTabs = [tabId, ...ws.tabs]
+              } else if (typeof afterTabId === 'string') {
                 const idx = ws.tabs.indexOf(afterTabId)
                 if (idx !== -1) {
                   newTabs = [...ws.tabs]
