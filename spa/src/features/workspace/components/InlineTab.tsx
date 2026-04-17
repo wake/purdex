@@ -28,7 +28,7 @@ export function InlineTab({
   const t = useI18nStore((s) => s.t)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: tab.id,
-    data: { type: 'tab', tabId: tab.id, sourceWsId },
+    data: { type: 'tab', tabId: tab.id, sourceWsId, isPinned: tab.pinned },
   })
 
   const style: React.CSSProperties = {
@@ -36,6 +36,19 @@ export function InlineTab({
     transition,
     opacity: isDragging ? 0.5 : 1,
   }
+
+  // Prevent focus theft when clicking the already-active tab.
+  // Must wrap dnd-kit's onPointerDown to avoid overriding it.
+  const handlePointerDown = (e: React.PointerEvent) => {
+    // Forward to dnd-kit FIRST — dnd-kit checks nativeEvent.defaultPrevented
+    // and silently aborts if true, so we must call it before preventDefault.
+    const dndHandler = listeners?.onPointerDown as ((e: React.PointerEvent) => void) | undefined
+    dndHandler?.(e)
+    if (isActive) e.preventDefault()
+  }
+
+  // Destructure onPointerDown off listeners so the wrapper wins; spread the rest.
+  const { onPointerDown: _omit, ...otherListeners } = listeners ?? {}
 
   const handleCloseClick = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -55,7 +68,8 @@ export function InlineTab({
       style={style}
       data-testid="inline-tab-row"
       {...attributes}
-      {...listeners}
+      {...otherListeners}
+      onPointerDown={handlePointerDown}
       role="button"
       tabIndex={0}
       onClick={() => onSelect(tab.id)}
