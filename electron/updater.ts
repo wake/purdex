@@ -22,6 +22,8 @@ export interface RemoteVersionInfo {
   source: { spaHash: string; electronHash: string }
   building: boolean
   buildError: string
+  requiresFullRebuild: boolean
+  fullRebuildReason?: string
 }
 
 export function getAppInfo(): AppInfo {

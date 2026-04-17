@@ -60,15 +60,24 @@ func (m *DevModule) Init(c *core.Core) error {
 	return nil
 }
 
-func (m *DevModule) runBuild() {
+// startBuildLocked transitions the module into building state, allocates a
+// fresh session, and kicks off the build goroutine. The caller must already
+// hold m.mu. Returns the session so callers can subscribe without a race.
+func (m *DevModule) startBuildLocked(spaSource, electronSource string) *BuildSession {
+	session := newBuildSession()
+	m.buildSession = session
+	m.building = true
+	m.buildError = ""
+	m.lastFailedSPA = spaSource
+	m.lastFailedElectron = electronSource
+	go m.runBuild(session)
+	return session
+}
+
+func (m *DevModule) runBuild(session *BuildSession) {
 	// Remove stale build info so a partial build doesn't leave source hashes
 	// that prevent re-triggering on next check
 	os.Remove(filepath.Join(m.repoRoot, "out", ".build-info.json"))
-
-	session := newBuildSession()
-	m.mu.Lock()
-	m.buildSession = session
-	m.mu.Unlock()
 
 	err := m.buildCmd(session)
 
@@ -77,10 +86,11 @@ func (m *DevModule) runBuild() {
 	} else {
 		session.append(BuildEvent{Type: BuildEventDone})
 	}
-	session.finish()
 
+	// Clear building state BEFORE closing subscriber channels so any handler
+	// that re-reads state after the channel close sees a consistent post-
+	// build snapshot (building=false + updated build info).
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.building = false
 	if err != nil {
 		m.buildError = err.Error()
@@ -91,14 +101,9 @@ func (m *DevModule) runBuild() {
 		m.lastFailedElectron = ""
 		log.Println("[dev] build completed successfully")
 	}
-}
+	m.mu.Unlock()
 
-// currentSession returns the in-flight or most-recent build session, or nil
-// if no build has ever run in this process.
-func (m *DevModule) currentSession() *BuildSession {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.buildSession
+	session.finish()
 }
 
 func (m *DevModule) defaultBuild(session *BuildSession) error {
@@ -145,6 +150,7 @@ func (m *DevModule) defaultBuild(session *BuildSession) error {
 
 func (m *DevModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/dev/update/check", m.handleCheck)
+	mux.HandleFunc("GET /api/dev/update/check/stream", m.handleCheckStream)
 	mux.HandleFunc("GET /api/dev/update/download", m.handleDownload)
 }
 

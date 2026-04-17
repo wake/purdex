@@ -19,7 +19,8 @@ func TestRunBuild_Success(t *testing.T) {
 	}
 	os.MkdirAll(filepath.Join(m.repoRoot, "out"), 0755)
 
-	m.runBuild()
+	session := newBuildSession()
+	m.runBuild(session)
 
 	if m.building {
 		t.Error("building: want false after successful build")
@@ -27,14 +28,10 @@ func TestRunBuild_Success(t *testing.T) {
 	if m.buildError != "" {
 		t.Errorf("buildError: want empty, got %q", m.buildError)
 	}
-	if m.buildSession == nil {
-		t.Fatal("buildSession: want non-nil after build, got nil")
-	}
-	// Session should be closed; final event is "done"
-	if n := len(m.buildSession.events); n == 0 {
+	if n := len(session.events); n == 0 {
 		t.Fatal("session events: want >=1, got 0")
 	}
-	last := m.buildSession.events[len(m.buildSession.events)-1]
+	last := session.events[len(session.events)-1]
 	if last.Type != BuildEventDone {
 		t.Errorf("last event: want done, got %+v", last)
 	}
@@ -48,7 +45,8 @@ func TestRunBuild_Failure(t *testing.T) {
 	}
 	os.MkdirAll(filepath.Join(m.repoRoot, "out"), 0755)
 
-	m.runBuild()
+	session := newBuildSession()
+	m.runBuild(session)
 
 	if m.building {
 		t.Error("building: want false after failed build")
@@ -56,10 +54,7 @@ func TestRunBuild_Failure(t *testing.T) {
 	if m.buildError != "build timed out after 5 minutes" {
 		t.Errorf("buildError: want timeout message, got %q", m.buildError)
 	}
-	if m.buildSession == nil {
-		t.Fatal("buildSession: want non-nil after build, got nil")
-	}
-	last := m.buildSession.events[len(m.buildSession.events)-1]
+	last := session.events[len(session.events)-1]
 	if last.Type != BuildEventError {
 		t.Errorf("last event: want error, got %+v", last)
 	}
@@ -86,7 +81,7 @@ func TestStop_CancelsBuild(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		m.runBuild()
+		m.runBuild(newBuildSession())
 		close(done)
 	}()
 
@@ -113,7 +108,7 @@ func TestRunBuild_ClearsErrorOnSuccess(t *testing.T) {
 	}
 	os.MkdirAll(filepath.Join(m.repoRoot, "out"), 0755)
 
-	m.runBuild()
+	m.runBuild(newBuildSession())
 
 	if m.buildError != "" {
 		t.Errorf("buildError: want empty after success, got %q", m.buildError)
