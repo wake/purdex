@@ -5,6 +5,17 @@ import type { Profile, ProfileKey } from '../lib/resolve-profile'
 
 export type { Profile, ProfileKey }
 
+const COL_COUNT: Record<ProfileKey, number> = {
+  '3col': 3,
+  '2col': 2,
+  '1col': 1,
+}
+
+/** Factory ensuring column-count invariant matches ProfileKey. */
+export function makeProfile(enabled: boolean, colCount: number): Profile {
+  return { enabled, columns: Array.from({ length: colCount }, () => []) }
+}
+
 interface ProviderInfo {
   id: string
   order: number
@@ -19,6 +30,7 @@ interface State {
   setEnabled: (p: ProfileKey, enabled: boolean) => void
   setEditing: (p: ProfileKey) => void
   placeModule: (p: ProfileKey, providerId: string, colIdx: number, rowIdx: number) => void
+  placeModuleInShortest: (p: ProfileKey, providerId: string) => void
   removeModule: (p: ProfileKey, providerId: string) => void
   ensureDefaults: (providers: ProviderInfo[]) => void
   reset: () => void
@@ -27,9 +39,9 @@ interface State {
 function initialState(): Pick<State, 'profiles' | 'knownIds' | 'activeEditingProfile'> {
   return {
     profiles: {
-      '3col': { enabled: false, columns: [[], [], []] },
-      '2col': { enabled: false, columns: [[], []] },
-      '1col': { enabled: true, columns: [[]] },
+      '3col': makeProfile(false, 3),
+      '2col': makeProfile(false, 2),
+      '1col': makeProfile(true, 1),
     },
     knownIds: [],
     activeEditingProfile: '1col',
@@ -40,7 +52,7 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n))
 }
 
-export function shortestColIdx(cols: string[][]): number {
+function shortestColIdx(cols: string[][]): number {
   let best = 0
   for (let i = 1; i < cols.length; i++) {
     if (cols[i].length < cols[best].length) best = i
@@ -50,6 +62,61 @@ export function shortestColIdx(cols: string[][]): number {
 
 function cloneProfile(p: Profile): Profile {
   return { enabled: p.enabled, columns: p.columns.map((c) => [...c]) }
+}
+
+/**
+ * Heal rehydrated state against shape corruption (missing keys, wrong column
+ * count, non-array values). Mutates state in place (Zustand persist convention).
+ * Called from `onRehydrateStorage` and exported for direct testing.
+ */
+export function healProfileState<
+  T extends Partial<Pick<State, 'profiles' | 'knownIds' | 'activeEditingProfile'>>,
+>(state: T): void {
+  // profiles: reset entirely if not an object
+  if (!state.profiles || typeof state.profiles !== 'object') {
+    state.profiles = initialState().profiles as T['profiles']
+  } else {
+    const profiles = state.profiles as Record<string, Profile | undefined>
+    for (const key of ['3col', '2col', '1col'] as const) {
+      const expectedLen = COL_COUNT[key]
+      const p = profiles[key]
+      if (
+        !p ||
+        typeof p !== 'object' ||
+        !Array.isArray(p.columns) ||
+        p.columns.length !== expectedLen
+      ) {
+        profiles[key] = makeProfile(key === '1col', expectedLen)
+        continue
+      }
+      for (let i = 0; i < p.columns.length; i++) {
+        if (!Array.isArray(p.columns[i])) {
+          p.columns[i] = []
+        } else {
+          p.columns[i] = p.columns[i].filter((s): s is string => typeof s === 'string')
+        }
+      }
+      if (typeof p.enabled !== 'boolean') {
+        p.enabled = false
+      }
+    }
+    // 1col lock invariant
+    if ((state.profiles as Record<string, Profile>)['1col'].enabled !== true) {
+      ;(state.profiles as Record<string, Profile>)['1col'].enabled = true
+    }
+  }
+
+  if (!Array.isArray(state.knownIds)) {
+    state.knownIds = [] as T['knownIds']
+  } else {
+    state.knownIds = state.knownIds.filter(
+      (s): s is string => typeof s === 'string',
+    ) as T['knownIds']
+  }
+
+  if (!['3col', '2col', '1col'].includes(state.activeEditingProfile as string)) {
+    state.activeEditingProfile = '1col' as T['activeEditingProfile']
+  }
 }
 
 /**
@@ -117,6 +184,18 @@ export const useNewTabLayoutStore = create<State>()(
           },
         })),
 
+      placeModuleInShortest: (p, providerId) =>
+        set((state) => {
+          const cols = state.profiles[p].columns
+          const target = shortestColIdx(cols)
+          return {
+            profiles: {
+              ...state.profiles,
+              [p]: placeIn(state.profiles[p], providerId, target, cols[target].length),
+            },
+          }
+        }),
+
       removeModule: (p, providerId) =>
         set((state) => {
           const next = cloneProfile(state.profiles[p])
@@ -168,6 +247,9 @@ export const useNewTabLayoutStore = create<State>()(
         knownIds: state.knownIds,
         activeEditingProfile: state.activeEditingProfile,
       }),
+      onRehydrateStorage: () => (state) => {
+        if (state) healProfileState(state)
+      },
     },
   ),
 )
