@@ -55,7 +55,7 @@ export function TabIcon({
       <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
         <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
         {showDotUnreadPip && <UnreadPip />}
-        {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
+        {subagentCount > 0 && <SubagentDots count={subagentCount} />}
       </span>
     )
   }
@@ -66,7 +66,7 @@ export function TabIcon({
         <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
           <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
           {showDotUnreadPip && <UnreadPip />}
-          {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
+          {subagentCount > 0 && <SubagentDots count={subagentCount} />}
         </span>
         {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
       </span>
@@ -74,8 +74,12 @@ export function TabIcon({
   }
 
   // Unread tints the badge dot red instead of overlaying a separate pip.
+  // Nudge the whole icon+badge group 1px right and park subagent dots at
+  // left:-4 so they sit just outside the box edge, clear of the icon.
   return (
-    <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
+    <span
+      className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-px"
+    >
       {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
       <TabStatusIndicator
         status={agentStatus}
@@ -83,7 +87,7 @@ export function TabIcon({
         isActive={isActive}
         isUnread={isUnread && !isActive}
       />
-      {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
+      {subagentCount > 0 && <SubagentDots count={subagentCount} left={-4} />}
     </span>
   )
 }
