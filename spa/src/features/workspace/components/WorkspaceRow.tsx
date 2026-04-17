@@ -39,6 +39,8 @@ export function WorkspaceRow(props: Props) {
   const t = useI18nStore((s) => s.t)
   const expanded = useLayoutStore((s) => !!s.workspaceExpanded[workspace.id])
   const toggleExpanded = useLayoutStore((s) => s.toggleWorkspaceExpanded)
+  const tabPosition = useLayoutStore((s) => s.tabPosition)
+  const showTabs = tabPosition !== 'top'
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: workspace.id,
@@ -74,18 +76,20 @@ export function WorkspaceRow(props: Props) {
             : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
         } ${isHeaderOver ? 'ring-2 ring-purple-400/80 bg-surface-hover' : ''}`}
       >
-        <button
-          type="button"
-          aria-label={chevronLabel}
-          aria-expanded={expanded}
-          onClick={(e) => {
-            e.stopPropagation()
-            toggleExpanded(workspace.id)
-          }}
-          className="p-1 rounded hover:bg-surface-secondary text-text-muted cursor-pointer"
-        >
-          <Chevron size={12} />
-        </button>
+        {showTabs && (
+          <button
+            type="button"
+            aria-label={chevronLabel}
+            aria-expanded={expanded}
+            onClick={(e) => {
+              e.stopPropagation()
+              toggleExpanded(workspace.id)
+            }}
+            className="p-1 rounded hover:bg-surface-secondary text-text-muted cursor-pointer"
+          >
+            <Chevron size={12} />
+          </button>
+        )}
         <button
           type="button"
           onClick={() => onSelectWorkspace(workspace.id)}
@@ -108,7 +112,7 @@ export function WorkspaceRow(props: Props) {
         </button>
       </div>
 
-      {expanded && (
+      {showTabs && expanded && (
         <div className="flex flex-col">
           <InlineTabList
             tabIds={workspace.tabs}

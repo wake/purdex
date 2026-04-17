@@ -75,12 +75,13 @@ describe('WorkspaceRow', () => {
   })
 
   it('tabs shown when workspaceExpanded[id]=true', () => {
-    useLayoutStore.setState({ workspaceExpanded: { 'ws-1': true } })
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide', workspaceExpanded: { 'ws-1': true } })
     renderRow(mkWs('ws-1', 'W', ['t1']), { tabsById: { t1: mkTab('t1', 'alpha') } })
     expect(screen.getByText('alpha.example.com')).toBeInTheDocument()
   })
 
   it('chevron toggles expand state', () => {
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
     renderRow(mkWs('ws-1', 'W', ['t1']), { tabsById: { t1: mkTab('t1', 'alpha') } })
     const chevron = screen.getByRole('button', { name: /expand|collapse/i })
     fireEvent.click(chevron)
@@ -88,7 +89,7 @@ describe('WorkspaceRow', () => {
   })
 
   it('+ button visible when expanded, calls onAddTabToWorkspace', () => {
-    useLayoutStore.setState({ workspaceExpanded: { 'ws-1': true } })
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide', workspaceExpanded: { 'ws-1': true } })
     const onAdd = vi.fn()
     renderRow(mkWs('ws-1', 'W', []), { onAddTabToWorkspace: onAdd })
     const addBtn = screen.getByRole('button', { name: /new tab in W/i })
@@ -114,6 +115,7 @@ describe('WorkspaceRow', () => {
     })
 
     it('chevron does not block pointer-down (keeps row drag reachable)', () => {
+      useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
       renderRow(mkWs('ws-1', 'Alpha'))
       const chevron = screen.getByRole('button', { name: /expand|collapse/i })
       const evt = new Event('pointerdown', { bubbles: true, cancelable: true })
@@ -121,5 +123,25 @@ describe('WorkspaceRow', () => {
       chevron.dispatchEvent(evt)
       expect(stopPropagationSpy).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('WorkspaceRow chevron visibility', () => {
+  it("hides chevron when tabPosition='top'", () => {
+    useLayoutStore.setState({ tabPosition: 'top' })
+    renderRow(mkWs('w1', 'Alpha'))
+    expect(screen.queryByLabelText(/expand alpha/i)).not.toBeInTheDocument()
+  })
+
+  it("shows chevron when tabPosition='left'", () => {
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
+    renderRow(mkWs('w1', 'Alpha'))
+    expect(screen.getByLabelText(/expand alpha/i)).toBeInTheDocument()
+  })
+
+  it("shows chevron when tabPosition='both'", () => {
+    useLayoutStore.setState({ tabPosition: 'both', activityBarWidth: 'wide' })
+    renderRow(mkWs('w1', 'Alpha'))
+    expect(screen.getByLabelText(/expand alpha/i)).toBeInTheDocument()
   })
 })
