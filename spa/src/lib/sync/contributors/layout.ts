@@ -9,7 +9,13 @@ import type { SyncContributor, FullPayload, MergeStrategy } from '../types'
 // Data field list (non-function fields from LayoutState)
 // ---------------------------------------------------------------------------
 
-const DATA_FIELDS = ['regions'] as const
+const DATA_FIELDS = [
+  'regions',
+  'activityBarWidth',
+  'tabPosition',
+  'activityBarWideSize',
+  'workspaceExpanded',
+] as const
 
 type LayoutData = {
   [K in (typeof DATA_FIELDS)[number]]: ReturnType<typeof useLayoutStore.getState>[K]
