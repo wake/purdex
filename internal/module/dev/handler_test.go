@@ -152,7 +152,7 @@ func TestHandleCheck_WithBuildInfo(t *testing.T) {
 		repoRoot:    dir,
 		versionFile: versionFile,
 		hashFn:      func(paths ...string) string { return "abc1234" },
-		buildCmd:    func() error { return nil },
+		buildCmd:    func(*BuildSession) error { return nil },
 	}
 
 	// hashFn returns "abc1234" for all paths; SPA build hash is "abc1234" — matches SPA source
@@ -217,7 +217,7 @@ func TestHandleCheck_NoBuildInfo(t *testing.T) {
 		repoRoot:    dir,
 		versionFile: versionFile,
 		hashFn:      func(paths ...string) string { return "abc1234" },
-		buildCmd:    func() error { return nil },
+		buildCmd:    func(*BuildSession) error { return nil },
 	}
 
 	req := httptest.NewRequest("GET", "/api/dev/update/check", nil)
@@ -268,7 +268,7 @@ func TestHandleCheck_StaleTriggersAutoBuild(t *testing.T) {
 		repoRoot:    dir,
 		versionFile: versionFile,
 		hashFn:      func(paths ...string) string { return "new3333" },
-		buildCmd:    func() error { return nil },
+		buildCmd:    func(*BuildSession) error { return nil },
 	}
 
 	req := httptest.NewRequest("GET", "/api/dev/update/check", nil)
