@@ -1,9 +1,11 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 import { InlineTab } from './InlineTab'
-import type { Tab } from '../../../types/tab'
+import type { Tab, PaneContent } from '../../../types/tab'
+import { useAgentStore } from '../../../stores/useAgentStore'
+import { useHostStore } from '../../../stores/useHostStore'
 
 function renderWith(
   tab: Tab,
@@ -28,14 +30,33 @@ function renderWith(
   )
 }
 
-const mkTab = (overrides: Partial<Tab> = {}): Tab =>
-  ({
-    id: 't1',
-    kind: 'new-tab',
-    locked: false,
-    layout: { type: 'single' } as Tab['layout'],
-    ...overrides,
-  }) as Tab
+interface MkTabOpts {
+  id?: string
+  pinned?: boolean
+  locked?: boolean
+  hostId?: string
+  sessionCode?: string
+  terminated?: boolean
+}
+
+const mkTab = (opts: MkTabOpts = {}): Tab => {
+  const id = opts.id ?? 't1'
+  const content: PaneContent =
+    opts.hostId && opts.sessionCode
+      ? ({
+          kind: 'tmux-session',
+          hostId: opts.hostId,
+          sessionCode: opts.sessionCode,
+          ...(opts.terminated ? { terminated: true } : {}),
+        } as PaneContent)
+      : ({ kind: 'new-tab' } as PaneContent)
+  return {
+    id,
+    pinned: opts.pinned ?? false,
+    locked: opts.locked ?? false,
+    layout: { type: 'leaf', pane: { id: `p-${id}`, content } },
+  } as Tab
+}
 
 describe('InlineTab', () => {
   it('renders given title', () => {
@@ -71,6 +92,90 @@ describe('InlineTab', () => {
     const row = screen.getByText('Untitled').closest('[data-testid="inline-tab-row"]')!
     fireEvent.mouseDown(row, { button: 1 })
     expect(onMiddleClick).toHaveBeenCalledWith('t1')
+  })
+})
+
+describe('InlineTab — visual parity', () => {
+  beforeEach(() => {
+    cleanup()
+    useAgentStore.setState({
+      statuses: {},
+      subagents: {},
+      unread: {},
+      tabIndicatorStyle: 'overlay',
+    } as Partial<ReturnType<typeof useAgentStore.getState>> as never)
+    useHostStore.setState({ runtime: {} } as Partial<ReturnType<typeof useHostStore.getState>> as never)
+  })
+
+  it('renders Lock icon for locked tabs', () => {
+    renderWith(mkTab({ locked: true }), 'Locked')
+    expect(screen.getByTestId('inline-tab-lock')).toBeInTheDocument()
+  })
+
+  it('hides Close button for locked tabs (parity with SortableTab)', () => {
+    renderWith(mkTab({ locked: true }), 'Locked')
+    expect(screen.queryByLabelText(/^Close /)).not.toBeInTheDocument()
+  })
+
+  it('shows unread dot when tab has unread flag and is not active', () => {
+    useAgentStore.setState({
+      unread: { 'host1:sc1': true },
+    } as Partial<ReturnType<typeof useAgentStore.getState>> as never)
+    renderWith(
+      mkTab({ hostId: 'host1', sessionCode: 'sc1' }),
+      'Unread',
+      { sourceWsId: null, isActive: false },
+    )
+    expect(screen.getByTestId('inline-tab-unread')).toBeInTheDocument()
+  })
+
+  it('hides unread dot when tab is active', () => {
+    useAgentStore.setState({
+      unread: { 'host1:sc1': true },
+    } as Partial<ReturnType<typeof useAgentStore.getState>> as never)
+    renderWith(
+      mkTab({ hostId: 'host1', sessionCode: 'sc1' }),
+      'Active',
+      { sourceWsId: null, isActive: true },
+    )
+    expect(screen.queryByTestId('inline-tab-unread')).not.toBeInTheDocument()
+  })
+
+  it('shows WifiSlash when host offline and tab not terminated', () => {
+    useHostStore.setState({
+      runtime: { host1: { status: 'disconnected' } },
+    } as Partial<ReturnType<typeof useHostStore.getState>> as never)
+    renderWith(
+      mkTab({ hostId: 'host1', sessionCode: 'sc1' }),
+      'Offline',
+      { sourceWsId: null },
+    )
+    expect(screen.getByTestId('inline-tab-host-offline')).toBeInTheDocument()
+  })
+
+  it('hides status slot entirely when tab has no agent status nor subagents', () => {
+    renderWith(mkTab({ hostId: 'host1', sessionCode: 'sc1' }), 'No agent', { sourceWsId: null })
+    expect(screen.queryByTestId('inline-tab-status-slot')).not.toBeInTheDocument()
+  })
+
+  it('shows status slot when agent has a status', () => {
+    useAgentStore.setState({
+      statuses: { 'host1:sc1': 'running' },
+    } as Partial<ReturnType<typeof useAgentStore.getState>> as never)
+    renderWith(mkTab({ hostId: 'host1', sessionCode: 'sc1' }), 'Running', { sourceWsId: null })
+    expect(screen.getByTestId('inline-tab-status-slot')).toBeInTheDocument()
+  })
+
+  it('hides WifiSlash when session is terminated', () => {
+    useHostStore.setState({
+      runtime: { host1: { status: 'disconnected' } },
+    } as Partial<ReturnType<typeof useHostStore.getState>> as never)
+    renderWith(
+      mkTab({ hostId: 'host1', sessionCode: 'sc1', terminated: true }),
+      'Terminated',
+      { sourceWsId: null },
+    )
+    expect(screen.queryByTestId('inline-tab-host-offline')).not.toBeInTheDocument()
   })
 })
 
