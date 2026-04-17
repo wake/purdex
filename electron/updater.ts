@@ -45,6 +45,67 @@ export async function checkUpdate(daemonUrl: string, token?: string): Promise<Re
   return resp.json()
 }
 
+export interface StreamCheckEvent {
+  type: 'check' | 'phase' | 'stdout' | 'stderr' | 'done' | 'error'
+  phase?: string
+  line?: string
+  error?: string
+  check?: RemoteVersionInfo
+}
+
+/**
+ * Opens an SSE connection to /api/dev/update/check/stream and invokes
+ * onEvent for every message until the server closes or the signal aborts.
+ *
+ * Event contract (matches internal/module/dev/handler.go):
+ *   - first event is always { type: 'check', check: RemoteVersionInfo }
+ *   - middle events carry build progress (phase / stdout / stderr)
+ *   - a single terminal { type: 'done', check: RemoteVersionInfo } ends the stream
+ */
+export async function streamCheck(
+  daemonUrl: string,
+  token: string | undefined,
+  onEvent: (ev: StreamCheckEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const resp = await fetch(`${daemonUrl}/api/dev/update/check/stream`, {
+    headers: { ...authHeaders(token), Accept: 'text/event-stream' },
+    signal,
+  })
+  if (!resp.ok) throw new Error(`stream failed: ${resp.status}`)
+  if (!resp.body) throw new Error('stream has no body')
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) return
+      buffer += decoder.decode(value, { stream: true })
+      let idx: number
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const chunk = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 2)
+        for (const line of chunk.split('\n')) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            onEvent(JSON.parse(line.slice(6)))
+          } catch {
+            // malformed frame — skip, keep streaming
+          }
+        }
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock()
+    } catch {
+      // reader already released
+    }
+  }
+}
+
 export type UpdateProgressFn = (step: string) => void
 
 export async function applyUpdate(

@@ -130,5 +130,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('dev:update-progress', handler)
       return () => ipcRenderer.removeListener('dev:update-progress', handler)
     },
+    streamCheck: (
+      daemonUrl: string,
+      token: string | undefined,
+      onEvent: (ev: unknown) => void,
+    ) => {
+      const handler = (_event: Electron.IpcRendererEvent, ev: unknown) => onEvent(ev)
+      ipcRenderer.on('dev:stream-check-event', handler)
+      ipcRenderer.invoke('dev:stream-check', daemonUrl, token).catch(() => {
+        // Errors arrive as dev:stream-check-event { type:'error' } — ignore the
+        // rejection here.
+      })
+      return () => {
+        ipcRenderer.send('dev:stream-check-stop')
+        ipcRenderer.removeListener('dev:stream-check-event', handler)
+      }
+    },
   } : {}),
 })
