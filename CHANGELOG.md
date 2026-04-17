@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.152] - 2026-04-17
+
+### 修復
+
+- **spa**：Layout Phase 3 hardening（#415）—— `reorderWorkspaceTabs` / `reorderStandaloneTabOrder` 加 stale-subset guard、phantom id 過濾與重複 id dedup；`WorkspaceRow` name button / `InlineTab` 加 pointerdown 守則，避免手震 ≥5px 偷走 click；移除 chevron 無效的 `onMouseDown stopPropagation`（關閉 #405, #406）
+
 ## [1.0.0-alpha.151] - 2026-04-17
 
 ### 功能
