@@ -105,10 +105,15 @@ export function InlineTab({
           : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
       }`}
     >
-      <span className="relative inline-flex items-center justify-center w-3 h-3 flex-shrink-0">
-        <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
-        {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
-      </span>
+      {(agentStatus !== undefined || subagentCount > 0) && (
+        <span
+          data-testid="inline-tab-status-slot"
+          className="relative inline-flex items-center justify-center w-3 h-3 flex-shrink-0"
+        >
+          <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
+          {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
+        </span>
+      )}
       <span className="flex-1 truncate" title={title}>
         {title}
       </span>

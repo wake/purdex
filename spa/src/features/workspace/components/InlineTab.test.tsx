@@ -153,6 +153,19 @@ describe('InlineTab — visual parity', () => {
     expect(screen.getByTestId('inline-tab-host-offline')).toBeInTheDocument()
   })
 
+  it('hides status slot entirely when tab has no agent status nor subagents', () => {
+    renderWith(mkTab({ hostId: 'host1', sessionCode: 'sc1' }), 'No agent', { sourceWsId: null })
+    expect(screen.queryByTestId('inline-tab-status-slot')).not.toBeInTheDocument()
+  })
+
+  it('shows status slot when agent has a status', () => {
+    useAgentStore.setState({
+      statuses: { 'host1:sc1': 'running' },
+    } as Partial<ReturnType<typeof useAgentStore.getState>> as never)
+    renderWith(mkTab({ hostId: 'host1', sessionCode: 'sc1' }), 'Running', { sourceWsId: null })
+    expect(screen.getByTestId('inline-tab-status-slot')).toBeInTheDocument()
+  })
+
   it('hides WifiSlash when session is terminated', () => {
     useHostStore.setState({
       runtime: { host1: { status: 'disconnected' } },
