@@ -14,11 +14,12 @@ import { hostFetch } from '../../host-api'
  * not yet implemented on the daemon side.
  */
 export function createDaemonProvider(hostId: string, clientId: string): SyncProvider {
+  const encoded = encodeURIComponent(clientId)
   return {
     id: 'daemon',
 
     async push(bundle: SyncBundle): Promise<void> {
-      const res = await hostFetch(hostId, `/api/sync/push?clientId=${clientId}`, {
+      const res = await hostFetch(hostId, `/api/sync/push?clientId=${encoded}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bundle),
@@ -29,7 +30,7 @@ export function createDaemonProvider(hostId: string, clientId: string): SyncProv
     },
 
     async pull(): Promise<SyncBundle | null> {
-      const res = await hostFetch(hostId, `/api/sync/pull?clientId=${clientId}`, undefined)
+      const res = await hostFetch(hostId, `/api/sync/pull?clientId=${encoded}`, undefined)
       if (!res.ok) {
         throw new Error(`sync pull failed: ${res.status} ${res.statusText}`)
       }
@@ -37,20 +38,18 @@ export function createDaemonProvider(hostId: string, clientId: string): SyncProv
     },
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    async pushChunks(chunks: Record<string, Uint8Array>): Promise<void> {
-      // stub — content-addressed chunked transfer not yet implemented
-    },
+    async pushChunks(chunks: Record<string, Uint8Array>): Promise<void> {},
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    async pullChunks(hashes: string[]): Promise<Record<string, Uint8Array>> {
-      // stub — content-addressed chunked transfer not yet implemented
-      return {}
-    },
+    async pullChunks(hashes: string[]): Promise<Record<string, Uint8Array>> { return {} },
 
     async listHistory(limit: number): Promise<SyncSnapshot[]> {
+      if (!Number.isInteger(limit) || limit < 1) {
+        throw new Error(`sync listHistory: limit must be a positive integer, got ${limit}`)
+      }
       const res = await hostFetch(
         hostId,
-        `/api/sync/history?clientId=${clientId}&limit=${limit}`,
+        `/api/sync/history?clientId=${encoded}&limit=${limit}`,
         undefined,
       )
       if (!res.ok) {

@@ -139,4 +139,45 @@ describe('DaemonProvider', () => {
     const provider = createDaemonProvider(HOST_ID, CLIENT_ID)
     await expect(provider.listHistory(5)).rejects.toThrow()
   })
+
+  it('push URL-encodes clientId containing special characters', async () => {
+    mockHostFetch.mockResolvedValue(new Response('', { status: 200 }))
+    const provider = createDaemonProvider(HOST_ID, 'c/weird?&=#id')
+    await provider.push(makeBundle())
+    expect(mockHostFetch).toHaveBeenCalledWith(
+      HOST_ID,
+      `/api/sync/push?clientId=${encodeURIComponent('c/weird?&=#id')}`,
+      expect.any(Object),
+    )
+  })
+
+  it('pull URL-encodes clientId', async () => {
+    mockHostFetch.mockResolvedValue(new Response('null'))
+    const provider = createDaemonProvider(HOST_ID, 'c/weird?&=#id')
+    await provider.pull()
+    expect(mockHostFetch).toHaveBeenCalledWith(
+      HOST_ID,
+      `/api/sync/pull?clientId=${encodeURIComponent('c/weird?&=#id')}`,
+      undefined,
+    )
+  })
+
+  it('listHistory URL-encodes clientId', async () => {
+    mockHostFetch.mockResolvedValue(new Response(JSON.stringify([])))
+    const provider = createDaemonProvider(HOST_ID, 'c/weird?&=#id')
+    await provider.listHistory(5)
+    expect(mockHostFetch).toHaveBeenCalledWith(
+      HOST_ID,
+      `/api/sync/history?clientId=${encodeURIComponent('c/weird?&=#id')}&limit=5`,
+      undefined,
+    )
+  })
+
+  it('listHistory throws when limit is not a positive integer', async () => {
+    const provider = createDaemonProvider(HOST_ID, CLIENT_ID)
+    await expect(provider.listHistory(0)).rejects.toThrow(/positive integer/)
+    await expect(provider.listHistory(-1)).rejects.toThrow(/positive integer/)
+    await expect(provider.listHistory(1.5)).rejects.toThrow(/positive integer/)
+    await expect(provider.listHistory(Number.NaN)).rejects.toThrow(/positive integer/)
+  })
 })
