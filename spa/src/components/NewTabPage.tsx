@@ -2,8 +2,9 @@ import { useMemo, useState, useEffect } from 'react'
 import { getNewTabProviders } from '../lib/new-tab-registry'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
-import { useMediaQuery } from '../hooks/useMediaQuery'
+import { useBreakpoint } from '../hooks/useBreakpoint'
 import { resolveProfile } from '../lib/resolve-profile'
+import { colsClass } from '../lib/cols-class'
 import type { PaneContent } from '../types/tab'
 
 interface Props {
@@ -18,8 +19,7 @@ export function NewTabPage({ onSelect }: Props) {
     return useNewTabLayoutStore.persist.onFinishHydration(() => setHydrated(true))
   }, [hydrated])
 
-  const isWide = useMediaQuery('(min-width: 1024px)')
-  const isMid = useMediaQuery('(min-width: 640px)')
+  const { isWide, isMid } = useBreakpoint()
   const profiles = useNewTabLayoutStore((s) => s.profiles)
   const profileKey = resolveProfile(isWide, isMid, profiles)
   const profile = profiles[profileKey]
@@ -39,9 +39,7 @@ export function NewTabPage({ onSelect }: Props) {
     )
   }
 
-  const gridCols = profile.columns.length === 3 ? 'grid-cols-3'
-                 : profile.columns.length === 2 ? 'grid-cols-2'
-                 : 'grid-cols-1'
+  const gridCols = colsClass(profile.columns.length)
 
   return (
     <div className={`flex-1 grid overflow-hidden gap-6 px-6 pt-8 ${gridCols}`}>

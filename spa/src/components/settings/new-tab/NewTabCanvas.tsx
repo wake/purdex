@@ -6,6 +6,7 @@ import { X } from '@phosphor-icons/react'
 import { useNewTabLayoutStore } from '../../../stores/useNewTabLayoutStore'
 import { getNewTabProviders } from '../../../lib/new-tab-registry'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { colsClass } from '../../../lib/cols-class'
 import type { ProfileKey } from '../../../lib/resolve-profile'
 
 interface Props { profileKey: ProfileKey }
@@ -94,9 +95,7 @@ function Column({ profileKey, colIdx, ids }: { profileKey: ProfileKey; colIdx: n
 
 export function NewTabCanvas({ profileKey }: Props) {
   const profile = useNewTabLayoutStore((s) => s.profiles[profileKey])
-  const gridCols = profile.columns.length === 3 ? 'grid-cols-3'
-                 : profile.columns.length === 2 ? 'grid-cols-2'
-                 : 'grid-cols-1'
+  const gridCols = colsClass(profile.columns.length)
   return (
     <div className={`grid gap-3 ${gridCols}`} data-testid={`canvas-${profileKey}`}>
       {profile.columns.map((ids, i) => (
