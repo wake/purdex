@@ -7,7 +7,7 @@ interface SettingItemProps {
 
 export function SettingItem({ label, description, disabled, children }: SettingItemProps) {
   return (
-    <div className={`flex items-center justify-between py-3 ${disabled ? 'pointer-events-none' : ''}`}>
+    <div className={`flex items-start justify-between py-3 ${disabled ? 'pointer-events-none' : ''}`}>
       <div className="flex flex-col gap-0.5 mr-4">
         <span className="text-sm text-text-primary">{label}</span>
         {description && <span className="text-xs text-text-secondary">{description}</span>}
