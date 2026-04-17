@@ -2290,14 +2290,16 @@ Open SPA in two browser tabs (or two profiles). In each:
 
 - [ ] **Step 5: Bump version**
 
-Read current version from `VERSION`. Bump patch-level alpha (e.g., `1.0.0-alpha.156` → `1.0.0-alpha.157`).
+Read current version from `VERSION` (expected: `1.0.0-alpha.157` after #424 merged). Bump patch-level alpha:
 
 ```bash
 CURRENT=$(cat VERSION)
-NEXT="1.0.0-alpha.157"  # adjust based on current
+NEXT="1.0.0-alpha.158"  # adjust if another PR merged first
 echo "$NEXT" > VERSION
 # Sync package.json + spa/package.json (sed or manual edit)
 ```
+
+**Before bumping, run `git fetch origin main && git log origin/main --oneline -5` to confirm no newer alpha landed since branch divergence.**
 
 Update `package.json` field `"version"` and `spa/package.json` field `"version"` to the new value.
 
@@ -2306,7 +2308,7 @@ Update `package.json` field `"version"` and `spa/package.json` field `"version"`
 Append to `CHANGELOG.md` top:
 
 ```markdown
-## 1.0.0-alpha.157 — 2026-04-18
+## 1.0.0-alpha.158 — 2026-04-18
 
 ### Sync P0 — 體質清理
 
@@ -2333,7 +2335,7 @@ Append to `CHANGELOG.md` top:
 
 ```bash
 git add VERSION package.json spa/package.json CHANGELOG.md
-git commit -m "chore: bump version to 1.0.0-alpha.157"
+git commit -m "chore: bump version to 1.0.0-alpha.158"
 ```
 
 - [ ] **Step 8: Update memory (main memory dir, outside worktree)**
