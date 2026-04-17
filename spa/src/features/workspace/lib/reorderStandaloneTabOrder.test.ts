@@ -42,4 +42,20 @@ describe('reorderStandaloneTabOrder', () => {
     // so they stay where they are.
     expect(reorderStandaloneTabOrder(['sA', 'ws1', 'sB'], [])).toEqual(['sA', 'ws1', 'sB'])
   })
+
+  describe('defensive filtering', () => {
+    it('drops phantom ids from newOrder not present in current', () => {
+      const current = ['a', 's1', 'b', 's2', 'c']
+      const result = reorderStandaloneTabOrder(current, ['s2', 'phantom', 's1'])
+      // phantom dropped; a/b/c non-standalone kept in place
+      expect(result).toEqual(['a', 's2', 's1', 'b', 'c'])
+    })
+
+    it('handles newOrder entirely filtered to empty (no-op return)', () => {
+      const current = ['a', 's1', 'b']
+      const result = reorderStandaloneTabOrder(current, ['phantom'])
+      // All ids phantom → effectively empty newOrder → return original slice
+      expect(result).toEqual(['a', 's1', 'b'])
+    })
+  })
 })
