@@ -5,7 +5,7 @@ import {
   type DragEndEvent, type DragStartEvent, pointerWithin,
 } from '@dnd-kit/core'
 import { getNewTabProviders } from '../../../lib/new-tab-registry'
-import { useNewTabLayoutStore, shortestColIdx } from '../../../stores/useNewTabLayoutStore'
+import { useNewTabLayoutStore } from '../../../stores/useNewTabLayoutStore'
 import type { ProfileKey } from '../../../lib/resolve-profile'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { NewTabModulePalette, type PaletteItem } from './NewTabModulePalette'
@@ -22,6 +22,7 @@ export function NewTabSubsection() {
   const setEnabled = useNewTabLayoutStore((s) => s.setEnabled)
   const placeModule = useNewTabLayoutStore((s) => s.placeModule)
   const removeModule = useNewTabLayoutStore((s) => s.removeModule)
+  const placeModuleInShortest = useNewTabLayoutStore((s) => s.placeModuleInShortest)
 
   const [dragging, setDragging] = useState<null | { providerId: string; source: 'palette' | 'canvas' }>(null)
 
@@ -38,18 +39,16 @@ export function NewTabSubsection() {
   }, [providers, profiles, active])
 
   const handleClickAdd = (id: string) => {
-    const cols = useNewTabLayoutStore.getState().profiles[active].columns
-    const col = shortestColIdx(cols)
-    placeModule(active, id, col, cols[col].length)
+    placeModuleInShortest(active, id)
   }
 
   const handleDragStart = (e: DragStartEvent) => {
-    const id = String(e.active.id)
-    if (id.startsWith('palette:')) {
-      setDragging({ providerId: id.slice('palette:'.length), source: 'palette' })
-    } else if (id.startsWith('item:')) {
-      const parts = id.split(':')
-      setDragging({ providerId: parts[2], source: 'canvas' })
+    const d = e.active.data.current as { type?: string; providerId?: string } | undefined
+    if (!d?.providerId) return
+    if (d.type === 'palette') {
+      setDragging({ providerId: d.providerId, source: 'palette' })
+    } else if (d.type === 'canvas-item') {
+      setDragging({ providerId: d.providerId, source: 'canvas' })
     }
   }
 
@@ -60,7 +59,7 @@ export function NewTabSubsection() {
     if (!over) return
 
     const src = activeEvt.data.current as { type?: string; providerId?: string; profileKey?: ProfileKey } | undefined
-    const dst = over.data.current as { type?: string; profileKey?: ProfileKey; colIdx?: number } | undefined
+    const dst = over.data.current as { type?: string; profileKey?: ProfileKey; colIdx?: number; providerId?: string } | undefined
     if (!src?.providerId) return
 
     // Drop into palette zone = remove from canvas
@@ -71,16 +70,13 @@ export function NewTabSubsection() {
       return
     }
 
-    // Drop onto another canvas sortable item = insert at its position
-    const overIdStr = String(over.id)
-    if (overIdStr.startsWith('item:')) {
-      const [, overProfile, overId] = overIdStr.split(':')
-      const profileKey = overProfile as ProfileKey
-      const cols = useNewTabLayoutStore.getState().profiles[profileKey].columns
-      const colIdx = cols.findIndex((c) => c.includes(overId))
+    // Drop onto another canvas item = insert at its position
+    if (dst?.type === 'canvas-item' && dst.profileKey && dst.providerId) {
+      const cols = useNewTabLayoutStore.getState().profiles[dst.profileKey].columns
+      const colIdx = cols.findIndex((c) => c.includes(dst.providerId!))
       if (colIdx < 0) return
-      const rowIdx = cols[colIdx].indexOf(overId)
-      placeModule(profileKey, src.providerId, colIdx, rowIdx)
+      const rowIdx = cols[colIdx].indexOf(dst.providerId)
+      placeModule(dst.profileKey, src.providerId, colIdx, rowIdx)
       return
     }
 
