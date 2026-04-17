@@ -120,7 +120,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const ccIconVariant = useAgentStore((s) => s.ccIconVariant)
   const isTerminated = primaryContent.kind === 'tmux-session' && !!primaryContent.terminated
   // Keep the terminated pane's SmileySad tombstone instead of the agent icon.
-  const agentIcon = !isTerminated && agentType ? getAgentIcon(agentType, ccIconVariant) : undefined
+  const agentIcon = !isTerminated && agentType ? getAgentIcon(agentType, { ccVariant: ccIconVariant }) : undefined
   const IconComponent = (agentIcon ?? paneIcon) as React.ComponentType<{ size: number; className?: string }> | undefined
   const isHostOffline = useHostStore((s) => {
     if (!hostId || isTerminated) return false

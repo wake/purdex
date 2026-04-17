@@ -115,4 +115,13 @@ describe('TerminalSection', () => {
     fireEvent.click(screen.getByRole('button', { name: /Bot/ }))
     expect(useAgentStore.getState().ccIconVariant).toBe('bot')
   })
+
+  it('shows cc_icon hidden hint only in dot mode', () => {
+    useAgentStore.setState({ tabIndicatorStyle: 'badge' })
+    const { rerender } = render(<TerminalSection />)
+    expect(screen.queryByText(/no visible effect/i)).toBeNull()
+    useAgentStore.setState({ tabIndicatorStyle: 'dot' })
+    rerender(<TerminalSection />)
+    expect(screen.getByText(/no visible effect/i)).toBeTruthy()
+  })
 })

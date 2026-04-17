@@ -2,7 +2,7 @@
 import type { AgentStatus } from '../stores/useAgentStore'
 
 /** Visual style of the dot itself — orthogonal to the tab-level indicator mode. */
-export type DotStyle = 'overlay' | 'replace' | 'inline'
+export type DotStyle = 'overlay' | 'replace'
 
 interface Props {
   status: AgentStatus | undefined
@@ -44,28 +44,14 @@ export function TabStatusDot({ status, style, isActive }: Props) {
     )
   }
 
-  if (style === 'replace') {
-    return (
-      <span
-        data-testid="tab-status-dot"
-        className={`rounded-full flex-shrink-0 ${isRunning ? 'animate-breathe' : ''}`}
-        style={{
-          width: '8px',
-          height: '8px',
-          backgroundColor: color,
-        }}
-      />
-    )
-  }
-
-  // inline
+  // replace
   return (
     <span
       data-testid="tab-status-dot"
       className={`rounded-full flex-shrink-0 ${isRunning ? 'animate-breathe' : ''}`}
       style={{
-        width: '6px',
-        height: '6px',
+        width: '8px',
+        height: '8px',
         backgroundColor: color,
       }}
     />

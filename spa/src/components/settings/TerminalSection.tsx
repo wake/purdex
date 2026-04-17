@@ -108,27 +108,34 @@ export function TerminalSection() {
       </SettingItem>
 
       <SettingItem label={t('settings.terminal.cc_icon.label')} description={t('settings.terminal.cc_icon.desc')}>
-        <div className="flex gap-2">
-          {CC_ICON_OPTIONS.map((opt) => {
-            const VariantIcon = CC_ICON_VARIANTS[opt.value]
-            const isActive = opt.value === ccIconVariant
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => { if (!isActive) setCcIconVariant(opt.value) }}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs transition-colors cursor-pointer ${
-                  isActive
-                    ? 'bg-surface-elevated border-border-active text-text-primary'
-                    : 'bg-transparent border-border-default text-text-muted hover:text-text-primary hover:border-text-muted'
-                }`}
-                aria-pressed={isActive}
-              >
-                <VariantIcon size={16} />
-                <span>{opt.label}</span>
-              </button>
-            )
-          })}
+        <div className="flex flex-col gap-2 items-end">
+          <div className="flex gap-2">
+            {CC_ICON_OPTIONS.map((opt) => {
+              const VariantIcon = CC_ICON_VARIANTS[opt.value]
+              const isActive = opt.value === ccIconVariant
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => { if (!isActive) setCcIconVariant(opt.value) }}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs transition-colors cursor-pointer ${
+                    isActive
+                      ? 'bg-surface-elevated border-border-active text-text-primary'
+                      : 'bg-transparent border-border-default text-text-muted hover:text-text-primary hover:border-text-muted'
+                  }`}
+                  aria-pressed={isActive}
+                >
+                  <VariantIcon size={16} />
+                  <span>{opt.label}</span>
+                </button>
+              )
+            })}
+          </div>
+          {tabIndicatorStyle === 'dot' && (
+            <p className="text-xs text-text-muted text-right max-w-xs">
+              {t('settings.terminal.cc_icon.hidden_hint')}
+            </p>
+          )}
         </div>
       </SettingItem>
     </div>

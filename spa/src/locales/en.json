@@ -102,6 +102,7 @@
   "settings.terminal.cc_icon.desc": "Which icon Claude Code sessions use on the tab",
   "settings.terminal.cc_icon.bot": "Bot",
   "settings.terminal.cc_icon.star": "Star",
+  "settings.terminal.cc_icon.hidden_hint": "Current tab indicator style hides the icon; this setting has no visible effect until you switch mode.",
 
   "theme.editor.title": "Theme Editor",
   "theme.editor.close": "Close editor",
