@@ -139,3 +139,67 @@ describe('openSingletonAndSelect', () => {
     expect(updatedWsA!.tabs).not.toContain(tabId!)
   })
 })
+
+describe('handleAddTabToWorkspace', () => {
+  beforeEach(() => {
+    useWorkspaceStore.getState().reset()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  })
+
+  it('creates a tab, adds to tab store, and inserts into given workspace', () => {
+    const ws = useWorkspaceStore.getState().addWorkspace('A')
+
+    const { result } = renderHook(() => useTabWorkspaceActions([]))
+    act(() => {
+      result.current.handleAddTabToWorkspace(ws.id)
+    })
+
+    const updated = useWorkspaceStore.getState().workspaces.find((w) => w.id === ws.id)!
+    expect(updated.tabs.length).toBe(1)
+    const newTabId = updated.tabs[0]
+    expect(updated.activeTabId).toBe(newTabId)
+    expect(useTabStore.getState().tabs[newTabId]).toBeDefined()
+    expect(useTabStore.getState().activeTabId).toBe(newTabId)
+  })
+
+  it('switches activeWorkspaceId to the target workspace', () => {
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('B')
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+
+    const { result } = renderHook(() => useTabWorkspaceActions([]))
+    act(() => {
+      result.current.handleAddTabToWorkspace(wsB.id)
+    })
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(wsB.id)
+  })
+})
+
+describe('handleReorderWorkspaceTabs', () => {
+  beforeEach(() => {
+    useWorkspaceStore.getState().reset()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  })
+
+  it('delegates to workspace store reorderWorkspaceTabs', () => {
+    const ws = useWorkspaceStore.getState().addWorkspace('A')
+    const t1 = createTab({ kind: 'new-tab' })
+    const t2 = createTab({ kind: 'new-tab' })
+    const t3 = createTab({ kind: 'new-tab' })
+    useTabStore.getState().addTab(t1)
+    useTabStore.getState().addTab(t2)
+    useTabStore.getState().addTab(t3)
+    useWorkspaceStore.getState().addTabToWorkspace(ws.id, t1.id)
+    useWorkspaceStore.getState().addTabToWorkspace(ws.id, t2.id)
+    useWorkspaceStore.getState().addTabToWorkspace(ws.id, t3.id)
+
+    const { result } = renderHook(() => useTabWorkspaceActions([]))
+    act(() => {
+      result.current.handleReorderWorkspaceTabs(ws.id, [t2.id, t1.id, t3.id])
+    })
+
+    const updated = useWorkspaceStore.getState().workspaces.find((w) => w.id === ws.id)!
+    expect(updated.tabs).toEqual([t2.id, t1.id, t3.id])
+  })
+})
