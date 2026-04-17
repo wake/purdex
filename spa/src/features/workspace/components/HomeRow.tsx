@@ -32,6 +32,8 @@ export function HomeRow(props: Props) {
   const t = useI18nStore((s) => s.t)
   const expanded = useLayoutStore((s) => !!s.workspaceExpanded[HOME_WS_KEY])
   const toggleExpanded = useLayoutStore((s) => s.toggleWorkspaceExpanded)
+  const tabPosition = useLayoutStore((s) => s.tabPosition)
+  const showTabs = tabPosition !== 'top'
 
   const { setNodeRef: setHeaderDropRef, isOver: isHeaderOver } = useDroppable({
     id: 'home-header',
@@ -52,18 +54,20 @@ export function HomeRow(props: Props) {
             : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
         } ${isHeaderOver ? 'ring-2 ring-purple-400/80 bg-surface-hover' : ''}`}
       >
-        <button
-          type="button"
-          aria-label={chevronLabel}
-          aria-expanded={expanded}
-          onClick={(e) => {
-            e.stopPropagation()
-            toggleExpanded(HOME_WS_KEY)
-          }}
-          className="p-1 rounded hover:bg-surface-secondary text-text-muted cursor-pointer"
-        >
-          <Chevron size={12} />
-        </button>
+        {showTabs && (
+          <button
+            type="button"
+            aria-label={chevronLabel}
+            aria-expanded={expanded}
+            onClick={(e) => {
+              e.stopPropagation()
+              toggleExpanded(HOME_WS_KEY)
+            }}
+            className="p-1 rounded hover:bg-surface-secondary text-text-muted cursor-pointer"
+          >
+            <Chevron size={12} />
+          </button>
+        )}
         <button
           type="button"
           onClick={onSelectHome}
@@ -80,7 +84,7 @@ export function HomeRow(props: Props) {
         </button>
       </div>
 
-      {expanded && (
+      {showTabs && expanded && (
         <InlineTabList
           tabIds={standaloneTabIds}
           tabsById={tabsById}

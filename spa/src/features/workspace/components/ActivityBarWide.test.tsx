@@ -107,7 +107,7 @@ describe('ActivityBarWide Phase 2 — inline tabs', () => {
   })
 
   it('shows expanded inline tabs when workspaceExpanded set', () => {
-    useLayoutStore.setState({ workspaceExpanded: { w1: true } })
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide', workspaceExpanded: { w1: true } })
     render(
       <ActivityBarWide
         workspaces={[{ id: 'w1', name: 'Alpha', tabs: ['t1'], activeTabId: 't1' }]}

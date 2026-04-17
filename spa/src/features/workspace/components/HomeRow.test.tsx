@@ -62,12 +62,13 @@ describe('HomeRow', () => {
   })
 
   it('tabs shown when workspaceExpanded["home"]=true', () => {
-    useLayoutStore.setState({ workspaceExpanded: { home: true } })
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide', workspaceExpanded: { home: true } })
     renderRow({ standaloneTabIds: ['t1'], tabsById: { t1: mkTab('t1', 'alpha') } })
     expect(screen.getByText('alpha.example.com')).toBeInTheDocument()
   })
 
   it('chevron toggles home expand state', () => {
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
     renderRow({ standaloneTabIds: ['t1'], tabsById: { t1: mkTab('t1', 'alpha') } })
     const chevron = screen.getByRole('button', { name: /expand|collapse/i })
     fireEvent.click(chevron)
@@ -79,5 +80,25 @@ describe('HomeRow', () => {
       renderRow()
       expect(screen.getByTestId('home-header')).toBeInTheDocument()
     })
+  })
+})
+
+describe('HomeRow chevron visibility', () => {
+  it("hides chevron when tabPosition='top'", () => {
+    useLayoutStore.setState({ tabPosition: 'top' })
+    renderRow()
+    expect(screen.queryByLabelText(/expand home/i)).not.toBeInTheDocument()
+  })
+
+  it("shows chevron when tabPosition='left'", () => {
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
+    renderRow()
+    expect(screen.getByLabelText(/expand home/i)).toBeInTheDocument()
+  })
+
+  it("shows chevron when tabPosition='both'", () => {
+    useLayoutStore.setState({ tabPosition: 'both', activityBarWidth: 'wide' })
+    renderRow()
+    expect(screen.getByLabelText(/expand home/i)).toBeInTheDocument()
   })
 })
