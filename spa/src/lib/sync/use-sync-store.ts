@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../storage'
-import type { SyncBundle } from './types'
+import type { ConflictItem, SyncBundle } from './types'
 
 /**
  * Registry of all known contributor IDs. Populated by registerSyncContributors()
@@ -27,6 +27,9 @@ interface SyncStoreState {
   clientId: string | null
   /** Host ID to sync through when activeProviderId === 'daemon'. */
   syncHostId: string | null
+  pendingConflicts: ConflictItem[]
+  pendingRemoteBundle: SyncBundle | null
+  pendingConflictsAt: number | null
 
   // Actions
   setLastSyncedBundle: (bundle: SyncBundle) => void
@@ -34,6 +37,8 @@ interface SyncStoreState {
   toggleModule: (moduleId: string) => void
   getClientId: () => string
   setSyncHostId: (hostId: string | null) => void
+  setPendingConflicts: (conflicts: ConflictItem[], remoteBundle: SyncBundle) => void
+  clearPendingConflicts: () => void
   reset: () => void
 }
 
@@ -48,6 +53,9 @@ const initialState = {
   enabledModules: [] as string[],
   clientId: null,
   syncHostId: null,
+  pendingConflicts: [] as ConflictItem[],
+  pendingRemoteBundle: null,
+  pendingConflictsAt: null,
 } satisfies Pick<
   SyncStoreState,
   | 'lastSyncedBundle'
@@ -56,6 +64,9 @@ const initialState = {
   | 'enabledModules'
   | 'clientId'
   | 'syncHostId'
+  | 'pendingConflicts'
+  | 'pendingRemoteBundle'
+  | 'pendingConflictsAt'
 >
 
 // ---------------------------------------------------------------------------
@@ -119,6 +130,20 @@ export const useSyncStore = create<SyncStoreState>()(
 
       setSyncHostId: (hostId) => set({ syncHostId: hostId }),
 
+      setPendingConflicts: (conflicts, remoteBundle) =>
+        set({
+          pendingConflicts: conflicts,
+          pendingRemoteBundle: remoteBundle,
+          pendingConflictsAt: Date.now(),
+        }),
+
+      clearPendingConflicts: () =>
+        set({
+          pendingConflicts: [],
+          pendingRemoteBundle: null,
+          pendingConflictsAt: null,
+        }),
+
       reset: () => set({ ...initialState }),
     }),
     {
@@ -131,6 +156,9 @@ export const useSyncStore = create<SyncStoreState>()(
         enabledModules: state.enabledModules,
         clientId: state.clientId,
         syncHostId: state.syncHostId,
+        pendingConflicts: state.pendingConflicts,
+        pendingRemoteBundle: state.pendingRemoteBundle,
+        pendingConflictsAt: state.pendingConflictsAt,
       }),
     },
   ),

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useSyncStore } from './use-sync-store'
 import type { SyncBundle } from './types'
+import type { ConflictItem } from './types'
 
 const mockBundle: SyncBundle = {
   version: 1,
@@ -22,6 +23,9 @@ describe('useSyncStore', () => {
     expect(state.enabledModules).toEqual([])
     expect(state.clientId).toBeNull()
     expect(state.syncHostId).toBeNull()
+    expect(state.pendingConflicts).toEqual([])
+    expect(state.pendingRemoteBundle).toBeNull()
+    expect(state.pendingConflictsAt).toBeNull()
   })
 
   it('setSyncHostId updates the sync host', () => {
@@ -120,5 +124,51 @@ describe('useSyncStore', () => {
     expect(state.enabledModules).toEqual([])
     expect(state.clientId).toBeNull()
     expect(state.syncHostId).toBeNull()
+  })
+
+  it('pendingConflicts default to empty + null', () => {
+    const state = useSyncStore.getState()
+    expect(state.pendingConflicts).toEqual([])
+    expect(state.pendingRemoteBundle).toBeNull()
+    expect(state.pendingConflictsAt).toBeNull()
+  })
+
+  it('setPendingConflicts stores conflicts, bundle, and timestamp', () => {
+    const before = Date.now()
+    const conflicts: ConflictItem[] = [
+      { contributor: 'prefs', field: 'theme', lastSynced: 'light', local: 'dark', remote: { value: 'x', device: 'A' } },
+    ]
+    const remoteBundle: SyncBundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+
+    useSyncStore.getState().setPendingConflicts(conflicts, remoteBundle)
+    const state = useSyncStore.getState()
+    expect(state.pendingConflicts).toEqual(conflicts)
+    expect(state.pendingRemoteBundle).toEqual(remoteBundle)
+    expect(state.pendingConflictsAt).toBeGreaterThanOrEqual(before)
+    expect(state.pendingConflictsAt).toBeLessThanOrEqual(Date.now())
+  })
+
+  it('clearPendingConflicts resets all three fields', () => {
+    const conflicts: ConflictItem[] = [
+      { contributor: 'prefs', field: 'theme', lastSynced: 'light', local: 'dark', remote: { value: 'x', device: 'A' } },
+    ]
+    useSyncStore.getState().setPendingConflicts(conflicts, mockBundle)
+    useSyncStore.getState().clearPendingConflicts()
+    const state = useSyncStore.getState()
+    expect(state.pendingConflicts).toEqual([])
+    expect(state.pendingRemoteBundle).toBeNull()
+    expect(state.pendingConflictsAt).toBeNull()
+  })
+
+  it('reset also clears pending conflict fields', () => {
+    const conflicts: ConflictItem[] = [
+      { contributor: 'prefs', field: 'theme', lastSynced: 'light', local: 'dark', remote: { value: 'x', device: 'A' } },
+    ]
+    useSyncStore.getState().setPendingConflicts(conflicts, mockBundle)
+    useSyncStore.getState().reset()
+    const state = useSyncStore.getState()
+    expect(state.pendingConflicts).toEqual([])
+    expect(state.pendingRemoteBundle).toBeNull()
+    expect(state.pendingConflictsAt).toBeNull()
   })
 })
