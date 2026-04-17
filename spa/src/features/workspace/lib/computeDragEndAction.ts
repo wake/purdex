@@ -92,5 +92,12 @@ export function dispatchDragEndAction(action: DragEndAction, d: DragEndDispatch)
       return
     case 'noop':
       return
+    default: {
+      // Exhaustiveness check: adding a new DragEndAction kind forces a TS error
+      // here until dispatchDragEndAction is updated to handle it.
+      const _exhaustive: never = action
+      void _exhaustive
+      return
+    }
   }
 }
