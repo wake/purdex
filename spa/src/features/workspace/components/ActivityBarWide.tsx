@@ -11,7 +11,6 @@ import {
 import {
   SortableContext,
   verticalListSortingStrategy,
-  arrayMove,
 } from '@dnd-kit/sortable'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useLayoutStore, MIN_WIDTH, MAX_WIDTH } from '../../../stores/useLayoutStore'
@@ -20,12 +19,9 @@ import { CollapseButton } from './CollapseButton'
 import { WorkspaceRow } from './WorkspaceRow'
 import { HomeRow } from './HomeRow'
 import type { ActivityBarProps } from './activity-bar-props'
+import { computeDragEndAction, dispatchDragEndAction } from '../lib/computeDragEndAction'
 
 const NOOP = () => {}
-
-type WorkspaceDragData = { type: 'workspace'; wsId: string }
-type TabDragData = { type: 'tab'; tabId: string; sourceWsId: string | null }
-type DragData = WorkspaceDragData | TabDragData
 
 export function ActivityBarWide(props: ActivityBarProps) {
   const {
@@ -75,43 +71,12 @@ export function ActivityBarWide(props: ActivityBarProps) {
 
   const handleDragEnd = useCallback(
     (e: DragEndEvent) => {
-      const { active, over } = e
-      if (!over || active.id === over.id) return
-
-      const activeData = active.data.current as DragData | undefined
-      const overData = over.data.current as DragData | undefined
-
-      if (!activeData) return
-
-      if (activeData.type === 'workspace') {
-        const oldIndex = wsIds.indexOf(String(active.id))
-        const newIndex = wsIds.indexOf(String(over.id))
-        if (oldIndex === -1 || newIndex === -1) return
-        const newOrder = arrayMove(wsIds, oldIndex, newIndex)
-        onReorderWorkspaces?.(newOrder)
-        return
-      }
-
-      if (activeData.type === 'tab') {
-        // Phase 3 will handle cross-zone (tab dropped on workspace row) drops;
-        // for Phase 2 require an over-target that is also a tab in the same zone.
-        if (!overData || overData.type !== 'tab') return
-        if (activeData.sourceWsId !== overData.sourceWsId) return
-        const sourceWsId = activeData.sourceWsId
-        if (sourceWsId === null) {
-          const oldIdx = standaloneTabIds.indexOf(activeData.tabId)
-          const newIdx = standaloneTabIds.indexOf(overData.tabId)
-          if (oldIdx === -1 || newIdx === -1) return
-          onReorderStandaloneTabs?.(arrayMove(standaloneTabIds, oldIdx, newIdx))
-          return
-        }
-        const ws = workspaces.find((w) => w.id === sourceWsId)
-        if (!ws) return
-        const oldIdx = ws.tabs.indexOf(activeData.tabId)
-        const newIdx = ws.tabs.indexOf(overData.tabId)
-        if (oldIdx === -1 || newIdx === -1) return
-        onReorderWorkspaceTabs?.(sourceWsId, arrayMove(ws.tabs, oldIdx, newIdx))
-      }
+      const action = computeDragEndAction(e, { wsIds, workspaces, standaloneTabIds })
+      dispatchDragEndAction(action, {
+        onReorderWorkspaces,
+        onReorderStandaloneTabs,
+        onReorderWorkspaceTabs,
+      })
     },
     [
       wsIds,
