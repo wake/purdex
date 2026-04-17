@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { InlineTab } from './InlineTab'
 import { useAgentStore } from '../../../stores/useAgentStore'
+import { useHostStore } from '../../../stores/useHostStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import type { Tab } from '../../../types/tab'
 
@@ -94,5 +95,121 @@ describe('InlineTab — indicator styles', () => {
     )
     fireEvent.click(screen.getByLabelText(/close work/i))
     expect(onClose).toHaveBeenCalledWith('t1')
+  })
+})
+
+describe('InlineTab — close button visibility', () => {
+  it('does NOT render close button when tab.locked is true', () => {
+    const locked: Tab = { ...baseTab, locked: true } as never
+    render(
+      <InlineTab
+        tab={locked}
+        title="work"
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    expect(screen.queryByLabelText(/close work/i)).not.toBeInTheDocument()
+  })
+
+  it('renders lock icon when tab.locked', () => {
+    const locked: Tab = { ...baseTab, locked: true } as never
+    render(
+      <InlineTab
+        tab={locked}
+        title="work"
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('inline-tab-lock')).toBeInTheDocument()
+  })
+})
+
+describe('InlineTab — unread dot', () => {
+  it('shows unread dot when unread and not active', () => {
+    useAgentStore.setState({ unread: { 'h1:S1': true } })
+    render(
+      <InlineTab
+        tab={baseTab}
+        title="work"
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('inline-tab-unread')).toBeInTheDocument()
+  })
+
+  it('hides unread dot when active', () => {
+    useAgentStore.setState({ unread: { 'h1:S1': true } })
+    render(
+      <InlineTab
+        tab={baseTab}
+        title="work"
+        isActive={true}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('inline-tab-unread')).not.toBeInTheDocument()
+  })
+})
+
+describe('InlineTab — host offline', () => {
+  it('renders WifiSlash when host is disconnected and tab is not terminated', () => {
+    useHostStore.setState({
+      runtime: { h1: { status: 'disconnected' } },
+    } as never)
+    render(
+      <InlineTab
+        tab={baseTab}
+        title="work"
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('inline-tab-host-offline')).toBeInTheDocument()
+  })
+
+  it('does NOT render WifiSlash when tab is terminated (session tombstoned)', () => {
+    useHostStore.setState({
+      runtime: { h1: { status: 'disconnected' } },
+    } as never)
+    const terminated: Tab = {
+      ...baseTab,
+      layout: {
+        type: 'leaf',
+        pane: {
+          id: 't1-pane',
+          content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'S1', terminated: true },
+        },
+      },
+    } as never
+    render(
+      <InlineTab
+        tab={terminated}
+        title="work"
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('inline-tab-host-offline')).not.toBeInTheDocument()
   })
 })

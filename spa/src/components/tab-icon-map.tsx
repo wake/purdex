@@ -1,10 +1,10 @@
 import { Plus, TerminalWindow, ChatCircleDots, House, ClockCounterClockwise, GearSix, SmileySad, Globe } from '@phosphor-icons/react'
 
-const TerminalWindowFill = (props: { size: number; className?: string }) => <TerminalWindow {...props} weight="fill" />
-
+// Filled TerminalWindow variant — inlined to avoid a named component export in
+// this otherwise-constant module (react-refresh/only-export-components).
 export const ICON_MAP: Record<string, React.ComponentType<{ size: number; className?: string }>> = {
   Plus,
-  TerminalWindow: TerminalWindowFill,
+  TerminalWindow: (props) => <TerminalWindow {...props} weight="fill" />,
   ChatCircleDots,
   House,
   ClockCounterClockwise,
