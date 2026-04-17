@@ -29,8 +29,10 @@
 - `spa/src/components/TitleBar.tsx` — 加 warning icon
 - `spa/src/components/SettingsPage.tsx` — URL deep link sync
 - `spa/src/lib/route-utils.ts` — `/settings/<section>` 支援
-- `spa/src/hooks/useRouteSync.ts` — 可能無改動（parseRoute 仍回 settings kind）
 - `spa/src/locales/en.json` + `zh-TW.json` — 新 i18n keys
+
+**不改動但需驗證不受影響**：
+- `spa/src/hooks/useRouteSync.ts` — `parseRoute` 擴 `section?` 欄位後仍走 settings kind 分支；`tabToUrl` 不帶 section，Tab→URL 與既有一致
 
 **新增**：
 - `spa/src/components/settings/SyncConflictBanner.tsx`
@@ -38,7 +40,7 @@
 - `spa/src/lib/object-depth.ts` + test（#396 util）
 
 **測試影響**：
-- `daemon-provider.test.ts` / `manual-provider.test.ts` / `SyncSection.test.tsx` / `TitleBar.test.tsx`（可能新建）/ `SettingsPage.test.tsx` 各加 case
+- `daemon-provider.test.ts` / `manual-provider.test.ts` / `SyncSection.test.tsx` / **擴充** `TitleBar.test.tsx` / `SettingsPage.test.tsx` 各加 case
 
 ## 4. SyncStore 改動
 
@@ -76,6 +78,20 @@ if (result.kind === 'conflicts') {
 ```
 
 （`sync-actions.ts` 目前已回傳 `remoteBundle`，無需改介面）
+
+**退役 `statusFromResult` 衝突分支**：現有 `statusFromResult()` 對 `conflicts` 分支寫死 `"Resolution UI coming soon; local data preserved."`。ConflictBanner 上線後此訊息多餘：
+
+```ts
+// 舊：
+if (result.kind === 'conflicts') {
+  return { tone: 'warn', message: `${result.conflicts.length} field conflict(s) detected. ...` }
+}
+// 新：衝突不再走 StatusLine；呼叫端不用再包 statusFromResult 的 conflict 分支。
+// 若要保留最小回饋，status 設 IDLE 由 banner 接手；或簡潔顯示：
+//   { tone: 'warn', message: t('settings.sync.status.conflictsPending', { count: result.conflicts.length }) }
+```
+
+新增 i18n key `settings.sync.status.conflictsPending`（見 §8）。
 
 ## 5. ConflictBanner 元件
 
@@ -134,23 +150,35 @@ interface SyncConflictBannerProps {
 
 - 每行一個 `ConflictItem`，兩顆 radio（local / remote）二選一，初始都不選
 - 上下 `[全部保留本地] [全部採用遠端]` 批次快速選；再點其他 radio 會覆蓋
-- `[套用]` **all-or-nothing**：每一個 field 都要選過才 enabled；label 顯示 `(已選 N/總 N)`
+- `[套用]` **all-or-nothing**：**N = `conflicts.length`（row 數，非 unique field 數）**；每一 row 都要選過才 enabled；label 顯示 `(已選 N/總 N)`
+- **Collision 行為**：若 row A 是 `preferences.theme`、row B 是 `layout.theme`，兩 row 個別可選但 flatten 為 `ResolvedFields` 時只剩一個 `theme` key — **後 flatten 的 row 蓋掉前面**（這是 engine 既有限制，不修正）。開發者若想穩定順序，flatten 迴圈依 `conflicts` 陣列順序走。UI 不顯額外提示（P0 scope 不擴展）；未來若問題顯現再 track 成 follow-up issue。
 - `[取消]` = 收合 + 清除 UI local 選擇狀態（不動 store）
 - 字串全部走 i18n（見 §8）
 
 ### 5.3 解決流程
 
-```
-[套用] → onResolve(resolved)
-       → SyncSection 接到：
-         const applied = syncEngine.resolveConflicts(pendingRemoteBundle, conflicts, resolved)
-         setLastSyncedBundle(applied)
-         clearPendingConflicts()
-         setStatus({ tone: 'success', message: t('settings.sync.conflict.resolved', { count: conflicts.length }) })
+**重要**：`syncEngine.resolveConflicts()` 的實際簽名是 `(remoteBundle, conflicts, resolved: ResolvedFields) => void`，**不回傳 bundle**，而是直接 side-effect 呼 `contributor.deserialize()` 把 merged data 套到本地 store。因此 SyncSection 不能 `const applied = ...`。
+
+正確接線：
+
+```ts
+// SyncSection 收到 banner onResolve(resolved)：
+syncEngine.resolveConflicts(pendingRemoteBundle, pendingConflicts, resolved)
+// 本地 store 此時已是「non-conflicting 欄位 = remote」+「conflicting 欄位 = 使用者選擇」。
+// 新 baseline = pendingRemoteBundle（衝突欄位已依 resolved 套到本地，若有衝突欄位使用者選 'local'，
+// 則本地該欄 != remoteBundle 對應欄；下次 sync 時 three-way-merge 會把本地當新變更正確處理。
+// 以 remoteBundle 當 baseline 語義正確：代表「已對齊這個遠端版本」）。
+setLastSyncedBundle(pendingRemoteBundle)
+clearPendingConflicts()
+setStatus({ tone: 'success', message: t('settings.sync.conflict.resolved', { count: pendingConflicts.length }) })
 ```
 
-- `syncEngine.resolveConflicts()` 已在 `engine.ts` 存在，不需新 API
-- 解決後 `pendingConflicts` 清空 → TitleBar icon 自動消失
+**語義驗證（不變量）**：
+- 若使用者全選 `remote`：本地 = remote，baseline = remote → 下次 pull 若 remote 未再變，`local == lastSynced` → 無衝突
+- 若使用者全選 `local`：本地 contributor 保持舊值（engine `resolveConflicts` 對 `'local'` 不動），baseline = remote → 下次 push 時 local vs lastSynced 不同 → push 正確反映本地選擇
+- 混合選擇：同上，per-field 獨立判斷
+
+（如果未來要讓 `resolveConflicts` 回 bundle 以免 SyncSection 自己推論 baseline，屬 engine 改動、另外 issue 追；本 spec 依現有簽名定義流程。）
 
 ### 5.4 位置
 
@@ -188,6 +216,10 @@ interface SyncConflictBannerProps {
 - `pointer-events-auto` 必要（container 預設 `pointer-events-none` 讓 drag 穿透）
 - `WebKitAppRegion: 'no-drag'` 必要（和既有 layout buttons 一樣）
 - 顏色 `text-yellow-500`，不引入 css var（既有 pattern 用 tailwind color class）
+- **寬度檢查**：既有 title 的 `max-w-[calc(100%-26rem)]` 是以右側 4+4 buttons + padding 計算。加入 icon 後，icon 也佔中央 flex 容器寬度。實作時驗證：
+  - 長 workspace 名 + icon 顯示時 title 不溢出（ellipsis 生效）
+  - Icon 不被 title 擠出右側 buttons 區
+  - 若需微調：把 icon 放到 title `<span>` 同 container gap-2，必要時把 `max-w` 減到 `calc(100%-27rem)` 留出 icon 寬度（~1rem）
 
 ### 6.3 測試
 
@@ -271,6 +303,19 @@ function GlobalSettingsPage() {
 - `SettingsPage.test.tsx`：URL `/settings/sync` 初始 → activeSection = 'sync'
 - `SettingsPage.test.tsx`：sidebar click → setLocation 被呼叫，URL 變
 
+**測試隔離策略（必要）**：`GlobalSettingsPage` 現在讀/寫 `wouter` location，測試若不隔離會污染 `window.location` 並在測試之間洩漏 state。兩種做法二選一（開發時統一用其一）：
+
+1. **memoryLocation hook（推薦）**：
+   ```tsx
+   import { Router } from 'wouter'
+   import { memoryLocation } from 'wouter/memory-location'
+   const { hook } = memoryLocation({ path: '/settings/sync' })
+   render(<Router hook={hook}><SettingsPage ... /></Router>)
+   ```
+2. **全 mock `wouter`**：`vi.mock('wouter', () => ({ useLocation: () => ['/settings/sync', mockSet] }))`
+
+既有 `SettingsPage.test.tsx`（在改動前不依賴 wouter）必須加入上述 pattern 才能通過。**Plan 寫作時此步驟不得省略**。
+
 ## 8. i18n Keys
 
 ### 8.1 新增 keys（必要最小集合）
@@ -296,6 +341,7 @@ settings.sync.status.importApplied
 settings.sync.status.importFailed  // "Import failed: {reason}"
 settings.sync.status.onlyDaemon    // "Sync Now is only available with the Daemon provider for now."
 settings.sync.status.selectHost    // "Select a sync host first."
+settings.sync.status.conflictsPending  // "{count} conflict(s) pending — see banner above"
 settings.sync.modules.label
 settings.sync.modules.description
 settings.sync.ioActions.label
@@ -455,10 +501,12 @@ export function importFromText(text: string): SyncBundle {
   - 取消收合但不清 store
   - 套用呼叫 `onResolve` 含正確 resolved map
   - > 24h 顯示 stale warning
-- `TitleBar.test.tsx`（若不存在則新建）
+  - 同名 field collision（兩 row flatten 後 `ResolvedFields` 只剩 1 entry，值為後 row 的選擇）
+- `TitleBar.test.tsx`（**既有檔，擴充**）
   - 0 conflicts 不顯示 icon
   - N conflicts 顯示 icon + tooltip 含 N
   - click 呼叫 setLocation('/settings/sync')
+  - Banner guard：父層傳 pendingConflicts 空陣列 → `<SyncConflictBanner />` 不該掛載（由 SyncSection 條件渲染防禦）
 - `object-depth.test.ts`
   - 淺 obj 回正確深度
   - 超過 max 丟 error
@@ -467,11 +515,15 @@ export function importFromText(text: string): SyncBundle {
 
 ### 10.2 擴充測試
 
-- `manual-provider.test.ts`：oversized text / too-deep object 抛正確 error
+- `manual-provider.test.ts`：
+  - oversized text 抛 `ImportError('too-large')`
+  - too-deep object 抛 `ImportError('too-deep')`
+  - **既有 JSON 錯誤 assertion 要更新**：從 `expect(...).toThrow(SyntaxError)` 改為 `expect(...).toThrow(ImportError)` 且 `err.code === 'invalid-json'`
+  - 既有 shape validation 錯誤改成 `ImportError('invalid-shape')`
 - `daemon-provider.test.ts`：clientId 含 `/&?=` 等字元的 URL encode；limit 非整數丟 error
-- `SyncSection.test.tsx`：concurrent export + import 不衝突；衝突出現後 store pending 寫入；apply 成功後 store clear
+- `SyncSection.test.tsx`：concurrent export + import 不衝突；衝突出現後 store pending 寫入；apply 成功後 store clear + baseline 等於 remoteBundle
 - `parseRoute.test.ts`：`/settings/sync` → section 解析；惡意 section 字串 fallback
-- `SettingsPage.test.tsx`：初始 URL `/settings/sync` 選中 sync；sidebar 點擊同步 URL
+- `SettingsPage.test.tsx`：初始 URL `/settings/sync` 選中 sync；sidebar 點擊同步 URL（測試用 `wouter/memory-location`，見 §7.4）
 - `use-sync-store.test.ts`：`setPendingConflicts` / `clearPendingConflicts` 行為 + persist
 
 ### 10.3 手動 integration
