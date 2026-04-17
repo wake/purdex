@@ -70,7 +70,7 @@ describe('HomeRow', () => {
   it('chevron toggles home expand state', () => {
     useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
     renderRow({ standaloneTabIds: ['t1'], tabsById: { t1: mkTab('t1', 'alpha') } })
-    const chevron = screen.getByRole('button', { name: /expand|collapse/i })
+    const chevron = screen.getByRole('button', { name: /expand home|collapse home/i })
     fireEvent.click(chevron)
     expect(useLayoutStore.getState().workspaceExpanded['home']).toBe(true)
   })

@@ -26,7 +26,6 @@ import {
 import { useWorkspaceStore } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
 import { RegionResize } from '../../../components/RegionResize'
-import { CollapseButton } from './CollapseButton'
 import { WorkspaceRow } from './WorkspaceRow'
 import { HomeRow } from './HomeRow'
 import type { ActivityBarProps } from './activity-bar-props'
@@ -308,9 +307,6 @@ export function ActivityBarWide(props: ActivityBarProps) {
         </DndContext>
 
         <div className="mt-auto flex flex-col gap-1 px-2 pb-1 pt-2">
-          <div className="flex items-center justify-end">
-            <CollapseButton />
-          </div>
           <button
             title={t('nav.new_workspace')}
             onClick={onAddWorkspace}

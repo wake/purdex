@@ -2,13 +2,28 @@ import { CaretDoubleLeft, CaretDoubleRight } from '@phosphor-icons/react'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 
-export function CollapseButton() {
+type Variant = 'header-right' | 'divider' | 'topbar'
+
+interface Props {
+  variant?: Variant
+}
+
+const VARIANT_CLASSES: Record<Variant, string> = {
+  'header-right': 'w-6 h-6 rounded-md',
+  // Divider: floats on the narrow bar's right edge, hover-revealed.
+  divider: 'absolute top-3 right-[-11px] w-[22px] h-[22px] rounded-full bg-surface-tertiary border border-border-subtle shadow-sm opacity-0 hover:opacity-100 focus:opacity-100 transition-opacity z-10',
+  topbar: 'w-6 h-6 rounded',
+}
+
+export function CollapseButton({ variant = 'header-right' }: Props) {
   const width = useLayoutStore((s) => s.activityBarWidth)
   const tabPosition = useLayoutStore((s) => s.tabPosition)
   const toggle = useLayoutStore((s) => s.toggleActivityBarWidth)
   const t = useI18nStore((s) => s.t)
 
-  const locked = tabPosition === 'left'
+  // Task 1 extended tabPosition to include 'both'. Both 'left' and 'both' lock
+  // the activity bar to wide — the button must reflect that.
+  const locked = tabPosition === 'left' || tabPosition === 'both'
   const isWide = width === 'wide'
   const Icon = isWide ? CaretDoubleLeft : CaretDoubleRight
   const label = locked
@@ -24,14 +39,15 @@ export function CollapseButton() {
       title={label}
       aria-label={label}
       aria-pressed={isWide}
+      data-variant={variant}
       onClick={toggle}
-      className={`w-[30px] h-[30px] rounded-md flex items-center justify-center ${
+      className={`${VARIANT_CLASSES[variant]} flex items-center justify-center transition ${
         locked
           ? 'text-text-muted/50 cursor-not-allowed'
           : 'cursor-pointer text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
       }`}
     >
-      <Icon size={14} />
+      <Icon size={12} />
     </button>
   )
 }

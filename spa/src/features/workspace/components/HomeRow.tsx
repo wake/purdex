@@ -4,6 +4,7 @@ import type { Tab } from '../../../types/tab'
 import { useLayoutStore, HOME_WS_KEY } from '../../../stores/useLayoutStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { InlineTabList } from './InlineTabList'
+import { CollapseButton } from './CollapseButton'
 
 interface Props {
   isActive: boolean
@@ -48,7 +49,7 @@ export function HomeRow(props: Props) {
       <div
         ref={setHeaderDropRef}
         data-testid="home-header"
-        className={`mx-2 flex items-center gap-1 pr-1.5 rounded-md text-sm transition-colors ${
+        className={`group/home-header mx-2 flex items-center gap-1 pr-1.5 rounded-md text-sm transition-colors ${
           isActive
             ? 'bg-surface-hover text-text-primary ring-1 ring-purple-400'
             : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
@@ -82,6 +83,7 @@ export function HomeRow(props: Props) {
           />
           <span className="truncate">{t('nav.home')}</span>
         </button>
+        <CollapseButton variant="header-right" />
       </div>
 
       {showTabs && expanded && (

@@ -135,7 +135,8 @@ export function ActivityBarNarrow({
   const isHomeActive = !activeWorkspaceId
   const showHomeBadge = (!isHomeActive || !!activeStandaloneTabId) && homeUnreadCount > 0
   return (
-    <div className="hidden lg:flex w-11 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 px-px gap-2.5 flex-shrink-0">
+    <div className="relative hidden lg:flex">
+      <div className="w-11 flex flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 px-px gap-2.5 flex-shrink-0">
       {/* Home — standalone tabs */}
       <div className="relative group">
         {homeStatus && (!isHomeActive || !!activeStandaloneTabId) && (
@@ -195,7 +196,6 @@ export function ActivityBarNarrow({
 
       {/* Add + Settings */}
       <div className="mt-auto flex flex-col items-center gap-2 pb-1">
-        <CollapseButton />
         <button
           title={t('nav.new_workspace')}
           onClick={onAddWorkspace}
@@ -218,6 +218,8 @@ export function ActivityBarNarrow({
           <GearSix size={16} />
         </button>
       </div>
+      </div>
+      <CollapseButton variant="divider" />
     </div>
   )
 }
