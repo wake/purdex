@@ -9,12 +9,14 @@ vi.mock('../features/workspace/lib/icon-path-cache', () => ({
 import { clearModuleRegistry, getModules, getPaneRenderer } from './module-registry'
 import { clearNewTabRegistry, getNewTabProviders } from './new-tab-registry'
 import { clearSettingsSectionRegistry, getSettingsSections } from './settings-section-registry'
+import { clearInterfaceSubsectionRegistry, getInterfaceSubsections } from './interface-subsection-registry'
 import { registerBuiltinModules } from './register-modules'
 
 function clearAll() {
   clearModuleRegistry()
   clearNewTabRegistry()
   clearSettingsSectionRegistry()
+  clearInterfaceSubsectionRegistry()
 }
 
 describe('registerBuiltinModules', () => {
@@ -64,5 +66,23 @@ describe('registerBuiltinModules', () => {
     registerBuiltinModules()
     const electron = getSettingsSections().find((s) => s.id === 'electron')
     expect(electron).toBeDefined()
+  })
+
+  it('registers interface section with order=2', () => {
+    registerBuiltinModules()
+    const sections = getSettingsSections()
+    const iface = sections.find((s) => s.id === 'interface')
+    expect(iface).toBeDefined()
+    expect(iface?.order).toBe(2)
+    expect(iface?.component).toBeDefined()
+  })
+
+  it('registers interface subsections: new-tab enabled, pane/sidebar disabled', () => {
+    registerBuiltinModules()
+    const subs = getInterfaceSubsections()
+    expect(subs.map((s) => s.id)).toEqual(['new-tab', 'pane', 'sidebar'])
+    expect(subs[0].disabled).toBeFalsy()
+    expect(subs[1].disabled).toBe(true)
+    expect(subs[2].disabled).toBe(true)
   })
 })

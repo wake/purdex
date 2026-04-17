@@ -20,17 +20,18 @@ globalThis.ResizeObserver = class ResizeObserver {
   disconnect() {}
 }
 
-// jsdom does not implement matchMedia
+// jsdom 不提供 matchMedia
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
+  configurable: true,
   value: (query: string) => ({
     matches: false,
     media: query,
+    onchange: null,
     addEventListener: () => {},
     removeEventListener: () => {},
-    dispatchEvent: () => false,
-    onchange: null,
     addListener: () => {},
     removeListener: () => {},
+    dispatchEvent: () => false,
   }),
 })

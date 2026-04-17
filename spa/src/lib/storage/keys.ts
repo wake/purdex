@@ -12,6 +12,7 @@ export const STORAGE_KEYS = {
   NOTIFICATION_SETTINGS: 'purdex-notification-settings',
   BROWSER_HISTORY: 'purdex-browser-history',
   LAYOUT: 'purdex-layout',
+  NEW_TAB_LAYOUT: 'purdex-newtab-layout',
   /** 手動管理（非 Zustand store），直接操作 localStorage，不走 browserStorage/syncManager */
   NOTIFICATION_SEEN: 'purdex-notification-seen',
   MODULE_CONFIG: 'purdex-module-config',

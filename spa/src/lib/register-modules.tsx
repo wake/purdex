@@ -36,7 +36,11 @@ import { LocalBackend } from './fs-backend-local'
 import { registerFsBackend, getFsBackend } from './fs-backend'
 import { registerFileOpener } from './file-opener-registry'
 import { useHostStore } from '../stores/useHostStore'
+import { useState } from 'react'
 import { registerSyncContributors } from './sync/register-sync'
+import { registerInterfaceSubsection, getInterfaceSubsections } from './interface-subsection-registry'
+import { InterfaceSection } from '../components/settings/InterfaceSection'
+import { NewTabSubsection } from '../components/settings/new-tab/NewTabSubsection'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
   const handleSelect = (content: PaneContent) => {
@@ -59,6 +63,17 @@ function BrowserPaneWrapper({ pane }: PaneRendererProps) {
 
 function MemoryMonitorPaneWrapper() {
   return <MemoryMonitorPage />
+}
+
+function InterfaceSectionHost() {
+  const subs = getInterfaceSubsections()
+  const [active, setActive] = useState<string>(() => subs[0]?.id ?? '')
+  if (subs.length === 0) {
+    // Defensive: registry not populated yet (e.g. HMR ordering race).
+    // Avoid blank-area silent failure; next render should succeed.
+    return <div className="flex-1 p-6 text-sm text-text-muted">Loading...</div>
+  }
+  return <InterfaceSection activeSubsection={active} onSelectSubsection={setActive} />
 }
 
 export function registerBuiltinModules(): void {
@@ -227,6 +242,12 @@ export function registerBuiltinModules(): void {
   // Settings sections
   registerSettingsSection({ id: 'appearance', label: 'settings.section.appearance', order: 0, component: AppearanceSection })
   registerSettingsSection({ id: 'terminal', label: 'settings.section.terminal', order: 1, component: TerminalSection })
+  registerSettingsSection({
+    id: 'interface',
+    label: 'settings.section.interface',
+    order: 2,
+    component: InterfaceSectionHost,
+  })
   registerSettingsSection({ id: 'workspace', label: 'settings.section.workspace', order: 10 }) // reserved
   registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: 11, component: SyncSection })
   registerSettingsSection({
@@ -240,6 +261,30 @@ export function registerBuiltinModules(): void {
     label: 'settings.section.editor_buffers',
     order: 9,
     component: BufferListSection,
+  })
+
+  // Interface subsections
+  registerInterfaceSubsection({
+    id: 'new-tab',
+    label: 'settings.interface.new_tab',
+    order: 0,
+    component: NewTabSubsection,
+  })
+  registerInterfaceSubsection({
+    id: 'pane',
+    label: 'settings.interface.pane',
+    order: 1,
+    component: () => null,
+    disabled: true,
+    disabledReason: 'settings.coming_soon',
+  })
+  registerInterfaceSubsection({
+    id: 'sidebar',
+    label: 'settings.interface.sidebar',
+    order: 2,
+    component: () => null,
+    disabled: true,
+    disabledReason: 'settings.coming_soon',
   })
 
   // New-tab providers

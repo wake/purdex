@@ -21,6 +21,7 @@ import { useShortcuts } from './hooks/useShortcuts'
 import './lib/browser-shortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useElectronIpc } from './hooks/useElectronIpc'
+import { useNewTabBootstrap } from './hooks/useNewTabBootstrap'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { useWorkspaceWindowActions } from './hooks/useWorkspaceWindowActions'
 import { isStandaloneTab } from './types/tab'
@@ -71,6 +72,7 @@ export default function App() {
   useShortcuts()
   useNotificationDispatcher()
   useElectronIpc()
+  useNewTabBootstrap()
 
   // Reconcile workspaceExpanded only when the id set actually changes
   // (workspace rename / tab reorder replace the `workspaces` ref but preserve ids).
