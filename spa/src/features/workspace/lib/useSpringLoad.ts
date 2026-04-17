@@ -30,6 +30,9 @@ export function useSpringLoad(delayMs: number): SpringLoadHook {
     [delayMs],
   )
 
+  // timerRef is a stable mutable ref, so the unmount cleanup always reads
+  // the most recently scheduled id — empty deps are intentional and safe
+  // even if delayMs changes across renders.
   useEffect(() => {
     return () => {
       if (timerRef.current) {

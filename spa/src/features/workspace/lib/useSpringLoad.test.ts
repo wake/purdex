@@ -102,4 +102,24 @@ describe('useSpringLoad', () => {
     })
     expect(onExpire).not.toHaveBeenCalled()
   })
+
+  it('unmount still cancels pending timer after delayMs changed across renders', () => {
+    // timerRef must be stable across renders so the unmount cleanup always
+    // observes the latest scheduled id, even if the caller changed delayMs.
+    vi.useFakeTimers()
+    const onExpire = vi.fn()
+    const { result, rerender, unmount } = renderHook(
+      ({ delay }: { delay: number }) => useSpringLoad(delay),
+      { initialProps: { delay: 500 } },
+    )
+    act(() => result.current.schedule('a', onExpire))
+    rerender({ delay: 1000 })
+    // Re-schedule after delayMs change — new timer id must be tracked.
+    act(() => result.current.schedule('a', onExpire))
+    unmount()
+    act(() => {
+      vi.advanceTimersByTime(2000)
+    })
+    expect(onExpire).not.toHaveBeenCalled()
+  })
 })
