@@ -23,7 +23,8 @@ export function SyncConflictBanner({ conflicts, remoteBundle, pendingAt, onResol
   const [expanded, setExpanded] = useState(false)
   const [choices, setChoices] = useState<Record<string, 'local' | 'remote'>>({})
 
-  const stale = Date.now() - pendingAt > STALE_MS
+  const [now] = useState<number>(() => Date.now())
+  const stale = useMemo(() => now - pendingAt > STALE_MS, [now, pendingAt])
   const total = conflicts.length
   const selected = conflicts.filter((c) => choices[`${c.contributor}::${c.field}`]).length
   const allDone = selected === total && total > 0
