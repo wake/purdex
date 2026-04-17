@@ -110,7 +110,11 @@ export function computeDragEndAction(
   }
 
   // Workspace header drop target → prepend to that workspace.
+  // Dropping a tab onto its own workspace header is a no-op — the tab already
+  // lives there, and falling through would call insertTab unnecessarily and
+  // flicker activeTabId without moving anything.
   if (overData.type === 'workspace-header') {
+    if (overData.wsId === activeData.sourceWsId) return NOOP
     return {
       kind: 'move-tab-to-workspace',
       tabId: activeData.tabId,

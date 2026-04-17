@@ -179,6 +179,17 @@ describe('computeDragEndAction', () => {
       })
     })
 
+    it('tab → own workspace-header drop target → noop (no phantom move)', () => {
+      const action = computeDragEndAction(
+        mkEvent(
+          { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1' } },
+          { id: 'ws-header-w1', data: { type: 'workspace-header', wsId: 'w1' } },
+        ),
+        ctx(),
+      )
+      expect(action).toEqual({ kind: 'noop' })
+    })
+
     it('tab → workspace-header drop target → move-tab-to-workspace afterTabId=null (prepend)', () => {
       const action = computeDragEndAction(
         mkEvent(
