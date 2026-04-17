@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.0.0-alpha.160 — 2026-04-18
+
+### Sync P0 — 體質清理
+
+- **ConflictBanner**: new UI for resolving per-field sync conflicts. Appears at top of Settings → Sync when pending conflicts exist. Supports expand/collapse, per-row local/remote choice, bulk "keep all local / use all remote", all-or-nothing apply.
+- **TitleBar warning icon**: global Phosphor `Warning` icon next to workspace title when there are pending sync conflicts. Tooltip shows count, click deep-links to `/settings/sync`.
+- **`/settings/<section>` deep-link**: URL now reflects the active settings section; back/forward navigation and external links (e.g. TitleBar icon) open the correct section.
+- **i18n**: full migration of SyncSection — 47 new `settings.sync.*` keys in `en.json` and `zh-TW.json`. Closes #397.
+- **Fix #394**: DaemonProvider URL-encodes `clientId` query params; `listHistory` rejects non-positive-integer limits.
+- **Fix #395**: `handleExportAll` now honours the `busy` flag to prevent mid-operation export.
+- **Fix #396**: `importFromText` enforces 5 MB size + 32 depth limits via typed `ImportError`, surfaced as friendly i18n messages.
+- **State**: `useSyncStore` persists `pendingConflicts` / `pendingRemoteBundle` / `pendingConflictsAt` across sessions.
+
+### Deferred / tracked separately
+
+- Daemon Pairing UI → gh #421 (Phase P2)
+- Cloud Provider → gh #422 (Phase P4)
+- Onboarding flow → gh #423 (Phase P6)
+- Sync History Dialog → Phase P1
+- File Provider → Phase P3
+- Content-addressed (Editor) → Phase P5
+
 ## [1.0.0-alpha.159] - 2026-04-18
 
 ### 介面調整
