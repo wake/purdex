@@ -1,13 +1,14 @@
-import { Columns, Rows, GridFour, Square, SidebarSimple, SquareHalfBottom } from '@phosphor-icons/react'
+import { Columns, Rows, GridFour, Square, SidebarSimple, SquareHalfBottom, Warning } from '@phosphor-icons/react'
+import { useLocation } from 'wouter'
 import { useTabStore } from '../stores/useTabStore'
 import { useLayoutStore } from '../stores/useLayoutStore'
+import { useSyncStore } from '../lib/sync/use-sync-store'
+import { useI18nStore } from '../stores/useI18nStore'
 import type { LayoutPattern } from '../types/tab'
 import type { SidebarRegion } from '../types/layout'
 import { CollapseButton } from '../features/workspace/components/CollapseButton'
 
-interface Props {
-  title: string
-}
+interface Props { title: string }
 
 const patterns: { pattern: LayoutPattern; icon: typeof Square; label: string }[] = [
   { pattern: 'single', icon: Square, label: 'Single pane' },
@@ -27,23 +28,35 @@ export function TitleBar({ title }: Props) {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const regions = useLayoutStore((s) => s.regions)
   const toggleVisibility = useLayoutStore((s) => s.toggleVisibility)
+  const pendingCount = useSyncStore((s) => s.pendingConflicts.length)
+  const t = useI18nStore((s) => s.t)
+  const [, setLocation] = useLocation()
 
   const handlePattern = (pattern: LayoutPattern) => {
     if (!activeTabId) return
     useTabStore.getState().applyLayout(activeTabId, pattern)
   }
 
-  const visibleToggles = regionToggles
-
   return (
     <div
       className="shrink-0 relative flex items-center bg-surface-secondary border-b border-border-subtle px-2"
       style={{ height: 30, WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
-      {/* Title — absolute positioned for true center across full window width */}
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none px-2">
-        <span className="text-xs text-text-secondary truncate max-w-[calc(100%-26rem)]">{title}</span>
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none px-2 gap-2">
+        <span className="text-xs text-text-secondary truncate max-w-[calc(100%-27rem)]">{title}</span>
+        {pendingCount > 0 && (
+          <button
+            aria-label={t('settings.sync.conflict.tooltip', { count: pendingCount })}
+            title={t('settings.sync.conflict.tooltip', { count: pendingCount })}
+            className="pointer-events-auto flex items-center shrink-0 cursor-pointer"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            onClick={() => setLocation('/settings/sync')}
+          >
+            <Warning size={14} className="text-yellow-500" />
+          </button>
+        )}
       </div>
+
       <div className="flex-1" />
       <div
         data-testid="layout-buttons"
@@ -52,8 +65,7 @@ export function TitleBar({ title }: Props) {
       >
         <CollapseButton variant="topbar" />
         <div className="w-px h-3.5 bg-border-subtle mx-0.5" />
-        {/* Region toggles */}
-        {visibleToggles.map(({ region, icon: Icon, label, mirror }) => {
+        {regionToggles.map(({ region, icon: Icon, label, mirror }) => {
           const isVisible = regions[region].mode !== 'hidden'
           return (
             <button
@@ -71,9 +83,7 @@ export function TitleBar({ title }: Props) {
             </button>
           )
         })}
-        {/* Separator */}
         <div className="w-px h-3.5 bg-border-subtle mx-0.5" />
-        {/* Layout pattern buttons */}
         {patterns.map(({ pattern, icon: Icon, label }) => (
           <button
             key={pattern}
