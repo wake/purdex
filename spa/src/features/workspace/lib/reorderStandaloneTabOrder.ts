@@ -4,12 +4,20 @@
  * is replaced by `newOrder` and re-inserted at the index where the first
  * standalone originally appeared.
  *
- * Phantom ids in `newOrder` (not present in `current`) are dropped. If the
- * filtered `newOrder` is empty, the original array is returned unchanged.
+ * Phantom ids in `newOrder` (not present in `current`) are dropped, and
+ * duplicates are collapsed to the first occurrence. If the filtered
+ * `newOrder` is empty, the original array is returned unchanged.
  */
 export function reorderStandaloneTabOrder(current: string[], newOrder: string[]): string[] {
   const currentSet = new Set(current)
-  const filtered = newOrder.filter((id) => currentSet.has(id))
+  const seen = new Set<string>()
+  const filtered: string[] = []
+  for (const id of newOrder) {
+    if (currentSet.has(id) && !seen.has(id)) {
+      filtered.push(id)
+      seen.add(id)
+    }
+  }
   if (filtered.length === 0) return current.slice()
   const standaloneSet = new Set(filtered)
   const kept: string[] = []

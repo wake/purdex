@@ -57,5 +57,11 @@ describe('reorderStandaloneTabOrder', () => {
       // All ids phantom → effectively empty newOrder → return original slice
       expect(result).toEqual(['a', 's1', 'b'])
     })
+
+    it('deduplicates repeated ids in newOrder', () => {
+      const current = ['a', 's1', 'b', 's2']
+      const result = reorderStandaloneTabOrder(current, ['s1', 's1', 's2'])
+      expect(result).toEqual(['a', 's1', 's2', 'b'])
+    })
   })
 })

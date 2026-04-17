@@ -192,6 +192,17 @@ describe('useWorkspaceStore', () => {
       useWorkspaceStore.getState().reorderWorkspaceTabs('w1', ['t2', 'phantom', 't1'])
       expect(useWorkspaceStore.getState().workspaces[0].tabs).toEqual(['t2', 't1'])
     })
+
+    it('deduplicates repeated ids without losing tabs', () => {
+      useWorkspaceStore.setState({
+        workspaces: [
+          { id: 'w1', name: 'W1', tabs: ['t1', 't2'], activeTabId: null },
+        ],
+        activeWorkspaceId: 'w1',
+      })
+      useWorkspaceStore.getState().reorderWorkspaceTabs('w1', ['t1', 't1'])
+      expect(useWorkspaceStore.getState().workspaces[0].tabs).toEqual(['t1', 't2'])
+    })
   })
 
   describe('setModuleConfig', () => {
