@@ -10,7 +10,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import type { AgentStatus, TabIndicatorStyle } from '../stores/useAgentStore'
 import { compositeKey } from '../lib/composite-key'
-import { AGENT_ICONS } from '../lib/agent-icons'
+import { getAgentIcon } from '../lib/agent-icons'
 import type { Session } from '../lib/host-api'
 
 const EMPTY_SESSIONS: Session[] = []
@@ -25,7 +25,18 @@ function renderTabIcon(
   iconSize: number,
   subagentCount: number,
 ) {
-  if (tabIndicatorStyle === 'replace' && agentStatus) {
+  const iconBox = (
+    <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
+      {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
+    </span>
+  )
+
+  // iconOnly, or any mode without a status event → show icon only
+  if (tabIndicatorStyle === 'iconOnly' || !agentStatus) {
+    return iconBox
+  }
+
+  if (tabIndicatorStyle === 'dotOnly') {
     return (
       <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
         <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
@@ -33,15 +44,20 @@ function renderTabIcon(
       </span>
     )
   }
-  if (tabIndicatorStyle === 'inline') {
+
+  if (tabIndicatorStyle === 'sideBySide') {
     return (
-      <span className="relative inline-flex items-center justify-center flex-shrink-0" style={{ minWidth: 16 }}>
+      <span className="relative inline-flex items-center flex-shrink-0">
+        <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
+          <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
+          {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
+        </span>
         {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
-        <TabStatusDot status={agentStatus} style="inline" isActive={isActive} />
-        {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
       </span>
     )
   }
+
+  // overlay (default): icon + small breathing dot in upper-right
   return (
     <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
       {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
@@ -101,9 +117,10 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const subagentCount = useAgentStore((s) => ck ? (s.subagents[ck]?.length ?? 0) : 0)
   const agentType = useAgentStore((s) => ck ? s.agentTypes[ck] : undefined)
   const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
+  const ccIconVariant = useAgentStore((s) => s.ccIconVariant)
   const isTerminated = primaryContent.kind === 'tmux-session' && !!primaryContent.terminated
   // Keep the terminated pane's SmileySad tombstone instead of the agent icon.
-  const agentIcon = !isTerminated && agentType ? AGENT_ICONS[agentType] : undefined
+  const agentIcon = !isTerminated && agentType ? getAgentIcon(agentType, ccIconVariant) : undefined
   const IconComponent = (agentIcon ?? paneIcon) as React.ComponentType<{ size: number; className?: string }> | undefined
   const isHostOffline = useHostStore((s) => {
     if (!hostId || isTerminated) return false

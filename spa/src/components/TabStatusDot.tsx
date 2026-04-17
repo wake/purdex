@@ -1,11 +1,12 @@
 // spa/src/components/TabStatusDot.tsx
 import type { AgentStatus } from '../stores/useAgentStore'
 
-export type TabIndicatorStyle = 'overlay' | 'replace' | 'inline'
+/** Visual style of the dot itself — orthogonal to the tab-level indicator mode. */
+export type DotStyle = 'overlay' | 'replace' | 'inline'
 
 interface Props {
   status: AgentStatus | undefined
-  style: TabIndicatorStyle
+  style: DotStyle
   isActive: boolean
 }
 
@@ -37,7 +38,7 @@ export function TabStatusDot({ status, style, isActive }: Props) {
           height: '6px',
           position: 'absolute',
           top: 0,
-          right: '-1px',
+          right: 0,
           backgroundColor: color,
           boxShadow: `0 0 0 1.5px ${breatheBg}`,
           '--breathe-color': color,
