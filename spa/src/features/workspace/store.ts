@@ -91,9 +91,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       reorderWorkspaceTabs: (wsId, tabIds) =>
         set((state) => ({
-          workspaces: state.workspaces.map((ws) =>
-            ws.id === wsId ? { ...ws, tabs: tabIds } : ws,
-          ),
+          workspaces: state.workspaces.map((ws) => {
+            if (ws.id !== wsId) return ws
+            const currentSet = new Set(ws.tabs)
+            const seen = new Set<string>()
+            const filtered: string[] = []
+            for (const id of tabIds) {
+              if (currentSet.has(id) && !seen.has(id)) {
+                filtered.push(id)
+                seen.add(id)
+              }
+            }
+            // Guard: if newOrder is a stale subset, preserve missing tabs at end
+            if (filtered.length < ws.tabs.length) {
+              const missing = ws.tabs.filter((id) => !seen.has(id))
+              return { ...ws, tabs: [...filtered, ...missing] }
+            }
+            return { ...ws, tabs: filtered }
+          }),
         })),
 
       reorderWorkspaces: (orderedIds) =>

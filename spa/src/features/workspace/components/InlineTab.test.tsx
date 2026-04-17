@@ -73,3 +73,30 @@ describe('InlineTab', () => {
     expect(onMiddleClick).toHaveBeenCalledWith('t1')
   })
 })
+
+describe('InlineTab — drag-safe pointerdown + isPinned data', () => {
+  it('click on row still fires onSelect after pointerdown', () => {
+    const onSelect = vi.fn()
+    renderWith(mkTab({ pinned: false }), 'T1', { sourceWsId: null, onSelect })
+    const row = screen.getByTestId('inline-tab-row')
+    fireEvent.pointerDown(row, { button: 0, clientX: 10, clientY: 10 })
+    fireEvent.click(row)
+    expect(onSelect).toHaveBeenCalledWith('t1')
+  })
+
+  it('pointerdown on active tab prevents default to stop focus theft', () => {
+    renderWith(mkTab({ pinned: false }), 'T1', { sourceWsId: null, isActive: true })
+    const row = screen.getByTestId('inline-tab-row')
+    const evt = new Event('pointerdown', { bubbles: true, cancelable: true })
+    row.dispatchEvent(evt)
+    expect(evt.defaultPrevented).toBe(true)
+  })
+
+  it('pointerdown on inactive tab does NOT preventDefault', () => {
+    renderWith(mkTab({ pinned: false }), 'T1', { sourceWsId: null, isActive: false })
+    const row = screen.getByTestId('inline-tab-row')
+    const evt = new Event('pointerdown', { bubbles: true, cancelable: true })
+    row.dispatchEvent(evt)
+    expect(evt.defaultPrevented).toBe(false)
+  })
+})

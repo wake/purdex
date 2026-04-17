@@ -74,7 +74,6 @@ export function WorkspaceRow(props: Props) {
             e.stopPropagation()
             toggleExpanded(workspace.id)
           }}
-          onMouseDown={(e) => e.stopPropagation()}
           className="p-1 rounded hover:bg-surface-secondary text-text-muted cursor-pointer"
         >
           <Chevron size={12} />
@@ -82,6 +81,7 @@ export function WorkspaceRow(props: Props) {
         <button
           type="button"
           onClick={() => onSelectWorkspace(workspace.id)}
+          onPointerDown={(e) => e.stopPropagation()}
           onContextMenu={(e) => {
             e.preventDefault()
             onContextMenuWorkspace?.(e, workspace.id)

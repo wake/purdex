@@ -165,6 +165,46 @@ describe('useWorkspaceStore', () => {
 
   // === setModuleConfig ===
 
+  // === reorderWorkspaceTabs stale guard ===
+
+  describe('reorderWorkspaceTabs — stale guard', () => {
+    it('preserves tabs missing from stale newOrder (concurrent insert safety)', () => {
+      useWorkspaceStore.setState({
+        workspaces: [
+          { id: 'w1', name: 'W1', tabs: ['t1', 't2', 't3'], activeTabId: null },
+        ],
+        activeWorkspaceId: 'w1',
+      })
+      // Caller captures stale snapshot ['t1', 't2'] (t3 was inserted concurrently).
+      useWorkspaceStore.getState().reorderWorkspaceTabs('w1', ['t2', 't1'])
+      const ws = useWorkspaceStore.getState().workspaces[0]
+      // Missing tabs appended at end; reordered subset at front.
+      expect(ws.tabs).toEqual(['t2', 't1', 't3'])
+    })
+
+    it('drops phantom ids not present in current ws.tabs', () => {
+      useWorkspaceStore.setState({
+        workspaces: [
+          { id: 'w1', name: 'W1', tabs: ['t1', 't2'], activeTabId: null },
+        ],
+        activeWorkspaceId: 'w1',
+      })
+      useWorkspaceStore.getState().reorderWorkspaceTabs('w1', ['t2', 'phantom', 't1'])
+      expect(useWorkspaceStore.getState().workspaces[0].tabs).toEqual(['t2', 't1'])
+    })
+
+    it('deduplicates repeated ids without losing tabs', () => {
+      useWorkspaceStore.setState({
+        workspaces: [
+          { id: 'w1', name: 'W1', tabs: ['t1', 't2'], activeTabId: null },
+        ],
+        activeWorkspaceId: 'w1',
+      })
+      useWorkspaceStore.getState().reorderWorkspaceTabs('w1', ['t1', 't1'])
+      expect(useWorkspaceStore.getState().workspaces[0].tabs).toEqual(['t1', 't2'])
+    })
+  })
+
   describe('setModuleConfig', () => {
     it('sets a module config value on a workspace', () => {
       const { workspaces } = useWorkspaceStore.getState()

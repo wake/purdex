@@ -95,4 +95,24 @@ describe('WorkspaceRow', () => {
     fireEvent.click(addBtn)
     expect(onAdd).toHaveBeenCalledWith('ws-1')
   })
+
+  describe('drag-steals-click guard', () => {
+    it('name button stops pointer-down propagation so dnd-kit drag does not start on click', () => {
+      renderRow(mkWs('ws-1', 'Alpha'))
+      const nameBtn = screen.getByText('Alpha').closest('button')!
+      const evt = new Event('pointerdown', { bubbles: true, cancelable: true })
+      const stopPropagationSpy = vi.spyOn(evt, 'stopPropagation')
+      nameBtn.dispatchEvent(evt)
+      expect(stopPropagationSpy).toHaveBeenCalled()
+    })
+
+    it('chevron does not block pointer-down (keeps row drag reachable)', () => {
+      renderRow(mkWs('ws-1', 'Alpha'))
+      const chevron = screen.getByRole('button', { name: /expand|collapse/i })
+      const evt = new Event('pointerdown', { bubbles: true, cancelable: true })
+      const stopPropagationSpy = vi.spyOn(evt, 'stopPropagation')
+      chevron.dispatchEvent(evt)
+      expect(stopPropagationSpy).not.toHaveBeenCalled()
+    })
+  })
 })
