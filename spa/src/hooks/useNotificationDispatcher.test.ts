@@ -122,7 +122,7 @@ describe('handleNotificationClick workspace switching', () => {
     // Reset all stores
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
     useWorkspaceStore.getState().reset()
-    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {}, tabIndicatorStyle: 'replace' })
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {}, tabIndicatorStyle: 'badge' })
     useNotificationSettingsStore.setState({ agents: {} })
     useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
     // Mock window.electronAPI as undefined (not in Electron in tests)

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TerminalSection } from './TerminalSection'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
+import { useAgentStore } from '../../stores/useAgentStore'
 
 describe('TerminalSection', () => {
   beforeEach(() => {
@@ -12,6 +13,7 @@ describe('TerminalSection', () => {
       terminalRevealDelay: 300,
       terminalSettingsVersion: 0,
     })
+    useAgentStore.setState({ tabIndicatorStyle: 'badge', ccIconVariant: 'bot' })
   })
 
   it('renders section title', () => {
@@ -94,5 +96,32 @@ describe('TerminalSection', () => {
     render(<TerminalSection />)
     fireEvent.click(screen.getByText('WebGL')) // already selected
     expect(useUISettingsStore.getState().terminalSettingsVersion).toBe(0)
+  })
+
+  it('updates tabIndicatorStyle when a segment is clicked', () => {
+    render(<TerminalSection />)
+    fireEvent.click(screen.getByText('Icon only'))
+    expect(useAgentStore.getState().tabIndicatorStyle).toBe('icon')
+    fireEvent.click(screen.getByText('Dot only'))
+    expect(useAgentStore.getState().tabIndicatorStyle).toBe('dot')
+    fireEvent.click(screen.getByText('Dot beside icon'))
+    expect(useAgentStore.getState().tabIndicatorStyle).toBe('iconDot')
+  })
+
+  it('updates ccIconVariant when a cc icon button is clicked', () => {
+    render(<TerminalSection />)
+    fireEvent.click(screen.getByRole('button', { name: /Star/ }))
+    expect(useAgentStore.getState().ccIconVariant).toBe('star')
+    fireEvent.click(screen.getByRole('button', { name: /Bot/ }))
+    expect(useAgentStore.getState().ccIconVariant).toBe('bot')
+  })
+
+  it('shows cc_icon hidden hint only in dot mode', () => {
+    useAgentStore.setState({ tabIndicatorStyle: 'badge' })
+    const { rerender } = render(<TerminalSection />)
+    expect(screen.queryByText(/no visible effect/i)).toBeNull()
+    useAgentStore.setState({ tabIndicatorStyle: 'dot' })
+    rerender(<TerminalSection />)
+    expect(screen.getByText(/no visible effect/i)).toBeTruthy()
   })
 })

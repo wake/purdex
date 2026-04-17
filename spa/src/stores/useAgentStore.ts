@@ -6,7 +6,8 @@ import { compositeKey } from '../lib/composite-key'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 export type AgentStatus = 'running' | 'waiting' | 'idle' | 'error'
-export type TabIndicatorStyle = 'overlay' | 'replace' | 'inline'
+export type TabIndicatorStyle = 'icon' | 'dot' | 'iconDot' | 'badge'
+export type CcIconVariant = 'bot' | 'star'
 
 /** Normalized event from backend (replaces AgentHookEvent). */
 export interface NormalizedEvent {
@@ -30,6 +31,7 @@ interface AgentState {
   // UI state
   unread: Record<string, boolean>
   tabIndicatorStyle: TabIndicatorStyle
+  ccIconVariant: CcIconVariant
 
   // Actions
   handleNormalizedEvent: (hostId: string, sessionCode: string, event: NormalizedEvent) => void
@@ -37,6 +39,7 @@ interface AgentState {
   markRead: (hostId: string, sessionCode: string) => void
   removeHost: (hostId: string) => void
   setTabIndicatorStyle: (style: TabIndicatorStyle) => void
+  setCcIconVariant: (variant: CcIconVariant) => void
 }
 
 export const useAgentStore = create<AgentState>()(
@@ -48,7 +51,8 @@ export const useAgentStore = create<AgentState>()(
       subagents: {},
       lastEvents: {},
       unread: {},
-      tabIndicatorStyle: 'replace' as TabIndicatorStyle,
+      tabIndicatorStyle: 'badge' as TabIndicatorStyle,
+      ccIconVariant: 'bot' as CcIconVariant,
 
       clearSession: (hostId, sessionCode) => {
         const key = compositeKey(hostId, sessionCode)
@@ -143,12 +147,16 @@ export const useAgentStore = create<AgentState>()(
       }),
 
       setTabIndicatorStyle: (style) => set({ tabIndicatorStyle: style }),
+      setCcIconVariant: (variant) => set({ ccIconVariant: variant }),
     }),
     {
       name: STORAGE_KEYS.AGENT,
       storage: purdexStorage,
-      version: 3,
-      partialize: (state) => ({ tabIndicatorStyle: state.tabIndicatorStyle }),
+      version: 4,
+      partialize: (state) => ({
+        tabIndicatorStyle: state.tabIndicatorStyle,
+        ccIconVariant: state.ccIconVariant,
+      }),
     },
   ),
 )

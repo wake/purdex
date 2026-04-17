@@ -24,7 +24,7 @@ describe('TabStatusDot', () => {
     expect(dot.style.height).toBe('6px')
     expect(dot.style.position).toBe('absolute')
     // running = green
-    expect(dot.style.getPropertyValue('--breathe-color')).toBe('#4ade80')
+    expect(dot.style.backgroundColor).toBe('rgb(74, 222, 128)')
   })
 
   it('renders dot for replace style', () => {
@@ -41,17 +41,4 @@ describe('TabStatusDot', () => {
     expect(dot.style.backgroundColor).toBe('rgb(250, 204, 21)')
   })
 
-  it('renders dot for inline style', () => {
-    cleanup()
-    render(
-      <TabStatusDot status="idle" style="inline" isActive={false} />,
-    )
-    const dot = screen.getByTestId('tab-status-dot')
-    expect(dot).toBeTruthy()
-    // inline: 6px
-    expect(dot.style.width).toBe('6px')
-    expect(dot.style.height).toBe('6px')
-    // idle = gray, no breathe animation
-    expect(dot.style.backgroundColor).toBe('rgb(107, 114, 128)')
-  })
 })

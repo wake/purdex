@@ -3,7 +3,7 @@ import { CheckCircle, XCircle, ArrowClockwise } from '@phosphor-icons/react'
 import { hostFetch } from '../../lib/host-api'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { AGENT_NAMES } from '../../lib/agent-icons'
+import { AGENT_NAMES } from '../../lib/agent-metadata'
 
 interface AgentInfo {
   installed: boolean

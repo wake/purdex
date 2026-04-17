@@ -40,7 +40,8 @@
     "electron": "^41.0.4",
     "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
-    "tailwindcss": "^4.2.2"
+    "tailwindcss": "^4.2.2",
+    "vite-plugin-svgr": "^5.2.0"
   },
   "dependencies": {
     "tar": "^7.5.13"

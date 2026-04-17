@@ -1,4 +1,6 @@
 import { useUISettingsStore, type TerminalRenderer, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
+import { useAgentStore, type TabIndicatorStyle, type CcIconVariant } from '../../stores/useAgentStore'
+import { CC_ICON_VARIANTS } from '../../lib/agent-icons'
 import { SettingItem } from './SettingItem'
 import { SegmentControl } from './SegmentControl'
 import { ToggleSwitch } from './ToggleSwitch'
@@ -19,11 +21,28 @@ export function TerminalSection() {
   const revealDelay = useUISettingsStore((s) => s.terminalRevealDelay)
   const setRevealDelay = useUISettingsStore((s) => s.setTerminalRevealDelay)
 
+  const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
+  const setTabIndicatorStyle = useAgentStore((s) => s.setTabIndicatorStyle)
+  const ccIconVariant = useAgentStore((s) => s.ccIconVariant)
+  const setCcIconVariant = useAgentStore((s) => s.setCcIconVariant)
+
   const t = useI18nStore((s) => s.t)
 
   const RENDERER_OPTIONS = [
     { value: 'webgl' as TerminalRenderer, label: t('settings.terminal.renderer.webgl') },
     { value: 'dom' as TerminalRenderer, label: t('settings.terminal.renderer.dom') },
+  ]
+
+  const TAB_INDICATOR_OPTIONS: { value: TabIndicatorStyle; label: string }[] = [
+    { value: 'icon', label: t('settings.terminal.tab_indicator.icon') },
+    { value: 'dot', label: t('settings.terminal.tab_indicator.dot') },
+    { value: 'iconDot', label: t('settings.terminal.tab_indicator.icon_dot') },
+    { value: 'badge', label: t('settings.terminal.tab_indicator.badge') },
+  ]
+
+  const CC_ICON_OPTIONS: { value: CcIconVariant; label: string }[] = [
+    { value: 'bot', label: t('settings.terminal.cc_icon.bot') },
+    { value: 'star', label: t('settings.terminal.cc_icon.star') },
   ]
 
   // Atomic: renderer + version + optional keepAlive clamp in one setState()
@@ -82,6 +101,42 @@ export function TerminalSection() {
           onChange={(e) => setRevealDelay(clamp(Number(e.target.value) || 0, 0, 2000))}
           className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-20 hover:border-text-muted focus:border-border-active focus:outline-none"
         />
+      </SettingItem>
+
+      <SettingItem label={t('settings.terminal.tab_indicator.label')} description={t('settings.terminal.tab_indicator.desc')}>
+        <SegmentControl options={TAB_INDICATOR_OPTIONS} value={tabIndicatorStyle} onChange={setTabIndicatorStyle} />
+      </SettingItem>
+
+      <SettingItem label={t('settings.terminal.cc_icon.label')} description={t('settings.terminal.cc_icon.desc')}>
+        <div className="flex flex-col gap-2 items-end">
+          <div className="flex gap-2">
+            {CC_ICON_OPTIONS.map((opt) => {
+              const VariantIcon = CC_ICON_VARIANTS[opt.value]
+              const isActive = opt.value === ccIconVariant
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => { if (!isActive) setCcIconVariant(opt.value) }}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs transition-colors cursor-pointer ${
+                    isActive
+                      ? 'bg-surface-elevated border-border-active text-text-primary'
+                      : 'bg-transparent border-border-default text-text-muted hover:text-text-primary hover:border-text-muted'
+                  }`}
+                  aria-pressed={isActive}
+                >
+                  <VariantIcon size={16} />
+                  <span>{opt.label}</span>
+                </button>
+              )
+            })}
+          </div>
+          {tabIndicatorStyle === 'dot' && (
+            <p className="text-xs text-text-muted text-right max-w-xs">
+              {t('settings.terminal.cc_icon.hidden_hint')}
+            </p>
+          )}
+        </div>
       </SettingItem>
     </div>
   )

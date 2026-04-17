@@ -1,11 +1,12 @@
 // spa/src/components/TabStatusDot.tsx
 import type { AgentStatus } from '../stores/useAgentStore'
 
-export type TabIndicatorStyle = 'overlay' | 'replace' | 'inline'
+/** Visual style of the dot itself — orthogonal to the tab-level indicator mode. */
+export type DotStyle = 'overlay' | 'replace'
 
 interface Props {
   status: AgentStatus | undefined
-  style: TabIndicatorStyle
+  style: DotStyle
   isActive: boolean
 }
 
@@ -22,12 +23,10 @@ export function TabStatusDot({ status, style, isActive }: Props) {
   const color = STATUS_COLORS[status]
   const isRunning = status === 'running'
 
-  // breathe CSS vars: --breathe-color = dot color, --breathe-bg = tab bg
-  const breatheBg = isActive
-    ? 'var(--surface-active)'
-    : 'var(--surface-secondary)'
-
   if (style === 'overlay') {
+    const ringColor = isActive
+      ? 'var(--surface-active)'
+      : 'var(--surface-secondary)'
     return (
       <span
         data-testid="tab-status-dot"
@@ -37,44 +36,24 @@ export function TabStatusDot({ status, style, isActive }: Props) {
           height: '6px',
           position: 'absolute',
           top: 0,
-          right: '-1px',
+          right: 0,
           backgroundColor: color,
-          boxShadow: `0 0 0 1.5px ${breatheBg}`,
-          '--breathe-color': color,
-          '--breathe-bg': breatheBg,
-        } as React.CSSProperties}
+          boxShadow: `0 0 0 1.5px ${ringColor}`,
+        }}
       />
     )
   }
 
-  if (style === 'replace') {
-    return (
-      <span
-        data-testid="tab-status-dot"
-        className={`rounded-full flex-shrink-0 ${isRunning ? 'animate-breathe' : ''}`}
-        style={{
-          width: '8px',
-          height: '8px',
-          backgroundColor: color,
-          '--breathe-color': color,
-          '--breathe-bg': breatheBg,
-        } as React.CSSProperties}
-      />
-    )
-  }
-
-  // inline
+  // replace
   return (
     <span
       data-testid="tab-status-dot"
       className={`rounded-full flex-shrink-0 ${isRunning ? 'animate-breathe' : ''}`}
       style={{
-        width: '6px',
-        height: '6px',
+        width: '8px',
+        height: '8px',
         backgroundColor: color,
-        '--breathe-color': color,
-        '--breathe-bg': breatheBg,
-      } as React.CSSProperties}
+      }}
     />
   )
 }
