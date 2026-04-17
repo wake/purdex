@@ -236,6 +236,17 @@ export function AppearanceSection() {
             />
             {t('settings.appearance.tab_position.left')}
           </label>
+          <label className="flex items-center gap-2 text-xs text-text-primary cursor-pointer">
+            <input
+              type="radio"
+              name="tab-position"
+              value="both"
+              checked={tabPosition === 'both'}
+              onChange={handleTabPositionChange}
+              className="accent-purple-500"
+            />
+            {t('settings.appearance.tab_position.both')}
+          </label>
           <p className="text-[11px] text-text-muted mt-0.5">
             {t('settings.appearance.tab_position.left_hint')}
           </p>

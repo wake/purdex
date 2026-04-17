@@ -8,7 +8,7 @@ export const MIN_WIDTH = 120
 export const MAX_WIDTH = 600
 
 export type ActivityBarWidth = 'narrow' | 'wide'
-export type TabPosition = 'top' | 'left'
+export type TabPosition = 'top' | 'left' | 'both'
 
 /**
  * Reserved key for Home row in `workspaceExpanded` (not a real workspace id).
@@ -16,11 +16,11 @@ export type TabPosition = 'top' | 'left'
 export const HOME_WS_KEY = 'home'
 
 /**
- * Self-heal invariant: `tabPosition='left'` requires `activityBarWidth='wide'`.
+ * Self-heal invariant: `tabPosition='left'` or `tabPosition='both'` requires `activityBarWidth='wide'`.
  * Called by persist's onRehydrateStorage; also exported for direct testing.
  */
 export function healLayoutInvariant<T extends { activityBarWidth?: ActivityBarWidth; tabPosition?: TabPosition }>(state: T): T {
-  if (state.tabPosition === 'left' && state.activityBarWidth === 'narrow') {
+  if ((state.tabPosition === 'left' || state.tabPosition === 'both') && state.activityBarWidth === 'narrow') {
     state.activityBarWidth = 'wide'
   }
   return state
@@ -187,23 +187,25 @@ export const useLayoutStore = create<LayoutState>()(
 
       setActivityBarWidth: (width) =>
         set((state) => {
-          if (width === 'narrow' && state.tabPosition === 'left') return state
+          const nonTop = state.tabPosition === 'left' || state.tabPosition === 'both'
+          if (width === 'narrow' && nonTop) return state
           return { activityBarWidth: width }
         }),
 
       toggleActivityBarWidth: () =>
         set((state) => {
           const next: ActivityBarWidth = state.activityBarWidth === 'narrow' ? 'wide' : 'narrow'
-          if (next === 'narrow' && state.tabPosition === 'left') return state
+          const nonTop = state.tabPosition === 'left' || state.tabPosition === 'both'
+          if (next === 'narrow' && nonTop) return state
           return { activityBarWidth: next }
         }),
 
       setTabPosition: (position) =>
-        set(() => {
-          if (position === 'left') {
-            return { tabPosition: 'left', activityBarWidth: 'wide' }
+        set((state) => {
+          if (position === 'left' || position === 'both') {
+            return { tabPosition: position, activityBarWidth: 'wide' }
           }
-          return { tabPosition: 'top' }
+          return { tabPosition: 'top', activityBarWidth: state.activityBarWidth }
         }),
 
       setActivityBarWideSize: (size) =>

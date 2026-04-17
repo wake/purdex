@@ -187,7 +187,8 @@
   "settings.appearance.tab_position.desc": "Where to display the open tabs",
   "settings.appearance.tab_position.top": "Top",
   "settings.appearance.tab_position.left": "Left (activity bar)",
-  "settings.appearance.tab_position.left_hint": "Left position keeps the activity bar wide",
+  "settings.appearance.tab_position.both": "Both",
+  "settings.appearance.tab_position.left_hint": "Left/Both keeps the activity bar wide",
   "nav.collapse_locked_tooltip": "Can't collapse while tabs are on the left",
 
   "page.newtab.title": "New Tab",

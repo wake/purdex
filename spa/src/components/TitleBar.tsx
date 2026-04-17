@@ -3,6 +3,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useLayoutStore } from '../stores/useLayoutStore'
 import type { LayoutPattern } from '../types/tab'
 import type { SidebarRegion } from '../types/layout'
+import { CollapseButton } from '../features/workspace/components/CollapseButton'
 
 interface Props {
   title: string
@@ -49,6 +50,8 @@ export function TitleBar({ title }: Props) {
         className="shrink-0 flex items-center gap-0.5"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
+        <CollapseButton variant="topbar" />
+        <div className="w-px h-3.5 bg-border-subtle mx-0.5" />
         {/* Region toggles */}
         {visibleToggles.map(({ region, icon: Icon, label, mirror }) => {
           const isVisible = regions[region].mode !== 'hidden'

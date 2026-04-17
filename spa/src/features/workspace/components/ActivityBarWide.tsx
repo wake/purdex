@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, GearSix, HardDrives } from '@phosphor-icons/react'
 import {
   DndContext,
@@ -26,12 +26,12 @@ import {
 import { useWorkspaceStore } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
 import { RegionResize } from '../../../components/RegionResize'
-import { CollapseButton } from './CollapseButton'
 import { WorkspaceRow } from './WorkspaceRow'
 import { HomeRow } from './HomeRow'
 import type { ActivityBarProps } from './activity-bar-props'
 import { computeDragEndAction, dispatchDragEndAction, type DragData } from '../lib/computeDragEndAction'
 import { useSpringLoad } from '../lib/useSpringLoad'
+import { useCrossWorkspaceDragOver } from '../lib/useCrossWorkspaceDragOver'
 
 const customCollisionDetection: CollisionDetection = (args) => {
   const pw = pointerWithin(args)
@@ -72,6 +72,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const t = useI18nStore((s) => s.t)
   const wideSize = useLayoutStore((s) => s.activityBarWideSize)
   const setWideSize = useLayoutStore((s) => s.setActivityBarWideSize)
+  const tabPosition = useLayoutStore((s) => s.tabPosition)
 
   // Ephemeral drag state for resize handle — avoid persisting + broadcasting on
   // every mousemove. Commit to store only on mouseup (see RegionResize.onResizeEnd).
@@ -96,6 +97,20 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace)
   const toggleWorkspaceExpanded = useLayoutStore((s) => s.toggleWorkspaceExpanded)
   const springLoad = useSpringLoad(500)
+  const handleCrossWsDragOver = useCrossWorkspaceDragOver()
+
+  // When switching to a mode that renders inline tabs (left/both), ensure the
+  // active workspace (or Home, when a standalone tab is active) is expanded so
+  // the user can see their tabs without manually opening the accordion. Only
+  // flips from collapsed → expanded; never collapses what the user opened.
+  useEffect(() => {
+    if (tabPosition === 'top') return
+    const state = useLayoutStore.getState()
+    const targetKey = activeStandaloneTabId || !activeWorkspaceId ? HOME_WS_KEY : activeWorkspaceId
+    if (!state.workspaceExpanded[targetKey]) {
+      state.toggleWorkspaceExpanded(targetKey)
+    }
+  }, [tabPosition, activeWorkspaceId, activeStandaloneTabId])
 
   // Read activeTabId via getState() at dispatch time rather than via closure,
   // mirroring the stale-closure fix applied to the resize handler in PR #392.
@@ -167,6 +182,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
 
   const handleDragOver = useCallback(
     (e: DragOverEvent) => {
+      handleCrossWsDragOver(e)
       const { over, active } = e
       if (!over || !active.data.current) {
         springLoad.cancel()
@@ -209,7 +225,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
       }
       springLoad.cancel()
     },
-    [springLoad, scheduleSpringLoad],
+    [handleCrossWsDragOver, springLoad, scheduleSpringLoad],
   )
 
   const handleDragEnd = useCallback(
@@ -291,9 +307,6 @@ export function ActivityBarWide(props: ActivityBarProps) {
         </DndContext>
 
         <div className="mt-auto flex flex-col gap-1 px-2 pb-1 pt-2">
-          <div className="flex items-center justify-end">
-            <CollapseButton />
-          </div>
           <button
             title={t('nav.new_workspace')}
             onClick={onAddWorkspace}

@@ -73,6 +73,12 @@ describe('useLayoutStore', () => {
       useLayoutStore.getState().setActivityBarWidth('wide')
       expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
     })
+
+    it('refuses narrow when tabPosition=both', () => {
+      useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'both' })
+      useLayoutStore.getState().setActivityBarWidth('narrow')
+      expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
+    })
   })
 
   describe('toggleActivityBarWidth', () => {
@@ -85,6 +91,12 @@ describe('useLayoutStore', () => {
 
     it('no-op when currently wide and tabPosition=left', () => {
       useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'left' })
+      useLayoutStore.getState().toggleActivityBarWidth()
+      expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
+    })
+
+    it('no-op when currently wide and tabPosition=both', () => {
+      useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'both' })
       useLayoutStore.getState().toggleActivityBarWidth()
       expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
     })
@@ -110,6 +122,13 @@ describe('useLayoutStore', () => {
       useLayoutStore.getState().setTabPosition('top')
       expect(useLayoutStore.getState().tabPosition).toBe('top')
       expect(useLayoutStore.getState().activityBarWidth).toBe('narrow')
+    })
+
+    it('sets to both and forces activityBarWidth=wide', () => {
+      useLayoutStore.setState({ activityBarWidth: 'narrow', tabPosition: 'top' })
+      useLayoutStore.getState().setTabPosition('both')
+      expect(useLayoutStore.getState().tabPosition).toBe('both')
+      expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
     })
   })
 
@@ -186,6 +205,11 @@ describe('useLayoutStore', () => {
   describe('healLayoutInvariant', () => {
     it('forces width=wide when state has {narrow, left}', () => {
       const healed = healLayoutInvariant({ activityBarWidth: 'narrow', tabPosition: 'left' })
+      expect(healed.activityBarWidth).toBe('wide')
+    })
+
+    it('forces width=wide when state has {narrow, both}', () => {
+      const healed = healLayoutInvariant({ activityBarWidth: 'narrow', tabPosition: 'both' })
       expect(healed.activityBarWidth).toBe('wide')
     })
 

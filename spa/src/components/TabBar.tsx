@@ -1,24 +1,12 @@
 import { Fragment, useRef, useState, useCallback, useMemo } from 'react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent, type Modifier } from '@dnd-kit/core'
 import { SortableContext, horizontalListSortingStrategy } from '@dnd-kit/sortable'
-import { Plus, CaretLeft, CaretRight, TerminalWindow, ChatCircleDots, House, ClockCounterClockwise, GearSix, SmileySad, Globe } from '@phosphor-icons/react'
+import { Plus, CaretLeft, CaretRight } from '@phosphor-icons/react'
 import { SortableTab } from './SortableTab'
 import { useScrollOverflow } from '../hooks/useScrollOverflow'
 import type { Tab } from '../types/tab'
 import { useI18nStore } from '../stores/useI18nStore'
-
-const TerminalWindowFill = (props: { size: number; className?: string }) => <TerminalWindow {...props} weight="fill" />
-
-const ICON_MAP: Record<string, React.ComponentType<{ size: number; className?: string }>> = {
-  Plus,
-  TerminalWindow: TerminalWindowFill,
-  ChatCircleDots,
-  House,
-  ClockCounterClockwise,
-  GearSix,
-  SmileySad,
-  Globe,
-}
+import { ICON_MAP } from './tab-icon-map'
 
 interface Props {
   tabs: Tab[]

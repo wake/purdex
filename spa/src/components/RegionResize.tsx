@@ -42,9 +42,12 @@ export function RegionResize({ onResize, resizeEdge, onResizeEnd }: Props) {
   }, [resizeEdge])
 
   return (
-    <div
-      className="w-1 shrink-0 cursor-col-resize hover:bg-accent-base/30 active:bg-accent-base/50 transition-colors"
-      onMouseDown={handleMouseDown}
-    />
+    <div className="relative w-px shrink-0 bg-border-subtle">
+      <div
+        data-testid="resize-hit"
+        className="absolute inset-y-0 -left-[5px] -right-[5px] cursor-col-resize hover:bg-accent-base/40 active:bg-accent-base/60"
+        onMouseDown={handleMouseDown}
+      />
+    </div>
   )
 }

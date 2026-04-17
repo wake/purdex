@@ -107,7 +107,7 @@ describe('ActivityBarWide Phase 2 — inline tabs', () => {
   })
 
   it('shows expanded inline tabs when workspaceExpanded set', () => {
-    useLayoutStore.setState({ workspaceExpanded: { w1: true } })
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide', workspaceExpanded: { w1: true } })
     render(
       <ActivityBarWide
         workspaces={[{ id: 'w1', name: 'Alpha', tabs: ['t1'], activeTabId: 't1' }]}
@@ -164,5 +164,66 @@ describe('ActivityBarWide Phase 2 — inline tabs', () => {
     expect(screen.getByTestId('home-header')).toBeInTheDocument()
     expect(screen.getByTestId('ws-header-w1')).toBeInTheDocument()
     expect(screen.getByTestId('ws-header-w2')).toBeInTheDocument()
+  })
+})
+
+describe('ActivityBarWide — auto-expand active workspace', () => {
+  beforeEach(() => {
+    cleanup()
+    useLayoutStore.setState(useLayoutStore.getInitialState())
+  })
+
+  it("expands active workspace when tabPosition='left'", () => {
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
+    render(
+      <ActivityBarWide
+        workspaces={[{ id: 'w1', name: 'Alpha', tabs: [], activeTabId: null }]}
+        activeWorkspaceId="w1"
+        activeStandaloneTabId={null}
+        onSelectWorkspace={() => {}}
+        onSelectHome={() => {}}
+        standaloneTabIds={[]}
+        onAddWorkspace={() => {}}
+        onOpenHosts={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    )
+    expect(useLayoutStore.getState().workspaceExpanded['w1']).toBe(true)
+  })
+
+  it("expands home when standalone tab is active and tabPosition='both'", () => {
+    useLayoutStore.setState({ tabPosition: 'both', activityBarWidth: 'wide' })
+    render(
+      <ActivityBarWide
+        workspaces={[]}
+        activeWorkspaceId={null}
+        activeStandaloneTabId="t1"
+        onSelectWorkspace={() => {}}
+        onSelectHome={() => {}}
+        standaloneTabIds={['t1']}
+        onAddWorkspace={() => {}}
+        onOpenHosts={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    )
+    expect(useLayoutStore.getState().workspaceExpanded['home']).toBe(true)
+  })
+
+  it("does NOT auto-expand when tabPosition='top'", () => {
+    useLayoutStore.setState({ tabPosition: 'top' })
+    render(
+      <ActivityBarWide
+        workspaces={[{ id: 'w1', name: 'Alpha', tabs: [], activeTabId: null }]}
+        activeWorkspaceId="w1"
+        activeStandaloneTabId={null}
+        onSelectWorkspace={() => {}}
+        onSelectHome={() => {}}
+        standaloneTabIds={[]}
+        onAddWorkspace={() => {}}
+        onOpenHosts={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    )
+    expect(useLayoutStore.getState().workspaceExpanded['w1']).toBeFalsy()
   })
 })

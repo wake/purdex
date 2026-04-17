@@ -11,9 +11,9 @@ describe('RegionResize', () => {
   it('calls onResize with delta on mouse drag', () => {
     const onResize = vi.fn()
     const { container } = render(<RegionResize onResize={onResize} resizeEdge="right" />)
-    const handle = container.firstElementChild as HTMLElement
+    const hit = container.querySelector('[data-testid="resize-hit"]') as HTMLElement
 
-    fireEvent.mouseDown(handle, { clientX: 100 })
+    fireEvent.mouseDown(hit, { clientX: 100 })
     fireEvent.mouseMove(document, { clientX: 150 })
     fireEvent.mouseUp(document)
 
@@ -23,9 +23,9 @@ describe('RegionResize', () => {
   it('negates delta for left resizeEdge', () => {
     const onResize = vi.fn()
     const { container } = render(<RegionResize onResize={onResize} resizeEdge="left" />)
-    const handle = container.firstElementChild as HTMLElement
+    const hit = container.querySelector('[data-testid="resize-hit"]') as HTMLElement
 
-    fireEvent.mouseDown(handle, { clientX: 200 })
+    fireEvent.mouseDown(hit, { clientX: 200 })
     fireEvent.mouseMove(document, { clientX: 150 })
     fireEvent.mouseUp(document)
 
@@ -37,10 +37,10 @@ describe('RegionResize', () => {
     const onResize2 = vi.fn()
 
     const { container, rerender } = render(<RegionResize onResize={onResize1} resizeEdge="right" />)
-    const handle = container.firstElementChild as HTMLElement
+    const hit = container.querySelector('[data-testid="resize-hit"]') as HTMLElement
 
     // Start drag
-    fireEvent.mouseDown(handle, { clientX: 100 })
+    fireEvent.mouseDown(hit, { clientX: 100 })
 
     // First move uses onResize1
     fireEvent.mouseMove(document, { clientX: 110 })
@@ -55,5 +55,14 @@ describe('RegionResize', () => {
     expect(onResize1).toHaveBeenCalledTimes(1) // should NOT have been called again
 
     fireEvent.mouseUp(document)
+  })
+
+  it('renders a wide invisible hit area over a thin visual seam', () => {
+    const { container } = render(<RegionResize onResize={vi.fn()} resizeEdge="right" />)
+    const root = container.firstChild as HTMLElement
+    expect(root.className).toMatch(/relative/)
+    const hit = root.querySelector('[data-testid="resize-hit"]') as HTMLElement
+    expect(hit).toBeInTheDocument()
+    expect(hit.className).toMatch(/cursor-col-resize/)
   })
 })

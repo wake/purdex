@@ -54,3 +54,26 @@ describe('CollapseButton', () => {
     expect(btn.className).toMatch(/\bcursor-not-allowed\b/)
   })
 })
+
+describe('CollapseButton — variants', () => {
+  it("defaults to data-variant='header-right'", () => {
+    render(<CollapseButton />)
+    expect(screen.getByRole('button')).toHaveAttribute('data-variant', 'header-right')
+  })
+
+  it("renders data-variant='divider'", () => {
+    render(<CollapseButton variant="divider" />)
+    expect(screen.getByRole('button')).toHaveAttribute('data-variant', 'divider')
+  })
+
+  it("renders data-variant='topbar'", () => {
+    render(<CollapseButton variant="topbar" />)
+    expect(screen.getByRole('button')).toHaveAttribute('data-variant', 'topbar')
+  })
+
+  it("is disabled when tabPosition='both'", () => {
+    useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'both' })
+    render(<CollapseButton />)
+    expect(screen.getByRole('button')).toBeDisabled()
+  })
+})
