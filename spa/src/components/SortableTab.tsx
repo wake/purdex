@@ -10,6 +10,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import type { AgentStatus, TabIndicatorStyle } from '../stores/useAgentStore'
 import { compositeKey } from '../lib/composite-key'
+import { AGENT_ICONS } from '../lib/agent-icons'
 import type { Session } from '../lib/host-api'
 
 const EMPTY_SESSIONS: Session[] = []
@@ -79,7 +80,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
 
   const primaryContent = getPrimaryPane(tab.layout).content
   const iconName = getPaneIcon(primaryContent)
-  const IconComponent = iconMap[iconName]
+  const paneIcon = iconMap[iconName]
 
   const t = useI18nStore((s) => s.t)
   const hostId = primaryContent.kind === 'tmux-session' ? primaryContent.hostId : ''
@@ -98,8 +99,12 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   })
   const isUnread = useAgentStore((s) => ck ? !!s.unread[ck] : false)
   const subagentCount = useAgentStore((s) => ck ? (s.subagents[ck]?.length ?? 0) : 0)
+  const agentType = useAgentStore((s) => ck ? s.agentTypes[ck] : undefined)
   const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
   const isTerminated = primaryContent.kind === 'tmux-session' && !!primaryContent.terminated
+  // Keep the terminated pane's SmileySad tombstone instead of the agent icon.
+  const agentIcon = !isTerminated && agentType ? AGENT_ICONS[agentType] : undefined
+  const IconComponent = (agentIcon ?? paneIcon) as React.ComponentType<{ size: number; className?: string }> | undefined
   const isHostOffline = useHostStore((s) => {
     if (!hostId || isTerminated) return false
     const rt = s.runtime[hostId]
