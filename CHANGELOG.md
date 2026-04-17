@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.154] - 2026-04-17
+
+### 功能
+
+- **spa**：Sidebar inline tab 視覺對齊 `SortableTab`（#418）—— agent status dot + subagent dots、unread 紅點、離線 host 的 `WifiSlash` icon、locked tab 的 `Lock` icon 並隱藏 Close button；status slot 只在實際有 status/subagent 時渲染，非 tmux tab 不額外縮進（關閉 #401）
+
 ## [1.0.0-alpha.153] - 2026-04-17
 
 ### 重構
