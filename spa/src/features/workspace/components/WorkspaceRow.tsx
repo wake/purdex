@@ -74,7 +74,6 @@ export function WorkspaceRow(props: Props) {
             e.stopPropagation()
             toggleExpanded(workspace.id)
           }}
-          onMouseDown={(e) => e.stopPropagation()}
           className="p-1 rounded hover:bg-surface-secondary text-text-muted cursor-pointer"
         >
           <Chevron size={12} />

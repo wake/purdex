@@ -105,5 +105,14 @@ describe('WorkspaceRow', () => {
       nameBtn.dispatchEvent(evt)
       expect(stopPropagationSpy).toHaveBeenCalled()
     })
+
+    it('chevron does not block pointer-down (keeps row drag reachable)', () => {
+      renderRow(mkWs('ws-1', 'Alpha'))
+      const chevron = screen.getByRole('button', { name: /expand|collapse/i })
+      const evt = new Event('pointerdown', { bubbles: true, cancelable: true })
+      const stopPropagationSpy = vi.spyOn(evt, 'stopPropagation')
+      chevron.dispatchEvent(evt)
+      expect(stopPropagationSpy).not.toHaveBeenCalled()
+    })
   })
 })
