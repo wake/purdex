@@ -77,22 +77,7 @@ describe('InlineTab', () => {
 describe('InlineTab — drag-safe pointerdown + isPinned data', () => {
   it('click on row still fires onSelect after pointerdown', () => {
     const onSelect = vi.fn()
-    render(
-      <DndContext>
-        <SortableContext items={['t1']}>
-          <InlineTab
-            tab={mkTab({ pinned: false })}
-            title="T1"
-            isActive={false}
-            sourceWsId={null}
-            onSelect={onSelect}
-            onClose={vi.fn()}
-            onMiddleClick={vi.fn()}
-            onContextMenu={vi.fn()}
-          />
-        </SortableContext>
-      </DndContext>,
-    )
+    renderWith(mkTab({ pinned: false }), 'T1', { sourceWsId: null, onSelect })
     const row = screen.getByTestId('inline-tab-row')
     fireEvent.pointerDown(row, { button: 0, clientX: 10, clientY: 10 })
     fireEvent.click(row)
@@ -100,22 +85,7 @@ describe('InlineTab — drag-safe pointerdown + isPinned data', () => {
   })
 
   it('pointerdown on active tab prevents default to stop focus theft', () => {
-    render(
-      <DndContext>
-        <SortableContext items={['t1']}>
-          <InlineTab
-            tab={mkTab({ pinned: false })}
-            title="T1"
-            isActive={true}
-            sourceWsId={null}
-            onSelect={vi.fn()}
-            onClose={vi.fn()}
-            onMiddleClick={vi.fn()}
-            onContextMenu={vi.fn()}
-          />
-        </SortableContext>
-      </DndContext>,
-    )
+    renderWith(mkTab({ pinned: false }), 'T1', { sourceWsId: null, isActive: true })
     const row = screen.getByTestId('inline-tab-row')
     const evt = new Event('pointerdown', { bubbles: true, cancelable: true })
     row.dispatchEvent(evt)
@@ -123,22 +93,7 @@ describe('InlineTab — drag-safe pointerdown + isPinned data', () => {
   })
 
   it('pointerdown on inactive tab does NOT preventDefault', () => {
-    render(
-      <DndContext>
-        <SortableContext items={['t1']}>
-          <InlineTab
-            tab={mkTab({ pinned: false })}
-            title="T1"
-            isActive={false}
-            sourceWsId={null}
-            onSelect={vi.fn()}
-            onClose={vi.fn()}
-            onMiddleClick={vi.fn()}
-            onContextMenu={vi.fn()}
-          />
-        </SortableContext>
-      </DndContext>,
-    )
+    renderWith(mkTab({ pinned: false }), 'T1', { sourceWsId: null, isActive: false })
     const row = screen.getByTestId('inline-tab-row')
     const evt = new Event('pointerdown', { bubbles: true, cancelable: true })
     row.dispatchEvent(evt)
