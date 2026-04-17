@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-alpha.159] - 2026-04-18
+
+### 介面調整
+
+- **spa**：badge 模式 tab icon + badge 整組右移 1px（`ml-px`），subagent dots 改用 literal `left: -4px` 貼在 box 外緣避開 icon 欄位（#431）；`SubagentDots` 加可選 `left?: number` prop，dot / iconDot 模式沿用原 `calc(50% + offset)` 行為
+- **spa**：順手移除 `TabIcon` 在 dot / iconDot branches 傳給 `SubagentDots` 的無效 `isActive` prop
+
 ## [1.0.0-alpha.158] - 2026-04-18
 
 ### 功能
