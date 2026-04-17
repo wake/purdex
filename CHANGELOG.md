@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.150] - 2026-04-17
+
+### 功能
+
+- **spa**：Terminal tab icon 依 agent 類型顯示 —— Claude Code 顯示 Lightning、Codex 顯示 Code；未收到 hook event 的 session 維持 `TerminalWindow`/`ChatCircleDots` pane icon，terminated session 保留 `SmileySad` tombstone（#413）
+
 ## [1.0.0-alpha.149] - 2026-04-17
 
 ### 介面調整
