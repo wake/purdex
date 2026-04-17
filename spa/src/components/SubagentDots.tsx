@@ -3,6 +3,9 @@ import { useMemo } from 'react'
 
 interface Props {
   count: number
+  // Literal `left` value (in px) overriding the default calc(50% + offset).
+  // Used by badge mode to nudge dots outside the icon box.
+  left?: number
 }
 
 const COLOR = '#60a5fa'
@@ -15,7 +18,7 @@ const ARC_POSITIONS: Record<number, [number, number][]> = {
   3: [[-9, -5.5], [-9, 0], [-9, 5.5]],
 }
 
-export function SubagentDots({ count }: Props) {
+export function SubagentDots({ count, left: leftOverride }: Props) {
   const clamped = Math.min(Math.max(count, 0), 3)
 
   // Recalculate phase offset when dot count changes so all dots restart
@@ -38,7 +41,7 @@ export function SubagentDots({ count }: Props) {
             width: dotSize,
             height: dotSize,
             backgroundColor: COLOR,
-            left: `calc(50% + ${left}px)`,
+            left: leftOverride !== undefined ? `${leftOverride}px` : `calc(50% + ${left}px)`,
             top: `calc(50% + ${top}px)`,
             transform: 'translate(-50%, -50%)',
             animationDelay: `${i * 0.3 - (phaseOffset / 1000) % 2}s`,

@@ -60,14 +60,16 @@ export function renderInlineTabIcon({
   }
 
   // badge: icon + small overlay dot
+  // Nudge the whole icon+badge group 1px right and park subagent dots at
+  // left:-4 so they sit just outside the box edge, clear of the icon.
   return (
     <span
       data-testid="inline-tab-dot-overlay"
-      className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0`}
+      className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0 ml-px`}
     >
       {IconComponent && <IconComponent size={ICON_SIZE} className="flex-shrink-0" />}
       <TabStatusIndicator status={agentStatus} mode="overlay" isActive={isActive} />
-      {subagentCount > 0 && <SubagentDots count={subagentCount} />}
+      {subagentCount > 0 && <SubagentDots count={subagentCount} left={-4} />}
     </span>
   )
 }
