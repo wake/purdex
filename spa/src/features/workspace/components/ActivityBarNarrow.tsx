@@ -51,9 +51,7 @@ function SortableWorkspaceButton({ workspace: ws, isActive, onSelect, onContextM
             transform: 'translateY(calc(-50% - 1px))',
             backgroundColor: PILL_COLORS[aggregatedStatus],
             boxShadow: '0 0 0 1.5px var(--surface-tertiary)',
-            '--breathe-color': PILL_COLORS[aggregatedStatus],
-            '--breathe-bg': 'var(--surface-tertiary)',
-          } as React.CSSProperties}
+          }}
         />
       )}
       <button
@@ -151,9 +149,7 @@ export function ActivityBarNarrow({
               transform: 'translateY(calc(-50% - 1px))',
               backgroundColor: PILL_COLORS[homeStatus],
               boxShadow: '0 0 0 1.5px var(--surface-tertiary)',
-              '--breathe-color': PILL_COLORS[homeStatus],
-              '--breathe-bg': 'var(--surface-tertiary)',
-            } as React.CSSProperties}
+            }}
           />
         )}
         <button

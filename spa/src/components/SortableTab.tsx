@@ -31,12 +31,12 @@ function renderTabIcon(
     </span>
   )
 
-  // iconOnly, or any mode without a status event → show icon only
-  if (tabIndicatorStyle === 'iconOnly' || !agentStatus) {
+  // icon, or any mode without a status event → show icon only
+  if (tabIndicatorStyle === 'icon' || !agentStatus) {
     return iconBox
   }
 
-  if (tabIndicatorStyle === 'dotOnly') {
+  if (tabIndicatorStyle === 'dot') {
     return (
       <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
         <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
@@ -45,7 +45,7 @@ function renderTabIcon(
     )
   }
 
-  if (tabIndicatorStyle === 'sideBySide') {
+  if (tabIndicatorStyle === 'iconDot') {
     return (
       <span className="relative inline-flex items-center flex-shrink-0">
         <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
@@ -57,7 +57,7 @@ function renderTabIcon(
     )
   }
 
-  // overlay (default): icon + small breathing dot in upper-right
+  // badge (default): icon + small breathing dot in upper-right
   return (
     <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
       {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}

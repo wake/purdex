@@ -34,10 +34,10 @@ export function TerminalSection() {
   ]
 
   const TAB_INDICATOR_OPTIONS: { value: TabIndicatorStyle; label: string }[] = [
-    { value: 'iconOnly', label: t('settings.terminal.tab_indicator.icon_only') },
-    { value: 'dotOnly', label: t('settings.terminal.tab_indicator.dot_only') },
-    { value: 'sideBySide', label: t('settings.terminal.tab_indicator.side_by_side') },
-    { value: 'overlay', label: t('settings.terminal.tab_indicator.overlay') },
+    { value: 'icon', label: t('settings.terminal.tab_indicator.icon') },
+    { value: 'dot', label: t('settings.terminal.tab_indicator.dot') },
+    { value: 'iconDot', label: t('settings.terminal.tab_indicator.icon_dot') },
+    { value: 'badge', label: t('settings.terminal.tab_indicator.badge') },
   ]
 
   const CC_ICON_OPTIONS: { value: CcIconVariant; label: string }[] = [

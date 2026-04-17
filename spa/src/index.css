@@ -29,7 +29,7 @@ button:disabled {
    doesn't show a coloured block against icons or contrasting tab backgrounds. */
 @keyframes breathe {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+  50% { opacity: 0.25; }
 }
 
 @utility animate-breathe {

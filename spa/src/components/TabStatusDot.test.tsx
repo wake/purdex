@@ -24,7 +24,7 @@ describe('TabStatusDot', () => {
     expect(dot.style.height).toBe('6px')
     expect(dot.style.position).toBe('absolute')
     // running = green
-    expect(dot.style.getPropertyValue('--breathe-color')).toBe('#4ade80')
+    expect(dot.style.backgroundColor).toBe('rgb(74, 222, 128)')
   })
 
   it('renders dot for replace style', () => {

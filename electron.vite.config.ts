@@ -4,6 +4,7 @@ import { execSync } from 'child_process'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import svgr from 'vite-plugin-svgr'
 
 function gitHash(...paths: string[]): string {
   try {
@@ -72,7 +73,7 @@ export default defineConfig({
   },
   renderer: {
     root: 'spa',
-    plugins: [react(), tailwindcss()],
+    plugins: [svgr(), react(), tailwindcss()],
     build: {
       outDir: resolve(__dirname, 'out/renderer'),
       rollupOptions: {

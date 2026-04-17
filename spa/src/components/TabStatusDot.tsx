@@ -23,12 +23,10 @@ export function TabStatusDot({ status, style, isActive }: Props) {
   const color = STATUS_COLORS[status]
   const isRunning = status === 'running'
 
-  // breathe CSS vars: --breathe-color = dot color, --breathe-bg = tab bg
-  const breatheBg = isActive
-    ? 'var(--surface-active)'
-    : 'var(--surface-secondary)'
-
   if (style === 'overlay') {
+    const ringColor = isActive
+      ? 'var(--surface-active)'
+      : 'var(--surface-secondary)'
     return (
       <span
         data-testid="tab-status-dot"
@@ -40,10 +38,8 @@ export function TabStatusDot({ status, style, isActive }: Props) {
           top: 0,
           right: 0,
           backgroundColor: color,
-          boxShadow: `0 0 0 1.5px ${breatheBg}`,
-          '--breathe-color': color,
-          '--breathe-bg': breatheBg,
-        } as React.CSSProperties}
+          boxShadow: `0 0 0 1.5px ${ringColor}`,
+        }}
       />
     )
   }
@@ -57,9 +53,7 @@ export function TabStatusDot({ status, style, isActive }: Props) {
           width: '8px',
           height: '8px',
           backgroundColor: color,
-          '--breathe-color': color,
-          '--breathe-bg': breatheBg,
-        } as React.CSSProperties}
+        }}
       />
     )
   }
@@ -73,9 +67,7 @@ export function TabStatusDot({ status, style, isActive }: Props) {
         width: '6px',
         height: '6px',
         backgroundColor: color,
-        '--breathe-color': color,
-        '--breathe-bg': breatheBg,
-      } as React.CSSProperties}
+      }}
     />
   )
 }

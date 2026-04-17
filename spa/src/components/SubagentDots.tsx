@@ -3,7 +3,6 @@ import { useMemo } from 'react'
 
 interface Props {
   count: number
-  isActive: boolean
 }
 
 const COLOR = '#60a5fa'
@@ -16,7 +15,7 @@ const ARC_POSITIONS: Record<number, [number, number][]> = {
   3: [[-9, -5.5], [-9, 0], [-9, 5.5]],
 }
 
-export function SubagentDots({ count, isActive }: Props) {
+export function SubagentDots({ count }: Props) {
   const clamped = Math.min(Math.max(count, 0), 3)
 
   // Recalculate phase offset when dot count changes so all dots restart
@@ -28,10 +27,6 @@ export function SubagentDots({ count, isActive }: Props) {
   if (clamped <= 0) return null
   const positions = ARC_POSITIONS[clamped]
   const dotSize = DOT_SIZES[clamped]
-
-  const breatheBg = isActive
-    ? 'var(--surface-active)'
-    : 'var(--surface-secondary)'
 
   return (
     <>
@@ -46,10 +41,8 @@ export function SubagentDots({ count, isActive }: Props) {
             left: `calc(50% + ${left}px)`,
             top: `calc(50% + ${top}px)`,
             transform: 'translate(-50%, -50%)',
-            '--breathe-color': COLOR,
-            '--breathe-bg': breatheBg,
             animationDelay: `${i * 0.3 - (phaseOffset / 1000) % 2}s`,
-          } as React.CSSProperties}
+          }}
         />
       ))}
     </>

@@ -6,7 +6,7 @@ import { compositeKey } from '../lib/composite-key'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 export type AgentStatus = 'running' | 'waiting' | 'idle' | 'error'
-export type TabIndicatorStyle = 'iconOnly' | 'dotOnly' | 'sideBySide' | 'overlay'
+export type TabIndicatorStyle = 'icon' | 'dot' | 'iconDot' | 'badge'
 export type CcIconVariant = 'bot' | 'star'
 
 /** Normalized event from backend (replaces AgentHookEvent). */
@@ -51,7 +51,7 @@ export const useAgentStore = create<AgentState>()(
       subagents: {},
       lastEvents: {},
       unread: {},
-      tabIndicatorStyle: 'overlay' as TabIndicatorStyle,
+      tabIndicatorStyle: 'badge' as TabIndicatorStyle,
       ccIconVariant: 'bot' as CcIconVariant,
 
       clearSession: (hostId, sessionCode) => {
