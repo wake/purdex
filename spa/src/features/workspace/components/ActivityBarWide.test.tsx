@@ -146,4 +146,23 @@ describe('ActivityBarWide Phase 2 — inline tabs', () => {
     // getPaneLabel for browser returns hostname
     expect(screen.getByText('example.test')).toBeInTheDocument()
   })
+
+  it('registers home-header and ws-header-<id> as droppable testids', () => {
+    render(
+      <ActivityBarWide
+        workspaces={[ws('w1', 'Alpha'), ws('w2', 'Beta')]}
+        activeWorkspaceId={null}
+        activeStandaloneTabId={null}
+        onSelectWorkspace={() => {}}
+        onSelectHome={() => {}}
+        standaloneTabIds={[]}
+        onAddWorkspace={() => {}}
+        onOpenHosts={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('home-header')).toBeInTheDocument()
+    expect(screen.getByTestId('ws-header-w1')).toBeInTheDocument()
+    expect(screen.getByTestId('ws-header-w2')).toBeInTheDocument()
+  })
 })

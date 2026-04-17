@@ -1,4 +1,5 @@
 import { CaretRight, CaretDown } from '@phosphor-icons/react'
+import { useDroppable } from '@dnd-kit/core'
 import type { Tab } from '../../../types/tab'
 import { useLayoutStore, HOME_WS_KEY } from '../../../stores/useLayoutStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -32,17 +33,24 @@ export function HomeRow(props: Props) {
   const expanded = useLayoutStore((s) => !!s.workspaceExpanded[HOME_WS_KEY])
   const toggleExpanded = useLayoutStore((s) => s.toggleWorkspaceExpanded)
 
+  const { setNodeRef: setHeaderDropRef, isOver: isHeaderOver } = useDroppable({
+    id: 'home-header',
+    data: { type: 'home-header' },
+  })
+
   const Chevron = expanded ? CaretDown : CaretRight
   const chevronLabel = expanded ? 'Collapse Home' : 'Expand Home'
 
   return (
     <div className="flex flex-col">
       <div
+        ref={setHeaderDropRef}
+        data-testid="home-header"
         className={`mx-2 flex items-center gap-1 pr-1.5 rounded-md text-sm transition-colors ${
           isActive
             ? 'bg-surface-hover text-text-primary ring-1 ring-purple-400'
             : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
-        }`}
+        } ${isHeaderOver ? 'ring-2 ring-purple-400/80 bg-surface-hover' : ''}`}
       >
         <button
           type="button"

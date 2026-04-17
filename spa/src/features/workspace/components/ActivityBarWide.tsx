@@ -5,21 +5,41 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  pointerWithin,
+  rectIntersection,
   closestCenter,
+  type CollisionDetection,
   type DragEndEvent,
+  type DragOverEvent,
 } from '@dnd-kit/core'
 import {
   SortableContext,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { useLayoutStore, MIN_WIDTH, MAX_WIDTH } from '../../../stores/useLayoutStore'
+import {
+  useLayoutStore,
+  MIN_WIDTH,
+  MAX_WIDTH,
+  HOME_WS_KEY,
+} from '../../../stores/useLayoutStore'
+import { useWorkspaceStore } from '../store'
+import { useTabStore } from '../../../stores/useTabStore'
 import { RegionResize } from '../../../components/RegionResize'
 import { CollapseButton } from './CollapseButton'
 import { WorkspaceRow } from './WorkspaceRow'
 import { HomeRow } from './HomeRow'
 import type { ActivityBarProps } from './activity-bar-props'
-import { computeDragEndAction, dispatchDragEndAction } from '../lib/computeDragEndAction'
+import { computeDragEndAction, dispatchDragEndAction, type DragData } from '../lib/computeDragEndAction'
+import { useSpringLoad } from '../lib/useSpringLoad'
+
+const customCollisionDetection: CollisionDetection = (args) => {
+  const pw = pointerWithin(args)
+  if (pw.length > 0) return pw
+  const ri = rectIntersection(args)
+  if (ri.length > 0) return ri
+  return closestCenter(args)
+}
 
 const NOOP = () => {}
 
@@ -45,6 +65,8 @@ export function ActivityBarWide(props: ActivityBarProps) {
     onReorderWorkspaceTabs,
     onReorderStandaloneTabs,
     onAddTabToWorkspace,
+    onMoveTabToWorkspace,
+    onMoveTabToStandalone,
   } = props
 
   const t = useI18nStore((s) => s.t)
@@ -69,13 +91,137 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const contextMenuTab = onContextMenuTab ?? NOOP
   const addTabToWs = onAddTabToWorkspace ?? NOOP
 
+  const insertTab = useWorkspaceStore((s) => s.insertTab)
+  const removeTabFromWorkspace = useWorkspaceStore((s) => s.removeTabFromWorkspace)
+  const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace)
+  const toggleWorkspaceExpanded = useLayoutStore((s) => s.toggleWorkspaceExpanded)
+  const springLoad = useSpringLoad(500)
+
+  // Read activeTabId via getState() at dispatch time rather than via closure,
+  // mirroring the stale-closure fix applied to the resize handler in PR #392.
+  // Default behavior mutates the store directly; callers that need to
+  // intercept (e.g. workspace-locked mode) can pass onMoveTabToWorkspace /
+  // onMoveTabToStandalone via props.
+  const handleMoveTabToWorkspace = useCallback(
+    (tabId: string, targetWsId: string, afterTabId: string | null) => {
+      if (onMoveTabToWorkspace) {
+        onMoveTabToWorkspace(tabId, targetWsId, afterTabId)
+        return
+      }
+      const wsStore = useWorkspaceStore.getState()
+      const sourceWs = wsStore.findWorkspaceByTab(tabId)
+      const sourceWsId = sourceWs?.id ?? null
+      insertTab(tabId, targetWsId, afterTabId)
+      const movedActiveTab = tabId === useTabStore.getState().activeTabId
+      const sourceBecameEmpty =
+        sourceWsId !== null &&
+        sourceWsId !== targetWsId &&
+        (useWorkspaceStore.getState().workspaces.find((w) => w.id === sourceWsId)?.tabs.length ?? 0) === 0
+      // Follow the moved tab if it was the global active, or if the source
+      // workspace we just vacated was the one currently selected — otherwise
+      // the user would stay on an empty workspace with no tabs to show.
+      if (movedActiveTab) {
+        setActiveWorkspace(targetWsId)
+      } else if (sourceBecameEmpty && wsStore.activeWorkspaceId === sourceWsId) {
+        setActiveWorkspace(targetWsId)
+      }
+    },
+    [insertTab, setActiveWorkspace, onMoveTabToWorkspace],
+  )
+
+  const handleMoveTabToStandalone = useCallback(
+    (tabId: string, sourceWsId: string) => {
+      if (onMoveTabToStandalone) {
+        onMoveTabToStandalone(tabId, sourceWsId)
+        return
+      }
+      const wsStore = useWorkspaceStore.getState()
+      const wasSourceActive = wsStore.activeWorkspaceId === sourceWsId
+      removeTabFromWorkspace(sourceWsId, tabId)
+      const movedActiveTab = tabId === useTabStore.getState().activeTabId
+      const sourceBecameEmpty =
+        (useWorkspaceStore.getState().workspaces.find((w) => w.id === sourceWsId)?.tabs.length ?? 0) === 0
+      if (movedActiveTab || (wasSourceActive && sourceBecameEmpty)) {
+        setActiveWorkspace(null)
+      }
+    },
+    [removeTabFromWorkspace, setActiveWorkspace, onMoveTabToStandalone],
+  )
+
+  const scheduleSpringLoad = useCallback(
+    (key: string) => {
+      springLoad.schedule(key, () => {
+        // Re-check expanded state at fire time so a user who manually
+        // expanded the row during the hover doesn't get collapsed back.
+        if (!useLayoutStore.getState().workspaceExpanded[key]) {
+          toggleWorkspaceExpanded(key)
+        }
+      })
+    },
+    [springLoad, toggleWorkspaceExpanded],
+  )
+
+  const handleDragStart = useCallback(() => {
+    springLoad.cancel()
+  }, [springLoad])
+
+  const handleDragOver = useCallback(
+    (e: DragOverEvent) => {
+      const { over, active } = e
+      if (!over || !active.data.current) {
+        springLoad.cancel()
+        return
+      }
+      const activeData = active.data.current as DragData
+      if (activeData.type !== 'tab') {
+        springLoad.cancel()
+        return
+      }
+      const overData = over.data.current as DragData | undefined
+      if (!overData) {
+        springLoad.cancel()
+        return
+      }
+
+      // Pinned tab is locked to its own workspace; any header / cross-ws target
+      // is a forbidden drop, so don't auto-expand into one.
+      if (activeData.isPinned) {
+        springLoad.cancel()
+        return
+      }
+
+      if (overData.type === 'workspace-header') {
+        const key = overData.wsId
+        if (!useLayoutStore.getState().workspaceExpanded[key]) {
+          scheduleSpringLoad(key)
+        } else {
+          springLoad.cancel(key)
+        }
+        return
+      }
+      if (overData.type === 'home-header') {
+        if (!useLayoutStore.getState().workspaceExpanded[HOME_WS_KEY]) {
+          scheduleSpringLoad(HOME_WS_KEY)
+        } else {
+          springLoad.cancel(HOME_WS_KEY)
+        }
+        return
+      }
+      springLoad.cancel()
+    },
+    [springLoad, scheduleSpringLoad],
+  )
+
   const handleDragEnd = useCallback(
     (e: DragEndEvent) => {
+      springLoad.cancel()
       const action = computeDragEndAction(e, { wsIds, workspaces, standaloneTabIds })
       dispatchDragEndAction(action, {
         onReorderWorkspaces,
         onReorderStandaloneTabs,
         onReorderWorkspaceTabs,
+        onMoveTabToWorkspace: handleMoveTabToWorkspace,
+        onMoveTabToStandalone: handleMoveTabToStandalone,
       })
     },
     [
@@ -85,6 +231,9 @@ export function ActivityBarWide(props: ActivityBarProps) {
       onReorderWorkspaces,
       onReorderWorkspaceTabs,
       onReorderStandaloneTabs,
+      handleMoveTabToWorkspace,
+      handleMoveTabToStandalone,
+      springLoad,
     ],
   )
 
@@ -96,7 +245,9 @@ export function ActivityBarWide(props: ActivityBarProps) {
       >
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCenter}
+          collisionDetection={customCollisionDetection}
+          onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
           onDragEnd={handleDragEnd}
         >
           <HomeRow

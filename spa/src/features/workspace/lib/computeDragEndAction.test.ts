@@ -63,22 +63,11 @@ describe('computeDragEndAction', () => {
       expect(action).toEqual({ kind: 'noop' })
     })
 
-    it('tab dropped on non-tab target → noop (Phase 3 handles cross-zone later)', () => {
+    it('tab dropped on workspace-row sortable (not header) → noop', () => {
       const action = computeDragEndAction(
         mkEvent(
           { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1' } },
           { id: 'w2', data: { type: 'workspace', wsId: 'w2' } },
-        ),
-        ctx(),
-      )
-      expect(action).toEqual({ kind: 'noop' })
-    })
-
-    it('tab dropped on tab in different workspace → noop', () => {
-      const action = computeDragEndAction(
-        mkEvent(
-          { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1' } },
-          { id: 't2a', data: { type: 'tab', tabId: 't2a', sourceWsId: 'w2' } },
         ),
         ctx(),
       )
@@ -172,6 +161,157 @@ describe('computeDragEndAction', () => {
       expect(action).toEqual({ kind: 'noop' })
     })
   })
+
+  describe('cross-ws (Phase 3 PR D)', () => {
+    it('tab → another ws tab-slot → move-tab-to-workspace afterTabId=targetTab', () => {
+      const action = computeDragEndAction(
+        mkEvent(
+          { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1' } },
+          { id: 't2a', data: { type: 'tab', tabId: 't2a', sourceWsId: 'w2' } },
+        ),
+        ctx(),
+      )
+      expect(action).toEqual({
+        kind: 'move-tab-to-workspace',
+        tabId: 't1a',
+        targetWsId: 'w2',
+        afterTabId: 't2a',
+      })
+    })
+
+    it('tab → own workspace-header drop target → noop (no phantom move)', () => {
+      const action = computeDragEndAction(
+        mkEvent(
+          { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1' } },
+          { id: 'ws-header-w1', data: { type: 'workspace-header', wsId: 'w1' } },
+        ),
+        ctx(),
+      )
+      expect(action).toEqual({ kind: 'noop' })
+    })
+
+    it('tab → workspace-header drop target → move-tab-to-workspace afterTabId=null (prepend)', () => {
+      const action = computeDragEndAction(
+        mkEvent(
+          { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1' } },
+          { id: 'ws-header-w2', data: { type: 'workspace-header', wsId: 'w2' } },
+        ),
+        ctx(),
+      )
+      expect(action).toEqual({
+        kind: 'move-tab-to-workspace',
+        tabId: 't1a',
+        targetWsId: 'w2',
+        afterTabId: null,
+      })
+    })
+
+    it('tab → home-header drop target → move-tab-to-standalone', () => {
+      const action = computeDragEndAction(
+        mkEvent(
+          { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1' } },
+          { id: 'home-header', data: { type: 'home-header' } },
+        ),
+        ctx(),
+      )
+      expect(action).toEqual({
+        kind: 'move-tab-to-standalone',
+        tabId: 't1a',
+        sourceWsId: 'w1',
+      })
+    })
+
+    it('standalone tab → workspace-header → move-tab-to-workspace afterTabId=null', () => {
+      const action = computeDragEndAction(
+        mkEvent(
+          { id: 'sA', data: { type: 'tab', tabId: 'sA', sourceWsId: null } },
+          { id: 'ws-header-w2', data: { type: 'workspace-header', wsId: 'w2' } },
+        ),
+        ctx(),
+      )
+      expect(action).toEqual({
+        kind: 'move-tab-to-workspace',
+        tabId: 'sA',
+        targetWsId: 'w2',
+        afterTabId: null,
+      })
+    })
+
+    it('standalone tab → other ws tab-slot → move-tab-to-workspace afterTabId=targetTab', () => {
+      const action = computeDragEndAction(
+        mkEvent(
+          { id: 'sA', data: { type: 'tab', tabId: 'sA', sourceWsId: null } },
+          { id: 't2a', data: { type: 'tab', tabId: 't2a', sourceWsId: 'w2' } },
+        ),
+        ctx(),
+      )
+      expect(action).toEqual({
+        kind: 'move-tab-to-workspace',
+        tabId: 'sA',
+        targetWsId: 'w2',
+        afterTabId: 't2a',
+      })
+    })
+
+    it('standalone tab → home-header → noop (already standalone)', () => {
+      const action = computeDragEndAction(
+        mkEvent(
+          { id: 'sA', data: { type: 'tab', tabId: 'sA', sourceWsId: null } },
+          { id: 'home-header', data: { type: 'home-header' } },
+        ),
+        ctx(),
+      )
+      expect(action).toEqual({ kind: 'noop' })
+    })
+
+    it('pinned tab → other ws tab-slot → noop (#404)', () => {
+      const action = computeDragEndAction(
+        mkEvent(
+          { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1', isPinned: true } },
+          { id: 't2a', data: { type: 'tab', tabId: 't2a', sourceWsId: 'w2' } },
+        ),
+        ctx(),
+      )
+      expect(action).toEqual({ kind: 'noop' })
+    })
+
+    it('pinned tab → workspace-header → noop (#404)', () => {
+      const action = computeDragEndAction(
+        mkEvent(
+          { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1', isPinned: true } },
+          { id: 'ws-header-w2', data: { type: 'workspace-header', wsId: 'w2' } },
+        ),
+        ctx(),
+      )
+      expect(action).toEqual({ kind: 'noop' })
+    })
+
+    it('pinned tab → home-header → noop (#404)', () => {
+      const action = computeDragEndAction(
+        mkEvent(
+          { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1', isPinned: true } },
+          { id: 'home-header', data: { type: 'home-header' } },
+        ),
+        ctx(),
+      )
+      expect(action).toEqual({ kind: 'noop' })
+    })
+
+    it('pinned tab same-ws reorder still works (#404)', () => {
+      const action = computeDragEndAction(
+        mkEvent(
+          { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1', isPinned: true } },
+          { id: 't1b', data: { type: 'tab', tabId: 't1b', sourceWsId: 'w1' } },
+        ),
+        ctx(),
+      )
+      expect(action).toEqual({
+        kind: 'reorder-workspace-tabs',
+        wsId: 'w1',
+        order: ['t1b', 't1a'],
+      })
+    })
+  })
 })
 
 describe('dispatchDragEndAction', () => {
@@ -217,5 +357,32 @@ describe('dispatchDragEndAction', () => {
   it('tolerates missing callbacks (optional chaining)', () => {
     const action: DragEndAction = { kind: 'reorder-workspaces', order: ['a'] }
     expect(() => dispatchDragEndAction(action, {})).not.toThrow()
+  })
+
+  it('dispatches move-tab-to-workspace with tabId, targetWsId, afterTabId', () => {
+    const d = { onMoveTabToWorkspace: vi.fn() }
+    dispatchDragEndAction(
+      { kind: 'move-tab-to-workspace', tabId: 't1', targetWsId: 'w2', afterTabId: null },
+      d,
+    )
+    expect(d.onMoveTabToWorkspace).toHaveBeenCalledWith('t1', 'w2', null)
+  })
+
+  it('dispatches move-tab-to-workspace with non-null afterTabId', () => {
+    const d = { onMoveTabToWorkspace: vi.fn() }
+    dispatchDragEndAction(
+      { kind: 'move-tab-to-workspace', tabId: 't1', targetWsId: 'w2', afterTabId: 't2' },
+      d,
+    )
+    expect(d.onMoveTabToWorkspace).toHaveBeenCalledWith('t1', 'w2', 't2')
+  })
+
+  it('dispatches move-tab-to-standalone with tabId and sourceWsId', () => {
+    const d = { onMoveTabToStandalone: vi.fn() }
+    dispatchDragEndAction(
+      { kind: 'move-tab-to-standalone', tabId: 't1', sourceWsId: 'w1' },
+      d,
+    )
+    expect(d.onMoveTabToStandalone).toHaveBeenCalledWith('t1', 'w1')
   })
 })

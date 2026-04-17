@@ -73,4 +73,11 @@ describe('HomeRow', () => {
     fireEvent.click(chevron)
     expect(useLayoutStore.getState().workspaceExpanded['home']).toBe(true)
   })
+
+  describe('droppable header (Phase 3 PR D)', () => {
+    it('exposes header with data-testid=home-header for drop target lookup', () => {
+      renderRow()
+      expect(screen.getByTestId('home-header')).toBeInTheDocument()
+    })
+  })
 })

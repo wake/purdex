@@ -29,4 +29,10 @@ export interface ActivityBarProps {
   onReorderWorkspaceTabs?: (wsId: string, tabIds: string[]) => void
   onReorderStandaloneTabs?: (tabIds: string[]) => void
   onAddTabToWorkspace?: (wsId: string) => void
+
+  // Phase 3 PR D — cross-workspace DnD.
+  // Default: ActivityBarWide calls the workspace store directly. Pass a
+  // handler here to intercept or veto (e.g. workspace-locked mode).
+  onMoveTabToWorkspace?: (tabId: string, targetWsId: string, afterTabId: string | null) => void
+  onMoveTabToStandalone?: (tabId: string, sourceWsId: string) => void
 }
