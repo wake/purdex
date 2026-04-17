@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.153] - 2026-04-17
+
+### 重構
+
+- **spa**：`ActivityBarWide.handleDragEnd` 抽離為 `computeDragEndAction` 純函式 + `dispatchDragEndAction` 分派（#417）—— discriminated action union（noop / reorder-workspaces / reorder-standalone-tabs / reorder-workspace-tabs）讓 Phase 3 cross-workspace drop、spring-load、pinned guard 有清楚擴充點；dispatch switch 加 exhaustiveness never 斷言（關閉 #407）
+
 ## [1.0.0-alpha.152] - 2026-04-17
 
 ### 修復
