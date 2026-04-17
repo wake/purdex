@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.0.0-alpha.157] - 2026-04-17
+## [1.0.0-alpha.158] - 2026-04-18
 
 ### 功能
 
@@ -13,6 +13,35 @@
 
 - **spa**：`+ New tab` 按鈕從各 workspace 底部移至 workspace header 右側（hover-reveal），減少左側欄縱向雜訊
 - **spa**：`RegionResize` 可拖拽區域從原本窄縫擴大到 11px、hover 顏色加深，side-panel 與 activity-bar 的拖拽邊界更容易捕捉；視覺縫線維持 1px
+
+
+## [1.0.0-alpha.157] - 2026-04-18
+
+### 功能
+
+- **spa**：Agent 動態標題 + 雙擊 session rename（#424）—— Settings → Terminal 新增「顯示 agent 動態標題」toggle，啟用後 tab label 改顯示 agent 送的 OSC 0/2 title（僅 agent-identified session 生效，shell-only session 保留 session name），hover tooltip 顯示「title - sessionName」；右下 status bar 多一列 OSC title（同樣受 toggle 控制）；左下 status bar 的 host / session name 雙擊進入 session rename popover，anchor 用 `e.currentTarget` 貼合被點元素；`useAgentStore` 新增持久化 `showOscTitle` + ephemeral `oscTitles` per-session map；`useTerminal` 暴露 `onTitle` callback 並綁定 xterm `onTitleChange`
+
+### 介面調整
+
+- **spa**：icon+badge 模式 overlay dot 位置微調 `top:-1px / right:-2px`，與 icon 角落更貼合
+- **spa**：未讀視覺改 per-mode 呈現 —— `badge` 模式把 overlay dot 染 unread 紅 (#b91c1c) 取代原本獨立角落 pip；`dot` / `iconDot` 模式在 dot wrapper 右上角疊 5px 小紅 pip；`icon` 模式與尚未收到 agent 事件時保留原本 corner pip 做 fallback
+- **spa**：Agent error 狀態改用 `WarningDiamond` duotone 圖示取代燈號 —— `badge` 模式在 overlay 位置繪製；`dot` / `iconDot` 模式整顆 dot 換成 warning diamond
+- **spa**：status bar host / session name 加上 `cursor:pointer` + `select-none` + `status.rename_hint` tooltip，視覺上明確可雙擊
+
+### 重構
+
+- **spa**：`TabStatusDot` 改名為 `TabStatusIndicator`（元件現在會渲染 dot 或 WarningDiamond，舊名不再貼合行為）；prop `style` → `mode`；`data-testid` 同步更名 `tab-status-dot` → `tab-status-indicator`
+- **spa**：抽 `renderTabIcon` / `UnreadPip` / `shouldShowGlobalUnreadPip` 出 `SortableTab.tsx`，分拆到新檔 `TabIcon.tsx` 與 `tab-icon-helpers.ts`（函式 export 與元件 export 拆開以符合 react-refresh 規則）
+- **spa**：`useAgentStore` 新增 `sanitizeOscTitle(raw)` helper，strip ANSI CSI (`\x1b[...m`) 與 C0 控制字元後再存 `oscTitles`，避免第三方 shell 或 agent 嵌 escape 序列時畫面亂碼
+- **spa**：`features/workspace/hooks.ts` 提出 `openRenameForTab(tab, anchor?)` helper，context menu 與 StatusBar 雙擊共用同一開啟邏輯，不再複製 rect 計算
+
+### 測試
+
+- SPA 新增 14 個測試：`TabStatusIndicator` unread 紅 tint / error warning-diamond（overlay + replace）3 項；`SortableTab` badge unread 染紅、dot mode pip、error warning-diamond（badge + dot）共 5 項；`useAgentStore` `setShowOscTitle` toggle、`setOscTitle` 的 trim / ANSI strip / C0 strip / equality guard / clearSession / removeHost 共 6 項；`sanitizeOscTitle` 4 分支；`TerminalSection` OSC toggle 1 項；`TerminalView` mock 補 `onTitleChange`；合計 +14，全套 1867 tests 通過
+
+### 文件
+
+- 新增 `docs/superpowers/specs/2026-04-18-cc-statusline-integration-design.md` backlog spec，記錄 CC `statusLine` / hooks 結構化狀態整合的後續設計方向（HTTP POST 路徑、env session 注入、wrapper pattern、跨機 URL 策略），並彙整 hooks 貧乏欄位 vs statusLine 完整 JSON 對照；同步建立 issue #425（InlineTab 對齊 common tab）與 #426（stream mode OSC 擷取）追蹤本版未處理的一致性缺口
 
 ## [1.0.0-alpha.156] - 2026-04-17
 

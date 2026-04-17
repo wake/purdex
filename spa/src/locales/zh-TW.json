@@ -98,6 +98,8 @@
   "settings.terminal.tab_indicator.dot": "只有燈號",
   "settings.terminal.tab_indicator.icon_dot": "燈號 + 圖示",
   "settings.terminal.tab_indicator.badge": "圖示帶角標",
+  "settings.terminal.osc_title.label": "顯示 agent 動態標題",
+  "settings.terminal.osc_title.desc": "啟用後分頁標籤改顯示 agent 送出的 OSC 0/2 標題；滑鼠滑過顯示「標題 - session name」",
   "settings.terminal.cc_icon.label": "Claude Code 圖示",
   "settings.terminal.cc_icon.desc": "Claude Code session 在分頁標籤上使用的圖示",
   "settings.terminal.cc_icon.bot": "機器人",
@@ -281,6 +283,7 @@
   "tab.move_to": "移到",
 
   "status.no_active": "無使用中的 Session",
+  "status.rename_hint": "雙擊可修改 session 名稱",
 
   "stream.thinking": "思考中...",
   "stream.waiting": "等待訊息...",

@@ -1,5 +1,5 @@
 import type { AgentStatus, TabIndicatorStyle } from '../../../stores/useAgentStore'
-import { TabStatusDot } from '../../../components/TabStatusDot'
+import { TabStatusIndicator } from '../../../components/TabStatusIndicator'
 import { SubagentDots } from '../../../components/SubagentDots'
 
 interface Params {
@@ -38,7 +38,7 @@ export function renderInlineTabIcon({
         data-testid="inline-tab-dot"
         className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0`}
       >
-        <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
+        <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
         {subagentCount > 0 && <SubagentDots count={subagentCount} />}
       </span>
     )
@@ -51,7 +51,7 @@ export function renderInlineTabIcon({
           data-testid="inline-tab-dot"
           className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0`}
         >
-          <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
+          <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
           {subagentCount > 0 && <SubagentDots count={subagentCount} />}
         </span>
         {IconComponent && <IconComponent size={ICON_SIZE} className="flex-shrink-0" />}
@@ -66,7 +66,7 @@ export function renderInlineTabIcon({
       className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0`}
     >
       {IconComponent && <IconComponent size={ICON_SIZE} className="flex-shrink-0" />}
-      <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
+      <TabStatusIndicator status={agentStatus} mode="overlay" isActive={isActive} />
       {subagentCount > 0 && <SubagentDots count={subagentCount} />}
     </span>
   )

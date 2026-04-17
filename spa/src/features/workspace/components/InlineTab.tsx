@@ -49,8 +49,14 @@ export function InlineTab({
   const agentType = useAgentStore((s) => (ck ? s.agentTypes[ck] : undefined))
   const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
   const ccIconVariant = useAgentStore((s) => s.ccIconVariant)
+  const showOscTitle = useAgentStore((s) => s.showOscTitle)
+  const oscTitle = useAgentStore((s) => (ck ? s.oscTitles[ck] : undefined))
 
   const isTerminated = primaryContent.kind === 'tmux-session' && !!primaryContent.terminated
+
+  const useOsc = showOscTitle && !isTerminated && !!agentType && !!oscTitle
+  const displayTitle = useOsc && oscTitle ? oscTitle : title
+  const tooltip = useOsc && oscTitle ? `${oscTitle} - ${title}` : title
   const isHostOffline = useHostStore((s) => {
     if (!hostId || isTerminated) return false
     const rt = s.runtime[hostId]
@@ -122,8 +128,8 @@ export function InlineTab({
         isActive,
         subagentCount,
       })}
-      <span className="flex-1 truncate" title={title}>
-        {title}
+      <span className="flex-1 truncate" title={tooltip}>
+        {displayTitle}
       </span>
       {isHostOffline && (
         <WifiSlash

@@ -98,6 +98,8 @@
   "settings.terminal.tab_indicator.dot": "Dot only",
   "settings.terminal.tab_indicator.icon_dot": "Dot beside icon",
   "settings.terminal.tab_indicator.badge": "Icon with badge",
+  "settings.terminal.osc_title.label": "Show agent dynamic title",
+  "settings.terminal.osc_title.desc": "When enabled, tabs display the OSC 0/2 title emitted by the agent. Hover shows \"title - session name\".",
   "settings.terminal.cc_icon.label": "Claude Code icon",
   "settings.terminal.cc_icon.desc": "Which icon Claude Code sessions use on the tab",
   "settings.terminal.cc_icon.bot": "Bot",
@@ -281,6 +283,7 @@
   "tab.move_to": "Move to",
 
   "status.no_active": "No active session",
+  "status.rename_hint": "Double-click to rename session",
 
   "stream.thinking": "Thinking...",
   "stream.waiting": "Waiting for messages...",

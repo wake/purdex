@@ -14,6 +14,7 @@ interface Props {
   activeTab: Tab | null
   onViewModeChange?: (tabId: string, paneId: string, mode: 'terminal' | 'stream') => void
   onNavigateToHost?: (hostId: string) => void
+  onStartRename?: (tab: Tab, anchor: Element | null) => void
 }
 
 const VIEW_MODE_COLORS: Record<string, string> = {
@@ -98,7 +99,7 @@ function UploadStatus({ hostId, sessionCode, t }: { hostId: string | null; sessi
   return null
 }
 
-export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost }: Props) {
+export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onStartRename }: Props) {
   const t = useI18nStore((s) => s.t)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -119,8 +120,17 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost }: Pro
   const hostConfig = useHostStore((s) => agentHostId ? s.hosts[agentHostId] : null)
   const hostRuntime = useHostStore((s) => agentHostId ? s.runtime[agentHostId] : null)
   const agentLabel = useAgentStore((s) => agentCk ? s.models[agentCk] ?? null : null)
+  const agentType = useAgentStore((s) => agentCk ? s.agentTypes[agentCk] ?? null : null)
+  const showOscTitle = useAgentStore((s) => s.showOscTitle)
+  const rawOscTitle = useAgentStore((s) => agentCk ? s.oscTitles[agentCk] ?? null : null)
+  const oscTitle = showOscTitle && agentType ? rawOscTitle : null
   const closeMenu = useCallback(() => setMenuOpen(false), [])
   useClickOutside(menuRef, closeMenu)
+
+  const handleNameDoubleClick = useCallback((e: React.MouseEvent<HTMLSpanElement>) => {
+    if (!activeTab || !onStartRename) return
+    onStartRename(activeTab, e.currentTarget)
+  }, [activeTab, onStartRename])
 
   if (!activeTab) {
     return (
@@ -151,8 +161,20 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost }: Pro
 
   return (
     <div className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted gap-3 flex-shrink-0 relative z-10">
-      <span className="text-text-secondary">{hostName}</span>
-      <span className="text-text-secondary">{sessionName}</span>
+      <span
+        className="text-text-secondary cursor-pointer select-none"
+        title={t('status.rename_hint')}
+        onDoubleClick={handleNameDoubleClick}
+      >
+        {hostName}
+      </span>
+      <span
+        className="text-text-secondary cursor-pointer select-none"
+        title={t('status.rename_hint')}
+        onDoubleClick={handleNameDoubleClick}
+      >
+        {sessionName}
+      </span>
       <span
         className={
           status === 'auth-error' ? 'text-red-400 cursor-pointer flex items-center gap-1'
@@ -175,7 +197,16 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost }: Pro
         </span>
       )}
       <UploadStatus hostId={agentHostId} sessionCode={agentSessionCode} t={t} />
-      <span className="ml-auto flex items-center">
+      {oscTitle && (
+        <span
+          data-testid="osc-title"
+          className="ml-auto max-w-[40ch] truncate text-text-muted"
+          title={oscTitle}
+        >
+          {oscTitle}
+        </span>
+      )}
+      <span className={`${oscTitle ? '' : 'ml-auto'} flex items-center`}>
         <div className="relative" ref={menuRef}>
           <button
             title={t('nav.toggle_view')}

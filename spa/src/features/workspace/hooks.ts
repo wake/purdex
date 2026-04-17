@@ -93,6 +93,23 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     if (tab && !tab.locked) handleCloseTab(tabId)
   }, [tabs, handleCloseTab])
 
+  const openRenameForTab = useCallback((tab: Tab, anchorEl?: Element | null) => {
+    const primary = getPrimaryPane(tab.layout)
+    const c = primary.content
+    if (c.kind !== 'tmux-session' || c.terminated) return
+    const el = anchorEl ?? document.querySelector(`[data-tab-id="${tab.id}"]`)
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    setRenameTarget({
+      tabId: tab.id,
+      hostId: c.hostId,
+      sessionCode: c.sessionCode,
+      currentName: c.cachedName || c.sessionCode,
+      anchorRect: rect,
+    })
+    setRenameError(undefined)
+  }, [])
+
   const handleContextAction = useCallback((action: ContextMenuAction, payload?: string) => {
     if (!contextMenu) return
     const { tab } = contextMenu
@@ -131,20 +148,7 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
         break
       }
       case 'rename': {
-        const primary = getPrimaryPane(tab.layout)
-        const c = primary.content
-        if (c.kind !== 'tmux-session' || c.terminated) break
-        const tabEl = document.querySelector(`[data-tab-id="${tab.id}"]`)
-        if (!tabEl) break
-        const rect = tabEl.getBoundingClientRect()
-        setRenameTarget({
-          tabId: tab.id,
-          hostId: c.hostId,
-          sessionCode: c.sessionCode,
-          currentName: c.cachedName || c.sessionCode,
-          anchorRect: rect,
-        })
-        setRenameError(undefined)
+        openRenameForTab(tab)
         break
       }
       case 'mergeToTab': {
@@ -163,7 +167,7 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
         break
       }
     }
-  }, [contextMenu, tabs, displayTabs, handleCloseTab, handleSelectTab])
+  }, [contextMenu, tabs, displayTabs, handleCloseTab, handleSelectTab, openRenameForTab])
 
   const handleRenameConfirm = useCallback(async (name: string) => {
     if (!renameTarget) return
@@ -226,6 +230,7 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     handleRenameConfirm,
     handleRenameCancel,
     handleClearRenameError,
+    openRenameForTab,
     openSingletonAndSelect,
   }
 }
