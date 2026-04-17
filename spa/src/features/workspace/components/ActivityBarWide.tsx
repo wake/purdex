@@ -5,7 +5,10 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  pointerWithin,
+  rectIntersection,
   closestCenter,
+  type CollisionDetection,
   type DragEndEvent,
 } from '@dnd-kit/core'
 import {
@@ -14,12 +17,22 @@ import {
 } from '@dnd-kit/sortable'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useLayoutStore, MIN_WIDTH, MAX_WIDTH } from '../../../stores/useLayoutStore'
+import { useWorkspaceStore } from '../store'
+import { useTabStore } from '../../../stores/useTabStore'
 import { RegionResize } from '../../../components/RegionResize'
 import { CollapseButton } from './CollapseButton'
 import { WorkspaceRow } from './WorkspaceRow'
 import { HomeRow } from './HomeRow'
 import type { ActivityBarProps } from './activity-bar-props'
 import { computeDragEndAction, dispatchDragEndAction } from '../lib/computeDragEndAction'
+
+const customCollisionDetection: CollisionDetection = (args) => {
+  const pw = pointerWithin(args)
+  if (pw.length > 0) return pw
+  const ri = rectIntersection(args)
+  if (ri.length > 0) return ri
+  return closestCenter(args)
+}
 
 const NOOP = () => {}
 
@@ -69,6 +82,31 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const contextMenuTab = onContextMenuTab ?? NOOP
   const addTabToWs = onAddTabToWorkspace ?? NOOP
 
+  const insertTab = useWorkspaceStore((s) => s.insertTab)
+  const removeTabFromWorkspace = useWorkspaceStore((s) => s.removeTabFromWorkspace)
+  const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace)
+  const globalActiveTabId = useTabStore((s) => s.activeTabId)
+
+  const handleMoveTabToWorkspace = useCallback(
+    (tabId: string, targetWsId: string, afterTabId: string | null) => {
+      insertTab(tabId, targetWsId, afterTabId)
+      if (tabId === globalActiveTabId) {
+        setActiveWorkspace(targetWsId)
+      }
+    },
+    [insertTab, setActiveWorkspace, globalActiveTabId],
+  )
+
+  const handleMoveTabToStandalone = useCallback(
+    (tabId: string, sourceWsId: string) => {
+      removeTabFromWorkspace(sourceWsId, tabId)
+      if (tabId === globalActiveTabId) {
+        setActiveWorkspace(null)
+      }
+    },
+    [removeTabFromWorkspace, setActiveWorkspace, globalActiveTabId],
+  )
+
   const handleDragEnd = useCallback(
     (e: DragEndEvent) => {
       const action = computeDragEndAction(e, { wsIds, workspaces, standaloneTabIds })
@@ -76,6 +114,8 @@ export function ActivityBarWide(props: ActivityBarProps) {
         onReorderWorkspaces,
         onReorderStandaloneTabs,
         onReorderWorkspaceTabs,
+        onMoveTabToWorkspace: handleMoveTabToWorkspace,
+        onMoveTabToStandalone: handleMoveTabToStandalone,
       })
     },
     [
@@ -85,6 +125,8 @@ export function ActivityBarWide(props: ActivityBarProps) {
       onReorderWorkspaces,
       onReorderWorkspaceTabs,
       onReorderStandaloneTabs,
+      handleMoveTabToWorkspace,
+      handleMoveTabToStandalone,
     ],
   )
 
@@ -96,7 +138,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
       >
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCenter}
+          collisionDetection={customCollisionDetection}
           onDragEnd={handleDragEnd}
         >
           <HomeRow
