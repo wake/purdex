@@ -7,7 +7,7 @@ import { useAgentStore } from '../../../stores/useAgentStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { getPrimaryPane } from '../../../lib/pane-tree'
 import { compositeKey } from '../../../lib/composite-key'
-import { TabStatusDot } from '../../../components/TabStatusDot'
+import { TabStatusIndicator } from '../../../components/TabStatusIndicator'
 import { SubagentDots } from '../../../components/SubagentDots'
 
 interface Props {
@@ -44,8 +44,15 @@ export function InlineTab({
   const agentStatus = useAgentStore((s) => (ck ? s.statuses[ck] : undefined))
   const isUnread = useAgentStore((s) => (ck ? !!s.unread[ck] : false))
   const subagentCount = useAgentStore((s) => (ck ? (s.subagents[ck]?.length ?? 0) : 0))
+  const showOscTitle = useAgentStore((s) => s.showOscTitle)
+  const oscTitle = useAgentStore((s) => (ck ? s.oscTitles[ck] : undefined))
+  const agentType = useAgentStore((s) => (ck ? s.agentTypes[ck] : undefined))
   const isTerminated =
     primaryContent.kind === 'tmux-session' && !!primaryContent.terminated
+
+  const useOsc = showOscTitle && !isTerminated && !!agentType && !!oscTitle
+  const displayTitle = useOsc && oscTitle ? oscTitle : title
+  const tooltip = useOsc && oscTitle ? `${oscTitle} - ${title}` : title
   const isHostOffline = useHostStore((s) => {
     if (!hostId || isTerminated) return false
     const rt = s.runtime[hostId]
@@ -110,12 +117,12 @@ export function InlineTab({
           data-testid="inline-tab-status-slot"
           className="relative inline-flex items-center justify-center w-3 h-3 flex-shrink-0"
         >
-          <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
+          <TabStatusIndicator status={agentStatus} mode="overlay" isActive={isActive} />
           {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
         </span>
       )}
-      <span className="flex-1 truncate" title={title}>
-        {title}
+      <span className="flex-1 truncate" title={tooltip}>
+        {displayTitle}
       </span>
       {isHostOffline && (
         <WifiSlash

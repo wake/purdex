@@ -20,6 +20,7 @@ const { mockClose, TerminalSpy, capturedCallbacks } = vi.hoisted(() => {
       write: vi.fn(),
       onData: vi.fn(() => ({ dispose: vi.fn() })),
       onResize: vi.fn(() => ({ dispose: vi.fn() })),
+      onTitleChange: vi.fn(() => ({ dispose: vi.fn() })),
       dispose: vi.fn(),
       focus: vi.fn(),
       unicode: { activeVersion: '6' },

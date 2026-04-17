@@ -131,13 +131,13 @@ describe('SortableTab renderTabIcon modes', () => {
   it('icon mode: no status dot rendered', () => {
     seedAgent('icon')
     render(<SortableTab {...defaultProps} />)
-    expect(screen.queryByTestId('tab-status-dot')).toBeNull()
+    expect(screen.queryByTestId('tab-status-indicator')).toBeNull()
   })
 
   it('dot mode: renders replace-style dot (8px, not absolute)', () => {
     seedAgent('dot')
     render(<SortableTab {...defaultProps} />)
-    const dot = screen.getByTestId('tab-status-dot')
+    const dot = screen.getByTestId('tab-status-indicator')
     expect(dot.style.width).toBe('8px')
     expect(dot.style.position).not.toBe('absolute')
   })
@@ -145,19 +145,51 @@ describe('SortableTab renderTabIcon modes', () => {
   it('iconDot mode: renders replace-style dot alongside icon', () => {
     seedAgent('iconDot')
     render(<SortableTab {...defaultProps} />)
-    const dot = screen.getByTestId('tab-status-dot')
+    const dot = screen.getByTestId('tab-status-indicator')
     expect(dot.style.width).toBe('8px')
     expect(dot.style.position).not.toBe('absolute')
   })
 
-  it('badge mode: renders overlay dot in upper-right', () => {
+  it('badge mode: renders overlay dot in upper-right (nudged -1/-2 px)', () => {
     seedAgent('badge')
     render(<SortableTab {...defaultProps} />)
-    const dot = screen.getByTestId('tab-status-dot')
+    const dot = screen.getByTestId('tab-status-indicator')
     expect(dot.style.width).toBe('6px')
     expect(dot.style.position).toBe('absolute')
-    expect(dot.style.top).toBe('0px')
-    expect(dot.style.right).toBe('0px')
+    expect(dot.style.top).toBe('-1px')
+    expect(dot.style.right).toBe('-2px')
+  })
+
+  it('badge mode + unread: dot tints red instead of separate pip', () => {
+    seedAgent('badge')
+    useAgentStore.setState({ unread: { 'h1:sc1': true } })
+    render(<SortableTab {...defaultProps} isActive={false} />)
+    const dot = screen.getByTestId('tab-status-indicator')
+    expect(dot.style.backgroundColor).toBe('rgb(185, 28, 28)')
+    expect(screen.queryByTestId('tab-unread-pip')).toBeNull()
+  })
+
+  it('dot mode + unread: pip on dot wrapper, no global pip', () => {
+    seedAgent('dot')
+    useAgentStore.setState({ unread: { 'h1:sc1': true } })
+    render(<SortableTab {...defaultProps} isActive={false} />)
+    expect(screen.getByTestId('tab-unread-pip')).toBeTruthy()
+  })
+
+  it('badge mode + error: warning-diamond instead of dot', () => {
+    seedAgent('badge')
+    useAgentStore.setState({ statuses: { 'h1:sc1': 'error' } })
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.queryByTestId('tab-status-indicator')).toBeNull()
+    expect(screen.getByTestId('tab-status-error')).toBeTruthy()
+  })
+
+  it('dot mode + error: warning-diamond replaces the dot', () => {
+    seedAgent('dot')
+    useAgentStore.setState({ statuses: { 'h1:sc1': 'error' } })
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.queryByTestId('tab-status-indicator')).toBeNull()
+    expect(screen.getByTestId('tab-status-error')).toBeTruthy()
   })
 
   it('terminated session: no status dot even when agent event exists', () => {
@@ -172,6 +204,6 @@ describe('SortableTab renderTabIcon modes', () => {
     // The overlay dot is still rendered because agentStatus is set — however,
     // getAgentIcon is NOT called, so the tab icon stays as the pane icon.
     // We assert the component renders without crashing.
-    expect(screen.getByTestId('tab-status-dot')).toBeTruthy()
+    expect(screen.getByTestId('tab-status-indicator')).toBeTruthy()
   })
 })
