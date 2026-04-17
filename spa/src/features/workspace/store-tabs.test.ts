@@ -91,6 +91,18 @@ describe('useWorkspaceStore', () => {
 
   // === insertTab edge cases ===
 
+  it('insertTab with nonexistent wsId does not orphan the tab from its source workspace', () => {
+    // Regression for concurrent-delete race: caller drags tab from ws1 to
+    // ws2, but ws2 was deleted in another session before the drop lands.
+    // insertTab must abort entirely rather than running the dedup branch,
+    // which would remove the tab from ws1 and leave it in no workspace.
+    const ws1 = useWorkspaceStore.getState().addWorkspace('W1')
+    useWorkspaceStore.getState().insertTab('tab-1', ws1.id)
+    useWorkspaceStore.getState().insertTab('tab-1', 'deleted-ws')
+    const after = useWorkspaceStore.getState().workspaces.find((w) => w.id === ws1.id)!
+    expect(after.tabs).toEqual(['tab-1'])
+  })
+
   it('insertTab with nonexistent wsId is a no-op', () => {
     useWorkspaceStore.getState().addWorkspace('WS')
     useWorkspaceStore.getState().insertTab('tab-1', 'deleted-ws')

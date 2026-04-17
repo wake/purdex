@@ -138,6 +138,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         if (!targetWsId) return
 
+        // Concurrent-delete guard: if the caller passes a target workspace
+        // that no longer exists (e.g. another session removed it mid-drag),
+        // abort rather than running the dedup branch — otherwise the tab
+        // would be removed from its source and land in no workspace at all.
+        if (!get().workspaces.some((ws) => ws.id === targetWsId)) return
+
         set((state) => ({
           workspaces: state.workspaces.map((ws) => {
             if (ws.id === targetWsId) {
