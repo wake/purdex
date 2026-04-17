@@ -151,8 +151,8 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost }: Pro
 
   return (
     <div className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted gap-3 flex-shrink-0 relative z-10">
-      <span>{hostName}</span>
-      <span>{sessionName}</span>
+      <span className="text-text-secondary">{hostName}</span>
+      <span className="text-text-secondary">{sessionName}</span>
       <span
         className={
           status === 'auth-error' ? 'text-red-400 cursor-pointer flex items-center gap-1'

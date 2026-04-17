@@ -41,7 +41,7 @@ export function TitleBar({ title }: Props) {
     >
       {/* Title — absolute positioned for true center across full window width */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none px-2">
-        <span className="text-xs text-text-muted truncate max-w-[calc(100%-26rem)]">{title}</span>
+        <span className="text-xs text-text-secondary truncate max-w-[calc(100%-26rem)]">{title}</span>
       </div>
       <div className="flex-1" />
       <div
@@ -58,7 +58,7 @@ export function TitleBar({ title }: Props) {
               className={`p-1 rounded transition-colors cursor-pointer ${
                 isVisible
                   ? 'text-accent-base bg-accent-base/10 hover:bg-accent-base/20'
-                  : 'text-text-muted hover:text-text-primary hover:bg-surface-hover'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
               }`}
               title={label}
               onClick={() => toggleVisibility(region)}
@@ -75,7 +75,7 @@ export function TitleBar({ title }: Props) {
           <button
             key={pattern}
             disabled={!activeTabId}
-            className="p-1 rounded cursor-pointer text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:pointer-events-none"
+            className="p-1 rounded cursor-pointer text-text-secondary hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:pointer-events-none"
             title={label}
             onClick={() => handlePattern(pattern)}
           >
