@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.150] - 2026-04-17
+
+### 功能
+
+- **spa**：Terminal tab icon 依 agent 類型顯示 —— Claude Code 顯示 Lightning、Codex 顯示 Code；未收到 hook event 的 session 維持 `TerminalWindow`/`ChatCircleDots` pane icon，terminated session 保留 `SmileySad` tombstone（#413）
+
+## [1.0.0-alpha.149] - 2026-04-17
+
+### 介面調整
+
+- **spa**：Status bar 主機名/session 名、Title bar 標題與右側按鈕統一採用 `text-text-secondary`，與 Activity bar icon 顏色一致（#400）
+- **spa**：Settings `SettingItem` 外層改為 `items-start`，Sync 頁 Modules 區塊 label 不再被右側多行 checkbox 撐開垂直置中（#411）
+
 ## [1.0.0-alpha.148] - 2026-04-17
 
 ### 功能

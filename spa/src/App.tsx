@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Router } from 'wouter'
 import { prefetchWeight } from './features/workspace/lib/icon-path-cache'
+import { reorderStandaloneTabOrder } from './features/workspace/lib/reorderStandaloneTabOrder'
 import { ActivityBar } from './components/ActivityBar'
 import { TabBar } from './components/TabBar'
 import { TabContent } from './components/TabContent'
@@ -56,6 +57,9 @@ export default function App() {
   const tabs = useTabStore((s) => s.tabs)
   const tabOrder = useTabStore((s) => s.tabOrder)
   const activeTabId = useTabStore((s) => s.activeTabId)
+
+  // Layout store
+  const tabPosition = useLayoutStore((s) => s.tabPosition)
 
   // Workspace store
   const workspaces = useWorkspaceStore((s) => s.workspaces)
@@ -114,6 +118,8 @@ export default function App() {
     handleSelectTab,
     handleCloseTab,
     handleAddTab,
+    handleAddTabToWorkspace,
+    handleReorderWorkspaceTabs,
     handleReorderTabs,
     handleContextMenu,
     handleMiddleClick,
@@ -140,6 +146,11 @@ export default function App() {
 
   const handleReorderWorkspaces = useCallback((ids: string[]) => {
     useWorkspaceStore.getState().reorderWorkspaces(ids)
+  }, [])
+
+  const handleReorderStandaloneTabs = useCallback((newOrder: string[]) => {
+    const current = useTabStore.getState().tabOrder
+    useTabStore.getState().reorderTabs(reorderStandaloneTabOrder(current, newOrder))
   }, [])
 
   const handleCloseTabContextMenu = useCallback(() => {
@@ -221,19 +232,31 @@ export default function App() {
             onContextMenuWorkspace={handleWsContextMenu}
             onOpenHosts={handleOpenHosts}
             onOpenSettings={handleOpenSettings}
+            // Phase 2
+            tabsById={tabs}
+            activeTabId={activeTabId}
+            onSelectTab={handleSelectTab}
+            onCloseTab={handleCloseTab}
+            onMiddleClickTab={handleMiddleClick}
+            onContextMenuTab={handleContextMenu}
+            onReorderWorkspaceTabs={handleReorderWorkspaceTabs}
+            onReorderStandaloneTabs={handleReorderStandaloneTabs}
+            onAddTabToWorkspace={handleAddTabToWorkspace}
           />
           <SidebarRegion region="primary-sidebar" resizeEdge="right" />
           <div className="flex-1 flex flex-col min-w-0">
-            <TabBar
-              tabs={displayTabs}
-              activeTabId={activeTabId}
-              onSelectTab={handleSelectTab}
-              onCloseTab={handleCloseTab}
-              onAddTab={handleAddTab}
-              onReorderTabs={handleReorderTabs}
-              onMiddleClick={handleMiddleClick}
-              onContextMenu={handleContextMenu}
-            />
+            {tabPosition === 'top' && (
+              <TabBar
+                tabs={displayTabs}
+                activeTabId={activeTabId}
+                onSelectTab={handleSelectTab}
+                onCloseTab={handleCloseTab}
+                onAddTab={handleAddTab}
+                onReorderTabs={handleReorderTabs}
+                onMiddleClick={handleMiddleClick}
+                onContextMenu={handleContextMenu}
+              />
+            )}
             <div className="flex-1 flex overflow-hidden">
               <SidebarRegion region="primary-panel" resizeEdge="right" />
               {visibleTabIds.length === 0 && activeWorkspaceId !== null ? (

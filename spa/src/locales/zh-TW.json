@@ -175,6 +175,13 @@
   "nav.toggle_view": "切換檢視模式",
   "nav.collapse_activity_bar": "收合側邊欄",
   "nav.expand_activity_bar": "展開側邊欄",
+  "nav.workspace_empty": "尚無分頁",
+  "nav.add_tab_to_workspace": "在 {{name}} 開新分頁",
+  "settings.appearance.tab_position.label": "分頁位置",
+  "settings.appearance.tab_position.desc": "開啟的分頁顯示在哪裡",
+  "settings.appearance.tab_position.top": "上方",
+  "settings.appearance.tab_position.left": "左側（側邊欄內）",
+  "settings.appearance.tab_position.left_hint": "選擇左側會讓側邊欄維持寬版",
   "nav.collapse_locked_tooltip": "當分頁顯示在左側時，側邊欄會維持寬版",
 
   "page.newtab.title": "新增分頁",

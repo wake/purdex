@@ -11,6 +11,8 @@ import { getAllLocales } from '../../lib/locale-registry'
 import type { LocaleDef } from '../../lib/locale-registry'
 import { LocaleEditor } from './LocaleEditor'
 import { LocaleImportModal } from './LocaleImportModal'
+import { useLayoutStore } from '../../stores/useLayoutStore'
+import type { TabPosition } from '../../stores/useLayoutStore'
 
 function exportTheme(theme: ThemeDefinition) {
   const data = JSON.stringify({ name: theme.name, tokens: theme.tokens }, null, 2)
@@ -42,6 +44,8 @@ export function AppearanceSection() {
   const setActiveTheme = useThemeStore((s) => s.setActiveTheme)
   const deleteCustomTheme = useThemeStore((s) => s.deleteCustomTheme)
   const t = useI18nStore((s) => s.t)
+  const tabPosition = useLayoutStore((s) => s.tabPosition)
+  const setTabPosition = useLayoutStore((s) => s.setTabPosition)
   const activeLocaleId = useI18nStore((s) => s.activeLocaleId)
   const setLocale = useI18nStore((s) => s.setLocale)
   const deleteCustomLocale = useI18nStore((s) => s.deleteCustomLocale)
@@ -82,6 +86,10 @@ export function AppearanceSection() {
 
   const handleLocaleImported = (localeId: string) => {
     setLocale(localeId)
+  }
+
+  const handleTabPositionChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTabPosition(e.target.value as TabPosition)
   }
 
   return (
@@ -198,6 +206,39 @@ export function AppearanceSection() {
               </button>
             </>
           )}
+        </div>
+      </SettingItem>
+
+      <SettingItem
+        label={t('settings.appearance.tab_position.label')}
+        description={t('settings.appearance.tab_position.desc')}
+      >
+        <div className="flex flex-col gap-1.5">
+          <label className="flex items-center gap-2 text-xs text-text-primary cursor-pointer">
+            <input
+              type="radio"
+              name="tab-position"
+              value="top"
+              checked={tabPosition === 'top'}
+              onChange={handleTabPositionChange}
+              className="accent-purple-500"
+            />
+            {t('settings.appearance.tab_position.top')}
+          </label>
+          <label className="flex items-center gap-2 text-xs text-text-primary cursor-pointer">
+            <input
+              type="radio"
+              name="tab-position"
+              value="left"
+              checked={tabPosition === 'left'}
+              onChange={handleTabPositionChange}
+              className="accent-purple-500"
+            />
+            {t('settings.appearance.tab_position.left')}
+          </label>
+          <p className="text-[11px] text-text-muted mt-0.5">
+            {t('settings.appearance.tab_position.left_hint')}
+          </p>
         </div>
       </SettingItem>
 

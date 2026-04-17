@@ -72,7 +72,15 @@ describe('createLayoutContributor', () => {
     const payload = contributor.serialize() as FullPayload
     const keys = Object.keys(payload.data)
 
-    expect(keys).toContain('regions')
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        'regions',
+        'activityBarWidth',
+        'tabPosition',
+        'activityBarWideSize',
+        'workspaceExpanded',
+      ]),
+    )
 
     // Must NOT contain action functions
     expect(keys).not.toContain('setRegionMode')
