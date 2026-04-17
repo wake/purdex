@@ -150,14 +150,46 @@ describe('SortableTab renderTabIcon modes', () => {
     expect(dot.style.position).not.toBe('absolute')
   })
 
-  it('badge mode: renders overlay dot in upper-right', () => {
+  it('badge mode: renders overlay dot in upper-right (nudged -1/-2 px)', () => {
     seedAgent('badge')
     render(<SortableTab {...defaultProps} />)
     const dot = screen.getByTestId('tab-status-dot')
     expect(dot.style.width).toBe('6px')
     expect(dot.style.position).toBe('absolute')
-    expect(dot.style.top).toBe('0px')
-    expect(dot.style.right).toBe('0px')
+    expect(dot.style.top).toBe('-1px')
+    expect(dot.style.right).toBe('-2px')
+  })
+
+  it('badge mode + unread: dot tints red instead of separate pip', () => {
+    seedAgent('badge')
+    useAgentStore.setState({ unread: { 'h1:sc1': true } })
+    render(<SortableTab {...defaultProps} isActive={false} />)
+    const dot = screen.getByTestId('tab-status-dot')
+    expect(dot.style.backgroundColor).toBe('rgb(185, 28, 28)')
+    expect(screen.queryByTestId('tab-unread-pip')).toBeNull()
+  })
+
+  it('dot mode + unread: pip on dot wrapper, no global pip', () => {
+    seedAgent('dot')
+    useAgentStore.setState({ unread: { 'h1:sc1': true } })
+    render(<SortableTab {...defaultProps} isActive={false} />)
+    expect(screen.getByTestId('tab-unread-pip')).toBeTruthy()
+  })
+
+  it('badge mode + error: warning-diamond instead of dot', () => {
+    seedAgent('badge')
+    useAgentStore.setState({ statuses: { 'h1:sc1': 'error' } })
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.queryByTestId('tab-status-dot')).toBeNull()
+    expect(screen.getByTestId('tab-status-error')).toBeTruthy()
+  })
+
+  it('dot mode + error: warning-diamond replaces the dot', () => {
+    seedAgent('dot')
+    useAgentStore.setState({ statuses: { 'h1:sc1': 'error' } })
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.queryByTestId('tab-status-dot')).toBeNull()
+    expect(screen.getByTestId('tab-status-error')).toBeTruthy()
   })
 
   it('terminated session: no status dot even when agent event exists', () => {

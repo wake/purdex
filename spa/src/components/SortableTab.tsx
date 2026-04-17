@@ -17,6 +17,36 @@ const EMPTY_SESSIONS: Session[] = []
 import { TabStatusDot } from './TabStatusDot'
 import { SubagentDots } from './SubagentDots'
 
+/**
+ * Global tab-level unread pip is only used when the tab icon slot has no
+ * dot to co-locate with. 'badge' tints the overlay dot red; 'dot' / 'iconDot'
+ * overlay a small pip on the dot wrapper. 'icon' mode has no dot, so fall
+ * back to the legacy corner pip. No dot event yet → also fall back.
+ */
+function shouldShowGlobalUnreadPip(
+  mode: TabIndicatorStyle,
+  agentStatus: AgentStatus | undefined,
+): boolean {
+  if (!agentStatus) return true
+  return mode === 'icon'
+}
+
+function UnreadPip({ size = 5 }: { size?: number }) {
+  return (
+    <span
+      data-testid="tab-unread-pip"
+      className="absolute rounded-full z-20"
+      style={{
+        width: size,
+        height: size,
+        top: -1,
+        right: -2,
+        backgroundColor: '#b91c1c',
+      }}
+    />
+  )
+}
+
 function renderTabIcon(
   IconComponent: React.ComponentType<{ size: number; className?: string }> | undefined,
   agentStatus: AgentStatus | undefined,
@@ -24,6 +54,7 @@ function renderTabIcon(
   isActive: boolean,
   iconSize: number,
   subagentCount: number,
+  isUnread: boolean,
 ) {
   const iconBox = (
     <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
@@ -36,10 +67,15 @@ function renderTabIcon(
     return iconBox
   }
 
+  // error warning diamond suppresses the overlayed unread pip on dot wrappers —
+  // error itself is already a louder signal than unread.
+  const showDotUnreadPip = isUnread && !isActive && agentStatus !== 'error'
+
   if (tabIndicatorStyle === 'dot') {
     return (
       <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
         <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
+        {showDotUnreadPip && <UnreadPip />}
         {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
       </span>
     )
@@ -50,6 +86,7 @@ function renderTabIcon(
       <span className="relative inline-flex items-center flex-shrink-0">
         <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
           <TabStatusDot status={agentStatus} style="replace" isActive={isActive} />
+          {showDotUnreadPip && <UnreadPip />}
           {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
         </span>
         {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
@@ -57,11 +94,17 @@ function renderTabIcon(
     )
   }
 
-  // badge (default): icon + small breathing dot in upper-right
+  // badge (default): icon + small breathing dot in upper-right.
+  // Unread tints the badge dot red instead of overlaying a separate pip.
   return (
     <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
       {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
-      <TabStatusDot status={agentStatus} style="overlay" isActive={isActive} />
+      <TabStatusDot
+        status={agentStatus}
+        style="overlay"
+        isActive={isActive}
+        isUnread={isUnread && !isActive}
+      />
       {subagentCount > 0 && <SubagentDots count={subagentCount} isActive={isActive} />}
     </span>
   )
@@ -118,6 +161,8 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const agentType = useAgentStore((s) => ck ? s.agentTypes[ck] : undefined)
   const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
   const ccIconVariant = useAgentStore((s) => s.ccIconVariant)
+  const showOscTitle = useAgentStore((s) => s.showOscTitle)
+  const oscTitle = useAgentStore((s) => ck ? s.oscTitles[ck] : undefined)
   const isTerminated = primaryContent.kind === 'tmux-session' && !!primaryContent.terminated
   // Keep the terminated pane's SmileySad tombstone instead of the agent icon.
   const agentIcon = !isTerminated && agentType ? getAgentIcon(agentType, { ccVariant: ccIconVariant }) : undefined
@@ -129,7 +174,11 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   })
   const sessionLookup = { getByCode: (code: string) => sessions.find((s) => s.code === code) }
   const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
-  const label = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
+  const sessionLabel = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
+  // OSC 0/2 title takes over when the setting is on and a title has arrived.
+  const useOsc = showOscTitle && !isTerminated && !!oscTitle
+  const label = useOsc && oscTitle ? oscTitle : sessionLabel
+  const tooltip = useOsc && oscTitle ? `${oscTitle} - ${sessionLabel}` : sessionLabel
 
   // Prevent focus theft when clicking the already-active tab.
   // Must wrap dnd-kit's onPointerDown to avoid overriding it.
@@ -172,11 +221,11 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
             ? 'text-white bg-surface-active border border-accent-muted'
             : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
         }`}
-        title={label}
+        title={tooltip}
       >
-        {renderTabIcon(IconComponent, agentStatus, tabIndicatorStyle, isActive, 14, subagentCount)}
+        {renderTabIcon(IconComponent, agentStatus, tabIndicatorStyle, isActive, 14, subagentCount, isUnread)}
         {tab.locked && <Lock size={10} className="absolute bottom-0.5 right-0.5" />}
-        {!isActive && isUnread && (
+        {!isActive && isUnread && shouldShowGlobalUnreadPip(tabIndicatorStyle, agentStatus) && (
           <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
             style={{ backgroundColor: '#b91c1c' }} />
         )}
@@ -212,11 +261,11 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
       }`}
     >
-      {renderTabIcon(IconComponent, agentStatus, tabIndicatorStyle, isActive, 14, subagentCount)}
-      <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
+      {renderTabIcon(IconComponent, agentStatus, tabIndicatorStyle, isActive, 14, subagentCount, isUnread)}
+      <span className="overflow-hidden flex-1 min-w-0 text-left" title={tooltip}>{label}</span>
       {isHostOffline && <WifiSlash size={12} className="text-red-400 flex-shrink-0" />}
       {tab.locked && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
-      {!isActive && isUnread && (
+      {!isActive && isUnread && shouldShowGlobalUnreadPip(tabIndicatorStyle, agentStatus) && (
         <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
           style={{ backgroundColor: '#b91c1c' }} />
       )}

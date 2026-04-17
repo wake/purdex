@@ -25,6 +25,8 @@ export function TerminalSection() {
   const setTabIndicatorStyle = useAgentStore((s) => s.setTabIndicatorStyle)
   const ccIconVariant = useAgentStore((s) => s.ccIconVariant)
   const setCcIconVariant = useAgentStore((s) => s.setCcIconVariant)
+  const showOscTitle = useAgentStore((s) => s.showOscTitle)
+  const setShowOscTitle = useAgentStore((s) => s.setShowOscTitle)
 
   const t = useI18nStore((s) => s.t)
 
@@ -105,6 +107,10 @@ export function TerminalSection() {
 
       <SettingItem label={t('settings.terminal.tab_indicator.label')} description={t('settings.terminal.tab_indicator.desc')}>
         <SegmentControl options={TAB_INDICATOR_OPTIONS} value={tabIndicatorStyle} onChange={setTabIndicatorStyle} />
+      </SettingItem>
+
+      <SettingItem label={t('settings.terminal.osc_title.label')} description={t('settings.terminal.osc_title.desc')}>
+        <ToggleSwitch label={t('settings.terminal.osc_title.label')} checked={showOscTitle} onChange={setShowOscTitle} />
       </SettingItem>
 
       <SettingItem label={t('settings.terminal.cc_icon.label')} description={t('settings.terminal.cc_icon.desc')}>

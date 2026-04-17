@@ -29,12 +29,18 @@ function getTerminalTheme() {
  */
 export interface UseTerminalOptions {
   linkHandler?: (event: MouseEvent, uri: string) => void
+  onTitle?: (title: string) => void
 }
 
 export function useTerminal(options: UseTerminalOptions = {}): UseTerminalResult {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
+
+  // Keep latest onTitle in a ref so the mount effect (empty deps) always
+  // calls the current handler without re-binding the terminal lifecycle.
+  const onTitleRef = useRef(options.onTitle)
+  onTitleRef.current = options.onTitle
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -46,6 +52,10 @@ export function useTerminal(options: UseTerminalOptions = {}): UseTerminalResult
       cursorBlink: true,
       macOptionClickForcesSelection: true,
       rightClickSelectsWord: true,
+    })
+
+    const titleDisposable = term.onTitleChange((title) => {
+      onTitleRef.current?.(title)
     })
 
     const fitAddon = new FitAddon()
@@ -101,6 +111,7 @@ export function useTerminal(options: UseTerminalOptions = {}): UseTerminalResult
       cancelAnimationFrame(rafId)
       observer.disconnect()
       container.removeEventListener('contextmenu', handleContextMenu)
+      titleDisposable.dispose()
       term.dispose()
       fitAddonRef.current = null
       termRef.current = null

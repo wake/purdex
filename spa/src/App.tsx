@@ -129,6 +129,7 @@ export default function App() {
     handleRenameConfirm,
     handleRenameCancel,
     handleClearRenameError,
+    openRenameForTab,
     openSingletonAndSelect,
   } = useTabWorkspaceActions(displayTabs)
 
@@ -273,6 +274,7 @@ export default function App() {
               activeTab={activeTab ?? null}
               onViewModeChange={handleViewModeChange}
               onNavigateToHost={handleNavigateToHost}
+              onStartRename={openRenameForTab}
             />
           </div>
           <SidebarRegion region="secondary-sidebar" resizeEdge="left" />

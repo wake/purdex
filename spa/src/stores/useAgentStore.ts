@@ -27,11 +27,13 @@ interface AgentState {
   models: Record<string, string>
   subagents: Record<string, string[]>
   lastEvents: Record<string, NormalizedEvent>  // for notification dispatcher
+  oscTitles: Record<string, string>  // latest OSC 0/2 title per session (ephemeral)
 
   // UI state
   unread: Record<string, boolean>
   tabIndicatorStyle: TabIndicatorStyle
   ccIconVariant: CcIconVariant
+  showOscTitle: boolean  // use OSC 0/2 as tab label when available
 
   // Actions
   handleNormalizedEvent: (hostId: string, sessionCode: string, event: NormalizedEvent) => void
@@ -40,6 +42,8 @@ interface AgentState {
   removeHost: (hostId: string) => void
   setTabIndicatorStyle: (style: TabIndicatorStyle) => void
   setCcIconVariant: (variant: CcIconVariant) => void
+  setShowOscTitle: (show: boolean) => void
+  setOscTitle: (hostId: string, sessionCode: string, title: string) => void
 }
 
 export const useAgentStore = create<AgentState>()(
@@ -50,9 +54,11 @@ export const useAgentStore = create<AgentState>()(
       models: {},
       subagents: {},
       lastEvents: {},
+      oscTitles: {},
       unread: {},
       tabIndicatorStyle: 'badge' as TabIndicatorStyle,
       ccIconVariant: 'bot' as CcIconVariant,
+      showOscTitle: false,
 
       clearSession: (hostId, sessionCode) => {
         const key = compositeKey(hostId, sessionCode)
@@ -68,6 +74,7 @@ export const useAgentStore = create<AgentState>()(
             models: filterOut(s.models),
             subagents: filterOut(s.subagents),
             lastEvents: filterOut(s.lastEvents),
+            oscTitles: filterOut(s.oscTitles),
             unread: filterOut(s.unread),
           }
         })
@@ -142,12 +149,25 @@ export const useAgentStore = create<AgentState>()(
           models: filterKeys(s.models),
           subagents: filterKeys(s.subagents),
           lastEvents: filterKeys(s.lastEvents),
+          oscTitles: filterKeys(s.oscTitles),
           unread: filterKeys(s.unread),
         }
       }),
 
       setTabIndicatorStyle: (style) => set({ tabIndicatorStyle: style }),
       setCcIconVariant: (variant) => set({ ccIconVariant: variant }),
+      setShowOscTitle: (show) => set({ showOscTitle: show }),
+      setOscTitle: (hostId, sessionCode, title) => set((s) => {
+        const key = compositeKey(hostId, sessionCode)
+        const trimmed = title.trim()
+        if (!trimmed) {
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { [key]: _, ...rest } = s.oscTitles
+          return { oscTitles: rest }
+        }
+        if (s.oscTitles[key] === trimmed) return s
+        return { oscTitles: { ...s.oscTitles, [key]: trimmed } }
+      }),
     }),
     {
       name: STORAGE_KEYS.AGENT,
@@ -156,6 +176,7 @@ export const useAgentStore = create<AgentState>()(
       partialize: (state) => ({
         tabIndicatorStyle: state.tabIndicatorStyle,
         ccIconVariant: state.ccIconVariant,
+        showOscTitle: state.showOscTitle,
       }),
     },
   ),

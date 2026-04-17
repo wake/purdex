@@ -1,4 +1,5 @@
 // spa/src/components/TabStatusDot.tsx
+import { WarningDiamond } from '@phosphor-icons/react'
 import type { AgentStatus } from '../stores/useAgentStore'
 
 /** Visual style of the dot itself — orthogonal to the tab-level indicator mode. */
@@ -8,6 +9,7 @@ interface Props {
   status: AgentStatus | undefined
   style: DotStyle
   isActive: boolean
+  isUnread?: boolean
 }
 
 const STATUS_COLORS: Record<AgentStatus, string> = {
@@ -17,16 +19,37 @@ const STATUS_COLORS: Record<AgentStatus, string> = {
   error: '#ef4444',
 }
 
-export function TabStatusDot({ status, style, isActive }: Props) {
+const UNREAD_COLOR = '#b91c1c'
+
+export function TabStatusDot({ status, style, isActive, isUnread = false }: Props) {
   if (status === undefined) return null
 
-  const color = STATUS_COLORS[status]
   const isRunning = status === 'running'
+  const isError = status === 'error'
 
   if (style === 'overlay') {
     const ringColor = isActive
       ? 'var(--surface-active)'
       : 'var(--surface-secondary)'
+
+    if (isError) {
+      return (
+        <WarningDiamond
+          data-testid="tab-status-error"
+          size={10}
+          weight="duotone"
+          color={STATUS_COLORS.error}
+          style={{
+            position: 'absolute',
+            top: -2,
+            right: -3,
+            filter: `drop-shadow(0 0 1px ${ringColor})`,
+          }}
+        />
+      )
+    }
+
+    const color = isUnread ? UNREAD_COLOR : STATUS_COLORS[status]
     return (
       <span
         data-testid="tab-status-dot"
@@ -35,8 +58,8 @@ export function TabStatusDot({ status, style, isActive }: Props) {
           width: '6px',
           height: '6px',
           position: 'absolute',
-          top: 0,
-          right: 0,
+          top: -1,
+          right: -2,
           backgroundColor: color,
           boxShadow: `0 0 0 1.5px ${ringColor}`,
         }}
@@ -44,7 +67,19 @@ export function TabStatusDot({ status, style, isActive }: Props) {
     )
   }
 
-  // replace
+  // replace style (dot-only / icon+dot)
+  if (isError) {
+    return (
+      <WarningDiamond
+        data-testid="tab-status-error"
+        size={14}
+        weight="duotone"
+        color={STATUS_COLORS.error}
+        className="flex-shrink-0"
+      />
+    )
+  }
+
   return (
     <span
       data-testid="tab-status-dot"
@@ -52,7 +87,7 @@ export function TabStatusDot({ status, style, isActive }: Props) {
       style={{
         width: '8px',
         height: '8px',
-        backgroundColor: color,
+        backgroundColor: STATUS_COLORS[status],
       }}
     />
   )
