@@ -65,6 +65,8 @@ export function ActivityBarWide(props: ActivityBarProps) {
     onReorderWorkspaceTabs,
     onReorderStandaloneTabs,
     onAddTabToWorkspace,
+    onMoveTabToWorkspace,
+    onMoveTabToStandalone,
   } = props
 
   const t = useI18nStore((s) => s.t)
@@ -92,28 +94,58 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const insertTab = useWorkspaceStore((s) => s.insertTab)
   const removeTabFromWorkspace = useWorkspaceStore((s) => s.removeTabFromWorkspace)
   const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace)
-  const globalActiveTabId = useTabStore((s) => s.activeTabId)
   const toggleWorkspaceExpanded = useLayoutStore((s) => s.toggleWorkspaceExpanded)
   const springLoad = useSpringLoad(500)
 
+  // Read activeTabId via getState() at dispatch time rather than via closure,
+  // mirroring the stale-closure fix applied to the resize handler in PR #392.
+  // Default behavior mutates the store directly; callers that need to
+  // intercept (e.g. workspace-locked mode) can pass onMoveTabToWorkspace /
+  // onMoveTabToStandalone via props.
   const handleMoveTabToWorkspace = useCallback(
     (tabId: string, targetWsId: string, afterTabId: string | null) => {
+      if (onMoveTabToWorkspace) {
+        onMoveTabToWorkspace(tabId, targetWsId, afterTabId)
+        return
+      }
+      const wsStore = useWorkspaceStore.getState()
+      const sourceWs = wsStore.findWorkspaceByTab(tabId)
+      const sourceWsId = sourceWs?.id ?? null
       insertTab(tabId, targetWsId, afterTabId)
-      if (tabId === globalActiveTabId) {
+      const movedActiveTab = tabId === useTabStore.getState().activeTabId
+      const sourceBecameEmpty =
+        sourceWsId !== null &&
+        sourceWsId !== targetWsId &&
+        (useWorkspaceStore.getState().workspaces.find((w) => w.id === sourceWsId)?.tabs.length ?? 0) === 0
+      // Follow the moved tab if it was the global active, or if the source
+      // workspace we just vacated was the one currently selected — otherwise
+      // the user would stay on an empty workspace with no tabs to show.
+      if (movedActiveTab) {
+        setActiveWorkspace(targetWsId)
+      } else if (sourceBecameEmpty && wsStore.activeWorkspaceId === sourceWsId) {
         setActiveWorkspace(targetWsId)
       }
     },
-    [insertTab, setActiveWorkspace, globalActiveTabId],
+    [insertTab, setActiveWorkspace, onMoveTabToWorkspace],
   )
 
   const handleMoveTabToStandalone = useCallback(
     (tabId: string, sourceWsId: string) => {
+      if (onMoveTabToStandalone) {
+        onMoveTabToStandalone(tabId, sourceWsId)
+        return
+      }
+      const wsStore = useWorkspaceStore.getState()
+      const wasSourceActive = wsStore.activeWorkspaceId === sourceWsId
       removeTabFromWorkspace(sourceWsId, tabId)
-      if (tabId === globalActiveTabId) {
+      const movedActiveTab = tabId === useTabStore.getState().activeTabId
+      const sourceBecameEmpty =
+        (useWorkspaceStore.getState().workspaces.find((w) => w.id === sourceWsId)?.tabs.length ?? 0) === 0
+      if (movedActiveTab || (wasSourceActive && sourceBecameEmpty)) {
         setActiveWorkspace(null)
       }
     },
-    [removeTabFromWorkspace, setActiveWorkspace, globalActiveTabId],
+    [removeTabFromWorkspace, setActiveWorkspace, onMoveTabToStandalone],
   )
 
   const scheduleSpringLoad = useCallback(
