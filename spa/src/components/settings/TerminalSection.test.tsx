@@ -13,7 +13,7 @@ describe('TerminalSection', () => {
       terminalRevealDelay: 300,
       terminalSettingsVersion: 0,
     })
-    useAgentStore.setState({ tabIndicatorStyle: 'badge', ccIconVariant: 'bot' })
+    useAgentStore.setState({ tabIndicatorStyle: 'badge', ccIconVariant: 'bot', showOscTitle: false })
   })
 
   it('renders section title', () => {
@@ -123,5 +123,13 @@ describe('TerminalSection', () => {
     useAgentStore.setState({ tabIndicatorStyle: 'dot' })
     rerender(<TerminalSection />)
     expect(screen.getByText(/no visible effect/i)).toBeTruthy()
+  })
+
+  it('toggles showOscTitle', () => {
+    render(<TerminalSection />)
+    fireEvent.click(screen.getByLabelText('Show agent dynamic title'))
+    expect(useAgentStore.getState().showOscTitle).toBe(true)
+    fireEvent.click(screen.getByLabelText('Show agent dynamic title'))
+    expect(useAgentStore.getState().showOscTitle).toBe(false)
   })
 })

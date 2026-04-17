@@ -9,6 +9,17 @@ export type AgentStatus = 'running' | 'waiting' | 'idle' | 'error'
 export type TabIndicatorStyle = 'icon' | 'dot' | 'iconDot' | 'badge'
 export type CcIconVariant = 'bot' | 'star'
 
+/**
+ * OSC 0/2 payloads are technically free-form — agents / shells occasionally
+ * embed ANSI CSI (colours) or C0 control chars that xterm passes through raw.
+ * Strip them so the text is safe to render in React and in native `title=""`
+ * tooltips.
+ */
+export function sanitizeOscTitle(raw: string): string {
+  // eslint-disable-next-line no-control-regex
+  return raw.replace(/\x1b\[[\d;]*[A-Za-z]/g, '').replace(/[\x00-\x1f\x7f]/g, '').trim()
+}
+
 /** Normalized event from backend (replaces AgentHookEvent). */
 export interface NormalizedEvent {
   agent_type: string
@@ -159,14 +170,14 @@ export const useAgentStore = create<AgentState>()(
       setShowOscTitle: (show) => set({ showOscTitle: show }),
       setOscTitle: (hostId, sessionCode, title) => set((s) => {
         const key = compositeKey(hostId, sessionCode)
-        const trimmed = title.trim()
-        if (!trimmed) {
+        const cleaned = sanitizeOscTitle(title)
+        if (!cleaned) {
           // eslint-disable-next-line @typescript-eslint/no-unused-vars
           const { [key]: _, ...rest } = s.oscTitles
           return { oscTitles: rest }
         }
-        if (s.oscTitles[key] === trimmed) return s
-        return { oscTitles: { ...s.oscTitles, [key]: trimmed } }
+        if (s.oscTitles[key] === cleaned) return s
+        return { oscTitles: { ...s.oscTitles, [key]: cleaned } }
       }),
     }),
     {

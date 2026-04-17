@@ -1,13 +1,13 @@
-// spa/src/components/TabStatusDot.tsx
+// spa/src/components/TabStatusIndicator.tsx
 import { WarningDiamond } from '@phosphor-icons/react'
 import type { AgentStatus } from '../stores/useAgentStore'
 
-/** Visual style of the dot itself — orthogonal to the tab-level indicator mode. */
-export type DotStyle = 'overlay' | 'replace'
+/** Render mode — orthogonal to the tab-level indicator style. */
+export type IndicatorRenderMode = 'overlay' | 'replace'
 
 interface Props {
   status: AgentStatus | undefined
-  style: DotStyle
+  mode: IndicatorRenderMode
   isActive: boolean
   isUnread?: boolean
 }
@@ -21,13 +21,13 @@ const STATUS_COLORS: Record<AgentStatus, string> = {
 
 const UNREAD_COLOR = '#b91c1c'
 
-export function TabStatusDot({ status, style, isActive, isUnread = false }: Props) {
+export function TabStatusIndicator({ status, mode, isActive, isUnread = false }: Props) {
   if (status === undefined) return null
 
   const isRunning = status === 'running'
   const isError = status === 'error'
 
-  if (style === 'overlay') {
+  if (mode === 'overlay') {
     const ringColor = isActive
       ? 'var(--surface-active)'
       : 'var(--surface-secondary)'
@@ -52,7 +52,7 @@ export function TabStatusDot({ status, style, isActive, isUnread = false }: Prop
     const color = isUnread ? UNREAD_COLOR : STATUS_COLORS[status]
     return (
       <span
-        data-testid="tab-status-dot"
+        data-testid="tab-status-indicator"
         className={`rounded-full flex-shrink-0 ${isRunning ? 'animate-breathe' : ''}`}
         style={{
           width: '6px',
@@ -67,7 +67,7 @@ export function TabStatusDot({ status, style, isActive, isUnread = false }: Prop
     )
   }
 
-  // replace style (dot-only / icon+dot)
+  // replace mode (dot-only / icon+dot)
   if (isError) {
     return (
       <WarningDiamond
@@ -82,7 +82,7 @@ export function TabStatusDot({ status, style, isActive, isUnread = false }: Prop
 
   return (
     <span
-      data-testid="tab-status-dot"
+      data-testid="tab-status-indicator"
       className={`rounded-full flex-shrink-0 ${isRunning ? 'animate-breathe' : ''}`}
       style={{
         width: '8px',

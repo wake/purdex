@@ -1,6 +1,6 @@
 // spa/src/stores/useAgentStore.test.ts
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useAgentStore } from './useAgentStore'
+import { useAgentStore, sanitizeOscTitle } from './useAgentStore'
 import { useTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
 import type { NormalizedEvent } from './useAgentStore'
@@ -14,7 +14,9 @@ beforeEach(() => {
     models: {},
     subagents: {},
     lastEvents: {},
+    oscTitles: {},
     unread: {},
+    showOscTitle: false,
   })
   useTabStore.setState({ tabs: {}, activeTabId: null, tabOrder: [] })
 })
@@ -324,5 +326,87 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().statuses[`${H}:dev`]).toBeUndefined()
     expect(useAgentStore.getState().statuses[`${H}:staging`]).toBe('running')
     expect(useAgentStore.getState().agentTypes[`${H}:staging`]).toBe('cc')
+  })
+})
+
+describe('useAgentStore.setShowOscTitle', () => {
+  it('toggles the flag', () => {
+    expect(useAgentStore.getState().showOscTitle).toBe(false)
+    useAgentStore.getState().setShowOscTitle(true)
+    expect(useAgentStore.getState().showOscTitle).toBe(true)
+    useAgentStore.getState().setShowOscTitle(false)
+    expect(useAgentStore.getState().showOscTitle).toBe(false)
+  })
+})
+
+describe('useAgentStore.setOscTitle', () => {
+  it('stores a cleaned title under the composite key', () => {
+    useAgentStore.getState().setOscTitle(H, 'dev', 'Claude Code — my feature')
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBe('Claude Code — my feature')
+  })
+
+  it('trims surrounding whitespace', () => {
+    useAgentStore.getState().setOscTitle(H, 'dev', '   hello   ')
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBe('hello')
+  })
+
+  it('strips ANSI CSI sequences from the stored title', () => {
+    useAgentStore.getState().setOscTitle(H, 'dev', '\x1b[32mbuild\x1b[0m passing')
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBe('build passing')
+  })
+
+  it('drops C0 control characters from the stored title', () => {
+    useAgentStore.getState().setOscTitle(H, 'dev', 'hello\x07world')
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBe('helloworld')
+  })
+
+  it('empty / whitespace-only title deletes the key', () => {
+    useAgentStore.getState().setOscTitle(H, 'dev', 'initial')
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBe('initial')
+    useAgentStore.getState().setOscTitle(H, 'dev', '   ')
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBeUndefined()
+  })
+
+  it('identical repeat returns the same state slice (equality guard)', () => {
+    useAgentStore.getState().setOscTitle(H, 'dev', 'same')
+    const before = useAgentStore.getState().oscTitles
+    useAgentStore.getState().setOscTitle(H, 'dev', 'same')
+    expect(useAgentStore.getState().oscTitles).toBe(before)
+  })
+
+  it('clearSession wipes oscTitles for that key only', () => {
+    useAgentStore.getState().setOscTitle(H, 'dev', 'dev-title')
+    useAgentStore.getState().setOscTitle(H, 'staging', 'staging-title')
+    useAgentStore.getState().clearSession(H, 'dev')
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBeUndefined()
+    expect(useAgentStore.getState().oscTitles[`${H}:staging`]).toBe('staging-title')
+  })
+
+  it('removeHost wipes oscTitles for matching hostId', () => {
+    useAgentStore.getState().setOscTitle(H, 'dev', 'dev-title')
+    useAgentStore.getState().setOscTitle('other-host', 'dev', 'other-title')
+    useAgentStore.getState().removeHost(H)
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBeUndefined()
+    expect(useAgentStore.getState().oscTitles['other-host:dev']).toBe('other-title')
+  })
+})
+
+describe('sanitizeOscTitle', () => {
+  it('returns empty string for empty input', () => {
+    expect(sanitizeOscTitle('')).toBe('')
+  })
+
+  it('strips ESC [ ... letter sequences (CSI colors, cursor moves)', () => {
+    expect(sanitizeOscTitle('\x1b[32mgreen\x1b[0m')).toBe('green')
+    expect(sanitizeOscTitle('\x1b[1;31mred bold\x1b[m')).toBe('red bold')
+  })
+
+  it('strips C0 control characters except whitespace-trimming tab/newline', () => {
+    expect(sanitizeOscTitle('a\x00b\x01c')).toBe('abc')
+    expect(sanitizeOscTitle('line1\nline2')).toBe('line1line2')
+  })
+
+  it('preserves non-ASCII (CJK, emoji)', () => {
+    expect(sanitizeOscTitle('你好 world')).toBe('你好 world')
   })
 })

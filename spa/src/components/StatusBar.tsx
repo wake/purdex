@@ -103,7 +103,6 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   const t = useI18nStore((s) => s.t)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  const sessionNameRef = useRef<HTMLSpanElement>(null)
 
   // Read agent event for the active session (hooks must be called unconditionally)
   const primaryContent = activeTab?.layout
@@ -121,13 +120,16 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   const hostConfig = useHostStore((s) => agentHostId ? s.hosts[agentHostId] : null)
   const hostRuntime = useHostStore((s) => agentHostId ? s.runtime[agentHostId] : null)
   const agentLabel = useAgentStore((s) => agentCk ? s.models[agentCk] ?? null : null)
-  const oscTitle = useAgentStore((s) => agentCk ? s.oscTitles[agentCk] ?? null : null)
+  const agentType = useAgentStore((s) => agentCk ? s.agentTypes[agentCk] ?? null : null)
+  const showOscTitle = useAgentStore((s) => s.showOscTitle)
+  const rawOscTitle = useAgentStore((s) => agentCk ? s.oscTitles[agentCk] ?? null : null)
+  const oscTitle = showOscTitle && agentType ? rawOscTitle : null
   const closeMenu = useCallback(() => setMenuOpen(false), [])
   useClickOutside(menuRef, closeMenu)
 
-  const handleSessionNameDoubleClick = useCallback(() => {
+  const handleNameDoubleClick = useCallback((e: React.MouseEvent<HTMLSpanElement>) => {
     if (!activeTab || !onStartRename) return
-    onStartRename(activeTab, sessionNameRef.current)
+    onStartRename(activeTab, e.currentTarget)
   }, [activeTab, onStartRename])
 
   if (!activeTab) {
@@ -162,15 +164,14 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
       <span
         className="text-text-secondary cursor-pointer select-none"
         title={t('status.rename_hint')}
-        onDoubleClick={handleSessionNameDoubleClick}
+        onDoubleClick={handleNameDoubleClick}
       >
         {hostName}
       </span>
       <span
-        ref={sessionNameRef}
         className="text-text-secondary cursor-pointer select-none"
         title={t('status.rename_hint')}
-        onDoubleClick={handleSessionNameDoubleClick}
+        onDoubleClick={handleNameDoubleClick}
       >
         {sessionName}
       </span>
