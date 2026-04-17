@@ -1,20 +1,5 @@
 # Changelog
 
-## [1.0.0-alpha.158] - 2026-04-18
-
-### 功能
-
-- **spa**：三選 `tabPosition`（`top` / `left` / `both`）—— `left` 模式自動展開 active workspace 內嵌 tabs，`top` 隱藏 Activity Bar caret 與 inline `+`，`both` 同時顯示兩個 tab 層（Settings → Appearance 新增三選 radio）
-- **spa**：`InlineTab`（left mode）支援 `tabIndicatorStyle`（`icon` / `dot` / `iconDot` / `badge`）—— agent icon、hover close、host-offline `WifiSlash`、locked `Lock` 圖示，與 top-bar tab 達到功能對等；active tab 改用強調左邊框 + 高亮背景，視覺上與 active-workspace 紫色 ring 明確區分
-- **spa**：Cross-workspace tab drag 顯示 make-way 動畫 —— 透過 optimistic move 在 target workspace 即時預覽 gap，遵循 dnd-kit multi-list 模式；tab 拖動限制為垂直軸（`x = 0`）
-- **spa**：Activity Bar collapse toggle 分拆為三個位置 —— title bar 常駐按鈕、寬欄時 workspace home-row 右側按鈕、窄欄時 divider 右邊緣 hover-reveal overlay
-
-### 介面調整
-
-- **spa**：`+ New tab` 按鈕從各 workspace 底部移至 workspace header 右側（hover-reveal），減少左側欄縱向雜訊
-- **spa**：`RegionResize` 可拖拽區域從原本窄縫擴大到 11px、hover 顏色加深，side-panel 與 activity-bar 的拖拽邊界更容易捕捉；視覺縫線維持 1px
-
-
 ## [1.0.0-alpha.157] - 2026-04-18
 
 ### 功能

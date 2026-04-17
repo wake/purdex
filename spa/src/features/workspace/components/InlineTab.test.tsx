@@ -1,10 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
-import { InlineTab } from './InlineTab'
 import { useAgentStore } from '../../../stores/useAgentStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import type { Tab } from '../../../types/tab'
+
+const mockOnPointerDown = vi.fn()
+
+vi.mock('@dnd-kit/sortable', () => ({
+  useSortable: () => ({
+    attributes: {},
+    listeners: { onPointerDown: mockOnPointerDown },
+    setNodeRef: vi.fn(),
+    transform: null,
+    transition: null,
+    isDragging: false,
+  }),
+}))
+
+const { InlineTab } = await import('./InlineTab')
 
 const baseTab: Tab = {
   id: 't1',
@@ -21,6 +35,7 @@ const baseTab: Tab = {
 
 beforeEach(() => {
   cleanup()
+  mockOnPointerDown.mockClear()
   useAgentStore.setState({
     statuses: {},
     unread: {},
@@ -214,8 +229,8 @@ describe('InlineTab — host offline', () => {
   })
 })
 
-describe('InlineTab — drag transform', () => {
-  it('omits horizontal translate from style attribute (vertical-only drag)', () => {
+describe('InlineTab — pointer down (dnd-kit integration)', () => {
+  it('forwards pointerdown to dnd-kit handler', () => {
     render(
       <InlineTab
         tab={baseTab}
@@ -227,13 +242,43 @@ describe('InlineTab — drag transform', () => {
         onContextMenu={() => {}}
       />,
     )
-    const row = screen.getByTestId('inline-tab-row')
-    const styleAttr = row.getAttribute('style') ?? ''
-    // If a translate3d is present, its first argument must be 0 (vertical-only).
-    // Match any translate3d(first-arg, ...) and assert first-arg is "0" when present.
-    const match = styleAttr.match(/translate3d\(([^,]+),/)
-    if (match) {
-      expect(match[1].trim()).toBe('0')
-    }
+    fireEvent.pointerDown(screen.getByTestId('inline-tab-row'))
+    expect(mockOnPointerDown).toHaveBeenCalled()
+  })
+
+  it('calls preventDefault on active tab pointerdown', () => {
+    render(
+      <InlineTab
+        tab={baseTab}
+        title="work"
+        isActive
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    const el = screen.getByTestId('inline-tab-row')
+    const event = new PointerEvent('pointerdown', { bubbles: true, cancelable: true })
+    el.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
+  })
+
+  it('does not call preventDefault on inactive tab pointerdown', () => {
+    render(
+      <InlineTab
+        tab={baseTab}
+        title="work"
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    const el = screen.getByTestId('inline-tab-row')
+    const event = new PointerEvent('pointerdown', { bubbles: true, cancelable: true })
+    el.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false)
   })
 })

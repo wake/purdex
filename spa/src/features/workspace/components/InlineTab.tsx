@@ -78,11 +78,17 @@ export function InlineTab({
       }
     : { transition, opacity: isDragging ? 0.5 : 1 }
 
+  // Prevent focus theft when clicking the already-active tab.
+  // Must wrap dnd-kit's onPointerDown to avoid overriding it.
   const handlePointerDown = (e: React.PointerEvent) => {
+    // Forward to dnd-kit FIRST — dnd-kit checks nativeEvent.defaultPrevented
+    // and silently aborts if true, so we must call it before preventDefault.
     const dndHandler = listeners?.onPointerDown as ((e: React.PointerEvent) => void) | undefined
     dndHandler?.(e)
     if (isActive) e.preventDefault()
   }
+
+  // Destructure onPointerDown off listeners so the wrapper wins; spread the rest.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { onPointerDown: _omit, ...otherListeners } = listeners ?? {}
 

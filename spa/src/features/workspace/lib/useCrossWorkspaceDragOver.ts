@@ -44,14 +44,16 @@ export function useCrossWorkspaceDragOver() {
     if (lastKeyRef.current === key) return
     lastKeyRef.current = key
 
-    const store = useWorkspaceStore.getState()
-    store.removeTabFromWorkspace(fromWs, activeData.tabId)
-    // Insert BEFORE the hovered tab: find its predecessor in the target
-    // workspace (after removal), or prepend if it's the first item.
-    const targetWs = store.workspaces.find((w) => w.id === toWs)
+    useWorkspaceStore.getState().removeTabFromWorkspace(fromWs, activeData.tabId)
+    // Re-read state after the mutation so subsequent lookups see the post-
+    // removal workspaces array (Zustand set() produces a new state object;
+    // reusing the pre-mutation snapshot returns stale tabs — see PR #392/#419
+    // stale-closure fixes).
+    const postRemoval = useWorkspaceStore.getState()
+    const targetWs = postRemoval.workspaces.find((w) => w.id === toWs)
     const overIdx = targetWs?.tabs.indexOf(overData.tabId) ?? -1
     const beforeTabId = overIdx > 0 ? (targetWs!.tabs[overIdx - 1] ?? null) : null
-    store.insertTab(activeData.tabId, toWs, beforeTabId)
+    postRemoval.insertTab(activeData.tabId, toWs, beforeTabId)
     // Update the active drag data's sourceWsId so subsequent onDragOver events
     // see the tab's new home. dnd-kit passes data.current by reference, so
     // mutating it propagates.

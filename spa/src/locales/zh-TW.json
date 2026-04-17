@@ -181,7 +181,6 @@
   "nav.toggle_view": "切換檢視模式",
   "nav.collapse_activity_bar": "收合側邊欄",
   "nav.expand_activity_bar": "展開側邊欄",
-  "nav.toggle_activity_bar": "切換側邊欄寬度",
   "nav.workspace_empty": "尚無分頁",
   "nav.add_tab_to_workspace": "在 {{name}} 開新分頁",
   "settings.appearance.tab_position.label": "分頁位置",
