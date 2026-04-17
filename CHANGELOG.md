@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.158] - 2026-04-18
+
+### 功能
+
+- **spa**：三選 `tabPosition`（`top` / `left` / `both`）（#427）—— `left` 模式自動展開 active workspace 內嵌 tabs，`top` 隱藏 Activity Bar caret 與 inline `+`，`both` 同時顯示兩個 tab 層（Settings → Appearance 新增三選 radio）
+- **spa**：`InlineTab`（left mode）支援 `tabIndicatorStyle`（`icon` / `dot` / `iconDot` / `badge`）—— agent icon、hover close、host-offline `WifiSlash`、locked `Lock` 圖示，與 top-bar tab 達到功能對等；active tab 改用強調左邊框 + 高亮背景，視覺上與 active-workspace 紫色 ring 明確區分
+- **spa**：Cross-workspace tab drag 顯示 make-way 動畫 —— 透過 optimistic move 在 target workspace 即時預覽 gap，遵循 dnd-kit multi-list 模式；tab 拖動限制為垂直軸（`x = 0`）
+- **spa**：Activity Bar collapse toggle 分拆為三個位置 —— title bar 常駐按鈕、寬欄時 workspace home-row 右側按鈕、窄欄時 divider 右邊緣 hover-reveal overlay
+
+### 介面調整
+
+- **spa**：`+ New tab` 按鈕從各 workspace 底部移至 workspace header 右側（hover-reveal），減少左側欄縱向雜訊
+- **spa**：`RegionResize` 可拖拽區域從原本窄縫擴大到 11px、hover 顏色加深，side-panel 與 activity-bar 的拖拽邊界更容易捕捉；視覺縫線維持 1px
+
+### 重構
+
+- **spa**：`SortableTab` 抽離 `ICON_MAP` 為獨立模組 `tab-icon-map.tsx`，left/top tab 共用同一份 icon 註冊
+- **spa**：cross-workspace drag orchestration 抽離為 `useCrossWorkspaceDragOver` hook；`useWorkspaceStore.getState()` 在 `removeTabFromWorkspace` 後重新讀取，遵循 PR #392/#419 stale-closure 慣例
+- **spa**：`renderInlineTabIcon` 抽離為 `features/workspace/lib/renderInlineTabIcon.tsx`，專門處理 left-mode 12px dot/badge/iconDot 呈現
+
+### 測試
+
+- SPA 合計 1895 tests 通過（+28）：`InlineTab` 行為（indicator styles、host offline、lock、pointerdown dnd-kit 順序 active/inactive 三 case）、`renderInlineTabIcon` 四模式、`useCrossWorkspaceDragOver` optimistic move + pinned/standalone short-circuit、`ActivityBarWide` auto-expand、`WorkspaceRow`/`HomeRow` chevron 條件顯示、`CollapseButton` 三 variant、`RegionResize` 11px hit zone、`useLayoutStore` `both` mode invariant
+
 ## [1.0.0-alpha.157] - 2026-04-18
 
 ### 功能
