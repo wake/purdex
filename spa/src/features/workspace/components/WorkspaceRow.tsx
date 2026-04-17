@@ -70,7 +70,7 @@ export function WorkspaceRow(props: Props) {
         data-testid={`ws-header-${workspace.id}`}
         {...attributes}
         {...listeners}
-        className={`mx-2 flex items-center gap-1 pr-1.5 rounded-md text-sm transition-colors ${
+        className={`group/ws-header mx-2 flex items-center gap-1 pr-1.5 rounded-md text-sm transition-colors ${
           isActive
             ? 'bg-[#8b5cf6]/25 text-text-primary ring-1 ring-purple-400'
             : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
@@ -110,31 +110,34 @@ export function WorkspaceRow(props: Props) {
             {workspace.name}
           </span>
         </button>
-      </div>
-
-      {showTabs && expanded && (
-        <div className="flex flex-col">
-          <InlineTabList
-            tabIds={workspace.tabs}
-            tabsById={tabsById}
-            activeTabId={activeTabId}
-            sourceWsId={workspace.id}
-            onSelect={onSelectTab}
-            onClose={onCloseTab}
-            onMiddleClick={onMiddleClickTab}
-            onContextMenu={onContextMenuTab}
-          />
+        {showTabs && (
           <button
             type="button"
             aria-label={t('nav.add_tab_to_workspace', { name: workspace.name })}
             title={t('nav.add_tab_to_workspace', { name: workspace.name })}
-            onClick={() => onAddTabToWorkspace(workspace.id)}
-            className="mx-2 pl-5 pr-1.5 py-1 rounded-md text-xs text-text-muted hover:bg-surface-hover hover:text-text-primary flex items-center gap-1.5 cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation()
+              onAddTabToWorkspace(workspace.id)
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="p-1 rounded hover:bg-surface-secondary text-text-muted cursor-pointer opacity-0 group-hover/ws-header:opacity-100 focus:opacity-100 transition-opacity"
           >
             <Plus size={12} />
-            <span>{t('nav.new_tab')}</span>
           </button>
-        </div>
+        )}
+      </div>
+
+      {showTabs && expanded && (
+        <InlineTabList
+          tabIds={workspace.tabs}
+          tabsById={tabsById}
+          activeTabId={activeTabId}
+          sourceWsId={workspace.id}
+          onSelect={onSelectTab}
+          onClose={onCloseTab}
+          onMiddleClick={onMiddleClickTab}
+          onContextMenu={onContextMenuTab}
+        />
       )}
     </div>
   )
