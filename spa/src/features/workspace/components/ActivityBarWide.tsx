@@ -14,15 +14,12 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { useLayoutStore } from '../../../stores/useLayoutStore'
+import { useLayoutStore, MIN_WIDTH, MAX_WIDTH } from '../../../stores/useLayoutStore'
 import { RegionResize } from '../../../components/RegionResize'
 import { CollapseButton } from './CollapseButton'
 import { WorkspaceRow } from './WorkspaceRow'
 import { HomeRow } from './HomeRow'
 import type { ActivityBarProps } from './activity-bar-props'
-
-const MIN_WIDE_SIZE = 120
-const MAX_WIDE_SIZE = 600
 
 const NOOP = () => {}
 
@@ -216,8 +213,8 @@ export function ActivityBarWide(props: ActivityBarProps) {
             const base =
               draftSizeRef.current ?? useLayoutStore.getState().activityBarWideSize
             const next = Math.max(
-              MIN_WIDE_SIZE,
-              Math.min(MAX_WIDE_SIZE, base + delta),
+              MIN_WIDTH,
+              Math.min(MAX_WIDTH, base + delta),
             )
             draftSizeRef.current = next
             setDraftSize(next)

@@ -4,8 +4,8 @@ import type { SidebarRegion } from '../types/layout'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { getAllViews } from '../lib/module-registry'
 
-const MIN_WIDTH = 120
-const MAX_WIDTH = 600
+export const MIN_WIDTH = 120
+export const MAX_WIDTH = 600
 
 export type ActivityBarWidth = 'narrow' | 'wide'
 export type TabPosition = 'top' | 'left'
