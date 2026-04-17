@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.155] - 2026-04-17
+
+### 功能
+
+- **spa**：Layout Phase 3 PR D — 跨 workspace tab DnD（#419）—— tab 可跨 workspace 拖放、拖到 Home header 轉 standalone、拖到他 workspace 的 tab-slot 插入指定位置；`WorkspaceRow` / `HomeRow` header 成為 drop target 附 `isOver` ring；custom collision detection（`pointerWithin → rectIntersection → closestCenter`）解決 header 與 tab-slot 重疊；active tab 跟隨搬動、原 ws 變空時 active 自動切目的 ws（關閉 #402）
+- **spa**：Spring-load 500ms 自動展開 collapsed header —— 懸停 500ms 於 collapsed workspace / home header 自動展開讓使用者繼續拖入；fire-time 重查 expanded 狀態避免與手動展開競速；`useSpringLoad(delayMs)` 單槽 timer hook（關閉 #403）
+- **spa**：Pinned tab 跨 ws drop 禁止 —— pinned tab 只能在所屬 ws 內重排，其他 drop target（他 ws tab-slot / workspace-header / home-header）一律 noop；dragOver 同步短路 spring-load，不對禁止 target 自動展開（關閉 #404）
+- **spa**：Cross-ws handler 可從 `ActivityBarProps` 注入 —— 新增 `onMoveTabToWorkspace` / `onMoveTabToStandalone` optional props；預設走 store 直接變更，parent 可 override 做 intercept 或 veto
+
+### 修復
+
+- **spa**：`insertTab` 對不存在 target workspace 的呼叫直接 abort —— 避免並發刪除情境下把 tab 從 source 移除但未插入任何 ws（孤兒 tab）
+- **spa**：同 workspace header drop 改為 noop —— 原本經 `insertTab` dedup 會默默改 `activeTabId`；同步消除誤導的 drop ring highlight
+- **spa**：Cross-ws handler 改以 `useTabStore.getState()` 讀 activeTabId —— 對齊 PR #392 resize handler 的 stale-closure 修正慣例
+
+### 測試
+
+- SPA 新增 11 個測試（cross-ws 4、pinned guard 3、insertTab orphan/null 3、spring-load 7、droppable header 3），全套 1834 tests 通過
+
 ## [1.0.0-alpha.154] - 2026-04-17
 
 ### 功能
