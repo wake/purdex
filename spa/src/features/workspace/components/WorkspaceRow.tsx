@@ -1,4 +1,5 @@
 import { CaretRight, CaretDown, Plus } from '@phosphor-icons/react'
+import { useDroppable } from '@dnd-kit/core'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { Workspace, Tab } from '../../../types/tab'
@@ -44,6 +45,11 @@ export function WorkspaceRow(props: Props) {
     data: { type: 'workspace', wsId: workspace.id },
   })
 
+  const { setNodeRef: setHeaderDropRef, isOver: isHeaderOver } = useDroppable({
+    id: `ws-header-${workspace.id}`,
+    data: { type: 'workspace-header', wsId: workspace.id },
+  })
+
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -58,13 +64,15 @@ export function WorkspaceRow(props: Props) {
   return (
     <div ref={setNodeRef} style={style} className="flex flex-col">
       <div
+        ref={setHeaderDropRef}
+        data-testid={`ws-header-${workspace.id}`}
         {...attributes}
         {...listeners}
         className={`mx-2 flex items-center gap-1 pr-1.5 rounded-md text-sm transition-colors ${
           isActive
             ? 'bg-[#8b5cf6]/25 text-text-primary ring-1 ring-purple-400'
             : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
-        }`}
+        } ${isHeaderOver ? 'ring-2 ring-purple-400/80 bg-surface-hover' : ''}`}
       >
         <button
           type="button"

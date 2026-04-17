@@ -96,6 +96,13 @@ describe('WorkspaceRow', () => {
     expect(onAdd).toHaveBeenCalledWith('ws-1')
   })
 
+  describe('droppable header (Phase 3 PR D)', () => {
+    it('exposes header with data-testid=ws-header-<id> for drop target lookup', () => {
+      renderRow(mkWs('ws-1', 'Alpha'))
+      expect(screen.getByTestId('ws-header-ws-1')).toBeInTheDocument()
+    })
+  })
+
   describe('drag-steals-click guard', () => {
     it('name button stops pointer-down propagation so dnd-kit drag does not start on click', () => {
       renderRow(mkWs('ws-1', 'Alpha'))
