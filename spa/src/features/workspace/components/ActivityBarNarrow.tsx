@@ -135,7 +135,7 @@ export function ActivityBarNarrow({
   const isHomeActive = !activeWorkspaceId
   const showHomeBadge = (!isHomeActive || !!activeStandaloneTabId) && homeUnreadCount > 0
   return (
-    <div className="relative hidden lg:flex">
+    <div className="group/narrow-bar relative hidden lg:flex">
       <div className="w-11 flex flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 px-px gap-2.5 flex-shrink-0">
       {/* Home — standalone tabs */}
       <div className="relative group">

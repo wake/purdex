@@ -11,7 +11,7 @@ interface Props {
 const VARIANT_CLASSES: Record<Variant, string> = {
   'header-right': 'w-6 h-6 rounded-md',
   // Divider: floats on the narrow bar's right edge, hover-revealed.
-  divider: 'absolute top-3 right-[-11px] w-[22px] h-[22px] rounded-full bg-surface-tertiary border border-border-subtle shadow-sm opacity-0 hover:opacity-100 focus:opacity-100 transition-opacity z-10',
+  divider: 'absolute top-3 right-[-11px] w-[22px] h-[22px] rounded-full bg-surface-tertiary border border-border-subtle shadow-sm opacity-0 group-hover/narrow-bar:opacity-100 focus:opacity-100 transition-opacity z-10',
   topbar: 'w-6 h-6 rounded',
 }
 
