@@ -8,6 +8,8 @@ vi.mock('../features/workspace/lib/icon-path-cache', () => ({
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { Router } from 'wouter'
+import { memoryLocation } from 'wouter/memory-location'
 import { SettingsPage, resetLastSection } from './SettingsPage'
 import { registerSettingsSection, clearSettingsSectionRegistry } from '../lib/settings-section-registry'
 import { AppearanceSection } from './settings/AppearanceSection'
@@ -17,6 +19,16 @@ import type { Pane } from '../types/tab'
 const settingsPane: Pane = {
   id: 'pane-set',
   content: { kind: 'settings', scope: 'global' },
+}
+
+function renderWithLocation(initialPath: string) {
+  const { hook, navigate, history } = memoryLocation({ path: initialPath, record: true })
+  const result = render(
+    <Router hook={hook}>
+      <SettingsPage pane={settingsPane} isActive />
+    </Router>,
+  )
+  return { ...result, navigate, hook, history: history as string[] }
 }
 
 describe('SettingsPage', () => {
@@ -29,27 +41,42 @@ describe('SettingsPage', () => {
     registerSettingsSection({ id: 'sync', label: 'Sync', order: 11 })
   })
 
-  it('renders sidebar and default appearance section', () => {
-    render(<SettingsPage pane={settingsPane} isActive />)
+  it('renders sidebar and default appearance section at /settings', () => {
+    renderWithLocation('/settings')
     expect(screen.getAllByText('Appearance').length).toBeGreaterThan(0)
     expect(screen.getByText('Terminal')).toBeTruthy()
     expect(screen.getByText('Visual preferences for the application')).toBeTruthy()
   })
 
   it('switches to terminal section on sidebar click', () => {
-    render(<SettingsPage pane={settingsPane} isActive />)
+    renderWithLocation('/settings')
     fireEvent.click(screen.getByText('Terminal'))
     expect(screen.getByText('Terminal rendering and connection settings')).toBeTruthy()
   })
 
   it('preserves section across unmount/remount', () => {
-    const { unmount } = render(<SettingsPage pane={settingsPane} isActive />)
+    const first = renderWithLocation('/settings')
     fireEvent.click(screen.getByText('Terminal'))
     const desc = 'Terminal rendering and connection settings'
     expect(screen.getByText(desc)).toBeTruthy()
-    unmount()
-    // Remount — should restore last section via module-level cache
-    render(<SettingsPage pane={settingsPane} isActive />)
+    first.unmount()
+    renderWithLocation('/settings')
     expect(screen.getByText(desc)).toBeTruthy()
+  })
+
+  it('deep-links to section via /settings/terminal on mount', () => {
+    renderWithLocation('/settings/terminal')
+    expect(screen.getByText('Terminal rendering and connection settings')).toBeTruthy()
+  })
+
+  it('sidebar click updates URL to /settings/<id>', () => {
+    const { history } = renderWithLocation('/settings')
+    fireEvent.click(screen.getByText('Terminal'))
+    expect(history[history.length - 1]).toBe('/settings/terminal')
+  })
+
+  it('invalid deep-link section falls through to default', () => {
+    renderWithLocation('/settings/nonexistent-section')
+    expect(screen.getByText('Visual preferences for the application')).toBeTruthy()
   })
 })
