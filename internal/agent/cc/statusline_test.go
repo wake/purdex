@@ -1,6 +1,7 @@
 package cc
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -101,5 +102,145 @@ func TestDetectStatuslineMode_MissingFile(t *testing.T) {
 	}
 	if m.Mode != "none" {
 		t.Errorf("missing file: mode = %q, want none", m.Mode)
+	}
+}
+
+func readSettingsMap(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func getStatusLineCommand(t *testing.T, path string) string {
+	t.Helper()
+	s := readSettingsMap(t, path)
+	sl, _ := s["statusLine"].(map[string]any)
+	if sl == nil {
+		return ""
+	}
+	c, _ := sl["command"].(string)
+	return c
+}
+
+func TestInstallStatuslinePdx_Empty(t *testing.T) {
+	path := writeSettings(t, `{}`)
+	if err := installStatuslinePdx(path, "/opt/bin/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	got := getStatusLineCommand(t, path)
+	if got != "/opt/bin/pdx statusline-proxy" {
+		t.Errorf("command = %q", got)
+	}
+}
+
+func TestInstallStatuslinePdx_PreservesHooks(t *testing.T) {
+	path := writeSettings(t, `{"hooks": {"Stop": "something"}}`)
+	if err := installStatuslinePdx(path, "/opt/bin/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	s := readSettingsMap(t, path)
+	if _, ok := s["hooks"]; !ok {
+		t.Error("hooks dropped")
+	}
+	sl, _ := s["statusLine"].(map[string]any)
+	if sl["type"] != "command" {
+		t.Errorf("type = %v", sl["type"])
+	}
+}
+
+func TestInstallStatuslineWrap_SimpleInner(t *testing.T) {
+	path := writeSettings(t, `{}`)
+	if err := installStatuslineWrap(path, "/opt/bin/pdx", "ccstatusline"); err != nil {
+		t.Fatal(err)
+	}
+	got := getStatusLineCommand(t, path)
+	want := "/opt/bin/pdx statusline-proxy --inner 'ccstatusline'"
+	if got != want {
+		t.Errorf("command = %q, want %q", got, want)
+	}
+}
+
+func TestInstallStatuslineWrap_InnerWithSingleQuote(t *testing.T) {
+	path := writeSettings(t, `{}`)
+	if err := installStatuslineWrap(path, "/opt/bin/pdx", "it's"); err != nil {
+		t.Fatal(err)
+	}
+	got := getStatusLineCommand(t, path)
+	// POSIX single-quote escape: ' -> '\''
+	want := "/opt/bin/pdx statusline-proxy --inner 'it'\\''s'"
+	if got != want {
+		t.Errorf("command = %q, want %q", got, want)
+	}
+	// Round-trip: detect should return the original inner.
+	m, _ := detectStatuslineMode(path)
+	if m.Inner != "it's" {
+		t.Errorf("round-trip inner = %q, want \"it's\"", m.Inner)
+	}
+}
+
+func TestInstallStatuslineWrap_InnerWithSpaceAndAmpersand(t *testing.T) {
+	inner := `foo "bar" & baz 'qux'`
+	path := writeSettings(t, `{}`)
+	if err := installStatuslineWrap(path, "/opt/bin/pdx", inner); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := detectStatuslineMode(path)
+	if m.Inner != inner {
+		t.Errorf("round-trip: got %q, want %q", m.Inner, inner)
+	}
+}
+
+func TestRemoveStatusline_Pdx(t *testing.T) {
+	path := writeSettings(t, `{"hooks":{"Stop":"x"},"statusLine":{"type":"command","command":"/opt/bin/pdx statusline-proxy"}}`)
+	if err := removeStatusline(path); err != nil {
+		t.Fatal(err)
+	}
+	s := readSettingsMap(t, path)
+	if _, ok := s["statusLine"]; ok {
+		t.Error("statusLine should be removed")
+	}
+	if _, ok := s["hooks"]; !ok {
+		t.Error("hooks should be preserved")
+	}
+}
+
+func TestRemoveStatusline_WrappedRestoresInner(t *testing.T) {
+	path := writeSettings(t, `{"statusLine":{"type":"command","command":"/opt/bin/pdx statusline-proxy --inner 'ccstatusline --format compact'","padding":0}}`)
+	if err := removeStatusline(path); err != nil {
+		t.Fatal(err)
+	}
+	got := getStatusLineCommand(t, path)
+	if got != "ccstatusline --format compact" {
+		t.Errorf("restored command = %q", got)
+	}
+	s := readSettingsMap(t, path)
+	sl, _ := s["statusLine"].(map[string]any)
+	if sl["type"] != "command" {
+		t.Errorf("type not preserved: %v", sl["type"])
+	}
+	if sl["padding"] == nil {
+		t.Errorf("padding not preserved")
+	}
+}
+
+func TestRemoveStatusline_UnmanagedRefuses(t *testing.T) {
+	path := writeSettings(t, `{"statusLine":{"type":"command","command":"ccstatusline"}}`)
+	err := removeStatusline(path)
+	if err == nil {
+		t.Error("expected refusal on unmanaged remove")
+	}
+}
+
+func TestRemoveStatusline_None_NoOp(t *testing.T) {
+	path := writeSettings(t, `{}`)
+	if err := removeStatusline(path); err != nil {
+		t.Fatalf("remove of none should no-op: %v", err)
 	}
 }
