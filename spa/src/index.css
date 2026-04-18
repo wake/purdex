@@ -2,6 +2,11 @@
 @import "./styles/themes.css";
 @plugin "@tailwindcss/typography";
 
+/* Sub-pixel margins (e.g. 0.5px / 1.5px) only render reliably on retina.
+   Use `lowdpi:` to override on @1x screens or Windows fractional scaling
+   below 1.5x DPR, where browsers round half-pixels inconsistently. */
+@custom-variant lowdpi (@media (max-resolution: 1.5dppx));
+
 body {
   background-color: var(--surface-primary);
 }

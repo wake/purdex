@@ -37,7 +37,7 @@ export function renderInlineTabIcon({
   // icon-only OR no agent event → plain icon slot
   if (tabIndicatorStyle === 'icon' || !agentStatus) {
     return (
-      <span className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0 ml-[2px]`}>
+      <span className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0 ml-[1.5px] lowdpi:ml-px`}>
         {IconComponent && <IconComponent size={ICON_SIZE} className="flex-shrink-0" />}
       </span>
     )
@@ -50,7 +50,7 @@ export function renderInlineTabIcon({
     return (
       <span
         data-testid="inline-tab-dot"
-        className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0 ml-[2px]`}
+        className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0 ml-[1.5px] lowdpi:ml-px`}
       >
         <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
         {showDotUnreadPip && UNREAD_PIP}
@@ -61,7 +61,7 @@ export function renderInlineTabIcon({
 
   if (tabIndicatorStyle === 'iconDot') {
     return (
-      <span className="relative inline-flex items-center flex-shrink-0 ml-[2px]">
+      <span className="relative inline-flex items-center flex-shrink-0 ml-[1.5px] lowdpi:ml-px">
         <span
           data-testid="inline-tab-dot"
           className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0`}
@@ -80,7 +80,7 @@ export function renderInlineTabIcon({
   return (
     <span
       data-testid="inline-tab-dot-overlay"
-      className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0 ml-px mr-px`}
+      className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0 ml-px mr-[0.5px] lowdpi:mr-0`}
     >
       {IconComponent && <IconComponent size={ICON_SIZE} className="flex-shrink-0" />}
       <TabStatusIndicator
