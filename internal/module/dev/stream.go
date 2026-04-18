@@ -111,9 +111,14 @@ func streamCmd(ctx context.Context, session *BuildSession, phase, dir, name stri
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		stdout.Close()
 		return err
 	}
 	if err := cmd.Start(); err != nil {
+		// cmd.Wait() closes these on the happy path; on Start() failure we
+		// must close them manually or the pipe read-ends leak.
+		stdout.Close()
+		stderr.Close()
 		return err
 	}
 

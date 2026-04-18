@@ -97,6 +97,34 @@ func (m *DevModule) snapshotCheck() (UpdateCheckResponse, *BuildSession) {
 	}, session
 }
 
+// observeCheck returns the current check snapshot without mutating state.
+// Unlike snapshotCheck it never kicks off a build — callers that just want
+// to report post-build results (e.g. the SSE terminal event) should use
+// this to avoid retriggering a second build if .build-info.json was not
+// written for any reason. Must not be called with m.mu held.
+func (m *DevModule) observeCheck() UpdateCheckResponse {
+	build := m.readBuildInfo()
+	spaSource := m.hashFn("spa/")
+	electronSource := m.hashFn("electron/", "electron.vite.config.ts")
+	requiresFull, fullReason := m.detectRequiresFullRebuild(build.RebuildHash)
+
+	m.mu.Lock()
+	building := m.building
+	buildError := m.buildError
+	m.mu.Unlock()
+
+	return UpdateCheckResponse{
+		Version:             m.readVersion(),
+		SPAHash:             build.SPAHash,
+		ElectronHash:        build.ElectronHash,
+		Source:              SourceHashes{SPAHash: spaSource, ElectronHash: electronSource},
+		Building:            building,
+		BuildError:          buildError,
+		RequiresFullRebuild: requiresFull,
+		FullRebuildReason:   fullReason,
+	}
+}
+
 func (m *DevModule) handleCheck(w http.ResponseWriter, r *http.Request) {
 	resp, _ := m.snapshotCheck()
 	w.Header().Set("Content-Type", "application/json")
@@ -155,8 +183,10 @@ func (m *DevModule) handleCheckStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				// Session finished; send a single terminal event carrying the
 				// authoritative post-build check snapshot (includes buildError
-				// if the build failed).
-				final, _ := m.snapshotCheck()
+				// if the build failed). Use observeCheck so a missing
+				// .build-info.json post-build doesn't retrigger a second
+				// build.
+				final := m.observeCheck()
 				writeEvent(streamEvent{Type: "done", Check: &final})
 				return
 			}

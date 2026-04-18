@@ -122,7 +122,7 @@ function registerIpcHandlers(): void {
 
   // Only one active stream at a time — a new request aborts the previous one.
   let activeStream: AbortController | null = null
-  ipcMain.handle('dev:stream-check', async (event, daemonUrl: string, token?: string) => {
+  ipcMain.handle('dev:stream-check', async (event, daemonUrl: string, token: string | undefined, channel: string) => {
     activeStream?.abort()
     const controller = new AbortController()
     activeStream = controller
@@ -130,14 +130,14 @@ function registerIpcHandlers(): void {
     try {
       await streamCheck(daemonUrl, token, (ev) => {
         if (win && !win.isDestroyed()) {
-          win.webContents.send('dev:stream-check-event', ev)
+          win.webContents.send(channel, ev)
         }
       }, controller.signal)
     } catch (err) {
       // AbortError on manual stop is expected — surface everything else.
       const msg = err instanceof Error ? err.message : String(err)
       if ((err as { name?: string })?.name !== 'AbortError' && win && !win.isDestroyed()) {
-        win.webContents.send('dev:stream-check-event', { type: 'error', error: msg })
+        win.webContents.send(channel, { type: 'error', error: msg })
       }
     } finally {
       if (activeStream === controller) activeStream = null

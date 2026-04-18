@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { DevEnvironmentSection } from './DevEnvironmentSection'
+import { useHostStore } from '../../stores/useHostStore'
 
 const mockGetAppInfo = vi.fn().mockResolvedValue({
   version: '1.0.0-alpha.21',
@@ -129,6 +130,26 @@ describe('DevEnvironmentSection', () => {
     await waitFor(() => expect(mockStreamCheck).toHaveBeenCalled())
     unmount()
     expect(lastStreamClose).toHaveBeenCalled()
+  })
+
+  it('restarts the stream when daemonBase changes', async () => {
+    arrangeStream((cb) => {
+      cb({ type: 'check', check: baseCheck() })
+      cb({ type: 'done', check: baseCheck() })
+    })
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(mockStreamCheck).toHaveBeenCalledTimes(1))
+    // Capture the first stream's close before arrangeStream replaces it on
+    // the next mockImplementation call.
+    const firstClose = lastStreamClose
+
+    const hostId = useHostStore.getState().hostOrder[0]
+    await act(async () => {
+      useHostStore.getState().updateHost(hostId, { port: 9999 })
+    })
+
+    await waitFor(() => expect(mockStreamCheck).toHaveBeenCalledTimes(2))
+    expect(firstClose).toHaveBeenCalled()
   })
 
   describe('SPA source mode', () => {

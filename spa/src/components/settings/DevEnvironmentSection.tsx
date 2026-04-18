@@ -97,13 +97,20 @@ export function DevEnvironmentSection() {
   const checkUpdateRef = useRef(checkUpdate)
   useEffect(() => { checkUpdateRef.current = checkUpdate }, [checkUpdate])
 
+  // Mount: load app info. Separate effect below re-runs the check whenever
+  // the daemon host changes (daemonBase or token), which closes any stale
+  // stream pointing at the previous host.
   useEffect(() => {
     window.electronAPI?.getAppInfo().then((info) => {
       setAppInfo(info)
       appInfoRef.current = info
-      checkUpdateRef.current()
     })
   }, [])
+
+  useEffect(() => {
+    if (!appInfo) return
+    checkUpdateRef.current()
+  }, [appInfo, daemonBase, token])
 
   useEffect(() => () => closeStream(), [closeStream])
 

@@ -257,7 +257,7 @@
   "settings.dev.error.bundled_failed": "無法載入 Bundled SPA",
   "settings.dev.log.waiting": "等待建置輸出中…",
   "settings.dev.log.copy": "複製完整 log",
-  "settings.dev.full_rebuild_hint": "建議重跑完整打包 — 請在建置機執行 `pnpm run electron:build`，dev update 只會抽換 JS bundle。",
+  "settings.dev.full_rebuild_hint": "建議重跑完整打包 — 請到執行 daemon 的主機跑 `pnpm run electron:build`，dev update 只會抽換 JS bundle。",
 
   "editor.provider_label": "編輯器",
   "editor.new_file": "新增檔案",

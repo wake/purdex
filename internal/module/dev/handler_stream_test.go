@@ -1,11 +1,13 @@
 package dev
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -277,3 +279,111 @@ func TestHandleCheckStream_IncludesRequiresFullRebuild(t *testing.T) {
 type exitError struct{ msg string }
 
 func (e *exitError) Error() string { return e.msg }
+
+// Guards against regressing the fix for: build completed but vite plugin
+// failed to write .build-info.json → old handleCheckStream would re-enter
+// snapshotCheck() and spuriously kick off another build. After fix, the
+// terminal snapshot uses observeCheck() which never spawns builds.
+func TestHandleCheckStream_TerminalSnapshotDoesNotTriggerSecondBuild(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "VERSION"), []byte("1.0.0\n"), 0644)
+	writeBuildInfo(t, dir, BuildInfo{Version: "1.0.0", SPAHash: "old", ElectronHash: "old"})
+
+	var buildCalls atomic.Int32
+	m := &DevModule{
+		repoRoot:    dir,
+		versionFile: filepath.Join(dir, "VERSION"),
+		hashFn:      func(paths ...string) string { return "new" },
+		buildCmd: func(s *BuildSession) error {
+			buildCalls.Add(1)
+			s.append(BuildEvent{Type: BuildEventStdout, Line: "building"})
+			// Intentionally do NOT update .build-info.json — simulates vite
+			// plugin failing to write for any reason. sourceChanged will
+			// still look true after the build.
+			return nil
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/dev/update/check/stream", nil)
+	w := httptest.NewRecorder()
+	m.handleCheckStream(w, req)
+
+	// Build should run exactly once. Prior buggy code would re-enter
+	// snapshotCheck after channel close and kick off a second build.
+	if got := buildCalls.Load(); got != 1 {
+		t.Errorf("buildCalls: want 1, got %d", got)
+	}
+
+	events := parseSSE(w.Body.String())
+	last := events[len(events)-1]
+	if last.Type != "done" {
+		t.Errorf("last event: want done, got %s", last.Type)
+	}
+	// Post-build state — building must be false even though source still
+	// looks stale (because .build-info.json was not updated).
+	if last.Check == nil || last.Check.Building {
+		t.Errorf("final building: want false, got %+v", last.Check)
+	}
+}
+
+// Guards against subscription leaks when the HTTP client disconnects while
+// a build is still streaming.
+func TestHandleCheckStream_ClientDisconnectReleasesSubscription(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "VERSION"), []byte("1.0.0\n"), 0644)
+	writeBuildInfo(t, dir, BuildInfo{Version: "1.0.0", SPAHash: "old", ElectronHash: "old"})
+
+	session := newBuildSession()
+	session.append(BuildEvent{Type: BuildEventPhase, Phase: "install"})
+
+	m := &DevModule{
+		repoRoot:     dir,
+		versionFile:  filepath.Join(dir, "VERSION"),
+		hashFn:       func(paths ...string) string { return "new" },
+		building:     true,
+		buildSession: session,
+		buildCmd:     func(*BuildSession) error { return nil },
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest("GET", "/api/dev/update/check/stream", nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		m.handleCheckStream(w, req)
+		close(done)
+	}()
+
+	// Wait until the handler subscribes.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		session.mu.Lock()
+		n := len(session.subs)
+		session.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	session.mu.Lock()
+	if n := len(session.subs); n != 1 {
+		session.mu.Unlock()
+		t.Fatalf("want 1 subscriber before cancel, got %d", n)
+	}
+	session.mu.Unlock()
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not exit after client disconnect")
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if n := len(session.subs); n != 0 {
+		t.Errorf("subscription leaked after disconnect: %d subs remain", n)
+	}
+}
