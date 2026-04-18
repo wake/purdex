@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.172] - 2026-04-18
+
+### Cross-platform: sub-pixel tab icon margin 在 @1x 退回整數 (#451)
+
+- 新增 Tailwind 4 custom variant `lowdpi (@media (max-resolution: 1.5dppx))` 在 `spa/src/index.css`，covering @1x 與 Windows fractional scaling < 1.5x DPR。
+- `TabIcon.tsx` / `renderInlineTabIcon.tsx` 兩處 sub-pixel margin 補上 fallback：
+  - 非 badge wrapper：`ml-[1.5px] lowdpi:ml-px`
+  - badge wrapper：`mr-[0.5px] lowdpi:mr-0`
+- 編出的 CSS 為 `@media (resolution<=1.5x){.lowdpi\:mr-0{...}}`，避免 @1x 螢幕上 0.5px 被瀏覽器不一致 round 造成 tab icon 抖動或對不齊。
+
 ## [1.0.0-alpha.171] - 2026-04-18
 
 ### Tweak: Tab icon margin 依 indicator style 微調 (#450)
