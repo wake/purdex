@@ -1,20 +1,10 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { X, Lock, WifiSlash } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
-import { getPaneIcon, getPaneLabel } from '../lib/pane-labels'
-import { getPrimaryPane } from '../lib/pane-tree'
-import { useSessionStore } from '../stores/useSessionStore'
-import { useHostStore } from '../stores/useHostStore'
-import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useI18nStore } from '../stores/useI18nStore'
-import { useAgentStore } from '../stores/useAgentStore'
-import { compositeKey } from '../lib/composite-key'
-import { getAgentIcon } from '../lib/agent-icons'
+import { useTabDisplay } from '../hooks/useTabDisplay'
 import { TabIcon } from './TabIcon'
 import { shouldShowGlobalUnreadPip } from './tab-icon-helpers'
-import type { Session } from '../lib/host-api'
-
-const EMPTY_SESSIONS: Session[] = []
 
 interface Props {
   tab: Tab
@@ -26,7 +16,6 @@ interface Props {
   onContextMenu: (e: React.MouseEvent, tabId: string) => void
   onRename?: (tabId: string) => void
   onHover?: (tabId: string | null) => void
-  iconMap: Record<string, React.ComponentType<{ size: number; className?: string }>>
 }
 
 // Composite bg colors (canvas-verified for opaque X button bg)
@@ -34,7 +23,7 @@ interface Props {
 const TAB_BG_INACTIVE = 'var(--surface-secondary)'
 const TAB_BG_ACTIVE = 'var(--surface-active)'
 
-export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onRename, onHover, iconMap }: Props) {
+export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onRename, onHover }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id })
 
   const style = {
@@ -44,49 +33,17 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     opacity: 1,
   }
 
-  const primaryContent = getPrimaryPane(tab.layout).content
-  const iconName = getPaneIcon(primaryContent)
-  const paneIcon = iconMap[iconName]
-
   const t = useI18nStore((s) => s.t)
-  const hostId = primaryContent.kind === 'tmux-session' ? primaryContent.hostId : ''
-  const sessions = useSessionStore((s) => (hostId ? s.sessions[hostId] : undefined) ?? EMPTY_SESSIONS)
-  const workspaces = useWorkspaceStore((s) => s.workspaces)
-
-  const sessionCode = primaryContent.kind === 'tmux-session' ? primaryContent.sessionCode : undefined
-  const ck = sessionCode && hostId ? compositeKey(hostId, sessionCode) : undefined
-  const agentStatus = useAgentStore((s) => {
-    if (!ck) return undefined
-    // No fallback — only show indicator when we have an actual hook event.
-    // Previously fell back to 'idle' when hooksInstalled was true, but that
-    // made it impossible to distinguish "agent running, first event pending"
-    // from "no agent running at all".
-    return s.statuses[ck]
-  })
-  const isUnread = useAgentStore((s) => ck ? !!s.unread[ck] : false)
-  const subagentCount = useAgentStore((s) => ck ? (s.subagents[ck]?.length ?? 0) : 0)
-  const agentType = useAgentStore((s) => ck ? s.agentTypes[ck] : undefined)
-  const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
-  const ccIconVariant = useAgentStore((s) => s.ccIconVariant)
-  const showOscTitle = useAgentStore((s) => s.showOscTitle)
-  const oscTitle = useAgentStore((s) => ck ? s.oscTitles[ck] : undefined)
-  const isTerminated = primaryContent.kind === 'tmux-session' && !!primaryContent.terminated
-  // Keep the terminated pane's SmileySad tombstone instead of the agent icon.
-  const agentIcon = !isTerminated && agentType ? getAgentIcon(agentType, { ccVariant: ccIconVariant }) : undefined
-  const IconComponent = (agentIcon ?? paneIcon) as React.ComponentType<{ size: number; className?: string }> | undefined
-  const isHostOffline = useHostStore((s) => {
-    if (!hostId || isTerminated) return false
-    const rt = s.runtime[hostId]
-    return rt ? rt.status !== 'connected' : false
-  })
-  const sessionLookup = { getByCode: (code: string) => sessions.find((s) => s.code === code) }
-  const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
-  const sessionLabel = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
-  // Shell-only (non-agent) sessions keep their session name; OSC only takes
-  // over once an agent identifies itself and emits a title.
-  const useOsc = showOscTitle && !isTerminated && !!agentType && !!oscTitle
-  const label = useOsc && oscTitle ? oscTitle : sessionLabel
-  const tooltip = useOsc && oscTitle ? `${oscTitle} - ${sessionLabel}` : sessionLabel
+  const {
+    displayTitle: label,
+    tooltip,
+    IconComponent,
+    agentStatus,
+    isUnread,
+    subagentCount,
+    tabIndicatorStyle,
+    isHostOffline,
+  } = useTabDisplay(tab)
 
   // Prevent focus theft when clicking the already-active tab.
   // Must wrap dnd-kit's onPointerDown to avoid overriding it.

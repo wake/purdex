@@ -3,6 +3,7 @@ import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { useAgentStore } from '../../../stores/useAgentStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
+import { useSessionStore } from '../../../stores/useSessionStore'
 import type { Tab } from '../../../types/tab'
 
 const mockOnPointerDown = vi.fn()
@@ -44,6 +45,12 @@ beforeEach(() => {
     tabIndicatorStyle: 'badge',
     ccIconVariant: 'bot',
   })
+  useSessionStore.setState({
+    sessions: { h1: [{ code: 'S1', name: 'work' }] as never },
+    activeHostId: null,
+    activeCode: null,
+  })
+  useHostStore.setState({ runtime: {} })
   useLayoutStore.setState(useLayoutStore.getInitialState())
 })
 
@@ -53,7 +60,6 @@ describe('InlineTab — indicator styles', () => {
     render(
       <InlineTab
         tab={baseTab}
-        title="work"
         isActive={false}
         onSelect={() => {}}
         onClose={() => {}}
@@ -69,7 +75,6 @@ describe('InlineTab — indicator styles', () => {
     render(
       <InlineTab
         tab={baseTab}
-        title="work"
         isActive={false}
         onSelect={() => {}}
         onClose={() => {}}
@@ -84,7 +89,6 @@ describe('InlineTab — indicator styles', () => {
     render(
       <InlineTab
         tab={baseTab}
-        title="work"
         isActive={false}
         onSelect={() => {}}
         onClose={() => {}}
@@ -100,7 +104,6 @@ describe('InlineTab — indicator styles', () => {
     render(
       <InlineTab
         tab={baseTab}
-        title="work"
         isActive={false}
         onSelect={() => {}}
         onClose={onClose}
@@ -119,7 +122,6 @@ describe('InlineTab — close button visibility', () => {
     render(
       <InlineTab
         tab={locked}
-        title="work"
         isActive={false}
         onSelect={() => {}}
         onClose={() => {}}
@@ -135,7 +137,6 @@ describe('InlineTab — close button visibility', () => {
     render(
       <InlineTab
         tab={locked}
-        title="work"
         isActive={false}
         onSelect={() => {}}
         onClose={() => {}}
@@ -153,7 +154,6 @@ describe('InlineTab — unread dot', () => {
     render(
       <InlineTab
         tab={baseTab}
-        title="work"
         isActive={false}
         onSelect={() => {}}
         onClose={() => {}}
@@ -169,7 +169,6 @@ describe('InlineTab — unread dot', () => {
     render(
       <InlineTab
         tab={baseTab}
-        title="work"
         isActive={true}
         onSelect={() => {}}
         onClose={() => {}}
@@ -189,7 +188,6 @@ describe('InlineTab — host offline', () => {
     render(
       <InlineTab
         tab={baseTab}
-        title="work"
         isActive={false}
         onSelect={() => {}}
         onClose={() => {}}
@@ -217,7 +215,6 @@ describe('InlineTab — host offline', () => {
     render(
       <InlineTab
         tab={terminated}
-        title="work"
         isActive={false}
         onSelect={() => {}}
         onClose={() => {}}
@@ -234,7 +231,6 @@ describe('InlineTab — pointer down (dnd-kit integration)', () => {
     render(
       <InlineTab
         tab={baseTab}
-        title="work"
         isActive={false}
         onSelect={() => {}}
         onClose={() => {}}
@@ -250,7 +246,6 @@ describe('InlineTab — pointer down (dnd-kit integration)', () => {
     render(
       <InlineTab
         tab={baseTab}
-        title="work"
         isActive
         onSelect={() => {}}
         onClose={() => {}}
@@ -268,7 +263,6 @@ describe('InlineTab — pointer down (dnd-kit integration)', () => {
     render(
       <InlineTab
         tab={baseTab}
-        title="work"
         isActive={false}
         onSelect={() => {}}
         onClose={() => {}}
