@@ -148,3 +148,23 @@ func TestPostStatus_SilentOn5xx(t *testing.T) {
 		t.Error("5xx should return error, got nil")
 	}
 }
+
+func TestResolveDaemonHost(t *testing.T) {
+	cases := []struct {
+		bind string
+		want string
+	}{
+		{"", "127.0.0.1"},
+		{"0.0.0.0", "127.0.0.1"},
+		{"::", "127.0.0.1"},
+		{"[::]", "127.0.0.1"},
+		{"127.0.0.1", "127.0.0.1"},
+		{"100.64.0.2", "100.64.0.2"},
+		{"localhost", "localhost"},
+	}
+	for _, tc := range cases {
+		if got := resolveDaemonHost(tc.bind); got != tc.want {
+			t.Errorf("resolveDaemonHost(%q) = %q, want %q", tc.bind, got, tc.want)
+		}
+	}
+}

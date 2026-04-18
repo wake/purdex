@@ -138,6 +138,18 @@ func postStatus(url, token string, payload statuslinePayload) error {
 	return nil
 }
 
+// resolveDaemonHost rewrites wildcard bind addresses (0.0.0.0, ::, empty) to
+// 127.0.0.1 so the statusline-proxy can POST to the daemon on the loopback.
+// A daemon bound to 0.0.0.0 is listening on all interfaces including loopback,
+// but 0.0.0.0 itself is not a valid connection target on macOS/Linux.
+func resolveDaemonHost(bind string) string {
+	switch bind {
+	case "", "0.0.0.0", "::", "[::]":
+		return "127.0.0.1"
+	}
+	return bind
+}
+
 // runStatuslineProxy is the entry point for `pdx statusline-proxy [--inner "<cmd>"]`.
 func runStatuslineProxy(args []string) {
 	inner := parseInnerFlag(args)
@@ -156,7 +168,7 @@ func runStatuslineProxy(args []string) {
 	url := "http://127.0.0.1:7860/api/agent/status"
 	var token string
 	if err == nil {
-		url = fmt.Sprintf("http://%s:%d/api/agent/status", cfg.Bind, cfg.Port)
+		url = fmt.Sprintf("http://%s:%d/api/agent/status", resolveDaemonHost(cfg.Bind), cfg.Port)
 		token = cfg.Token
 	}
 	_ = postStatus(url, token, statuslinePayload{
