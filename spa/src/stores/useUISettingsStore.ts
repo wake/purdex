@@ -45,6 +45,13 @@ interface UISettings {
   setKeepAlivePinned: (v: boolean) => void
   terminalSettingsVersion: number
   bumpTerminalSettingsVersion: () => void
+
+  linkDetectAbsolute: boolean
+  setLinkDetectAbsolute: (v: boolean) => void
+  linkDetectRelativeSlash: boolean
+  setLinkDetectRelativeSlash: (v: boolean) => void
+  linkDetectBareFilename: boolean
+  setLinkDetectBareFilename: (v: boolean) => void
 }
 
 export const useUISettingsStore = create<UISettings>()(
@@ -61,6 +68,13 @@ export const useUISettingsStore = create<UISettings>()(
       setKeepAlivePinned: (v) => set({ keepAlivePinned: v }),
       terminalSettingsVersion: 0,
       bumpTerminalSettingsVersion: () => set((s) => ({ terminalSettingsVersion: s.terminalSettingsVersion + 1 })),
+
+      linkDetectAbsolute: true,
+      setLinkDetectAbsolute: (v) => set({ linkDetectAbsolute: v }),
+      linkDetectRelativeSlash: false,
+      setLinkDetectRelativeSlash: (v) => set({ linkDetectRelativeSlash: v }),
+      linkDetectBareFilename: false,
+      setLinkDetectBareFilename: (v) => set({ linkDetectBareFilename: v }),
     }),
     {
       name: STORAGE_KEYS.UI_SETTINGS,
