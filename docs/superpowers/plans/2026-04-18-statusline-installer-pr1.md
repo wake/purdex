@@ -284,8 +284,9 @@ func renderMinimal(raw json.RawMessage) string {
 	if len(parts) == 1 {
 		return parts[0]
 	}
-	out := parts[0]
-	for _, p := range parts[1:] {
+	// "[pdx]" is a label prefix (space-joined); remaining parts bullet-separated.
+	out := parts[0] + " " + parts[1]
+	for _, p := range parts[2:] {
 		out += " · " + p
 	}
 	return out
