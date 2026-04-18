@@ -52,6 +52,7 @@ func (m *SessionModule) Init(c *core.Core) error {
 func (m *SessionModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions", m.handleList)
 	mux.HandleFunc("GET /api/sessions/{code}", m.handleGet)
+	mux.HandleFunc("GET /api/sessions/{code}/cwd", m.handleSessionCwd)
 	mux.HandleFunc("POST /api/sessions", m.handleCreate)
 	mux.HandleFunc("PATCH /api/sessions/{code}", m.handleRename)
 	mux.HandleFunc("DELETE /api/sessions/{code}", m.handleDelete)
