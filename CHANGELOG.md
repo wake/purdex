@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.174] - 2026-04-18
+
+### Fix: `tabPosition='both'` 允許折疊 activity bar (#453)
+
+- #452 改了 icon + 樣式但沒解掉核心 bug：`both` 模式下 `CollapseButton.locked` 永遠為 true，按下沒反應、tooltip 還誤寫「tabs are on the left」。
+- 根因：`locked` / store guards / heal invariant 把 `left` 和 `both` 綁在一起要求 wide。實際上 `both` = 上方 tab bar 已經可以觸及所有 tab，activity bar 縮窄完全合理。
+- `CollapseButton.locked` 收窄到 `tabPosition === 'left'`；`setActivityBarWidth` / `toggleActivityBarWidth` / `setTabPosition` / `healLayoutInvariant` 都拿掉 `both` 的強制 wide。
+- 現有 both+wide 的 persisted layout 不動，只是從現在起可以自由 toggle。
+- 測試：`useLayoutStore.test.ts` + `CollapseButton.test.tsx` 改寫成新規格並加入 "toggle wide→narrow in both" 與 `setTabPosition` 保留寬度兩組新案例。
+
 ## [1.0.0-alpha.173] - 2026-04-18
 
 ### Tweak: Activity-bar collapse button 換成 SidebarSimple (#452)
