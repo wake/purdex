@@ -202,6 +202,12 @@ export const useAgentStore = create<AgentState>()(
         get().setOscTitle(hostId, sessionCode, sessionName)
       },
 
+      /**
+       * Wipe all ccStatus + oscTitles entries for a host. Called on the
+       * `agent.status.cleared` WS event (e.g., when CC statusLine is uninstalled).
+       * Note: also clears non-CC oscTitles for the host — terminals will re-emit
+       * on their next prompt.
+       */
       clearHostAgentStatus: (hostId) => set((s) => {
         const prefix = `${hostId}:`
         const filterKeys = <T,>(record: Record<string, T>): Record<string, T> => {

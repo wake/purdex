@@ -412,6 +412,12 @@ describe('useAgentStore.ccStatus', () => {
     expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBeUndefined()
   })
 
+  it('setCcStatus with null session_name leaves oscTitle cleared', () => {
+    useAgentStore.getState().setOscTitle(H, 'dev', 'stale')
+    useAgentStore.getState().setCcStatus(H, 'dev', { session_name: null as unknown as string })
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBeUndefined()
+  })
+
   it('clearHostAgentStatus wipes ccStatus + oscTitles for host', () => {
     useAgentStore.getState().setCcStatus(H, 'dev', { session_name: 'a' })
     useAgentStore.getState().setCcStatus(H, 'prod', { session_name: 'b' })
