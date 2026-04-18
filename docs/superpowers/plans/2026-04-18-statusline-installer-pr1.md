@@ -1038,7 +1038,8 @@ func writeSettingsAtomic(path string, settings map[string]any) error {
 	return nil
 }
 
-func readSettings(path string) (map[string]any, error) {
+// Note: not `readSettings` because hooks_test.go already uses that name as a test helper.
+func loadSettings(path string) (map[string]any, error) {
 	settings := make(map[string]any)
 	data, err := os.ReadFile(path)
 	if err == nil {
@@ -1052,7 +1053,7 @@ func readSettings(path string) (map[string]any, error) {
 }
 
 func installStatuslinePdx(path, pdxPath string) error {
-	settings, err := readSettings(path)
+	settings, err := loadSettings(path)
 	if err != nil {
 		return err
 	}
@@ -1064,7 +1065,7 @@ func installStatuslinePdx(path, pdxPath string) error {
 }
 
 func installStatuslineWrap(path, pdxPath, inner string) error {
-	settings, err := readSettings(path)
+	settings, err := loadSettings(path)
 	if err != nil {
 		return err
 	}
@@ -1080,7 +1081,7 @@ func removeStatusline(path string) error {
 	if err != nil {
 		return err
 	}
-	settings, err := readSettings(path)
+	settings, err := loadSettings(path)
 	if err != nil {
 		return err
 	}
