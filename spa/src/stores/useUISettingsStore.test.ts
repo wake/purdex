@@ -152,24 +152,31 @@ describe('terminalSettingsVersion', () => {
 })
 
 describe('link detection settings', () => {
-  it('defaults absolute=true, relative-slash=false, bare=false', () => {
+  beforeEach(() => {
     useUISettingsStore.setState({
       linkDetectAbsolute: true,
       linkDetectRelativeSlash: false,
       linkDetectBareFilename: false,
     })
+  })
+
+  it('defaults: absolute=true, relative-slash=false, bare=false', () => {
     const s = useUISettingsStore.getState()
     expect(s.linkDetectAbsolute).toBe(true)
     expect(s.linkDetectRelativeSlash).toBe(false)
     expect(s.linkDetectBareFilename).toBe(false)
   })
 
-  it('setters update the flags', () => {
-    useUISettingsStore.getState().setLinkDetectRelativeSlash(true)
-    expect(useUISettingsStore.getState().linkDetectRelativeSlash).toBe(true)
-    useUISettingsStore.getState().setLinkDetectBareFilename(true)
-    expect(useUISettingsStore.getState().linkDetectBareFilename).toBe(true)
-    useUISettingsStore.getState().setLinkDetectAbsolute(false)
+  it('setters toggle the flags in both directions', () => {
+    const store = useUISettingsStore.getState()
+    store.setLinkDetectAbsolute(false)
     expect(useUISettingsStore.getState().linkDetectAbsolute).toBe(false)
+    store.setLinkDetectAbsolute(true)
+    expect(useUISettingsStore.getState().linkDetectAbsolute).toBe(true)
+
+    store.setLinkDetectRelativeSlash(true)
+    expect(useUISettingsStore.getState().linkDetectRelativeSlash).toBe(true)
+    store.setLinkDetectBareFilename(true)
+    expect(useUISettingsStore.getState().linkDetectBareFilename).toBe(true)
   })
 })
