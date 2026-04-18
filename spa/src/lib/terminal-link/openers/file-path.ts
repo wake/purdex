@@ -19,6 +19,7 @@ function buildFileInfo(path: string): FileInfo {
 export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
   return {
     id: 'builtin:file-path',
+    // priority 0 = builtin default，讓第三方 opener 以更高 priority 覆寫
     priority: 0,
     canOpen: (token) =>
       token.type === 'file' &&

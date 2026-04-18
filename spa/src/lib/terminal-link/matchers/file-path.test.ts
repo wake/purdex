@@ -48,4 +48,11 @@ describe('file-path matcher', () => {
   it('produces type "file"', () => {
     expect(filePathMatcher.type).toBe('file')
   })
+
+  it('finishes quickly on long extensionless paths (no ReDoS)', () => {
+    const line = '/' + Array(50).fill('segment').join('/')
+    const start = performance.now()
+    expect(filePathMatcher.provide(line)).toEqual([])
+    expect(performance.now() - start).toBeLessThan(50)
+  })
 })

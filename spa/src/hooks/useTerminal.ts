@@ -90,8 +90,9 @@ export function useTerminal(options: UseTerminalOptions = {}): UseTerminalResult
       term.loadAddon(new Unicode11Addon())
       term.unicode.activeVersion = '11'
     } catch { /* fallback to unicode 6 */ }
+    let linkProviderDisp: { dispose: () => void } | undefined
     try {
-      term.registerLinkProvider(
+      linkProviderDisp = term.registerLinkProvider(
         createXtermLinkProvider(terminalLinkRegistry, () => linkCtxRef.current, term),
       )
     } catch { /* non-critical */ }
@@ -120,6 +121,7 @@ export function useTerminal(options: UseTerminalOptions = {}): UseTerminalResult
       cancelAnimationFrame(rafId)
       observer.disconnect()
       container.removeEventListener('contextmenu', handleContextMenu)
+      linkProviderDisp?.dispose()
       titleDisposable.dispose()
       term.dispose()
       fitAddonRef.current = null

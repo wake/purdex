@@ -41,4 +41,20 @@ describe('url opener', () => {
     expect(openMiniWindow).toHaveBeenCalledWith('https://example.com')
     expect(openBrowserTab).not.toHaveBeenCalled()
   })
+
+  it('rejects non-http(s) schemes regardless of matcher output', () => {
+    const openBrowserTab = vi.fn()
+    const openMiniWindow = vi.fn()
+    const webSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const electron = createUrlOpener({ isElectron: true, openBrowserTab, openMiniWindow })
+    const web = createUrlOpener({ isElectron: false, openBrowserTab, openMiniWindow })
+
+    for (const uri of ['javascript:alert(1)', 'data:text/html,<script>x</script>', 'file:///etc/passwd']) {
+      electron.open({ ...token, text: uri }, {}, new MouseEvent('click'))
+      web.open({ ...token, text: uri }, {}, new MouseEvent('click'))
+    }
+    expect(openBrowserTab).not.toHaveBeenCalled()
+    expect(openMiniWindow).not.toHaveBeenCalled()
+    expect(webSpy).not.toHaveBeenCalled()
+  })
 })

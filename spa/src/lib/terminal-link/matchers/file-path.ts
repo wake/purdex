@@ -2,7 +2,8 @@ import type { LinkMatcher } from '../types'
 
 // 絕對路徑 + 末段必須含副檔名（避免誤配 `/usr/local/bin` 或 `/home/user/.config`）
 // 允許後接 :line 或 :line:col
-const PATH_RE = /(?<![\w/:])(\/(?:[\w./-]*\/)?[\w-]+\.[A-Za-z0-9]+)(?::(\d+)(?::(\d+))?)?/g
+// 段落用 `[\w.-]+\/` 確定性拆分（`/` 不在字元類內），避免 ReDoS
+const PATH_RE = /(?<![\w/:])(\/(?:[\w.-]+\/)*[\w-]+\.[A-Za-z0-9]+)(?::(\d+)(?::(\d+))?)?/g
 
 export const filePathMatcher: LinkMatcher = {
   id: 'builtin:file-path',

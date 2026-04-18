@@ -17,6 +17,9 @@ export interface BuiltinTerminalLinksDeps {
   getActiveWorkspaceId: () => string | null
 }
 
+// Invariant：此 flag 與 terminalLinkRegistry 的狀態必須同步。
+// 清空 registry 請透過 __resetBuiltinTerminalLinks()，勿直接呼叫 terminalLinkRegistry.clear()
+// 否則 flag 仍為 true，後續 registerBuiltinTerminalLinks() 會被跳過。
 let registered = false
 
 export function registerBuiltinTerminalLinks(deps: BuiltinTerminalLinksDeps): void {
