@@ -89,15 +89,15 @@ describe('TitleBar', () => {
 
   // The TitleBar sits flush with the window's top edge; without an offset the
   // buttons optically collide with the traffic-light row. Shift both button
-  // clusters down 2px so they sit on the content-side of the bar instead.
-  it('sidebar-toggle cluster is shifted down 2px', () => {
+  // clusters down 2.5px so they sit on the content-side of the bar instead.
+  it('sidebar-toggle cluster is shifted down 2.5px', () => {
     render(<TitleBar title="test" />)
-    expect(screen.getByTestId('sidebar-toggle').className).toMatch(/translate-y-\[2px\]/)
+    expect(screen.getByTestId('sidebar-toggle').className).toMatch(/translate-y-\[2\.5px\]/)
   })
 
-  it('layout-buttons cluster is shifted down 2px', () => {
+  it('layout-buttons cluster is shifted down 2.5px', () => {
     render(<TitleBar title="test" />)
-    expect(screen.getByTestId('layout-buttons').className).toMatch(/translate-y-\[2px\]/)
+    expect(screen.getByTestId('layout-buttons').className).toMatch(/translate-y-\[2\.5px\]/)
   })
 })
 
