@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.166] - 2026-04-18
+
+### Fixes / UI (#445)
+
+- **InlineTab icon 同寬佔位**：`DOT_SLOT` 從 `w-3.5` (14px) 改為 `w-4` (16px)，跟 `TabIcon` 一致。14px icon 放進 16px slot 後四周多 1px 內距，不同 agent / pane icon 寬度統一，tab name 起始 x 對齊。
+- **Badge overlay 位置對齊 top bar**：slot 擴大後 `TabStatusIndicator` overlay（`top:-1 right:-2`）相對 icon 的位置跟上方 TabBar 一致。
+- **iconDot 結構對齊**：拿掉兩個 slot 之間的 `gap-1`，跟 `TabIcon` 相同。
+
 ## [1.0.0-alpha.165] - 2026-04-18
 
 ### Fixes / UI (#444)
