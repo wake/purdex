@@ -31,6 +31,12 @@ export interface NormalizedEvent {
   detail?: Record<string, unknown>
 }
 
+/** Latest CC statusLine snapshot per session (ephemeral, from statusLine wrapper). */
+export interface CcStatusEntry {
+  receivedAt: number
+  raw: Record<string, unknown>
+}
+
 interface AgentState {
   // Backend-derived state
   statuses: Record<string, AgentStatus>
@@ -39,6 +45,7 @@ interface AgentState {
   subagents: Record<string, string[]>
   lastEvents: Record<string, NormalizedEvent>  // for notification dispatcher
   oscTitles: Record<string, string>  // latest OSC 0/2 title per session (ephemeral)
+  ccStatus: Record<string, CcStatusEntry>  // latest CC statusLine snapshot (ephemeral)
 
   // UI state
   unread: Record<string, boolean>
@@ -55,6 +62,8 @@ interface AgentState {
   setCcIconVariant: (variant: CcIconVariant) => void
   setShowOscTitle: (show: boolean) => void
   setOscTitle: (hostId: string, sessionCode: string, title: string) => void
+  setCcStatus: (hostId: string, sessionCode: string, raw: Record<string, unknown>) => void
+  clearHostAgentStatus: (hostId: string) => void
 }
 
 export const useAgentStore = create<AgentState>()(
@@ -66,6 +75,7 @@ export const useAgentStore = create<AgentState>()(
       subagents: {},
       lastEvents: {},
       oscTitles: {},
+      ccStatus: {},
       unread: {},
       tabIndicatorStyle: 'badge' as TabIndicatorStyle,
       ccIconVariant: 'bot' as CcIconVariant,
@@ -86,6 +96,7 @@ export const useAgentStore = create<AgentState>()(
             subagents: filterOut(s.subagents),
             lastEvents: filterOut(s.lastEvents),
             oscTitles: filterOut(s.oscTitles),
+            ccStatus: filterOut(s.ccStatus),
             unread: filterOut(s.unread),
           }
         })
@@ -161,6 +172,7 @@ export const useAgentStore = create<AgentState>()(
           subagents: filterKeys(s.subagents),
           lastEvents: filterKeys(s.lastEvents),
           oscTitles: filterKeys(s.oscTitles),
+          ccStatus: filterKeys(s.ccStatus),
           unread: filterKeys(s.unread),
         }
       }),
@@ -178,6 +190,31 @@ export const useAgentStore = create<AgentState>()(
         }
         if (s.oscTitles[key] === cleaned) return s
         return { oscTitles: { ...s.oscTitles, [key]: cleaned } }
+      }),
+
+      setCcStatus: (hostId, sessionCode, raw) => {
+        const key = compositeKey(hostId, sessionCode)
+        const entry: CcStatusEntry = { receivedAt: Date.now(), raw }
+        set((s) => ({ ccStatus: { ...s.ccStatus, [key]: entry } }))
+        // Mirror session_name → oscTitle (statusline's channel for cc session name).
+        // Empty / missing session_name → setOscTitle deletes the key via sanitizeOscTitle.
+        const sessionName = typeof raw?.session_name === 'string' ? raw.session_name : ''
+        get().setOscTitle(hostId, sessionCode, sessionName)
+      },
+
+      clearHostAgentStatus: (hostId) => set((s) => {
+        const prefix = `${hostId}:`
+        const filterKeys = <T,>(record: Record<string, T>): Record<string, T> => {
+          const result: Record<string, T> = {}
+          for (const [k, v] of Object.entries(record)) {
+            if (!k.startsWith(prefix)) result[k] = v
+          }
+          return result
+        }
+        return {
+          ccStatus: filterKeys(s.ccStatus),
+          oscTitles: filterKeys(s.oscTitles),
+        }
       }),
     }),
     {
