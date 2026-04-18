@@ -372,10 +372,16 @@ func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	pdxPath, _ = filepath.EvalSymlinks(pdxPath)
 
+	// Acquire mutex only for the mutation phase. The status reply at the end
+	// is a read-only CheckStatusline() call plus HTTP write; keeping it
+	// outside the lock means install/remove don't block subsequent status
+	// polls, and avoids holding the mutex across HTTP response writes.
 	statuslineMutex.Lock()
-	defer statuslineMutex.Unlock()
-
-	var opErr error
+	var (
+		opErr       error
+		badRequest  string
+		conflictErr error
+	)
 	switch req.Action {
 	case "install":
 		switch req.Mode {
@@ -383,48 +389,54 @@ func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
 			opErr = installer.InstallStatuslinePdx(pdxPath)
 		case "wrap":
 			if req.Inner == "" {
-				http.Error(w, `{"error":"wrap requires inner"}`, http.StatusBadRequest)
-				return
+				badRequest = `{"error":"wrap requires inner"}`
+			} else {
+				opErr = installer.InstallStatuslineWrap(pdxPath, req.Inner)
 			}
-			opErr = installer.InstallStatuslineWrap(pdxPath, req.Inner)
 		default:
-			http.Error(w, `{"error":"mode must be pdx or wrap"}`, http.StatusBadRequest)
-			return
+			badRequest = `{"error":"mode must be pdx or wrap"}`
 		}
 	case "remove":
 		opErr = installer.RemoveStatusline()
 		if opErr != nil && strings.Contains(opErr.Error(), "refusing to remove unmanaged") {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusConflict)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": opErr.Error()})
-			return
+			conflictErr = opErr
+			opErr = nil
+		} else if opErr == nil {
+			// On successful remove: wipe cached snapshots and broadcast a
+			// cleared event so the SPA can drop stale statusline state.
+			// Global clear is intentional for single-host daemon (simplest-
+			// possible approach); the empty session code is the existing
+			// codebase convention for cross-session events (see watcher.go
+			// sessions/tmux broadcasts).
+			snapshotMu.Lock()
+			statusSnapshots = make(map[string]statusSnapshot)
+			snapshotMu.Unlock()
+			if m.core != nil {
+				m.core.Events.Broadcast("", "agent.status.cleared", `{"agent_type":"cc"}`)
+			}
 		}
 	default:
-		http.Error(w, `{"error":"action must be install or remove"}`, http.StatusBadRequest)
-		return
+		badRequest = `{"error":"action must be install or remove"}`
 	}
-	if opErr != nil {
+	statuslineMutex.Unlock()
+
+	switch {
+	case badRequest != "":
+		http.Error(w, badRequest, http.StatusBadRequest)
+		return
+	case conflictErr != nil:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": conflictErr.Error()})
+		return
+	case opErr != nil:
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": opErr.Error()})
 		return
 	}
 
-	// On successful remove: wipe cached snapshots and broadcast a cleared
-	// event so the SPA can drop stale statusline state. Global clear is
-	// intentional for single-host daemon (simplest-possible approach); the
-	// empty session code is the existing codebase convention for
-	// cross-session events (see watcher.go sessions/tmux broadcasts).
-	if req.Action == "remove" {
-		snapshotMu.Lock()
-		statusSnapshots = make(map[string]statusSnapshot)
-		snapshotMu.Unlock()
-		if m.core != nil {
-			m.core.Events.Broadcast("", "agent.status.cleared", `{"agent_type":"cc"}`)
-		}
-	}
-
-	// Return updated status
+	// Return updated status (mutex released; CheckStatusline is a pure read).
 	m.handleStatuslineStatus(w, r)
 }
 
