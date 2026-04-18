@@ -42,6 +42,7 @@ import { registerInterfaceSubsection, getInterfaceSubsections } from './interfac
 import { InterfaceSection } from '../components/settings/InterfaceSection'
 import { NewTabSubsection } from '../components/settings/new-tab/NewTabSubsection'
 import { registerBuiltinTerminalLinks } from './terminal-link'
+import { fetchSessionCwd } from './host-api'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { openBrowserTab } from './open-browser-tab'
 import { getDefaultOpener } from './file-opener-registry'
@@ -344,5 +345,6 @@ export function registerBuiltinModules(): void {
     openSingletonTab: (content) => useTabStore.getState().openSingletonTab(content),
     insertTab: (tabId, wsId) => useWorkspaceStore.getState().insertTab(tabId, wsId),
     getActiveWorkspaceId: () => useWorkspaceStore.getState().activeWorkspaceId,
+    fetchPaneCwd: (hostId, sessionCode) => fetchSessionCwd(hostId, sessionCode),
   })
 }
