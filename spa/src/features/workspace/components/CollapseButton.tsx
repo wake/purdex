@@ -8,9 +8,12 @@ interface Props {
   variant?: Variant
 }
 
+// header-right and divider have explicit w/h so the icon needs flex centering;
+// topbar only wraps the icon in p-1, which matches the region-toggle buttons
+// byte-for-byte — leave flex classes off so class strings are identical.
 const VARIANT_CLASSES: Record<Variant, string> = {
-  'header-right': 'w-6 h-6 rounded-md',
-  divider: 'absolute top-3 right-[-11px] w-[22px] h-[22px] rounded-full bg-surface-tertiary border border-border-subtle shadow-sm opacity-0 group-hover/narrow-bar:opacity-100 focus:opacity-100 transition-opacity z-10',
+  'header-right': 'w-6 h-6 rounded-md flex items-center justify-center',
+  divider: 'absolute top-3 right-[-11px] w-[22px] h-[22px] rounded-full bg-surface-tertiary border border-border-subtle shadow-sm opacity-0 group-hover/narrow-bar:opacity-100 focus:opacity-100 transition-opacity z-10 flex items-center justify-center',
   topbar: 'p-1 rounded',
 }
 
@@ -56,7 +59,7 @@ export function CollapseButton({ variant = 'header-right' }: Props) {
       aria-pressed={isWide}
       data-variant={variant}
       onClick={toggle}
-      className={`${VARIANT_CLASSES[variant]} flex items-center justify-center transition-colors ${stateClasses(variant, locked, isWide)}`}
+      className={`${VARIANT_CLASSES[variant]} transition-colors ${stateClasses(variant, locked, isWide)}`}
     >
       <SidebarSimple size={ICON_SIZE[variant]} />
     </button>
