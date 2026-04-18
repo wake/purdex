@@ -10,11 +10,10 @@ interface Params {
   subagentCount: number
 }
 
-// Left-mode variant of the top-tab renderer in SortableTab.tsx. Sizes are tuned
-// for the 12px (xs) row; branching mirrors SortableTab exactly so the two
-// surfaces stay visually coherent.
-const ICON_SIZE = 12
-const DOT_SLOT = 'w-3 h-3'
+// Left-mode variant of the top-tab renderer in SortableTab.tsx. Icon size
+// matches the top TabBar (14px) so both surfaces feel the same weight.
+const ICON_SIZE = 14
+const DOT_SLOT = 'w-3.5 h-3.5'
 
 export function renderInlineTabIcon({
   IconComponent,

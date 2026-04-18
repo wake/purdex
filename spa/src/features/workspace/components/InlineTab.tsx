@@ -107,12 +107,12 @@ export function InlineTab({
 
   const showClose = !tab.locked
 
-  // Active tab visual distinct from active workspace:
-  //   active workspace → purple ring + translucent purple bg (set in WorkspaceRow)
-  //   active tab       → accent left border + elevated surface, no ring
+  // Match upper TabBar visual: no left-border accent; active uses subtle
+  // accent-muted ring + elevated surface, inactive keeps a transparent border
+  // so sibling rows don't shift when toggling active state.
   const activeClasses = isActive
-    ? 'bg-surface-active text-text-primary border-l-2 border-accent-base'
-    : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary border-l-2 border-transparent'
+    ? 'bg-surface-active text-white border border-accent-muted'
+    : 'text-text-muted hover:bg-surface-hover hover:text-text-primary border border-transparent'
 
   return (
     <div
@@ -128,7 +128,7 @@ export function InlineTab({
       onDoubleClick={() => onRename?.(tab.id)}
       onMouseDown={handleMouseDown}
       onContextMenu={(e) => onContextMenu(e, tab.id)}
-      className={`group relative flex items-center gap-1.5 mx-2 pl-6 pr-1.5 py-1 rounded-md text-xs cursor-pointer transition-colors ${activeClasses}`}
+      className={`group relative flex items-center gap-1.5 mx-2 pl-[18px] pr-1.5 py-1 rounded-md text-xs cursor-pointer transition-colors ${activeClasses}`}
     >
       {renderInlineTabIcon({
         IconComponent,
