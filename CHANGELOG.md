@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.175] - 2026-04-18
+
+### Polish: TitleBar 按鈕視覺收斂 (#454)
+
+- `CollapseButton` topbar variant 拿掉多餘的 `flex items-center justify-center`，class string 與 TitleBar 右側 region-toggle 完全一致（svg `display: block` 本來就能自然置中）；header-right / divider 變體保留 flex 置中（它們有固定 w/h）。
+- `TitleBar`：`sidebar-toggle` 與 `layout-buttons` 兩個 slot 加上 `translate-y-[5px]`，整體下移 5px，不再與 traffic-light row 視覺互衝；title 與 sync 警示（absolute overlay）不動。
+- 測試：CollapseButton 補 3 組 class-shape assert（topbar 無 flex / header-right + divider 保留 flex）；TitleBar 補 2 組 slot 有 `translate-y-[5px]` 的 regression。
+
 ## [1.0.0-alpha.174] - 2026-04-18
 
 ### Fix: `tabPosition='both'` 允許折疊 activity bar (#453)
