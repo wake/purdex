@@ -28,6 +28,13 @@ export function TerminalSection() {
   const showOscTitle = useAgentStore((s) => s.showOscTitle)
   const setShowOscTitle = useAgentStore((s) => s.setShowOscTitle)
 
+  const linkDetectAbsolute = useUISettingsStore((s) => s.linkDetectAbsolute)
+  const setLinkDetectAbsolute = useUISettingsStore((s) => s.setLinkDetectAbsolute)
+  const linkDetectRelativeSlash = useUISettingsStore((s) => s.linkDetectRelativeSlash)
+  const setLinkDetectRelativeSlash = useUISettingsStore((s) => s.setLinkDetectRelativeSlash)
+  const linkDetectBareFilename = useUISettingsStore((s) => s.linkDetectBareFilename)
+  const setLinkDetectBareFilename = useUISettingsStore((s) => s.setLinkDetectBareFilename)
+
   const t = useI18nStore((s) => s.t)
 
   const RENDERER_OPTIONS = [
@@ -143,6 +150,21 @@ export function TerminalSection() {
             </p>
           )}
         </div>
+      </SettingItem>
+
+      <h3 className="text-sm text-text-primary mt-6 mb-1">{t('settings.terminal.link_detect.title')}</h3>
+      <p className="text-xs text-text-secondary mb-3">{t('settings.terminal.link_detect.desc')}</p>
+
+      <SettingItem label={t('settings.terminal.link_detect.absolute.label')} description={t('settings.terminal.link_detect.absolute.desc')}>
+        <ToggleSwitch label={t('settings.terminal.link_detect.absolute.label')} checked={linkDetectAbsolute} onChange={setLinkDetectAbsolute} />
+      </SettingItem>
+
+      <SettingItem label={t('settings.terminal.link_detect.relative_slash.label')} description={t('settings.terminal.link_detect.relative_slash.desc')}>
+        <ToggleSwitch label={t('settings.terminal.link_detect.relative_slash.label')} checked={linkDetectRelativeSlash} onChange={setLinkDetectRelativeSlash} />
+      </SettingItem>
+
+      <SettingItem label={t('settings.terminal.link_detect.bare.label')} description={t('settings.terminal.link_detect.bare.desc')}>
+        <ToggleSwitch label={t('settings.terminal.link_detect.bare.label')} checked={linkDetectBareFilename} onChange={setLinkDetectBareFilename} />
       </SettingItem>
     </div>
   )
