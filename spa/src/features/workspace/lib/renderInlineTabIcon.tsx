@@ -11,10 +11,12 @@ interface Params {
   isUnread?: boolean
 }
 
-// Left-mode variant of the top-tab renderer in SortableTab.tsx. Icon size
-// matches the top TabBar (14px) so both surfaces feel the same weight.
+// Left-mode variant of the top-tab renderer in SortableTab.tsx. Slot/icon
+// sizes mirror TabIcon (w-4 h-4 = 16px slot, 14px icon) so post-icon text
+// positions and overlay-dot offsets stay pixel-identical between the
+// activity bar and the top TabBar.
 const ICON_SIZE = 14
-const DOT_SLOT = 'w-3.5 h-3.5'
+const DOT_SLOT = 'w-4 h-4'
 
 const UNREAD_PIP = (
   <span
@@ -59,7 +61,7 @@ export function renderInlineTabIcon({
 
   if (tabIndicatorStyle === 'iconDot') {
     return (
-      <span className="relative inline-flex items-center flex-shrink-0 gap-1">
+      <span className="relative inline-flex items-center flex-shrink-0">
         <span
           data-testid="inline-tab-dot"
           className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0`}
