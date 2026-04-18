@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.180] - 2026-04-19
+
+### Feat: active workspace/home 標題點擊改 toggle 展開（#457）
+
+- `WorkspaceRow` / `HomeRow`：當該列已 active 且 `tabPosition !== 'top'` 時，點擊標題切換 inline tabs 展開/收合（不再 re-select）。
+- 非 active 時維持原本 select 行為，chevron 按鈕一律 toggle。
+
+### Fix: 從 Home 切到空 workspace 卡住 standalone tab（#457）
+
+- `handleSelectWorkspace` 在目標 ws 沒 tabs 時補 `setActiveTab(null)`；先前 standalone tab 留著讓 `activeStandaloneTabId` 繼續遮蔽 `ActivityBar` 的 `isActive`，visual 看起來沒切過去。
+- Pre-existing bug，被 active-click toggle 誘發後才注意到。
+
 ## [1.0.0-alpha.179] - 2026-04-19
 
 ### Fix: Activity bar resize handle 無法拖曳（#455）
