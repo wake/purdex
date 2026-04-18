@@ -3,7 +3,11 @@ import type { PaneContent } from '../../types/tab'
 import type { FileOpener } from '../file-opener-registry'
 import { terminalLinkRegistry } from './registry'
 import { urlMatcher } from './matchers/url'
-import { filePathMatcher } from './matchers/file-path'
+import {
+  absoluteFilePathMatcher,
+  relativeSlashFilePathMatcher,
+  bareFilenameFilePathMatcher,
+} from './matchers/file-path'
 import { createUrlOpener } from './openers/url'
 import { createFilePathOpener } from './openers/file-path'
 
@@ -15,6 +19,8 @@ export interface BuiltinTerminalLinksDeps {
   openSingletonTab: (content: PaneContent) => string
   insertTab: (tabId: string, wsId: string) => void
   getActiveWorkspaceId: () => string | null
+  // 新增：供 relative/bare path 於 click 時即時查 pane cwd
+  fetchPaneCwd: (hostId: string, sessionCode: string) => Promise<string>
 }
 
 // Invariant：此 flag 與 terminalLinkRegistry 的狀態必須同步。
@@ -27,7 +33,9 @@ export function registerBuiltinTerminalLinks(deps: BuiltinTerminalLinksDeps): vo
   registered = true
 
   terminalLinkRegistry.registerMatcher(urlMatcher)
-  terminalLinkRegistry.registerMatcher(filePathMatcher)
+  terminalLinkRegistry.registerMatcher(absoluteFilePathMatcher)
+  terminalLinkRegistry.registerMatcher(relativeSlashFilePathMatcher)
+  terminalLinkRegistry.registerMatcher(bareFilenameFilePathMatcher)
 
   terminalLinkRegistry.registerOpener(createUrlOpener({
     isElectron: deps.isElectron,
@@ -39,6 +47,7 @@ export function registerBuiltinTerminalLinks(deps: BuiltinTerminalLinksDeps): vo
     openSingletonTab: deps.openSingletonTab,
     insertTab: deps.insertTab,
     getActiveWorkspaceId: deps.getActiveWorkspaceId,
+    fetchPaneCwd: deps.fetchPaneCwd,
   }))
 }
 

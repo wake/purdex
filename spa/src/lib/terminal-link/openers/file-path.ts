@@ -8,6 +8,7 @@ export interface FilePathOpenerDeps {
   openSingletonTab(content: PaneContent): string
   insertTab(tabId: string, workspaceId: string): void
   getActiveWorkspaceId(): string | null
+  fetchPaneCwd(hostId: string, sessionCode: string): Promise<string>  // Task 9 消費
 }
 
 function buildFileInfo(path: string): FileInfo {
