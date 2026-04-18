@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef } from 'react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent, type Modifier } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
-import { Plus, GearSix, HardDrives } from '@phosphor-icons/react'
+import { Plus, Sliders, HardDrives } from '@phosphor-icons/react'
 import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
@@ -215,7 +215,7 @@ export function ActivityBarNarrow({
           onClick={onOpenSettings}
           className="w-[30px] h-[30px] rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
         >
-          <GearSix size={16} />
+          <Sliders size={16} />
         </button>
       </div>
       </div>

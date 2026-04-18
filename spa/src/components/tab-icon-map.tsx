@@ -1,4 +1,4 @@
-import { Plus, TerminalWindow, ChatCircleDots, House, ClockCounterClockwise, GearSix, SmileySad, Globe } from '@phosphor-icons/react'
+import { Plus, TerminalWindow, ChatCircleDots, House, ClockCounterClockwise, Sliders, SmileySad, Globe, HardDrives, TextAlignLeft } from '@phosphor-icons/react'
 
 // Filled TerminalWindow variant — inlined to avoid a named component export in
 // this otherwise-constant module (react-refresh/only-export-components).
@@ -8,7 +8,9 @@ export const ICON_MAP: Record<string, React.ComponentType<{ size: number; classN
   ChatCircleDots,
   House,
   ClockCounterClockwise,
-  GearSix,
+  Sliders,
   SmileySad,
   Globe,
+  HardDrives,
+  TextAlignLeft,
 }

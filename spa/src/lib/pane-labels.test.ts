@@ -102,8 +102,8 @@ describe('getPaneIcon', () => {
     expect(getPaneIcon({ kind: 'history' })).toBe('ClockCounterClockwise')
   })
 
-  it('returns GearSix for settings', () => {
-    expect(getPaneIcon({ kind: 'settings', scope: 'global' })).toBe('GearSix')
+  it('returns Sliders for settings', () => {
+    expect(getPaneIcon({ kind: 'settings', scope: 'global' })).toBe('Sliders')
   })
 
   it('returns HardDrives for hosts', () => {
@@ -117,5 +117,13 @@ describe('getPaneIcon', () => {
 
   it('returns ChartBar for memory-monitor', () => {
     expect(getPaneIcon({ kind: 'memory-monitor' })).toBe('ChartBar')
+  })
+
+  it('returns TextAlignLeft for editor', () => {
+    expect(getPaneIcon({ kind: 'editor', filePath: '/x.ts', source: { type: 'local' } })).toBe('TextAlignLeft')
+  })
+
+  it('returns GitDiff for editor diff mode', () => {
+    expect(getPaneIcon({ kind: 'editor', filePath: '/x.ts', source: { type: 'local' }, diff: { against: 'saved' } })).toBe('GitDiff')
   })
 })

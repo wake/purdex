@@ -65,7 +65,7 @@ export function getPaneIcon(content: PaneContent): string {
     case 'history':
       return 'ClockCounterClockwise'
     case 'settings':
-      return 'GearSix'
+      return 'Sliders'
     case 'hosts':
       return 'HardDrives'
     case 'browser':
@@ -73,7 +73,7 @@ export function getPaneIcon(content: PaneContent): string {
     case 'memory-monitor':
       return 'ChartBar'
     case 'editor':
-      return content.diff ? 'GitDiff' : 'File'
+      return content.diff ? 'GitDiff' : 'TextAlignLeft'
     case 'image-preview':
       return 'Image'
     case 'pdf-preview':
