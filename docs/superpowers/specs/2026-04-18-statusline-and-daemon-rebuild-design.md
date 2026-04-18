@@ -1,11 +1,16 @@
 # StatusLine Installer + Daemon Dev Rebuild — Design
 
 > **Date**：2026-04-18
-> **Status**：Brainstormed, awaiting user review
+> **Status**：Brainstormed + subagent-reviewed, awaiting user sign-off
 > **Scope**：兩個獨立 PR
 > - PR-1：CC statusLine wrapper + Agents tab installer UI（end-to-end）
 > - PR-2：Daemon dev rebuild + restart in `Settings → Development`
 > **Background**：[`2026-04-18-cc-statusline-integration-design.md`](./2026-04-18-cc-statusline-integration-design.md)（OSC dead-end / hooks vs statusLine 對比 / 傳輸方案研究）
+>
+> **Prep refactors**（兩 PR 分別內含，非獨立 PR）：
+> - PR-1：從 `spa/src/features/workspace/components/ActivityBarNarrow.tsx:85-87` 的 `ws-tooltip` 抽出共用元件 `<HoverTooltip>`（CSS-only group-hover tooltip），供 tab hover 與未來其他 hover 元件復用
+> - PR-1：從 `internal/agent/cc/hooks.go` 抽出 `ccSettingsPath()` helper（目前 inline 在多處），供 statusline installer 共用
+> - PR-2：對**既有** `/api/dev/update/*` 補 daemon 端 `PDX_DEV_UPDATE=1` gating（目前僅 Electron preload 端 gate，server-side 裸露是洞），同時套用於新 `/api/dev/daemon/*` endpoint
 
 ---
 
@@ -34,10 +39,10 @@ Claude Code (跑在 tmux pane 裡)
   │ spawns subprocess every ≥300ms (CC 內建 debounce)
   ▼
 pdx statusline-proxy (Go subcommand)
-  - read stdin JSON
+  - read stdin JSON (5s timeout)
   - if --inner present: exec inner, capture stdout
   - print stdout (CC 顯示用)
-  - background: POST stdin JSON → daemon
+  - synchronous POST stdin JSON → daemon
     (config.Load() 拿 url+token, 2s timeout, fail silent)
   - exit 0 always
   │
@@ -78,7 +83,7 @@ pdx statusline-proxy [--inner "<original-command>"]
 | 1. Read stdin | 完整 stdin JSON，**5s 讀取 timeout**（避免 CC 的 bug 讓 wrapper 永遠卡住、阻塞下一次 debounce）。空或讀失敗 → `{}` |
 | 2. Inner exec（有 `--inner`） | `sh -c "<inner>"`（用 `sh` 比 `bash` 更可攜），stdin 餵同一份 JSON，timeout 2s。stdout 收集；stderr 丟棄；exit code 忽略 |
 | 3. Print stdout | 沒 `--inner`：印 default minimal；有 `--inner`：原樣印 inner stdout |
-| 4. Background POST | go-routine `POST /api/agent/status`，2s timeout，silent fail |
+| 4. **Synchronous** POST | `POST /api/agent/status`，2s HTTP timeout，silent fail。**必須同步**：goroutine + `os.Exit(0)` 會在 POST 完成前殺掉 goroutine。2s 對 CC 300ms debounce 可承受（最差下一輪才 POST 新 snapshot） |
 | 5. Exit | 永遠 `0` |
 
 ### Default minimal status
@@ -101,7 +106,8 @@ pdx statusline-proxy [--inner "<original-command>"]
 
 ### 錯誤處理（hard rule）
 
-- daemon 不通、binary panic、任何 IO 錯：**全部吞掉、exit 0、stdout 仍須印出 inner/default**
+- **daemon 不通（連線拒絕 / DNS 失敗 / 5xx）**：POST silent fail，**stdout 仍正常印 inner/default**；CC 看到的狀態列內容完全不受影響、只是 Purdex SPA 看不到 update
+- binary panic、任何 IO 錯：**全部吞掉、exit 0、stdout 仍須印出 inner/default**
 
 ### 測試
 
@@ -146,6 +152,20 @@ type StatusPayload struct {
    { "type": "agent.status", "session_id": "...", "agent_type": "cc", "status": { /* raw_status */ } }
    ```
 5. 回 `200 OK` + `{}`
+
+### 新 WS 連線 snapshot replay
+
+新 SPA 連線時（WebSocket subscription 建立），daemon 對該 host 所有有 cached snapshot 的 session 推一次 `agent.status` event，確保新連線立即看到最新狀態而不是等下一輪 CC tick。邏輯掛在既有 hook snapshot replay 旁（相同 WS subscribe entry point）。
+
+### 卸載廣播（配合 Section 6）
+
+`POST /api/agent/cc/statusline/setup { action: "remove" }` 成功後：
+- daemon 清掉 `map[sessionId]*StatusPayload` 中所有**該 host** 的 entries
+- 廣播 `agent.status.cleared` event：
+  ```json
+  { "type": "agent.status.cleared", "host_id": "...", "agent_type": "cc" }
+  ```
+- SPA 收到後清掉該 host 所有 session 的 `oscTitles` / `ccStatus`，避免殘留顯示
 
 ### Backpressure
 
@@ -201,8 +221,11 @@ key 格式：`${hostId}:${sessionName}`（與既有 `oscTitles` 一致）。
 新增 `agent.status` WS event handler（在既有 agent store 的 WS subscriber 旁）：
 
 1. 收到 event → `ccStatus[key] = { receivedAt: Date.now(), raw: status }`
-2. 若 `status.session_name` 非空 → `setOscTitle(key, status.session_name)`
-3. 若 `status.session_name` 為空（CC 還沒 `/rename`）→ `removeOscTitle(key)`
+2. `setOscTitle(key, status.session_name ?? '')` — 既有 `setOscTitle` 傳空字串時**會自動移除** entry（見 `useAgentStore.ts:171-181`）；沒有獨立 `removeOscTitle` API
+
+新增 `agent.status.cleared` WS event handler（配合後端卸載廣播）：
+
+1. 收到 event → 該 host 所有 `oscTitles` / `ccStatus` entries 全清
 
 ### Tab Name 顯示規則
 
@@ -213,18 +236,24 @@ key 格式：`${hostId}:${sessionName}`（與既有 `oscTitles` 一致）。
 
 `tmux session name` 不論預設或使用者 rename，都是同一個概念，無額外分支。
 
+> ⚠️ **既有行為變更**：當前 `spa/src/components/InlineTab.tsx:60` 顯示**只** `oscTitle`（cc-only），組合字串僅在 tooltip 呈現。本 PR 改為 visible tab text 直接顯示 `{cc} - {tmux}`，**會使 tab 寬度受限時截斷得更早**。這是刻意的 UX 變更（配合 hover tooltip 反 truncate 的設計），需在 PR 描述中標注、加視覺 regression 測試 case。
+
 ### Tab Hover
 
-使用既有 **activity bar 窄版 tooltip 元件**（不用 HTML 原生 `title`），顯示**完整 tab name 字串**（即 `{cc session name} - {tmux session name}` 或 `{tmux session name}`），用於反 truncate（tab 寬度有限會截斷）。
+使用 **`<HoverTooltip>` 元件**（PR-1 prep task 從 `ActivityBarNarrow.tsx:85-87` 的 `ws-tooltip` span 抽出：CSS-only、`group-hover:opacity-100`、定位 prop 可配置）。顯示**完整 tab name 字串**（即 `{cc session name} - {tmux session name}` 或 `{tmux session name}`），用於反 truncate（tab 寬度有限會截斷）。
+
+**不使用 HTML 原生 `title=""`**（當前 `InlineTab.tsx:61` 使用、要一起換掉）。
 
 ### Bottom Status Bar 顯示
 
-位置：bottom status bar 右側、terminal/stream 切換按鈕的**左邊**
+位置：bottom status bar 右側、terminal/stream 切換按鈕的**左邊**。
+
+**重要：這個 span 已經存在**（`spa/src/components/StatusBar.tsx:200-208`，`data-testid="osc-title"`），目前由舊 `oscTitles` store 驅動（OSC dead-end 後實際空著）。**不新增元件**，只是 statusLine WS handler 接上 `setOscTitle` 後資料自動從新來源餵入，此 span 的顯示邏輯與位置完全不動。
 
 | 條件 | 顯示 |
 |---|---|
 | `showOscTitle == true` AND host 已裝 wrapper AND **cc session name 非空** | `{cc session name}`（**只 cc，不串 tmux**） |
-| 否則 | **整個元素隱藏** |
+| 否則 | **整個元素隱藏**（既有 `{oscTitle && ...}` conditional 已是這個行為） |
 
 無 tooltip。
 
@@ -371,12 +400,14 @@ Namespace `/api/agent/`（不是 `/api/hooks/`，statusline 概念上不是 hook
 
 | 內容 | mode |
 |---|---|
-| 欄位不存在或 `statusLine` 為 null | `none` |
-| match 正則 `^.*/pdx(\.exe)?\s+statusline-proxy\s*$` | `pdx` |
-| match 正則 `^.*/pdx(\.exe)?\s+statusline-proxy\s+--inner\s+'(.*)'\s*$` | `wrapped`（`inner` = 第二個 capture group，反 shell-quote） |
+| 欄位不存在、`statusLine` 為 null、或非物件（如 string） | `none`（視為可安全覆寫） |
+| tokenize 後 argv[0] basename == `pdx` (或 `pdx.exe`) 且 argv[1] == `statusline-proxy` 且 argv 長度 2 | `pdx` |
+| 同上但 argv[2] == `--inner` 且有 argv[3] | `wrapped`（`inner` = argv[3]） |
 | 其他 | `unmanaged`（`inner` = 整段 command 原文） |
 
-**不綁定當前 daemon executable 絕對路徑**（避免 binary 被移動後偵測不到），只要檔名是 `pdx` / `pdx.exe` 即視為我方安裝。寫入時則固定用 `os.Executable()` 取的絕對路徑。
+**用 `github.com/mattn/go-shellwords` tokenize**（不用正則）— 正則無法正確處理 POSIX single-quote escape `'\''`（含單引號的 inner 會被誤 parse）。
+
+**不綁定當前 daemon executable 絕對路徑**（避免 binary 被移動後偵測不到），只要 argv[0] basename 是 `pdx` / `pdx.exe` 即視為我方安裝。寫入時則固定用 `os.Executable()` 取的絕對路徑。
 
 ### `POST /setup` 請求
 
@@ -416,25 +447,32 @@ Namespace `/api/agent/`（不是 `/api/hooks/`，statusline 概念上不是 hook
 - `install { mode: pdx }` 當前已是 pdx → no-op，回 200
 - `remove` 當前是 none → no-op，回 200
 
+### 併發防護
+
+`POST /setup` handler 內用 **per-host file mutex**（read-modify-write settings.json 全程持有），避免兩個 SPA 同時 install 時 race。atomic rename 只保證檔案不半寫，不保證邏輯順序正確；mutex 保證 last-writer-wins 語意 + 兩邊都會看到 consistent status 回應。
+
 ### Go 模組位置
 
+- `internal/agent/cc/paths.go`（新 — **PR-1 prep**）— 抽出 `ccSettingsPath()` helper（目前 `hooks.go` 多處 inline `filepath.Join(home, ".claude", "settings.json")`）
 - `internal/agent/cc/statusline.go`（新） — reader / writer / 偵測 / mode 判斷
-- `internal/module/agent/handler.go`（擴） — 兩個 route
-- 與 `internal/agent/cc/hooks.go` 對齊結構、共用 settings.json path 解析
+- `internal/agent/cc/hooks.go`（微調） — 改用 `ccSettingsPath()` helper
+- `internal/module/agent/handler.go`（擴） — 兩個 route + per-host file mutex
 
 ### 測試
 
 #### Unit（`internal/agent/cc/statusline_test.go`）
 
-- mode 判定：none / pdx / wrapped / unmanaged 四個 case
+- mode 判定：none / pdx / wrapped / unmanaged 四個 case（含 `statusLine` 為 string / null / 非物件 → none）
 - install pdx 於空 settings
 - install pdx 於已有其他欄位（hooks / mcp 保留）
 - install wrap：inner 含 space、單引號、`&` 等 shell 特殊字元 → quote 正確
+- install wrap + remove round-trip：inner 含 `it's`, `a "b"`, `foo 'bar' baz` → 還原與原值 byte-perfect 相等（go-shellwords tokenize 驗證）
 - remove pdx → statusLine 欄位消失、其他欄位保留
 - remove wrapped → inner 還原、type/padding 保留
 - remove unmanaged → 拒絕 + error
 - 缺檔 install → 建立新檔
 - atomic write：模擬中斷不留半寫檔
+- 併發 install：兩個 goroutine 同時 call setup → 結果 consistent（mutex 驗證）
 
 #### Integration（`internal/module/agent/handler_test.go`）
 
@@ -467,7 +505,7 @@ Namespace `/api/dev/daemon/`，與既有 `/api/dev/update/`（app）並列。
 { "current_hash": "9dfe8fbf", "latest_hash": "a7c3d2e1", "available": true }
 ```
 
-**CWD 假設**：daemon 必須在 repo root 啟動，或 config / env 指向 repo 路徑（與既有 `/api/dev/update/check` 相同要求）。dev endpoint 只在 `PDX_DEV_UPDATE=1` 啟用，正式環境不會碰到。
+**CWD 假設**：daemon 必須在 repo root 啟動，或 config / env 指向 repo 路徑（與既有 `/api/dev/update/check` 相同要求）。
 
 ### `POST /rebuild`
 
@@ -483,9 +521,9 @@ SSE stream，事件類型：
 ```
 1. Old daemon 收 POST /rebuild
 2. 開啟 SSE stream；in-flight HTTP 不受影響
-3. 執行 `go build -o bin/pdx.new ./cmd/pdx`
+3. 執行 `go build -o bin/pdx.new ./cmd/pdx`（**5 分鐘 timeout**，鏡射既有 app build 的 `defaultBuild` 時間）
    ├─ 過程每行 stdout/stderr → SSE "log" event
-   ├─ 失敗 → SSE "error" + 關閉 stream，老 daemon 繼續服務
+   ├─ 失敗 / timeout → SSE "error" + 關閉 stream，老 daemon 繼續服務
    └─ 成功 → 下一步
 4. `os.Rename("bin/pdx.new", "bin/pdx")` — 原子替換（同 FS）
 5. SSE 推 "success" + "restarting" 事件，關閉 stream
@@ -535,16 +573,20 @@ SSE stream，事件類型：
 
 ## 12. 安全 Guards
 
-- endpoint 只在 `PDX_DEV_UPDATE=1` 開啟（與既有 app update 一致）
+- **server-side gating**：daemon 啟動時讀取 `PDX_DEV_UPDATE=1` env var；未啟用時**整個 dev module 不註冊 route**（既有 `/api/dev/update/*` + 新的 `/api/dev/daemon/*` 一起覆蓋）
+  - 當前現況：既有 `internal/module/dev/module.go` 沒有 server-side gate，僅 Electron preload 端 gate（`electron/preload.ts:122-123`）— **本 PR 一併補洞**
+  - 行為：daemon 未帶 `PDX_DEV_UPDATE=1` 啟動 → 兩組 dev endpoint 都回 404
 - bearer auth（與其他 daemon API 一致）
-- 同時只允許一個 rebuild 進行（mutex）
+- 同時只允許一個 daemon rebuild 進行（per-process mutex）
 - Build 不阻塞其他 request（goroutine）
 
 ## 13. Go 模組位置
 
 - `internal/module/dev/daemon.go`（新） — build / rebuild 邏輯、SSE handler
-- `internal/module/dev/module.go`（擴） — 新 route registration
-- `cmd/pdx/daemon.go` 啟動時確認 port re-bind 於 restart 後（多數情況 SO_REUSEADDR 預設即可）
+- `internal/module/dev/module.go`（擴） — 新 route registration + **補 `PDX_DEV_UPDATE` server-side gate**（module register 時條件性掛 route）
+- `cmd/pdx/daemon.go`（改） — 監聽 socket 明確設 `SO_REUSEADDR`（透過 `net.ListenConfig{ Control: setReuseAddr }`）+ 啟動時若遇 `EADDRINUSE` 做 exponential backoff retry bind（最多 5 次、間隔 200ms → 1s）— 處理 exec 後 kernel TIME_WAIT 等 race
+
+**明確放棄的方案**：不用 listener fd 繼承（`extraFiles`）— 複雜度不符 MVP 收益。`SO_REUSEADDR` + retry loop 對 macOS dev 環境足夠；未來若遇真實生產 restart 再升級到 fd 繼承。
 
 ## 14. 測試
 
