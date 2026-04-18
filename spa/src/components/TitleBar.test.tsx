@@ -89,8 +89,9 @@ describe('TitleBar — sync conflict warning', () => {
     expect(screen.queryByLabelText(/sync conflict|同步衝突/i)).toBeNull()
   })
 
-  it('renders warning icon + tooltip when pending conflicts > 0', () => {
+  it('renders warning icon + tooltip when pending conflicts > 0 (provider active)', () => {
     const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setActiveProvider('daemon')
     useSyncStore.getState().setPendingConflicts(
       [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
       bundle,
@@ -101,8 +102,34 @@ describe('TitleBar — sync conflict warning', () => {
     expect(btn.getAttribute('title')).toMatch(/1/)
   })
 
+  it('hides warning icon when provider is off, even with pending conflicts', () => {
+    const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setPendingConflicts(
+      [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
+      bundle,
+    )
+    // activeProviderId remains null (off)
+    render(<TitleBar title="test" />)
+    expect(screen.queryByLabelText(/sync conflict|同步衝突/i)).toBeNull()
+  })
+
+  it('hides warning icon when pendingRemoteBundle is null (banner would be hidden)', () => {
+    // Simulate partial rehydrate / divergent state
+    useSyncStore.setState({
+      activeProviderId: 'daemon',
+      pendingConflicts: [
+        { contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } },
+      ],
+      pendingRemoteBundle: null,
+      pendingConflictsAt: Date.now(),
+    })
+    render(<TitleBar title="test" />)
+    expect(screen.queryByLabelText(/sync conflict|同步衝突/i)).toBeNull()
+  })
+
   it('plural: tooltip uses singular for 1 conflict', () => {
     const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setActiveProvider('daemon')
     useSyncStore.getState().setPendingConflicts(
       [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
       bundle,
@@ -114,6 +141,7 @@ describe('TitleBar — sync conflict warning', () => {
 
   it('plural: tooltip uses plural for >1 conflicts', () => {
     const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setActiveProvider('daemon')
     useSyncStore.getState().setPendingConflicts(
       [
         { contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } },
@@ -128,6 +156,7 @@ describe('TitleBar — sync conflict warning', () => {
 
   it('clicking icon navigates to /settings/sync', () => {
     const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setActiveProvider('daemon')
     useSyncStore.getState().setPendingConflicts(
       [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
       bundle,

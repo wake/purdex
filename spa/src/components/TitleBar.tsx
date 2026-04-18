@@ -29,6 +29,16 @@ export function TitleBar({ title }: Props) {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const regions = useLayoutStore((s) => s.regions)
   const toggleVisibility = useLayoutStore((s) => s.toggleVisibility)
+  // Match SyncSection banner predicate exactly — otherwise the icon flashes
+  // on states where the banner silently refuses to render, creating a
+  // dead-end click path.
+  const showSyncWarning = useSyncStore(
+    (s) =>
+      s.activeProviderId !== null &&
+      s.pendingConflicts.length > 0 &&
+      s.pendingRemoteBundle !== null &&
+      s.pendingConflictsAt !== null,
+  )
   const pendingCount = useSyncStore((s) => s.pendingConflicts.length)
   const t = useI18nStore((s) => s.t)
   const [, setLocation] = useLocation()
@@ -45,7 +55,7 @@ export function TitleBar({ title }: Props) {
     >
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none px-2 gap-2">
         <span className="text-xs text-text-secondary truncate max-w-[calc(100%-27rem)]">{title}</span>
-        {pendingCount > 0 && (
+        {showSyncWarning && (
           <button
             aria-label={t(pluralKey('settings.sync.conflict.tooltip', pendingCount), { count: pendingCount })}
             title={t(pluralKey('settings.sync.conflict.tooltip', pendingCount), { count: pendingCount })}
