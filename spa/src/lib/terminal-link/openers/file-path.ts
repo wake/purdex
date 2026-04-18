@@ -8,13 +8,18 @@ export interface FilePathOpenerDeps {
   openSingletonTab(content: PaneContent): string
   insertTab(tabId: string, workspaceId: string): void
   getActiveWorkspaceId(): string | null
-  fetchPaneCwd(hostId: string, sessionCode: string): Promise<string>  // Task 9 消費
+  fetchPaneCwd(hostId: string, sessionCode: string): Promise<string>
 }
 
 function buildFileInfo(path: string): FileInfo {
   const name = path.split('/').pop() ?? path
   const extension = name.includes('.') ? name.split('.').pop()! : ''
   return { name, path, extension, size: 0, isDirectory: false }
+}
+
+function joinCwd(cwd: string, rel: string): string {
+  const trimmed = cwd.replace(/\/+$/, '')
+  return `${trimmed}/${rel}`
 }
 
 export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
@@ -25,11 +30,25 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
     canOpen: (token) =>
       token.type === 'file' &&
       typeof (token.meta as { path?: unknown } | undefined)?.path === 'string',
-    open: (token, ctx) => {
+    open: async (token, ctx) => {
       // 不依賴呼叫方一定先走 canOpen，自行檢查 meta.path
-      const path = (token.meta as { path?: unknown } | undefined)?.path
-      if (typeof path !== 'string') return
+      const rawPath = (token.meta as { path?: unknown } | undefined)?.path
+      if (typeof rawPath !== 'string') return
       if (!ctx.hostId) return
+
+      let path = rawPath
+      if (!path.startsWith('/')) {
+        // relative / bare: 即時向 tmux pane 查 cwd。無 sessionCode 或 fetch 失敗放棄
+        if (!ctx.sessionCode) return
+        try {
+          const cwd = await deps.fetchPaneCwd(ctx.hostId, ctx.sessionCode)
+          if (!cwd || !cwd.startsWith('/')) return
+          path = joinCwd(cwd, path)
+        } catch {
+          return
+        }
+      }
+
       const file = buildFileInfo(path)
       const opener = deps.getDefaultOpener(file)
       if (!opener) return
