@@ -41,6 +41,18 @@ describe('absoluteFilePathMatcher', () => {
     setFlags({ abs: false })
     expect(absoluteFilePathMatcher.provide('/a/b.md')).toHaveLength(0)
   })
+
+  it('matches multi-extension path like /x/foo.d.ts', () => {
+    const r = absoluteFilePathMatcher.provide('open /x/foo.d.ts')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('/x/foo.d.ts')
+    expect(r[0].meta).toEqual({ path: '/x/foo.d.ts' })
+  })
+
+  it('multi-ext with line suffix: /x/bar.min.js:42', () => {
+    const r = absoluteFilePathMatcher.provide('at /x/bar.min.js:42 here')
+    expect(r[0].meta).toEqual({ path: '/x/bar.min.js', line: 42 })
+  })
 })
 
 describe('relativeSlashFilePathMatcher', () => {
@@ -74,6 +86,12 @@ describe('relativeSlashFilePathMatcher', () => {
     setFlags({ rel: false })
     expect(relativeSlashFilePathMatcher.provide('src/App.tsx')).toHaveLength(0)
   })
+
+  it('matches multi-extension relative path src/a/foo.d.ts', () => {
+    const r = relativeSlashFilePathMatcher.provide('edit src/a/foo.d.ts')
+    expect(r[0].text).toBe('src/a/foo.d.ts')
+    expect(r[0].meta).toEqual({ path: 'src/a/foo.d.ts' })
+  })
 })
 
 describe('bareFilenameFilePathMatcher', () => {
@@ -103,5 +121,17 @@ describe('bareFilenameFilePathMatcher', () => {
   it('returns [] when flag off', () => {
     setFlags({ bare: false })
     expect(bareFilenameFilePathMatcher.provide('foo.md')).toHaveLength(0)
+  })
+
+  it('matches multi-extension bare name foo.d.ts', () => {
+    const r = bareFilenameFilePathMatcher.provide('see foo.d.ts')
+    expect(r[0].text).toBe('foo.d.ts')
+    expect(r[0].meta).toEqual({ path: 'foo.d.ts' })
+  })
+
+  it('matches v1.2.3.tar.gz:10', () => {
+    const r = bareFilenameFilePathMatcher.provide('got v1.2.3.tar.gz:10')
+    expect(r[0].text).toBe('v1.2.3.tar.gz:10')
+    expect(r[0].meta).toEqual({ path: 'v1.2.3.tar.gz', line: 10 })
   })
 })

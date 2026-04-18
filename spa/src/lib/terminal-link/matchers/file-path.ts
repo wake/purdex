@@ -1,14 +1,14 @@
 import type { LinkMatcher } from '../types'
 import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 
-// 絕對路徑：必須以 `/` 開頭 + 末段 name.ext
-const ABS_RE = /(?<![\w/:])(\/(?:[\w.-]+\/)*[\w-]+\.[A-Za-z0-9]+)(?::(\d+)(?::(\d+))?)?/g
+// 絕對路徑：必須以 `/` 開頭 + 末段 name.ext（支援多重副檔名如 .d.ts / .min.js）
+const ABS_RE = /(?<![\w/:])(\/(?:[\w.-]+\/)*[\w-]+(?:\.[A-Za-z0-9]+)+)(?::(\d+)(?::(\d+))?)?/g
 
-// 相對路徑（含至少一個 `/`）：不能以 `/` 開頭，至少一個中間段 + 末段
-const REL_RE = /(?<![\w/:])((?:[\w.-]+\/)+[\w-]+\.[A-Za-z0-9]+)(?::(\d+)(?::(\d+))?)?/g
+// 相對路徑（含至少一個 `/`）：不能以 `/` 開頭，至少一個中間段 + 末段（支援多重副檔名）
+const REL_RE = /(?<![\w/:])((?:[\w.-]+\/)+[\w-]+(?:\.[A-Za-z0-9]+)+)(?::(\d+)(?::(\d+))?)?/g
 
-// 純檔名：無 `/`；lookbehind 阻擋 word/`/`/`:`/`.` 避免匹配路徑片段或 URL 內段、或次級副檔名
-const BARE_RE = /(?<![\w/:.])([\w-]+\.[A-Za-z0-9]+)(?::(\d+)(?::(\d+))?)?/g
+// 純檔名：無 `/`；lookbehind 阻擋 word/`/`/`:`/`.` 避免匹配路徑片段或 URL 內段、或次級副檔名（支援多重副檔名）
+const BARE_RE = /(?<![\w/:.])([\w-]+(?:\.[A-Za-z0-9]+)+)(?::(\d+)(?::(\d+))?)?/g
 
 type MatchResult = {
   text: string
