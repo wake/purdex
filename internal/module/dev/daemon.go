@@ -65,8 +65,23 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 		writeMu.Unlock()
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	// Fix 4: derive build context from m.stopCtx so SIGTERM cancels in-flight
+	// builds; propagate client disconnect via a side goroutine.
+	parent := m.stopCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
+
+	// Propagate client disconnect to the build too.
+	go func() {
+		select {
+		case <-r.Context().Done():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	binDir := filepath.Join(m.repoRoot, "bin")
 	if err := os.MkdirAll(binDir, 0755); err != nil {
@@ -75,7 +90,17 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	}
 	newPath := filepath.Join(binDir, "pdx.new")
 
-	cmd := exec.CommandContext(ctx, "go", "build", "-o", newPath, "./cmd/pdx")
+	// Fix 1: Inject the current git hash via -ldflags so the rebuilt binary
+	// reports the correct BakedInHash through /api/dev/daemon/check. Without
+	// this, the new binary would start with BakedInHash="unknown" and the UI
+	// would permanently show "update available" after every rebuild.
+	// Bound the git query with a short timeout to avoid blocking the mutex.
+	hashCtx, hashCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer hashCancel()
+	hashOut, _ := exec.CommandContext(hashCtx, "git", "-C", m.repoRoot, "log", "-1", "--format=%h").Output()
+	hash := strings.TrimSpace(string(hashOut))
+	ldflags := "-X github.com/wake/purdex/internal/module/dev.BakedInHash=" + hash
+	cmd := exec.CommandContext(ctx, "go", "build", "-ldflags", ldflags, "-o", newPath, "./cmd/pdx")
 	cmd.Dir = m.repoRoot
 	// Inherit env so GOCACHE / PATH / HOME work; do not scrub.
 	cmd.Env = os.Environ()
@@ -85,13 +110,18 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
 		return
 	}
+	// Fix 2: close stdout pipe on StderrPipe failure to avoid FD leak.
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		stdout.Close()
 		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
 		return
 	}
 
+	// Fix 2: close both pipes when cmd.Start fails.
 	if err := cmd.Start(); err != nil {
+		stdout.Close()
+		stderr.Close()
 		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
 		return
 	}
@@ -116,12 +146,8 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Capture new hash for client UI.
-	newHash := ""
-	if out, hashErr := exec.Command("git", "-C", m.repoRoot, "log", "-1", "--format=%h").Output(); hashErr == nil {
-		newHash = strings.TrimSpace(string(out))
-	}
-	writeEvent(daemonRebuildEvent{Type: "success", NewHash: newHash})
+	// Fix 3: send success AFTER atomic rename so we don't emit success-then-
+	// error if rename fails. hash was captured before the build (Fix 1/5).
 
 	// Atomic swap: bin/pdx.new -> bin/pdx
 	finalPath := filepath.Join(binDir, "pdx")
@@ -130,6 +156,7 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	writeEvent(daemonRebuildEvent{Type: "success", NewHash: hash})
 	writeEvent(daemonRebuildEvent{Type: "restarting"})
 	// Give SSE a moment to flush to the client before we vanish into Exec.
 	time.Sleep(200 * time.Millisecond)
