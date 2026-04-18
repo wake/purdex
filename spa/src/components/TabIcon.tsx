@@ -39,7 +39,7 @@ export function TabIcon({
   isUnread,
 }: Props) {
   const iconBox = (
-    <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
+    <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-px">
       {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
     </span>
   )
@@ -52,7 +52,7 @@ export function TabIcon({
 
   if (tabIndicatorStyle === 'dot') {
     return (
-      <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
+      <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-px">
         <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
         {showDotUnreadPip && <UnreadPip />}
         {subagentCount > 0 && <SubagentDots count={subagentCount} />}
@@ -62,7 +62,7 @@ export function TabIcon({
 
   if (tabIndicatorStyle === 'iconDot') {
     return (
-      <span className="relative inline-flex items-center flex-shrink-0">
+      <span className="relative inline-flex items-center flex-shrink-0 ml-px">
         <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
           <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
           {showDotUnreadPip && <UnreadPip />}
@@ -74,12 +74,12 @@ export function TabIcon({
   }
 
   // Unread tints the badge dot red instead of overlaying a separate pip.
-  // Nudge the whole icon+badge group 3px right to align the visually
-  // off-center robot glyph with the terminal icon, and park subagent dots
-  // at left:-4 so they sit just outside the box edge, clear of the icon.
+  // Every mode now carries `ml-px` so the icon column aligns regardless of
+  // which indicator style a tab uses; subagent dots park at left:-4 so they
+  // sit just outside the box edge, clear of the icon.
   return (
     <span
-      className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[3px]"
+      className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-px"
     >
       {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
       <TabStatusIndicator
