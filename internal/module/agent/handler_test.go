@@ -813,3 +813,120 @@ func TestHandleAgentStatus_BadAgentType(t *testing.T) {
 		t.Errorf("status %d, want 400", w.Code)
 	}
 }
+
+// --- Task 12: statusline snapshot replay + cleared broadcast ---
+
+func TestSendStatuslineSnapshot_ReplaysToSubscriber(t *testing.T) {
+	// Reset package-level state (other tests may have populated it).
+	snapshotMu.Lock()
+	statusSnapshots = map[string]statusSnapshot{
+		"code-a": {AgentType: "cc", Status: json.RawMessage(`{"model":{"display_name":"A"}}`)},
+		"code-b": {AgentType: "cc", Status: json.RawMessage(`{"model":{"display_name":"B"}}`)},
+	}
+	snapshotMu.Unlock()
+	t.Cleanup(func() {
+		snapshotMu.Lock()
+		statusSnapshots = make(map[string]statusSnapshot)
+		snapshotMu.Unlock()
+	})
+
+	m := newTestModule(t)
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: tmux.NewFakeExecutor()}
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	m.sendStatuslineSnapshot(sub)
+
+	// Read both expected replays (order not guaranteed — maps).
+	seen := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		select {
+		case msg := <-sub.SendCh():
+			var env struct {
+				Type    string `json:"type"`
+				Session string `json:"session"`
+				Value   string `json:"value"`
+			}
+			if err := json.Unmarshal(msg, &env); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if env.Type != "agent.status" {
+				t.Errorf("type = %q, want agent.status", env.Type)
+			}
+			seen[env.Session] = true
+		case <-time.After(100 * time.Millisecond):
+			t.Fatalf("timed out after %d events", i)
+		}
+	}
+	if !seen["code-a"] || !seen["code-b"] {
+		t.Errorf("missing replay; seen=%v", seen)
+	}
+}
+
+func TestHandleStatuslineSetup_RemoveBroadcastsCleared(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Seed a cached snapshot so we can assert it gets cleared.
+	snapshotMu.Lock()
+	statusSnapshots = map[string]statusSnapshot{"code-x": {AgentType: "cc", Status: json.RawMessage(`{}`)}}
+	snapshotMu.Unlock()
+	t.Cleanup(func() {
+		snapshotMu.Lock()
+		statusSnapshots = make(map[string]statusSnapshot)
+		snapshotMu.Unlock()
+	})
+
+	// Seed settings.json with a pdx-mode statusline (so remove succeeds, not refused).
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"),
+		[]byte(`{"statusLine":{"type":"command","command":"/opt/bin/pdx statusline-proxy"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: tmux.NewFakeExecutor()}
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	body := strings.NewReader(`{"action":"remove"}`)
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", body)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+
+	m.handleStatuslineSetup(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// Check: statusSnapshots cleared.
+	snapshotMu.RLock()
+	n := len(statusSnapshots)
+	snapshotMu.RUnlock()
+	if n != 0 {
+		t.Errorf("snapshot map size = %d, want 0", n)
+	}
+
+	// Check: agent.status.cleared was broadcast. Drain up to 1 event.
+	foundCleared := false
+	for i := 0; i < 3; i++ {
+		select {
+		case msg := <-sub.SendCh():
+			var env struct {
+				Type string `json:"type"`
+			}
+			_ = json.Unmarshal(msg, &env)
+			if env.Type == "agent.status.cleared" {
+				foundCleared = true
+			}
+		case <-time.After(50 * time.Millisecond):
+			i = 3 // break
+		}
+	}
+	if !foundCleared {
+		t.Error("agent.status.cleared broadcast not seen")
+	}
+}

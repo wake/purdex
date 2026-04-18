@@ -13,6 +13,7 @@ import (
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 )
 
@@ -409,6 +410,19 @@ func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// On successful remove: wipe cached snapshots and broadcast a cleared
+	// event so the SPA can drop stale statusline state. Global clear is
+	// intentional for single-host daemon (simplest-possible approach); the
+	// "*" session code tells the frontend to apply this across all sessions.
+	if req.Action == "remove" {
+		snapshotMu.Lock()
+		statusSnapshots = make(map[string]statusSnapshot)
+		snapshotMu.Unlock()
+		if m.core != nil {
+			m.core.Events.Broadcast("*", "agent.status.cleared", `{"host_id":"*","agent_type":"cc"}`)
+		}
+	}
+
 	// Return updated status
 	m.handleStatuslineStatus(w, r)
 }
@@ -562,6 +576,29 @@ func (m *Module) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 	if m.core != nil {
 		body, _ := json.Marshal(snap)
 		m.core.Events.Broadcast(code, "agent.status", string(body))
+	}
+}
+
+// sendStatuslineSnapshot pushes the cached statusline snapshots to a new
+// WebSocket subscriber. Mirrors the hook sendSnapshot pattern — builds a
+// core.HostEvent for each cached entry and calls sub.Send directly.
+func (m *Module) sendStatuslineSnapshot(sub *core.EventSubscriber) {
+	if m.core == nil {
+		return
+	}
+	snapshotMu.RLock()
+	defer snapshotMu.RUnlock()
+	for code, snap := range statusSnapshots {
+		body, err := json.Marshal(snap)
+		if err != nil {
+			continue
+		}
+		event := core.HostEvent{Type: "agent.status", Session: code, Value: string(body)}
+		data, err := json.Marshal(event)
+		if err != nil {
+			continue
+		}
+		sub.Send(data)
 	}
 }
 

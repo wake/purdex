@@ -137,6 +137,7 @@ func (m *Module) Start(_ context.Context) error {
 
 	m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
 		m.sendSnapshot(sub)
+		m.sendStatuslineSnapshot(sub)
 		go m.checkAliveAll(sub)
 	})
 
