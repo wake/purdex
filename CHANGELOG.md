@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.0.0-alpha.160] - 2026-04-18
+
+### 功能
+
+- **daemon / spa**：Dev Update 加 SSE build log streaming（#428）—— 新增 `GET /api/dev/update/check/stream`，Settings → Development 按下 Check 後即時顯示 build 的 stdout / stderr / phase 事件，取代原本 3 秒 JSON polling；遲到的 subscriber 拿到完整 replay；並發多個 client 共享同一次 build
+- **daemon**：新增 `requiresFullRebuild` 旗標 —— 偵測 `package.json` / `pnpm-lock.yaml` / `electron-builder.yml` / `build/` 變動時，Settings 跳警告 banner 提示需要手動跑 `pnpm run electron:build`（dev update 只抽換 JS bundle）；hash 由 `electron.vite.config.ts` 寫入 `out/.build-info.json` 的 `rebuildHash` 欄位
+
+### 介面調整
+
+- **spa**：新元件 `DevBuildLogPanel` —— 可捲動 `<pre>` 顯示 build log、sticky auto-scroll（使用者本在底部時才跟著捲）、複製完整 log 按鈕；`full_rebuild_hint` 文案指明「執行 daemon 的主機」避免 Air / Mini 情境混淆
+
+### 重構
+
+- **daemon**：`runBuild` 改接受 `*BuildSession` 參數，`CombinedOutput` 換成 pipe-based `streamCmd` 逐行廣播；`snapshotCheck` 拆出唯讀版 `observeCheck` 供終局 SSE 事件使用，避免 build-info 寫失敗時誤觸第二次 build
+- **electron**：`streamCheck` 加在 `updater.ts`，SSE 用 fetch + ReadableStream 自解；IPC 每次呼叫配獨立 reply channel，舊 stream 事件不會灌進新 listener
+- **spa**：`DevEnvironmentSection` 改用 `streamCheck` IPC；`daemonBase` / `token` 改變時自動重啟 stream 關閉舊 host 殘流
+
+### 測試
+
+- Go 新增 17 個 daemon 測試（BuildSession fanout / 遲到 subscribe / 併發 unsubscribe / handleCheckStream 各狀態 / 終局不觸發第二次 build / client disconnect 釋放 subscription / rebuild-hash 5 case）
+- SPA 新增 1 個 `DevEnvironmentSection` test（host 切換重啟 stream）+ 5 個 `DevBuildLogPanel` tests（總計 1876 通過）
+
+### 後續
+
+- Issues #433–#437 追蹤延後項目：build error 脈絡、首次連線 401 文案、`electron/updater.ts` / `internal/module/dev/handler.go` / `DevEnvironmentSection.tsx` 拆分
+
 ## [1.0.0-alpha.159] - 2026-04-18
 
 ### 介面調整
