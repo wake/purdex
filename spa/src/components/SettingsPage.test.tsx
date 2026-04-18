@@ -7,7 +7,7 @@ vi.mock('../features/workspace/lib/icon-path-cache', () => ({
 }))
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Router } from 'wouter'
 import { memoryLocation } from 'wouter/memory-location'
 import { SettingsPage, resetLastSection } from './SettingsPage'
@@ -78,5 +78,22 @@ describe('SettingsPage', () => {
   it('invalid deep-link section falls through to default', () => {
     renderWithLocation('/settings/nonexistent-section')
     expect(screen.getByText('Visual preferences for the application')).toBeTruthy()
+  })
+
+  it('self-heals URL when deep-link section is invalid (replaces to canonical)', async () => {
+    const { history } = renderWithLocation('/settings/nonexistent-section')
+    expect(screen.getByText('Visual preferences for the application')).toBeTruthy()
+    await waitFor(() => {
+      expect(history[history.length - 1]).toBe('/settings/appearance')
+    })
+  })
+
+  it('self-heals URL when deep-link path has extra segments', async () => {
+    const { history } = renderWithLocation('/settings/sync/extra')
+    // Falls through to default appearance section
+    expect(screen.getByText('Visual preferences for the application')).toBeTruthy()
+    await waitFor(() => {
+      expect(history[history.length - 1]).toBe('/settings/appearance')
+    })
   })
 })

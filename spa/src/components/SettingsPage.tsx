@@ -44,6 +44,15 @@ function GlobalSettingsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlSection])
 
+  // Self-heal invalid /settings/<bad> URLs so back/forward history doesn't
+  // preserve garbage paths (e.g. /settings/sync/extra or /settings/BAD!).
+  useEffect(() => {
+    if (urlSection && !sections.some((s) => s.id === urlSection)) {
+      setLocation(`/settings/${activeSection}`, { replace: true })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlSection, activeSection])
+
   const handleSelectSection = (id: string) => {
     lastSection = id
     setActiveSection(id)
