@@ -32,4 +32,16 @@ describe('HoverTooltip', () => {
     const el = screen.getByText('r tip')
     expect(el.className).toContain('left-full')
   })
+
+  it('includes fade-on-hover classes (opacity-0 + group-hover:opacity-100 + transition-opacity)', () => {
+    render(
+      <div className="relative group">
+        <HoverTooltip>fade</HoverTooltip>
+      </div>
+    )
+    const el = screen.getByText('fade')
+    expect(el.className).toMatch(/\bopacity-0\b/)
+    expect(el.className).toMatch(/\bgroup-hover:opacity-100\b/)
+    expect(el.className).toMatch(/\btransition-opacity\b/)
+  })
 })
