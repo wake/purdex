@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useHostStore } from '../stores/useHostStore'
 import {
   listSessions, createSession, deleteSession, switchMode,
-  handoff, fetchHistory, getConfig, updateConfig, agentUpload,
+  handoff, fetchHistory, fetchSessionCwd, getConfig, updateConfig, agentUpload,
   type Session,
 } from './host-api'
 
@@ -206,6 +206,24 @@ describe('agentUpload', () => {
     )
     const file = new File(['data'], 'test.png')
     await expect(agentUpload(HOST_ID, file, 'dev001')).rejects.toThrow('404')
+  })
+})
+
+describe('fetchSessionCwd', () => {
+  it('returns cwd string from /api/sessions/{code}/cwd', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ cwd: '/home/user/proj' }), { status: 200 }),
+    )
+    const cwd = await fetchSessionCwd(HOST_ID, 'abc123')
+    expect(cwd).toBe('/home/user/proj')
+    expectAuthFetch(`${BASE}/api/sessions/abc123/cwd`)
+  })
+
+  it('throws on non-ok response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('nope', { status: 500 }),
+    )
+    await expect(fetchSessionCwd(HOST_ID, 'abc123')).rejects.toThrow('500')
   })
 })
 
