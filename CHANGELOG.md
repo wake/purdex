@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.162] - 2026-04-18
+
+### 介面調整
+
+- **spa**：Activity bar collapse 按鈕從 HomeRow 抽出到專屬的上方 header 區，仿 Claude Code desktop 的留白佈局，不再貼著 Home 列（#439）
+- **spa**：workspace hover 顯示的 `+` new tab 按鈕改亮改粗（`text-text-primary`、`size=14`、`weight="bold"`），提高可見度（#439）
+- **spa**：workspace / home 列的展開收合 chevron 改放到最右側，與 `+` 按鈕同側（#439）
+- **spa**：清掉點擊 workspace 列後殘留的瀏覽器預設橘色 focus 外框（header 容器與內部 buttons 加 `focus:outline-none focus-visible:outline-none`）（#439）
+- **spa**：Settings → Appearance 的 Tab Position 從 radio list 改為共用的 `SegmentControl`，與 Tab indicator style 欄位風格一致（#439）
+
 ## [1.0.0-alpha.161] - 2026-04-18
 
 ### 修復
