@@ -1,4 +1,4 @@
-import { CaretDoubleLeft, CaretDoubleRight } from '@phosphor-icons/react'
+import { SidebarSimple } from '@phosphor-icons/react'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 
@@ -8,8 +8,6 @@ interface Props {
   variant?: Variant
 }
 
-// topbar: inline-padding layout that matches the TitleBar's region-toggle /
-// layout-pattern buttons so the collapse control reads as a sibling of them.
 const VARIANT_CLASSES: Record<Variant, string> = {
   'header-right': 'w-6 h-6 rounded-md',
   divider: 'absolute top-3 right-[-11px] w-[22px] h-[22px] rounded-full bg-surface-tertiary border border-border-subtle shadow-sm opacity-0 group-hover/narrow-bar:opacity-100 focus:opacity-100 transition-opacity z-10',
@@ -22,6 +20,17 @@ const ICON_SIZE: Record<Variant, number> = {
   topbar: 14,
 }
 
+// topbar mirrors the region-toggle buttons in TitleBar's right cluster: accent
+// tint when the activity bar is "visible as wide", neutral secondary styling
+// otherwise. Other variants keep the original hover-only treatment.
+function stateClasses(variant: Variant, locked: boolean, isWide: boolean): string {
+  if (locked) return 'text-text-muted/50 cursor-not-allowed'
+  if (variant === 'topbar' && isWide) {
+    return 'cursor-pointer text-accent-base bg-accent-base/10 hover:bg-accent-base/20'
+  }
+  return 'cursor-pointer text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+}
+
 export function CollapseButton({ variant = 'header-right' }: Props) {
   const width = useLayoutStore((s) => s.activityBarWidth)
   const tabPosition = useLayoutStore((s) => s.tabPosition)
@@ -32,7 +41,6 @@ export function CollapseButton({ variant = 'header-right' }: Props) {
   // the activity bar to wide — the button must reflect that.
   const locked = tabPosition === 'left' || tabPosition === 'both'
   const isWide = width === 'wide'
-  const Icon = isWide ? CaretDoubleLeft : CaretDoubleRight
   const label = locked
     ? t('nav.collapse_locked_tooltip')
     : isWide
@@ -48,13 +56,9 @@ export function CollapseButton({ variant = 'header-right' }: Props) {
       aria-pressed={isWide}
       data-variant={variant}
       onClick={toggle}
-      className={`${VARIANT_CLASSES[variant]} flex items-center justify-center transition-colors ${
-        locked
-          ? 'text-text-muted/50 cursor-not-allowed'
-          : 'cursor-pointer text-text-secondary hover:text-text-primary hover:bg-surface-hover'
-      }`}
+      className={`${VARIANT_CLASSES[variant]} flex items-center justify-center transition-colors ${stateClasses(variant, locked, isWide)}`}
     >
-      <Icon size={ICON_SIZE[variant]} />
+      <SidebarSimple size={ICON_SIZE[variant]} />
     </button>
   )
 }
