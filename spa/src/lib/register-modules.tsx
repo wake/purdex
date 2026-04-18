@@ -41,6 +41,10 @@ import { registerSyncContributors } from './sync/register-sync'
 import { registerInterfaceSubsection, getInterfaceSubsections } from './interface-subsection-registry'
 import { InterfaceSection } from '../components/settings/InterfaceSection'
 import { NewTabSubsection } from '../components/settings/new-tab/NewTabSubsection'
+import { registerBuiltinTerminalLinks } from './terminal-link'
+import { useWorkspaceStore } from '../stores/useWorkspaceStore'
+import { openBrowserTab } from './open-browser-tab'
+import { getDefaultOpener } from './file-opener-registry'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
   const handleSelect = (content: PaneContent) => {
@@ -331,4 +335,14 @@ export function registerBuiltinModules(): void {
       component: DevEnvironmentSection,
     })
   }
+
+  registerBuiltinTerminalLinks({
+    isElectron: caps.isElectron,
+    openBrowserTab,
+    openMiniWindow: (url) => window.electronAPI?.browserViewOpenMiniWindow(url),
+    getDefaultFileOpener: getDefaultOpener,
+    openSingletonTab: (content) => useTabStore.getState().openSingletonTab(content),
+    insertTab: (tabId, wsId) => useWorkspaceStore.getState().insertTab(tabId, wsId),
+    getActiveWorkspaceId: () => useWorkspaceStore.getState().activeWorkspaceId,
+  })
 }

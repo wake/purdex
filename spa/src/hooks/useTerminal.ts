@@ -3,7 +3,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
-import { WebLinksAddon } from '@xterm/addon-web-links'
+import { createXtermLinkProvider, terminalLinkRegistry } from '../lib/terminal-link'
+import type { LinkContext } from '../lib/terminal-link'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useThemeStore } from '../stores/useThemeStore'
 
@@ -28,7 +29,7 @@ function getTerminalTheme() {
  * (`key={id}-${poolVersion}`) 觸發 remount，不在此 hook 處理。
  */
 export interface UseTerminalOptions {
-  linkHandler?: (event: MouseEvent, uri: string) => void
+  linkContext?: LinkContext
   onTitle?: (title: string) => void
 }
 
@@ -40,7 +41,14 @@ export function useTerminal(options: UseTerminalOptions = {}): UseTerminalResult
   // Keep latest onTitle in a ref so the mount effect (empty deps) always
   // calls the current handler without re-binding the terminal lifecycle.
   const onTitleRef = useRef(options.onTitle)
+  // eslint-disable-next-line react-hooks/refs -- latest-value pattern for mount-only effect closure
   onTitleRef.current = options.onTitle
+
+  // Keep latest linkContext in a ref so the provider closure always reads
+  // the current hostId/sessionCode without re-binding the terminal lifecycle.
+  const linkCtxRef = useRef<LinkContext>(options.linkContext ?? {})
+  // eslint-disable-next-line react-hooks/refs -- latest-value pattern for mount-only effect closure
+  linkCtxRef.current = options.linkContext ?? {}
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -82,18 +90,20 @@ export function useTerminal(options: UseTerminalOptions = {}): UseTerminalResult
       term.loadAddon(new Unicode11Addon())
       term.unicode.activeVersion = '11'
     } catch { /* fallback to unicode 6 */ }
+    let linkProviderDisp: { dispose: () => void } | undefined
     try {
-      const lh = options.linkHandler
-      term.loadAddon(lh ? new WebLinksAddon(lh) : new WebLinksAddon())
+      linkProviderDisp = term.registerLinkProvider(
+        createXtermLinkProvider(terminalLinkRegistry, () => linkCtxRef.current, term),
+      )
     } catch { /* non-critical */ }
 
+    const container = containerRef.current
     // Guard: skip initial fit if container is hidden (visibility:hidden in keep-alive pool)
     requestAnimationFrame(() => {
       const { width, height } = container.getBoundingClientRect()
       if (width && height) fitAddon.fit()
     })
 
-    const container = containerRef.current
     let rafId = 0
     const observer = new ResizeObserver((entries) => {
       // Guard against hidden tabs (visibility:hidden) sending stale resize
@@ -111,12 +121,12 @@ export function useTerminal(options: UseTerminalOptions = {}): UseTerminalResult
       cancelAnimationFrame(rafId)
       observer.disconnect()
       container.removeEventListener('contextmenu', handleContextMenu)
+      linkProviderDisp?.dispose()
       titleDisposable.dispose()
       term.dispose()
       fitAddonRef.current = null
       termRef.current = null
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- lifecycle bound to mount/unmount only
   }, [])
 
   useEffect(() => {
