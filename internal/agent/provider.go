@@ -49,6 +49,23 @@ type HookEventInfo struct {
 	Command   string `json:"command"`
 }
 
+// StatuslineInstaller manages CC's statusLine.command in ~/.claude/settings.json.
+type StatuslineInstaller interface {
+	CheckStatusline() (StatuslineState, error)
+	InstallStatuslinePdx(pdxPath string) error
+	InstallStatuslineWrap(pdxPath, inner string) error
+	RemoveStatusline() error
+}
+
+// StatuslineState describes the current state of an agent's statusLine config.
+type StatuslineState struct {
+	Mode         string `json:"mode"` // "none" | "pdx" | "wrapped" | "unmanaged"
+	Installed    bool   `json:"installed"`
+	Inner        string `json:"innerCommand,omitempty"`
+	RawCommand   string `json:"rawCommand,omitempty"`
+	SettingsPath string `json:"settingsPath"`
+}
+
 // HistoryProvider can retrieve conversation history for a session.
 type HistoryProvider interface {
 	GetHistory(cwd string, sessionID string) ([]map[string]any, error)

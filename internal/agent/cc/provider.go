@@ -57,3 +57,35 @@ func (p *Provider) RegisterServices(registry *core.ServiceRegistry) {
 	registry.Register(HistoryKey, CCHistoryProvider(p))
 	registry.Register(OperatorKey, CCOperator(p))
 }
+
+func (p *Provider) CheckStatusline() (agent.StatuslineState, error) {
+	path, err := ccSettingsPath()
+	if err != nil {
+		return agent.StatuslineState{}, err
+	}
+	return detectStatuslineMode(path)
+}
+
+func (p *Provider) InstallStatuslinePdx(pdxPath string) error {
+	path, err := ccSettingsPath()
+	if err != nil {
+		return err
+	}
+	return installStatuslinePdx(path, pdxPath)
+}
+
+func (p *Provider) InstallStatuslineWrap(pdxPath, inner string) error {
+	path, err := ccSettingsPath()
+	if err != nil {
+		return err
+	}
+	return installStatuslineWrap(path, pdxPath, inner)
+}
+
+func (p *Provider) RemoveStatusline() error {
+	path, err := ccSettingsPath()
+	if err != nil {
+		return err
+	}
+	return removeStatusline(path)
+}

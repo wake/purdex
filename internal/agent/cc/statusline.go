@@ -8,21 +8,14 @@ import (
 	"strings"
 
 	shellwords "github.com/mattn/go-shellwords"
-)
 
-// StatuslineState describes the current state of CC's statusLine config.
-type StatuslineState struct {
-	Mode         string `json:"mode"` // "none" | "pdx" | "wrapped" | "unmanaged"
-	Installed    bool   `json:"installed"`
-	Inner        string `json:"innerCommand,omitempty"`
-	RawCommand   string `json:"rawCommand,omitempty"`
-	SettingsPath string `json:"settingsPath"`
-}
+	"github.com/wake/purdex/internal/agent"
+)
 
 // detectStatuslineMode reads ~/.claude/settings.json and classifies the
 // current statusLine.command value.
-func detectStatuslineMode(path string) (StatuslineState, error) {
-	s := StatuslineState{Mode: "none", SettingsPath: path}
+func detectStatuslineMode(path string) (agent.StatuslineState, error) {
+	s := agent.StatuslineState{Mode: "none", SettingsPath: path}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
