@@ -37,6 +37,7 @@ type FakeExecutor struct {
 	paneCommandCalls     map[string]int         // target → PaneCurrentCommand call count
 	paneContents         map[string]string      // target → captured text
 	paneChildren         map[string][]string    // target → child command names
+	paneCwds             map[string]string      // target → pane_current_path
 	paneSizes            map[string][2]int      // target → [cols, rows]
 	rawKeysCalls         []RawKeysCall
 	keysCalls            []KeysCall
@@ -57,6 +58,7 @@ func NewFakeExecutor() *FakeExecutor {
 		paneCommandCalls: make(map[string]int),
 		paneContents:     make(map[string]string),
 		paneChildren:     make(map[string][]string),
+		paneCwds:         make(map[string]string),
 		paneSizes:        make(map[string][2]int),
 		alive:            true,
 	}
@@ -240,6 +242,22 @@ func (f *FakeExecutor) PaneCurrentCommand(target string) (string, error) {
 		return "", fmt.Errorf("no pane command for target %q", target)
 	}
 	return cmd, nil
+}
+
+func (f *FakeExecutor) SetPaneCwd(target, cwd string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paneCwds[target] = cwd
+}
+
+func (f *FakeExecutor) PaneCurrentPath(target string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cwd, ok := f.paneCwds[target]
+	if !ok {
+		return "", fmt.Errorf("fake: no pane cwd set for %q", target)
+	}
+	return cwd, nil
 }
 
 // PaneCommandCallCount returns how many times PaneCurrentCommand was called for a target.
