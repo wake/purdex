@@ -108,7 +108,7 @@ export function WorkspaceRow(props: Props) {
               onAddTabToWorkspace(workspace.id)
             }}
             onPointerDown={(e) => e.stopPropagation()}
-            className="p-1 rounded hover:bg-surface-secondary text-text-primary cursor-pointer opacity-0 group-hover/ws-header:opacity-100 focus:opacity-100 transition-opacity focus:outline-none"
+            className="p-1 rounded hover:bg-surface-secondary cursor-pointer opacity-0 group-hover/ws-header:opacity-100 focus:opacity-100 transition-opacity focus:outline-none"
           >
             <Plus size={14} weight="bold" />
           </button>
@@ -122,7 +122,7 @@ export function WorkspaceRow(props: Props) {
               e.stopPropagation()
               toggleExpanded(workspace.id)
             }}
-            className="p-1 mr-0.5 rounded hover:bg-surface-secondary text-text-muted cursor-pointer focus:outline-none"
+            className="p-1 mr-0.5 rounded hover:bg-surface-secondary cursor-pointer focus:outline-none"
           >
             <Chevron size={12} />
           </button>

@@ -79,7 +79,7 @@ export function HomeRow(props: Props) {
               e.stopPropagation()
               toggleExpanded(HOME_WS_KEY)
             }}
-            className="p-1 mr-0.5 rounded hover:bg-surface-secondary text-text-muted cursor-pointer focus:outline-none"
+            className="p-1 mr-0.5 rounded hover:bg-surface-secondary cursor-pointer focus:outline-none"
           >
             <Chevron size={12} />
           </button>
