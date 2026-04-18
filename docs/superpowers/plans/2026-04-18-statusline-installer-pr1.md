@@ -696,9 +696,11 @@ func TestDetectStatuslineMode_Wrapped(t *testing.T) {
 }
 
 func TestDetectStatuslineMode_WrappedWithSingleQuoteEscape(t *testing.T) {
-	// Shell: --inner 'it'\''s'   after escape
+	// Shell escape we want to exercise: --inner 'it'\''s'   (POSIX single-quote escape for it's)
+	// In the on-disk JSON the backslash must itself be escaped (`\\`), so the raw-string literal
+	// below writes `'it'\\''s'` which JSON decodes to `'it'\''s'` — then shellwords parses to "it's".
 	path := writeSettings(t, `{
-  "statusLine": {"type": "command", "command": "/x/pdx statusline-proxy --inner 'it'\''s'"}
+  "statusLine": {"type": "command", "command": "/x/pdx statusline-proxy --inner 'it'\\''s'"}
 }`)
 	m, _ := detectStatuslineMode(path)
 	if m.Mode != "wrapped" {
