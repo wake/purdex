@@ -158,6 +158,10 @@ func (m *DevModule) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (m *DevModule) Start(_ context.Context) error {
+	if os.Getenv("PDX_DEV_UPDATE") != "1" {
+		log.Println("[dev] update endpoints disabled (set PDX_DEV_UPDATE=1 to enable)")
+		return nil
+	}
 	log.Println("[dev] update endpoints enabled")
 	return nil
 }
