@@ -114,6 +114,8 @@ export function SyncSection() {
 
     const clientId = getClientId()
     const provider = createDaemonProvider(syncHostId, clientId)
+    const startProvider = activeProviderId
+    const startHostId = syncHostId
     const result = await syncNow({
       provider,
       clientId,
@@ -121,6 +123,14 @@ export function SyncSection() {
       enabledModules,
       engine: syncEngine,
     })
+
+    // Discard stale result if the user swapped provider/host during the await.
+    const after = useSyncStore.getState()
+    if (after.activeProviderId !== startProvider || after.syncHostId !== startHostId) {
+      setStatus(IDLE)
+      setBusy(false)
+      return
+    }
 
     if (result.kind === 'ok') {
       setLastSyncedBundle(result.appliedBundle)
@@ -154,6 +164,7 @@ export function SyncSection() {
     setBusy(true)
     setStatus({ tone: 'busy', message: t('settings.sync.status.syncing') })
 
+    const startProvider = activeProviderId
     try {
       const text = await file.text()
       const provider = createManualProvider()
@@ -165,6 +176,12 @@ export function SyncSection() {
         enabledModules,
         engine: syncEngine,
       })
+
+      // Discard if the user swapped provider during the import await.
+      if (useSyncStore.getState().activeProviderId !== startProvider) {
+        setStatus(IDLE)
+        return
+      }
 
       if (result.kind === 'ok') {
         setLastSyncedBundle(result.appliedBundle)

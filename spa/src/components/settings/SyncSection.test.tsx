@@ -5,6 +5,7 @@ import { useSyncStore } from '../../lib/sync/use-sync-store'
 import { useHostStore } from '../../stores/useHostStore'
 import { SyncSection } from './SyncSection'
 import * as syncActionsModule from '../../lib/sync/sync-actions'
+import type { SyncActionResult } from '../../lib/sync/sync-actions'
 import type { SyncBundle, ConflictItem } from '../../lib/sync/types'
 
 function resetStores() {
@@ -77,6 +78,34 @@ describe('SyncSection', () => {
     render(<SyncSection />)
     expect(screen.getByText(/1/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /view details|查看詳情/i })).toBeTruthy()
+  })
+
+  it('discards syncNow result if provider changes during await', async () => {
+    useSyncStore.getState().setActiveProvider('daemon')
+    useSyncStore.getState().setSyncHostId('h1')
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1', name: 'mini', ip: '127.0.0.1', port: 7860 } as never },
+      hostOrder: ['h1'],
+    })
+
+    let resolveSync!: (r: SyncActionResult) => void
+    const pending = new Promise<SyncActionResult>((r) => { resolveSync = r })
+    vi.spyOn(syncActionsModule, 'syncNow').mockReturnValue(pending)
+
+    render(<SyncSection />)
+    fireEvent.click(screen.getByRole('button', { name: /Sync Now|立即同步/i }))
+
+    // User turns provider off while sync is still awaiting — setActiveProvider
+    // also resets lastSyncedBundle to null as a side effect.
+    useSyncStore.getState().setActiveProvider(null)
+
+    const staleBundle: SyncBundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    resolveSync({ kind: 'ok', appliedBundle: staleBundle })
+    await pending
+    await new Promise((r) => setTimeout(r, 0))
+
+    // Guard should have dropped the stale result — bundle stays null.
+    expect(useSyncStore.getState().lastSyncedBundle).toBeNull()
   })
 
   it('apply in banner: calls engine.resolveConflicts + clears pending', async () => {
