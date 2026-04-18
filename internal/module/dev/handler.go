@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -18,19 +19,33 @@ type SourceHashes struct {
 }
 
 type UpdateCheckResponse struct {
-	Version      string       `json:"version"`
-	SPAHash      string       `json:"spaHash"`
-	ElectronHash string       `json:"electronHash"`
-	Source       SourceHashes `json:"source"`
-	Building     bool         `json:"building"`
-	BuildError   string       `json:"buildError"`
+	Version             string       `json:"version"`
+	SPAHash             string       `json:"spaHash"`
+	ElectronHash        string       `json:"electronHash"`
+	Source              SourceHashes `json:"source"`
+	Building            bool         `json:"building"`
+	BuildError          string       `json:"buildError"`
+	RequiresFullRebuild bool         `json:"requiresFullRebuild"`
+	FullRebuildReason   string       `json:"fullRebuildReason,omitempty"`
 }
 
 type BuildInfo struct {
 	Version      string `json:"version"`
 	SPAHash      string `json:"spaHash"`
 	ElectronHash string `json:"electronHash"`
+	RebuildHash  string `json:"rebuildHash,omitempty"`
 	BuiltAt      string `json:"builtAt"`
+}
+
+// streamEvent is the SSE payload for /check/stream. It carries either a
+// build event (phase/stdout/stderr/done/error) or, for the initial and
+// terminal frames, a check snapshot.
+type streamEvent struct {
+	Type  string               `json:"type"`
+	Phase string               `json:"phase,omitempty"`
+	Line  string               `json:"line,omitempty"`
+	Error string               `json:"error,omitempty"`
+	Check *UpdateCheckResponse `json:"check,omitempty"`
 }
 
 func (m *DevModule) readBuildInfo() BuildInfo {
@@ -46,40 +61,158 @@ func (m *DevModule) readBuildInfo() BuildInfo {
 	return info
 }
 
-func (m *DevModule) handleCheck(w http.ResponseWriter, r *http.Request) {
+// snapshotCheck evaluates the current state and, if source is stale and no
+// build is in flight (or previously failed on the same source), kicks one
+// off. It returns the response payload plus the in-flight session (or nil
+// if no build is running). Must not be called with m.mu held.
+func (m *DevModule) snapshotCheck() (UpdateCheckResponse, *BuildSession) {
 	build := m.readBuildInfo()
 	spaSource := m.hashFn("spa/")
 	electronSource := m.hashFn("electron/", "electron.vite.config.ts")
-
-	// Determine if source differs from build
 	sourceChanged := build.SPAHash != spaSource || build.ElectronHash != electronSource
+
+	requiresFull, fullReason := m.detectRequiresFullRebuild(build.RebuildHash)
 
 	m.mu.Lock()
 	failedSameSource := m.buildError != "" && m.lastFailedSPA == spaSource && m.lastFailedElectron == electronSource
+	var session *BuildSession
 	if sourceChanged && !m.building && !failedSameSource {
-		m.building = true
-		m.buildError = ""
-		m.lastFailedSPA = spaSource
-		m.lastFailedElectron = electronSource
-		go m.runBuild()
+		session = m.startBuildLocked(spaSource, electronSource)
+	} else if m.building {
+		session = m.buildSession
 	}
 	building := m.building
 	buildError := m.buildError
 	m.mu.Unlock()
 
-	resp := UpdateCheckResponse{
-		Version:      m.readVersion(),
-		SPAHash:      build.SPAHash,
-		ElectronHash: build.ElectronHash,
-		Source: SourceHashes{
-			SPAHash:      spaSource,
-			ElectronHash: electronSource,
-		},
-		Building:   building,
-		BuildError: buildError,
+	return UpdateCheckResponse{
+		Version:             m.readVersion(),
+		SPAHash:             build.SPAHash,
+		ElectronHash:        build.ElectronHash,
+		Source:              SourceHashes{SPAHash: spaSource, ElectronHash: electronSource},
+		Building:            building,
+		BuildError:          buildError,
+		RequiresFullRebuild: requiresFull,
+		FullRebuildReason:   fullReason,
+	}, session
+}
+
+// observeCheck returns the current check snapshot without mutating state.
+// Unlike snapshotCheck it never kicks off a build — callers that just want
+// to report post-build results (e.g. the SSE terminal event) should use
+// this to avoid retriggering a second build if .build-info.json was not
+// written for any reason. Must not be called with m.mu held.
+func (m *DevModule) observeCheck() UpdateCheckResponse {
+	build := m.readBuildInfo()
+	spaSource := m.hashFn("spa/")
+	electronSource := m.hashFn("electron/", "electron.vite.config.ts")
+	requiresFull, fullReason := m.detectRequiresFullRebuild(build.RebuildHash)
+
+	m.mu.Lock()
+	building := m.building
+	buildError := m.buildError
+	m.mu.Unlock()
+
+	return UpdateCheckResponse{
+		Version:             m.readVersion(),
+		SPAHash:             build.SPAHash,
+		ElectronHash:        build.ElectronHash,
+		Source:              SourceHashes{SPAHash: spaSource, ElectronHash: electronSource},
+		Building:            building,
+		BuildError:          buildError,
+		RequiresFullRebuild: requiresFull,
+		FullRebuildReason:   fullReason,
 	}
+}
+
+func (m *DevModule) handleCheck(w http.ResponseWriter, r *http.Request) {
+	resp, _ := m.snapshotCheck()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (m *DevModule) handleCheckStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	writeEvent := func(ev streamEvent) bool {
+		data, err := json.Marshal(ev)
+		if err != nil {
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	initial, session := m.snapshotCheck()
+	if !writeEvent(streamEvent{Type: "check", Check: &initial}) {
+		return
+	}
+
+	// No build in flight → stream a terminal done and close.
+	if session == nil {
+		writeEvent(streamEvent{Type: "done", Check: &initial})
+		return
+	}
+
+	ch, replay, unsub := session.subscribe()
+	defer unsub()
+	for _, ev := range replay {
+		if isTerminalBuildEvent(ev) {
+			continue
+		}
+		if !writeEvent(toStreamEvent(ev)) {
+			return
+		}
+	}
+
+	ctx := r.Context()
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				// Session finished; send a single terminal event carrying the
+				// authoritative post-build check snapshot (includes buildError
+				// if the build failed). Use observeCheck so a missing
+				// .build-info.json post-build doesn't retrigger a second
+				// build.
+				final := m.observeCheck()
+				writeEvent(streamEvent{Type: "done", Check: &final})
+				return
+			}
+			if isTerminalBuildEvent(ev) {
+				continue
+			}
+			if !writeEvent(toStreamEvent(ev)) {
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func isTerminalBuildEvent(ev BuildEvent) bool {
+	return ev.Type == BuildEventDone || ev.Type == BuildEventError
+}
+
+func toStreamEvent(ev BuildEvent) streamEvent {
+	return streamEvent{
+		Type:  string(ev.Type),
+		Phase: ev.Phase,
+		Line:  ev.Line,
+		Error: ev.Error,
+	}
 }
 
 func (m *DevModule) handleDownload(w http.ResponseWriter, r *http.Request) {

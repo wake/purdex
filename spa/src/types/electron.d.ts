@@ -39,6 +39,16 @@ interface ElectronRemoteVersionInfo {
   source: { spaHash: string; electronHash: string }
   building: boolean
   buildError: string
+  requiresFullRebuild: boolean
+  fullRebuildReason?: string
+}
+
+interface ElectronStreamCheckEvent {
+  type: 'check' | 'phase' | 'stdout' | 'stderr' | 'done' | 'error'
+  phase?: string
+  line?: string
+  error?: string
+  check?: ElectronRemoteVersionInfo
 }
 
 interface Window {
@@ -104,5 +114,10 @@ interface Window {
     checkUpdate: (daemonUrl: string, token?: string) => Promise<ElectronRemoteVersionInfo>
     applyUpdate: (daemonUrl: string, token?: string) => Promise<ElectronUpdateResult>
     onUpdateProgress: (callback: (step: string) => void) => () => void
+    streamCheck: (
+      daemonUrl: string,
+      token: string | undefined,
+      onEvent: (ev: ElectronStreamCheckEvent) => void,
+    ) => () => void
   }
 }

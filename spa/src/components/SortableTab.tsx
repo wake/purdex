@@ -24,6 +24,7 @@ interface Props {
   onClose: (tabId: string) => void
   onMiddleClick: (tabId: string) => void
   onContextMenu: (e: React.MouseEvent, tabId: string) => void
+  onRename?: (tabId: string) => void
   onHover?: (tabId: string | null) => void
   iconMap: Record<string, React.ComponentType<{ size: number; className?: string }>>
 }
@@ -33,7 +34,7 @@ interface Props {
 const TAB_BG_INACTIVE = 'var(--surface-secondary)'
 const TAB_BG_ACTIVE = 'var(--surface-active)'
 
-export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onHover, iconMap }: Props) {
+export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onRename, onHover, iconMap }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id })
 
   const style = {
@@ -106,6 +107,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     e.preventDefault()
     onContextMenu(e, tab.id)
   }
+  const handleDoubleClick = () => onRename?.(tab.id)
 
   const tabBg = isActive ? TAB_BG_ACTIVE : TAB_BG_INACTIVE
 
@@ -118,6 +120,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         {...attributes}
         {...listeners}
         onClick={() => onSelect(tab.id)}
+        onDoubleClick={handleDoubleClick}
         onPointerDown={handlePointerDown}
         onMouseUp={handleMouseUp}
         onMouseEnter={handleMouseEnter}
@@ -156,6 +159,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       role="tab"
       aria-selected={isActive}
       onClick={() => onSelect(tab.id)}
+      onDoubleClick={handleDoubleClick}
       onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
       onMouseUp={handleMouseUp}

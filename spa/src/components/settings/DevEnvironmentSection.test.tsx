@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { DevEnvironmentSection } from './DevEnvironmentSection'
+import { useHostStore } from '../../stores/useHostStore'
 
 const mockGetAppInfo = vi.fn().mockResolvedValue({
   version: '1.0.0-alpha.21',
@@ -9,19 +10,51 @@ const mockGetAppInfo = vi.fn().mockResolvedValue({
   devUpdateEnabled: true,
 })
 
-const mockCheckUpdate = vi.fn()
+const mockStreamCheck = vi.fn()
 const mockApplyUpdate = vi.fn()
 const mockForceLoadSPA = vi.fn().mockResolvedValue(undefined)
 
+function baseCheck(overrides: Partial<ElectronRemoteVersionInfo> = {}): ElectronRemoteVersionInfo {
+  return {
+    version: '1.0.0-alpha.21',
+    spaHash: 'def5678',
+    electronHash: 'abc1234',
+    source: { spaHash: 'src111', electronHash: 'src222' },
+    building: false,
+    buildError: '',
+    requiresFullRebuild: false,
+    ...overrides,
+  }
+}
+
+// Capture the latest streamCheck callback so tests can drive events post-render.
+let lastStreamCallback: ((ev: ElectronStreamCheckEvent) => void) | null = null
+let lastStreamClose = vi.fn()
+
+function arrangeStream(emitInline?: (cb: (ev: ElectronStreamCheckEvent) => void) => void) {
+  mockStreamCheck.mockImplementation((_url: string, _tok: string | undefined, cb: (ev: ElectronStreamCheckEvent) => void) => {
+    lastStreamCallback = cb
+    lastStreamClose = vi.fn()
+    emitInline?.(cb)
+    return lastStreamClose
+  })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
+  lastStreamCallback = null
   window.electronAPI = {
     ...window.electronAPI!,
     getAppInfo: mockGetAppInfo,
-    checkUpdate: mockCheckUpdate,
+    streamCheck: mockStreamCheck,
     applyUpdate: mockApplyUpdate,
     forceLoadSPA: mockForceLoadSPA,
   } as typeof window.electronAPI
+  // Default: emit a non-stale check immediately
+  arrangeStream((cb) => {
+    cb({ type: 'check', check: baseCheck() })
+    cb({ type: 'done', check: baseCheck() })
+  })
 })
 
 afterEach(() => {
@@ -30,111 +63,110 @@ afterEach(() => {
 
 describe('DevEnvironmentSection', () => {
   it('renders section title', async () => {
-    mockCheckUpdate.mockResolvedValue({
-      version: '1.0.0-alpha.21',
-      spaHash: 'def5678',
-      electronHash: 'abc1234',
-      source: { spaHash: 'src111', electronHash: 'src222' },
-      building: false,
-      buildError: '',
-    })
-
-    render(<DevEnvironmentSection />)
+    await act(async () => { render(<DevEnvironmentSection />) })
     expect(screen.getByText(/Development|開發環境/)).toBeTruthy()
   })
 
-  it('calls getAppInfo on mount', async () => {
-    mockCheckUpdate.mockResolvedValue({
-      version: '1.0.0-alpha.21',
-      spaHash: 'def5678',
-      electronHash: 'abc1234',
-      source: { spaHash: 'src111', electronHash: 'src222' },
-      building: false,
-      buildError: '',
-    })
-
-    render(<DevEnvironmentSection />)
-    expect(mockGetAppInfo).toHaveBeenCalledOnce()
+  it('calls getAppInfo on mount and opens stream', async () => {
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(mockGetAppInfo).toHaveBeenCalledOnce())
+    await waitFor(() => expect(mockStreamCheck).toHaveBeenCalled())
   })
 
-  it('shows building status and polls', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
+  it('shows building status and renders the log panel while build streams', async () => {
+    // Hold the stream open so we can push events manually
+    arrangeStream()
 
-    // First call: building in progress
-    mockCheckUpdate.mockResolvedValueOnce({
-      version: '1.0.0-alpha.21',
-      spaHash: 'def5678',
-      electronHash: 'abc1234',
-      source: { spaHash: 'src111', electronHash: 'src222' },
-      building: true,
-      buildError: '',
+    await act(async () => { render(<DevEnvironmentSection />) })
+
+    // Emit initial check (building=true), then phase + stdout events
+    await act(async () => {
+      lastStreamCallback!({ type: 'check', check: baseCheck({ building: true, spaHash: 'old', electronHash: 'old' }) })
     })
-    // Second call (poll): build done, new hashes
-    mockCheckUpdate.mockResolvedValueOnce({
-      version: '1.0.0-alpha.21',
-      spaHash: 'new5678',
-      electronHash: 'newabc1',
-      source: { spaHash: 'src333', electronHash: 'src444' },
-      building: false,
-      buildError: '',
-    })
+    await waitFor(() => expect(screen.getByText(/Building|建置中/)).toBeTruthy())
 
     await act(async () => {
-      render(<DevEnvironmentSection />)
+      lastStreamCallback!({ type: 'phase', phase: 'install' })
+      lastStreamCallback!({ type: 'stdout', line: 'resolving dependencies' })
     })
 
-    // Wait for initial check to complete and show building status
-    await waitFor(() => {
-      expect(screen.getByText(/Building|建置中/)).toBeTruthy()
-    })
+    const pre = screen.getByTestId('dev-build-log')
+    expect(pre.textContent).toContain('── install ──')
+    expect(pre.textContent).toContain('resolving dependencies')
 
-    // Advance timer to trigger poll
+    // Emit terminal done with fresh hashes — status should flip to update_available
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000)
+      lastStreamCallback!({ type: 'done', check: baseCheck({ spaHash: 'new5678', electronHash: 'newabc1' }) })
+    })
+    await waitFor(() => expect(screen.getByText(/Update available|有新版本/)).toBeTruthy())
+  })
+
+  it('shows buildError when done check carries it', async () => {
+    arrangeStream((cb) => {
+      cb({ type: 'check', check: baseCheck({ building: true, spaHash: 'old', electronHash: 'old' }) })
+      cb({ type: 'stderr', line: 'ERR_SOMETHING' })
+      cb({ type: 'done', check: baseCheck({ spaHash: 'old', electronHash: 'old', buildError: 'exit code 1' }) })
     })
 
-    // After poll, building is done — should show update_available
-    await waitFor(() => {
-      expect(screen.getByText(/Update available|有新版本/)).toBeTruthy()
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(screen.getByText('exit code 1')).toBeTruthy())
+  })
+
+  it('shows requiresFullRebuild hint banner', async () => {
+    arrangeStream((cb) => {
+      const check = baseCheck({ requiresFullRebuild: true, fullRebuildReason: 'rebuild-tracked paths changed (old → new)' })
+      cb({ type: 'check', check })
+      cb({ type: 'done', check })
     })
+
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(screen.getByText(/Full app rebuild recommended|建議重跑完整打包/)).toBeTruthy())
+    expect(screen.getByText('rebuild-tracked paths changed (old → new)')).toBeTruthy()
+  })
+
+  it('closes the stream on unmount', async () => {
+    arrangeStream()
+    const { unmount } = await act(async () => render(<DevEnvironmentSection />))
+    await waitFor(() => expect(mockStreamCheck).toHaveBeenCalled())
+    unmount()
+    expect(lastStreamClose).toHaveBeenCalled()
+  })
+
+  it('restarts the stream when daemonBase changes', async () => {
+    arrangeStream((cb) => {
+      cb({ type: 'check', check: baseCheck() })
+      cb({ type: 'done', check: baseCheck() })
+    })
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(mockStreamCheck).toHaveBeenCalledTimes(1))
+    // Capture the first stream's close before arrangeStream replaces it on
+    // the next mockImplementation call.
+    const firstClose = lastStreamClose
+
+    const hostId = useHostStore.getState().hostOrder[0]
+    await act(async () => {
+      useHostStore.getState().updateHost(hostId, { port: 9999 })
+    })
+
+    await waitFor(() => expect(mockStreamCheck).toHaveBeenCalledTimes(2))
+    expect(firstClose).toHaveBeenCalled()
   })
 
   describe('SPA source mode', () => {
-    const upToDateRemote = {
-      version: '1.0.0-alpha.21',
-      spaHash: 'def5678',
-      electronHash: 'abc1234',
-      source: { spaHash: 'src111', electronHash: 'src222' },
-      building: false,
-      buildError: '',
-    }
-
     it('shows "Dev Server" when loaded from http: protocol', async () => {
-      mockCheckUpdate.mockResolvedValue(upToDateRemote)
-      // jsdom default is http://localhost — which means dev server
-      await act(async () => {
-        render(<DevEnvironmentSection />)
-      })
-      await waitFor(() => {
-        expect(screen.getByText('Dev Server')).toBeTruthy()
-      })
+      await act(async () => { render(<DevEnvironmentSection />) })
+      await waitFor(() => expect(screen.getByText('Dev Server')).toBeTruthy())
     })
 
     it('shows "Bundled" when loaded from app: protocol', async () => {
-      mockCheckUpdate.mockResolvedValue(upToDateRemote)
-      // Simulate app:// protocol by overriding location.protocol
       const originalProtocol = window.location.protocol
       Object.defineProperty(window, 'location', {
         value: { ...window.location, protocol: 'app:' },
         writable: true,
       })
       try {
-        await act(async () => {
-          render(<DevEnvironmentSection />)
-        })
-        await waitFor(() => {
-          expect(screen.getByText('Bundled')).toBeTruthy()
-        })
+        await act(async () => { render(<DevEnvironmentSection />) })
+        await waitFor(() => expect(screen.getByText('Bundled')).toBeTruthy())
       } finally {
         Object.defineProperty(window, 'location', {
           value: { ...window.location, protocol: originalProtocol },
@@ -144,33 +176,22 @@ describe('DevEnvironmentSection', () => {
     })
 
     it('shows switch button and calls forceLoadSPA("bundled") from dev mode', async () => {
-      mockCheckUpdate.mockResolvedValue(upToDateRemote)
-      // Default is http: → dev server, so button should offer "Switch to Bundled"
-      await act(async () => {
-        render(<DevEnvironmentSection />)
-      })
-      await waitFor(() => {
-        expect(screen.getByText('Dev Server')).toBeTruthy()
-      })
+      await act(async () => { render(<DevEnvironmentSection />) })
+      await waitFor(() => expect(screen.getByText('Dev Server')).toBeTruthy())
       const switchBtn = screen.getByRole('button', { name: /Bundled/i })
       fireEvent.click(switchBtn)
       expect(mockForceLoadSPA).toHaveBeenCalledWith('bundled')
     })
 
     it('shows switch button and calls forceLoadSPA("dev") from bundled mode', async () => {
-      mockCheckUpdate.mockResolvedValue(upToDateRemote)
       const originalProtocol = window.location.protocol
       Object.defineProperty(window, 'location', {
         value: { ...window.location, protocol: 'app:' },
         writable: true,
       })
       try {
-        await act(async () => {
-          render(<DevEnvironmentSection />)
-        })
-        await waitFor(() => {
-          expect(screen.getByText('Bundled')).toBeTruthy()
-        })
+        await act(async () => { render(<DevEnvironmentSection />) })
+        await waitFor(() => expect(screen.getByText('Bundled')).toBeTruthy())
         const switchBtn = screen.getByRole('button', { name: /Dev Server/i })
         fireEvent.click(switchBtn)
         expect(mockForceLoadSPA).toHaveBeenCalledWith('dev')
@@ -183,25 +204,15 @@ describe('DevEnvironmentSection', () => {
     })
 
     it('shows error when switching to bundled fails', async () => {
-      mockCheckUpdate.mockResolvedValue(upToDateRemote)
       mockForceLoadSPA.mockRejectedValueOnce('protocol error')
-      await act(async () => {
-        render(<DevEnvironmentSection />)
-      })
-      await waitFor(() => {
-        expect(screen.getByText('Dev Server')).toBeTruthy()
-      })
+      await act(async () => { render(<DevEnvironmentSection />) })
+      await waitFor(() => expect(screen.getByText('Dev Server')).toBeTruthy())
       const switchBtn = screen.getByRole('button', { name: /Bundled/i })
-      await act(async () => {
-        fireEvent.click(switchBtn)
-      })
-      await waitFor(() => {
-        expect(screen.getByText(/Failed to load bundled SPA.*protocol error/)).toBeTruthy()
-      })
+      await act(async () => { fireEvent.click(switchBtn) })
+      await waitFor(() => expect(screen.getByText(/Failed to load bundled SPA.*protocol error/)).toBeTruthy())
     })
 
     it('shows error when switching to dev server fails', async () => {
-      mockCheckUpdate.mockResolvedValue(upToDateRemote)
       mockForceLoadSPA.mockRejectedValueOnce('ERR_CONNECTION_REFUSED')
       const originalProtocol = window.location.protocol
       Object.defineProperty(window, 'location', {
@@ -209,44 +220,17 @@ describe('DevEnvironmentSection', () => {
         writable: true,
       })
       try {
-        await act(async () => {
-          render(<DevEnvironmentSection />)
-        })
-        await waitFor(() => {
-          expect(screen.getByText('Bundled')).toBeTruthy()
-        })
+        await act(async () => { render(<DevEnvironmentSection />) })
+        await waitFor(() => expect(screen.getByText('Bundled')).toBeTruthy())
         const switchBtn = screen.getByRole('button', { name: /Dev Server/i })
-        await act(async () => {
-          fireEvent.click(switchBtn)
-        })
-        await waitFor(() => {
-          expect(screen.getByText(/Dev server is not reachable.*ERR_CONNECTION_REFUSED/)).toBeTruthy()
-        })
+        await act(async () => { fireEvent.click(switchBtn) })
+        await waitFor(() => expect(screen.getByText(/Dev server is not reachable.*ERR_CONNECTION_REFUSED/)).toBeTruthy())
       } finally {
         Object.defineProperty(window, 'location', {
           value: { ...window.location, protocol: originalProtocol },
           writable: true,
         })
       }
-    })
-  })
-
-  it('shows build error', async () => {
-    mockCheckUpdate.mockResolvedValue({
-      version: '1.0.0-alpha.21',
-      spaHash: 'def5678',
-      electronHash: 'abc1234',
-      source: { spaHash: 'src111', electronHash: 'src222' },
-      building: false,
-      buildError: 'exit code 1',
-    })
-
-    await act(async () => {
-      render(<DevEnvironmentSection />)
-    })
-
-    await waitFor(() => {
-      expect(screen.getByText('exit code 1')).toBeTruthy()
     })
   })
 })

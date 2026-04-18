@@ -26,6 +26,7 @@ export interface ActivityBarProps {
   onCloseTab?: (tabId: string) => void
   onMiddleClickTab?: (tabId: string) => void
   onContextMenuTab?: (e: React.MouseEvent, tabId: string) => void
+  onRenameTab?: (tabId: string) => void
   onReorderWorkspaceTabs?: (wsId: string, tabIds: string[]) => void
   onReorderStandaloneTabs?: (tabIds: string[]) => void
   onAddTabToWorkspace?: (wsId: string) => void

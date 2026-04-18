@@ -22,6 +22,17 @@ function readVersion(): string {
   }
 }
 
+// Paths whose changes hint that a full electron-builder rebuild may be
+// needed (native deps, icon, app bundle config). Kept narrow — over-flagging
+// is worse than a false negative. Must stay in sync with rebuildTrackedPaths
+// in internal/module/dev/rebuild_detect.go.
+const REBUILD_TRACKED_PATHS = [
+  'package.json',
+  'pnpm-lock.yaml',
+  'electron-builder.yml',
+  'build/',
+]
+
 function buildInfoPlugin() {
   return {
     name: 'write-build-info',
@@ -30,6 +41,7 @@ function buildInfoPlugin() {
         version: readVersion(),
         spaHash: gitHash('spa/'),
         electronHash: gitHash('electron/', 'electron.vite.config.ts'),
+        rebuildHash: gitHash(...REBUILD_TRACKED_PATHS),
         builtAt: new Date().toISOString(),
       }
       const outDir = resolve(__dirname, 'out')

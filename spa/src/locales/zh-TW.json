@@ -308,6 +308,9 @@
   "settings.dev.btn.switch_dev": "切換為 Dev Server",
   "settings.dev.error.dev_unreachable": "Dev Server 無法連線",
   "settings.dev.error.bundled_failed": "無法載入 Bundled SPA",
+  "settings.dev.log.waiting": "等待建置輸出中…",
+  "settings.dev.log.copy": "複製完整 log",
+  "settings.dev.full_rebuild_hint": "建議重跑完整打包 — 請到執行 daemon 的主機跑 `pnpm run electron:build`，dev update 只會抽換 JS bundle。",
 
   "editor.provider_label": "編輯器",
   "editor.new_file": "新增檔案",
@@ -335,6 +338,7 @@
 
   "status.no_active": "無使用中的 Session",
   "status.rename_hint": "雙擊可修改 session 名稱",
+  "status.open_host_hint": "點擊開啟主機設定",
 
   "stream.thinking": "思考中...",
   "stream.waiting": "等待訊息...",

@@ -4,7 +4,6 @@ import type { Tab } from '../../../types/tab'
 import { useLayoutStore, HOME_WS_KEY } from '../../../stores/useLayoutStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { InlineTabList } from './InlineTabList'
-import { CollapseButton } from './CollapseButton'
 
 interface Props {
   isActive: boolean
@@ -16,6 +15,7 @@ interface Props {
   onCloseTab: (tabId: string) => void
   onMiddleClickTab: (tabId: string) => void
   onContextMenuTab: (e: React.MouseEvent, tabId: string) => void
+  onRenameTab?: (tabId: string) => void
 }
 
 export function HomeRow(props: Props) {
@@ -29,6 +29,7 @@ export function HomeRow(props: Props) {
     onCloseTab,
     onMiddleClickTab,
     onContextMenuTab,
+    onRenameTab,
   } = props
   const t = useI18nStore((s) => s.t)
   const expanded = useLayoutStore((s) => !!s.workspaceExpanded[HOME_WS_KEY])
@@ -49,30 +50,16 @@ export function HomeRow(props: Props) {
       <div
         ref={setHeaderDropRef}
         data-testid="home-header"
-        className={`group/home-header mx-2 flex items-center gap-1 pr-1.5 rounded-md text-sm transition-colors ${
+        className={`group/home-header mx-2 flex items-center gap-1 pl-1.5 rounded-md text-sm transition-colors focus:outline-none focus-visible:outline-none ${
           isActive
             ? 'bg-surface-hover text-text-primary ring-1 ring-purple-400'
             : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
         } ${isHeaderOver ? 'ring-2 ring-purple-400/80 bg-surface-hover' : ''}`}
       >
-        {showTabs && (
-          <button
-            type="button"
-            aria-label={chevronLabel}
-            aria-expanded={expanded}
-            onClick={(e) => {
-              e.stopPropagation()
-              toggleExpanded(HOME_WS_KEY)
-            }}
-            className="p-1 rounded hover:bg-surface-secondary text-text-muted cursor-pointer"
-          >
-            <Chevron size={12} />
-          </button>
-        )}
         <button
           type="button"
           onClick={onSelectHome}
-          className="flex-1 flex items-center gap-2 py-1.5 text-left cursor-pointer"
+          className="flex-1 flex items-center gap-2 py-1.5 text-left cursor-pointer focus:outline-none"
         >
           <img
             src="/icons/logo-transparent.png"
@@ -83,7 +70,20 @@ export function HomeRow(props: Props) {
           />
           <span className="truncate">{t('nav.home')}</span>
         </button>
-        <CollapseButton variant="header-right" />
+        {showTabs && (
+          <button
+            type="button"
+            aria-label={chevronLabel}
+            aria-expanded={expanded}
+            onClick={(e) => {
+              e.stopPropagation()
+              toggleExpanded(HOME_WS_KEY)
+            }}
+            className="p-1 mr-0.5 rounded hover:bg-surface-secondary text-text-muted cursor-pointer focus:outline-none"
+          >
+            <Chevron size={12} />
+          </button>
+        )}
       </div>
 
       {showTabs && expanded && (
@@ -96,6 +96,7 @@ export function HomeRow(props: Props) {
           onClose={onCloseTab}
           onMiddleClick={onMiddleClickTab}
           onContextMenu={onContextMenuTab}
+          onRename={onRenameTab}
         />
       )}
     </div>

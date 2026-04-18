@@ -130,5 +130,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('dev:update-progress', handler)
       return () => ipcRenderer.removeListener('dev:update-progress', handler)
     },
+    streamCheck: (
+      daemonUrl: string,
+      token: string | undefined,
+      onEvent: (ev: unknown) => void,
+    ) => {
+      // Each call gets its own reply channel so stale events from a previous
+      // in-flight stream can never leak into a freshly registered listener.
+      const channel = `dev:stream-check-event:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`
+      const handler = (_event: Electron.IpcRendererEvent, ev: unknown) => onEvent(ev)
+      ipcRenderer.on(channel, handler)
+      ipcRenderer.invoke('dev:stream-check', daemonUrl, token, channel).catch(() => {
+        // Errors arrive as { type: 'error' } on the channel — ignore the
+        // rejection here.
+      })
+      return () => {
+        ipcRenderer.send('dev:stream-check-stop')
+        ipcRenderer.removeListener(channel, handler)
+      }
+    },
   } : {}),
 })

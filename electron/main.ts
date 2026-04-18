@@ -6,7 +6,7 @@ import { MiniWindowManager } from './mini-browser-window'
 import { registerBrowserViewIpc } from './browser-view-ipc'
 import { registerFsIpc } from './fs-ipc'
 import { createTray } from './tray'
-import { getAppInfo, checkUpdate, applyUpdate } from './updater'
+import { getAppInfo, checkUpdate, applyUpdate, streamCheck } from './updater'
 import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
 
 // Register custom protocol before app is ready (Electron requirement).
@@ -119,6 +119,34 @@ function registerIpcHandlers(): void {
   // Dev Update
   ipcMain.handle('dev:app-info', () => getAppInfo())
   ipcMain.handle('dev:check-update', (_event, daemonUrl: string, token?: string) => checkUpdate(daemonUrl, token))
+
+  // Only one active stream at a time — a new request aborts the previous one.
+  let activeStream: AbortController | null = null
+  ipcMain.handle('dev:stream-check', async (event, daemonUrl: string, token: string | undefined, channel: string) => {
+    activeStream?.abort()
+    const controller = new AbortController()
+    activeStream = controller
+    const win = BrowserWindow.fromWebContents(event.sender)
+    try {
+      await streamCheck(daemonUrl, token, (ev) => {
+        if (win && !win.isDestroyed()) {
+          win.webContents.send(channel, ev)
+        }
+      }, controller.signal)
+    } catch (err) {
+      // AbortError on manual stop is expected — surface everything else.
+      const msg = err instanceof Error ? err.message : String(err)
+      if ((err as { name?: string })?.name !== 'AbortError' && win && !win.isDestroyed()) {
+        win.webContents.send(channel, { type: 'error', error: msg })
+      }
+    } finally {
+      if (activeStream === controller) activeStream = null
+    }
+  })
+  ipcMain.on('dev:stream-check-stop', () => {
+    activeStream?.abort()
+  })
+
   ipcMain.handle('dev:apply-update', async (event, daemonUrl: string, token?: string) => {
     if (updateInProgress) throw 'Update already in progress'
     updateInProgress = true
