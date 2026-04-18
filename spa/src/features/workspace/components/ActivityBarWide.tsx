@@ -28,6 +28,7 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { RegionResize } from '../../../components/RegionResize'
 import { WorkspaceRow } from './WorkspaceRow'
 import { HomeRow } from './HomeRow'
+import { CollapseButton } from './CollapseButton'
 import type { ActivityBarProps } from './activity-bar-props'
 import { computeDragEndAction, dispatchDragEndAction, type DragData } from '../lib/computeDragEndAction'
 import { useSpringLoad } from '../lib/useSpringLoad'
@@ -259,6 +260,10 @@ export function ActivityBarWide(props: ActivityBarProps) {
         className="hidden lg:flex flex-col bg-surface-tertiary border-r border-border-subtle py-2 gap-0.5 flex-shrink-0 overflow-y-auto"
         style={{ width: renderedSize }}
       >
+        <div className="flex items-center px-3 pt-0.5 pb-1.5">
+          <CollapseButton variant="header-right" />
+        </div>
+
         <DndContext
           sensors={sensors}
           collisionDetection={customCollisionDetection}

@@ -70,26 +70,12 @@ export function WorkspaceRow(props: Props) {
         data-testid={`ws-header-${workspace.id}`}
         {...attributes}
         {...listeners}
-        className={`group/ws-header mx-2 flex items-center gap-1 pr-1.5 rounded-md text-sm transition-colors ${
+        className={`group/ws-header mx-2 flex items-center gap-1 pl-1.5 rounded-md text-sm transition-colors focus:outline-none focus-visible:outline-none ${
           isActive
             ? 'bg-[#8b5cf6]/25 text-text-primary ring-1 ring-purple-400'
             : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
         } ${isHeaderOver ? 'ring-2 ring-purple-400/80 bg-surface-hover' : ''}`}
       >
-        {showTabs && (
-          <button
-            type="button"
-            aria-label={chevronLabel}
-            aria-expanded={expanded}
-            onClick={(e) => {
-              e.stopPropagation()
-              toggleExpanded(workspace.id)
-            }}
-            className="p-1 rounded hover:bg-surface-secondary text-text-muted cursor-pointer"
-          >
-            <Chevron size={12} />
-          </button>
-        )}
         <button
           type="button"
           onClick={() => onSelectWorkspace(workspace.id)}
@@ -98,7 +84,7 @@ export function WorkspaceRow(props: Props) {
             e.preventDefault()
             onContextMenuWorkspace?.(e, workspace.id)
           }}
-          className="flex-1 flex items-center gap-2 py-1.5 text-left cursor-pointer"
+          className="flex-1 flex items-center gap-2 py-1.5 text-left cursor-pointer focus:outline-none"
         >
           <WorkspaceIcon
             icon={workspace.icon}
@@ -120,9 +106,23 @@ export function WorkspaceRow(props: Props) {
               onAddTabToWorkspace(workspace.id)
             }}
             onPointerDown={(e) => e.stopPropagation()}
-            className="p-1 rounded hover:bg-surface-secondary text-text-muted cursor-pointer opacity-0 group-hover/ws-header:opacity-100 focus:opacity-100 transition-opacity"
+            className="p-1 rounded hover:bg-surface-secondary text-text-primary cursor-pointer opacity-0 group-hover/ws-header:opacity-100 focus:opacity-100 transition-opacity focus:outline-none"
           >
-            <Plus size={12} />
+            <Plus size={14} weight="bold" />
+          </button>
+        )}
+        {showTabs && (
+          <button
+            type="button"
+            aria-label={chevronLabel}
+            aria-expanded={expanded}
+            onClick={(e) => {
+              e.stopPropagation()
+              toggleExpanded(workspace.id)
+            }}
+            className="p-1 mr-0.5 rounded hover:bg-surface-secondary text-text-muted cursor-pointer focus:outline-none"
+          >
+            <Chevron size={12} />
           </button>
         )}
       </div>
