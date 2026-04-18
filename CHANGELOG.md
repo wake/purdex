@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.165] - 2026-04-18
+
+### Fixes / UI (#444)
+
+- **InlineTab 顯示規則對齊 SortableTab**：dot / iconDot 模式內嵌 unread pip，badge 模式改以紅色 overlay；外部 corner pip 加上 `shouldShowGlobalUnreadPip` 判定並對齊上方 TabBar 的位置/大小（`w-2 h-2`、`-top-[4px] -right-[4px]`）。
+- **Active tab 移除 accent border**：`border border-accent-muted` → `border border-transparent`，兩態都保留透明 1px 邊框，尺寸不跳。
+- **Host tab icon**：`ICON_MAP` 補 `HardDrives`，上方 TabBar 的 host tab 現在能正確渲染硬碟 icon。
+- **Settings icon**：`GearSix` → `Sliders`（ActivityBar 寬/窄、WorkspaceContextMenu、SessionPanel、tab-icon-map、pane-labels）。
+- **Editor tab icon**（非 diff）：`File` → `TextAlignLeft`，對齊 VSCode 習慣。
+
 ## [1.0.0-alpha.164] - 2026-04-18
 
 ### Sync P0 — 體質清理 (#432)
