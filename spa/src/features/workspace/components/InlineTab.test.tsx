@@ -42,6 +42,8 @@ beforeEach(() => {
     unread: {},
     subagents: {},
     agentTypes: {},
+    oscTitles: {},
+    showOscTitle: false,
     tabIndicatorStyle: 'badge',
     ccIconVariant: 'bot',
   })
@@ -223,6 +225,93 @@ describe('InlineTab — host offline', () => {
       />,
     )
     expect(screen.queryByTestId('inline-tab-host-offline')).not.toBeInTheDocument()
+  })
+})
+
+describe('InlineTab — statusline display', () => {
+  it('shows "{oscTitle} - {baseLabel}" when showOscTitle + oscTitle + agentType all set', () => {
+    useAgentStore.setState({
+      showOscTitle: true,
+      agentTypes: { 'h1:S1': 'cc' },
+      oscTitles: { 'h1:S1': 'my-feature' },
+    })
+    render(
+      <InlineTab
+        tab={baseTab}
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    const title = screen.getByTestId('inline-tab-title')
+    expect(title.textContent).toBe('my-feature - work')
+  })
+
+  it('shows only baseLabel when oscTitle absent', () => {
+    useAgentStore.setState({
+      showOscTitle: true,
+      agentTypes: { 'h1:S1': 'cc' },
+      oscTitles: {},
+    })
+    render(
+      <InlineTab
+        tab={baseTab}
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    const title = screen.getByTestId('inline-tab-title')
+    expect(title.textContent).toBe('work')
+    expect(title.textContent).not.toContain(' - ')
+  })
+
+  it('shows only baseLabel when showOscTitle is disabled', () => {
+    useAgentStore.setState({
+      showOscTitle: false,
+      agentTypes: { 'h1:S1': 'cc' },
+      oscTitles: { 'h1:S1': 'my-feature' },
+    })
+    render(
+      <InlineTab
+        tab={baseTab}
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    const title = screen.getByTestId('inline-tab-title')
+    expect(title.textContent).toBe('work')
+  })
+
+  it('renders HoverTooltip with combined text (not native title attr)', () => {
+    useAgentStore.setState({
+      showOscTitle: true,
+      agentTypes: { 'h1:S1': 'cc' },
+      oscTitles: { 'h1:S1': 'my-feature' },
+    })
+    render(
+      <InlineTab
+        tab={baseTab}
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    const title = screen.getByTestId('inline-tab-title')
+    // Native title attribute must be gone
+    expect(title.getAttribute('title')).toBeNull()
+    // HoverTooltip renders combined text as a sibling
+    const tooltip = screen.getByTestId('inline-tab-tooltip')
+    expect(tooltip.textContent).toBe('my-feature - work')
   })
 })
 

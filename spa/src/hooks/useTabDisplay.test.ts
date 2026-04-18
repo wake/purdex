@@ -90,7 +90,7 @@ describe('useTabDisplay — OSC title override', () => {
       oscTitles: { 'h1:sc1': 'claude' },
     })
     const { result } = renderHook(() => useTabDisplay(makeTab()))
-    expect(result.current.displayTitle).toBe('claude')
+    expect(result.current.displayTitle).toBe('claude - base')
     expect(result.current.tooltip).toBe('claude - base')
   })
 

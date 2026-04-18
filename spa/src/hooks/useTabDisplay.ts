@@ -71,7 +71,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const baseLabel = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
 
   const useOsc = showOscTitle && !isTerminated && !!agentType && !!oscTitle
-  const displayTitle = useOsc && oscTitle ? oscTitle : baseLabel
+  const displayTitle = useOsc && oscTitle ? `${oscTitle} - ${baseLabel}` : baseLabel
   const tooltip = useOsc && oscTitle ? `${oscTitle} - ${baseLabel}` : baseLabel
 
   return {

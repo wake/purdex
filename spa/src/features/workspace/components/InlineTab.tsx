@@ -4,6 +4,7 @@ import type { Tab } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabDisplay } from '../../../hooks/useTabDisplay'
 import { shouldShowGlobalUnreadPip } from '../../../components/tab-icon-helpers'
+import { HoverTooltip } from '../../../components/HoverTooltip'
 import { renderInlineTabIcon } from '../lib/renderInlineTabIcon'
 
 interface Props {
@@ -35,7 +36,6 @@ export function InlineTab({
 
   const {
     displayTitle,
-    tooltip,
     IconComponent,
     agentStatus,
     isUnread,
@@ -111,9 +111,12 @@ export function InlineTab({
         subagentCount,
         isUnread,
       })}
-      <span className="flex-1 truncate" title={tooltip}>
+      <span data-testid="inline-tab-title" className="flex-1 truncate">
         {displayTitle}
       </span>
+      <HoverTooltip placement="top" data-testid="inline-tab-tooltip">
+        {displayTitle}
+      </HoverTooltip>
       {isHostOffline && (
         <WifiSlash
           size={12}
