@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.173] - 2026-04-18
+
+### Tweak: Activity-bar collapse button 換成 SidebarSimple (#452)
+
+- `CollapseButton` 改用單一 `SidebarSimple` icon，取代動態 `CaretDoubleLeft` / `CaretDoubleRight` 兩張圖互換。
+- `topbar` variant 加上 region-toggle 慣用的 active 配色：wide 時 accent 底色（讀作「activity bar is on」），narrow 時 secondary 常態，和 TitleBar 右側 region toggles 同一家族。
+- 單一 icon 消除每次點擊的 swap flicker，連帶掃除 #446 commit message 裡提到的「感覺壞掉」觀感。
+- 測試面：`CollapseButton.test.tsx` 補上 SidebarSimple path 簽章、topbar active/inactive 配色、與 `p-1 rounded` 共用 pattern 的三組 regression。
+
 ## [1.0.0-alpha.172] - 2026-04-18
 
 ### Cross-platform: sub-pixel tab icon margin 在 @1x 退回整數 (#451)
