@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.161] - 2026-04-18
+
+### 修復
+
+- **spa**：Tab double-click 現在會打開 rename popover（TabBar 與 Activity Bar InlineTab 都生效），複用既有 `openRenameForTab`（#438）
+- **spa**：StatusBar `{host}` 由雙擊改名改為單擊開啟 Host 設定頁並選中該 Host（#438）
+
+### 介面調整
+
+- **spa**：StatusBar `{host}` / `{session}` span 移除 `cursor-pointer` —— 仍可互動但不再顯示手型，減輕介面認知負擔（#438）
+
 ## [1.0.0-alpha.160] - 2026-04-18
 
 ### 功能
