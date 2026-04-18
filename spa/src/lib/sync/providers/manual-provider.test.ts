@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createManualProvider } from './manual-provider'
+import { createManualProvider, ImportError } from './manual-provider'
 import type { SyncBundle } from '../types'
 
 const makeBundle = (): SyncBundle => ({
@@ -37,39 +37,132 @@ describe('ManualProvider', () => {
     expect(result).toEqual(bundle)
   })
 
-  it('importFromText throws on invalid JSON', () => {
+  it('importFromText throws ImportError(invalid-json) on malformed JSON', () => {
     const provider = createManualProvider()
-    expect(() => provider.importFromText('not valid json{')).toThrow()
+    try {
+      provider.importFromText('not valid json{')
+      throw new Error('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(ImportError)
+      expect((e as ImportError).code).toBe('invalid-json')
+    }
   })
 
-  it('importFromText throws on missing version field', () => {
+  it('importFromText throws ImportError(invalid-shape) when version missing', () => {
     const provider = createManualProvider()
     const bad = { timestamp: 1000000, device: 'x', collections: {} }
-    expect(() => provider.importFromText(JSON.stringify(bad))).toThrow(/version/)
+    try {
+      provider.importFromText(JSON.stringify(bad))
+      throw new Error('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(ImportError)
+      expect((e as ImportError).code).toBe('invalid-shape')
+      expect((e as ImportError).message).toMatch(/version/)
+    }
   })
 
-  it('importFromText throws when version is not a number', () => {
+  it('importFromText throws ImportError(invalid-shape) when version is not number', () => {
     const provider = createManualProvider()
     const bad = { version: 'one', timestamp: 1000000, device: 'x', collections: {} }
-    expect(() => provider.importFromText(JSON.stringify(bad))).toThrow(/version/)
+    try {
+      provider.importFromText(JSON.stringify(bad))
+      throw new Error('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(ImportError)
+      expect((e as ImportError).code).toBe('invalid-shape')
+      expect((e as ImportError).message).toMatch(/version/)
+    }
   })
 
-  it('importFromText throws when timestamp is not a number', () => {
+  it('importFromText throws ImportError(invalid-shape) when timestamp is not number', () => {
     const provider = createManualProvider()
     const bad = { version: 1, timestamp: 'now', device: 'x', collections: {} }
-    expect(() => provider.importFromText(JSON.stringify(bad))).toThrow(/timestamp/)
+    try {
+      provider.importFromText(JSON.stringify(bad))
+      throw new Error('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(ImportError)
+      expect((e as ImportError).code).toBe('invalid-shape')
+      expect((e as ImportError).message).toMatch(/timestamp/)
+    }
   })
 
-  it('importFromText throws when device is not a string', () => {
+  it('importFromText throws ImportError(invalid-shape) when device is not string', () => {
     const provider = createManualProvider()
     const bad = { version: 1, timestamp: 1000000, device: 42, collections: {} }
-    expect(() => provider.importFromText(JSON.stringify(bad))).toThrow(/device/)
+    try {
+      provider.importFromText(JSON.stringify(bad))
+      throw new Error('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(ImportError)
+      expect((e as ImportError).code).toBe('invalid-shape')
+      expect((e as ImportError).message).toMatch(/device/)
+    }
   })
 
-  it('importFromText throws when collections is not an object', () => {
+  it('importFromText throws ImportError(invalid-shape) when collections is not object', () => {
     const provider = createManualProvider()
     const bad = { version: 1, timestamp: 1000000, device: 'x', collections: 'bad' }
-    expect(() => provider.importFromText(JSON.stringify(bad))).toThrow(/collections/)
+    try {
+      provider.importFromText(JSON.stringify(bad))
+      throw new Error('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(ImportError)
+      expect((e as ImportError).code).toBe('invalid-shape')
+      expect((e as ImportError).message).toMatch(/collections/)
+    }
+  })
+
+  it('importFromText throws ImportError(too-large) when text exceeds 5 MB', () => {
+    const provider = createManualProvider()
+    // 5 MB + 1 char
+    const huge = '"' + 'a'.repeat(5 * 1024 * 1024) + '"'
+    try {
+      provider.importFromText(huge)
+      throw new Error('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(ImportError)
+      expect((e as ImportError).code).toBe('too-large')
+    }
+  })
+
+  it('importFromText throws ImportError(too-deep) when object depth exceeds 32', () => {
+    const provider = createManualProvider()
+    // Build deep object: { a: { a: { ... } } } 40 levels rooted at collections
+    const deepCollections: Record<string, unknown> = {}
+    let cursor: Record<string, unknown> = deepCollections
+    for (let i = 0; i < 40; i++) {
+      const next: Record<string, unknown> = {}
+      cursor['deep'] = next
+      cursor = next
+    }
+    const root: SyncBundle = {
+      version: 1,
+      timestamp: 1,
+      device: 'x',
+      collections: deepCollections as SyncBundle['collections'],
+    }
+    try {
+      provider.importFromText(JSON.stringify(root))
+      throw new Error('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(ImportError)
+      expect((e as ImportError).code).toBe('too-deep')
+    }
+  })
+
+  it('importFromText accepts 4 MB payload below size limit', () => {
+    const provider = createManualProvider()
+    const bundle: SyncBundle = {
+      version: 1,
+      timestamp: 1,
+      device: 'x',
+      collections: { big: { version: 1, data: { blob: 'a'.repeat(4 * 1024 * 1024) } } } as SyncBundle['collections'],
+    }
+    const text = JSON.stringify(bundle)
+    expect(text.length).toBeLessThan(5 * 1024 * 1024)
+    const result = provider.importFromText(text)
+    expect(result.device).toBe('x')
   })
 
   it('listHistory returns empty array', async () => {

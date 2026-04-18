@@ -1,7 +1,10 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { Router } from 'wouter'
+import { memoryLocation } from 'wouter/memory-location'
 import { TitleBar } from './TitleBar'
 import { useTabStore } from '../stores/useTabStore'
+import { useSyncStore } from '../lib/sync/use-sync-store'
 import { createTab } from '../types/tab'
 
 describe('TitleBar', () => {
@@ -73,5 +76,100 @@ describe('TitleBar', () => {
     for (const btn of buttons) {
       expect(btn.className).toContain('cursor-pointer')
     }
+  })
+})
+
+describe('TitleBar — sync conflict warning', () => {
+  beforeEach(() => {
+    useSyncStore.getState().reset()
+  })
+
+  it('does not render warning icon when no pending conflicts', () => {
+    render(<TitleBar title="test" />)
+    expect(screen.queryByLabelText(/sync conflict|同步衝突/i)).toBeNull()
+  })
+
+  it('renders warning icon + tooltip when pending conflicts > 0 (provider active)', () => {
+    const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setActiveProvider('daemon')
+    useSyncStore.getState().setPendingConflicts(
+      [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
+      bundle,
+    )
+    render(<TitleBar title="test" />)
+    const btn = screen.getByLabelText(/sync conflict|同步衝突/i)
+    expect(btn).toBeTruthy()
+    expect(btn.getAttribute('title')).toMatch(/1/)
+  })
+
+  it('hides warning icon when provider is off, even with pending conflicts', () => {
+    const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setPendingConflicts(
+      [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
+      bundle,
+    )
+    // activeProviderId remains null (off)
+    render(<TitleBar title="test" />)
+    expect(screen.queryByLabelText(/sync conflict|同步衝突/i)).toBeNull()
+  })
+
+  it('hides warning icon when pendingRemoteBundle is null (banner would be hidden)', () => {
+    // Simulate partial rehydrate / divergent state
+    useSyncStore.setState({
+      activeProviderId: 'daemon',
+      pendingConflicts: [
+        { contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } },
+      ],
+      pendingRemoteBundle: null,
+      pendingConflictsAt: Date.now(),
+    })
+    render(<TitleBar title="test" />)
+    expect(screen.queryByLabelText(/sync conflict|同步衝突/i)).toBeNull()
+  })
+
+  it('plural: tooltip uses singular for 1 conflict', () => {
+    const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setActiveProvider('daemon')
+    useSyncStore.getState().setPendingConflicts(
+      [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
+      bundle,
+    )
+    render(<TitleBar title="test" />)
+    const btn = screen.getByLabelText(/sync conflict|同步衝突/i)
+    expect(btn.getAttribute('title')).toMatch(/^1 sync conflict pending$/)
+  })
+
+  it('plural: tooltip uses plural for >1 conflicts', () => {
+    const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setActiveProvider('daemon')
+    useSyncStore.getState().setPendingConflicts(
+      [
+        { contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } },
+        { contributor: 'layout', field: 'tabPos', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } },
+      ],
+      bundle,
+    )
+    render(<TitleBar title="test" />)
+    const btn = screen.getByLabelText(/sync conflict|同步衝突/i)
+    expect(btn.getAttribute('title')).toMatch(/^2 sync conflicts pending$/)
+  })
+
+  it('clicking icon navigates to /settings/sync', () => {
+    const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setActiveProvider('daemon')
+    useSyncStore.getState().setPendingConflicts(
+      [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
+      bundle,
+    )
+
+    const { hook, history } = memoryLocation({ path: '/', record: true })
+    render(
+      <Router hook={hook}>
+        <TitleBar title="test" />
+      </Router>,
+    )
+    const btn = screen.getByLabelText(/sync conflict|同步衝突/i)
+    fireEvent.click(btn)
+    expect(history[history.length - 1]).toBe('/settings/sync')
   })
 })

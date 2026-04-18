@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.0.0-alpha.164] - 2026-04-18
+
+### Sync P0 — 體質清理 (#432)
+
+- **ConflictBanner**: new UI for resolving per-field sync conflicts. Appears at top of Settings → Sync when pending conflicts exist. Supports expand/collapse, per-row local/remote choice, bulk "keep all local / use all remote", all-or-nothing apply.
+- **TitleBar warning icon**: global Phosphor `Warning` icon next to workspace title when there are pending sync conflicts. Tooltip shows count, click deep-links to `/settings/sync`.
+- **`/settings/<section>` deep-link**: URL now reflects the active settings section; back/forward navigation and external links (e.g. TitleBar icon) open the correct section.
+- **i18n**: full migration of SyncSection — 47 new `settings.sync.*` keys in `en.json` and `zh-TW.json`. Closes #397.
+- **Fix #394**: DaemonProvider URL-encodes `clientId` query params; `listHistory` rejects non-positive-integer limits.
+- **Fix #395**: `handleExportAll` now honours the `busy` flag to prevent mid-operation export.
+- **Fix #396**: `importFromText` enforces 5 MB size + 32 depth limits via typed `ImportError`, surfaced as friendly i18n messages.
+- **State**: `useSyncStore` persists `pendingConflicts` / `pendingRemoteBundle` / `pendingConflictsAt` across sessions.
+
+### Round-2 review fixes
+
+- **resolveConflicts push** (R2-A4): `handleResolveConflicts` now pushes the merged bundle back to the daemon provider after a successful resolve, preventing other devices from seeing ghost conflicts on their next pull.
+- **pendingRemoteBundle trim** (R1-#2): `setPendingConflicts` keeps only the collections for contributors that actually have conflicts, capping localStorage footprint (`resolveConflicts` never reads the rest).
+- **Provider-change race guard** (R2-A6): `handleSyncNow` and `handleFileChange` snapshot `activeProviderId` before their awaits and drop stale results if the user swapped provider mid-flight.
+- **TitleBar predicate alignment** (R1-#3): warning icon now matches `SyncSection` banner's full render guard (`provider !== null && remoteBundle && pendingConflictsAt`) so clicking the icon never leads to a banner-less settings page.
+- **Settings URL self-heal** (R2-A7): `/settings/<bad>` or `/settings/foo/extra` are replaced with the canonical `/settings/<active>` so back/forward history never preserves garbage URLs.
+- **Plural-safe i18n** (R2-A5): 4 count-sensitive keys (`conflict.banner`, `conflict.tooltip`, `conflict.resolved`, `status.conflictsPending`) split into `_one` / `_other` variants via new `pluralKey` helper; English singular stops rendering "1 conflicts".
+
+### Tracked separately (review follow-ups)
+
+- Engine `ResolvedFields` compound-key refactor → #440
+- `formatRelativeTime` live tick → #441
+- `SyncSection.tsx` split (useSyncActions hook + StatusLine) → #442
+
+### Deferred / tracked separately
+
+- Daemon Pairing UI → gh #421 (Phase P2)
+- Cloud Provider → gh #422 (Phase P4)
+- Onboarding flow → gh #423 (Phase P6)
+- Sync History Dialog → Phase P1
+- File Provider → Phase P3
+- Content-addressed (Editor) → Phase P5
+
 ## [1.0.0-alpha.163] - 2026-04-18
 
 ### 介面調整

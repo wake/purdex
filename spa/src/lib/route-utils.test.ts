@@ -18,12 +18,40 @@ describe('parseRoute', () => {
     expect(parseRoute('/settings')).toEqual({ kind: 'settings', scope: 'global' })
   })
 
-  it('parses /settings/appearance as global settings', () => {
-    expect(parseRoute('/settings/appearance')).toEqual({ kind: 'settings', scope: 'global' })
+  it('parses /settings/appearance with section field', () => {
+    expect(parseRoute('/settings/appearance')).toEqual({
+      kind: 'settings', scope: 'global', section: 'appearance',
+    })
   })
 
-  it('parses /settings/terminal as global settings', () => {
-    expect(parseRoute('/settings/terminal')).toEqual({ kind: 'settings', scope: 'global' })
+  it('parses /settings/terminal with section field', () => {
+    expect(parseRoute('/settings/terminal')).toEqual({
+      kind: 'settings', scope: 'global', section: 'terminal',
+    })
+  })
+
+  it('parses /settings/sync with section field', () => {
+    expect(parseRoute('/settings/sync')).toEqual({
+      kind: 'settings', scope: 'global', section: 'sync',
+    })
+  })
+
+  it('rejects invalid section names, falls back to no section', () => {
+    expect(parseRoute('/settings/bad..name')).toEqual({
+      kind: 'settings', scope: 'global',
+    })
+    expect(parseRoute('/settings/BAD')).toEqual({
+      kind: 'settings', scope: 'global',
+    })
+    expect(parseRoute('/settings/has spaces')).toEqual({
+      kind: 'settings', scope: 'global',
+    })
+  })
+
+  it('accepts valid section ids (a-z, 0-9, hyphen, max 32)', () => {
+    expect(parseRoute('/settings/dev-env-123')).toEqual({
+      kind: 'settings', scope: 'global', section: 'dev-env-123',
+    })
   })
 
   it('parses /t/:tabId/:mode', () => {
