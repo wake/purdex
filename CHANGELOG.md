@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.0.0-alpha.163 — 2026-04-18
+## [1.0.0-alpha.164] - 2026-04-18
 
-### Sync P0 — 體質清理
+### Sync P0 — 體質清理 (#432)
 
 - **ConflictBanner**: new UI for resolving per-field sync conflicts. Appears at top of Settings → Sync when pending conflicts exist. Supports expand/collapse, per-row local/remote choice, bulk "keep all local / use all remote", all-or-nothing apply.
 - **TitleBar warning icon**: global Phosphor `Warning` icon next to workspace title when there are pending sync conflicts. Tooltip shows count, click deep-links to `/settings/sync`.
@@ -36,6 +36,15 @@
 - Sync History Dialog → Phase P1
 - File Provider → Phase P3
 - Content-addressed (Editor) → Phase P5
+
+## [1.0.0-alpha.163] - 2026-04-18
+
+### 介面調整
+
+- **spa**：Activity bar 的 `InlineTab` 視覺對齊上方 `TabBar` —— 移除未定義 token `border-accent-base` 造成的白色左 border（原本 fallback 到 `currentColor`），改用 `border border-accent-muted` / `border border-transparent`；active 文字 `text-white`、inactive 文字 `text-text-muted`，和 `SortableTab` 一致（#443）
+- **spa**：`WorkspaceRow` / `HomeRow` 的 `+` 與 chevron 按鈕拿掉硬寫的 `text-text-primary` / `text-text-muted`，改繼承父層顏色，和列內 close X 表現一致（#443）
+- **spa**：`InlineTab` 內容左移 6px（`pl-6` → `pl-[18px]`）（#443）
+- **spa**：`renderInlineTabIcon` icon 從 12px 改為 14px，對齊上方 `SortableTab` 的 icon 尺寸（`DOT_SLOT` 同步 `w-3 h-3` → `w-3.5 h-3.5`）（#443）
 
 ## [1.0.0-alpha.162] - 2026-04-18
 
