@@ -5,6 +5,21 @@ import { DevBuildLogPanel } from './DevBuildLogPanel'
 
 type UpdateStatus = 'idle' | 'checking' | 'building' | 'up_to_date' | 'update_available' | 'error'
 
+type DaemonPhase = 'idle' | 'checking' | 'rebuilding' | 'restarting' | 'error'
+
+interface DaemonCheck {
+  current_hash: string
+  latest_hash: string
+  available: boolean
+}
+
+interface DaemonEvent {
+  type: 'log' | 'error' | 'success' | 'restarting'
+  line?: string
+  message?: string
+  new_hash?: string
+}
+
 interface AppInfo {
   version: string
   electronHash: string
@@ -33,7 +48,111 @@ export function DevEnvironmentSection() {
 
   const streamCloseRef = useRef<(() => void) | null>(null)
 
+  // Daemon rebuild state
+  const [daemonCheck, setDaemonCheck] = useState<DaemonCheck | null>(null)
+  const [daemonLog, setDaemonLog] = useState<string[]>([])
+  const [daemonPhase, setDaemonPhase] = useState<DaemonPhase>('idle')
+  const [daemonError, setDaemonError] = useState<string | null>(null)
+
   useEffect(() => { appInfoRef.current = appInfo }, [appInfo])
+
+  const daemonAuthHeaders = useCallback((): HeadersInit => {
+    return token ? { Authorization: `Bearer ${token}` } : {}
+  }, [token])
+
+  const checkDaemon = useCallback(async () => {
+    if (!daemonBase) return
+    setDaemonPhase('checking')
+    setDaemonError(null)
+    try {
+      const res = await fetch(`${daemonBase}/api/dev/daemon/check`, { headers: daemonAuthHeaders() })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = (await res.json()) as DaemonCheck
+      setDaemonCheck(data)
+      setDaemonPhase('idle')
+    } catch (err) {
+      setDaemonError(err instanceof Error ? err.message : String(err))
+      setDaemonPhase('error')
+    }
+  }, [daemonBase, daemonAuthHeaders])
+
+  const rebuildDaemon = useCallback(async () => {
+    if (!daemonBase) return
+    setDaemonPhase('rebuilding')
+    setDaemonLog([])
+    setDaemonError(null)
+
+    let encounteredError = false
+
+    try {
+      const res = await fetch(`${daemonBase}/api/dev/daemon/rebuild`, {
+        method: 'POST',
+        headers: daemonAuthHeaders(),
+      })
+      if (res.status === 409) {
+        setDaemonError('Rebuild already in progress')
+        setDaemonPhase('error')
+        return
+      }
+      if (!res.ok || !res.body) {
+        setDaemonError(`HTTP ${res.status}`)
+        setDaemonPhase('error')
+        return
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const chunks = buffer.split('\n\n')
+        buffer = chunks.pop() ?? ''
+        for (const chunk of chunks) {
+          if (!chunk.startsWith('data: ')) continue
+          let ev: DaemonEvent
+          try {
+            ev = JSON.parse(chunk.slice(6)) as DaemonEvent
+          } catch {
+            continue
+          }
+          switch (ev.type) {
+            case 'log':
+              if (ev.line) setDaemonLog((prev) => [...prev, ev.line!])
+              break
+            case 'error':
+              setDaemonLog((prev) => [...prev, `ERROR: ${ev.message ?? ''}`])
+              setDaemonError(ev.message ?? 'build failed')
+              setDaemonPhase('error')
+              encounteredError = true
+              break
+            case 'success': {
+              const hashSuffix = ev.new_hash ? ` (${ev.new_hash})` : ''
+              setDaemonLog((prev) => [...prev, `✓ ${t('settings.dev.daemon.build_complete')}${hashSuffix}`])
+              break
+            }
+            case 'restarting':
+              setDaemonPhase('restarting')
+              break
+          }
+        }
+      }
+      // Stream ended. If we saw 'restarting', the daemon is exec'ing itself; WS will disconnect.
+      // After a brief delay, re-check to confirm new hash.
+      if (!encounteredError) {
+        setTimeout(() => { void checkDaemon() }, 3000)
+      }
+    } catch (err) {
+      setDaemonError(err instanceof Error ? err.message : String(err))
+      setDaemonPhase('error')
+    }
+  }, [daemonBase, daemonAuthHeaders, checkDaemon, t])
+
+  // Load daemon status on mount / host change
+  useEffect(() => {
+    void checkDaemon()
+  }, [checkDaemon])
 
   const closeStream = useCallback(() => {
     streamCloseRef.current?.()
@@ -251,6 +370,57 @@ export function DevEnvironmentSection() {
             {t('settings.dev.btn.reload_spa')}
           </button>
         )}
+      </div>
+
+      <div className="pt-6 border-t border-border-default">
+        <h3 className="text-sm font-semibold text-text-primary mb-3">{t('settings.dev.daemon.heading')}</h3>
+        {daemonCheck && (
+          <div className="space-y-1 mb-3 text-xs text-text-secondary">
+            <div className="flex items-center justify-between">
+              <span>{t('settings.dev.daemon.current_hash')}</span>
+              <span className="font-mono text-text-primary">{daemonCheck.current_hash}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>{t('settings.dev.daemon.latest_hash')}</span>
+              <div className="flex items-center gap-2">
+                <span className="font-mono">{daemonCheck.latest_hash || '-'}</span>
+                {daemonCheck.available && (
+                  <span className="text-status-warning">{t('settings.dev.daemon.update_available')}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {daemonPhase === 'error' && daemonError && (
+          <div className="text-xs text-status-error mb-3">{daemonError}</div>
+        )}
+        {daemonPhase === 'restarting' && (
+          <div className="text-xs text-accent mb-3">{t('settings.dev.daemon.restarting')}</div>
+        )}
+
+        {daemonLog.length > 0 && (
+          <pre className="bg-surface-input border border-border-default rounded p-2 mb-3 text-xs font-mono max-h-60 overflow-y-auto whitespace-pre-wrap">
+            {daemonLog.join('\n')}
+          </pre>
+        )}
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => void checkDaemon()}
+            disabled={daemonPhase === 'checking' || daemonPhase === 'rebuilding' || daemonPhase === 'restarting'}
+            className="px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default"
+          >
+            {t('settings.dev.daemon.check')}
+          </button>
+          <button
+            onClick={() => void rebuildDaemon()}
+            disabled={daemonPhase === 'rebuilding' || daemonPhase === 'restarting'}
+            className="px-3 py-1.5 text-xs rounded-md bg-accent text-text-inverse hover:bg-accent-hover disabled:opacity-50 cursor-pointer disabled:cursor-default"
+          >
+            {t('settings.dev.daemon.rebuild')}
+          </button>
+        </div>
       </div>
     </div>
   )

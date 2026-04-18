@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/wake/purdex/internal/core"
@@ -32,6 +33,10 @@ type DevModule struct {
 	lastFailedElectron string
 	stopCtx            context.Context
 	stopCancel         context.CancelFunc
+	// execSelf can be overridden in tests to prevent syscall.Exec from
+	// replacing the test process. Nil means skip exec (test-safe default).
+	// Set to syscall.Exec by Init for production use.
+	execSelf func(argv0 string, argv []string, envv []string) error
 }
 
 func New(repoRoot string) *DevModule {
@@ -56,6 +61,9 @@ func (m *DevModule) Init(c *core.Core) error {
 	}
 	if m.buildCmd == nil {
 		m.buildCmd = m.defaultBuild
+	}
+	if m.execSelf == nil {
+		m.execSelf = syscall.Exec
 	}
 	return nil
 }
@@ -149,12 +157,27 @@ func (m *DevModule) defaultBuild(session *BuildSession) error {
 }
 
 func (m *DevModule) RegisterRoutes(mux *http.ServeMux) {
+	// Two-layer gate. Layer 1 (config.Dev.Update in main.go) decides whether
+	// to instantiate this module at all — when false, DevModule isn't even
+	// constructed. Layer 2 (PDX_DEV_UPDATE=1 env var, below) gates route
+	// registration so operators can run the module without exposing the dev
+	// endpoints (useful for staging or partial rollouts). Both must be set
+	// to serve /api/dev/* requests.
+	if os.Getenv("PDX_DEV_UPDATE") != "1" {
+		return
+	}
 	mux.HandleFunc("GET /api/dev/update/check", m.handleCheck)
 	mux.HandleFunc("GET /api/dev/update/check/stream", m.handleCheckStream)
 	mux.HandleFunc("GET /api/dev/update/download", m.handleDownload)
+	mux.HandleFunc("GET /api/dev/daemon/check", m.handleDaemonCheck)
+	mux.HandleFunc("POST /api/dev/daemon/rebuild", m.handleDaemonRebuild)
 }
 
 func (m *DevModule) Start(_ context.Context) error {
+	if os.Getenv("PDX_DEV_UPDATE") != "1" {
+		log.Println("[dev] update endpoints disabled (requires config.Dev.Update=true AND PDX_DEV_UPDATE=1)")
+		return nil
+	}
 	log.Println("[dev] update endpoints enabled")
 	return nil
 }
