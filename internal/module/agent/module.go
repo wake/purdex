@@ -34,16 +34,23 @@ type Module struct {
 	currentStatus  map[string]agentpkg.Status
 	subagents      map[string][]string
 	activeWatchers map[string]string // tmuxSession → agentType
+
+	// statusSnapshots caches the latest statusline payload per sessionCode.
+	// Display-only, not persisted; guarded by snapshotMu (separate from mu
+	// because hot-path agent.status POSTs shouldn't contend with hook writes).
+	snapshotMu      sync.RWMutex
+	statusSnapshots map[string]statusSnapshot
 }
 
 // New creates a new agent Module backed by the given AgentEventStore.
 func New(events *store.AgentEventStore) *Module {
 	return &Module{
-		events:         events,
-		registry:       agentpkg.NewRegistry(),
-		currentStatus:  make(map[string]agentpkg.Status),
-		subagents:      make(map[string][]string),
-		activeWatchers: make(map[string]string),
+		events:          events,
+		registry:        agentpkg.NewRegistry(),
+		currentStatus:   make(map[string]agentpkg.Status),
+		subagents:       make(map[string][]string),
+		activeWatchers:  make(map[string]string),
+		statusSnapshots: make(map[string]statusSnapshot),
 	}
 }
 
@@ -113,6 +120,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/event", m.handleEvent)
 	mux.HandleFunc("GET /api/hooks/{agent}/status", m.handleHookStatus)
 	mux.HandleFunc("POST /api/hooks/{agent}/setup", m.handleHookSetup)
+	mux.HandleFunc("GET /api/agent/{agent}/statusline/status", m.handleStatuslineStatus)
+	mux.HandleFunc("POST /api/agent/{agent}/statusline/setup", m.handleStatuslineSetup)
+	mux.HandleFunc("POST /api/agent/status", m.handleAgentStatus)
 	mux.HandleFunc("POST /api/agent/check-alive/{session}", m.handleCheckAlive)
 	mux.HandleFunc("GET /api/agents/detect", m.handleDetect)
 
@@ -134,6 +144,7 @@ func (m *Module) Start(_ context.Context) error {
 
 	m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
 		m.sendSnapshot(sub)
+		m.sendStatuslineSnapshot(sub)
 		go m.checkAliveAll(sub)
 	})
 
@@ -348,6 +359,10 @@ func (m *Module) checkAliveAll(sub *core.EventSubscriber) {
 			delete(m.subagents, ev.TmuxSession)
 			delete(m.activeWatchers, ev.TmuxSession)
 			m.mu.Unlock()
+
+			m.snapshotMu.Lock()
+			delete(m.statusSnapshots, code)
+			m.snapshotMu.Unlock()
 
 			m.prober.StopWatch(tmuxTarget)
 			_ = m.events.Delete(ev.TmuxSession)

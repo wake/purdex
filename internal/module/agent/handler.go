@@ -9,11 +9,40 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 )
+
+// statuslineMutex serializes concurrent /statusline/setup requests.
+// CC settings.json is a shared resource; atomic rename doesn't protect
+// read-modify-write ordering across simultaneous install/remove calls.
+var statuslineMutex sync.Mutex
+
+// resolveStatuslineInstaller returns the StatuslineInstaller for the agent
+// named by the request path variable "agent", or writes a 404 JSON error and
+// returns (nil, false). Used by both /statusline/status and /statusline/setup.
+func (m *Module) resolveStatuslineInstaller(w http.ResponseWriter, r *http.Request) (agentpkg.StatuslineInstaller, bool) {
+	agentType := r.PathValue("agent")
+	if agentType != "cc" {
+		http.Error(w, `{"error":"unsupported agent"}`, http.StatusNotFound)
+		return nil, false
+	}
+	provider, ok := m.registry.Get(agentType)
+	if !ok {
+		http.Error(w, `{"error":"unknown agent"}`, http.StatusNotFound)
+		return nil, false
+	}
+	installer, ok := provider.(agentpkg.StatuslineInstaller)
+	if !ok {
+		http.Error(w, `{"error":"agent does not support statusline"}`, http.StatusNotFound)
+		return nil, false
+	}
+	return installer, true
+}
 
 // EventRequest is the JSON body expected by POST /api/agent/event.
 type EventRequest struct {
@@ -297,6 +326,120 @@ func (m *Module) handleHookSetup(w http.ResponseWriter, r *http.Request) {
 	m.handleHookStatus(w, r)
 }
 
+// handleStatuslineStatus handles GET /api/agent/{agent}/statusline/status.
+// Currently only "cc" is supported; other agent types return 404.
+func (m *Module) handleStatuslineStatus(w http.ResponseWriter, r *http.Request) {
+	installer, ok := m.resolveStatuslineInstaller(w, r)
+	if !ok {
+		return
+	}
+	state, err := installer.CheckStatusline()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(state)
+}
+
+// handleStatuslineSetup handles POST /api/agent/{agent}/statusline/setup.
+// Action "install" with mode "pdx" installs the pdx-native statusLine;
+// mode "wrap" installs pdx as a wrapper around the given inner command.
+// Action "remove" removes a pdx-managed statusLine (unmanaged entries are
+// refused with 409 Conflict).
+func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
+	installer, ok := m.resolveStatuslineInstaller(w, r)
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Action string `json:"action"`
+		Mode   string `json:"mode"`
+		Inner  string `json:"inner"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	pdxPath, err := os.Executable()
+	if err != nil {
+		http.Error(w, `{"error":"cannot find pdx binary"}`, http.StatusInternalServerError)
+		return
+	}
+	pdxPath, _ = filepath.EvalSymlinks(pdxPath)
+
+	// Acquire mutex only for the mutation phase. The status reply at the end
+	// is a read-only CheckStatusline() call plus HTTP write; keeping it
+	// outside the lock means install/remove don't block subsequent status
+	// polls, and avoids holding the mutex across HTTP response writes.
+	statuslineMutex.Lock()
+	var (
+		opErr       error
+		badRequest  string
+		conflictErr error
+	)
+	switch req.Action {
+	case "install":
+		switch req.Mode {
+		case "pdx":
+			opErr = installer.InstallStatuslinePdx(pdxPath)
+		case "wrap":
+			if req.Inner == "" {
+				badRequest = `{"error":"wrap requires inner"}`
+			} else {
+				opErr = installer.InstallStatuslineWrap(pdxPath, req.Inner)
+			}
+		default:
+			badRequest = `{"error":"mode must be pdx or wrap"}`
+		}
+	case "remove":
+		opErr = installer.RemoveStatusline()
+		if opErr != nil && strings.Contains(opErr.Error(), "refusing to remove unmanaged") {
+			conflictErr = opErr
+			opErr = nil
+		} else if opErr == nil {
+			// On successful remove: wipe cached snapshots and broadcast a
+			// cleared event so the SPA can drop stale statusline state.
+			// Global clear is intentional for single-host daemon (simplest-
+			// possible approach); the empty session code is the existing
+			// codebase convention for cross-session events (see watcher.go
+			// sessions/tmux broadcasts).
+			m.snapshotMu.Lock()
+			m.statusSnapshots = make(map[string]statusSnapshot)
+			m.snapshotMu.Unlock()
+			if m.core != nil {
+				m.core.Events.Broadcast("", "agent.status.cleared", `{"agent_type":"cc"}`)
+			}
+		}
+	default:
+		badRequest = `{"error":"action must be install or remove"}`
+	}
+	statuslineMutex.Unlock()
+
+	switch {
+	case badRequest != "":
+		http.Error(w, badRequest, http.StatusBadRequest)
+		return
+	case conflictErr != nil:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": conflictErr.Error()})
+		return
+	case opErr != nil:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": opErr.Error()})
+		return
+	}
+
+	// Return updated status (mutex released; CheckStatusline is a pure read).
+	m.handleStatuslineStatus(w, r)
+}
+
 // handleHistory handles GET /api/sessions/{code}/history.
 func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
@@ -396,6 +539,81 @@ func (m *Module) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 	alive := m.prober.IsAliveFor(ev.AgentType, tmuxName+":")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"alive": alive})
+}
+
+// statusSnapshot is the in-memory shape cached per sessionCode and broadcast over WS.
+// It is intentionally display-only and not persisted (high-frequency, agent-owned).
+// Lives as a Module field (m.statusSnapshots) guarded by m.snapshotMu.
+type statusSnapshot struct {
+	AgentType string          `json:"agent_type"`
+	Status    json.RawMessage `json:"status"`
+}
+
+// handleAgentStatus handles POST /api/agent/status.
+// Receives statusline payloads from `pdx statusline-proxy` and broadcasts
+// agent.status WS events to subscribers.
+func (m *Module) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		TmuxSession string          `json:"tmux_session"`
+		AgentType   string          `json:"agent_type"`
+		RawStatus   json.RawMessage `json:"raw_status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if payload.AgentType != "cc" {
+		http.Error(w, `{"error":"unsupported agent_type"}`, http.StatusBadRequest)
+		return
+	}
+
+	code := m.resolveSessionCode(payload.TmuxSession)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{}`))
+
+	if code == "" {
+		return
+	}
+
+	snap := statusSnapshot{AgentType: payload.AgentType, Status: payload.RawStatus}
+	m.snapshotMu.Lock()
+	m.statusSnapshots[code] = snap
+	m.snapshotMu.Unlock()
+
+	if m.core != nil {
+		body, _ := json.Marshal(snap)
+		m.core.Events.Broadcast(code, "agent.status", string(body))
+	}
+}
+
+// sendStatuslineSnapshot pushes the cached statusline snapshots to a new
+// WebSocket subscriber. Marshals under RLock, then releases the lock
+// before calling sub.Send — a slow subscriber (full channel) would
+// otherwise block every concurrent agent.status writer through snapshotMu.
+func (m *Module) sendStatuslineSnapshot(sub *core.EventSubscriber) {
+	if m.core == nil {
+		return
+	}
+	m.snapshotMu.RLock()
+	pending := make([][]byte, 0, len(m.statusSnapshots))
+	for code, snap := range m.statusSnapshots {
+		body, err := json.Marshal(snap)
+		if err != nil {
+			continue
+		}
+		event := core.HostEvent{Type: "agent.status", Session: code, Value: string(body)}
+		data, err := json.Marshal(event)
+		if err != nil {
+			continue
+		}
+		pending = append(pending, data)
+	}
+	m.snapshotMu.RUnlock()
+	for _, data := range pending {
+		sub.Send(data)
+	}
 }
 
 // handleDetect handles GET /api/agents/detect.

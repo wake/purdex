@@ -284,8 +284,9 @@ func renderMinimal(raw json.RawMessage) string {
 	if len(parts) == 1 {
 		return parts[0]
 	}
-	out := parts[0]
-	for _, p := range parts[1:] {
+	// "[pdx]" is a label prefix (space-joined); remaining parts bullet-separated.
+	out := parts[0] + " " + parts[1]
+	for _, p := range parts[2:] {
 		out += " · " + p
 	}
 	return out
@@ -695,9 +696,11 @@ func TestDetectStatuslineMode_Wrapped(t *testing.T) {
 }
 
 func TestDetectStatuslineMode_WrappedWithSingleQuoteEscape(t *testing.T) {
-	// Shell: --inner 'it'\''s'   after escape
+	// Shell escape we want to exercise: --inner 'it'\''s'   (POSIX single-quote escape for it's)
+	// In the on-disk JSON the backslash must itself be escaped (`\\`), so the raw-string literal
+	// below writes `'it'\\''s'` which JSON decodes to `'it'\''s'` — then shellwords parses to "it's".
 	path := writeSettings(t, `{
-  "statusLine": {"type": "command", "command": "/x/pdx statusline-proxy --inner 'it'\''s'"}
+  "statusLine": {"type": "command", "command": "/x/pdx statusline-proxy --inner 'it'\\''s'"}
 }`)
 	m, _ := detectStatuslineMode(path)
 	if m.Mode != "wrapped" {
@@ -1035,7 +1038,8 @@ func writeSettingsAtomic(path string, settings map[string]any) error {
 	return nil
 }
 
-func readSettings(path string) (map[string]any, error) {
+// Note: not `readSettings` because hooks_test.go already uses that name as a test helper.
+func loadSettings(path string) (map[string]any, error) {
 	settings := make(map[string]any)
 	data, err := os.ReadFile(path)
 	if err == nil {
@@ -1049,7 +1053,7 @@ func readSettings(path string) (map[string]any, error) {
 }
 
 func installStatuslinePdx(path, pdxPath string) error {
-	settings, err := readSettings(path)
+	settings, err := loadSettings(path)
 	if err != nil {
 		return err
 	}
@@ -1061,7 +1065,7 @@ func installStatuslinePdx(path, pdxPath string) error {
 }
 
 func installStatuslineWrap(path, pdxPath, inner string) error {
-	settings, err := readSettings(path)
+	settings, err := loadSettings(path)
 	if err != nil {
 		return err
 	}
@@ -1077,7 +1081,7 @@ func removeStatusline(path string) error {
 	if err != nil {
 		return err
 	}
-	settings, err := readSettings(path)
+	settings, err := loadSettings(path)
 	if err != nil {
 		return err
 	}
@@ -1219,7 +1223,7 @@ func TestHandleStatuslineStatus_CC(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
-	var body cc.StatuslineState
+	var body agent.StatuslineState
 	_ = json.NewDecoder(resp.Body).Decode(&body)
 	if body.Mode == "" {
 		t.Error("empty mode")
@@ -1245,7 +1249,7 @@ func (m *Module) handleStatuslineStatus(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, `{"error":"unknown agent"}`, http.StatusNotFound)
 		return
 	}
-	installer, ok := provider.(cc.StatuslineInstaller)
+	installer, ok := provider.(agent.StatuslineInstaller)
 	if !ok {
 		http.Error(w, `{"error":"agent does not support statusline"}`, http.StatusNotFound)
 		return
@@ -1363,7 +1367,7 @@ func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"unknown agent"}`, http.StatusNotFound)
 		return
 	}
-	installer, ok := provider.(cc.StatuslineInstaller)
+	installer, ok := provider.(agent.StatuslineInstaller)
 	if !ok {
 		http.Error(w, `{"error":"agent does not support statusline"}`, http.StatusNotFound)
 		return

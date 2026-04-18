@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -503,6 +505,61 @@ func TestActivityWatch_YellowLightRecovery(t *testing.T) {
 	}
 }
 
+// --- Task 9: GET /api/agent/{agent}/statusline/status ---
+
+func TestHandleStatuslineStatus_UnknownAgent(t *testing.T) {
+	m := newTestModule(t)
+	// No provider registered — expect 404 "unknown agent"
+	req := httptest.NewRequest("GET", "/api/agent/cc/statusline/status", nil)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+	m.handleStatuslineStatus(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleStatuslineStatus_UnsupportedAgent(t *testing.T) {
+	m := newTestModule(t)
+	// Path value other than "cc" should be rejected before registry lookup.
+	req := httptest.NewRequest("GET", "/api/agent/codex/statusline/status", nil)
+	req.SetPathValue("agent", "codex")
+	w := httptest.NewRecorder()
+	m.handleStatuslineStatus(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleStatuslineStatus_CC_Registered(t *testing.T) {
+	m := newTestModule(t)
+	// Real CC provider with nil deps — CheckStatusline only uses ccSettingsPath
+	// + detectStatuslineMode, neither of which need prober/tmux/cfg.
+	ccProvider := agentcc.NewProvider(nil, nil, nil, nil)
+	m.registry.Register(ccProvider)
+
+	req := httptest.NewRequest("GET", "/api/agent/cc/statusline/status", nil)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+	m.handleStatuslineStatus(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s)", w.Code, w.Body.String())
+	}
+	var body agentpkg.StatuslineState
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.SettingsPath == "" {
+		t.Errorf("expected settingsPath to be populated")
+	}
+	// Mode depends on host env (CC may or may not be installed). Just assert a valid value.
+	switch body.Mode {
+	case "none", "pdx", "wrapped", "unmanaged":
+	default:
+		t.Errorf("unexpected mode: %q", body.Mode)
+	}
+}
+
 func TestActivityWatch_HookEventSupersedes(t *testing.T) {
 	m := newTestModule(t)
 
@@ -551,5 +608,313 @@ func TestActivityWatch_HookEventSupersedes(t *testing.T) {
 	}
 	if status != agentpkg.StatusRunning {
 		t.Fatalf("expected running after UserPromptSubmit, got %s", status)
+	}
+}
+
+// --- Task 10: POST /api/agent/{agent}/statusline/setup ---
+
+func TestHandleStatuslineSetup_InstallPdx(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+
+	body := strings.NewReader(`{"action":"install","mode":"pdx"}`)
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", body)
+	req.SetPathValue("agent", "cc")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleStatuslineSetup(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body: %s", w.Code, w.Body.String())
+	}
+	data, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if !strings.Contains(string(data), "statusline-proxy") {
+		t.Errorf("settings.json did not install statusline-proxy: %s", data)
+	}
+}
+
+func TestHandleStatuslineSetup_InstallWrap(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+
+	body := strings.NewReader(`{"action":"install","mode":"wrap","inner":"ccstatusline --format compact"}`)
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", body)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+
+	m.handleStatuslineSetup(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body: %s", w.Code, w.Body.String())
+	}
+	data, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if !strings.Contains(string(data), "--inner 'ccstatusline --format compact'") {
+		t.Errorf("wrap inner not properly embedded: %s", data)
+	}
+}
+
+func TestHandleStatuslineSetup_InstallWrapMissingInner(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+
+	body := strings.NewReader(`{"action":"install","mode":"wrap"}`)
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", body)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+
+	m.handleStatuslineSetup(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status %d, want 400", w.Code)
+	}
+}
+
+func TestHandleStatuslineSetup_RemoveUnmanagedRefused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Pre-populate with unmanaged statusLine
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"),
+		[]byte(`{"statusLine":{"type":"command","command":"ccstatusline"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+
+	body := strings.NewReader(`{"action":"remove"}`)
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", body)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+
+	m.handleStatuslineSetup(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("status %d, want 409", w.Code)
+	}
+}
+
+func TestHandleStatuslineSetup_BadAction(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+
+	body := strings.NewReader(`{"action":"uninstall"}`)
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", body)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+
+	m.handleStatuslineSetup(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status %d, want 400", w.Code)
+	}
+}
+
+// --- Task 11: POST /api/agent/status ---
+
+func TestHandleAgentStatus_BroadcastsOnSessionMatch(t *testing.T) {
+	m := newTestModule(t)
+	fake := tmux.NewFakeExecutor()
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Name: "sess1", Code: "code-1"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	body := `{"tmux_session":"sess1","agent_type":"cc","raw_status":{"model":{"display_name":"Sonnet"}}}`
+	req := httptest.NewRequest("POST", "/api/agent/status", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleAgentStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body: %s", w.Code, w.Body.String())
+	}
+	// Drain the broadcast channel — expect exactly one agent.status event for code-1.
+	select {
+	case msg := <-sub.SendCh():
+		var env struct {
+			Type    string `json:"type"`
+			Session string `json:"session"`
+			Value   string `json:"value"`
+		}
+		if err := json.Unmarshal(msg, &env); err != nil {
+			t.Fatalf("unmarshal broadcast: %v", err)
+		}
+		if env.Type != "agent.status" {
+			t.Errorf("broadcast type = %q, want agent.status", env.Type)
+		}
+		if env.Session != "code-1" {
+			t.Errorf("broadcast session = %q, want code-1", env.Session)
+		}
+		// Value should be a JSON-encoded statusSnapshot with agent_type + status.
+		if !strings.Contains(env.Value, `"agent_type":"cc"`) {
+			t.Errorf("broadcast value missing agent_type: %s", env.Value)
+		}
+		if !strings.Contains(env.Value, `"display_name":"Sonnet"`) {
+			t.Errorf("broadcast value missing raw_status: %s", env.Value)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("timed out waiting for broadcast")
+	}
+}
+
+func TestHandleAgentStatus_NoBroadcastOnUnknownSession(t *testing.T) {
+	m := newTestModule(t)
+	fake := tmux.NewFakeExecutor()
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	body := `{"tmux_session":"unknown","agent_type":"cc","raw_status":{}}`
+	req := httptest.NewRequest("POST", "/api/agent/status", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	m.handleAgentStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status %d, want 200", w.Code)
+	}
+	// No broadcast: channel should stay empty for a brief window.
+	select {
+	case msg := <-sub.SendCh():
+		t.Errorf("unexpected broadcast: %s", msg)
+	case <-time.After(50 * time.Millisecond):
+		// expected
+	}
+}
+
+func TestHandleAgentStatus_BadAgentType(t *testing.T) {
+	m := newTestModule(t)
+	body := `{"tmux_session":"x","agent_type":"codex","raw_status":{}}`
+	req := httptest.NewRequest("POST", "/api/agent/status", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	m.handleAgentStatus(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status %d, want 400", w.Code)
+	}
+}
+
+// --- Task 12: statusline snapshot replay + cleared broadcast ---
+
+func TestSendStatuslineSnapshot_ReplaysToSubscriber(t *testing.T) {
+	m := newTestModule(t)
+	m.snapshotMu.Lock()
+	m.statusSnapshots = map[string]statusSnapshot{
+		"code-a": {AgentType: "cc", Status: json.RawMessage(`{"model":{"display_name":"A"}}`)},
+		"code-b": {AgentType: "cc", Status: json.RawMessage(`{"model":{"display_name":"B"}}`)},
+	}
+	m.snapshotMu.Unlock()
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: tmux.NewFakeExecutor()}
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	m.sendStatuslineSnapshot(sub)
+
+	// Read both expected replays (order not guaranteed — maps).
+	seen := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		select {
+		case msg := <-sub.SendCh():
+			var env struct {
+				Type    string `json:"type"`
+				Session string `json:"session"`
+				Value   string `json:"value"`
+			}
+			if err := json.Unmarshal(msg, &env); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if env.Type != "agent.status" {
+				t.Errorf("type = %q, want agent.status", env.Type)
+			}
+			seen[env.Session] = true
+		case <-time.After(100 * time.Millisecond):
+			t.Fatalf("timed out after %d events", i)
+		}
+	}
+	if !seen["code-a"] || !seen["code-b"] {
+		t.Errorf("missing replay; seen=%v", seen)
+	}
+}
+
+func TestHandleStatuslineSetup_RemoveBroadcastsCleared(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Seed settings.json with a pdx-mode statusline (so remove succeeds, not refused).
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"),
+		[]byte(`{"statusLine":{"type":"command","command":"/opt/bin/pdx statusline-proxy"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: tmux.NewFakeExecutor()}
+	// Seed a cached snapshot so we can assert it gets cleared.
+	m.snapshotMu.Lock()
+	m.statusSnapshots = map[string]statusSnapshot{"code-x": {AgentType: "cc", Status: json.RawMessage(`{}`)}}
+	m.snapshotMu.Unlock()
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	body := strings.NewReader(`{"action":"remove"}`)
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", body)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+
+	m.handleStatuslineSetup(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// Check: statusSnapshots cleared.
+	m.snapshotMu.RLock()
+	n := len(m.statusSnapshots)
+	m.snapshotMu.RUnlock()
+	if n != 0 {
+		t.Errorf("snapshot map size = %d, want 0", n)
+	}
+
+	// Check: agent.status.cleared was broadcast. Drain up to 1 event.
+	foundCleared := false
+	for i := 0; i < 3; i++ {
+		select {
+		case msg := <-sub.SendCh():
+			var env struct {
+				Type string `json:"type"`
+			}
+			_ = json.Unmarshal(msg, &env)
+			if env.Type == "agent.status.cleared" {
+				foundCleared = true
+			}
+		case <-time.After(50 * time.Millisecond):
+			i = 3 // break
+		}
+	}
+	if !foundCleared {
+		t.Error("agent.status.cleared broadcast not seen")
 	}
 }
