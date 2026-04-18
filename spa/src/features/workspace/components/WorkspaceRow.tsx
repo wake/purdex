@@ -80,7 +80,13 @@ export function WorkspaceRow(props: Props) {
       >
         <button
           type="button"
-          onClick={() => onSelectWorkspace(workspace.id)}
+          onClick={() => {
+            if (isActive && showTabs) {
+              toggleExpanded(workspace.id)
+            } else {
+              onSelectWorkspace(workspace.id)
+            }
+          }}
           onPointerDown={(e) => e.stopPropagation()}
           onContextMenu={(e) => {
             e.preventDefault()

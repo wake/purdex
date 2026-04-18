@@ -56,6 +56,25 @@ describe('workspace tab recall', () => {
     act(() => { result.current.handleSelectWorkspace(ws.id) })
     expect(useTabStore.getState().activeTabId).toBe(tab2.id)
   })
+
+  it('clears activeTab when selecting an empty workspace from a standalone tab', () => {
+    // Standalone tab (not in any workspace) is active (Home visually).
+    const standalone = createTab({ kind: 'dashboard' })
+    useTabStore.getState().addTab(standalone)
+    useTabStore.getState().setActiveTab(standalone.id)
+
+    // Empty workspace.
+    const emptyWs = useWorkspaceStore.getState().addWorkspace('Empty')
+
+    const { result } = renderHook(() => useTabWorkspaceActions([standalone]))
+
+    act(() => { result.current.handleSelectWorkspace(emptyWs.id) })
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(emptyWs.id)
+    // Must drop the standalone tab so isStandaloneTab-derived `activeStandaloneTabId`
+    // stops masking the workspace selection in ActivityBar's `isActive` logic.
+    expect(useTabStore.getState().activeTabId).toBeNull()
+  })
 })
 
 describe('openSingletonAndSelect', () => {

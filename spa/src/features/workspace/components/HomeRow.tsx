@@ -58,7 +58,13 @@ export function HomeRow(props: Props) {
       >
         <button
           type="button"
-          onClick={onSelectHome}
+          onClick={() => {
+            if (isActive && showTabs) {
+              toggleExpanded(HOME_WS_KEY)
+            } else {
+              onSelectHome()
+            }
+          }}
           className="flex-1 flex items-center gap-2 py-1.5 text-left cursor-pointer focus:outline-none"
         >
           <img
