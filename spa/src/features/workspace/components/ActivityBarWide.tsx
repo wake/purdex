@@ -337,7 +337,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
           </button>
         </div>
       </div>
-      <div data-testid="activity-bar-resize" className="hidden lg:block">
+      <div data-testid="activity-bar-resize" className="hidden lg:flex">
         <RegionResize
           resizeEdge="right"
           onResize={(delta) => {
