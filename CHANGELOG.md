@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.169] - 2026-04-18
+
+### Fixes / UI: tab/workspace 對齊與對比微調 (#448)
+
+- **Tab icon 對齊**：badge mode wrapper `ml-px` → `ml-[3px]`，補償 Phosphor robot glyph 在 viewbox 中略偏左的視覺偏移，與 terminal icon 對齊；同時為 subagent dots 預留更多左側空間（`TabIcon` / `renderInlineTabIcon`）。
+- **Workspace header 按鈕對齊 InlineTab close**：row 加 `pr-1.5`；`+` 與 chevron 都改 12px icon + `p-0.5`，移除 `+` 的 `weight="bold"` 與 chevron 的 `mr-0.5`，並補上 `hover:text-text-primary`，三者視覺與位置一致。
+- **Unread 燈號亮度**：`#b91c1c` (red-700) → `#ef4444` (red-500)，比照 running 與 error 級別亮度；影響 `TabIcon` UnreadPip / `TabStatusIndicator` UNREAD_COLOR / `SortableTab` 與 `InlineTab` 角落 pip / `renderInlineTabIcon` UNREAD_PIP。
+- **StatusBar host 名稱**：`onClick` → `onDoubleClick`，避免單擊誤開主機設定頁；`status.open_host_hint` zh-TW/en 文案改為「雙擊」。
+
 ## [1.0.0-alpha.168] - 2026-04-18
 
 ### Refactor: `useTabDisplay` hook 收斂 tab 顯示邏輯 (#447)

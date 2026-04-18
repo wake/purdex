@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "purdex",
-  "version": "1.0.0-alpha.168",
+  "version": "1.0.0-alpha.169",
   "main": "out/main/index.mjs",
   "scripts": {
     "electron:dev": "electron-vite dev",
