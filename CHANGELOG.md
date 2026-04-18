@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.183] - 2026-04-19
+
+### Feat: CC statusline installer — wrapper + daemon endpoints（PR-1a，#464）
+
+- 新增 `pdx statusline-proxy` subcommand：讀 stdin JSON、render 預設 `[pdx]` 或透過 `--inner` exec 原 CC statusLine 指令、同步 POST 狀態到 daemon（2s timeout，靜默失敗）。`resolveDaemonHost` 把 `0.0.0.0`/`::`/空字串重寫為 `127.0.0.1`，避免 daemon bind 萬用位址時 proxy 無法連線。
+- `internal/agent/cc`：`StatuslineInstaller` interface 實作，install / remove 對 `~/.claude/settings.json` 做 atomic write（保留 file mode、tmp-leak-safe），shell-quote round-trip（pdxPath、inner 皆單引號包覆），mode 偵測（none / pdx / wrapped / unmanaged）用 `go-shellwords` 解析；remove 拒絕 unmanaged 以 409 回報。
+- `internal/module/agent`：`GET/POST /api/agent/{agent}/statusline/setup` + `GET /api/agent/{agent}/statusline/status` + `POST /api/agent/status`（收 proxy POST）+ WS `agent.status` snapshot replay on subscribe + `agent.status.cleared` broadcast on remove。`statuslineMutex` 序列化 RMW 並於 HTTP 回應前釋放；`statusSnapshots` 狀態掛在 `Module` struct（非 package global）。
+- 兩輪 review + 5 個 pre-merge fix：round-1（5-angle）修 `pdxPath` shell-quote；round-2（attacker / defender / file-size）修 `bind=0.0.0.0` 靜默失敗、`os.Exit(0)` 一致性、`statuslineMutex` 包住 HTTP response、snapshot 狀態搬進 `Module`、`snapshotMu` 在 WS `sub.Send` 前釋放。
+- 測試：Go ~50 tests（proxy render / shellwords / install / remove / WS snapshot / handler）全綠。
+
+### Follow-up issues
+
+- #465 Statusline handler 硬編碼 `agentType != "cc"` guard（Codex 擴展時需統一為 registry + interface assertion）
+- #466 `removeStatusline` 雙重讀取 `settings.json` 存在 TOCTOU（可靜默刪除使用者 unmanaged 設定）
+- #468 `hooks.go` 與 `statusline.go` 的 `settings.json` 讀/寫流程重複（hooks 那份缺 file mode 保留）
+- #469 `handler.go` 641 行 / 5 職責，PR-1c 前建議拆分 `handler_statusline.go` / `handler_hooks.go`
+
 ## [1.0.0-alpha.182] - 2026-04-19
 
 ### Feat: terminal link registry — matcher/opener plugin architecture（#458）
