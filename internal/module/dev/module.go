@@ -149,6 +149,9 @@ func (m *DevModule) defaultBuild(session *BuildSession) error {
 }
 
 func (m *DevModule) RegisterRoutes(mux *http.ServeMux) {
+	if os.Getenv("PDX_DEV_UPDATE") != "1" {
+		return
+	}
 	mux.HandleFunc("GET /api/dev/update/check", m.handleCheck)
 	mux.HandleFunc("GET /api/dev/update/check/stream", m.handleCheckStream)
 	mux.HandleFunc("GET /api/dev/update/download", m.handleDownload)

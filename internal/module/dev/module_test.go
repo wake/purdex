@@ -3,6 +3,8 @@ package dev
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -169,5 +171,48 @@ func TestDefaultBuild_WrapsStepErrorWithLabel(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exit status 1") {
 		t.Fatalf("error: want wrapped exit status, got %q", err.Error())
+	}
+}
+
+func TestRegisterRoutes_DisabledByDefault(t *testing.T) {
+	t.Setenv("PDX_DEV_UPDATE", "")
+	m := &DevModule{}
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/dev/update/check", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status: want 404, got %d", w.Code)
+	}
+}
+
+func TestRegisterRoutes_EnabledWithEnv(t *testing.T) {
+	t.Setenv("PDX_DEV_UPDATE", "1")
+	m := &DevModule{}
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/dev/update/check", nil)
+	w := httptest.NewRecorder()
+
+	// The handler may panic due to nil hashFn (m.core is nil), which is
+	// acceptable. A panic means the route was matched and the handler invoked;
+	// that alone proves registration. A true 404 (no route) would come from
+	// the mux itself, before the handler is called.
+	panicked := false
+	func() {
+		defer func() {
+			if recover() != nil {
+				panicked = true
+			}
+		}()
+		mux.ServeHTTP(w, req)
+	}()
+
+	if !panicked && w.Code == http.StatusNotFound {
+		t.Errorf("status: want non-404 (route registered), got 404")
 	}
 }
