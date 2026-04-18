@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.167] - 2026-04-18
+
+### UI: TitleBar 搬家 + 視窗按鈕置中 (#446)
+
+- **CollapseButton 移至 TitleBar 左側**：從 ActivityBarWide 的 header-right 與 ActivityBarNarrow 的 divider 下架，改到 TitleBar 左邊、macOS 72px traffic-light 保留區之後的 `sidebar-toggle` 槽（Claude.ai 風格）。
+- **Topbar variant 樣式統一**：`p-1 rounded` + 14px icon + `hover:bg-surface-hover`，和 region-toggle / layout-pattern 按鈕同一個視覺 family。
+- **TitleBar 高度 30 → 36**：讓 macOS traffic-light 上下置中（y=12 + 6 = 18 ↔ 36/2 = 18）。
+- **副作用修正**：按鈕從 ActivityBar 內部（被 DndContext 包的 scrollable 區域）搬出後，先前「展開狀態下按鈕失效」的 bug 一併解決。
+
 ## [1.0.0-alpha.166] - 2026-04-18
 
 ### Fixes / UI (#445)
