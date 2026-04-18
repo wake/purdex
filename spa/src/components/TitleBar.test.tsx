@@ -101,6 +101,31 @@ describe('TitleBar — sync conflict warning', () => {
     expect(btn.getAttribute('title')).toMatch(/1/)
   })
 
+  it('plural: tooltip uses singular for 1 conflict', () => {
+    const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setPendingConflicts(
+      [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
+      bundle,
+    )
+    render(<TitleBar title="test" />)
+    const btn = screen.getByLabelText(/sync conflict|同步衝突/i)
+    expect(btn.getAttribute('title')).toMatch(/^1 sync conflict pending$/)
+  })
+
+  it('plural: tooltip uses plural for >1 conflicts', () => {
+    const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setPendingConflicts(
+      [
+        { contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } },
+        { contributor: 'layout', field: 'tabPos', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } },
+      ],
+      bundle,
+    )
+    render(<TitleBar title="test" />)
+    const btn = screen.getByLabelText(/sync conflict|同步衝突/i)
+    expect(btn.getAttribute('title')).toMatch(/^2 sync conflicts pending$/)
+  })
+
   it('clicking icon navigates to /settings/sync', () => {
     const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
     useSyncStore.getState().setPendingConflicts(

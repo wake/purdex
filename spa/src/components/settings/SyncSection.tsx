@@ -17,6 +17,7 @@ import { createDaemonProvider } from '../../lib/sync/providers/daemon-provider'
 import { applyImport, syncNow, type SyncActionResult } from '../../lib/sync/sync-actions'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { pluralKey } from '../../lib/plural'
 
 type ProviderId = 'off' | 'daemon' | 'file'
 
@@ -88,9 +89,10 @@ export function SyncSection() {
   const statusFromResult = (result: SyncActionResult, okMessage: string): Status => {
     if (result.kind === 'ok') return { tone: 'success', message: okMessage }
     if (result.kind === 'conflicts') {
+      const n = result.conflicts.length
       return {
         tone: 'warn',
-        message: t('settings.sync.status.conflictsPending', { count: result.conflicts.length }),
+        message: t(pluralKey('settings.sync.status.conflictsPending', n), { count: n }),
       }
     }
     return { tone: 'error', message: result.error }
@@ -202,7 +204,7 @@ export function SyncSection() {
     syncEngine.resolveConflicts(pendingRemoteBundle, pendingConflicts, resolved)
     setLastSyncedBundle(pendingRemoteBundle)
     clearPendingConflicts()
-    setStatus({ tone: 'success', message: t('settings.sync.conflict.resolved', { count }) })
+    setStatus({ tone: 'success', message: t(pluralKey('settings.sync.conflict.resolved', count), { count }) })
   }
 
   return (

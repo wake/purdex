@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Warning, X } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { pluralKey } from '../../lib/plural'
 import type { ConflictItem, SyncBundle, ResolvedFields } from '../../lib/sync/types'
 
 interface Props {
@@ -60,7 +61,7 @@ export function SyncConflictBanner({ conflicts, remoteBundle, pendingAt, onResol
       <div className="mb-4 rounded border border-yellow-500/40 bg-yellow-500/10 text-xs text-text-primary">
         <div className="flex items-center gap-2 px-3 py-2">
           <Warning size={14} className="text-yellow-500 shrink-0" />
-          <span className="flex-1">{t('settings.sync.conflict.banner', { count: total })}</span>
+          <span className="flex-1">{t(pluralKey('settings.sync.conflict.banner', total), { count: total })}</span>
           <button
             className="px-2 py-1 rounded text-yellow-600 hover:bg-yellow-500/20"
             onClick={() => setExpanded(true)}
@@ -81,7 +82,7 @@ export function SyncConflictBanner({ conflicts, remoteBundle, pendingAt, onResol
     <div className="mb-4 rounded border border-yellow-500/40 bg-yellow-500/5 text-xs text-text-primary">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-yellow-500/30">
         <Warning size={14} className="text-yellow-500 shrink-0" />
-        <span className="flex-1">{t('settings.sync.conflict.banner', { count: total })}</span>
+        <span className="flex-1">{t(pluralKey('settings.sync.conflict.banner', total), { count: total })}</span>
         <button
           className="p-1 rounded hover:bg-yellow-500/10"
           onClick={() => setExpanded(false)}

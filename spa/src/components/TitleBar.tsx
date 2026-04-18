@@ -4,6 +4,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useLayoutStore } from '../stores/useLayoutStore'
 import { useSyncStore } from '../lib/sync/use-sync-store'
 import { useI18nStore } from '../stores/useI18nStore'
+import { pluralKey } from '../lib/plural'
 import type { LayoutPattern } from '../types/tab'
 import type { SidebarRegion } from '../types/layout'
 import { CollapseButton } from '../features/workspace/components/CollapseButton'
@@ -46,8 +47,8 @@ export function TitleBar({ title }: Props) {
         <span className="text-xs text-text-secondary truncate max-w-[calc(100%-27rem)]">{title}</span>
         {pendingCount > 0 && (
           <button
-            aria-label={t('settings.sync.conflict.tooltip', { count: pendingCount })}
-            title={t('settings.sync.conflict.tooltip', { count: pendingCount })}
+            aria-label={t(pluralKey('settings.sync.conflict.tooltip', pendingCount), { count: pendingCount })}
+            title={t(pluralKey('settings.sync.conflict.tooltip', pendingCount), { count: pendingCount })}
             className="pointer-events-auto flex items-center shrink-0 cursor-pointer"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             onClick={() => setLocation('/settings/sync')}

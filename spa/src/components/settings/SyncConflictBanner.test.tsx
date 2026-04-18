@@ -143,6 +143,38 @@ describe('SyncConflictBanner', () => {
     expect(screen.getByText(/24.*(hour|小時)/i)).toBeTruthy()
   })
 
+  it('plural: count === 1 uses singular banner form', () => {
+    render(
+      <SyncConflictBanner
+        conflicts={[mkConflict('prefs', 'theme', 'dark', 'light')]}
+        remoteBundle={makeBundle()}
+        pendingAt={Date.now()}
+        onResolve={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    )
+    // "⚠ 1 field conflict" — note: no trailing 's'
+    expect(screen.getByText(/1 field conflict$/)).toBeTruthy()
+    expect(screen.queryByText(/conflicts/)).toBeNull()
+  })
+
+  it('plural: count > 1 uses plural banner form', () => {
+    const conflicts = [
+      mkConflict('prefs', 'theme', 'dark', 'light'),
+      mkConflict('layout', 'tabPos', 'top', 'bottom'),
+    ]
+    render(
+      <SyncConflictBanner
+        conflicts={conflicts}
+        remoteBundle={makeBundle()}
+        pendingAt={Date.now()}
+        onResolve={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    )
+    expect(screen.getByText(/2 field conflicts/)).toBeTruthy()
+  })
+
   it('collision: two rows with same field name flatten to one entry (later wins)', () => {
     const conflicts = [
       mkConflict('prefs', 'theme', 'dark', 'light'),
