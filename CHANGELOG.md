@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.168] - 2026-04-18
+
+### Refactor: `useTabDisplay` hook 收斂 tab 顯示邏輯 (#447)
+
+- **新 hook `useTabDisplay`**：把原本在 `SortableTab`（top TabBar）與 `InlineTab`（activity bar）各寫一次的 OSC title 解析、agent icon fallback、host offline 判定、agent store 訂閱集中到同一處，兩個 surface 從此共用一份顯示邏輯，未來加 badge / indicator 只需改 hook 一處。
+- **InlineTabList 不再計算 title**：原本用跨 host flat session lookup（同 code 不同 host 會標到錯的 session 名），改由 hook 用每個 tab 自己的 `hostId` 做 per-host 查詢 — 順手修掉多 host 命名碰撞的 pre-existing bug。
+- **InlineTab `aria-label` 改用 `displayTitle`**：OSC 啟動時螢幕閱讀器讀到的是目前顯示的標題，與視覺一致。
+- **砍 `iconMap` prop**：hook 內部從 `ICON_MAP` 解析 pane icon，`TabBar` / `SortableTab` 不再互傳。
+- 淨效果：相較 alpha.167，`SortableTab` / `InlineTab` / `InlineTabList` 合計減 130+ 行重複邏輯；新增 155 行 hook 測試涵蓋 label / OSC / per-host 隔離 / host offline / agent 欄位。
+
 ## [1.0.0-alpha.167] - 2026-04-18
 
 ### UI: TitleBar 搬家 + 視窗按鈕置中 (#446)
