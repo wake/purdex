@@ -13,6 +13,21 @@
 - **Fix #396**: `importFromText` enforces 5 MB size + 32 depth limits via typed `ImportError`, surfaced as friendly i18n messages.
 - **State**: `useSyncStore` persists `pendingConflicts` / `pendingRemoteBundle` / `pendingConflictsAt` across sessions.
 
+### Round-2 review fixes
+
+- **resolveConflicts push** (R2-A4): `handleResolveConflicts` now pushes the merged bundle back to the daemon provider after a successful resolve, preventing other devices from seeing ghost conflicts on their next pull.
+- **pendingRemoteBundle trim** (R1-#2): `setPendingConflicts` keeps only the collections for contributors that actually have conflicts, capping localStorage footprint (`resolveConflicts` never reads the rest).
+- **Provider-change race guard** (R2-A6): `handleSyncNow` and `handleFileChange` snapshot `activeProviderId` before their awaits and drop stale results if the user swapped provider mid-flight.
+- **TitleBar predicate alignment** (R1-#3): warning icon now matches `SyncSection` banner's full render guard (`provider !== null && remoteBundle && pendingConflictsAt`) so clicking the icon never leads to a banner-less settings page.
+- **Settings URL self-heal** (R2-A7): `/settings/<bad>` or `/settings/foo/extra` are replaced with the canonical `/settings/<active>` so back/forward history never preserves garbage URLs.
+- **Plural-safe i18n** (R2-A5): 4 count-sensitive keys (`conflict.banner`, `conflict.tooltip`, `conflict.resolved`, `status.conflictsPending`) split into `_one` / `_other` variants via new `pluralKey` helper; English singular stops rendering "1 conflicts".
+
+### Tracked separately (review follow-ups)
+
+- Engine `ResolvedFields` compound-key refactor → #440
+- `formatRelativeTime` live tick → #441
+- `SyncSection.tsx` split (useSyncActions hook + StatusLine) → #442
+
 ### Deferred / tracked separately
 
 - Daemon Pairing UI → gh #421 (Phase P2)
