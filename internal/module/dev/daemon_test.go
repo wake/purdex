@@ -72,9 +72,9 @@ func TestHandleDaemonRebuild_BuildsInTempRepo(t *testing.T) {
 	if !strings.Contains(got, "data: ") {
 		t.Errorf("expected SSE framing, got:\n%s", got)
 	}
-	// New binary should exist.
-	if _, err := os.Stat(filepath.Join(dir, "bin", "pdx.new")); err != nil {
-		t.Errorf("pdx.new not produced: %v", err)
+	// After Task 5: rename succeeded, so bin/pdx should exist (pdx.new is gone).
+	if _, err := os.Stat(filepath.Join(dir, "bin", "pdx")); err != nil {
+		t.Errorf("bin/pdx not present after rename: %v", err)
 	}
 }
 
@@ -111,6 +111,47 @@ func TestHandleDaemonRebuild_BuildFailureEmitsError(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, `"type":"error"`) {
 		t.Errorf("expected error event, got:\n%s", body)
+	}
+}
+
+func TestHandleDaemonRebuild_RenameFailureEmitsError(t *testing.T) {
+	t.Setenv("PDX_DEV_UPDATE", "1")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "cmd", "pdx"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cmd", "pdx", "main.go"), []byte("package main\nfunc main(){}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Make bin/pdx a non-empty directory so rename(file -> dir) fails.
+	if err := os.MkdirAll(filepath.Join(dir, "bin", "pdx"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "pdx", "blocker"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &DevModule{repoRoot: dir}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/dev/daemon/rebuild", m.handleDaemonRebuild)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/dev/daemon/rebuild", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	got := string(body)
+	if !strings.Contains(got, `"type":"error"`) {
+		t.Errorf("expected error event after rename failure, got:\n%s", got)
+	}
+	if !strings.Contains(got, "rename failed") {
+		t.Errorf("expected rename-failed message, got:\n%s", got)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/wake/purdex/internal/core"
@@ -32,6 +33,10 @@ type DevModule struct {
 	lastFailedElectron string
 	stopCtx            context.Context
 	stopCancel         context.CancelFunc
+	// execSelf can be overridden in tests to prevent syscall.Exec from
+	// replacing the test process. Nil means skip exec (test-safe default).
+	// Set to syscall.Exec by Init for production use.
+	execSelf func(argv0 string, argv []string, envv []string) error
 }
 
 func New(repoRoot string) *DevModule {
@@ -56,6 +61,9 @@ func (m *DevModule) Init(c *core.Core) error {
 	}
 	if m.buildCmd == nil {
 		m.buildCmd = m.defaultBuild
+	}
+	if m.execSelf == nil {
+		m.execSelf = syscall.Exec
 	}
 	return nil
 }

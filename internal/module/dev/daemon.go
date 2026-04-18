@@ -30,7 +30,7 @@ type daemonCheckResponse struct {
 }
 
 type daemonRebuildEvent struct {
-	Type    string `json:"type"` // "log" | "error" | "success"
+	Type    string `json:"type"` // "log" | "error" | "success" | "restarting"
 	Line    string `json:"line,omitempty"`
 	Message string `json:"message,omitempty"`
 	NewHash string `json:"new_hash,omitempty"`
@@ -123,7 +123,30 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	}
 	writeEvent(daemonRebuildEvent{Type: "success", NewHash: newHash})
 
-	// TODO Task 5: atomic rename + syscall.Exec self
+	// Atomic swap: bin/pdx.new -> bin/pdx
+	finalPath := filepath.Join(binDir, "pdx")
+	if err := os.Rename(newPath, finalPath); err != nil {
+		writeEvent(daemonRebuildEvent{Type: "error", Message: "rename failed: " + err.Error()})
+		return
+	}
+
+	writeEvent(daemonRebuildEvent{Type: "restarting"})
+	// Give SSE a moment to flush to the client before we vanish into Exec.
+	time.Sleep(200 * time.Millisecond)
+
+	self, err := os.Executable()
+	if err != nil {
+		writeEvent(daemonRebuildEvent{Type: "error", Message: "Executable: " + err.Error()})
+		return
+	}
+	// execSelf replaces this process; the function only returns on failure.
+	// In tests execSelf is nil (DevModule constructed directly without Init),
+	// so we skip exec entirely — safe, no risk of replacing the test binary.
+	if m.execSelf != nil {
+		if err := m.execSelf(self, os.Args, os.Environ()); err != nil {
+			writeEvent(daemonRebuildEvent{Type: "error", Message: "exec: " + err.Error()})
+		}
+	}
 }
 
 func (m *DevModule) handleDaemonCheck(w http.ResponseWriter, _ *http.Request) {
