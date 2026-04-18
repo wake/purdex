@@ -127,6 +127,35 @@ describe('CollapseButton — topbar variant active state', () => {
     expect(btn.className).toMatch(/\bp-1\b/)
     expect(btn.className).toMatch(/\brounded\b/)
   })
+
+  it('matches region-toggle structure: no flex centering classes', () => {
+    // Region toggles in TitleBar don't use `flex items-center justify-center`;
+    // the svg centers naturally. Keeping the class list identical avoids subtle
+    // layout drift between (a) and (b) buttons.
+    render(<CollapseButton variant="topbar" />)
+    const btn = screen.getByRole('button')
+    expect(btn.className).not.toMatch(/\bflex\b/)
+    expect(btn.className).not.toMatch(/\bitems-center\b/)
+    expect(btn.className).not.toMatch(/\bjustify-center\b/)
+  })
+})
+
+describe('CollapseButton — other variants keep flex centering', () => {
+  it('header-right still uses flex centering (w-6 h-6 needs explicit center)', () => {
+    render(<CollapseButton variant="header-right" />)
+    const btn = screen.getByRole('button')
+    expect(btn.className).toMatch(/\bflex\b/)
+    expect(btn.className).toMatch(/\bitems-center\b/)
+    expect(btn.className).toMatch(/\bjustify-center\b/)
+  })
+
+  it('divider still uses flex centering', () => {
+    render(<CollapseButton variant="divider" />)
+    const btn = screen.getByRole('button')
+    expect(btn.className).toMatch(/\bflex\b/)
+    expect(btn.className).toMatch(/\bitems-center\b/)
+    expect(btn.className).toMatch(/\bjustify-center\b/)
+  })
 })
 
 describe('CollapseButton — icon', () => {
