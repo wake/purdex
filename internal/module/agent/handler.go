@@ -9,11 +9,39 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/module/session"
 )
+
+// statuslineMutex serializes concurrent /statusline/setup requests.
+// CC settings.json is a shared resource; atomic rename doesn't protect
+// read-modify-write ordering across simultaneous install/remove calls.
+var statuslineMutex sync.Mutex
+
+// resolveStatuslineInstaller returns the StatuslineInstaller for the agent
+// named by the request path variable "agent", or writes a 404 JSON error and
+// returns (nil, false). Used by both /statusline/status and /statusline/setup.
+func (m *Module) resolveStatuslineInstaller(w http.ResponseWriter, r *http.Request) (agentpkg.StatuslineInstaller, bool) {
+	agentType := r.PathValue("agent")
+	if agentType != "cc" {
+		http.Error(w, `{"error":"unsupported agent"}`, http.StatusNotFound)
+		return nil, false
+	}
+	provider, ok := m.registry.Get(agentType)
+	if !ok {
+		http.Error(w, `{"error":"unknown agent"}`, http.StatusNotFound)
+		return nil, false
+	}
+	installer, ok := provider.(agentpkg.StatuslineInstaller)
+	if !ok {
+		http.Error(w, `{"error":"agent does not support statusline"}`, http.StatusNotFound)
+		return nil, false
+	}
+	return installer, true
+}
 
 // EventRequest is the JSON body expected by POST /api/agent/event.
 type EventRequest struct {
@@ -300,19 +328,8 @@ func (m *Module) handleHookSetup(w http.ResponseWriter, r *http.Request) {
 // handleStatuslineStatus handles GET /api/agent/{agent}/statusline/status.
 // Currently only "cc" is supported; other agent types return 404.
 func (m *Module) handleStatuslineStatus(w http.ResponseWriter, r *http.Request) {
-	agentType := r.PathValue("agent")
-	if agentType != "cc" {
-		http.Error(w, `{"error":"unsupported agent"}`, http.StatusNotFound)
-		return
-	}
-	provider, ok := m.registry.Get(agentType)
+	installer, ok := m.resolveStatuslineInstaller(w, r)
 	if !ok {
-		http.Error(w, `{"error":"unknown agent"}`, http.StatusNotFound)
-		return
-	}
-	installer, ok := provider.(agentpkg.StatuslineInstaller)
-	if !ok {
-		http.Error(w, `{"error":"agent does not support statusline"}`, http.StatusNotFound)
 		return
 	}
 	state, err := installer.CheckStatusline()
@@ -324,6 +341,76 @@ func (m *Module) handleStatuslineStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(state)
+}
+
+// handleStatuslineSetup handles POST /api/agent/{agent}/statusline/setup.
+// Action "install" with mode "pdx" installs the pdx-native statusLine;
+// mode "wrap" installs pdx as a wrapper around the given inner command.
+// Action "remove" removes a pdx-managed statusLine (unmanaged entries are
+// refused with 409 Conflict).
+func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
+	installer, ok := m.resolveStatuslineInstaller(w, r)
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Action string `json:"action"`
+		Mode   string `json:"mode"`
+		Inner  string `json:"inner"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	pdxPath, err := os.Executable()
+	if err != nil {
+		http.Error(w, `{"error":"cannot find pdx binary"}`, http.StatusInternalServerError)
+		return
+	}
+	pdxPath, _ = filepath.EvalSymlinks(pdxPath)
+
+	statuslineMutex.Lock()
+	defer statuslineMutex.Unlock()
+
+	var opErr error
+	switch req.Action {
+	case "install":
+		switch req.Mode {
+		case "pdx":
+			opErr = installer.InstallStatuslinePdx(pdxPath)
+		case "wrap":
+			if req.Inner == "" {
+				http.Error(w, `{"error":"wrap requires inner"}`, http.StatusBadRequest)
+				return
+			}
+			opErr = installer.InstallStatuslineWrap(pdxPath, req.Inner)
+		default:
+			http.Error(w, `{"error":"mode must be pdx or wrap"}`, http.StatusBadRequest)
+			return
+		}
+	case "remove":
+		opErr = installer.RemoveStatusline()
+		if opErr != nil && strings.Contains(opErr.Error(), "refusing to remove unmanaged") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": opErr.Error()})
+			return
+		}
+	default:
+		http.Error(w, `{"error":"action must be install or remove"}`, http.StatusBadRequest)
+		return
+	}
+	if opErr != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": opErr.Error()})
+		return
+	}
+
+	// Return updated status
+	m.handleStatuslineStatus(w, r)
 }
 
 // handleHistory handles GET /api/sessions/{code}/history.

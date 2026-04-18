@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -606,5 +608,119 @@ func TestActivityWatch_HookEventSupersedes(t *testing.T) {
 	}
 	if status != agentpkg.StatusRunning {
 		t.Fatalf("expected running after UserPromptSubmit, got %s", status)
+	}
+}
+
+// --- Task 10: POST /api/agent/{agent}/statusline/setup ---
+
+func TestHandleStatuslineSetup_InstallPdx(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+
+	body := strings.NewReader(`{"action":"install","mode":"pdx"}`)
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", body)
+	req.SetPathValue("agent", "cc")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleStatuslineSetup(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body: %s", w.Code, w.Body.String())
+	}
+	data, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if !strings.Contains(string(data), "statusline-proxy") {
+		t.Errorf("settings.json did not install statusline-proxy: %s", data)
+	}
+}
+
+func TestHandleStatuslineSetup_InstallWrap(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+
+	body := strings.NewReader(`{"action":"install","mode":"wrap","inner":"ccstatusline --format compact"}`)
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", body)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+
+	m.handleStatuslineSetup(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body: %s", w.Code, w.Body.String())
+	}
+	data, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if !strings.Contains(string(data), "--inner 'ccstatusline --format compact'") {
+		t.Errorf("wrap inner not properly embedded: %s", data)
+	}
+}
+
+func TestHandleStatuslineSetup_InstallWrapMissingInner(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+
+	body := strings.NewReader(`{"action":"install","mode":"wrap"}`)
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", body)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+
+	m.handleStatuslineSetup(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status %d, want 400", w.Code)
+	}
+}
+
+func TestHandleStatuslineSetup_RemoveUnmanagedRefused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Pre-populate with unmanaged statusLine
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"),
+		[]byte(`{"statusLine":{"type":"command","command":"ccstatusline"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+
+	body := strings.NewReader(`{"action":"remove"}`)
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", body)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+
+	m.handleStatuslineSetup(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("status %d, want 409", w.Code)
+	}
+}
+
+func TestHandleStatuslineSetup_BadAction(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+
+	body := strings.NewReader(`{"action":"uninstall"}`)
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", body)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+
+	m.handleStatuslineSetup(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status %d, want 400", w.Code)
 	}
 }
