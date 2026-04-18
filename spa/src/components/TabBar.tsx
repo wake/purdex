@@ -6,7 +6,6 @@ import { SortableTab } from './SortableTab'
 import { useScrollOverflow } from '../hooks/useScrollOverflow'
 import type { Tab } from '../types/tab'
 import { useI18nStore } from '../stores/useI18nStore'
-import { ICON_MAP } from './tab-icon-map'
 
 interface Props {
   tabs: Tab[]
@@ -108,7 +107,6 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                       onContextMenu={onContextMenu}
                       onRename={onRenameTab}
                       onHover={setHoveredTabId}
-                      iconMap={ICON_MAP}
                     />
                   </Fragment>
                 ))}
@@ -144,7 +142,6 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                       onContextMenu={onContextMenu}
                       onRename={onRenameTab}
                       onHover={setHoveredTabId}
-                      iconMap={ICON_MAP}
                     />
                   </Fragment>
                 ))}

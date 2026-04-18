@@ -46,7 +46,6 @@ const defaultProps = {
   onClose: vi.fn(),
   onMiddleClick: vi.fn(),
   onContextMenu: vi.fn(),
-  iconMap: {} as Record<string, React.ComponentType<{ size: number; className?: string }>>,
 }
 
 beforeEach(() => {
