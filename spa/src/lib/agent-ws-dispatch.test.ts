@@ -32,6 +32,14 @@ describe('dispatchAgentWsEvent', () => {
     expect(useAgentStore.getState().ccStatus[`${H}:dev`]).toBeUndefined()
   })
 
+  it('agent.status with non-object JSON (null/array/primitive) is ignored', () => {
+    dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: 'null' })
+    dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: '123' })
+    dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: '[1,2,3]' })
+    dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: '"bare"' })
+    expect(useAgentStore.getState().ccStatus[`${H}:dev`]).toBeUndefined()
+  })
+
   it('agent.status.cleared event calls clearHostAgentStatus', () => {
     useAgentStore.getState().setCcStatus(H, 'dev', { session_name: 'stale' })
     dispatchAgentWsEvent(H, { type: 'agent.status.cleared', session: '', value: '{"agent_type":"cc"}' })

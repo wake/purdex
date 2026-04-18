@@ -9,8 +9,10 @@ import { useAgentStore } from '../stores/useAgentStore'
 export function dispatchAgentWsEvent(hostId: string, event: HostEvent): void {
   if (event.type === 'agent.status') {
     try {
-      const parsed = JSON.parse(event.value) as Record<string, unknown>
-      useAgentStore.getState().setCcStatus(hostId, event.session, parsed)
+      const parsed = JSON.parse(event.value)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        useAgentStore.getState().setCcStatus(hostId, event.session, parsed as Record<string, unknown>)
+      }
     } catch { /* ignore malformed payload */ }
     return
   }
