@@ -39,7 +39,7 @@ export function TabIcon({
   isUnread,
 }: Props) {
   const iconBox = (
-    <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[2px]">
+    <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[1.5px] lowdpi:ml-px">
       {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
     </span>
   )
@@ -52,7 +52,7 @@ export function TabIcon({
 
   if (tabIndicatorStyle === 'dot') {
     return (
-      <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[2px]">
+      <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[1.5px] lowdpi:ml-px">
         <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
         {showDotUnreadPip && <UnreadPip />}
         {subagentCount > 0 && <SubagentDots count={subagentCount} />}
@@ -62,7 +62,7 @@ export function TabIcon({
 
   if (tabIndicatorStyle === 'iconDot') {
     return (
-      <span className="relative inline-flex items-center flex-shrink-0 ml-[2px]">
+      <span className="relative inline-flex items-center flex-shrink-0 ml-[1.5px] lowdpi:ml-px">
         <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
           <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
           {showDotUnreadPip && <UnreadPip />}
@@ -74,12 +74,12 @@ export function TabIcon({
   }
 
   // Unread tints the badge dot red instead of overlaying a separate pip.
-  // Badge keeps `ml-px mr-px` (1px each side) — non-badge modes get `ml-[2px]`
-  // so they align with the badge icon's visual right edge while keeping a
-  // small breathing gap to the trailing label. Subagent dots park at left:-4.
+  // Margins: badge `ml-px mr-[0.5px]`, non-badge `ml-[1.5px]` — picks up the
+  // icon column alignment + a tiny trailing gap on retina. `lowdpi:` snaps
+  // sub-pixel values back to integers below @2x. Subagent dots park at left:-4.
   return (
     <span
-      className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-px mr-px"
+      className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-px mr-[0.5px] lowdpi:mr-0"
     >
       {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
       <TabStatusIndicator
