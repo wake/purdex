@@ -234,3 +234,44 @@ describe('DevEnvironmentSection', () => {
     })
   })
 })
+
+describe('DevEnvironmentSection - Daemon block', () => {
+  const originalFetch = globalThis.fetch
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn(async (url: string | URL) => {
+      const href = String(url)
+      if (href.endsWith('/api/dev/daemon/check')) {
+        return new Response(JSON.stringify({ current_hash: 'abc1234', latest_hash: 'abc1234', available: false }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      // Fallback: minimal 200 with empty body
+      return new Response('{}', { status: 200 })
+    }) as typeof globalThis.fetch
+  })
+
+  afterEach(() => { globalThis.fetch = originalFetch })
+
+  it('renders Daemon heading', async () => {
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => {
+      const headings = screen.getAllByText(/Daemon|daemon/i)
+      expect(headings.length).toBeGreaterThan(0)
+    })
+  })
+
+  it('shows Rebuild button', async () => {
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(screen.getByText(/Rebuild|重新建置|rebuild/i)).toBeTruthy())
+  })
+
+  it('displays current_hash and latest_hash after fetch', async () => {
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => {
+      const abc = screen.queryAllByText('abc1234')
+      expect(abc.length).toBeGreaterThan(0)
+    })
+  })
+})
