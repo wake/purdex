@@ -413,13 +413,14 @@ func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
 	// On successful remove: wipe cached snapshots and broadcast a cleared
 	// event so the SPA can drop stale statusline state. Global clear is
 	// intentional for single-host daemon (simplest-possible approach); the
-	// "*" session code tells the frontend to apply this across all sessions.
+	// empty session code is the existing codebase convention for
+	// cross-session events (see watcher.go sessions/tmux broadcasts).
 	if req.Action == "remove" {
 		snapshotMu.Lock()
 		statusSnapshots = make(map[string]statusSnapshot)
 		snapshotMu.Unlock()
 		if m.core != nil {
-			m.core.Events.Broadcast("*", "agent.status.cleared", `{"host_id":"*","agent_type":"cc"}`)
+			m.core.Events.Broadcast("", "agent.status.cleared", `{"agent_type":"cc"}`)
 		}
 	}
 

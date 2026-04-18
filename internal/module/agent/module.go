@@ -353,6 +353,10 @@ func (m *Module) checkAliveAll(sub *core.EventSubscriber) {
 			delete(m.activeWatchers, ev.TmuxSession)
 			m.mu.Unlock()
 
+			snapshotMu.Lock()
+			delete(statusSnapshots, code)
+			snapshotMu.Unlock()
+
 			m.prober.StopWatch(tmuxTarget)
 			_ = m.events.Delete(ev.TmuxSession)
 
