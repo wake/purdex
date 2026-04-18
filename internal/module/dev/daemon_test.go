@@ -52,7 +52,9 @@ func TestHandleDaemonCheck_AvailableFlag(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	var body daemonCheckResponse
-	json.NewDecoder(resp.Body).Decode(&body)
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
 	if !body.Available {
 		t.Errorf("expected Available=true when BakedInHash differs, got %+v", body)
 	}
