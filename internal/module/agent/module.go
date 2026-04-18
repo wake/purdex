@@ -115,6 +115,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/hooks/{agent}/setup", m.handleHookSetup)
 	mux.HandleFunc("GET /api/agent/{agent}/statusline/status", m.handleStatuslineStatus)
 	mux.HandleFunc("POST /api/agent/{agent}/statusline/setup", m.handleStatuslineSetup)
+	mux.HandleFunc("POST /api/agent/status", m.handleAgentStatus)
 	mux.HandleFunc("POST /api/agent/check-alive/{session}", m.handleCheckAlive)
 	mux.HandleFunc("GET /api/agents/detect", m.handleDetect)
 

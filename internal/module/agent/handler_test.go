@@ -724,3 +724,92 @@ func TestHandleStatuslineSetup_BadAction(t *testing.T) {
 		t.Errorf("status %d, want 400", w.Code)
 	}
 }
+
+// --- Task 11: POST /api/agent/status ---
+
+func TestHandleAgentStatus_BroadcastsOnSessionMatch(t *testing.T) {
+	m := newTestModule(t)
+	fake := tmux.NewFakeExecutor()
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Name: "sess1", Code: "code-1"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	body := `{"tmux_session":"sess1","agent_type":"cc","raw_status":{"model":{"display_name":"Sonnet"}}}`
+	req := httptest.NewRequest("POST", "/api/agent/status", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleAgentStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body: %s", w.Code, w.Body.String())
+	}
+	// Drain the broadcast channel — expect exactly one agent.status event for code-1.
+	select {
+	case msg := <-sub.SendCh():
+		var env struct {
+			Type    string `json:"type"`
+			Session string `json:"session"`
+			Value   string `json:"value"`
+		}
+		if err := json.Unmarshal(msg, &env); err != nil {
+			t.Fatalf("unmarshal broadcast: %v", err)
+		}
+		if env.Type != "agent.status" {
+			t.Errorf("broadcast type = %q, want agent.status", env.Type)
+		}
+		if env.Session != "code-1" {
+			t.Errorf("broadcast session = %q, want code-1", env.Session)
+		}
+		// Value should be a JSON-encoded statusSnapshot with agent_type + status.
+		if !strings.Contains(env.Value, `"agent_type":"cc"`) {
+			t.Errorf("broadcast value missing agent_type: %s", env.Value)
+		}
+		if !strings.Contains(env.Value, `"display_name":"Sonnet"`) {
+			t.Errorf("broadcast value missing raw_status: %s", env.Value)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("timed out waiting for broadcast")
+	}
+}
+
+func TestHandleAgentStatus_NoBroadcastOnUnknownSession(t *testing.T) {
+	m := newTestModule(t)
+	fake := tmux.NewFakeExecutor()
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	body := `{"tmux_session":"unknown","agent_type":"cc","raw_status":{}}`
+	req := httptest.NewRequest("POST", "/api/agent/status", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	m.handleAgentStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status %d, want 200", w.Code)
+	}
+	// No broadcast: channel should stay empty for a brief window.
+	select {
+	case msg := <-sub.SendCh():
+		t.Errorf("unexpected broadcast: %s", msg)
+	case <-time.After(50 * time.Millisecond):
+		// expected
+	}
+}
+
+func TestHandleAgentStatus_BadAgentType(t *testing.T) {
+	m := newTestModule(t)
+	body := `{"tmux_session":"x","agent_type":"codex","raw_status":{}}`
+	req := httptest.NewRequest("POST", "/api/agent/status", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	m.handleAgentStatus(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status %d, want 400", w.Code)
+	}
+}

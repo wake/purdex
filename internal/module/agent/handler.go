@@ -514,6 +514,57 @@ func (m *Module) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"alive": alive})
 }
 
+// statusSnapshot is the in-memory shape cached per sessionCode and broadcast over WS.
+// It is intentionally display-only and not persisted (high-frequency, agent-owned).
+type statusSnapshot struct {
+	AgentType string          `json:"agent_type"`
+	Status    json.RawMessage `json:"status"`
+}
+
+var (
+	snapshotMu      sync.RWMutex
+	statusSnapshots = make(map[string]statusSnapshot) // key: sessionCode
+)
+
+// handleAgentStatus handles POST /api/agent/status.
+// Receives statusline payloads from `pdx statusline-proxy` and broadcasts
+// agent.status WS events to subscribers.
+func (m *Module) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		TmuxSession string          `json:"tmux_session"`
+		AgentType   string          `json:"agent_type"`
+		RawStatus   json.RawMessage `json:"raw_status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if payload.AgentType != "cc" {
+		http.Error(w, `{"error":"unsupported agent_type"}`, http.StatusBadRequest)
+		return
+	}
+
+	code := m.resolveSessionCode(payload.TmuxSession)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{}`))
+
+	if code == "" {
+		return
+	}
+
+	snap := statusSnapshot{AgentType: payload.AgentType, Status: payload.RawStatus}
+	snapshotMu.Lock()
+	statusSnapshots[code] = snap
+	snapshotMu.Unlock()
+
+	if m.core != nil {
+		body, _ := json.Marshal(snap)
+		m.core.Events.Broadcast(code, "agent.status", string(body))
+	}
+}
+
 // handleDetect handles GET /api/agents/detect.
 // Checks if agent CLIs (claude, codex) are available on the host.
 func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
