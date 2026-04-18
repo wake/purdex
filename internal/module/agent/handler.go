@@ -589,14 +589,15 @@ func (m *Module) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // sendStatuslineSnapshot pushes the cached statusline snapshots to a new
-// WebSocket subscriber. Mirrors the hook sendSnapshot pattern — builds a
-// core.HostEvent for each cached entry and calls sub.Send directly.
+// WebSocket subscriber. Marshals under RLock, then releases the lock
+// before calling sub.Send — a slow subscriber (full channel) would
+// otherwise block every concurrent agent.status writer through snapshotMu.
 func (m *Module) sendStatuslineSnapshot(sub *core.EventSubscriber) {
 	if m.core == nil {
 		return
 	}
 	m.snapshotMu.RLock()
-	defer m.snapshotMu.RUnlock()
+	pending := make([][]byte, 0, len(m.statusSnapshots))
 	for code, snap := range m.statusSnapshots {
 		body, err := json.Marshal(snap)
 		if err != nil {
@@ -607,6 +608,10 @@ func (m *Module) sendStatuslineSnapshot(sub *core.EventSubscriber) {
 		if err != nil {
 			continue
 		}
+		pending = append(pending, data)
+	}
+	m.snapshotMu.RUnlock()
+	for _, data := range pending {
 		sub.Send(data)
 	}
 }
