@@ -71,10 +71,13 @@ describe('CollapseButton — variants', () => {
     expect(screen.getByRole('button')).toHaveAttribute('data-variant', 'topbar')
   })
 
-  it("is disabled when tabPosition='both'", () => {
+  it("is enabled when tabPosition='both' (top tabs remain reachable)", () => {
     useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'both' })
     render(<CollapseButton />)
-    expect(screen.getByRole('button')).toBeDisabled()
+    const btn = screen.getByRole('button')
+    expect(btn).not.toBeDisabled()
+    fireEvent.click(btn)
+    expect(useLayoutStore.getState().activityBarWidth).toBe('narrow')
   })
 })
 

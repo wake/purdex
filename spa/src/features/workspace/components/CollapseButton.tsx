@@ -37,9 +37,9 @@ export function CollapseButton({ variant = 'header-right' }: Props) {
   const toggle = useLayoutStore((s) => s.toggleActivityBarWidth)
   const t = useI18nStore((s) => s.t)
 
-  // Task 1 extended tabPosition to include 'both'. Both 'left' and 'both' lock
-  // the activity bar to wide — the button must reflect that.
-  const locked = tabPosition === 'left' || tabPosition === 'both'
+  // Only `left` forces wide (tabs live exclusively in the activity bar there).
+  // `both` keeps tabs reachable via the top tab bar, so collapse is allowed.
+  const locked = tabPosition === 'left'
   const isWide = width === 'wide'
   const label = locked
     ? t('nav.collapse_locked_tooltip')
