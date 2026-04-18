@@ -22,7 +22,7 @@ const UNREAD_PIP = (
   <span
     data-testid="inline-tab-unread-pip"
     className="absolute rounded-full z-20"
-    style={{ width: 5, height: 5, top: -1, right: -2, backgroundColor: '#b91c1c' }}
+    style={{ width: 5, height: 5, top: -1, right: -2, backgroundColor: '#ef4444' }}
   />
 )
 
@@ -80,7 +80,7 @@ export function renderInlineTabIcon({
   return (
     <span
       data-testid="inline-tab-dot-overlay"
-      className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0 ml-px`}
+      className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0 ml-[3px]`}
     >
       {IconComponent && <IconComponent size={ICON_SIZE} className="flex-shrink-0" />}
       <TabStatusIndicator

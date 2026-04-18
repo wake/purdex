@@ -72,7 +72,7 @@ export function WorkspaceRow(props: Props) {
         data-testid={`ws-header-${workspace.id}`}
         {...attributes}
         {...listeners}
-        className={`group/ws-header mx-2 flex items-center gap-1 pl-1.5 rounded-md text-sm transition-colors focus:outline-none focus-visible:outline-none ${
+        className={`group/ws-header mx-2 flex items-center gap-1 pl-1.5 pr-1.5 rounded-md text-sm transition-colors focus:outline-none focus-visible:outline-none ${
           isActive
             ? 'bg-[#8b5cf6]/25 text-text-primary ring-1 ring-purple-400'
             : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
@@ -108,9 +108,9 @@ export function WorkspaceRow(props: Props) {
               onAddTabToWorkspace(workspace.id)
             }}
             onPointerDown={(e) => e.stopPropagation()}
-            className="p-1 rounded hover:bg-surface-secondary cursor-pointer opacity-0 group-hover/ws-header:opacity-100 focus:opacity-100 transition-opacity focus:outline-none"
+            className="p-0.5 rounded hover:bg-surface-secondary hover:text-text-primary cursor-pointer opacity-0 group-hover/ws-header:opacity-100 focus:opacity-100 transition-opacity focus:outline-none"
           >
-            <Plus size={14} weight="bold" />
+            <Plus size={12} />
           </button>
         )}
         {showTabs && (
@@ -122,7 +122,7 @@ export function WorkspaceRow(props: Props) {
               e.stopPropagation()
               toggleExpanded(workspace.id)
             }}
-            className="p-1 mr-0.5 rounded hover:bg-surface-secondary cursor-pointer focus:outline-none"
+            className="p-0.5 rounded hover:bg-surface-secondary hover:text-text-primary cursor-pointer focus:outline-none"
           >
             <Chevron size={12} />
           </button>

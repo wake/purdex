@@ -19,7 +19,7 @@ const STATUS_COLORS: Record<AgentStatus, string> = {
   error: '#ef4444',
 }
 
-const UNREAD_COLOR = '#b91c1c'
+const UNREAD_COLOR = '#ef4444'
 
 export function TabStatusIndicator({ status, mode, isActive, isUnread = false }: Props) {
   if (status === undefined) return null

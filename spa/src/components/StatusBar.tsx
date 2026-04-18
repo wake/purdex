@@ -164,7 +164,7 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
       <span
         className="text-text-secondary select-none"
         title={t('status.open_host_hint')}
-        onClick={agentHostId ? () => onNavigateToHost?.(agentHostId) : undefined}
+        onDoubleClick={agentHostId ? () => onNavigateToHost?.(agentHostId) : undefined}
       >
         {hostName}
       </span>
