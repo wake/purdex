@@ -176,6 +176,4 @@ func runStatuslineProxy(args []string) {
 		AgentType:   "cc",
 		RawStatus:   raw,
 	})
-
-	os.Exit(0)
 }
