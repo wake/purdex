@@ -164,7 +164,7 @@ describe('SortableTab renderTabIcon modes', () => {
     useAgentStore.setState({ unread: { 'h1:sc1': true } })
     render(<SortableTab {...defaultProps} isActive={false} />)
     const dot = screen.getByTestId('tab-status-indicator')
-    expect(dot.style.backgroundColor).toBe('rgb(185, 28, 28)')
+    expect(dot.style.backgroundColor).toBe('rgb(239, 68, 68)')
     expect(screen.queryByTestId('tab-unread-pip')).toBeNull()
   })
 

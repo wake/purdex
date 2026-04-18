@@ -94,7 +94,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         {tab.locked && <Lock size={10} className="absolute bottom-0.5 right-0.5" />}
         {!isActive && isUnread && shouldShowGlobalUnreadPip(tabIndicatorStyle, agentStatus) && (
           <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
-            style={{ backgroundColor: '#b91c1c' }} />
+            style={{ backgroundColor: '#ef4444' }} />
         )}
       </button>
     )

@@ -45,7 +45,7 @@ describe('TabStatusIndicator', () => {
       <TabStatusIndicator status="idle" mode="overlay" isActive={false} isUnread />,
     )
     const dot = screen.getByTestId('tab-status-indicator')
-    expect(dot.style.backgroundColor).toBe('rgb(185, 28, 28)')
+    expect(dot.style.backgroundColor).toBe('rgb(239, 68, 68)')
   })
 
   it('overlay mode: renders warning-diamond instead of dot when status is error', () => {

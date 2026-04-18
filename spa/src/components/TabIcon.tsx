@@ -13,7 +13,7 @@ function UnreadPip({ size = 5 }: { size?: number }) {
         height: size,
         top: -1,
         right: -2,
-        backgroundColor: '#b91c1c',
+        backgroundColor: '#ef4444',
       }}
     />
   )
@@ -74,11 +74,12 @@ export function TabIcon({
   }
 
   // Unread tints the badge dot red instead of overlaying a separate pip.
-  // Nudge the whole icon+badge group 1px right and park subagent dots at
-  // left:-4 so they sit just outside the box edge, clear of the icon.
+  // Nudge the whole icon+badge group 3px right to align the visually
+  // off-center robot glyph with the terminal icon, and park subagent dots
+  // at left:-4 so they sit just outside the box edge, clear of the icon.
   return (
     <span
-      className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-px"
+      className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[3px]"
     >
       {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
       <TabStatusIndicator

@@ -128,7 +128,7 @@ export function InlineTab({
         <span
           data-testid="inline-tab-unread"
           className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
-          style={{ backgroundColor: '#b91c1c' }}
+          style={{ backgroundColor: '#ef4444' }}
         />
       )}
       {showClose && (
