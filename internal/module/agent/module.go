@@ -34,16 +34,23 @@ type Module struct {
 	currentStatus  map[string]agentpkg.Status
 	subagents      map[string][]string
 	activeWatchers map[string]string // tmuxSession → agentType
+
+	// statusSnapshots caches the latest statusline payload per sessionCode.
+	// Display-only, not persisted; guarded by snapshotMu (separate from mu
+	// because hot-path agent.status POSTs shouldn't contend with hook writes).
+	snapshotMu      sync.RWMutex
+	statusSnapshots map[string]statusSnapshot
 }
 
 // New creates a new agent Module backed by the given AgentEventStore.
 func New(events *store.AgentEventStore) *Module {
 	return &Module{
-		events:         events,
-		registry:       agentpkg.NewRegistry(),
-		currentStatus:  make(map[string]agentpkg.Status),
-		subagents:      make(map[string][]string),
-		activeWatchers: make(map[string]string),
+		events:          events,
+		registry:        agentpkg.NewRegistry(),
+		currentStatus:   make(map[string]agentpkg.Status),
+		subagents:       make(map[string][]string),
+		activeWatchers:  make(map[string]string),
+		statusSnapshots: make(map[string]statusSnapshot),
 	}
 }
 
@@ -353,9 +360,9 @@ func (m *Module) checkAliveAll(sub *core.EventSubscriber) {
 			delete(m.activeWatchers, ev.TmuxSession)
 			m.mu.Unlock()
 
-			snapshotMu.Lock()
-			delete(statusSnapshots, code)
-			snapshotMu.Unlock()
+			m.snapshotMu.Lock()
+			delete(m.statusSnapshots, code)
+			m.snapshotMu.Unlock()
 
 			m.prober.StopWatch(tmuxTarget)
 			_ = m.events.Delete(ev.TmuxSession)

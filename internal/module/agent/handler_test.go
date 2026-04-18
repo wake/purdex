@@ -817,20 +817,13 @@ func TestHandleAgentStatus_BadAgentType(t *testing.T) {
 // --- Task 12: statusline snapshot replay + cleared broadcast ---
 
 func TestSendStatuslineSnapshot_ReplaysToSubscriber(t *testing.T) {
-	// Reset package-level state (other tests may have populated it).
-	snapshotMu.Lock()
-	statusSnapshots = map[string]statusSnapshot{
+	m := newTestModule(t)
+	m.snapshotMu.Lock()
+	m.statusSnapshots = map[string]statusSnapshot{
 		"code-a": {AgentType: "cc", Status: json.RawMessage(`{"model":{"display_name":"A"}}`)},
 		"code-b": {AgentType: "cc", Status: json.RawMessage(`{"model":{"display_name":"B"}}`)},
 	}
-	snapshotMu.Unlock()
-	t.Cleanup(func() {
-		snapshotMu.Lock()
-		statusSnapshots = make(map[string]statusSnapshot)
-		snapshotMu.Unlock()
-	})
-
-	m := newTestModule(t)
+	m.snapshotMu.Unlock()
 	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: tmux.NewFakeExecutor()}
 	sub := m.core.Events.AddTestSubscriber()
 	defer m.core.Events.RemoveTestSubscriber(sub)
@@ -866,15 +859,6 @@ func TestSendStatuslineSnapshot_ReplaysToSubscriber(t *testing.T) {
 func TestHandleStatuslineSetup_RemoveBroadcastsCleared(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	// Seed a cached snapshot so we can assert it gets cleared.
-	snapshotMu.Lock()
-	statusSnapshots = map[string]statusSnapshot{"code-x": {AgentType: "cc", Status: json.RawMessage(`{}`)}}
-	snapshotMu.Unlock()
-	t.Cleanup(func() {
-		snapshotMu.Lock()
-		statusSnapshots = make(map[string]statusSnapshot)
-		snapshotMu.Unlock()
-	})
 
 	// Seed settings.json with a pdx-mode statusline (so remove succeeds, not refused).
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
@@ -888,6 +872,10 @@ func TestHandleStatuslineSetup_RemoveBroadcastsCleared(t *testing.T) {
 	m := newTestModule(t)
 	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
 	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: tmux.NewFakeExecutor()}
+	// Seed a cached snapshot so we can assert it gets cleared.
+	m.snapshotMu.Lock()
+	m.statusSnapshots = map[string]statusSnapshot{"code-x": {AgentType: "cc", Status: json.RawMessage(`{}`)}}
+	m.snapshotMu.Unlock()
 	sub := m.core.Events.AddTestSubscriber()
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
@@ -903,9 +891,9 @@ func TestHandleStatuslineSetup_RemoveBroadcastsCleared(t *testing.T) {
 	}
 
 	// Check: statusSnapshots cleared.
-	snapshotMu.RLock()
-	n := len(statusSnapshots)
-	snapshotMu.RUnlock()
+	m.snapshotMu.RLock()
+	n := len(m.statusSnapshots)
+	m.snapshotMu.RUnlock()
 	if n != 0 {
 		t.Errorf("snapshot map size = %d, want 0", n)
 	}

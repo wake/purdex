@@ -408,9 +408,9 @@ func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
 			// possible approach); the empty session code is the existing
 			// codebase convention for cross-session events (see watcher.go
 			// sessions/tmux broadcasts).
-			snapshotMu.Lock()
-			statusSnapshots = make(map[string]statusSnapshot)
-			snapshotMu.Unlock()
+			m.snapshotMu.Lock()
+			m.statusSnapshots = make(map[string]statusSnapshot)
+			m.snapshotMu.Unlock()
 			if m.core != nil {
 				m.core.Events.Broadcast("", "agent.status.cleared", `{"agent_type":"cc"}`)
 			}
@@ -543,15 +543,11 @@ func (m *Module) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 
 // statusSnapshot is the in-memory shape cached per sessionCode and broadcast over WS.
 // It is intentionally display-only and not persisted (high-frequency, agent-owned).
+// Lives as a Module field (m.statusSnapshots) guarded by m.snapshotMu.
 type statusSnapshot struct {
 	AgentType string          `json:"agent_type"`
 	Status    json.RawMessage `json:"status"`
 }
-
-var (
-	snapshotMu      sync.RWMutex
-	statusSnapshots = make(map[string]statusSnapshot) // key: sessionCode
-)
 
 // handleAgentStatus handles POST /api/agent/status.
 // Receives statusline payloads from `pdx statusline-proxy` and broadcasts
@@ -582,9 +578,9 @@ func (m *Module) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	snap := statusSnapshot{AgentType: payload.AgentType, Status: payload.RawStatus}
-	snapshotMu.Lock()
-	statusSnapshots[code] = snap
-	snapshotMu.Unlock()
+	m.snapshotMu.Lock()
+	m.statusSnapshots[code] = snap
+	m.snapshotMu.Unlock()
 
 	if m.core != nil {
 		body, _ := json.Marshal(snap)
@@ -599,9 +595,9 @@ func (m *Module) sendStatuslineSnapshot(sub *core.EventSubscriber) {
 	if m.core == nil {
 		return
 	}
-	snapshotMu.RLock()
-	defer snapshotMu.RUnlock()
-	for code, snap := range statusSnapshots {
+	m.snapshotMu.RLock()
+	defer m.snapshotMu.RUnlock()
+	for code, snap := range m.statusSnapshots {
 		body, err := json.Marshal(snap)
 		if err != nil {
 			continue
