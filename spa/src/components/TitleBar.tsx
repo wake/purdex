@@ -51,8 +51,18 @@ export function TitleBar({ title }: Props) {
   return (
     <div
       className="shrink-0 relative flex items-center bg-surface-secondary border-b border-border-subtle px-2"
-      style={{ height: 30, WebkitAppRegion: 'drag' } as React.CSSProperties}
+      style={{ height: 36, WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
+      {/* macOS traffic-light reserve (titleBarStyle='hiddenInset' draws them at x=12, y=12). */}
+      <div className="w-[72px] shrink-0" aria-hidden="true" />
+      <div
+        data-testid="sidebar-toggle"
+        className="shrink-0 flex items-center"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
+        <CollapseButton variant="topbar" />
+      </div>
+
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none px-2 gap-2">
         <span className="text-xs text-text-secondary truncate max-w-[calc(100%-27rem)]">{title}</span>
         {showSyncWarning && (
@@ -74,8 +84,6 @@ export function TitleBar({ title }: Props) {
         className="shrink-0 flex items-center gap-0.5"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        <CollapseButton variant="topbar" />
-        <div className="w-px h-3.5 bg-border-subtle mx-0.5" />
         {regionToggles.map(({ region, icon: Icon, label, mirror }) => {
           const isVisible = regions[region].mode !== 'hidden'
           return (
