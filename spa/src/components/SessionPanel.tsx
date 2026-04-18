@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useHostStore } from '../stores/useHostStore'
-import { Terminal, Lightning, GearSix, Circle, Spinner, CaretDown, CaretRight } from '@phosphor-icons/react'
+import { Terminal, Lightning, Sliders, Circle, Spinner, CaretDown, CaretRight } from '@phosphor-icons/react'
 import SessionStatusBadge from './SessionStatusBadge'
 import { useI18nStore } from '../stores/useI18nStore'
 import { compositeKey } from '../lib/composite-key'
@@ -123,7 +123,7 @@ export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSe
           onClick={onSettingsOpen}
           className="flex items-center gap-2 text-text-secondary hover:text-text-primary text-sm cursor-pointer w-full"
         >
-          <GearSix size={16} />
+          <Sliders size={16} />
           <span>{t('session.settings')}</span>
         </button>
       </div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, GearSix, HardDrives } from '@phosphor-icons/react'
+import { Plus, Sliders, HardDrives } from '@phosphor-icons/react'
 import {
   DndContext,
   PointerSensor,
@@ -337,7 +337,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
             onClick={onOpenSettings}
             className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
           >
-            <GearSix size={16} />
+            <Sliders size={16} />
             <span className="truncate">{t('nav.settings')}</span>
           </button>
         </div>

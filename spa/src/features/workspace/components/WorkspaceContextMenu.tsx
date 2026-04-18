@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { GearSix, ArrowSquareOut, ArrowSquareIn } from '@phosphor-icons/react'
+import { Sliders, ArrowSquareOut, ArrowSquareIn } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 
 interface Props {
@@ -48,7 +48,7 @@ export function WorkspaceContextMenu({ position, onSettings, onTearOff, onMergeT
           onClick={() => { onSettings(); onClose() }}
           className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer transition-colors"
         >
-          <GearSix size={14} />
+          <Sliders size={14} />
           {t('nav.settings') ?? 'Settings'}
         </button>
 

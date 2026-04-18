@@ -9,6 +9,7 @@ import { getPaneIcon } from '../../../lib/pane-labels'
 import { compositeKey } from '../../../lib/composite-key'
 import { getAgentIcon } from '../../../lib/agent-icons'
 import { ICON_MAP } from '../../../components/tab-icon-map'
+import { shouldShowGlobalUnreadPip } from '../../../components/tab-icon-helpers'
 import { renderInlineTabIcon } from '../lib/renderInlineTabIcon'
 
 interface Props {
@@ -107,11 +108,10 @@ export function InlineTab({
 
   const showClose = !tab.locked
 
-  // Match upper TabBar visual: no left-border accent; active uses subtle
-  // accent-muted ring + elevated surface, inactive keeps a transparent border
-  // so sibling rows don't shift when toggling active state.
+  // Active surface — no visible border; both states keep a transparent 1px
+  // border so sibling rows don't shift when toggling active state.
   const activeClasses = isActive
-    ? 'bg-surface-active text-white border border-accent-muted'
+    ? 'bg-surface-active text-white border border-transparent'
     : 'text-text-muted hover:bg-surface-hover hover:text-text-primary border border-transparent'
 
   return (
@@ -136,6 +136,7 @@ export function InlineTab({
         tabIndicatorStyle,
         isActive,
         subagentCount,
+        isUnread,
       })}
       <span className="flex-1 truncate" title={tooltip}>
         {displayTitle}
@@ -150,10 +151,10 @@ export function InlineTab({
       {tab.locked && (
         <Lock size={10} data-testid="inline-tab-lock" className="flex-shrink-0" />
       )}
-      {!isActive && isUnread && (
+      {!isActive && isUnread && shouldShowGlobalUnreadPip(tabIndicatorStyle, agentStatus) && (
         <span
           data-testid="inline-tab-unread"
-          className="absolute -top-[2px] -right-[2px] w-1.5 h-1.5 rounded-full z-20"
+          className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
           style={{ backgroundColor: '#b91c1c' }}
         />
       )}

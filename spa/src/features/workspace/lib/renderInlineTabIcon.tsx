@@ -8,6 +8,7 @@ interface Params {
   tabIndicatorStyle: TabIndicatorStyle
   isActive: boolean
   subagentCount: number
+  isUnread?: boolean
 }
 
 // Left-mode variant of the top-tab renderer in SortableTab.tsx. Icon size
@@ -15,12 +16,21 @@ interface Params {
 const ICON_SIZE = 14
 const DOT_SLOT = 'w-3.5 h-3.5'
 
+const UNREAD_PIP = (
+  <span
+    data-testid="inline-tab-unread-pip"
+    className="absolute rounded-full z-20"
+    style={{ width: 5, height: 5, top: -1, right: -2, backgroundColor: '#b91c1c' }}
+  />
+)
+
 export function renderInlineTabIcon({
   IconComponent,
   agentStatus,
   tabIndicatorStyle,
   isActive,
   subagentCount,
+  isUnread = false,
 }: Params) {
   // icon-only OR no agent event → plain icon slot
   if (tabIndicatorStyle === 'icon' || !agentStatus) {
@@ -31,6 +41,9 @@ export function renderInlineTabIcon({
     )
   }
 
+  // error already louder than unread — don't also stack a pip.
+  const showDotUnreadPip = isUnread && !isActive && agentStatus !== 'error'
+
   if (tabIndicatorStyle === 'dot') {
     return (
       <span
@@ -38,6 +51,7 @@ export function renderInlineTabIcon({
         className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0`}
       >
         <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
+        {showDotUnreadPip && UNREAD_PIP}
         {subagentCount > 0 && <SubagentDots count={subagentCount} />}
       </span>
     )
@@ -51,6 +65,7 @@ export function renderInlineTabIcon({
           className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0`}
         >
           <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
+          {showDotUnreadPip && UNREAD_PIP}
           {subagentCount > 0 && <SubagentDots count={subagentCount} />}
         </span>
         {IconComponent && <IconComponent size={ICON_SIZE} className="flex-shrink-0" />}
@@ -58,16 +73,20 @@ export function renderInlineTabIcon({
     )
   }
 
-  // badge: icon + small overlay dot
-  // Nudge the whole icon+badge group 1px right and park subagent dots at
-  // left:-4 so they sit just outside the box edge, clear of the icon.
+  // badge: icon + small overlay dot. Unread tints the overlay dot red
+  // instead of stacking a separate pip (parity with TabIcon badge mode).
   return (
     <span
       data-testid="inline-tab-dot-overlay"
       className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0 ml-px`}
     >
       {IconComponent && <IconComponent size={ICON_SIZE} className="flex-shrink-0" />}
-      <TabStatusIndicator status={agentStatus} mode="overlay" isActive={isActive} />
+      <TabStatusIndicator
+        status={agentStatus}
+        mode="overlay"
+        isActive={isActive}
+        isUnread={isUnread && !isActive}
+      />
       {subagentCount > 0 && <SubagentDots count={subagentCount} left={-4} />}
     </span>
   )
