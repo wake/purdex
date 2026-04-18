@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.171] - 2026-04-18
+
+### Tweak: Tab icon margin 依 indicator style 微調 (#450)
+
+- **icon / dot / iconDot wrapper**：`ml-px` → `ml-[2px]`，向右多 1px 與 badge icon 視覺右緣對齊。
+- **badge wrapper**：保持 `ml-px`，新增 `mr-px`，讓 icon+overlay 群與 trailing label 之間多 1px 呼吸感，平衡 overlay dot 在 `right:-2` 突出的不對稱。
+- 影響 `TabIcon.tsx` 與 `renderInlineTabIcon.tsx` 兩個 surface。
+
 ## [1.0.0-alpha.170] - 2026-04-18
 
 ### Hotfix: Tab icon 對齊統一 ml-px (#449)
