@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.182] - 2026-04-19
+
+### Feat: terminal link registry — matcher/opener plugin architecture（#458）
+
+- 新增 `spa/src/lib/terminal-link/` 模組：`LinkMatcher`（偵測 token）+ `LinkOpener`（處理點擊）可獨立註冊的 registry 架構；dispatch 以 priority DESC 路由。
+- 內建 URL matcher（`http(s)://…`，含結尾標點剝除、URL query path 誤匹配排除）+ URL opener（Electron：browser tab / shift+click mini window；web：`window.open`；加 http(s) scheme 白名單兜底）。
+- 內建 file-path matcher（絕對 Unix 路徑 + 末段需副檔名 + 可選 `:line[:col]`；regex 改寫避免 ReDoS）+ file-path opener（橋接既有 `FileOpener` registry，Editor / Image / PDF 既有 opener 零修改自動套用）。
+- xterm 整合：新增 `createXtermLinkProvider` 將 registry 包成 `ILinkProvider`，於 `useTerminal` 以 `registerLinkProvider` 掛載；`linkContext` 透過 ref 傳入讓 mount-only effect 不需重綁。
+- 移除 `WebLinksAddon` + 舊 `spa/src/lib/link-handler.ts`；boot 在 `registerBuiltinModules()` 透過 DI 接上 Tab/Workspace store + Electron API。
+- 測試：181 tests（registry / matcher / opener / xterm-provider / register / TerminalView 整合）全綠，含 ReDoS 防護 + scheme 白名單 + dispose lifecycle 驗證。
+
+### Follow-up issues
+
+- #462 Electron `openMiniWindow` API 版本不匹配缺 fallback
+- #463 host switch 時 activate token 可能 stale
+
 ## [1.0.0-alpha.181] - 2026-04-19
 
 ### Feat: daemon self-rebuild + server-side `PDX_DEV_UPDATE` gate（#456）
