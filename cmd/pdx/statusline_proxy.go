@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"time"
+
+	"github.com/wake/purdex/internal/config"
 )
 
 // readStdinWithTimeout reads the entire stdin, returning []byte("{}") if empty
@@ -102,16 +105,65 @@ func execInner(inner string, stdinJSON []byte, timeoutSec int) string {
 	return out.String()
 }
 
+type statuslinePayload struct {
+	TmuxSession string          `json:"tmux_session"`
+	AgentType   string          `json:"agent_type"`
+	RawStatus   json.RawMessage `json:"raw_status"`
+}
+
+// postStatus synchronously POSTs the payload to the daemon with a 2s timeout.
+// Returns error on any failure; caller swallows errors silently.
+func postStatus(url, token string, payload statuslinePayload) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("daemon returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // runStatuslineProxy is the entry point for `pdx statusline-proxy [--inner "<cmd>"]`.
-// Full implementation added in later tasks; stub for now.
 func runStatuslineProxy(args []string) {
 	inner := parseInnerFlag(args)
 	raw := readStdinWithTimeout(os.Stdin, 5)
 
+	// 1) Print to CC (never blocks on POST)
 	if inner != "" {
 		fmt.Print(execInner(inner, raw, 2))
 	} else {
 		fmt.Println(renderMinimal(raw))
 	}
+
+	// 2) Synchronously POST to daemon; silent fail.
+	tmuxSession := queryTmuxSession() // defined in cmd/pdx/hook.go
+	cfg, err := config.Load("")
+	url := "http://127.0.0.1:7860/api/agent/status"
+	var token string
+	if err == nil {
+		url = fmt.Sprintf("http://%s:%d/api/agent/status", cfg.Bind, cfg.Port)
+		token = cfg.Token
+	}
+	_ = postStatus(url, token, statuslinePayload{
+		TmuxSession: tmuxSession,
+		AgentType:   "cc",
+		RawStatus:   raw,
+	})
+
 	os.Exit(0)
 }

@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRenderMinimal_FullFields(t *testing.T) {
@@ -99,5 +102,49 @@ func TestExecInner_NonZeroExitCaptured(t *testing.T) {
 	got := execInner("printf 'foo'; exit 1", []byte("{}"), 2)
 	if strings.TrimSpace(got) != "foo" {
 		t.Errorf("non-zero exit should still capture stdout; got %q", got)
+	}
+}
+
+func TestPostStatus_Success(t *testing.T) {
+	var received statuslinePayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	err := postStatus(ts.URL+"/api/agent/status", "tok", statuslinePayload{
+		TmuxSession: "sess1",
+		AgentType:   "cc",
+		RawStatus:   json.RawMessage(`{"x":1}`),
+	})
+	if err != nil {
+		t.Fatalf("postStatus: %v", err)
+	}
+	if received.TmuxSession != "sess1" {
+		t.Errorf("tmux_session mismatch: %q", received.TmuxSession)
+	}
+}
+
+func TestPostStatus_Timeout(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(5 * time.Second)
+	}))
+	defer ts.Close()
+
+	err := postStatus(ts.URL, "", statuslinePayload{TmuxSession: "x", AgentType: "cc"})
+	if err == nil {
+		t.Error("expected timeout error, got nil")
+	}
+}
+
+func TestPostStatus_SilentOn5xx(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+	err := postStatus(ts.URL, "", statuslinePayload{TmuxSession: "x", AgentType: "cc"})
+	if err == nil {
+		t.Error("5xx should return error, got nil")
 	}
 }
