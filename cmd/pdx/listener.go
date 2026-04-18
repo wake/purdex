@@ -37,11 +37,13 @@ func listenWithReuseAddr(addr string) (net.Listener, error) {
 		if !errors.Is(err, syscall.EADDRINUSE) {
 			return nil, err
 		}
-		time.Sleep(backoff)
-		if backoff < time.Second {
-			backoff *= 2
-			if backoff > time.Second {
-				backoff = time.Second
+		if i < 4 {
+			time.Sleep(backoff)
+			if backoff < time.Second {
+				backoff *= 2
+				if backoff > time.Second {
+					backoff = time.Second
+				}
 			}
 		}
 	}
