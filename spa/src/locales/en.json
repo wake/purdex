@@ -256,6 +256,9 @@
   "settings.dev.btn.switch_dev": "Switch to Dev Server",
   "settings.dev.error.dev_unreachable": "Dev server is not reachable",
   "settings.dev.error.bundled_failed": "Failed to load bundled SPA",
+  "settings.dev.log.waiting": "Waiting for build output…",
+  "settings.dev.log.copy": "Copy log",
+  "settings.dev.full_rebuild_hint": "Full app rebuild recommended — run `pnpm run electron:build` on the machine running the daemon, since the dev update only swaps JS bundles.",
 
   "editor.provider_label": "Editor",
   "editor.new_file": "New File",

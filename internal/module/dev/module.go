@@ -15,6 +15,8 @@ import (
 	"github.com/wake/purdex/internal/core"
 )
 
+type stepRunner func(ctx context.Context, session *BuildSession, phase, dir, name string, args ...string) error
+
 type DevModule struct {
 	core               *core.Core
 	repoRoot           string
@@ -23,8 +25,9 @@ type DevModule struct {
 	mu                 sync.Mutex
 	building           bool
 	buildError         string
-	buildCmd           func() error
-	execCmd            func(ctx context.Context, dir string, name string, args ...string) ([]byte, error)
+	buildCmd           func(session *BuildSession) error
+	runStep            stepRunner
+	buildSession       *BuildSession
 	lastFailedSPA      string
 	lastFailedElectron string
 	stopCtx            context.Context
@@ -48,8 +51,8 @@ func (m *DevModule) Init(c *core.Core) error {
 	if m.hashFn == nil {
 		m.hashFn = m.gitHash
 	}
-	if m.execCmd == nil {
-		m.execCmd = runCombinedOutput
+	if m.runStep == nil {
+		m.runStep = streamCmd
 	}
 	if m.buildCmd == nil {
 		m.buildCmd = m.defaultBuild
@@ -57,14 +60,37 @@ func (m *DevModule) Init(c *core.Core) error {
 	return nil
 }
 
-func (m *DevModule) runBuild() {
+// startBuildLocked transitions the module into building state, allocates a
+// fresh session, and kicks off the build goroutine. The caller must already
+// hold m.mu. Returns the session so callers can subscribe without a race.
+func (m *DevModule) startBuildLocked(spaSource, electronSource string) *BuildSession {
+	session := newBuildSession()
+	m.buildSession = session
+	m.building = true
+	m.buildError = ""
+	m.lastFailedSPA = spaSource
+	m.lastFailedElectron = electronSource
+	go m.runBuild(session)
+	return session
+}
+
+func (m *DevModule) runBuild(session *BuildSession) {
 	// Remove stale build info so a partial build doesn't leave source hashes
 	// that prevent re-triggering on next check
 	os.Remove(filepath.Join(m.repoRoot, "out", ".build-info.json"))
 
-	err := m.buildCmd()
+	err := m.buildCmd(session)
+
+	if err != nil {
+		session.append(BuildEvent{Type: BuildEventError, Error: err.Error()})
+	} else {
+		session.append(BuildEvent{Type: BuildEventDone})
+	}
+
+	// Clear building state BEFORE closing subscriber channels so any handler
+	// that re-reads state after the channel close sees a consistent post-
+	// build snapshot (building=false + updated build info).
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.building = false
 	if err != nil {
 		m.buildError = err.Error()
@@ -75,9 +101,12 @@ func (m *DevModule) runBuild() {
 		m.lastFailedElectron = ""
 		log.Println("[dev] build completed successfully")
 	}
+	m.mu.Unlock()
+
+	session.finish()
 }
 
-func (m *DevModule) defaultBuild() error {
+func (m *DevModule) defaultBuild(session *BuildSession) error {
 	parent := m.stopCtx
 	if parent == nil {
 		parent = context.Background()
@@ -108,14 +137,9 @@ func (m *DevModule) defaultBuild() error {
 	}
 
 	for _, step := range steps {
-		out, err := m.execCmd(ctx, m.repoRoot, step.name, step.args...)
-		if err != nil {
+		if err := m.runStep(ctx, session, step.label, m.repoRoot, step.name, step.args...); err != nil {
 			if ctx.Err() == context.DeadlineExceeded {
 				return fmt.Errorf("build timed out after 5 minutes")
-			}
-			if len(out) > 0 {
-				log.Printf("[dev] %s output: %s", step.label, string(out))
-				return fmt.Errorf("%s failed: %w\n%s", step.label, err, strings.TrimSpace(string(out)))
 			}
 			return fmt.Errorf("%s failed: %w", step.label, err)
 		}
@@ -126,6 +150,7 @@ func (m *DevModule) defaultBuild() error {
 
 func (m *DevModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/dev/update/check", m.handleCheck)
+	mux.HandleFunc("GET /api/dev/update/check/stream", m.handleCheckStream)
 	mux.HandleFunc("GET /api/dev/update/download", m.handleDownload)
 }
 
@@ -158,10 +183,4 @@ func (m *DevModule) readVersion() string {
 		return "unknown"
 	}
 	return strings.TrimSpace(string(data))
-}
-
-func runCombinedOutput(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	return cmd.CombinedOutput()
 }

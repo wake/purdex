@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostStore } from '../../stores/useHostStore'
+import { DevBuildLogPanel } from './DevBuildLogPanel'
 
 type UpdateStatus = 'idle' | 'checking' | 'building' | 'up_to_date' | 'update_available' | 'error'
 
@@ -10,7 +11,7 @@ interface AppInfo {
   spaHash: string
 }
 
-type RemoteInfo = Awaited<ReturnType<NonNullable<typeof window.electronAPI>['checkUpdate']>>
+type RemoteInfo = ElectronRemoteVersionInfo
 
 export function DevEnvironmentSection() {
   const t = useI18nStore((s) => s.t)
@@ -27,80 +28,91 @@ export function DevEnvironmentSection() {
   const [updating, setUpdating] = useState(false)
   const [updateStep, setUpdateStep] = useState<string | null>(null)
   const [updateError, setUpdateError] = useState<string | null>(null)
+  const [buildEvents, setBuildEvents] = useState<ElectronStreamCheckEvent[]>([])
+  const [streaming, setStreaming] = useState(false)
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  const stopPolling = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current)
-      pollRef.current = null
-    }
-  }, [])
-
-  useEffect(() => () => stopPolling(), [stopPolling])
+  const streamCloseRef = useRef<(() => void) | null>(null)
 
   useEffect(() => { appInfoRef.current = appInfo }, [appInfo])
 
-  const processCheckResult = useCallback(
-    (remote: RemoteInfo) => {
-      setRemoteInfo(remote)
-      if (remote.buildError) {
-        setUpdateError(remote.buildError)
-        setStatus('error')
-        return
-      }
-      const ai = appInfoRef.current
-      if (remote.electronHash !== ai?.electronHash || remote.spaHash !== ai?.spaHash) {
-        setStatus('update_available')
-      } else {
-        setStatus('up_to_date')
-      }
-    },
-    [], // deps now empty — reads appInfo from ref
-  )
+  const closeStream = useCallback(() => {
+    streamCloseRef.current?.()
+    streamCloseRef.current = null
+    setStreaming(false)
+  }, [])
 
-  const checkUpdate = useCallback(async () => {
+  const resolveFinalStatus = useCallback((check: RemoteInfo) => {
+    if (check.buildError) {
+      setStatus('error')
+      setUpdateError(check.buildError)
+      return
+    }
+    const ai = appInfoRef.current
+    if (ai && (check.electronHash !== ai.electronHash || check.spaHash !== ai.spaHash)) {
+      setStatus('update_available')
+    } else {
+      setStatus('up_to_date')
+    }
+  }, [])
+
+  const checkUpdate = useCallback(() => {
+    closeStream()
     setStatus('checking')
     setUpdateError(null)
-    try {
-      const remote = await window.electronAPI!.checkUpdate(daemonBase, token)
-      if (remote.building) {
-        setStatus('building')
-        if (!pollRef.current) {
-          pollRef.current = setInterval(async () => {
-            try {
-              const r = await window.electronAPI!.checkUpdate(daemonBase, token)
-              if (!r.building) {
-                stopPolling()
-                processCheckResult(r)
-              }
-            } catch {
-              stopPolling()
-              setStatus('error')
-            }
-          }, 3000)
-        }
-      } else {
-        stopPolling()
-        processCheckResult(remote)
-      }
-    } catch {
-      setStatus('error')
-    }
-  }, [daemonBase, token, stopPolling, processCheckResult])
+    setBuildEvents([])
+    setStreaming(true)
 
-  // Keep ref in sync so the mount effect can call the latest version
+    const close = window.electronAPI!.streamCheck(daemonBase, token, (ev) => {
+      switch (ev.type) {
+        case 'check':
+          if (!ev.check) return
+          setRemoteInfo(ev.check)
+          setStatus(ev.check.building ? 'building' : 'checking')
+          return
+        case 'phase':
+        case 'stdout':
+        case 'stderr':
+          setBuildEvents((prev) => [...prev, ev])
+          return
+        case 'error':
+          setBuildEvents((prev) => [...prev, ev])
+          setStatus('error')
+          setUpdateError(ev.error ?? 'stream error')
+          setStreaming(false)
+          streamCloseRef.current = null
+          return
+        case 'done':
+          if (ev.check) {
+            setRemoteInfo(ev.check)
+            resolveFinalStatus(ev.check)
+          }
+          setStreaming(false)
+          streamCloseRef.current = null
+          return
+      }
+    })
+    streamCloseRef.current = close
+  }, [daemonBase, token, closeStream, resolveFinalStatus])
+
   const checkUpdateRef = useRef(checkUpdate)
   useEffect(() => { checkUpdateRef.current = checkUpdate }, [checkUpdate])
 
-  // Fetch appInfo on mount, then auto-check for updates (event-driven, not effect cascade)
+  // Mount: load app info. Separate effect below re-runs the check whenever
+  // the daemon host changes (daemonBase or token), which closes any stale
+  // stream pointing at the previous host.
   useEffect(() => {
     window.electronAPI?.getAppInfo().then((info) => {
       setAppInfo(info)
       appInfoRef.current = info
-      checkUpdateRef.current()
     })
   }, [])
+
+  useEffect(() => {
+    if (!appInfo) return
+    checkUpdateRef.current()
+  }, [appInfo, daemonBase, token])
+
+  useEffect(() => () => closeStream(), [closeStream])
 
   useEffect(() => {
     if (!window.electronAPI?.onUpdateProgress) return
@@ -111,7 +123,6 @@ export function DevEnvironmentSection() {
     setUpdating(true)
     setUpdateStep(null)
     setUpdateError(null)
-    // Fire and forget — app.exit(0) kills the process before the promise resolves
     window.electronAPI!.applyUpdate(daemonBase, token).catch((err) => {
       setUpdating(false)
       setUpdateStep(null)
@@ -128,6 +139,7 @@ export function DevEnvironmentSection() {
 
   const hasElectronUpdate = remoteInfo && appInfo && remoteInfo.electronHash !== appInfo.electronHash
   const hasSPAUpdate = remoteInfo && appInfo && remoteInfo.spaHash !== appInfo.spaHash
+  const showLogPanel = buildEvents.length > 0 || status === 'building'
 
   const statusText: Record<UpdateStatus, string> = {
     idle: '',
@@ -189,10 +201,23 @@ export function DevEnvironmentSection() {
         </div>
       </div>
 
+      {remoteInfo?.requiresFullRebuild && (
+        <div className="text-xs text-status-warning border border-status-warning/40 bg-status-warning/10 rounded p-2">
+          {t('settings.dev.full_rebuild_hint')}
+          {remoteInfo.fullRebuildReason && (
+            <span className="block text-text-secondary font-mono mt-1">{remoteInfo.fullRebuildReason}</span>
+          )}
+        </div>
+      )}
+
       {status !== 'idle' && (
         <div className={`text-sm ${status === 'error' ? 'text-status-error' : status === 'building' ? 'text-accent' : status === 'update_available' ? 'text-status-warning' : 'text-text-secondary'}`}>
           {status === 'error' && updateError ? updateError : statusText[status]}
         </div>
+      )}
+
+      {showLogPanel && (
+        <DevBuildLogPanel events={buildEvents} streaming={streaming} />
       )}
 
       {updating && updateStep && (
