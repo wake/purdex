@@ -21,6 +21,8 @@ const { mockClose, TerminalSpy, capturedCallbacks } = vi.hoisted(() => {
       onData: vi.fn(() => ({ dispose: vi.fn() })),
       onResize: vi.fn(() => ({ dispose: vi.fn() })),
       onTitleChange: vi.fn(() => ({ dispose: vi.fn() })),
+      registerLinkProvider: vi.fn(() => ({ dispose: vi.fn() })),
+      buffer: { active: { getLine: () => ({ translateToString: () => '' }) } },
       dispose: vi.fn(),
       focus: vi.fn(),
       unicode: { activeVersion: '6' },
@@ -54,12 +56,6 @@ vi.mock('@xterm/addon-webgl', () => ({
 
 vi.mock('@xterm/addon-unicode11', () => ({
   Unicode11Addon: vi.fn(function () {
-    return { dispose: vi.fn() }
-  }),
-}))
-
-vi.mock('@xterm/addon-web-links', () => ({
-  WebLinksAddon: vi.fn(function () {
     return { dispose: vi.fn() }
   }),
 }))
@@ -198,6 +194,13 @@ describe('TerminalView', () => {
     // fit() is called in next rAF — flush it
     await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
     expect(fit.fit).toHaveBeenCalled()
+  })
+
+  it('registers terminal-link provider on mount', () => {
+    TerminalSpy.mockClear()
+    render(<TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" />)
+    const termInstance = TerminalSpy.mock.results[0]!.value as { registerLinkProvider: ReturnType<typeof vi.fn> }
+    expect(termInstance.registerLinkProvider).toHaveBeenCalledTimes(1)
   })
 
   describe('drag-drop', () => {

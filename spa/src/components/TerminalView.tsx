@@ -8,9 +8,6 @@ import { useUploadStore } from '../stores/useUploadStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { compositeKey } from '../lib/composite-key'
 import { agentUpload } from '../lib/host-api'
-import { createLinkHandler } from '../lib/link-handler'
-import { getPlatformCapabilities } from '../lib/platform'
-import { openBrowserTab } from '../lib/open-browser-tab'
 import '@xterm/xterm/css/xterm.css'
 
 interface Props {
@@ -23,22 +20,13 @@ interface Props {
 }
 
 export default function TerminalView({ wsUrl, visible = true, connectingMessage, hostId, sessionCode, getTicket }: Props) {
-  const caps = useMemo(() => getPlatformCapabilities(), [])
-  const linkHandler = useMemo(
-    () =>
-      createLinkHandler({
-        isElectron: caps.isElectron,
-        openBrowserTab,
-        openMiniWindow: (url) => window.electronAPI?.browserViewOpenMiniWindow(url),
-      }),
-    [caps.isElectron],
-  )
   const setOscTitle = useAgentStore((s) => s.setOscTitle)
   const handleTitle = useCallback((title: string) => {
     if (hostId && sessionCode) setOscTitle(hostId, sessionCode, title)
   }, [hostId, sessionCode, setOscTitle])
 
-  const { termRef, fitAddonRef, containerRef } = useTerminal({ linkHandler, onTitle: handleTitle })
+  const linkContext = useMemo(() => ({ hostId, sessionCode }), [hostId, sessionCode])
+  const { termRef, fitAddonRef, containerRef } = useTerminal({ linkContext, onTitle: handleTitle })
   const [ready, setReady] = useState(false)
   const [disconnected, setDisconnected] = useState(false)
   const prevVisible = useRef(visible)

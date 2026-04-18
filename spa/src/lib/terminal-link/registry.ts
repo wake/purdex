@@ -1,4 +1,4 @@
-import type { LinkMatcher, LinkOpener, LinkToken, LinkContext, TerminalLinkRegistry } from './types'
+import type { LinkMatcher, LinkOpener, TerminalLinkRegistry } from './types'
 
 export function createRegistry(): TerminalLinkRegistry {
   const matchers: LinkMatcher[] = []
