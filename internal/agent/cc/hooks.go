@@ -16,29 +16,26 @@ var ccHookEvents = []string{
 }
 
 func (p *Provider) InstallHooks(pdxPath string) error {
-	home, err := os.UserHomeDir()
+	settingsPath, err := ccSettingsPath()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	return mergeClaudeHooks(settingsPath, pdxPath, false)
 }
 
 func (p *Provider) RemoveHooks(pdxPath string) error {
-	home, err := os.UserHomeDir()
+	settingsPath, err := ccSettingsPath()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	return mergeClaudeHooks(settingsPath, pdxPath, true)
 }
 
 func (p *Provider) CheckHooks() (agent.HookStatus, error) {
-	home, err := os.UserHomeDir()
+	settingsPath, err := ccSettingsPath()
 	if err != nil {
 		return agent.HookStatus{Issues: []string{"cannot find home dir"}}, err
 	}
-	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	data, err := os.ReadFile(settingsPath)
 	if err != nil {
 		return agent.HookStatus{
