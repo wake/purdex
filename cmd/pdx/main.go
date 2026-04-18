@@ -224,7 +224,11 @@ func runServe(args []string) {
 	}()
 
 	log.Printf("pdx daemon listening on %s", addr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	listener, err := listenWithReuseAddr(addr)
+	if err != nil {
+		log.Fatalf("bind %s: %v", addr, err)
+	}
+	if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 		log.Printf("server error: %v", err)
 	}
 }
