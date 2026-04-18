@@ -5,7 +5,6 @@ import { Plus, Sliders, HardDrives } from '@phosphor-icons/react'
 import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
-import { CollapseButton } from './CollapseButton'
 import { useWorkspaceIndicators } from '../useWorkspaceIndicators'
 import type { ActiveStatus } from '../workspace-indicators'
 import type { ActivityBarProps } from './activity-bar-props'
@@ -219,7 +218,6 @@ export function ActivityBarNarrow({
         </button>
       </div>
       </div>
-      <CollapseButton variant="divider" />
     </div>
   )
 }

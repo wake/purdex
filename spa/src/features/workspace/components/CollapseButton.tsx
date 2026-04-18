@@ -8,11 +8,18 @@ interface Props {
   variant?: Variant
 }
 
+// topbar: inline-padding layout that matches the TitleBar's region-toggle /
+// layout-pattern buttons so the collapse control reads as a sibling of them.
 const VARIANT_CLASSES: Record<Variant, string> = {
   'header-right': 'w-6 h-6 rounded-md',
-  // Divider: floats on the narrow bar's right edge, hover-revealed.
   divider: 'absolute top-3 right-[-11px] w-[22px] h-[22px] rounded-full bg-surface-tertiary border border-border-subtle shadow-sm opacity-0 group-hover/narrow-bar:opacity-100 focus:opacity-100 transition-opacity z-10',
-  topbar: 'w-6 h-6 rounded',
+  topbar: 'p-1 rounded',
+}
+
+const ICON_SIZE: Record<Variant, number> = {
+  'header-right': 12,
+  divider: 12,
+  topbar: 14,
 }
 
 export function CollapseButton({ variant = 'header-right' }: Props) {
@@ -41,13 +48,13 @@ export function CollapseButton({ variant = 'header-right' }: Props) {
       aria-pressed={isWide}
       data-variant={variant}
       onClick={toggle}
-      className={`${VARIANT_CLASSES[variant]} flex items-center justify-center transition ${
+      className={`${VARIANT_CLASSES[variant]} flex items-center justify-center transition-colors ${
         locked
           ? 'text-text-muted/50 cursor-not-allowed'
-          : 'cursor-pointer text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
+          : 'cursor-pointer text-text-secondary hover:text-text-primary hover:bg-surface-hover'
       }`}
     >
-      <Icon size={12} />
+      <Icon size={ICON_SIZE[variant]} />
     </button>
   )
 }
