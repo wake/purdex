@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.170] - 2026-04-18
+
+### Hotfix: Tab icon 對齊統一 ml-px (#449)
+
+- **alpha.169 對齊翻車**：badge mode 改 `ml-[3px]` 想補償 Phosphor robot glyph 的視覺偏移，方向與幅度都猜錯，結果 robot 變成比 terminal 偏右 2–3px。
+- **修正**：badge mode 改回 `ml-px`（alpha.168 值），同時 icon / dot / iconDot 三個 wrapper 也補上 `ml-px`。`TabIcon.tsx` 與 `renderInlineTabIcon.tsx` 兩處同步。
+- **效果**：所有 indicator style 的 icon 欄位橫向位置完全脫鉤、落在同一 x。
+
 ## [1.0.0-alpha.169] - 2026-04-18
 
 ### Fixes / UI: tab/workspace 對齊與對比微調 (#448)
