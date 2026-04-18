@@ -135,7 +135,7 @@ func TestInstallStatuslinePdx_Empty(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := getStatusLineCommand(t, path)
-	if got != "/opt/bin/pdx statusline-proxy" {
+	if got != "'/opt/bin/pdx' statusline-proxy" {
 		t.Errorf("command = %q", got)
 	}
 }
@@ -161,7 +161,7 @@ func TestInstallStatuslineWrap_SimpleInner(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := getStatusLineCommand(t, path)
-	want := "/opt/bin/pdx statusline-proxy --inner 'ccstatusline'"
+	want := "'/opt/bin/pdx' statusline-proxy --inner 'ccstatusline'"
 	if got != want {
 		t.Errorf("command = %q, want %q", got, want)
 	}
@@ -174,7 +174,7 @@ func TestInstallStatuslineWrap_InnerWithSingleQuote(t *testing.T) {
 	}
 	got := getStatusLineCommand(t, path)
 	// POSIX single-quote escape: ' -> '\''
-	want := "/opt/bin/pdx statusline-proxy --inner 'it'\\''s'"
+	want := "'/opt/bin/pdx' statusline-proxy --inner 'it'\\''s'"
 	if got != want {
 		t.Errorf("command = %q, want %q", got, want)
 	}
@@ -279,5 +279,34 @@ func TestWriteSettings_NoTmpLeftAfterRenameFailure(t *testing.T) {
 	entries, _ := filepath.Glob(base + "*.tmp")
 	if len(entries) != 0 {
 		t.Errorf("tmp leak: %v", entries)
+	}
+}
+
+func TestInstallStatuslinePdx_PdxPathWithSpaces(t *testing.T) {
+	path := writeSettings(t, `{}`)
+	spaced := "/Applications/Claude Code.app/Contents/Resources/pdx"
+	if err := installStatuslinePdx(path, spaced); err != nil {
+		t.Fatal(err)
+	}
+	// Round-trip: detection must classify as "pdx", not "unmanaged".
+	m, _ := detectStatuslineMode(path)
+	if m.Mode != "pdx" {
+		t.Errorf("spaced pdxPath install round-trip: mode = %q, want pdx (raw cmd = %q)", m.Mode, m.RawCommand)
+	}
+}
+
+func TestInstallStatuslineWrap_PdxPathWithSpaces(t *testing.T) {
+	path := writeSettings(t, `{}`)
+	spaced := "/Applications/Claude Code.app/Contents/Resources/pdx"
+	inner := "ccstatusline --format compact"
+	if err := installStatuslineWrap(path, spaced, inner); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := detectStatuslineMode(path)
+	if m.Mode != "wrapped" {
+		t.Errorf("spaced pdxPath wrap round-trip: mode = %q, want wrapped (raw cmd = %q)", m.Mode, m.RawCommand)
+	}
+	if m.Inner != inner {
+		t.Errorf("inner round-trip: got %q, want %q", m.Inner, inner)
 	}
 }

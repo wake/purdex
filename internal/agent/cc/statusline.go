@@ -130,7 +130,7 @@ func installStatuslinePdx(path, pdxPath string) error {
 	}
 	settings["statusLine"] = map[string]any{
 		"type":    "command",
-		"command": fmt.Sprintf("%s statusline-proxy", pdxPath),
+		"command": fmt.Sprintf("%s statusline-proxy", shellSingleQuote(pdxPath)),
 	}
 	return writeSettingsAtomic(path, settings)
 }
@@ -142,7 +142,7 @@ func installStatuslineWrap(path, pdxPath, inner string) error {
 	}
 	settings["statusLine"] = map[string]any{
 		"type":    "command",
-		"command": fmt.Sprintf("%s statusline-proxy --inner %s", pdxPath, shellSingleQuote(inner)),
+		"command": fmt.Sprintf("%s statusline-proxy --inner %s", shellSingleQuote(pdxPath), shellSingleQuote(inner)),
 	}
 	return writeSettingsAtomic(path, settings)
 }
