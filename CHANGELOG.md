@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-alpha.176] - 2026-04-18
+
+### Tweak: TitleBar 按鈕下移幅度 5px → 3px
+
+- `sidebar-toggle` / `layout-buttons` 兩個 slot 的 `translate-y` 從 5px 降到 3px，視覺上稍微往上靠一點。
+- 直接 main commit（微調，無 PR）。
+
 ## [1.0.0-alpha.175] - 2026-04-18
 
 ### Polish: TitleBar 按鈕視覺收斂 (#454)
