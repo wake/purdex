@@ -503,6 +503,61 @@ func TestActivityWatch_YellowLightRecovery(t *testing.T) {
 	}
 }
 
+// --- Task 9: GET /api/agent/{agent}/statusline/status ---
+
+func TestHandleStatuslineStatus_UnknownAgent(t *testing.T) {
+	m := newTestModule(t)
+	// No provider registered — expect 404 "unknown agent"
+	req := httptest.NewRequest("GET", "/api/agent/cc/statusline/status", nil)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+	m.handleStatuslineStatus(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleStatuslineStatus_UnsupportedAgent(t *testing.T) {
+	m := newTestModule(t)
+	// Path value other than "cc" should be rejected before registry lookup.
+	req := httptest.NewRequest("GET", "/api/agent/codex/statusline/status", nil)
+	req.SetPathValue("agent", "codex")
+	w := httptest.NewRecorder()
+	m.handleStatuslineStatus(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleStatuslineStatus_CC_Registered(t *testing.T) {
+	m := newTestModule(t)
+	// Real CC provider with nil deps — CheckStatusline only uses ccSettingsPath
+	// + detectStatuslineMode, neither of which need prober/tmux/cfg.
+	ccProvider := agentcc.NewProvider(nil, nil, nil, nil)
+	m.registry.Register(ccProvider)
+
+	req := httptest.NewRequest("GET", "/api/agent/cc/statusline/status", nil)
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+	m.handleStatuslineStatus(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s)", w.Code, w.Body.String())
+	}
+	var body agentpkg.StatuslineState
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.SettingsPath == "" {
+		t.Errorf("expected settingsPath to be populated")
+	}
+	// Mode depends on host env (CC may or may not be installed). Just assert a valid value.
+	switch body.Mode {
+	case "none", "pdx", "wrapped", "unmanaged":
+	default:
+		t.Errorf("unexpected mode: %q", body.Mode)
+	}
+}
+
 func TestActivityWatch_HookEventSupersedes(t *testing.T) {
 	m := newTestModule(t)
 

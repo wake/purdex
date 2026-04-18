@@ -297,6 +297,35 @@ func (m *Module) handleHookSetup(w http.ResponseWriter, r *http.Request) {
 	m.handleHookStatus(w, r)
 }
 
+// handleStatuslineStatus handles GET /api/agent/{agent}/statusline/status.
+// Currently only "cc" is supported; other agent types return 404.
+func (m *Module) handleStatuslineStatus(w http.ResponseWriter, r *http.Request) {
+	agentType := r.PathValue("agent")
+	if agentType != "cc" {
+		http.Error(w, `{"error":"unsupported agent"}`, http.StatusNotFound)
+		return
+	}
+	provider, ok := m.registry.Get(agentType)
+	if !ok {
+		http.Error(w, `{"error":"unknown agent"}`, http.StatusNotFound)
+		return
+	}
+	installer, ok := provider.(agentpkg.StatuslineInstaller)
+	if !ok {
+		http.Error(w, `{"error":"agent does not support statusline"}`, http.StatusNotFound)
+		return
+	}
+	state, err := installer.CheckStatusline()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(state)
+}
+
 // handleHistory handles GET /api/sessions/{code}/history.
 func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
