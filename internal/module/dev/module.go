@@ -155,6 +155,7 @@ func (m *DevModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/dev/update/check", m.handleCheck)
 	mux.HandleFunc("GET /api/dev/update/check/stream", m.handleCheckStream)
 	mux.HandleFunc("GET /api/dev/update/download", m.handleDownload)
+	mux.HandleFunc("GET /api/dev/daemon/check", m.handleDaemonCheck)
 }
 
 func (m *DevModule) Start(_ context.Context) error {
