@@ -200,6 +200,11 @@ export default function App() {
     useHostStore.getState().setActiveHost(hostId)
   }, [openSingletonAndSelect])
 
+  const handleRenameTab = useCallback((tabId: string) => {
+    const tab = tabs[tabId]
+    if (tab) openRenameForTab(tab)
+  }, [tabs, openRenameForTab])
+
   const handleMigrateConfirm = useCallback(() => {
     if (!migrateDialog) return
     tabOrder.forEach((tabId) => {
@@ -240,6 +245,7 @@ export default function App() {
             onCloseTab={handleCloseTab}
             onMiddleClickTab={handleMiddleClick}
             onContextMenuTab={handleContextMenu}
+            onRenameTab={handleRenameTab}
             onReorderWorkspaceTabs={handleReorderWorkspaceTabs}
             onReorderStandaloneTabs={handleReorderStandaloneTabs}
             onAddTabToWorkspace={handleAddTabToWorkspace}
@@ -256,6 +262,7 @@ export default function App() {
                 onReorderTabs={handleReorderTabs}
                 onMiddleClick={handleMiddleClick}
                 onContextMenu={handleContextMenu}
+                onRenameTab={handleRenameTab}
               />
             )}
             <div className="flex-1 flex overflow-hidden">

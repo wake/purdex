@@ -20,6 +20,7 @@ interface Props {
   onClose: (tabId: string) => void
   onMiddleClick: (tabId: string) => void
   onContextMenu: (e: React.MouseEvent, tabId: string) => void
+  onRename?: (tabId: string) => void
 }
 
 export function InlineTab({
@@ -31,6 +32,7 @@ export function InlineTab({
   onClose,
   onMiddleClick,
   onContextMenu,
+  onRename,
 }: Props) {
   const t = useI18nStore((s) => s.t)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -123,6 +125,7 @@ export function InlineTab({
       role="button"
       tabIndex={0}
       onClick={() => onSelect(tab.id)}
+      onDoubleClick={() => onRename?.(tab.id)}
       onMouseDown={handleMouseDown}
       onContextMenu={(e) => onContextMenu(e, tab.id)}
       className={`group relative flex items-center gap-1.5 mx-2 pl-6 pr-1.5 py-1 rounded-md text-xs cursor-pointer transition-colors ${activeClasses}`}

@@ -286,6 +286,7 @@
 
   "status.no_active": "No active session",
   "status.rename_hint": "Double-click to rename session",
+  "status.open_host_hint": "Click to open host settings",
 
   "stream.thinking": "Thinking...",
   "stream.waiting": "Waiting for messages...",
