@@ -8,7 +8,6 @@ import { renderInlineTabIcon } from '../lib/renderInlineTabIcon'
 
 interface Props {
   tab: Tab
-  title: string
   isActive: boolean
   sourceWsId?: string | null
   onSelect: (tabId: string) => void
@@ -20,7 +19,6 @@ interface Props {
 
 export function InlineTab({
   tab,
-  title,
   isActive,
   sourceWsId = null,
   onSelect,
@@ -44,7 +42,7 @@ export function InlineTab({
     subagentCount,
     tabIndicatorStyle,
     isHostOffline,
-  } = useTabDisplay(tab, { titleOverride: title })
+  } = useTabDisplay(tab)
 
   // Vertical-only drag — x locked to 0 so the row never slides horizontally
   // across the activity bar border.
@@ -136,7 +134,7 @@ export function InlineTab({
       {showClose && (
         <button
           type="button"
-          aria-label={`Close ${title}`}
+          aria-label={`Close ${displayTitle}`}
           title={t('common.close')}
           onClick={handleCloseClick}
           onMouseDown={(e) => e.stopPropagation()}

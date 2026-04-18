@@ -27,22 +27,15 @@ export interface TabDisplayData {
   tabIndicatorStyle: TabIndicatorStyle
   isHostOffline: boolean
   isTerminated: boolean
-  hostId: string
-  sessionCode: string | undefined
-  compositeKey: string | undefined
-}
-
-interface Options {
-  /** Override the base label; OSC still takes precedence when active. */
-  titleOverride?: string
 }
 
 /**
  * Shared tab display state for InlineTab (activity bar) and SortableTab (top
- * TabBar). Centralises OSC title resolution, agent-icon fallback, host-offline
- * detection, and agent store reads so both surfaces render consistently.
+ * TabBar). Centralises label + OSC title resolution, agent-icon fallback,
+ * host-offline detection, and agent store reads so both surfaces render
+ * identically.
  */
-export function useTabDisplay(tab: Tab, options?: Options): TabDisplayData {
+export function useTabDisplay(tab: Tab): TabDisplayData {
   const t = useI18nStore((s) => s.t)
   const primaryContent = getPrimaryPane(tab.layout).content
   const hostId = primaryContent.kind === 'tmux-session' ? primaryContent.hostId : ''
@@ -73,14 +66,9 @@ export function useTabDisplay(tab: Tab, options?: Options): TabDisplayData {
   const agentIcon = !isTerminated && agentType ? getAgentIcon(agentType, { ccVariant: ccIconVariant }) : undefined
   const IconComponent = (agentIcon ?? paneIcon) as TabIconComponent | undefined
 
-  let baseLabel: string
-  if (options?.titleOverride !== undefined) {
-    baseLabel = options.titleOverride
-  } else {
-    const sessionLookup = { getByCode: (code: string) => sessions.find((sess) => sess.code === code) }
-    const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
-    baseLabel = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
-  }
+  const sessionLookup = { getByCode: (code: string) => sessions.find((sess) => sess.code === code) }
+  const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
+  const baseLabel = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
 
   const useOsc = showOscTitle && !isTerminated && !!agentType && !!oscTitle
   const displayTitle = useOsc && oscTitle ? oscTitle : baseLabel
@@ -96,8 +84,5 @@ export function useTabDisplay(tab: Tab, options?: Options): TabDisplayData {
     tabIndicatorStyle,
     isHostOffline,
     isTerminated,
-    hostId,
-    sessionCode,
-    compositeKey: ck,
   }
 }

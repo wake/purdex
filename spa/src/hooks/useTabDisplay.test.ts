@@ -58,10 +58,22 @@ describe('useTabDisplay — label resolution', () => {
     expect(result.current.displayTitle).toBe('sc1')
   })
 
-  it('uses titleOverride when provided', () => {
-    const { result } = renderHook(() => useTabDisplay(makeTab(), { titleOverride: 'custom' }))
-    expect(result.current.displayTitle).toBe('custom')
-    expect(result.current.tooltip).toBe('custom')
+  it('falls back to cachedName when session not found and cachedName present', () => {
+    const { result } = renderHook(() => useTabDisplay(makeTab({ cachedName: 'cached' })))
+    expect(result.current.displayTitle).toBe('cached')
+  })
+
+  it('scopes session lookup to the tabs own hostId (no cross-host collisions)', () => {
+    useSessionStore.setState({
+      sessions: {
+        h1: [{ code: 'sc1', name: 'correct' }] as never,
+        h2: [{ code: 'sc1', name: 'wrong-host' }] as never,
+      },
+      activeHostId: null,
+      activeCode: null,
+    })
+    const { result } = renderHook(() => useTabDisplay(makeTab({ hostId: 'h1' })))
+    expect(result.current.displayTitle).toBe('correct')
   })
 })
 
