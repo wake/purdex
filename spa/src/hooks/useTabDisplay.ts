@@ -19,6 +19,11 @@ export type TabIconComponent = ComponentType<{ size: number; className?: string 
 
 export interface TabDisplayData {
   displayTitle: string
+  /**
+   * @deprecated Identical to `displayTitle` post-T16. Kept only because
+   * SortableTab still passes this as a native `title=""` attribute. Remove
+   * once SortableTab migrates to HoverTooltip.
+   */
   tooltip: string
   IconComponent: TabIconComponent | undefined
   agentStatus: AgentStatus | undefined
