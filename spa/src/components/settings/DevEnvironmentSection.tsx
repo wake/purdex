@@ -5,7 +5,7 @@ import { DevBuildLogPanel } from './DevBuildLogPanel'
 
 type UpdateStatus = 'idle' | 'checking' | 'building' | 'up_to_date' | 'update_available' | 'error'
 
-type DaemonPhase = 'idle' | 'checking' | 'rebuilding' | 'restarting' | 'done' | 'error'
+type DaemonPhase = 'idle' | 'checking' | 'rebuilding' | 'restarting' | 'error'
 
 interface DaemonCheck {
   current_hash: string
@@ -127,9 +127,11 @@ export function DevEnvironmentSection() {
               setDaemonPhase('error')
               encounteredError = true
               break
-            case 'success':
-              setDaemonLog((prev) => [...prev, `✓ build complete (${ev.new_hash ?? ''})`])
+            case 'success': {
+              const hashSuffix = ev.new_hash ? ` (${ev.new_hash})` : ''
+              setDaemonLog((prev) => [...prev, `✓ ${t('settings.dev.daemon.build_complete')}${hashSuffix}`])
               break
+            }
             case 'restarting':
               setDaemonPhase('restarting')
               break
@@ -145,7 +147,7 @@ export function DevEnvironmentSection() {
       setDaemonError(err instanceof Error ? err.message : String(err))
       setDaemonPhase('error')
     }
-  }, [daemonBase, daemonAuthHeaders, checkDaemon])
+  }, [daemonBase, daemonAuthHeaders, checkDaemon, t])
 
   // Load daemon status on mount / host change
   useEffect(() => {
