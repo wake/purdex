@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.179] - 2026-04-19
+
+### Fix: Activity bar resize handle 無法拖曳（#455）
+
+- `ActivityBarWide` 包 `RegionResize` 的 wrapper 從 `hidden lg:block` 改為 `hidden lg:flex`。
+- 原本 `.relative.w-px` 是 block-in-block，高度塌成 0，`inset-y-0` 熱區跟著變 0 高，看似 handle 存在實則點不到。
+- 改成 flex 容器後內層以 flex item stretch 填滿，熱區恢復正常可拖。
+
 ## [1.0.0-alpha.178] - 2026-04-18
 
 ### Tweak: TitleBar 按鈕下移幅度 2px → 2.5px
