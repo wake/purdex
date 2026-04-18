@@ -16,6 +16,7 @@ interface Props {
   onClose: (tabId: string) => void
   onMiddleClick: (tabId: string) => void
   onContextMenu: (e: React.MouseEvent, tabId: string) => void
+  onRename?: (tabId: string) => void
 }
 
 export function InlineTabList({
@@ -27,6 +28,7 @@ export function InlineTabList({
   onClose,
   onMiddleClick,
   onContextMenu,
+  onRename,
 }: Props) {
   const t = useI18nStore((s) => s.t)
   const sessionsByHost = useSessionStore((s) => s.sessions)
@@ -76,6 +78,7 @@ export function InlineTabList({
               onClose={onClose}
               onMiddleClick={onMiddleClick}
               onContextMenu={onContextMenu}
+              onRename={onRename}
             />
           )
         })}

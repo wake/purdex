@@ -62,6 +62,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
     onCloseTab,
     onMiddleClickTab,
     onContextMenuTab,
+    onRenameTab,
     onReorderWorkspaceTabs,
     onReorderStandaloneTabs,
     onAddTabToWorkspace,
@@ -90,6 +91,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const closeTab = onCloseTab ?? NOOP
   const middleClickTab = onMiddleClickTab ?? NOOP
   const contextMenuTab = onContextMenuTab ?? NOOP
+  const renameTab = onRenameTab
   const addTabToWs = onAddTabToWorkspace ?? NOOP
 
   const insertTab = useWorkspaceStore((s) => s.insertTab)
@@ -276,6 +278,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
             onCloseTab={closeTab}
             onMiddleClickTab={middleClickTab}
             onContextMenuTab={contextMenuTab}
+            onRenameTab={renameTab}
           />
 
           {workspaces.length > 0 && (
@@ -299,6 +302,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
                   onCloseTab={closeTab}
                   onMiddleClickTab={middleClickTab}
                   onContextMenuTab={contextMenuTab}
+                  onRenameTab={renameTab}
                   onAddTabToWorkspace={addTabToWs}
                 />
               ))}

@@ -16,6 +16,7 @@ interface Props {
   onCloseTab: (tabId: string) => void
   onMiddleClickTab: (tabId: string) => void
   onContextMenuTab: (e: React.MouseEvent, tabId: string) => void
+  onRenameTab?: (tabId: string) => void
 }
 
 export function HomeRow(props: Props) {
@@ -29,6 +30,7 @@ export function HomeRow(props: Props) {
     onCloseTab,
     onMiddleClickTab,
     onContextMenuTab,
+    onRenameTab,
   } = props
   const t = useI18nStore((s) => s.t)
   const expanded = useLayoutStore((s) => !!s.workspaceExpanded[HOME_WS_KEY])
@@ -96,6 +98,7 @@ export function HomeRow(props: Props) {
           onClose={onCloseTab}
           onMiddleClick={onMiddleClickTab}
           onContextMenu={onContextMenuTab}
+          onRename={onRenameTab}
         />
       )}
     </div>

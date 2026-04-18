@@ -162,14 +162,14 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   return (
     <div className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted gap-3 flex-shrink-0 relative z-10">
       <span
-        className="text-text-secondary cursor-pointer select-none"
-        title={t('status.rename_hint')}
-        onDoubleClick={handleNameDoubleClick}
+        className="text-text-secondary select-none"
+        title={t('status.open_host_hint')}
+        onClick={agentHostId ? () => onNavigateToHost?.(agentHostId) : undefined}
       >
         {hostName}
       </span>
       <span
-        className="text-text-secondary cursor-pointer select-none"
+        className="text-text-secondary select-none"
         title={t('status.rename_hint')}
         onDoubleClick={handleNameDoubleClick}
       >

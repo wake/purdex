@@ -17,6 +17,7 @@ interface Props {
   onReorderTabs: (newOrder: string[]) => void
   onMiddleClick: (tabId: string) => void
   onContextMenu: (e: React.MouseEvent, tabId: string) => void
+  onRenameTab?: (tabId: string) => void
   /** When embedded in Electron title bar — no border, no fixed height */
   embedded?: boolean
 }
@@ -25,7 +26,7 @@ function TabSeparator({ show }: { show: boolean }) {
   return <div className={`w-px h-3.5 flex-shrink-0 transition-opacity duration-150 ease-out ${show ? 'bg-border-default' : 'bg-transparent'}`} />
 }
 
-export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, embedded }: Props) {
+export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded }: Props) {
   const t = useI18nStore((s) => s.t)
   const pinnedTabs = useMemo(() => tabs.filter((t) => t.pinned), [tabs])
   const normalTabs = useMemo(() => tabs.filter((t) => !t.pinned), [tabs])
@@ -105,6 +106,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                       onClose={onCloseTab}
                       onMiddleClick={onMiddleClick}
                       onContextMenu={onContextMenu}
+                      onRename={onRenameTab}
                       onHover={setHoveredTabId}
                       iconMap={ICON_MAP}
                     />
@@ -140,6 +142,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                       onClose={onCloseTab}
                       onMiddleClick={onMiddleClick}
                       onContextMenu={onContextMenu}
+                      onRename={onRenameTab}
                       onHover={setHoveredTabId}
                       iconMap={ICON_MAP}
                     />

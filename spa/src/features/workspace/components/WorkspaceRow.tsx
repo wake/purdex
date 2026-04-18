@@ -19,6 +19,7 @@ interface Props {
   onCloseTab: (tabId: string) => void
   onMiddleClickTab: (tabId: string) => void
   onContextMenuTab: (e: React.MouseEvent, tabId: string) => void
+  onRenameTab?: (tabId: string) => void
   onAddTabToWorkspace: (wsId: string) => void
 }
 
@@ -34,6 +35,7 @@ export function WorkspaceRow(props: Props) {
     onCloseTab,
     onMiddleClickTab,
     onContextMenuTab,
+    onRenameTab,
     onAddTabToWorkspace,
   } = props
   const t = useI18nStore((s) => s.t)
@@ -137,6 +139,7 @@ export function WorkspaceRow(props: Props) {
           onClose={onCloseTab}
           onMiddleClick={onMiddleClickTab}
           onContextMenu={onContextMenuTab}
+          onRename={onRenameTab}
         />
       )}
     </div>
