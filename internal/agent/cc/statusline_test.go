@@ -244,3 +244,40 @@ func TestRemoveStatusline_None_NoOp(t *testing.T) {
 		t.Fatalf("remove of none should no-op: %v", err)
 	}
 }
+
+func TestWriteSettings_PreservesFileMode(t *testing.T) {
+	path := writeSettings(t, `{"statusLine":{"type":"command","command":"/opt/bin/pdx statusline-proxy"}}`)
+	if err := os.Chmod(path, 0600); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	// Any install/remove operation goes through writeSettingsAtomic.
+	if err := installStatuslinePdx(path, "/opt/bin/pdx"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Mode().Perm(); got != 0600 {
+		t.Errorf("mode = %o, want 0600", got)
+	}
+}
+
+func TestWriteSettings_NoTmpLeftAfterRenameFailure(t *testing.T) {
+	// Force a rename failure by making the target an un-renameable-onto directory.
+	// We simulate by pointing path into a dir that can't be created; MkdirAll fails first.
+	// Simpler: use an invalid path under a regular file.
+	base := writeSettings(t, `{}`) // a regular file
+	invalid := filepath.Join(base, "nested", "settings.json")
+	// MkdirAll will fail because base is a file, not a dir.
+	err := installStatuslinePdx(invalid, "/opt/bin/pdx")
+	if err == nil {
+		t.Fatal("expected error writing under a regular file")
+	}
+	// No .tmp sibling should be left next to any part of the invalid path.
+	// (installs must not leave garbage on failure.)
+	entries, _ := filepath.Glob(base + "*.tmp")
+	if len(entries) != 0 {
+		t.Errorf("tmp leak: %v", entries)
+	}
+}

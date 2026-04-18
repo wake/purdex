@@ -100,8 +100,14 @@ func writeSettingsAtomic(path string, settings map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
+	// Preserve existing file mode so we never widen permissions (e.g. 0600 → 0644).
+	mode := os.FileMode(0644)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, out, 0644); err != nil {
+	if err := os.WriteFile(tmp, out, mode); err != nil {
+		os.Remove(tmp)
 		return fmt.Errorf("write temp: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
