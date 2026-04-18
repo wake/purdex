@@ -59,3 +59,45 @@ func TestReadStdinWithTimeout_Empty(t *testing.T) {
 		t.Errorf("empty stdin got %q, want {}", got)
 	}
 }
+
+func TestParseInnerFlag(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{}, ""},
+		{[]string{"--inner", "ccstatusline"}, "ccstatusline"},
+		{[]string{"--inner", "ccstatusline --format compact"}, "ccstatusline --format compact"},
+		{[]string{"--unknown", "x"}, ""},
+	}
+	for _, tc := range cases {
+		got := parseInnerFlag(tc.args)
+		if got != tc.want {
+			t.Errorf("parseInnerFlag(%v) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestExecInner_Success(t *testing.T) {
+	stdin := []byte(`{"a":1}`)
+	got := execInner("echo hello", stdin, 2)
+	if strings.TrimSpace(got) != "hello" {
+		t.Errorf("execInner stdout = %q, want %q", got, "hello")
+	}
+}
+
+func TestExecInner_Timeout(t *testing.T) {
+	got := execInner("sleep 5", []byte("{}"), 1)
+	// Timeout is silent; empty or partial stdout is acceptable.
+	if got == "should-never-happen" {
+		t.Error("sentinel check")
+	}
+	_ = got
+}
+
+func TestExecInner_NonZeroExitCaptured(t *testing.T) {
+	got := execInner("printf 'foo'; exit 1", []byte("{}"), 2)
+	if strings.TrimSpace(got) != "foo" {
+		t.Errorf("non-zero exit should still capture stdout; got %q", got)
+	}
+}

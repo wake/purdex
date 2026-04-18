@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"time"
 )
 
@@ -74,11 +77,41 @@ func renderMinimal(raw json.RawMessage) string {
 	return out
 }
 
+// parseInnerFlag extracts the value following "--inner" from args.
+// Returns "" when absent.
+func parseInnerFlag(args []string) string {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--inner" {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+// execInner runs the user-supplied inner command via `sh -c`, feeding stdinJSON
+// to its stdin. The inner command's stdout is captured and returned; stderr
+// and non-zero exit codes are ignored. timeoutSec caps total execution.
+func execInner(inner string, stdinJSON []byte, timeoutSec int) string {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", inner)
+	cmd.Stdin = bytes.NewReader(stdinJSON)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	_ = cmd.Run()
+	return out.String()
+}
+
 // runStatuslineProxy is the entry point for `pdx statusline-proxy [--inner "<cmd>"]`.
 // Full implementation added in later tasks; stub for now.
 func runStatuslineProxy(args []string) {
-	_ = args
+	inner := parseInnerFlag(args)
 	raw := readStdinWithTimeout(os.Stdin, 5)
-	fmt.Println(renderMinimal(raw))
+
+	if inner != "" {
+		fmt.Print(execInner(inner, raw, 2))
+	} else {
+		fmt.Println(renderMinimal(raw))
+	}
 	os.Exit(0)
 }
