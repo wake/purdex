@@ -2,8 +2,12 @@ package dev
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +34,83 @@ func TestHandleDaemonCheck_ReturnsHashes(t *testing.T) {
 	}
 	if body.LatestHash == "" {
 		t.Error("latest_hash empty — expected a git commit short hash")
+	}
+}
+
+func TestHandleDaemonRebuild_BuildsInTempRepo(t *testing.T) {
+	t.Setenv("PDX_DEV_UPDATE", "1")
+	dir := t.TempDir()
+	// Minimal go module that builds at ./cmd/pdx.
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "cmd", "pdx"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cmd", "pdx", "main.go"), []byte("package main\nfunc main(){}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &DevModule{repoRoot: dir}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/dev/daemon/rebuild", m.handleDaemonRebuild)
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/dev/daemon/rebuild", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	got := string(body)
+	if !strings.Contains(got, `"type":"success"`) {
+		t.Errorf("expected success event, got:\n%s", got)
+	}
+	if !strings.Contains(got, "data: ") {
+		t.Errorf("expected SSE framing, got:\n%s", got)
+	}
+	// New binary should exist.
+	if _, err := os.Stat(filepath.Join(dir, "bin", "pdx.new")); err != nil {
+		t.Errorf("pdx.new not produced: %v", err)
+	}
+}
+
+func TestHandleDaemonRebuild_ConcurrentReturns409(t *testing.T) {
+	daemonRebuildMu.Lock()
+	defer daemonRebuildMu.Unlock()
+
+	m := &DevModule{repoRoot: "."}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/dev/daemon/rebuild", nil)
+	m.handleDaemonRebuild(w, req)
+	if w.Code != http.StatusConflict {
+		t.Errorf("want 409, got %d", w.Code)
+	}
+}
+
+func TestHandleDaemonRebuild_BuildFailureEmitsError(t *testing.T) {
+	t.Setenv("PDX_DEV_UPDATE", "1")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "cmd", "pdx"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberate syntax error to trigger go build failure.
+	if err := os.WriteFile(filepath.Join(dir, "cmd", "pdx", "main.go"), []byte("package main\nfunc main(){ broken syntax }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m := &DevModule{repoRoot: dir}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/dev/daemon/rebuild", nil)
+	m.handleDaemonRebuild(w, req)
+	body := w.Body.String()
+	if !strings.Contains(body, `"type":"error"`) {
+		t.Errorf("expected error event, got:\n%s", body)
 	}
 }
 
