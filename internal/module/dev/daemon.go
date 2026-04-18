@@ -53,13 +53,16 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
+	var writeMu sync.Mutex
 	writeEvent := func(ev daemonRebuildEvent) {
 		data, err := json.Marshal(ev)
 		if err != nil {
 			return
 		}
+		writeMu.Lock()
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
+		writeMu.Unlock()
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
