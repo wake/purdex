@@ -36,6 +36,7 @@
   "settings.sync.status.importFailed": "匯入失敗：{{reason}}",
   "settings.sync.status.onlyDaemon": "目前「立即同步」僅在 Daemon 提供者可用。",
   "settings.sync.status.selectHost": "請先選擇同步主機。",
+  "settings.sync.status.resolvePushFailed": "已在本地解決衝突，但推送至遠端失敗：{{reason}}",
   "settings.sync.status.conflictsPending_one": "{{count}} 個衝突待處理 — 詳見上方提示",
   "settings.sync.status.conflictsPending_other": "{{count}} 個衝突待處理 — 詳見上方提示",
   "settings.sync.modules.label": "模組",

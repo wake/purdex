@@ -215,12 +215,31 @@ export function SyncSection() {
     }
   }
 
-  const handleResolveConflicts = (resolved: Record<string, 'local' | 'remote'>) => {
+  const handleResolveConflicts = async (resolved: Record<string, 'local' | 'remote'>) => {
     if (!pendingRemoteBundle) return
     const count = pendingConflicts.length
     syncEngine.resolveConflicts(pendingRemoteBundle, pendingConflicts, resolved)
     setLastSyncedBundle(pendingRemoteBundle)
     clearPendingConflicts()
+
+    // Push merged local state to remote so other devices don't see ghost
+    // conflicts when they pull next. Only daemon has a writable remote; the
+    // file/import path is one-shot and has nowhere to push to.
+    if (currentProvider === 'daemon' && syncHostId) {
+      const clientId = getClientId()
+      const provider = createDaemonProvider(syncHostId, clientId)
+      try {
+        await syncEngine.push(provider, clientId, enabledModules)
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        setStatus({
+          tone: 'error',
+          message: t('settings.sync.status.resolvePushFailed', { reason }),
+        })
+        return
+      }
+    }
+
     setStatus({ tone: 'success', message: t(pluralKey('settings.sync.conflict.resolved', count), { count }) })
   }
 

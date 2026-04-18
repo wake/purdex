@@ -6,6 +6,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { SyncSection } from './SyncSection'
 import * as syncActionsModule from '../../lib/sync/sync-actions'
 import type { SyncActionResult } from '../../lib/sync/sync-actions'
+import { syncEngine } from '../../lib/sync/register-sync'
 import type { SyncBundle, ConflictItem } from '../../lib/sync/types'
 
 function resetStores() {
@@ -16,6 +17,7 @@ function resetStores() {
 describe('SyncSection', () => {
   beforeEach(() => {
     resetStores()
+    vi.restoreAllMocks()
   })
 
   it('renders provider selector', () => {
@@ -110,11 +112,18 @@ describe('SyncSection', () => {
 
   it('apply in banner: calls engine.resolveConflicts + clears pending', async () => {
     useSyncStore.getState().setActiveProvider('daemon')
+    useSyncStore.getState().setSyncHostId('h1')
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1', name: 'mini', ip: '127.0.0.1', port: 7860 } as never },
+      hostOrder: ['h1'],
+    })
     const bundle: SyncBundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
     useSyncStore.getState().setPendingConflicts(
       [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
       bundle,
     )
+    // Suppress push side effect for this happy-path assertion.
+    vi.spyOn(syncEngine, 'push').mockResolvedValue(bundle)
     render(<SyncSection />)
     fireEvent.click(screen.getByRole('button', { name: /view details|查看詳情/i }))
     const radios = screen.getAllByRole('radio')
@@ -126,5 +135,49 @@ describe('SyncSection', () => {
       expect(s.pendingConflicts).toEqual([])
       expect(s.lastSyncedBundle).toEqual(bundle)
     })
+  })
+
+  it('apply in banner (daemon): pushes merged state to provider after resolve', async () => {
+    useSyncStore.getState().setActiveProvider('daemon')
+    useSyncStore.getState().setSyncHostId('h1')
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1', name: 'mini', ip: '127.0.0.1', port: 7860 } as never },
+      hostOrder: ['h1'],
+    })
+    const bundle: SyncBundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setPendingConflicts(
+      [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
+      bundle,
+    )
+    const pushSpy = vi.spyOn(syncEngine, 'push').mockResolvedValue(bundle)
+
+    render(<SyncSection />)
+    fireEvent.click(screen.getByRole('button', { name: /view details|查看詳情/i }))
+    fireEvent.click(screen.getAllByRole('radio')[1])
+    fireEvent.click(screen.getByRole('button', { name: /apply|套用/i }))
+
+    await waitFor(() => {
+      expect(pushSpy).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('apply in banner (file): does NOT push (file provider has no remote)', async () => {
+    useSyncStore.getState().setActiveProvider('file')
+    const bundle: SyncBundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.getState().setPendingConflicts(
+      [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
+      bundle,
+    )
+    const pushSpy = vi.spyOn(syncEngine, 'push').mockResolvedValue(bundle)
+
+    render(<SyncSection />)
+    fireEvent.click(screen.getByRole('button', { name: /view details|查看詳情/i }))
+    fireEvent.click(screen.getAllByRole('radio')[1])
+    fireEvent.click(screen.getByRole('button', { name: /apply|套用/i }))
+
+    await waitFor(() => {
+      expect(useSyncStore.getState().pendingConflicts).toEqual([])
+    })
+    expect(pushSpy).not.toHaveBeenCalled()
   })
 })

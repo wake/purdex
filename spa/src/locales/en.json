@@ -36,6 +36,7 @@
   "settings.sync.status.importFailed": "Import failed: {{reason}}",
   "settings.sync.status.onlyDaemon": "Sync Now is only available with the Daemon provider for now.",
   "settings.sync.status.selectHost": "Select a sync host first.",
+  "settings.sync.status.resolvePushFailed": "Conflicts resolved locally, but pushing to remote failed: {{reason}}",
   "settings.sync.status.conflictsPending_one": "1 conflict pending — see banner above",
   "settings.sync.status.conflictsPending_other": "{{count}} conflicts pending — see banner above",
   "settings.sync.modules.label": "Modules",
