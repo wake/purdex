@@ -80,6 +80,37 @@ describe('WorkspaceRow', () => {
     expect(screen.getByText('alpha.example.com')).toBeInTheDocument()
   })
 
+  it('clicking title on ACTIVE ws toggles expand (does not re-select)', () => {
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
+    const onSelect = vi.fn()
+    renderRow(mkWs('ws-1', 'Purdex'), { isActive: true, onSelectWorkspace: onSelect })
+    fireEvent.click(screen.getByText('Purdex'))
+    expect(useLayoutStore.getState().workspaceExpanded['ws-1']).toBe(true)
+    expect(onSelect).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByText('Purdex'))
+    expect(useLayoutStore.getState().workspaceExpanded['ws-1']).toBe(false)
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it("active-click toggle is inert when tabPosition='top' (no inline tabs); still selects", () => {
+    useLayoutStore.setState({ tabPosition: 'top' })
+    const onSelect = vi.fn()
+    renderRow(mkWs('ws-1', 'Purdex'), { isActive: true, onSelectWorkspace: onSelect })
+    fireEvent.click(screen.getByText('Purdex'))
+    expect(onSelect).toHaveBeenCalledWith('ws-1')
+    expect(useLayoutStore.getState().workspaceExpanded['ws-1']).toBeFalsy()
+  })
+
+  it('clicking title on INACTIVE ws selects (does not toggle)', () => {
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
+    const onSelect = vi.fn()
+    renderRow(mkWs('ws-1', 'Purdex'), { isActive: false, onSelectWorkspace: onSelect })
+    fireEvent.click(screen.getByText('Purdex'))
+    expect(onSelect).toHaveBeenCalledWith('ws-1')
+    expect(useLayoutStore.getState().workspaceExpanded['ws-1']).toBeFalsy()
+  })
+
   it('chevron toggles expand state', () => {
     useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
     renderRow(mkWs('ws-1', 'W', ['t1']), { tabsById: { t1: mkTab('t1', 'alpha') } })

@@ -32,6 +32,7 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     const allTabs = useTabStore.getState().tabs
     if (ws?.activeTabId && allTabs[ws.activeTabId]) setActiveTab(ws.activeTabId)
     else if (ws?.tabs[0]) setActiveTab(ws.tabs[0])
+    else setActiveTab(null)
   }, [setActiveWorkspace, setActiveTab])
 
   const handleSelectTab = useCallback((tabId: string) => {

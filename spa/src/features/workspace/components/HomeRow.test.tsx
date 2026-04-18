@@ -67,6 +67,37 @@ describe('HomeRow', () => {
     expect(screen.getByText('alpha.example.com')).toBeInTheDocument()
   })
 
+  it('clicking title on ACTIVE Home toggles expand (does not re-select)', () => {
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
+    const onSelectHome = vi.fn()
+    renderRow({ isActive: true, onSelectHome })
+    fireEvent.click(screen.getByText(/home/i))
+    expect(useLayoutStore.getState().workspaceExpanded['home']).toBe(true)
+    expect(onSelectHome).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByText(/home/i))
+    expect(useLayoutStore.getState().workspaceExpanded['home']).toBe(false)
+    expect(onSelectHome).not.toHaveBeenCalled()
+  })
+
+  it("active-click toggle is inert when tabPosition='top' (no inline tabs); still selects", () => {
+    useLayoutStore.setState({ tabPosition: 'top' })
+    const onSelectHome = vi.fn()
+    renderRow({ isActive: true, onSelectHome })
+    fireEvent.click(screen.getByText(/home/i))
+    expect(onSelectHome).toHaveBeenCalled()
+    expect(useLayoutStore.getState().workspaceExpanded['home']).toBeFalsy()
+  })
+
+  it('clicking title on INACTIVE Home selects (does not toggle)', () => {
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
+    const onSelectHome = vi.fn()
+    renderRow({ isActive: false, onSelectHome })
+    fireEvent.click(screen.getByText(/home/i))
+    expect(onSelectHome).toHaveBeenCalled()
+    expect(useLayoutStore.getState().workspaceExpanded['home']).toBeFalsy()
+  })
+
   it('chevron toggles home expand state', () => {
     useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
     renderRow({ standaloneTabIds: ['t1'], tabsById: { t1: mkTab('t1', 'alpha') } })
