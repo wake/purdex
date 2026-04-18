@@ -1223,7 +1223,7 @@ func TestHandleStatuslineStatus_CC(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
-	var body cc.StatuslineState
+	var body agent.StatuslineState
 	_ = json.NewDecoder(resp.Body).Decode(&body)
 	if body.Mode == "" {
 		t.Error("empty mode")
@@ -1249,7 +1249,7 @@ func (m *Module) handleStatuslineStatus(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, `{"error":"unknown agent"}`, http.StatusNotFound)
 		return
 	}
-	installer, ok := provider.(cc.StatuslineInstaller)
+	installer, ok := provider.(agent.StatuslineInstaller)
 	if !ok {
 		http.Error(w, `{"error":"agent does not support statusline"}`, http.StatusNotFound)
 		return
@@ -1367,7 +1367,7 @@ func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"unknown agent"}`, http.StatusNotFound)
 		return
 	}
-	installer, ok := provider.(cc.StatuslineInstaller)
+	installer, ok := provider.(agent.StatuslineInstaller)
 	if !ok {
 		http.Error(w, `{"error":"agent does not support statusline"}`, http.StatusNotFound)
 		return
