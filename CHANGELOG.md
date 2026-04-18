@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.181] - 2026-04-19
+
+### Feat: daemon self-rebuild + server-side `PDX_DEV_UPDATE` gate（#456）
+
+- 新增 `POST /api/dev/daemon/rebuild`（SSE）：TryLock → `go build` 帶 `-ldflags -X BakedInHash=<hash>` → atomic rename `bin/pdx.new → bin/pdx` → `syscall.Exec` self。build context 繼承 `m.stopCtx`，SIGTERM 會取消進行中 build。
+- 新增 `GET /api/dev/daemon/check`：回 `{current_hash, latest_hash, available}`，`current_hash` 由 `-ldflags` 在 build 時注入（Makefile 已更新）。
+- 新增 listener `SO_REUSEADDR` + 指數退避 retry bind（最後一圈不 sleep），survive exec-self restart。
+- `/api/dev/update/*` + `/api/dev/daemon/*` 補上 server-side `PDX_DEV_UPDATE=1` gate（原本只在 Electron preload 端 gate，是裸露洞）；註冊雙層 gate 註解 + `Start` disabled log 升級說明 `config.Dev.Update` + env var 兩條件。
+- SPA `Settings → Development` 新增 Daemon 區塊：check / rebuild 按鈕、即時 SSE log 面板、rebuild 成功 3s 後自動重 check；i18n keys `settings.dev.daemon.*`（en + zh-TW）。
+- 測試：38 Go tests（含 race）覆蓋 gate、listener rebind、check、rebuild success / error / 409 / rename-failure；SPA 1906 tests 全綠。
+
+### Follow-up issues
+
+- #459 SPA `rebuildDaemon` 缺 AbortController + setTimeout cleanup
+- #460 `go run` 啟動時 rebuild 靜默失敗偵測
+- #461 `DevEnvironmentSection` 拆出 `DaemonRebuildSection`
+
 ## [1.0.0-alpha.180] - 2026-04-19
 
 ### Feat: active workspace/home 標題點擊改 toggle 展開（#457）
