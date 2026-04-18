@@ -130,12 +130,24 @@ export const useSyncStore = create<SyncStoreState>()(
 
       setSyncHostId: (hostId) => set({ syncHostId: hostId }),
 
-      setPendingConflicts: (conflicts, remoteBundle) =>
+      setPendingConflicts: (conflicts, remoteBundle) => {
+        // Trim collections to conflicted contributors only — keeps the
+        // persisted payload bounded to what resolveConflicts actually reads,
+        // avoiding multi-MB localStorage writes when only one contributor has
+        // conflicts (the editor contributor in particular can be large).
+        const conflictedIds = new Set(conflicts.map((c) => c.contributor))
+        const trimmed: SyncBundle = {
+          ...remoteBundle,
+          collections: Object.fromEntries(
+            Object.entries(remoteBundle.collections).filter(([id]) => conflictedIds.has(id)),
+          ),
+        }
         set({
           pendingConflicts: conflicts,
-          pendingRemoteBundle: remoteBundle,
+          pendingRemoteBundle: trimmed,
           pendingConflictsAt: Date.now(),
-        }),
+        })
+      },
 
       clearPendingConflicts: () =>
         set({

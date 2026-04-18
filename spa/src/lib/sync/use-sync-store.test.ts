@@ -171,4 +171,28 @@ describe('useSyncStore', () => {
     expect(state.pendingRemoteBundle).toBeNull()
     expect(state.pendingConflictsAt).toBeNull()
   })
+
+  it('setPendingConflicts trims pendingRemoteBundle collections to conflicted contributors only', () => {
+    const conflicts: ConflictItem[] = [
+      { contributor: 'prefs', field: 'theme', lastSynced: 'light', local: 'dark', remote: { value: 'x', device: 'A' } },
+    ]
+    const fullBundle: SyncBundle = {
+      version: 2,
+      timestamp: 5000,
+      device: 'A',
+      collections: {
+        prefs: { version: 1, data: { theme: 'x' } },
+        editor: { version: 1, data: { huge: 'payload' } },
+        hosts: { version: 1, data: { n: 1 } },
+      },
+    }
+    useSyncStore.getState().setPendingConflicts(conflicts, fullBundle)
+    const stored = useSyncStore.getState().pendingRemoteBundle
+    expect(stored).not.toBeNull()
+    expect(Object.keys(stored!.collections)).toEqual(['prefs'])
+    expect(stored!.collections.prefs).toEqual({ version: 1, data: { theme: 'x' } })
+    expect(stored!.version).toBe(2)
+    expect(stored!.timestamp).toBe(5000)
+    expect(stored!.device).toBe('A')
+  })
 })
