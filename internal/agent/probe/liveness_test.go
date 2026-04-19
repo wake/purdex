@@ -1,9 +1,9 @@
-package probe_test
+package probe
 
 import (
 	"testing"
+	"time"
 
-	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -15,7 +15,7 @@ func (f *fakeContentMatcher) LooksLikeAgent(string) bool { return f.result }
 
 func TestIsAliveFor_DirectCommand(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
-	p := probe.New(fake)
+	p := New(fake)
 	p.RegisterProcessNames("cc", []string{"claude", "cld"})
 
 	fake.SetPaneCommand("sess:", "claude")
@@ -26,7 +26,7 @@ func TestIsAliveFor_DirectCommand(t *testing.T) {
 
 func TestIsAliveFor_ShellIsDead(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
-	p := probe.New(fake)
+	p := New(fake)
 	p.RegisterProcessNames("cc", []string{"claude"})
 
 	fake.SetPaneCommand("sess:", "zsh")
@@ -37,7 +37,7 @@ func TestIsAliveFor_ShellIsDead(t *testing.T) {
 
 func TestIsAliveFor_ChildProcess(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
-	p := probe.New(fake)
+	p := New(fake)
 	p.RegisterProcessNames("cc", []string{"claude"})
 
 	fake.SetPaneCommand("sess:", "node")
@@ -47,9 +47,85 @@ func TestIsAliveFor_ChildProcess(t *testing.T) {
 	}
 }
 
+func TestIsAliveFor_RecursiveDescendant(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	p := New(fake)
+	p.RegisterProcessNames("cc", []string{"claude"})
+
+	fake.SetPaneCommand("sess:", "zsh")
+	fake.SetPaneChildren("sess:", []string{"bash"})
+	fake.SetPaneDescendants("sess:", []string{"bash", "/usr/local/bin/claude"})
+	if !p.IsAliveFor("cc", "sess:") {
+		t.Fatal("expected alive when descendant process matches")
+	}
+}
+
+func TestIsAliveFor_RecursiveDescendantUsesCacheWithinTTL(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	p := New(fake)
+	p.RegisterProcessNames("cc", []string{"claude"})
+	now := time.Unix(100, 0)
+	p.now = func() time.Time { return now }
+
+	fake.SetPaneCommand("sess:", "node")
+	fake.SetPaneChildren("sess:", []string{"npm"})
+	fake.SetPaneDescendants("sess:", []string{"npm", "/usr/bin/claude"})
+
+	if !p.IsAliveFor("cc", "sess:") {
+		t.Fatal("expected alive on first recursive descendant lookup")
+	}
+	fake.SetPaneDescendants("sess:", []string{"npm"})
+	if !p.IsAliveFor("cc", "sess:") {
+		t.Fatal("expected cached descendant lookup to keep reporting alive")
+	}
+}
+
+func TestIsAliveFor_RecursiveDescendantCacheExpiresWhenGrandchildChanges(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	p := New(fake)
+	p.RegisterProcessNames("cc", []string{"claude"})
+	now := time.Unix(100, 0)
+	p.now = func() time.Time { return now }
+
+	fake.SetPaneCommand("sess:", "node")
+	fake.SetPaneChildren("sess:", []string{"bash"})
+	fake.SetPaneDescendants("sess:", []string{"bash", "/usr/bin/claude"})
+
+	if !p.IsAliveFor("cc", "sess:") {
+		t.Fatal("expected alive before matching descendant exits")
+	}
+	fake.SetPaneDescendants("sess:", []string{"bash"})
+	now = now.Add(recursiveDescendantCacheTTL + time.Millisecond)
+	if p.IsAliveFor("cc", "sess:") {
+		t.Fatal("expected dead after cache expiry rechecks unchanged direct-child snapshot")
+	}
+}
+
+func TestIsAliveFor_RecursiveDescendantCacheInvalidatesOnPanePIDChange(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	p := New(fake)
+	p.RegisterProcessNames("cc", []string{"claude"})
+	now := time.Unix(100, 0)
+	p.now = func() time.Time { return now }
+
+	fake.SetPanePID("sess:", "pid-1")
+	fake.SetPaneCommand("sess:", "node")
+	fake.SetPaneChildren("sess:", []string{"bash"})
+	fake.SetPaneDescendants("sess:", []string{"bash", "/usr/bin/claude"})
+	if !p.IsAliveFor("cc", "sess:") {
+		t.Fatal("expected alive before pane is recreated")
+	}
+
+	fake.SetPanePID("sess:", "pid-2")
+	fake.SetPaneDescendants("sess:", []string{"bash"})
+	if p.IsAliveFor("cc", "sess:") {
+		t.Fatal("expected dead after pane PID changes and descendant no longer matches")
+	}
+}
+
 func TestIsAliveFor_ContentFallback(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
-	p := probe.New(fake)
+	p := New(fake)
 	p.RegisterProcessNames("cc", []string{"claude"})
 	p.RegisterContentMatcher("cc", &fakeContentMatcher{result: true})
 
@@ -63,7 +139,7 @@ func TestIsAliveFor_ContentFallback(t *testing.T) {
 
 func TestIsAliveFor_NoContentMatcherReturnsDead(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
-	p := probe.New(fake)
+	p := New(fake)
 	p.RegisterProcessNames("cc", []string{"claude"})
 
 	fake.SetPaneCommand("sess:", "node")
@@ -76,7 +152,7 @@ func TestIsAliveFor_NoContentMatcherReturnsDead(t *testing.T) {
 
 func TestIsAliveFor_ContentMatcherReturnsFalse(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
-	p := probe.New(fake)
+	p := New(fake)
 	p.RegisterProcessNames("cc", []string{"claude"})
 	p.RegisterContentMatcher("cc", &fakeContentMatcher{result: false})
 
@@ -90,7 +166,7 @@ func TestIsAliveFor_ContentMatcherReturnsFalse(t *testing.T) {
 
 func TestIsAliveFor_UnknownAgentType(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
-	p := probe.New(fake)
+	p := New(fake)
 
 	fake.SetPaneCommand("sess:", "claude")
 	if p.IsAliveFor("unknown", "sess:") {
@@ -100,7 +176,7 @@ func TestIsAliveFor_UnknownAgentType(t *testing.T) {
 
 func TestUpdateProcessNames(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
-	p := probe.New(fake)
+	p := New(fake)
 	p.RegisterProcessNames("cc", []string{"claude"})
 
 	fake.SetPaneCommand("sess:", "cld")

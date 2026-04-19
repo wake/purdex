@@ -37,6 +37,8 @@ type FakeExecutor struct {
 	paneCommandCalls     map[string]int         // target → PaneCurrentCommand call count
 	paneContents         map[string]string      // target → captured text
 	paneChildren         map[string][]string    // target → child command names
+	paneDescendants      map[string][]string    // target → recursive descendant command names
+	panePIDs             map[string]string      // target → pane pid
 	paneCwds             map[string]string      // target → pane_current_path
 	paneSizes            map[string][2]int      // target → [cols, rows]
 	rawKeysCalls         []RawKeysCall
@@ -58,6 +60,8 @@ func NewFakeExecutor() *FakeExecutor {
 		paneCommandCalls: make(map[string]int),
 		paneContents:     make(map[string]string),
 		paneChildren:     make(map[string][]string),
+		paneDescendants:  make(map[string][]string),
+		panePIDs:         make(map[string]string),
 		paneCwds:         make(map[string]string),
 		paneSizes:        make(map[string][2]int),
 		alive:            true,
@@ -219,7 +223,24 @@ func (f *FakeExecutor) SetPaneChildren(target string, cmds []string) {
 	f.paneChildren[target] = cmds
 }
 
+func (f *FakeExecutor) SetPaneDescendants(target string, cmds []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paneDescendants[target] = cmds
+}
+
+func (f *FakeExecutor) SetPanePID(target, pid string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.panePIDs[target] = pid
+}
+
 func (f *FakeExecutor) PanePID(target string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if pid, ok := f.panePIDs[target]; ok {
+		return pid, nil
+	}
 	return "fake-pid", nil
 }
 
@@ -230,7 +251,19 @@ func (f *FakeExecutor) PaneChildCommands(target string) ([]string, error) {
 	if !ok {
 		return nil, nil // no children
 	}
-	return cmds, nil
+	return append([]string(nil), cmds...), nil
+}
+
+func (f *FakeExecutor) PaneDescendantCommands(target string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if cmds, ok := f.paneDescendants[target]; ok {
+		return append([]string(nil), cmds...), nil
+	}
+	if cmds, ok := f.paneChildren[target]; ok {
+		return append([]string(nil), cmds...), nil
+	}
+	return nil, nil
 }
 
 func (f *FakeExecutor) PaneCurrentCommand(target string) (string, error) {
@@ -338,7 +371,7 @@ func (f *FakeExecutor) SetWindowOptionCalls() []SetWindowOptionCall {
 }
 
 func (f *FakeExecutor) SetHookGlobal(event, command string) error { return nil }
-func (f *FakeExecutor) RemoveHookGlobal(event string) error      { return nil }
+func (f *FakeExecutor) RemoveHookGlobal(event string) error       { return nil }
 
 func (f *FakeExecutor) ShowHooksGlobal() (string, error) {
 	f.mu.Lock()

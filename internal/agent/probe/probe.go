@@ -2,6 +2,7 @@ package probe
 
 import (
 	"sync"
+	"time"
 
 	"github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/tmux"
@@ -42,6 +43,10 @@ type Prober struct {
 	content   map[string]ContentMatcher   // agentType → optional
 	readiness map[string]ReadinessChecker // agentType → checker
 
+	livenessMu      sync.Mutex
+	descendantCache map[string]descendantCacheEntry // target → recursive descendant snapshot
+	now             func() time.Time
+
 	watcherMu sync.Mutex
 	watchers  map[string]watchEntry // target → active watcher
 }
@@ -54,11 +59,13 @@ type watchEntry struct {
 // New creates a Prober backed by the given tmux executor.
 func New(tmux tmux.Executor) *Prober {
 	return &Prober{
-		tmux:      tmux,
-		matchers:  make(map[string]*processMatcher),
-		content:   make(map[string]ContentMatcher),
-		readiness: make(map[string]ReadinessChecker),
-		watchers:  make(map[string]watchEntry),
+		tmux:            tmux,
+		matchers:        make(map[string]*processMatcher),
+		content:         make(map[string]ContentMatcher),
+		readiness:       make(map[string]ReadinessChecker),
+		descendantCache: make(map[string]descendantCacheEntry),
+		now:             time.Now,
+		watchers:        make(map[string]watchEntry),
 	}
 }
 
