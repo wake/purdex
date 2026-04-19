@@ -11,7 +11,7 @@ const items: SnapshotMetadata[] = [
 describe('HistoryList', () => {
   it('renders empty state when no items', () => {
     render(<HistoryList items={[]} loading={false} error={null} selectedId={null} onSelect={() => {}} />)
-    expect(screen.getByText(/no/i)).toBeInTheDocument()
+    expect(screen.getByTestId('empty')).toBeInTheDocument()
   })
 
   it('renders rows and dispatches onSelect', () => {

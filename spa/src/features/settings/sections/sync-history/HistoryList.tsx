@@ -37,7 +37,11 @@ export function HistoryList(props: HistoryListProps) {
   }
 
   if (props.items.length === 0) {
-    return <div className="p-6 text-sm text-text-muted">{t('settings.sync.history.empty.noItems')}</div>
+    return (
+      <div className="p-6 text-sm text-text-muted" data-testid="empty">
+        {t('settings.sync.history.empty.local')}
+      </div>
+    )
   }
 
   return (
