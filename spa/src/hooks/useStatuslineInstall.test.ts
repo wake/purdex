@@ -151,4 +151,29 @@ describe('useStatuslineInstall', () => {
     await act(async () => { await result.current.remove() })
     expect(result.current.error).toBeNull()
   })
+
+  // --- Stale closure / hostId change (Fix 2) ---
+
+  it('ignores stale fetch result when hostId changes', async () => {
+    let resolveFirst: (v: { ok: boolean; json: () => Promise<unknown> }) => void = () => {}
+    const firstPromise = new Promise<{ ok: boolean; json: () => Promise<unknown> }>((r) => { resolveFirst = r })
+
+    mockFetch
+      .mockReturnValueOnce(firstPromise)  // h1 mount fetch — we'll resolve this late
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'pdx', installed: true, settingsPath: '/x' }) })  // h2 mount fetch
+
+    const { result, rerender } = renderHook(
+      ({ hostId }) => useStatuslineInstall(hostId),
+      { initialProps: { hostId: 'h1' } }
+    )
+    rerender({ hostId: 'h2' })
+    await waitFor(() => expect(result.current.state.mode).toBe('pdx'))
+
+    // Now resolve the stale h1 fetch — expect state to NOT regress
+    await act(async () => {
+      resolveFirst({ ok: true, json: () => Promise.resolve({ mode: 'none', installed: false, settingsPath: '/x' }) })
+      await Promise.resolve()
+    })
+    expect(result.current.state.mode).toBe('pdx')
+  })
 })
