@@ -195,58 +195,6 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// handleSubagentEvent tracks subagent add/remove in memory.
-func (m *Module) handleSubagentEvent(tmuxSession, eventName string, result agentpkg.DeriveResult) {
-	agentID, _ := result.Detail["agent_id"].(string)
-	if agentID == "" {
-		return
-	}
-	if eventName == "SubagentStart" {
-		// Guard: ignore SubagentStart for sessions whose latest persisted
-		// event indicates they're not active.  Two cases this rejects:
-		//   - No DB entry at all → session is unknown to the daemon
-		//     (also covers daemon restart with no replay state).
-		//   - Latest event is StatusClear (SessionEnd) → late hook arriving
-		//     after the session ended; should not re-populate state.
-		// Uses persistent DB state instead of in-memory currentStatus, so
-		// the guard survives daemon restarts and edge cases like compact
-		// SessionStart events that don't update currentStatus.
-		ev, _ := m.events.Get(tmuxSession)
-		if ev == nil {
-			return
-		}
-		if provider, ok := m.registry.Get(ev.AgentType); ok {
-			if r := provider.DeriveStatus(ev.EventName, ev.RawEvent); r.Status == agentpkg.StatusClear {
-				return
-			}
-		}
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if eventName == "SubagentStart" {
-		current := m.subagents[tmuxSession]
-		for _, id := range current {
-			if id == agentID {
-				return
-			}
-		}
-		m.subagents[tmuxSession] = append(current, agentID)
-	} else {
-		current := m.subagents[tmuxSession]
-		filtered := make([]string, 0, len(current))
-		for _, id := range current {
-			if id != agentID {
-				filtered = append(filtered, id)
-			}
-		}
-		if len(filtered) == 0 {
-			delete(m.subagents, tmuxSession)
-		} else {
-			m.subagents[tmuxSession] = filtered
-		}
-	}
-}
-
 // buildNormalized creates a NormalizedEvent from the derive result and current state.
 func (m *Module) buildNormalized(tmuxSession, eventName, agentType string, broadcastTs int64, result agentpkg.DeriveResult) agentpkg.NormalizedEvent {
 	m.mu.Lock()
@@ -541,50 +489,6 @@ func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(history)
-}
-
-// handleCheckAlive handles POST /api/agent/check-alive/{session}.
-func (m *Module) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
-	if m.sessions == nil {
-		http.Error(w, `{"error":"no session provider"}`, http.StatusInternalServerError)
-		return
-	}
-	sessionCode := r.PathValue("session")
-
-	sessions, err := m.sessions.ListSessions()
-	if err != nil {
-		http.Error(w, `{"error":"list sessions"}`, http.StatusInternalServerError)
-		return
-	}
-	var tmuxName string
-	for _, s := range sessions {
-		if s.Code == sessionCode {
-			tmuxName = s.Name
-			break
-		}
-	}
-	if tmuxName == "" {
-		http.Error(w, `{"error":"session not found"}`, http.StatusNotFound)
-		return
-	}
-
-	ev, _ := m.events.Get(tmuxName)
-	if ev == nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"alive": false, "reason": "no event"})
-		return
-	}
-
-	_, ok := m.registry.Get(ev.AgentType)
-	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"alive": false, "reason": "unknown agent"})
-		return
-	}
-
-	alive := m.prober.IsAliveFor(ev.AgentType, tmuxName+":")
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"alive": alive})
 }
 
 // statusSnapshot is the in-memory shape cached per sessionCode and broadcast over WS.

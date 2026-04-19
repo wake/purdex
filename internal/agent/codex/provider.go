@@ -22,7 +22,7 @@ func (p *Provider) Claim(ctx agent.ClaimContext) bool {
 	if ctx.HookEvent != nil {
 		return ctx.HookEvent.AgentType == "codex"
 	}
-	return ctx.ProcessName == "codex"
+	return false
 }
 
 func (p *Provider) Identify(proc agent.ProcessInfo) bool {

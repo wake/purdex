@@ -313,12 +313,12 @@ every 2s:
       clear frame（PID reuse 偵測）
 ```
 
-#### Phase 7 待刪除的舊能力
+#### 已刪除的舊能力
 
-- `RegisterProcessNames(agentType, []string{"claude"})` — P7 移除，P1-P6 過渡期仍存在
+- `RegisterProcessNames(agentType, []string{"claude"})` — 已移除
 - `ContentMatcher` interface + `LooksLikeAgent` — 身份識別層刪除
-- Liveness Layer 1a `pane_current_command` 比對 — P7 刪除
-- Liveness Layer 1d 內容 fallback 做身份判定 — P7 刪除
+- Liveness Layer 1a `pane_current_command` 比對 — 已刪除
+- Liveness Layer 1d 內容 fallback 做身份判定 — 已刪除
 
 ### 5.7 Activity 三規則（補 Hook Gap）
 

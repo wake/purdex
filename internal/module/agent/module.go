@@ -103,24 +103,22 @@ func (m *Module) Init(c *core.Core) error {
 	// Prober (shared across all providers)
 	m.tmux = c.Tmux
 	m.prober = probe.New(c.Tmux)
-	m.prober.RegisterProcessNames("cc", c.Cfg.Detect.CCCommands)
-	m.prober.RegisterReadiness("cc", agentcc.NewReadinessChecker(c.Tmux))
-	m.prober.RegisterProcessNames("codex", []string{"codex"})
-	m.prober.RegisterReadiness("codex", codex.NewReadinessChecker(c.Tmux))
-	c.Registry.Register("agent.prober", m.prober)
-
-	// CC provider
 	ccProvider := agentcc.NewProvider(m.prober, c.Tmux, c.Cfg, &c.CfgMu)
+	m.prober.RegisterIdentifier(ccProvider.Type(), ccProvider.Identify)
+	m.prober.RegisterReadiness(ccProvider.Type(), agentcc.NewReadinessChecker(c.Tmux))
 	ccProvider.RegisterServices(c.Registry)
 	m.registry.Register(ccProvider)
 
-	// Listen for config changes to update CC process names
+	codexProvider := codex.NewProvider()
+	m.prober.RegisterIdentifier(codexProvider.Type(), codexProvider.Identify)
+	m.prober.RegisterReadiness(codexProvider.Type(), codex.NewReadinessChecker(c.Tmux))
+	c.Registry.Register("agent.prober", m.prober)
+
+	// Listen for config changes to update mutable module state.
 	c.OnConfigChange(func() {
 		c.CfgMu.RLock()
-		cmds := c.Cfg.Detect.CCCommands
 		newDir := c.Cfg.UploadDir
 		c.CfgMu.RUnlock()
-		m.prober.UpdateProcessNames("cc", cmds)
 		if newDir != "" {
 			m.mu.Lock()
 			m.uploadDir = newDir
@@ -129,7 +127,7 @@ func (m *Module) Init(c *core.Core) error {
 	})
 
 	// Codex provider
-	m.registry.Register(codex.NewProvider())
+	m.registry.Register(codexProvider)
 
 	// Expose registry for other modules
 	c.Registry.Register("agent.registry", m.registry)
@@ -146,7 +144,6 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/{agent}/statusline/setup", m.handleStatuslineSetup)
 	mux.HandleFunc("POST /api/agent/cc/statusline/test", m.handleStatuslineTest)
 	mux.HandleFunc("POST /api/agent/status", m.handleAgentStatus)
-	mux.HandleFunc("POST /api/agent/check-alive/{session}", m.handleCheckAlive)
 	mux.HandleFunc("GET /api/agents/detect", m.handleDetect)
 
 	// History (delegates to provider)
@@ -385,92 +382,6 @@ func (m *Module) resolvePaneSession(paneID string) (string, string) {
 }
 
 // checkAliveAll checks all tracked sessions for liveness and broadcasts clear events for dead ones.
-func (m *Module) checkAliveAll(sub *core.EventSubscriber) {
-	if m.sessions == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	all, err := m.events.ListAll()
-	if err != nil {
-		return
-	}
-
-	sessions, err := m.sessions.ListSessions()
-	if err != nil {
-		return
-	}
-	nameToCode := make(map[string]string, len(sessions))
-	for _, s := range sessions {
-		nameToCode[s.Name] = s.Code
-	}
-
-	for _, ev := range all {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		code, ok := nameToCode[ev.TmuxSession]
-		if !ok {
-			// Not in current sessions list — could be a real orphan or
-			// a transient ListSessions inconsistency.  Use tmux.HasSession
-			// as the authoritative tiebreaker before deleting persistent
-			// state: this directly checks tmux session existence, unlike
-			// provider.IsAlive which only checks whether the CC/Codex
-			// process is the pane's current command (a user exiting CC
-			// in a live tmux session would wrongly trigger deletion).
-			//
-			// No broadcast is sent here: orphaned sessions have no code
-			// (resolveSessionCode would return ""), so the frontend cannot
-			// be notified by session code.  The frontend's session-closed
-			// detection (useMultiHostEventWs) handles this case via the
-			// sessions WS event, which fires whenever ListSessions output
-			// changes.
-			if m.core != nil && m.core.Tmux != nil && m.core.Tmux.HasSession(ev.TmuxSession) {
-				continue // transient — leave it alone
-			}
-			m.mu.Lock()
-			delete(m.currentStatus, ev.TmuxSession)
-			delete(m.subagents, ev.TmuxSession)
-			m.mu.Unlock()
-			_ = m.events.Delete(ev.TmuxSession)
-			continue
-		}
-		_, ok = m.registry.Get(ev.AgentType)
-		if !ok {
-			continue
-		}
-
-		tmuxTarget := ev.TmuxSession + ":"
-		if !m.prober.IsAliveFor(ev.AgentType, tmuxTarget) {
-			m.mu.Lock()
-			delete(m.currentStatus, ev.TmuxSession)
-			delete(m.subagents, ev.TmuxSession)
-			delete(m.activeWatchers, ev.TmuxSession)
-			m.mu.Unlock()
-
-			m.snapshotMu.Lock()
-			delete(m.statusSnapshots, code)
-			m.snapshotMu.Unlock()
-
-			m.prober.StopWatch(tmuxTarget)
-			_ = m.events.Delete(ev.TmuxSession)
-
-			normalized := agentpkg.NormalizedEvent{
-				AgentType:    ev.AgentType,
-				Status:       string(agentpkg.StatusClear),
-				RawEventName: "isAlive:dead",
-				BroadcastTs:  time.Now().UnixNano(),
-			}
-			payload, _ := json.Marshal(normalized)
-			m.core.Events.Broadcast(code, "hook", string(payload))
-		}
-	}
-}
-
 // manageActivityWatch handles starting/stopping Activity watchers in response to hook events.
 func (m *Module) manageActivityWatch(session, agentType string, newStatus agentpkg.Status) {
 	m.mu.Lock()

@@ -636,7 +636,7 @@ Activity watcher 實作三規則（動 → running、靜 → idle、shell prompt
 - 刪除 `RegisterProcessNames` + `UpdateProcessNames`
 - 刪除 probe Liveness Layer 1a（`pane_current_command` 比對）
 - 刪除 `matcher.commands` map
-- `config.Detect.CCCommands` 標記 deprecated 或刪除
+- `config.Detect.CCCommands` 不再參與 probe liveness；僅保留給 CC provider Identify 補充 command basename
 - 更新 `docs/superpowers/specs/2026-04-13-probe-chain-design.md` 「已被收斂」標記
 - 更新 README / AGENTS.md / CLAUDE.md 相關描述
 

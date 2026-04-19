@@ -28,7 +28,6 @@ type Executor interface {
 	SendKeys(target, keys string) error
 	SendKeysRaw(target string, keys ...string) error
 	PasteText(target, text string) error
-	PaneCurrentCommand(target string) (string, error)
 	PaneCurrentPath(target string) (string, error)
 	PaneSessionName(target string) (string, error)
 	PanePID(target string) (string, error)
@@ -136,16 +135,6 @@ func (r *RealExecutor) PasteText(target, text string) error {
 	//     a paste event rather than typed input.
 	// -r  preserves LF as-is (default converts LF → CR).
 	return exec.Command("tmux", "paste-buffer", "-b", bufName, "-t", target, "-d", "-p", "-r").Run()
-}
-
-func (r *RealExecutor) PaneCurrentCommand(target string) (string, error) {
-	out, err := exec.Command("tmux", "list-panes", "-t", target, "-F", "#{pane_current_command}").Output()
-	if err != nil {
-		return "", fmt.Errorf("tmux list-panes: %w", err)
-	}
-	// Return the first line (active pane's command).
-	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
-	return strings.TrimSpace(line), nil
 }
 
 func (r *RealExecutor) PaneCurrentPath(target string) (string, error) {

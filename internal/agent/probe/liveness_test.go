@@ -1,144 +1,210 @@
 package probe
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
+	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/tmux"
 )
 
-func TestIsAliveFor_DirectCommand(t *testing.T) {
-	fake := tmux.NewFakeExecutor()
-	p := New(fake)
-	p.RegisterProcessNames("cc", []string{"claude", "cld"})
+func stubLivenessSeams(t *testing.T) {
+	t.Helper()
+	origRead := readProcessInfoFn
+	origTree := listProcessTreeFn
+	t.Cleanup(func() {
+		readProcessInfoFn = origRead
+		listProcessTreeFn = origTree
+	})
+}
 
-	fake.SetPaneCommand("sess:", "claude")
+func registerTestIdentifier(p *Prober) {
+	p.RegisterIdentifier("cc", func(info agentpkg.ProcessInfo) bool {
+		return info.ExePath == "/usr/local/bin/claude"
+	})
+}
+
+func TestIsAliveFor_PaneProcess(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	fake.SetPanePID("sess:", "100")
+	p := New(fake)
+	registerTestIdentifier(p)
+	stubLivenessSeams(t)
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid != 100 {
+			return agentpkg.ProcessInfo{}, fmt.Errorf("unexpected pid %d", pid)
+		}
+		return agentpkg.ProcessInfo{PID: 100, ExePath: "/usr/local/bin/claude"}, nil
+	}
+	listProcessTreeFn = func() (map[int][]int, error) { return map[int][]int{}, nil }
+
 	if !p.IsAliveFor("cc", "sess:") {
-		t.Fatal("expected alive when pane command is registered CC command")
+		t.Fatal("expected alive when pane pid identifies as cc")
 	}
 }
 
 func TestIsAliveFor_ShellIsDead(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
+	fake.SetPanePID("sess:", "100")
 	p := New(fake)
-	p.RegisterProcessNames("cc", []string{"claude"})
+	registerTestIdentifier(p)
+	stubLivenessSeams(t)
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, ExePath: "/bin/zsh"}, nil
+	}
+	listProcessTreeFn = func() (map[int][]int, error) { return map[int][]int{}, nil }
 
-	fake.SetPaneCommand("sess:", "zsh")
 	if p.IsAliveFor("cc", "sess:") {
-		t.Fatal("expected dead when pane command is shell")
+		t.Fatal("expected dead when pane pid tree contains no matching process")
 	}
 }
 
-func TestIsAliveFor_ChildProcess(t *testing.T) {
+func TestIsAliveFor_DescendantProcess(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
+	fake.SetPanePID("sess:", "100")
 	p := New(fake)
-	p.RegisterProcessNames("cc", []string{"claude"})
-
-	fake.SetPaneCommand("sess:", "node")
-	fake.SetPaneChildren("sess:", []string{"/usr/local/bin/claude"})
-	if !p.IsAliveFor("cc", "sess:") {
-		t.Fatal("expected alive when child process matches (basename)")
+	registerTestIdentifier(p)
+	stubLivenessSeams(t)
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, ExePath: "/bin/zsh"}, nil
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, ExePath: "/usr/local/bin/claude"}, nil
+		default:
+			return agentpkg.ProcessInfo{}, fmt.Errorf("unexpected pid %d", pid)
+		}
 	}
-}
+	listProcessTreeFn = func() (map[int][]int, error) {
+		return map[int][]int{100: []int{200}}, nil
+	}
 
-func TestIsAliveFor_RecursiveDescendant(t *testing.T) {
-	fake := tmux.NewFakeExecutor()
-	p := New(fake)
-	p.RegisterProcessNames("cc", []string{"claude"})
-
-	fake.SetPaneCommand("sess:", "zsh")
-	fake.SetPaneChildren("sess:", []string{"bash"})
-	fake.SetPaneDescendants("sess:", []string{"bash", "/usr/local/bin/claude"})
 	if !p.IsAliveFor("cc", "sess:") {
-		t.Fatal("expected alive when descendant process matches")
+		t.Fatal("expected alive when descendant identifies as cc")
 	}
 }
 
 func TestIsAliveFor_RecursiveDescendantUsesCacheWithinTTL(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
+	fake.SetPanePID("sess:", "100")
 	p := New(fake)
-	p.RegisterProcessNames("cc", []string{"claude"})
+	registerTestIdentifier(p)
 	now := time.Unix(100, 0)
 	p.now = func() time.Time { return now }
-
-	fake.SetPaneCommand("sess:", "node")
-	fake.SetPaneChildren("sess:", []string{"npm"})
-	fake.SetPaneDescendants("sess:", []string{"npm", "/usr/bin/claude"})
+	stubLivenessSeams(t)
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, ExePath: "/bin/zsh"}, nil
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, ExePath: "/usr/local/bin/claude"}, nil
+		default:
+			return agentpkg.ProcessInfo{}, fmt.Errorf("unexpected pid %d", pid)
+		}
+	}
+	tree := map[int][]int{100: []int{200}}
+	listProcessTreeFn = func() (map[int][]int, error) { return tree, nil }
 
 	if !p.IsAliveFor("cc", "sess:") {
-		t.Fatal("expected alive on first recursive descendant lookup")
+		t.Fatal("expected alive on first lookup")
 	}
-	fake.SetPaneDescendants("sess:", []string{"npm"})
+	tree = map[int][]int{100: []int{}}
 	if !p.IsAliveFor("cc", "sess:") {
 		t.Fatal("expected cached descendant lookup to keep reporting alive")
 	}
 }
 
-func TestIsAliveFor_RecursiveDescendantCacheExpiresWhenGrandchildChanges(t *testing.T) {
+func TestIsAliveFor_RecursiveDescendantCacheExpires(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
+	fake.SetPanePID("sess:", "100")
 	p := New(fake)
-	p.RegisterProcessNames("cc", []string{"claude"})
+	registerTestIdentifier(p)
 	now := time.Unix(100, 0)
 	p.now = func() time.Time { return now }
-
-	fake.SetPaneCommand("sess:", "node")
-	fake.SetPaneChildren("sess:", []string{"bash"})
-	fake.SetPaneDescendants("sess:", []string{"bash", "/usr/bin/claude"})
+	stubLivenessSeams(t)
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, ExePath: "/bin/zsh"}, nil
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, ExePath: "/usr/local/bin/claude"}, nil
+		default:
+			return agentpkg.ProcessInfo{}, fmt.Errorf("unexpected pid %d", pid)
+		}
+	}
+	tree := map[int][]int{100: []int{200}}
+	listProcessTreeFn = func() (map[int][]int, error) { return tree, nil }
 
 	if !p.IsAliveFor("cc", "sess:") {
-		t.Fatal("expected alive before matching descendant exits")
+		t.Fatal("expected alive before descendant exits")
 	}
-	fake.SetPaneDescendants("sess:", []string{"bash"})
+	tree = map[int][]int{100: []int{}}
 	now = now.Add(recursiveDescendantCacheTTL + time.Millisecond)
 	if p.IsAliveFor("cc", "sess:") {
-		t.Fatal("expected dead after cache expiry rechecks unchanged direct-child snapshot")
+		t.Fatal("expected dead after cache expiry")
 	}
 }
 
 func TestIsAliveFor_RecursiveDescendantCacheInvalidatesOnPanePIDChange(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
+	fake.SetPanePID("sess:", "100")
 	p := New(fake)
-	p.RegisterProcessNames("cc", []string{"claude"})
+	registerTestIdentifier(p)
 	now := time.Unix(100, 0)
 	p.now = func() time.Time { return now }
+	stubLivenessSeams(t)
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 100, 101:
+			return agentpkg.ProcessInfo{PID: pid, ExePath: "/bin/zsh"}, nil
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, ExePath: "/usr/local/bin/claude"}, nil
+		default:
+			return agentpkg.ProcessInfo{}, fmt.Errorf("unexpected pid %d", pid)
+		}
+	}
+	tree := map[int][]int{100: []int{200}}
+	listProcessTreeFn = func() (map[int][]int, error) { return tree, nil }
 
-	fake.SetPanePID("sess:", "pid-1")
-	fake.SetPaneCommand("sess:", "node")
-	fake.SetPaneChildren("sess:", []string{"bash"})
-	fake.SetPaneDescendants("sess:", []string{"bash", "/usr/bin/claude"})
 	if !p.IsAliveFor("cc", "sess:") {
-		t.Fatal("expected alive before pane is recreated")
+		t.Fatal("expected alive before pane pid changes")
 	}
 
-	fake.SetPanePID("sess:", "pid-2")
-	fake.SetPaneDescendants("sess:", []string{"bash"})
+	fake.SetPanePID("sess:", "101")
+	tree = map[int][]int{101: []int{}}
 	if p.IsAliveFor("cc", "sess:") {
-		t.Fatal("expected dead after pane PID changes and descendant no longer matches")
+		t.Fatal("expected dead after pane pid changes")
 	}
 }
 
 func TestIsAliveFor_UnknownAgentType(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
+	fake.SetPanePID("sess:", "100")
 	p := New(fake)
 
-	fake.SetPaneCommand("sess:", "claude")
 	if p.IsAliveFor("unknown", "sess:") {
 		t.Fatal("expected dead for unregistered agent type")
 	}
 }
 
-func TestUpdateProcessNames(t *testing.T) {
+func TestRegisterIdentifier_ReplacesExisting(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
+	fake.SetPanePID("sess:", "100")
 	p := New(fake)
-	p.RegisterProcessNames("cc", []string{"claude"})
+	stubLivenessSeams(t)
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, ExePath: "/usr/local/bin/cld"}, nil
+	}
+	listProcessTreeFn = func() (map[int][]int, error) { return map[int][]int{}, nil }
 
-	fake.SetPaneCommand("sess:", "cld")
+	p.RegisterIdentifier("cc", func(info agentpkg.ProcessInfo) bool { return false })
 	if p.IsAliveFor("cc", "sess:") {
-		t.Fatal("cld should not be alive before update")
+		t.Fatal("expected dead before identifier replacement")
 	}
 
-	p.UpdateProcessNames("cc", []string{"claude", "cld"})
+	p.RegisterIdentifier("cc", func(info agentpkg.ProcessInfo) bool { return info.ExePath == "/usr/local/bin/cld" })
 	if !p.IsAliveFor("cc", "sess:") {
-		t.Fatal("cld should be alive after update")
+		t.Fatal("expected alive after identifier replacement")
 	}
 }

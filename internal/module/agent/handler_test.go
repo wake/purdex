@@ -338,170 +338,6 @@ func TestRenameSession_NoOldData(t *testing.T) {
 	}
 }
 
-// --- Bug 3: SubagentStart guard via events.Get ---
-
-func TestHandleSubagentEvent_NoEntryStartIgnored(t *testing.T) {
-	m := newTestModule(t)
-	// No DB entry for "work" → session is unknown to the daemon
-
-	result := agentpkg.DeriveResult{
-		Valid:  true,
-		Detail: map[string]any{"agent_id": "late-agent"},
-	}
-	m.handleSubagentEvent("work", "SubagentStart", result)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.subagents["work"]; ok {
-		t.Error("SubagentStart should be ignored when session has no DB entry")
-	}
-}
-
-func TestHandleSubagentEvent_StartAfterClearIgnored(t *testing.T) {
-	m := newTestModule(t)
-	// Register a fake provider whose DeriveStatus returns StatusClear
-	provider := &fakeAgentProvider{
-		typeName: "cc",
-		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
-			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}
-		},
-	}
-	m.registry.Register(provider)
-	_ = m.events.Set("work", "SessionEnd", json.RawMessage(`{}`), "cc", 1)
-
-	result := agentpkg.DeriveResult{
-		Valid:  true,
-		Detail: map[string]any{"agent_id": "late-agent"},
-	}
-	m.handleSubagentEvent("work", "SubagentStart", result)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.subagents["work"]; ok {
-		t.Error("SubagentStart should be ignored when latest event is StatusClear")
-	}
-}
-
-func TestHandleSubagentEvent_StartAcceptedWhenSessionActive(t *testing.T) {
-	m := newTestModule(t)
-	// Register a fake provider whose DeriveStatus returns StatusRunning
-	provider := &fakeAgentProvider{
-		typeName: "cc",
-		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
-			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
-		},
-	}
-	m.registry.Register(provider)
-	_ = m.events.Set("work", "UserPromptSubmit", json.RawMessage(`{}`), "cc", 1)
-
-	result := agentpkg.DeriveResult{
-		Valid:  true,
-		Detail: map[string]any{"agent_id": "agent-1"},
-	}
-	m.handleSubagentEvent("work", "SubagentStart", result)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if subs := m.subagents["work"]; len(subs) != 1 || subs[0] != "agent-1" {
-		t.Errorf("SubagentStart should be accepted for active session, got %v", subs)
-	}
-}
-
-// Bug 2 A1: compact SessionStart edge case — DB has entry but currentStatus
-// is empty (because compact returns Valid:false).  events.Get-based guard
-// must accept SubagentStart in this case.
-func TestHandleSubagentEvent_CompactSessionStartAccepted(t *testing.T) {
-	m := newTestModule(t)
-	provider := &fakeAgentProvider{
-		typeName: "cc",
-		derive: func(eventName string, _ json.RawMessage) agentpkg.DeriveResult {
-			// Compact SessionStart returns Valid:false
-			return agentpkg.DeriveResult{Valid: false}
-		},
-	}
-	m.registry.Register(provider)
-	_ = m.events.Set("work", "SessionStart", json.RawMessage(`{"source":"compact"}`), "cc", 1)
-	// Note: m.currentStatus["work"] is NOT populated (Valid:false skipped)
-
-	result := agentpkg.DeriveResult{
-		Valid:  true,
-		Detail: map[string]any{"agent_id": "agent-1"},
-	}
-	m.handleSubagentEvent("work", "SubagentStart", result)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if subs := m.subagents["work"]; len(subs) != 1 {
-		t.Errorf("SubagentStart should be accepted for compact-started session, got %v", subs)
-	}
-}
-
-// --- Bug 2 (refined): checkAliveAll uses IsAlive tiebreaker for orphans ---
-
-func TestCheckAliveAll_OrphanNotInTmuxDeleted(t *testing.T) {
-	m := newTestModule(t)
-	provider := &fakeAgentProvider{typeName: "cc"}
-	m.registry.Register(provider)
-	_ = m.events.Set("dead-session", "UserPromptSubmit", json.RawMessage(`{}`), "cc", 1)
-
-	m.mu.Lock()
-	m.subagents["dead-session"] = []string{"agent-1"}
-	m.currentStatus["dead-session"] = agentpkg.StatusRunning
-	m.mu.Unlock()
-
-	// Fake tmux with NO sessions → HasSession("dead-session") returns false
-	fake := tmux.NewFakeExecutor()
-	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{}}
-	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
-
-	sub := m.core.Events.AddTestSubscriber()
-	defer m.core.Events.RemoveTestSubscriber(sub)
-
-	m.checkAliveAll(sub)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.subagents["dead-session"]; ok {
-		t.Error("orphan not in tmux should be deleted")
-	}
-	if ev, _ := m.events.Get("dead-session"); ev != nil {
-		t.Error("orphan DB entry should be deleted")
-	}
-}
-
-func TestCheckAliveAll_OrphanStillInTmuxPreserved(t *testing.T) {
-	m := newTestModule(t)
-	provider := &fakeAgentProvider{typeName: "cc"}
-	m.registry.Register(provider)
-	_ = m.events.Set("transient-session", "UserPromptSubmit", json.RawMessage(`{}`), "cc", 1)
-
-	m.mu.Lock()
-	m.subagents["transient-session"] = []string{"agent-1"}
-	m.currentStatus["transient-session"] = agentpkg.StatusRunning
-	m.mu.Unlock()
-
-	// Fake tmux HAS the session → HasSession returns true, but the
-	// fakeSessionProvider omits it (simulating transient ListSessions hiccup)
-	fake := tmux.NewFakeExecutor()
-	fake.AddSession("transient-session", "/tmp")
-	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{}}
-	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
-
-	sub := m.core.Events.AddTestSubscriber()
-	defer m.core.Events.RemoveTestSubscriber(sub)
-
-	m.checkAliveAll(sub)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if subs := m.subagents["transient-session"]; len(subs) != 1 {
-		t.Error("orphan still in tmux should NOT be deleted (transient case)")
-	}
-	if ev, _ := m.events.Get("transient-session"); ev == nil {
-		t.Error("orphan still in tmux should preserve DB entry")
-	}
-}
-
 // --- Bug 0b: RenameSessionAtomic runs callback under lock ---
 
 func TestRenameSessionAtomic_Success(t *testing.T) {
@@ -569,7 +405,7 @@ func TestActivityWatch_YellowLightRecovery(t *testing.T) {
 
 	fake := tmux.NewFakeExecutor()
 	m.prober = probe.New(fake)
-	m.prober.RegisterProcessNames("cc", []string{"claude"})
+	m.prober.RegisterIdentifier("cc", func(info agentpkg.ProcessInfo) bool { return info.ExePath == "/usr/local/bin/claude" })
 	m.prober.RegisterReadiness("cc", agentcc.NewReadinessChecker(fake))
 
 	provider := &fakeAgentProvider{
@@ -682,7 +518,7 @@ func TestActivityWatch_HookEventSupersedes(t *testing.T) {
 
 	fake := tmux.NewFakeExecutor()
 	m.prober = probe.New(fake)
-	m.prober.RegisterProcessNames("cc", []string{"claude"})
+	m.prober.RegisterIdentifier("cc", func(info agentpkg.ProcessInfo) bool { return info.ExePath == "/usr/local/bin/claude" })
 
 	provider := &fakeAgentProvider{
 		typeName: "cc",
