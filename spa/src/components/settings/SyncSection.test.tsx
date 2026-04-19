@@ -4,6 +4,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { useSyncStore } from '../../lib/sync/use-sync-store'
 import { useHostStore } from '../../stores/useHostStore'
 import { SyncSection } from './SyncSection'
+import { SettingsRouteContext } from '../SettingsPage'
 import * as syncActionsModule from '../../lib/sync/sync-actions'
 import type { SyncActionResult } from '../../lib/sync/sync-actions'
 import { syncEngine } from '../../lib/sync/register-sync'
@@ -179,5 +180,44 @@ describe('SyncSection', () => {
       expect(useSyncStore.getState().pendingConflicts).toEqual([])
     })
     expect(pushSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('SyncSection subsection routing', () => {
+  beforeEach(() => {
+    resetStores()
+    vi.restoreAllMocks()
+  })
+
+  it('renders SnapshotHistoryPage when subsection=history', () => {
+    render(
+      <SettingsRouteContext.Provider value={{ subsection: 'history', setSubsection: () => {} }}>
+        <SyncSection />
+      </SettingsRouteContext.Provider>,
+    )
+    // SnapshotHistoryPage renders HistoryTabs → role=tablist
+    expect(screen.getByRole('tablist')).toBeInTheDocument()
+  })
+
+  it('renders main Sync section when subsection=null', () => {
+    render(
+      <SettingsRouteContext.Provider value={{ subsection: null, setSubsection: () => {} }}>
+        <SyncSection />
+      </SettingsRouteContext.Provider>,
+    )
+    // Main section shows the provider selector ("settings.sync.provider.*" keys)
+    // Any text containing 'provider' will do
+    expect(screen.getByText(/provider/i)).toBeInTheDocument()
+  })
+
+  it('"View History" button calls setSubsection("history")', () => {
+    const fn = vi.fn()
+    render(
+      <SettingsRouteContext.Provider value={{ subsection: null, setSubsection: fn }}>
+        <SyncSection />
+      </SettingsRouteContext.Provider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /history/i }))
+    expect(fn).toHaveBeenCalledWith('history')
   })
 })

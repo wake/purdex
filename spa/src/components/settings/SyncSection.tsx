@@ -18,6 +18,8 @@ import { applyImport, syncNow, type SyncActionResult } from '../../lib/sync/sync
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { pluralKey } from '../../lib/plural'
+import { useSettingsRoute } from '../SettingsPage'
+import { SnapshotHistoryPage } from '../../features/settings/sections/sync-history/SnapshotHistoryPage'
 
 type ProviderId = 'off' | 'daemon' | 'file'
 
@@ -47,6 +49,7 @@ function triggerDownload(blob: Blob, filename: string): void {
 
 export function SyncSection() {
   const t = useI18nStore((s) => s.t)
+  const { subsection, setSubsection } = useSettingsRoute()
 
   const activeProviderId = useSyncStore((s) => s.activeProviderId)
   const setActiveProvider = useSyncStore((s) => s.setActiveProvider)
@@ -70,6 +73,10 @@ export function SyncSection() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [status, setStatus] = useState<Status>(IDLE)
   const [busy, setBusy] = useState(false)
+
+  if (subsection === 'history') {
+    return <SnapshotHistoryPage />
+  }
 
   const PROVIDER_OPTIONS: { value: ProviderId; label: string }[] = [
     { value: 'off', label: t('settings.sync.provider.off') },
@@ -263,6 +270,19 @@ export function SyncSection() {
         description={t('settings.sync.provider.description')}
       >
         <SegmentControl options={PROVIDER_OPTIONS} value={currentProvider} onChange={handleProviderChange} />
+      </SettingItem>
+
+      <SettingItem
+        label={t('settings.sync.history.label')}
+        description={t('settings.sync.history.description')}
+      >
+        <button
+          type="button"
+          onClick={() => setSubsection('history')}
+          className="px-3 py-1 text-sm text-accent-base"
+        >
+          {t('settings.sync.history.viewLink')}
+        </button>
       </SettingItem>
 
       {currentProvider !== 'off' && (
