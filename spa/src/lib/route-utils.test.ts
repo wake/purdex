@@ -165,3 +165,20 @@ describe('tabToUrl', () => {
     expect(tabToUrl('abc123', { kind: 'new-tab' })).toBe('/')
   })
 })
+
+describe('parseRoute settings subsection', () => {
+  it('recognises /settings/sync/history as section=sync, subsection=history', () => {
+    const r = parseRoute('/settings/sync/history')
+    expect(r).toEqual({ kind: 'settings', scope: 'global', section: 'sync', subsection: 'history' })
+  })
+
+  it('still parses /settings/sync as section only', () => {
+    const r = parseRoute('/settings/sync')
+    expect(r).toEqual({ kind: 'settings', scope: 'global', section: 'sync' })
+  })
+
+  it('rejects 3-level /settings/a/b/c', () => {
+    const r = parseRoute('/settings/a/b/c')
+    expect(r).toEqual({ kind: 'settings', scope: 'global' })
+  })
+})
