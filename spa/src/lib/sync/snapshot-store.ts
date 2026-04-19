@@ -16,6 +16,16 @@ function computeBundleSize(bundle: SyncBundle): number {
   return new TextEncoder().encode(JSON.stringify(bundle)).byteLength
 }
 
+function isQuotaError(err: unknown): boolean {
+  if (err instanceof DOMException) {
+    if (err.name === 'QuotaExceededError') return true
+    // Historic numeric codes: 22 (standard), 1014 (Firefox).
+    const code = (err as DOMException & { code?: number }).code
+    if (code === 22 || code === 1014) return true
+  }
+  return false
+}
+
 export interface SnapshotStore {
   init(): Promise<void>
   listLocal(): Promise<SnapshotMetadata[]>
@@ -89,7 +99,18 @@ export function createSnapshotStore(dbName = 'purdex-sync'): SnapshotStore {
         isSessionPristine: opts?.isSessionPristine ?? false,
       }
       const record: StoredSnapshot = { ...meta, bundle }
-      await db.put(STORE, record)
+      try {
+        await db.put(STORE, record)
+      } catch (err) {
+        // When quota is tight the initial put fails before compaction has
+        // a chance to evict retention-eligible rows. Run compaction and
+        // retry once before surfacing the error; without this fallback a
+        // full IDB locks users out of manual / pre-import / pre-restore
+        // snapshots even when old hourly rows could be dropped.
+        if (!isQuotaError(err)) throw err
+        await compactFn()
+        await db.put(STORE, record)
+      }
       await compactFn()
       return meta
     },
