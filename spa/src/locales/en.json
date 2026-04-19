@@ -109,6 +109,7 @@
   "settings.sync.history.restore.confirmPendingConflicts_other": "This will discard {{n}} pending conflicts.",
   "settings.sync.history.restore.preOpFailed": "Failed to create backup. Continue anyway?",
   "settings.sync.history.restore.continueAnyway": "Continue anyway",
+  "settings.sync.history.restore.coverageWarning": "This snapshot does not cover: {{names}}. Those modules will keep their current state. Continue anyway?",
   "settings.sync.history.restore.cancel": "Cancel",
   "settings.sync.history.restore.proceed": "Restore",
   "settings.sync.history.restore.success": "Restored from {{device}} · {{time}}",

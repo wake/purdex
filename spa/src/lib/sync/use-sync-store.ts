@@ -6,6 +6,44 @@ import type { StoredSnapshot } from './snapshot-types'
 import { getSnapshotStore } from './snapshot-store-instance'
 import { __getActiveEngine } from './register-sync'
 
+// ---------------------------------------------------------------------------
+// Restore errors
+// ---------------------------------------------------------------------------
+
+export class PreOpFailedError extends Error {
+  cause?: unknown
+  constructor(cause?: unknown) {
+    super('Pre-operation snapshot failed')
+    this.name = 'PreOpFailedError'
+    this.cause = cause
+  }
+}
+
+export class SnapshotCoverageError extends Error {
+  missing: string[]
+  constructor(missing: string[]) {
+    super(`Snapshot does not cover contributors: ${missing.join(', ')}`)
+    this.name = 'SnapshotCoverageError'
+    this.missing = missing
+  }
+}
+
+export class RestoreFailedError extends Error {
+  failed: string[]
+  constructor(failed: string[]) {
+    super(`Restore failed for contributors: ${failed.join(', ')}`)
+    this.name = 'RestoreFailedError'
+    this.failed = failed
+  }
+}
+
+export interface RestoreOptions {
+  /** Skip the pre-restore safety snapshot. UI uses this when the user opts to continue after a pre-op failure. */
+  skipPreOp?: boolean
+  /** Accept a snapshot that does not cover every currently registered contributor; missing ones keep current state. */
+  allowMissingContributors?: boolean
+}
+
 /**
  * Registry of all known contributor IDs. Populated by registerSyncContributors()
  * at startup, before any UI interaction triggers setActiveProvider().
@@ -44,7 +82,7 @@ interface SyncStoreState {
   clearPendingConflicts: () => void
   reset: () => void
   createPreOperationSnapshot: (trigger: 'pre-import' | 'pre-restore') => Promise<string>
-  restoreFromSnapshot: (snapshot: StoredSnapshot, source: 'local' | 'remote') => Promise<void>
+  restoreFromSnapshot: (snapshot: StoredSnapshot, source: 'local' | 'remote', options?: RestoreOptions) => Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -166,24 +204,40 @@ export const useSyncStore = create<SyncStoreState>()(
       createPreOperationSnapshot: async (trigger) => {
         const engine = __getActiveEngine()
         const device = get().clientId ?? 'unknown'
-        const enabled = get().enabledModules.length > 0
-          ? get().enabledModules
-          : engine.getContributors().map((c) => c.id)
-        const currentBundle = engine.serialize(device, enabled)
+        // Back up the full contributor registry, not just enabledModules —
+        // a later restore may touch contributors that are currently disabled,
+        // and the safety snapshot must be able to undo those writes too.
+        const allIds = engine.getContributors().map((c) => c.id)
+        const currentBundle = engine.serialize(device, allIds)
         const meta = await getSnapshotStore().createSnapshot(currentBundle, trigger)
         return meta.id
       },
 
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      restoreFromSnapshot: async (snapshot, _source) => {
-        await get().createPreOperationSnapshot('pre-restore')
-        set({
-          pendingConflicts: [],
-          pendingRemoteBundle: null,
-          pendingConflictsAt: null,
-        })
+      restoreFromSnapshot: async (snapshot, _source, options = {}) => {
         const engine = __getActiveEngine()
         const contribs = new Map(engine.getContributors().map((c) => [c.id, c]))
+
+        // Coverage check: fail fast if the snapshot does not cover every
+        // currently registered contributor, unless the caller explicitly
+        // opts in to a partial restore (missing contributors keep state).
+        const missing: string[] = []
+        for (const id of contribs.keys()) {
+          if (!(id in snapshot.bundle.collections)) missing.push(id)
+        }
+        if (missing.length > 0 && !options.allowMissingContributors) {
+          throw new SnapshotCoverageError(missing)
+        }
+
+        if (!options.skipPreOp) {
+          try {
+            await get().createPreOperationSnapshot('pre-restore')
+          } catch (e) {
+            throw new PreOpFailedError(e)
+          }
+        }
+
+        const failed: string[] = []
         for (const [id, payload] of Object.entries(snapshot.bundle.collections)) {
           const c = contribs.get(id)
           if (!c) continue
@@ -191,9 +245,22 @@ export const useSyncStore = create<SyncStoreState>()(
             c.deserialize(payload, { type: 'full-replace' })
           } catch (e) {
             console.error(`restore: ${id} deserialize failed`, e)
+            failed.push(id)
           }
         }
-        // B1 append-only: do NOT touch lastSyncedBundle
+        if (failed.length > 0) {
+          throw new RestoreFailedError(failed)
+        }
+
+        // Only clear pending conflict context after every contributor succeeded.
+        // Clearing earlier would strip the user's conflict metadata even on
+        // partial failure, leaving no way to retry the merge.
+        set({
+          pendingConflicts: [],
+          pendingRemoteBundle: null,
+          pendingConflictsAt: null,
+        })
+        // Append-only: do NOT touch lastSyncedBundle
       },
     }),
     {

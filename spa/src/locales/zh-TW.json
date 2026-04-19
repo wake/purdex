@@ -109,6 +109,7 @@
   "settings.sync.history.restore.confirmPendingConflicts_other": "將清掉 {{n}} 項待處理衝突。",
   "settings.sync.history.restore.preOpFailed": "建立備份失敗，仍要繼續？",
   "settings.sync.history.restore.continueAnyway": "仍要繼續",
+  "settings.sync.history.restore.coverageWarning": "此快照未涵蓋 {{names}}，那些模組將保留目前狀態。仍要繼續？",
   "settings.sync.history.restore.cancel": "取消",
   "settings.sync.history.restore.proceed": "還原",
   "settings.sync.history.restore.success": "已從 {{device}} · {{time}} 還原",

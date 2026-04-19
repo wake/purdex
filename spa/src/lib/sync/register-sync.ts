@@ -57,9 +57,9 @@ export async function ensureSessionPristine(): Promise<void> {
   const engine = __getActiveEngine()
   const state = useSyncStore.getState()
   const device = state.clientId ?? 'unknown'
-  const enabled = state.enabledModules.length > 0
-    ? state.enabledModules
-    : engine.getContributors().map((c) => c.id)
-  const currentBundle = engine.serialize(device, enabled)
+  // Pristine snapshot must cover the full contributor registry — a later
+  // restore could write any contributor, including ones currently disabled.
+  const allIds = engine.getContributors().map((c) => c.id)
+  const currentBundle = engine.serialize(device, allIds)
   await store.createSnapshot(currentBundle, 'pre-restore', { isSessionPristine: true })
 }

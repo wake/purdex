@@ -1,8 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useSyncStore } from './use-sync-store'
+import {
+  useSyncStore,
+  PreOpFailedError,
+  SnapshotCoverageError,
+  RestoreFailedError,
+} from './use-sync-store'
 import { setSnapshotStore } from './snapshot-store-instance'
 import type { SyncBundle } from './types'
 import type { ConflictItem } from './types'
+import type { StoredSnapshot } from './snapshot-types'
 
 const mockBundle: SyncBundle = {
   version: 1,
@@ -314,5 +320,216 @@ describe('useSyncStore.restoreFromSnapshot', () => {
     expect(state.lastSyncedAt).toBe(12345)
 
     __setEngineForTests({ ...syncEngine, getContributors: () => originalContribs } as never)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Restore contract — A1-A4 hardening
+// ---------------------------------------------------------------------------
+
+interface StubSnapshotStoreOptions {
+  onCreate?: (trigger: string) => Promise<void> | void
+}
+
+function installStubSnapshotStore(opts: StubSnapshotStoreOptions = {}) {
+  const preOpCalls: string[] = []
+  setSnapshotStore({
+    init: async () => {},
+    listLocal: async () => [],
+    getLocal: async () => null,
+    createSnapshot: async (_b, trigger) => {
+      await opts.onCreate?.(trigger)
+      preOpCalls.push(trigger)
+      return {
+        id: 'pre-' + trigger,
+        timestamp: 0,
+        device: 'd',
+        trigger,
+        bundleSize: 0,
+        contributorIds: [],
+        isSessionPristine: false,
+      }
+    },
+    deleteLocal: async () => {},
+    compact: async () => ({ kept: [], evicted: [] }),
+    clear: async () => {},
+  })
+  return { preOpCalls }
+}
+
+function makeStoredSnapshot(collections: Record<string, unknown>): StoredSnapshot {
+  return {
+    id: 't',
+    timestamp: 0,
+    device: 'd',
+    trigger: 'manual',
+    bundleSize: 0,
+    contributorIds: Object.keys(collections),
+    isSessionPristine: false,
+    bundle: {
+      version: 1,
+      timestamp: 0,
+      device: 'd',
+      collections: collections as Record<string, { version: number; data: Record<string, unknown> }>,
+    },
+  }
+}
+
+describe('restoreFromSnapshot — coverage check (A3)', () => {
+  beforeEach(() => useSyncStore.getState().reset())
+
+  it('throws SnapshotCoverageError when snapshot misses a registered contributor', async () => {
+    installStubSnapshotStore()
+    const { __setEngineForTests, syncEngine } = await import('./register-sync')
+    const original = syncEngine.getContributors()
+    __setEngineForTests({
+      register: () => {},
+      getContributors: () => [
+        { id: 'a', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: {} }), deserialize: () => {} },
+        { id: 'b', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: {} }), deserialize: () => {} },
+      ],
+      serialize: () => ({ version: 1, timestamp: 0, device: 'd', collections: {} }),
+      push: async () => null as never,
+      pull: async () => ({ appliedBundle: null, conflicts: [] }),
+    } as never)
+
+    const snap = makeStoredSnapshot({ a: { version: 1, data: {} } })
+    await expect(useSyncStore.getState().restoreFromSnapshot(snap, 'local')).rejects.toBeInstanceOf(SnapshotCoverageError)
+
+    __setEngineForTests({ ...syncEngine, getContributors: () => original } as never)
+  })
+
+  it('passes when allowMissingContributors=true (A3 opt-in)', async () => {
+    installStubSnapshotStore()
+    const { __setEngineForTests, syncEngine } = await import('./register-sync')
+    const original = syncEngine.getContributors()
+    const applied: string[] = []
+    __setEngineForTests({
+      register: () => {},
+      getContributors: () => [
+        { id: 'a', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: {} }), deserialize: () => applied.push('a') },
+        { id: 'b', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: {} }), deserialize: () => applied.push('b') },
+      ],
+      serialize: () => ({ version: 1, timestamp: 0, device: 'd', collections: {} }),
+      push: async () => null as never,
+      pull: async () => ({ appliedBundle: null, conflicts: [] }),
+    } as never)
+
+    const snap = makeStoredSnapshot({ a: { version: 1, data: {} } })
+    await useSyncStore.getState().restoreFromSnapshot(snap, 'local', { allowMissingContributors: true })
+    expect(applied).toEqual(['a']) // b is missing in snapshot, kept as current state
+
+    __setEngineForTests({ ...syncEngine, getContributors: () => original } as never)
+  })
+})
+
+describe('restoreFromSnapshot — pre-op failure (A4)', () => {
+  beforeEach(() => useSyncStore.getState().reset())
+
+  it('throws PreOpFailedError when pre-restore snapshot creation fails', async () => {
+    installStubSnapshotStore({
+      onCreate: () => { throw new Error('quota') },
+    })
+    const { __setEngineForTests, syncEngine } = await import('./register-sync')
+    const original = syncEngine.getContributors()
+    __setEngineForTests({
+      register: () => {},
+      getContributors: () => [
+        { id: 'a', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: {} }), deserialize: () => {} },
+      ],
+      serialize: () => ({ version: 1, timestamp: 0, device: 'd', collections: {} }),
+      push: async () => null as never,
+      pull: async () => ({ appliedBundle: null, conflicts: [] }),
+    } as never)
+
+    const snap = makeStoredSnapshot({ a: { version: 1, data: {} } })
+    await expect(useSyncStore.getState().restoreFromSnapshot(snap, 'local')).rejects.toBeInstanceOf(PreOpFailedError)
+
+    __setEngineForTests({ ...syncEngine, getContributors: () => original } as never)
+  })
+
+  it('skips pre-op and succeeds when skipPreOp=true (continueAnyway path)', async () => {
+    installStubSnapshotStore({
+      onCreate: () => { throw new Error('quota') },
+    })
+    const { __setEngineForTests, syncEngine } = await import('./register-sync')
+    const original = syncEngine.getContributors()
+    const applied: string[] = []
+    __setEngineForTests({
+      register: () => {},
+      getContributors: () => [
+        { id: 'a', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: {} }), deserialize: () => applied.push('a') },
+      ],
+      serialize: () => ({ version: 1, timestamp: 0, device: 'd', collections: {} }),
+      push: async () => null as never,
+      pull: async () => ({ appliedBundle: null, conflicts: [] }),
+    } as never)
+
+    const snap = makeStoredSnapshot({ a: { version: 1, data: {} } })
+    await useSyncStore.getState().restoreFromSnapshot(snap, 'local', { skipPreOp: true })
+    expect(applied).toEqual(['a'])
+
+    __setEngineForTests({ ...syncEngine, getContributors: () => original } as never)
+  })
+})
+
+describe('restoreFromSnapshot — deserialize failure (A1)', () => {
+  beforeEach(() => useSyncStore.getState().reset())
+
+  it('throws RestoreFailedError and preserves pendingConflicts when any contributor throws', async () => {
+    installStubSnapshotStore()
+    const { __setEngineForTests, syncEngine } = await import('./register-sync')
+    const original = syncEngine.getContributors()
+    __setEngineForTests({
+      register: () => {},
+      getContributors: () => [
+        { id: 'a', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: {} }), deserialize: () => { throw new Error('bad payload') } },
+      ],
+      serialize: () => ({ version: 1, timestamp: 0, device: 'd', collections: {} }),
+      push: async () => null as never,
+      pull: async () => ({ appliedBundle: null, conflicts: [] }),
+    } as never)
+
+    const conflict: ConflictItem = { contributor: 'a', field: 'x', lastSynced: null, local: null, remote: { value: null, device: 'r' } }
+    useSyncStore.setState({ pendingConflicts: [conflict], pendingConflictsAt: 1 })
+
+    const snap = makeStoredSnapshot({ a: { version: 1, data: {} } })
+    await expect(useSyncStore.getState().restoreFromSnapshot(snap, 'local')).rejects.toBeInstanceOf(RestoreFailedError)
+
+    // Pending conflicts must be preserved because restore did not succeed fully
+    expect(useSyncStore.getState().pendingConflicts).toEqual([conflict])
+
+    __setEngineForTests({ ...syncEngine, getContributors: () => original } as never)
+  })
+})
+
+describe('createPreOperationSnapshot — coverage (A2)', () => {
+  beforeEach(() => useSyncStore.getState().reset())
+
+  it('serializes the full contributor registry, not enabledModules', async () => {
+    installStubSnapshotStore()
+    const { __setEngineForTests, syncEngine } = await import('./register-sync')
+    const original = syncEngine.getContributors()
+    let serializedIds: string[] | null = null
+    __setEngineForTests({
+      register: () => {},
+      getContributors: () => [
+        { id: 'a', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: {} }), deserialize: () => {} },
+        { id: 'b', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: {} }), deserialize: () => {} },
+      ],
+      serialize: (_device, ids) => {
+        serializedIds = ids
+        return { version: 1, timestamp: 0, device: 'd', collections: {} }
+      },
+      push: async () => null as never,
+      pull: async () => ({ appliedBundle: null, conflicts: [] }),
+    } as never)
+
+    // User has only module 'a' enabled, but safety snapshot must still cover 'b'
+    useSyncStore.setState({ enabledModules: ['a'] })
+    await useSyncStore.getState().createPreOperationSnapshot('pre-restore')
+    expect(serializedIds).toEqual(['a', 'b'])
+
+    __setEngineForTests({ ...syncEngine, getContributors: () => original } as never)
   })
 })
