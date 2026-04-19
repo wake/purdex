@@ -56,37 +56,49 @@ func (p *Prober) activityLoop(ctx context.Context, id *struct{}, target string, 
 		p.watcherMu.Unlock()
 	}()
 
-	baseline, ok := p.hashCapture(target)
+	baseline, content, ok := p.hashCapture(target)
 	if !ok {
 		// Initial capture failed — can't establish baseline, exit
 		return
 	}
 	ticker := time.NewTicker(activityPollInterval)
 	defer ticker.Stop()
+	stableCount := 0
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			current, ok := p.hashCapture(target)
+			current, currentContent, ok := p.hashCapture(target)
 			if !ok {
 				continue // tmux error — skip this tick, don't trigger false change
 			}
 			if current != baseline {
-				cb(target)
+				cb(target, ActivitySignalRunning)
+				return
+			}
+			baseline = current
+			content = currentContent
+			stableCount++
+			if stableCount >= 3 {
+				if looksLikeShellPrompt(content) {
+					cb(target, ActivitySignalShellPrompt)
+				} else {
+					cb(target, ActivitySignalIdle)
+				}
 				return
 			}
 		}
 	}
 }
 
-func (p *Prober) hashCapture(target string) (uint32, bool) {
+func (p *Prober) hashCapture(target string) (uint32, string, bool) {
 	content, err := p.tmux.CapturePaneContent(target, activityCaptureLines)
 	if err != nil {
-		return 0, false
+		return 0, "", false
 	}
 	h := fnv.New32a()
 	h.Write([]byte(content))
-	return h.Sum32(), true
+	return h.Sum32(), content, true
 }

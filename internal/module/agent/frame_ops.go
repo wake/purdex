@@ -169,3 +169,31 @@ func buildProjectionNormalized(projection *SessionProjection, fallbackAgentType,
 	normalized.Status = string(projection.TopFrame.Status)
 	return normalized
 }
+
+func (m *Module) projectionForSession(sessionName string) (*SessionProjection, error) {
+	projections, err := m.liveFrameProjections()
+	if err != nil {
+		return nil, err
+	}
+	for i := range projections {
+		name, _ := m.resolvePaneSession(projections[i].PaneID)
+		if name == sessionName {
+			projection := projections[i]
+			return &projection, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *Module) setProjectionTopStatus(sessionName string, status agentpkg.Status) (*SessionProjection, error) {
+	projection, err := m.projectionForSession(sessionName)
+	if err != nil || projection == nil || projection.TopFrame == nil {
+		return projection, err
+	}
+	frame := *projection.TopFrame
+	frame.Status = status
+	if _, err := m.frames.Upsert(frame); err != nil {
+		return nil, err
+	}
+	return m.projectPane(frame.PaneID)
+}

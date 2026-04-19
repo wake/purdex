@@ -226,7 +226,7 @@ func (r *RealExecutor) paneProcessCommands(target string, recursive bool) ([]str
 
 func (r *RealExecutor) CapturePaneContent(target string, lastN int) (string, error) {
 	arg := fmt.Sprintf("-%d", lastN)
-	out, err := exec.Command("tmux", "capture-pane", "-t", target, "-p", "-S", arg).Output()
+	out, err := exec.Command("tmux", "capture-pane", "-e", "-t", target, "-p", "-S", arg).Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux capture-pane: %w", err)
 	}

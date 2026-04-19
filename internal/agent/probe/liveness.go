@@ -29,7 +29,6 @@ type descendantCommandQuerier interface {
 func (p *Prober) IsAliveFor(agentType, target string) bool {
 	p.matcherMu.RLock()
 	matcher, ok := p.matchers[agentType]
-	contentMatcher := p.content[agentType]
 	p.matcherMu.RUnlock()
 	if !ok {
 		return false
@@ -87,14 +86,6 @@ func (p *Prober) IsAliveFor(agentType, target string) bool {
 
 	if defaultShells[baseCommand(cmd)] {
 		return false
-	}
-
-	// Layer 1d: content fallback (optional)
-	if contentMatcher != nil {
-		content, err := p.tmux.CapturePaneContent(target, 5)
-		if err == nil && contentMatcher.LooksLikeAgent(content) {
-			return true
-		}
 	}
 
 	return false

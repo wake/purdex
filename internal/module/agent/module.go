@@ -104,7 +104,6 @@ func (m *Module) Init(c *core.Core) error {
 	m.tmux = c.Tmux
 	m.prober = probe.New(c.Tmux)
 	m.prober.RegisterProcessNames("cc", c.Cfg.Detect.CCCommands)
-	m.prober.RegisterContentMatcher("cc", agentcc.NewContentMatcher())
 	m.prober.RegisterReadiness("cc", agentcc.NewReadinessChecker(c.Tmux))
 	m.prober.RegisterProcessNames("codex", []string{"codex"})
 	m.prober.RegisterReadiness("codex", codex.NewReadinessChecker(c.Tmux))
@@ -495,8 +494,8 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 // during a waiting state. The callback checks if the watcher is still active
 // (a hook event may have already superseded it), then runs Readiness to
 // determine the new status.
-func (m *Module) onActivityDetected(session, agentType string) func(string) {
-	return func(target string) {
+func (m *Module) onActivityDetected(session, agentType string) func(string, probe.ActivitySignal) {
+	return func(target string, signal probe.ActivitySignal) {
 		m.mu.Lock()
 		if _, active := m.activeWatchers[session]; !active {
 			m.mu.Unlock()
@@ -505,21 +504,20 @@ func (m *Module) onActivityDetected(session, agentType string) func(string) {
 		delete(m.activeWatchers, session)
 		m.mu.Unlock()
 
-		if !m.prober.IsAliveFor(agentType, target) {
-			return
-		}
-
-		result, ok := m.prober.CheckReadiness(agentType, target)
-		if !ok {
-			return
-		}
-
-		// Issue #2: StatusWaiting — restart watcher to keep monitoring
-		if result.Status == agentpkg.StatusWaiting {
-			m.mu.Lock()
-			m.activeWatchers[session] = agentType
-			m.mu.Unlock()
-			m.prober.StartWatch(target, m.onActivityDetected(session, agentType))
+		status := agentpkg.StatusIdle
+		switch signal {
+		case probe.ActivitySignalRunning:
+			status = agentpkg.StatusRunning
+		case probe.ActivitySignalIdle:
+			status = agentpkg.StatusIdle
+		case probe.ActivitySignalShellPrompt:
+			projection, err := m.projectionForSession(session)
+			if err == nil && projection != nil && projection.TopFrame != nil && !isPidAliveFn(projection.TopFrame.PID) {
+				_ = m.sweepOnce()
+				return
+			}
+			status = agentpkg.StatusIdle
+		default:
 			return
 		}
 
@@ -529,16 +527,18 @@ func (m *Module) onActivityDetected(session, agentType string) func(string) {
 			m.mu.Unlock()
 			return // respect Error Guard
 		}
-		m.currentStatus[session] = result.Status
+		m.currentStatus[session] = status
 		m.mu.Unlock()
 
-		// Note: probe:activity status changes are not persisted to DB.
-		// After daemon restart, replayFromDB may show stale "waiting" status,
-		// but the next hook event or checkAliveAll will correct it.
+		if projection, err := m.setProjectionTopStatus(session, status); err == nil && projection != nil {
+			normalized := buildProjectionNormalized(projection, agentType, "probe:activity", time.Now().UnixNano(), agentpkg.DeriveResult{})
+			m.broadcastToSession(session, normalized)
+			return
+		}
 
 		normalized := agentpkg.NormalizedEvent{
 			AgentType:    agentType,
-			Status:       string(result.Status),
+			Status:       string(status),
 			RawEventName: "probe:activity",
 			BroadcastTs:  time.Now().UnixNano(),
 		}

@@ -13,11 +13,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/bridge"
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
-	agentcc "github.com/wake/purdex/internal/agent/cc"
-	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -25,12 +25,12 @@ import (
 // --- Fake CCOperator ---
 
 type fakeCCOperator struct {
-	mu            sync.Mutex
-	interruptErr  error
-	exitErr       error
-	getStatusErr  error
-	launchErr     error
-	statusInfo    *agentcc.StatusInfo
+	mu             sync.Mutex
+	interruptErr   error
+	exitErr        error
+	getStatusErr   error
+	launchErr      error
+	statusInfo     *agentcc.StatusInfo
 	interruptCalls int
 	exitCalls      int
 	getStatusCalls int
@@ -75,7 +75,6 @@ func (f *fakeCCOperator) Launch(_ context.Context, _ string, cmd string) error {
 func setupTestProber(fake *tmux.FakeExecutor) *probe.Prober {
 	p := probe.New(fake)
 	p.RegisterProcessNames("cc", []string{"claude"})
-	p.RegisterContentMatcher("cc", agentcc.NewContentMatcher())
 	p.RegisterReadiness("cc", agentcc.NewReadinessChecker(fake))
 	return p
 }

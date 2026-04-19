@@ -7,12 +7,6 @@ import (
 	"github.com/wake/purdex/internal/tmux"
 )
 
-type fakeContentMatcher struct {
-	result bool
-}
-
-func (f *fakeContentMatcher) LooksLikeAgent(string) bool { return f.result }
-
 func TestIsAliveFor_DirectCommand(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
 	p := New(fake)
@@ -120,47 +114,6 @@ func TestIsAliveFor_RecursiveDescendantCacheInvalidatesOnPanePIDChange(t *testin
 	fake.SetPaneDescendants("sess:", []string{"bash"})
 	if p.IsAliveFor("cc", "sess:") {
 		t.Fatal("expected dead after pane PID changes and descendant no longer matches")
-	}
-}
-
-func TestIsAliveFor_ContentFallback(t *testing.T) {
-	fake := tmux.NewFakeExecutor()
-	p := New(fake)
-	p.RegisterProcessNames("cc", []string{"claude"})
-	p.RegisterContentMatcher("cc", &fakeContentMatcher{result: true})
-
-	fake.SetPaneCommand("sess:", "node")
-	fake.SetPaneChildren("sess:", []string{"npm"})
-	fake.SetPaneContent("sess:", "❯ prompt here")
-	if !p.IsAliveFor("cc", "sess:") {
-		t.Fatal("expected alive via content fallback")
-	}
-}
-
-func TestIsAliveFor_NoContentMatcherReturnsDead(t *testing.T) {
-	fake := tmux.NewFakeExecutor()
-	p := New(fake)
-	p.RegisterProcessNames("cc", []string{"claude"})
-
-	fake.SetPaneCommand("sess:", "node")
-	fake.SetPaneChildren("sess:", []string{"npm"})
-	fake.SetPaneContent("sess:", "❯ prompt here")
-	if p.IsAliveFor("cc", "sess:") {
-		t.Fatal("expected dead when no content matcher registered")
-	}
-}
-
-func TestIsAliveFor_ContentMatcherReturnsFalse(t *testing.T) {
-	fake := tmux.NewFakeExecutor()
-	p := New(fake)
-	p.RegisterProcessNames("cc", []string{"claude"})
-	p.RegisterContentMatcher("cc", &fakeContentMatcher{result: false})
-
-	fake.SetPaneCommand("sess:", "vim")
-	fake.SetPaneChildren("sess:", nil)
-	fake.SetPaneContent("sess:", "-- INSERT --")
-	if p.IsAliveFor("cc", "sess:") {
-		t.Fatal("expected dead when content matcher returns false")
 	}
 }
 
