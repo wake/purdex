@@ -70,7 +70,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			allInstalled = false
 			continue
 		}
-		if hasLegacyDirectCodexEntry(entries) {
+		if hasLegacyPdxDirectCodexEntry(entries) {
 			events[eventName] = agent.HookEventInfo{Installed: false}
 			issues = append(issues, eventName+" hook uses legacy format; reinstall required")
 			allInstalled = false
@@ -194,29 +194,11 @@ func codexMatcherGroups(v any) []any {
 	return groups
 }
 
-func normalizeCodexGroups(v any) []any {
-	var groups []any
-	for _, entry := range toCodexEntrySlice(v) {
-		m, ok := entry.(map[string]any)
-		if !ok {
-			continue
-		}
-		// Codex 0.121+ expects matcher groups: {"matcher": "...", "hooks": [...]}
-		if _, ok := m["hooks"]; ok {
-			groups = append(groups, m)
-			continue
-		}
-		// Legacy shape: direct hook handler object in the event array.
-		if _, ok := m["type"]; ok {
-			groups = append(groups, map[string]any{
-				"hooks": []any{m},
-			})
-		}
-	}
-	return groups
-}
-
-func hasLegacyDirectCodexEntry(v any) bool {
+// hasLegacyPdxDirectCodexEntry reports true only when a pre-0.121 direct-entry
+// shape ({"type": "command", "command": "...pdx hook..."}) is found. Presence
+// of a third-party legacy entry alongside a correctly-installed pdx matcher
+// group is not a pdx reinstall trigger and must not report false.
+func hasLegacyPdxDirectCodexEntry(v any) bool {
 	for _, entry := range toCodexEntrySlice(v) {
 		m, ok := entry.(map[string]any)
 		if !ok {
@@ -225,7 +207,11 @@ func hasLegacyDirectCodexEntry(v any) bool {
 		if _, hasHooks := m["hooks"]; hasHooks {
 			continue
 		}
-		if _, hasType := m["type"]; hasType {
+		if _, hasType := m["type"]; !hasType {
+			continue
+		}
+		cmd, _ := m["command"].(string)
+		if isPdxCommandCodex(cmd) {
 			return true
 		}
 	}

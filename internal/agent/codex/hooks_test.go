@@ -117,7 +117,7 @@ func TestMergeCodexHooks_EmptyFile(t *testing.T) {
 			t.Errorf("event %s not found", event)
 			continue
 		}
-		arr := normalizeCodexGroups(entries)
+		arr := codexMatcherGroups(entries)
 		if len(arr) == 0 {
 			t.Errorf("event %s has no matcher groups", event)
 			continue
@@ -150,7 +150,7 @@ func TestMergeCodexHooks_Idempotent(t *testing.T) {
 
 	for _, event := range codexHookEvents {
 		pdxCount := 0
-		for _, groupEntry := range normalizeCodexGroups(hooks[event]) {
+		for _, groupEntry := range codexMatcherGroups(hooks[event]) {
 			group, _ := groupEntry.(map[string]any)
 			for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
 				em, ok := hookEntry.(map[string]any)
@@ -204,7 +204,7 @@ func TestMergeCodexHooks_PreservesExistingHooks(t *testing.T) {
 
 	hasNotifyMe := false
 	hasPdx := false
-	for _, groupEntry := range normalizeCodexGroups(hooks["SessionStart"]) {
+	for _, groupEntry := range codexMatcherGroups(hooks["SessionStart"]) {
 		group, _ := groupEntry.(map[string]any)
 		for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
 			em, ok := hookEntry.(map[string]any)
@@ -242,7 +242,7 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 	// Add a non-pdx entry for SessionStart
 	m := readHooksFile(t, path)
 	hooks := hooksSection(t, m)
-	sessionEntries := normalizeCodexGroups(hooks["SessionStart"])
+	sessionEntries := codexMatcherGroups(hooks["SessionStart"])
 	sessionEntries = append(sessionEntries, map[string]any{
 		"hooks": []any{
 			map[string]any{
@@ -266,7 +266,7 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 	hooks = hooksSection(t, m)
 
 	for _, event := range codexHookEvents {
-		for _, groupEntry := range normalizeCodexGroups(hooks[event]) {
+		for _, groupEntry := range codexMatcherGroups(hooks[event]) {
 			group, _ := groupEntry.(map[string]any)
 			for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
 				em, ok := hookEntry.(map[string]any)
@@ -283,7 +283,7 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 
 	// Non-pdx entry for SessionStart must remain
 	found := false
-	for _, groupEntry := range normalizeCodexGroups(hooks["SessionStart"]) {
+	for _, groupEntry := range codexMatcherGroups(hooks["SessionStart"]) {
 		group, _ := groupEntry.(map[string]any)
 		for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
 			em, ok := hookEntry.(map[string]any)
@@ -352,5 +352,58 @@ func TestCheckHooks_LegacyDirectEntryReportedUninstalled(t *testing.T) {
 	}
 	if len(status.Issues) == 0 || !strings.Contains(status.Issues[0], "legacy format") {
 		t.Fatalf("expected legacy format issue, got %v", status.Issues)
+	}
+}
+
+// TestCheckHooks_ThirdPartyLegacyEntryDoesNotTriggerReinstall covers the case
+// where the user has a legacy-format third-party hook alongside a correctly
+// installed pdx matcher group. The third-party legacy entry must not cause
+// pdx to report "reinstall required".
+func TestCheckHooks_ThirdPartyLegacyEntryDoesNotTriggerReinstall(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	hooksPath := filepath.Join(dir, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	pdxGroup := func(event string) map[string]any {
+		return map[string]any{
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": `"/usr/local/bin/pdx" hook --agent codex ` + event,
+					"timeout": 5,
+				},
+			},
+		}
+	}
+	thirdPartyLegacy := map[string]any{
+		"type":    "command",
+		"command": "/usr/bin/notify-me start",
+		"timeout": 5,
+	}
+	mixed := map[string]any{
+		"hooks": map[string]any{
+			"SessionStart":     []any{pdxGroup("SessionStart"), thirdPartyLegacy},
+			"UserPromptSubmit": []any{pdxGroup("UserPromptSubmit")},
+			"Stop":             []any{pdxGroup("Stop")},
+		},
+	}
+	data, _ := json.MarshalIndent(mixed, "", "  ")
+	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if !status.Installed {
+		t.Fatalf("expected all pdx hooks to be reported installed, got issues=%v", status.Issues)
+	}
+	if !status.Events["SessionStart"].Installed {
+		t.Fatal("SessionStart should be installed despite coexisting third-party legacy entry")
 	}
 }
