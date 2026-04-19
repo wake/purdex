@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { CheckCircle, WarningCircle } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useStatuslineInstall } from '../../hooks/useStatuslineInstall'
@@ -51,10 +52,39 @@ export function AgentExtensionRow({ hostId, extensionId }: Props) {
     }
   })()
 
+  const statusIcon = (() => {
+    if (state.mode === 'pdx' || state.mode === 'wrapped') {
+      return (
+        <CheckCircle
+          size={13}
+          weight="fill"
+          className="text-green-400"
+          data-testid="ext-status-icon"
+          data-icon="check"
+          aria-hidden="true"
+        />
+      )
+    }
+    if (state.mode === 'unmanaged') {
+      return (
+        <WarningCircle
+          size={13}
+          weight="fill"
+          className="text-yellow-400"
+          data-testid="ext-status-icon"
+          data-icon="warning"
+          aria-hidden="true"
+        />
+      )
+    }
+    return null
+  })()
+
   return (
     <>
       <div className="flex items-center justify-between py-2">
         <div className="flex items-center gap-2">
+          {statusIcon}
           <span className="text-sm">{t(`hosts.extensions.${extensionId}`)}</span>
           <span className="text-xs text-text-muted">{badge}</span>
         </div>
