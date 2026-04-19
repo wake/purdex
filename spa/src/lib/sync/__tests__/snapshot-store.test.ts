@@ -55,9 +55,10 @@ describe('SnapshotStore.listLocal', () => {
     const store = createSnapshotStore('purdex-sync-test')
     await store.init()
 
-    const a = await store.createSnapshot(bundle('a'), 'manual')
+    // Use pre-import trigger so auto-compact keeps both (pre-op pool max=5)
+    const a = await store.createSnapshot(bundle('a'), 'pre-import')
     await new Promise((r) => setTimeout(r, 5))
-    const b = await store.createSnapshot(bundle('b'), 'manual')
+    const b = await store.createSnapshot(bundle('b'), 'pre-import')
 
     const list = await store.listLocal()
     expect(list).toHaveLength(2)
@@ -82,5 +83,40 @@ describe('SnapshotStore.listLocal', () => {
     await store.createSnapshot(bundle(), 'manual')
     await store.clear()
     expect(await store.listLocal()).toHaveLength(0)
+  })
+})
+
+describe('SnapshotStore.compact + auto-compact', () => {
+  beforeEach(async () => {
+    await closeAllIDB()
+    indexedDB.deleteDatabase('purdex-sync-test')
+  })
+
+  it('compact policy evicts oldest pre-op beyond max=5', async () => {
+    const store = createSnapshotStore('purdex-sync-test')
+    await store.init()
+
+    const ids: string[] = []
+    for (let i = 0; i < 6; i++) {
+      const m = await store.createSnapshot(bundle(), 'pre-import')
+      ids.push(m.id)
+      await new Promise((r) => setTimeout(r, 2))
+    }
+
+    // After 6 creates, auto-compact has run; expect 5 remain and ids[0] is gone
+    const list = await store.listLocal()
+    expect(list).toHaveLength(5)
+    expect(list.some((m) => m.id === ids[0])).toBe(false)
+  })
+
+  it('createSnapshot 後自動 compact', async () => {
+    const store = createSnapshotStore('purdex-sync-test')
+    await store.init()
+    for (let i = 0; i < 7; i++) {
+      await store.createSnapshot(bundle(), 'pre-import')
+      await new Promise((r) => setTimeout(r, 2))
+    }
+    const list = await store.listLocal()
+    expect(list.length).toBeLessThanOrEqual(5)
   })
 })

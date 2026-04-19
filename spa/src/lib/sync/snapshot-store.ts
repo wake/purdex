@@ -1,6 +1,7 @@
 import { openIDB } from '../storage/idb'
 import type { SyncBundle } from './types'
 import type { SnapshotMetadata, SnapshotTrigger, StoredSnapshot } from './snapshot-types'
+import { computeCompaction } from './snapshot-compaction'
 
 const STORE = 'snapshots'
 const DB_VERSION = 1
@@ -37,6 +38,17 @@ export function createSnapshotStore(dbName = 'purdex-sync'): SnapshotStore {
     }
   })
 
+  async function compactFn(): Promise<{ kept: string[]; evicted: string[] }> {
+    const db = await dbPromise
+    const all = await db.getAll(STORE) as StoredSnapshot[]
+    const metas: SnapshotMetadata[] = all.map(({ bundle: _bundle, ...m }) => m as SnapshotMetadata)
+    const { kept, evicted } = computeCompaction(metas, Date.now())
+    const tx = db.transaction(STORE, 'readwrite')
+    await Promise.all(evicted.map((id) => tx.store.delete(id)))
+    await tx.done
+    return { kept, evicted }
+  }
+
   return {
     async init() {
       await dbPromise
@@ -69,6 +81,7 @@ export function createSnapshotStore(dbName = 'purdex-sync'): SnapshotStore {
       }
       const record: StoredSnapshot = { ...meta, bundle }
       await db.put(STORE, record)
+      await compactFn()
       return meta
     },
 
@@ -78,8 +91,7 @@ export function createSnapshotStore(dbName = 'purdex-sync'): SnapshotStore {
     },
 
     async compact() {
-      // Implemented in Task 8
-      throw new Error('not implemented')
+      return compactFn()
     },
 
     async clear() {
