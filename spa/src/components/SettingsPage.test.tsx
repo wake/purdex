@@ -88,12 +88,47 @@ describe('SettingsPage', () => {
     })
   })
 
-  it('self-heals URL when deep-link path has extra segments', async () => {
-    const { history } = renderWithLocation('/settings/sync/extra')
-    // Falls through to default appearance section
-    expect(screen.getByText('Visual preferences for the application')).toBeTruthy()
+  it('self-heals URL when deep-link path has extra segments (>2 levels)', async () => {
+    const { history } = renderWithLocation('/settings/sync/extra/level3')
     await waitFor(() => {
-      expect(history[history.length - 1]).toBe('/settings/appearance')
+      expect(history[history.length - 1]).toBe('/settings/sync')
+    })
+  })
+})
+
+describe('SettingsPage subsection', () => {
+  beforeEach(() => {
+    resetLastSection()
+    clearSettingsSectionRegistry()
+    registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: AppearanceSection })
+    registerSettingsSection({ id: 'terminal', label: 'Terminal', order: 1, component: TerminalSection })
+    registerSettingsSection({ id: 'sync', label: 'Sync', order: 11 })
+  })
+
+  it('renders /settings/sync/history without self-heal (valid subsection)', async () => {
+    const { hook, history } = memoryLocation({ path: '/settings/sync/history', record: true })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    // allow any self-heal effects to run; then assert URL did NOT change
+    await new Promise((r) => setTimeout(r, 20))
+    const hist = history as string[]
+    // The URL should still be /settings/sync/history (no self-heal)
+    expect(hist[hist.length - 1]).toBe('/settings/sync/history')
+  })
+
+  it('self-heals /settings/sync/extra/level3 back to /settings/sync', async () => {
+    const { hook, history } = memoryLocation({ path: '/settings/sync/extra/level3', record: true })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    const hist = history as string[]
+    await waitFor(() => {
+      expect(hist[hist.length - 1]).toBe('/settings/sync')
     })
   })
 })
