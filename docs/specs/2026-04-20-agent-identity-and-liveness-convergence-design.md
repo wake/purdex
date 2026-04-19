@@ -206,6 +206,7 @@ type Frame struct {
     PPID             int
     ProcessStartTime time.Time  // 解 PID reuse，與 sender_start_time 對應
     ParentFrameID    string     // 若 PPID 在另一 frame 的 PID descendants 中 → 主從
+    Subagents        []string   // CC subagent ids；持久化時存成 JSON text
     Status           AgentStatus
     StartedAt        time.Time
     LastSeenAt       time.Time  // 最後一次 verified hook 時間
@@ -215,8 +216,8 @@ type Frame struct {
 
 #### 主鍵與持久化
 
-- **主鍵**：`(PaneID, PID)`
-- **UNIQUE INDEX**：`(PaneID, PID, ProcessStartTime)`（PID reuse 保險）
+- **資料列主鍵**：`FrameID`
+- **邏輯唯一鍵 / UNIQUE INDEX**：`(PaneID, PID, ProcessStartTime)`（PID reuse 保險）
 - **索引**：`(PaneID)`、`(AgentType)`
 - **持久化到 SQLite**（與現有 `agent_events` 同一 DB `agent_events.db`），table 名稱 `agent_frames`
 - Daemon 啟動時 `replayFromDB()` 讀回所有 `Verified = true` 的 frame；對每個 frame 用 `ProcessStartTime` 驗證 PID 未被重用（若重用 → 丟棄該 frame）
@@ -238,7 +239,7 @@ type SessionProjection struct {
     PaneID       string
     PrimaryFrame *Frame  // stack bottom（第一個進場，或最久的 verified frame）
     TopFrame     *Frame  // stack top（最新進場的 agent，可能是 nested）
-    Subagents    []string
+    Subagents    []string // 取自 TopFrame.Subagents
 }
 ```
 
@@ -277,7 +278,7 @@ Daemon 收到 hook 時 **同步** 執行（verify 操作都很便宜：`kill -0`
    payload.agent_type 對應的 provider
    Identify 回 false → 202 rejected, reason="identify_mismatch"
 
-7. 全部通過 → upsert frame (PaneID, PID, ProcessStartTime) with Verified=true
+7. 全部通過 → 以 `(PaneID, PID, ProcessStartTime)` 做 upsert lookup；新 row 產生 `FrameID`，並標記 `Verified=true`
    計算 Session Projection，廣播 WS
 ```
 
@@ -421,7 +422,7 @@ Probe 的 activity watcher 看畫面狀態，映射到既有 status。**不做�
 5. Periodic sweep 以 per-frame `kill -0` 為單位，不會因 tmux 失聯大屠殺（§7.x PR #486 review finding 3）
 6. Daemon restart 後 replay verified frames 不產生錯誤 projection，PID reuse 情境下能正確丟棄過期 frame
 7. CC / Codex / terminal 三種 icon 切換在手動驗證中穩定可重現
-8. Codex Ctrl+C 回 shell 後 icon 在 1.5s（idle 偵測）+ 2s（sweep 間隔）內回到 terminal
+8. Codex Ctrl+C 回 shell 後 icon 在 1.5s（idle 偵測）+ 下一輪 2s sweep 視窗內回到 terminal（最慢約 3.5s）
 
 ---
 
@@ -434,16 +435,16 @@ Probe 的 activity watcher 看畫面狀態，映射到既有 status。**不做�
 | 1 | tmux 內啟動 CC | icon 穩定為 cc |
 | 2 | 從 CC 觸發 detached Codex review | **cc icon 不被覆蓋**；Codex 事件進不了 CC 的 session（reject reason=`pid_not_in_pane_tree`）|
 | 3 | 新開純 Codex tmux session | icon 切為 codex |
-| 4 | CC 內呼叫 Codex 作為 subprocess（非 detached）| CC + Codex 兩個 frame 共存；TopFrame = Codex；Codex 結束後回 CC |
+| 4 | CC 內呼叫 Codex 作為 subprocess（非 detached）| CC + Codex 兩個 frame 共存；經過至少一輪 quiet period / sweep 後仍不誤清；Codex 結束後回 CC |
 | 5 | CC argv[0]=`2.1.114` 情況下送 hook | Verify 通過，Identify 命中 cc（exe basename）|
-| 6 | 從 node wrapper 啟動 CC（`node /path/to/claude-code/cli.js`）| Verify 通過，Identify 命中 cc（argv pattern）|
+| 6 | 從 node wrapper 啟動 CC / Codex（例如 `node /path/to/<agent>/cli.js`）| Verify 通過，Identify 命中對應 agent（argv pattern）|
 | 7 | Codex 內 apply_patch 長時間編輯（無 PreToolUse hook）| icon 維持 running 或走 activity idle（畫面不動就 idle）|
-| 8 | Codex Ctrl+C 退回 shell | icon 在 sweep 後（≤2s）回到 terminal |
+| 8 | Codex Ctrl+C 退回 shell | icon 在 1.5s idle 偵測 + 下一輪 sweep 視窗內回到 terminal（最慢約 3.5s） |
 | 9 | CC 觸發 Notification → 使用者 terminal 直接回應（不按按鈕）| icon 從 waiting 回到 running |
 | 10 | kill -9 殺掉 CC 程序 | icon 在下個 sweep 內（≤2s）回到 terminal |
 | 11 | Daemon restart 時有 3 個活躍 agent session | replay 後三個 icon 正確恢復 |
 | 12 | Daemon restart 後，原 PID 在 OS 被重用（不同程序）| replay 時該 frame 被丟棄（start_time 不符）|
-| 13 | Tmux session rename（`tmux rename-session`）| icon 不消失不閃爍 |
+| 13 | Tmux session rename（`tmux rename-session`）或 tmux 短暫失聯 / pane 暫時無法解析 | 不因 tmux 名稱或 tmux 短暫失聯而大屠殺清除；rename 時 icon 不消失不閃爍 |
 | 14 | 全新安裝、CC 已在某 tmux session 跑著 | icon 為 terminal 直到使用者觸發下個 hook（接受行為，§3.2）|
 
 ---

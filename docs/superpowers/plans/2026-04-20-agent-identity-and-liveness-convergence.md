@@ -61,7 +61,7 @@ docs/superpowers/plans/2026-04-20-agent-identity-and-liveness-convergence.md 的
 
 - [ ] issue #487 有 comment 註記狀態
 - [ ] regression checklist 建檔
-- [ ] 不需開 PR（純文件工作可直接 push 到 main 或開小型 docs PR）
+- [ ] 走小型 docs PR；不直接 push / merge 到 main
 
 ### 預估工作量
 
@@ -344,7 +344,6 @@ func PidAncestorIncludes(pid int, ancestor int) bool {
 - [ ] **`TestVerify_RejectsPidReuse` 過 — PID 重用防護有效**
 - [ ] 其他 verify tests 全過
 - [ ] 手動驗證：spec §9 情境 2（detached Codex 不覆蓋 CC）通過
-- [ ] 手動驗證：spec §9 情境 4（CC 內呼叫 Codex subprocess）frame 正常
 - [ ] Codex review 無 high severity
 - [ ] PR 兩輪 review + merge + bump
 
@@ -391,6 +390,7 @@ CREATE TABLE agent_frames (
     ppid                INTEGER NOT NULL,
     process_start_time  TEXT NOT NULL,                -- lstart 字串，PID reuse 保險
     parent_frame_id     TEXT,
+    subagents_json      TEXT NOT NULL DEFAULT '[]',   -- JSON array of subagent ids
     status              TEXT NOT NULL,
     started_at          INTEGER NOT NULL,              -- daemon-side epoch
     last_seen_at        INTEGER NOT NULL,
@@ -443,6 +443,7 @@ CREATE INDEX idx_frames_agent_type ON agent_frames(agent_type);
 ### Implementation 要點
 
 - `parent_frame_id` 計算：新 frame 的 PPID 若為某既有 frame 的 PID → 該 frame 為 parent
+- `subagents_json` 儲存 `Frame.Subagents`；daemon restart 後 replay 時一併恢復
 - TopFrame 算法：`ORDER BY started_at DESC LIMIT 1`（同 pane_id）
 - Projection 在 WS broadcast 前重新計算
 - SPA 接口保持向後相容：WS 廣播 `agent_type` 欄位填 TopFrame.AgentType
@@ -453,7 +454,8 @@ CREATE INDEX idx_frames_agent_type ON agent_frames(agent_type);
 - [ ] **`TestFramesStore_OrphanPolicy` 過 — 主從生命週期**
 - [ ] **`TestReplay_SkipsFramesWithStaleStartTime` 過 — PID reuse 防護**
 - [ ] SPA 端無需改動仍可正常渲染
-- [ ] 手動：spec §9 情境 13（tmux rename）正確
+- [ ] 手動：spec §9 情境 4（CC 內呼叫 Codex subprocess，跨 quiet period / sweep 仍不誤清）正確
+- [ ] 手動：spec §9 情境 13（tmux rename / tmux 短暫失聯）正確
 - [ ] 手動：spec §9 情境 11（daemon restart 3 個活 session）正確
 - [ ] Codex review 無 high severity
 - [ ] PR 兩輪 review + merge + bump
@@ -534,6 +536,7 @@ every 2s:
 - [ ] **`TestSweep_DoesNotMassDeleteOnTmuxOutage` 過**（解 PR #486 finding 3）
 - [ ] **`TestSweep_DetectsPidReuse` 過**
 - [ ] 手動：kill -9 殺掉 agent 後 icon 在 ≤2s 回到 terminal（spec §9 情境 10）
+- [ ] 手動：spec §9 情境 13（tmux rename / tmux 短暫失聯）正確
 - [ ] Codex review 無 high severity
 - [ ] PR 兩輪 review + merge + bump
 - [ ] 同 PR 或後續 follow-up：close PR #486 + comment 指向新實作
