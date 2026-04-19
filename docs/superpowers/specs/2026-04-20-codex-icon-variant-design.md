@@ -50,8 +50,10 @@ is rejected to keep tab visuals consistent.
   `CodexLobeSvg`; wrap with existing `wrapSvg` helper
 - Rename the existing local `CodexIcon` component (which currently renders
   `OpenAiLogo`) to `CodexOpenAiIcon` so both variants have parallel names
-- Export `CODEX_ICON_VARIANTS: Record<CodexIconVariant, AgentIconComponent>`
-  alongside `CC_ICON_VARIANTS`
+- Declare an internal `CODEX_VARIANTS` map and re-export it as
+  `CODEX_ICON_VARIANTS: Record<CodexIconVariant, AgentIconComponent>` —
+  mirrors the existing `CC_VARIANTS` / `CC_ICON_VARIANTS` pair at
+  `spa/src/lib/agent-icons.tsx:22-25,40`
 - Extend `GetAgentIconOptions` with `codexVariant: CodexIconVariant`
 - In `getAgentIcon`, the `'codex'` branch returns
   `CODEX_ICON_VARIANTS[options.codexVariant]`
@@ -83,7 +85,8 @@ Add keys:
 - `settings.terminal.codex_icon.codex`
 - `settings.terminal.codex_icon.hidden_hint`
 
-Wording parallels the CC icon strings.
+Wording parallels the CC icon strings. `spa/src/locales/locale-completeness.test.ts`
+fails if a key is added to only one locale, so both files must land together.
 
 ### 6. Tests
 
@@ -108,6 +111,12 @@ when no `migrate` is supplied, which is acceptable since the affected keys
 defaults. This matches the project's "Alpha 階段不需 persist migration"
 policy.
 
+There is a second drop path via `syncManager.register(STORAGE_KEYS.AGENT,
+useAgentStore)` at `spa/src/stores/useAgentStore.ts:254` — cross-tab sync
+broadcasts carry the version number, and older tabs still on v4 will have
+their broadcasts dropped by a tab that has upgraded to v5. Same safe-default
+guarantee applies, so no `migrate` hook on `SyncableSpec` is needed.
+
 ## Risks / Edge Cases
 
 - **Tab rendering ignores the new variant on dot mode** — same as CC; the
@@ -129,7 +138,10 @@ policy.
 ## Acceptance
 
 - `cd spa && pnpm run lint` clean
-- `cd spa && npx vitest run` all green, including the new assertions
+- `cd spa && npx vitest run` all green, including the new assertions and
+  `locale-completeness.test.ts`
 - Manual check in a Codex session: toggling between OpenAI and Codex icons
   in Settings updates the tab icon live; default on a fresh profile is
   OpenAI
+- `CHANGELOG.md` entry added per project convention (CLAUDE.md: each
+  merged PR bumps `VERSION` + `CHANGELOG.md`)
