@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createFilePathOpener } from './file-path'
 import type { LinkToken } from '../types'
 import type { FileOpener } from '../../file-opener-registry'
@@ -21,7 +21,7 @@ function makeDeps() {
   }
   const getDefaultOpener = vi.fn(() => fakeOpener)
   const getActiveWorkspaceId = vi.fn(() => 'ws-1')
-  const fetchPaneCwd = vi.fn(async () => '/home/user/proj')
+  const fetchPaneCwd = vi.fn(async (_h: string, _s: string, _sig?: AbortSignal) => '/home/user/proj')
   return { openSingletonTab, insertTab, getDefaultOpener, getActiveWorkspaceId, fetchPaneCwd, fakeOpener, paneContent }
 }
 
@@ -107,7 +107,7 @@ describe('file-path opener — relative path cwd resolution', () => {
     const deps = makeDeps()
     const o = createFilePathOpener(deps)
     await o.open(relToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
-    expect(deps.fetchPaneCwd).toHaveBeenCalledWith('h1', 'c1')
+    expect(deps.fetchPaneCwd).toHaveBeenCalledWith('h1', 'c1', expect.any(AbortSignal))
     // verify the path passed to FileOpener.createContent is the joined absolute path
     const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
     expect(createContentCalls[0][1].path).toBe('/home/user/proj/src/App.tsx')
@@ -121,20 +121,26 @@ describe('file-path opener — relative path cwd resolution', () => {
     expect(deps.openSingletonTab).not.toHaveBeenCalled()
   })
 
-  it('fetchPaneCwd throws: no-op (does not crash)', async () => {
+  it('fetchPaneCwd throws: no-op and warns with context', async () => {
     const deps = makeDeps()
     deps.fetchPaneCwd.mockRejectedValueOnce(new Error('boom'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const o = createFilePathOpener(deps)
     await o.open(relToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
     expect(deps.openSingletonTab).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('boom'))
+    warnSpy.mockRestore()
   })
 
-  it('fetched cwd is not absolute: no-op', async () => {
+  it('fetched cwd is not absolute: no-op and warns', async () => {
     const deps = makeDeps()
     deps.fetchPaneCwd.mockResolvedValueOnce('not-absolute')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const o = createFilePathOpener(deps)
     await o.open(relToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
     expect(deps.openSingletonTab).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('cwd not absolute'))
+    warnSpy.mockRestore()
   })
 
   it('cwd with trailing slash: no double-slash in joined path', async () => {
@@ -191,5 +197,41 @@ describe('file-path opener — relative path cwd resolution', () => {
     await o.open(token, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
     const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
     expect(createContentCalls[0][1].path).toBe('/home/user/proj/src/App.tsx')
+  })
+
+  it('fetchPaneCwd hanging: aborts after 5s timeout and warns', async () => {
+    vi.useFakeTimers()
+    const deps = makeDeps()
+    let signalFromCall: AbortSignal | undefined
+    deps.fetchPaneCwd.mockImplementation((_h, _s, signal) => {
+      signalFromCall = signal
+      return new Promise((_, reject) => {
+        signal?.addEventListener('abort', () => {
+          const err = new Error('aborted')
+          err.name = 'AbortError'
+          reject(err)
+        })
+      })
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const o = createFilePathOpener(deps)
+
+    const relToken: LinkToken = {
+      type: 'file',
+      text: 'src/App.tsx',
+      range: { startCol: 0, endCol: 11 },
+      meta: { path: 'src/App.tsx' },
+    }
+
+    const openPromise = o.open(relToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    await vi.advanceTimersByTimeAsync(5001)
+    await openPromise
+
+    expect(signalFromCall?.aborted).toBe(true)
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('timeout'))
+    expect(deps.openSingletonTab).not.toHaveBeenCalled()
+
+    warnSpy.mockRestore()
+    vi.useRealTimers()
   })
 })

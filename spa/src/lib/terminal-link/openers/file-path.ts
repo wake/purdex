@@ -8,7 +8,7 @@ export interface FilePathOpenerDeps {
   openSingletonTab(content: PaneContent): string
   insertTab(tabId: string, workspaceId: string): void
   getActiveWorkspaceId(): string | null
-  fetchPaneCwd(hostId: string, sessionCode: string): Promise<string>
+  fetchPaneCwd(hostId: string, sessionCode: string, signal?: AbortSignal): Promise<string>
 }
 
 function buildFileInfo(path: string): FileInfo {
@@ -76,13 +76,22 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
       if (!path.startsWith('/')) {
         // relative / bare: 即時向 tmux pane 查 cwd，normalize 後驗證不越界
         if (!ctx.sessionCode) return
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 5000)
         let cwd: string
         try {
-          cwd = await deps.fetchPaneCwd(ctx.hostId, ctx.sessionCode)
-        } catch {
+          cwd = await deps.fetchPaneCwd(ctx.hostId, ctx.sessionCode, controller.signal)
+        } catch (err) {
+          clearTimeout(timeoutId)
+          const reason = (err as Error)?.name === 'AbortError' ? 'timeout' : (err as Error)?.message ?? String(err)
+          console.warn(`[file-path] cwd fetch failed (${reason}) for host=${ctx.hostId} session=${ctx.sessionCode} rel=${rawPath}`)
           return
         }
-        if (!cwd || !cwd.startsWith('/')) return
+        clearTimeout(timeoutId)
+        if (!cwd || !cwd.startsWith('/')) {
+          console.warn(`[file-path] cwd not absolute, skipping: host=${ctx.hostId} cwd=${cwd}`)
+          return
+        }
         const resolved = resolveCwdPath(cwd, path)
         if (resolved === null) {
           console.warn(`[file-path] rejected path escaping cwd: ${path} vs ${cwd}`)

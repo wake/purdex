@@ -345,6 +345,6 @@ export function registerBuiltinModules(): void {
     openSingletonTab: (content) => useTabStore.getState().openSingletonTab(content),
     insertTab: (tabId, wsId) => useWorkspaceStore.getState().insertTab(tabId, wsId),
     getActiveWorkspaceId: () => useWorkspaceStore.getState().activeWorkspaceId,
-    fetchPaneCwd: (hostId, sessionCode) => fetchSessionCwd(hostId, sessionCode),
+    fetchPaneCwd: (hostId, sessionCode, signal) => fetchSessionCwd(hostId, sessionCode, signal),
   })
 }

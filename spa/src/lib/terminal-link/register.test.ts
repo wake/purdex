@@ -14,7 +14,7 @@ describe('registerBuiltinTerminalLinks', () => {
       openSingletonTab: () => 't',
       insertTab: () => {},
       getActiveWorkspaceId: () => null,
-      fetchPaneCwd: async () => '',
+      fetchPaneCwd: async (_h: string, _s: string, _sig?: AbortSignal) => '',
     })
     const types = terminalLinkRegistry.getMatchers().map((m) => m.type)
     expect(types).toContain('url')
@@ -30,7 +30,7 @@ describe('registerBuiltinTerminalLinks', () => {
       openSingletonTab: () => 't',
       insertTab: () => {},
       getActiveWorkspaceId: () => null,
-      fetchPaneCwd: async () => '',
+      fetchPaneCwd: async (_h: string, _s: string, _sig?: AbortSignal) => '',
     }
     registerBuiltinTerminalLinks(deps)
     const firstCount = terminalLinkRegistry.getMatchers().length
