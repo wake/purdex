@@ -50,6 +50,27 @@ export function HookModuleCard({ module, hostId, refreshKey }: Props) {
       </div>
       <p className="text-xs text-text-muted mb-3">{t(module.descKey)}</p>
 
+      {status && (status.agentVersion || status.supportedVersion) && (
+        <div className="text-xs text-text-muted mb-3 space-y-1">
+          {status.agentVersion && (
+            <div>
+              <span className="text-text-secondary">{t('hosts.hook_agent_version')}:</span> <span className="font-mono">{status.agentVersion}</span>
+            </div>
+          )}
+          {status.supportedVersion && (
+            <div>
+              <span className="text-text-secondary">{t('hosts.hook_supported_version')}:</span> <span className="font-mono">{status.supportedVersion}</span>
+            </div>
+          )}
+          {status.exceedsSupport && (
+            <div className="flex items-center gap-1 text-yellow-400">
+              <WarningCircle size={12} />
+              <span>{t('hosts.hook_version_warning')}</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {loading && !status && !error && (
         <div className="flex items-center gap-1.5 text-xs text-text-muted mb-3">
           <CircleNotch size={14} className="animate-spin" />

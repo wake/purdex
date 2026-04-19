@@ -11,12 +11,17 @@ const OK_STATUS: HookModuleStatus = {
   installed: true,
   events: { SessionStart: { installed: true }, Stop: { installed: true } },
   issues: [],
+  agentVersion: '0.121.0',
+  supportedVersion: '0.121.0',
 }
 
 const NOT_INSTALLED: HookModuleStatus = {
   installed: false,
   events: { SessionStart: { installed: false } },
   issues: ['SessionStart hook not installed'],
+  agentVersion: '0.122.0',
+  supportedVersion: '0.121.0',
+  exceedsSupport: true,
 }
 
 function mockModule(overrides?: Partial<HookModule>): HookModule {
@@ -69,6 +74,16 @@ describe('HookModuleCard', () => {
     const mod = mockModule({ fetchStatus: () => Promise.resolve(NOT_INSTALLED) })
     render(<HookModuleCard module={mod} hostId={HOST_ID} refreshKey={0} />)
     await waitFor(() => expect(screen.getByText('SessionStart hook not installed')).toBeInTheDocument())
+  })
+
+  it('renders hook version info and support warning', async () => {
+    const mod = mockModule({ fetchStatus: () => Promise.resolve(NOT_INSTALLED) })
+    render(<HookModuleCard module={mod} hostId={HOST_ID} refreshKey={0} />)
+    await waitFor(() => expect(screen.getByText('Agent Version:')).toBeInTheDocument())
+    expect(screen.getByText('0.122.0')).toBeInTheDocument()
+    expect(screen.getByText('Hook Support Through:')).toBeInTheDocument()
+    expect(screen.getByText('0.121.0')).toBeInTheDocument()
+    expect(screen.getByText('Agent version is newer than the currently supported hook version')).toBeInTheDocument()
   })
 
   it('renders error on fetch failure', async () => {

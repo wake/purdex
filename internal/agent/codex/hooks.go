@@ -16,6 +16,8 @@ var codexHookEvents = []string{
 	"Stop",
 }
 
+const codexHooksSupportedVersion = "0.121.0"
+
 func (p *Provider) InstallHooks(pdxPath string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -39,13 +41,17 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	if err != nil {
 		return agent.HookStatus{Issues: []string{"cannot find home dir"}}, err
 	}
+	agentVersion := agent.DetectHookAgentVersion("codex", "--version")
 	hooksPath := filepath.Join(home, ".codex", "hooks.json")
 	data, err := os.ReadFile(hooksPath)
 	if err != nil {
 		return agent.HookStatus{
-			Installed: false,
-			Events:    map[string]agent.HookEventInfo{},
-			Issues:    []string{"hooks.json not found"},
+			Installed:        false,
+			Events:           map[string]agent.HookEventInfo{},
+			Issues:           []string{"hooks.json not found"},
+			AgentVersion:     agentVersion,
+			SupportedVersion: codexHooksSupportedVersion,
+			ExceedsSupport:   agent.CompareHookAgentVersions(agentVersion, codexHooksSupportedVersion) > 0,
 		}, nil
 	}
 	var hooksFile map[string]any
@@ -64,6 +70,12 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			allInstalled = false
 			continue
 		}
+		if hasLegacyPdxDirectCodexEntry(entries) {
+			events[eventName] = agent.HookEventInfo{Installed: false}
+			issues = append(issues, eventName+" hook uses legacy format; reinstall required")
+			allInstalled = false
+			continue
+		}
 		command := findPdxCommandInCodex(entries)
 		events[eventName] = agent.HookEventInfo{Installed: command != "", Command: command}
 		if command == "" {
@@ -71,7 +83,14 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			allInstalled = false
 		}
 	}
-	return agent.HookStatus{Installed: allInstalled, Events: events, Issues: issues}, nil
+	return agent.HookStatus{
+		Installed:        allInstalled,
+		Events:           events,
+		Issues:           issues,
+		AgentVersion:     agentVersion,
+		SupportedVersion: codexHooksSupportedVersion,
+		ExceedsSupport:   agent.CompareHookAgentVersions(agentVersion, codexHooksSupportedVersion) > 0,
+	}, nil
 }
 
 func mergeCodexHooks(path, pdxPath string, remove bool) error {
@@ -92,13 +111,16 @@ func mergeCodexHooks(path, pdxPath string, remove bool) error {
 		hooks = make(map[string]any)
 	}
 	for _, event := range codexHookEvents {
-		entries := toCodexEntrySlice(hooks[event])
-		entries = filterOutPdxCodex(entries)
+		entries := filterOutPdxCodex(hooks[event])
 		if !remove {
 			entries = append(entries, map[string]any{
-				"type":    "command",
-				"command": fmt.Sprintf(`"%s" hook --agent codex %s`, pdxPath, event),
-				"timeout": 5,
+				"hooks": []any{
+					map[string]any{
+						"type":    "command",
+						"command": fmt.Sprintf(`"%s" hook --agent codex %s`, pdxPath, event),
+						"timeout": 5,
+					},
+				},
 			})
 		}
 		hooks[event] = entries
@@ -129,18 +151,20 @@ func isPdxCommandCodex(cmd string) bool {
 }
 
 func findPdxCommandInCodex(entries any) string {
-	arr, ok := entries.([]any)
-	if !ok {
-		return ""
-	}
-	for _, entry := range arr {
-		m, ok := entry.(map[string]any)
+	for _, groupEntry := range codexMatcherGroups(entries) {
+		group, ok := groupEntry.(map[string]any)
 		if !ok {
 			continue
 		}
-		cmd, _ := m["command"].(string)
-		if isPdxCommandCodex(cmd) {
-			return cmd
+		for _, entry := range toCodexEntrySlice(group["hooks"]) {
+			m, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			cmd, _ := m["command"].(string)
+			if isPdxCommandCodex(cmd) {
+				return cmd
+			}
 		}
 	}
 	return ""
@@ -156,18 +180,92 @@ func toCodexEntrySlice(v any) []any {
 	return []any{}
 }
 
-func filterOutPdxCodex(entries []any) []any {
-	var result []any
-	for _, e := range entries {
-		m, ok := e.(map[string]any)
+func codexMatcherGroups(v any) []any {
+	var groups []any
+	for _, entry := range toCodexEntrySlice(v) {
+		m, ok := entry.(map[string]any)
 		if !ok {
-			result = append(result, e)
+			continue
+		}
+		if _, ok := m["hooks"]; ok {
+			groups = append(groups, m)
+		}
+	}
+	return groups
+}
+
+// hasLegacyPdxDirectCodexEntry reports true only when a pre-0.121 direct-entry
+// shape ({"type": "command", "command": "...pdx hook..."}) is found. Presence
+// of a third-party legacy entry alongside a correctly-installed pdx matcher
+// group is not a pdx reinstall trigger and must not report false.
+func hasLegacyPdxDirectCodexEntry(v any) bool {
+	for _, entry := range toCodexEntrySlice(v) {
+		m, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, hasHooks := m["hooks"]; hasHooks {
+			continue
+		}
+		if _, hasType := m["type"]; !hasType {
 			continue
 		}
 		cmd, _ := m["command"].(string)
-		if !isPdxCommandCodex(cmd) {
-			result = append(result, e)
+		if isPdxCommandCodex(cmd) {
+			return true
 		}
+	}
+	return false
+}
+
+func cloneCodexMap(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func filterOutPdxCodex(entries any) []any {
+	var result []any
+	for _, entry := range toCodexEntrySlice(entries) {
+		group, ok := entry.(map[string]any)
+		if !ok {
+			result = append(result, entry)
+			continue
+		}
+		if _, ok := group["hooks"]; !ok {
+			if _, ok := group["type"]; ok {
+				cmd, _ := group["command"].(string)
+				if isPdxCommandCodex(cmd) {
+					continue
+				}
+				result = append(result, map[string]any{
+					"hooks": []any{cloneCodexMap(group)},
+				})
+				continue
+			}
+			result = append(result, entry)
+			continue
+		}
+		var kept []any
+		for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
+			m, ok := hookEntry.(map[string]any)
+			if !ok {
+				kept = append(kept, hookEntry)
+				continue
+			}
+			cmd, _ := m["command"].(string)
+			if !isPdxCommandCodex(cmd) {
+				kept = append(kept, hookEntry)
+			}
+		}
+		if len(kept) == 0 {
+			continue
+		}
+		cloned := cloneCodexMap(group)
+		cloned["hooks"] = kept
+		result = append(result, cloned)
 	}
 	return result
 }
