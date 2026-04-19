@@ -143,8 +143,9 @@ describe('ActivityBarWide Phase 2 — inline tabs', () => {
         onAddTabToWorkspace={() => {}}
       />,
     )
-    // getPaneLabel for browser returns hostname
-    expect(screen.getByText('example.test')).toBeInTheDocument()
+    // getPaneLabel for browser returns hostname.
+    // Label appears twice per row: visible title span + HoverTooltip.
+    expect(screen.getAllByText('example.test').length).toBeGreaterThan(0)
   })
 
   it('registers home-header and ws-header-<id> as droppable testids', () => {

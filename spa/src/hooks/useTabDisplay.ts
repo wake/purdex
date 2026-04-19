@@ -19,7 +19,6 @@ export type TabIconComponent = ComponentType<{ size: number; className?: string 
 
 export interface TabDisplayData {
   displayTitle: string
-  tooltip: string
   IconComponent: TabIconComponent | undefined
   agentStatus: AgentStatus | undefined
   isUnread: boolean
@@ -71,12 +70,10 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const baseLabel = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
 
   const useOsc = showOscTitle && !isTerminated && !!agentType && !!oscTitle
-  const displayTitle = useOsc && oscTitle ? oscTitle : baseLabel
-  const tooltip = useOsc && oscTitle ? `${oscTitle} - ${baseLabel}` : baseLabel
+  const displayTitle = useOsc && oscTitle ? `${oscTitle} - ${baseLabel}` : baseLabel
 
   return {
     displayTitle,
-    tooltip,
     IconComponent,
     agentStatus,
     isUnread,

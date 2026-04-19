@@ -20,6 +20,22 @@ export function sanitizeOscTitle(raw: string): string {
   return raw.replace(/\x1b\[[\d;]*[A-Za-z]/g, '').replace(/[\x00-\x1f\x7f]/g, '').trim()
 }
 
+/**
+ * Return a new record containing every entry of `rec` except those whose key
+ * matches `shouldOmit`. Shared by `removeHost` (prefix match) and
+ * `clearHostAgentStatus` (set membership).
+ */
+function omitKeys<T>(
+  rec: Record<string, T>,
+  shouldOmit: (key: string) => boolean,
+): Record<string, T> {
+  const out: Record<string, T> = {}
+  for (const [k, v] of Object.entries(rec)) {
+    if (!shouldOmit(k)) out[k] = v
+  }
+  return out
+}
+
 /** Normalized event from backend (replaces AgentHookEvent). */
 export interface NormalizedEvent {
   agent_type: string
@@ -31,6 +47,12 @@ export interface NormalizedEvent {
   detail?: Record<string, unknown>
 }
 
+/** Latest CC statusLine snapshot per session (ephemeral, from statusLine wrapper). */
+export interface CcStatusEntry {
+  receivedAt: number
+  raw: Record<string, unknown>
+}
+
 interface AgentState {
   // Backend-derived state
   statuses: Record<string, AgentStatus>
@@ -39,6 +61,7 @@ interface AgentState {
   subagents: Record<string, string[]>
   lastEvents: Record<string, NormalizedEvent>  // for notification dispatcher
   oscTitles: Record<string, string>  // latest OSC 0/2 title per session (ephemeral)
+  ccStatus: Record<string, CcStatusEntry>  // latest CC statusLine snapshot (ephemeral)
 
   // UI state
   unread: Record<string, boolean>
@@ -55,6 +78,8 @@ interface AgentState {
   setCcIconVariant: (variant: CcIconVariant) => void
   setShowOscTitle: (show: boolean) => void
   setOscTitle: (hostId: string, sessionCode: string, title: string) => void
+  setCcStatus: (hostId: string, sessionCode: string, raw: Record<string, unknown>) => void
+  clearHostAgentStatus: (hostId: string) => void
 }
 
 export const useAgentStore = create<AgentState>()(
@@ -66,6 +91,7 @@ export const useAgentStore = create<AgentState>()(
       subagents: {},
       lastEvents: {},
       oscTitles: {},
+      ccStatus: {},
       unread: {},
       tabIndicatorStyle: 'badge' as TabIndicatorStyle,
       ccIconVariant: 'bot' as CcIconVariant,
@@ -86,6 +112,7 @@ export const useAgentStore = create<AgentState>()(
             subagents: filterOut(s.subagents),
             lastEvents: filterOut(s.lastEvents),
             oscTitles: filterOut(s.oscTitles),
+            ccStatus: filterOut(s.ccStatus),
             unread: filterOut(s.unread),
           }
         })
@@ -147,21 +174,16 @@ export const useAgentStore = create<AgentState>()(
 
       removeHost: (hostId) => set((s) => {
         const prefix = `${hostId}:`
-        const filterKeys = <T,>(record: Record<string, T>): Record<string, T> => {
-          const result: Record<string, T> = {}
-          for (const [k, v] of Object.entries(record)) {
-            if (!k.startsWith(prefix)) result[k] = v
-          }
-          return result
-        }
+        const byPrefix = (k: string) => k.startsWith(prefix)
         return {
-          statuses: filterKeys(s.statuses),
-          agentTypes: filterKeys(s.agentTypes),
-          models: filterKeys(s.models),
-          subagents: filterKeys(s.subagents),
-          lastEvents: filterKeys(s.lastEvents),
-          oscTitles: filterKeys(s.oscTitles),
-          unread: filterKeys(s.unread),
+          statuses: omitKeys(s.statuses, byPrefix),
+          agentTypes: omitKeys(s.agentTypes, byPrefix),
+          models: omitKeys(s.models, byPrefix),
+          subagents: omitKeys(s.subagents, byPrefix),
+          lastEvents: omitKeys(s.lastEvents, byPrefix),
+          oscTitles: omitKeys(s.oscTitles, byPrefix),
+          ccStatus: omitKeys(s.ccStatus, byPrefix),
+          unread: omitKeys(s.unread, byPrefix),
         }
       }),
 
@@ -178,6 +200,42 @@ export const useAgentStore = create<AgentState>()(
         }
         if (s.oscTitles[key] === cleaned) return s
         return { oscTitles: { ...s.oscTitles, [key]: cleaned } }
+      }),
+
+      setCcStatus: (hostId, sessionCode, raw) => {
+        const key = compositeKey(hostId, sessionCode)
+        const entry: CcStatusEntry = { receivedAt: Date.now(), raw }
+        set((s) => ({ ccStatus: { ...s.ccStatus, [key]: entry } }))
+        // Mirror session_name → oscTitle (statusline's channel for cc session name).
+        // Empty / missing session_name → setOscTitle deletes the key via sanitizeOscTitle.
+        const sessionName = typeof raw?.session_name === 'string' ? raw.session_name : ''
+        get().setOscTitle(hostId, sessionCode, sessionName)
+      },
+
+      /**
+       * Wipe CC statusLine state for a host: all ccStatus entries with the host's
+       * prefix, plus the oscTitles entries that were mirrored from those ccStatus
+       * snapshots (same composite keys). Non-CC oscTitles (from terminal OSC
+       * 0/2 sequences) are preserved.
+       *
+       * Called on the `agent.status.cleared` WS event, broadcast by the daemon
+       * when the CC statusLine wrapper is uninstalled.
+       *
+       * Does NOT touch statuses / agentTypes / models / subagents / unread /
+       * lastEvents — those track agent hook events, which are orthogonal to
+       * statusLine install state. Uninstalling the wrapper does not imply the
+       * CC session has ended; the hook stream may continue.
+       */
+      clearHostAgentStatus: (hostId) => set((s) => {
+        const prefix = `${hostId}:`
+        const ccKeysToRemove = Object.keys(s.ccStatus).filter((k) => k.startsWith(prefix))
+        if (ccKeysToRemove.length === 0) return s
+        const removeSet = new Set(ccKeysToRemove)
+        const shouldOmit = (k: string) => removeSet.has(k)
+        return {
+          ccStatus: omitKeys(s.ccStatus, shouldOmit),
+          oscTitles: omitKeys(s.oscTitles, shouldOmit),
+        }
       }),
     }),
     {

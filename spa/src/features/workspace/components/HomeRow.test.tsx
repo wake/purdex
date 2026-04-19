@@ -64,7 +64,8 @@ describe('HomeRow', () => {
   it('tabs shown when workspaceExpanded["home"]=true', () => {
     useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide', workspaceExpanded: { home: true } })
     renderRow({ standaloneTabIds: ['t1'], tabsById: { t1: mkTab('t1', 'alpha') } })
-    expect(screen.getByText('alpha.example.com')).toBeInTheDocument()
+    // Label appears twice per row: visible title span + HoverTooltip.
+    expect(screen.getAllByText('alpha.example.com').length).toBeGreaterThan(0)
   })
 
   it('clicking title on ACTIVE Home toggles expand (does not re-select)', () => {

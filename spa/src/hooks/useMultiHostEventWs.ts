@@ -6,6 +6,7 @@ import { useStreamStore } from '../stores/useStreamStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useTabStore } from '../stores/useTabStore'
 import { connectHostEvents, type EventConnection } from '../lib/host-events'
+import { dispatchAgentWsEvent } from '../lib/agent-ws-dispatch'
 import { scanPaneTree } from '../lib/pane-tree'
 import { hostWsUrl, fetchWsTicket, fetchHistory, type Session } from '../lib/host-api'
 import { checkHealth, type HealthResult } from '../lib/host-connection'
@@ -160,6 +161,10 @@ export function useMultiHostEventWs() {
             } else {
               store.setHandoffProgress(hostId, event.session, event.value)
             }
+          }
+          if (event.type === 'agent.status' || event.type === 'agent.status.cleared') {
+            dispatchAgentWsEvent(hostId, event)
+            return
           }
         },
         // onClose — trigger SM health check (no auto-reconnect)

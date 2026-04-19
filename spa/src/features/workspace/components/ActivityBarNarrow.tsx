@@ -8,6 +8,7 @@ import { WorkspaceIcon } from './WorkspaceIcon'
 import { useWorkspaceIndicators } from '../useWorkspaceIndicators'
 import type { ActiveStatus } from '../workspace-indicators'
 import type { ActivityBarProps } from './activity-bar-props'
+import { HoverTooltip } from '../../../components/HoverTooltip'
 
 const PILL_COLORS: Record<ActiveStatus, string> = {
   running: '#4ade80',
@@ -81,9 +82,7 @@ function SortableWorkspaceButton({ workspace: ws, isActive, onSelect, onContextM
           {unreadCount > 99 ? '99+' : unreadCount}
         </span>
       )}
-      <span data-testid="ws-tooltip" className="pointer-events-none absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-surface-secondary border border-border-default px-2 py-1 text-xs text-text-primary shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-50">
-        {tooltipText}
-      </span>
+      <HoverTooltip data-testid="ws-tooltip" placement="right">{tooltipText}</HoverTooltip>
     </div>
   )
 }

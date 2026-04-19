@@ -77,7 +77,8 @@ describe('WorkspaceRow', () => {
   it('tabs shown when workspaceExpanded[id]=true', () => {
     useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide', workspaceExpanded: { 'ws-1': true } })
     renderRow(mkWs('ws-1', 'W', ['t1']), { tabsById: { t1: mkTab('t1', 'alpha') } })
-    expect(screen.getByText('alpha.example.com')).toBeInTheDocument()
+    // Label appears twice per row: visible title span + HoverTooltip.
+    expect(screen.getAllByText('alpha.example.com').length).toBeGreaterThan(0)
   })
 
   it('clicking title on ACTIVE ws toggles expand (does not re-select)', () => {

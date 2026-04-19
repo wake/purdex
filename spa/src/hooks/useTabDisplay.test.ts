@@ -50,7 +50,6 @@ describe('useTabDisplay — label resolution', () => {
     })
     const { result } = renderHook(() => useTabDisplay(makeTab()))
     expect(result.current.displayTitle).toBe('my-session')
-    expect(result.current.tooltip).toBe('my-session')
   })
 
   it('falls back to sessionCode when session not found', () => {
@@ -90,8 +89,7 @@ describe('useTabDisplay — OSC title override', () => {
       oscTitles: { 'h1:sc1': 'claude' },
     })
     const { result } = renderHook(() => useTabDisplay(makeTab()))
-    expect(result.current.displayTitle).toBe('claude')
-    expect(result.current.tooltip).toBe('claude - base')
+    expect(result.current.displayTitle).toBe('claude - base')
   })
 
   it('ignores OSC when showOscTitle is off', () => {

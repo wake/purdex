@@ -15,6 +15,7 @@ beforeEach(() => {
     subagents: {},
     lastEvents: {},
     oscTitles: {},
+    ccStatus: {},
     unread: {},
     showOscTitle: false,
   })
@@ -388,6 +389,97 @@ describe('useAgentStore.setOscTitle', () => {
     useAgentStore.getState().removeHost(H)
     expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBeUndefined()
     expect(useAgentStore.getState().oscTitles['other-host:dev']).toBe('other-title')
+  })
+})
+
+describe('useAgentStore.ccStatus', () => {
+  it('setCcStatus stores snapshot under composite key', () => {
+    const raw = { model: { display_name: 'Sonnet' } }
+    useAgentStore.getState().setCcStatus(H, 'dev', raw)
+    const entry = useAgentStore.getState().ccStatus[`${H}:dev`]
+    expect(entry?.raw).toEqual(raw)
+    expect(typeof entry?.receivedAt).toBe('number')
+  })
+
+  it('setCcStatus with session_name also sets oscTitle', () => {
+    useAgentStore.getState().setCcStatus(H, 'dev', { session_name: 'my-feature' })
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBe('my-feature')
+  })
+
+  it('setCcStatus with empty session_name clears oscTitle', () => {
+    useAgentStore.getState().setOscTitle(H, 'dev', 'stale')
+    useAgentStore.getState().setCcStatus(H, 'dev', { model: { display_name: 'x' } })
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBeUndefined()
+  })
+
+  it('setCcStatus with null session_name leaves oscTitle cleared', () => {
+    useAgentStore.getState().setOscTitle(H, 'dev', 'stale')
+    useAgentStore.getState().setCcStatus(H, 'dev', { session_name: null as unknown as string })
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBeUndefined()
+  })
+
+  it('clearHostAgentStatus wipes ccStatus + cc-sourced oscTitles for host', () => {
+    useAgentStore.getState().setCcStatus(H, 'dev', { session_name: 'a' })
+    useAgentStore.getState().setCcStatus(H, 'prod', { session_name: 'b' })
+    useAgentStore.getState().clearHostAgentStatus(H)
+    expect(useAgentStore.getState().ccStatus[`${H}:dev`]).toBeUndefined()
+    expect(useAgentStore.getState().ccStatus[`${H}:prod`]).toBeUndefined()
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBeUndefined()
+    expect(useAgentStore.getState().oscTitles[`${H}:prod`]).toBeUndefined()
+  })
+
+  it('clearHostAgentStatus preserves non-CC oscTitles for the host', () => {
+    // Terminal-sourced oscTitle (no ccStatus mirror)
+    useAgentStore.getState().setOscTitle(H, 'term', 'terminal-title')
+    // CC-sourced oscTitle (mirrored via setCcStatus)
+    useAgentStore.getState().setCcStatus(H, 'dev', { session_name: 'cc-feature' })
+    useAgentStore.getState().clearHostAgentStatus(H)
+
+    // CC-sourced wiped (both ccStatus and mirrored oscTitle)
+    expect(useAgentStore.getState().ccStatus[`${H}:dev`]).toBeUndefined()
+    expect(useAgentStore.getState().oscTitles[`${H}:dev`]).toBeUndefined()
+    // Terminal-sourced oscTitle preserved
+    expect(useAgentStore.getState().oscTitles[`${H}:term`]).toBe('terminal-title')
+  })
+
+  it('clearHostAgentStatus is a no-op when no ccStatus exists for host', () => {
+    // Seed terminal-only oscTitles for the host (no ccStatus entries)
+    useAgentStore.getState().setOscTitle(H, 'a', 'title-a')
+    useAgentStore.getState().setOscTitle(H, 'b', 'title-b')
+    const beforeState = useAgentStore.getState()
+    const beforeCc = beforeState.ccStatus
+    const beforeOsc = beforeState.oscTitles
+
+    useAgentStore.getState().clearHostAgentStatus(H)
+
+    const afterState = useAgentStore.getState()
+    // Reference equality: no slice rebuilt
+    expect(afterState.ccStatus).toBe(beforeCc)
+    expect(afterState.oscTitles).toBe(beforeOsc)
+    // Values intact
+    expect(afterState.oscTitles[`${H}:a`]).toBe('title-a')
+    expect(afterState.oscTitles[`${H}:b`]).toBe('title-b')
+  })
+
+  it('clearHostAgentStatus preserves other hosts ccStatus + oscTitles', () => {
+    useAgentStore.getState().setCcStatus(H, 'dev', { session_name: 'a' })
+    useAgentStore.getState().setCcStatus('other-host', 'dev', { session_name: 'other' })
+    useAgentStore.getState().clearHostAgentStatus(H)
+    expect(useAgentStore.getState().ccStatus[`${H}:dev`]).toBeUndefined()
+    expect(useAgentStore.getState().ccStatus['other-host:dev']?.raw).toEqual({ session_name: 'other' })
+    expect(useAgentStore.getState().oscTitles['other-host:dev']).toBe('other')
+  })
+
+  it('clearSession also wipes ccStatus', () => {
+    useAgentStore.getState().setCcStatus(H, 'dev', { session_name: 'a' })
+    useAgentStore.getState().clearSession(H, 'dev')
+    expect(useAgentStore.getState().ccStatus[`${H}:dev`]).toBeUndefined()
+  })
+
+  it('removeHost wipes ccStatus', () => {
+    useAgentStore.getState().setCcStatus(H, 'dev', { session_name: 'a' })
+    useAgentStore.getState().removeHost(H)
+    expect(useAgentStore.getState().ccStatus[`${H}:dev`]).toBeUndefined()
   })
 })
 

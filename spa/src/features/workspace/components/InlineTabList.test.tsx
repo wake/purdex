@@ -56,9 +56,10 @@ describe('InlineTabList', () => {
         />
       </DndContext>,
     )
-    // `browser` kind in getPaneLabel extracts hostname from URL
-    expect(screen.getByText('alpha.example.com')).toBeInTheDocument()
-    expect(screen.getByText('beta.example.com')).toBeInTheDocument()
+    // `browser` kind in getPaneLabel extracts hostname from URL.
+    // Label appears twice per row: visible title span + HoverTooltip.
+    expect(screen.getAllByText('alpha.example.com').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('beta.example.com').length).toBeGreaterThan(0)
   })
 
   it('skips ids with no matching tab entry', () => {
@@ -76,7 +77,7 @@ describe('InlineTabList', () => {
         />
       </DndContext>,
     )
-    expect(screen.getByText('alpha.example.com')).toBeInTheDocument()
+    expect(screen.getAllByText('alpha.example.com').length).toBeGreaterThan(0)
     expect(screen.queryByText('missing')).not.toBeInTheDocument()
   })
 })
