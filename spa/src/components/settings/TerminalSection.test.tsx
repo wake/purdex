@@ -13,7 +13,7 @@ describe('TerminalSection', () => {
       terminalRevealDelay: 300,
       terminalSettingsVersion: 0,
     })
-    useAgentStore.setState({ tabIndicatorStyle: 'badge', ccIconVariant: 'bot', showOscTitle: false })
+    useAgentStore.setState({ tabIndicatorStyle: 'badge', ccIconVariant: 'bot', codexIconVariant: 'openai', showOscTitle: false })
   })
 
   it('renders section title', () => {
@@ -116,13 +116,21 @@ describe('TerminalSection', () => {
     expect(useAgentStore.getState().ccIconVariant).toBe('bot')
   })
 
+  it('updates codexIconVariant when a codex icon button is clicked', () => {
+    render(<TerminalSection />)
+    fireEvent.click(screen.getByRole('button', { name: /^Codex$/ }))
+    expect(useAgentStore.getState().codexIconVariant).toBe('codex')
+    fireEvent.click(screen.getByRole('button', { name: /^OpenAI$/ }))
+    expect(useAgentStore.getState().codexIconVariant).toBe('openai')
+  })
+
   it('shows cc_icon hidden hint only in dot mode', () => {
     useAgentStore.setState({ tabIndicatorStyle: 'badge' })
     const { rerender } = render(<TerminalSection />)
     expect(screen.queryByText(/no visible effect/i)).toBeNull()
     useAgentStore.setState({ tabIndicatorStyle: 'dot' })
     rerender(<TerminalSection />)
-    expect(screen.getByText(/no visible effect/i)).toBeTruthy()
+    expect(screen.getAllByText(/no visible effect/i).length).toBeGreaterThan(0)
   })
 
   it('toggles showOscTitle', () => {

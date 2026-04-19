@@ -12,12 +12,12 @@ export type AgentIconComponent = ComponentType<{ size: number; className?: strin
 
 function wrapSvg(Svg: SvgComponent): AgentIconComponent {
   return function AgentBrandIcon({ size, className }) {
-    return <Svg width={size} height={size} className={className} />
+    return <Svg width={size} height={size} className={className} aria-hidden="true" />
   }
 }
 
 function CodexOpenAiIcon({ size, className }: { size: number; className?: string }) {
-  return <OpenAiLogo size={size} className={className} />
+  return <OpenAiLogo size={size} className={className} aria-hidden="true" />
 }
 
 const CC_VARIANTS: Record<CcIconVariant, AgentIconComponent> = {
