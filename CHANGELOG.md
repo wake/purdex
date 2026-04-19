@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.187] - 2026-04-19
+
+### Fix(agent): Codex hook schema compatibility + hook support version warning (#479)
+
+- **Codex hooks schema**：`~/.codex/hooks.json` 改寫為 Codex 0.121+ 需要的 matcher-group schema（`{"hooks": [...]}`），避免 legacy direct-entry 看似已安裝但實際完全不觸發。
+- **Legacy detection scoped to pdx**：`CheckHooks` 偵測 legacy direct-entry 時，只對 pdx 自己的 command 觸發「reinstall required」；第三方 legacy hook 與 pdx matcher-group 並存時不再誤報。
+- **Agent version cache**：`DetectHookAgentVersion` 加 60s per-binary TTL cache。原本每次 `CheckHooks` 都同步 spawn `claude --version` / `codex --version`（含 5s timeout），現在最差情況降為每分鐘一次。
+- **Hook version support fields**：hook status API 新增 `agentVersion` / `supportedVersion` / `exceedsSupport`，目前記錄已驗證的 Claude Code（2.1.114）/ Codex（0.121.0）hook 支援上限。
+- **Hosts UI**：Hook 卡片顯示 Agent 版本與 Hook 支援上限，agent 版本高於支援版本時顯示黃色警示（`<WarningCircle>` + `hosts.hook_version_warning` key）。
+- **Tests**：新增 version parser/compare 測試、version cache TTL 測試、Codex legacy 格式 regression test（含 pdx 與第三方 legacy 並存情境）、HookModuleCard 版本資訊顯示測試。
+
 ## [1.0.0-alpha.186] - 2026-04-19
 
 ### Feat: Statusline installer UI (PR-1c, #473)
