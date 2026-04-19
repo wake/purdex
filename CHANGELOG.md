@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.184] - 2026-04-19
+
+### Feat: CC statusline installer — SPA ccStatus store + tab rendering（PR-1b，#471）
+
+- 新增 `<HoverTooltip>` 元件（`spa/src/components/HoverTooltip.tsx`）：從 `ActivityBarNarrow` 的 `ws-tooltip` pattern 抽出，純 CSS `group-hover:opacity-100` fade-in，`placement: 'top' | 'right'`，`role="tooltip"`，parent 需 `.relative.group`。`ActivityBarNarrow` + `InlineTab` + `SortableTab`（pinned + regular）皆改用之。
+- `useAgentStore`：新增 `ccStatus: Record<compositeKey, CcStatusEntry>` 非 persist slot，加 `setCcStatus` / `clearHostAgentStatus` actions。`setCcStatus` 將 `session_name` 鏡射到現有 `oscTitles` channel（經 `sanitizeOscTitle` 清理 ANSI/C0）。`clearHostAgentStatus` 按 provenance 只清除 ccStatus 來源的 oscTitles，保留終端 OSC 0/2 來源的 titles。抽出 module-level `omitKeys` helper，`removeHost` 共用。
+- `dispatchAgentWsEvent`（`spa/src/lib/agent-ws-dispatch.ts`）：新 pure helper，由 `useMultiHostEventWs` 呼叫。解開 daemon wire shape `{agent_type, status}`、驗證 `agent_type === 'cc'`、把 inner `status` 傳給 `setCcStatus`。`agent.status.cleared` 呼叫 `clearHostAgentStatus`。非物件 JSON / 錯 agent_type / 缺 status 欄位皆靜默忽略。
+- `useTabDisplay.displayTitle` 改為 `${oscTitle} - ${baseLabel}` 組合形式（原本 oscTitle only）；`tooltip` deprecated 欄位整個移除，InlineTab + SortableTab 統一從 `displayTitle` 取值。
+- `InlineTab` 改用 `<HoverTooltip placement="right">`（避開 `ActivityBarWide.overflow-y-auto` 截斷）；`SortableTab` 兩個 call sites（pinned button + regular span）也遷移到 HoverTooltip（placement=top）。
+- 兩輪 review + 大量 pre-merge fix：round-1 clean；round-2（attacker / defender / file-size）找到 3 個 user-facing bug（wire shape mismatch 導致 feature 整個不運作、tooltip placement 被 sidebar 截斷、a11y regression）全部 pre-merge 修；defender 提出的 oscTitles provenance concern 也順手修；filterKeys 重複 + deprecated tooltip 欄位一併清掉。
+- 測試：2065/2065 pass（+10 vs PR-1a baseline），204 files，`tsc --noEmit` clean。
+
+### Follow-up issues
+
+- #472 HoverTooltip 擴充 `placement='bottom'`（SortableTab 在 top TabBar 用 `placement='top'` 是 compromise，實測若 clipping 明顯再處理）
+
 ## [1.0.0-alpha.183] - 2026-04-19
 
 ### Feat: CC statusline installer — wrapper + daemon endpoints（PR-1a，#464）
