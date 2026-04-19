@@ -34,8 +34,7 @@ describe('AgentsSection Extensions region', () => {
     render(<AgentsSection hostId="h1" />)
     // Wait for the AgentExtensionRow to render after detect + statusline status fetch
     await waitFor(() => {
-      // heading key renders as raw key when T21 translations are absent
-      expect(screen.getByText('hosts.extensions.heading')).toBeInTheDocument()
+      expect(screen.getByText('Extensions')).toBeInTheDocument()
     })
     // AgentExtensionRow renders its Install button
     await waitFor(() =>
@@ -51,7 +50,7 @@ describe('AgentsSection Extensions region', () => {
       expect(screen.getByText(/codex/i)).toBeInTheDocument()
     )
     // Extensions heading should NOT appear
-    expect(screen.queryByText('hosts.extensions.heading')).not.toBeInTheDocument()
+    expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
   })
 
   it('does not render Extensions region when cc is not installed', async () => {
@@ -61,6 +60,6 @@ describe('AgentsSection Extensions region', () => {
     await waitFor(() =>
       expect(screen.getByText(/not found/i)).toBeInTheDocument()
     )
-    expect(screen.queryByText('hosts.extensions.heading')).not.toBeInTheDocument()
+    expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
   })
 })
