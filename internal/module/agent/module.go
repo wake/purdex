@@ -25,6 +25,7 @@ import (
 type Module struct {
 	core      *core.Core
 	events    *store.AgentEventStore
+	frames    *store.FramesStore
 	sessions  session.SessionProvider
 	registry  *agentpkg.Registry
 	uploadDir string
@@ -56,8 +57,13 @@ type Module struct {
 
 // New creates a new agent Module backed by the given AgentEventStore.
 func New(events *store.AgentEventStore) *Module {
+	var frames *store.FramesStore
+	if events != nil {
+		frames, _ = events.Frames()
+	}
 	return &Module{
 		events:          events,
+		frames:          frames,
 		registry:        agentpkg.NewRegistry(),
 		currentStatus:   make(map[string]agentpkg.Status),
 		subagents:       make(map[string][]string),
@@ -247,6 +253,18 @@ func (m *Module) RenameSessionAtomic(oldName, newName string, doRename func() er
 
 // replayFromDB rebuilds in-memory currentStatus from persisted events.
 func (m *Module) replayFromDB() {
+	if projections, err := m.liveFrameProjections(); err == nil && len(projections) > 0 {
+		for _, projection := range projections {
+			sessionName, _ := m.resolvePaneSession(projection.PaneID)
+			if sessionName == "" {
+				continue
+			}
+			m.mu.Lock()
+			syncProjectionState(m.currentStatus, m.subagents, sessionName, &projection)
+			m.mu.Unlock()
+		}
+		return
+	}
 	all, err := m.events.ListAll()
 	if err != nil {
 		log.Printf("[agent] replay: %v", err)
@@ -269,6 +287,23 @@ func (m *Module) replayFromDB() {
 // sendSnapshot sends the latest hook event for each known session to a new WS subscriber.
 func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 	if m.sessions == nil {
+		return
+	}
+	if projections, err := m.liveFrameProjections(); err == nil && len(projections) > 0 {
+		for _, projection := range projections {
+			sessionName, code := m.resolvePaneSession(projection.PaneID)
+			if code == "" {
+				continue
+			}
+			normalized := buildProjectionNormalized(&projection, projection.TopFrame.AgentType, "replay", time.Now().UnixNano(), agentpkg.DeriveResult{})
+			payload, _ := json.Marshal(normalized)
+			event := core.HostEvent{Type: "hook", Session: code, Value: string(payload)}
+			data, _ := json.Marshal(event)
+			sub.Send(data)
+			m.mu.Lock()
+			syncProjectionState(m.currentStatus, m.subagents, sessionName, &projection)
+			m.mu.Unlock()
+		}
 		return
 	}
 	all, err := m.events.ListAll()
@@ -305,6 +340,40 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 		data, _ := json.Marshal(event)
 		sub.Send(data)
 	}
+}
+
+func (m *Module) liveFrameProjections() ([]SessionProjection, error) {
+	if m.frames == nil {
+		return nil, nil
+	}
+	frames, err := m.frames.ListAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(frames) == 0 {
+		return nil, nil
+	}
+	live := make([]store.Frame, 0, len(frames))
+	for _, frame := range frames {
+		actualStartTime, err := processStartTimeFn(frame.PID)
+		if err != nil || actualStartTime != frame.ProcessStartTime {
+			_ = m.frames.Delete(frame.FrameID)
+			continue
+		}
+		live = append(live, frame)
+	}
+	return BuildSessionProjections(live), nil
+}
+
+func (m *Module) resolvePaneSession(paneID string) (string, string) {
+	if m.tmux == nil {
+		return "", ""
+	}
+	sessionName, err := m.tmux.PaneSessionName(paneID)
+	if err != nil {
+		return "", ""
+	}
+	return sessionName, m.resolveSessionCode(sessionName)
 }
 
 // checkAliveAll checks all tracked sessions for liveness and broadcasts clear events for dead ones.

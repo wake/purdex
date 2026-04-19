@@ -101,10 +101,19 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		result = provider.DeriveStatus(req.EventName, req.RawEvent)
 	}
 
+	projection, err := m.applyFrameEvent(req, result, broadcastTs)
+	if err != nil {
+		log.Printf("[agent] frame event: %v", err)
+		http.Error(w, `{"error":"frame update failed"}`, http.StatusInternalServerError)
+		return
+	}
+
 	// Handle subagent events (transient — broadcast only, don't persist)
 	if req.EventName == "SubagentStart" || req.EventName == "SubagentStop" {
-		m.handleSubagentEvent(req.TmuxSession, req.EventName, result)
-		normalized := m.buildNormalized(req.TmuxSession, req.EventName, req.AgentType, broadcastTs, result)
+		m.mu.Lock()
+		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
+		m.mu.Unlock()
+		normalized := buildProjectionNormalized(projection, req.AgentType, req.EventName, broadcastTs, result)
 		m.broadcastToSession(req.TmuxSession, normalized)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -150,8 +159,14 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// Activity watch management:
 	// 1. Any hook event stops an active watcher for this session
 	// 2. If new status is waiting, start a new watcher
+	watchAgentType := req.AgentType
+	watchStatus := result.Status
+	if projection != nil && projection.TopFrame != nil {
+		watchAgentType = projection.TopFrame.AgentType
+		watchStatus = projection.TopFrame.Status
+	}
 	if req.TmuxSession != "" && m.prober != nil && result.Valid {
-		m.manageActivityWatch(req.TmuxSession, req.AgentType, result.Status)
+		m.manageActivityWatch(req.TmuxSession, watchAgentType, watchStatus)
 	}
 
 	// Clear subagents on non-compact SessionStart
@@ -162,7 +177,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build and broadcast normalized event
-	normalized := m.buildNormalized(req.TmuxSession, req.EventName, req.AgentType, broadcastTs, result)
+	normalized := buildProjectionNormalized(projection, req.AgentType, req.EventName, broadcastTs, result)
+	m.mu.Lock()
+	syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
+	m.mu.Unlock()
 	m.broadcastToSession(req.TmuxSession, normalized)
 
 	w.Header().Set("Content-Type", "application/json")

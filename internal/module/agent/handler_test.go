@@ -33,6 +33,11 @@ func newTestModule(t *testing.T) *Module {
 	origVerify := verifyEventFn
 	verifyEventFn = func(*Module, EventRequest) verifyDecision { return verifyDecision{Accepted: true} }
 	t.Cleanup(func() { verifyEventFn = origVerify })
+	origReadProcessInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1, ExePath: "/usr/local/bin/claude", Argv: []string{"claude"}}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origReadProcessInfo })
 	return m
 }
 

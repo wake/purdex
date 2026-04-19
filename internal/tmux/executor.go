@@ -30,6 +30,7 @@ type Executor interface {
 	PasteText(target, text string) error
 	PaneCurrentCommand(target string) (string, error)
 	PaneCurrentPath(target string) (string, error)
+	PaneSessionName(target string) (string, error)
 	PanePID(target string) (string, error)
 	PaneChildCommands(target string) ([]string, error)
 	CapturePaneContent(target string, lastN int) (string, error)
@@ -151,6 +152,14 @@ func (r *RealExecutor) PaneCurrentPath(target string) (string, error) {
 	out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_current_path}").Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux display-message pane_current_path: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func (r *RealExecutor) PaneSessionName(target string) (string, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{session_name}").Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux display-message session_name: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
