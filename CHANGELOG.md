@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.186] - 2026-04-19
+
+### Feat: Statusline installer UI (PR-1c, #473)
+
+- SPA installer UI for CC statusline extension under Host → Agents. CC card gains Extensions region with Install / Remove affordance; Codex card has no Extensions section.
+- `useStatuslineInstall` hook wraps `GET /api/agent/cc/statusline/status` + `POST /api/agent/cc/statusline/setup`; exposes `{ state, phase, error, install, remove, refresh }` with per-effect cancelled closure for hostId-change safety.
+- `StatuslineConflictDialog` prompts user when CC has an unmanaged statusLine — Wrap route POSTs `{ action: install, mode: wrap, inner: rawCommand }`. Full a11y: `role=dialog` + `aria-modal` + `aria-labelledby`; Escape / backdrop / stop-propagation dismiss.
+- `AgentExtensionRow` gates button choice by `state.mode` (not `installed`): `none` / `unmanaged` → Install, `pdx` / `wrapped` → Remove. Remove confirmation via `window.confirm`. Buttons disabled when host offline (matches `HookModuleCard` pattern).
+- 14 new `hosts.extensions.*` i18n keys (en + zh-TW).
+- Pre-merge round-2 review fixes: `setError(null)` before mutation fetches, stale hostId fetch cancellation, offline button guard, test comment clarification.
+
+### Follow-up issues
+
+- #474 add fetch timeout to `useStatuslineInstall`
+- #475 `ConflictDialog` should dismiss on `hostId` change
+- #476 extract `ConfirmDialog` to replace `window.confirm`
+- #477 `AgentExtensionRow.extensionId` prop is false extensibility
+- #478 `AGENT_EXTENSIONS` config table instead of `agentType === 'cc'` branching
+
 ## [1.0.0-alpha.185] - 2026-04-19
 
 ### Feat: terminal link detection — 3 modes (absolute / relative with `/` / bare filename), gated by settings（#470）
