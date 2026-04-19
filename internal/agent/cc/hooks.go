@@ -15,6 +15,8 @@ var ccHookEvents = []string{
 	"Stop", "StopFailure", "Notification", "PermissionRequest", "SessionEnd",
 }
 
+const ccHooksSupportedVersion = "2.1.114"
+
 func (p *Provider) InstallHooks(pdxPath string) error {
 	settingsPath, err := ccSettingsPath()
 	if err != nil {
@@ -36,12 +38,16 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	if err != nil {
 		return agent.HookStatus{Issues: []string{"cannot find home dir"}}, err
 	}
+	agentVersion := agent.DetectHookAgentVersion("claude", "--version")
 	data, err := os.ReadFile(settingsPath)
 	if err != nil {
 		return agent.HookStatus{
-			Installed: false,
-			Events:    map[string]agent.HookEventInfo{},
-			Issues:    []string{"settings.json not found"},
+			Installed:        false,
+			Events:           map[string]agent.HookEventInfo{},
+			Issues:           []string{"settings.json not found"},
+			AgentVersion:     agentVersion,
+			SupportedVersion: ccHooksSupportedVersion,
+			ExceedsSupport:   agent.CompareHookAgentVersions(agentVersion, ccHooksSupportedVersion) > 0,
 		}, nil
 	}
 	var settings map[string]any
@@ -67,7 +73,14 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			allInstalled = false
 		}
 	}
-	return agent.HookStatus{Installed: allInstalled, Events: events, Issues: issues}, nil
+	return agent.HookStatus{
+		Installed:        allInstalled,
+		Events:           events,
+		Issues:           issues,
+		AgentVersion:     agentVersion,
+		SupportedVersion: ccHooksSupportedVersion,
+		ExceedsSupport:   agent.CompareHookAgentVersions(agentVersion, ccHooksSupportedVersion) > 0,
+	}, nil
 }
 
 func mergeClaudeHooks(path, pdxPath string, remove bool) error {

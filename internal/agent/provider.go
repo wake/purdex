@@ -38,9 +38,12 @@ type HookInstaller interface {
 
 // HookStatus reports the installation state of hooks for an agent.
 type HookStatus struct {
-	Installed bool                     `json:"installed"`
-	Events    map[string]HookEventInfo `json:"events"`
-	Issues    []string                 `json:"issues"`
+	Installed        bool                     `json:"installed"`
+	Events           map[string]HookEventInfo `json:"events"`
+	Issues           []string                 `json:"issues"`
+	AgentVersion     string                   `json:"agentVersion,omitempty"`
+	SupportedVersion string                   `json:"supportedVersion,omitempty"`
+	ExceedsSupport   bool                     `json:"exceedsSupport,omitempty"`
 }
 
 // HookEventInfo describes the state of a single hook event.

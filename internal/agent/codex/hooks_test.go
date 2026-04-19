@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -12,14 +13,18 @@ import (
 func TestFilterOutPdxCodex_MatchesAndPreserves(t *testing.T) {
 	entries := []any{
 		map[string]any{
-			"type":    "command",
-			"command": `"/usr/local/bin/pdx" hook --agent codex SessionStart`,
-			"timeout": 5,
-		},
-		map[string]any{
-			"type":    "command",
-			"command": "/usr/bin/notify-me start",
-			"timeout": 5,
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": `"/usr/local/bin/pdx" hook --agent codex SessionStart`,
+					"timeout": 5,
+				},
+				map[string]any{
+					"type":    "command",
+					"command": "/usr/bin/notify-me start",
+					"timeout": 5,
+				},
+			},
 		},
 	}
 
@@ -27,7 +32,12 @@ func TestFilterOutPdxCodex_MatchesAndPreserves(t *testing.T) {
 	if len(result) != 1 {
 		t.Fatalf("expected 1 entry after filter, got %d", len(result))
 	}
-	m, _ := result[0].(map[string]any)
+	group, _ := result[0].(map[string]any)
+	hookEntries := toCodexEntrySlice(group["hooks"])
+	if len(hookEntries) != 1 {
+		t.Fatalf("expected 1 remaining hook entry, got %d", len(hookEntries))
+	}
+	m, _ := hookEntries[0].(map[string]any)
 	cmd, _ := m["command"].(string)
 	if isPdxCommandCodex(cmd) {
 		t.Error("pdx entry was not filtered out")
@@ -37,11 +47,30 @@ func TestFilterOutPdxCodex_MatchesAndPreserves(t *testing.T) {
 	}
 }
 
+func TestFilterOutPdxCodex_LegacyDirectEntryMigrated(t *testing.T) {
+	entries := []any{
+		map[string]any{
+			"type":    "command",
+			"command": "/usr/bin/notify-me start",
+			"timeout": 5,
+		},
+	}
+	result := filterOutPdxCodex(entries)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 matcher group after migration, got %d", len(result))
+	}
+	group, _ := result[0].(map[string]any)
+	hookEntries := toCodexEntrySlice(group["hooks"])
+	if len(hookEntries) != 1 {
+		t.Fatalf("expected 1 migrated hook entry, got %d", len(hookEntries))
+	}
+}
+
 func TestFilterOutPdxCodex_NonMapPreserved(t *testing.T) {
 	entries := []any{"string-entry", 42}
 	result := filterOutPdxCodex(entries)
 	if len(result) != 2 {
-		t.Errorf("expected 2 non-map entries preserved, got %d", len(result))
+		t.Fatalf("expected 2 preserved entries, got %d", len(result))
 	}
 }
 
@@ -88,9 +117,15 @@ func TestMergeCodexHooks_EmptyFile(t *testing.T) {
 			t.Errorf("event %s not found", event)
 			continue
 		}
-		arr, ok := entries.([]any)
-		if !ok || len(arr) == 0 {
-			t.Errorf("event %s has no entries", event)
+		arr := normalizeCodexGroups(entries)
+		if len(arr) == 0 {
+			t.Errorf("event %s has no matcher groups", event)
+			continue
+		}
+		group, _ := arr[0].(map[string]any)
+		hookEntries := toCodexEntrySlice(group["hooks"])
+		if len(hookEntries) == 0 {
+			t.Errorf("event %s has no hook handlers", event)
 		}
 	}
 	if len(hooks) != len(codexHookEvents) {
@@ -114,19 +149,18 @@ func TestMergeCodexHooks_Idempotent(t *testing.T) {
 	hooks := hooksSection(t, m)
 
 	for _, event := range codexHookEvents {
-		entries, ok := hooks[event].([]any)
-		if !ok {
-			t.Fatalf("event %s: not an array", event)
-		}
 		pdxCount := 0
-		for _, e := range entries {
-			em, ok := e.(map[string]any)
-			if !ok {
-				continue
-			}
-			cmd, _ := em["command"].(string)
-			if isPdxCommandCodex(cmd) {
-				pdxCount++
+		for _, groupEntry := range normalizeCodexGroups(hooks[event]) {
+			group, _ := groupEntry.(map[string]any)
+			for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
+				em, ok := hookEntry.(map[string]any)
+				if !ok {
+					continue
+				}
+				cmd, _ := em["command"].(string)
+				if isPdxCommandCodex(cmd) {
+					pdxCount++
+				}
 			}
 		}
 		if pdxCount != 1 {
@@ -145,9 +179,13 @@ func TestMergeCodexHooks_PreservesExistingHooks(t *testing.T) {
 		"hooks": map[string]any{
 			"SessionStart": []any{
 				map[string]any{
-					"type":    "command",
-					"command": "/usr/bin/notify-me start",
-					"timeout": 5,
+					"hooks": []any{
+						map[string]any{
+							"type":    "command",
+							"command": "/usr/bin/notify-me start",
+							"timeout": 5,
+						},
+					},
 				},
 			},
 		},
@@ -164,24 +202,22 @@ func TestMergeCodexHooks_PreservesExistingHooks(t *testing.T) {
 	m := readHooksFile(t, path)
 	hooks := hooksSection(t, m)
 
-	entries, ok := hooks["SessionStart"].([]any)
-	if !ok {
-		t.Fatal("SessionStart not an array")
-	}
-
 	hasNotifyMe := false
 	hasPdx := false
-	for _, e := range entries {
-		em, ok := e.(map[string]any)
-		if !ok {
-			continue
-		}
-		cmd, _ := em["command"].(string)
-		if isPdxCommandCodex(cmd) {
-			hasPdx = true
-		}
-		if cmd == "/usr/bin/notify-me start" {
-			hasNotifyMe = true
+	for _, groupEntry := range normalizeCodexGroups(hooks["SessionStart"]) {
+		group, _ := groupEntry.(map[string]any)
+		for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
+			em, ok := hookEntry.(map[string]any)
+			if !ok {
+				continue
+			}
+			cmd, _ := em["command"].(string)
+			if isPdxCommandCodex(cmd) {
+				hasPdx = true
+			}
+			if cmd == "/usr/bin/notify-me start" {
+				hasNotifyMe = true
+			}
 		}
 	}
 	if !hasNotifyMe {
@@ -206,11 +242,15 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 	// Add a non-pdx entry for SessionStart
 	m := readHooksFile(t, path)
 	hooks := hooksSection(t, m)
-	sessionEntries := toCodexEntrySlice(hooks["SessionStart"])
+	sessionEntries := normalizeCodexGroups(hooks["SessionStart"])
 	sessionEntries = append(sessionEntries, map[string]any{
-		"type":    "command",
-		"command": "/usr/bin/notify-me start",
-		"timeout": 5,
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": "/usr/bin/notify-me start",
+				"timeout": 5,
+			},
+		},
 	})
 	hooks["SessionStart"] = sessionEntries
 	m["hooks"] = hooks
@@ -226,33 +266,91 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 	hooks = hooksSection(t, m)
 
 	for _, event := range codexHookEvents {
-		entries, _ := hooks[event].([]any)
-		for _, e := range entries {
-			em, ok := e.(map[string]any)
-			if !ok {
-				continue
-			}
-			cmd, _ := em["command"].(string)
-			if isPdxCommandCodex(cmd) {
-				t.Errorf("event %s: pdx entry should have been removed", event)
+		for _, groupEntry := range normalizeCodexGroups(hooks[event]) {
+			group, _ := groupEntry.(map[string]any)
+			for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
+				em, ok := hookEntry.(map[string]any)
+				if !ok {
+					continue
+				}
+				cmd, _ := em["command"].(string)
+				if isPdxCommandCodex(cmd) {
+					t.Errorf("event %s: pdx entry should have been removed", event)
+				}
 			}
 		}
 	}
 
 	// Non-pdx entry for SessionStart must remain
-	sessionEntries2, _ := hooks["SessionStart"].([]any)
 	found := false
-	for _, e := range sessionEntries2 {
-		em, ok := e.(map[string]any)
-		if !ok {
-			continue
-		}
-		cmd, _ := em["command"].(string)
-		if cmd == "/usr/bin/notify-me start" {
-			found = true
+	for _, groupEntry := range normalizeCodexGroups(hooks["SessionStart"]) {
+		group, _ := groupEntry.(map[string]any)
+		for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
+			em, ok := hookEntry.(map[string]any)
+			if !ok {
+				continue
+			}
+			cmd, _ := em["command"].(string)
+			if cmd == "/usr/bin/notify-me start" {
+				found = true
+			}
 		}
 	}
 	if !found {
 		t.Error("non-pdx hook was incorrectly removed")
+	}
+}
+
+func TestCheckHooks_LegacyDirectEntryReportedUninstalled(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	hooksPath := filepath.Join(dir, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	legacy := map[string]any{
+		"hooks": map[string]any{
+			"SessionStart": []any{
+				map[string]any{
+					"type":    "command",
+					"command": `"/usr/local/bin/pdx" hook --agent codex SessionStart`,
+					"timeout": 5,
+				},
+			},
+			"UserPromptSubmit": []any{
+				map[string]any{
+					"type":    "command",
+					"command": `"/usr/local/bin/pdx" hook --agent codex UserPromptSubmit`,
+					"timeout": 5,
+				},
+			},
+			"Stop": []any{
+				map[string]any{
+					"type":    "command",
+					"command": `"/usr/local/bin/pdx" hook --agent codex Stop`,
+					"timeout": 5,
+				},
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(legacy, "", "  ")
+	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Installed {
+		t.Fatal("expected legacy codex hooks to be reported as not installed")
+	}
+	if status.Events["SessionStart"].Installed {
+		t.Fatal("expected legacy SessionStart hook to be reported as not installed")
+	}
+	if len(status.Issues) == 0 || !strings.Contains(status.Issues[0], "legacy format") {
+		t.Fatalf("expected legacy format issue, got %v", status.Issues)
 	}
 }

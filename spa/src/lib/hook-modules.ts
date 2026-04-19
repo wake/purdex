@@ -12,6 +12,9 @@ export interface HookModuleStatus {
   installed: boolean
   events: Record<string, HookModuleEvent>
   issues?: string[]
+  agentVersion?: string
+  supportedVersion?: string
+  exceedsSupport?: boolean
 }
 
 export interface HookModule {
