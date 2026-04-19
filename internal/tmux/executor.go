@@ -165,22 +165,53 @@ func (r *RealExecutor) PanePID(target string) (string, error) {
 }
 
 func (r *RealExecutor) PaneChildCommands(target string) ([]string, error) {
+	return r.paneProcessCommands(target, false)
+}
+
+func (r *RealExecutor) PaneDescendantCommands(target string) ([]string, error) {
+	return r.paneProcessCommands(target, true)
+}
+
+func (r *RealExecutor) paneProcessCommands(target string, recursive bool) ([]string, error) {
 	panePID, err := r.PanePID(target)
 	if err != nil {
 		return nil, err
 	}
-	// ps -ax -o pid,ppid,comm → find children of the pane's shell PID
-	out, err := exec.Command("ps", "-ax", "-o", "pid,ppid,comm").Output()
+	// Build a process tree from ps output, then walk the pane shell's descendants.
+	out, err := exec.Command("ps", "-ax", "-o", "pid=,ppid=,comm=").Output()
 	if err != nil {
 		return nil, fmt.Errorf("ps: %w", err)
 	}
-	var cmds []string
+	childrenByPPID := make(map[string][]processEntry)
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 3 && fields[1] == panePID {
-			cmds = append(cmds, fields[2])
+		if len(fields) < 3 {
+			continue
+		}
+		entry := processEntry{
+			pid:     fields[0],
+			ppid:    fields[1],
+			command: fields[2],
+		}
+		childrenByPPID[entry.ppid] = append(childrenByPPID[entry.ppid], entry)
+	}
+
+	queue := append([]string(nil), panePID)
+	var cmds []string
+	for len(queue) > 0 {
+		parentPID := queue[0]
+		queue = queue[1:]
+		for _, child := range childrenByPPID[parentPID] {
+			cmds = append(cmds, child.command)
+			if recursive {
+				queue = append(queue, child.pid)
+			}
+		}
+		if !recursive {
+			break
 		}
 	}
+
 	return cmds, nil
 }
 
@@ -249,3 +280,8 @@ func (r *RealExecutor) TmuxAlive() bool {
 	return exec.CommandContext(ctx, "tmux", "info").Run() == nil
 }
 
+type processEntry struct {
+	pid     string
+	ppid    string
+	command string
+}
