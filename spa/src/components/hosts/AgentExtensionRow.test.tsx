@@ -98,6 +98,47 @@ describe('AgentExtensionRow (statusline)', () => {
     confirmSpy.mockRestore()
   })
 
+  // --- Status icon (#480) ---
+
+  it('renders green CheckCircle icon when mode=pdx', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'pdx', installed: true, settingsPath: '/x' }) })
+    const { container } = render(<AgentExtensionRow hostId="h1" extensionId="statusline" />)
+    await waitFor(() => screen.getByRole('button', { name: /remove/i }))
+    const icon = container.querySelector('[data-testid="ext-status-icon"]')
+    expect(icon).not.toBeNull()
+    expect(icon?.getAttribute('data-icon')).toBe('check')
+    expect(icon?.classList.contains('text-green-400')).toBe(true)
+    expect(icon?.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('renders green CheckCircle icon when mode=wrapped', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'wrapped', installed: true, innerCommand: 'x', settingsPath: '/x' }) })
+    const { container } = render(<AgentExtensionRow hostId="h1" extensionId="statusline" />)
+    await waitFor(() => screen.getByRole('button', { name: /remove/i }))
+    const icon = container.querySelector('[data-testid="ext-status-icon"]')
+    expect(icon).not.toBeNull()
+    expect(icon?.getAttribute('data-icon')).toBe('check')
+    expect(icon?.classList.contains('text-green-400')).toBe(true)
+  })
+
+  it('renders yellow WarningCircle icon when mode=unmanaged', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'unmanaged', installed: true, rawCommand: 'ccstatusline', settingsPath: '/x' }) })
+    const { container } = render(<AgentExtensionRow hostId="h1" extensionId="statusline" />)
+    await waitFor(() => screen.getByRole('button', { name: /install/i }))
+    const icon = container.querySelector('[data-testid="ext-status-icon"]')
+    expect(icon).not.toBeNull()
+    expect(icon?.getAttribute('data-icon')).toBe('warning')
+    expect(icon?.classList.contains('text-yellow-400')).toBe(true)
+    expect(icon?.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('omits status icon when mode=none', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'none', installed: false, settingsPath: '/x' }) })
+    const { container } = render(<AgentExtensionRow hostId="h1" extensionId="statusline" />)
+    await waitFor(() => screen.getByRole('button', { name: /install/i }))
+    expect(container.querySelector('[data-testid="ext-status-icon"]')).toBeNull()
+  })
+
   // --- Offline guard (Fix 3) ---
 
   it('disables buttons when host is offline', async () => {
