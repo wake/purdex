@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -341,7 +342,7 @@ func TestCheckAliveAll_OrphanNotInTmuxDeleted(t *testing.T) {
 	sub := m.core.Events.AddTestSubscriber()
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
-	m.checkAliveAll(sub)
+	m.checkAliveAll()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -374,7 +375,7 @@ func TestCheckAliveAll_OrphanStillInTmuxPreserved(t *testing.T) {
 	sub := m.core.Events.AddTestSubscriber()
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
-	m.checkAliveAll(sub)
+	m.checkAliveAll()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -383,6 +384,115 @@ func TestCheckAliveAll_OrphanStillInTmuxPreserved(t *testing.T) {
 	}
 	if ev, _ := m.events.Get("transient-session"); ev == nil {
 		t.Error("orphan still in tmux should preserve DB entry")
+	}
+}
+
+func TestCheckAliveAll_TrackedDeadSessionBroadcastsClear(t *testing.T) {
+	m := newTestModule(t)
+	provider := &fakeAgentProvider{typeName: "codex"}
+	m.registry.Register(provider)
+	_ = m.events.Set("work", "UserPromptSubmit", json.RawMessage(`{}`), "codex", 1)
+
+	m.mu.Lock()
+	m.subagents["work"] = []string{"agent-1"}
+	m.currentStatus["work"] = agentpkg.StatusRunning
+	m.activeWatchers["work"] = "codex"
+	m.mu.Unlock()
+
+	fake := tmux.NewFakeExecutor()
+	fake.AddSession("work", "/tmp")
+	fake.SetPaneCommand("work:", "zsh")
+	m.prober = probe.New(fake)
+	m.prober.RegisterProcessNames("codex", []string{"codex"})
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	m.checkAliveAll()
+
+	select {
+	case raw := <-sub.SendCh():
+		var env core.HostEvent
+		if err := json.Unmarshal(raw, &env); err != nil {
+			t.Fatalf("unmarshal host event: %v", err)
+		}
+		if env.Type != "hook" {
+			t.Fatalf("event type = %q, want hook", env.Type)
+		}
+		if env.Session != "code-work" {
+			t.Fatalf("event session = %q, want code-work", env.Session)
+		}
+		var normalized agentpkg.NormalizedEvent
+		if err := json.Unmarshal([]byte(env.Value), &normalized); err != nil {
+			t.Fatalf("unmarshal normalized event: %v", err)
+		}
+		if normalized.Status != string(agentpkg.StatusClear) {
+			t.Fatalf("status = %q, want clear", normalized.Status)
+		}
+		if normalized.RawEventName != "isAlive:dead" {
+			t.Fatalf("raw_event_name = %q, want isAlive:dead", normalized.RawEventName)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected clear broadcast")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.currentStatus["work"]; ok {
+		t.Error("dead tracked session should be cleared from currentStatus")
+	}
+	if _, ok := m.subagents["work"]; ok {
+		t.Error("dead tracked session should be cleared from subagents")
+	}
+	if _, ok := m.activeWatchers["work"]; ok {
+		t.Error("dead tracked session should be cleared from activeWatchers")
+	}
+	if ev, _ := m.events.Get("work"); ev != nil {
+		t.Error("dead tracked session DB entry should be deleted")
+	}
+}
+
+func TestWatchAlive_PeriodicallyClearsDeadSession(t *testing.T) {
+	m := newTestModule(t)
+	provider := &fakeAgentProvider{typeName: "codex"}
+	m.registry.Register(provider)
+	_ = m.events.Set("work", "UserPromptSubmit", json.RawMessage(`{}`), "codex", 1)
+
+	fake := tmux.NewFakeExecutor()
+	fake.AddSession("work", "/tmp")
+	fake.SetPaneCommand("work:", "zsh")
+	m.prober = probe.New(fake)
+	m.prober.RegisterProcessNames("codex", []string{"codex"})
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.watchAlive(ctx, 10*time.Millisecond)
+
+	select {
+	case raw := <-sub.SendCh():
+		var env core.HostEvent
+		if err := json.Unmarshal(raw, &env); err != nil {
+			t.Fatalf("unmarshal host event: %v", err)
+		}
+		if env.Type != "hook" {
+			t.Fatalf("event type = %q, want hook", env.Type)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected periodic clear broadcast")
+	}
+
+	if fake.PaneCommandCallCount("work:") == 0 {
+		t.Fatal("watchAlive should poll pane liveness")
+	}
+	if ev, _ := m.events.Get("work"); ev != nil {
+		t.Fatal("periodic liveness sweep should delete dead session event")
 	}
 }
 

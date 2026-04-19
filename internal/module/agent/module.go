@@ -30,6 +30,8 @@ type Module struct {
 
 	prober *probe.Prober
 
+	cancelAliveSweep context.CancelFunc
+
 	mu             sync.Mutex
 	currentStatus  map[string]agentpkg.Status
 	subagents      map[string][]string
@@ -151,14 +153,18 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 }
 
 // Start replays DB state and registers OnSubscribe callback.
-func (m *Module) Start(_ context.Context) error {
+func (m *Module) Start(ctx context.Context) error {
 	m.replayFromDB()
 
 	m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
 		m.sendSnapshot(sub)
 		m.sendStatuslineSnapshot(sub)
-		go m.checkAliveAll(sub)
+		go m.checkAliveAll()
 	})
+
+	aliveCtx, cancel := context.WithCancel(ctx)
+	m.cancelAliveSweep = cancel
+	m.watchAlive(aliveCtx, 2*time.Second)
 
 	log.Println("[agent] hook event endpoint registered")
 	return nil
@@ -173,6 +179,9 @@ func (m *Module) getUploadDir() string {
 
 // Stop cancels all active Activity watchers and resets transient state.
 func (m *Module) Stop(_ context.Context) error {
+	if m.cancelAliveSweep != nil {
+		m.cancelAliveSweep()
+	}
 	if m.prober != nil {
 		m.prober.StopAllWatches()
 	}
@@ -180,6 +189,22 @@ func (m *Module) Stop(_ context.Context) error {
 	m.activeWatchers = make(map[string]string)
 	m.mu.Unlock()
 	return nil
+}
+
+func (m *Module) watchAlive(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.checkAliveAll()
+			}
+		}
+	}()
 }
 
 // renameSessionLocked transfers in-memory agent state (subagents, currentStatus,
@@ -305,7 +330,7 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 }
 
 // checkAliveAll checks all tracked sessions for liveness and broadcasts clear events for dead ones.
-func (m *Module) checkAliveAll(sub *core.EventSubscriber) {
+func (m *Module) checkAliveAll() {
 	if m.sessions == nil {
 		return
 	}
