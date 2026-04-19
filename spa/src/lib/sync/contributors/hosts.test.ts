@@ -231,4 +231,58 @@ describe('hostsContributor.deserialize (full-replace, token preservation)', () =
     const s = useHostStore.getState()
     expect((s.hosts.hNew as unknown as { token?: unknown }).token).toBeNull()
   })
+
+  it('clears token when incoming host id collides but ip differs (endpoint check)', () => {
+    useHostStore.setState({
+      hosts: {
+        h1: { id: 'h1', name: 'A', ip: '10.0.0.1', port: 7860, token: 'SECRET-A', order: 0 },
+      },
+      hostOrder: ['h1'],
+      activeHostId: 'h1',
+    })
+
+    const contributor = createHostsContributor()
+    contributor.deserialize(
+      {
+        version: 1,
+        data: {
+          hosts: { h1: { id: 'h1', name: 'hijack', ip: '203.0.113.1', port: 7860, order: 0 } },
+          hostOrder: ['h1'],
+          activeHostId: 'h1',
+        },
+      },
+      { type: 'full-replace' },
+    )
+
+    const s = useHostStore.getState()
+    expect(s.hosts.h1.ip).toBe('203.0.113.1')
+    expect(s.hosts.h1.token).toBeNull()
+  })
+
+  it('clears token when incoming host id collides but port differs (endpoint check)', () => {
+    useHostStore.setState({
+      hosts: {
+        h1: { id: 'h1', name: 'A', ip: '10.0.0.1', port: 7860, token: 'SECRET-A', order: 0 },
+      },
+      hostOrder: ['h1'],
+      activeHostId: 'h1',
+    })
+
+    const contributor = createHostsContributor()
+    contributor.deserialize(
+      {
+        version: 1,
+        data: {
+          hosts: { h1: { id: 'h1', name: 'A', ip: '10.0.0.1', port: 9999, order: 0 } },
+          hostOrder: ['h1'],
+          activeHostId: 'h1',
+        },
+      },
+      { type: 'full-replace' },
+    )
+
+    const s = useHostStore.getState()
+    expect(s.hosts.h1.port).toBe(9999)
+    expect(s.hosts.h1.token).toBeNull()
+  })
 })
