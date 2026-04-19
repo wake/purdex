@@ -2,11 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AgentExtensionRow } from './AgentExtensionRow'
 import { hostFetch } from '../../lib/host-api'
+import { useHostStore } from '../../stores/useHostStore'
 
 vi.mock('../../lib/host-api', () => ({ hostFetch: vi.fn() }))
 const mockFetch = hostFetch as unknown as ReturnType<typeof vi.fn>
 
-beforeEach(() => mockFetch.mockReset())
+beforeEach(() => {
+  mockFetch.mockReset()
+  useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
+})
 
 describe('AgentExtensionRow (statusline)', () => {
   it('shows Install button when mode=none', async () => {
@@ -50,7 +54,7 @@ describe('AgentExtensionRow (statusline)', () => {
     render(<AgentExtensionRow hostId="h1" extensionId="statusline" />)
     await waitFor(() => screen.getByRole('button', { name: /install/i }))
     fireEvent.click(screen.getByRole('button', { name: /install/i }))
-    expect(await screen.findByText('ccstatusline')).toBeInTheDocument() // dialog shows raw command
+    expect(await screen.findByText('ccstatusline')).toBeInTheDocument() // dialog shows existingCommand (rawCommand ?? innerCommand)
   })
 
   it('Wrap choice in dialog sends install with mode=wrap + inner', async () => {
@@ -92,5 +96,15 @@ describe('AgentExtensionRow (statusline)', () => {
     // only the GET from mount, no POST
     expect(mockFetch).toHaveBeenCalledTimes(1)
     confirmSpy.mockRestore()
+  })
+
+  // --- Offline guard (Fix 3) ---
+
+  it('disables buttons when host is offline', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'pdx', installed: true, settingsPath: '/x' }) })
+    useHostStore.setState({ runtime: { h1: { status: 'disconnected' } } })
+    render(<AgentExtensionRow hostId="h1" extensionId="statusline" />)
+    await waitFor(() => screen.getByRole('button', { name: /remove/i }))
+    expect(screen.getByRole('button', { name: /remove/i })).toBeDisabled()
   })
 })
