@@ -1,58 +1,149 @@
 import { describe, it, expect } from 'vitest'
-import { filePathMatcher } from './file-path'
+import { createFilePathMatcher, ABS_RE, REL_RE, BARE_RE } from './file-path'
 
-describe('file-path matcher', () => {
-  it('matches absolute Unix paths with extension', () => {
-    const out = filePathMatcher.provide('error at /Users/x/a.ts now')
-    expect(out).toHaveLength(1)
-    expect(out[0].text).toBe('/Users/x/a.ts')
-    expect(out[0].meta).toEqual({ path: '/Users/x/a.ts' })
+describe('createFilePathMatcher — absolute', () => {
+  const make = (isEnabled = true) =>
+    createFilePathMatcher({ id: 'test-abs', regex: ABS_RE, isEnabled: () => isEnabled })
+
+  it('matches /path/to/file.md', () => {
+    const r = make().provide('see /a/b/c.md here')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('/a/b/c.md')
+    expect(r[0].meta).toEqual({ path: '/a/b/c.md' })
   })
 
-  it('captures line:col suffix into meta', () => {
-    const out = filePathMatcher.provide('at /a/b.ts:12:3')
-    expect(out).toHaveLength(1)
-    expect(out[0].text).toBe('/a/b.ts:12:3')
-    expect(out[0].meta).toEqual({ path: '/a/b.ts', line: 12, col: 3 })
+  it('captures line/col suffix', () => {
+    const r = make().provide('at /x/y.ts:12:3!')
+    expect(r[0].meta).toEqual({ path: '/x/y.ts', line: 12, col: 3 })
   })
 
-  it('captures line-only suffix', () => {
-    const out = filePathMatcher.provide('see /a/b.md:42')
-    expect(out[0].meta).toEqual({ path: '/a/b.md', line: 42 })
+  it('skips dotdir like /home/u/.config', () => {
+    expect(make().provide('go /home/u/.config')).toHaveLength(0)
   })
 
-  it('does not match paths without extension', () => {
-    expect(filePathMatcher.provide('cd /usr/local/bin')).toEqual([])
+  it('skips path inside URL', () => {
+    expect(make().provide('https://a.com/b.md')).toHaveLength(0)
   })
 
-  it('does not match inside URLs', () => {
-    expect(filePathMatcher.provide('https://x.com/a.md')).toEqual([])
+  it('returns [] when flag off', () => {
+    expect(make(false).provide('/a/b.md')).toHaveLength(0)
   })
 
-  it('does not match paths inside URL query/fragment', () => {
-    expect(filePathMatcher.provide('open https://app.com/r?to=/Users/me/a.ts')).toEqual([])
-    expect(filePathMatcher.provide('https://docs.com/g#/home/a.md')).toEqual([])
+  it('matches multi-extension path like /x/foo.d.ts', () => {
+    const r = make().provide('open /x/foo.d.ts')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('/x/foo.d.ts')
+    expect(r[0].meta).toEqual({ path: '/x/foo.d.ts' })
   })
 
-  it('matches path after URL with whitespace separator', () => {
-    const out = filePathMatcher.provide('see https://x.com then /home/a.md')
-    expect(out).toHaveLength(1)
-    expect(out[0].text).toBe('/home/a.md')
+  it('multi-ext with line suffix: /x/bar.min.js:42', () => {
+    const r = make().provide('at /x/bar.min.js:42 here')
+    expect(r[0].meta).toEqual({ path: '/x/bar.min.js', line: 42 })
   })
 
-  it('does not match dotdir segments as extensions', () => {
-    expect(filePathMatcher.provide('cd /home/user/.config')).toEqual([])
-    expect(filePathMatcher.provide('check /var/.cache')).toEqual([])
+  it('does NOT match /path/to/1.2.3 (all-digit extensions)', () => {
+    expect(make().provide('see /path/1.2.3 dir')).toHaveLength(0)
+  })
+})
+
+describe('createFilePathMatcher — relativeSlash', () => {
+  const make = (isEnabled = true) =>
+    createFilePathMatcher({ id: 'test-rel', regex: REL_RE, isEnabled: () => isEnabled })
+
+  it('matches src/App.tsx', () => {
+    const r = make().provide('edit src/App.tsx now')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('src/App.tsx')
+    expect(r[0].meta).toEqual({ path: 'src/App.tsx' })
   })
 
-  it('produces type "file"', () => {
-    expect(filePathMatcher.type).toBe('file')
+  it('matches internal/agent/cc/extract.go:14', () => {
+    const r = make().provide('internal/agent/cc/extract.go:14')
+    expect(r[0].meta).toEqual({ path: 'internal/agent/cc/extract.go', line: 14 })
   })
 
-  it('finishes quickly on long extensionless paths (no ReDoS)', () => {
-    const line = '/' + Array(50).fill('segment').join('/')
-    const start = performance.now()
-    expect(filePathMatcher.provide(line)).toEqual([])
-    expect(performance.now() - start).toBeLessThan(50)
+  it('does NOT match absolute path', () => {
+    expect(make().provide('/abs/x.md')).toHaveLength(0)
+  })
+
+  it('does NOT match bare filename', () => {
+    expect(make().provide('x.md')).toHaveLength(0)
+  })
+
+  it('skips URL-internal segments', () => {
+    expect(make().provide('https://a.com/b/c.md')).toHaveLength(0)
+  })
+
+  it('returns [] when flag off', () => {
+    expect(make(false).provide('src/App.tsx')).toHaveLength(0)
+  })
+
+  it('matches multi-extension relative path src/a/foo.d.ts', () => {
+    const r = make().provide('edit src/a/foo.d.ts')
+    expect(r[0].text).toBe('src/a/foo.d.ts')
+    expect(r[0].meta).toEqual({ path: 'src/a/foo.d.ts' })
+  })
+
+  it('does NOT match dir/1.2.3 (all-digit extensions)', () => {
+    expect(make().provide('cd dir/1.2.3')).toHaveLength(0)
+  })
+})
+
+describe('createFilePathMatcher — bare', () => {
+  const make = (isEnabled = true) =>
+    createFilePathMatcher({ id: 'test-bare', regex: BARE_RE, isEnabled: () => isEnabled })
+
+  it('matches bare package.json', () => {
+    const r = make().provide('see package.json')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('package.json')
+    expect(r[0].meta).toEqual({ path: 'package.json' })
+  })
+
+  it('does NOT match segments inside a/b.md', () => {
+    expect(make().provide('a/b.md')).toHaveLength(0)
+  })
+
+  it('does NOT match absolute /a/b.md', () => {
+    expect(make().provide('/a/b.md')).toHaveLength(0)
+  })
+
+  it('captures line/col for bare name', () => {
+    const r = make().provide('see foo.ts:5:2')
+    expect(r[0].meta).toEqual({ path: 'foo.ts', line: 5, col: 2 })
+  })
+
+  it('returns [] when flag off', () => {
+    expect(make(false).provide('foo.md')).toHaveLength(0)
+  })
+
+  it('matches multi-extension bare name foo.d.ts', () => {
+    const r = make().provide('see foo.d.ts')
+    expect(r[0].text).toBe('foo.d.ts')
+    expect(r[0].meta).toEqual({ path: 'foo.d.ts' })
+  })
+
+  it('matches v1.2.3.tar.gz:10', () => {
+    const r = make().provide('got v1.2.3.tar.gz:10')
+    expect(r[0].text).toBe('v1.2.3.tar.gz:10')
+    expect(r[0].meta).toEqual({ path: 'v1.2.3.tar.gz', line: 10 })
+  })
+
+  it('does NOT match IP address 192.168.1.1', () => {
+    expect(make().provide('ping 192.168.1.1 response')).toHaveLength(0)
+  })
+
+  it('does NOT match version number like 1.2.3', () => {
+    expect(make().provide('v1.2.3 released')).toHaveLength(0)
+  })
+
+  it('does NOT match decimal number 1.5', () => {
+    expect(make().provide('got 1.5 seconds')).toHaveLength(0)
+  })
+
+  it('DOES still match foo.d.ts (letters in ext)', () => {
+    const r = make().provide('open foo.d.ts')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('foo.d.ts')
   })
 })

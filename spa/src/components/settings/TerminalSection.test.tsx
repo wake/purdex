@@ -132,4 +132,5 @@ describe('TerminalSection', () => {
     fireEvent.click(screen.getByLabelText('Show agent dynamic title'))
     expect(useAgentStore.getState().showOscTitle).toBe(false)
   })
+
 })

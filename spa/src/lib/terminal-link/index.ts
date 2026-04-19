@@ -10,3 +10,10 @@ export type {
   LinkRange,
   TerminalLinkRegistry,
 } from './types'
+export {
+  createFilePathMatcher,
+  ABS_RE,
+  REL_RE,
+  BARE_RE,
+} from './matchers/file-path'
+export type { FilePathMatcherConfig } from './matchers/file-path'

@@ -7,13 +7,14 @@ describe('registerBuiltinTerminalLinks', () => {
 
   it('registers both url and file-path matchers', () => {
     registerBuiltinTerminalLinks({
-      isElectron: false,
-      openBrowserTab: () => {},
-      openMiniWindow: () => {},
-      getDefaultFileOpener: () => null,
-      openSingletonTab: () => 't',
-      insertTab: () => {},
-      getActiveWorkspaceId: () => null,
+      urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
+      filePathOpener: {
+        getDefaultOpener: () => null,
+        openSingletonTab: () => 't',
+        insertTab: () => {},
+        getActiveWorkspaceId: () => null,
+        fetchPaneCwd: async (_h: string, _s: string, _sig?: AbortSignal) => '',
+      },
     })
     const types = terminalLinkRegistry.getMatchers().map((m) => m.type)
     expect(types).toContain('url')
@@ -22,13 +23,14 @@ describe('registerBuiltinTerminalLinks', () => {
 
   it('is idempotent — double call does not double-register matchers or openers', () => {
     const deps = {
-      isElectron: false,
-      openBrowserTab: () => {},
-      openMiniWindow: () => {},
-      getDefaultFileOpener: () => null,
-      openSingletonTab: () => 't',
-      insertTab: () => {},
-      getActiveWorkspaceId: () => null,
+      urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
+      filePathOpener: {
+        getDefaultOpener: () => null,
+        openSingletonTab: () => 't',
+        insertTab: () => {},
+        getActiveWorkspaceId: () => null,
+        fetchPaneCwd: async (_h: string, _s: string, _sig?: AbortSignal) => '',
+      },
     }
     registerBuiltinTerminalLinks(deps)
     const firstCount = terminalLinkRegistry.getMatchers().length
@@ -39,5 +41,26 @@ describe('registerBuiltinTerminalLinks', () => {
     // Openers: dispatch a url token — should route to exactly one opener (built-in one)
     const urlToken = { type: 'url', text: 'https://x', range: { startCol: 0, endCol: 9 } }
     expect(terminalLinkRegistry.dispatch(urlToken, {}, new MouseEvent('click'))).toBe(true)
+  })
+})
+
+describe('registerBuiltinTerminalLinks — 3 file-path matchers', () => {
+  beforeEach(() => __resetBuiltinTerminalLinks())
+
+  it('registers all 3 file-path matchers', () => {
+    registerBuiltinTerminalLinks({
+      urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
+      filePathOpener: {
+        getDefaultOpener: () => null,
+        openSingletonTab: () => 'tab',
+        insertTab: () => {},
+        getActiveWorkspaceId: () => 'ws',
+        fetchPaneCwd: async () => '/cwd',
+      },
+    })
+    const ids = terminalLinkRegistry.getMatchers().map((m) => m.id)
+    expect(ids).toContain('builtin:file-path-absolute')
+    expect(ids).toContain('builtin:file-path-relative-slash')
+    expect(ids).toContain('builtin:file-path-bare')
   })
 })

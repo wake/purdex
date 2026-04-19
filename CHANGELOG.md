@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.0.0-alpha.185] - 2026-04-19
+
+### Feat: terminal link detection — 3 modes (absolute / relative with `/` / bare filename), gated by settings（#470）
+
+- 將內建 file-path matcher 拆為 3 個獨立 matcher（絕對路徑 / 含 `/` 的相對路徑 / 無 `/` 的裸檔名），各自對應 `linkDetectAbsolute` / `linkDetectRelativeSlash` / `linkDetectBareFilename` 設定開關（預設僅 absolute 開啟，其餘因高誤判率預設關閉）。
+- 同時修正所有 matcher 的 multi-extension 錯配 bug：`foo.d.ts` / `file.min.js` / `v1.2.3.tar.gz` 原本只匹配第一段副檔名，現以 `(?:\.[A-Za-z0-9]+)+` 全數納入。
+- `TerminalSection` 新增 `<LinkDetectionSection>` 子元件（3 toggle + i18n，en + zh-TW），與 appearance 設定解耦。
+- Matcher 採 `createFilePathMatcher({ id, regex, isEnabled })` factory 樣式，gate 由 `register.ts` 在註冊時注入，解除對 `useUISettingsStore` 的直接耦合，unit test 不再需 mutate store。
+
+### Fix: terminal link underline no longer drifts on lines with CJK / wide chars
+
+- 新增 `buildJsOffsetToCol`（`col-map.ts`）：走訪 xterm `IBufferLine.getCell` 建立 JS UTF-16 offset → terminal cell column 的單調遞增表，binary search 查詢；正確處理 CJK 寬字元、emoji surrogate pair、past-end clamp。
+- `createXtermLinkProvider` 每次 `provideLinks` 建表一次供所有 matcher 共用，matcher 回傳的 JS offset 統一在 provider 層轉為 terminal cell column 再建構 `ILink.range`，修正連結底線偏移。
+- `LinkRange` 型別註解更新，明確雙層語意：matcher emit JS offset / dispatch 到 opener 時 `token.range` 已為 terminal cell column。
+
+### Feat: daemon `GET /api/sessions/{code}/cwd` — returns tmux `pane_current_path` for link resolution
+
+- `tmux.Executor` 新增 `PaneCurrentPath(target)`，呼叫 `tmux display-message -p -t <target> '#{pane_current_path}'`；`FakeExecutor` 對應 `SetPaneCwd` setter。
+- 新增 `GET /api/sessions/{code}/cwd` 路由，handler 先 `GetSession(code) → info.Name` 解碼再查 tmux（對齊其他 handler 模式）。
+- SPA 新增 `fetchSessionCwd(hostId, sessionCode, signal?)` host-api client。`BuiltinTerminalLinksDeps` 由 8 欄位扁平結構重組為 `{ urlOpener, filePathOpener }`，sub-object 與各自 `createOpener` 參數 1:1 對應。
+
+### Fix: file-path opener security — path traversal guard + IP/version false-positive filter + 5s timeout
+
+- `resolveCwdPath(cwd, rel)` 正規化 `.` / `..` / 重複斜線後驗證結果仍在 `cwd` 的父目錄範圍內；`../../../etc/passwd` 類攻擊被拒絕，並以 `console.warn` 記錄。允許一層 `../App.tsx` 的常見相對路徑。
+- Matcher 新增「全副檔名皆為數字」的排除（如 `192.168.1.1` / `1.2.3` / `1.5`），避免 IP 位址與版本號誤判為檔名。
+- Opener cwd fetch 加 5 秒 timeout（AbortController），慢/斷線 host 不再 ghost click 無回饋；所有失敗路徑改為 `console.warn` 帶 host/session/path 上下文，非靜默。
+
+### Follow-up issues
+
+- Daemon `fs/handler.go` 僅做 `filepath.IsAbs(filepath.Clean(path))` 驗證，無 cwd boundary 檢查；SPA 為單一防線。此為既有架構，非本 PR 引入，另開 issue 追蹤。
+
 ## [1.0.0-alpha.184] - 2026-04-19
 
 ### Feat: CC statusline installer — SPA ccStatus store + tab rendering（PR-1b，#471）

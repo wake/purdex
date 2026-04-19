@@ -226,3 +226,23 @@ func TestPasteTextFail(t *testing.T) {
 		t.Error("want error when FailPasteText is true")
 	}
 }
+
+func TestFakeExecutor_PaneCurrentPath(t *testing.T) {
+	f := tmux.NewFakeExecutor()
+	f.SetPaneCwd("sess-A", "/home/user/proj")
+	got, err := f.PaneCurrentPath("sess-A")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got != "/home/user/proj" {
+		t.Errorf("got %q, want /home/user/proj", got)
+	}
+}
+
+func TestFakeExecutor_PaneCurrentPath_NotSet(t *testing.T) {
+	f := tmux.NewFakeExecutor()
+	_, err := f.PaneCurrentPath("sess-nope")
+	if err == nil {
+		t.Error("expected error for unset pane cwd")
+	}
+}

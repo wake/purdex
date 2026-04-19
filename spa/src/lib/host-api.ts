@@ -152,6 +152,17 @@ export async function fetchHistory(hostId: string, sessionCode: string): Promise
   return res.json()
 }
 
+export async function fetchSessionCwd(
+  hostId: string,
+  sessionCode: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const res = await hostFetch(hostId, `/api/sessions/${sessionCode}/cwd`, { signal })
+  if (!res.ok) throw new Error(`fetchSessionCwd failed: ${res.status}`)
+  const body = await res.json()
+  return String(body.cwd ?? '')
+}
+
 /* ─── Config API ─── */
 
 export async function getConfig(hostId: string): Promise<ConfigData> {

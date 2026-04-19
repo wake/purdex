@@ -1,20 +1,20 @@
-import type { FileInfo } from '../../types/fs'
-import type { PaneContent } from '../../types/tab'
-import type { FileOpener } from '../file-opener-registry'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { terminalLinkRegistry } from './registry'
 import { urlMatcher } from './matchers/url'
-import { filePathMatcher } from './matchers/file-path'
+import {
+  createFilePathMatcher,
+  ABS_RE,
+  REL_RE,
+  BARE_RE,
+} from './matchers/file-path'
 import { createUrlOpener } from './openers/url'
+import type { UrlOpenerDeps } from './openers/url'
 import { createFilePathOpener } from './openers/file-path'
+import type { FilePathOpenerDeps } from './openers/file-path'
 
 export interface BuiltinTerminalLinksDeps {
-  isElectron: boolean
-  openBrowserTab: (url: string) => void
-  openMiniWindow: (url: string) => void
-  getDefaultFileOpener: (file: FileInfo) => FileOpener | null
-  openSingletonTab: (content: PaneContent) => string
-  insertTab: (tabId: string, wsId: string) => void
-  getActiveWorkspaceId: () => string | null
+  urlOpener: UrlOpenerDeps
+  filePathOpener: FilePathOpenerDeps
 }
 
 // Invariant：此 flag 與 terminalLinkRegistry 的狀態必須同步。
@@ -27,19 +27,24 @@ export function registerBuiltinTerminalLinks(deps: BuiltinTerminalLinksDeps): vo
   registered = true
 
   terminalLinkRegistry.registerMatcher(urlMatcher)
-  terminalLinkRegistry.registerMatcher(filePathMatcher)
+  terminalLinkRegistry.registerMatcher(createFilePathMatcher({
+    id: 'builtin:file-path-absolute',
+    regex: ABS_RE,
+    isEnabled: () => useUISettingsStore.getState().linkDetectAbsolute,
+  }))
+  terminalLinkRegistry.registerMatcher(createFilePathMatcher({
+    id: 'builtin:file-path-relative-slash',
+    regex: REL_RE,
+    isEnabled: () => useUISettingsStore.getState().linkDetectRelativeSlash,
+  }))
+  terminalLinkRegistry.registerMatcher(createFilePathMatcher({
+    id: 'builtin:file-path-bare',
+    regex: BARE_RE,
+    isEnabled: () => useUISettingsStore.getState().linkDetectBareFilename,
+  }))
 
-  terminalLinkRegistry.registerOpener(createUrlOpener({
-    isElectron: deps.isElectron,
-    openBrowserTab: deps.openBrowserTab,
-    openMiniWindow: deps.openMiniWindow,
-  }))
-  terminalLinkRegistry.registerOpener(createFilePathOpener({
-    getDefaultOpener: deps.getDefaultFileOpener,
-    openSingletonTab: deps.openSingletonTab,
-    insertTab: deps.insertTab,
-    getActiveWorkspaceId: deps.getActiveWorkspaceId,
-  }))
+  terminalLinkRegistry.registerOpener(createUrlOpener(deps.urlOpener))
+  terminalLinkRegistry.registerOpener(createFilePathOpener(deps.filePathOpener))
 }
 
 /** @internal 僅供測試使用；同時清空 registry 以避免 flag 與內容不同步 */

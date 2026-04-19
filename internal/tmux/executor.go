@@ -29,6 +29,7 @@ type Executor interface {
 	SendKeysRaw(target string, keys ...string) error
 	PasteText(target, text string) error
 	PaneCurrentCommand(target string) (string, error)
+	PaneCurrentPath(target string) (string, error)
 	PanePID(target string) (string, error)
 	PaneChildCommands(target string) ([]string, error)
 	CapturePaneContent(target string, lastN int) (string, error)
@@ -144,6 +145,14 @@ func (r *RealExecutor) PaneCurrentCommand(target string) (string, error) {
 	// Return the first line (active pane's command).
 	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
 	return strings.TrimSpace(line), nil
+}
+
+func (r *RealExecutor) PaneCurrentPath(target string) (string, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_current_path}").Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux display-message pane_current_path: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (r *RealExecutor) PanePID(target string) (string, error) {

@@ -5,6 +5,7 @@ import { SettingItem } from './SettingItem'
 import { SegmentControl } from './SegmentControl'
 import { ToggleSwitch } from './ToggleSwitch'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { LinkDetectionSection } from './LinkDetectionSection'
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
@@ -144,6 +145,8 @@ export function TerminalSection() {
           )}
         </div>
       </SettingItem>
+
+      <LinkDetectionSection />
     </div>
   )
 }

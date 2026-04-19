@@ -8,6 +8,7 @@ export interface FilePathOpenerDeps {
   openSingletonTab(content: PaneContent): string
   insertTab(tabId: string, workspaceId: string): void
   getActiveWorkspaceId(): string | null
+  fetchPaneCwd(hostId: string, sessionCode: string, signal?: AbortSignal): Promise<string>
 }
 
 function buildFileInfo(path: string): FileInfo {
@@ -16,19 +17,89 @@ function buildFileInfo(path: string): FileInfo {
   return { name, path, extension, size: 0, isDirectory: false }
 }
 
+/**
+ * Resolve a relative path against `cwd`, normalizing `.` and `..` segments.
+ * Returns `null` if the resolved path escapes `cwd`'s parent directory
+ * (i.e. moves more than one level above `cwd`), so the caller can reject
+ * path-traversal attempts like `../../../etc/passwd`.
+ *
+ * Design: allow at most one `..` out of the fetched cwd (common in relative
+ * editor paths like `../App.tsx`), but reject deep traversals that escape
+ * the cwd's parent entirely.
+ */
+export function resolveCwdPath(cwd: string, rel: string): string | null {
+  const base = cwd.replace(/\/+$/, '')  // strip trailing slashes
+  const joined = `${base}/${rel}`
+  const parts = joined.split('/')
+  const stack: string[] = []
+  for (const part of parts) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      if (stack.length > 0) stack.pop()
+      continue
+    }
+    stack.push(part)
+  }
+  const normalized = '/' + stack.join('/')
+
+  // Boundary: normalized must be within cwd's parent directory.
+  // This allows one level of ".." escape (e.g. ../App.tsx from a subdir)
+  // but rejects deep traversals that land outside the parent tree.
+  const parentIdx = base.lastIndexOf('/')
+  // parentIdx === 0 means cwd is /foo — parent is root "/"
+  // parentIdx < 0 should not happen since cwd must start with /
+  const baseParent = parentIdx <= 0 ? '' : base.slice(0, parentIdx)
+  // normalized must equal baseParent, or be nested under it
+  if (baseParent === '') {
+    // parent is root: any absolute path is within root
+    return normalized
+  }
+  if (normalized !== baseParent && !normalized.startsWith(baseParent + '/')) {
+    return null
+  }
+  return normalized
+}
+
 export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
   return {
     id: 'builtin:file-path',
-    // priority 0 = builtin default，讓第三方 opener 以更高 priority 覆寫
     priority: 0,
     canOpen: (token) =>
       token.type === 'file' &&
       typeof (token.meta as { path?: unknown } | undefined)?.path === 'string',
-    open: (token, ctx) => {
-      // 不依賴呼叫方一定先走 canOpen，自行檢查 meta.path
-      const path = (token.meta as { path?: unknown } | undefined)?.path
-      if (typeof path !== 'string') return
+    open: async (token, ctx) => {
+      const rawPath = (token.meta as { path?: unknown } | undefined)?.path
+      if (typeof rawPath !== 'string') return
       if (!ctx.hostId) return
+
+      let path = rawPath
+      if (!path.startsWith('/')) {
+        // relative / bare: 即時向 tmux pane 查 cwd，normalize 後驗證不越界
+        if (!ctx.sessionCode) return
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 5000)
+        let cwd: string
+        try {
+          cwd = await deps.fetchPaneCwd(ctx.hostId, ctx.sessionCode, controller.signal)
+        } catch (err) {
+          clearTimeout(timeoutId)
+          const reason = (err as Error)?.name === 'AbortError' ? 'timeout' : (err as Error)?.message ?? String(err)
+          console.warn(`[file-path] cwd fetch failed (${reason}) for host=${ctx.hostId} session=${ctx.sessionCode} rel=${rawPath}`)
+          return
+        }
+        clearTimeout(timeoutId)
+        if (!cwd || !cwd.startsWith('/')) {
+          console.warn(`[file-path] cwd not absolute, skipping: host=${ctx.hostId} cwd=${cwd}`)
+          return
+        }
+        const resolved = resolveCwdPath(cwd, path)
+        if (resolved === null) {
+          console.warn(`[file-path] rejected path escaping cwd: ${path} vs ${cwd}`)
+          return
+        }
+        path = resolved
+      }
+
       const file = buildFileInfo(path)
       const opener = deps.getDefaultOpener(file)
       if (!opener) return

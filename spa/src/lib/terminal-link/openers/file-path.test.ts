@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createFilePathOpener } from './file-path'
 import type { LinkToken } from '../types'
 import type { FileOpener } from '../../file-opener-registry'
@@ -21,7 +21,8 @@ function makeDeps() {
   }
   const getDefaultOpener = vi.fn(() => fakeOpener)
   const getActiveWorkspaceId = vi.fn(() => 'ws-1')
-  return { openSingletonTab, insertTab, getDefaultOpener, getActiveWorkspaceId, fakeOpener, paneContent }
+  const fetchPaneCwd = vi.fn(async (_h: string, _s: string, _sig?: AbortSignal) => '/home/user/proj')
+  return { openSingletonTab, insertTab, getDefaultOpener, getActiveWorkspaceId, fetchPaneCwd, fakeOpener, paneContent }
 }
 
 describe('file-path opener', () => {
@@ -35,17 +36,17 @@ describe('file-path opener', () => {
     expect(o.canOpen({ ...fileToken, meta: undefined })).toBe(false)
   })
 
-  it('requires hostId in ctx to open', () => {
+  it('requires hostId in ctx to open', async () => {
     const deps = makeDeps()
     const o = createFilePathOpener(deps)
-    o.open(fileToken, {}, new MouseEvent('click'))
+    await o.open(fileToken, {}, new MouseEvent('click'))
     expect(deps.getDefaultOpener).not.toHaveBeenCalled()
   })
 
-  it('looks up FileOpener and opens singleton tab in active workspace', () => {
+  it('looks up FileOpener and opens singleton tab in active workspace', async () => {
     const deps = makeDeps()
     const o = createFilePathOpener(deps)
-    o.open(fileToken, { hostId: 'h1' }, new MouseEvent('click'))
+    await o.open(fileToken, { hostId: 'h1' }, new MouseEvent('click'))
 
     expect(deps.getDefaultOpener).toHaveBeenCalledWith(expect.objectContaining({
       name: 'b.ts',
@@ -61,26 +62,176 @@ describe('file-path opener', () => {
     expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-1')
   })
 
-  it('no-op when no FileOpener matches', () => {
+  it('no-op when no FileOpener matches', async () => {
     const deps = makeDeps()
     deps.getDefaultOpener.mockReturnValue(null)
     const o = createFilePathOpener(deps)
-    o.open(fileToken, { hostId: 'h1' }, new MouseEvent('click'))
+    await o.open(fileToken, { hostId: 'h1' }, new MouseEvent('click'))
     expect(deps.openSingletonTab).not.toHaveBeenCalled()
   })
 
-  it('no-op when no active workspace', () => {
+  it('no-op when no active workspace', async () => {
     const deps = makeDeps()
     deps.getActiveWorkspaceId.mockReturnValue(null)
     const o = createFilePathOpener(deps)
-    o.open(fileToken, { hostId: 'h1' }, new MouseEvent('click'))
+    await o.open(fileToken, { hostId: 'h1' }, new MouseEvent('click'))
     expect(deps.insertTab).not.toHaveBeenCalled()
   })
 
-  it('no-op when direct open without meta.path (canOpen bypass)', () => {
+  it('no-op when direct open without meta.path (canOpen bypass)', async () => {
     const deps = makeDeps()
     const o = createFilePathOpener(deps)
-    o.open({ ...fileToken, meta: undefined }, { hostId: 'h1' }, new MouseEvent('click'))
+    await o.open({ ...fileToken, meta: undefined }, { hostId: 'h1' }, new MouseEvent('click'))
     expect(deps.getDefaultOpener).not.toHaveBeenCalled()
+  })
+})
+
+describe('file-path opener — relative path cwd resolution', () => {
+  beforeEach(() => vi.restoreAllMocks())
+
+  const relToken: LinkToken = {
+    type: 'file',
+    text: 'src/App.tsx',
+    range: { startCol: 0, endCol: 11 },
+    meta: { path: 'src/App.tsx' },
+  }
+
+  it('absolute path: does NOT fetch cwd', async () => {
+    const deps = makeDeps()
+    const o = createFilePathOpener(deps)
+    await o.open(fileToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    expect(deps.fetchPaneCwd).not.toHaveBeenCalled()
+  })
+
+  it('relative path: fetches cwd and prepends', async () => {
+    const deps = makeDeps()
+    const o = createFilePathOpener(deps)
+    await o.open(relToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    expect(deps.fetchPaneCwd).toHaveBeenCalledWith('h1', 'c1', expect.any(AbortSignal))
+    // verify the path passed to FileOpener.createContent is the joined absolute path
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('/home/user/proj/src/App.tsx')
+  })
+
+  it('relative path without sessionCode: no-op', async () => {
+    const deps = makeDeps()
+    const o = createFilePathOpener(deps)
+    await o.open(relToken, { hostId: 'h1' }, new MouseEvent('click'))
+    expect(deps.fetchPaneCwd).not.toHaveBeenCalled()
+    expect(deps.openSingletonTab).not.toHaveBeenCalled()
+  })
+
+  it('fetchPaneCwd throws: no-op and warns with context', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneCwd.mockRejectedValueOnce(new Error('boom'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const o = createFilePathOpener(deps)
+    await o.open(relToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    expect(deps.openSingletonTab).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('boom'))
+    warnSpy.mockRestore()
+  })
+
+  it('fetched cwd is not absolute: no-op and warns', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneCwd.mockResolvedValueOnce('not-absolute')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const o = createFilePathOpener(deps)
+    await o.open(relToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    expect(deps.openSingletonTab).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('cwd not absolute'))
+    warnSpy.mockRestore()
+  })
+
+  it('cwd with trailing slash: no double-slash in joined path', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneCwd.mockResolvedValueOnce('/home/user/proj/')
+    const o = createFilePathOpener(deps)
+    await o.open(relToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('/home/user/proj/src/App.tsx')
+  })
+
+  it('relative path with .. escaping cwd: no-op and warn', async () => {
+    const deps = makeDeps()
+    const o = createFilePathOpener(deps)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const traversalToken: LinkToken = {
+      type: 'file',
+      text: '../../../etc/passwd',
+      range: { startCol: 0, endCol: 19 },
+      meta: { path: '../../../etc/passwd' },
+    }
+    await o.open(traversalToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    expect(deps.openSingletonTab).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('relative path with single ".." inside cwd: resolves correctly', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneCwd.mockResolvedValueOnce('/home/user/proj/sub')
+    const o = createFilePathOpener(deps)
+    const token: LinkToken = {
+      type: 'file',
+      text: '../App.tsx',
+      range: { startCol: 0, endCol: 10 },
+      meta: { path: '../App.tsx' },
+    }
+    await o.open(token, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('/home/user/proj/App.tsx')
+  })
+
+  it('normalizes ./ and redundant slashes', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneCwd.mockResolvedValueOnce('/home/user/proj')
+    const o = createFilePathOpener(deps)
+    const token: LinkToken = {
+      type: 'file',
+      text: './src/./App.tsx',
+      range: { startCol: 0, endCol: 15 },
+      meta: { path: './src/./App.tsx' },
+    }
+    await o.open(token, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('/home/user/proj/src/App.tsx')
+  })
+
+  it('fetchPaneCwd hanging: aborts after 5s timeout and warns', async () => {
+    vi.useFakeTimers()
+    const deps = makeDeps()
+    let signalFromCall: AbortSignal | undefined
+    deps.fetchPaneCwd.mockImplementation((_h, _s, signal) => {
+      signalFromCall = signal
+      return new Promise((_, reject) => {
+        signal?.addEventListener('abort', () => {
+          const err = new Error('aborted')
+          err.name = 'AbortError'
+          reject(err)
+        })
+      })
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const o = createFilePathOpener(deps)
+
+    const relToken: LinkToken = {
+      type: 'file',
+      text: 'src/App.tsx',
+      range: { startCol: 0, endCol: 11 },
+      meta: { path: 'src/App.tsx' },
+    }
+
+    const openPromise = o.open(relToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    await vi.advanceTimersByTimeAsync(5001)
+    await openPromise
+
+    expect(signalFromCall?.aborted).toBe(true)
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('timeout'))
+    expect(deps.openSingletonTab).not.toHaveBeenCalled()
+
+    warnSpy.mockRestore()
+    vi.useRealTimers()
   })
 })

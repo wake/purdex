@@ -42,6 +42,7 @@ import { registerInterfaceSubsection, getInterfaceSubsections } from './interfac
 import { InterfaceSection } from '../components/settings/InterfaceSection'
 import { NewTabSubsection } from '../components/settings/new-tab/NewTabSubsection'
 import { registerBuiltinTerminalLinks } from './terminal-link'
+import { fetchSessionCwd } from './host-api'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { openBrowserTab } from './open-browser-tab'
 import { getDefaultOpener } from './file-opener-registry'
@@ -337,12 +338,17 @@ export function registerBuiltinModules(): void {
   }
 
   registerBuiltinTerminalLinks({
-    isElectron: caps.isElectron,
-    openBrowserTab,
-    openMiniWindow: (url) => window.electronAPI?.browserViewOpenMiniWindow(url),
-    getDefaultFileOpener: getDefaultOpener,
-    openSingletonTab: (content) => useTabStore.getState().openSingletonTab(content),
-    insertTab: (tabId, wsId) => useWorkspaceStore.getState().insertTab(tabId, wsId),
-    getActiveWorkspaceId: () => useWorkspaceStore.getState().activeWorkspaceId,
+    urlOpener: {
+      isElectron: caps.isElectron,
+      openBrowserTab,
+      openMiniWindow: (url) => window.electronAPI?.browserViewOpenMiniWindow(url),
+    },
+    filePathOpener: {
+      getDefaultOpener,
+      openSingletonTab: (content) => useTabStore.getState().openSingletonTab(content),
+      insertTab: (tabId, wsId) => useWorkspaceStore.getState().insertTab(tabId, wsId),
+      getActiveWorkspaceId: () => useWorkspaceStore.getState().activeWorkspaceId,
+      fetchPaneCwd: (hostId, sessionCode, signal) => fetchSessionCwd(hostId, sessionCode, signal),
+    },
   })
 }
