@@ -1,14 +1,19 @@
 import type { LinkMatcher } from '../types'
-import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 
 // 絕對路徑：必須以 `/` 開頭 + 末段 name.ext（支援多重副檔名如 .d.ts / .min.js）
-const ABS_RE = /(?<![\w/:])(\/(?:[\w.-]+\/)*[\w-]+(?:\.[A-Za-z0-9]+)+)(?::(\d+)(?::(\d+))?)?/g
+export const ABS_RE = /(?<![\w/:])(\/(?:[\w.-]+\/)*[\w-]+(?:\.[A-Za-z0-9]+)+)(?::(\d+)(?::(\d+))?)?/g
 
 // 相對路徑（含至少一個 `/`）：不能以 `/` 開頭，至少一個中間段 + 末段（支援多重副檔名）
-const REL_RE = /(?<![\w/:])((?:[\w.-]+\/)+[\w-]+(?:\.[A-Za-z0-9]+)+)(?::(\d+)(?::(\d+))?)?/g
+export const REL_RE = /(?<![\w/:])((?:[\w.-]+\/)+[\w-]+(?:\.[A-Za-z0-9]+)+)(?::(\d+)(?::(\d+))?)?/g
 
 // 純檔名：無 `/`；lookbehind 阻擋 word/`/`/`:`/`.` 避免匹配路徑片段或 URL 內段、或次級副檔名（支援多重副檔名）
-const BARE_RE = /(?<![\w/:.])([\w-]+(?:\.[A-Za-z0-9]+)+)(?::(\d+)(?::(\d+))?)?/g
+export const BARE_RE = /(?<![\w/:.])([\w-]+(?:\.[A-Za-z0-9]+)+)(?::(\d+)(?::(\d+))?)?/g
+
+export interface FilePathMatcherConfig {
+  id: string
+  regex: RegExp
+  isEnabled: () => boolean // called on each provide() — hot path, must be cheap
+}
 
 type MatchResult = {
   text: string
@@ -51,29 +56,13 @@ function runRegex(line: string, re: RegExp): MatchResult[] {
   return results
 }
 
-export const absoluteFilePathMatcher: LinkMatcher = {
-  id: 'builtin:file-path-absolute',
-  type: 'file',
-  provide(line) {
-    if (!useUISettingsStore.getState().linkDetectAbsolute) return []
-    return runRegex(line, ABS_RE)
-  },
-}
-
-export const relativeSlashFilePathMatcher: LinkMatcher = {
-  id: 'builtin:file-path-relative-slash',
-  type: 'file',
-  provide(line) {
-    if (!useUISettingsStore.getState().linkDetectRelativeSlash) return []
-    return runRegex(line, REL_RE)
-  },
-}
-
-export const bareFilenameFilePathMatcher: LinkMatcher = {
-  id: 'builtin:file-path-bare',
-  type: 'file',
-  provide(line) {
-    if (!useUISettingsStore.getState().linkDetectBareFilename) return []
-    return runRegex(line, BARE_RE)
-  },
+export function createFilePathMatcher(cfg: FilePathMatcherConfig): LinkMatcher {
+  return {
+    id: cfg.id,
+    type: 'file',
+    provide(line) {
+      if (!cfg.isEnabled()) return []
+      return runRegex(line, cfg.regex)
+    },
+  }
 }

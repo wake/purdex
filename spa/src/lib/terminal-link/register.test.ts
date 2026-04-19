@@ -1,11 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { terminalLinkRegistry } from './registry'
 import { registerBuiltinTerminalLinks, __resetBuiltinTerminalLinks } from './register'
-import {
-  absoluteFilePathMatcher,
-  relativeSlashFilePathMatcher,
-  bareFilenameFilePathMatcher,
-} from './matchers/file-path'
 
 describe('registerBuiltinTerminalLinks', () => {
   beforeEach(() => __resetBuiltinTerminalLinks())
@@ -64,8 +59,8 @@ describe('registerBuiltinTerminalLinks — 3 file-path matchers', () => {
       fetchPaneCwd: async () => '/cwd',
     })
     const ids = terminalLinkRegistry.getMatchers().map((m) => m.id)
-    expect(ids).toContain(absoluteFilePathMatcher.id)
-    expect(ids).toContain(relativeSlashFilePathMatcher.id)
-    expect(ids).toContain(bareFilenameFilePathMatcher.id)
+    expect(ids).toContain('builtin:file-path-absolute')
+    expect(ids).toContain('builtin:file-path-relative-slash')
+    expect(ids).toContain('builtin:file-path-bare')
   })
 })

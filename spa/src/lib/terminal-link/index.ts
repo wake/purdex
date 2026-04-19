@@ -11,7 +11,9 @@ export type {
   TerminalLinkRegistry,
 } from './types'
 export {
-  absoluteFilePathMatcher,
-  relativeSlashFilePathMatcher,
-  bareFilenameFilePathMatcher,
+  createFilePathMatcher,
+  ABS_RE,
+  REL_RE,
+  BARE_RE,
 } from './matchers/file-path'
+export type { FilePathMatcherConfig } from './matchers/file-path'

@@ -1,12 +1,14 @@
 import type { FileInfo } from '../../types/fs'
 import type { PaneContent } from '../../types/tab'
 import type { FileOpener } from '../file-opener-registry'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { terminalLinkRegistry } from './registry'
 import { urlMatcher } from './matchers/url'
 import {
-  absoluteFilePathMatcher,
-  relativeSlashFilePathMatcher,
-  bareFilenameFilePathMatcher,
+  createFilePathMatcher,
+  ABS_RE,
+  REL_RE,
+  BARE_RE,
 } from './matchers/file-path'
 import { createUrlOpener } from './openers/url'
 import { createFilePathOpener } from './openers/file-path'
@@ -33,9 +35,21 @@ export function registerBuiltinTerminalLinks(deps: BuiltinTerminalLinksDeps): vo
   registered = true
 
   terminalLinkRegistry.registerMatcher(urlMatcher)
-  terminalLinkRegistry.registerMatcher(absoluteFilePathMatcher)
-  terminalLinkRegistry.registerMatcher(relativeSlashFilePathMatcher)
-  terminalLinkRegistry.registerMatcher(bareFilenameFilePathMatcher)
+  terminalLinkRegistry.registerMatcher(createFilePathMatcher({
+    id: 'builtin:file-path-absolute',
+    regex: ABS_RE,
+    isEnabled: () => useUISettingsStore.getState().linkDetectAbsolute,
+  }))
+  terminalLinkRegistry.registerMatcher(createFilePathMatcher({
+    id: 'builtin:file-path-relative-slash',
+    regex: REL_RE,
+    isEnabled: () => useUISettingsStore.getState().linkDetectRelativeSlash,
+  }))
+  terminalLinkRegistry.registerMatcher(createFilePathMatcher({
+    id: 'builtin:file-path-bare',
+    regex: BARE_RE,
+    isEnabled: () => useUISettingsStore.getState().linkDetectBareFilename,
+  }))
 
   terminalLinkRegistry.registerOpener(createUrlOpener({
     isElectron: deps.isElectron,
