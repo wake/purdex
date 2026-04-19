@@ -4,6 +4,7 @@ import type { Tab } from '../types/tab'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useTabDisplay } from '../hooks/useTabDisplay'
 import { TabIcon } from './TabIcon'
+import { HoverTooltip } from './HoverTooltip'
 import { shouldShowGlobalUnreadPip } from './tab-icon-helpers'
 
 interface Props {
@@ -36,7 +37,6 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const t = useI18nStore((s) => s.t)
   const {
     displayTitle: label,
-    tooltip,
     IconComponent,
     agentStatus,
     isUnread,
@@ -83,12 +83,11 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         onContextMenu={handleContextMenu}
-        className={`relative flex items-center justify-center w-9 rounded-[6px] cursor-pointer transition-colors duration-150 ease-out ${
+        className={`group relative flex items-center justify-center w-9 rounded-[6px] cursor-pointer transition-colors duration-150 ease-out ${
           isActive
             ? 'text-white bg-surface-active border border-accent-muted'
             : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
         }`}
-        title={tooltip}
       >
         <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentCount={subagentCount} isUnread={isUnread} />
         {tab.locked && <Lock size={10} className="absolute bottom-0.5 right-0.5" />}
@@ -96,6 +95,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
             style={{ backgroundColor: '#ef4444' }} />
         )}
+        <HoverTooltip placement="top">{label}</HoverTooltip>
       </button>
     )
   }
@@ -130,7 +130,8 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       }`}
     >
       <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentCount={subagentCount} isUnread={isUnread} />
-      <span className="overflow-hidden flex-1 min-w-0 text-left" title={tooltip}>{label}</span>
+      <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
+      <HoverTooltip placement="top">{label}</HoverTooltip>
       {isHostOffline && <WifiSlash size={12} className="text-red-400 flex-shrink-0" />}
       {tab.locked && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
       {!isActive && isUnread && shouldShowGlobalUnreadPip(tabIndicatorStyle, agentStatus) && (

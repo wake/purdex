@@ -45,22 +45,24 @@ const pinnedTabs: Tab[] = [
 describe('TabBar', () => {
   it('renders all tabs', () => {
     render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} />)
-    // Session tabs show sessionCode as fallback label (no session store data)
-    expect(screen.getByText('dev001')).toBeTruthy()
-    expect(screen.getByText('cld001')).toBeTruthy()
-    expect(screen.getByText('Dashboard')).toBeTruthy()
+    // Session tabs show sessionCode as fallback label (no session store data).
+    // Each label appears twice per tab: visible span + HoverTooltip sibling.
+    expect(screen.getAllByText('dev001')).toHaveLength(2)
+    expect(screen.getAllByText('cld001')).toHaveLength(2)
+    expect(screen.getAllByText('Dashboard')).toHaveLength(2)
   })
 
   it('highlights active tab', () => {
     render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} />)
-    const activeTab = screen.getByText('dev001').closest('[role="tab"]')!
+    // First match is the visible span; either is inside the same tab root.
+    const activeTab = screen.getAllByText('dev001')[0].closest('[role="tab"]')!
     expect(activeTab.className).toContain('text-white')
   })
 
   it('calls onSelectTab on click', () => {
     const onSelect = vi.fn()
     render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} onSelectTab={onSelect} />)
-    fireEvent.click(screen.getByText('cld001'))
+    fireEvent.click(screen.getAllByText('cld001')[0])
     expect(onSelect).toHaveBeenCalledWith('t2')
   })
 
@@ -72,19 +74,23 @@ describe('TabBar', () => {
     expect(onClose).toHaveBeenCalledWith('t1')
   })
 
-  it('renders pinned tabs as icon-only with title', () => {
-    render(<TabBar tabs={pinnedTabs} activeTabId="t1" {...defaultHandlers} />)
-    // Pinned tab shows label as title attribute (sessionCode fallback)
-    const pinnedBtn = screen.getByTitle('aaa001')
-    expect(pinnedBtn).toBeInTheDocument()
-    // Pinned tab should not render label text in the button content
-    expect(pinnedBtn.textContent).not.toContain('aaa001')
+  it('renders pinned tabs as icon-only with HoverTooltip label', () => {
+    const { container } = render(<TabBar tabs={pinnedTabs} activeTabId="t1" {...defaultHandlers} />)
+    // Pinned tab no longer uses native title attr — label comes via HoverTooltip.
+    const pinnedRoot = container.querySelector('[data-tab-id="p1"]')!
+    const tooltip = pinnedRoot.querySelector('[role="tooltip"]')!
+    expect(tooltip).toBeInTheDocument()
+    expect(tooltip.textContent).toBe('aaa001')
+    // Pinned tab should not render the label as a visible (non-tooltip) text node
+    // inside the button — only the icon + the (visually hidden until hover) tooltip.
+    expect(pinnedRoot.querySelector('span.overflow-hidden')).toBeNull()
   })
 
   it('renders normal tabs with label', () => {
     render(<TabBar tabs={pinnedTabs} activeTabId="t1" {...defaultHandlers} />)
-    expect(screen.getByText('bbb001')).toBeInTheDocument()
-    expect(screen.getByText('ccc001')).toBeInTheDocument()
+    // Each label appears twice per tab: visible span + HoverTooltip sibling.
+    expect(screen.getAllByText('bbb001')).toHaveLength(2)
+    expect(screen.getAllByText('ccc001')).toHaveLength(2)
   })
 
   it('locked tab hides close button', () => {
@@ -100,9 +106,10 @@ describe('TabBar', () => {
       makeTab('t1', { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'xxx001', mode: 'terminal', cachedName: '', tmuxInstance: '' }, { locked: true }),
     ]
     render(<TabBar tabs={lockedTabs} activeTabId="t1" {...defaultHandlers} />)
-    expect(screen.getByText('xxx001')).toBeInTheDocument()
+    // Label appears twice per tab: visible span + HoverTooltip sibling.
+    expect(screen.getAllByText('xxx001')).toHaveLength(2)
     // Lock icon rendered — verify SVG with Lock's presence
-    const tabBtn = screen.getByText('xxx001').closest('[role="tab"]')!
+    const tabBtn = screen.getAllByText('xxx001')[0].closest('[role="tab"]')!
     const svgs = tabBtn.querySelectorAll('svg')
     // Should have at least 2 SVGs: tab icon + lock icon
     expect(svgs.length).toBeGreaterThanOrEqual(2)
@@ -111,7 +118,7 @@ describe('TabBar', () => {
   it('activates tab on Enter key', () => {
     const onSelect = vi.fn()
     render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} onSelectTab={onSelect} />)
-    const tab = screen.getByText('cld001').closest('[role="tab"]')!
+    const tab = screen.getAllByText('cld001')[0].closest('[role="tab"]')!
     fireEvent.keyDown(tab, { key: 'Enter' })
     expect(onSelect).toHaveBeenCalledWith('t2')
   })

@@ -114,6 +114,55 @@ describe('SortableTab', () => {
     expect(onClose).toHaveBeenCalledWith('t1')
     expect(onSelect).not.toHaveBeenCalled()
   })
+
+  it('renders HoverTooltip with combined text on regular tab (not native title attr)', () => {
+    useSessionStore.setState({
+      sessions: { h1: [{ code: 'sc1', name: 'work' }] as never },
+      activeHostId: null,
+      activeCode: null,
+    })
+    useAgentStore.setState({
+      unread: {},
+      statuses: {},
+      subagents: {},
+      tabIndicatorStyle: 'badge',
+      showOscTitle: true,
+      agentTypes: { 'h1:sc1': 'cc' },
+      oscTitles: { 'h1:sc1': 'my-feature' },
+    } as never)
+    const { container } = render(<SortableTab {...defaultProps} />)
+    // The visible label span should NOT have a native title attribute anymore.
+    const tabRoot = container.querySelector('[data-tab-id="t1"]')!
+    const labelSpan = tabRoot.querySelector('span.overflow-hidden')!
+    expect(labelSpan.getAttribute('title')).toBeNull()
+    expect(labelSpan.textContent).toBe('my-feature - work')
+    // HoverTooltip renders as a sibling with role="tooltip".
+    const tooltip = screen.getByRole('tooltip')
+    expect(tooltip.textContent).toBe('my-feature - work')
+  })
+
+  it('renders HoverTooltip on pinned tab (not native title attr)', () => {
+    useSessionStore.setState({
+      sessions: { h1: [{ code: 'sc1', name: 'work' }] as never },
+      activeHostId: null,
+      activeCode: null,
+    })
+    useAgentStore.setState({
+      unread: {},
+      statuses: {},
+      subagents: {},
+      tabIndicatorStyle: 'badge',
+      showOscTitle: true,
+      agentTypes: { 'h1:sc1': 'cc' },
+      oscTitles: { 'h1:sc1': 'my-feature' },
+    } as never)
+    const pinnedTab = makeTestTab('t1', { pinned: true })
+    const { container } = render(<SortableTab {...defaultProps} tab={pinnedTab} pinned />)
+    const tabRoot = container.querySelector('[data-tab-id="t1"]')!
+    expect(tabRoot.getAttribute('title')).toBeNull()
+    const tooltip = screen.getByRole('tooltip')
+    expect(tooltip.textContent).toBe('my-feature - work')
+  })
 })
 
 describe('SortableTab renderTabIcon modes', () => {
