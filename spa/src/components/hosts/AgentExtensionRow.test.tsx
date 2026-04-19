@@ -9,6 +9,10 @@ const mockFetch = hostFetch as unknown as ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   mockFetch.mockReset()
+  // Fallback: the StatuslineTestPanel auto-run fires on install transitions.
+  // Tests that don't explicitly care about the test endpoint get a safe non-ok
+  // response so the panel fails stage 1 gracefully (no unhandled rejection).
+  mockFetch.mockResolvedValue({ ok: false, status: 500, body: null })
   useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
 })
 
@@ -75,26 +79,35 @@ describe('AgentExtensionRow (statusline)', () => {
   it('Remove button triggers window.confirm then remove', async () => {
     mockFetch
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'pdx', installed: true, settingsPath: '/x' }) })
+      // Panel auto-run fires on mount (transition none→pdx) — respond with non-ok so it fails stage 1 and stops
+      .mockResolvedValueOnce({ ok: false, status: 500, body: null })
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'none', installed: false, settingsPath: '/x' }) })
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<AgentExtensionRow hostId="h1" extensionId="statusline" />)
     await waitFor(() => screen.getByRole('button', { name: /remove/i }))
-    fireEvent.click(screen.getByRole('button', { name: /remove/i }))
+    // Wait until panel auto-run fetch has fired (2 calls: GET status + POST test)
     await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2))
+    fireEvent.click(screen.getByRole('button', { name: /remove/i }))
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(3))
     expect(confirmSpy).toHaveBeenCalled()
-    const call = mockFetch.mock.calls[1]
-    expect(JSON.parse(call[2].body)).toMatchObject({ action: 'remove' })
+    const removeCall = mockFetch.mock.calls[2]
+    expect(JSON.parse(removeCall[2].body)).toMatchObject({ action: 'remove' })
     confirmSpy.mockRestore()
   })
 
   it('Remove cancelled in window.confirm does not POST', async () => {
-    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'pdx', installed: true, settingsPath: '/x' }) })
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'pdx', installed: true, settingsPath: '/x' }) })
+      // Panel auto-run fires on mount — respond with non-ok
+      .mockResolvedValueOnce({ ok: false, status: 500, body: null })
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     render(<AgentExtensionRow hostId="h1" extensionId="statusline" />)
     await waitFor(() => screen.getByRole('button', { name: /remove/i }))
+    // Wait until panel auto-run fetch has fired
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2))
     fireEvent.click(screen.getByRole('button', { name: /remove/i }))
-    // only the GET from mount, no POST
-    expect(mockFetch).toHaveBeenCalledTimes(1)
+    // still 2 calls — confirm=false → no remove POST
+    expect(mockFetch).toHaveBeenCalledTimes(2)
     confirmSpy.mockRestore()
   })
 
@@ -147,5 +160,35 @@ describe('AgentExtensionRow (statusline)', () => {
     render(<AgentExtensionRow hostId="h1" extensionId="statusline" />)
     await waitFor(() => screen.getByRole('button', { name: /remove/i }))
     expect(screen.getByRole('button', { name: /remove/i })).toBeDisabled()
+  })
+
+  // --- Pipeline test panel (#481) ---
+
+  it('renders StatuslineTestPanel when mode=pdx', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'pdx', installed: true, settingsPath: '/x' }) })
+    render(<AgentExtensionRow hostId="h1" extensionId="statusline" />)
+    await waitFor(() => screen.getByRole('button', { name: /remove/i }))
+    expect(screen.getByText(/pipeline test/i)).toBeInTheDocument()
+  })
+
+  it('renders StatuslineTestPanel when mode=wrapped', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'wrapped', installed: true, innerCommand: 'x', settingsPath: '/x' }) })
+    render(<AgentExtensionRow hostId="h1" extensionId="statusline" />)
+    await waitFor(() => screen.getByRole('button', { name: /remove/i }))
+    expect(screen.getByText(/pipeline test/i)).toBeInTheDocument()
+  })
+
+  it('does not render panel when mode=none', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'none', installed: false, settingsPath: '/x' }) })
+    render(<AgentExtensionRow hostId="h1" extensionId="statusline" />)
+    await waitFor(() => screen.getByRole('button', { name: /install/i }))
+    expect(screen.queryByText(/pipeline test/i)).toBeNull()
+  })
+
+  it('does not render panel when mode=unmanaged', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'unmanaged', installed: true, rawCommand: 'ccstatusline', settingsPath: '/x' }) })
+    render(<AgentExtensionRow hostId="h1" extensionId="statusline" />)
+    await waitFor(() => screen.getByRole('button', { name: /install/i }))
+    expect(screen.queryByText(/pipeline test/i)).toBeNull()
   })
 })

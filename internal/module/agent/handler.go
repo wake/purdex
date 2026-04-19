@@ -22,6 +22,13 @@ import (
 // read-modify-write ordering across simultaneous install/remove calls.
 var statuslineMutex sync.Mutex
 
+// testNoncePrefix identifies statusline self-test POSTs to /api/agent/status.
+// Real tmux session names cannot start with this prefix; the SPA self-test
+// panel generates nonces like "__pdx_test_<random>" so we can route them down
+// a dedicated path that signals the test observer and broadcasts keyed by the
+// nonce, without touching the production snapshot map / session lookup.
+const testNoncePrefix = "__pdx_test_"
+
 // resolveStatuslineInstaller returns the StatuslineInstaller for the agent
 // named by the request path variable "agent", or writes a 404 JSON error and
 // returns (nil, false). Used by both /statusline/status and /statusline/setup.
@@ -567,12 +574,25 @@ func (m *Module) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	code := m.resolveSessionCode(payload.TmuxSession)
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{}`))
 
+	// Test-nonce path: signal observer, broadcast keyed by nonce, skip snapshot persist.
+	// Production traffic never starts with testNoncePrefix (real tmux session names
+	// can't start with `__pdx_test_`), so the normal path below is unaffected.
+	if strings.HasPrefix(payload.TmuxSession, testNoncePrefix) {
+		m.signalTestStage(payload.TmuxSession, testStageReceived)
+		if m.core != nil {
+			snap := statusSnapshot{AgentType: payload.AgentType, Status: payload.RawStatus}
+			body, _ := json.Marshal(snap)
+			m.core.Events.Broadcast(payload.TmuxSession, "agent.status", string(body))
+		}
+		m.signalTestStage(payload.TmuxSession, testStageBroadcast)
+		return
+	}
+
+	code := m.resolveSessionCode(payload.TmuxSession)
 	if code == "" {
 		return
 	}

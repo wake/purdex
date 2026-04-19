@@ -5,6 +5,9 @@
 // agent_type discriminator inside value).
 import type { HostEvent } from './host-events'
 import { useAgentStore } from '../stores/useAgentStore'
+import { statuslineTestBus } from './statusline-test-bus'
+
+const TEST_NONCE_PREFIX = '__pdx_test_'
 
 export function dispatchAgentWsEvent(hostId: string, event: HostEvent): void {
   if (event.type === 'agent.status') {
@@ -21,14 +24,23 @@ export function dispatchAgentWsEvent(hostId: string, event: HostEvent): void {
       if (wire.agent_type !== 'cc') return
       const status = wire.status
       if (!status || typeof status !== 'object' || Array.isArray(status)) return
-      useAgentStore.getState().setCcStatus(hostId, event.session, status as Record<string, unknown>)
+      const rawStatus = status as Record<string, unknown>
+      useAgentStore.getState().setCcStatus(hostId, event.session, rawStatus)
+      if (event.session.startsWith(TEST_NONCE_PREFIX)) {
+        statuslineTestBus.emit({ nonce: event.session, hostId, raw: rawStatus })
+      }
     } catch { /* ignore malformed payload */ }
     return
   }
   if (event.type === 'agent.status.cleared') {
-    // Daemon currently always sends {"agent_type":"cc"}; the store wipes all
-    // ccStatus entries for the host regardless, so we skip parsing value.
-    useAgentStore.getState().clearHostAgentStatus(hostId)
+    // Scoped clear (targeted session) vs global clear (empty session) — the
+    // daemon emits scoped events for the self-test nonce cleanup and emits
+    // unscoped events when a real statusLine is uninstalled.
+    if (event.session) {
+      useAgentStore.getState().clearSession(hostId, event.session)
+    } else {
+      useAgentStore.getState().clearHostAgentStatus(hostId)
+    }
     return
   }
 }
