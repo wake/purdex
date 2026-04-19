@@ -68,4 +68,25 @@ describe('computeCompaction', () => {
     expect(result.kept).toContain('d2b')
     expect(result.evicted).toContain('d2a')
   })
+
+  it('monthly tier caps at 12 latest monthly buckets (E1)', () => {
+    const now = Date.now()
+    const DAY = 24 * 60 * 60 * 1000
+    const items: SnapshotMetadata[] = []
+    // 18 representative rows, each ~33 days apart starting from 100 days ago
+    // so every row lands in the monthly tier (>90 days old) with a distinct month.
+    for (let i = 0; i < 18; i++) {
+      items.push(meta(`m${i}`, 'manual', (100 + i * 33) * DAY))
+    }
+    const result = computeCompaction(items, now)
+    const keptMonths = items.filter((m) => result.kept.includes(m.id))
+    expect(keptMonths).toHaveLength(12)
+    // The 12 kept entries are the newest 12 months
+    const keptIdx = keptMonths.map((m) => Number(m.id.slice(1))).sort((a, b) => a - b)
+    expect(keptIdx).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+    // Older 6 are evicted
+    for (let i = 12; i < 18; i++) {
+      expect(result.evicted).toContain(`m${i}`)
+    }
+  })
 })

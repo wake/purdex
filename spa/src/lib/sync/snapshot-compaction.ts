@@ -4,6 +4,7 @@ const HOUR_MS = 60 * 60 * 1000
 const DAY_MS = 24 * HOUR_MS
 
 const PRE_OP_MAX = 5
+const MONTHLY_MAX = 12
 
 function isPreOp(m: SnapshotMetadata): boolean {
   return m.trigger === 'pre-import' || m.trigger === 'pre-restore'
@@ -79,20 +80,36 @@ export function computeCompaction(all: SnapshotMetadata[], now: number): Compact
   }
 
   // --- time-tier: 分桶、每桶留 newest ---
-  const buckets = new Map<string, SnapshotMetadata[]>()
+  const buckets = new Map<string, { tier: string; items: SnapshotMetadata[] }>()
   for (const m of timeTier) {
     const age = now - m.timestamp
     const cls = classifyTier(age)
     const bucketKey = `${cls.tier}:${cls.key(m.timestamp)}`
-    const arr = buckets.get(bucketKey) ?? []
-    arr.push(m)
-    buckets.set(bucketKey, arr)
+    const entry = buckets.get(bucketKey) ?? { tier: cls.tier, items: [] }
+    entry.items.push(m)
+    buckets.set(bucketKey, entry)
   }
 
-  for (const arr of buckets.values()) {
-    arr.sort((a, b) => b.timestamp - a.timestamp)
-    kept.push(arr[0].id)
-    for (let i = 1; i < arr.length; i++) evicted.push(arr[i].id)
+  // Each non-monthly bucket keeps its newest entry; older duplicates go.
+  // Monthly buckets are collected separately so we can cap them at
+  // MONTHLY_MAX latest buckets — otherwise a long-lived profile would
+  // accumulate one snapshot per historical month forever.
+  const monthlyRepresentatives: SnapshotMetadata[] = []
+  for (const { tier, items } of buckets.values()) {
+    items.sort((a, b) => b.timestamp - a.timestamp)
+    const [newest, ...older] = items
+    if (tier === 'monthly') {
+      monthlyRepresentatives.push(newest)
+    } else {
+      kept.push(newest.id)
+    }
+    for (const m of older) evicted.push(m.id)
+  }
+
+  monthlyRepresentatives.sort((a, b) => b.timestamp - a.timestamp)
+  for (let i = 0; i < monthlyRepresentatives.length; i++) {
+    if (i < MONTHLY_MAX) kept.push(monthlyRepresentatives[i].id)
+    else evicted.push(monthlyRepresentatives[i].id)
   }
 
   return { kept, evicted }
