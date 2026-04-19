@@ -36,6 +36,7 @@ beforeEach(() => {
     oscTitles: {},
     tabIndicatorStyle: 'badge',
     ccIconVariant: 'bot',
+    codexIconVariant: 'openai',
     showOscTitle: false,
   })
   useI18nStore.setState({ t: (k: string) => k })

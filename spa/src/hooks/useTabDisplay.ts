@@ -51,6 +51,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const agentType = useAgentStore((s) => (ck ? s.agentTypes[ck] : undefined))
   const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
   const ccIconVariant = useAgentStore((s) => s.ccIconVariant)
+  const codexIconVariant = useAgentStore((s) => s.codexIconVariant)
   const showOscTitle = useAgentStore((s) => s.showOscTitle)
   const oscTitle = useAgentStore((s) => (ck ? s.oscTitles[ck] : undefined))
 
@@ -62,7 +63,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
 
   const iconName = getPaneIcon(primaryContent)
   const paneIcon = ICON_MAP[iconName]
-  const agentIcon = !isTerminated && agentType ? getAgentIcon(agentType, { ccVariant: ccIconVariant }) : undefined
+  const agentIcon = !isTerminated && agentType ? getAgentIcon(agentType, { ccVariant: ccIconVariant, codexVariant: codexIconVariant }) : undefined
   const IconComponent = (agentIcon ?? paneIcon) as TabIconComponent | undefined
 
   const sessionLookup = { getByCode: (code: string) => sessions.find((sess) => sess.code === code) }
