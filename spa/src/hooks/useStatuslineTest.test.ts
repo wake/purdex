@@ -78,7 +78,7 @@ describe('useStatuslineTest', () => {
     expect(result.current.state.stages[5].status).toBe('skipped')
   })
 
-  it('overall 5s timeout marks incomplete stages failed', async () => {
+  it('overall timeout marks incomplete stages failed', async () => {
     vi.useFakeTimers()
     const pendingBody = new ReadableStream<Uint8Array>({ start() { /* never writes */ } })
     mockFetch.mockResolvedValueOnce({ ok: true, status: 200, body: pendingBody } as unknown as Response)
@@ -87,7 +87,8 @@ describe('useStatuslineTest', () => {
     let runPromise: Promise<void> = Promise.resolve()
     await act(async () => {
       runPromise = result.current.run()
-      await vi.advanceTimersByTimeAsync(5100)
+      // Advance past OVERALL_TIMEOUT_MS (currently 8000ms).
+      await vi.advanceTimersByTimeAsync(8100)
       await runPromise
     })
     expect(result.current.state.stages[1].status).toBe('failed')

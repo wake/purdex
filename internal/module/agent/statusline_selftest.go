@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -62,6 +63,13 @@ func (m *Module) defaultSpawnTestProxy(nonce string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate pdx binary: %w", err)
+	}
+	// Resolve symlinks — on Linux with symlink-based binary installs,
+	// os.Executable() may return the symlink rather than the real path,
+	// which can matter for subprocess exec identity. Matches the pattern
+	// used by handleStatuslineSetup / handleHookSetup in handler.go.
+	if resolved, symErr := filepath.EvalSymlinks(exe); symErr == nil {
+		exe = resolved
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

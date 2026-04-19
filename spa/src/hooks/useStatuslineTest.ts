@@ -40,7 +40,11 @@ const INITIAL: StatuslineTestState = {
   nonce: null,
 }
 
-const OVERALL_TIMEOUT_MS = 5000
+// Server per-stage deadline is 2s × 3 = 6s worst case (stage1 exec timeout +
+// stage2 + stage3 channel waits). Giving the client budget a cushion above
+// that prevents spurious "timeout" failures on loaded systems where the
+// proxy subprocess is slow to spawn.
+const OVERALL_TIMEOUT_MS = 8000
 
 type StageNum = 1 | 2 | 3 | 4 | 5
 
@@ -59,8 +63,15 @@ export function useStatuslineTest(hostId: string) {
 
   useEffect(() => () => { mountedRef.current = false }, [])
 
+  const runningRef = useRef(false)
+
   const run = useCallback(async () => {
     if (!mountedRef.current) return
+    // Re-entrancy guard: caller might skip the button's disabled state
+    // (programmatic calls, double-click races). Drop the second call instead
+    // of interleaving two runs over the same state slot.
+    if (runningRef.current) return
+    runningRef.current = true
 
     setState({
       ...INITIAL,
@@ -75,6 +86,7 @@ export function useStatuslineTest(hostId: string) {
     })
 
     let unsubBus: (() => void) | null = null
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
 
     const markStage = (n: StageNum, patch: StageState) => {
       if (!mountedRef.current) return
@@ -99,7 +111,7 @@ export function useStatuslineTest(hostId: string) {
         markFailThenSkipRest(1, `HTTP ${res.status}`)
         return
       }
-      const reader = res.body.getReader()
+      reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
       for (;;) {
@@ -169,6 +181,13 @@ export function useStatuslineTest(hostId: string) {
     const outcome = await Promise.race([work.then(() => 'done' as const), timeout])
     if (timeoutId !== undefined) clearTimeout(timeoutId)
 
+    if (outcome === 'timeout') {
+      // Release the SSE reader so the browser closes the HTTP connection;
+      // otherwise the fetch stream stays open until the server finishes
+      // or its own timeouts fire.
+      reader?.cancel().catch(() => { /* already closed — ignore */ })
+    }
+
     if (outcome === 'timeout' && mountedRef.current) {
       setState((s) => {
         const next = { ...s.stages }
@@ -187,6 +206,7 @@ export function useStatuslineTest(hostId: string) {
     }
 
     unsubBus?.()
+    runningRef.current = false
     if (mountedRef.current) {
       setState((s) => ({ ...s, running: false, lastRunAt: Date.now() }))
     }
