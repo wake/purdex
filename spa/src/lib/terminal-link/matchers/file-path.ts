@@ -16,6 +16,20 @@ type MatchResult = {
   meta?: Record<string, unknown>
 }
 
+// Returns true if every extension part (parts after the first) is purely digits.
+// e.g. "192.168.1.1" → true (all exts are digits → reject as IP/version/decimal)
+// e.g. "foo.d.ts"    → false (exts include letters → keep)
+// e.g. "v1.2.3.tar.gz" → false (tar, gz are letters → keep)
+// Note: "bar.123" → true (rotated-log style rejected; trade-off documented).
+function allExtensionsDigits(path: string): boolean {
+  // Extract the filename from any preceding path segments
+  const name = path.split('/').pop() ?? path
+  const parts = name.split('.')
+  if (parts.length < 2) return false
+  // parts[0] = base name; parts[1..] = extensions
+  return parts.slice(1).every((ext) => /^\d+$/.test(ext))
+}
+
 function runRegex(line: string, re: RegExp): MatchResult[] {
   const results: MatchResult[] = []
   for (const m of line.matchAll(re)) {
@@ -23,6 +37,8 @@ function runRegex(line: string, re: RegExp): MatchResult[] {
     // 排除 URL 內的路徑：前方若有 http(s):// 且到此位置之間沒有空白，視為仍在 URL 中
     if (/https?:\/\/\S*$/.test(before)) continue
     const path = m[1]
+    // 排除 IP / 版本號 / 小數：所有副檔名段均為純數字時拒絕
+    if (allExtensionsDigits(path)) continue
     const lineNum = m[2] ? parseInt(m[2], 10) : undefined
     const colNum = m[3] ? parseInt(m[3], 10) : undefined
     const text = m[0]

@@ -53,6 +53,10 @@ describe('absoluteFilePathMatcher', () => {
     const r = absoluteFilePathMatcher.provide('at /x/bar.min.js:42 here')
     expect(r[0].meta).toEqual({ path: '/x/bar.min.js', line: 42 })
   })
+
+  it('does NOT match /path/to/1.2.3 (all-digit extensions)', () => {
+    expect(absoluteFilePathMatcher.provide('see /path/1.2.3 dir')).toHaveLength(0)
+  })
 })
 
 describe('relativeSlashFilePathMatcher', () => {
@@ -91,6 +95,10 @@ describe('relativeSlashFilePathMatcher', () => {
     const r = relativeSlashFilePathMatcher.provide('edit src/a/foo.d.ts')
     expect(r[0].text).toBe('src/a/foo.d.ts')
     expect(r[0].meta).toEqual({ path: 'src/a/foo.d.ts' })
+  })
+
+  it('does NOT match dir/1.2.3 (all-digit extensions)', () => {
+    expect(relativeSlashFilePathMatcher.provide('cd dir/1.2.3')).toHaveLength(0)
   })
 })
 
@@ -133,5 +141,23 @@ describe('bareFilenameFilePathMatcher', () => {
     const r = bareFilenameFilePathMatcher.provide('got v1.2.3.tar.gz:10')
     expect(r[0].text).toBe('v1.2.3.tar.gz:10')
     expect(r[0].meta).toEqual({ path: 'v1.2.3.tar.gz', line: 10 })
+  })
+
+  it('does NOT match IP address 192.168.1.1', () => {
+    expect(bareFilenameFilePathMatcher.provide('ping 192.168.1.1 response')).toHaveLength(0)
+  })
+
+  it('does NOT match version number like 1.2.3', () => {
+    expect(bareFilenameFilePathMatcher.provide('v1.2.3 released')).toHaveLength(0)
+  })
+
+  it('does NOT match decimal number 1.5', () => {
+    expect(bareFilenameFilePathMatcher.provide('got 1.5 seconds')).toHaveLength(0)
+  })
+
+  it('DOES still match foo.d.ts (letters in ext)', () => {
+    const r = bareFilenameFilePathMatcher.provide('open foo.d.ts')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('foo.d.ts')
   })
 })
