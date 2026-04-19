@@ -46,6 +46,7 @@ beforeEach(() => {
     showOscTitle: false,
     tabIndicatorStyle: 'badge',
     ccIconVariant: 'bot',
+    codexIconVariant: 'openai',
   })
   useSessionStore.setState({
     sessions: { h1: [{ code: 'S1', name: 'work' }] as never },
