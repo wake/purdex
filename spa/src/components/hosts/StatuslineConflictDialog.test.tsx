@@ -23,4 +23,26 @@ describe('StatuslineConflictDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
     expect(onCancel).toHaveBeenCalledOnce()
   })
+
+  it('Escape key invokes onCancel', () => {
+    const onCancel = vi.fn()
+    render(<StatuslineConflictDialog existingCommand="x" onWrap={vi.fn()} onCancel={onCancel} />)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledOnce()
+  })
+
+  it('backdrop click invokes onCancel', () => {
+    const onCancel = vi.fn()
+    render(<StatuslineConflictDialog existingCommand="x" onWrap={vi.fn()} onCancel={onCancel} />)
+    const dialog = screen.getByRole('dialog')
+    fireEvent.click(dialog)
+    expect(onCancel).toHaveBeenCalledOnce()
+  })
+
+  it('click inside card does not invoke onCancel', () => {
+    const onCancel = vi.fn()
+    render(<StatuslineConflictDialog existingCommand="foo" onWrap={vi.fn()} onCancel={onCancel} />)
+    fireEvent.click(screen.getByText('foo'))
+    expect(onCancel).not.toHaveBeenCalled()
+  })
 })
