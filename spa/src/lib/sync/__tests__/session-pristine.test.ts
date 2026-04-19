@@ -28,6 +28,7 @@ describe('ensureSessionPristine', () => {
         return { id: 'p', timestamp: 0, device: 'd', trigger, bundleSize: 0, contributorIds: [], isSessionPristine: opts?.isSessionPristine ?? false }
       },
       deleteLocal: async () => {},
+      demoteSessionPristine: async () => {},
       compact: async () => ({ kept: [], evicted: [] }),
       clear: async () => {},
     })
@@ -38,20 +39,26 @@ describe('ensureSessionPristine', () => {
     expect(created[0].trigger).toBe('pre-restore')
   })
 
-  it('does not create duplicate pristine if one already exists', async () => {
-    const created: Array<unknown> = []
+  it('demotes prior pristine entries and creates a new one (D2: per-bootstrap)', async () => {
+    const createdTriggers: string[] = []
+    const demoteCalls: number[] = []
     setSnapshotStore({
       init: async () => {},
       listLocal: async () => [
-        { id: 'existing', timestamp: 0, device: 'd', trigger: 'pre-restore', bundleSize: 0, contributorIds: [], isSessionPristine: true },
+        { id: 'prev', timestamp: 0, device: 'd', trigger: 'pre-restore', bundleSize: 0, contributorIds: [], isSessionPristine: true },
       ],
       getLocal: async () => null,
-      createSnapshot: async (...args) => { created.push(args); return { id: 'x', timestamp: 0, device: 'd', trigger: 'manual', bundleSize: 0, contributorIds: [], isSessionPristine: false } },
+      createSnapshot: async (_b, trigger, opts) => {
+        createdTriggers.push(trigger)
+        return { id: 'new', timestamp: 0, device: 'd', trigger, bundleSize: 0, contributorIds: [], isSessionPristine: opts?.isSessionPristine ?? false }
+      },
       deleteLocal: async () => {},
+      demoteSessionPristine: async () => { demoteCalls.push(Date.now()) },
       compact: async () => ({ kept: [], evicted: [] }),
       clear: async () => {},
     })
     await ensureSessionPristine()
-    expect(created).toHaveLength(0)
+    expect(demoteCalls).toHaveLength(1)
+    expect(createdTriggers).toEqual(['pre-restore'])
   })
 })

@@ -45,14 +45,16 @@ import { getSnapshotStore } from './snapshot-store-instance'
 import { useSyncStore } from './use-sync-store'
 
 /**
- * Ensure there is a session-pristine snapshot so the user can always return
- * to "state at session start" regardless of how many restores they perform.
+ * Capture "state at the start of this session" as a session-pristine
+ * snapshot. Called on every bootstrap so the user can always return to the
+ * state from *this* launch, not the first-ever launch. Prior pristine
+ * snapshots are demoted (data retained, flag cleared) so only the newest
+ * one blocks compaction.
  */
 export async function ensureSessionPristine(): Promise<void> {
   const store = getSnapshotStore()
   await store.init()
-  const existing = await store.listLocal()
-  if (existing.some((m) => m.isSessionPristine)) return
+  await store.demoteSessionPristine()
 
   const engine = __getActiveEngine()
   const state = useSyncStore.getState()

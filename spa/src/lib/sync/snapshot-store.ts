@@ -26,6 +26,13 @@ export interface SnapshotStore {
     opts?: { isSessionPristine?: boolean },
   ): Promise<SnapshotMetadata>
   deleteLocal(id: string): Promise<void>
+  /**
+   * Strip the isSessionPristine flag from every stored snapshot. Used by the
+   * session-pristine bootstrap to ensure only the snapshot from the current
+   * bootstrap carries the flag; older ones keep their data but no longer
+   * block compaction.
+   */
+  demoteSessionPristine(): Promise<void>
   compact(): Promise<{ kept: string[]; evicted: string[] }>
   clear(): Promise<void>
 }
@@ -90,6 +97,18 @@ export function createSnapshotStore(dbName = 'purdex-sync'): SnapshotStore {
     async deleteLocal(id) {
       const db = await dbPromise
       await db.delete(STORE, id)
+    },
+
+    async demoteSessionPristine() {
+      const db = await dbPromise
+      const all = await db.getAll(STORE) as StoredSnapshot[]
+      const targets = all.filter((r) => r.isSessionPristine)
+      if (targets.length === 0) return
+      const tx = db.transaction(STORE, 'readwrite')
+      await Promise.all(
+        targets.map((r) => tx.store.put({ ...r, isSessionPristine: false })),
+      )
+      await tx.done
     },
 
     async compact() {
