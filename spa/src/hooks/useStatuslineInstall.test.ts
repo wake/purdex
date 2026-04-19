@@ -61,4 +61,59 @@ describe('useStatuslineInstall', () => {
     })
     expect(result.current.state.mode).toBe('none')
   })
+
+  // --- Error path tests ---
+
+  it('refresh error when response not ok', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 })
+
+    const { result } = renderHook(() => useStatuslineInstall('host1'))
+    await waitFor(() => expect(result.current.phase).toBe('error'))
+    expect(result.current.error).toContain('500')
+  })
+
+  it('install error when response not ok', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'none', installed: false, settingsPath: '/x' }) })
+      .mockResolvedValueOnce({ ok: false, status: 500 })
+
+    const { result } = renderHook(() => useStatuslineInstall('host1'))
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+
+    await act(async () => {
+      await result.current.install('pdx')
+    })
+    expect(result.current.phase).toBe('error')
+    expect(result.current.error).toContain('500')
+  })
+
+  it('remove 409 sets unmanaged error message', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'unmanaged', installed: true, settingsPath: '/x' }) })
+      .mockResolvedValueOnce({ ok: false, status: 409 })
+
+    const { result } = renderHook(() => useStatuslineInstall('host1'))
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+
+    await act(async () => {
+      await result.current.remove()
+    })
+    expect(result.current.phase).toBe('error')
+    expect(result.current.error).toContain('Cannot remove unmanaged statusLine')
+  })
+
+  it('install network throw sets error state', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'none', installed: false, settingsPath: '/x' }) })
+      .mockRejectedValueOnce(new Error('network down'))
+
+    const { result } = renderHook(() => useStatuslineInstall('host1'))
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+
+    await act(async () => {
+      await result.current.install('pdx')
+    })
+    expect(result.current.phase).toBe('error')
+    expect(result.current.error).toContain('network down')
+  })
 })

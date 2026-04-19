@@ -9,11 +9,11 @@ export interface StatuslineState {
   settingsPath: string
 }
 
-type Phase = 'idle' | 'loading' | 'ready' | 'error'
+export type StatuslinePhase = 'idle' | 'loading' | 'ready' | 'error'
 
 export function useStatuslineInstall(hostId: string) {
   const [state, setState] = useState<StatuslineState>({ mode: 'none', installed: false, settingsPath: '' })
-  const [phase, setPhase] = useState<Phase>('idle')
+  const [phase, setPhase] = useState<StatuslinePhase>('idle')
   const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
@@ -34,37 +34,47 @@ export function useStatuslineInstall(hostId: string) {
     async (mode: 'pdx' | 'wrap', inner?: string) => {
       setPhase('loading')
       const body = JSON.stringify({ action: 'install', mode, inner })
-      const res = await hostFetch(hostId, '/api/agent/cc/statusline/setup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-      })
-      if (!res.ok) {
-        setError(`${res.status}`)
+      try {
+        const res = await hostFetch(hostId, '/api/agent/cc/statusline/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        })
+        if (!res.ok) {
+          setError(`${res.status}`)
+          setPhase('error')
+          return
+        }
+        setState(await res.json())
+        setPhase('ready')
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
         setPhase('error')
-        return
       }
-      setState(await res.json())
-      setPhase('ready')
     },
     [hostId],
   )
 
   const remove = useCallback(async () => {
     setPhase('loading')
-    const res = await hostFetch(hostId, '/api/agent/cc/statusline/setup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'remove' }),
-    })
-    if (!res.ok) {
-      const msg = res.status === 409 ? 'Cannot remove unmanaged statusLine' : `${res.status}`
-      setError(msg)
+    try {
+      const res = await hostFetch(hostId, '/api/agent/cc/statusline/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'remove' }),
+      })
+      if (!res.ok) {
+        const msg = res.status === 409 ? 'Cannot remove unmanaged statusLine' : `${res.status}`
+        setError(msg)
+        setPhase('error')
+        return
+      }
+      setState(await res.json())
+      setPhase('ready')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
       setPhase('error')
-      return
     }
-    setState(await res.json())
-    setPhase('ready')
   }, [hostId])
 
   useEffect(() => {
