@@ -22,3 +22,17 @@ export function registerSyncContributors(): void {
   // Populate the default module list so setActiveProvider() can auto-enable all.
   setAllContributorIds(syncEngine.getContributors().map((c) => c.id))
 }
+
+// Test-only: override the engine instance so use-sync-store tests can
+// inject a minimal contributor set without pulling in real stores.
+let _engineForTests: typeof syncEngine | null = null
+
+/** @internal tests only */
+export function __setEngineForTests(e: typeof syncEngine | null): void {
+  _engineForTests = e
+}
+
+/** @internal tests only */
+export function __getActiveEngine(): typeof syncEngine {
+  return _engineForTests ?? syncEngine
+}

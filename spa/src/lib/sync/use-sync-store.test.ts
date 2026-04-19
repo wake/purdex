@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useSyncStore } from './use-sync-store'
+import { setSnapshotStore } from './snapshot-store-instance'
 import type { SyncBundle } from './types'
 import type { ConflictItem } from './types'
 
@@ -194,5 +195,124 @@ describe('useSyncStore', () => {
     expect(stored!.version).toBe(2)
     expect(stored!.timestamp).toBe(5000)
     expect(stored!.device).toBe('A')
+  })
+})
+
+describe('useSyncStore.createPreOperationSnapshot', () => {
+  beforeEach(() => {
+    useSyncStore.getState().reset()
+  })
+
+  it('delegates to SnapshotStore and returns id', async () => {
+    const calls: Array<{ trigger: string; opts: unknown }> = []
+    setSnapshotStore({
+      init: async () => {},
+      listLocal: async () => [],
+      getLocal: async () => null,
+      createSnapshot: async (_b, trigger, opts) => {
+        calls.push({ trigger, opts })
+        return {
+          id: 'stub-id',
+          timestamp: 0,
+          device: 'd',
+          trigger,
+          bundleSize: 0,
+          contributorIds: [],
+          isSessionPristine: opts?.isSessionPristine ?? false,
+        }
+      },
+      deleteLocal: async () => {},
+      compact: async () => ({ kept: [], evicted: [] }),
+      clear: async () => {},
+    })
+
+    const id = await useSyncStore.getState().createPreOperationSnapshot('pre-import')
+    expect(id).toBe('stub-id')
+    expect(calls[0].trigger).toBe('pre-import')
+  })
+})
+
+describe('useSyncStore.restoreFromSnapshot', () => {
+  beforeEach(() => {
+    useSyncStore.getState().reset()
+  })
+
+  it('creates pre-restore, clears pendingConflicts, calls contributor deserialize, does NOT touch lastSyncedBundle', async () => {
+    const deserializeCalls: string[] = []
+    const preOpCalls: string[] = []
+
+    setSnapshotStore({
+      init: async () => {},
+      listLocal: async () => [],
+      getLocal: async () => null,
+      createSnapshot: async (_b, trigger) => {
+        preOpCalls.push(trigger)
+        return {
+          id: 'pre-' + trigger,
+          timestamp: 0,
+          device: 'd',
+          trigger,
+          bundleSize: 0,
+          contributorIds: [],
+          isSessionPristine: false,
+        }
+      },
+      deleteLocal: async () => {},
+      compact: async () => ({ kept: [], evicted: [] }),
+      clear: async () => {},
+    })
+
+    const stubBundle: SyncBundle = {
+      version: 1,
+      timestamp: 0,
+      device: 'snap-dev',
+      collections: {
+        stub1: { version: 1, data: { x: 1 } },
+      },
+    }
+
+    const { __setEngineForTests, syncEngine } = await import('./register-sync')
+    const originalContribs = syncEngine.getContributors()
+    __setEngineForTests({
+      register: () => {},
+      getContributors: () => [
+        {
+          id: 'stub1',
+          strategy: 'full',
+          getVersion: () => 1,
+          serialize: () => ({ version: 1, data: {} }),
+          deserialize: (_p, merge) => {
+            if (merge.type === 'full-replace') deserializeCalls.push('stub1')
+          },
+        },
+      ],
+      serialize: () => stubBundle,
+      push: async () => stubBundle,
+      pull: async () => ({ appliedBundle: null, conflicts: [] }),
+    } as never)
+
+    useSyncStore.setState({
+      pendingConflicts: [{ contributor: 'x', field: 'y', lastSynced: null, local: null, remote: { value: null, device: 'r' } }],
+      pendingRemoteBundle: stubBundle,
+      pendingConflictsAt: Date.now(),
+      lastSyncedBundle: stubBundle,
+      lastSyncedAt: 12345,
+    })
+
+    await useSyncStore.getState().restoreFromSnapshot(
+      { ...stubBundle, bundle: stubBundle, id: 'target', trigger: 'manual', bundleSize: 0, contributorIds: ['stub1'], isSessionPristine: false },
+      'local',
+    )
+
+    expect(preOpCalls).toContain('pre-restore')
+    expect(deserializeCalls).toContain('stub1')
+
+    const state = useSyncStore.getState()
+    expect(state.pendingConflicts).toEqual([])
+    expect(state.pendingRemoteBundle).toBeNull()
+    expect(state.lastSyncedBundle).toEqual(stubBundle)
+    expect(state.lastSyncedAt).toBe(12345)
+
+    __setEngineForTests({ ...syncEngine, getContributors: () => originalContribs } as never)
   })
 })

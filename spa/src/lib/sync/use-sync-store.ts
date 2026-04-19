@@ -2,6 +2,9 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../storage'
 import type { ConflictItem, SyncBundle } from './types'
+import type { StoredSnapshot } from './snapshot-types'
+import { getSnapshotStore } from './snapshot-store-instance'
+import { __getActiveEngine } from './register-sync'
 
 /**
  * Registry of all known contributor IDs. Populated by registerSyncContributors()
@@ -40,6 +43,8 @@ interface SyncStoreState {
   setPendingConflicts: (conflicts: ConflictItem[], remoteBundle: SyncBundle) => void
   clearPendingConflicts: () => void
   reset: () => void
+  createPreOperationSnapshot: (trigger: 'pre-import' | 'pre-restore') => Promise<string>
+  restoreFromSnapshot: (snapshot: StoredSnapshot, source: 'local' | 'remote') => Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +162,39 @@ export const useSyncStore = create<SyncStoreState>()(
         }),
 
       reset: () => set({ ...initialState }),
+
+      createPreOperationSnapshot: async (trigger) => {
+        const engine = __getActiveEngine()
+        const device = get().clientId ?? 'unknown'
+        const enabled = get().enabledModules.length > 0
+          ? get().enabledModules
+          : engine.getContributors().map((c) => c.id)
+        const currentBundle = engine.serialize(device, enabled)
+        const meta = await getSnapshotStore().createSnapshot(currentBundle, trigger)
+        return meta.id
+      },
+
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      restoreFromSnapshot: async (snapshot, _source) => {
+        await get().createPreOperationSnapshot('pre-restore')
+        set({
+          pendingConflicts: [],
+          pendingRemoteBundle: null,
+          pendingConflictsAt: null,
+        })
+        const engine = __getActiveEngine()
+        const contribs = new Map(engine.getContributors().map((c) => [c.id, c]))
+        for (const [id, payload] of Object.entries(snapshot.bundle.collections)) {
+          const c = contribs.get(id)
+          if (!c) continue
+          try {
+            c.deserialize(payload, { type: 'full-replace' })
+          } catch (e) {
+            console.error(`restore: ${id} deserialize failed`, e)
+          }
+        }
+        // B1 append-only: do NOT touch lastSyncedBundle
+      },
     }),
     {
       name: STORAGE_KEYS.SYNC_STATE,
