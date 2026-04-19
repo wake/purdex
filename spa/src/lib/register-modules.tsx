@@ -338,13 +338,17 @@ export function registerBuiltinModules(): void {
   }
 
   registerBuiltinTerminalLinks({
-    isElectron: caps.isElectron,
-    openBrowserTab,
-    openMiniWindow: (url) => window.electronAPI?.browserViewOpenMiniWindow(url),
-    getDefaultFileOpener: getDefaultOpener,
-    openSingletonTab: (content) => useTabStore.getState().openSingletonTab(content),
-    insertTab: (tabId, wsId) => useWorkspaceStore.getState().insertTab(tabId, wsId),
-    getActiveWorkspaceId: () => useWorkspaceStore.getState().activeWorkspaceId,
-    fetchPaneCwd: (hostId, sessionCode, signal) => fetchSessionCwd(hostId, sessionCode, signal),
+    urlOpener: {
+      isElectron: caps.isElectron,
+      openBrowserTab,
+      openMiniWindow: (url) => window.electronAPI?.browserViewOpenMiniWindow(url),
+    },
+    filePathOpener: {
+      getDefaultOpener,
+      openSingletonTab: (content) => useTabStore.getState().openSingletonTab(content),
+      insertTab: (tabId, wsId) => useWorkspaceStore.getState().insertTab(tabId, wsId),
+      getActiveWorkspaceId: () => useWorkspaceStore.getState().activeWorkspaceId,
+      fetchPaneCwd: (hostId, sessionCode, signal) => fetchSessionCwd(hostId, sessionCode, signal),
+    },
   })
 }
