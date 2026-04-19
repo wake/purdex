@@ -150,6 +150,18 @@ func resolveDaemonHost(bind string) string {
 	return bind
 }
 
+// resolveProxyTmuxSession returns the session name the proxy should report to
+// the daemon. The PDX_STATUSLINE_TEST_SESSION env var (set by the daemon's
+// statusline self-test endpoint) wins over the normal tmux lookup; this lets
+// the test loop end-to-end through the same code path as production traffic
+// while tagging the payload with a nonce for the daemon to recognise.
+func resolveProxyTmuxSession() string {
+	if v := os.Getenv("PDX_STATUSLINE_TEST_SESSION"); v != "" {
+		return v
+	}
+	return queryTmuxSession()
+}
+
 // runStatuslineProxy is the entry point for `pdx statusline-proxy [--inner "<cmd>"]`.
 func runStatuslineProxy(args []string) {
 	inner := parseInnerFlag(args)
@@ -163,7 +175,7 @@ func runStatuslineProxy(args []string) {
 	}
 
 	// 2) Synchronously POST to daemon; silent fail.
-	tmuxSession := queryTmuxSession() // defined in cmd/pdx/hook.go
+	tmuxSession := resolveProxyTmuxSession()
 	cfg, err := config.Load("")
 	url := "http://127.0.0.1:7860/api/agent/status"
 	var token string

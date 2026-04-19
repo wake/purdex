@@ -168,3 +168,19 @@ func TestResolveDaemonHost(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveTmuxSessionHonorsTestEnvOverride(t *testing.T) {
+	t.Setenv("PDX_STATUSLINE_TEST_SESSION", "__pdx_test_deadbeef")
+	got := resolveProxyTmuxSession()
+	if got != "__pdx_test_deadbeef" {
+		t.Fatalf("want __pdx_test_deadbeef, got %q", got)
+	}
+}
+
+func TestResolveTmuxSessionFallsBackWhenEnvEmpty(t *testing.T) {
+	t.Setenv("PDX_STATUSLINE_TEST_SESSION", "")
+	got := resolveProxyTmuxSession()
+	if got == "__pdx_test_deadbeef" {
+		t.Fatalf("override leaked into fallback path")
+	}
+}
