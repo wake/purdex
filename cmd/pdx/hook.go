@@ -40,7 +40,8 @@ var loadConfigFn = config.Load
 
 // runHook is the entry point for `pdx hook <event_name>`.
 // It reads stdin, queries tmux for the session name, and POSTs to the daemon.
-// Any error exits 0 silently — this MUST NOT break CC.
+// Daemon/tmux/runtime failures are swallowed to avoid breaking the agent hook path.
+// CLI misuse still exits non-zero so local invocation mistakes are visible.
 func runHook(args []string) {
 	if len(args) < 1 {
 		os.Exit(0)

@@ -38,6 +38,11 @@ func newTestModule(t *testing.T) *Module {
 		return agentpkg.ProcessInfo{PID: pid, PPID: 1, ExePath: "/usr/local/bin/claude", Argv: []string{"claude"}}, nil
 	}
 	t.Cleanup(func() { readProcessInfoFn = origReadProcessInfo })
+	origProcessStartTime := processStartTimeFn
+	processStartTimeFn = func(pid int) (string, error) {
+		return "Sun Apr 20 01:30:00 2026", nil
+	}
+	t.Cleanup(func() { processStartTimeFn = origProcessStartTime })
 	return m
 }
 
@@ -225,6 +230,35 @@ func TestHandleEvent_RejectedHookDoesNotOverwriteSession(t *testing.T) {
 	}
 	if ev.AgentType != "cc" {
 		t.Fatalf("agent_type = %q, want cc", ev.AgentType)
+	}
+}
+
+func TestHandleEvent_ErrorGuardBlocksFrameMutation(t *testing.T) {
+	m := newTestModule(t)
+	m.currentStatus["work"] = agentpkg.StatusError
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
+		},
+	})
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PostToolUse","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0", len(frames))
 	}
 }
 
@@ -556,6 +590,7 @@ func TestActivityWatch_YellowLightRecovery(t *testing.T) {
 
 	fake.SetPaneCommand("work:", "claude")
 	fake.SetPaneContent("work:", "Allow  Deny")
+	fake.SetPaneSessionName("%5", "work")
 
 	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
@@ -669,6 +704,7 @@ func TestActivityWatch_HookEventSupersedes(t *testing.T) {
 
 	fake.SetPaneCommand("work:", "claude")
 	fake.SetPaneContent("work:", "Allow  Deny")
+	fake.SetPaneSessionName("%5", "work")
 
 	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
@@ -682,14 +718,40 @@ func TestActivityWatch_HookEventSupersedes(t *testing.T) {
 
 	m.mu.Lock()
 	_, watching := m.activeWatchers["work"]
-	status := m.currentStatus["work"]
 	m.mu.Unlock()
 
-	if watching {
-		t.Fatal("watcher should have been stopped by hook event")
+	if !watching {
+		t.Fatal("watcher should remain active for running status after hook event")
 	}
-	if status != agentpkg.StatusRunning {
-		t.Fatalf("expected running after UserPromptSubmit, got %s", status)
+}
+
+func TestActivityWatch_StartsForRunningStatus(t *testing.T) {
+	m := newTestModule(t)
+
+	fake := tmux.NewFakeExecutor()
+	m.prober = probe.New(fake)
+	fake.SetPaneSessionName("%5", "work")
+	provider := &fakeAgentProvider{
+		typeName: "codex",
+		derive: func(eventName string, raw json.RawMessage) agentpkg.DeriveResult {
+			if eventName == "UserPromptSubmit" {
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
+			}
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
+	}
+	m.registry.Register(provider)
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"UserPromptSubmit","raw_event":{},"agent_type":"codex"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+
+	m.mu.Lock()
+	_, watching := m.activeWatchers["work"]
+	m.mu.Unlock()
+	if !watching {
+		t.Fatal("expected active watcher after running status")
 	}
 }
 

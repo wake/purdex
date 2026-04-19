@@ -262,14 +262,10 @@ func (m *Module) RenameSessionAtomic(oldName, newName string, doRename func() er
 
 // replayFromDB rebuilds in-memory currentStatus from persisted events.
 func (m *Module) replayFromDB() {
-	if projections, err := m.liveFrameProjections(); err == nil && len(projections) > 0 {
-		for _, projection := range projections {
-			sessionName, _ := m.resolvePaneSession(projection.PaneID)
-			if sessionName == "" {
-				continue
-			}
+	if projections, err := m.liveSessionProjections(); err == nil && len(projections) > 0 {
+		for _, item := range projections {
 			m.mu.Lock()
-			syncProjectionState(m.currentStatus, m.subagents, sessionName, &projection)
+			syncProjectionState(m.currentStatus, m.subagents, item.SessionName, &item.Projection)
 			m.mu.Unlock()
 		}
 		return
@@ -298,19 +294,18 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 	if m.sessions == nil {
 		return
 	}
-	if projections, err := m.liveFrameProjections(); err == nil && len(projections) > 0 {
-		for _, projection := range projections {
-			sessionName, code := m.resolvePaneSession(projection.PaneID)
-			if code == "" {
+	if projections, err := m.liveSessionProjections(); err == nil && len(projections) > 0 {
+		for _, item := range projections {
+			if item.SessionCode == "" {
 				continue
 			}
-			normalized := buildProjectionNormalized(&projection, projection.TopFrame.AgentType, "replay", time.Now().UnixNano(), agentpkg.DeriveResult{})
+			normalized := buildProjectionNormalized(&item.Projection, item.Projection.TopFrame.AgentType, "replay", time.Now().UnixNano(), agentpkg.DeriveResult{})
 			payload, _ := json.Marshal(normalized)
-			event := core.HostEvent{Type: "hook", Session: code, Value: string(payload)}
+			event := core.HostEvent{Type: "hook", Session: item.SessionCode, Value: string(payload)}
 			data, _ := json.Marshal(event)
 			sub.Send(data)
 			m.mu.Lock()
-			syncProjectionState(m.currentStatus, m.subagents, sessionName, &projection)
+			syncProjectionState(m.currentStatus, m.subagents, item.SessionName, &item.Projection)
 			m.mu.Unlock()
 		}
 		return
@@ -365,7 +360,11 @@ func (m *Module) liveFrameProjections() ([]SessionProjection, error) {
 	live := make([]store.Frame, 0, len(frames))
 	for _, frame := range frames {
 		actualStartTime, err := processStartTimeFn(frame.PID)
-		if err != nil || actualStartTime != frame.ProcessStartTime {
+		if err != nil {
+			live = append(live, frame)
+			continue
+		}
+		if actualStartTime != frame.ProcessStartTime {
 			_ = m.frames.Delete(frame.FrameID)
 			continue
 		}
@@ -482,11 +481,20 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 		m.prober.StopWatch(session + ":")
 	}
 
-	if newStatus == agentpkg.StatusWaiting {
+	if shouldWatchActivity(newStatus) {
 		m.mu.Lock()
 		m.activeWatchers[session] = agentType
 		m.mu.Unlock()
 		m.prober.StartWatch(session+":", m.onActivityDetected(session, agentType))
+	}
+}
+
+func shouldWatchActivity(status agentpkg.Status) bool {
+	switch status {
+	case agentpkg.StatusWaiting, agentpkg.StatusRunning, agentpkg.StatusIdle:
+		return true
+	default:
+		return false
 	}
 }
 

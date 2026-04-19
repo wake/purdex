@@ -6,8 +6,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
@@ -202,5 +204,79 @@ func TestReplay_RestoresLiveFrames(t *testing.T) {
 
 	if got := m.currentStatus["work"]; got != agentpkg.StatusRunning {
 		t.Fatalf("currentStatus = %q, want running", got)
+	}
+}
+
+func TestSendSnapshot_CollapsesMultiplePanesInSession(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	fakeTmux.SetPaneSessionName("%6", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "work-code", Name: "work"}}}
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "A",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame A: %v", err)
+	}
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%6",
+		AgentType:        "codex",
+		PID:              300,
+		PPID:             100,
+		ProcessStartTime: "B",
+		Status:           agentpkg.StatusRunning,
+		StartedAt:        20,
+		LastSeenAt:       20,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame B: %v", err)
+	}
+	origStart := processStartTimeFn
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			return "A", nil
+		}
+		return "B", nil
+	}
+	t.Cleanup(func() { processStartTimeFn = origStart })
+
+	broadcaster := core.NewEventsBroadcaster()
+	sub := broadcaster.AddTestSubscriber()
+	defer broadcaster.RemoveTestSubscriber(sub)
+
+	m.sendSnapshot(sub)
+
+	select {
+	case msg := <-sub.SendCh():
+		var env struct {
+			Type    string `json:"type"`
+			Session string `json:"session"`
+			Value   string `json:"value"`
+		}
+		if err := json.Unmarshal(msg, &env); err != nil {
+			t.Fatalf("unmarshal event: %v", err)
+		}
+		if env.Session != "work-code" {
+			t.Fatalf("session = %q, want work-code", env.Session)
+		}
+		if !strings.Contains(env.Value, `"agent_type":"codex"`) || !strings.Contains(env.Value, `"status":"running"`) {
+			t.Fatalf("snapshot value = %s, want codex running", env.Value)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for snapshot")
+	}
+	select {
+	case msg := <-sub.SendCh():
+		t.Fatalf("unexpected extra snapshot: %s", msg)
+	case <-time.After(20 * time.Millisecond):
 	}
 }

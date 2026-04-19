@@ -101,25 +101,6 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		result = provider.DeriveStatus(req.EventName, req.RawEvent)
 	}
 
-	projection, err := m.applyFrameEvent(req, result, broadcastTs)
-	if err != nil {
-		log.Printf("[agent] frame event: %v", err)
-		http.Error(w, `{"error":"frame update failed"}`, http.StatusInternalServerError)
-		return
-	}
-
-	// Handle subagent events (transient — broadcast only, don't persist)
-	if req.EventName == "SubagentStart" || req.EventName == "SubagentStop" {
-		m.mu.Lock()
-		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
-		m.mu.Unlock()
-		normalized := buildProjectionNormalized(projection, req.AgentType, req.EventName, broadcastTs, result)
-		m.broadcastToSession(req.TmuxSession, normalized)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-		return
-	}
-
 	// Error guard: when in error state, only whitelisted events can clear it
 	if result.Valid && result.Status != "" && result.Status != agentpkg.StatusError {
 		m.mu.Lock()
@@ -135,6 +116,33 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+
+	projection, err := m.applyFrameEvent(req, result, broadcastTs)
+	if err != nil {
+		log.Printf("[agent] frame event: %v", err)
+		http.Error(w, `{"error":"frame update failed"}`, http.StatusInternalServerError)
+		return
+	}
+	if req.TmuxSession != "" {
+		projection, err = m.projectionForSession(req.TmuxSession)
+		if err != nil {
+			log.Printf("[agent] session projection: %v", err)
+			http.Error(w, `{"error":"frame update failed"}`, http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Handle subagent events (transient — broadcast only, don't persist)
+	if req.EventName == "SubagentStart" || req.EventName == "SubagentStop" {
+		m.mu.Lock()
+		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
+		m.mu.Unlock()
+		normalized := buildProjectionNormalized(projection, req.AgentType, req.EventName, broadcastTs, result)
+		m.broadcastToSession(req.TmuxSession, normalized)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		return
 	}
 
 	// Store raw event to DB

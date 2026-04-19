@@ -65,3 +65,38 @@ func TestProjection_CcAndCodexCoexist(t *testing.T) {
 		t.Fatalf("subagents = %v, want [sub-1]", projections[0].Subagents)
 	}
 }
+
+func TestLiveFrameProjections_PreservesFrameOnLookupError(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "live",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+	origStart := processStartTimeFn
+	processStartTimeFn = func(pid int) (string, error) { return "", errStub("ps failed") }
+	t.Cleanup(func() { processStartTimeFn = origStart })
+
+	projections, err := m.liveFrameProjections()
+	if err != nil {
+		t.Fatalf("liveFrameProjections: %v", err)
+	}
+	if len(projections) != 1 {
+		t.Fatalf("projection count = %d, want 1", len(projections))
+	}
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+}

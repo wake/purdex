@@ -177,3 +177,53 @@ func TestFramesStore_UniqueOnPidAndStartTime(t *testing.T) {
 		t.Fatalf("frames count = %d, want 2", len(frames))
 	}
 }
+
+func TestFramesStore_UpsertSameIdentityKeepsStoredFrameID(t *testing.T) {
+	s := openTestFramesStore(t)
+
+	first, err := s.Upsert(Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "A",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	})
+	if err != nil {
+		t.Fatalf("Upsert first: %v", err)
+	}
+	second, err := s.Upsert(Frame{
+		FrameID:          "other-id",
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             101,
+		ProcessStartTime: "A",
+		Status:           agentpkg.StatusRunning,
+		StartedAt:        10,
+		LastSeenAt:       20,
+		Verified:         true,
+	})
+	if err != nil {
+		t.Fatalf("Upsert second: %v", err)
+	}
+	if second.FrameID != first.FrameID {
+		t.Fatalf("frame_id = %q, want %q", second.FrameID, first.FrameID)
+	}
+	got, err := s.GetByIdentity("%5", 200, "A")
+	if err != nil {
+		t.Fatalf("GetByIdentity: %v", err)
+	}
+	if got == nil {
+		t.Fatal("frame not found")
+	}
+	if got.FrameID != first.FrameID {
+		t.Fatalf("stored frame_id = %q, want %q", got.FrameID, first.FrameID)
+	}
+	if got.PPID != 101 || got.Status != agentpkg.StatusRunning {
+		t.Fatalf("stored frame = %+v, want updated fields", *got)
+	}
+}

@@ -74,11 +74,11 @@ func (m *Module) clearFrame(frame store.Frame, reason string) error {
 	if err := m.frames.Delete(frame.FrameID); err != nil {
 		return err
 	}
-	projection, err := m.projectPane(frame.PaneID)
+	sessionName, code := m.resolvePaneSession(frame.PaneID)
+	projection, err := m.projectionForSession(sessionName)
 	if err != nil {
 		return err
 	}
-	sessionName, code := m.resolvePaneSession(frame.PaneID)
 	m.mu.Lock()
 	if sessionName != "" {
 		syncProjectionState(m.currentStatus, m.subagents, sessionName, projection)

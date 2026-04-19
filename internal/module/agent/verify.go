@@ -31,7 +31,7 @@ func defaultVerifyEvent(m *Module, req EventRequest) (decision verifyDecision) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			log.Printf("[agent][verify] warning: panic while verifying pid=%d pane=%s: %v", req.SenderPID, req.TmuxPaneID, recovered)
-			decision = verifyDecision{Accepted: true}
+			decision = verifyDecision{Reason: "verify_panic"}
 		}
 	}()
 	return m.verifyEvent(req)
@@ -47,14 +47,14 @@ func (m *Module) verifyEvent(req EventRequest) verifyDecision {
 	actualStart, err := processStartTimeFn(req.SenderPID)
 	if err != nil {
 		log.Printf("[agent][verify] warning: start_time lookup failed for pid=%d: %v", req.SenderPID, err)
-		return verifyDecision{Accepted: true}
+		return verifyDecision{Reason: "start_time_unavailable"}
 	}
 	if strings.TrimSpace(actualStart) != strings.TrimSpace(req.SenderStartTime) {
 		return verifyDecision{Reason: "pid_reused"}
 	}
 	if m.tmux == nil {
 		log.Printf("[agent][verify] warning: tmux executor unavailable for pid=%d pane=%s", req.SenderPID, req.TmuxPaneID)
-		return verifyDecision{Accepted: true}
+		return verifyDecision{Reason: "tmux_unavailable"}
 	}
 	panePID, err := resolvePanePIDFn(m.tmux, req.TmuxPaneID)
 	if err != nil {
@@ -70,7 +70,7 @@ func (m *Module) verifyEvent(req EventRequest) verifyDecision {
 	info, err := readProcessInfoFn(req.SenderPID)
 	if err != nil {
 		log.Printf("[agent][verify] warning: process lookup failed for pid=%d: %v", req.SenderPID, err)
-		return verifyDecision{Accepted: true}
+		return verifyDecision{Reason: "process_lookup_failed"}
 	}
 	if !provider.Identify(info) {
 		return verifyDecision{Reason: "identify_mismatch"}

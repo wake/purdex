@@ -199,3 +199,45 @@ func TestVerify_RejectsUncertainSender(t *testing.T) {
 		t.Fatalf("reason = %q, want sender_uncertain", decision.Reason)
 	}
 }
+
+func TestVerify_RejectsWhenStartTimeLookupFails(t *testing.T) {
+	m := newVerifyTestModule(t)
+	stubVerifySeams(t)
+	isPidAliveFn = func(pid int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) { return "", errStub("ps failed") }
+
+	decision := m.verifyEvent(EventRequest{
+		TmuxPaneID:      "%5",
+		SenderPID:       200,
+		SenderStartTime: "Sun Apr 20 01:30:00 2026",
+	})
+	if decision.Reason != "start_time_unavailable" {
+		t.Fatalf("reason = %q, want start_time_unavailable", decision.Reason)
+	}
+}
+
+func TestVerify_RejectsWhenProcessLookupFails(t *testing.T) {
+	m := newVerifyTestModule(t)
+	m.tmux.(*tmux.FakeExecutor).SetPanePID("%5", "100")
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		identify: func(agentpkg.ProcessInfo) bool { return true },
+	})
+	stubVerifySeams(t)
+	isPidAliveFn = func(pid int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) { return "Sun Apr 20 01:30:00 2026", nil }
+	pidAncestorIncludesFn = func(pid int, ancestor int) bool { return true }
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{}, errStub("lookup failed")
+	}
+
+	decision := m.verifyEvent(EventRequest{
+		TmuxPaneID:      "%5",
+		AgentType:       "cc",
+		SenderPID:       200,
+		SenderStartTime: "Sun Apr 20 01:30:00 2026",
+	})
+	if decision.Reason != "process_lookup_failed" {
+		t.Fatalf("reason = %q, want process_lookup_failed", decision.Reason)
+	}
+}

@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"sort"
+
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/store"
 )
@@ -175,14 +177,7 @@ func (m *Module) projectionForSession(sessionName string) (*SessionProjection, e
 	if err != nil {
 		return nil, err
 	}
-	for i := range projections {
-		name, _ := m.resolvePaneSession(projections[i].PaneID)
-		if name == sessionName {
-			projection := projections[i]
-			return &projection, nil
-		}
-	}
-	return nil, nil
+	return m.selectSessionProjection(sessionName, projections), nil
 }
 
 func (m *Module) setProjectionTopStatus(sessionName string, status agentpkg.Status) (*SessionProjection, error) {
@@ -195,5 +190,74 @@ func (m *Module) setProjectionTopStatus(sessionName string, status agentpkg.Stat
 	if _, err := m.frames.Upsert(frame); err != nil {
 		return nil, err
 	}
-	return m.projectPane(frame.PaneID)
+	return m.projectionForSession(sessionName)
+}
+
+func (m *Module) selectSessionProjection(sessionName string, projections []SessionProjection) *SessionProjection {
+	var selected *SessionProjection
+	for i := range projections {
+		name, _ := m.resolvePaneSession(projections[i].PaneID)
+		if name != sessionName {
+			continue
+		}
+		if selected == nil || projectionSortGreater(projections[i], *selected) {
+			projection := projections[i]
+			selected = &projection
+		}
+	}
+	return selected
+}
+
+type namedProjection struct {
+	SessionName string
+	SessionCode string
+	Projection  SessionProjection
+}
+
+func (m *Module) liveSessionProjections() ([]namedProjection, error) {
+	projections, err := m.liveFrameProjections()
+	if err != nil {
+		return nil, err
+	}
+	if len(projections) == 0 {
+		return nil, nil
+	}
+	selected := make(map[string]namedProjection)
+	for _, projection := range projections {
+		sessionName, sessionCode := m.resolvePaneSession(projection.PaneID)
+		if sessionName == "" {
+			continue
+		}
+		current, ok := selected[sessionName]
+		if !ok || projectionSortGreater(projection, current.Projection) {
+			selected[sessionName] = namedProjection{
+				SessionName: sessionName,
+				SessionCode: sessionCode,
+				Projection:  projection,
+			}
+		}
+	}
+	sessionNames := make([]string, 0, len(selected))
+	for sessionName := range selected {
+		sessionNames = append(sessionNames, sessionName)
+	}
+	sort.Strings(sessionNames)
+	out := make([]namedProjection, 0, len(sessionNames))
+	for _, sessionName := range sessionNames {
+		out = append(out, selected[sessionName])
+	}
+	return out, nil
+}
+
+func projectionSortGreater(candidate, current SessionProjection) bool {
+	if candidate.TopFrame == nil {
+		return false
+	}
+	if current.TopFrame == nil {
+		return true
+	}
+	if candidate.TopFrame.StartedAt != current.TopFrame.StartedAt {
+		return candidate.TopFrame.StartedAt > current.TopFrame.StartedAt
+	}
+	return candidate.TopFrame.FrameID > current.TopFrame.FrameID
 }

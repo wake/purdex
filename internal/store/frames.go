@@ -102,12 +102,9 @@ func (s *FramesStore) Upsert(frame Frame) (Frame, error) {
 			frame_id, pane_id, agent_type, pid, ppid, process_start_time,
 			parent_frame_id, subagents_json, status, started_at, last_seen_at, verified
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(frame_id) DO UPDATE SET
-			pane_id = excluded.pane_id,
+		ON CONFLICT(pane_id, pid, process_start_time) DO UPDATE SET
 			agent_type = excluded.agent_type,
-			pid = excluded.pid,
 			ppid = excluded.ppid,
-			process_start_time = excluded.process_start_time,
 			parent_frame_id = excluded.parent_frame_id,
 			subagents_json = excluded.subagents_json,
 			status = excluded.status,
@@ -119,7 +116,14 @@ func (s *FramesStore) Upsert(frame Frame) (Frame, error) {
 	if err != nil {
 		return Frame{}, err
 	}
-	return frame, nil
+	stored, err := s.GetByIdentity(frame.PaneID, frame.PID, frame.ProcessStartTime)
+	if err != nil {
+		return Frame{}, err
+	}
+	if stored == nil {
+		return Frame{}, sql.ErrNoRows
+	}
+	return *stored, nil
 }
 
 func (s *FramesStore) GetByIdentity(paneID string, pid int, startTime string) (*Frame, error) {

@@ -696,7 +696,7 @@ Activity watcher 實作三規則（動 → running、靜 → idle、shell prompt
 |------|:---:|------|
 | pdx hook 的 shim list 不完整（新 shim 導致 agent PID 解析錯誤）| P1 | 測試覆蓋常見 shim；新增 shim 時加 log；unknown 第一層不 skip 以保守 |
 | Verify 過嚴誤拒合法 wrapper | P3 | log reason 詳細；透過使用者回報調整 shim list（P1）或 Identify（P2），不放寬主 verify |
-| macOS cgo 限制導致 `proc_pidpath` 無法用 | P2 | Fallback 到 `ps -p PID -o args=` 取第一個 token；ping 實測過可接受 |
+| macOS `proc_pidpath` 不可用或不值得引入 cgo | P2 | 改用 `ps -p PID -o comm=` 取 executable，再配 `args=` 組 argv；避免把被改寫的 `argv[0]` 當成 ExePath |
 | Frame schema migration 複雜 | P4 | alpha 階段直接新表 + 舊表退役；不做雙軌 |
 | Codex ApplyPatch 期間狀態不變 | P6 | 上游 issue #16732；本輪以「畫面不動 → idle」兜底，不再追求完美 |
 | SPA 需不需要改 | 全程 | 設計目標：不改。projection 在 daemon 層完成 |

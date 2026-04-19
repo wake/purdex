@@ -11,6 +11,14 @@ func readProcessInfoPlatform(pid int) (ProcessInfo, error) {
 	if err != nil {
 		return ProcessInfo{}, err
 	}
+	commOut, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "comm=").Output()
+	if err != nil {
+		return ProcessInfo{}, fmt.Errorf("read command for pid %d: %w", pid, err)
+	}
+	exePath, err := normalizeExecutablePath(strings.TrimSpace(string(commOut)))
+	if err != nil {
+		return ProcessInfo{}, fmt.Errorf("normalize exe path for pid %d: %w", pid, err)
+	}
 	out, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "args=").Output()
 	if err != nil {
 		return ProcessInfo{}, fmt.Errorf("read args for pid %d: %w", pid, err)
@@ -22,10 +30,6 @@ func readProcessInfoPlatform(pid int) (ProcessInfo, error) {
 	argv := strings.Fields(rawArgs)
 	if len(argv) == 0 {
 		return ProcessInfo{}, fmt.Errorf("read args for pid %d: empty argv", pid)
-	}
-	exePath, err := normalizeExecutablePath(argv[0])
-	if err != nil {
-		return ProcessInfo{}, fmt.Errorf("normalize exe path for pid %d: %w", pid, err)
 	}
 	startTime, err := readProcessStartTime(pid)
 	if err != nil {
