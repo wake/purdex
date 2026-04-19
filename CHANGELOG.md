@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Feat(spa): Codex icon variant setting
+
+- **Settings → Terminal → Codex icon**: OpenAI / Codex monochrome button pair with live preview, mirroring the existing Claude Code bot/star row. Active button uses `aria-pressed`; when tab indicator is dot-only, a hidden-hint paragraph matches the CC behaviour.
+- **Icon options**: `openai` (Phosphor `OpenAiLogo`, default — unchanged behaviour) and `codex` (monochrome `@lobehub/icons-static-svg/codex.svg`, inherits tab theme via `currentColor`).
+- **Store**: `useAgentStore.codexIconVariant` (persist version 4 → 5, `partialize` extended). Zustand mismatch + `syncManager` cross-tab both drop the three persisted setting keys once on upgrade; alpha-acceptable per "Alpha 階段不需 persist migration" policy.
+- **A11y**: `aria-hidden="true"` on the agent-icons wrappers so lobehub SVG `<title>` elements no longer pollute button accessible names.
+- **Tests**: +3 in `agent-icons.test.tsx` (codex variant coverage), +1 in `TerminalSection.test.tsx` (codex button click), +locale-completeness keeps en/zh-TW in sync. Full suite 2161/2161.
+
 ## [1.0.0-alpha.189] - 2026-04-19
 
 ### Fix(agent): probe wrapped descendants with bounded cache (#484)
