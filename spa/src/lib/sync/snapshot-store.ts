@@ -41,6 +41,7 @@ export function createSnapshotStore(dbName = 'purdex-sync'): SnapshotStore {
   async function compactFn(): Promise<{ kept: string[]; evicted: string[] }> {
     const db = await dbPromise
     const all = await db.getAll(STORE) as StoredSnapshot[]
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const metas: SnapshotMetadata[] = all.map(({ bundle: _bundle, ...m }) => m as SnapshotMetadata)
     const { kept, evicted } = computeCompaction(metas, Date.now())
     const tx = db.transaction(STORE, 'readwrite')
@@ -58,6 +59,7 @@ export function createSnapshotStore(dbName = 'purdex-sync'): SnapshotStore {
       const db = await dbPromise
       const all = await db.getAll(STORE) as StoredSnapshot[]
       return all
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         .map(({ bundle: _bundle, ...meta }) => meta as SnapshotMetadata)
         .sort((a, b) => b.timestamp - a.timestamp)
     },

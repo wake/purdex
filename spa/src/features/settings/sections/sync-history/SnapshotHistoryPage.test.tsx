@@ -29,15 +29,21 @@ describe('SnapshotHistoryPage', () => {
 
   it('renders list → select row → detail shows → click Restore opens dialog', async () => {
     render(<SnapshotHistoryPage />)
-    await waitFor(() => expect(screen.getAllByRole('button').some((b) => b.textContent?.includes('manual'))).toBe(true))
+    // Wait for a list row to appear (HistoryRow button includes translated "manual" trigger)
+    await waitFor(() =>
+      expect(screen.getAllByRole('button').some((b) => b.textContent?.includes('manual'))).toBe(true),
+    )
     const row = screen.getAllByRole('button').find((b) => b.textContent?.includes('manual'))!
     fireEvent.click(row)
+    // Wait for SnapshotDetail's "Restore this snapshot" button to appear after bundle loads
     await waitFor(() => {
-      const restoreBtn = screen.queryAllByRole('button').find((b) => b.textContent?.includes('detail.restore'))
-      expect(restoreBtn).toBeTruthy()
+      expect(
+        screen.queryAllByRole('button').some((b) => b.textContent?.includes('Restore this snapshot')),
+      ).toBe(true)
     })
-    // Click the SnapshotDetail restore button
-    const restoreBtn = screen.getAllByRole('button').find((b) => b.textContent?.includes('detail.restore'))!
+    const restoreBtn = screen
+      .getAllByRole('button')
+      .find((b) => b.textContent?.includes('Restore this snapshot'))!
     fireEvent.click(restoreBtn)
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   })

@@ -6,7 +6,7 @@ describe('SnapshotRestoreDialog', () => {
   it('dispatches onConfirm when Restore clicked', () => {
     const onConfirm = vi.fn()
     render(<SnapshotRestoreDialog open pendingConflictCount={0} onCancel={() => {}} onConfirm={onConfirm} restoring={false} />)
-    fireEvent.click(screen.getByRole('button', { name: /proceed/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }))
     expect(onConfirm).toHaveBeenCalled()
   })
 
@@ -18,6 +18,6 @@ describe('SnapshotRestoreDialog', () => {
 
   it('disables Restore while restoring', () => {
     render(<SnapshotRestoreDialog open pendingConflictCount={0} onCancel={() => {}} onConfirm={() => {}} restoring={true} />)
-    expect(screen.getByRole('button', { name: /proceed/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeDisabled()
   })
 })
