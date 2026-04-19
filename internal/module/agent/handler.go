@@ -72,7 +72,12 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.TmuxSession == "" || req.TmuxPaneID == "" || req.AgentType == "" || req.EventName == "" || req.SenderPID == 0 || req.SenderStartTime == "" {
+	if req.TmuxSession == "" || req.TmuxPaneID == "" || req.AgentType == "" || req.EventName == "" || req.SenderPID == 0 {
+		http.Error(w, `{"error":"schema_invalid"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.SenderStartTime == "" && !req.SenderUncertain {
 		http.Error(w, `{"error":"schema_invalid"}`, http.StatusBadRequest)
 		return
 	}

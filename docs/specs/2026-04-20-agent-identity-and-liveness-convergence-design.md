@@ -166,7 +166,7 @@ pdx hook → 向上 walk PPID chain
 
 若走到 PPID=1 都沒找到非 shim（代表 pdx 以 detached 狀態被啟動，罕見），回報 PPID=1 並在 payload 加 `"sender_uncertain": true` 欄位；daemon 接到後視為 unverifiable 直接拒絕。
 
-此解析邏輯實作在 `cmd/pdx/hook.go` 內。單元測試需覆蓋每種 shim 組合。
+此解析邏輯實作在 `cmd/pdx/hook_pid_resolver.go` 內。單元測試需覆蓋常見 shim 類型與多層 shim 組合。
 
 ### 5.2 ProcessInfo
 

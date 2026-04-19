@@ -122,3 +122,75 @@ func TestResolveAgentPID_ReachesInit(t *testing.T) {
 		t.Fatal("uncertain = false, want true")
 	}
 }
+
+func TestResolveAgentPID_SkipsEnv(t *testing.T) {
+	orig := readResolverProcessInfo
+	t.Cleanup(func() { readResolverProcessInfo = orig })
+
+	readResolverProcessInfo = func(pid int) (procInfo, error) {
+		switch pid {
+		case 300:
+			return procInfo{PID: 300, PPID: 200, ExePath: "/usr/bin/env", Argv: []string{"env", "PATH=/tmp/bin", "pdx", "hook", "Stop"}}, nil
+		case 200:
+			return procInfo{PID: 200, PPID: 100, ExePath: "/opt/bin/codex"}, nil
+		default:
+			return procInfo{}, errors.New("unexpected pid")
+		}
+	}
+
+	got, uncertain := resolveAgentPID(300)
+	if got != 200 {
+		t.Fatalf("pid = %d, want 200", got)
+	}
+	if uncertain {
+		t.Fatal("uncertain = true, want false")
+	}
+}
+
+func TestResolveAgentPID_SkipsYarn(t *testing.T) {
+	orig := readResolverProcessInfo
+	t.Cleanup(func() { readResolverProcessInfo = orig })
+
+	readResolverProcessInfo = func(pid int) (procInfo, error) {
+		switch pid {
+		case 300:
+			return procInfo{PID: 300, PPID: 200, ExePath: "/opt/homebrew/bin/yarn", Argv: []string{"yarn", "pdx", "hook", "Stop"}}, nil
+		case 200:
+			return procInfo{PID: 200, PPID: 100, ExePath: "/opt/bin/claude"}, nil
+		default:
+			return procInfo{}, errors.New("unexpected pid")
+		}
+	}
+
+	got, uncertain := resolveAgentPID(300)
+	if got != 200 {
+		t.Fatalf("pid = %d, want 200", got)
+	}
+	if uncertain {
+		t.Fatal("uncertain = true, want false")
+	}
+}
+
+func TestResolveAgentPID_SkipsPnpm(t *testing.T) {
+	orig := readResolverProcessInfo
+	t.Cleanup(func() { readResolverProcessInfo = orig })
+
+	readResolverProcessInfo = func(pid int) (procInfo, error) {
+		switch pid {
+		case 300:
+			return procInfo{PID: 300, PPID: 200, ExePath: "/opt/homebrew/bin/pnpm", Argv: []string{"pnpm", "pdx", "hook", "Stop"}}, nil
+		case 200:
+			return procInfo{PID: 200, PPID: 100, ExePath: "/opt/bin/codex"}, nil
+		default:
+			return procInfo{}, errors.New("unexpected pid")
+		}
+	}
+
+	got, uncertain := resolveAgentPID(300)
+	if got != 200 {
+		t.Fatalf("pid = %d, want 200", got)
+	}
+	if uncertain {
+		t.Fatal("uncertain = true, want false")
+	}
+}
