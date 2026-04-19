@@ -116,4 +116,39 @@ describe('useStatuslineInstall', () => {
     expect(result.current.phase).toBe('error')
     expect(result.current.error).toContain('network down')
   })
+
+  // --- Stale error clearing (Fix 1) ---
+
+  it('install clears stale error from previous failure', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'none', installed: false, settingsPath: '/x' }) })
+      .mockResolvedValueOnce({ ok: false, status: 500 })  // first install fails
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'pdx', installed: true, settingsPath: '/x' }) })  // second install succeeds
+
+    const { result } = renderHook(() => useStatuslineInstall('host1'))
+    await waitFor(() => expect(result.current.state.mode).toBe('none'))
+
+    await act(async () => { await result.current.install('pdx') })
+    expect(result.current.error).not.toBeNull()
+
+    await act(async () => { await result.current.install('pdx') })
+    expect(result.current.error).toBeNull()
+    expect(result.current.state.mode).toBe('pdx')
+  })
+
+  it('remove clears stale error from previous failure', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'pdx', installed: true, settingsPath: '/x' }) })
+      .mockResolvedValueOnce({ ok: false, status: 500 })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ mode: 'none', installed: false, settingsPath: '/x' }) })
+
+    const { result } = renderHook(() => useStatuslineInstall('host1'))
+    await waitFor(() => expect(result.current.state.mode).toBe('pdx'))
+
+    await act(async () => { await result.current.remove() })
+    expect(result.current.error).not.toBeNull()
+
+    await act(async () => { await result.current.remove() })
+    expect(result.current.error).toBeNull()
+  })
 })

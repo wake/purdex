@@ -33,6 +33,7 @@ export function useStatuslineInstall(hostId: string) {
   const install = useCallback(
     async (mode: 'pdx' | 'wrap', inner?: string) => {
       setPhase('loading')
+      setError(null)
       const body = JSON.stringify({ action: 'install', mode, inner })
       try {
         const res = await hostFetch(hostId, '/api/agent/cc/statusline/setup', {
@@ -57,6 +58,7 @@ export function useStatuslineInstall(hostId: string) {
 
   const remove = useCallback(async () => {
     setPhase('loading')
+    setError(null)
     try {
       const res = await hostFetch(hostId, '/api/agent/cc/statusline/setup', {
         method: 'POST',
