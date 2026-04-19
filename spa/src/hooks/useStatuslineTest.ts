@@ -161,11 +161,13 @@ export function useStatuslineTest(hostId: string) {
       }
     })()
 
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<'timeout'>((resolve) => {
-      setTimeout(() => resolve('timeout'), OVERALL_TIMEOUT_MS)
+      timeoutId = setTimeout(() => resolve('timeout'), OVERALL_TIMEOUT_MS)
     })
 
     const outcome = await Promise.race([work.then(() => 'done' as const), timeout])
+    if (timeoutId !== undefined) clearTimeout(timeoutId)
 
     if (outcome === 'timeout' && mountedRef.current) {
       setState((s) => {
