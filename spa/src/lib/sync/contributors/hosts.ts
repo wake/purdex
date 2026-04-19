@@ -45,8 +45,18 @@ export function createHostsContributor(): SyncContributor {
       const incoming = fp.data as Record<string, unknown>
 
       if (merge.type === 'full-replace') {
+        const current = useHostStore.getState().hosts
+        const incomingHosts = (incoming.hosts ?? {}) as Record<string, Record<string, unknown>>
+        const mergedHosts: Record<string, Record<string, unknown>> = {}
+        for (const [id, host] of Object.entries(incomingHosts)) {
+          const currentToken = (current as Record<string, { token?: unknown } | undefined>)[id]?.token
+          mergedHosts[id] = {
+            ...host,
+            token: currentToken ?? null,
+          }
+        }
         useHostStore.setState({
-          hosts: incoming.hosts as ReturnType<typeof useHostStore.getState>['hosts'],
+          hosts: mergedHosts as ReturnType<typeof useHostStore.getState>['hosts'],
           hostOrder: incoming.hostOrder as string[],
           activeHostId: incoming.activeHostId as string | null,
         })
