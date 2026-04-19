@@ -349,6 +349,32 @@ describe('SyncSection pre-import snapshot', () => {
     expect(calls).toHaveLength(0)
     expect(applySpy).not.toHaveBeenCalled()
   })
+
+  it('still applies the import when pre-import snapshot fails (G1: no hard dep)', async () => {
+    useSyncStore.getState().setActiveProvider('file')
+
+    // Force createPreOperationSnapshot to throw (e.g. IDB unavailable).
+    const origCreate = useSyncStore.getState().createPreOperationSnapshot
+    useSyncStore.setState({
+      createPreOperationSnapshot: (async () => { throw new Error('IDB unavailable') }) as typeof origCreate,
+    })
+
+    const applySpy = vi.spyOn(syncActionsModule, 'applyImport').mockResolvedValue({
+      kind: 'ok',
+      appliedBundle: { version: 1, timestamp: 0, device: 'x', collections: {} },
+    })
+
+    render(<SyncSection />)
+
+    const file = new File([makeValidBundleJson()], 'bundle.purdex-sync', { type: 'application/json' })
+    const input = getFileInput()
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    fireEvent.change(input)
+
+    await waitFor(() => {
+      expect(applySpy).toHaveBeenCalled()
+    })
+  })
 })
 
 describe('SyncSection post-sync snapshot', () => {

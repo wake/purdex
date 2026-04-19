@@ -189,7 +189,15 @@ export function SyncSection() {
       const bundle = validateImportText(text)
 
       // P1: valid file → safety-net snapshot before applying the import.
-      await useSyncStore.getState().createPreOperationSnapshot('pre-import')
+      // Best-effort: if the snapshot store is unavailable (private-mode IDB,
+      // quota, etc.) we still let the import proceed rather than blocking
+      // users from loading a legitimate bundle. The import itself remains
+      // the source of truth for correctness.
+      try {
+        await useSyncStore.getState().createPreOperationSnapshot('pre-import')
+      } catch (snapErr) {
+        console.warn('pre-import snapshot failed; continuing without safety net', snapErr)
+      }
 
       const result = await applyImport({
         bundle,
