@@ -39,6 +39,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { getPlatformCapabilities } from './lib/platform'
 import type { Tab } from './types/tab'
 import { GlobalUndoToast } from './components/GlobalUndoToast'
+import { ensureSessionPristine } from './lib/sync/register-sync'
 
 // Prefetch default icon weight so WorkspaceIcon renders instantly
 prefetchWeight('bold').catch(() => {})
@@ -91,6 +92,11 @@ export default function App() {
   useEffect(() => {
     if (firstHostId) fetchConfig(firstHostId)
   }, [fetchConfig, firstHostId])
+
+  // --- Bootstrap: ensure session-pristine snapshot ---
+  useEffect(() => {
+    void ensureSessionPristine()
+  }, [])
 
   // --- Derive visible tabs for display ---
   const visibleTabIds = getVisibleTabIds({

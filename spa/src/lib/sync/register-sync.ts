@@ -36,3 +36,30 @@ export function __setEngineForTests(e: typeof syncEngine | null): void {
 export function __getActiveEngine(): typeof syncEngine {
   return _engineForTests ?? syncEngine
 }
+
+// ---------------------------------------------------------------------------
+// Session pristine bootstrap
+// ---------------------------------------------------------------------------
+
+import { getSnapshotStore } from './snapshot-store-instance'
+import { useSyncStore } from './use-sync-store'
+
+/**
+ * Ensure there is a session-pristine snapshot so the user can always return
+ * to "state at session start" regardless of how many restores they perform.
+ */
+export async function ensureSessionPristine(): Promise<void> {
+  const store = getSnapshotStore()
+  await store.init()
+  const existing = await store.listLocal()
+  if (existing.some((m) => m.isSessionPristine)) return
+
+  const engine = __getActiveEngine()
+  const state = useSyncStore.getState()
+  const device = state.clientId ?? 'unknown'
+  const enabled = state.enabledModules.length > 0
+    ? state.enabledModules
+    : engine.getContributors().map((c) => c.id)
+  const currentBundle = engine.serialize(device, enabled)
+  await store.createSnapshot(currentBundle, 'pre-restore', { isSessionPristine: true })
+}
