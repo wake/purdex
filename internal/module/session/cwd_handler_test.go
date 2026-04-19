@@ -13,15 +13,22 @@ import (
 func TestHandleSessionCwd_ReturnsCwd(t *testing.T) {
 	mod, _, fake := newTestModule(t)
 
-	fake.AddSession("code-X", "/tmp/initial")
-	fake.SetPaneCwd("code-X", "/home/user/proj")
+	// Create a real session via fake; this generates a tmux ID like "$0" and stores name "my-sess"
+	fake.AddSession("my-sess", "/initial")
+	fake.SetPaneCwd("my-sess", "/home/user/proj")
+
+	// Find the code by listing sessions — codec maps tmuxID → code
+	sessions, err := mod.ListSessions()
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	code := sessions[0].Code
 
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/sessions/code-X/cwd")
+	resp, err := http.Get(srv.URL + "/api/sessions/" + code + "/cwd")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -41,10 +48,33 @@ func TestHandleSessionCwd_NotFound(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/sessions/missing/cwd")
+	// Use a syntactically valid but non-existent code
+	resp, err := http.Get(srv.URL + "/api/sessions/nosession/cwd")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	// FakeExecutor returns an error for unset pane cwd → handler returns 500
-	assert.NotEqual(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestHandleSessionCwd_TmuxError(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+
+	fake.AddSession("my-sess", "/initial")
+	// NOT calling SetPaneCwd → PaneCurrentPath will return an error
+
+	sessions, err := mod.ListSessions()
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	code := sessions[0].Code
+
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/sessions/" + code + "/cwd")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }

@@ -10,11 +10,16 @@ import (
 // to resolve relative file paths at click time.
 func (m *SessionModule) handleSessionCwd(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
-	if code == "" {
-		http.Error(w, "missing code", http.StatusBadRequest)
+	info, err := m.GetSession(code)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cwd, err := m.tmux.PaneCurrentPath(code)
+	if info == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	cwd, err := m.tmux.PaneCurrentPath(info.Name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
