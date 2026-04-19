@@ -20,6 +20,22 @@ export function sanitizeOscTitle(raw: string): string {
   return raw.replace(/\x1b\[[\d;]*[A-Za-z]/g, '').replace(/[\x00-\x1f\x7f]/g, '').trim()
 }
 
+/**
+ * Return a new record containing every entry of `rec` except those whose key
+ * matches `shouldOmit`. Shared by `removeHost` (prefix match) and
+ * `clearHostAgentStatus` (set membership).
+ */
+function omitKeys<T>(
+  rec: Record<string, T>,
+  shouldOmit: (key: string) => boolean,
+): Record<string, T> {
+  const out: Record<string, T> = {}
+  for (const [k, v] of Object.entries(rec)) {
+    if (!shouldOmit(k)) out[k] = v
+  }
+  return out
+}
+
 /** Normalized event from backend (replaces AgentHookEvent). */
 export interface NormalizedEvent {
   agent_type: string
@@ -158,22 +174,16 @@ export const useAgentStore = create<AgentState>()(
 
       removeHost: (hostId) => set((s) => {
         const prefix = `${hostId}:`
-        const filterKeys = <T,>(record: Record<string, T>): Record<string, T> => {
-          const result: Record<string, T> = {}
-          for (const [k, v] of Object.entries(record)) {
-            if (!k.startsWith(prefix)) result[k] = v
-          }
-          return result
-        }
+        const byPrefix = (k: string) => k.startsWith(prefix)
         return {
-          statuses: filterKeys(s.statuses),
-          agentTypes: filterKeys(s.agentTypes),
-          models: filterKeys(s.models),
-          subagents: filterKeys(s.subagents),
-          lastEvents: filterKeys(s.lastEvents),
-          oscTitles: filterKeys(s.oscTitles),
-          ccStatus: filterKeys(s.ccStatus),
-          unread: filterKeys(s.unread),
+          statuses: omitKeys(s.statuses, byPrefix),
+          agentTypes: omitKeys(s.agentTypes, byPrefix),
+          models: omitKeys(s.models, byPrefix),
+          subagents: omitKeys(s.subagents, byPrefix),
+          lastEvents: omitKeys(s.lastEvents, byPrefix),
+          oscTitles: omitKeys(s.oscTitles, byPrefix),
+          ccStatus: omitKeys(s.ccStatus, byPrefix),
+          unread: omitKeys(s.unread, byPrefix),
         }
       }),
 
@@ -203,23 +213,28 @@ export const useAgentStore = create<AgentState>()(
       },
 
       /**
-       * Wipe all ccStatus + oscTitles entries for a host. Called on the
-       * `agent.status.cleared` WS event (e.g., when CC statusLine is uninstalled).
-       * Note: also clears non-CC oscTitles for the host — terminals will re-emit
-       * on their next prompt.
+       * Wipe CC statusLine state for a host: all ccStatus entries with the host's
+       * prefix, plus the oscTitles entries that were mirrored from those ccStatus
+       * snapshots (same composite keys). Non-CC oscTitles (from terminal OSC
+       * 0/2 sequences) are preserved.
+       *
+       * Called on the `agent.status.cleared` WS event, broadcast by the daemon
+       * when the CC statusLine wrapper is uninstalled.
+       *
+       * Does NOT touch statuses / agentTypes / models / subagents / unread /
+       * lastEvents — those track agent hook events, which are orthogonal to
+       * statusLine install state. Uninstalling the wrapper does not imply the
+       * CC session has ended; the hook stream may continue.
        */
       clearHostAgentStatus: (hostId) => set((s) => {
         const prefix = `${hostId}:`
-        const filterKeys = <T,>(record: Record<string, T>): Record<string, T> => {
-          const result: Record<string, T> = {}
-          for (const [k, v] of Object.entries(record)) {
-            if (!k.startsWith(prefix)) result[k] = v
-          }
-          return result
-        }
+        const ccKeysToRemove = Object.keys(s.ccStatus).filter((k) => k.startsWith(prefix))
+        if (ccKeysToRemove.length === 0) return s
+        const removeSet = new Set(ccKeysToRemove)
+        const shouldOmit = (k: string) => removeSet.has(k)
         return {
-          ccStatus: filterKeys(s.ccStatus),
-          oscTitles: filterKeys(s.oscTitles),
+          ccStatus: omitKeys(s.ccStatus, shouldOmit),
+          oscTitles: omitKeys(s.oscTitles, shouldOmit),
         }
       }),
     }),
