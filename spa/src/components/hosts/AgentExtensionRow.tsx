@@ -4,6 +4,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useStatuslineInstall } from '../../hooks/useStatuslineInstall'
 import { StatuslineConflictDialog } from './StatuslineConflictDialog'
+import { StatuslineTestPanel } from './StatuslineTestPanel'
 
 interface Props {
   hostId: string
@@ -115,6 +116,14 @@ export function AgentExtensionRow({ hostId, extensionId }: Props) {
           onWrap={handleWrap}
           onCancel={() => setShowConflict(false)}
         />
+      )}
+      {(state.mode === 'pdx' || state.mode === 'wrapped') && (
+        // Panel is only rendered when statusline is managed (pdx/wrapped).
+        // It auto-runs once per mount via its internal autoRanRef guard — so
+        // a fresh install (panel mounts as state transitions into managed)
+        // triggers one test run. Clicking Remove unmounts the panel; a
+        // subsequent re-install remounts it and runs again.
+        <StatuslineTestPanel hostId={hostId} autoRun />
       )}
     </>
   )
