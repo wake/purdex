@@ -36,7 +36,7 @@ func newTestModule(t *testing.T) *Module {
 func TestHandleEvent_StoresAndReturns(t *testing.T) {
 	m := newTestModule(t)
 
-	body := `{"tmux_session":"work","event_name":"agent:lifecycle:start","raw_event":{"session_id":"abc"}}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"agent:lifecycle:start","raw_event":{"session_id":"abc"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -85,36 +85,26 @@ func TestHandleEvent_BadJSON(t *testing.T) {
 	}
 }
 
-func TestHandleEvent_MissingTmuxSession(t *testing.T) {
+func TestHandleEvent_RejectsLegacyPayload(t *testing.T) {
 	m := newTestModule(t)
 
-	body := `{"tmux_session":"","event_name":"agent:lifecycle:stop","raw_event":{}}`
+	body := `{"tmux_session":"work","event_name":"agent:lifecycle:stop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	m.handleEvent(w, req)
 
-	// Spec: empty tmux_session is still OK (returns 200) but skips DB storage.
-	if w.Code != http.StatusOK {
-		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d (body: %s)", w.Code, w.Body.String())
 	}
 
-	var resp map[string]string
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp["status"] != "ok" {
-		t.Errorf("status field: want ok, got %s", resp["status"])
-	}
-
-	// Verify NOT stored — empty tmux_session should be skipped.
-	ev, err := m.events.Get("")
+	ev, err := m.events.Get("work")
 	if err != nil {
 		t.Fatalf("events.Get: %v", err)
 	}
 	if ev != nil {
-		t.Error("event with empty tmux_session should not be stored in DB, but was found")
+		t.Error("legacy payload should not be stored in DB")
 	}
 }
 
@@ -123,7 +113,7 @@ func TestHandleEvent_MissingTmuxSession(t *testing.T) {
 func TestHandleEvent_StoresAgentType(t *testing.T) {
 	m := newTestModule(t)
 
-	body := `{"tmux_session":"dev","event_name":"Stop","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -143,6 +133,32 @@ func TestHandleEvent_StoresAgentType(t *testing.T) {
 	}
 	if ev.AgentType != "cc" {
 		t.Errorf("agent_type: want cc, got %q", ev.AgentType)
+	}
+}
+
+func TestHandleEvent_AcceptsV2Payload_StillUsesLegacyFlow(t *testing.T) {
+	m := newTestModule(t)
+
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	ev, err := m.events.Get("dev")
+	if err != nil {
+		t.Fatalf("events.Get: %v", err)
+	}
+	if ev == nil {
+		t.Fatal("event not stored")
+	}
+	if ev.AgentType != "cc" || ev.EventName != "Stop" {
+		t.Fatalf("stored event = %+v, want legacy store flow populated", ev)
 	}
 }
 
@@ -475,7 +491,7 @@ func TestActivityWatch_YellowLightRecovery(t *testing.T) {
 	fake.SetPaneCommand("work:", "claude")
 	fake.SetPaneContent("work:", "Allow  Deny")
 
-	body := `{"tmux_session":"work","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	m.handleEvent(w, req)
@@ -588,12 +604,12 @@ func TestActivityWatch_HookEventSupersedes(t *testing.T) {
 	fake.SetPaneCommand("work:", "claude")
 	fake.SetPaneContent("work:", "Allow  Deny")
 
-	body := `{"tmux_session":"work","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	m.handleEvent(w, req)
 
-	body2 := `{"tmux_session":"work","event_name":"UserPromptSubmit","raw_event":{},"agent_type":"cc"}`
+	body2 := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"UserPromptSubmit","raw_event":{},"agent_type":"cc"}`
 	req2 := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body2))
 	w2 := httptest.NewRecorder()
 	m.handleEvent(w2, req2)

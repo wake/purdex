@@ -53,10 +53,14 @@ func (m *Module) resolveStatuslineInstaller(w http.ResponseWriter, r *http.Reque
 
 // EventRequest is the JSON body expected by POST /api/agent/event.
 type EventRequest struct {
-	TmuxSession string          `json:"tmux_session"`
-	EventName   string          `json:"event_name"`
-	RawEvent    json.RawMessage `json:"raw_event"`
-	AgentType   string          `json:"agent_type"`
+	TmuxSession     string          `json:"tmux_session"`
+	TmuxPaneID      string          `json:"tmux_pane_id"`
+	EventName       string          `json:"event_name"`
+	RawEvent        json.RawMessage `json:"raw_event"`
+	AgentType       string          `json:"agent_type"`
+	SenderPID       int             `json:"sender_pid"`
+	SenderStartTime string          `json:"sender_start_time"`
+	SenderUncertain bool            `json:"sender_uncertain"`
 }
 
 // handleEvent handles POST /api/agent/event.
@@ -68,9 +72,8 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.TmuxSession == "" {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	if req.TmuxSession == "" || req.TmuxPaneID == "" || req.AgentType == "" || req.EventName == "" || req.SenderPID == 0 || req.SenderStartTime == "" {
+		http.Error(w, `{"error":"schema_invalid"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -670,4 +673,3 @@ func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
-

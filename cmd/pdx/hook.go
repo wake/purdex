@@ -15,11 +15,28 @@ import (
 )
 
 type hookPayload struct {
-	TmuxSession string          `json:"tmux_session"`
-	EventName   string          `json:"event_name"`
-	RawEvent    json.RawMessage `json:"raw_event"`
-	AgentType   string          `json:"agent_type"`
+	TmuxSession     string          `json:"tmux_session"`
+	TmuxPaneID      string          `json:"tmux_pane_id"`
+	EventName       string          `json:"event_name"`
+	RawEvent        json.RawMessage `json:"raw_event"`
+	AgentType       string          `json:"agent_type"`
+	SenderPID       int             `json:"sender_pid"`
+	SenderStartTime string          `json:"sender_start_time"`
+	SenderUncertain bool            `json:"sender_uncertain,omitempty"`
 }
+
+type hookProvenance struct {
+	TmuxPaneID      string
+	SenderPID       int
+	SenderStartTime string
+	SenderUncertain bool
+}
+
+var queryTmuxSessionFn = queryTmuxSession
+var queryTmuxPaneIDFn = queryTmuxPaneID
+var resolveHookProvenanceFn = resolveHookProvenance
+var postHookEventFn = postHookEvent
+var loadConfigFn = config.Load
 
 // runHook is the entry point for `pdx hook <event_name>`.
 // It reads stdin, queries tmux for the session name, and POSTs to the daemon.
@@ -50,10 +67,11 @@ func runHook(args []string) {
 		os.Exit(1)
 	}
 
-	tmuxSession := queryTmuxSession()
-	payload := buildHookPayload(tmuxSession, eventName, os.Stdin, agentType)
+	tmuxSession := queryTmuxSessionFn()
+	provenance := resolveHookProvenanceFn()
+	payload := buildHookPayload(tmuxSession, eventName, os.Stdin, agentType, provenance)
 
-	cfg, err := config.Load("")
+	cfg, err := loadConfigFn("")
 	var url, token string
 	if err != nil {
 		url = "http://127.0.0.1:7860/api/agent/event"
@@ -62,7 +80,7 @@ func runHook(args []string) {
 		token = cfg.Token
 	}
 
-	_ = postHookEvent(url, token, payload)
+	_ = postHookEventFn(url, token, payload)
 }
 
 // queryTmuxSession runs `tmux display-message -p '#{session_name}'` and returns
@@ -75,18 +93,26 @@ func queryTmuxSession() string {
 	return strings.TrimRight(string(out), "\n")
 }
 
+func queryTmuxPaneID() string {
+	return os.Getenv("TMUX_PANE")
+}
+
 // buildHookPayload constructs a hookPayload from the given parameters.
 // If stdin is empty or cannot be read, raw_event defaults to {}.
-func buildHookPayload(tmuxSession, eventName string, stdin io.Reader, agentType string) hookPayload {
+func buildHookPayload(tmuxSession, eventName string, stdin io.Reader, agentType string, provenance hookProvenance) hookPayload {
 	raw, err := io.ReadAll(stdin)
 	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
 		raw = []byte("{}")
 	}
 	return hookPayload{
-		TmuxSession: tmuxSession,
-		EventName:   eventName,
-		RawEvent:    json.RawMessage(raw),
-		AgentType:   agentType,
+		TmuxSession:     tmuxSession,
+		TmuxPaneID:      provenance.TmuxPaneID,
+		EventName:       eventName,
+		RawEvent:        json.RawMessage(raw),
+		AgentType:       agentType,
+		SenderPID:       provenance.SenderPID,
+		SenderStartTime: provenance.SenderStartTime,
+		SenderUncertain: provenance.SenderUncertain,
 	}
 }
 
