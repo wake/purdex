@@ -40,6 +40,12 @@ type Module struct {
 	// because hot-path agent.status POSTs shouldn't contend with hook writes).
 	snapshotMu      sync.RWMutex
 	statusSnapshots map[string]statusSnapshot
+
+	// testObservers: per-nonce channel for the statusline self-test endpoint.
+	// Guarded by testMu (separate from snapshotMu and mu so test traffic
+	// cannot block production hook / status writes).
+	testMu        sync.Mutex
+	testObservers map[string]chan testStage
 }
 
 // New creates a new agent Module backed by the given AgentEventStore.
@@ -51,6 +57,7 @@ func New(events *store.AgentEventStore) *Module {
 		subagents:       make(map[string][]string),
 		activeWatchers:  make(map[string]string),
 		statusSnapshots: make(map[string]statusSnapshot),
+		testObservers:   make(map[string]chan testStage),
 	}
 }
 
