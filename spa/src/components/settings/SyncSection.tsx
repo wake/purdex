@@ -12,9 +12,11 @@ import { SegmentControl } from './SegmentControl'
 import { SyncConflictBanner } from './SyncConflictBanner'
 import { useSyncStore } from '../../lib/sync/use-sync-store'
 import { syncEngine } from '../../lib/sync/register-sync'
-import { createManualProvider, ImportError } from '../../lib/sync/providers/manual-provider'
+import { createManualProvider, ImportError, validateImportText } from '../../lib/sync/providers/manual-provider'
 import { createDaemonProvider } from '../../lib/sync/providers/daemon-provider'
 import { applyImport, syncNow, type SyncActionResult } from '../../lib/sync/sync-actions'
+import { equalExceptEnvelope } from '../../lib/sync/snapshot-diff'
+import { getSnapshotStore } from '../../lib/sync/snapshot-store-instance'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { pluralKey } from '../../lib/plural'
@@ -123,6 +125,9 @@ export function SyncSection() {
     const provider = createDaemonProvider(syncHostId, clientId)
     const startProvider = activeProviderId
     const startHostId = syncHostId
+    // P1: capture baseline BEFORE sync runs so we can dedup the post-sync
+    // manual snapshot against what we last synced.
+    const prevBundle = lastSyncedBundle
     const result = await syncNow({
       provider,
       clientId,
@@ -141,6 +146,12 @@ export function SyncSection() {
 
     if (result.kind === 'ok') {
       setLastSyncedBundle(result.appliedBundle)
+      // P1: create manual snapshot if bundle changed vs lastSyncedBundle (dedup).
+      // Fire-and-forget — don't block UI on snapshot creation.
+      const newBundle = result.appliedBundle
+      if (!prevBundle || !equalExceptEnvelope(prevBundle, newBundle)) {
+        void getSnapshotStore().createSnapshot(newBundle, 'manual')
+      }
     } else if (result.kind === 'conflicts') {
       setLastSyncedBundle(result.partialBaseline)
       setPendingConflicts(result.conflicts, result.remoteBundle)
@@ -174,8 +185,11 @@ export function SyncSection() {
     const startProvider = activeProviderId
     try {
       const text = await file.text()
-      const provider = createManualProvider()
-      const bundle = provider.importFromText(text)
+      // P1: validate first — if this throws, NO pre-import snapshot is created.
+      const bundle = validateImportText(text)
+
+      // P1: valid file → safety-net snapshot before applying the import.
+      await useSyncStore.getState().createPreOperationSnapshot('pre-import')
 
       const result = await applyImport({
         bundle,

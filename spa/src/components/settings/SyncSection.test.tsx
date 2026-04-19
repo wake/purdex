@@ -1,5 +1,5 @@
 // spa/src/components/settings/SyncSection.test.tsx
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { useSyncStore } from '../../lib/sync/use-sync-store'
 import { useHostStore } from '../../stores/useHostStore'
@@ -8,6 +8,9 @@ import { SettingsRouteContext } from '../SettingsPage'
 import * as syncActionsModule from '../../lib/sync/sync-actions'
 import type { SyncActionResult } from '../../lib/sync/sync-actions'
 import { syncEngine } from '../../lib/sync/register-sync'
+import { setSnapshotStore } from '../../lib/sync/snapshot-store-instance'
+import type { SnapshotStore } from '../../lib/sync/snapshot-store'
+import type { SnapshotMetadata, SnapshotTrigger } from '../../lib/sync/snapshot-types'
 import type { SyncBundle, ConflictItem } from '../../lib/sync/types'
 
 function resetStores() {
@@ -219,5 +222,215 @@ describe('SyncSection subsection routing', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /history/i }))
     expect(fn).toHaveBeenCalledWith('history')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// T23: pre-import + post-sync snapshot wiring
+// ---------------------------------------------------------------------------
+
+interface SnapshotCall {
+  bundle: SyncBundle
+  trigger: SnapshotTrigger
+}
+
+/** Build a stub SnapshotStore that records all createSnapshot calls. */
+function installSnapshotSpy(): SnapshotCall[] {
+  const calls: SnapshotCall[] = []
+  const stub: SnapshotStore = {
+    init: async () => {},
+    listLocal: async () => [],
+    getLocal: async () => null,
+    createSnapshot: async (bundle, trigger, opts) => {
+      calls.push({ bundle, trigger })
+      const meta: SnapshotMetadata = {
+        id: `snap_${calls.length}`,
+        timestamp: Date.now(),
+        device: bundle.device,
+        trigger,
+        bundleSize: 0,
+        contributorIds: Object.keys(bundle.collections),
+        isSessionPristine: opts?.isSessionPristine ?? false,
+      }
+      return meta
+    },
+    deleteLocal: async () => {},
+    compact: async () => ({ kept: [], evicted: [] }),
+    clear: async () => {},
+  }
+  setSnapshotStore(stub)
+  return calls
+}
+
+function getFileInput(): HTMLInputElement {
+  const el = document.querySelector('input[type="file"]')
+  if (!el) throw new Error('file input not found')
+  return el as HTMLInputElement
+}
+
+function makeValidBundleJson(overrides?: Partial<SyncBundle>): string {
+  const bundle: SyncBundle = {
+    version: 1,
+    timestamp: 1_000,
+    device: 'import-src',
+    collections: {},
+    ...overrides,
+  }
+  return JSON.stringify(bundle)
+}
+
+describe('SyncSection pre-import snapshot', () => {
+  beforeEach(() => {
+    resetStores()
+    vi.restoreAllMocks()
+  })
+  afterEach(() => {
+    setSnapshotStore(null)
+  })
+
+  it('calls createPreOperationSnapshot before applyImport when valid JSON file chosen', async () => {
+    const calls = installSnapshotSpy()
+    useSyncStore.getState().setActiveProvider('file')
+
+    // Track relative order of snapshot vs applyImport.
+    const applyOrder: string[] = []
+    const origCreate = useSyncStore.getState().createPreOperationSnapshot
+    const wrapped: typeof origCreate = async (trigger) => {
+      applyOrder.push(`snapshot:${trigger}`)
+      return origCreate(trigger)
+    }
+    useSyncStore.setState({ createPreOperationSnapshot: wrapped })
+
+    vi.spyOn(syncActionsModule, 'applyImport').mockImplementation(async ({ bundle }) => {
+      applyOrder.push('applyImport')
+      return { kind: 'ok', appliedBundle: bundle }
+    })
+
+    render(<SyncSection />)
+
+    const file = new File([makeValidBundleJson()], 'bundle.purdex-sync', { type: 'application/json' })
+    const input = getFileInput()
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    fireEvent.change(input)
+
+    await waitFor(() => {
+      expect(calls.length).toBe(1)
+    })
+    expect(calls[0].trigger).toBe('pre-import')
+    // Snapshot must precede applyImport in the recorded order.
+    const snapIdx = applyOrder.indexOf('snapshot:pre-import')
+    const applyIdx = applyOrder.indexOf('applyImport')
+    expect(snapIdx).toBeGreaterThanOrEqual(0)
+    expect(applyIdx).toBeGreaterThan(snapIdx)
+  })
+
+  it('does NOT create pre-import snapshot for invalid JSON', async () => {
+    const calls = installSnapshotSpy()
+    useSyncStore.getState().setActiveProvider('file')
+
+    const applySpy = vi
+      .spyOn(syncActionsModule, 'applyImport')
+      .mockResolvedValue({ kind: 'ok', appliedBundle: { version: 1, timestamp: 0, device: 'x', collections: {} } })
+
+    render(<SyncSection />)
+
+    const file = new File(['not-json{'], 'broken.purdex-sync', { type: 'application/json' })
+    const input = getFileInput()
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    fireEvent.change(input)
+
+    // Wait for error path to settle (busy flips back off).
+    await waitFor(() => {
+      expect(useSyncStore.getState()).toBeTruthy()
+    })
+    // Small tick for async error path to finish.
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(calls).toHaveLength(0)
+    expect(applySpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('SyncSection post-sync snapshot', () => {
+  beforeEach(() => {
+    resetStores()
+    vi.restoreAllMocks()
+  })
+  afterEach(() => {
+    setSnapshotStore(null)
+  })
+
+  it('creates manual snapshot when syncNow succeeds with changed bundle', async () => {
+    const calls = installSnapshotSpy()
+    useSyncStore.getState().setActiveProvider('daemon')
+    useSyncStore.getState().setSyncHostId('h1')
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1', name: 'mini', ip: '127.0.0.1', port: 7860 } as never },
+      hostOrder: ['h1'],
+    })
+
+    const bundleA: SyncBundle = {
+      version: 1,
+      timestamp: 1000,
+      device: 'A',
+      collections: { prefs: { version: 1, data: { theme: 'light' } } },
+    }
+    const bundleB: SyncBundle = {
+      version: 1,
+      timestamp: 2000,
+      device: 'A',
+      collections: { prefs: { version: 1, data: { theme: 'dark' } } },
+    }
+    useSyncStore.setState({ lastSyncedBundle: bundleA })
+
+    vi.spyOn(syncActionsModule, 'syncNow').mockResolvedValue({ kind: 'ok', appliedBundle: bundleB })
+
+    render(<SyncSection />)
+    fireEvent.click(screen.getByRole('button', { name: /Sync Now|立即同步/i }))
+
+    await waitFor(() => {
+      expect(calls.length).toBe(1)
+    })
+    expect(calls[0].trigger).toBe('manual')
+    expect(calls[0].bundle).toEqual(bundleB)
+  })
+
+  it('skips snapshot when returned bundle is equalExceptEnvelope to lastSyncedBundle', async () => {
+    const calls = installSnapshotSpy()
+    useSyncStore.getState().setActiveProvider('daemon')
+    useSyncStore.getState().setSyncHostId('h1')
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1', name: 'mini', ip: '127.0.0.1', port: 7860 } as never },
+      hostOrder: ['h1'],
+    })
+
+    const bundleA: SyncBundle = {
+      version: 1,
+      timestamp: 1000,
+      device: 'A',
+      collections: { prefs: { version: 1, data: { theme: 'light' } } },
+    }
+    // Same collections, different envelope fields (timestamp + device).
+    const bundleAPrime: SyncBundle = {
+      version: 1,
+      timestamp: 9999,
+      device: 'B',
+      collections: { prefs: { version: 1, data: { theme: 'light' } } },
+    }
+    useSyncStore.setState({ lastSyncedBundle: bundleA })
+
+    vi.spyOn(syncActionsModule, 'syncNow').mockResolvedValue({ kind: 'ok', appliedBundle: bundleAPrime })
+
+    render(<SyncSection />)
+    fireEvent.click(screen.getByRole('button', { name: /Sync Now|立即同步/i }))
+
+    // Wait for syncNow to complete (lastSyncedBundle updates).
+    await waitFor(() => {
+      expect(useSyncStore.getState().lastSyncedBundle).toEqual(bundleAPrime)
+    })
+    // Give fire-and-forget a tick in case it was queued.
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(calls).toHaveLength(0)
   })
 })
