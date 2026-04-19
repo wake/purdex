@@ -46,6 +46,14 @@ const INITIAL: StatuslineTestState = {
 // proxy subprocess is slow to spawn.
 const OVERALL_TIMEOUT_MS = 8000
 
+// After SSE completes, wait this long for the WS-delivered agent.status to
+// reach the dispatcher. SSE and WS travel over separate sockets, so the server
+// can finish signalling stage 3 + done before the broadcast message traverses
+// the WS writer pump → network → browser → dispatcher. Without this grace
+// window the bus subscriber gets torn down prematurely and stages 4/5 spin
+// forever.
+const STAGE4_GRACE_MS = 2000
+
 type StageNum = 1 | 2 | 3 | 4 | 5
 
 interface ServerStageEvent {
@@ -88,12 +96,31 @@ export function useStatuslineTest(hostId: string) {
     let unsubBus: (() => void) | null = null
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
 
+    // stage4Signal resolves when the bus subscriber fires (or the early-hit
+    // fallback catches a pre-subscribe store entry). The post-SSE grace block
+    // races this against STAGE4_GRACE_MS; if the timeout wins we know the WS
+    // event is missing and can fail stage 4 with a real error instead of
+    // leaving a permanent spinner.
+    let stage4Resolver: (() => void) | null = null
+    const stage4Signal = new Promise<void>((resolve) => { stage4Resolver = resolve })
+    let stage4Awaiting = false
+    const fireStage4 = () => {
+      stage4Awaiting = false
+      const r = stage4Resolver
+      stage4Resolver = null
+      r?.()
+    }
+
     const markStage = (n: StageNum, patch: StageState) => {
       if (!mountedRef.current) return
       setState((s) => ({ ...s, stages: { ...s.stages, [n]: patch } }))
     }
 
     const markFailThenSkipRest = (failedAt: StageNum, reason: string) => {
+      // Any failure short-circuits the rest of the pipeline — suppress the
+      // post-SSE stage-4 grace wait so we don't hang waiting for a bus event
+      // that will never come.
+      stage4Awaiting = false
       if (!mountedRef.current) return
       setState((s) => {
         const next = { ...s.stages }
@@ -146,6 +173,7 @@ export function useStatuslineTest(hostId: string) {
               if (useAgentStore.getState().ccStatus[key]) {
                 markStage(5, { status: 'passed' })
               }
+              fireStage4()
             })
             // If the dispatcher already fired (setCcStatus + emit) before we
             // subscribed — possible because the WS broadcast can race the SSE
@@ -156,12 +184,18 @@ export function useStatuslineTest(hostId: string) {
             if (useAgentStore.getState().ccStatus[earlyKey]) {
               markStage(4, { status: 'passed' })
               markStage(5, { status: 'passed' })
+              fireStage4()
             }
           } else if (n === 2) {
             setState((s) => s.stages[3].status === 'untested'
               ? { ...s, stages: { ...s.stages, 3: { status: 'running' } } }
               : s)
           } else if (n === 3) {
+            // Only opt in to the post-SSE grace wait if stage 4 hasn't
+            // already fired via early-hit / racing bus event — otherwise
+            // we'd block on a signal that already resolved to no-op and
+            // waste the grace window.
+            if (stage4Resolver !== null) stage4Awaiting = true
             setState((s) => {
               const next = { ...s.stages }
               if (next[4].status === 'untested') next[4] = { status: 'running' }
@@ -203,6 +237,30 @@ export function useStatuslineTest(hostId: string) {
         }
         return { ...s, stages: next }
       })
+    }
+
+    // SSE finished cleanly but stage 4 is still pending → give the WS a
+    // grace window, otherwise the spinner for stages 4/5 would hang forever.
+    if (outcome === 'done' && mountedRef.current && stage4Awaiting) {
+      let graceId: ReturnType<typeof setTimeout> | undefined
+      const graceTimeout = new Promise<'grace-timeout'>((resolve) => {
+        graceId = setTimeout(() => resolve('grace-timeout'), STAGE4_GRACE_MS)
+      })
+      const graceOutcome = await Promise.race([
+        stage4Signal.then(() => 'fired' as const),
+        graceTimeout,
+      ])
+      if (graceId !== undefined) clearTimeout(graceId)
+      if (graceOutcome === 'grace-timeout' && mountedRef.current) {
+        // Detach the bus before marking failure so a late-arriving WS event
+        // can't overwrite the failed state.
+        unsubBus?.()
+        unsubBus = null
+        markFailThenSkipRest(
+          4,
+          `WS event not received within ${STAGE4_GRACE_MS}ms after stream completed`,
+        )
+      }
     }
 
     unsubBus?.()
