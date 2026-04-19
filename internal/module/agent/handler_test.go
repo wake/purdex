@@ -30,6 +30,9 @@ func newTestModule(t *testing.T) *Module {
 	t.Cleanup(func() { events.Close() })
 	m := New(events)
 	m.registry = agentpkg.NewRegistry()
+	origVerify := verifyEventFn
+	verifyEventFn = func(*Module, EventRequest) verifyDecision { return verifyDecision{Accepted: true} }
+	t.Cleanup(func() { verifyEventFn = origVerify })
 	return m
 }
 
@@ -162,8 +165,10 @@ func TestHandleEvent_AcceptsV2Payload_StillUsesLegacyFlow(t *testing.T) {
 	}
 }
 
-func TestHandleEvent_AcceptsUncertainV2Payload_WithoutStartTime(t *testing.T) {
+func TestHandleEvent_RejectsUncertainV2Payload_WhenVerifyEnabled(t *testing.T) {
 	m := newTestModule(t)
+	verifyEventFn = defaultVerifyEvent
+	m.tmux = tmux.NewFakeExecutor()
 
 	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_uncertain":true,"event_name":"Stop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
@@ -172,16 +177,49 @@ func TestHandleEvent_AcceptsUncertainV2Payload_WithoutStartTime(t *testing.T) {
 
 	m.handleEvent(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status: want 202, got %d (body: %s)", w.Code, w.Body.String())
 	}
 
 	ev, err := m.events.Get("dev")
 	if err != nil {
 		t.Fatalf("events.Get: %v", err)
 	}
+	if ev != nil {
+		t.Fatal("uncertain payload should not be stored after verify")
+	}
+}
+
+func TestHandleEvent_RejectedHookDoesNotOverwriteSession(t *testing.T) {
+	m := newTestModule(t)
+	verifyEventFn = func(*Module, EventRequest) verifyDecision {
+		return verifyDecision{Reason: "identify_mismatch"}
+	}
+
+	if err := m.events.Set("work", "Stop", json.RawMessage(`{}`), "cc", 1); err != nil {
+		t.Fatalf("seed event: %v", err)
+	}
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"codex"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status: want 202, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	ev, err := m.events.Get("work")
+	if err != nil {
+		t.Fatalf("events.Get: %v", err)
+	}
 	if ev == nil {
-		t.Fatal("event not stored")
+		t.Fatal("seeded event disappeared")
+	}
+	if ev.AgentType != "cc" {
+		t.Fatalf("agent_type = %q, want cc", ev.AgentType)
 	}
 }
 

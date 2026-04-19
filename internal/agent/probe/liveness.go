@@ -1,9 +1,15 @@
 package probe
 
 import (
+	"fmt"
+	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
+
+	agentpkg "github.com/wake/purdex/internal/agent"
 )
 
 var defaultShells = map[string]bool{
@@ -167,4 +173,35 @@ func baseCommand(cmd string) string {
 		return cmd[idx+1:]
 	}
 	return cmd
+}
+
+func IsPidAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
+}
+
+func ProcessStartTime(pid int) (string, error) {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "lstart=").Output()
+	if err != nil {
+		return "", fmt.Errorf("read start time for pid %d: %w", pid, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func PidAncestorIncludes(pid int, ancestor int) bool {
+	current := pid
+	for current > 1 {
+		if current == ancestor {
+			return true
+		}
+		info, err := agentpkg.ReadProcessInfo(current)
+		if err != nil {
+			return false
+		}
+		if info.PPID <= 0 || info.PPID == current {
+			return false
+		}
+		current = info.PPID
+	}
+	return false
 }

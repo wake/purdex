@@ -18,6 +18,7 @@ import (
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // Module is the agent hook event module.
@@ -29,6 +30,7 @@ type Module struct {
 	uploadDir string
 
 	prober *probe.Prober
+	tmux   tmux.Executor
 
 	mu             sync.Mutex
 	currentStatus  map[string]agentpkg.Status
@@ -90,6 +92,7 @@ func (m *Module) Init(c *core.Core) error {
 	}
 
 	// Prober (shared across all providers)
+	m.tmux = c.Tmux
 	m.prober = probe.New(c.Tmux)
 	m.prober.RegisterProcessNames("cc", c.Cfg.Detect.CCCommands)
 	m.prober.RegisterContentMatcher("cc", agentcc.NewContentMatcher())

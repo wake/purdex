@@ -82,6 +82,11 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if decision := verifyEventFn(m, req); !decision.Accepted {
+		writeVerifyRejected(w, req, decision.Reason)
+		return
+	}
+
 	broadcastTs := time.Now().UnixNano()
 
 	// Find provider
