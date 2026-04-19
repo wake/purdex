@@ -114,7 +114,12 @@ export function InlineTab({
       <span data-testid="inline-tab-title" className="flex-1 truncate">
         {displayTitle}
       </span>
-      <HoverTooltip placement="top" data-testid="inline-tab-tooltip">
+      {/*
+        placement=right mirrors ActivityBarNarrow's pattern — the sidebar is an
+        overflow-y-auto scroll container, so a top-anchored tooltip can be
+        clipped near the edge. Right escapes into the main content area.
+      */}
+      <HoverTooltip placement="right" data-testid="inline-tab-tooltip">
         {displayTitle}
       </HoverTooltip>
       {isHostOffline && (

@@ -313,6 +313,25 @@ describe('InlineTab — statusline display', () => {
     const tooltip = screen.getByTestId('inline-tab-tooltip')
     expect(tooltip.textContent).toBe('my-feature - work')
   })
+
+  it('uses placement=right for tooltip (escapes sidebar overflow-y-auto clipping)', () => {
+    render(
+      <InlineTab
+        tab={baseTab}
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    const tooltip = screen.getByTestId('inline-tab-tooltip')
+    // placement=right uses left-full (mirrors ActivityBarNarrow pattern).
+    // placement=top would use bottom-full, which can be clipped by the sidebar's
+    // vertical scroll container near the top edge.
+    expect(tooltip.className).toContain('left-full')
+    expect(tooltip.className).not.toContain('bottom-full')
+  })
 })
 
 describe('InlineTab — pointer down (dnd-kit integration)', () => {

@@ -20,6 +20,7 @@ export function HoverTooltip({ children, placement = 'right', 'data-testid': tes
   const pos = PLACEMENTS[placement]
   return (
     <span
+      role="tooltip"
       data-testid={testId}
       className={`pointer-events-none absolute ${pos} whitespace-nowrap rounded bg-surface-secondary border border-border-default px-2 py-1 text-xs text-text-primary shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-50`}
     >

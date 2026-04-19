@@ -20,11 +20,13 @@ beforeEach(() => {
 })
 
 describe('dispatchAgentWsEvent', () => {
-  it('agent.status event calls setCcStatus with parsed value', () => {
-    const payload = { session_name: 'abc', model: { display_name: 'Sonnet' } }
-    dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: JSON.stringify(payload) })
+  it('agent.status event unwraps {agent_type,status} wire shape and stores inner status', () => {
+    const status = { session_name: 'abc', model: { display_name: 'Sonnet' } }
+    const wire = { agent_type: 'cc', status }
+    dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: JSON.stringify(wire) })
     const entry = useAgentStore.getState().ccStatus[`${H}:dev`]
-    expect(entry?.raw).toEqual(payload)
+    // The store should hold the INNER status object, not the outer wrapper.
+    expect(entry?.raw).toEqual(status)
   })
 
   it('agent.status with malformed value is silently ignored', () => {
@@ -37,6 +39,24 @@ describe('dispatchAgentWsEvent', () => {
     dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: '123' })
     dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: '[1,2,3]' })
     dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: '"bare"' })
+    expect(useAgentStore.getState().ccStatus[`${H}:dev`]).toBeUndefined()
+  })
+
+  it('ignores agent.status with non-"cc" agent_type', () => {
+    const wire = { agent_type: 'codex', status: { session_name: 'abc' } }
+    dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: JSON.stringify(wire) })
+    expect(useAgentStore.getState().ccStatus[`${H}:dev`]).toBeUndefined()
+  })
+
+  it('ignores agent.status with missing status field', () => {
+    const wire = { agent_type: 'cc' }
+    dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: JSON.stringify(wire) })
+    expect(useAgentStore.getState().ccStatus[`${H}:dev`]).toBeUndefined()
+  })
+
+  it('ignores agent.status with non-object status field', () => {
+    const wire = { agent_type: 'cc', status: 'not-an-object' }
+    dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: JSON.stringify(wire) })
     expect(useAgentStore.getState().ccStatus[`${H}:dev`]).toBeUndefined()
   })
 

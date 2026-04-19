@@ -44,4 +44,13 @@ describe('HoverTooltip', () => {
     expect(el.className).toMatch(/\bgroup-hover:opacity-100\b/)
     expect(el.className).toMatch(/\btransition-opacity\b/)
   })
+
+  it('has role="tooltip" for screen readers', () => {
+    render(
+      <div className="relative group">
+        <HoverTooltip>a11y</HoverTooltip>
+      </div>
+    )
+    expect(screen.getByText('a11y').getAttribute('role')).toBe('tooltip')
+  })
 })
