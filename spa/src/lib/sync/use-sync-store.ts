@@ -213,7 +213,6 @@ export const useSyncStore = create<SyncStoreState>()(
         return meta.id
       },
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       restoreFromSnapshot: async (snapshot, _source, options = {}) => {
         const engine = __getActiveEngine()
         const contribs = new Map(engine.getContributors().map((c) => [c.id, c]))

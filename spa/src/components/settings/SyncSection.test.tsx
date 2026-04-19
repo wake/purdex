@@ -354,9 +354,10 @@ describe('SyncSection pre-import snapshot', () => {
     useSyncStore.getState().setActiveProvider('file')
 
     // Force createPreOperationSnapshot to throw (e.g. IDB unavailable).
-    const origCreate = useSyncStore.getState().createPreOperationSnapshot
     useSyncStore.setState({
-      createPreOperationSnapshot: (async () => { throw new Error('IDB unavailable') }) as typeof origCreate,
+      createPreOperationSnapshot: async () => {
+        throw new Error('IDB unavailable')
+      },
     })
 
     const applySpy = vi.spyOn(syncActionsModule, 'applyImport').mockResolvedValue({
