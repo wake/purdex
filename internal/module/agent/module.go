@@ -46,6 +46,10 @@ type Module struct {
 	// cannot block production hook / status writes).
 	testMu        sync.Mutex
 	testObservers map[string]chan testStage
+
+	// testSpawnProxy is a test seam; production leaves this nil so the handler
+	// falls back to defaultSpawnTestProxy which execs the real pdx binary.
+	testSpawnProxy func(nonce string) error
 }
 
 // New creates a new agent Module backed by the given AgentEventStore.
@@ -129,6 +133,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/hooks/{agent}/setup", m.handleHookSetup)
 	mux.HandleFunc("GET /api/agent/{agent}/statusline/status", m.handleStatuslineStatus)
 	mux.HandleFunc("POST /api/agent/{agent}/statusline/setup", m.handleStatuslineSetup)
+	mux.HandleFunc("POST /api/agent/cc/statusline/test", m.handleStatuslineTest)
 	mux.HandleFunc("POST /api/agent/status", m.handleAgentStatus)
 	mux.HandleFunc("POST /api/agent/check-alive/{session}", m.handleCheckAlive)
 	mux.HandleFunc("GET /api/agents/detect", m.handleDetect)
