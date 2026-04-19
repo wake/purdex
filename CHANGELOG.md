@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.189] - 2026-04-19
+
+### Fix(agent): probe wrapped descendants with bounded cache (#484)
+
+- **Wrapped agent liveness**: `probe.IsAliveFor()` 保留前景 command 與 direct-child 快路徑，之後補上 recursive descendant 偵測，修正 `shell -> node -> codex` 這類包裝程序被誤判成 dead 的問題。
+- **Bounded cache**: descendant 結果快取現在綁定 tmux target、pane PID、direct-child snapshot，並加上短 TTL；同 target 換 pane、grandchild 變動或 cache 過期都會重查，避免把 stale alive/dead 判斷釘住。
+- **Probe-local capability**: recursive descendant 查詢改為 probe 內部的 optional capability，不再把 `PaneDescendantCommands` 掛進全域 `tmux.Executor` 介面。
+- **Tests**: 新增 wrapped descendant、TTL 內命中、TTL 後 grandchild 變動、pane PID 變更等 probe regression tests；`go test ./internal/agent/probe ./internal/tmux ./internal/module/agent` 通過。
+
 ## [1.0.0-alpha.188] - 2026-04-19
 
 ### Feat(spa): Extensions sub-row status icon (#480, PR #482)
