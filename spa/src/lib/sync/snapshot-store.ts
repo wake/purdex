@@ -43,8 +43,11 @@ export function createSnapshotStore(dbName = 'purdex-sync'): SnapshotStore {
     },
 
     async listLocal() {
-      // Implemented in Task 6
-      throw new Error('not implemented')
+      const db = await dbPromise
+      const all = await db.getAll(STORE) as StoredSnapshot[]
+      return all
+        .map(({ bundle: _bundle, ...meta }) => meta as SnapshotMetadata)
+        .sort((a, b) => b.timestamp - a.timestamp)
     },
 
     async getLocal(id) {

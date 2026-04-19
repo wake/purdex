@@ -44,3 +44,43 @@ describe('SnapshotStore.createSnapshot + getLocal', () => {
     expect(meta.isSessionPristine).toBe(true)
   })
 })
+
+describe('SnapshotStore.listLocal', () => {
+  beforeEach(async () => {
+    await closeAllIDB()
+    indexedDB.deleteDatabase('purdex-sync-test')
+  })
+
+  it('returns metadata only (no bundle) sorted newest first', async () => {
+    const store = createSnapshotStore('purdex-sync-test')
+    await store.init()
+
+    const a = await store.createSnapshot(bundle('a'), 'manual')
+    await new Promise((r) => setTimeout(r, 5))
+    const b = await store.createSnapshot(bundle('b'), 'manual')
+
+    const list = await store.listLocal()
+    expect(list).toHaveLength(2)
+    expect(list[0].id).toBe(b.id)
+    expect(list[1].id).toBe(a.id)
+    // bundle 不應該在 metadata 裡
+    expect((list[0] as Record<string, unknown>).bundle).toBeUndefined()
+  })
+
+  it('deleteLocal removes one', async () => {
+    const store = createSnapshotStore('purdex-sync-test')
+    await store.init()
+    const m = await store.createSnapshot(bundle(), 'manual')
+    await store.deleteLocal(m.id)
+    expect(await store.getLocal(m.id)).toBeNull()
+  })
+
+  it('clear empties store', async () => {
+    const store = createSnapshotStore('purdex-sync-test')
+    await store.init()
+    await store.createSnapshot(bundle(), 'manual')
+    await store.createSnapshot(bundle(), 'manual')
+    await store.clear()
+    expect(await store.listLocal()).toHaveLength(0)
+  })
+})
