@@ -8,6 +8,7 @@ import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 export type AgentStatus = 'running' | 'waiting' | 'idle' | 'error'
 export type TabIndicatorStyle = 'icon' | 'dot' | 'iconDot' | 'badge'
 export type CcIconVariant = 'bot' | 'star'
+export type CodexIconVariant = 'openai' | 'codex'
 
 /**
  * OSC 0/2 payloads are technically free-form — agents / shells occasionally
@@ -67,6 +68,7 @@ interface AgentState {
   unread: Record<string, boolean>
   tabIndicatorStyle: TabIndicatorStyle
   ccIconVariant: CcIconVariant
+  codexIconVariant: CodexIconVariant
   showOscTitle: boolean  // use OSC 0/2 as tab label when available
 
   // Actions
@@ -76,6 +78,7 @@ interface AgentState {
   removeHost: (hostId: string) => void
   setTabIndicatorStyle: (style: TabIndicatorStyle) => void
   setCcIconVariant: (variant: CcIconVariant) => void
+  setCodexIconVariant: (variant: CodexIconVariant) => void
   setShowOscTitle: (show: boolean) => void
   setOscTitle: (hostId: string, sessionCode: string, title: string) => void
   setCcStatus: (hostId: string, sessionCode: string, raw: Record<string, unknown>) => void
@@ -95,6 +98,7 @@ export const useAgentStore = create<AgentState>()(
       unread: {},
       tabIndicatorStyle: 'badge' as TabIndicatorStyle,
       ccIconVariant: 'bot' as CcIconVariant,
+      codexIconVariant: 'openai' as CodexIconVariant,
       showOscTitle: false,
 
       clearSession: (hostId, sessionCode) => {
@@ -189,6 +193,7 @@ export const useAgentStore = create<AgentState>()(
 
       setTabIndicatorStyle: (style) => set({ tabIndicatorStyle: style }),
       setCcIconVariant: (variant) => set({ ccIconVariant: variant }),
+      setCodexIconVariant: (variant) => set({ codexIconVariant: variant }),
       setShowOscTitle: (show) => set({ showOscTitle: show }),
       setOscTitle: (hostId, sessionCode, title) => set((s) => {
         const key = compositeKey(hostId, sessionCode)
@@ -241,10 +246,11 @@ export const useAgentStore = create<AgentState>()(
     {
       name: STORAGE_KEYS.AGENT,
       storage: purdexStorage,
-      version: 4,
+      version: 5,
       partialize: (state) => ({
         tabIndicatorStyle: state.tabIndicatorStyle,
         ccIconVariant: state.ccIconVariant,
+        codexIconVariant: state.codexIconVariant,
         showOscTitle: state.showOscTitle,
       }),
     },
