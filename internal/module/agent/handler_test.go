@@ -856,6 +856,74 @@ func TestSendStatuslineSnapshot_ReplaysToSubscriber(t *testing.T) {
 	}
 }
 
+// --- Task 3 (#481): statusline self-test nonce detection in handleAgentStatus ---
+
+// handlerTestEnv bundles a Module wired with a usable core.Core.  Used by the
+// statusline self-test nonce tests: handleAgentStatus's test-nonce branch
+// bypasses resolveSessionCode but still calls core.Events.Broadcast, so core
+// must be non-nil.  No session provider is needed for the test-nonce path.
+type handlerTestEnv struct {
+	module *Module
+}
+
+func newHandlerTestEnv(t *testing.T) *handlerTestEnv {
+	t.Helper()
+	m := newTestModule(t)
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: tmux.NewFakeExecutor()}
+	return &handlerTestEnv{module: m}
+}
+
+func TestHandleAgentStatusTestNonceSignalsAndBroadcasts(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	nonce := "__pdx_test_0123abcd"
+	ch := env.module.registerTestObserver(nonce)
+	defer env.module.deregisterTestObserver(nonce)
+
+	body := `{"tmux_session":"` + nonce + `","agent_type":"cc","raw_status":{"model":{"display_name":"pipeline-test"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/status", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	env.module.handleAgentStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", w.Code)
+	}
+
+	// Drain stage 2 then stage 3 within a short window.
+	got := make([]testStage, 0, 2)
+	deadline := time.After(500 * time.Millisecond)
+loop:
+	for len(got) < 2 {
+		select {
+		case s := <-ch:
+			got = append(got, s)
+		case <-deadline:
+			break loop
+		}
+	}
+	if len(got) != 2 || got[0] != testStageReceived || got[1] != testStageBroadcast {
+		t.Fatalf("stage sequence = %v, want [received broadcast]", got)
+	}
+
+	// Snapshot map must NOT hold the test nonce (display map is real sessions only).
+	env.module.snapshotMu.RLock()
+	_, persisted := env.module.statusSnapshots[nonce]
+	env.module.snapshotMu.RUnlock()
+	if persisted {
+		t.Fatal("test nonce leaked into statusSnapshots")
+	}
+}
+
+func TestHandleAgentStatusTestNonceWithoutObserverIsSilent(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	body := `{"tmux_session":"__pdx_test_deadbeef","agent_type":"cc","raw_status":{}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/status", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	env.module.handleAgentStatus(w, req) // must not panic, must return 200
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", w.Code)
+	}
+}
+
 func TestHandleStatuslineSetup_RemoveBroadcastsCleared(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
