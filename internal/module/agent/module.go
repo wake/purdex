@@ -53,6 +53,9 @@ type Module struct {
 	// testSpawnProxy is a test seam; production leaves this nil so the handler
 	// falls back to defaultSpawnTestProxy which execs the real pdx binary.
 	testSpawnProxy func(nonce string) error
+
+	sweepCancel context.CancelFunc
+	sweepWG     sync.WaitGroup
 }
 
 // New creates a new agent Module backed by the given AgentEventStore.
@@ -162,12 +165,14 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 // Start replays DB state and registers OnSubscribe callback.
 func (m *Module) Start(_ context.Context) error {
 	m.replayFromDB()
+	m.startSweep()
 
-	m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
-		m.sendSnapshot(sub)
-		m.sendStatuslineSnapshot(sub)
-		go m.checkAliveAll(sub)
-	})
+	if m.core != nil {
+		m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
+			m.sendSnapshot(sub)
+			m.sendStatuslineSnapshot(sub)
+		})
+	}
 
 	log.Println("[agent] hook event endpoint registered")
 	return nil
@@ -182,6 +187,11 @@ func (m *Module) getUploadDir() string {
 
 // Stop cancels all active Activity watchers and resets transient state.
 func (m *Module) Stop(_ context.Context) error {
+	if m.sweepCancel != nil {
+		m.sweepCancel()
+		m.sweepWG.Wait()
+		m.sweepCancel = nil
+	}
 	if m.prober != nil {
 		m.prober.StopAllWatches()
 	}
