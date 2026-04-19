@@ -2,6 +2,8 @@ package codex
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"strings"
 
 	"github.com/wake/purdex/internal/agent"
 )
@@ -21,6 +23,17 @@ func (p *Provider) Claim(ctx agent.ClaimContext) bool {
 		return ctx.HookEvent.AgentType == "codex"
 	}
 	return ctx.ProcessName == "codex"
+}
+
+func (p *Provider) Identify(proc agent.ProcessInfo) bool {
+	exeName := strings.ToLower(filepath.Base(proc.ExePath))
+	if exeName == "codex" {
+		return true
+	}
+	if !agent.IsJSRuntime(exeName) {
+		return false
+	}
+	return agent.ArgvContainsFragment(proc.Argv, "@openai/codex", "/codex/", "/codex-cli/", "codex/dist/cli.js")
 }
 
 func (p *Provider) DeriveStatus(eventName string, rawEvent json.RawMessage) agent.DeriveResult {

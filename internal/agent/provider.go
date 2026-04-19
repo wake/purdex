@@ -8,6 +8,7 @@ type AgentProvider interface {
 	DisplayName() string
 	IconHint() string
 	Claim(ctx ClaimContext) bool
+	Identify(proc ProcessInfo) bool
 	DeriveStatus(eventName string, rawEvent json.RawMessage) DeriveResult
 	IsAlive(tmuxTarget string) bool
 }

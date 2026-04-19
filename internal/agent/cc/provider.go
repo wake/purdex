@@ -2,6 +2,8 @@ package cc
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/wake/purdex/internal/agent"
@@ -39,6 +41,17 @@ func (p *Provider) Claim(ctx agent.ClaimContext) bool {
 		return false
 	}
 	return p.prober.IsAliveFor("cc", ctx.TmuxTarget)
+}
+
+func (p *Provider) Identify(proc agent.ProcessInfo) bool {
+	exeName := strings.ToLower(filepath.Base(proc.ExePath))
+	if p.isConfiguredCommand(exeName) {
+		return true
+	}
+	if isJSRuntimeProcess(exeName, proc.Argv) {
+		return true
+	}
+	return false
 }
 
 func (p *Provider) DeriveStatus(eventName string, rawEvent json.RawMessage) agent.DeriveResult {
@@ -88,4 +101,35 @@ func (p *Provider) RemoveStatusline() error {
 		return err
 	}
 	return removeStatusline(path)
+}
+
+func (p *Provider) isConfiguredCommand(exeName string) bool {
+	if exeName == "" {
+		return false
+	}
+	if exeName == "claude" {
+		return true
+	}
+	if p.cfg == nil || p.cfgMu == nil {
+		return false
+	}
+	p.cfgMu.RLock()
+	defer p.cfgMu.RUnlock()
+	for _, cmd := range p.cfg.Detect.CCCommands {
+		if strings.EqualFold(filepath.Base(cmd), exeName) {
+			return true
+		}
+	}
+	return false
+}
+
+func isJSRuntimeProcess(exeName string, argv []string) bool {
+	if !agent.IsJSRuntime(exeName) {
+		return false
+	}
+	return argvContainsCCWrapper(argv)
+}
+
+func argvContainsCCWrapper(argv []string) bool {
+	return agent.ArgvContainsFragment(argv, "@anthropic-ai/claude-code", "/claude-code/", "claude-code/index.js")
 }

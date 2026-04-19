@@ -49,11 +49,12 @@ type fakeAgentProvider struct {
 	derive   func(eventName string, raw json.RawMessage) agentpkg.DeriveResult
 }
 
-func (f *fakeAgentProvider) Type() string                          { return f.typeName }
-func (f *fakeAgentProvider) DisplayName() string                   { return f.typeName }
-func (f *fakeAgentProvider) IconHint() string                      { return "" }
-func (f *fakeAgentProvider) Claim(_ agentpkg.ClaimContext) bool    { return false }
-func (f *fakeAgentProvider) IsAlive(string) bool                   { return f.alive }
+func (f *fakeAgentProvider) Type() string                       { return f.typeName }
+func (f *fakeAgentProvider) DisplayName() string                { return f.typeName }
+func (f *fakeAgentProvider) IconHint() string                   { return "" }
+func (f *fakeAgentProvider) Claim(_ agentpkg.ClaimContext) bool { return false }
+func (f *fakeAgentProvider) Identify(agentpkg.ProcessInfo) bool { return false }
+func (f *fakeAgentProvider) IsAlive(string) bool                { return f.alive }
 func (f *fakeAgentProvider) DeriveStatus(eventName string, raw json.RawMessage) agentpkg.DeriveResult {
 	if f.derive != nil {
 		return f.derive(eventName, raw)
