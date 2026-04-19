@@ -133,6 +133,14 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.TmuxSession != "" && m.frames != nil && m.events != nil {
+		if err := m.events.Delete(req.TmuxSession); err != nil {
+			log.Printf("[agent] clear legacy event: %v", err)
+			http.Error(w, `{"error":"store failed"}`, http.StatusInternalServerError)
+			return
+		}
+	}
+
 	// Handle subagent events (transient — broadcast only, don't persist)
 	if req.EventName == "SubagentStart" || req.EventName == "SubagentStop" {
 		m.mu.Lock()
@@ -142,13 +150,6 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		m.broadcastToSession(req.TmuxSession, normalized)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-		return
-	}
-
-	// Store raw event to DB
-	if err := m.events.Set(req.TmuxSession, req.EventName, req.RawEvent, req.AgentType, broadcastTs); err != nil {
-		log.Printf("[agent] store event: %v", err)
-		http.Error(w, `{"error":"store failed"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -165,8 +166,8 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Activity watch management:
-	// 1. Any hook event stops an active watcher for this session
-	// 2. If new status is waiting, start a new watcher
+	// 1. Any hook event stops an active watcher for this session.
+	// 2. waiting/running/idle transitions restart the watcher for the top frame.
 	watchAgentType := req.AgentType
 	watchStatus := result.Status
 	if projection != nil && projection.TopFrame != nil {
@@ -458,14 +459,23 @@ func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ev, _ := m.events.Get(sess.Name)
-	if ev == nil {
+	agentType := ""
+	if projection, err := m.projectionForSession(sess.Name); err == nil && projection != nil && projection.TopFrame != nil {
+		agentType = projection.TopFrame.AgentType
+	}
+	if agentType == "" && m.events != nil {
+		ev, _ := m.events.Get(sess.Name)
+		if ev != nil {
+			agentType = ev.AgentType
+		}
+	}
+	if agentType == "" {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]any{})
 		return
 	}
 
-	provider, ok := m.registry.Get(ev.AgentType)
+	provider, ok := m.registry.Get(agentType)
 	if !ok {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]any{})

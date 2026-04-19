@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -22,6 +23,9 @@ func newSweepTestModule(t *testing.T) *Module {
 
 func TestSweep_ClearsDeadFramesByPid(t *testing.T) {
 	m := newSweepTestModule(t)
+	if err := m.events.Set("work", "Stop", json.RawMessage(`{}`), "cc", 1); err != nil {
+		t.Fatalf("seed event: %v", err)
+	}
 	if _, err := m.frames.Upsert(store.Frame{
 		PaneID:           "%5",
 		AgentType:        "cc",
@@ -48,6 +52,13 @@ func TestSweep_ClearsDeadFramesByPid(t *testing.T) {
 	}
 	if len(frames) != 0 {
 		t.Fatalf("frame count = %d, want 0", len(frames))
+	}
+	ev, err := m.events.Get("work")
+	if err != nil {
+		t.Fatalf("events.Get: %v", err)
+	}
+	if ev != nil {
+		t.Fatalf("legacy event row should be cleared, got %+v", ev)
 	}
 }
 

@@ -75,6 +75,11 @@ func (m *Module) clearFrame(frame store.Frame, reason string) error {
 		return err
 	}
 	sessionName, code := m.resolvePaneSession(frame.PaneID)
+	if sessionName != "" && m.events != nil {
+		if err := m.events.Delete(sessionName); err != nil {
+			return err
+		}
+	}
 	projection, err := m.projectionForSession(sessionName)
 	if err != nil {
 		return err

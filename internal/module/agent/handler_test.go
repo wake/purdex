@@ -43,6 +43,9 @@ func newTestModule(t *testing.T) *Module {
 		return "Sun Apr 20 01:30:00 2026", nil
 	}
 	t.Cleanup(func() { processStartTimeFn = origProcessStartTime })
+	origIsPidAlive := isPidAliveFn
+	isPidAliveFn = func(pid int) bool { return true }
+	t.Cleanup(func() { isPidAliveFn = origIsPidAlive })
 	return m
 }
 
@@ -68,19 +71,13 @@ func TestHandleEvent_StoresAndReturns(t *testing.T) {
 		t.Errorf("status field: want ok, got %s", resp["status"])
 	}
 
-	// Verify stored in AgentEventStore
+	// Accepted v2 hooks should not keep dual-written legacy rows around.
 	ev, err := m.events.Get("work")
 	if err != nil {
 		t.Fatalf("events.Get: %v", err)
 	}
-	if ev == nil {
-		t.Fatal("event not found in store")
-	}
-	if ev.EventName != "agent:lifecycle:start" {
-		t.Errorf("event_name: want agent:lifecycle:start, got %s", ev.EventName)
-	}
-	if string(ev.RawEvent) != `{"session_id":"abc"}` {
-		t.Errorf("raw_event: want {\"session_id\":\"abc\"}, got %s", string(ev.RawEvent))
+	if ev != nil {
+		t.Fatalf("legacy event row should be cleared, got %+v", ev)
 	}
 }
 
@@ -121,10 +118,16 @@ func TestHandleEvent_RejectsLegacyPayload(t *testing.T) {
 	}
 }
 
-// TestHandleEvent_StoresAgentType verifies that agent_type from the request
-// body is persisted and can be read back from the store.
+// TestHandleEvent_StoresAgentType verifies that accepted hooks project agent
+// identity into frames instead of keeping a dual-written legacy row.
 func TestHandleEvent_StoresAgentType(t *testing.T) {
 	m := newTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
+	})
 
 	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
@@ -137,20 +140,36 @@ func TestHandleEvent_StoresAgentType(t *testing.T) {
 		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
 	}
 
+	frames, err := m.frames.ListByPane("%9")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if frames[0].AgentType != "cc" {
+		t.Errorf("agent_type: want cc, got %q", frames[0].AgentType)
+	}
 	ev, err := m.events.Get("dev")
 	if err != nil {
 		t.Fatalf("events.Get: %v", err)
 	}
-	if ev == nil {
-		t.Fatal("event not stored")
-	}
-	if ev.AgentType != "cc" {
-		t.Errorf("agent_type: want cc, got %q", ev.AgentType)
+	if ev != nil {
+		t.Fatalf("legacy event row should be cleared, got %+v", ev)
 	}
 }
 
-func TestHandleEvent_AcceptsV2Payload_StillUsesLegacyFlow(t *testing.T) {
+func TestHandleEvent_AcceptedV2HookRemovesLegacyRow(t *testing.T) {
 	m := newTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
+	})
+	if err := m.events.Set("dev", "Stop", json.RawMessage(`{}`), "cc", 1); err != nil {
+		t.Fatalf("seed event: %v", err)
+	}
 
 	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
@@ -167,11 +186,8 @@ func TestHandleEvent_AcceptsV2Payload_StillUsesLegacyFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("events.Get: %v", err)
 	}
-	if ev == nil {
-		t.Fatal("event not stored")
-	}
-	if ev.AgentType != "cc" || ev.EventName != "Stop" {
-		t.Fatalf("stored event = %+v, want legacy store flow populated", ev)
+	if ev != nil {
+		t.Fatalf("legacy event row should be cleared, got %+v", ev)
 	}
 }
 
@@ -588,6 +604,52 @@ func TestActivityWatch_StartsForRunningStatus(t *testing.T) {
 	m.mu.Unlock()
 	if !watching {
 		t.Fatal("expected active watcher after running status")
+	}
+}
+
+func TestActivityWatch_ShellPromptDeadPidTriggersSweep(t *testing.T) {
+	m := newTestModule(t)
+	fake := tmux.NewFakeExecutor()
+	fake.SetPaneSessionName("%5", "work")
+	m.tmux = fake
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
+	m.sessions = &fakeSessionProvider{
+		sessions: []session.SessionInfo{{Code: "s1", Name: "work"}},
+	}
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "codex",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "dead",
+		Status:           agentpkg.StatusRunning,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+	m.currentStatus["work"] = agentpkg.StatusRunning
+	m.activeWatchers["work"] = "codex"
+	origAlive := isPidAliveFn
+	isPidAliveFn = func(pid int) bool { return false }
+	t.Cleanup(func() { isPidAliveFn = origAlive })
+
+	cb := m.onActivityDetected("work", "codex")
+	cb("work:", probe.ActivitySignalShellPrompt)
+
+	if got := m.currentStatus["work"]; got != "" {
+		t.Fatalf("currentStatus = %q, want cleared", got)
+	}
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0", len(frames))
+	}
+	if _, watching := m.activeWatchers["work"]; watching {
+		t.Fatal("watcher should be cleared after sweep")
 	}
 }
 

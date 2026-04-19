@@ -243,9 +243,9 @@ func (r *Registry) All() []AgentProvider
 
 狀態粒度比 CC 粗——沒有 waiting / error / clear。
 
-**Claim：** hook event 的 `agent_type == "codex"` 或 `pane_current_command == "codex"`。
+**Claim：** 以 hook event 的 `agent_type == "codex"` 與 verify provenance 為準；不再依賴 `pane_current_command`。
 
-**IsAlive：** 檢查 `pane_current_command` 是否為 `codex`。準確度有限，為最佳可用方案。
+**IsAlive：** 現行由 probe 走 tmux pane PID tree + `Identify(ProcessInfo)` 判定；不再看 `pane_current_command`。
 
 **HookInstaller：** 改寫 `~/.codex/hooks.json`。格式範例：
 

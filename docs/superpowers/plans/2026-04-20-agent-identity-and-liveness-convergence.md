@@ -195,10 +195,10 @@ func resolveAgentPid(startPpid int) (pid int, uncertain bool) {
 
 | 平台 | ExePath | Argv | StartTime |
 |------|---------|------|-----------|
-| macOS | `ps -p PID -o args=` 的第一個 token（優先）；或 cgo 呼叫 `proc_pidpath(2)`（備案）| `ps -p PID -o args=` 全部 | `ps -p PID -o lstart=` |
+| macOS | `ps -p PID -o comm=`（再做 path normalize / symlink resolve） | `ps -p PID -o args=` 全部 | `ps -p PID -o lstart=` |
 | Linux | `readlink /proc/PID/exe` + `filepath.EvalSymlinks` | `/proc/PID/cmdline`（null-sep）| `ps -p PID -o lstart=` 或 `/proc/PID/stat` 第 22 欄 |
 
-**禁用**：`ps -p PID -o comm=` — macOS 可能 16 字元截斷且可能只回 argv[0]-honored name（CC 會顯示 `2.1.114`）。
+**備註**：macOS 目前實作以 `comm=` 取得 executable、以 `args=` 還原 argv；重點是不再信任 `argv[0]` 當成 Identify 依據。
 
 ### TDD 任務
 
@@ -335,7 +335,7 @@ func PidAncestorIncludes(pid int, ancestor int) bool {
 - `ProcessStartTime` 用 `ps -p PID -o lstart=` 字串比對即可（秒級精度）
 - verify 失敗回 202 Accepted + `{"status":"rejected","reason":"..."}`，不是 500
 - log 輸出 `[agent][verify] rejected pid=X reason=Y pane=Z`
-- 若 verify 本身出 panic/error（不該發生但防呆），fallback 為 accept + log warning（避免擋掉合法 hook）
+- 若 verify 本身出 panic/error，回 202 rejected + reason，並記 warning log（fail-closed，避免 detached runtime 混入）
 
 ### 驗收 (DoD)
 

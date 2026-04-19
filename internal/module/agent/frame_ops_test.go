@@ -166,6 +166,9 @@ func TestReplay_SkipsFramesWithStaleStartTime(t *testing.T) {
 	processStartTimeFn = func(pid int) (string, error) { return "fresh", nil }
 	t.Cleanup(func() { processStartTimeFn = origStart })
 
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
 	m.replayFromDB()
 
 	got, err := m.frames.GetByIdentity("%5", 200, "stale")
@@ -204,6 +207,94 @@ func TestReplay_RestoresLiveFrames(t *testing.T) {
 
 	if got := m.currentStatus["work"]; got != agentpkg.StatusRunning {
 		t.Fatalf("currentStatus = %q, want running", got)
+	}
+}
+
+func TestReplay_DropsDeadFramesBeforeRestore(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "work-code", Name: "work"}}}
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "dead",
+		Status:           agentpkg.StatusRunning,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+	origAlive := isPidAliveFn
+	isPidAliveFn = func(pid int) bool { return pid != 200 }
+	t.Cleanup(func() { isPidAliveFn = origAlive })
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+	m.replayFromDB()
+
+	if got := m.currentStatus["work"]; got != "" {
+		t.Fatalf("currentStatus = %q, want empty", got)
+	}
+	got, err := m.frames.GetByIdentity("%5", 200, "dead")
+	if err != nil {
+		t.Fatalf("GetByIdentity: %v", err)
+	}
+	if got != nil {
+		t.Fatal("dead frame should be deleted during replay")
+	}
+}
+
+func TestReplay_RestoresLegacySessionsWithoutFrames(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{
+		{Code: "legacy-code", Name: "legacy"},
+		{Code: "work-code", Name: "work"},
+	}}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
+			if event == "Stop" {
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			}
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
+		},
+	})
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "live",
+		Status:           agentpkg.StatusRunning,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+	if err := m.events.Set("legacy", "Stop", json.RawMessage(`{}`), "cc", 11); err != nil {
+		t.Fatalf("seed legacy event: %v", err)
+	}
+	origStart := processStartTimeFn
+	processStartTimeFn = func(pid int) (string, error) { return "live", nil }
+	t.Cleanup(func() { processStartTimeFn = origStart })
+
+	m.replayFromDB()
+
+	if got := m.currentStatus["work"]; got != agentpkg.StatusRunning {
+		t.Fatalf("work currentStatus = %q, want running", got)
+	}
+	if got := m.currentStatus["legacy"]; got != agentpkg.StatusIdle {
+		t.Fatalf("legacy currentStatus = %q, want idle", got)
 	}
 }
 
@@ -273,6 +364,87 @@ func TestSendSnapshot_CollapsesMultiplePanesInSession(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for snapshot")
+	}
+	select {
+	case msg := <-sub.SendCh():
+		t.Fatalf("unexpected extra snapshot: %s", msg)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestSendSnapshot_IncludesLegacySessionsWithoutFrames(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{
+		{Code: "legacy-code", Name: "legacy"},
+		{Code: "work-code", Name: "work"},
+	}}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
+			if event == "Stop" {
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			}
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
+		},
+	})
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "live",
+		Status:           agentpkg.StatusRunning,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+	if err := m.events.Set("legacy", "Stop", json.RawMessage(`{}`), "cc", 11); err != nil {
+		t.Fatalf("seed legacy event: %v", err)
+	}
+	origStart := processStartTimeFn
+	processStartTimeFn = func(pid int) (string, error) { return "live", nil }
+	t.Cleanup(func() { processStartTimeFn = origStart })
+
+	broadcaster := core.NewEventsBroadcaster()
+	sub := broadcaster.AddTestSubscriber()
+	defer broadcaster.RemoveTestSubscriber(sub)
+
+	m.sendSnapshot(sub)
+
+	var messages []string
+	for len(messages) < 2 {
+		select {
+		case msg := <-sub.SendCh():
+			messages = append(messages, string(msg))
+		case <-time.After(100 * time.Millisecond):
+			t.Fatalf("timed out waiting for snapshot %d", len(messages)+1)
+		}
+	}
+
+	var first struct {
+		Session string `json:"session"`
+		Value   string `json:"value"`
+	}
+	if err := json.Unmarshal([]byte(messages[0]), &first); err != nil {
+		t.Fatalf("unmarshal first snapshot: %v", err)
+	}
+	if first.Session != "work-code" || !strings.Contains(first.Value, `"status":"running"`) {
+		t.Fatalf("first snapshot = %s, want work running", messages[0])
+	}
+	var second struct {
+		Session string `json:"session"`
+		Value   string `json:"value"`
+	}
+	if err := json.Unmarshal([]byte(messages[1]), &second); err != nil {
+		t.Fatalf("unmarshal second snapshot: %v", err)
+	}
+	if second.Session != "legacy-code" || !strings.Contains(second.Value, `"status":"idle"`) {
+		t.Fatalf("second snapshot = %s, want legacy idle", messages[1])
 	}
 	select {
 	case msg := <-sub.SendCh():

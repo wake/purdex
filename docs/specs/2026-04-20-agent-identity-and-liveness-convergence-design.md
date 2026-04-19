@@ -186,10 +186,10 @@ type ProcessInfo struct {
 
 | 平台 | ExePath 取得 | Argv 取得 | StartTime 取得 |
 |------|------------|-----------|----------------|
-| macOS | `proc_pidpath(2)` via cgo；退而求其次 `ps -p PID -o args=` 的第一個 token | `ps -p PID -o args=` 分割 | `ps -p PID -o lstart=` |
+| macOS | `ps -p PID -o comm=`（再做 path normalize / symlink resolve） | `ps -p PID -o args=` 分割 | `ps -p PID -o lstart=` |
 | Linux | `readlink /proc/PID/exe` | `/proc/PID/cmdline`（null-separated）| `ps -p PID -o lstart=` 或 `/proc/PID/stat` 第 22 欄 |
 
-**不使用**：`ps -p PID -o comm=` — macOS 有 16 字元截斷風險，且可能只回 argv[0]-honored name（CC 顯示 `2.1.114`）。
+**備註**：macOS 目前實作改用 `ps -p PID -o comm=` 取得 executable，再配合 `args=` 組 argv，避免直接信任 `argv[0]` 造成 Identify 誤判。
 
 **Symlink 處理**：`ExePath` 取得後必須跑 `filepath.EvalSymlinks` 再 `filepath.Base`，避免 symlink wrapper（如 `~/.local/bin/claude → /opt/homebrew/.../claude`）造成 basename 不穩。
 

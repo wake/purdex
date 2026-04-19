@@ -1,6 +1,7 @@
 // Package agent provides the agent hook event module.
-// It receives hook events from `pdx hook`, stores them in AgentEventStore,
-// and broadcasts to WS subscribers.
+// It receives hook events from `pdx hook`, projects live state into frames,
+// and broadcasts to WS subscribers. AgentEventStore remains as a legacy
+// fallback source for pre-frame sessions and session rename compatibility.
 package agent
 
 import (
@@ -160,6 +161,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 
 // Start replays DB state and registers OnSubscribe callback.
 func (m *Module) Start(_ context.Context) error {
+	if err := m.sweepOnce(); err != nil {
+		log.Printf("[agent] startup sweep: %v", err)
+	}
 	m.replayFromDB()
 	m.startSweep()
 
@@ -257,15 +261,19 @@ func (m *Module) RenameSessionAtomic(oldName, newName string, doRename func() er
 	return nil
 }
 
-// replayFromDB rebuilds in-memory currentStatus from persisted events.
+// replayFromDB rebuilds in-memory state from persisted frame projections and
+// falls back to legacy agent_events for sessions that have not migrated yet.
 func (m *Module) replayFromDB() {
-	if projections, err := m.liveSessionProjections(); err == nil && len(projections) > 0 {
+	projectedSessions := make(map[string]struct{})
+	if projections, err := m.liveSessionProjections(); err == nil {
 		for _, item := range projections {
+			projectedSessions[item.SessionName] = struct{}{}
 			m.mu.Lock()
 			syncProjectionState(m.currentStatus, m.subagents, item.SessionName, &item.Projection)
 			m.mu.Unlock()
 		}
-		return
+	} else {
+		log.Printf("[agent] replay frames: %v", err)
 	}
 	all, err := m.events.ListAll()
 	if err != nil {
@@ -273,6 +281,9 @@ func (m *Module) replayFromDB() {
 		return
 	}
 	for _, ev := range all {
+		if _, ok := projectedSessions[ev.TmuxSession]; ok {
+			continue
+		}
 		provider, ok := m.registry.Get(ev.AgentType)
 		if !ok {
 			continue
@@ -291,8 +302,10 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 	if m.sessions == nil {
 		return
 	}
-	if projections, err := m.liveSessionProjections(); err == nil && len(projections) > 0 {
+	projectedSessions := make(map[string]struct{})
+	if projections, err := m.liveSessionProjections(); err == nil {
 		for _, item := range projections {
+			projectedSessions[item.SessionName] = struct{}{}
 			if item.SessionCode == "" {
 				continue
 			}
@@ -305,7 +318,8 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 			syncProjectionState(m.currentStatus, m.subagents, item.SessionName, &item.Projection)
 			m.mu.Unlock()
 		}
-		return
+	} else {
+		log.Printf("[agent] snapshot frames: %v", err)
 	}
 	all, err := m.events.ListAll()
 	if err != nil {
@@ -327,6 +341,9 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 	}
 
 	for _, ev := range all {
+		if _, ok := projectedSessions[ev.TmuxSession]; ok {
+			continue
+		}
 		code, ok := nameToCode[ev.TmuxSession]
 		if !ok {
 			continue
@@ -354,20 +371,7 @@ func (m *Module) liveFrameProjections() ([]SessionProjection, error) {
 	if len(frames) == 0 {
 		return nil, nil
 	}
-	live := make([]store.Frame, 0, len(frames))
-	for _, frame := range frames {
-		actualStartTime, err := processStartTimeFn(frame.PID)
-		if err != nil {
-			live = append(live, frame)
-			continue
-		}
-		if actualStartTime != frame.ProcessStartTime {
-			_ = m.frames.Delete(frame.FrameID)
-			continue
-		}
-		live = append(live, frame)
-	}
-	return BuildSessionProjections(live), nil
+	return BuildSessionProjections(frames), nil
 }
 
 func (m *Module) resolvePaneSession(paneID string) (string, string) {
@@ -381,7 +385,6 @@ func (m *Module) resolvePaneSession(paneID string) (string, string) {
 	return sessionName, m.resolveSessionCode(sessionName)
 }
 
-// checkAliveAll checks all tracked sessions for liveness and broadcasts clear events for dead ones.
 // manageActivityWatch handles starting/stopping Activity watchers in response to hook events.
 func (m *Module) manageActivityWatch(session, agentType string, newStatus agentpkg.Status) {
 	m.mu.Lock()
@@ -409,10 +412,10 @@ func shouldWatchActivity(status agentpkg.Status) bool {
 	}
 }
 
-// onActivityDetected returns a callback for when screen activity is detected
-// during a waiting state. The callback checks if the watcher is still active
-// (a hook event may have already superseded it), then runs Readiness to
-// determine the new status.
+// onActivityDetected returns a callback for screen-activity transitions while a
+// waiting/running/idle session is being watched. The callback checks if the
+// watcher is still active and then maps the activity signal to a new status or
+// triggers a sweep hint for shell-prompt + dead-PID cases.
 func (m *Module) onActivityDetected(session, agentType string) func(string, probe.ActivitySignal) {
 	return func(target string, signal probe.ActivitySignal) {
 		m.mu.Lock()
