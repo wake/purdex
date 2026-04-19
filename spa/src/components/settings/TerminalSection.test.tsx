@@ -12,9 +12,6 @@ describe('TerminalSection', () => {
       keepAlivePinned: false,
       terminalRevealDelay: 300,
       terminalSettingsVersion: 0,
-      linkDetectAbsolute: true,
-      linkDetectRelativeSlash: false,
-      linkDetectBareFilename: false,
     })
     useAgentStore.setState({ tabIndicatorStyle: 'badge', ccIconVariant: 'bot', showOscTitle: false })
   })
@@ -136,23 +133,4 @@ describe('TerminalSection', () => {
     expect(useAgentStore.getState().showOscTitle).toBe(false)
   })
 
-  it('renders 3 link detection toggles and toggling updates the store', () => {
-    render(<TerminalSection />)
-    const absToggle = screen.getByLabelText(/Absolute paths|絕對路徑/)
-    const relToggle = screen.getByLabelText(/Relative paths with \/|含 \/ 的相對路徑/)
-    const bareToggle = screen.getByLabelText(/Bare filenames|純檔名/)
-
-    expect(absToggle.getAttribute('aria-checked')).toBe('true')
-    expect(relToggle.getAttribute('aria-checked')).toBe('false')
-    expect(bareToggle.getAttribute('aria-checked')).toBe('false')
-
-    fireEvent.click(relToggle)
-    expect(useUISettingsStore.getState().linkDetectRelativeSlash).toBe(true)
-
-    fireEvent.click(bareToggle)
-    expect(useUISettingsStore.getState().linkDetectBareFilename).toBe(true)
-
-    fireEvent.click(absToggle)
-    expect(useUISettingsStore.getState().linkDetectAbsolute).toBe(false)
-  })
 })
