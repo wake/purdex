@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.0.0-alpha.188] - 2026-04-19
+
+### Feat(spa): Extensions sub-row status icon (#480, PR #482)
+
+- 13px Phosphor status icon left of the Status integration label in `AgentExtensionRow`:
+  - `pdx` / `wrapped` → `CheckCircle` (green-400)
+  - `unmanaged` → `WarningCircle` (yellow-400)
+  - `none` → omitted
+- Icons marked `aria-hidden="true"`; the existing text badge already conveys state to screen readers.
+- 4 new TDD tests covering all 4 modes + icon type + a11y attribute.
+
+### Feat: Statusline pipeline self-test panel (#481, PR #483)
+
+- **One-click loopback self-test** under Status integration validating the full `proxy → daemon → WS → SPA store → UI` chain without spawning `claude -p`.
+- **Daemon** (Go)
+  - `POST /api/agent/cc/statusline/test` SSE endpoint streams per-stage pass/fail for stages 1-3 (proxy spawned / daemon POST received / daemon WS broadcast).
+  - Test nonce `__pdx_test_<8-hex>` rides through the real `pdx statusline-proxy` subprocess via new `PDX_STATUSLINE_TEST_SESSION` env override.
+  - `handleAgentStatus` detects nonce prefix → signals per-nonce observer channel → broadcasts WS keyed by nonce → never persists to `statusSnapshots` or hits `resolveSessionCode`. Phantom-tmux-session-free.
+  - Targeted `agent.status.cleared` (scoped by session) for cleanup — distinct from the existing unscoped (empty session) wipe-all semantics used for statusline uninstall.
+  - `testSpawnProxy` seam for unit tests; `defaultSpawnTestProxy` uses `os.Executable()` + `filepath.EvalSymlinks` + 2s context timeout.
+- **SPA** (React / TypeScript)
+  - `useStatuslineTest(hostId)` hook: POSTs, parses SSE for stages 1-3, subscribes to `statuslineTestBus` for stage 4 (WS event received), introspects `useAgentStore.ccStatus` for stage 5 (store populated). 8s overall client timeout with `reader.cancel()` on timeout and `runningRef` re-entrancy guard.
+  - `StatuslineTestPanel` renders 5-node status with Phosphor icons (`CheckCircle` / `XCircle` / `Minus` / `CircleNotch`), Run-again button, expandable failure log.
+  - `AgentExtensionRow` embeds the panel when `state.mode` is `pdx` / `wrapped`; panel's internal `autoRanRef` + mount/unmount cycle auto-runs exactly once per install.
+  - `agent-ws-dispatch`: nonce-aware routing — `agent.status` with `__pdx_test_` session also emits to the test bus; `agent.status.cleared` with non-empty session routes to scoped `clearSession(hostId, nonce)`.
+  - 14 new `hosts.extensions.test.*` i18n keys (en + zh-TW).
+- **Review fixes**: timeout 5s → 8s (server worst case is 6s), dangling SSE reader `reader.cancel()`, re-entrancy guard on `run()`, `EvalSymlinks` for symlinked binary installs.
+
+### Follow-up issues
+
+- #480 ✅ addressed by PR #482
+- #481 ✅ addressed by PR #483
+- Deferred observations (low priority): auto-run on panel remount (by design — fresh install remounts), discarded `cmd.Stderr` in test spawn (stage-1 failure shows only exit code), synthetic `ccStatus[host:nonce]` lingers if SSE connection drops before cleanup (harmless, bounded by page lifetime)
+
 ## [1.0.0-alpha.187] - 2026-04-19
 
 ### Fix(agent): Codex hook schema compatibility + hook support version warning (#479)
