@@ -17,36 +17,78 @@ function buildFileInfo(path: string): FileInfo {
   return { name, path, extension, size: 0, isDirectory: false }
 }
 
-function joinCwd(cwd: string, rel: string): string {
-  const trimmed = cwd.replace(/\/+$/, '')
-  return `${trimmed}/${rel}`
+/**
+ * Resolve a relative path against `cwd`, normalizing `.` and `..` segments.
+ * Returns `null` if the resolved path escapes `cwd`'s parent directory
+ * (i.e. moves more than one level above `cwd`), so the caller can reject
+ * path-traversal attempts like `../../../etc/passwd`.
+ *
+ * Design: allow at most one `..` out of the fetched cwd (common in relative
+ * editor paths like `../App.tsx`), but reject deep traversals that escape
+ * the cwd's parent entirely.
+ */
+export function resolveCwdPath(cwd: string, rel: string): string | null {
+  const base = cwd.replace(/\/+$/, '')  // strip trailing slashes
+  const joined = `${base}/${rel}`
+  const parts = joined.split('/')
+  const stack: string[] = []
+  for (const part of parts) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      if (stack.length > 0) stack.pop()
+      continue
+    }
+    stack.push(part)
+  }
+  const normalized = '/' + stack.join('/')
+
+  // Boundary: normalized must be within cwd's parent directory.
+  // This allows one level of ".." escape (e.g. ../App.tsx from a subdir)
+  // but rejects deep traversals that land outside the parent tree.
+  const parentIdx = base.lastIndexOf('/')
+  // parentIdx === 0 means cwd is /foo — parent is root "/"
+  // parentIdx < 0 should not happen since cwd must start with /
+  const baseParent = parentIdx <= 0 ? '' : base.slice(0, parentIdx)
+  // normalized must equal baseParent, or be nested under it
+  if (baseParent === '') {
+    // parent is root: any absolute path is within root
+    return normalized
+  }
+  if (normalized !== baseParent && !normalized.startsWith(baseParent + '/')) {
+    return null
+  }
+  return normalized
 }
 
 export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
   return {
     id: 'builtin:file-path',
-    // priority 0 = builtin default，讓第三方 opener 以更高 priority 覆寫
     priority: 0,
     canOpen: (token) =>
       token.type === 'file' &&
       typeof (token.meta as { path?: unknown } | undefined)?.path === 'string',
     open: async (token, ctx) => {
-      // 不依賴呼叫方一定先走 canOpen，自行檢查 meta.path
       const rawPath = (token.meta as { path?: unknown } | undefined)?.path
       if (typeof rawPath !== 'string') return
       if (!ctx.hostId) return
 
       let path = rawPath
       if (!path.startsWith('/')) {
-        // relative / bare: 即時向 tmux pane 查 cwd。無 sessionCode 或 fetch 失敗放棄
+        // relative / bare: 即時向 tmux pane 查 cwd，normalize 後驗證不越界
         if (!ctx.sessionCode) return
+        let cwd: string
         try {
-          const cwd = await deps.fetchPaneCwd(ctx.hostId, ctx.sessionCode)
-          if (!cwd || !cwd.startsWith('/')) return
-          path = joinCwd(cwd, path)
+          cwd = await deps.fetchPaneCwd(ctx.hostId, ctx.sessionCode)
         } catch {
           return
         }
+        if (!cwd || !cwd.startsWith('/')) return
+        const resolved = resolveCwdPath(cwd, path)
+        if (resolved === null) {
+          console.warn(`[file-path] rejected path escaping cwd: ${path} vs ${cwd}`)
+          return
+        }
+        path = resolved
       }
 
       const file = buildFileInfo(path)

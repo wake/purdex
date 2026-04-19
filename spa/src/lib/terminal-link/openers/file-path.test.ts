@@ -145,4 +145,51 @@ describe('file-path opener — relative path cwd resolution', () => {
     const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
     expect(createContentCalls[0][1].path).toBe('/home/user/proj/src/App.tsx')
   })
+
+  it('relative path with .. escaping cwd: no-op and warn', async () => {
+    const deps = makeDeps()
+    const o = createFilePathOpener(deps)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const traversalToken: LinkToken = {
+      type: 'file',
+      text: '../../../etc/passwd',
+      range: { startCol: 0, endCol: 19 },
+      meta: { path: '../../../etc/passwd' },
+    }
+    await o.open(traversalToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    expect(deps.openSingletonTab).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('relative path with single ".." inside cwd: resolves correctly', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneCwd.mockResolvedValueOnce('/home/user/proj/sub')
+    const o = createFilePathOpener(deps)
+    const token: LinkToken = {
+      type: 'file',
+      text: '../App.tsx',
+      range: { startCol: 0, endCol: 10 },
+      meta: { path: '../App.tsx' },
+    }
+    await o.open(token, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('/home/user/proj/App.tsx')
+  })
+
+  it('normalizes ./ and redundant slashes', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneCwd.mockResolvedValueOnce('/home/user/proj')
+    const o = createFilePathOpener(deps)
+    const token: LinkToken = {
+      type: 'file',
+      text: './src/./App.tsx',
+      range: { startCol: 0, endCol: 15 },
+      meta: { path: './src/./App.tsx' },
+    }
+    await o.open(token, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('/home/user/proj/src/App.tsx')
+  })
 })
