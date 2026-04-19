@@ -16,7 +16,6 @@ beforeEach(() => {
     oscTitles: {},
     ccStatus: {},
     unread: {},
-    showOscTitle: false,
   })
   statuslineTestBus.reset()
 })

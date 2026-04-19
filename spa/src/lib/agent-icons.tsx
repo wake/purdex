@@ -4,7 +4,7 @@ import { OpenAiLogo } from '@phosphor-icons/react'
 import ClaudeCodeBotSvg from '@lobehub/icons-static-svg/icons/claudecode.svg?react'
 import ClaudeStarSvg from '@lobehub/icons-static-svg/icons/claude.svg?react'
 import CodexLobeSvg from '@lobehub/icons-static-svg/icons/codex.svg?react'
-import type { CcIconVariant, CodexIconVariant } from '../stores/useAgentStore'
+import type { CcIconVariant, CodexIconVariant } from '../stores/useUISettingsStore'
 
 type SvgComponent = ComponentType<SVGProps<SVGSVGElement>>
 

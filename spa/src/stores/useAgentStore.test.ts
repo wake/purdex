@@ -17,7 +17,6 @@ beforeEach(() => {
     oscTitles: {},
     ccStatus: {},
     unread: {},
-    showOscTitle: false,
   })
   useTabStore.setState({ tabs: {}, activeTabId: null, tabOrder: [] })
 })
@@ -327,16 +326,6 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().statuses[`${H}:dev`]).toBeUndefined()
     expect(useAgentStore.getState().statuses[`${H}:staging`]).toBe('running')
     expect(useAgentStore.getState().agentTypes[`${H}:staging`]).toBe('cc')
-  })
-})
-
-describe('useAgentStore.setShowOscTitle', () => {
-  it('toggles the flag', () => {
-    expect(useAgentStore.getState().showOscTitle).toBe(false)
-    useAgentStore.getState().setShowOscTitle(true)
-    expect(useAgentStore.getState().showOscTitle).toBe(true)
-    useAgentStore.getState().setShowOscTitle(false)
-    expect(useAgentStore.getState().showOscTitle).toBe(false)
   })
 })
 

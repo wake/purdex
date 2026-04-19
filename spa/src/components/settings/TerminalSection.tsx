@@ -1,5 +1,4 @@
-import { useUISettingsStore, type TerminalRenderer, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
-import { useAgentStore, type TabIndicatorStyle, type CcIconVariant, type CodexIconVariant } from '../../stores/useAgentStore'
+import { useUISettingsStore, type TerminalRenderer, type TabIndicatorStyle, type CcIconVariant, type CodexIconVariant, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
 import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS } from '../../lib/agent-icons'
 import { SettingItem } from './SettingItem'
 import { SegmentControl } from './SegmentControl'
@@ -22,14 +21,14 @@ export function TerminalSection() {
   const revealDelay = useUISettingsStore((s) => s.terminalRevealDelay)
   const setRevealDelay = useUISettingsStore((s) => s.setTerminalRevealDelay)
 
-  const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
-  const setTabIndicatorStyle = useAgentStore((s) => s.setTabIndicatorStyle)
-  const ccIconVariant = useAgentStore((s) => s.ccIconVariant)
-  const setCcIconVariant = useAgentStore((s) => s.setCcIconVariant)
-  const codexIconVariant = useAgentStore((s) => s.codexIconVariant)
-  const setCodexIconVariant = useAgentStore((s) => s.setCodexIconVariant)
-  const showOscTitle = useAgentStore((s) => s.showOscTitle)
-  const setShowOscTitle = useAgentStore((s) => s.setShowOscTitle)
+  const tabIndicatorStyle = useUISettingsStore((s) => s.tabIndicatorStyle)
+  const setTabIndicatorStyle = useUISettingsStore((s) => s.setTabIndicatorStyle)
+  const ccIconVariant = useUISettingsStore((s) => s.ccIconVariant)
+  const setCcIconVariant = useUISettingsStore((s) => s.setCcIconVariant)
+  const codexIconVariant = useUISettingsStore((s) => s.codexIconVariant)
+  const setCodexIconVariant = useUISettingsStore((s) => s.setCodexIconVariant)
+  const showOscTitle = useUISettingsStore((s) => s.showOscTitle)
+  const setShowOscTitle = useUISettingsStore((s) => s.setShowOscTitle)
 
   const t = useI18nStore((s) => s.t)
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
@@ -34,6 +35,8 @@ beforeEach(() => {
     subagents: {},
     agentTypes: {},
     oscTitles: {},
+  })
+  useUISettingsStore.setState({
     tabIndicatorStyle: 'badge',
     ccIconVariant: 'bot',
     codexIconVariant: 'openai',
@@ -84,8 +87,8 @@ describe('useTabDisplay — OSC title override', () => {
       activeHostId: null,
       activeCode: null,
     })
+    useUISettingsStore.setState({ showOscTitle: true })
     useAgentStore.setState({
-      showOscTitle: true,
       agentTypes: { 'h1:sc1': 'cc' },
       oscTitles: { 'h1:sc1': 'claude' },
     })
@@ -94,8 +97,8 @@ describe('useTabDisplay — OSC title override', () => {
   })
 
   it('ignores OSC when showOscTitle is off', () => {
+    useUISettingsStore.setState({ showOscTitle: false })
     useAgentStore.setState({
-      showOscTitle: false,
       agentTypes: { 'h1:sc1': 'cc' },
       oscTitles: { 'h1:sc1': 'claude' },
     })
@@ -104,8 +107,8 @@ describe('useTabDisplay — OSC title override', () => {
   })
 
   it('ignores OSC on terminated session', () => {
+    useUISettingsStore.setState({ showOscTitle: true })
     useAgentStore.setState({
-      showOscTitle: true,
       agentTypes: { 'h1:sc1': 'cc' },
       oscTitles: { 'h1:sc1': 'claude' },
     })
@@ -155,8 +158,8 @@ describe('useTabDisplay — agent store fields', () => {
       statuses: { 'h1:sc1': 'running' },
       unread: { 'h1:sc1': true },
       subagents: { 'h1:sc1': [{ id: 's1' }] as never },
-      tabIndicatorStyle: 'dot',
     })
+    useUISettingsStore.setState({ tabIndicatorStyle: 'dot' })
     const { result } = renderHook(() => useTabDisplay(makeTab()))
     expect(result.current.agentStatus).toBe('running')
     expect(result.current.isUnread).toBe(true)

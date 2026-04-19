@@ -3,6 +3,9 @@ import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 export type TerminalRenderer = 'webgl' | 'dom'
+export type TabIndicatorStyle = 'icon' | 'dot' | 'iconDot' | 'badge'
+export type CcIconVariant = 'bot' | 'star'
+export type CodexIconVariant = 'openai' | 'codex'
 
 export const KEEPALIVE_MAX_WEBGL = 6
 export const KEEPALIVE_MAX_DOM = 10
@@ -52,6 +55,15 @@ interface UISettings {
   setLinkDetectRelativeSlash: (v: boolean) => void
   linkDetectBareFilename: boolean
   setLinkDetectBareFilename: (v: boolean) => void
+
+  tabIndicatorStyle: TabIndicatorStyle
+  setTabIndicatorStyle: (style: TabIndicatorStyle) => void
+  ccIconVariant: CcIconVariant
+  setCcIconVariant: (variant: CcIconVariant) => void
+  codexIconVariant: CodexIconVariant
+  setCodexIconVariant: (variant: CodexIconVariant) => void
+  showOscTitle: boolean
+  setShowOscTitle: (show: boolean) => void
 }
 
 export const useUISettingsStore = create<UISettings>()(
@@ -75,11 +87,43 @@ export const useUISettingsStore = create<UISettings>()(
       setLinkDetectRelativeSlash: (v) => set({ linkDetectRelativeSlash: v }),
       linkDetectBareFilename: false,
       setLinkDetectBareFilename: (v) => set({ linkDetectBareFilename: v }),
+
+      tabIndicatorStyle: 'badge' as TabIndicatorStyle,
+      setTabIndicatorStyle: (style) => set({ tabIndicatorStyle: style }),
+      ccIconVariant: 'bot' as CcIconVariant,
+      setCcIconVariant: (variant) => set({ ccIconVariant: variant }),
+      codexIconVariant: 'openai' as CodexIconVariant,
+      setCodexIconVariant: (variant) => set({ codexIconVariant: variant }),
+      showOscTitle: false,
+      setShowOscTitle: (show) => set({ showOscTitle: show }),
     }),
     {
       name: STORAGE_KEYS.UI_SETTINGS,
       storage: purdexStorage,
-      version: 1,
+      version: 2,
+      migrate: (persisted: unknown, fromVersion: number): unknown => {
+        const base = (persisted ?? {}) as Record<string, unknown>
+        if (fromVersion >= 2) return base
+
+        // Import UI prefs that used to live in useAgentStore's persist slice (v4 or v5).
+        // Keep it best-effort: any parse/shape error just falls back to defaults.
+        try {
+          if (typeof window === 'undefined') return base
+          const raw = window.localStorage.getItem(STORAGE_KEYS.AGENT)
+          if (!raw) return base
+          const parsed = JSON.parse(raw)
+          const oldState = parsed?.state as Record<string, unknown> | undefined
+          if (!oldState) return base
+          const imported: Record<string, unknown> = {}
+          if (typeof oldState.tabIndicatorStyle === 'string') imported.tabIndicatorStyle = oldState.tabIndicatorStyle
+          if (typeof oldState.ccIconVariant === 'string') imported.ccIconVariant = oldState.ccIconVariant
+          if (typeof oldState.codexIconVariant === 'string') imported.codexIconVariant = oldState.codexIconVariant
+          if (typeof oldState.showOscTitle === 'boolean') imported.showOscTitle = oldState.showOscTitle
+          return { ...base, ...imported }
+        } catch {
+          return base
+        }
+      },
       onRehydrateStorage: () => (state) => {
         if (!state) return
         const clamped = clampKeepAlive(state.terminalRenderer, state.keepAliveCount)

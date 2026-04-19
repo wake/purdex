@@ -124,6 +124,58 @@ describe('onRehydrateStorage clamps keepAliveCount', () => {
   })
 })
 
+describe('useUISettingsStore — tab/icon preferences', () => {
+  beforeEach(() => {
+    useUISettingsStore.setState({
+      tabIndicatorStyle: 'badge',
+      ccIconVariant: 'bot',
+      codexIconVariant: 'openai',
+      showOscTitle: false,
+    })
+  })
+
+  it('defaults tabIndicatorStyle to badge', () => {
+    expect(useUISettingsStore.getState().tabIndicatorStyle).toBe('badge')
+  })
+
+  it('setTabIndicatorStyle updates the value', () => {
+    useUISettingsStore.getState().setTabIndicatorStyle('dot')
+    expect(useUISettingsStore.getState().tabIndicatorStyle).toBe('dot')
+    useUISettingsStore.getState().setTabIndicatorStyle('icon')
+    expect(useUISettingsStore.getState().tabIndicatorStyle).toBe('icon')
+  })
+
+  it('defaults ccIconVariant to bot', () => {
+    expect(useUISettingsStore.getState().ccIconVariant).toBe('bot')
+  })
+
+  it('setCcIconVariant updates the value', () => {
+    useUISettingsStore.getState().setCcIconVariant('star')
+    expect(useUISettingsStore.getState().ccIconVariant).toBe('star')
+    useUISettingsStore.getState().setCcIconVariant('bot')
+    expect(useUISettingsStore.getState().ccIconVariant).toBe('bot')
+  })
+
+  it('defaults codexIconVariant to openai', () => {
+    expect(useUISettingsStore.getState().codexIconVariant).toBe('openai')
+  })
+
+  it('setCodexIconVariant updates the value', () => {
+    useUISettingsStore.getState().setCodexIconVariant('codex')
+    expect(useUISettingsStore.getState().codexIconVariant).toBe('codex')
+    useUISettingsStore.getState().setCodexIconVariant('openai')
+    expect(useUISettingsStore.getState().codexIconVariant).toBe('openai')
+  })
+
+  it('showOscTitle toggles the flag', () => {
+    expect(useUISettingsStore.getState().showOscTitle).toBe(false)
+    useUISettingsStore.getState().setShowOscTitle(true)
+    expect(useUISettingsStore.getState().showOscTitle).toBe(true)
+    useUISettingsStore.getState().setShowOscTitle(false)
+    expect(useUISettingsStore.getState().showOscTitle).toBe(false)
+  })
+})
+
 describe('KEEPALIVE constants', () => {
   it('KEEPALIVE_MAX_WEBGL is 6', () => {
     expect(KEEPALIVE_MAX_WEBGL).toBe(6)

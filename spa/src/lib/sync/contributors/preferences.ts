@@ -15,6 +15,10 @@ const DATA_FIELDS = [
   'keepAliveCount',
   'keepAlivePinned',
   'terminalSettingsVersion',
+  'tabIndicatorStyle',
+  'ccIconVariant',
+  'codexIconVariant',
+  'showOscTitle',
 ] as const
 
 type PreferencesData = {

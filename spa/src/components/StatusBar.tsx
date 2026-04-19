@@ -5,6 +5,7 @@ import { getPrimaryPane } from '../lib/pane-tree'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useUploadStore } from '../stores/useUploadStore'
 import { compositeKey } from '../lib/composite-key'
 import { useClickOutside } from '../hooks/useClickOutside'
@@ -121,7 +122,7 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   const hostRuntime = useHostStore((s) => agentHostId ? s.runtime[agentHostId] : null)
   const agentLabel = useAgentStore((s) => agentCk ? s.models[agentCk] ?? null : null)
   const agentType = useAgentStore((s) => agentCk ? s.agentTypes[agentCk] ?? null : null)
-  const showOscTitle = useAgentStore((s) => s.showOscTitle)
+  const showOscTitle = useUISettingsStore((s) => s.showOscTitle)
   const rawOscTitle = useAgentStore((s) => agentCk ? s.oscTitles[agentCk] ?? null : null)
   const oscTitle = showOscTitle && agentType ? rawOscTitle : null
   const closeMenu = useCallback(() => setMenuOpen(false), [])
