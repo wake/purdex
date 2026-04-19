@@ -4,6 +4,7 @@ import { hostFetch } from '../../lib/host-api'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { AGENT_NAMES } from '../../lib/agent-metadata'
+import { AgentExtensionRow } from './AgentExtensionRow'
 
 interface AgentInfo {
   installed: boolean
@@ -93,6 +94,12 @@ export function AgentsSection({ hostId }: Props) {
                   {info.path && (
                     <div><span className="text-text-secondary">{t('hosts.agent_path')}:</span> <code className="font-mono">{info.path}</code></div>
                   )}
+                </div>
+              )}
+              {agentType === 'cc' && info.installed && (
+                <div className="mt-3 pt-3 border-t border-border-subtle">
+                  <p className="text-xs text-text-muted mb-2">{t('hosts.extensions.heading')}</p>
+                  <AgentExtensionRow hostId={hostId} extensionId="statusline" />
                 </div>
               )}
             </div>
