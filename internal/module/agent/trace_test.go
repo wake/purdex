@@ -1,0 +1,156 @@
+package agent
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/store"
+	"github.com/wake/purdex/internal/tmux"
+)
+
+func TestHandleEvent_PersistAcceptedHookTrace(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%7", "work")
+	m.tmux = fakeTmux
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.sessions = &fakeSessionProvider{
+		sessions: []session.SessionInfo{{Code: "session-code-1", Name: "work"}},
+	}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "codex",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{
+				Valid:  true,
+				Status: agentpkg.StatusRunning,
+				Detail: map[string]any{"source": "test"},
+			}
+		},
+	})
+
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(`{
+		"tmux_session":"work",
+		"tmux_pane_id":"%7",
+		"event_name":"UserPromptSubmit",
+		"raw_event":{"prompt":"hi"},
+		"agent_type":"codex",
+		"sender_pid":1234,
+		"sender_start_time":"Sun Apr 20 01:30:00 2026"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	page := waitForTraceChains(t, m, "work", 1)
+	if got := len(page.Chains); got != 1 {
+		t.Fatalf("len(page.Chains) = %d, want 1", got)
+	}
+	if page.Chains[0].TerminalStatus != "completed" {
+		t.Fatalf("TerminalStatus = %q, want completed", page.Chains[0].TerminalStatus)
+	}
+	if page.Chains[0].LatestStepKind != "emit" {
+		t.Fatalf("LatestStepKind = %q, want emit", page.Chains[0].LatestStepKind)
+	}
+
+	record, err := m.traces.GetChainRecord(page.Chains[0].ChainID)
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if got := len(record.Steps); got < 5 {
+		t.Fatalf("len(record.Steps) = %d, want >= 5", got)
+	}
+	if record.Steps[0].Kind != "trigger" {
+		t.Fatalf("record.Steps[0].Kind = %q, want trigger", record.Steps[0].Kind)
+	}
+	if record.Steps[1].Kind != "verify" {
+		t.Fatalf("record.Steps[1].Kind = %q, want verify", record.Steps[1].Kind)
+	}
+	if record.Steps[1].ParentStepID != record.Steps[0].StepID {
+		t.Fatalf("verify ParentStepID = %q, want %q", record.Steps[1].ParentStepID, record.Steps[0].StepID)
+	}
+	if record.Steps[len(record.Steps)-1].Kind != "emit" {
+		t.Fatalf("last step kind = %q, want emit", record.Steps[len(record.Steps)-1].Kind)
+	}
+}
+
+func TestHandleEvent_VerifyRejectPersistsTerminalChain(t *testing.T) {
+	m := newTestModule(t)
+	origVerify := verifyEventFn
+	verifyEventFn = func(_ *Module, _ EventRequest) verifyDecision {
+		return verifyDecision{Accepted: false, Reason: "pid_not_in_pane_tree"}
+	}
+	t.Cleanup(func() {
+		verifyEventFn = origVerify
+	})
+
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(`{
+		"tmux_session":"work",
+		"tmux_pane_id":"%7",
+		"event_name":"Stop",
+		"raw_event":{},
+		"agent_type":"cc",
+		"sender_pid":1234,
+		"sender_start_time":"Sun Apr 20 01:30:00 2026"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+
+	page := waitForTraceChains(t, m, "work", 1)
+	if got := len(page.Chains); got != 1 {
+		t.Fatalf("len(page.Chains) = %d, want 1", got)
+	}
+	if page.Chains[0].TerminalStatus != "completed" {
+		t.Fatalf("TerminalStatus = %q, want completed", page.Chains[0].TerminalStatus)
+	}
+	if page.Chains[0].LatestDecision != "rejected" {
+		t.Fatalf("LatestDecision = %q, want rejected", page.Chains[0].LatestDecision)
+	}
+
+	record, err := m.traces.GetChainRecord(page.Chains[0].ChainID)
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if got := len(record.Steps); got != 2 {
+		t.Fatalf("len(record.Steps) = %d, want 2", got)
+	}
+	if record.Steps[1].ParentStepID != record.Steps[0].StepID {
+		t.Fatalf("verify ParentStepID = %q, want %q", record.Steps[1].ParentStepID, record.Steps[0].StepID)
+	}
+}
+
+func waitForTraceChains(t *testing.T, m *Module, tmuxSession string, want int) store.TraceChainPage {
+	t.Helper()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		page, err := m.traces.ListChains(store.TraceListFilter{TmuxSession: tmuxSession, Limit: 10})
+		if err != nil {
+			t.Fatalf("ListChains: %v", err)
+		}
+		if len(page.Chains) >= want {
+			return page
+		}
+		if time.Now().After(deadline) {
+			return page
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

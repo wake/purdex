@@ -7,46 +7,95 @@ import (
 	"github.com/wake/purdex/internal/store"
 )
 
-func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult, broadcastTs int64) (*SessionProjection, error) {
+type FrameTraceMeta struct {
+	FrameID       string
+	ParentFrameID string
+	Decision      string
+	Reason        string
+	Before        any
+	After         any
+}
+
+func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult, broadcastTs int64) (*SessionProjection, FrameTraceMeta, error) {
 	if m.frames == nil {
-		return nil, nil
+		return nil, FrameTraceMeta{Decision: "skipped", Reason: "frame_store_unavailable", Before: map[string]any{}, After: map[string]any{}}, nil
 	}
 	if req.EventName != "SubagentStart" && req.EventName != "SubagentStop" && !result.Valid {
-		return m.projectPane(req.TmuxPaneID)
+		projection, err := m.projectPane(req.TmuxPaneID)
+		return projection, FrameTraceMeta{Decision: "skipped", Reason: "derive_invalid", Before: map[string]any{}, After: map[string]any{}}, err
 	}
 
 	frame, err := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
 	if err != nil {
-		return nil, err
+		return nil, FrameTraceMeta{}, err
 	}
+	before := summarizeFrame(frame)
 
 	switch req.EventName {
 	case "SessionEnd":
 		if frame != nil {
 			if err := m.frames.Delete(frame.FrameID); err != nil {
-				return nil, err
+				return nil, FrameTraceMeta{}, err
 			}
+			projection, err := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				FrameID:       frame.FrameID,
+				ParentFrameID: frame.ParentFrameID,
+				Decision:      "deleted_frame",
+				Reason:        "session_end",
+				Before:        before,
+				After:         map[string]any{},
+			}, err
 		}
-		return m.projectPane(req.TmuxPaneID)
+		projection, err := m.projectPane(req.TmuxPaneID)
+		return projection, FrameTraceMeta{
+			Decision: "skipped",
+			Reason:   "session_end_without_frame",
+			Before:   before,
+			After:    map[string]any{},
+		}, err
 	case "SubagentStart", "SubagentStop":
 		if frame == nil {
-			return m.projectPane(req.TmuxPaneID)
+			projection, err := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				Decision: "skipped",
+				Reason:   "frame_missing",
+				Before:   before,
+				After:    map[string]any{},
+			}, err
 		}
 		agentID, _ := result.Detail["agent_id"].(string)
 		if agentID == "" {
-			return m.projectPane(req.TmuxPaneID)
+			projection, err := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				FrameID:       frame.FrameID,
+				ParentFrameID: frame.ParentFrameID,
+				Decision:      "skipped",
+				Reason:        "subagent_id_missing",
+				Before:        before,
+				After:         before,
+			}, err
 		}
 		frame.Subagents = updateSubagents(frame.Subagents, req.EventName, agentID)
 		frame.LastSeenAt = broadcastTs
-		if _, err := m.frames.Upsert(*frame); err != nil {
-			return nil, err
+		stored, err := m.frames.Upsert(*frame)
+		if err != nil {
+			return nil, FrameTraceMeta{}, err
 		}
-		return m.projectPane(req.TmuxPaneID)
+		projection, err := m.projectPane(req.TmuxPaneID)
+		return projection, FrameTraceMeta{
+			FrameID:       stored.FrameID,
+			ParentFrameID: stored.ParentFrameID,
+			Decision:      "updated_frame",
+			Reason:        "subagent_membership_changed",
+			Before:        before,
+			After:         summarizeFrame(&stored),
+		}, err
 	}
 
 	info, err := readProcessInfoFn(req.SenderPID)
 	if err != nil {
-		return nil, err
+		return nil, FrameTraceMeta{}, err
 	}
 
 	subagents := []string{}
@@ -60,7 +109,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	if parentFrameID == "" {
 		parent, err := m.frames.FindByPanePID(req.TmuxPaneID, info.PPID)
 		if err != nil {
-			return nil, err
+			return nil, FrameTraceMeta{}, err
 		}
 		if parent != nil && (frame == nil || parent.FrameID != frame.FrameID) {
 			parentFrameID = parent.FrameID
@@ -75,7 +124,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		status = agentpkg.StatusIdle
 	}
 
-	_, err = m.frames.Upsert(store.Frame{
+	stored, err := m.frames.Upsert(store.Frame{
 		FrameID:          frameID(frame),
 		PaneID:           req.TmuxPaneID,
 		AgentType:        req.AgentType,
@@ -90,9 +139,25 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		Verified:         true,
 	})
 	if err != nil {
-		return nil, err
+		return nil, FrameTraceMeta{}, err
 	}
-	return m.projectPane(req.TmuxPaneID)
+	projection, err := m.projectPane(req.TmuxPaneID)
+	reason := "parent_frame_missing"
+	if stored.ParentFrameID != "" {
+		reason = "parent_frame_found"
+	}
+	decision := "created_frame"
+	if frame != nil {
+		decision = "updated_frame"
+	}
+	return projection, FrameTraceMeta{
+		FrameID:       stored.FrameID,
+		ParentFrameID: stored.ParentFrameID,
+		Decision:      decision,
+		Reason:        reason,
+		Before:        before,
+		After:         summarizeFrame(&stored),
+	}, err
 }
 
 func (m *Module) projectPane(paneID string) (*SessionProjection, error) {
@@ -112,6 +177,23 @@ func frameID(frame *store.Frame) string {
 		return ""
 	}
 	return frame.FrameID
+}
+
+func summarizeFrame(frame *store.Frame) map[string]any {
+	if frame == nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"frame_id":         frame.FrameID,
+		"pane_id":          frame.PaneID,
+		"agent_type":       frame.AgentType,
+		"pid":              frame.PID,
+		"ppid":             frame.PPID,
+		"parent_frame_id":  frame.ParentFrameID,
+		"process_start_at": frame.ProcessStartTime,
+		"status":           string(frame.Status),
+		"subagents":        append([]string(nil), frame.Subagents...),
+	}
 }
 
 func updateSubagents(current []string, eventName, agentID string) []string {
