@@ -1,9 +1,12 @@
 // Package agent — self-test endpoint for the statusline pipeline (see #481).
 //
-// Observer semantics: one test invocation registers a single channel keyed by
-// the test nonce. handleAgentStatus signals stage2 on entry and stage3 after
-// Broadcast returns. The test handler consumes both within its per-stage
-// deadlines and then deregisters.
+// Observer semantics: one self-test invocation registers a per-nonce observer
+// with two signals:
+//   - ready: the SPA has received the nonce and subscribed to statuslineTestBus
+//   - stages: handleAgentStatus has received the POST and broadcast the WS event
+//
+// The ready handshake avoids treating SSE write order as a client-ready
+// barrier, while keeping the real `handleAgentStatus -> Broadcast` path intact.
 package agent
 
 import (
@@ -11,12 +14,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,12 +33,25 @@ const (
 	testStageBroadcast                      // stage 3 (WS Broadcast called)
 )
 
-func (m *Module) registerTestObserver(nonce string) chan testStage {
-	ch := make(chan testStage, 2) // buffered so signalTestStage never blocks the POST handler
+type testObserver struct {
+	stages    chan testStage
+	ready     chan struct{}
+	readyOnce sync.Once
+}
+
+const testReadyClientProtocol = "ready-v1"
+
+var testReadyTimeout = 2 * time.Second
+
+func (m *Module) registerTestObserver(nonce string) *testObserver {
+	obs := &testObserver{
+		stages: make(chan testStage, 2),
+		ready:  make(chan struct{}),
+	}
 	m.testMu.Lock()
-	m.testObservers[nonce] = ch
+	m.testObservers[nonce] = obs
 	m.testMu.Unlock()
-	return ch
+	return obs
 }
 
 func (m *Module) deregisterTestObserver(nonce string) {
@@ -41,15 +60,33 @@ func (m *Module) deregisterTestObserver(nonce string) {
 	m.testMu.Unlock()
 }
 
+func (m *Module) hasTestObserver(nonce string) bool {
+	m.testMu.Lock()
+	_, ok := m.testObservers[nonce]
+	m.testMu.Unlock()
+	return ok
+}
+
+func (m *Module) markTestObserverReady(nonce string) bool {
+	m.testMu.Lock()
+	obs := m.testObservers[nonce]
+	m.testMu.Unlock()
+	if obs == nil {
+		return false
+}
+	obs.readyOnce.Do(func() { close(obs.ready) })
+	return true
+}
+
 func (m *Module) signalTestStage(nonce string, stage testStage) {
 	m.testMu.Lock()
-	ch := m.testObservers[nonce]
+	obs := m.testObservers[nonce]
 	m.testMu.Unlock()
-	if ch == nil {
+	if obs == nil {
 		return
 	}
 	select {
-	case ch <- stage:
+	case obs.stages <- stage:
 	default:
 		// Channel full — observer already got the signal or has moved on. Drop.
 	}
@@ -91,11 +128,41 @@ type testStageEvent struct {
 	Nonce     string `json:"nonce,omitempty"`
 }
 
+func (m *Module) handleStatuslineTestReady(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Nonce string `json:"nonce"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Nonce == "" {
+		http.Error(w, `{"error":"nonce required"}`, http.StatusBadRequest)
+		return
+	}
+	if !m.markTestObserverReady(req.Nonce) {
+		http.Error(w, `{"error":"unknown nonce"}`, http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{}`))
+}
+
 // handleStatuslineTest handles POST /api/agent/cc/statusline/test.
 // Spawns a real `pdx statusline-proxy` subprocess with a test nonce, then
 // streams per-stage pass/fail events over SSE for stages 1-3. Stages 4-5 are
 // marked by the SPA after it sees the daemon-broadcast WS event.
+//
 func (m *Module) handleStatuslineTest(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ClientProtocol string `json:"client_protocol"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -107,7 +174,7 @@ func (m *Module) handleStatuslineTest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	nonce := "__pdx_test_" + randomNonceHex()
-	ch := m.registerTestObserver(nonce)
+	obs := m.registerTestObserver(nonce)
 	defer m.deregisterTestObserver(nonce)
 
 	writeEvent := func(ev testStageEvent) bool {
@@ -134,6 +201,19 @@ func (m *Module) handleStatuslineTest(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	if req.ClientProtocol == testReadyClientProtocol {
+		if !writeEvent(testStageEvent{Type: "init", Nonce: nonce}) {
+			return
+		}
+		select {
+		case <-obs.ready:
+		case <-time.After(testReadyTimeout):
+			emitStage(1, "Proxy spawned", "failed", "timeout waiting for client ready", 0)
+			writeEvent(testStageEvent{Type: "done", Nonce: nonce})
+			return
+		}
+	}
+
 	spawn := m.testSpawnProxy
 	if spawn == nil {
 		spawn = m.defaultSpawnTestProxy
@@ -149,10 +229,10 @@ func (m *Module) handleStatuslineTest(w http.ResponseWriter, r *http.Request) {
 	}
 	emitStage(1, "Proxy spawned", "passed", "", time.Since(stage1Start))
 
-	// Stage 2: wait for handleAgentStatus to signal "received"
+	// Stage 2: wait for handleAgentStatus to signal "received".
 	stage2Start := time.Now()
 	select {
-	case s := <-ch:
+	case s := <-obs.stages:
 		if s != testStageReceived {
 			emitStage(2, "Proxy → daemon POST received", "failed", fmt.Sprintf("out-of-order stage %d", s), time.Since(stage2Start))
 			writeEvent(testStageEvent{Type: "done"})
@@ -165,10 +245,10 @@ func (m *Module) handleStatuslineTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stage 3: wait for broadcast signal
+	// Stage 3: wait for the real /api/agent/status handler to broadcast.
 	stage3Start := time.Now()
 	select {
-	case s := <-ch:
+	case s := <-obs.stages:
 		if s != testStageBroadcast {
 			emitStage(3, "Daemon → WS broadcast", "failed", fmt.Sprintf("out-of-order stage %d", s), time.Since(stage3Start))
 			writeEvent(testStageEvent{Type: "done"})

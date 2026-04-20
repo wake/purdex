@@ -915,11 +915,13 @@ func newHandlerTestEnv(t *testing.T) *handlerTestEnv {
 	return &handlerTestEnv{module: m}
 }
 
-func TestHandleAgentStatusTestNonceSignalsAndBroadcasts(t *testing.T) {
+func TestHandleAgentStatusTestNonceSignalsAndBroadcastsWhenObserverPresent(t *testing.T) {
 	env := newHandlerTestEnv(t)
 	nonce := "__pdx_test_0123abcd"
-	ch := env.module.registerTestObserver(nonce)
+	obs := env.module.registerTestObserver(nonce)
 	defer env.module.deregisterTestObserver(nonce)
+	sub := env.module.core.Events.AddTestSubscriber()
+	defer env.module.core.Events.RemoveTestSubscriber(sub)
 
 	body := `{"tmux_session":"` + nonce + `","agent_type":"cc","raw_status":{"model":{"display_name":"pipeline-test"}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/status", strings.NewReader(body))
@@ -930,20 +932,27 @@ func TestHandleAgentStatusTestNonceSignalsAndBroadcasts(t *testing.T) {
 		t.Fatalf("status %d, want 200", w.Code)
 	}
 
-	// Drain stage 2 then stage 3 within a short window.
 	got := make([]testStage, 0, 2)
 	deadline := time.After(500 * time.Millisecond)
-loop:
 	for len(got) < 2 {
 		select {
-		case s := <-ch:
-			got = append(got, s)
+		case stage := <-obs.stages:
+			got = append(got, stage)
 		case <-deadline:
-			break loop
+			t.Fatalf("timed out waiting for test stages; got=%v", got)
 		}
 	}
-	if len(got) != 2 || got[0] != testStageReceived || got[1] != testStageBroadcast {
+	if got[0] != testStageReceived || got[1] != testStageBroadcast {
 		t.Fatalf("stage sequence = %v, want [received broadcast]", got)
+	}
+
+	select {
+	case msg := <-sub.SendCh():
+		if !strings.Contains(string(msg), `"type":"agent.status"`) || !strings.Contains(string(msg), `"session":"`+nonce+`"`) {
+			t.Fatalf("unexpected broadcast: %s", string(msg))
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for test-nonce broadcast")
 	}
 
 	// Snapshot map must NOT hold the test nonce (display map is real sessions only).
@@ -963,6 +972,38 @@ func TestHandleAgentStatusTestNonceWithoutObserverIsSilent(t *testing.T) {
 	env.module.handleAgentStatus(w, req) // must not panic, must return 200
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d, want 200", w.Code)
+	}
+}
+
+func TestHandleAgentStatusTestPrefixWithoutObserverFallsThroughToProduction(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	env.module.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-1", Name: "__pdx_test_real"}}}
+	sub := env.module.core.Events.AddTestSubscriber()
+	defer env.module.core.Events.RemoveTestSubscriber(sub)
+
+	body := `{"tmux_session":"__pdx_test_real","agent_type":"cc","raw_status":{"model":{"display_name":"prod-like"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/status", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	env.module.handleAgentStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", w.Code)
+	}
+
+	select {
+	case msg := <-sub.SendCh():
+		if !strings.Contains(string(msg), `"type":"agent.status"`) || !strings.Contains(string(msg), `"session":"code-1"`) {
+			t.Fatalf("unexpected broadcast: %s", string(msg))
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for production-path status broadcast")
+	}
+
+	env.module.snapshotMu.RLock()
+	_, persisted := env.module.statusSnapshots["code-1"]
+	env.module.snapshotMu.RUnlock()
+	if !persisted {
+		t.Fatal("expected production-path payload to persist in statusSnapshots")
 	}
 }
 
