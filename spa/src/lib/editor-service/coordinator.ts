@@ -8,6 +8,7 @@ import {
 import { EditorTreeRepository, type EditorTreeNode } from '../editor-db/tree-repository'
 import {
   EditorContentRepository,
+  type EditorBindingStatus,
   type EditorContentRecord,
 } from '../editor-db/content-repository'
 
@@ -21,6 +22,7 @@ export interface EditorCoordinator {
   createFile(path: string, initialContent: string): Promise<EditorFileRecord>
   createFolder(path: string): Promise<string>
   resolvePath(docId: string): Promise<string | null>
+  getDocumentSnapshot(docId: string): Promise<{ docId: string; path: string | null; text: string; version: number; bindingStatus: EditorBindingStatus }>
   renameNode(fromPath: string, toPath: string): Promise<void>
   saveDocument(docId: string, text: string, expectedVersion: number): Promise<EditorFileRecord>
   saveDocumentAs(docId: string, newPath: string, text: string, expectedVersion: number): Promise<EditorFileRecord>
@@ -163,6 +165,23 @@ async function createCoordinatorFromDb(db: IDBDatabase): Promise<EditorCoordinat
         return null
       }
       return node.path
+    },
+
+    async getDocumentSnapshot(docId: string) {
+      const [node, record] = await Promise.all([
+        tree.getNodeByDocId(docId),
+        contents.readDocument(docId),
+      ])
+      if (!node || !record) {
+        throw new Error(`Document not found: ${docId}`)
+      }
+      return {
+        docId,
+        path: node.state === 'active' && record.bindingStatus === 'active' ? node.path : null,
+        text: record.text,
+        version: record.version,
+        bindingStatus: record.bindingStatus,
+      }
     },
 
     async renameNode(fromPath: string, toPath: string): Promise<void> {

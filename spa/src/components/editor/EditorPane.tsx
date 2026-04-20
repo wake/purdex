@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useCallback, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { getFsBackend } from '../../lib/fs-backend'
+import { getEditorCoordinator } from '../../lib/editor-service/coordinator'
 import { MonacoWrapper } from './MonacoWrapper'
 import { DiffView } from './DiffView'
 import { EditorToolbar } from './EditorToolbar'
@@ -34,13 +35,33 @@ function detectLanguage(filePath: string): string {
 export function EditorPane({ pane, isActive }: PaneRendererProps) {
   const content = pane.content
   if (content.kind !== 'editor') return null
-  return <EditorPaneInner source={content.source} filePath={content.filePath} isActive={isActive} />
+  return (
+    <EditorPaneInner
+      source={content.source}
+      docId={content.source.type === 'inapp' ? content.docId : undefined}
+      filePath={content.filePath ?? ''}
+      isActive={isActive}
+    />
+  )
 }
 
-function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; filePath: string; isActive: boolean }) {
-  const key = bufferKey(source, filePath)
+function EditorPaneInner({
+  source,
+  docId,
+  filePath,
+  isActive,
+}: {
+  source: FileSource
+  docId?: string
+  filePath: string
+  isActive: boolean
+}) {
+  const key = source.type === 'inapp' ? (docId ?? filePath) : bufferKey(source, filePath)
   const buffer = useEditorStore((s) => s.buffers[key])
-  const isMarkdown = filePath.endsWith('.md') || filePath.endsWith('.mdx')
+  const [currentPath, setCurrentPath] = useState(filePath)
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'missing'>('loading')
+  const displayPath = currentPath || filePath
+  const isMarkdown = displayPath.endsWith('.md') || displayPath.endsWith('.mdx')
   const [editorMode, setEditorMode] = useState<'raw' | 'wysiwyg'>('raw')
   const [showDiff, setShowDiff] = useState(false)
 
@@ -51,24 +72,58 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
     const backend = getFsBackend(source)
     if (!backend) return
 
-    backend.read(filePath)
-      .then((data) => {
+    const load = async () => {
+      try {
+        if (source.type === 'inapp' && docId) {
+          const coordinator = await getEditorCoordinator()
+          const snapshot = await coordinator.getDocumentSnapshot(docId)
+          if (stale) return
+          const nextPath = snapshot.path ?? filePath
+          setCurrentPath(nextPath)
+          let stat: { mtime: number; size: number } | undefined
+          if (snapshot.path) {
+            try {
+              const nextStat = await backend.stat(snapshot.path)
+              stat = { mtime: nextStat.mtime, size: nextStat.size }
+            } catch {
+              stat = undefined
+            }
+          }
+          useEditorStore.getState().openBuffer(
+            key,
+            snapshot.text,
+            detectLanguage(nextPath),
+            stat,
+            { baseVersion: snapshot.version, bindingStatus: snapshot.bindingStatus },
+          )
+          setLoadState('ready')
+          return
+        }
+
+        const data = await backend.read(filePath)
         if (stale) return
         const text = new TextDecoder().decode(data)
-        const lang = detectLanguage(filePath)
-        return backend.stat(filePath).then((stat) => {
-          if (stale) return
-          useEditorStore.getState().openBuffer(key, text, lang, { mtime: stat.mtime, size: stat.size })
-        })
-      })
-      .catch(() => {
+        const stat = await backend.stat(filePath)
         if (stale) return
+        setCurrentPath(filePath)
+        useEditorStore.getState().openBuffer(key, text, detectLanguage(filePath), { mtime: stat.mtime, size: stat.size })
+        setLoadState('ready')
+      } catch {
+        if (stale) return
+        if (source.type === 'inapp') {
+          setLoadState('missing')
+          return
+        }
         // New file — open empty buffer
         useEditorStore.getState().openBuffer(key, '', detectLanguage(filePath))
-      })
+        setLoadState('ready')
+      }
+    }
+
+    void load()
 
     return () => { stale = true }
-  }, [key, source, filePath])
+  }, [docId, filePath, key, source])
 
   // Cleanup buffer on unmount
   useEffect(() => {
@@ -84,6 +139,28 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
 
     const backend = getFsBackend(source)
     if (!backend) return
+
+    if (source.type === 'inapp' && docId) {
+      void getEditorCoordinator()
+        .then((coordinator) => coordinator.getDocumentSnapshot(docId))
+        .then((snapshot) => {
+          const latestBuf = useEditorStore.getState().buffers[key]
+          if (!latestBuf) return
+          const nextPath = snapshot.path ?? filePath
+          setCurrentPath(nextPath)
+          if (snapshot.text === latestBuf.savedContent && snapshot.bindingStatus === latestBuf.bindingStatus) return
+          if (!latestBuf.isDirty) {
+            useEditorStore.getState().reloadBuffer(
+              key,
+              snapshot.text,
+              undefined,
+              { baseVersion: snapshot.version, bindingStatus: snapshot.bindingStatus },
+            )
+          }
+        })
+        .catch(() => {})
+      return
+    }
 
     backend.stat(filePath)
       .then((stat) => {
@@ -105,7 +182,7 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
       })
       .catch(() => {}) // File may have been deleted
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-check on tab activation, not on source/filePath change
-  }, [isActive, key])
+  }, [docId, filePath, isActive, key, source])
 
   const handleSave = useCallback(async () => {
     const buf = useEditorStore.getState().buffers[key]
@@ -113,24 +190,48 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
     const backend = getFsBackend(source)
     if (!backend) return
     try {
-      const encoded = new TextEncoder().encode(buf.content)
-      await backend.write(filePath, encoded)
-      const newStat = await backend.stat(filePath)
-      useEditorStore.getState().markSaved(key, { mtime: newStat.mtime, size: newStat.size })
+      if (source.type === 'inapp' && docId) {
+        const coordinator = await getEditorCoordinator()
+        const next = await coordinator.saveDocument(docId, buf.content, buf.baseVersion)
+        setCurrentPath(next.path)
+        let stat: { mtime: number; size: number } | undefined
+        try {
+          const newStat = await backend.stat(next.path)
+          stat = { mtime: newStat.mtime, size: newStat.size }
+        } catch {
+          stat = undefined
+        }
+        useEditorStore.getState().markSaved(
+          key,
+          stat,
+          { baseVersion: next.version, bindingStatus: 'active' },
+        )
+      } else {
+        const encoded = new TextEncoder().encode(buf.content)
+        await backend.write(filePath, encoded)
+        const newStat = await backend.stat(filePath)
+        useEditorStore.getState().markSaved(key, { mtime: newStat.mtime, size: newStat.size })
+      }
       setShowDiff(false)
     } catch (err) {
+      if (source.type === 'inapp' && /save as required|parent folder does not exist|path already exists/i.test(String(err))) {
+        useEditorStore.getState().setBindingStatus(key, 'orphaned')
+      }
       console.error('[editor] Save failed:', err)
     }
-  }, [key, source, filePath])
+  }, [docId, filePath, key, source])
 
   if (!buffer) {
+    if (loadState === 'missing') {
+      return <div className="flex-1 flex items-center justify-center text-text-muted text-xs">Document unavailable</div>
+    }
     return <div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading...</div>
   }
 
   return (
     <div className="h-full w-full flex flex-col overflow-hidden">
       <EditorToolbar
-        filePath={filePath}
+        filePath={displayPath}
         isDirty={buffer.isDirty}
         isMarkdown={isMarkdown}
         editorMode={editorMode}

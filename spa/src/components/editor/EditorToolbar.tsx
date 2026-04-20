@@ -12,12 +12,18 @@ interface Props {
 }
 
 export function EditorToolbar({ filePath, isDirty, isMarkdown, editorMode, showDiff, onSave, onToggleMode, onDiff }: Props) {
-  const fileName = filePath.split('/').pop() ?? filePath
+  const segments = filePath.split('/').filter(Boolean)
 
   return (
     <div className="flex items-center justify-between px-3 py-1 border-b border-border-subtle bg-surface-secondary">
-      <div className="flex items-center gap-2 text-xs text-text-secondary truncate">
-        <span className="truncate" title={filePath}>{fileName}</span>
+      <div className="flex items-center gap-1 min-w-0 text-xs text-text-secondary">
+        <span className="shrink-0 text-text-muted">/</span>
+        {segments.map((segment, index) => (
+          <span key={`${segment}-${index}`} className="flex items-center min-w-0">
+            {index > 0 && <span className="mx-1 shrink-0 text-text-muted">/</span>}
+            <span className="truncate" title={filePath}>{segment}</span>
+          </span>
+        ))}
         {isDirty && <span className="text-accent-base" title="Unsaved changes">●</span>}
       </div>
       <div className="flex items-center gap-1">
