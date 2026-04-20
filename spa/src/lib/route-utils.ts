@@ -1,8 +1,10 @@
 import type { PaneContent } from '../types/tab'
+import { decodeHostRouteId, isHostSubPage, type HostSubPage } from './host-routes'
 
 export type ParsedRoute =
   | { kind: 'history' }
-  | { kind: 'hosts' }
+  | { kind: 'hosts'; hostId?: string; subPage?: HostSubPage }
+  | { kind: 'hosts-invalid'; hostId?: string; subPage?: string }
   | { kind: 'settings'; scope: 'global'; section?: string; subsection?: string }
   | { kind: 'session-tab'; tabId: string; mode: 'terminal' | 'stream' }
   | { kind: 'workspace'; workspaceId: string }
@@ -21,6 +23,26 @@ export function parseRoute(path: string): ParsedRoute | null {
   if (path === '/') return null // no-op — preserves persisted tab state
   if (path === '/history') return { kind: 'history' }
   if (path === '/hosts') return { kind: 'hosts' }
+  if (path === '/hosts/') return { kind: 'hosts' }
+  if (path.startsWith('/hosts/')) {
+    const segments = path.split('/').filter(Boolean)
+    const hostId = segments[1] ? decodeHostRouteId(segments[1]) : null
+    const subPage = segments[2]
+
+    if (segments.length === 2) {
+      return hostId ? { kind: 'hosts-invalid', hostId } : null
+    }
+
+    if (segments.length === 3 && hostId && subPage && isHostSubPage(subPage)) {
+      return { kind: 'hosts', hostId, subPage }
+    }
+
+    if (hostId && subPage) {
+      return { kind: 'hosts-invalid', hostId, subPage }
+    }
+
+    return hostId ? { kind: 'hosts-invalid', hostId } : null
+  }
   if (path === '/settings') return { kind: 'settings', scope: 'global' }
   if (path.startsWith('/settings/')) {
     const rest = path.slice('/settings/'.length)

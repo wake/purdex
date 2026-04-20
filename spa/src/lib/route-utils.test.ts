@@ -14,6 +14,49 @@ describe('parseRoute', () => {
     expect(parseRoute('/hosts')).toEqual({ kind: 'hosts' })
   })
 
+  it('parses /hosts/ as bare hosts', () => {
+    expect(parseRoute('/hosts/')).toEqual({ kind: 'hosts' })
+  })
+
+  it('parses /hosts/:hostId/:subPage with a valid sub page', () => {
+    expect(parseRoute('/hosts/test-host/sessions')).toEqual({
+      kind: 'hosts',
+      hostId: 'test-host',
+      subPage: 'sessions',
+    })
+  })
+
+  it('decodes encoded host ids in host deep links', () => {
+    expect(parseRoute('/hosts/host%2Fwith%3Fhash%23value/logs')).toEqual({
+      kind: 'hosts',
+      hostId: 'host/with?hash#value',
+      subPage: 'logs',
+    })
+  })
+
+  it('parses /hosts/:hostId/:subPage with an invalid sub page', () => {
+    expect(parseRoute('/hosts/test-host/not-a-page')).toEqual({
+      kind: 'hosts-invalid',
+      hostId: 'test-host',
+      subPage: 'not-a-page',
+    })
+  })
+
+  it('parses /hosts/:hostId/:subPage/:extra as invalid even when sub page is known', () => {
+    expect(parseRoute('/hosts/test-host/sessions/extra')).toEqual({
+      kind: 'hosts-invalid',
+      hostId: 'test-host',
+      subPage: 'sessions',
+    })
+  })
+
+  it('parses /hosts/:hostId as invalid', () => {
+    expect(parseRoute('/hosts/test-host')).toEqual({
+      kind: 'hosts-invalid',
+      hostId: 'test-host',
+    })
+  })
+
   it('parses /settings', () => {
     expect(parseRoute('/settings')).toEqual({ kind: 'settings', scope: 'global' })
   })

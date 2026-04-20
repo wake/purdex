@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.193] - 2026-04-20
+
+### Fix(spa): preserve host deep links across tab switches (#518)
+
+- Host 管理頁現在支援 `/hosts/:hostId/:subPage` deep link，切換 tab 後回到 hosts 頁時會保留上一個 canonical host section，而不是跳回第一個 section。
+- `HostPage` 改成 URL-driven selection；bare `/hosts`、invalid deep link、host deletion fallback 都會收斂到可預期的 canonical path，且在沒有 host 可選時會回到 bare `/hosts`。
+- `useRouteSync()` 對 valid / invalid host deep links 都只開 singleton hosts tab，不會把 host selection 滲進 tab model。
+- Host route 會對 `hostId` 做 URL encode/decode，避免含保留字元的 host id 破壞 deep link。
+- 補齊 parser、`HostPage`、mounted route-sync 測試，涵蓋 remount、keep-alive、invalid route、no-host fallback 與 canonicalization。
+
 ## [1.0.0-alpha.192] - 2026-04-20
 
 ### Feat(sync): P1 Sync History + Restore (#488)

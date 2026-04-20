@@ -80,6 +80,7 @@ export function useRouteSync() {
         openSingletonTab({ kind: 'history' })
         break
       case 'hosts':
+      case 'hosts-invalid':
         openSingletonTab({ kind: 'hosts' })
         break
       case 'settings':
