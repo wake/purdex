@@ -148,6 +148,9 @@ func (m *Module) Init(c *core.Core) error {
 // RegisterRoutes registers the agent API endpoints.
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/event", m.handleEvent)
+	mux.HandleFunc("GET /api/agent/monitor/chains", m.handleMonitorChains)
+	mux.HandleFunc("GET /api/agent/monitor/chains/{id}", m.handleMonitorChain)
+	mux.HandleFunc("GET /api/agent/monitor/projection", m.handleMonitorProjection)
 	mux.HandleFunc("GET /api/hooks/{agent}/status", m.handleHookStatus)
 	mux.HandleFunc("POST /api/hooks/{agent}/setup", m.handleHookSetup)
 	mux.HandleFunc("GET /api/agent/{agent}/statusline/status", m.handleStatuslineStatus)
