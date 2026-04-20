@@ -6,15 +6,17 @@ import type { StoredSnapshot } from '../../../../../lib/sync/snapshot-types'
 
 export function useSnapshotDiff(snapshot: StoredSnapshot | null): ContributorDiff[] | null {
   const clientId = useSyncStore((s) => s.clientId) ?? 'unknown'
-  const enabledModules = useSyncStore((s) => s.enabledModules)
 
   return useMemo(() => {
     if (!snapshot) return null
     const engine = __getActiveEngine()
-    const enabled = enabledModules.length > 0
-      ? enabledModules
-      : engine.getContributors().map((c) => c.id)
-    const current = engine.serialize(clientId, enabled)
+    // Diff against the full contributor registry, not just enabledModules —
+    // a snapshot may contain data for currently-disabled contributors, and
+    // serializing with only enabled ids would misreport those as
+    // "missing-in-current" when they are in fact still registered.
+    // Mirror createPreOperationSnapshot which also uses the full registry.
+    const allIds = engine.getContributors().map((c) => c.id)
+    const current = engine.serialize(clientId, allIds)
     return computeSnapshotDiff(snapshot.bundle, current)
-  }, [snapshot, clientId, enabledModules])
+  }, [snapshot, clientId])
 }
