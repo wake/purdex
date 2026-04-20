@@ -1,8 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.0-alpha.190] - 2026-04-20
 
-### Feat(spa): Codex icon variant setting
+### Feat(spa): Codex icon variant setting (#491)
 
 - **Settings → Terminal → Codex icon**: OpenAI / Codex monochrome button pair with live preview, mirroring the existing Claude Code bot/star row. Active button uses `aria-pressed`; when tab indicator is dot-only, a hidden-hint paragraph matches the CC behaviour.
 - **Icon options**: `openai` (Phosphor `OpenAiLogo`, default — unchanged behaviour) and `codex` (monochrome `@lobehub/icons-static-svg/codex.svg`, inherits tab theme via `currentColor`).
