@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.195] - 2026-04-20
+
+### Feat(agent): add tmux agent hook trace monitor (#526)
+
+- daemon 新增 hook-only trace rail，將 trigger / verify / frame / projection / emit 傳遞鏈持久化到 SQLite，並補上 migration hardening、retention 與 typed monitor APIs。
+- Settings 新增 dev-only `Tmux Agent Monitor` 區塊，可依 host / session / pane 檢視 chain list、階層 step tree、selected-step JSON inspector 與 projection summary。
+- 前端 monitor 針對 active host、pane-scoped projection、stale request 覆寫與失敗後殘留舊資料等除錯誤導情境補上防護與測試。
+- 後續結構性收斂另開 #523、#524、#525 追蹤，不阻擋本次功能出貨。
+
 ## [1.0.0-alpha.194] - 2026-04-20
 
 ### Fix(agent): harden statusline self-test handshake across version skew (#520)
