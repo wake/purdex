@@ -9,6 +9,9 @@ export function contentMatches(a: PaneContent, b: PaneContent): boolean {
   }
   if (a.kind === 'editor' && b.kind === 'editor') {
     if (a.source.type !== b.source.type) return false
+    if (a.source.type === 'inapp') {
+      return a.docId === b.docId
+    }
     if (a.source.type === 'daemon' && b.source.type === 'daemon') {
       return a.filePath === b.filePath && a.source.hostId === b.source.hostId
     }

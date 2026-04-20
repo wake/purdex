@@ -6,14 +6,22 @@ describe('useEditorStore', () => {
     useEditorStore.getState().clearAllBuffers()
   })
 
-  it('opens a buffer with content', () => {
-    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript')
+  it('opens a buffer with content and metadata', () => {
+    useEditorStore.getState().openBuffer(
+      'key1',
+      'hello',
+      'typescript',
+      { mtime: 10, size: 5 },
+      { baseVersion: 7, bindingStatus: 'orphaned' },
+    )
     const buf = useEditorStore.getState().buffers['key1']
     expect(buf).toBeDefined()
     expect(buf.content).toBe('hello')
     expect(buf.savedContent).toBe('hello')
     expect(buf.isDirty).toBe(false)
     expect(buf.language).toBe('typescript')
+    expect(buf.baseVersion).toBe(7)
+    expect(buf.bindingStatus).toBe('orphaned')
   })
 
   it('updateContent marks buffer as dirty', () => {
@@ -65,9 +73,25 @@ describe('useEditorStore', () => {
 
   it('markSaved preserves existing lastStat when no stat provided', () => {
     const initialStat = { mtime: 1000, size: 30 }
-    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript', initialStat)
+    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript', initialStat, { baseVersion: 3, bindingStatus: 'active' })
     useEditorStore.getState().markSaved('key1')
     const buf = useEditorStore.getState().buffers['key1']
     expect(buf.lastStat).toEqual({ mtime: 1000, size: 30 })
+  })
+
+  it('preserves baseVersion and bindingStatus across content updates', () => {
+    useEditorStore.getState().openBuffer(
+      'key1',
+      'hello',
+      'typescript',
+      undefined,
+      { baseVersion: 12, bindingStatus: 'deleted' },
+    )
+    useEditorStore.getState().updateContent('key1', 'hello world')
+    useEditorStore.getState().reloadBuffer('key1', 'fresh content')
+    useEditorStore.getState().markSaved('key1')
+    const buf = useEditorStore.getState().buffers['key1']
+    expect(buf.baseVersion).toBe(12)
+    expect(buf.bindingStatus).toBe('deleted')
   })
 })

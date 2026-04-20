@@ -6,6 +6,8 @@ export type FileSource =
   | { type: 'local' }
   | { type: 'inapp' }
 
+export type EditorBindingStatus = 'active' | 'deleted' | 'orphaned'
+
 /** File opener registry 使用的檔案資訊 */
 export interface FileInfo {
   name: string

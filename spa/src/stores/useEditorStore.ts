@@ -1,5 +1,6 @@
 // spa/src/stores/useEditorStore.ts
 import { create } from 'zustand'
+import type { EditorBindingStatus } from '../types/fs'
 
 export interface EditorBuffer {
   content: string
@@ -8,23 +9,31 @@ export interface EditorBuffer {
   language: string
   cursorPosition: { line: number; column: number }
   lastStat: { mtime: number; size: number } | null
+  baseVersion: number
+  bindingStatus: EditorBindingStatus
+}
+
+interface BufferMeta {
+  baseVersion?: number
+  bindingStatus?: EditorBindingStatus
 }
 
 interface EditorState {
   buffers: Record<string, EditorBuffer>
-  openBuffer: (key: string, content: string, language: string, stat?: { mtime: number; size: number }) => void
+  openBuffer: (key: string, content: string, language: string, stat?: { mtime: number; size: number }, meta?: BufferMeta) => void
   updateContent: (key: string, content: string) => void
-  markSaved: (key: string, stat?: { mtime: number; size: number }) => void
+  markSaved: (key: string, stat?: { mtime: number; size: number }, meta?: BufferMeta) => void
   closeBuffer: (key: string) => void
-  reloadBuffer: (key: string, content: string, stat?: { mtime: number; size: number }) => void
+  reloadBuffer: (key: string, content: string, stat?: { mtime: number; size: number }, meta?: BufferMeta) => void
   updateCursor: (key: string, line: number, column: number) => void
+  setBindingStatus: (key: string, bindingStatus: EditorBindingStatus) => void
   clearAllBuffers: () => void
 }
 
 export const useEditorStore = create<EditorState>()((set) => ({
   buffers: {},
 
-  openBuffer: (key, content, language, stat) => set((s) => ({
+  openBuffer: (key, content, language, stat, meta) => set((s) => ({
     buffers: {
       ...s.buffers,
       [key]: {
@@ -34,6 +43,8 @@ export const useEditorStore = create<EditorState>()((set) => ({
         language,
         cursorPosition: { line: 1, column: 1 },
         lastStat: stat ?? null,
+        baseVersion: meta?.baseVersion ?? 0,
+        bindingStatus: meta?.bindingStatus ?? 'active',
       },
     },
   })),
@@ -53,7 +64,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
     }
   }),
 
-  markSaved: (key, stat) => set((s) => {
+  markSaved: (key, stat, meta) => set((s) => {
     const buf = s.buffers[key]
     if (!buf) return s
     return {
@@ -64,6 +75,8 @@ export const useEditorStore = create<EditorState>()((set) => ({
           savedContent: buf.content,
           isDirty: false,
           lastStat: stat ?? buf.lastStat,
+          baseVersion: meta?.baseVersion ?? buf.baseVersion,
+          bindingStatus: meta?.bindingStatus ?? buf.bindingStatus,
         },
       },
     }
@@ -74,7 +87,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
     return { buffers: rest }
   }),
 
-  reloadBuffer: (key, content, stat) => set((s) => {
+  reloadBuffer: (key, content, stat, meta) => set((s) => {
     const buf = s.buffers[key]
     if (!buf) return s
     return {
@@ -86,6 +99,8 @@ export const useEditorStore = create<EditorState>()((set) => ({
           savedContent: content,
           isDirty: false,
           lastStat: stat ?? buf.lastStat,
+          baseVersion: meta?.baseVersion ?? buf.baseVersion,
+          bindingStatus: meta?.bindingStatus ?? buf.bindingStatus,
         },
       },
     }
@@ -100,6 +115,20 @@ export const useEditorStore = create<EditorState>()((set) => ({
         [key]: {
           ...buf,
           cursorPosition: { line, column },
+        },
+      },
+    }
+  }),
+
+  setBindingStatus: (key, bindingStatus) => set((s) => {
+    const buf = s.buffers[key]
+    if (!buf) return s
+    return {
+      buffers: {
+        ...s.buffers,
+        [key]: {
+          ...buf,
+          bindingStatus,
         },
       },
     }

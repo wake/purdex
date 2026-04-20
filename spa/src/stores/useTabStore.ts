@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Tab, PaneContent, PaneLayout, TerminatedReason, LayoutPattern } from '../types/tab'
-import { createTab } from '../types/tab'
+import { createLegacyEditorDocId, createTab, normalizePaneContent } from '../types/tab'
 import { getPrimaryPane, findPane, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern } from '../lib/pane-tree'
 import { contentMatches } from '../lib/pane-utils'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
@@ -12,22 +12,40 @@ import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 function migrateLayout(layout: PaneLayout): PaneLayout {
   if (layout.type === 'leaf') {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const content = layout.pane.content as any
+    let content = layout.pane.content
     if (content.kind === 'session') {
-      return {
-        ...layout,
-        pane: { ...layout.pane, content: { ...content, kind: 'tmux-session' } },
-      }
+      content = { ...content, kind: 'tmux-session' }
     }
-    return layout
+    if (content.kind === 'editor' && content.source?.type === 'inapp' && !('docId' in content)) {
+      content = {
+        ...content,
+        docId: createLegacyEditorDocId(content.filePath),
+      } as PaneContent
+    }
+    content = normalizePaneContent(content as PaneContent)
+    return content === layout.pane.content ? layout : { ...layout, pane: { ...layout.pane, content } }
   }
-  return { ...layout, children: layout.children.map(migrateLayout) }
+  const children = layout.children.map(migrateLayout)
+  return children.some((child, index) => child !== layout.children[index]) ? { ...layout, children } : layout
+}
+
+function normalizeLayout(layout: PaneLayout): PaneLayout {
+  if (layout.type === 'leaf') {
+    const content = normalizePaneContent(layout.pane.content)
+    return content === layout.pane.content ? layout : { ...layout, pane: { ...layout.pane, content } }
+  }
+  const children = layout.children.map(normalizeLayout)
+  return children.some((child, index) => child !== layout.children[index]) ? { ...layout, children } : layout
+}
+
+function normalizeTab(tab: Tab): Tab {
+  const layout = normalizeLayout(tab.layout)
+  return layout === tab.layout ? tab : { ...tab, layout }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function migrateTabStore(state: any, version: number): any {
-  if (version < 2) {
+  if (version < 3) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tabs: Record<string, any> = {}
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -101,47 +119,49 @@ export const useTabStore = create<TabState>()(
 
       addTab: (tab, afterTabId) =>
         set((state) => {
-          if (state.tabs[tab.id]) return state // dedup guard
+          const normalizedTab = normalizeTab(tab)
+          if (state.tabs[normalizedTab.id]) return state // dedup guard
           let newOrder: string[]
           if (afterTabId) {
             const idx = state.tabOrder.indexOf(afterTabId)
             if (idx !== -1) {
               // If afterTabId is pinned and new tab is not, skip past pinned group
               let insertIdx = idx + 1
-              if (!tab.pinned && state.tabs[afterTabId]?.pinned) {
+              if (!normalizedTab.pinned && state.tabs[afterTabId]?.pinned) {
                 while (insertIdx < state.tabOrder.length && state.tabs[state.tabOrder[insertIdx]]?.pinned) {
                   insertIdx++
                 }
               }
               newOrder = [...state.tabOrder]
-              newOrder.splice(insertIdx, 0, tab.id)
+              newOrder.splice(insertIdx, 0, normalizedTab.id)
             } else {
-              newOrder = [...state.tabOrder, tab.id]
+              newOrder = [...state.tabOrder, normalizedTab.id]
             }
           } else {
-            newOrder = [...state.tabOrder, tab.id]
+            newOrder = [...state.tabOrder, normalizedTab.id]
           }
           return {
-            tabs: { ...state.tabs, [tab.id]: tab },
+            tabs: { ...state.tabs, [normalizedTab.id]: normalizedTab },
             tabOrder: newOrder,
-            activeTabId: state.activeTabId ?? tab.id,
+            activeTabId: state.activeTabId ?? normalizedTab.id,
           }
         }),
 
       openSingletonTab: (content) => {
+        const normalizedContent = normalizePaneContent(content)
         const state = get()
         // Scan all tabs' primary pane for matching content
         for (const id of state.tabOrder) {
           const tab = state.tabs[id]
           if (!tab) continue
           const primary = getPrimaryPane(tab.layout)
-          if (contentMatches(primary.content, content)) {
+          if (contentMatches(primary.content, normalizedContent)) {
             get().setActiveTab(id)
             return id
           }
         }
         // Not found — create new tab
-        const tab = createTab(content)
+        const tab = createTab(normalizedContent)
         get().addTab(tab)
         get().setActiveTab(tab.id)
         return tab.id
@@ -197,7 +217,7 @@ export const useTabStore = create<TabState>()(
         set((state) => {
           const tab = state.tabs[tabId]
           if (!tab) return state
-          const newLayout = updatePaneInLayout(tab.layout, paneId, content)
+          const newLayout = updatePaneInLayout(tab.layout, paneId, normalizePaneContent(content))
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
 
@@ -205,7 +225,7 @@ export const useTabStore = create<TabState>()(
         set((state) => {
           const tab = state.tabs[tabId]
           if (!tab) return state
-          const newLayout = splitAtPane(tab.layout, paneId, direction, content)
+          const newLayout = splitAtPane(tab.layout, paneId, direction, normalizePaneContent(content))
           if (newLayout === tab.layout) return state
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
@@ -243,7 +263,7 @@ export const useTabStore = create<TabState>()(
         set((state) => {
           const tab = state.tabs[tabId]
           if (!tab) return state
-          const newLayout = applyLayoutPattern(tab.layout, pattern)
+          const newLayout = normalizeLayout(applyLayoutPattern(tab.layout, pattern))
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
 
@@ -251,7 +271,7 @@ export const useTabStore = create<TabState>()(
         set((state) => {
           const tab = state.tabs[tabId]
           if (!tab) return state
-          return { tabs: { ...state.tabs, [tabId]: { ...tab, layout } } }
+          return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: normalizeLayout(layout) } } }
         }),
 
       detachPane: (tabId, paneId, afterTabId) => {
@@ -355,7 +375,7 @@ export const useTabStore = create<TabState>()(
     {
       name: STORAGE_KEYS.TABS,
       storage: purdexStorage,
-      version: 2,
+      version: 3,
       migrate: migrateTabStore,
       partialize: (state) => ({
         tabs: state.tabs,

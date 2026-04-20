@@ -36,7 +36,8 @@ export type PaneContent =
   | { kind: 'settings'; scope: 'global' | { workspaceId: string } }
   | { kind: 'browser'; url: string }
   | { kind: 'memory-monitor' }
-  | { kind: 'editor'; source: FileSource; filePath: string; diff?: { against: 'saved' | string } }
+  | { kind: 'editor'; source: { type: 'inapp' }; docId: string; filePath?: string; diff?: { against: 'saved' | string } }
+  | { kind: 'editor'; source: { type: 'daemon'; hostId: string } | { type: 'local' }; filePath: string; diff?: { against: 'saved' | string } }
   | { kind: 'image-preview'; source: FileSource; filePath: string }
   | { kind: 'pdf-preview'; source: FileSource; filePath: string }
 
@@ -54,13 +55,22 @@ export interface Workspace {
 }
 // === Factories ===
 
+export function createLegacyEditorDocId(filePath?: string): string {
+  return filePath ? `legacy:${filePath}` : `legacy:${generateId()}`
+}
+
+export function normalizePaneContent(content: PaneContent): PaneContent {
+  return content
+}
+
 export function createTab(content: PaneContent, opts?: { pinned?: boolean }): Tab {
+  const normalizedContent = normalizePaneContent(content)
   return {
     id: generateId(),
     pinned: opts?.pinned ?? false,
     locked: false,
     createdAt: Date.now(),
-    layout: { type: 'leaf', pane: { id: generateId(), content } },
+    layout: { type: 'leaf', pane: { id: generateId(), content: normalizedContent } },
   }
 }
 

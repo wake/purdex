@@ -93,20 +93,20 @@ describe('contentMatches', () => {
     expect(contentMatches(a, b)).toBe(false)
   })
 
-  it('returns true for editor with same inapp source and filePath', () => {
-    const a: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/buffer/test.txt' }
-    const b: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/buffer/test.txt' }
+  it('returns true for editor with same inapp docId even when filePath differs', () => {
+    const a: PaneContent = { kind: 'editor', source: { type: 'inapp' }, docId: 'doc-1', filePath: '/buffer/test.txt' }
+    const b: PaneContent = { kind: 'editor', source: { type: 'inapp' }, docId: 'doc-1', filePath: '/buffer/other.txt' }
     expect(contentMatches(a, b)).toBe(true)
   })
 
-  it('returns false for editor with different filePath', () => {
-    const a: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/a.txt' }
-    const b: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/b.txt' }
+  it('returns false for editor with different inapp docId even when filePath matches', () => {
+    const a: PaneContent = { kind: 'editor', source: { type: 'inapp' }, docId: 'doc-a', filePath: '/shared.txt' }
+    const b: PaneContent = { kind: 'editor', source: { type: 'inapp' }, docId: 'doc-b', filePath: '/shared.txt' }
     expect(contentMatches(a, b)).toBe(false)
   })
 
   it('returns false for editor with different source types', () => {
-    const a: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/test.txt' }
+    const a: PaneContent = { kind: 'editor', source: { type: 'inapp' }, docId: 'doc-1', filePath: '/test.txt' }
     const b: PaneContent = { kind: 'editor', source: { type: 'local' }, filePath: '/test.txt' }
     expect(contentMatches(a, b)).toBe(false)
   })
