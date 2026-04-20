@@ -49,7 +49,7 @@ type Module struct {
 	// Guarded by testMu (separate from snapshotMu and mu so test traffic
 	// cannot block production hook / status writes).
 	testMu        sync.Mutex
-	testObservers map[string]chan testStage
+	testObservers map[string]chan testObserverSignal
 
 	// testSpawnProxy is a test seam; production leaves this nil so the handler
 	// falls back to defaultSpawnTestProxy which execs the real pdx binary.
@@ -73,7 +73,7 @@ func New(events *store.AgentEventStore) *Module {
 		subagents:       make(map[string][]string),
 		activeWatchers:  make(map[string]string),
 		statusSnapshots: make(map[string]statusSnapshot),
-		testObservers:   make(map[string]chan testStage),
+		testObservers:   make(map[string]chan testObserverSignal),
 	}
 }
 

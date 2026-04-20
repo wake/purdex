@@ -1,9 +1,13 @@
 // Package agent — self-test endpoint for the statusline pipeline (see #481).
 //
-// Observer semantics: one test invocation registers a single channel keyed by
-// the test nonce. handleAgentStatus signals stage2 on entry and stage3 after
-// Broadcast returns. The test handler consumes both within its per-stage
-// deadlines and then deregisters.
+// Observer semantics: handleStatuslineTest registers a per-nonce channel that
+// carries the raw status payload across from handleAgentStatus. The test
+// handler itself then drives the WS broadcast between stages 2 and 3, so
+// `agent.status` is broadcast only after the client has already received SSE
+// stages 1 and 2 and had a chance to subscribe to the statusline-test bus.
+// This inverts the race observed in PR #490: the SPA's bus subscriber is now
+// expected to fire on the real WS event rather than leaning on the early-hit
+// fallback.
 package agent
 
 import (
@@ -20,15 +24,15 @@ import (
 	"time"
 )
 
-type testStage int
+// testObserverSignal is what handleAgentStatus hands back to the test handler
+// when the proxy's POST lands. Carries the raw status payload so the test
+// handler can broadcast it itself at the right moment in the SSE sequence.
+type testObserverSignal struct {
+	raw json.RawMessage
+}
 
-const (
-	testStageReceived  testStage = iota + 1 // stage 2 (POST handler entered)
-	testStageBroadcast                      // stage 3 (WS Broadcast called)
-)
-
-func (m *Module) registerTestObserver(nonce string) chan testStage {
-	ch := make(chan testStage, 2) // buffered so signalTestStage never blocks the POST handler
+func (m *Module) registerTestObserver(nonce string) chan testObserverSignal {
+	ch := make(chan testObserverSignal, 1) // buffered so signalTestObserver never blocks the POST handler
 	m.testMu.Lock()
 	m.testObservers[nonce] = ch
 	m.testMu.Unlock()
@@ -41,7 +45,7 @@ func (m *Module) deregisterTestObserver(nonce string) {
 	m.testMu.Unlock()
 }
 
-func (m *Module) signalTestStage(nonce string, stage testStage) {
+func (m *Module) signalTestObserver(nonce string, raw json.RawMessage) {
 	m.testMu.Lock()
 	ch := m.testObservers[nonce]
 	m.testMu.Unlock()
@@ -49,7 +53,7 @@ func (m *Module) signalTestStage(nonce string, stage testStage) {
 		return
 	}
 	select {
-	case ch <- stage:
+	case ch <- testObserverSignal{raw: raw}:
 	default:
 		// Channel full — observer already got the signal or has moved on. Drop.
 	}
@@ -95,6 +99,13 @@ type testStageEvent struct {
 // Spawns a real `pdx statusline-proxy` subprocess with a test nonce, then
 // streams per-stage pass/fail events over SSE for stages 1-3. Stages 4-5 are
 // marked by the SPA after it sees the daemon-broadcast WS event.
+//
+// Stage ordering matters for the SPA's bus subscriber (see PR #490 follow-up):
+// the WS broadcast is intentionally deferred until after emitStage(2) so the
+// SPA has processed SSE stage 1 and subscribed to the statusline-test bus
+// before the `agent.status` frame arrives. Otherwise the client falls back to
+// the early-hit store check every run, which works but doesn't exercise the
+// real bus-subscriber path.
 func (m *Module) handleStatuslineTest(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -149,15 +160,13 @@ func (m *Module) handleStatuslineTest(w http.ResponseWriter, r *http.Request) {
 	}
 	emitStage(1, "Proxy spawned", "passed", "", time.Since(stage1Start))
 
-	// Stage 2: wait for handleAgentStatus to signal "received"
+	// Stage 2: wait for handleAgentStatus to signal "received" — carries raw
+	// status payload back across for this handler to broadcast itself.
 	stage2Start := time.Now()
+	var receivedRaw json.RawMessage
 	select {
-	case s := <-ch:
-		if s != testStageReceived {
-			emitStage(2, "Proxy → daemon POST received", "failed", fmt.Sprintf("out-of-order stage %d", s), time.Since(stage2Start))
-			writeEvent(testStageEvent{Type: "done"})
-			return
-		}
+	case sig := <-ch:
+		receivedRaw = sig.raw
 		emitStage(2, "Proxy → daemon POST received", "passed", "", time.Since(stage2Start))
 	case <-time.After(2 * time.Second):
 		emitStage(2, "Proxy → daemon POST received", "failed", "timeout at stage 2", time.Since(stage2Start))
@@ -165,26 +174,28 @@ func (m *Module) handleStatuslineTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stage 3: wait for broadcast signal
+	// Stage 3: broadcast WS now, *after* the client has consumed SSE stage 2.
+	// The SPA subscribed to the statusline-test bus while processing stage 1,
+	// so by the time this broadcast lands on the WS socket the subscriber is
+	// already registered.
 	stage3Start := time.Now()
-	select {
-	case s := <-ch:
-		if s != testStageBroadcast {
-			emitStage(3, "Daemon → WS broadcast", "failed", fmt.Sprintf("out-of-order stage %d", s), time.Since(stage3Start))
-			writeEvent(testStageEvent{Type: "done"})
-			return
-		}
-		emitStage(3, "Daemon → WS broadcast", "passed", "", time.Since(stage3Start))
-	case <-time.After(2 * time.Second):
-		emitStage(3, "Daemon → WS broadcast", "failed", "timeout at stage 3", time.Since(stage3Start))
+	if m.core == nil {
+		emitStage(3, "Daemon → WS broadcast", "failed", "core unavailable", time.Since(stage3Start))
 		writeEvent(testStageEvent{Type: "done"})
 		return
 	}
+	snap := statusSnapshot{AgentType: "cc", Status: receivedRaw}
+	body, err := json.Marshal(snap)
+	if err != nil {
+		emitStage(3, "Daemon → WS broadcast", "failed", err.Error(), time.Since(stage3Start))
+		writeEvent(testStageEvent{Type: "done"})
+		return
+	}
+	m.core.Events.Broadcast(nonce, "agent.status", string(body))
+	emitStage(3, "Daemon → WS broadcast", "passed", "", time.Since(stage3Start))
 
 	// Cleanup: targeted clear of the test nonce so the SPA scrubs its ccStatus entry.
-	if m.core != nil {
-		m.core.Events.Broadcast(nonce, "agent.status.cleared", `{"agent_type":"cc"}`)
-	}
+	m.core.Events.Broadcast(nonce, "agent.status.cleared", `{"agent_type":"cc"}`)
 
 	writeEvent(testStageEvent{Type: "done", Nonce: nonce})
 }

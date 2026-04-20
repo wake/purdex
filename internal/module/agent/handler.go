@@ -531,17 +531,13 @@ func (m *Module) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{}`))
 
-	// Test-nonce path: signal observer, broadcast keyed by nonce, skip snapshot persist.
-	// Production traffic never starts with testNoncePrefix (real tmux session names
-	// can't start with `__pdx_test_`), so the normal path below is unaffected.
+	// Test-nonce path: hand the raw status to the test observer and return.
+	// Broadcast is done by handleStatuslineTest itself so it can sequence the
+	// WS frame after SSE stage 2 — see statusline_selftest.go for the race
+	// rationale. Production traffic never starts with testNoncePrefix (real
+	// tmux session names can't), so the normal path below is unaffected.
 	if strings.HasPrefix(payload.TmuxSession, testNoncePrefix) {
-		m.signalTestStage(payload.TmuxSession, testStageReceived)
-		if m.core != nil {
-			snap := statusSnapshot{AgentType: payload.AgentType, Status: payload.RawStatus}
-			body, _ := json.Marshal(snap)
-			m.core.Events.Broadcast(payload.TmuxSession, "agent.status", string(body))
-		}
-		m.signalTestStage(payload.TmuxSession, testStageBroadcast)
+		m.signalTestObserver(payload.TmuxSession, payload.RawStatus)
 		return
 	}
 

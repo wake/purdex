@@ -915,11 +915,13 @@ func newHandlerTestEnv(t *testing.T) *handlerTestEnv {
 	return &handlerTestEnv{module: m}
 }
 
-func TestHandleAgentStatusTestNonceSignalsAndBroadcasts(t *testing.T) {
+func TestHandleAgentStatusTestNonceSignalsObserver(t *testing.T) {
 	env := newHandlerTestEnv(t)
 	nonce := "__pdx_test_0123abcd"
 	ch := env.module.registerTestObserver(nonce)
 	defer env.module.deregisterTestObserver(nonce)
+	sub := env.module.core.Events.AddTestSubscriber()
+	defer env.module.core.Events.RemoveTestSubscriber(sub)
 
 	body := `{"tmux_session":"` + nonce + `","agent_type":"cc","raw_status":{"model":{"display_name":"pipeline-test"}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/status", strings.NewReader(body))
@@ -930,20 +932,22 @@ func TestHandleAgentStatusTestNonceSignalsAndBroadcasts(t *testing.T) {
 		t.Fatalf("status %d, want 200", w.Code)
 	}
 
-	// Drain stage 2 then stage 3 within a short window.
-	got := make([]testStage, 0, 2)
-	deadline := time.After(500 * time.Millisecond)
-loop:
-	for len(got) < 2 {
-		select {
-		case s := <-ch:
-			got = append(got, s)
-		case <-deadline:
-			break loop
+	// The test handler signals once with the raw payload; broadcast is the
+	// test handler's job, not handleAgentStatus's. Verify we got the signal
+	// and that handleAgentStatus did NOT broadcast on its own.
+	select {
+	case sig := <-ch:
+		if !strings.Contains(string(sig.raw), `"display_name":"pipeline-test"`) {
+			t.Fatalf("signal raw = %s, want payload containing display_name:pipeline-test", string(sig.raw))
 		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for test observer signal")
 	}
-	if len(got) != 2 || got[0] != testStageReceived || got[1] != testStageBroadcast {
-		t.Fatalf("stage sequence = %v, want [received broadcast]", got)
+
+	select {
+	case msg := <-sub.SendCh():
+		t.Fatalf("handleAgentStatus broadcast unexpectedly: %s", string(msg))
+	default:
 	}
 
 	// Snapshot map must NOT hold the test nonce (display map is real sessions only).
