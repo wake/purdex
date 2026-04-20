@@ -1,4 +1,5 @@
-import type { AgentStatus, TabIndicatorStyle } from '../../../stores/useAgentStore'
+import type { AgentStatus } from '../../../stores/useAgentStore'
+import type { TabIndicatorStyle } from '../../../stores/useUISettingsStore'
 import { TabStatusIndicator } from '../../../components/TabStatusIndicator'
 import { SubagentDots } from '../../../components/SubagentDots'
 

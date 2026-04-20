@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { useAgentStore } from '../../../stores/useAgentStore'
+import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useSessionStore } from '../../../stores/useSessionStore'
@@ -43,9 +44,12 @@ beforeEach(() => {
     subagents: {},
     agentTypes: {},
     oscTitles: {},
+  })
+  useUISettingsStore.setState({
     showOscTitle: false,
     tabIndicatorStyle: 'badge',
     ccIconVariant: 'bot',
+    codexIconVariant: 'openai',
   })
   useSessionStore.setState({
     sessions: { h1: [{ code: 'S1', name: 'work' }] as never },
@@ -58,7 +62,8 @@ beforeEach(() => {
 
 describe('InlineTab — indicator styles', () => {
   it("renders dot only when tabIndicatorStyle='dot'", () => {
-    useAgentStore.setState({ tabIndicatorStyle: 'dot', statuses: { 'h1:S1': 'running' } })
+    useUISettingsStore.setState({ tabIndicatorStyle: 'dot' })
+    useAgentStore.setState({ statuses: { 'h1:S1': 'running' } })
     render(
       <InlineTab
         tab={baseTab}
@@ -73,7 +78,8 @@ describe('InlineTab — indicator styles', () => {
   })
 
   it("renders icon + overlay dot when tabIndicatorStyle='badge'", () => {
-    useAgentStore.setState({ tabIndicatorStyle: 'badge', statuses: { 'h1:S1': 'running' } })
+    useUISettingsStore.setState({ tabIndicatorStyle: 'badge' })
+    useAgentStore.setState({ statuses: { 'h1:S1': 'running' } })
     render(
       <InlineTab
         tab={baseTab}
@@ -230,8 +236,8 @@ describe('InlineTab — host offline', () => {
 
 describe('InlineTab — statusline display', () => {
   it('shows "{oscTitle} - {baseLabel}" when showOscTitle + oscTitle + agentType all set', () => {
+    useUISettingsStore.setState({ showOscTitle: true })
     useAgentStore.setState({
-      showOscTitle: true,
       agentTypes: { 'h1:S1': 'cc' },
       oscTitles: { 'h1:S1': 'my-feature' },
     })
@@ -250,8 +256,8 @@ describe('InlineTab — statusline display', () => {
   })
 
   it('shows only baseLabel when oscTitle absent', () => {
+    useUISettingsStore.setState({ showOscTitle: true })
     useAgentStore.setState({
-      showOscTitle: true,
       agentTypes: { 'h1:S1': 'cc' },
       oscTitles: {},
     })
@@ -271,8 +277,8 @@ describe('InlineTab — statusline display', () => {
   })
 
   it('shows only baseLabel when showOscTitle is disabled', () => {
+    useUISettingsStore.setState({ showOscTitle: false })
     useAgentStore.setState({
-      showOscTitle: false,
       agentTypes: { 'h1:S1': 'cc' },
       oscTitles: { 'h1:S1': 'my-feature' },
     })
@@ -291,8 +297,8 @@ describe('InlineTab — statusline display', () => {
   })
 
   it('renders HoverTooltip with combined text (not native title attr)', () => {
+    useUISettingsStore.setState({ showOscTitle: true })
     useAgentStore.setState({
-      showOscTitle: true,
       agentTypes: { 'h1:S1': 'cc' },
       oscTitles: { 'h1:S1': 'my-feature' },
     })

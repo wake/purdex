@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TerminalSection } from './TerminalSection'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
-import { useAgentStore } from '../../stores/useAgentStore'
 
 describe('TerminalSection', () => {
   beforeEach(() => {
@@ -12,8 +11,11 @@ describe('TerminalSection', () => {
       keepAlivePinned: false,
       terminalRevealDelay: 300,
       terminalSettingsVersion: 0,
+      tabIndicatorStyle: 'badge',
+      ccIconVariant: 'bot',
+      codexIconVariant: 'openai',
+      showOscTitle: false,
     })
-    useAgentStore.setState({ tabIndicatorStyle: 'badge', ccIconVariant: 'bot', showOscTitle: false })
   })
 
   it('renders section title', () => {
@@ -101,36 +103,44 @@ describe('TerminalSection', () => {
   it('updates tabIndicatorStyle when a segment is clicked', () => {
     render(<TerminalSection />)
     fireEvent.click(screen.getByText('Icon only'))
-    expect(useAgentStore.getState().tabIndicatorStyle).toBe('icon')
+    expect(useUISettingsStore.getState().tabIndicatorStyle).toBe('icon')
     fireEvent.click(screen.getByText('Dot only'))
-    expect(useAgentStore.getState().tabIndicatorStyle).toBe('dot')
+    expect(useUISettingsStore.getState().tabIndicatorStyle).toBe('dot')
     fireEvent.click(screen.getByText('Dot beside icon'))
-    expect(useAgentStore.getState().tabIndicatorStyle).toBe('iconDot')
+    expect(useUISettingsStore.getState().tabIndicatorStyle).toBe('iconDot')
   })
 
   it('updates ccIconVariant when a cc icon button is clicked', () => {
     render(<TerminalSection />)
     fireEvent.click(screen.getByRole('button', { name: /Star/ }))
-    expect(useAgentStore.getState().ccIconVariant).toBe('star')
+    expect(useUISettingsStore.getState().ccIconVariant).toBe('star')
     fireEvent.click(screen.getByRole('button', { name: /Bot/ }))
-    expect(useAgentStore.getState().ccIconVariant).toBe('bot')
+    expect(useUISettingsStore.getState().ccIconVariant).toBe('bot')
   })
 
-  it('shows cc_icon hidden hint only in dot mode', () => {
-    useAgentStore.setState({ tabIndicatorStyle: 'badge' })
+  it('updates codexIconVariant when a codex icon button is clicked', () => {
+    render(<TerminalSection />)
+    fireEvent.click(screen.getByRole('button', { name: /^Codex$/ }))
+    expect(useUISettingsStore.getState().codexIconVariant).toBe('codex')
+    fireEvent.click(screen.getByRole('button', { name: /^OpenAI$/ }))
+    expect(useUISettingsStore.getState().codexIconVariant).toBe('openai')
+  })
+
+  it('shows hidden hints for both cc and codex rows only in dot mode', () => {
+    useUISettingsStore.setState({ tabIndicatorStyle: 'badge' })
     const { rerender } = render(<TerminalSection />)
     expect(screen.queryByText(/no visible effect/i)).toBeNull()
-    useAgentStore.setState({ tabIndicatorStyle: 'dot' })
+    useUISettingsStore.setState({ tabIndicatorStyle: 'dot' })
     rerender(<TerminalSection />)
-    expect(screen.getByText(/no visible effect/i)).toBeTruthy()
+    expect(screen.getAllByText(/no visible effect/i)).toHaveLength(2)
   })
 
   it('toggles showOscTitle', () => {
     render(<TerminalSection />)
     fireEvent.click(screen.getByLabelText('Show agent dynamic title'))
-    expect(useAgentStore.getState().showOscTitle).toBe(true)
+    expect(useUISettingsStore.getState().showOscTitle).toBe(true)
     fireEvent.click(screen.getByLabelText('Show agent dynamic title'))
-    expect(useAgentStore.getState().showOscTitle).toBe(false)
+    expect(useUISettingsStore.getState().showOscTitle).toBe(false)
   })
 
 })

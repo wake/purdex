@@ -1,28 +1,40 @@
 import { describe, it, expect } from 'vitest'
-import { getAgentIcon, CC_ICON_VARIANTS } from './agent-icons'
+import { getAgentIcon, CC_ICON_VARIANTS, CODEX_ICON_VARIANTS } from './agent-icons'
 
 describe('getAgentIcon', () => {
   it('returns bot variant for cc when ccVariant=bot', () => {
-    expect(getAgentIcon('cc', { ccVariant: 'bot' })).toBe(CC_ICON_VARIANTS.bot)
+    expect(getAgentIcon('cc', { ccVariant: 'bot', codexVariant: 'openai' })).toBe(CC_ICON_VARIANTS.bot)
   })
 
   it('returns star variant for cc when ccVariant=star', () => {
-    expect(getAgentIcon('cc', { ccVariant: 'star' })).toBe(CC_ICON_VARIANTS.star)
+    expect(getAgentIcon('cc', { ccVariant: 'star', codexVariant: 'openai' })).toBe(CC_ICON_VARIANTS.star)
   })
 
   it('returns distinct components for bot vs star', () => {
     expect(CC_ICON_VARIANTS.bot).not.toBe(CC_ICON_VARIANTS.star)
   })
 
-  it('returns the codex icon regardless of ccVariant', () => {
-    const codexBot = getAgentIcon('codex', { ccVariant: 'bot' })
-    const codexStar = getAgentIcon('codex', { ccVariant: 'star' })
-    expect(codexBot).toBeDefined()
-    expect(codexBot).toBe(codexStar)
+  it('returns openai variant for codex when codexVariant=openai', () => {
+    expect(getAgentIcon('codex', { ccVariant: 'bot', codexVariant: 'openai' })).toBe(CODEX_ICON_VARIANTS.openai)
+  })
+
+  it('returns codex variant for codex when codexVariant=codex', () => {
+    expect(getAgentIcon('codex', { ccVariant: 'bot', codexVariant: 'codex' })).toBe(CODEX_ICON_VARIANTS.codex)
+  })
+
+  it('returns distinct components for openai vs codex', () => {
+    expect(CODEX_ICON_VARIANTS.openai).not.toBe(CODEX_ICON_VARIANTS.codex)
+  })
+
+  it('codex branch ignores ccVariant and respects codexVariant', () => {
+    const withBot = getAgentIcon('codex', { ccVariant: 'bot', codexVariant: 'codex' })
+    const withStar = getAgentIcon('codex', { ccVariant: 'star', codexVariant: 'codex' })
+    expect(withBot).toBe(CODEX_ICON_VARIANTS.codex)
+    expect(withStar).toBe(CODEX_ICON_VARIANTS.codex)
   })
 
   it('returns undefined for unknown agent types', () => {
-    expect(getAgentIcon('gemini', { ccVariant: 'bot' })).toBeUndefined()
-    expect(getAgentIcon('', { ccVariant: 'bot' })).toBeUndefined()
+    expect(getAgentIcon('gemini', { ccVariant: 'bot', codexVariant: 'openai' })).toBeUndefined()
+    expect(getAgentIcon('', { ccVariant: 'bot', codexVariant: 'openai' })).toBeUndefined()
   })
 })

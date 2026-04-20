@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.0.0-alpha.190] - 2026-04-20
+
+### Fix(spa): statusline test — stage 4 grace window for late WS events (#490)
+
+- **Root cause**：SSE `done` 比 WS `agent.status` 先到 SPA，舊版 `unsubBus` 立即執行 → 後到的 WS 沒人接，stages 4/5 卡 `running` 轉圈到天荒地老。舊 8s overall timeout 救不到（`work` 已 resolve 走 `done` 路徑）。
+- **Fix**：新增 `STAGE4_GRACE_MS = 2000` 的 post-SSE grace window，grace 超時 → `unsubBus` → `markFailThenSkipRest(4, "WS event not received within 2000ms after stream completed")`，stage 5 連帶 skipped。既有 `StatuslineTestPanel` log 按鈕自動顯示 error。
+- **State machine 清理**：`stage4Awaiting` 與 `stage4Resolver` 合併為 `Stage4State` union（`pending` / `armed` / `fired` / `cancelled`），消除雙 flag 隱性依賴；`markFailThenSkipRest` 不再能蓋掉已 fired 狀態。
+- **Early-hit 修正**：命中後立即 `unsubBus`，避免後到 WS 觸發冗餘 subscriber。
+- **Doc**：`OVERALL_TIMEOUT_MS` comment 註明 grace 不在 overall 內，整體最壞 8+2=10s。
+- **Tests**：新增 `SSE done without WS event → stage 4 fails after grace period`（fake timers）；既有 happy-path / stage-1 failure / overall-timeout 全綠（5 passes）。2158 個 SPA 測試全綠。
+- **Follow-ups**：開 #496（StrictMode ref reset）、#497（error 字串 i18n）、#498（dispatcher↔bus contract test）、#499（SSE 亂序防禦）、#500（state machine 抽離）追蹤。
+
+### Feat(spa): Codex icon variant setting (#491)
+
+- **Settings → Terminal → Codex icon**: OpenAI / Codex monochrome button pair with live preview, mirroring the existing Claude Code bot/star row. Active button uses `aria-pressed`; when tab indicator is dot-only, a hidden-hint paragraph matches the CC behaviour.
+- **Icon options**: `openai` (Phosphor `OpenAiLogo`, default — unchanged behaviour) and `codex` (monochrome `@lobehub/icons-static-svg/codex.svg`, inherits tab theme via `currentColor`).
+- **A11y**: `aria-hidden="true"` on the agent-icons wrappers so lobehub SVG `<title>` elements no longer pollute button accessible names.
+- **Tests**: +3 in `agent-icons.test.tsx` (codex variant coverage), +1 in `TerminalSection.test.tsx` (codex button click), +locale-completeness keeps en/zh-TW in sync. Full suite 2161/2161.
+
+### Refactor(spa): move tab/icon preferences to useUISettingsStore
+
+Driven by codex review findings on PR #491. Previously these preferences
+lived in `useAgentStore` alongside runtime state, so any schema bump would
+silently reset user settings — and the new `codexIconVariant` would not
+have roamed through the preferences sync contributor.
+
+- **Moved**: `tabIndicatorStyle`, `ccIconVariant`, `codexIconVariant`, `showOscTitle` (types, state, setters) from `useAgentStore` → `useUISettingsStore`.
+- **Migration**: `useUISettingsStore` v1 → v2 with a `migrate` that imports the old `purdex-agent` payload's UI pref keys when present, so upgraders keep their settings.
+- **Sync**: `preferences` sync contributor's `DATA_FIELDS` now includes the four moved keys — they roam across devices and survive import/export.
+- **Store**: `useAgentStore` no longer persists anything and drops the `persist` middleware + `syncManager.register` entirely. It's now pure runtime state.
+
 ## [1.0.0-alpha.189] - 2026-04-19
 
 ### Fix(agent): probe wrapped descendants with bounded cache (#484)
