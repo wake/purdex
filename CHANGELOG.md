@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.191] - 2026-04-20
+
+### Feat(agent): identity and liveness convergence phases 1-7 (#489)
+
+- **Hook provenance v2**: `pdx hook` payload 現在攜帶 `tmux_pane_id`、`sender_pid`、`sender_start_time`、`sender_uncertain`，daemon 端只接受新 schema，並驗證 hook 送進來的 pane / PID / start time provenance。
+- **Frame-authoritative state**: 新增 `agent_frames` store，session 狀態改由 frame projection / replay / sweep 驅動；accepted v2 hooks 不再 dual-write `agent_events`，startup 先 sweep，再 replay，避免 ghost session resurrection。
+- **Process identification**: provider 改吃 `ProcessInfo`，`probe.IsAliveFor()` 走 PID tree + `Identify(ProcessInfo)`，不再依賴 command-name / `pane_current_command` 舊路徑；legacy liveness handlers 已移除。
+- **Activity convergence**: activity watcher 收斂為 `waiting` / `running` / `idle` 三規則，加入 shell prompt 檢測與 `capture-pane -e` 路徑；`shell_prompt + dead PID` 現在會正確觸發 sweep / clear。
+- **Docs and follow-up**: convergence spec / plan 已同步到最終實作；剩餘 replay / snapshot legacy fallback duplication 另開 #505 追蹤。
+
 ## [1.0.0-alpha.190] - 2026-04-20
 
 ### Fix(spa): statusline test — stage 4 grace window for late WS events (#490)
