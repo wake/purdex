@@ -45,6 +45,13 @@ export interface SnapshotStore {
    * atomic).
    */
   demoteSessionPristine(exceptId?: string): Promise<void>
+  /**
+   * Demote every existing pristine flag and write a new pristine snapshot in
+   * one readwrite transaction. IndexedDB serializes `readwrite` transactions
+   * on the same object store across tabs, so concurrent bootstraps cannot
+   * interleave demote/create steps and leave zero pristine rows.
+   */
+  rotateSessionPristine(bundle: SyncBundle, trigger: SnapshotTrigger): Promise<SnapshotMetadata>
   compact(): Promise<{ kept: string[]; evicted: string[] }>
   clear(): Promise<void>
 }
@@ -132,6 +139,41 @@ export function createSnapshotStore(dbName = 'purdex-sync'): SnapshotStore {
         targets.map((r) => tx.store.put({ ...r, isSessionPristine: false })),
       )
       await tx.done
+    },
+
+    async rotateSessionPristine(bundle, trigger) {
+      const db = await dbPromise
+      const meta: SnapshotMetadata = {
+        id: genId(),
+        timestamp: Date.now(),
+        device: bundle.device,
+        trigger,
+        bundleSize: computeBundleSize(bundle),
+        contributorIds: Object.keys(bundle.collections),
+        isSessionPristine: true,
+      }
+      const record: StoredSnapshot = { ...meta, bundle }
+
+      // Single readwrite transaction: demote every existing pristine row,
+      // then put the new one. IDB readwrite transactions on the same store
+      // are serialized (including across tabs), so two concurrent
+      // ensureSessionPristine calls cannot interleave demote/put steps and
+      // end up with zero pristine rows.
+      const tx = db.transaction(STORE, 'readwrite')
+      const all = await tx.store.getAll() as StoredSnapshot[]
+      for (const r of all) {
+        if (r.isSessionPristine) {
+          await tx.store.put({ ...r, isSessionPristine: false })
+        }
+      }
+      await tx.store.put(record)
+      await tx.done
+
+      // Compaction runs outside the transaction because computeCompaction
+      // needs to read metadata post-commit and its own delete pass already
+      // runs in its own tx. Failures here do not undo the rotation.
+      await compactFn()
+      return meta
     },
 
     async compact() {

@@ -17,73 +17,39 @@ describe('ensureSessionPristine', () => {
     } as never)
   })
 
-  it('creates a session-pristine snapshot if none exists', async () => {
-    const created: Array<{ trigger: string; isPristine: boolean }> = []
+  it('delegates to rotateSessionPristine (single-tx rotation)', async () => {
+    const rotateCalls: Array<{ trigger: string }> = []
     setSnapshotStore({
       init: async () => {},
       listLocal: async () => [],
       getLocal: async () => null,
-      createSnapshot: async (_b, trigger, opts) => {
-        created.push({ trigger, isPristine: opts?.isSessionPristine ?? false })
-        return { id: 'p', timestamp: 0, device: 'd', trigger, bundleSize: 0, contributorIds: [], isSessionPristine: opts?.isSessionPristine ?? false }
+      createSnapshot: async () => { throw new Error('createSnapshot should not be called') },
+      deleteLocal: async () => {},
+      demoteSessionPristine: async () => { throw new Error('demoteSessionPristine should not be called') },
+      rotateSessionPristine: async (_b, trigger) => {
+        rotateCalls.push({ trigger })
+        return { id: 'p', timestamp: 0, device: 'd', trigger, bundleSize: 0, contributorIds: [], isSessionPristine: true }
       },
+      compact: async () => ({ kept: [], evicted: [] }),
+      clear: async () => {},
+    })
+
+    await ensureSessionPristine()
+    expect(rotateCalls).toEqual([{ trigger: 'pre-restore' }])
+  })
+
+  it('propagates rotation failures so App.tsx bootstrap can surface them', async () => {
+    setSnapshotStore({
+      init: async () => {},
+      listLocal: async () => [],
+      getLocal: async () => null,
+      createSnapshot: async () => { throw new Error('unexpected') },
       deleteLocal: async () => {},
       demoteSessionPristine: async () => {},
-      compact: async () => ({ kept: [], evicted: [] }),
-      clear: async () => {},
-    })
-
-    await ensureSessionPristine()
-    expect(created).toHaveLength(1)
-    expect(created[0].isPristine).toBe(true)
-    expect(created[0].trigger).toBe('pre-restore')
-  })
-
-  it('demotes prior pristine entries and creates a new one (D2: per-bootstrap)', async () => {
-    const createdTriggers: string[] = []
-    const demoteCalls: number[] = []
-    setSnapshotStore({
-      init: async () => {},
-      listLocal: async () => [
-        { id: 'prev', timestamp: 0, device: 'd', trigger: 'pre-restore', bundleSize: 0, contributorIds: [], isSessionPristine: true },
-      ],
-      getLocal: async () => null,
-      createSnapshot: async (_b, trigger, opts) => {
-        createdTriggers.push(trigger)
-        return { id: 'new', timestamp: 0, device: 'd', trigger, bundleSize: 0, contributorIds: [], isSessionPristine: opts?.isSessionPristine ?? false }
-      },
-      deleteLocal: async () => {},
-      demoteSessionPristine: async () => { demoteCalls.push(Date.now()) },
-      compact: async () => ({ kept: [], evicted: [] }),
-      clear: async () => {},
-    })
-    await ensureSessionPristine()
-    expect(demoteCalls).toHaveLength(1)
-    expect(createdTriggers).toEqual(['pre-restore'])
-  })
-
-  it('does not demote prior pristine if createSnapshot throws (atomic rotation)', async () => {
-    const demoteCalls: number[] = []
-    const createCalls: string[] = []
-    setSnapshotStore({
-      init: async () => {},
-      listLocal: async () => [
-        { id: 'prev', timestamp: 0, device: 'd', trigger: 'pre-restore', bundleSize: 0, contributorIds: [], isSessionPristine: true },
-      ],
-      getLocal: async () => null,
-      createSnapshot: async (_b, trigger) => {
-        createCalls.push(trigger)
-        throw new Error('quota exceeded')
-      },
-      deleteLocal: async () => {},
-      demoteSessionPristine: async () => { demoteCalls.push(Date.now()) },
+      rotateSessionPristine: async () => { throw new Error('quota exceeded') },
       compact: async () => ({ kept: [], evicted: [] }),
       clear: async () => {},
     })
     await expect(ensureSessionPristine()).rejects.toThrow('quota exceeded')
-    expect(createCalls).toEqual(['pre-restore'])
-    // Demote must NOT be called — prior pristine stays put so we still have
-    // a valid session-pristine if createSnapshot fails.
-    expect(demoteCalls).toHaveLength(0)
   })
 })

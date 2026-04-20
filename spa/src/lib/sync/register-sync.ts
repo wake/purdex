@@ -63,11 +63,10 @@ export async function ensureSessionPristine(): Promise<void> {
   const allIds = engine.getContributors().map((c) => c.id)
   const currentBundle = engine.serialize(device, allIds)
 
-  // Atomic rotation: create the new pristine snapshot first so that if the
-  // write fails (quota, IDB error), the prior pristine is still intact. Only
-  // demote the old flag after the new one is safely written — otherwise a
-  // mid-rotation failure would leave zero session-pristine snapshots. Pass
-  // the new snapshot's id so demote skips it (keeping exactly one pristine).
-  const meta = await store.createSnapshot(currentBundle, 'pre-restore', { isSessionPristine: true })
-  await store.demoteSessionPristine(meta.id)
+  // Single-transaction rotation: demote every prior pristine flag and write
+  // the new pristine row inside one readwrite tx. IDB serializes those
+  // transactions across tabs, so concurrent bootstraps cannot interleave
+  // and leave zero pristine rows (which the separate create-then-demote
+  // sequence was still vulnerable to).
+  await store.rotateSessionPristine(currentBundle, 'pre-restore')
 }

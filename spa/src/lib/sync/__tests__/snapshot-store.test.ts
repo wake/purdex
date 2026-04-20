@@ -120,3 +120,46 @@ describe('SnapshotStore.compact + auto-compact', () => {
     expect(list.length).toBeLessThanOrEqual(5)
   })
 })
+
+describe('SnapshotStore.rotateSessionPristine (Adv-1 atomicity)', () => {
+  beforeEach(async () => {
+    await closeAllIDB()
+    indexedDB.deleteDatabase('purdex-sync-test')
+  })
+
+  it('creates a new pristine and demotes all prior pristine rows in one pass', async () => {
+    const store = createSnapshotStore('purdex-sync-test')
+    await store.init()
+
+    // Seed two prior pristine snapshots
+    await store.createSnapshot(bundle('old-a'), 'pre-restore', { isSessionPristine: true })
+    await new Promise((r) => setTimeout(r, 2))
+    await store.createSnapshot(bundle('old-b'), 'pre-restore', { isSessionPristine: true })
+
+    const meta = await store.rotateSessionPristine(bundle('new'), 'pre-restore')
+    expect(meta.isSessionPristine).toBe(true)
+
+    const list = await store.listLocal()
+    const pristineIds = list.filter((m) => m.isSessionPristine).map((m) => m.id)
+    expect(pristineIds).toEqual([meta.id])
+  })
+
+  it('concurrent rotateSessionPristine calls end with exactly one pristine (no race)', async () => {
+    const store = createSnapshotStore('purdex-sync-test')
+    await store.init()
+
+    // Fire two rotations without awaiting — each must land, and only one
+    // row can keep isSessionPristine at the end.
+    const [metaA, metaB] = await Promise.all([
+      store.rotateSessionPristine(bundle('tab-a'), 'pre-restore'),
+      store.rotateSessionPristine(bundle('tab-b'), 'pre-restore'),
+    ])
+    expect(metaA.id).not.toBe(metaB.id)
+
+    const list = await store.listLocal()
+    const pristine = list.filter((m) => m.isSessionPristine)
+    expect(pristine).toHaveLength(1)
+    // Whichever rotation committed last is the winner.
+    expect([metaA.id, metaB.id]).toContain(pristine[0].id)
+  })
+})
