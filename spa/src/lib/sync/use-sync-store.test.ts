@@ -476,7 +476,7 @@ describe('restoreFromSnapshot — pre-op failure (A4)', () => {
 describe('restoreFromSnapshot — deserialize failure (A1)', () => {
   beforeEach(() => useSyncStore.getState().reset())
 
-  it('throws RestoreFailedError and preserves pendingConflicts when any contributor throws', async () => {
+  it('throws RestoreFailedError and clears pendingConflicts when any contributor throws after deserialize begins', async () => {
     installStubSnapshotStore()
     const { __setEngineForTests, syncEngine } = await import('./register-sync')
     const original = syncEngine.getContributors()
@@ -491,13 +491,56 @@ describe('restoreFromSnapshot — deserialize failure (A1)', () => {
     } as never)
 
     const conflict: ConflictItem = { contributor: 'a', field: 'x', lastSynced: null, local: null, remote: { value: null, device: 'r' } }
-    useSyncStore.setState({ pendingConflicts: [conflict], pendingConflictsAt: 1 })
+    const remoteBundle = { version: 1, timestamp: 0, device: 'r', collections: { a: { version: 1, data: {} } } }
+    useSyncStore.setState({
+      pendingConflicts: [conflict],
+      pendingRemoteBundle: remoteBundle,
+      pendingConflictsAt: 1,
+    })
 
     const snap = makeStoredSnapshot({ a: { version: 1, data: {} } })
     await expect(useSyncStore.getState().restoreFromSnapshot(snap, 'local')).rejects.toBeInstanceOf(RestoreFailedError)
 
-    // Pending conflicts must be preserved because restore did not succeed fully
+    // Once the deserialize loop is entered, state may have partially mutated.
+    // A later resolveConflicts against stale pendingRemoteBundle would overwrite
+    // restored contributors, so we clear the conflict context on partial failure.
+    expect(useSyncStore.getState().pendingConflicts).toEqual([])
+    expect(useSyncStore.getState().pendingRemoteBundle).toBeNull()
+    expect(useSyncStore.getState().pendingConflictsAt).toBeNull()
+
+    __setEngineForTests({ ...syncEngine, getContributors: () => original } as never)
+  })
+
+  it('preserves pendingConflicts when SnapshotCoverageError throws (before deserialize loop)', async () => {
+    installStubSnapshotStore()
+    const { __setEngineForTests, syncEngine } = await import('./register-sync')
+    const original = syncEngine.getContributors()
+    __setEngineForTests({
+      register: () => {},
+      getContributors: () => [
+        { id: 'a', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: {} }), deserialize: () => {} },
+        { id: 'b', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: {} }), deserialize: () => {} },
+      ],
+      serialize: () => ({ version: 1, timestamp: 0, device: 'd', collections: {} }),
+      push: async () => null as never,
+      pull: async () => ({ appliedBundle: null, conflicts: [] }),
+    } as never)
+
+    const conflict: ConflictItem = { contributor: 'a', field: 'x', lastSynced: null, local: null, remote: { value: null, device: 'r' } }
+    const remoteBundle = { version: 1, timestamp: 0, device: 'r', collections: { a: { version: 1, data: {} } } }
+    useSyncStore.setState({
+      pendingConflicts: [conflict],
+      pendingRemoteBundle: remoteBundle,
+      pendingConflictsAt: 1,
+    })
+
+    // Snapshot only covers 'a', 'b' is missing → throws SnapshotCoverageError
+    // BEFORE deserialize loop, so state is untouched and conflicts remain valid.
+    const snap = makeStoredSnapshot({ a: { version: 1, data: {} } })
+    await expect(useSyncStore.getState().restoreFromSnapshot(snap, 'local')).rejects.toBeInstanceOf(SnapshotCoverageError)
+
     expect(useSyncStore.getState().pendingConflicts).toEqual([conflict])
+    expect(useSyncStore.getState().pendingRemoteBundle).toEqual(remoteBundle)
 
     __setEngineForTests({ ...syncEngine, getContributors: () => original } as never)
   })

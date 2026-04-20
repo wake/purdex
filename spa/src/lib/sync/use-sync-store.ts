@@ -236,6 +236,17 @@ export const useSyncStore = create<SyncStoreState>()(
           }
         }
 
+        // Once we enter the deserialize loop, contributor state may partially
+        // mutate before a failure. The existing pendingConflicts/pendingRemoteBundle
+        // were computed against the pre-restore baseline, so keeping them would
+        // let a later resolveConflicts overwrite the contributors we just
+        // restored. Clear the conflict context up-front (regardless of outcome).
+        set({
+          pendingConflicts: [],
+          pendingRemoteBundle: null,
+          pendingConflictsAt: null,
+        })
+
         const failed: string[] = []
         for (const [id, payload] of Object.entries(snapshot.bundle.collections)) {
           const c = contribs.get(id)
@@ -250,15 +261,6 @@ export const useSyncStore = create<SyncStoreState>()(
         if (failed.length > 0) {
           throw new RestoreFailedError(failed)
         }
-
-        // Only clear pending conflict context after every contributor succeeded.
-        // Clearing earlier would strip the user's conflict metadata even on
-        // partial failure, leaving no way to retry the merge.
-        set({
-          pendingConflicts: [],
-          pendingRemoteBundle: null,
-          pendingConflictsAt: null,
-        })
         // Append-only: do NOT touch lastSyncedBundle
       },
     }),
