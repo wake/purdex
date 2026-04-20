@@ -10,6 +10,12 @@
 - **Activity convergence**: activity watcher 收斂為 `waiting` / `running` / `idle` 三規則，加入 shell prompt 檢測與 `capture-pane -e` 路徑；`shell_prompt + dead PID` 現在會正確觸發 sweep / clear。
 - **Docs and follow-up**: convergence spec / plan 已同步到最終實作；剩餘 replay / snapshot legacy fallback duplication 另開 #505 追蹤。
 
+### Chore(spa): flag-gated debug logs for statusline self-test chain (#506)
+
+- `spa/src/lib/statusline-test-debug.ts` — 以 `localStorage.getItem('pdx:debug:statusline-test') === '1'` gate 的 `debugStatuslineTest` helper，no-op when flag absent。
+- Instrumented points（只對 `__pdx_test_*` sessions fire）：`ws.entry`（`useMultiHostEventWs`）、`dispatch.entry` / `.parsed` / `.emit-bus` / `.reject.*`（`agent-ws-dispatch`）、`bus.subscribe` / `.emit` / `.unsubscribe`（`statusline-test-bus`）、`hook.stage1-passed` / `.bus-callback` / `.stage5-check` / `.early-hit-check` / `.sse-outcome` / `.grace-start` / `.grace-result`（`useStatuslineTest`）。
+- 用途：本地 triage stage 4 `"WS event not received"` 真因時，整條 daemon → WS → dispatcher → bus → hook 的 timeline 可視化，pinpoint 哪一層斷掉。
+
 ## [1.0.0-alpha.190] - 2026-04-20
 
 ### Fix(spa): statusline test — stage 4 grace window for late WS events (#490)
