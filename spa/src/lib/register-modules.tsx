@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { registerModule } from './module-registry'
 import { registerNewTabProvider } from './new-tab-registry'
 import { registerSettingsSection } from './settings-section-registry'
@@ -17,6 +18,7 @@ import { AppearanceSection } from '../components/settings/AppearanceSection'
 import { TerminalSection } from '../components/settings/TerminalSection'
 import { ElectronSection } from '../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../components/settings/DevEnvironmentSection'
+import { TmuxAgentMonitorSection } from '../components/settings/TmuxAgentMonitorSection'
 import { ModuleConfigSection } from '../components/settings/ModuleConfigSection'
 import { SyncSection } from '../components/settings/SyncSection'
 import { FileTreeWorkspaceView } from '../components/FileTreeView'
@@ -334,6 +336,15 @@ export function registerBuiltinModules(): void {
       label: 'settings.section.dev_environment',
       order: 20,
       component: DevEnvironmentSection,
+    })
+  }
+
+  if (import.meta.env.DEV || caps.devUpdateEnabled) {
+    registerSettingsSection({
+      id: 'tmux-agent-monitor',
+      label: 'settings.section.tmux_agent_monitor',
+      order: 21,
+      component: TmuxAgentMonitorSection,
     })
   }
 

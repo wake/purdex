@@ -4,6 +4,7 @@ import { useHostStore } from '../stores/useHostStore'
 import {
   listSessions, createSession, deleteSession, switchMode,
   handoff, fetchHistory, fetchSessionCwd, getConfig, updateConfig, agentUpload,
+  fetchAgentMonitorChains, fetchAgentMonitorChain, fetchAgentMonitorProjection,
   type Session,
 } from './host-api'
 
@@ -224,6 +225,69 @@ describe('fetchSessionCwd', () => {
       new Response('nope', { status: 500 }),
     )
     await expect(fetchSessionCwd(HOST_ID, 'abc123')).rejects.toThrow('500')
+  })
+})
+
+describe('agent monitor api', () => {
+  it('fetches chain list with query params', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ chains: [], next_cursor: 'cursor-1' }), { status: 200 }),
+    )
+
+    const query = new URLSearchParams({ session: 'work', limit: '50' })
+    const result = await fetchAgentMonitorChains(HOST_ID, query)
+
+    expect(result).toEqual({ chains: [], next_cursor: 'cursor-1' })
+    expectAuthFetch(`${BASE}/api/agent/monitor/chains?session=work&limit=50`)
+  })
+
+  it('fetches a single chain detail', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ chain: { chain_id: 'chain-1' }, step_tree: [] }), { status: 200 }),
+    )
+
+    const result = await fetchAgentMonitorChain(HOST_ID, 'chain-1')
+
+    expect(result).toEqual({ chain: { chain_id: 'chain-1' }, step_tree: [] })
+    expectAuthFetch(`${BASE}/api/agent/monitor/chains/chain-1`)
+  })
+
+  it('fetches projection summary with query params', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ projection: { tmux_session: 'work' } }), { status: 200 }),
+    )
+
+    const result = await fetchAgentMonitorProjection(HOST_ID, new URLSearchParams({ pane: '%7' }))
+
+    expect(result).toEqual({ projection: { tmux_session: 'work' } })
+    expectAuthFetch(`${BASE}/api/agent/monitor/projection?pane=%257`)
+  })
+
+  it('throws when chain list request fails', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('error', { status: 503 }),
+    )
+
+    await expect(fetchAgentMonitorChains(HOST_ID, new URLSearchParams({ session: 'work' })))
+      .rejects.toThrow('fetchAgentMonitorChains failed: 503')
+  })
+
+  it('throws when single chain request fails', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('error', { status: 404 }),
+    )
+
+    await expect(fetchAgentMonitorChain(HOST_ID, 'chain-1'))
+      .rejects.toThrow('fetchAgentMonitorChain failed: 404')
+  })
+
+  it('throws when projection request fails', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('error', { status: 500 }),
+    )
+
+    await expect(fetchAgentMonitorProjection(HOST_ID, new URLSearchParams({ pane: '%7' })))
+      .rejects.toThrow('fetchAgentMonitorProjection failed: 500')
   })
 })
 
