@@ -446,6 +446,15 @@ func rebuildLegacyTraceSteps(db *sql.DB) error {
 	if stepRows > 0 && chainRows == 0 {
 		return fmt.Errorf("cannot migrate legacy trace steps without legacy trace chains")
 	}
+	if stepRows > 0 && chainRows > 0 {
+		orphanSteps, err := legacyTraceOrphanStepCount(db)
+		if err != nil {
+			return err
+		}
+		if orphanSteps > 0 {
+			return fmt.Errorf("cannot migrate legacy trace steps with %d orphan step references", orphanSteps)
+		}
+	}
 	if _, err := db.Exec(`ALTER TABLE agent_trace_steps RENAME TO agent_trace_steps_legacy`); err != nil {
 		return err
 	}
@@ -540,6 +549,20 @@ func rebuildLegacyTraceSteps(db *sql.DB) error {
 func traceTableRowCount(db *sql.DB, table string) (int, error) {
 	var count int
 	err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func legacyTraceOrphanStepCount(db *sql.DB) (int, error) {
+	var count int
+	err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM agent_trace_steps s
+		LEFT JOIN agent_trace_chains c ON c.chain_id = s.chain_id
+		WHERE c.chain_id IS NULL
+	`).Scan(&count)
 	if err != nil {
 		return 0, err
 	}

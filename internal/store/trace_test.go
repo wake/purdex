@@ -186,6 +186,23 @@ func TestTraceStore_MigratesLegacyStepsWithoutChainsTable(t *testing.T) {
 	}
 }
 
+func TestTraceStore_MigratesLegacyStepsWithOrphanChainReference(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	seedLegacyTraceStepsWithUnrelatedChain(t, s.db)
+
+	if _, err := s.Traces(); err == nil {
+		t.Fatal("expected Traces to fail fast")
+	}
+
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_trace_steps`).Scan(&count); err != nil {
+		t.Fatalf("count legacy steps: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("legacy step count = %d, want 1", count)
+	}
+}
+
 func TestTraceStore_MigratesLegacyStepSchemaAndBlocksCrossChainParent(t *testing.T) {
 	s := openTestAgentEventStore(t)
 	seedIntermediateTraceSchema(t, s.db)
@@ -530,6 +547,63 @@ func seedLegacyTraceStepsOnly(t *testing.T, db *sql.DB) {
 		('legacy-step-1', 'legacy-chain', NULL, 'root', 'null', 1, 124)
 	`); err != nil {
 		t.Fatalf("seed legacy step: %v", err)
+	}
+}
+
+func seedLegacyTraceStepsWithUnrelatedChain(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`PRAGMA foreign_keys = ON`)
+	})
+
+	if _, err := db.Exec(`
+		CREATE TABLE agent_trace_chains (
+			chain_id     TEXT PRIMARY KEY,
+			tmux_session TEXT NOT NULL,
+			pane_id      TEXT NOT NULL,
+			agent_type   TEXT NOT NULL,
+			event_name   TEXT NOT NULL,
+			created_at   INTEGER NOT NULL,
+			updated_at   INTEGER NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create legacy chains: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, tmux_session, pane_id, agent_type, event_name, created_at, updated_at
+		) VALUES
+		('other-chain', 'proj-legacy', '%9', 'cc', 'Stop', 123, 456)
+	`); err != nil {
+		t.Fatalf("seed unrelated chain: %v", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE agent_trace_steps (
+			step_id        TEXT PRIMARY KEY,
+			chain_id       TEXT NOT NULL,
+			parent_step_id TEXT,
+			step_name      TEXT NOT NULL,
+			payload        TEXT NOT NULL DEFAULT 'null',
+			step_index     INTEGER NOT NULL,
+			created_at     INTEGER NOT NULL,
+			FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
+			FOREIGN KEY (parent_step_id) REFERENCES agent_trace_steps(step_id) ON DELETE SET NULL
+		)
+	`); err != nil {
+		t.Fatalf("create legacy steps: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_trace_steps (
+			step_id, chain_id, parent_step_id, step_name, payload, step_index, created_at
+		) VALUES
+		('legacy-step-1', 'missing-chain', NULL, 'root', 'null', 1, 124)
+	`); err != nil {
+		t.Fatalf("seed orphan legacy step: %v", err)
 	}
 }
 
