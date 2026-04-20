@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { hostFetch } from '../lib/host-api'
 import { statuslineTestBus } from '../lib/statusline-test-bus'
+import { debugStatuslineTest } from '../lib/statusline-test-debug'
 import { useAgentStore } from '../stores/useAgentStore'
 import { compositeKey } from '../lib/composite-key'
 
@@ -182,13 +183,17 @@ export function useStatuslineTest(hostId: string) {
 
           if (n === 1 && ev.nonce) {
             const noncedVal = ev.nonce
+            debugStatuslineTest('hook.stage1-passed', { nonce: noncedVal, hostId })
             setState((s) => ({ ...s, nonce: noncedVal }))
             markStage(2, { status: 'running' })
             unsubBus = statuslineTestBus.subscribe(noncedVal, ({ nonce: got }) => {
+              debugStatuslineTest('hook.bus-callback', { nonce: got, mounted: mountedRef.current })
               if (!mountedRef.current) return
               markStage(4, { status: 'passed' })
               const key = compositeKey(hostId, got)
-              if (useAgentStore.getState().ccStatus[key]) {
+              const hasStoreEntry = !!useAgentStore.getState().ccStatus[key]
+              debugStatuslineTest('hook.stage5-check', { key, hasStoreEntry })
+              if (hasStoreEntry) {
                 markStage(5, { status: 'passed' })
               }
               fireStage4()
@@ -199,7 +204,9 @@ export function useStatuslineTest(hostId: string) {
             // presence as equivalent to a bus hit (the dispatcher always sets
             // store before emitting).
             const earlyKey = compositeKey(hostId, noncedVal)
-            if (useAgentStore.getState().ccStatus[earlyKey]) {
+            const earlyHit = !!useAgentStore.getState().ccStatus[earlyKey]
+            debugStatuslineTest('hook.early-hit-check', { earlyKey, earlyHit })
+            if (earlyHit) {
               markStage(4, { status: 'passed' })
               markStage(5, { status: 'passed' })
               fireStage4()
@@ -261,9 +268,12 @@ export function useStatuslineTest(hostId: string) {
       })
     }
 
+    debugStatuslineTest('hook.sse-outcome', { outcome, stage4State, mounted: mountedRef.current })
+
     // SSE finished cleanly but stage 4 is still pending → give the WS a
     // grace window, otherwise the spinner for stages 4/5 would hang forever.
     if (outcome === 'done' && mountedRef.current && stage4State === 'armed') {
+      debugStatuslineTest('hook.grace-start', { graceMs: STAGE4_GRACE_MS })
       let graceId: ReturnType<typeof setTimeout> | undefined
       const graceTimeout = new Promise<'grace-timeout'>((resolve) => {
         graceId = setTimeout(() => resolve('grace-timeout'), STAGE4_GRACE_MS)
@@ -273,6 +283,7 @@ export function useStatuslineTest(hostId: string) {
         graceTimeout,
       ])
       if (graceId !== undefined) clearTimeout(graceId)
+      debugStatuslineTest('hook.grace-result', { graceOutcome })
       if (graceOutcome === 'grace-timeout' && mountedRef.current) {
         // Detach the bus before marking failure so a late-arriving WS event
         // can't overwrite the failed state.
