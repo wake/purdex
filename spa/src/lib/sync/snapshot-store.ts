@@ -40,9 +40,11 @@ export interface SnapshotStore {
    * Strip the isSessionPristine flag from every stored snapshot. Used by the
    * session-pristine bootstrap to ensure only the snapshot from the current
    * bootstrap carries the flag; older ones keep their data but no longer
-   * block compaction.
+   * block compaction. Pass `exceptId` to preserve the flag on a specific
+   * snapshot (used when demote runs *after* createSnapshot to keep rotation
+   * atomic).
    */
-  demoteSessionPristine(): Promise<void>
+  demoteSessionPristine(exceptId?: string): Promise<void>
   compact(): Promise<{ kept: string[]; evicted: string[] }>
   clear(): Promise<void>
 }
@@ -120,10 +122,10 @@ export function createSnapshotStore(dbName = 'purdex-sync'): SnapshotStore {
       await db.delete(STORE, id)
     },
 
-    async demoteSessionPristine() {
+    async demoteSessionPristine(exceptId) {
       const db = await dbPromise
       const all = await db.getAll(STORE) as StoredSnapshot[]
-      const targets = all.filter((r) => r.isSessionPristine)
+      const targets = all.filter((r) => r.isSessionPristine && r.id !== exceptId)
       if (targets.length === 0) return
       const tx = db.transaction(STORE, 'readwrite')
       await Promise.all(

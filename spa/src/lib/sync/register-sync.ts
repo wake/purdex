@@ -54,7 +54,6 @@ import { useSyncStore } from './use-sync-store'
 export async function ensureSessionPristine(): Promise<void> {
   const store = getSnapshotStore()
   await store.init()
-  await store.demoteSessionPristine()
 
   const engine = __getActiveEngine()
   const state = useSyncStore.getState()
@@ -63,5 +62,12 @@ export async function ensureSessionPristine(): Promise<void> {
   // restore could write any contributor, including ones currently disabled.
   const allIds = engine.getContributors().map((c) => c.id)
   const currentBundle = engine.serialize(device, allIds)
-  await store.createSnapshot(currentBundle, 'pre-restore', { isSessionPristine: true })
+
+  // Atomic rotation: create the new pristine snapshot first so that if the
+  // write fails (quota, IDB error), the prior pristine is still intact. Only
+  // demote the old flag after the new one is safely written — otherwise a
+  // mid-rotation failure would leave zero session-pristine snapshots. Pass
+  // the new snapshot's id so demote skips it (keeping exactly one pristine).
+  const meta = await store.createSnapshot(currentBundle, 'pre-restore', { isSessionPristine: true })
+  await store.demoteSessionPristine(meta.id)
 }

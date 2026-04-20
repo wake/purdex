@@ -61,4 +61,29 @@ describe('ensureSessionPristine', () => {
     expect(demoteCalls).toHaveLength(1)
     expect(createdTriggers).toEqual(['pre-restore'])
   })
+
+  it('does not demote prior pristine if createSnapshot throws (atomic rotation)', async () => {
+    const demoteCalls: number[] = []
+    const createCalls: string[] = []
+    setSnapshotStore({
+      init: async () => {},
+      listLocal: async () => [
+        { id: 'prev', timestamp: 0, device: 'd', trigger: 'pre-restore', bundleSize: 0, contributorIds: [], isSessionPristine: true },
+      ],
+      getLocal: async () => null,
+      createSnapshot: async (_b, trigger) => {
+        createCalls.push(trigger)
+        throw new Error('quota exceeded')
+      },
+      deleteLocal: async () => {},
+      demoteSessionPristine: async () => { demoteCalls.push(Date.now()) },
+      compact: async () => ({ kept: [], evicted: [] }),
+      clear: async () => {},
+    })
+    await expect(ensureSessionPristine()).rejects.toThrow('quota exceeded')
+    expect(createCalls).toEqual(['pre-restore'])
+    // Demote must NOT be called — prior pristine stays put so we still have
+    // a valid session-pristine if createSnapshot fails.
+    expect(demoteCalls).toHaveLength(0)
+  })
 })
