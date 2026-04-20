@@ -37,6 +37,8 @@ type testObserver struct {
 	readyOnce sync.Once
 }
 
+const testReadyWait = 250 * time.Millisecond
+
 func (m *Module) registerTestObserver(nonce string) *testObserver {
 	obs := &testObserver{
 		stages: make(chan testStage, 2),
@@ -190,13 +192,14 @@ func (m *Module) handleStatuslineTest(w http.ResponseWriter, r *http.Request) {
 	if !writeEvent(testStageEvent{Type: "init", Nonce: nonce}) {
 		return
 	}
-	readyStart := time.Now()
 	select {
 	case <-obs.ready:
-	case <-time.After(2 * time.Second):
-		emitStage(1, "Proxy spawned", "failed", "timeout waiting for client ready", time.Since(readyStart))
-		writeEvent(testStageEvent{Type: "done", Nonce: nonce})
-		return
+	case <-time.After(testReadyWait):
+		// Backward-compatible fallback: older SPAs do not know about the init/ready
+		// handshake yet, and dev-mode HMR can temporarily skew frontend/backend
+		// versions. In those cases keep the legacy behavior rather than failing the
+		// self-test before spawn. When the ready ack does arrive, this wait gives
+		// the client a best-effort head start before the proxy POST lands.
 	}
 
 	spawn := m.testSpawnProxy

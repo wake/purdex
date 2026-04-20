@@ -88,6 +88,31 @@ describe('useStatuslineTest', () => {
     expect(result.current.state.stages[5].status).toBe('skipped')
   })
 
+  it('falls back to stage-1 nonce when daemon does not send init', async () => {
+    const nonce = '__pdx_test_legacy111'
+    const body = sseBodyFrom([
+      { type: 'stage', stage: 1, name: 'Proxy spawned', status: 'passed', elapsed_ms: 12, nonce },
+      { type: 'stage', stage: 2, name: 'Proxy → daemon POST received', status: 'passed', elapsed_ms: 8, nonce },
+      { type: 'stage', stage: 3, name: 'Daemon → WS broadcast', status: 'passed', elapsed_ms: 3, nonce },
+      { type: 'done', nonce },
+    ])
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, body } as unknown as Response)
+
+    const { result } = renderHook(() => useStatuslineTest('h1'))
+    await act(async () => {
+      const p = result.current.run()
+      queueMicrotask(() => {
+        useAgentStore.getState().setCcStatus('h1', nonce, { model: { id: 'x' } })
+        statuslineTestBus.emit({ nonce, hostId: 'h1', raw: { model: { id: 'x' } } })
+      })
+      await p
+    })
+
+    expect(result.current.state.stages[4].status).toBe('passed')
+    expect(result.current.state.stages[5].status).toBe('passed')
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
   it('SSE done without WS event → stage 4 fails after grace period', async () => {
     vi.useFakeTimers()
     const nonce = '__pdx_test_bbbb2222'

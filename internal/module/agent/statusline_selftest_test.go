@@ -193,6 +193,47 @@ func TestHandleStatuslineTestWaitsForReadyBeforeSpawning(t *testing.T) {
 	}
 }
 
+func TestHandleStatuslineTestFallsBackWhenReadyAckNeverArrives(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	spawnCalled := make(chan struct{}, 1)
+	env.module.testSpawnProxy = func(nonce string) error {
+		spawnCalled <- struct{}{}
+		go func() {
+			body := `{"tmux_session":"` + nonce + `","agent_type":"cc","raw_status":{"model":{"display_name":"legacy-fallback"}}}`
+			req := httptest.NewRequest(http.MethodPost, "/api/agent/status", strings.NewReader(body))
+			w := httptest.NewRecorder()
+			env.module.handleAgentStatus(w, req)
+		}()
+		return nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", nil)
+	w := newStageAwareRecorder()
+	done := make(chan struct{})
+	go func() {
+		env.module.handleStatuslineTest(w, req)
+		close(done)
+	}()
+
+	_ = waitForInitNonce(t, w)
+	select {
+	case <-spawnCalled:
+		// Ready ack never arrived; this should only happen after the compatibility timeout.
+	case <-time.After(testReadyWait + 300*time.Millisecond):
+		t.Fatal("timed out waiting for legacy fallback spawn")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for self-test handler completion; body=%s", w.BodyString())
+	}
+
+	if strings.Contains(w.BodyString(), "timeout waiting for client ready") {
+		t.Fatalf("legacy fallback should not fail the self-test before spawn; body=%s", w.BodyString())
+	}
+}
+
 func TestHandleStatuslineTestBroadcastsAgentStatusAfterClientReady(t *testing.T) {
 	env := newHandlerTestEnv(t)
 

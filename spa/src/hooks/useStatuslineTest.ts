@@ -110,6 +110,7 @@ export function useStatuslineTest(hostId: string) {
 
     let unsubBus: (() => void) | null = null
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+    let activeNonce: string | null = null
 
     // stage4Signal resolves when the bus subscriber fires (or the early-hit
     // fallback catches a pre-subscribe store entry). The post-SSE grace block
@@ -151,6 +152,45 @@ export function useStatuslineTest(hostId: string) {
       })
     }
 
+    const armNonce = async (noncedVal: string, sendReadyAck: boolean) => {
+      activeNonce = noncedVal
+      debugStatuslineTest('hook.stage1-passed', { nonce: noncedVal, hostId, phase: sendReadyAck ? 'init' : 'stage1-fallback' })
+      setState((s) => ({ ...s, nonce: noncedVal }))
+      unsubBus = statuslineTestBus.subscribe(noncedVal, ({ nonce: got }) => {
+        debugStatuslineTest('hook.bus-callback', { nonce: got, mounted: mountedRef.current })
+        if (!mountedRef.current) return
+        markStage(4, { status: 'passed' })
+        const key = compositeKey(hostId, got)
+        const hasStoreEntry = !!useAgentStore.getState().ccStatus[key]
+        debugStatuslineTest('hook.stage5-check', { key, hasStoreEntry })
+        if (hasStoreEntry) {
+          markStage(5, { status: 'passed' })
+        }
+        fireStage4()
+      })
+      const earlyKey = compositeKey(hostId, noncedVal)
+      const earlyHit = !!useAgentStore.getState().ccStatus[earlyKey]
+      debugStatuslineTest('hook.early-hit-check', { earlyKey, earlyHit })
+      if (earlyHit) {
+        markStage(4, { status: 'passed' })
+        markStage(5, { status: 'passed' })
+        fireStage4()
+        unsubBus?.()
+        unsubBus = null
+      }
+      if (!sendReadyAck) return true
+      const ready = await hostFetch(hostId, '/api/agent/cc/statusline/test/ready', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nonce: noncedVal }),
+      })
+      if (!ready.ok) {
+        markFailThenSkipRest(1, `ready ack failed: HTTP ${ready.status}`)
+        return false
+      }
+      return true
+    }
+
     const work = (async () => {
       const res = await hostFetch(hostId, '/api/agent/cc/statusline/test', { method: 'POST' })
       if (!res.ok || !res.body) {
@@ -172,38 +212,8 @@ export function useStatuslineTest(hostId: string) {
           let ev: ServerStageEvent
           try { ev = JSON.parse(dataLine.slice(6)) } catch { continue }
           if (ev.type === 'init' && ev.nonce) {
-            const noncedVal = ev.nonce
-            debugStatuslineTest('hook.stage1-passed', { nonce: noncedVal, hostId, phase: 'init' })
-            setState((s) => ({ ...s, nonce: noncedVal }))
-            unsubBus = statuslineTestBus.subscribe(noncedVal, ({ nonce: got }) => {
-              debugStatuslineTest('hook.bus-callback', { nonce: got, mounted: mountedRef.current })
-              if (!mountedRef.current) return
-              markStage(4, { status: 'passed' })
-              const key = compositeKey(hostId, got)
-              const hasStoreEntry = !!useAgentStore.getState().ccStatus[key]
-              debugStatuslineTest('hook.stage5-check', { key, hasStoreEntry })
-              if (hasStoreEntry) {
-                markStage(5, { status: 'passed' })
-              }
-              fireStage4()
-            })
-            const earlyKey = compositeKey(hostId, noncedVal)
-            const earlyHit = !!useAgentStore.getState().ccStatus[earlyKey]
-            debugStatuslineTest('hook.early-hit-check', { earlyKey, earlyHit })
-            if (earlyHit) {
-              markStage(4, { status: 'passed' })
-              markStage(5, { status: 'passed' })
-              fireStage4()
-              unsubBus?.()
-              unsubBus = null
-            }
-            const ready = await hostFetch(hostId, '/api/agent/cc/statusline/test/ready', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ nonce: noncedVal }),
-            })
-            if (!ready.ok) {
-              markFailThenSkipRest(1, `ready ack failed: HTTP ${ready.status}`)
+            const ok = await armNonce(ev.nonce, true)
+            if (!ok) {
               return
             }
             continue
@@ -219,9 +229,9 @@ export function useStatuslineTest(hostId: string) {
           markStage(n, { status: 'passed', elapsedMs: ev.elapsed_ms })
 
           if (n === 1) {
-            if (ev.nonce) {
-              debugStatuslineTest('hook.stage1-passed', { nonce: ev.nonce, hostId })
-              setState((s) => ({ ...s, nonce: ev.nonce }))
+            if (ev.nonce && !activeNonce) {
+              const ok = await armNonce(ev.nonce, false)
+              if (!ok) return
             }
             markStage(2, { status: 'running' })
           } else if (n === 2) {

@@ -51,6 +51,9 @@
 3. daemon 收到 ready ack 後才 spawn proxy
 4. test nonce 仍走真實 `handleAgentStatus -> agent.status broadcast` 路徑
 5. `agent.status.cleared` 仍由 self-test handler 在結尾送出，清掉 synthetic nonce state
+6. 新舊版相容：
+   - 新 frontend + 舊 daemon：保留 stage-1 nonce fallback
+   - 新 daemon + 舊 frontend：ready wait 逾時後回退舊行為，不在 spawn 前直接 fail
 
 ## 驗證
 
