@@ -46,15 +46,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 圖示統一使用 Phosphor Icons
 - 每個 PR merge 後，必須更新 `VERSION` + `CHANGELOG.md` 並 commit push
 
-### PR Review 兩輪制
+### PR Review 兩輪制（Codex 跨模型第二意見）
 
-**第一輪：`code-review:code-review` skill**
-- 標準化 code review（CLAUDE.md 合規、bug scan、git history、PR comments、code comments）
+**第一輪：`/codex:review --base main --background`**
+- 標準 code review（跨模型差異化檢查）
 
-**第二輪：3 個 parallel agent 正反方審查**
-- 攻擊方：找 bug / 安全漏洞 / 邊界情況
-- 防守方：驗證設計合理性 / 架構一致性
-- 檔案大小審查：偵測過大檔案、職責不清
+**第二輪：3 個 parallel `/codex:adversarial-review --base main --background <focus>`**
+- 攻擊方：找 bug / 安全漏洞 / race / 邊界條件
+- 防守方：驗證設計合理性 / 架構一致性 / API 邊界
+- 檔案體質：過大檔案 / SRP 違反 / 職責不清
+
+輪詢 `/codex:status` → `/codex:result <job-id>` 讀回 4 份輸出。
+
+Focus text 越具體越好（指定檔案 / 具體風險點 / 設計疑問）。全域 CLAUDE.md 載明 Skill 設計意圖與 companion script 啟動路徑。
 
 ### Review 問題彙整
 
