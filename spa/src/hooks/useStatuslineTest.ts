@@ -179,21 +179,22 @@ export function useStatuslineTest(hostId: string) {
         unsubBus = null
       }
       if (!sendReadyAck) return true
-      try {
-        const ready = await hostFetch(hostId, '/api/agent/cc/statusline/test/ready', {
+      hostFetch(hostId, '/api/agent/cc/statusline/test/ready', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ nonce: noncedVal }),
         })
+        .then((ready) => {
         if (!ready.ok) {
           debugStatuslineTest('hook.ready-ack-fallback', { nonce: noncedVal, status: ready.status })
         }
-      } catch (err) {
-        debugStatuslineTest('hook.ready-ack-fallback', {
-          nonce: noncedVal,
-          error: err instanceof Error ? err.message : String(err),
         })
-      }
+        .catch((err) => {
+          debugStatuslineTest('hook.ready-ack-fallback', {
+            nonce: noncedVal,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
       return true
     }
 
