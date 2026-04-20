@@ -142,6 +142,33 @@ func TestTraceStore_MigratesLegacySchemaAndReadsListChains(t *testing.T) {
 	}
 }
 
+func TestTraceStore_MigratesLegacyChainsWithoutStepsTable(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	seedLegacyTraceChainsOnly(t, s.db)
+
+	if _, err := s.Traces(); err != nil {
+		t.Fatalf("Traces: %v", err)
+	}
+
+	store := &TraceStore{db: s.db, maxChains: 10, maxSteps: 10}
+	page, err := store.ListChains(TraceListFilter{
+		TmuxSession: "proj-legacy",
+		PaneID:      "%9",
+		AgentType:   "cc",
+		EventName:   "Stop",
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("ListChains: %v", err)
+	}
+	if len(page.Chains) != 1 {
+		t.Fatalf("chains = %d, want 1", len(page.Chains))
+	}
+	if page.Chains[0].StepCount != 0 {
+		t.Fatalf("step_count = %d, want 0", page.Chains[0].StepCount)
+	}
+}
+
 func TestTraceStore_MigratesLegacyStepSchemaAndBlocksCrossChainParent(t *testing.T) {
 	s := openTestAgentEventStore(t)
 	seedIntermediateTraceSchema(t, s.db)
@@ -425,6 +452,32 @@ func seedLegacyTraceSchema(t *testing.T, db *sql.DB) {
 		)
 	`); err != nil {
 		t.Fatalf("create legacy steps: %v", err)
+	}
+}
+
+func seedLegacyTraceChainsOnly(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	if _, err := db.Exec(`
+		CREATE TABLE agent_trace_chains (
+			chain_id     TEXT PRIMARY KEY,
+			tmux_session TEXT NOT NULL,
+			pane_id      TEXT NOT NULL,
+			agent_type   TEXT NOT NULL,
+			event_name   TEXT NOT NULL,
+			created_at   INTEGER NOT NULL,
+			updated_at   INTEGER NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create legacy chains: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, tmux_session, pane_id, agent_type, event_name, created_at, updated_at
+		) VALUES
+		('legacy-chain', 'proj-legacy', '%9', 'cc', 'Stop', 123, 456)
+	`); err != nil {
+		t.Fatalf("seed legacy chain: %v", err)
 	}
 }
 

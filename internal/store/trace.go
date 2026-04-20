@@ -388,6 +388,14 @@ func rebuildLegacyTraceChains(db *sql.DB) error {
 }
 
 func legacyTraceStepCounts(db *sql.DB) (map[string]int, error) {
+	exists, err := traceTableExists(db, "agent_trace_steps")
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return map[string]int{}, nil
+	}
+
 	rows, err := db.Query(`SELECT chain_id, COUNT(*) FROM agent_trace_steps GROUP BY chain_id`)
 	if err != nil {
 		return nil, err
@@ -404,6 +412,22 @@ func legacyTraceStepCounts(db *sql.DB) (map[string]int, error) {
 		counts[chainID] = count
 	}
 	return counts, rows.Err()
+}
+
+func traceTableExists(db *sql.DB, table string) (bool, error) {
+	var name string
+	err := db.QueryRow(`
+		SELECT name
+		FROM sqlite_master
+		WHERE type = 'table' AND name = ?
+	`, table).Scan(&name)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func rebuildLegacyTraceSteps(db *sql.DB) error {
