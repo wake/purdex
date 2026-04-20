@@ -250,7 +250,9 @@ func (m *Module) handleStatuslineTest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Cleanup: targeted clear of the test nonce so the SPA scrubs its ccStatus entry.
-	m.core.Events.Broadcast(nonce, "agent.status.cleared", `{"agent_type":"cc"}`)
+	if m.core != nil {
+		m.core.Events.Broadcast(nonce, "agent.status.cleared", `{"agent_type":"cc"}`)
+	}
 
 	writeEvent(testStageEvent{Type: "done", Nonce: nonce})
 }
