@@ -21,6 +21,7 @@ func (f *fakeProvider) Claim(ctx agent.ClaimContext) bool {
 	}
 	return false
 }
+func (f *fakeProvider) Identify(agent.ProcessInfo) bool { return false }
 func (f *fakeProvider) DeriveStatus(string, json.RawMessage) agent.DeriveResult {
 	return agent.DeriveResult{}
 }

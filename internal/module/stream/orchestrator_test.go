@@ -13,11 +13,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/wake/purdex/internal/agent"
+	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/bridge"
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
-	agentcc "github.com/wake/purdex/internal/agent/cc"
-	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -25,12 +26,12 @@ import (
 // --- Fake CCOperator ---
 
 type fakeCCOperator struct {
-	mu            sync.Mutex
-	interruptErr  error
-	exitErr       error
-	getStatusErr  error
-	launchErr     error
-	statusInfo    *agentcc.StatusInfo
+	mu             sync.Mutex
+	interruptErr   error
+	exitErr        error
+	getStatusErr   error
+	launchErr      error
+	statusInfo     *agentcc.StatusInfo
 	interruptCalls int
 	exitCalls      int
 	getStatusCalls int
@@ -70,14 +71,34 @@ func (f *fakeCCOperator) Launch(_ context.Context, _ string, cmd string) error {
 
 // --- Prober test helpers ---
 
-// setupTestProber creates a Prober backed by a FakeExecutor, with CC process names
-// and readiness checker registered (matching production wiring).
-func setupTestProber(fake *tmux.FakeExecutor) *probe.Prober {
-	p := probe.New(fake)
-	p.RegisterProcessNames("cc", []string{"claude"})
-	p.RegisterContentMatcher("cc", agentcc.NewContentMatcher())
-	p.RegisterReadiness("cc", agentcc.NewReadinessChecker(fake))
-	return p
+type fakeStreamProber struct {
+	tmux      *tmux.FakeExecutor
+	readiness probe.ReadinessChecker
+}
+
+func (f *fakeStreamProber) IsAliveFor(agentType, target string) bool {
+	if agentType != "cc" {
+		return false
+	}
+	cmd, err := f.tmux.PaneCurrentCommand(target)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(cmd) == "claude"
+}
+
+func (f *fakeStreamProber) CheckReadiness(agentType, target string) (probe.ReadinessResult, bool) {
+	if agentType != "cc" || f.readiness == nil {
+		return probe.ReadinessResult{Status: agent.StatusRunning}, true
+	}
+	return f.readiness.CheckReadiness(target), true
+}
+
+func setupTestProber(fake *tmux.FakeExecutor) livenessProber {
+	return &fakeStreamProber{
+		tmux:      fake,
+		readiness: agentcc.NewReadinessChecker(fake),
+	}
 }
 
 // setPaneShell configures the FakeExecutor so the prober sees a shell (IsAliveFor = false).

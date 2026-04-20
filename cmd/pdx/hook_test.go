@@ -5,19 +5,35 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/wake/purdex/internal/config"
 )
 
 func TestBuildHookPayload(t *testing.T) {
 	stdin := strings.NewReader(`{"type":"Stop","session_id":"abc123"}`)
-	p := buildHookPayload("my-session", "Stop", stdin, "")
+	p := buildHookPayload("my-session", "Stop", stdin, "", hookProvenance{
+		TmuxPaneID:      "%5",
+		SenderPID:       123,
+		SenderStartTime: "Sun Apr 20 01:30:00 2026",
+	})
 
 	if p.TmuxSession != "my-session" {
 		t.Errorf("TmuxSession = %q, want %q", p.TmuxSession, "my-session")
 	}
 	if p.EventName != "Stop" {
 		t.Errorf("EventName = %q, want %q", p.EventName, "Stop")
+	}
+	if p.TmuxPaneID != "%5" {
+		t.Errorf("TmuxPaneID = %q, want %%5", p.TmuxPaneID)
+	}
+	if p.SenderPID != 123 {
+		t.Errorf("SenderPID = %d, want 123", p.SenderPID)
+	}
+	if p.SenderStartTime != "Sun Apr 20 01:30:00 2026" {
+		t.Errorf("SenderStartTime = %q, want expected", p.SenderStartTime)
 	}
 
 	// raw_event should be the original JSON
@@ -35,7 +51,11 @@ func TestBuildHookPayload(t *testing.T) {
 
 func TestBuildHookPayload_EmptyStdin(t *testing.T) {
 	stdin := strings.NewReader("")
-	p := buildHookPayload("sess", "Start", stdin, "")
+	p := buildHookPayload("sess", "Start", stdin, "", hookProvenance{
+		TmuxPaneID:      "%7",
+		SenderPID:       456,
+		SenderStartTime: "Sun Apr 20 01:40:00 2026",
+	})
 
 	if p.EventName != "Start" {
 		t.Errorf("EventName = %q, want %q", p.EventName, "Start")
@@ -43,11 +63,14 @@ func TestBuildHookPayload_EmptyStdin(t *testing.T) {
 	if string(p.RawEvent) != "{}" {
 		t.Errorf("RawEvent = %s, want {}", string(p.RawEvent))
 	}
+	if p.SenderPID != 456 || p.TmuxPaneID != "%7" {
+		t.Errorf("provenance lost: %+v", p)
+	}
 }
 
 func TestBuildHookPayload_WithAgentType(t *testing.T) {
 	stdin := strings.NewReader(`{"hook_event_name":"Stop"}`)
-	p := buildHookPayload("sess", "Stop", stdin, "cc")
+	p := buildHookPayload("sess", "Stop", stdin, "cc", hookProvenance{})
 
 	if p.AgentType != "cc" {
 		t.Errorf("AgentType = %q, want %q", p.AgentType, "cc")
@@ -56,7 +79,7 @@ func TestBuildHookPayload_WithAgentType(t *testing.T) {
 
 func TestBuildHookPayload_EmptyAgent(t *testing.T) {
 	stdin := strings.NewReader(`{}`)
-	p := buildHookPayload("sess", "Stop", stdin, "")
+	p := buildHookPayload("sess", "Stop", stdin, "", hookProvenance{})
 
 	if p.AgentType != "" {
 		t.Errorf("AgentType = %q, want empty", p.AgentType)
@@ -88,9 +111,12 @@ func TestPostHookEvent(t *testing.T) {
 	defer ts.Close()
 
 	p := hookPayload{
-		TmuxSession: "test-sess",
-		EventName:   "Stop",
-		RawEvent:    json.RawMessage(`{"foo":"bar"}`),
+		TmuxSession:     "test-sess",
+		TmuxPaneID:      "%9",
+		EventName:       "Stop",
+		RawEvent:        json.RawMessage(`{"foo":"bar"}`),
+		SenderPID:       777,
+		SenderStartTime: "Sun Apr 20 01:30:00 2026",
 	}
 
 	if err := postHookEvent(ts.URL+"/api/agent/event", "my-secret", p); err != nil {
@@ -102,6 +128,12 @@ func TestPostHookEvent(t *testing.T) {
 	}
 	if received.EventName != "Stop" {
 		t.Errorf("received EventName = %q, want %q", received.EventName, "Stop")
+	}
+	if received.TmuxPaneID != "%9" {
+		t.Errorf("received TmuxPaneID = %q, want %%9", received.TmuxPaneID)
+	}
+	if received.SenderPID != 777 {
+		t.Errorf("received SenderPID = %d, want 777", received.SenderPID)
 	}
 	if string(received.RawEvent) != `{"foo":"bar"}` {
 		t.Errorf("received RawEvent = %s, want %s", string(received.RawEvent), `{"foo":"bar"}`)
@@ -121,9 +153,11 @@ func TestPostHookEvent_NoToken(t *testing.T) {
 	defer ts.Close()
 
 	p := hookPayload{
-		TmuxSession: "x",
-		EventName:   "Stop",
-		RawEvent:    json.RawMessage(`{}`),
+		TmuxSession:     "x",
+		EventName:       "Stop",
+		RawEvent:        json.RawMessage(`{}`),
+		SenderPID:       1,
+		SenderStartTime: "Sun Apr 20 01:30:00 2026",
 	}
 
 	if err := postHookEvent(ts.URL+"/api/agent/event", "", p); err != nil {
@@ -136,14 +170,78 @@ func TestPostHookEvent_NoToken(t *testing.T) {
 
 func TestPostHookEvent_ServerDown(t *testing.T) {
 	p := hookPayload{
-		TmuxSession: "x",
-		EventName:   "Stop",
-		RawEvent:    json.RawMessage(`{}`),
+		TmuxSession:     "x",
+		EventName:       "Stop",
+		RawEvent:        json.RawMessage(`{}`),
+		SenderPID:       1,
+		SenderStartTime: "Sun Apr 20 01:30:00 2026",
 	}
 
 	// Use a port that is almost certainly not listening
 	err := postHookEvent("http://127.0.0.1:1/api/agent/event", "", p)
 	if err == nil {
 		t.Fatal("expected error for unreachable server, got nil")
+	}
+}
+
+func TestRunHook_PopulatesProvenance(t *testing.T) {
+	origSession := queryTmuxSessionFn
+	origPaneID := queryTmuxPaneIDFn
+	origResolve := resolveHookProvenanceFn
+	origPost := postHookEventFn
+	origLoad := loadConfigFn
+	origStdin := os.Stdin
+	t.Cleanup(func() {
+		queryTmuxSessionFn = origSession
+		queryTmuxPaneIDFn = origPaneID
+		resolveHookProvenanceFn = origResolve
+		postHookEventFn = origPost
+		loadConfigFn = origLoad
+		os.Stdin = origStdin
+	})
+
+	queryTmuxSessionFn = func() string { return "work" }
+	queryTmuxPaneIDFn = func() string { return "%5" }
+	resolveHookProvenanceFn = func() hookProvenance {
+		return hookProvenance{
+			TmuxPaneID:      "%5",
+			SenderPID:       36649,
+			SenderStartTime: "Sun Apr 20 01:30:00 2026",
+		}
+	}
+	loadConfigFn = func(string) (config.Config, error) { return config.Config{}, nil }
+
+	var got hookPayload
+	postHookEventFn = func(_ string, _ string, payload hookPayload) error {
+		got = payload
+		return nil
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	if _, err := w.WriteString(`{"hook_event_name":"SessionStart"}`); err != nil {
+		t.Fatalf("write stdin: %v", err)
+	}
+	_ = w.Close()
+	os.Stdin = r
+
+	runHook([]string{"--agent", "cc", "SessionStart"})
+
+	if got.TmuxSession != "work" {
+		t.Fatalf("tmux_session = %q, want work", got.TmuxSession)
+	}
+	if got.TmuxPaneID != "%5" {
+		t.Fatalf("tmux_pane_id = %q, want %%5", got.TmuxPaneID)
+	}
+	if got.SenderPID != 36649 {
+		t.Fatalf("sender_pid = %d, want 36649", got.SenderPID)
+	}
+	if got.SenderStartTime != "Sun Apr 20 01:30:00 2026" {
+		t.Fatalf("sender_start_time = %q, want expected", got.SenderStartTime)
+	}
+	if got.SenderUncertain {
+		t.Fatal("sender_uncertain = true, want false")
 	}
 }

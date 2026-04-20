@@ -53,10 +53,14 @@ func (m *Module) resolveStatuslineInstaller(w http.ResponseWriter, r *http.Reque
 
 // EventRequest is the JSON body expected by POST /api/agent/event.
 type EventRequest struct {
-	TmuxSession string          `json:"tmux_session"`
-	EventName   string          `json:"event_name"`
-	RawEvent    json.RawMessage `json:"raw_event"`
-	AgentType   string          `json:"agent_type"`
+	TmuxSession     string          `json:"tmux_session"`
+	TmuxPaneID      string          `json:"tmux_pane_id"`
+	EventName       string          `json:"event_name"`
+	RawEvent        json.RawMessage `json:"raw_event"`
+	AgentType       string          `json:"agent_type"`
+	SenderPID       int             `json:"sender_pid"`
+	SenderStartTime string          `json:"sender_start_time"`
+	SenderUncertain bool            `json:"sender_uncertain"`
 }
 
 // handleEvent handles POST /api/agent/event.
@@ -68,9 +72,18 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.TmuxSession == "" {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	if req.TmuxSession == "" || req.TmuxPaneID == "" || req.AgentType == "" || req.EventName == "" || req.SenderPID == 0 {
+		http.Error(w, `{"error":"schema_invalid"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.SenderStartTime == "" && !req.SenderUncertain {
+		http.Error(w, `{"error":"schema_invalid"}`, http.StatusBadRequest)
+		return
+	}
+
+	if decision := verifyEventFn(m, req); !decision.Accepted {
+		writeVerifyRejected(w, req, decision.Reason)
 		return
 	}
 
@@ -86,16 +99,6 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	var result agentpkg.DeriveResult
 	if provider != nil {
 		result = provider.DeriveStatus(req.EventName, req.RawEvent)
-	}
-
-	// Handle subagent events (transient — broadcast only, don't persist)
-	if req.EventName == "SubagentStart" || req.EventName == "SubagentStop" {
-		m.handleSubagentEvent(req.TmuxSession, req.EventName, result)
-		normalized := m.buildNormalized(req.TmuxSession, req.EventName, req.AgentType, broadcastTs, result)
-		m.broadcastToSession(req.TmuxSession, normalized)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-		return
 	}
 
 	// Error guard: when in error state, only whitelisted events can clear it
@@ -115,10 +118,38 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Store raw event to DB
-	if err := m.events.Set(req.TmuxSession, req.EventName, req.RawEvent, req.AgentType, broadcastTs); err != nil {
-		log.Printf("[agent] store event: %v", err)
-		http.Error(w, `{"error":"store failed"}`, http.StatusInternalServerError)
+	projection, err := m.applyFrameEvent(req, result, broadcastTs)
+	if err != nil {
+		log.Printf("[agent] frame event: %v", err)
+		http.Error(w, `{"error":"frame update failed"}`, http.StatusInternalServerError)
+		return
+	}
+	if req.TmuxSession != "" {
+		projection, err = m.projectionForSession(req.TmuxSession)
+		if err != nil {
+			log.Printf("[agent] session projection: %v", err)
+			http.Error(w, `{"error":"frame update failed"}`, http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if req.TmuxSession != "" && m.frames != nil && m.events != nil {
+		if err := m.events.Delete(req.TmuxSession); err != nil {
+			log.Printf("[agent] clear legacy event: %v", err)
+			http.Error(w, `{"error":"store failed"}`, http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Handle subagent events (transient — broadcast only, don't persist)
+	if req.EventName == "SubagentStart" || req.EventName == "SubagentStop" {
+		m.mu.Lock()
+		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
+		m.mu.Unlock()
+		normalized := buildProjectionNormalized(projection, req.AgentType, req.EventName, broadcastTs, result)
+		m.broadcastToSession(req.TmuxSession, normalized)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		return
 	}
 
@@ -135,10 +166,16 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Activity watch management:
-	// 1. Any hook event stops an active watcher for this session
-	// 2. If new status is waiting, start a new watcher
+	// 1. Any hook event stops an active watcher for this session.
+	// 2. waiting/running/idle transitions restart the watcher for the top frame.
+	watchAgentType := req.AgentType
+	watchStatus := result.Status
+	if projection != nil && projection.TopFrame != nil {
+		watchAgentType = projection.TopFrame.AgentType
+		watchStatus = projection.TopFrame.Status
+	}
 	if req.TmuxSession != "" && m.prober != nil && result.Valid {
-		m.manageActivityWatch(req.TmuxSession, req.AgentType, result.Status)
+		m.manageActivityWatch(req.TmuxSession, watchAgentType, watchStatus)
 	}
 
 	// Clear subagents on non-compact SessionStart
@@ -149,63 +186,14 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build and broadcast normalized event
-	normalized := m.buildNormalized(req.TmuxSession, req.EventName, req.AgentType, broadcastTs, result)
+	normalized := buildProjectionNormalized(projection, req.AgentType, req.EventName, broadcastTs, result)
+	m.mu.Lock()
+	syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
+	m.mu.Unlock()
 	m.broadcastToSession(req.TmuxSession, normalized)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-// handleSubagentEvent tracks subagent add/remove in memory.
-func (m *Module) handleSubagentEvent(tmuxSession, eventName string, result agentpkg.DeriveResult) {
-	agentID, _ := result.Detail["agent_id"].(string)
-	if agentID == "" {
-		return
-	}
-	if eventName == "SubagentStart" {
-		// Guard: ignore SubagentStart for sessions whose latest persisted
-		// event indicates they're not active.  Two cases this rejects:
-		//   - No DB entry at all → session is unknown to the daemon
-		//     (also covers daemon restart with no replay state).
-		//   - Latest event is StatusClear (SessionEnd) → late hook arriving
-		//     after the session ended; should not re-populate state.
-		// Uses persistent DB state instead of in-memory currentStatus, so
-		// the guard survives daemon restarts and edge cases like compact
-		// SessionStart events that don't update currentStatus.
-		ev, _ := m.events.Get(tmuxSession)
-		if ev == nil {
-			return
-		}
-		if provider, ok := m.registry.Get(ev.AgentType); ok {
-			if r := provider.DeriveStatus(ev.EventName, ev.RawEvent); r.Status == agentpkg.StatusClear {
-				return
-			}
-		}
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if eventName == "SubagentStart" {
-		current := m.subagents[tmuxSession]
-		for _, id := range current {
-			if id == agentID {
-				return
-			}
-		}
-		m.subagents[tmuxSession] = append(current, agentID)
-	} else {
-		current := m.subagents[tmuxSession]
-		filtered := make([]string, 0, len(current))
-		for _, id := range current {
-			if id != agentID {
-				filtered = append(filtered, id)
-			}
-		}
-		if len(filtered) == 0 {
-			delete(m.subagents, tmuxSession)
-		} else {
-			m.subagents[tmuxSession] = filtered
-		}
-	}
 }
 
 // buildNormalized creates a NormalizedEvent from the derive result and current state.
@@ -471,14 +459,23 @@ func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ev, _ := m.events.Get(sess.Name)
-	if ev == nil {
+	agentType := ""
+	if projection, err := m.projectionForSession(sess.Name); err == nil && projection != nil && projection.TopFrame != nil {
+		agentType = projection.TopFrame.AgentType
+	}
+	if agentType == "" && m.events != nil {
+		ev, _ := m.events.Get(sess.Name)
+		if ev != nil {
+			agentType = ev.AgentType
+		}
+	}
+	if agentType == "" {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]any{})
 		return
 	}
 
-	provider, ok := m.registry.Get(ev.AgentType)
+	provider, ok := m.registry.Get(agentType)
 	if !ok {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]any{})
@@ -502,50 +499,6 @@ func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(history)
-}
-
-// handleCheckAlive handles POST /api/agent/check-alive/{session}.
-func (m *Module) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
-	if m.sessions == nil {
-		http.Error(w, `{"error":"no session provider"}`, http.StatusInternalServerError)
-		return
-	}
-	sessionCode := r.PathValue("session")
-
-	sessions, err := m.sessions.ListSessions()
-	if err != nil {
-		http.Error(w, `{"error":"list sessions"}`, http.StatusInternalServerError)
-		return
-	}
-	var tmuxName string
-	for _, s := range sessions {
-		if s.Code == sessionCode {
-			tmuxName = s.Name
-			break
-		}
-	}
-	if tmuxName == "" {
-		http.Error(w, `{"error":"session not found"}`, http.StatusNotFound)
-		return
-	}
-
-	ev, _ := m.events.Get(tmuxName)
-	if ev == nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"alive": false, "reason": "no event"})
-		return
-	}
-
-	_, ok := m.registry.Get(ev.AgentType)
-	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"alive": false, "reason": "unknown agent"})
-		return
-	}
-
-	alive := m.prober.IsAliveFor(ev.AgentType, tmuxName+":")
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"alive": alive})
 }
 
 // statusSnapshot is the in-memory shape cached per sessionCode and broadcast over WS.
@@ -670,4 +623,3 @@ func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
-

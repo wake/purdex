@@ -28,8 +28,8 @@ type Executor interface {
 	SendKeys(target, keys string) error
 	SendKeysRaw(target string, keys ...string) error
 	PasteText(target, text string) error
-	PaneCurrentCommand(target string) (string, error)
 	PaneCurrentPath(target string) (string, error)
+	PaneSessionName(target string) (string, error)
 	PanePID(target string) (string, error)
 	PaneChildCommands(target string) ([]string, error)
 	CapturePaneContent(target string, lastN int) (string, error)
@@ -137,20 +137,18 @@ func (r *RealExecutor) PasteText(target, text string) error {
 	return exec.Command("tmux", "paste-buffer", "-b", bufName, "-t", target, "-d", "-p", "-r").Run()
 }
 
-func (r *RealExecutor) PaneCurrentCommand(target string) (string, error) {
-	out, err := exec.Command("tmux", "list-panes", "-t", target, "-F", "#{pane_current_command}").Output()
-	if err != nil {
-		return "", fmt.Errorf("tmux list-panes: %w", err)
-	}
-	// Return the first line (active pane's command).
-	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
-	return strings.TrimSpace(line), nil
-}
-
 func (r *RealExecutor) PaneCurrentPath(target string) (string, error) {
 	out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_current_path}").Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux display-message pane_current_path: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func (r *RealExecutor) PaneSessionName(target string) (string, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{session_name}").Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux display-message session_name: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -217,7 +215,7 @@ func (r *RealExecutor) paneProcessCommands(target string, recursive bool) ([]str
 
 func (r *RealExecutor) CapturePaneContent(target string, lastN int) (string, error) {
 	arg := fmt.Sprintf("-%d", lastN)
-	out, err := exec.Command("tmux", "capture-pane", "-t", target, "-p", "-S", arg).Output()
+	out, err := exec.Command("tmux", "capture-pane", "-e", "-t", target, "-p", "-S", arg).Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux capture-pane: %w", err)
 	}

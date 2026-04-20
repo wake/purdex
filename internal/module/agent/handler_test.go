@@ -30,13 +30,29 @@ func newTestModule(t *testing.T) *Module {
 	t.Cleanup(func() { events.Close() })
 	m := New(events)
 	m.registry = agentpkg.NewRegistry()
+	origVerify := verifyEventFn
+	verifyEventFn = func(*Module, EventRequest) verifyDecision { return verifyDecision{Accepted: true} }
+	t.Cleanup(func() { verifyEventFn = origVerify })
+	origReadProcessInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1, ExePath: "/usr/local/bin/claude", Argv: []string{"claude"}}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origReadProcessInfo })
+	origProcessStartTime := processStartTimeFn
+	processStartTimeFn = func(pid int) (string, error) {
+		return "Sun Apr 20 01:30:00 2026", nil
+	}
+	t.Cleanup(func() { processStartTimeFn = origProcessStartTime })
+	origIsPidAlive := isPidAliveFn
+	isPidAliveFn = func(pid int) bool { return true }
+	t.Cleanup(func() { isPidAliveFn = origIsPidAlive })
 	return m
 }
 
 func TestHandleEvent_StoresAndReturns(t *testing.T) {
 	m := newTestModule(t)
 
-	body := `{"tmux_session":"work","event_name":"agent:lifecycle:start","raw_event":{"session_id":"abc"}}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"agent:lifecycle:start","raw_event":{"session_id":"abc"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -55,19 +71,13 @@ func TestHandleEvent_StoresAndReturns(t *testing.T) {
 		t.Errorf("status field: want ok, got %s", resp["status"])
 	}
 
-	// Verify stored in AgentEventStore
+	// Accepted v2 hooks should not keep dual-written legacy rows around.
 	ev, err := m.events.Get("work")
 	if err != nil {
 		t.Fatalf("events.Get: %v", err)
 	}
-	if ev == nil {
-		t.Fatal("event not found in store")
-	}
-	if ev.EventName != "agent:lifecycle:start" {
-		t.Errorf("event_name: want agent:lifecycle:start, got %s", ev.EventName)
-	}
-	if string(ev.RawEvent) != `{"session_id":"abc"}` {
-		t.Errorf("raw_event: want {\"session_id\":\"abc\"}, got %s", string(ev.RawEvent))
+	if ev != nil {
+		t.Fatalf("legacy event row should be cleared, got %+v", ev)
 	}
 }
 
@@ -85,45 +95,83 @@ func TestHandleEvent_BadJSON(t *testing.T) {
 	}
 }
 
-func TestHandleEvent_MissingTmuxSession(t *testing.T) {
+func TestHandleEvent_RejectsLegacyPayload(t *testing.T) {
 	m := newTestModule(t)
 
-	body := `{"tmux_session":"","event_name":"agent:lifecycle:stop","raw_event":{}}`
+	body := `{"tmux_session":"work","event_name":"agent:lifecycle:stop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	m.handleEvent(w, req)
 
-	// Spec: empty tmux_session is still OK (returns 200) but skips DB storage.
-	if w.Code != http.StatusOK {
-		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d (body: %s)", w.Code, w.Body.String())
 	}
 
-	var resp map[string]string
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp["status"] != "ok" {
-		t.Errorf("status field: want ok, got %s", resp["status"])
-	}
-
-	// Verify NOT stored — empty tmux_session should be skipped.
-	ev, err := m.events.Get("")
+	ev, err := m.events.Get("work")
 	if err != nil {
 		t.Fatalf("events.Get: %v", err)
 	}
 	if ev != nil {
-		t.Error("event with empty tmux_session should not be stored in DB, but was found")
+		t.Error("legacy payload should not be stored in DB")
 	}
 }
 
-// TestHandleEvent_StoresAgentType verifies that agent_type from the request
-// body is persisted and can be read back from the store.
+// TestHandleEvent_StoresAgentType verifies that accepted hooks project agent
+// identity into frames instead of keeping a dual-written legacy row.
 func TestHandleEvent_StoresAgentType(t *testing.T) {
 	m := newTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
+	})
 
-	body := `{"tmux_session":"dev","event_name":"Stop","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	frames, err := m.frames.ListByPane("%9")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if frames[0].AgentType != "cc" {
+		t.Errorf("agent_type: want cc, got %q", frames[0].AgentType)
+	}
+	ev, err := m.events.Get("dev")
+	if err != nil {
+		t.Fatalf("events.Get: %v", err)
+	}
+	if ev != nil {
+		t.Fatalf("legacy event row should be cleared, got %+v", ev)
+	}
+}
+
+func TestHandleEvent_AcceptedV2HookRemovesLegacyRow(t *testing.T) {
+	m := newTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
+	})
+	if err := m.events.Set("dev", "Stop", json.RawMessage(`{}`), "cc", 1); err != nil {
+		t.Fatalf("seed event: %v", err)
+	}
+
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -138,11 +186,95 @@ func TestHandleEvent_StoresAgentType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("events.Get: %v", err)
 	}
+	if ev != nil {
+		t.Fatalf("legacy event row should be cleared, got %+v", ev)
+	}
+}
+
+func TestHandleEvent_RejectsUncertainV2Payload_WhenVerifyEnabled(t *testing.T) {
+	m := newTestModule(t)
+	verifyEventFn = defaultVerifyEvent
+	m.tmux = tmux.NewFakeExecutor()
+
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_uncertain":true,"event_name":"Stop","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status: want 202, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	ev, err := m.events.Get("dev")
+	if err != nil {
+		t.Fatalf("events.Get: %v", err)
+	}
+	if ev != nil {
+		t.Fatal("uncertain payload should not be stored after verify")
+	}
+}
+
+func TestHandleEvent_RejectedHookDoesNotOverwriteSession(t *testing.T) {
+	m := newTestModule(t)
+	verifyEventFn = func(*Module, EventRequest) verifyDecision {
+		return verifyDecision{Reason: "identify_mismatch"}
+	}
+
+	if err := m.events.Set("work", "Stop", json.RawMessage(`{}`), "cc", 1); err != nil {
+		t.Fatalf("seed event: %v", err)
+	}
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"codex"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status: want 202, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	ev, err := m.events.Get("work")
+	if err != nil {
+		t.Fatalf("events.Get: %v", err)
+	}
 	if ev == nil {
-		t.Fatal("event not stored")
+		t.Fatal("seeded event disappeared")
 	}
 	if ev.AgentType != "cc" {
-		t.Errorf("agent_type: want cc, got %q", ev.AgentType)
+		t.Fatalf("agent_type = %q, want cc", ev.AgentType)
+	}
+}
+
+func TestHandleEvent_ErrorGuardBlocksFrameMutation(t *testing.T) {
+	m := newTestModule(t)
+	m.currentStatus["work"] = agentpkg.StatusError
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
+		},
+	})
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PostToolUse","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0", len(frames))
 	}
 }
 
@@ -222,170 +354,6 @@ func TestRenameSession_NoOldData(t *testing.T) {
 	}
 }
 
-// --- Bug 3: SubagentStart guard via events.Get ---
-
-func TestHandleSubagentEvent_NoEntryStartIgnored(t *testing.T) {
-	m := newTestModule(t)
-	// No DB entry for "work" → session is unknown to the daemon
-
-	result := agentpkg.DeriveResult{
-		Valid:  true,
-		Detail: map[string]any{"agent_id": "late-agent"},
-	}
-	m.handleSubagentEvent("work", "SubagentStart", result)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.subagents["work"]; ok {
-		t.Error("SubagentStart should be ignored when session has no DB entry")
-	}
-}
-
-func TestHandleSubagentEvent_StartAfterClearIgnored(t *testing.T) {
-	m := newTestModule(t)
-	// Register a fake provider whose DeriveStatus returns StatusClear
-	provider := &fakeAgentProvider{
-		typeName: "cc",
-		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
-			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}
-		},
-	}
-	m.registry.Register(provider)
-	_ = m.events.Set("work", "SessionEnd", json.RawMessage(`{}`), "cc", 1)
-
-	result := agentpkg.DeriveResult{
-		Valid:  true,
-		Detail: map[string]any{"agent_id": "late-agent"},
-	}
-	m.handleSubagentEvent("work", "SubagentStart", result)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.subagents["work"]; ok {
-		t.Error("SubagentStart should be ignored when latest event is StatusClear")
-	}
-}
-
-func TestHandleSubagentEvent_StartAcceptedWhenSessionActive(t *testing.T) {
-	m := newTestModule(t)
-	// Register a fake provider whose DeriveStatus returns StatusRunning
-	provider := &fakeAgentProvider{
-		typeName: "cc",
-		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
-			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
-		},
-	}
-	m.registry.Register(provider)
-	_ = m.events.Set("work", "UserPromptSubmit", json.RawMessage(`{}`), "cc", 1)
-
-	result := agentpkg.DeriveResult{
-		Valid:  true,
-		Detail: map[string]any{"agent_id": "agent-1"},
-	}
-	m.handleSubagentEvent("work", "SubagentStart", result)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if subs := m.subagents["work"]; len(subs) != 1 || subs[0] != "agent-1" {
-		t.Errorf("SubagentStart should be accepted for active session, got %v", subs)
-	}
-}
-
-// Bug 2 A1: compact SessionStart edge case — DB has entry but currentStatus
-// is empty (because compact returns Valid:false).  events.Get-based guard
-// must accept SubagentStart in this case.
-func TestHandleSubagentEvent_CompactSessionStartAccepted(t *testing.T) {
-	m := newTestModule(t)
-	provider := &fakeAgentProvider{
-		typeName: "cc",
-		derive: func(eventName string, _ json.RawMessage) agentpkg.DeriveResult {
-			// Compact SessionStart returns Valid:false
-			return agentpkg.DeriveResult{Valid: false}
-		},
-	}
-	m.registry.Register(provider)
-	_ = m.events.Set("work", "SessionStart", json.RawMessage(`{"source":"compact"}`), "cc", 1)
-	// Note: m.currentStatus["work"] is NOT populated (Valid:false skipped)
-
-	result := agentpkg.DeriveResult{
-		Valid:  true,
-		Detail: map[string]any{"agent_id": "agent-1"},
-	}
-	m.handleSubagentEvent("work", "SubagentStart", result)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if subs := m.subagents["work"]; len(subs) != 1 {
-		t.Errorf("SubagentStart should be accepted for compact-started session, got %v", subs)
-	}
-}
-
-// --- Bug 2 (refined): checkAliveAll uses IsAlive tiebreaker for orphans ---
-
-func TestCheckAliveAll_OrphanNotInTmuxDeleted(t *testing.T) {
-	m := newTestModule(t)
-	provider := &fakeAgentProvider{typeName: "cc"}
-	m.registry.Register(provider)
-	_ = m.events.Set("dead-session", "UserPromptSubmit", json.RawMessage(`{}`), "cc", 1)
-
-	m.mu.Lock()
-	m.subagents["dead-session"] = []string{"agent-1"}
-	m.currentStatus["dead-session"] = agentpkg.StatusRunning
-	m.mu.Unlock()
-
-	// Fake tmux with NO sessions → HasSession("dead-session") returns false
-	fake := tmux.NewFakeExecutor()
-	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{}}
-	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
-
-	sub := m.core.Events.AddTestSubscriber()
-	defer m.core.Events.RemoveTestSubscriber(sub)
-
-	m.checkAliveAll(sub)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.subagents["dead-session"]; ok {
-		t.Error("orphan not in tmux should be deleted")
-	}
-	if ev, _ := m.events.Get("dead-session"); ev != nil {
-		t.Error("orphan DB entry should be deleted")
-	}
-}
-
-func TestCheckAliveAll_OrphanStillInTmuxPreserved(t *testing.T) {
-	m := newTestModule(t)
-	provider := &fakeAgentProvider{typeName: "cc"}
-	m.registry.Register(provider)
-	_ = m.events.Set("transient-session", "UserPromptSubmit", json.RawMessage(`{}`), "cc", 1)
-
-	m.mu.Lock()
-	m.subagents["transient-session"] = []string{"agent-1"}
-	m.currentStatus["transient-session"] = agentpkg.StatusRunning
-	m.mu.Unlock()
-
-	// Fake tmux HAS the session → HasSession returns true, but the
-	// fakeSessionProvider omits it (simulating transient ListSessions hiccup)
-	fake := tmux.NewFakeExecutor()
-	fake.AddSession("transient-session", "/tmp")
-	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{}}
-	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
-
-	sub := m.core.Events.AddTestSubscriber()
-	defer m.core.Events.RemoveTestSubscriber(sub)
-
-	m.checkAliveAll(sub)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if subs := m.subagents["transient-session"]; len(subs) != 1 {
-		t.Error("orphan still in tmux should NOT be deleted (transient case)")
-	}
-	if ev, _ := m.events.Get("transient-session"); ev == nil {
-		t.Error("orphan still in tmux should preserve DB entry")
-	}
-}
-
 // --- Bug 0b: RenameSessionAtomic runs callback under lock ---
 
 func TestRenameSessionAtomic_Success(t *testing.T) {
@@ -453,7 +421,7 @@ func TestActivityWatch_YellowLightRecovery(t *testing.T) {
 
 	fake := tmux.NewFakeExecutor()
 	m.prober = probe.New(fake)
-	m.prober.RegisterProcessNames("cc", []string{"claude"})
+	m.prober.RegisterIdentifier("cc", func(info agentpkg.ProcessInfo) bool { return info.ExePath == "/usr/local/bin/claude" })
 	m.prober.RegisterReadiness("cc", agentcc.NewReadinessChecker(fake))
 
 	provider := &fakeAgentProvider{
@@ -474,8 +442,9 @@ func TestActivityWatch_YellowLightRecovery(t *testing.T) {
 
 	fake.SetPaneCommand("work:", "claude")
 	fake.SetPaneContent("work:", "Allow  Deny")
+	fake.SetPaneSessionName("%5", "work")
 
-	body := `{"tmux_session":"work","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	m.handleEvent(w, req)
@@ -565,7 +534,7 @@ func TestActivityWatch_HookEventSupersedes(t *testing.T) {
 
 	fake := tmux.NewFakeExecutor()
 	m.prober = probe.New(fake)
-	m.prober.RegisterProcessNames("cc", []string{"claude"})
+	m.prober.RegisterIdentifier("cc", func(info agentpkg.ProcessInfo) bool { return info.ExePath == "/usr/local/bin/claude" })
 
 	provider := &fakeAgentProvider{
 		typeName: "cc",
@@ -587,27 +556,100 @@ func TestActivityWatch_HookEventSupersedes(t *testing.T) {
 
 	fake.SetPaneCommand("work:", "claude")
 	fake.SetPaneContent("work:", "Allow  Deny")
+	fake.SetPaneSessionName("%5", "work")
 
-	body := `{"tmux_session":"work","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	m.handleEvent(w, req)
 
-	body2 := `{"tmux_session":"work","event_name":"UserPromptSubmit","raw_event":{},"agent_type":"cc"}`
+	body2 := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"UserPromptSubmit","raw_event":{},"agent_type":"cc"}`
 	req2 := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body2))
 	w2 := httptest.NewRecorder()
 	m.handleEvent(w2, req2)
 
 	m.mu.Lock()
 	_, watching := m.activeWatchers["work"]
-	status := m.currentStatus["work"]
 	m.mu.Unlock()
 
-	if watching {
-		t.Fatal("watcher should have been stopped by hook event")
+	if !watching {
+		t.Fatal("watcher should remain active for running status after hook event")
 	}
-	if status != agentpkg.StatusRunning {
-		t.Fatalf("expected running after UserPromptSubmit, got %s", status)
+}
+
+func TestActivityWatch_StartsForRunningStatus(t *testing.T) {
+	m := newTestModule(t)
+
+	fake := tmux.NewFakeExecutor()
+	m.prober = probe.New(fake)
+	fake.SetPaneSessionName("%5", "work")
+	provider := &fakeAgentProvider{
+		typeName: "codex",
+		derive: func(eventName string, raw json.RawMessage) agentpkg.DeriveResult {
+			if eventName == "UserPromptSubmit" {
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
+			}
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
+	}
+	m.registry.Register(provider)
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"UserPromptSubmit","raw_event":{},"agent_type":"codex"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+
+	m.mu.Lock()
+	_, watching := m.activeWatchers["work"]
+	m.mu.Unlock()
+	if !watching {
+		t.Fatal("expected active watcher after running status")
+	}
+}
+
+func TestActivityWatch_ShellPromptDeadPidTriggersSweep(t *testing.T) {
+	m := newTestModule(t)
+	fake := tmux.NewFakeExecutor()
+	fake.SetPaneSessionName("%5", "work")
+	m.tmux = fake
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
+	m.sessions = &fakeSessionProvider{
+		sessions: []session.SessionInfo{{Code: "s1", Name: "work"}},
+	}
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "codex",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "dead",
+		Status:           agentpkg.StatusRunning,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+	m.currentStatus["work"] = agentpkg.StatusRunning
+	m.activeWatchers["work"] = "codex"
+	origAlive := isPidAliveFn
+	isPidAliveFn = func(pid int) bool { return false }
+	t.Cleanup(func() { isPidAliveFn = origAlive })
+
+	cb := m.onActivityDetected("work", "codex")
+	cb("work:", probe.ActivitySignalShellPrompt)
+
+	if got := m.currentStatus["work"]; got != "" {
+		t.Fatalf("currentStatus = %q, want cleared", got)
+	}
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0", len(frames))
+	}
+	if _, watching := m.activeWatchers["work"]; watching {
+		t.Fatal("watcher should be cleared after sweep")
 	}
 }
 

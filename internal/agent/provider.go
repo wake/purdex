@@ -8,6 +8,7 @@ type AgentProvider interface {
 	DisplayName() string
 	IconHint() string
 	Claim(ctx ClaimContext) bool
+	Identify(proc ProcessInfo) bool
 	DeriveStatus(eventName string, rawEvent json.RawMessage) DeriveResult
 	IsAlive(tmuxTarget string) bool
 }
@@ -15,7 +16,7 @@ type AgentProvider interface {
 // ClaimContext provides information for agent detection.
 type ClaimContext struct {
 	HookEvent   *HookEvent
-	ProcessName string // pane_current_command value (e.g. "claude", "codex")
+	ProcessName string // Legacy foreground-command hint; avoid new dependencies.
 	TmuxTarget  string // tmux target for detailed detection (e.g. "mySession:")
 }
 

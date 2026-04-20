@@ -1,6 +1,7 @@
 // Package agent provides the agent hook event module.
-// It receives hook events from `pdx hook`, stores them in AgentEventStore,
-// and broadcasts to WS subscribers.
+// It receives hook events from `pdx hook`, projects live state into frames,
+// and broadcasts to WS subscribers. AgentEventStore remains as a legacy
+// fallback source for pre-frame sessions and session rename compatibility.
 package agent
 
 import (
@@ -18,17 +19,20 @@ import (
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // Module is the agent hook event module.
 type Module struct {
 	core      *core.Core
 	events    *store.AgentEventStore
+	frames    *store.FramesStore
 	sessions  session.SessionProvider
 	registry  *agentpkg.Registry
 	uploadDir string
 
 	prober *probe.Prober
+	tmux   tmux.Executor
 
 	mu             sync.Mutex
 	currentStatus  map[string]agentpkg.Status
@@ -50,12 +54,20 @@ type Module struct {
 	// testSpawnProxy is a test seam; production leaves this nil so the handler
 	// falls back to defaultSpawnTestProxy which execs the real pdx binary.
 	testSpawnProxy func(nonce string) error
+
+	sweepCancel context.CancelFunc
+	sweepWG     sync.WaitGroup
 }
 
 // New creates a new agent Module backed by the given AgentEventStore.
 func New(events *store.AgentEventStore) *Module {
+	var frames *store.FramesStore
+	if events != nil {
+		frames, _ = events.Frames()
+	}
 	return &Module{
 		events:          events,
+		frames:          frames,
 		registry:        agentpkg.NewRegistry(),
 		currentStatus:   make(map[string]agentpkg.Status),
 		subagents:       make(map[string][]string),
@@ -90,26 +102,24 @@ func (m *Module) Init(c *core.Core) error {
 	}
 
 	// Prober (shared across all providers)
+	m.tmux = c.Tmux
 	m.prober = probe.New(c.Tmux)
-	m.prober.RegisterProcessNames("cc", c.Cfg.Detect.CCCommands)
-	m.prober.RegisterContentMatcher("cc", agentcc.NewContentMatcher())
-	m.prober.RegisterReadiness("cc", agentcc.NewReadinessChecker(c.Tmux))
-	m.prober.RegisterProcessNames("codex", []string{"codex"})
-	m.prober.RegisterReadiness("codex", codex.NewReadinessChecker(c.Tmux))
-	c.Registry.Register("agent.prober", m.prober)
-
-	// CC provider
 	ccProvider := agentcc.NewProvider(m.prober, c.Tmux, c.Cfg, &c.CfgMu)
+	m.prober.RegisterIdentifier(ccProvider.Type(), ccProvider.Identify)
+	m.prober.RegisterReadiness(ccProvider.Type(), agentcc.NewReadinessChecker(c.Tmux))
 	ccProvider.RegisterServices(c.Registry)
 	m.registry.Register(ccProvider)
 
-	// Listen for config changes to update CC process names
+	codexProvider := codex.NewProvider()
+	m.prober.RegisterIdentifier(codexProvider.Type(), codexProvider.Identify)
+	m.prober.RegisterReadiness(codexProvider.Type(), codex.NewReadinessChecker(c.Tmux))
+	c.Registry.Register("agent.prober", m.prober)
+
+	// Listen for config changes to update mutable module state.
 	c.OnConfigChange(func() {
 		c.CfgMu.RLock()
-		cmds := c.Cfg.Detect.CCCommands
 		newDir := c.Cfg.UploadDir
 		c.CfgMu.RUnlock()
-		m.prober.UpdateProcessNames("cc", cmds)
 		if newDir != "" {
 			m.mu.Lock()
 			m.uploadDir = newDir
@@ -118,7 +128,7 @@ func (m *Module) Init(c *core.Core) error {
 	})
 
 	// Codex provider
-	m.registry.Register(codex.NewProvider())
+	m.registry.Register(codexProvider)
 
 	// Expose registry for other modules
 	c.Registry.Register("agent.registry", m.registry)
@@ -135,7 +145,6 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/{agent}/statusline/setup", m.handleStatuslineSetup)
 	mux.HandleFunc("POST /api/agent/cc/statusline/test", m.handleStatuslineTest)
 	mux.HandleFunc("POST /api/agent/status", m.handleAgentStatus)
-	mux.HandleFunc("POST /api/agent/check-alive/{session}", m.handleCheckAlive)
 	mux.HandleFunc("GET /api/agents/detect", m.handleDetect)
 
 	// History (delegates to provider)
@@ -152,13 +161,18 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 
 // Start replays DB state and registers OnSubscribe callback.
 func (m *Module) Start(_ context.Context) error {
+	if err := m.sweepOnce(); err != nil {
+		log.Printf("[agent] startup sweep: %v", err)
+	}
 	m.replayFromDB()
+	m.startSweep()
 
-	m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
-		m.sendSnapshot(sub)
-		m.sendStatuslineSnapshot(sub)
-		go m.checkAliveAll(sub)
-	})
+	if m.core != nil {
+		m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
+			m.sendSnapshot(sub)
+			m.sendStatuslineSnapshot(sub)
+		})
+	}
 
 	log.Println("[agent] hook event endpoint registered")
 	return nil
@@ -173,6 +187,11 @@ func (m *Module) getUploadDir() string {
 
 // Stop cancels all active Activity watchers and resets transient state.
 func (m *Module) Stop(_ context.Context) error {
+	if m.sweepCancel != nil {
+		m.sweepCancel()
+		m.sweepWG.Wait()
+		m.sweepCancel = nil
+	}
 	if m.prober != nil {
 		m.prober.StopAllWatches()
 	}
@@ -242,14 +261,29 @@ func (m *Module) RenameSessionAtomic(oldName, newName string, doRename func() er
 	return nil
 }
 
-// replayFromDB rebuilds in-memory currentStatus from persisted events.
+// replayFromDB rebuilds in-memory state from persisted frame projections and
+// falls back to legacy agent_events for sessions that have not migrated yet.
 func (m *Module) replayFromDB() {
+	projectedSessions := make(map[string]struct{})
+	if projections, err := m.liveSessionProjections(); err == nil {
+		for _, item := range projections {
+			projectedSessions[item.SessionName] = struct{}{}
+			m.mu.Lock()
+			syncProjectionState(m.currentStatus, m.subagents, item.SessionName, &item.Projection)
+			m.mu.Unlock()
+		}
+	} else {
+		log.Printf("[agent] replay frames: %v", err)
+	}
 	all, err := m.events.ListAll()
 	if err != nil {
 		log.Printf("[agent] replay: %v", err)
 		return
 	}
 	for _, ev := range all {
+		if _, ok := projectedSessions[ev.TmuxSession]; ok {
+			continue
+		}
 		provider, ok := m.registry.Get(ev.AgentType)
 		if !ok {
 			continue
@@ -267,6 +301,25 @@ func (m *Module) replayFromDB() {
 func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 	if m.sessions == nil {
 		return
+	}
+	projectedSessions := make(map[string]struct{})
+	if projections, err := m.liveSessionProjections(); err == nil {
+		for _, item := range projections {
+			projectedSessions[item.SessionName] = struct{}{}
+			if item.SessionCode == "" {
+				continue
+			}
+			normalized := buildProjectionNormalized(&item.Projection, item.Projection.TopFrame.AgentType, "replay", time.Now().UnixNano(), agentpkg.DeriveResult{})
+			payload, _ := json.Marshal(normalized)
+			event := core.HostEvent{Type: "hook", Session: item.SessionCode, Value: string(payload)}
+			data, _ := json.Marshal(event)
+			sub.Send(data)
+			m.mu.Lock()
+			syncProjectionState(m.currentStatus, m.subagents, item.SessionName, &item.Projection)
+			m.mu.Unlock()
+		}
+	} else {
+		log.Printf("[agent] snapshot frames: %v", err)
 	}
 	all, err := m.events.ListAll()
 	if err != nil {
@@ -288,6 +341,9 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 	}
 
 	for _, ev := range all {
+		if _, ok := projectedSessions[ev.TmuxSession]; ok {
+			continue
+		}
 		code, ok := nameToCode[ev.TmuxSession]
 		if !ok {
 			continue
@@ -304,91 +360,29 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 	}
 }
 
-// checkAliveAll checks all tracked sessions for liveness and broadcasts clear events for dead ones.
-func (m *Module) checkAliveAll(sub *core.EventSubscriber) {
-	if m.sessions == nil {
-		return
+func (m *Module) liveFrameProjections() ([]SessionProjection, error) {
+	if m.frames == nil {
+		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	all, err := m.events.ListAll()
+	frames, err := m.frames.ListAll()
 	if err != nil {
-		return
+		return nil, err
 	}
+	if len(frames) == 0 {
+		return nil, nil
+	}
+	return BuildSessionProjections(frames), nil
+}
 
-	sessions, err := m.sessions.ListSessions()
+func (m *Module) resolvePaneSession(paneID string) (string, string) {
+	if m.tmux == nil {
+		return "", ""
+	}
+	sessionName, err := m.tmux.PaneSessionName(paneID)
 	if err != nil {
-		return
+		return "", ""
 	}
-	nameToCode := make(map[string]string, len(sessions))
-	for _, s := range sessions {
-		nameToCode[s.Name] = s.Code
-	}
-
-	for _, ev := range all {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		code, ok := nameToCode[ev.TmuxSession]
-		if !ok {
-			// Not in current sessions list — could be a real orphan or
-			// a transient ListSessions inconsistency.  Use tmux.HasSession
-			// as the authoritative tiebreaker before deleting persistent
-			// state: this directly checks tmux session existence, unlike
-			// provider.IsAlive which only checks whether the CC/Codex
-			// process is the pane's current command (a user exiting CC
-			// in a live tmux session would wrongly trigger deletion).
-			//
-			// No broadcast is sent here: orphaned sessions have no code
-			// (resolveSessionCode would return ""), so the frontend cannot
-			// be notified by session code.  The frontend's session-closed
-			// detection (useMultiHostEventWs) handles this case via the
-			// sessions WS event, which fires whenever ListSessions output
-			// changes.
-			if m.core != nil && m.core.Tmux != nil && m.core.Tmux.HasSession(ev.TmuxSession) {
-				continue // transient — leave it alone
-			}
-			m.mu.Lock()
-			delete(m.currentStatus, ev.TmuxSession)
-			delete(m.subagents, ev.TmuxSession)
-			m.mu.Unlock()
-			_ = m.events.Delete(ev.TmuxSession)
-			continue
-		}
-		_, ok = m.registry.Get(ev.AgentType)
-		if !ok {
-			continue
-		}
-
-		tmuxTarget := ev.TmuxSession + ":"
-		if !m.prober.IsAliveFor(ev.AgentType, tmuxTarget) {
-			m.mu.Lock()
-			delete(m.currentStatus, ev.TmuxSession)
-			delete(m.subagents, ev.TmuxSession)
-			delete(m.activeWatchers, ev.TmuxSession)
-			m.mu.Unlock()
-
-			m.snapshotMu.Lock()
-			delete(m.statusSnapshots, code)
-			m.snapshotMu.Unlock()
-
-			m.prober.StopWatch(tmuxTarget)
-			_ = m.events.Delete(ev.TmuxSession)
-
-			normalized := agentpkg.NormalizedEvent{
-				AgentType:    ev.AgentType,
-				Status:       string(agentpkg.StatusClear),
-				RawEventName: "isAlive:dead",
-				BroadcastTs:  time.Now().UnixNano(),
-			}
-			payload, _ := json.Marshal(normalized)
-			m.core.Events.Broadcast(code, "hook", string(payload))
-		}
-	}
+	return sessionName, m.resolveSessionCode(sessionName)
 }
 
 // manageActivityWatch handles starting/stopping Activity watchers in response to hook events.
@@ -401,7 +395,7 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 		m.prober.StopWatch(session + ":")
 	}
 
-	if newStatus == agentpkg.StatusWaiting {
+	if shouldWatchActivity(newStatus) {
 		m.mu.Lock()
 		m.activeWatchers[session] = agentType
 		m.mu.Unlock()
@@ -409,12 +403,21 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 	}
 }
 
-// onActivityDetected returns a callback for when screen activity is detected
-// during a waiting state. The callback checks if the watcher is still active
-// (a hook event may have already superseded it), then runs Readiness to
-// determine the new status.
-func (m *Module) onActivityDetected(session, agentType string) func(string) {
-	return func(target string) {
+func shouldWatchActivity(status agentpkg.Status) bool {
+	switch status {
+	case agentpkg.StatusWaiting, agentpkg.StatusRunning, agentpkg.StatusIdle:
+		return true
+	default:
+		return false
+	}
+}
+
+// onActivityDetected returns a callback for screen-activity transitions while a
+// waiting/running/idle session is being watched. The callback checks if the
+// watcher is still active and then maps the activity signal to a new status or
+// triggers a sweep hint for shell-prompt + dead-PID cases.
+func (m *Module) onActivityDetected(session, agentType string) func(string, probe.ActivitySignal) {
+	return func(target string, signal probe.ActivitySignal) {
 		m.mu.Lock()
 		if _, active := m.activeWatchers[session]; !active {
 			m.mu.Unlock()
@@ -423,21 +426,20 @@ func (m *Module) onActivityDetected(session, agentType string) func(string) {
 		delete(m.activeWatchers, session)
 		m.mu.Unlock()
 
-		if !m.prober.IsAliveFor(agentType, target) {
-			return
-		}
-
-		result, ok := m.prober.CheckReadiness(agentType, target)
-		if !ok {
-			return
-		}
-
-		// Issue #2: StatusWaiting — restart watcher to keep monitoring
-		if result.Status == agentpkg.StatusWaiting {
-			m.mu.Lock()
-			m.activeWatchers[session] = agentType
-			m.mu.Unlock()
-			m.prober.StartWatch(target, m.onActivityDetected(session, agentType))
+		status := agentpkg.StatusIdle
+		switch signal {
+		case probe.ActivitySignalRunning:
+			status = agentpkg.StatusRunning
+		case probe.ActivitySignalIdle:
+			status = agentpkg.StatusIdle
+		case probe.ActivitySignalShellPrompt:
+			projection, err := m.projectionForSession(session)
+			if err == nil && projection != nil && projection.TopFrame != nil && !isPidAliveFn(projection.TopFrame.PID) {
+				_ = m.sweepOnce()
+				return
+			}
+			status = agentpkg.StatusIdle
+		default:
 			return
 		}
 
@@ -447,16 +449,18 @@ func (m *Module) onActivityDetected(session, agentType string) func(string) {
 			m.mu.Unlock()
 			return // respect Error Guard
 		}
-		m.currentStatus[session] = result.Status
+		m.currentStatus[session] = status
 		m.mu.Unlock()
 
-		// Note: probe:activity status changes are not persisted to DB.
-		// After daemon restart, replayFromDB may show stale "waiting" status,
-		// but the next hook event or checkAliveAll will correct it.
+		if projection, err := m.setProjectionTopStatus(session, status); err == nil && projection != nil {
+			normalized := buildProjectionNormalized(projection, agentType, "probe:activity", time.Now().UnixNano(), agentpkg.DeriveResult{})
+			m.broadcastToSession(session, normalized)
+			return
+		}
 
 		normalized := agentpkg.NormalizedEvent{
 			AgentType:    agentType,
-			Status:       string(result.Status),
+			Status:       string(status),
 			RawEventName: "probe:activity",
 			BroadcastTs:  time.Now().UnixNano(),
 		}

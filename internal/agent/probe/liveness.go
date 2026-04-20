@@ -1,31 +1,42 @@
 package probe
 
 import (
-	"sort"
+	"fmt"
+	"os/exec"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
-)
 
-var defaultShells = map[string]bool{
-	"zsh": true, "bash": true, "sh": true, "fish": true, "dash": true,
-}
+	agentpkg "github.com/wake/purdex/internal/agent"
+)
 
 const recursiveDescendantCacheTTL = 250 * time.Millisecond
 
-type descendantCommandQuerier interface {
-	PaneDescendantCommands(target string) ([]string, error)
-}
+var (
+	readProcessInfoFn = agentpkg.ReadProcessInfo
+	listProcessTreeFn = listProcessTree
+)
 
-// IsAliveFor checks whether the given tmux target is running an agent of the
-// specified type. It checks in order: (1) pane foreground command,
-// (2) direct child processes, (3) cached recursive descendants,
-// (4) optional content fallback.
+// IsAliveFor checks whether the tmux target's pane PID tree contains a process
+// identified as the given agent type.
 func (p *Prober) IsAliveFor(agentType, target string) bool {
-	p.matcherMu.RLock()
-	matcher, ok := p.matchers[agentType]
-	contentMatcher := p.content[agentType]
-	p.matcherMu.RUnlock()
+	p.registryMu.RLock()
+	identify, ok := p.identifiers[agentType]
+	p.registryMu.RUnlock()
 	if !ok {
+		return false
+	}
+	if p.tmux == nil {
+		return false
+	}
+
+	panePIDRaw, err := p.tmux.PanePID(target)
+	if err != nil {
+		return false
+	}
+	panePID, err := strconv.Atoi(strings.TrimSpace(panePIDRaw))
+	if err != nil || panePID <= 0 {
 		return false
 	}
 
@@ -33,115 +44,75 @@ func (p *Prober) IsAliveFor(agentType, target string) bool {
 	p.pruneExpiredDescendantCacheLocked(p.now())
 	p.livenessMu.Unlock()
 
-	// Layer 1a: foreground command
-	cmd, err := p.tmux.PaneCurrentCommand(target)
-	if err != nil {
-		return false
-	}
-	cmd = strings.TrimSpace(cmd)
-	if matcher.commands[baseCommand(cmd)] {
-		return true
-	}
-
-	panePID := ""
-	panePIDKnown := false
-	if pid, err := p.tmux.PanePID(target); err == nil {
-		panePID = strings.TrimSpace(pid)
-		panePIDKnown = true
-	}
-
-	// Layer 1b: child processes
-	childrenKnown := false
-	var children []string
-	children, err = p.tmux.PaneChildCommands(target)
+	descendants, err := p.cachedDescendants(target, panePID)
 	if err == nil {
-		childrenKnown = true
-		for _, child := range children {
-			if matcher.commands[baseCommand(child)] {
+		candidates := make([]int, 0, len(descendants)+1)
+		candidates = append(candidates, panePID)
+		candidates = append(candidates, descendants...)
+		for _, pid := range candidates {
+			info, infoErr := readProcessInfoFn(pid)
+			if infoErr != nil {
+				continue
+			}
+			if identify(info) {
 				return true
 			}
 		}
 	}
-
-	// Layer 1c: recursive descendants (cached by target + current snapshot)
-	descendants, err := p.cachedDescendants(target, descendantCacheSnapshot{
-		panePID:       panePID,
-		panePIDKnown:  panePIDKnown,
-		paneCommand:   cmd,
-		childrenKey:   childSnapshotKey(children),
-		childrenKnown: childrenKnown,
-	})
-	if err == nil {
-		for _, descendant := range descendants {
-			if matcher.commands[baseCommand(descendant)] {
-				return true
-			}
-		}
-	}
-
-	if defaultShells[baseCommand(cmd)] {
-		return false
-	}
-
-	// Layer 1d: content fallback (optional)
-	if contentMatcher != nil {
-		content, err := p.tmux.CapturePaneContent(target, 5)
-		if err == nil && contentMatcher.LooksLikeAgent(content) {
-			return true
-		}
-	}
-
 	return false
 }
 
-type descendantCacheSnapshot struct {
-	panePID       string
-	panePIDKnown  bool
-	paneCommand   string
-	childrenKey   string
-	childrenKnown bool
-}
-
 type descendantCacheEntry struct {
-	snapshot    descendantCacheSnapshot
+	rootPID     int
 	descendants []string
 	expiresAt   time.Time
 }
 
-func (p *Prober) cachedDescendants(target string, snapshot descendantCacheSnapshot) ([]string, error) {
+func (p *Prober) cachedDescendants(target string, rootPID int) ([]int, error) {
 	now := p.now()
 	p.livenessMu.Lock()
 	entry, ok := p.descendantCache[target]
-	if ok && entry.snapshot == snapshot && now.Before(entry.expiresAt) {
+	if ok && entry.rootPID == rootPID && now.Before(entry.expiresAt) {
 		descendants := append([]string(nil), entry.descendants...)
 		p.livenessMu.Unlock()
-		return descendants, nil
+		return parsePIDSlice(descendants), nil
 	}
 	p.livenessMu.Unlock()
 
-	descendants, err := p.queryDescendants(target)
+	descendants, err := p.queryDescendants(rootPID)
 	if err != nil {
 		return nil, err
 	}
-	descendants = append([]string(nil), descendants...)
+	stringified := make([]string, 0, len(descendants))
+	for _, pid := range descendants {
+		stringified = append(stringified, strconv.Itoa(pid))
+	}
 
 	p.livenessMu.Lock()
 	p.descendantCache[target] = descendantCacheEntry{
-		snapshot:    snapshot,
-		descendants: descendants,
+		rootPID:     rootPID,
+		descendants: stringified,
 		expiresAt:   now.Add(recursiveDescendantCacheTTL),
 	}
 	p.livenessMu.Unlock()
 
-	return append([]string(nil), descendants...), nil
+	return append([]int(nil), descendants...), nil
 }
 
-func (p *Prober) queryDescendants(target string) ([]string, error) {
-	querier, ok := p.tmux.(descendantCommandQuerier)
-	if !ok {
-		return nil, nil
+func (p *Prober) queryDescendants(rootPID int) ([]int, error) {
+	childrenByParent, err := listProcessTreeFn()
+	if err != nil {
+		return nil, err
 	}
-	return querier.PaneDescendantCommands(target)
+	var descendants []int
+	queue := append([]int(nil), childrenByParent[rootPID]...)
+	for len(queue) > 0 {
+		pid := queue[0]
+		queue = queue[1:]
+		descendants = append(descendants, pid)
+		queue = append(queue, childrenByParent[pid]...)
+	}
+	return descendants, nil
 }
 
 func (p *Prober) pruneExpiredDescendantCacheLocked(now time.Time) {
@@ -152,19 +123,72 @@ func (p *Prober) pruneExpiredDescendantCacheLocked(now time.Time) {
 	}
 }
 
-func childSnapshotKey(children []string) string {
-	if len(children) == 0 {
-		return ""
+func parsePIDSlice(values []string) []int {
+	out := make([]int, 0, len(values))
+	for _, value := range values {
+		pid, err := strconv.Atoi(value)
+		if err == nil {
+			out = append(out, pid)
+		}
 	}
-	snapshot := append([]string(nil), children...)
-	sort.Strings(snapshot)
-	return strings.Join(snapshot, "\x00")
+	return out
 }
 
-func baseCommand(cmd string) string {
-	cmd = strings.TrimSpace(cmd)
-	if idx := strings.LastIndex(cmd, "/"); idx >= 0 {
-		return cmd[idx+1:]
+func IsPidAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
+}
+
+func ProcessStartTime(pid int) (string, error) {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "lstart=").Output()
+	if err != nil {
+		return "", fmt.Errorf("read start time for pid %d: %w", pid, err)
 	}
-	return cmd
+	return strings.TrimSpace(string(out)), nil
+}
+
+func listProcessTree() (map[int][]int, error) {
+	out, err := exec.Command("ps", "-Ao", "pid=,ppid=").Output()
+	if err != nil {
+		return nil, fmt.Errorf("list process tree: %w", err)
+	}
+	childrenByParent := make(map[int][]int)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		ppid, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		childrenByParent[ppid] = append(childrenByParent[ppid], pid)
+	}
+	return childrenByParent, nil
+}
+
+func PidAncestorIncludes(pid int, ancestor int) bool {
+	current := pid
+	for current > 1 {
+		if current == ancestor {
+			return true
+		}
+		info, err := agentpkg.ReadProcessInfo(current)
+		if err != nil {
+			return false
+		}
+		if info.PPID <= 0 || info.PPID == current {
+			return false
+		}
+		current = info.PPID
+	}
+	return false
 }

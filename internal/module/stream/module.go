@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/wake/purdex/internal/bridge"
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/agent/probe"
+	"github.com/wake/purdex/internal/bridge"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 )
+
+type livenessProber interface {
+	IsAliveFor(agentType, target string) bool
+	CheckReadiness(agentType, target string) (probe.ReadinessResult, bool)
+}
 
 // StreamModule manages stream mode data pipelines:
 // relay connection management, SPA subscriber fan-out, and mode switching.
@@ -19,7 +24,7 @@ type StreamModule struct {
 	bridge   *bridge.Bridge
 	sessions session.SessionProvider
 	ccOps    agentcc.CCOperator
-	prober   *probe.Prober
+	prober   livenessProber
 	locks    *handoffLocks
 }
 

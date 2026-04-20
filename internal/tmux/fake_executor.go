@@ -39,6 +39,7 @@ type FakeExecutor struct {
 	paneChildren         map[string][]string    // target → child command names
 	paneDescendants      map[string][]string    // target → recursive descendant command names
 	panePIDs             map[string]string      // target → pane pid
+	paneSessions         map[string]string      // target → session name
 	paneCwds             map[string]string      // target → pane_current_path
 	paneSizes            map[string][2]int      // target → [cols, rows]
 	rawKeysCalls         []RawKeysCall
@@ -62,6 +63,7 @@ func NewFakeExecutor() *FakeExecutor {
 		paneChildren:     make(map[string][]string),
 		paneDescendants:  make(map[string][]string),
 		panePIDs:         make(map[string]string),
+		paneSessions:     make(map[string]string),
 		paneCwds:         make(map[string]string),
 		paneSizes:        make(map[string][2]int),
 		alive:            true,
@@ -233,6 +235,21 @@ func (f *FakeExecutor) SetPanePID(target, pid string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.panePIDs[target] = pid
+}
+
+func (f *FakeExecutor) SetPaneSessionName(target, session string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paneSessions[target] = session
+}
+
+func (f *FakeExecutor) PaneSessionName(target string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if session, ok := f.paneSessions[target]; ok {
+		return session, nil
+	}
+	return "", fmt.Errorf("pane session not configured for %s", target)
 }
 
 func (f *FakeExecutor) PanePID(target string) (string, error) {

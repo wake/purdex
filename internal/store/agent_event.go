@@ -32,6 +32,10 @@ func OpenAgentEvent(path string) (*AgentEventStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open agent event db: %w", err)
 	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
 	if err := migrateAgentEventDB(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate agent event db: %w", err)
@@ -128,4 +132,11 @@ func (s *AgentEventStore) Rename(oldName, newName string) error {
 func (s *AgentEventStore) Delete(tmuxSession string) error {
 	_, err := s.db.Exec("DELETE FROM agent_events WHERE tmux_session = ?", tmuxSession)
 	return err
+}
+
+func (s *AgentEventStore) Frames() (*FramesStore, error) {
+	if err := migrateFramesDB(s.db); err != nil {
+		return nil, err
+	}
+	return &FramesStore{db: s.db}, nil
 }
