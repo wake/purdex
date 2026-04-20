@@ -95,7 +95,12 @@ export default function App() {
 
   // --- Bootstrap: ensure session-pristine snapshot ---
   useEffect(() => {
-    void ensureSessionPristine()
+    ensureSessionPristine().catch((err) => {
+      // Swallow — pristine failures are recoverable (prior pristine stays
+      // intact thanks to atomic rotation) and must not become an unhandled
+      // rejection that crashes dev mode or pollutes sentry-style reporters.
+      console.warn('ensureSessionPristine failed', err)
+    })
   }, [])
 
   // --- Derive visible tabs for display ---
