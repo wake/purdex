@@ -73,6 +73,13 @@
 - 工具函式檔名用 `kebab-case` 或語意清楚命名
 - 圖示統一使用 Phosphor Icons
 
+## 測試規範
+
+- Go 測試放在實作旁，命名 `*_test.go`
+- 前端與 Electron 使用 Vitest，檔名慣例 `*.test.ts` / `*.test.tsx`
+- 優先補行為測試，特別是 IPC、store、路由、workspace/tab 邏輯
+- 常用指令：`make test`、`pnpm --prefix spa exec vitest run`、`pnpm --prefix electron test`
+
 ## 打包與更新
 
 - Electron 打包：`pnpm run electron:build` → `dist/mac/` 與 `dist/mac-arm64/`
@@ -93,6 +100,13 @@
 - 每個 task 獨立 commit
 - 每個 PR merge 後，必須更新 `VERSION` + `CHANGELOG.md`
 - 若使用 worktree，從最新 `origin/main` 開新 branch/worktree，不重用舊 feature branch 當實作基線
+
+### Commit / PR 撰寫格式
+
+- Commit 訊息採 Conventional Commits，範例：`fix(editor): ...`、`refactor: ...`、`test: ...`、`chore: bump version ...`
+- 訊息用祈使句、帶 scope
+- PR body 要說明變更動機與驗證指令
+- 涉及 UI / 快捷鍵 / Electron 視窗行為的 PR，附上截圖或錄影
 
 ## Review 規範
 
@@ -163,7 +177,3 @@
 - 不提交 token、`~/.config/pdx` 內容或本機資料庫
 - 測試與開發優先使用假資料與 repo 內設定
 - `dist/` 是輸出物，除非明確要釋出產物，勿在其上手改
-
-## 備註
-
-- `origin/main` 目前沒有既存 `AGENTS.md`；本檔即為將 `CLAUDE.md` 規範與 repo agent 規則整合後的版本
