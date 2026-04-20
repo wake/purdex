@@ -69,6 +69,8 @@
   "settings.sync.import.error.tooLarge": "File too large (max {{mb}} MB)",
   "settings.sync.import.error.tooDeep": "Import structure too deep (max {{depth}} levels)",
   "settings.sync.history.title": "Sync History",
+  "settings.sync.history.label": "Sync History",
+  "settings.sync.history.description": "View past snapshots and restore from them.",
   "settings.sync.history.viewLink": "View Sync History",
   "settings.sync.history.tabs.local": "Local",
   "settings.sync.history.tabs.remote": "Remote",

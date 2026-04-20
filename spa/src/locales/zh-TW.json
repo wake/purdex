@@ -69,6 +69,8 @@
   "settings.sync.import.error.tooLarge": "檔案過大（最大 {{mb}} MB）",
   "settings.sync.import.error.tooDeep": "匯入結構太深（最多 {{depth}} 層）",
   "settings.sync.history.title": "同步歷史",
+  "settings.sync.history.label": "同步歷史",
+  "settings.sync.history.description": "查看歷史快照並從中還原。",
   "settings.sync.history.viewLink": "查看同步歷史",
   "settings.sync.history.tabs.local": "本機",
   "settings.sync.history.tabs.remote": "遠端",
