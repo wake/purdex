@@ -146,18 +146,31 @@ describe('useStatuslineTest', () => {
     vi.useRealTimers()
   })
 
-  it('ready ack failure fails stage 1 before proxy spawn', async () => {
+  it('ready ack failure falls back to the legacy flow', async () => {
     const nonce = '__pdx_test_readyfail'
-    const body = sseBodyFrom([{ type: 'init', nonce }])
+    const body = sseBodyFrom([
+      { type: 'init', nonce },
+      { type: 'stage', stage: 1, name: 'Proxy spawned', status: 'passed', elapsed_ms: 5, nonce },
+      { type: 'stage', stage: 2, name: 'Proxy → daemon POST received', status: 'passed', elapsed_ms: 3, nonce },
+      { type: 'stage', stage: 3, name: 'Daemon → WS broadcast', status: 'passed', elapsed_ms: 2, nonce },
+      { type: 'done', nonce },
+    ])
     mockFetch.mockResolvedValueOnce({ ok: true, status: 200, body } as unknown as Response)
     mockFetch.mockResolvedValueOnce({ ok: false, status: 500 } as unknown as Response)
 
     const { result } = renderHook(() => useStatuslineTest('h1'))
-    await act(async () => { await result.current.run() })
+    await act(async () => {
+      const p = result.current.run()
+      queueMicrotask(() => {
+        useAgentStore.getState().setCcStatus('h1', nonce, { model: { id: 'x' } })
+        statuslineTestBus.emit({ nonce, hostId: 'h1', raw: { model: { id: 'x' } } })
+      })
+      await p
+    })
 
-    expect(result.current.state.stages[1].status).toBe('failed')
-    expect(result.current.state.stages[1].error).toMatch(/ready/i)
-    expect(result.current.state.stages[2].status).toBe('skipped')
+    expect(result.current.state.stages[1].status).toBe('passed')
+    expect(result.current.state.stages[4].status).toBe('passed')
+    expect(result.current.state.stages[5].status).toBe('passed')
   })
 
   it('overall timeout marks incomplete stages failed', async () => {

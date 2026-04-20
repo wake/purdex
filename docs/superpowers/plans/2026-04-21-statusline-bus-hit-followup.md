@@ -48,12 +48,13 @@
 
 1. `handleStatuslineTest` 先送 `init` event，讓 SPA 取得 nonce
 2. SPA 用 nonce 先訂閱 `statuslineTestBus`，再呼叫 ready ack endpoint
-3. daemon 收到 ready ack 後才 spawn proxy
+3. daemon 優先等待 ready ack，再 spawn proxy；若 SPA 尚未升級，逾時後回退舊行為
 4. test nonce 仍走真實 `handleAgentStatus -> agent.status broadcast` 路徑
 5. `agent.status.cleared` 仍由 self-test handler 在結尾送出，清掉 synthetic nonce state
 6. 新舊版相容：
    - 新 frontend + 舊 daemon：保留 stage-1 nonce fallback
    - 新 daemon + 舊 frontend：ready wait 逾時後回退舊行為，不在 spawn 前直接 fail
+   - 新 frontend + 新 daemon：走 init/ready 優先路徑，減少 bus subscriber race
 
 ## 驗證
 
