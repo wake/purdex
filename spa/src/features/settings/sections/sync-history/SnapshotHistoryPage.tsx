@@ -25,6 +25,11 @@ export function SnapshotHistoryPage() {
   const [missingContributors, setMissingContributors] = useState<string[]>([])
   const [warningText, setWarningText] = useState<string | null>(null)
   const [restoring, setRestoring] = useState(false)
+  // Overrides accumulate across retries: if the user sees coverageWarning,
+  // clicks continue (→ allowMissingContributors), then hits preOpFailed and
+  // clicks continue again (→ skipPreOp), the second retry must carry BOTH
+  // flags or the coverage check will fire again and deadlock the dialog.
+  const [restoreOverrides, setRestoreOverrides] = useState<RestoreOptions>({})
 
   const activeProviderId = useSyncStore((s) => s.activeProviderId)
   const pendingConflicts = useSyncStore((s) => s.pendingConflicts)
@@ -46,13 +51,22 @@ export function SnapshotHistoryPage() {
     return () => { cancelled = true }
   }, [selectedId])
 
-  async function runRestore(options?: RestoreOptions) {
+  // Single restore path. `initial=true` resets accumulated overrides to the
+  // passed options (fresh attempt from the "Restore this snapshot" button);
+  // `initial=false` merges `next` onto existing overrides (retry after a
+  // dialog prompt). Merging is critical: if coverageWarning + preOpFailed
+  // both fire across retries, the final call must carry BOTH flags or the
+  // dialog deadlocks.
+  async function runRestore(next: RestoreOptions = {}, initial = true) {
     if (!selectedSnap) return
+    const merged: RestoreOptions = initial ? next : { ...restoreOverrides, ...next }
     setRestoring(true)
+    setRestoreOverrides(merged)
     try {
-      await restoreFromSnapshot(selectedSnap, 'local', options)
+      await restoreFromSnapshot(selectedSnap, 'local', merged)
       setDialogMode('idle')
       setWarningText(null)
+      setRestoreOverrides({})
       await refresh()
     } catch (e) {
       if (e instanceof PreOpFailedError) {
@@ -63,6 +77,7 @@ export function SnapshotHistoryPage() {
       } else if (e instanceof RestoreFailedError) {
         setWarningText(t('settings.sync.history.restore.warnings', { names: e.failed.join(', ') }))
         setDialogMode('idle')
+        setRestoreOverrides({})
         await refresh()
       } else {
         throw e
@@ -74,12 +89,17 @@ export function SnapshotHistoryPage() {
 
   async function handleConfirm() {
     if (dialogMode === 'preOpFailed') {
-      await runRestore({ skipPreOp: true })
+      await runRestore({ skipPreOp: true }, false)
     } else if (dialogMode === 'coverageWarning') {
-      await runRestore({ allowMissingContributors: true })
+      await runRestore({ allowMissingContributors: true }, false)
     } else {
       await runRestore()
     }
+  }
+
+  function handleCancel() {
+    setDialogMode('idle')
+    setRestoreOverrides({})
   }
 
   return (
@@ -123,7 +143,7 @@ export function SnapshotHistoryPage() {
         mode={dialogMode === 'idle' ? 'confirm' : dialogMode}
         pendingConflictCount={pendingConflicts.length}
         missingContributors={missingContributors}
-        onCancel={() => setDialogMode('idle')}
+        onCancel={handleCancel}
         onConfirm={handleConfirm}
         restoring={restoring}
       />
