@@ -6,11 +6,20 @@
 import type { HostEvent } from './host-events'
 import { useAgentStore } from '../stores/useAgentStore'
 import { statuslineTestBus } from './statusline-test-bus'
+import { debugStatuslineTest } from './statusline-test-debug'
 
 const TEST_NONCE_PREFIX = '__pdx_test_'
 
 export function dispatchAgentWsEvent(hostId: string, event: HostEvent): void {
   if (event.type === 'agent.status') {
+    const isTestNonce = event.session.startsWith(TEST_NONCE_PREFIX)
+    if (isTestNonce) {
+      debugStatuslineTest('dispatch.entry', {
+        hostId,
+        session: event.session,
+        valueLen: event.value.length,
+      })
+    }
     try {
       // Daemon broadcasts {"agent_type":"cc","status":<raw CC statusLine JSON>}
       // (see internal/module/agent/handler.go statusSnapshot). We must unwrap
@@ -18,18 +27,38 @@ export function dispatchAgentWsEvent(hostId: string, event: HostEvent): void {
       // (read by setCcStatus) lives one level too deep and oscTitles never
       // populate in real environments.
       const parsed = JSON.parse(event.value)
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        if (isTestNonce) debugStatuslineTest('dispatch.reject.parsed-not-object', { parsed })
+        return
+      }
       const wire = parsed as Record<string, unknown>
+      if (isTestNonce) {
+        debugStatuslineTest('dispatch.parsed', {
+          agent_type: wire.agent_type,
+          statusKeys: wire.status && typeof wire.status === 'object'
+            ? Object.keys(wire.status as Record<string, unknown>)
+            : null,
+        })
+      }
       // SPA only supports cc today; future Codex payloads should route elsewhere.
-      if (wire.agent_type !== 'cc') return
+      if (wire.agent_type !== 'cc') {
+        if (isTestNonce) debugStatuslineTest('dispatch.reject.wrong-agent-type', { agent_type: wire.agent_type })
+        return
+      }
       const status = wire.status
-      if (!status || typeof status !== 'object' || Array.isArray(status)) return
+      if (!status || typeof status !== 'object' || Array.isArray(status)) {
+        if (isTestNonce) debugStatuslineTest('dispatch.reject.status-not-object', { status })
+        return
+      }
       const rawStatus = status as Record<string, unknown>
       useAgentStore.getState().setCcStatus(hostId, event.session, rawStatus)
-      if (event.session.startsWith(TEST_NONCE_PREFIX)) {
+      if (isTestNonce) {
+        debugStatuslineTest('dispatch.emit-bus', { nonce: event.session })
         statuslineTestBus.emit({ nonce: event.session, hostId, raw: rawStatus })
       }
-    } catch { /* ignore malformed payload */ }
+    } catch (err) {
+      if (isTestNonce) debugStatuslineTest('dispatch.reject.exception', { err: String(err) })
+    }
     return
   }
   if (event.type === 'agent.status.cleared') {
