@@ -114,36 +114,12 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 func TestTraceStore_MigratesLegacySchemaAndReadsListChains(t *testing.T) {
 	s := openTestAgentEventStore(t)
 	seedLegacyTraceSchema(t, s.db)
+	seedLegacyTraceData(t, s.db)
 
 	if _, err := s.Traces(); err != nil {
 		t.Fatalf("Traces: %v", err)
 	}
 	store := &TraceStore{db: s.db, maxChains: 10, maxSteps: 10}
-
-	chain := TraceChain{
-		ChainID:          "legacy-chain",
-		StepCount:        77,
-		StartedAt:        123,
-		CompletedAt:      456,
-		TerminalStatus:   "done",
-		TerminalReason:   "legacy",
-		TmuxSession:      "proj-legacy",
-		PaneID:           "%9",
-		RootAgentType:    "cc",
-		RootEventName:    "Stop",
-		RootReason:       "bootstrap",
-		LatestStepKind:   "terminal",
-		LatestDecision:   "done",
-		LatestStepReason: "legacy",
-	}
-	if err := store.SaveChain(TraceRecord{
-		Chain: chain,
-		Steps: []TraceStep{
-			{StepID: "legacy-step", ChainID: "legacy-chain", Seq: 1, Kind: "terminal", TmuxSession: "proj-legacy", PaneID: "%9", AgentType: "cc", EventName: "Stop", Decision: "done", Reason: "legacy", CreatedAt: 124},
-		},
-	}); err != nil {
-		t.Fatalf("SaveChain: %v", err)
-	}
 
 	page, err := store.ListChains(TraceListFilter{
 		TmuxSession: "proj-legacy",
@@ -161,36 +137,18 @@ func TestTraceStore_MigratesLegacySchemaAndReadsListChains(t *testing.T) {
 	if page.Chains[0].StartedAt != 123 {
 		t.Fatalf("started_at = %d, want 123", page.Chains[0].StartedAt)
 	}
+	if page.Chains[0].StepCount != 2 {
+		t.Fatalf("step_count = %d, want 2", page.Chains[0].StepCount)
+	}
 }
 
 func TestTraceStore_MigratesLegacyStepSchemaAndBlocksCrossChainParent(t *testing.T) {
 	s := openTestAgentEventStore(t)
-	seedLegacyTraceSchema(t, s.db)
+	seedIntermediateTraceSchema(t, s.db)
+	seedIntermediateTraceData(t, s.db)
 
 	if _, err := s.Traces(); err != nil {
 		t.Fatalf("Traces: %v", err)
-	}
-
-	if _, err := s.db.Exec(`
-		INSERT INTO agent_trace_chains (
-			chain_id, started_at, completed_at, terminal_status, terminal_reason,
-			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
-			latest_step_kind, latest_decision, latest_step_reason, step_count, updated_at
-		) VALUES
-		('chain-a', 1, 2, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 1, 2),
-		('chain-b', 3, 4, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 1, 4)
-	`); err != nil {
-		t.Fatalf("seed chains: %v", err)
-	}
-	if _, err := s.db.Exec(`
-		INSERT INTO agent_trace_steps (
-			step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
-			agent_type, frame_id, parent_frame_id, event_name, decision, reason,
-			payload_json, before_json, after_json, created_at
-		) VALUES
-		('a-1', 'chain-a', NULL, 1, 'root', 'proj-a', '%1', 'cc', 'frame-a', '', 'Stop', '', '', 'null', 'null', 'null', 1)
-	`); err != nil {
-		t.Fatalf("seed step: %v", err)
 	}
 
 	_, err := s.db.Exec(`
@@ -467,5 +425,86 @@ func seedLegacyTraceSchema(t *testing.T, db *sql.DB) {
 		)
 	`); err != nil {
 		t.Fatalf("create legacy steps: %v", err)
+	}
+}
+
+func seedLegacyTraceData(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	if _, err := db.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, tmux_session, pane_id, agent_type, event_name, created_at, updated_at
+		) VALUES
+		('legacy-chain', 'proj-legacy', '%9', 'cc', 'Stop', 123, 456)
+	`); err != nil {
+		t.Fatalf("seed legacy chain: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_trace_steps (
+			step_id, chain_id, parent_step_id, step_name, payload, step_index, created_at
+		) VALUES
+		('legacy-step-1', 'legacy-chain', NULL, 'root', 'null', 1, 124),
+		('legacy-step-2', 'legacy-chain', 'legacy-step-1', 'terminal', 'null', 2, 125)
+	`); err != nil {
+		t.Fatalf("seed legacy steps: %v", err)
+	}
+}
+
+func seedIntermediateTraceSchema(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	if err := createTraceChainsTable(db); err != nil {
+		t.Fatalf("create chains: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE agent_trace_steps (
+			step_id         TEXT PRIMARY KEY,
+			chain_id        TEXT NOT NULL,
+			parent_step_id  TEXT,
+			seq             INTEGER NOT NULL,
+			kind            TEXT NOT NULL DEFAULT '',
+			tmux_session    TEXT NOT NULL DEFAULT '',
+			pane_id         TEXT NOT NULL DEFAULT '',
+			agent_type      TEXT NOT NULL DEFAULT '',
+			frame_id        TEXT NOT NULL DEFAULT '',
+			parent_frame_id TEXT NOT NULL DEFAULT '',
+			event_name      TEXT NOT NULL DEFAULT '',
+			decision        TEXT NOT NULL DEFAULT '',
+			reason          TEXT NOT NULL DEFAULT '',
+			payload_json    TEXT NOT NULL DEFAULT 'null',
+			before_json     TEXT NOT NULL DEFAULT 'null',
+			after_json      TEXT NOT NULL DEFAULT 'null',
+			created_at      INTEGER NOT NULL DEFAULT 0,
+			FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
+			FOREIGN KEY (parent_step_id) REFERENCES agent_trace_steps(step_id) ON DELETE SET NULL
+		)
+	`); err != nil {
+		t.Fatalf("create intermediate steps: %v", err)
+	}
+}
+
+func seedIntermediateTraceData(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	if _, err := db.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, started_at, completed_at, terminal_status, terminal_reason,
+			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
+			latest_step_kind, latest_decision, latest_step_reason, step_count, updated_at
+		) VALUES
+		('chain-a', 1, 2, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 1, 2),
+		('chain-b', 3, 4, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 1, 4)
+	`); err != nil {
+		t.Fatalf("seed chains: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_trace_steps (
+			step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+			agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+			payload_json, before_json, after_json, created_at
+		) VALUES
+		('a-1', 'chain-a', NULL, 1, 'root', 'proj-a', '%1', 'cc', 'frame-a', '', 'Stop', '', '', 'null', 'null', 'null', 1)
+	`); err != nil {
+		t.Fatalf("seed step: %v", err)
 	}
 }

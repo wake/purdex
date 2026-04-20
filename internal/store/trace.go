@@ -217,6 +217,12 @@ func hasStepParentCompositeFK(db *sql.DB) bool {
 	}
 	defer rows.Close()
 
+	type fkPart struct {
+		table string
+		from  string
+		to    string
+	}
+	parts := make(map[int][]fkPart)
 	for rows.Next() {
 		var (
 			id    int
@@ -231,7 +237,26 @@ func hasStepParentCompositeFK(db *sql.DB) bool {
 		if err := rows.Scan(&id, &seq, &table, &from, &to, &onUpd, &onDel, &match); err != nil {
 			return false
 		}
-		if table == "agent_trace_steps" && from == "parent_step_id" && to == "step_id" {
+		_ = seq
+		parts[id] = append(parts[id], fkPart{table: table, from: from, to: to})
+	}
+	for _, group := range parts {
+		if len(group) != 2 {
+			continue
+		}
+		var hasChainRef, hasParentRef bool
+		for _, part := range group {
+			if part.table != "agent_trace_steps" {
+				continue
+			}
+			if part.from == "chain_id" && part.to == "chain_id" {
+				hasChainRef = true
+			}
+			if part.from == "parent_step_id" && part.to == "step_id" {
+				hasParentRef = true
+			}
+		}
+		if hasChainRef && hasParentRef {
 			return true
 		}
 	}
@@ -314,13 +339,17 @@ func createTraceIndexes(db *sql.DB) error {
 }
 
 func rebuildLegacyTraceChains(db *sql.DB) error {
+	stepCounts, err := legacyTraceStepCounts(db)
+	if err != nil {
+		return err
+	}
 	if _, err := db.Exec(`ALTER TABLE agent_trace_chains RENAME TO agent_trace_chains_legacy`); err != nil {
 		return err
 	}
 	if err := createTraceChainsTable(db); err != nil {
 		return err
 	}
-	_, err := db.Exec(`
+	_, err = db.Exec(`
 		INSERT INTO agent_trace_chains (
 			chain_id, started_at, completed_at, terminal_status, terminal_reason,
 			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
@@ -347,54 +376,125 @@ func rebuildLegacyTraceChains(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if len(stepCounts) > 0 {
+		for chainID, count := range stepCounts {
+			if _, err := db.Exec(`UPDATE agent_trace_chains SET step_count = ? WHERE chain_id = ?`, count, chainID); err != nil {
+				return err
+			}
+		}
+	}
 	_, err = db.Exec(`DROP TABLE agent_trace_chains_legacy`)
 	return err
 }
 
+func legacyTraceStepCounts(db *sql.DB) (map[string]int, error) {
+	rows, err := db.Query(`SELECT chain_id, COUNT(*) FROM agent_trace_steps GROUP BY chain_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var chainID string
+		var count int
+		if err := rows.Scan(&chainID, &count); err != nil {
+			return nil, err
+		}
+		counts[chainID] = count
+	}
+	return counts, rows.Err()
+}
+
 func rebuildLegacyTraceSteps(db *sql.DB) error {
+	cols, err := tableColumns(db, "agent_trace_steps")
+	if err != nil {
+		return err
+	}
 	if _, err := db.Exec(`ALTER TABLE agent_trace_steps RENAME TO agent_trace_steps_legacy`); err != nil {
 		return err
 	}
 	if err := createTraceStepsTable(db); err != nil {
 		return err
 	}
-	_, err := db.Exec(`
-		INSERT INTO agent_trace_steps (
-			step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
-			agent_type, frame_id, parent_frame_id, event_name, decision, reason,
-			payload_json, before_json, after_json, created_at
-		)
-		SELECT
-			s.step_id,
-			s.chain_id,
-			CASE
-				WHEN s.parent_step_id IS NOT NULL
-				 AND EXISTS (
-					SELECT 1
-					FROM agent_trace_steps_legacy p
-					WHERE p.chain_id = s.chain_id AND p.step_id = s.parent_step_id
-				 )
-				THEN s.parent_step_id
-				ELSE NULL
-			END,
-			s.step_index,
-			s.step_name,
-			c.tmux_session,
-			c.pane_id,
-			c.root_agent_type,
-			'',
-			'',
-			c.root_event_name,
-			'',
-			'',
-			COALESCE(s.payload, 'null'),
-			'null',
-			'null',
-			s.created_at
-		FROM agent_trace_steps_legacy s
-		JOIN agent_trace_chains c ON c.chain_id = s.chain_id
-		ORDER BY s.chain_id ASC, s.step_index ASC, s.created_at ASC, s.step_id ASC
-	`)
+	var copyQuery string
+	if cols["seq"] {
+		copyQuery = `
+			INSERT INTO agent_trace_steps (
+				step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+				agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+				payload_json, before_json, after_json, created_at
+			)
+			SELECT
+				s.step_id,
+				s.chain_id,
+				CASE
+					WHEN s.parent_step_id IS NOT NULL
+					 AND EXISTS (
+						SELECT 1
+						FROM agent_trace_steps_legacy p
+						WHERE p.chain_id = s.chain_id AND p.step_id = s.parent_step_id
+					 )
+					THEN s.parent_step_id
+					ELSE NULL
+				END,
+				s.seq,
+				s.kind,
+				s.tmux_session,
+				s.pane_id,
+				s.agent_type,
+				s.frame_id,
+				s.parent_frame_id,
+				s.event_name,
+				s.decision,
+				s.reason,
+				s.payload_json,
+				s.before_json,
+				s.after_json,
+				s.created_at
+			FROM agent_trace_steps_legacy s
+			ORDER BY s.chain_id ASC, s.seq ASC, s.created_at ASC, s.step_id ASC
+		`
+	} else {
+		copyQuery = `
+			INSERT INTO agent_trace_steps (
+				step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+				agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+				payload_json, before_json, after_json, created_at
+			)
+			SELECT
+				s.step_id,
+				s.chain_id,
+				CASE
+					WHEN s.parent_step_id IS NOT NULL
+					 AND EXISTS (
+						SELECT 1
+						FROM agent_trace_steps_legacy p
+						WHERE p.chain_id = s.chain_id AND p.step_id = s.parent_step_id
+					 )
+					THEN s.parent_step_id
+					ELSE NULL
+				END,
+				s.step_index,
+				s.step_name,
+				c.tmux_session,
+				c.pane_id,
+				c.root_agent_type,
+				'',
+				'',
+				c.root_event_name,
+				'',
+				'',
+				COALESCE(s.payload, 'null'),
+				'null',
+				'null',
+				s.created_at
+			FROM agent_trace_steps_legacy s
+			JOIN agent_trace_chains c ON c.chain_id = s.chain_id
+			ORDER BY s.chain_id ASC, s.step_index ASC, s.created_at ASC, s.step_id ASC
+		`
+	}
+	_, err = db.Exec(copyQuery)
 	if err != nil {
 		return err
 	}
