@@ -212,8 +212,8 @@ describe('useStatuslineTest', () => {
     let runPromise: Promise<void> = Promise.resolve()
     await act(async () => {
       runPromise = result.current.run()
-      // Advance past OVERALL_TIMEOUT_MS (currently 8000ms).
-      await vi.advanceTimersByTimeAsync(8100)
+      // Advance past OVERALL_TIMEOUT_MS (currently 10000ms).
+      await vi.advanceTimersByTimeAsync(10100)
       await runPromise
     })
     expect(result.current.state.stages[1].status).toBe('failed')

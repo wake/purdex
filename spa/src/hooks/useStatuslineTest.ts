@@ -41,15 +41,14 @@ const INITIAL: StatuslineTestState = {
   nonce: null,
 }
 
-// Server per-stage deadline is 2s × 3 = 6s worst case (stage1 exec timeout +
-// stage2 + stage3 channel waits). Giving the client budget a cushion above
-// that prevents spurious "timeout" failures on loaded systems where the
-// proxy subprocess is slow to spawn.
+// Server worst case on the ready-v1 path is 2s ready wait + 2s stage1 spawn +
+// 2s stage2 + 2s stage3 = 8s before the SSE stream completes. Give the client
+// budget a cushion above that to avoid false timeouts on loaded systems.
 //
 // Note: this bounds only the SSE round-trip (`work`). The post-SSE stage-4
 // grace wait (STAGE4_GRACE_MS) runs after `work` resolves, so the absolute
-// worst-case run duration is OVERALL_TIMEOUT_MS + STAGE4_GRACE_MS = 10s.
-const OVERALL_TIMEOUT_MS = 8000
+// worst-case run duration is OVERALL_TIMEOUT_MS + STAGE4_GRACE_MS = 12s.
+const OVERALL_TIMEOUT_MS = 10000
 
 // After SSE completes, wait this long for the WS-delivered agent.status to
 // reach the dispatcher. SSE and WS travel over separate sockets, so the server
