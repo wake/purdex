@@ -1,5 +1,6 @@
 // spa/src/components/tab-icon-helpers.ts
-import type { AgentStatus, TabIndicatorStyle } from '../stores/useAgentStore'
+import type { AgentStatus } from '../stores/useAgentStore'
+import type { TabIndicatorStyle } from '../stores/useUISettingsStore'
 
 /**
  * The corner pip is a fallback for indicator styles that have no dot to

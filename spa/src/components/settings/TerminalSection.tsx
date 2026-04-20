@@ -1,6 +1,5 @@
-import { useUISettingsStore, type TerminalRenderer, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
-import { useAgentStore, type TabIndicatorStyle, type CcIconVariant } from '../../stores/useAgentStore'
-import { CC_ICON_VARIANTS } from '../../lib/agent-icons'
+import { useUISettingsStore, type TerminalRenderer, type TabIndicatorStyle, type CcIconVariant, type CodexIconVariant, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
+import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS } from '../../lib/agent-icons'
 import { SettingItem } from './SettingItem'
 import { SegmentControl } from './SegmentControl'
 import { ToggleSwitch } from './ToggleSwitch'
@@ -22,12 +21,14 @@ export function TerminalSection() {
   const revealDelay = useUISettingsStore((s) => s.terminalRevealDelay)
   const setRevealDelay = useUISettingsStore((s) => s.setTerminalRevealDelay)
 
-  const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
-  const setTabIndicatorStyle = useAgentStore((s) => s.setTabIndicatorStyle)
-  const ccIconVariant = useAgentStore((s) => s.ccIconVariant)
-  const setCcIconVariant = useAgentStore((s) => s.setCcIconVariant)
-  const showOscTitle = useAgentStore((s) => s.showOscTitle)
-  const setShowOscTitle = useAgentStore((s) => s.setShowOscTitle)
+  const tabIndicatorStyle = useUISettingsStore((s) => s.tabIndicatorStyle)
+  const setTabIndicatorStyle = useUISettingsStore((s) => s.setTabIndicatorStyle)
+  const ccIconVariant = useUISettingsStore((s) => s.ccIconVariant)
+  const setCcIconVariant = useUISettingsStore((s) => s.setCcIconVariant)
+  const codexIconVariant = useUISettingsStore((s) => s.codexIconVariant)
+  const setCodexIconVariant = useUISettingsStore((s) => s.setCodexIconVariant)
+  const showOscTitle = useUISettingsStore((s) => s.showOscTitle)
+  const setShowOscTitle = useUISettingsStore((s) => s.setShowOscTitle)
 
   const t = useI18nStore((s) => s.t)
 
@@ -46,6 +47,11 @@ export function TerminalSection() {
   const CC_ICON_OPTIONS: { value: CcIconVariant; label: string }[] = [
     { value: 'bot', label: t('settings.terminal.cc_icon.bot') },
     { value: 'star', label: t('settings.terminal.cc_icon.star') },
+  ]
+
+  const CODEX_ICON_OPTIONS: { value: CodexIconVariant; label: string }[] = [
+    { value: 'openai', label: t('settings.terminal.codex_icon.openai') },
+    { value: 'codex', label: t('settings.terminal.codex_icon.codex') },
   ]
 
   // Atomic: renderer + version + optional keepAlive clamp in one setState()
@@ -141,6 +147,38 @@ export function TerminalSection() {
           {tabIndicatorStyle === 'dot' && (
             <p className="text-xs text-text-muted text-right max-w-xs">
               {t('settings.terminal.cc_icon.hidden_hint')}
+            </p>
+          )}
+        </div>
+      </SettingItem>
+
+      <SettingItem label={t('settings.terminal.codex_icon.label')} description={t('settings.terminal.codex_icon.desc')}>
+        <div className="flex flex-col gap-2 items-end">
+          <div className="flex gap-2">
+            {CODEX_ICON_OPTIONS.map((opt) => {
+              const VariantIcon = CODEX_ICON_VARIANTS[opt.value]
+              const isActive = opt.value === codexIconVariant
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => { if (!isActive) setCodexIconVariant(opt.value) }}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs transition-colors cursor-pointer ${
+                    isActive
+                      ? 'bg-surface-elevated border-border-active text-text-primary'
+                      : 'bg-transparent border-border-default text-text-muted hover:text-text-primary hover:border-text-muted'
+                  }`}
+                  aria-pressed={isActive}
+                >
+                  <VariantIcon size={16} />
+                  <span>{opt.label}</span>
+                </button>
+              )
+            })}
+          </div>
+          {tabIndicatorStyle === 'dot' && (
+            <p className="text-xs text-text-muted text-right max-w-xs">
+              {t('settings.terminal.codex_icon.hidden_hint')}
             </p>
           )}
         </div>

@@ -7,6 +7,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useI18nStore } from '../stores/useI18nStore'
 
 const mockOnPointerDown = vi.fn()
@@ -56,7 +57,8 @@ beforeEach(() => {
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
   useHostStore.setState({ runtime: {} })
-  useAgentStore.setState({ unread: {}, statuses: {}, subagents: {}, tabIndicatorStyle: 'badge' })
+  useAgentStore.setState({ unread: {}, statuses: {}, subagents: {} })
+  useUISettingsStore.setState({ tabIndicatorStyle: 'badge' })
   useI18nStore.setState({ t: (k: string) => k })
 })
 
@@ -121,12 +123,11 @@ describe('SortableTab', () => {
       activeHostId: null,
       activeCode: null,
     })
+    useUISettingsStore.setState({ tabIndicatorStyle: 'badge', showOscTitle: true })
     useAgentStore.setState({
       unread: {},
       statuses: {},
       subagents: {},
-      tabIndicatorStyle: 'badge',
-      showOscTitle: true,
       agentTypes: { 'h1:sc1': 'cc' },
       oscTitles: { 'h1:sc1': 'my-feature' },
     } as never)
@@ -147,12 +148,11 @@ describe('SortableTab', () => {
       activeHostId: null,
       activeCode: null,
     })
+    useUISettingsStore.setState({ tabIndicatorStyle: 'badge', showOscTitle: true })
     useAgentStore.setState({
       unread: {},
       statuses: {},
       subagents: {},
-      tabIndicatorStyle: 'badge',
-      showOscTitle: true,
       agentTypes: { 'h1:sc1': 'cc' },
       oscTitles: { 'h1:sc1': 'my-feature' },
     } as never)
@@ -170,10 +170,10 @@ describe('SortableTab renderTabIcon modes', () => {
     useAgentStore.setState({
       unread: {},
       subagents: {},
-      tabIndicatorStyle: style,
       statuses: { 'h1:sc1': 'running' },
       agentTypes: { 'h1:sc1': 'cc' },
     })
+    useUISettingsStore.setState({ tabIndicatorStyle: style })
   }
 
   it('icon mode: no status dot rendered', () => {

@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+### Feat(spa): Codex icon variant setting
+
+- **Settings → Terminal → Codex icon**: OpenAI / Codex monochrome button pair with live preview, mirroring the existing Claude Code bot/star row. Active button uses `aria-pressed`; when tab indicator is dot-only, a hidden-hint paragraph matches the CC behaviour.
+- **Icon options**: `openai` (Phosphor `OpenAiLogo`, default — unchanged behaviour) and `codex` (monochrome `@lobehub/icons-static-svg/codex.svg`, inherits tab theme via `currentColor`).
+- **A11y**: `aria-hidden="true"` on the agent-icons wrappers so lobehub SVG `<title>` elements no longer pollute button accessible names.
+- **Tests**: +3 in `agent-icons.test.tsx` (codex variant coverage), +1 in `TerminalSection.test.tsx` (codex button click), +locale-completeness keeps en/zh-TW in sync. Full suite 2161/2161.
+
+### Refactor(spa): move tab/icon preferences to useUISettingsStore
+
+Driven by codex review findings on PR #491. Previously these preferences
+lived in `useAgentStore` alongside runtime state, so any schema bump would
+silently reset user settings — and the new `codexIconVariant` would not
+have roamed through the preferences sync contributor.
+
+- **Moved**: `tabIndicatorStyle`, `ccIconVariant`, `codexIconVariant`, `showOscTitle` (types, state, setters) from `useAgentStore` → `useUISettingsStore`.
+- **Migration**: `useUISettingsStore` v1 → v2 with a `migrate` that imports the old `purdex-agent` payload's UI pref keys when present, so upgraders keep their settings.
+- **Sync**: `preferences` sync contributor's `DATA_FIELDS` now includes the four moved keys — they roam across devices and survive import/export.
+- **Store**: `useAgentStore` no longer persists anything and drops the `persist` middleware + `syncManager.register` entirely. It's now pure runtime state.
+
 ## [1.0.0-alpha.189] - 2026-04-19
 
 ### Fix(agent): probe wrapped descendants with bounded cache (#484)

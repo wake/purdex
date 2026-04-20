@@ -1,7 +1,9 @@
 import type { ComponentType } from 'react'
 import type { Tab } from '../types/tab'
-import type { AgentStatus, TabIndicatorStyle } from '../stores/useAgentStore'
+import type { AgentStatus } from '../stores/useAgentStore'
+import type { TabIndicatorStyle } from '../stores/useUISettingsStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
@@ -49,9 +51,10 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const isUnread = useAgentStore((s) => (ck ? !!s.unread[ck] : false))
   const subagentCount = useAgentStore((s) => (ck ? (s.subagents[ck]?.length ?? 0) : 0))
   const agentType = useAgentStore((s) => (ck ? s.agentTypes[ck] : undefined))
-  const tabIndicatorStyle = useAgentStore((s) => s.tabIndicatorStyle)
-  const ccIconVariant = useAgentStore((s) => s.ccIconVariant)
-  const showOscTitle = useAgentStore((s) => s.showOscTitle)
+  const tabIndicatorStyle = useUISettingsStore((s) => s.tabIndicatorStyle)
+  const ccIconVariant = useUISettingsStore((s) => s.ccIconVariant)
+  const codexIconVariant = useUISettingsStore((s) => s.codexIconVariant)
+  const showOscTitle = useUISettingsStore((s) => s.showOscTitle)
   const oscTitle = useAgentStore((s) => (ck ? s.oscTitles[ck] : undefined))
 
   const isHostOffline = useHostStore((s) => {
@@ -62,7 +65,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
 
   const iconName = getPaneIcon(primaryContent)
   const paneIcon = ICON_MAP[iconName]
-  const agentIcon = !isTerminated && agentType ? getAgentIcon(agentType, { ccVariant: ccIconVariant }) : undefined
+  const agentIcon = !isTerminated && agentType ? getAgentIcon(agentType, { ccVariant: ccIconVariant, codexVariant: codexIconVariant }) : undefined
   const IconComponent = (agentIcon ?? paneIcon) as TabIconComponent | undefined
 
   const sessionLookup = { getByCode: (code: string) => sessions.find((sess) => sess.code === code) }

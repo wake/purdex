@@ -1,5 +1,6 @@
 // spa/src/components/TabIcon.tsx
-import type { AgentStatus, TabIndicatorStyle } from '../stores/useAgentStore'
+import type { AgentStatus } from '../stores/useAgentStore'
+import type { TabIndicatorStyle } from '../stores/useUISettingsStore'
 import { TabStatusIndicator } from './TabStatusIndicator'
 import { SubagentDots } from './SubagentDots'
 
