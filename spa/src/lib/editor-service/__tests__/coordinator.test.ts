@@ -1,6 +1,5 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { InAppBackend } from '../../fs-backend-inapp'
 import {
   createEditorCoordinator,
   getEditorCoordinator,
@@ -26,6 +25,16 @@ describe('EditorCoordinator', () => {
     const doc = await coordinator.createFile('/untitled.md', '')
 
     expect(doc.path).toBe('/untitled.md')
+  })
+
+  it('allocates untitled names at root without relying on a buffer folder', async () => {
+    const coordinator = await createEditorCoordinator()
+
+    const first = await coordinator.createUntitledFile('md')
+    const second = await coordinator.createUntitledFile('md')
+
+    expect(first.path).toBe('/untitled.md')
+    expect(second.path).toBe('/untitled-2.md')
   })
 
   it('rejects moving folder into its own descendant', async () => {
@@ -55,6 +64,25 @@ describe('EditorCoordinator', () => {
     const restored = await coordinator.saveDocument(doc.docId, 'old write', 1)
     expect(restored.path).toBe('/notes/a.md')
     expect(await coordinator.resolvePath(doc.docId)).toBe('/notes/a.md')
+  })
+
+  it('updates recent-open ordering when a document is opened, not when it is saved', async () => {
+    const coordinator = await createEditorCoordinator()
+    const first = await coordinator.createFile('/alpha.md', 'one')
+    const second = await coordinator.createFile('/beta.md', 'two')
+
+    await coordinator.openDocument(second.docId)
+
+    const initial = await coordinator.listRecentOpened(10)
+    expect(initial.map((node) => node.path)).toEqual(['/beta.md', '/alpha.md'])
+
+    await coordinator.saveDocument(first.docId, 'one updated', 1)
+    const afterSave = await coordinator.listRecentOpened(10)
+    expect(afterSave.map((node) => node.path)).toEqual(['/beta.md', '/alpha.md'])
+
+    await coordinator.openDocument(first.docId)
+    const afterOpen = await coordinator.listRecentOpened(10)
+    expect(afterOpen.map((node) => node.path)).toEqual(['/alpha.md', '/beta.md'])
   })
 
   it('allows reoccupying a deleted path with a new document while old doc save requires save-as', async () => {

@@ -1,10 +1,8 @@
 import { useCallback } from 'react'
 import { FilePlus, FileText } from '@phosphor-icons/react'
-import { generateId } from '../../lib/id'
-import { getFsBackend } from '../../lib/fs-backend'
+import { getInAppBackend } from '../../lib/fs-backend-inapp'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { PaneContent } from '../../types/tab'
-import type { FileSource } from '../../types/fs'
 
 interface Props {
   onSelect: (content: PaneContent) => void
@@ -13,23 +11,22 @@ interface Props {
 export function EditorNewTabSection({ onSelect }: Props) {
   const t = useI18nStore((s) => s.t)
   const createFile = useCallback(async (ext: string) => {
-    const id = generateId()
-    const filePath = `/buffer/${id}.${ext}`
-    const source: FileSource = { type: 'inapp' }
-
-    const backend = getFsBackend(source)
+    const backend = getInAppBackend()
     if (!backend) {
       console.error('[editor] InApp backend not available')
       return
     }
     try {
-      await backend.write(filePath, new TextEncoder().encode(''))
+      const created = await backend.createUntitledFile(ext)
+      onSelect({
+        kind: 'editor',
+        source: { type: 'inapp' },
+        docId: created.docId,
+        filePath: created.path,
+      })
     } catch (err) {
       console.error('[editor] Failed to create file:', err)
-      return
     }
-
-    onSelect({ kind: 'editor', source, filePath } as PaneContent)
   }, [onSelect])
 
   return (

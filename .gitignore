@@ -1,7 +1,10 @@
 .claude/
+.codex/
 .superpowers/
 .worktrees/
+openspec/
 bin/
+dist/
 node_modules/
 spa/node_modules/
 spa/dist/

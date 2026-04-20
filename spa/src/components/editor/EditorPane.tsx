@@ -3,7 +3,7 @@ import { lazy, Suspense, useEffect, useCallback, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { getFsBackend } from '../../lib/fs-backend'
-import { getEditorCoordinator } from '../../lib/editor-service/coordinator'
+import { getInAppBackend } from '../../lib/fs-backend-inapp'
 import { MonacoWrapper } from './MonacoWrapper'
 import { DiffView } from './DiffView'
 import { EditorToolbar } from './EditorToolbar'
@@ -38,8 +38,9 @@ export function EditorPane({ pane, isActive }: PaneRendererProps) {
   return (
     <EditorPaneInner
       source={content.source}
-      docId={content.source.type === 'inapp' ? content.docId : undefined}
-      filePath={content.filePath ?? ''}
+      {...(content.source.type === 'inapp'
+        ? { docId: content.docId, filePath: content.filePath }
+        : { filePath: content.filePath })}
       isActive={isActive}
     />
   )
@@ -47,20 +48,18 @@ export function EditorPane({ pane, isActive }: PaneRendererProps) {
 
 function EditorPaneInner({
   source,
-  docId,
   filePath,
+  docId,
   isActive,
-}: {
-  source: FileSource
-  docId?: string
-  filePath: string
-  isActive: boolean
-}) {
-  const key = source.type === 'inapp' ? (docId ?? filePath) : bufferKey(source, filePath)
+}: (
+  | { source: Extract<FileSource, { type: 'inapp' }>; docId: string; filePath?: string; isActive: boolean }
+  | { source: Exclude<FileSource, { type: 'inapp' }>; filePath: string; isActive: boolean }
+)) {
+  const key = source.type === 'inapp' ? docId : bufferKey(source, filePath)
   const buffer = useEditorStore((s) => s.buffers[key])
-  const [currentPath, setCurrentPath] = useState(filePath)
+  const [currentPath, setCurrentPath] = useState(filePath ?? '')
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'missing'>('loading')
-  const displayPath = currentPath || filePath
+  const displayPath = currentPath || filePath || ''
   const isMarkdown = displayPath.endsWith('.md') || displayPath.endsWith('.mdx')
   const [editorMode, setEditorMode] = useState<'raw' | 'wysiwyg'>('raw')
   const [showDiff, setShowDiff] = useState(false)
@@ -69,16 +68,15 @@ function EditorPaneInner({
   useEffect(() => {
     let stale = false
     if (useEditorStore.getState().buffers[key]) return // already loaded
-    const backend = getFsBackend(source)
+    const backend = source.type === 'inapp' ? getInAppBackend() : getFsBackend(source)
     if (!backend) return
 
     const load = async () => {
       try {
-        if (source.type === 'inapp' && docId) {
-          const coordinator = await getEditorCoordinator()
-          const snapshot = await coordinator.getDocumentSnapshot(docId)
+        if (source.type === 'inapp') {
+          const snapshot = await backend.openDocument(docId)
           if (stale) return
-          const nextPath = snapshot.path ?? filePath
+          const nextPath = snapshot.path ?? filePath ?? ''
           setCurrentPath(nextPath)
           let stat: { mtime: number; size: number } | undefined
           if (snapshot.path) {
@@ -138,15 +136,17 @@ function EditorPaneInner({
     if (!buf) return
 
     const backend = getFsBackend(source)
-    if (!backend) return
+    const inAppBackend = source.type === 'inapp' ? getInAppBackend() : undefined
+    const activeBackend = source.type === 'inapp' ? inAppBackend : backend
+    if (!activeBackend) return
 
-    if (source.type === 'inapp' && docId) {
-      void getEditorCoordinator()
-        .then((coordinator) => coordinator.getDocumentSnapshot(docId))
+    if (source.type === 'inapp') {
+      void inAppBackend
+        ?.openDocument(docId)
         .then((snapshot) => {
           const latestBuf = useEditorStore.getState().buffers[key]
           if (!latestBuf) return
-          const nextPath = snapshot.path ?? filePath
+          const nextPath = snapshot.path ?? filePath ?? ''
           setCurrentPath(nextPath)
           if (snapshot.text === latestBuf.savedContent && snapshot.bindingStatus === latestBuf.bindingStatus) return
           if (!latestBuf.isDirty) {
@@ -162,7 +162,7 @@ function EditorPaneInner({
       return
     }
 
-    backend.stat(filePath)
+    backend?.stat(filePath)
       .then((stat) => {
         const currentBuf = useEditorStore.getState().buffers[key]
         if (!currentBuf?.lastStat) return
@@ -181,18 +181,16 @@ function EditorPaneInner({
         })
       })
       .catch(() => {}) // File may have been deleted
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-check on tab activation, not on source/filePath change
   }, [docId, filePath, isActive, key, source])
 
   const handleSave = useCallback(async () => {
     const buf = useEditorStore.getState().buffers[key]
     if (!buf || !buf.isDirty) return
-    const backend = getFsBackend(source)
+    const backend = source.type === 'inapp' ? getInAppBackend() : getFsBackend(source)
     if (!backend) return
     try {
-      if (source.type === 'inapp' && docId) {
-        const coordinator = await getEditorCoordinator()
-        const next = await coordinator.saveDocument(docId, buf.content, buf.baseVersion)
+      if (source.type === 'inapp') {
+        const next = await backend.saveDocument(docId, buf.content, buf.baseVersion)
         setCurrentPath(next.path)
         let stat: { mtime: number; size: number } | undefined
         try {

@@ -18,11 +18,21 @@ export interface EditorFileRecord {
   version: number
 }
 
+export interface EditorDocumentSnapshot {
+  docId: string
+  path: string | null
+  text: string
+  version: number
+  bindingStatus: EditorBindingStatus
+}
+
 export interface EditorCoordinator {
   createFile(path: string, initialContent: string): Promise<EditorFileRecord>
+  createUntitledFile(ext: string, initialContent?: string): Promise<EditorFileRecord>
   createFolder(path: string): Promise<string>
   resolvePath(docId: string): Promise<string | null>
-  getDocumentSnapshot(docId: string): Promise<{ docId: string; path: string | null; text: string; version: number; bindingStatus: EditorBindingStatus }>
+  getDocumentSnapshot(docId: string): Promise<EditorDocumentSnapshot>
+  openDocument(docId: string): Promise<EditorDocumentSnapshot>
   renameNode(fromPath: string, toPath: string): Promise<void>
   saveDocument(docId: string, text: string, expectedVersion: number): Promise<EditorFileRecord>
   saveDocumentAs(docId: string, newPath: string, text: string, expectedVersion: number): Promise<EditorFileRecord>
@@ -111,6 +121,40 @@ function nextSavedRecord(
   }
 }
 
+function normalizeExtension(ext: string): string {
+  const trimmed = ext.trim().replace(/^\.+/, '').toLowerCase()
+  if (!trimmed) {
+    throw new Error('File extension is required')
+  }
+  return trimmed
+}
+
+async function allocateUntitledPath(
+  tree: EditorTreeRepository,
+  ext: string,
+  tx: IDBTransaction,
+): Promise<string> {
+  const normalizedExt = normalizeExtension(ext)
+  for (let index = 1; ; index += 1) {
+    const suffix = index === 1 ? '' : `-${index}`
+    const candidate = `/untitled${suffix}.${normalizedExt}`
+    const existing = await tree.getNodeByPath(candidate, tx)
+    if (!existing || existing.state !== 'active') {
+      return candidate
+    }
+  }
+}
+
+function toDocumentSnapshot(docId: string, node: EditorTreeNode, record: EditorContentRecord): EditorDocumentSnapshot {
+  return {
+    docId,
+    path: node.state === 'active' && record.bindingStatus === 'active' ? node.path : null,
+    text: record.text,
+    version: record.version,
+    bindingStatus: record.bindingStatus,
+  }
+}
+
 async function ensureParentFolderExists(
   tree: EditorTreeRepository,
   path: string,
@@ -138,6 +182,16 @@ async function createCoordinatorFromDb(db: IDBDatabase): Promise<EditorCoordinat
         await tree.createFileNode(canonical, docId, tx)
         await contents.createDocument(docId, initialContent, canonical, tx)
         return { docId, path: canonical, version: 1 }
+      })
+    },
+
+    async createUntitledFile(ext: string, initialContent = ''): Promise<EditorFileRecord> {
+      return withWriteTransaction(db, async (tx) => {
+        const path = await allocateUntitledPath(tree, ext, tx)
+        const docId = generateId()
+        await tree.createFileNode(path, docId, tx)
+        await contents.createDocument(docId, initialContent, path, tx)
+        return { docId, path, version: 1 }
       })
     },
 
@@ -175,13 +229,27 @@ async function createCoordinatorFromDb(db: IDBDatabase): Promise<EditorCoordinat
       if (!node || !record) {
         throw new Error(`Document not found: ${docId}`)
       }
-      return {
-        docId,
-        path: node.state === 'active' && record.bindingStatus === 'active' ? node.path : null,
-        text: record.text,
-        version: record.version,
-        bindingStatus: record.bindingStatus,
-      }
+      return toDocumentSnapshot(docId, node, record)
+    },
+
+    async openDocument(docId: string) {
+      return withWriteTransaction(db, async (tx) => {
+        const node = await tree.getNodeByDocId(docId, tx)
+        const record = await contents.readDocument(docId, tx)
+        if (!node || !record) {
+          throw new Error(`Document not found: ${docId}`)
+        }
+        if (node.state === 'active' && node.kind === 'file' && record.bindingStatus === 'active') {
+          const openedAt = Date.now()
+          await tree.putNode({
+            ...node,
+            lastOpenedAt: openedAt,
+            updatedAt: openedAt,
+          }, tx)
+          return toDocumentSnapshot(docId, { ...node, lastOpenedAt: openedAt, updatedAt: openedAt }, record)
+        }
+        return toDocumentSnapshot(docId, node, record)
+      })
     },
 
     async renameNode(fromPath: string, toPath: string): Promise<void> {
@@ -227,12 +295,10 @@ async function createCoordinatorFromDb(db: IDBDatabase): Promise<EditorCoordinat
             ...splitParentPath(desiredPath),
             state: 'active',
             updatedAt: Date.now(),
-            lastOpenedAt: Date.now(),
           }, tx)
         }
 
         await contents.putDocument(nextRecord, tx)
-        await tree.touchPath(desiredPath, nextRecord.savedAt, tx)
         return { docId, path: desiredPath, version: nextRecord.version }
       })
     },
@@ -257,7 +323,6 @@ async function createCoordinatorFromDb(db: IDBDatabase): Promise<EditorCoordinat
           ...splitParentPath(canonical),
           state: 'active',
           updatedAt: nextRecord.savedAt,
-          lastOpenedAt: nextRecord.savedAt,
         }, tx)
         await contents.putDocument(nextRecord, tx)
         return { docId, path: canonical, version: nextRecord.version }
@@ -307,7 +372,6 @@ async function createCoordinatorFromDb(db: IDBDatabase): Promise<EditorCoordinat
             throw new Error(`Document is inactive: ${node.docId}`)
           }
           await contents.writeDocument(node.docId, text, current.version, tx)
-          await tree.touchPath(canonical, Date.now(), tx)
           return
         }
 

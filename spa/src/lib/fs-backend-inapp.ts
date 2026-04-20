@@ -1,8 +1,10 @@
-import type { FsBackend } from './fs-backend'
+import { getFsBackend, type FsBackend } from './fs-backend'
 import {
   getEditorCoordinator,
   isCoordinatorRecoverableError,
   resetEditorCoordinatorCache,
+  type EditorDocumentSnapshot,
+  type EditorFileRecord,
 } from './editor-service/coordinator'
 import type { FileStat, FileEntry } from '../types/fs'
 
@@ -55,4 +57,24 @@ export class InAppBackend implements FsBackend {
   async rename(from: string, to: string): Promise<void> {
     await withCoordinatorRetry((coordinator) => coordinator.renameNode(from, to))
   }
+
+  async createUntitledFile(ext: string, initialContent = ''): Promise<EditorFileRecord> {
+    return withCoordinatorRetry((coordinator) => coordinator.createUntitledFile(ext, initialContent))
+  }
+
+  async openDocument(docId: string): Promise<EditorDocumentSnapshot> {
+    return withCoordinatorRetry((coordinator) => coordinator.openDocument(docId))
+  }
+
+  async getDocumentSnapshot(docId: string): Promise<EditorDocumentSnapshot> {
+    return withCoordinatorRetry((coordinator) => coordinator.getDocumentSnapshot(docId))
+  }
+
+  async saveDocument(docId: string, text: string, expectedVersion: number): Promise<EditorFileRecord> {
+    return withCoordinatorRetry((coordinator) => coordinator.saveDocument(docId, text, expectedVersion))
+  }
+}
+
+export function getInAppBackend(): InAppBackend | undefined {
+  return getFsBackend({ type: 'inapp' }) as InAppBackend | undefined
 }
