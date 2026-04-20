@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,40 +14,56 @@ import (
 )
 
 const (
-	maxChains = 10000
-	maxSteps  = 100000
+	defaultTraceMaxChains = 10000
+	defaultTraceMaxSteps  = 100000
 )
 
-// TraceChain is the lightweight summary row for a trace chain.
+// TraceChain is the summary row for a trace chain.
 type TraceChain struct {
-	ChainID     string `json:"chain_id"`
-	TmuxSession string `json:"tmux_session"`
-	PaneID      string `json:"pane_id"`
-	AgentType   string `json:"agent_type"`
-	EventName   string `json:"event_name"`
-	CreatedAt   int64  `json:"created_at"`
-	UpdatedAt   int64  `json:"updated_at"`
-	StepCount   int    `json:"step_count"`
+	ChainID          string `json:"chain_id"`
+	StartedAt        int64  `json:"started_at"`
+	CompletedAt      int64  `json:"completed_at"`
+	TerminalStatus   string `json:"terminal_status"`
+	TerminalReason   string `json:"terminal_reason"`
+	TmuxSession      string `json:"tmux_session"`
+	PaneID           string `json:"pane_id"`
+	RootAgentType    string `json:"root_agent_type"`
+	RootEventName    string `json:"root_event_name"`
+	RootReason       string `json:"root_reason"`
+	LatestStepKind   string `json:"latest_step_kind"`
+	LatestDecision   string `json:"latest_decision"`
+	LatestStepReason string `json:"latest_step_reason"`
+	StepCount        int    `json:"step_count,omitempty"`
 }
 
-// TraceStep is a single ordered step within a trace chain.
+// TraceStep is a single ordered trace step within a chain.
 type TraceStep struct {
-	StepID       string          `json:"step_id"`
-	ChainID      string          `json:"chain_id"`
-	ParentStepID string          `json:"parent_step_id,omitempty"`
-	StepName     string          `json:"step_name"`
-	Payload      json.RawMessage `json:"payload,omitempty"`
-	StepIndex    int             `json:"step_index"`
-	CreatedAt    int64           `json:"created_at"`
+	StepID        string          `json:"step_id"`
+	ChainID       string          `json:"chain_id"`
+	ParentStepID  string          `json:"parent_step_id,omitempty"`
+	Seq           int             `json:"seq"`
+	Kind          string          `json:"kind"`
+	TmuxSession   string          `json:"tmux_session"`
+	PaneID        string          `json:"pane_id"`
+	AgentType     string          `json:"agent_type"`
+	FrameID       string          `json:"frame_id"`
+	ParentFrameID string          `json:"parent_frame_id,omitempty"`
+	EventName     string          `json:"event_name"`
+	Decision      string          `json:"decision"`
+	Reason        string          `json:"reason"`
+	PayloadJSON   json.RawMessage `json:"payload_json,omitempty"`
+	BeforeJSON    json.RawMessage `json:"before_json,omitempty"`
+	AfterJSON     json.RawMessage `json:"after_json,omitempty"`
+	CreatedAt     int64           `json:"created_at"`
 }
 
-// TraceRecord combines the chain summary with its ordered steps.
+// TraceRecord combines a chain summary with its ordered steps.
 type TraceRecord struct {
 	Chain TraceChain  `json:"chain"`
 	Steps []TraceStep `json:"steps"`
 }
 
-// TraceListFilter filters and paginates chain summaries.
+// TraceListFilter filters and paginates trace chains.
 type TraceListFilter struct {
 	TmuxSession string
 	PaneID      string
@@ -57,166 +74,195 @@ type TraceListFilter struct {
 	Before      bool
 }
 
-// TraceChainPage is a page of trace chain summaries.
+// TraceChainPage is a page of chain summaries.
 type TraceChainPage struct {
 	Chains     []TraceChain
 	NextCursor string
 }
 
-// TraceStore persists trace chains and their ordered steps.
-type TraceStore struct{ db *sql.DB }
+// TraceStore persists trace chains and ordered steps.
+type TraceStore struct {
+	db        *sql.DB
+	maxChains int
+	maxSteps  int
+}
 
 func migrateTraceDB(db *sql.DB) error {
-	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS agent_trace_chains (
-			chain_id     TEXT PRIMARY KEY,
-			tmux_session TEXT NOT NULL,
-			pane_id      TEXT NOT NULL,
-			agent_type   TEXT NOT NULL,
-			event_name   TEXT NOT NULL,
-			created_at   INTEGER NOT NULL,
-			updated_at   INTEGER NOT NULL
-		)
-	`)
-	if err != nil {
-		return err
-	}
 	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS agent_trace_steps (
-			step_id        TEXT PRIMARY KEY,
-			chain_id       TEXT NOT NULL,
-			parent_step_id TEXT,
-			step_name      TEXT NOT NULL,
-			payload        TEXT NOT NULL DEFAULT 'null',
-			step_index     INTEGER NOT NULL,
-			created_at     INTEGER NOT NULL,
-			FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
-			FOREIGN KEY (parent_step_id) REFERENCES agent_trace_steps(step_id) ON DELETE SET NULL
+		CREATE TABLE IF NOT EXISTS agent_trace_chains (
+			chain_id          TEXT PRIMARY KEY,
+			started_at        INTEGER NOT NULL DEFAULT 0,
+			completed_at      INTEGER NOT NULL DEFAULT 0,
+			terminal_status   TEXT NOT NULL DEFAULT '',
+			terminal_reason   TEXT NOT NULL DEFAULT '',
+			tmux_session      TEXT NOT NULL DEFAULT '',
+			pane_id           TEXT NOT NULL DEFAULT '',
+			root_agent_type   TEXT NOT NULL DEFAULT '',
+			root_event_name   TEXT NOT NULL DEFAULT '',
+			root_reason       TEXT NOT NULL DEFAULT '',
+			latest_step_kind  TEXT NOT NULL DEFAULT '',
+			latest_decision   TEXT NOT NULL DEFAULT '',
+			latest_step_reason TEXT NOT NULL DEFAULT '',
+			step_count        INTEGER NOT NULL DEFAULT 0,
+			updated_at        INTEGER NOT NULL DEFAULT 0
 		)
 	`); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_chains_session_created ON agent_trace_chains(tmux_session, created_at DESC, chain_id DESC)`); err != nil {
+	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN completed_at INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN terminal_status TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN terminal_reason TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN tmux_session TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN pane_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN root_agent_type TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN root_event_name TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN root_reason TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN latest_step_kind TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN latest_decision TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN latest_step_reason TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN step_count INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`)
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS agent_trace_steps (
+			step_id         TEXT PRIMARY KEY,
+			chain_id        TEXT NOT NULL,
+			parent_step_id  TEXT,
+			seq             INTEGER NOT NULL,
+			kind            TEXT NOT NULL DEFAULT '',
+			tmux_session    TEXT NOT NULL DEFAULT '',
+			pane_id         TEXT NOT NULL DEFAULT '',
+			agent_type      TEXT NOT NULL DEFAULT '',
+			frame_id        TEXT NOT NULL DEFAULT '',
+			parent_frame_id TEXT NOT NULL DEFAULT '',
+			event_name      TEXT NOT NULL DEFAULT '',
+			decision        TEXT NOT NULL DEFAULT '',
+			reason          TEXT NOT NULL DEFAULT '',
+			payload_json    TEXT NOT NULL DEFAULT 'null',
+			before_json     TEXT NOT NULL DEFAULT 'null',
+			after_json      TEXT NOT NULL DEFAULT 'null',
+			created_at      INTEGER NOT NULL DEFAULT 0,
+			FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
+			FOREIGN KEY (chain_id, parent_step_id) REFERENCES agent_trace_steps(chain_id, step_id) ON DELETE CASCADE
+		)
+	`); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_chains_pane_created ON agent_trace_chains(pane_id, created_at DESC, chain_id DESC)`); err != nil {
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN seq INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN kind TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN tmux_session TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN pane_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN frame_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN parent_frame_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN event_name TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN decision TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN reason TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN payload_json TEXT NOT NULL DEFAULT 'null'`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN before_json TEXT NOT NULL DEFAULT 'null'`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN after_json TEXT NOT NULL DEFAULT 'null'`)
+	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0`)
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_chains_started ON agent_trace_chains(started_at DESC, chain_id DESC)`); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_chains_agent_event_created ON agent_trace_chains(agent_type, event_name, created_at DESC, chain_id DESC)`); err != nil {
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_chains_session_started ON agent_trace_chains(tmux_session, started_at DESC, chain_id DESC)`); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_chains_created ON agent_trace_chains(created_at DESC, chain_id DESC)`); err != nil {
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_chains_pane_started ON agent_trace_chains(pane_id, started_at DESC, chain_id DESC)`); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_steps_chain_index ON agent_trace_steps(chain_id, step_index ASC, created_at ASC, step_id ASC)`); err != nil {
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_chains_agent_event_started ON agent_trace_chains(root_agent_type, root_event_name, started_at DESC, chain_id DESC)`); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_steps_created ON agent_trace_steps(created_at DESC, step_id DESC)`); err != nil {
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_steps_chain_seq ON agent_trace_steps(chain_id, seq ASC, created_at ASC, step_id ASC)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_trace_steps_chain_step ON agent_trace_steps(chain_id, step_id)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_steps_parent ON agent_trace_steps(chain_id, parent_step_id)`); err != nil {
 		return err
 	}
 	return nil
 }
 
-// SaveChain stores a chain summary and its ordered steps in a single
-// transaction, replacing any prior steps for the same chain_id.
-func (s *TraceStore) SaveChain(record TraceRecord) error {
+// SaveChain stores a chain and its steps atomically, replacing any existing
+// record for the same chain_id.
+func (s *TraceStore) SaveChain(record TraceRecord) (err error) {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("trace store is nil")
+	}
+	chain, steps, err := normalizeTraceRecord(record)
+	if err != nil {
+		return err
+	}
+
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return err
 	}
-	rollback := func() error {
-		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
-			return rbErr
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
 		}
-		return nil
-	}
-
-	chain := record.Chain
-	if chain.ChainID == "" {
-		chain.ChainID = uuid.NewString()
-	}
-	if chain.CreatedAt == 0 {
-		chain.CreatedAt = time.Now().UnixNano()
-	}
-	if chain.UpdatedAt == 0 {
-		chain.UpdatedAt = chain.CreatedAt
-	}
-
-	_, err = tx.Exec(`
-		INSERT INTO agent_trace_chains (
-			chain_id, tmux_session, pane_id, agent_type, event_name, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(chain_id) DO UPDATE SET
-			tmux_session = excluded.tmux_session,
-			pane_id      = excluded.pane_id,
-			agent_type   = excluded.agent_type,
-			event_name   = excluded.event_name,
-			updated_at   = excluded.updated_at
-	`, chain.ChainID, chain.TmuxSession, chain.PaneID, chain.AgentType, chain.EventName, chain.CreatedAt, chain.UpdatedAt)
-	if err != nil {
-		if rbErr := rollback(); rbErr != nil {
-			return rbErr
-		}
-		return err
-	}
+	}()
 
 	if _, err = tx.Exec(`DELETE FROM agent_trace_steps WHERE chain_id = ?`, chain.ChainID); err != nil {
-		if rbErr := rollback(); rbErr != nil {
-			return rbErr
-		}
+		return err
+	}
+	if _, err = tx.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, started_at, completed_at, terminal_status, terminal_reason,
+			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
+			latest_step_kind, latest_decision, latest_step_reason, step_count, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(chain_id) DO UPDATE SET
+			started_at = excluded.started_at,
+			completed_at = excluded.completed_at,
+			terminal_status = excluded.terminal_status,
+			terminal_reason = excluded.terminal_reason,
+			tmux_session = excluded.tmux_session,
+			pane_id = excluded.pane_id,
+			root_agent_type = excluded.root_agent_type,
+			root_event_name = excluded.root_event_name,
+			root_reason = excluded.root_reason,
+			latest_step_kind = excluded.latest_step_kind,
+			latest_decision = excluded.latest_decision,
+			latest_step_reason = excluded.latest_step_reason,
+			step_count = excluded.step_count,
+			updated_at = excluded.updated_at
+	`, chain.ChainID, chain.StartedAt, chain.CompletedAt, chain.TerminalStatus, chain.TerminalReason,
+		chain.TmuxSession, chain.PaneID, chain.RootAgentType, chain.RootEventName, chain.RootReason,
+		chain.LatestStepKind, chain.LatestDecision, chain.LatestStepReason, chain.StepCount, time.Now().UnixNano()); err != nil {
 		return err
 	}
 
-	for i := range record.Steps {
-		step := record.Steps[i]
-		if step.StepID == "" {
-			step.StepID = uuid.NewString()
-		}
-		step.ChainID = chain.ChainID
-		if step.CreatedAt == 0 {
-			step.CreatedAt = chain.CreatedAt + int64(i)
-		}
-		payload := string(step.Payload)
-		if payload == "" {
-			payload = "null"
-		}
-		_, err = tx.Exec(`
+	for _, step := range steps {
+		if _, err = tx.Exec(`
 			INSERT INTO agent_trace_steps (
-				step_id, chain_id, parent_step_id, step_name, payload, step_index, created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, step.StepID, step.ChainID, nullString(step.ParentStepID), step.StepName, payload, step.StepIndex, step.CreatedAt)
-		if err != nil {
-			if rbErr := rollback(); rbErr != nil {
-				return rbErr
-			}
+				step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+				agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+				payload_json, before_json, after_json, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, step.StepID, step.ChainID, nullString(step.ParentStepID), step.Seq, step.Kind, step.TmuxSession, step.PaneID,
+			step.AgentType, step.FrameID, step.ParentFrameID, step.EventName, step.Decision, step.Reason,
+			rawJSONText(step.PayloadJSON), rawJSONText(step.BeforeJSON), rawJSONText(step.AfterJSON), step.CreatedAt); err != nil {
 			return err
 		}
 	}
 
-	if err := pruneTraceChains(tx); err != nil {
-		if rbErr := rollback(); rbErr != nil {
-			return rbErr
-		}
+	maxChains, maxSteps := s.traceLimits()
+	if err = pruneTraceChains(tx, maxChains, maxSteps); err != nil {
 		return err
 	}
-	if err := pruneTraceSteps(tx); err != nil {
-		if rbErr := rollback(); rbErr != nil {
-			return rbErr
-		}
-		return err
-	}
-
-	if err := tx.Commit(); err != nil {
-		if rbErr := rollback(); rbErr != nil {
-			return rbErr
-		}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	return nil
 }
 
-// ListChains returns chain summaries ordered newest-first, with cursor-based
-// pagination that can move either before or after the provided cursor.
+// ListChains returns chain summaries ordered newest-first.
 func (s *TraceStore) ListChains(filter TraceListFilter) (TraceChainPage, error) {
 	limit := filter.Limit
 	if limit <= 0 {
@@ -243,33 +289,35 @@ func (s *TraceStore) ListChains(filter TraceListFilter) (TraceChainPage, error) 
 	page := TraceChainPage{Chains: chains}
 	if len(page.Chains) > limit-1 {
 		last := page.Chains[limit-2]
-		page.NextCursor = encodeTraceCursor(last.CreatedAt, last.ChainID)
+		page.NextCursor = encodeTraceCursor(last.StartedAt, last.ChainID)
 		page.Chains = page.Chains[:limit-1]
 	}
 	return page, nil
 }
 
-// GetChainRecord returns a chain summary and its steps in step_index order.
+// GetChainRecord returns a full chain and its ordered steps.
 func (s *TraceStore) GetChainRecord(chainID string) (*TraceRecord, error) {
 	var chain TraceChain
 	err := s.db.QueryRow(`
-		SELECT c.chain_id, c.tmux_session, c.pane_id, c.agent_type, c.event_name,
-		       c.created_at, c.updated_at,
-		       (
-		         SELECT COUNT(*)
-		         FROM agent_trace_steps s
-		         WHERE s.chain_id = c.chain_id
-		       ) AS step_count
-		FROM agent_trace_chains c
-		WHERE c.chain_id = ?
+		SELECT chain_id, started_at, completed_at, terminal_status, terminal_reason,
+		       tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
+		       latest_step_kind, latest_decision, latest_step_reason, step_count
+		FROM agent_trace_chains
+		WHERE chain_id = ?
 	`, chainID).Scan(
 		&chain.ChainID,
+		&chain.StartedAt,
+		&chain.CompletedAt,
+		&chain.TerminalStatus,
+		&chain.TerminalReason,
 		&chain.TmuxSession,
 		&chain.PaneID,
-		&chain.AgentType,
-		&chain.EventName,
-		&chain.CreatedAt,
-		&chain.UpdatedAt,
+		&chain.RootAgentType,
+		&chain.RootEventName,
+		&chain.RootReason,
+		&chain.LatestStepKind,
+		&chain.LatestDecision,
+		&chain.LatestStepReason,
 		&chain.StepCount,
 	)
 	if err == sql.ErrNoRows {
@@ -280,10 +328,12 @@ func (s *TraceStore) GetChainRecord(chainID string) (*TraceRecord, error) {
 	}
 
 	rows, err := s.db.Query(`
-		SELECT step_id, chain_id, parent_step_id, step_name, payload, step_index, created_at
+		SELECT step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+		       agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+		       payload_json, before_json, after_json, created_at
 		FROM agent_trace_steps
 		WHERE chain_id = ?
-		ORDER BY step_index ASC, created_at ASC, step_id ASC
+		ORDER BY seq ASC, created_at ASC, step_id ASC
 	`, chainID)
 	if err != nil {
 		return nil, err
@@ -298,29 +348,183 @@ func (s *TraceStore) GetChainRecord(chainID string) (*TraceRecord, error) {
 	return &TraceRecord{Chain: chain, Steps: steps}, nil
 }
 
-func pruneTraceChains(tx *sql.Tx) error {
-	_, err := tx.Exec(`
-		DELETE FROM agent_trace_chains
-		WHERE chain_id IN (
-			SELECT chain_id
-			FROM agent_trace_chains
-			ORDER BY created_at DESC, chain_id DESC
-			LIMIT -1 OFFSET ?
-		)
-	`, maxChains)
-	return err
+func (s *TraceStore) traceLimits() (int, int) {
+	maxChains := s.maxChains
+	if maxChains <= 0 {
+		maxChains = defaultTraceMaxChains
+	}
+	maxSteps := s.maxSteps
+	if maxSteps <= 0 {
+		maxSteps = defaultTraceMaxSteps
+	}
+	return maxChains, maxSteps
 }
 
-func pruneTraceSteps(tx *sql.Tx) error {
-	_, err := tx.Exec(`
-		DELETE FROM agent_trace_steps
-		WHERE step_id IN (
-			SELECT step_id
-			FROM agent_trace_steps
-			ORDER BY created_at DESC, step_id DESC
-			LIMIT -1 OFFSET ?
-		)
-	`, maxSteps)
+func normalizeTraceRecord(record TraceRecord) (TraceChain, []TraceStep, error) {
+	chain := record.Chain
+	if chain.ChainID == "" {
+		chain.ChainID = uuid.NewString()
+	}
+
+	steps := make([]TraceStep, len(record.Steps))
+	copy(steps, record.Steps)
+	for i := range steps {
+		if steps[i].StepID == "" {
+			steps[i].StepID = uuid.NewString()
+		}
+		if steps[i].ChainID == "" {
+			steps[i].ChainID = chain.ChainID
+		}
+		if steps[i].ChainID != chain.ChainID {
+			return TraceChain{}, nil, fmt.Errorf("step %s belongs to chain %s, want %s", steps[i].StepID, steps[i].ChainID, chain.ChainID)
+		}
+		if steps[i].Seq == 0 {
+			steps[i].Seq = i + 1
+		}
+		if steps[i].TmuxSession == "" {
+			steps[i].TmuxSession = chain.TmuxSession
+		}
+		if chain.TmuxSession == "" {
+			chain.TmuxSession = steps[i].TmuxSession
+		}
+		if steps[i].PaneID == "" {
+			steps[i].PaneID = chain.PaneID
+		}
+		if chain.PaneID == "" {
+			chain.PaneID = steps[i].PaneID
+		}
+		if steps[i].AgentType == "" {
+			steps[i].AgentType = chain.RootAgentType
+		}
+		if steps[i].EventName == "" {
+			steps[i].EventName = chain.RootEventName
+		}
+		if steps[i].CreatedAt == 0 {
+			steps[i].CreatedAt = time.Now().UnixNano() + int64(i)
+		}
+	}
+
+	sort.SliceStable(steps, func(i, j int) bool {
+		if steps[i].Seq != steps[j].Seq {
+			return steps[i].Seq < steps[j].Seq
+		}
+		if steps[i].CreatedAt != steps[j].CreatedAt {
+			return steps[i].CreatedAt < steps[j].CreatedAt
+		}
+		return steps[i].StepID < steps[j].StepID
+	})
+
+	seen := make(map[string]struct{}, len(steps))
+	for i := range steps {
+		if steps[i].ParentStepID != "" {
+			if _, ok := seen[steps[i].ParentStepID]; !ok {
+				return TraceChain{}, nil, fmt.Errorf("step %s references missing parent step %s", steps[i].StepID, steps[i].ParentStepID)
+			}
+		}
+		seen[steps[i].StepID] = struct{}{}
+	}
+
+	if len(steps) > 0 {
+		first := steps[0]
+		last := steps[len(steps)-1]
+		if chain.StartedAt == 0 {
+			chain.StartedAt = first.CreatedAt
+		}
+		if chain.CompletedAt == 0 {
+			chain.CompletedAt = last.CreatedAt
+		}
+		if chain.TmuxSession == "" {
+			chain.TmuxSession = first.TmuxSession
+		}
+		if chain.PaneID == "" {
+			chain.PaneID = first.PaneID
+		}
+		if chain.RootAgentType == "" {
+			chain.RootAgentType = first.AgentType
+		}
+		if chain.RootEventName == "" {
+			chain.RootEventName = first.EventName
+		}
+		if chain.RootReason == "" {
+			chain.RootReason = first.Reason
+		}
+		chain.LatestStepKind = last.Kind
+		chain.LatestDecision = last.Decision
+		chain.LatestStepReason = last.Reason
+	} else {
+		now := time.Now().UnixNano()
+		if chain.StartedAt == 0 {
+			chain.StartedAt = now
+		}
+		if chain.CompletedAt == 0 {
+			chain.CompletedAt = chain.StartedAt
+		}
+	}
+
+	if chain.CompletedAt == 0 {
+		chain.CompletedAt = chain.StartedAt
+	}
+	if chain.StepCount == 0 {
+		chain.StepCount = len(steps)
+	}
+	return chain, steps, nil
+}
+
+func pruneTraceChains(tx *sql.Tx, maxChains, maxSteps int) error {
+	if maxChains <= 0 || maxSteps <= 0 {
+		return nil
+	}
+
+	rows, err := tx.Query(`
+		SELECT chain_id, step_count
+		FROM agent_trace_chains
+		ORDER BY started_at ASC, chain_id ASC
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type chainStat struct {
+		chainID   string
+		stepCount int
+	}
+
+	stats := make([]chainStat, 0, 64)
+	totalSteps := 0
+	for rows.Next() {
+		var stat chainStat
+		if err := rows.Scan(&stat.chainID, &stat.stepCount); err != nil {
+			return err
+		}
+		stats = append(stats, stat)
+		totalSteps += stat.stepCount
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	totalChains := len(stats)
+	var evict []string
+	for _, stat := range stats {
+		if totalChains <= maxChains && totalSteps <= maxSteps {
+			break
+		}
+		evict = append(evict, stat.chainID)
+		totalChains--
+		totalSteps -= stat.stepCount
+	}
+	if len(evict) == 0 {
+		return nil
+	}
+
+	placeholders := strings.Repeat("?,", len(evict))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(evict))
+	for i, chainID := range evict {
+		args[i] = chainID
+	}
+	_, err = tx.Exec(fmt.Sprintf(`DELETE FROM agent_trace_chains WHERE chain_id IN (%s)`, placeholders), args...)
 	return err
 }
 
@@ -337,15 +541,15 @@ func buildTraceChainListQuery(filter TraceListFilter, limit int) (string, []any,
 		args = append(args, filter.PaneID)
 	}
 	if filter.AgentType != "" {
-		clauses = append(clauses, "c.agent_type = ?")
+		clauses = append(clauses, "c.root_agent_type = ?")
 		args = append(args, filter.AgentType)
 	}
 	if filter.EventName != "" {
-		clauses = append(clauses, "c.event_name = ?")
+		clauses = append(clauses, "c.root_event_name = ?")
 		args = append(args, filter.EventName)
 	}
 	if filter.Cursor != "" {
-		createdAt, chainID, err := decodeTraceCursor(filter.Cursor)
+		startedAt, chainID, err := decodeTraceCursor(filter.Cursor)
 		if err != nil {
 			return "", nil, err
 		}
@@ -353,23 +557,21 @@ func buildTraceChainListQuery(filter TraceListFilter, limit int) (string, []any,
 		if !filter.Before {
 			op = ">"
 		}
-		clauses = append(clauses, fmt.Sprintf("(c.created_at %s ? OR (c.created_at = ? AND c.chain_id %s ?))", op, op))
-		args = append(args, createdAt, createdAt, chainID)
+		clauses = append(clauses, fmt.Sprintf("(c.started_at %s ? OR (c.started_at = ? AND c.chain_id %s ?))", op, op))
+		args = append(args, startedAt, startedAt, chainID)
 	}
 
 	query := `
-		SELECT c.chain_id, c.tmux_session, c.pane_id, c.agent_type, c.event_name,
-		       c.created_at, c.updated_at,
-		       COUNT(s.step_id) AS step_count
+		SELECT c.chain_id, c.started_at, c.completed_at, c.terminal_status, c.terminal_reason,
+		       c.tmux_session, c.pane_id, c.root_agent_type, c.root_event_name, c.root_reason,
+		       c.latest_step_kind, c.latest_decision, c.latest_step_reason, c.step_count
 		FROM agent_trace_chains c
-		LEFT JOIN agent_trace_steps s ON s.chain_id = c.chain_id
 	`
 	if len(clauses) > 0 {
 		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
 	query += `
-		GROUP BY c.chain_id
-		ORDER BY c.created_at DESC, c.chain_id DESC
+		ORDER BY c.started_at DESC, c.chain_id DESC
 		LIMIT ?
 	`
 	args = append(args, limit)
@@ -382,12 +584,18 @@ func collectTraceChains(rows *sql.Rows) ([]TraceChain, error) {
 		var chain TraceChain
 		if err := rows.Scan(
 			&chain.ChainID,
+			&chain.StartedAt,
+			&chain.CompletedAt,
+			&chain.TerminalStatus,
+			&chain.TerminalReason,
 			&chain.TmuxSession,
 			&chain.PaneID,
-			&chain.AgentType,
-			&chain.EventName,
-			&chain.CreatedAt,
-			&chain.UpdatedAt,
+			&chain.RootAgentType,
+			&chain.RootEventName,
+			&chain.RootReason,
+			&chain.LatestStepKind,
+			&chain.LatestDecision,
+			&chain.LatestStepReason,
 			&chain.StepCount,
 		); err != nil {
 			return nil, err
@@ -402,40 +610,68 @@ func collectTraceSteps(rows *sql.Rows) ([]TraceStep, error) {
 	for rows.Next() {
 		var step TraceStep
 		var parent sql.NullString
-		var payload string
+		var payload, before, after string
 		if err := rows.Scan(
 			&step.StepID,
 			&step.ChainID,
 			&parent,
-			&step.StepName,
+			&step.Seq,
+			&step.Kind,
+			&step.TmuxSession,
+			&step.PaneID,
+			&step.AgentType,
+			&step.FrameID,
+			&step.ParentFrameID,
+			&step.EventName,
+			&step.Decision,
+			&step.Reason,
 			&payload,
-			&step.StepIndex,
+			&before,
+			&after,
 			&step.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
 		step.ParentStepID = parent.String
-		step.Payload = json.RawMessage(payload)
+		step.PayloadJSON = json.RawMessage(payload)
+		step.BeforeJSON = json.RawMessage(before)
+		step.AfterJSON = json.RawMessage(after)
 		steps = append(steps, step)
 	}
 	return steps, rows.Err()
 }
 
-func encodeTraceCursor(createdAt int64, chainID string) string {
-	return strconv.FormatInt(createdAt, 10) + "|" + chainID
+func encodeTraceCursor(startedAt int64, chainID string) string {
+	return strconv.FormatInt(startedAt, 10) + "|" + chainID
 }
 
 func decodeTraceCursor(cursor string) (int64, string, error) {
-	createdAtText, chainID, ok := strings.Cut(cursor, "|")
+	startedAtText, chainID, ok := strings.Cut(cursor, "|")
 	if !ok {
 		return 0, "", fmt.Errorf("invalid trace cursor %q", cursor)
 	}
-	createdAt, err := strconv.ParseInt(createdAtText, 10, 64)
+	startedAt, err := strconv.ParseInt(startedAtText, 10, 64)
 	if err != nil {
 		return 0, "", fmt.Errorf("invalid trace cursor %q: %w", cursor, err)
 	}
 	if chainID == "" {
 		return 0, "", fmt.Errorf("invalid trace cursor %q", cursor)
 	}
-	return createdAt, chainID, nil
+	return startedAt, chainID, nil
+}
+
+func rawJSONText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "null"
+	}
+	return string(raw)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

@@ -150,5 +150,9 @@ func (s *AgentEventStore) Traces() (*TraceStore, error) {
 	if err := migrateTraceDB(s.db); err != nil {
 		return nil, err
 	}
-	return &TraceStore{db: s.db}, nil
+	return &TraceStore{
+		db:        s.db,
+		maxChains: defaultTraceMaxChains,
+		maxSteps:  defaultTraceMaxSteps,
+	}, nil
 }

@@ -18,34 +18,59 @@ func openTestTraceStore(t *testing.T) *TraceStore {
 
 func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 	s := openTestTraceStore(t)
+	s.maxChains = 10
+	s.maxSteps = 10
 
 	record := TraceRecord{
 		Chain: TraceChain{
-			ChainID:     "chain-1",
-			TmuxSession: "proj-a",
-			PaneID:      "%5",
-			AgentType:   "cc",
-			EventName:   "Stop",
-			CreatedAt:   100,
-			UpdatedAt:   200,
+			ChainID:          "chain-1",
+			StartedAt:        100,
+			CompletedAt:      200,
+			TerminalStatus:   "done",
+			TerminalReason:   "completed",
+			TmuxSession:      "proj-a",
+			PaneID:           "%5",
+			RootAgentType:    "cc",
+			RootEventName:    "SessionStart",
+			RootReason:       "bootstrap",
+			LatestStepKind:   "decision",
+			LatestDecision:   "continue",
+			LatestStepReason: "ready",
 		},
 		Steps: []TraceStep{
 			{
-				StepID:    "step-1",
-				ChainID:   "chain-1",
-				StepIndex: 0,
-				StepName:  "capture",
-				Payload:   json.RawMessage(`{"status":"queued"}`),
-				CreatedAt: 101,
+				StepID:      "step-1",
+				ChainID:     "chain-1",
+				Seq:         1,
+				Kind:        "decision",
+				TmuxSession: "proj-a",
+				PaneID:      "%5",
+				AgentType:   "cc",
+				FrameID:     "frame-1",
+				EventName:   "SessionStart",
+				Decision:    "continue",
+				Reason:      "ready",
+				PayloadJSON: json.RawMessage(`{"status":"queued"}`),
+				BeforeJSON:  json.RawMessage(`{"before":true}`),
+				AfterJSON:   json.RawMessage(`{"after":true}`),
+				CreatedAt:   101,
 			},
 			{
-				StepID:       "step-2",
-				ChainID:      "chain-1",
-				ParentStepID: "step-1",
-				StepIndex:    1,
-				StepName:     "derive",
-				Payload:      json.RawMessage(`{"status":"done"}`),
-				CreatedAt:    102,
+				StepID:        "step-2",
+				ChainID:       "chain-1",
+				ParentStepID:  "step-1",
+				Seq:           2,
+				Kind:          "terminal",
+				TmuxSession:   "proj-a",
+				PaneID:        "%5",
+				AgentType:     "cc",
+				FrameID:       "frame-1",
+				ParentFrameID: "frame-0",
+				EventName:     "Stop",
+				Decision:      "done",
+				Reason:        "completed",
+				PayloadJSON:   json.RawMessage(`{"status":"done"}`),
+				CreatedAt:     102,
 			},
 		},
 	}
@@ -61,96 +86,67 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected record, got nil")
 	}
-	if got.Chain.ChainID != record.Chain.ChainID {
-		t.Fatalf("chain_id = %q, want %q", got.Chain.ChainID, record.Chain.ChainID)
+	if got.Chain.TerminalStatus != "done" {
+		t.Fatalf("terminal_status = %q, want done", got.Chain.TerminalStatus)
 	}
-	if got.Chain.TmuxSession != record.Chain.TmuxSession {
-		t.Fatalf("tmux_session = %q, want %q", got.Chain.TmuxSession, record.Chain.TmuxSession)
+	if got.Chain.RootAgentType != "cc" || got.Chain.LatestDecision != "done" || got.Chain.LatestStepKind != "terminal" {
+		t.Fatalf("chain summary = %+v", got.Chain)
 	}
-	if got.Chain.StepCount != len(record.Steps) {
-		t.Fatalf("step_count = %d, want %d", got.Chain.StepCount, len(record.Steps))
+	if len(got.Steps) != 2 {
+		t.Fatalf("steps = %d, want 2", len(got.Steps))
 	}
-	if len(got.Steps) != len(record.Steps) {
-		t.Fatalf("steps = %d, want %d", len(got.Steps), len(record.Steps))
-	}
-	if got.Steps[0].StepName != "capture" || string(got.Steps[0].Payload) != `{"status":"queued"}` {
+	if got.Steps[0].Seq != 1 || got.Steps[0].Kind != "decision" {
 		t.Fatalf("first step = %+v", got.Steps[0])
 	}
 	if got.Steps[1].ParentStepID != "step-1" {
 		t.Fatalf("parent_step_id = %q, want step-1", got.Steps[1].ParentStepID)
 	}
-}
-
-func TestTraceStore_SaveChain_PreservesParentStepID(t *testing.T) {
-	s := openTestTraceStore(t)
-
-	record := TraceRecord{
-		Chain: TraceChain{
-			ChainID:     "chain-parent",
-			TmuxSession: "proj-a",
-			PaneID:      "%5",
-			AgentType:   "cc",
-			EventName:   "SessionStart",
-			CreatedAt:   300,
-			UpdatedAt:   300,
-		},
-		Steps: []TraceStep{
-			{StepID: "root", ChainID: "chain-parent", StepIndex: 0, StepName: "root", CreatedAt: 301},
-			{StepID: "child", ChainID: "chain-parent", ParentStepID: "root", StepIndex: 1, StepName: "child", CreatedAt: 302},
-		},
-	}
-
-	if err := s.SaveChain(record); err != nil {
-		t.Fatalf("SaveChain: %v", err)
-	}
-
-	got, err := s.GetChainRecord("chain-parent")
-	if err != nil {
-		t.Fatalf("GetChainRecord: %v", err)
-	}
-	if got == nil {
-		t.Fatal("expected record, got nil")
-	}
-	if got.Steps[1].ParentStepID != "root" {
-		t.Fatalf("parent_step_id = %q, want root", got.Steps[1].ParentStepID)
+	if string(got.Steps[0].BeforeJSON) != `{"before":true}` || string(got.Steps[0].AfterJSON) != `{"after":true}` {
+		t.Fatalf("payload fields = %+v", got.Steps[0])
 	}
 }
 
 func TestTraceStore_ListChains_PaginatesWithCursorAndBefore(t *testing.T) {
 	s := openTestTraceStore(t)
+	s.maxChains = 10
+	s.maxSteps = 20
 
 	for i := 0; i < 4; i++ {
 		record := TraceRecord{
 			Chain: TraceChain{
-				ChainID:     fmt.Sprintf("chain-%d", i),
-				TmuxSession: "proj-a",
-				PaneID:      "%5",
-				AgentType:   "cc",
-				EventName:   "Stop",
-				CreatedAt:   int64(100 + i),
-				UpdatedAt:   int64(100 + i),
+				ChainID:          fmt.Sprintf("chain-%d", i),
+				StartedAt:        int64(100 + i),
+				CompletedAt:      int64(200 + i),
+				TerminalStatus:   "done",
+				TerminalReason:   "ok",
+				TmuxSession:      "proj-a",
+				PaneID:           "%5",
+				RootAgentType:    "cc",
+				RootEventName:    "Stop",
+				RootReason:       "bootstrap",
+				LatestStepKind:   "terminal",
+				LatestDecision:   "done",
+				LatestStepReason: "ok",
 			},
 			Steps: []TraceStep{
-				{StepID: fmt.Sprintf("step-%d", i), ChainID: fmt.Sprintf("chain-%d", i), StepIndex: 0, StepName: "step", CreatedAt: int64(100 + i)},
+				{
+					StepID:      fmt.Sprintf("step-%d", i),
+					ChainID:     fmt.Sprintf("chain-%d", i),
+					Seq:         1,
+					Kind:        "terminal",
+					TmuxSession: "proj-a",
+					PaneID:      "%5",
+					AgentType:   "cc",
+					EventName:   "Stop",
+					Decision:    "done",
+					Reason:      "ok",
+					CreatedAt:   int64(100 + i),
+				},
 			},
 		}
 		if err := s.SaveChain(record); err != nil {
 			t.Fatalf("SaveChain %d: %v", i, err)
 		}
-	}
-	if err := s.SaveChain(TraceRecord{
-		Chain: TraceChain{
-			ChainID:     "chain-skip",
-			TmuxSession: "proj-b",
-			PaneID:      "%9",
-			AgentType:   "codex",
-			EventName:   "Stop",
-			CreatedAt:   999,
-			UpdatedAt:   999,
-		},
-		Steps: []TraceStep{{StepID: "skip-step", ChainID: "chain-skip", StepIndex: 0, StepName: "step", CreatedAt: 999}},
-	}); err != nil {
-		t.Fatalf("SaveChain skip: %v", err)
 	}
 
 	page1, err := s.ListChains(TraceListFilter{
@@ -193,78 +189,150 @@ func TestTraceStore_ListChains_PaginatesWithCursorAndBefore(t *testing.T) {
 	}
 }
 
-func TestTraceStore_RetentionCapsChainsAtMax(t *testing.T) {
+func TestTraceStore_RetentionDropsOldestWholeChainWhenStepCapExceeded(t *testing.T) {
 	s := openTestTraceStore(t)
+	s.maxChains = 10
+	s.maxSteps = 3
 
-	for i := 0; i < maxChains+1; i++ {
+	first := TraceRecord{
+		Chain: TraceChain{
+			ChainID:        "chain-a",
+			StartedAt:      1,
+			CompletedAt:    2,
+			TerminalStatus: "done",
+			TmuxSession:    "proj-a",
+			PaneID:         "%5",
+			RootAgentType:  "cc",
+			RootEventName:  "Stop",
+			RootReason:     "a",
+		},
+		Steps: []TraceStep{
+			{StepID: "a-1", ChainID: "chain-a", Seq: 1, Kind: "root", TmuxSession: "proj-a", PaneID: "%5", AgentType: "cc", EventName: "Stop", CreatedAt: 1},
+			{StepID: "a-2", ChainID: "chain-a", ParentStepID: "a-1", Seq: 2, Kind: "decision", TmuxSession: "proj-a", PaneID: "%5", AgentType: "cc", EventName: "Stop", CreatedAt: 2},
+		},
+	}
+	second := TraceRecord{
+		Chain: TraceChain{
+			ChainID:        "chain-b",
+			StartedAt:      3,
+			CompletedAt:    4,
+			TerminalStatus: "done",
+			TmuxSession:    "proj-a",
+			PaneID:         "%5",
+			RootAgentType:  "cc",
+			RootEventName:  "Stop",
+			RootReason:     "b",
+		},
+		Steps: []TraceStep{
+			{StepID: "b-1", ChainID: "chain-b", Seq: 1, Kind: "root", TmuxSession: "proj-a", PaneID: "%5", AgentType: "cc", EventName: "Stop", CreatedAt: 3},
+			{StepID: "b-2", ChainID: "chain-b", ParentStepID: "b-1", Seq: 2, Kind: "decision", TmuxSession: "proj-a", PaneID: "%5", AgentType: "cc", EventName: "Stop", CreatedAt: 4},
+		},
+	}
+
+	if err := s.SaveChain(first); err != nil {
+		t.Fatalf("SaveChain first: %v", err)
+	}
+	if err := s.SaveChain(second); err != nil {
+		t.Fatalf("SaveChain second: %v", err)
+	}
+
+	gotA, err := s.GetChainRecord("chain-a")
+	if err != nil {
+		t.Fatalf("GetChainRecord a: %v", err)
+	}
+	if gotA != nil {
+		t.Fatalf("expected chain-a to be evicted, got %+v", gotA.Chain)
+	}
+
+	gotB, err := s.GetChainRecord("chain-b")
+	if err != nil {
+		t.Fatalf("GetChainRecord b: %v", err)
+	}
+	if gotB == nil {
+		t.Fatal("expected chain-b to remain")
+	}
+	if len(gotB.Steps) != 2 {
+		t.Fatalf("chain-b steps = %d, want 2", len(gotB.Steps))
+	}
+}
+
+func TestTraceStore_RetentionDropsOldestWholeChainWhenChainCapExceeded(t *testing.T) {
+	s := openTestTraceStore(t)
+	s.maxChains = 2
+	s.maxSteps = 100
+
+	for i := 0; i < 3; i++ {
 		record := TraceRecord{
 			Chain: TraceChain{
-				ChainID:     fmt.Sprintf("chain-%05d", i),
-				TmuxSession: "proj-a",
-				PaneID:      "%5",
-				AgentType:   "cc",
-				EventName:   "Stop",
-				CreatedAt:   int64(i + 1),
-				UpdatedAt:   int64(i + 1),
+				ChainID:        fmt.Sprintf("chain-%d", i),
+				StartedAt:      int64(i + 1),
+				CompletedAt:    int64(i + 2),
+				TerminalStatus: "done",
+				TmuxSession:    "proj-a",
+				PaneID:         "%5",
+				RootAgentType:  "cc",
+				RootEventName:  "Stop",
+				RootReason:     fmt.Sprintf("reason-%d", i),
 			},
-			Steps: []TraceStep{{StepID: fmt.Sprintf("step-%05d", i), ChainID: fmt.Sprintf("chain-%05d", i), StepIndex: 0, StepName: "step", CreatedAt: int64(i + 1)}},
+			Steps: []TraceStep{
+				{StepID: fmt.Sprintf("step-%d", i), ChainID: fmt.Sprintf("chain-%d", i), Seq: 1, Kind: "terminal", TmuxSession: "proj-a", PaneID: "%5", AgentType: "cc", EventName: "Stop", CreatedAt: int64(i + 1)},
+			},
 		}
 		if err := s.SaveChain(record); err != nil {
 			t.Fatalf("SaveChain %d: %v", i, err)
 		}
 	}
 
-	page, err := s.ListChains(TraceListFilter{Limit: maxChains + 10})
+	got0, err := s.GetChainRecord("chain-0")
 	if err != nil {
-		t.Fatalf("ListChains: %v", err)
+		t.Fatalf("GetChainRecord chain-0: %v", err)
 	}
-	if len(page.Chains) != maxChains {
-		t.Fatalf("chains len = %d, want %d", len(page.Chains), maxChains)
-	}
-	if page.Chains[len(page.Chains)-1].ChainID != "chain-00001" {
-		t.Fatalf("oldest chain kept = %q, want chain-00001", page.Chains[len(page.Chains)-1].ChainID)
+	if got0 != nil {
+		t.Fatalf("expected chain-0 to be evicted, got %+v", got0.Chain)
 	}
 }
 
-func TestTraceStore_RetentionCapsStepsAtMax(t *testing.T) {
+func TestTraceStore_RejectsCrossChainParentStep(t *testing.T) {
 	s := openTestTraceStore(t)
+	s.maxChains = 10
+	s.maxSteps = 10
 
-	steps := make([]TraceStep, 0, maxSteps+1)
-	for i := 0; i < maxSteps+1; i++ {
-		steps = append(steps, TraceStep{
-			StepID:    fmt.Sprintf("step-%06d", i),
-			ChainID:   "chain-steps",
-			StepIndex: i,
-			StepName:  "step",
-			CreatedAt: int64(i + 1),
-		})
-	}
 	if err := s.SaveChain(TraceRecord{
 		Chain: TraceChain{
-			ChainID:     "chain-steps",
-			TmuxSession: "proj-a",
-			PaneID:      "%5",
-			AgentType:   "cc",
-			EventName:   "Stop",
-			CreatedAt:   1,
-			UpdatedAt:   1,
+			ChainID:        "chain-a",
+			StartedAt:      1,
+			CompletedAt:    2,
+			TerminalStatus: "done",
+			TmuxSession:    "proj-a",
+			PaneID:         "%5",
+			RootAgentType:  "cc",
+			RootEventName:  "Stop",
+			RootReason:     "root",
 		},
-		Steps: steps,
+		Steps: []TraceStep{
+			{StepID: "a-1", ChainID: "chain-a", Seq: 1, Kind: "root", TmuxSession: "proj-a", PaneID: "%5", AgentType: "cc", EventName: "Stop", CreatedAt: 1},
+		},
 	}); err != nil {
-		t.Fatalf("SaveChain: %v", err)
+		t.Fatalf("SaveChain chain-a: %v", err)
 	}
 
-	got, err := s.GetChainRecord("chain-steps")
-	if err != nil {
-		t.Fatalf("GetChainRecord: %v", err)
-	}
-	if got == nil {
-		t.Fatal("expected record, got nil")
-	}
-	if len(got.Steps) != maxSteps {
-		t.Fatalf("steps len = %d, want %d", len(got.Steps), maxSteps)
-	}
-	if got.Steps[0].StepID != "step-000001" {
-		t.Fatalf("oldest kept step = %q, want step-000001", got.Steps[0].StepID)
+	err := s.SaveChain(TraceRecord{
+		Chain: TraceChain{
+			ChainID:        "chain-b",
+			StartedAt:      3,
+			CompletedAt:    4,
+			TerminalStatus: "done",
+			TmuxSession:    "proj-a",
+			PaneID:         "%5",
+			RootAgentType:  "cc",
+			RootEventName:  "Stop",
+			RootReason:     "root",
+		},
+		Steps: []TraceStep{
+			{StepID: "b-1", ChainID: "chain-b", ParentStepID: "a-1", Seq: 1, Kind: "decision", TmuxSession: "proj-a", PaneID: "%5", AgentType: "cc", EventName: "Stop", CreatedAt: 3},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected cross-chain parent step to fail")
 	}
 }

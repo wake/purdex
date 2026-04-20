@@ -131,3 +131,17 @@ func TestAgentEventStore_Delete(t *testing.T) {
 		t.Error("expected nil after delete")
 	}
 }
+
+func TestAgentEventStore_TracesDefaults(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	traces, err := s.Traces()
+	if err != nil {
+		t.Fatalf("traces: %v", err)
+	}
+	if traces.maxChains != 10000 {
+		t.Fatalf("maxChains = %d, want 10000", traces.maxChains)
+	}
+	if traces.maxSteps != 100000 {
+		t.Fatalf("maxSteps = %d, want 100000", traces.maxSteps)
+	}
+}
