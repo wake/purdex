@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.192] - 2026-04-20
+
+### Feat(sync): P1 Sync History + Restore (#488)
+
+- **SnapshotStore on IndexedDB**：`lib/storage/idb.ts` 版本感知 cache（rejected / terminated / blocking 時重連），`features/sync/snapshot-store.ts` 提供 `init / create / get / list / delete / compact / demoteSessionPristine / rotateSessionPristine / clear`，`list` 僅回 metadata，tiered compaction 每層保留最新（monthly bucket cap 12）。
+- **Restore contract**：`useSyncStore.restoreFromSnapshot(snapshot, source, options?)` 引入 `PreOpFailedError / SnapshotCoverageError / RestoreFailedError` 與 `RestoreOptions (skipPreOp, allowMissingContributors)`；snapshot 需涵蓋完整 contributor registry，進入 deserialize 前清 `pendingConflicts` 避免 partial-restore 後 stale conflict 覆寫 restored 資料；`restoreTokenRef` 隔離 in-flight restore 不跨 row 污染。
+- **Safety net**：`createPreOperationSnapshot` 與 `ensureSessionPristine` 序列化完整 contributor registry（不是 `enabledModules`）；pristine rotation 走單一 IDB readwrite transaction，跨 tab 也能收斂到恰好一份 pristine；quota retry：`createSnapshot` put 失敗 → compact → retry 一次。
+- **Auth boundary**：`contributors/hosts.ts` full-replace 時僅在 endpoint `(ip, port)` 完全一致才保留 token，否則強制 re-auth，避免惡意 bundle 將 bearer token 重指向攻擊者 daemon。
+- **UI**：雙層路由 `/settings/<section>/<subsection>` + `SettingsRouteContext`；`SnapshotHistoryPage` + `HistoryTabs` + `HistoryList` + `SnapshotDetail` + `SnapshotRestoreDialog`（confirm / preOpFailed / coverageWarning 三模態，override 跨 retry 累積）；dialog Cancel 在 restore in-flight 時 disabled，阻斷並行 restore。
+- **Integration**：`manual-provider.ts` 匯入前建立 pre-import snapshot（失敗不阻斷匯入）；`App.tsx` bootstrap 呼叫 `ensureSessionPristine`（rejection 已 catch）；i18n 新增 45+2 key（en + zh-TW）。
+- **Scope**：daemon `/api/sync/snapshots` + Remote tab 接線留給 PR B；Remote tab 目前對 daemon user 顯示占位。
+- **Known issues（後續 PR 處理）**：[#492](https://github.com/wake/purdex/issues/492) · [#493](https://github.com/wake/purdex/issues/493) · [#494](https://github.com/wake/purdex/issues/494) · [#495](https://github.com/wake/purdex/issues/495) · [#503](https://github.com/wake/purdex/issues/503) · [#510](https://github.com/wake/purdex/issues/510) · [#511](https://github.com/wake/purdex/issues/511) · [#512](https://github.com/wake/purdex/issues/512) · [#514](https://github.com/wake/purdex/issues/514)。
+
 ## [1.0.0-alpha.191] - 2026-04-20
 
 ### Feat(agent): identity and liveness convergence phases 1-7 (#489)
