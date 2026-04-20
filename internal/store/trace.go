@@ -88,42 +88,181 @@ type TraceStore struct {
 }
 
 func migrateTraceDB(db *sql.DB) error {
-	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS agent_trace_chains (
-			chain_id          TEXT PRIMARY KEY,
-			started_at        INTEGER NOT NULL DEFAULT 0,
-			completed_at      INTEGER NOT NULL DEFAULT 0,
-			terminal_status   TEXT NOT NULL DEFAULT '',
-			terminal_reason   TEXT NOT NULL DEFAULT '',
-			tmux_session      TEXT NOT NULL DEFAULT '',
-			pane_id           TEXT NOT NULL DEFAULT '',
-			root_agent_type   TEXT NOT NULL DEFAULT '',
-			root_event_name   TEXT NOT NULL DEFAULT '',
-			root_reason       TEXT NOT NULL DEFAULT '',
-			latest_step_kind  TEXT NOT NULL DEFAULT '',
-			latest_decision   TEXT NOT NULL DEFAULT '',
-			latest_step_reason TEXT NOT NULL DEFAULT '',
-			step_count        INTEGER NOT NULL DEFAULT 0,
-			updated_at        INTEGER NOT NULL DEFAULT 0
-		)
-	`); err != nil {
+	if err := setTraceForeignKeys(db, false); err != nil {
 		return err
 	}
-	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN completed_at INTEGER NOT NULL DEFAULT 0`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN terminal_status TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN terminal_reason TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN tmux_session TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN pane_id TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN root_agent_type TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN root_event_name TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN root_reason TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN latest_step_kind TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN latest_decision TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN latest_step_reason TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN step_count INTEGER NOT NULL DEFAULT 0`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_chains ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`)
+	defer func() {
+		_ = setTraceForeignKeys(db, true)
+	}()
 
-	if _, err := db.Exec(`
+	chainCols, err := tableColumns(db, "agent_trace_chains")
+	if err != nil {
+		return err
+	}
+	if len(chainCols) == 0 {
+		if err := createTraceChainsTable(db); err != nil {
+			return err
+		}
+	} else if needsChainRebuild(chainCols) {
+		if err := rebuildLegacyTraceChains(db); err != nil {
+			return err
+		}
+	}
+
+	stepCols, err := tableColumns(db, "agent_trace_steps")
+	if err != nil {
+		return err
+	}
+	if len(stepCols) == 0 {
+		if err := createTraceStepsTable(db); err != nil {
+			return err
+		}
+	} else if needsStepRebuild(stepCols, db) {
+		if err := rebuildLegacyTraceSteps(db); err != nil {
+			return err
+		}
+	}
+
+	return createTraceIndexes(db)
+}
+
+func setTraceForeignKeys(db *sql.DB, enabled bool) error {
+	state := "OFF"
+	if enabled {
+		state = "ON"
+	}
+	_, err := db.Exec("PRAGMA foreign_keys = " + state)
+	return err
+}
+
+func tableColumns(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	cols := make(map[string]bool)
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			colType string
+			notNull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		cols[name] = true
+	}
+	return cols, rows.Err()
+}
+
+func needsChainRebuild(cols map[string]bool) bool {
+	required := []string{
+		"started_at",
+		"completed_at",
+		"terminal_status",
+		"terminal_reason",
+		"tmux_session",
+		"pane_id",
+		"root_agent_type",
+		"root_event_name",
+		"root_reason",
+		"latest_step_kind",
+		"latest_decision",
+		"latest_step_reason",
+		"step_count",
+		"updated_at",
+	}
+	for _, col := range required {
+		if !cols[col] {
+			return true
+		}
+	}
+	return false
+}
+
+func needsStepRebuild(cols map[string]bool, db *sql.DB) bool {
+	required := []string{
+		"seq",
+		"kind",
+		"tmux_session",
+		"pane_id",
+		"agent_type",
+		"frame_id",
+		"parent_frame_id",
+		"event_name",
+		"decision",
+		"reason",
+		"payload_json",
+		"before_json",
+		"after_json",
+		"created_at",
+	}
+	for _, col := range required {
+		if !cols[col] {
+			return true
+		}
+	}
+	return !hasStepParentCompositeFK(db)
+}
+
+func hasStepParentCompositeFK(db *sql.DB) bool {
+	rows, err := db.Query(`PRAGMA foreign_key_list(agent_trace_steps)`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			id    int
+			seq   int
+			table string
+			from  string
+			to    string
+			onUpd string
+			onDel string
+			match string
+		)
+		if err := rows.Scan(&id, &seq, &table, &from, &to, &onUpd, &onDel, &match); err != nil {
+			return false
+		}
+		if table == "agent_trace_steps" && from == "parent_step_id" && to == "step_id" {
+			return true
+		}
+	}
+	return false
+}
+
+func createTraceChainsTable(db *sql.DB) error {
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS agent_trace_chains (
+			chain_id           TEXT PRIMARY KEY,
+			started_at         INTEGER NOT NULL DEFAULT 0,
+			completed_at       INTEGER NOT NULL DEFAULT 0,
+			terminal_status     TEXT NOT NULL DEFAULT '',
+			terminal_reason     TEXT NOT NULL DEFAULT '',
+			tmux_session        TEXT NOT NULL DEFAULT '',
+			pane_id             TEXT NOT NULL DEFAULT '',
+			root_agent_type     TEXT NOT NULL DEFAULT '',
+			root_event_name     TEXT NOT NULL DEFAULT '',
+			root_reason         TEXT NOT NULL DEFAULT '',
+			latest_step_kind    TEXT NOT NULL DEFAULT '',
+			latest_decision     TEXT NOT NULL DEFAULT '',
+			latest_step_reason  TEXT NOT NULL DEFAULT '',
+			step_count          INTEGER NOT NULL DEFAULT 0,
+			updated_at          INTEGER NOT NULL DEFAULT 0
+		)
+	`)
+	return err
+}
+
+func createTraceStepsTable(db *sql.DB) error {
+	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS agent_trace_steps (
 			step_id         TEXT PRIMARY KEY,
 			chain_id        TEXT NOT NULL,
@@ -145,24 +284,11 @@ func migrateTraceDB(db *sql.DB) error {
 			FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
 			FOREIGN KEY (chain_id, parent_step_id) REFERENCES agent_trace_steps(chain_id, step_id) ON DELETE CASCADE
 		)
-	`); err != nil {
-		return err
-	}
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN seq INTEGER NOT NULL DEFAULT 0`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN kind TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN tmux_session TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN pane_id TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN frame_id TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN parent_frame_id TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN event_name TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN decision TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN reason TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN payload_json TEXT NOT NULL DEFAULT 'null'`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN before_json TEXT NOT NULL DEFAULT 'null'`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN after_json TEXT NOT NULL DEFAULT 'null'`)
-	_, _ = db.Exec(`ALTER TABLE agent_trace_steps ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0`)
+	`)
+	return err
+}
 
+func createTraceIndexes(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_chains_started ON agent_trace_chains(started_at DESC, chain_id DESC)`); err != nil {
 		return err
 	}
@@ -185,6 +311,95 @@ func migrateTraceDB(db *sql.DB) error {
 		return err
 	}
 	return nil
+}
+
+func rebuildLegacyTraceChains(db *sql.DB) error {
+	if _, err := db.Exec(`ALTER TABLE agent_trace_chains RENAME TO agent_trace_chains_legacy`); err != nil {
+		return err
+	}
+	if err := createTraceChainsTable(db); err != nil {
+		return err
+	}
+	_, err := db.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, started_at, completed_at, terminal_status, terminal_reason,
+			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
+			latest_step_kind, latest_decision, latest_step_reason, step_count, updated_at
+		)
+		SELECT
+			chain_id,
+			created_at,
+			updated_at,
+			'',
+			'',
+			tmux_session,
+			pane_id,
+			agent_type,
+			event_name,
+			'',
+			'',
+			'',
+			'',
+			0,
+			updated_at
+		FROM agent_trace_chains_legacy
+	`)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`DROP TABLE agent_trace_chains_legacy`)
+	return err
+}
+
+func rebuildLegacyTraceSteps(db *sql.DB) error {
+	if _, err := db.Exec(`ALTER TABLE agent_trace_steps RENAME TO agent_trace_steps_legacy`); err != nil {
+		return err
+	}
+	if err := createTraceStepsTable(db); err != nil {
+		return err
+	}
+	_, err := db.Exec(`
+		INSERT INTO agent_trace_steps (
+			step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+			agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+			payload_json, before_json, after_json, created_at
+		)
+		SELECT
+			s.step_id,
+			s.chain_id,
+			CASE
+				WHEN s.parent_step_id IS NOT NULL
+				 AND EXISTS (
+					SELECT 1
+					FROM agent_trace_steps_legacy p
+					WHERE p.chain_id = s.chain_id AND p.step_id = s.parent_step_id
+				 )
+				THEN s.parent_step_id
+				ELSE NULL
+			END,
+			s.step_index,
+			s.step_name,
+			c.tmux_session,
+			c.pane_id,
+			c.root_agent_type,
+			'',
+			'',
+			c.root_event_name,
+			'',
+			'',
+			COALESCE(s.payload, 'null'),
+			'null',
+			'null',
+			s.created_at
+		FROM agent_trace_steps_legacy s
+		JOIN agent_trace_chains c ON c.chain_id = s.chain_id
+		ORDER BY s.chain_id ASC, s.step_index ASC, s.created_at ASC, s.step_id ASC
+	`)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`DROP TABLE agent_trace_steps_legacy`)
+	return err
 }
 
 // SaveChain stores a chain and its steps atomically, replacing any existing
@@ -464,9 +679,7 @@ func normalizeTraceRecord(record TraceRecord) (TraceChain, []TraceStep, error) {
 	if chain.CompletedAt == 0 {
 		chain.CompletedAt = chain.StartedAt
 	}
-	if chain.StepCount == 0 {
-		chain.StepCount = len(steps)
-	}
+	chain.StepCount = len(steps)
 	return chain, steps, nil
 }
 

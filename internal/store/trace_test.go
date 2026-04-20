@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -24,6 +25,7 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 	record := TraceRecord{
 		Chain: TraceChain{
 			ChainID:          "chain-1",
+			StepCount:        99,
 			StartedAt:        100,
 			CompletedAt:      200,
 			TerminalStatus:   "done",
@@ -86,6 +88,9 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected record, got nil")
 	}
+	if got.Chain.StepCount != 2 {
+		t.Fatalf("step_count = %d, want 2", got.Chain.StepCount)
+	}
 	if got.Chain.TerminalStatus != "done" {
 		t.Fatalf("terminal_status = %q, want done", got.Chain.TerminalStatus)
 	}
@@ -103,6 +108,101 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 	}
 	if string(got.Steps[0].BeforeJSON) != `{"before":true}` || string(got.Steps[0].AfterJSON) != `{"after":true}` {
 		t.Fatalf("payload fields = %+v", got.Steps[0])
+	}
+}
+
+func TestTraceStore_MigratesLegacySchemaAndReadsListChains(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	seedLegacyTraceSchema(t, s.db)
+
+	if _, err := s.Traces(); err != nil {
+		t.Fatalf("Traces: %v", err)
+	}
+	store := &TraceStore{db: s.db, maxChains: 10, maxSteps: 10}
+
+	chain := TraceChain{
+		ChainID:          "legacy-chain",
+		StepCount:        77,
+		StartedAt:        123,
+		CompletedAt:      456,
+		TerminalStatus:   "done",
+		TerminalReason:   "legacy",
+		TmuxSession:      "proj-legacy",
+		PaneID:           "%9",
+		RootAgentType:    "cc",
+		RootEventName:    "Stop",
+		RootReason:       "bootstrap",
+		LatestStepKind:   "terminal",
+		LatestDecision:   "done",
+		LatestStepReason: "legacy",
+	}
+	if err := store.SaveChain(TraceRecord{
+		Chain: chain,
+		Steps: []TraceStep{
+			{StepID: "legacy-step", ChainID: "legacy-chain", Seq: 1, Kind: "terminal", TmuxSession: "proj-legacy", PaneID: "%9", AgentType: "cc", EventName: "Stop", Decision: "done", Reason: "legacy", CreatedAt: 124},
+		},
+	}); err != nil {
+		t.Fatalf("SaveChain: %v", err)
+	}
+
+	page, err := store.ListChains(TraceListFilter{
+		TmuxSession: "proj-legacy",
+		PaneID:      "%9",
+		AgentType:   "cc",
+		EventName:   "Stop",
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("ListChains: %v", err)
+	}
+	if len(page.Chains) != 1 {
+		t.Fatalf("chains = %d, want 1", len(page.Chains))
+	}
+	if page.Chains[0].StartedAt != 123 {
+		t.Fatalf("started_at = %d, want 123", page.Chains[0].StartedAt)
+	}
+}
+
+func TestTraceStore_MigratesLegacyStepSchemaAndBlocksCrossChainParent(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	seedLegacyTraceSchema(t, s.db)
+
+	if _, err := s.Traces(); err != nil {
+		t.Fatalf("Traces: %v", err)
+	}
+
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, started_at, completed_at, terminal_status, terminal_reason,
+			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
+			latest_step_kind, latest_decision, latest_step_reason, step_count, updated_at
+		) VALUES
+		('chain-a', 1, 2, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 1, 2),
+		('chain-b', 3, 4, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 1, 4)
+	`); err != nil {
+		t.Fatalf("seed chains: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_steps (
+			step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+			agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+			payload_json, before_json, after_json, created_at
+		) VALUES
+		('a-1', 'chain-a', NULL, 1, 'root', 'proj-a', '%1', 'cc', 'frame-a', '', 'Stop', '', '', 'null', 'null', 'null', 1)
+	`); err != nil {
+		t.Fatalf("seed step: %v", err)
+	}
+
+	_, err := s.db.Exec(`
+		INSERT INTO agent_trace_steps (
+			step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+			agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+			payload_json, before_json, after_json, created_at
+		) VALUES
+		('b-1', 'chain-b', 'a-1', 1, 'decision', 'proj-a', '%1', 'cc', 'frame-b', '', 'Stop', 'continue', 'needs-parent', 'null', 'null', 'null', 3)
+	`)
+	if err == nil {
+		t.Fatal("expected cross-chain parent insert to fail")
 	}
 }
 
@@ -334,5 +434,38 @@ func TestTraceStore_RejectsCrossChainParentStep(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected cross-chain parent step to fail")
+	}
+}
+
+func seedLegacyTraceSchema(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	if _, err := db.Exec(`
+		CREATE TABLE agent_trace_chains (
+			chain_id     TEXT PRIMARY KEY,
+			tmux_session TEXT NOT NULL,
+			pane_id      TEXT NOT NULL,
+			agent_type   TEXT NOT NULL,
+			event_name   TEXT NOT NULL,
+			created_at   INTEGER NOT NULL,
+			updated_at   INTEGER NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create legacy chains: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE agent_trace_steps (
+			step_id        TEXT PRIMARY KEY,
+			chain_id       TEXT NOT NULL,
+			parent_step_id TEXT,
+			step_name      TEXT NOT NULL,
+			payload        TEXT NOT NULL DEFAULT 'null',
+			step_index     INTEGER NOT NULL,
+			created_at     INTEGER NOT NULL,
+			FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
+			FOREIGN KEY (parent_step_id) REFERENCES agent_trace_steps(step_id) ON DELETE SET NULL
+		)
+	`); err != nil {
+		t.Fatalf("create legacy steps: %v", err)
 	}
 }
