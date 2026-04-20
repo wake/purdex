@@ -32,6 +32,11 @@ func OpenAgentEvent(path string) (*AgentEventStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open agent event db: %w", err)
 	}
+	if path == ":memory:" {
+		// Keep a single connection so the in-memory schema is shared across
+		// all queries and transactions in tests.
+		db.SetMaxOpenConns(1)
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
@@ -139,4 +144,15 @@ func (s *AgentEventStore) Frames() (*FramesStore, error) {
 		return nil, err
 	}
 	return &FramesStore{db: s.db}, nil
+}
+
+func (s *AgentEventStore) Traces() (*TraceStore, error) {
+	if err := migrateTraceDB(s.db); err != nil {
+		return nil, err
+	}
+	return &TraceStore{
+		db:        s.db,
+		maxChains: defaultTraceMaxChains,
+		maxSteps:  defaultTraceMaxSteps,
+	}, nil
 }

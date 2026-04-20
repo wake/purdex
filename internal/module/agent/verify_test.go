@@ -18,6 +18,9 @@ func newVerifyTestModule(t *testing.T) *Module {
 	m := New(events)
 	m.registry = agentpkg.NewRegistry()
 	m.tmux = tmux.NewFakeExecutor()
+	if m.traceSink != nil {
+		t.Cleanup(func() { m.traceSink.Close() })
+	}
 	return m
 }
 

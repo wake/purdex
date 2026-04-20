@@ -202,6 +202,88 @@ export async function agentUpload(
   return res.json()
 }
 
+/* ─── Agent Monitor API ─── */
+
+export interface AgentMonitorChainSummary {
+  chain_id: string
+  started_at: number
+  completed_at: number
+  terminal_status: string
+  terminal_reason: string
+  tmux_session: string
+  pane_id: string
+  root_agent_type: string
+  root_event_name: string
+  root_reason: string
+  latest_step_kind: string
+  latest_decision: string
+  latest_step_reason: string
+  step_count: number
+}
+
+export interface AgentMonitorStep {
+  step_id: string
+  chain_id: string
+  parent_step_id?: string
+  seq: number
+  kind: string
+  tmux_session: string
+  pane_id: string
+  agent_type: string
+  frame_id: string
+  parent_frame_id: string
+  event_name: string
+  decision: string
+  reason: string
+  payload_json: string
+  before_json: string
+  after_json: string
+  created_at: number
+}
+
+export interface AgentMonitorStepNode {
+  step: AgentMonitorStep
+  children: AgentMonitorStepNode[]
+}
+
+export interface AgentMonitorProjectionSummary {
+  tmux_session: string
+  pane_id: string
+  primary_frame_id: string
+  top_frame_id: string
+  top_agent_type: string
+  latest_chain_id: string
+}
+
+export async function fetchAgentMonitorChains(
+  hostId: string,
+  query = new URLSearchParams(),
+): Promise<{ chains: AgentMonitorChainSummary[]; next_cursor: string }> {
+  const qs = query.toString()
+  const res = await hostFetch(hostId, `/api/agent/monitor/chains${qs ? `?${qs}` : ''}`)
+  if (!res.ok) throw new Error(`fetchAgentMonitorChains failed: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchAgentMonitorChain(
+  hostId: string,
+  chainId: string,
+): Promise<{ chain: AgentMonitorChainSummary; step_tree: AgentMonitorStepNode[] }> {
+  const res = await hostFetch(hostId, `/api/agent/monitor/chains/${chainId}`)
+  if (!res.ok) throw new Error(`fetchAgentMonitorChain failed: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchAgentMonitorProjection(
+  hostId: string,
+  query: URLSearchParams,
+): Promise<{ projection: AgentMonitorProjectionSummary | null }> {
+  const qs = query.toString()
+  const res = await hostFetch(hostId, `/api/agent/monitor/projection${qs ? `?${qs}` : ''}`)
+  if (!res.ok) throw new Error(`fetchAgentMonitorProjection failed: ${res.status}`)
+  return res.json()
+}
+
 /* ─── Pairing API (Phase 5a) ─── */
 
 /** POST /api/pair/verify — Quick mode: verify pairing secret, get setupSecret. */

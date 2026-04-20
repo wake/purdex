@@ -68,6 +68,14 @@ describe('registerBuiltinModules', () => {
     expect(electron).toBeDefined()
   })
 
+  it('registers tmux agent monitor section in dev mode', () => {
+    registerBuiltinModules()
+    const monitor = getSettingsSections().find((s) => s.id === 'tmux-agent-monitor')
+    expect(monitor).toBeDefined()
+    expect(monitor?.label).toBe('settings.section.tmux_agent_monitor')
+    expect(monitor?.order).toBe(21)
+  })
+
   it('registers interface section with order=2', () => {
     registerBuiltinModules()
     const sections = getSettingsSections()

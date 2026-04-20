@@ -27,9 +27,11 @@ type Module struct {
 	core      *core.Core
 	events    *store.AgentEventStore
 	frames    *store.FramesStore
+	traces    *store.TraceStore
 	sessions  session.SessionProvider
 	registry  *agentpkg.Registry
 	uploadDir string
+	traceSink *hookTraceSink
 
 	prober *probe.Prober
 	tmux   tmux.Executor
@@ -62,12 +64,15 @@ type Module struct {
 // New creates a new agent Module backed by the given AgentEventStore.
 func New(events *store.AgentEventStore) *Module {
 	var frames *store.FramesStore
+	var traces *store.TraceStore
 	if events != nil {
 		frames, _ = events.Frames()
+		traces, _ = events.Traces()
 	}
-	return &Module{
+	m := &Module{
 		events:          events,
 		frames:          frames,
+		traces:          traces,
 		registry:        agentpkg.NewRegistry(),
 		currentStatus:   make(map[string]agentpkg.Status),
 		subagents:       make(map[string][]string),
@@ -75,6 +80,10 @@ func New(events *store.AgentEventStore) *Module {
 		statusSnapshots: make(map[string]statusSnapshot),
 		testObservers:   make(map[string]*testObserver),
 	}
+	if traces != nil {
+		m.traceSink = newHookTraceSink(traces)
+	}
+	return m
 }
 
 func (m *Module) Name() string           { return "agent" }
@@ -139,6 +148,9 @@ func (m *Module) Init(c *core.Core) error {
 // RegisterRoutes registers the agent API endpoints.
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/event", m.handleEvent)
+	mux.HandleFunc("GET /api/agent/monitor/chains", m.handleMonitorChains)
+	mux.HandleFunc("GET /api/agent/monitor/chains/{id}", m.handleMonitorChain)
+	mux.HandleFunc("GET /api/agent/monitor/projection", m.handleMonitorProjection)
 	mux.HandleFunc("GET /api/hooks/{agent}/status", m.handleHookStatus)
 	mux.HandleFunc("POST /api/hooks/{agent}/setup", m.handleHookSetup)
 	mux.HandleFunc("GET /api/agent/{agent}/statusline/status", m.handleStatuslineStatus)
@@ -199,6 +211,9 @@ func (m *Module) Stop(_ context.Context) error {
 	m.mu.Lock()
 	m.activeWatchers = make(map[string]string)
 	m.mu.Unlock()
+	if m.traceSink != nil {
+		m.traceSink.Close()
+	}
 	return nil
 }
 

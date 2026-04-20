@@ -82,10 +82,22 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	trace := beginHookTrace(m.traceSink, req)
+	traceFinished := false
+	defer func() {
+		if !traceFinished {
+			trace.Finish("aborted", "handler_return")
+		}
+	}()
+
 	if decision := verifyEventFn(m, req); !decision.Accepted {
+		trace.Verify(req, "rejected", decision.Reason, map[string]any{"decision": "rejected", "reason": decision.Reason})
+		trace.Finish("completed", "verify_rejected")
+		traceFinished = true
 		writeVerifyRejected(w, req, decision.Reason)
 		return
 	}
+	trace.Verify(req, "accepted", "verify_passed", map[string]any{"decision": "accepted"})
 
 	broadcastTs := time.Now().UnixNano()
 
@@ -111,6 +123,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 				req.EventName == "SessionStart" ||
 				req.EventName == "Stop"
 			if !canClear {
+				normalized := buildProjectionNormalized(nil, req.AgentType, req.EventName, broadcastTs, result)
+				trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, "skipped", "error_guard_blocked")
+				trace.Finish("completed", "emit_skipped")
+				traceFinished = true
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 				return
@@ -118,24 +134,33 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	projection, err := m.applyFrameEvent(req, result, broadcastTs)
+	paneProjection, frameMeta, err := m.applyFrameEvent(req, result, broadcastTs)
 	if err != nil {
 		log.Printf("[agent] frame event: %v", err)
+		trace.Finish("aborted", "frame_apply_failed")
+		traceFinished = true
 		http.Error(w, `{"error":"frame update failed"}`, http.StatusInternalServerError)
 		return
 	}
+	trace.Frame(req, frameMeta)
+	projection := paneProjection
 	if req.TmuxSession != "" {
 		projection, err = m.projectionForSession(req.TmuxSession)
 		if err != nil {
 			log.Printf("[agent] session projection: %v", err)
+			trace.Finish("aborted", "projection_failed")
+			traceFinished = true
 			http.Error(w, `{"error":"frame update failed"}`, http.StatusInternalServerError)
 			return
 		}
 	}
+	trace.Projection(req, summarizeProjectionChange(paneProjection, projection))
 
 	if req.TmuxSession != "" && m.frames != nil && m.events != nil {
 		if err := m.events.Delete(req.TmuxSession); err != nil {
 			log.Printf("[agent] clear legacy event: %v", err)
+			trace.Finish("aborted", "legacy_delete_failed")
+			traceFinished = true
 			http.Error(w, `{"error":"store failed"}`, http.StatusInternalServerError)
 			return
 		}
@@ -147,7 +172,14 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
 		m.mu.Unlock()
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.EventName, broadcastTs, result)
-		m.broadcastToSession(req.TmuxSession, normalized)
+		emitDecision, emitReason := m.emitHookToSession(req.TmuxSession, normalized)
+		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
+		if emitDecision == "broadcasted" {
+			trace.Finish("completed", "emit_broadcasted")
+		} else {
+			trace.Finish("completed", "emit_skipped")
+		}
+		traceFinished = true
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		return
@@ -190,7 +222,14 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
 	m.mu.Unlock()
-	m.broadcastToSession(req.TmuxSession, normalized)
+	emitDecision, emitReason := m.emitHookToSession(req.TmuxSession, normalized)
+	trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
+	if emitDecision == "broadcasted" {
+		trace.Finish("completed", "emit_broadcasted")
+	} else {
+		trace.Finish("completed", "emit_skipped")
+	}
+	traceFinished = true
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -217,15 +256,20 @@ func (m *Module) buildNormalized(tmuxSession, eventName, agentType string, broad
 
 // broadcastToSession resolves the tmux session name to a session code and broadcasts.
 func (m *Module) broadcastToSession(tmuxSession string, normalized agentpkg.NormalizedEvent) {
+	_, _ = m.emitHookToSession(tmuxSession, normalized)
+}
+
+func (m *Module) emitHookToSession(tmuxSession string, normalized agentpkg.NormalizedEvent) (string, string) {
 	if m.core == nil {
-		return
+		return "skipped", "core_unavailable"
 	}
 	code := m.resolveSessionCode(tmuxSession)
 	if code == "" {
-		return
+		return "skipped", "session_code_missing"
 	}
 	payload, _ := json.Marshal(normalized)
 	m.core.Events.Broadcast(code, "hook", string(payload))
+	return "broadcasted", "session_code_resolved"
 }
 
 // resolveSessionCode maps a tmux session name to the pdx session code.

@@ -46,6 +46,9 @@ func newTestModule(t *testing.T) *Module {
 	origIsPidAlive := isPidAliveFn
 	isPidAliveFn = func(pid int) bool { return true }
 	t.Cleanup(func() { isPidAliveFn = origIsPidAlive })
+	if m.traceSink != nil {
+		t.Cleanup(func() { m.traceSink.Close() })
+	}
 	return m
 }
 
