@@ -113,6 +113,36 @@ describe('useStatuslineTest', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1)
   })
 
+  it('ignores bus events for the same nonce from another host', async () => {
+    vi.useFakeTimers()
+    const nonce = '__pdx_test_crosshost'
+    const body = sseBodyFrom([
+      { type: 'init', nonce },
+      { type: 'stage', stage: 1, name: 'Proxy spawned', status: 'passed', elapsed_ms: 5, nonce },
+      { type: 'stage', stage: 2, name: 'Proxy → daemon POST received', status: 'passed', elapsed_ms: 3, nonce },
+      { type: 'stage', stage: 3, name: 'Daemon → WS broadcast', status: 'passed', elapsed_ms: 2, nonce },
+      { type: 'done', nonce },
+    ])
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, body } as unknown as Response)
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 } as unknown as Response)
+
+    const { result } = renderHook(() => useStatuslineTest('h1'))
+    let runPromise: Promise<void> = Promise.resolve()
+    await act(async () => {
+      runPromise = result.current.run()
+      queueMicrotask(() => {
+        useAgentStore.getState().setCcStatus('h2', nonce, { model: { id: 'other-host' } })
+        statuslineTestBus.emit({ nonce, hostId: 'h2', raw: { model: { id: 'other-host' } } })
+      })
+      await vi.advanceTimersByTimeAsync(2100)
+      await runPromise
+    })
+
+    expect(result.current.state.stages[4].status).toBe('failed')
+    expect(result.current.state.stages[5].status).toBe('skipped')
+    vi.useRealTimers()
+  })
+
   it('SSE done without WS event → stage 4 fails after grace period', async () => {
     vi.useFakeTimers()
     const nonce = '__pdx_test_bbbb2222'

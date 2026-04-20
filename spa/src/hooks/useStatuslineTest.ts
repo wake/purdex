@@ -156,8 +156,9 @@ export function useStatuslineTest(hostId: string) {
       activeNonce = noncedVal
       debugStatuslineTest('hook.stage1-passed', { nonce: noncedVal, hostId, phase: sendReadyAck ? 'init' : 'stage1-fallback' })
       setState((s) => ({ ...s, nonce: noncedVal }))
-      unsubBus = statuslineTestBus.subscribe(noncedVal, ({ nonce: got }) => {
-        debugStatuslineTest('hook.bus-callback', { nonce: got, mounted: mountedRef.current })
+      unsubBus = statuslineTestBus.subscribe(noncedVal, ({ nonce: got, hostId: eventHostId }) => {
+        debugStatuslineTest('hook.bus-callback', { nonce: got, eventHostId, mounted: mountedRef.current })
+        if (eventHostId !== hostId) return
         if (!mountedRef.current) return
         markStage(4, { status: 'passed' })
         const key = compositeKey(hostId, got)
