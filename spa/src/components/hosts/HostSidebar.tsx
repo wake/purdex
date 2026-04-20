@@ -1,8 +1,8 @@
 import { Plus, CaretDown, CaretRight, Circle, LockSimple, Spinner, Warning } from '@phosphor-icons/react'
 import { useState } from 'react'
+import type { HostSubPage } from '../../lib/host-routes'
 import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import type { HostSubPage } from '../HostPage'
 
 const SUB_PAGES: { id: HostSubPage; labelKey: string }[] = [
   { id: 'overview', labelKey: 'hosts.overview' },
