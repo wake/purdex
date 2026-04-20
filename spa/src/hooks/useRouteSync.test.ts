@@ -190,7 +190,7 @@ describe('useRouteSync', () => {
   })
 
   it('opens the singleton hosts tab for invalid host deep links without rewriting them to bare /hosts', () => {
-    const mem = memoryLocation({ path: '/hosts/missing-host/logs', record: true })
+    const mem = memoryLocation({ path: '/hosts/test-host/not-a-page', record: true })
 
     renderHook(() => useRouteSync(), { wrapper: createWrapper(mem) })
 
@@ -199,6 +199,6 @@ describe('useRouteSync', () => {
     const primary = tab ? getPrimaryPane(tab.layout) : null
 
     expect(primary?.content.kind).toBe('hosts')
-    expect(mem.history[mem.history.length - 1]).toBe('/hosts/missing-host/logs')
+    expect(mem.history[mem.history.length - 1]).toBe('/hosts/test-host/not-a-page')
   })
 })

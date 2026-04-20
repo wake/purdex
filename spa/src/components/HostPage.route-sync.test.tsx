@@ -81,6 +81,10 @@ function seedHosts() {
 
 function RouteSyncHostPage({ pane }: { pane: Pane }) {
   useRouteSync()
+  const activeTab = useTabStore((s) => (s.activeTabId ? s.tabs[s.activeTabId] : null))
+  const primary = activeTab ? getPrimaryPane(activeTab.layout) : null
+
+  if (primary?.content.kind !== 'hosts') return null
   return <HostPage pane={pane} isActive />
 }
 
@@ -136,6 +140,17 @@ describe('HostPage route sync', () => {
 
   it('canonicalizes invalid deep links with replace semantics', async () => {
     const { mem } = renderWithRoute('/hosts/missing-host/logs')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', TEST_HOST_ID)
+      expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-subpage', 'logs')
+      expect(currentPath(mem)).toBe('/hosts/test-host/logs')
+      expect(mem.history).toEqual(['/hosts/test-host/logs'])
+    })
+  })
+
+  it('canonicalizes hosts-invalid deep links with replace semantics', async () => {
+    const { mem } = renderWithRoute('/hosts/test-host/logs/extra')
 
     await waitFor(() => {
       expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', TEST_HOST_ID)
