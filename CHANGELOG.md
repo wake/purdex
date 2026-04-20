@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.194] - 2026-04-20
+
+### Fix(agent): harden statusline self-test handshake across version skew (#520)
+
+- Statusline self-test 新增 capability-based `init` / `ready-v1` handshake：新前後端組合會先完成 bus subscriber 就緒，再進入真正的 `proxy -> daemon -> WS -> SPA` 驗證路徑。
+- `/api/agent/status` 的 test nonce 仍保留真實 broadcast path，避免 self-test 因為走旁路而失去對 production WS shape / routing 的覆蓋。
+- 舊版前端或舊版 daemon 仍可走 legacy fallback，不會因版本錯位把 self-test 永久卡住；SPA 端也把 test bus 命中收斂到當前 `hostId`，避免跨 host 同 nonce 誤判成功。
+- 另開 #521 追蹤 `ready-v1` timeout policy 的後續設計，不阻擋本次修正出貨。
+
 ## [1.0.0-alpha.193] - 2026-04-20
 
 ### Fix(spa): preserve host deep links across tab switches (#518)

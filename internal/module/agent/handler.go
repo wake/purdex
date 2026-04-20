@@ -575,10 +575,11 @@ func (m *Module) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{}`))
 
-	// Test-nonce path: signal observer, broadcast keyed by nonce, skip snapshot persist.
-	// Production traffic never starts with testNoncePrefix (real tmux session names
-	// can't start with `__pdx_test_`), so the normal path below is unaffected.
-	if strings.HasPrefix(payload.TmuxSession, testNoncePrefix) {
+	// Test-nonce path: only treat the request as self-test traffic when there is
+	// an active observer for that nonce. This prevents legitimate sessions whose
+	// names happen to start with the prefix from silently losing production
+	// status updates.
+	if strings.HasPrefix(payload.TmuxSession, testNoncePrefix) && m.hasTestObserver(payload.TmuxSession) {
 		m.signalTestStage(payload.TmuxSession, testStageReceived)
 		if m.core != nil {
 			snap := statusSnapshot{AgentType: payload.AgentType, Status: payload.RawStatus}
