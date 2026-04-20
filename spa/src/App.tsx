@@ -39,6 +39,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { getPlatformCapabilities } from './lib/platform'
 import type { Tab } from './types/tab'
 import { GlobalUndoToast } from './components/GlobalUndoToast'
+import { ensureSessionPristine } from './lib/sync/register-sync'
 
 // Prefetch default icon weight so WorkspaceIcon renders instantly
 prefetchWeight('bold').catch(() => {})
@@ -91,6 +92,16 @@ export default function App() {
   useEffect(() => {
     if (firstHostId) fetchConfig(firstHostId)
   }, [fetchConfig, firstHostId])
+
+  // --- Bootstrap: ensure session-pristine snapshot ---
+  useEffect(() => {
+    ensureSessionPristine().catch((err) => {
+      // Swallow — pristine failures are recoverable (prior pristine stays
+      // intact thanks to atomic rotation) and must not become an unhandled
+      // rejection that crashes dev mode or pollutes sentry-style reporters.
+      console.warn('ensureSessionPristine failed', err)
+    })
+  }, [])
 
   // --- Derive visible tabs for display ---
   const visibleTabIds = getVisibleTabIds({

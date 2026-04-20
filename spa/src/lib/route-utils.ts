@@ -3,7 +3,7 @@ import type { PaneContent } from '../types/tab'
 export type ParsedRoute =
   | { kind: 'history' }
   | { kind: 'hosts' }
-  | { kind: 'settings'; scope: 'global'; section?: string }
+  | { kind: 'settings'; scope: 'global'; section?: string; subsection?: string }
   | { kind: 'session-tab'; tabId: string; mode: 'terminal' | 'stream' }
   | { kind: 'workspace'; workspaceId: string }
   | { kind: 'workspace-settings'; workspaceId: string }
@@ -11,6 +11,7 @@ export type ParsedRoute =
 
 const ID_PATTERN = /^[0-9a-z]{6}$/
 const SETTINGS_SECTION_PATTERN = /^[a-z0-9-]{1,32}$/
+const SETTINGS_SUBSECTION_PATTERN = /^[a-z0-9-]{1,32}$/
 
 function validateMode(mode: string): 'terminal' | 'stream' {
   return mode === 'stream' ? 'stream' : 'terminal'
@@ -22,9 +23,17 @@ export function parseRoute(path: string): ParsedRoute | null {
   if (path === '/hosts') return { kind: 'hosts' }
   if (path === '/settings') return { kind: 'settings', scope: 'global' }
   if (path.startsWith('/settings/')) {
-    const section = path.slice('/settings/'.length)
-    if (SETTINGS_SECTION_PATTERN.test(section)) {
-      return { kind: 'settings', scope: 'global', section }
+    const rest = path.slice('/settings/'.length)
+    const parts = rest.split('/')
+    if (parts.length === 1 && SETTINGS_SECTION_PATTERN.test(parts[0])) {
+      return { kind: 'settings', scope: 'global', section: parts[0] }
+    }
+    if (
+      parts.length === 2 &&
+      SETTINGS_SECTION_PATTERN.test(parts[0]) &&
+      SETTINGS_SUBSECTION_PATTERN.test(parts[1])
+    ) {
+      return { kind: 'settings', scope: 'global', section: parts[0], subsection: parts[1] }
     }
     return { kind: 'settings', scope: 'global' }
   }

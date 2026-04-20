@@ -22,3 +22,51 @@ export function registerSyncContributors(): void {
   // Populate the default module list so setActiveProvider() can auto-enable all.
   setAllContributorIds(syncEngine.getContributors().map((c) => c.id))
 }
+
+// Test-only: override the engine instance so use-sync-store tests can
+// inject a minimal contributor set without pulling in real stores.
+let _engineForTests: typeof syncEngine | null = null
+
+/** @internal tests only */
+export function __setEngineForTests(e: typeof syncEngine | null): void {
+  _engineForTests = e
+}
+
+/** @internal tests only */
+export function __getActiveEngine(): typeof syncEngine {
+  return _engineForTests ?? syncEngine
+}
+
+// ---------------------------------------------------------------------------
+// Session pristine bootstrap
+// ---------------------------------------------------------------------------
+
+import { getSnapshotStore } from './snapshot-store-instance'
+import { useSyncStore } from './use-sync-store'
+
+/**
+ * Capture "state at the start of this session" as a session-pristine
+ * snapshot. Called on every bootstrap so the user can always return to the
+ * state from *this* launch, not the first-ever launch. Prior pristine
+ * snapshots are demoted (data retained, flag cleared) so only the newest
+ * one blocks compaction.
+ */
+export async function ensureSessionPristine(): Promise<void> {
+  const store = getSnapshotStore()
+  await store.init()
+
+  const engine = __getActiveEngine()
+  const state = useSyncStore.getState()
+  const device = state.clientId ?? 'unknown'
+  // Pristine snapshot must cover the full contributor registry — a later
+  // restore could write any contributor, including ones currently disabled.
+  const allIds = engine.getContributors().map((c) => c.id)
+  const currentBundle = engine.serialize(device, allIds)
+
+  // Single-transaction rotation: demote every prior pristine flag and write
+  // the new pristine row inside one readwrite tx. IDB serializes those
+  // transactions across tabs, so concurrent bootstraps cannot interleave
+  // and leave zero pristine rows (which the separate create-then-demote
+  // sequence was still vulnerable to).
+  await store.rotateSessionPristine(currentBundle, 'pre-restore')
+}

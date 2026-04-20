@@ -45,8 +45,26 @@ export function createHostsContributor(): SyncContributor {
       const incoming = fp.data as Record<string, unknown>
 
       if (merge.type === 'full-replace') {
+        const current = useHostStore.getState().hosts
+        const incomingHosts = (incoming.hosts ?? {}) as Record<string, Record<string, unknown>>
+        const mergedHosts: Record<string, Record<string, unknown>> = {}
+        for (const [id, host] of Object.entries(incomingHosts)) {
+          // Only preserve token when endpoint identity (ip, port) matches.
+          // A bundle reusing an id but pointing at a different endpoint must
+          // force re-auth, otherwise a bearer token could be sent to an
+          // attacker-controlled daemon.
+          const currentHost = (current as Record<string, { ip?: unknown; port?: unknown; token?: unknown } | undefined>)[id]
+          const sameEndpoint =
+            currentHost !== undefined &&
+            currentHost.ip === host.ip &&
+            currentHost.port === host.port
+          mergedHosts[id] = {
+            ...host,
+            token: sameEndpoint ? (currentHost.token ?? null) : null,
+          }
+        }
         useHostStore.setState({
-          hosts: incoming.hosts as ReturnType<typeof useHostStore.getState>['hosts'],
+          hosts: mergedHosts as ReturnType<typeof useHostStore.getState>['hosts'],
           hostOrder: incoming.hostOrder as string[],
           activeHostId: incoming.activeHostId as string | null,
         })

@@ -40,7 +40,7 @@ export interface MergeCollectionResult {
  * Deep equality for JSON-serializable values (primitives, null, plain objects,
  * arrays). Does not handle Date, Set, Map, or functions.
  */
-function deepEqual(a: unknown, b: unknown): boolean {
+export function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true
 
   // Handle null explicitly (typeof null === 'object')

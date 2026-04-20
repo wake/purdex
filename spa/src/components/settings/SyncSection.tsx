@@ -12,12 +12,16 @@ import { SegmentControl } from './SegmentControl'
 import { SyncConflictBanner } from './SyncConflictBanner'
 import { useSyncStore } from '../../lib/sync/use-sync-store'
 import { syncEngine } from '../../lib/sync/register-sync'
-import { createManualProvider, ImportError } from '../../lib/sync/providers/manual-provider'
+import { createManualProvider, ImportError, validateImportText } from '../../lib/sync/providers/manual-provider'
 import { createDaemonProvider } from '../../lib/sync/providers/daemon-provider'
 import { applyImport, syncNow, type SyncActionResult } from '../../lib/sync/sync-actions'
+import { equalExceptEnvelope } from '../../lib/sync/snapshot-diff'
+import { getSnapshotStore } from '../../lib/sync/snapshot-store-instance'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { pluralKey } from '../../lib/plural'
+import { useSettingsRoute } from '../SettingsPage'
+import { SnapshotHistoryPage } from '../../features/settings/sections/sync-history/SnapshotHistoryPage'
 
 type ProviderId = 'off' | 'daemon' | 'file'
 
@@ -47,6 +51,7 @@ function triggerDownload(blob: Blob, filename: string): void {
 
 export function SyncSection() {
   const t = useI18nStore((s) => s.t)
+  const { subsection, setSubsection } = useSettingsRoute()
 
   const activeProviderId = useSyncStore((s) => s.activeProviderId)
   const setActiveProvider = useSyncStore((s) => s.setActiveProvider)
@@ -70,6 +75,10 @@ export function SyncSection() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [status, setStatus] = useState<Status>(IDLE)
   const [busy, setBusy] = useState(false)
+
+  if (subsection === 'history') {
+    return <SnapshotHistoryPage />
+  }
 
   const PROVIDER_OPTIONS: { value: ProviderId; label: string }[] = [
     { value: 'off', label: t('settings.sync.provider.off') },
@@ -116,6 +125,9 @@ export function SyncSection() {
     const provider = createDaemonProvider(syncHostId, clientId)
     const startProvider = activeProviderId
     const startHostId = syncHostId
+    // P1: capture baseline BEFORE sync runs so we can dedup the post-sync
+    // manual snapshot against what we last synced.
+    const prevBundle = lastSyncedBundle
     const result = await syncNow({
       provider,
       clientId,
@@ -134,6 +146,12 @@ export function SyncSection() {
 
     if (result.kind === 'ok') {
       setLastSyncedBundle(result.appliedBundle)
+      // P1: create manual snapshot if bundle changed vs lastSyncedBundle (dedup).
+      // Fire-and-forget — don't block UI on snapshot creation.
+      const newBundle = result.appliedBundle
+      if (!prevBundle || !equalExceptEnvelope(prevBundle, newBundle)) {
+        void getSnapshotStore().createSnapshot(newBundle, 'manual')
+      }
     } else if (result.kind === 'conflicts') {
       setLastSyncedBundle(result.partialBaseline)
       setPendingConflicts(result.conflicts, result.remoteBundle)
@@ -167,8 +185,19 @@ export function SyncSection() {
     const startProvider = activeProviderId
     try {
       const text = await file.text()
-      const provider = createManualProvider()
-      const bundle = provider.importFromText(text)
+      // P1: validate first — if this throws, NO pre-import snapshot is created.
+      const bundle = validateImportText(text)
+
+      // P1: valid file → safety-net snapshot before applying the import.
+      // Best-effort: if the snapshot store is unavailable (private-mode IDB,
+      // quota, etc.) we still let the import proceed rather than blocking
+      // users from loading a legitimate bundle. The import itself remains
+      // the source of truth for correctness.
+      try {
+        await useSyncStore.getState().createPreOperationSnapshot('pre-import')
+      } catch (snapErr) {
+        console.warn('pre-import snapshot failed; continuing without safety net', snapErr)
+      }
 
       const result = await applyImport({
         bundle,
@@ -263,6 +292,19 @@ export function SyncSection() {
         description={t('settings.sync.provider.description')}
       >
         <SegmentControl options={PROVIDER_OPTIONS} value={currentProvider} onChange={handleProviderChange} />
+      </SettingItem>
+
+      <SettingItem
+        label={t('settings.sync.history.label')}
+        description={t('settings.sync.history.description')}
+      >
+        <button
+          type="button"
+          onClick={() => setSubsection('history')}
+          className="px-3 py-1 text-sm text-accent-base"
+        >
+          {t('settings.sync.history.viewLink')}
+        </button>
       </SettingItem>
 
       {currentProvider !== 'off' && (
