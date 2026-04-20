@@ -1,10 +1,22 @@
+import 'fake-indexeddb/auto'
 import { describe, it, expect, beforeEach } from 'vitest'
 import { InAppBackend } from './fs-backend-inapp'
+import { resetEditorCoordinatorCache } from './editor-service/coordinator'
+
+function resetEditorDb(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase('purdex-editor')
+    request.onsuccess = () => resolve()
+    request.onerror = () => reject(request.error ?? new Error('deleteDatabase failed'))
+  })
+}
 
 describe('InAppBackend', () => {
   let backend: InAppBackend
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    resetEditorCoordinatorCache()
+    await resetEditorDb()
     backend = new InAppBackend()
   })
 
@@ -34,11 +46,18 @@ describe('InAppBackend', () => {
   })
 
   it('list returns entries in a directory', async () => {
+    await backend.mkdir('/dir')
     await backend.write('/dir/a.txt', new TextEncoder().encode('a'))
     await backend.write('/dir/b.txt', new TextEncoder().encode('b'))
     const entries = await backend.list('/dir')
     const names = entries.map((e) => e.name).sort()
     expect(names).toEqual(['a.txt', 'b.txt'])
+  })
+
+  it('rejects writing nested files when the parent folder does not exist', async () => {
+    await expect(
+      backend.write('/missing/a.txt', new TextEncoder().encode('a')),
+    ).rejects.toThrow(/parent|exist/i)
   })
 
   it('mkdir creates a directory entry', async () => {
