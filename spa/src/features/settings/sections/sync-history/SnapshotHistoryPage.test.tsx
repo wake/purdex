@@ -113,4 +113,49 @@ describe('SnapshotHistoryPage', () => {
       skipPreOp: true,
     })
   })
+
+  it('ignores stale restore rejections after the user cancels (Adv-2)', async () => {
+    // In-flight restore for the selected row; we resolve it manually so we
+    // can cancel the dialog before the rejection reaches the catch block.
+    let rejectRestore: ((err: unknown) => void) | null = null
+    const restoreMock = vi
+      .fn<(snapshot: StoredSnapshot, source: 'local' | 'remote', options?: RestoreOptions) => Promise<void>>()
+      .mockImplementation(() => new Promise<void>((_resolve, reject) => { rejectRestore = reject }))
+    useSyncStore.setState({ restoreFromSnapshot: restoreMock })
+
+    render(<SnapshotHistoryPage />)
+    await waitFor(() =>
+      expect(screen.getAllByRole('button').some((b) => b.textContent?.includes('manual'))).toBe(true),
+    )
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent?.includes('manual'))!)
+    await waitFor(() =>
+      expect(
+        screen.queryAllByRole('button').some((b) => b.textContent?.includes('Restore this snapshot')),
+      ).toBe(true),
+    )
+    fireEvent.click(
+      screen.getAllByRole('button').find((b) => b.textContent?.includes('Restore this snapshot'))!,
+    )
+
+    // Confirm → restore runs but never resolves
+    fireEvent.click(
+      screen
+        .getAllByRole('button')
+        .find((b) => b.textContent?.includes('Restore') && !b.textContent?.includes('this snapshot'))!,
+    )
+    await waitFor(() => expect(restoreMock).toHaveBeenCalledTimes(1))
+
+    // Cancel before the in-flight restore finishes
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === 'Cancel')!)
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    // Now deliver the stale rejection from the original restore attempt —
+    // handleConfirm's token check must swallow it and leave the dialog
+    // closed instead of reopening into coverageWarning against the
+    // currently-selected row.
+    rejectRestore!(new SnapshotCoverageError(['stub']))
+    // Give the rejection microtask time to settle
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
 })

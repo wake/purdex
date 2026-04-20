@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { HistoryTabs } from './HistoryTabs'
 import { HistoryList } from './HistoryList'
 import { SnapshotDetail } from './SnapshotDetail'
@@ -30,6 +30,12 @@ export function SnapshotHistoryPage() {
   // clicks continue again (→ skipPreOp), the second retry must carry BOTH
   // flags or the coverage check will fire again and deadlock the dialog.
   const [restoreOverrides, setRestoreOverrides] = useState<RestoreOptions>({})
+  // Token that identifies the current restore attempt. Bumped whenever the
+  // user cancels, switches rows, or a restore resolves. Async completions
+  // with a stale token are ignored so an in-flight restore for snapshot A
+  // cannot leak its prompt / overrides onto snapshot B after the user
+  // cancels and picks another row.
+  const restoreTokenRef = useRef(0)
 
   const activeProviderId = useSyncStore((s) => s.activeProviderId)
   const pendingConflicts = useSyncStore((s) => s.pendingConflicts)
@@ -43,6 +49,10 @@ export function SnapshotHistoryPage() {
     // getLocal() cannot leave a stale snapshot paired with the new row,
     // which could otherwise feed the restore dialog the wrong bundle.
     setSelectedSnap(null)
+    // Switching rows also invalidates any in-flight restore against the
+    // previous snapshot — its async result must not mutate dialog state
+    // for the newly selected row.
+    restoreTokenRef.current++
     if (!selectedId) return
     let cancelled = false
     void getSnapshotStore().getLocal(selectedId).then((snap) => {
@@ -51,24 +61,22 @@ export function SnapshotHistoryPage() {
     return () => { cancelled = true }
   }, [selectedId])
 
-  // Single restore path. `initial=true` resets accumulated overrides to the
-  // passed options (fresh attempt from the "Restore this snapshot" button);
-  // `initial=false` merges `next` onto existing overrides (retry after a
-  // dialog prompt). Merging is critical: if coverageWarning + preOpFailed
-  // both fire across retries, the final call must carry BOTH flags or the
-  // dialog deadlocks.
   async function runRestore(next: RestoreOptions = {}, initial = true) {
-    if (!selectedSnap) return
+    const target = selectedSnap
+    if (!target) return
     const merged: RestoreOptions = initial ? next : { ...restoreOverrides, ...next }
+    const token = ++restoreTokenRef.current
     setRestoring(true)
     setRestoreOverrides(merged)
     try {
-      await restoreFromSnapshot(selectedSnap, 'local', merged)
+      await restoreFromSnapshot(target, 'local', merged)
+      if (token !== restoreTokenRef.current) return
       setDialogMode('idle')
       setWarningText(null)
       setRestoreOverrides({})
       await refresh()
     } catch (e) {
+      if (token !== restoreTokenRef.current) return
       if (e instanceof PreOpFailedError) {
         setDialogMode('preOpFailed')
       } else if (e instanceof SnapshotCoverageError) {
@@ -83,7 +91,7 @@ export function SnapshotHistoryPage() {
         throw e
       }
     } finally {
-      setRestoring(false)
+      if (token === restoreTokenRef.current) setRestoring(false)
     }
   }
 
@@ -98,8 +106,13 @@ export function SnapshotHistoryPage() {
   }
 
   function handleCancel() {
+    // Invalidate the current restore token so a late resolution/rejection
+    // from the in-flight restore cannot reopen the dialog against whatever
+    // row the user picks next.
+    restoreTokenRef.current++
     setDialogMode('idle')
     setRestoreOverrides({})
+    setRestoring(false)
   }
 
   return (
