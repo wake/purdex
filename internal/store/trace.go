@@ -435,6 +435,17 @@ func rebuildLegacyTraceSteps(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	stepRows, err := traceTableRowCount(db, "agent_trace_steps")
+	if err != nil {
+		return err
+	}
+	chainRows, err := traceTableRowCount(db, "agent_trace_chains")
+	if err != nil {
+		return err
+	}
+	if stepRows > 0 && chainRows == 0 {
+		return fmt.Errorf("cannot migrate legacy trace steps without legacy trace chains")
+	}
 	if _, err := db.Exec(`ALTER TABLE agent_trace_steps RENAME TO agent_trace_steps_legacy`); err != nil {
 		return err
 	}
@@ -524,6 +535,15 @@ func rebuildLegacyTraceSteps(db *sql.DB) error {
 	}
 	_, err = db.Exec(`DROP TABLE agent_trace_steps_legacy`)
 	return err
+}
+
+func traceTableRowCount(db *sql.DB, table string) (int, error) {
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // SaveChain stores a chain and its steps atomically, replacing any existing
