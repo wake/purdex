@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -52,31 +53,60 @@ func (r *stageAwareRecorder) BodyString() string {
 	return r.buf.String()
 }
 
+func waitForInitNonce(t *testing.T, w *stageAwareRecorder) string {
+	t.Helper()
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		body := w.BodyString()
+		if strings.Contains(body, `"type":"init"`) {
+			match := regexp.MustCompile(`"nonce":"([^"]+)"`).FindStringSubmatch(body)
+			if len(match) == 2 {
+				return match[1]
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for init event; body=%s", body)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func ackReady(t *testing.T, env *handlerTestEnv, nonce string) {
+	t.Helper()
+	readyReq := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test/ready", strings.NewReader(`{"nonce":"`+nonce+`"}`))
+	readyW := httptest.NewRecorder()
+	env.module.handleStatuslineTestReady(readyW, readyReq)
+	if readyW.Code != http.StatusOK {
+		t.Fatalf("ready status %d, want 200", readyW.Code)
+	}
+}
+
 func TestTestObserversRegisterSignalDeregister(t *testing.T) {
 	m := New(nil) // AgentEventStore allowed to be nil; observers don't touch it
-	ch := m.registerTestObserver("__pdx_test_aaaa1111")
+	obs := m.registerTestObserver("__pdx_test_aaaa1111")
 
-	go m.signalTestObserver("__pdx_test_aaaa1111", json.RawMessage(`{"model":{"id":"x"}}`))
+	go m.signalTestStage("__pdx_test_aaaa1111", testStageReceived)
 
 	select {
-	case sig := <-ch:
-		if !strings.Contains(string(sig.raw), `"id":"x"`) {
-			t.Fatalf("signal carried unexpected raw payload: %s", string(sig.raw))
+	case stage := <-obs.stages:
+		if stage != testStageReceived {
+			t.Fatalf("got stage %v, want testStageReceived", stage)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("timed out waiting for signal")
+		t.Fatal("timed out waiting for stage")
 	}
 
 	m.deregisterTestObserver("__pdx_test_aaaa1111")
 
-	// After deregister, signalTestObserver must be a no-op (no panic from send on nil chan etc.)
-	m.signalTestObserver("__pdx_test_aaaa1111", json.RawMessage(`{}`))
+	// After deregister, signalTestStage must be a no-op (no panic from send on nil chan etc.)
+	m.signalTestStage("__pdx_test_aaaa1111", testStageBroadcast)
 }
 
-func TestSignalTestObserverUnknownNonceIsNoOp(t *testing.T) {
+func TestSignalTestStageUnknownNonceIsNoOp(t *testing.T) {
 	m := New(nil)
 	// Must not panic, must not hang.
-	m.signalTestObserver("__pdx_test_zzzz9999", json.RawMessage(`{}`))
+	m.signalTestStage("__pdx_test_zzzz9999", testStageReceived)
 }
 
 func TestHandleStatuslineTestStreamsStagesAndCleans(t *testing.T) {
@@ -93,13 +123,24 @@ func TestHandleStatuslineTestStreamsStagesAndCleans(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", nil)
-	w := httptest.NewRecorder()
-	env.module.handleStatuslineTest(w, req)
+	w := newStageAwareRecorder()
+	done := make(chan struct{})
+	go func() {
+		env.module.handleStatuslineTest(w, req)
+		close(done)
+	}()
+	nonce := waitForInitNonce(t, w)
+	ackReady(t, env, nonce)
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for self-test handler completion; body=%s", w.BodyString())
+	}
 
 	if ct := w.Header().Get("Content-Type"); ct != "text/event-stream" {
 		t.Fatalf("content-type = %q, want text/event-stream", ct)
 	}
-	out := w.Body.String()
+	out := w.BodyString()
 	for _, want := range []string{`"stage":1`, `"stage":2`, `"stage":3`, `"type":"done"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("SSE output missing %s:\n%s", want, out)
@@ -107,10 +148,54 @@ func TestHandleStatuslineTestStreamsStagesAndCleans(t *testing.T) {
 	}
 }
 
-func TestHandleStatuslineTestBroadcastsAgentStatusAfterStage2(t *testing.T) {
+func TestHandleStatuslineTestWaitsForReadyBeforeSpawning(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	spawnCalled := make(chan struct{}, 1)
+	env.module.testSpawnProxy = func(nonce string) error {
+		spawnCalled <- struct{}{}
+		go func() {
+			body := `{"tmux_session":"` + nonce + `","agent_type":"cc","raw_status":{"model":{"display_name":"ready-check"}}}`
+			req := httptest.NewRequest(http.MethodPost, "/api/agent/status", strings.NewReader(body))
+			w := httptest.NewRecorder()
+			env.module.handleAgentStatus(w, req)
+		}()
+		return nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", nil)
+	w := newStageAwareRecorder()
+	done := make(chan struct{})
+	go func() {
+		env.module.handleStatuslineTest(w, req)
+		close(done)
+	}()
+
+	nonce := waitForInitNonce(t, w)
+
+	select {
+	case <-spawnCalled:
+		t.Fatal("spawned before ready ack")
+	default:
+	}
+
+	ackReady(t, env, nonce)
+
+	select {
+	case <-spawnCalled:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for spawn after ready ack")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for self-test handler completion; body=%s", w.BodyString())
+	}
+}
+
+func TestHandleStatuslineTestBroadcastsAgentStatusAfterClientReady(t *testing.T) {
 	env := newHandlerTestEnv(t)
 
-	// Capture broadcast ordering relative to SSE stage 2 via a test subscriber.
 	sub := env.module.core.Events.AddTestSubscriber()
 	defer env.module.core.Events.RemoveTestSubscriber(sub)
 
@@ -126,13 +211,14 @@ func TestHandleStatuslineTestBroadcastsAgentStatusAfterStage2(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", nil)
 	w := newStageAwareRecorder()
+	done := make(chan struct{})
 
 	type hostEvent struct {
 		Type    string `json:"type"`
 		Session string `json:"session"`
 		Value   string `json:"value"`
 	}
-	broadcastAfterStage2 := make(chan bool, 1)
+	broadcastSeen := make(chan bool, 1)
 	go func() {
 		deadline := time.After(500 * time.Millisecond)
 		for {
@@ -145,23 +231,28 @@ func TestHandleStatuslineTestBroadcastsAgentStatusAfterStage2(t *testing.T) {
 				if ev.Type != "agent.status" || !strings.Contains(ev.Value, `"display_name":"order-check"`) {
 					continue
 				}
-				select {
-				case <-w.stage2Seen:
-					broadcastAfterStage2 <- true
-				default:
-					broadcastAfterStage2 <- false
-				}
+				broadcastSeen <- true
 				return
 			case <-deadline:
-				broadcastAfterStage2 <- false
+				broadcastSeen <- false
 				return
 			}
 		}
 	}()
+	go func() {
+		env.module.handleStatuslineTest(w, req)
+		close(done)
+	}()
+	nonce := waitForInitNonce(t, w)
+	ackReady(t, env, nonce)
 
-	env.module.handleStatuslineTest(w, req)
-	if ok := <-broadcastAfterStage2; !ok {
-		t.Fatalf("agent.status broadcast arrived before SSE stage 2 was written; body=%s", w.BodyString())
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for self-test handler completion; body=%s", w.BodyString())
+	}
+	if ok := <-broadcastSeen; !ok {
+		t.Fatalf("did not observe agent.status broadcast after ready ack; body=%s", w.BodyString())
 	}
 
 	// Verify cleanup broadcast still lands after the agent.status event.
@@ -197,10 +288,21 @@ func TestHandleStatuslineTestReportsProxySpawnFailure(t *testing.T) {
 		return fmt.Errorf("proxy spawn failed: no such executable")
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", nil)
-	w := httptest.NewRecorder()
-	env.module.handleStatuslineTest(w, req)
+	w := newStageAwareRecorder()
+	done := make(chan struct{})
+	go func() {
+		env.module.handleStatuslineTest(w, req)
+		close(done)
+	}()
+	nonce := waitForInitNonce(t, w)
+	ackReady(t, env, nonce)
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for self-test handler completion; body=%s", w.BodyString())
+	}
 
-	out := w.Body.String()
+	out := w.BodyString()
 	if !strings.Contains(out, `"stage":1`) || !strings.Contains(out, `"status":"failed"`) {
 		t.Errorf("expected stage1 failure, got:\n%s", out)
 	}

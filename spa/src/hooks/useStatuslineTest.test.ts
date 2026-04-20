@@ -36,12 +36,14 @@ describe('useStatuslineTest', () => {
   it('happy path: all 5 stages pass', async () => {
     const nonce = '__pdx_test_aaaa1111'
     const body = sseBodyFrom([
+      { type: 'init', nonce },
       { type: 'stage', stage: 1, name: 'Proxy spawned', status: 'passed', elapsed_ms: 12, nonce },
       { type: 'stage', stage: 2, name: 'Proxy → daemon POST received', status: 'passed', elapsed_ms: 8, nonce },
       { type: 'stage', stage: 3, name: 'Daemon → WS broadcast', status: 'passed', elapsed_ms: 3, nonce },
       { type: 'done', nonce },
     ])
     mockFetch.mockResolvedValueOnce({ ok: true, status: 200, body } as unknown as Response)
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 } as unknown as Response)
 
     const { result } = renderHook(() => useStatuslineTest('h1'))
     await act(async () => {
@@ -60,14 +62,22 @@ describe('useStatuslineTest', () => {
     expect(result.current.state.stages[4].status).toBe('passed')
     expect(result.current.state.stages[5].status).toBe('passed')
     expect(result.current.state.lastRunAt).not.toBeNull()
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      'h1',
+      '/api/agent/cc/statusline/test/ready',
+      expect.objectContaining({ method: 'POST' }),
+    )
   })
 
   it('stage 1 failure marks later stages skipped', async () => {
     const body = sseBodyFrom([
+      { type: 'init', nonce: '__pdx_test_fail1111' },
       { type: 'stage', stage: 1, status: 'failed', error: 'proxy spawn failed: no such executable', elapsed_ms: 5 },
       { type: 'done' },
     ])
     mockFetch.mockResolvedValueOnce({ ok: true, status: 200, body } as unknown as Response)
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 } as unknown as Response)
 
     const { result } = renderHook(() => useStatuslineTest('h1'))
     await act(async () => { await result.current.run() })
@@ -82,12 +92,14 @@ describe('useStatuslineTest', () => {
     vi.useFakeTimers()
     const nonce = '__pdx_test_bbbb2222'
     const body = sseBodyFrom([
+      { type: 'init', nonce },
       { type: 'stage', stage: 1, name: 'Proxy spawned', status: 'passed', elapsed_ms: 5, nonce },
       { type: 'stage', stage: 2, name: 'Proxy → daemon POST received', status: 'passed', elapsed_ms: 3, nonce },
       { type: 'stage', stage: 3, name: 'Daemon → WS broadcast', status: 'passed', elapsed_ms: 2, nonce },
       { type: 'done', nonce },
     ])
     mockFetch.mockResolvedValueOnce({ ok: true, status: 200, body } as unknown as Response)
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 } as unknown as Response)
 
     const { result } = renderHook(() => useStatuslineTest('h1'))
     let runPromise: Promise<void> = Promise.resolve()
@@ -107,6 +119,20 @@ describe('useStatuslineTest', () => {
     expect(result.current.state.stages[4].error).toMatch(/WS event not received/i)
     expect(result.current.state.stages[5].status).toBe('skipped')
     vi.useRealTimers()
+  })
+
+  it('ready ack failure fails stage 1 before proxy spawn', async () => {
+    const nonce = '__pdx_test_readyfail'
+    const body = sseBodyFrom([{ type: 'init', nonce }])
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, body } as unknown as Response)
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 } as unknown as Response)
+
+    const { result } = renderHook(() => useStatuslineTest('h1'))
+    await act(async () => { await result.current.run() })
+
+    expect(result.current.state.stages[1].status).toBe('failed')
+    expect(result.current.state.stages[1].error).toMatch(/ready/i)
+    expect(result.current.state.stages[2].status).toBe('skipped')
   })
 
   it('overall timeout marks incomplete stages failed', async () => {

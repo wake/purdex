@@ -72,7 +72,7 @@ type Stage4State = 'pending' | 'armed' | 'fired' | 'cancelled'
 type StageNum = 1 | 2 | 3 | 4 | 5
 
 interface ServerStageEvent {
-  type: 'stage' | 'done'
+  type: 'init' | 'stage' | 'done'
   stage?: number
   status?: 'passed' | 'failed'
   elapsed_ms?: number
@@ -171,21 +171,10 @@ export function useStatuslineTest(hostId: string) {
           if (!dataLine) continue
           let ev: ServerStageEvent
           try { ev = JSON.parse(dataLine.slice(6)) } catch { continue }
-          if (ev.type === 'done') return
-          if (ev.type !== 'stage' || !ev.stage || ev.stage < 1 || ev.stage > 3) continue
-
-          const n = ev.stage as 1 | 2 | 3
-          if (ev.status === 'failed') {
-            markFailThenSkipRest(n, ev.error ?? 'stage failed')
-            return
-          }
-          markStage(n, { status: 'passed', elapsedMs: ev.elapsed_ms })
-
-          if (n === 1 && ev.nonce) {
+          if (ev.type === 'init' && ev.nonce) {
             const noncedVal = ev.nonce
-            debugStatuslineTest('hook.stage1-passed', { nonce: noncedVal, hostId })
+            debugStatuslineTest('hook.stage1-passed', { nonce: noncedVal, hostId, phase: 'init' })
             setState((s) => ({ ...s, nonce: noncedVal }))
-            markStage(2, { status: 'running' })
             unsubBus = statuslineTestBus.subscribe(noncedVal, ({ nonce: got }) => {
               debugStatuslineTest('hook.bus-callback', { nonce: got, mounted: mountedRef.current })
               if (!mountedRef.current) return
@@ -198,11 +187,6 @@ export function useStatuslineTest(hostId: string) {
               }
               fireStage4()
             })
-            // If the dispatcher already fired (setCcStatus + emit) before we
-            // subscribed — possible because the WS broadcast can race the SSE
-            // stream — the store will already have the entry. Treat store
-            // presence as equivalent to a bus hit (the dispatcher always sets
-            // store before emitting).
             const earlyKey = compositeKey(hostId, noncedVal)
             const earlyHit = !!useAgentStore.getState().ccStatus[earlyKey]
             debugStatuslineTest('hook.early-hit-check', { earlyKey, earlyHit })
@@ -210,11 +194,36 @@ export function useStatuslineTest(hostId: string) {
               markStage(4, { status: 'passed' })
               markStage(5, { status: 'passed' })
               fireStage4()
-              // Stage 4 is done — detach immediately so a later WS event
-              // can't re-invoke the subscriber with stale state.
               unsubBus?.()
               unsubBus = null
             }
+            const ready = await hostFetch(hostId, '/api/agent/cc/statusline/test/ready', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ nonce: noncedVal }),
+            })
+            if (!ready.ok) {
+              markFailThenSkipRest(1, `ready ack failed: HTTP ${ready.status}`)
+              return
+            }
+            continue
+          }
+          if (ev.type === 'done') return
+          if (ev.type !== 'stage' || !ev.stage || ev.stage < 1 || ev.stage > 3) continue
+
+          const n = ev.stage as 1 | 2 | 3
+          if (ev.status === 'failed') {
+            markFailThenSkipRest(n, ev.error ?? 'stage failed')
+            return
+          }
+          markStage(n, { status: 'passed', elapsedMs: ev.elapsed_ms })
+
+          if (n === 1) {
+            if (ev.nonce) {
+              debugStatuslineTest('hook.stage1-passed', { nonce: ev.nonce, hostId })
+              setState((s) => ({ ...s, nonce: ev.nonce }))
+            }
+            markStage(2, { status: 'running' })
           } else if (n === 2) {
             setState((s) => s.stages[3].status === 'untested'
               ? { ...s, stages: { ...s.stages, 3: { status: 'running' } } }
