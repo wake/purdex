@@ -448,28 +448,29 @@ async function createCoordinatorFromDb(db: IDBDatabase): Promise<EditorCoordinat
 
     async deletePath(path: string): Promise<void> {
       const canonical = canonicalizePath(path)
-      const subtree = (await tree.listAllNodes())
-        .filter((node) => node.state === 'active' && (node.path === canonical || isDescendantPath(node.path, canonical)))
-      const tombstones = await Promise.all(subtree
-        .filter((node) => node.kind === 'file' && !!node.docId)
-        .map(async (node) => ({
-          node,
-          record: await contents.readDocument(node.docId!),
-        })))
-      if (tombstones.some(({ node, record }) => !record || record.bindingStatus !== 'active' || !node.docId)) {
-        throw new Error(`Document is inactive: ${canonical}`)
-      }
-      const tx = db.transaction([EDITOR_NODES_STORE, EDITOR_CONTENTS_STORE], 'readwrite')
-      await tree.markDeleted(canonical, tx)
-      for (const { node, record } of tombstones) {
-        await contents.putDocument({
-          ...record!,
-          tombstone: true,
-          bindingStatus: node.path === canonical ? 'deleted' : 'orphaned',
-          savedAt: Date.now(),
-        }, tx)
-      }
-      await transactionComplete(tx)
+      await withWriteTransaction(db, async (tx) => {
+        const subtree = (await tree.listAllNodes(tx))
+          .filter((node) => node.state === 'active' && (node.path === canonical || isDescendantPath(node.path, canonical)))
+        const tombstones = await Promise.all(subtree
+          .filter((node) => node.kind === 'file' && !!node.docId)
+          .map(async (node) => ({
+            node,
+            record: await contents.readDocument(node.docId!, tx),
+          })))
+        if (tombstones.some(({ node, record }) => !record || record.bindingStatus !== 'active' || !node.docId)) {
+          throw new Error(`Document is inactive: ${canonical}`)
+        }
+
+        await tree.markDeleted(canonical, tx)
+        for (const { node, record } of tombstones) {
+          await contents.putDocument({
+            ...record!,
+            tombstone: true,
+            bindingStatus: node.path === canonical ? 'deleted' : 'orphaned',
+            savedAt: Date.now(),
+          }, tx)
+        }
+      })
     },
   }
 }

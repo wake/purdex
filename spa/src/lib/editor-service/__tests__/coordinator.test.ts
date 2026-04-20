@@ -5,6 +5,8 @@ import {
   getEditorCoordinator,
   resetEditorCoordinatorCache,
 } from '../coordinator'
+import { EditorTreeRepository } from '../../editor-db/tree-repository'
+import { EditorContentRepository } from '../../editor-db/content-repository'
 
 function resetEditorDb(): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -67,22 +69,35 @@ describe('EditorCoordinator', () => {
   })
 
   it('updates recent-open ordering when a document is opened, not when it is saved', async () => {
+    const nowSpy = vi.spyOn(Date, 'now')
+    nowSpy
+      .mockReturnValueOnce(1000)
+      .mockReturnValueOnce(1001)
+      .mockReturnValueOnce(1002)
+      .mockReturnValueOnce(1003)
+      .mockReturnValueOnce(1004)
+      .mockReturnValueOnce(1005)
+
     const coordinator = await createEditorCoordinator()
-    const first = await coordinator.createFile('/alpha.md', 'one')
-    const second = await coordinator.createFile('/beta.md', 'two')
+    try {
+      const first = await coordinator.createFile('/alpha.md', 'one')
+      const second = await coordinator.createFile('/beta.md', 'two')
 
-    await coordinator.openDocument(second.docId)
+      await coordinator.openDocument(second.docId)
 
-    const initial = await coordinator.listRecentOpened(10)
-    expect(initial.map((node) => node.path)).toEqual(['/beta.md', '/alpha.md'])
+      const initial = await coordinator.listRecentOpened(10)
+      expect(initial.map((node) => node.path)).toEqual(['/beta.md', '/alpha.md'])
 
-    await coordinator.saveDocument(first.docId, 'one updated', 1)
-    const afterSave = await coordinator.listRecentOpened(10)
-    expect(afterSave.map((node) => node.path)).toEqual(['/beta.md', '/alpha.md'])
+      await coordinator.saveDocument(first.docId, 'one updated', 1)
+      const afterSave = await coordinator.listRecentOpened(10)
+      expect(afterSave.map((node) => node.path)).toEqual(['/beta.md', '/alpha.md'])
 
-    await coordinator.openDocument(first.docId)
-    const afterOpen = await coordinator.listRecentOpened(10)
-    expect(afterOpen.map((node) => node.path)).toEqual(['/alpha.md', '/beta.md'])
+      await coordinator.openDocument(first.docId)
+      const afterOpen = await coordinator.listRecentOpened(10)
+      expect(afterOpen.map((node) => node.path)).toEqual(['/alpha.md', '/beta.md'])
+    } finally {
+      nowSpy.mockRestore()
+    }
   })
 
   it('allows reoccupying a deleted path with a new document while old doc save requires save-as', async () => {
@@ -119,6 +134,26 @@ describe('EditorCoordinator', () => {
 
     await expect(coordinator.saveDocument(doc.docId, 'old write', 999)).rejects.toThrow(/version/i)
     expect(await coordinator.resolvePath(doc.docId)).toBeNull()
+  })
+
+  it('reads subtree and content records inside the delete transaction', async () => {
+    const coordinator = await createEditorCoordinator()
+    await coordinator.createFolder('/notes')
+    await coordinator.createFile('/notes/a.md', 'one')
+    const listAllNodesSpy = vi.spyOn(EditorTreeRepository.prototype, 'listAllNodes')
+    const readDocumentSpy = vi.spyOn(EditorContentRepository.prototype, 'readDocument')
+
+    try {
+      await coordinator.deletePath('/notes')
+
+      expect(listAllNodesSpy).toHaveBeenCalled()
+      expect(readDocumentSpy).toHaveBeenCalled()
+      expect(listAllNodesSpy.mock.calls.at(-1)?.[0]).toBeDefined()
+      expect(readDocumentSpy.mock.calls.every(([, tx]) => tx !== undefined)).toBe(true)
+    } finally {
+      listAllNodesSpy.mockRestore()
+      readDocumentSpy.mockRestore()
+    }
   })
 
   it('rolls back saveDocumentAs when the content write fails', async () => {
