@@ -26,6 +26,14 @@ describe('parseRoute', () => {
     })
   })
 
+  it('decodes encoded host ids in host deep links', () => {
+    expect(parseRoute('/hosts/host%2Fwith%3Fhash%23value/logs')).toEqual({
+      kind: 'hosts',
+      hostId: 'host/with?hash#value',
+      subPage: 'logs',
+    })
+  })
+
   it('parses /hosts/:hostId/:subPage with an invalid sub page', () => {
     expect(parseRoute('/hosts/test-host/not-a-page')).toEqual({
       kind: 'hosts-invalid',

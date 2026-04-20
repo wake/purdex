@@ -120,6 +120,38 @@ describe('HostPage', () => {
     expect(currentPath(mem)).toBe('/hosts/test-host/logs')
   })
 
+  it('canonicalizes to encoded host ids when the fallback host contains reserved URL characters', () => {
+    const specialHostId = 'host/with?hash#value'
+    useHostStore.setState({
+      hosts: {
+        [specialHostId]: { id: specialHostId, name: 'Special Host', ip: '9.9.9.9', port: 7860, order: 0 },
+      },
+      hostOrder: [specialHostId],
+      activeHostId: specialHostId,
+      runtime: {},
+    })
+
+    const { mem } = renderHostPage('/hosts/missing-host/logs')
+
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', specialHostId)
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-subpage', 'logs')
+    expect(currentPath(mem)).toBe('/hosts/host%2Fwith%3Fhash%23value/logs')
+  })
+
+  it('does not overwrite the last valid selection on non-host routes', () => {
+    const firstMount = renderHostPage('/hosts/test-host/logs')
+    expect(screen.getByTestId('logs-section')).toHaveAttribute('data-host', TEST_HOST_ID)
+
+    firstMount.mem.navigate('/history')
+    firstMount.unmount()
+
+    const { mem } = renderHostPage('/hosts')
+
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', TEST_HOST_ID)
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-subpage', 'logs')
+    expect(currentPath(mem)).toBe('/hosts/test-host/logs')
+  })
+
   it('canonicalizes an extra hosts path while preserving a valid subpage', () => {
     const { mem } = renderHostPage('/hosts/test-host/logs/extra')
 
@@ -173,5 +205,19 @@ describe('HostPage', () => {
     renderHostPage('/hosts')
 
     expect(screen.getByText('No host selected.')).toBeInTheDocument()
+  })
+
+  it('canonicalizes invalid host deep links to bare /hosts when no hosts remain', () => {
+    useHostStore.setState({
+      hosts: {},
+      hostOrder: [],
+      activeHostId: null,
+      runtime: {},
+    })
+
+    const { mem } = renderHostPage('/hosts/missing-host/logs')
+
+    expect(screen.getByText('No host selected.')).toBeInTheDocument()
+    expect(currentPath(mem)).toBe('/hosts')
   })
 })

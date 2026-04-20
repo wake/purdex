@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'wouter'
 import type { PaneRendererProps } from '../lib/module-registry'
-import { isHostSubPage, type HostSubPage } from '../lib/host-routes'
+import { encodeHostRouteId, isHostSubPage, type HostSubPage } from '../lib/host-routes'
 import { parseRoute } from '../lib/route-utils'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -24,7 +24,7 @@ interface Selection {
 let lastSelection: Selection | null = null
 
 function buildHostPath({ hostId, subPage }: Selection) {
-  return `/hosts/${hostId}/${subPage}`
+  return `/hosts/${encodeHostRouteId(hostId)}/${subPage}`
 }
 
 function getFallbackHostId(hostOrder: string[], activeHostId: string | null) {
@@ -47,35 +47,54 @@ function getFallbackSubPage() {
 }
 
 function resolveSelection(location: string, hostOrder: string[], activeHostId: string | null) {
+  const parsed = parseRoute(location)
+  const isHostRoute = parsed?.kind === 'hosts' || parsed?.kind === 'hosts-invalid'
+
   if (hostOrder.length === 0) {
-    return { selection: null, canonicalPath: null as string | null }
+    return {
+      selection: null,
+      canonicalPath: isHostRoute && location !== '/hosts' ? '/hosts' : null as string | null,
+      shouldPersistSelection: false,
+    }
   }
 
-  const parsed = parseRoute(location)
   const fallbackSelection = getFallbackSelection(hostOrder, activeHostId)
   if (!fallbackSelection) {
-    return { selection: null, canonicalPath: null as string | null }
+    return {
+      selection: null,
+      canonicalPath: isHostRoute && location !== '/hosts' ? '/hosts' : null as string | null,
+      shouldPersistSelection: false,
+    }
   }
 
   if (parsed?.kind === 'hosts') {
     if (parsed.hostId && parsed.subPage) {
       if (hostOrder.includes(parsed.hostId)) {
-        return { selection: { hostId: parsed.hostId, subPage: parsed.subPage }, canonicalPath: null as string | null }
+        return {
+          selection: { hostId: parsed.hostId, subPage: parsed.subPage },
+          canonicalPath: null as string | null,
+          shouldPersistSelection: true,
+        }
       }
 
       return {
         selection: { hostId: fallbackSelection.hostId, subPage: parsed.subPage },
         canonicalPath: buildHostPath({ hostId: fallbackSelection.hostId, subPage: parsed.subPage }),
+        shouldPersistSelection: true,
       }
     }
 
     if (lastSelection) {
       const hostId = hostOrder.includes(lastSelection.hostId) ? lastSelection.hostId : fallbackSelection.hostId
       const selection = { hostId, subPage: lastSelection.subPage }
-      return { selection, canonicalPath: buildHostPath(selection) }
+      return { selection, canonicalPath: buildHostPath(selection), shouldPersistSelection: true }
     }
 
-    return { selection: fallbackSelection, canonicalPath: buildHostPath(fallbackSelection) }
+    return {
+      selection: fallbackSelection,
+      canonicalPath: buildHostPath(fallbackSelection),
+      shouldPersistSelection: true,
+    }
   }
 
   if (parsed?.kind === 'hosts-invalid') {
@@ -88,10 +107,15 @@ function resolveSelection(location: string, hostOrder: string[], activeHostId: s
     return {
       selection,
       canonicalPath: buildHostPath(selection),
+      shouldPersistSelection: true,
     }
   }
 
-  return { selection: fallbackSelection, canonicalPath: null as string | null }
+  return {
+    selection: lastSelection ?? fallbackSelection,
+    canonicalPath: null as string | null,
+    shouldPersistSelection: false,
+  }
 }
 
 /** @internal test-only — must co-locate to access module-scoped variable */
@@ -107,11 +131,11 @@ export function HostPage(_props: PaneRendererProps) {
   const activeHostId = useHostStore((s) => s.activeHostId)
   const [showAddHost, setShowAddHost] = useState(false)
   const t = useI18nStore((s) => s.t)
-  const { selection, canonicalPath } = resolveSelection(location, hostOrder, activeHostId)
+  const { selection, canonicalPath, shouldPersistSelection } = resolveSelection(location, hostOrder, activeHostId)
 
   useEffect(() => {
-    if (selection) lastSelection = selection
-  }, [selection])
+    if (shouldPersistSelection && selection) lastSelection = selection
+  }, [selection, shouldPersistSelection])
 
   useEffect(() => {
     if (canonicalPath && canonicalPath !== location) {
