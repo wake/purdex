@@ -44,7 +44,12 @@ export function SnapshotRestoreDialog(props: SnapshotRestoreDialogProps) {
           </p>
         )}
         <div className="mt-4 flex justify-end gap-2">
-          <button type="button" onClick={props.onCancel} className="px-3 py-1 text-sm text-text-muted">
+          <button
+            type="button"
+            onClick={props.onCancel}
+            disabled={props.restoring}
+            className="px-3 py-1 text-sm text-text-muted disabled:opacity-50"
+          >
             {t('settings.sync.history.restore.cancel')}
           </button>
           <button

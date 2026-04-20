@@ -49,17 +49,20 @@ export function SnapshotHistoryPage() {
     // getLocal() cannot leave a stale snapshot paired with the new row,
     // which could otherwise feed the restore dialog the wrong bundle.
     setSelectedSnap(null)
-    // Switching rows also invalidates any in-flight restore against the
-    // previous snapshot — its async result must not mutate dialog state
-    // for the newly selected row.
-    restoreTokenRef.current++
+    // Only invalidate the restore token when no restore is in flight.
+    // If we bumped the token while a restore was running, the success
+    // path's final setRestoring(false) would be skipped by the token
+    // guard and the UI would stay locked in the restoring indicator.
+    // The dialog already blocks Cancel while restoring, so selection
+    // changes mid-restore cannot actually dispatch a second restore.
+    if (!restoring) restoreTokenRef.current++
     if (!selectedId) return
     let cancelled = false
     void getSnapshotStore().getLocal(selectedId).then((snap) => {
       if (!cancelled && snap && snap.id === selectedId) setSelectedSnap(snap)
     })
     return () => { cancelled = true }
-  }, [selectedId])
+  }, [selectedId, restoring])
 
   async function runRestore(next: RestoreOptions = {}, initial = true) {
     const target = selectedSnap
@@ -70,11 +73,12 @@ export function SnapshotHistoryPage() {
     setRestoreOverrides(merged)
     try {
       await restoreFromSnapshot(target, 'local', merged)
-      if (token !== restoreTokenRef.current) return
-      setDialogMode('idle')
-      setWarningText(null)
-      setRestoreOverrides({})
-      await refresh()
+      if (token === restoreTokenRef.current) {
+        setDialogMode('idle')
+        setWarningText(null)
+        setRestoreOverrides({})
+        await refresh()
+      }
     } catch (e) {
       if (token !== restoreTokenRef.current) return
       if (e instanceof PreOpFailedError) {
@@ -91,7 +95,11 @@ export function SnapshotHistoryPage() {
         throw e
       }
     } finally {
-      if (token === restoreTokenRef.current) setRestoring(false)
+      // Always clear the restoring indicator — decoupled from the token so
+      // that a later selection change cannot leave the UI permanently stuck
+      // in the restoring state. The token still guards post-completion
+      // dialog/state mutation above.
+      setRestoring(false)
     }
   }
 
@@ -106,13 +114,15 @@ export function SnapshotHistoryPage() {
   }
 
   function handleCancel() {
-    // Invalidate the current restore token so a late resolution/rejection
-    // from the in-flight restore cannot reopen the dialog against whatever
-    // row the user picks next.
+    // Cancel is only meaningful when no restore is in flight. Guard with
+    // the dialog's disabled prop on restoring, but keep a runtime check
+    // here too so programmatic calls can't bypass it. Invalidate the
+    // token so any late rejection against the just-closed dialog cannot
+    // reopen it against whatever row the user picks next.
+    if (restoring) return
     restoreTokenRef.current++
     setDialogMode('idle')
     setRestoreOverrides({})
-    setRestoring(false)
   }
 
   return (

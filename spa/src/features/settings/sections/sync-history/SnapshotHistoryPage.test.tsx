@@ -114,13 +114,11 @@ describe('SnapshotHistoryPage', () => {
     })
   })
 
-  it('ignores stale restore rejections after the user cancels (Adv-2)', async () => {
-    // In-flight restore for the selected row; we resolve it manually so we
-    // can cancel the dialog before the rejection reaches the catch block.
-    let rejectRestore: ((err: unknown) => void) | null = null
+  it('disables Cancel button while restore is in flight (Round-4 Adv-1)', async () => {
+    // Hold restoreFromSnapshot indefinitely so the UI observes `restoring=true`.
     const restoreMock = vi
       .fn<(snapshot: StoredSnapshot, source: 'local' | 'remote', options?: RestoreOptions) => Promise<void>>()
-      .mockImplementation(() => new Promise<void>((_resolve, reject) => { rejectRestore = reject }))
+      .mockImplementation(() => new Promise<void>(() => {}))
     useSyncStore.setState({ restoreFromSnapshot: restoreMock })
 
     render(<SnapshotHistoryPage />)
@@ -136,26 +134,15 @@ describe('SnapshotHistoryPage', () => {
     fireEvent.click(
       screen.getAllByRole('button').find((b) => b.textContent?.includes('Restore this snapshot'))!,
     )
-
-    // Confirm → restore runs but never resolves
     fireEvent.click(
-      screen
-        .getAllByRole('button')
-        .find((b) => b.textContent?.includes('Restore') && !b.textContent?.includes('this snapshot'))!,
+      screen.getAllByRole('button').find((b) => b.textContent === 'Restore')!,
     )
     await waitFor(() => expect(restoreMock).toHaveBeenCalledTimes(1))
 
-    // Cancel before the in-flight restore finishes
-    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === 'Cancel')!)
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-
-    // Now deliver the stale rejection from the original restore attempt —
-    // handleConfirm's token check must swallow it and leave the dialog
-    // closed instead of reopening into coverageWarning against the
-    // currently-selected row.
-    rejectRestore!(new SnapshotCoverageError(['stub']))
-    // Give the rejection microtask time to settle
-    await new Promise((r) => setTimeout(r, 0))
-    expect(screen.queryByRole('dialog')).toBeNull()
+    // Cancel button must now be disabled so the user cannot close the dialog
+    // mid-restore and dispatch a second restore in parallel.
+    const cancelBtn = screen.getAllByRole('button').find((b) => b.textContent === 'Cancel')!
+    expect(cancelBtn).toBeDisabled()
   })
+
 })
