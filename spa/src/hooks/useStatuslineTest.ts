@@ -200,7 +200,11 @@ export function useStatuslineTest(hostId: string) {
     }
 
     const work = (async () => {
-      const res = await hostFetch(hostId, '/api/agent/cc/statusline/test', { method: 'POST' })
+      const res = await hostFetch(hostId, '/api/agent/cc/statusline/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_protocol: 'ready-v1' }),
+      })
       if (!res.ok || !res.body) {
         markFailThenSkipRest(1, `HTTP ${res.status}`)
         return

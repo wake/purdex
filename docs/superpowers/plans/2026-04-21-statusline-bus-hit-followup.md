@@ -13,7 +13,8 @@
 主功能與 stage-4 grace fallback 已經在 `main`。本 follow-up 處理 self-test race 的最小可驗證修正：
 
 - 在 self-test 開始時先送 `init` nonce，讓 SPA 先訂閱 `statuslineTestBus`
-- 加入 ready ack，讓 daemon 在 client 宣告 ready 之後才 spawn proxy
+- 新 frontend 會在 `/test` 請求裡宣告 `client_protocol=ready-v1`
+- daemon 只有在看到 `ready-v1` capability 時，才強制要求 ready ack 後再 spawn proxy
 - 保留真實 `/api/agent/status -> agent.status broadcast` 路徑，不把 broadcast 移到 self-test handler 自己重建
 
 這是 `2026-04-19-statusline-pipeline-test.md` 的 post-plan 修正；不改 spec contract，只修正 plan 落地後暴露的 race。
@@ -47,14 +48,15 @@
 ### Follow-up 後
 
 1. `handleStatuslineTest` 先送 `init` event，讓 SPA 取得 nonce
-2. SPA 用 nonce 先訂閱 `statuslineTestBus`，再呼叫 ready ack endpoint
-3. daemon 優先等待 ready ack，再 spawn proxy；若 SPA 尚未升級，逾時後回退舊行為
-4. test nonce 仍走真實 `handleAgentStatus -> agent.status broadcast` 路徑
-5. `agent.status.cleared` 仍由 self-test handler 在結尾送出，清掉 synthetic nonce state
-6. 新舊版相容：
+2. 新 frontend 在 `/test` 請求中帶 `client_protocol=ready-v1`
+3. daemon 看到 `ready-v1` 時，先送 `init`，再等待 ready ack 後才 spawn proxy
+4. 沒有 `ready-v1` capability 的舊 frontend，直接走 legacy path
+5. test nonce 仍走真實 `handleAgentStatus -> agent.status broadcast` 路徑
+6. `agent.status.cleared` 仍由 self-test handler 在結尾送出，清掉 synthetic nonce state
+7. 新舊版相容：
    - 新 frontend + 舊 daemon：保留 stage-1 nonce fallback
-   - 新 daemon + 舊 frontend：ready wait 逾時後回退舊行為，不在 spawn 前直接 fail
-   - 新 frontend + 新 daemon：走 init/ready 優先路徑，減少 bus subscriber race
+   - 新 daemon + 舊 frontend：因沒有 `ready-v1` capability，直接走 legacy path
+   - 新 frontend + 新 daemon：走 capability-based init/ready path，避免靜默退回舊 race
 
 ## 驗證
 

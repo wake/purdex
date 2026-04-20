@@ -111,6 +111,9 @@ func TestSignalTestStageUnknownNonceIsNoOp(t *testing.T) {
 
 func TestHandleStatuslineTestStreamsStagesAndCleans(t *testing.T) {
 	env := newHandlerTestEnv(t) // same helper used by handler_test.go
+	prevReadyTimeout := testReadyTimeout
+	testReadyTimeout = 100 * time.Millisecond
+	defer func() { testReadyTimeout = prevReadyTimeout }()
 	env.module.testSpawnProxy = func(nonce string) error {
 		// Simulate the proxy posting to /api/agent/status with the nonce.
 		go func() {
@@ -122,7 +125,7 @@ func TestHandleStatuslineTestStreamsStagesAndCleans(t *testing.T) {
 		return nil // simulate proxy exit 0
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", strings.NewReader(`{"client_protocol":"ready-v1"}`))
 	w := newStageAwareRecorder()
 	done := make(chan struct{})
 	go func() {
@@ -150,6 +153,9 @@ func TestHandleStatuslineTestStreamsStagesAndCleans(t *testing.T) {
 
 func TestHandleStatuslineTestWaitsForReadyBeforeSpawning(t *testing.T) {
 	env := newHandlerTestEnv(t)
+	prevReadyTimeout := testReadyTimeout
+	testReadyTimeout = 100 * time.Millisecond
+	defer func() { testReadyTimeout = prevReadyTimeout }()
 	spawnCalled := make(chan struct{}, 1)
 	env.module.testSpawnProxy = func(nonce string) error {
 		spawnCalled <- struct{}{}
@@ -162,7 +168,7 @@ func TestHandleStatuslineTestWaitsForReadyBeforeSpawning(t *testing.T) {
 		return nil
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", strings.NewReader(`{"client_protocol":"ready-v1"}`))
 	w := newStageAwareRecorder()
 	done := make(chan struct{})
 	go func() {
@@ -193,7 +199,7 @@ func TestHandleStatuslineTestWaitsForReadyBeforeSpawning(t *testing.T) {
 	}
 }
 
-func TestHandleStatuslineTestFallsBackWhenReadyAckNeverArrives(t *testing.T) {
+func TestHandleStatuslineTestLegacyClientSkipsReadyGate(t *testing.T) {
 	env := newHandlerTestEnv(t)
 	spawnCalled := make(chan struct{}, 1)
 	env.module.testSpawnProxy = func(nonce string) error {
@@ -215,11 +221,9 @@ func TestHandleStatuslineTestFallsBackWhenReadyAckNeverArrives(t *testing.T) {
 		close(done)
 	}()
 
-	_ = waitForInitNonce(t, w)
 	select {
 	case <-spawnCalled:
-		// Ready ack never arrived; this should only happen after the compatibility timeout.
-	case <-time.After(testReadyWait + 300*time.Millisecond):
+	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for legacy fallback spawn")
 	}
 
@@ -234,8 +238,46 @@ func TestHandleStatuslineTestFallsBackWhenReadyAckNeverArrives(t *testing.T) {
 	}
 }
 
+func TestHandleStatuslineTestReadyClientWithoutAckFailsStage1(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	prevReadyTimeout := testReadyTimeout
+	testReadyTimeout = 100 * time.Millisecond
+	defer func() { testReadyTimeout = prevReadyTimeout }()
+	spawnCalled := make(chan struct{}, 1)
+	env.module.testSpawnProxy = func(nonce string) error {
+		spawnCalled <- struct{}{}
+		return nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", strings.NewReader(`{"client_protocol":"ready-v1"}`))
+	w := newStageAwareRecorder()
+	done := make(chan struct{})
+	go func() {
+		env.module.handleStatuslineTest(w, req)
+		close(done)
+	}()
+
+	_ = waitForInitNonce(t, w)
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for self-test handler completion; body=%s", w.BodyString())
+	}
+	select {
+	case <-spawnCalled:
+		t.Fatal("ready-aware client should not spawn without ack")
+	default:
+	}
+	if !strings.Contains(w.BodyString(), "timeout waiting for client ready") {
+		t.Fatalf("expected ready timeout failure; body=%s", w.BodyString())
+	}
+}
+
 func TestHandleStatuslineTestBroadcastsAgentStatusAfterClientReady(t *testing.T) {
 	env := newHandlerTestEnv(t)
+	prevReadyTimeout := testReadyTimeout
+	testReadyTimeout = 100 * time.Millisecond
+	defer func() { testReadyTimeout = prevReadyTimeout }()
 
 	sub := env.module.core.Events.AddTestSubscriber()
 	defer env.module.core.Events.RemoveTestSubscriber(sub)
@@ -250,7 +292,7 @@ func TestHandleStatuslineTestBroadcastsAgentStatusAfterClientReady(t *testing.T)
 		return nil
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", strings.NewReader(`{"client_protocol":"ready-v1"}`))
 	w := newStageAwareRecorder()
 	done := make(chan struct{})
 
@@ -325,10 +367,13 @@ collect:
 
 func TestHandleStatuslineTestReportsProxySpawnFailure(t *testing.T) {
 	env := newHandlerTestEnv(t)
+	prevReadyTimeout := testReadyTimeout
+	testReadyTimeout = 100 * time.Millisecond
+	defer func() { testReadyTimeout = prevReadyTimeout }()
 	env.module.testSpawnProxy = func(nonce string) error {
 		return fmt.Errorf("proxy spawn failed: no such executable")
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/cc/statusline/test", strings.NewReader(`{"client_protocol":"ready-v1"}`))
 	w := newStageAwareRecorder()
 	done := make(chan struct{})
 	go func() {

@@ -14,7 +14,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -37,7 +39,9 @@ type testObserver struct {
 	readyOnce sync.Once
 }
 
-const testReadyWait = 250 * time.Millisecond
+const testReadyClientProtocol = "ready-v1"
+
+var testReadyTimeout = 2 * time.Second
 
 func (m *Module) registerTestObserver(nonce string) *testObserver {
 	obs := &testObserver{
@@ -151,6 +155,14 @@ func (m *Module) handleStatuslineTestReady(w http.ResponseWriter, r *http.Reques
 // marked by the SPA after it sees the daemon-broadcast WS event.
 //
 func (m *Module) handleStatuslineTest(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ClientProtocol string `json:"client_protocol"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -189,17 +201,17 @@ func (m *Module) handleStatuslineTest(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	if !writeEvent(testStageEvent{Type: "init", Nonce: nonce}) {
-		return
-	}
-	select {
-	case <-obs.ready:
-	case <-time.After(testReadyWait):
-		// Backward-compatible fallback: older SPAs do not know about the init/ready
-		// handshake yet, and dev-mode HMR can temporarily skew frontend/backend
-		// versions. In those cases keep the legacy behavior rather than failing the
-		// self-test before spawn. When the ready ack does arrive, this wait gives
-		// the client a best-effort head start before the proxy POST lands.
+	if req.ClientProtocol == testReadyClientProtocol {
+		if !writeEvent(testStageEvent{Type: "init", Nonce: nonce}) {
+			return
+		}
+		select {
+		case <-obs.ready:
+		case <-time.After(testReadyTimeout):
+			emitStage(1, "Proxy spawned", "failed", "timeout waiting for client ready", 0)
+			writeEvent(testStageEvent{Type: "done", Nonce: nonce})
+			return
+		}
 	}
 
 	spawn := m.testSpawnProxy
