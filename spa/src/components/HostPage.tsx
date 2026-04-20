@@ -111,7 +111,7 @@ export function HostPage(_props: PaneRendererProps) {
 
   useEffect(() => {
     if (selection) lastSelection = selection
-  }, [selection?.hostId, selection?.subPage])
+  }, [selection])
 
   useEffect(() => {
     if (canonicalPath && canonicalPath !== location) {

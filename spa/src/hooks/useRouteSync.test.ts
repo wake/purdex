@@ -11,6 +11,7 @@ import type { ReactNode } from 'react'
 import { createElement } from 'react'
 import { Router } from 'wouter'
 import { memoryLocation } from 'wouter/memory-location'
+import { resetLastHostSelection } from '../components/HostPage'
 import { useRouteSync } from './useRouteSync'
 import { useTabStore } from '../stores/useTabStore'
 import { getPrimaryPane } from '../lib/pane-tree'
@@ -37,6 +38,7 @@ function resetStore(data?: { tabs?: Record<string, Tab>; tabOrder?: string[]; ac
     tabs: data?.tabs ?? {},
     tabOrder: data?.tabOrder ?? [],
     activeTabId: data?.activeTabId ?? null,
+    visitHistory: [],
   })
 }
 
@@ -49,6 +51,7 @@ function createWrapper(mem: ReturnType<typeof memoryLocation>) {
 describe('useRouteSync', () => {
   beforeEach(() => {
     resetStore()
+    resetLastHostSelection()
   })
 
   it('singleton route /history opens a history tab', () => {
@@ -171,5 +174,31 @@ describe('useRouteSync', () => {
     // Tab→URL should NOT replace /settings/terminal with /settings
     const lastPath = mem.history[mem.history.length - 1]
     expect(lastPath).toBe('/settings/terminal')
+  })
+
+  it('opens the singleton hosts tab for /hosts/test-host/logs without rewriting the URL', () => {
+    const mem = memoryLocation({ path: '/hosts/test-host/logs', record: true })
+
+    renderHook(() => useRouteSync(), { wrapper: createWrapper(mem) })
+
+    const state = useTabStore.getState()
+    const tab = state.activeTabId ? state.tabs[state.activeTabId] : null
+    const primary = tab ? getPrimaryPane(tab.layout) : null
+
+    expect(primary?.content.kind).toBe('hosts')
+    expect(mem.history[mem.history.length - 1]).toBe('/hosts/test-host/logs')
+  })
+
+  it('opens the singleton hosts tab for invalid host deep links without rewriting them to bare /hosts', () => {
+    const mem = memoryLocation({ path: '/hosts/missing-host/logs', record: true })
+
+    renderHook(() => useRouteSync(), { wrapper: createWrapper(mem) })
+
+    const state = useTabStore.getState()
+    const tab = state.activeTabId ? state.tabs[state.activeTabId] : null
+    const primary = tab ? getPrimaryPane(tab.layout) : null
+
+    expect(primary?.content.kind).toBe('hosts')
+    expect(mem.history[mem.history.length - 1]).toBe('/hosts/missing-host/logs')
   })
 })
