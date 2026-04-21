@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.199] - 2026-04-22
+
+### Feat(spa): HSR PR-1 — scope-parameterized settings contribution registry + 3-layer stores (#542)
+
+- 建立 Host-scoped Module Settings Registry（HSR）核心：`ModuleDefinition.settings` 以 scope-parameterized discriminated union 宣告，module 可在 `purdex` / `host` / `workspace` 三種 scope 各自掛自己的設定；`AnySettingsContributionDeclaration` distributive union 在 registry / dispatcher / ModuleDefinition 三處 boundary 保留 scope↔ctx 關聯。
+- 新增三層 settings store（`useGlobalSettingsStore` / `useHostSettingsStore` / `useWorkspaceSettingsStore`）：persist + BroadcastChannel sync + rehydrate heal 皆就位；heal 拒絕 `__proto__` / `constructor` / `prototype` keys 防 prototype pollution。
+- `dispatch-settings-contributions.ts` 以 atomic two-phase（validate → commit）註冊，Invariant I1 保證同 module 同 scope 不與舊 `globalConfig` / `workspaceConfig` 雙軌並存。
+- Cascade integration：host 刪除 / workspace 移除會同步清掉對應 scope 的 settings；host 刪除 undo 對 last-host veto、same-id 重建 race、tab restore 綁到新 host 三類邊界 case 都有保護。
+- Tear-off / merge 搬移 window 時透過 `removeWorkspace(wsId, { keepSettings: true })` 保留 workspace 設定不被連坐清除。
+- 3 輪 codex 4-way review 全部收斂（R3 標準 no findings）；遺留 #538–#541 追蹤 shell migration 後才處理的 MED 級項目（smoke render / internal API 收斂 / store ref 外洩 / cross-store rehydrate order）。
+- 本 PR 僅含 registry + 型別 + 三層 store + cascade 整合；SettingsPage / HostPage / WorkspaceSettingsPage 遷 registry-driven 與 Editor module 首個用例（tilde Layer 1/2）由後續 PR-2/3/4 接手。
+
 ## [1.0.0-alpha.198] - 2026-04-21
 
 ### Feat(agent): add opencode hook integration (#534)
