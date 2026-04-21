@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-alpha.200] - 2026-04-22
+
+### Test: realign stale fs and editor suites with current runtime (#544)
+
+- 將已失效的 `internal/module/files` list handler 測試遷回現行 `internal/module/fs`，保留目錄排序、hidden file 過濾、empty dir、broken symlink 等仍有意義的 coverage，讓 `make test` 重新可完整跑完。
+- `EditorPane` 測試改寫為對齊現行 `FsBackend` editor runtime，覆蓋初始載入、儲存成功、儲存失敗、unmount cleanup 與 active reload，移除對舊 `docId` / `bindingStatus` 模型的錯誤依賴。
+
 ## [1.0.0-alpha.199] - 2026-04-22
 
 ### Feat(spa): HSR PR-1 — scope-parameterized settings contribution registry + 3-layer stores (#542)
