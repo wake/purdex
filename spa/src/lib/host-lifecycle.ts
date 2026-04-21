@@ -21,6 +21,18 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   const agentStore = useAgentStore.getState()
   const streamStore = useStreamStore.getState()
 
+  // Mirror the veto in `useHostStore.removeHost()` up front: if the host
+  // doesn't exist or is the last remaining host (store refuses to delete it),
+  // abort the cascade entirely rather than clearing per-host state that
+  // won't ever be matched by a real removal. Without this guard the cascade
+  // would wipe sessions/agent/stream/settings, then `removeHost()` would
+  // no-op, and the undo callback's recreation guard would treat the still-
+  // present host row as a recreation and skip every restore — permanent
+  // data loss on the last host.
+  if (!hostStore.hosts[hostId] || Object.keys(hostStore.hosts).length <= 1) {
+    return () => {}
+  }
+
   const prefix = `${hostId}:`
 
   // --- Snapshot for undo (serializable data only) ---
@@ -176,7 +188,10 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     }
 
     // --- Restore tabs ---
-    if (closeTabs && snapshot.closedTabs.length > 0) {
+    // Tabs carry the deleted host's hostId/sessionCode; if a different entity
+    // now owns the same hostId (recreated during undo window), we must not
+    // re-bind stale panes to it — gate tab restore on !hostWasRecreated too.
+    if (closeTabs && !hostWasRecreated && snapshot.closedTabs.length > 0) {
       const ts = useTabStore.getState()
       for (const tab of snapshot.closedTabs) {
         // Only restore if tab wasn't re-created by user during undo window
@@ -192,7 +207,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
           useWorkspaceStore.getState().addTabToWorkspace(wsId, tabId)
         }
       }
-    } else if (!closeTabs && snapshot.terminatedTabPaneIds.length > 0) {
+    } else if (!closeTabs && !hostWasRecreated && snapshot.terminatedTabPaneIds.length > 0) {
       // Clear terminated marking on panes that were marked by this delete
       for (const { tabId, paneId } of snapshot.terminatedTabPaneIds) {
         const currentTab = useTabStore.getState().tabs[tabId]

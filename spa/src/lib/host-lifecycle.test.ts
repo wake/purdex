@@ -289,6 +289,81 @@ describe('host delete cascade', () => {
     }
   })
 
+  it('aborts cascade with no-op undo when host removal would be vetoed (last host)', () => {
+    // Leave only one host so useHostStore.removeHost() will no-op.
+    useHostStore.setState({
+      hosts: { [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0 } },
+      hostOrder: [HOST_A],
+      activeHostId: HOST_A,
+      runtime: {},
+    })
+    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/a' })
+    const tab = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(tab)
+
+    const restore = deleteHostCascade(HOST_A, true)
+
+    // Cascade must be inert: host entry, settings and tabs are untouched.
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toEqual({ homePath: '/tmp/a' })
+    expect(useTabStore.getState().tabs[tab.id]).toBeDefined()
+
+    // Undo is a safe no-op.
+    expect(() => restore()).not.toThrow()
+    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toEqual({ homePath: '/tmp/a' })
+  })
+
+  it('undo does not restore closed tabs onto a recreated same-id host (closeTabs=true)', () => {
+    const tab = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(tab)
+
+    const restore = deleteHostCascade(HOST_A, true)
+    expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
+    expect(useHostStore.getState().hosts[HOST_A]).toBeUndefined()
+
+    // Same-id host recreated during undo window — it is a different entity.
+    useHostStore.setState((s) => ({
+      hosts: {
+        ...s.hosts,
+        [HOST_A]: { id: HOST_A, name: 'Host A (new)', ip: '9.9.9.9', port: 7860, order: 2 },
+      },
+      hostOrder: [...s.hostOrder, HOST_A],
+    }))
+
+    restore()
+
+    // Stale tabs with old hostId/sessionCode must not be bound to the new host.
+    expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
+  })
+
+  it('undo does not clear terminated markers when host was recreated (closeTabs=false)', () => {
+    const tab = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(tab)
+
+    const restore = deleteHostCascade(HOST_A, false)
+    const marked = getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content
+    if (marked.kind === 'tmux-session') {
+      expect(marked.terminated).toBe('host-removed')
+    }
+
+    // Recreate same-id host during undo window.
+    useHostStore.setState((s) => ({
+      hosts: {
+        ...s.hosts,
+        [HOST_A]: { id: HOST_A, name: 'Host A (new)', ip: '9.9.9.9', port: 7860, order: 2 },
+      },
+      hostOrder: [...s.hostOrder, HOST_A],
+    }))
+
+    restore()
+
+    // Terminated marking must stay — those panes belonged to the deleted host.
+    const after = getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content
+    if (after.kind === 'tmux-session') {
+      expect(after.terminated).toBe('host-removed')
+    }
+  })
+
   it('does not affect other hosts during cascade', () => {
     const tabB = makeSessionTab(HOST_B, 'stg001')
     useTabStore.getState().addTab(tabB)
