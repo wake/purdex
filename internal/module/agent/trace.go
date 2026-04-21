@@ -100,50 +100,118 @@ func beginHookTrace(sink *hookTraceSink, req EventRequest) *hookTraceCollector {
 		},
 		nextSeq: 1,
 	}
-	collector.triggerStepID = collector.append(
-		"",
-		"trigger",
-		req.AgentType,
-		"",
-		"",
-		req.EventName,
-		"received",
-		"hook_post",
-		req,
-		nil,
-		nil,
-	)
+	collector.triggerStepID = collector.append(traceStepInput{
+		Kind:      "trigger",
+		AgentType: req.AgentType,
+		EventName: req.EventName,
+		Decision:  "received",
+		Reason:    "hook_post",
+		Payload:   req,
+	})
 	return collector
 }
 
-func (c *hookTraceCollector) append(parentStepID, kind, agentType, frameID, parentFrameID, eventName, decision, reason string, payload, before, after any) string {
+// traceStepInput carries the optional fields for a single trace step; zero
+// values fall back to hook-path defaults inside append().
+type traceStepInput struct {
+	// Identity
+	ParentStepID  string
+	Kind          string
+	AgentType     string
+	FrameID       string
+	ParentFrameID string
+	EventName     string
+	Decision      string
+	Reason        string
+
+	// Payload
+	Payload any
+	Before  any
+	After   any
+
+	// Lights envelope (spec §3.5)
+	SourceKind         string
+	Action             string
+	ReasonCode         string
+	Outcome            string
+	ScenarioKey        string
+	ObservedGeneration int64
+	DecisionPorts      string
+	Phase              string
+	Status             string
+	WatcherToken       *string
+}
+
+func (c *hookTraceCollector) append(in traceStepInput) string {
 	if c == nil {
 		return ""
 	}
 	stepID := uuid.NewString()
+	sourceKind := in.SourceKind
+	if sourceKind == "" {
+		sourceKind = "hook"
+	}
+	phase := in.Phase
+	if phase == "" {
+		phase = "committed"
+	}
+	status := in.Status
+	if status == "" {
+		status = "success"
+	}
+	outcome := in.Outcome
+	if outcome == "" {
+		outcome = "emitted"
+	}
+	action := in.Action
+	if action == "" {
+		action = in.Kind + ":" + in.Decision
+	}
+	scenarioKey := in.ScenarioKey
+	if scenarioKey == "" {
+		scenarioKey = in.EventName
+	}
+	reasonCode := in.ReasonCode
+	if reasonCode == "" {
+		reasonCode = in.Reason
+	}
+	decisionPorts := in.DecisionPorts
+	if decisionPorts == "" {
+		decisionPorts = "[]"
+	}
 	c.steps = append(c.steps, store.TraceStep{
-		StepID:        stepID,
-		ChainID:       c.chain.ChainID,
-		ParentStepID:  parentStepID,
-		Seq:           c.nextSeq,
-		Kind:          kind,
-		TmuxSession:   c.chain.TmuxSession,
-		PaneID:        c.chain.PaneID,
-		AgentType:     agentType,
-		FrameID:       frameID,
-		ParentFrameID: parentFrameID,
-		EventName:     eventName,
-		Decision:      decision,
-		Reason:        reason,
-		PayloadJSON:   marshalTraceJSON(payload),
-		BeforeJSON:    marshalTraceJSON(before),
-		AfterJSON:     marshalTraceJSON(after),
-		CreatedAt:     time.Now().UnixNano(),
+		StepID:             stepID,
+		ChainID:            c.chain.ChainID,
+		ParentStepID:       in.ParentStepID,
+		Seq:                c.nextSeq,
+		Kind:               in.Kind,
+		TmuxSession:        c.chain.TmuxSession,
+		PaneID:             c.chain.PaneID,
+		AgentType:          in.AgentType,
+		FrameID:            in.FrameID,
+		ParentFrameID:      in.ParentFrameID,
+		EventName:          in.EventName,
+		Decision:           in.Decision,
+		Reason:             in.Reason,
+		PayloadJSON:        marshalTraceJSON(in.Payload),
+		BeforeJSON:         marshalTraceJSON(in.Before),
+		AfterJSON:          marshalTraceJSON(in.After),
+		CreatedAt:          time.Now().UnixNano(),
+		SourceKind:         sourceKind,
+		Action:             action,
+		ReasonCode:         reasonCode,
+		Outcome:            outcome,
+		ScenarioKey:        scenarioKey,
+		ObservedGeneration: in.ObservedGeneration,
+		DecisionPorts:      json.RawMessage(decisionPorts),
+		Phase:              phase,
+		Status:             status,
+		WatcherToken:       in.WatcherToken,
 	})
 	c.nextSeq++
-	c.chain.LatestStepKind = kind
-	c.chain.LatestDecision = decision
-	c.chain.LatestStepReason = reason
+	c.chain.LatestStepKind = in.Kind
+	c.chain.LatestDecision = in.Decision
+	c.chain.LatestStepReason = in.Reason
 	return stepID
 }
 
@@ -151,38 +219,35 @@ func (c *hookTraceCollector) Verify(req EventRequest, decision, reason string, a
 	if c == nil {
 		return
 	}
-	c.verifyStepID = c.append(
-		c.triggerStepID,
-		"verify",
-		req.AgentType,
-		"",
-		"",
-		req.EventName,
-		decision,
-		reason,
-		req,
-		nil,
-		after,
-	)
+	c.verifyStepID = c.append(traceStepInput{
+		ParentStepID: c.triggerStepID,
+		Kind:         "verify",
+		AgentType:    req.AgentType,
+		EventName:    req.EventName,
+		Decision:     decision,
+		Reason:       reason,
+		Payload:      req,
+		After:        after,
+	})
 }
 
 func (c *hookTraceCollector) Frame(req EventRequest, meta FrameTraceMeta) {
 	if c == nil || meta.Decision == "" {
 		return
 	}
-	c.frameStepID = c.append(
-		c.verifyStepID,
-		"frame",
-		req.AgentType,
-		meta.FrameID,
-		meta.ParentFrameID,
-		req.EventName,
-		meta.Decision,
-		meta.Reason,
-		req,
-		meta.Before,
-		meta.After,
-	)
+	c.frameStepID = c.append(traceStepInput{
+		ParentStepID:  c.verifyStepID,
+		Kind:          "frame",
+		AgentType:     req.AgentType,
+		FrameID:       meta.FrameID,
+		ParentFrameID: meta.ParentFrameID,
+		EventName:     req.EventName,
+		Decision:      meta.Decision,
+		Reason:        meta.Reason,
+		Payload:       req,
+		Before:        meta.Before,
+		After:         meta.After,
+	})
 }
 
 type ProjectionTraceSummary struct {
@@ -200,19 +265,17 @@ func (c *hookTraceCollector) Projection(req EventRequest, summary ProjectionTrac
 	if parent == "" {
 		parent = c.verifyStepID
 	}
-	c.projectionStepID = c.append(
-		parent,
-		"projection",
-		req.AgentType,
-		"",
-		"",
-		req.EventName,
-		summary.Decision,
-		summary.Reason,
-		req,
-		summary.Before,
-		summary.After,
-	)
+	c.projectionStepID = c.append(traceStepInput{
+		ParentStepID: parent,
+		Kind:         "projection",
+		AgentType:    req.AgentType,
+		EventName:    req.EventName,
+		Decision:     summary.Decision,
+		Reason:       summary.Reason,
+		Payload:      req,
+		Before:       summary.Before,
+		After:        summary.After,
+	})
 }
 
 func (c *hookTraceCollector) Emit(payload any, agentType, eventName, decision, reason string) {
@@ -226,19 +289,16 @@ func (c *hookTraceCollector) Emit(payload any, agentType, eventName, decision, r
 	if parent == "" {
 		parent = c.verifyStepID
 	}
-	c.append(
-		parent,
-		"emit",
-		agentType,
-		"",
-		"",
-		eventName,
-		decision,
-		reason,
-		payload,
-		nil,
-		payload,
-	)
+	c.append(traceStepInput{
+		ParentStepID: parent,
+		Kind:         "emit",
+		AgentType:    agentType,
+		EventName:    eventName,
+		Decision:     decision,
+		Reason:       reason,
+		Payload:      payload,
+		After:        payload,
+	})
 }
 
 func (c *hookTraceCollector) Finish(status, reason string) {

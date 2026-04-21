@@ -83,6 +83,33 @@ func TestHandleEvent_PersistAcceptedHookTrace(t *testing.T) {
 	if record.Steps[len(record.Steps)-1].Kind != "emit" {
 		t.Fatalf("last step kind = %q, want emit", record.Steps[len(record.Steps)-1].Kind)
 	}
+
+	for i, step := range record.Steps {
+		if step.SourceKind != "hook" {
+			t.Fatalf("step %d SourceKind = %q, want hook", i, step.SourceKind)
+		}
+		if step.Phase != "committed" {
+			t.Fatalf("step %d Phase = %q, want committed", i, step.Phase)
+		}
+		if step.Status != "success" {
+			t.Fatalf("step %d Status = %q, want success", i, step.Status)
+		}
+		if step.ScenarioKey == "" {
+			t.Fatalf("step %d ScenarioKey empty", i)
+		}
+		if step.Action == "" {
+			t.Fatalf("step %d Action empty", i)
+		}
+		if step.Outcome == "" {
+			t.Fatalf("step %d Outcome empty", i)
+		}
+		if string(step.DecisionPorts) != "[]" {
+			t.Fatalf("step %d DecisionPorts = %s, want []", i, string(step.DecisionPorts))
+		}
+		if step.WatcherToken != nil {
+			t.Fatalf("step %d WatcherToken = %v, want nil", i, step.WatcherToken)
+		}
+	}
 }
 
 func TestHandleEvent_VerifyRejectPersistsTerminalChain(t *testing.T) {

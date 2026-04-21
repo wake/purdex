@@ -37,24 +37,35 @@ type TraceChain struct {
 }
 
 // TraceStep is a single ordered trace step within a chain.
+// Light-tracking fields back the Lights System trace envelope (spec §3.5).
 type TraceStep struct {
-	StepID        string          `json:"step_id"`
-	ChainID       string          `json:"chain_id"`
-	ParentStepID  string          `json:"parent_step_id,omitempty"`
-	Seq           int             `json:"seq"`
-	Kind          string          `json:"kind"`
-	TmuxSession   string          `json:"tmux_session"`
-	PaneID        string          `json:"pane_id"`
-	AgentType     string          `json:"agent_type"`
-	FrameID       string          `json:"frame_id"`
-	ParentFrameID string          `json:"parent_frame_id,omitempty"`
-	EventName     string          `json:"event_name"`
-	Decision      string          `json:"decision"`
-	Reason        string          `json:"reason"`
-	PayloadJSON   json.RawMessage `json:"payload_json,omitempty"`
-	BeforeJSON    json.RawMessage `json:"before_json,omitempty"`
-	AfterJSON     json.RawMessage `json:"after_json,omitempty"`
-	CreatedAt     int64           `json:"created_at"`
+	StepID             string          `json:"step_id"`
+	ChainID            string          `json:"chain_id"`
+	ParentStepID       string          `json:"parent_step_id,omitempty"`
+	Seq                int             `json:"seq"`
+	Kind               string          `json:"kind"`
+	TmuxSession        string          `json:"tmux_session"`
+	PaneID             string          `json:"pane_id"`
+	AgentType          string          `json:"agent_type"`
+	FrameID            string          `json:"frame_id"`
+	ParentFrameID      string          `json:"parent_frame_id,omitempty"`
+	EventName          string          `json:"event_name"`
+	Decision           string          `json:"decision"`
+	Reason             string          `json:"reason"`
+	PayloadJSON        json.RawMessage `json:"payload_json,omitempty"`
+	BeforeJSON         json.RawMessage `json:"before_json,omitempty"`
+	AfterJSON          json.RawMessage `json:"after_json,omitempty"`
+	CreatedAt          int64           `json:"created_at"`
+	SourceKind         string          `json:"source_kind,omitempty"`
+	Action             string          `json:"action,omitempty"`
+	ReasonCode         string          `json:"reason_code,omitempty"`
+	Outcome            string          `json:"outcome,omitempty"`
+	ScenarioKey        string          `json:"scenario_key,omitempty"`
+	ObservedGeneration int64           `json:"observed_generation,omitempty"`
+	DecisionPorts      json.RawMessage `json:"decision_ports,omitempty"`
+	Phase              string          `json:"phase,omitempty"`
+	Status             string          `json:"status,omitempty"`
+	WatcherToken       *string         `json:"watcher_token,omitempty"`
 }
 
 // TraceRecord combines a chain summary with its ordered steps.
@@ -201,6 +212,16 @@ func needsStepRebuild(cols map[string]bool, db *sql.DB) bool {
 		"before_json",
 		"after_json",
 		"created_at",
+		"source_kind",
+		"action",
+		"reason_code",
+		"outcome",
+		"scenario_key",
+		"observed_generation",
+		"decision_ports",
+		"phase",
+		"status",
+		"watcher_token",
 	}
 	for _, col := range required {
 		if !cols[col] {
@@ -289,23 +310,33 @@ func createTraceChainsTable(db *sql.DB) error {
 func createTraceStepsTable(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS agent_trace_steps (
-			step_id         TEXT PRIMARY KEY,
-			chain_id        TEXT NOT NULL,
-			parent_step_id  TEXT,
-			seq             INTEGER NOT NULL,
-			kind            TEXT NOT NULL DEFAULT '',
-			tmux_session    TEXT NOT NULL DEFAULT '',
-			pane_id         TEXT NOT NULL DEFAULT '',
-			agent_type      TEXT NOT NULL DEFAULT '',
-			frame_id        TEXT NOT NULL DEFAULT '',
-			parent_frame_id TEXT NOT NULL DEFAULT '',
-			event_name      TEXT NOT NULL DEFAULT '',
-			decision        TEXT NOT NULL DEFAULT '',
-			reason          TEXT NOT NULL DEFAULT '',
-			payload_json    TEXT NOT NULL DEFAULT 'null',
-			before_json     TEXT NOT NULL DEFAULT 'null',
-			after_json      TEXT NOT NULL DEFAULT 'null',
-			created_at      INTEGER NOT NULL DEFAULT 0,
+			step_id             TEXT PRIMARY KEY,
+			chain_id            TEXT NOT NULL,
+			parent_step_id      TEXT,
+			seq                 INTEGER NOT NULL,
+			kind                TEXT NOT NULL DEFAULT '',
+			tmux_session        TEXT NOT NULL DEFAULT '',
+			pane_id             TEXT NOT NULL DEFAULT '',
+			agent_type          TEXT NOT NULL DEFAULT '',
+			frame_id            TEXT NOT NULL DEFAULT '',
+			parent_frame_id     TEXT NOT NULL DEFAULT '',
+			event_name          TEXT NOT NULL DEFAULT '',
+			decision            TEXT NOT NULL DEFAULT '',
+			reason              TEXT NOT NULL DEFAULT '',
+			payload_json        TEXT NOT NULL DEFAULT 'null',
+			before_json         TEXT NOT NULL DEFAULT 'null',
+			after_json          TEXT NOT NULL DEFAULT 'null',
+			created_at          INTEGER NOT NULL DEFAULT 0,
+			source_kind         TEXT NOT NULL DEFAULT '',
+			action              TEXT NOT NULL DEFAULT '',
+			reason_code         TEXT NOT NULL DEFAULT '',
+			outcome             TEXT NOT NULL DEFAULT '',
+			scenario_key        TEXT NOT NULL DEFAULT '',
+			observed_generation INTEGER NOT NULL DEFAULT 0,
+			decision_ports      TEXT NOT NULL DEFAULT '[]',
+			phase               TEXT NOT NULL DEFAULT '',
+			status              TEXT NOT NULL DEFAULT '',
+			watcher_token       TEXT,
 			FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
 			FOREIGN KEY (chain_id, parent_step_id) REFERENCES agent_trace_steps(chain_id, step_id) ON DELETE CASCADE
 		)
@@ -625,11 +656,15 @@ func (s *TraceStore) SaveChain(record TraceRecord) (err error) {
 			INSERT INTO agent_trace_steps (
 				step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
 				agent_type, frame_id, parent_frame_id, event_name, decision, reason,
-				payload_json, before_json, after_json, created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				payload_json, before_json, after_json, created_at,
+				source_kind, action, reason_code, outcome, scenario_key,
+				observed_generation, decision_ports, phase, status, watcher_token
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, step.StepID, step.ChainID, nullString(step.ParentStepID), step.Seq, step.Kind, step.TmuxSession, step.PaneID,
 			step.AgentType, step.FrameID, step.ParentFrameID, step.EventName, step.Decision, step.Reason,
-			rawJSONText(step.PayloadJSON), rawJSONText(step.BeforeJSON), rawJSONText(step.AfterJSON), step.CreatedAt); err != nil {
+			rawJSONText(step.PayloadJSON), rawJSONText(step.BeforeJSON), rawJSONText(step.AfterJSON), step.CreatedAt,
+			step.SourceKind, step.Action, step.ReasonCode, step.Outcome, step.ScenarioKey,
+			step.ObservedGeneration, rawJSONArrayText(step.DecisionPorts), step.Phase, step.Status, nullableString(step.WatcherToken)); err != nil {
 			return err
 		}
 	}
@@ -712,7 +747,9 @@ func (s *TraceStore) GetChainRecord(chainID string) (*TraceRecord, error) {
 	rows, err := s.db.Query(`
 		SELECT step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
 		       agent_type, frame_id, parent_frame_id, event_name, decision, reason,
-		       payload_json, before_json, after_json, created_at
+		       payload_json, before_json, after_json, created_at,
+		       source_kind, action, reason_code, outcome, scenario_key,
+		       observed_generation, decision_ports, phase, status, watcher_token
 		FROM agent_trace_steps
 		WHERE chain_id = ?
 		ORDER BY seq ASC, created_at ASC, step_id ASC
@@ -990,7 +1027,8 @@ func collectTraceSteps(rows *sql.Rows) ([]TraceStep, error) {
 	for rows.Next() {
 		var step TraceStep
 		var parent sql.NullString
-		var payload, before, after string
+		var watcher sql.NullString
+		var payload, before, after, decisionPorts string
 		if err := rows.Scan(
 			&step.StepID,
 			&step.ChainID,
@@ -1009,6 +1047,16 @@ func collectTraceSteps(rows *sql.Rows) ([]TraceStep, error) {
 			&before,
 			&after,
 			&step.CreatedAt,
+			&step.SourceKind,
+			&step.Action,
+			&step.ReasonCode,
+			&step.Outcome,
+			&step.ScenarioKey,
+			&step.ObservedGeneration,
+			&decisionPorts,
+			&step.Phase,
+			&step.Status,
+			&watcher,
 		); err != nil {
 			return nil, err
 		}
@@ -1016,6 +1064,11 @@ func collectTraceSteps(rows *sql.Rows) ([]TraceStep, error) {
 		step.PayloadJSON = json.RawMessage(payload)
 		step.BeforeJSON = json.RawMessage(before)
 		step.AfterJSON = json.RawMessage(after)
+		step.DecisionPorts = json.RawMessage(decisionPorts)
+		if watcher.Valid {
+			v := watcher.String
+			step.WatcherToken = &v
+		}
 		steps = append(steps, step)
 	}
 	return steps, rows.Err()
@@ -1045,6 +1098,20 @@ func rawJSONText(raw json.RawMessage) string {
 		return "null"
 	}
 	return string(raw)
+}
+
+func rawJSONArrayText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "[]"
+	}
+	return string(raw)
+}
+
+func nullableString(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func firstNonEmpty(values ...string) string {

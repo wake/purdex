@@ -156,3 +156,12 @@ func (s *AgentEventStore) Traces() (*TraceStore, error) {
 		maxSteps:  defaultTraceMaxSteps,
 	}, nil
 }
+
+// Divergences returns a DivergenceStore backed by the same SQLite connection.
+// The table is migrated lazily on first call.
+func (s *AgentEventStore) Divergences() (*DivergenceStore, error) {
+	if err := migrateDivergencesDB(s.db); err != nil {
+		return nil, err
+	}
+	return &DivergenceStore{db: s.db}, nil
+}
