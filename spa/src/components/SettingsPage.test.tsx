@@ -6,14 +6,22 @@ vi.mock('../features/workspace/lib/icon-path-cache', () => ({
   prefetchWeight: () => Promise.resolve(),
 }))
 
+vi.mock('../features/workspace/components/WorkspaceSettingsPage', () => ({
+  WorkspaceSettingsPage: ({ workspaceId }: { workspaceId: string }) => (
+    <div data-testid="workspace-settings-mock">ws:{workspaceId}</div>
+  ),
+}))
+
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Router } from 'wouter'
 import { memoryLocation } from 'wouter/memory-location'
-import { SettingsPage, resetLastSection } from './SettingsPage'
+import { SettingsPage, resetLastSection, useSettingsRoute } from './SettingsPage'
 import { registerSettingsSection, clearSettingsSectionRegistry } from '../lib/settings-section-registry'
-import { clearContributions } from '../lib/settings-contribution-registry'
+import { clearContributions, registerSettingsContribution } from '../lib/settings-contribution-registry'
 import { dispatchSettingsContributions } from '../lib/dispatch-settings-contributions'
+import { clearModuleRegistry } from '../lib/module-registry'
+import type { SettingsContext } from '../lib/settings-contribution-types'
 import { AppearanceSection } from './settings/AppearanceSection'
 import { TerminalSection } from './settings/TerminalSection'
 import type { Pane } from '../types/tab'
@@ -33,6 +41,8 @@ function renderWithLocation(initialPath: string) {
   return { ...result, navigate, hook, history: history as string[] }
 }
 
+const SyncStub = () => <div>SyncStub</div>
+
 describe('SettingsPage', () => {
   beforeEach(() => {
     resetLastSection()
@@ -41,7 +51,7 @@ describe('SettingsPage', () => {
     registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: AppearanceSection })
     registerSettingsSection({ id: 'terminal', label: 'Terminal', order: 1, component: TerminalSection })
     registerSettingsSection({ id: 'workspace', label: 'Workspace', order: 10 })
-    registerSettingsSection({ id: 'sync', label: 'Sync', order: 11 })
+    registerSettingsSection({ id: 'sync', label: 'Sync', order: 11, component: SyncStub })
     dispatchSettingsContributions([])
   })
 
@@ -107,7 +117,7 @@ describe('SettingsPage subsection', () => {
     clearContributions()
     registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: AppearanceSection })
     registerSettingsSection({ id: 'terminal', label: 'Terminal', order: 1, component: TerminalSection })
-    registerSettingsSection({ id: 'sync', label: 'Sync', order: 11 })
+    registerSettingsSection({ id: 'sync', label: 'Sync', order: 11, component: SyncStub })
     dispatchSettingsContributions([])
   })
 
@@ -136,5 +146,131 @@ describe('SettingsPage subsection', () => {
     await waitFor(() => {
       expect(hist[hist.length - 1]).toBe('/settings/sync')
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// §3.2 — Registry-driven render + ctx injection + workspace dispatch (PR-2).
+// ---------------------------------------------------------------------------
+
+describe('SettingsPage (registry-driven)', () => {
+  beforeEach(() => {
+    resetLastSection()
+    clearSettingsSectionRegistry()
+    clearContributions()
+    clearModuleRegistry()
+  })
+
+  it('renders a new-registry contribution by label (fake module bypasses legacy adapter)', () => {
+    const captured: SettingsContext[] = []
+    const Fake = ({ ctx }: { ctx: SettingsContext }) => {
+      captured.push(ctx)
+      return <div>MY_FAKE_BODY</div>
+    }
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.primary',
+      localId: 'primary',
+      scope: 'purdex',
+      order: 0,
+      labelKey: 'FAKE_LABEL',
+      component: Fake,
+    })
+
+    const { hook } = memoryLocation({ path: '/settings', record: true })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    expect(screen.getByText('FAKE_LABEL')).toBeTruthy()
+    expect(screen.getByText('MY_FAKE_BODY')).toBeTruthy()
+    expect(captured[0]).toEqual({ scope: 'purdex' })
+  })
+
+  it('renders contributions in ascending `order`', () => {
+    const Body = ({ label }: { label: string }) => <div>{label}</div>
+    const Third = () => <Body label="THIRD" />
+    const First = () => <Body label="FIRST" />
+    const Second = () => <Body label="SECOND" />
+
+    registerSettingsContribution({
+      moduleId: 'm', id: 'm.c', localId: 'c', scope: 'purdex',
+      order: 50, labelKey: 'C', component: Third,
+    })
+    registerSettingsContribution({
+      moduleId: 'm', id: 'm.a', localId: 'a', scope: 'purdex',
+      order: 0, labelKey: 'A', component: First,
+    })
+    registerSettingsContribution({
+      moduleId: 'm', id: 'm.b', localId: 'b', scope: 'purdex',
+      order: 10, labelKey: 'B', component: Second,
+    })
+
+    const { hook } = memoryLocation({ path: '/settings', record: true })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    const sidebar = screen.getByText('A').closest('[class*="w-48"]')
+    expect(sidebar).toBeTruthy()
+    const labels = Array.from(sidebar!.querySelectorAll('button')).map((b) =>
+      b.textContent?.trim(),
+    )
+    expect(labels).toEqual(['A', 'B', 'C'])
+  })
+
+  it('adapter integration: legacy registerSettingsSection + dispatch renders via new registry', () => {
+    const Legacy = () => <div>LEGACY_BODY</div>
+    registerSettingsSection({ id: 'leg', label: 'LEGACY_LABEL', order: 0, component: Legacy })
+    dispatchSettingsContributions([])
+
+    const { hook } = memoryLocation({ path: '/settings', record: true })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    expect(screen.getByText('LEGACY_LABEL')).toBeTruthy()
+    expect(screen.getByText('LEGACY_BODY')).toBeTruthy()
+  })
+
+  it('subsection is exposed via useSettingsRoute()', () => {
+    const Probe = () => {
+      const { subsection } = useSettingsRoute()
+      return <div>sub:{subsection ?? 'null'}</div>
+    }
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.primary',
+      localId: 'primary',
+      scope: 'purdex',
+      order: 0,
+      labelKey: 'Primary',
+      component: Probe,
+    })
+    const { hook } = memoryLocation({ path: '/settings/primary/deep', record: true })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    // "/settings/<section>/<subsection>" preserves subsection via context.
+    expect(screen.getByText('sub:deep')).toBeTruthy()
+  })
+
+  it('dispatches to WorkspaceSettingsPage when pane content has a workspace scope', () => {
+    const workspacePane: Pane = {
+      id: 'pane-ws',
+      content: { kind: 'settings', scope: { workspaceId: 'wsA' } },
+    }
+    const { hook } = memoryLocation({ path: '/settings', record: true })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={workspacePane} isActive />
+      </Router>,
+    )
+    expect(screen.getByTestId('workspace-settings-mock').textContent).toBe('ws:wsA')
   })
 })

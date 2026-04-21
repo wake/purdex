@@ -1,10 +1,12 @@
 /**
- * Smoke test for HSR PR-1: prove that the settings contribution registry
- * is NOT yet wired into any of the three settings shells.
+ * Smoke test for HSR PR-1/PR-2: prove that the settings contribution
+ * registry is wired into the Purdex shell (PR-2), and NOT yet wired into
+ * the remaining two shells (HostPage — PR-4 target, WorkspaceSettingsPage
+ * — PR-3 target).
  *
  * Design rationale — Option B (static source check), preferred here:
  *
- *   The three pages below have deep coupling to app-wide state
+ *   The two pages below have deep coupling to app-wide state
  *   (wouter router, zustand host/workspace stores, i18n, electronAPI,
  *   plus numerous leaf components). Mounting them from cold to do a
  *   "queryByText must be null" check would require hundreds of lines
@@ -13,25 +15,19 @@
  *   reshuffle could make the test spuriously pass).
  *
  *   A static-source check is strictly stronger for the thing we
- *   actually want to prove: that none of the three shells imports
- *   from `settings-contribution-registry`. If a future PR wires the
- *   registry into a shell, this test fails deterministically — no
- *   rendering or DOM needed.
+ *   actually want to prove: that these shells do not yet import from
+ *   `settings-contribution-registry`. When PR-3 / PR-4 wire them up,
+ *   those corresponding entries are removed from `PAGES`.
  *
  *   We additionally register three fake contributions (one per scope)
  *   and verify they are queryable from the registry directly, so the
  *   infrastructure is exercised and regressions in the registry
  *   itself would surface here too.
  *
- *   Per HSR PR-1 plan §Task 4: use Option A where trivial, Option B
- *   where Option A would require excessive scaffolding. All three
- *   pages fall into the latter bucket.
- *
  *   Source files are pulled via Vite's `?raw` imports (browser/jsdom
  *   safe, no node:fs dependency).
  */
 import { describe, it, expect, beforeEach } from 'vitest'
-import settingsPageSrc from '../components/SettingsPage.tsx?raw'
 import hostPageSrc from '../components/HostPage.tsx?raw'
 import workspaceSettingsPageSrc from '../features/workspace/components/WorkspaceSettingsPage.tsx?raw'
 import {
@@ -44,8 +40,10 @@ const FAKE_PURDEX_LABEL = 'SMOKE_PURDEX_LABEL_UNIQUE'
 const FAKE_HOST_LABEL = 'SMOKE_HOST_LABEL_UNIQUE'
 const FAKE_WORKSPACE_LABEL = 'SMOKE_WORKSPACE_LABEL_UNIQUE'
 
+// HSR PR-2 migrated `src/components/SettingsPage.tsx` off this list — it
+// now reads the contribution registry directly. The remaining two shells
+// land in PR-3 (workspace) and PR-4 (host).
 const PAGES: Array<{ name: string; src: string }> = [
-  { name: 'src/components/SettingsPage.tsx', src: settingsPageSrc },
   { name: 'src/components/HostPage.tsx', src: hostPageSrc },
   { name: 'src/features/workspace/components/WorkspaceSettingsPage.tsx', src: workspaceSettingsPageSrc },
 ]

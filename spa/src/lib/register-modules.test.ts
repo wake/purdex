@@ -14,7 +14,12 @@ import {
   type ModuleDefinition,
 } from './module-registry'
 import { clearNewTabRegistry, getNewTabProviders } from './new-tab-registry'
-import { clearSettingsSectionRegistry, getSettingsSections } from './settings-section-registry'
+import {
+  clearSettingsSectionRegistry,
+  getSettingsSections,
+  listReservedItems,
+  registerSettingsSection,
+} from './settings-section-registry'
 import { clearInterfaceSubsectionRegistry, getInterfaceSubsections } from './interface-subsection-registry'
 import { registerBuiltinModules, dispatchSettingsContributions } from './register-modules'
 import {
@@ -287,5 +292,87 @@ describe('settings contribution dispatch', () => {
       registerBuiltinModules()
       registerBuiltinModules()
     }).not.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// §3.3 — Built-in sections flow through legacy adapter into new registry.
+// ---------------------------------------------------------------------------
+
+describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
+  beforeEach(() => {
+    clearAll()
+  })
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).electronAPI
+    clearAll()
+  })
+
+  it('built-in legacy sections land under _builtin.legacy-section in purdex scope', () => {
+    registerBuiltinModules()
+    const contribs = listContributions('purdex')
+    const legacyIds = contribs
+      .filter((c) => c.moduleId === '_builtin.legacy-section')
+      .map((c) => c.localId)
+
+    // Core legacy set always present (no caps gating). Exact membership:
+    // appearance / terminal / interface / sync / module-config /
+    // editor-buffers. Electron / dev-environment / tmux-agent-monitor are
+    // gated by PlatformCapabilities / import.meta.env.DEV.
+    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'module-config', 'editor-buffers']) {
+      expect(legacyIds).toContain(id)
+    }
+    expect(legacyIds.length).toBeGreaterThanOrEqual(6)
+  })
+
+  it('reserved workspace section stays in listReservedItems, not in the new registry', () => {
+    registerBuiltinModules()
+    const reserved = listReservedItems()
+    expect(reserved.map((r) => r.id)).toContain('workspace')
+    // workspace is the only reserved section shipped by register-modules today.
+    expect(reserved).toHaveLength(1)
+    // And it does NOT appear in the new registry under any moduleId.
+    const contribs = listContributions('purdex')
+    expect(contribs.find((c) => c.localId === 'workspace')).toBeUndefined()
+  })
+
+  it('dispatch timing: legacy contributions survive repeated dispatches', () => {
+    registerBuiltinModules()
+    const before = listContributions('purdex')
+      .filter((c) => c.moduleId === '_builtin.legacy-section')
+      .map((c) => c.id)
+    expect(before.length).toBeGreaterThan(0)
+
+    // Re-push legacy sections (simulating HMR or additional
+    // registerBuiltinModules call) before dispatching again. Real flow
+    // guarantees this because registerBuiltinModules runs ahead of dispatch.
+    registerSettingsSection({
+      id: 'appearance',
+      label: 'settings.section.appearance',
+      order: 0,
+      component: () => null,
+    })
+    dispatchSettingsContributions()
+
+    const after = listContributions('purdex')
+      .filter((c) => c.moduleId === '_builtin.legacy-section')
+      .map((c) => c.id)
+    expect(after).toContain('_builtin.legacy-section.appearance')
+  })
+
+  it('I1 guard remains intact — registerBuiltinModules does not throw', () => {
+    expect(() => registerBuiltinModules()).not.toThrow()
+  })
+
+  it('getSettingsSections() legacy view stays consistent with new registry', () => {
+    registerBuiltinModules()
+    const legacyView = getSettingsSections().map((s) => s.id)
+    // Legacy view is the filtered `_builtin.legacy-section.*` entries plus
+    // reserved (component undefined) entries. The set of localIds returned
+    // should cover all the built-in registerSettingsSection calls.
+    for (const id of ['appearance', 'terminal', 'interface', 'workspace', 'sync', 'module-config', 'editor-buffers']) {
+      expect(legacyView).toContain(id)
+    }
   })
 })

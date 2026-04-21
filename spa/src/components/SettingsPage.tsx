@@ -1,7 +1,8 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'wouter'
 import type { PaneRendererProps } from '../lib/module-registry'
-import { getSettingsSections } from '../lib/settings-section-registry'
+import { listContributions } from '../lib/settings-contribution-registry'
+import type { SettingsContextFor } from '../lib/settings-contribution-types'
 import { SettingsSidebar } from './settings/SettingsSidebar'
 import { WorkspaceSettingsPage } from '../features/workspace/components/WorkspaceSettingsPage'
 
@@ -39,7 +40,9 @@ export function SettingsPage(props: PaneRendererProps) {
 
 function GlobalSettingsPage() {
   const [location, setLocation] = useLocation()
-  const sections = getSettingsSections()
+  // Pull purdex-scoped contributions from the new registry. `listContributions`
+  // returns a fresh array sorted by `order` ascending on each call.
+  const sections = listContributions('purdex')
 
   const pathAfterSettings = location.startsWith('/settings/')
     ? location.slice('/settings/'.length)
@@ -49,14 +52,14 @@ function GlobalSettingsPage() {
   const urlSubsection = parts[1] || null
 
   const [activeSection, setActiveSection] = useState(() => {
-    if (urlSection && sections.some((s) => s.id === urlSection)) return urlSection
-    if (lastSection && sections.some((s) => s.id === lastSection)) return lastSection
-    return sections.find((s) => s.component)?.id ?? ''
+    if (urlSection && sections.some((s) => s.localId === urlSection)) return urlSection
+    if (lastSection && sections.some((s) => s.localId === lastSection)) return lastSection
+    return sections[0]?.localId ?? ''
   })
 
   // URL → activeSection (e.g. back/forward navigation or TitleBar click)
   useEffect(() => {
-    if (urlSection && sections.some((s) => s.id === urlSection) && urlSection !== activeSection) {
+    if (urlSection && sections.some((s) => s.localId === urlSection) && urlSection !== activeSection) {
       setActiveSection(urlSection)
       lastSection = urlSection
     }
@@ -70,7 +73,7 @@ function GlobalSettingsPage() {
   // SettingsRouteContext so sub-components can render subsection views.
   useEffect(() => {
     if (!urlSection) return
-    const sectionValid = sections.some((s) => s.id === urlSection)
+    const sectionValid = sections.some((s) => s.localId === urlSection)
     if (!sectionValid) {
       setLocation(`/settings/${activeSection}`, { replace: true })
       return
@@ -87,7 +90,10 @@ function GlobalSettingsPage() {
     setLocation(`/settings/${id}`, { replace: true })
   }
 
-  const ActiveComponent = sections.find((s) => s.id === activeSection)?.component
+  const ActiveComponent = sections.find((s) => s.localId === activeSection)?.component
+  // `ctx` is stable per page render — §5.3 rule 4 says only the shell is
+  // allowed to construct it. Purdex scope carries no entity id.
+  const ctx: SettingsContextFor<'purdex'> = useMemo(() => ({ scope: 'purdex' as const }), [])
 
   return (
     <SettingsRouteContext.Provider
@@ -103,7 +109,7 @@ function GlobalSettingsPage() {
       <div className="flex h-full">
         <SettingsSidebar activeSection={activeSection} onSelectSection={handleSelectSection} />
         <div className="flex-1 overflow-y-auto p-6">
-          {ActiveComponent && <ActiveComponent />}
+          {ActiveComponent && <ActiveComponent ctx={ctx} />}
         </div>
       </div>
     </SettingsRouteContext.Provider>
