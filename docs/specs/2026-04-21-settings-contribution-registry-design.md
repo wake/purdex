@@ -1,7 +1,7 @@
 # Settings Contribution Registry 設計 Spec（三層 Scope）
 
-> 日期：2026-04-21（v3.1 對齊 2026-04-22，post-codex-review task-mo8xtpa8-bdxsh4）
-> 狀態：Draft v3.1 — v3 對齊 5 個未決策點（§6.2 / §7.1 / §7.2 / §7.3 / §8 / §13）；v3.1 回應 codex review Finding 1+2（§7.2 dispatch 硬約束、§8 並行敘述修正）
+> 日期：2026-04-21（v3.2 對齊 2026-04-22，post-codex-review Round 2 task-mo8z6ppx-pj07yk）
+> 狀態：Draft v3.2 — v3 對齊 5 個未決策點（§6.2 / §7.1 / §7.2 / §7.3 / §8 / §13）；v3.1 回應 Round 1 Finding 1+2（§7.2 dispatch 硬約束、§8 並行敘述修正）；v3.2 回應 Round 2 新 Finding N2（§13 PR-4 起點對齊 dispatch-flushed pattern）
 > 關聯：kickoff `kickoff_host_module_settings.md`（擴大版，涵蓋三層 scope 而非僅 host）
 > 參考：
 > - Codex 探索結果：job `task-mo8crieu-phjsc8`（2026-04-21）
@@ -389,5 +389,5 @@ PR-1 具體驗收條件見 `2026-04-21-hsr-pr1-registry-core-plan.md`。
 
 - **PR-2 起點（決策 1c）**：`SettingsPage` 改**只讀新 registry**（無 feature flag）；`settings-section-registry` 的 `registerSettingsSection` 改為 push 到 pending buffer + export `drainLegacyContributionQueue()`；`dispatchSettingsContributions()` 修改為同時 flush module-declared + legacy pending（見 §7.2 硬約束）；既有 7 個 built-in section 無需改碼即自動進新 registry；#539 在此 PR 把 `registerSettingsContribution` 降級為 `@internal`（adapter 改走 pending buffer，dispatch 成為新 registry 唯一寫入入口）
 - **PR-3 起點（決策 5a）**：`WorkspaceSettingsPage` 拆 shell + reserved `workspace` section 清除 + `module-config` 空頁清除 + `removeWorkspace()` cleanup hook（與 PR-1 的 `useWorkspaceSettingsStore.clearWorkspace` 對接）
-- **PR-4 起點（決策 4c）**：`HostPage` switch → shell；六子頁（overview/sessions/hooks/agents/uploads/logs）**不轉為 module 宣告**，改為 shell 內部的「built-in adapter registration」— 由 `HostPage` 載入時自動 `registerSettingsContribution({ moduleId: '_builtin.host', ... })`，走同一條 contract 但來源標記為 built-in；`ctx.hostId` 來源由 route resolution 提供（§5.3 rule 2）；`removeHost()` cleanup hook 對接 `useHostSettingsStore.clearHost`；#541 在此 PR 驗證 cross-store rehydrate order
+- **PR-4 起點（決策 4c）**：`HostPage` switch → shell；六子頁（overview/sessions/hooks/agents/uploads/logs）**不轉為 module 宣告**，改為 **`registerBuiltinModules()` 階段 push 到 pending queue** 的「built-in adapter registration」— 由 `dispatchSettingsContributions()` 統一 flush（沿用 §7.2 的 dispatch-flushed pattern，**不得**在 `HostPage` 載入時直接呼叫 `registerSettingsContribution()`，否則 dispatch 的 `clearContributions()` 會把 built-in 項整批清掉；與 PR-2 legacy adapter 同一機制），走同一條 contract 但來源標記為 built-in；`ctx.hostId` 來源由 route resolution 提供（§5.3 rule 2）；`removeHost()` cleanup hook 對接 `useHostSettingsStore.clearHost`；#541 在此 PR 驗證 cross-store rehydrate order
 - **PR-5 起點（決策 3b）**：Editor module 宣告 `settings: [{ localId: 'homePath', scope: 'host', ... }, { localId: 'homePath', scope: 'workspace', ... }]`；opener 層做層疊 resolve（workspace → host → `fetchPaneHome` fallback）；PR-5 merge 時對舊 `globalConfig` / `workspaceConfig` 加 console.warn + JSDoc `@deprecated`，指向新 `settings` 路徑；全面移除延後獨立 PR

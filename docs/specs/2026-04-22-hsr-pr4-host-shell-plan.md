@@ -1,10 +1,11 @@
 # HSR PR-4：Host Settings Shell + Built-in Sub-page Adapter — Implementation Plan
 
-> 日期：2026-04-22（v2 post-codex-review task-mo8xtpa8-bdxsh4）
-> 狀態：Ready for Implementation（**依序 build on PR-2 + PR-3**）
+> 日期：2026-04-22（v3 post-codex-review Round 2 task-mo8z6ppx-pj07yk）
+> 狀態：Ready for Implementation（**必須 build on PR-2**；功能上不依賴 PR-3 但與 PR-3 有 rebase 衝突 — 見 §9）
 > 主 spec：`2026-04-21-settings-contribution-registry-design.md`
 > 決策對齊：4c（HostPage registry-driven + 六子頁走 built-in adapter registration + host route contract 鬆綁）
 > PR 系列：PR-1 ✅ / PR-2 / PR-3 / **PR-4（本文件）** / PR-5
+> v3 收斂：Round 1 Finding 3/5 → v2 修；Round 2 Finding 5 partial（harness 綁 singleton）→ 本版改為 `store.setState()` 方案
 
 ---
 
@@ -106,46 +107,64 @@ PR-4 結束時：
 
 ### 3.4 `host-lifecycle.test.ts` 擴充（#541 — 具體 harness）
 
-**Harness 設計**：zustand persist 的 rehydrate 是自動的，要精準控制順序需用 test fixture：
+**現況限制**：`host-lifecycle.ts` 直接綁 module singleton（`useHostStore.getState()` / `useHostSettingsStore.getState()` 等），不接受 store instance 注入 — 所以 harness **不能**用 `createStore()` 新建獨立 instance（那樣測不到 source）。
+
+**Harness 設計（v3 修正）**：用 `store.setState()` 直接操控 singleton 的狀態，模擬「rehydrate 完成後的 state shape」，再呼叫 `removeHost` / `undo` / `hostWasRecreated` 等 lifecycle 操作。
 
 ```ts
-// Setup pattern
-import { createStore } from 'zustand/vanilla'
-// 手動 create store instance（不經過 module singleton）
-const makeHostStore = () => createStore(...)
-const makeHostSettingsStore = () => createStore(...)
+import { useHostStore } from '@/stores/useHostStore'
+import { useHostSettingsStore } from '@/stores/useHostSettingsStore'
+import { useWorkspaceSettingsStore } from '@/stores/useWorkspaceSettingsStore'
+import { useTabStore } from '@/stores/useTabStore'
+import { useSessionStore } from '@/stores/useSessionStore'
+import { useStreamStore } from '@/stores/useStreamStore'
+import { useAgentStore } from '@/stores/useAgentStore'
 
-// 控制 rehydrate 順序
-function harnessOrderA() {
-  const hostStore = makeHostStore()
-  hostStore.persist.rehydrate()  // 完成
-  const settingsStore = makeHostSettingsStore()
-  settingsStore.persist.rehydrate()  // 完成
-  return { hostStore, settingsStore }
+// 每個 test 前把所有被觸及的 singleton 歸零（getInitialState 可從 zustand 拿原始 initial state fn）
+beforeEach(() => {
+  useHostStore.setState(useHostStore.getInitialState(), true)  // true = replace
+  useHostSettingsStore.setState(useHostSettingsStore.getInitialState(), true)
+  useWorkspaceSettingsStore.setState(useWorkspaceSettingsStore.getInitialState(), true)
+  useTabStore.setState(useTabStore.getInitialState(), true)
+  // 其餘 cascade 涉及的 store 同上
+})
+
+// 模擬「hosts rehydrate 完成 + hostSettings rehydrate 完成」狀態
+function seedBothRehydrated() {
+  useHostStore.setState({ hosts: { hA: { id: 'hA', name: 'Host A', ... }, hB: {...} }, activeHostId: 'hA' })
+  useHostSettingsStore.setState({ settings: { hA: { editor: { homePath: '/tmp/a' } } } })
 }
 
-function harnessOrderB() {
-  const settingsStore = makeHostSettingsStore()
-  settingsStore.persist.rehydrate()
-  const hostStore = makeHostStore()
-  hostStore.persist.rehydrate()
-  return { hostStore, settingsStore }
+// 模擬「hosts 已 rehydrate + hostSettings 尚未 rehydrate」瞬間
+function seedHostOnly() {
+  useHostStore.setState({ hosts: { hA: {...}, hB: {...} }, activeHostId: 'hA' })
+  // hostSettings 保留 initial state（visual: 'rehydrate 還沒跑到'）
+}
+
+// 模擬「hostSettings 先 rehydrate + hosts 尚未 rehydrate」瞬間
+function seedSettingsOnly() {
+  useHostSettingsStore.setState({ settings: { hA: { editor: { homePath: '/tmp/a' } } } })
+  // hostStore 保留 initial state（hosts: {}）
 }
 ```
 
+`vi.mock` 方案備選：若某些 cascade 的相依 store 有複雜 side-effect 不易用 `setState` 重現（例：`useTabStore` 的 derived getter），可用 `vi.mock('@/stores/useTabStore', ...)` 覆寫整個 module export；但測試先用 setState 方案完成，mock 僅作 fallback。
+
 | 類別 | 測試項 | 預期 |
 |---|---|---|
-| Rehydrate order A | `harnessOrderA()` → 預設 seed data（hosts[hostA], hostSettings[hostA][editor]）→ 刪除 hostA → `hostSettingsStore.get(hostA, 'editor')` undefined；undo 在 window 內 → 兩 store 都恢復 | 通過 |
-| Rehydrate order B | `harnessOrderB()` → 相同 seed + 行為 → 兩 store 恢復 | 通過 |
-| Interleaved | 模擬「HostStore 半 rehydrate（hosts[hostA] 存在但 runtime 還沒）時觸發刪除」— 驗 `removeHost` 的 precheck 不會因部分 state 誤判 last-host | 通過 |
-| hostWasRecreated | Rehydrate 完成後模擬 same-id 重建 → `hostWasRecreated(hostId)` 回 true（沿用 PR-1 實作） | 通過 |
-| Cascade 回歸 | 刪除 hostA → `hostSettingsStore.get(hostA, *)` undefined（PR-1 cascade） | 通過 |
-| Undo 回歸 | Cascade clear 後 undo window 內 undo → host + hostSettings 都恢復（PR-1） | 通過 |
-| Workspace 交叉 | 刪 hostA + hostA 參與的 workspace tear-off / merge → workspaceSettings 不被連坐清（PR-1 的 D finding） | 通過（回歸） |
+| Rehydrate order A（both done） | `seedBothRehydrated()` → `removeHost('hA')` → `useHostSettingsStore.getState().settings.hA` undefined；undo window 內 `undoRemove()` → hosts + hostSettings 都恢復 | 通過 |
+| Rehydrate order B（settings only） | `seedSettingsOnly()` → `removeHost('hA')` → precheck 因 `hostStore.hosts[hA]` undefined 直接 veto + no-op（B1 回歸）；hostSettings 不被清 | 通過 |
+| Rehydrate order C（host only） | `seedHostOnly()` → `removeHost('hA')` → cascade 跑完（hostSettings 本就空，清 no-op）；undo 恢復 hosts、hostSettings 仍空（對應 source rehydrate 還沒跑到的瞬間） | 通過 |
+| Interleaved write during cascade | `seedBothRehydrated()` → 開始 `removeHost('hA')` → 在 undo window 內再對 `useHostSettingsStore.setState(...)` 寫入相同 hostId → undo 的 `hostWasRecreated` 判斷應 **gate 住** restore，避免蓋掉較新的 write（B2 回歸） | 通過 |
+| hostWasRecreated | `seedBothRehydrated()` → `removeHost('hA')` → 在 undo window 內重建 same-id host（`useHostStore.setState({ hosts: { hA: {新 payload} } })`）→ `hostWasRecreated('hA')` 回 true；`undoRemove()` 的 5 類 restore 全 gate | 通過 |
+| Last-host veto | `useHostStore.setState({ hosts: { hA: {...} } })`（僅剩一 host）→ `removeHost('hA')` veto + no-op（B1 回歸） | 通過 |
+| Cascade 回歸 | `seedBothRehydrated()` → `removeHost('hA')` → `useHostSettingsStore.getState().settings.hA` undefined（PR-1 cascade） | 通過 |
+| Undo 回歸 | Cascade clear 後 undo window 內 undo → hosts + hostSettings 都恢復（PR-1） | 通過 |
+| Workspace 交叉 | `seedBothRehydrated()` + 額外 seed workspaceSettings for hA-owned workspace → tearOff / mergeWorkspace → workspaceSettings 不被連坐清（PR-1 的 D finding 回歸） | 通過 |
 
-**若 harness 發現 bug**：改 `host-lifecycle.ts` source 修邏輯（不再 ship PR-4 直到 #541 解決）。若發現 bug 過大，選項 B：#541 拆獨立 PR，PR-4 scope 保留 built-in adapter + shell 部分（先 ship），#541 後補 follow-up。
+**若 harness 發現 bug**：改 `host-lifecycle.ts` source 修邏輯。若 bug 過大，選項 B：#541 拆獨立 PR，PR-4 scope 保留 built-in adapter + shell 部分（先 ship），#541 後補 follow-up。
 
-**Harness 複雜度風險**：若 zustand v4+ 的 `persist.rehydrate()` API 無法精準控制，改用較直接的 state mutation：`store.setState(mockedRehydratedState)` 模擬「已 rehydrate」狀態；`store.setState(initialState)` 模擬「未 rehydrate」狀態。兩種實作擇一，測試先綠為準。
+**Harness 驗證原則**：本設計用 `setState(..., true)` 做 replace 而非 merge，確保 test 之間完全隔離；避免相依 `persist.rehydrate()` 的非確定性 timing。
 
 ### 3.5 視覺回歸（手動）
 
@@ -230,8 +249,8 @@ function harnessOrderB() {
 ## 9. 與其他 PR 的關聯
 
 - **依賴**：PR-1（已 merged）+ **PR-2**（本 PR 的 built-in host adapter 沿用 PR-2 的 dispatch-flushed pattern + pending buffer 機制；若 PR-2 尚未 merge，PR-4 的 built-in adapter 會被 `dispatchSettingsContributions()` 的 `clearContributions()` 清掉）
-- **不依賴**：PR-3（shell 檔案不重疊，但 `register-modules.tsx` 有 rebase 衝突 — 見 §9 rebase 備註）
-- **rebase 衝突點**（若與 PR-3 並行）：
-  - `spa/src/lib/register-modules.tsx` — PR-3 拔 reserved 兩行；PR-4 加 built-in host sections 六行。位置不同，機械合併可行
+- **與 PR-3 的關係**（統一敘事，Round 2 提醒）：功能層**不依賴** PR-3（shell 檔案 `HostPage.tsx` / `HostSidebar.tsx` / `host-routes.ts` 與 PR-3 的 `WorkspaceSettingsPage.tsx` 不重疊）；**但** `spa/src/lib/register-modules.tsx` 有 rebase 衝突（見下），合併順序**建議 PR-3 先於 PR-4**（spec §8 序列化順序）以單純化 rebase
+- **rebase 衝突點**：
+  - `spa/src/lib/register-modules.tsx` — PR-3 拔 reserved 兩行；PR-4 加 built-in host sections 六行。位置不同，機械合併可行（本 PR rebase on PR-3 時只需保留 PR-3 的拔除、疊加本 PR 的新增）
 - **被依賴**：PR-5（Editor `hostConfig.homePath` 需要 PR-4 的動態 subPage 機制與 host shell render 新 contribution）
 - **順風解決**：#538（Host 層 render-level smoke）/ #541（cross-store rehydrate order，具體 harness）

@@ -1,10 +1,11 @@
 # HSR PR-2：Purdex Settings Shell + Legacy Adapter — Implementation Plan
 
-> 日期：2026-04-22（v2 post-codex-review task-mo8xtpa8-bdxsh4）
+> 日期：2026-04-22（v3 post-codex-review Round 2 task-mo8z6ppx-pj07yk）
 > 狀態：Ready for Implementation
 > 主 spec：`2026-04-21-settings-contribution-registry-design.md`
 > 決策對齊：1c（adapter-only, **dispatch-flushed**）+ 2b（既有 section 不搬家）+ 3b（舊 API deprecate 時點）
 > PR 系列：PR-1 ✅ / **PR-2（本文件）** / PR-3 / PR-4 / PR-5
+> v3 收斂：Round 1 Finding 1/6 → v2 修；Round 2 Finding 6 partial（§2/§8 sidebar 敘事矛盾）+ N1（reserved buffer idempotent/HMR）+ N3（commit 1→2 依賴）→ 本版修
 
 ---
 
@@ -32,18 +33,22 @@ PR-2 結束時：
   - 排序依舊 by `order` 升冪（新 registry 已保證）
   - URL 分派 / `lastSection` / `SettingsRouteContext` 邏輯保留
 - `spa/src/components/settings/SettingsSidebar.tsx`
-  - 改吃 `listContributions('purdex')`
-  - `reservedStart` 邏輯保留（因為 reserved section 會在 PR-3 才清，PR-2 期間仍可能出現無 `component` 的 contribution；但新 registry 的 `component` 是 required，所以實務上不會有 reserved 進 registry — adapter 在組 declaration 時若原 def `component` 為 undefined，**跳過註冊**，由 PR-3 shell 改造時一併拔除 reserved 顯示）
+  - 改吃 `listContributions('purdex')`（active sections，來源皆為新 registry — 含 module-declared 與 legacy adapter flush 後的 `_builtin.legacy-section.*`）
+  - 另呼叫新 export `listReservedItems()`（來自 `settings-section-registry.ts`，回傳當下 `pendingReservedItems` 的 read-only snapshot）補顯示 reserved coming_soon 項
+  - Sidebar 內部以統一資料流合併兩陣列，按 `order` 升冪一次排序（不用 `getSettingsSections()`）；`getSettingsSections()` 保留給尚未遷的外部 callsite（read-only 過渡，由 PR-3 清除 reserved 後再評估拔除）
+  - `reservedStart` 分隔線邏輯保留（`component: undefined` 的項分到 reserved 區）；PR-3 清 reserved 後該分支成為 dead code，由 PR-3 移除
   - `label` → `labelKey`（其實只是欄位 rename，值原本就是 i18n key）
 - `spa/src/lib/settings-section-registry.ts`（adapter 化 + pending buffer）
-  - 新增 module-scope `let pendingLegacyContributions: SettingsContributionDeclaration[] = []`
-  - 新增 module-scope `let pendingReservedItems: SettingsSectionDef[] = []`（**Finding 6 的統一解法**：reserved `component: undefined` 不進新 registry，僅保留在 legacy buffer 供 `SettingsSidebar` 顯示 coming_soon）
+  - 新增 module-scope `let pendingLegacyContributions: SettingsContributionDeclaration[] = []`（active，順序保留 push 序）
+  - 新增 module-scope **`const pendingReservedItems = new Map<string, SettingsSectionDef>()`**（N1：keyed by `def.id`，upsert 語義，HMR / 重複 register 不累積）— reserved `component: undefined` 不進新 registry，僅保留在此 buffer 供 sidebar 顯示 coming_soon（Finding 6 統一解）
   - `registerSettingsSection(def)`：
-    - 若 `def.component` 為 undefined → push 到 `pendingReservedItems`
-    - 否則 → 組 `SettingsContributionDeclaration`（`localId = def.id`、`scope: 'purdex'`、`order = def.order`、`labelKey = def.label`、`component = wrapLegacyComponent(def.component)`） push 到 `pendingLegacyContributions`（`moduleId = '_builtin.legacy-section'`；完整 `id` 由 dispatch 時組）
+    - 若 `def.component` 為 undefined → `pendingReservedItems.set(def.id, def)`（upsert；同 id 重 register 覆寫，不重複）
+    - 否則 → 組 `SettingsContributionDeclaration`（`localId = def.id`、`scope: 'purdex'`、`order = def.order`、`labelKey = def.label`、`component = wrapLegacyComponent(def.component)`） push 到 `pendingLegacyContributions`（`moduleId = '_builtin.legacy-section'`；完整 `id` 由 dispatch 時組）；同 `def.id` 若已在 buffer 中，**覆寫**該項（upsert；避免 HMR 累積）
     - **不呼叫** `registerSettingsContribution`
   - 新增 export `drainLegacyContributionQueue(): SettingsContributionDeclaration[]`：回傳 pending buffer 的 deep copy 並清空 buffer（dispatch pass 呼叫）
-  - `getSettingsSections(): SettingsSectionDef[]`：將 `listContributions('purdex').filter(c => c.moduleId === '_builtin.legacy-section').map(toLegacyShape)` 與 `pendingReservedItems` 合併，依 `order` 升冪排序回傳（讓 `SettingsSidebar` 一次看到 active + reserved）
+  - 新增 export `listReservedItems(): readonly SettingsSectionDef[]`：回傳 `pendingReservedItems` 的 snapshot array（依 `order` 升冪），供 `SettingsSidebar` 顯示 coming_soon（讀取介面，不提供寫入）
+  - 新增 HMR dispose hook（`register-modules.tsx` 既有 HMR 流程內呼叫）：`clearLegacyPending()` 清 `pendingLegacyContributions` **與** `pendingReservedItems`（N1：reserved 必須一併清，否則 HMR 重跑時 reserved 會被下輪 upsert 覆寫但孤兒 key 殘留；用 upsert + dispose 雙保險）
+  - `getSettingsSections(): SettingsSectionDef[]`：將 `listContributions('purdex').filter(c => c.moduleId === '_builtin.legacy-section').map(toLegacyShape)` 與 `Array.from(pendingReservedItems.values())` 合併，依 `order` 升冪排序回傳（**保留給尚未遷的外部 callsite 過渡**；`SettingsSidebar` 改走 `listContributions('purdex') + listReservedItems()` 明確兩路，不經過本 API）
   - `clearSettingsSectionRegistry()`：清 `pendingLegacyContributions` + `pendingReservedItems`（僅 test 用）
   - `wrapLegacyComponent(Comp)`：`(props: { ctx: SettingsContext }) => <Comp />`（忽略 ctx；legacy component 不吃 ctx）
   - `toLegacyShape(c)`：將 contribution 還原回 `{ id, label, order, component }` shape（`component` 透過 `legacyComponentMap` WeakMap 取原 component reference，避免 wrap 破壞 React identity）
@@ -94,8 +99,11 @@ PR-2 結束時：
 | Adapter round-trip | dispatch 後 `getSettingsSections()` 回傳 active 項目原 shape（id / label / order / component reference 等於原 def.component） | 通過 |
 | React identity | dispatch 後 `getSettingsSections()[i].component === 原 passed-in Comp`（透過 `legacyComponentMap` unwrap） | 通過 |
 | Order 保留 | 多項 active + reserved 混合註冊後 `getSettingsSections()` 依 order 升冪交錯回傳 | 通過 |
-| Reserved buffer | `registerSettingsSection({ ..., component: undefined })` → dispatch 後新 registry **無** 該項；`getSettingsSections()` **有** 該項（from `pendingReservedItems`），`component` 為 undefined | **Finding 6 — 統一策略驗證** |
-| HMR re-run | `registerSettingsSection(x)` → dispatch → 再次 `registerSettingsSection(x)` → dispatch → 不 throw，最終一份（pending drain 每輪用完即清） | 通過 |
+| Reserved buffer | `registerSettingsSection({ ..., component: undefined })` → dispatch 後新 registry **無** 該項；`listReservedItems()` **有** 該項，`component` 為 undefined；`getSettingsSections()` 合併 active + reserved 也回該項（過渡 API） | **Finding 6 — 統一策略驗證** |
+| Reserved upsert | 連續 `registerSettingsSection({ id: 'r1', component: undefined, order: 10, label: 'A' })` × N 次（N≥3）→ `listReservedItems()` 長度 = 1；若最後一次改 `order: 5` → 該項 `order === 5`（upsert 覆寫，N1 驗證） | **N1 — reserved 不累積** |
+| Active upsert | 連續 `registerSettingsSection({ id: 'a1', component: Comp1 })` → `registerSettingsSection({ id: 'a1', component: Comp2 })` → dispatch → `listContributions('purdex')` 中 id `_builtin.legacy-section.a1` 只 1 項，component unwrap 後 `=== Comp2`（N1 驗證 active 也不累積） | **N1 — active 不累積** |
+| HMR dispose | `registerSettingsSection({ component: undefined })` → `clearLegacyPending()` → `listReservedItems().length === 0`；同樣對 active buffer → `drainLegacyContributionQueue()` 已回空 | **N1 — HMR dispose 雙 buffer 清** |
+| HMR re-run | `registerSettingsSection(x)` → dispatch → `clearLegacyPending()` → 再次 `registerSettingsSection(x)` → dispatch → 不 throw，最終一份（upsert + dispose 雙保險） | 通過 |
 | Namespace 隔離 | 另一 module 透過 `ModuleDefinition.settings` 宣告 `scope: 'purdex'` → dispatch 後 `getSettingsSections()` **不**回傳該項（filter `moduleId === '_builtin.legacy-section'`） | 通過 |
 | Clear | `clearSettingsSectionRegistry()` 清 pending buffer（不碰新 registry；dispatch 後的結果由 `clearContributions()` 負責） | 通過 |
 | Cross-id guard | module 宣告 `moduleId='foo', localId='appearance'` + legacy adapter 收 `id='appearance'` → dispatch 後兩者 id 不同（`foo.appearance` vs `_builtin.legacy-section.appearance`），無衝突 | 通過 |
@@ -191,19 +199,28 @@ PR-2 結束時：
 
 每個 commit 必須獨立過 vitest / lint / build（完全綠）。
 
-1. **`feat(spa): dispatch pass also flushes legacy contribution queue`**
-   - `dispatch-settings-contributions.ts` 加 `drainLegacyContributionQueue()` 整合 + 測試（`dispatch-settings-contributions.test.ts` 擴充）
-   - 這個 commit 之前 legacy queue empty，測試預設空 drain；commit 後 dispatch 行為新增，但仍 backwards-compat（無 legacy item 時行為不變）— 單測獨立可綠
-2. **`feat(spa): settings-section-registry uses pending buffer + reserved items`**
-   - `settings-section-registry.ts` 改實作（pending buffer + `drainLegacyContributionQueue` export + `getSettingsSections` 合併 registry + reserved）+ `settings-section-registry.test.ts` 新增 §3.1 全部案例
-   - 依賴 commit 1（dispatch drain 語義）；此 commit 後 `registerBuiltinModules()` 跑完的 end-to-end 行為與 `main` 一致（existing 6 active + 1 reserved）
-3. **`feat(spa): SettingsPage reads new contribution registry with ctx`**
-   - `SettingsPage.tsx` + `SettingsSidebar.tsx` 改 `listContributions('purdex')` / `ctx` 注入 + `SettingsPage.test.tsx`
-   - Sidebar 繼續透過 `getSettingsSections()` 拿 reserved（因 reserved 不在新 registry），保持 coming_soon 視覺
+**N3 修正**：commit 1 要呼叫 `drainLegacyContributionQueue()`，該 export 必須同 commit 提供（否則 commit 1 無法獨立編譯）。策略：commit 1 在 `settings-section-registry.ts` 先 export **no-op stub**（`export function drainLegacyContributionQueue(): SettingsContributionDeclaration[] { return [] }` + `export function listReservedItems(): readonly SettingsSectionDef[] { return [] }` + `export function clearLegacyPending(): void {}`），commit 2 才把這三個 API 接上真實 buffer。commit 1 的 stub 行為等同「legacy queue 一直是空」，既有 `registerSettingsSection` 仍走舊 registry 寫入 — 所以 commit 1 land 時 end-to-end 行為與 `main` 一致，獨立可綠。
+
+1. **`feat(spa): dispatch pass flushes legacy contribution queue (stub)`**
+   - `settings-section-registry.ts` 先 export `drainLegacyContributionQueue` / `listReservedItems` / `clearLegacyPending` no-op stub（真實 buffer 在 commit 2）
+   - `dispatch-settings-contributions.ts` 加 drain 呼叫 + stub 情境測試（`dispatch-settings-contributions.test.ts` 擴充）
+   - 此 commit 前後 end-to-end 行為不變（stub 回空 → dispatch drain 無項目 → 同 `main`）；型別 / lint / vitest 三綠
+2. **`feat(spa): settings-section-registry uses pending buffer + reserved upsert map`**
+   - `settings-section-registry.ts` 把 commit 1 的 stub 換成真實實作（pending buffer + `Map<string, SettingsSectionDef>` reserved upsert + `clearLegacyPending` 雙清 + `listReservedItems` snapshot + `getSettingsSections` 合併）
+   - `settings-section-registry.test.ts` 新增 §3.1 全部案例（含 upsert / HMR dispose / reserved buffer）
+   - 此 commit 後 `registerBuiltinModules()` 跑完的 end-to-end 行為與 `main` 一致（existing 6 active + 1 reserved）
+3. **`feat(spa): SettingsPage + SettingsSidebar read new contribution registry with ctx`**
+   - `SettingsPage.tsx` 改 `listContributions('purdex')` + `ctx: { scope: 'purdex' }` 注入
+   - `SettingsSidebar.tsx` 改 `listContributions('purdex') + listReservedItems()` 合併渲染（不走 `getSettingsSections()`）
+   - `SettingsPage.test.tsx`（§3.2 全部）
 4. **`refactor(spa): mark registerSettingsContribution as internal (#539)`**
    - JSDoc `@internal` + re-export 調整 + optional ESLint rule
 
-共 4 commits。每個皆獨立可綠（commit 1 僅新增 drain 入口但不影響既有行為；commit 2 遷 adapter 時 dispatch 已 ready；commit 3 只讀，不動 registry；commit 4 純文檔/型別）。
+共 4 commits。每個皆獨立可綠：
+- commit 1：純新增 API stub + dispatch drain 呼叫；stub 回空所以既有流程行為不變
+- commit 2：把 stub 替換為真實實作；此 commit 的測試依賴 commit 1 的 drain 整合
+- commit 3：只讀 registry + reserved snapshot，不動 registry 寫入
+- commit 4：純文檔/型別
 
 ---
 

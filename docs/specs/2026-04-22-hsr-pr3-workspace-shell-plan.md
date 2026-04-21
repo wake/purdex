@@ -1,10 +1,11 @@
 # HSR PR-3：Workspace Settings Shell + Reserved Cleanup — Implementation Plan
 
-> 日期：2026-04-22（v2 post-codex-review task-mo8xtpa8-bdxsh4）
+> 日期：2026-04-22（v3 post-codex-review Round 2 task-mo8z6ppx-pj07yk）
 > 狀態：Ready for Implementation（**依序 build on PR-2**，不可與 PR-2 並行）
 > 主 spec：`2026-04-21-settings-contribution-registry-design.md`
 > 決策對齊：5a（PR-3 清 reserved + 空頁）+ 2b（既有 `ModuleConfigSection` 不動）
 > PR 系列：PR-1 ✅ / PR-2 / **PR-3（本文件）** / PR-4 / PR-5
+> v3 收斂：Round 1 + Round 2 皆對 PR-3 無 finding；僅隨 PR-2 sidebar 敘事更新對齊（reserved buffer 在 PR-2 v3 改為 `Map` upsert，PR-3 清除時一併拔除 map 與 `listReservedItems` export）
 
 ---
 
@@ -37,10 +38,11 @@ PR-3 結束時：
   - 移除 `registerSettingsSection({ id: 'workspace', ..., order: 10 })`（reserved 行）
   - 移除 `registerSettingsSection({ id: 'module-config', ..., order: 8, component: () => <ModuleConfigSection scope="global" /> })`（global scope 無 production 消費者）
   - 若 PR-2 有為 reserved 保留 local buffer 兼容路徑，同步拔除該 buffer
-- `spa/src/components/settings/SettingsSidebar.tsx`（build on PR-2 新版 — PR-2 已改為讀 `listContributions('purdex')` + `getSettingsSections()` 合併 reserved；本 PR 拔除 reserved 後 sidebar 可簡化）
+- `spa/src/components/settings/SettingsSidebar.tsx`（build on PR-2 v3 — PR-2 改為讀 `listContributions('purdex')` + `listReservedItems()` 兩路合併；本 PR 拔除 reserved 後 sidebar 簡化為只讀 `listContributions('purdex')`）
   - PR-3 rebase PR-2 後：清掉 `reservedStart` 分隔線邏輯（reserved 已不存在）
   - 移除 coming_soon disabled 灰字樣式（無 reserved item，分支恆未觸發）
-  - 若 PR-2 的 PR-2 sidebar 實作仍保留 reserved 透過 `getSettingsSections()` 回傳，本 PR 一併把 `SettingsSidebar` 簡化為**只讀 `listContributions('purdex')`**，拋棄 `getSettingsSections()` 依賴（可連帶開始規劃 `settings-section-registry.ts` 的最終拔除時點，但不在本 PR 完成）
+  - 移除對 `listReservedItems()` 的呼叫；`settings-section-registry.ts` 的 `listReservedItems` export + `pendingReservedItems` Map 連帶拔除（dead code）
+  - `getSettingsSections()` 過渡 API 保留給尚未遷的外部 callsite（若 grep 已無外部 callsite，可在本 PR 直接移除；實作時 audit 後決定）
 - `spa/src/locales/en.json` / `zh-TW.json`
   - 移除 `settings.section.workspace` i18n key（若 reserved 特有，且無其他 callsite）
   - 保留 `settings.section.modules` key（`module-config` section 相關，但 `ModuleConfigSection` 本身仍在 workspace 頁用，key 可能仍有用；實作時 audit）

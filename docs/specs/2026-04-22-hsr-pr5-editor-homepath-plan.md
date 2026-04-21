@@ -1,10 +1,11 @@
 # HSR PR-5：Editor `homePath` First Module User — Implementation Plan
 
-> 日期：2026-04-22（v2 post-codex-review task-mo8xtpa8-bdxsh4）
+> 日期：2026-04-22（v3 post-codex-review Round 2 task-mo8z6ppx-pj07yk）
 > 狀態：Ready for Implementation（依賴 PR-2 + PR-3 + PR-4 全部 land）
 > 主 spec：`2026-04-21-settings-contribution-registry-design.md`
 > 決策對齊：3b（舊 API 在 PR-5 merge 時發 deprecation）+ 1c（走 adapter 的新 registry 路徑）
 > PR 系列：PR-1 ✅ / PR-2 / PR-3 / PR-4 / **PR-5（本文件）**
+> v3 收斂：Round 1 Finding 4 → v2 修 LinkContext API；Round 2 Finding 4 partial（plumbing 未閉環）+ N3（commit 切分漏 plumbing）→ 本版改以 `SessionPaneContent` 為 workspaceId 來源，獨立 commit
 
 ---
 
@@ -16,7 +17,12 @@
 
 Tilde path opener（`spa/src/lib/terminal-link/openers/file-path.ts`）的 `~/...` 分支改為**層疊 resolve**：workspace settings → host settings → `fetchPaneHome()`（Layer 3，PR #530 既有）→ 無則 fallthrough 原 rawPath 行為。
 
-**關鍵前置（codex review Finding 4）**：`LinkContext`（`spa/src/lib/terminal-link/types.ts:29`）目前只有 `hostId?: string` + `sessionCode?: string`，無 `workspaceId`。本 PR 必須擴 `LinkContext` 加 `workspaceId?: string`，並在 `TerminalView.tsx:28` 的 `linkContext` 構造處注入正確的 workspaceId（link 來源 terminal 所屬的 workspace，**不是** `getActiveWorkspaceId()` — 兩者在 inactive pane / split screen / 多 workspace 並存時不同）。resolver 用 `ctx.workspaceId` 查 `useWorkspaceSettingsStore`，確保 multi-workspace 情境下 override 來源正確。
+**關鍵前置（Round 1 Finding 4 + Round 2 partial 閉環）**：
+
+- `LinkContext`（`spa/src/lib/terminal-link/types.ts:29`）目前只有 `hostId?: string` + `sessionCode?: string`，無 `workspaceId`。本 PR 擴 `LinkContext` 加 `workspaceId?: string`（link 來源 terminal 所屬的 workspace，**不是** `getActiveWorkspaceId()`）
+- **Plumbing 來源（v3 確定）**：`workspaceId` 必須由 link 來源 pane 帶上來。可靠的入口是 `spa/src/components/SessionPaneContent.tsx:56-61`（現況已由 `useTabStore` 查到 `tabId`）；該層再查 `useWorkspaceStore` 找「包含此 tabId 的 workspace」得 `workspaceId`，以 prop 傳入 `TerminalView`。`TerminalView` 不自己找 workspace（避免在多層組件各自用 `activeWorkspaceId` 猜，造成 inactive pane / split / multi-workspace 不一致）
+- `TerminalView` 接 `workspaceId?: string` prop，`linkContext` 構造改為 `useMemo(() => ({ hostId, sessionCode, workspaceId }), [hostId, sessionCode, workspaceId])`
+- Resolver 用 `ctx.workspaceId` 查 `useWorkspaceSettingsStore`，確保 multi-workspace 情境下 override 來源正確；`ctx.workspaceId === undefined`（standalone pane）時跳過 workspace 層
 
 PR-5 merge 時同步：
 - **#540 解決**：三層 store `get()` 回傳 frozen shallow clone（防止 consumer 以 in-place mutation 繞過 persist / sync）
@@ -50,11 +56,16 @@ PR-5 結束時：
 ### 修改
 - `spa/src/lib/terminal-link/types.ts`（Finding 4 — LinkContext 擴充）
   - `interface LinkContext` 加 `workspaceId?: string`（optional — legacy callsite 不給時 resolver 直接 fallthrough 到 host 層）
-  - JSDoc 標示：「workspaceId 應為 link 來源 terminal 所屬的 workspace id，**不是** active workspace id」
+  - JSDoc 標示：「workspaceId 應為 link 來源 terminal 所屬的 workspace id，**不是** active workspace id；由 `SessionPaneContent` 用 pane-to-tab-to-workspace 查詢得出並透過 `TerminalView.workspaceId` prop 注入」
 - `spa/src/components/TerminalView.tsx`
+  - Props 加 `workspaceId?: string`
   - `linkContext` 構造改為 `useMemo(() => ({ hostId, sessionCode, workspaceId }), [hostId, sessionCode, workspaceId])`
-  - 新增 `workspaceId` prop 或 context 來源：TerminalView 的 tab 屬於某 workspace，透過 `useTabStore` + `useWorkspaceStore` 查「包含此 tab 的 workspace」—— 即 `workspaces.find(ws => ws.tabs.includes(tabId))?.id`
-  - 若該 tab 屬 standalone（不在任一 workspace），`workspaceId` 為 undefined；resolver 跳過 workspace 層
+  - **不自行查 workspace**（依 v3 plumbing 約定由父層注入；若 prop undefined 表示 standalone pane，linkContext.workspaceId 為 undefined）
+- `spa/src/components/SessionPaneContent.tsx`（v3 新增 — Finding 4 plumbing 真來源）
+  - 現況已用 `useTabStore` 查出 `tabId`（line 56-61）
+  - 新增：再用 `useWorkspaceStore` 查「包含此 tabId 的 workspace」得 `workspaceId`；偽碼：`const workspaceId = useWorkspaceStore((s) => tabId ? s.workspaces.find(ws => ws.tabIds?.includes(tabId))?.id : undefined)`（實際 store shape 以當下 `useWorkspaceStore` API 為準；實作時需對照 current store schema — tearoff 後 workspace 的 tabs field 命名可能為 `tabIds` / `tabs` 之一）
+  - 把 `workspaceId` 以 prop 傳入 `<TerminalView workspaceId={workspaceId} ... />`
+  - `<ConversationView>` 分支（stream mode）若未來也吃 linkContext（現況不吃）則同樣由此注入；PR-5 scope 內不動 ConversationView
 - `spa/src/lib/register-modules.tsx`
   - Editor `registerModule({ id: 'editor', ..., settings: [{ localId: 'homePath', scope: 'workspace', order: 0, labelKey: 'editor.settings.home_path.workspace', component: EditorHomePathWorkspaceSection }, { localId: 'homePath', scope: 'host', order: 0, labelKey: 'editor.settings.home_path.host', component: EditorHomePathHostSection }] })`
   - 加舊 API deprecation warning（僅對非 `files` 使用者）—— 在 register pass 中偵測 `globalConfig.length > 0` 或 `workspaceConfig.length > 0` 且 moduleId !== 'files' → `console.warn('[module] ${id} uses deprecated globalConfig/workspaceConfig; migrate to settings: [{ scope, localId }]')`
@@ -135,6 +146,18 @@ PR-5 結束時：
 | Mutation guard | `store.get(ws, mod).foo = 'x'` 在 strict mode 拋（或在 loose mode 靜默忽略）；**store 內部狀態不變** | 通過 |
 | Patch 仍可 | `store.set(ws, mod, { foo: 'x' })` 正常運作（set 不受 frozen 影響） | 通過 |
 
+### 3.6a LinkContext plumbing（commit 2 — v3 新增）
+
+測試分兩處：`TerminalView.test.tsx` 與 `SessionPaneContent.test.tsx`（或合併為 `SessionPaneContent.test.tsx` 一處）。
+
+| 類別 | 測試項 | 預期 |
+|---|---|---|
+| TerminalView prop | 傳 `workspaceId='wsA'` → `linkContext.workspaceId === 'wsA'`（可透過 mock `useTerminal` 觀察 `linkContext` 參數） | 通過 |
+| TerminalView prop | 不傳 workspaceId → `linkContext.workspaceId === undefined` | 通過 |
+| SessionPaneContent 查詢 | pane 在 workspace `wsA` 的 tab `tX` 下 → `<TerminalView>` 收到 `workspaceId='wsA'` | 通過 |
+| SessionPaneContent standalone | pane 在 tab `tY`，`tY` 不屬任何 workspace → `<TerminalView>` 收到 `workspaceId={undefined}` | 通過 |
+| Multi-workspace isolation | `workspaces: { wsA: { tabIds:['tX'] }, wsB: { tabIds:['tY'] } }`；pane 在 `tY` → 收到 `workspaceId='wsB'`，非 active 的 `wsA` | **關鍵 — Finding 4 plumbing 閉環** |
+
 ### 3.6 Deprecation warning (#3b)
 
 | 類別 | 測試項 | 預期 |
@@ -214,16 +237,29 @@ PR-5 結束時：
 
 1. **`refactor(spa): settings stores return frozen immutable snapshot (#540)`**
    - 三層 store `get` + test
-2. **`feat(spa): editor-home-resolver with layered workspace → host → pane-shell resolve`**
-   - `editor-home-resolver.ts` + test
-3. **`feat(spa): terminal-link opener uses editor-home-resolver for tilde paths`**
-   - `file-path.ts` 改 resolver 呼叫 + test 擴充
-4. **`feat(spa): Editor module declares homePath contributions (workspace + host)`**
+2. **`feat(spa): LinkContext carries link-source workspaceId (plumbing)`**
+   - `terminal-link/types.ts` 加 `workspaceId?`
+   - `TerminalView.tsx` 加 prop + linkContext 注入
+   - `SessionPaneContent.tsx` 查 workspaceId 傳 prop
+   - 單測：`TerminalView.test.tsx` / `SessionPaneContent.test.tsx` 驗 workspaceId 正確傳遞（active ws / standalone pane / multi-workspace inactive pane 三路徑）
+   - 此 commit 後 `linkContext.workspaceId` 在所有開啟 terminal 的情境都填對；因 opener 還沒消費該欄位，行為與 main 一致
+3. **`feat(spa): editor-home-resolver with layered workspace → host → pane-shell resolve`**
+   - `editor-home-resolver.ts` + test（含 wrong-workspaceId 回歸）
+4. **`feat(spa): terminal-link opener uses editor-home-resolver for tilde paths`**
+   - `file-path.ts` 改 resolver 呼叫 + test 擴充（含 Multi-workspace / Standalone pane 測試）
+   - 此 commit 消費 commit 2 的 `workspaceId` plumbing + commit 3 的 resolver
+5. **`feat(spa): Editor module declares homePath contributions (workspace + host)`**
    - 兩個 section component + test + `register-modules.tsx` Editor `settings` 宣告 + i18n
-5. **`refactor(spa): deprecate ModuleDefinition.globalConfig / workspaceConfig`**
+6. **`refactor(spa): deprecate ModuleDefinition.globalConfig / workspaceConfig`**
    - `module-registry.ts` JSDoc + `register-modules.tsx` warn + test
 
-共 5 commits。
+共 6 commits。每 commit 獨立可綠：
+- commit 1：只動 store.get 實作與測試
+- commit 2：plumbing 純傳值，無邏輯消費者（`workspaceId` 進 linkContext 但 opener 還沒讀）— 行為與 main 一致
+- commit 3：resolver 純邏輯 + 測試，無 callsite 接進
+- commit 4：opener 切到 resolver，同時消費 commit 2 plumbing + commit 3 resolver
+- commit 5：加 section + module 宣告，UI 出現但不影響其他流程
+- commit 6：deprecation warning，純 runtime 觀察，不改行為
 
 ---
 
