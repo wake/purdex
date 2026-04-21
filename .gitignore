@@ -7,3 +7,4 @@ spa/node_modules/
 spa/dist/
 .playwright-mcp/
 out/
+dist/

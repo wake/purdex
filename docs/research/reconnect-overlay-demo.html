@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>Reconnecting Overlay Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #191919; color: #e0e0e0; font-family: system-ui, sans-serif; height: 100vh; display: flex; }
+
+  /* Sidebar mock */
+  .sidebar {
+    width: 200px; background: #1a1a2e; padding: 16px; border-right: 1px solid #333;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .sidebar h3 { font-size: 13px; color: #888; margin-bottom: 8px; }
+  .session-btn {
+    padding: 8px 12px; background: transparent; border: none; color: #ccc;
+    text-align: left; cursor: pointer; border-radius: 6px; font-size: 13px;
+  }
+  .session-btn:hover { background: #ffffff10; }
+  .session-btn.active { background: #ffffff15; color: #fff; }
+
+  /* Terminal area */
+  .terminal-area {
+    flex: 1; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .topbar {
+    padding: 8px 16px; background: #1e1e2e; border-bottom: 1px solid #333;
+    font-size: 14px; font-weight: 600;
+  }
+  .terminal-container {
+    flex: 1; position: relative; background: #0a0a1a; overflow: hidden;
+  }
+
+  /* Fake terminal content */
+  .terminal-content {
+    padding: 12px; font-family: 'Menlo', 'Monaco', monospace; font-size: 14px;
+    line-height: 1.5; color: #e0e0e0; white-space: pre;
+  }
+  .prompt { color: #4ec9b0; }
+  .path { color: #dcdcaa; }
+  .branch { color: #ce9178; }
+
+  /* Reconnecting overlay */
+  .reconnect-overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: rgba(10, 10, 26, 0.5);
+    opacity: 0; transition: opacity 0.3s ease-out;
+    pointer-events: none; z-index: 10;
+  }
+  .reconnect-overlay.visible { opacity: 1; }
+
+  .reconnect-text {
+    color: #999; font-size: 14px;
+    animation: breathing 2s ease-in-out infinite;
+  }
+  .reconnect-dot {
+    width: 6px; height: 6px; background: #666; border-radius: 50%;
+    margin-top: 12px;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  @keyframes breathing {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 0.3; }
+    50% { transform: scale(1.5); opacity: 0.8; }
+  }
+
+  /* Controls */
+  .controls {
+    position: fixed; bottom: 20px; right: 20px;
+    display: flex; gap: 8px;
+  }
+  .controls button {
+    padding: 8px 16px; border-radius: 6px; border: 1px solid #555;
+    background: #2a2a3e; color: #e0e0e0; cursor: pointer; font-size: 13px;
+  }
+  .controls button:hover { background: #3a3a4e; }
+  .controls button.active { background: #c0392b; border-color: #e74c3c; }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <h3>SESSIONS</h3>
+  <button class="session-btn">0</button>
+  <button class="session-btn">10</button>
+  <button class="session-btn active">test-terminal</button>
+  <button class="session-btn">tmux box</button>
+  <button class="session-btn">tsm</button>
+</div>
+
+<div class="terminal-area">
+  <div class="topbar">test-terminal</div>
+  <div class="terminal-container">
+    <div class="terminal-content"><span class="prompt">></span> <span class="path">wake</span> [/Users/wake/Workspace/wake/tmux-box] <span class="branch">main !1</span> >
+git status
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  modified:   internal/server/server.go
+
+no changes added to commit
+
+<span class="prompt">></span> <span class="path">wake</span> [/Users/wake/Workspace/wake/tmux-box] <span class="branch">main !1</span> >
+<span style="background:#e0e0e0;color:#0a0a1a"> </span></div>
+
+    <!-- Reconnecting overlay (50% transparent) -->
+    <div class="reconnect-overlay" id="overlay">
+      <span class="reconnect-text">reconnecting...</span>
+      <div class="reconnect-dot"></div>
+    </div>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="toggleBtn" onclick="toggle()">Simulate Disconnect</button>
+</div>
+
+<script>
+  let disconnected = false;
+  function toggle() {
+    disconnected = !disconnected;
+    const overlay = document.getElementById('overlay');
+    const btn = document.getElementById('toggleBtn');
+    if (disconnected) {
+      overlay.classList.add('visible');
+      btn.textContent = 'Simulate Reconnect';
+      btn.classList.add('active');
+    } else {
+      overlay.classList.remove('visible');
+      btn.textContent = 'Simulate Disconnect';
+      btn.classList.remove('active');
+    }
+  }
+</script>
+
+</body>
+</html>

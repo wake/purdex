@@ -166,7 +166,7 @@ pdx hook → 向上 walk PPID chain
 
 若走到 PPID=1 都沒找到非 shim（代表 pdx 以 detached 狀態被啟動，罕見），回報 PPID=1 並在 payload 加 `"sender_uncertain": true` 欄位；daemon 接到後視為 unverifiable 直接拒絕。
 
-此解析邏輯實作在 `cmd/pdx/hook_pid_resolver.go` 內。單元測試需覆蓋常見 shim 類型與多層 shim 組合。
+此解析邏輯實作在 `cmd/pdx/hook.go` 內。單元測試需覆蓋每種 shim 組合。
 
 ### 5.2 ProcessInfo
 
@@ -186,10 +186,10 @@ type ProcessInfo struct {
 
 | 平台 | ExePath 取得 | Argv 取得 | StartTime 取得 |
 |------|------------|-----------|----------------|
-| macOS | `ps -p PID -o comm=`（再做 path normalize / symlink resolve） | `ps -p PID -o args=` 分割 | `ps -p PID -o lstart=` |
+| macOS | `proc_pidpath(2)` via cgo；退而求其次 `ps -p PID -o args=` 的第一個 token | `ps -p PID -o args=` 分割 | `ps -p PID -o lstart=` |
 | Linux | `readlink /proc/PID/exe` | `/proc/PID/cmdline`（null-separated）| `ps -p PID -o lstart=` 或 `/proc/PID/stat` 第 22 欄 |
 
-**備註**：macOS 目前實作改用 `ps -p PID -o comm=` 取得 executable，再配合 `args=` 組 argv，避免直接信任 `argv[0]` 造成 Identify 誤判。
+**不使用**：`ps -p PID -o comm=` — macOS 有 16 字元截斷風險，且可能只回 argv[0]-honored name（CC 顯示 `2.1.114`）。
 
 **Symlink 處理**：`ExePath` 取得後必須跑 `filepath.EvalSymlinks` 再 `filepath.Base`，避免 symlink wrapper（如 `~/.local/bin/claude → /opt/homebrew/.../claude`）造成 basename 不穩。
 
@@ -313,12 +313,12 @@ every 2s:
       clear frame（PID reuse 偵測）
 ```
 
-#### 已刪除的舊能力
+#### 刪除的舊能力
 
-- `RegisterProcessNames(agentType, []string{"claude"})` — 已移除
+- `RegisterProcessNames(agentType, []string{"claude"})` — 不再需要
 - `ContentMatcher` interface + `LooksLikeAgent` — 身份識別層刪除
-- Liveness Layer 1a `pane_current_command` 比對 — 已刪除
-- Liveness Layer 1d 內容 fallback 做身份判定 — 已刪除
+- Liveness Layer 1a `pane_current_command` 比對 — 刪除
+- Liveness Layer 1d 內容 fallback 做身份判定 — 刪除
 
 ### 5.7 Activity 三規則（補 Hook Gap）
 

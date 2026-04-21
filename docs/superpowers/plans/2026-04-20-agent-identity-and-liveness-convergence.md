@@ -195,10 +195,10 @@ func resolveAgentPid(startPpid int) (pid int, uncertain bool) {
 
 | 平台 | ExePath | Argv | StartTime |
 |------|---------|------|-----------|
-| macOS | `ps -p PID -o comm=`（再做 path normalize / symlink resolve） | `ps -p PID -o args=` 全部 | `ps -p PID -o lstart=` |
+| macOS | `ps -p PID -o args=` 的第一個 token（優先）；或 cgo 呼叫 `proc_pidpath(2)`（備案）| `ps -p PID -o args=` 全部 | `ps -p PID -o lstart=` |
 | Linux | `readlink /proc/PID/exe` + `filepath.EvalSymlinks` | `/proc/PID/cmdline`（null-sep）| `ps -p PID -o lstart=` 或 `/proc/PID/stat` 第 22 欄 |
 
-**備註**：macOS 目前實作以 `comm=` 取得 executable、以 `args=` 還原 argv；重點是不再信任 `argv[0]` 當成 Identify 依據。
+**禁用**：`ps -p PID -o comm=` — macOS 可能 16 字元截斷且可能只回 argv[0]-honored name（CC 會顯示 `2.1.114`）。
 
 ### TDD 任務
 
@@ -335,7 +335,7 @@ func PidAncestorIncludes(pid int, ancestor int) bool {
 - `ProcessStartTime` 用 `ps -p PID -o lstart=` 字串比對即可（秒級精度）
 - verify 失敗回 202 Accepted + `{"status":"rejected","reason":"..."}`，不是 500
 - log 輸出 `[agent][verify] rejected pid=X reason=Y pane=Z`
-- 若 verify 本身出 panic/error，回 202 rejected + reason，並記 warning log（fail-closed，避免 detached runtime 混入）
+- 若 verify 本身出 panic/error（不該發生但防呆），fallback 為 accept + log warning（避免擋掉合法 hook）
 
 ### 驗收 (DoD)
 
@@ -636,7 +636,7 @@ Activity watcher 實作三規則（動 → running、靜 → idle、shell prompt
 - 刪除 `RegisterProcessNames` + `UpdateProcessNames`
 - 刪除 probe Liveness Layer 1a（`pane_current_command` 比對）
 - 刪除 `matcher.commands` map
-- `config.Detect.CCCommands` 不再參與 probe liveness；僅保留給 CC provider Identify 補充 command basename
+- `config.Detect.CCCommands` 標記 deprecated 或刪除
 - 更新 `docs/superpowers/specs/2026-04-13-probe-chain-design.md` 「已被收斂」標記
 - 更新 README / AGENTS.md / CLAUDE.md 相關描述
 
@@ -696,7 +696,7 @@ Activity watcher 實作三規則（動 → running、靜 → idle、shell prompt
 |------|:---:|------|
 | pdx hook 的 shim list 不完整（新 shim 導致 agent PID 解析錯誤）| P1 | 測試覆蓋常見 shim；新增 shim 時加 log；unknown 第一層不 skip 以保守 |
 | Verify 過嚴誤拒合法 wrapper | P3 | log reason 詳細；透過使用者回報調整 shim list（P1）或 Identify（P2），不放寬主 verify |
-| macOS `proc_pidpath` 不可用或不值得引入 cgo | P2 | 改用 `ps -p PID -o comm=` 取 executable，再配 `args=` 組 argv；避免把被改寫的 `argv[0]` 當成 ExePath |
+| macOS cgo 限制導致 `proc_pidpath` 無法用 | P2 | Fallback 到 `ps -p PID -o args=` 取第一個 token；ping 實測過可接受 |
 | Frame schema migration 複雜 | P4 | alpha 階段直接新表 + 舊表退役；不做雙軌 |
 | Codex ApplyPatch 期間狀態不變 | P6 | 上游 issue #16732；本輪以「畫面不動 → idle」兜底，不再追求完美 |
 | SPA 需不需要改 | 全程 | 設計目標：不改。projection 在 daemon 層完成 |
