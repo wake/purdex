@@ -65,7 +65,7 @@ export function InlineTab({
   }
 
   // Destructure onPointerDown off listeners so the wrapper wins; spread the rest.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+   
   const { onPointerDown: _omit, ...otherListeners } = listeners ?? {}
 
   const handleCloseClick = (e: React.MouseEvent) => {

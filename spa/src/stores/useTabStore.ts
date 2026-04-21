@@ -151,7 +151,7 @@ export const useTabStore = create<TabState>()(
         set((state) => {
           if (!state.tabs[id]) return state
           if (state.tabs[id].locked) return state
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+           
           const { [id]: _removed, ...remainingTabs } = state.tabs
           const newOrder = state.tabOrder.filter((tid) => tid !== id)
           // Clean closed tab from visitHistory; active tab selection is caller's responsibility
