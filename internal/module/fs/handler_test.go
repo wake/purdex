@@ -27,16 +27,48 @@ func postJSON(handler http.HandlerFunc, body interface{}) *httptest.ResponseReco
 	return w
 }
 
+func decodeListResponse(t *testing.T, w *httptest.ResponseRecorder) struct {
+	Path    string      `json:"path"`
+	Entries []fileEntry `json:"entries"`
+} {
+	t.Helper()
+	var resp struct {
+		Path    string      `json:"path"`
+		Entries []fileEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	return resp
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
+
+func TestModuleMetadata(t *testing.T) {
+	m := New()
+
+	if got := m.Name(); got != "fs" {
+		t.Fatalf("Name() = %q, want %q", got, "fs")
+	}
+
+	if deps := m.Dependencies(); deps != nil {
+		t.Fatalf("Dependencies() = %v, want nil", deps)
+	}
+}
 
 func TestHandleList(t *testing.T) {
 	m, dir := setupTestModule(t)
 
-	// Create a file and a subdirectory
-	if err := os.WriteFile(filepath.Join(dir, "beta.txt"), []byte("hello"), 0o644); err != nil {
+	if err := os.Mkdir(filepath.Join(dir, "alpha"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(dir, "alpha-dir"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(dir, "beta"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "c.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("abc"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -46,27 +78,48 @@ func TestHandleList(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp struct {
-		Path    string      `json:"path"`
-		Entries []fileEntry `json:"entries"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
+	resp := decodeListResponse(t, w)
+
+	if resp.Path != dir {
+		t.Fatalf("expected path %q, got %q", dir, resp.Path)
 	}
 
-	if len(resp.Entries) != 2 {
-		t.Fatalf("expected 2 entries, got %d", len(resp.Entries))
+	if len(resp.Entries) != 4 {
+		t.Fatalf("expected 4 entries, got %d", len(resp.Entries))
 	}
 
-	// Directories should come first
-	if !resp.Entries[0].IsDir {
-		t.Errorf("expected first entry to be a directory, got %q", resp.Entries[0].Name)
+	expected := []struct {
+		name  string
+		isDir bool
+		size  int64
+	}{
+		{name: "alpha", isDir: true},
+		{name: "beta", isDir: true},
+		{name: "a.txt", isDir: false, size: 3},
+		{name: "c.txt", isDir: false, size: 5},
 	}
-	if resp.Entries[0].Name != "alpha-dir" {
-		t.Errorf("expected first entry name 'alpha-dir', got %q", resp.Entries[0].Name)
+
+	for i, want := range expected {
+		got := resp.Entries[i]
+		if got.Name != want.name {
+			t.Fatalf("entries[%d].Name = %q, want %q", i, got.Name, want.name)
+		}
+		if got.IsDir != want.isDir {
+			t.Fatalf("entries[%d].IsDir = %v, want %v", i, got.IsDir, want.isDir)
+		}
+		if !want.isDir && got.Size != want.size {
+			t.Fatalf("entries[%d].Size = %d, want %d", i, got.Size, want.size)
+		}
 	}
-	if resp.Entries[1].Name != "beta.txt" {
-		t.Errorf("expected second entry name 'beta.txt', got %q", resp.Entries[1].Name)
+}
+
+func TestHandleListRejectsMissingPath(t *testing.T) {
+	m, _ := setupTestModule(t)
+
+	w := postJSON(m.handleList, map[string]string{})
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 
@@ -80,14 +133,27 @@ func TestHandleListRejectsRelativePath(t *testing.T) {
 	}
 }
 
+func TestHandleListNotFound(t *testing.T) {
+	m, _ := setupTestModule(t)
+	missing := filepath.Join(t.TempDir(), "missing")
+
+	w := postJSON(m.handleList, map[string]string{"path": missing})
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
 func TestHandleListSkipsHiddenFiles(t *testing.T) {
 	m, dir := setupTestModule(t)
 
-	// Create a visible file and a hidden file
 	if err := os.WriteFile(filepath.Join(dir, "visible.txt"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, ".hidden"), []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".config"), []byte("secret"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -97,18 +163,76 @@ func TestHandleListSkipsHiddenFiles(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp struct {
-		Entries []fileEntry `json:"entries"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
+	resp := decodeListResponse(t, w)
 
 	if len(resp.Entries) != 1 {
 		t.Fatalf("expected 1 entry (hidden skipped), got %d", len(resp.Entries))
 	}
 	if resp.Entries[0].Name != "visible.txt" {
 		t.Errorf("expected 'visible.txt', got %q", resp.Entries[0].Name)
+	}
+}
+
+func TestHandleListEmptyDirReturnsArray(t *testing.T) {
+	m, dir := setupTestModule(t)
+
+	w := postJSON(m.handleList, map[string]string{"path": dir})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("failed to decode raw response: %v", err)
+	}
+	if got := string(raw["entries"]); got != "[]" {
+		t.Fatalf("entries = %s, want []", got)
+	}
+}
+
+func TestHandleListPathIsFileReturnsNotFound(t *testing.T) {
+	m, dir := setupTestModule(t)
+	filePath := filepath.Join(dir, "somefile.txt")
+	if err := os.WriteFile(filePath, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	w := postJSON(m.handleList, map[string]string{"path": filePath})
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestHandleListBrokenSymlinkDoesNotCrash(t *testing.T) {
+	m, dir := setupTestModule(t)
+	if err := os.WriteFile(filepath.Join(dir, "normal.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "missing-target"), filepath.Join(dir, "broken_link")); err != nil {
+		t.Fatal(err)
+	}
+
+	w := postJSON(m.handleList, map[string]string{"path": dir})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	resp := decodeListResponse(t, w)
+	if len(resp.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(resp.Entries))
+	}
+	found := map[string]bool{}
+	for _, entry := range resp.Entries {
+		found[entry.Name] = true
+	}
+	if !found["normal.txt"] {
+		t.Fatal("expected normal.txt to remain listed")
+	}
+	if !found["broken_link"] {
+		t.Fatal("expected broken_link to remain listed")
 	}
 }
 
