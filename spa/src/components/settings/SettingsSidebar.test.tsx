@@ -2,16 +2,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { SettingsSidebar } from './SettingsSidebar'
 import { registerSettingsSection, clearSettingsSectionRegistry } from '../../lib/settings-section-registry'
+import { clearContributions } from '../../lib/settings-contribution-registry'
+import { dispatchSettingsContributions } from '../../lib/dispatch-settings-contributions'
 
 const FakeComponent = () => null
 
 describe('SettingsSidebar', () => {
   beforeEach(() => {
     clearSettingsSectionRegistry()
+    clearContributions()
     registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: FakeComponent })
     registerSettingsSection({ id: 'terminal', label: 'Terminal', order: 1, component: FakeComponent })
     registerSettingsSection({ id: 'workspace', label: 'Workspace', order: 10 })
     registerSettingsSection({ id: 'sync', label: 'Sync', order: 11 })
+    dispatchSettingsContributions([])
   })
 
   it('renders all section items', () => {

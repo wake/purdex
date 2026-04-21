@@ -12,6 +12,8 @@ import { Router } from 'wouter'
 import { memoryLocation } from 'wouter/memory-location'
 import { SettingsPage, resetLastSection } from './SettingsPage'
 import { registerSettingsSection, clearSettingsSectionRegistry } from '../lib/settings-section-registry'
+import { clearContributions } from '../lib/settings-contribution-registry'
+import { dispatchSettingsContributions } from '../lib/dispatch-settings-contributions'
 import { AppearanceSection } from './settings/AppearanceSection'
 import { TerminalSection } from './settings/TerminalSection'
 import type { Pane } from '../types/tab'
@@ -35,10 +37,12 @@ describe('SettingsPage', () => {
   beforeEach(() => {
     resetLastSection()
     clearSettingsSectionRegistry()
+    clearContributions()
     registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: AppearanceSection })
     registerSettingsSection({ id: 'terminal', label: 'Terminal', order: 1, component: TerminalSection })
     registerSettingsSection({ id: 'workspace', label: 'Workspace', order: 10 })
     registerSettingsSection({ id: 'sync', label: 'Sync', order: 11 })
+    dispatchSettingsContributions([])
   })
 
   it('renders sidebar and default appearance section at /settings', () => {
@@ -100,9 +104,11 @@ describe('SettingsPage subsection', () => {
   beforeEach(() => {
     resetLastSection()
     clearSettingsSectionRegistry()
+    clearContributions()
     registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: AppearanceSection })
     registerSettingsSection({ id: 'terminal', label: 'Terminal', order: 1, component: TerminalSection })
     registerSettingsSection({ id: 'sync', label: 'Sync', order: 11 })
+    dispatchSettingsContributions([])
   })
 
   it('renders /settings/sync/history without self-heal (valid subsection)', async () => {
