@@ -4,13 +4,15 @@
 **Status**: Design approved, ready for plan
 **Revisions**:
 - v1 (2026-04-22): 初版
-- v2 (2026-04-22): 吃進 codex review 20 項 blocker（pending 語意統一、proxy 投影、decision-port schema、optional services、並發所有權、generation 邊界、migration 落地、restart 恢復、測試補齊、PR 拆分調整）
+- v2 (2026-04-22): 吃進 codex review v1（20 項 blocker）
+- v3 (2026-04-22): 吃進 codex review v2（10 項 blocker + 7 follow-up）。核心哲學釐清：**「沒有反應」是預設，只有明確 evidence 才起反應** → unknown 一律不建 actor、不改 status，只進 trace。PR 數 15→17。
 
 **Inputs**:
 - `docs/research/2026-04-21-lights-system-alignment.md`（現況分析 + 目標落差）
 - 10 份 codex web research 調查（架構主流對照 + pid tree 驗證）
 - memory kickoff：`kickoff_lights_spec.md`
 - codex review `task-mo8w4hyl-ys0v5e`（v1 審閱）
+- codex review `task-mo8xbpd3-anz4np`（v2 審閱）
 
 ## 1. 背景與目標
 
@@ -53,18 +55,20 @@ Purdex daemon 已有燈號骨架（hook provider chain + probe 三類 + sweep �
 
 | 燈號 | 屬於 | 狀態空間 |
 |---|---|---|
-| **主燈號**（primary light） | primary actor（有獨立 hook 流） | `running / waiting / idle / error / clear / unknown` |
+| **主燈號**（primary light） | primary actor（有獨立 hook 流） | `running / waiting / idle / error / clear` |
 | **次要燈號**（secondary light） | proxy actor 或 subagent | proxy: `running / waiting / idle / error / clear`；subagent: `active / inactive` |
 
-**UI 投影規則**（消除 v1 歧義）：
+**UI 投影規則**：
 
 | 投影位置 | 呈現對象 | 視覺呈現 |
 |---|---|---|
 | **Primary color** | 主燈號（session 唯一） | session bar 主色（cc / codex / opencode 各有 palette） |
 | **Secondary badge** | 每個 proxy / subagent | session bar 右側 agent-type icon + 小圓點顏色表狀態 |
-| **Trace-only** | `unknown` actor 與未 verified pending | session bar 不呈現，僅進 trace viewer |
+| **Trace-only** | 未成為 actor 的 Observation（role 判不出、probe timeout、sweep 被拒等） | UI 不呈現，僅進 trace viewer |
 
 投影規則為硬約定：**一個 session frame UI 上只有一個主色（主燈號）+ N 個 badge**。Proxy 不競爭主色位置。
+
+**設計哲學**：「沒有反應」比「錯誤反應」更好。Daemon 在 role 判不出或 status 無法確定時，**不建 actor、不改 status**，僅進 trace。UI 呈現維持現狀（已有 primary 就保留，沒有就維持純 terminal）。
 
 ### 2.2 Subagent vs Proxy agent
 
@@ -163,13 +167,14 @@ type ActorKey struct {
 type Actor struct {
     Key                ActorKey
     AgentType          string                // cc / codex / opencode / general-purpose (subagent)
-    Role               ActorRole             // primary | proxy | subagent
-    Status             string                // primary/proxy: running/waiting/idle/error/clear/unknown
+    Role               ActorRole             // primary | proxy | subagent（無 unknown；判不出的 Observation 不建 actor）
+    Status             string                // primary/proxy: running/waiting/idle/error/clear
                                              // subagent: active/inactive
+                                             // （無 unknown；status 不確定時 Arbitrator 不更動，保留前值）
     PID                int                   // subagent 時 = parent pid（無獨立 process）
     PidAncestry        []int                 // 從 pane root 往下的 pid 鏈
     ParentActorKey     *ActorKey             // proxy 指向 parent primary；subagent 指向 parent
-    Lifecycle          Lifecycle             // started_at / ended_at / ended_reason
+    Lifecycle          Lifecycle             // started_at / ended_at / ended_reason / last_activity
     ObservedGeneration int64                 // 本 actor 最後觀察到的 generation
     Detail             map[string]any        // agent-specific 資料層（UI 不看，debug / module 看）
 }
@@ -182,9 +187,10 @@ const (
 )
 
 type Lifecycle struct {
-    StartedAt   time.Time
-    EndedAt     *time.Time
-    EndedReason string   // hook_stop / process_exit / probe_timeout / replaced_by_new_primary / ...
+    StartedAt    time.Time
+    LastActivity time.Time   // 每次 committed observation 更新；reconcile stale detection 用
+    EndedAt      *time.Time
+    EndedReason  string      // hook_stop / process_exit / probe_timeout / replaced_by_new_primary / ...
 }
 ```
 
@@ -253,6 +259,14 @@ type Branch struct {
 
 **注意**：`DecisionPorts` 是目標 #4（每個判斷端口的 input-reason-output 流程圖）落地的資料結構。UI viewer 以 DecisionPort 為節點，Branches 為邊，`Selected` 上色呈現選到的路徑。
 
+**DecisionPort 上限**（trace 體積控制）：每個 Observation `len(DecisionPorts) ≤ 16`。超過 16 視為程式錯誤（panic in dev / log warning + truncate in prod）。單一判斷鏈過長代表該抽成多個 Observation 用 `parent_span_id` 串接。
+
+**WatcherToken 儲存**：
+- Probe 實例建立時生成唯一 `watcher_token`（uuid），其 `Identify()` 方法回傳此 token
+- Frame 內每個 actor 的 `Detail["current_watcher_tokens"]` 存 `map[probe_id]token`（arbitrator apply `Observation` 時更新）
+- 新 watcher 啟動（重新 arm 同一 probe）會 rotate token；老 watcher 的 late callback 因 token 不符被 Arbitrator reject（§3.4.1 第 2 步）
+- Daemon restart 後所有 token 失效（pending buffer 清空時一併重置）
+
 ### 3.4 Arbitrator 仲裁規則
 
 Arbitrator 是**單一 goroutine** + **condition-based reducer**：
@@ -260,11 +274,12 @@ Arbitrator 是**單一 goroutine** + **condition-based reducer**：
 ```go
 type Arbitrator struct {
     mode           ArbMode                     // Passthrough | Authoritative
-    in             <-chan Observation
+    in             <-chan Observation          // cap=1024；滿載行為見 §3.5.1
+    retryCh        <-chan retryTick            // cap=256
     frames         FrameStore
     pending        map[ActorKey]*PendingEntry  // 由 Arbitrator 獨占
-    lastSeq        map[ActorKey]int64
-    traceOut       chan<- TraceRecord
+    lastIdemKey    map[string]int64            // key = hash(actor_key|source|action|evidence_hash)
+    traceOut       chan<- TraceRecord          // cap=4096；滿載行為見 §3.5.1
 }
 
 func (a *Arbitrator) Run(ctx context.Context) {
@@ -273,6 +288,8 @@ func (a *Arbitrator) Run(ctx context.Context) {
         select {
         case obs := <-a.in:
             a.apply(obs)
+        case t := <-a.retryCh:
+            a.attemptRetry(t)
         case <-ticker.C:
             a.reconcile()
         case <-ctx.Done():
@@ -289,16 +306,21 @@ Observation 進來
   ↓
 1. Generation gate
    - 若 observation.observed_generation < frame.generation → reject (ReasonCode=StaleGeneration)
-   - 若 > frame.generation → frame 接受 new generation（SessionStart 的 observation）
+   - 若 > frame.generation：
+       • 僅 SourceKind=hook 且 Action=SessionStart 可推進 generation
+         → frame.generation = observation.observed_generation；清空 pending buffer；emit SessionRestartCleared trace
+       • 其他任何 source/action → reject (ReasonCode=UnauthorizedGenerationBump)
   ↓
 2. Watcher identity（probe 限定）
-   - 比對 watcher_token == frame.currentWatcherToken(actor)
+   - 比對 observation.watcher_token == frame.actor[observation.proposal.actor_key].detail["current_watcher_tokens"][probe_id]
    - 不符 → reject (ReasonCode=StaleWatcher)
   ↓
 3. Idempotency
-   - 若 (actor_key, source_kind, action, evidence_hash) 已在 lastSeq 且 seq <= lastSeq → reject (ReasonCode=DuplicateObservation)
+   - 計算 idem_key = hash(actor_key, source_kind, action, evidence_hash)
+   - 若 lastIdemKey[idem_key] 存在且 observation.seq ≤ lastIdemKey[idem_key] → reject (ReasonCode=DuplicateObservation)
+   - 否則寫入 lastIdemKey[idem_key] = observation.seq
   ↓
-4. Pending window（actor 未 verified 時）
+4. Pending window（role 判不出時）
    - 見 §3.4.2
   ↓
 5. Source priority
@@ -313,17 +335,19 @@ Observation 進來
    - proposal 會建立第二個 primary → 先發 SyntheticEndLifecycle 給舊 primary（reason=replaced_by_new_primary），再 apply
   ↓
 8. Mode branch
-   - Passthrough（v1→v2 Phase 1）: 計算 proposal 但不寫 frame；寫 divergence table
-   - Authoritative（Phase 2 後）: 寫 frame + broadcast
+   - Passthrough（Phase 1）: 計算 proposal 但不寫 frame；寫 divergence table
+   - Authoritative（Phase 2 後）: 寫 frame + 更新 actor.Lifecycle.LastActivity + broadcast
   ↓
 9. Trace: 該 observation 含完整 DecisionPorts 落 trace
 ```
 
-#### 3.4.2 Pending Window 語意（統一定義）
+**Generation gate 設計理由**：只允許 `hook.SessionStart` 推進 generation 可阻止 late probe / retry / sweep 誤觸 generation 清 pending 的副作用。這是 v2 未寫死、v3 補強的條件。
 
-**修正 v1 §3.4 vs §5.4 不一致**：
+#### 3.4.2 Pending Window — Role 判定視窗
 
-Pending window 結束後，actor **落成 `status=unknown` 的 actor**（開 `Lifecycle.StartedAt`），而不是 drop。理由：UI 需要呈現「發生了什麼但判不定」的情境，使用者看到灰燈代表 daemon 有收到 hook。
+**設計哲學（v3）**：Pending timeout 或 evict 後 **drop proposal，不建 actor**。Daemon 維持現狀（有 primary 就保留；沒有就維持純 terminal）。完整 trace 紀錄留存可在 trace viewer 重建「發生了什麼但沒反應」。
+
+> 「沒有反應」比「錯誤反應」更好。建一個 role 判不出的 unknown actor 會干擾 primary 的唯一性、污染 UI、並讓後續 observation 的 parent attribution 更不穩。
 
 ```go
 type PendingEntry struct {
@@ -337,10 +361,15 @@ type PendingEntry struct {
 
 // Coalescing：同 ActorKey 只保留一份 entry
 // 新 Observation 進來 → append 到 entry.Observations
-// 超 16 筆 → drop oldest proposed；committed 永不 drop
+// 超 16 筆 → drop oldest；都只進 trace，無需區分 committed
 func (a *Arbitrator) addPending(obs Observation) {
     entry, ok := a.pending[obs.Proposal.ActorKey]
     if !ok {
+        // Per-session 上限 8 entries
+        if a.pendingCountForSession(obs.SessionID) >= 8 {
+            a.dropPendingOldest(obs.SessionID)
+            metrics.Inc("lights_pending_evicted")
+        }
         entry = &PendingEntry{
             Key:       obs.Proposal.ActorKey,
             FirstSeen: obs.ObservedAt,
@@ -364,19 +393,28 @@ func (a *Arbitrator) flushPendingDue(now time.Time) {
             // 嘗試最後一次 verify
             if a.tryPromoteToActor(entry) {
                 delete(a.pending, key)
-            } else {
-                // 落成 unknown actor
-                a.commitUnknownActor(entry)
-                delete(a.pending, key)
+                continue
             }
+            // v3：drop proposal，不建 actor
+            a.emitTraceOnly(entry, "PidTreeUnresolvable")
+            delete(a.pending, key)
         }
     }
+}
+
+// Evict（per-session 超過 8 entries）時也走 emitTraceOnly，不建 actor
+func (a *Arbitrator) dropPendingOldest(sessionID string) {
+    oldest := a.findOldestPending(sessionID)
+    a.emitTraceOnly(oldest, "PendingEvicted")
+    delete(a.pending, oldest.Key)
 }
 ```
 
 **Bounded protection（hook storm）**：
-- Per-session pending 上限 **8 entries**；超出 drop 最舊 entry + `metrics.Inc("lights_pending_evicted")`
-- 單 session 10ms 內 > 50 observation → drop proposed 且記 `metrics.Inc("lights_hook_storm_dropped")`；committed 永不 drop
+- Per-session pending 上限 **8 entries**；超出 drop 最舊 entry（只進 trace） + `metrics.Inc("lights_pending_evicted")`
+- 單 session 10ms 內 > 50 observation → drop（只進 trace） + `metrics.Inc("lights_hook_storm_dropped")`
+
+**`emitTraceOnly` 行為**：把 pending entry 的所有 observation 展開成 trace record，`phase=rejected, outcome=skipped, reason_code={PidTreeUnresolvable|PendingEvicted|HookStormDropped}`。UI 不收到任何 frame 變化事件。
 
 #### 3.4.3 Sweep vs Pending 勝負
 
@@ -392,7 +430,9 @@ if obs.SourceKind == SourceSweep && a.isPending(obs.Proposal.ActorKey) {
 }
 ```
 
-**原則**：Sweep 永遠弱於 hook 起源的 verify 結果。Pending 解決為 actor（或 unknown）後，replay 累積的 sweep observation；此時若仍判 `actor should end`，正常走 monotone lifecycle。
+**原則**：Sweep 永遠弱於 hook 起源的 verify 結果。
+- 若 pending timeout → drop proposal（§3.4.2），累積的 sweep observation 一併 drop 進 trace（沒有 actor 可供 sweep 結束）
+- 若 pending promote 為 actor → replay 累積的 sweep observation；若仍判 `actor should end`，正常走 monotone lifecycle
 
 #### 3.4.4 Generation 邊界
 
@@ -404,24 +444,35 @@ if obs.SourceKind == SourceSweep && a.isPending(obs.Proposal.ActorKey) {
 
 #### 3.4.5 Reconcile Loop（每 5s）
 
+**v3 設計哲學**：reconcile **不主動改變 actor.status**（status 變化只能由明確 evidence 驅動：hook / probe 的確定信號 / sweep 的 process 死偵測）。
+
 ```go
 func (a *Arbitrator) reconcile() {
     now := time.Now()
     a.flushPendingDue(now)
 
     for _, actor := range a.frames.AllActive() {
-        // Stale detection
+        // Stale detection：30s 沒活動 → 只進 trace（phase=proposed, outcome=skipped），不 apply status 變化
         if now.Sub(actor.Lifecycle.LastActivity) > 30*time.Second {
-            a.emit(Observation{
-                SourceKind: SourceSynthetic,
-                Action:     "actor.stale",
-                ReasonCode: "SyntheticStale",
-                Proposal:   StateProposal{ActorKey: actor.Key, SuggestStatus: "unknown"},
-            })
+            a.traceOut <- TraceRecord{
+                SourceKind:  SourceReconcile,
+                Action:      "actor.stale_detected",
+                Phase:       PhaseProposed,
+                Outcome:     OutcomeSkipped,
+                ReasonCode:  "ReconcileStaleNoted",
+                ReasonText:  "actor 30s 無活動，但 reconcile 不主動改 status",
+                // 不進 apply pipeline，不變 frame
+            }
         }
     }
 }
 ```
+
+**解決 stale actor 的正確做法**：
+- `common.motion` probe 持續偵測（未來常駐模式）發現 pane 無畫面變化 → 產明確 proposal
+- `liveness` probe 發現 process 死 → 產 `EndLifecycle` proposal
+- Sweep 發現 pane pid 不存在 → 產 `EndLifecycle` proposal
+- Reconcile 只做**觀察者**，不自己下判斷
 
 ### 3.5 Trace Envelope（OTel + ECS + DAP 混合 + Decision Ports）
 
@@ -462,20 +513,62 @@ observed_generation
 
 #### 3.5.1 Back-Pressure Policy
 
-**問題**：現況 trace sink queue 256，滿則 drop（`internal/module/agent/trace.go:26`）；全量 observation 後寫入量 10× 以上。
+**問題**：現況 trace sink queue 256，滿則 drop（`internal/module/agent/trace.go:26`）；全量 observation 後寫入量 10× 以上。v3 需同時定義 **Arbitrator 入口**（`inCh / retryCh`）與 **Trace 出口**（`traceOut`）的滿載策略。
 
-**Policy**：
+**三層策略**：
+
+| 層 | Channel | 容量 | 滿載行為 | Metric |
+|---|---|---|---|---|
+| **Arbitrator in** | `Arbitrator.in` | 1024 | 上游（hook handler / probe / sweep）`select + default` 走 non-blocking send；滿則 drop proposed + 記 metric；committed 改成 blocking send with 100ms timeout（timeout 後 drop + emergency log）| `lights_arb_in_dropped{priority}` |
+| **Retry** | `Arbitrator.retryCh` | 256 | 滿則 drop retry tick + 記 metric（原 observation 已進 pending buffer，錯過的是 retry timer 觸發）| `lights_arb_retry_dropped` |
+| **Trace writer** | `Arbitrator.traceOut` | 4096 | Batching 100/100ms；滿則按 Drop Priority 丟棄 | `lights_trace_dropped{priority}` |
+
+**Arbitrator 入口 submit helper**（上游統一使用）：
+
+```go
+func (m *Module) submitObservation(obs Observation) {
+    priority := obs.admissionPriority()  // committed > proposed
+    if priority == AdmissionCommitted {
+        // Blocking with 100ms timeout（committed 不能丟）
+        timer := time.NewTimer(100 * time.Millisecond)
+        defer timer.Stop()
+        select {
+        case m.arbIn <- obs:
+        case <-timer.C:
+            metrics.Inc("lights_arb_in_dropped", "priority=committed")
+            log.Error("arb_in full, committed observation dropped", obs)
+        }
+        return
+    }
+    // Proposed 非阻塞
+    select {
+    case m.arbIn <- obs:
+    default:
+        metrics.Inc("lights_arb_in_dropped", "priority=proposed")
+    }
+}
+```
+
+**Drop Priority**（queue 滿時）：
+
+```
+hook committed > reconcile committed > probe committed >
+hook proposed > probe proposed > sweep proposed > synthetic proposed
+```
+
+**Batching / Sampling / Retention**：
 
 | 層 | 策略 |
 |---|---|
 | **Batching** | Arbitrator → trace writer 走 100-event batch，每 100ms 或滿額即 flush |
 | **Sampling** | Sweep/synthetic 的 proposed（未改變 phase）只取 1/10；committed 全留 |
 | **Retention** | Alpha 階段不保留；trace DB per-session TTL 24h（reconcile tick 清 expired） |
-| **Drop priority**（queue 滿時）| hook committed > reconcile committed > probe committed > hook proposed > probe proposed > sweep proposed > synthetic proposed |
 
 **Metrics**：
 - `lights_trace_queue_depth`
 - `lights_trace_dropped{priority=<level>}`
+- `lights_arb_in_dropped{priority=<committed|proposed>}`
+- `lights_arb_retry_dropped`
 - `lights_trace_batch_flush_ms`
 
 ### 3.6 Capability Bits + Optional Services
@@ -612,12 +705,14 @@ hook fires ──► ProbePolicy.PlanProbesForHook(hook_kind)
 Scheduler arms probe：
   t0 = now + InitialDelay
   schedule tick every PollInterval until:
-    - probe returns definitive signal → cancel + emit Observation
-    - timeout 觸及 → cancel + emit SyntheticTimeout Observation
-    - 對應 actor ended → cancel (no observation)
+    - probe returns definitive signal → cancel + emit Observation（含 proposal，Arbitrator apply）
+    - timeout 觸及 → cancel + emit trace-only record（不產 proposal，不進 apply pipeline）
+    - 對應 actor ended → cancel（no observation）
 ```
 
-Probe 產 Observation 時必須帶 `WatcherToken = probe.IdentityToken()`，Arbitrator 依 `WatcherToken` 鑑別 stale callback（§3.4.1 第 2 步）。
+**v3 修正：Probe timeout 不產生狀態變化 proposal**。原因：timeout 代表「這次沒偵測到確定信號」，不等於「進入 error」或「變成 unknown」；依設計哲學「沒有反應」優於「錯誤反應」，只進 trace（`reason_code=ProbeTimeout`，`phase=proposed, outcome=skipped`），Arbitrator 不 apply 改變 status。後續若該 actor 仍需明確狀態判斷，由下一次 hook 或重新 arm 的 probe 驅動。
+
+Probe 產 Observation 時必須帶 `WatcherToken = probe.IdentityToken()`，Arbitrator 依 `WatcherToken` 鑑別 stale callback（§3.4.1 第 2 步）。Probe 被 cancel 或 timeout 時 rotate token，舊 callback 自動被 reject。
 
 **Continuous 行為（目前 disabled）**：
 
@@ -684,6 +779,39 @@ func NewDefaultRegistry() *Registry {
 - 舊的 hook path 仍透過 provider 走（到 PR-3b 才從 hook collector 改寫走 observation bus）
 - PR-4a/4b 逐個 agent 補 `ProbePolicy`，未補的 agent 使用 `NoopProbePolicy`
 
+#### 4.6.1 PR-3a Legacy Provider Compat Adapter
+
+**Daemon 起不來風險**：現有 `internal/module/stream/module.go:39` 直接讀 `cc.operator`；`internal/module/agent/handler.go` 多處對 provider 做 type assertion（`handler.go:311/381/539`）。若 PR-3a 直接換成 `AgentSpec` 介面，未升級的呼叫端會 nil panic。
+
+**Compat Adapter 設計**：
+
+```go
+// PR-3a 引入：legacy call site 透過 adapter 繼續拿 concrete provider
+type LegacyProviderAdapter struct {
+    spec AgentSpec
+}
+
+// 讓 spec.Provider() 實作既有 concrete provider 介面（或提供相容 shim）
+// 保留時間：PR-3a 合併 → PR-5a 全面切換走 optional services → 移除 adapter
+func (r *Registry) LegacyProvider(agentID string) concrete.Provider {
+    spec, ok := r.specs[agentID]
+    if !ok { return nil }
+    return &LegacyProviderAdapter{spec: spec}.AsLegacy()
+}
+```
+
+**PR-3a 不動的呼叫端**（靠 adapter 保持舊行為）：
+- `stream/module.go:39` → 透過 `registry.LegacyProvider("cc")` 拿 `cc.operator` 等效物件
+- `agent/handler.go` 的 provider type assertion → 透過 adapter 還原介面
+- 其他 `*stream/orchestrator.go` 對 `CCSessionID / CCOperator` 的直取 → 暫時保留（PR-5a 才解耦）
+
+**PR-5a 移除 adapter**：
+- 所有 call site 改用 `spec.Operator() / spec.Statusline() / spec.StreamResumer()` 動態分派
+- Adapter 與 legacy provider 介面一併刪除
+
+**Registry 啟動時一致性驗證**：
+`Registry.Register()` 檢查 capability bits 與 optional services 一致（§4.5），若 cc/codex/opencode 任一不一致 → `panic` 阻止 daemon 啟動。這是 **dev-time 保護**；production deployment 前必定會觸發過測試環境的 registry validation。
+
 ---
 
 ## 5. Pid Tree Role 判斷
@@ -699,7 +827,7 @@ func NewDefaultRegistry() *Registry {
 
 ### 5.2 嚴格策略（D1=C）
 
-判不出就**不認**，在 pending buffer 暫存，超時後落成 `status=unknown` actor（§3.4.2）。
+判不出就**不認**，在 pending buffer 暫存。Pending timeout 後 **drop proposal**（不建 actor，不改 frame），只保留完整 trace（§3.4.2）。設計哲學：「沒有反應」比「錯誤反應」更好。
 
 ### 5.3 Ancestor Walk
 
@@ -772,7 +900,7 @@ func (a *Arbitrator) scheduleRetry(obs Observation, delays []time.Duration) {
 }
 ```
 
-Arbitrator main loop 多加一個 select case：
+Arbitrator main loop 多加一個 select case（§3.4 已列）：
 ```go
 case t := <-a.retryCh:
     a.attemptRetry(t)
@@ -781,17 +909,31 @@ case t := <-a.retryCh:
 **Coalescing + Bounded**（§3.4.2 已寫）：
 - 同 `ActorKey` 合成單一 pending entry
 - Per-session ≤ 8 entries；超出 evict 最舊
-- Hook storm（10ms > 50 obs）drop proposed，保 committed
+- Hook storm（10ms > 50 obs）drop（只進 trace）
+
+#### 5.4.1 Handler 同步/非同步邊界（plan 層定 diff）
+
+Spec 只定**介面與語意**：
+- Hook handler goroutine 負責：(a) 同步第一次 verify、(b) build Observation、(c) submit 給 arbitrator（走 §3.5.1 submit helper，滿載退讓）、(d) HTTP 回 `202 Accepted`
+- Arbitrator goroutine 負責：pending buffer 管理、retry 排程、trace 寫入、frame broadcast
+
+**Plan 層需決定的具體切點**（不在 spec 規範）：
+- 現有 `internal/module/agent/handler.go:68` `handleEvent()` 內的 `verify` / `applyFrameEvent` / watcher 管理 / broadcast 如何拆
+- `verify.Run()` 在 handler 層回傳的 retry signal 如何序列化成 retry Observation
+- `broadcast` 從 handler 移入 Arbitrator 後，對外 SSE / WS 的 ordering 保證
+- 原 tests 若 stub 了 `verifyEventFn` 與 `applyFrameEvent` → plan 層決定 rewrite 或新測試檔
+
+**工作量提醒**：此處變更涉及**重切 handler 同步/非同步語意 + trace path + 測試假設**，plan 會比 spec 字面看起來大。PR-2a 分量估計應納入此邊界重構。
 
 ### 5.5 Role 判斷表 + Primary 替換規則
 
-| 情境 | pane pid 驗證 | 直接 PPID 命中 actor | ancestor walk 命中 actor | role |
+| 情境 | pane pid 驗證 | 直接 PPID 命中 actor | ancestor walk 命中 actor | 結果 |
 |---|---|---|---|---|
-| hook 來自 pane 內且是 session root process | ✅ | N/A | N/A | `primary` |
-| hook 來自 pane 內、PPID 是另一 actor process | ✅ | ✅ | ✅ | `proxy`（parent = 那 actor） |
-| hook 來自 pane 內、PPID 是 shim、祖父是 actor | ✅ | ❌ | ✅ | `proxy`（parent = 祖父 actor） |
+| hook 來自 pane 內且是 session root process | ✅ | N/A | N/A | 建 actor，`role=primary` |
+| hook 來自 pane 內、PPID 是另一 actor process | ✅ | ✅ | ✅ | 建 actor，`role=proxy`（parent = 那 actor） |
+| hook 來自 pane 內、PPID 是 shim、祖父是 actor | ✅ | ❌ | ✅ | 建 actor，`role=proxy`（parent = 祖父 actor） |
 | hook 來自 pane 內、無任何祖先是 actor | ✅ | ❌ | ❌ | 見下「新 primary 替換規則」 |
-| hook 不在 pane tree | ❌ | N/A | N/A | `unknown`（進 pending / 超時落 unknown actor） |
+| hook 不在 pane tree（pending 3 retry + timeout）| ❌ | N/A | N/A | **drop proposal**（不建 actor），`emitTraceOnly` + `reason_code=PidTreeUnresolvable`；frame 維持現狀 |
 
 **新 primary 替換規則**（修 v1 §5.5 衝突）：
 
@@ -885,9 +1027,19 @@ Arbitrator 在 apply 時：
 
 未來若 `watchAlive` 形式的常駐監測確需啟用，啟動單一 probe 而非重寫架構。
 
-### 6.6 Stream Handoff 泛化（PR-5a 內一併處理）
+### 6.6 Stream Handoff 泛化（PR-5a 拆 3 個子 PR）
 
-現況 stream orchestrator 硬依 `CCSessionID` 與 `CCOperator`（`internal/module/stream/orchestrator.go:70`）。泛化方案：
+現況 stream orchestrator 硬依 `CCSessionID` 與 `CCOperator`（`internal/module/stream/orchestrator.go:70`、`165`）；`internal/module/session/provider.go:15` 的 session metadata 也直接長 `CCSessionID` 欄位。
+
+**工作量**：涉及 `stream` / `session` / `agent` 三個 module。PR-5a 實際拆成 **三個子 PR**：
+
+| 子 PR | 範圍 | 尺寸 |
+|---|---|---|
+| **PR-5a0** | Session metadata 中性化：`CCSessionID` → `ResumeToken` 之類中性欄位；資料庫 schema + 所有讀寫點改名 | 中 |
+| **PR-5a1** | Stream orchestrator 改造：硬編 `cc.operator` / `ccOps` 走 `spec.Operator()` / `spec.StreamResumer()` 動態分派 | 中 |
+| **PR-5a2** | API 層 capability 分派：`/api/agent/status`、statusline installer 改走 `spec.Statusline()` / `spec.Descriptor().Capabilities` 判斷 | 中 |
+
+**介面設計**：
 
 - 新介面 `StreamResumer`（§3.6.2 Optional services）
   ```go
@@ -1006,15 +1158,18 @@ CREATE INDEX idx_divergence_matched ON frame_divergences(matched);
 ### 8.3 AGENT_ARB_MODE 注入與切換
 
 **來源優先**：
-1. Env: `AGENT_ARB_MODE=passthrough|authoritative`
-2. Config: `[agent] arb_mode = "passthrough"|"authoritative"`（`config.toml`）
+1. Env: `AGENT_ARB_MODE=passthrough|authoritative`（啟動時讀取，**不支援 hot reload**）
+2. Config: `[agent] arb_mode = "passthrough"|"authoritative"`（`config.toml`，支援 hot reload）
 3. 預設：`passthrough`（PR-1b ~ PR-2a 期間）；`authoritative`（PR-2b 起）
 
 **切換語意**：
-- Daemon boot 時讀取最終值，設 Arbitrator 初始 mode
+- Daemon boot 時：env 若有設 → 使用 env 值並鎖定；否則讀取 config 值
 - `OnConfigChange` 監聽 `[agent] arb_mode` 變化（`internal/core/core.go:117` 現有 hot reload 機制）
+  - **若 env 已設**：忽略 config 變化，僅 log warning `arb_mode overridden by env, hot reload ignored`
+  - **若 env 未設**：更新 `pendingMode`
 - 切換時**不立即生效**；記錄 `pendingMode`，在下一次 `SessionStart` 時套用（避免 mid-session 切換導致 frame 狀態撕裂）
-- API 可讀當前 mode + pending mode：`GET /api/agent/arbitrator/mode → { current, pending }`
+- API 可讀當前 mode + pending mode：`GET /api/agent/arbitrator/mode → { current, pending, env_locked }`
+  - `env_locked=true` 時 SPA 顯示「mode 由 env 鎖定，hot reload 已停用」
 
 ### 8.4 Phase 3 抽象層重構
 
@@ -1028,9 +1183,10 @@ CREATE INDEX idx_divergence_matched ON frame_divergences(matched);
 |---|---|
 | PR-1a trace schema | 新欄位與舊欄位雙寫，SPA 讀 fallback；若 SPA 依新欄位 crash → revert schema |
 | PR-1b Observation bus | Arbitrator passthrough 不寫 frame，關掉 bus 不影響 |
+| PR-2a Frame schema 升級 | `agent_frames` 表 DDL 加 `generation / actors` JSON 欄位時保留舊 `status` / `subagents` 欄位；舊 binary 讀新行透過 view / fallback projection。revert binary = 直接 rollback；revert DDL = 留新欄為 NULL 不刪 |
 | PR-2b 切 writer | `AGENT_ARB_MODE=passthrough` 回退；下次 SessionStart 生效 |
 | PR-2c 刪 legacy | 需 revert commit（legacy path 已刪）|
-| PR-3a AgentSpec | 保留 legacy provider 介面；切換點少，revert 易 |
+| PR-3a AgentSpec | 保留 legacy provider compat adapter（§4.6.1）；切換點少，revert 易 |
 | PR-3b ProbePolicy | 新 probe path 可關閉，legacy probe 仍註冊 |
 
 ### 8.6 Daemon Restart 恢復
@@ -1045,19 +1201,22 @@ CREATE INDEX idx_divergence_matched ON frame_divergences(matched);
    - 若 `frames` 表沒這個 session（rare），下一個 `SessionStart` 以 DB 最大 generation +1 起
 
 2. **Session 重新連結**：
-   - 啟動後對所有活著的 pane 發 `SyntheticRestart` Observation
-   - Arbitrator 對 primary actor 標 `Detail["restarted_at"]`，保持 status 不變
-   - 若 30s 內收到 hook → 正常流程接手；若沒收到 → reconcile loop 最終產 `SyntheticStale`
+   - 啟動後對所有活著的 pane 發 `SyntheticRestart` trace record（不產生可 apply 的 proposal；phase=proposed, outcome=skipped）
+   - Primary actor 的 `Detail["restarted_at"]` 欄位由 replay 時直接寫入 frame，**不透過 Arbitrator proposal**
+   - 若 30s 內收到 hook → 正常流程接手；若沒收到 → reconcile 只記 trace（§3.4.5 哲學：不主動改 status）
 
-3. **Trace 恢復**：
-   - `trace_id` 不跨 restart 續用（因為 daemon memory span IDs 不延續）
+3. **Trace 恢復**（`generation ≠ trace_id` 的 UI 標記）：
+   - `trace_id` 不跨 restart 續用（daemon memory span IDs 不延續）
    - 每次 restart 為 active session 開新 `trace_id`；舊 trace 保留但不再寫入
-   - DB schema 記錄 `trace_id.startup_id` 欄位區分哪個 daemon lifetime 寫的
+   - DB schema 記錄 `startup_id`（UUID）欄位區分哪個 daemon lifetime 寫的
+   - Generation **不因 restart bump**（generation 由 `SessionStart` 專屬推進，§3.4.1）；所以同一 session 可能多個 `trace_id`（restart N 次）但仍在同一 generation 下
+   - **UI 標記**：SPA trace viewer 顯示「此 session 期間 daemon 重啟 N 次」加 `startup_id` 切換標記（每個 startup_id 顏色區分）
+   - 調查時需同時看 `generation`（hook lifetime）與 `startup_id`（daemon lifetime）
 
 4. **Pending 清空**：
-   - restart 後 pending buffer 清空；未 verified 的 hook observation 永久遺失
-   - 影響：短暫的 restart 期間 hook 可能遺失，reconcile 5s 後會重試偵測
-   - 接受風險：daemon restart 不常見，alpha 階段不補償
+   - restart 後 pending buffer 清空；所有 WatcherToken 失效（§3.3）
+   - 影響：短暫的 restart 期間 hook / probe callback 可能遺失
+   - 接受風險：daemon restart 不常見，alpha 階段不補償（見 §11 `hook_retry_on_startup` 延後 issue）
 
 ---
 
@@ -1084,9 +1243,9 @@ CREATE INDEX idx_divergence_matched ON frame_divergences(matched);
 | `observation_idempotent` | 同 `(actor_key, source, action, evidence_hash)` 不重複入 frame | `arbitrator_test.go` |
 | `monotone_lifecycle` | ended actor 的 late observation 被拒 | `arbitrator_test.go` |
 | `probe_error_overrides_hook_waiting` | probe 的 error 可以 override hook 的 waiting | `arbitrator_test.go` |
-| `retry_pending_unknown_flush` | 3 次 retry 全失敗 → unknown actor（非 drop）| `arbitrator_test.go` |
+| `retry_pending_drop_trace_only` | 3 次 retry 全失敗 → drop proposal + 寫 trace，frame 不變 | `arbitrator_test.go` |
 
-### 9.3 新增測試類別（v2）
+### 9.3 新增測試類別
 
 #### Phase 1 雙寫 divergence
 
@@ -1095,31 +1254,45 @@ CREATE INDEX idx_divergence_matched ON frame_divergences(matched);
 | `passthrough_match_ok` | hook 驅動的 legacy flow 與 arbitrator proposal 一致 → `divergence.matched=1` |
 | `known_divergence_counter_increments` | 刻意構造已知差異（如 probe override）→ counter +1 |
 | `flag_switch_no_regression` | `AGENT_ARB_MODE=passthrough→authoritative` 切換後 SessionStart 新流程接手；既有 test 全過 |
+| `env_lock_ignores_hot_reload` | env 設了 mode 後，config hot reload 被忽略 + log warning |
 
 #### Generation 邊界
 
 | Test | 覆蓋 |
 |---|---|
-| `session_restart_new_generation` | `SessionStart` 後 old gen actor 強制 end；new gen actor 進 frame |
+| `session_restart_new_generation` | `SessionStart` hook 後 old gen actor 強制 end；new gen actor 進 frame |
+| `future_generation_non_session_start_rejected` | 非 SessionStart 的 future-generation observation → reject (UnauthorizedGenerationBump) |
 | `late_probe_rejected_by_gate` | 新 generation 後收到舊 generation probe → reject |
 | `stale_watcher_rejected` | probe watcher_token 不符 → reject |
 
-#### Pending buffer 壓力
+#### Pending buffer / Drop 語意
 
 | Test | 覆蓋 |
 |---|---|
-| `hook_storm_50_obs_in_10ms` | drop proposed，保 committed |
+| `hook_storm_50_obs_in_10ms` | drop（只進 trace）+ metric +1 |
 | `pending_bounded_coalescing` | 同 ActorKey 第 17 筆觀察合併 → 最舊丟棄 + metric +1 |
-| `pending_8_entry_per_session_evict` | 第 9 個 actor 進 pending → 最舊 evict |
-| `sweep_intersect_pending` | sweep 對仍 pending 的 actor 發 end → 累積到 entry；pending flush 後 replay |
+| `pending_8_entry_per_session_evict` | 第 9 個 actor 進 pending → 最舊 evict 走 `emitTraceOnly` |
+| `pending_timeout_drops_no_actor_created` | pending 2s 超時 → drop proposal + trace，frame 不變（無 actor 建立）|
+| `sweep_intersect_pending` | sweep 對仍 pending 的 actor 發 end → 累積到 entry；pending timeout 仍走 drop（非建 actor 再 end）|
+| `no_primary_no_actor_frame_empty` | role 判不出且無 primary → frame 保持 empty（純 terminal）|
+| `existing_primary_unknown_hook_no_change` | 有 primary 時判不出的 hook → 不改動既有 primary |
+
+#### Channel admission control
+
+| Test | 覆蓋 |
+|---|---|
+| `arb_in_full_proposed_drops_non_blocking` | Arbitrator in channel 滿，proposed observation non-blocking drop + metric |
+| `arb_in_full_committed_blocks_100ms` | committed observation blocking send；超 100ms timeout + emergency log |
+| `retry_ch_full_drops` | retryCh 滿 → drop retry tick + metric（pending entry 仍在） |
 
 #### Daemon restart
 
 | Test | 覆蓋 |
 |---|---|
 | `restart_replay_frames` | DB frame 重建 → 記憶體 state 正確 |
-| `restart_new_trace_id` | 舊 trace_id 不再寫入；active session 開新 trace_id |
-| `restart_pending_lost_ok` | restart 時 pending buffer 空；reconcile tick 後恢復 |
+| `restart_new_trace_id_same_generation` | 新 `startup_id` + 新 `trace_id`，但 generation 不變 |
+| `restart_pending_lost_ok` | restart 時 pending buffer 空；所有 watcher token 失效 |
+| `restart_no_status_change_from_reconcile` | replay 後 reconcile 不主動改 actor.status（只記 trace） |
 
 #### Trace back-pressure
 
@@ -1128,6 +1301,22 @@ CREATE INDEX idx_divergence_matched ON frame_divergences(matched);
 | `trace_queue_full_drop_by_priority` | queue 滿時 synthetic proposed 先被 drop；hook committed 保留 |
 | `trace_batch_flush_by_size_or_time` | 100 event or 100ms flush 一次 |
 | `trace_retention_ttl_cleanup` | 24h 舊 trace 被 reconcile 清掉 |
+| `decision_ports_cap_16` | Observation 帶 17 個 DecisionPort → dev panic / prod truncate |
+
+#### UI Drop 規則（SPA）
+
+| Test | 覆蓋 |
+|---|---|
+| `unknown_proposal_no_frame_update` | daemon 送 drop-trace 事件 → SPA 不變 frame badge |
+| `primary_only_one_at_a_time` | 多個 primary candidate → SPA 只呈現被 Arbitrator 選定的那個 |
+
+#### Registry compat
+
+| Test | 覆蓋 |
+|---|---|
+| `registry_capability_service_mismatch_panics` | `HasOperator=true` 但 `Operator()==nil` → `Register` panic（dev）|
+| `registry_legacy_adapter_cc_provider` | PR-3a compat adapter 讓 `stream/module.go:39` 仍能取得 cc operator |
+| `registry_noop_probe_policy` | PR-3b 前未補 ProbePolicy 的 agent 走 `NoopProbePolicy` 不 crash |
 
 ### 9.4 測試優先級
 
@@ -1144,27 +1333,29 @@ CREATE INDEX idx_divergence_matched ON frame_divergences(matched);
 
 ---
 
-## 10. Phase / PR 拆分（v2 調整版）
+## 10. Phase / PR 拆分（v3 調整版）
 
-原則：每 PR 單一關注點、中等尺寸（500-1500 lines）、合進 main 後仍可運行。共 **15 PR**（v1 為 13，v2 拆 PR-2b→b/c、PR-6→a/b）。
+原則：每 PR 單一關注點、中等尺寸（500-1500 lines），合進 main 後仍可運行。共 **17 PR**（v1 為 13；v2 拆 PR-2b→b/c、PR-6→a/b = 15；v3 拆 PR-5a→5a0/5a1/5a2 = 17）。
 
 | Phase | PR | 範圍 | 尺寸 | 依賴 |
 |---|---|---|---|---|
 | **0 輕清理** | **PR-0** | close PR #486；刪 `feat/agent-watch-alive`；Codex readiness 加 capability bit（不補邏輯） | 極小 | — |
 | **1 Schema + 雙寫過渡** | **PR-1a** | Trace schema 升級（加 `source_kind / action / reason_code / outcome / scenario_key / observed_generation / decision_ports[]` 等一級欄位，hook path 填值）+ `frame_divergences` 表 DDL | 中 | PR-0 |
-| | **PR-1b** | Observation type + Arbitrator **passthrough**（hook/probe/sweep 雙寫直寫 frame **並**送 Observation 到 Arbitrator；Arbitrator 以新 multi-actor schema 計算 proposal，下投影到舊 schema 比對，寫 divergence 表）| 中大 | PR-1a |
-| **2 Arbitrator 切換** | **PR-2a** | Frame 改 multi-actor + `ActorKey` 複合鍵 + role via pid tree + **ancestor walk** + retry/pending 視窗 + generation 邊界 gate + watcher token 驗證 | 中大 | PR-1b |
+| | **PR-1b** | Observation type + Arbitrator **passthrough**（hook/probe/sweep 雙寫直寫 frame **並**送 Observation 到 Arbitrator；Arbitrator 以新 multi-actor schema 計算 proposal，下投影到舊 schema 比對，寫 divergence 表）+ Arbitrator channel admission control（§3.5.1）| 中大 | PR-1a |
+| **2 Arbitrator 切換** | **PR-2a** | Frame 改 multi-actor + `ActorKey` 複合鍵 + role via pid tree + **ancestor walk** + retry/pending 視窗 + generation gate（限 SessionStart 推進）+ watcher token + idempotency key + `Lifecycle.LastActivity`；**handler 同步/非同步邊界重構**（§5.4.1）| 大 | PR-1b |
 | | **PR-2b** | 切換 Arbitrator 為唯一 writer（mode=authoritative）；`AGENT_ARB_MODE` env/config 注入 + hot reload；baseline regression test | 中大 | PR-2a |
 | | **PR-2c** | 移除 hook/probe/sweep direct write + 刪 legacy 測試 | 中 | PR-2b |
-| **3 抽象層重構** | **PR-3a** | `AgentSpec = Descriptor + Provider + ProbePolicy + Optional services` 拆分 + `Capability` bits 擴張 + `Registry` 一致性驗證 + `RegisterBuiltinAgents` 顯式註冊 | 中大 | PR-2c |
-| | **PR-3b** | `ProbePolicy` + `ProbeBinding(OnDemand/Continuous)` + Scheduler + `common_probes`（motion + 彩虹字）+ self_detection probe（disabled）+ Trace back-pressure policy（batching/sampling/drop） | 中大 | PR-3a |
+| **3 抽象層重構** | **PR-3a** | `AgentSpec = Descriptor + Provider + ProbePolicy + Optional services` 拆分 + `Capability` bits 擴張 + `Registry` 一致性驗證 + `RegisterBuiltinAgents` 顯式註冊 + **Legacy Provider Compat Adapter**（§4.6.1）| 中大 | PR-2c |
+| | **PR-3b** | `ProbePolicy` + `ProbeBinding(OnDemand/Continuous)` + Scheduler + `common_probes`（motion + 彩虹字）+ self_detection probe（disabled） | 中大 | PR-3a |
 | **4 三 agent 對齊** | **PR-4a** | Codex ProbePolicy 實作 + Capability bits 標註 | 中 | PR-3b |
 | | **PR-4b** | OpenCode ProbePolicy 實作 + readiness 補齊 + `HasReadiness` 開 true | 中 | PR-3b |
 | | **PR-4c** | Subagent typed model（`SubagentRef{id, type}` 升級至 Frame / Projection；OpenCode typed 從 detail 提升） | 中 | PR-2a |
-| **5 硬編拆除 + SPA 對齊** | **PR-5a** | Daemon 側拆 cc 硬編（statusline installer / `/api/agent/status` / stream orchestrator 透過 `Operator()` / `Statusline()` / `StreamResumer()` optional services 動態分派） | 中大 | PR-3a |
-| | **PR-5b** | SPA 側拆 cc 硬編（icon list / detect list / metadata）+ registry 化；燈號 UI 體質（`unknown` 灰燈、`clear` 型別、顏色 SOT palette、SessionsSection 4 色對齊、§2.1 投影規則實作）| 中大 | PR-5a |
+| **5 硬編拆除 + SPA 對齊** | **PR-5a0** | Session metadata 中性化：`CCSessionID` → `ResumeToken`（DB schema + 所有讀寫點改名）+ Trace back-pressure policy 實作（batching/sampling/drop priority） | 中 | PR-3a |
+| | **PR-5a1** | Stream orchestrator 改造：硬編 `cc.operator` / `ccOps` 走 `spec.Operator()` / `spec.StreamResumer()` 動態分派 + 移除 compat adapter 中 stream 相關路徑 | 中 | PR-5a0 |
+| | **PR-5a2** | API 層 capability 分派：`/api/agent/status`、statusline installer 改走 `spec.Statusline()` / `spec.Descriptor().Capabilities` 判斷 + 移除剩餘 compat adapter | 中 | PR-5a1 |
+| | **PR-5b** | SPA 側拆 cc 硬編（icon list / detect list / metadata）+ registry 化；燈號 UI 體質（`clear` 型別、顏色 SOT palette、SessionsSection 4 色對齊、§2.1 投影規則實作；UI drop 規則：收到 trace-only event 不更動 frame badge）| 中大 | PR-5a2 |
 | **6 Trace viewer** | **PR-6a** | Trace read API 實作（REST + WS：`/api/agent/traces/:sessionId`、`/api/agent/traces/:sessionId/events/:eventId`、`/api/agent/traces/:sessionId/state/:ref`、WS tail）| 中 | PR-1a |
-| | **PR-6b** | SPA trace viewer UI：flow graph + DecisionPort 子節點 + DAP-style inspector + filter（source_kind/phase/outcome/decision_port_id）+ time-range | 大（純 SPA） | PR-6a |
+| | **PR-6b** | SPA trace viewer UI：flow graph + DecisionPort 子節點 + DAP-style inspector + filter（source_kind/phase/outcome/decision_port_id）+ time-range + `startup_id` 著色切換標記（§8.6）| 大（純 SPA） | PR-6a |
 
 ### 10.1 可 parallel 的 PR
 
@@ -1174,7 +1365,7 @@ CREATE INDEX idx_divergence_matched ON frame_divergences(matched);
 | PR-4c + PR-4a/4b | `Frame.Actors` schema 與各 agent provider | PR-4c 先合（schema 改動在先），PR-4a/4b rebase |
 | PR-6b + Phase 2-5 | 純 SPA，依賴 PR-6a | 無硬衝突 |
 | PR-3a + PR-3b | `AgentSpec` interface vs `ProbePolicy` impl | 必須串行（3a 先）|
-| PR-5a + PR-5b | daemon API vs SPA consumer | 必須串行（5a 先）|
+| PR-5a0/5a1/5a2 + PR-5b | daemon metadata/orchestrator/API 分層；SPA consumer | 必須串行（5a0→5a1→5a2→5b）|
 
 ### 10.2 關鍵設計點
 
@@ -1191,11 +1382,12 @@ CREATE INDEX idx_divergence_matched ON frame_divergences(matched);
 
 | PR | 風險 | 緩解 |
 |---|---|---|
+| PR-2a | Handler 同步/非同步邊界重構 + frame schema 升級同 PR；尺寸易膨脹 | 先在 plan 層切 sub-diff 審查（verify → observation → arbitrator）；compat adapter 讓舊 code path 暫存活 |
 | PR-2b | 所有 frame 寫入路徑改動，regression 面積大 | PR-1b 雙寫留下 divergence log 可比對；配合完整 regression test；flag 可回退 |
 | PR-2c | legacy path 刪除不可逆 | 需 revert commit；時機放 PR-2b 穩定運行 1 alpha 週期後 |
-| PR-3a | 既有 hard-coded `cc` 可能有遺漏 | 配合 PR-5a grep 清單核對；Registry 一致性檢查會 panic 早期發現 |
+| PR-3a | 既有 hard-coded `cc` 呼叫端（`stream/module.go:39` / `handler.go:311/381/539`）若無 compat adapter 會 nil panic | **Legacy Provider Compat Adapter**（§4.6.1）作為過渡；Registry 一致性檢查會 panic 早期發現配置錯誤 |
 | PR-4c | Schema 三層同步，migration 風險 | Alpha 階段可接受重置（memory: `feedback_no_alpha_migration`） |
-| PR-5a | `CCSessionID` / `CCOperator` 依賴解耦涉及 stream 模組 | Optional services interface 一致性檢查 + e2e 串流測試 |
+| PR-5a0/5a1/5a2 | 涉及 `stream` / `session` / `agent` 三 module | 拆三個子 PR，每步都有 compat adapter 保護；e2e 串流測試覆蓋 |
 
 ### 10.4 時序指引
 
@@ -1217,6 +1409,9 @@ CREATE INDEX idx_divergence_matched ON frame_divergences(matched);
 | Trace DB schema（SQLite）增量升級 | PR-1a 決定 schema 初版；alpha 階段可以 breaking drop | — |
 | `AGENT_ARB_MODE` 全域 console 介面 | GA 前考慮在 Settings → Dev 頁加 mode 切換 | — |
 | Restart recovery pending loss 補償 | alpha 不補；GA 前視需要加 `hook_retry_on_startup` | — |
+| **Role Unknown 補檢查 probe** | v3 選「drop + trace」哲學；未來可加一個 on-demand probe（`role_rediscover`）對該 pane 重新 scan pid tree；現階段不實作（不掛空殼，留本條追蹤） | future |
+| **DecisionPort 過量體積** | 已加 per-observation cap 16（§3.3）；若日後發現 hook/probe committed 普遍觸頂，可能需要 sampling per port | future |
+| Handler 同步/非同步邊界具體 diff | Spec §5.4.1 只定介面；PR-2a plan 層決定 `handleEvent()` 拆法、trace path 調整、test stub 重寫 | plan 層 |
 
 ---
 
@@ -1288,7 +1483,13 @@ CREATE INDEX idx_divergence_matched ON frame_divergences(matched);
 
 | Job ID | Duration | 範圍 |
 |---|---|---|
-| `task-mo8w4hyl-ys0v5e` | 5m30s | Spec v1 完整審閱：8 維度 20 項 blocker，本 v2 已全數吃進 |
+| `task-mo8w4hyl-ys0v5e` | 5m30s | Spec v1 完整審閱：8 維度 20 項 blocker，v2 已全數吃進 |
+
+**Spec v2 審閱（2026-04-22）**
+
+| Job ID | Duration | 範圍 |
+|---|---|---|
+| `task-mo8xbpd3-anz4np` | 6m09s | Spec v2 收斂審閱：10 完全修 + 8 部分修（5 真 blocker）+ 4 新 Findings + 3 新風險 / 代碼整合 blocker；本 v3 吃進核心 4 blocker + 6 細節 blocker + 7 follow-up |
 
 ---
 
