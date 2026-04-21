@@ -228,6 +228,16 @@ describe('useSyncStore.createPreOperationSnapshot', () => {
         }
       },
       deleteLocal: async () => {},
+      demoteSessionPristine: async () => {},
+      rotateSessionPristine: async (_b, trigger) => ({
+        id: 'stub-id',
+        timestamp: 0,
+        device: 'd',
+        trigger,
+        bundleSize: 0,
+        contributorIds: [],
+        isSessionPristine: true,
+      }),
       compact: async () => ({ kept: [], evicted: [] }),
       clear: async () => {},
     })
@@ -264,6 +274,16 @@ describe('useSyncStore.restoreFromSnapshot', () => {
         }
       },
       deleteLocal: async () => {},
+      demoteSessionPristine: async () => {},
+      rotateSessionPristine: async (_b, trigger) => ({
+        id: 'pre-' + trigger,
+        timestamp: 0,
+        device: 'd',
+        trigger,
+        bundleSize: 0,
+        contributorIds: [],
+        isSessionPristine: true,
+      }),
       compact: async () => ({ kept: [], evicted: [] }),
       clear: async () => {},
     })
@@ -287,7 +307,7 @@ describe('useSyncStore.restoreFromSnapshot', () => {
           strategy: 'full',
           getVersion: () => 1,
           serialize: () => ({ version: 1, data: {} }),
-          deserialize: (_p, merge) => {
+          deserialize: (_p: unknown, merge: { type: string }) => {
             if (merge.type === 'full-replace') deserializeCalls.push('stub1')
           },
         },
@@ -351,6 +371,20 @@ function installStubSnapshotStore(opts: StubSnapshotStoreOptions = {}) {
       }
     },
     deleteLocal: async () => {},
+    demoteSessionPristine: async () => {},
+    rotateSessionPristine: async (_b, trigger) => {
+      await opts.onCreate?.(trigger)
+      preOpCalls.push(trigger)
+      return {
+        id: 'pre-' + trigger,
+        timestamp: 0,
+        device: 'd',
+        trigger,
+        bundleSize: 0,
+        contributorIds: [],
+        isSessionPristine: true,
+      }
+    },
     compact: async () => ({ kept: [], evicted: [] }),
     clear: async () => {},
   })
@@ -560,7 +594,7 @@ describe('createPreOperationSnapshot — coverage (A2)', () => {
         { id: 'a', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: {} }), deserialize: () => {} },
         { id: 'b', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: {} }), deserialize: () => {} },
       ],
-      serialize: (_device, ids) => {
+      serialize: (_device: string, ids: string[]) => {
         serializedIds = ids
         return { version: 1, timestamp: 0, device: 'd', collections: {} }
       },

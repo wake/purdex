@@ -8,8 +8,27 @@ import {
 
 const Fake = () => null
 
-function make(overrides: Partial<InterfaceSubsection> = {}): InterfaceSubsection {
-  return { id: 'test', label: 'Test', order: 0, component: Fake, ...overrides }
+type MakeOverrides = {
+  id?: string
+  label?: string
+  order?: number
+  component?: typeof Fake
+} & (
+  | { disabled?: false; disabledReason?: never }
+  | { disabled: true; disabledReason?: string }
+)
+
+function make(overrides: MakeOverrides = {}): InterfaceSubsection {
+  const base = { id: 'test', label: 'Test', order: 0, component: Fake }
+  if (overrides.disabled) {
+    return {
+      ...base,
+      ...overrides,
+      disabled: true,
+      disabledReason: overrides.disabledReason ?? 'settings.coming_soon',
+    }
+  }
+  return { ...base, ...overrides }
 }
 
 describe('interface-subsection-registry', () => {

@@ -4,6 +4,7 @@ import { getLayoutKey, collectLeaves, swapPaneContent } from '../lib/pane-tree'
 import { PaneSplitter } from './PaneSplitter'
 import { PaneHeader } from './PaneHeader'
 import { QuickCommandMenu } from './QuickCommandMenu'
+import { isGrid4 } from './pane-layout-grid'
 import { executeCommand } from '../lib/execute-command'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
@@ -11,13 +12,6 @@ import type { PaneLayout, SplitLayout } from '../types/tab'
 
 function isSplit(layout: PaneLayout): layout is SplitLayout {
   return layout.type === 'split'
-}
-
-export function isGrid4(layout: PaneLayout): boolean {
-  if (!isSplit(layout) || layout.direction !== 'v' || layout.children.length !== 2) return false
-  return layout.children.every(
-    (c) => c.type === 'split' && c.direction === 'h' && c.children.length === 2,
-  )
 }
 
 interface Props {

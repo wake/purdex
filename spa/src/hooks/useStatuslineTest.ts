@@ -68,6 +68,10 @@ const STAGE4_GRACE_MS = 2000
 // from drifting out of sync when transitions fire in unexpected orders.
 type Stage4State = 'pending' | 'armed' | 'fired' | 'cancelled'
 
+function isStage4Armed(state: Stage4State): state is 'armed' {
+  return state === 'armed'
+}
+
 type StageNum = 1 | 2 | 3 | 4 | 5
 
 interface ServerStageEvent {
@@ -119,6 +123,16 @@ export function useStatuslineTest(hostId: string) {
     let stage4State: Stage4State = 'pending'
     let stage4Resolver: (() => void) | null = null
     const stage4Signal = new Promise<void>((resolve) => { stage4Resolver = resolve })
+    const unsubscribeBus = () => {
+      const unsub = unsubBus
+      unsubBus = null
+      unsub?.()
+    }
+    const cancelReader = () => {
+      const currentReader = reader
+      if (!currentReader) return
+      void currentReader.cancel().catch(() => { /* already closed — ignore */ })
+    }
     const fireStage4 = () => {
       // Idempotent — bus subscriber + early-hit may both invoke this; only
       // the first transition out of pending/armed actually resolves the signal.
@@ -171,13 +185,12 @@ export function useStatuslineTest(hostId: string) {
       const earlyKey = compositeKey(hostId, noncedVal)
       const earlyHit = !!useAgentStore.getState().ccStatus[earlyKey]
       debugStatuslineTest('hook.early-hit-check', { earlyKey, earlyHit })
-      if (earlyHit) {
-        markStage(4, { status: 'passed' })
-        markStage(5, { status: 'passed' })
-        fireStage4()
-        unsubBus?.()
-        unsubBus = null
-      }
+        if (earlyHit) {
+          markStage(4, { status: 'passed' })
+          markStage(5, { status: 'passed' })
+          fireStage4()
+          unsubscribeBus()
+        }
       if (!sendReadyAck) return true
       hostFetch(hostId, '/api/agent/cc/statusline/test/ready', {
           method: 'POST',
@@ -278,7 +291,7 @@ export function useStatuslineTest(hostId: string) {
       // Release the SSE reader so the browser closes the HTTP connection;
       // otherwise the fetch stream stays open until the server finishes
       // or its own timeouts fire.
-      reader?.cancel().catch(() => { /* already closed — ignore */ })
+      cancelReader()
     }
 
     if (outcome === 'timeout' && mountedRef.current) {
@@ -302,7 +315,8 @@ export function useStatuslineTest(hostId: string) {
 
     // SSE finished cleanly but stage 4 is still pending → give the WS a
     // grace window, otherwise the spinner for stages 4/5 would hang forever.
-    if (outcome === 'done' && mountedRef.current && stage4State === 'armed') {
+    const shouldWaitForStage4 = outcome === 'done' && mountedRef.current && isStage4Armed(stage4State)
+    if (shouldWaitForStage4) {
       debugStatuslineTest('hook.grace-start', { graceMs: STAGE4_GRACE_MS })
       let graceId: ReturnType<typeof setTimeout> | undefined
       const graceTimeout = new Promise<'grace-timeout'>((resolve) => {
@@ -317,8 +331,7 @@ export function useStatuslineTest(hostId: string) {
       if (graceOutcome === 'grace-timeout' && mountedRef.current) {
         // Detach the bus before marking failure so a late-arriving WS event
         // can't overwrite the failed state.
-        unsubBus?.()
-        unsubBus = null
+        unsubscribeBus()
         markFailThenSkipRest(
           4,
           `WS event not received within ${STAGE4_GRACE_MS}ms after stream completed`,
@@ -326,7 +339,7 @@ export function useStatuslineTest(hostId: string) {
       }
     }
 
-    unsubBus?.()
+    unsubscribeBus()
     runningRef.current = false
     if (mountedRef.current) {
       setState((s) => ({ ...s, running: false, lastRunAt: Date.now() }))

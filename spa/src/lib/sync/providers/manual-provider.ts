@@ -78,15 +78,11 @@ export function createManualProvider(): ManualProvider {
   return {
     id: 'manual',
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    async push(bundle: SyncBundle): Promise<void> {},
+    async push(_bundle: SyncBundle): Promise<void> {},
     async pull(): Promise<SyncBundle | null> { return null },
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    async pushChunks(chunks: Record<string, Uint8Array>): Promise<void> {},
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    async pullChunks(hashes: string[]): Promise<Record<string, Uint8Array>> { return {} },
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    async listHistory(limit: number): Promise<SyncSnapshot[]> { return [] },
+    async pushChunks(_chunks: Record<string, Uint8Array>): Promise<void> {},
+    async pullChunks(_hashes: string[]): Promise<Record<string, Uint8Array>> { return {} },
+    async listHistory(_limit: number): Promise<SyncSnapshot[]> { return [] },
 
     exportToBlob(bundle: SyncBundle): Blob {
       const json = JSON.stringify(bundle, null, 2)

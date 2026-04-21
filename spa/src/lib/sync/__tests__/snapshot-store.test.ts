@@ -65,7 +65,7 @@ describe('SnapshotStore.listLocal', () => {
     expect(list[0].id).toBe(b.id)
     expect(list[1].id).toBe(a.id)
     // bundle 不應該在 metadata 裡
-    expect((list[0] as Record<string, unknown>).bundle).toBeUndefined()
+    expect('bundle' in list[0]).toBe(false)
   })
 
   it('deleteLocal removes one', async () => {

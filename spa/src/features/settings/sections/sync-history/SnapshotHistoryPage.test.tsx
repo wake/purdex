@@ -26,6 +26,8 @@ describe('SnapshotHistoryPage', () => {
       getLocal: async (id) => (id === 'm1' ? fullSnap : null),
       createSnapshot: async () => items[0],
       deleteLocal: async () => {},
+      demoteSessionPristine: async () => {},
+      rotateSessionPristine: async () => ({ ...items[0], isSessionPristine: true }),
       compact: async () => ({ kept: [], evicted: [] }),
       clear: async () => {},
     })
