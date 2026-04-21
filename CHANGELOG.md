@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.198] - 2026-04-21
+
+### Feat(agent): add opencode hook integration (#534)
+
+- daemon 新增 `opencode` provider、`pdx setup --agent opencode` 與 `/api/hooks/opencode/*` host-global installer，讓 OpenCode hooks 可比照 Claude Code / Codex 由 Host Hooks 介面統一管理。
+- OpenCode plugin 會把 `session`、`permission`、`task` lifecycle 映射成現有 agent hook 事件，並將 `task` tool 對齊為 Claude-compatible `SubagentStart` / `SubagentStop`，補上跨 session pairing、duplicate start 忽略、malformed event 不廣播等保護。
+- agent module 補強 OpenCode error guard 與 subagent cleanup：`SessionStart` 會清殘留 subagents、`Stop` 不會誤清 error、`SessionEnd` 在 error 狀態下仍可正常 cleanup。
+- Settings 的 Host Hooks 現在會顯示 `OpenCode Hooks` 卡片，並補上 focused Go / SPA tests 覆蓋 provider、installer、subagent contract、detect API 與 page-level hooks UI 接線。
+
 ## [1.0.0-alpha.197] - 2026-04-21
 
 ### Feat(spa): support ~/... tilde paths in terminal file links (#530)
