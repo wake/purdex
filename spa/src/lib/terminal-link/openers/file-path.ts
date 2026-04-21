@@ -9,6 +9,7 @@ export interface FilePathOpenerDeps {
   insertTab(tabId: string, workspaceId: string): void
   getActiveWorkspaceId(): string | null
   fetchPaneCwd(hostId: string, sessionCode: string, signal?: AbortSignal): Promise<string>
+  fetchPaneHome(hostId: string, sessionCode: string, signal?: AbortSignal): Promise<string>
 }
 
 function buildFileInfo(path: string): FileInfo {
@@ -73,7 +74,26 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
       if (!ctx.hostId) return
 
       let path = rawPath
-      if (!path.startsWith('/')) {
+      if (path.startsWith('~/')) {
+        if (!ctx.sessionCode) return
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 5000)
+        let home: string
+        try {
+          home = await deps.fetchPaneHome(ctx.hostId, ctx.sessionCode, controller.signal)
+        } catch (err) {
+          clearTimeout(timeoutId)
+          const reason = (err as Error)?.name === 'AbortError' ? 'timeout' : (err as Error)?.message ?? String(err)
+          console.warn(`[file-path] home fetch failed (${reason}) for host=${ctx.hostId} session=${ctx.sessionCode} path=${rawPath}`)
+          return
+        }
+        clearTimeout(timeoutId)
+        if (!home || !home.startsWith('/')) {
+          console.warn(`[file-path] home not absolute, skipping: host=${ctx.hostId} home=${home}`)
+          return
+        }
+        path = home.replace(/\/+$/, '') + path.slice(1)
+      } else if (!path.startsWith('/')) {
         // relative / bare: 即時向 tmux pane 查 cwd，normalize 後驗證不越界
         if (!ctx.sessionCode) return
         const controller = new AbortController()

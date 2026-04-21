@@ -51,6 +51,8 @@ interface UISettings {
 
   linkDetectAbsolute: boolean
   setLinkDetectAbsolute: (v: boolean) => void
+  linkDetectTilde: boolean
+  setLinkDetectTilde: (v: boolean) => void
   linkDetectRelativeSlash: boolean
   setLinkDetectRelativeSlash: (v: boolean) => void
   linkDetectBareFilename: boolean
@@ -83,6 +85,8 @@ export const useUISettingsStore = create<UISettings>()(
 
       linkDetectAbsolute: true,
       setLinkDetectAbsolute: (v) => set({ linkDetectAbsolute: v }),
+      linkDetectTilde: true,
+      setLinkDetectTilde: (v) => set({ linkDetectTilde: v }),
       linkDetectRelativeSlash: false,
       setLinkDetectRelativeSlash: (v) => set({ linkDetectRelativeSlash: v }),
       linkDetectBareFilename: false,

@@ -19,10 +19,11 @@ function makeDeps() {
     match: () => true, priority: 'default',
     createContent: vi.fn(() => paneContent as never),
   }
-  const getDefaultOpener = vi.fn(() => fakeOpener)
-  const getActiveWorkspaceId = vi.fn(() => 'ws-1')
+  const getDefaultOpener = vi.fn((): FileOpener | null => fakeOpener)
+  const getActiveWorkspaceId = vi.fn((): string | null => 'ws-1')
   const fetchPaneCwd = vi.fn(async (_h: string, _s: string, _sig?: AbortSignal) => '/home/user/proj')
-  return { openSingletonTab, insertTab, getDefaultOpener, getActiveWorkspaceId, fetchPaneCwd, fakeOpener, paneContent }
+  const fetchPaneHome = vi.fn(async (_h: string, _s: string, _sig?: AbortSignal) => '/home/user')
+  return { openSingletonTab, insertTab, getDefaultOpener, getActiveWorkspaceId, fetchPaneCwd, fetchPaneHome, fakeOpener, paneContent }
 }
 
 describe('file-path opener', () => {
@@ -233,5 +234,80 @@ describe('file-path opener — relative path cwd resolution', () => {
 
     warnSpy.mockRestore()
     vi.useRealTimers()
+  })
+})
+
+describe('file-path opener — tilde path home resolution', () => {
+  beforeEach(() => vi.restoreAllMocks())
+  afterEach(() => vi.useRealTimers())
+
+  const tildeToken: LinkToken = {
+    type: 'file',
+    text: '~/foo.ts',
+    range: { startCol: 0, endCol: 8 },
+    meta: { path: '~/foo.ts' },
+  }
+
+  it('tilde path: fetches home and expands to absolute path', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneHome.mockResolvedValueOnce('/Users/wake')
+    const o = createFilePathOpener(deps)
+    await o.open(tildeToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+
+    expect(deps.fetchPaneHome).toHaveBeenCalledWith('h1', 'c1', expect.any(AbortSignal))
+    expect(deps.fetchPaneCwd).not.toHaveBeenCalled()
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('/Users/wake/foo.ts')
+  })
+
+  it('home with trailing slash: trims before expansion', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneHome.mockResolvedValueOnce('/Users/wake/')
+    const o = createFilePathOpener(deps)
+    await o.open(tildeToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('/Users/wake/foo.ts')
+  })
+
+  it('fetchPaneHome throws: no-op and warns with context', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneHome.mockRejectedValueOnce(new Error('boom'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const o = createFilePathOpener(deps)
+
+    await o.open(tildeToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+
+    expect(deps.openSingletonTab).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('boom'))
+    warnSpy.mockRestore()
+  })
+
+  it('fetchPaneHome hanging: aborts after 5s timeout and warns', async () => {
+    vi.useFakeTimers()
+    const deps = makeDeps()
+    let signalFromCall: AbortSignal | undefined
+    deps.fetchPaneHome.mockImplementation((_h, _s, signal) => {
+      signalFromCall = signal
+      return new Promise((_, reject) => {
+        signal?.addEventListener('abort', () => {
+          const err = new Error('aborted')
+          err.name = 'AbortError'
+          reject(err)
+        })
+      })
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const o = createFilePathOpener(deps)
+
+    const openPromise = o.open(tildeToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+    await vi.advanceTimersByTimeAsync(5001)
+    await openPromise
+
+    expect(signalFromCall?.aborted).toBe(true)
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('timeout'))
+    expect(deps.openSingletonTab).not.toHaveBeenCalled()
+
+    warnSpy.mockRestore()
   })
 })

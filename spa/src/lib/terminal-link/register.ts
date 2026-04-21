@@ -4,6 +4,7 @@ import { urlMatcher } from './matchers/url'
 import {
   createFilePathMatcher,
   ABS_RE,
+  TILDE_RE,
   REL_RE,
   BARE_RE,
 } from './matchers/file-path'
@@ -31,6 +32,11 @@ export function registerBuiltinTerminalLinks(deps: BuiltinTerminalLinksDeps): vo
     id: 'builtin:file-path-absolute',
     regex: ABS_RE,
     isEnabled: () => useUISettingsStore.getState().linkDetectAbsolute,
+  }))
+  terminalLinkRegistry.registerMatcher(createFilePathMatcher({
+    id: 'builtin:file-path-tilde',
+    regex: TILDE_RE,
+    isEnabled: () => useUISettingsStore.getState().linkDetectTilde,
   }))
   terminalLinkRegistry.registerMatcher(createFilePathMatcher({
     id: 'builtin:file-path-relative-slash',

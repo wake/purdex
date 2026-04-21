@@ -14,6 +14,7 @@ describe('registerBuiltinTerminalLinks', () => {
         insertTab: () => {},
         getActiveWorkspaceId: () => null,
         fetchPaneCwd: async (_h: string, _s: string, _sig?: AbortSignal) => '',
+        fetchPaneHome: async (_h: string, _s: string, _sig?: AbortSignal) => '',
       },
     })
     const types = terminalLinkRegistry.getMatchers().map((m) => m.type)
@@ -30,6 +31,7 @@ describe('registerBuiltinTerminalLinks', () => {
         insertTab: () => {},
         getActiveWorkspaceId: () => null,
         fetchPaneCwd: async (_h: string, _s: string, _sig?: AbortSignal) => '',
+        fetchPaneHome: async (_h: string, _s: string, _sig?: AbortSignal) => '',
       },
     }
     registerBuiltinTerminalLinks(deps)
@@ -44,10 +46,10 @@ describe('registerBuiltinTerminalLinks', () => {
   })
 })
 
-describe('registerBuiltinTerminalLinks — 3 file-path matchers', () => {
+describe('registerBuiltinTerminalLinks — 4 file-path matchers', () => {
   beforeEach(() => __resetBuiltinTerminalLinks())
 
-  it('registers all 3 file-path matchers', () => {
+  it('registers all 4 file-path matchers', () => {
     registerBuiltinTerminalLinks({
       urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
       filePathOpener: {
@@ -56,10 +58,12 @@ describe('registerBuiltinTerminalLinks — 3 file-path matchers', () => {
         insertTab: () => {},
         getActiveWorkspaceId: () => 'ws',
         fetchPaneCwd: async () => '/cwd',
+        fetchPaneHome: async () => '/home/user',
       },
     })
     const ids = terminalLinkRegistry.getMatchers().map((m) => m.id)
     expect(ids).toContain('builtin:file-path-absolute')
+    expect(ids).toContain('builtin:file-path-tilde')
     expect(ids).toContain('builtin:file-path-relative-slash')
     expect(ids).toContain('builtin:file-path-bare')
   })

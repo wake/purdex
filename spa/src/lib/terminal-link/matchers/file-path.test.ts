@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createFilePathMatcher, ABS_RE, REL_RE, BARE_RE } from './file-path'
+import { createFilePathMatcher, ABS_RE, REL_RE, BARE_RE, TILDE_RE } from './file-path'
 
 describe('createFilePathMatcher — absolute', () => {
   const make = (isEnabled = true) =>
@@ -43,6 +43,10 @@ describe('createFilePathMatcher — absolute', () => {
 
   it('does NOT match /path/to/1.2.3 (all-digit extensions)', () => {
     expect(make().provide('see /path/1.2.3 dir')).toHaveLength(0)
+  })
+
+  it('does NOT pick /foo.ts out of ~/foo.ts', () => {
+    expect(make().provide('open ~/foo.ts')).toHaveLength(0)
   })
 })
 
@@ -145,5 +149,42 @@ describe('createFilePathMatcher — bare', () => {
     const r = make().provide('open foo.d.ts')
     expect(r).toHaveLength(1)
     expect(r[0].text).toBe('foo.d.ts')
+  })
+})
+
+describe('createFilePathMatcher — tilde', () => {
+  const make = (isEnabled = true) =>
+    createFilePathMatcher({ id: 'test-tilde', regex: TILDE_RE, isEnabled: () => isEnabled })
+
+  it('matches ~/foo.ts', () => {
+    const r = make().provide('open ~/foo.ts')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('~/foo.ts')
+    expect(r[0].meta).toEqual({ path: '~/foo.ts' })
+  })
+
+  it('matches ~/.config/x.ts', () => {
+    const r = make().provide('open ~/.config/x.ts')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('~/.config/x.ts')
+    expect(r[0].meta).toEqual({ path: '~/.config/x.ts' })
+  })
+
+  it('does NOT match word~/foo.ts', () => {
+    expect(make().provide('word~/foo.ts')).toHaveLength(0)
+  })
+
+  it('captures line/col at line start', () => {
+    const r = make().provide('~/foo.ts:10:5')
+    expect(r).toHaveLength(1)
+    expect(r[0].meta).toEqual({ path: '~/foo.ts', line: 10, col: 5 })
+  })
+
+  it('does NOT match ~~double', () => {
+    expect(make().provide('~~/foo.ts')).toHaveLength(0)
+  })
+
+  it('returns [] when flag off', () => {
+    expect(make(false).provide('~/foo.ts')).toHaveLength(0)
   })
 })

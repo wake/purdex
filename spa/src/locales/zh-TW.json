@@ -214,6 +214,8 @@
   "settings.terminal.link_detect.desc": "終端輸出中哪些類型的檔案路徑會變成可點擊連結",
   "settings.terminal.link_detect.absolute.label": "絕對路徑",
   "settings.terminal.link_detect.absolute.desc": "例如 /path/to/file.md — 歧義最少",
+  "settings.terminal.link_detect.tilde.label": "Tilde 路徑",
+  "settings.terminal.link_detect.tilde.desc": "偵測 ~/... 開頭的路徑（依 pane shell $HOME 展開）",
   "settings.terminal.link_detect.relative_slash.label": "含 / 的相對路徑",
   "settings.terminal.link_detect.relative_slash.desc": "例如 src/App.tsx — 點擊時即時向 tmux pane 查 cwd 拼接",
   "settings.terminal.link_detect.bare.label": "純檔名",

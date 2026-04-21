@@ -13,6 +13,7 @@ export type {
 export {
   createFilePathMatcher,
   ABS_RE,
+  TILDE_RE,
   REL_RE,
   BARE_RE,
 } from './matchers/file-path'

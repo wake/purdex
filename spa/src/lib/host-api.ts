@@ -163,6 +163,17 @@ export async function fetchSessionCwd(
   return String(body.cwd ?? '')
 }
 
+export async function fetchSessionHome(
+  hostId: string,
+  sessionCode: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const res = await hostFetch(hostId, `/api/sessions/${sessionCode}/home`, { signal })
+  if (!res.ok) throw new Error(`fetchSessionHome failed: ${res.status}`)
+  const body = await res.json()
+  return String(body.home ?? '')
+}
+
 /* ─── Config API ─── */
 
 export async function getConfig(hostId: string): Promise<ConfigData> {

@@ -214,6 +214,8 @@
   "settings.terminal.link_detect.desc": "Which kinds of file paths in terminal output become clickable links",
   "settings.terminal.link_detect.absolute.label": "Absolute paths",
   "settings.terminal.link_detect.absolute.desc": "e.g. /path/to/file.md — least ambiguous",
+  "settings.terminal.link_detect.tilde.label": "Tilde path",
+  "settings.terminal.link_detect.tilde.desc": "Match paths starting with ~/... (expanded via pane shell $HOME)",
   "settings.terminal.link_detect.relative_slash.label": "Relative paths with /",
   "settings.terminal.link_detect.relative_slash.desc": "e.g. src/App.tsx — resolved via tmux pane cwd at click time",
   "settings.terminal.link_detect.bare.label": "Bare filenames",
