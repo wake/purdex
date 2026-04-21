@@ -15,7 +15,10 @@ func TestHandleSessionHome_ReturnsShellHome(t *testing.T) {
 	mod, _, fake := newTestModule(t)
 
 	fake.AddSession("my-sess", "/initial")
+	fake.SetActivePanePID("my-sess", "active-42")
+	var gotPID string
 	mod.shellHomeReader = func(pid string) (string, error) {
+		gotPID = pid
 		return "/Users/test", nil
 	}
 
@@ -39,6 +42,7 @@ func TestHandleSessionHome_ReturnsShellHome(t *testing.T) {
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.Equal(t, "/Users/test", body.Home)
+	assert.Equal(t, "active-42", gotPID, "handler should pass the active pane PID to shellHomeReader")
 }
 
 func TestHandleSessionHome_FallbackToDaemonHome(t *testing.T) {

@@ -33,7 +33,7 @@ func (m *SessionModule) handleSessionHome(w http.ResponseWriter, r *http.Request
 
 func (m *SessionModule) sessionHome(sessionName string) (string, error) {
 	if m.shellHomeReader != nil {
-		if pid, err := m.tmux.PanePID(sessionName); err == nil && pid != "" {
+		if pid, err := m.tmux.ActivePanePID(sessionName); err == nil && pid != "" {
 			if home, err := m.shellHomeReader(pid); err == nil && home != "" {
 				return home, nil
 			}
