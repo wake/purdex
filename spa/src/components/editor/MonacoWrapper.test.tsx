@@ -68,4 +68,78 @@ describe('MonacoWrapper', () => {
 
     expect(onViewStateChange).toHaveBeenCalledWith({ scrollTop: 42 })
   })
+
+  it('does not save view state during a normal rerender', () => {
+    const firstOnViewStateChange = vi.fn()
+    const secondOnViewStateChange = vi.fn()
+    const { rerender, unmount } = render(
+      <MonacoWrapper
+        content="hello"
+        language="markdown"
+        modelId="model-1"
+        initialViewState={null}
+        onChange={() => {}}
+        onCursorChange={() => {}}
+        onViewStateChange={firstOnViewStateChange}
+        onSave={() => {}}
+      />,
+    )
+
+    rerender(
+      <MonacoWrapper
+        content="hello world"
+        language="markdown"
+        modelId="model-1"
+        initialViewState={null}
+        onChange={() => {}}
+        onCursorChange={() => {}}
+        onViewStateChange={secondOnViewStateChange}
+        onSave={() => {}}
+      />,
+    )
+
+    expect(firstOnViewStateChange).not.toHaveBeenCalled()
+    expect(secondOnViewStateChange).not.toHaveBeenCalled()
+
+    unmount()
+
+    expect(firstOnViewStateChange).not.toHaveBeenCalled()
+    expect(secondOnViewStateChange).toHaveBeenCalledWith({ scrollTop: 42 })
+  })
+
+  it('uses the latest onSave callback for Monaco save action', () => {
+    const firstOnSave = vi.fn()
+    const secondOnSave = vi.fn()
+    const { rerender } = render(
+      <MonacoWrapper
+        content="hello"
+        language="markdown"
+        modelId="model-1"
+        initialViewState={null}
+        onChange={() => {}}
+        onCursorChange={() => {}}
+        onViewStateChange={() => {}}
+        onSave={firstOnSave}
+      />,
+    )
+
+    rerender(
+      <MonacoWrapper
+        content="hello"
+        language="markdown"
+        modelId="model-1"
+        initialViewState={null}
+        onChange={() => {}}
+        onCursorChange={() => {}}
+        onViewStateChange={() => {}}
+        onSave={secondOnSave}
+      />,
+    )
+
+    const action = editorMock.addAction.mock.calls[0]?.[0] as { run: () => void }
+    action.run()
+
+    expect(firstOnSave).not.toHaveBeenCalled()
+    expect(secondOnSave).toHaveBeenCalledTimes(1)
+  })
 })

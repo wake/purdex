@@ -49,4 +49,17 @@ describe('TiptapEditor', () => {
       expect.stringContaining('prose prose-invert prose-sm max-w-none'),
     )
   })
+
+  it('keeps a visible focus style on the editable root', () => {
+    render(<TiptapEditor content="# Hello" onChange={() => {}} onSave={() => {}} />)
+
+    expect(screen.getByTestId('editor-content')).toHaveAttribute(
+      'data-editor-class',
+      expect.not.stringContaining('focus:outline-none'),
+    )
+    expect(screen.getByTestId('editor-content')).toHaveAttribute(
+      'data-editor-class',
+      expect.stringContaining('focus-visible:outline'),
+    )
+  })
 })

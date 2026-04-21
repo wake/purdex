@@ -30,7 +30,7 @@ export function TiptapEditor({ content, onChange, onSave }: Props) {
     },
     editorProps: {
       attributes: {
-        class: 'prose prose-invert prose-sm max-w-none min-h-full px-4 py-4 focus:outline-none',
+        class: 'tiptap-editor prose prose-invert prose-sm max-w-none min-h-full px-4 py-4 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent-base',
       },
       handleKeyDown: (_view, event) => {
         if ((event.metaKey || event.ctrlKey) && event.key === 's') {
@@ -57,7 +57,7 @@ export function TiptapEditor({ content, onChange, onSave }: Props) {
 
   return (
     <div data-testid="tiptap-scroll-root" className="h-full min-h-0 overflow-auto">
-      <div className="min-h-full">
+      <div className="min-h-full [&_.tiptap-editor]:min-h-full [&_.tiptap-editor]:cursor-text">
         <EditorContent editor={editor} />
       </div>
     </div>

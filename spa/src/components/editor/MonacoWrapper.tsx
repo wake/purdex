@@ -15,6 +15,16 @@ interface Props {
 
 export function MonacoWrapper({ content, language, modelId, initialViewState, onChange, onCursorChange, onViewStateChange, onSave }: Props) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
+  const onSaveRef = useRef(onSave)
+  const onViewStateChangeRef = useRef(onViewStateChange)
+
+  useEffect(() => {
+    onSaveRef.current = onSave
+  }, [onSave])
+
+  useEffect(() => {
+    onViewStateChangeRef.current = onViewStateChange
+  }, [onViewStateChange])
 
   const handleMount: OnMount = useCallback((ed, monaco) => {
     editorRef.current = ed
@@ -25,19 +35,19 @@ export function MonacoWrapper({ content, language, modelId, initialViewState, on
       id: 'purdex-save',
       label: 'Save',
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
-      run: () => onSave(),
+      run: () => onSaveRef.current(),
     })
     ed.onDidChangeCursorPosition((e) => {
       onCursorChange(e.position.lineNumber, e.position.column)
     })
-  }, [initialViewState, onSave, onCursorChange])
+  }, [initialViewState, onCursorChange])
 
   useEffect(() => {
     return () => {
-      onViewStateChange(editorRef.current?.saveViewState() ?? null)
+      onViewStateChangeRef.current(editorRef.current?.saveViewState() ?? null)
       editorRef.current = null
     }
-  }, [onViewStateChange])
+  }, [])
 
   return (
     <Editor

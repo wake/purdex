@@ -28,9 +28,9 @@ interface EditorState {
   attachPane: (paneId: string, bufferKey: string) => void
   updateContent: (key: string, content: string) => void
   markSaved: (key: string, stat?: { mtime: number; size: number }) => void
-  renameBuffer: (oldKey: string, newKey: string) => void
+  renameBuffer: (oldKey: string, newKey: string, language?: string) => void
   closeBuffer: (key: string) => void
-  closePane: (paneId: string) => void
+  closePane: (paneId: string, expectedBufferKey?: string) => void
   reloadBuffer: (key: string, content: string, stat?: { mtime: number; size: number }) => void
   setEditorMode: (paneId: string, mode: EditorMode) => void
   setShowDiff: (paneId: string, showDiff: boolean) => void
@@ -40,6 +40,16 @@ interface EditorState {
 }
 
 let nextModelId = 1
+
+function createPaneState(bufferKey: string): EditorPaneState {
+  return {
+    bufferKey,
+    editorMode: 'raw',
+    showDiff: false,
+    cursorPosition: { line: 1, column: 1 },
+    monacoViewState: null,
+  }
+}
 
 function createModelId(): string {
   const modelId = `editor-model-${nextModelId}`
@@ -68,20 +78,35 @@ export const useEditorStore = create<EditorState>()((set) => ({
     }
   }),
 
-  attachPane: (paneId, bufferKey) => set((s) => ({
-    paneStates: {
+  attachPane: (paneId, bufferKey) => set((s) => {
+    const currentPaneState = s.paneStates[paneId]
+    if (!currentPaneState) {
+      return {
+        paneStates: {
+          ...s.paneStates,
+          [paneId]: createPaneState(bufferKey),
+        },
+      }
+    }
+    if (currentPaneState.bufferKey === bufferKey) return s
+
+    const nextPaneStates = {
       ...s.paneStates,
-      [paneId]: s.paneStates[paneId]
-        ? { ...s.paneStates[paneId], bufferKey }
-        : {
-            bufferKey,
-            editorMode: 'raw',
-            showDiff: false,
-            cursorPosition: { line: 1, column: 1 },
-            monacoViewState: null,
-          },
-    },
-  })),
+      [paneId]: createPaneState(bufferKey),
+    }
+    const stillReferenced = Object.entries(nextPaneStates).some(([otherPaneId, state]) =>
+      otherPaneId !== paneId && state.bufferKey === currentPaneState.bufferKey,
+    )
+    if (stillReferenced) {
+      return { paneStates: nextPaneStates }
+    }
+
+    const { [currentPaneState.bufferKey]: _removedBuffer, ...restBuffers } = s.buffers
+    return {
+      buffers: restBuffers,
+      paneStates: nextPaneStates,
+    }
+  }),
 
   updateContent: (key, content) => set((s) => {
     const buf = s.buffers[key]
@@ -114,7 +139,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
     }
   }),
 
-  renameBuffer: (oldKey, newKey) => set((s) => {
+  renameBuffer: (oldKey, newKey, language) => set((s) => {
     const buffer = s.buffers[oldKey]
     if (!buffer || oldKey === newKey) return s
 
@@ -129,7 +154,10 @@ export const useEditorStore = create<EditorState>()((set) => ({
     return {
       buffers: {
         ...restBuffers,
-        [newKey]: buffer,
+        [newKey]: {
+          ...buffer,
+          language: language ?? buffer.language,
+        },
       },
       paneStates,
     }
@@ -140,9 +168,10 @@ export const useEditorStore = create<EditorState>()((set) => ({
     return { buffers: rest }
   }),
 
-  closePane: (paneId) => set((s) => {
+  closePane: (paneId, expectedBufferKey) => set((s) => {
     const paneState = s.paneStates[paneId]
     if (!paneState) return s
+    if (expectedBufferKey && paneState.bufferKey !== expectedBufferKey) return s
 
     const { [paneId]: _removed, ...restPaneStates } = s.paneStates
     const stillReferenced = Object.values(restPaneStates).some((state) => state.bufferKey === paneState.bufferKey)

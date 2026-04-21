@@ -43,17 +43,37 @@ describe('useEditorStore', () => {
     expect(useEditorStore.getState().buffers['key1']).toBeUndefined()
   })
 
+  it('switching a pane to another buffer resets pane-local state and releases the old buffer', () => {
+    useEditorStore.getState().openBuffer('key-a', 'A', 'typescript')
+    useEditorStore.getState().openBuffer('key-b', 'B', 'markdown')
+    useEditorStore.getState().attachPane('pane-a', 'key-a')
+    useEditorStore.getState().setEditorMode('pane-a', 'wysiwyg')
+    useEditorStore.getState().setShowDiff('pane-a', true)
+    useEditorStore.getState().updateCursor('pane-a', 8, 3)
+
+    useEditorStore.getState().attachPane('pane-a', 'key-b')
+
+    expect(useEditorStore.getState().buffers['key-a']).toBeUndefined()
+    expect(useEditorStore.getState().paneStates['pane-a']).toMatchObject({
+      bufferKey: 'key-b',
+      editorMode: 'raw',
+      showDiff: false,
+      cursorPosition: { line: 1, column: 1 },
+    })
+  })
+
   it('renames a shared buffer key and preserves model identity', () => {
     useEditorStore.getState().openBuffer('old-key', 'hello', 'typescript')
     useEditorStore.getState().attachPane('pane-a', 'old-key')
 
     const modelId = useEditorStore.getState().buffers['old-key']?.modelId
-    useEditorStore.getState().renameBuffer('old-key', 'new-key')
+    useEditorStore.getState().renameBuffer('old-key', 'new-key', 'markdown')
 
     expect(useEditorStore.getState().buffers['old-key']).toBeUndefined()
     expect(useEditorStore.getState().buffers['new-key']).toMatchObject({
       content: 'hello',
       modelId,
+      language: 'markdown',
     })
     expect(useEditorStore.getState().paneStates['pane-a']?.bufferKey).toBe('new-key')
   })

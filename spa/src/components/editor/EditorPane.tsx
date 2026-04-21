@@ -58,6 +58,18 @@ function renameWarningMessage(error: unknown): string {
   return 'Rename failed'
 }
 
+function sameSource(a: FileSource, b: FileSource): boolean {
+  if (a.type !== b.type) return false
+  if (a.type === 'daemon' && b.type === 'daemon') {
+    return a.hostId === b.hostId
+  }
+  return true
+}
+
+function sourceIdentity(source: FileSource): string {
+  return source.type === 'daemon' ? `daemon:${source.hostId}` : source.type
+}
+
 // Outer component does kind guard to avoid hooks-after-early-return
 export function EditorPane({ pane, isActive }: PaneRendererProps) {
   const content = pane.content
@@ -67,6 +79,7 @@ export function EditorPane({ pane, isActive }: PaneRendererProps) {
 
 function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: string; source: FileSource; filePath: string; isActive: boolean }) {
   const key = bufferKey(source, filePath)
+  const sourceId = sourceIdentity(source)
   const buffer = useEditorStore((s) => s.buffers[key])
   const paneState = useEditorStore((s) => s.paneStates[paneId])
   const isMarkdown = filePath.endsWith('.md') || filePath.endsWith('.mdx')
@@ -75,6 +88,14 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
   const [renameWarning, setRenameWarning] = useState<string>()
+
+  const handleCursorChange = useCallback((line: number, column: number) => {
+    useEditorStore.getState().updateCursor(paneId, line, column)
+  }, [paneId])
+
+  const handleViewStateChange = useCallback((viewState: import('monaco-editor').editor.ICodeEditorViewState | null) => {
+    useEditorStore.getState().saveMonacoViewState(paneId, viewState)
+  }, [paneId])
 
   useEffect(() => {
     useEditorStore.getState().attachPane(paneId, key)
@@ -110,17 +131,22 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
       })
 
     return () => { stale = true }
-  }, [key, source, filePath])
+  }, [filePath, key, sourceId])
 
   // Cleanup pane state only when the pane is truly gone, not just hidden by tab switching.
   useEffect(() => {
     return () => {
-      const paneStillExists = Object.values(useTabStore.getState().tabs).some((tab) => findPane(tab.layout, paneId))
-      if (!paneStillExists) {
-        useEditorStore.getState().closePane(paneId)
+      const currentPane = Object.values(useTabStore.getState().tabs)
+        .map((tab) => findPane(tab.layout, paneId))
+        .find(Boolean)
+      const stillSameEditor = currentPane?.content.kind === 'editor' &&
+        currentPane.content.filePath === filePath &&
+        sameSource(currentPane.content.source, source)
+      if (!stillSameEditor) {
+        useEditorStore.getState().closePane(paneId, key)
       }
     }
-  }, [paneId])
+  }, [filePath, key, paneId, sourceId])
 
   // Detect external file changes when tab becomes active
   useEffect(() => {
@@ -188,6 +214,12 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
     }
 
     const nextPath = siblingPath(filePath, nextName)
+    const nextKey = bufferKey(source, nextPath)
+    if (nextKey !== key && useEditorStore.getState().buffers[nextKey]) {
+      setRenameWarning('File already exists')
+      return
+    }
+
     if (!isCaseOnlyRename(filePath, nextPath)) {
       try {
         await backend.stat(nextPath)
@@ -201,7 +233,7 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
     try {
       await backend.rename(filePath, nextPath)
       useTabStore.getState().renameEditorPanes(source, filePath, nextPath)
-      useEditorStore.getState().renameBuffer(key, bufferKey(source, nextPath))
+      useEditorStore.getState().renameBuffer(key, nextKey, detectLanguage(nextPath))
       setIsRenaming(false)
       setRenameDraft('')
       setRenameWarning(undefined)
@@ -255,13 +287,14 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
           />
         ) : editorMode === 'raw' ? (
           <MonacoWrapper
+            key={buffer.modelId}
             content={buffer.content}
             language={buffer.language}
             modelId={buffer.modelId}
             initialViewState={paneState?.monacoViewState ?? null}
             onChange={(value) => useEditorStore.getState().updateContent(key, value)}
-            onCursorChange={(line, col) => useEditorStore.getState().updateCursor(paneId, line, col)}
-            onViewStateChange={(viewState) => useEditorStore.getState().saveMonacoViewState(paneId, viewState)}
+            onCursorChange={handleCursorChange}
+            onViewStateChange={handleViewStateChange}
             onSave={handleSave}
           />
         ) : (
