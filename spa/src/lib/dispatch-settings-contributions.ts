@@ -4,7 +4,13 @@ import {
   clearContributions,
   registerSettingsContribution,
 } from './settings-contribution-registry'
+import { drainLegacyContributionQueue } from './settings-section-registry'
 import type { AnySettingsContribution } from './settings-contribution-types'
+
+// Legacy adapter namespace constant — sections registered through the legacy
+// `registerSettingsSection()` API are flushed into the new registry under this
+// moduleId. Centralized so PR-3/4 can reuse the same pattern.
+const LEGACY_SECTION_MODULE_ID = '_builtin.legacy-section'
 
 function assertNoLegacyScopeConflict(module: ModuleDefinition): void {
   const settings = module.settings
@@ -58,6 +64,31 @@ export function buildSettingsContributionBatch(
       seenIds.add(full.id)
       batch.push(full)
     }
+  }
+
+  // Drain legacy adapter pending buffer. Commit 1 stub returns [] so behavior
+  // matches main. Commit 2 wires the real pending buffer, at which point each
+  // `registerSettingsSection()` call push declarations here that get composed
+  // with module-declared contributions in the same atomic pass.
+  const legacyDecls = drainLegacyContributionQueue()
+  for (const decl of legacyDecls) {
+    const full = {
+      ...decl,
+      moduleId: LEGACY_SECTION_MODULE_ID,
+      id: `${LEGACY_SECTION_MODULE_ID}.${decl.localId}`,
+    } as AnySettingsContribution
+    assertValidSettingsContribution(full)
+    if (seenIds.has(full.id)) {
+      // Defensive: legacy moduleId is fixed to `_builtin.legacy-section`, so
+      // collisions between module-declared and legacy ids imply an author
+      // prefixed their own moduleId with `_builtin.legacy-section` — reject.
+      throw new Error(
+        `settings-contribution-registry: duplicate contribution id "${full.id}" ` +
+          `(legacy adapter collides with module-declared contribution)`,
+      )
+    }
+    seenIds.add(full.id)
+    batch.push(full)
   }
 
   return batch

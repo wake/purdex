@@ -2,12 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { clearModuleRegistry, registerModule, type ModuleDefinition } from './module-registry'
 import { clearContributions, listContributions } from './settings-contribution-registry'
 import { dispatchSettingsContributions } from './dispatch-settings-contributions'
+import { drainLegacyContributionQueue } from './settings-section-registry'
 
 const FakeComponent = () => null
 
 function resetRegistries() {
   clearModuleRegistry()
   clearContributions()
+  // Drain any leftover legacy pending buffer from previous tests.
+  drainLegacyContributionQueue()
 }
 
 describe('dispatchSettingsContributions', () => {
@@ -29,6 +32,15 @@ describe('dispatchSettingsContributions', () => {
 
     expect(listContributions('purdex').map((item) => item.id)).toEqual(['repeatable.general'])
     expect(listContributions('host').map((item) => item.id)).toEqual(['repeatable.host'])
+  })
+
+  it('drains legacy pending contribution queue as part of the dispatch pass', () => {
+    // Stub-level smoke: drainLegacyContributionQueue is exported and called
+    // by dispatch. Stub returns [] so behavior is unchanged relative to main;
+    // commit 2 replaces the stub with real pending-buffer semantics.
+    expect(drainLegacyContributionQueue).toBeTypeOf('function')
+    expect(() => dispatchSettingsContributions([])).not.toThrow()
+    expect(drainLegacyContributionQueue()).toEqual([])
   })
 
   it('does not leave partial registry state behind when a later module fails validation', () => {
