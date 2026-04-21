@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
+import { sanitizeFlatModuleMap } from './settings-store-shape'
 
 type ModulePayload = Record<string, unknown>
 
@@ -44,6 +45,10 @@ export const useGlobalSettingsStore = create<GlobalSettingsState>()(
       name: STORAGE_KEYS.GLOBAL_SETTINGS,
       storage: purdexStorage,
       version: 1,
+      onRehydrateStorage: () => (state) => {
+        if (!state) return
+        state.modules = sanitizeFlatModuleMap(state.modules)
+      },
     },
   ),
 )

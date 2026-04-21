@@ -15,6 +15,10 @@ vi.mock('../lib/storage/sync', () => ({
 import { useHostSettingsStore } from './useHostSettingsStore'
 import { STORAGE_KEYS } from '../lib/storage/keys'
 
+async function rehydrateHostSettingsStore() {
+  await useHostSettingsStore.persist.rehydrate()
+}
+
 beforeEach(() => {
   localStorage.clear()
   useHostSettingsStore.setState({ hosts: {} })
@@ -79,5 +83,53 @@ describe('useHostSettingsStore', () => {
 
   it('registers itself with syncManager', () => {
     expect(registerSpy).toHaveBeenCalledWith(STORAGE_KEYS.HOST_SETTINGS, useHostSettingsStore)
+  })
+
+  it('heals malformed host slots during rehydrate so get/set/clear stay usable', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.HOST_SETTINGS,
+      JSON.stringify({
+        state: {
+          hosts: {
+            hostA: {
+              files: { projectPath: '/a' },
+              broken: null,
+            },
+            hostB: [],
+          },
+        },
+        version: 1,
+      }),
+    )
+
+    await rehydrateHostSettingsStore()
+
+    expect(useHostSettingsStore.getState().hosts).toEqual({
+      hostA: {
+        files: { projectPath: '/a' },
+      },
+    })
+
+    useHostSettingsStore.getState().set('hostA', 'editor', { wrap: true })
+    expect(useHostSettingsStore.getState().get('hostA', 'editor')).toEqual({ wrap: true })
+
+    useHostSettingsStore.getState().clearHost('hostA')
+    expect(useHostSettingsStore.getState().get('hostA', 'files')).toBeUndefined()
+  })
+
+  it('resets a non-object hosts root during rehydrate', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.HOST_SETTINGS,
+      JSON.stringify({
+        state: { hosts: [] },
+        version: 1,
+      }),
+    )
+
+    await rehydrateHostSettingsStore()
+
+    expect(useHostSettingsStore.getState().hosts).toEqual({})
+    useHostSettingsStore.getState().set('hostA', 'files', { projectPath: '/a' })
+    expect(useHostSettingsStore.getState().get('hostA', 'files')).toEqual({ projectPath: '/a' })
   })
 })

@@ -15,6 +15,10 @@ vi.mock('../lib/storage/sync', () => ({
 import { useWorkspaceSettingsStore } from './useWorkspaceSettingsStore'
 import { STORAGE_KEYS } from '../lib/storage/keys'
 
+async function rehydrateWorkspaceSettingsStore() {
+  await useWorkspaceSettingsStore.persist.rehydrate()
+}
+
 beforeEach(() => {
   localStorage.clear()
   useWorkspaceSettingsStore.setState({ workspaces: {} })
@@ -79,5 +83,53 @@ describe('useWorkspaceSettingsStore', () => {
 
   it('registers itself with syncManager', () => {
     expect(registerSpy).toHaveBeenCalledWith(STORAGE_KEYS.WORKSPACE_SETTINGS, useWorkspaceSettingsStore)
+  })
+
+  it('heals malformed workspace slots during rehydrate so get/set/clear stay usable', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.WORKSPACE_SETTINGS,
+      JSON.stringify({
+        state: {
+          workspaces: {
+            wsA: {
+              files: { projectPath: '/a' },
+              broken: null,
+            },
+            wsB: 42,
+          },
+        },
+        version: 1,
+      }),
+    )
+
+    await rehydrateWorkspaceSettingsStore()
+
+    expect(useWorkspaceSettingsStore.getState().workspaces).toEqual({
+      wsA: {
+        files: { projectPath: '/a' },
+      },
+    })
+
+    useWorkspaceSettingsStore.getState().set('wsA', 'editor', { wrap: true })
+    expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toEqual({ wrap: true })
+
+    useWorkspaceSettingsStore.getState().clearWorkspace('wsA')
+    expect(useWorkspaceSettingsStore.getState().get('wsA', 'files')).toBeUndefined()
+  })
+
+  it('resets a non-object workspaces root during rehydrate', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.WORKSPACE_SETTINGS,
+      JSON.stringify({
+        state: { workspaces: null },
+        version: 1,
+      }),
+    )
+
+    await rehydrateWorkspaceSettingsStore()
+
+    expect(useWorkspaceSettingsStore.getState().workspaces).toEqual({})
+    useWorkspaceSettingsStore.getState().set('wsA', 'files', { projectPath: '/a' })
+    expect(useWorkspaceSettingsStore.getState().get('wsA', 'files')).toEqual({ projectPath: '/a' })
   })
 })

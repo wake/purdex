@@ -15,6 +15,10 @@ vi.mock('../lib/storage/sync', () => ({
 import { useGlobalSettingsStore } from './useGlobalSettingsStore'
 import { STORAGE_KEYS } from '../lib/storage/keys'
 
+async function rehydrateGlobalSettingsStore() {
+  await useGlobalSettingsStore.persist.rehydrate()
+}
+
 beforeEach(() => {
   localStorage.clear()
   useGlobalSettingsStore.setState({ modules: {} })
@@ -77,5 +81,48 @@ describe('useGlobalSettingsStore', () => {
 
   it('registers itself with syncManager', () => {
     expect(registerSpy).toHaveBeenCalledWith(STORAGE_KEYS.GLOBAL_SETTINGS, useGlobalSettingsStore)
+  })
+
+  it('heals malformed rehydrate shapes so get/set/clear stay usable', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.GLOBAL_SETTINGS,
+      JSON.stringify({
+        state: {
+          modules: {
+            valid: { enabled: true },
+            broken: null,
+          },
+        },
+        version: 1,
+      }),
+    )
+
+    await rehydrateGlobalSettingsStore()
+
+    expect(useGlobalSettingsStore.getState().modules).toEqual({
+      valid: { enabled: true },
+    })
+
+    useGlobalSettingsStore.getState().set('editor', { wrap: true })
+    expect(useGlobalSettingsStore.getState().get('editor')).toEqual({ wrap: true })
+
+    useGlobalSettingsStore.getState().clear('valid')
+    expect(useGlobalSettingsStore.getState().get('valid')).toBeUndefined()
+  })
+
+  it('resets a non-object modules root during rehydrate', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.GLOBAL_SETTINGS,
+      JSON.stringify({
+        state: { modules: null },
+        version: 1,
+      }),
+    )
+
+    await rehydrateGlobalSettingsStore()
+
+    expect(useGlobalSettingsStore.getState().modules).toEqual({})
+    useGlobalSettingsStore.getState().set('files', { projectPath: '/tmp' })
+    expect(useGlobalSettingsStore.getState().get('files')).toEqual({ projectPath: '/tmp' })
   })
 })

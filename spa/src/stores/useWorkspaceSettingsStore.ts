@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
+import { sanitizeScopedModuleMap } from './settings-store-shape'
 
 type ModulePayload = Record<string, unknown>
 type WorkspaceSlot = Record<string, ModulePayload>
@@ -63,6 +64,10 @@ export const useWorkspaceSettingsStore = create<WorkspaceSettingsState>()(
       name: STORAGE_KEYS.WORKSPACE_SETTINGS,
       storage: purdexStorage,
       version: 1,
+      onRehydrateStorage: () => (state) => {
+        if (!state) return
+        state.workspaces = sanitizeScopedModuleMap(state.workspaces)
+      },
     },
   ),
 )

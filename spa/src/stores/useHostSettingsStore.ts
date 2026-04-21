@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
+import { sanitizeScopedModuleMap } from './settings-store-shape'
 
 type ModulePayload = Record<string, unknown>
 type HostSlot = Record<string, ModulePayload>
@@ -63,6 +64,10 @@ export const useHostSettingsStore = create<HostSettingsState>()(
       name: STORAGE_KEYS.HOST_SETTINGS,
       storage: purdexStorage,
       version: 1,
+      onRehydrateStorage: () => (state) => {
+        if (!state) return
+        state.hosts = sanitizeScopedModuleMap(state.hosts)
+      },
     },
   ),
 )
