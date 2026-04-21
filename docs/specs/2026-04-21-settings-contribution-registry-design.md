@@ -1,7 +1,7 @@
 # Settings Contribution Registry 設計 Spec（三層 Scope）
 
-> 日期：2026-04-21（v3 對齊 2026-04-22）
-> 狀態：Draft v3（post PR-1 landing，5 個未決策點已對齊：§6.2 / §7.1 / §7.2 / §7.3 / §8 / §13）
+> 日期：2026-04-21
+> 狀態：Draft v2（post spec-review，PR-1 implementation plan 另見 `2026-04-21-hsr-pr1-registry-core-plan.md`）
 > 關聯：kickoff `kickoff_host_module_settings.md`（擴大版，涵蓋三層 scope 而非僅 host）
 > 參考：
 > - Codex 探索結果：job `task-mo8crieu-phjsc8`（2026-04-21）
@@ -212,7 +212,7 @@ clearContributions(): void   // 測試用
 - `listContributions(scope)`：依 `order` 升冪排序；只回傳指定 scope；不做 `disabled(ctx)` filter（由 shell 處理）
 - `clearContributions()`：測試隔離用；production flow 不呼叫
 
-**與既有 `settings-section-registry` 的關係**：PR-1 保留舊 registry 原樣，新 registry 並存。**PR-2 合流策略鎖定 adapter-only**（決策 1c）：舊 `registerSettingsSection()` 改為對新 registry 的 adapter，所有既有 callsite 不用動；`SettingsPage` / `WorkspaceSettingsPage` / `HostPage` 只信新 registry。
+**與既有 `settings-section-registry` 的關係**：PR-1 **保留**舊 registry 原樣，新 registry 並存。PR-2 合流策略在該 PR plan 決定。
 
 ### 6.3 `ModuleDefinition` 擴充
 
@@ -269,49 +269,34 @@ interface ModuleDefinition {
 
 理由：這些是 SPA 必備 core（bootstrap 必讀、不可延遲載入、不可由 module 卸載），不符合「可選式 module-contributed settings」語意。詳見 `feedback_core_vs_module_settings.md`。
 
-**既有 section 搬家節奏（決策 2b）**：AppearanceSection / TerminalSection / SyncSection / LinkDetectionSection 等既有 built-in section，在 HSR PR-2/3/4 階段**只換掛法**（透過 §7.2 adapter 進新 registry），**不改內部程式碼、也不強制轉為 module-owned declaration**。真正把 section 搬進各自 module 的 `settings: []` 宣告，由各 owner（Sync / Editor / Appearance 等）後續獨立 refactor PR 接手，不是 HSR 系列的 scope。
+AppearanceSection / TerminalSection 等屬 **core section**，PR-2 遷移時走 adapter 掛進新 registry，不改其內部資料層。
 
-### 7.2 既有 `settings-section-registry`（決策 1c — adapter-only）
+### 7.2 既有 `settings-section-registry`
 
-**鎖定策略**：adapter-only。
-
-- 舊 `registerSettingsSection(section)` 實作改成：組出 `SettingsContributionDeclaration`（`localId` = 原 `id`、`scope: 'purdex'`、`labelKey` = 原 `label`、`component` = 原 component 包一層吃 `{ ctx }` 的 wrapper），同步呼叫 `registerSettingsContribution(...)` 把項目註冊進新 registry
-- 舊 `getSettingsSections()` 與舊 registry 的其他 read API 保留，實作改成對新 registry 的 scope='purdex' filtered view（供尚未遷的 callsite 過渡）
-- `SettingsPage` / `WorkspaceSettingsPage` / `HostPage` 自 PR-2/3/4 起**只讀新 registry**，不再經過舊 API
-- 舊 registry 的完全移除延到 HSR 系列全部 land 後，當舊 callsite 清空再獨立 refactor PR 拔除
-
-**理由**：alpha 階段雖無 backwards-compat 包袱，但一次全遷會迫使 PR-2 同時處理 shell 切換 + section 搬家，scope 難收斂；adapter 讓既有 7 個 builtin section 零改動進新 registry，PR-2 scope 聚焦於 shell 與 adapter 正確性。
+PR-1 保留不動。合流策略 defer 到 PR-2 plan：
+- (a) 舊 registry 改 export 適配層，內部改走新 registry
+- (b) 舊 registry 廢棄，所有 section 改註冊到新 registry
+- (c) 並存（不建議）
 
 ### 7.3 待清理項
 
-- `workspace` reserved section（`register-modules.tsx:258-259`）—— **PR-3 清掉**（決策 5a）
-- `module-config` 空頁 section（`register-modules.tsx:260-265`）—— **PR-3 清掉**（決策 5a；PR-3 shell 本就動 WorkspaceSettingsPage，順手最省事）
-- 舊 `globalConfig` / `workspaceConfig` 欄位（決策 3b）：invariant I1 守住雙軌禁令；**PR-5 merge 後**發 deprecation warning（console.warn + JSDoc `@deprecated`），指向新 `settings: [{ scope: 'workspace', ... }]`；**全面移除**延到至少 1 個 module 將舊軌遷移完畢之後，由獨立 cleanup PR 處理
-
-**理由（決策 3b）**：deprecate 要有替代範例可指，PR-5（Editor `homePath`）才是第一個真正用新 `hostConfig` / `workspaceConfig` 替代路徑的用例；PR-5 merge 後再發 deprecation 警告，避免 API 消費者沒有可行遷移路徑就被警告轟炸。
+- `workspace` reserved section（`register-modules.tsx:258-259`）—— PR-3 清掉
+- `module-config` 空頁 section（`register-modules.tsx:260-265`）—— PR-3 或 PR-5 清掉
+- 舊 `globalConfig` / `workspaceConfig` 欄位：invariant I1 守住雙軌禁令；全面移除延到有 module 將舊軌遷移完畢之後（PR-5 或後續）
 
 ---
 
 ## 8. 實作 Phase（Roadmap）
 
-| PR | 範圍 | Plan 文件 | 狀態 |
-|---|---|---|---|
-| **PR-1** | Registry 核心 + types + 三層 stores + `ModuleDefinition.settings` + register pass（**不動任何頁面**） | `2026-04-21-hsr-pr1-registry-core-plan.md` | ✅ merged (#542, alpha.199) |
-| PR-2 | Purdex Settings 頁 shell → registry-driven + 舊 `settings-section-registry` adapter（決策 1c） | `2026-04-22-hsr-pr2-purdex-shell-plan.md` | 📝 plan |
-| PR-3 | Workspace Settings 頁 shell → registry-driven + 清理 reserved `workspace` section + 清理 `module-config` 空頁（決策 5a） | `2026-04-22-hsr-pr3-workspace-shell-plan.md` | 📝 plan |
-| PR-4 | Host Settings 頁 shell → registry-driven + 六子頁走 built-in adapter registration（決策 4c，非 module 宣告，但走同 contract） | `2026-04-22-hsr-pr4-host-shell-plan.md` | 📝 plan |
-| PR-5 | Editor `settings: [{ scope: 'host', localId: 'homePath' }, { scope: 'workspace', localId: 'homePath' }]` 首個 module 用例 + PR-5 merge 後對舊 `globalConfig` / `workspaceConfig` 發 deprecation warning（決策 3b） | `2026-04-22-hsr-pr5-editor-homepath-plan.md` | 📝 plan |
+| PR | 範圍 | Plan 文件 |
+|---|---|---|
+| **PR-1** | Registry 核心 + types + 三層 stores + `ModuleDefinition.settings` + register pass（**不動任何頁面**） | `2026-04-21-hsr-pr1-registry-core-plan.md` |
+| PR-2 | Purdex Settings 頁 shell → registry-driven + core sections adapter | 待寫 |
+| PR-3 | Workspace Settings 頁 shell → registry-driven + 清理 reserved `workspace` section | 待寫 |
+| PR-4 | Host Settings 頁 shell → registry-driven + 六子頁轉 built-in host contributions | 待寫 |
+| PR-5 | Editor `hostSettings.homePath` 首個 module 用例 + 清理 `module-config` 空頁 | 待寫 |
 
-**相依與並行**：
-- PR-2 / PR-3 / PR-4 彼此**不動共用檔案**（三頁 shell 各自獨立），可並行
-- PR-5 依賴 PR-4（`ctx.hostId` 由 PR-4 的 HostPage shell 注入）＋ PR-3（`ctx.workspaceId` 由 PR-3 的 WorkspaceSettingsPage shell 注入）
-- 既有 section（Appearance / Terminal / Sync / LinkDetection 等）的真正搬家到 module-owned declaration **不在** HSR 系列 scope，由各 owner 後續獨立 refactor PR 接手（決策 2b）
-
-**延後 issue 對應**：
-- PR-2/3/4 任一 land 後 → 補 **#538**（render-level smoke test）
-- 第一個 consumer PR 一併處理 → **#539**（`registerSettingsContribution` 收斂為 internal API；PR-2 切斷外部 callsite 最合適）
-- PR-5 前必解 → **#540**（三層 store `get()` 回傳 internal ref / 改回 immutable snapshot）
-- PR-4 sync subsystem 驗證 → **#541**（cross-store rehydrate order）
+PR-2/3/4 可並行開（三頁獨立）。PR-5 依賴 PR-4。
 
 ---
 
@@ -366,9 +351,9 @@ PR-1 具體驗收條件見 `2026-04-21-hsr-pr1-registry-core-plan.md`。
 
 ---
 
-## 13. 後續 PR 銜接備忘（決策對齊版）
+## 13. 後續 PR 銜接備忘
 
-- **PR-2 起點（決策 1c）**：`SettingsPage` 改**只讀新 registry**（無 feature flag）；同步把舊 `settings-section-registry` 的 `registerSettingsSection` / `getSettingsSections` / 其他 read API 實作改為對新 registry 的薄 adapter；既有 7 個 built-in section 無需改碼，透過 adapter 自動進新 registry；#539 在此 PR 一併把 `registerSettingsContribution` 收斂為 internal（僅供 adapter + register pass 呼叫）
-- **PR-3 起點（決策 5a）**：`WorkspaceSettingsPage` 拆 shell + reserved `workspace` section 清除 + `module-config` 空頁清除 + `removeWorkspace()` cleanup hook（與 PR-1 的 `useWorkspaceSettingsStore.clearWorkspace` 對接）
-- **PR-4 起點（決策 4c）**：`HostPage` switch → shell；六子頁（overview/sessions/hooks/agents/uploads/logs）**不轉為 module 宣告**，改為 shell 內部的「built-in adapter registration」— 由 `HostPage` 載入時自動 `registerSettingsContribution({ moduleId: '_builtin.host', ... })`，走同一條 contract 但來源標記為 built-in；`ctx.hostId` 來源由 route resolution 提供（§5.3 rule 2）；`removeHost()` cleanup hook 對接 `useHostSettingsStore.clearHost`；#541 在此 PR 驗證 cross-store rehydrate order
-- **PR-5 起點（決策 3b）**：Editor module 宣告 `settings: [{ localId: 'homePath', scope: 'host', ... }, { localId: 'homePath', scope: 'workspace', ... }]`；opener 層做層疊 resolve（workspace → host → `fetchPaneHome` fallback）；PR-5 merge 時對舊 `globalConfig` / `workspaceConfig` 加 console.warn + JSDoc `@deprecated`，指向新 `settings` 路徑；全面移除延後獨立 PR
+- **PR-2 起點**：SettingsPage 先做 feature flag 並存吃新舊 registry，穩定後拔舊 registry；既有 sections 以 adapter 掛進新 registry
+- **PR-3 起點**：WorkspaceSettingsPage 拆 shell + reserved `workspace` section 清除 + `removeWorkspace()` cleanup hook
+- **PR-4 起點**：HostPage switch → shell + 六子頁 built-in host contributions 宣告；`ctx.hostId` 來源由 route resolution 提供（§5.3 rule 2）；`removeHost()` cleanup hook
+- **PR-5 起點**：Editor module 宣告 `settings: [{ localId: 'homePath', scope: 'host', ... }]`；搭配 daemon 端已完成的 tilde path 支援
