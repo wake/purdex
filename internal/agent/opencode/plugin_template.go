@@ -18,18 +18,19 @@ func newPluginState() *pluginState {
 	return &pluginState{activeSubagents: make(map[string]string)}
 }
 
-func (s *pluginState) handleTaskStart(callID string, args map[string]any) (mappedHookEvent, bool) {
-	if callID == "" {
+func (s *pluginState) handleTaskStart(sessionID, callID string, args map[string]any) (mappedHookEvent, bool) {
+	key := subagentKey(sessionID, callID)
+	if key == "" {
 		return mappedHookEvent{}, false
 	}
-	if _, exists := s.activeSubagents[callID]; exists {
+	if _, exists := s.activeSubagents[key]; exists {
 		return mappedHookEvent{}, false
 	}
 	agentType := firstString(args, "subagent_type", "agent")
 	if agentType == "" {
 		agentType = "task"
 	}
-	s.activeSubagents[callID] = agentType
+	s.activeSubagents[key] = agentType
 	payload := map[string]any{
 		"agent_id":   callID,
 		"agent_type": agentType,
@@ -43,15 +44,16 @@ func (s *pluginState) handleTaskStart(callID string, args map[string]any) (mappe
 	return mappedHookEvent{Name: "SubagentStart", Payload: payload}, true
 }
 
-func (s *pluginState) handleTaskStop(callID, title, output string) (mappedHookEvent, bool) {
-	if callID == "" {
+func (s *pluginState) handleTaskStop(sessionID, callID, title, output string) (mappedHookEvent, bool) {
+	key := subagentKey(sessionID, callID)
+	if key == "" {
 		return mappedHookEvent{}, false
 	}
-	agentType, exists := s.activeSubagents[callID]
+	agentType, exists := s.activeSubagents[key]
 	if !exists {
 		return mappedHookEvent{}, false
 	}
-	delete(s.activeSubagents, callID)
+	delete(s.activeSubagents, key)
 	payload := map[string]any{
 		"agent_id":   callID,
 		"agent_type": agentType,
@@ -83,6 +85,13 @@ func (s *pluginState) handleSessionIdle() (mappedHookEvent, bool) {
 		return mappedHookEvent{}, false
 	}
 	return mappedHookEvent{Name: "Stop", Payload: map[string]any{}}, true
+}
+
+func subagentKey(sessionID, callID string) string {
+	if sessionID == "" || callID == "" {
+		return ""
+	}
+	return sessionID + ":" + callID
 }
 
 func renderManagedPlugin(pdxPath string) string {
@@ -148,7 +157,7 @@ export const PurdexOpenCodeHooks = async () => {
       }
     },
     'chat.message': async (input, output) => {
-      const model = output.message?.model
+      const model = input.model
       const modelName = model ? (model.providerID + '/' + model.modelID) : ''
       await emit('UserPromptSubmit', {
         session_id: input.sessionID,
@@ -160,8 +169,10 @@ export const PurdexOpenCodeHooks = async () => {
     },
     'tool.execute.before': async (input, output) => {
       if (input.tool !== 'task' || !input.callID) return
+      const subagentKey = input.sessionID + ':' + input.callID
+      if (activeSubagents.has(subagentKey)) return
       const agentType = agentTypeFromArgs(output.args)
-      activeSubagents.set(input.callID, agentType)
+      activeSubagents.set(subagentKey, agentType)
       await emit('SubagentStart', {
         agent_id: input.callID,
         agent_type: agentType,
@@ -171,9 +182,10 @@ export const PurdexOpenCodeHooks = async () => {
     },
     'tool.execute.after': async (input, output) => {
       if (input.tool !== 'task' || !input.callID) return
-      const agentType = activeSubagents.get(input.callID)
+      const subagentKey = input.sessionID + ':' + input.callID
+      const agentType = activeSubagents.get(subagentKey)
       if (!agentType) return
-      activeSubagents.delete(input.callID)
+      activeSubagents.delete(subagentKey)
       await emit('SubagentStop', {
         agent_id: input.callID,
         agent_type: agentType,
