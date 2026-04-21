@@ -70,6 +70,24 @@ describe('useWorkspaceStore', () => {
     expect(parsed.state.workspaces[ws1.id].editor).toEqual({ wrap: true })
   })
 
+  it('removeWorkspace with { keepSettings: true } preserves settings (tear-off/merge path)', () => {
+    const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
+    const ws2 = useWorkspaceStore.getState().addWorkspace('To Move')
+    useWorkspaceSettingsStore.getState().set(ws2.id, 'editor', { wrap: true, tabSize: 4 })
+
+    useWorkspaceStore.getState().removeWorkspace(ws2.id, { keepSettings: true })
+
+    // workspace list is updated
+    expect(useWorkspaceStore.getState().workspaces).toHaveLength(1)
+    expect(useWorkspaceStore.getState().workspaces[0].id).toBe(ws1.id)
+
+    // but settings for ws2 survive so the receiving window can import them
+    expect(useWorkspaceSettingsStore.getState().get(ws2.id, 'editor')).toEqual({
+      wrap: true,
+      tabSize: 4,
+    })
+  })
+
   it('removes the last workspace and sets activeWorkspaceId to null', () => {
     const ws = useWorkspaceStore.getState().addWorkspace('Only')
     useWorkspaceStore.getState().removeWorkspace(ws.id)

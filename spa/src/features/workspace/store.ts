@@ -11,7 +11,7 @@ interface WorkspaceState {
   activeWorkspaceId: string | null
 
   addWorkspace: (name: string, opts?: { icon?: string }) => Workspace
-  removeWorkspace: (wsId: string) => void
+  removeWorkspace: (wsId: string, opts?: { keepSettings?: boolean }) => void
   setActiveWorkspace: (wsId: string | null) => void
   addTabToWorkspace: (wsId: string, tabId: string) => void
   removeTabFromWorkspace: (wsId: string, tabId: string) => void
@@ -48,9 +48,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         return ws
       },
 
-      removeWorkspace: (wsId) => {
+      removeWorkspace: (wsId, opts) => {
         if (!get().workspaces.some((ws) => ws.id === wsId)) return
-        useWorkspaceSettingsStore.getState().clearWorkspace(wsId)
+        // Tear-off / merge paths reuse the same `workspace.id` on the receiving
+        // window; in those cases the caller passes `keepSettings: true` so
+        // workspace-scoped settings survive the move.
+        if (!opts?.keepSettings) {
+          useWorkspaceSettingsStore.getState().clearWorkspace(wsId)
+        }
         set((state) => {
           const remaining = state.workspaces.filter((ws) => ws.id !== wsId)
           const activeId = state.activeWorkspaceId === wsId
