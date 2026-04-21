@@ -2,6 +2,8 @@
 import { registerModule } from './module-registry'
 import { registerNewTabProvider } from './new-tab-registry'
 import { registerSettingsSection } from './settings-section-registry'
+import { clearContributions } from './settings-contribution-registry'
+import { dispatchSettingsContributions } from './dispatch-settings-contributions'
 import { findPane } from './pane-tree'
 import { getPlatformCapabilities } from './platform'
 import { SessionPaneContent } from '../components/SessionPaneContent'
@@ -81,6 +83,14 @@ function InterfaceSectionHost() {
     return <div className="flex-1 p-6 text-sm text-text-muted">Loading...</div>
   }
   return <InterfaceSection activeSubsection={active} onSelectSubsection={setActive} />
+}
+
+export { dispatchSettingsContributions } from './dispatch-settings-contributions'
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    clearContributions()
+  })
 }
 
 export function registerBuiltinModules(): void {
@@ -363,4 +373,8 @@ export function registerBuiltinModules(): void {
       fetchPaneHome: (hostId, sessionCode, signal) => fetchSessionHome(hostId, sessionCode, signal),
     },
   })
+
+  // Dispatch module-declared settings contributions into the contribution registry.
+  // Must run AFTER all registerModule(...) calls so every module is visible.
+  dispatchSettingsContributions()
 }

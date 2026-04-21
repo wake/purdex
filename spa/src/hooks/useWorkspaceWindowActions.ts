@@ -27,7 +27,9 @@ export function useWorkspaceWindowActions() {
     const newTabOrder = currentTabOrder.filter(id => !tabIds.includes(id))
     for (const id of tabIds) delete newTabs[id]
     useTabStore.setState({ tabs: newTabs, tabOrder: newTabOrder, activeTabId: null })
-    useWorkspaceStore.getState().removeWorkspace(wsId)
+    // tearOff / merge reuse the same workspace.id on the receiving window —
+    // preserve workspace-scoped settings so they follow the move.
+    useWorkspaceStore.getState().removeWorkspace(wsId, { keepSettings: true })
     const wsState = useWorkspaceStore.getState()
     const newActiveWs = wsState.activeWorkspaceId
       ? wsState.workspaces.find(w => w.id === wsState.activeWorkspaceId)

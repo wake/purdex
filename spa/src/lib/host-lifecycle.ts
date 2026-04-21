@@ -4,6 +4,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type NormalizedEvent, type AgentStatus } from '../stores/useAgentStore'
 import { useStreamStore, type PerSessionState } from '../stores/useStreamStore'
+import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { scanPaneTree } from './pane-tree'
 import type { Session } from './host-api'
@@ -20,6 +21,18 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   const agentStore = useAgentStore.getState()
   const streamStore = useStreamStore.getState()
 
+  // Mirror the veto in `useHostStore.removeHost()` up front: if the host
+  // doesn't exist or is the last remaining host (store refuses to delete it),
+  // abort the cascade entirely rather than clearing per-host state that
+  // won't ever be matched by a real removal. Without this guard the cascade
+  // would wipe sessions/agent/stream/settings, then `removeHost()` would
+  // no-op, and the undo callback's recreation guard would treat the still-
+  // present host row as a recreation and skip every restore — permanent
+  // data loss on the last host.
+  if (!hostStore.hosts[hostId] || Object.keys(hostStore.hosts).length <= 1) {
+    return () => {}
+  }
+
   const prefix = `${hostId}:`
 
   // --- Snapshot for undo (serializable data only) ---
@@ -27,6 +40,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     host: HostConfig | undefined
     hostOrder: string[]
     sessions: Session[] | undefined
+    hostSettings: Record<string, Record<string, unknown>> | undefined
     activeHostId: string | null
     // AgentStore data (exclude transient activeSubagents)
     agentEvents: Record<string, NormalizedEvent>
@@ -43,6 +57,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     host: hostStore.hosts[hostId],
     hostOrder: [...hostStore.hostOrder],
     sessions: sessionStore.sessions[hostId],
+    hostSettings: useHostSettingsStore.getState().hosts[hostId],
     activeHostId: hostStore.activeHostId,
     agentEvents: {},
     agentStatuses: {},
@@ -110,12 +125,23 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   sessionStore.removeHost(hostId)
   agentStore.removeHost(hostId)
   streamStore.clearHost(hostId)
+  useHostSettingsStore.getState().clearHost(hostId)
   hostStore.removeHost(hostId)
 
   // Return undo function
   return () => {
+    // Guard against host-recreation race: if another code path (import,
+    // cross-window BroadcastChannel sync, user re-add) re-created a host
+    // with the same id during the undo window, the current entry is a
+    // different entity than the one we snapshotted. Skip any restore that
+    // would overwrite the user's freshly written state (settings, sessions,
+    // agent/stream data). addHost itself already dedupes, but reorderHosts
+    // and setActiveHost would otherwise silently mutate the new host's
+    // position / activation.
+    const hostWasRecreated = useHostStore.getState().hosts[hostId] !== undefined
+
     // --- Restore host + hostOrder position ---
-    if (snapshot.host) {
+    if (snapshot.host && !hostWasRecreated) {
       useHostStore.getState().addHost(snapshot.host)
       // Restore original hostOrder position
       useHostStore.getState().reorderHosts(snapshot.hostOrder)
@@ -125,13 +151,22 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     }
 
     // --- Restore sessions ---
-    if (snapshot.sessions) {
+    if (snapshot.sessions && !hostWasRecreated) {
       useSessionStore.getState().replaceHost(hostId, snapshot.sessions)
+    }
+
+    if (snapshot.hostSettings && !hostWasRecreated) {
+      useHostSettingsStore.setState((state) => ({
+        hosts: {
+          ...state.hosts,
+          [hostId]: snapshot.hostSettings!,
+        },
+      }))
     }
 
     // --- Restore AgentStore data ---
     const ag = useAgentStore.getState()
-    if (Object.keys(snapshot.agentEvents).length > 0) {
+    if (!hostWasRecreated && Object.keys(snapshot.agentEvents).length > 0) {
       useAgentStore.setState({
         lastEvents: { ...ag.lastEvents, ...snapshot.agentEvents },
         statuses: { ...ag.statuses, ...snapshot.agentStatuses },
@@ -141,7 +176,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     }
 
     // --- Restore StreamStore data (conn set to null) ---
-    if (Object.keys(snapshot.streamSessions).length > 0) {
+    if (!hostWasRecreated && Object.keys(snapshot.streamSessions).length > 0) {
       const st = useStreamStore.getState()
       const restored: Record<string, PerSessionState> = {}
       for (const [k, v] of Object.entries(snapshot.streamSessions)) {
@@ -153,7 +188,10 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     }
 
     // --- Restore tabs ---
-    if (closeTabs && snapshot.closedTabs.length > 0) {
+    // Tabs carry the deleted host's hostId/sessionCode; if a different entity
+    // now owns the same hostId (recreated during undo window), we must not
+    // re-bind stale panes to it — gate tab restore on !hostWasRecreated too.
+    if (closeTabs && !hostWasRecreated && snapshot.closedTabs.length > 0) {
       const ts = useTabStore.getState()
       for (const tab of snapshot.closedTabs) {
         // Only restore if tab wasn't re-created by user during undo window
@@ -169,7 +207,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
           useWorkspaceStore.getState().addTabToWorkspace(wsId, tabId)
         }
       }
-    } else if (!closeTabs && snapshot.terminatedTabPaneIds.length > 0) {
+    } else if (!closeTabs && !hostWasRecreated && snapshot.terminatedTabPaneIds.length > 0) {
       // Clear terminated marking on panes that were marked by this delete
       for (const { tabId, paneId } of snapshot.terminatedTabPaneIds) {
         const currentTab = useTabStore.getState().tabs[tabId]

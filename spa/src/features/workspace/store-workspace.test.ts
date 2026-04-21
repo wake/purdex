@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useWorkspaceStore } from './store'
+import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
+import { STORAGE_KEYS } from '../../lib/storage/keys'
 import type { Workspace } from '../../types/tab'
 
 describe('useWorkspaceStore', () => {
   beforeEach(() => {
+    localStorage.clear()
     useWorkspaceStore.getState().reset()
+    useWorkspaceSettingsStore.setState({ workspaces: {} })
   })
 
   // === 全自由制基礎 ===
@@ -46,6 +50,42 @@ describe('useWorkspaceStore', () => {
     useWorkspaceStore.getState().removeWorkspace(ws2.id)
     expect(useWorkspaceStore.getState().workspaces).toHaveLength(1)
     expect(useWorkspaceStore.getState().workspaces[0].id).toBe(ws1.id)
+  })
+
+  it('removes persisted workspace settings for the deleted workspace', () => {
+    const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
+    const ws2 = useWorkspaceStore.getState().addWorkspace('To Remove')
+    useWorkspaceSettingsStore.getState().set(ws1.id, 'editor', { wrap: true })
+    useWorkspaceSettingsStore.getState().set(ws2.id, 'editor', { wrap: false })
+
+    useWorkspaceStore.getState().removeWorkspace(ws2.id)
+
+    expect(useWorkspaceSettingsStore.getState().get(ws2.id, 'editor')).toBeUndefined()
+    expect(useWorkspaceSettingsStore.getState().get(ws1.id, 'editor')).toEqual({ wrap: true })
+
+    const raw = localStorage.getItem(STORAGE_KEYS.WORKSPACE_SETTINGS)
+    expect(raw).toBeTruthy()
+    const parsed = JSON.parse(raw!)
+    expect(parsed.state.workspaces[ws2.id]).toBeUndefined()
+    expect(parsed.state.workspaces[ws1.id].editor).toEqual({ wrap: true })
+  })
+
+  it('removeWorkspace with { keepSettings: true } preserves settings (tear-off/merge path)', () => {
+    const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
+    const ws2 = useWorkspaceStore.getState().addWorkspace('To Move')
+    useWorkspaceSettingsStore.getState().set(ws2.id, 'editor', { wrap: true, tabSize: 4 })
+
+    useWorkspaceStore.getState().removeWorkspace(ws2.id, { keepSettings: true })
+
+    // workspace list is updated
+    expect(useWorkspaceStore.getState().workspaces).toHaveLength(1)
+    expect(useWorkspaceStore.getState().workspaces[0].id).toBe(ws1.id)
+
+    // but settings for ws2 survive so the receiving window can import them
+    expect(useWorkspaceSettingsStore.getState().get(ws2.id, 'editor')).toEqual({
+      wrap: true,
+      tabSize: 4,
+    })
   })
 
   it('removes the last workspace and sets activeWorkspaceId to null', () => {
