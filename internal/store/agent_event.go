@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
+	"sync"
 
 	_ "modernc.org/sqlite"
 )
@@ -19,7 +21,12 @@ type AgentEvent struct {
 }
 
 // AgentEventStore persists the latest agent hook event per tmux session.
-type AgentEventStore struct{ db *sql.DB }
+type AgentEventStore struct {
+	db *sql.DB
+
+	divergenceMu    sync.Mutex
+	divergenceReady bool
+}
 
 // OpenAgentEvent opens (or creates) an AgentEventStore DB at path, runs
 // migration, and enables WAL mode. Use ":memory:" for tests.
@@ -45,18 +52,17 @@ func OpenAgentEvent(path string) (*AgentEventStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate agent event db: %w", err)
 	}
-	// frame_divergences is populated by the dual-write passthrough path that
-	// lands in a later PR; production code never reaches Divergences() via
-	// the hook hot path. Migrate eagerly at open time so the table exists
-	// for ops tooling (PR-1a review finding). Frames/Traces already get
-	// migrated by module.New() touching their getters, and their legacy
-	// migration tests seed raw schema against a freshly-opened DB — so we
-	// don't eagerly migrate those here to keep the seed helpers working.
-	if err := migrateDivergencesDB(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate divergences db: %w", err)
+	store := &AgentEventStore{db: db}
+	// frame_divergences is eagerly migrated so ops tooling finds the table
+	// ready. A failure here is *non-fatal*: divergences are a side channel
+	// for the dual-write observation window (spec §8.1) and should never
+	// block daemon startup. Divergences() retries lazily on demand.
+	if err := migrateDivergencesDBFn(db); err != nil {
+		log.Printf("[store] divergences migration deferred: %v", err)
+	} else {
+		store.divergenceReady = true
 	}
-	return &AgentEventStore{db: db}, nil
+	return store, nil
 }
 
 func migrateAgentEventDB(db *sql.DB) error {
@@ -169,10 +175,17 @@ func (s *AgentEventStore) Traces() (*TraceStore, error) {
 }
 
 // Divergences returns a DivergenceStore backed by the same SQLite connection.
-// The table is migrated lazily on first call.
+// If the eager migration at OpenAgentEvent time failed, retry it here so a
+// transient error (e.g. disk-full at boot) does not permanently disable the
+// side channel.
 func (s *AgentEventStore) Divergences() (*DivergenceStore, error) {
-	if err := migrateDivergencesDB(s.db); err != nil {
-		return nil, err
+	s.divergenceMu.Lock()
+	defer s.divergenceMu.Unlock()
+	if !s.divergenceReady {
+		if err := migrateDivergencesDBFn(s.db); err != nil {
+			return nil, err
+		}
+		s.divergenceReady = true
 	}
 	return &DivergenceStore{db: s.db}, nil
 }

@@ -1,7 +1,9 @@
 package store
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -24,8 +26,8 @@ func TestDivergenceStore_InsertAndFetchRoundtrip(t *testing.T) {
 		TraceID:            "chain-1",
 		EventID:            "evt-1",
 		ObservedGeneration: 42,
-		OldStateRef:        []byte(`{"frame":"old"}`),
-		ProposalStateRef:   []byte(`{"frame":"new"}`),
+		OldStateRef:        json.RawMessage(`{"frame":"old"}`),
+		ProposalStateRef:   json.RawMessage(`{"frame":"new"}`),
 		DiffSummary:        `{"changed":["decision"]}`,
 		Matched:            false,
 		ReasonCode:         "projection_mismatch",
@@ -76,17 +78,82 @@ func TestDivergenceStore_InsertAndFetchRoundtrip(t *testing.T) {
 	}
 }
 
+// TestDivergenceStore_StateRefsSerializeAsJSONNotBase64 guards against the
+// regression flagged by the round-2 review: when OldStateRef /
+// ProposalStateRef were []byte backed by a BLOB column, json.Marshal on the
+// struct encoded them as base64 strings and leaked the underlying bytes
+// representation into API consumers. json.RawMessage + TEXT keeps the JSON
+// structure intact.
+func TestDivergenceStore_StateRefsSerializeAsJSONNotBase64(t *testing.T) {
+	d := FrameDivergence{
+		SessionID:        "proj-a",
+		TraceID:          "t1",
+		EventID:          "e1",
+		OldStateRef:      json.RawMessage(`{"frame":"old"}`),
+		ProposalStateRef: json.RawMessage(`{"frame":"new"}`),
+		DiffSummary:      "{}",
+		CreatedAt:        1,
+	}
+	buf, err := json.Marshal(d)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	body := string(buf)
+	// JSON snapshot must appear as nested objects, not base64-encoded strings.
+	if !strings.Contains(body, `"OldStateRef":{"frame":"old"}`) {
+		t.Fatalf("OldStateRef not rendered as nested JSON: %s", body)
+	}
+	if !strings.Contains(body, `"ProposalStateRef":{"frame":"new"}`) {
+		t.Fatalf("ProposalStateRef not rendered as nested JSON: %s", body)
+	}
+}
+
+// TestDivergenceStore_DuplicateInsertIsIdempotent ensures retry/replay with
+// the same (session, trace, event, generation) key does not produce a second
+// row. The ON CONFLICT DO NOTHING clause backs the unique index.
+func TestDivergenceStore_DuplicateInsertIsIdempotent(t *testing.T) {
+	s := openTestDivergenceStore(t)
+
+	d := FrameDivergence{
+		SessionID:          "proj-a",
+		TraceID:            "trace-1",
+		EventID:            "evt-1",
+		ObservedGeneration: 7,
+		OldStateRef:        json.RawMessage(`{"frame":"a"}`),
+		ProposalStateRef:   json.RawMessage(`{"frame":"b"}`),
+		DiffSummary:        "{}",
+		Matched:            false,
+		CreatedAt:          1,
+	}
+
+	if _, err := s.Insert(d); err != nil {
+		t.Fatalf("Insert #1: %v", err)
+	}
+	if _, err := s.Insert(d); err != nil {
+		t.Fatalf("Insert #2 (idempotent): %v", err)
+	}
+
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM frame_divergences WHERE session_id=? AND trace_id=? AND event_id=? AND observed_generation=?`,
+		d.SessionID, d.TraceID, d.EventID, d.ObservedGeneration).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("duplicate inserts produced %d rows, want 1", count)
+	}
+}
+
 func TestDivergenceStore_MatchedFlagPersistsBothValues(t *testing.T) {
 	s := openTestDivergenceStore(t)
 
 	matched := FrameDivergence{
 		SessionID: "proj-a", TraceID: "t1", EventID: "e1",
-		OldStateRef: []byte("a"), ProposalStateRef: []byte("a"),
+		OldStateRef: json.RawMessage(`{"x":"a"}`), ProposalStateRef: json.RawMessage(`{"x":"a"}`),
 		DiffSummary: "{}", Matched: true, CreatedAt: 1,
 	}
 	mismatched := FrameDivergence{
 		SessionID: "proj-a", TraceID: "t2", EventID: "e2",
-		OldStateRef: []byte("a"), ProposalStateRef: []byte("b"),
+		OldStateRef: json.RawMessage(`{"x":"a"}`), ProposalStateRef: json.RawMessage(`{"x":"b"}`),
 		DiffSummary: `{"k":"v"}`, Matched: false, ReasonCode: "x", CreatedAt: 2,
 	}
 
@@ -134,8 +201,8 @@ func TestDivergenceStore_ParallelInsertsAllPersist(t *testing.T) {
 					TraceID:            fmt.Sprintf("trace-%d-%d", gid, i),
 					EventID:            fmt.Sprintf("evt-%d-%d", gid, i),
 					ObservedGeneration: int64(i),
-					OldStateRef:        []byte("old"),
-					ProposalStateRef:   []byte("new"),
+					OldStateRef:        json.RawMessage(`{"v":"old"}`),
+					ProposalStateRef:   json.RawMessage(`{"v":"new"}`),
 					DiffSummary:        "{}",
 					Matched:            i%2 == 0,
 					CreatedAt:          int64(gid*1000 + i),
@@ -166,8 +233,9 @@ func TestDivergenceStore_IndexesAreCreated(t *testing.T) {
 	s := openTestDivergenceStore(t)
 
 	wantIndexes := map[string]bool{
-		"idx_divergence_session": false,
-		"idx_divergence_matched": false,
+		"idx_divergence_session":     false,
+		"idx_divergence_matched":     false,
+		"idx_divergence_idempotency": false,
 	}
 	rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='frame_divergences'`)
 	if err != nil {
