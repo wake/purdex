@@ -1,11 +1,12 @@
 # HSR PR-2：Purdex Settings Shell + Legacy Adapter — Implementation Plan
 
-> 日期：2026-04-22（v3 post-codex-review Round 2 task-mo8z6ppx-pj07yk）
+> 日期：2026-04-22（v3.1 post-codex-review Round 3 task-mo90eijb-mk3gfg）
 > 狀態：Ready for Implementation
 > 主 spec：`2026-04-21-settings-contribution-registry-design.md`
 > 決策對齊：1c（adapter-only, **dispatch-flushed**）+ 2b（既有 section 不搬家）+ 3b（舊 API deprecate 時點）
 > PR 系列：PR-1 ✅ / **PR-2（本文件）** / PR-3 / PR-4 / PR-5
-> v3 收斂：Round 1 Finding 1/6 → v2 修；Round 2 Finding 6 partial（§2/§8 sidebar 敘事矛盾）+ N1（reserved buffer idempotent/HMR）+ N3（commit 1→2 依賴）→ 本版修
+> v3 收斂：Round 1 Finding 1/6 → v2 修；Round 2 Finding 6 partial + N1 + N3 → v3 修
+> v3.1 收斂：Round 3 MED（§2/§3.2 test 敘述仍把 adapter 寫成「直接可見」與 pending-buffer 衝突、active section 數硬編 6/7）→ 本版補上 `dispatchSettingsContributions()` 敘述、去掉硬編數字改為「至少 6 + 條件式」
 
 ---
 
@@ -66,19 +67,19 @@ PR-2 結束時：
 
 ### 新增
 - `spa/src/components/SettingsPage.test.tsx`
-  - Render-level smoke：註冊 fake contribution（scope: 'purdex'）→ `SettingsPage` render 後 sidebar 顯示該 label、active 時 content 區 render 該 component
+  - Render-level smoke：**先** register fake contribution + **呼叫 `dispatchSettingsContributions([...modules])`**（或透過 `registerBuiltinModules()` 完整 bootstrap fixture，其內部已含 dispatch）→ `SettingsPage` render 後 sidebar 顯示該 label、active 時 content 區 render 該 component
   - URL routing：`/settings/<localId>` → 該 section active；URL subsection 可讀 `useSettingsRoute()`
   - `lastSection` 保留（remount 仍回到前次 section）
-  - adapter 自動遷移：先呼 `registerSettingsSection({ id: 'test-legacy', label: '...', order: 99, component: Comp })` → `listContributions('purdex')` 回傳該項目
+  - adapter 自動遷移：`registerSettingsSection({ id: 'test-legacy', label: '...', order: 99, component: Comp })` → `dispatchSettingsContributions([])` → `listContributions('purdex')` 回傳該項目（dispatch 是唯一 flush 入口）
   - 關閉 #538 首個 render-level 目標
 - `spa/src/lib/settings-section-registry.test.ts`（新增 adapter 行為測試）
-  - adapter round-trip：`registerSettingsSection` → `getSettingsSections` 回傳原 shape
-  - adapter 與 `listContributions('purdex')` 一致性（同一批資料）
-  - `component` undefined 時跳過註冊（無 throw）
-  - `clearSettingsSectionRegistry` 只清 legacy namespace，不清其他 module 的 contribution
+  - adapter round-trip：`registerSettingsSection(x)` → `dispatchSettingsContributions([])` → `getSettingsSections()` 回傳原 shape（**dispatch 後** active 項來自新 registry filter + reserved 來自 `pendingReservedItems`）
+  - adapter 與 `listContributions('purdex')` 一致性：dispatch 後同一批資料（active 項目）；dispatch 前兩者都空（pending buffer 未 flush）
+  - `component` undefined 時改進 reserved map（無 throw）；`listReservedItems()` 含該項
+  - `clearSettingsSectionRegistry` 只清 pending buffer（legacy namespace），不清其他 module 的 contribution（走新 registry 的 `clearContributions`）
 
 ### 不動
-- 7 個既有 built-in section 檔（`AppearanceSection` / `TerminalSection` / `SyncSection` / `LinkDetectionSection` / `DevEnvironmentSection` / `TmuxAgentSection` 等 — 確切數量以當下 `register-modules.tsx` 註冊為準）
+- 既有 built-in section 檔（`AppearanceSection` / `TerminalSection` / `InterfaceSectionHost` / `SyncSection` / `ModuleConfigSection` / `BufferListSection` 等；conditional: `ElectronSection` / `DevEnvironmentSection` / `TmuxAgentMonitorSection` — 確切清單以當下 `register-modules.tsx` 註冊 + caps flag 為準）
 - `spa/src/lib/register-modules.tsx`（section 宣告照舊透過舊 `registerSettingsSection` 呼叫；adapter 會接住）
 - `WorkspaceSettingsPage.tsx` / `HostPage.tsx` / `HostSidebar.tsx` / `host-routes.ts`
 - 三層 settings store（PR-1 已建）
@@ -120,22 +121,22 @@ PR-2 結束時：
 | URL 自癒 | URL `>2` 段 → trim 到 `/settings/<section>` | 通過 |
 | Subsection | fake component 透過 `useSettingsRoute()` 讀 subsection | 通過 |
 | `lastSection` 持久 | remount `<SettingsPage>` 仍回到前次 active | 通過 |
-| Adapter 整合 | 只透過舊 `registerSettingsSection` 註冊 → `<SettingsPage>` 仍 render 該 section | 通過 |
+| Adapter 整合 | 透過舊 `registerSettingsSection` 註冊 + 呼叫 `dispatchSettingsContributions([])` → `<SettingsPage>` 仍 render 該 section（bootstrap fixture 走完整 `registerBuiltinModules()` 或測試顯式 dispatch） | 通過（保留既有） |
 | Workspace 分派 | `props.pane.content.scope = { workspaceId: 'wsA' }` → render `WorkspaceSettingsPage`，不走 `GlobalSettingsPage` | 通過（保留既有） |
 
 ### 3.3 `register-modules.test.ts` 擴充
 
 | 類別 | 測試項 | 預期 |
 |---|---|---|
-| 端對端 | 跑 `registerBuiltinModules()` 後，現有 **active** built-in section 皆在 `listContributions('purdex')`，`moduleId='_builtin.legacy-section'`；active 數 = 6（appearance / terminal / interface / sync / module-config / editor-buffers，workspace 為 reserved 不進 registry） | 通過 |
-| Reserved 顯示 | `getSettingsSections()` 回傳 7 項（含 workspace reserved），`component: undefined` 的項可被 sidebar render 為 coming_soon | 通過 |
+| 端對端 | 跑 `registerBuiltinModules()` 後，現有 **active** built-in section 皆在 `listContributions('purdex')`，`moduleId='_builtin.legacy-section'`；至少 6 項（appearance / terminal / interface / sync / module-config / editor-buffers；workspace 為 reserved 不進 registry；conditional: electron / dev-environment / tmux-agent-monitor 視 caps / `import.meta.env.DEV` 而定）| 通過 |
+| Reserved 顯示 | `listReservedItems()` 含 workspace reserved（`component: undefined`，可被 sidebar render 為 coming_soon）；數量為 1（目前僅 workspace reserved） | 通過 |
 | 無 regression | I1 guard 對既有 module fixture 仍不 throw | 通過 |
 | Dispatch 時序 | 對 `registerBuiltinModules()` 流程做 integration test：`registerModule` + `registerSettingsSection` 都跑完後 `dispatchSettingsContributions()` 最後呼叫，確認 legacy 項不被清 | 通過 |
 
 ### 3.4 視覺回歸（肉眼 / 手動）
 
 - `cd spa && pnpm dev` 起站
-- 開 `/settings`：sidebar 上 7 個 section 顯示順序、label、active highlight 與 `main` 分支一致
+- 開 `/settings`：sidebar 的 active sections + reserved 分隔線排序、label、active highlight 與 `main` 分支一致（實際項數視 dev/caps 而異；以 `main` 同環境為基準 diff）
 - 點每個 section：右側 content 正常渲染（無 console error / 白屏）
 - `/settings/<section>/<subsection>`：subsection context 仍可用（挑一個目前有用 subsection 的 section 驗，如 `/settings/sync/history`）
 - Workspace 打開 settings tab（`pane.content.scope` object）：仍走 `WorkspaceSettingsPage`（本 PR 不動）

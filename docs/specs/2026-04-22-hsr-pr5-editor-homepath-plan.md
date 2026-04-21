@@ -5,15 +5,17 @@
 > 主 spec：`2026-04-21-settings-contribution-registry-design.md`
 > 決策對齊：3b（舊 API 在 PR-5 merge 時發 deprecation）+ 1c（走 adapter 的新 registry 路徑）
 > PR 系列：PR-1 ✅ / PR-2 / PR-3 / PR-4 / **PR-5（本文件）**
-> v3 收斂：Round 1 Finding 4 → v2 修 LinkContext API；Round 2 Finding 4 partial（plumbing 未閉環）+ N3（commit 切分漏 plumbing）→ 本版改以 `SessionPaneContent` 為 workspaceId 來源，獨立 commit
+> v3.1 收斂：Round 1 Finding 4 → v2 修 LinkContext API；Round 2 Finding 4 partial → v3 改以 `SessionPaneContent` 為 workspaceId 來源 + 獨立 plumbing commit；Round 3 HIGH（duplicate localId `homePath`）+ MED（`tabIds` 應為 `tabs`）→ v3.1 修 localId 拆為 `workspaceHomePath` / `hostHomePath` + plumbing 改用現成 `findWorkspaceByTab()`
 
 ---
 
 ## 1. 範圍
 
 **HSR 第一個 module 用例**。Editor module 透過新 `ModuleDefinition.settings` 宣告兩個 contribution：
-- `{ scope: 'workspace', localId: 'homePath' }` — workspace 手動 home（Layer 1）
-- `{ scope: 'host', localId: 'homePath' }` — host 手動 home（Layer 2）
+- `{ scope: 'workspace', localId: 'workspaceHomePath' }` — workspace 手動 home（Layer 1）
+- `{ scope: 'host', localId: 'hostHomePath' }` — host 手動 home（Layer 2）
+
+**注意（v3.1 修正，Round 3 HIGH）**：兩個 contribution **不得共用同一 `localId: 'homePath'`** — PR-1 registry 規定 `id = ${moduleId}.${localId}` 全域唯一，同 module 內兩個 localId 相同會在 `dispatchSettingsContributions()` collision check throw（`assertValidSettingsContribution` + seen-id set）。即使 scope 不同，id 仍會撞。因此 workspace / host 兩層各用獨立 localId。
 
 Tilde path opener（`spa/src/lib/terminal-link/openers/file-path.ts`）的 `~/...` 分支改為**層疊 resolve**：workspace settings → host settings → `fetchPaneHome()`（Layer 3，PR #530 既有）→ 無則 fallthrough 原 rawPath 行為。
 
@@ -63,11 +65,11 @@ PR-5 結束時：
   - **不自行查 workspace**（依 v3 plumbing 約定由父層注入；若 prop undefined 表示 standalone pane，linkContext.workspaceId 為 undefined）
 - `spa/src/components/SessionPaneContent.tsx`（v3 新增 — Finding 4 plumbing 真來源）
   - 現況已用 `useTabStore` 查出 `tabId`（line 56-61）
-  - 新增：再用 `useWorkspaceStore` 查「包含此 tabId 的 workspace」得 `workspaceId`；偽碼：`const workspaceId = useWorkspaceStore((s) => tabId ? s.workspaces.find(ws => ws.tabIds?.includes(tabId))?.id : undefined)`（實際 store shape 以當下 `useWorkspaceStore` API 為準；實作時需對照 current store schema — tearoff 後 workspace 的 tabs field 命名可能為 `tabIds` / `tabs` 之一）
+  - 新增：用 `useWorkspaceStore` 的現成 helper `findWorkspaceByTab(tabId)` 查 workspace（見 `spa/src/features/workspace/store.ts:136-138`；實際 workspace.tabs 欄位為 `tabs: string[]`，非 `tabIds`）：`const workspaceId = useWorkspaceStore((s) => tabId ? s.findWorkspaceByTab(tabId)?.id : undefined) ?? undefined`
   - 把 `workspaceId` 以 prop 傳入 `<TerminalView workspaceId={workspaceId} ... />`
   - `<ConversationView>` 分支（stream mode）若未來也吃 linkContext（現況不吃）則同樣由此注入；PR-5 scope 內不動 ConversationView
 - `spa/src/lib/register-modules.tsx`
-  - Editor `registerModule({ id: 'editor', ..., settings: [{ localId: 'homePath', scope: 'workspace', order: 0, labelKey: 'editor.settings.home_path.workspace', component: EditorHomePathWorkspaceSection }, { localId: 'homePath', scope: 'host', order: 0, labelKey: 'editor.settings.home_path.host', component: EditorHomePathHostSection }] })`
+  - Editor `registerModule({ id: 'editor', ..., settings: [{ localId: 'workspaceHomePath', scope: 'workspace', order: 0, labelKey: 'editor.settings.home_path.workspace', component: EditorHomePathWorkspaceSection }, { localId: 'hostHomePath', scope: 'host', order: 0, labelKey: 'editor.settings.home_path.host', component: EditorHomePathHostSection }] })` — 兩個 contribution 的完整 id 為 `editor.workspaceHomePath` 與 `editor.hostHomePath`，無 collision
   - 加舊 API deprecation warning（僅對非 `files` 使用者）—— 在 register pass 中偵測 `globalConfig.length > 0` 或 `workspaceConfig.length > 0` 且 moduleId !== 'files' → `console.warn('[module] ${id} uses deprecated globalConfig/workspaceConfig; migrate to settings: [{ scope, localId }]')`
   - Warn de-dupe：module-scope `Set<string>` 記 `${moduleId}:${scope}` 已 warn 過的 key，避免 HMR 重跑反覆 warn
 - `spa/src/lib/terminal-link/openers/file-path.ts`
@@ -156,7 +158,7 @@ PR-5 結束時：
 | TerminalView prop | 不傳 workspaceId → `linkContext.workspaceId === undefined` | 通過 |
 | SessionPaneContent 查詢 | pane 在 workspace `wsA` 的 tab `tX` 下 → `<TerminalView>` 收到 `workspaceId='wsA'` | 通過 |
 | SessionPaneContent standalone | pane 在 tab `tY`，`tY` 不屬任何 workspace → `<TerminalView>` 收到 `workspaceId={undefined}` | 通過 |
-| Multi-workspace isolation | `workspaces: { wsA: { tabIds:['tX'] }, wsB: { tabIds:['tY'] } }`；pane 在 `tY` → 收到 `workspaceId='wsB'`，非 active 的 `wsA` | **關鍵 — Finding 4 plumbing 閉環** |
+| Multi-workspace isolation | `workspaces: [{ id: 'wsA', tabs: ['tX'], ... }, { id: 'wsB', tabs: ['tY'], ... }]`；pane 在 `tY` → `findWorkspaceByTab('tY')?.id === 'wsB'`，TerminalView 收到 `workspaceId='wsB'`，非 active 的 `wsA` | **關鍵 — Finding 4 plumbing 閉環** |
 
 ### 3.6 Deprecation warning (#3b)
 
