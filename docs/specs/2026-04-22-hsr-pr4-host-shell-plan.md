@@ -1,54 +1,59 @@
 # HSR PR-4：Host Settings Shell + Built-in Sub-page Adapter — Implementation Plan
 
-> 日期：2026-04-22
-> 狀態：Ready for Implementation
+> 日期：2026-04-22（v2 post-codex-review task-mo8xtpa8-bdxsh4）
+> 狀態：Ready for Implementation（**依序 build on PR-2 + PR-3**）
 > 主 spec：`2026-04-21-settings-contribution-registry-design.md`
-> 決策對齊：4c（HostPage registry-driven + 六子頁走 built-in adapter registration）
+> 決策對齊：4c（HostPage registry-driven + 六子頁走 built-in adapter registration + host route contract 鬆綁）
 > PR 系列：PR-1 ✅ / PR-2 / PR-3 / **PR-4（本文件）** / PR-5
 
 ---
 
 ## 1. 範圍
 
-**Shell 改造 + built-in adapter registration**。`HostPage` / `HostSidebar` / `host-routes` 改為 registry-driven；六個既有 sub-page（`overview` / `sessions` / `hooks` / `agents` / `uploads` / `logs`）**不改內部程式碼**，透過 built-in adapter 在 `registerBuiltinModules()` 尾段以 `moduleId: '_builtin.host'` 一次註冊進新 registry（走相同 `registerSettingsContribution` contract，但標記為 built-in 來源）。
+**Shell 改造 + built-in adapter registration + host route contract 鬆綁**。
 
-`ctx.hostId` 由 shell 依 route resolution 結果注入（§5.3 rule 2）；`ctx.scope: 'host'`。
+三層工作：
+1. **Host route 型別鬆綁**：`HostSubPage` 從六字串 union 改為 `string`（runtime 由 registry 驗證）；`HOST_SUB_PAGES` 保留為 built-in 的預設值 const 但不再是型別來源；`parseRoute()` / `resolveSelection()` / `HostPage` / `HostSidebar` 所有 exhaustiveness 假設改為動態（codex review Finding 3 的硬約束）
+2. **Built-in adapter 註冊**：六個既有 sub-page 透過 `registerSettingsSection` 風格的 host adapter 走 pending buffer，由 `dispatchSettingsContributions()` 統一 flush（沿用 PR-2 建立的 dispatch-flushed pattern，避免 clearContributions 清掉 built-in）；六子頁內部程式碼**零改動**
+3. **Shell 吃 registry**：`HostPage.renderContent` + `HostSidebar.SUB_PAGES` 改讀 `listContributions('host')` + 以 `ctx: { scope: 'host', hostId }` 注入
 
-本 PR 順帶驗證 **#541**（cross-store rehydrate order）：`host-lifecycle.test.ts` 擴充測試，確保 `hostWasRecreated` 判定在 `HostStore` 與 `useHostSettingsStore` 兩種 rehydrate 順序下皆正確。
+本 PR 一併驗證 **#541**（cross-store rehydrate order），使用具體 harness（§3.4），不僅口頭描述。
 
 PR-4 結束時：
 - `HostPage` 的 sub-page 渲染透過 `listContributions('host')` + ctx 注入
 - 六子頁以 `_builtin.host.<id>` 存在於 registry，與任何 future module-contributed host section 走同一條 render 路徑
-- URL `/hosts/:hostId/:subPage` 的 `subPage` 合法性判定改為對 registry 查詢
-- 新 module 可宣告 `settings: [{ scope: 'host', ... }]` 並出現在 `HostPage` 左側 sidebar（module owner 自定 header / 分組策略由 sidebar 實作決定）
-- `removeHost()` cascade 對 `useHostSettingsStore` 的清理 PR-1 已完成；本 PR 驗回歸
+- URL `/hosts/:hostId/:subPage` 的 `subPage` 從「六個 literal 之一」放寬為「registry 中 scope='host' 的任一 localId」
+- `HostSubPage` 型別收斂為 `string` 或 branded string；exhaustive switch 被動態 dispatch 取代
+- 新 module 可宣告 `settings: [{ scope: 'host', ... }]` 並出現在 `HostPage` 左側 sidebar
+- `removeHost()` cascade 對 `useHostSettingsStore` 的清理 PR-1 已完成；本 PR 的 #541 harness 驗回歸 + rehydrate order invariant
 
 ---
 
 ## 2. 檔案清單
 
 ### 修改
+- `spa/src/lib/host-routes.ts`（型別鬆綁 — Finding 3）
+  - `HostSubPage` 改為 `type HostSubPage = string`（或 `type HostSubPage = string & { readonly __brand: 'HostSubPage' }` branded string，實作擇一）
+  - `HOST_SUB_PAGES` 保留為 `const` 陣列但**僅作** built-in 預設值（供 `parseRoute()` fallback、測試 fixture、i18n key 檢索），**不再**作為 type literal 來源
+  - `isHostSubPage(value): value is HostSubPage` 改為 `listContributions('host').some(c => c.localId === value)`
+  - `parseRoute()` 回傳 shape 不變（`subPage: HostSubPage`），但型別 narrow 靠 `isHostSubPage` runtime 而非 literal union
 - `spa/src/components/HostPage.tsx`
-  - `renderContent()`：從 switch 改為 `const contribution = getContribution(`_builtin.host.${selection.subPage}`)` 或更一般化 `listContributions('host').find(c => c.localId === selection.subPage)`
-  - 找到 contribution 後以 `<contribution.component ctx={{ scope: 'host', hostId: selection.hostId }} />` render
-  - fallback（contribution 不存在）：render `no_host_selected` 或等效空態
+  - `renderContent()`：從 `switch (selection.subPage)` 改為 `const contribution = listContributions('host').find(c => c.localId === selection.subPage)`；找到則 `<contribution.component ctx={{ scope: 'host', hostId: selection.hostId }} />`；否則 redirect 到 default（沿用 `resolveSelection` 自癒邏輯）
+  - 移除對六字串 literal 的 exhaustive switch 假設；以 registry lookup 取代
+  - `getFallbackSubPage()` 現況為 const return；改為讀 `listContributions('host')[0]?.localId ?? 'overview'`（registry 空時 fallback 到 `'overview'` 字面值作 safety net）
 - `spa/src/components/hosts/HostSidebar.tsx`
   - 移除硬編 `SUB_PAGES` const
   - `const subPages = listContributions('host')` — 排序已保證
-  - 每項顯示 `t(c.labelKey)`（現 `labelKey` 在 contribution 內；與舊 `SUB_PAGES[].labelKey` 一致）
-  - `onSelect(hostId, subPage)` 參數仍用 `localId`（即現在的 `'overview'` / `'sessions'` 等值）
-- `spa/src/lib/host-routes.ts`
-  - `HOST_SUB_PAGES` 移除或保留為 fallback（implementation choice）
-  - `isHostSubPage(value)` 改為 `listContributions('host').some(c => c.localId === value)`
-  - 若保留 `HOST_SUB_PAGES`：只當 SSR / 極早期 bootstrap 時期 fallback（實務上 `registerBuiltinModules()` 在 React render 前就跑，通常不需要 fallback）
-- `spa/src/lib/register-modules.tsx`
-  - 結尾新增 `registerBuiltinHostSections()` pass（或直接 inline）：
-    - 依序 `registerSettingsContribution({ id: '_builtin.host.overview', moduleId: '_builtin.host', localId: 'overview', scope: 'host', order: 0, labelKey: 'hosts.overview', component: wrap(OverviewSection) })`
-    - 同樣六項：sessions (1) / hooks (2) / agents (3) / uploads (4) / logs (5)
-    - `wrap(Section)` = `(props: { ctx: SettingsContext }) => props.ctx.scope === 'host' ? <Section hostId={props.ctx.hostId} /> : null`
-  - 此 pass 為 internal — `registerSettingsContribution` `@internal` JSDoc 允許 `_builtin.*` 內部 callsite（#539 PR-2 已落地）
-- `spa/src/lib/host-lifecycle.ts`（僅測試擴充，若現有邏輯未觸及 cross-store order 則不動 source）
-- `spa/src/lib/host-lifecycle.test.ts`（擴充 #541 驗證）
+  - 每項顯示 `t(c.labelKey)`（與舊 `SUB_PAGES[].labelKey` 一致）
+  - `onSelect(hostId, subPage: string)` 參數型別鬆綁（subPage 是 registry localId，不再是六 literal 之一）
+- `spa/src/lib/register-modules.tsx`（走 pending buffer，PR-2 dispatch-flushed pattern）
+  - 新增 `registerBuiltinHostSection(def: HostSectionDef)` helper（可放 `settings-section-registry.ts` 或 `host-builtin-sections.ts`）：組 `SettingsContributionDeclaration`（`scope: 'host'`、`moduleId: '_builtin.host'`、wrap 過的 `component: (props) => props.ctx.scope === 'host' ? <Section hostId={props.ctx.hostId} /> : null`）push 到 pending buffer（與 legacy adapter 同一 queue，或獨立第二 queue — 任一實作，測試明確）
+  - `registerBuiltinModules()` 結尾在 `dispatchSettingsContributions()` 之前（與 `registerSettingsSection` 同階段）呼叫六次 `registerBuiltinHostSection(...)` — sessions (1) / hooks (2) / agents (3) / uploads (4) / logs (5)（overview 為 0）
+  - Dispatch pass 統一 flush 後六項進 `listContributions('host')`，與 PR-2 的 legacy adapter 機制一致
+- `spa/src/lib/dispatch-settings-contributions.ts`（若採獨立第二 queue）
+  - `drainHostBuiltinQueue()` 整合進 Phase 2，與 legacy queue、module-declared batch 三者合併
+- `spa/src/lib/host-lifecycle.test.ts`（#541 具體 harness — Finding 5）
+  - 不動 `host-lifecycle.ts` source（現況已 guard；本 PR 驗回歸 + 加 order 測試）
 
 ### 新增
 - `spa/src/components/HostPage.test.tsx`（render-level）
@@ -99,16 +104,48 @@ PR-4 結束時：
 | Wrap forward | 取得第 0 項 `listContributions('host')[0]`，用 `ctx={{ scope:'host', hostId:'hA' }}` render → 等同 `<OverviewSection hostId='hA' />` 行為（以 render 內含可辨識文字斷言） | 通過 |
 | Scope guard | `_builtin.host.overview` contribution 收到 `ctx.scope !== 'host'` 時 render null（wrap 的 guard） | 通過 |
 
-### 3.4 `host-lifecycle.test.ts` 擴充（#541）
+### 3.4 `host-lifecycle.test.ts` 擴充（#541 — 具體 harness）
+
+**Harness 設計**：zustand persist 的 rehydrate 是自動的，要精準控制順序需用 test fixture：
+
+```ts
+// Setup pattern
+import { createStore } from 'zustand/vanilla'
+// 手動 create store instance（不經過 module singleton）
+const makeHostStore = () => createStore(...)
+const makeHostSettingsStore = () => createStore(...)
+
+// 控制 rehydrate 順序
+function harnessOrderA() {
+  const hostStore = makeHostStore()
+  hostStore.persist.rehydrate()  // 完成
+  const settingsStore = makeHostSettingsStore()
+  settingsStore.persist.rehydrate()  // 完成
+  return { hostStore, settingsStore }
+}
+
+function harnessOrderB() {
+  const settingsStore = makeHostSettingsStore()
+  settingsStore.persist.rehydrate()
+  const hostStore = makeHostStore()
+  hostStore.persist.rehydrate()
+  return { hostStore, settingsStore }
+}
+```
 
 | 類別 | 測試項 | 預期 |
 |---|---|---|
-| Rehydrate order A | 模擬 HostStore 先 rehydrate 完成、`useHostSettingsStore` 後 → 刪除 + undo 情境下 `hostWasRecreated` 判定正確 | 通過 |
-| Rehydrate order B | 模擬 `useHostSettingsStore` 先、HostStore 後 → 同上 | 通過 |
-| Cascade 回歸 | 刪除 host → `useHostSettingsStore.get(hostId, moduleId)` 為 undefined（PR-1 功能）| 通過 |
-| Undo 回歸 | 在 cascade clear 後的 undo window 內 undo → host 與其 hostSettings 均回復（PR-1 功能）| 通過 |
+| Rehydrate order A | `harnessOrderA()` → 預設 seed data（hosts[hostA], hostSettings[hostA][editor]）→ 刪除 hostA → `hostSettingsStore.get(hostA, 'editor')` undefined；undo 在 window 內 → 兩 store 都恢復 | 通過 |
+| Rehydrate order B | `harnessOrderB()` → 相同 seed + 行為 → 兩 store 恢復 | 通過 |
+| Interleaved | 模擬「HostStore 半 rehydrate（hosts[hostA] 存在但 runtime 還沒）時觸發刪除」— 驗 `removeHost` 的 precheck 不會因部分 state 誤判 last-host | 通過 |
+| hostWasRecreated | Rehydrate 完成後模擬 same-id 重建 → `hostWasRecreated(hostId)` 回 true（沿用 PR-1 實作） | 通過 |
+| Cascade 回歸 | 刪除 hostA → `hostSettingsStore.get(hostA, *)` undefined（PR-1 cascade） | 通過 |
+| Undo 回歸 | Cascade clear 後 undo window 內 undo → host + hostSettings 都恢復（PR-1） | 通過 |
+| Workspace 交叉 | 刪 hostA + hostA 參與的 workspace tear-off / merge → workspaceSettings 不被連坐清（PR-1 的 D finding） | 通過（回歸） |
 
-若 rehydrate order 測試發現 `hostWasRecreated` 需要改邏輯（e.g. 考慮 `useHostSettingsStore` 中該 host 的 key 是否存在），則加 source 改動（`host-lifecycle.ts`），並追加測試覆蓋新邏輯。
+**若 harness 發現 bug**：改 `host-lifecycle.ts` source 修邏輯（不再 ship PR-4 直到 #541 解決）。若發現 bug 過大，選項 B：#541 拆獨立 PR，PR-4 scope 保留 built-in adapter + shell 部分（先 ship），#541 後補 follow-up。
+
+**Harness 複雜度風險**：若 zustand v4+ 的 `persist.rehydrate()` API 無法精準控制，改用較直接的 state mutation：`store.setState(mockedRehydratedState)` 模擬「已 rehydrate」狀態；`store.setState(initialState)` 模擬「未 rehydrate」狀態。兩種實作擇一，測試先綠為準。
 
 ### 3.5 視覺回歸（手動）
 
@@ -192,7 +229,9 @@ PR-4 結束時：
 
 ## 9. 與其他 PR 的關聯
 
-- **依賴**：PR-1（已 merged）
-- **不依賴**：PR-2 / PR-3（三頁 shell 彼此獨立）
-- **被依賴**：PR-5（Editor `hostConfig.homePath` 需要 PR-4 的 HostPage shell 能顯示 module-contributed host section）
-- **順風解決**：#538（Host 層）/ #541（cross-store rehydrate order）
+- **依賴**：PR-1（已 merged）+ **PR-2**（本 PR 的 built-in host adapter 沿用 PR-2 的 dispatch-flushed pattern + pending buffer 機制；若 PR-2 尚未 merge，PR-4 的 built-in adapter 會被 `dispatchSettingsContributions()` 的 `clearContributions()` 清掉）
+- **不依賴**：PR-3（shell 檔案不重疊，但 `register-modules.tsx` 有 rebase 衝突 — 見 §9 rebase 備註）
+- **rebase 衝突點**（若與 PR-3 並行）：
+  - `spa/src/lib/register-modules.tsx` — PR-3 拔 reserved 兩行；PR-4 加 built-in host sections 六行。位置不同，機械合併可行
+- **被依賴**：PR-5（Editor `hostConfig.homePath` 需要 PR-4 的動態 subPage 機制與 host shell render 新 contribution）
+- **順風解決**：#538（Host 層 render-level smoke）/ #541（cross-store rehydrate order，具體 harness）

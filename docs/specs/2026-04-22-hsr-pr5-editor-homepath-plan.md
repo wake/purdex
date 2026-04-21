@@ -1,7 +1,7 @@
 # HSR PR-5：Editor `homePath` First Module User — Implementation Plan
 
-> 日期：2026-04-22
-> 狀態：Ready for Implementation（但依賴 PR-3 / PR-4 land）
+> 日期：2026-04-22（v2 post-codex-review task-mo8xtpa8-bdxsh4）
+> 狀態：Ready for Implementation（依賴 PR-2 + PR-3 + PR-4 全部 land）
 > 主 spec：`2026-04-21-settings-contribution-registry-design.md`
 > 決策對齊：3b（舊 API 在 PR-5 merge 時發 deprecation）+ 1c（走 adapter 的新 registry 路徑）
 > PR 系列：PR-1 ✅ / PR-2 / PR-3 / PR-4 / **PR-5（本文件）**
@@ -15,6 +15,8 @@
 - `{ scope: 'host', localId: 'homePath' }` — host 手動 home（Layer 2）
 
 Tilde path opener（`spa/src/lib/terminal-link/openers/file-path.ts`）的 `~/...` 分支改為**層疊 resolve**：workspace settings → host settings → `fetchPaneHome()`（Layer 3，PR #530 既有）→ 無則 fallthrough 原 rawPath 行為。
+
+**關鍵前置（codex review Finding 4）**：`LinkContext`（`spa/src/lib/terminal-link/types.ts:29`）目前只有 `hostId?: string` + `sessionCode?: string`，無 `workspaceId`。本 PR 必須擴 `LinkContext` 加 `workspaceId?: string`，並在 `TerminalView.tsx:28` 的 `linkContext` 構造處注入正確的 workspaceId（link 來源 terminal 所屬的 workspace，**不是** `getActiveWorkspaceId()` — 兩者在 inactive pane / split screen / 多 workspace 並存時不同）。resolver 用 `ctx.workspaceId` 查 `useWorkspaceSettingsStore`，確保 multi-workspace 情境下 override 來源正確。
 
 PR-5 merge 時同步：
 - **#540 解決**：三層 store `get()` 回傳 frozen shallow clone（防止 consumer 以 in-place mutation 繞過 persist / sync）
@@ -46,12 +48,21 @@ PR-5 結束時：
 - `spa/src/lib/editor-home-resolver.test.ts`
 
 ### 修改
+- `spa/src/lib/terminal-link/types.ts`（Finding 4 — LinkContext 擴充）
+  - `interface LinkContext` 加 `workspaceId?: string`（optional — legacy callsite 不給時 resolver 直接 fallthrough 到 host 層）
+  - JSDoc 標示：「workspaceId 應為 link 來源 terminal 所屬的 workspace id，**不是** active workspace id」
+- `spa/src/components/TerminalView.tsx`
+  - `linkContext` 構造改為 `useMemo(() => ({ hostId, sessionCode, workspaceId }), [hostId, sessionCode, workspaceId])`
+  - 新增 `workspaceId` prop 或 context 來源：TerminalView 的 tab 屬於某 workspace，透過 `useTabStore` + `useWorkspaceStore` 查「包含此 tab 的 workspace」—— 即 `workspaces.find(ws => ws.tabs.includes(tabId))?.id`
+  - 若該 tab 屬 standalone（不在任一 workspace），`workspaceId` 為 undefined；resolver 跳過 workspace 層
 - `spa/src/lib/register-modules.tsx`
   - Editor `registerModule({ id: 'editor', ..., settings: [{ localId: 'homePath', scope: 'workspace', order: 0, labelKey: 'editor.settings.home_path.workspace', component: EditorHomePathWorkspaceSection }, { localId: 'homePath', scope: 'host', order: 0, labelKey: 'editor.settings.home_path.host', component: EditorHomePathHostSection }] })`
   - 加舊 API deprecation warning（僅對非 `files` 使用者）—— 在 register pass 中偵測 `globalConfig.length > 0` 或 `workspaceConfig.length > 0` 且 moduleId !== 'files' → `console.warn('[module] ${id} uses deprecated globalConfig/workspaceConfig; migrate to settings: [{ scope, localId }]')`
+  - Warn de-dupe：module-scope `Set<string>` 記 `${moduleId}:${scope}` 已 warn 過的 key，避免 HMR 重跑反覆 warn
 - `spa/src/lib/terminal-link/openers/file-path.ts`
-  - 將 `~/...` 分支的 `fetchPaneHome` 直呼改為 `resolveEditorHomePath(...)` 呼叫（內部仍會 fallback 回 `fetchPaneHome`）
-  - opener deps 若需擴充介面（`getWorkspaceHomePath(wsId)` / `getHostHomePath(hostId)`），一併擴充；但**傾向** resolver 直接 `import` store（opener 在 SPA 內部，無跨 boundary）
+  - 將 `~/...` 分支的 `fetchPaneHome` 直呼改為 `resolveEditorHomePath(ctx, deps)` 呼叫（內部依序嘗試 workspace → host → fetchPaneHome）
+  - `ctx` 傳入 resolver 的完整 LinkContext（含 `workspaceId`）；resolver 內部直接 `import` 三層 store，不走 deps injection（SPA 內部不跨 boundary）
+  - Inactive workspace / undefined workspaceId 時，resolver 自動 skip workspace 層
 - `spa/src/stores/useGlobalSettingsStore.ts`（#540）
   - `get(moduleId)` 回 `Object.freeze({ ...internal })`（shallow clone + freeze）
 - `spa/src/stores/useHostSettingsStore.ts`（#540）
@@ -95,11 +106,13 @@ PR-5 結束時：
 
 | 類別 | 測試項 | 預期 |
 |---|---|---|
-| Priority | workspace 有值 + host 有值 + fetchPaneHome 有值 → 回 workspace 值 | 通過 |
+| Priority | `ctx.workspaceId` 有值 + workspace store 有值 + host 有值 + fetchPaneHome 有值 → 回 workspace 值 | 通過 |
 | Priority | workspace 空 + host 有值 → 回 host 值 | 通過 |
 | Priority | workspace / host 皆空 + fetchPaneHome OK → 回 fetchPaneHome 值 | 通過 |
 | Priority | 三層皆空（fetchPaneHome reject / 回空字串）→ 回 null | 通過 |
 | Priority | workspace 值為空字串（使用者 clear）→ 視為無值，fallthrough 到 host | 通過 |
+| **Workspace skip — undefined workspaceId** | `ctx.workspaceId === undefined`（link 來源 pane 非屬任一 workspace）→ resolver 跳過 workspace 層，直接進 host → fetchPaneHome | 通過 |
+| **Workspace skip — wrong workspaceId** | workspace store 有 `wsA.homePath`，但 `ctx.workspaceId === 'wsB'` → resolver 讀 `wsB.homePath`（undefined）→ fallthrough 到 host，**不**讀 `wsA` 的值（即 multi-workspace inactive pane 正確性） | **關鍵 — Finding 4 回歸** |
 | Abort | `signal.aborted` → fetchPaneHome 不呼叫、回 null | 通過 |
 | Absolute only | workspace / host 值非以 `/` 開頭 → 視為無效，fallthrough | 通過 |
 
@@ -107,10 +120,12 @@ PR-5 結束時：
 
 | 類別 | 測試項 | 預期 |
 |---|---|---|
-| Tilde + workspace override | 點 `~/foo.ts`；workspace 有 `homePath='/Users/x'` → 開啟 `/Users/x/foo.ts` | 通過 |
+| Tilde + workspace override | 點 `~/foo.ts`；`ctx.workspaceId='wsA'`、workspace store `wsA.editor.homePath='/Users/x'` → 開啟 `/Users/x/foo.ts` | 通過 |
 | Tilde + host override | 點 `~/foo.ts`；workspace 空、host 有 `homePath='/home/y'` → 開啟 `/home/y/foo.ts` | 通過 |
 | Tilde fallback | 三層皆空、`fetchPaneHome` 回 `/Users/z` → 開啟 `/Users/z/foo.ts` | 通過（PR #530 回歸） |
 | Tilde all fail | 三層皆空、`fetchPaneHome` reject → 開啟 raw `~/foo.ts`（blank buffer；既有行為） | 通過 |
+| **Multi-workspace** | 點 `~/foo.ts`；active workspace = `wsA`（有 `/Users/x`），但 link 來源 pane 屬 `wsB`（無 value）；`ctx.workspaceId='wsB'` → resolver 不讀 `wsA`，進 host 層或 fetchPaneHome | **關鍵 — Finding 4 回歸** |
+| **Standalone pane** | 點 `~/foo.ts`；pane 非屬任一 workspace；`ctx.workspaceId === undefined` → skip workspace 層，走 host / fetchPaneHome | 通過 |
 
 ### 3.5 Store immutability (#540)
 
@@ -214,7 +229,11 @@ PR-5 結束時：
 
 ## 9. 與其他 PR 的關聯
 
-- **依賴**：PR-1（已 merged）+ **PR-3**（workspace shell 能渲染 workspace contribution）+ **PR-4**（host shell 能渲染 host contribution）
-- **不依賴**：PR-2（Purdex shell — Editor 不宣告 `scope: 'purdex'`）
-- **被依賴**：後續「全面移除舊 `globalConfig` / `workspaceConfig`」的獨立 refactor PR
-- **順風解決**：#540 / 決策 3b deprecation
+- **依賴**：
+  - PR-1（已 merged）— 三層 store + registry 基礎
+  - **PR-2** — dispatch-flushed adapter pattern；`@internal` boundary（本 PR 的新 registry 消費遵守同樣 boundary）
+  - **PR-3** — WorkspaceSettingsPage shell 能渲染 workspace contribution（Editor `workspace.homePath` section 的 render 環境）
+  - **PR-4** — HostPage shell + host route contract 鬆綁（Editor `host.homePath` section 走動態 subPage localId）
+- **rebase 衝突點**：無（PR-5 動 `terminal-link/types.ts` + `TerminalView.tsx` + `register-modules.tsx` Editor module 段，與前面 PR 不重疊）
+- **被依賴**：後續「全面移除舊 `globalConfig` / `workspaceConfig`」的獨立 refactor PR（要等至少 `files` 也遷完）
+- **順風解決**：#540（三層 store immutable snapshot）/ 決策 3b（deprecation warning 落地 + de-dupe 機制）
