@@ -553,6 +553,8 @@
   "hosts.cc_hooks_desc": "Claude Code hooks configured in settings.json for agent event monitoring",
   "hosts.codex_hooks": "Codex Hooks",
   "hosts.codex_hooks_desc": "Codex hooks configured in hooks.json for agent event monitoring",
+  "hosts.opencode_hooks": "OpenCode Hooks",
+  "hosts.opencode_hooks_desc": "OpenCode hooks configured in ~/.config/opencode/plugins for agent event monitoring",
   "hosts.hook_agent_version": "Agent Version",
   "hosts.hook_supported_version": "Hook Support Through",
   "hosts.hook_version_warning": "Agent version is newer than the currently supported hook version",

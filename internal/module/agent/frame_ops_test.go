@@ -142,6 +142,51 @@ func TestHandleEvent_SubagentDoesNotCreateFrame(t *testing.T) {
 	}
 }
 
+func TestHandleEvent_OpenCodeSessionStartClearsPersistedSubagents(t *testing.T) {
+	m := newTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "opencode",
+		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
+			switch event {
+			case "SessionStart":
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			case "SubagentStart":
+				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": "call-1", "agent_type": "Explore"}}
+			default:
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			}
+		},
+	})
+
+	for _, body := range []string{
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SubagentStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
+	} {
+		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		m.handleEvent(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+	}
+
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("frame subagents = %#v, want empty after SessionStart cleanup", frames[0].Subagents)
+	}
+	if got := m.subagents["work"]; len(got) != 0 {
+		t.Fatalf("in-memory subagents = %#v, want empty after SessionStart cleanup", got)
+	}
+}
+
 func TestReplay_SkipsFramesWithStaleStartTime(t *testing.T) {
 	m := newTestModule(t)
 	fakeTmux := tmux.NewFakeExecutor()

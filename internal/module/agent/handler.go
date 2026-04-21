@@ -119,9 +119,12 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		current := m.currentStatus[req.TmuxSession]
 		m.mu.Unlock()
 		if current == agentpkg.StatusError {
-			canClear := req.EventName == "UserPromptSubmit" ||
-				req.EventName == "SessionStart" ||
-				req.EventName == "Stop"
+			canClear := req.EventName == "UserPromptSubmit" || req.EventName == "SessionStart"
+			if req.AgentType == "opencode" {
+				canClear = canClear || req.EventName == "SessionEnd"
+			} else {
+				canClear = canClear || req.EventName == "Stop"
+			}
 			if !canClear {
 				normalized := buildProjectionNormalized(nil, req.AgentType, req.EventName, broadcastTs, result)
 				trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, "skipped", "error_guard_blocked")
@@ -168,6 +171,13 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 
 	// Handle subagent events (transient — broadcast only, don't persist)
 	if req.EventName == "SubagentStart" || req.EventName == "SubagentStop" {
+		if frameMeta.Decision != "updated_frame" {
+			trace.Finish("completed", "emit_skipped")
+			traceFinished = true
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			return
+		}
 		m.mu.Lock()
 		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
 		m.mu.Unlock()
@@ -661,8 +671,9 @@ func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := map[string]agentInfo{
-		"cc":    detect("claude", "--version"),
-		"codex": detect("codex", "--version"),
+		"cc":       detect("claude", "--version"),
+		"codex":    detect("codex", "--version"),
+		"opencode": detect("opencode", "--version"),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

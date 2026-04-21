@@ -12,6 +12,7 @@ import (
 
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/agent/codex"
+	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/config"
 )
 
@@ -32,7 +33,7 @@ func runSetup(args []string) {
 	}
 
 	if agentType == "" {
-		fmt.Fprintf(os.Stderr, "pdx setup: --agent flag is required (e.g. --agent cc, --agent codex)\n")
+		fmt.Fprintf(os.Stderr, "pdx setup: --agent flag is required (e.g. --agent cc, --agent codex, --agent opencode)\n")
 		os.Exit(1)
 	}
 
@@ -121,7 +122,13 @@ func localSetup(agentType string, remove bool) error {
 			return p.RemoveHooks(pdxPath)
 		}
 		return p.InstallHooks(pdxPath)
+	case "opencode":
+		p := opencode.NewProvider()
+		if remove {
+			return p.RemoveHooks(pdxPath)
+		}
+		return p.InstallHooks(pdxPath)
 	default:
-		return fmt.Errorf("unknown agent type: %s (supported: cc, codex)", agentType)
+		return fmt.Errorf("unknown agent type: %s (supported: cc, codex, opencode)", agentType)
 	}
 }

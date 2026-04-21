@@ -553,6 +553,8 @@
   "hosts.cc_hooks_desc": "在 settings.json 中設定的 Claude Code hooks，用於 Agent 事件監控",
   "hosts.codex_hooks": "Codex Hooks",
   "hosts.codex_hooks_desc": "在 hooks.json 中設定的 Codex hooks，用於 Agent 事件監控",
+  "hosts.opencode_hooks": "OpenCode Hooks",
+  "hosts.opencode_hooks_desc": "在 ~/.config/opencode/plugins 中設定的 OpenCode hooks，用於 Agent 事件監控",
   "hosts.hook_agent_version": "Agent 版本",
   "hosts.hook_supported_version": "Hook 支援到版本",
   "hosts.hook_version_warning": "目前 agent 版本已高於現在支援的 hook 版本",

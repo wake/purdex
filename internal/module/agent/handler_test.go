@@ -12,6 +12,7 @@ import (
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
@@ -281,6 +282,215 @@ func TestHandleEvent_ErrorGuardBlocksFrameMutation(t *testing.T) {
 	}
 }
 
+func TestHandleEvent_OpenCodeSessionEndClearsErrorState(t *testing.T) {
+	m := newTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "opencode",
+		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
+			switch event {
+			case "SessionEnd":
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}
+			default:
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			}
+		},
+	})
+
+	for _, body := range []string{
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionEnd","raw_event":{},"agent_type":"opencode"}`,
+	} {
+		if strings.Contains(body, `"SessionEnd"`) {
+			m.currentStatus["work"] = agentpkg.StatusError
+		}
+		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		m.handleEvent(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+	}
+
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0", len(frames))
+	}
+	if got := m.currentStatus["work"]; got != "" {
+		t.Fatalf("currentStatus = %q, want cleared", got)
+	}
+}
+
+func TestHandleEvent_OpenCodeStopDoesNotClearError(t *testing.T) {
+	m := newTestModule(t)
+	m.currentStatus["work"] = agentpkg.StatusError
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "opencode",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
+	})
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"opencode"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if got := m.currentStatus["work"]; got != agentpkg.StatusError {
+		t.Fatalf("currentStatus = %q, want error", got)
+	}
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0", len(frames))
+	}
+}
+
+func TestHandleEvent_OpenCodeValidSubagentBroadcasts(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "opencode",
+		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
+			switch event {
+			case "SessionStart":
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			case "SubagentStart":
+				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": "call-1", "agent_type": "Explore"}}
+			default:
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			}
+		},
+	})
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	for _, body := range []string{
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SubagentStart","raw_event":{},"agent_type":"opencode"}`,
+	} {
+		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		m.handleEvent(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+	}
+
+	select {
+	case <-sub.SendCh():
+		// SessionStart broadcast
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for SessionStart broadcast")
+	}
+
+	select {
+	case msg := <-sub.SendCh():
+		var env struct {
+			Type    string `json:"type"`
+			Session string `json:"session"`
+			Value   string `json:"value"`
+		}
+		if err := json.Unmarshal(msg, &env); err != nil {
+			t.Fatalf("unmarshal broadcast: %v", err)
+		}
+		if env.Type != "hook" {
+			t.Fatalf("broadcast type = %q, want hook", env.Type)
+		}
+		if env.Session != "code-work" {
+			t.Fatalf("broadcast session = %q, want code-work", env.Session)
+		}
+		if !strings.Contains(env.Value, `"raw_event_name":"SubagentStart"`) {
+			t.Fatalf("broadcast value missing raw_event_name: %s", env.Value)
+		}
+		if !strings.Contains(env.Value, `"subagents":["call-1"]`) {
+			t.Fatalf("broadcast value missing subagent membership: %s", env.Value)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for SubagentStart broadcast")
+	}
+}
+
+func TestHandleEvent_OpenCodeMalformedSubagentDoesNotBroadcast(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "opencode",
+		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
+			switch event {
+			case "SessionStart":
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			case "SubagentStart":
+				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_type": "Explore"}}
+			default:
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			}
+		},
+	})
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	for _, body := range []string{
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SubagentStart","raw_event":{},"agent_type":"opencode"}`,
+	} {
+		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		m.handleEvent(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+	}
+
+	select {
+	case <-sub.SendCh():
+		// SessionStart broadcast
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for SessionStart broadcast")
+	}
+
+	select {
+	case msg := <-sub.SendCh():
+		t.Fatalf("unexpected malformed subagent broadcast: %s", string(msg))
+	case <-time.After(50 * time.Millisecond):
+		// expected
+	}
+
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("frame subagents = %#v, want empty", frames[0].Subagents)
+	}
+	if got := m.subagents["work"]; len(got) != 0 {
+		t.Fatalf("in-memory subagents = %#v, want empty", got)
+	}
+}
+
 // --- Bug 0: buildNormalized always includes Subagents field ---
 
 func TestBuildNormalized_EmptySubagentsIsNotNil(t *testing.T) {
@@ -529,6 +739,105 @@ func TestHandleStatuslineStatus_CC_Registered(t *testing.T) {
 	case "none", "pdx", "wrapped", "unmanaged":
 	default:
 		t.Errorf("unexpected mode: %q", body.Mode)
+	}
+}
+
+func TestHandleHookStatus_OpenCodeRegistered(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m := newTestModule(t)
+	m.registry.Register(opencode.NewProvider())
+
+	req := httptest.NewRequest("GET", "/api/hooks/opencode/status", nil)
+	req.SetPathValue("agent", "opencode")
+	w := httptest.NewRecorder()
+
+	m.handleHookStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s)", w.Code, w.Body.String())
+	}
+	var body agentpkg.HookStatus
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Installed {
+		t.Fatalf("expected not installed by default, got %+v", body)
+	}
+	if len(body.Issues) == 0 {
+		t.Fatalf("expected issues for missing plugin, got %+v", body)
+	}
+}
+
+func TestHandleHookSetup_OpenCodeInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m := newTestModule(t)
+	m.registry.Register(opencode.NewProvider())
+
+	body := strings.NewReader(`{"action":"install"}`)
+	req := httptest.NewRequest("POST", "/api/hooks/opencode/setup", body)
+	req.SetPathValue("agent", "opencode")
+	w := httptest.NewRecorder()
+
+	m.handleHookSetup(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s)", w.Code, w.Body.String())
+	}
+	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "pdx-agent-hooks.js")
+	if _, err := os.Stat(pluginPath); err != nil {
+		t.Fatalf("expected plugin install, stat err=%v", err)
+	}
+	var bodyStatus agentpkg.HookStatus
+	if err := json.NewDecoder(w.Body).Decode(&bodyStatus); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !bodyStatus.Installed {
+		t.Fatalf("expected installed status, got %+v", bodyStatus)
+	}
+	if !bodyStatus.Events["SubagentStart"].Installed {
+		t.Fatalf("expected SubagentStart installed, got %+v", bodyStatus.Events)
+	}
+}
+
+func TestHandleDetect_IncludesOpenCode(t *testing.T) {
+	binDir := t.TempDir()
+	for name, content := range map[string]string{
+		"opencode": "#!/bin/sh\necho 1.2.3\n",
+	} {
+		path := filepath.Join(binDir, name)
+		if err := os.WriteFile(path, []byte(content), 0755); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
+
+	m := newTestModule(t)
+	req := httptest.NewRequest("GET", "/api/agents/detect", nil)
+	w := httptest.NewRecorder()
+
+	m.handleDetect(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s)", w.Code, w.Body.String())
+	}
+	var body map[string]struct {
+		Installed bool   `json:"installed"`
+		Path      string `json:"path"`
+		Version   string `json:"version"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body["opencode"].Installed {
+		t.Fatalf("expected opencode detected, got %+v", body)
+	}
+	if body["opencode"].Version != "1.2.3" {
+		t.Fatalf("opencode version = %q, want 1.2.3", body["opencode"].Version)
 	}
 }
 

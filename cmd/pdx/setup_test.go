@@ -62,6 +62,25 @@ func TestLocalSetup(t *testing.T) {
 		}
 	})
 
+	t.Run("opencode install creates project plugin", func(t *testing.T) {
+		root := t.TempDir()
+		t.Setenv("HOME", root)
+
+		err := localSetup("opencode", false)
+		if err != nil {
+			t.Fatalf("localSetup opencode install: %v", err)
+		}
+
+		pluginPath := filepath.Join(root, ".config", "opencode", "plugins", "pdx-agent-hooks.js")
+		data, err := os.ReadFile(pluginPath)
+		if err != nil {
+			t.Fatalf("read plugin: %v", err)
+		}
+		if len(data) == 0 {
+			t.Fatal("plugin file is empty")
+		}
+	})
+
 	t.Run("unknown agent returns error", func(t *testing.T) {
 		err := localSetup("unknown", false)
 		if err == nil {
@@ -86,6 +105,16 @@ func TestLocalSetup(t *testing.T) {
 		err := localSetup("codex", true)
 		if err != nil {
 			t.Fatalf("localSetup codex remove: %v", err)
+		}
+	})
+
+	t.Run("opencode remove on empty dir succeeds", func(t *testing.T) {
+		root := t.TempDir()
+		t.Setenv("HOME", root)
+
+		err := localSetup("opencode", true)
+		if err != nil {
+			t.Fatalf("localSetup opencode remove: %v", err)
 		}
 	})
 }
