@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-alpha.201] - 2026-04-22
+
+### Fix(spa): restore lint and build baseline (#556)
+
+- 修正 `main` 上殘留的 SPA lint 與 typecheck 基線失敗，讓 `pnpm --prefix spa run lint` 與 `pnpm --prefix spa run build` 再次可通過。
+- 將退化集中收斂到現行型別與 runtime 契約，包含 preview pane、fs backend、sync provider、drag/statusline helper 與多批測試 fixture 對齊。
+
 ## [1.0.0-alpha.200] - 2026-04-22
 
 ### Test: realign stale fs and editor suites with current runtime (#544)
