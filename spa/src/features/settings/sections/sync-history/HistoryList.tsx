@@ -17,7 +17,7 @@ export function HistoryList(props: HistoryListProps) {
 
   if (props.loading) {
     return (
-      <div className="flex items-center justify-center p-6" data-testid="loading">
+      <div className="flex min-h-[24rem] items-center justify-center p-6" data-testid="loading">
         <CircleNotch className="animate-spin text-text-muted" size={18} />
       </div>
     )
@@ -25,27 +25,35 @@ export function HistoryList(props: HistoryListProps) {
 
   if (props.error) {
     return (
-      <div className="p-6 text-sm text-text-muted">
-        {t('settings.sync.history.error.loadList')}
-        {props.onRetry && (
-          <button type="button" onClick={props.onRetry} className="ml-2 text-accent-base">
-            {t('settings.sync.history.retry')}
-          </button>
-        )}
+      <div className="flex min-h-[24rem] items-center justify-center p-6">
+        <div className="max-w-xs text-center text-sm text-text-muted">
+          <p>{t('settings.sync.history.error.loadList')}</p>
+          {props.onRetry && (
+            <button
+              type="button"
+              onClick={props.onRetry}
+              className="mt-3 rounded-md border border-border-default px-3 py-1.5 text-xs text-text-primary hover:border-border-active"
+            >
+              {t('settings.sync.history.retry')}
+            </button>
+          )}
+        </div>
       </div>
     )
   }
 
   if (props.items.length === 0) {
     return (
-      <div className="p-6 text-sm text-text-muted" data-testid="empty">
-        {t('settings.sync.history.empty.local')}
+      <div className="flex min-h-[24rem] items-center justify-center p-6" data-testid="empty">
+        <div className="max-w-xs text-center text-sm text-text-muted">
+          {t('settings.sync.history.empty.local')}
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col gap-2 p-3">
       {props.items.map((m) => (
         <HistoryRow
           key={m.id}

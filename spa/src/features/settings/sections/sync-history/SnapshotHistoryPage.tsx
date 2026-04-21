@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { ClockCounterClockwise, WarningCircle } from '@phosphor-icons/react'
 import { HistoryTabs } from './HistoryTabs'
 import { HistoryList } from './HistoryList'
 import { SnapshotDetail } from './SnapshotDetail'
@@ -41,6 +42,7 @@ export function SnapshotHistoryPage() {
   const pendingConflicts = useSyncStore((s) => s.pendingConflicts)
   const restoreFromSnapshot = useSyncStore((s) => s.restoreFromSnapshot)
   const t = useI18nStore((s) => s.t)
+  const remoteAvailable = activeProviderId === 'daemon'
 
   const diff = useSnapshotDiff(selectedSnap)
 
@@ -126,14 +128,39 @@ export function SnapshotHistoryPage() {
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <HistoryTabs
-        active={activeTab}
-        remoteAvailable={activeProviderId === 'daemon'}
-        onChange={setActiveTab}
-      />
-      <div className="flex flex-1 overflow-hidden">
-        <div className="w-80 overflow-y-auto border-r border-text-subtle/20">
+    <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-6">
+      <div>
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-border-default bg-surface-secondary text-text-secondary">
+            <ClockCounterClockwise size={18} />
+          </div>
+          <div>
+            <h2 className="text-lg text-text-primary">{t('settings.sync.history.title')}</h2>
+            <p className="text-xs text-text-secondary">{t('settings.sync.history.description')}</p>
+          </div>
+        </div>
+      </div>
+
+      {warningText && (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-status-warn-text"
+        >
+          <WarningCircle size={18} className="mt-0.5 shrink-0 text-yellow-500" />
+          <span>{warningText}</span>
+        </div>
+      )}
+
+      <div className="flex items-center gap-4">
+        <HistoryTabs
+          active={activeTab}
+          remoteAvailable={remoteAvailable}
+          onChange={setActiveTab}
+        />
+      </div>
+
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(19rem,24rem)_minmax(0,1fr)]">
+        <section className="min-h-[24rem] overflow-hidden rounded-lg border border-border-default bg-surface-secondary">
           {activeTab === 'local' ? (
             <HistoryList
               items={items}
@@ -144,23 +171,29 @@ export function SnapshotHistoryPage() {
               onRetry={refresh}
             />
           ) : (
-            <div className="p-6 text-sm text-text-muted">Remote tab: PR B</div>
+            <div className="flex min-h-[24rem] items-center justify-center p-6">
+              <div className="max-w-sm text-center">
+                <p className="text-sm text-text-primary">{t('settings.sync.history.tabs.remote')}</p>
+                <p className="mt-2 text-xs text-text-secondary">
+                  {remoteAvailable
+                    ? t('settings.sync.history.empty.remote')
+                    : t('settings.sync.history.tabs.remoteDaemonOnly')}
+                </p>
+              </div>
+            </div>
           )}
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {warningText && (
-            <p role="alert" className="m-4 text-sm text-status-warn-text">
-              {warningText}
-            </p>
-          )}
+        </section>
+
+        <section className="min-h-[24rem] overflow-hidden rounded-lg border border-border-default bg-surface-secondary">
           <SnapshotDetail
             snapshot={selectedSnap}
             diff={diff}
             onRestore={() => setDialogMode('confirm')}
             restoring={restoring}
           />
-        </div>
+        </section>
       </div>
+
       <SnapshotRestoreDialog
         open={dialogMode !== 'idle'}
         mode={dialogMode === 'idle' ? 'confirm' : dialogMode}

@@ -9,14 +9,16 @@ export interface HistoryTabsProps {
 export function HistoryTabs(props: HistoryTabsProps) {
   const t = useI18nStore((s) => s.t)
   return (
-    <div role="tablist" className="flex border-b border-text-subtle/20">
+    <div role="tablist" className="inline-flex rounded-md border border-border-default bg-surface-secondary p-1">
       <button
         role="tab"
         aria-selected={props.active === 'local'}
         onClick={() => props.onChange('local')}
         className={[
-          'px-4 py-2 text-sm',
-          props.active === 'local' ? 'border-b-2 border-accent-base text-accent-base' : 'text-text-muted',
+          'rounded-md px-4 py-1.5 text-xs font-medium transition-colors',
+          props.active === 'local'
+            ? 'bg-surface-elevated text-text-primary'
+            : 'text-text-muted hover:text-text-primary',
         ].join(' ')}
       >
         {t('settings.sync.history.tabs.local')}
@@ -28,9 +30,11 @@ export function HistoryTabs(props: HistoryTabsProps) {
         onClick={() => props.onChange('remote')}
         title={!props.remoteAvailable ? t('settings.sync.history.tabs.remoteDaemonOnly') : undefined}
         className={[
-          'px-4 py-2 text-sm',
-          props.active === 'remote' ? 'border-b-2 border-accent-base text-accent-base' : 'text-text-muted',
-          !props.remoteAvailable ? 'opacity-50 cursor-not-allowed' : '',
+          'rounded-md px-4 py-1.5 text-xs font-medium transition-colors',
+          props.active === 'remote'
+            ? 'bg-surface-elevated text-text-primary'
+            : 'text-text-muted hover:text-text-primary',
+          !props.remoteAvailable ? 'cursor-not-allowed opacity-50' : '',
         ].join(' ')}
       >
         {t('settings.sync.history.tabs.remote')}

@@ -20,6 +20,12 @@ function formatRelative(ms: number): string {
   return `${days}d`
 }
 
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(2)} MB`
+}
+
 export interface HistoryRowProps {
   meta: SnapshotMetadata
   selected: boolean
@@ -35,24 +41,34 @@ export function HistoryRow({ meta, selected, onSelect }: HistoryRowProps) {
       data-selected={selected}
       onClick={onSelect}
       className={[
-        'w-full px-3 py-2 flex items-center gap-2 text-left',
-        'border-b border-text-subtle/10',
-        selected ? 'bg-accent-muted' : 'hover:bg-text-subtle/5',
+        'w-full rounded-lg border px-3 py-3 text-left transition-colors',
+        selected
+          ? 'border-border-active bg-surface-elevated'
+          : 'border-border-subtle hover:border-border-default hover:bg-surface-hover',
       ].join(' ')}
     >
-      <Icon size={16} className="text-text-muted" />
-      <div className="flex-1">
-        <div className="text-sm text-text-primary">
-          {t(`settings.sync.history.trigger.${meta.trigger === 'pre-import' ? 'preImport' : meta.trigger === 'pre-restore' ? 'preRestore' : meta.trigger}`)}
-          <span className="ml-2 text-xs text-text-muted">{formatRelative(meta.timestamp)}</span>
+      <div className="flex items-start gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border-default bg-bg-surface text-text-muted">
+          <Icon size={16} className="shrink-0" />
         </div>
-        <div className="text-xs text-text-muted">{meta.device}</div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-sm font-medium text-text-primary">
+              {t(`settings.sync.history.trigger.${meta.trigger === 'pre-import' ? 'preImport' : meta.trigger === 'pre-restore' ? 'preRestore' : meta.trigger}`)}
+            </span>
+            <span className="text-xs text-text-muted">{formatRelative(meta.timestamp)}</span>
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-text-secondary">
+            <span>{meta.device}</span>
+            <span>{formatBytes(meta.bundleSize)}</span>
+          </div>
+        </div>
+        {meta.isSessionPristine && (
+          <span data-testid="pristine-badge" className="shrink-0 rounded-md bg-accent-muted px-2 py-1 text-[11px] font-medium text-accent-base">
+            {t('settings.sync.history.trigger.sessionPristine')}
+          </span>
+        )}
       </div>
-      {meta.isSessionPristine && (
-        <span data-testid="pristine-badge" className="text-xs px-1 rounded bg-accent-muted text-accent-base">
-          {t('settings.sync.history.trigger.sessionPristine')}
-        </span>
-      )}
     </button>
   )
 }
