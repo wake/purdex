@@ -192,7 +192,7 @@ describe('settings contribution dispatch', () => {
       ],
     }
     registerModule(mod)
-    expect(() => dispatchSettingsContributions()).toThrow(/dualpurdex/)
+    expect(() => dispatchSettingsContributions()).toThrow(/dualpurdex.*globalConfig.*purdex/)
   })
 
   it('I1: non-empty workspaceConfig + settings scope=workspace → throws naming the module', () => {
@@ -205,7 +205,7 @@ describe('settings contribution dispatch', () => {
       ],
     }
     registerModule(mod)
-    expect(() => dispatchSettingsContributions()).toThrow(/dualws/)
+    expect(() => dispatchSettingsContributions()).toThrow(/dualws.*workspaceConfig.*workspace/)
   })
 
   it('I1: module with only globalConfig (no settings) does NOT throw', () => {
@@ -248,8 +248,7 @@ describe('settings contribution dispatch', () => {
 
   // --- Re-entry ---
 
-  it('re-entry: dispatching the same module twice with fresh settings declarations throws', () => {
-    // Register the module + dispatch once (succeeds).
+  it('re-entry: dispatching the same module twice with fresh settings declarations stays idempotent', () => {
     registerModule({
       id: 'reentry',
       name: 'Re-entry',
@@ -269,7 +268,8 @@ describe('settings contribution dispatch', () => {
         { localId: 'x', scope: 'purdex', order: 0, labelKey: 'x', component: FakeComponent },
       ],
     })
-    expect(() => dispatchSettingsContributions()).toThrow()
+    expect(() => dispatchSettingsContributions()).not.toThrow()
+    expect(listContributions('purdex').map((c) => c.id)).toEqual(['reentry.x'])
   })
 
   it('re-entry: after clearAll() (including contributions), registerBuiltinModules() succeeds', () => {

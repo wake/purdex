@@ -7,7 +7,7 @@ const LOCAL_ID_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/
 
 const contributions = new Map<string, SettingsContribution>()
 
-function validate(def: SettingsContribution): void {
+export function assertValidSettingsContribution(def: SettingsContribution): void {
   if (!def.moduleId) {
     throw new Error('settings-contribution-registry: moduleId must be a non-empty string')
   }
@@ -31,7 +31,7 @@ function validate(def: SettingsContribution): void {
 }
 
 export function registerSettingsContribution(def: SettingsContribution): void {
-  validate(def)
+  assertValidSettingsContribution(def)
 
   const existing = contributions.get(def.id)
   if (existing !== undefined) {
