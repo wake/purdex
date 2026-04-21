@@ -323,9 +323,10 @@ Observation 進來
 4. Pending window（role 判不出時）
    - 見 §3.4.2
   ↓
-5. Source priority
-   - hook > probe > sweep > synthetic > reconcile
+5. Source priority（只對可 apply 的 source 計）
+   - hook > probe > sweep > synthetic
    - 但有 override clause：probe 的 `error` 可 override hook 的 `waiting`（probe 偵測崩潰）
+   - **Reconcile 不在 priority 表內**：reconcile observation 永遠 `phase=proposed, outcome=skipped`，不進 apply pipeline（見 §3.4.5）
   ↓
 6. Monotone lifecycle
    - 若 actor.Lifecycle.EndedAt != nil → reject (ReasonCode=ActorEnded)
@@ -552,9 +553,11 @@ func (m *Module) submitObservation(obs Observation) {
 **Drop Priority**（queue 滿時）：
 
 ```
-hook committed > reconcile committed > probe committed >
-hook proposed > probe proposed > sweep proposed > synthetic proposed
+hook committed > probe committed >
+hook proposed > probe proposed > sweep proposed > synthetic proposed > reconcile proposed
 ```
+
+（reconcile 永遠 `phase=proposed`，§3.4.5；無 `reconcile committed` 類別。）
 
 **Batching / Sampling / Retention**：
 
@@ -745,12 +748,7 @@ type Registry struct {
     specs map[string]AgentSpec
 }
 
-func RegisterBuiltinAgents(r *Registry) {
-    r.Register(cc.NewSpec())
-    r.Register(codex.NewSpec())
-    r.Register(opencode.NewSpec())
-}
-
+// Register 做單個 spec 的驗證 — 回 error 讓呼叫端選擇處置
 func (r *Registry) Register(spec AgentSpec) error {
     // 驗證 capability bits 與 optional services 一致
     caps := spec.Descriptor().Capabilities
@@ -762,14 +760,29 @@ func (r *Registry) Register(spec AgentSpec) error {
     return nil
 }
 
+// RegisterBuiltinAgents 依序註冊 cc/codex/opencode — 遇到第一個 error 就返回
+func RegisterBuiltinAgents(r *Registry) error {
+    for _, spec := range []AgentSpec{cc.NewSpec(), codex.NewSpec(), opencode.NewSpec()} {
+        if err := r.Register(spec); err != nil {
+            return fmt.Errorf("register %s: %w", spec.Descriptor().ID, err)
+        }
+    }
+    return nil
+}
+
+// NewDefaultRegistry 是 daemon 啟動點 — mismatch 時 panic（dev-time 保護）
 func NewDefaultRegistry() *Registry {
     r := &Registry{specs: map[string]AgentSpec{}}
     if err := RegisterBuiltinAgents(r); err != nil {
-        panic(err)  // dev 時必須修正
+        panic(err)  // dev 時必須修正；production deploy 前已過測試
     }
     return r
 }
 ```
+
+**失敗語意**（釘死口徑）：
+- `Register(spec)` 與 `RegisterBuiltinAgents(r)` 只**回 error**，不 panic（允許測試環境模擬失敗）
+- `NewDefaultRegistry()` 是唯一的 panic 點；daemon 啟動時呼叫，mismatch 直接停住
 
 ### 4.6 Backward compatibility
 
@@ -810,7 +823,7 @@ func (r *Registry) LegacyProvider(agentID string) concrete.Provider {
 - Adapter 與 legacy provider 介面一併刪除
 
 **Registry 啟動時一致性驗證**：
-`Registry.Register()` 檢查 capability bits 與 optional services 一致（§4.5），若 cc/codex/opencode 任一不一致 → `panic` 阻止 daemon 啟動。這是 **dev-time 保護**；production deployment 前必定會觸發過測試環境的 registry validation。
+`Registry.Register()` 檢查 capability bits 與 optional services 一致（§4.5 回 error）。`NewDefaultRegistry()`（daemon 啟動點）包裹 `RegisterBuiltinAgents`，若 cc/codex/opencode 任一不一致 → `panic` 阻止 daemon 啟動。這是 **dev-time 保護**；production deployment 前必定會觸發過測試環境的 registry validation。
 
 ---
 
@@ -1314,7 +1327,8 @@ CREATE INDEX idx_divergence_matched ON frame_divergences(matched);
 
 | Test | 覆蓋 |
 |---|---|
-| `registry_capability_service_mismatch_panics` | `HasOperator=true` 但 `Operator()==nil` → `Register` panic（dev）|
+| `registry_register_returns_error_on_mismatch` | `HasOperator=true` 但 `Operator()==nil` → `Register` 回 non-nil error（不 panic）|
+| `new_default_registry_panics_on_mismatch` | 同上不一致下 `NewDefaultRegistry()` 觸發 panic（daemon 啟動 dev 保護） |
 | `registry_legacy_adapter_cc_provider` | PR-3a compat adapter 讓 `stream/module.go:39` 仍能取得 cc operator |
 | `registry_noop_probe_policy` | PR-3b 前未補 ProbePolicy 的 agent 走 `NoopProbePolicy` 不 crash |
 
