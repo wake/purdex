@@ -15,6 +15,8 @@ describe('useLocalHistory', () => {
       getLocal: async () => null,
       createSnapshot: async () => items[0],
       deleteLocal: async () => {},
+      demoteSessionPristine: async () => {},
+      rotateSessionPristine: async () => ({ ...items[0], isSessionPristine: true }),
       compact: async () => ({ kept: [], evicted: [] }),
       clear: async () => {},
     })

@@ -11,6 +11,24 @@ export interface FileSystemIpc {
   mkdir(path: string): Promise<void>
 }
 
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const chunkSize = 8192
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
+function decodeBase64(value: string): Uint8Array {
+  const binary = atob(value)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return bytes
+}
+
 // ---------------------------------------------------------------------------
 // FileProvider — iCloud / Syncthing sync folder
 // ---------------------------------------------------------------------------
@@ -94,7 +112,7 @@ export function createFileProvider(syncFolder: string, fs: FileSystemIpc): SyncP
 
       await Promise.all(
         hashes.map((hash) => {
-          const b64 = Buffer.from(chunks[hash]).toString('base64')
+          const b64 = encodeBase64(chunks[hash])
           return fs.writeFile(`${chunksDir}/${hash}.bin`, b64)
         }),
       )
@@ -107,7 +125,7 @@ export function createFileProvider(syncFolder: string, fs: FileSystemIpc): SyncP
         hashes.map(async (hash) => {
           try {
             const b64 = await fs.readFile(`${chunksDir}/${hash}.bin`)
-            result[hash] = new Uint8Array(Buffer.from(b64, 'base64'))
+            result[hash] = decodeBase64(b64)
           } catch (err) {
             if (isEnoent(err)) return // skip missing chunks
             throw err

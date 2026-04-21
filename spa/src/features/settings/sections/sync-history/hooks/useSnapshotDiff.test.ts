@@ -13,6 +13,8 @@ describe('useSnapshotDiff', () => {
       getLocal: async () => null,
       createSnapshot: async () => ({ id: 'x', timestamp: 0, device: 'd', trigger: 'manual', bundleSize: 0, contributorIds: [], isSessionPristine: false }),
       deleteLocal: async () => {},
+      demoteSessionPristine: async () => {},
+      rotateSessionPristine: async () => ({ id: 'x', timestamp: 0, device: 'd', trigger: 'manual', bundleSize: 0, contributorIds: [], isSessionPristine: true }),
       compact: async () => ({ kept: [], evicted: [] }),
       clear: async () => {},
     })
@@ -62,7 +64,7 @@ describe('useSnapshotDiff', () => {
         { id: 'w', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: { x: 1 } }), deserialize: () => {} },
         { id: 'x', strategy: 'full', getVersion: () => 1, serialize: () => ({ version: 1, data: { k: 1 } }), deserialize: () => {} },
       ],
-      serialize: (_device, ids: string[]) => ({
+      serialize: (_device: string, ids: string[]) => ({
         version: 1, timestamp: 0, device: 'd',
         collections: Object.fromEntries(
           ids.map((id) => [id, id === 'w' ? { version: 1, data: { x: 1 } } : { version: 1, data: { k: 1 } }]),

@@ -16,16 +16,20 @@ describe('LocalBackend', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks()
-    ;(window as any).electronAPI = { fs: mockFs }
+    Object.defineProperty(window, 'electronAPI', {
+      value: { fs: mockFs },
+      configurable: true,
+      writable: true,
+    })
     backend = new LocalBackend()
   })
 
   afterEach(() => {
-    delete (window as any).electronAPI
+    delete window.electronAPI
   })
 
   it('available() returns false when no electronAPI', () => {
-    delete (window as any).electronAPI
+    delete window.electronAPI
     expect(backend.available()).toBe(false)
   })
 
@@ -83,7 +87,7 @@ describe('LocalBackend', () => {
   })
 
   it('throws when api not available', async () => {
-    delete (window as any).electronAPI
+    delete window.electronAPI
     await expect(backend.read('/test.txt')).rejects.toThrow('Local filesystem not available (requires Electron)')
   })
 })

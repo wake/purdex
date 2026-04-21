@@ -25,7 +25,7 @@ function ImagePreviewPaneInner({ source, filePath }: { source: FileSource; fileP
     backend.read(filePath)
       .then((data) => {
         if (stale) return
-        url = URL.createObjectURL(new Blob([data]))
+        url = URL.createObjectURL(new Blob([new Uint8Array(data)]))
         setObjectUrl(url)
       })
       .catch((err: Error) => {

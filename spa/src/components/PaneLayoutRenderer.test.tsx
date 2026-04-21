@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
-import { PaneLayoutRenderer, isGrid4 } from './PaneLayoutRenderer'
+import { PaneLayoutRenderer } from './PaneLayoutRenderer'
+import { isGrid4 } from './pane-layout-grid'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import type { PaneLayout } from '../types/tab'
 

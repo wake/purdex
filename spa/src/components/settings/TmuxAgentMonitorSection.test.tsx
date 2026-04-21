@@ -7,6 +7,9 @@ import {
   fetchAgentMonitorChain,
   fetchAgentMonitorChains,
   fetchAgentMonitorProjection,
+  type AgentMonitorChainSummary,
+  type AgentMonitorProjectionSummary,
+  type AgentMonitorStepNode,
 } from '../../lib/host-api'
 
 vi.mock('../../lib/host-api', () => ({
@@ -23,6 +26,15 @@ function deferred<T>() {
     reject = rej
   })
   return { promise, resolve, reject }
+}
+
+type ChainDetailResponse = {
+  chain: AgentMonitorChainSummary
+  step_tree: AgentMonitorStepNode[]
+}
+
+type ProjectionResponse = {
+  projection: AgentMonitorProjectionSummary
 }
 
 describe('TmuxAgentMonitorSection', () => {
@@ -283,10 +295,10 @@ describe('TmuxAgentMonitorSection', () => {
   })
 
   it('ignores stale responses from an older selection request', async () => {
-    const chain1Detail = deferred<{ chain: { chain_id: string }; step_tree: Array<{ step: { step_id: string; chain_id: string; seq: number; kind: string; tmux_session: string; pane_id: string; agent_type: string; frame_id: string; parent_frame_id: string; event_name: string; decision: string; reason: string; payload_json: string; before_json: string; after_json: string; created_at: number }; children: never[] }> }>()
-    const chain2Detail = deferred<{ chain: { chain_id: string }; step_tree: Array<{ step: { step_id: string; chain_id: string; seq: number; kind: string; tmux_session: string; pane_id: string; agent_type: string; frame_id: string; parent_frame_id: string; event_name: string; decision: string; reason: string; payload_json: string; before_json: string; after_json: string; created_at: number }; children: never[] }> }>()
-    const chain1Projection = deferred<{ projection: { tmux_session: string; pane_id: string; primary_frame_id: string; top_frame_id: string; top_agent_type: string; latest_chain_id: string } }>()
-    const chain2Projection = deferred<{ projection: { tmux_session: string; pane_id: string; primary_frame_id: string; top_frame_id: string; top_agent_type: string; latest_chain_id: string } }>()
+    const chain1Detail = deferred<ChainDetailResponse>()
+    const chain2Detail = deferred<ChainDetailResponse>()
+    const chain1Projection = deferred<ProjectionResponse>()
+    const chain2Projection = deferred<ProjectionResponse>()
 
     vi.mocked(fetchAgentMonitorChains).mockResolvedValue({
       chains: [
@@ -340,7 +352,22 @@ describe('TmuxAgentMonitorSection', () => {
     fireEvent.click(screen.getByText('chain-2'))
 
     chain2Detail.resolve({
-      chain: { chain_id: 'chain-2' },
+      chain: {
+        chain_id: 'chain-2',
+        started_at: 101,
+        completed_at: 121,
+        terminal_status: 'completed',
+        terminal_reason: 'emit_broadcasted',
+        tmux_session: 'work',
+        pane_id: '%8',
+        root_agent_type: 'cc',
+        root_event_name: 'Stop',
+        root_reason: 'hook_post',
+        latest_step_kind: 'emit',
+        latest_decision: 'broadcasted',
+        latest_step_reason: 'session_code_resolved',
+        step_count: 1,
+      },
       step_tree: [{
         step: {
           step_id: 'step-2',
@@ -377,7 +404,22 @@ describe('TmuxAgentMonitorSection', () => {
     await waitFor(() => expect(screen.getByText('{"prompt":"second"}')).toBeInTheDocument())
 
     chain1Detail.resolve({
-      chain: { chain_id: 'chain-1' },
+      chain: {
+        chain_id: 'chain-1',
+        started_at: 100,
+        completed_at: 120,
+        terminal_status: 'completed',
+        terminal_reason: 'emit_broadcasted',
+        tmux_session: 'work',
+        pane_id: '%7',
+        root_agent_type: 'codex',
+        root_event_name: 'UserPromptSubmit',
+        root_reason: 'hook_post',
+        latest_step_kind: 'emit',
+        latest_decision: 'broadcasted',
+        latest_step_reason: 'session_code_resolved',
+        step_count: 1,
+      },
       step_tree: [{
         step: {
           step_id: 'step-1',

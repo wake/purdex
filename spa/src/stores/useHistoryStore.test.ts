@@ -13,6 +13,7 @@ function makeContent(kind: PaneContent['kind'] = 'dashboard'): PaneContent {
     case 'history': return { kind: 'history' }
     case 'browser': return { kind: 'browser', url: 'https://example.com' }
     case 'memory-monitor': return { kind: 'memory-monitor' }
+    default: return { kind: 'dashboard' }
   }
 }
 

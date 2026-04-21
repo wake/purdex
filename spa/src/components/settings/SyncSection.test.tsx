@@ -255,6 +255,10 @@ function installSnapshotSpy(): SnapshotCall[] {
       return meta
     },
     deleteLocal: async () => {},
+    demoteSessionPristine: async () => {},
+    rotateSessionPristine: async (bundle, trigger) => {
+      return stub.createSnapshot(bundle, trigger, { isSessionPristine: true })
+    },
     compact: async () => ({ kept: [], evicted: [] }),
     clear: async () => {},
   }

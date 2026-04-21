@@ -1,7 +1,7 @@
 import { useCallback, useRef } from 'react'
 import type { DragOverEvent } from '@dnd-kit/core'
 import { useWorkspaceStore } from '../store'
-import type { DragData } from './computeDragEndAction'
+import type { DragData, TabDragData } from './computeDragEndAction'
 
 /**
  * Optimistic cross-workspace make-way effect: when a tab drags over a tab in a
@@ -57,6 +57,6 @@ export function useCrossWorkspaceDragOver() {
     // Update the active drag data's sourceWsId so subsequent onDragOver events
     // see the tab's new home. dnd-kit passes data.current by reference, so
     // mutating it propagates.
-    ;(active.data.current as DragData).sourceWsId = toWs as never
+    ;(active.data.current as TabDragData).sourceWsId = toWs
   }, [])
 }

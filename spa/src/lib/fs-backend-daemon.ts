@@ -4,11 +4,13 @@ import type { FileStat, FileEntry } from '../types/fs'
 export class DaemonBackend implements FsBackend {
   readonly id = 'daemon'
   readonly label = 'Remote Host'
+  private readonly baseUrl: string
+  private readonly getHeaders: () => Record<string, string>
 
-  constructor(
-    private baseUrl: string,
-    private getHeaders: () => Record<string, string>,
-  ) {}
+  constructor(baseUrl: string, getHeaders: () => Record<string, string>) {
+    this.baseUrl = baseUrl
+    this.getHeaders = getHeaders
+  }
 
   available(): boolean {
     return !!this.baseUrl

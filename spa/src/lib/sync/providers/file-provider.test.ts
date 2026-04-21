@@ -13,6 +13,29 @@ const mockFs = {
   mkdir: vi.fn(),
 }
 
+function decodeBase64(value: string): Uint8Array {
+  const binary = atob(value)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return bytes
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
+
+function getWriteFileCalls(): Array<[path: string, content: string]> {
+  return mockFs.writeFile.mock.calls.map((call) => [String(call[0]), String(call[1])])
+}
+
+function findWriteFileCall(predicate: (path: string) => boolean): [string, string] | undefined {
+  return getWriteFileCalls().find(([path]) => predicate(path))
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -51,30 +74,24 @@ describe('FileProvider', () => {
       await provider.push(bundle)
 
       // manifest.json
-      const manifestCall = mockFs.writeFile.mock.calls.find(([path]: [string]) =>
-        path.endsWith('manifest.json'),
-      )
+      const manifestCall = findWriteFileCall((path) => path.endsWith('manifest.json'))
       expect(manifestCall).toBeDefined()
-      expect(manifestCall[0]).toBe(`${SYNC_FOLDER}/manifest.json`)
-      expect(JSON.parse(manifestCall[1])).toEqual(bundle)
+      expect(manifestCall?.[0]).toBe(`${SYNC_FOLDER}/manifest.json`)
+      expect(JSON.parse(manifestCall?.[1] ?? '')).toEqual(bundle)
 
       // history snapshot
-      const historyCall = mockFs.writeFile.mock.calls.find(([path]: [string]) =>
-        path.includes('/history/'),
-      )
+      const historyCall = findWriteFileCall((path) => path.includes('/history/'))
       expect(historyCall).toBeDefined()
-      expect(historyCall[0]).toMatch(/\/history\/.*\.json$/)
-      expect(JSON.parse(historyCall[1])).toEqual(bundle)
+      expect(historyCall?.[0]).toMatch(/\/history\/.*\.json$/)
+      expect(JSON.parse(historyCall?.[1] ?? '')).toEqual(bundle)
     })
 
     it('history snapshot filename uses ISO timestamp with colons replaced', async () => {
       const provider = createFileProvider(SYNC_FOLDER, mockFs)
       await provider.push(makeBundle())
 
-      const historyCall = mockFs.writeFile.mock.calls.find(([path]: [string]) =>
-        path.includes('/history/'),
-      )
-      const filename = historyCall[0].split('/').pop() as string
+      const historyCall = findWriteFileCall((path) => path.includes('/history/'))
+      const filename = historyCall?.[0].split('/').pop()
       // e.g. 2026-04-16T12-00-00-000Z.json
       expect(filename).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/)
     })
@@ -126,14 +143,11 @@ describe('FileProvider', () => {
       const data = new Uint8Array([1, 2, 3, 4, 5])
       await provider.pushChunks({ abc123: data })
 
-      const chunkCall = mockFs.writeFile.mock.calls.find(([path]: [string]) =>
-        path.includes('/chunks/'),
-      )
+      const chunkCall = findWriteFileCall((path) => path.includes('/chunks/'))
       expect(chunkCall).toBeDefined()
-      expect(chunkCall[0]).toBe(`${SYNC_FOLDER}/chunks/abc123.bin`)
+      expect(chunkCall?.[0]).toBe(`${SYNC_FOLDER}/chunks/abc123.bin`)
       // value must be base64-encoded string
-      const decoded = Buffer.from(chunkCall[1], 'base64')
-      expect(new Uint8Array(decoded)).toEqual(data)
+      expect(decodeBase64(chunkCall?.[1] ?? '')).toEqual(data)
     })
 
     it('calls ensureDirs before writing chunks', async () => {
@@ -155,7 +169,7 @@ describe('FileProvider', () => {
   describe('pullChunks', () => {
     it('reads and decodes chunk files', async () => {
       const data = new Uint8Array([10, 20, 30])
-      const b64 = Buffer.from(data).toString('base64')
+      const b64 = encodeBase64(data)
       mockFs.readFile.mockResolvedValue(b64)
 
       const provider = createFileProvider(SYNC_FOLDER, mockFs)
@@ -177,7 +191,7 @@ describe('FileProvider', () => {
 
     it('returns only present chunks when some are missing', async () => {
       const data = new Uint8Array([99])
-      const b64 = Buffer.from(data).toString('base64')
+      const b64 = encodeBase64(data)
       const notFound = Object.assign(new Error('no such file'), { code: 'ENOENT' })
 
       mockFs.readFile.mockImplementation(async (path: string) => {

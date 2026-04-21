@@ -15,12 +15,14 @@ function resetStores() {
 describe('closeTab', () => {
   beforeEach(() => {
     resetStores()
-    // @ts-expect-error -- test-only partial mock
-    window.electronAPI = { destroyBrowserView: vi.fn() }
+    Object.defineProperty(window, 'electronAPI', {
+      value: { destroyBrowserView: vi.fn() },
+      configurable: true,
+      writable: true,
+    })
   })
 
   afterEach(() => {
-    // @ts-expect-error -- cleanup
     delete window.electronAPI
   })
 

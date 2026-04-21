@@ -39,13 +39,22 @@ function createBackend(): FsBackend & {
   write: ReturnType<typeof vi.fn>
   stat: ReturnType<typeof vi.fn>
 } {
+  const read = vi.fn(async (_path: string) => new Uint8Array())
+  const write = vi.fn(async (_path: string, _content: Uint8Array) => {})
+  const stat = vi.fn(async (_path: string) => ({
+    isFile: true,
+    isDirectory: false,
+    size: 0,
+    mtime: 0,
+  }))
+
   return {
     id: 'test-backend',
     label: 'Test Backend',
     available: vi.fn(() => true),
-    read: vi.fn(),
-    write: vi.fn(),
-    stat: vi.fn(),
+    read,
+    write,
+    stat,
     list: vi.fn(),
     mkdir: vi.fn(),
     delete: vi.fn(),

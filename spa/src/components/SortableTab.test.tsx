@@ -53,7 +53,7 @@ beforeEach(() => {
   cleanup()
   vi.clearAllMocks()
   clearModuleRegistry()
-  registerModule({ id: 'session', name: 'Session', pane: { kind: 'tmux-session', component: () => null } })
+  registerModule({ id: 'session', name: 'Session', panes: [{ kind: 'tmux-session', component: () => null }] })
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
   useHostStore.setState({ runtime: {} })

@@ -25,7 +25,7 @@ function PdfPreviewPaneInner({ source, filePath }: { source: FileSource; filePat
     backend.read(filePath)
       .then((data) => {
         if (stale) return
-        url = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }))
+        url = URL.createObjectURL(new Blob([new Uint8Array(data)], { type: 'application/pdf' }))
         setObjectUrl(url)
       })
       .catch((err: Error) => {

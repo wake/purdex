@@ -37,11 +37,9 @@ export function createDaemonProvider(hostId: string, clientId: string): SyncProv
       return res.json() as Promise<SyncBundle | null>
     },
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    async pushChunks(chunks: Record<string, Uint8Array>): Promise<void> {},
+    async pushChunks(_chunks: Record<string, Uint8Array>): Promise<void> {},
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    async pullChunks(hashes: string[]): Promise<Record<string, Uint8Array>> { return {} },
+    async pullChunks(_hashes: string[]): Promise<Record<string, Uint8Array>> { return {} },
 
     async listHistory(limit: number): Promise<SyncSnapshot[]> {
       if (!Number.isInteger(limit) || limit < 1) {

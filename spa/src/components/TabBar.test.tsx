@@ -9,8 +9,8 @@ import { useSessionStore } from '../stores/useSessionStore'
 beforeEach(() => {
   cleanup()
   clearModuleRegistry()
-  registerModule({ id: 'session', name: 'Session', pane: { kind: 'tmux-session', component: () => null } })
-  registerModule({ id: 'dashboard', name: 'Dashboard', pane: { kind: 'dashboard', component: () => null } })
+  registerModule({ id: 'session', name: 'Session', panes: [{ kind: 'tmux-session', component: () => null }] })
+  registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: () => null }] })
   // Provide sessions keyed by hostId for SortableTab's label lookups
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
 })

@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createQuickCommandsContributor } from './quick-commands'
 import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import type { QuickCommand } from '../../../stores/useQuickCommandStore'
 import type { FullPayload } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -16,7 +17,7 @@ const DEFAULT_STATE = {
     { id: 'start-cc', name: 'Start Claude Code', command: 'claude -p --verbose --output-format stream-json', category: 'agent' },
     { id: 'start-codex', name: 'Start Codex', command: 'codex', category: 'agent' },
   ],
-  byHost: {} as Record<string, unknown[]>,
+  byHost: {} as Record<string, QuickCommand[]>,
 }
 
 // ---------------------------------------------------------------------------
