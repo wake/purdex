@@ -1,7 +1,9 @@
 /* eslint-disable react-refresh/only-export-components */
-import { registerModule } from './module-registry'
+import { registerModule, getModules } from './module-registry'
 import { registerNewTabProvider } from './new-tab-registry'
 import { registerSettingsSection } from './settings-section-registry'
+import { registerSettingsContribution, clearContributions } from './settings-contribution-registry'
+import type { SettingsContribution } from './settings-contribution-types'
 import { findPane } from './pane-tree'
 import { getPlatformCapabilities } from './platform'
 import { SessionPaneContent } from '../components/SessionPaneContent'
@@ -81,6 +83,63 @@ function InterfaceSectionHost() {
     return <div className="flex-1 p-6 text-sm text-text-muted">Loading...</div>
   }
   return <InterfaceSection activeSubsection={active} onSelectSubsection={setActive} />
+}
+
+/**
+ * Dispatches all declared `ModuleDefinition.settings` entries into the
+ * settings contribution registry, and enforces HSR Invariant I1:
+ *
+ *   A module MUST NOT expose the same scope via both the legacy
+ *   globalConfig/workspaceConfig fields AND the new `settings` field.
+ *   (host scope has no legacy counterpart so no conflict is possible.)
+ *
+ * Called at the tail of `registerBuiltinModules()` after all
+ * `registerModule(...)` calls. Safe to call multiple times only if the
+ * contribution registry is cleared in between (HMR handled via
+ * `import.meta.hot.dispose`).
+ */
+export function dispatchSettingsContributions(): void {
+  for (const module of getModules()) {
+    const settings = module.settings
+    if (!settings || settings.length === 0) continue
+
+    // Invariant I1 — check purdex scope clash.
+    if (module.globalConfig && module.globalConfig.length > 0) {
+      const hasPurdexContribution = settings.some((s) => s.scope === 'purdex')
+      if (hasPurdexContribution) {
+        throw new Error(
+          `Invariant I1 violated: module "${module.id}" exposes purdex scope via both ` +
+            `globalConfig (legacy) and settings[scope='purdex']. Pick one.`,
+        )
+      }
+    }
+
+    // Invariant I1 — check workspace scope clash.
+    if (module.workspaceConfig && module.workspaceConfig.length > 0) {
+      const hasWorkspaceContribution = settings.some((s) => s.scope === 'workspace')
+      if (hasWorkspaceContribution) {
+        throw new Error(
+          `Invariant I1 violated: module "${module.id}" exposes workspace scope via both ` +
+            `workspaceConfig (legacy) and settings[scope='workspace']. Pick one.`,
+        )
+      }
+    }
+
+    for (const decl of settings) {
+      const full: SettingsContribution = {
+        ...decl,
+        moduleId: module.id,
+        id: `${module.id}.${decl.localId}`,
+      }
+      registerSettingsContribution(full)
+    }
+  }
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    clearContributions()
+  })
 }
 
 export function registerBuiltinModules(): void {
@@ -363,4 +422,8 @@ export function registerBuiltinModules(): void {
       fetchPaneHome: (hostId, sessionCode, signal) => fetchSessionHome(hostId, sessionCode, signal),
     },
   })
+
+  // Dispatch module-declared settings contributions into the contribution registry.
+  // Must run AFTER all registerModule(...) calls so every module is visible.
+  dispatchSettingsContributions()
 }
