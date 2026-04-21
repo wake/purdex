@@ -2,11 +2,13 @@
 import { lazy, Suspense, useEffect, useCallback, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useEditorStore } from '../../stores/useEditorStore'
+import { useTabStore } from '../../stores/useTabStore'
 import { getFsBackend } from '../../lib/fs-backend'
 import { MonacoWrapper } from './MonacoWrapper'
 import { DiffView } from './DiffView'
 import { EditorToolbar } from './EditorToolbar'
 import { EditorStatusBar } from './EditorStatusBar'
+import { findPane } from '../../lib/pane-tree'
 import type { FileSource } from '../../types/fs'
 
 const TiptapEditor = lazy(() =>
@@ -30,19 +32,59 @@ function detectLanguage(filePath: string): string {
   return map[ext] ?? 'plaintext'
 }
 
+function fileName(filePath: string): string {
+  return filePath.split('/').pop() ?? filePath
+}
+
+function siblingPath(filePath: string, nextBaseName: string): string {
+  const separatorIndex = filePath.lastIndexOf('/')
+  return separatorIndex === -1 ? nextBaseName : `${filePath.slice(0, separatorIndex)}/${nextBaseName}`
+}
+
+function isInvalidRename(name: string): boolean {
+  const trimmed = name.trim()
+  return trimmed === '' || trimmed === '.' || trimmed === '..' || trimmed.includes('/') || trimmed.includes('\\')
+}
+
+function isCaseOnlyRename(oldPath: string, nextPath: string): boolean {
+  return oldPath !== nextPath && oldPath.toLowerCase() === nextPath.toLowerCase()
+}
+
+function renameWarningMessage(error: unknown): string {
+  if (error instanceof Error) {
+    if (/exist/i.test(error.message)) return 'File already exists'
+    return error.message || 'Rename failed'
+  }
+  return 'Rename failed'
+}
+
 // Outer component does kind guard to avoid hooks-after-early-return
 export function EditorPane({ pane, isActive }: PaneRendererProps) {
   const content = pane.content
   if (content.kind !== 'editor') return null
-  return <EditorPaneInner source={content.source} filePath={content.filePath} isActive={isActive} />
+  return <EditorPaneInner paneId={pane.id} source={content.source} filePath={content.filePath} isActive={isActive} />
 }
 
-function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; filePath: string; isActive: boolean }) {
+function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: string; source: FileSource; filePath: string; isActive: boolean }) {
   const key = bufferKey(source, filePath)
   const buffer = useEditorStore((s) => s.buffers[key])
+  const paneState = useEditorStore((s) => s.paneStates[paneId])
   const isMarkdown = filePath.endsWith('.md') || filePath.endsWith('.mdx')
-  const [editorMode, setEditorMode] = useState<'raw' | 'wysiwyg'>('raw')
-  const [showDiff, setShowDiff] = useState(false)
+  const editorMode = paneState?.editorMode ?? 'raw'
+  const showDiff = paneState?.showDiff ?? false
+  const [isRenaming, setIsRenaming] = useState(false)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [renameWarning, setRenameWarning] = useState<string>()
+
+  useEffect(() => {
+    useEditorStore.getState().attachPane(paneId, key)
+  }, [paneId, key])
+
+  useEffect(() => {
+    setIsRenaming(false)
+    setRenameDraft('')
+    setRenameWarning(undefined)
+  }, [filePath])
 
   // Load file on mount, cleanup buffer on unmount
   useEffect(() => {
@@ -70,10 +112,15 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
     return () => { stale = true }
   }, [key, source, filePath])
 
-  // Cleanup buffer on unmount
+  // Cleanup pane state only when the pane is truly gone, not just hidden by tab switching.
   useEffect(() => {
-    return () => { useEditorStore.getState().closeBuffer(key) }
-  }, [key])
+    return () => {
+      const paneStillExists = Object.values(useTabStore.getState().tabs).some((tab) => findPane(tab.layout, paneId))
+      if (!paneStillExists) {
+        useEditorStore.getState().closePane(paneId)
+      }
+    }
+  }, [paneId])
 
   // Detect external file changes when tab becomes active
   useEffect(() => {
@@ -117,11 +164,51 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
       await backend.write(filePath, encoded)
       const newStat = await backend.stat(filePath)
       useEditorStore.getState().markSaved(key, { mtime: newStat.mtime, size: newStat.size })
-      setShowDiff(false)
+      useEditorStore.getState().setShowDiff(paneId, false)
     } catch (err) {
       console.error('[editor] Save failed:', err)
     }
-  }, [key, source, filePath])
+  }, [filePath, key, paneId, source])
+
+  const handleRenameSubmit = useCallback(async () => {
+    const backend = getFsBackend(source)
+    if (!backend) return
+
+    const nextName = renameDraft.trim()
+    if (isInvalidRename(nextName)) {
+      setRenameWarning('Invalid file name')
+      return
+    }
+
+    if (nextName === fileName(filePath)) {
+      setIsRenaming(false)
+      setRenameDraft('')
+      setRenameWarning(undefined)
+      return
+    }
+
+    const nextPath = siblingPath(filePath, nextName)
+    if (!isCaseOnlyRename(filePath, nextPath)) {
+      try {
+        await backend.stat(nextPath)
+        setRenameWarning('File already exists')
+        return
+      } catch {
+        // Missing target is expected.
+      }
+    }
+
+    try {
+      await backend.rename(filePath, nextPath)
+      useTabStore.getState().renameEditorPanes(source, filePath, nextPath)
+      useEditorStore.getState().renameBuffer(key, bufferKey(source, nextPath))
+      setIsRenaming(false)
+      setRenameDraft('')
+      setRenameWarning(undefined)
+    } catch (error) {
+      setRenameWarning(renameWarningMessage(error))
+    }
+  }, [filePath, key, renameDraft, source])
 
   if (!buffer) {
     return <div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading...</div>
@@ -135,9 +222,29 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
         isMarkdown={isMarkdown}
         editorMode={editorMode}
         showDiff={showDiff}
+        isRenaming={isRenaming}
+        renameValue={renameDraft}
+        renameWarning={renameWarning}
         onSave={handleSave}
-        onToggleMode={isMarkdown ? () => setEditorMode((m) => (m === 'raw' ? 'wysiwyg' : 'raw')) : undefined}
-        onDiff={() => setShowDiff((d) => !d)}
+        onToggleMode={isMarkdown ? () => useEditorStore.getState().setEditorMode(paneId, editorMode === 'raw' ? 'wysiwyg' : 'raw') : undefined}
+        onDiff={() => useEditorStore.getState().setShowDiff(paneId, !showDiff)}
+        onRenameStart={() => {
+          setIsRenaming(true)
+          setRenameDraft(fileName(filePath))
+          setRenameWarning(undefined)
+        }}
+        onRenameChange={(value) => {
+          setRenameDraft(value)
+          if (renameWarning) setRenameWarning(undefined)
+        }}
+        onRenameSubmit={() => {
+          void handleRenameSubmit()
+        }}
+        onRenameCancel={() => {
+          setIsRenaming(false)
+          setRenameDraft('')
+          setRenameWarning(undefined)
+        }}
       />
       <div className="flex-1 min-h-0 overflow-hidden">
         {showDiff ? (
@@ -150,8 +257,11 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
           <MonacoWrapper
             content={buffer.content}
             language={buffer.language}
+            modelId={buffer.modelId}
+            initialViewState={paneState?.monacoViewState ?? null}
             onChange={(value) => useEditorStore.getState().updateContent(key, value)}
-            onCursorChange={(line, col) => useEditorStore.getState().updateCursor(key, line, col)}
+            onCursorChange={(line, col) => useEditorStore.getState().updateCursor(paneId, line, col)}
+            onViewStateChange={(viewState) => useEditorStore.getState().saveMonacoViewState(paneId, viewState)}
             onSave={handleSave}
           />
         ) : (
@@ -166,8 +276,8 @@ function EditorPaneInner({ source, filePath, isActive }: { source: FileSource; f
       </div>
       <EditorStatusBar
         language={buffer.language}
-        line={buffer.cursorPosition.line}
-        column={buffer.cursorPosition.column}
+        line={paneState?.cursorPosition.line ?? 1}
+        column={paneState?.cursorPosition.column ?? 1}
       />
     </div>
   )

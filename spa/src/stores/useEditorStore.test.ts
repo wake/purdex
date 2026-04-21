@@ -6,6 +6,58 @@ describe('useEditorStore', () => {
     useEditorStore.getState().clearAllBuffers()
   })
 
+  it('keeps shared buffer state separate from pane-local view state', () => {
+    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript')
+    useEditorStore.getState().attachPane('pane-a', 'key1')
+    useEditorStore.getState().attachPane('pane-b', 'key1')
+
+    useEditorStore.getState().setEditorMode('pane-a', 'wysiwyg')
+    useEditorStore.getState().setShowDiff('pane-a', true)
+    useEditorStore.getState().updateCursor('pane-a', 10, 5)
+
+    const state = useEditorStore.getState()
+    expect(state.buffers.key1?.content).toBe('hello')
+    expect(state.paneStates['pane-a']).toMatchObject({
+      bufferKey: 'key1',
+      editorMode: 'wysiwyg',
+      showDiff: true,
+      cursorPosition: { line: 10, column: 5 },
+    })
+    expect(state.paneStates['pane-b']).toMatchObject({
+      bufferKey: 'key1',
+      editorMode: 'raw',
+      showDiff: false,
+      cursorPosition: { line: 1, column: 1 },
+    })
+  })
+
+  it('only closes a shared buffer when the last pane detaches', () => {
+    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript')
+    useEditorStore.getState().attachPane('pane-a', 'key1')
+    useEditorStore.getState().attachPane('pane-b', 'key1')
+
+    useEditorStore.getState().closePane('pane-a')
+    expect(useEditorStore.getState().buffers['key1']).toBeDefined()
+
+    useEditorStore.getState().closePane('pane-b')
+    expect(useEditorStore.getState().buffers['key1']).toBeUndefined()
+  })
+
+  it('renames a shared buffer key and preserves model identity', () => {
+    useEditorStore.getState().openBuffer('old-key', 'hello', 'typescript')
+    useEditorStore.getState().attachPane('pane-a', 'old-key')
+
+    const modelId = useEditorStore.getState().buffers['old-key']?.modelId
+    useEditorStore.getState().renameBuffer('old-key', 'new-key')
+
+    expect(useEditorStore.getState().buffers['old-key']).toBeUndefined()
+    expect(useEditorStore.getState().buffers['new-key']).toMatchObject({
+      content: 'hello',
+      modelId,
+    })
+    expect(useEditorStore.getState().paneStates['pane-a']?.bufferKey).toBe('new-key')
+  })
+
   it('opens a buffer with content', () => {
     useEditorStore.getState().openBuffer('key1', 'hello', 'typescript')
     const buf = useEditorStore.getState().buffers['key1']
@@ -50,9 +102,10 @@ describe('useEditorStore', () => {
 
   it('updateCursor stores cursor position', () => {
     useEditorStore.getState().openBuffer('key1', '', 'plaintext')
-    useEditorStore.getState().updateCursor('key1', 10, 5)
-    const buf = useEditorStore.getState().buffers['key1']
-    expect(buf.cursorPosition).toEqual({ line: 10, column: 5 })
+    useEditorStore.getState().attachPane('pane-a', 'key1')
+    useEditorStore.getState().updateCursor('pane-a', 10, 5)
+    const pane = useEditorStore.getState().paneStates['pane-a']
+    expect(pane.cursorPosition).toEqual({ line: 10, column: 5 })
   })
 
   it('markSaved updates lastStat when stat is provided', () => {

@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { EditorPane } from '../EditorPane'
 import { useEditorStore } from '../../../stores/useEditorStore'
+import { useTabStore } from '../../../stores/useTabStore'
 import type { Pane } from '../../../types/tab'
 import type { FsBackend } from '../../../lib/fs-backend'
 
@@ -23,9 +24,9 @@ vi.mock('../EditorStatusBar', () => ({
   EditorStatusBar: () => <div data-testid="editor-status-bar" />,
 }))
 
-function createPane(filePath = '/notes/editor.md'): Pane {
+function createPane(filePath = '/notes/editor.md', paneId = 'pane-editor'): Pane {
   return {
-    id: 'pane-editor',
+    id: paneId,
     content: {
       kind: 'editor',
       source: { type: 'inapp' },
@@ -38,6 +39,7 @@ function createBackend(): FsBackend & {
   read: ReturnType<typeof vi.fn>
   write: ReturnType<typeof vi.fn>
   stat: ReturnType<typeof vi.fn>
+  rename: ReturnType<typeof vi.fn>
 } {
   return {
     id: 'test-backend',
@@ -50,6 +52,11 @@ function createBackend(): FsBackend & {
     mkdir: vi.fn(),
     delete: vi.fn(),
     rename: vi.fn(),
+  } as FsBackend & {
+    read: ReturnType<typeof vi.fn>
+    write: ReturnType<typeof vi.fn>
+    stat: ReturnType<typeof vi.fn>
+    rename: ReturnType<typeof vi.fn>
   }
 }
 
@@ -57,10 +64,61 @@ function getBufferKey(filePath: string): string {
   return `inapp:${filePath}`
 }
 
+function registerTabPane(pane: Pane, tabId = 'tab-1') {
+  useTabStore.setState({
+    tabs: {
+      [tabId]: {
+        id: tabId,
+        pinned: false,
+        locked: false,
+        createdAt: 1,
+        layout: { type: 'leaf', pane },
+      },
+    },
+    tabOrder: [tabId],
+    activeTabId: tabId,
+    visitHistory: [],
+  })
+}
+
 describe('EditorPane', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+  })
+
+  it('preserves pane-local editor state across unmount when the pane still exists in tabs', async () => {
+    const pane = createPane('/notes/keep-state.md')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('hello world'))
+    backend.stat.mockResolvedValue({
+      isFile: true,
+      isDirectory: false,
+      size: 11,
+      mtime: 123,
+    })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    const { unmount } = render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/keep-state.md')]).toBeDefined()
+    })
+
+    act(() => {
+      useEditorStore.getState().setEditorMode(pane.id, 'wysiwyg')
+      useEditorStore.getState().setShowDiff(pane.id, true)
+    })
+
+    unmount()
+
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/keep-state.md')]).toBeDefined()
+    expect(useEditorStore.getState().paneStates[pane.id]).toMatchObject({
+      editorMode: 'wysiwyg',
+      showDiff: true,
+    })
   })
 
   it('loads the initial file content through FsBackend', async () => {
@@ -89,6 +147,161 @@ describe('EditorPane', () => {
     expect(screen.getByText('loaded.md')).toBeInTheDocument()
     expect(backend.read).toHaveBeenCalledWith('/notes/loaded.md')
     expect(backend.stat).toHaveBeenCalledWith('/notes/loaded.md')
+  })
+
+  it('shows the full file path as breadcrumbs in the toolbar', async () => {
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('hello world'))
+    backend.stat.mockResolvedValue({
+      isFile: true,
+      isDirectory: false,
+      size: 11,
+      mtime: 123,
+    })
+    getFsBackendMock.mockReturnValue(backend)
+
+    render(<EditorPane pane={createPane('/notes/project/loaded.md')} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/project/loaded.md')]).toBeDefined()
+    })
+
+    expect(screen.getByText('notes')).toBeInTheDocument()
+    expect(screen.getByText('project')).toBeInTheDocument()
+    expect(screen.getByText('loaded.md')).toBeInTheDocument()
+  })
+
+  it('enters rename mode on double click and rejects invalid base names', async () => {
+    const pane = createPane('/notes/rename.md')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('hello world'))
+    backend.stat.mockResolvedValue({
+      isFile: true,
+      isDirectory: false,
+      size: 11,
+      mtime: 123,
+    })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/rename.md')]).toBeDefined()
+    })
+
+    fireEvent.doubleClick(screen.getByText('rename.md'))
+    fireEvent.change(screen.getByDisplayValue('rename.md'), { target: { value: '..' } })
+    fireEvent.keyDown(screen.getByDisplayValue('..'), { key: 'Enter' })
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Invalid file name')
+    expect(backend.rename).not.toHaveBeenCalled()
+  })
+
+  it('warns when the rename target already exists', async () => {
+    const pane = createPane('/notes/rename.md')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('hello world'))
+    backend.stat
+      .mockResolvedValueOnce({
+        isFile: true,
+        isDirectory: false,
+        size: 11,
+        mtime: 123,
+      })
+      .mockResolvedValueOnce({
+        isFile: true,
+        isDirectory: false,
+        size: 20,
+        mtime: 456,
+      })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/rename.md')]).toBeDefined()
+    })
+
+    fireEvent.doubleClick(screen.getByText('rename.md'))
+    fireEvent.change(screen.getByDisplayValue('rename.md'), { target: { value: 'taken.md' } })
+    fireEvent.keyDown(screen.getByDisplayValue('taken.md'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('File already exists')
+    })
+
+    expect(backend.rename).not.toHaveBeenCalled()
+  })
+
+  it('renames all matching panes and preserves the shared buffer', async () => {
+    const paneA = createPane('/notes/rename.md', 'pane-a')
+    const paneB = createPane('/notes/rename.md', 'pane-b')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('hello world'))
+    backend.rename.mockResolvedValue(undefined)
+    backend.stat
+      .mockResolvedValueOnce({
+        isFile: true,
+        isDirectory: false,
+        size: 11,
+        mtime: 123,
+      })
+      .mockResolvedValueOnce({
+        isFile: true,
+        isDirectory: false,
+        size: 11,
+        mtime: 123,
+      })
+      .mockRejectedValueOnce(new Error('not found'))
+    getFsBackendMock.mockReturnValue(backend)
+    useTabStore.setState({
+      tabs: {
+        'tab-a': {
+          id: 'tab-a',
+          pinned: false,
+          locked: false,
+          createdAt: 1,
+          layout: { type: 'leaf', pane: paneA },
+        },
+        'tab-b': {
+          id: 'tab-b',
+          pinned: false,
+          locked: false,
+          createdAt: 2,
+          layout: { type: 'leaf', pane: paneB },
+        },
+      },
+      tabOrder: ['tab-a', 'tab-b'],
+      activeTabId: 'tab-a',
+      visitHistory: [],
+    })
+
+    render(<EditorPane pane={paneA} isActive />)
+    render(<EditorPane pane={paneB} isActive={false} />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/rename.md')]).toBeDefined()
+    })
+
+    fireEvent.doubleClick(screen.getAllByText('rename.md')[0])
+    fireEvent.change(screen.getByDisplayValue('rename.md'), { target: { value: 'renamed.md' } })
+    fireEvent.keyDown(screen.getByDisplayValue('renamed.md'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(backend.rename).toHaveBeenCalledWith('/notes/rename.md', '/notes/renamed.md')
+    })
+
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/rename.md')]).toBeUndefined()
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/renamed.md')]).toBeDefined()
+
+    const tabPaths = Object.values(useTabStore.getState().tabs).map((tab) =>
+      tab.layout.type === 'leaf' && tab.layout.pane.content.kind === 'editor'
+        ? tab.layout.pane.content.filePath
+        : null,
+    )
+    expect(tabPaths).toEqual(['/notes/renamed.md', '/notes/renamed.md'])
   })
 
   it('saves dirty content and marks the buffer clean on success', async () => {
