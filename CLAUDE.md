@@ -24,6 +24,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Daemon**: Go / net/http / gorilla/websocket / creack/pty / modernc.org/sqlite
 - **SPA**: React 19 / Vite 8 / Zustand 5 / Tailwind 4 / Vitest / Phosphor Icons / xterm.js 6
 - **Electron**: electron-vite / electron-builder / contextBridge IPC
+- **Icon 圖示**: 統一使用 Phosphor Icons
 
 ## 打包與更新
 
@@ -38,20 +39,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **改動後必須重新打包**：push 新 commit 後須在 Mini 跑 `pnpm run electron:build`，否則 `out/` 裡的 baked-in hash 是舊的，Air 端會無限顯示 "Update available"
 - **SPA 走 HMR 不受影響**：dev server 跑著時 SPA 改動即時生效，但 Electron main/preload 改動仍需打包 + dev update
 
-## 開發流程
+## 完整開發流程
 
-- **絕對不能直推 main**，即使 hotfix 也必須走 PR + review
-- TDD：先寫測試再實作
-- 每個 task 獨立 commit
-- 圖示統一使用 Phosphor Icons
-- 每個 PR merge 後，必須更新 `VERSION` + `CHANGELOG.md` 並 commit push
+**絕對不能直推 main**，即使 hotfix 也必須走 PR + review
+**TDD：先寫測試再實作**
+**每個 task 獨立 commit**
 
-### PR Review 兩輪制（Codex 跨模型第二意見）
+1. 依照需求 / 請求提出建議方案
+2. 依據討論完成方案撰寫 spec，必須按照合適 review 大小切分 phase
+3. 委派 codex 審閱 spec
+4. 依據定稿的 spec 撰寫 plan
+5. 委派 codex 審閱 plan
+6. 依據 plan 使用自己的 subagent 進行開發
+7. PR & 委派 codex 兩輪深度 review
+8. 確認完成後進行 PR mrege，必須更新 `VERSION` + `CHANGELOG.md` 並 commit push
 
-**第一輪：`/codex:review --base main --background`**
-- 標準 code review（跨模型差異化檢查）
+### PR Review 兩輪制 (委派 Codex 進行)
 
-**第二輪：3 個 parallel `/codex:adversarial-review --base main --background <focus>`**
+**第一輪：標準 code review（跨模型差異化檢查）**
+
+**第二輪：3 個 parallel**
 - 攻擊方：找 bug / 安全漏洞 / race / 邊界條件
 - 防守方：驗證設計合理性 / 架構一致性 / API 邊界
 - 檔案體質：過大檔案 / SRP 違反 / 職責不清
@@ -75,7 +82,7 @@ Focus text 越具體越好（指定檔案 / 具體風險點 / 設計疑問）。
 - **高信心**：確定是真正問題而非誤報的項目
 - **低複雜**：修復成本低、可快速解決的項目
 
-符合以上任一條件即優先處理。需要討論的項目先討論完再修。當下不修的問題建立 `gh issue` 追蹤。
+只有低關聯 + 中高複雜可以延後，其他統一優先處理。需要討論的項目先討論完再修。當下不修的問題建立 `gh issue` 追蹤。
 
 ### Issue 管理
 
