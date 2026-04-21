@@ -138,6 +138,59 @@ describe('host delete cascade', () => {
     expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toEqual({ homePath: '/tmp/a' })
   })
 
+  it('undo skips restore when the same host id was recreated during the undo window', () => {
+    // Simulate user writing settings, then deleting the host.
+    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/old' })
+
+    const restore = deleteHostCascade(HOST_A, true)
+    expect(useHostStore.getState().hosts[HOST_A]).toBeUndefined()
+    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toBeUndefined()
+
+    // Simulate cross-window BroadcastChannel sync or import re-creating a
+    // distinct host with the same id during the undo window, and the user
+    // writing new settings for that recreated host.
+    useHostStore.setState((s) => ({
+      hosts: {
+        ...s.hosts,
+        [HOST_A]: { id: HOST_A, name: 'Host A (recreated)', ip: '9.9.9.9', port: 7860, order: 2 },
+      },
+      hostOrder: [...s.hostOrder, HOST_A],
+    }))
+    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/new' })
+
+    restore()
+
+    // Stale snapshot settings must NOT overwrite the user's new settings
+    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toEqual({ homePath: '/tmp/new' })
+    // Recreated host entry must survive (not be clobbered by snapshot)
+    expect(useHostStore.getState().hosts[HOST_A]?.name).toBe('Host A (recreated)')
+    expect(useHostStore.getState().hosts[HOST_A]?.ip).toBe('9.9.9.9')
+  })
+
+  it('undo skips session restore when host was recreated during the undo window', () => {
+    const sessions: Session[] = [makeSession('dev001', 'Dev')]
+    useSessionStore.getState().replaceHost(HOST_A, sessions)
+
+    const restore = deleteHostCascade(HOST_A, true)
+    expect(useSessionStore.getState().sessions[HOST_A]).toBeUndefined()
+
+    // Recreate host with same id and a fresh (different) sessions list
+    useHostStore.setState((s) => ({
+      hosts: {
+        ...s.hosts,
+        [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 2 },
+      },
+      hostOrder: [...s.hostOrder, HOST_A],
+    }))
+    const freshSessions: Session[] = [makeSession('dev999', 'Fresh')]
+    useSessionStore.getState().replaceHost(HOST_A, freshSessions)
+
+    restore()
+
+    // Stale snapshot sessions must NOT overwrite the freshly written list
+    expect(useSessionStore.getState().sessions[HOST_A]).toEqual(freshSessions)
+  })
+
   it('undo restores host at original position', () => {
     const restore = deleteHostCascade(HOST_A, true)
     expect(useHostStore.getState().hostOrder).toEqual([HOST_B])

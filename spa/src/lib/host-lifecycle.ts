@@ -118,8 +118,18 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
 
   // Return undo function
   return () => {
+    // Guard against host-recreation race: if another code path (import,
+    // cross-window BroadcastChannel sync, user re-add) re-created a host
+    // with the same id during the undo window, the current entry is a
+    // different entity than the one we snapshotted. Skip any restore that
+    // would overwrite the user's freshly written state (settings, sessions,
+    // agent/stream data). addHost itself already dedupes, but reorderHosts
+    // and setActiveHost would otherwise silently mutate the new host's
+    // position / activation.
+    const hostWasRecreated = useHostStore.getState().hosts[hostId] !== undefined
+
     // --- Restore host + hostOrder position ---
-    if (snapshot.host) {
+    if (snapshot.host && !hostWasRecreated) {
       useHostStore.getState().addHost(snapshot.host)
       // Restore original hostOrder position
       useHostStore.getState().reorderHosts(snapshot.hostOrder)
@@ -129,11 +139,11 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     }
 
     // --- Restore sessions ---
-    if (snapshot.sessions) {
+    if (snapshot.sessions && !hostWasRecreated) {
       useSessionStore.getState().replaceHost(hostId, snapshot.sessions)
     }
 
-    if (snapshot.hostSettings) {
+    if (snapshot.hostSettings && !hostWasRecreated) {
       useHostSettingsStore.setState((state) => ({
         hosts: {
           ...state.hosts,
@@ -144,7 +154,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
 
     // --- Restore AgentStore data ---
     const ag = useAgentStore.getState()
-    if (Object.keys(snapshot.agentEvents).length > 0) {
+    if (!hostWasRecreated && Object.keys(snapshot.agentEvents).length > 0) {
       useAgentStore.setState({
         lastEvents: { ...ag.lastEvents, ...snapshot.agentEvents },
         statuses: { ...ag.statuses, ...snapshot.agentStatuses },
@@ -154,7 +164,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     }
 
     // --- Restore StreamStore data (conn set to null) ---
-    if (Object.keys(snapshot.streamSessions).length > 0) {
+    if (!hostWasRecreated && Object.keys(snapshot.streamSessions).length > 0) {
       const st = useStreamStore.getState()
       const restored: Record<string, PerSessionState> = {}
       for (const [k, v] of Object.entries(snapshot.streamSessions)) {
