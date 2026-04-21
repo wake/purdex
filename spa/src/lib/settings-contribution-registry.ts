@@ -8,6 +8,16 @@ const LOCAL_ID_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/
 
 const contributions = new Map<string, AnySettingsContribution>()
 
+/**
+ * Validate a prepared contribution. Shared by the dispatch pass and the
+ * direct `registerSettingsContribution` path.
+ *
+ * @internal
+ *   Contribution registration has a single public entry point — the
+ *   `ModuleDefinition.settings` declaration flushed by
+ *   `dispatchSettingsContributions()`. The validator is wired inside that
+ *   path and is not part of the public surface. See #539.
+ */
 export function assertValidSettingsContribution(def: AnySettingsContribution): void {
   if (!def.moduleId) {
     throw new Error('settings-contribution-registry: moduleId must be a non-empty string')
@@ -31,6 +41,18 @@ export function assertValidSettingsContribution(def: AnySettingsContribution): v
   }
 }
 
+/**
+ * Insert a fully-formed `SettingsContribution` into the registry.
+ *
+ * @internal
+ *   The only supported public write path is declaring
+ *   `settings: [...]` on a `ModuleDefinition` (for module-authored
+ *   contributions) or calling `registerSettingsSection()` (for the legacy
+ *   adapter) and letting `dispatchSettingsContributions()` flush. Direct
+ *   calls from outside `dispatch-settings-contributions.ts` /
+ *   `settings-section-registry.ts` / test files are considered internal
+ *   and subject to removal without notice. See #539.
+ */
 export function registerSettingsContribution(def: AnySettingsContribution): void {
   assertValidSettingsContribution(def)
 
@@ -63,6 +85,14 @@ export function getContribution(id: string): AnySettingsContribution | undefined
   return contributions.get(id)
 }
 
+/**
+ * Clear all registered contributions. Used by (a) the dispatch pass as the
+ * first step of each flush and (b) the HMR dispose hook in
+ * `register-modules.tsx`. Tests may also call it for isolation.
+ *
+ * @internal
+ *   Not for production consumer code. See #539.
+ */
 export function clearContributions(): void {
   contributions.clear()
 }

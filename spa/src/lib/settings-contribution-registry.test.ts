@@ -5,6 +5,7 @@ import {
   getContribution,
   clearContributions,
 } from './settings-contribution-registry'
+import registrySrc from './settings-contribution-registry.ts?raw'
 import type { AnySettingsContribution } from './settings-contribution-types'
 
 const Fake = () => null
@@ -175,5 +176,48 @@ describe('settings-contribution-registry', () => {
     expect(listContributions('purdex')).toEqual([])
     expect(listContributions('host')).toEqual([])
     expect(listContributions('workspace')).toEqual([])
+  })
+
+  // --- #539: internal API boundary -----------------------------------------
+  //
+  // These are source-text assertions. TypeScript's `@internal` is JSDoc-only;
+  // we can't enforce it at the type layer without stripInternal + a separate
+  // declaration build. Instead, lock the JSDoc presence so removing the tag
+  // (e.g. during a well-meaning cleanup) raises a PR-time signal. Consumers
+  // are audited by `rg "registerSettingsContribution"` per the plan.
+
+  it('#539: registerSettingsContribution is marked @internal', () => {
+    expect(registrySrc).toMatch(
+      /\/\*\*[\s\S]*?@internal[\s\S]*?\*\/\s*export function registerSettingsContribution/,
+    )
+  })
+
+  it('#539: clearContributions is marked @internal', () => {
+    expect(registrySrc).toMatch(
+      /\/\*\*[\s\S]*?@internal[\s\S]*?\*\/\s*export function clearContributions/,
+    )
+  })
+
+  it('#539: assertValidSettingsContribution is marked @internal', () => {
+    expect(registrySrc).toMatch(
+      /\/\*\*[\s\S]*?@internal[\s\S]*?\*\/\s*export function assertValidSettingsContribution/,
+    )
+  })
+
+  it('#539: listContributions / getContribution stay public (no @internal tag)', () => {
+    // Ensure we did not accidentally mark the consumer-facing read APIs.
+    const listBlockMatch = registrySrc.match(
+      /(?:\/\*\*[\s\S]*?\*\/\s*)?export function listContributions/,
+    )
+    expect(listBlockMatch).toBeTruthy()
+    const listBlock = listBlockMatch![0]
+    expect(listBlock).not.toMatch(/@internal/)
+
+    const getBlockMatch = registrySrc.match(
+      /(?:\/\*\*[\s\S]*?\*\/\s*)?export function getContribution/,
+    )
+    expect(getBlockMatch).toBeTruthy()
+    const getBlock = getBlockMatch![0]
+    expect(getBlock).not.toMatch(/@internal/)
   })
 })
