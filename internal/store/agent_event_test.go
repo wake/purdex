@@ -16,6 +16,22 @@ func openTestAgentEventStore(t *testing.T) *AgentEventStore {
 	return s
 }
 
+// frame_divergences must exist immediately after OpenAgentEvent because no
+// production code path reaches Divergences() on the hook hot path, so a lazy
+// getter would leave the table unprovisioned in deployed daemons (PR-1a
+// review finding).
+func TestOpenAgentEvent_DivergencesTableExistsAfterOpen(t *testing.T) {
+	s := openTestAgentEventStore(t)
+
+	var got string
+	err := s.db.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='frame_divergences'`,
+	).Scan(&got)
+	if err != nil {
+		t.Fatalf("frame_divergences missing after OpenAgentEvent: %v", err)
+	}
+}
+
 func TestAgentEventStore_SetAndGet(t *testing.T) {
 	s := openTestAgentEventStore(t)
 

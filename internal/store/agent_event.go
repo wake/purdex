@@ -45,6 +45,17 @@ func OpenAgentEvent(path string) (*AgentEventStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate agent event db: %w", err)
 	}
+	// frame_divergences is populated by the dual-write passthrough path that
+	// lands in a later PR; production code never reaches Divergences() via
+	// the hook hot path. Migrate eagerly at open time so the table exists
+	// for ops tooling (PR-1a review finding). Frames/Traces already get
+	// migrated by module.New() touching their getters, and their legacy
+	// migration tests seed raw schema against a freshly-opened DB — so we
+	// don't eagerly migrate those here to keep the seed helpers working.
+	if err := migrateDivergencesDB(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate divergences db: %w", err)
+	}
 	return &AgentEventStore{db: db}, nil
 }
 

@@ -153,15 +153,17 @@ func (c *hookTraceCollector) append(in traceStepInput) string {
 	}
 	phase := in.Phase
 	if phase == "" {
+		// Legacy hook path writes directly to state, so every step is
+		// already committed from the envelope's perspective.
 		phase = "committed"
-	}
-	status := in.Status
-	if status == "" {
-		status = "success"
 	}
 	outcome := in.Outcome
 	if outcome == "" {
-		outcome = "emitted"
+		outcome = deriveOutcomeFromDecision(in.Decision)
+	}
+	status := in.Status
+	if status == "" {
+		status = deriveStatusFromOutcome(outcome)
 	}
 	action := in.Action
 	if action == "" {
@@ -314,6 +316,32 @@ func (c *hookTraceCollector) Finish(status, reason string) {
 		Steps: append([]store.TraceStep(nil), c.steps...),
 	}
 	c.sink.Enqueue(record)
+}
+
+// deriveOutcomeFromDecision maps a step-level decision string onto the
+// spec §3.5 Outcome vocabulary. Unknown decisions fall back to "emitted"
+// so the pre-existing happy path remains unchanged, while reject/skip/
+// stable-projection paths surface their true observation outcome.
+func deriveOutcomeFromDecision(decision string) string {
+	switch decision {
+	case "rejected":
+		return "rejected"
+	case "skipped", "":
+		return "skipped"
+	case "projection_unchanged":
+		return "matched"
+	default:
+		return "emitted"
+	}
+}
+
+// deriveStatusFromOutcome marks rejected observations as failures and
+// everything else as success.
+func deriveStatusFromOutcome(outcome string) string {
+	if outcome == "rejected" {
+		return "failure"
+	}
+	return "success"
 }
 
 func marshalTraceJSON(v any) json.RawMessage {
