@@ -18,6 +18,23 @@ function buildFileInfo(path: string): FileInfo {
   return { name, path, extension, size: 0, isDirectory: false }
 }
 
+// Collapse `.` and `..` segments in an absolute path. Used by the tilde
+// branch so that `~/./foo` and `~/../foo` resolve to single canonical paths,
+// avoiding duplicate editor tabs for the same physical file.
+function normalizeAbsPath(abs: string): string {
+  const parts = abs.split('/')
+  const stack: string[] = []
+  for (const part of parts) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      if (stack.length > 0) stack.pop()
+      continue
+    }
+    stack.push(part)
+  }
+  return '/' + stack.join('/')
+}
+
 /**
  * Resolve a relative path against `cwd`, normalizing `.` and `..` segments.
  * Returns `null` if the resolved path escapes `cwd`'s parent directory
@@ -78,21 +95,19 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
         if (!ctx.sessionCode) return
         const controller = new AbortController()
         const timeoutId = setTimeout(() => controller.abort(), 5000)
-        let home: string
+        let home: string | null = null
         try {
           home = await deps.fetchPaneHome(ctx.hostId, ctx.sessionCode, controller.signal)
         } catch (err) {
-          clearTimeout(timeoutId)
           const reason = (err as Error)?.name === 'AbortError' ? 'timeout' : (err as Error)?.message ?? String(err)
-          console.warn(`[file-path] home fetch failed (${reason}) for host=${ctx.hostId} session=${ctx.sessionCode} path=${rawPath}`)
-          return
+          console.warn(`[file-path] home fetch failed (${reason}) for host=${ctx.hostId} session=${ctx.sessionCode} path=${rawPath}; opening as new buffer`)
+        } finally {
+          clearTimeout(timeoutId)
         }
-        clearTimeout(timeoutId)
-        if (!home || !home.startsWith('/')) {
-          console.warn(`[file-path] home not absolute, skipping: host=${ctx.hostId} home=${home}`)
-          return
+        if (home && home.startsWith('/')) {
+          path = normalizeAbsPath(home.replace(/\/+$/, '') + path.slice(1))
         }
-        path = home.replace(/\/+$/, '') + path.slice(1)
+        // else: leave path as rawPath (~/foo) so Editor opens a blank buffer
       } else if (!path.startsWith('/')) {
         // relative / bare: 即時向 tmux pane 查 cwd，normalize 後驗證不越界
         if (!ctx.sessionCode) return
