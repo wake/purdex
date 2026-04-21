@@ -41,18 +41,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 完整開發流程
 
-**絕對不能直推 main**，即使 hotfix 也必須走 PR + review（例外：純 docs typo 修正可直接 commit push）
+**除非使用者授權，否則不能直推 main**，即使 hotfix 也必須走 PR + review
 **TDD：先寫測試再實作**
 **每個 task 獨立 commit**
 
-1. 依照需求 / 請求提出建議方案
+1. 依照需求 / 請求提出建議方案，並且 enter worktree，以下都在 tree 中進行
 2. 依據討論完成方案撰寫 spec，必須按照合適 review 大小切分 phase
 3. 委派 codex 審閱 spec
 4. 依據定稿的 spec 撰寫 plan
 5. 委派 codex 審閱 plan
 6. 依據 plan 使用自己的 subagent 進行開發
-7. PR & 委派 codex 兩輪深度 review
-8. 確認完成後進行 PR merge，必須更新 `VERSION` + `CHANGELOG.md` 並 commit push
+7.  PR & 委派 codex 兩輪深度 review
+8. 確認完成後進行 PR merge，完成後清理 worktree 並關閉
+9. 獨立一個 bump PR 以更新 `VERSION` + `CHANGELOG.md` 並 merge
+10. 更新 main branch 對齊 origin/main
 
 ### PR Review 兩輪制 (委派 Codex 進行)
 
