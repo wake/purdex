@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.196] - 2026-04-21
+
+### Fix(spa): align sync history settings UI (#528)
+
+- 將 Sync History 頁面從早期 wireframe 風格的硬切 split-pane 收斂回現行 Settings 設計語言，補上正常的 section header、surface card 和一致的狀態樣式。
+- History tabs、snapshot rows、detail panel 與 restore dialog 全面改用既有 border / surface / hover token，避免 Sync 子頁在視覺上脫離整體設定頁。
+- loading、empty、error 與 warning 狀態一併改成與現行 Settings 相同的面板式呈現，不變動既有 restore 行為。
+
 ## [1.0.0-alpha.195] - 2026-04-20
 
 ### Feat(agent): add tmux agent hook trace monitor (#526)
