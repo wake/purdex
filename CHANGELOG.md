@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.197] - 2026-04-21
+
+### Feat(spa): support ~/... tilde paths in terminal file links (#530)
+
+- Terminal 點 `~/foo.ts` 會以 pane shell `$HOME` 展開（daemon `$HOME` 為 fallback），修正 `~` 被絕對路徑正則 lookbehind 吃掉、點擊後開到 `/foo.ts` 錯檔的 regression。
+- Daemon 新增 `GET /api/sessions/{code}/home` 端點：Linux 讀 `/proc/<pid>/environ`、Darwin 走 `ps -E`；pane shell 讀不到時 fallback daemon `HOME`，兩者皆空才回 500。
+- Settings「Link 偵測」新增第四個 toggle（預設開）供停用 tilde 偵測；pane home 取得失敗改 fallthrough 用原 raw path 讓 Editor 開空白 buffer，而非 warn+return。
+- ESLint config 統一加 `argsIgnorePattern: '^_'`，順手清掉 18 個既有檔散落的 `// eslint-disable-next-line @typescript-eslint/no-unused-vars` 註解。
+- 4 輪 Codex review（標準 + 攻擊 / 防守 / 體質）完成；workspace / host 手動 home 不在本 PR scope，遺留由後續追蹤：#531（`~/../foo` 逃出 `$HOME`，刻意保留）、#532（Darwin `ps -E` 遇 env 含空白切壞）、#533（lint config 不該混 feature PR 的 review policy 討論）。
+
 ## [1.0.0-alpha.196] - 2026-04-21
 
 ### Fix(spa): align sync history settings UI (#528)
