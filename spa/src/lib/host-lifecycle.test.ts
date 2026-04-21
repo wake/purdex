@@ -6,11 +6,13 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type NormalizedEvent } from '../stores/useAgentStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
+import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useUndoToast } from '../stores/useUndoToast'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, scanPaneTree } from './pane-tree'
 import { deleteHostCascade } from './host-lifecycle'
+import { STORAGE_KEYS } from './storage/keys'
 import type { Tab } from '../types/tab'
 import type { StreamMessage } from './stream-ws'
 import type { Session } from './host-api'
@@ -27,6 +29,7 @@ function makeSessionTab(hostId: string, code: string, mode: 'terminal' | 'stream
 }
 
 function resetAllStores() {
+  localStorage.clear()
   useHostStore.setState({
     hosts: {
       [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0 },
@@ -41,6 +44,7 @@ function resetAllStores() {
   useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, agentTypes: {}, models: {} })
   useStreamStore.setState({ sessions: {}, relayStatus: {}, handoffProgress: {} })
   useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
+  useHostSettingsStore.setState({ hosts: {} })
   useWorkspaceStore.getState().reset()
   useUndoToast.setState({ toast: null })
 }
@@ -106,6 +110,32 @@ describe('host delete cascade', () => {
     deleteHostCascade(HOST_A, true)
 
     expect(useSessionStore.getState().sessions[HOST_A]).toBeUndefined()
+  })
+
+  it('cascade clears persisted host settings for the deleted host', () => {
+    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/a' })
+    useHostSettingsStore.getState().set(HOST_B, 'editor', { homePath: '/tmp/b' })
+
+    deleteHostCascade(HOST_A, true)
+
+    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toBeUndefined()
+    expect(useHostSettingsStore.getState().get(HOST_B, 'editor')).toEqual({ homePath: '/tmp/b' })
+
+    const raw = localStorage.getItem(STORAGE_KEYS.HOST_SETTINGS)
+    expect(raw).toBeTruthy()
+    const parsed = JSON.parse(raw!)
+    expect(parsed.state.hosts[HOST_A]).toBeUndefined()
+    expect(parsed.state.hosts[HOST_B].editor).toEqual({ homePath: '/tmp/b' })
+  })
+
+  it('undo restores host settings cleared by the cascade', () => {
+    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/a' })
+
+    const restore = deleteHostCascade(HOST_A, true)
+    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toBeUndefined()
+
+    restore()
+    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toEqual({ homePath: '/tmp/a' })
   })
 
   it('undo restores host at original position', () => {

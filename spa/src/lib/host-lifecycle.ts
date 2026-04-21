@@ -4,6 +4,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type NormalizedEvent, type AgentStatus } from '../stores/useAgentStore'
 import { useStreamStore, type PerSessionState } from '../stores/useStreamStore'
+import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { scanPaneTree } from './pane-tree'
 import type { Session } from './host-api'
@@ -27,6 +28,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     host: HostConfig | undefined
     hostOrder: string[]
     sessions: Session[] | undefined
+    hostSettings: Record<string, Record<string, unknown>> | undefined
     activeHostId: string | null
     // AgentStore data (exclude transient activeSubagents)
     agentEvents: Record<string, NormalizedEvent>
@@ -43,6 +45,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     host: hostStore.hosts[hostId],
     hostOrder: [...hostStore.hostOrder],
     sessions: sessionStore.sessions[hostId],
+    hostSettings: useHostSettingsStore.getState().hosts[hostId],
     activeHostId: hostStore.activeHostId,
     agentEvents: {},
     agentStatuses: {},
@@ -110,6 +113,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   sessionStore.removeHost(hostId)
   agentStore.removeHost(hostId)
   streamStore.clearHost(hostId)
+  useHostSettingsStore.getState().clearHost(hostId)
   hostStore.removeHost(hostId)
 
   // Return undo function
@@ -127,6 +131,15 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     // --- Restore sessions ---
     if (snapshot.sessions) {
       useSessionStore.getState().replaceHost(hostId, snapshot.sessions)
+    }
+
+    if (snapshot.hostSettings) {
+      useHostSettingsStore.setState((state) => ({
+        hosts: {
+          ...state.hosts,
+          [hostId]: snapshot.hostSettings!,
+        },
+      }))
     }
 
     // --- Restore AgentStore data ---
