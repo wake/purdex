@@ -29,3 +29,16 @@ export interface SettingsContribution<S extends SettingsScope = SettingsScope>
   id: string       // `${moduleId}.${localId}` — globally unique within registry
   moduleId: string
 }
+
+// Distributive union — each element stays bound to its own scope's ctx type.
+// Using `SettingsContributionDeclaration<SettingsScope>[]` at a container
+// boundary would instantiate the generic once against the full union and
+// erase the per-item scope↔ctx relationship, letting wrong-ctx components
+// pass type-checking.
+export type AnySettingsContributionDeclaration = {
+  [S in SettingsScope]: SettingsContributionDeclaration<S>
+}[SettingsScope]
+
+export type AnySettingsContribution = {
+  [S in SettingsScope]: SettingsContribution<S>
+}[SettingsScope]

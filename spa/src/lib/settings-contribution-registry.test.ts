@@ -5,11 +5,11 @@ import {
   getContribution,
   clearContributions,
 } from './settings-contribution-registry'
-import type { SettingsContribution } from './settings-contribution-types'
+import type { AnySettingsContribution } from './settings-contribution-types'
 
 const Fake = () => null
 
-function make(overrides: Partial<SettingsContribution> = {}): SettingsContribution {
+function make(overrides: Partial<AnySettingsContribution> = {}): AnySettingsContribution {
   return {
     id: 'mod.general',
     moduleId: 'mod',
@@ -19,7 +19,7 @@ function make(overrides: Partial<SettingsContribution> = {}): SettingsContributi
     labelKey: 'settings.general.label',
     component: Fake,
     ...overrides,
-  }
+  } as AnySettingsContribution
 }
 
 describe('settings-contribution-registry', () => {

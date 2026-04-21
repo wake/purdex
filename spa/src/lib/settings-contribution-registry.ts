@@ -1,13 +1,14 @@
 import type {
+  AnySettingsContribution,
   SettingsContribution,
   SettingsScope,
 } from './settings-contribution-types'
 
 const LOCAL_ID_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/
 
-const contributions = new Map<string, SettingsContribution>()
+const contributions = new Map<string, AnySettingsContribution>()
 
-export function assertValidSettingsContribution(def: SettingsContribution): void {
+export function assertValidSettingsContribution(def: AnySettingsContribution): void {
   if (!def.moduleId) {
     throw new Error('settings-contribution-registry: moduleId must be a non-empty string')
   }
@@ -30,7 +31,7 @@ export function assertValidSettingsContribution(def: SettingsContribution): void
   }
 }
 
-export function registerSettingsContribution(def: SettingsContribution): void {
+export function registerSettingsContribution(def: AnySettingsContribution): void {
   assertValidSettingsContribution(def)
 
   const existing = contributions.get(def.id)
@@ -47,16 +48,18 @@ export function registerSettingsContribution(def: SettingsContribution): void {
   contributions.set(def.id, def)
 }
 
-export function listContributions(scope: SettingsScope): SettingsContribution[] {
-  const out: SettingsContribution[] = []
+export function listContributions<S extends SettingsScope>(
+  scope: S,
+): Array<SettingsContribution<S>> {
+  const out: Array<SettingsContribution<S>> = []
   for (const c of contributions.values()) {
-    if (c.scope === scope) out.push(c)
+    if (c.scope === scope) out.push(c as unknown as SettingsContribution<S>)
   }
   out.sort((a, b) => a.order - b.order)
   return out
 }
 
-export function getContribution(id: string): SettingsContribution | undefined {
+export function getContribution(id: string): AnySettingsContribution | undefined {
   return contributions.get(id)
 }
 

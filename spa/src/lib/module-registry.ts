@@ -1,11 +1,14 @@
 import type React from 'react'
 import type { Pane } from '../types/tab'
 import type { SidebarRegion } from '../types/layout'
-import type { SettingsContributionDeclaration, SettingsScope } from './settings-contribution-types'
+import type { AnySettingsContributionDeclaration } from './settings-contribution-types'
 
 // Re-export for convenience
 export type { SidebarRegion } from '../types/layout'
 export type {
+  AnySettingsContribution,
+  AnySettingsContributionDeclaration,
+  SettingsContribution,
   SettingsContributionDeclaration,
   SettingsContext,
   SettingsContextFor,
@@ -70,7 +73,7 @@ export interface ModuleDefinition {
   workspaceConfig?: ConfigDef[]
   globalConfig?: ConfigDef[]
   commands?: CommandContribution[]
-  settings?: Array<SettingsContributionDeclaration<SettingsScope>>
+  settings?: AnySettingsContributionDeclaration[]
 }
 
 // === Registry ===

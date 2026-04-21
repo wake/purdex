@@ -4,7 +4,7 @@ import {
   clearContributions,
   registerSettingsContribution,
 } from './settings-contribution-registry'
-import type { SettingsContribution } from './settings-contribution-types'
+import type { AnySettingsContribution } from './settings-contribution-types'
 
 function assertNoLegacyScopeConflict(module: ModuleDefinition): void {
   const settings = module.settings
@@ -33,8 +33,8 @@ function assertNoLegacyScopeConflict(module: ModuleDefinition): void {
 
 export function buildSettingsContributionBatch(
   modules: ModuleDefinition[] = getModules(),
-): SettingsContribution[] {
-  const batch: SettingsContribution[] = []
+): AnySettingsContribution[] {
+  const batch: AnySettingsContribution[] = []
   const seenIds = new Set<string>()
 
   for (const module of modules) {
@@ -44,11 +44,11 @@ export function buildSettingsContributionBatch(
     assertNoLegacyScopeConflict(module)
 
     for (const decl of settings) {
-      const full: SettingsContribution = {
+      const full = {
         ...decl,
         moduleId: module.id,
         id: `${module.id}.${decl.localId}`,
-      }
+      } as AnySettingsContribution
       assertValidSettingsContribution(full)
       if (seenIds.has(full.id)) {
         throw new Error(
