@@ -153,17 +153,22 @@ func (c *hookTraceCollector) append(in traceStepInput) string {
 	}
 	phase := in.Phase
 	if phase == "" {
-		// Legacy hook path writes directly to state, so every step is
-		// already committed from the envelope's perspective.
-		phase = "committed"
+		// Spec §3.5 phase ∈ {proposed, committed, rejected}. Derive from the
+		// decision per call site (rejected/skipped/unchanged stay proposed;
+		// frame upserts and successful emits commit).
+		phase = derivePhaseFromDecision(in.Decision)
 	}
 	outcome := in.Outcome
 	if outcome == "" {
 		outcome = deriveOutcomeFromDecision(in.Decision)
 	}
+	// Status defaults to "success": every appended step represents a
+	// completed observation. Status=failure is reserved for execution
+	// errors (panic / marshal / DB write) — not for rejected decisions,
+	// which spec §3.5 keeps under outcome.
 	status := in.Status
 	if status == "" {
-		status = deriveStatusFromOutcome(outcome)
+		status = "success"
 	}
 	action := in.Action
 	if action == "" {
@@ -318,30 +323,54 @@ func (c *hookTraceCollector) Finish(status, reason string) {
 	c.sink.Enqueue(record)
 }
 
-// deriveOutcomeFromDecision maps a step-level decision string onto the
-// spec §3.5 Outcome vocabulary. Unknown decisions fall back to "emitted"
-// so the pre-existing happy path remains unchanged, while reject/skip/
-// stable-projection paths surface their true observation outcome.
-func deriveOutcomeFromDecision(decision string) string {
-	switch decision {
-	case "rejected":
-		return "rejected"
-	case "skipped", "":
-		return "skipped"
-	case "projection_unchanged":
-		return "matched"
-	default:
-		return "emitted"
-	}
+// hookDecisionVocab enumerates every decision literal the agent hook path
+// emits (trigger / verify / frame / projection / emit call sites). An
+// unrecognised decision maps to an empty outcome — the previous "fall back
+// to emitted" default masked classification gaps that this PR's round-2
+// review flagged.
+var hookDecisionVocab = map[string]struct {
+	outcome string
+	phase   string
+}{
+	// trigger
+	"received": {outcome: "received", phase: "proposed"},
+	// verify
+	"accepted": {outcome: "accepted", phase: "proposed"},
+	"rejected": {outcome: "rejected", phase: "rejected"},
+	// frame_ops
+	"created_frame": {outcome: "created_frame", phase: "committed"},
+	"updated_frame": {outcome: "updated_frame", phase: "committed"},
+	"deleted_frame": {outcome: "deleted_frame", phase: "committed"},
+	"skipped":       {outcome: "skipped", phase: "proposed"},
+	// projection
+	"projection_changed":   {outcome: "projection_changed", phase: "committed"},
+	"projection_unchanged": {outcome: "projection_unchanged", phase: "proposed"},
+	// emit
+	"broadcasted": {outcome: "broadcasted", phase: "committed"},
 }
 
-// deriveStatusFromOutcome marks rejected observations as failures and
-// everything else as success.
-func deriveStatusFromOutcome(outcome string) string {
-	if outcome == "rejected" {
-		return "failure"
+// deriveOutcomeFromDecision maps a known decision literal onto the spec §3.5
+// Outcome vocabulary. Unknown decisions return "" so gaps surface instead of
+// defaulting to a happy-path value; the empty decision is treated as skipped
+// for legacy/no-op call sites.
+func deriveOutcomeFromDecision(decision string) string {
+	if decision == "" {
+		return "skipped"
 	}
-	return "success"
+	if entry, ok := hookDecisionVocab[decision]; ok {
+		return entry.outcome
+	}
+	return ""
+}
+
+// derivePhaseFromDecision maps a known decision literal onto Phase ∈
+// {proposed, committed, rejected}. Empty / unknown decisions default to
+// "proposed" — an observation without committed side-effects.
+func derivePhaseFromDecision(decision string) string {
+	if entry, ok := hookDecisionVocab[decision]; ok {
+		return entry.phase
+	}
+	return "proposed"
 }
 
 func marshalTraceJSON(v any) json.RawMessage {

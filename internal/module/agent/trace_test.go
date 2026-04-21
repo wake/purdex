@@ -84,12 +84,31 @@ func TestHandleEvent_PersistAcceptedHookTrace(t *testing.T) {
 		t.Fatalf("last step kind = %q, want emit", record.Steps[len(record.Steps)-1].Kind)
 	}
 
+	// Spec §3.5 phase is derived from each step's decision. Happy-path
+	// decisions in this scenario: received/accepted → proposed,
+	// created_frame → committed, projection_* → committed when changed /
+	// proposed when unchanged, broadcasted → committed.
+	wantPhase := map[string]string{
+		"received":             "proposed",
+		"accepted":             "proposed",
+		"created_frame":        "committed",
+		"updated_frame":        "committed",
+		"deleted_frame":        "committed",
+		"projection_changed":   "committed",
+		"projection_unchanged": "proposed",
+		"broadcasted":          "committed",
+		"skipped":              "proposed",
+	}
 	for i, step := range record.Steps {
 		if step.SourceKind != "hook" {
 			t.Fatalf("step %d SourceKind = %q, want hook", i, step.SourceKind)
 		}
-		if step.Phase != "committed" {
-			t.Fatalf("step %d Phase = %q, want committed", i, step.Phase)
+		phase, ok := wantPhase[step.Decision]
+		if !ok {
+			t.Fatalf("step %d unexpected decision = %q", i, step.Decision)
+		}
+		if step.Phase != phase {
+			t.Fatalf("step %d (%s/%s) Phase = %q, want %q", i, step.Kind, step.Decision, step.Phase, phase)
 		}
 		if step.Status != "success" {
 			t.Fatalf("step %d Status = %q, want success", i, step.Status)
@@ -161,7 +180,9 @@ func TestHandleEvent_VerifyRejectPersistsTerminalChain(t *testing.T) {
 	if record.Steps[1].ParentStepID != record.Steps[0].StepID {
 		t.Fatalf("verify ParentStepID = %q, want %q", record.Steps[1].ParentStepID, record.Steps[0].StepID)
 	}
-	// Verify step reflects rejection in outcome/status, not the hook-path defaults.
+	// Verify step reflects rejection in outcome + phase; spec §3.5 line 511
+	// is explicit that a pre-commit reject is still a successful observation
+	// (status=success, outcome=rejected, phase=rejected).
 	verify := record.Steps[1]
 	if verify.Decision != "rejected" {
 		t.Fatalf("verify Decision = %q, want rejected", verify.Decision)
@@ -169,8 +190,11 @@ func TestHandleEvent_VerifyRejectPersistsTerminalChain(t *testing.T) {
 	if verify.Outcome != "rejected" {
 		t.Fatalf("verify Outcome = %q, want rejected", verify.Outcome)
 	}
-	if verify.Status != "failure" {
-		t.Fatalf("verify Status = %q, want failure", verify.Status)
+	if verify.Phase != "rejected" {
+		t.Fatalf("verify Phase = %q, want rejected", verify.Phase)
+	}
+	if verify.Status != "success" {
+		t.Fatalf("verify Status = %q, want success (spec §3.5)", verify.Status)
 	}
 }
 
@@ -241,8 +265,118 @@ func TestHandleEvent_ErrorGuardEmitSkippedPersistsSkippedOutcome(t *testing.T) {
 	if emit.Outcome != "skipped" {
 		t.Fatalf("emit Outcome = %q, want skipped", emit.Outcome)
 	}
+	if emit.Phase != "proposed" {
+		t.Fatalf("emit Phase = %q, want proposed (observation without commit)", emit.Phase)
+	}
 	if emit.Status != "success" {
 		t.Fatalf("emit Status = %q, want success", emit.Status)
+	}
+}
+
+// TestDeriveOutcomeFromDecision covers the explicit decision→outcome vocabulary
+// map. The round-2 adversarial review called out that an unknown decision
+// silently folded into "emitted" — we now return "" for unknown and add a
+// dedicated negative-path assertion.
+func TestDeriveOutcomeFromDecision(t *testing.T) {
+	cases := map[string]string{
+		// Verify lifecycle
+		"received": "received",
+		"accepted": "accepted",
+		"rejected": "rejected",
+		// Frame apply
+		"created_frame": "created_frame",
+		"updated_frame": "updated_frame",
+		"deleted_frame": "deleted_frame",
+		"skipped":       "skipped",
+		// Projection
+		"projection_changed":   "projection_changed",
+		"projection_unchanged": "projection_unchanged",
+		// Emit
+		"broadcasted": "broadcasted",
+		// Empty decision is treated as skipped by legacy callers.
+		"": "skipped",
+	}
+	for decision, want := range cases {
+		if got := deriveOutcomeFromDecision(decision); got != want {
+			t.Errorf("deriveOutcomeFromDecision(%q) = %q, want %q", decision, got, want)
+		}
+	}
+}
+
+func TestDeriveOutcomeFromDecision_UnknownDecisionDoesNotMapToEmitted(t *testing.T) {
+	if got := deriveOutcomeFromDecision("totally_bogus_decision"); got != "" {
+		t.Fatalf("unknown decision outcome = %q, want empty (must not default to emitted)", got)
+	}
+}
+
+// TestDerivePhaseFromDecision covers the per-decision phase classifier. Spec
+// §3.5 Phase ∈ {proposed, committed, rejected}: verify/skipped/unchanged are
+// observations without commit; frame upserts and successful emits commit.
+func TestDerivePhaseFromDecision(t *testing.T) {
+	cases := map[string]string{
+		"received":             "proposed",
+		"accepted":             "proposed",
+		"rejected":             "rejected",
+		"created_frame":        "committed",
+		"updated_frame":        "committed",
+		"deleted_frame":        "committed",
+		"skipped":              "proposed",
+		"projection_changed":   "committed",
+		"projection_unchanged": "proposed",
+		"broadcasted":          "committed",
+		"":                     "proposed",
+	}
+	for decision, want := range cases {
+		if got := derivePhaseFromDecision(decision); got != want {
+			t.Errorf("derivePhaseFromDecision(%q) = %q, want %q", decision, got, want)
+		}
+	}
+}
+
+func TestHandleEvent_Emit_PhaseIsCommittedWhenBroadcasted(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%7", "work")
+	m.tmux = fakeTmux
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.sessions = &fakeSessionProvider{
+		sessions: []session.SessionInfo{{Code: "session-code-1", Name: "work"}},
+	}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "codex",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
+		},
+	})
+
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(`{
+		"tmux_session":"work",
+		"tmux_pane_id":"%7",
+		"event_name":"UserPromptSubmit",
+		"raw_event":{"prompt":"hi"},
+		"agent_type":"codex",
+		"sender_pid":1234,
+		"sender_start_time":"Sun Apr 20 01:30:00 2026"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	page := waitForTraceChains(t, m, "work", 1)
+	record, err := m.traces.GetChainRecord(page.Chains[0].ChainID)
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	emit := record.Steps[len(record.Steps)-1]
+	if emit.Kind != "emit" {
+		t.Fatalf("last step kind = %q, want emit", emit.Kind)
+	}
+	if emit.Decision != "broadcasted" {
+		t.Fatalf("emit Decision = %q, want broadcasted", emit.Decision)
+	}
+	if emit.Phase != "committed" {
+		t.Fatalf("emit Phase = %q, want committed", emit.Phase)
 	}
 }
 
