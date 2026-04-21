@@ -17,12 +17,13 @@ const listCacheTTL = time.Second
 
 // SessionModule manages tmux sessions, meta cache, and HTTP API.
 type SessionModule struct {
-	meta        *store.MetaStore
-	tmux        tmux.Executor
-	core        *core.Core
-	cancelWatch context.CancelFunc
-	wstate      watcherState
-	waitForGate chan bool
+	meta            *store.MetaStore
+	tmux            tmux.Executor
+	core            *core.Core
+	shellHomeReader func(pid string) (string, error)
+	cancelWatch     context.CancelFunc
+	wstate          watcherState
+	waitForGate     chan bool
 	// createMu serializes handleCreate's HasSession→NewSession→SetMeta
 	// critical section so two concurrent POSTs with the same name can't
 	// both slip past the duplicate check. See #61.
@@ -36,7 +37,10 @@ type SessionModule struct {
 
 // NewSessionModule creates a SessionModule with the given MetaStore.
 func NewSessionModule(meta *store.MetaStore) *SessionModule {
-	return &SessionModule{meta: meta}
+	return &SessionModule{
+		meta:            meta,
+		shellHomeReader: readShellHomeFromProc,
+	}
 }
 
 func (m *SessionModule) Name() string           { return "session" }
@@ -52,6 +56,7 @@ func (m *SessionModule) Init(c *core.Core) error {
 func (m *SessionModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions", m.handleList)
 	mux.HandleFunc("GET /api/sessions/{code}", m.handleGet)
+	mux.HandleFunc("GET /api/sessions/{code}/home", m.handleSessionHome)
 	mux.HandleFunc("GET /api/sessions/{code}/cwd", m.handleSessionCwd)
 	mux.HandleFunc("POST /api/sessions", m.handleCreate)
 	mux.HandleFunc("PATCH /api/sessions/{code}", m.handleRename)
