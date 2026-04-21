@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useHostStore } from '../stores/useHostStore'
 import {
   listSessions, createSession, deleteSession, switchMode,
-  handoff, fetchHistory, fetchSessionCwd, getConfig, updateConfig, agentUpload,
+  handoff, fetchHistory, fetchSessionCwd, fetchSessionHome, getConfig, updateConfig, agentUpload,
   fetchAgentMonitorChains, fetchAgentMonitorChain, fetchAgentMonitorProjection,
   type Session,
 } from './host-api'
@@ -225,6 +225,24 @@ describe('fetchSessionCwd', () => {
       new Response('nope', { status: 500 }),
     )
     await expect(fetchSessionCwd(HOST_ID, 'abc123')).rejects.toThrow('500')
+  })
+})
+
+describe('fetchSessionHome', () => {
+  it('returns home string from /api/sessions/{code}/home', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ home: '/Users/wake' }), { status: 200 }),
+    )
+    const home = await fetchSessionHome(HOST_ID, 'abc123')
+    expect(home).toBe('/Users/wake')
+    expectAuthFetch(`${BASE}/api/sessions/abc123/home`)
+  })
+
+  it('throws on non-ok response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('nope', { status: 500 }),
+    )
+    await expect(fetchSessionHome(HOST_ID, 'abc123')).rejects.toThrow('500')
   })
 })
 

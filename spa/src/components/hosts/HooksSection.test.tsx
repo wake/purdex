@@ -3,14 +3,14 @@ import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/re
 import { HooksSection } from './HooksSection'
 import { useHostStore } from '../../stores/useHostStore'
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+ 
 const mockFetchStatus = vi.fn((_hostId?: string) => Promise.resolve({
   installed: true,
   events: { 'event-a': { installed: true } },
   issues: [] as string[],
 }))
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+ 
 const mockSetup = vi.fn((_hostId?: string, _action?: string) => Promise.resolve({
   installed: true,
   events: { 'event-a': { installed: true } },

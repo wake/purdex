@@ -70,7 +70,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
   }),
 
   closeBuffer: (key) => set((s) => {
-    const { [key]: _removed, ...rest } = s.buffers // eslint-disable-line @typescript-eslint/no-unused-vars
+    const { [key]: _removed, ...rest } = s.buffers  
     return { buffers: rest }
   }),
 

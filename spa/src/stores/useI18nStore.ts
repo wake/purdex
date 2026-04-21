@@ -96,7 +96,7 @@ export const useI18nStore = create<I18nState>()(
 
       deleteCustomLocale: (id) => {
         unregisterLocale(id)
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+         
         const { [id]: _removed, ...rest } = get().customLocales
         const newActiveId = get().activeLocaleId === id ? 'en' : get().activeLocaleId
         if (get().activeLocaleId === id) applyLocaleToDom('en')

@@ -71,7 +71,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   // Snapshot StreamStore entries for this host (exclude conn)
   for (const [k, v] of Object.entries(streamStore.sessions)) {
     if (k.startsWith(prefix)) {
-      const { conn: _, ...serializable } = v // eslint-disable-line @typescript-eslint/no-unused-vars
+      const { conn: _, ...serializable } = v  
       snapshot.streamSessions[k] = serializable
     }
   }
@@ -185,7 +185,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
           // Re-read to get current content and remove terminated
           scanPaneTree(useTabStore.getState().tabs[tabId].layout, (pane) => {
             if (pane.id === paneId && pane.content.kind === 'tmux-session' && pane.content.terminated === 'host-removed') {
-              const { terminated: _, ...contentWithoutTerminated } = pane.content // eslint-disable-line @typescript-eslint/no-unused-vars
+              const { terminated: _, ...contentWithoutTerminated } = pane.content  
               useTabStore.getState().setPaneContent(tabId, paneId, contentWithoutTerminated as typeof pane.content)
             }
           })

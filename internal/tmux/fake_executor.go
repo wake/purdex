@@ -39,6 +39,7 @@ type FakeExecutor struct {
 	paneChildren         map[string][]string    // target → child command names
 	paneDescendants      map[string][]string    // target → recursive descendant command names
 	panePIDs             map[string]string      // target → pane pid
+	activePanePIDs       map[string]string      // target → active pane pid
 	paneSessions         map[string]string      // target → session name
 	paneCwds             map[string]string      // target → pane_current_path
 	paneSizes            map[string][2]int      // target → [cols, rows]
@@ -63,6 +64,7 @@ func NewFakeExecutor() *FakeExecutor {
 		paneChildren:     make(map[string][]string),
 		paneDescendants:  make(map[string][]string),
 		panePIDs:         make(map[string]string),
+		activePanePIDs:   make(map[string]string),
 		paneSessions:     make(map[string]string),
 		paneCwds:         make(map[string]string),
 		paneSizes:        make(map[string][2]int),
@@ -259,6 +261,25 @@ func (f *FakeExecutor) PanePID(target string) (string, error) {
 		return pid, nil
 	}
 	return "fake-pid", nil
+}
+
+func (f *FakeExecutor) SetActivePanePID(target, pid string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.activePanePIDs[target] = pid
+}
+
+func (f *FakeExecutor) ActivePanePID(target string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if pid, ok := f.activePanePIDs[target]; ok {
+		return pid, nil
+	}
+	// Fall through to panePIDs so tests that only set PanePID still work.
+	if pid, ok := f.panePIDs[target]; ok {
+		return pid, nil
+	}
+	return "fake-active-pid", nil
 }
 
 func (f *FakeExecutor) PaneChildCommands(target string) ([]string, error) {

@@ -31,6 +31,7 @@ type Executor interface {
 	PaneCurrentPath(target string) (string, error)
 	PaneSessionName(target string) (string, error)
 	PanePID(target string) (string, error)
+	ActivePanePID(target string) (string, error)
 	PaneChildCommands(target string) ([]string, error)
 	CapturePaneContent(target string, lastN int) (string, error)
 	PaneSize(target string) (cols, rows int, err error)
@@ -160,6 +161,18 @@ func (r *RealExecutor) PanePID(target string) (string, error) {
 	}
 	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
 	return strings.TrimSpace(line), nil
+}
+
+// ActivePanePID returns the PID of the currently active pane of the target
+// session/window, unlike PanePID which returns the first listed pane. Used
+// when a value must come from the pane the user is looking at (e.g. shell
+// HOME for tilde-path expansion).
+func (r *RealExecutor) ActivePanePID(target string) (string, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_pid}").Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux display-message pane_pid: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (r *RealExecutor) PaneChildCommands(target string) ([]string, error) {

@@ -6,6 +6,8 @@ import { ToggleSwitch } from './ToggleSwitch'
 export function LinkDetectionSection() {
   const linkDetectAbsolute = useUISettingsStore((s) => s.linkDetectAbsolute)
   const setLinkDetectAbsolute = useUISettingsStore((s) => s.setLinkDetectAbsolute)
+  const linkDetectTilde = useUISettingsStore((s) => s.linkDetectTilde)
+  const setLinkDetectTilde = useUISettingsStore((s) => s.setLinkDetectTilde)
   const linkDetectRelativeSlash = useUISettingsStore((s) => s.linkDetectRelativeSlash)
   const setLinkDetectRelativeSlash = useUISettingsStore((s) => s.setLinkDetectRelativeSlash)
   const linkDetectBareFilename = useUISettingsStore((s) => s.linkDetectBareFilename)
@@ -19,6 +21,10 @@ export function LinkDetectionSection() {
 
       <SettingItem label={t('settings.terminal.link_detect.absolute.label')} description={t('settings.terminal.link_detect.absolute.desc')}>
         <ToggleSwitch label={t('settings.terminal.link_detect.absolute.label')} checked={linkDetectAbsolute} onChange={setLinkDetectAbsolute} />
+      </SettingItem>
+
+      <SettingItem label={t('settings.terminal.link_detect.tilde.label')} description={t('settings.terminal.link_detect.tilde.desc')}>
+        <ToggleSwitch label={t('settings.terminal.link_detect.tilde.label')} checked={linkDetectTilde} onChange={setLinkDetectTilde} />
       </SettingItem>
 
       <SettingItem label={t('settings.terminal.link_detect.relative_slash.label')} description={t('settings.terminal.link_detect.relative_slash.desc')}>

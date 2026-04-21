@@ -124,7 +124,7 @@ export function resetLastHostSelection() {
   lastSelection = null
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+ 
 export function HostPage(_props: PaneRendererProps) {
   const [location, setLocation] = useLocation()
   const hostOrder = useHostStore((s) => s.hostOrder)

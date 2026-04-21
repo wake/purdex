@@ -87,7 +87,7 @@ export const useAgentStore = create<AgentState>()(
       const key = compositeKey(hostId, sessionCode)
       set((s) => {
         const filterOut = <T,>(rec: Record<string, T>): Record<string, T> => {
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+           
           const { [key]: _, ...rest } = rec
           return rest
         }
@@ -130,7 +130,7 @@ export const useAgentStore = create<AgentState>()(
         set((s) => ({
           subagents: event.subagents!.length > 0
             ? { ...s.subagents, [key]: event.subagents! }
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+             
             : (() => { const { [key]: _, ...rest } = s.subagents; return rest })(),
         }))
       }
@@ -153,7 +153,7 @@ export const useAgentStore = create<AgentState>()(
 
     markRead: (hostId, sessionCode) => set((s) => {
       const key = compositeKey(hostId, sessionCode)
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+       
       const { [key]: _, ...rest } = s.unread
       return { unread: rest }
     }),
@@ -177,7 +177,7 @@ export const useAgentStore = create<AgentState>()(
       const key = compositeKey(hostId, sessionCode)
       const cleaned = sanitizeOscTitle(title)
       if (!cleaned) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+         
         const { [key]: _, ...rest } = s.oscTitles
         return { oscTitles: rest }
       }

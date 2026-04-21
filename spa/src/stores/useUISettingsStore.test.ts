@@ -207,14 +207,16 @@ describe('link detection settings', () => {
   beforeEach(() => {
     useUISettingsStore.setState({
       linkDetectAbsolute: true,
+      linkDetectTilde: true,
       linkDetectRelativeSlash: false,
       linkDetectBareFilename: false,
     })
   })
 
-  it('defaults: absolute=true, relative-slash=false, bare=false', () => {
+  it('defaults: absolute=true, tilde=true, relative-slash=false, bare=false', () => {
     const s = useUISettingsStore.getState()
     expect(s.linkDetectAbsolute).toBe(true)
+    expect(s.linkDetectTilde).toBe(true)
     expect(s.linkDetectRelativeSlash).toBe(false)
     expect(s.linkDetectBareFilename).toBe(false)
   })
@@ -225,6 +227,11 @@ describe('link detection settings', () => {
     expect(useUISettingsStore.getState().linkDetectAbsolute).toBe(false)
     store.setLinkDetectAbsolute(true)
     expect(useUISettingsStore.getState().linkDetectAbsolute).toBe(true)
+
+    store.setLinkDetectTilde(false)
+    expect(useUISettingsStore.getState().linkDetectTilde).toBe(false)
+    store.setLinkDetectTilde(true)
+    expect(useUISettingsStore.getState().linkDetectTilde).toBe(true)
 
     store.setLinkDetectRelativeSlash(true)
     expect(useUISettingsStore.getState().linkDetectRelativeSlash).toBe(true)
