@@ -99,4 +99,29 @@ const CODEX_HOOKS: HookModule = {
   },
 }
 
-export const HOOK_MODULES: HookModule[] = [TMUX_HOOKS, CC_HOOKS, CODEX_HOOKS]
+const OPENCODE_HOOKS: HookModule = {
+  id: 'opencode',
+  labelKey: 'hosts.opencode_hooks',
+  descKey: 'hosts.opencode_hooks_desc',
+  fetchStatus: (hostId) => hookFetch(hostId, '/api/hooks/opencode/status'),
+  setup: (hostId, action) =>
+    hookFetch(hostId, '/api/hooks/opencode/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    }),
+  getLastTrigger: (hostId, events) => {
+    const prefix = `${hostId}:`
+    const result: Record<string, number> = {}
+    for (const [key, event] of Object.entries(events)) {
+      if (!key.startsWith(prefix) || event.agent_type !== 'opencode') continue
+      const existing = result[event.raw_event_name]
+      if (!existing || event.broadcast_ts > existing) {
+        result[event.raw_event_name] = event.broadcast_ts
+      }
+    }
+    return Object.keys(result).length > 0 ? result : null
+  },
+}
+
+export const HOOK_MODULES: HookModule[] = [TMUX_HOOKS, CC_HOOKS, CODEX_HOOKS, OPENCODE_HOOKS]

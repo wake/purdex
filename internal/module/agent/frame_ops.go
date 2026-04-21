@@ -106,6 +106,9 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		startedAt = frame.StartedAt
 		parentFrameID = frame.ParentFrameID
 	}
+	if req.EventName == "SessionStart" {
+		subagents = []string{}
+	}
 	if parentFrameID == "" {
 		parent, err := m.frames.FindByPanePID(req.TmuxPaneID, info.PPID)
 		if err != nil {

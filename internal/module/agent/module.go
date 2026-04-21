@@ -15,6 +15,7 @@ import (
 	agentpkg "github.com/wake/purdex/internal/agent"
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/agent/codex"
+	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
@@ -138,6 +139,10 @@ func (m *Module) Init(c *core.Core) error {
 
 	// Codex provider
 	m.registry.Register(codexProvider)
+
+	opencodeProvider := opencode.NewProvider()
+	m.prober.RegisterIdentifier(opencodeProvider.Type(), opencodeProvider.Identify)
+	m.registry.Register(opencodeProvider)
 
 	// Expose registry for other modules
 	c.Registry.Register("agent.registry", m.registry)
