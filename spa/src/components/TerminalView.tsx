@@ -16,16 +16,17 @@ interface Props {
   connectingMessage?: string
   hostId?: string
   sessionCode?: string
+  workspaceId?: string
   getTicket?: () => Promise<string>
 }
 
-export default function TerminalView({ wsUrl, visible = true, connectingMessage, hostId, sessionCode, getTicket }: Props) {
+export default function TerminalView({ wsUrl, visible = true, connectingMessage, hostId, sessionCode, workspaceId, getTicket }: Props) {
   const setOscTitle = useAgentStore((s) => s.setOscTitle)
   const handleTitle = useCallback((title: string) => {
     if (hostId && sessionCode) setOscTitle(hostId, sessionCode, title)
   }, [hostId, sessionCode, setOscTitle])
 
-  const linkContext = useMemo(() => ({ hostId, sessionCode }), [hostId, sessionCode])
+  const linkContext = useMemo(() => ({ hostId, sessionCode, workspaceId }), [hostId, sessionCode, workspaceId])
   const { termRef, fitAddonRef, containerRef } = useTerminal({ linkContext, onTitle: handleTitle })
   const [ready, setReady] = useState(false)
   const [disconnected, setDisconnected] = useState(false)

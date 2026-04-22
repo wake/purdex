@@ -6,6 +6,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useConfigStore } from '../stores/useConfigStore'
 import { useTabStore } from '../stores/useTabStore'
+import { useWorkspaceStore } from '../features/workspace/store'
 import { handoff, fetchWsTicket } from '../lib/host-api'
 import { useHostStore } from '../stores/useHostStore'
 import { findPane } from '../lib/pane-tree'
@@ -60,6 +61,12 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
     return ''
   })
 
+  // Link-source workspace for terminal link openers (PR-5): use the workspace
+  // that owns this tab, not active workspace. `undefined` for standalone tabs.
+  const workspaceId = useWorkspaceStore((s) =>
+    tabId ? s.findWorkspaceByTab(tabId)?.id : undefined,
+  ) ?? undefined
+
   if (content.kind === 'tmux-session' && content.terminated) {
     return <TerminatedPane content={content} tabId={tabId} paneId={pane.id} />
   }
@@ -85,6 +92,7 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
       visible={isActive}
       hostId={hostId}
       sessionCode={sessionCode}
+      workspaceId={workspaceId}
       getTicket={() => fetchWsTicket(hostId)}
     />
   )
