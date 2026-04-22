@@ -113,6 +113,26 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		result = provider.DeriveStatus(req.EventName, req.RawEvent)
 	}
 
+	// Catalog miss: provider rejected the event (Valid=false) — record it as
+	// a verify-kind trace step (decision=skipped, reason=event_not_in_catalog)
+	// and return 200 OK without running any frame / projection / broadcast /
+	// activity-watch logic. catalog miss is "received but not recognized";
+	// distinct from verify_rejected (202 Accepted, identity / staleness fail).
+	// The hook CLI treats anything but non-200 as success, so 200 here means
+	// "no retry needed". Per Phase 1 plan §1.4 — this branch is the explicit
+	// early return previously missing from the pipeline.
+	if !result.Valid {
+		trace.Verify(req, "skipped", "event_not_in_catalog", nil)
+		trace.Finish("completed", "event_not_in_catalog")
+		traceFinished = true
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "ok",
+			"reason": "event_not_in_catalog",
+		})
+		return
+	}
+
 	// Error guard: when in error state, only whitelisted events can clear it
 	if result.Valid && result.Status != "" && result.Status != agentpkg.StatusError {
 		m.mu.Lock()

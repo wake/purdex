@@ -1319,6 +1319,150 @@ func TestHandleAgentStatusTestPrefixWithoutObserverFallsThroughToProduction(t *t
 	}
 }
 
+// --- Phase 1: Catalog miss (Valid=false → early-return + trace) ---
+
+// catalogMissModule wires up a Module + cc provider + tmux + sessions + core
+// in the minimum configuration required to exercise the catalog-miss path
+// end-to-end (including trace persistence and broadcast suppression).
+func catalogMissModule(t *testing.T) *Module {
+	t.Helper()
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.prober = probe.New(fakeTmux)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+	return m
+}
+
+func catalogMissRequest() *http.Request {
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"FutureMysteryEvent","raw_event":{"foo":"bar"},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// H1: catalog miss returns 200 with explicit reason and the trace chain
+// records a verify-kind step with decision=skipped, reason=event_not_in_catalog.
+// It must NOT contain frame / projection / emit steps.
+func TestHandleEvent_CatalogMiss_WritesTraceAndReturnsOK(t *testing.T) {
+	m := catalogMissModule(t)
+	w := httptest.NewRecorder()
+	m.handleEvent(w, catalogMissRequest())
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s), want 200", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["status"] != "ok" {
+		t.Errorf("status field = %q, want ok", resp["status"])
+	}
+	if resp["reason"] != "event_not_in_catalog" {
+		t.Errorf("reason field = %q, want event_not_in_catalog", resp["reason"])
+	}
+
+	page := waitForTraceChains(t, m, "work", 1)
+	if len(page.Chains) != 1 {
+		t.Fatalf("len(page.Chains) = %d, want 1", len(page.Chains))
+	}
+	chain := page.Chains[0]
+	if chain.TerminalStatus != "completed" {
+		t.Errorf("TerminalStatus = %q, want completed", chain.TerminalStatus)
+	}
+	if chain.TerminalReason != "event_not_in_catalog" {
+		t.Errorf("TerminalReason = %q, want event_not_in_catalog", chain.TerminalReason)
+	}
+	if chain.LatestStepKind != "verify" {
+		t.Errorf("LatestStepKind = %q, want verify (catalog miss reuses verify kind)", chain.LatestStepKind)
+	}
+	if chain.LatestDecision != "skipped" {
+		t.Errorf("LatestDecision = %q, want skipped", chain.LatestDecision)
+	}
+
+	record, err := m.traces.GetChainRecord(chain.ChainID)
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	// Expect exactly: trigger + verify(accepted) + verify(skipped, catalog).
+	// Frame / projection / emit MUST NOT appear.
+	for _, step := range record.Steps {
+		switch step.Kind {
+		case "frame", "projection", "emit":
+			t.Errorf("unexpected step kind %q in catalog-miss chain (steps=%+v)", step.Kind, record.Steps)
+		}
+	}
+	// Find the catalog-miss step explicitly.
+	var foundCatalog bool
+	for _, step := range record.Steps {
+		if step.Kind == "verify" && step.Decision == "skipped" && step.Reason == "event_not_in_catalog" {
+			foundCatalog = true
+		}
+	}
+	if !foundCatalog {
+		t.Errorf("no verify-step with decision=skipped reason=event_not_in_catalog (steps=%+v)", record.Steps)
+	}
+}
+
+// H2: catalog miss must not mutate currentStatus / subagents / broadcast.
+func TestHandleEvent_CatalogMiss_NoStatusUpdate(t *testing.T) {
+	m := catalogMissModule(t)
+	// Seed pre-existing state to verify it's untouched.
+	m.mu.Lock()
+	m.currentStatus["work"] = agentpkg.StatusRunning
+	m.subagents["work"] = []string{"existing-sub"}
+	m.mu.Unlock()
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	w := httptest.NewRecorder()
+	m.handleEvent(w, catalogMissRequest())
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	m.mu.Lock()
+	gotStatus := m.currentStatus["work"]
+	gotSubs := append([]string(nil), m.subagents["work"]...)
+	m.mu.Unlock()
+	if gotStatus != agentpkg.StatusRunning {
+		t.Errorf("currentStatus = %q, want running (catalog miss must not mutate)", gotStatus)
+	}
+	if len(gotSubs) != 1 || gotSubs[0] != "existing-sub" {
+		t.Errorf("subagents = %v, want [existing-sub]", gotSubs)
+	}
+
+	select {
+	case msg := <-sub.SendCh():
+		t.Errorf("unexpected broadcast on catalog miss: %s", string(msg))
+	case <-time.After(50 * time.Millisecond):
+		// expected — no broadcast
+	}
+}
+
+// H3: catalog miss must not start an activity watcher.
+func TestHandleEvent_CatalogMiss_NoActivityWatch(t *testing.T) {
+	m := catalogMissModule(t)
+	w := httptest.NewRecorder()
+	m.handleEvent(w, catalogMissRequest())
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	m.mu.Lock()
+	_, watching := m.activeWatchers["work"]
+	m.mu.Unlock()
+	if watching {
+		t.Error("catalog miss should not start an activity watcher")
+	}
+}
+
 func TestHandleStatuslineSetup_RemoveBroadcastsCleared(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
