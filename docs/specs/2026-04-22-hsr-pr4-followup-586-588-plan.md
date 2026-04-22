@@ -1,7 +1,7 @@
 # HSR PR-4 Follow-up — #586 + #588 Implementation Plan
 
 - **Date**: 2026-04-22
-- **Status**: Draft v1 (pending codex plan review)
+- **Status**: Draft v2 (post codex plan R1 — absorbed P1-1/1-2, P2-1/2/3, P3-1/2/3)
 - **Base spec**: `docs/specs/2026-04-22-hsr-pr4-followup-586-588-spec.md` (v2)
 - **Branch**: `worktree-hsr-pr4-followup-586-588`
 - **Base commit**: `df34d1d8` (alpha.206)
@@ -17,7 +17,7 @@ Two-commit PR closing #586 (dispatch idempotence / batch-replace source map) and
 
 | # | Kind | Subject | Gate |
 |---|---|---|---|
-| 1 (already) | docs | HSR PR-4 follow-up spec v1 + v2 | — (already committed `07de9e9a` + `64860323`) |
+| docs (already) | docs | HSR PR-4 follow-up spec v1 + v2 + plan v1 + v2 | — (already committed `07de9e9a` + `64860323` + `89891ae0` + this plan v2) |
 | 2 | feat | host built-in batch-replace + stable wrapper | #586 tests + existing tests + lint + build |
 | 3 | feat | SettingsContextFor<'host'>.runtime + HostPage two-pass selective subscription | #588 tests + existing tests + lint + build |
 
@@ -42,8 +42,10 @@ Reviewer reads spec v2 → commit 2 → commit 3.
 - `spa/src/lib/host-builtin-sections.test.tsx` — remove `registerBuiltinHostSection` + `clearHostBuiltinPending` imports; use `setHostBuiltinSections` + `clearHostBuiltinSources`; add tests 1–5 per spec §6.1 (commit 2)
 - `spa/src/lib/dispatch-settings-contributions.test.ts` — add tests 6–8 per spec §6.1; the host-builtin atomicity test case may simplify since sources are long-lived (commit 2)
 - `spa/src/lib/register-modules.test.ts` — no expected change (public surface `registerBuiltinModules()` unchanged); smoke-verify six host contributions still present (commit 2)
+- `spa/src/lib/settings-contribution-types.test.ts` — **existing ctx constructions must be updated to include `runtime: undefined`** (any direct `{ scope: 'host', hostId }` objects in fixtures/asserts); add 1–2 type-level assertions proving new shape (commit 3). **Flagged by codex R1 P1-2**
 - `spa/src/components/HostPage.test.tsx` — existing tests adjust any ctx constructions to include `runtime`; add tests 7–12 per spec §6.2 (commit 3)
 - `spa/src/components/hosts/HostSidebar.test.tsx` — existing ctx constructions gain `runtime`; add test 13 (commit 3)
+- **Full-repo grep audit for ctx construction sites missing `runtime`** — any other test file constructing `{ scope: 'host', hostId, ... }` objects. Plan §7 checklist enforces this (codex R1 P1-2 + P3-1)
 
 ### Not touched
 - `spa/src/lib/host-routes.ts` (#587 deferred; no `parseRoute` / `isHostSubPage` change)
@@ -137,17 +139,33 @@ Reviewer reads spec v2 → commit 2 → commit 3.
 
 **Subject**: `feat(spa): reactive host runtime in SettingsContextFor<'host'> (closes #588)`
 
-**TDD order**:
+**Ordering contract (codex R1 P1-1)**: This commit contains an ATOMIC type change. TDD is NOT expressed as "TypeScript compile-error = red" — that produces a broken build state mid-commit, not a meaningful red. Instead, each intermediate file state inside this commit keeps TypeScript green; the "red" phase lives in **behavioural test failures** (tests 7–13 fail at runtime before HostPage/HostSidebar logic lands) while TS always compiles.
 
-1. **Red — write new/modified tests first**
-   - `spa/src/lib/settings-contribution-types.test.ts`: add a type-level test (or TypeScript compile-error check via `// @ts-expect-error` patterns) asserting `SettingsContextFor<'host'>` requires `runtime: HostRuntime | undefined`. Keep light — the real enforcement comes from downstream consumers.
-   - `spa/src/components/HostPage.test.tsx`:
-     - Adjust every existing test's ctx constructions to include `runtime: undefined` (or a minimal stub) — these are the callsites TypeScript will flag after commit 3 lands the type change.
-     - Add tests 7–12 per spec §6.2. Tests 10 (background host tick) and 11 (rapid flicker) require careful store-state seeding via merge-mode `useHostStore.setState` (feedback `zustand_harness_setstate`). Test 12 captures console spies before `cleanup()` then ticks runtime; assert no stale warning. Tests 7+8 use contributions registered directly into the registry via `registerSettingsContribution` (bypass module registration) to inject a test contribution with runtime-driven `disabled`.
-   - `spa/src/components/hosts/HostSidebar.test.tsx`: add test 13; existing tests update ctx to include runtime.
-   - Run: `cd spa && pnpm exec vitest run src/components/HostPage.test.tsx src/components/hosts/HostSidebar.test.tsx src/lib/settings-contribution-types.test.ts` — expect TypeScript errors / test failures.
+The recommended sequence inside the single commit:
 
-2. **Green — extend types + HostPage + HostSidebar**
+1. **Step A — atomic type + fixture migration (TS green throughout)**
+   - Extend `SettingsContextFor<'host'>` in `settings-contribution-types.ts` with `runtime: HostRuntime | undefined`.
+   - Migrate every host-ctx callsite in one pass: HostPage, HostSidebar, host-builtin-sections wrapper, all `*.test.ts[x]` fixtures. Use the grep audit from §7 to enumerate. Baseline for migration: "any construction of `{ scope: 'host', hostId: X, ... }` must add `runtime`; initial value `undefined` is always safe (matches pre-runtime behaviour)".
+   - Run `pnpm run build` until green. No behavioural change yet — ctx now carries runtime but `disabled(ctx)` predicates in existing code all ignore it.
+   - Run existing tests → all still pass (no behavioural change).
+2. **Step B — write the new behavioural tests (red in runtime, TS still green)**
+   - `HostPage.test.tsx` add tests 7–12 (spec §6.2). The contribution factory in tests 7/8/11 injects `disabled: (ctx) => ctx.runtime?.status !== 'connected'` and `registerSettingsContribution(...)` directly. Tests 10+12 use deterministic spies — see §5 test harness details.
+   - `HostSidebar.test.tsx` add test 13.
+   - `settings-contribution-types.test.ts` add 1–2 type-level assertions documenting the new shape (purely for docs + compile-time guard; no runtime effect).
+   - Run these new tests → they fail at runtime: HostPage still ignores runtime ticks, so tests 7/8/11 never observe the expected unmount; test 10's render counter sees extra renders because runtime subscription isn't selective yet.
+3. **Step C — land HostPage + HostSidebar behavioural changes (tests turn green)**
+   - HostPage: introduce the shared `pickHostIdFallback` helper (codex R1 P2-3), extract `preResolveHostId` on top of it, add `useHostStore((s) => tentativeHostId ? s.runtime[tentativeHostId] : undefined)` selective subscription, thread `tentativeRuntime` through `resolveSelection` / `pickSelectableSubPage` / `renderContent`.
+   - HostSidebar: `hostCtx` gains `runtime: runtime[hostId]`.
+   - Run until green.
+4. **Single commit**: step A + B + C together (no mid-state push). Message body notes the atomic-migration rationale and references codex R1 P1-1.
+
+(Original three-step TDD description retained below but marked non-authoritative — it described the conceptually-correct flow but not the physically-correct ordering for a type-change commit.)
+
+**Legacy TDD description (reference only, superseded by the sequence above)**:
+
+1. ~~**Red — write new/modified tests first**~~ (superseded by Step A→B→C above to avoid a mid-commit broken-TS state)
+
+2. **Concrete code sketches for Step A+B+C**
 
    **Types** (`settings-contribution-types.ts`):
    ```ts
@@ -159,24 +177,42 @@ Reviewer reads spec v2 → commit 2 → commit 3.
      | { scope: 'workspace'; workspaceId: string }
    ```
 
-   **HostPage.tsx** — two-pass selective subscription:
-   ```tsx
+   **Shared hostId fallback helper** (codex R1 P2-3 — extract the duplicated fallback logic):
+   ```ts
+   // spa/src/components/HostPage.tsx (or a new host-selection-utils.ts if extraction is cleaner)
+   /** @internal */
+   export function pickHostIdFallback(
+     hostOrder: string[],
+     activeHostId: string | null,
+     lastSel: Selection | null,
+   ): string | null {
+     if (hostOrder.length === 0) return null
+     if (lastSel?.hostId && hostOrder.includes(lastSel.hostId)) return lastSel.hostId
+     if (activeHostId && hostOrder.includes(activeHostId)) return activeHostId
+     return hostOrder[0] ?? null
+   }
+   ```
+   Both `preResolveHostId` and the existing inline fallback logic inside `resolveSelection` / `getFallbackSelection` call this helper. Equivalence test (plan §4 new entry 14): same input → same output across both callsites.
+
+   **preResolveHostId** (pure, runtime-independent — built on the shared helper):
+   ```ts
    function preResolveHostId(
      location: string,
      hostOrder: string[],
      activeHostId: string | null,
      lastSel: Selection | null,
    ): string | null {
-     if (hostOrder.length === 0) return null
      const parsed = parseRoute(location)
      if ((parsed?.kind === 'hosts' || parsed?.kind === 'hosts-invalid')
          && parsed.hostId && hostOrder.includes(parsed.hostId)) {
        return parsed.hostId
      }
-     if (lastSel?.hostId && hostOrder.includes(lastSel.hostId)) return lastSel.hostId
-     return getFallbackHostId(hostOrder, activeHostId)
+     return pickHostIdFallback(hostOrder, activeHostId, lastSel)
    }
+   ```
 
+   **HostPage.tsx** — two-pass selective subscription:
+   ```tsx
    export function HostPage(_props: PaneRendererProps) {
      const [location, setLocation] = useLocation()
      const hostOrder    = useHostStore((s) => s.hostOrder)
@@ -185,7 +221,6 @@ Reviewer reads spec v2 → commit 2 → commit 3.
      const tentativeRuntime = useHostStore((s) =>
        tentativeHostId ? s.runtime[tentativeHostId] : undefined,
      )
-     // resolveSelection / pickSelectableSubPage take tentativeHostId + tentativeRuntime
      const { selection, canonicalPath, shouldPersistSelection } = resolveSelection(
        location, hostOrder, activeHostId, tentativeHostId, tentativeRuntime,
      )
@@ -206,6 +241,7 @@ Reviewer reads spec v2 → commit 2 → commit 3.
    ```
    - `pickSelectableSubPage(hostId, requested, runtime)` signature change.
    - `resolveSelection(..., tentativeHostId, tentativeRuntime)` threads runtime into every `pickSelectableSubPage` callsite.
+   - `getFallbackSelection` inline fallback logic calls `pickHostIdFallback` (shared helper).
    - `lastSelection` logic unchanged (pure bookkeeping).
 
    **HostSidebar.tsx**:
@@ -272,6 +308,7 @@ Reviewer reads spec v2 → commit 2 → commit 3.
 | §6.2 #11 | `HostPage.test.tsx` | Rapid flicker stable | 3 |
 | §6.2 #12 | `HostPage.test.tsx` | Unmount during tick no warning | 3 |
 | §6.2 #13 | `HostSidebar.test.tsx` | Sidebar ctx carries runtime | 3 |
+| **NEW 14** | `HostPage.test.tsx` (or new `host-selection-utils.test.ts`) | `pickHostIdFallback` equivalence: extracted helper produces identical output to inline fallback for representative inputs (hostOrder ∈ {empty, single, multi}; activeHostId ∈ {null, present, absent}; lastSel ∈ {null, present, stale}). Codex R1 P2-3 | 3 |
 
 ---
 
@@ -280,6 +317,39 @@ Reviewer reads spec v2 → commit 2 → commit 3.
 - **Merge-mode setState only** for tests touching `useHostStore` — do NOT use `setState({...}, true)` replace mode; it wipes zustand actions and causes "not a function" errors. Feedback: `feedback_zustand_harness_setstate.md`.
 - When seeding for tests 10+11, use `useHostStore.setState((state) => ({ runtime: { ...state.runtime, [hostId]: nextRuntime } }))` — functional updater preserves zustand's merge semantics.
 - For tests that need to wipe host state entirely, use explicit merge: `useHostStore.setState({ hosts: {}, hostOrder: [], runtime: {}, activeHostId: null })` and list every mutable field (ref `feedback_zustand_harness_setstate.md`).
+
+### 5.1 Deterministic test harness for tests 10 + 12 (codex R1 P2-1, P3-3)
+
+Codex R1 P2-1 / P3-3 flagged that render-counter / `console.error` spy approaches for "no re-render" / "no warning after unmount" are brittle under React 19 + jsdom + strict mode. Use deterministic alternatives:
+
+**Test 10 — background host tick does NOT re-render HostPage**:
+- Wrap HostPage's render in a counter via a thin spy component:
+  ```tsx
+  const renderCount = { value: 0 }
+  function HostPageProbe(props: PaneRendererProps) {
+    renderCount.value++
+    return <HostPage {...props} />
+  }
+  ```
+- Mount HostPage on `/hosts/hA/overview`. Snapshot `renderCount.value` after initial render + flush.
+- Mutate `runtime[hB]` (background host) via `useHostStore.setState((state) => ({ runtime: { ...state.runtime, hB: { status: 'disconnected' } } }))`.
+- Assert `renderCount.value` unchanged (selective subscription returned same reference for `runtime[tentativeHostId]`).
+- Repeat: mutate `runtime[hA]` (selected host) → assert counter incremented.
+
+**Test 12 — unmount during tick has no side effects**:
+- Use a deterministic subscription-leak probe instead of console-warning spy:
+  ```ts
+  // before mount
+  const subBefore = useHostStore.subscribe(() => {})
+  // After cleanup() unmount, push a runtime tick
+  useHostStore.setState((state) => ({ runtime: { ...state.runtime, hA: { status: 'reconnecting' } } }))
+  // Assert: no error thrown; the test-local subscriber recorded the tick (proving store healthy);
+  //         no React-internal listener leak (count of internal listeners returned to baseline)
+  ```
+- Concretely assert via `useHostStore.getState()` accessibility post-unmount and that the store's internal listener Set size returns to the baseline before mount. Zustand exposes `useHostStore.subscribe` returning an unsubscribe fn; before HostPage mount, capture the set size via `(useHostStore as unknown as { getSubscribers?(): unknown }).getSubscribers?.()` if available, else snapshot via temporary subscribe/unsubscribe pair to count delta.
+- Fallback if zustand internals are not introspectable: assert that `cleanup()` followed by a runtime tick does not raise + a deterministic effect counter on a sentinel component does not increment. The key contract is "no callback fires into the unmounted HostPage tree", measurable via the spy on a child component that records calls.
+
+**Test 12 must NOT be skipped** (codex R1 P2-2). If neither approach is feasible during implementation, downgrade to the lightest possible deterministic check (assert `cleanup() → setState(...)` does not throw + sentinel's effect callback runs only N times during lifecycle) and document the limitation in the test's docstring.
 
 ---
 
@@ -290,7 +360,9 @@ Reviewer reads spec v2 → commit 2 → commit 3.
 | `HostRuntime` import from `../stores/useHostStore` into `settings-contribution-types.ts` creates a coupling back from lib→stores | Acceptable: `HostRuntime` is already exported at `useHostStore.ts:17`. Spec §5 documents the dependency. |
 | `setHostBuiltinSections` call in `register-modules.tsx` runs once per `registerBuiltinModules()` invocation; HMR dispose already clears sources. Edge: test suites that re-import `register-modules` without a clear | Tests already call `clearContributions()` + `clearHostBuiltinPending` (now `clearHostBuiltinSources`) in `clearAll()`. The batch-replace API itself is idempotent (second call with same defs → same state). Mitigated by design. |
 | `preResolveHostId` duplicates logic from `resolveSelection` / `getFallbackHostId` | Intentional — `preResolveHostId` is a *pure, runtime-independent* extraction. `resolveSelection` still owns the full redirect logic and uses `getFallbackHostId` as before. Small overlap (URL parse + hostOrder check); documented in the code comment. |
-| Test 12 (unmount warning) relies on RTL's cleanup + console.error spy; vitest may not print warning under `jsdom` env | Assert on `console.error` / `console.warn` spy counts, not on regex match. Skip the test with explicit reason if jsdom strips warnings — leave a TODO linking to #588. |
+| Test 12 (unmount warning) relies on RTL's cleanup + console.error spy; vitest may not print warning under `jsdom` env (codex R1 P2-1) | **Resolved**: §5.1 prescribes deterministic subscription-leak probe instead of warning spy. NOT skipped. |
+| `pickHostIdFallback` extraction creates two callsites that drift independently (codex R1 P2-3) | Equivalence test 14 (plan §4) asserts shared output; helper is `@internal`-marked single source of truth. |
+| `hostBuiltinComponentMap` retains stale wrapper keys after batch-replace drops a localId (codex R1 P3-2) | WeakMap's GC handles dropped wrappers automatically once `hostBuiltinSources` releases the strong ref. Add explicit test in §6.1 #4 (wrapper rebuilt on re-add). No code change needed beyond the natural GC; documented in commit 2's body. |
 | Commit 2 changes break a callsite outside grep | Run full suite + lint + build — TS catches removed imports; grep audit performed in plan §2. |
 
 ---
@@ -298,14 +370,15 @@ Reviewer reads spec v2 → commit 2 → commit 3.
 ## 7. Validation checklist
 
 Before PR:
-- [ ] `git log --oneline df34d1d8..HEAD` shows exactly 3 commits (spec v1 + spec v2 + commit 2 + commit 3 = 4; note: v1 and v2 are separate commits per §1 layout; re-count is 4)
-  - Actually: commits on branch are `07de9e9a` (spec v1), `64860323` (spec v2), commit 2, commit 3 → **4 commits total**
+- [ ] `git log --oneline df34d1d8..HEAD` shows the expected commits on the branch (spec v1, spec v2, plan v1, plan v2, commit 2, commit 3 → **6 commits total** at PR open, with the four docs commits providing review context for the two feat commits)
 - [ ] `cd spa && pnpm exec vitest run` — full suite green
 - [ ] `cd spa && pnpm run lint` — green
 - [ ] `cd spa && pnpm run build` — green
 - [ ] Manual smoke: `pnpm run dev` → host page renders six sub-pages → disconnect a host → sidebar row updates + body unaffected (no regression)
-- [ ] Grep confirms no lingering `registerBuiltinHostSection` / `peekHostBuiltinQueue` / `drainHostBuiltinQueue` / `clearHostBuiltinPending` references
-- [ ] Grep confirms no lingering `{ scope: 'host', hostId: X }` ctx construction missing the `runtime` field (TS would already catch this; grep is a belt-and-braces check)
+- [ ] **Negative grep audits** (codex R1 P3-1):
+  - [ ] `rg -n "registerBuiltinHostSection|peekHostBuiltinQueue|drainHostBuiltinQueue|clearHostBuiltinPending" spa/src` → empty (or only hits in historical docs / spec / plan files)
+  - [ ] `rg -n "scope:\s*'host'" spa/src --type ts --type tsx` → every match is a ctx construction that includes the `runtime` field (manual eyeball or follow-up grep `rg -n "scope:\s*'host'.*hostId" spa/src` cross-checked for `runtime` presence)
+  - [ ] `rg -n "SettingsContextFor<'host'>" spa/src` → every consumer either uses `ctx.runtime` deliberately or ignores it harmlessly (no `// @ts-expect-error` work-arounds)
 
 Before merge:
 - [ ] Codex R1 (standard) + R2 (3-way adversarial) both green / findings absorbed
