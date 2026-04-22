@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.205] - 2026-04-22
+
+### Feat(lights): PR-1b-1b — Arbitrator goroutine + admission + apply pipeline (#583)
+
+- 新 `internal/module/agent/arbitrator/` 套件：單一 goroutine `Run(ctx)` 消費 `Arbitrator.in` (cap 1024)；9 步 apply pipeline（generation gate / watcher / idempotency / pending routing / source priority / monotone lifecycle / single-primary invariant / mode branch / trace emit），含 hook-storm 10ms/50 obs pre-gate（§3.4.2）與 authoritative fail-closed pre-gate（reject 前不修改任何 frameState）。
+- `SessionStart` helper：一次完成 force-end old-gen actors（reason=session_restart）+ clear pending + per-obs `SessionRestartCleared` trace + `TraceIDMinter.Mint(sid, newGen)` + `PruneSessionBefore` + `arbmode.Manager.ApplyAtSessionStart()` + synthetic boundary trace（使用**新 mint** 的 trace_id）。
+- `TraceWriter` 採 bounded **priority ring buffer** cap 4096（非 FIFO channel）：滿載時 O(n) 淘汰既有最低 DropPriority 項；每 100ms flush 一次走 `TraceStore.AppendSteps` batch。flush 成功才 pop 已送批次，失敗保留 buf 等下輪 retry，不再靜默遺失。
+- 新 `TraceStore.AppendSteps([]TraceStep)` API：單 tx 多 chain；chain INSERT OR IGNORE（不存在則建最小 placeholder）+ step INSERT OR IGNORE（idempotent on retry）+ 每個變動 chain 回填 step_count / latest_step_kind / latest_decision / latest_step_reason（COALESCE 保留既有非空值）。
+- `frameState` 單 owner in-memory reducer（無 mutex）：per-session generation + actor lifecycle + watcher tokens + IsPrimary；passthrough 與 authoritative mode 都更新，只有 FramesStore / frame_divergences / WS broadcast 按 mode gate（1b-1b 全不寫外部；1b-1c 寫 divergence；Phase 2 寫 frame）。
+- `Module.SubmitObservation` admission helper：committed 100ms 有界阻塞 + timeout drop；proposed 非阻塞 drop；滿載 metric `lights_arb_in_dropped{priority}`。
+- Shutdown drain：`Run(ctx).Done()` 後繼續 consume inCh 內已排隊 obs 到空才退出，避免關機邊界遺失 committed 事件。
+- reconcile tick 5s：flushPendingDue + stale actor detect（30s LastActivity，僅發 trace 不改 status）+ idempotency cache 5 分鐘 TTL prune。stale trace 走 `TraceIDLookup.Get` 取 session/gen trace_id，miss 則不 emit 避免 poison batch。
+- #578 修復：`TraceIDRegistry` 拆 `TraceIDMinter` / `TraceIDLookup` 兩介面；具體 struct unexported；constructor 回兩個 interface 值。Arbitrator 收 Minter，hook path（1b-1c）收 Lookup。
+- #579 修復：`arbmode.Manager` 改用 `atomic.Pointer[modeTarget]` published snapshot 線性化 `OnConfigChange` ↔ `ApplyAtSessionStart`；最後完成的 publish 保證在下一 SessionStart 被 apply 讀到。
+- Plan review 處理：3 P0 / 3 P1 / 2 P2 / 1 P3 全修（atomic published snapshot / priority ring buffer + AppendSteps / frameState both-modes update / SessionStart helper / 1b-1b scope 內移除 retryCh / hook-storm 納入 / idempotency canonical bytes + order-invariant / authoritative fail-closed / interface compile assertion 替代）。
+- R1 + R2 三視角 review 處理：C1-C6, C8-C10 全修（boundary trace_id 新 mint / reconcile trace_id lookup / shutdown drain / flush retain-on-error / authoritative pre-gate / committed phase 保留 / stable SpanID UUID / AppendSteps chain summary 回填 / idem prune 接 reconcile tick）；C7 production pending entry trigger 延後追蹤於 #584。
+
 ## [1.0.0-alpha.204] - 2026-04-22
 
 ### Feat(lights): PR-1b-1a — Observation types + AGENT_ARB_MODE + trace_id strategy (#575)
