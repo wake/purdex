@@ -1,8 +1,11 @@
 // spa/src/components/hosts/HostSidebar.test.tsx
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { HostSidebar } from './HostSidebar'
 import { useHostStore } from '../../stores/useHostStore'
+import { clearContributions, registerSettingsContribution } from '../../lib/settings-contribution-registry'
+import { clearModuleRegistry } from '../../lib/module-registry'
+import { registerBuiltinModules } from '../../lib/register-modules'
 
 vi.mock('../../lib/host-api', async (importOriginal) => {
   const actual = await importOriginal() as Record<string, unknown>
@@ -14,11 +17,24 @@ const HOST_B = 'host-b'
 
 beforeEach(() => {
   cleanup()
+  // Populate the contribution registry with the six built-in host sub-pages.
+  // HostSidebar now reads listContributions('host') instead of the old hard-coded
+  // SUB_PAGES const, so the registry must be populated for sub-page labels to appear.
+  clearContributions()
+  clearModuleRegistry()
+  registerBuiltinModules()
+
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'Test Host', ip: '1.2.3.4', port: 7860, order: 0 } },
     hostOrder: [HOST_ID],
     runtime: {},
   })
+})
+
+afterEach(() => {
+  delete (window as unknown as Record<string, unknown>).electronAPI
+  clearContributions()
+  clearModuleRegistry()
 })
 
 describe('HostSidebar', () => {
@@ -202,5 +218,34 @@ describe('HostSidebar', () => {
     expect(overviewItems.length).toBeGreaterThanOrEqual(1)
     const sessionsItems = screen.getAllByText('Sessions')
     expect(sessionsItems.length).toBeGreaterThanOrEqual(1)
+  })
+
+  // T7 companion (§3.1): disabled contribution → sidebar row appears with
+  // data-disabled-ctx="true" attribute, click is a no-op (F7 contract).
+  it('T7 (§3.1): disabled contribution renders as disabled row in sidebar', () => {
+    const DisabledBody = () => null
+
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.disabled-section',
+      localId: 'disabled-section',
+      scope: 'host',
+      order: 100,
+      labelKey: 'disabled-section',
+      component: DisabledBody,
+      disabled: () => true,
+      disabledReasonKey: 'settings.coming_soon',
+    })
+
+    render(<HostSidebar {...defaultProps} />)
+
+    // Disabled row must appear (not filtered out)
+    const disabledRows = document.querySelectorAll('[data-disabled-ctx="true"]')
+    expect(disabledRows.length).toBeGreaterThan(0)
+
+    // Click on disabled row must NOT call onSelect
+    const disabledButton = disabledRows[0] as HTMLButtonElement
+    fireEvent.click(disabledButton)
+    expect(defaultProps.onSelect).not.toHaveBeenCalled()
   })
 })

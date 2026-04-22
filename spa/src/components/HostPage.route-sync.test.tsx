@@ -1,9 +1,12 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { Router } from 'wouter'
 import { memoryLocation } from 'wouter/memory-location'
 import { useRouteSync } from '../hooks/useRouteSync'
 import { getPrimaryPane } from '../lib/pane-tree'
+import { clearContributions } from '../lib/settings-contribution-registry'
+import { clearModuleRegistry } from '../lib/module-registry'
+import { registerBuiltinModules } from '../lib/register-modules'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
@@ -108,6 +111,18 @@ describe('HostPage route sync', () => {
     useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
     resetLastHostSelection()
     seedHosts()
+    // HostPage.renderContent() now reads listContributions('host') — populate
+    // the registry with the six built-in host sub-pages so section bodies render.
+    // vi.mock hoisting ensures the mocked section stubs are used by registerBuiltinModules.
+    clearContributions()
+    clearModuleRegistry()
+    registerBuiltinModules()
+  })
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).electronAPI
+    clearContributions()
+    clearModuleRegistry()
   })
 
   it('canonicalizes bare /hosts to the fallback selection with replace semantics', async () => {

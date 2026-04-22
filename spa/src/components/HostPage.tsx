@@ -3,15 +3,10 @@ import { useLocation } from 'wouter'
 import type { PaneRendererProps } from '../lib/module-registry'
 import { encodeHostRouteId, isHostSubPage, type HostSubPage } from '../lib/host-routes'
 import { parseRoute } from '../lib/route-utils'
+import { listContributions } from '../lib/settings-contribution-registry'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { HostSidebar } from './hosts/HostSidebar'
-import { OverviewSection } from './hosts/OverviewSection'
-import { SessionsSection } from './hosts/SessionsSection'
-import { HooksSection } from './hosts/HooksSection'
-import { AgentsSection } from './hosts/AgentsSection'
-import { UploadSection } from './hosts/UploadSection'
-import { LogsSection } from './hosts/LogsSection'
 import { AddHostDialog } from './hosts/AddHostDialog'
 
 export type { HostSubPage } from '../lib/host-routes'
@@ -38,12 +33,15 @@ function getFallbackSelection(hostOrder: string[], activeHostId: string | null):
 
   return {
     hostId,
-    subPage: lastSelection?.subPage ?? 'overview',
+    subPage: lastSelection?.subPage ?? getFallbackSubPage(),
   }
 }
 
-function getFallbackSubPage() {
-  return lastSelection?.subPage ?? 'overview'
+function getFallbackSubPage(): HostSubPage {
+  if (lastSelection?.subPage) return lastSelection.subPage
+  // Cast: commit 3 will change HostSubPage to string; until then, the localId
+  // of a registered host contribution is always a valid URL token.
+  return (listContributions('host')[0]?.localId ?? 'overview') as HostSubPage
 }
 
 function resolveSelection(location: string, hostOrder: string[], activeHostId: string | null) {
@@ -147,28 +145,31 @@ export function HostPage(_props: PaneRendererProps) {
     if (!selection?.hostId) {
       return <p className="text-text-muted">{t('hosts.no_host_selected')}</p>
     }
-    switch (selection.subPage) {
-      case 'overview':
-        return <OverviewSection hostId={selection.hostId} />
-      case 'sessions':
-        return <SessionsSection hostId={selection.hostId} />
-      case 'hooks':
-        return <HooksSection hostId={selection.hostId} />
-      case 'agents':
-        return <AgentsSection hostId={selection.hostId} />
-      case 'uploads':
-        return <UploadSection hostId={selection.hostId} />
-      case 'logs':
-        return <LogsSection hostId={selection.hostId} />
+    const { hostId, subPage } = selection
+    const contributions = listContributions('host')
+    const contribution = contributions.find((c) => c.localId === subPage)
+    if (!contribution) {
+      // subPage not in registry — self-heal via resolveSelection redirect.
+      // Return null here; the canonicalPath effect will navigate away.
+      return null
     }
+    const ctx = { scope: 'host' as const, hostId }
+    // F7: disabled contributions must not mount their body component.
+    if (contribution.disabled && contribution.disabled(ctx) === true) {
+      return null
+    }
+    const Component = contribution.component
+    // Wrap with a key that includes hostId so switching hosts forces a remount
+    // and prevents cross-host state leak (PR-4 analog of PR-3 F3).
+    return <Component key={`${hostId}:${contribution.id}`} ctx={ctx} />
   }
 
   return (
     <div className="flex h-full">
       <HostSidebar
         selectedHostId={selection?.hostId ?? ''}
-        selectedSubPage={selection?.subPage ?? lastSelection?.subPage ?? 'overview'}
-        onSelect={(hostId, subPage) => setLocation(buildHostPath({ hostId, subPage }), { replace: true })}
+        selectedSubPage={selection?.subPage ?? lastSelection?.subPage ?? getFallbackSubPage()}
+        onSelect={(hostId, subPage) => setLocation(buildHostPath({ hostId, subPage: subPage as HostSubPage }), { replace: true })}
         onAddHost={() => setShowAddHost(true)}
       />
       <div className="flex-1 overflow-y-auto p-6">
