@@ -15,6 +15,7 @@
   "settings.section.appearance": "Appearance",
   "settings.section.terminal": "Terminal",
   "settings.section.sync": "Sync",
+  "settings.section.modules": "Modules",
   "settings.sync.description": "Synchronise settings and workspaces across devices.",
   "settings.sync.provider.label": "Provider",
   "settings.sync.provider.description": "Select where sync data is stored and exchanged.",

@@ -15,6 +15,7 @@
   "settings.section.appearance": "外觀",
   "settings.section.terminal": "終端機",
   "settings.section.sync": "同步",
+  "settings.section.modules": "模組",
   "settings.sync.description": "在多裝置之間同步設定與工作區。",
   "settings.sync.provider.label": "提供者",
   "settings.sync.provider.description": "選擇同步資料的儲存與交換位置。",

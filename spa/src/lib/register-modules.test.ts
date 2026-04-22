@@ -315,15 +315,20 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
       .filter((c) => c.moduleId === '_builtin.legacy-section')
       .map((c) => c.localId)
 
-    // Core legacy set always present (no caps gating). Exact membership
-    // after PR-3 (reserved `workspace` and global `module-config` removed):
-    // appearance / terminal / interface / sync / editor-buffers.
-    // Electron / dev-environment / tmux-agent-monitor are gated by
-    // PlatformCapabilities / import.meta.env.DEV.
-    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'editor-buffers']) {
+    // Core legacy set always present (no caps gating). After the F3
+    // follow-up the `module-config` global wrapper is restored (still
+    // needed while `ModuleDefinition.globalConfig` remains public —
+    // tracked by #574 for removal alongside HSR PR-5). The reserved
+    // `workspace` row stays removed (PR-3 decision 5a — nothing
+    // consumes the reserved-items plumbing and the entry itself is dead).
+    //
+    // Always-on: appearance / terminal / interface / sync / module-config /
+    // editor-buffers.  Electron / dev-environment / tmux-agent-monitor are
+    // gated by PlatformCapabilities / import.meta.env.DEV.
+    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'module-config', 'editor-buffers']) {
       expect(legacyIds).toContain(id)
     }
-    expect(legacyIds.length).toBeGreaterThanOrEqual(5)
+    expect(legacyIds.length).toBeGreaterThanOrEqual(6)
   })
 
   it('PR-3: reserved workspace section is no longer registered', () => {
@@ -335,14 +340,16 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
     expect(getSettingsSections().find((s) => s.id === 'workspace')).toBeUndefined()
   })
 
-  it('PR-3: global module-config section is no longer registered', () => {
+  it('F3: global module-config section is registered (restored until globalConfig deprecates — #574)', () => {
     registerBuiltinModules()
-    // Removed by PR-3: no production consumer of globalConfig; legacy
-    // workspaceConfig still renders via ModuleConfigSection inside
-    // WorkspaceSettingsPage directly.
+    // F3 follow-up restored `module-config` — removing it left
+    // `ModuleDefinition.globalConfig` API live-but-unreachable (silent
+    // dead-end). Deferred removal to HSR PR-5 tracked by #574.
     const contribs = listContributions('purdex')
-    expect(contribs.find((c) => c.localId === 'module-config')).toBeUndefined()
-    expect(getSettingsSections().find((s) => s.id === 'module-config')).toBeUndefined()
+    const entry = contribs.find((c) => c.localId === 'module-config')
+    expect(entry).toBeDefined()
+    expect(entry?.order).toBe(8)
+    expect(getSettingsSections().find((s) => s.id === 'module-config')).toBeDefined()
   })
 
   it('dispatch timing: legacy contributions survive repeated dispatches', () => {
@@ -376,15 +383,13 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
   it('getSettingsSections() legacy view stays consistent with new registry', () => {
     registerBuiltinModules()
     const legacyView = getSettingsSections().map((s) => s.id)
-    // Legacy view is the filtered `_builtin.legacy-section.*` entries. After
-    // PR-3 there are no reserved entries and `module-config` is gone, so the
-    // active set returned by getSettingsSections() covers the remaining
-    // always-on built-in registerSettingsSection calls.
-    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'editor-buffers']) {
+    // Legacy view is the filtered `_builtin.legacy-section.*` entries.
+    // After the F3 follow-up `module-config` is back (tracked by #574 for
+    // removal alongside globalConfig deprecation).  Reserved `workspace`
+    // stays removed.
+    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'module-config', 'editor-buffers']) {
       expect(legacyView).toContain(id)
     }
-    // Removed by PR-3.
     expect(legacyView).not.toContain('workspace')
-    expect(legacyView).not.toContain('module-config')
   })
 })

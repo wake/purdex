@@ -23,6 +23,7 @@ import { TerminalSection } from '../components/settings/TerminalSection'
 import { ElectronSection } from '../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../components/settings/DevEnvironmentSection'
 import { TmuxAgentMonitorSection } from '../components/settings/TmuxAgentMonitorSection'
+import { ModuleConfigSection } from '../components/settings/ModuleConfigSection'
 import { SyncSection } from '../components/settings/SyncSection'
 import { FileTreeWorkspaceView } from '../components/FileTreeView'
 import { FileTreeSessionView } from '../components/FileTreeSessionView'
@@ -273,6 +274,16 @@ export function registerBuiltinModules(): void {
     component: InterfaceSectionHost,
   })
   registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: 11, component: SyncSection })
+  // F3: retained until HSR PR-5 deprecates `ModuleDefinition.globalConfig`.
+  // Dropping this section (PR-3 commit 2) left the `globalConfig` API
+  // live-but-unreachable — any module declaring `globalConfig` had no UI
+  // surface. Removal tracked by #574.
+  registerSettingsSection({
+    id: 'module-config',
+    label: 'settings.section.modules',
+    order: 8,
+    component: () => <ModuleConfigSection scope="global" />,
+  })
   registerSettingsSection({
     id: 'editor-buffers',
     label: 'settings.section.editor_buffers',
