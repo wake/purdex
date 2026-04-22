@@ -858,6 +858,148 @@ func (s *TraceStore) SaveChain(record TraceRecord) (err error) {
 	return nil
 }
 
+// AppendSteps inserts the given steps across multiple chains in a single
+// transaction. For each chain_id that doesn't already exist a minimal chain
+// row is created with started_at = min CreatedAt/StartedAt across that
+// chain's steps (other summary fields stay at their schema defaults). Steps
+// use INSERT OR IGNORE on step_id — the call is idempotent on retry.
+//
+// This is the TraceWriter sink (PR-1b-1b Task 7 / plan D10.4). Unlike
+// SaveChain, AppendSteps never rewrites existing chain summary fields; it
+// only appends onto whatever is already there. Callers (Arbitrator ⇒
+// TraceWriter) are expected to emit synthetic chain rollups separately if
+// they need the latest_* fields populated.
+func (s *TraceStore) AppendSteps(steps []TraceStep) (err error) {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("trace store is nil")
+	}
+	if len(steps) == 0 {
+		return nil
+	}
+
+	// Group steps by chain_id to decide minimal chain rows.
+	type chainAcc struct {
+		startedAt int64
+	}
+	chains := make(map[string]*chainAcc)
+	for _, step := range steps {
+		if step.ChainID == "" {
+			return fmt.Errorf("AppendSteps: step %q missing chain_id", step.StepID)
+		}
+		started := step.StartedAt
+		if started == 0 {
+			started = step.CreatedAt
+		}
+		if acc, ok := chains[step.ChainID]; !ok {
+			chains[step.ChainID] = &chainAcc{startedAt: started}
+		} else if started != 0 && (acc.startedAt == 0 || started < acc.startedAt) {
+			acc.startedAt = started
+		}
+	}
+
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	for chainID, acc := range chains {
+		if _, err = tx.Exec(`
+			INSERT INTO agent_trace_chains (
+				chain_id, started_at, completed_at, terminal_status, terminal_reason,
+				tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
+				latest_step_kind, latest_decision, latest_step_reason, step_count, updated_at
+			) VALUES (?, ?, 0, '', '', '', '', '', '', '', '', '', '', 0, ?)
+			ON CONFLICT(chain_id) DO NOTHING
+		`, chainID, acc.startedAt, time.Now().UnixNano()); err != nil {
+			return err
+		}
+	}
+
+	for _, step := range steps {
+		if err = validateLightsRow(step); err != nil {
+			return err
+		}
+		if err = validateJSONShape(step); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`
+			INSERT INTO agent_trace_steps (
+				step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+				agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+				payload_json, before_json, after_json, created_at,
+				source_kind, action, reason_code, outcome, scenario_key,
+				observed_generation, decision_ports, phase, status, watcher_token,
+				trace_id, reason_text, attrs, input_refs, output_refs,
+				state_before_ref, state_after_ref, evidence_refs,
+				started_at, ended_at, otel_kind
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(step_id) DO NOTHING
+		`, step.StepID, step.ChainID, nullString(step.ParentStepID), step.Seq, step.Kind, step.TmuxSession, step.PaneID,
+			step.AgentType, step.FrameID, step.ParentFrameID, step.EventName, step.Decision, step.Reason,
+			rawJSONText(step.PayloadJSON), rawJSONText(step.BeforeJSON), rawJSONText(step.AfterJSON), step.CreatedAt,
+			step.SourceKind, step.Action, step.ReasonCode, step.Outcome, step.ScenarioKey,
+			step.ObservedGeneration, rawJSONArrayText(step.DecisionPorts), step.Phase, step.Status, nullableString(step.WatcherToken),
+			step.TraceID, step.ReasonText, rawJSONObjectText(step.Attrs),
+			rawJSONArrayText(step.InputRefs), rawJSONArrayText(step.OutputRefs),
+			step.StateBeforeRef, step.StateAfterRef, rawJSONArrayText(step.EvidenceRefs),
+			step.StartedAt, step.EndedAt, step.OTelKind); err != nil {
+			return err
+		}
+	}
+
+	// Refresh summary fields on each chain touched by this batch. step_count
+	// is the authoritative count of persisted rows; latest_* fall back to
+	// the previously stored value when the newest step leaves them empty,
+	// which preserves SaveChain-provided roll-up values for chains that
+	// AppendSteps is only extending (spec: AppendSteps never rewrites chain
+	// summary fields). NULLIF(..., '') treats empty strings as NULL so
+	// COALESCE properly falls through.
+	//
+	// Subqueries pick the newest step by (seq DESC, created_at DESC,
+	// step_id DESC) — the same order ListChains / GetChainRecord use when
+	// materializing steps.
+	for chainID := range chains {
+		if _, err = tx.Exec(`
+			UPDATE agent_trace_chains
+			SET step_count = (
+				SELECT COUNT(*) FROM agent_trace_steps WHERE chain_id = ?
+			),
+			latest_step_kind = COALESCE(NULLIF((
+				SELECT kind FROM agent_trace_steps
+				WHERE chain_id = ?
+				ORDER BY seq DESC, created_at DESC, step_id DESC
+				LIMIT 1
+			), ''), latest_step_kind),
+			latest_decision = COALESCE(NULLIF((
+				SELECT decision FROM agent_trace_steps
+				WHERE chain_id = ?
+				ORDER BY seq DESC, created_at DESC, step_id DESC
+				LIMIT 1
+			), ''), latest_decision),
+			latest_step_reason = COALESCE(NULLIF((
+				SELECT reason FROM agent_trace_steps
+				WHERE chain_id = ?
+				ORDER BY seq DESC, created_at DESC, step_id DESC
+				LIMIT 1
+			), ''), latest_step_reason),
+			updated_at = ?
+			WHERE chain_id = ?
+		`, chainID, chainID, chainID, chainID, time.Now().UnixNano(), chainID); err != nil {
+			return err
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
 // ListChains returns chain summaries ordered newest-first.
 func (s *TraceStore) ListChains(filter TraceListFilter) (TraceChainPage, error) {
 	limit := filter.Limit
