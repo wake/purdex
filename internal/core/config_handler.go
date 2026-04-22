@@ -29,6 +29,12 @@ type configUpdateRequest struct {
 	Detect    *detectUpdateRequest   `json:"detect,omitempty"`
 	Terminal  *config.TerminalConfig `json:"terminal,omitempty"`
 	UploadDir *string                `json:"upload_dir,omitempty"`
+	Agent     *agentUpdateRequest    `json:"agent,omitempty"`
+}
+
+// agentUpdateRequest allows partial updates to agent config.
+type agentUpdateRequest struct {
+	ArbMode *string `json:"arb_mode,omitempty"`
 }
 
 // detectUpdateRequest allows partial updates to detect config.
@@ -68,6 +74,18 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Validate agent.arb_mode if provided.
+	if req.Agent != nil && req.Agent.ArbMode != nil && *req.Agent.ArbMode != "" {
+		switch *req.Agent.ArbMode {
+		case "passthrough", "authoritative":
+			// valid
+		default:
+			c.CfgMu.Unlock()
+			http.Error(w, "invalid agent.arb_mode: must be passthrough or authoritative", http.StatusBadRequest)
+			return
+		}
+	}
+
 	// Snapshot before any mutation so writeConfig failure can roll back the
 	// in-memory state, keeping c.Cfg and disk consistent. Shallow copy is
 	// sufficient because every mutation below replaces fields wholesale
@@ -102,6 +120,10 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		c.Cfg.UploadDir = *req.UploadDir
 	}
 
+	if req.Agent != nil && req.Agent.ArbMode != nil {
+		c.Cfg.Agent.ArbMode = *req.Agent.ArbMode
+	}
+
 	// Write back to config file
 	if c.CfgPath != "" {
 		if err := config.WriteFile(c.CfgPath, *c.Cfg); err != nil {
@@ -117,7 +139,7 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.Unlock()
 
 	// Notify registered callbacks about config changes (outside lock)
-	if detectChanged || req.UploadDir != nil {
+	if detectChanged || req.UploadDir != nil || req.Agent != nil {
 		c.NotifyConfigChange()
 	}
 

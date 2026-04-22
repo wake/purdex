@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/agent/arbmode"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
@@ -60,6 +62,9 @@ type Module struct {
 
 	sweepCancel context.CancelFunc
 	sweepWG     sync.WaitGroup
+
+	arbmodeMgr     *arbmode.Manager
+	arbmodeHandler *arbmode.Handler
 }
 
 // New creates a new agent Module backed by the given AgentEventStore.
@@ -125,15 +130,27 @@ func (m *Module) Init(c *core.Core) error {
 	m.prober.RegisterReadiness(codexProvider.Type(), codex.NewReadinessChecker(c.Tmux))
 	c.Registry.Register("agent.prober", m.prober)
 
+	// arbmode: env > config > default (passthrough)
+	c.CfgMu.RLock()
+	initialArbMode := c.Cfg.Agent.ArbMode
+	c.CfgMu.RUnlock()
+	m.arbmodeMgr = arbmode.NewManager(os.Getenv("AGENT_ARB_MODE"), initialArbMode)
+	m.arbmodeHandler = arbmode.NewHandler(m.arbmodeMgr)
+	c.Registry.Register("agent.arbmode.manager", m.arbmodeMgr)
+
 	// Listen for config changes to update mutable module state.
 	c.OnConfigChange(func() {
 		c.CfgMu.RLock()
 		newDir := c.Cfg.UploadDir
+		newArbMode := c.Cfg.Agent.ArbMode
 		c.CfgMu.RUnlock()
 		if newDir != "" {
 			m.mu.Lock()
 			m.uploadDir = newDir
 			m.mu.Unlock()
+		}
+		if m.arbmodeMgr != nil {
+			m.arbmodeMgr.OnConfigChange(newArbMode)
 		}
 	})
 
@@ -164,6 +181,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/cc/statusline/test/ready", m.handleStatuslineTestReady)
 	mux.HandleFunc("POST /api/agent/status", m.handleAgentStatus)
 	mux.HandleFunc("GET /api/agents/detect", m.handleDetect)
+
+	// Arbitrator mode (read-only snapshot)
+	mux.Handle("GET /api/agent/arbitrator/mode", m.arbmodeHandler)
 
 	// History (delegates to provider)
 	mux.HandleFunc("GET /api/sessions/{code}/history", m.handleHistory)

@@ -44,6 +44,14 @@ func (tc TerminalConfig) GetSizingMode() string {
 	return tc.SizingMode
 }
 
+// AgentConfig holds per-agent-module settings. Currently the single setting is
+// the arbitrator mode flag (AGENT_ARB_MODE) which governs whether the
+// Arbitrator writes frames authoritatively or only observes via the legacy
+// direct-write path.
+type AgentConfig struct {
+	ArbMode string `toml:"arb_mode" json:"arb_mode"`
+}
+
 type Config struct {
 	HostID       string         `toml:"host_id"        json:"host_id"`
 	Bind         string         `toml:"bind"           json:"bind"`
@@ -58,6 +66,7 @@ type Config struct {
 	Detect       DetectConfig   `toml:"detect"         json:"detect"`
 	Features     FeaturesConfig `toml:"features"       json:"features"`
 	Dev          DevConfig      `toml:"dev"            json:"dev"`
+	Agent        AgentConfig    `toml:"agent"          json:"agent"`
 }
 
 func defaults() Config {

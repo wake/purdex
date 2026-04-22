@@ -237,6 +237,69 @@ func TestPutConfigIgnoresZeroPollInterval(t *testing.T) {
 	c.CfgMu.RUnlock()
 }
 
+func TestPutConfig_Agent_ArbMode_Passthrough(t *testing.T) {
+	c := newTestCore()
+
+	body := `{"agent":{"arb_mode":"passthrough"}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	c.CfgMu.RLock()
+	assert.Equal(t, "passthrough", c.Cfg.Agent.ArbMode)
+	c.CfgMu.RUnlock()
+}
+
+func TestPutConfig_Agent_ArbMode_Authoritative(t *testing.T) {
+	c := newTestCore()
+
+	body := `{"agent":{"arb_mode":"authoritative"}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	c.CfgMu.RLock()
+	assert.Equal(t, "authoritative", c.Cfg.Agent.ArbMode)
+	c.CfgMu.RUnlock()
+}
+
+func TestPutConfig_Agent_ArbMode_InvalidValue_400(t *testing.T) {
+	c := newTestCore()
+
+	body := `{"agent":{"arb_mode":"bogus"}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid agent.arb_mode")
+}
+
+func TestPutConfig_Agent_ArbMode_TriggersOnConfigChange(t *testing.T) {
+	c := newTestCore()
+
+	var callbackCalled int
+	c.OnConfigChange(func() {
+		callbackCalled++
+	})
+
+	body := `{"agent":{"arb_mode":"authoritative"}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 1, callbackCalled, "OnConfigChange callback should be called exactly once")
+
+	c.CfgMu.RLock()
+	assert.Equal(t, "authoritative", c.Cfg.Agent.ArbMode)
+	c.CfgMu.RUnlock()
+}
+
 func TestRegisterCoreRoutesIncludesConfigEndpoints(t *testing.T) {
 	c := newTestCore()
 	mux := http.NewServeMux()
