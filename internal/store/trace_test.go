@@ -4,7 +4,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func strPtr(s string) *string { return &s }
@@ -23,6 +26,8 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 	s := openTestTraceStore(t)
 	s.maxChains = 10
 	s.maxSteps = 10
+
+	traceID := uuid.NewString()
 
 	record := TraceRecord{
 		Chain: TraceChain{
@@ -68,6 +73,17 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 				Phase:              "committed",
 				Status:             "success",
 				WatcherToken:       strPtr("watcher-abc"),
+				TraceID:            traceID,
+				ReasonText:         "ready to continue",
+				Attrs:              json.RawMessage(`{"agent_type":"cc","hook":"post"}`),
+				InputRefs:          json.RawMessage(`[{"kind":"event","id":"e1"}]`),
+				OutputRefs:         json.RawMessage(`[{"kind":"frame","id":"f1"}]`),
+				StateBeforeRef:     "snap:before",
+				StateAfterRef:      "snap:after",
+				EvidenceRefs:       json.RawMessage(`[{"source":"tmux"}]`),
+				StartedAt:          101,
+				EndedAt:            101,
+				OTelKind:           "internal",
 			},
 			{
 				StepID:             "step-2",
@@ -93,6 +109,8 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 				ObservedGeneration: 8,
 				Phase:              "committed",
 				Status:             "success",
+				TraceID:            traceID,
+				OTelKind:           "internal",
 			},
 		},
 	}
@@ -156,13 +174,58 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 	if second.Phase != "committed" || second.Status != "success" {
 		t.Fatalf("second step lights fields = %+v", second)
 	}
+
+	// PR-1b-0 envelope completion: the 11 new fields must round-trip on the
+	// fully populated first step and keep well-formed zero-value defaults on
+	// the sparsely populated second step.
+	if first.TraceID != traceID {
+		t.Fatalf("first TraceID = %q, want %q", first.TraceID, traceID)
+	}
+	if first.ReasonText != "ready to continue" {
+		t.Fatalf("first ReasonText = %q", first.ReasonText)
+	}
+	if string(first.Attrs) != `{"agent_type":"cc","hook":"post"}` {
+		t.Fatalf("first Attrs = %s", string(first.Attrs))
+	}
+	if string(first.InputRefs) != `[{"kind":"event","id":"e1"}]` {
+		t.Fatalf("first InputRefs = %s", string(first.InputRefs))
+	}
+	if string(first.OutputRefs) != `[{"kind":"frame","id":"f1"}]` {
+		t.Fatalf("first OutputRefs = %s", string(first.OutputRefs))
+	}
+	if first.StateBeforeRef != "snap:before" || first.StateAfterRef != "snap:after" {
+		t.Fatalf("first state refs = %q/%q", first.StateBeforeRef, first.StateAfterRef)
+	}
+	if string(first.EvidenceRefs) != `[{"source":"tmux"}]` {
+		t.Fatalf("first EvidenceRefs = %s", string(first.EvidenceRefs))
+	}
+	if first.StartedAt != 101 || first.EndedAt != 101 {
+		t.Fatalf("first started/ended = %d/%d", first.StartedAt, first.EndedAt)
+	}
+	if first.OTelKind != "internal" {
+		t.Fatalf("first OTelKind = %q", first.OTelKind)
+	}
+
+	if second.TraceID != traceID {
+		t.Fatalf("second TraceID = %q, want %q", second.TraceID, traceID)
+	}
+	if string(second.Attrs) != `{}` {
+		t.Fatalf("second Attrs default = %s, want {}", string(second.Attrs))
+	}
+	if string(second.InputRefs) != `[]` || string(second.OutputRefs) != `[]` || string(second.EvidenceRefs) != `[]` {
+		t.Fatalf("second refs default = %s/%s/%s", string(second.InputRefs), string(second.OutputRefs), string(second.EvidenceRefs))
+	}
+	if second.OTelKind != "internal" {
+		t.Fatalf("second OTelKind = %q, want internal", second.OTelKind)
+	}
 }
 
-// TestTraceStore_ZeroValueLightsFieldsRoundTrip guards the backwards-compat
-// path: older callers that do not set the new light-tracking columns must
-// still round-trip without errors. Scanned zero values must come back without
-// surfacing SQL NULL errors.
-func TestTraceStore_ZeroValueLightsFieldsRoundTrip(t *testing.T) {
+// TestTraceStore_LegacyRowZeroValueEnvelopeRoundtrip guards the row-class
+// discriminator contract (plan phase-1 #561): a step whose source_kind is
+// empty is a legacy row and is exempt from Lights envelope validation, so
+// every new spec §3.5 field is allowed to stay at its zero value without
+// surfacing SQL NULL errors or triggering validation.
+func TestTraceStore_LegacyRowZeroValueEnvelopeRoundtrip(t *testing.T) {
 	s := openTestTraceStore(t)
 	s.maxChains = 10
 	s.maxSteps = 10
@@ -191,6 +254,8 @@ func TestTraceStore_ZeroValueLightsFieldsRoundTrip(t *testing.T) {
 				EventName:   "Stop",
 				Decision:    "done",
 				CreatedAt:   11,
+				// Intentionally no SourceKind / Phase / Outcome / Action /
+				// TraceID: legacy row, discriminator must permit zero-values.
 			},
 		},
 	}
@@ -207,7 +272,10 @@ func TestTraceStore_ZeroValueLightsFieldsRoundTrip(t *testing.T) {
 		t.Fatalf("got = %+v", got)
 	}
 	step := got.Steps[0]
-	if step.SourceKind != "" || step.Action != "" || step.Phase != "" || step.Status != "" {
+	if step.SourceKind != "" {
+		t.Fatalf("legacy row SourceKind must be empty, got %q", step.SourceKind)
+	}
+	if step.Action != "" || step.Phase != "" || step.Status != "" || step.Outcome != "" {
 		t.Fatalf("zero-value lights fields corrupted: %+v", step)
 	}
 	if step.ObservedGeneration != 0 {
@@ -218,6 +286,171 @@ func TestTraceStore_ZeroValueLightsFieldsRoundTrip(t *testing.T) {
 	}
 	if step.WatcherToken != nil {
 		t.Fatalf("WatcherToken = %v, want nil", step.WatcherToken)
+	}
+	// PR-1b-0 envelope completion: legacy rows keep zero values and
+	// well-formed JSON defaults.
+	if step.TraceID != "" || step.ReasonText != "" || step.StateBeforeRef != "" || step.StateAfterRef != "" || step.OTelKind != "" {
+		t.Fatalf("legacy row envelope fields must be zero, got %+v", step)
+	}
+	if step.StartedAt != 0 || step.EndedAt != 0 {
+		t.Fatalf("legacy row started/ended = %d/%d, want 0/0", step.StartedAt, step.EndedAt)
+	}
+	if string(step.Attrs) != `{}` {
+		t.Fatalf("legacy row Attrs default = %s, want {}", string(step.Attrs))
+	}
+	if string(step.InputRefs) != `[]` || string(step.OutputRefs) != `[]` || string(step.EvidenceRefs) != `[]` {
+		t.Fatalf("legacy row refs default = %s/%s/%s", string(step.InputRefs), string(step.OutputRefs), string(step.EvidenceRefs))
+	}
+}
+
+// TestTraceStore_LightsRow_MissingRequiredField_Errors covers the negative
+// half of the row-class discriminator: once source_kind is set, required
+// envelope fields (phase/outcome/action/trace_id) must be non-empty; otherwise
+// SaveChain rejects the record with an actionable error.
+func TestTraceStore_LightsRow_MissingRequiredField_Errors(t *testing.T) {
+	base := func() TraceRecord {
+		return TraceRecord{
+			Chain: TraceChain{
+				ChainID:        "chain-lights",
+				StartedAt:      10,
+				CompletedAt:    20,
+				TerminalStatus: "done",
+				TmuxSession:    "proj-a",
+				PaneID:         "%5",
+				RootAgentType:  "cc",
+				RootEventName:  "Stop",
+			},
+			Steps: []TraceStep{
+				{
+					StepID:      "lights-1",
+					ChainID:     "chain-lights",
+					Seq:         1,
+					Kind:        "decision",
+					TmuxSession: "proj-a",
+					PaneID:      "%5",
+					AgentType:   "cc",
+					EventName:   "Stop",
+					Decision:    "done",
+					CreatedAt:   11,
+					SourceKind:  "hook",
+					Action:      "decision:done",
+					Outcome:     "emitted",
+					Phase:       "committed",
+					Status:      "success",
+					TraceID:     uuid.NewString(),
+				},
+			},
+		}
+	}
+
+	// Sanity: fully-populated lights row persists without error.
+	s := openTestTraceStore(t)
+	s.maxChains = 10
+	s.maxSteps = 10
+	if err := s.SaveChain(base()); err != nil {
+		t.Fatalf("baseline SaveChain: %v", err)
+	}
+
+	cases := []struct {
+		name     string
+		mutate   func(*TraceStep)
+		wantHint string
+	}{
+		{"missing action", func(st *TraceStep) { st.Action = "" }, "action"},
+		{"missing outcome", func(st *TraceStep) { st.Outcome = "" }, "outcome"},
+		{"missing phase", func(st *TraceStep) { st.Phase = "" }, "phase"},
+		{"missing trace_id", func(st *TraceStep) { st.TraceID = "" }, "trace_id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openTestTraceStore(t)
+			store.maxChains = 10
+			store.maxSteps = 10
+			rec := base()
+			rec.Chain.ChainID = "chain-lights-" + tc.name
+			rec.Steps[0].ChainID = rec.Chain.ChainID
+			tc.mutate(&rec.Steps[0])
+			err := store.SaveChain(rec)
+			if err == nil {
+				t.Fatalf("expected lights row validation error")
+			}
+			if !strings.Contains(err.Error(), tc.wantHint) {
+				t.Fatalf("error %q does not mention field %q", err.Error(), tc.wantHint)
+			}
+		})
+	}
+}
+
+// TestTraceStore_MixedLegacyAndLightsRows confirms legacy + lights rows can
+// live in the same chain without the discriminator tripping on the legacy
+// neighbour.
+func TestTraceStore_MixedLegacyAndLightsRows(t *testing.T) {
+	s := openTestTraceStore(t)
+	s.maxChains = 10
+	s.maxSteps = 10
+
+	traceID := uuid.NewString()
+	rec := TraceRecord{
+		Chain: TraceChain{
+			ChainID:        "chain-mixed",
+			StartedAt:      10,
+			CompletedAt:    30,
+			TerminalStatus: "done",
+			TmuxSession:    "proj-a",
+			PaneID:         "%5",
+			RootAgentType:  "cc",
+			RootEventName:  "Stop",
+		},
+		Steps: []TraceStep{
+			{
+				StepID:      "legacy-1",
+				ChainID:     "chain-mixed",
+				Seq:         1,
+				Kind:        "decision",
+				TmuxSession: "proj-a",
+				PaneID:      "%5",
+				AgentType:   "cc",
+				EventName:   "Stop",
+				Decision:    "done",
+				CreatedAt:   11,
+			},
+			{
+				StepID:       "lights-1",
+				ChainID:      "chain-mixed",
+				ParentStepID: "legacy-1",
+				Seq:          2,
+				Kind:         "terminal",
+				TmuxSession:  "proj-a",
+				PaneID:       "%5",
+				AgentType:    "cc",
+				EventName:    "Stop",
+				Decision:     "done",
+				CreatedAt:    12,
+				SourceKind:   "hook",
+				Action:       "terminal:done",
+				Outcome:      "broadcasted",
+				Phase:        "committed",
+				Status:       "success",
+				TraceID:      traceID,
+				OTelKind:     "internal",
+			},
+		},
+	}
+	if err := s.SaveChain(rec); err != nil {
+		t.Fatalf("SaveChain mixed: %v", err)
+	}
+	got, err := s.GetChainRecord("chain-mixed")
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if len(got.Steps) != 2 {
+		t.Fatalf("steps = %d, want 2", len(got.Steps))
+	}
+	if got.Steps[0].SourceKind != "" {
+		t.Fatalf("legacy step SourceKind = %q, want empty", got.Steps[0].SourceKind)
+	}
+	if got.Steps[1].SourceKind != "hook" || got.Steps[1].TraceID != traceID {
+		t.Fatalf("lights step = %+v", got.Steps[1])
 	}
 }
 

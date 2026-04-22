@@ -39,7 +39,7 @@ PR-1a merge 後 review 發現 §3.5 envelope 欄位仍缺 12 個（#560）、leg
 | `session_id` | `agent_trace_chains.tmux_session` + `pane_id`（既有 composite）| PR-1a |
 | `event_id` | `agent_trace_steps.step_id`（既有，uuid 全域唯一）| PR-1a |
 | `span_id / parent_span_id` | `step_id / parent_step_id`（既有）| PR-1a |
-| `name` | `event_name`（既有，PR-1b-0 擴充填法為 `hook.post.<Event>`）| PR-1a |
+| `name` | `event_name`（既有，裸事件名；PR-1b-1 擴充填法為 `hook.post.<Event>`）| PR-1a |
 | `kind` (OTel) | `otel_kind` 新欄（避開現有 `kind` 的 step_kind 語意）| PR-1b-0 |
 | `source_kind` | `source_kind` | PR-1a |
 | `watcher_token` | `watcher_token` | PR-1a |

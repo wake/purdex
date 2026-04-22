@@ -66,6 +66,18 @@ type TraceStep struct {
 	Phase              string          `json:"phase,omitempty"`
 	Status             string          `json:"status,omitempty"`
 	WatcherToken       *string         `json:"watcher_token,omitempty"`
+	// Spec §3.5 envelope completion (PR-1b-0).
+	TraceID        string          `json:"trace_id,omitempty"`
+	ReasonText     string          `json:"reason_text,omitempty"`
+	Attrs          json.RawMessage `json:"attrs,omitempty"`
+	InputRefs      json.RawMessage `json:"input_refs,omitempty"`
+	OutputRefs     json.RawMessage `json:"output_refs,omitempty"`
+	StateBeforeRef string          `json:"state_before_ref,omitempty"`
+	StateAfterRef  string          `json:"state_after_ref,omitempty"`
+	EvidenceRefs   json.RawMessage `json:"evidence_refs,omitempty"`
+	StartedAt      int64           `json:"started_at,omitempty"`
+	EndedAt        int64           `json:"ended_at,omitempty"`
+	OTelKind       string          `json:"otel_kind,omitempty"`
 }
 
 // TraceRecord combines a chain summary with its ordered steps.
@@ -268,6 +280,17 @@ func needsStepRebuildTx(tx *sql.Tx, cols map[string]bool) bool {
 		"phase",
 		"status",
 		"watcher_token",
+		"trace_id",
+		"reason_text",
+		"attrs",
+		"input_refs",
+		"output_refs",
+		"state_before_ref",
+		"state_after_ref",
+		"evidence_refs",
+		"started_at",
+		"ended_at",
+		"otel_kind",
 	}
 	for _, col := range required {
 		if !cols[col] {
@@ -379,6 +402,17 @@ const traceStepsDDL = `
 		phase               TEXT NOT NULL DEFAULT '',
 		status              TEXT NOT NULL DEFAULT '',
 		watcher_token       TEXT,
+		trace_id            TEXT NOT NULL DEFAULT '',
+		reason_text         TEXT NOT NULL DEFAULT '',
+		attrs               TEXT NOT NULL DEFAULT '{}',
+		input_refs          TEXT NOT NULL DEFAULT '[]',
+		output_refs         TEXT NOT NULL DEFAULT '[]',
+		state_before_ref    TEXT NOT NULL DEFAULT '',
+		state_after_ref     TEXT NOT NULL DEFAULT '',
+		evidence_refs       TEXT NOT NULL DEFAULT '[]',
+		started_at          INTEGER NOT NULL DEFAULT 0,
+		ended_at            INTEGER NOT NULL DEFAULT 0,
+		otel_kind           TEXT NOT NULL DEFAULT '',
 		FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
 		FOREIGN KEY (chain_id, parent_step_id) REFERENCES agent_trace_steps(chain_id, step_id) ON DELETE CASCADE
 	)
@@ -739,13 +773,20 @@ func (s *TraceStore) SaveChain(record TraceRecord) (err error) {
 				agent_type, frame_id, parent_frame_id, event_name, decision, reason,
 				payload_json, before_json, after_json, created_at,
 				source_kind, action, reason_code, outcome, scenario_key,
-				observed_generation, decision_ports, phase, status, watcher_token
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				observed_generation, decision_ports, phase, status, watcher_token,
+				trace_id, reason_text, attrs, input_refs, output_refs,
+				state_before_ref, state_after_ref, evidence_refs,
+				started_at, ended_at, otel_kind
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, step.StepID, step.ChainID, nullString(step.ParentStepID), step.Seq, step.Kind, step.TmuxSession, step.PaneID,
 			step.AgentType, step.FrameID, step.ParentFrameID, step.EventName, step.Decision, step.Reason,
 			rawJSONText(step.PayloadJSON), rawJSONText(step.BeforeJSON), rawJSONText(step.AfterJSON), step.CreatedAt,
 			step.SourceKind, step.Action, step.ReasonCode, step.Outcome, step.ScenarioKey,
-			step.ObservedGeneration, rawJSONArrayText(step.DecisionPorts), step.Phase, step.Status, nullableString(step.WatcherToken)); err != nil {
+			step.ObservedGeneration, rawJSONArrayText(step.DecisionPorts), step.Phase, step.Status, nullableString(step.WatcherToken),
+			step.TraceID, step.ReasonText, rawJSONObjectText(step.Attrs),
+			rawJSONArrayText(step.InputRefs), rawJSONArrayText(step.OutputRefs),
+			step.StateBeforeRef, step.StateAfterRef, rawJSONArrayText(step.EvidenceRefs),
+			step.StartedAt, step.EndedAt, step.OTelKind); err != nil {
 			return err
 		}
 	}
@@ -830,7 +871,10 @@ func (s *TraceStore) GetChainRecord(chainID string) (*TraceRecord, error) {
 		       agent_type, frame_id, parent_frame_id, event_name, decision, reason,
 		       payload_json, before_json, after_json, created_at,
 		       source_kind, action, reason_code, outcome, scenario_key,
-		       observed_generation, decision_ports, phase, status, watcher_token
+		       observed_generation, decision_ports, phase, status, watcher_token,
+		       trace_id, reason_text, attrs, input_refs, output_refs,
+		       state_before_ref, state_after_ref, evidence_refs,
+		       started_at, ended_at, otel_kind
 		FROM agent_trace_steps
 		WHERE chain_id = ?
 		ORDER BY seq ASC, created_at ASC, step_id ASC
@@ -920,6 +964,9 @@ func normalizeTraceRecord(record TraceRecord) (TraceChain, []TraceStep, error) {
 			if _, ok := seen[steps[i].ParentStepID]; !ok {
 				return TraceChain{}, nil, fmt.Errorf("step %s references missing parent step %s", steps[i].StepID, steps[i].ParentStepID)
 			}
+		}
+		if err := validateLightsRow(steps[i]); err != nil {
+			return TraceChain{}, nil, err
 		}
 		seen[steps[i].StepID] = struct{}{}
 	}
@@ -1110,6 +1157,7 @@ func collectTraceSteps(rows *sql.Rows) ([]TraceStep, error) {
 		var parent sql.NullString
 		var watcher sql.NullString
 		var payload, before, after, decisionPorts string
+		var attrs, inputRefs, outputRefs, evidenceRefs string
 		if err := rows.Scan(
 			&step.StepID,
 			&step.ChainID,
@@ -1138,6 +1186,17 @@ func collectTraceSteps(rows *sql.Rows) ([]TraceStep, error) {
 			&step.Phase,
 			&step.Status,
 			&watcher,
+			&step.TraceID,
+			&step.ReasonText,
+			&attrs,
+			&inputRefs,
+			&outputRefs,
+			&step.StateBeforeRef,
+			&step.StateAfterRef,
+			&evidenceRefs,
+			&step.StartedAt,
+			&step.EndedAt,
+			&step.OTelKind,
 		); err != nil {
 			return nil, err
 		}
@@ -1146,6 +1205,10 @@ func collectTraceSteps(rows *sql.Rows) ([]TraceStep, error) {
 		step.BeforeJSON = json.RawMessage(before)
 		step.AfterJSON = json.RawMessage(after)
 		step.DecisionPorts = json.RawMessage(decisionPorts)
+		step.Attrs = json.RawMessage(attrs)
+		step.InputRefs = json.RawMessage(inputRefs)
+		step.OutputRefs = json.RawMessage(outputRefs)
+		step.EvidenceRefs = json.RawMessage(evidenceRefs)
 		if watcher.Valid {
 			v := watcher.String
 			step.WatcherToken = &v
@@ -1188,6 +1251,13 @@ func rawJSONArrayText(raw json.RawMessage) string {
 	return string(raw)
 }
 
+func rawJSONObjectText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "{}"
+	}
+	return string(raw)
+}
+
 func nullableString(value *string) any {
 	if value == nil {
 		return nil
@@ -1195,11 +1265,29 @@ func nullableString(value *string) any {
 	return *value
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
+// validateLightsRow enforces the row-class discriminator contract from spec
+// §3.5 / plan phase-1 #561: rows with a non-empty source_kind are Lights rows
+// and must carry the required envelope identifiers; rows with an empty
+// source_kind are legacy rows and are exempt so pre-PR-1a callers still
+// round-trip.
+func validateLightsRow(step TraceStep) error {
+	if step.SourceKind == "" {
+		return nil
+	}
+	required := []struct {
+		name  string
+		value string
+	}{
+		{"source_kind", step.SourceKind},
+		{"phase", step.Phase},
+		{"outcome", step.Outcome},
+		{"action", step.Action},
+		{"trace_id", step.TraceID},
+	}
+	for _, field := range required {
+		if field.value == "" {
+			return fmt.Errorf("lights row step %s missing required field %s", step.StepID, field.name)
 		}
 	}
-	return ""
+	return nil
 }
