@@ -264,11 +264,12 @@ activity probe 目前靠畫面 hash diff 判定，但 cc 提問後若使用者�
 
 ### 目的
 
-Settings → Development 區塊新增 Event / Trace / Frame / Coverage 四視圖 Inspector，消費既有 `/api/agent/monitor/chains`、`/chains/{id}`、`/projection` 三 endpoint，並新增 Coverage 矩陣視圖消費 Phase 0 的 `Coverage()` 結果。後端資料已齊，本 Phase 純讀取側。
+Settings → Development 區塊新增 Event / Trace / Frame / Coverage 四視圖 Inspector。Chain / Projection 三視圖消費**既有** `/api/agent/monitor/chains` / `/chains/{id}` / `/projection` endpoint；Coverage 視圖需要**新增一個** `/api/agent/monitor/coverage` 唯讀 endpoint 將 Phase 0 `Coverage()` 結果序列化（現有 Monitor API 沒有此路徑）。本 Phase 主體為 SPA UI，backend 改動限縮於一個無邏輯的 JSON serializer handler + 對應單元測試。
 
 ### 改動觸及
 
-- 新增 `/api/agent/monitor/coverage` endpoint：將 `Coverage()` 結果 JSON 化（欄位命名以 Phase 0 結構為準）
+- 新增 `/api/agent/monitor/coverage` endpoint：將 `Coverage()` 結果 JSON 化（欄位命名以 Phase 0 `CoverageRow` 結構為準；`Status` 以現有 string 常數 marshal；無 query / filter 參數）
+- Handler 單元測試：涵蓋空 registry、單一 declared / not-declared provider、混合情境 — 與 Phase 0 `coverage_test.go` 對齊
 - SPA 新增 Inspector 面板：
   - **Chain List** — 依時間 / agent type / pane / reason 過濾
   - **Chain Detail** — `buildStepTree` 父子樹呈現 verify / derive / apply 三階段 step，可展開原始 payload

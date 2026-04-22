@@ -31,7 +31,8 @@
 
 - 呼叫 `r.All()` 取得所有 provider
 - 對每個 provider 做 type assertion 判斷是否實作 `StatusSupporter`
-- 輸出順序：以 `AgentType` 字母序（ASCII）排序；重複 AgentType 保留 registration 順序作為 tie-breaker（不預期會發生，但不 panic）
+- 輸出順序：**保留 registry 註冊順序**（`Registry.All()` 原序）— 該順序已帶 `Claim` 優先權語意；Coverage 重排會丟失資訊。需要字母序的消費端（例：Phase 5 Inspector UI）自行排序
+- 重複 `AgentType`：不合併、不去重；兩列並存並保留註冊順序（罕見但支援，利於後續 diagnose provider shadowing）
 - 空 registry 回傳 `nil`（不是 empty slice） — 與 Go 慣例對齊，`len()` 皆為 0
 - 非 thread-safe 假設：呼叫期間 registry 不會被 mutate（與 `Registry.All()` 相同約束）
 
@@ -58,8 +59,9 @@
 | T3 | `TestCoverageWithStatusSupporter` | 註冊一個實作 `StatusSupporter` 的 provider，宣告 `[Running, Idle]` | 單列 row，`Declares=true`、`Declared` 元素 = `[Running, Idle]`、`AgentType` 正確 |
 | T4 | `TestCoverageDeclaredIsCopy` | provider 回傳 slice 後，呼叫端 mutate `row.Declared` | provider 內部 slice 未被影響（defensive copy 驗證） |
 | T5 | `TestCoverageEmptyDeclaration` | provider 實作 `StatusSupporter` 但回傳空 slice | `Declares=true`、`Declared` 為空 slice（非 nil）（若改為允許 nil 可調整此斷言，本 plan 偏向「空 slice，明確表達『宣告了沒有』」） |
-| T6 | `TestCoverageSortedByAgentType` | 註冊三個 provider，註冊順序 `cc` → `codex` → `opencode`（字母序恰好一致）；另加一個反序案例 `zed` → `abc` → `mid` | 回傳順序為字母序 `abc, mid, zed` |
-| T7 | `TestCoverageMixed` | 同時註冊 `StatusSupporter` 實作者 + 非實作者 | 兩列 row 各自 `Declares` 標記正確、排序正確 |
+| T6 | `TestCoverageRegistrationOrder` | 反字母序註冊 `zed` → `abc` → `mid` | 回傳順序保持註冊順序 `zed, abc, mid`（非重排） |
+| T7 | `TestCoverageDuplicateAgentType` | 同 `AgentType` 註冊兩次：第一次含 `StatusSupporter` 宣告、第二次為裸 provider | 兩列 row 都存在且保留註冊順序；`Declares` 各自正確（不合併、不去重、不重排） |
+| T8 | `TestCoverageMixed` | 同時註冊 `StatusSupporter` 實作者 + 非實作者 | 兩列 row 各自 `Declares` 標記正確、順序跟隨註冊 |
 
 ### 2.1 T5 邊界決議
 
@@ -87,12 +89,11 @@ TDD 循序：
 6. **綠**：加 type assertion + 呼叫 `SupportedStatuses()` + defensive copy → T3 綠
 7. **紅**：加 T4（defensive copy） → 應綠（已在 6 實作）；若未綠，補 copy 邏輯
 8. **紅**：加 T5（空 slice normalize） → 根據實作可能綠或需補 normalize
-9. **紅**：加 T6（排序穩定）+ T7（混合） → 失敗
-10. **綠**：加 `sort.Slice` 按 `AgentType` 字母序 → T6 + T7 綠
-11. **refactor**：抽取 `classify(provider)` helper 若有助於可讀性；否則保持內聯
+9. **紅**：加 T6（註冊順序）+ T7（重複 AgentType）+ T8（混合） → 應綠（若 Coverage 走 `r.All()` 原序即自然成立）
+10. **refactor**：抽取 `classify(provider)` helper 若有助於可讀性；否則保持內聯
 
 驗收：
-- `go test ./internal/agent/...` 全綠（新增 7 個測試 + 既有測試）
+- `go test ./internal/agent/...` 全綠（新增 8 個測試 T1–T8 + 既有測試）
 - `go vet ./...` 無 warning
 - `go build ./...` 綠
 
@@ -102,8 +103,8 @@ TDD 循序：
 |---|---|---|
 | `internal/agent/provider.go` | 加 `StatusSupporter` interface + doc comment | +6 |
 | `internal/agent/coverage.go` | 新檔：`CoverageRow` + `Coverage()` + normalize | ~35 |
-| `internal/agent/coverage_test.go` | 新檔：T1–T7 + stub | ~100 |
-| **合計** | | **~140 行** |
+| `internal/agent/coverage_test.go` | 新檔：T1–T8 + stub | ~180 |
+| **合計** | | **~220 行** |
 
 （超出 spec 原本估的 ~75 行，原因是測試涵蓋率加厚 + stub 樣板 — 仍在 Phase 0 範圍內合理。）
 
@@ -128,9 +129,13 @@ TDD 循序：
 
 ## 7. 驗收清單（完整 Phase 0）
 
-- [ ] 兩個 commit 符合上述 message 規範
+- [ ] Commits 符合上述 message 規範（Phase 0 PR 最終含：interface commit + Coverage helper commit + spec/plan docs commit + 後續 review fix commits）
 - [ ] `go build ./...` 綠
-- [ ] `go test ./internal/agent/...` 綠（新增 7 個測試全通過）
+- [ ] `go test ./internal/agent/...` 綠（新增 8 個測試 T1–T8 全通過）
 - [ ] `go vet ./...` 無 warning
-- [ ] `git diff main..HEAD` 只涉及三個檔案（`provider.go` / `coverage.go` / `coverage_test.go`）
-- [ ] `Coverage()` 對空 registry 回傳 nil、對未實作 provider 標 `Declares=false`、對實作 provider 標 `Declares=true` 且 `Declared` 為 defensive copy
+- [ ] PR 對 `origin/main` 的 diff 涉及：3 個 code 檔（`provider.go` / `coverage.go` / `coverage_test.go`）+ 3 份設計文件（discussion / spec / plan）；所有其他路徑不得出現
+- [ ] `Coverage()` 對空 registry 回傳 nil、對未實作 provider 標 `Declares=false`、對實作 provider 標 `Declares=true` 且 `Declared` 為 defensive copy、輸出順序保持 registry 註冊順序
+
+## 8. 歷史事實註記（Retrospective）
+
+本 plan 原寫於 TDD 執行**並行期間**（spec + plan + subagent 實作同一 session 內進行），實際 commit 歷史呈現的順序為：code commits 在前、spec/plan docs commit 在後。plan §3 的「兩個 commit」切分描述設計意圖，不代表實際 HEAD 重建為先 docs 後 code 的嚴格線性歷史。若需要形式化的 spec → plan → implementation 歷史，在 Phase 1 起改為：先 commit + push spec/plan 佔位檔、再派 subagent 補 code。Phase 0 不做事後 rebase（避免改動已 push 的 PR hash 影響 review continuity）。
