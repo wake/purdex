@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.207] - 2026-04-22
+
+### Feat(spa): add untitled editor document flow (#591)
+
+- 新的 in-app 編輯器文件改為先建立在獨立的 `untitled:` URI 上，名稱採 `Untitled`、`Untitled-1` 遞增，並把語言、EOL、encoding 與 untitled 狀態一起留在 editor store。
+- untitled rename 改成純前端遷移 pane 與 buffer key，不再誤走後端檔案 rename；第一次存檔則共用 `RenamePopover`，未 rename 的文件先提示 `.txt` / `.md` 建議檔名，已 rename 的文件可直接寫入 `/buffer/<name>`。
+- save 後會把編輯中的 untitled 文件遷移到實際的 in-app buffer 路徑，清除 untitled metadata，並同步更新 toolbar / status bar 顯示與相關測試覆蓋。
+
 ## [1.0.0-alpha.206] - 2026-04-22
 
 ### Feat(spa): HSR PR-4 — Host settings shell + built-in adapter + #541 harness (#582)
