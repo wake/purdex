@@ -78,26 +78,46 @@ type Module struct {
 	traceWriter *arbitrator.TraceWriter
 	arbCancel   context.CancelFunc
 	arbDone     chan struct{}
+
+	// PR-1b-1c T7: divergenceStore is the shared store exposed to the
+	// Arbitrator's apply pipeline (nil-tolerant when the store isn't
+	// available). Initialised in New; nil in the degraded path.
+	divergenceStore *store.DivergenceStore
+
+	// PR-1b-1c T7: probe Watcher registry — per (sessionName, probe.Kind).
+	// Writes happen from probe wiring points (manageActivityWatch, probe
+	// session teardown, Module.Stop). Reads happen from the same callsites
+	// plus probeOnOutcome closures captured by Watcher goroutines.
+	watchersMu     sync.Mutex
+	watchers       map[watcherKey]probe.Watcher
+	watchersCtx    context.Context
+	watchersCancel context.CancelFunc
 }
 
 // New creates a new agent Module backed by the given AgentEventStore.
 func New(events *store.AgentEventStore) *Module {
 	var frames *store.FramesStore
 	var traces *store.TraceStore
+	var divergences *store.DivergenceStore
 	if events != nil {
 		frames, _ = events.Frames()
 		traces, _ = events.Traces()
+		// Divergences is nil-tolerant throughout the apply pipeline; a
+		// migration failure here must not block the rest of Init.
+		divergences, _ = events.Divergences()
 	}
 	m := &Module{
 		events:          events,
 		frames:          frames,
 		traces:          traces,
+		divergenceStore: divergences,
 		registry:        agentpkg.NewRegistry(),
 		currentStatus:   make(map[string]agentpkg.Status),
 		subagents:       make(map[string][]string),
 		activeWatchers:  make(map[string]string),
 		statusSnapshots: make(map[string]statusSnapshot),
 		testObservers:   make(map[string]*testObserver),
+		watchers:        make(map[watcherKey]probe.Watcher),
 	}
 	if traces != nil {
 		m.traceSink = newHookTraceSink(traces)
@@ -158,12 +178,25 @@ func (m *Module) Init(c *core.Core) error {
 			Store: m.traces,
 			Now:   time.Now,
 		})
+		// PR-1b-1c T7: wire the divergence writer + legacy-frames view.
+		// Both are nil-tolerant in the apply pipeline (D5.2) — we pass
+		// whatever the event store exposes.
+		var divWriter arbitrator.DivergencesWriter
+		if m.divergenceStore != nil {
+			divWriter = m.divergenceStore
+		}
+		var legacyFrames arbitrator.LegacyFramesView
+		if m.frames != nil {
+			legacyFrames = m.frames
+		}
 		m.arbitrator = arbitrator.NewArbitrator(arbitrator.Options{
-			Minter:      m.traceMinter,
-			Lookup:      m.traceLookup,
-			Arbmode:     m.arbmodeMgr,
-			TraceWriter: m.traceWriter,
-			Now:         time.Now,
+			Minter:       m.traceMinter,
+			Lookup:       m.traceLookup,
+			Arbmode:      m.arbmodeMgr,
+			TraceWriter:  m.traceWriter,
+			Divergences:  divWriter,
+			LegacyFrames: legacyFrames,
+			Now:          time.Now,
 		})
 	}
 
@@ -288,6 +321,10 @@ func (m *Module) Stop(_ context.Context) error {
 	if m.prober != nil {
 		m.prober.StopAllWatches()
 	}
+	// PR-1b-1c T7: stop every Module-managed probe Watcher and cancel the
+	// shared context.
+	m.stopAllWatchers()
+	m.cancelWatchersContext()
 	m.mu.Lock()
 	m.activeWatchers = make(map[string]string)
 	m.mu.Unlock()
