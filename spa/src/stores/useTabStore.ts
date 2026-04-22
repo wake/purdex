@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Tab, PaneContent, PaneLayout, TerminatedReason, LayoutPattern } from '../types/tab'
+import type { FileSource } from '../types/fs'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, findPane, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern } from '../lib/pane-tree'
 import { contentMatches } from '../lib/pane-utils'
@@ -65,6 +66,35 @@ function markHostPanesInLayout(layout: PaneLayout, hostId: string, reason: Termi
   return children.some((c, i) => c !== layout.children[i]) ? { ...layout, children } : layout
 }
 
+function sourceMatches(a: FileSource, b: FileSource): boolean {
+  if (a.type !== b.type) return false
+  if (a.type === 'daemon' && b.type === 'daemon') {
+    return a.hostId === b.hostId
+  }
+  return true
+}
+
+function renameEditorPanesInLayout(layout: PaneLayout, source: FileSource, oldPath: string, newPath: string): PaneLayout {
+  if (layout.type === 'leaf') {
+    const content = layout.pane.content
+    if (content.kind === 'editor' && content.filePath === oldPath && sourceMatches(content.source, source)) {
+      return {
+        type: 'leaf',
+        pane: {
+          ...layout.pane,
+          content: { ...content, filePath: newPath },
+        },
+      }
+    }
+    return layout
+  }
+
+  const children = layout.children.map((child) => renameEditorPanesInLayout(child, source, oldPath, newPath))
+  return children.some((child, index) => child !== layout.children[index])
+    ? { ...layout, children }
+    : layout
+}
+
 interface TabState {
   tabs: Record<string, Tab>
   tabOrder: string[]
@@ -77,6 +107,7 @@ interface TabState {
   setActiveTab: (id: string | null) => void
   setViewMode: (tabId: string, paneId: string, mode: 'terminal' | 'stream') => void
   setPaneContent: (tabId: string, paneId: string, content: PaneContent) => void
+  renameEditorPanes: (source: FileSource, oldPath: string, newPath: string) => void
   splitPane: (tabId: string, paneId: string, direction: 'h' | 'v', content: PaneContent) => void
   closePane: (tabId: string, paneId: string) => void
   resizePanes: (tabId: string, splitId: string, sizes: number[]) => void
@@ -199,6 +230,20 @@ export const useTabStore = create<TabState>()(
           if (!tab) return state
           const newLayout = updatePaneInLayout(tab.layout, paneId, content)
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
+        }),
+
+      renameEditorPanes: (source, oldPath, newPath) =>
+        set((state) => {
+          let changed = false
+          const tabs = { ...state.tabs }
+          for (const [tabId, tab] of Object.entries(state.tabs)) {
+            const newLayout = renameEditorPanesInLayout(tab.layout, source, oldPath, newPath)
+            if (newLayout !== tab.layout) {
+              tabs[tabId] = { ...tab, layout: newLayout }
+              changed = true
+            }
+          }
+          return changed ? { tabs } : state
         }),
 
       splitPane: (tabId, paneId, direction, content) =>

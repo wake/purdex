@@ -218,6 +218,29 @@ describe('useTabStore', () => {
     })
   })
 
+  describe('renameEditorPanes', () => {
+    it('renames matching editor panes in a split layout', () => {
+      const content: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/notes/a.md' }
+      const tab = createTab(content)
+      useTabStore.getState().addTab(tab)
+      const paneId = tab.layout.type === 'leaf' ? tab.layout.pane.id : ''
+
+      useTabStore.getState().splitPane(tab.id, paneId, 'h', content)
+      useTabStore.getState().renameEditorPanes({ type: 'inapp' }, '/notes/a.md', '/notes/b.md')
+
+      const updated = useTabStore.getState().tabs[tab.id]
+      expect(updated.layout.type).toBe('split')
+      if (updated.layout.type === 'split') {
+        const filePaths = updated.layout.children.map((child) =>
+          child.type === 'leaf' && child.pane.content.kind === 'editor'
+            ? child.pane.content.filePath
+            : null,
+        )
+        expect(filePaths).toEqual(['/notes/b.md', '/notes/b.md'])
+      }
+    })
+  })
+
   describe('updateSessionCache', () => {
     it('updates cachedName for matching session tab', () => {
       const tab = makeSessionTab('dev001', 'terminal')
