@@ -46,9 +46,11 @@ func TestTraceIDRegistry_Mint_NewKey_UUIDv4(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mint returned non-UUID value %q: %v", got, err)
 	}
-	// version 4
 	if parsed.Version() != 4 {
 		t.Fatalf("expected UUID version 4, got version %d", parsed.Version())
+	}
+	if parsed.Variant() != uuid.RFC4122 {
+		t.Fatalf("expected UUID variant RFC4122, got %v", parsed.Variant())
 	}
 
 	got2, ok := r.Get("s1", 1)
@@ -143,7 +145,8 @@ func TestTraceIDRegistry_DifferentGeneration_DifferentID(t *testing.T) {
 }
 
 // TestTraceIDRegistry_DifferentSession_DifferentID verifies that the same
-// generation for different sessions receives different trace IDs.
+// generation for different sessions receives different trace IDs, and that
+// Get returns each session's id independently.
 func TestTraceIDRegistry_DifferentSession_DifferentID(t *testing.T) {
 	r := observation.NewTraceIDRegistry()
 	id1 := r.Mint("s1", 1)
@@ -151,6 +154,15 @@ func TestTraceIDRegistry_DifferentSession_DifferentID(t *testing.T) {
 
 	if id1 == id2 {
 		t.Fatalf("different sessions must have different trace IDs, both got %q", id1)
+	}
+
+	got1, ok1 := r.Get("s1", 1)
+	if !ok1 || got1 != id1 {
+		t.Fatalf("Get(s1,1) = (%q,%v); want (%q,true)", got1, ok1, id1)
+	}
+	got2, ok2 := r.Get("s2", 1)
+	if !ok2 || got2 != id2 {
+		t.Fatalf("Get(s2,1) = (%q,%v); want (%q,true)", got2, ok2, id2)
 	}
 }
 
@@ -222,6 +234,16 @@ func TestTraceIDRegistry_PruneSessionBefore_NonExistent(t *testing.T) {
 	}
 }
 
+// TestTraceIDRegistry_PruneSession_NonExistent verifies that PruneSession on an
+// unknown session returns 0 and does not panic (symmetric with PruneSessionBefore).
+func TestTraceIDRegistry_PruneSession_NonExistent(t *testing.T) {
+	r := observation.NewTraceIDRegistry()
+	removed := r.PruneSession("unknown")
+	if removed != 0 {
+		t.Fatalf("expected 0 removed for unknown session, got %d", removed)
+	}
+}
+
 // TestTraceIDRegistry_Concurrent_Race exercises Mint and PruneSessionBefore
 // concurrently to surface data races under -race. A panic or race report is
 // the failure signal.
@@ -253,6 +275,18 @@ func TestTraceIDRegistry_Concurrent_Race(t *testing.T) {
 			sessionID := "race-session-" + string(rune('A'+s))
 			for g := int64(0); g < pairs; g += 10 {
 				r.PruneSessionBefore(sessionID, g)
+			}
+		}
+	}()
+
+	// Goroutine C: Concurrently Get (exercises RLock vs Prune's Lock).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for s := 0; s < sessions; s++ {
+			sessionID := "race-session-" + string(rune('A'+s))
+			for g := int64(0); g < pairs; g++ {
+				_, _ = r.Get(sessionID, g)
 			}
 		}
 	}()

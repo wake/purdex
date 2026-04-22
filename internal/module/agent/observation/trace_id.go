@@ -7,7 +7,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// TraceIDKey identifies a (session, generation) pair.
+// TraceIDKey identifies a (session, generation) pair. Fields are comparable,
+// making the struct safe to use as a Go map key. Do not add slice/map/func
+// fields to this type.
 type TraceIDKey struct {
 	SessionID  string
 	Generation int64
