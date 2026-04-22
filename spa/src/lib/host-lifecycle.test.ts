@@ -542,13 +542,26 @@ describe('#541 cross-store rehydrate order invariants', () => {
   // the action closures.
   beforeEach(() => {
     localStorage.clear()
-    // Merge-mode: set data fields to blank without clobbering action methods
+    // Merge-mode: set ALL mutable data fields to blank without clobbering
+    // action methods (Finding D fix: explicit field-by-field reset prevents
+    // cross-test leakage of fields not listed).
     useHostStore.setState({ hosts: {}, hostOrder: [], runtime: {}, activeHostId: null })
     useHostSettingsStore.setState({ hosts: {} })
     useWorkspaceSettingsStore.setState({ workspaces: {} })
-    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    // visitHistory added — codex Finding D flagged it as a cross-test leak vector
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
     useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
-    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, agentTypes: {}, models: {} })
+    // oscTitles + ccStatus added — codex Finding D flagged them as cross-test leak vectors
+    useAgentStore.setState({
+      lastEvents: {},
+      statuses: {},
+      unread: {},
+      subagents: {},
+      agentTypes: {},
+      models: {},
+      oscTitles: {},
+      ccStatus: {},
+    })
     useStreamStore.setState({ sessions: {}, relayStatus: {}, handoffProgress: {} })
     useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
     useWorkspaceStore.getState().reset()

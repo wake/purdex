@@ -380,7 +380,7 @@ describe('HostPage (registry-driven, §3.1)', () => {
     expect(lastPath).toBe('/hosts/hA/overview')
   })
 
-  // Test 7: Disabled contribution → body NOT rendered.
+  // Test 7: Disabled contribution → body NOT rendered + URL redirects.
   // NOTE: HostSidebar is mocked in this file, so we can only assert the body
   // absence here. The disabled-row sidebar styling (data-disabled-ctx) is tested
   // in HostSidebar.test.tsx which renders the real sidebar with the registry.
@@ -400,9 +400,153 @@ describe('HostPage (registry-driven, §3.1)', () => {
     })
 
     // Navigate to the disabled section's URL
-    renderHostPage('/hosts/hA/disabled-section')
+    const { mem } = renderHostPage('/hosts/hA/disabled-section')
 
     // Body must NOT be rendered (disabled contribution skipped by HostPage.renderContent)
     expect(screen.queryByTestId('disabled-body')).not.toBeInTheDocument()
+    // URL must self-heal to the first selectable sub-page (overview)
+    expect(currentPath(mem)).toBe('/hosts/hA/overview')
+    // The selectable overview renders
+    expect(screen.getByTestId('overview-section')).toBeInTheDocument()
+  })
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // §A.7 — Finding A regression tests (R1+R2 fixup)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // A.7 Test 1: Direct deep-link to disabled sub-page redirects to first selectable.
+  it('A.7-1: disabled deep-link redirects to first selectable sub-page', () => {
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.disabled-section',
+      localId: 'disabled-section',
+      scope: 'host',
+      order: 100,
+      labelKey: 'disabled-section',
+      component: () => <div data-testid="disabled-body" />,
+      disabled: () => true,
+    })
+
+    const { mem } = renderHostPage('/hosts/hA/disabled-section')
+
+    // URL must canonicalize to the first selectable page (overview)
+    expect(currentPath(mem)).toBe('/hosts/hA/overview')
+    // OverviewSection renders — not blank
+    expect(screen.getByTestId('overview-section')).toBeInTheDocument()
+    expect(screen.queryByTestId('disabled-body')).not.toBeInTheDocument()
+  })
+
+  // A.7 Test 2: lastSelection clamped when contribution removed from registry.
+  it('A.7-2: removed contribution in lastSelection falls back to overview, not stale sub-page', () => {
+    // Step 1: register fake custom contribution, navigate to it → seeds lastSelection
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.custom',
+      localId: 'custom',
+      scope: 'host',
+      order: 100,
+      labelKey: 'custom',
+      component: () => <div data-testid="custom-body" />,
+    })
+
+    const firstMount = renderHostPage('/hosts/hA/custom')
+    expect(screen.getByTestId('custom-body')).toBeInTheDocument()
+    firstMount.unmount()
+
+    // Step 2: clear all, re-register only built-ins (no 'custom')
+    clearContributions()
+    clearModuleRegistry()
+    registerBuiltinModules()
+
+    // Step 3: render bare /hosts — lastSelection.subPage='custom' must be ignored
+    const { mem } = renderHostPage('/hosts')
+
+    // Must fall back to 'overview', not the stale 'custom'
+    expect(screen.getByTestId('overview-section')).toBeInTheDocument()
+    expect(screen.queryByTestId('custom-body')).not.toBeInTheDocument()
+    // URL must have been redirected to overview (not custom which no longer exists)
+    const lastPath = currentPath(mem)
+    expect(lastPath).toBe('/hosts/hA/overview')
+  })
+
+  // A.7 Test 3: Cross-host switch with per-host disabled → redirects to first selectable.
+  it('A.7-3: cross-host switch to host where current sub-page is disabled redirects', () => {
+    const HOST_B = 'hB'
+    // Seed two hosts
+    useHostStore.setState({
+      hosts: {
+        [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0 },
+        [HOST_B]: { id: HOST_B, name: 'Host B', ip: '5.6.7.8', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_A, HOST_B],
+      activeHostId: HOST_A,
+      runtime: {},
+    })
+
+    // Register featureX: enabled on hA, disabled on hB
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.feature-x',
+      localId: 'feature-x',
+      scope: 'host',
+      order: 100,
+      labelKey: 'feature-x',
+      component: () => <div data-testid="feature-x-body" />,
+      disabled: (ctx) => ctx.hostId === HOST_B,
+    })
+
+    // Start on hA/feature-x (enabled)
+    const { mem, rerender } = renderHostPage('/hosts/hA/feature-x')
+    expect(screen.getByTestId('feature-x-body')).toBeInTheDocument()
+
+    // Simulate cross-host switch to hB/feature-x (disabled on hB)
+    // Navigate directly to hB/feature-x — resolveSelection must redirect
+    mem.navigate('/hosts/hB/feature-x')
+    rerender(
+      <Router hook={mem.hook}>
+        <HostPage pane={hostPane} isActive />
+      </Router>,
+    )
+
+    // URL must canonicalize to hB's first selectable page (overview)
+    expect(currentPath(mem)).toBe('/hosts/hB/overview')
+    // Overview renders for hB — not blank
+    expect(screen.getByTestId('overview-section')).toHaveAttribute('data-host', HOST_B)
+    expect(screen.queryByTestId('feature-x-body')).not.toBeInTheDocument()
+  })
+
+  // A.7 Test 4: lastSelection sub-page clamped on read when not in live registry.
+  it('A.7-4: stale lastSelection subPage not in registry is clamped to overview on render', () => {
+    // Seed lastSelection with a sub-page that is no longer in the registry
+    // by mounting with it, then removing it before the next render.
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.gone',
+      localId: 'gone',
+      scope: 'host',
+      order: 100,
+      labelKey: 'gone',
+      component: () => <div data-testid="gone-body" />,
+    })
+
+    const first = renderHostPage('/hosts/hA/gone')
+    expect(screen.getByTestId('gone-body')).toBeInTheDocument()
+    first.unmount()
+
+    // Remove 'gone' from the registry
+    clearContributions()
+    clearModuleRegistry()
+    registerBuiltinModules()
+    // 'gone' is no longer registered.
+
+    // Render with no URL sub-page — bare /hosts
+    const { mem } = renderHostPage('/hosts')
+
+    // lastSelection.subPage = 'gone' must be clamped — overview must render
+    expect(screen.getByTestId('overview-section')).toBeInTheDocument()
+    expect(screen.queryByTestId('gone-body')).not.toBeInTheDocument()
+    // URL settles on overview (or the first selectable in the canonicalized path)
+    const lastPath = currentPath(mem)
+    expect(lastPath).toBe('/hosts/hA/overview')
   })
 })
