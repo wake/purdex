@@ -160,6 +160,7 @@ func (m *Module) Init(c *core.Core) error {
 		})
 		m.arbitrator = arbitrator.NewArbitrator(arbitrator.Options{
 			Minter:      m.traceMinter,
+			Lookup:      m.traceLookup,
 			Arbmode:     m.arbmodeMgr,
 			TraceWriter: m.traceWriter,
 			Now:         time.Now,

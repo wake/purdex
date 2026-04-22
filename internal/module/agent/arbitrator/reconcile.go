@@ -38,6 +38,11 @@ type reconcilerDeps struct {
 	// staleThreshold is the duration after LastActivity at which an actor is
 	// considered stale (spec §3.4.5 default: 30s).
 	staleThreshold time.Duration
+	// pruneIdem evicts idempotency-cache entries untouched longer than the
+	// cache's configured pruneAfter window. Called on every reconcile tick
+	// so the cache does not grow without bound over long daemon uptimes.
+	// Optional — reconcile skips the call when nil.
+	pruneIdem func(now time.Time)
 }
 
 // reconciler is a light helper that performs a single reconcile tick when
@@ -57,6 +62,8 @@ func newReconciler(deps reconcilerDeps) *reconciler {
 //  1. Flush any pending entries whose deadline has expired.
 //  2. Scan active actors; for any actor where now - LastActivity strictly
 //     exceeds the stale threshold, emit a ReconcileStaleNoted trace.
+//  3. Prune the idempotency cache so entries untouched longer than the
+//     cache's pruneAfter window are released.
 //
 // reconcile NEVER mutates actor.Status, actor.LastActivity, or actor.EndedAt
 // (spec §3.4.5, first rule). It is observer-only.
@@ -65,13 +72,15 @@ func (r *reconciler) reconcile() {
 	if r.deps.flushPendingDue != nil {
 		r.deps.flushPendingDue(now)
 	}
-	if r.deps.allActiveActors == nil || r.deps.emitStaleTrace == nil {
-		return
-	}
-	actors := r.deps.allActiveActors()
-	for key, actor := range actors {
-		if now.Sub(actor.GetLastActivity()) > r.deps.staleThreshold {
-			r.deps.emitStaleTrace(key)
+	if r.deps.allActiveActors != nil && r.deps.emitStaleTrace != nil {
+		actors := r.deps.allActiveActors()
+		for key, actor := range actors {
+			if now.Sub(actor.GetLastActivity()) > r.deps.staleThreshold {
+				r.deps.emitStaleTrace(key)
+			}
 		}
+	}
+	if r.deps.pruneIdem != nil {
+		r.deps.pruneIdem(now)
 	}
 }

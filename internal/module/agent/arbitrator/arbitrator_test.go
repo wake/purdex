@@ -35,10 +35,11 @@ func (c *captureTraceSubmitter) count() int {
 }
 
 func newArbOptionsForTest(submitter TraceSubmitter) Options {
-	minter, _ := observation.NewTraceIDRegistry()
+	minter, lookup := observation.NewTraceIDRegistry()
 	arb := arbmode.NewManager("", string(arbmode.ModePassthrough))
 	return Options{
 		Minter:          minter,
+		Lookup:          lookup,
 		Arbmode:         arb,
 		TraceWriter:     submitter,
 		InChCap:         16,
@@ -51,6 +52,32 @@ func newArbOptionsForTest(submitter TraceSubmitter) Options {
 		StaleThreshold:  30 * time.Second,
 		Now:             time.Now,
 	}
+}
+
+// fakeLookup is a minimal TraceIDLookup fake: tests can seed entries, and it
+// records Get calls so reconcile tests can assert lookup was consulted.
+type fakeLookup struct {
+	mu      sync.Mutex
+	entries map[observation.TraceIDKey]string
+	calls   int
+}
+
+func newFakeLookup() *fakeLookup {
+	return &fakeLookup{entries: make(map[observation.TraceIDKey]string)}
+}
+
+func (f *fakeLookup) seed(sessionID string, generation int64, traceID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.entries[observation.TraceIDKey{SessionID: sessionID, Generation: generation}] = traceID
+}
+
+func (f *fakeLookup) Get(sessionID string, generation int64) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	id, ok := f.entries[observation.TraceIDKey{SessionID: sessionID, Generation: generation}]
+	return id, ok
 }
 
 // makeSessionStart is a small helper producing a hook SessionStart obs that
@@ -142,6 +169,10 @@ func TestArbitrator_Run_ReconcileTickerFires(t *testing.T) {
 	// with an actor present in frameState, reconcile will emit stale traces
 	// on every tick.
 	opts.StaleThreshold = -1 * time.Nanosecond
+	// Pre-mint a trace_id so the reconcile stale-emit path has a valid
+	// trace_id to stamp onto its synthesized records (C2 fix requires
+	// reconcile to skip emission on lookup miss).
+	opts.Minter.Mint("sess-t", 1)
 	arb := NewArbitrator(opts)
 
 	// Seed one active actor so reconcile has something to iterate over.
@@ -237,4 +268,159 @@ func TestArbitrator_SingleOwner_NoDataRace(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	<-doneCh
+}
+
+// ----- C2: Reconcile stale trace must carry a valid trace_id --------------
+
+// TestReconcile_StaleActor_NoTraceID_SkipsEmit verifies that when the
+// TraceIDLookup has no entry for an actor's (session, generation), the
+// reconcile emitStale closure skips the submission entirely. Submitting a
+// record with an empty TraceID would fail validateLightsRow and roll back
+// the TraceWriter's whole flush batch.
+func TestReconcile_StaleActor_NoTraceID_SkipsEmit(t *testing.T) {
+	cap := &captureTraceSubmitter{}
+	opts := newArbOptionsForTest(cap)
+	opts.Lookup = newFakeLookup() // empty — every Get misses
+	opts.ReconcileEvery = 5 * time.Millisecond
+	opts.StaleThreshold = -1 * time.Nanosecond
+	arb := NewArbitrator(opts)
+
+	// Seed an active actor so reconcile's stale scan finds something.
+	key := observation.ActorKey{SessionID: "sess-miss", Generation: 1, ActorID: "a1"}
+	arb.deps.frames.getOrCreateSession("sess-miss").Generation = 1
+	arb.deps.frames.upsertActor(key, func(a *actorSummary) {
+		a.LastActivity = time.Now()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan struct{})
+	go func() {
+		arb.Run(ctx)
+		close(doneCh)
+	}()
+	time.Sleep(40 * time.Millisecond)
+	cancel()
+	<-doneCh
+
+	if got := cap.count(); got != 0 {
+		t.Fatalf("stale trace submissions on miss = %d, want 0 (empty TraceID would poison batch)", got)
+	}
+}
+
+// TestReconcile_StaleActor_WithTraceID_EmitsValidTrace verifies that when the
+// lookup returns a valid trace_id, reconcile emits a stale trace record and
+// the record carries the looked-up TraceID (plus a generated SpanID).
+func TestReconcile_StaleActor_WithTraceID_EmitsValidTrace(t *testing.T) {
+	cap := &captureTraceSubmitter{}
+	opts := newArbOptionsForTest(cap)
+	lookup := newFakeLookup()
+	lookup.seed("sess-hit", 1, "TRACE_FROM_LOOKUP")
+	opts.Lookup = lookup
+	opts.ReconcileEvery = 5 * time.Millisecond
+	opts.StaleThreshold = -1 * time.Nanosecond
+	arb := NewArbitrator(opts)
+
+	key := observation.ActorKey{SessionID: "sess-hit", Generation: 1, ActorID: "a1"}
+	arb.deps.frames.getOrCreateSession("sess-hit").Generation = 1
+	arb.deps.frames.upsertActor(key, func(a *actorSummary) {
+		a.LastActivity = time.Now()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan struct{})
+	go func() {
+		arb.Run(ctx)
+		close(doneCh)
+	}()
+	time.Sleep(40 * time.Millisecond)
+	cancel()
+	<-doneCh
+
+	if cap.count() < 1 {
+		t.Fatalf("expected at least 1 stale trace; got 0")
+	}
+	cap.mu.Lock()
+	first := cap.records[0]
+	cap.mu.Unlock()
+	if first.TraceID != "TRACE_FROM_LOOKUP" {
+		t.Errorf("stale trace TraceID = %q, want TRACE_FROM_LOOKUP", first.TraceID)
+	}
+	if first.SpanID == "" {
+		t.Error("stale trace SpanID must be non-empty (generated UUID)")
+	}
+	if first.SessionID != "sess-hit" {
+		t.Errorf("stale trace SessionID = %q, want sess-hit", first.SessionID)
+	}
+	if first.ObservedGeneration != 1 {
+		t.Errorf("stale trace ObservedGeneration = %d, want 1", first.ObservedGeneration)
+	}
+}
+
+// ----- C3: Shutdown drains queued observations ----------------------------
+
+// drainingSubmitter captures submissions so TestArbitrator_Run_ContextCancel_DrainsInCh
+// can count how many observations reached apply before Run exited.
+type drainingSubmitter struct {
+	mu      sync.Mutex
+	records []TraceRecord
+	block   chan struct{} // if non-nil, first Submit blocks on it
+}
+
+func (d *drainingSubmitter) Submit(r TraceRecord) {
+	d.mu.Lock()
+	d.records = append(d.records, r)
+	d.mu.Unlock()
+}
+
+func (d *drainingSubmitter) Shutdown(context.Context) error { return nil }
+
+func (d *drainingSubmitter) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.records)
+}
+
+// TestArbitrator_Run_ContextCancel_DrainsInCh verifies that cancelling the
+// Run context drains any observations already enqueued in inCh before the
+// goroutine exits. Without this, Module.Stop would lose queued observations
+// between ctx cancel and goroutine exit.
+//
+// The test pre-cancels the ctx BEFORE starting Run so the goroutine enters
+// the ctx.Done branch on its first iteration. If Run lacks the drain logic,
+// the 3 queued observations are lost and the submitter sees 0 records.
+func TestArbitrator_Run_ContextCancel_DrainsInCh(t *testing.T) {
+	sub := &drainingSubmitter{}
+	opts := newArbOptionsForTest(sub)
+	// Very large ReconcileEvery so the ticker cannot consume cycles.
+	opts.ReconcileEvery = time.Hour
+	opts.InChCap = 32
+	arb := NewArbitrator(opts)
+
+	now := time.Now()
+	// Pre-seed 3 obs BEFORE Run so the channel has queued work immediately.
+	for i := 0; i < 3; i++ {
+		arb.InCh() <- makeSessionStart("sess-drain", int64(i+1), now)
+	}
+
+	// Pre-cancel before Run so the goroutine MUST take the drain path to
+	// process the queued observations.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	doneCh := make(chan struct{})
+	go func() {
+		arb.Run(ctx)
+		close(doneCh)
+	}()
+	select {
+	case <-doneCh:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Run did not exit within 500ms after cancel")
+	}
+
+	// Each SessionStart produces at least one trace (the boundary). All 3
+	// must have been applied via the drain loop.
+	if got := sub.count(); got < 3 {
+		t.Fatalf("submissions = %d, want >= 3 (all queued observations must drain)", got)
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wake/purdex/internal/module/agent/observation"
 )
 
@@ -22,8 +23,14 @@ const (
 // Options bundles every tunable and dependency the Arbitrator needs. Zero
 // values fall back to the package defaults. Required fields (Minter, Arbmode,
 // TraceWriter) must be supplied by the caller — nil values panic at first use.
+//
+// Lookup is optional: when non-nil, reconcile uses it to attach a valid
+// trace_id to synthesized stale traces. When nil (or when a key has no
+// entry), reconcile silently skips emitting for that key so empty-TraceID
+// rows never reach the TraceWriter and poison validateLightsRow.
 type Options struct {
 	Minter          observation.TraceIDMinter
+	Lookup          observation.TraceIDLookup
 	Arbmode         ArbmodeView
 	TraceWriter     TraceSubmitter
 	InChCap         int
@@ -110,20 +117,37 @@ func NewArbitrator(opts Options) *Arbitrator {
 	// Reconciler needs closures bound to this Arbitrator so the reconcile
 	// tick can flush pending + emit stale traces through the shared
 	// TraceWriter.
+	//
+	// emitStale skips the record when no trace_id is known for the actor's
+	// (session, generation). A missing lookup entry signals the session was
+	// never observed through SessionStart — emitting an empty-trace_id row
+	// would fail validateLightsRow and roll back the TraceWriter's entire
+	// batch. Reconcile is observer-only, so a skipped stale note is
+	// preferable to a batch poison pill.
 	emitStale := func(key observation.ActorKey) {
+		if a.opts.Lookup == nil {
+			return
+		}
+		traceID, ok := a.opts.Lookup.Get(key.SessionID, key.Generation)
+		if !ok || traceID == "" {
+			return
+		}
 		now := a.opts.Now()
 		a.opts.TraceWriter.Submit(TraceRecord{
-			SessionID:    key.SessionID,
-			SourceKind:   observation.SourceReconcile,
-			Action:       "actor.stale_detected",
-			Phase:        observation.PhaseProposed,
-			Status:       "success",
-			Outcome:      "skipped",
-			ReasonCode:   ReasonReconcileStaleNoted,
-			ReasonText:   "actor 30s 無活動，reconcile 不主動改 status",
-			StartedAt:    now,
-			EndedAt:      now,
-			DropPriority: dropPriority(observation.SourceReconcile, observation.PhaseProposed),
+			TraceID:            traceID,
+			SpanID:             uuid.NewString(),
+			SessionID:          key.SessionID,
+			ObservedGeneration: key.Generation,
+			SourceKind:         observation.SourceReconcile,
+			Action:             "actor.stale_detected",
+			Phase:              observation.PhaseProposed,
+			Status:             "success",
+			Outcome:            "skipped",
+			ReasonCode:         ReasonReconcileStaleNoted,
+			ReasonText:         "actor 30s 無活動，reconcile 不主動改 status",
+			StartedAt:          now,
+			EndedAt:            now,
+			DropPriority:       dropPriority(observation.SourceReconcile, observation.PhaseProposed),
 		})
 	}
 
@@ -147,6 +171,7 @@ func NewArbitrator(opts Options) *Arbitrator {
 		allActiveActors: frames.allActiveActorsView,
 		emitStaleTrace:  emitStale,
 		staleThreshold:  opts.StaleThreshold,
+		pruneIdem:       func(now time.Time) { idem.Prune(now) },
 	})
 
 	return a
@@ -166,10 +191,14 @@ func (a *Arbitrator) InChForTesting() chan observation.Observation {
 	return a.inCh
 }
 
-// Run is the single-owner goroutine. It blocks until ctx is cancelled. The
-// caller is responsible for stopping producers before cancellation — inCh is
-// NOT drained on exit because the trace-writer flush already covers any
-// in-flight records.
+// Run is the single-owner goroutine. It blocks until ctx is cancelled.
+//
+// On ctx cancel, Run drains any observations already queued in inCh before
+// exiting so Module.Stop does not silently discard queued work between
+// "cancel ctx" and "goroutine exit". New observations arriving from
+// producers after cancel may still be sent or dropped (admission in
+// module.SubmitObservation handles that side); the drain only covers the
+// already-queued backlog.
 func (a *Arbitrator) Run(ctx context.Context) {
 	ticker := time.NewTicker(a.opts.ReconcileEvery)
 	defer ticker.Stop()
@@ -180,7 +209,16 @@ func (a *Arbitrator) Run(ctx context.Context) {
 		case <-ticker.C:
 			a.reconciler.reconcile()
 		case <-ctx.Done():
-			return
+			// Drain any observations queued when cancel fired so producers
+			// that submitted just before Module.Stop don't lose data.
+			for {
+				select {
+				case obs := <-a.inCh:
+					a.deps.apply(obs)
+				default:
+					return
+				}
+			}
 		}
 	}
 }
