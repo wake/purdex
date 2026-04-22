@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TiptapEditor } from './TiptapEditor'
 
@@ -71,6 +71,16 @@ describe('TiptapEditor', () => {
     focusSpy.mockClear()
 
     rerender(<TiptapEditor content="# Hello" isActive={true} onChange={() => {}} onSave={() => {}} />)
+
+    expect(focusSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('focuses the editable content when clicking empty editor space', () => {
+    render(<TiptapEditor content="# Hello" isActive={false} onChange={() => {}} onSave={() => {}} />)
+
+    focusSpy.mockClear()
+
+    fireEvent.mouseDown(screen.getByTestId('tiptap-scroll-root'))
 
     expect(focusSpy).toHaveBeenCalledTimes(1)
   })

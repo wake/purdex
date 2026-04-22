@@ -13,6 +13,11 @@ interface Props {
 export function TiptapEditor({ content, isActive, onChange, onSave }: Props) {
   const onSaveRef = useRef(onSave)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  const focusEditable = () => {
+    containerRef.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus()
+  }
+
   useEffect(() => {
     onSaveRef.current = onSave
   }, [onSave])
@@ -57,13 +62,21 @@ export function TiptapEditor({ content, isActive, onChange, onSave }: Props) {
 
   useEffect(() => {
     if (!isActive) return
-    containerRef.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus()
+    focusEditable()
   }, [isActive])
 
   if (!editor) return null
 
   return (
-    <div ref={containerRef} data-testid="tiptap-scroll-root" className="h-full min-h-0 overflow-auto">
+    <div
+      ref={containerRef}
+      data-testid="tiptap-scroll-root"
+      className="h-full min-h-0 overflow-auto"
+      onMouseDown={(event) => {
+        if ((event.target as HTMLElement).closest('[contenteditable="true"]')) return
+        focusEditable()
+      }}
+    >
       <div className="min-h-full [&_.tiptap-editor]:min-h-full [&_.tiptap-editor]:cursor-text">
         <EditorContent editor={editor} />
       </div>
