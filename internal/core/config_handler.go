@@ -125,8 +125,18 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 
 	agentChanged := false
 	if req.Agent != nil && req.Agent.ArbMode != nil {
-		c.Cfg.Agent.ArbMode = *req.Agent.ArbMode
-		agentChanged = true
+		// Canonicalize empty as reset-to-default to keep persisted state and
+		// runtime mode in sync. arbmode.Manager treats "" as invalid; writing ""
+		// through would make GET /api/config and GET /api/agent/arbitrator/mode
+		// disagree forever.
+		newMode := *req.Agent.ArbMode
+		if newMode == "" {
+			newMode = "passthrough"
+		}
+		if c.Cfg.Agent.ArbMode != newMode {
+			c.Cfg.Agent.ArbMode = newMode
+			agentChanged = true
+		}
 	}
 
 	// Write back to config file

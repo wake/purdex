@@ -27,3 +27,8 @@ var ErrActorKeySessionMismatch = errors.New("observation: proposal actor key ses
 // Proposal.ActorKey.Generation does not equal the Observation's
 // ObservedGeneration.
 var ErrActorKeyGenerationMismatch = errors.New("observation: proposal actor key generation mismatch")
+
+// ErrInvalidActorKey is returned when a Proposal is present (non-zero
+// ActorKey) but the ActorKey is not complete (SessionID, Generation, ActorID
+// must all be meaningful; empty ActorID is rejected).
+var ErrInvalidActorKey = errors.New("observation: invalid actor key (non-zero ActorKey must have non-empty ActorID)")

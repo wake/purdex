@@ -244,6 +244,87 @@ func TestTraceIDRegistry_PruneSession_NonExistent(t *testing.T) {
 	}
 }
 
+// TestTraceIDRegistry_Mint_StaleAfterPrune_ReturnsEmpty verifies that a Mint
+// for a generation below the watermark (set by PruneSessionBefore) returns ""
+// and logs a rejection message, while Mint above the watermark still works.
+func TestTraceIDRegistry_Mint_StaleAfterPrune_ReturnsEmpty(t *testing.T) {
+	buf := captureTraceIDLog(t)
+	r := observation.NewTraceIDRegistry()
+
+	r.Mint("s1", 1)
+	r.Mint("s1", 2)
+	r.Mint("s1", 3)
+
+	r.PruneSessionBefore("s1", 3) // watermark = 3; gens 1,2 pruned; gen 3 survives
+
+	// Stale mint for pruned generation must return empty string.
+	got := r.Mint("s1", 2)
+	if got != "" {
+		t.Fatalf("Mint for pruned generation should return empty, got %q", got)
+	}
+	if !strings.Contains(buf.String(), "stale mint rejected") {
+		t.Errorf("expected 'stale mint rejected' in log, got: %q", buf.String())
+	}
+
+	// Mint at the watermark boundary (generation == floor) is allowed.
+	id4 := r.Mint("s1", 4) // above watermark — fresh generation
+	if id4 == "" {
+		t.Error("Mint above watermark should succeed, got empty string")
+	}
+}
+
+// TestTraceIDRegistry_Mint_AtWatermark_Rejected verifies watermark boundary
+// semantics: PruneSessionBefore(s1, 5) deletes gens < 5, watermark = 5.
+// generation 4 → rejected (< 5); generation 5 → allowed (>= 5).
+func TestTraceIDRegistry_Mint_AtWatermark_Rejected(t *testing.T) {
+	r := observation.NewTraceIDRegistry()
+
+	r.PruneSessionBefore("s1", 5) // sets watermark = 5; nothing to delete
+
+	// Generation strictly below watermark → rejected.
+	got4 := r.Mint("s1", 4)
+	if got4 != "" {
+		t.Fatalf("Mint(s1, 4) below watermark 5 should return empty, got %q", got4)
+	}
+
+	// Generation equal to watermark → allowed (exclusive-floor semantics).
+	got5 := r.Mint("s1", 5)
+	if got5 == "" {
+		t.Error("Mint(s1, 5) at watermark floor should succeed, got empty string")
+	}
+
+	// Generation above watermark → allowed.
+	got6 := r.Mint("s1", 6)
+	if got6 == "" {
+		t.Error("Mint(s1, 6) above watermark should succeed, got empty string")
+	}
+}
+
+// TestTraceIDRegistry_PruneSession_ResetsWatermark verifies that PruneSession
+// clears the per-session watermark, allowing subsequent Mints for any
+// generation (fresh-session semantics after full session cleanup).
+func TestTraceIDRegistry_PruneSession_ResetsWatermark(t *testing.T) {
+	r := observation.NewTraceIDRegistry()
+
+	r.Mint("s1", 1)
+	r.PruneSessionBefore("s1", 2) // watermark = 2; gen 1 pruned
+
+	// Confirm stale mint is blocked before PruneSession.
+	staleBefore := r.Mint("s1", 0)
+	if staleBefore != "" {
+		t.Fatalf("expected stale mint to be blocked, got %q", staleBefore)
+	}
+
+	// Full session cleanup resets watermark.
+	r.PruneSession("s1")
+
+	// After PruneSession, even generation 0 is allowed (watermark cleared).
+	gotAfter := r.Mint("s1", 0)
+	if gotAfter == "" {
+		t.Error("Mint after PruneSession should succeed (watermark cleared), got empty string")
+	}
+}
+
 // TestTraceIDRegistry_Concurrent_Race exercises Mint and PruneSessionBefore
 // concurrently to surface data races under -race. A panic or race report is
 // the failure signal.

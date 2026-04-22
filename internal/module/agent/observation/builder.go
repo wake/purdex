@@ -21,14 +21,15 @@ func WithDevMode(dev bool) BuilderOption {
 
 // Builder accumulates fields and produces a validated Observation via Build().
 //
-// Single-use: Build() does not deep-copy slices, so the returned Observation
-// shares DecisionPorts/Evidence backing arrays with the Builder. Mutating the
-// returned Observation's slices, or calling Build() again after Build(), will
-// produce undefined behaviour. Create a fresh Builder for each Observation.
-// Not thread-safe.
+// Single-use: Build() deep-copies top-level mutable fields (DecisionPorts,
+// Evidence, and their nested slices) so the returned Observation is safe to
+// hand off. EvidenceRef.Value is shallow-copied — if it holds a map or
+// pointer, callers must not mutate Value contents after Build(). Calling
+// Build() twice panics. Not thread-safe.
 type Builder struct {
-	dev bool
-	obs Observation
+	dev      bool
+	consumed bool
+	obs      Observation
 }
 
 // NewBuilder returns a fresh Builder with options applied in order.
@@ -129,7 +130,14 @@ func (b *Builder) Seq(v int64) *Builder {
 // DecisionPorts cap (16):
 //   - dev mode: panics
 //   - prod mode: truncates to 16 and logs "[agent][observation] decision_ports truncated from N to 16"
+//
+// Build panics if called more than once on the same Builder. Create a fresh
+// Builder for each Observation.
 func (b *Builder) Build() (Observation, error) {
+	if b.consumed {
+		panic("observation: Builder.Build called more than once — create a fresh Builder per Observation")
+	}
+
 	// --- required string fields ---
 	if b.obs.TraceID == "" {
 		return Observation{}, fmt.Errorf("%w: %s", ErrMissingRequiredField, "trace_id")
@@ -174,6 +182,12 @@ func (b *Builder) Build() (Observation, error) {
 	// SessionID + ObservedGeneration per D3.
 	ak := b.obs.Proposal.ActorKey
 	if ak != (ActorKey{}) {
+		// ActorID is required for a non-zero ActorKey. Without it, actors with
+		// different sessions/generations but empty ActorID would collapse onto the
+		// same identity key downstream.
+		if ak.ActorID == "" {
+			return Observation{}, ErrInvalidActorKey
+		}
 		if ak.SessionID != b.obs.SessionID {
 			return Observation{}, fmt.Errorf("%w: proposal=%q observation=%q",
 				ErrActorKeySessionMismatch, ak.SessionID, b.obs.SessionID)
@@ -194,6 +208,41 @@ func (b *Builder) Build() (Observation, error) {
 		b.obs.DecisionPorts = b.obs.DecisionPorts[:maxDecisionPorts]
 	}
 
+	// Deep-copy top-level mutable fields before returning so the returned
+	// Observation's slices do not alias the Builder's internal state.
+	// EvidenceRef.Value is any-typed and only shallow-copied; callers must
+	// not mutate Value contents (e.g. map entries) after Build().
 	out := b.obs
+	if len(out.DecisionPorts) > 0 {
+		ports := make([]DecisionPort, len(out.DecisionPorts))
+		for i, p := range out.DecisionPorts {
+			ports[i] = copyDecisionPort(p)
+		}
+		out.DecisionPorts = ports
+	}
+	if len(out.Evidence) > 0 {
+		evi := make([]EvidenceRef, len(out.Evidence))
+		copy(evi, out.Evidence)
+		out.Evidence = evi
+	}
+	b.consumed = true
 	return out, nil
+}
+
+// copyDecisionPort returns a deep copy of p with independent InputRefs and
+// Branches slices. The scalar fields (PortID, Selected, Reason) are value
+// types and are copied by the struct assignment.
+func copyDecisionPort(p DecisionPort) DecisionPort {
+	out := p
+	if len(p.InputRefs) > 0 {
+		refs := make([]EvidenceRef, len(p.InputRefs))
+		copy(refs, p.InputRefs)
+		out.InputRefs = refs
+	}
+	if len(p.Branches) > 0 {
+		branches := make([]Branch, len(p.Branches))
+		copy(branches, p.Branches)
+		out.Branches = branches
+	}
+	return out
 }
