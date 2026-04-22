@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import { sanitizeScopedModuleMap } from './settings-store-shape'
+import { deepFreeze, sanitizeScopedModuleMap } from './settings-store-shape'
 
 type ModulePayload = Record<string, unknown>
 type WorkspaceSlot = Record<string, ModulePayload>
@@ -21,7 +21,7 @@ export const useWorkspaceSettingsStore = create<WorkspaceSettingsState>()(
 
       get: (workspaceId, moduleId) => {
         const payload = get().workspaces[workspaceId]?.[moduleId]
-        return payload ? Object.freeze({ ...payload }) : undefined
+        return payload ? deepFreeze(payload) : undefined
       },
 
       set: (workspaceId, moduleId, patch) =>

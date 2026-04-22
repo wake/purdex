@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sanitizeFlatModuleMap, sanitizeScopedModuleMap } from './settings-store-shape'
+import { deepFreeze, sanitizeFlatModuleMap, sanitizeScopedModuleMap } from './settings-store-shape'
 
 // Finding C: malformed persisted JSON like `{"__proto__":{"x":1}}` parses into
 // a regular object where `__proto__` / `constructor` / `prototype` are *own*
@@ -78,5 +78,54 @@ describe('sanitizeScopedModuleMap — prototype pollution hardening', () => {
     expect(healed['host-1']).toEqual({ editor: { tabSize: 2 } })
     expect(healed['host-2']).toEqual({ editor: { tabSize: 4 } })
     expect(Object.prototype.hasOwnProperty.call(healed['host-2'], 'constructor')).toBe(false)
+  })
+})
+
+describe('deepFreeze', () => {
+  it('returns primitives and null untouched', () => {
+    expect(deepFreeze(null)).toBe(null)
+    expect(deepFreeze(undefined)).toBe(undefined)
+    expect(deepFreeze(42)).toBe(42)
+    expect(deepFreeze('x')).toBe('x')
+  })
+
+  it('freezes the top-level object', () => {
+    const frozen = deepFreeze({ a: 1 })
+    expect(Object.isFrozen(frozen)).toBe(true)
+  })
+
+  it('freezes nested objects so deep mutation throws in strict mode', () => {
+    const frozen = deepFreeze({ outer: { inner: { x: 1 } } })
+    expect(Object.isFrozen(frozen.outer)).toBe(true)
+    expect(Object.isFrozen(frozen.outer.inner)).toBe(true)
+    expect(() => {
+      ;(frozen.outer.inner as { x: number }).x = 999
+    }).toThrow()
+  })
+
+  it('detaches the returned graph from the input (no ref sharing)', () => {
+    const source = { nested: { x: 1 } }
+    const frozen = deepFreeze(source)
+    expect(frozen).not.toBe(source)
+    expect(frozen.nested).not.toBe(source.nested)
+    // Source stays mutable (we only freeze the returned copy)
+    source.nested.x = 2
+    expect(source.nested.x).toBe(2)
+    expect(frozen.nested.x).toBe(1)
+  })
+
+  it('freezes arrays and array items', () => {
+    const frozen = deepFreeze({ list: [{ a: 1 }, { a: 2 }] })
+    expect(Object.isFrozen(frozen.list)).toBe(true)
+    expect(Object.isFrozen(frozen.list[0])).toBe(true)
+    expect(() => {
+      ;(frozen.list as unknown as { a: number }[])[0].a = 999
+    }).toThrow()
+  })
+
+  it('passes already-frozen inputs through without re-cloning', () => {
+    const input = Object.freeze({ a: 1 })
+    const result = deepFreeze(input)
+    expect(result).toBe(input)
   })
 })

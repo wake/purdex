@@ -135,6 +135,19 @@ describe('useGlobalSettingsStore', () => {
       set('editor', { homePath: '/Users/y' })
       expect(get('editor')).toEqual({ homePath: '/Users/y' })
     })
+
+    it('guards against nested mutation (deep freeze)', () => {
+      const { set, get } = useGlobalSettingsStore.getState()
+      set('editor', { config: { nested: { deep: 'original' } } })
+      const snapshot = get('editor') as { config: { nested: { deep: string } } }
+      expect(Object.isFrozen(snapshot.config)).toBe(true)
+      expect(Object.isFrozen(snapshot.config.nested)).toBe(true)
+      expect(() => {
+        snapshot.config.nested.deep = 'hacked'
+      }).toThrow()
+      // Store state is unchanged
+      expect(get('editor')).toEqual({ config: { nested: { deep: 'original' } } })
+    })
   })
 
   it('resets a non-object modules root during rehydrate', async () => {

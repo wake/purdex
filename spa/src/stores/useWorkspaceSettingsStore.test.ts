@@ -142,6 +142,18 @@ describe('useWorkspaceSettingsStore', () => {
       set('wsA', 'editor', { homePath: '/Users/y' })
       expect(get('wsA', 'editor')).toEqual({ homePath: '/Users/y' })
     })
+
+    it('guards against nested mutation (deep freeze)', () => {
+      const { set, get } = useWorkspaceSettingsStore.getState()
+      set('wsA', 'editor', { config: { nested: { deep: 'original' } } })
+      const snapshot = get('wsA', 'editor') as { config: { nested: { deep: string } } }
+      expect(Object.isFrozen(snapshot.config)).toBe(true)
+      expect(Object.isFrozen(snapshot.config.nested)).toBe(true)
+      expect(() => {
+        snapshot.config.nested.deep = 'hacked'
+      }).toThrow()
+      expect(get('wsA', 'editor')).toEqual({ config: { nested: { deep: 'original' } } })
+    })
   })
 
   it('resets a non-object workspaces root during rehydrate', async () => {

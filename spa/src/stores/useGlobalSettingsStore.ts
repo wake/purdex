@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import { sanitizeFlatModuleMap } from './settings-store-shape'
+import { deepFreeze, sanitizeFlatModuleMap } from './settings-store-shape'
 
 type ModulePayload = Record<string, unknown>
 
@@ -19,7 +19,7 @@ export const useGlobalSettingsStore = create<GlobalSettingsState>()(
 
       get: (moduleId) => {
         const payload = get().modules[moduleId]
-        return payload ? Object.freeze({ ...payload }) : undefined
+        return payload ? deepFreeze(payload) : undefined
       },
 
       set: (moduleId, patch) =>

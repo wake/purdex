@@ -39,3 +39,18 @@ export function sanitizeScopedModuleMap(value: unknown): ScopedModuleMap {
   }
   return healed
 }
+
+// Recursively clone + freeze so `get()` consumers can't bypass persist/sync
+// via `snapshot.nested.x = ...`. Primitives and already-frozen refs pass
+// through untouched; plain objects and arrays are shallow-cloned so the
+// returned graph is detached from store-internal state.
+export function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== 'object') return value
+  if (Object.isFrozen(value)) return value
+  const clone: unknown = Array.isArray(value)
+    ? (value as unknown[]).map((item) => deepFreeze(item))
+    : Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, deepFreeze(v)]),
+      )
+  return Object.freeze(clone) as T
+}

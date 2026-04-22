@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import { sanitizeScopedModuleMap } from './settings-store-shape'
+import { deepFreeze, sanitizeScopedModuleMap } from './settings-store-shape'
 
 type ModulePayload = Record<string, unknown>
 type HostSlot = Record<string, ModulePayload>
@@ -21,7 +21,7 @@ export const useHostSettingsStore = create<HostSettingsState>()(
 
       get: (hostId, moduleId) => {
         const payload = get().hosts[hostId]?.[moduleId]
-        return payload ? Object.freeze({ ...payload }) : undefined
+        return payload ? deepFreeze(payload) : undefined
       },
 
       set: (hostId, moduleId, patch) =>

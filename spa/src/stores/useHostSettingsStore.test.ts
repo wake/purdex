@@ -142,6 +142,18 @@ describe('useHostSettingsStore', () => {
       set('hostA', 'editor', { homePath: '/home/y' })
       expect(get('hostA', 'editor')).toEqual({ homePath: '/home/y' })
     })
+
+    it('guards against nested mutation (deep freeze)', () => {
+      const { set, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { config: { nested: { deep: 'original' } } })
+      const snapshot = get('hostA', 'editor') as { config: { nested: { deep: string } } }
+      expect(Object.isFrozen(snapshot.config)).toBe(true)
+      expect(Object.isFrozen(snapshot.config.nested)).toBe(true)
+      expect(() => {
+        snapshot.config.nested.deep = 'hacked'
+      }).toThrow()
+      expect(get('hostA', 'editor')).toEqual({ config: { nested: { deep: 'original' } } })
+    })
   })
 
   it('resets a non-object hosts root during rehydrate', async () => {
