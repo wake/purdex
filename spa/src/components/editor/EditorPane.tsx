@@ -11,6 +11,8 @@ import { EditorStatusBar } from './EditorStatusBar'
 import { RenamePopover } from '../RenamePopover'
 import { findPane } from '../../lib/pane-tree'
 import type { FileSource } from '../../types/fs'
+import type { EditorBufferMetadata, EditorLanguageSource } from '../../stores/useEditorStore'
+import type { UntitledDocumentState } from '../../types/tab'
 
 const TiptapEditor = lazy(() =>
   import('./TiptapEditor').then((m) => ({ default: m.TiptapEditor }))
@@ -31,6 +33,47 @@ function detectLanguage(filePath: string): string {
     java: 'java', c: 'c', cpp: 'cpp', h: 'c', hpp: 'cpp',
   }
   return map[ext] ?? 'plaintext'
+}
+
+function detectLanguageSource(source: FileSource, filePath: string): EditorLanguageSource {
+  if (source.type === 'inapp' && /^\/buffer\/Untitled(?:-\d+)?\./.test(filePath)) {
+    return 'template'
+  }
+  return 'extension'
+}
+
+function isUntitledPath(filePath: string): boolean {
+  return filePath.startsWith('untitled:')
+}
+
+function untitledSuggestedName(untitled: UntitledDocumentState): string {
+  return untitled.hasBeenRenamed ? untitled.name : `${untitled.name}${untitled.suggestedExtension}`
+}
+
+function untitledStoragePath(name: string): string {
+  return `/buffer/${name}`
+}
+
+function displayName(filePath: string, untitled?: UntitledDocumentState): string {
+  return untitled?.name ?? fileName(filePath)
+}
+
+function renamePath(filePath: string, nextName: string, untitled?: UntitledDocumentState): string {
+  return untitled ? `untitled:${nextName}` : siblingPath(filePath, nextName)
+}
+
+function createMetadata(source: FileSource, filePath: string, untitled?: UntitledDocumentState): Pick<EditorBufferMetadata, 'language' | 'languageSource' | 'untitled'> {
+  const resolvedPath = untitled
+    ? untitledStoragePath(untitledSuggestedName(untitled))
+    : filePath
+
+  return {
+    language: detectLanguage(resolvedPath),
+    languageSource: !untitled || untitled.hasBeenRenamed
+      ? detectLanguageSource(source, resolvedPath)
+      : 'template',
+    untitled,
+  }
 }
 
 function fileName(filePath: string): string {
@@ -59,14 +102,6 @@ function renameWarningMessage(error: unknown): string {
   return 'Rename failed'
 }
 
-function sameSource(a: FileSource, b: FileSource): boolean {
-  if (a.type !== b.type) return false
-  if (a.type === 'daemon' && b.type === 'daemon') {
-    return a.hostId === b.hostId
-  }
-  return true
-}
-
 function sourceIdentity(source: FileSource): string {
   return source.type === 'daemon' ? `daemon:${source.hostId}` : source.type
 }
@@ -75,18 +110,24 @@ function sourceIdentity(source: FileSource): string {
 export function EditorPane({ pane, isActive }: PaneRendererProps) {
   const content = pane.content
   if (content.kind !== 'editor') return null
-  return <EditorPaneInner paneId={pane.id} source={content.source} filePath={content.filePath} isActive={isActive} />
+  return <EditorPaneInner paneId={pane.id} source={content.source} filePath={content.filePath} untitled={content.untitled} isActive={isActive} />
 }
 
-function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: string; source: FileSource; filePath: string; isActive: boolean }) {
+function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { paneId: string; source: FileSource; filePath: string; untitled?: UntitledDocumentState; isActive: boolean }) {
   const key = bufferKey(source, filePath)
   const sourceId = sourceIdentity(source)
+  const isUntitled = isUntitledPath(filePath)
+  const currentName = displayName(filePath, untitled)
   const buffer = useEditorStore((s) => s.buffers[key])
   const paneState = useEditorStore((s) => s.paneStates[paneId])
-  const isMarkdown = filePath.endsWith('.md') || filePath.endsWith('.mdx')
+  const isMarkdown = buffer?.language === 'markdown'
   const editorMode = paneState?.editorMode ?? 'raw'
+  const effectiveEditorMode = isMarkdown ? editorMode : 'raw'
   const showDiff = paneState?.showDiff ?? false
+  const canSave = buffer ? (buffer.isDirty || !buffer.lastStat) : false
   const [renameAnchorRect, setRenameAnchorRect] = useState<DOMRect | null>(null)
+  const [renameMode, setRenameMode] = useState<'rename' | 'save'>('rename')
+  const [renameInitialValue, setRenameInitialValue] = useState<string>()
   const [renameWarning, setRenameWarning] = useState<string>()
 
   const handleCursorChange = useCallback((line: number, column: number) => {
@@ -106,10 +147,21 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
     setRenameWarning(undefined)
   }, [filePath])
 
+  useEffect(() => {
+    if (!isMarkdown && editorMode !== 'raw') {
+      useEditorStore.getState().setEditorMode(paneId, 'raw')
+    }
+  }, [editorMode, isMarkdown, paneId])
+
   // Load file on mount, cleanup buffer on unmount
   useEffect(() => {
     let stale = false
     if (useEditorStore.getState().buffers[key]) return // already loaded
+    if (isUntitled) {
+      useEditorStore.getState().openBuffer(key, '', createMetadata(source, filePath, untitled))
+      return
+    }
+
     const backend = getFsBackend(source)
     if (!backend) return
 
@@ -117,20 +169,20 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
       .then((data) => {
         if (stale) return
         const text = new TextDecoder().decode(data)
-        const lang = detectLanguage(filePath)
+        const metadata = createMetadata(source, filePath, untitled)
         return backend.stat(filePath).then((stat) => {
           if (stale) return
-          useEditorStore.getState().openBuffer(key, text, lang, { mtime: stat.mtime, size: stat.size })
+          useEditorStore.getState().openBuffer(key, text, metadata, { mtime: stat.mtime, size: stat.size })
         })
       })
       .catch(() => {
         if (stale) return
         // New file — open empty buffer
-        useEditorStore.getState().openBuffer(key, '', detectLanguage(filePath))
+        useEditorStore.getState().openBuffer(key, '', createMetadata(source, filePath, untitled))
       })
 
     return () => { stale = true }
-  }, [filePath, key, sourceId])
+  }, [filePath, isUntitled, key, sourceId, source, untitled])
 
   // Cleanup pane state only when the pane is truly gone, not just hidden by tab switching.
   useEffect(() => {
@@ -140,7 +192,7 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
         .find(Boolean)
       const stillSameEditor = currentPane?.content.kind === 'editor' &&
         currentPane.content.filePath === filePath &&
-        sameSource(currentPane.content.source, source)
+        sourceIdentity(currentPane.content.source) === sourceId
       if (!stillSameEditor) {
         useEditorStore.getState().closePane(paneId, key)
       }
@@ -150,6 +202,7 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
   // Detect external file changes when tab becomes active
   useEffect(() => {
     if (!isActive) return
+    if (isUntitled) return
 
     const buf = useEditorStore.getState().buffers[key]
     if (!buf) return
@@ -177,11 +230,61 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
       })
       .catch(() => {}) // File may have been deleted
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-check on tab activation, not on source/filePath change
-  }, [isActive, key])
+  }, [isActive, isUntitled, key, source])
 
-  const handleSave = useCallback(async () => {
+  const saveUntitledBuffer = useCallback(async (name: string) => {
     const buf = useEditorStore.getState().buffers[key]
-    if (!buf || !buf.isDirty) return
+    const backend = getFsBackend(source)
+    if (!buf || !backend || !untitled) return
+
+    const trimmedName = name.trim()
+    if (isInvalidRename(trimmedName)) {
+      setRenameWarning('Invalid file name')
+      return
+    }
+
+    const nextPath = untitledStoragePath(trimmedName)
+    const nextKey = bufferKey(source, nextPath)
+    if (nextKey !== key && useEditorStore.getState().buffers[nextKey]) {
+      setRenameWarning('File already exists')
+      return
+    }
+
+    try {
+      const encoded = new TextEncoder().encode(buf.content)
+      await backend.write(nextPath, encoded)
+      const newStat = await backend.stat(nextPath)
+      const nextMetadata = buf.languageSource === 'manual'
+        ? { language: buf.language, languageSource: 'manual' as const, untitled: undefined }
+        : { ...createMetadata(source, nextPath), untitled: undefined }
+      useTabStore.getState().renameEditorPanes(source, filePath, nextPath)
+      useEditorStore.getState().renameBuffer(key, nextKey, nextMetadata)
+      useEditorStore.getState().markSaved(nextKey, { mtime: newStat.mtime, size: newStat.size })
+      useEditorStore.getState().setShowDiff(paneId, false)
+      setRenameAnchorRect(null)
+      setRenameInitialValue(undefined)
+      setRenameWarning(undefined)
+    } catch (err) {
+      console.error('[editor] Save failed:', err)
+    }
+  }, [filePath, key, paneId, source, untitled])
+
+  const handleSave = useCallback(async (anchorRect?: DOMRect) => {
+    const buf = useEditorStore.getState().buffers[key]
+    if (!buf || (!buf.isDirty && buf.lastStat)) return
+    if (buf.untitled) {
+      if (!buf.untitled.hasBeenRenamed) {
+        if (!anchorRect) return
+        setRenameMode('save')
+        setRenameAnchorRect(anchorRect)
+        setRenameInitialValue(untitledSuggestedName(buf.untitled))
+        setRenameWarning(undefined)
+        return
+      }
+      await saveUntitledBuffer(buf.untitled.name)
+      return
+    }
+
     const backend = getFsBackend(source)
     if (!backend) return
     try {
@@ -193,29 +296,55 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
     } catch (err) {
       console.error('[editor] Save failed:', err)
     }
-  }, [filePath, key, paneId, source])
+  }, [filePath, key, paneId, saveUntitledBuffer, source])
 
   const handleRenameSubmit = useCallback(async (nextName: string) => {
-    const backend = getFsBackend(source)
-    if (!backend) return
+    const currentBuffer = useEditorStore.getState().buffers[key]
+    if (!currentBuffer) return
+
+    if (renameMode === 'save') {
+      await saveUntitledBuffer(nextName)
+      return
+    }
 
     if (isInvalidRename(nextName)) {
       setRenameWarning('Invalid file name')
       return
     }
 
-    if (nextName === fileName(filePath)) {
+    if (nextName === currentName) {
       setRenameAnchorRect(null)
+      setRenameInitialValue(undefined)
       setRenameWarning(undefined)
       return
     }
 
-    const nextPath = siblingPath(filePath, nextName)
+    const nextPath = renamePath(filePath, nextName, currentBuffer.untitled)
     const nextKey = bufferKey(source, nextPath)
     if (nextKey !== key && useEditorStore.getState().buffers[nextKey]) {
       setRenameWarning('File already exists')
       return
     }
+
+    if (currentBuffer.untitled) {
+      const nextUntitled: UntitledDocumentState = {
+        ...currentBuffer.untitled,
+        name: nextName,
+        hasBeenRenamed: true,
+      }
+      useTabStore.getState().renameEditorPanes(source, filePath, nextPath, { untitled: nextUntitled })
+      const nextMetadata = currentBuffer.languageSource === 'manual'
+        ? { language: currentBuffer.language, languageSource: 'manual' as const, untitled: nextUntitled }
+        : createMetadata(source, nextPath, nextUntitled)
+      useEditorStore.getState().renameBuffer(key, nextKey, nextMetadata)
+      setRenameAnchorRect(null)
+      setRenameInitialValue(undefined)
+      setRenameWarning(undefined)
+      return
+    }
+
+    const backend = getFsBackend(source)
+    if (!backend) return
 
     if (!isCaseOnlyRename(filePath, nextPath)) {
       try {
@@ -228,15 +357,21 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
     }
 
     try {
-      await backend.rename(filePath, nextPath)
+      if (currentBuffer?.lastStat) {
+        await backend.rename(filePath, nextPath)
+      }
       useTabStore.getState().renameEditorPanes(source, filePath, nextPath)
-      useEditorStore.getState().renameBuffer(key, nextKey, detectLanguage(nextPath))
+      const nextMetadata = currentBuffer?.languageSource === 'manual'
+        ? { language: currentBuffer.language, languageSource: 'manual' as const }
+        : createMetadata(source, nextPath)
+      useEditorStore.getState().renameBuffer(key, nextKey, nextMetadata)
       setRenameAnchorRect(null)
+      setRenameInitialValue(undefined)
       setRenameWarning(undefined)
     } catch (error) {
       setRenameWarning(renameWarningMessage(error))
     }
-  }, [filePath, key, source])
+  }, [currentName, filePath, key, renameMode, saveUntitledBuffer, source])
 
   if (!buffer) {
     return <div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading...</div>
@@ -245,13 +380,18 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
   return (
     <div className="h-full w-full flex flex-col overflow-hidden">
       <EditorToolbar
+        source={source}
         filePath={filePath}
+        displayPath={untitled ? untitled.name : undefined}
         isDirty={buffer.isDirty}
+        canSave={canSave}
         showDiff={showDiff}
         onSave={handleSave}
         onDiff={() => useEditorStore.getState().setShowDiff(paneId, !showDiff)}
         onRenameStart={(anchorRect) => {
+          setRenameMode('rename')
           setRenameAnchorRect(anchorRect)
+          setRenameInitialValue(undefined)
           setRenameWarning(undefined)
         }}
       />
@@ -262,7 +402,7 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
             modified={buffer.content}
             language={buffer.language}
           />
-        ) : editorMode === 'raw' ? (
+        ) : effectiveEditorMode === 'raw' ? (
           <MonacoWrapper
             key={buffer.modelId}
             content={buffer.content}
@@ -290,17 +430,27 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
         source={source}
         line={paneState?.cursorPosition.line ?? 1}
         column={paneState?.cursorPosition.column ?? 1}
+        language={buffer.language}
+        eol={buffer.eol}
+        encoding={buffer.encoding}
         isMarkdown={isMarkdown}
-        editorMode={editorMode}
-        onModeChange={(mode) => useEditorStore.getState().setEditorMode(paneId, mode)}
+        editorMode={effectiveEditorMode}
+        onLanguageChange={(language) => useEditorStore.getState().setBufferLanguage(key, language)}
+        onModeChange={(mode) => {
+          if (!isMarkdown && mode === 'wysiwyg') return
+          useEditorStore.getState().setEditorMode(paneId, mode)
+        }}
       />
       {renameAnchorRect && (
         <RenamePopover
           anchorRect={renameAnchorRect}
-          currentName={fileName(filePath)}
+          currentName={currentName}
+          initialValue={renameInitialValue}
+          allowUnchangedSubmit={renameMode === 'save'}
           onConfirm={handleRenameSubmit}
           onCancel={() => {
             setRenameAnchorRect(null)
+            setRenameInitialValue(undefined)
             setRenameWarning(undefined)
           }}
           error={renameWarning}

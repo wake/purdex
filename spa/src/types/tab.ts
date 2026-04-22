@@ -27,6 +27,12 @@ export interface Pane {
 // === Pane Content (discriminated union) ===
 export type TerminatedReason = 'session-closed' | 'tmux-restarted' | 'host-removed'
 
+export interface UntitledDocumentState {
+  name: string
+  suggestedExtension: '.txt' | '.md'
+  hasBeenRenamed: boolean
+}
+
 export type PaneContent =
   | { kind: 'new-tab' }
   | { kind: 'tmux-session'; hostId: string; sessionCode: string; mode: 'terminal' | 'stream'; cachedName: string; tmuxInstance: string; terminated?: TerminatedReason }
@@ -36,7 +42,7 @@ export type PaneContent =
   | { kind: 'settings'; scope: 'global' | { workspaceId: string } }
   | { kind: 'browser'; url: string }
   | { kind: 'memory-monitor' }
-  | { kind: 'editor'; source: FileSource; filePath: string; diff?: { against: 'saved' | string } }
+  | { kind: 'editor'; source: FileSource; filePath: string; untitled?: UntitledDocumentState; diff?: { against: 'saved' | string } }
   | { kind: 'image-preview'; source: FileSource; filePath: string }
   | { kind: 'pdf-preview'; source: FileSource; filePath: string }
 

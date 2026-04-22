@@ -6,6 +6,7 @@ import { createTab } from '../types/tab'
 import { getPrimaryPane, findPane, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern } from '../lib/pane-tree'
 import { contentMatches } from '../lib/pane-utils'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
+import type { UntitledDocumentState } from '../types/tab'
 
 // --- Persist migration helpers ---
 // These functions handle legacy persisted data whose shape no longer matches
@@ -74,7 +75,13 @@ function sourceMatches(a: FileSource, b: FileSource): boolean {
   return true
 }
 
-function renameEditorPanesInLayout(layout: PaneLayout, source: FileSource, oldPath: string, newPath: string): PaneLayout {
+function renameEditorPanesInLayout(
+  layout: PaneLayout,
+  source: FileSource,
+  oldPath: string,
+  newPath: string,
+  options?: { untitled?: UntitledDocumentState },
+): PaneLayout {
   if (layout.type === 'leaf') {
     const content = layout.pane.content
     if (content.kind === 'editor' && content.filePath === oldPath && sourceMatches(content.source, source)) {
@@ -82,14 +89,18 @@ function renameEditorPanesInLayout(layout: PaneLayout, source: FileSource, oldPa
         type: 'leaf',
         pane: {
           ...layout.pane,
-          content: { ...content, filePath: newPath },
+          content: {
+            ...content,
+            filePath: newPath,
+            ...(options?.untitled === undefined ? { untitled: undefined } : { untitled: options.untitled }),
+          },
         },
       }
     }
     return layout
   }
 
-  const children = layout.children.map((child) => renameEditorPanesInLayout(child, source, oldPath, newPath))
+  const children = layout.children.map((child) => renameEditorPanesInLayout(child, source, oldPath, newPath, options))
   return children.some((child, index) => child !== layout.children[index])
     ? { ...layout, children }
     : layout
@@ -107,7 +118,7 @@ interface TabState {
   setActiveTab: (id: string | null) => void
   setViewMode: (tabId: string, paneId: string, mode: 'terminal' | 'stream') => void
   setPaneContent: (tabId: string, paneId: string, content: PaneContent) => void
-  renameEditorPanes: (source: FileSource, oldPath: string, newPath: string) => void
+  renameEditorPanes: (source: FileSource, oldPath: string, newPath: string, options?: { untitled?: UntitledDocumentState }) => void
   splitPane: (tabId: string, paneId: string, direction: 'h' | 'v', content: PaneContent) => void
   closePane: (tabId: string, paneId: string) => void
   resizePanes: (tabId: string, splitId: string, sizes: number[]) => void
@@ -232,12 +243,12 @@ export const useTabStore = create<TabState>()(
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
 
-      renameEditorPanes: (source, oldPath, newPath) =>
+      renameEditorPanes: (source, oldPath, newPath, options) =>
         set((state) => {
           let changed = false
           const tabs = { ...state.tabs }
           for (const [tabId, tab] of Object.entries(state.tabs)) {
-            const newLayout = renameEditorPanesInLayout(tab.layout, source, oldPath, newPath)
+            const newLayout = renameEditorPanesInLayout(tab.layout, source, oldPath, newPath, options)
             if (newLayout !== tab.layout) {
               tabs[tabId] = { ...tab, layout: newLayout }
               changed = true

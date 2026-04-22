@@ -7,6 +7,7 @@ import type { Pane } from '../../../types/tab'
 import type { FsBackend } from '../../../lib/fs-backend'
 
 const getFsBackendMock = vi.hoisted(() => vi.fn())
+const editorStatusBarMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../../../lib/fs-backend', () => ({
   getFsBackend: getFsBackendMock,
@@ -21,7 +22,23 @@ vi.mock('../DiffView', () => ({
 }))
 
 vi.mock('../EditorStatusBar', () => ({
-  EditorStatusBar: () => <div data-testid="editor-status-bar" />,
+  EditorStatusBar: (props: { language: string; eol: 'lf' | 'crlf'; encoding: 'utf8'; isMarkdown: boolean; editorMode: 'raw' | 'wysiwyg' }) => {
+    editorStatusBarMock(props)
+    return (
+      <div
+        data-testid="editor-status-bar"
+        data-language={props.language}
+        data-eol={props.eol}
+        data-encoding={props.encoding}
+        data-is-markdown={props.isMarkdown ? 'true' : 'false'}
+        data-editor-mode={props.editorMode}
+      />
+    )
+  },
+}))
+
+vi.mock('../TiptapEditor', () => ({
+  TiptapEditor: () => <div data-testid="tiptap-editor" />,
 }))
 
 function createPane(filePath = '/notes/editor.md', paneId = 'pane-editor'): Pane {
@@ -31,6 +48,22 @@ function createPane(filePath = '/notes/editor.md', paneId = 'pane-editor'): Pane
       kind: 'editor',
       source: { type: 'inapp' },
       filePath,
+    },
+  }
+}
+
+function createUntitledPane(name = 'Untitled', suggestedExtension: '.txt' | '.md' = '.md', paneId = 'pane-editor'): Pane {
+  return {
+    id: paneId,
+    content: {
+      kind: 'editor',
+      source: { type: 'inapp' },
+      filePath: `untitled:${name}`,
+      untitled: {
+        name,
+        suggestedExtension,
+        hasBeenRenamed: false,
+      },
     },
   }
 }
@@ -176,6 +209,59 @@ describe('EditorPane', () => {
     rerender(<EditorPane pane={pane} isActive />)
 
     expect(screen.getByTestId('monaco-wrapper')).toHaveAttribute('data-active', 'true')
+  })
+
+  it('keeps non-markdown files in source mode even if the pane state was previously live mode', async () => {
+    const pane = createPane('/notes/plain.txt', 'pane-txt')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('hello world'))
+    backend.stat.mockResolvedValue({
+      isFile: true,
+      isDirectory: false,
+      size: 11,
+      mtime: 123,
+    })
+    getFsBackendMock.mockReturnValue(backend)
+
+    useEditorStore.getState().attachPane(pane.id, getBufferKey('/notes/plain.txt'))
+    useEditorStore.getState().setEditorMode(pane.id, 'wysiwyg')
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/plain.txt')]).toBeDefined()
+    })
+
+    expect(screen.getByTestId('monaco-wrapper')).toBeInTheDocument()
+    expect(screen.queryByTestId('tiptap-editor')).not.toBeInTheDocument()
+    expect(screen.getByTestId('editor-status-bar')).toHaveAttribute('data-is-markdown', 'false')
+    expect(screen.getByTestId('editor-status-bar')).toHaveAttribute('data-editor-mode', 'raw')
+  })
+
+  it('uses buffer metadata instead of the file extension to allow markdown live mode', async () => {
+    const pane = createPane('/notes/plain.txt', 'pane-manual-markdown')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/plain.txt'), '# hello', {
+      language: 'markdown',
+      languageSource: 'manual',
+      eol: 'lf',
+      encoding: 'utf8',
+    })
+    useEditorStore.getState().attachPane(pane.id, getBufferKey('/notes/plain.txt'))
+    useEditorStore.getState().setEditorMode(pane.id, 'wysiwyg')
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tiptap-editor')).toBeInTheDocument()
+    })
+
+    expect(screen.queryByTestId('monaco-wrapper')).not.toBeInTheDocument()
+    expect(screen.getByTestId('editor-status-bar')).toHaveAttribute('data-language', 'markdown')
+    expect(screen.getByTestId('editor-status-bar')).toHaveAttribute('data-is-markdown', 'true')
+    expect(screen.getByTestId('editor-status-bar')).toHaveAttribute('data-editor-mode', 'wysiwyg')
   })
 
   it('cleans up pane state when the pane is reused for non-editor content', async () => {
@@ -389,7 +475,7 @@ describe('EditorPane', () => {
       .mockRejectedValueOnce(new Error('not found'))
     getFsBackendMock.mockReturnValue(backend)
     registerTabPane(pane)
-    useEditorStore.getState().openBuffer(getBufferKey('/notes/taken.md'), 'draft', 'markdown')
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/taken.md'), 'draft', { language: 'markdown' })
     useEditorStore.getState().attachPane('pane-other', getBufferKey('/notes/taken.md'))
 
     render(<EditorPane pane={pane} isActive />)
@@ -507,6 +593,146 @@ describe('EditorPane', () => {
     await waitFor(() => {
       expect(useEditorStore.getState().buffers[getBufferKey('/notes/example.md')]?.language).toBe('markdown')
     })
+  })
+
+  it('renames an untitled buffer without calling backend rename', async () => {
+    const pane = createUntitledPane('Untitled', '.md', 'pane-unsaved-rename')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeDefined()
+    })
+
+    fireEvent.doubleClick(screen.getByText('Untitled'))
+    fireEvent.change(screen.getByDisplayValue('Untitled'), { target: { value: 'notes.txt' } })
+    fireEvent.keyDown(screen.getByDisplayValue('notes.txt'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:notes.txt')]).toBeDefined()
+    })
+
+    expect(backend.rename).not.toHaveBeenCalled()
+    expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeUndefined()
+    expect(useEditorStore.getState().buffers[getBufferKey('untitled:notes.txt')]).toMatchObject({
+      language: 'plaintext',
+      languageSource: 'extension',
+      lastStat: null,
+      untitled: {
+        name: 'notes.txt',
+        suggestedExtension: '.md',
+        hasBeenRenamed: true,
+      },
+    })
+  })
+
+  it('prompts for a file name before first save of an unrenamed untitled document', async () => {
+    const pane = createUntitledPane('Untitled', '.md', 'pane-save-prompt')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    expect(screen.getByDisplayValue('Untitled.md')).toBeInTheDocument()
+    expect(backend.write).not.toHaveBeenCalled()
+  })
+
+  it('saves an untitled document to in-app after confirming the suggested name', async () => {
+    const pane = createUntitledPane('Untitled', '.md', 'pane-save-untitled')
+    const backend = createBackend()
+    backend.write.mockResolvedValue(undefined)
+    backend.stat.mockResolvedValue({
+      isFile: true,
+      isDirectory: false,
+      size: 0,
+      mtime: 456,
+    })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+    fireEvent.keyDown(screen.getByDisplayValue('Untitled.md'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(backend.write).toHaveBeenCalledWith('/buffer/Untitled.md', new TextEncoder().encode(''))
+    })
+
+    expect(useEditorStore.getState().buffers[getBufferKey('/buffer/Untitled.md')]).toMatchObject({
+      lastStat: { mtime: 456, size: 0 },
+      untitled: undefined,
+    })
+  })
+
+  it('saves a renamed untitled document directly to in-app without prompting', async () => {
+    const pane = createUntitledPane('notes.txt', '.txt', 'pane-save-renamed')
+    const backend = createBackend()
+    backend.write.mockResolvedValue(undefined)
+    backend.stat.mockResolvedValue({
+      isFile: true,
+      isDirectory: false,
+      size: 5,
+      mtime: 456,
+    })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane({
+      ...pane,
+      content: {
+        kind: 'editor',
+        source: { type: 'inapp' },
+        filePath: 'untitled:notes.txt',
+        untitled: {
+          name: 'notes.txt',
+          suggestedExtension: '.txt',
+          hasBeenRenamed: true,
+        },
+      },
+    })
+    useEditorStore.getState().openBuffer(getBufferKey('untitled:notes.txt'), 'hello', {
+      language: 'plaintext',
+      languageSource: 'extension',
+      untitled: {
+        name: 'notes.txt',
+        suggestedExtension: '.txt',
+        hasBeenRenamed: true,
+      },
+    })
+
+    render(<EditorPane pane={{
+      ...pane,
+      content: {
+        kind: 'editor',
+        source: { type: 'inapp' },
+        filePath: 'untitled:notes.txt',
+        untitled: {
+          name: 'notes.txt',
+          suggestedExtension: '.txt',
+          hasBeenRenamed: true,
+        },
+      },
+    }} isActive />)
+
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => {
+      expect(backend.write).toHaveBeenCalledWith('/buffer/notes.txt', new TextEncoder().encode('hello'))
+    })
+
+    expect(screen.queryByDisplayValue('notes.txt')).not.toBeInTheDocument()
   })
 
   it('saves dirty content and marks the buffer clean on success', async () => {

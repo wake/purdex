@@ -44,7 +44,7 @@ export function getPaneLabel(
     case 'memory-monitor':
       return t('monitor.title')
     case 'editor': {
-      const name = content.filePath.split('/').pop() ?? content.filePath
+      const name = content.untitled?.name ?? (content.filePath.split('/').pop() ?? content.filePath)
       return content.diff ? `${name} (Diff)` : name
     }
     case 'image-preview':

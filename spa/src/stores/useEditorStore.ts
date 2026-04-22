@@ -1,14 +1,25 @@
 // spa/src/stores/useEditorStore.ts
 import { create } from 'zustand'
 import type { editor } from 'monaco-editor'
+import type { UntitledDocumentState } from '../types/tab'
 
 export type EditorMode = 'raw' | 'wysiwyg'
+export type EditorLanguageSource = 'extension' | 'template' | 'manual'
+export type EditorEol = 'lf' | 'crlf'
+export type EditorEncoding = 'utf8'
 
-export interface EditorBuffer {
+export interface EditorBufferMetadata {
+  language: string
+  languageSource: EditorLanguageSource
+  eol: EditorEol
+  encoding: EditorEncoding
+  untitled?: UntitledDocumentState
+}
+
+export interface EditorBuffer extends EditorBufferMetadata {
   content: string
   savedContent: string
   isDirty: boolean
-  language: string
   lastStat: { mtime: number; size: number } | null
   modelId: string
 }
@@ -24,11 +35,12 @@ export interface EditorPaneState {
 interface EditorState {
   buffers: Record<string, EditorBuffer>
   paneStates: Record<string, EditorPaneState>
-  openBuffer: (key: string, content: string, language: string, stat?: { mtime: number; size: number }) => void
+  openBuffer: (key: string, content: string, metadata: Partial<EditorBufferMetadata> & Pick<EditorBufferMetadata, 'language'>, stat?: { mtime: number; size: number }) => void
   attachPane: (paneId: string, bufferKey: string) => void
   updateContent: (key: string, content: string) => void
   markSaved: (key: string, stat?: { mtime: number; size: number }) => void
-  renameBuffer: (oldKey: string, newKey: string, language?: string) => void
+  renameBuffer: (oldKey: string, newKey: string, metadata?: Partial<EditorBufferMetadata>) => void
+  setBufferLanguage: (key: string, language: string) => void
   closeBuffer: (key: string) => void
   closePane: (paneId: string, expectedBufferKey?: string) => void
   reloadBuffer: (key: string, content: string, stat?: { mtime: number; size: number }) => void
@@ -57,11 +69,25 @@ function createModelId(): string {
   return modelId
 }
 
+function detectEol(content: string): EditorEol {
+  return content.includes('\r\n') ? 'crlf' : 'lf'
+}
+
+function normalizeMetadata(content: string, metadata: Partial<EditorBufferMetadata> & Pick<EditorBufferMetadata, 'language'>): EditorBufferMetadata {
+  return {
+    language: metadata.language,
+    languageSource: metadata.languageSource ?? 'extension',
+    eol: metadata.eol ?? detectEol(content),
+    encoding: metadata.encoding ?? 'utf8',
+    untitled: metadata.untitled,
+  }
+}
+
 export const useEditorStore = create<EditorState>()((set) => ({
   buffers: {},
   paneStates: {},
 
-  openBuffer: (key, content, language, stat) => set((s) => {
+  openBuffer: (key, content, metadata, stat) => set((s) => {
     if (s.buffers[key]) return s
     return {
       buffers: {
@@ -70,7 +96,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
           content,
           savedContent: content,
           isDirty: false,
-          language,
+          ...normalizeMetadata(content, metadata),
           lastStat: stat ?? null,
           modelId: createModelId(),
         },
@@ -118,6 +144,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
           ...buf,
           content,
           isDirty: content !== buf.savedContent,
+          eol: detectEol(content),
         },
       },
     }
@@ -139,7 +166,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
     }
   }),
 
-  renameBuffer: (oldKey, newKey, language) => set((s) => {
+  renameBuffer: (oldKey, newKey, metadata) => set((s) => {
     const buffer = s.buffers[oldKey]
     if (!buffer || oldKey === newKey) return s
 
@@ -156,15 +183,30 @@ export const useEditorStore = create<EditorState>()((set) => ({
         ...restBuffers,
         [newKey]: {
           ...buffer,
-          language: language ?? buffer.language,
+          ...metadata,
         },
       },
       paneStates,
     }
   }),
 
+  setBufferLanguage: (key, language) => set((s) => {
+    const buffer = s.buffers[key]
+    if (!buffer) return s
+    return {
+      buffers: {
+        ...s.buffers,
+        [key]: {
+          ...buffer,
+          language,
+          languageSource: 'manual',
+        },
+      },
+    }
+  }),
+
   closeBuffer: (key) => set((s) => {
-    const { [key]: _removed, ...rest } = s.buffers  
+    const { [key]: _removed, ...rest } = s.buffers
     return { buffers: rest }
   }),
 
@@ -197,6 +239,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
           content,
           savedContent: content,
           isDirty: false,
+          eol: detectEol(content),
           lastStat: stat ?? buf.lastStat,
         },
       },
