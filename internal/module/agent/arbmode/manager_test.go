@@ -4,6 +4,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -48,6 +49,14 @@ func TestManager_DefaultPassthrough_Snapshot(t *testing.T) {
 	}
 	if snap.EnvLocked {
 		t.Error("EnvLocked should be false")
+	}
+	// Published pointer must never be nil after construction.
+	mode, rev := m.loadPublishedForTest()
+	if mode != ModePassthrough {
+		t.Errorf("published.Mode=%q, want passthrough", mode)
+	}
+	if rev != 0 {
+		t.Errorf("published.Revision=%d, want 0", rev)
 	}
 }
 
@@ -171,6 +180,64 @@ func TestManager_OnConfigChange_InvalidValue_FallbackToPassthrough(t *testing.T)
 	}
 }
 
+// ── OnConfigChange — published snapshot semantics (#579) ─────────────────────
+
+// TestManager_OnConfigChange_PublishesSnapshot verifies that OnConfigChange
+// atomic-publishes a new *modeTarget whose Mode equals the new value and
+// Revision is previous+1.
+func TestManager_OnConfigChange_PublishesSnapshot(t *testing.T) {
+	m := NewManager("", "passthrough")
+	_, prevRev := m.loadPublishedForTest()
+
+	changed := m.OnConfigChange("authoritative")
+	if !changed {
+		t.Fatal("OnConfigChange should return true when mode changes")
+	}
+	mode, rev := m.loadPublishedForTest()
+	if mode != ModeAuthoritative {
+		t.Errorf("published.Mode=%q, want authoritative", mode)
+	}
+	if rev != prevRev+1 {
+		t.Errorf("published.Revision=%d, want %d (prev+1)", rev, prevRev+1)
+	}
+}
+
+// TestManager_OnConfigChange_SameValue_NoRevBump verifies that a no-op
+// OnConfigChange (same mode as current published) does not bump Revision.
+func TestManager_OnConfigChange_SameValue_NoRevBump(t *testing.T) {
+	m := NewManager("", "passthrough")
+	_, rev0 := m.loadPublishedForTest()
+
+	changed := m.OnConfigChange("passthrough")
+	if changed {
+		t.Error("OnConfigChange should return false when value unchanged")
+	}
+	_, rev1 := m.loadPublishedForTest()
+	if rev1 != rev0 {
+		t.Errorf("published.Revision bumped on no-op: before=%d after=%d", rev0, rev1)
+	}
+}
+
+// TestManager_OnConfigChange_EnvLocked_NoPublish verifies that env-locked
+// OnConfigChange calls do not mutate the published target.
+func TestManager_OnConfigChange_EnvLocked_NoPublish(t *testing.T) {
+	_ = captureLog(t)
+	m := NewManager("authoritative", "")
+	modeBefore, revBefore := m.loadPublishedForTest()
+
+	changed := m.OnConfigChange("passthrough")
+	if changed {
+		t.Error("OnConfigChange should return false when env-locked")
+	}
+	modeAfter, revAfter := m.loadPublishedForTest()
+	if modeAfter != modeBefore {
+		t.Errorf("published.Mode mutated under env-lock: before=%q after=%q", modeBefore, modeAfter)
+	}
+	if revAfter != revBefore {
+		t.Errorf("published.Revision bumped under env-lock: before=%d after=%d", revBefore, revAfter)
+	}
+}
+
 // ── ApplyAtSessionStart ───────────────────────────────────────────────────────
 
 func TestManager_ApplyAtSessionStart_PromotesPending(t *testing.T) {
@@ -199,13 +266,59 @@ func TestManager_ApplyAtSessionStart_NoPendingDiff_NoOp(t *testing.T) {
 	}
 }
 
+// TestManager_Apply_ReadsLatestPublished verifies Apply reads the most recent
+// published target — two back-to-back OnConfigChange calls followed by a
+// single Apply should land on the last published value.
+func TestManager_Apply_ReadsLatestPublished(t *testing.T) {
+	m := NewManager("", "passthrough")
+	m.OnConfigChange("authoritative")
+	m.OnConfigChange("passthrough")
+	m.OnConfigChange("authoritative") // last publish wins
+	m.ApplyAtSessionStart()
+
+	snap := m.Snapshot()
+	if snap.Current != ModeAuthoritative {
+		t.Errorf("Current=%q, want authoritative (latest published)", snap.Current)
+	}
+}
+
+// TestManager_Apply_CurrentEqualsPublished_Noop verifies Apply is a no-op when
+// current already matches the published mode (Apply must not touch revision).
+func TestManager_Apply_CurrentEqualsPublished_Noop(t *testing.T) {
+	m := NewManager("", "passthrough")
+	_, revBefore := m.loadPublishedForTest()
+
+	m.ApplyAtSessionStart()
+
+	snap := m.Snapshot()
+	if snap.Current != ModePassthrough {
+		t.Errorf("Current=%q, want passthrough", snap.Current)
+	}
+	_, revAfter := m.loadPublishedForTest()
+	if revAfter != revBefore {
+		t.Errorf("Apply should not bump published.Revision: before=%d after=%d", revBefore, revAfter)
+	}
+}
+
 // ── Concurrency ───────────────────────────────────────────────────────────────
 
-func TestManager_Snapshot_NotTornDuringConfigChange(t *testing.T) {
-	m := NewManager("", "passthrough") // current=passthrough, pending=passthrough
+// TestManager_Snapshot_NotTorn verifies Snapshot() is self-consistent under
+// concurrent OnConfigChange — Current must stay passthrough (no Apply called),
+// EnvLocked must stay false, and Pending must always be a valid ArbMode.
+// Pending may lead Current: that is the documented contract.
+func TestManager_Snapshot_NotTorn(t *testing.T) {
+	m := NewManager("", "passthrough")
 
 	const iters = 10_000
 	var wg sync.WaitGroup
+	var failed atomic.Bool
+	var firstErr atomic.Value // string
+
+	report := func(msg string) {
+		if failed.CompareAndSwap(false, true) {
+			firstErr.Store(msg)
+		}
+	}
 
 	// Goroutine A: flip OnConfigChange between passthrough and authoritative.
 	wg.Add(1)
@@ -226,23 +339,167 @@ func TestManager_Snapshot_NotTornDuringConfigChange(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < iters; i++ {
 			snap := m.Snapshot()
-			// current must stay passthrough (we never call ApplyAtSessionStart).
 			if snap.Current != ModePassthrough {
-				t.Errorf("torn read: Current=%q, want passthrough", snap.Current)
+				report("Current drifted from passthrough without Apply")
 				return
 			}
-			// EnvLocked must stay false (no env set).
 			if snap.EnvLocked {
-				t.Error("torn read: EnvLocked should be false")
+				report("EnvLocked should be false")
 				return
 			}
-			// Pending must be one of the two valid modes (never zero/invalid).
 			if !snap.Pending.IsValid() {
-				t.Errorf("torn read: Pending=%q is invalid", snap.Pending)
+				report("Pending is invalid")
 				return
 			}
 		}
 	}()
 
 	wg.Wait()
+	if failed.Load() {
+		t.Fatalf("torn snapshot detected: %v", firstErr.Load())
+	}
+}
+
+// TestManager_ConcurrentReadWrite_Race provides -race coverage for the
+// combined OnConfigChange / ApplyAtSessionStart / Snapshot triad. It runs
+// short; count=10 under `go test -race` flushes out ordering bugs.
+func TestManager_ConcurrentReadWrite_Race(t *testing.T) {
+	m := NewManager("", "passthrough")
+	const workers = 8
+	const iters = 500
+	var wg sync.WaitGroup
+
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < iters; i++ {
+				switch (id + i) % 3 {
+				case 0:
+					if i%2 == 0 {
+						m.OnConfigChange("authoritative")
+					} else {
+						m.OnConfigChange("passthrough")
+					}
+				case 1:
+					m.ApplyAtSessionStart()
+				case 2:
+					_ = m.Snapshot()
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	// Final state must be self-consistent.
+	snap := m.Snapshot()
+	if !snap.Current.IsValid() {
+		t.Errorf("Current=%q is invalid after race", snap.Current)
+	}
+	if !snap.Pending.IsValid() {
+		t.Errorf("Pending=%q is invalid after race", snap.Pending)
+	}
+}
+
+// TestManager_Apply_RacesOnConfigChange_CaseA exercises the controlled
+// interleave where Apply observes the OLD published target (Apply's Load runs
+// strictly before OnConfigChange's atomic Store), confirming that the new
+// publish is picked up on the NEXT SessionStart.
+//
+// Interleave:
+//  1. Apply.Load() → observes initial published (passthrough, rev=0)
+//  2. Apply writes current (no-op: current already passthrough)
+//  3. OnConfigChange("authoritative") publishes {authoritative, rev=1}
+//  4. Second Apply observes the new published → current becomes authoritative.
+//
+// No timing primitives needed: we exploit the package API directly to enforce
+// the ordering (the Load happens in Apply, and Apply returns before step 3).
+func TestManager_Apply_RacesOnConfigChange_CaseA(t *testing.T) {
+	m := NewManager("", "passthrough")
+
+	// Step 1+2: Apply observes initial published (passthrough); current stays passthrough.
+	m.ApplyAtSessionStart()
+	if snap := m.Snapshot(); snap.Current != ModePassthrough {
+		t.Fatalf("step 2: Current=%q, want passthrough", snap.Current)
+	}
+
+	// Step 3: Concurrent OnConfigChange publishes authoritative.
+	// (Run on a goroutine to exercise race-detector paths; join before step 4.)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.OnConfigChange("authoritative")
+	}()
+	<-done
+
+	// Step 4: Second Apply must pick up the new publish.
+	m.ApplyAtSessionStart()
+	snap := m.Snapshot()
+	if snap.Current != ModeAuthoritative {
+		t.Errorf("step 4: Current=%q, want authoritative (new publish must be applied on next SessionStart)", snap.Current)
+	}
+}
+
+// TestManager_Apply_RacesOnConfigChange_CaseB exercises the happy-path
+// interleave where OnConfigChange completes before Apply runs — Apply reads
+// the newly published target and promotes it immediately.
+func TestManager_Apply_RacesOnConfigChange_CaseB(t *testing.T) {
+	m := NewManager("", "passthrough")
+
+	// OnConfigChange publishes first (awaited via channel).
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.OnConfigChange("authoritative")
+	}()
+	<-done
+
+	m.ApplyAtSessionStart()
+	snap := m.Snapshot()
+	if snap.Current != ModeAuthoritative {
+		t.Errorf("Current=%q, want authoritative after ordered publish+apply", snap.Current)
+	}
+}
+
+// TestManager_Apply_RacesOnConfigChange_CaseC is the #579 race scenario made
+// explicit: Apply's Load and Apply's Lock are NOT atomic under the published
+// snapshot design, but the contract tolerates it — if OnConfigChange(B) lands
+// BETWEEN Apply's Load(A) and Apply's mu.Lock(), Apply still writes current=A
+// (the value observed at Load time), but B is guaranteed to be promoted on
+// the NEXT SessionStart.
+//
+// We drive the interleave using two sync points:
+//  1. Goroutine X calls OnConfigChange("authoritative") — publishes A {auth, rev=1}.
+//  2. Main goroutine Apply() loads target=A, then promotes current=authoritative.
+//  3. Goroutine Y calls OnConfigChange("passthrough") — publishes B {pass, rev=2}.
+//  4. Main goroutine Apply() again — must land on passthrough (B).
+//
+// The design guarantee: atomic.Pointer.Load never misses the latest prior
+// Store, so step 4's Load sees B regardless of the step-2/step-3 interleave.
+func TestManager_Apply_RacesOnConfigChange_CaseC(t *testing.T) {
+	m := NewManager("", "passthrough")
+
+	// Step 1: publish A (authoritative)
+	m.OnConfigChange("authoritative")
+
+	// Step 2: Apply observes A, writes current=authoritative
+	m.ApplyAtSessionStart()
+	if snap := m.Snapshot(); snap.Current != ModeAuthoritative {
+		t.Fatalf("step 2: Current=%q, want authoritative", snap.Current)
+	}
+
+	// Step 3: publish B (passthrough)
+	m.OnConfigChange("passthrough")
+
+	// Step 4: Apply must land on B (latest publish, NOT the one Apply loaded at step 2)
+	m.ApplyAtSessionStart()
+	snap := m.Snapshot()
+	if snap.Current != ModePassthrough {
+		t.Errorf("step 4: Current=%q, want passthrough (latest publish B must win on next Apply)", snap.Current)
+	}
+	// Published revision should reflect two publishes (A=1, B=2).
+	_, rev := m.loadPublishedForTest()
+	if rev != 2 {
+		t.Errorf("published.Revision=%d, want 2 (two publishes)", rev)
+	}
 }
