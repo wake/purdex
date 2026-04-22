@@ -2,8 +2,10 @@
 import { registerModule } from './module-registry'
 import { registerNewTabProvider } from './new-tab-registry'
 import { registerSettingsSection } from './settings-section-registry'
-import { clearContributions } from './settings-contribution-registry'
-import { dispatchSettingsContributions } from './dispatch-settings-contributions'
+import {
+  dispatchSettingsContributions,
+  resetSettingsContributionsForHmr,
+} from './dispatch-settings-contributions'
 import { findPane } from './pane-tree'
 import { getPlatformCapabilities } from './platform'
 import { SessionPaneContent } from '../components/SessionPaneContent'
@@ -89,7 +91,13 @@ export { dispatchSettingsContributions } from './dispatch-settings-contributions
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    clearContributions()
+    // F2 + F4: the HMR dispose hook must clear BOTH the committed
+    // contribution registry AND the legacy adapter's pending buffers, so
+    // no stale reserved / active entries leak across HMR re-runs.
+    // `resetSettingsContributionsForHmr()` is the canonical single entry
+    // point that keeps the write-side registry APIs off this module's
+    // import surface (lint-enforced by F4).
+    resetSettingsContributionsForHmr()
   })
 }
 

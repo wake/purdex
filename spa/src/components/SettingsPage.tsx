@@ -1,7 +1,8 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'wouter'
 import type { PaneRendererProps } from '../lib/module-registry'
-import { getSettingsSections } from '../lib/settings-section-registry'
+import { listContributions } from '../lib/settings-contribution-registry'
+import type { SettingsContextFor } from '../lib/settings-contribution-types'
 import { SettingsSidebar } from './settings/SettingsSidebar'
 import { WorkspaceSettingsPage } from '../features/workspace/components/WorkspaceSettingsPage'
 
@@ -39,7 +40,26 @@ export function SettingsPage(props: PaneRendererProps) {
 
 function GlobalSettingsPage() {
   const [location, setLocation] = useLocation()
-  const sections = getSettingsSections()
+  // Pull purdex-scoped contributions from the new registry. `listContributions`
+  // returns a fresh array sorted by `order` ascending on each call.
+  const sections = listContributions('purdex')
+
+  // `ctx` is stable per page render — §5.3 rule 4 says only the shell is
+  // allowed to construct it. Purdex scope carries no entity id.
+  const ctx: SettingsContextFor<'purdex'> = useMemo(() => ({ scope: 'purdex' as const }), [])
+
+  // F7: a contribution whose `disabled(ctx)` returns true is treated as
+  // invalid for navigation — it stays visible in the sidebar (rendered
+  // greyed out) but the shell will never mount it. `isSelectable()` is
+  // the single predicate used by (a) the URL self-heal effect and (b)
+  // the default-section fallback.
+  const isSelectable = (localId: string): boolean => {
+    const c = sections.find((s) => s.localId === localId)
+    if (!c) return false
+    if (c.disabled && c.disabled(ctx) === true) return false
+    return true
+  }
+  const firstSelectable = sections.find((s) => isSelectable(s.localId))?.localId ?? ''
 
   const pathAfterSettings = location.startsWith('/settings/')
     ? location.slice('/settings/'.length)
@@ -49,14 +69,15 @@ function GlobalSettingsPage() {
   const urlSubsection = parts[1] || null
 
   const [activeSection, setActiveSection] = useState(() => {
-    if (urlSection && sections.some((s) => s.id === urlSection)) return urlSection
-    if (lastSection && sections.some((s) => s.id === lastSection)) return lastSection
-    return sections.find((s) => s.component)?.id ?? ''
+    if (urlSection && isSelectable(urlSection)) return urlSection
+    if (lastSection && isSelectable(lastSection)) return lastSection
+    return firstSelectable
   })
 
-  // URL → activeSection (e.g. back/forward navigation or TitleBar click)
+  // URL → activeSection (e.g. back/forward navigation or TitleBar click).
+  // F7: only honor URL sections that are actually selectable under ctx.
   useEffect(() => {
-    if (urlSection && sections.some((s) => s.id === urlSection) && urlSection !== activeSection) {
+    if (urlSection && isSelectable(urlSection) && urlSection !== activeSection) {
       setActiveSection(urlSection)
       lastSection = urlSection
     }
@@ -64,14 +85,13 @@ function GlobalSettingsPage() {
   }, [urlSection])
 
   // Self-heal:
-  //   1. invalid section → /settings/<activeSection>
+  //   1. invalid OR disabled-by-ctx section → /settings/<activeSection>
   //   2. >2 path segments (e.g. /settings/sync/extra/level3) → /settings/<section>
   // Valid /settings/<section>/<subsection> URLs are preserved and exposed via
   // SettingsRouteContext so sub-components can render subsection views.
   useEffect(() => {
     if (!urlSection) return
-    const sectionValid = sections.some((s) => s.id === urlSection)
-    if (!sectionValid) {
+    if (!isSelectable(urlSection)) {
       setLocation(`/settings/${activeSection}`, { replace: true })
       return
     }
@@ -81,13 +101,35 @@ function GlobalSettingsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlSection, urlSubsection, activeSection])
 
+  // F7: if the current URL is `/settings` (no urlSection) and the
+  // initial pick was not selectable (e.g. all contributions disabled
+  // except one further down the order), advance the URL to match the
+  // mounted section so route-sync round-trips correctly.
+  useEffect(() => {
+    if (urlSection) return
+    if (!activeSection) return
+    if (location === `/settings/${activeSection}`) return
+    // Only push the canonical URL when we actually have a selectable
+    // section to mount — avoids spurious history entries during tests
+    // that register zero contributions.
+    if (isSelectable(activeSection)) {
+      setLocation(`/settings/${activeSection}`, { replace: true })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlSection, activeSection])
+
   const handleSelectSection = (id: string) => {
+    // Guard: the sidebar already suppresses clicks on disabled rows, but
+    // belt-and-braces in case a future caller bypasses that UI path.
+    if (!isSelectable(id)) return
     lastSection = id
     setActiveSection(id)
     setLocation(`/settings/${id}`, { replace: true })
   }
 
-  const ActiveComponent = sections.find((s) => s.id === activeSection)?.component
+  const ActiveComponent = isSelectable(activeSection)
+    ? sections.find((s) => s.localId === activeSection)?.component
+    : undefined
 
   return (
     <SettingsRouteContext.Provider
@@ -103,7 +145,7 @@ function GlobalSettingsPage() {
       <div className="flex h-full">
         <SettingsSidebar activeSection={activeSection} onSelectSection={handleSelectSection} />
         <div className="flex-1 overflow-y-auto p-6">
-          {ActiveComponent && <ActiveComponent />}
+          {ActiveComponent && <ActiveComponent ctx={ctx} />}
         </div>
       </div>
     </SettingsRouteContext.Provider>

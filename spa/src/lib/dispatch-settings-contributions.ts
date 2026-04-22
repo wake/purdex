@@ -4,7 +4,20 @@ import {
   clearContributions,
   registerSettingsContribution,
 } from './settings-contribution-registry'
-import type { AnySettingsContribution } from './settings-contribution-types'
+import {
+  clearLegacyPending,
+  drainLegacyContributionQueue,
+  peekLegacyContributionQueue,
+} from './settings-section-registry'
+import type {
+  AnySettingsContribution,
+  SettingsScope,
+} from './settings-contribution-types'
+
+// Legacy adapter namespace constant — sections registered through the legacy
+// `registerSettingsSection()` API are flushed into the new registry under this
+// moduleId. Centralized so PR-3/4 can reuse the same pattern.
+const LEGACY_SECTION_MODULE_ID = '_builtin.legacy-section'
 
 function assertNoLegacyScopeConflict(module: ModuleDefinition): void {
   const settings = module.settings
@@ -31,11 +44,63 @@ function assertNoLegacyScopeConflict(module: ModuleDefinition): void {
   }
 }
 
+/**
+ * Build the validated contribution batch for a dispatch pass. Runs two
+ * collision checks in a single shared pass that spans BOTH module-declared
+ * contributions AND the legacy adapter's pending queue:
+ *
+ *  1. Full-id uniqueness (`${moduleId}.${localId}`) — registry-level.
+ *  2. Per-scope localId uniqueness (F1) — shell-level. Within a scope,
+ *     `localId` must be unique across all modules. The shell uses `localId`
+ *     as the URL segment and React key for SettingsPage routing/selection,
+ *     so two contributions sharing a localId within the same scope are
+ *     ambiguous at the UI layer (even though their full ids differ). The
+ *     per-scope uniqueness contract lets the shell continue to use
+ *     `localId` — URLs and selection state stay stable.
+ *
+ * On any validation failure, nothing is committed to the live registry —
+ * `dispatchSettingsContributions()` only writes after `buildSettingsContributionBatch`
+ * returns without throwing.
+ */
 export function buildSettingsContributionBatch(
   modules: ModuleDefinition[] = getModules(),
 ): AnySettingsContribution[] {
   const batch: AnySettingsContribution[] = []
   const seenIds = new Set<string>()
+  // Shared across module-declared and legacy sources so collisions across
+  // both layers are caught in a single pass.
+  const localIdByScope = new Map<SettingsScope, Map<string, string>>()
+
+  const checkAndRecord = (
+    full: AnySettingsContribution,
+    origin: 'module' | 'legacy',
+  ): void => {
+    assertValidSettingsContribution(full)
+    if (seenIds.has(full.id)) {
+      throw new Error(
+        origin === 'legacy'
+          ? `settings-contribution-registry: duplicate contribution id "${full.id}" ` +
+              `(legacy adapter collides with module-declared contribution)`
+          : `settings-contribution-registry: duplicate contribution id "${full.id}"`,
+      )
+    }
+    let scopeMap = localIdByScope.get(full.scope)
+    if (!scopeMap) {
+      scopeMap = new Map()
+      localIdByScope.set(full.scope, scopeMap)
+    }
+    const existingSource = scopeMap.get(full.localId)
+    if (existingSource !== undefined) {
+      throw new Error(
+        `settings-contribution-registry: duplicate localId "${full.localId}" ` +
+          `in scope "${full.scope}": already registered by "${existingSource}", ` +
+          `now re-registered by "${full.id}". Within a scope, localId must be ` +
+          `unique across modules.`,
+      )
+    }
+    scopeMap.set(full.localId, full.id)
+    seenIds.add(full.id)
+  }
 
   for (const module of modules) {
     const settings = module.settings
@@ -49,26 +114,68 @@ export function buildSettingsContributionBatch(
         moduleId: module.id,
         id: `${module.id}.${decl.localId}`,
       } as AnySettingsContribution
-      assertValidSettingsContribution(full)
-      if (seenIds.has(full.id)) {
-        throw new Error(
-          `settings-contribution-registry: duplicate contribution id "${full.id}"`,
-        )
-      }
-      seenIds.add(full.id)
+      checkAndRecord(full, 'module')
       batch.push(full)
     }
+  }
+
+  // Peek (non-destructive) at the legacy adapter pending buffer — F3. The
+  // real drain happens only in `dispatchSettingsContributions()` AFTER full
+  // validation of both sources has succeeded. A validation failure here
+  // leaves the legacy queue intact, so after the author fixes the offending
+  // declaration the next dispatch can re-validate and commit the
+  // still-queued legacy sections without requiring re-registration.
+  const legacyDecls = peekLegacyContributionQueue()
+  for (const decl of legacyDecls) {
+    const full = {
+      ...decl,
+      moduleId: LEGACY_SECTION_MODULE_ID,
+      id: `${LEGACY_SECTION_MODULE_ID}.${decl.localId}`,
+    } as AnySettingsContribution
+    checkAndRecord(full, 'legacy')
+    batch.push(full)
   }
 
   return batch
 }
 
+/**
+ * Atomic dispatch of all settings contributions. Phase 1 validates the full
+ * batch (module-declared + peeked legacy queue) without mutating state.
+ * Only if Phase 1 succeeds does Phase 2 commit: clear the live registry,
+ * drain the legacy queue, and write the validated batch.
+ *
+ * Ordering within Phase 2 preserves the R1 Finding #1 atomic-two-phase
+ * property: clear first, then register — the registry never observes a
+ * mixed old/new state.
+ */
 export function dispatchSettingsContributions(
   modules: ModuleDefinition[] = getModules(),
 ): void {
+  // Phase 1 — validate without mutating. Throws on any collision (F1) or
+  // invariant violation. The legacy queue is peeked, not drained.
   const batch = buildSettingsContributionBatch(modules)
+
+  // Phase 2 — commit. Safe to mutate now: validation passed.
   clearContributions()
+  drainLegacyContributionQueue() // safe: staging already holds the validated set
   for (const contribution of batch) {
     registerSettingsContribution(contribution)
   }
+}
+
+/**
+ * HMR dispose helper — clears BOTH the committed contribution registry
+ * AND the legacy adapter's pending buffers, so the next module
+ * registration starts from a clean slate across HMR re-runs (F2).
+ *
+ * Consolidated here (rather than calling the two write APIs directly from
+ * `register-modules.tsx`) so the ESLint `no-restricted-imports` rule (F4)
+ * can keep `clearContributions` off the public surface. This is the
+ * canonical single entry point for HMR cleanup of settings contribution
+ * state.
+ */
+export function resetSettingsContributionsForHmr(): void {
+  clearContributions()
+  clearLegacyPending()
 }
