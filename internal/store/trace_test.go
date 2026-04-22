@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+func strPtr(s string) *string { return &s }
+
 func openTestTraceStore(t *testing.T) *TraceStore {
 	t.Helper()
 	events := openTestAgentEventStore(t)
@@ -41,38 +43,56 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 		},
 		Steps: []TraceStep{
 			{
-				StepID:      "step-1",
-				ChainID:     "chain-1",
-				Seq:         1,
-				Kind:        "decision",
-				TmuxSession: "proj-a",
-				PaneID:      "%5",
-				AgentType:   "cc",
-				FrameID:     "frame-1",
-				EventName:   "SessionStart",
-				Decision:    "continue",
-				Reason:      "ready",
-				PayloadJSON: json.RawMessage(`{"status":"queued"}`),
-				BeforeJSON:  json.RawMessage(`{"before":true}`),
-				AfterJSON:   json.RawMessage(`{"after":true}`),
-				CreatedAt:   101,
+				StepID:             "step-1",
+				ChainID:            "chain-1",
+				Seq:                1,
+				Kind:               "decision",
+				TmuxSession:        "proj-a",
+				PaneID:             "%5",
+				AgentType:          "cc",
+				FrameID:            "frame-1",
+				EventName:          "SessionStart",
+				Decision:           "continue",
+				Reason:             "ready",
+				PayloadJSON:        json.RawMessage(`{"status":"queued"}`),
+				BeforeJSON:         json.RawMessage(`{"before":true}`),
+				AfterJSON:          json.RawMessage(`{"after":true}`),
+				CreatedAt:          101,
+				SourceKind:         "hook",
+				Action:             "decision:continue",
+				ReasonCode:         "ready",
+				Outcome:            "emitted",
+				ScenarioKey:        "SessionStart",
+				ObservedGeneration: 7,
+				DecisionPorts:      json.RawMessage(`[{"port":"statusline","decision":"ok"}]`),
+				Phase:              "committed",
+				Status:             "success",
+				WatcherToken:       strPtr("watcher-abc"),
 			},
 			{
-				StepID:        "step-2",
-				ChainID:       "chain-1",
-				ParentStepID:  "step-1",
-				Seq:           2,
-				Kind:          "terminal",
-				TmuxSession:   "proj-a",
-				PaneID:        "%5",
-				AgentType:     "cc",
-				FrameID:       "frame-1",
-				ParentFrameID: "frame-0",
-				EventName:     "Stop",
-				Decision:      "done",
-				Reason:        "completed",
-				PayloadJSON:   json.RawMessage(`{"status":"done"}`),
-				CreatedAt:     102,
+				StepID:             "step-2",
+				ChainID:            "chain-1",
+				ParentStepID:       "step-1",
+				Seq:                2,
+				Kind:               "terminal",
+				TmuxSession:        "proj-a",
+				PaneID:             "%5",
+				AgentType:          "cc",
+				FrameID:            "frame-1",
+				ParentFrameID:      "frame-0",
+				EventName:          "Stop",
+				Decision:           "done",
+				Reason:             "completed",
+				PayloadJSON:        json.RawMessage(`{"status":"done"}`),
+				CreatedAt:          102,
+				SourceKind:         "hook",
+				Action:             "terminal:done",
+				ReasonCode:         "completed",
+				Outcome:            "emitted",
+				ScenarioKey:        "Stop",
+				ObservedGeneration: 8,
+				Phase:              "committed",
+				Status:             "success",
 			},
 		},
 	}
@@ -108,6 +128,96 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 	}
 	if string(got.Steps[0].BeforeJSON) != `{"before":true}` || string(got.Steps[0].AfterJSON) != `{"after":true}` {
 		t.Fatalf("payload fields = %+v", got.Steps[0])
+	}
+
+	first := got.Steps[0]
+	if first.SourceKind != "hook" || first.Action != "decision:continue" || first.ReasonCode != "ready" ||
+		first.Outcome != "emitted" || first.ScenarioKey != "SessionStart" || first.Phase != "committed" ||
+		first.Status != "success" {
+		t.Fatalf("first step lights fields = %+v", first)
+	}
+	if first.ObservedGeneration != 7 {
+		t.Fatalf("first ObservedGeneration = %d, want 7", first.ObservedGeneration)
+	}
+	if string(first.DecisionPorts) != `[{"port":"statusline","decision":"ok"}]` {
+		t.Fatalf("first DecisionPorts = %s", string(first.DecisionPorts))
+	}
+	if first.WatcherToken == nil || *first.WatcherToken != "watcher-abc" {
+		t.Fatalf("first WatcherToken = %v", first.WatcherToken)
+	}
+
+	second := got.Steps[1]
+	if second.WatcherToken != nil {
+		t.Fatalf("second WatcherToken = %v, want nil", second.WatcherToken)
+	}
+	if string(second.DecisionPorts) != `[]` {
+		t.Fatalf("second DecisionPorts = %s, want []", string(second.DecisionPorts))
+	}
+	if second.Phase != "committed" || second.Status != "success" {
+		t.Fatalf("second step lights fields = %+v", second)
+	}
+}
+
+// TestTraceStore_ZeroValueLightsFieldsRoundTrip guards the backwards-compat
+// path: older callers that do not set the new light-tracking columns must
+// still round-trip without errors. Scanned zero values must come back without
+// surfacing SQL NULL errors.
+func TestTraceStore_ZeroValueLightsFieldsRoundTrip(t *testing.T) {
+	s := openTestTraceStore(t)
+	s.maxChains = 10
+	s.maxSteps = 10
+
+	record := TraceRecord{
+		Chain: TraceChain{
+			ChainID:        "chain-legacy",
+			StartedAt:      10,
+			CompletedAt:    20,
+			TerminalStatus: "done",
+			TmuxSession:    "proj-a",
+			PaneID:         "%5",
+			RootAgentType:  "cc",
+			RootEventName:  "Stop",
+			RootReason:     "boot",
+		},
+		Steps: []TraceStep{
+			{
+				StepID:      "legacy-1",
+				ChainID:     "chain-legacy",
+				Seq:         1,
+				Kind:        "decision",
+				TmuxSession: "proj-a",
+				PaneID:      "%5",
+				AgentType:   "cc",
+				EventName:   "Stop",
+				Decision:    "done",
+				CreatedAt:   11,
+			},
+		},
+	}
+
+	if err := s.SaveChain(record); err != nil {
+		t.Fatalf("SaveChain: %v", err)
+	}
+
+	got, err := s.GetChainRecord("chain-legacy")
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if got == nil || len(got.Steps) != 1 {
+		t.Fatalf("got = %+v", got)
+	}
+	step := got.Steps[0]
+	if step.SourceKind != "" || step.Action != "" || step.Phase != "" || step.Status != "" {
+		t.Fatalf("zero-value lights fields corrupted: %+v", step)
+	}
+	if step.ObservedGeneration != 0 {
+		t.Fatalf("ObservedGeneration = %d, want 0", step.ObservedGeneration)
+	}
+	if string(step.DecisionPorts) != `[]` {
+		t.Fatalf("DecisionPorts default = %s, want []", string(step.DecisionPorts))
+	}
+	if step.WatcherToken != nil {
+		t.Fatalf("WatcherToken = %v, want nil", step.WatcherToken)
 	}
 }
 
@@ -222,6 +332,88 @@ func TestTraceStore_MigratesLegacyStepSchemaAndBlocksCrossChainParent(t *testing
 	`)
 	if err == nil {
 		t.Fatal("expected cross-chain parent insert to fail")
+	}
+}
+
+// TestRebuildLegacyTraceSteps_BlocksCrossChainParent seeds intermediate-schema
+// legacy data with a parent_step_id whose target step belongs to a different
+// chain_id. The old migration silently nulled such links; the new behaviour
+// must abort migration instead so ops can reconcile the data.
+func TestRebuildLegacyTraceSteps_BlocksCrossChainParent(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	seedIntermediateTraceSchema(t, s.db)
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, started_at, completed_at, terminal_status, terminal_reason,
+			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
+			latest_step_kind, latest_decision, latest_step_reason, step_count, updated_at
+		) VALUES
+		('chain-a', 1, 2, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 1, 2),
+		('chain-b', 3, 4, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 1, 4)
+	`); err != nil {
+		t.Fatalf("seed chains: %v", err)
+	}
+	// chain-b has a step whose parent points at a step in chain-a.
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_steps (
+			step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+			agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+			payload_json, before_json, after_json, created_at
+		) VALUES
+		('a-1', 'chain-a', NULL, 1, 'root',     'proj-a', '%1', 'cc', 'frame-a', '', 'Stop', '', '', 'null', 'null', 'null', 1),
+		('b-1', 'chain-b', 'a-1', 1, 'decision','proj-a', '%1', 'cc', 'frame-b', '', 'Stop', 'continue', 'x', 'null', 'null', 'null', 3)
+	`); err != nil {
+		t.Fatalf("seed cross-chain parent step: %v", err)
+	}
+
+	if _, err := s.Traces(); err == nil {
+		t.Fatal("expected Traces migration to fail on cross-chain parent reference")
+	}
+
+	// Legacy tables must still exist (migration aborted atomically).
+	var name string
+	if err := s.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='agent_trace_steps'`).Scan(&name); err != nil {
+		t.Fatalf("agent_trace_steps missing after aborted migration: %v", err)
+	}
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_trace_steps`).Scan(&count); err != nil {
+		t.Fatalf("count legacy steps: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("legacy step count = %d, want 2", count)
+	}
+}
+
+// TestMigrateTraceDB_ResumableIfLegacyTableRemains ensures a second Traces()
+// call after a crash-interrupted migration (legacy rename committed, new table
+// not yet populated) surfaces the stale state as an error rather than silently
+// skipping rebuild.
+func TestMigrateTraceDB_ResumableIfLegacyTableRemains(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	// Simulate a partially-complete migration: new steps table exists (empty)
+	// AND agent_trace_steps_legacy remains from an aborted rebuild.
+	if err := createTraceChainsTable(s.db); err != nil {
+		t.Fatalf("create chains: %v", err)
+	}
+	if err := createTraceStepsTable(s.db); err != nil {
+		t.Fatalf("create steps: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		CREATE TABLE agent_trace_steps_legacy (
+			step_id TEXT PRIMARY KEY,
+			chain_id TEXT NOT NULL,
+			parent_step_id TEXT,
+			step_name TEXT NOT NULL,
+			payload TEXT NOT NULL DEFAULT 'null',
+			step_index INTEGER NOT NULL,
+			created_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("seed legacy leftover: %v", err)
+	}
+
+	if _, err := s.Traces(); err == nil {
+		t.Fatal("expected Traces to fail fast when agent_trace_steps_legacy remains")
 	}
 }
 

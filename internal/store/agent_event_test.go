@@ -2,9 +2,13 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"testing"
 )
+
+var errDivergenceMigrateInject = errors.New("injected divergence migrate failure")
 
 func openTestAgentEventStore(t *testing.T) *AgentEventStore {
 	t.Helper()
@@ -14,6 +18,66 @@ func openTestAgentEventStore(t *testing.T) *AgentEventStore {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+// frame_divergences must exist immediately after OpenAgentEvent because no
+// production code path reaches Divergences() on the hook hot path, so a lazy
+// getter would leave the table unprovisioned in deployed daemons (PR-1a
+// review finding).
+func TestOpenAgentEvent_DivergencesTableExistsAfterOpen(t *testing.T) {
+	s := openTestAgentEventStore(t)
+
+	var got string
+	err := s.db.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='frame_divergences'`,
+	).Scan(&got)
+	if err != nil {
+		t.Fatalf("frame_divergences missing after OpenAgentEvent: %v", err)
+	}
+}
+
+// TestOpenAgentEvent_DivergencesMigrationFailureIsNonFatal ensures daemon
+// startup is not blocked when the divergences migration fails. Divergences()
+// lazily retries the underlying migrate call so a transient failure does not
+// permanently disable the side channel (round-2 review D).
+func TestOpenAgentEvent_DivergencesMigrationFailureIsNonFatal(t *testing.T) {
+	fail := true
+	orig := migrateDivergencesDBFn
+	migrateDivergencesDBFn = func(db *sql.DB) error {
+		if fail {
+			return errDivergenceMigrateInject
+		}
+		return orig(db)
+	}
+	t.Cleanup(func() { migrateDivergencesDBFn = orig })
+
+	s, err := OpenAgentEvent(":memory:")
+	if err != nil {
+		t.Fatalf("OpenAgentEvent must not fail when divergences migrate errors: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	// First Divergences() call also fails while the injection is active.
+	if _, err := s.Divergences(); err == nil {
+		t.Fatal("expected Divergences() to propagate migration failure")
+	}
+
+	// Clear the injection: the next call must successfully retry.
+	fail = false
+	divs, err := s.Divergences()
+	if err != nil {
+		t.Fatalf("Divergences retry failed: %v", err)
+	}
+	if divs == nil {
+		t.Fatal("Divergences returned nil after retry")
+	}
+
+	var name string
+	if err := s.db.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='frame_divergences'`,
+	).Scan(&name); err != nil {
+		t.Fatalf("frame_divergences missing after retry: %v", err)
+	}
 }
 
 func TestAgentEventStore_SetAndGet(t *testing.T) {
