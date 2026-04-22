@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.211] - 2026-04-23
+
+### Fix(agent): preserve symlink invocation path for versioned CLI binaries (#602)
+
+- Claude Code 2.1.113+ 以 symlink (`~/.local/bin/claude`) 指向版本化 Mach-O binary (`~/.local/share/claude/versions/<X.Y.Z>`)。原先 `normalizeExecutablePath` 的 `EvalSymlinks` 會把 `ExePath` 解析成版本化 target，`cc.Provider.Identify` 看到 basename `"2.1.117"` 而非 `"claude"`，導致每個 cc hook 都以 `identify_mismatch` 在 verify 階段被拒絕。
+- Spoofing 防線仍由 `internal/module/agent/verify.go:63` 的 `pidAncestorIncludesFn` 提供（要求 sender PID 在目標 pane 的 process tree 內），比 binary path 匹配更強。
+- 測試：新增 unit test `TestNormalizeExecutablePath_PreservesSymlinkInvocationPath`；既有整合測試 `TestProcessInfo_ResolvesSymlinks` 改名為 `TestProcessInfo_PreservesSymlinkInvocationPath` 並翻轉 assertion。
+
 ## [1.0.0-alpha.210] - 2026-04-23
 
 ### Fix(spa): focus WYSIWYG editor from empty clicks (#600)
