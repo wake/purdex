@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   registerSettingsSection,
   getSettingsSections,
@@ -68,22 +68,60 @@ describe('settings-section-registry', () => {
     expect(getSettingsSections()).toHaveLength(0)
   })
 
-  // --- PR-3: reserved (component: undefined) is now a hard error -----------
+  // --- F5: reserved (component: undefined) soft-fails with a warning ------
 
-  it('PR-3: registerSettingsSection throws when component is undefined', () => {
-    // Reserved semantics were removed alongside the last reserved entry
-    // (`workspace`). A caller attempting to register a component-less
-    // section must fail loudly rather than silently buffering a coming-soon
-    // row.
-    expect(() =>
+  it('F5: registerSettingsSection with component=undefined does NOT throw', () => {
+    // Upgraded from a throw to a warn+return in the F5 follow-up. Throwing
+    // crashed `registerBuiltinModules()` at bootstrap whenever any stale
+    // caller (dev snippet, HMR leftover, parallel-session version mismatch)
+    // invoked the function without a component — killing the whole shell.
+    // Soft-fail: log a clear warning and skip the registration so the rest
+    // of the bootstrap completes.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(() =>
+        registerSettingsSection({
+          id: 'ghost',
+          label: 'Ghost',
+          order: 10,
+          // @ts-expect-error — intentional misuse for the runtime guard
+          component: undefined,
+        }),
+      ).not.toThrow()
+      // Warning message must name the offending id + explain the
+      // reserved-semantics removal + suggest the replacement path.
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+      const msg = String(warnSpy.mock.calls[0]?.[0] ?? '')
+      expect(msg).toMatch(/settings-section-registry/)
+      expect(msg).toMatch(/id="ghost"/)
+      expect(msg).toMatch(/HSR PR-3/)
+      expect(msg).toMatch(/disabled\(ctx\)/)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('F5: warn-and-skip — nothing lands in listContributions / drain queue', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
       registerSettingsSection({
-        id: 'ghost',
-        label: 'Ghost',
-        order: 10,
+        id: 'ghost-skip',
+        label: 'Ghost Skip',
+        order: 20,
         // @ts-expect-error — intentional misuse for the runtime guard
         component: undefined,
-      }),
-    ).toThrow(/Reserved .* removed/i)
+      })
+      // Drain yields nothing for the skipped id.
+      const drained = drainLegacyContributionQueue()
+      expect(drained.find((d) => d.localId === 'ghost-skip')).toBeUndefined()
+      // Dispatch after the skip must not publish a `ghost-skip` contribution.
+      dispatchSettingsContributions([])
+      expect(
+        listContributions('purdex').find((c) => c.localId === 'ghost-skip'),
+      ).toBeUndefined()
+    } finally {
+      warnSpy.mockRestore()
+    }
   })
 
   // --- Pending buffer: dispatch-flushed semantics (spec §7.2) --------------

@@ -35,9 +35,10 @@ const LEGACY_SECTION_MODULE_ID = '_builtin.legacy-section'
 //   `getSettingsSections()` preserves React identity (important for memo).
 //
 // Reserved (`component: undefined`) plumbing was dropped in PR-3 — the sole
-// reserved entry (`workspace`) was removed alongside the removal, so
-// `registerSettingsSection` now throws loudly on missing component rather
-// than silently buffering a coming-soon row.
+// reserved entry (`workspace`) was removed alongside the removal. F5 follow-up
+// softened the missing-component handling from `throw` to `console.warn +
+// early return` so a stale caller (HMR leftover, version-mismatched dev
+// snippet) no longer crashes the whole shell at bootstrap.
 // ----------------------------------------------------------------------------
 
 type LegacyContributionDeclaration = SettingsContributionDeclaration<'purdex'>
@@ -63,16 +64,21 @@ function wrapLegacyComponent(
 }
 
 export function registerSettingsSection(def: SettingsSectionDef): void {
-  // PR-3: reserved semantics (`component: undefined`) have been removed. A
-  // caller trying to register a component-less section is almost certainly
-  // re-introducing the reserved-items plumbing this PR just deleted — fail
-  // loudly rather than silently dropping the row.
+  // F5: reserved semantics (`component: undefined`) have been removed, but
+  // throwing here previously crashed `registerBuiltinModules()` at bootstrap
+  // whenever any stale caller (dev-console snippet, HMR leftover, parallel-
+  // session version mismatch) hit the function without a component — which
+  // killed the whole shell. Soft-fail: log a clear warning and skip the
+  // registration so subsequent calls complete.
   if (def.component === undefined) {
-    throw new Error(
-      `settings-section-registry: registerSettingsSection("${def.id}") called with ` +
-        `component=undefined. Reserved (coming-soon) sections were removed in ` +
-        `HSR PR-3. Provide a component, or use disabled(ctx) for runtime gating.`,
+    console.warn(
+      `[settings-section-registry] registerSettingsSection called with ` +
+        `component: undefined for id="${def.id}". Reserved-row semantics were ` +
+        `removed in HSR PR-3; this registration is ignored. If you intended to ` +
+        `declare a disabled contribution, use ModuleDefinition.settings with ` +
+        `disabled(ctx) returning true instead.`,
     )
+    return
   }
 
   const wrapped = wrapLegacyComponent(def.component)
