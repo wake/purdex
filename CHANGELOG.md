@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.206] - 2026-04-22
+
+### Feat(spa): HSR PR-4 — Host settings shell + built-in adapter + #541 harness (#582)
+
+- HostPage shell 改 registry-driven：`renderContent` 改用 `listContributions('host').find(c => c.localId === selection.subPage)`，六子頁（overview / sessions / hooks / agents / uploads / logs）透過 pending buffer + dispatch-flushed adapter 註冊為 `_builtin.host.<localId>`，與 PR-2 legacy adapter 同 contract（spec §7.2 dispatch hard constraint）。
+- `HostSubPage` 型別從六字面 union 鬆綁為 `string`；`isHostSubPage()` 改為 `listContributions('host').some(c => c.localId === value)` 動態驗證；`HOST_SUB_PAGES` const 保留作 i18n key 參考 + 註冊順序註解（JSDoc 標注非型別來源）。
+- Section subtree key：`HostPage.renderContent` 使用 `key={\`${hostId}:${c.id}\`}` 強制跨 host 切換 remount（對稱 PR-3 `${workspaceId}:${c.id}` pattern），防止跨 host 狀態汙染。
+- Disabled contribution UX：HostSidebar 不 filter disabled contributions，渲染 disabled row + `disabledReasonKey` title + `data-disabled-ctx="true"` + click no-op；`renderContent` 對 disabled ctx return null（對齊 PR-2 F7 / PR-3 F2）。
+- `isSelectable(c, ctx)` + `pickSelectableSubPage(hostId, requested)` helper：三處 fallback（getFallbackSelection / sidebarSubPage / resolveSelection）統一走 selectable 檢查；`lastSelection` read-time clamp 到 live registry；跨 host 切換由 HostPage 透過 helper 重算目標 subPage；disabled/missing URL 自癒 emit `canonicalPath` redirect（R1+R2 六方 codex review 收斂後的統一修法）。
+- #541 cross-store rehydrate harness：9 invariant tests 覆蓋 `host-lifecycle.ts` 全部 6 個 `!hostWasRecreated` gate（含 tab restore）；merge-mode `setState` 顯式 reset 所有 mutable store fields（useTabStore.visitHistory / useAgentStore.oscTitles / ccStatus），避免 cross-test leak；PR-1 cascade + undo guards 正確，`host-lifecycle.ts` source 0 改動。
+- Commit 1/2/3/4 per-commit spec + quality review 各修 2–4 nits 後 approved；整體 R1 標準 + R2 三視角 parallel（攻擊 / 防守 / 體質）+ R3 verify 共三輪 codex review 收斂，no critical / no P1。
+- Follow-ups：#586（dispatch-flushed 第二次 standalone call 會清空 host built-ins，theoretical-risk）/ #587（parseRoute / isHostSubPage 依賴 mutable registry state — architecture discussion）/ #588（disabled(ctx) 動態變化時 body 不 reactive 卸載）均 tracked for PR-5 前處理。#581（disabled built-in self-heal）已由本 PR commit `ca000a81` 修復關閉。
+
 ## [1.0.0-alpha.205] - 2026-04-22
 
 ### Feat(lights): PR-1b-1b — Arbitrator goroutine + admission + apply pipeline (#583)
