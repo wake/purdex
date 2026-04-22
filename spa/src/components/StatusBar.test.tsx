@@ -71,6 +71,12 @@ describe('StatusBar', () => {
     expect(screen.queryByTitle('Toggle view mode')).toBeNull()
   })
 
+  it('does not render the global fallback bar for editor tabs', () => {
+    const tab = makeTab('t1', { kind: 'editor', source: { type: 'inapp' }, filePath: '/notes/a.md' })
+    const { container } = render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
   it('opens popup on badge click and calls onViewModeChange', () => {
     const onChange = vi.fn()
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })

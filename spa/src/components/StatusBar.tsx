@@ -144,6 +144,10 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   const primary = getPrimaryPane(activeTab.layout)
   const { content } = primary
 
+  if (content.kind === 'editor') {
+    return null
+  }
+
   if (content.kind !== 'tmux-session') {
     return (
       <div className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted flex-shrink-0">
