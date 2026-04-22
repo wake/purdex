@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.203] - 2026-04-22
+
+### Fix(spa): editor state, footer, and status bar polish (#565, #570)
+
+- Editor footer 對齊 terminal status bar 的資訊結構：左側顯示 host / Local / 紫色 Purdex badge，右側顯示 `Source` / `Live Preview` 模式切換與行列資訊，並在切回 tab 時自動 focus Monaco / Tiptap 內容。
+- editor rename 互動改為與 session rename 對齊的 popover 形式，移除 inline input；同時保留 rename 驗證、衝突保護與多 pane path migration。
+- 停止在 editor tab 顯示全域 `StatusBar` fallback，避免 terminal-style editor footer 下方再疊一條 `editor` 狀態列。
+
 ## [1.0.0-alpha.202] - 2026-04-22
 
 ### Feat(spa): HSR PR-2 — Purdex settings shell + legacy adapter (dispatch-flushed) (#558)
