@@ -8,6 +8,13 @@ import (
 	"github.com/wake/purdex/internal/store"
 )
 
+// monitorSchemaVersion is stamped on every chain summary response. SPA
+// consumers pin this value to detect store rollback: if the daemon is
+// downgraded to a pre-Lights build the field either disappears or returns a
+// lower version, and the SPA can warn instead of silently rendering a
+// degraded envelope. Keep in sync with spec §3.5 / plan PR-1b-1c D6.
+const monitorSchemaVersion = "1.0.0-lights-1b"
+
 type MonitorChainSummary struct {
 	ChainID          string `json:"chain_id"`
 	StartedAt        int64  `json:"started_at"`
@@ -23,6 +30,10 @@ type MonitorChainSummary struct {
 	LatestDecision   string `json:"latest_decision"`
 	LatestStepReason string `json:"latest_step_reason"`
 	StepCount        int    `json:"step_count"`
+	// SchemaVersion is always monitorSchemaVersion; a missing / older value
+	// signals the daemon was rolled back and the 22-field envelope below is
+	// not trustworthy (defender recommendation, PR-1b-1c D6).
+	SchemaVersion string `json:"schema_version"`
 }
 
 type MonitorStep struct {
@@ -39,10 +50,40 @@ type MonitorStep struct {
 	EventName     string `json:"event_name"`
 	Decision      string `json:"decision"`
 	Reason        string `json:"reason"`
-	PayloadJSON   string `json:"payload_json"`
-	BeforeJSON    string `json:"before_json"`
-	AfterJSON     string `json:"after_json"`
-	CreatedAt     int64  `json:"created_at"`
+	// Legacy non-omitempty JSON fields — monitorRawJSON normalises empty
+	// store values to the literal string "null" so SPA consumers can rely
+	// on the field existing on every step.
+	PayloadJSON string `json:"payload_json"`
+	BeforeJSON  string `json:"before_json"`
+	AfterJSON   string `json:"after_json"`
+	CreatedAt   int64  `json:"created_at"`
+
+	// Lights envelope fields (spec §3.5 / PR-1b-0). All carry omitempty so
+	// legacy (non-Lights) rows continue to project the exact shape the
+	// earlier Monitor API contract promised. JSON fields use
+	// json.RawMessage so they project as structured JSON, not double-encoded
+	// strings, and default to absent (not "null") on empty rows.
+	SourceKind         string          `json:"source_kind,omitempty"`
+	Action             string          `json:"action,omitempty"`
+	ReasonCode         string          `json:"reason_code,omitempty"`
+	Outcome            string          `json:"outcome,omitempty"`
+	ScenarioKey        string          `json:"scenario_key,omitempty"`
+	ObservedGeneration int64           `json:"observed_generation,omitempty"`
+	DecisionPorts      json.RawMessage `json:"decision_ports,omitempty"`
+	Phase              string          `json:"phase,omitempty"`
+	Status             string          `json:"status,omitempty"`
+	WatcherToken       string          `json:"watcher_token,omitempty"`
+	TraceID            string          `json:"trace_id,omitempty"`
+	ReasonText         string          `json:"reason_text,omitempty"`
+	Attrs              json.RawMessage `json:"attrs,omitempty"`
+	InputRefs          json.RawMessage `json:"input_refs,omitempty"`
+	OutputRefs         json.RawMessage `json:"output_refs,omitempty"`
+	StateBeforeRef     string          `json:"state_before_ref,omitempty"`
+	StateAfterRef      string          `json:"state_after_ref,omitempty"`
+	EvidenceRefs       json.RawMessage `json:"evidence_refs,omitempty"`
+	StartedAt          int64           `json:"started_at,omitempty"`
+	EndedAt            int64           `json:"ended_at,omitempty"`
+	OtelKind           string          `json:"otel_kind,omitempty"`
 }
 
 type MonitorStepNode struct {
@@ -235,10 +276,15 @@ func monitorChainSummaryFromStore(chain store.TraceChain) MonitorChainSummary {
 		LatestDecision:   chain.LatestDecision,
 		LatestStepReason: chain.LatestStepReason,
 		StepCount:        chain.StepCount,
+		SchemaVersion:    monitorSchemaVersion,
 	}
 }
 
 func monitorStepFromStore(step store.TraceStep) MonitorStep {
+	watcher := ""
+	if step.WatcherToken != nil {
+		watcher = *step.WatcherToken
+	}
 	return MonitorStep{
 		StepID:        step.StepID,
 		ChainID:       step.ChainID,
@@ -257,6 +303,32 @@ func monitorStepFromStore(step store.TraceStep) MonitorStep {
 		BeforeJSON:    monitorRawJSON(step.BeforeJSON),
 		AfterJSON:     monitorRawJSON(step.AfterJSON),
 		CreatedAt:     step.CreatedAt,
+		// Lights envelope — empty values pass through as zero-value and are
+		// elided by omitempty so legacy rows keep their prior JSON shape.
+		// JSON fields stay as RawMessage (not renormalised to "null") so
+		// consumers see structured JSON when populated and a missing key
+		// when not.
+		SourceKind:         step.SourceKind,
+		Action:             step.Action,
+		ReasonCode:         step.ReasonCode,
+		Outcome:            step.Outcome,
+		ScenarioKey:        step.ScenarioKey,
+		ObservedGeneration: step.ObservedGeneration,
+		DecisionPorts:      step.DecisionPorts,
+		Phase:              step.Phase,
+		Status:             step.Status,
+		WatcherToken:       watcher,
+		TraceID:            step.TraceID,
+		ReasonText:         step.ReasonText,
+		Attrs:              step.Attrs,
+		InputRefs:          step.InputRefs,
+		OutputRefs:         step.OutputRefs,
+		StateBeforeRef:     step.StateBeforeRef,
+		StateAfterRef:      step.StateAfterRef,
+		EvidenceRefs:       step.EvidenceRefs,
+		StartedAt:          step.StartedAt,
+		EndedAt:            step.EndedAt,
+		OtelKind:           step.OTelKind,
 	}
 }
 
