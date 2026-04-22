@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import { sanitizeScopedModuleMap } from './settings-store-shape'
+import { deepFreeze, sanitizeScopedModuleMap } from './settings-store-shape'
 
 type ModulePayload = Record<string, unknown>
 type WorkspaceSlot = Record<string, ModulePayload>
@@ -10,6 +10,7 @@ interface WorkspaceSettingsState {
   workspaces: Record<string, WorkspaceSlot>
   get: (workspaceId: string, moduleId: string) => ModulePayload | undefined
   set: (workspaceId: string, moduleId: string, patch: ModulePayload) => void
+  removeKey: (workspaceId: string, moduleId: string, key: string) => void
   clearWorkspace: (workspaceId: string) => void
   clearModule: (workspaceId: string, moduleId: string) => void
 }
@@ -19,7 +20,10 @@ export const useWorkspaceSettingsStore = create<WorkspaceSettingsState>()(
     (set, get) => ({
       workspaces: {},
 
-      get: (workspaceId, moduleId) => get().workspaces[workspaceId]?.[moduleId],
+      get: (workspaceId, moduleId) => {
+        const payload = get().workspaces[workspaceId]?.[moduleId]
+        return payload ? deepFreeze(payload) : undefined
+      },
 
       set: (workspaceId, moduleId, patch) =>
         set((state) => {
@@ -36,6 +40,22 @@ export const useWorkspaceSettingsStore = create<WorkspaceSettingsState>()(
               },
             },
           }
+        }),
+
+      removeKey: (workspaceId, moduleId, key) =>
+        set((state) => {
+          const currentWorkspace = state.workspaces[workspaceId]
+          const currentModule = currentWorkspace?.[moduleId]
+          if (!currentWorkspace || !currentModule || !(key in currentModule)) return state
+          const { [key]: _omit, ...rest } = currentModule
+          void _omit
+          const nextWorkspace = { ...currentWorkspace }
+          if (Object.keys(rest).length === 0) {
+            delete nextWorkspace[moduleId]
+          } else {
+            nextWorkspace[moduleId] = rest
+          }
+          return { workspaces: { ...state.workspaces, [workspaceId]: nextWorkspace } }
         }),
 
       clearWorkspace: (workspaceId) =>

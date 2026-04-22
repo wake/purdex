@@ -21,6 +21,7 @@ import {
 } from './settings-section-registry'
 import { clearInterfaceSubsectionRegistry, getInterfaceSubsections } from './interface-subsection-registry'
 import { registerBuiltinModules, dispatchSettingsContributions } from './register-modules'
+import { resetDeprecationWarningsForTest, resetSettingsContributionsForHmr } from './dispatch-settings-contributions'
 import {
   clearContributions,
   listContributions,
@@ -393,5 +394,138 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
       expect(legacyView).toContain(id)
     }
     expect(legacyView).not.toContain('workspace')
+  })
+})
+
+describe('ModuleDefinition.globalConfig / workspaceConfig deprecation (PR-5)', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    clearAll()
+    resetDeprecationWarningsForTest()
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    warnSpy.mockRestore()
+    clearAll()
+  })
+
+  it('warns when a non-files module uses globalConfig', () => {
+    registerModule({
+      id: 'fakemod',
+      name: 'Fake',
+      globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+    })
+    dispatchSettingsContributions()
+    const msgs = (warnSpy.mock.calls as unknown[][]).map((c) => String(c[0]))
+    expect(msgs.some((m: string) => m.includes('fakemod') && m.includes('deprecated'))).toBe(true)
+  })
+
+  it('warns when a non-files module uses workspaceConfig', () => {
+    registerModule({
+      id: 'fakews',
+      name: 'Fake WS',
+      workspaceConfig: [{ key: 'x', type: 'string', label: 'x' }],
+    })
+    dispatchSettingsContributions()
+    const msgs = (warnSpy.mock.calls as unknown[][]).map((c) => String(c[0]))
+    expect(msgs.some((m: string) => m.includes('fakews') && m.includes('deprecated'))).toBe(true)
+  })
+
+  it('does NOT warn for files module (exempted during transition)', () => {
+    registerModule({
+      id: 'files',
+      name: 'Files',
+      workspaceConfig: [{ key: 'projectPath', type: 'string', label: '專案路徑' }],
+    })
+    dispatchSettingsContributions()
+    const msgs = (warnSpy.mock.calls as unknown[][]).map((c) => String(c[0]))
+    expect(msgs.some((m: string) => m.includes('files') && m.includes('deprecated'))).toBe(false)
+  })
+
+  it('does NOT warn for modules using new `settings` field', () => {
+    registerModule({
+      id: 'newmod',
+      name: 'New',
+      settings: [
+        { localId: 'x', scope: 'purdex', order: 0, labelKey: 'x', component: FakeComponent },
+      ],
+    })
+    dispatchSettingsContributions()
+    const msgs = (warnSpy.mock.calls as unknown[][]).map((c) => String(c[0]))
+    expect(msgs.some((m: string) => m.includes('newmod') && m.includes('deprecated'))).toBe(false)
+  })
+
+  it('de-dupes: repeated dispatch for the same module/scope warns only once', () => {
+    registerModule({
+      id: 'dedupe',
+      name: 'Dedupe',
+      globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+    })
+    dispatchSettingsContributions()
+    dispatchSettingsContributions()
+    dispatchSettingsContributions()
+    const hits = (warnSpy.mock.calls as unknown[][]).filter((c) => String(c[0]).includes('dedupe')).length
+    expect(hits).toBe(1)
+  })
+
+  it('HMR reset clears the dedupe set so warnings re-emit after reload (R2 codex)', () => {
+    registerModule({
+      id: 'hmrmod',
+      name: 'HMR Mod',
+      globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+    })
+    dispatchSettingsContributions()
+    const firstHits = (warnSpy.mock.calls as unknown[][]).filter(
+      (c) => String(c[0]).includes('hmrmod') && String(c[0]).includes('deprecated'),
+    ).length
+    expect(firstHits).toBe(1)
+
+    // Simulate HMR dispose + re-register from the rebuilt module graph
+    resetSettingsContributionsForHmr()
+    registerModule({
+      id: 'hmrmod',
+      name: 'HMR Mod',
+      globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+    })
+    dispatchSettingsContributions()
+    const afterHmrHits = (warnSpy.mock.calls as unknown[][]).filter(
+      (c) => String(c[0]).includes('hmrmod') && String(c[0]).includes('deprecated'),
+    ).length
+    expect(afterHmrHits).toBe(2)
+  })
+
+  it('defers the warning until after a successful dispatch (R1 codex)', () => {
+    // Module with I1 violation: both globalConfig AND settings[scope='purdex']
+    registerModule({
+      id: 'retrymod',
+      name: 'Retry',
+      globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+      settings: [
+        { localId: 'x', scope: 'purdex', order: 0, labelKey: 'x', component: FakeComponent },
+      ],
+    })
+    expect(() => dispatchSettingsContributions()).toThrow()
+    const beforeHits = (warnSpy.mock.calls as unknown[][]).filter(
+      (c) => String(c[0]).includes('retrymod') && String(c[0]).includes('deprecated'),
+    ).length
+    // Prior to the fix, the warn ran BEFORE validation and burnt the dedupe
+    // key even on failed dispatches — the retry would then observe no warn.
+    // With the fix, the failed dispatch emits nothing.
+    expect(beforeHits).toBe(0)
+
+    // Author fixes the conflict and retries. The retry is the first
+    // successful dispatch, so it should emit the deprecation warning.
+    registerModule({
+      id: 'retrymod',
+      name: 'Retry',
+      globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+    })
+    dispatchSettingsContributions()
+    const afterHits = (warnSpy.mock.calls as unknown[][]).filter(
+      (c) => String(c[0]).includes('retrymod') && String(c[0]).includes('deprecated'),
+    ).length
+    expect(afterHits).toBe(1)
   })
 })

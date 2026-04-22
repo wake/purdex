@@ -416,6 +416,11 @@
   "editor.provider_label": "Editor",
   "editor.new_file": "New File",
   "editor.new_markdown": "New Markdown",
+  "editor.settings.home_path.workspace": "Home Path (Workspace)",
+  "editor.settings.home_path.host": "Home Path (Host)",
+  "editor.settings.home_path.description": "Tilde-prefixed paths (~/foo) in terminal links expand against this directory. Workspace overrides host; empty falls back to pane shell.",
+  "editor.settings.home_path.placeholder": "Auto-detect from pane shell",
+  "editor.settings.home_path.clear": "Clear",
 
   "monitor.provider_label": "Memory Monitor",
   "monitor.requires_app": "Requires desktop app",

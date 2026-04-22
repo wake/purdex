@@ -70,7 +70,9 @@ export interface ModuleDefinition {
   name: string
   panes?: PaneDefinition[]
   views?: ViewDefinition[]
+  /** @deprecated Use `settings: [{ scope: 'workspace', localId }]` instead. Will be removed after the files module migrates. */
   workspaceConfig?: ConfigDef[]
+  /** @deprecated Use `settings: [{ scope: 'purdex', localId }]` instead. Will be removed after all consumers migrate. */
   globalConfig?: ConfigDef[]
   commands?: CommandContribution[]
   settings?: AnySettingsContributionDeclaration[]

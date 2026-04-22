@@ -25,6 +25,41 @@ import type {
 // moduleId. Centralized so PR-3/4 can reuse the same pattern.
 const LEGACY_SECTION_MODULE_ID = '_builtin.legacy-section'
 
+// PR-5 deprecation: module authors using `globalConfig` / `workspaceConfig`
+// should migrate to `settings: [{ scope, localId }]`. `files` is exempt until
+// the files owner completes its refactor.
+const DEPRECATED_LEGACY_CONFIG_EXEMPT: ReadonlySet<string> = new Set(['files'])
+const warnedDeprecationKeys = new Set<string>()
+
+function warnLegacyConfigDeprecations(modules: readonly ModuleDefinition[]): void {
+  for (const m of modules) {
+    if (DEPRECATED_LEGACY_CONFIG_EXEMPT.has(m.id)) continue
+    if (m.globalConfig && m.globalConfig.length > 0) {
+      const key = `${m.id}:global`
+      if (!warnedDeprecationKeys.has(key)) {
+        warnedDeprecationKeys.add(key)
+        console.warn(
+          `[module] ${m.id} uses deprecated globalConfig; migrate to settings: [{ scope: 'purdex', localId }]`,
+        )
+      }
+    }
+    if (m.workspaceConfig && m.workspaceConfig.length > 0) {
+      const key = `${m.id}:workspace`
+      if (!warnedDeprecationKeys.has(key)) {
+        warnedDeprecationKeys.add(key)
+        console.warn(
+          `[module] ${m.id} uses deprecated workspaceConfig; migrate to settings: [{ scope: 'workspace', localId }]`,
+        )
+      }
+    }
+  }
+}
+
+// Test-only reset — exposed so dedupe state doesn't leak across test cases.
+export function resetDeprecationWarningsForTest(): void {
+  warnedDeprecationKeys.clear()
+}
+
 function assertNoLegacyScopeConflict(module: ModuleDefinition): void {
   const settings = module.settings
   if (!settings || settings.length === 0) return
@@ -194,6 +229,11 @@ export function dispatchSettingsContributions(
   for (const contribution of batch) {
     registerSettingsContribution(contribution)
   }
+
+  // PR-5 deprecation warnings: emit only after a successful dispatch so a
+  // validation-failed pass doesn't silently burn the dedupe key for the
+  // successful retry.
+  warnLegacyConfigDeprecations(modules)
 }
 
 /**
@@ -211,4 +251,10 @@ export function resetSettingsContributionsForHmr(): void {
   clearContributions()
   clearLegacyPending()
   clearHostBuiltinSources()
+  // R2 codex: also clear the deprecation-warn dedupe set. Without this, a
+  // module author who temporarily removed and then re-added a legacy
+  // `globalConfig` / `workspaceConfig` declaration during an HMR session
+  // would never see the warning again — the dedupe key persists across
+  // reloads even though the rest of the registry is freshly rebuilt.
+  warnedDeprecationKeys.clear()
 }

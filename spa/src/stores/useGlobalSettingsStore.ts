@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import { sanitizeFlatModuleMap } from './settings-store-shape'
+import { deepFreeze, sanitizeFlatModuleMap } from './settings-store-shape'
 
 type ModulePayload = Record<string, unknown>
 
@@ -9,6 +9,7 @@ interface GlobalSettingsState {
   modules: Record<string, ModulePayload>
   get: (moduleId: string) => ModulePayload | undefined
   set: (moduleId: string, patch: ModulePayload) => void
+  removeKey: (moduleId: string, key: string) => void
   clear: (moduleId?: string) => void
 }
 
@@ -17,7 +18,10 @@ export const useGlobalSettingsStore = create<GlobalSettingsState>()(
     (set, get) => ({
       modules: {},
 
-      get: (moduleId) => get().modules[moduleId],
+      get: (moduleId) => {
+        const payload = get().modules[moduleId]
+        return payload ? deepFreeze(payload) : undefined
+      },
 
       set: (moduleId, patch) =>
         set((state) => ({
@@ -29,6 +33,20 @@ export const useGlobalSettingsStore = create<GlobalSettingsState>()(
             },
           },
         })),
+
+      removeKey: (moduleId, key) =>
+        set((state) => {
+          const current = state.modules[moduleId]
+          if (!current || !(key in current)) return state
+          const { [key]: _omit, ...rest } = current
+          void _omit
+          if (Object.keys(rest).length === 0) {
+            const next = { ...state.modules }
+            delete next[moduleId]
+            return { modules: next }
+          }
+          return { modules: { ...state.modules, [moduleId]: rest } }
+        }),
 
       clear: (moduleId) =>
         set((state) => {

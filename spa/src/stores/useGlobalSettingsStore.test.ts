@@ -110,6 +110,71 @@ describe('useGlobalSettingsStore', () => {
     expect(useGlobalSettingsStore.getState().get('valid')).toBeUndefined()
   })
 
+  describe('immutability (#540)', () => {
+    it('get() returns a frozen snapshot', () => {
+      const { set, get } = useGlobalSettingsStore.getState()
+      set('editor', { homePath: '/Users/x' })
+      const snapshot = get('editor')!
+      expect(Object.isFrozen(snapshot)).toBe(true)
+    })
+
+    it('mutating the returned snapshot does not leak into store state', () => {
+      const { set, get } = useGlobalSettingsStore.getState()
+      set('editor', { homePath: '/Users/x' })
+      const snapshot = get('editor')!
+      expect(() => {
+        ;(snapshot as Record<string, unknown>).homePath = '/hacked'
+      }).toThrow()
+      expect(get('editor')).toEqual({ homePath: '/Users/x' })
+    })
+
+    it('set() still patches after prior get() returned frozen snapshot', () => {
+      const { set, get } = useGlobalSettingsStore.getState()
+      set('editor', { homePath: '/Users/x' })
+      void get('editor')
+      set('editor', { homePath: '/Users/y' })
+      expect(get('editor')).toEqual({ homePath: '/Users/y' })
+    })
+
+    it('guards against nested mutation (deep freeze)', () => {
+      const { set, get } = useGlobalSettingsStore.getState()
+      set('editor', { config: { nested: { deep: 'original' } } })
+      const snapshot = get('editor') as { config: { nested: { deep: string } } }
+      expect(Object.isFrozen(snapshot.config)).toBe(true)
+      expect(Object.isFrozen(snapshot.config.nested)).toBe(true)
+      expect(() => {
+        snapshot.config.nested.deep = 'hacked'
+      }).toThrow()
+      // Store state is unchanged
+      expect(get('editor')).toEqual({ config: { nested: { deep: 'original' } } })
+    })
+  })
+
+  describe('removeKey', () => {
+    it('drops a single key and preserves siblings', () => {
+      const { set, removeKey, get } = useGlobalSettingsStore.getState()
+      set('editor', { homePath: '/Users/x', wrap: true, tabSize: 4 })
+      removeKey('editor', 'homePath')
+      expect(get('editor')).toEqual({ wrap: true, tabSize: 4 })
+    })
+
+    it('removes the whole module bucket when the last key is dropped', () => {
+      const { set, removeKey, get } = useGlobalSettingsStore.getState()
+      set('editor', { homePath: '/Users/x' })
+      removeKey('editor', 'homePath')
+      expect(get('editor')).toBeUndefined()
+    })
+
+    it('is a no-op when the module or key is absent', () => {
+      const { removeKey, get } = useGlobalSettingsStore.getState()
+      removeKey('nope', 'any')
+      expect(get('nope')).toBeUndefined()
+      useGlobalSettingsStore.getState().set('editor', { wrap: true })
+      removeKey('editor', 'homePath')
+      expect(get('editor')).toEqual({ wrap: true })
+    })
+  })
+
   it('resets a non-object modules root during rehydrate', async () => {
     localStorage.setItem(
       STORAGE_KEYS.GLOBAL_SETTINGS,

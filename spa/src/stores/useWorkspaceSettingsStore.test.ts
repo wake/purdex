@@ -117,6 +117,79 @@ describe('useWorkspaceSettingsStore', () => {
     expect(useWorkspaceSettingsStore.getState().get('wsA', 'files')).toBeUndefined()
   })
 
+  describe('immutability (#540)', () => {
+    it('get() returns a frozen snapshot', () => {
+      const { set, get } = useWorkspaceSettingsStore.getState()
+      set('wsA', 'editor', { homePath: '/Users/x' })
+      const snapshot = get('wsA', 'editor')!
+      expect(Object.isFrozen(snapshot)).toBe(true)
+    })
+
+    it('mutating the returned snapshot does not leak into store state', () => {
+      const { set, get } = useWorkspaceSettingsStore.getState()
+      set('wsA', 'editor', { homePath: '/Users/x' })
+      const snapshot = get('wsA', 'editor')!
+      expect(() => {
+        ;(snapshot as Record<string, unknown>).homePath = '/hacked'
+      }).toThrow()
+      expect(get('wsA', 'editor')).toEqual({ homePath: '/Users/x' })
+    })
+
+    it('set() still patches after prior get() returned frozen snapshot', () => {
+      const { set, get } = useWorkspaceSettingsStore.getState()
+      set('wsA', 'editor', { homePath: '/Users/x' })
+      void get('wsA', 'editor')
+      set('wsA', 'editor', { homePath: '/Users/y' })
+      expect(get('wsA', 'editor')).toEqual({ homePath: '/Users/y' })
+    })
+
+    it('guards against nested mutation (deep freeze)', () => {
+      const { set, get } = useWorkspaceSettingsStore.getState()
+      set('wsA', 'editor', { config: { nested: { deep: 'original' } } })
+      const snapshot = get('wsA', 'editor') as { config: { nested: { deep: string } } }
+      expect(Object.isFrozen(snapshot.config)).toBe(true)
+      expect(Object.isFrozen(snapshot.config.nested)).toBe(true)
+      expect(() => {
+        snapshot.config.nested.deep = 'hacked'
+      }).toThrow()
+      expect(get('wsA', 'editor')).toEqual({ config: { nested: { deep: 'original' } } })
+    })
+  })
+
+  describe('removeKey', () => {
+    it('drops a single key and preserves siblings under the same module', () => {
+      const { set, removeKey, get } = useWorkspaceSettingsStore.getState()
+      set('wsA', 'editor', { homePath: '/Users/x', wrap: true, tabSize: 4 })
+      removeKey('wsA', 'editor', 'homePath')
+      expect(get('wsA', 'editor')).toEqual({ wrap: true, tabSize: 4 })
+    })
+
+    it('removes the whole module bucket when the last key is dropped', () => {
+      const { set, removeKey, get } = useWorkspaceSettingsStore.getState()
+      set('wsA', 'editor', { homePath: '/Users/x' })
+      removeKey('wsA', 'editor', 'homePath')
+      expect(get('wsA', 'editor')).toBeUndefined()
+    })
+
+    it('leaves other modules under the same workspace alone', () => {
+      const { set, removeKey, get } = useWorkspaceSettingsStore.getState()
+      set('wsA', 'editor', { homePath: '/Users/x' })
+      set('wsA', 'files', { projectPath: '/Users/proj' })
+      removeKey('wsA', 'editor', 'homePath')
+      expect(get('wsA', 'editor')).toBeUndefined()
+      expect(get('wsA', 'files')).toEqual({ projectPath: '/Users/proj' })
+    })
+
+    it('is a no-op when workspace, module, or key is absent', () => {
+      const { set, removeKey, get } = useWorkspaceSettingsStore.getState()
+      removeKey('missingWs', 'editor', 'homePath')
+      expect(get('missingWs', 'editor')).toBeUndefined()
+      set('wsA', 'editor', { wrap: true })
+      removeKey('wsA', 'editor', 'homePath')
+      expect(get('wsA', 'editor')).toEqual({ wrap: true })
+    })
+  })
+
   it('resets a non-object workspaces root during rehydrate', async () => {
     localStorage.setItem(
       STORAGE_KEYS.WORKSPACE_SETTINGS,

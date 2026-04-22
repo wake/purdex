@@ -26,9 +26,19 @@ export interface LinkToken {
   meta?: Record<string, unknown>
 }
 
+/**
+ * Context injected when a terminal link is dispatched to an opener.
+ *
+ * - `workspaceId` must be the workspace that **owns the link-source pane**,
+ *   not `activeWorkspaceId`. For terminal link usage it is resolved by
+ *   `SessionPaneContent` via `useWorkspaceStore.findWorkspaceByTab(tabId)`
+ *   and passed into `TerminalView` as a prop. Panes not attached to any
+ *   workspace (standalone tabs) leave this `undefined`.
+ */
 export interface LinkContext {
   hostId?: string
   sessionCode?: string
+  workspaceId?: string
 }
 
 export interface LinkMatcher {

@@ -203,6 +203,45 @@ describe('TerminalView', () => {
     expect(termInstance.registerLinkProvider).toHaveBeenCalledTimes(1)
   })
 
+  describe('linkContext (PR-5)', () => {
+    it('passes workspaceId through linkContext', async () => {
+      const mod = await import('../hooks/useTerminal')
+      const spy = vi.spyOn(mod, 'useTerminal')
+      try {
+        render(
+          <TerminalView
+            wsUrl="ws://localhost:7860/ws/terminal/test"
+            hostId="h1"
+            sessionCode="s1"
+            workspaceId="wsA"
+          />,
+        )
+        const opts = spy.mock.calls[0]?.[0]
+        expect(opts?.linkContext).toEqual({ hostId: 'h1', sessionCode: 's1', workspaceId: 'wsA' })
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it('omits workspaceId when prop not supplied', async () => {
+      const mod = await import('../hooks/useTerminal')
+      const spy = vi.spyOn(mod, 'useTerminal')
+      try {
+        render(
+          <TerminalView
+            wsUrl="ws://localhost:7860/ws/terminal/test"
+            hostId="h1"
+            sessionCode="s1"
+          />,
+        )
+        const opts = spy.mock.calls[0]?.[0]
+        expect(opts?.linkContext).toEqual({ hostId: 'h1', sessionCode: 's1', workspaceId: undefined })
+      } finally {
+        spy.mockRestore()
+      }
+    })
+  })
+
   describe('drag-drop', () => {
     const HOST = 'test-host'
     const SESSION = 'dev001'

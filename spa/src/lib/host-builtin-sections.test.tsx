@@ -90,19 +90,17 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     clearAll()
   })
 
-  it('registers exactly 6 host-scoped contributions with moduleId _builtin.host', () => {
+  it('registers 6 built-in host-scoped contributions with moduleId _builtin.host', () => {
     registerBuiltinModules()
     const hostContribs = listContributions('host')
-    expect(hostContribs).toHaveLength(6)
-    for (const c of hostContribs) {
-      expect(c.moduleId).toBe(HOST_BUILTIN_MODULE_ID)
-    }
+    const builtinContribs = hostContribs.filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID)
+    expect(builtinContribs).toHaveLength(6)
   })
 
-  it('orders contributions as: overview, sessions, hooks, agents, uploads, logs', () => {
+  it('orders built-in contributions as: overview, sessions, hooks, agents, uploads, logs', () => {
     registerBuiltinModules()
-    const hostContribs = listContributions('host')
-    const localIds = hostContribs.map((c) => c.localId)
+    const builtinContribs = listContributions('host').filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID)
+    const localIds = builtinContribs.map((c) => c.localId)
     expect(localIds).toEqual(['overview', 'sessions', 'hooks', 'agents', 'uploads', 'logs'])
   })
 
@@ -158,23 +156,23 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     expect(container.firstChild).toBeNull()
   })
 
-  it('all contributions have correct scope, valid localIds, and labelKey starting with "hosts."', () => {
+  it('built-in contributions have correct scope, valid localIds, and labelKey starting with "hosts."', () => {
     registerBuiltinModules()
-    const hostContribs = listContributions('host')
+    const builtinContribs = listContributions('host').filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID)
 
-    for (const c of hostContribs) {
+    for (const c of builtinContribs) {
       expect(c.scope).toBe('host')
       expect(c.id).toBe(`${HOST_BUILTIN_MODULE_ID}.${c.localId}`)
       expect(c.labelKey).toMatch(/^hosts\./)
     }
   })
 
-  it('is HMR-safe: re-running registerBuiltinModules after clearAll does not duplicate', () => {
+  it('is HMR-safe: re-running registerBuiltinModules after clearAll keeps built-in count stable', () => {
     registerBuiltinModules()
-    const first = listContributions('host').length
+    const first = listContributions('host').filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID).length
     clearAll()
     registerBuiltinModules()
-    const second = listContributions('host').length
+    const second = listContributions('host').filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID).length
     expect(first).toBe(6)
     expect(second).toBe(6)
   })

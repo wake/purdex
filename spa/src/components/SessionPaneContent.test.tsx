@@ -5,11 +5,17 @@ import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useConfigStore } from '../stores/useConfigStore'
-import type { Pane, Tab } from '../types/tab'
+import { useWorkspaceStore } from '../features/workspace/store'
+import type { Pane, Tab, Workspace } from '../types/tab'
 import type { ConfigData } from '../lib/host-api'
 
+const terminalViewProps = vi.hoisted(() => ({ last: undefined as Record<string, unknown> | undefined }))
+
 vi.mock('./TerminalView', () => ({
-  default: () => <div data-testid="terminal-view" />,
+  default: (props: Record<string, unknown>) => {
+    terminalViewProps.last = props
+    return <div data-testid="terminal-view" />
+  },
 }))
 
 vi.mock('./ConversationView', () => ({
@@ -52,8 +58,18 @@ function setupTabStore(pane: Pane) {
   })
 }
 
+function makeWorkspace(id: string, tabs: string[]): Workspace {
+  return {
+    id,
+    name: id,
+    tabs,
+    activeTabId: tabs[0] ?? null,
+  }
+}
+
 beforeEach(() => {
   cleanup()
+  terminalViewProps.last = undefined
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 } },
     hostOrder: [HOST_ID],
@@ -71,6 +87,7 @@ beforeEach(() => {
   })
   useConfigStore.setState({ config: defaultConfig })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
 })
 
 describe('SessionPaneContent', () => {
@@ -109,6 +126,41 @@ describe('SessionPaneContent', () => {
     render(<SessionPaneContent pane={pane} isActive={true} />)
     expect(screen.getByTestId('terminated-pane')).toBeInTheDocument()
     expect(screen.getByText('Terminated: session-closed')).toBeInTheDocument()
+  })
+
+  describe('TerminalView workspaceId plumbing (PR-5)', () => {
+    it('passes workspaceId when pane belongs to a workspace tab', () => {
+      const pane = makePane()
+      setupTabStore(pane)
+      useWorkspaceStore.setState({
+        workspaces: [makeWorkspace('wsA', ['tab-1'])],
+        activeWorkspaceId: 'wsA',
+      })
+      render(<SessionPaneContent pane={pane} isActive={true} />)
+      expect(terminalViewProps.last?.workspaceId).toBe('wsA')
+    })
+
+    it('passes undefined workspaceId for standalone tab (not in any workspace)', () => {
+      const pane = makePane()
+      setupTabStore(pane)
+      useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
+      render(<SessionPaneContent pane={pane} isActive={true} />)
+      expect(terminalViewProps.last?.workspaceId).toBeUndefined()
+    })
+
+    it('uses link-source workspace, not active workspace (multi-workspace isolation)', () => {
+      const pane = makePane()
+      setupTabStore(pane)
+      useWorkspaceStore.setState({
+        workspaces: [
+          makeWorkspace('wsA', []),
+          makeWorkspace('wsB', ['tab-1']),
+        ],
+        activeWorkspaceId: 'wsA',
+      })
+      render(<SessionPaneContent pane={pane} isActive={true} />)
+      expect(terminalViewProps.last?.workspaceId).toBe('wsB')
+    })
   })
 
   it('does not render TerminalView when terminated', () => {

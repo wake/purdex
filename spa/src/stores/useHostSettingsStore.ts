@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import { sanitizeScopedModuleMap } from './settings-store-shape'
+import { deepFreeze, sanitizeScopedModuleMap } from './settings-store-shape'
 
 type ModulePayload = Record<string, unknown>
 type HostSlot = Record<string, ModulePayload>
@@ -10,6 +10,7 @@ interface HostSettingsState {
   hosts: Record<string, HostSlot>
   get: (hostId: string, moduleId: string) => ModulePayload | undefined
   set: (hostId: string, moduleId: string, patch: ModulePayload) => void
+  removeKey: (hostId: string, moduleId: string, key: string) => void
   clearHost: (hostId: string) => void
   clearModule: (hostId: string, moduleId: string) => void
 }
@@ -19,7 +20,10 @@ export const useHostSettingsStore = create<HostSettingsState>()(
     (set, get) => ({
       hosts: {},
 
-      get: (hostId, moduleId) => get().hosts[hostId]?.[moduleId],
+      get: (hostId, moduleId) => {
+        const payload = get().hosts[hostId]?.[moduleId]
+        return payload ? deepFreeze(payload) : undefined
+      },
 
       set: (hostId, moduleId, patch) =>
         set((state) => {
@@ -36,6 +40,22 @@ export const useHostSettingsStore = create<HostSettingsState>()(
               },
             },
           }
+        }),
+
+      removeKey: (hostId, moduleId, key) =>
+        set((state) => {
+          const currentHost = state.hosts[hostId]
+          const currentModule = currentHost?.[moduleId]
+          if (!currentHost || !currentModule || !(key in currentModule)) return state
+          const { [key]: _omit, ...rest } = currentModule
+          void _omit
+          const nextHost = { ...currentHost }
+          if (Object.keys(rest).length === 0) {
+            delete nextHost[moduleId]
+          } else {
+            nextHost[moduleId] = rest
+          }
+          return { hosts: { ...state.hosts, [hostId]: nextHost } }
         }),
 
       clearHost: (hostId) =>

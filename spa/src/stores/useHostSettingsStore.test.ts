@@ -117,6 +117,79 @@ describe('useHostSettingsStore', () => {
     expect(useHostSettingsStore.getState().get('hostA', 'files')).toBeUndefined()
   })
 
+  describe('immutability (#540)', () => {
+    it('get() returns a frozen snapshot', () => {
+      const { set, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { homePath: '/home/x' })
+      const snapshot = get('hostA', 'editor')!
+      expect(Object.isFrozen(snapshot)).toBe(true)
+    })
+
+    it('mutating the returned snapshot does not leak into store state', () => {
+      const { set, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { homePath: '/home/x' })
+      const snapshot = get('hostA', 'editor')!
+      expect(() => {
+        ;(snapshot as Record<string, unknown>).homePath = '/hacked'
+      }).toThrow()
+      expect(get('hostA', 'editor')).toEqual({ homePath: '/home/x' })
+    })
+
+    it('set() still patches after prior get() returned frozen snapshot', () => {
+      const { set, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { homePath: '/home/x' })
+      void get('hostA', 'editor')
+      set('hostA', 'editor', { homePath: '/home/y' })
+      expect(get('hostA', 'editor')).toEqual({ homePath: '/home/y' })
+    })
+
+    it('guards against nested mutation (deep freeze)', () => {
+      const { set, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { config: { nested: { deep: 'original' } } })
+      const snapshot = get('hostA', 'editor') as { config: { nested: { deep: string } } }
+      expect(Object.isFrozen(snapshot.config)).toBe(true)
+      expect(Object.isFrozen(snapshot.config.nested)).toBe(true)
+      expect(() => {
+        snapshot.config.nested.deep = 'hacked'
+      }).toThrow()
+      expect(get('hostA', 'editor')).toEqual({ config: { nested: { deep: 'original' } } })
+    })
+  })
+
+  describe('removeKey', () => {
+    it('drops a single key and preserves siblings under the same module', () => {
+      const { set, removeKey, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { homePath: '/home/x', wrap: true, tabSize: 4 })
+      removeKey('hostA', 'editor', 'homePath')
+      expect(get('hostA', 'editor')).toEqual({ wrap: true, tabSize: 4 })
+    })
+
+    it('removes the whole module bucket when the last key is dropped', () => {
+      const { set, removeKey, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { homePath: '/home/x' })
+      removeKey('hostA', 'editor', 'homePath')
+      expect(get('hostA', 'editor')).toBeUndefined()
+    })
+
+    it('leaves other modules under the same host alone', () => {
+      const { set, removeKey, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { homePath: '/home/x' })
+      set('hostA', 'files', { projectPath: '/home/proj' })
+      removeKey('hostA', 'editor', 'homePath')
+      expect(get('hostA', 'editor')).toBeUndefined()
+      expect(get('hostA', 'files')).toEqual({ projectPath: '/home/proj' })
+    })
+
+    it('is a no-op when host, module, or key is absent', () => {
+      const { set, removeKey, get } = useHostSettingsStore.getState()
+      removeKey('missingHost', 'editor', 'homePath')
+      expect(get('missingHost', 'editor')).toBeUndefined()
+      set('hostA', 'editor', { wrap: true })
+      removeKey('hostA', 'editor', 'homePath')
+      expect(get('hostA', 'editor')).toEqual({ wrap: true })
+    })
+  })
+
   it('resets a non-object hosts root during rehydrate', async () => {
     localStorage.setItem(
       STORAGE_KEYS.HOST_SETTINGS,
