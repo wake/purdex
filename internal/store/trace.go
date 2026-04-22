@@ -1,7 +1,6 @@
 package store
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -67,18 +66,6 @@ type TraceStep struct {
 	Phase              string          `json:"phase,omitempty"`
 	Status             string          `json:"status,omitempty"`
 	WatcherToken       *string         `json:"watcher_token,omitempty"`
-	// Spec §3.5 envelope completion (PR-1b-0).
-	TraceID        string          `json:"trace_id,omitempty"`
-	ReasonText     string          `json:"reason_text,omitempty"`
-	Attrs          json.RawMessage `json:"attrs,omitempty"`
-	InputRefs      json.RawMessage `json:"input_refs,omitempty"`
-	OutputRefs     json.RawMessage `json:"output_refs,omitempty"`
-	StateBeforeRef string          `json:"state_before_ref,omitempty"`
-	StateAfterRef  string          `json:"state_after_ref,omitempty"`
-	EvidenceRefs   json.RawMessage `json:"evidence_refs,omitempty"`
-	StartedAt      int64           `json:"started_at,omitempty"`
-	EndedAt        int64           `json:"ended_at,omitempty"`
-	OTelKind       string          `json:"otel_kind,omitempty"`
 }
 
 // TraceRecord combines a chain summary with its ordered steps.
@@ -281,17 +268,6 @@ func needsStepRebuildTx(tx *sql.Tx, cols map[string]bool) bool {
 		"phase",
 		"status",
 		"watcher_token",
-		"trace_id",
-		"reason_text",
-		"attrs",
-		"input_refs",
-		"output_refs",
-		"state_before_ref",
-		"state_after_ref",
-		"evidence_refs",
-		"started_at",
-		"ended_at",
-		"otel_kind",
 	}
 	for _, col := range required {
 		if !cols[col] {
@@ -403,17 +379,6 @@ const traceStepsDDL = `
 		phase               TEXT NOT NULL DEFAULT '',
 		status              TEXT NOT NULL DEFAULT '',
 		watcher_token       TEXT,
-		trace_id            TEXT NOT NULL DEFAULT '',
-		reason_text         TEXT NOT NULL DEFAULT '',
-		attrs               TEXT NOT NULL DEFAULT '{}',
-		input_refs          TEXT NOT NULL DEFAULT '[]',
-		output_refs         TEXT NOT NULL DEFAULT '[]',
-		state_before_ref    TEXT NOT NULL DEFAULT '',
-		state_after_ref     TEXT NOT NULL DEFAULT '',
-		evidence_refs       TEXT NOT NULL DEFAULT '[]',
-		started_at          INTEGER NOT NULL DEFAULT 0,
-		ended_at            INTEGER NOT NULL DEFAULT 0,
-		otel_kind           TEXT NOT NULL DEFAULT '',
 		FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
 		FOREIGN KEY (chain_id, parent_step_id) REFERENCES agent_trace_steps(chain_id, step_id) ON DELETE CASCADE
 	)
@@ -568,6 +533,10 @@ func traceTableExistsTx(tx *sql.Tx, table string) (bool, error) {
 }
 
 func rebuildLegacyTraceStepsTx(tx *sql.Tx) error {
+	cols, err := tableColumnsTx(tx, "agent_trace_steps")
+	if err != nil {
+		return err
+	}
 	stepRows, err := traceTableRowCountTx(tx, "agent_trace_steps")
 	if err != nil {
 		return err
@@ -604,37 +573,37 @@ func rebuildLegacyTraceStepsTx(tx *sql.Tx) error {
 	if err := createTraceStepsTableTx(tx); err != nil {
 		return err
 	}
-	// Re-read the legacy column set after rename so the copy query only
-	// references columns that actually exist. PR-1a added 10 Lights columns
-	// and PR-1b-0 added 11 more envelope columns; rebuild must preserve the
-	// actual values on any table that already has them instead of silently
-	// DEFAULT-ing them (which would corrupt deployed Lights history).
-	legacyCols, err := tableColumnsTx(tx, "agent_trace_steps_legacy")
-	if err != nil {
-		return err
-	}
-	copyQuery := buildLegacyTraceStepsCopyQuery(legacyCols)
-	if _, err = tx.Exec(copyQuery); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(`DROP TABLE agent_trace_steps_legacy`); err != nil {
-		return err
-	}
-	return nil
-}
-
-// buildLegacyTraceStepsCopyQuery composes an INSERT … SELECT that copies every
-// column present on the (now-renamed) legacy steps table into the freshly
-// created agent_trace_steps table. Columns absent on the legacy side are
-// omitted from both lists so SQLite applies the new-schema DEFAULTs (spec §3.5
-// envelope defaults) instead of NULL.
-func buildLegacyTraceStepsCopyQuery(legacyCols map[string]bool) string {
-	// Two very different legacy shapes: pre-PR-1a used step_name/step_index
-	// and did not have a seq column, so we derive the new schema values from
-	// the chains table. Everything after that point keeps the same column
-	// names as the current schema and can be copied 1:1.
-	if !legacyCols["seq"] {
-		return `
+	var copyQuery string
+	if cols["seq"] {
+		copyQuery = `
+			INSERT INTO agent_trace_steps (
+				step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+				agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+				payload_json, before_json, after_json, created_at
+			)
+			SELECT
+				s.step_id,
+				s.chain_id,
+				s.parent_step_id,
+				s.seq,
+				s.kind,
+				s.tmux_session,
+				s.pane_id,
+				s.agent_type,
+				s.frame_id,
+				s.parent_frame_id,
+				s.event_name,
+				s.decision,
+				s.reason,
+				s.payload_json,
+				s.before_json,
+				s.after_json,
+				s.created_at
+			FROM agent_trace_steps_legacy s
+			ORDER BY s.chain_id ASC, s.seq ASC, s.created_at ASC, s.step_id ASC
+		`
+	} else {
+		copyQuery = `
 			INSERT INTO agent_trace_steps (
 				step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
 				agent_type, frame_id, parent_frame_id, event_name, decision, reason,
@@ -663,73 +632,13 @@ func buildLegacyTraceStepsCopyQuery(legacyCols map[string]bool) string {
 			ORDER BY s.chain_id ASC, s.step_index ASC, s.created_at ASC, s.step_id ASC
 		`
 	}
-
-	// Core 17 cols — always present on any post-PR-1a schema and always copied.
-	// parent_step_id keeps its nullable-TEXT form (cross-chain parents were
-	// rejected by legacyTraceCrossChainParentCountTx earlier in the rebuild).
-	core := []string{
-		"step_id", "chain_id", "parent_step_id", "seq", "kind",
-		"tmux_session", "pane_id", "agent_type", "frame_id", "parent_frame_id",
-		"event_name", "decision", "reason",
-		"payload_json", "before_json", "after_json", "created_at",
+	if _, err = tx.Exec(copyQuery); err != nil {
+		return err
 	}
-	// PR-1a Lights cols — preserve if present.
-	pr1aLights := []string{
-		"source_kind", "action", "reason_code", "outcome", "scenario_key",
-		"observed_generation", "decision_ports", "phase", "status", "watcher_token",
+	if _, err = tx.Exec(`DROP TABLE agent_trace_steps_legacy`); err != nil {
+		return err
 	}
-	// PR-1b-0 envelope cols — preserve if present (robustness path; normally
-	// the rebuild triggers precisely because these are missing). trace_id is
-	// handled separately below so we can backfill PR-1a Lights rows that never
-	// had the column (contract: source_kind!="" ⇒ trace_id required).
-	pr1b0EnvelopeExceptTraceID := []string{
-		"reason_text", "attrs", "input_refs", "output_refs",
-		"state_before_ref", "state_after_ref", "evidence_refs",
-		"started_at", "ended_at", "otel_kind",
-	}
-
-	columns := make([]string, 0, len(core)+len(pr1aLights)+len(pr1b0EnvelopeExceptTraceID)+1)
-	selectCols := make([]string, 0, cap(columns))
-	columns = append(columns, core...)
-	for _, c := range core {
-		selectCols = append(selectCols, "s."+c)
-	}
-	for _, c := range pr1aLights {
-		if legacyCols[c] {
-			columns = append(columns, c)
-			selectCols = append(selectCols, "s."+c)
-		}
-	}
-	// trace_id backfill: PR-1a Lights rows lack the column; per spec §3.5 a
-	// Lights row (source_kind!="") must carry trace_id, and PR-1b-0's agent
-	// trace emitter aliases trace_id = chain_id for its transition period. We
-	// mirror that aliasing here so post-migration Lights rows satisfy
-	// validateLightsRow. Legacy rows (source_kind="") stay at empty string.
-	if legacyCols["trace_id"] {
-		columns = append(columns, "trace_id")
-		if legacyCols["source_kind"] {
-			selectCols = append(selectCols,
-				`CASE WHEN s.trace_id != '' THEN s.trace_id WHEN s.source_kind != '' THEN s.chain_id ELSE '' END`)
-		} else {
-			selectCols = append(selectCols, "s.trace_id")
-		}
-	} else if legacyCols["source_kind"] {
-		columns = append(columns, "trace_id")
-		selectCols = append(selectCols, `CASE WHEN s.source_kind != '' THEN s.chain_id ELSE '' END`)
-	}
-	for _, c := range pr1b0EnvelopeExceptTraceID {
-		if legacyCols[c] {
-			columns = append(columns, c)
-			selectCols = append(selectCols, "s."+c)
-		}
-	}
-
-	return fmt.Sprintf(`
-		INSERT INTO agent_trace_steps (%s)
-		SELECT %s
-		FROM agent_trace_steps_legacy s
-		ORDER BY s.chain_id ASC, s.seq ASC, s.created_at ASC, s.step_id ASC
-	`, strings.Join(columns, ", "), strings.Join(selectCols, ", "))
+	return nil
 }
 
 func traceTableRowCountTx(tx *sql.Tx, table string) (int, error) {
@@ -830,20 +739,13 @@ func (s *TraceStore) SaveChain(record TraceRecord) (err error) {
 				agent_type, frame_id, parent_frame_id, event_name, decision, reason,
 				payload_json, before_json, after_json, created_at,
 				source_kind, action, reason_code, outcome, scenario_key,
-				observed_generation, decision_ports, phase, status, watcher_token,
-				trace_id, reason_text, attrs, input_refs, output_refs,
-				state_before_ref, state_after_ref, evidence_refs,
-				started_at, ended_at, otel_kind
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				observed_generation, decision_ports, phase, status, watcher_token
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, step.StepID, step.ChainID, nullString(step.ParentStepID), step.Seq, step.Kind, step.TmuxSession, step.PaneID,
 			step.AgentType, step.FrameID, step.ParentFrameID, step.EventName, step.Decision, step.Reason,
 			rawJSONText(step.PayloadJSON), rawJSONText(step.BeforeJSON), rawJSONText(step.AfterJSON), step.CreatedAt,
 			step.SourceKind, step.Action, step.ReasonCode, step.Outcome, step.ScenarioKey,
-			step.ObservedGeneration, rawJSONArrayText(step.DecisionPorts), step.Phase, step.Status, nullableString(step.WatcherToken),
-			step.TraceID, step.ReasonText, rawJSONObjectText(step.Attrs),
-			rawJSONArrayText(step.InputRefs), rawJSONArrayText(step.OutputRefs),
-			step.StateBeforeRef, step.StateAfterRef, rawJSONArrayText(step.EvidenceRefs),
-			step.StartedAt, step.EndedAt, step.OTelKind); err != nil {
+			step.ObservedGeneration, rawJSONArrayText(step.DecisionPorts), step.Phase, step.Status, nullableString(step.WatcherToken)); err != nil {
 			return err
 		}
 	}
@@ -928,10 +830,7 @@ func (s *TraceStore) GetChainRecord(chainID string) (*TraceRecord, error) {
 		       agent_type, frame_id, parent_frame_id, event_name, decision, reason,
 		       payload_json, before_json, after_json, created_at,
 		       source_kind, action, reason_code, outcome, scenario_key,
-		       observed_generation, decision_ports, phase, status, watcher_token,
-		       trace_id, reason_text, attrs, input_refs, output_refs,
-		       state_before_ref, state_after_ref, evidence_refs,
-		       started_at, ended_at, otel_kind
+		       observed_generation, decision_ports, phase, status, watcher_token
 		FROM agent_trace_steps
 		WHERE chain_id = ?
 		ORDER BY seq ASC, created_at ASC, step_id ASC
@@ -1021,12 +920,6 @@ func normalizeTraceRecord(record TraceRecord) (TraceChain, []TraceStep, error) {
 			if _, ok := seen[steps[i].ParentStepID]; !ok {
 				return TraceChain{}, nil, fmt.Errorf("step %s references missing parent step %s", steps[i].StepID, steps[i].ParentStepID)
 			}
-		}
-		if err := validateLightsRow(steps[i]); err != nil {
-			return TraceChain{}, nil, err
-		}
-		if err := validateJSONShape(steps[i]); err != nil {
-			return TraceChain{}, nil, err
 		}
 		seen[steps[i].StepID] = struct{}{}
 	}
@@ -1217,7 +1110,6 @@ func collectTraceSteps(rows *sql.Rows) ([]TraceStep, error) {
 		var parent sql.NullString
 		var watcher sql.NullString
 		var payload, before, after, decisionPorts string
-		var attrs, inputRefs, outputRefs, evidenceRefs string
 		if err := rows.Scan(
 			&step.StepID,
 			&step.ChainID,
@@ -1246,17 +1138,6 @@ func collectTraceSteps(rows *sql.Rows) ([]TraceStep, error) {
 			&step.Phase,
 			&step.Status,
 			&watcher,
-			&step.TraceID,
-			&step.ReasonText,
-			&attrs,
-			&inputRefs,
-			&outputRefs,
-			&step.StateBeforeRef,
-			&step.StateAfterRef,
-			&evidenceRefs,
-			&step.StartedAt,
-			&step.EndedAt,
-			&step.OTelKind,
 		); err != nil {
 			return nil, err
 		}
@@ -1265,10 +1146,6 @@ func collectTraceSteps(rows *sql.Rows) ([]TraceStep, error) {
 		step.BeforeJSON = json.RawMessage(before)
 		step.AfterJSON = json.RawMessage(after)
 		step.DecisionPorts = json.RawMessage(decisionPorts)
-		step.Attrs = json.RawMessage(attrs)
-		step.InputRefs = json.RawMessage(inputRefs)
-		step.OutputRefs = json.RawMessage(outputRefs)
-		step.EvidenceRefs = json.RawMessage(evidenceRefs)
 		if watcher.Valid {
 			v := watcher.String
 			step.WatcherToken = &v
@@ -1311,13 +1188,6 @@ func rawJSONArrayText(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func rawJSONObjectText(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return "{}"
-	}
-	return string(raw)
-}
-
 func nullableString(value *string) any {
 	if value == nil {
 		return nil
@@ -1325,87 +1195,11 @@ func nullableString(value *string) any {
 	return *value
 }
 
-// validateLightsRow enforces the row-class discriminator contract from spec
-// §3.5 / plan phase-1 #561 bidirectionally: any row carrying at least one
-// Lights envelope field is treated as a Lights row and must populate all five
-// required identifiers; rows with every Lights field empty are legacy rows
-// and pass through so pre-PR-1a callers still round-trip.
-func validateLightsRow(step TraceStep) error {
-	hasLightsData := step.SourceKind != "" ||
-		step.TraceID != "" ||
-		step.Phase != "" ||
-		step.Outcome != "" ||
-		step.Action != ""
-	if !hasLightsData {
-		return nil
-	}
-	required := []struct {
-		name  string
-		value string
-	}{
-		{"source_kind", step.SourceKind},
-		{"phase", step.Phase},
-		{"outcome", step.Outcome},
-		{"action", step.Action},
-		{"trace_id", step.TraceID},
-	}
-	for _, field := range required {
-		if field.value == "" {
-			return fmt.Errorf("lights row step %s missing required field %s", step.StepID, field.name)
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
 		}
 	}
-	return nil
-}
-
-// validateJSONShape rejects malformed JSON or wrong top-level shapes in the
-// envelope JSON fields before they hit SQLite. attrs is an object; input_refs
-// / output_refs / evidence_refs / decision_ports are arrays. Empty values fall
-// through to rawJSON*Text defaults and are accepted.
-func validateJSONShape(step TraceStep) error {
-	if err := validateJSONObject(step.StepID, "attrs", step.Attrs); err != nil {
-		return err
-	}
-	arrayFields := []struct {
-		name string
-		raw  json.RawMessage
-	}{
-		{"input_refs", step.InputRefs},
-		{"output_refs", step.OutputRefs},
-		{"evidence_refs", step.EvidenceRefs},
-		{"decision_ports", step.DecisionPorts},
-	}
-	for _, f := range arrayFields {
-		if err := validateJSONArray(step.StepID, f.name, f.raw); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateJSONObject(stepID, field string, raw json.RawMessage) error {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return nil
-	}
-	if !json.Valid(trimmed) {
-		return fmt.Errorf("step %s field %s: invalid JSON", stepID, field)
-	}
-	if trimmed[0] != '{' {
-		return fmt.Errorf("step %s field %s: expected JSON object", stepID, field)
-	}
-	return nil
-}
-
-func validateJSONArray(stepID, field string, raw json.RawMessage) error {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return nil
-	}
-	if !json.Valid(trimmed) {
-		return fmt.Errorf("step %s field %s: invalid JSON", stepID, field)
-	}
-	if trimmed[0] != '[' {
-		return fmt.Errorf("step %s field %s: expected JSON array", stepID, field)
-	}
-	return nil
+	return ""
 }

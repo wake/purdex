@@ -140,19 +140,6 @@ type traceStepInput struct {
 	Phase              string
 	Status             string
 	WatcherToken       *string
-
-	// Lights envelope completion (PR-1b-0, spec §3.5).
-	TraceID        string
-	ReasonText     string
-	Attrs          string
-	InputRefs      string
-	OutputRefs     string
-	StateBeforeRef string
-	StateAfterRef  string
-	EvidenceRefs   string
-	StartedAt      int64
-	EndedAt        int64
-	OTelKind       string
 }
 
 func (c *hookTraceCollector) append(in traceStepInput) string {
@@ -199,47 +186,6 @@ func (c *hookTraceCollector) append(in traceStepInput) string {
 	if decisionPorts == "" {
 		decisionPorts = "[]"
 	}
-	// PR-1b-0: trace_id defaults to chain_id (one hook invocation = one
-	// generation's trace); PR-1b-1 Observation path will mint its own.
-	traceID := in.TraceID
-	if traceID == "" {
-		traceID = c.chain.ChainID
-	}
-	reasonText := in.ReasonText
-	if reasonText == "" {
-		reasonText = in.Reason
-	}
-	attrs := in.Attrs
-	if attrs == "" {
-		attrs = "{}"
-	}
-	inputRefs := in.InputRefs
-	if inputRefs == "" {
-		inputRefs = "[]"
-	}
-	outputRefs := in.OutputRefs
-	if outputRefs == "" {
-		outputRefs = "[]"
-	}
-	evidenceRefs := in.EvidenceRefs
-	if evidenceRefs == "" {
-		evidenceRefs = "[]"
-	}
-	// otel_kind "internal": hook post-callback runs inside the daemon and is
-	// not a client/server RPC edge (spec §3.5 line 488).
-	otelKind := in.OTelKind
-	if otelKind == "" {
-		otelKind = "internal"
-	}
-	now := time.Now().UnixNano()
-	startedAt := in.StartedAt
-	if startedAt == 0 {
-		startedAt = now
-	}
-	endedAt := in.EndedAt
-	if endedAt == 0 {
-		endedAt = startedAt
-	}
 	c.steps = append(c.steps, store.TraceStep{
 		StepID:             stepID,
 		ChainID:            c.chain.ChainID,
@@ -257,7 +203,7 @@ func (c *hookTraceCollector) append(in traceStepInput) string {
 		PayloadJSON:        marshalTraceJSON(in.Payload),
 		BeforeJSON:         marshalTraceJSON(in.Before),
 		AfterJSON:          marshalTraceJSON(in.After),
-		CreatedAt:          now,
+		CreatedAt:          time.Now().UnixNano(),
 		SourceKind:         sourceKind,
 		Action:             action,
 		ReasonCode:         reasonCode,
@@ -268,17 +214,6 @@ func (c *hookTraceCollector) append(in traceStepInput) string {
 		Phase:              phase,
 		Status:             status,
 		WatcherToken:       in.WatcherToken,
-		TraceID:            traceID,
-		ReasonText:         reasonText,
-		Attrs:              json.RawMessage(attrs),
-		InputRefs:          json.RawMessage(inputRefs),
-		OutputRefs:         json.RawMessage(outputRefs),
-		StateBeforeRef:     in.StateBeforeRef,
-		StateAfterRef:      in.StateAfterRef,
-		EvidenceRefs:       json.RawMessage(evidenceRefs),
-		StartedAt:          startedAt,
-		EndedAt:            endedAt,
-		OTelKind:           otelKind,
 	})
 	c.nextSeq++
 	c.chain.LatestStepKind = in.Kind
