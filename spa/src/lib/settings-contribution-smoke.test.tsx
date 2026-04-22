@@ -1,31 +1,22 @@
 /**
- * Smoke test for HSR PR-1/PR-2/PR-3: prove that the settings contribution
- * registry is wired into the Purdex shell (PR-2) and the Workspace shell
- * (PR-3), and NOT yet wired into the remaining shell (HostPage — PR-4
- * target).
+ * Smoke test for HSR PR-1/PR-2/PR-3/PR-4: prove that the settings contribution
+ * registry is wired into all three shells (Purdex / Workspace / Host).
  *
  * Design rationale — Option B (static source check), preferred here:
  *
- *   The page below has deep coupling to app-wide state (wouter router,
- *   zustand host store, i18n, electronAPI, plus numerous leaf
- *   components). Mounting it from cold to do a "queryByText must be
- *   null" check would require hundreds of lines of setup / mocking
- *   purely to observe the absence of a string — and would be brittle
- *   (any future i18n key collision or mock reshuffle could make the
- *   test spuriously pass).
+ *   These shells have deep coupling to app-wide state (wouter router,
+ *   zustand stores, i18n, electronAPI, plus numerous leaf components).
+ *   Mounting them from cold to do a "queryByText must be null" check
+ *   would require hundreds of lines of setup / mocking purely to observe
+ *   the absence of a string — and would be brittle.
  *
- *   A static-source check is strictly stronger for the thing we
- *   actually want to prove: that this shell does not yet import from
- *   `settings-contribution-registry`. When PR-4 wires it up, the
- *   corresponding entry is removed from `PAGES`.
+ *   A static-source check is strictly stronger for the thing we actually
+ *   want to prove. Source files are pulled via Vite's `?raw` imports
+ *   (browser/jsdom safe, no node:fs dependency).
  *
- *   We additionally register three fake contributions (one per scope)
- *   and verify they are queryable from the registry directly, so the
- *   infrastructure is exercised and regressions in the registry
- *   itself would surface here too.
- *
- *   Source files are pulled via Vite's `?raw` imports (browser/jsdom
- *   safe, no node:fs dependency).
+ * PR-4 update: HostPage.tsx is now wired into the registry (commit 2).
+ * The `PAGES` negative-guard list is now empty (all three shells migrated).
+ * Positive assertion added to confirm HostPage does import from registry.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import hostPageSrc from '../components/HostPage.tsx?raw'
@@ -39,14 +30,14 @@ const FAKE_PURDEX_LABEL = 'SMOKE_PURDEX_LABEL_UNIQUE'
 const FAKE_HOST_LABEL = 'SMOKE_HOST_LABEL_UNIQUE'
 const FAKE_WORKSPACE_LABEL = 'SMOKE_WORKSPACE_LABEL_UNIQUE'
 
-// HSR PR-2 migrated `src/components/SettingsPage.tsx` off this list — it
-// now reads the contribution registry directly. HSR PR-3 migrated
-// `src/features/workspace/components/WorkspaceSettingsPage.tsx` off this
-// list — workspace-scoped contributions now render via the registry. The
-// remaining shell lands in PR-4 (host).
-const PAGES: Array<{ name: string; src: string }> = [
-  { name: 'src/components/HostPage.tsx', src: hostPageSrc },
-]
+// All three shells have been migrated to the contribution registry.
+// PR-2: SettingsPage.tsx; PR-3: WorkspaceSettingsPage.tsx; PR-4: HostPage.tsx.
+// This list is intentionally empty — kept for visibility that no shell
+// remains unwired. Remove the iteration block below if no new shells are added.
+const PAGES: Array<{ name: string; src: string }> = []
+
+// Positive guard: HostPage.tsx MUST import listContributions (PR-4 commit 2).
+// If this breaks, it means someone accidentally reverted the migration.
 
 function FakeComponent() {
   return null
@@ -90,6 +81,14 @@ describe('settings-contribution-smoke (PR-1)', () => {
     expect(listContributions('workspace').map((c) => c.id)).toContain('smoketest.workspace-fake')
   })
 
+  // PR-4 (commit 2): HostPage is now wired into the registry — positive guard.
+  it('src/components/HostPage.tsx DOES import from settings-contribution-registry', () => {
+    expect(hostPageSrc).toMatch(/from\s+['"][^'"]*settings-contribution-registry['"]/)
+    expect(hostPageSrc).toMatch(/\blistContributions\b/)
+  })
+
+  // No unwired shells remain. The iteration block below is kept as a template
+  // in case new shells are added before their migration PR.
   for (const page of PAGES) {
     it(`${page.name} does NOT import from settings-contribution-registry`, () => {
       // Any import line referring to the registry module, relative or absolute.

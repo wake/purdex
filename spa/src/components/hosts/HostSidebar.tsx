@@ -1,22 +1,13 @@
 import { Plus, CaretDown, CaretRight, Circle, LockSimple, Spinner, Warning } from '@phosphor-icons/react'
 import { useState } from 'react'
-import type { HostSubPage } from '../../lib/host-routes'
+import { listContributions } from '../../lib/settings-contribution-registry'
 import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 
-const SUB_PAGES: { id: HostSubPage; labelKey: string }[] = [
-  { id: 'overview', labelKey: 'hosts.overview' },
-  { id: 'sessions', labelKey: 'hosts.sessions' },
-  { id: 'hooks', labelKey: 'hosts.hooks' },
-  { id: 'agents', labelKey: 'hosts.agents' },
-  { id: 'uploads', labelKey: 'hosts.uploads' },
-  { id: 'logs', labelKey: 'hosts.logs' },
-]
-
 interface Props {
   selectedHostId: string
-  selectedSubPage: HostSubPage
-  onSelect: (hostId: string, subPage: HostSubPage) => void
+  selectedSubPage: string
+  onSelect: (hostId: string, subPage: string) => void
   onAddHost?: () => void
 }
 
@@ -40,6 +31,10 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
     [selectedHostId]: true,
   }))
 
+  // Read sub-pages from the contribution registry (order guaranteed by registry sort).
+  // Do NOT memoize — ctx may change scope-narrow inputs React cannot track in deps.
+  const subPages = listContributions('host')
+
   const toggleExpand = (hostId: string) => {
     setExpanded((prev) => ({ ...prev, [hostId]: !prev[hostId] }))
   }
@@ -54,6 +49,7 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
           const host = hosts[hostId]
           if (!host) return null
           const isExpanded = expanded[hostId] || hostId === selectedHostId
+          const hostCtx = { scope: 'host' as const, hostId }
           return (
             <div key={hostId} className="mb-1">
               <button
@@ -77,19 +73,35 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
               </button>
               {isExpanded && (
                 <div className="ml-4 border-l-2 border-border-subtle pl-2 mt-1">
-                  {SUB_PAGES.map((page) => (
-                    <button
-                      key={page.id}
-                      onClick={() => onSelect(hostId, page.id)}
-                      className={`w-full text-left px-2 py-1 rounded text-xs cursor-pointer ${
-                        selectedHostId === hostId && selectedSubPage === page.id
-                          ? 'text-accent font-semibold bg-accent/10'
-                          : 'text-text-muted hover:text-text-secondary'
-                      }`}
-                    >
-                      {t(page.labelKey)}
-                    </button>
-                  ))}
+                  {subPages.map((page) => {
+                    // F7: disabled contributions show as a disabled row but are NOT
+                    // filtered out. Clicking a disabled row is a no-op.
+                    const isDisabled = page.disabled ? page.disabled(hostCtx) === true : false
+                    const isActive = selectedHostId === hostId && selectedSubPage === page.localId
+                    const disabledTitle =
+                      isDisabled && page.disabledReasonKey
+                        ? t(page.disabledReasonKey)
+                        : undefined
+                    return (
+                      <button
+                        key={page.localId}
+                        data-disabled-ctx={isDisabled ? 'true' : undefined}
+                        title={disabledTitle}
+                        onClick={() => {
+                          if (!isDisabled) onSelect(hostId, page.localId)
+                        }}
+                        className={`w-full text-left px-2 py-1 rounded text-xs ${
+                          isDisabled
+                            ? 'text-text-muted cursor-not-allowed'
+                            : isActive
+                              ? 'text-accent font-semibold bg-accent/10 cursor-pointer'
+                              : 'text-text-muted hover:text-text-secondary cursor-pointer'
+                        }`}
+                      >
+                        {t(page.labelKey)}
+                      </button>
+                    )
+                  })}
                 </div>
               )}
             </div>
