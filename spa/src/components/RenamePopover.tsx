@@ -6,6 +6,8 @@ import { isValidSessionName } from '../lib/session-name'
 interface Props {
   anchorRect: DOMRect
   currentName: string
+  initialValue?: string
+  allowUnchangedSubmit?: boolean
   onConfirm: (name: string) => Promise<void>
   onCancel: () => void
   error?: string
@@ -17,9 +19,9 @@ interface Props {
 const POPOVER_WIDTH = 240
 const PADDING = 4
 
-export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, error, onClearError, placeholder, validateName }: Props) {
+export function RenamePopover({ anchorRect, currentName, initialValue, allowUnchangedSubmit = false, onConfirm, onCancel, error, onClearError, placeholder, validateName }: Props) {
   const t = useI18nStore((s) => s.t)
-  const [draft, setDraft] = useState(currentName)
+  const [draft, setDraft] = useState(initialValue ?? currentName)
   const [submitting, setSubmitting] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -71,7 +73,7 @@ export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, er
     if (e.key === 'Enter') {
       e.preventDefault()
       const trimmed = draft.trim()
-      if (!trimmed || trimmed === currentName || submitting || validationError) return
+      if (!trimmed || (!allowUnchangedSubmit && trimmed === currentName) || submitting || validationError) return
       setSubmitting(true)
       onConfirm(trimmed).finally(() => setSubmitting(false))
     }

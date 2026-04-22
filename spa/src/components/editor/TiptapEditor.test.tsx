@@ -52,16 +52,16 @@ describe('TiptapEditor', () => {
     )
   })
 
-  it('keeps a visible focus style on the editable root', () => {
+  it('suppresses the editable focus outline to avoid a bottom accent line', () => {
     render(<TiptapEditor content="# Hello" isActive={false} onChange={() => {}} onSave={() => {}} />)
 
     expect(screen.getByTestId('editor-content')).toHaveAttribute(
       'data-editor-class',
-      expect.not.stringContaining('focus:outline-none'),
+      expect.stringContaining('focus:outline-none'),
     )
     expect(screen.getByTestId('editor-content')).toHaveAttribute(
       'data-editor-class',
-      expect.stringContaining('focus-visible:outline'),
+      expect.not.stringContaining('focus-visible:outline'),
     )
   })
 

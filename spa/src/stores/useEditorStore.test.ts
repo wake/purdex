@@ -7,7 +7,7 @@ describe('useEditorStore', () => {
   })
 
   it('keeps shared buffer state separate from pane-local view state', () => {
-    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript')
+    useEditorStore.getState().openBuffer('key1', 'hello', { language: 'typescript' })
     useEditorStore.getState().attachPane('pane-a', 'key1')
     useEditorStore.getState().attachPane('pane-b', 'key1')
 
@@ -32,7 +32,7 @@ describe('useEditorStore', () => {
   })
 
   it('only closes a shared buffer when the last pane detaches', () => {
-    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript')
+    useEditorStore.getState().openBuffer('key1', 'hello', { language: 'typescript' })
     useEditorStore.getState().attachPane('pane-a', 'key1')
     useEditorStore.getState().attachPane('pane-b', 'key1')
 
@@ -44,8 +44,8 @@ describe('useEditorStore', () => {
   })
 
   it('switching a pane to another buffer resets pane-local state and releases the old buffer', () => {
-    useEditorStore.getState().openBuffer('key-a', 'A', 'typescript')
-    useEditorStore.getState().openBuffer('key-b', 'B', 'markdown')
+    useEditorStore.getState().openBuffer('key-a', 'A', { language: 'typescript' })
+    useEditorStore.getState().openBuffer('key-b', 'B', { language: 'markdown' })
     useEditorStore.getState().attachPane('pane-a', 'key-a')
     useEditorStore.getState().setEditorMode('pane-a', 'wysiwyg')
     useEditorStore.getState().setShowDiff('pane-a', true)
@@ -63,23 +63,120 @@ describe('useEditorStore', () => {
   })
 
   it('renames a shared buffer key and preserves model identity', () => {
-    useEditorStore.getState().openBuffer('old-key', 'hello', 'typescript')
+    useEditorStore.getState().openBuffer('old-key', 'hello', { language: 'typescript' })
     useEditorStore.getState().attachPane('pane-a', 'old-key')
 
     const modelId = useEditorStore.getState().buffers['old-key']?.modelId
-    useEditorStore.getState().renameBuffer('old-key', 'new-key', 'markdown')
+    useEditorStore.getState().renameBuffer('old-key', 'new-key', {
+      language: 'markdown',
+      languageSource: 'extension',
+    })
 
     expect(useEditorStore.getState().buffers['old-key']).toBeUndefined()
     expect(useEditorStore.getState().buffers['new-key']).toMatchObject({
       content: 'hello',
       modelId,
       language: 'markdown',
+      languageSource: 'extension',
     })
     expect(useEditorStore.getState().paneStates['pane-a']?.bufferKey).toBe('new-key')
   })
 
+  it('stores document metadata when opening a buffer', () => {
+    useEditorStore.getState().openBuffer('key1', 'hello\r\nworld', {
+      language: 'typescript',
+      languageSource: 'extension',
+    })
+
+    expect(useEditorStore.getState().buffers['key1']).toMatchObject({
+      language: 'typescript',
+      languageSource: 'extension',
+      eol: 'crlf',
+      encoding: 'utf8',
+    })
+  })
+
+  it('stores untitled document state when opening a buffer', () => {
+    useEditorStore.getState().openBuffer('key1', '', {
+      language: 'markdown',
+      languageSource: 'template',
+      untitled: {
+        name: 'Untitled',
+        suggestedExtension: '.md',
+        hasBeenRenamed: false,
+      },
+    })
+
+    expect(useEditorStore.getState().buffers['key1']?.untitled).toEqual({
+      name: 'Untitled',
+      suggestedExtension: '.md',
+      hasBeenRenamed: false,
+    })
+  })
+
+  it('allows manual language changes without changing content state', () => {
+    useEditorStore.getState().openBuffer('key1', 'hello', { language: 'typescript' })
+
+    useEditorStore.getState().setBufferLanguage('key1', 'markdown')
+
+    expect(useEditorStore.getState().buffers['key1']).toMatchObject({
+      language: 'markdown',
+      languageSource: 'manual',
+      content: 'hello',
+      savedContent: 'hello',
+      isDirty: false,
+    })
+  })
+
+  it('preserves manual language when a buffer is renamed', () => {
+    useEditorStore.getState().openBuffer('old-key', 'hello', {
+      language: 'markdown',
+      languageSource: 'manual',
+    })
+
+    useEditorStore.getState().renameBuffer('old-key', 'new-key', {
+      language: 'markdown',
+      languageSource: 'manual',
+    })
+
+    expect(useEditorStore.getState().buffers['new-key']).toMatchObject({
+      language: 'markdown',
+      languageSource: 'manual',
+    })
+  })
+
+  it('updates untitled state when a buffer is renamed', () => {
+    useEditorStore.getState().openBuffer('untitled:Untitled', '', {
+      language: 'plaintext',
+      languageSource: 'template',
+      untitled: {
+        name: 'Untitled',
+        suggestedExtension: '.txt',
+        hasBeenRenamed: false,
+      },
+    })
+
+    useEditorStore.getState().renameBuffer('untitled:Untitled', 'untitled:notes.txt', {
+      language: 'plaintext',
+      languageSource: 'extension',
+      untitled: {
+        name: 'notes.txt',
+        suggestedExtension: '.txt',
+        hasBeenRenamed: true,
+      },
+    })
+
+    expect(useEditorStore.getState().buffers['untitled:notes.txt']).toMatchObject({
+      untitled: {
+        name: 'notes.txt',
+        suggestedExtension: '.txt',
+        hasBeenRenamed: true,
+      },
+    })
+  })
+
   it('opens a buffer with content', () => {
-    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript')
+    useEditorStore.getState().openBuffer('key1', 'hello', { language: 'typescript' })
     const buf = useEditorStore.getState().buffers['key1']
     expect(buf).toBeDefined()
     expect(buf.content).toBe('hello')
@@ -89,7 +186,7 @@ describe('useEditorStore', () => {
   })
 
   it('updateContent marks buffer as dirty', () => {
-    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript')
+    useEditorStore.getState().openBuffer('key1', 'hello', { language: 'typescript' })
     useEditorStore.getState().updateContent('key1', 'hello world')
     const buf = useEditorStore.getState().buffers['key1']
     expect(buf.content).toBe('hello world')
@@ -97,7 +194,7 @@ describe('useEditorStore', () => {
   })
 
   it('markSaved clears dirty flag', () => {
-    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript')
+    useEditorStore.getState().openBuffer('key1', 'hello', { language: 'typescript' })
     useEditorStore.getState().updateContent('key1', 'changed')
     useEditorStore.getState().markSaved('key1')
     const buf = useEditorStore.getState().buffers['key1']
@@ -106,22 +203,23 @@ describe('useEditorStore', () => {
   })
 
   it('closeBuffer removes the buffer', () => {
-    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript')
+    useEditorStore.getState().openBuffer('key1', 'hello', { language: 'typescript' })
     useEditorStore.getState().closeBuffer('key1')
     expect(useEditorStore.getState().buffers['key1']).toBeUndefined()
   })
 
   it('reloadBuffer replaces content without marking dirty', () => {
-    useEditorStore.getState().openBuffer('key1', 'old', 'typescript')
+    useEditorStore.getState().openBuffer('key1', 'old', { language: 'typescript' })
     useEditorStore.getState().reloadBuffer('key1', 'new')
     const buf = useEditorStore.getState().buffers['key1']
     expect(buf.content).toBe('new')
     expect(buf.savedContent).toBe('new')
     expect(buf.isDirty).toBe(false)
+    expect(buf.eol).toBe('lf')
   })
 
   it('updateCursor stores cursor position', () => {
-    useEditorStore.getState().openBuffer('key1', '', 'plaintext')
+    useEditorStore.getState().openBuffer('key1', '', { language: 'plaintext' })
     useEditorStore.getState().attachPane('pane-a', 'key1')
     useEditorStore.getState().updateCursor('pane-a', 10, 5)
     const pane = useEditorStore.getState().paneStates['pane-a']
@@ -129,7 +227,7 @@ describe('useEditorStore', () => {
   })
 
   it('markSaved updates lastStat when stat is provided', () => {
-    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript')
+    useEditorStore.getState().openBuffer('key1', 'hello', { language: 'typescript' })
     const stat = { mtime: 2000, size: 50 }
     useEditorStore.getState().markSaved('key1', stat)
     const buf = useEditorStore.getState().buffers['key1']
@@ -138,7 +236,7 @@ describe('useEditorStore', () => {
 
   it('markSaved preserves existing lastStat when no stat provided', () => {
     const initialStat = { mtime: 1000, size: 30 }
-    useEditorStore.getState().openBuffer('key1', 'hello', 'typescript', initialStat)
+    useEditorStore.getState().openBuffer('key1', 'hello', { language: 'typescript' }, initialStat)
     useEditorStore.getState().markSaved('key1')
     const buf = useEditorStore.getState().buffers['key1']
     expect(buf.lastStat).toEqual({ mtime: 1000, size: 30 })
