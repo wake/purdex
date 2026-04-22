@@ -100,190 +100,50 @@ func beginHookTrace(sink *hookTraceSink, req EventRequest) *hookTraceCollector {
 		},
 		nextSeq: 1,
 	}
-	collector.triggerStepID = collector.append(traceStepInput{
-		Kind:      "trigger",
-		AgentType: req.AgentType,
-		EventName: req.EventName,
-		Decision:  "received",
-		Reason:    "hook_post",
-		Payload:   req,
-	})
+	collector.triggerStepID = collector.append(
+		"",
+		"trigger",
+		req.AgentType,
+		"",
+		"",
+		req.EventName,
+		"received",
+		"hook_post",
+		req,
+		nil,
+		nil,
+	)
 	return collector
 }
 
-// traceStepInput carries the optional fields for a single trace step; zero
-// values fall back to hook-path defaults inside append().
-type traceStepInput struct {
-	// Identity
-	ParentStepID  string
-	Kind          string
-	AgentType     string
-	FrameID       string
-	ParentFrameID string
-	EventName     string
-	Decision      string
-	Reason        string
-
-	// Payload
-	Payload any
-	Before  any
-	After   any
-
-	// Lights envelope (spec §3.5)
-	SourceKind         string
-	Action             string
-	ReasonCode         string
-	Outcome            string
-	ScenarioKey        string
-	ObservedGeneration int64
-	DecisionPorts      string
-	Phase              string
-	Status             string
-	WatcherToken       *string
-
-	// Lights envelope completion (PR-1b-0, spec §3.5).
-	TraceID        string
-	ReasonText     string
-	Attrs          string
-	InputRefs      string
-	OutputRefs     string
-	StateBeforeRef string
-	StateAfterRef  string
-	EvidenceRefs   string
-	StartedAt      int64
-	EndedAt        int64
-	OTelKind       string
-}
-
-func (c *hookTraceCollector) append(in traceStepInput) string {
+func (c *hookTraceCollector) append(parentStepID, kind, agentType, frameID, parentFrameID, eventName, decision, reason string, payload, before, after any) string {
 	if c == nil {
 		return ""
 	}
 	stepID := uuid.NewString()
-	sourceKind := in.SourceKind
-	if sourceKind == "" {
-		sourceKind = "hook"
-	}
-	phase := in.Phase
-	if phase == "" {
-		// Spec §3.5 phase ∈ {proposed, committed, rejected}. Derive from the
-		// decision per call site (rejected/skipped/unchanged stay proposed;
-		// frame upserts and successful emits commit).
-		phase = derivePhaseFromDecision(in.Decision)
-	}
-	outcome := in.Outcome
-	if outcome == "" {
-		outcome = deriveOutcomeFromDecision(in.Decision)
-	}
-	// Status defaults to "success": every appended step represents a
-	// completed observation. Status=failure is reserved for execution
-	// errors (panic / marshal / DB write) — not for rejected decisions,
-	// which spec §3.5 keeps under outcome.
-	status := in.Status
-	if status == "" {
-		status = "success"
-	}
-	action := in.Action
-	if action == "" {
-		action = in.Kind + ":" + in.Decision
-	}
-	scenarioKey := in.ScenarioKey
-	if scenarioKey == "" {
-		scenarioKey = in.EventName
-	}
-	reasonCode := in.ReasonCode
-	if reasonCode == "" {
-		reasonCode = in.Reason
-	}
-	decisionPorts := in.DecisionPorts
-	if decisionPorts == "" {
-		decisionPorts = "[]"
-	}
-	// PR-1b-0: trace_id defaults to chain_id (one hook invocation = one
-	// generation's trace); PR-1b-1 Observation path will mint its own.
-	traceID := in.TraceID
-	if traceID == "" {
-		traceID = c.chain.ChainID
-	}
-	reasonText := in.ReasonText
-	if reasonText == "" {
-		reasonText = in.Reason
-	}
-	attrs := in.Attrs
-	if attrs == "" {
-		attrs = "{}"
-	}
-	inputRefs := in.InputRefs
-	if inputRefs == "" {
-		inputRefs = "[]"
-	}
-	outputRefs := in.OutputRefs
-	if outputRefs == "" {
-		outputRefs = "[]"
-	}
-	evidenceRefs := in.EvidenceRefs
-	if evidenceRefs == "" {
-		evidenceRefs = "[]"
-	}
-	// otel_kind "internal": hook post-callback runs inside the daemon and is
-	// not a client/server RPC edge (spec §3.5 line 488).
-	otelKind := in.OTelKind
-	if otelKind == "" {
-		otelKind = "internal"
-	}
-	now := time.Now().UnixNano()
-	startedAt := in.StartedAt
-	if startedAt == 0 {
-		startedAt = now
-	}
-	endedAt := in.EndedAt
-	if endedAt == 0 {
-		endedAt = startedAt
-	}
 	c.steps = append(c.steps, store.TraceStep{
-		StepID:             stepID,
-		ChainID:            c.chain.ChainID,
-		ParentStepID:       in.ParentStepID,
-		Seq:                c.nextSeq,
-		Kind:               in.Kind,
-		TmuxSession:        c.chain.TmuxSession,
-		PaneID:             c.chain.PaneID,
-		AgentType:          in.AgentType,
-		FrameID:            in.FrameID,
-		ParentFrameID:      in.ParentFrameID,
-		EventName:          in.EventName,
-		Decision:           in.Decision,
-		Reason:             in.Reason,
-		PayloadJSON:        marshalTraceJSON(in.Payload),
-		BeforeJSON:         marshalTraceJSON(in.Before),
-		AfterJSON:          marshalTraceJSON(in.After),
-		CreatedAt:          now,
-		SourceKind:         sourceKind,
-		Action:             action,
-		ReasonCode:         reasonCode,
-		Outcome:            outcome,
-		ScenarioKey:        scenarioKey,
-		ObservedGeneration: in.ObservedGeneration,
-		DecisionPorts:      json.RawMessage(decisionPorts),
-		Phase:              phase,
-		Status:             status,
-		WatcherToken:       in.WatcherToken,
-		TraceID:            traceID,
-		ReasonText:         reasonText,
-		Attrs:              json.RawMessage(attrs),
-		InputRefs:          json.RawMessage(inputRefs),
-		OutputRefs:         json.RawMessage(outputRefs),
-		StateBeforeRef:     in.StateBeforeRef,
-		StateAfterRef:      in.StateAfterRef,
-		EvidenceRefs:       json.RawMessage(evidenceRefs),
-		StartedAt:          startedAt,
-		EndedAt:            endedAt,
-		OTelKind:           otelKind,
+		StepID:        stepID,
+		ChainID:       c.chain.ChainID,
+		ParentStepID:  parentStepID,
+		Seq:           c.nextSeq,
+		Kind:          kind,
+		TmuxSession:   c.chain.TmuxSession,
+		PaneID:        c.chain.PaneID,
+		AgentType:     agentType,
+		FrameID:       frameID,
+		ParentFrameID: parentFrameID,
+		EventName:     eventName,
+		Decision:      decision,
+		Reason:        reason,
+		PayloadJSON:   marshalTraceJSON(payload),
+		BeforeJSON:    marshalTraceJSON(before),
+		AfterJSON:     marshalTraceJSON(after),
+		CreatedAt:     time.Now().UnixNano(),
 	})
 	c.nextSeq++
-	c.chain.LatestStepKind = in.Kind
-	c.chain.LatestDecision = in.Decision
-	c.chain.LatestStepReason = in.Reason
+	c.chain.LatestStepKind = kind
+	c.chain.LatestDecision = decision
+	c.chain.LatestStepReason = reason
 	return stepID
 }
 
@@ -291,35 +151,38 @@ func (c *hookTraceCollector) Verify(req EventRequest, decision, reason string, a
 	if c == nil {
 		return
 	}
-	c.verifyStepID = c.append(traceStepInput{
-		ParentStepID: c.triggerStepID,
-		Kind:         "verify",
-		AgentType:    req.AgentType,
-		EventName:    req.EventName,
-		Decision:     decision,
-		Reason:       reason,
-		Payload:      req,
-		After:        after,
-	})
+	c.verifyStepID = c.append(
+		c.triggerStepID,
+		"verify",
+		req.AgentType,
+		"",
+		"",
+		req.EventName,
+		decision,
+		reason,
+		req,
+		nil,
+		after,
+	)
 }
 
 func (c *hookTraceCollector) Frame(req EventRequest, meta FrameTraceMeta) {
 	if c == nil || meta.Decision == "" {
 		return
 	}
-	c.frameStepID = c.append(traceStepInput{
-		ParentStepID:  c.verifyStepID,
-		Kind:          "frame",
-		AgentType:     req.AgentType,
-		FrameID:       meta.FrameID,
-		ParentFrameID: meta.ParentFrameID,
-		EventName:     req.EventName,
-		Decision:      meta.Decision,
-		Reason:        meta.Reason,
-		Payload:       req,
-		Before:        meta.Before,
-		After:         meta.After,
-	})
+	c.frameStepID = c.append(
+		c.verifyStepID,
+		"frame",
+		req.AgentType,
+		meta.FrameID,
+		meta.ParentFrameID,
+		req.EventName,
+		meta.Decision,
+		meta.Reason,
+		req,
+		meta.Before,
+		meta.After,
+	)
 }
 
 type ProjectionTraceSummary struct {
@@ -337,17 +200,19 @@ func (c *hookTraceCollector) Projection(req EventRequest, summary ProjectionTrac
 	if parent == "" {
 		parent = c.verifyStepID
 	}
-	c.projectionStepID = c.append(traceStepInput{
-		ParentStepID: parent,
-		Kind:         "projection",
-		AgentType:    req.AgentType,
-		EventName:    req.EventName,
-		Decision:     summary.Decision,
-		Reason:       summary.Reason,
-		Payload:      req,
-		Before:       summary.Before,
-		After:        summary.After,
-	})
+	c.projectionStepID = c.append(
+		parent,
+		"projection",
+		req.AgentType,
+		"",
+		"",
+		req.EventName,
+		summary.Decision,
+		summary.Reason,
+		req,
+		summary.Before,
+		summary.After,
+	)
 }
 
 func (c *hookTraceCollector) Emit(payload any, agentType, eventName, decision, reason string) {
@@ -361,16 +226,19 @@ func (c *hookTraceCollector) Emit(payload any, agentType, eventName, decision, r
 	if parent == "" {
 		parent = c.verifyStepID
 	}
-	c.append(traceStepInput{
-		ParentStepID: parent,
-		Kind:         "emit",
-		AgentType:    agentType,
-		EventName:    eventName,
-		Decision:     decision,
-		Reason:       reason,
-		Payload:      payload,
-		After:        payload,
-	})
+	c.append(
+		parent,
+		"emit",
+		agentType,
+		"",
+		"",
+		eventName,
+		decision,
+		reason,
+		payload,
+		nil,
+		payload,
+	)
 }
 
 func (c *hookTraceCollector) Finish(status, reason string) {
@@ -386,56 +254,6 @@ func (c *hookTraceCollector) Finish(status, reason string) {
 		Steps: append([]store.TraceStep(nil), c.steps...),
 	}
 	c.sink.Enqueue(record)
-}
-
-// hookDecisionVocab enumerates every decision literal the agent hook path
-// emits (trigger / verify / frame / projection / emit call sites). An
-// unrecognised decision maps to an empty outcome — the previous "fall back
-// to emitted" default masked classification gaps that this PR's round-2
-// review flagged.
-var hookDecisionVocab = map[string]struct {
-	outcome string
-	phase   string
-}{
-	// trigger
-	"received": {outcome: "received", phase: "proposed"},
-	// verify
-	"accepted": {outcome: "accepted", phase: "proposed"},
-	"rejected": {outcome: "rejected", phase: "rejected"},
-	// frame_ops
-	"created_frame": {outcome: "created_frame", phase: "committed"},
-	"updated_frame": {outcome: "updated_frame", phase: "committed"},
-	"deleted_frame": {outcome: "deleted_frame", phase: "committed"},
-	"skipped":       {outcome: "skipped", phase: "proposed"},
-	// projection
-	"projection_changed":   {outcome: "projection_changed", phase: "committed"},
-	"projection_unchanged": {outcome: "projection_unchanged", phase: "proposed"},
-	// emit
-	"broadcasted": {outcome: "broadcasted", phase: "committed"},
-}
-
-// deriveOutcomeFromDecision maps a known decision literal onto the spec §3.5
-// Outcome vocabulary. Unknown decisions return "" so gaps surface instead of
-// defaulting to a happy-path value; the empty decision is treated as skipped
-// for legacy/no-op call sites.
-func deriveOutcomeFromDecision(decision string) string {
-	if decision == "" {
-		return "skipped"
-	}
-	if entry, ok := hookDecisionVocab[decision]; ok {
-		return entry.outcome
-	}
-	return ""
-}
-
-// derivePhaseFromDecision maps a known decision literal onto Phase ∈
-// {proposed, committed, rejected}. Empty / unknown decisions default to
-// "proposed" — an observation without committed side-effects.
-func derivePhaseFromDecision(decision string) string {
-	if entry, ok := hookDecisionVocab[decision]; ok {
-		return entry.phase
-	}
-	return "proposed"
 }
 
 func marshalTraceJSON(v any) json.RawMessage {

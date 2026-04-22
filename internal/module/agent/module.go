@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -19,9 +18,6 @@ import (
 	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
-	"github.com/wake/purdex/internal/module/agent/arbitrator"
-	"github.com/wake/purdex/internal/module/agent/arbmode"
-	"github.com/wake/purdex/internal/module/agent/observation"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
@@ -64,20 +60,6 @@ type Module struct {
 
 	sweepCancel context.CancelFunc
 	sweepWG     sync.WaitGroup
-
-	arbmodeMgr     *arbmode.Manager
-	arbmodeHandler *arbmode.Handler
-
-	// Lights Arbitrator wiring (PR-1b-1b). traceMinter/traceLookup share one
-	// underlying registry; Lookup is stored for PR-1b-1c readers (not yet
-	// consumed). arbitrator + traceWriter are nil when the module falls into
-	// the degraded path (traces store missing).
-	traceMinter observation.TraceIDMinter
-	traceLookup observation.TraceIDLookup
-	arbitrator  *arbitrator.Arbitrator
-	traceWriter *arbitrator.TraceWriter
-	arbCancel   context.CancelFunc
-	arbDone     chan struct{}
 }
 
 // New creates a new agent Module backed by the given AgentEventStore.
@@ -112,61 +94,6 @@ func (m *Module) Dependencies() []string { return []string{"session"} }
 // and registers CC and Codex providers.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
-
-	// Build arbmode Manager + handler BEFORE the session-provider check so the
-	// /api/agent/arbitrator/mode endpoint is always available even in the
-	// degraded path where session provider is missing. arbmode has no session
-	// dependency.
-	c.CfgMu.RLock()
-	initialArbMode := c.Cfg.Agent.ArbMode
-	initialUploadDir := c.Cfg.UploadDir
-	c.CfgMu.RUnlock()
-	m.arbmodeMgr = arbmode.NewManager(os.Getenv("AGENT_ARB_MODE"), initialArbMode)
-	m.arbmodeHandler = arbmode.NewHandler(m.arbmodeMgr)
-	c.Registry.Register("agent.arbmode.manager", m.arbmodeMgr)
-	if m.uploadDir == "" {
-		m.uploadDir = initialUploadDir
-	}
-
-	// Register the OnConfigChange callback before the session-provider check so
-	// that hot-reload of agent.arb_mode (and UploadDir) keeps working even when
-	// the agent module falls into the degraded path.
-	c.OnConfigChange(func() {
-		c.CfgMu.RLock()
-		newDir := c.Cfg.UploadDir
-		newArbMode := c.Cfg.Agent.ArbMode
-		c.CfgMu.RUnlock()
-		if newDir != "" {
-			m.mu.Lock()
-			m.uploadDir = newDir
-			m.mu.Unlock()
-		}
-		m.arbmodeMgr.OnConfigChange(newArbMode)
-	})
-
-	// Lights Arbitrator wiring (PR-1b-1b). Built BEFORE the session-provider
-	// check so SubmitObservation + arbitrator lifecycle remain available even
-	// in the degraded path where session provider is missing, mirroring the
-	// arbmode manager's design. Minter/Lookup share one registry so the
-	// apply pipeline (writer) and PR-1b-1c consumers (readers) see the same
-	// (session, generation) → trace_id mapping. When the traces store is
-	// absent we skip Arbitrator construction entirely; SubmitObservation
-	// becomes a no-op.
-	m.traceMinter, m.traceLookup = observation.NewTraceIDRegistry()
-	if m.traces != nil {
-		m.traceWriter = arbitrator.NewTraceWriter(arbitrator.TraceWriterOptions{
-			Store: m.traces,
-			Now:   time.Now,
-		})
-		m.arbitrator = arbitrator.NewArbitrator(arbitrator.Options{
-			Minter:      m.traceMinter,
-			Lookup:      m.traceLookup,
-			Arbmode:     m.arbmodeMgr,
-			TraceWriter: m.traceWriter,
-			Now:         time.Now,
-		})
-	}
-
 	svc, ok := c.Registry.Get(session.RegistryKey)
 	if !ok {
 		log.Printf("[agent] warning: session provider not found")
@@ -177,6 +104,12 @@ func (m *Module) Init(c *core.Core) error {
 	// Expose event store and module so other modules (e.g. session rename) can update it.
 	c.Registry.Register("agent.events", m.events)
 	c.Registry.Register("agent.module", m)
+
+	if m.uploadDir == "" {
+		c.CfgMu.RLock()
+		m.uploadDir = c.Cfg.UploadDir
+		c.CfgMu.RUnlock()
+	}
 
 	// Prober (shared across all providers)
 	m.tmux = c.Tmux
@@ -191,6 +124,18 @@ func (m *Module) Init(c *core.Core) error {
 	m.prober.RegisterIdentifier(codexProvider.Type(), codexProvider.Identify)
 	m.prober.RegisterReadiness(codexProvider.Type(), codex.NewReadinessChecker(c.Tmux))
 	c.Registry.Register("agent.prober", m.prober)
+
+	// Listen for config changes to update mutable module state.
+	c.OnConfigChange(func() {
+		c.CfgMu.RLock()
+		newDir := c.Cfg.UploadDir
+		c.CfgMu.RUnlock()
+		if newDir != "" {
+			m.mu.Lock()
+			m.uploadDir = newDir
+			m.mu.Unlock()
+		}
+	})
 
 	// Codex provider
 	m.registry.Register(codexProvider)
@@ -220,9 +165,6 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/status", m.handleAgentStatus)
 	mux.HandleFunc("GET /api/agents/detect", m.handleDetect)
 
-	// Arbitrator mode (read-only snapshot)
-	mux.Handle("GET /api/agent/arbitrator/mode", m.arbmodeHandler)
-
 	// History (delegates to provider)
 	mux.HandleFunc("GET /api/sessions/{code}/history", m.handleHistory)
 
@@ -248,23 +190,6 @@ func (m *Module) Start(_ context.Context) error {
 			m.sendSnapshot(sub)
 			m.sendStatuslineSnapshot(sub)
 		})
-	}
-
-	// Start Arbitrator goroutine + TraceWriter flush loop. Construction
-	// happens in Init; Start only spins up the runtime so the wiring mirrors
-	// the rest of the Module lifecycle (Init builds; Start runs; Stop
-	// cancels). When arbitrator is nil (degraded path), SubmitObservation
-	// returns immediately and nothing else runs.
-	if m.arbitrator != nil {
-		ctx, cancel := context.WithCancel(context.Background())
-		m.arbCancel = cancel
-		m.arbDone = make(chan struct{})
-		m.traceWriter.Start(ctx)
-		go func() {
-			defer close(m.arbDone)
-			m.arbitrator.Run(ctx)
-		}()
-		log.Println("[agent][arbitrator] Run started")
 	}
 
 	log.Println("[agent] hook event endpoint registered")
@@ -293,17 +218,6 @@ func (m *Module) Stop(_ context.Context) error {
 	m.mu.Unlock()
 	if m.traceSink != nil {
 		m.traceSink.Close()
-	}
-	if m.arbCancel != nil {
-		m.arbCancel()
-		<-m.arbDone
-		shutCtx, shutCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		if m.traceWriter != nil {
-			_ = m.traceWriter.Shutdown(shutCtx)
-		}
-		shutCancel()
-		m.arbCancel = nil
-		log.Println("[agent][arbitrator] Run stopped")
 	}
 	return nil
 }
