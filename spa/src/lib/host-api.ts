@@ -230,6 +230,9 @@ export interface AgentMonitorChainSummary {
   latest_decision: string
   latest_step_reason: string
   step_count: number
+  // Lights envelope (PR-1b-0, #569); expected value e.g. "1.0.0-lights-1b".
+  // Optional to stay compatible with older daemons that omit the field.
+  schema_version?: string
 }
 
 export interface AgentMonitorStep {
@@ -250,6 +253,31 @@ export interface AgentMonitorStep {
   before_json: string
   after_json: string
   created_at: number
+  // Lights envelope (PR-1b-0, #569) — all optional because backend uses
+  // `omitempty` and older daemons will not send them. JSON-valued fields
+  // are typed as `unknown` intentionally; consumers must narrow before use
+  // (no `any` to avoid type erosion across the codebase).
+  source_kind?: string
+  action?: string
+  reason_code?: string
+  outcome?: string
+  scenario_key?: string
+  observed_generation?: number
+  decision_ports?: unknown
+  phase?: string
+  status?: string
+  watcher_token?: string
+  trace_id?: string
+  reason_text?: string
+  attrs?: unknown
+  input_refs?: unknown
+  output_refs?: unknown
+  state_before_ref?: unknown
+  state_after_ref?: unknown
+  evidence_refs?: unknown
+  started_at?: number
+  ended_at?: number
+  otel_kind?: string
 }
 
 export interface AgentMonitorStepNode {
