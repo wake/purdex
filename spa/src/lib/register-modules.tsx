@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { registerModule } from './module-registry'
 import { registerNewTabProvider } from './new-tab-registry'
-import { registerSettingsSection } from './settings-section-registry'
+import { registerSettingsSection, clearLegacyPending } from './settings-section-registry'
 import { clearContributions } from './settings-contribution-registry'
 import { dispatchSettingsContributions } from './dispatch-settings-contributions'
 import { findPane } from './pane-tree'
@@ -89,7 +89,13 @@ export { dispatchSettingsContributions } from './dispatch-settings-contributions
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
+    // F2: the HMR dispose hook must clear BOTH the committed contribution
+    // registry AND the legacy adapter's pending buffers. Clearing only the
+    // registry leaves pending legacy entries to accumulate across HMR
+    // re-runs, producing duplicate sidebar rows and stale reserved entries
+    // that were renamed in the edit that triggered HMR.
     clearContributions()
+    clearLegacyPending()
   })
 }
 

@@ -181,6 +181,53 @@ describe('settings-section-registry', () => {
     expect(getSettingsSections().find((s) => s.id === 'a1')?.component).toBe(FakeComponent2)
   })
 
+  // --- F2: reserved ↔ active cross-delete on upsert ------------------------
+
+  describe('F2: reserved ↔ active cross-delete on upsert', () => {
+    it('reserved → active: second register removes the reserved entry', () => {
+      registerSettingsSection({ id: 'x', label: 'X', order: 10 }) // reserved
+      registerSettingsSection({ id: 'x', label: 'X', order: 10, component: FakeComponent }) // active
+      dispatchSettingsContributions([])
+      expect(listReservedItems().find((r) => r.id === 'x')).toBeUndefined()
+      const active = listContributions('purdex').filter((c) => c.localId === 'x')
+      expect(active).toHaveLength(1)
+    })
+
+    it('active → reserved: second register removes the active pending entry', () => {
+      registerSettingsSection({ id: 'x', label: 'X', order: 10, component: FakeComponent }) // active
+      registerSettingsSection({ id: 'x', label: 'X', order: 10 }) // reserved
+      dispatchSettingsContributions([])
+      expect(listContributions('purdex').find((c) => c.localId === 'x')).toBeUndefined()
+      const reserved = listReservedItems().filter((r) => r.id === 'x')
+      expect(reserved).toHaveLength(1)
+      expect(reserved[0].component).toBeUndefined()
+    })
+
+    it('sidebar row count for id stays at 1 across reserved ↔ active transitions', () => {
+      // reserved → active → reserved → active
+      registerSettingsSection({ id: 'x', label: 'X', order: 10 })
+      registerSettingsSection({ id: 'x', label: 'X', order: 10, component: FakeComponent })
+      registerSettingsSection({ id: 'x', label: 'X', order: 10 })
+      registerSettingsSection({ id: 'x', label: 'X', order: 10, component: FakeComponent2 })
+      dispatchSettingsContributions([])
+
+      const reserved = listReservedItems().filter((r) => r.id === 'x')
+      const active = listContributions('purdex').filter((c) => c.localId === 'x')
+      expect(reserved.length + active.length).toBe(1)
+      // Landed on active (last registration had a component).
+      expect(active).toHaveLength(1)
+    })
+
+    it('active-before-reserved drop: pending active declaration must not survive after reserved upsert', () => {
+      // Regression guard — previously the active pending entry leaked through
+      // even when the same id was later declared reserved, producing a zombie
+      // sidebar row after dispatch.
+      registerSettingsSection({ id: 'ghost', label: 'Ghost', order: 10, component: FakeComponent })
+      registerSettingsSection({ id: 'ghost', label: 'Ghost', order: 10 })
+      expect(drainLegacyContributionQueue()).toEqual([])
+    })
+  })
+
   // --- HMR dispose: N1 double-clear guarantee ------------------------------
 
   it('HMR dispose: clearLegacyPending clears both active pending buffer AND reserved map', () => {

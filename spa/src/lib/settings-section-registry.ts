@@ -63,10 +63,19 @@ function wrapLegacyComponent(
 
 export function registerSettingsSection(def: SettingsSectionDef): void {
   if (def.component === undefined) {
-    // Reserved — never flow into the new registry.
+    // Reserved — never flow into the new registry. F2: also remove any
+    // stale active pending entry for the same id so a later reserved
+    // registration wins (reserved ↔ active transitions must leave only one
+    // row in the sidebar).
+    pendingLegacyContributions.delete(def.id)
     pendingReservedItems.set(def.id, def)
     return
   }
+
+  // F2: active registration must remove any prior reserved entry for the
+  // same id — otherwise a reserved → active transition leaves a zombie
+  // reserved row alongside the newly active one.
+  pendingReservedItems.delete(def.id)
 
   const wrapped = wrapLegacyComponent(def.component)
   const decl: LegacyContributionDeclaration = {
