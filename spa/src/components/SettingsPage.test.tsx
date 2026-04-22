@@ -274,3 +274,90 @@ describe('SettingsPage (registry-driven)', () => {
     expect(screen.getByTestId('workspace-settings-mock').textContent).toBe('ws:wsA')
   })
 })
+
+// ---------------------------------------------------------------------------
+// F7 — shell honors `disabled(ctx)`. A contribution that is disabled under
+// the current ctx must NOT mount its component, even if the URL / default
+// selection would otherwise pick it. Shell self-heals to the first
+// non-disabled section (matching the "invalid section" pattern).
+// ---------------------------------------------------------------------------
+
+describe('SettingsPage (F7: disabled contribution gating)', () => {
+  beforeEach(() => {
+    resetLastSection()
+    clearSettingsSectionRegistry()
+    clearContributions()
+    clearModuleRegistry()
+  })
+
+  it('does NOT mount the active component when disabled(ctx) returns true', () => {
+    const Alive = () => <div>ALIVE_BODY</div>
+    const Dead = () => <div>DEAD_BODY</div>
+    registerSettingsContribution({
+      moduleId: 'mod', id: 'mod.alive', localId: 'alive',
+      scope: 'purdex', order: 0, labelKey: 'Alive', component: Alive,
+    })
+    registerSettingsContribution({
+      moduleId: 'mod', id: 'mod.dead', localId: 'dead',
+      scope: 'purdex', order: 1, labelKey: 'Dead', component: Dead,
+      disabled: () => true,
+    })
+
+    // Deep-link straight to the disabled section.
+    const { hook, history } = memoryLocation({ path: '/settings/dead', record: true })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    // Dead component did not render.
+    expect(screen.queryByText('DEAD_BODY')).toBeNull()
+    // Alive (first non-disabled) is mounted instead.
+    expect(screen.getByText('ALIVE_BODY')).toBeTruthy()
+    // URL self-heals to the first non-disabled section.
+    expect((history as string[]).at(-1)).toBe('/settings/alive')
+  })
+
+  it('mounts the component normally when disabled(ctx) returns false', () => {
+    const Alive = () => <div>ALIVE_BODY_2</div>
+    registerSettingsContribution({
+      moduleId: 'mod', id: 'mod.alive', localId: 'alive',
+      scope: 'purdex', order: 0, labelKey: 'Alive', component: Alive,
+      disabled: () => false,
+    })
+
+    const { hook } = memoryLocation({ path: '/settings/alive', record: true })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    expect(screen.getByText('ALIVE_BODY_2')).toBeTruthy()
+  })
+
+  it('treats disabled default (first) as invalid and picks next non-disabled section', () => {
+    const First = () => <div>FIRST_BODY</div>
+    const Second = () => <div>SECOND_BODY</div>
+    registerSettingsContribution({
+      moduleId: 'mod', id: 'mod.first', localId: 'first',
+      scope: 'purdex', order: 0, labelKey: 'First', component: First,
+      disabled: () => true,
+    })
+    registerSettingsContribution({
+      moduleId: 'mod', id: 'mod.second', localId: 'second',
+      scope: 'purdex', order: 1, labelKey: 'Second', component: Second,
+    })
+
+    // Bare /settings — the default would otherwise be `first` by order.
+    const { hook, history } = memoryLocation({ path: '/settings', record: true })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    expect(screen.queryByText('FIRST_BODY')).toBeNull()
+    expect(screen.getByText('SECOND_BODY')).toBeTruthy()
+    // URL should reflect the actual mounted section.
+    expect((history as string[]).at(-1)).toBe('/settings/second')
+  })
+})
