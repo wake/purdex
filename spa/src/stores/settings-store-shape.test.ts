@@ -142,7 +142,23 @@ describe('deepFreeze', () => {
     const frozen = deepFreeze(a)
     expect(Object.isFrozen(frozen)).toBe(true)
     expect(frozen.name).toBe('root')
-    // Cycle is preserved by short-circuiting on revisit
-    expect(frozen.self).toBeDefined()
+    // Cycle resolves to the frozen clone (self-reference preserved + frozen)
+    expect(frozen.self).toBe(frozen)
+    expect(Object.isFrozen(frozen.self!)).toBe(true)
+  })
+
+  it('aliased subgraphs resolve to the same frozen clone, not the mutable original (R3 codex)', () => {
+    const shared = { count: 1 }
+    const input = { a: shared, b: shared }
+    const frozen = deepFreeze(input)
+    // Both slots point to the SAME frozen clone — no mutable original leak
+    expect(frozen.a).toBe(frozen.b)
+    expect(Object.isFrozen(frozen.a)).toBe(true)
+    expect(frozen.a).not.toBe(shared)
+    expect(() => {
+      ;(frozen.b as { count: number }).count = 999
+    }).toThrow()
+    // The original `shared` stays mutable (we only froze the clone)
+    expect(shared.count).toBe(1)
   })
 })
