@@ -24,13 +24,28 @@ type sessionGen struct {
 // actorSummary is the per-actor projection used by the Arbitrator's apply
 // pipeline. Fields are plain values so individual step functions can mutate
 // them through a single `update` closure passed to upsertActor.
+//
+// LastAcceptedSource / LastAcceptedStatus record the source-kind and
+// SuggestStatus of the most recently accepted Observation for this actor.
+// Task 6's step-5 (source priority) reads these to decide whether an
+// incoming lower-priority source should still win (e.g. probe.error override
+// hook.waiting per spec §3.4.1 #5).
 type actorSummary struct {
-	EndedAt       *time.Time
-	EndedReason   string
-	LastActivity  time.Time
-	Status        string
-	WatcherTokens map[string]string // probe_id → current token
-	IsPrimary     bool
+	EndedAt            *time.Time
+	EndedReason        string
+	LastActivity       time.Time
+	Status             string
+	WatcherTokens      map[string]string // probe_id → current token
+	IsPrimary          bool
+	LastAcceptedSource observation.SourceKind
+	LastAcceptedStatus string
+}
+
+// GetLastActivity satisfies the reconcile package's actorLivenessView contract.
+// Task 6 supplies allActiveActorsView as the adapter from the concrete actor
+// map to the read-only projection reconcile consumes.
+func (a *actorSummary) GetLastActivity() time.Time {
+	return a.LastActivity
 }
 
 // newFrameState returns an empty frameState with its session map initialized.
@@ -183,4 +198,41 @@ func (f *frameState) actor(key observation.ActorKey) (*actorSummary, bool) {
 	}
 	a, ok := sess.Actors[key]
 	return a, ok
+}
+
+// findPrimary returns the ActorKey of the current primary actor in sessionID
+// (restricted to the current generation and not-yet-ended), or (zero, false)
+// if none exists. Task 6's enforceSinglePrimaryInvariant uses this to identify
+// the soon-to-be-displaced primary before calling setPrimary (so it can emit
+// the synthetic "replaced_by_new_primary" trace against the displaced key).
+func (f *frameState) findPrimary(sessionID string) (observation.ActorKey, bool) {
+	sess, ok := f.sessions[sessionID]
+	if !ok {
+		return observation.ActorKey{}, false
+	}
+	for key, a := range sess.Actors {
+		if key.Generation != sess.Generation {
+			continue
+		}
+		if a.EndedAt != nil {
+			continue
+		}
+		if a.IsPrimary {
+			return key, true
+		}
+	}
+	return observation.ActorKey{}, false
+}
+
+// allActiveActorsView adapts allActiveActors() into a map of read-only
+// projections, satisfying the actorLivenessView contract used by reconcile.
+// The returned map is a fresh allocation; callers may retain it past the
+// next mutation of frameState.
+func (f *frameState) allActiveActorsView() map[observation.ActorKey]actorLivenessView {
+	active := f.allActiveActors()
+	out := make(map[observation.ActorKey]actorLivenessView, len(active))
+	for key, a := range active {
+		out[key] = a
+	}
+	return out
 }
