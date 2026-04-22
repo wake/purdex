@@ -21,6 +21,7 @@ import {
 } from './settings-section-registry'
 import { clearInterfaceSubsectionRegistry, getInterfaceSubsections } from './interface-subsection-registry'
 import { registerBuiltinModules, dispatchSettingsContributions } from './register-modules'
+import { resetDeprecationWarningsForTest } from './dispatch-settings-contributions'
 import {
   clearContributions,
   listContributions,
@@ -393,5 +394,79 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
       expect(legacyView).toContain(id)
     }
     expect(legacyView).not.toContain('workspace')
+  })
+})
+
+describe('ModuleDefinition.globalConfig / workspaceConfig deprecation (PR-5)', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    clearAll()
+    resetDeprecationWarningsForTest()
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    warnSpy.mockRestore()
+    clearAll()
+  })
+
+  it('warns when a non-files module uses globalConfig', () => {
+    registerModule({
+      id: 'fakemod',
+      name: 'Fake',
+      globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+    })
+    dispatchSettingsContributions()
+    const msgs = (warnSpy.mock.calls as unknown[][]).map((c) => String(c[0]))
+    expect(msgs.some((m: string) => m.includes('fakemod') && m.includes('deprecated'))).toBe(true)
+  })
+
+  it('warns when a non-files module uses workspaceConfig', () => {
+    registerModule({
+      id: 'fakews',
+      name: 'Fake WS',
+      workspaceConfig: [{ key: 'x', type: 'string', label: 'x' }],
+    })
+    dispatchSettingsContributions()
+    const msgs = (warnSpy.mock.calls as unknown[][]).map((c) => String(c[0]))
+    expect(msgs.some((m: string) => m.includes('fakews') && m.includes('deprecated'))).toBe(true)
+  })
+
+  it('does NOT warn for files module (exempted during transition)', () => {
+    registerModule({
+      id: 'files',
+      name: 'Files',
+      workspaceConfig: [{ key: 'projectPath', type: 'string', label: '專案路徑' }],
+    })
+    dispatchSettingsContributions()
+    const msgs = (warnSpy.mock.calls as unknown[][]).map((c) => String(c[0]))
+    expect(msgs.some((m: string) => m.includes('files') && m.includes('deprecated'))).toBe(false)
+  })
+
+  it('does NOT warn for modules using new `settings` field', () => {
+    registerModule({
+      id: 'newmod',
+      name: 'New',
+      settings: [
+        { localId: 'x', scope: 'purdex', order: 0, labelKey: 'x', component: FakeComponent },
+      ],
+    })
+    dispatchSettingsContributions()
+    const msgs = (warnSpy.mock.calls as unknown[][]).map((c) => String(c[0]))
+    expect(msgs.some((m: string) => m.includes('newmod') && m.includes('deprecated'))).toBe(false)
+  })
+
+  it('de-dupes: repeated dispatch for the same module/scope warns only once', () => {
+    registerModule({
+      id: 'dedupe',
+      name: 'Dedupe',
+      globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+    })
+    dispatchSettingsContributions()
+    dispatchSettingsContributions()
+    dispatchSettingsContributions()
+    const hits = (warnSpy.mock.calls as unknown[][]).filter((c) => String(c[0]).includes('dedupe')).length
+    expect(hits).toBe(1)
   })
 })

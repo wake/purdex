@@ -25,6 +25,41 @@ import type {
 // moduleId. Centralized so PR-3/4 can reuse the same pattern.
 const LEGACY_SECTION_MODULE_ID = '_builtin.legacy-section'
 
+// PR-5 deprecation: module authors using `globalConfig` / `workspaceConfig`
+// should migrate to `settings: [{ scope, localId }]`. `files` is exempt until
+// the files owner completes its refactor.
+const DEPRECATED_LEGACY_CONFIG_EXEMPT: ReadonlySet<string> = new Set(['files'])
+const warnedDeprecationKeys = new Set<string>()
+
+function warnLegacyConfigDeprecations(modules: readonly ModuleDefinition[]): void {
+  for (const m of modules) {
+    if (DEPRECATED_LEGACY_CONFIG_EXEMPT.has(m.id)) continue
+    if (m.globalConfig && m.globalConfig.length > 0) {
+      const key = `${m.id}:global`
+      if (!warnedDeprecationKeys.has(key)) {
+        warnedDeprecationKeys.add(key)
+        console.warn(
+          `[module] ${m.id} uses deprecated globalConfig; migrate to settings: [{ scope: 'purdex', localId }]`,
+        )
+      }
+    }
+    if (m.workspaceConfig && m.workspaceConfig.length > 0) {
+      const key = `${m.id}:workspace`
+      if (!warnedDeprecationKeys.has(key)) {
+        warnedDeprecationKeys.add(key)
+        console.warn(
+          `[module] ${m.id} uses deprecated workspaceConfig; migrate to settings: [{ scope: 'workspace', localId }]`,
+        )
+      }
+    }
+  }
+}
+
+// Test-only reset — exposed so dedupe state doesn't leak across test cases.
+export function resetDeprecationWarningsForTest(): void {
+  warnedDeprecationKeys.clear()
+}
+
 function assertNoLegacyScopeConflict(module: ModuleDefinition): void {
   const settings = module.settings
   if (!settings || settings.length === 0) return
@@ -178,6 +213,11 @@ export function buildSettingsContributionBatch(
 export function dispatchSettingsContributions(
   modules: ModuleDefinition[] = getModules(),
 ): void {
+  // PR-5 deprecation warnings: detect legacy API usage before validation.
+  // Runs only when Phase 1 succeeds (wrapped below) to avoid noise on
+  // validation failures that would otherwise be retried.
+  warnLegacyConfigDeprecations(modules)
+
   // Phase 1 — validate without mutating. Throws on any collision (F1) or
   // invariant violation. The legacy queue is peeked, not drained.
   const batch = buildSettingsContributionBatch(modules)
