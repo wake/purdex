@@ -134,6 +134,7 @@ describe('MonacoWrapper', () => {
         content="hello"
         language="markdown"
         modelId="model-1"
+        isActive={true}
         initialViewState={null}
         onChange={() => {}}
         onCursorChange={() => {}}
