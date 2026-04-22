@@ -41,16 +41,19 @@ export function sanitizeScopedModuleMap(value: unknown): ScopedModuleMap {
 }
 
 // Recursively clone + freeze so `get()` consumers can't bypass persist/sync
-// via `snapshot.nested.x = ...`. Primitives and already-frozen refs pass
-// through untouched; plain objects and arrays are shallow-cloned so the
-// returned graph is detached from store-internal state.
-export function deepFreeze<T>(value: T): T {
+// via `snapshot.nested.x = ...`. We never short-circuit on `Object.isFrozen`:
+// a shallow-frozen input (e.g. `Object.freeze({ nested: {...} })`) would still
+// leak a mutable nested ref — the whole point is that the *returned* graph is
+// fully frozen regardless of input shape. A WeakSet breaks cycles so exotic
+// payloads can't blow the stack.
+export function deepFreeze<T>(value: T, seen: WeakSet<object> = new WeakSet()): T {
   if (value === null || typeof value !== 'object') return value
-  if (Object.isFrozen(value)) return value
+  if (seen.has(value as object)) return value as T
+  seen.add(value as object)
   const clone: unknown = Array.isArray(value)
-    ? (value as unknown[]).map((item) => deepFreeze(item))
+    ? (value as unknown[]).map((item) => deepFreeze(item, seen))
     : Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, deepFreeze(v)]),
+        Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, deepFreeze(v, seen)]),
       )
   return Object.freeze(clone) as T
 }

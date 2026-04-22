@@ -123,9 +123,26 @@ describe('deepFreeze', () => {
     }).toThrow()
   })
 
-  it('passes already-frozen inputs through without re-cloning', () => {
-    const input = Object.freeze({ a: 1 })
-    const result = deepFreeze(input)
-    expect(result).toBe(input)
+  it('still deep-freezes a shallow-frozen container (no short-circuit on Object.isFrozen)', () => {
+    // Regression (R2 codex): prior impl bailed early on Object.isFrozen(input),
+    // leaving any mutable nested refs intact and still shared with the caller.
+    const shallow = Object.freeze({ nested: { x: 1 } })
+    const result = deepFreeze(shallow)
+    expect(Object.isFrozen(result.nested)).toBe(true)
+    expect(result.nested).not.toBe(shallow.nested)
+    expect(() => {
+      ;(result.nested as { x: number }).x = 999
+    }).toThrow()
+  })
+
+  it('survives cyclic inputs without stack overflow', () => {
+    type Node = { name: string; self?: Node }
+    const a: Node = { name: 'root' }
+    a.self = a
+    const frozen = deepFreeze(a)
+    expect(Object.isFrozen(frozen)).toBe(true)
+    expect(frozen.name).toBe('root')
+    // Cycle is preserved by short-circuiting on revisit
+    expect(frozen.self).toBeDefined()
   })
 })
