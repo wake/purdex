@@ -81,6 +81,56 @@ describe('file-path opener', () => {
     expect(deps.insertTab).not.toHaveBeenCalled()
   })
 
+  it('inserts into link-source workspace when ctx.workspaceId is set (R2 codex)', async () => {
+    const deps = makeDeps()
+    const o = createFilePathOpener(deps)
+    await o.open(
+      fileToken,
+      { hostId: 'h1', workspaceId: 'ws-source' },
+      new MouseEvent('click'),
+    )
+    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-source')
+  })
+
+  it('prefers link-source workspace even when active workspace changes mid-await (R2 codex)', async () => {
+    const deps = makeDeps()
+    // Simulate an active-workspace switch racing the tilde resolve
+    deps.fetchPaneHome.mockImplementationOnce(async () => {
+      deps.getActiveWorkspaceId.mockReturnValue('ws-after')
+      return '/home/user'
+    })
+    const o = createFilePathOpener(deps)
+    await o.open(
+      { ...fileToken, text: '~/x.ts', meta: { path: '~/x.ts' } },
+      { hostId: 'h1', sessionCode: 's1', workspaceId: 'ws-source' },
+      new MouseEvent('click'),
+    )
+    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-source')
+  })
+
+  it('prefers link-source workspace when active changes during cwd resolve for relative paths (R2 codex)', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneCwd.mockImplementationOnce(async () => {
+      deps.getActiveWorkspaceId.mockReturnValue('ws-after')
+      return '/home/user/proj'
+    })
+    const o = createFilePathOpener(deps)
+    await o.open(
+      { ...fileToken, text: 'rel.ts', meta: { path: 'rel.ts' } },
+      { hostId: 'h1', sessionCode: 's1', workspaceId: 'ws-source' },
+      new MouseEvent('click'),
+    )
+    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-source')
+  })
+
+  it('no-op when ctx.workspaceId undefined and active workspace is null (R2 codex)', async () => {
+    const deps = makeDeps()
+    deps.getActiveWorkspaceId.mockReturnValue(null)
+    const o = createFilePathOpener(deps)
+    await o.open(fileToken, { hostId: 'h1' /* no workspaceId */ }, new MouseEvent('click'))
+    expect(deps.insertTab).not.toHaveBeenCalled()
+  })
+
   it('no-op when direct open without meta.path (canOpen bypass)', async () => {
     const deps = makeDeps()
     const o = createFilePathOpener(deps)

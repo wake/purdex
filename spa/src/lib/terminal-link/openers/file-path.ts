@@ -91,6 +91,15 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
       if (typeof rawPath !== 'string') return
       if (!ctx.hostId) return
 
+      // R2 codex: snapshot the tab's target workspace before any await.
+      // Prefer the link-source workspace from LinkContext (plumbed through
+      // SessionPaneContent) so a workspace switch during async path / home
+      // resolution can't place the tab into the wrong workspace. Only fall
+      // back to live active workspace for standalone panes (ctx.workspaceId
+      // undefined).
+      const targetWorkspaceId = ctx.workspaceId ?? deps.getActiveWorkspaceId()
+      if (!targetWorkspaceId) return
+
       let path = rawPath
       if (path.startsWith('~/')) {
         if (!ctx.sessionCode) return
@@ -149,10 +158,8 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
       if (!opener) return
       const source: FileSource = { type: 'daemon', hostId: ctx.hostId }
       const content = opener.createContent(source, file)
-      const wsId = deps.getActiveWorkspaceId()
-      if (!wsId) return
       const tabId = deps.openSingletonTab(content)
-      deps.insertTab(tabId, wsId)
+      deps.insertTab(tabId, targetWorkspaceId)
     },
   }
 }
