@@ -436,16 +436,18 @@ func (d *applyDeps) writeDivergenceIfAny(obs observation.Observation) {
         TraceID: obs.TraceID,
         EventID: obs.SpanID,
         ObservedGeneration: obs.ObservedGeneration,
-        OldStateRef: mustJSON(legacyFrame),
-        ProposalStateRef: mustJSON(projected),
+        OldStateRef: mustJSON(legacyFrame),       // json.RawMessage
+        ProposalStateRef: mustJSON(projected),    // json.RawMessage
         DiffSummary: humanDiff(legacyFrame, projected),
-        Matched: 0,
+        Matched: false,                            // bool — 僅在有 divergence 時寫 row
         ReasonCode: obs.ReasonCode,
         CreatedAt: d.now().UnixNano(),
     })
     metrics.Inc("lights_divergence_total", "matched=0")
 }
 ```
+
+> 實際 `store.FrameDivergence.Matched` 型別是 `bool`（Insert 時 driver 轉為 INTEGER column：true=1 / false=0）；`OldStateRef` / `ProposalStateRef` 是 `json.RawMessage`（存為 TEXT），`mustJSON(v)` 回 `json.RawMessage`。
 
 Divergence 寫失敗只 log，不影響 apply（passthrough 本身就是 observability 層）。
 
