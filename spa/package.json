@@ -1,7 +1,7 @@
 {
   "name": "spa",
   "private": true,
-  "version": "1.0.0-alpha.208",
+  "version": "1.0.0-alpha.209",
   "type": "module",
   "scripts": {
     "dev": "vite",

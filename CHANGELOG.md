@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.209] - 2026-04-23
+
+### Feat(spa): HSR PR-4 follow-up — #586 batch-replace + #588 reactive host runtime (#593)
+
+- **#586 host built-in batch-replace + transactional commit**：`registerBuiltinHostSection()` + pending-buffer/drain 移除，改為 `setHostBuiltinSections(defs[])`（一次性 stage）+ `commitHostBuiltinSources()`（dispatch Phase 2 內 staged → live 原子 swap）。Wrapper identity 按 localId stable cache（HMR / drop+re-add 都不換 React component reference）；wrapper render 時讀 `liveSources` — dispatch 失敗時 `liveSources` 不變，不會出現 sidebar/route 與 body 內容 split-brain。`dispatchSettingsContributions()` 對 host built-ins 完全 idempotent（第二次 standalone call 不再清空，閉環 #586 原 bug）。Legacy adapter 仍走原 destructive drain（無 production trigger，#597 追蹤後續對稱化）。
+- **#588 reactive host runtime via `SettingsContextFor<'host'>.runtime`**：discriminated union 加 `runtime: HostRuntime | undefined` 必填欄位；HostPage 用兩段式 selective subscription（`preResolveHostId` 算 tentative hostId → `useHostStore((s) => s.runtime[tentativeHostId])` 只訂閱該 host，背景 host tick 不觸發重 render）；ctx 在 `resolvedHostId !== tentativeHostId` 時保守傳 `runtime: undefined`，避免錯誤把 host A runtime 套進 host B 的 disabled(ctx)。HostSidebar 跨 host 切換時優先保留 user 當前 selectedSubPage（若 target host 仍 selectable），否則 fallback 至 target host 第一個 selectable subPage — 消除 runtime-gated 模組情境的 visible blank-and-redirect 閃爍。
+- **HostPage isActive side-effect gate**：TabContent 用 `visibility:hidden` 保留非作用中 pane mounted；`lastSelection` 寫回 effect + canonical-path navigate effect 加 `isActive` gate，避免 hidden 實例污染 active 實例的 module-scoped lastSelection、避免 hidden 實例競爭 setLocation。Runtime selector 仍用真實值（不 fabricate undefined）以維持 hidden body 的 disabled(ctx) 評估正確（PR-4 「disabled body 不 mount」契約）。
+- **shared `pickHostIdFallback` helper**：把 `preResolveHostId` 與 `resolveSelection.getFallbackSelection` 共用的 fallback 順序（lastSel → activeHostId → hostOrder[0]）抽成單一 source of truth + 等價性測試 14。
+- **render-local lastSelection snapshot**：HostPage render 開頭 snapshot 一次傳到所有 helper，避免單 render cycle 內讀到不同 module-scoped 值（多 HostPage 實例 race 的 architectural mitigation；ownership refactor 由 #598 追蹤）。
+- 4 輪 codex review 收斂（spec R1 + plan R1 + R1+R2+R3 共 11 findings 修完，R4 standard clean）；3 個延後 follow-up：#596 (HostRuntime DTO 收窄)、#597 (legacy adapter idempotent)、#598 (host-builtin reset 邊界 + lastSelection ownership)。
+
 ## [1.0.0-alpha.208] - 2026-04-22
 
 ### Revert(lights): rip arbitrator / observation / arbmode stack + trace schema extensions (#594)
