@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.213] - 2026-04-23
+
+### Feat(spa): HSR PR-5 — Editor homePath first module user + #540 immutable snapshot + deprecation warn (#604)
+
+HSR 系列最後一棒。Editor module 透過新 `ModuleDefinition.settings` 宣告 `workspace-home-path` + `host-home-path` 兩個 contribution，作為整套 registry + 三層 store 架構的 real module validation proof。
+
+- Editor tilde path 層疊 resolve：workspace settings → host settings → pane shell fallback
+- `LinkContext` 擴 `workspaceId?`，由 `SessionPaneContent` 用 `findWorkspaceByTab()` 查後 plumbing 到 `TerminalView`（非 active — multi-workspace inactive pane 正確性）
+- 三層 store `get()` 改回 frozen deep-clone，WeakMap 處理 alias / cycle（closes #540）
+- 新增 `removeKey(scope, moduleId, key)` store API — section 清 homePath 不會誤刪 sibling 鍵
+- file-path opener 在 await 前 snapshot link-source workspaceId；standalone pane 延後讀 active
+- Editor home path input：focus ref + dirty ref + live store re-read，防 BroadcastChannel 同步覆寫 / stale snapshot
+- `ModuleDefinition.globalConfig` / `workspaceConfig` 加 `@deprecated` + register-time warn（豁免 `files`；de-dupe；HMR reset 會清）
+
+17 commits：plan §8 6 + R1 codex 3 + R2 codex (3-way adversarial) 5 + R3 codex 3。4 輪 review 收斂 HIGH/P1 → P2/P3 → known issues 追蹤（#607 workspace layer 在 mixed-host workspace 的 host scope 缺口 / #608 workspace 刪除中 opener orphan tab race）。
+
+測試新增 ~75 個 PR-5 cases 全綠，完整 suite 2644 passed（3 pre-existing hosts.test.ts fail 無關）。
+
 ## [1.0.0-alpha.212] - 2026-04-23
 
 ### Fix(dev): exec rebuilt daemon binary after rebuild (#605)
