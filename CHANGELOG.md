@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.210] - 2026-04-23
+
+### Fix(spa): focus WYSIWYG editor from empty clicks (#600)
+
+- `TiptapEditor` 把 Live Mode 空白區點擊視為 editor focus 請求，現在點擊整個 WYSIWYG 畫布都會把焦點導回實際的 `contenteditable` 輸入區。
+- 直接點在現有 editable 內容上的行為維持不變，只補上原本落在空白區時不會 focus 的缺口。
+- 新增回歸測試，覆蓋點擊 editor 空白區會觸發 focus 的行為。
+
 ## [1.0.0-alpha.209] - 2026-04-23
 
 ### Feat(spa): HSR PR-4 follow-up — #586 batch-replace + #588 reactive host runtime (#593)
