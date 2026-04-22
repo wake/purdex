@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.202] - 2026-04-22
+
+### Feat(spa): HSR PR-2 — Purdex settings shell + legacy adapter (dispatch-flushed) (#558)
+
+- `SettingsPage` 的 `GlobalSettingsPage` 與 `SettingsSidebar` 改為 registry-driven，讀 `listContributions('purdex')` + `listReservedItems()`，並向 active component 注入 `ctx: { scope: 'purdex' }`（spec §5.3 rule 4 — ctx 由 shell 產生）。
+- `settings-section-registry.ts` 由直接寫 registry 改為 **pending-buffer adapter**：active 項 push 到 `pendingLegacyContributions`（upsert by id），reserved 項寫入 `pendingReservedItems: Map<string, SettingsSectionDef>`（upsert）；`dispatchSettingsContributions()` Phase 2 在 `clearContributions()` 後以 `drainLegacyContributionQueue()` 統一 drain + register，滿足 spec §7.2 dispatch-flushed 硬約束（避免 legacy 被 clearContributions 整批清掉的 regression）。
+- 同 commit 完成 #539 收斂：`registerSettingsContribution` / `clearContributions` / `assertValidSettingsContribution` 標為 `@internal`，並以 ESLint `no-restricted-imports` 限定僅 `dispatch-settings-contributions.ts` / `settings-section-registry.ts` / test 可 import 寫入 API；HMR dispose 走單一 `resetSettingsContributionsForHmr()` helper 同清 registry + pending buffer。
+- React component identity 透過 `wrapLegacyComponent` + `WeakMap<WrappedComp, OrigComp>` 逆查保留（`toLegacyShape` unwrap 後 `component === 原 passed-in Comp`）。
+- 3 輪 codex review（R1 標準 + R2 三路對抗 + R3 確認）全部收斂：R1/R2 HIGH findings（shell 用 localId 當全域 route key / reserved↔active 雙 Map 無互斥清理 / dispatch destructive drain / @internal 無 runtime 護欄）於 F1-F4 commit 修復；R3 P2 findings（localId regex 對不齊 parseRoute / sidebar 未評估 `disabled(ctx)`）於 F6/F7 commit 修復。
+- F1：dispatch-time 新增 per-scope localId 唯一性 assertion（同 scope 跨 module 同 localId → throw）；保留 URL `/settings/<localId>` 向後相容。
+- F2：reserved ↔ active 互斥清理（每次 `registerSettingsSection` 寫入先刪對方 buffer 同 id 項）；workspace reserved → active 升級（PR-3 動作）不再留殭屍列。
+- F3：`peekLegacyContributionQueue()` snapshot + validate-before-commit；dispatch 驗證失敗時 queue 保留供 retry。
+- F6：`SETTINGS_LOCAL_ID_RE` 共用 const（`/^[a-z0-9-]{1,32}$/`），registry validator 與 `route-utils.ts` 同源；既有 built-in 10 個 localId 全部 conform。
+- F7：單一 `isSelectable()` predicate 貫穿 sidebar / self-heal / initial state picker / handleSelectSection guard / ActiveComponent gate；`disabled(ctx)` 評估 + `disabledReasonKey` i18n tooltip；deep-link 到 disabled section → URL replace 到第一個 selectable。
+- 延後 follow-up issue：#563（registry.ts SRP refactor，Backlog；等 PR-5 後 adapter scope 穩定再處理）；#538/#540/#541 持續由後續 PR-3/4/5 解。
+- 本 PR 僅含 Purdex 層 shell 遷移；`WorkspaceSettingsPage` / `HostPage` 改 registry-driven 與 Editor module 首個用例由 PR-3/4/5 接手。
+
 ## [1.0.0-alpha.201] - 2026-04-22
 
 ### Fix(spa): restore lint and build baseline (#556)
