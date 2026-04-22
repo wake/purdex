@@ -62,4 +62,23 @@ describe('EditorHomePathWorkspaceSection', () => {
     const { container } = render(<EditorHomePathWorkspaceSection ctx={wrongCtx} />)
     expect(container.innerHTML).toBe('')
   })
+
+  it('normalizes trailing whitespace back to the input on blur (R1 codex)', () => {
+    useWorkspaceSettingsStore.getState().set('wsA', 'editor', { homePath: '/Users/x' })
+    render(<EditorHomePathWorkspaceSection ctx={ctx} />)
+    const input = screen.getByLabelText(/home path/i) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '/Users/x ' } })
+    fireEvent.blur(input)
+    expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toEqual({ homePath: '/Users/x' })
+    expect(input.value).toBe('/Users/x')
+  })
+
+  it('normalizes pure-whitespace input to empty on blur when nothing is stored', () => {
+    render(<EditorHomePathWorkspaceSection ctx={ctx} />)
+    const input = screen.getByLabelText(/home path/i) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '   ' } })
+    fireEvent.blur(input)
+    expect(input.value).toBe('')
+    expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toBeUndefined()
+  })
 })

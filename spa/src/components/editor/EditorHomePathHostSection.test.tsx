@@ -61,4 +61,25 @@ describe('EditorHomePathHostSection', () => {
     const { container } = render(<EditorHomePathHostSection ctx={wrongCtx} />)
     expect(container.innerHTML).toBe('')
   })
+
+  it('normalizes trailing whitespace back to the input on blur (R1 codex)', () => {
+    useHostSettingsStore.getState().set('h1', 'editor', { homePath: '/home/y' })
+    render(<EditorHomePathHostSection ctx={ctx} />)
+    const input = screen.getByLabelText(/home path/i) as HTMLInputElement
+    // User adds a trailing space — same trimmed value, still a no-op commit
+    fireEvent.change(input, { target: { value: '/home/y ' } })
+    fireEvent.blur(input)
+    // Store is unchanged and the UI reflects the trimmed value
+    expect(useHostSettingsStore.getState().get('h1', 'editor')).toEqual({ homePath: '/home/y' })
+    expect(input.value).toBe('/home/y')
+  })
+
+  it('normalizes pure-whitespace input to empty on blur when nothing is stored', () => {
+    render(<EditorHomePathHostSection ctx={ctx} />)
+    const input = screen.getByLabelText(/home path/i) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '   ' } })
+    fireEvent.blur(input)
+    expect(input.value).toBe('')
+    expect(useHostSettingsStore.getState().get('h1', 'editor')).toBeUndefined()
+  })
 })

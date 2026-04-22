@@ -23,6 +23,10 @@ function Body({ hostId }: { hostId: string }) {
 
   const commit = () => {
     const trimmed = draft.trim()
+    // Reflect normalization in the input even when the trimmed value matches
+    // the stored one — otherwise trailing whitespace lingers in the UI while
+    // persisted state is clean.
+    if (trimmed !== draft) setDraft(trimmed)
     if (trimmed === storedStr) return
     if (trimmed === '') {
       useHostSettingsStore.getState().clearModule(hostId, 'editor')
