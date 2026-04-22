@@ -361,6 +361,8 @@ func (a *Arbitrator) emitTraceOnly(entry *PendingEntry, reasonCode string) { ...
 
 **Promote fail 判定**：pass-through 階段以「observations 裡最後一筆的 StateProposal 是否有足夠 evidence」為準；實際判定 logic 留 1b-1c 定義，1b-1b 只實作骨架 + 測試 happy path / deadline drop / evict drop / coalesce cap。
 
+**延後項（PR-1b-1c）— production path 第一筆 pending entry 的 trigger logic（issue [#584](https://github.com/wake/purdex/issues/584)）**：1b-1b 只實作 sweep-override pending 與 addPending 骨架；spec §3.4.3 entry trigger（「role 判不出 / evidence 不足 ⇒ 先 stash 到 pending」）要等 hook/probe 實際產 obs 且 pid-tree 判定流程就位時才能定義 → 整組併入 1b-1c。
+
 ### D8. Reconcile loop
 
 ```go
