@@ -36,6 +36,8 @@ import { ImagePreviewPane } from '../components/editor/ImagePreviewPane'
 import { PdfPreviewPane } from '../components/editor/PdfPreviewPane'
 import { EditorNewTabSection } from '../components/editor/EditorNewTabSection'
 import { BufferListSection } from '../components/editor/BufferListSection'
+import { EditorHomePathWorkspaceSection } from '../components/editor/EditorHomePathWorkspaceSection'
+import { EditorHomePathHostSection } from '../components/editor/EditorHomePathHostSection'
 import { InAppBackend } from './fs-backend-inapp'
 import { DaemonBackend } from './fs-backend-daemon'
 import { LocalBackend } from './fs-backend-local'
@@ -173,6 +175,22 @@ export function registerBuiltinModules(): void {
       { kind: 'editor', component: EditorPane },
       { kind: 'image-preview', component: ImagePreviewPane },
       { kind: 'pdf-preview', component: PdfPreviewPane },
+    ],
+    settings: [
+      {
+        localId: 'workspace-home-path',
+        scope: 'workspace',
+        order: 0,
+        labelKey: 'editor.settings.home_path.workspace',
+        component: EditorHomePathWorkspaceSection,
+      },
+      {
+        localId: 'host-home-path',
+        scope: 'host',
+        order: 100,
+        labelKey: 'editor.settings.home_path.host',
+        component: EditorHomePathHostSection,
+      },
     ],
   })
 

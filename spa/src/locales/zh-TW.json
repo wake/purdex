@@ -416,6 +416,11 @@
   "editor.provider_label": "編輯器",
   "editor.new_file": "新增檔案",
   "editor.new_markdown": "新增 Markdown",
+  "editor.settings.home_path.workspace": "家目錄（Workspace）",
+  "editor.settings.home_path.host": "家目錄（Host）",
+  "editor.settings.home_path.description": "終端機連結中的 ~/foo 會以此目錄展開。Workspace 優先於 Host，未設定則回退到 pane shell。",
+  "editor.settings.home_path.placeholder": "自動偵測 pane shell",
+  "editor.settings.home_path.clear": "清除",
 
   "monitor.provider_label": "記憶體監控",
   "monitor.requires_app": "需要安裝桌面版本",
