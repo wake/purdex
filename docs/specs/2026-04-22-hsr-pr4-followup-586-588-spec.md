@@ -1,7 +1,7 @@
 # HSR PR-4 Follow-up — #586 + #588 (Architecture Polish)
 
 - **Date**: 2026-04-22
-- **Status**: Draft v1 (pending codex review)
+- **Status**: Draft v2 (post codex R1 — absorbed P2 #1-#2 + P3 #3-#4)
 - **Target**: `main` — post-alpha.206
 - **Scope**: Two architectural polish items closed together in one PR, as preparation for PR-5 (Editor module dynamic register).
 - **Related**:
@@ -100,43 +100,80 @@ No runtime field for host scope. To make `disabled(ctx)` reflect host-runtime re
 
 ## 4. Design
 
-### 4.1 #586 — stable source map (Option A)
+### 4.1 #586 — stable source map with batch-replace API (Option A, revised per codex R1 P2 #1+#2)
 
-Concept: host built-ins become a **stable registration source**, not a one-shot buffer. Every `dispatchSettingsContributions()` call re-materializes host-builtin declarations from the source map; the source map is only mutated by `registerBuiltinHostSection()` (population) and `clearHostBuiltinSources()` (HMR dispose / test reset).
+Concept: host built-ins become a **stable registration source**, not a one-shot buffer. Every `dispatchSettingsContributions()` call re-materializes host-builtin declarations from the source map; the source map is populated via a single **batch-replace** call (not one-at-a-time upsert), and the wrapper identity is **stable by `localId`** (never rebuilt across re-registrations / HMR reloads).
 
 #### 4.1.1 New `host-builtin-sections.ts` shape
 
+Two design corrections vs. v1 (per codex R1):
+
+- **Codex P2 #1 (partial re-register / no removal)** → replace one-at-a-time upsert with `setHostBuiltinSections(defs: HostBuiltinSectionDef[])` that atomically replaces the full set. Any `localId` not in the new list is dropped. HMR / test / re-dispatch contract: the set is **exactly** what the last call said.
+- **Codex P2 #2 (HMR identity)** → keep wrapper identity stable per `localId`. The cached wrapper closes over the `localId` and reads the *current* `component` via a live ref from the source map at render time. HMR-replacing `OverviewSection` updates the ref but reuses the same wrapper reference → React does NOT remount the body.
+
 ```ts
 interface HostBuiltinSource {
-  def: HostBuiltinSectionDef         // original inputs
-  wrapped: React.ComponentType<{ ctx: SettingsContextFor<'host'> }>  // cached wrapper
+  // Mutable fields — updated by setHostBuiltinSections(); wrapper reads via ref.
+  component: React.ComponentType<{ hostId: string }>
+  labelKey: string
+  order: number
+  // Stable: built once per localId, never reassigned.
+  wrapped: React.ComponentType<{ ctx: SettingsContextFor<'host'> }>
 }
 
-// Stable source map. Populated by registerBuiltinHostSection(),
-// read non-destructively by the dispatcher, cleared only on HMR dispose.
+// Stable source map. Populated by setHostBuiltinSections(), read non-
+// destructively by the dispatcher, cleared only on HMR dispose / reset.
 const hostBuiltinSources = new Map<string, HostBuiltinSource>()
 
-export function registerBuiltinHostSection(def: HostBuiltinSectionDef): void {
-  const existing = hostBuiltinSources.get(def.localId)
-  // Idempotent: if all user-visible fields unchanged, reuse the cached wrapper
-  // so React.ComponentType identity is stable across re-dispatches.
-  if (existing &&
-      existing.def.component === def.component &&
-      existing.def.labelKey === def.labelKey &&
-      existing.def.order === def.order) {
-    return
+function createHostBuiltinWrapper(localId: string): React.ComponentType<{ ctx: SettingsContextFor<'host'> }> {
+  // Closure over localId only; component read fresh from the source map on
+  // every render, so HMR-replacing the underlying section updates the render
+  // output without changing the wrapper's React component identity.
+  const Wrapped: React.FC<{ ctx: SettingsContextFor<'host'> }> = (props) => {
+    if (props.ctx.scope !== 'host') return null
+    const source = hostBuiltinSources.get(localId)
+    if (!source) return null   // defensive: localId dropped mid-render
+    return React.createElement(source.component, { hostId: props.ctx.hostId })
   }
-  const wrapped = createHostBuiltinWrapper(def)  // same scope-guard logic as today
-  hostBuiltinSources.set(def.localId, { def, wrapped })
+  Wrapped.displayName = `HostBuiltinWrap(${localId})`
+  return Wrapped
+}
+
+/**
+ * Replace the full set of built-in host sub-page sources atomically.
+ * Any localId present in the previous state but absent from `defs` is
+ * dropped; the wrapper for each retained localId is reused (stable
+ * React.ComponentType identity across re-registrations / HMR reloads).
+ * The next dispatchSettingsContributions() materializes exactly these.
+ */
+export function setHostBuiltinSections(defs: readonly HostBuiltinSectionDef[]): void {
+  const nextIds = new Set(defs.map((d) => d.localId))
+  // Drop localIds not in the new set.
+  for (const key of Array.from(hostBuiltinSources.keys())) {
+    if (!nextIds.has(key)) hostBuiltinSources.delete(key)
+  }
+  // Upsert each def; reuse wrapper when present so identity is stable.
+  for (const def of defs) {
+    const existing = hostBuiltinSources.get(def.localId)
+    const wrapped = existing?.wrapped ?? createHostBuiltinWrapper(def.localId)
+    hostBuiltinSources.set(def.localId, {
+      component: def.component,
+      labelKey: def.labelKey,
+      order: def.order,
+      wrapped,
+    })
+    // hostBuiltinComponentMap (WeakMap) kept in lockstep for identity tests:
+    hostBuiltinComponentMap.set(wrapped, def.component)
+  }
 }
 
 export function getHostBuiltinDeclarations(): readonly AnySettingsContributionDeclaration[] {
-  return Array.from(hostBuiltinSources.values(), (src) => ({
-    localId: src.def.localId,
+  return Array.from(hostBuiltinSources.entries(), ([localId, src]) => ({
+    localId,
     scope: 'host' as const,
-    order: src.def.order,
-    labelKey: src.def.labelKey,
-    component: src.wrapped,  // STABLE reference across dispatches
+    order: src.order,
+    labelKey: src.labelKey,
+    component: src.wrapped,  // STABLE reference across dispatches and HMR
   }))
 }
 
@@ -145,7 +182,11 @@ export function clearHostBuiltinSources(): void {
 }
 ```
 
-Removed: `pendingHostBuiltinContributions`, `peekHostBuiltinQueue`, `drainHostBuiltinQueue`, `clearHostBuiltinPending`. The WeakMap `hostBuiltinComponentMap` stays (identity test helper).
+Removed: `pendingHostBuiltinContributions`, `peekHostBuiltinQueue`, `drainHostBuiltinQueue`, `clearHostBuiltinPending`, **`registerBuiltinHostSection` (single-item API)**.
+
+Kept: `HOST_BUILTIN_MODULE_ID`, `HostBuiltinSectionDef` interface, `hostBuiltinComponentMap` WeakMap (identity test helper).
+
+**Callsite change** (`register-modules.tsx:399-404`): the six `registerBuiltinHostSection(...)` calls collapse into one `setHostBuiltinSections([ ...6 defs... ])` call. This is the only production callsite.
 
 #### 4.1.2 Dispatcher changes
 
@@ -182,9 +223,10 @@ clearHostBuiltinSources()  // renamed from clearHostBuiltinPending
 #### 4.1.3 Invariants restored
 
 - **Idempotent dispatch**: N consecutive `dispatchSettingsContributions()` calls (same module list, same built-in source map) yield identical live registry state.
-- **Order-independence**: `registerBuiltinHostSection()` may be called before or after any `registerModule()` without changing the end state; same for the ordering between the two categories.
-- **HMR safety**: `clearHostBuiltinSources()` runs in HMR dispose; the next `registerBuiltinModules()` repopulates without duplication.
-- **Component identity stability**: When `registerBuiltinHostSection()` is called twice with the same `def.component` / `def.labelKey` / `def.order`, the cached `wrapped` reference is preserved, so React does not remount built-in host sub-page bodies across re-dispatches.
+- **Order-independence**: `setHostBuiltinSections()` may be called before or after any `registerModule()` without changing the end state; same for the ordering between the two categories.
+- **Full-replace semantics**: a `setHostBuiltinSections(defs)` call defines the **exact** set; any `localId` not in `defs` is dropped. Rules out partial-re-register stale `localId` leak (codex R1 P2 #1).
+- **HMR safety**: `clearHostBuiltinSources()` runs in HMR dispose; the next `registerBuiltinModules()` repopulates via `setHostBuiltinSections()` without duplication. Additionally, HMR reloading a single host section file triggers `registerBuiltinModules()` re-run → `setHostBuiltinSections()` re-run → same `localId`s → wrapper identity preserved (closed over `localId`, not `component`), only the `component` field in the source record is refreshed.
+- **Component identity stability across HMR**: the wrapper for each `localId` is created once and reused on every subsequent `setHostBuiltinSections()` call, even when the underlying section component is a new reference (HMR reload case). React sees the same wrapper component type → no unmount of the host sub-page body; only the internal delegation resolves to the freshly reloaded section (codex R1 P2 #2).
 
 ### 4.2 #588 — reactive host runtime (Option A)
 
@@ -201,24 +243,41 @@ type SettingsContext =
 - `runtime` is explicitly `HostRuntime | undefined` (not optional `?`) to force callers to think about the absent case (host exists but no runtime yet — common on first render before any status tick).
 - All existing `disabled(ctx)` / component consumers that ignore `runtime` continue to compile (property unused).
 
-#### 4.2.2 `HostPage` subscribes runtime
+#### 4.2.2 `HostPage` subscribes runtime — two-pass selective subscription (codex R1 P3 #3)
+
+v1 proposed subscribing the entire `runtime` map at HostPage, which would re-render the page on every host's heartbeat tick. Codex R1 P3 #3 flagged this as avoidable. Revised design uses a two-pass resolve:
 
 ```tsx
-const hostOrder  = useHostStore((s) => s.hostOrder)
-const activeHostId = useHostStore((s) => s.activeHostId)
-const runtime    = useHostStore((s) => s.runtime)   // NEW — whole map
+// Pass 1: compute tentative hostId WITHOUT runtime
+const hostOrder     = useHostStore((s) => s.hostOrder)
+const activeHostId  = useHostStore((s) => s.activeHostId)
+const tentativeHostId = preResolveHostId(location, hostOrder, activeHostId, lastSelection)
+
+// Pass 2: selective subscription — only the tentative host's runtime.
+// Zustand re-runs this selector on every store change but triggers
+// re-render only when the returned reference changes (shallow equality).
+const tentativeRuntime = useHostStore((s) =>
+  tentativeHostId ? s.runtime[tentativeHostId] : undefined,
+)
+
+// Pass 3: final resolve with runtime-aware ctx
+const { selection, canonicalPath, shouldPersistSelection } = resolveSelection(
+  location, hostOrder, activeHostId, tentativeHostId, tentativeRuntime,
+)
 ```
 
-Rationale for subscribing the whole map, not a selective `runtime[hostId]`:
-- `hostId` is derived from `resolveSelection(location, hostOrder, activeHostId, runtime)` — chicken-and-egg otherwise.
-- `runtime` is a `Record<string, HostRuntime>` whose object identity only changes on runtime ticks for *any* host; impact is bounded to host-area lifecycle. For the typical user session (single-digit hosts, ticks every few seconds), re-render cost is negligible and strictly better than the alternative of refactoring selection to a two-pass design.
-- `HostSidebar` already subscribes to the same map; cost is already paid at the HostPage level via child render.
+- `preResolveHostId(...)` is a **pure**, runtime-independent helper: hostId selection depends only on URL / hostOrder / activeHostId / lastSelection (§4.2.6 chicken-and-egg still holds).
+- `pickSelectableSubPage(hostId, requested, runtime)` receives the *single-host* runtime and builds ctx as `{ scope: 'host', hostId, runtime }`.
+- Sub-page selection for the tentative host is sensitive to *that host's* runtime only. A background host's heartbeat tick mutates `runtime[otherId]` but leaves `runtime[tentativeHostId]` reference unchanged → zustand shallow-compares → selector returns same reference → **no HostPage re-render**.
+- `HostSidebar` unavoidably subscribes to the whole runtime map (StatusIcon + per-row disabled predicate) — that cost is inherent to the sidebar's job and unchanged by this PR.
 
 #### 4.2.3 `resolveSelection` / `pickSelectableSubPage` / `renderContent` take runtime
 
-- `resolveSelection(location, hostOrder, activeHostId, runtime)` — additional `runtime` parameter.
-- `pickSelectableSubPage(hostId, requestedSubPage, runtime)` — builds ctx as `{ scope: 'host', hostId, runtime: runtime[hostId] }`.
-- `renderContent` builds ctx the same way; `isSelectable(contribution, ctx)` receives runtime-aware ctx.
+- `preResolveHostId(location, hostOrder, activeHostId, lastSelection): string | null` — new pure helper. Extracted logic currently inline in `resolveSelection` / `getFallbackSelection`.
+- `resolveSelection(location, hostOrder, activeHostId, tentativeHostId, tentativeRuntime)` — additional two parameters. Internally builds ctx only for `tentativeHostId`; other hostIds never need ctx at selection time.
+- `pickSelectableSubPage(hostId, requestedSubPage, runtime: HostRuntime | undefined)` — builds ctx `{ scope: 'host', hostId, runtime }` and evaluates `disabled(ctx)`.
+- `renderContent` builds ctx as `{ scope: 'host', hostId: selection.hostId, runtime: tentativeRuntime }` (we only render the body for the selected host, which equals the tentative host after resolve).
+- **ctx-builder helper** (codex R1 Q4 ergonomics note): optional small `buildHostCtx(hostId, runtime)` helper colocated in `host-builtin-sections.ts` or a new `host-ctx.ts` to keep the construction tidy. Not required — callsites inside HostPage are few enough to inline — but plan may adopt if ergonomics wins during implementation.
 
 #### 4.2.4 `HostSidebar` propagates runtime in ctx
 
@@ -248,10 +307,11 @@ The three sites fixed by `ca000a81` (getFallbackSelection / sidebarSubPage / res
 
 | Surface | Before | After | Breakage |
 |---|---|---|---|
-| `registerBuiltinHostSection(def)` | Push to pending buffer | Upsert into stable source map (idempotent) | None externally — call semantics unchanged from caller's viewpoint |
+| `registerBuiltinHostSection(def)` | Push to pending buffer (single item) | **Removed** | Only production caller (`register-modules.tsx:399-404`) migrates to `setHostBuiltinSections`. No other importers (grep confirmed). |
+| `setHostBuiltinSections(defs[])` | — | **New**: batch-replace full set; wrapper identity stable per localId | New API |
 | `peekHostBuiltinQueue()` / `drainHostBuiltinQueue()` / `clearHostBuiltinPending()` | Exported | Removed | Internal to `host-builtin-sections` + `dispatch-settings-contributions` + tests — grep confirms no other importers |
-| New: `getHostBuiltinDeclarations()` | — | Exported | Used by dispatcher only |
-| New: `clearHostBuiltinSources()` | — | Exported | Replaces `clearHostBuiltinPending` in `resetSettingsContributionsForHmr` |
+| `getHostBuiltinDeclarations()` | — | **New**, exported | Used by dispatcher only |
+| `clearHostBuiltinSources()` | — | **New**, exported | Replaces `clearHostBuiltinPending` in `resetSettingsContributionsForHmr` and in test harnesses |
 | `SettingsContextFor<'host'>` | `{ scope: 'host'; hostId }` | `{ scope: 'host'; hostId; runtime: HostRuntime \| undefined }` | All consumer sites must now set `runtime` when building ctx. Consumers that **read** ctx stay source-compatible (extra field). |
 | `HostRuntime` type | — | **exported** from `useHostStore` (already exported at `spa/src/stores/useHostStore.ts:17` — no change needed) | None |
 
@@ -263,29 +323,34 @@ All call-site churn for `runtime` is inside `HostPage.tsx` + `HostSidebar.tsx` +
 
 ### 6.1 New tests — #586
 
-`spa/src/lib/host-builtin-sections.test.tsx`:
+`spa/src/lib/host-builtin-sections.test.tsx` (existing file — rewrite #586-impacted tests and add):
 
-1. **Idempotent re-register**: call `registerBuiltinHostSection(def)` twice with identical def → source map size = 1 AND `getHostBuiltinDeclarations()[0].component === getHostBuiltinDeclarations()[0].component` across calls (stable reference).
-2. **Def change invalidates cache**: register with `order: 0`, then re-register with `order: 1` → declarations reflect new order, wrapper is rebuilt (reference may differ; new def fully replaces).
-3. **`clearHostBuiltinSources()` empties the map**: populate → clear → `getHostBuiltinDeclarations()` returns `[]`.
+1. **Batch replace is the full set**: `setHostBuiltinSections([a, b, c])` → declarations = 3, localIds = [a, b, c]. Then `setHostBuiltinSections([a, d])` → declarations = 2, localIds = [a, d] (b and c dropped). Validates codex R1 P2 #1 full-replace.
+2. **Wrapper identity stable across re-calls with same localIds** (codex R1 P2 #2): `setHostBuiltinSections([a])` → capture `getHostBuiltinDeclarations()[0].component` → `setHostBuiltinSections([a])` again with a *fresh* section `component` reference (simulating HMR reload of the section file) → new `getHostBuiltinDeclarations()[0].component` is the **same reference** as before. Validates wrapper caching by `localId`.
+3. **Wrapper delegates to the latest component**: after (2), render the wrapper → output reflects the **new** section component (not the pre-HMR one). Use `vi.fn()`-style stubs to assert which was invoked.
+4. **Wrapper is rebuilt only when localId is re-added after being dropped**: `setHostBuiltinSections([a])` → drop via `setHostBuiltinSections([])` → re-add via `setHostBuiltinSections([a])` → wrapper identity differs from the first round (dropped localIds lose their cached wrapper).
+5. **`clearHostBuiltinSources()` empties the map**: populate → clear → `getHostBuiltinDeclarations()` returns `[]`.
 
-`spa/src/lib/dispatch-settings-contributions.test.ts`:
+`spa/src/lib/dispatch-settings-contributions.test.ts` (existing file — extend):
 
-4. **Standalone re-dispatch preserves host built-ins** (THE #586 bug): `registerBuiltinHostSection(...)` × 6 → `dispatchSettingsContributions()` → assert 6 host contributions → `dispatchSettingsContributions()` again (no re-register) → assert still 6 host contributions AND same component identities.
-5. **Interleaved module + built-in dispatch**: `registerModule({ settings: [...] })` + `registerBuiltinHostSection(...)` → dispatch → dispatch again → state stable.
-6. **HMR reset**: populate → `resetSettingsContributionsForHmr()` → dispatch → 0 host contributions (sources cleared).
+6. **Standalone re-dispatch preserves host built-ins** (THE #586 bug): `setHostBuiltinSections([...6 defs...])` → `dispatchSettingsContributions()` → assert 6 host contributions → `dispatchSettingsContributions()` again (no re-register) → assert still 6 host contributions AND same `component` references on each.
+7. **Interleaved module + built-in dispatch**: `registerModule({ settings: [...] })` + `setHostBuiltinSections(...)` → dispatch → dispatch again → state stable.
+8. **HMR reset**: populate → `resetSettingsContributionsForHmr()` → dispatch → 0 host contributions (sources cleared).
 
 ### 6.2 New tests — #588
 
-`spa/src/components/HostPage.test.tsx` (if absent, new; otherwise extend):
+`spa/src/components/HostPage.test.tsx` (existing file — extend):
 
 7. **Runtime tick drops disabled body**: register a host contribution with `disabled: (ctx) => ctx.runtime?.status !== 'connected'` → URL `/hosts/hA/featureX` → seed `runtime.hA = { status: 'connected' }` → body mounts → mutate to `{ status: 'disconnected' }` → `HostPage` re-renders → body unmounts, URL navigates to the next selectable sub-page.
 8. **Runtime tick re-enables body**: inverse of 7 — disabled initially → runtime flips → `canonicalPath` is null (already at correct subPage) OR redirects into the now-enabled body cleanly.
 9. **`pickSelectableSubPage` uses runtime**: unit test on the helper with synthetic contributions + runtime maps; disabled predicate returns true iff runtime is absent.
+10. **Background host tick does NOT re-render HostPage** (codex R1 P3 #3 regression): render HostPage on `/hosts/hA/overview` → spy/counter on HostPage render → `useHostStore.setState(state => ({ runtime: { ...state.runtime, hB: { status: 'disconnected' } } }))` → render count unchanged. Validates selective subscription.
+11. **Rapid runtime flicker is stable** (codex R1 P3 #4): register contribution with runtime-driven disabled → URL `/hosts/hA/featureX` → tick `connected → disconnected → connected` in three sync setState calls → final state: body mounted on featureX, no redirect thrash left in the location history beyond 0–1 redirects. Asserts idempotent resolve under rapid ticks.
+12. **Unmount during tick does not warn** (codex R1 P3 #4): render → unmount via RTL `cleanup()` → push a runtime tick → vitest `process.stdout`/console spy records no "update on unmounted component" / stale-state warnings. Guards against stale effect subscriptions.
 
-`spa/src/components/hosts/HostSidebar.test.tsx` (if absent, new; otherwise extend):
+`spa/src/components/hosts/HostSidebar.test.tsx` (existing file — extend):
 
-10. **Sidebar builds runtime-aware ctx**: register contribution with `disabled: (ctx) => ctx.runtime === undefined` → host in store but no runtime yet → sidebar row rendered with `data-disabled-ctx="true"` → runtime tick arrives → row becomes enabled.
+13. **Sidebar builds runtime-aware ctx**: register contribution with `disabled: (ctx) => ctx.runtime === undefined` → host in store but no runtime yet → sidebar row rendered with `data-disabled-ctx="true"` → runtime tick arrives → row becomes enabled.
 
 ### 6.3 Existing tests
 
@@ -310,8 +375,8 @@ Target: all scope tests + existing suite pass (`pnpm exec vitest run`). Lint + b
 Single PR, squash merge, alpha bump afterwards.
 
 Commit sequence (detail in plan):
-1. **feat(spa): host built-in stable source map** — replace pending buffer with source map + idempotent wrapper cache + dispatcher re-materialization + HMR rename. Rewrites tests for #586. Ships alone and green.
-2. **feat(spa): reactive host runtime in SettingsContextFor<'host'>** — add `runtime` to host ctx, plumb through HostPage + HostSidebar + pickSelectableSubPage. Rewrites / adds tests for #588. Ships alone and green.
+1. **feat(spa): host built-in batch-replace source map** — remove `registerBuiltinHostSection` + pending buffer; add `setHostBuiltinSections` (batch replace) + stable-per-localId wrapper cache + dispatcher re-materialization + HMR rename. Migrates the six-call register-modules.tsx callsite. Rewrites tests for #586. Ships alone and green.
+2. **feat(spa): reactive host runtime in SettingsContextFor<'host'>** — add `runtime` to host ctx, plumb through HostPage two-pass selective subscription + HostSidebar ctx + `pickSelectableSubPage`. Rewrites / adds tests for #588. Ships alone and green.
 
 Optional commit 0 (docs): add spec file. Kept alongside merge.
 
@@ -324,8 +389,9 @@ Post-merge: bump PR to alpha.207 from separate worktree (CLAUDE.md dev process �
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | `SettingsContextFor<'host'>` breaking change surfaces in unseen callsite | Low | Medium | TypeScript compilation catches all sites; grep for `scope: 'host'` or `SettingsContextFor<'host'>` in plan §checklist |
-| HostPage re-render on every runtime tick degrades perf | Low | Low | Single-digit hosts; ticks are heartbeat-speed; matches HostSidebar subscription cost already paid today |
-| Component identity regression forces body remount | Med | Low | Unit test 1+4 explicitly assert wrapper identity across re-registers and re-dispatches |
+| HostPage re-render on every runtime tick degrades perf | Low→**Addressed** | Low | Two-pass selective subscription (§4.2.2 per codex R1 P3 #3); regression test 10 asserts background-host tick does NOT re-render HostPage |
+| Component identity regression forces body remount | Med→**Addressed** | Low | Stable-per-localId wrapper cache (§4.1.1 per codex R1 P2 #2); tests 2+3 assert wrapper identity across HMR-simulated re-registrations |
+| Partial re-register leaves stale localIds | Med→**Addressed** | Low | Batch-replace API (§4.1.1 per codex R1 P2 #1); test 1 asserts dropped localIds disappear |
 | Legacy adapter kept on old buffer pattern looks asymmetric | High | Low (it actually is asymmetric; intentional) | Note in PR body + issue #586 (or follow-up) captures "legacy adapter same fix, deferred"; adds strictly more risk to expand scope here |
 | `runtime: HostRuntime \| undefined` confuses callers expecting optional | Low | Low | Use `?` optional makes callers forget runtime — keeping required-undefined is a deliberate contract to force explicit handling. Documented in spec §5 |
 | Test rewrites miss an invariant the old pending-buffer captured | Med | Medium | Each rewritten test's behavioural property is explicitly listed in §6.1; pass/fail table in PR body cross-refs old vs new |
@@ -342,12 +408,15 @@ Post-merge: bump PR to alpha.207 from separate worktree (CLAUDE.md dev process �
 
 ## 10. Acceptance checklist
 
-- [ ] #586: `dispatchSettingsContributions()` is idempotent (test 4 green)
-- [ ] #586: HMR reset + dispatch → host built-ins gone (test 6 green)
-- [ ] #586: Component identity stable across re-dispatches (test 1+4 green)
+- [ ] #586: `dispatchSettingsContributions()` is idempotent under re-dispatch (test 6 green)
+- [ ] #586: HMR reset + dispatch → host built-ins gone (test 8 green)
+- [ ] #586: Full-replace semantics — dropped localIds disappear (test 1 green, codex R1 P2 #1)
+- [ ] #586: Wrapper identity stable across re-calls with same localIds (test 2+3 green, codex R1 P2 #2)
+- [ ] #586: `registerBuiltinHostSection` removed; only `setHostBuiltinSections` is the public API
 - [ ] #588: `SettingsContextFor<'host'>` has `runtime: HostRuntime | undefined`
-- [ ] #588: `HostPage` subscribes `runtime` and re-resolves on ticks (test 7+8 green)
-- [ ] #588: `HostSidebar` passes runtime in ctx (test 10 green)
+- [ ] #588: `HostPage` uses two-pass selective subscription (test 10 green, codex R1 P3 #3)
+- [ ] #588: Rapid runtime tick is stable + unmount during tick does not warn (tests 11+12 green, codex R1 P3 #4)
+- [ ] #588: `HostSidebar` passes runtime in ctx (test 13 green)
 - [ ] All existing tests green (`pnpm exec vitest run`)
 - [ ] Lint green (`pnpm run lint`)
 - [ ] Build green (`pnpm run build`)
