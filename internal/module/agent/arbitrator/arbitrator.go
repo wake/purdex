@@ -159,6 +159,13 @@ func (a *Arbitrator) InCh() chan<- observation.Observation {
 	return a.inCh
 }
 
+// InChForTesting returns the bidirectional input channel. Test-only — exposes
+// the receive side so admission tests can drain without starting the Run
+// goroutine. Never call from production code.
+func (a *Arbitrator) InChForTesting() chan observation.Observation {
+	return a.inCh
+}
+
 // Run is the single-owner goroutine. It blocks until ctx is cancelled. The
 // caller is responsible for stopping producers before cancellation — inCh is
 // NOT drained on exit because the trace-writer flush already covers any
