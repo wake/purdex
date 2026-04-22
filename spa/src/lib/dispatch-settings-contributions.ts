@@ -251,4 +251,10 @@ export function resetSettingsContributionsForHmr(): void {
   clearContributions()
   clearLegacyPending()
   clearHostBuiltinSources()
+  // R2 codex: also clear the deprecation-warn dedupe set. Without this, a
+  // module author who temporarily removed and then re-added a legacy
+  // `globalConfig` / `workspaceConfig` declaration during an HMR session
+  // would never see the warning again — the dedupe key persists across
+  // reloads even though the rest of the registry is freshly rebuilt.
+  warnedDeprecationKeys.clear()
 }

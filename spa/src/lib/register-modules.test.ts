@@ -21,7 +21,7 @@ import {
 } from './settings-section-registry'
 import { clearInterfaceSubsectionRegistry, getInterfaceSubsections } from './interface-subsection-registry'
 import { registerBuiltinModules, dispatchSettingsContributions } from './register-modules'
-import { resetDeprecationWarningsForTest } from './dispatch-settings-contributions'
+import { resetDeprecationWarningsForTest, resetSettingsContributionsForHmr } from './dispatch-settings-contributions'
 import {
   clearContributions,
   listContributions,
@@ -468,6 +468,32 @@ describe('ModuleDefinition.globalConfig / workspaceConfig deprecation (PR-5)', (
     dispatchSettingsContributions()
     const hits = (warnSpy.mock.calls as unknown[][]).filter((c) => String(c[0]).includes('dedupe')).length
     expect(hits).toBe(1)
+  })
+
+  it('HMR reset clears the dedupe set so warnings re-emit after reload (R2 codex)', () => {
+    registerModule({
+      id: 'hmrmod',
+      name: 'HMR Mod',
+      globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+    })
+    dispatchSettingsContributions()
+    const firstHits = (warnSpy.mock.calls as unknown[][]).filter(
+      (c) => String(c[0]).includes('hmrmod') && String(c[0]).includes('deprecated'),
+    ).length
+    expect(firstHits).toBe(1)
+
+    // Simulate HMR dispose + re-register from the rebuilt module graph
+    resetSettingsContributionsForHmr()
+    registerModule({
+      id: 'hmrmod',
+      name: 'HMR Mod',
+      globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+    })
+    dispatchSettingsContributions()
+    const afterHmrHits = (warnSpy.mock.calls as unknown[][]).filter(
+      (c) => String(c[0]).includes('hmrmod') && String(c[0]).includes('deprecated'),
+    ).length
+    expect(afterHmrHits).toBe(2)
   })
 
   it('defers the warning until after a successful dispatch (R1 codex)', () => {
