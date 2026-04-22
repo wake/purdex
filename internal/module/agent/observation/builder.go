@@ -1,0 +1,248 @@
+package observation
+
+import (
+	"fmt"
+	"log"
+	"time"
+)
+
+// BuilderOption is a functional option for configuring a Builder.
+type BuilderOption func(*Builder)
+
+// WithDevMode toggles the over-cap behaviour for DecisionPorts.
+// When dev is true, Build() panics if more than 16 DecisionPorts are present.
+// When dev is false (default / prod), Build() truncates to 16 and logs a
+// warning with prefix [agent][observation].
+func WithDevMode(dev bool) BuilderOption {
+	return func(b *Builder) {
+		b.dev = dev
+	}
+}
+
+// Builder accumulates fields and produces a validated Observation via Build().
+//
+// Single-use: Build() deep-copies top-level mutable fields (DecisionPorts,
+// Evidence, and their nested slices) so the returned Observation is safe to
+// hand off. EvidenceRef.Value is shallow-copied — if it holds a map or
+// pointer, callers must not mutate Value contents after Build(). Calling
+// Build() twice panics. Not thread-safe.
+type Builder struct {
+	dev      bool
+	consumed bool
+	obs      Observation
+}
+
+// NewBuilder returns a fresh Builder with options applied in order.
+func NewBuilder(opts ...BuilderOption) *Builder {
+	b := &Builder{}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
+}
+
+// TraceID sets the trace_id field. No validation here; validation runs at Build().
+func (b *Builder) TraceID(v string) *Builder {
+	b.obs.TraceID = v
+	return b
+}
+
+func (b *Builder) SpanID(v string) *Builder {
+	b.obs.SpanID = v
+	return b
+}
+
+func (b *Builder) ParentSpanID(v string) *Builder {
+	b.obs.ParentSpanID = v
+	return b
+}
+
+func (b *Builder) SessionID(v string) *Builder {
+	b.obs.SessionID = v
+	return b
+}
+
+func (b *Builder) ObservedGeneration(v int64) *Builder {
+	b.obs.ObservedGeneration = v
+	return b
+}
+
+func (b *Builder) SourceKind(v SourceKind) *Builder {
+	b.obs.SourceKind = v
+	return b
+}
+
+func (b *Builder) WatcherToken(v string) *Builder {
+	b.obs.WatcherToken = v
+	return b
+}
+
+func (b *Builder) Action(v string) *Builder {
+	b.obs.Action = v
+	return b
+}
+
+func (b *Builder) Phase(v ObsPhase) *Builder {
+	b.obs.Phase = v
+	return b
+}
+
+func (b *Builder) Proposal(v StateProposal) *Builder {
+	b.obs.Proposal = v
+	return b
+}
+
+func (b *Builder) ReasonCode(v string) *Builder {
+	b.obs.ReasonCode = v
+	return b
+}
+
+func (b *Builder) ReasonText(v string) *Builder {
+	b.obs.ReasonText = v
+	return b
+}
+
+// AddDecisionPort appends a DecisionPort. The cap of 16 is enforced at Build().
+func (b *Builder) AddDecisionPort(v DecisionPort) *Builder {
+	b.obs.DecisionPorts = append(b.obs.DecisionPorts, v)
+	return b
+}
+
+func (b *Builder) Evidence(v []EvidenceRef) *Builder {
+	b.obs.Evidence = v
+	return b
+}
+
+func (b *Builder) ObservedAt(v time.Time) *Builder {
+	b.obs.ObservedAt = v
+	return b
+}
+
+func (b *Builder) Seq(v int64) *Builder {
+	b.obs.Seq = v
+	return b
+}
+
+// Build runs all validation rules defined in D3 and returns the Observation or
+// an error wrapping a sentinel. Callers may use errors.Is to match sentinels
+// and inspect err.Error() for the specific field name.
+//
+// DecisionPorts cap (16):
+//   - dev mode: panics
+//   - prod mode: truncates to 16 and logs "[agent][observation] decision_ports truncated from N to 16"
+//
+// Build panics if called more than once on the same Builder. Create a fresh
+// Builder for each Observation.
+func (b *Builder) Build() (Observation, error) {
+	if b.consumed {
+		panic("observation: Builder.Build called more than once — create a fresh Builder per Observation")
+	}
+
+	// --- required string fields ---
+	if b.obs.TraceID == "" {
+		return Observation{}, fmt.Errorf("%w: %s", ErrMissingRequiredField, "trace_id")
+	}
+	if b.obs.SessionID == "" {
+		return Observation{}, fmt.Errorf("%w: %s", ErrMissingRequiredField, "session_id")
+	}
+
+	// --- SourceKind: required + valid ---
+	if b.obs.SourceKind == "" {
+		return Observation{}, fmt.Errorf("%w: %s", ErrMissingRequiredField, "source_kind")
+	}
+	if !b.obs.SourceKind.IsValid() {
+		return Observation{}, fmt.Errorf("%w: %q", ErrInvalidSourceKind, string(b.obs.SourceKind))
+	}
+
+	if b.obs.Action == "" {
+		return Observation{}, fmt.Errorf("%w: %s", ErrMissingRequiredField, "action")
+	}
+
+	// --- Phase: required + valid ---
+	if b.obs.Phase == "" {
+		return Observation{}, fmt.Errorf("%w: %s", ErrMissingRequiredField, "phase")
+	}
+	if !b.obs.Phase.IsValid() {
+		return Observation{}, fmt.Errorf("%w: %q", ErrInvalidPhase, string(b.obs.Phase))
+	}
+
+	if b.obs.ObservedAt.IsZero() {
+		return Observation{}, fmt.Errorf("%w: %s", ErrMissingRequiredField, "observed_at")
+	}
+
+	// --- probe requires watcher_token ---
+	if b.obs.SourceKind == SourceProbe && b.obs.WatcherToken == "" {
+		return Observation{}, ErrMissingWatcherToken
+	}
+
+	// --- ActorKey consistency ---
+	// Zero ActorKey means "no proposal attached" — reconcile-only observations
+	// emit trace without a proposal target (spec §3.4.5: stale_detected trace with
+	// no actor mutation). Non-zero ActorKey MUST align with the observation's
+	// SessionID + ObservedGeneration per D3.
+	ak := b.obs.Proposal.ActorKey
+	if ak != (ActorKey{}) {
+		// ActorID is required for a non-zero ActorKey. Without it, actors with
+		// different sessions/generations but empty ActorID would collapse onto the
+		// same identity key downstream.
+		if ak.ActorID == "" {
+			return Observation{}, ErrInvalidActorKey
+		}
+		if ak.SessionID != b.obs.SessionID {
+			return Observation{}, fmt.Errorf("%w: proposal=%q observation=%q",
+				ErrActorKeySessionMismatch, ak.SessionID, b.obs.SessionID)
+		}
+		if ak.Generation != b.obs.ObservedGeneration {
+			return Observation{}, fmt.Errorf("%w: proposal=%d observation=%d",
+				ErrActorKeyGenerationMismatch, ak.Generation, b.obs.ObservedGeneration)
+		}
+	}
+
+	// --- DecisionPorts cap ---
+	const maxDecisionPorts = 16
+	if n := len(b.obs.DecisionPorts); n > maxDecisionPorts {
+		if b.dev {
+			panic(fmt.Sprintf("[agent][observation] decision_ports cap exceeded: %d > %d", n, maxDecisionPorts))
+		}
+		log.Printf("[agent][observation] decision_ports truncated from %d to %d", n, maxDecisionPorts)
+		b.obs.DecisionPorts = b.obs.DecisionPorts[:maxDecisionPorts]
+	}
+
+	// Deep-copy top-level mutable fields before returning so the returned
+	// Observation's slices do not alias the Builder's internal state.
+	// EvidenceRef.Value is any-typed and only shallow-copied; callers must
+	// not mutate Value contents (e.g. map entries) after Build().
+	out := b.obs
+	if len(out.DecisionPorts) > 0 {
+		ports := make([]DecisionPort, len(out.DecisionPorts))
+		for i, p := range out.DecisionPorts {
+			ports[i] = copyDecisionPort(p)
+		}
+		out.DecisionPorts = ports
+	}
+	if len(out.Evidence) > 0 {
+		evi := make([]EvidenceRef, len(out.Evidence))
+		copy(evi, out.Evidence)
+		out.Evidence = evi
+	}
+	b.consumed = true
+	return out, nil
+}
+
+// copyDecisionPort returns a deep copy of p with independent InputRefs and
+// Branches slices. The scalar fields (PortID, Selected, Reason) are value
+// types and are copied by the struct assignment.
+func copyDecisionPort(p DecisionPort) DecisionPort {
+	out := p
+	if len(p.InputRefs) > 0 {
+		refs := make([]EvidenceRef, len(p.InputRefs))
+		copy(refs, p.InputRefs)
+		out.InputRefs = refs
+	}
+	if len(p.Branches) > 0 {
+		branches := make([]Branch, len(p.Branches))
+		copy(branches, p.Branches)
+		out.Branches = branches
+	}
+	return out
+}

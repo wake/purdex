@@ -2,16 +2,21 @@
 
 > Spec 對照：§3.3、§3.4、§3.5、§3.5.1、§8.1
 > 依賴：Phase 0
-> PR：PR-1a（schema baseline）+ **PR-1b-0（schema 補完 + discriminator）** + **PR-1b-1（observation passthrough）**
+> PR：PR-1a ✅ + PR-1b-0 ✅ + **PR-1b-1a**（Observation 型別 + flag + trace_id）+ **PR-1b-1b**（Arbitrator + admission）+ **PR-1b-1c**（passthrough + divergence + API 穿透）
 
 在不改變使用者可見行為的前提下，把新 trace schema 鋪到 SQLite，讓 hook / probe / sweep 在維持直寫 frame 的同時把同一事件轉成 `Observation` 送進 Arbitrator 的 passthrough 路徑。Arbitrator 此階段只計算 proposal、下投影到舊 schema 與 direct-write frame 比對，差異寫入 `frame_divergences`。這是 Phase 2 切換 writer 前的觀察視窗，上線後至少留一個 alpha bump 週期收集 divergence。
 
 ## PR 拆分修訂（2026-04-22）
 
-PR-1a merge 後 review 發現 §3.5 envelope 欄位仍缺 12 個（#560）、legacy vs Lights row 無區分契約（#561）。原 PR-1b 範圍（Observation + Arbitrator + divergence passthrough）需這兩個前置條件。**拆分**：
+PR-1a merge 後 review 發現 §3.5 envelope 欄位仍缺 12 個（#560）、legacy vs Lights row 無區分契約（#561）。原 PR-1b 範圍（Observation + Arbitrator + divergence passthrough）需這兩個前置條件。**初次拆分**：
 
-- **PR-1b-0**：envelope schema 補完（#560）+ row 類別 discriminator（#561）— 中等大小 schema PR
-- **PR-1b-1**：Observation 型別 + Arbitrator 骨架 + channel admission + 雙寫 passthrough + divergence 比對 — 大型 PR（原 PR-1b 範圍）
+- **PR-1b-0** ✅（#564，alpha.202）：envelope schema 補完（#560）+ row 類別 discriminator（#561）
+
+**PR-1b-1 二次拆分（2026-04-22 夜）** — 原 plan 2000-3000 LOC 過大，且 PR-1a + PR-1b-0 累計 8 commit / 9 輪 review 導致 reviewer 疲勞；拆成 3 段，每段 600-1200 LOC，review 可聚焦單一主題：
+
+- **PR-1b-1a**（~600 LOC）：Observation 型別（§3.3）+ `AGENT_ARB_MODE` feature flag（§8.3）+ #568 trace_id per-session-per-generation strategy — 資料模型與設定開關，不含執行邏輯，依賴 plan `pr-1b-1a.md`
+- **PR-1b-1b**（~1200 LOC）：Arbitrator goroutine（§3.4）+ channel admission（§3.5.1）+ apply pipeline 9 步 + pending window（§3.4.2）+ reconcile loop（§3.4.5）— 核心邏輯，依賴 1b-1a 型別，依賴 plan `pr-1b-1b.md`（1b-1a merge 後再寫）
+- **PR-1b-1c**（~800 LOC）：hook / probe / sweep 轉 Observation 雙寫 + 投影比對與 `frame_divergences` 落表（§8.1）+ #569 Monitor API envelope 穿透 — 整合收尾，1b-1b merge 後寫 plan `pr-1b-1c.md`
 
 ## 主架構
 
@@ -76,7 +81,7 @@ PR-1a merge 後 review 發現 §3.5 envelope 欄位仍缺 12 個（#560）、leg
 - [x] DDL migration（alpha 階段可 drop-recreate）
 - [x] BLOB → TEXT + `json.RawMessage`（避免 base64 外流）
 
-### 3. `Observation` 型別（§3.3） — **PR-1b-1**
+### 3. `Observation` 型別（§3.3） — **PR-1b-1a**
 
 - [ ] 測試：`DecisionPort` cap 16 — 超過第 17 筆拒收不 panic（dev panic / prod log+truncate）
 - [ ] 測試：`WatcherToken` 儲存 roundtrip（uuid rotation 下老 token reject）
@@ -84,7 +89,7 @@ PR-1a merge 後 review 發現 §3.5 envelope 欄位仍缺 12 個（#560）、leg
 - [ ] 測試：`SourceKind` enum 值域合法性（hook|probe|sweep|reconcile|synthetic）
 - [ ] 測試：`StateProposal.ActorKey` composite key（SessionID, Generation, ActorID）roundtrip
 
-### 4. Arbitrator 骨架 + channel admission control（§3.4、§3.5.1） — **PR-1b-1**
+### 4. Arbitrator 骨架 + channel admission control（§3.4、§3.5.1） — **PR-1b-1b**
 
 - [ ] 測試：`arb_in` cap 1024 — proposed 滿載 drop non-blocking、committed 滿載 blocking 100ms timeout
 - [ ] 測試：`retryCh` cap 256 滿載 drop retry tick 但 pending entry 仍在 buffer
@@ -95,7 +100,7 @@ PR-1a merge 後 review 發現 §3.5 envelope 欄位仍缺 12 個（#560）、leg
 - [ ] 測試：Pending window — per-session 8 entries evict、per-observation coalescing 16 筆 drop oldest、2s deadline drop proposal 不建 actor
 - [ ] 測試：Reconcile loop — 不改 actor.status，只進 trace（`outcome=skipped, reason_code=ReconcileStaleNoted`）
 
-### 5. 雙寫 passthrough + divergence 比對（§8.1） — **PR-1b-1**
+### 5. 雙寫 passthrough + divergence 比對（§8.1） — **PR-1b-1c**
 
 - [ ] 測試：hook path 送進 Arbitrator 的 proposal 投影到舊 schema 後與 direct-write frame 逐欄等值（無 divergence）
 - [ ] 測試：人為注入不一致 proposal → `frame_divergences` 有對應 row

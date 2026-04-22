@@ -237,6 +237,152 @@ func TestPutConfigIgnoresZeroPollInterval(t *testing.T) {
 	c.CfgMu.RUnlock()
 }
 
+func TestPutConfig_Agent_ArbMode_Passthrough(t *testing.T) {
+	c := newTestCore()
+
+	body := `{"agent":{"arb_mode":"passthrough"}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	c.CfgMu.RLock()
+	assert.Equal(t, "passthrough", c.Cfg.Agent.ArbMode)
+	c.CfgMu.RUnlock()
+}
+
+func TestPutConfig_Agent_ArbMode_Authoritative(t *testing.T) {
+	c := newTestCore()
+
+	body := `{"agent":{"arb_mode":"authoritative"}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	c.CfgMu.RLock()
+	assert.Equal(t, "authoritative", c.Cfg.Agent.ArbMode)
+	c.CfgMu.RUnlock()
+}
+
+func TestPutConfig_Agent_ArbMode_InvalidValue_400(t *testing.T) {
+	c := newTestCore()
+
+	body := `{"agent":{"arb_mode":"bogus"}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid agent.arb_mode")
+}
+
+func TestPutConfig_Agent_ArbMode_TriggersOnConfigChange(t *testing.T) {
+	c := newTestCore()
+
+	var callbackCalled int
+	c.OnConfigChange(func() {
+		callbackCalled++
+	})
+
+	body := `{"agent":{"arb_mode":"authoritative"}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 1, callbackCalled, "OnConfigChange callback should be called exactly once")
+
+	c.CfgMu.RLock()
+	assert.Equal(t, "authoritative", c.Cfg.Agent.ArbMode)
+	c.CfgMu.RUnlock()
+}
+
+// Empty arb_mode is canonicalized to "passthrough" at the PUT boundary so
+// that GET /api/config and GET /api/agent/arbitrator/mode always agree.
+// Previously the empty string was written through, but arbmode.Manager treats
+// "" as invalid and silently falls back to passthrough, causing the two APIs
+// to disagree.
+func TestPutConfig_Agent_ArbMode_EmptyString_Accepted(t *testing.T) {
+	c := newTestCore()
+
+	var callbackCalled int
+	c.OnConfigChange(func() {
+		callbackCalled++
+	})
+
+	body := `{"agent":{"arb_mode":""}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	// Empty string canonicalizes to "passthrough" — the initial Cfg.Agent.ArbMode
+	// is "" so this is a real change (default "" → canonical "passthrough").
+	assert.Equal(t, 1, callbackCalled, "canonicalized value differs from initial empty default → callback fires")
+
+	c.CfgMu.RLock()
+	// Fix A: empty input is now canonicalized to "passthrough", not stored as "".
+	assert.Equal(t, "passthrough", c.Cfg.Agent.ArbMode)
+	c.CfgMu.RUnlock()
+}
+
+// TestPutConfig_Agent_ArbMode_SameValue_DoesNotTrigger verifies that sending
+// a value identical to the persisted state does not fire NotifyConfigChange.
+// Scenario: first PUT "" canonicalizes to "passthrough" and fires. Second PUT
+// "" also canonicalizes to "passthrough" — no actual change → callback must NOT
+// fire a second time.
+func TestPutConfig_Agent_ArbMode_SameValue_DoesNotTrigger(t *testing.T) {
+	c := newTestCore()
+
+	var callbackCalled int
+	c.OnConfigChange(func() {
+		callbackCalled++
+	})
+
+	// First call: "" → canonicalize to "passthrough"; default was "", so change fires.
+	body := `{"agent":{"arb_mode":""}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 1, callbackCalled, "first call fires (default→passthrough)")
+
+	// Second call: same empty string → canonicalizes to "passthrough" again.
+	// Cfg.Agent.ArbMode is already "passthrough" → no mutation → callback must not fire.
+	req2 := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec2 := httptest.NewRecorder()
+	c.handlePutConfig(rec2, req2)
+	assert.Equal(t, http.StatusOK, rec2.Code)
+	assert.Equal(t, 1, callbackCalled, "second idempotent call must NOT re-fire callback")
+
+	c.CfgMu.RLock()
+	assert.Equal(t, "passthrough", c.Cfg.Agent.ArbMode)
+	c.CfgMu.RUnlock()
+}
+
+// When the PUT body has `{"agent":{}}` (agent key present but arb_mode absent),
+// nothing actually changes — NotifyConfigChange must NOT fire, otherwise all
+// OnConfigChange subscribers get woken up for nothing.
+func TestPutConfig_Agent_Empty_DoesNotTriggerOnConfigChange(t *testing.T) {
+	c := newTestCore()
+
+	var callbackCalled int
+	c.OnConfigChange(func() {
+		callbackCalled++
+	})
+
+	body := `{"agent":{}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 0, callbackCalled, "no-op PUT must not trigger OnConfigChange")
+}
+
 func TestRegisterCoreRoutesIncludesConfigEndpoints(t *testing.T) {
 	c := newTestCore()
 	mux := http.NewServeMux()
