@@ -8,6 +8,7 @@ import { MonacoWrapper } from './MonacoWrapper'
 import { DiffView } from './DiffView'
 import { EditorToolbar } from './EditorToolbar'
 import { EditorStatusBar } from './EditorStatusBar'
+import { RenamePopover } from '../RenamePopover'
 import { findPane } from '../../lib/pane-tree'
 import type { FileSource } from '../../types/fs'
 
@@ -85,8 +86,7 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
   const isMarkdown = filePath.endsWith('.md') || filePath.endsWith('.mdx')
   const editorMode = paneState?.editorMode ?? 'raw'
   const showDiff = paneState?.showDiff ?? false
-  const [isRenaming, setIsRenaming] = useState(false)
-  const [renameDraft, setRenameDraft] = useState('')
+  const [renameAnchorRect, setRenameAnchorRect] = useState<DOMRect | null>(null)
   const [renameWarning, setRenameWarning] = useState<string>()
 
   const handleCursorChange = useCallback((line: number, column: number) => {
@@ -102,8 +102,7 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
   }, [paneId, key])
 
   useEffect(() => {
-    setIsRenaming(false)
-    setRenameDraft('')
+    setRenameAnchorRect(null)
     setRenameWarning(undefined)
   }, [filePath])
 
@@ -196,19 +195,17 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
     }
   }, [filePath, key, paneId, source])
 
-  const handleRenameSubmit = useCallback(async () => {
+  const handleRenameSubmit = useCallback(async (nextName: string) => {
     const backend = getFsBackend(source)
     if (!backend) return
 
-    const nextName = renameDraft.trim()
     if (isInvalidRename(nextName)) {
       setRenameWarning('Invalid file name')
       return
     }
 
     if (nextName === fileName(filePath)) {
-      setIsRenaming(false)
-      setRenameDraft('')
+      setRenameAnchorRect(null)
       setRenameWarning(undefined)
       return
     }
@@ -234,13 +231,12 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
       await backend.rename(filePath, nextPath)
       useTabStore.getState().renameEditorPanes(source, filePath, nextPath)
       useEditorStore.getState().renameBuffer(key, nextKey, detectLanguage(nextPath))
-      setIsRenaming(false)
-      setRenameDraft('')
+      setRenameAnchorRect(null)
       setRenameWarning(undefined)
     } catch (error) {
       setRenameWarning(renameWarningMessage(error))
     }
-  }, [filePath, key, renameDraft, source])
+  }, [filePath, key, source])
 
   if (!buffer) {
     return <div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading...</div>
@@ -251,30 +247,11 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
       <EditorToolbar
         filePath={filePath}
         isDirty={buffer.isDirty}
-        isMarkdown={isMarkdown}
-        editorMode={editorMode}
         showDiff={showDiff}
-        isRenaming={isRenaming}
-        renameValue={renameDraft}
-        renameWarning={renameWarning}
         onSave={handleSave}
-        onToggleMode={isMarkdown ? () => useEditorStore.getState().setEditorMode(paneId, editorMode === 'raw' ? 'wysiwyg' : 'raw') : undefined}
         onDiff={() => useEditorStore.getState().setShowDiff(paneId, !showDiff)}
-        onRenameStart={() => {
-          setIsRenaming(true)
-          setRenameDraft(fileName(filePath))
-          setRenameWarning(undefined)
-        }}
-        onRenameChange={(value) => {
-          setRenameDraft(value)
-          if (renameWarning) setRenameWarning(undefined)
-        }}
-        onRenameSubmit={() => {
-          void handleRenameSubmit()
-        }}
-        onRenameCancel={() => {
-          setIsRenaming(false)
-          setRenameDraft('')
+        onRenameStart={(anchorRect) => {
+          setRenameAnchorRect(anchorRect)
           setRenameWarning(undefined)
         }}
       />
@@ -291,6 +268,7 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
             content={buffer.content}
             language={buffer.language}
             modelId={buffer.modelId}
+            isActive={isActive}
             initialViewState={paneState?.monacoViewState ?? null}
             onChange={(value) => useEditorStore.getState().updateContent(key, value)}
             onCursorChange={handleCursorChange}
@@ -301,6 +279,7 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
           <Suspense fallback={<div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading editor...</div>}>
             <TiptapEditor
               content={buffer.content}
+              isActive={isActive}
               onChange={(md) => useEditorStore.getState().updateContent(key, md)}
               onSave={handleSave}
             />
@@ -308,10 +287,31 @@ function EditorPaneInner({ paneId, source, filePath, isActive }: { paneId: strin
         )}
       </div>
       <EditorStatusBar
-        language={buffer.language}
+        source={source}
         line={paneState?.cursorPosition.line ?? 1}
         column={paneState?.cursorPosition.column ?? 1}
+        isMarkdown={isMarkdown}
+        editorMode={editorMode}
+        onModeChange={(mode) => useEditorStore.getState().setEditorMode(paneId, mode)}
       />
+      {renameAnchorRect && (
+        <RenamePopover
+          anchorRect={renameAnchorRect}
+          currentName={fileName(filePath)}
+          onConfirm={handleRenameSubmit}
+          onCancel={() => {
+            setRenameAnchorRect(null)
+            setRenameWarning(undefined)
+          }}
+          error={renameWarning}
+          onClearError={() => setRenameWarning(undefined)}
+          placeholder="File name"
+          validateName={(trimmedDraft, currentName) => {
+            if (!trimmedDraft || trimmedDraft === currentName) return undefined
+            return isInvalidRename(trimmedDraft) ? 'Invalid file name' : undefined
+          }}
+        />
+      )}
     </div>
   )
 }

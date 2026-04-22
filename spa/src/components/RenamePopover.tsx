@@ -10,12 +10,14 @@ interface Props {
   onCancel: () => void
   error?: string
   onClearError?: () => void
+  placeholder?: string
+  validateName?: (trimmedDraft: string, currentName: string) => string | undefined
 }
 
 const POPOVER_WIDTH = 240
 const PADDING = 4
 
-export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, error, onClearError }: Props) {
+export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, error, onClearError, placeholder, validateName }: Props) {
   const t = useI18nStore((s) => s.t)
   const [draft, setDraft] = useState(currentName)
   const [submitting, setSubmitting] = useState(false)
@@ -25,9 +27,11 @@ export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, er
   useClickOutside(containerRef, onCancel)
 
   const trimmedDraft = draft.trim()
-  const validationError = trimmedDraft && trimmedDraft !== currentName && !isValidSessionName(trimmedDraft)
-    ? t('tab.rename_invalid_format')
-    : undefined
+  const validationError = validateName
+    ? validateName(trimmedDraft, currentName)
+    : (trimmedDraft && trimmedDraft !== currentName && !isValidSessionName(trimmedDraft)
+        ? t('tab.rename_invalid_format')
+        : undefined)
   const displayError = validationError ?? error
 
   // Focus + select all on mount
@@ -67,7 +71,7 @@ export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, er
     if (e.key === 'Enter') {
       e.preventDefault()
       const trimmed = draft.trim()
-      if (!trimmed || trimmed === currentName || submitting || !isValidSessionName(trimmed)) return
+      if (!trimmed || trimmed === currentName || submitting || validationError) return
       setSubmitting(true)
       onConfirm(trimmed).finally(() => setSubmitting(false))
     }
@@ -86,7 +90,7 @@ export function RenamePopover({ anchorRect, currentName, onConfirm, onCancel, er
         onChange={(e) => { setDraft(e.target.value); onClearError?.() }}
         onKeyDown={handleKeyDown}
         disabled={submitting}
-        placeholder={t('tab.rename_placeholder')}
+        placeholder={placeholder ?? t('tab.rename_placeholder')}
         className="w-full bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 focus:border-border-active focus:outline-none disabled:opacity-50"
       />
       {displayError && (

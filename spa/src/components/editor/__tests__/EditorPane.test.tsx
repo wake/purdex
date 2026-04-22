@@ -13,7 +13,7 @@ vi.mock('../../../lib/fs-backend', () => ({
 }))
 
 vi.mock('../MonacoWrapper', () => ({
-  MonacoWrapper: () => <div data-testid="monaco-wrapper" />,
+  MonacoWrapper: ({ isActive }: { isActive?: boolean }) => <div data-testid="monaco-wrapper" data-active={isActive ? 'true' : 'false'} />,
 }))
 
 vi.mock('../DiffView', () => ({
@@ -128,6 +128,54 @@ describe('EditorPane', () => {
       editorMode: 'wysiwyg',
       showDiff: true,
     })
+  })
+
+  it('uses rename popover UI instead of inline filename input', async () => {
+    const pane = createPane('/notes/rename.md')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    backend.read.mockResolvedValue(new TextEncoder().encode('hello world'))
+    backend.stat.mockResolvedValue({
+      isFile: true,
+      isDirectory: false,
+      size: 11,
+      mtime: 123,
+    })
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/rename.md')]).toBeDefined()
+    })
+
+    fireEvent.doubleClick(screen.getByText('rename.md'))
+
+    expect(screen.getByDisplayValue('rename.md')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Rename file')).not.toBeInTheDocument()
+  })
+
+  it('passes active state through to the editor content for refocus', async () => {
+    const pane = createPane('/notes/focus.md')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    backend.read.mockResolvedValue(new TextEncoder().encode('hello world'))
+    backend.stat.mockResolvedValue({
+      isFile: true,
+      isDirectory: false,
+      size: 11,
+      mtime: 123,
+    })
+
+    const { rerender } = render(<EditorPane pane={pane} isActive={false} />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/focus.md')]).toBeDefined()
+    })
+
+    rerender(<EditorPane pane={pane} isActive />)
+
+    expect(screen.getByTestId('monaco-wrapper')).toHaveAttribute('data-active', 'true')
   })
 
   it('cleans up pane state when the pane is reused for non-editor content', async () => {
@@ -286,7 +334,7 @@ describe('EditorPane', () => {
     fireEvent.change(screen.getByDisplayValue('rename.md'), { target: { value: '..' } })
     fireEvent.keyDown(screen.getByDisplayValue('..'), { key: 'Enter' })
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Invalid file name')
+    expect(screen.getByText('Invalid file name')).toBeInTheDocument()
     expect(backend.rename).not.toHaveBeenCalled()
   })
 
@@ -321,7 +369,7 @@ describe('EditorPane', () => {
     fireEvent.keyDown(screen.getByDisplayValue('taken.md'), { key: 'Enter' })
 
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('File already exists')
+      expect(screen.getByText('File already exists')).toBeInTheDocument()
     })
 
     expect(backend.rename).not.toHaveBeenCalled()
@@ -355,7 +403,7 @@ describe('EditorPane', () => {
     fireEvent.keyDown(screen.getByDisplayValue('taken.md'), { key: 'Enter' })
 
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('File already exists')
+      expect(screen.getByText('File already exists')).toBeInTheDocument()
     })
 
     expect(backend.rename).not.toHaveBeenCalled()

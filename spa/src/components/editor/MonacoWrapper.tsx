@@ -6,6 +6,7 @@ interface Props {
   content: string
   language: string
   modelId: string
+  isActive: boolean
   initialViewState: editor.ICodeEditorViewState | null
   onChange: (value: string) => void
   onCursorChange: (line: number, column: number) => void
@@ -13,7 +14,7 @@ interface Props {
   onSave: () => void
 }
 
-export function MonacoWrapper({ content, language, modelId, initialViewState, onChange, onCursorChange, onViewStateChange, onSave }: Props) {
+export function MonacoWrapper({ content, language, modelId, isActive, initialViewState, onChange, onCursorChange, onViewStateChange, onSave }: Props) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const onSaveRef = useRef(onSave)
   const onViewStateChangeRef = useRef(onViewStateChange)
@@ -48,6 +49,11 @@ export function MonacoWrapper({ content, language, modelId, initialViewState, on
       editorRef.current = null
     }
   }, [])
+
+  useEffect(() => {
+    if (!isActive) return
+    editorRef.current?.focus()
+  }, [isActive])
 
   return (
     <Editor
