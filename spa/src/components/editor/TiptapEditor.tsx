@@ -5,12 +5,14 @@ import { useEffect, useRef } from 'react'
 
 interface Props {
   content: string // raw markdown
+  isActive: boolean
   onChange: (markdown: string) => void
   onSave: () => void
 }
 
-export function TiptapEditor({ content, onChange, onSave }: Props) {
+export function TiptapEditor({ content, isActive, onChange, onSave }: Props) {
   const onSaveRef = useRef(onSave)
+  const containerRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     onSaveRef.current = onSave
   }, [onSave])
@@ -53,10 +55,15 @@ export function TiptapEditor({ content, onChange, onSave }: Props) {
     editor.commands.setContent(content, { emitUpdate: false, contentType: 'markdown' })
   }, [content, editor])
 
+  useEffect(() => {
+    if (!isActive) return
+    containerRef.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus()
+  }, [isActive])
+
   if (!editor) return null
 
   return (
-    <div data-testid="tiptap-scroll-root" className="h-full min-h-0 overflow-auto">
+    <div ref={containerRef} data-testid="tiptap-scroll-root" className="h-full min-h-0 overflow-auto">
       <div className="min-h-full [&_.tiptap-editor]:min-h-full [&_.tiptap-editor]:cursor-text">
         <EditorContent editor={editor} />
       </div>

@@ -9,6 +9,7 @@ const editorMock = vi.hoisted(() => ({
   onDidChangeCursorPosition: vi.fn(),
   restoreViewState: vi.fn(),
   saveViewState: vi.fn(() => ({ scrollTop: 42 })),
+  focus: vi.fn(),
 }))
 
 vi.mock('@monaco-editor/react', () => ({
@@ -35,6 +36,7 @@ describe('MonacoWrapper', () => {
         content="hello"
         language="markdown"
         modelId="model-1"
+        isActive={true}
         initialViewState={null}
         onChange={() => {}}
         onCursorChange={() => {}}
@@ -54,6 +56,7 @@ describe('MonacoWrapper', () => {
         content="hello"
         language="markdown"
         modelId="model-1"
+        isActive={true}
         initialViewState={initialViewState}
         onChange={() => {}}
         onCursorChange={() => {}}
@@ -77,6 +80,7 @@ describe('MonacoWrapper', () => {
         content="hello"
         language="markdown"
         modelId="model-1"
+        isActive={true}
         initialViewState={null}
         onChange={() => {}}
         onCursorChange={() => {}}
@@ -90,6 +94,7 @@ describe('MonacoWrapper', () => {
         content="hello world"
         language="markdown"
         modelId="model-1"
+        isActive={true}
         initialViewState={null}
         onChange={() => {}}
         onCursorChange={() => {}}
@@ -115,6 +120,7 @@ describe('MonacoWrapper', () => {
         content="hello"
         language="markdown"
         modelId="model-1"
+        isActive={true}
         initialViewState={null}
         onChange={() => {}}
         onCursorChange={() => {}}
@@ -141,5 +147,39 @@ describe('MonacoWrapper', () => {
 
     expect(firstOnSave).not.toHaveBeenCalled()
     expect(secondOnSave).toHaveBeenCalledTimes(1)
+  })
+
+  it('focuses the editor when the pane becomes active', () => {
+    const { rerender } = render(
+      <MonacoWrapper
+        content="hello"
+        language="markdown"
+        modelId="model-1"
+        isActive={false}
+        initialViewState={null}
+        onChange={() => {}}
+        onCursorChange={() => {}}
+        onViewStateChange={() => {}}
+        onSave={() => {}}
+      />,
+    )
+
+    editorMock.focus.mockClear()
+
+    rerender(
+      <MonacoWrapper
+        content="hello"
+        language="markdown"
+        modelId="model-1"
+        isActive={true}
+        initialViewState={null}
+        onChange={() => {}}
+        onCursorChange={() => {}}
+        onViewStateChange={() => {}}
+        onSave={() => {}}
+      />,
+    )
+
+    expect(editorMock.focus).toHaveBeenCalledTimes(1)
   })
 })

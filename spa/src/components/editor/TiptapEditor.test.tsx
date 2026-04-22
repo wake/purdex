@@ -4,13 +4,14 @@ import { TiptapEditor } from './TiptapEditor'
 
 const useEditorSpy = vi.hoisted(() => vi.fn())
 const editorClassRef = vi.hoisted(() => ({ current: '' }))
+const focusSpy = vi.hoisted(() => vi.fn())
 
 vi.mock('@tiptap/react', () => ({
   useEditor: (config: { editorProps?: { attributes?: { class?: string } } }) => {
     editorClassRef.current = config.editorProps?.attributes?.class ?? ''
     return useEditorSpy(config)
   },
-  EditorContent: () => <div data-testid="editor-content" data-editor-class={editorClassRef.current} />,
+  EditorContent: () => <div data-testid="editor-content" data-editor-class={editorClassRef.current}><div data-testid="editor-editable" contentEditable={true} tabIndex={0} ref={(node) => { if (node) node.focus = focusSpy }} /></div>,
 }))
 
 vi.mock('@tiptap/starter-kit', () => ({
@@ -23,6 +24,7 @@ vi.mock('@tiptap/markdown', () => ({
 
 describe('TiptapEditor', () => {
   beforeEach(() => {
+    focusSpy.mockReset()
     useEditorSpy.mockReturnValue({
       getMarkdown: () => 'hello',
       commands: {
@@ -32,7 +34,7 @@ describe('TiptapEditor', () => {
   })
 
   it('uses a dedicated scroll container instead of putting prose on it', () => {
-    render(<TiptapEditor content="# Hello" onChange={() => {}} onSave={() => {}} />)
+    render(<TiptapEditor content="# Hello" isActive={false} onChange={() => {}} onSave={() => {}} />)
 
     const scrollRoot = screen.getByTestId('tiptap-scroll-root')
     expect(scrollRoot.className).toContain('h-full')
@@ -42,7 +44,7 @@ describe('TiptapEditor', () => {
   })
 
   it('applies typography classes to the editable root', () => {
-    render(<TiptapEditor content="# Hello" onChange={() => {}} onSave={() => {}} />)
+    render(<TiptapEditor content="# Hello" isActive={false} onChange={() => {}} onSave={() => {}} />)
 
     expect(screen.getByTestId('editor-content')).toHaveAttribute(
       'data-editor-class',
@@ -51,7 +53,7 @@ describe('TiptapEditor', () => {
   })
 
   it('keeps a visible focus style on the editable root', () => {
-    render(<TiptapEditor content="# Hello" onChange={() => {}} onSave={() => {}} />)
+    render(<TiptapEditor content="# Hello" isActive={false} onChange={() => {}} onSave={() => {}} />)
 
     expect(screen.getByTestId('editor-content')).toHaveAttribute(
       'data-editor-class',
@@ -61,5 +63,15 @@ describe('TiptapEditor', () => {
       'data-editor-class',
       expect.stringContaining('focus-visible:outline'),
     )
+  })
+
+  it('focuses the editable content when the pane becomes active', () => {
+    const { rerender } = render(<TiptapEditor content="# Hello" isActive={false} onChange={() => {}} onSave={() => {}} />)
+
+    focusSpy.mockClear()
+
+    rerender(<TiptapEditor content="# Hello" isActive={true} onChange={() => {}} onSave={() => {}} />)
+
+    expect(focusSpy).toHaveBeenCalledTimes(1)
   })
 })
