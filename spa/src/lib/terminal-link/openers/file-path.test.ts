@@ -131,6 +131,24 @@ describe('file-path opener', () => {
     expect(deps.insertTab).not.toHaveBeenCalled()
   })
 
+  it('standalone pane reads active workspace AFTER async resolve (R3 codex)', async () => {
+    const deps = makeDeps()
+    // The fetch flips the live active workspace. A standalone pane (no
+    // ctx.workspaceId) should land in the post-resolve active workspace,
+    // not the click-time snapshot.
+    deps.fetchPaneCwd.mockImplementationOnce(async () => {
+      deps.getActiveWorkspaceId.mockReturnValue('ws-after')
+      return '/home/user/proj'
+    })
+    const o = createFilePathOpener(deps)
+    await o.open(
+      { ...fileToken, text: 'rel.ts', meta: { path: 'rel.ts' } },
+      { hostId: 'h1', sessionCode: 's1' /* no workspaceId */ },
+      new MouseEvent('click'),
+    )
+    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-after')
+  })
+
   it('no-op when direct open without meta.path (canOpen bypass)', async () => {
     const deps = makeDeps()
     const o = createFilePathOpener(deps)

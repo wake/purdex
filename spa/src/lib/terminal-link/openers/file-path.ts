@@ -91,14 +91,12 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
       if (typeof rawPath !== 'string') return
       if (!ctx.hostId) return
 
-      // R2 codex: snapshot the tab's target workspace before any await.
-      // Prefer the link-source workspace from LinkContext (plumbed through
-      // SessionPaneContent) so a workspace switch during async path / home
-      // resolution can't place the tab into the wrong workspace. Only fall
-      // back to live active workspace for standalone panes (ctx.workspaceId
-      // undefined).
-      const targetWorkspaceId = ctx.workspaceId ?? deps.getActiveWorkspaceId()
-      if (!targetWorkspaceId) return
+      // R2 + R3 codex: snapshot the link-source workspace from LinkContext
+      // before any await so workspace-owned panes preserve isolation across
+      // a mid-flight switch. Standalone panes (ctx.workspaceId undefined)
+      // legitimately follow the user's current focus, so we *defer* the
+      // active-workspace read until after the async resolve below.
+      const sourceWorkspaceId = ctx.workspaceId
 
       let path = rawPath
       if (path.startsWith('~/')) {
@@ -158,6 +156,8 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
       if (!opener) return
       const source: FileSource = { type: 'daemon', hostId: ctx.hostId }
       const content = opener.createContent(source, file)
+      const targetWorkspaceId = sourceWorkspaceId ?? deps.getActiveWorkspaceId()
+      if (!targetWorkspaceId) return
       const tabId = deps.openSingletonTab(content)
       deps.insertTab(tabId, targetWorkspaceId)
     },
