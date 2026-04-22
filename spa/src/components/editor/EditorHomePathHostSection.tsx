@@ -29,7 +29,9 @@ function Body({ hostId }: { hostId: string }) {
     if (trimmed !== draft) setDraft(trimmed)
     if (trimmed === storedStr) return
     if (trimmed === '') {
-      useHostSettingsStore.getState().clearModule(hostId, 'editor')
+      // R2 codex: only drop the homePath key — `clearModule` would wipe any
+      // sibling editor settings (wrap / tabSize / ...) stored in the same bucket.
+      useHostSettingsStore.getState().removeKey(hostId, 'editor', 'homePath')
       return
     }
     useHostSettingsStore.getState().set(hostId, 'editor', { homePath: trimmed })
@@ -37,7 +39,7 @@ function Body({ hostId }: { hostId: string }) {
 
   const clear = () => {
     setDraft('')
-    useHostSettingsStore.getState().clearModule(hostId, 'editor')
+    useHostSettingsStore.getState().removeKey(hostId, 'editor', 'homePath')
   }
 
   return (

@@ -150,6 +150,31 @@ describe('useGlobalSettingsStore', () => {
     })
   })
 
+  describe('removeKey', () => {
+    it('drops a single key and preserves siblings', () => {
+      const { set, removeKey, get } = useGlobalSettingsStore.getState()
+      set('editor', { homePath: '/Users/x', wrap: true, tabSize: 4 })
+      removeKey('editor', 'homePath')
+      expect(get('editor')).toEqual({ wrap: true, tabSize: 4 })
+    })
+
+    it('removes the whole module bucket when the last key is dropped', () => {
+      const { set, removeKey, get } = useGlobalSettingsStore.getState()
+      set('editor', { homePath: '/Users/x' })
+      removeKey('editor', 'homePath')
+      expect(get('editor')).toBeUndefined()
+    })
+
+    it('is a no-op when the module or key is absent', () => {
+      const { removeKey, get } = useGlobalSettingsStore.getState()
+      removeKey('nope', 'any')
+      expect(get('nope')).toBeUndefined()
+      useGlobalSettingsStore.getState().set('editor', { wrap: true })
+      removeKey('editor', 'homePath')
+      expect(get('editor')).toEqual({ wrap: true })
+    })
+  })
+
   it('resets a non-object modules root during rehydrate', async () => {
     localStorage.setItem(
       STORAGE_KEYS.GLOBAL_SETTINGS,

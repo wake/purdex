@@ -82,4 +82,30 @@ describe('EditorHomePathHostSection', () => {
     expect(input.value).toBe('')
     expect(useHostSettingsStore.getState().get('h1', 'editor')).toBeUndefined()
   })
+
+  it('Clear only drops homePath, preserving sibling editor settings (R2 codex)', () => {
+    useHostSettingsStore.getState().set('h1', 'editor', {
+      homePath: '/home/y',
+      wrap: true,
+      tabSize: 4,
+    })
+    render(<EditorHomePathHostSection ctx={ctx} />)
+    fireEvent.click(screen.getByRole('button', { name: /clear|清除/i }))
+    expect(useHostSettingsStore.getState().get('h1', 'editor')).toEqual({
+      wrap: true,
+      tabSize: 4,
+    })
+  })
+
+  it('Blur-to-empty only drops homePath, preserving sibling editor settings (R2 codex)', () => {
+    useHostSettingsStore.getState().set('h1', 'editor', {
+      homePath: '/home/y',
+      wrap: true,
+    })
+    render(<EditorHomePathHostSection ctx={ctx} />)
+    const input = screen.getByLabelText(/home path/i) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.blur(input)
+    expect(useHostSettingsStore.getState().get('h1', 'editor')).toEqual({ wrap: true })
+  })
 })

@@ -81,4 +81,30 @@ describe('EditorHomePathWorkspaceSection', () => {
     expect(input.value).toBe('')
     expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toBeUndefined()
   })
+
+  it('Clear only drops homePath, preserving sibling editor settings (R2 codex)', () => {
+    useWorkspaceSettingsStore.getState().set('wsA', 'editor', {
+      homePath: '/Users/x',
+      wrap: true,
+      tabSize: 4,
+    })
+    render(<EditorHomePathWorkspaceSection ctx={ctx} />)
+    fireEvent.click(screen.getByRole('button', { name: /clear|清除/i }))
+    expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toEqual({
+      wrap: true,
+      tabSize: 4,
+    })
+  })
+
+  it('Blur-to-empty only drops homePath, preserving sibling editor settings (R2 codex)', () => {
+    useWorkspaceSettingsStore.getState().set('wsA', 'editor', {
+      homePath: '/Users/x',
+      wrap: true,
+    })
+    render(<EditorHomePathWorkspaceSection ctx={ctx} />)
+    const input = screen.getByLabelText(/home path/i) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.blur(input)
+    expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toEqual({ wrap: true })
+  })
 })

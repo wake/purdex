@@ -29,7 +29,9 @@ function Body({ workspaceId }: { workspaceId: string }) {
     if (trimmed !== draft) setDraft(trimmed)
     if (trimmed === storedStr) return
     if (trimmed === '') {
-      useWorkspaceSettingsStore.getState().clearModule(workspaceId, 'editor')
+      // R2 codex: only drop the homePath key — `clearModule` would wipe any
+      // sibling editor settings (wrap / tabSize / ...) stored in the same bucket.
+      useWorkspaceSettingsStore.getState().removeKey(workspaceId, 'editor', 'homePath')
       return
     }
     useWorkspaceSettingsStore.getState().set(workspaceId, 'editor', { homePath: trimmed })
@@ -37,7 +39,7 @@ function Body({ workspaceId }: { workspaceId: string }) {
 
   const clear = () => {
     setDraft('')
-    useWorkspaceSettingsStore.getState().clearModule(workspaceId, 'editor')
+    useWorkspaceSettingsStore.getState().removeKey(workspaceId, 'editor', 'homePath')
   }
 
   return (

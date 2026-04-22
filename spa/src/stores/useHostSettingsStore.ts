@@ -10,6 +10,7 @@ interface HostSettingsState {
   hosts: Record<string, HostSlot>
   get: (hostId: string, moduleId: string) => ModulePayload | undefined
   set: (hostId: string, moduleId: string, patch: ModulePayload) => void
+  removeKey: (hostId: string, moduleId: string, key: string) => void
   clearHost: (hostId: string) => void
   clearModule: (hostId: string, moduleId: string) => void
 }
@@ -39,6 +40,22 @@ export const useHostSettingsStore = create<HostSettingsState>()(
               },
             },
           }
+        }),
+
+      removeKey: (hostId, moduleId, key) =>
+        set((state) => {
+          const currentHost = state.hosts[hostId]
+          const currentModule = currentHost?.[moduleId]
+          if (!currentHost || !currentModule || !(key in currentModule)) return state
+          const { [key]: _omit, ...rest } = currentModule
+          void _omit
+          const nextHost = { ...currentHost }
+          if (Object.keys(rest).length === 0) {
+            delete nextHost[moduleId]
+          } else {
+            nextHost[moduleId] = rest
+          }
+          return { hosts: { ...state.hosts, [hostId]: nextHost } }
         }),
 
       clearHost: (hostId) =>

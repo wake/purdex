@@ -156,6 +156,40 @@ describe('useHostSettingsStore', () => {
     })
   })
 
+  describe('removeKey', () => {
+    it('drops a single key and preserves siblings under the same module', () => {
+      const { set, removeKey, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { homePath: '/home/x', wrap: true, tabSize: 4 })
+      removeKey('hostA', 'editor', 'homePath')
+      expect(get('hostA', 'editor')).toEqual({ wrap: true, tabSize: 4 })
+    })
+
+    it('removes the whole module bucket when the last key is dropped', () => {
+      const { set, removeKey, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { homePath: '/home/x' })
+      removeKey('hostA', 'editor', 'homePath')
+      expect(get('hostA', 'editor')).toBeUndefined()
+    })
+
+    it('leaves other modules under the same host alone', () => {
+      const { set, removeKey, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { homePath: '/home/x' })
+      set('hostA', 'files', { projectPath: '/home/proj' })
+      removeKey('hostA', 'editor', 'homePath')
+      expect(get('hostA', 'editor')).toBeUndefined()
+      expect(get('hostA', 'files')).toEqual({ projectPath: '/home/proj' })
+    })
+
+    it('is a no-op when host, module, or key is absent', () => {
+      const { set, removeKey, get } = useHostSettingsStore.getState()
+      removeKey('missingHost', 'editor', 'homePath')
+      expect(get('missingHost', 'editor')).toBeUndefined()
+      set('hostA', 'editor', { wrap: true })
+      removeKey('hostA', 'editor', 'homePath')
+      expect(get('hostA', 'editor')).toEqual({ wrap: true })
+    })
+  })
+
   it('resets a non-object hosts root during rehydrate', async () => {
     localStorage.setItem(
       STORAGE_KEYS.HOST_SETTINGS,

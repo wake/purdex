@@ -156,6 +156,40 @@ describe('useWorkspaceSettingsStore', () => {
     })
   })
 
+  describe('removeKey', () => {
+    it('drops a single key and preserves siblings under the same module', () => {
+      const { set, removeKey, get } = useWorkspaceSettingsStore.getState()
+      set('wsA', 'editor', { homePath: '/Users/x', wrap: true, tabSize: 4 })
+      removeKey('wsA', 'editor', 'homePath')
+      expect(get('wsA', 'editor')).toEqual({ wrap: true, tabSize: 4 })
+    })
+
+    it('removes the whole module bucket when the last key is dropped', () => {
+      const { set, removeKey, get } = useWorkspaceSettingsStore.getState()
+      set('wsA', 'editor', { homePath: '/Users/x' })
+      removeKey('wsA', 'editor', 'homePath')
+      expect(get('wsA', 'editor')).toBeUndefined()
+    })
+
+    it('leaves other modules under the same workspace alone', () => {
+      const { set, removeKey, get } = useWorkspaceSettingsStore.getState()
+      set('wsA', 'editor', { homePath: '/Users/x' })
+      set('wsA', 'files', { projectPath: '/Users/proj' })
+      removeKey('wsA', 'editor', 'homePath')
+      expect(get('wsA', 'editor')).toBeUndefined()
+      expect(get('wsA', 'files')).toEqual({ projectPath: '/Users/proj' })
+    })
+
+    it('is a no-op when workspace, module, or key is absent', () => {
+      const { set, removeKey, get } = useWorkspaceSettingsStore.getState()
+      removeKey('missingWs', 'editor', 'homePath')
+      expect(get('missingWs', 'editor')).toBeUndefined()
+      set('wsA', 'editor', { wrap: true })
+      removeKey('wsA', 'editor', 'homePath')
+      expect(get('wsA', 'editor')).toEqual({ wrap: true })
+    })
+  })
+
   it('resets a non-object workspaces root during rehydrate', async () => {
     localStorage.setItem(
       STORAGE_KEYS.WORKSPACE_SETTINGS,
