@@ -106,10 +106,30 @@ func (m *Module) Init(c *core.Core) error {
 	// dependency.
 	c.CfgMu.RLock()
 	initialArbMode := c.Cfg.Agent.ArbMode
+	initialUploadDir := c.Cfg.UploadDir
 	c.CfgMu.RUnlock()
 	m.arbmodeMgr = arbmode.NewManager(os.Getenv("AGENT_ARB_MODE"), initialArbMode)
 	m.arbmodeHandler = arbmode.NewHandler(m.arbmodeMgr)
 	c.Registry.Register("agent.arbmode.manager", m.arbmodeMgr)
+	if m.uploadDir == "" {
+		m.uploadDir = initialUploadDir
+	}
+
+	// Register the OnConfigChange callback before the session-provider check so
+	// that hot-reload of agent.arb_mode (and UploadDir) keeps working even when
+	// the agent module falls into the degraded path.
+	c.OnConfigChange(func() {
+		c.CfgMu.RLock()
+		newDir := c.Cfg.UploadDir
+		newArbMode := c.Cfg.Agent.ArbMode
+		c.CfgMu.RUnlock()
+		if newDir != "" {
+			m.mu.Lock()
+			m.uploadDir = newDir
+			m.mu.Unlock()
+		}
+		m.arbmodeMgr.OnConfigChange(newArbMode)
+	})
 
 	svc, ok := c.Registry.Get(session.RegistryKey)
 	if !ok {
@@ -121,12 +141,6 @@ func (m *Module) Init(c *core.Core) error {
 	// Expose event store and module so other modules (e.g. session rename) can update it.
 	c.Registry.Register("agent.events", m.events)
 	c.Registry.Register("agent.module", m)
-
-	if m.uploadDir == "" {
-		c.CfgMu.RLock()
-		m.uploadDir = c.Cfg.UploadDir
-		c.CfgMu.RUnlock()
-	}
 
 	// Prober (shared across all providers)
 	m.tmux = c.Tmux
@@ -141,20 +155,6 @@ func (m *Module) Init(c *core.Core) error {
 	m.prober.RegisterIdentifier(codexProvider.Type(), codexProvider.Identify)
 	m.prober.RegisterReadiness(codexProvider.Type(), codex.NewReadinessChecker(c.Tmux))
 	c.Registry.Register("agent.prober", m.prober)
-
-	// Listen for config changes to update mutable module state.
-	c.OnConfigChange(func() {
-		c.CfgMu.RLock()
-		newDir := c.Cfg.UploadDir
-		newArbMode := c.Cfg.Agent.ArbMode
-		c.CfgMu.RUnlock()
-		if newDir != "" {
-			m.mu.Lock()
-			m.uploadDir = newDir
-			m.mu.Unlock()
-		}
-		m.arbmodeMgr.OnConfigChange(newArbMode)
-	})
 
 	// Codex provider
 	m.registry.Register(codexProvider)
