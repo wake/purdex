@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { Trash } from '@phosphor-icons/react'
 import { useWorkspaceStore } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -6,6 +6,8 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import { getPrimaryPane } from '../../../lib/pane-tree'
 import { getPaneLabel } from '../../../lib/pane-labels'
 import { closeTab } from '../../../lib/tab-lifecycle'
+import { listContributions } from '../../../lib/settings-contribution-registry'
+import type { SettingsContextFor } from '../../../lib/settings-contribution-types'
 import { WorkspaceIcon } from './WorkspaceIcon'
 
 import { WorkspaceIconPicker } from './WorkspaceIconPicker'
@@ -27,6 +29,26 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
 
   const [nameInput, setNameInput] = useState(ws?.name ?? '')
   const [showDelete, setShowDelete] = useState(false)
+
+  // Workspace-scoped ctx per spec §5.3 rule 4 (ctx only produced by the shell).
+  // Rebuilt whenever workspaceId changes so `disabled(ctx)` and child
+  // components see a fresh, matching entity id.
+  const ctx = useMemo<SettingsContextFor<'workspace'>>(
+    () => ({ scope: 'workspace' as const, workspaceId }),
+    [workspaceId],
+  )
+
+  // Registry-driven workspace-scoped contributions. `listContributions` returns
+  // a fresh array sorted by `order` ascending per call; memoize against ctx so
+  // we do not recompute on unrelated state changes. Disabled contributions are
+  // hidden entirely (plan §3.1 — hide over disabled-style).
+  const workspaceContributions = useMemo(
+    () =>
+      listContributions('workspace').filter((c) =>
+        c.disabled ? c.disabled(ctx) !== true : true,
+      ),
+    [ctx],
+  )
 
   const handleNameBlur = useCallback(() => {
     const trimmed = nameInput.trim()
@@ -101,6 +123,19 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
 
         {/* Module Settings */}
         <ModuleConfigSection scope={{ workspaceId }} />
+
+        {/* Registry-driven workspace-scoped contributions */}
+        {workspaceContributions.map((c) => {
+          const Body = c.component
+          return (
+            <section key={c.id} className="mb-8">
+              <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">
+                {t(c.labelKey) ?? c.labelKey}
+              </h3>
+              <Body ctx={ctx} />
+            </section>
+          )
+        })}
 
         {/* Danger Zone */}
         <section className="border-t border-border-subtle pt-6 mt-8">
