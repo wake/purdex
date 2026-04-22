@@ -1,38 +1,43 @@
 /**
  * host-builtin-sections.ts
  *
- * Built-in host sub-page adapter — mirrors the PR-2 dispatch-flushed
- * pattern used by the legacy settings adapter (`settings-section-registry`),
- * but scoped to `'host'` contributions with `moduleId = '_builtin.host'`.
+ * Built-in host sub-page adapter — registers six (or whatever the caller
+ * supplies) `'host'`-scoped contributions under `moduleId = '_builtin.host'`.
  *
- * ## Why a separate queue (not shared with the legacy adapter)
+ * ## Design (post-#586)
  *
- * The legacy adapter (`_builtin.legacy-section`) is purdex-scoped.  Sharing
- * the same pending buffer would conflate two independent namespaces and make
- * the collision-checking logic in `buildSettingsContributionBatch` harder to
- * reason about.  A parallel queue keeps each adapter's invariants isolated
- * and the drain/peek surface matches the legacy adapter's contract exactly
- * (same shape, same atomicity guarantees — PR-3 Finding F3).
+ * Built-ins are a **stable registration source**, not a one-shot pending
+ * buffer.  `setHostBuiltinSections(defs[])` atomically replaces the full
+ * source set; any localId absent from the new defs is dropped.
+ * `dispatchSettingsContributions()` re-materializes host built-ins from the
+ * source map on every call (no drain), so the dispatcher is idempotent: a
+ * standalone second call to `dispatchSettingsContributions()` no longer
+ * wipes built-in host contributions.
  *
- * ## Dispatch contract (§7.2 hard constraint)
+ * ## Wrapper identity stability
  *
- * `registerBuiltinHostSection()` MUST NOT call `registerSettingsContribution()`
- * directly.  It pushes to `pendingHostBuiltinContributions`, which is peeked
- * (non-destructively) during Phase 1 validation and drained atomically during
- * Phase 2 commit inside `dispatchSettingsContributions()`.  This prevents
- * `clearContributions()` from nuking built-ins registered before dispatch.
+ * Each `localId`'s wrapper React component is created once
+ * (`createHostBuiltinWrapper(localId)`) and reused across subsequent
+ * `setHostBuiltinSections` calls — even when the inner section component
+ * is a new reference (HMR reload of a section file).  The wrapper closes
+ * over `localId` only; on render it reads the *current* component out of
+ * the source map and delegates.  React sees the same wrapper component
+ * type, so the host sub-page body does NOT remount across HMR.
+ *
+ * If a localId is dropped via `setHostBuiltinSections([])` and later re-
+ * added, a fresh wrapper is created (the dropped wrapper is no longer
+ * cached).
  *
  * ## HMR safety
  *
- * `registerBuiltinModules()` may re-run on hot-reload.  The buffer is drained
- * (cleared) after each successful dispatch, so re-runs produce a clean batch
- * without duplicates.  The `clearHostBuiltinPending()` helper is also exposed
- * for the `resetSettingsContributionsForHmr()` path.
+ * `clearHostBuiltinSources()` is exposed for the
+ * `resetSettingsContributionsForHmr()` path.  Subsequent
+ * `registerBuiltinModules()` runs repopulate via
+ * `setHostBuiltinSections(...)` without duplication.
  */
 import React from 'react'
 import type {
   AnySettingsContributionDeclaration,
-  SettingsContributionDeclaration,
   SettingsContextFor,
 } from './settings-contribution-types'
 
@@ -47,7 +52,7 @@ export interface HostBuiltinSectionDef {
   order: number
   /**
    * The underlying section component.  Receives `{ hostId: string }` props
-   * (the standard shape shared by all six built-in host sections).  The
+   * (the standard shape shared by all built-in host sections).  The
    * adapter wraps it with a scope guard so contributions receive the correct
    * `ctx` shape without modifying the section components.
    */
@@ -55,78 +60,107 @@ export interface HostBuiltinSectionDef {
 }
 
 // ----------------------------------------------------------------------------
-// Pending buffer (PR-2 dispatch-flushed pattern)
+// Stable source map
 // ----------------------------------------------------------------------------
 
-type HostBuiltinDeclaration = SettingsContributionDeclaration<'host'>
 type HostCtxProps = { ctx: SettingsContextFor<'host'> }
 
+interface HostBuiltinSource {
+  // Mutable per-source — refreshed by setHostBuiltinSections().  The wrapper
+  // reads these via the live map at render time so HMR-replacing the
+  // underlying section component takes effect without changing the wrapper's
+  // React component identity.
+  component: React.ComponentType<{ hostId: string }>
+  labelKey: string
+  order: number
+  // Stable per-localId — built once on first appearance and reused on every
+  // subsequent setHostBuiltinSections call as long as the localId stays in
+  // the source set.
+  wrapped: React.ComponentType<HostCtxProps>
+}
+
+const hostBuiltinSources = new Map<string, HostBuiltinSource>()
+
 /**
- * WeakMap from the ctx-wrapper component → the original section component.
- * Exposed for tests that verify `hostId` forwarding without a full DOM render.
+ * WeakMap from the ctx-wrapper component → the most recently registered
+ * underlying section component.  Used by tests to verify identity / forwarding
+ * without a full DOM render.  Updated in lockstep by `setHostBuiltinSections`
+ * so a test reading from the WeakMap always sees the latest section.
  */
-// Exported for test identity assertions only — see host-builtin-sections.test.tsx
 export const hostBuiltinComponentMap = new WeakMap<
   React.ComponentType<HostCtxProps>,
   React.ComponentType<{ hostId: string }>
 >()
 
-// Upsert map by localId so HMR re-runs do not accumulate duplicates.
-const pendingHostBuiltinContributions = new Map<string, HostBuiltinDeclaration>()
-
-/**
- * Register a built-in host sub-page into the pending buffer.  The
- * contribution is NOT committed to the live registry here — it waits for the
- * next `dispatchSettingsContributions()` call to flush.
- */
-export function registerBuiltinHostSection(def: HostBuiltinSectionDef): void {
-  // Scope guard wrapper: forward `hostId` from ctx; return null for wrong scope.
-  // Using React.createElement keeps this file as .ts (no JSX transform needed).
-  const Section = def.component
+function createHostBuiltinWrapper(localId: string): React.ComponentType<HostCtxProps> {
   const Wrapped: React.FC<HostCtxProps> = (props) => {
     if (props.ctx.scope !== 'host') return null
+    const source = hostBuiltinSources.get(localId)
+    if (!source) return null
+    const Section = source.component
     return React.createElement(Section, { hostId: props.ctx.hostId })
   }
-  Wrapped.displayName = `HostBuiltinWrap(${Section.displayName ?? Section.name ?? def.localId})`
+  Wrapped.displayName = `HostBuiltinWrap(${localId})`
+  return Wrapped
+}
 
-  hostBuiltinComponentMap.set(Wrapped, Section)
+/**
+ * Atomically replace the full set of built-in host sub-page sources.
+ * Any localId present in the previous state but absent from `defs` is
+ * dropped.  For each retained localId the cached wrapper is reused so its
+ * React component identity is stable across calls — including HMR reloads
+ * where `def.component` is a freshly imported reference.  The next
+ * `dispatchSettingsContributions()` materializes exactly these.
+ */
+export function setHostBuiltinSections(defs: readonly HostBuiltinSectionDef[]): void {
+  const nextIds = new Set<string>()
+  for (const def of defs) nextIds.add(def.localId)
 
-  const decl: HostBuiltinDeclaration = {
-    localId: def.localId,
-    scope: 'host',
-    order: def.order,
-    labelKey: def.labelKey,
-    component: Wrapped,
+  // Drop localIds not in the new set.  Their cached wrappers are released —
+  // a subsequent re-add for the same localId rebuilds the wrapper.
+  for (const key of Array.from(hostBuiltinSources.keys())) {
+    if (!nextIds.has(key)) hostBuiltinSources.delete(key)
   }
-  pendingHostBuiltinContributions.set(def.localId, decl)
+
+  // Upsert each def; reuse wrapper when present so identity is stable.
+  for (const def of defs) {
+    const existing = hostBuiltinSources.get(def.localId)
+    const wrapped = existing?.wrapped ?? createHostBuiltinWrapper(def.localId)
+    hostBuiltinSources.set(def.localId, {
+      component: def.component,
+      labelKey: def.labelKey,
+      order: def.order,
+      wrapped,
+    })
+    // Keep the WeakMap pointed at the latest section component so tests that
+    // read identity see the freshest reference.
+    hostBuiltinComponentMap.set(wrapped, def.component)
+  }
 }
 
 /**
- * Non-destructive view of the pending host built-in queue.  Used by the
- * dispatch validation phase (Phase 1) so a validation failure leaves the
- * queue intact for a retry.
+ * Snapshot the current built-in host source set as contribution declarations.
+ * Called by the dispatcher's batch-build pass; the returned array's component
+ * references are stable across calls when the source set is unchanged.
  */
-export function peekHostBuiltinQueue(): readonly AnySettingsContributionDeclaration[] {
-  return Array.from(pendingHostBuiltinContributions.values())
-}
-
-/**
- * Drain pending host built-in contributions into a fresh array, emptying the
- * internal buffer.  F3: COMMIT-ONLY — call only after full validation has
- * succeeded (see `drainLegacyContributionQueue` docs for rationale).
- */
-export function drainHostBuiltinQueue(): AnySettingsContributionDeclaration[] {
-  const out: AnySettingsContributionDeclaration[] = Array.from(
-    pendingHostBuiltinContributions.values(),
-  )
-  pendingHostBuiltinContributions.clear()
+export function getHostBuiltinDeclarations(): readonly AnySettingsContributionDeclaration[] {
+  const out: AnySettingsContributionDeclaration[] = []
+  for (const [localId, src] of hostBuiltinSources.entries()) {
+    out.push({
+      localId,
+      scope: 'host',
+      order: src.order,
+      labelKey: src.labelKey,
+      component: src.wrapped,
+    })
+  }
   return out
 }
 
 /**
- * HMR dispose hook.  Clears the active pending buffer so no stale entries
- * leak across HMR re-runs.
+ * HMR dispose hook + test reset.  Clears the stable source map so the next
+ * `setHostBuiltinSections(...)` call starts from an empty set.
  */
-export function clearHostBuiltinPending(): void {
-  pendingHostBuiltinContributions.clear()
+export function clearHostBuiltinSources(): void {
+  hostBuiltinSources.clear()
 }

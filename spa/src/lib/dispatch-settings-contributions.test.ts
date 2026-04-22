@@ -1,15 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { clearModuleRegistry, registerModule, type ModuleDefinition } from './module-registry'
 import { clearContributions, listContributions } from './settings-contribution-registry'
-import { dispatchSettingsContributions } from './dispatch-settings-contributions'
+import {
+  dispatchSettingsContributions,
+  resetSettingsContributionsForHmr,
+} from './dispatch-settings-contributions'
 import {
   drainLegacyContributionQueue,
   peekLegacyContributionQueue,
   registerSettingsSection,
   clearLegacyPending,
 } from './settings-section-registry'
+import {
+  clearHostBuiltinSources,
+  HOST_BUILTIN_MODULE_ID,
+  setHostBuiltinSections,
+} from './host-builtin-sections'
 
 const FakeComponent = () => null
+const FakeHostSection = ({ hostId: _ }: { hostId: string }) => null
 
 function resetRegistries() {
   clearModuleRegistry()
@@ -17,6 +26,8 @@ function resetRegistries() {
   // Drain any leftover legacy pending buffer from previous tests.
   drainLegacyContributionQueue()
   clearLegacyPending()
+  // Clear the host-builtin source map so #586 tests start from a clean state.
+  clearHostBuiltinSources()
 }
 
 describe('dispatchSettingsContributions', () => {
@@ -278,6 +289,73 @@ describe('dispatchSettingsContributions', () => {
       expect(listContributions('purdex')).toEqual([])
       expect(listContributions('host')).toEqual([])
       expect(listContributions('workspace')).toEqual([])
+    })
+  })
+
+  // ----- #586: host-builtin source-map idempotence ------------------------
+
+  describe('#586 — host-builtin sources are idempotent across re-dispatches', () => {
+    function defs(...ids: string[]) {
+      return ids.map((id, i) => ({
+        localId: id,
+        labelKey: `hosts.${id}`,
+        order: i,
+        component: FakeHostSection,
+      }))
+    }
+
+    // Test 6 (spec §6.1 #6): standalone re-dispatch preserves host built-ins
+    // AND keeps wrapper component references identical.
+    it('Test 6 — second standalone dispatchSettingsContributions() preserves built-ins (the #586 bug)', () => {
+      setHostBuiltinSections(defs('overview', 'sessions', 'hooks', 'agents', 'uploads', 'logs'))
+
+      dispatchSettingsContributions()
+      const first = listContributions('host')
+      expect(first).toHaveLength(6)
+      const firstIds = first.map((c) => c.id)
+      const firstComponents = first.map((c) => c.component)
+
+      dispatchSettingsContributions()  // standalone — no re-setHostBuiltinSections
+      const second = listContributions('host')
+      expect(second).toHaveLength(6)
+      expect(second.map((c) => c.id)).toEqual(firstIds)
+      expect(second.map((c) => c.component)).toEqual(firstComponents)
+      for (const c of second) {
+        expect(c.moduleId).toBe(HOST_BUILTIN_MODULE_ID)
+      }
+    })
+
+    // Test 7 (spec §6.1 #7): interleaving module-declared + built-in sources is stable.
+    it('Test 7 — interleaved module + built-in dispatch state is stable across calls', () => {
+      registerModule({
+        id: 'editor',
+        name: 'Editor',
+        settings: [
+          { localId: 'editor-opts', scope: 'purdex', order: 0, labelKey: 'ed.editor-opts', component: FakeComponent },
+        ],
+      })
+      setHostBuiltinSections(defs('overview', 'sessions'))
+
+      dispatchSettingsContributions()
+      const purdexFirst = listContributions('purdex').map((c) => c.id)
+      const hostFirst = listContributions('host').map((c) => c.id)
+      expect(purdexFirst).toEqual(['editor.editor-opts'])
+      expect(hostFirst).toEqual(['_builtin.host.overview', '_builtin.host.sessions'])
+
+      dispatchSettingsContributions()
+      expect(listContributions('purdex').map((c) => c.id)).toEqual(purdexFirst)
+      expect(listContributions('host').map((c) => c.id)).toEqual(hostFirst)
+    })
+
+    // Test 8 (spec §6.1 #8): HMR reset clears host built-ins; subsequent dispatch sees zero.
+    it('Test 8 — resetSettingsContributionsForHmr() clears host-builtin sources', () => {
+      setHostBuiltinSections(defs('overview'))
+      dispatchSettingsContributions()
+      expect(listContributions('host')).toHaveLength(1)
+
+      resetSettingsContributionsForHmr()
+      dispatchSettingsContributions()
+      expect(listContributions('host')).toEqual([])
     })
   })
 })

@@ -10,10 +10,9 @@ import {
   peekLegacyContributionQueue,
 } from './settings-section-registry'
 import {
-  clearHostBuiltinPending,
-  drainHostBuiltinQueue,
+  clearHostBuiltinSources,
+  getHostBuiltinDeclarations,
   HOST_BUILTIN_MODULE_ID,
-  peekHostBuiltinQueue,
 } from './host-builtin-sections'
 import type {
   AnySettingsContribution,
@@ -145,10 +144,13 @@ export function buildSettingsContributionBatch(
     batch.push(full)
   }
 
-  // Peek (non-destructive) at the host built-in adapter pending buffer.
-  // Same F3 atomicity contract: peeked here for validation, drained only
-  // in the commit phase of `dispatchSettingsContributions()`.
-  const hostBuiltinDecls = peekHostBuiltinQueue()
+  // Re-materialize host built-ins from the stable source map every dispatch.
+  // The source map is long-lived (mutated only by setHostBuiltinSections /
+  // clearHostBuiltinSources), so this is idempotent across repeated dispatch
+  // calls — fixes #586 where a standalone second dispatch call would wipe
+  // built-in host contributions because the old pending-buffer/drain
+  // pattern emptied the buffer after the first commit.
+  const hostBuiltinDecls = getHostBuiltinDeclarations()
   for (const decl of hostBuiltinDecls) {
     const full = {
       ...decl,
@@ -182,7 +184,9 @@ export function dispatchSettingsContributions(
   // Phase 2 — commit. Safe to mutate now: validation passed.
   clearContributions()
   drainLegacyContributionQueue()  // safe: staging already holds the validated set
-  drainHostBuiltinQueue()         // same atomicity contract as legacy drain
+  // No host-builtin drain — sources are long-lived (#586). The batch already
+  // contains the materialized host-builtin contributions; registering them
+  // below is sufficient. Repeated dispatches are idempotent.
   for (const contribution of batch) {
     registerSettingsContribution(contribution)
   }
@@ -202,5 +206,5 @@ export function dispatchSettingsContributions(
 export function resetSettingsContributionsForHmr(): void {
   clearContributions()
   clearLegacyPending()
-  clearHostBuiltinPending()
+  clearHostBuiltinSources()
 }

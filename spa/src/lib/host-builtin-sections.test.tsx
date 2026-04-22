@@ -1,23 +1,21 @@
 /**
- * §3.3 — Built-in host sub-page adapter tests (PR-4 Commit 1)
+ * host-builtin-sections.test.tsx
  *
- * Verifies that `registerBuiltinModules()` registers exactly six host-scoped
- * contributions with the correct moduleId, order, wrap semantics, and scope
- * guard.
+ * Covers two layers:
  *
- * Test design — Test 3 (render-level props forwarding):
- *   OverviewSection is swapped for a spy stub via vi.mock so zustand/HTTP
- *   dependencies are never loaded.  The wrapper is rendered with a real host
- *   ctx and the resulting DOM is asserted — proving (a) the wrapper renders,
- *   (b) the underlying section component is invoked, (c) hostId is forwarded.
+ * 1. The PR-4 §3.3 baseline — `registerBuiltinModules()` registers the six
+ *    expected host-scoped contributions with the correct moduleId / order
+ *    / wrap semantics / scope guard.
  *
- *   The "all six identity" extra test uses the WeakMap as a complementary
- *   structural check and keeps that coverage without duplicating the render
- *   assertion for every section.
- *
- *   Test 4 (scope guard) renders the wrapper component directly with a wrong-
- *   scope ctx and asserts the output is null — the wrapper is a pure function
- *   with no external dependencies, so no mocks are needed.
+ * 2. The #586 follow-up contracts on the new batch-replace source-map API
+ *    (`setHostBuiltinSections`, `getHostBuiltinDeclarations`,
+ *    `clearHostBuiltinSources`):
+ *    - full-replace semantics (dropped localIds disappear),
+ *    - wrapper identity stable per localId across re-calls (incl. HMR-style
+ *      component-reference swap),
+ *    - wrapper delegates to the latest component reference,
+ *    - re-add after drop rebuilds the wrapper,
+ *    - clear empties the source map.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render } from '@testing-library/react'
@@ -30,10 +28,9 @@ vi.mock('../features/workspace/lib/icon-path-cache', () => ({
   prefetchWeight: () => Promise.resolve(),
 }))
 
-// Mock OverviewSection so Test 3 can render the wrapper without pulling in
-// zustand / HTTP dependencies.  The stub is a named export (matching the
-// real module's export shape) and renders identifiable content that includes
-// the forwarded hostId prop.
+// Mock OverviewSection so the §3.3 render-level tests can render the wrapper
+// without pulling in zustand / HTTP dependencies.  The stub is a named export
+// matching the real module's export shape.
 vi.mock('../components/hosts/OverviewSection', () => ({
   OverviewSection: vi.fn(({ hostId }: { hostId: string }) => (
     <div data-testid="overview-stub">overview-for-{hostId}</div>
@@ -54,9 +51,12 @@ import {
   listContributions,
 } from './settings-contribution-registry'
 import {
-  clearHostBuiltinPending,
+  clearHostBuiltinSources,
+  getHostBuiltinDeclarations,
   hostBuiltinComponentMap,
   HOST_BUILTIN_MODULE_ID,
+  setHostBuiltinSections,
+  type HostBuiltinSectionDef,
 } from './host-builtin-sections'
 
 // Import the six section components so we can verify identity (extra test).
@@ -73,8 +73,10 @@ function clearAll() {
   clearSettingsSectionRegistry()
   clearInterfaceSubsectionRegistry()
   clearContributions()
-  clearHostBuiltinPending()
+  clearHostBuiltinSources()
 }
+
+// ---------- §3.3 baseline (PR-4) ------------------------------------------
 
 describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions', () => {
   beforeEach(() => {
@@ -86,8 +88,6 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     clearAll()
   })
 
-  // Test 1: After registerBuiltinModules(), listContributions('host') contains
-  // exactly 6 items, all with moduleId === '_builtin.host'
   it('registers exactly 6 host-scoped contributions with moduleId _builtin.host', () => {
     registerBuiltinModules()
     const hostContribs = listContributions('host')
@@ -97,7 +97,6 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     }
   })
 
-  // Test 2: Order is exactly overview → sessions → hooks → agents → uploads → logs
   it('orders contributions as: overview, sessions, hooks, agents, uploads, logs', () => {
     registerBuiltinModules()
     const hostContribs = listContributions('host')
@@ -105,9 +104,6 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     expect(localIds).toEqual(['overview', 'sessions', 'hooks', 'agents', 'uploads', 'logs'])
   })
 
-  // Test 3: The contribution's component wraps OverviewSection and forwards hostId.
-  // Renders the wrapper with a real host ctx and asserts on the stub's DOM output,
-  // proving (a) wrapper renders, (b) section is invoked, (c) hostId is forwarded.
   it('renders OverviewSection with forwarded hostId for host ctx', () => {
     registerBuiltinModules()
     const overview = listContributions('host').find((c) => c.localId === 'overview')
@@ -121,7 +117,6 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     expect(node.textContent).toBe('overview-for-hA')
   })
 
-  // Bonus identity checks for the remaining five sections (keeps Test 3's spirit).
   it('wraps all six sections to their original components', () => {
     registerBuiltinModules()
     const hostContribs = listContributions('host')
@@ -145,7 +140,6 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     }
   })
 
-  // Test 4: Scope guard — render with ctx.scope !== 'host' returns null.
   it('scope guard: wrapper returns null when ctx.scope is not "host"', () => {
     registerBuiltinModules()
     const hostContribs = listContributions('host')
@@ -156,15 +150,12 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
       ctx: { scope: string; workspaceId?: string }
     }>
 
-    // Render with a workspace ctx — must produce null (no DOM nodes).
-    // The guard is a single `!== 'host'` check, so any non-host scope suffices.
     const { container } = render(
       <Wrapper ctx={{ scope: 'workspace', workspaceId: 'wA' }} />,
     )
     expect(container.firstChild).toBeNull()
   })
 
-  // Structural checks on all contributions.
   it('all contributions have correct scope, valid localIds, and labelKey starting with "hosts."', () => {
     registerBuiltinModules()
     const hostContribs = listContributions('host')
@@ -176,7 +167,6 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     }
   })
 
-  // HMR safety: re-running registerBuiltinModules does not accumulate duplicates.
   it('is HMR-safe: re-running registerBuiltinModules after clearAll does not duplicate', () => {
     registerBuiltinModules()
     const first = listContributions('host').length
@@ -185,5 +175,96 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     const second = listContributions('host').length
     expect(first).toBe(6)
     expect(second).toBe(6)
+  })
+})
+
+// ---------- #586 follow-up: batch-replace source map ----------------------
+
+describe('#586 — setHostBuiltinSections (batch-replace source map)', () => {
+  beforeEach(() => {
+    clearHostBuiltinSources()
+    clearContributions()
+  })
+
+  afterEach(() => {
+    clearHostBuiltinSources()
+    clearContributions()
+  })
+
+  function makeSection(localId: string, render?: (hostId: string) => React.ReactNode): HostBuiltinSectionDef {
+    const Section: React.FC<{ hostId: string }> = ({ hostId }) =>
+      <div data-testid={`section-${localId}`}>{render ? render(hostId) : `${localId}-${hostId}`}</div>
+    Section.displayName = `Section_${localId}`
+    return { localId, labelKey: `hosts.${localId}`, order: 0, component: Section }
+  }
+
+  // Test 1 (spec §6.1 #1): batch-replace defines the exact set; absent localIds are dropped.
+  it('Test 1 — batch replace is the full set; absent localIds are dropped', () => {
+    setHostBuiltinSections([makeSection('a'), makeSection('b'), makeSection('c')])
+    expect(getHostBuiltinDeclarations().map((d) => d.localId).sort()).toEqual(['a', 'b', 'c'])
+
+    setHostBuiltinSections([makeSection('a'), makeSection('d')])
+    expect(getHostBuiltinDeclarations().map((d) => d.localId).sort()).toEqual(['a', 'd'])
+  })
+
+  // Test 2 (spec §6.1 #2): wrapper identity stable across re-calls with same localIds (HMR).
+  it('Test 2 — wrapper identity stable across re-calls with the same localIds (HMR)', () => {
+    setHostBuiltinSections([makeSection('a')])
+    const firstWrapped = getHostBuiltinDeclarations()[0].component
+
+    // Simulate HMR: a fresh section component reference for the same localId.
+    setHostBuiltinSections([makeSection('a')])
+    const secondWrapped = getHostBuiltinDeclarations()[0].component
+
+    expect(secondWrapped).toBe(firstWrapped)
+  })
+
+  // Test 3 (spec §6.1 #3): wrapper delegates to the latest component.
+  it('Test 3 — wrapper delegates to the latest section component', () => {
+    const first = vi.fn(({ hostId }: { hostId: string }) => <div data-testid="impl">v1-{hostId}</div>)
+    const second = vi.fn(({ hostId }: { hostId: string }) => <div data-testid="impl">v2-{hostId}</div>)
+
+    setHostBuiltinSections([{ localId: 'a', labelKey: 'hosts.a', order: 0, component: first }])
+    const Wrapper = getHostBuiltinDeclarations()[0].component as React.ComponentType<{ ctx: { scope: 'host'; hostId: string; runtime?: undefined } }>
+    const { getByTestId, rerender } = render(<Wrapper ctx={{ scope: 'host', hostId: 'hA', runtime: undefined }} />)
+    expect(getByTestId('impl').textContent).toBe('v1-hA')
+    expect(first).toHaveBeenCalled()
+
+    // Swap the underlying section component (HMR style).
+    setHostBuiltinSections([{ localId: 'a', labelKey: 'hosts.a', order: 0, component: second }])
+    rerender(<Wrapper ctx={{ scope: 'host', hostId: 'hA', runtime: undefined }} />)
+    expect(getByTestId('impl').textContent).toBe('v2-hA')
+    expect(second).toHaveBeenCalled()
+  })
+
+  // Test 4 (spec §6.1 #4): re-add after drop rebuilds the wrapper.
+  it('Test 4 — re-add after drop rebuilds the wrapper (cached identity is released)', () => {
+    setHostBuiltinSections([makeSection('a')])
+    const before = getHostBuiltinDeclarations()[0].component
+
+    setHostBuiltinSections([])  // drop
+    expect(getHostBuiltinDeclarations()).toEqual([])
+
+    setHostBuiltinSections([makeSection('a')])
+    const after = getHostBuiltinDeclarations()[0].component
+    expect(after).not.toBe(before)
+  })
+
+  // Test 5 (spec §6.1 #5): clearHostBuiltinSources empties the source map.
+  it('Test 5 — clearHostBuiltinSources empties the source map', () => {
+    setHostBuiltinSections([makeSection('a'), makeSection('b')])
+    expect(getHostBuiltinDeclarations()).toHaveLength(2)
+    clearHostBuiltinSources()
+    expect(getHostBuiltinDeclarations()).toEqual([])
+  })
+
+  // Bonus: declaration shape is correctly carried through.
+  it('declaration shape includes scope/order/labelKey from the source def', () => {
+    setHostBuiltinSections([
+      { localId: 'x', labelKey: 'hosts.x', order: 7, component: OverviewSection },
+    ])
+    const decls = getHostBuiltinDeclarations()
+    expect(decls).toHaveLength(1)
+    expect(decls[0]).toMatchObject({ localId: 'x', labelKey: 'hosts.x', order: 7, scope: 'host' })
   })
 })

@@ -52,7 +52,7 @@ import { fetchSessionCwd, fetchSessionHome } from './host-api'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { openBrowserTab } from './open-browser-tab'
 import { getDefaultOpener } from './file-opener-registry'
-import { registerBuiltinHostSection } from './host-builtin-sections'
+import { setHostBuiltinSections } from './host-builtin-sections'
 import { OverviewSection } from '../components/hosts/OverviewSection'
 import { SessionsSection } from '../components/hosts/SessionsSection'
 import { HooksSection } from '../components/hosts/HooksSection'
@@ -392,16 +392,19 @@ export function registerBuiltinModules(): void {
     },
   })
 
-  // Built-in host sub-page contributions (PR-4).
-  // Push into the host-builtin pending buffer; flushed atomically by the
-  // dispatchSettingsContributions() call below (§7.2 dispatch-flushed pattern).
-  // Order follows the established HOST_SUB_PAGES sequence: 0–5.
-  registerBuiltinHostSection({ localId: 'overview',  labelKey: 'hosts.overview',  order: 0, component: OverviewSection })
-  registerBuiltinHostSection({ localId: 'sessions',  labelKey: 'hosts.sessions',  order: 1, component: SessionsSection })
-  registerBuiltinHostSection({ localId: 'hooks',     labelKey: 'hosts.hooks',     order: 2, component: HooksSection })
-  registerBuiltinHostSection({ localId: 'agents',    labelKey: 'hosts.agents',    order: 3, component: AgentsSection })
-  registerBuiltinHostSection({ localId: 'uploads',   labelKey: 'hosts.uploads',   order: 4, component: UploadSection })
-  registerBuiltinHostSection({ localId: 'logs',      labelKey: 'hosts.logs',      order: 5, component: LogsSection })
+  // Built-in host sub-page contributions (PR-4 + #586).
+  // Atomically replace the full set of built-in host sources; any localId
+  // not in this list would be dropped.  Re-materialized by every
+  // dispatchSettingsContributions() call (idempotent).  Wrapper identity is
+  // stable per localId across HMR reloads.
+  setHostBuiltinSections([
+    { localId: 'overview',  labelKey: 'hosts.overview',  order: 0, component: OverviewSection },
+    { localId: 'sessions',  labelKey: 'hosts.sessions',  order: 1, component: SessionsSection },
+    { localId: 'hooks',     labelKey: 'hosts.hooks',     order: 2, component: HooksSection },
+    { localId: 'agents',    labelKey: 'hosts.agents',    order: 3, component: AgentsSection },
+    { localId: 'uploads',   labelKey: 'hosts.uploads',   order: 4, component: UploadSection },
+    { localId: 'logs',      labelKey: 'hosts.logs',      order: 5, component: LogsSection },
+  ])
 
   // Dispatch module-declared settings contributions into the contribution registry.
   // Must run AFTER all registerModule(...) calls so every module is visible.

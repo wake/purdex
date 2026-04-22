@@ -26,6 +26,7 @@ import {
   listContributions,
   getContribution,
 } from './settings-contribution-registry'
+import { clearHostBuiltinSources } from './host-builtin-sections'
 
 const FakeComponent = () => null
 
@@ -35,6 +36,7 @@ function clearAll() {
   clearSettingsSectionRegistry()
   clearInterfaceSubsectionRegistry()
   clearContributions()
+  clearHostBuiltinSources()
 }
 
 describe('registerBuiltinModules', () => {
