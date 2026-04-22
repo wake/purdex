@@ -213,11 +213,6 @@ export function buildSettingsContributionBatch(
 export function dispatchSettingsContributions(
   modules: ModuleDefinition[] = getModules(),
 ): void {
-  // PR-5 deprecation warnings: detect legacy API usage before validation.
-  // Runs only when Phase 1 succeeds (wrapped below) to avoid noise on
-  // validation failures that would otherwise be retried.
-  warnLegacyConfigDeprecations(modules)
-
   // Phase 1 — validate without mutating. Throws on any collision (F1) or
   // invariant violation. The legacy queue is peeked, not drained.
   const batch = buildSettingsContributionBatch(modules)
@@ -234,6 +229,11 @@ export function dispatchSettingsContributions(
   for (const contribution of batch) {
     registerSettingsContribution(contribution)
   }
+
+  // PR-5 deprecation warnings: emit only after a successful dispatch so a
+  // validation-failed pass doesn't silently burn the dedupe key for the
+  // successful retry.
+  warnLegacyConfigDeprecations(modules)
 }
 
 /**

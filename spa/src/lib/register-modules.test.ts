@@ -469,4 +469,37 @@ describe('ModuleDefinition.globalConfig / workspaceConfig deprecation (PR-5)', (
     const hits = (warnSpy.mock.calls as unknown[][]).filter((c) => String(c[0]).includes('dedupe')).length
     expect(hits).toBe(1)
   })
+
+  it('defers the warning until after a successful dispatch (R1 codex)', () => {
+    // Module with I1 violation: both globalConfig AND settings[scope='purdex']
+    registerModule({
+      id: 'retrymod',
+      name: 'Retry',
+      globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+      settings: [
+        { localId: 'x', scope: 'purdex', order: 0, labelKey: 'x', component: FakeComponent },
+      ],
+    })
+    expect(() => dispatchSettingsContributions()).toThrow()
+    const beforeHits = (warnSpy.mock.calls as unknown[][]).filter(
+      (c) => String(c[0]).includes('retrymod') && String(c[0]).includes('deprecated'),
+    ).length
+    // Prior to the fix, the warn ran BEFORE validation and burnt the dedupe
+    // key even on failed dispatches — the retry would then observe no warn.
+    // With the fix, the failed dispatch emits nothing.
+    expect(beforeHits).toBe(0)
+
+    // Author fixes the conflict and retries. The retry is the first
+    // successful dispatch, so it should emit the deprecation warning.
+    registerModule({
+      id: 'retrymod',
+      name: 'Retry',
+      globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+    })
+    dispatchSettingsContributions()
+    const afterHits = (warnSpy.mock.calls as unknown[][]).filter(
+      (c) => String(c[0]).includes('retrymod') && String(c[0]).includes('deprecated'),
+    ).length
+    expect(afterHits).toBe(1)
+  })
 })
