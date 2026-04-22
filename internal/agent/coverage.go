@@ -1,7 +1,5 @@
 package agent
 
-import "sort"
-
 // CoverageRow describes a single provider's Status declaration state.
 type CoverageRow struct {
 	AgentType string
@@ -10,10 +8,12 @@ type CoverageRow struct {
 }
 
 // Coverage produces a matrix of each registered provider's declared Status
-// support, sorted by AgentType. Providers not implementing StatusSupporter
-// are reported with Declares=false and Declared=nil. Providers implementing
-// it have Declared normalized to a non-nil defensive copy (even for empty
-// declarations). Returns nil for an empty registry.
+// support, preserving the registry's registration order (which carries the
+// Claim-priority semantics defined by Registry). Providers not implementing
+// StatusSupporter are reported with Declares=false and Declared=nil.
+// Providers implementing it have Declared normalized to a non-nil defensive
+// copy (even for empty declarations). Returns nil for an empty registry.
+// Callers that need alphabetic display order should sort the result themselves.
 func Coverage(r *Registry) []CoverageRow {
 	providers := r.All()
 	if len(providers) == 0 {
@@ -33,8 +33,5 @@ func Coverage(r *Registry) []CoverageRow {
 		}
 		rows = append(rows, row)
 	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		return rows[i].AgentType < rows[j].AgentType
-	})
 	return rows
 }

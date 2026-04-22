@@ -115,9 +115,11 @@ func TestCoverageEmptyDeclaration(t *testing.T) {
 	}
 }
 
-func TestCoverageSortedByAgentType(t *testing.T) {
+func TestCoverageRegistrationOrder(t *testing.T) {
 	r := agent.NewRegistry()
-	// Register in reverse alphabetical order to ensure sort is exercised.
+	// Register in reverse alphabetical order; Coverage must preserve the
+	// registry's registration order (which carries Claim-priority semantics),
+	// not re-sort alphabetically.
 	r.Register(&fakeProvider{agentType: "zed"})
 	r.Register(&fakeProvider{agentType: "abc"})
 	r.Register(&fakeProvider{agentType: "mid"})
@@ -126,11 +128,38 @@ func TestCoverageSortedByAgentType(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(rows))
 	}
-	want := []string{"abc", "mid", "zed"}
+	want := []string{"zed", "abc", "mid"}
 	for i, w := range want {
 		if rows[i].AgentType != w {
 			t.Fatalf("row %d: expected AgentType=%q, got %q", i, w, rows[i].AgentType)
 		}
+	}
+}
+
+func TestCoverageDuplicateAgentType(t *testing.T) {
+	// Two providers sharing the same AgentType (e.g. a plugin shadowing a
+	// built-in). Coverage must preserve both rows in their registration order
+	// so downstream diagnostics can see the shadow, instead of collapsing or
+	// re-sorting them.
+	r := agent.NewRegistry()
+	r.Register(&supporterStub{
+		fakeProvider: fakeProvider{agentType: "cc"},
+		supported:    []agent.Status{agent.StatusRunning},
+	})
+	r.Register(&fakeProvider{agentType: "cc"}) // duplicate, registered second
+
+	rows := agent.Coverage(r)
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows (duplicates preserved), got %d", len(rows))
+	}
+	if rows[0].AgentType != "cc" || rows[1].AgentType != "cc" {
+		t.Fatalf("expected both rows to be AgentType=cc, got [%q, %q]", rows[0].AgentType, rows[1].AgentType)
+	}
+	if !rows[0].Declares {
+		t.Fatalf("expected first-registered cc to keep Declares=true")
+	}
+	if rows[1].Declares {
+		t.Fatalf("expected second-registered cc to keep Declares=false (registration order, no rewrite)")
 	}
 }
 
@@ -146,7 +175,7 @@ func TestCoverageMixed(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("expected 2 rows, got %d", len(rows))
 	}
-	// Sorted: cc < codex
+	// Registration order: cc first, codex second (not alphabetic guarantee).
 	if rows[0].AgentType != "cc" || rows[1].AgentType != "codex" {
 		t.Fatalf("expected order [cc, codex], got [%q, %q]", rows[0].AgentType, rows[1].AgentType)
 	}
