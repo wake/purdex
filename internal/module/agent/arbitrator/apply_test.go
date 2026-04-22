@@ -1054,3 +1054,217 @@ func TestApply_HookStorm_EmitsHookStormDroppedTrace(t *testing.T) {
 		t.Errorf("HookStormDropped phase = %q, want rejected", rej[0].Phase)
 	}
 }
+
+// ----- C5: Authoritative fail-closed is a pre-gate ------------------------
+
+// TestApply_AuthoritativeMode_DoesNotAdvanceGeneration_OnSessionStart
+// verifies the authoritative pre-gate (step 0b) blocks the SessionStart
+// helper entirely. Before C5 the mode check ran AFTER checkGenerationGate,
+// so frameState would have its generation bumped and actors ended even
+// though the observation was ultimately rejected.
+func TestApply_AuthoritativeMode_DoesNotAdvanceGeneration_OnSessionStart(t *testing.T) {
+	h := newApplyHarness(t)
+	h.arbmodeFk.current = arbmode.ModeAuthoritative
+	h.frames.getOrCreateSession("s1").Generation = 1
+
+	obs := h.obsBuilder().withSession("s1", 2).hook().withAction(actionSessionStart).build()
+	h.deps.apply(obs)
+
+	if g := h.frames.getOrCreateSession("s1").Generation; g != 1 {
+		t.Errorf("generation after authoritative SessionStart = %d, want 1 (pre-gate must block mutation)", g)
+	}
+	if len(h.minter.mintCalls) != 0 {
+		t.Errorf("Mint called under authoritative; want no mint (pre-gate blocks)")
+	}
+	// Exactly one rejected trace (authoritative).
+	rej := h.trace.byReason(ReasonAuthoritativeNotSupportedPhase1)
+	if len(rej) != 1 {
+		t.Errorf("authoritative reject count = %d, want 1", len(rej))
+	}
+}
+
+// TestApply_AuthoritativeMode_DoesNotEndActors verifies the pre-gate blocks
+// forceEndOldGenActors for authoritative mode. Before C5, a SessionStart
+// observation would end all pre-existing actors even though the
+// observation was rejected.
+func TestApply_AuthoritativeMode_DoesNotEndActors(t *testing.T) {
+	h := newApplyHarness(t)
+	h.arbmodeFk.current = arbmode.ModeAuthoritative
+	h.frames.getOrCreateSession("s1").Generation = 1
+	oldKey := observation.ActorKey{SessionID: "s1", Generation: 1, ActorID: "old"}
+	h.frames.upsertActor(oldKey, func(a *actorSummary) {
+		a.Status = "active"
+		a.LastActivity = h.now
+	})
+
+	obs := h.obsBuilder().withSession("s1", 2).hook().withAction(actionSessionStart).build()
+	h.deps.apply(obs)
+
+	actor, ok := h.frames.actor(oldKey)
+	if !ok {
+		t.Fatal("actor should still exist")
+	}
+	if actor.EndedAt != nil {
+		t.Errorf("old actor was ended under authoritative mode (EndedAt=%v); pre-gate must block mutation", actor.EndedAt)
+	}
+}
+
+// TestApply_AuthoritativeMode_DoesNotAdvancePrimary verifies the pre-gate
+// blocks enforceSinglePrimaryInvariant so primary transfers do not happen
+// on rejected observations.
+func TestApply_AuthoritativeMode_DoesNotAdvancePrimary(t *testing.T) {
+	h := newApplyHarness(t)
+	h.arbmodeFk.current = arbmode.ModeAuthoritative
+	h.frames.getOrCreateSession("s1").Generation = 1
+	oldKey := observation.ActorKey{SessionID: "s1", Generation: 1, ActorID: "old"}
+	h.frames.upsertActor(oldKey, func(a *actorSummary) { a.Status = "active"; a.LastActivity = h.now })
+	h.frames.setPrimary(oldKey, h.now)
+
+	// Incoming obs asserts is_primary=true for a NEW actor.
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("new").withSuggest("active").withSeq(1).
+		withEvidence(observation.EvidenceRef{Key: "is_primary", Value: true}).build()
+	h.deps.apply(obs)
+
+	// Old primary must remain primary; no synthetic replacement trace.
+	oldA, _ := h.frames.actor(oldKey)
+	if !oldA.IsPrimary {
+		t.Error("old primary was demoted under authoritative — pre-gate must block")
+	}
+	for _, r := range h.trace.records {
+		if r.SourceKind == observation.SourceSynthetic && r.ReasonCode == endReasonReplacedByNewPrimary {
+			t.Errorf("synthetic replaced_by_new_primary emitted under authoritative; want none")
+		}
+	}
+}
+
+// ----- C1: Boundary trace carries newly minted trace_id -------------------
+
+// TestApplySessionStart_BoundaryTraceUsesNewlyMintedTraceID verifies that
+// the synthetic session.generation_advanced boundary trace is tagged with
+// the trace_id returned from minter.Mint for the new generation — NOT the
+// incoming obs.TraceID, which belongs to the prior (pre-advance) chain.
+// An empty TraceID would make validateLightsRow reject the whole batch
+// during flush.
+func TestApplySessionStart_BoundaryTraceUsesNewlyMintedTraceID(t *testing.T) {
+	h := newApplyHarness(t)
+	h.minter.nextMintID = "NEW_UUID_FROM_MINTER"
+	h.frames.getOrCreateSession("s1").Generation = 3
+
+	// Incoming hook carries a stale trace_id from the old chain.
+	obs := h.obsBuilder().withSession("s1", 4).hook().withAction(actionSessionStart).
+		withTrace("STALE_TRACE_FROM_OLD_GEN").build()
+	h.deps.apply(obs)
+
+	var boundary *TraceRecord
+	for i, r := range h.trace.records {
+		if r.SourceKind == observation.SourceSynthetic && r.Action == actionSessionGenerationAdvanced {
+			boundary = &h.trace.records[i]
+			break
+		}
+	}
+	if boundary == nil {
+		t.Fatalf("boundary trace missing; records=%+v", h.trace.records)
+	}
+	if boundary.TraceID != "NEW_UUID_FROM_MINTER" {
+		t.Errorf("boundary TraceID = %q, want NEW_UUID_FROM_MINTER (from minter.Mint, not obs.TraceID)",
+			boundary.TraceID)
+	}
+	if boundary.SpanID == "" {
+		t.Error("boundary SpanID must be non-empty (generated UUID) to keep AppendSteps idempotent")
+	}
+}
+
+// ----- C6: emitAcceptedTrace preserves incoming Phase ----------------------
+
+// TestApply_AcceptedTrace_CommittedObs_KeepsCommittedPhase_AndDropPriority0
+// verifies that a committed hook observation stays PhaseCommitted end-to-end
+// so the priority ring buffer's protections for hook+committed (dp=0) are
+// not silently downgraded to hook+proposed (dp=2) by the accept path.
+func TestApply_AcceptedTrace_CommittedObs_KeepsCommittedPhase_AndDropPriority0(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("a1").withSuggest("active").withSeq(1).build()
+	obs.Phase = observation.PhaseCommitted
+	h.deps.apply(obs)
+
+	accepted := h.trace.records
+	if len(accepted) != 1 {
+		t.Fatalf("want 1 accepted trace; got %d: %+v", len(accepted), accepted)
+	}
+	r := accepted[0]
+	if r.Phase != observation.PhaseCommitted {
+		t.Errorf("Phase = %q, want committed (incoming committed obs must not be downgraded)", r.Phase)
+	}
+	if r.DropPriority != 0 {
+		t.Errorf("DropPriority = %d, want 0 (hook+committed); downgrade breaks priority ring protection", r.DropPriority)
+	}
+}
+
+// TestApply_AcceptedTrace_ProposedObs_KeepsProposedPhase verifies the mirror
+// case: a proposed observation stays proposed after acceptance.
+func TestApply_AcceptedTrace_ProposedObs_KeepsProposedPhase(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("a1").withSuggest("active").withSeq(1).build()
+	// Leave Phase = PhaseProposed (default from obsBuilder).
+
+	h.deps.apply(obs)
+
+	if len(h.trace.records) != 1 {
+		t.Fatalf("want 1 accepted trace; got %d", len(h.trace.records))
+	}
+	if h.trace.records[0].Phase != observation.PhaseProposed {
+		t.Errorf("Phase = %q, want proposed", h.trace.records[0].Phase)
+	}
+	if h.trace.records[0].DropPriority != 2 {
+		t.Errorf("DropPriority = %d, want 2 (hook+proposed)", h.trace.records[0].DropPriority)
+	}
+}
+
+// ----- C8 defensive: SpanID is generated when missing ----------------------
+
+// TestEmitTrace_GeneratesStableSpanIDWhenMissing verifies emit*Trace
+// back-fills SpanID with a fresh UUID when the incoming observation carries
+// none. Without this, toStoreSteps would synthesize a step_id from
+// trace_id+seq+batch-index — batch-local indices break INSERT OR IGNORE
+// idempotency across AppendSteps retries.
+func TestEmitTrace_GeneratesStableSpanIDWhenMissing(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("a1").withSuggest("active").withSeq(1).build()
+	// SpanID explicitly left empty.
+	if obs.SpanID != "" {
+		t.Fatalf("test precondition: obs.SpanID should be empty")
+	}
+
+	h.deps.apply(obs)
+
+	if len(h.trace.records) != 1 {
+		t.Fatalf("want 1 trace; got %d", len(h.trace.records))
+	}
+	if h.trace.records[0].SpanID == "" {
+		t.Error("emitAcceptedTrace must back-fill empty obs.SpanID with a fresh UUID")
+	}
+
+	// Rejected path: a stale-generation obs gets a fresh SpanID too.
+	h.trace.records = nil
+	h.frames.getOrCreateSession("s2").Generation = 5
+	rejObs := h.obsBuilder().withSession("s2", 2).hook().withAction("PostToolUse").build()
+	if rejObs.SpanID != "" {
+		t.Fatalf("test precondition: rejected obs.SpanID should be empty")
+	}
+	h.deps.apply(rejObs)
+	if len(h.trace.records) != 1 {
+		t.Fatalf("want 1 rejected trace; got %d", len(h.trace.records))
+	}
+	if h.trace.records[0].SpanID == "" {
+		t.Error("emitRejectedTrace must back-fill empty obs.SpanID with a fresh UUID")
+	}
+}

@@ -3,6 +3,7 @@ package arbitrator
 import (
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wake/purdex/internal/module/agent/arbmode"
 	"github.com/wake/purdex/internal/module/agent/observation"
 )
@@ -65,16 +66,28 @@ type applyDeps struct {
 //
 // Each step returns early (via trace emission) when it rejects or stashes
 // the observation; step 9 is reached only when all prior gates accept.
-// D12 hook-storm is a pre-gate — step 0 — so the storm does not inflate
+// D12 hook-storm is a pre-gate — step 0a — so the storm does not inflate
 // idem / pending state for a session that has already blown its budget.
+// The authoritative-mode fail-closed gate is also a pre-gate — step 0b —
+// so frameState mutations (generation bump, actor end, primary transfer)
+// never fire for observations that are going to be rejected anyway.
 func (d *applyDeps) apply(obs observation.Observation) {
 	now := d.now()
 
-	// Step 0 — D12 hook-storm pre-gate. Only applies to hook-sourced obs;
+	// Step 0a — D12 hook-storm pre-gate. Only applies to hook-sourced obs;
 	// probes/sweeps/synthetic/reconcile have their own rate characteristics.
 	if obs.SourceKind == observation.SourceHook && d.stormGuard != nil &&
 		d.stormGuard.ShouldDrop(obs.SessionID, now) {
 		d.emitRejectedTrace(obs, ReasonHookStormDropped, "per-session hook rate exceeded")
+		return
+	}
+
+	// Step 0b — Authoritative-mode fail-closed (P2-2). Applied BEFORE any
+	// state-mutating step so frameState is not polluted by observations
+	// that are ultimately rejected. Phase 2 replaces this with real
+	// authoritative mutations; today it's a strict pre-gate.
+	if snapshot := d.arbmode.Snapshot(); snapshot.Current == arbmode.ModeAuthoritative {
+		d.emitRejectedTrace(obs, ReasonAuthoritativeNotSupportedPhase1, "authoritative mode not supported until Phase 2")
 		return
 	}
 
@@ -114,8 +127,10 @@ func (d *applyDeps) apply(obs observation.Observation) {
 	// trace for any displaced primary and updates frameState directly.
 	d.enforceSinglePrimaryInvariant(obs)
 
-	// Step 8 — Mode branch (passthrough advances frameState lineage only;
-	// authoritative fail-closes per P2-2).
+	// Step 8 — Mode branch (defensive). Authoritative is already rejected
+	// at step 0b; the branch here is a belt-and-braces guard against
+	// unknown modes slipping past the pre-gate. Passthrough falls through
+	// to step 9 (trace emission).
 	if !d.applyModeBranch(obs) {
 		return
 	}
@@ -172,8 +187,11 @@ func (d *applyDeps) applySessionStart(obs observation.Observation) {
 	// Step 1 — bump generation after stashing oldGen side-effects.
 	sg.Generation = newGen
 
-	// Step 5 — mint the new generation's trace_id.
-	d.minter.Mint(sid, newGen)
+	// Step 5 — mint the new generation's trace_id. The returned id becomes
+	// the authoritative tag for every boundary-synthesis event emitted for
+	// this new generation; obs.TraceID still carries the *incoming* hook's
+	// trace-id which is stale relative to the newly bumped generation.
+	newTraceID := d.minter.Mint(sid, newGen)
 
 	// Step 6 — prune any trace_id entries for generations below newGen.
 	d.minter.PruneSessionBefore(sid, newGen)
@@ -181,8 +199,11 @@ func (d *applyDeps) applySessionStart(obs observation.Observation) {
 	// Step 7 — consume the latest published arbmode target.
 	d.arbmode.ApplyAtSessionStart()
 
-	// Step 8 — emit synthetic boundary trace.
-	d.emitBoundaryTrace(obs, newGen, len(endedActors), clearedPending)
+	// Step 8 — emit synthetic boundary trace stamped with the newly minted
+	// trace_id (not obs.TraceID which is from the old generation's trace
+	// chain). Empty trace_id would trip validateLightsRow and poison the
+	// whole flush batch.
+	d.emitBoundaryTrace(obs, newGen, newTraceID, len(endedActors), clearedPending)
 }
 
 // checkWatcher verifies a probe observation's WatcherToken matches the
@@ -332,40 +353,38 @@ func (d *applyDeps) enforceSinglePrimaryInvariant(obs observation.Observation) {
 	d.frames.setPrimary(key, now)
 }
 
-// applyModeBranch implements D6 step 8 + P2-2 fail-closed for authoritative.
+// applyModeBranch is a defensive post-mutation mode check.
 //
-// Passthrough: frameState has already been updated by the preceding steps
-// (generation gate, idempotency bookkeeping, potential primary rotation).
-// PR-1b-1b deliberately does NOT write FramesStore / divergence / broadcast;
-// that wiring lands in 1b-1c. The return-true here means "proceed to step 9
-// and emit the accept trace".
+// The authoritative fail-closed gate moved to step 0b of apply() — by the
+// time we reach this function, passthrough is the only expected mode. This
+// branch stays around to catch unknown / newly-added modes that might
+// somehow slip past the pre-gate; it treats anything non-passthrough as
+// fail-closed so the reducer can never silently skip Phase-2 wiring.
 //
-// Authoritative: fail-closed. Observations are rejected with a stable
-// reason_code so operators who set AGENT_ARB_MODE=authoritative see an
-// explicit reject rather than a silent half-functional system. Phase 2
-// replaces this branch with real frame mutations.
+// Passthrough: PR-1b-1b deliberately does NOT write FramesStore /
+// divergence / broadcast; that wiring lands in 1b-1c. Return-true here
+// means "proceed to step 9 and emit the accept trace".
 func (d *applyDeps) applyModeBranch(obs observation.Observation) bool {
 	snapshot := d.arbmode.Snapshot()
-	switch snapshot.Current {
-	case arbmode.ModePassthrough:
+	if snapshot.Current == arbmode.ModePassthrough {
 		return true
-	case arbmode.ModeAuthoritative:
-		d.emitRejectedTrace(obs, ReasonAuthoritativeNotSupportedPhase1, "authoritative mode not supported until Phase 2")
-		return false
-	default:
-		// Defensive — should be unreachable because arbmode.Manager always
-		// publishes a valid mode. Treat as authoritative fail-closed.
-		d.emitRejectedTrace(obs, ReasonAuthoritativeNotSupportedPhase1, "unknown arb_mode")
-		return false
 	}
+	// Authoritative (pre-gate usually catches this) or unknown mode — fail
+	// closed defensively.
+	d.emitRejectedTrace(obs, ReasonAuthoritativeNotSupportedPhase1, "non-passthrough mode not supported until Phase 2")
+	return false
 }
 
 // emitAcceptedTrace builds and submits the trace record for an observation
 // that passed the full pipeline. In 1b-1b (passthrough only) the record is
-// Phase=proposed + Outcome=skipped because nothing is actually persisted
-// externally; 1b-1c will flip this to committed when the dual-write lands.
-// It also records the acceptance onto the actor summary so step-5 source
-// priority can consult it on future observations.
+// Outcome=skipped because nothing is actually persisted externally; 1b-1c
+// will flip outcome semantics when the dual-write lands.
+//
+// Phase is preserved from the incoming observation (not hard-coded to
+// PhaseProposed): a committed observation stays committed end-to-end so the
+// priority ring buffer keeps its drop-priority-0/1 protections. Missing
+// SpanID is back-filled with a fresh UUID so AppendSteps retries remain
+// idempotent (INSERT OR IGNORE keys on step_id).
 func (d *applyDeps) emitAcceptedTrace(obs observation.Observation) {
 	if obs.Proposal.ActorKey != (observation.ActorKey{}) {
 		d.frames.upsertActor(obs.Proposal.ActorKey, func(a *actorSummary) {
@@ -389,15 +408,24 @@ func (d *applyDeps) emitAcceptedTrace(obs observation.Observation) {
 		})
 	}
 
+	phase := obs.Phase
+	if phase == "" {
+		phase = observation.PhaseProposed
+	}
+	spanID := obs.SpanID
+	if spanID == "" {
+		spanID = uuid.NewString()
+	}
+
 	r := TraceRecord{
 		TraceID:            obs.TraceID,
-		SpanID:             obs.SpanID,
+		SpanID:             spanID,
 		ParentSpanID:       obs.ParentSpanID,
 		SessionID:          obs.SessionID,
 		ObservedGeneration: obs.ObservedGeneration,
 		SourceKind:         obs.SourceKind,
 		Action:             obs.Action,
-		Phase:              observation.PhaseProposed,
+		Phase:              phase,
 		Status:             "success",
 		Outcome:            "skipped",
 		DecisionPorts:      obs.DecisionPorts,
@@ -405,7 +433,7 @@ func (d *applyDeps) emitAcceptedTrace(obs observation.Observation) {
 		StartedAt:          obs.ObservedAt,
 		EndedAt:            obs.ObservedAt,
 		Seq:                obs.Seq,
-		DropPriority:       dropPriority(obs.SourceKind, observation.PhaseProposed),
+		DropPriority:       dropPriority(obs.SourceKind, phase),
 	}
 	d.traceSubmit.Submit(r)
 }
@@ -413,10 +441,17 @@ func (d *applyDeps) emitAcceptedTrace(obs observation.Observation) {
 // emitRejectedTrace builds and submits a rejected trace record. The
 // reasonCode/reasonText are required for downstream operators to classify
 // why a given observation never reached frame state.
+//
+// Missing SpanID is back-filled with a fresh UUID so AppendSteps retries
+// remain idempotent (INSERT OR IGNORE keys on step_id).
 func (d *applyDeps) emitRejectedTrace(obs observation.Observation, reasonCode, reasonText string) {
+	spanID := obs.SpanID
+	if spanID == "" {
+		spanID = uuid.NewString()
+	}
 	r := TraceRecord{
 		TraceID:            obs.TraceID,
-		SpanID:             obs.SpanID,
+		SpanID:             spanID,
 		ParentSpanID:       obs.ParentSpanID,
 		SessionID:          obs.SessionID,
 		ObservedGeneration: obs.ObservedGeneration,
@@ -440,10 +475,15 @@ func (d *applyDeps) emitRejectedTrace(obs observation.Observation, reasonCode, r
 // emitBoundaryTrace submits the synthetic "session.generation_advanced"
 // trace record generated by applySessionStart. The Action is canonical so
 // downstream tools can filter boundary events out of per-actor views.
-func (d *applyDeps) emitBoundaryTrace(obs observation.Observation, newGen int64, endedActors, clearedPending int) {
+//
+// traceID must be the newly-minted id for (sessionID, newGen); callers
+// (applySessionStart) capture it from minter.Mint's return value rather
+// than reusing obs.TraceID, which belongs to the prior generation.
+func (d *applyDeps) emitBoundaryTrace(obs observation.Observation, newGen int64, traceID string, endedActors, clearedPending int) {
 	now := d.now()
 	r := TraceRecord{
-		TraceID:            obs.TraceID,
+		TraceID:            traceID,
+		SpanID:             uuid.NewString(),
 		SessionID:          obs.SessionID,
 		ObservedGeneration: newGen,
 		SourceKind:         observation.SourceSynthetic,
@@ -471,6 +511,7 @@ func (d *applyDeps) emitBoundaryTrace(obs observation.Observation, newGen int64,
 func (d *applyDeps) emitSyntheticReplacedPrimaryTrace(obs observation.Observation, displaced observation.ActorKey, now time.Time) {
 	r := TraceRecord{
 		TraceID:            obs.TraceID,
+		SpanID:             uuid.NewString(),
 		SessionID:          obs.SessionID,
 		ObservedGeneration: obs.ObservedGeneration,
 		SourceKind:         observation.SourceSynthetic,
