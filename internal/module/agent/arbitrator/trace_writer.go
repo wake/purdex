@@ -158,26 +158,57 @@ func (w *TraceWriter) Shutdown(ctx context.Context) error {
 	}
 }
 
-// flush drains the current buffer onto the store in one batch. Store errors
-// are logged; the buffer is drained either way (retrying would pile up more
-// drops on the next tick).
+// flush snapshots the current buffer and attempts to persist it via the
+// backing store. On success the flushed prefix is removed from the buffer,
+// preserving any records that arrived concurrently while AppendSteps was
+// running. On store error the buffer is left intact so the next tick can
+// retry — dropping the batch would silently lose committed-phase traces.
 func (w *TraceWriter) flush() {
 	w.mu.Lock()
 	if len(w.buf) == 0 {
 		w.mu.Unlock()
 		return
 	}
-	batch := w.buf
-	w.buf = make([]TraceRecord, 0, w.cap)
+	// Snapshot the current head of the buffer. Do NOT clear w.buf yet:
+	// AppendSteps may fail, in which case the batch must remain available
+	// for the next flush attempt.
+	batch := make([]TraceRecord, len(w.buf))
+	copy(batch, w.buf)
+	flushed := len(batch)
 	w.mu.Unlock()
 
 	if w.store == nil {
+		// No store — drop the snapshot but still clear the head so
+		// producer admission can keep inserting.
+		w.mu.Lock()
+		if len(w.buf) >= flushed {
+			w.buf = w.buf[flushed:]
+		} else {
+			w.buf = w.buf[:0]
+		}
+		w.mu.Unlock()
 		return
 	}
 	steps := toStoreSteps(batch, w.now)
 	if err := w.store.AppendSteps(steps); err != nil {
-		log.Printf("[arbitrator][trace_writer] AppendSteps failed: %v", err)
+		// Retain the buffer for the next tick. Records that arrived during
+		// AppendSteps are appended to the tail of w.buf and remain, so the
+		// next flush snapshots them together with the retried head.
+		log.Printf("[arbitrator][trace_writer] AppendSteps failed — retaining %d records for next flush: %v", flushed, err)
+		return
 	}
+	// Success — remove only the records we actually persisted. Records
+	// appended during AppendSteps sit at w.buf[flushed:] and must survive.
+	w.mu.Lock()
+	if len(w.buf) >= flushed {
+		w.buf = w.buf[flushed:]
+	} else {
+		// Defensive: buf cannot shrink below `flushed` in normal operation
+		// (no other flusher is concurrent), but guard against pathological
+		// mutations just in case.
+		w.buf = w.buf[:0]
+	}
+	w.mu.Unlock()
 }
 
 // sizeForTesting returns the current buffer length. Test-only; holds mu.
@@ -199,9 +230,20 @@ func (w *TraceWriter) snapshotForTesting() []TraceRecord {
 // toStoreSteps converts a batch of TraceRecord envelopes into store-level
 // TraceStep rows. Zero times are normalized to the supplied now() so every
 // step satisfies validateLightsRow's NOT-NULL requirements.
+//
+// Records without a SpanID are skipped with a metric: the apply pipeline
+// is expected to back-fill SpanID with a UUID for every emitted record,
+// and a missing id here is a contract violation. Skipping (rather than
+// synthesizing a batch-local id) avoids non-idempotent step_id values
+// that would defeat the INSERT OR IGNORE retry path.
 func toStoreSteps(records []TraceRecord, now func() time.Time) []store.TraceStep {
 	out := make([]store.TraceStep, 0, len(records))
-	for i, r := range records {
+	for _, r := range records {
+		if r.SpanID == "" {
+			log.Printf("[arbitrator][trace_writer] skipping record with empty SpanID — apply pipeline must back-fill: trace_id=%q action=%q", r.TraceID, r.Action)
+			Inc("lights_trace_dropped", "reason=missing_span_id")
+			continue
+		}
 		started := r.StartedAt
 		if started.IsZero() {
 			started = now()
@@ -213,12 +255,6 @@ func toStoreSteps(records []TraceRecord, now func() time.Time) []store.TraceStep
 
 		chainID := r.TraceID
 		stepID := r.SpanID
-		if stepID == "" {
-			// SpanID is an optional PR-1b-1b envelope field; fall back to a
-			// deterministic synthetic id derived from trace+seq+index so
-			// AppendSteps retries collapse via INSERT OR IGNORE.
-			stepID = chainID + "/" + strconv.FormatInt(r.Seq, 10) + "/" + strconv.Itoa(i)
-		}
 
 		step := store.TraceStep{
 			StepID:             stepID,
