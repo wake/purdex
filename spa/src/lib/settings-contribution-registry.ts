@@ -3,8 +3,7 @@ import type {
   SettingsContribution,
   SettingsScope,
 } from './settings-contribution-types'
-
-const LOCAL_ID_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/
+import { SETTINGS_LOCAL_ID_RE } from './settings-contribution-types'
 
 const contributions = new Map<string, AnySettingsContribution>()
 
@@ -34,9 +33,11 @@ export function assertValidSettingsContribution(def: AnySettingsContribution): v
       `settings-contribution-registry: id "${def.id}" does not match "${expectedId}" (moduleId.localId)`,
     )
   }
-  if (!LOCAL_ID_RE.test(def.localId)) {
+  if (!SETTINGS_LOCAL_ID_RE.test(def.localId)) {
     throw new Error(
-      `settings-contribution-registry: localId "${def.localId}" is invalid; must match ${LOCAL_ID_RE.source}`,
+      `settings-contribution-registry: localId "${def.localId}" is invalid; ` +
+        `must match ${SETTINGS_LOCAL_ID_RE.source} ` +
+        `(lowercase ASCII, digits, hyphen; 1-32 chars — same grammar as parseRoute)`,
     )
   }
 }

@@ -1,5 +1,6 @@
 import type { PaneContent } from '../types/tab'
 import { decodeHostRouteId, isHostSubPage, type HostSubPage } from './host-routes'
+import { SETTINGS_LOCAL_ID_RE } from './settings-contribution-types'
 
 export type ParsedRoute =
   | { kind: 'history' }
@@ -12,8 +13,12 @@ export type ParsedRoute =
   | { kind: 'workspace-session-tab'; workspaceId: string; tabId: string; mode: 'terminal' | 'stream' }
 
 const ID_PATTERN = /^[0-9a-z]{6}$/
-const SETTINGS_SECTION_PATTERN = /^[a-z0-9-]{1,32}$/
-const SETTINGS_SUBSECTION_PATTERN = /^[a-z0-9-]{1,32}$/
+// F6: share the source of truth for settings id grammar with the
+// contribution registry so a registration that passes `assertValid…` is
+// also guaranteed to round-trip through parseRoute(). Subsection uses
+// the same pattern today.
+const SETTINGS_SECTION_PATTERN = SETTINGS_LOCAL_ID_RE
+const SETTINGS_SUBSECTION_PATTERN = SETTINGS_LOCAL_ID_RE
 
 function validateMode(mode: string): 'terminal' | 'stream' {
   return mode === 'stream' ? 'stream' : 'terminal'

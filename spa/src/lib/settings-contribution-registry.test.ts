@@ -143,21 +143,50 @@ describe('settings-contribution-registry', () => {
     ).toThrow()
   })
 
-  it('localId starting with digit throws', () => {
+  // F6: `1foo` is accepted by the tightened grammar `[a-z0-9-]{1,32}`
+  // (digits are allowed anywhere — the previous regex restricted the
+  // leading char to a letter, which was stricter than parseRoute and not
+  // required by the router).
+  it('localId starting with digit passes (F6: route grammar allows it)', () => {
     expect(() =>
       registerSettingsContribution(make({ localId: '1foo', id: 'mod.1foo' })),
-    ).toThrow()
-  })
-
-  it('localId with uppercase passes', () => {
-    expect(() =>
-      registerSettingsContribution(make({ localId: 'FooBar', id: 'mod.FooBar' })),
     ).not.toThrow()
   })
 
-  it('localId with underscore passes', () => {
+  // F6: localId regex is tightened to match parseRoute's
+  // SETTINGS_SECTION_PATTERN (`/^[a-z0-9-]{1,32}$/`). Previously the
+  // contribution registry allowed `[a-zA-Z][a-zA-Z0-9_-]*`, which let ids
+  // like `FooBar` or `foo_bar` register but then fail parseRoute on reload
+  // / route-sync and silently redirect to the default section. Align both.
+  it('localId with uppercase throws (F6: must match route grammar)', () => {
+    expect(() =>
+      registerSettingsContribution(make({ localId: 'FooBar', id: 'mod.FooBar' })),
+    ).toThrow()
+  })
+
+  it('localId with underscore throws (F6: must match route grammar)', () => {
     expect(() =>
       registerSettingsContribution(make({ localId: 'foo_bar', id: 'mod.foo_bar' })),
+    ).toThrow()
+  })
+
+  it('localId longer than 32 chars throws (F6: parseRoute caps at 32)', () => {
+    const long = 'a'.repeat(33)
+    expect(() =>
+      registerSettingsContribution(make({ localId: long, id: `mod.${long}` })),
+    ).toThrow()
+  })
+
+  it('localId exactly 32 chars passes (F6: parseRoute upper bound)', () => {
+    const thirtyTwo = 'a'.repeat(32)
+    expect(() =>
+      registerSettingsContribution(make({ localId: thirtyTwo, id: `mod.${thirtyTwo}` })),
+    ).not.toThrow()
+  })
+
+  it('localId single char passes (F6: parseRoute lower bound)', () => {
+    expect(() =>
+      registerSettingsContribution(make({ localId: 'a', id: 'mod.a' })),
     ).not.toThrow()
   })
 
@@ -165,6 +194,18 @@ describe('settings-contribution-registry', () => {
     expect(() =>
       registerSettingsContribution(make({ localId: 'foo-bar', id: 'mod.foo-bar' })),
     ).not.toThrow()
+  })
+
+  it('localId mixed lowercase + digits + dash passes', () => {
+    expect(() =>
+      registerSettingsContribution(make({ localId: 'a-b-c-1-2-3', id: 'mod.a-b-c-1-2-3' })),
+    ).not.toThrow()
+  })
+
+  it('F6: SETTINGS_LOCAL_ID_RE is exported and equal to the route pattern', async () => {
+    const { SETTINGS_LOCAL_ID_RE } = await import('./settings-contribution-types')
+    // Source parity with parseRoute's SETTINGS_SECTION_PATTERN.
+    expect(SETTINGS_LOCAL_ID_RE.source).toBe('^[a-z0-9-]{1,32}$')
   })
 
   // --- Isolation ---
