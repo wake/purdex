@@ -4,6 +4,9 @@ import (
 	"testing"
 
 	"github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/agent/codex"
+	"github.com/wake/purdex/internal/agent/opencode"
 )
 
 // supporterStub implements agent.AgentProvider and agent.StatusSupporter.
@@ -160,6 +163,49 @@ func TestCoverageDuplicateAgentType(t *testing.T) {
 	}
 	if rows[1].Declares {
 		t.Fatalf("expected second-registered cc to keep Declares=false (registration order, no rewrite)")
+	}
+}
+
+// TestCoverageRealProviders is the integration check that the three
+// production providers (cc, codex, opencode) all implement StatusSupporter
+// and declare the Phase 1 status set. The other Coverage tests use stubs
+// to guard the helper logic; this one guards the wire-up to real providers.
+func TestCoverageRealProviders(t *testing.T) {
+	r := agent.NewRegistry()
+	r.Register(cc.NewProvider(nil, nil, nil, nil))
+	r.Register(codex.NewProvider())
+	r.Register(opencode.NewProvider())
+
+	rows := agent.Coverage(r)
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(rows))
+	}
+
+	required := []agent.Status{
+		agent.StatusRunning,
+		agent.StatusWaiting,
+		agent.StatusIdle,
+		agent.StatusError,
+		agent.StatusClear,
+	}
+	for _, row := range rows {
+		if !row.Declares {
+			t.Errorf("provider %q: Declares=false, want true", row.AgentType)
+			continue
+		}
+		if len(row.Declared) == 0 {
+			t.Errorf("provider %q: Declared is empty", row.AgentType)
+			continue
+		}
+		set := make(map[agent.Status]bool, len(row.Declared))
+		for _, s := range row.Declared {
+			set[s] = true
+		}
+		for _, want := range required {
+			if !set[want] {
+				t.Errorf("provider %q: missing required Status %q (declared=%v)", row.AgentType, want, row.Declared)
+			}
+		}
 	}
 }
 
