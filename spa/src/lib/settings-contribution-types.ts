@@ -1,4 +1,5 @@
 import type React from 'react'
+import type { HostRuntime } from '../stores/useHostStore'
 
 export type SettingsScope = 'purdex' | 'host' | 'workspace'
 
@@ -21,9 +22,21 @@ export type SettingsScope = 'purdex' | 'host' | 'workspace'
 export const SETTINGS_LOCAL_ID_RE = /^[a-z0-9-]{1,32}$/
 
 // Discriminated union — scope field narrows hostId/workspaceId.
+//
+// host scope carries `runtime: HostRuntime | undefined` so `disabled(ctx)`
+// predicates can react to live host runtime changes without reading from
+// `useHostStore.getState()` (which would be a non-reactive side read).  The
+// field is required (not optional `?`) — callers MUST think about the
+// "runtime not yet observed" case and pass `undefined` explicitly.
+//
+// Why undefined-allowed: a host can exist in the store before any runtime
+// tick has populated `runtime[hostId]` (first render, freshly added host,
+// or a reconnect race).  Modules that gate on runtime should treat
+// `runtime === undefined` as "unknown, don't disable yet" or whatever
+// matches their semantics.
 export type SettingsContext =
   | { scope: 'purdex' }
-  | { scope: 'host'; hostId: string }
+  | { scope: 'host'; hostId: string; runtime: HostRuntime | undefined }
   | { scope: 'workspace'; workspaceId: string }
 
 export type SettingsContextFor<S extends SettingsScope> = Extract<SettingsContext, { scope: S }>

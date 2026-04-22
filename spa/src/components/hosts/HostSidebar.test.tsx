@@ -177,7 +177,11 @@ describe('HostSidebar', () => {
     expect(sessionsButtons.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('preserves current subPage when expanding a collapsed host', () => {
+  it('expanding a different collapsed host preserves selectedSubPage when still selectable for target (R3 P1)', () => {
+    // R3 standard P1 — D2 was over-aggressive (always picked first selectable
+    // for target host).  Correct behaviour: preserve the user's current
+    // selectedSubPage when it is still selectable on the target host;
+    // only fallback to first-selectable when it would be disabled.
     useHostStore.setState({
       hosts: {
         [HOST_ID]: { id: HOST_ID, name: 'Test Host', ip: '1.2.3.4', port: 7860, order: 0 },
@@ -186,12 +190,56 @@ describe('HostSidebar', () => {
       hostOrder: [HOST_ID, HOST_B],
       runtime: {},
     })
-    // Current selectedSubPage is 'hooks'
+    // No disabled predicates → 'hooks' is selectable for both hosts.
     render(<HostSidebar {...defaultProps} selectedSubPage="hooks" />)
 
-    // Click collapsed HOST_B — should call onSelect with 'hooks', not 'overview'
     fireEvent.click(screen.getByText('Second Host'))
     expect(defaultProps.onSelect).toHaveBeenCalledWith(HOST_B, 'hooks')
+  })
+
+  it('expanding a different collapsed host picks first selectable when current sub-page is disabled for target (R2 D2)', () => {
+    // R2 defender D2 fix path — when current selectedSubPage IS disabled for
+    // the target host, fall back to the target host's first selectable
+    // sub-page rather than navigating into a known-disabled URL.
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Test Host', ip: '1.2.3.4', port: 7860, order: 0 },
+        [HOST_B]: { id: HOST_B, name: 'Second Host', ip: '5.6.7.8', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, HOST_B],
+      runtime: { [HOST_ID]: { status: 'connected' } },
+    })
+
+    // Register a contribution that is disabled when runtime is undefined
+    // (i.e. for HOST_B which has no runtime yet).  selectedSubPage points at it.
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.gated',
+      localId: 'gated',
+      scope: 'host',
+      order: 100,
+      labelKey: 'gated',
+      component: () => null,
+      disabled: (ctx) => ctx.runtime === undefined,
+    })
+
+    render(<HostSidebar {...defaultProps} selectedSubPage="gated" />)
+
+    fireEvent.click(screen.getByText('Second Host'))
+    // 'gated' disabled for HOST_B → fallback to first selectable, which is 'overview'.
+    expect(defaultProps.onSelect).toHaveBeenCalledWith(HOST_B, 'overview')
+  })
+
+  it('clicking the currently selected host preserves selectedSubPage (no per-target rewrite)', () => {
+    // When clicking the SAME host that is already selected, the existing
+    // selectedSubPage stays — D2 only kicks in for cross-host expansion.
+    render(<HostSidebar {...defaultProps} selectedSubPage="hooks" />)
+
+    fireEvent.click(screen.getByText('Test Host'))
+    // Same-host click while already expanded → no onSelect (collapse instead)
+    // — but the test setup leaves the host expanded so clicking it again
+    // collapses without calling onSelect.  Assert no spurious onSelect call.
+    expect(defaultProps.onSelect).not.toHaveBeenCalled()
   })
 
   it('auto-expands new selectedHostId on prop change (e.g. host deletion fallback)', () => {
@@ -247,5 +295,39 @@ describe('HostSidebar', () => {
     const disabledButton = disabledRows[0] as HTMLButtonElement
     fireEvent.click(disabledButton)
     expect(defaultProps.onSelect).not.toHaveBeenCalled()
+  })
+
+  // Test 13 (#588 spec §6.2 #13): sidebar passes runtime[hostId] in ctx so
+  // disabled(ctx) predicates can react to live host runtime.
+  it('Test 13: sidebar builds runtime-aware ctx — runtime tick flips disabled', () => {
+    const RuntimeGated = () => null
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.runtime-gated',
+      localId: 'runtime-gated',
+      scope: 'host',
+      order: 100,
+      labelKey: 'runtime-gated',
+      component: RuntimeGated,
+      // disabled when no runtime observed yet.
+      disabled: (ctx) => ctx.runtime === undefined,
+    })
+
+    // Initially no runtime[HOST_ID] — row disabled.
+    const { rerender } = render(<HostSidebar {...defaultProps} />)
+    expect(document.querySelectorAll('[data-disabled-ctx="true"]').length).toBeGreaterThan(0)
+
+    // Tick runtime — re-render sidebar; disabled row count drops by one.
+    useHostStore.setState((state) => ({
+      runtime: { ...state.runtime, [HOST_ID]: { status: 'connected' } },
+    }))
+    rerender(<HostSidebar {...defaultProps} />)
+    // The runtime-gated row no longer matches data-disabled-ctx="true".
+    const disabledNow = Array.from(
+      document.querySelectorAll('[data-disabled-ctx="true"]'),
+    ) as HTMLElement[]
+    for (const el of disabledNow) {
+      expect(el.textContent).not.toContain('runtime-gated')
+    }
   })
 })

@@ -63,12 +63,13 @@ vi.mock('./hosts/AddHostDialog', () => ({
   AddHostDialog: (props: { onClose: () => void }) => <div data-testid="add-host-dialog" onClick={props.onClose} />,
 }))
 
+import React from 'react'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { Router } from 'wouter'
 import { memoryLocation } from 'wouter/memory-location'
-import { HostPage, resetLastHostSelection } from './HostPage'
-import { useHostStore } from '../stores/useHostStore'
+import { HostPage, pickHostIdFallback, resetLastHostSelection } from './HostPage'
+import { useHostStore, type HostRuntime } from '../stores/useHostStore'
 import {
   clearContributions,
   listContributions,
@@ -548,5 +549,379 @@ describe('HostPage (registry-driven, §3.1)', () => {
     // URL settles on overview (or the first selectable in the canonicalized path)
     const lastPath = currentPath(mem)
     expect(lastPath).toBe('/hosts/hA/overview')
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// #588 — reactive host runtime in SettingsContextFor<'host'>
+// Spec §6.2 tests 7–12 + plan §4 test 14 (pickHostIdFallback equivalence).
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('#588 — reactive host runtime', () => {
+  // Re-seed with HOST_A as the single host so URL paths /hosts/${HOST_A}/...
+  // resolve cleanly (outer seedHosts() seeds 'test-host' + 'second-host').
+  // For tests that need a second host (Test 10: background tick on SECOND_HOST_ID),
+  // set up explicitly inside the test.
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0 },
+        [SECOND_HOST_ID]: { id: SECOND_HOST_ID, name: 'Second Host', ip: '5.6.7.8', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_A, SECOND_HOST_ID],
+      activeHostId: HOST_A,
+      runtime: {},
+    })
+  })
+
+  function setHostRuntime(hostId: string, runtime: HostRuntime | undefined) {
+    act(() => {
+      useHostStore.setState((state) => {
+        const next = { ...state.runtime }
+        if (runtime === undefined) delete next[hostId]
+        else next[hostId] = runtime
+        return { runtime: next }
+      })
+    })
+  }
+
+  // Test 7 — runtime tick that flips disabled(ctx) drops the body and redirects.
+  it('Test 7 — runtime tick that flips disabled(ctx) drops body and redirects', () => {
+    const FeatureBody = () => <div data-testid="feature-x-body">FX</div>
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.feature-x',
+      localId: 'feature-x',
+      scope: 'host',
+      order: 100,
+      labelKey: 'feature-x',
+      component: FeatureBody,
+      disabled: (ctx: SettingsContextFor<'host'>) => ctx.runtime?.status !== 'connected',
+    })
+
+    setHostRuntime(HOST_A, { status: 'connected' })
+
+    const { mem, rerender } = renderHostPage(`/hosts/${HOST_A}/feature-x`)
+    expect(screen.getByTestId('feature-x-body')).toBeInTheDocument()
+    expect(currentPath(mem)).toBe(`/hosts/${HOST_A}/feature-x`)
+
+    // Flip runtime → disabled becomes true → body unmounts + URL canonicalizes away.
+    setHostRuntime(HOST_A, { status: 'disconnected' })
+    rerender(
+      <Router hook={mem.hook}>
+        <HostPage pane={hostPane} isActive />
+      </Router>,
+    )
+
+    expect(screen.queryByTestId('feature-x-body')).not.toBeInTheDocument()
+    expect(currentPath(mem)).toBe(`/hosts/${HOST_A}/overview`)
+  })
+
+  // Test 8 — runtime tick that flips disabled(ctx) re-enables the body cleanly.
+  it('Test 8 — runtime tick re-enables a previously disabled contribution', () => {
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.feature-y',
+      localId: 'feature-y',
+      scope: 'host',
+      order: 100,
+      labelKey: 'feature-y',
+      component: () => <div data-testid="feature-y-body">FY</div>,
+      disabled: (ctx: SettingsContextFor<'host'>) => ctx.runtime?.status !== 'connected',
+    })
+
+    // Initially disconnected → URL points at feature-y but disabled → redirects to overview.
+    setHostRuntime(HOST_A, { status: 'disconnected' })
+    const { mem, rerender } = renderHostPage(`/hosts/${HOST_A}/feature-y`)
+    expect(screen.queryByTestId('feature-y-body')).not.toBeInTheDocument()
+    expect(currentPath(mem)).toBe(`/hosts/${HOST_A}/overview`)
+
+    // Flip to connected — the user can now navigate to feature-y and body mounts.
+    setHostRuntime(HOST_A, { status: 'connected' })
+    act(() => { mem.navigate(`/hosts/${HOST_A}/feature-y`) })
+    rerender(
+      <Router hook={mem.hook}>
+        <HostPage pane={hostPane} isActive />
+      </Router>,
+    )
+
+    expect(screen.getByTestId('feature-y-body')).toBeInTheDocument()
+    expect(currentPath(mem)).toBe(`/hosts/${HOST_A}/feature-y`)
+  })
+
+  // Test 9 — pickSelectableSubPage uses runtime: directly observe behaviour through
+  // the rendered selection (no helper export required).
+  it('Test 9 — disabled contribution NOT chosen as fallback when runtime makes it disabled', () => {
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.runtime-gate',
+      localId: 'runtime-gate',
+      scope: 'host',
+      order: 0,  // would be FIRST if not gated
+      labelKey: 'runtime-gate',
+      component: () => <div data-testid="rg-body">RG</div>,
+      disabled: (ctx: SettingsContextFor<'host'>) => ctx.runtime === undefined,
+    })
+
+    // No runtime tick yet → runtime-gate disabled → bare /hosts must NOT pick runtime-gate.
+    setHostRuntime(HOST_A, undefined)
+    const { mem } = renderHostPage('/hosts')
+    expect(screen.queryByTestId('rg-body')).not.toBeInTheDocument()
+    // Falls through to first selectable (overview is order=0 but registered later;
+    // runtime-gate at order=0 should beat overview but is disabled, so overview wins).
+    expect(currentPath(mem)).toBe(`/hosts/${HOST_A}/overview`)
+  })
+
+  // Test 10 — background host tick does NOT re-render HostPage (selective subscription).
+  // Uses React.Profiler to count actual reconciliation work in the HostPage subtree —
+  // probe-wrapper-only counters don't capture re-renders triggered by HostPage's
+  // own internal store subscriptions (parent doesn't re-execute).
+  it('Test 10 — background host runtime tick does NOT re-render HostPage', () => {
+    const onRender = vi.fn()
+
+    setHostRuntime(HOST_A, { status: 'connected' })
+    const mem = memoryLocation({ path: `/hosts/${HOST_A}/overview`, record: true })
+    render(
+      <Router hook={mem.hook}>
+        <React.Profiler id="hostpage-test10" onRender={onRender}>
+          <HostPage pane={hostPane} isActive />
+        </React.Profiler>
+      </Router>,
+    )
+    const baseline = onRender.mock.calls.length
+    expect(baseline).toBeGreaterThan(0)
+
+    // Mutate runtime for the OTHER host (background tick) — selective
+    // subscription returns the same runtime[hA] reference; shallow compare
+    // skips a re-render.
+    setHostRuntime(SECOND_HOST_ID, { status: 'reconnecting' })
+    expect(onRender.mock.calls.length).toBe(baseline)
+
+    // Sanity: tick the SELECTED host's runtime — re-render expected.
+    setHostRuntime(HOST_A, { status: 'reconnecting' })
+    expect(onRender.mock.calls.length).toBeGreaterThan(baseline)
+  })
+
+  // Test 11 — rapid runtime flicker is stable (idempotent resolve under successive ticks).
+  // Once the URL has been canonicalized away from a disabled sub-page during
+  // the disconnected window, re-enabling the runtime does NOT auto-restore
+  // the original sub-page (that's a real navigation, not a state reversal).
+  // The crucial invariant is convergence — no infinite redirect loop, no
+  // unbounded history growth.
+  it('Test 11 — rapid runtime flicker converges without thrash', () => {
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.feature-flick',
+      localId: 'feature-flick',
+      scope: 'host',
+      order: 100,
+      labelKey: 'feature-flick',
+      component: () => <div data-testid="flick-body">FLICK</div>,
+      disabled: (ctx: SettingsContextFor<'host'>) => ctx.runtime?.status !== 'connected',
+    })
+
+    setHostRuntime(HOST_A, { status: 'connected' })
+    const { mem, rerender } = renderHostPage(`/hosts/${HOST_A}/feature-flick`)
+    expect(screen.getByTestId('flick-body')).toBeInTheDocument()
+    const initialHistoryLen = mem.history.length
+
+    // Three sync ticks: connected → disconnected → connected.
+    setHostRuntime(HOST_A, { status: 'disconnected' })
+    setHostRuntime(HOST_A, { status: 'connected' })
+    rerender(
+      <Router hook={mem.hook}>
+        <HostPage pane={hostPane} isActive />
+      </Router>,
+    )
+
+    // Convergence: history grew by a small bounded number (canonical redirect
+    // away from disabled feature-flick + maybe one settle), nowhere near a loop.
+    expect(mem.history.length - initialHistoryLen).toBeLessThan(5)
+
+    // After re-connecting, the user CAN navigate back to feature-flick and
+    // the body now mounts (proves the contribution is enabled again).
+    act(() => { mem.navigate(`/hosts/${HOST_A}/feature-flick`) })
+    rerender(
+      <Router hook={mem.hook}>
+        <HostPage pane={hostPane} isActive />
+      </Router>,
+    )
+    expect(screen.getByTestId('flick-body')).toBeInTheDocument()
+  })
+
+  // Test 12 — unmount during tick has no observable side effects (deterministic
+  // subscription-leak probe per codex R1 P2-1: no console warning spy).
+  it('Test 12 — runtime tick AFTER unmount does not throw and store stays healthy', () => {
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.umt',
+      localId: 'umt',
+      scope: 'host',
+      order: 100,
+      labelKey: 'umt',
+      component: () => <div data-testid="umt-body">UMT</div>,
+      disabled: (ctx: SettingsContextFor<'host'>) => ctx.runtime?.status !== 'connected',
+    })
+
+    setHostRuntime(HOST_A, { status: 'connected' })
+    const { unmount } = renderHostPage(`/hosts/${HOST_A}/umt`)
+    expect(screen.getByTestId('umt-body')).toBeInTheDocument()
+
+    // Independent probe subscriber — survives the unmount and proves the store
+    // still dispatches updates afterwards.
+    let probeTicks = 0
+    const unsubProbe = useHostStore.subscribe(() => { probeTicks++ })
+
+    unmount()
+    cleanup()
+
+    // No exception expected from a tick after unmount.
+    expect(() => setHostRuntime(HOST_A, { status: 'reconnecting' })).not.toThrow()
+    expect(probeTicks).toBeGreaterThanOrEqual(1)
+
+    unsubProbe()
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// Test 14 — pickHostIdFallback equivalence (plan §4 row 14 / codex R1 P2-3).
+// Asserts the shared helper covers the fallback semantics used by both the
+// pre-resolve pass and resolveSelection's getFallbackSelection.
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('Test 14 — pickHostIdFallback (shared helper)', () => {
+  it('returns null when hostOrder is empty', () => {
+    expect(pickHostIdFallback([], null, null)).toBeNull()
+    expect(pickHostIdFallback([], 'anything', { hostId: 'anything' })).toBeNull()
+  })
+
+  it('prefers lastSel.hostId when present in hostOrder', () => {
+    expect(pickHostIdFallback(['a', 'b'], null, { hostId: 'b' })).toBe('b')
+    expect(pickHostIdFallback(['a', 'b'], 'a', { hostId: 'b' })).toBe('b')
+  })
+
+  it('skips lastSel.hostId when not in hostOrder, falls to activeHostId', () => {
+    expect(pickHostIdFallback(['a', 'b'], 'a', { hostId: 'stale' })).toBe('a')
+  })
+
+  it('falls back to hostOrder[0] when neither lastSel nor activeHostId are valid', () => {
+    expect(pickHostIdFallback(['a', 'b'], null, null)).toBe('a')
+    expect(pickHostIdFallback(['a', 'b'], 'stale', { hostId: 'stale' })).toBe('a')
+  })
+
+  it('treats activeHostId=null as no preference', () => {
+    expect(pickHostIdFallback(['a'], null, null)).toBe('a')
+  })
+
+  // Equivalence: the inline fallback path inside resolveSelection used the same
+  // ordering — capture key cases via the public renderHostPage so any drift
+  // would surface here instead of silently diverging.
+  // R3 attacker P1 — inactive HostPage does NOT write back to module-scoped
+  // lastSelection.  When two HostPage instances coexist (one active, one
+  // hidden via TabContent visibility:hidden) the inactive one runs the same
+  // selection pipeline with fabricated runtime=undefined and would otherwise
+  // push a fallback selection (overview) into lastSelection, polluting the
+  // active instance's next resolve.
+  it('R3 P1 regression — inactive HostPage does NOT pollute lastSelection (dual-instance)', () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0 },
+      },
+      hostOrder: [HOST_A],
+      activeHostId: HOST_A,
+      runtime: { [HOST_A]: { status: 'connected' } },
+    })
+
+    // Register a runtime-gated contribution that the active instance is on.
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.gated',
+      localId: 'gated',
+      scope: 'host',
+      order: 100,
+      labelKey: 'gated',
+      component: () => <div data-testid="gated-body">GATED</div>,
+      disabled: (ctx) => ctx.runtime?.status !== 'connected',
+    })
+
+    // Mount the ACTIVE instance on /hosts/hA/gated — body mounts, lastSelection
+    // gets {hA, gated}.
+    const memActive = memoryLocation({ path: `/hosts/${HOST_A}/gated`, record: true })
+    const active = render(
+      <Router hook={memActive.hook}>
+        <HostPage pane={hostPane} isActive />
+      </Router>,
+    )
+    expect(screen.getByTestId('gated-body')).toBeInTheDocument()
+    active.unmount()
+
+    // Now mount a HIDDEN HostPage — it sees runtime=undefined (gate),
+    // resolves to fallback (overview).  Its useEffect MUST NOT write
+    // lastSelection back to overview.
+    const memHidden = memoryLocation({ path: `/hosts/${HOST_A}/gated`, record: true })
+    const hidden = render(
+      <Router hook={memHidden.hook}>
+        <HostPage pane={hostPane} isActive={false} />
+      </Router>,
+    )
+    hidden.unmount()
+
+    // Re-mount an active instance on bare /hosts — lastSelection should
+    // still point at 'gated' (set by the first active mount), NOT 'overview'
+    // (which the hidden instance would have written without the gate).
+    const memActive2 = memoryLocation({ path: '/hosts', record: true })
+    render(
+      <Router hook={memActive2.hook}>
+        <HostPage pane={hostPane} isActive />
+      </Router>,
+    )
+    // gated body re-mounts because lastSelection is preserved.
+    expect(screen.getByTestId('gated-body')).toBeInTheDocument()
+  })
+
+  // R1 standard P2 — inactive HostPage does NOT race the active one to push
+  // canonical-path redirects.
+  it('R1 P2 regression — inactive HostPage does NOT navigate on canonicalPath', () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0 },
+      },
+      hostOrder: [HOST_A],
+      activeHostId: HOST_A,
+      runtime: {},
+    })
+
+    // URL points at a sub-page that the active resolve would canonicalize away.
+    const mem = memoryLocation({ path: `/hosts/${HOST_A}/nonexistent`, record: true })
+    const before = mem.history.length
+    render(
+      <Router hook={mem.hook}>
+        <HostPage pane={hostPane} isActive={false} />
+      </Router>,
+    )
+    // Inactive — no redirect performed.
+    expect(mem.history.length).toBe(before)
+  })
+
+  it('renders the same hostId as preResolveHostId when no URL host is provided (smoke)', () => {
+    useHostStore.setState({
+      hosts: {
+        a: { id: 'a', name: 'A', ip: '1.1.1.1', port: 7860, order: 0 },
+        b: { id: 'b', name: 'B', ip: '2.2.2.2', port: 7860, order: 1 },
+      },
+      hostOrder: ['a', 'b'],
+      activeHostId: 'b',
+      runtime: {},
+    })
+
+    // No URL hostId → activeHostId='b' → preResolveHostId picks 'b' → resolveSelection
+    // also picks 'b' (lastSelection cleared by beforeEach).
+    const mem = memoryLocation({ path: '/hosts', record: true })
+    render(
+      <Router hook={mem.hook}>
+        <HostPage pane={hostPane} isActive />
+      </Router>,
+    )
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', 'b')
   })
 })

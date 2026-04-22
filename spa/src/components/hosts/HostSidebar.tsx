@@ -49,13 +49,32 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
           const host = hosts[hostId]
           if (!host) return null
           const isExpanded = expanded[hostId] || hostId === selectedHostId
-          const hostCtx = { scope: 'host' as const, hostId }
+          // ctx carries runtime[hostId] so disabled(ctx) predicates can react
+          // to live host runtime changes without a separate side-read.
+          const hostCtx = { scope: 'host' as const, hostId, runtime: runtime[hostId] }
+          // R2 defender D2 + R3 standard P1 — when expanding a different host:
+          //   1. If the current `selectedSubPage` is still selectable for the
+          //      target host, preserve it (UX: user's working sub-page stays
+          //      across host switches when valid).
+          //   2. Otherwise pick the target host's first selectable sub-page
+          //      using its runtime — avoids the blank-and-redirect window
+          //      that D2 was originally meant to eliminate.
+          const targetSubPageForHost = (): string => {
+            const current = subPages.find((page) => page.localId === selectedSubPage)
+            if (current && current.disabled?.(hostCtx) !== true) return selectedSubPage
+            const candidate = subPages.find((page) => page.disabled?.(hostCtx) !== true)
+            return candidate?.localId ?? selectedSubPage
+          }
           return (
             <div key={hostId} className="mb-1">
               <button
                 onClick={() => {
                   toggleExpand(hostId)
-                  if (!isExpanded) onSelect(hostId, selectedSubPage)
+                  if (!isExpanded) {
+                    const targetSubPage =
+                      hostId === selectedHostId ? selectedSubPage : targetSubPageForHost()
+                    onSelect(hostId, targetSubPage)
+                  }
                 }}
                 className={`w-full text-left px-2 py-1.5 rounded text-sm cursor-pointer flex items-center gap-1.5 ${
                   selectedHostId === hostId
