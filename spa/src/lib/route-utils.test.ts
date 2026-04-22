@@ -1,5 +1,19 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { parseRoute, tabToUrl } from './route-utils'
+import { clearContributions } from './settings-contribution-registry'
+import { clearModuleRegistry } from './module-registry'
+import { registerBuiltinModules } from './register-modules'
+
+beforeEach(() => {
+  clearContributions()
+  clearModuleRegistry()
+  registerBuiltinModules()
+})
+
+afterEach(() => {
+  clearContributions()
+  clearModuleRegistry()
+})
 
 describe('parseRoute', () => {
   it('/ returns null (no-op, preserves persisted state)', () => {

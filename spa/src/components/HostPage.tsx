@@ -39,9 +39,7 @@ function getFallbackSelection(hostOrder: string[], activeHostId: string | null):
 
 function getFallbackSubPage(): HostSubPage {
   if (lastSelection?.subPage) return lastSelection.subPage
-  // Cast: commit 3 will change HostSubPage to string; until then, the localId
-  // of a registered host contribution is always a valid URL token.
-  return (listContributions('host')[0]?.localId ?? 'overview') as HostSubPage
+  return listContributions('host')[0]?.localId ?? 'overview'
 }
 
 function resolveSelection(location: string, hostOrder: string[], activeHostId: string | null) {
@@ -169,7 +167,7 @@ export function HostPage(_props: PaneRendererProps) {
       <HostSidebar
         selectedHostId={selection?.hostId ?? ''}
         selectedSubPage={selection?.subPage ?? lastSelection?.subPage ?? getFallbackSubPage()}
-        onSelect={(hostId, subPage) => setLocation(buildHostPath({ hostId, subPage: subPage as HostSubPage }), { replace: true })}
+        onSelect={(hostId, subPage) => setLocation(buildHostPath({ hostId, subPage }), { replace: true })}
         onAddHost={() => setShowAddHost(true)}
       />
       <div className="flex-1 overflow-y-auto p-6">

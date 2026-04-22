@@ -12,10 +12,10 @@
  *    These assert that HostPage + HostSidebar read `listContributions('host')`
  *    and render via the contribution registry.
  *
- * NOTE: `isHostSubPage` is still the static six-literal check in commit 2.
- * For §3.1 T4/T5/T7 we need custom localIds to route correctly, so we mock
- * isHostSubPage to also accept any value registered in the contribution
- * registry. This mirrors the commit 3 behavior and is the correct contract.
+ * NOTE (commit 3): `isHostSubPage` is now dynamic via the contribution
+ * registry. No shim is needed — the real implementation accepts any localId
+ * registered in the registry, so §3.1 T4/T5/T7 with custom localIds work
+ * out of the box.
  */
 
 // vi.mock calls must come before any imports that reference the mocked modules.
@@ -23,23 +23,6 @@
 vi.mock('../lib/host-api', async (importOriginal) => {
   const actual = await importOriginal() as Record<string, unknown>
   return { ...actual, listSessions: vi.fn().mockResolvedValue([]) }
-})
-
-// Pre-commit-3 shim: isHostSubPage is static in commit 2, but the §3.1 tests
-// for registry-contributed subPages need it to accept the fake localId so that
-// parseRoute() classifies `/hosts/hA/<fakeId>` as 'hosts' (not 'hosts-invalid').
-vi.mock('../lib/host-routes', async (importOriginal) => {
-  const actual = await importOriginal() as Record<string, unknown>
-  const { listContributions } = await import('../lib/settings-contribution-registry')
-  return {
-    ...actual,
-    isHostSubPage: (value: string) => {
-      // Accept built-in literals OR any registered host contribution localId.
-      const builtinCheck = (actual.isHostSubPage as (v: string) => boolean)(value)
-      if (builtinCheck) return true
-      return listContributions('host').some((c) => c.localId === value)
-    },
-  }
 })
 
 vi.mock('./hosts/HostSidebar', () => ({
