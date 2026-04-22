@@ -273,8 +273,11 @@ export function registerBuiltinModules(): void {
     order: 2,
     component: InterfaceSectionHost,
   })
-  registerSettingsSection({ id: 'workspace', label: 'settings.section.workspace', order: 10 }) // reserved
   registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: 11, component: SyncSection })
+  // F3: retained until HSR PR-5 deprecates `ModuleDefinition.globalConfig`.
+  // Dropping this section (PR-3 commit 2) left the `globalConfig` API
+  // live-but-unreachable — any module declaring `globalConfig` had no UI
+  // surface. Removal tracked by #574.
   registerSettingsSection({
     id: 'module-config',
     label: 'settings.section.modules',

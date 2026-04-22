@@ -14,8 +14,8 @@
   "settings.coming_soon": "coming soon",
   "settings.section.appearance": "Appearance",
   "settings.section.terminal": "Terminal",
-  "settings.section.workspace": "Workspace",
   "settings.section.sync": "Sync",
+  "settings.section.modules": "Modules",
   "settings.sync.description": "Synchronise settings and workspaces across devices.",
   "settings.sync.provider.label": "Provider",
   "settings.sync.provider.description": "Select where sync data is stored and exchanged.",
@@ -131,7 +131,6 @@
   "settings.interface.palette_unavailable": "unavailable here",
   "settings.interface.canvas_drop_here": "Drop module here",
   "settings.section.agent": "Agent",
-  "settings.section.modules": "Modules",
   "settings.section.editor_buffers": "Editor Buffers",
 
   "settings.agent.title": "Agent",

@@ -1,23 +1,23 @@
 /**
- * Smoke test for HSR PR-1/PR-2: prove that the settings contribution
- * registry is wired into the Purdex shell (PR-2), and NOT yet wired into
- * the remaining two shells (HostPage — PR-4 target, WorkspaceSettingsPage
- * — PR-3 target).
+ * Smoke test for HSR PR-1/PR-2/PR-3: prove that the settings contribution
+ * registry is wired into the Purdex shell (PR-2) and the Workspace shell
+ * (PR-3), and NOT yet wired into the remaining shell (HostPage — PR-4
+ * target).
  *
  * Design rationale — Option B (static source check), preferred here:
  *
- *   The two pages below have deep coupling to app-wide state
- *   (wouter router, zustand host/workspace stores, i18n, electronAPI,
- *   plus numerous leaf components). Mounting them from cold to do a
- *   "queryByText must be null" check would require hundreds of lines
- *   of setup / mocking purely to observe the absence of a string —
- *   and would be brittle (any future i18n key collision or mock
- *   reshuffle could make the test spuriously pass).
+ *   The page below has deep coupling to app-wide state (wouter router,
+ *   zustand host store, i18n, electronAPI, plus numerous leaf
+ *   components). Mounting it from cold to do a "queryByText must be
+ *   null" check would require hundreds of lines of setup / mocking
+ *   purely to observe the absence of a string — and would be brittle
+ *   (any future i18n key collision or mock reshuffle could make the
+ *   test spuriously pass).
  *
  *   A static-source check is strictly stronger for the thing we
- *   actually want to prove: that these shells do not yet import from
- *   `settings-contribution-registry`. When PR-3 / PR-4 wire them up,
- *   those corresponding entries are removed from `PAGES`.
+ *   actually want to prove: that this shell does not yet import from
+ *   `settings-contribution-registry`. When PR-4 wires it up, the
+ *   corresponding entry is removed from `PAGES`.
  *
  *   We additionally register three fake contributions (one per scope)
  *   and verify they are queryable from the registry directly, so the
@@ -29,7 +29,6 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import hostPageSrc from '../components/HostPage.tsx?raw'
-import workspaceSettingsPageSrc from '../features/workspace/components/WorkspaceSettingsPage.tsx?raw'
 import {
   registerSettingsContribution,
   listContributions,
@@ -41,11 +40,12 @@ const FAKE_HOST_LABEL = 'SMOKE_HOST_LABEL_UNIQUE'
 const FAKE_WORKSPACE_LABEL = 'SMOKE_WORKSPACE_LABEL_UNIQUE'
 
 // HSR PR-2 migrated `src/components/SettingsPage.tsx` off this list — it
-// now reads the contribution registry directly. The remaining two shells
-// land in PR-3 (workspace) and PR-4 (host).
+// now reads the contribution registry directly. HSR PR-3 migrated
+// `src/features/workspace/components/WorkspaceSettingsPage.tsx` off this
+// list — workspace-scoped contributions now render via the registry. The
+// remaining shell lands in PR-4 (host).
 const PAGES: Array<{ name: string; src: string }> = [
   { name: 'src/components/HostPage.tsx', src: hostPageSrc },
-  { name: 'src/features/workspace/components/WorkspaceSettingsPage.tsx', src: workspaceSettingsPageSrc },
 ]
 
 function FakeComponent() {

@@ -1,10 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   registerSettingsSection,
   getSettingsSections,
   clearSettingsSectionRegistry,
   drainLegacyContributionQueue,
-  listReservedItems,
   clearLegacyPending,
   type SettingsSectionDef,
 } from './settings-section-registry'
@@ -69,17 +68,60 @@ describe('settings-section-registry', () => {
     expect(getSettingsSections()).toHaveLength(0)
   })
 
-  it('supports reserved sections (no component) via listReservedItems', () => {
-    registerSettingsSection({ id: 'ws', label: 'Workspace', order: 10 })
-    // Reserved items are never pushed into the new registry, even after dispatch.
-    dispatchSettingsContributions([])
-    const contribs = listContributions('purdex')
-    expect(contribs.find((c) => c.localId === 'ws')).toBeUndefined()
-    const reserved = listReservedItems()
-    expect(reserved).toHaveLength(1)
-    expect(reserved[0].component).toBeUndefined()
-    // getSettingsSections() still surfaces reserved for the legacy transition API.
-    expect(getSettingsSections().find((s) => s.id === 'ws')).toBeDefined()
+  // --- F5: reserved (component: undefined) soft-fails with a warning ------
+
+  it('F5: registerSettingsSection with component=undefined does NOT throw', () => {
+    // Upgraded from a throw to a warn+return in the F5 follow-up. Throwing
+    // crashed `registerBuiltinModules()` at bootstrap whenever any stale
+    // caller (dev snippet, HMR leftover, parallel-session version mismatch)
+    // invoked the function without a component — killing the whole shell.
+    // Soft-fail: log a clear warning and skip the registration so the rest
+    // of the bootstrap completes.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(() =>
+        registerSettingsSection({
+          id: 'ghost',
+          label: 'Ghost',
+          order: 10,
+          // @ts-expect-error — intentional misuse for the runtime guard
+          component: undefined,
+        }),
+      ).not.toThrow()
+      // Warning message must name the offending id + explain the
+      // reserved-semantics removal + suggest the replacement path.
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+      const msg = String(warnSpy.mock.calls[0]?.[0] ?? '')
+      expect(msg).toMatch(/settings-section-registry/)
+      expect(msg).toMatch(/id="ghost"/)
+      expect(msg).toMatch(/HSR PR-3/)
+      expect(msg).toMatch(/disabled\(ctx\)/)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('F5: warn-and-skip — nothing lands in listContributions / drain queue', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      registerSettingsSection({
+        id: 'ghost-skip',
+        label: 'Ghost Skip',
+        order: 20,
+        // @ts-expect-error — intentional misuse for the runtime guard
+        component: undefined,
+      })
+      // Drain yields nothing for the skipped id.
+      const drained = drainLegacyContributionQueue()
+      expect(drained.find((d) => d.localId === 'ghost-skip')).toBeUndefined()
+      // Dispatch after the skip must not publish a `ghost-skip` contribution.
+      dispatchSettingsContributions([])
+      expect(
+        listContributions('purdex').find((c) => c.localId === 'ghost-skip'),
+      ).toBeUndefined()
+    } finally {
+      warnSpy.mockRestore()
+    }
   })
 
   // --- Pending buffer: dispatch-flushed semantics (spec §7.2) --------------
@@ -140,36 +182,15 @@ describe('settings-section-registry', () => {
     expect(entry?.component).toBe(FakeComponent)
   })
 
-  it('order preservation: mixed active + reserved sort ascending via getSettingsSections', () => {
+  it('order preservation: active sections sort ascending via getSettingsSections', () => {
     registerSettingsSection(makeDef({ id: 'a', order: 0 }))
-    registerSettingsSection({ id: 'r', label: 'R', order: 10 }) // reserved
     registerSettingsSection(makeDef({ id: 'b', order: 11 }))
     registerSettingsSection(makeDef({ id: 'c', order: 2 }))
     dispatchSettingsContributions([])
-    expect(getSettingsSections().map((s) => s.id)).toEqual(['a', 'c', 'r', 'b'])
+    expect(getSettingsSections().map((s) => s.id)).toEqual(['a', 'c', 'b'])
   })
 
-  // --- Reserved buffer (Finding 6 unified policy + N1 no-accumulation) -----
-
-  it('reserved buffer: component undefined stays in reserved map, not in new registry', () => {
-    registerSettingsSection({ id: 'resv', label: 'Reserved', order: 10 })
-    dispatchSettingsContributions([])
-    expect(listContributions('purdex').find((c) => c.localId === 'resv')).toBeUndefined()
-    const reserved = listReservedItems()
-    expect(reserved.map((r) => r.id)).toEqual(['resv'])
-    expect(reserved[0].component).toBeUndefined()
-    // getSettingsSections() surfaces reserved alongside active (transition API).
-    expect(getSettingsSections().find((s) => s.id === 'resv')).toBeDefined()
-  })
-
-  it('N1 reserved upsert: re-registering same reserved id replaces, not duplicates', () => {
-    registerSettingsSection({ id: 'r1', label: 'A', order: 10 })
-    registerSettingsSection({ id: 'r1', label: 'A', order: 10 })
-    registerSettingsSection({ id: 'r1', label: 'A', order: 5 })
-    const reserved = listReservedItems()
-    expect(reserved).toHaveLength(1)
-    expect(reserved[0].order).toBe(5)
-  })
+  // --- N1: active upsert -----------------------------------------------------
 
   it('N1 active upsert: re-registering same active id replaces, dispatch yields one entry', () => {
     registerSettingsSection({ id: 'a1', label: 'L', order: 0, component: FakeComponent })
@@ -181,60 +202,11 @@ describe('settings-section-registry', () => {
     expect(getSettingsSections().find((s) => s.id === 'a1')?.component).toBe(FakeComponent2)
   })
 
-  // --- F2: reserved ↔ active cross-delete on upsert ------------------------
+  // --- HMR dispose: pending buffer clear -----------------------------------
 
-  describe('F2: reserved ↔ active cross-delete on upsert', () => {
-    it('reserved → active: second register removes the reserved entry', () => {
-      registerSettingsSection({ id: 'x', label: 'X', order: 10 }) // reserved
-      registerSettingsSection({ id: 'x', label: 'X', order: 10, component: FakeComponent }) // active
-      dispatchSettingsContributions([])
-      expect(listReservedItems().find((r) => r.id === 'x')).toBeUndefined()
-      const active = listContributions('purdex').filter((c) => c.localId === 'x')
-      expect(active).toHaveLength(1)
-    })
-
-    it('active → reserved: second register removes the active pending entry', () => {
-      registerSettingsSection({ id: 'x', label: 'X', order: 10, component: FakeComponent }) // active
-      registerSettingsSection({ id: 'x', label: 'X', order: 10 }) // reserved
-      dispatchSettingsContributions([])
-      expect(listContributions('purdex').find((c) => c.localId === 'x')).toBeUndefined()
-      const reserved = listReservedItems().filter((r) => r.id === 'x')
-      expect(reserved).toHaveLength(1)
-      expect(reserved[0].component).toBeUndefined()
-    })
-
-    it('sidebar row count for id stays at 1 across reserved ↔ active transitions', () => {
-      // reserved → active → reserved → active
-      registerSettingsSection({ id: 'x', label: 'X', order: 10 })
-      registerSettingsSection({ id: 'x', label: 'X', order: 10, component: FakeComponent })
-      registerSettingsSection({ id: 'x', label: 'X', order: 10 })
-      registerSettingsSection({ id: 'x', label: 'X', order: 10, component: FakeComponent2 })
-      dispatchSettingsContributions([])
-
-      const reserved = listReservedItems().filter((r) => r.id === 'x')
-      const active = listContributions('purdex').filter((c) => c.localId === 'x')
-      expect(reserved.length + active.length).toBe(1)
-      // Landed on active (last registration had a component).
-      expect(active).toHaveLength(1)
-    })
-
-    it('active-before-reserved drop: pending active declaration must not survive after reserved upsert', () => {
-      // Regression guard — previously the active pending entry leaked through
-      // even when the same id was later declared reserved, producing a zombie
-      // sidebar row after dispatch.
-      registerSettingsSection({ id: 'ghost', label: 'Ghost', order: 10, component: FakeComponent })
-      registerSettingsSection({ id: 'ghost', label: 'Ghost', order: 10 })
-      expect(drainLegacyContributionQueue()).toEqual([])
-    })
-  })
-
-  // --- HMR dispose: N1 double-clear guarantee ------------------------------
-
-  it('HMR dispose: clearLegacyPending clears both active pending buffer AND reserved map', () => {
-    registerSettingsSection({ id: 'resv', label: 'R', order: 10 })
+  it('HMR dispose: clearLegacyPending clears the active pending buffer', () => {
     registerSettingsSection(makeDef({ id: 'act' }))
     clearLegacyPending()
-    expect(listReservedItems()).toEqual([])
     expect(drainLegacyContributionQueue()).toEqual([])
   })
 
@@ -265,7 +237,7 @@ describe('settings-section-registry', () => {
     expect(getSettingsSections()).toEqual([])
   })
 
-  it('clear scope: clearSettingsSectionRegistry only wipes pending buffer + reserved, not other contributions', () => {
+  it('clear scope: clearSettingsSectionRegistry only wipes pending buffer, not other contributions', () => {
     // A contribution registered through the new registry directly (simulating
     // what a module declaration flush would produce).
     registerSettingsContribution({
@@ -277,17 +249,15 @@ describe('settings-section-registry', () => {
       labelKey: 'other.keep',
       component: FakeComponent,
     })
-    // Legacy pending sections.
+    // Legacy pending section.
     registerSettingsSection(makeDef({ id: 'legacy' }))
-    registerSettingsSection({ id: 'reserved', label: 'R', order: 10 })
 
     clearSettingsSectionRegistry()
 
     // New registry entry must remain.
     expect(listContributions('purdex').map((c) => c.id)).toContain('other.keep')
-    // Legacy pending drained & reserved cleared.
+    // Legacy pending drained.
     expect(drainLegacyContributionQueue()).toEqual([])
-    expect(listReservedItems()).toEqual([])
   })
 
   it('cross-id guard (F1): module-declared and legacy with same localId under same scope throws', () => {

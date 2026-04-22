@@ -17,7 +17,6 @@ import { clearNewTabRegistry, getNewTabProviders } from './new-tab-registry'
 import {
   clearSettingsSectionRegistry,
   getSettingsSections,
-  listReservedItems,
   registerSettingsSection,
 } from './settings-section-registry'
 import { clearInterfaceSubsectionRegistry, getInterfaceSubsections } from './interface-subsection-registry'
@@ -316,9 +315,15 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
       .filter((c) => c.moduleId === '_builtin.legacy-section')
       .map((c) => c.localId)
 
-    // Core legacy set always present (no caps gating). Exact membership:
-    // appearance / terminal / interface / sync / module-config /
-    // editor-buffers. Electron / dev-environment / tmux-agent-monitor are
+    // Core legacy set always present (no caps gating). After the F3
+    // follow-up the `module-config` global wrapper is restored (still
+    // needed while `ModuleDefinition.globalConfig` remains public —
+    // tracked by #574 for removal alongside HSR PR-5). The reserved
+    // `workspace` row stays removed (PR-3 decision 5a — nothing
+    // consumes the reserved-items plumbing and the entry itself is dead).
+    //
+    // Always-on: appearance / terminal / interface / sync / module-config /
+    // editor-buffers.  Electron / dev-environment / tmux-agent-monitor are
     // gated by PlatformCapabilities / import.meta.env.DEV.
     for (const id of ['appearance', 'terminal', 'interface', 'sync', 'module-config', 'editor-buffers']) {
       expect(legacyIds).toContain(id)
@@ -326,15 +331,25 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
     expect(legacyIds.length).toBeGreaterThanOrEqual(6)
   })
 
-  it('reserved workspace section stays in listReservedItems, not in the new registry', () => {
+  it('PR-3: reserved workspace section is no longer registered', () => {
     registerBuiltinModules()
-    const reserved = listReservedItems()
-    expect(reserved.map((r) => r.id)).toContain('workspace')
-    // workspace is the only reserved section shipped by register-modules today.
-    expect(reserved).toHaveLength(1)
-    // And it does NOT appear in the new registry under any moduleId.
+    // Removed by PR-3 per plan decision 5a: `workspace` was the sole reserved
+    // entry; after its removal the reserved-items plumbing has been dropped.
     const contribs = listContributions('purdex')
     expect(contribs.find((c) => c.localId === 'workspace')).toBeUndefined()
+    expect(getSettingsSections().find((s) => s.id === 'workspace')).toBeUndefined()
+  })
+
+  it('F3: global module-config section is registered (restored until globalConfig deprecates — #574)', () => {
+    registerBuiltinModules()
+    // F3 follow-up restored `module-config` — removing it left
+    // `ModuleDefinition.globalConfig` API live-but-unreachable (silent
+    // dead-end). Deferred removal to HSR PR-5 tracked by #574.
+    const contribs = listContributions('purdex')
+    const entry = contribs.find((c) => c.localId === 'module-config')
+    expect(entry).toBeDefined()
+    expect(entry?.order).toBe(8)
+    expect(getSettingsSections().find((s) => s.id === 'module-config')).toBeDefined()
   })
 
   it('dispatch timing: legacy contributions survive repeated dispatches', () => {
@@ -368,11 +383,13 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
   it('getSettingsSections() legacy view stays consistent with new registry', () => {
     registerBuiltinModules()
     const legacyView = getSettingsSections().map((s) => s.id)
-    // Legacy view is the filtered `_builtin.legacy-section.*` entries plus
-    // reserved (component undefined) entries. The set of localIds returned
-    // should cover all the built-in registerSettingsSection calls.
-    for (const id of ['appearance', 'terminal', 'interface', 'workspace', 'sync', 'module-config', 'editor-buffers']) {
+    // Legacy view is the filtered `_builtin.legacy-section.*` entries.
+    // After the F3 follow-up `module-config` is back (tracked by #574 for
+    // removal alongside globalConfig deprecation).  Reserved `workspace`
+    // stays removed.
+    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'module-config', 'editor-buffers']) {
       expect(legacyView).toContain(id)
     }
+    expect(legacyView).not.toContain('workspace')
   })
 })

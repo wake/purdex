@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { Trash } from '@phosphor-icons/react'
 import { useWorkspaceStore } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -6,6 +6,11 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import { getPrimaryPane } from '../../../lib/pane-tree'
 import { getPaneLabel } from '../../../lib/pane-labels'
 import { closeTab } from '../../../lib/tab-lifecycle'
+import { listContributions } from '../../../lib/settings-contribution-registry'
+import type {
+  SettingsContextFor,
+  SettingsContribution,
+} from '../../../lib/settings-contribution-types'
 import { WorkspaceIcon } from './WorkspaceIcon'
 
 import { WorkspaceIconPicker } from './WorkspaceIconPicker'
@@ -27,6 +32,27 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
 
   const [nameInput, setNameInput] = useState(ws?.name ?? '')
   const [showDelete, setShowDelete] = useState(false)
+
+  // Workspace-scoped ctx per spec §5.3 rule 4 (ctx only produced by the shell).
+  // Rebuilt whenever workspaceId changes so `disabled(ctx)` and child
+  // components see a fresh, matching entity id.
+  const ctx = useMemo<SettingsContextFor<'workspace'>>(
+    () => ({ scope: 'workspace' as const, workspaceId }),
+    [workspaceId],
+  )
+
+  // F1: do NOT memoize the filtered/sorted list against ctx — that caches
+  // `disabled(ctx)` once per workspaceId, which freezes rows whose `disabled`
+  // closure reads reactive state (Zustand store, capability flag). N is tiny
+  // and contributions are already sorted by the registry, so re-read per
+  // render. `listContributions` returns a fresh array on each call.
+  //
+  // F2: keep disabled rows in the list — the render pass below mirrors
+  // PR-2's SettingsSidebar pattern (disabled header visible with
+  // `data-disabled-ctx="true"` + `title=disabledReasonKey`, body skipped)
+  // instead of hiding the contribution entirely.
+  const workspaceContributions: SettingsContribution<'workspace'>[] =
+    listContributions('workspace')
 
   const handleNameBlur = useCallback(() => {
     const trimmed = nameInput.trim()
@@ -101,6 +127,40 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
 
         {/* Module Settings */}
         <ModuleConfigSection scope={{ workspaceId }} />
+
+        {/* Registry-driven workspace-scoped contributions.
+            F2: mirror PR-2's SettingsSidebar disabled-row pattern —
+            show the header greyed with a title tooltip carrying the
+            i18n'd `disabledReasonKey`, and skip mounting the body.
+            F4: key by `${workspaceId}:${c.id}` so swapping to a different
+            workspace forces per-section remount; contributions seeding
+            local state from `ctx.workspaceId` cannot leak across
+            workspaces. */}
+        {workspaceContributions.map((c) => {
+          const isDisabled = c.disabled ? c.disabled(ctx) === true : false
+          const title = isDisabled && c.disabledReasonKey
+            ? (t(c.disabledReasonKey) ?? c.disabledReasonKey)
+            : undefined
+          const Body = c.component
+          return (
+            <section
+              key={`${workspaceId}:${c.id}`}
+              data-section={c.localId}
+              data-disabled-ctx={isDisabled ? 'true' : undefined}
+              title={title}
+              className="mb-8"
+            >
+              <h3
+                className={`text-xs font-semibold uppercase tracking-wider mb-3 ${
+                  isDisabled ? 'text-text-muted' : 'text-text-secondary'
+                }`}
+              >
+                {t(c.labelKey) ?? c.labelKey}
+              </h3>
+              {!isDisabled && <Body ctx={ctx} />}
+            </section>
+          )
+        })}
 
         {/* Danger Zone */}
         <section className="border-t border-border-subtle pt-6 mt-8">
