@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.202] - 2026-04-22
+
+### Fix(spa): editor state, toolbar, and footer polish (#551, #565)
+
+- 修正 Editor tab 切換後的 runtime state 遺失：shared buffer 與 pane-local state 分離，Monaco view state / cursor / diff / mode 會隨 pane 保留，避免 tab remount 或 pane 重用時丟失或污染狀態。
+- Editor top bar 改回完整路徑 breadcrumbs，並加入受保護的 rename 流程：雙擊檔名後使用與 session rename 對齊的 popover 介面，檢查非法 basename、同名衝突與記憶體中已開啟的目標檔案，rename 後同步 migration 多 pane path 與 language。
+- Editor footer 對齊 terminal status bar：左側顯示 host / Local / 紫色 Purdex badge，右側改為藍色 `Source` / `Live Preview` 模式切換並保留行列資訊；切回 tab 時 Monaco 與 Tiptap 內容會自動 focus。
+- 修正 Markdown WYSIWYG 容器與 editable root 互動：scroll 層次正確、focus 樣式可見，短文件底部空白區也能正常聚焦與繼續編輯。
+
 ## [1.0.0-alpha.201] - 2026-04-22
 
 ### Fix(spa): restore lint and build baseline (#556)
