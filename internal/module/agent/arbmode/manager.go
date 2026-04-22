@@ -49,7 +49,7 @@ func NewManager(env, configVal string) *Manager {
 			m.envValue = ev
 			return m
 		}
-		log.Printf("[arbmode] invalid env value %q — falling through to config", env)
+		log.Printf("[agent][arbmode] invalid env value %q — falling through to config", env)
 	}
 
 	// No env (or invalid env): use config value.
@@ -61,7 +61,7 @@ func NewManager(env, configVal string) *Manager {
 	}
 
 	if configVal != "" {
-		log.Printf("[arbmode] invalid config value %q — falling back to passthrough", configVal)
+		log.Printf("[agent][arbmode] invalid config value %q — falling back to passthrough", configVal)
 	}
 	m.current = ModePassthrough
 	m.pending = ModePassthrough
@@ -92,13 +92,13 @@ func (m *Manager) OnConfigChange(configVal string) (changed bool) {
 	defer m.mu.Unlock()
 
 	if m.envLocked {
-		log.Printf("[arbmode] hot reload ignored: overridden by env (%q)", m.envValue)
+		log.Printf("[agent][arbmode] hot reload ignored: overridden by env (%q)", m.envValue)
 		return false
 	}
 
 	cv := ArbMode(configVal)
 	if !cv.IsValid() {
-		log.Printf("[arbmode] invalid config value %q — falling back to passthrough", configVal)
+		log.Printf("[agent][arbmode] invalid config value %q — falling back to passthrough", configVal)
 		cv = ModePassthrough
 	}
 

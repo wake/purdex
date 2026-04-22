@@ -158,7 +158,10 @@ func TestManager_OnConfigChange_InvalidValue_FallbackToPassthrough(t *testing.T)
 	buf := captureLog(t)
 	// "bogus" is invalid; should fall back to passthrough.
 	// Since current pending is authoritative and fallback is passthrough, changed=true.
-	m.OnConfigChange("bogus")
+	changed := m.OnConfigChange("bogus")
+	if !changed {
+		t.Error("OnConfigChange returned false; want true when fallback changes pending (authoritative → passthrough)")
+	}
 	if !strings.Contains(buf.String(), "invalid config value") {
 		t.Errorf("expected log to contain %q, got: %q", "invalid config value", buf.String())
 	}
@@ -240,35 +243,6 @@ func TestManager_Snapshot_NotTornDuringConfigChange(t *testing.T) {
 			}
 		}
 	}()
-
-	wg.Wait()
-}
-
-func TestManager_ConcurrentReadWrite_Race(t *testing.T) {
-	m := NewManager("", "passthrough")
-
-	const goroutines = 100
-	var wg sync.WaitGroup
-
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = m.Snapshot()
-		}()
-	}
-
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			if i%2 == 0 {
-				m.OnConfigChange("authoritative")
-			} else {
-				m.OnConfigChange("passthrough")
-			}
-		}(i)
-	}
 
 	wg.Wait()
 }
