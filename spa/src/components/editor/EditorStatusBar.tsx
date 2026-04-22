@@ -56,6 +56,7 @@ export function EditorStatusBar({ source, line, column, isMarkdown, editorMode, 
         <span className="text-text-secondary select-none">{currentSource.label}</span>
       )}
       <span className="ml-auto flex items-center gap-3">
+        <span>Ln {line}, Col {column}</span>
         {isMarkdown && onModeChange && (
           <div className="relative" ref={menuRef}>
             <button
@@ -87,7 +88,6 @@ export function EditorStatusBar({ source, line, column, isMarkdown, editorMode, 
             )}
           </div>
         )}
-        <span>Ln {line}, Col {column}</span>
       </span>
     </div>
   )
