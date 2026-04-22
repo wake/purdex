@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.202] - 2026-04-22
+
+### Fix(spa): restore editor state and toolbar actions (#551)
+
+- 修正 Editor tab 切換後狀態遺失：shared buffer 與 pane-local state 分離，Monaco view state / cursor / diff / mode 不再因 remount 被清空，也避免 pane 重用時殘留舊檔狀態污染新檔案。
+- Editor top bar 改回完整路徑 breadcrumbs，並加入 inline rename：雙擊最後一段檔名可重新命名，會檢查非法 basename、同名衝突、記憶體中已開啟的目標檔案，以及 rename 後多 pane path migration / language 更新。
+- 修正 WYSIWYG editor 容器與捲動層次，讓 editable root 正確撐滿 pane、高度空白區可聚焦，並補上可見的 focus 樣式避免鍵盤操作時失去焦點指示。
+
 ## [1.0.0-alpha.201] - 2026-04-22
 
 ### Fix(spa): restore lint and build baseline (#556)
