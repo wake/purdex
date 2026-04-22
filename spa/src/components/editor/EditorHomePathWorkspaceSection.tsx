@@ -19,6 +19,7 @@ function Body({ workspaceId }: { workspaceId: string }) {
   const [draft, setDraft] = useState(storedStr)
   const inputId = useId()
   const focusedRef = useRef(false)
+  const dirtyRef = useRef(false)
 
   // R2 codex: skip the sync while the user is editing so an external store
   // update (e.g. BroadcastChannel from another window) can't clobber the
@@ -29,6 +30,21 @@ function Body({ workspaceId }: { workspaceId: string }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setDraft(storedStr)
   }, [storedStr])
+
+  const handleBlur = () => {
+    focusedRef.current = false
+    if (!dirtyRef.current) {
+      // R3 codex: focus-without-edit must not push the stale draft back to
+      // the store. If the store changed during the focus window (e.g.
+      // another window wrote via BroadcastChannel), pull the latest value
+      // into the input instead of clobbering it.
+      const live = useWorkspaceSettingsStore.getState().workspaces[workspaceId]?.editor?.homePath
+      setDraft(typeof live === 'string' ? live : '')
+      return
+    }
+    dirtyRef.current = false
+    commit()
+  }
 
   const commit = () => {
     const trimmed = draft.trim()
@@ -52,6 +68,7 @@ function Body({ workspaceId }: { workspaceId: string }) {
 
   const clear = () => {
     setDraft('')
+    dirtyRef.current = false
     useWorkspaceSettingsStore.getState().removeKey(workspaceId, 'editor', 'homePath')
   }
 
@@ -67,9 +84,9 @@ function Body({ workspaceId }: { workspaceId: string }) {
           aria-label={t('editor.settings.home_path.workspace')}
           placeholder={t('editor.settings.home_path.placeholder')}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => { setDraft(e.target.value); dirtyRef.current = true }}
           onFocus={() => { focusedRef.current = true }}
-          onBlur={() => { focusedRef.current = false; commit() }}
+          onBlur={handleBlur}
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
           className="flex-1 px-3 py-2 rounded-md bg-surface-muted text-text-primary border border-border-subtle focus:border-accent focus:outline-none text-sm"
         />

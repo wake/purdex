@@ -132,4 +132,17 @@ describe('EditorHomePathWorkspaceSection', () => {
     fireEvent.blur(input)
     expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toEqual({ homePath: '/Users/new' })
   })
+
+  it('focus-without-edit + external sync + blur pulls in the new value (R3 codex)', () => {
+    useWorkspaceSettingsStore.getState().set('wsA', 'editor', { homePath: '/Users/old' })
+    render(<EditorHomePathWorkspaceSection ctx={ctx} />)
+    const input = screen.getByLabelText(/home path/i) as HTMLInputElement
+    fireEvent.focus(input)
+    act(() => {
+      useWorkspaceSettingsStore.getState().set('wsA', 'editor', { homePath: '/Users/external' })
+    })
+    fireEvent.blur(input)
+    expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toEqual({ homePath: '/Users/external' })
+    expect(input.value).toBe('/Users/external')
+  })
 })

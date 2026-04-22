@@ -136,4 +136,20 @@ describe('EditorHomePathHostSection', () => {
     // commit detects the no-op against live store and leaves state alone
     expect(useHostSettingsStore.getState().get('h1', 'editor')).toEqual({ homePath: '/home/new' })
   })
+
+  it('focus-without-edit + external sync + blur pulls in the new value (R3 codex)', () => {
+    useHostSettingsStore.getState().set('h1', 'editor', { homePath: '/home/old' })
+    render(<EditorHomePathHostSection ctx={ctx} />)
+    const input = screen.getByLabelText(/home path/i) as HTMLInputElement
+    fireEvent.focus(input)
+    // External update during focus, no user typing
+    act(() => {
+      useHostSettingsStore.getState().set('h1', 'editor', { homePath: '/home/external' })
+    })
+    fireEvent.blur(input)
+    // Store keeps the external value (no clobber)
+    expect(useHostSettingsStore.getState().get('h1', 'editor')).toEqual({ homePath: '/home/external' })
+    // Input also reflects the external value
+    expect(input.value).toBe('/home/external')
+  })
 })
