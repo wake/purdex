@@ -177,7 +177,13 @@ describe('HostSidebar', () => {
     expect(sessionsButtons.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('preserves current subPage when expanding a collapsed host', () => {
+  it('expanding a different collapsed host picks first selectable sub-page for that host (R2 D2)', () => {
+    // R2 defender D2 fix — when expanding a different host we must NOT carry
+    // over the current host's selectedSubPage; that would briefly navigate
+    // into the new host's sub-page even when it is disabled for that host
+    // (visible blank-and-redirect under runtime-gated modules).  Instead
+    // pick the first selectable sub-page for the target host using its
+    // own runtime.
     useHostStore.setState({
       hosts: {
         [HOST_ID]: { id: HOST_ID, name: 'Test Host', ip: '1.2.3.4', port: 7860, order: 0 },
@@ -186,12 +192,24 @@ describe('HostSidebar', () => {
       hostOrder: [HOST_ID, HOST_B],
       runtime: {},
     })
-    // Current selectedSubPage is 'hooks'
+    // Current selectedSubPage is 'hooks' for HOST_ID; built-ins have no
+    // disabled() predicates, so the first selectable for HOST_B is 'overview'.
     render(<HostSidebar {...defaultProps} selectedSubPage="hooks" />)
 
-    // Click collapsed HOST_B — should call onSelect with 'hooks', not 'overview'
     fireEvent.click(screen.getByText('Second Host'))
-    expect(defaultProps.onSelect).toHaveBeenCalledWith(HOST_B, 'hooks')
+    expect(defaultProps.onSelect).toHaveBeenCalledWith(HOST_B, 'overview')
+  })
+
+  it('clicking the currently selected host preserves selectedSubPage (no per-target rewrite)', () => {
+    // When clicking the SAME host that is already selected, the existing
+    // selectedSubPage stays — D2 only kicks in for cross-host expansion.
+    render(<HostSidebar {...defaultProps} selectedSubPage="hooks" />)
+
+    fireEvent.click(screen.getByText('Test Host'))
+    // Same-host click while already expanded → no onSelect (collapse instead)
+    // — but the test setup leaves the host expanded so clicking it again
+    // collapses without calling onSelect.  Assert no spurious onSelect call.
+    expect(defaultProps.onSelect).not.toHaveBeenCalled()
   })
 
   it('auto-expands new selectedHostId on prop change (e.g. host deletion fallback)', () => {

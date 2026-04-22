@@ -52,12 +52,26 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
           // ctx carries runtime[hostId] so disabled(ctx) predicates can react
           // to live host runtime changes without a separate side-read.
           const hostCtx = { scope: 'host' as const, hostId, runtime: runtime[hostId] }
+          // R2 defender D2 fix — when expanding a different host, choose the
+          // first selectable sub-page FOR THAT HOST (using its runtime) rather
+          // than carrying over `selectedSubPage` from the currently-selected
+          // host.  Otherwise navigating to host B would briefly land on host
+          // A's sub-page and trigger a visible blank-and-redirect when the
+          // sub-page is disabled for host B.
+          const firstSelectableForHost = (): string => {
+            const candidate = subPages.find((page) => page.disabled?.(hostCtx) !== true)
+            return (candidate?.localId ?? selectedSubPage)
+          }
           return (
             <div key={hostId} className="mb-1">
               <button
                 onClick={() => {
                   toggleExpand(hostId)
-                  if (!isExpanded) onSelect(hostId, selectedSubPage)
+                  if (!isExpanded) {
+                    const targetSubPage =
+                      hostId === selectedHostId ? selectedSubPage : firstSelectableForHost()
+                    onSelect(hostId, targetSubPage)
+                  }
                 }}
                 className={`w-full text-left px-2 py-1.5 rounded text-sm cursor-pointer flex items-center gap-1.5 ${
                   selectedHostId === hostId

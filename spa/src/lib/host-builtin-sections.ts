@@ -4,36 +4,43 @@
  * Built-in host sub-page adapter — registers six (or whatever the caller
  * supplies) `'host'`-scoped contributions under `moduleId = '_builtin.host'`.
  *
- * ## Design (post-#586)
+ * ## Design (post-#586, with R2 attacker/defender/file-health A1 transactional fix)
  *
- * Built-ins are a **stable registration source**, not a one-shot pending
- * buffer.  `setHostBuiltinSections(defs[])` atomically replaces the full
- * source set; any localId absent from the new defs is dropped.
- * `dispatchSettingsContributions()` re-materializes host built-ins from the
- * source map on every call (no drain), so the dispatcher is idempotent: a
- * standalone second call to `dispatchSettingsContributions()` no longer
- * wipes built-in host contributions.
+ * Built-ins live in two maps:
+ *
+ *   - `stagedSources` — what `setHostBuiltinSections(defs)` last said.
+ *     Mutated immediately on every call.  Read ONLY by the dispatcher's
+ *     batch-build pass via `getHostBuiltinDeclarations()`.
+ *
+ *   - `liveSources` — what was last successfully committed by
+ *     `commitHostBuiltinSources()` (called from Phase 2 of
+ *     `dispatchSettingsContributions()`).  Read by every wrapper at render
+ *     time.
+ *
+ * `dispatchSettingsContributions()` is responsible for swapping staged→live
+ * after Phase 1 validation succeeds.  If validation throws, `liveSources`
+ * stays untouched — wrappers continue rendering the previously committed
+ * built-ins, so registry metadata and rendered body stay in sync (no
+ * split-brain on partial failure).
+ *
+ * `dispatchSettingsContributions()` is idempotent: a second standalone call
+ * (no re-`setHostBuiltinSections`) re-validates the same staged set, then
+ * re-commits the same liveSources content (no observable change).
  *
  * ## Wrapper identity stability
  *
  * Each `localId`'s wrapper React component is created once
- * (`createHostBuiltinWrapper(localId)`) and reused across subsequent
- * `setHostBuiltinSections` calls — even when the inner section component
- * is a new reference (HMR reload of a section file).  The wrapper closes
- * over `localId` only; on render it reads the *current* component out of
- * the source map and delegates.  React sees the same wrapper component
+ * (`createHostBuiltinWrapper(localId)`), cached in `wrapperCache`, and reused
+ * across subsequent calls — even when the inner section component is a new
+ * reference (HMR reload of a section file).  The wrapper closes over
+ * `localId` only; on render it reads the *currently committed* component
+ * out of `liveSources` and delegates.  React sees the same wrapper component
  * type, so the host sub-page body does NOT remount across HMR.
  *
- * If a localId is dropped via `setHostBuiltinSections([])` and later re-
- * added, a fresh wrapper is created (the dropped wrapper is no longer
- * cached).
- *
- * ## HMR safety
- *
- * `clearHostBuiltinSources()` is exposed for the
- * `resetSettingsContributionsForHmr()` path.  Subsequent
- * `registerBuiltinModules()` runs repopulate via
- * `setHostBuiltinSections(...)` without duplication.
+ * Wrappers stay cached even after a `localId` is dropped from staged/live
+ * (until `clearHostBuiltinSources()`), so a subsequent re-add reuses the
+ * same wrapper reference — strictly stronger identity stability than the
+ * pre-R2 design.
  */
 import React from 'react'
 import type {
@@ -60,32 +67,26 @@ export interface HostBuiltinSectionDef {
 }
 
 // ----------------------------------------------------------------------------
-// Stable source map
+// Two-tier source map: staged (input) vs live (committed)
 // ----------------------------------------------------------------------------
 
 type HostCtxProps = { ctx: SettingsContextFor<'host'> }
 
-interface HostBuiltinSource {
-  // Mutable per-source — refreshed by setHostBuiltinSections().  The wrapper
-  // reads these via the live map at render time so HMR-replacing the
-  // underlying section component takes effect without changing the wrapper's
-  // React component identity.
+interface HostBuiltinLiveSource {
   component: React.ComponentType<{ hostId: string }>
   labelKey: string
   order: number
-  // Stable per-localId — built once on first appearance and reused on every
-  // subsequent setHostBuiltinSections call as long as the localId stays in
-  // the source set.
-  wrapped: React.ComponentType<HostCtxProps>
 }
 
-const hostBuiltinSources = new Map<string, HostBuiltinSource>()
+const stagedSources = new Map<string, HostBuiltinSectionDef>()
+const liveSources = new Map<string, HostBuiltinLiveSource>()
+const wrapperCache = new Map<string, React.ComponentType<HostCtxProps>>()
 
 /**
- * WeakMap from the ctx-wrapper component → the most recently registered
+ * WeakMap from the ctx-wrapper component → the most recently *committed*
  * underlying section component.  Used by tests to verify identity / forwarding
- * without a full DOM render.  Updated in lockstep by `setHostBuiltinSections`
- * so a test reading from the WeakMap always sees the latest section.
+ * without a full DOM render.  Updated only on `commitHostBuiltinSources()` —
+ * staged-but-uncommitted changes are not visible here.
  */
 export const hostBuiltinComponentMap = new WeakMap<
   React.ComponentType<HostCtxProps>,
@@ -95,7 +96,12 @@ export const hostBuiltinComponentMap = new WeakMap<
 function createHostBuiltinWrapper(localId: string): React.ComponentType<HostCtxProps> {
   const Wrapped: React.FC<HostCtxProps> = (props) => {
     if (props.ctx.scope !== 'host') return null
-    const source = hostBuiltinSources.get(localId)
+    // Read from LIVE (committed) state.  If a localId is in the wrapper
+    // cache but not in liveSources (dropped without re-commit, or commit
+    // has not yet happened), render null — the registry metadata likewise
+    // lacks the entry, so the route layer self-heals away from this sub-
+    // page rather than rendering stale content.
+    const source = liveSources.get(localId)
     if (!source) return null
     const Section = source.component
     return React.createElement(Section, { hostId: props.ctx.hostId })
@@ -105,62 +111,79 @@ function createHostBuiltinWrapper(localId: string): React.ComponentType<HostCtxP
 }
 
 /**
- * Atomically replace the full set of built-in host sub-page sources.
- * Any localId present in the previous state but absent from `defs` is
- * dropped.  For each retained localId the cached wrapper is reused so its
- * React component identity is stable across calls — including HMR reloads
- * where `def.component` is a freshly imported reference.  The next
- * `dispatchSettingsContributions()` materializes exactly these.
+ * Stage a new full set of built-in host sub-page sources.  Does NOT alter
+ * the live (committed) state observed by wrappers; that swap happens inside
+ * `commitHostBuiltinSources()` which the dispatcher calls after Phase 1
+ * validation.  Wrappers are pre-created here so the dispatcher's batch-build
+ * pass can reference them by stable identity.
  */
 export function setHostBuiltinSections(defs: readonly HostBuiltinSectionDef[]): void {
-  const nextIds = new Set<string>()
-  for (const def of defs) nextIds.add(def.localId)
-
-  // Drop localIds not in the new set.  Their cached wrappers are released —
-  // a subsequent re-add for the same localId rebuilds the wrapper.
-  for (const key of Array.from(hostBuiltinSources.keys())) {
-    if (!nextIds.has(key)) hostBuiltinSources.delete(key)
-  }
-
-  // Upsert each def; reuse wrapper when present so identity is stable.
+  stagedSources.clear()
   for (const def of defs) {
-    const existing = hostBuiltinSources.get(def.localId)
-    const wrapped = existing?.wrapped ?? createHostBuiltinWrapper(def.localId)
-    hostBuiltinSources.set(def.localId, {
-      component: def.component,
-      labelKey: def.labelKey,
-      order: def.order,
-      wrapped,
-    })
-    // Keep the WeakMap pointed at the latest section component so tests that
-    // read identity see the freshest reference.
-    hostBuiltinComponentMap.set(wrapped, def.component)
+    stagedSources.set(def.localId, def)
+    if (!wrapperCache.has(def.localId)) {
+      wrapperCache.set(def.localId, createHostBuiltinWrapper(def.localId))
+    }
   }
 }
 
 /**
- * Snapshot the current built-in host source set as contribution declarations.
- * Called by the dispatcher's batch-build pass; the returned array's component
- * references are stable across calls when the source set is unchanged.
+ * Snapshot the current staged set as contribution declarations for the
+ * dispatcher to validate + commit.  Returns wrapper components from the
+ * stable per-localId cache so identity is preserved across batch builds.
+ *
+ * @internal Used only by `dispatch-settings-contributions.ts`.
  */
 export function getHostBuiltinDeclarations(): readonly AnySettingsContributionDeclaration[] {
   const out: AnySettingsContributionDeclaration[] = []
-  for (const [localId, src] of hostBuiltinSources.entries()) {
+  for (const [localId, def] of stagedSources.entries()) {
+    const wrapped = wrapperCache.get(localId)!
     out.push({
       localId,
       scope: 'host',
-      order: src.order,
-      labelKey: src.labelKey,
-      component: src.wrapped,
+      order: def.order,
+      labelKey: def.labelKey,
+      component: wrapped,
     })
   }
   return out
 }
 
 /**
- * HMR dispose hook + test reset.  Clears the stable source map so the next
- * `setHostBuiltinSections(...)` call starts from an empty set.
+ * Commit the staged source map to live, becoming visible to wrappers.
+ * Called from Phase 2 of `dispatchSettingsContributions()` ONLY after
+ * Phase 1 validation has succeeded.  Fixes the R2 A1 finding: a failed
+ * dispatch leaves `liveSources` (and therefore wrappers' render output)
+ * untouched, so registry metadata and rendered body stay in sync.
+ *
+ * @internal Used only by `dispatch-settings-contributions.ts`.
+ */
+export function commitHostBuiltinSources(): void {
+  // Drop live entries no longer in staged.
+  for (const key of Array.from(liveSources.keys())) {
+    if (!stagedSources.has(key)) liveSources.delete(key)
+  }
+  // Upsert staged into live.  Wrappers read live, so once we set here, the
+  // next wrapper render sees the new component.  Wrapper identity itself is
+  // unchanged (cached in wrapperCache by localId).
+  for (const [localId, def] of stagedSources.entries()) {
+    liveSources.set(localId, {
+      component: def.component,
+      labelKey: def.labelKey,
+      order: def.order,
+    })
+    const wrapped = wrapperCache.get(localId)!
+    hostBuiltinComponentMap.set(wrapped, def.component)
+  }
+}
+
+/**
+ * HMR dispose hook + test reset.  Clears every tier — staged, live, and the
+ * wrapper cache — so the next `setHostBuiltinSections(...)` call starts from
+ * a fully empty slate.
  */
 export function clearHostBuiltinSources(): void {
-  hostBuiltinSources.clear()
+  stagedSources.clear()
+  liveSources.clear()
+  wrapperCache.clear()
 }

@@ -816,6 +816,63 @@ describe('Test 14 — pickHostIdFallback (shared helper)', () => {
   // Equivalence: the inline fallback path inside resolveSelection used the same
   // ordering — capture key cases via the public renderHostPage so any drift
   // would surface here instead of silently diverging.
+  // R1 standard P2 — hidden HostPage (isActive=false) does not subscribe to
+  // runtime, so background heartbeat ticks do not re-render the inactive pane.
+  it('R1 P2 regression — inactive HostPage does NOT re-render on runtime tick', () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0 },
+      },
+      hostOrder: [HOST_A],
+      activeHostId: HOST_A,
+      runtime: {},
+    })
+
+    const onRender = vi.fn()
+    const mem = memoryLocation({ path: `/hosts/${HOST_A}/overview`, record: true })
+    render(
+      <Router hook={mem.hook}>
+        <React.Profiler id="hostpage-inactive" onRender={onRender}>
+          <HostPage pane={hostPane} isActive={false} />
+        </React.Profiler>
+      </Router>,
+    )
+    const baseline = onRender.mock.calls.length
+
+    // Tick the SELECTED host's runtime — inactive HostPage's selector returns
+    // undefined regardless, so no re-render.
+    act(() => {
+      useHostStore.setState((state) => ({
+        runtime: { ...state.runtime, [HOST_A]: { status: 'reconnecting' } },
+      }))
+    })
+    expect(onRender.mock.calls.length).toBe(baseline)
+  })
+
+  // R1 standard P2 — inactive HostPage does NOT race the active one to push
+  // canonical-path redirects.
+  it('R1 P2 regression — inactive HostPage does NOT navigate on canonicalPath', () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0 },
+      },
+      hostOrder: [HOST_A],
+      activeHostId: HOST_A,
+      runtime: {},
+    })
+
+    // URL points at a sub-page that the active resolve would canonicalize away.
+    const mem = memoryLocation({ path: `/hosts/${HOST_A}/nonexistent`, record: true })
+    const before = mem.history.length
+    render(
+      <Router hook={mem.hook}>
+        <HostPage pane={hostPane} isActive={false} />
+      </Router>,
+    )
+    // Inactive — no redirect performed.
+    expect(mem.history.length).toBe(before)
+  })
+
   it('renders the same hostId as preResolveHostId when no URL host is provided (smoke)', () => {
     useHostStore.setState({
       hosts: {

@@ -58,6 +58,7 @@ import {
   setHostBuiltinSections,
   type HostBuiltinSectionDef,
 } from './host-builtin-sections'
+import { dispatchSettingsContributions } from './dispatch-settings-contributions'
 import type { HostRuntime } from '../stores/useHostStore'
 
 // Import the six section components so we can verify identity (extra test).
@@ -220,26 +221,35 @@ describe('#586 — setHostBuiltinSections (batch-replace source map)', () => {
     expect(secondWrapped).toBe(firstWrapped)
   })
 
-  // Test 3 (spec §6.1 #3): wrapper delegates to the latest component.
-  it('Test 3 — wrapper delegates to the latest section component', () => {
+  // Test 3 (spec §6.1 #3): wrapper delegates to the latest *committed* component.
+  // Post-R2 A1 design — wrappers read liveSources, which is only updated by
+  // commitHostBuiltinSources() (called from dispatchSettingsContributions
+  // Phase 2).  This test triggers a commit by calling dispatch directly.
+  it('Test 3 — wrapper delegates to the latest committed section component', () => {
     const first = vi.fn(({ hostId }: { hostId: string }) => <div data-testid="impl">v1-{hostId}</div>)
     const second = vi.fn(({ hostId }: { hostId: string }) => <div data-testid="impl">v2-{hostId}</div>)
 
     setHostBuiltinSections([{ localId: 'a', labelKey: 'hosts.a', order: 0, component: first }])
-    const Wrapper = getHostBuiltinDeclarations()[0].component as React.ComponentType<{ ctx: { scope: 'host'; hostId: string; runtime?: undefined } }>
+    dispatchSettingsContributions()  // commit staged → live
+    const Wrapper = getHostBuiltinDeclarations()[0].component as React.ComponentType<{ ctx: { scope: 'host'; hostId: string; runtime: HostRuntime | undefined } }>
     const { getByTestId, rerender } = render(<Wrapper ctx={{ scope: 'host', hostId: 'hA', runtime: undefined }} />)
     expect(getByTestId('impl').textContent).toBe('v1-hA')
     expect(first).toHaveBeenCalled()
 
-    // Swap the underlying section component (HMR style).
+    // Swap the underlying section component (HMR style); commit before re-render.
     setHostBuiltinSections([{ localId: 'a', labelKey: 'hosts.a', order: 0, component: second }])
+    dispatchSettingsContributions()
     rerender(<Wrapper ctx={{ scope: 'host', hostId: 'hA', runtime: undefined }} />)
     expect(getByTestId('impl').textContent).toBe('v2-hA')
     expect(second).toHaveBeenCalled()
   })
 
-  // Test 4 (spec §6.1 #4): re-add after drop rebuilds the wrapper.
-  it('Test 4 — re-add after drop rebuilds the wrapper (cached identity is released)', () => {
+  // Test 4 (post-R2 design): wrapper identity is stable across drop+re-add
+  // because wrapperCache is keyed by localId and only cleared by
+  // clearHostBuiltinSources(). This is a STRONGER stability invariant than
+  // the pre-R2 design — a section file's wrapper component does not change
+  // identity even after a transient absence from the staged set.
+  it('Test 4 — wrapper identity stays stable across drop and re-add (post-R2 stronger contract)', () => {
     setHostBuiltinSections([makeSection('a')])
     const before = getHostBuiltinDeclarations()[0].component
 
@@ -248,7 +258,14 @@ describe('#586 — setHostBuiltinSections (batch-replace source map)', () => {
 
     setHostBuiltinSections([makeSection('a')])
     const after = getHostBuiltinDeclarations()[0].component
-    expect(after).not.toBe(before)
+    expect(after).toBe(before)  // SAME wrapper reference
+
+    // clearHostBuiltinSources releases the wrapper cache; subsequent
+    // re-add gets a fresh wrapper.
+    clearHostBuiltinSources()
+    setHostBuiltinSections([makeSection('a')])
+    const afterClear = getHostBuiltinDeclarations()[0].component
+    expect(afterClear).not.toBe(before)
   })
 
   // Test 5 (spec §6.1 #5): clearHostBuiltinSources empties the source map.
@@ -267,5 +284,65 @@ describe('#586 — setHostBuiltinSections (batch-replace source map)', () => {
     const decls = getHostBuiltinDeclarations()
     expect(decls).toHaveLength(1)
     expect(decls[0]).toMatchObject({ localId: 'x', labelKey: 'hosts.x', order: 7, scope: 'host' })
+  })
+
+  // R2 attacker/defender/file-health A1 regression — staged changes do not
+  // leak to wrappers until commitHostBuiltinSources() (called from dispatch)
+  // runs.  A failed Phase 1 leaves liveSources untouched, so wrapper.render
+  // continues to use the previously committed component / null.
+  it('R2 A1 regression — wrapper renders previous committed source until dispatch commits new staged set', () => {
+    const v1 = vi.fn(({ hostId }: { hostId: string }) => <div data-testid="impl">v1-{hostId}</div>)
+    const v2 = vi.fn(({ hostId }: { hostId: string }) => <div data-testid="impl">v2-{hostId}</div>)
+
+    setHostBuiltinSections([{ localId: 'a', labelKey: 'hosts.a', order: 0, component: v1 }])
+    dispatchSettingsContributions()  // commit v1
+    const Wrapper = getHostBuiltinDeclarations()[0].component as React.ComponentType<{ ctx: { scope: 'host'; hostId: string; runtime: HostRuntime | undefined } }>
+
+    // Stage v2 BUT do not commit; render — must show v1 (committed) not v2 (staged).
+    setHostBuiltinSections([{ localId: 'a', labelKey: 'hosts.a', order: 0, component: v2 }])
+    const { getByTestId, rerender } = render(<Wrapper ctx={{ scope: 'host', hostId: 'hA', runtime: undefined }} />)
+    expect(getByTestId('impl').textContent).toBe('v1-hA')
+    expect(v2).not.toHaveBeenCalled()
+
+    // After dispatch commits, wrapper sees v2.
+    dispatchSettingsContributions()
+    rerender(<Wrapper ctx={{ scope: 'host', hostId: 'hA', runtime: undefined }} />)
+    expect(getByTestId('impl').textContent).toBe('v2-hA')
+    expect(v2).toHaveBeenCalled()
+  })
+
+  it('R2 A1 regression — dispatch failure leaves committed liveSources intact', () => {
+    const v1 = ({ hostId }: { hostId: string }) => <div data-testid="impl">v1-{hostId}</div>
+    setHostBuiltinSections([{ localId: 'a', labelKey: 'hosts.a', order: 0, component: v1 }])
+    dispatchSettingsContributions()
+    const Wrapper = getHostBuiltinDeclarations()[0].component as React.ComponentType<{ ctx: { scope: 'host'; hostId: string; runtime: HostRuntime | undefined } }>
+    const initial = render(<Wrapper ctx={{ scope: 'host', hostId: 'hA', runtime: undefined }} />)
+    expect(initial.getByTestId('impl').textContent).toBe('v1-hA')
+    initial.unmount()
+
+    // Stage a malformed set that will fail Phase 1 validation
+    // (uppercase localId fails SETTINGS_LOCAL_ID_RE).
+    const v2 = ({ hostId }: { hostId: string }) => <div data-testid="impl">v2-{hostId}</div>
+    setHostBuiltinSections([{ localId: 'a', labelKey: 'hosts.a', order: 0, component: v2 }])
+    expect(() =>
+      // localId fails SETTINGS_LOCAL_ID_RE — assertValidSettingsContribution throws
+      // during Phase 1.  The cast bypasses the static check that normally
+      // protects this — we want to simulate runtime validation failure.
+      dispatchSettingsContributions([
+        {
+          id: 'broken',
+          name: 'Broken',
+          settings: [
+            { localId: 'BadID', scope: 'host', order: 0, labelKey: 'x', component: v2 },
+          ],
+        },
+      ] as unknown as Parameters<typeof dispatchSettingsContributions>[0]),
+    ).toThrow()
+
+    // liveSources['a'] still maps to v1 — wrapper render unchanged.  Render
+    // a fresh instance to prove the live state.
+    const after = render(<Wrapper ctx={{ scope: 'host', hostId: 'hA', runtime: undefined }} />)
+    expect(after.getByTestId('impl').textContent).toBe('v1-hA')
+    after.unmount()
   })
 })

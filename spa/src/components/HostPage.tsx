@@ -121,21 +121,25 @@ function pickSelectableSubPage(
 }
 
 /**
- * `tentativeHostId` and `tentativeRuntime` are the result of the pre-resolve
- * pass + selective subscription.  This second pass picks the final hostId and
- * sub-page using the same shared fallback helper for consistency.
+ * Builds a sub-page selection for a fallback hostId derived from the
+ * render-local snapshot of `lastSelection`.  Both `lastSel` and
+ * `tentativeRuntime` come from the caller so this function never reads
+ * the module-scoped `lastSelection` directly — that's the R2 attacker A2
+ * fix: a single render must use one consistent snapshot to avoid
+ * cross-instance contamination from concurrent HostPage renders.
  */
 function getFallbackSelection(
   hostOrder: string[],
   activeHostId: string | null,
+  lastSel: Selection | null,
   tentativeRuntime: HostRuntime | undefined,
 ): Selection | null {
-  const hostId = pickHostIdFallback(hostOrder, activeHostId, lastSelection)
+  const hostId = pickHostIdFallback(hostOrder, activeHostId, lastSel)
   if (!hostId) return null
 
   return {
     hostId,
-    subPage: pickSelectableSubPage(hostId, lastSelection?.subPage, tentativeRuntime),
+    subPage: pickSelectableSubPage(hostId, lastSel?.subPage, tentativeRuntime),
   }
 }
 
@@ -143,7 +147,9 @@ function resolveSelection(
   location: string,
   hostOrder: string[],
   activeHostId: string | null,
+  tentativeHostId: string | null,
   tentativeRuntime: HostRuntime | undefined,
+  lastSel: Selection | null,
 ) {
   const parsed = parseRoute(location)
   const isHostRoute = parsed?.kind === 'hosts' || parsed?.kind === 'hosts-invalid'
@@ -156,7 +162,7 @@ function resolveSelection(
     }
   }
 
-  const fallbackSelection = getFallbackSelection(hostOrder, activeHostId, tentativeRuntime)
+  const fallbackSelection = getFallbackSelection(hostOrder, activeHostId, lastSel, tentativeRuntime)
   if (!fallbackSelection) {
     return {
       selection: null,
@@ -165,18 +171,20 @@ function resolveSelection(
     }
   }
 
-  // The runtime we use to evaluate sub-page disabled() predicates is the
-  // tentative-host runtime — the final selected hostId equals tentativeHostId
-  // when the URL/lastSelection is valid; if we fall back to a different host
-  // (rare: tentativeHostId not in hostOrder) the fallback ctx will be evaluated
-  // against tentativeRuntime, which is acceptable since selection rarely
-  // changes mid-resolve.
-  const evalRuntime = tentativeRuntime
+  // R2 attacker A2 — `tentativeRuntime` is the runtime *of the tentative
+  // hostId only*.  When the final resolvedHostId differs from tentativeHostId
+  // (e.g. URL hostId not in hostOrder, or fallback paths), evaluating
+  // `disabled(ctx)` with the wrong host's runtime would mis-select sub-pages.
+  // Be conservative: pass undefined runtime to pickSelectableSubPage in that
+  // case, so disabled() predicates that gate on runtime fall through to the
+  // "no info yet" branch instead of using stale data from another host.
+  const evalRuntimeFor = (hostId: string): HostRuntime | undefined =>
+    hostId === tentativeHostId ? tentativeRuntime : undefined
 
   if (parsed?.kind === 'hosts') {
     if (parsed.hostId && parsed.subPage) {
       const resolvedHostId = hostOrder.includes(parsed.hostId) ? parsed.hostId : fallbackSelection.hostId
-      const resolvedSubPage = pickSelectableSubPage(resolvedHostId, parsed.subPage, evalRuntime)
+      const resolvedSubPage = pickSelectableSubPage(resolvedHostId, parsed.subPage, evalRuntimeFor(resolvedHostId))
       const needsHostRedirect = resolvedHostId !== parsed.hostId
       const needsSubPageRedirect = resolvedSubPage !== parsed.subPage
       const needsRedirect = needsHostRedirect || needsSubPageRedirect
@@ -196,9 +204,9 @@ function resolveSelection(
       }
     }
 
-    if (lastSelection) {
-      const hostId = hostOrder.includes(lastSelection.hostId) ? lastSelection.hostId : fallbackSelection.hostId
-      const subPage = pickSelectableSubPage(hostId, lastSelection.subPage, evalRuntime)
+    if (lastSel) {
+      const hostId = hostOrder.includes(lastSel.hostId) ? lastSel.hostId : fallbackSelection.hostId
+      const subPage = pickSelectableSubPage(hostId, lastSel.subPage, evalRuntimeFor(hostId))
       const selection = { hostId, subPage }
       return { selection, canonicalPath: buildHostPath(selection), shouldPersistSelection: true }
     }
@@ -215,7 +223,7 @@ function resolveSelection(
     const rawSubPage = parsed.subPage && isHostSubPage(parsed.subPage) ? parsed.subPage : null
     const selection = {
       hostId,
-      subPage: pickSelectableSubPage(hostId, rawSubPage, evalRuntime),
+      subPage: pickSelectableSubPage(hostId, rawSubPage, evalRuntimeFor(hostId)),
     }
 
     return {
@@ -225,10 +233,10 @@ function resolveSelection(
     }
   }
 
-  // Non-host route: keep lastSelection if available, clamped to live registry.
-  if (lastSelection) {
-    const hostId = hostOrder.includes(lastSelection.hostId) ? lastSelection.hostId : fallbackSelection.hostId
-    const subPage = pickSelectableSubPage(hostId, lastSelection.subPage, evalRuntime)
+  // Non-host route: keep lastSel if available, clamped to live registry.
+  if (lastSel) {
+    const hostId = hostOrder.includes(lastSel.hostId) ? lastSel.hostId : fallbackSelection.hostId
+    const subPage = pickSelectableSubPage(hostId, lastSel.subPage, evalRuntimeFor(hostId))
     return {
       selection: { hostId, subPage },
       canonicalPath: null as string | null,
@@ -250,30 +258,39 @@ export function resetLastHostSelection() {
 }
 
 
-export function HostPage(_props: PaneRendererProps) {
+export function HostPage({ isActive }: PaneRendererProps) {
   const [location, setLocation] = useLocation()
   const hostOrder = useHostStore((s) => s.hostOrder)
   const activeHostId = useHostStore((s) => s.activeHostId)
   const [showAddHost, setShowAddHost] = useState(false)
   const t = useI18nStore((s) => s.t)
 
+  // R2 attacker A2 fix — snapshot module-scoped lastSelection ONCE per render
+  // and pass it to every helper.  preResolveHostId, resolveSelection, and
+  // getFallbackSelection all consume this snapshot, so a render uses one
+  // consistent view even if a concurrent HostPage instance's effect mutates
+  // the module-scoped value mid-flight.
+  const lastSelSnapshot = lastSelection
+
   // Pass 1: pre-resolve a tentative hostId without observing runtime.
-  const tentativeHostId = preResolveHostId(location, hostOrder, activeHostId, lastSelection)
+  const tentativeHostId = preResolveHostId(location, hostOrder, activeHostId, lastSelSnapshot)
 
   // Pass 2: SELECTIVE runtime subscription — only the tentative host's
-  // runtime triggers re-renders.  Background host heartbeat ticks mutate
-  // `runtime[otherId]` but the selector returns the same `runtime[tentativeHostId]`
-  // reference, so zustand's shallow compare skips a re-render.
+  // runtime triggers re-renders.  R1 standard P2 fix — `isActive` gates
+  // the subscription so hidden HostPage instances (TabContent keeps
+  // non-active panes mounted with `visibility: hidden`) do not re-render
+  // on background-host heartbeat ticks.  Selector returns undefined when
+  // inactive; resolveSelection then evaluates with no runtime info, which
+  // is safe because the inactive page is not user-visible anyway.
   const tentativeRuntime = useHostStore((s) =>
-    tentativeHostId ? s.runtime[tentativeHostId] : undefined,
+    isActive && tentativeHostId ? s.runtime[tentativeHostId] : undefined,
   )
 
   // Pass 3: full resolve with runtime-aware ctx for disabled() predicates.
-  // tentativeHostId already drove the selective subscription above; resolveSelection
-  // re-derives the final hostId from URL/order/active and uses tentativeRuntime
-  // for ctx-aware sub-page selection.
+  // resolveSelection only assigns runtime to a host's ctx when the resolved
+  // hostId equals tentativeHostId, otherwise it passes undefined (R2 A2).
   const { selection, canonicalPath, shouldPersistSelection } = resolveSelection(
-    location, hostOrder, activeHostId, tentativeRuntime,
+    location, hostOrder, activeHostId, tentativeHostId, tentativeRuntime, lastSelSnapshot,
   )
 
   useEffect(() => {
@@ -281,10 +298,14 @@ export function HostPage(_props: PaneRendererProps) {
   }, [selection, shouldPersistSelection])
 
   useEffect(() => {
+    // R1 standard P2 fix — only the active HostPage may push canonical-path
+    // redirects.  Hidden instances must not race the active one to
+    // setLocation, which would otherwise navigate the user mid-interaction.
+    if (!isActive) return
     if (canonicalPath && canonicalPath !== location) {
       setLocation(canonicalPath, { replace: true })
     }
-  }, [canonicalPath, location, setLocation])
+  }, [isActive, canonicalPath, location, setLocation])
 
   const renderContent = () => {
     if (!selection?.hostId) {

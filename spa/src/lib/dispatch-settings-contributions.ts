@@ -11,6 +11,7 @@ import {
 } from './settings-section-registry'
 import {
   clearHostBuiltinSources,
+  commitHostBuiltinSources,
   getHostBuiltinDeclarations,
   HOST_BUILTIN_MODULE_ID,
 } from './host-builtin-sections'
@@ -184,9 +185,12 @@ export function dispatchSettingsContributions(
   // Phase 2 — commit. Safe to mutate now: validation passed.
   clearContributions()
   drainLegacyContributionQueue()  // safe: staging already holds the validated set
-  // No host-builtin drain — sources are long-lived (#586). The batch already
-  // contains the materialized host-builtin contributions; registering them
-  // below is sufficient. Repeated dispatches are idempotent.
+  // R2 attacker/defender/file-health A1 — host built-ins live in a staged map
+  // that wrappers do NOT observe.  commitHostBuiltinSources() swaps staged
+  // into the live map only here, in lock-step with the registry write below,
+  // so a failed Phase 1 leaves both layers untouched (no split-brain between
+  // sidebar/route metadata and the rendered body).
+  commitHostBuiltinSources()
   for (const contribution of batch) {
     registerSettingsContribution(contribution)
   }
