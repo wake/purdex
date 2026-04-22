@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.203] - 2026-04-22
+
+### Feat(spa): HSR PR-3 — Workspace settings shell + reserved cleanup (#573)
+
+- `WorkspaceSettingsPage` 在 `ModuleConfigSection` 下方新增 registry-driven 區塊：讀 `listContributions('workspace')` 依 `order` 升冪渲染，每個 contribution 收到 `ctx: { scope: 'workspace', workspaceId }`（spec §5.3 rule 4 — ctx 僅由 shell 產生）。
+- `register-modules.tsx` 拔掉 reserved `workspace` section（`order: 10`，無 component 的 coming_soon 項）；`SettingsSidebar` 同步精簡：移除 `listReservedItems()` 呼叫、`reservedStart` 分隔線、coming_soon 灰字樣式（reserved cleanup 後皆 dead code），PR-2 F7 的 `disabled(ctx)` 處理保留。
+- `settings-section-registry.ts` 拔 `pendingReservedItems` Map、`listReservedItems` export、與 `registerSettingsSection` 的 reserved 分支：舊 API 呼叫方若仍傳 `component: undefined`，改為 `console.warn + return`（非 throw），避免 stale caller / HMR 舊 session 炸 bootstrap（R2 attack F5 修正）。
+- **新 finding 收斂**（R1+R2 四路 review）：F1 移除 `WorkspaceSettingsPage` 的 `useMemo([ctx])` 過度快取，`disabled(ctx)` 改為每次 render 重算，store/flag 變化即時反映；F2 workspace shell 對 disabled contribution 改為「顯示 disabled row + `disabledReasonKey`」，與 PR-2 purdex shell 契約一致；F4 section subtree 加 `key={${workspaceId}:${c.id}}` 強制 workspace 切換時 remount，防止 contribution 內 `useState(ctx.workspaceId)` / `useEffect(..., [])` 跨 workspace 狀態汙染。R3 confirmation review clean。
+- F3：原規劃拔掉的 `module-config` 全域節 restored — `globalConfig` API 仍 live 但 UI 入口被移除形成 silent dead-end；改為保留 UI，等 PR-5 才真正 deprecate（tracked in #574）。
+- 新 `WorkspaceSettingsPage.registry.test.tsx` 7 cases：baseline / render / ctx / order / disabled / workspaceId freshness / cross-scope isolation；`register-modules.test.ts` / `settings-section-registry.test.ts` / `SettingsSidebar.test.tsx` / `SettingsPage.test.tsx` / `settings-contribution-smoke.test.tsx` 同步更新。i18n 移除 `settings.section.workspace` key（`settings.section.modules` 隨 F3 還原保留）。
+- Follow-up issues：#574（globalConfig deprecation after PR-5，Backlog）；#538 workspace 層 render-level smoke milestone 可關閉。
+- 本 PR 僅含 workspace 層 shell 遷移；`HostPage` 改 registry-driven 與 Editor module 首個用例由 PR-4/5 接手。
+
+### Fix(spa): restore build baseline — MonacoWrapper test missing isActive prop (#576)
+
+- `MonacoWrapper.test.tsx:133` 的 `rerender` 呼叫缺 `isActive` prop（第一次 render 有傳，rerender 漏補），導致 `tsc -b` 自 #570 後在 main red。補上 `isActive={true}` 恢復 `pnpm run build` 全綠。
+- Vitest 對型別較寬鬆沒抓到；問題由 HSR PR-3 review 階段發現並獨立以 baseline PR 修復（不夾帶 feature 變更）。
+
 ## [1.0.0-alpha.202] - 2026-04-22
 
 ### Feat(spa): HSR PR-2 — Purdex settings shell + legacy adapter (dispatch-flushed) (#558)
