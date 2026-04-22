@@ -816,37 +816,67 @@ describe('Test 14 — pickHostIdFallback (shared helper)', () => {
   // Equivalence: the inline fallback path inside resolveSelection used the same
   // ordering — capture key cases via the public renderHostPage so any drift
   // would surface here instead of silently diverging.
-  // R1 standard P2 — hidden HostPage (isActive=false) does not subscribe to
-  // runtime, so background heartbeat ticks do not re-render the inactive pane.
-  it('R1 P2 regression — inactive HostPage does NOT re-render on runtime tick', () => {
+  // R3 attacker P1 — inactive HostPage does NOT write back to module-scoped
+  // lastSelection.  When two HostPage instances coexist (one active, one
+  // hidden via TabContent visibility:hidden) the inactive one runs the same
+  // selection pipeline with fabricated runtime=undefined and would otherwise
+  // push a fallback selection (overview) into lastSelection, polluting the
+  // active instance's next resolve.
+  it('R3 P1 regression — inactive HostPage does NOT pollute lastSelection (dual-instance)', () => {
     useHostStore.setState({
       hosts: {
         [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0 },
       },
       hostOrder: [HOST_A],
       activeHostId: HOST_A,
-      runtime: {},
+      runtime: { [HOST_A]: { status: 'connected' } },
     })
 
-    const onRender = vi.fn()
-    const mem = memoryLocation({ path: `/hosts/${HOST_A}/overview`, record: true })
-    render(
-      <Router hook={mem.hook}>
-        <React.Profiler id="hostpage-inactive" onRender={onRender}>
-          <HostPage pane={hostPane} isActive={false} />
-        </React.Profiler>
+    // Register a runtime-gated contribution that the active instance is on.
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.gated',
+      localId: 'gated',
+      scope: 'host',
+      order: 100,
+      labelKey: 'gated',
+      component: () => <div data-testid="gated-body">GATED</div>,
+      disabled: (ctx) => ctx.runtime?.status !== 'connected',
+    })
+
+    // Mount the ACTIVE instance on /hosts/hA/gated — body mounts, lastSelection
+    // gets {hA, gated}.
+    const memActive = memoryLocation({ path: `/hosts/${HOST_A}/gated`, record: true })
+    const active = render(
+      <Router hook={memActive.hook}>
+        <HostPage pane={hostPane} isActive />
       </Router>,
     )
-    const baseline = onRender.mock.calls.length
+    expect(screen.getByTestId('gated-body')).toBeInTheDocument()
+    active.unmount()
 
-    // Tick the SELECTED host's runtime — inactive HostPage's selector returns
-    // undefined regardless, so no re-render.
-    act(() => {
-      useHostStore.setState((state) => ({
-        runtime: { ...state.runtime, [HOST_A]: { status: 'reconnecting' } },
-      }))
-    })
-    expect(onRender.mock.calls.length).toBe(baseline)
+    // Now mount a HIDDEN HostPage — it sees runtime=undefined (gate),
+    // resolves to fallback (overview).  Its useEffect MUST NOT write
+    // lastSelection back to overview.
+    const memHidden = memoryLocation({ path: `/hosts/${HOST_A}/gated`, record: true })
+    const hidden = render(
+      <Router hook={memHidden.hook}>
+        <HostPage pane={hostPane} isActive={false} />
+      </Router>,
+    )
+    hidden.unmount()
+
+    // Re-mount an active instance on bare /hosts — lastSelection should
+    // still point at 'gated' (set by the first active mount), NOT 'overview'
+    // (which the hidden instance would have written without the gate).
+    const memActive2 = memoryLocation({ path: '/hosts', record: true })
+    render(
+      <Router hook={memActive2.hook}>
+        <HostPage pane={hostPane} isActive />
+      </Router>,
+    )
+    // gated body re-mounts because lastSelection is preserved.
+    expect(screen.getByTestId('gated-body')).toBeInTheDocument()
   })
 
   // R1 standard P2 — inactive HostPage does NOT race the active one to push

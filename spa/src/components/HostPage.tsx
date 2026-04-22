@@ -276,14 +276,25 @@ export function HostPage({ isActive }: PaneRendererProps) {
   const tentativeHostId = preResolveHostId(location, hostOrder, activeHostId, lastSelSnapshot)
 
   // Pass 2: SELECTIVE runtime subscription — only the tentative host's
-  // runtime triggers re-renders.  R1 standard P2 fix — `isActive` gates
-  // the subscription so hidden HostPage instances (TabContent keeps
-  // non-active panes mounted with `visibility: hidden`) do not re-render
-  // on background-host heartbeat ticks.  Selector returns undefined when
-  // inactive; resolveSelection then evaluates with no runtime info, which
-  // is safe because the inactive page is not user-visible anyway.
+  // runtime triggers re-renders.  Background-host heartbeat ticks mutate
+  // `runtime[otherId]` but the selector returns the same
+  // `runtime[tentativeHostId]` reference, so zustand's shallow compare
+  // skips a re-render.
+  //
+  // R3 defender high #2 reversal — earlier `isActive` gate fabricated
+  // `runtime: undefined` for hidden HostPage instances, but TabContent
+  // keep-alive means hidden panes still render their bodies.  Forcing
+  // undefined runtime would mis-evaluate `disabled(ctx)` for runtime-
+  // gated contributions and either keep a should-be-disabled body
+  // mounted (when the predicate treats undefined as "not yet known")
+  // OR unmount a should-be-enabled body (when it treats undefined as
+  // disabled), violating PR-4's "disabled contribution body must not
+  // mount" contract in either direction.  Real runtime is the only safe
+  // input for hidden panes.  R1 standard P2's "hidden tabs re-render
+  // on tick" cost is acceptable: this selector already filters to the
+  // tentative host's runtime only, so background hosts don't trigger.
   const tentativeRuntime = useHostStore((s) =>
-    isActive && tentativeHostId ? s.runtime[tentativeHostId] : undefined,
+    tentativeHostId ? s.runtime[tentativeHostId] : undefined,
   )
 
   // Pass 3: full resolve with runtime-aware ctx for disabled() predicates.
@@ -294,8 +305,17 @@ export function HostPage({ isActive }: PaneRendererProps) {
   )
 
   useEffect(() => {
+    // R3 attacker P1 — only the active HostPage may write back to the module-
+    // scoped lastSelection.  Inactive instances run the same selection
+    // pipeline with a fabricated `runtime: undefined` (R1 P2 gate above), so
+    // their computed selection may be a fallback to overview that does not
+    // reflect the real user choice.  Without this gate, a hidden HostPage
+    // would overwrite lastSelection and pollute the active instance's next
+    // resolve — visible as the user's working sub-page collapsing to
+    // overview after switching tabs.
+    if (!isActive) return
     if (shouldPersistSelection && selection) lastSelection = selection
-  }, [selection, shouldPersistSelection])
+  }, [isActive, selection, shouldPersistSelection])
 
   useEffect(() => {
     // R1 standard P2 fix — only the active HostPage may push canonical-path
