@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.212] - 2026-04-23
+
+### Fix(dev): exec rebuilt daemon binary after rebuild (#605)
+
+- `POST /api/dev/daemon/rebuild` 在成功 rename `bin/pdx.new -> bin/pdx` 後，原本仍用目前行程的 `os.Executable()` 做 self-exec。當 daemon 不是從 repo 內的 `bin/pdx` 啟動時，重啟會回到舊 binary，UI 會看到 build 完成與 restarting，但實際 daemon 版本不會更新。
+- 現在改為直接 exec 剛完成原子替換的 `bin/pdx`，確保 daemon self-rebuild 真的切到新 binary。
+- 新增回歸測試，驗證 rebuild SSE 跑完後，exec target 指向 repo 內重建出的 `bin/pdx`。
+
 ## [1.0.0-alpha.211] - 2026-04-23
 
 ### Fix(agent): preserve symlink invocation path for versioned CLI binaries (#602)
