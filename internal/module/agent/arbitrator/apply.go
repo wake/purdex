@@ -142,15 +142,19 @@ func (d *applyDeps) apply(obs observation.Observation) {
 // checkGenerationGate guards against stale-generation observations and
 // routes SessionStart through applySessionStart. Returns true when apply
 // should proceed to step 2.
+//
+// Reads the current generation through GenerationOf so the RWMutex
+// protection covers cross-goroutine readers (Arbitrator.CurrentGeneration
+// producers) that may be racing against the apply writer.
 func (d *applyDeps) checkGenerationGate(obs observation.Observation) bool {
-	sg := d.frames.getOrCreateSession(obs.SessionID)
+	current := d.frames.GenerationOf(obs.SessionID)
 	switch {
-	case obs.ObservedGeneration < sg.Generation:
+	case obs.ObservedGeneration < current:
 		d.emitRejectedTrace(obs, ReasonStaleGeneration, "observation from older generation")
 		return false
-	case obs.ObservedGeneration == sg.Generation:
+	case obs.ObservedGeneration == current:
 		return true
-	default: // obs.ObservedGeneration > sg.Generation
+	default: // obs.ObservedGeneration > current
 		if obs.SourceKind == observation.SourceHook && obs.Action == actionSessionStart {
 			d.applySessionStart(obs)
 			// SessionStart is fully handled by the helper; do not fall
@@ -166,11 +170,15 @@ func (d *applyDeps) checkGenerationGate(obs observation.Observation) bool {
 // generation, ends old-gen actors, clears stale pending observations,
 // rotates the trace_id watermark, consumes any published arbmode pending,
 // and emits a synthetic boundary trace.
+//
+// All frameState mutations (read oldGen, end old-gen actors, advance
+// generation) go through locked frameState methods. GenerationOf is read
+// before the end-old-gen path so the oldGen snapshot is consistent with the
+// value that forceEndOldGenActors will filter on.
 func (d *applyDeps) applySessionStart(obs observation.Observation) {
 	sid := obs.SessionID
 	newGen := obs.ObservedGeneration
-	sg := d.frames.getOrCreateSession(sid)
-	oldGen := sg.Generation
+	oldGen := d.frames.GenerationOf(sid)
 	now := d.now()
 
 	// Steps 2-3 — end old-gen actors (clears WatcherTokens in the process).
@@ -185,7 +193,7 @@ func (d *applyDeps) applySessionStart(obs observation.Observation) {
 	})
 
 	// Step 1 — bump generation after stashing oldGen side-effects.
-	sg.Generation = newGen
+	d.frames.SetGeneration(sid, newGen)
 
 	// Step 5 — mint the new generation's trace_id. The returned id becomes
 	// the authoritative tag for every boundary-synthesis event emitted for

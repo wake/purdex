@@ -18,11 +18,31 @@ type TraceIDKey struct {
 // TraceIDMinter is the write-side view of the trace-id registry. It is owned
 // by components that advance generations — SessionStart handling in the
 // Arbitrator (PR-1b-1b) mints a new id on start and prunes prior generations
-// on generation advance.
+// on generation advance. PR-1b-1c adds AdoptTraceID so the hook/arbitrator
+// handshake can tunnel a provisional UUID all the way from the hook handler
+// into the (session, gen) registry slot, binding Observation.TraceID and
+// the per-generation public trace_id to the same uuid for correlation.
 type TraceIDMinter interface {
 	// Mint returns the trace_id for (sessionID, generation). See
 	// traceIDRegistry.Mint for repeat-mint and watermark semantics.
 	Mint(sessionID string, generation int64) string
+
+	// AdoptTraceID populates the (sessionID, generation) slot with seed
+	// when the key is absent and returns seed. When the key already holds
+	// a value (from a prior Mint or Adopt), the existing value is returned
+	// and seed is discarded — this idempotent contract protects replay
+	// paths (duplicate SessionStart fan-out) from splitting the trace.
+	//
+	// If seed is the empty string, the call degrades to Mint: a fresh
+	// UUIDv4 is generated, stored, and returned. The degradation exists
+	// because downstream TraceWriter batches reject rows with empty
+	// TraceID; returning "" here would turn a caller bug into a batch
+	// flush failure.
+	//
+	// If generation is below the per-session watermark set by
+	// PruneSessionBefore, AdoptTraceID refuses to populate the key and
+	// returns "". This mirrors Mint's stale-generation rejection.
+	AdoptTraceID(sessionID string, generation int64, seed string) string
 
 	// PruneSessionBefore deletes entries with generation < threshold for the
 	// session and advances the per-session watermark. Returns number of
@@ -130,6 +150,45 @@ func (r *traceIDRegistry) Get(sessionID string, generation int64) (string, bool)
 
 	id, ok := r.cache[key]
 	return id, ok
+}
+
+// AdoptTraceID see TraceIDMinter.AdoptTraceID for the full contract. This
+// is the concrete implementation; it acquires mu.Lock because each branch
+// may mutate r.cache.
+func (r *traceIDRegistry) AdoptTraceID(sessionID string, generation int64, seed string) string {
+	key := TraceIDKey{SessionID: sessionID, Generation: generation}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Reject stale adopts for generations that have already been pruned —
+	// mirrors Mint. An empty return signals the caller must discard and
+	// not propagate the id.
+	if floor, ok := r.watermark[sessionID]; ok && generation < floor {
+		log.Printf("[agent][observation] stale adopt rejected: session=%q generation=%d watermark=%d",
+			sessionID, generation, floor)
+		return ""
+	}
+
+	// Idempotent branch: existing value wins, seed is discarded.
+	if existing, ok := r.cache[key]; ok {
+		return existing
+	}
+
+	// Empty-seed fallback: generate a fresh UUID so callers never receive
+	// an empty TraceID (which would poison validateLightsRow downstream).
+	// Log a warning because an empty seed indicates an upstream builder
+	// missed its uuid.NewString() step.
+	if seed == "" {
+		id := uuid.NewString()
+		r.cache[key] = id
+		log.Printf("[agent][observation] AdoptTraceID received empty seed: session=%q generation=%d; falling back to mint (id=%s)",
+			sessionID, generation, id)
+		return id
+	}
+
+	r.cache[key] = seed
+	return seed
 }
 
 // PruneSessionBefore deletes entries where SessionID == sessionID AND

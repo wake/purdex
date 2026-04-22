@@ -42,17 +42,27 @@ func (f *fakeTraceSubmitter) byReason(code string) []TraceRecord {
 	return out
 }
 
-// fakeMinter records Mint + PruneSessionBefore calls for SessionStart tests.
+// fakeMinter records Mint + AdoptTraceID + PruneSessionBefore calls for
+// SessionStart tests. AdoptTraceID is added in PR-1b-1c (T1); existing tests
+// only exercise Mint, but the interface now includes Adopt, so the fake
+// satisfies both contracts.
 type fakeMinter struct {
-	mintCalls          []mintCall
-	pruneBeforeCalls   []pruneBeforeCall
-	pruneSessionCalls  []string
-	nextMintID         string
+	mintCalls         []mintCall
+	adoptCalls        []adoptCall
+	pruneBeforeCalls  []pruneBeforeCall
+	pruneSessionCalls []string
+	nextMintID        string
 }
 
 type mintCall struct {
 	sessionID  string
 	generation int64
+}
+
+type adoptCall struct {
+	sessionID  string
+	generation int64
+	seed       string
 }
 
 type pruneBeforeCall struct {
@@ -66,6 +76,18 @@ func (m *fakeMinter) Mint(sessionID string, generation int64) string {
 		return m.nextMintID
 	}
 	return "mint-" + sessionID
+}
+
+// AdoptTraceID echoes the seed when non-empty (fake idempotency is not
+// exercised by existing apply tests — 1b-1c T5 will cover that). When seed
+// is empty, degrade to Mint so the contract round-trips the no-empty-id
+// guarantee.
+func (m *fakeMinter) AdoptTraceID(sessionID string, generation int64, seed string) string {
+	m.adoptCalls = append(m.adoptCalls, adoptCall{sessionID, generation, seed})
+	if seed != "" {
+		return seed
+	}
+	return m.Mint(sessionID, generation)
 }
 
 func (m *fakeMinter) PruneSessionBefore(sessionID string, generation int64) int {

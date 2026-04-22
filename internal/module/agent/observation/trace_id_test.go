@@ -391,6 +391,132 @@ func TestTraceIDRegistry_PruneSession_ResetsWatermark(t *testing.T) {
 	}
 }
 
+// TestTraceIDRegistry_AdoptTraceID_NewPair_UsesSeed verifies that when the
+// (sessionID, generation) key is absent and seed is non-empty, AdoptTraceID
+// writes seed into the registry and returns it verbatim. A subsequent Get
+// must observe the same value (shared state with the Lookup view).
+func TestTraceIDRegistry_AdoptTraceID_NewPair_UsesSeed(t *testing.T) {
+	minter, lookup := observation.NewTraceIDRegistry()
+
+	seed := "seed-uuid-1234"
+	got := minter.AdoptTraceID("s-adopt-new", 1, seed)
+	if got != seed {
+		t.Fatalf("AdoptTraceID on new pair = %q, want seed %q", got, seed)
+	}
+
+	back, ok := lookup.Get("s-adopt-new", 1)
+	if !ok {
+		t.Fatal("Lookup miss after AdoptTraceID; registry was not populated")
+	}
+	if back != seed {
+		t.Fatalf("Lookup returned %q after adopt; want %q", back, seed)
+	}
+}
+
+// TestTraceIDRegistry_AdoptTraceID_ExistingPair_ReturnsOld verifies adoption
+// is idempotent: if the key already has a value, AdoptTraceID returns the
+// existing value and discards seed. This is the replay-safety contract —
+// repeated SessionStart attempts (or duplicate hook fan-out) must not rotate
+// the (session, gen) trace_id.
+func TestTraceIDRegistry_AdoptTraceID_ExistingPair_ReturnsOld(t *testing.T) {
+	minter, lookup := observation.NewTraceIDRegistry()
+
+	first := minter.AdoptTraceID("s-adopt-exist", 2, "original-seed")
+	if first != "original-seed" {
+		t.Fatalf("first adopt = %q, want original-seed", first)
+	}
+
+	second := minter.AdoptTraceID("s-adopt-exist", 2, "different-seed")
+	if second != first {
+		t.Fatalf("repeat adopt rotated trace_id: first=%q second=%q", first, second)
+	}
+
+	got, _ := lookup.Get("s-adopt-exist", 2)
+	if got != first {
+		t.Fatalf("Lookup after repeat adopt = %q, want %q (registry mutated)", got, first)
+	}
+}
+
+// TestTraceIDRegistry_AdoptTraceID_ExistingViaMint_ReturnsMinted verifies the
+// interop contract: if the key was already populated by Mint (legacy path),
+// AdoptTraceID must treat it as existing and return the minted id verbatim.
+// This protects sessions that were started pre-1b-1c adopt path from having
+// their trace_id overwritten if an adopt call reaches the minter afterwards.
+func TestTraceIDRegistry_AdoptTraceID_ExistingViaMint_ReturnsMinted(t *testing.T) {
+	minter, _ := observation.NewTraceIDRegistry()
+
+	minted := minter.Mint("s-adopt-mint", 3)
+	if minted == "" {
+		t.Fatal("Mint returned empty id on fresh registry")
+	}
+	adopted := minter.AdoptTraceID("s-adopt-mint", 3, "some-seed")
+	if adopted != minted {
+		t.Fatalf("AdoptTraceID over minted key = %q, want %q (must not rotate)", adopted, minted)
+	}
+}
+
+// TestTraceIDRegistry_AdoptTraceID_EmptySeed_FallsBackToMint locks the
+// decision for the empty-seed edge case: AdoptTraceID degrades to Mint and
+// returns a fresh UUIDv4, so callers with a malformed seed never get an
+// empty string back (empty TraceID poisons the downstream TraceWriter
+// batch via validateLightsRow). Subsequent adopts for the same key must
+// then be idempotent against that generated id.
+func TestTraceIDRegistry_AdoptTraceID_EmptySeed_FallsBackToMint(t *testing.T) {
+	buf := captureTraceIDLog(t)
+	minter, lookup := observation.NewTraceIDRegistry()
+
+	got := minter.AdoptTraceID("s-adopt-empty", 4, "")
+	if got == "" {
+		t.Fatal("AdoptTraceID with empty seed must not return empty string")
+	}
+	if _, err := uuid.Parse(got); err != nil {
+		t.Fatalf("empty-seed fallback must return valid UUIDv4, got %q: %v", got, err)
+	}
+
+	back, ok := lookup.Get("s-adopt-empty", 4)
+	if !ok || back != got {
+		t.Fatalf("Lookup after empty-seed adopt = (%q,%v), want (%q,true)", back, ok, got)
+	}
+
+	// Idempotency against the generated value: a second adopt (with any
+	// seed) must return the same id.
+	again := minter.AdoptTraceID("s-adopt-empty", 4, "late-seed")
+	if again != got {
+		t.Fatalf("repeat adopt after empty-seed fallback = %q, want %q", again, got)
+	}
+
+	// The fallback path must leave a warning crumb so operators can trace
+	// why a provisional seed went missing.
+	if !strings.Contains(buf.String(), "empty seed") {
+		t.Fatalf("expected 'empty seed' warning in log, got: %q", buf.String())
+	}
+}
+
+// TestTraceIDRegistry_AdoptTraceID_BelowWatermark_ReturnsEmpty locks the
+// defensive contract: if generation is below the per-session watermark set
+// by a prior PruneSessionBefore, AdoptTraceID refuses to populate the key
+// and returns "". This mirrors Mint's behaviour — a stale hook replay must
+// not revive a retired (session, gen) slot.
+func TestTraceIDRegistry_AdoptTraceID_BelowWatermark_ReturnsEmpty(t *testing.T) {
+	buf := captureTraceIDLog(t)
+	minter, lookup := observation.NewTraceIDRegistry()
+
+	minter.Mint("s-adopt-wm", 1)
+	minter.Mint("s-adopt-wm", 2)
+	minter.PruneSessionBefore("s-adopt-wm", 3) // watermark = 3
+
+	got := minter.AdoptTraceID("s-adopt-wm", 1, "stale-seed")
+	if got != "" {
+		t.Fatalf("stale adopt below watermark = %q, want empty string", got)
+	}
+	if _, ok := lookup.Get("s-adopt-wm", 1); ok {
+		t.Error("stale adopt should not populate registry")
+	}
+	if !strings.Contains(buf.String(), "stale") {
+		t.Fatalf("expected stale rejection in log, got: %q", buf.String())
+	}
+}
+
 // TestTraceIDRegistry_Concurrent_Race exercises Mint and PruneSessionBefore
 // concurrently to surface data races under -race. A panic or race report is
 // the failure signal.

@@ -184,6 +184,20 @@ func (a *Arbitrator) InCh() chan<- observation.Observation {
 	return a.inCh
 }
 
+// CurrentGeneration returns the generation currently associated with
+// sessionID, or 0 if the session has not yet been observed through
+// SessionStart. Callers invoke this from producer goroutines (hook /
+// probe / sweep / Module) concurrently with the Arbitrator Run goroutine;
+// the implementation reads frameState.sessions under mu.RLock so the value
+// is consistent with the last completed apply step.
+//
+// Plan D10 (P0-6) mandates RWMutex over atomic.Int64 here so every field
+// on sessionGen shares a single invariant owner — callers must not assume
+// any other frameState field (Actors, WatcherTokens) can be read lock-free.
+func (a *Arbitrator) CurrentGeneration(sessionID string) int64 {
+	return a.deps.frames.GenerationOf(sessionID)
+}
+
 // InChForTesting returns the bidirectional input channel. Test-only — exposes
 // the receive side so admission tests can drain without starting the Run
 // goroutine. Never call from production code.
