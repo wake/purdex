@@ -248,4 +248,38 @@ describe('HostSidebar', () => {
     fireEvent.click(disabledButton)
     expect(defaultProps.onSelect).not.toHaveBeenCalled()
   })
+
+  // Test 13 (#588 spec §6.2 #13): sidebar passes runtime[hostId] in ctx so
+  // disabled(ctx) predicates can react to live host runtime.
+  it('Test 13: sidebar builds runtime-aware ctx — runtime tick flips disabled', () => {
+    const RuntimeGated = () => null
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.runtime-gated',
+      localId: 'runtime-gated',
+      scope: 'host',
+      order: 100,
+      labelKey: 'runtime-gated',
+      component: RuntimeGated,
+      // disabled when no runtime observed yet.
+      disabled: (ctx) => ctx.runtime === undefined,
+    })
+
+    // Initially no runtime[HOST_ID] — row disabled.
+    const { rerender } = render(<HostSidebar {...defaultProps} />)
+    expect(document.querySelectorAll('[data-disabled-ctx="true"]').length).toBeGreaterThan(0)
+
+    // Tick runtime — re-render sidebar; disabled row count drops by one.
+    useHostStore.setState((state) => ({
+      runtime: { ...state.runtime, [HOST_ID]: { status: 'connected' } },
+    }))
+    rerender(<HostSidebar {...defaultProps} />)
+    // The runtime-gated row no longer matches data-disabled-ctx="true".
+    const disabledNow = Array.from(
+      document.querySelectorAll('[data-disabled-ctx="true"]'),
+    ) as HTMLElement[]
+    for (const el of disabledNow) {
+      expect(el.textContent).not.toContain('runtime-gated')
+    }
+  })
 })

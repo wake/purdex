@@ -58,6 +58,7 @@ import {
   setHostBuiltinSections,
   type HostBuiltinSectionDef,
 } from './host-builtin-sections'
+import type { HostRuntime } from '../stores/useHostStore'
 
 // Import the six section components so we can verify identity (extra test).
 import { OverviewSection } from '../components/hosts/OverviewSection'
@@ -110,9 +111,9 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     expect(overview).toBeDefined()
 
     const Wrapper = overview!.component as React.ComponentType<{
-      ctx: { scope: 'host'; hostId: string }
+      ctx: { scope: 'host'; hostId: string; runtime: HostRuntime | undefined }
     }>
-    const { getByTestId } = render(<Wrapper ctx={{ scope: 'host', hostId: 'hA' }} />)
+    const { getByTestId } = render(<Wrapper ctx={{ scope: 'host', hostId: 'hA', runtime: undefined }} />)
     const node = getByTestId('overview-stub')
     expect(node.textContent).toBe('overview-for-hA')
   })
@@ -134,7 +135,7 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
       const contrib = hostContribs.find((c) => c.localId === localId)
       expect(contrib, `contribution for '${localId}' must exist`).toBeDefined()
       const original = hostBuiltinComponentMap.get(
-        contrib!.component as React.ComponentType<{ ctx: { scope: 'host'; hostId: string } }>,
+        contrib!.component as React.ComponentType<{ ctx: { scope: 'host'; hostId: string; runtime: HostRuntime | undefined } }>,
       )
       expect(original, `'${localId}' must wrap the correct section`).toBe(component)
     }

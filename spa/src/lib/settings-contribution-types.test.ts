@@ -8,7 +8,7 @@ import type {
 
 const PurdexScopedComponent: React.ComponentType<{ ctx: { scope: 'purdex' } }> = () => null
 
-const HostScopedComponent: React.ComponentType<{ ctx: { scope: 'host'; hostId: string } }> = () => null
+const HostScopedComponent: React.ComponentType<{ ctx: SettingsContextFor<'host'> }> = () => null
 
 const WorkspaceScopedComponent: React.ComponentType<{ ctx: { scope: 'workspace'; workspaceId: string } }> = () => null
 

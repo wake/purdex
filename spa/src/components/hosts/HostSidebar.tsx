@@ -49,7 +49,9 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
           const host = hosts[hostId]
           if (!host) return null
           const isExpanded = expanded[hostId] || hostId === selectedHostId
-          const hostCtx = { scope: 'host' as const, hostId }
+          // ctx carries runtime[hostId] so disabled(ctx) predicates can react
+          // to live host runtime changes without a separate side-read.
+          const hostCtx = { scope: 'host' as const, hostId, runtime: runtime[hostId] }
           return (
             <div key={hostId} className="mb-1">
               <button
