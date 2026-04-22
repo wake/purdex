@@ -952,6 +952,48 @@ func (s *TraceStore) AppendSteps(steps []TraceStep) (err error) {
 		}
 	}
 
+	// Refresh summary fields on each chain touched by this batch. step_count
+	// is the authoritative count of persisted rows; latest_* fall back to
+	// the previously stored value when the newest step leaves them empty,
+	// which preserves SaveChain-provided roll-up values for chains that
+	// AppendSteps is only extending (spec: AppendSteps never rewrites chain
+	// summary fields). NULLIF(..., '') treats empty strings as NULL so
+	// COALESCE properly falls through.
+	//
+	// Subqueries pick the newest step by (seq DESC, created_at DESC,
+	// step_id DESC) — the same order ListChains / GetChainRecord use when
+	// materializing steps.
+	for chainID := range chains {
+		if _, err = tx.Exec(`
+			UPDATE agent_trace_chains
+			SET step_count = (
+				SELECT COUNT(*) FROM agent_trace_steps WHERE chain_id = ?
+			),
+			latest_step_kind = COALESCE(NULLIF((
+				SELECT kind FROM agent_trace_steps
+				WHERE chain_id = ?
+				ORDER BY seq DESC, created_at DESC, step_id DESC
+				LIMIT 1
+			), ''), latest_step_kind),
+			latest_decision = COALESCE(NULLIF((
+				SELECT decision FROM agent_trace_steps
+				WHERE chain_id = ?
+				ORDER BY seq DESC, created_at DESC, step_id DESC
+				LIMIT 1
+			), ''), latest_decision),
+			latest_step_reason = COALESCE(NULLIF((
+				SELECT reason FROM agent_trace_steps
+				WHERE chain_id = ?
+				ORDER BY seq DESC, created_at DESC, step_id DESC
+				LIMIT 1
+			), ''), latest_step_reason),
+			updated_at = ?
+			WHERE chain_id = ?
+		`, chainID, chainID, chainID, chainID, time.Now().UnixNano(), chainID); err != nil {
+			return err
+		}
+	}
+
 	if err = tx.Commit(); err != nil {
 		return err
 	}

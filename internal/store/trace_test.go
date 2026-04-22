@@ -2154,3 +2154,138 @@ func TestTraceStore_AppendSteps_EnvelopeFields_Roundtrip(t *testing.T) {
 		t.Fatalf("status/outcome = %q / %q", gotStatus, gotOutcome)
 	}
 }
+
+// ----- C9: AppendSteps refreshes chain summary (step_count + latest_*) -----
+
+// TestTraceStore_AppendSteps_UpdatesChainSummary_StepCount_Latest verifies
+// that AppendSteps refreshes step_count and latest_* columns on the chain
+// row after every insert. Without the refresh, ListChains would always
+// return step_count=0 for AppendSteps-only chains, breaking pruning's
+// max-steps budget and making the trace viewer's "latest event" column
+// useless.
+func TestTraceStore_AppendSteps_UpdatesChainSummary_StepCount_Latest(t *testing.T) {
+	s := openTestTraceStore(t)
+
+	// Three steps on one chain. Make the third carry distinctive
+	// kind/decision/reason so we can see the latest_* fields catch up.
+	s1 := makeLightsStep("sum-1", "sum-chain", 1, 100)
+	s1.Kind = "decision"
+	s1.Decision = "first"
+	s1.Reason = "first-reason"
+
+	s2 := makeLightsStep("sum-2", "sum-chain", 2, 200)
+	s2.Kind = "decision"
+	s2.Decision = "middle"
+	s2.Reason = "middle-reason"
+
+	s3 := makeLightsStep("sum-3", "sum-chain", 3, 300)
+	s3.Kind = "event"
+	s3.Decision = "last"
+	s3.Reason = "last-reason"
+
+	if err := s.AppendSteps([]TraceStep{s1, s2, s3}); err != nil {
+		t.Fatalf("AppendSteps: %v", err)
+	}
+
+	var (
+		stepCount                                      int
+		latestKind, latestDecision, latestStepReason string
+	)
+	if err := s.db.QueryRow(`
+		SELECT step_count, latest_step_kind, latest_decision, latest_step_reason
+		FROM agent_trace_chains WHERE chain_id=?`, "sum-chain").Scan(
+		&stepCount, &latestKind, &latestDecision, &latestStepReason); err != nil {
+		t.Fatalf("chain row: %v", err)
+	}
+
+	if stepCount != 3 {
+		t.Errorf("step_count = %d, want 3", stepCount)
+	}
+	if latestKind != "event" {
+		t.Errorf("latest_step_kind = %q, want event (from sum-3)", latestKind)
+	}
+	if latestDecision != "last" {
+		t.Errorf("latest_decision = %q, want last (from sum-3)", latestDecision)
+	}
+	if latestStepReason != "last-reason" {
+		t.Errorf("latest_step_reason = %q, want last-reason (from sum-3)", latestStepReason)
+	}
+}
+
+// TestTraceStore_AppendSteps_ChainExistingLatest_PreservedWhenNewStepEmpty
+// verifies that AppendSteps does NOT overwrite pre-existing latest_* values
+// with empty strings: if the appended step's kind/decision/reason are
+// blank, the chain row keeps whatever SaveChain wrote. This preserves the
+// "AppendSteps never rewrites chain summary" contract called out in the
+// AppendSteps godoc.
+func TestTraceStore_AppendSteps_ChainExistingLatest_PreservedWhenNewStepEmpty(t *testing.T) {
+	s := openTestTraceStore(t)
+
+	// Seed the chain with a rich step so SaveChain's normalize step fills
+	// the chain latest_* columns with "saved-*" values (SaveChain mirrors
+	// the last step's Decision/Reason into the chain row).
+	seed := makeLightsStep("preserve-1", "preserve", 1, 55)
+	seed.Kind = "decision"
+	seed.Decision = "saved-decision"
+	seed.Reason = "saved-reason"
+	original := TraceRecord{
+		Chain: TraceChain{
+			ChainID:        "preserve",
+			StartedAt:      50,
+			CompletedAt:    60,
+			TerminalStatus: "done",
+			TerminalReason: "finished",
+			TmuxSession:    "proj-a",
+			PaneID:         "%5",
+			RootAgentType:  "cc",
+			RootEventName:  "Stop",
+		},
+		Steps: []TraceStep{seed},
+	}
+	if err := s.SaveChain(original); err != nil {
+		t.Fatalf("SaveChain: %v", err)
+	}
+
+	// Sanity-check: SaveChain has stored "saved-*" into the chain row.
+	var sanityDecision string
+	if err := s.db.QueryRow(`SELECT latest_decision FROM agent_trace_chains WHERE chain_id=?`, "preserve").Scan(&sanityDecision); err != nil {
+		t.Fatalf("pre-condition query: %v", err)
+	}
+	if sanityDecision != "saved-decision" {
+		t.Fatalf("pre-condition failed: SaveChain stored latest_decision=%q, want saved-decision", sanityDecision)
+	}
+
+	// Append a step with blank decision + reason (kind keeps a value so we
+	// can confirm the NULLIF fallback is per-field, not global).
+	blank := makeLightsStep("preserve-2", "preserve", 2, 75)
+	blank.Kind = "event"
+	blank.Decision = ""
+	blank.Reason = ""
+	if err := s.AppendSteps([]TraceStep{blank}); err != nil {
+		t.Fatalf("AppendSteps: %v", err)
+	}
+
+	var (
+		stepCount                                    int
+		latestKind, latestDecision, latestStepReason string
+	)
+	if err := s.db.QueryRow(`
+		SELECT step_count, latest_step_kind, latest_decision, latest_step_reason
+		FROM agent_trace_chains WHERE chain_id=?`, "preserve").Scan(
+		&stepCount, &latestKind, &latestDecision, &latestStepReason); err != nil {
+		t.Fatalf("chain row: %v", err)
+	}
+
+	if stepCount != 2 {
+		t.Errorf("step_count = %d, want 2", stepCount)
+	}
+	if latestKind != "event" {
+		t.Errorf("latest_step_kind = %q, want event (append wins non-empty field)", latestKind)
+	}
+	if latestDecision != "saved-decision" {
+		t.Errorf("latest_decision = %q, want saved-decision (blank append preserves SaveChain)", latestDecision)
+	}
+	if latestStepReason != "saved-reason" {
+		t.Errorf("latest_step_reason = %q, want saved-reason (blank append preserves SaveChain)", latestStepReason)
+	}
+}
