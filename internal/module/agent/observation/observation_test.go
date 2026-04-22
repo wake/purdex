@@ -3,7 +3,6 @@ package observation_test
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/wake/purdex/internal/module/agent/observation"
 )
@@ -50,9 +49,10 @@ func TestObsPhase_ValidValues(t *testing.T) {
 
 func TestObservation_ZeroValue_String(t *testing.T) {
 	var obs observation.Observation
-	s := obs.String()
-	if s == "" {
-		t.Error("Observation{}.String() returned empty string; want non-empty")
+	got := obs.String()
+	want := "Observation{trace_id: session_id: action: phase:}"
+	if got != want {
+		t.Errorf("Observation{}.String() = %q; want %q", got, want)
 	}
 }
 
@@ -89,6 +89,31 @@ func TestStateProposal_JSONRoundtrip(t *testing.T) {
 	}
 	if got.EndReason != orig.EndReason {
 		t.Errorf("EndReason = %q; want %q", got.EndReason, orig.EndReason)
+	}
+}
+
+// Covers the bool-zero-value path that JSONRoundtrip (with EndLifecycle=true)
+// cannot: without omitempty, false must survive marshal/unmarshal.
+func TestStateProposal_ZeroValue(t *testing.T) {
+	var orig observation.StateProposal
+	data, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("Marshal zero StateProposal: %v", err)
+	}
+
+	var got observation.StateProposal
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal zero StateProposal: %v", err)
+	}
+
+	if got.EndLifecycle {
+		t.Errorf("EndLifecycle = true; want false (zero-value must roundtrip)")
+	}
+	if got.ActorKey != (observation.ActorKey{}) {
+		t.Errorf("ActorKey = %+v; want zero value", got.ActorKey)
+	}
+	if got.SuggestStatus != "" || got.EndReason != "" {
+		t.Errorf("non-empty string fields: SuggestStatus=%q EndReason=%q", got.SuggestStatus, got.EndReason)
 	}
 }
 
@@ -179,6 +204,3 @@ func TestBranch_Fields(t *testing.T) {
 		t.Errorf("Outcome = %q; want %q", got.Outcome, orig.Outcome)
 	}
 }
-
-// Compile-time check: Observation uses time.Time.
-var _ = time.Now

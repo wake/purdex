@@ -26,7 +26,6 @@ const (
 )
 
 // IsValid reports whether sk is one of the five defined SourceKind values.
-// Uses a switch statement to avoid heap allocation.
 func (sk SourceKind) IsValid() bool {
 	switch sk {
 	case SourceHook, SourceProbe, SourceSweep, SourceReconcile, SourceSynthetic:

@@ -12,8 +12,7 @@ type ActorKey struct {
 	ActorID    string `json:"actor_id"`
 }
 
-// String returns a human-readable representation of the key in the form
-// "<sessionID>/<generation>/<actorID>". It is safe to call on a zero value.
+// String implements fmt.Stringer. Safe on zero value.
 func (k ActorKey) String() string {
 	return fmt.Sprintf("%s/%d/%s", k.SessionID, k.Generation, k.ActorID)
 }
