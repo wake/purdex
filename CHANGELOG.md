@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.214] - 2026-04-23
+
+### Feat(agent): Lights rebuild — Phase 0 Status alignment skeleton (#610)
+
+Lights 子系統 rebuild 系列第一棒，導入最小骨架讓後續 Phase 可對齊 agent Status。
+
+- 新 optional interface `StatusSupporter`（`SupportedStatuses() []Status`）— 與既有 `HookInstaller` / `StatuslineInstaller` 同型
+- 新 `Coverage(Registry)` helper 產出 agent 宣告矩陣（`[]CoverageRow`）— 保留 registry 註冊順序（Claim priority 語意）、`Declared` defensive copy、nil → `[]Status{}` normalize
+- 零改動既有 provider / handler / module / probe — Phase 0 僅骨架，Phase 1 才各 agent 填入實作
+- 附帶完整 tightened 版 Lights rebuild spec（6 Phase roadmap）+ Phase 0 TDD plan + 討論文件
+
+6 commits + 2 codex review（R1 標準 approve / R2 三視角 3 findings 採納 + 2 findings 維持判斷 + 1 findings 事實承認修 docs）。8 個 Coverage 測試涵蓋空 registry / 已宣告 / 未宣告 / defensive copy / nil normalize / 註冊順序 / duplicate AgentType / 混合情境。
+
 ## [1.0.0-alpha.213] - 2026-04-23
 
 ### Feat(spa): HSR PR-5 — Editor homePath first module user + #540 immutable snapshot + deprecation warn (#604)
