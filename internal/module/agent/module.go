@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -19,7 +18,6 @@ import (
 	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
-	"github.com/wake/purdex/internal/module/agent/arbmode"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
@@ -62,9 +60,6 @@ type Module struct {
 
 	sweepCancel context.CancelFunc
 	sweepWG     sync.WaitGroup
-
-	arbmodeMgr     *arbmode.Manager
-	arbmodeHandler *arbmode.Handler
 }
 
 // New creates a new agent Module backed by the given AgentEventStore.
@@ -99,38 +94,6 @@ func (m *Module) Dependencies() []string { return []string{"session"} }
 // and registers CC and Codex providers.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
-
-	// Build arbmode Manager + handler BEFORE the session-provider check so the
-	// /api/agent/arbitrator/mode endpoint is always available even in the
-	// degraded path where session provider is missing. arbmode has no session
-	// dependency.
-	c.CfgMu.RLock()
-	initialArbMode := c.Cfg.Agent.ArbMode
-	initialUploadDir := c.Cfg.UploadDir
-	c.CfgMu.RUnlock()
-	m.arbmodeMgr = arbmode.NewManager(os.Getenv("AGENT_ARB_MODE"), initialArbMode)
-	m.arbmodeHandler = arbmode.NewHandler(m.arbmodeMgr)
-	c.Registry.Register("agent.arbmode.manager", m.arbmodeMgr)
-	if m.uploadDir == "" {
-		m.uploadDir = initialUploadDir
-	}
-
-	// Register the OnConfigChange callback before the session-provider check so
-	// that hot-reload of agent.arb_mode (and UploadDir) keeps working even when
-	// the agent module falls into the degraded path.
-	c.OnConfigChange(func() {
-		c.CfgMu.RLock()
-		newDir := c.Cfg.UploadDir
-		newArbMode := c.Cfg.Agent.ArbMode
-		c.CfgMu.RUnlock()
-		if newDir != "" {
-			m.mu.Lock()
-			m.uploadDir = newDir
-			m.mu.Unlock()
-		}
-		m.arbmodeMgr.OnConfigChange(newArbMode)
-	})
-
 	svc, ok := c.Registry.Get(session.RegistryKey)
 	if !ok {
 		log.Printf("[agent] warning: session provider not found")
@@ -141,6 +104,12 @@ func (m *Module) Init(c *core.Core) error {
 	// Expose event store and module so other modules (e.g. session rename) can update it.
 	c.Registry.Register("agent.events", m.events)
 	c.Registry.Register("agent.module", m)
+
+	if m.uploadDir == "" {
+		c.CfgMu.RLock()
+		m.uploadDir = c.Cfg.UploadDir
+		c.CfgMu.RUnlock()
+	}
 
 	// Prober (shared across all providers)
 	m.tmux = c.Tmux
@@ -155,6 +124,18 @@ func (m *Module) Init(c *core.Core) error {
 	m.prober.RegisterIdentifier(codexProvider.Type(), codexProvider.Identify)
 	m.prober.RegisterReadiness(codexProvider.Type(), codex.NewReadinessChecker(c.Tmux))
 	c.Registry.Register("agent.prober", m.prober)
+
+	// Listen for config changes to update mutable module state.
+	c.OnConfigChange(func() {
+		c.CfgMu.RLock()
+		newDir := c.Cfg.UploadDir
+		c.CfgMu.RUnlock()
+		if newDir != "" {
+			m.mu.Lock()
+			m.uploadDir = newDir
+			m.mu.Unlock()
+		}
+	})
 
 	// Codex provider
 	m.registry.Register(codexProvider)
@@ -183,9 +164,6 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/cc/statusline/test/ready", m.handleStatuslineTestReady)
 	mux.HandleFunc("POST /api/agent/status", m.handleAgentStatus)
 	mux.HandleFunc("GET /api/agents/detect", m.handleDetect)
-
-	// Arbitrator mode (read-only snapshot)
-	mux.Handle("GET /api/agent/arbitrator/mode", m.arbmodeHandler)
 
 	// History (delegates to provider)
 	mux.HandleFunc("GET /api/sessions/{code}/history", m.handleHistory)

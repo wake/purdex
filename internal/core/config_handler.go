@@ -29,12 +29,6 @@ type configUpdateRequest struct {
 	Detect    *detectUpdateRequest   `json:"detect,omitempty"`
 	Terminal  *config.TerminalConfig `json:"terminal,omitempty"`
 	UploadDir *string                `json:"upload_dir,omitempty"`
-	Agent     *agentUpdateRequest    `json:"agent,omitempty"`
-}
-
-// agentUpdateRequest allows partial updates to agent config.
-type agentUpdateRequest struct {
-	ArbMode *string `json:"arb_mode,omitempty"`
 }
 
 // detectUpdateRequest allows partial updates to detect config.
@@ -74,21 +68,6 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Validate agent.arb_mode if provided. Empty string is accepted as "reset to
-	// default" — the arbmode Manager handles empty by falling back to passthrough.
-	// We duplicate the enum literals here rather than import arbmode.IsValid()
-	// because internal/core is a lower layer than internal/module/agent.
-	if req.Agent != nil && req.Agent.ArbMode != nil {
-		switch *req.Agent.ArbMode {
-		case "", "passthrough", "authoritative":
-			// valid
-		default:
-			c.CfgMu.Unlock()
-			http.Error(w, "invalid agent.arb_mode: must be passthrough or authoritative (or empty to reset)", http.StatusBadRequest)
-			return
-		}
-	}
-
 	// Snapshot before any mutation so writeConfig failure can roll back the
 	// in-memory state, keeping c.Cfg and disk consistent. Shallow copy is
 	// sufficient because every mutation below replaces fields wholesale
@@ -123,22 +102,6 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		c.Cfg.UploadDir = *req.UploadDir
 	}
 
-	agentChanged := false
-	if req.Agent != nil && req.Agent.ArbMode != nil {
-		// Canonicalize empty as reset-to-default to keep persisted state and
-		// runtime mode in sync. arbmode.Manager treats "" as invalid; writing ""
-		// through would make GET /api/config and GET /api/agent/arbitrator/mode
-		// disagree forever.
-		newMode := *req.Agent.ArbMode
-		if newMode == "" {
-			newMode = "passthrough"
-		}
-		if c.Cfg.Agent.ArbMode != newMode {
-			c.Cfg.Agent.ArbMode = newMode
-			agentChanged = true
-		}
-	}
-
 	// Write back to config file
 	if c.CfgPath != "" {
 		if err := config.WriteFile(c.CfgPath, *c.Cfg); err != nil {
@@ -154,7 +117,7 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.Unlock()
 
 	// Notify registered callbacks about config changes (outside lock)
-	if detectChanged || req.UploadDir != nil || agentChanged {
+	if detectChanged || req.UploadDir != nil {
 		c.NotifyConfigChange()
 	}
 
