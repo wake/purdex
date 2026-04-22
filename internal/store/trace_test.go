@@ -4,7 +4,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func strPtr(s string) *string { return &s }
@@ -23,6 +26,8 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 	s := openTestTraceStore(t)
 	s.maxChains = 10
 	s.maxSteps = 10
+
+	traceID := uuid.NewString()
 
 	record := TraceRecord{
 		Chain: TraceChain{
@@ -68,6 +73,17 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 				Phase:              "committed",
 				Status:             "success",
 				WatcherToken:       strPtr("watcher-abc"),
+				TraceID:            traceID,
+				ReasonText:         "ready to continue",
+				Attrs:              json.RawMessage(`{"agent_type":"cc","hook":"post"}`),
+				InputRefs:          json.RawMessage(`[{"kind":"event","id":"e1"}]`),
+				OutputRefs:         json.RawMessage(`[{"kind":"frame","id":"f1"}]`),
+				StateBeforeRef:     "snap:before",
+				StateAfterRef:      "snap:after",
+				EvidenceRefs:       json.RawMessage(`[{"source":"tmux"}]`),
+				StartedAt:          101,
+				EndedAt:            101,
+				OTelKind:           "internal",
 			},
 			{
 				StepID:             "step-2",
@@ -93,6 +109,8 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 				ObservedGeneration: 8,
 				Phase:              "committed",
 				Status:             "success",
+				TraceID:            traceID,
+				OTelKind:           "internal",
 			},
 		},
 	}
@@ -156,13 +174,58 @@ func TestTraceStore_SaveAndGetChainRecord(t *testing.T) {
 	if second.Phase != "committed" || second.Status != "success" {
 		t.Fatalf("second step lights fields = %+v", second)
 	}
+
+	// PR-1b-0 envelope completion: the 11 new fields must round-trip on the
+	// fully populated first step and keep well-formed zero-value defaults on
+	// the sparsely populated second step.
+	if first.TraceID != traceID {
+		t.Fatalf("first TraceID = %q, want %q", first.TraceID, traceID)
+	}
+	if first.ReasonText != "ready to continue" {
+		t.Fatalf("first ReasonText = %q", first.ReasonText)
+	}
+	if string(first.Attrs) != `{"agent_type":"cc","hook":"post"}` {
+		t.Fatalf("first Attrs = %s", string(first.Attrs))
+	}
+	if string(first.InputRefs) != `[{"kind":"event","id":"e1"}]` {
+		t.Fatalf("first InputRefs = %s", string(first.InputRefs))
+	}
+	if string(first.OutputRefs) != `[{"kind":"frame","id":"f1"}]` {
+		t.Fatalf("first OutputRefs = %s", string(first.OutputRefs))
+	}
+	if first.StateBeforeRef != "snap:before" || first.StateAfterRef != "snap:after" {
+		t.Fatalf("first state refs = %q/%q", first.StateBeforeRef, first.StateAfterRef)
+	}
+	if string(first.EvidenceRefs) != `[{"source":"tmux"}]` {
+		t.Fatalf("first EvidenceRefs = %s", string(first.EvidenceRefs))
+	}
+	if first.StartedAt != 101 || first.EndedAt != 101 {
+		t.Fatalf("first started/ended = %d/%d", first.StartedAt, first.EndedAt)
+	}
+	if first.OTelKind != "internal" {
+		t.Fatalf("first OTelKind = %q", first.OTelKind)
+	}
+
+	if second.TraceID != traceID {
+		t.Fatalf("second TraceID = %q, want %q", second.TraceID, traceID)
+	}
+	if string(second.Attrs) != `{}` {
+		t.Fatalf("second Attrs default = %s, want {}", string(second.Attrs))
+	}
+	if string(second.InputRefs) != `[]` || string(second.OutputRefs) != `[]` || string(second.EvidenceRefs) != `[]` {
+		t.Fatalf("second refs default = %s/%s/%s", string(second.InputRefs), string(second.OutputRefs), string(second.EvidenceRefs))
+	}
+	if second.OTelKind != "internal" {
+		t.Fatalf("second OTelKind = %q, want internal", second.OTelKind)
+	}
 }
 
-// TestTraceStore_ZeroValueLightsFieldsRoundTrip guards the backwards-compat
-// path: older callers that do not set the new light-tracking columns must
-// still round-trip without errors. Scanned zero values must come back without
-// surfacing SQL NULL errors.
-func TestTraceStore_ZeroValueLightsFieldsRoundTrip(t *testing.T) {
+// TestTraceStore_LegacyRowZeroValueEnvelopeRoundtrip guards the row-class
+// discriminator contract (plan phase-1 #561): a step whose source_kind is
+// empty is a legacy row and is exempt from Lights envelope validation, so
+// every new spec §3.5 field is allowed to stay at its zero value without
+// surfacing SQL NULL errors or triggering validation.
+func TestTraceStore_LegacyRowZeroValueEnvelopeRoundtrip(t *testing.T) {
 	s := openTestTraceStore(t)
 	s.maxChains = 10
 	s.maxSteps = 10
@@ -191,6 +254,8 @@ func TestTraceStore_ZeroValueLightsFieldsRoundTrip(t *testing.T) {
 				EventName:   "Stop",
 				Decision:    "done",
 				CreatedAt:   11,
+				// Intentionally no SourceKind / Phase / Outcome / Action /
+				// TraceID: legacy row, discriminator must permit zero-values.
 			},
 		},
 	}
@@ -207,7 +272,10 @@ func TestTraceStore_ZeroValueLightsFieldsRoundTrip(t *testing.T) {
 		t.Fatalf("got = %+v", got)
 	}
 	step := got.Steps[0]
-	if step.SourceKind != "" || step.Action != "" || step.Phase != "" || step.Status != "" {
+	if step.SourceKind != "" {
+		t.Fatalf("legacy row SourceKind must be empty, got %q", step.SourceKind)
+	}
+	if step.Action != "" || step.Phase != "" || step.Status != "" || step.Outcome != "" {
 		t.Fatalf("zero-value lights fields corrupted: %+v", step)
 	}
 	if step.ObservedGeneration != 0 {
@@ -218,6 +286,339 @@ func TestTraceStore_ZeroValueLightsFieldsRoundTrip(t *testing.T) {
 	}
 	if step.WatcherToken != nil {
 		t.Fatalf("WatcherToken = %v, want nil", step.WatcherToken)
+	}
+	// PR-1b-0 envelope completion: legacy rows keep zero values and
+	// well-formed JSON defaults.
+	if step.TraceID != "" || step.ReasonText != "" || step.StateBeforeRef != "" || step.StateAfterRef != "" || step.OTelKind != "" {
+		t.Fatalf("legacy row envelope fields must be zero, got %+v", step)
+	}
+	if step.StartedAt != 0 || step.EndedAt != 0 {
+		t.Fatalf("legacy row started/ended = %d/%d, want 0/0", step.StartedAt, step.EndedAt)
+	}
+	if string(step.Attrs) != `{}` {
+		t.Fatalf("legacy row Attrs default = %s, want {}", string(step.Attrs))
+	}
+	if string(step.InputRefs) != `[]` || string(step.OutputRefs) != `[]` || string(step.EvidenceRefs) != `[]` {
+		t.Fatalf("legacy row refs default = %s/%s/%s", string(step.InputRefs), string(step.OutputRefs), string(step.EvidenceRefs))
+	}
+}
+
+// TestTraceStore_LightsRow_MissingRequiredField_Errors covers the negative
+// half of the row-class discriminator: once source_kind is set, required
+// envelope fields (phase/outcome/action/trace_id) must be non-empty; otherwise
+// SaveChain rejects the record with an actionable error.
+func TestTraceStore_LightsRow_MissingRequiredField_Errors(t *testing.T) {
+	base := func() TraceRecord {
+		return TraceRecord{
+			Chain: TraceChain{
+				ChainID:        "chain-lights",
+				StartedAt:      10,
+				CompletedAt:    20,
+				TerminalStatus: "done",
+				TmuxSession:    "proj-a",
+				PaneID:         "%5",
+				RootAgentType:  "cc",
+				RootEventName:  "Stop",
+			},
+			Steps: []TraceStep{
+				{
+					StepID:      "lights-1",
+					ChainID:     "chain-lights",
+					Seq:         1,
+					Kind:        "decision",
+					TmuxSession: "proj-a",
+					PaneID:      "%5",
+					AgentType:   "cc",
+					EventName:   "Stop",
+					Decision:    "done",
+					CreatedAt:   11,
+					SourceKind:  "hook",
+					Action:      "decision:done",
+					Outcome:     "emitted",
+					Phase:       "committed",
+					Status:      "success",
+					TraceID:     uuid.NewString(),
+				},
+			},
+		}
+	}
+
+	// Sanity: fully-populated lights row persists without error.
+	s := openTestTraceStore(t)
+	s.maxChains = 10
+	s.maxSteps = 10
+	if err := s.SaveChain(base()); err != nil {
+		t.Fatalf("baseline SaveChain: %v", err)
+	}
+
+	cases := []struct {
+		name     string
+		mutate   func(*TraceStep)
+		wantHint string
+	}{
+		{"missing action", func(st *TraceStep) { st.Action = "" }, "action"},
+		{"missing outcome", func(st *TraceStep) { st.Outcome = "" }, "outcome"},
+		{"missing phase", func(st *TraceStep) { st.Phase = "" }, "phase"},
+		{"missing trace_id", func(st *TraceStep) { st.TraceID = "" }, "trace_id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openTestTraceStore(t)
+			store.maxChains = 10
+			store.maxSteps = 10
+			rec := base()
+			rec.Chain.ChainID = "chain-lights-" + tc.name
+			rec.Steps[0].ChainID = rec.Chain.ChainID
+			tc.mutate(&rec.Steps[0])
+			err := store.SaveChain(rec)
+			if err == nil {
+				t.Fatalf("expected lights row validation error")
+			}
+			if !strings.Contains(err.Error(), tc.wantHint) {
+				t.Fatalf("error %q does not mention field %q", err.Error(), tc.wantHint)
+			}
+		})
+	}
+}
+
+// TestValidateLightsRow_HybridRow_WithTraceIDButNoSourceKind_Errors covers
+// the bidirectional row-class contract: if any Lights envelope field is set
+// but source_kind is empty, the row is a hybrid and must be rejected.
+func TestValidateLightsRow_HybridRow_WithTraceIDButNoSourceKind_Errors(t *testing.T) {
+	step := TraceStep{StepID: "hybrid-1", TraceID: uuid.NewString()}
+	if err := validateLightsRow(step); err == nil {
+		t.Fatal("expected hybrid row (trace_id set, source_kind empty) to fail validation")
+	}
+}
+
+func TestValidateLightsRow_HybridRow_WithPhaseButNoSourceKind_Errors(t *testing.T) {
+	step := TraceStep{StepID: "hybrid-2", Phase: "committed"}
+	if err := validateLightsRow(step); err == nil {
+		t.Fatal("expected hybrid row (phase set, source_kind empty) to fail validation")
+	}
+}
+
+func TestValidateLightsRow_HybridRow_WithActionButNoSourceKind_Errors(t *testing.T) {
+	step := TraceStep{StepID: "hybrid-3", Action: "decision:continue"}
+	if err := validateLightsRow(step); err == nil {
+		t.Fatal("expected hybrid row (action set, source_kind empty) to fail validation")
+	}
+}
+
+func TestValidateLightsRow_PureLegacyRow_Passes(t *testing.T) {
+	step := TraceStep{StepID: "legacy-1", Kind: "decision", Reason: "ok"}
+	if err := validateLightsRow(step); err != nil {
+		t.Fatalf("pure legacy row must pass: %v", err)
+	}
+}
+
+// TestTraceStore_InvalidJSON_* covers JSON validation for the envelope JSON
+// columns (attrs / *_refs / decision_ports). SaveChain must reject both
+// malformed JSON and wrong top-level shapes (array-where-object-expected or
+// vice versa) before they reach the database.
+func TestTraceStore_InvalidJSON_Attrs_Errors(t *testing.T) {
+	rec := newLightsRecordForJSONTest()
+	rec.Steps[0].Attrs = json.RawMessage(`{invalid`)
+	store := openTestTraceStore(t)
+	if err := store.SaveChain(rec); err == nil {
+		t.Fatal("expected malformed attrs to be rejected")
+	}
+}
+
+func TestTraceStore_InvalidJSON_InputRefs_Errors(t *testing.T) {
+	rec := newLightsRecordForJSONTest()
+	rec.Steps[0].InputRefs = json.RawMessage(`[not json`)
+	store := openTestTraceStore(t)
+	if err := store.SaveChain(rec); err == nil {
+		t.Fatal("expected malformed input_refs to be rejected")
+	}
+}
+
+func TestTraceStore_WrongShape_AttrsAsArray_Errors(t *testing.T) {
+	rec := newLightsRecordForJSONTest()
+	rec.Steps[0].Attrs = json.RawMessage(`[]`)
+	store := openTestTraceStore(t)
+	if err := store.SaveChain(rec); err == nil {
+		t.Fatal("expected attrs=array to be rejected (spec: attrs is object)")
+	}
+}
+
+func TestTraceStore_WrongShape_InputRefsAsObject_Errors(t *testing.T) {
+	rec := newLightsRecordForJSONTest()
+	rec.Steps[0].InputRefs = json.RawMessage(`{}`)
+	store := openTestTraceStore(t)
+	if err := store.SaveChain(rec); err == nil {
+		t.Fatal("expected input_refs=object to be rejected (spec: *_refs is array)")
+	}
+}
+
+func TestTraceStore_WrongShape_OutputRefsAsObject_Errors(t *testing.T) {
+	rec := newLightsRecordForJSONTest()
+	rec.Steps[0].OutputRefs = json.RawMessage(`{}`)
+	store := openTestTraceStore(t)
+	if err := store.SaveChain(rec); err == nil {
+		t.Fatal("expected output_refs=object to be rejected")
+	}
+}
+
+func TestTraceStore_WrongShape_EvidenceRefsAsObject_Errors(t *testing.T) {
+	rec := newLightsRecordForJSONTest()
+	rec.Steps[0].EvidenceRefs = json.RawMessage(`{}`)
+	store := openTestTraceStore(t)
+	if err := store.SaveChain(rec); err == nil {
+		t.Fatal("expected evidence_refs=object to be rejected")
+	}
+}
+
+func TestTraceStore_WrongShape_DecisionPortsAsObject_Errors(t *testing.T) {
+	rec := newLightsRecordForJSONTest()
+	rec.Steps[0].DecisionPorts = json.RawMessage(`{}`)
+	store := openTestTraceStore(t)
+	if err := store.SaveChain(rec); err == nil {
+		t.Fatal("expected decision_ports=object to be rejected")
+	}
+}
+
+func TestTraceStore_EmptyJSONFields_DefaultApplied(t *testing.T) {
+	rec := newLightsRecordForJSONTest()
+	rec.Steps[0].Attrs = nil
+	rec.Steps[0].InputRefs = nil
+	rec.Steps[0].OutputRefs = nil
+	rec.Steps[0].EvidenceRefs = nil
+	rec.Steps[0].DecisionPorts = nil
+	store := openTestTraceStore(t)
+	if err := store.SaveChain(rec); err != nil {
+		t.Fatalf("empty JSON fields must default without error: %v", err)
+	}
+	got, err := store.GetChainRecord(rec.Chain.ChainID)
+	if err != nil || got == nil || len(got.Steps) != 1 {
+		t.Fatalf("GetChainRecord: rec=%+v err=%v", got, err)
+	}
+	step := got.Steps[0]
+	if string(step.Attrs) != `{}` {
+		t.Fatalf("attrs default = %s", string(step.Attrs))
+	}
+	if string(step.InputRefs) != `[]` || string(step.OutputRefs) != `[]` || string(step.EvidenceRefs) != `[]` {
+		t.Fatalf("refs defaults = %s/%s/%s", string(step.InputRefs), string(step.OutputRefs), string(step.EvidenceRefs))
+	}
+	if string(step.DecisionPorts) != `[]` {
+		t.Fatalf("decision_ports default = %s", string(step.DecisionPorts))
+	}
+}
+
+// newLightsRecordForJSONTest returns a fully-populated Lights record whose
+// JSON fields are valid; tests mutate one field at a time to exercise the
+// shape / validity rejection paths.
+func newLightsRecordForJSONTest() TraceRecord {
+	return TraceRecord{
+		Chain: TraceChain{
+			ChainID:        "chain-json",
+			StartedAt:      10,
+			CompletedAt:    20,
+			TerminalStatus: "done",
+			TmuxSession:    "proj-a",
+			PaneID:         "%5",
+			RootAgentType:  "cc",
+			RootEventName:  "Stop",
+		},
+		Steps: []TraceStep{
+			{
+				StepID:        "json-step-1",
+				ChainID:       "chain-json",
+				Seq:           1,
+				Kind:          "decision",
+				TmuxSession:   "proj-a",
+				PaneID:        "%5",
+				AgentType:     "cc",
+				EventName:     "Stop",
+				Decision:      "done",
+				CreatedAt:     11,
+				SourceKind:    "hook",
+				Action:        "decision:done",
+				Outcome:       "emitted",
+				Phase:         "committed",
+				Status:        "success",
+				TraceID:       "chain-json",
+				Attrs:         json.RawMessage(`{"k":"v"}`),
+				InputRefs:     json.RawMessage(`[{"kind":"event"}]`),
+				OutputRefs:    json.RawMessage(`[{"kind":"frame"}]`),
+				EvidenceRefs:  json.RawMessage(`[{"source":"tmux"}]`),
+				DecisionPorts: json.RawMessage(`[{"port":"statusline"}]`),
+			},
+		},
+	}
+}
+
+// TestTraceStore_MixedLegacyAndLightsRows confirms legacy + lights rows can
+// live in the same chain without the discriminator tripping on the legacy
+// neighbour.
+func TestTraceStore_MixedLegacyAndLightsRows(t *testing.T) {
+	s := openTestTraceStore(t)
+	s.maxChains = 10
+	s.maxSteps = 10
+
+	traceID := uuid.NewString()
+	rec := TraceRecord{
+		Chain: TraceChain{
+			ChainID:        "chain-mixed",
+			StartedAt:      10,
+			CompletedAt:    30,
+			TerminalStatus: "done",
+			TmuxSession:    "proj-a",
+			PaneID:         "%5",
+			RootAgentType:  "cc",
+			RootEventName:  "Stop",
+		},
+		Steps: []TraceStep{
+			{
+				StepID:      "legacy-1",
+				ChainID:     "chain-mixed",
+				Seq:         1,
+				Kind:        "decision",
+				TmuxSession: "proj-a",
+				PaneID:      "%5",
+				AgentType:   "cc",
+				EventName:   "Stop",
+				Decision:    "done",
+				CreatedAt:   11,
+			},
+			{
+				StepID:       "lights-1",
+				ChainID:      "chain-mixed",
+				ParentStepID: "legacy-1",
+				Seq:          2,
+				Kind:         "terminal",
+				TmuxSession:  "proj-a",
+				PaneID:       "%5",
+				AgentType:    "cc",
+				EventName:    "Stop",
+				Decision:     "done",
+				CreatedAt:    12,
+				SourceKind:   "hook",
+				Action:       "terminal:done",
+				Outcome:      "broadcasted",
+				Phase:        "committed",
+				Status:       "success",
+				TraceID:      traceID,
+				OTelKind:     "internal",
+			},
+		},
+	}
+	if err := s.SaveChain(rec); err != nil {
+		t.Fatalf("SaveChain mixed: %v", err)
+	}
+	got, err := s.GetChainRecord("chain-mixed")
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if len(got.Steps) != 2 {
+		t.Fatalf("steps = %d, want 2", len(got.Steps))
+	}
+	if got.Steps[0].SourceKind != "" {
+		t.Fatalf("legacy step SourceKind = %q, want empty", got.Steps[0].SourceKind)
+	}
+	if got.Steps[1].SourceKind != "hook" || got.Steps[1].TraceID != traceID {
+		t.Fatalf("lights step = %+v", got.Steps[1])
 	}
 }
 
@@ -381,6 +782,552 @@ func TestRebuildLegacyTraceSteps_BlocksCrossChainParent(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("legacy step count = %d, want 2", count)
+	}
+}
+
+// TestRebuildLegacyTraceSteps_PreservesPR1aLightsColumns seeds a legacy table
+// carrying the PR-1a Lights columns (source_kind/action/reason_code/outcome/
+// scenario_key/observed_generation/decision_ports/phase/status/watcher_token)
+// and verifies that PR-1b-0's rebuild preserves their actual values instead of
+// resetting them to DEFAULT. Previous rebuild query only copied the original
+// 17 columns, which silently corrupted every deployed Lights row whenever the
+// migration triggered (e.g. any schema drift that flipped needsStepRebuildTx).
+func TestRebuildLegacyTraceSteps_PreservesPR1aLightsColumns(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	// Seed chains + a "PR-1a schema" steps table: 17 legacy cols + 10 PR-1a
+	// Lights cols, but WITHOUT the composite FK and WITHOUT the PR-1b-0
+	// envelope cols. This matches what any daemon pinned at PR-1a would see.
+	if err := createTraceChainsTable(s.db); err != nil {
+		t.Fatalf("create chains: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		CREATE TABLE agent_trace_steps (
+			step_id             TEXT PRIMARY KEY,
+			chain_id            TEXT NOT NULL,
+			parent_step_id      TEXT,
+			seq                 INTEGER NOT NULL,
+			kind                TEXT NOT NULL DEFAULT '',
+			tmux_session        TEXT NOT NULL DEFAULT '',
+			pane_id             TEXT NOT NULL DEFAULT '',
+			agent_type          TEXT NOT NULL DEFAULT '',
+			frame_id            TEXT NOT NULL DEFAULT '',
+			parent_frame_id     TEXT NOT NULL DEFAULT '',
+			event_name          TEXT NOT NULL DEFAULT '',
+			decision            TEXT NOT NULL DEFAULT '',
+			reason              TEXT NOT NULL DEFAULT '',
+			payload_json        TEXT NOT NULL DEFAULT 'null',
+			before_json         TEXT NOT NULL DEFAULT 'null',
+			after_json          TEXT NOT NULL DEFAULT 'null',
+			created_at          INTEGER NOT NULL DEFAULT 0,
+			source_kind         TEXT NOT NULL DEFAULT '',
+			action              TEXT NOT NULL DEFAULT '',
+			reason_code         TEXT NOT NULL DEFAULT '',
+			outcome             TEXT NOT NULL DEFAULT '',
+			scenario_key        TEXT NOT NULL DEFAULT '',
+			observed_generation INTEGER NOT NULL DEFAULT 0,
+			decision_ports      TEXT NOT NULL DEFAULT '[]',
+			phase               TEXT NOT NULL DEFAULT '',
+			status              TEXT NOT NULL DEFAULT '',
+			watcher_token       TEXT,
+			FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
+			FOREIGN KEY (parent_step_id) REFERENCES agent_trace_steps(step_id) ON DELETE SET NULL
+		)
+	`); err != nil {
+		t.Fatalf("create PR-1a steps: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, started_at, completed_at, terminal_status, terminal_reason,
+			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
+			latest_step_kind, latest_decision, latest_step_reason, step_count, updated_at
+		) VALUES
+		('chain-pr1a', 10, 20, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 1, 20)
+	`); err != nil {
+		t.Fatalf("seed chain: %v", err)
+	}
+	// Populate every PR-1a Lights column with a non-default value so we can
+	// detect any DEFAULT-clobber after rebuild.
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_steps (
+			step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+			agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+			payload_json, before_json, after_json, created_at,
+			source_kind, action, reason_code, outcome, scenario_key,
+			observed_generation, decision_ports, phase, status, watcher_token
+		) VALUES
+		('pr1a-1', 'chain-pr1a', NULL, 1, 'terminal', 'proj-a', '%1', 'cc', 'frame-1', 'frame-0',
+		 'Stop', 'done', 'completed',
+		 '{"x":1}', '{"b":1}', '{"a":1}', 15,
+		 'hook', 'terminal:done', 'completed', 'emitted', 'Stop',
+		 42, '[{"port":"statusline","decision":"ok"}]', 'committed', 'success', 'watcher-123')
+	`); err != nil {
+		t.Fatalf("seed step: %v", err)
+	}
+
+	// Trigger migrate: missing PR-1b-0 cols make needsStepRebuildTx return true
+	// and rebuild the table.
+	if _, err := s.Traces(); err != nil {
+		t.Fatalf("Traces migrate: %v", err)
+	}
+
+	store := &TraceStore{db: s.db, maxChains: 10, maxSteps: 10}
+	rec, err := store.GetChainRecord("chain-pr1a")
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if rec == nil || len(rec.Steps) != 1 {
+		t.Fatalf("rec = %+v", rec)
+	}
+	step := rec.Steps[0]
+	if step.SourceKind != "hook" {
+		t.Fatalf("source_kind = %q, want hook (rebuild clobbered)", step.SourceKind)
+	}
+	if step.Action != "terminal:done" {
+		t.Fatalf("action = %q, want terminal:done", step.Action)
+	}
+	if step.ReasonCode != "completed" {
+		t.Fatalf("reason_code = %q, want completed", step.ReasonCode)
+	}
+	if step.Outcome != "emitted" {
+		t.Fatalf("outcome = %q, want emitted", step.Outcome)
+	}
+	if step.ScenarioKey != "Stop" {
+		t.Fatalf("scenario_key = %q, want Stop", step.ScenarioKey)
+	}
+	if step.ObservedGeneration != 42 {
+		t.Fatalf("observed_generation = %d, want 42", step.ObservedGeneration)
+	}
+	if string(step.DecisionPorts) != `[{"port":"statusline","decision":"ok"}]` {
+		t.Fatalf("decision_ports = %s", string(step.DecisionPorts))
+	}
+	if step.Phase != "committed" {
+		t.Fatalf("phase = %q, want committed", step.Phase)
+	}
+	if step.Status != "success" {
+		t.Fatalf("status = %q, want success", step.Status)
+	}
+	if step.WatcherToken == nil || *step.WatcherToken != "watcher-123" {
+		t.Fatalf("watcher_token = %v, want watcher-123", step.WatcherToken)
+	}
+	// trace_id is backfilled from chain_id for Lights rows (source_kind!="")
+	// so the row satisfies validateLightsRow post-migration.
+	if step.TraceID != "chain-pr1a" {
+		t.Fatalf("pr1b0 trace_id backfill = %q, want chain-pr1a", step.TraceID)
+	}
+	// Other PR-1b-0 cols absent from legacy table fall back to DEFAULTs.
+	if step.ReasonText != "" || step.StateBeforeRef != "" || step.StateAfterRef != "" || step.OTelKind != "" {
+		t.Fatalf("pr1b0 string cols must default to empty, got %+v", step)
+	}
+	if step.StartedAt != 0 || step.EndedAt != 0 {
+		t.Fatalf("pr1b0 timestamp defaults wrong: %d/%d", step.StartedAt, step.EndedAt)
+	}
+	if string(step.Attrs) != `{}` || string(step.InputRefs) != `[]` || string(step.OutputRefs) != `[]` || string(step.EvidenceRefs) != `[]` {
+		t.Fatalf("pr1b0 json defaults wrong: %s / %s / %s / %s",
+			string(step.Attrs), string(step.InputRefs), string(step.OutputRefs), string(step.EvidenceRefs))
+	}
+}
+
+// TestRebuildLegacyTraceSteps_PreservesAllLightsColumnsEvenIfFullSchemaExists
+// covers the robustness scenario where a legacy twin ends up with the full
+// PR-1b-0 schema (38 cols). Although this should never happen in practice
+// because needsStepRebuildTx also triggers on the missing composite FK, the
+// rebuild must still preserve every populated field instead of DEFAULT-ing it.
+func TestRebuildLegacyTraceSteps_PreservesAllLightsColumnsEvenIfFullSchemaExists(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	if err := createTraceChainsTable(s.db); err != nil {
+		t.Fatalf("create chains: %v", err)
+	}
+	// Full PR-1b-0 steps table but without the composite FK, so
+	// hasStepParentCompositeFKTx returns false and needsStepRebuildTx triggers
+	// a rebuild.
+	if _, err := s.db.Exec(`
+		CREATE TABLE agent_trace_steps (
+			step_id             TEXT PRIMARY KEY,
+			chain_id            TEXT NOT NULL,
+			parent_step_id      TEXT,
+			seq                 INTEGER NOT NULL,
+			kind                TEXT NOT NULL DEFAULT '',
+			tmux_session        TEXT NOT NULL DEFAULT '',
+			pane_id             TEXT NOT NULL DEFAULT '',
+			agent_type          TEXT NOT NULL DEFAULT '',
+			frame_id            TEXT NOT NULL DEFAULT '',
+			parent_frame_id     TEXT NOT NULL DEFAULT '',
+			event_name          TEXT NOT NULL DEFAULT '',
+			decision            TEXT NOT NULL DEFAULT '',
+			reason              TEXT NOT NULL DEFAULT '',
+			payload_json        TEXT NOT NULL DEFAULT 'null',
+			before_json         TEXT NOT NULL DEFAULT 'null',
+			after_json          TEXT NOT NULL DEFAULT 'null',
+			created_at          INTEGER NOT NULL DEFAULT 0,
+			source_kind         TEXT NOT NULL DEFAULT '',
+			action              TEXT NOT NULL DEFAULT '',
+			reason_code         TEXT NOT NULL DEFAULT '',
+			outcome             TEXT NOT NULL DEFAULT '',
+			scenario_key        TEXT NOT NULL DEFAULT '',
+			observed_generation INTEGER NOT NULL DEFAULT 0,
+			decision_ports      TEXT NOT NULL DEFAULT '[]',
+			phase               TEXT NOT NULL DEFAULT '',
+			status              TEXT NOT NULL DEFAULT '',
+			watcher_token       TEXT,
+			trace_id            TEXT NOT NULL DEFAULT '',
+			reason_text         TEXT NOT NULL DEFAULT '',
+			attrs               TEXT NOT NULL DEFAULT '{}',
+			input_refs          TEXT NOT NULL DEFAULT '[]',
+			output_refs         TEXT NOT NULL DEFAULT '[]',
+			state_before_ref    TEXT NOT NULL DEFAULT '',
+			state_after_ref     TEXT NOT NULL DEFAULT '',
+			evidence_refs       TEXT NOT NULL DEFAULT '[]',
+			started_at          INTEGER NOT NULL DEFAULT 0,
+			ended_at            INTEGER NOT NULL DEFAULT 0,
+			otel_kind           TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
+			FOREIGN KEY (parent_step_id) REFERENCES agent_trace_steps(step_id) ON DELETE SET NULL
+		)
+	`); err != nil {
+		t.Fatalf("create full steps: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, started_at, completed_at, terminal_status, terminal_reason,
+			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
+			latest_step_kind, latest_decision, latest_step_reason, step_count, updated_at
+		) VALUES
+		('chain-full', 10, 20, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 1, 20)
+	`); err != nil {
+		t.Fatalf("seed chain: %v", err)
+	}
+	traceID := uuid.NewString()
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_steps (
+			step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+			agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+			payload_json, before_json, after_json, created_at,
+			source_kind, action, reason_code, outcome, scenario_key,
+			observed_generation, decision_ports, phase, status, watcher_token,
+			trace_id, reason_text, attrs, input_refs, output_refs,
+			state_before_ref, state_after_ref, evidence_refs,
+			started_at, ended_at, otel_kind
+		) VALUES
+		('full-1', 'chain-full', NULL, 1, 'terminal', 'proj-a', '%1', 'cc', 'frame-1', 'frame-0',
+		 'Stop', 'done', 'completed',
+		 '{"x":1}', '{"b":1}', '{"a":1}', 15,
+		 'hook', 'terminal:done', 'completed', 'emitted', 'Stop',
+		 42, '[{"port":"statusline","decision":"ok"}]', 'committed', 'success', 'watcher-123',
+		 ?, 'reason-text', '{"hook":"post"}', '[{"kind":"event"}]', '[{"kind":"frame"}]',
+		 'snap:before', 'snap:after', '[{"source":"tmux"}]',
+		 101, 102, 'internal')
+	`, traceID); err != nil {
+		t.Fatalf("seed step: %v", err)
+	}
+
+	if _, err := s.Traces(); err != nil {
+		t.Fatalf("Traces migrate: %v", err)
+	}
+
+	store := &TraceStore{db: s.db, maxChains: 10, maxSteps: 10}
+	rec, err := store.GetChainRecord("chain-full")
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if rec == nil || len(rec.Steps) != 1 {
+		t.Fatalf("rec = %+v", rec)
+	}
+	step := rec.Steps[0]
+	// PR-1a cols.
+	if step.SourceKind != "hook" || step.Action != "terminal:done" || step.ReasonCode != "completed" ||
+		step.Outcome != "emitted" || step.ScenarioKey != "Stop" || step.Phase != "committed" || step.Status != "success" {
+		t.Fatalf("pr1a cols wrong: %+v", step)
+	}
+	if step.ObservedGeneration != 42 {
+		t.Fatalf("observed_generation = %d", step.ObservedGeneration)
+	}
+	if string(step.DecisionPorts) != `[{"port":"statusline","decision":"ok"}]` {
+		t.Fatalf("decision_ports = %s", string(step.DecisionPorts))
+	}
+	if step.WatcherToken == nil || *step.WatcherToken != "watcher-123" {
+		t.Fatalf("watcher_token = %v", step.WatcherToken)
+	}
+	// PR-1b-0 cols.
+	if step.TraceID != traceID {
+		t.Fatalf("trace_id = %q, want %q", step.TraceID, traceID)
+	}
+	if step.ReasonText != "reason-text" {
+		t.Fatalf("reason_text = %q", step.ReasonText)
+	}
+	if string(step.Attrs) != `{"hook":"post"}` {
+		t.Fatalf("attrs = %s", string(step.Attrs))
+	}
+	if string(step.InputRefs) != `[{"kind":"event"}]` || string(step.OutputRefs) != `[{"kind":"frame"}]` {
+		t.Fatalf("ref cols wrong: %s / %s", string(step.InputRefs), string(step.OutputRefs))
+	}
+	if step.StateBeforeRef != "snap:before" || step.StateAfterRef != "snap:after" {
+		t.Fatalf("state refs = %q / %q", step.StateBeforeRef, step.StateAfterRef)
+	}
+	if string(step.EvidenceRefs) != `[{"source":"tmux"}]` {
+		t.Fatalf("evidence_refs = %s", string(step.EvidenceRefs))
+	}
+	if step.StartedAt != 101 || step.EndedAt != 102 {
+		t.Fatalf("started/ended = %d/%d", step.StartedAt, step.EndedAt)
+	}
+	if step.OTelKind != "internal" {
+		t.Fatalf("otel_kind = %q", step.OTelKind)
+	}
+}
+
+// TestRebuildLegacyTraceSteps_BackfillsTraceIdForPR1aLightsRows seeds a PR-1a
+// schema (17 legacy cols + 10 PR-1a Lights cols, no PR-1b-0 envelope cols) with
+// a Lights row (source_kind="hook" …) and a neighbouring legacy row. After
+// rebuild the Lights row's trace_id must be backfilled from chain_id so the
+// row satisfies validateLightsRow; the pure-legacy row's trace_id must stay
+// empty so it keeps round-tripping as a legacy row.
+func TestRebuildLegacyTraceSteps_BackfillsTraceIdForPR1aLightsRows(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	if err := createTraceChainsTable(s.db); err != nil {
+		t.Fatalf("create chains: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		CREATE TABLE agent_trace_steps (
+			step_id             TEXT PRIMARY KEY,
+			chain_id            TEXT NOT NULL,
+			parent_step_id      TEXT,
+			seq                 INTEGER NOT NULL,
+			kind                TEXT NOT NULL DEFAULT '',
+			tmux_session        TEXT NOT NULL DEFAULT '',
+			pane_id             TEXT NOT NULL DEFAULT '',
+			agent_type          TEXT NOT NULL DEFAULT '',
+			frame_id            TEXT NOT NULL DEFAULT '',
+			parent_frame_id     TEXT NOT NULL DEFAULT '',
+			event_name          TEXT NOT NULL DEFAULT '',
+			decision            TEXT NOT NULL DEFAULT '',
+			reason              TEXT NOT NULL DEFAULT '',
+			payload_json        TEXT NOT NULL DEFAULT 'null',
+			before_json         TEXT NOT NULL DEFAULT 'null',
+			after_json          TEXT NOT NULL DEFAULT 'null',
+			created_at          INTEGER NOT NULL DEFAULT 0,
+			source_kind         TEXT NOT NULL DEFAULT '',
+			action              TEXT NOT NULL DEFAULT '',
+			reason_code         TEXT NOT NULL DEFAULT '',
+			outcome             TEXT NOT NULL DEFAULT '',
+			scenario_key        TEXT NOT NULL DEFAULT '',
+			observed_generation INTEGER NOT NULL DEFAULT 0,
+			decision_ports      TEXT NOT NULL DEFAULT '[]',
+			phase               TEXT NOT NULL DEFAULT '',
+			status              TEXT NOT NULL DEFAULT '',
+			watcher_token       TEXT,
+			FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
+			FOREIGN KEY (parent_step_id) REFERENCES agent_trace_steps(step_id) ON DELETE SET NULL
+		)
+	`); err != nil {
+		t.Fatalf("create PR-1a steps: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, started_at, completed_at, terminal_status, terminal_reason,
+			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
+			latest_step_kind, latest_decision, latest_step_reason, step_count, updated_at
+		) VALUES
+		('chain-backfill', 10, 20, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 2, 20)
+	`); err != nil {
+		t.Fatalf("seed chain: %v", err)
+	}
+	// Lights row: source_kind set → trace_id should be backfilled from chain_id.
+	// Legacy row: source_kind empty → trace_id must remain empty.
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_steps (
+			step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+			agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+			payload_json, before_json, after_json, created_at,
+			source_kind, action, reason_code, outcome, scenario_key,
+			observed_generation, decision_ports, phase, status, watcher_token
+		) VALUES
+		('lights-row', 'chain-backfill', NULL, 1, 'decision', 'proj-a', '%1', 'cc', 'frame-1', '',
+		 'Stop', 'done', 'completed',
+		 'null', 'null', 'null', 15,
+		 'hook', 'decision:continue', 'ready', 'emitted', 'Stop',
+		 1, '[]', 'committed', 'success', NULL),
+		('legacy-row', 'chain-backfill', 'lights-row', 2, 'terminal', 'proj-a', '%1', 'cc', 'frame-1', '',
+		 'Stop', 'done', '',
+		 'null', 'null', 'null', 16,
+		 '', '', '', '', '',
+		 0, '[]', '', '', NULL)
+	`); err != nil {
+		t.Fatalf("seed pr1a rows: %v", err)
+	}
+
+	if _, err := s.Traces(); err != nil {
+		t.Fatalf("Traces migrate: %v", err)
+	}
+
+	store := &TraceStore{db: s.db, maxChains: 10, maxSteps: 10}
+	rec, err := store.GetChainRecord("chain-backfill")
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if rec == nil || len(rec.Steps) != 2 {
+		t.Fatalf("rec = %+v", rec)
+	}
+	var lights, legacy TraceStep
+	for _, step := range rec.Steps {
+		switch step.StepID {
+		case "lights-row":
+			lights = step
+		case "legacy-row":
+			legacy = step
+		}
+	}
+	if lights.TraceID != "chain-backfill" {
+		t.Fatalf("lights trace_id = %q, want chain-backfill (backfilled)", lights.TraceID)
+	}
+	if err := validateLightsRow(lights); err != nil {
+		t.Fatalf("migrated lights row fails validateLightsRow: %v", err)
+	}
+	if legacy.TraceID != "" {
+		t.Fatalf("legacy trace_id = %q, want empty (no backfill)", legacy.TraceID)
+	}
+	if legacy.SourceKind != "" {
+		t.Fatalf("legacy source_kind = %q, want empty", legacy.SourceKind)
+	}
+}
+
+// TestRebuildLegacyTraceSteps_LegacyRowsTraceIdStaysEmpty is a targeted
+// regression guarding the negative half of the backfill: every row in the
+// seeded table has source_kind="" so none of them are Lights rows, and the
+// rebuild must leave trace_id at the DEFAULT empty string.
+func TestRebuildLegacyTraceSteps_LegacyRowsTraceIdStaysEmpty(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	if err := createTraceChainsTable(s.db); err != nil {
+		t.Fatalf("create chains: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		CREATE TABLE agent_trace_steps (
+			step_id             TEXT PRIMARY KEY,
+			chain_id            TEXT NOT NULL,
+			parent_step_id      TEXT,
+			seq                 INTEGER NOT NULL,
+			kind                TEXT NOT NULL DEFAULT '',
+			tmux_session        TEXT NOT NULL DEFAULT '',
+			pane_id             TEXT NOT NULL DEFAULT '',
+			agent_type          TEXT NOT NULL DEFAULT '',
+			frame_id            TEXT NOT NULL DEFAULT '',
+			parent_frame_id     TEXT NOT NULL DEFAULT '',
+			event_name          TEXT NOT NULL DEFAULT '',
+			decision            TEXT NOT NULL DEFAULT '',
+			reason              TEXT NOT NULL DEFAULT '',
+			payload_json        TEXT NOT NULL DEFAULT 'null',
+			before_json         TEXT NOT NULL DEFAULT 'null',
+			after_json          TEXT NOT NULL DEFAULT 'null',
+			created_at          INTEGER NOT NULL DEFAULT 0,
+			source_kind         TEXT NOT NULL DEFAULT '',
+			action              TEXT NOT NULL DEFAULT '',
+			reason_code         TEXT NOT NULL DEFAULT '',
+			outcome             TEXT NOT NULL DEFAULT '',
+			scenario_key        TEXT NOT NULL DEFAULT '',
+			observed_generation INTEGER NOT NULL DEFAULT 0,
+			decision_ports      TEXT NOT NULL DEFAULT '[]',
+			phase               TEXT NOT NULL DEFAULT '',
+			status              TEXT NOT NULL DEFAULT '',
+			watcher_token       TEXT,
+			FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
+			FOREIGN KEY (parent_step_id) REFERENCES agent_trace_steps(step_id) ON DELETE SET NULL
+		)
+	`); err != nil {
+		t.Fatalf("create PR-1a steps: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, started_at, completed_at, terminal_status, terminal_reason,
+			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
+			latest_step_kind, latest_decision, latest_step_reason, step_count, updated_at
+		) VALUES
+		('chain-legacy-only', 10, 20, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 1, 20)
+	`); err != nil {
+		t.Fatalf("seed chain: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_steps (
+			step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+			agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+			payload_json, before_json, after_json, created_at,
+			source_kind, action, reason_code, outcome, scenario_key,
+			observed_generation, decision_ports, phase, status, watcher_token
+		) VALUES
+		('legacy-1', 'chain-legacy-only', NULL, 1, 'decision', 'proj-a', '%1', 'cc', 'frame-1', '',
+		 'Stop', 'done', 'ok',
+		 'null', 'null', 'null', 15,
+		 '', '', '', '', '',
+		 0, '[]', '', '', NULL)
+	`); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+
+	if _, err := s.Traces(); err != nil {
+		t.Fatalf("Traces migrate: %v", err)
+	}
+
+	store := &TraceStore{db: s.db, maxChains: 10, maxSteps: 10}
+	rec, err := store.GetChainRecord("chain-legacy-only")
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if rec == nil || len(rec.Steps) != 1 {
+		t.Fatalf("rec = %+v", rec)
+	}
+	step := rec.Steps[0]
+	if step.TraceID != "" {
+		t.Fatalf("trace_id = %q, want empty (legacy row must not be backfilled)", step.TraceID)
+	}
+	if step.SourceKind != "" {
+		t.Fatalf("source_kind = %q, want empty", step.SourceKind)
+	}
+}
+
+// TestRebuildLegacyTraceSteps_OldSchemaOnlyStillRestores confirms the
+// pre-PR-1a legacy schema (step_name/step_index, no Lights cols) still
+// rebuilds cleanly with every Lights field left at its DEFAULT — the existing
+// TestTraceStore_MigratesLegacy* tests cover behaviour, this adds an explicit
+// assertion on the Lights defaults after rebuild.
+func TestRebuildLegacyTraceSteps_OldSchemaOnlyStillRestores(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	seedLegacyTraceSchema(t, s.db)
+	seedLegacyTraceData(t, s.db)
+
+	if _, err := s.Traces(); err != nil {
+		t.Fatalf("Traces migrate: %v", err)
+	}
+
+	store := &TraceStore{db: s.db, maxChains: 10, maxSteps: 10}
+	rec, err := store.GetChainRecord("legacy-chain")
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if rec == nil || len(rec.Steps) != 2 {
+		t.Fatalf("rec = %+v", rec)
+	}
+	for _, step := range rec.Steps {
+		if step.SourceKind != "" || step.Action != "" || step.Phase != "" || step.Status != "" ||
+			step.Outcome != "" || step.ScenarioKey != "" || step.ReasonCode != "" {
+			t.Fatalf("legacy schema rebuild must default PR-1a Lights cols, got %+v", step)
+		}
+		if step.ObservedGeneration != 0 {
+			t.Fatalf("observed_generation default = %d", step.ObservedGeneration)
+		}
+		if string(step.DecisionPorts) != `[]` {
+			t.Fatalf("decision_ports default = %s", string(step.DecisionPorts))
+		}
+		if step.WatcherToken != nil {
+			t.Fatalf("watcher_token = %v, want nil", step.WatcherToken)
+		}
+		if step.TraceID != "" || step.ReasonText != "" || step.OTelKind != "" ||
+			step.StateBeforeRef != "" || step.StateAfterRef != "" {
+			t.Fatalf("legacy schema rebuild must default PR-1b-0 envelope string cols, got %+v", step)
+		}
+		if step.StartedAt != 0 || step.EndedAt != 0 {
+			t.Fatalf("legacy schema rebuild must default envelope timestamps, got %d/%d", step.StartedAt, step.EndedAt)
+		}
+		if string(step.Attrs) != `{}` || string(step.InputRefs) != `[]` || string(step.OutputRefs) != `[]` || string(step.EvidenceRefs) != `[]` {
+			t.Fatalf("legacy schema rebuild must default PR-1b-0 json cols, got %s / %s / %s / %s",
+				string(step.Attrs), string(step.InputRefs), string(step.OutputRefs), string(step.EvidenceRefs))
+		}
 	}
 }
 

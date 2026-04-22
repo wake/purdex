@@ -128,6 +128,28 @@ func TestHandleEvent_PersistAcceptedHookTrace(t *testing.T) {
 		if step.WatcherToken != nil {
 			t.Fatalf("step %d WatcherToken = %v, want nil", i, step.WatcherToken)
 		}
+		// PR-1b-0: hook collector must populate the 11 new envelope fields.
+		if step.TraceID != record.Chain.ChainID {
+			t.Fatalf("step %d TraceID = %q, want chain id %q", i, step.TraceID, record.Chain.ChainID)
+		}
+		if step.OTelKind != "internal" {
+			t.Fatalf("step %d OTelKind = %q, want internal", i, step.OTelKind)
+		}
+		if step.ReasonText == "" {
+			t.Fatalf("step %d ReasonText empty", i)
+		}
+		if string(step.Attrs) != "{}" {
+			t.Fatalf("step %d Attrs = %s, want {}", i, string(step.Attrs))
+		}
+		if string(step.InputRefs) != "[]" || string(step.OutputRefs) != "[]" || string(step.EvidenceRefs) != "[]" {
+			t.Fatalf("step %d refs default = %s/%s/%s", i, string(step.InputRefs), string(step.OutputRefs), string(step.EvidenceRefs))
+		}
+		if step.StateBeforeRef != "" || step.StateAfterRef != "" {
+			t.Fatalf("step %d state refs = %q/%q, want empty", i, step.StateBeforeRef, step.StateAfterRef)
+		}
+		if step.StartedAt == 0 || step.EndedAt == 0 {
+			t.Fatalf("step %d started_at/ended_at = %d/%d, want non-zero", i, step.StartedAt, step.EndedAt)
+		}
 	}
 }
 
