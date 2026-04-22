@@ -2,6 +2,7 @@ import type { LinkOpener } from '../types'
 import type { FileInfo, FileSource } from '../../../types/fs'
 import type { PaneContent } from '../../../types/tab'
 import type { FileOpener } from '../../file-opener-registry'
+import { resolveEditorHomePath } from '../../editor-home-resolver'
 
 export interface FilePathOpenerDeps {
   getDefaultOpener(file: FileInfo): FileOpener | null
@@ -97,10 +98,18 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
         const timeoutId = setTimeout(() => controller.abort(), 5000)
         let home: string | null = null
         try {
-          home = await deps.fetchPaneHome(ctx.hostId, ctx.sessionCode, controller.signal)
+          home = await resolveEditorHomePath(
+            {
+              hostId: ctx.hostId,
+              sessionCode: ctx.sessionCode,
+              workspaceId: ctx.workspaceId,
+              signal: controller.signal,
+            },
+            { fetchPaneHome: deps.fetchPaneHome },
+          )
         } catch (err) {
           const reason = (err as Error)?.name === 'AbortError' ? 'timeout' : (err as Error)?.message ?? String(err)
-          console.warn(`[file-path] home fetch failed (${reason}) for host=${ctx.hostId} session=${ctx.sessionCode} path=${rawPath}; opening as new buffer`)
+          console.warn(`[file-path] home resolve failed (${reason}) for host=${ctx.hostId} session=${ctx.sessionCode} path=${rawPath}; opening as new buffer`)
         } finally {
           clearTimeout(timeoutId)
         }

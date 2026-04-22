@@ -65,13 +65,14 @@ describe('resolveEditorHomePath', () => {
     expect(out).toBeNull()
   })
 
-  it('returns null when fetchPaneHome rejects', async () => {
+  it('propagates fetchPaneHome rejection so callers can warn with context', async () => {
     const deps = makeDeps({ fetchPaneHome: vi.fn(async () => { throw new Error('boom') }) })
-    const out = await resolveEditorHomePath(
-      { hostId: 'h1', sessionCode: 's1', workspaceId: 'wsA' },
-      deps,
-    )
-    expect(out).toBeNull()
+    await expect(
+      resolveEditorHomePath(
+        { hostId: 'h1', sessionCode: 's1', workspaceId: 'wsA' },
+        deps,
+      ),
+    ).rejects.toThrow('boom')
   })
 
   it('treats empty workspace string as unset and falls through to host', async () => {

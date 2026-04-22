@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createFilePathOpener } from './file-path'
 import type { LinkToken } from '../types'
 import type { FileOpener } from '../../file-opener-registry'
+import { useHostSettingsStore } from '../../../stores/useHostSettingsStore'
+import { useWorkspaceSettingsStore } from '../../../stores/useWorkspaceSettingsStore'
 
 const fileToken: LinkToken = {
   type: 'file',
@@ -358,5 +360,98 @@ describe('file-path opener — tilde path home resolution', () => {
 
     const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
     expect(createContentCalls[0][1].path).toBe('/Users/foo.ts')
+  })
+})
+
+describe('file-path opener — tilde path layered resolve (PR-5)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    localStorage.clear()
+    useHostSettingsStore.setState({ hosts: {} })
+    useWorkspaceSettingsStore.setState({ workspaces: {} })
+  })
+  afterEach(() => vi.useRealTimers())
+
+  const tildeToken: LinkToken = {
+    type: 'file',
+    text: '~/foo.ts',
+    range: { startCol: 0, endCol: 8 },
+    meta: { path: '~/foo.ts' },
+  }
+
+  it('workspace override: uses workspace homePath over host and pane shell', async () => {
+    useWorkspaceSettingsStore.getState().set('wsA', 'editor', { homePath: '/Users/x' })
+    useHostSettingsStore.getState().set('h1', 'editor', { homePath: '/Users/host' })
+    const deps = makeDeps()
+    deps.fetchPaneHome.mockResolvedValueOnce('/Users/shell')
+    const o = createFilePathOpener(deps)
+
+    await o.open(tildeToken, { hostId: 'h1', sessionCode: 'c1', workspaceId: 'wsA' }, new MouseEvent('click'))
+
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('/Users/x/foo.ts')
+    expect(deps.fetchPaneHome).not.toHaveBeenCalled()
+  })
+
+  it('host override: uses host homePath when workspace empty', async () => {
+    useHostSettingsStore.getState().set('h1', 'editor', { homePath: '/home/y' })
+    const deps = makeDeps()
+    deps.fetchPaneHome.mockResolvedValueOnce('/Users/shell')
+    const o = createFilePathOpener(deps)
+
+    await o.open(tildeToken, { hostId: 'h1', sessionCode: 'c1', workspaceId: 'wsA' }, new MouseEvent('click'))
+
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('/home/y/foo.ts')
+    expect(deps.fetchPaneHome).not.toHaveBeenCalled()
+  })
+
+  it('all layers empty + fetchPaneHome rejects: opens raw ~/foo.ts as new buffer', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneHome.mockRejectedValueOnce(new Error('boom'))
+    const o = createFilePathOpener(deps)
+
+    await o.open(tildeToken, { hostId: 'h1', sessionCode: 'c1', workspaceId: 'wsA' }, new MouseEvent('click'))
+
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('~/foo.ts')
+    expect(deps.openSingletonTab).toHaveBeenCalled()
+  })
+
+  it('multi-workspace: reads link-source workspace (wsB), not active (wsA)', async () => {
+    useWorkspaceSettingsStore.getState().set('wsA', 'editor', { homePath: '/Users/x' })
+    useHostSettingsStore.getState().set('h1', 'editor', { homePath: '/home/host' })
+    const deps = makeDeps()
+    const o = createFilePathOpener(deps)
+
+    await o.open(tildeToken, { hostId: 'h1', sessionCode: 'c1', workspaceId: 'wsB' }, new MouseEvent('click'))
+
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('/home/host/foo.ts')
+    expect(deps.fetchPaneHome).not.toHaveBeenCalled()
+  })
+
+  it('standalone pane (workspaceId undefined): skips workspace layer', async () => {
+    useWorkspaceSettingsStore.getState().set('wsA', 'editor', { homePath: '/Users/x' })
+    useHostSettingsStore.getState().set('h1', 'editor', { homePath: '/home/host' })
+    const deps = makeDeps()
+    const o = createFilePathOpener(deps)
+
+    await o.open(tildeToken, { hostId: 'h1', sessionCode: 'c1' }, new MouseEvent('click'))
+
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('/home/host/foo.ts')
+    expect(deps.fetchPaneHome).not.toHaveBeenCalled()
+  })
+
+  it('fallback to fetchPaneHome still works (PR #530 regression)', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneHome.mockResolvedValueOnce('/Users/wake')
+    const o = createFilePathOpener(deps)
+
+    await o.open(tildeToken, { hostId: 'h1', sessionCode: 'c1', workspaceId: 'wsA' }, new MouseEvent('click'))
+
+    const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
+    expect(createContentCalls[0][1].path).toBe('/Users/wake/foo.ts')
   })
 })

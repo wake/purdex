@@ -50,11 +50,7 @@ export async function resolveEditorHomePath(
 
   if (!ctx.sessionCode) return null
   if (ctx.signal?.aborted) return null
-  try {
-    const shell = await deps.fetchPaneHome(ctx.hostId, ctx.sessionCode, ctx.signal)
-    if (shell && shell.startsWith('/')) return shell
-    return null
-  } catch {
-    return null
-  }
+  const shell = await deps.fetchPaneHome(ctx.hostId, ctx.sessionCode, ctx.signal)
+  if (shell && shell.startsWith('/')) return shell
+  return null
 }
