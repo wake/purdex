@@ -110,6 +110,33 @@ describe('useGlobalSettingsStore', () => {
     expect(useGlobalSettingsStore.getState().get('valid')).toBeUndefined()
   })
 
+  describe('immutability (#540)', () => {
+    it('get() returns a frozen snapshot', () => {
+      const { set, get } = useGlobalSettingsStore.getState()
+      set('editor', { homePath: '/Users/x' })
+      const snapshot = get('editor')!
+      expect(Object.isFrozen(snapshot)).toBe(true)
+    })
+
+    it('mutating the returned snapshot does not leak into store state', () => {
+      const { set, get } = useGlobalSettingsStore.getState()
+      set('editor', { homePath: '/Users/x' })
+      const snapshot = get('editor')!
+      expect(() => {
+        ;(snapshot as Record<string, unknown>).homePath = '/hacked'
+      }).toThrow()
+      expect(get('editor')).toEqual({ homePath: '/Users/x' })
+    })
+
+    it('set() still patches after prior get() returned frozen snapshot', () => {
+      const { set, get } = useGlobalSettingsStore.getState()
+      set('editor', { homePath: '/Users/x' })
+      void get('editor')
+      set('editor', { homePath: '/Users/y' })
+      expect(get('editor')).toEqual({ homePath: '/Users/y' })
+    })
+  })
+
   it('resets a non-object modules root during rehydrate', async () => {
     localStorage.setItem(
       STORAGE_KEYS.GLOBAL_SETTINGS,

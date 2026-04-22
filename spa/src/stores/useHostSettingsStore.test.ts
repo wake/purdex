@@ -117,6 +117,33 @@ describe('useHostSettingsStore', () => {
     expect(useHostSettingsStore.getState().get('hostA', 'files')).toBeUndefined()
   })
 
+  describe('immutability (#540)', () => {
+    it('get() returns a frozen snapshot', () => {
+      const { set, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { homePath: '/home/x' })
+      const snapshot = get('hostA', 'editor')!
+      expect(Object.isFrozen(snapshot)).toBe(true)
+    })
+
+    it('mutating the returned snapshot does not leak into store state', () => {
+      const { set, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { homePath: '/home/x' })
+      const snapshot = get('hostA', 'editor')!
+      expect(() => {
+        ;(snapshot as Record<string, unknown>).homePath = '/hacked'
+      }).toThrow()
+      expect(get('hostA', 'editor')).toEqual({ homePath: '/home/x' })
+    })
+
+    it('set() still patches after prior get() returned frozen snapshot', () => {
+      const { set, get } = useHostSettingsStore.getState()
+      set('hostA', 'editor', { homePath: '/home/x' })
+      void get('hostA', 'editor')
+      set('hostA', 'editor', { homePath: '/home/y' })
+      expect(get('hostA', 'editor')).toEqual({ homePath: '/home/y' })
+    })
+  })
+
   it('resets a non-object hosts root during rehydrate', async () => {
     localStorage.setItem(
       STORAGE_KEYS.HOST_SETTINGS,

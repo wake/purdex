@@ -19,7 +19,10 @@ export const useHostSettingsStore = create<HostSettingsState>()(
     (set, get) => ({
       hosts: {},
 
-      get: (hostId, moduleId) => get().hosts[hostId]?.[moduleId],
+      get: (hostId, moduleId) => {
+        const payload = get().hosts[hostId]?.[moduleId]
+        return payload ? Object.freeze({ ...payload }) : undefined
+      },
 
       set: (hostId, moduleId, patch) =>
         set((state) => {

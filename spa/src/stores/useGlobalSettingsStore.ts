@@ -17,7 +17,10 @@ export const useGlobalSettingsStore = create<GlobalSettingsState>()(
     (set, get) => ({
       modules: {},
 
-      get: (moduleId) => get().modules[moduleId],
+      get: (moduleId) => {
+        const payload = get().modules[moduleId]
+        return payload ? Object.freeze({ ...payload }) : undefined
+      },
 
       set: (moduleId, patch) =>
         set((state) => ({

@@ -19,7 +19,10 @@ export const useWorkspaceSettingsStore = create<WorkspaceSettingsState>()(
     (set, get) => ({
       workspaces: {},
 
-      get: (workspaceId, moduleId) => get().workspaces[workspaceId]?.[moduleId],
+      get: (workspaceId, moduleId) => {
+        const payload = get().workspaces[workspaceId]?.[moduleId]
+        return payload ? Object.freeze({ ...payload }) : undefined
+      },
 
       set: (workspaceId, moduleId, patch) =>
         set((state) => {
