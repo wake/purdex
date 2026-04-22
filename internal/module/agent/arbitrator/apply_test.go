@@ -2,12 +2,15 @@ package arbitrator
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/module/agent/arbmode"
 	"github.com/wake/purdex/internal/module/agent/observation"
+	"github.com/wake/purdex/internal/store"
 )
 
 // ----- Test fakes ----------------------------------------------------------
@@ -117,21 +120,75 @@ func (f *fakeArbmode) Snapshot() arbmode.Snapshot {
 
 func (f *fakeArbmode) ApplyAtSessionStart() { f.applyAtStartCalls++ }
 
+// ----- Divergence + legacy frames fakes (T5) ------------------------------
+
+// fakeDivergencesWriter records every Insert call so tests can assert both
+// the call count (primary-only gate passes) and the row shape (Matched,
+// DiffSummary, OldStateRef, ProposalStateRef). The fake never returns an
+// error; tests that want to simulate store failures can swap in a custom
+// DivergencesWriter.
+type fakeDivergencesWriter struct {
+	inserts []store.FrameDivergence
+	nextErr error
+}
+
+func (f *fakeDivergencesWriter) Insert(row store.FrameDivergence) (int64, error) {
+	f.inserts = append(f.inserts, row)
+	if f.nextErr != nil {
+		return 0, f.nextErr
+	}
+	return int64(len(f.inserts)), nil
+}
+
+// fakeLegacyFramesView lets tests pre-seed the frame state the divergence
+// writer will compare against. Key is the (paneID, pid, startTime) triple
+// serialized via fakeLegacyKey so tests can use struct literals.
+type fakeLegacyFramesView struct {
+	frames map[fakeLegacyKey]*store.Frame
+	err    error
+}
+
+type fakeLegacyKey struct {
+	PaneID    string
+	PID       int
+	StartTime string
+}
+
+func (f *fakeLegacyFramesView) set(paneID string, pid int, startTime string, frame *store.Frame) {
+	if f.frames == nil {
+		f.frames = make(map[fakeLegacyKey]*store.Frame)
+	}
+	f.frames[fakeLegacyKey{PaneID: paneID, PID: pid, StartTime: startTime}] = frame
+}
+
+func (f *fakeLegacyFramesView) GetByIdentity(paneID string, pid int, startTime string) (*store.Frame, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if fr, ok := f.frames[fakeLegacyKey{PaneID: paneID, PID: pid, StartTime: startTime}]; ok {
+		return fr, nil
+	}
+	return nil, nil
+}
+
 // ----- Test harness --------------------------------------------------------
 
 // applyHarness builds a fully-wired applyDeps with sensible defaults for
 // passthrough-mode tests. Individual tests can override fields on the
 // returned struct before invoking apply.
 type applyHarness struct {
-	deps       *applyDeps
-	now        time.Time
-	trace      *fakeTraceSubmitter
-	minter     *fakeMinter
-	arbmodeFk  *fakeArbmode
-	stormGuard *hookStormGuard
-	idem       *idemCache
-	pending    *pendingStore
-	frames     *frameState
+	deps         *applyDeps
+	now          time.Time
+	trace        *fakeTraceSubmitter
+	minter       *fakeMinter
+	arbmodeFk    *fakeArbmode
+	stormGuard   *hookStormGuard
+	idem         *idemCache
+	pending      *pendingStore
+	frames       *frameState
+	sampler      *sampler
+	divergences  *fakeDivergencesWriter
+	legacyFrames *fakeLegacyFramesView
 }
 
 func newApplyHarness(t *testing.T) *applyHarness {
@@ -146,6 +203,9 @@ func newApplyHarness(t *testing.T) *applyHarness {
 	h.idem = newIdemCache(func() time.Time { return h.now })
 	h.pending = newPendingStore()
 	h.frames = newFrameState()
+	h.sampler = newSampler()
+	h.divergences = &fakeDivergencesWriter{}
+	h.legacyFrames = &fakeLegacyFramesView{}
 	h.deps = &applyDeps{
 		frames:          h.frames,
 		pending:         h.pending,
@@ -154,6 +214,9 @@ func newApplyHarness(t *testing.T) *applyHarness {
 		minter:          h.minter,
 		arbmode:         h.arbmodeFk,
 		traceSubmit:     h.trace,
+		sampler:         h.sampler,
+		divergences:     h.divergences,
+		legacyFrames:    h.legacyFrames,
 		now:             func() time.Time { return h.now },
 		pendingDeadline: 200 * time.Millisecond,
 		perSessionCap:   8,
@@ -1160,22 +1223,23 @@ func TestApply_AuthoritativeMode_DoesNotAdvancePrimary(t *testing.T) {
 	}
 }
 
-// ----- C1: Boundary trace carries newly minted trace_id -------------------
+// ----- C1: Boundary trace carries adopted trace_id ------------------------
 
-// TestApplySessionStart_BoundaryTraceUsesNewlyMintedTraceID verifies that
-// the synthetic session.generation_advanced boundary trace is tagged with
-// the trace_id returned from minter.Mint for the new generation — NOT the
-// incoming obs.TraceID, which belongs to the prior (pre-advance) chain.
-// An empty TraceID would make validateLightsRow reject the whole batch
-// during flush.
-func TestApplySessionStart_BoundaryTraceUsesNewlyMintedTraceID(t *testing.T) {
+// TestApplySessionStart_BoundaryTraceUsesAdoptedTraceID verifies that the
+// synthetic session.generation_advanced boundary trace is tagged with the
+// trace_id returned from minter.AdoptTraceID — which, for a fresh
+// (session, gen) slot, equals the seed taken from obs.TraceID (a
+// provisional UUID minted hook-side, per D1.2). Prior to PR-1b-1c the
+// boundary id came from minter.Mint, but T5 rewired the binding so the
+// hook-provided id is authoritative and Observation.TraceID / hook chain
+// trace_id / boundary trace_id all correlate without a registry round-trip.
+func TestApplySessionStart_BoundaryTraceUsesAdoptedTraceID(t *testing.T) {
 	h := newApplyHarness(t)
-	h.minter.nextMintID = "NEW_UUID_FROM_MINTER"
 	h.frames.getOrCreateSession("s1").Generation = 3
 
-	// Incoming hook carries a stale trace_id from the old chain.
+	// Incoming hook carries a provisional UUID (hook-side mint from T6).
 	obs := h.obsBuilder().withSession("s1", 4).hook().withAction(actionSessionStart).
-		withTrace("STALE_TRACE_FROM_OLD_GEN").build()
+		withTrace("HOOK_PROVISIONAL_UUID").build()
 	h.deps.apply(obs)
 
 	var boundary *TraceRecord
@@ -1188,8 +1252,8 @@ func TestApplySessionStart_BoundaryTraceUsesNewlyMintedTraceID(t *testing.T) {
 	if boundary == nil {
 		t.Fatalf("boundary trace missing; records=%+v", h.trace.records)
 	}
-	if boundary.TraceID != "NEW_UUID_FROM_MINTER" {
-		t.Errorf("boundary TraceID = %q, want NEW_UUID_FROM_MINTER (from minter.Mint, not obs.TraceID)",
+	if boundary.TraceID != "HOOK_PROVISIONAL_UUID" {
+		t.Errorf("boundary TraceID = %q, want HOOK_PROVISIONAL_UUID (adopted from obs.TraceID)",
 			boundary.TraceID)
 	}
 	if boundary.SpanID == "" {
@@ -1288,5 +1352,517 @@ func TestEmitTrace_GeneratesStableSpanIDWhenMissing(t *testing.T) {
 	}
 	if h.trace.records[0].SpanID == "" {
 		t.Error("emitRejectedTrace must back-fill empty obs.SpanID with a fresh UUID")
+	}
+}
+
+// ======================================================================
+// T5 (PR-1b-1c) — Apply pipeline expansion
+// ======================================================================
+
+// roleResolutionEv is a small helper that builds the canonical EvidenceRef
+// carrying role_resolution. Used throughout the T5 test suite to avoid
+// repeating the key name.
+func roleResolutionEv(state observation.RoleResolutionState) observation.EvidenceRef {
+	return observation.EvidenceRef{Key: observation.EvidenceKeyRoleResolution, Value: state}
+}
+
+// identityTripleEv produces the {pid, pane_id, start_time} evidence triple
+// that the divergence writer gate requires (D5.2 / P0-5). The pid type is
+// int64 so evidenceInt64 extraction hits the canonical path.
+func identityTripleEv(paneID string, pid int64, startTime string) []observation.EvidenceRef {
+	return []observation.EvidenceRef{
+		{Key: "pid", Value: pid},
+		{Key: "pane_id", Value: paneID},
+		{Key: "start_time", Value: startTime},
+	}
+}
+
+// ----- Role-based pending routing (D4.2) ----------------------------------
+
+// TestApply_HookRoleResolutionMissing_NotPending verifies a hook observation
+// with no role_resolution evidence key falls through route-to-pending (goes
+// the normal reject path instead of stashing). The observation lands at
+// source-priority or later steps; we assert pending remains empty.
+func TestApply_HookRoleResolutionMissing_NotPending(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("a1").withSuggest("active").withSeq(1).build()
+	// No role_resolution key anywhere in Evidence.
+
+	h.deps.apply(obs)
+
+	if h.pending.count() != 0 {
+		t.Errorf("pending count = %d, want 0 (no role_resolution -> no pending)", h.pending.count())
+	}
+}
+
+// TestApply_HookRetryableUnresolved_CreatesFirstPendingEntry_NoRetryScheduled
+// verifies the RoleRetryableUnresolved branch stashes observation into
+// pending and NEVER schedules a timer-based retry (Non-Goals).
+func TestApply_HookRetryableUnresolved_CreatesFirstPendingEntry_NoRetryScheduled(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("a1").withSuggest("active").withSeq(1).
+		withEvidence(roleResolutionEv(observation.RoleRetryableUnresolved)).build()
+
+	h.deps.apply(obs)
+
+	key := observation.ActorKey{SessionID: "s1", Generation: 1, ActorID: "a1"}
+	if !h.pending.isPending(key) {
+		t.Fatalf("pending entry missing after RoleRetryableUnresolved observation")
+	}
+	entry := h.pending.entries[key]
+	if len(entry.Observations) != 1 {
+		t.Errorf("pending entry observations = %d, want 1", len(entry.Observations))
+	}
+	// Non-Goals: no retryTick / retryCh / timer. The stash path is silent —
+	// no trace records should be emitted.
+	if len(h.trace.records) != 0 {
+		t.Errorf("pending stash must not emit trace; got %d records", len(h.trace.records))
+	}
+}
+
+// TestApply_HookTerminalUnresolved_EmitsTraceOnly_NotPending verifies the
+// RoleTerminalUnresolved branch emits one trace (reason=RoleTerminalUnresolved)
+// and does NOT add the observation to pending.
+func TestApply_HookTerminalUnresolved_EmitsTraceOnly_NotPending(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("a1").withSuggest("active").withSeq(1).
+		withEvidence(roleResolutionEv(observation.RoleTerminalUnresolved)).build()
+
+	h.deps.apply(obs)
+
+	if h.pending.count() != 0 {
+		t.Errorf("pending count = %d, want 0 (terminal must drop)", h.pending.count())
+	}
+	terminalRejects := h.trace.byReason("RoleTerminalUnresolved")
+	if len(terminalRejects) != 1 {
+		t.Fatalf("RoleTerminalUnresolved traces = %d, want 1; got %+v", len(terminalRejects), h.trace.records)
+	}
+}
+
+// TestApply_HookResolved_WhilePending_TriggersTryPromoteToActorNow verifies
+// that a RoleResolved observation arriving while the actor has a pending
+// entry triggers immediate promotion (no wait for reconcile tick).
+func TestApply_HookResolved_WhilePending_TriggersTryPromoteToActorNow(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+
+	// Seed a pending entry with a Retryable observation.
+	retryObs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("a1").withSuggest("active").withSeq(1).
+		withEvidence(roleResolutionEv(observation.RoleRetryableUnresolved)).build()
+	h.deps.apply(retryObs)
+
+	key := observation.ActorKey{SessionID: "s1", Generation: 1, ActorID: "a1"}
+	if !h.pending.isPending(key) {
+		t.Fatalf("seed Retryable obs did not create pending entry")
+	}
+
+	// Now send a Resolved observation — should promote immediately.
+	h.trace.records = nil
+	resolvedObs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("a1").withSuggest("active").withSeq(2).
+		withEvidence(roleResolutionEv(observation.RoleResolved)).build()
+	h.deps.apply(resolvedObs)
+
+	if h.pending.isPending(key) {
+		t.Errorf("pending entry still exists after Resolved promotion; want cleared")
+	}
+	accepted := h.trace.byPhase(observation.PhaseProposed)
+	if len(accepted) != 1 {
+		t.Errorf("expected 1 accepted trace after promote; got %d records=%+v", len(accepted), h.trace.records)
+	}
+}
+
+// ----- tryPromoteFromEntry contract (D4.3) --------------------------------
+
+// TestApply_TryPromoteFromEntry_NoPositiveSignal_ReturnsFalse_WaitsForDeadline
+// verifies that an entry containing only RoleRetryableUnresolved observations
+// is not promoted — it stays pending until deadline drop.
+func TestApply_TryPromoteFromEntry_NoPositiveSignal_ReturnsFalse_WaitsForDeadline(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+
+	// Build an entry with only Retryable observations.
+	key := observation.ActorKey{SessionID: "s1", Generation: 1, ActorID: "a1"}
+	for i := 0; i < 3; i++ {
+		obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+			withActor("a1").withSuggest("active").withSeq(int64(i + 1)).
+			withEvidence(roleResolutionEv(observation.RoleRetryableUnresolved)).build()
+		h.pending.addPending(obs, h.now, h.deps.pendingDeadline, h.deps.perSessionCap, h.deps.perEntryObsCap, nil)
+	}
+
+	entry := h.pending.entries[key]
+	if entry == nil {
+		t.Fatalf("seed failed")
+	}
+
+	promoted := h.deps.tryPromoteFromEntry(entry)
+	if promoted {
+		t.Errorf("tryPromoteFromEntry = true, want false (no RoleResolved obs in entry)")
+	}
+	// Still pending.
+	if !h.pending.isPending(key) {
+		t.Errorf("entry removed despite no positive signal")
+	}
+}
+
+// TestApply_TryPromoteFromEntry_HasResolvedObs_Promotes verifies that an
+// entry containing at least one RoleResolved observation is promoted by
+// running apply steps 5-9.
+func TestApply_TryPromoteFromEntry_HasResolvedObs_Promotes(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+	key := observation.ActorKey{SessionID: "s1", Generation: 1, ActorID: "a1"}
+
+	// Seed: Retryable first, then Resolved.
+	retryObs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("a1").withSuggest("active").withSeq(1).
+		withEvidence(roleResolutionEv(observation.RoleRetryableUnresolved)).build()
+	resolvedObs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("a1").withSuggest("active").withSeq(2).
+		withEvidence(roleResolutionEv(observation.RoleResolved)).build()
+	h.pending.addPending(retryObs, h.now, h.deps.pendingDeadline, h.deps.perSessionCap, h.deps.perEntryObsCap, nil)
+	h.pending.addPending(resolvedObs, h.now, h.deps.pendingDeadline, h.deps.perSessionCap, h.deps.perEntryObsCap, nil)
+
+	entry := h.pending.entries[key]
+	promoted := h.deps.tryPromoteFromEntry(entry)
+	if !promoted {
+		t.Errorf("tryPromoteFromEntry = false, want true (Resolved present)")
+	}
+	accepted := h.trace.byPhase(observation.PhaseProposed)
+	if len(accepted) != 1 {
+		t.Errorf("accepted trace count = %d, want 1 after promotion", len(accepted))
+	}
+}
+
+// TestApply_TryPromoteFromEntry_ResolvedButNoProposal_ReturnsFalse verifies
+// that a Resolved observation with no meaningful proposal (empty
+// SuggestStatus and EndLifecycle=false) does NOT promote the entry.
+func TestApply_TryPromoteFromEntry_ResolvedButNoProposal_ReturnsFalse(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+	key := observation.ActorKey{SessionID: "s1", Generation: 1, ActorID: "a1"}
+
+	// Resolved but proposal is empty.
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("a1").withSeq(1).
+		withEvidence(roleResolutionEv(observation.RoleResolved)).build()
+	// obs.Proposal.SuggestStatus defaults to "" and EndLifecycle=false.
+	h.pending.addPending(obs, h.now, h.deps.pendingDeadline, h.deps.perSessionCap, h.deps.perEntryObsCap, nil)
+
+	entry := h.pending.entries[key]
+	promoted := h.deps.tryPromoteFromEntry(entry)
+	if promoted {
+		t.Errorf("tryPromoteFromEntry = true, want false (Resolved but no proposal)")
+	}
+}
+
+// ----- Gen gate (D1.3) ----------------------------------------------------
+
+// TestApply_GenGate_ObservedEqualCurrent_NotSessionStart_AppliesNormally
+// documents that generation == current proceeds to normal apply without
+// triggering the SessionStart helper or any mint/adopt.
+func TestApply_GenGate_ObservedEqualCurrent_NotSessionStart_AppliesNormally(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 2
+
+	obs := h.obsBuilder().withSession("s1", 2).hook().withAction("PostToolUse").
+		withActor("a1").withSuggest("active").withSeq(1).build()
+	h.deps.apply(obs)
+
+	if len(h.minter.mintCalls) != 0 || len(h.minter.adoptCalls) != 0 {
+		t.Errorf("same-gen apply must not mint/adopt; mint=%d adopt=%d",
+			len(h.minter.mintCalls), len(h.minter.adoptCalls))
+	}
+	if len(h.trace.byPhase(observation.PhaseProposed)) != 1 {
+		t.Errorf("same-gen apply did not accept; records=%+v", h.trace.records)
+	}
+}
+
+// TestApply_GenGate_ObservedGreaterCurrent_SessionStart_RunsHelper_Adopts
+// verifies that obs.Gen > current + Action == SessionStart triggers
+// AdoptTraceID with the observation's trace_id as seed.
+func TestApply_GenGate_ObservedGreaterCurrent_SessionStart_RunsHelper_Adopts(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 0
+
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction(actionSessionStart).
+		withTrace("HOOK_PROVISIONAL_UUID").build()
+	h.deps.apply(obs)
+
+	if len(h.minter.adoptCalls) != 1 {
+		t.Fatalf("AdoptTraceID calls = %d, want 1", len(h.minter.adoptCalls))
+	}
+	if h.minter.adoptCalls[0].seed != "HOOK_PROVISIONAL_UUID" {
+		t.Errorf("adopt seed = %q, want HOOK_PROVISIONAL_UUID", h.minter.adoptCalls[0].seed)
+	}
+	if h.minter.adoptCalls[0].sessionID != "s1" || h.minter.adoptCalls[0].generation != 1 {
+		t.Errorf("adopt args = %+v, want {s1, 1}", h.minter.adoptCalls[0])
+	}
+	// SessionStart must not call Mint (adopt supersedes it).
+	if len(h.minter.mintCalls) != 0 {
+		t.Errorf("SessionStart called Mint %d times, want 0 (AdoptTraceID replaces it)", len(h.minter.mintCalls))
+	}
+}
+
+// TestApply_GenGate_ObservedGreaterCurrent_NotSessionStart_Rejects verifies
+// that obs.Gen > current + Action != SessionStart is rejected with
+// ObservedGenerationAhead (i.e. UnauthorizedGenerationBump reason code in
+// this codebase's enum).
+func TestApply_GenGate_ObservedGreaterCurrent_NotSessionStart_Rejects(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 0
+
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("a1").withSuggest("active").withSeq(1).build()
+	h.deps.apply(obs)
+
+	rej := h.trace.byReason(ReasonUnauthorizedGenerationBump)
+	if len(rej) != 1 {
+		t.Errorf("ObservedGenerationAhead / UnauthorizedGenerationBump rejects = %d, want 1", len(rej))
+	}
+}
+
+// ----- SessionStart AdoptTraceID (D1.2) -----------------------------------
+
+// TestApply_SessionStart_AdoptTraceID_UsesObservationSeed verifies the
+// boundary synthetic trace uses the seed returned from AdoptTraceID (which
+// equals obs.TraceID when the seed is non-empty and the key is new).
+func TestApply_SessionStart_AdoptTraceID_UsesObservationSeed(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 0
+
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction(actionSessionStart).
+		withTrace("ADOPT_ME").build()
+	h.deps.apply(obs)
+
+	var boundary *TraceRecord
+	for i, r := range h.trace.records {
+		if r.SourceKind == observation.SourceSynthetic && r.Action == actionSessionGenerationAdvanced {
+			boundary = &h.trace.records[i]
+			break
+		}
+	}
+	if boundary == nil {
+		t.Fatalf("boundary trace missing; records=%+v", h.trace.records)
+	}
+	if boundary.TraceID != "ADOPT_ME" {
+		t.Errorf("boundary trace_id = %q, want ADOPT_ME (adopted seed)", boundary.TraceID)
+	}
+}
+
+// TestApply_SessionStart_AdoptTraceID_Idempotent_WhenReplayed verifies that
+// two AdoptTraceID calls with the same (sid, gen) but different seeds
+// return the first seed — the second is discarded. We invoke AdoptTraceID
+// directly on the real registry to exercise the idempotent contract at
+// the source (the fake echoes seed, so it cannot demonstrate idempotency).
+func TestApply_SessionStart_AdoptTraceID_Idempotent_WhenReplayed(t *testing.T) {
+	minter, _ := observation.NewTraceIDRegistry()
+
+	first := minter.AdoptTraceID("s1", 1, "FIRST_SEED")
+	second := minter.AdoptTraceID("s1", 1, "SECOND_SEED")
+
+	if first != "FIRST_SEED" {
+		t.Errorf("first adopt = %q, want FIRST_SEED", first)
+	}
+	if second != "FIRST_SEED" {
+		t.Errorf("second adopt (replay) = %q, want FIRST_SEED (idempotent; second seed discarded)", second)
+	}
+}
+
+// ----- Divergence writer primary-only (D5.2) ------------------------------
+
+// TestApply_Passthrough_DivergenceWritten_WhenLegacyDiffers_Primary verifies
+// the happy path: primary actor + identity triple present + legacy frame
+// exists + proposal diverges from legacy → one Insert with Matched=false.
+func TestApply_Passthrough_DivergenceWritten_WhenLegacyDiffers_Primary(t *testing.T) {
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+
+	// Seed a legacy frame (status=idle) so the passthrough proposal
+	// (status=active) diverges.
+	legacyFrame := &store.Frame{
+		PaneID:           "pane-1",
+		PID:              4321,
+		ProcessStartTime: "2026-04-22T00:00:00Z",
+		AgentType:        "cc",
+		Status:           agentpkg.StatusIdle,
+	}
+	h.legacyFrames.set("pane-1", 4321, "2026-04-22T00:00:00Z", legacyFrame)
+
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("primary:cc").withSuggest("active").withSeq(1).
+		withEvidence(identityTripleEv("pane-1", 4321, "2026-04-22T00:00:00Z")...).build()
+	obs.TraceID = "trace-xyz"
+	obs.SpanID = "span-abc"
+
+	h.deps.apply(obs)
+
+	if len(h.divergences.inserts) != 1 {
+		t.Fatalf("divergences.Insert calls = %d, want 1", len(h.divergences.inserts))
+	}
+	row := h.divergences.inserts[0]
+	if row.Matched {
+		t.Errorf("divergence Matched = true, want false (status differs)")
+	}
+	if row.SessionID != "s1" || row.TraceID != "trace-xyz" || row.EventID != "span-abc" {
+		t.Errorf("divergence identity fields = (sid=%q trace=%q event=%q), want (s1, trace-xyz, span-abc)",
+			row.SessionID, row.TraceID, row.EventID)
+	}
+	if row.ObservedGeneration != 1 {
+		t.Errorf("ObservedGeneration = %d, want 1", row.ObservedGeneration)
+	}
+	if row.DiffSummary == "" {
+		t.Error("DiffSummary empty; expected non-empty humanDiff summary")
+	}
+	// OldStateRef / ProposalStateRef should be valid JSON.
+	if !json.Valid(row.OldStateRef) {
+		t.Errorf("OldStateRef not valid JSON: %s", row.OldStateRef)
+	}
+	if !json.Valid(row.ProposalStateRef) {
+		t.Errorf("ProposalStateRef not valid JSON: %s", row.ProposalStateRef)
+	}
+}
+
+// TestApply_Passthrough_DivergenceSkipped_WhenActorIsSubagent_MetricIncremented
+// verifies non-primary actors are gated out and the divergence skip metric
+// fires with actor_kind=subagent.
+func TestApply_Passthrough_DivergenceSkipped_WhenActorIsSubagent_MetricIncremented(t *testing.T) {
+	ResetForTesting()
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("subagent:task-1").withSuggest("active").withSeq(1).
+		withEvidence(identityTripleEv("pane-1", 4321, "2026-04-22T00:00:00Z")...).build()
+
+	h.deps.apply(obs)
+
+	if len(h.divergences.inserts) != 0 {
+		t.Errorf("Insert calls = %d, want 0 (subagent must be skipped)", len(h.divergences.inserts))
+	}
+	got := Value("lights_divergence_non_primary_skipped", "actor_kind=subagent")
+	if got != 1 {
+		t.Errorf("lights_divergence_non_primary_skipped{actor_kind=subagent} = %d, want 1", got)
+	}
+}
+
+// TestApply_Passthrough_DivergenceSkipped_WhenIdentityTripleMissing_MetricIncremented
+// verifies the identity-triple gate skips divergence writes and bumps the
+// appropriate metric when pane_id/pid/start_time is missing.
+func TestApply_Passthrough_DivergenceSkipped_WhenIdentityTripleMissing_MetricIncremented(t *testing.T) {
+	ResetForTesting()
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+
+	// pid + start_time present, but pane_id missing.
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("primary:cc").withSuggest("active").withSeq(1).
+		withEvidence(
+			observation.EvidenceRef{Key: "pid", Value: int64(4321)},
+			observation.EvidenceRef{Key: "start_time", Value: "2026-04-22T00:00:00Z"},
+		).build()
+
+	h.deps.apply(obs)
+
+	if len(h.divergences.inserts) != 0 {
+		t.Errorf("Insert calls = %d, want 0 (identity triple missing)", len(h.divergences.inserts))
+	}
+	got := Value("lights_divergence_identity_missing", "source=hook")
+	if got != 1 {
+		t.Errorf("lights_divergence_identity_missing{source=hook} = %d, want 1", got)
+	}
+}
+
+// TestApply_Passthrough_NoDivergenceWrite_WhenMatches verifies a matching
+// projection does NOT insert a row; only the matched=1 metric bumps.
+func TestApply_Passthrough_NoDivergenceWrite_WhenMatches(t *testing.T) {
+	ResetForTesting()
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+
+	// Seed legacy frame with status already active → projection will match.
+	legacyFrame := &store.Frame{
+		PaneID:           "pane-1",
+		PID:              4321,
+		ProcessStartTime: "2026-04-22T00:00:00Z",
+		AgentType:        "cc",
+		Status:           agentpkg.Status("active"),
+	}
+	h.legacyFrames.set("pane-1", 4321, "2026-04-22T00:00:00Z", legacyFrame)
+
+	obs := h.obsBuilder().withSession("s1", 1).hook().withAction("PostToolUse").
+		withActor("primary:cc").withSuggest("active").withSeq(1).
+		withEvidence(identityTripleEv("pane-1", 4321, "2026-04-22T00:00:00Z")...).build()
+
+	h.deps.apply(obs)
+
+	if len(h.divergences.inserts) != 0 {
+		t.Errorf("matching projection must not insert row; got %d inserts", len(h.divergences.inserts))
+	}
+	if got := Value("lights_divergence_total", "matched=1"); got != 1 {
+		t.Errorf("lights_divergence_total{matched=1} = %d, want 1", got)
+	}
+}
+
+// ----- Sampler wiring (D7) ------------------------------------------------
+
+// TestApply_Sampler_Sweep_DropsNineInTen_PerSession verifies the sampler is
+// invoked on emit: 10 sweep proposals in one session produce exactly 1
+// trace row (first emits, subsequent 9 drop). A second session's sweep
+// sequence starts fresh (independent counter).
+func TestApply_Sampler_Sweep_DropsNineInTen_PerSession(t *testing.T) {
+	ResetForTesting()
+	h := newApplyHarness(t)
+	h.frames.getOrCreateSession("s1").Generation = 1
+	h.frames.getOrCreateSession("s2").Generation = 1
+
+	// 10 sweep proposals on session s1 against fresh actors (unique ActorID
+	// so idempotency + pending routing do not interfere).
+	for i := 0; i < 10; i++ {
+		obs := h.obsBuilder().withSession("s1", 1).sweep().withAction("scan").
+			withActor("a" + itoa(i)).withSuggest("waiting").withSeq(int64(i + 1)).
+			withEvidence(roleResolutionEv(observation.RoleResolved)).build()
+		h.deps.apply(obs)
+	}
+
+	s1Sweep := 0
+	for _, r := range h.trace.records {
+		if r.SessionID == "s1" && r.SourceKind == observation.SourceSweep {
+			s1Sweep++
+		}
+	}
+	if s1Sweep != 1 {
+		t.Errorf("s1 sweep emitted traces = %d, want 1 (1-in-10 sampling)", s1Sweep)
+	}
+	// sampled_dropped metric should reflect 9 drops for s1 sweep.
+	if got := Value("lights_trace_sampled_dropped",
+		"phase=proposed", "session=s1", "source=sweep"); got != 9 {
+		t.Errorf("lights_trace_sampled_dropped{s1,sweep,proposed} = %d, want 9", got)
+	}
+
+	// Now fire 1 sweep on s2 — should emit (independent counter).
+	obs := h.obsBuilder().withSession("s2", 1).sweep().withAction("scan").
+		withActor("b0").withSuggest("waiting").withSeq(1).
+		withEvidence(roleResolutionEv(observation.RoleResolved)).build()
+	h.deps.apply(obs)
+
+	s2Sweep := 0
+	for _, r := range h.trace.records {
+		if r.SessionID == "s2" && r.SourceKind == observation.SourceSweep {
+			s2Sweep++
+		}
+	}
+	if s2Sweep != 1 {
+		t.Errorf("s2 first sweep did not emit; s2 sweep traces = %d, want 1 (cross-session independence)", s2Sweep)
 	}
 }

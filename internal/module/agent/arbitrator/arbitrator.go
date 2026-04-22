@@ -33,6 +33,16 @@ type Options struct {
 	Lookup          observation.TraceIDLookup
 	Arbmode         ArbmodeView
 	TraceWriter     TraceSubmitter
+	// Divergences is the write-side for frame_divergences rows (D5.2).
+	// When nil (legacy tests, early bring-up) the divergence path is
+	// skipped silently — it is observability-only and Phase 2's authoritative
+	// mode will cover the write semantics.
+	Divergences DivergencesWriter
+	// LegacyFrames reads current legacy frame state by (pane_id, pid,
+	// start_time) so the divergence writer can project the proposal onto
+	// the same identity tuple before comparing. Nil → divergence path is
+	// skipped identically to a nil Divergences.
+	LegacyFrames    LegacyFramesView
 	InChCap         int
 	PendingDeadline time.Duration
 	PerSessionCap   int
@@ -108,6 +118,9 @@ func NewArbitrator(opts Options) *Arbitrator {
 		minter:          opts.Minter,
 		arbmode:         opts.Arbmode,
 		traceSubmit:     opts.TraceWriter,
+		sampler:         newSampler(),
+		divergences:     opts.Divergences,
+		legacyFrames:    opts.LegacyFrames,
 		now:             opts.Now,
 		pendingDeadline: opts.PendingDeadline,
 		perSessionCap:   opts.PerSessionCap,
@@ -152,11 +165,13 @@ func NewArbitrator(opts Options) *Arbitrator {
 	}
 
 	flushPendingDue := func(now time.Time) {
-		// PR-1b-1b wires only the skeleton + happy path. tryPromote is a stub
-		// that always returns false so pending entries fall through to the
-		// drop path (emitting a PidTreeUnresolvable trace per entry). The
-		// authoritative promote logic lands in PR-1b-1c.
-		tryPromote := func(_ *PendingEntry) bool { return false }
+		// PR-1b-1c: real tryPromote — scans the entry's observations for
+		// a positive role_resolution signal + valid proposal and runs
+		// apply steps 5-9 on the winner. Deadline drops still emit the
+		// PidTreeUnresolvable trace per observation (unchanged contract).
+		tryPromote := func(entry *PendingEntry) bool {
+			return a.deps.tryPromoteFromEntry(entry)
+		}
 		emitOnDrop := func(entry *PendingEntry, reason string) {
 			for _, pObs := range entry.Observations {
 				a.deps.emitRejectedTrace(pObs, reason, "pending entry dropped without promotion")
