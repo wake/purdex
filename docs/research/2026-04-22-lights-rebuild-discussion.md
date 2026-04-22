@@ -359,3 +359,106 @@ bounded bloat 的本質是：
 ### 結論
 
 bounded bloat 不是比 tightened 好的折衷，是「延後 over-engineering 的變形」。**不採用**。
+
+---
+
+## tightened 對三個需求的支援驗證
+
+### 需求 1：Status 作為唯一對齊，agent 各自註冊實作
+
+直接由 tightened 提供：
+
+```go
+// 骨架側
+type StatusSupporter interface {
+    SupportedStatuses() []Status
+}
+
+// agent 側（各自實作）
+func (p *Provider) SupportedStatuses() []agent.Status { ... }
+// hook → status 邏輯仍在既有 deriveXxxStatus()
+```
+
+✅ 直接對應。
+
+### 需求 2：Subagent parent/child + proxy 識別
+
+**不在 tightened 骨架範圍，但骨架不擋擴充路徑。** 屬 frame 層，Phase 2 處理。
+
+Phase 2 擴充草圖：
+```go
+// internal/store/frame.go —— 升級
+type SubagentRef struct {
+    ID        string
+    Type      string  // NEW
+    StartedAt int64   // NEW
+    IsProxy   bool    // NEW
+}
+type Frame struct {
+    ...
+    Subagents []SubagentRef  // 升級自 []string
+}
+
+// internal/module/agent/frame_ops.go —— proxy 偵測分支（新增）
+// 當同 pane 已有 frame + 新 hook 的 agent_type 不同 → 視為 proxy subagent
+// 附加到 parent.Subagents，不建新 frame
+```
+
+骨架的 `StatusSupporter` 完全未碰。parent/child 靠既有 `ParentFrameID` + 新加的 `Type`/`IsProxy`。
+
+### 需求 3：Probe 輔助註冊 status，不破壞式
+
+**不在 tightened 骨架範圍，但骨架不擋擴充路徑。** 屬 probe 層，Phase 4 處理。
+
+Phase 4 擴充草圖：
+```go
+// 新增 optional interface（骨架延伸，不動既有）
+type ProbeIntentProvider interface {
+    ProbeIntents() []ProbeIntent
+}
+type ProbeIntent struct {
+    OnEntry  Status
+    Detector ProbeFunc
+    OnSignal func(Signal) Status
+}
+
+// module.go：附加檢查，既有 manageActivityWatch 預設路徑完全保留
+if provider, ok := m.getProvider(agentType).(ProbeIntentProvider); ok {
+    for _, intent := range provider.ProbeIntents() {
+        if intent.OnEntry == newStatus {
+            m.prober.StartWithIntent(session, intent)
+        }
+    }
+}
+```
+
+沒實作 `ProbeIntentProvider` 的 agent 行為和現在一模一樣（不破壞）。
+
+### 三需求匯總
+
+| 需求 | tightened 直接支援 | 擴充方式 | 動到骨架 |
+|---|---|---|---|
+| Status 對齊 | ✅ | Phase 0 骨架 + Phase 1 各 agent 實作 | — |
+| Subagent parent/child + proxy | ❌（留空間） | Phase 2：frame model + frame_ops proxy 分支 | 否 |
+| Probe 輔助（不破壞） | ❌（留空間） | Phase 4：optional `ProbeIntentProvider` interface | 否 |
+
+### 架構哲學差別（總結）
+
+| bloat 哲學 | tightened 哲學 |
+|---|---|
+| 統一 hook + probe + status 於 Transition 型別 | 三者獨立演化 |
+| 一個 registry 管所有註冊 | 每個 concern 有自己的 interface |
+| 緊耦合換 coherent 抽象 | 鬆耦合換 independent evolvability |
+
+TraceStore 當跨 concern 的共同事實 SOT；runtime 層保持 concern 獨立。Inspector（Phase 5）由 trace 跨 concern 拼接呈現，而不是由 runtime 結構強制統一。
+
+### tightened 明確不提供的（trade-off 誠實列出）
+
+- 三個 concern 在 runtime 層的「統一註冊 API」
+- 「一處修改影響多處」的 coherent 擴充體驗
+- runtime 層的 Transition 型別作為 Inspector timeline 的單一事實源（改由 TraceStep 擔任）
+
+這些是 tightened 刻意放棄的，換取：
+- 每個 Phase 可獨立 PR、獨立 merge、獨立 rollback
+- 跨 Phase bug 不連動
+- 設計失誤只影響該 Phase 的 layer，不會溢出到骨架
