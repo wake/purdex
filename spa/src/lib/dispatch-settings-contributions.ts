@@ -9,6 +9,12 @@ import {
   drainLegacyContributionQueue,
   peekLegacyContributionQueue,
 } from './settings-section-registry'
+import {
+  clearHostBuiltinPending,
+  drainHostBuiltinQueue,
+  HOST_BUILTIN_MODULE_ID,
+  peekHostBuiltinQueue,
+} from './host-builtin-sections'
 import type {
   AnySettingsContribution,
   SettingsScope,
@@ -73,15 +79,18 @@ export function buildSettingsContributionBatch(
 
   const checkAndRecord = (
     full: AnySettingsContribution,
-    origin: 'module' | 'legacy',
+    origin: 'module' | 'legacy' | 'host-builtin',
   ): void => {
     assertValidSettingsContribution(full)
     if (seenIds.has(full.id)) {
-      throw new Error(
+      const suffix =
         origin === 'legacy'
-          ? `settings-contribution-registry: duplicate contribution id "${full.id}" ` +
-              `(legacy adapter collides with module-declared contribution)`
-          : `settings-contribution-registry: duplicate contribution id "${full.id}"`,
+          ? ` (legacy adapter collides with module-declared contribution)`
+          : origin === 'host-builtin'
+            ? ` (host-builtin adapter collides with module-declared contribution)`
+            : ``
+      throw new Error(
+        `settings-contribution-registry: duplicate contribution id "${full.id}"${suffix}`,
       )
     }
     let scopeMap = localIdByScope.get(full.scope)
@@ -136,6 +145,20 @@ export function buildSettingsContributionBatch(
     batch.push(full)
   }
 
+  // Peek (non-destructive) at the host built-in adapter pending buffer.
+  // Same F3 atomicity contract: peeked here for validation, drained only
+  // in the commit phase of `dispatchSettingsContributions()`.
+  const hostBuiltinDecls = peekHostBuiltinQueue()
+  for (const decl of hostBuiltinDecls) {
+    const full = {
+      ...decl,
+      moduleId: HOST_BUILTIN_MODULE_ID,
+      id: `${HOST_BUILTIN_MODULE_ID}.${decl.localId}`,
+    } as AnySettingsContribution
+    checkAndRecord(full, 'host-builtin')
+    batch.push(full)
+  }
+
   return batch
 }
 
@@ -158,7 +181,8 @@ export function dispatchSettingsContributions(
 
   // Phase 2 — commit. Safe to mutate now: validation passed.
   clearContributions()
-  drainLegacyContributionQueue() // safe: staging already holds the validated set
+  drainLegacyContributionQueue()  // safe: staging already holds the validated set
+  drainHostBuiltinQueue()         // same atomicity contract as legacy drain
   for (const contribution of batch) {
     registerSettingsContribution(contribution)
   }
@@ -178,4 +202,5 @@ export function dispatchSettingsContributions(
 export function resetSettingsContributionsForHmr(): void {
   clearContributions()
   clearLegacyPending()
+  clearHostBuiltinPending()
 }
