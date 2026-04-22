@@ -37,7 +37,7 @@ func testProcessInfoReadsCurrentProcess(t *testing.T) {
 	}
 }
 
-func testProcessInfoResolvesSymlinks(t *testing.T) {
+func testProcessInfoPreservesSymlinkInvocationPath(t *testing.T) {
 	t.Helper()
 
 	if os.Getenv("GO_WANT_PROCESS_INFO_HELPER") == "1" {
@@ -48,10 +48,6 @@ func testProcessInfoResolvesSymlinks(t *testing.T) {
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)
-	}
-	resolvedExe, err := filepath.EvalSymlinks(exe)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(%q): %v", exe, err)
 	}
 	linkPath := filepath.Join(t.TempDir(), "process-info-helper")
 	if err := os.Symlink(exe, linkPath); err != nil {
@@ -72,8 +68,8 @@ func testProcessInfoResolvesSymlinks(t *testing.T) {
 	for {
 		info, err := agent.ReadProcessInfo(cmd.Process.Pid)
 		if err == nil {
-			if info.ExePath != resolvedExe {
-				t.Fatalf("ExePath = %q, want %q", info.ExePath, resolvedExe)
+			if info.ExePath != linkPath {
+				t.Fatalf("ExePath = %q, want %q (symlink invocation path preserved)", info.ExePath, linkPath)
 			}
 			if len(info.Argv) == 0 {
 				t.Fatal("Argv should not be empty for helper process")
