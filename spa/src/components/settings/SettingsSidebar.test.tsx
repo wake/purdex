@@ -17,8 +17,7 @@ describe('SettingsSidebar', () => {
     clearContributions()
     registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: FakeComponent })
     registerSettingsSection({ id: 'terminal', label: 'Terminal', order: 1, component: FakeComponent })
-    registerSettingsSection({ id: 'workspace', label: 'Workspace', order: 10 })
-    registerSettingsSection({ id: 'sync', label: 'Sync', order: 11 })
+    registerSettingsSection({ id: 'sync', label: 'Sync', order: 11, component: FakeComponent })
     dispatchSettingsContributions([])
   })
 
@@ -26,7 +25,6 @@ describe('SettingsSidebar', () => {
     render(<SettingsSidebar activeSection="appearance" onSelectSection={vi.fn()} />)
     expect(screen.getByText('Appearance')).toBeTruthy()
     expect(screen.getByText('Terminal')).toBeTruthy()
-    expect(screen.getByText('Workspace')).toBeTruthy()
     expect(screen.getByText('Sync')).toBeTruthy()
   })
 
@@ -43,26 +41,18 @@ describe('SettingsSidebar', () => {
     expect(onSelect).toHaveBeenCalledWith('terminal')
   })
 
-  it('does not call onSelectSection for reserved items', () => {
-    const onSelect = vi.fn()
-    render(<SettingsSidebar activeSection="appearance" onSelectSection={onSelect} />)
-    fireEvent.click(screen.getByText('Workspace'))
-    expect(onSelect).not.toHaveBeenCalled()
-  })
-
-  it('shows coming soon badge on reserved items', () => {
-    render(<SettingsSidebar activeSection="appearance" onSelectSection={vi.fn()} />)
-    const badges = screen.getAllByText('coming soon')
-    expect(badges.length).toBe(2)
-  })
+  // PR-3 removed the reserved (coming-soon) rows entirely. These used to be
+  // registered via `registerSettingsSection({ id, label, order })` without a
+  // component — the function now throws on that shape. The
+  // "reserved items render coming-soon badge" and "reserved row click is a
+  // no-op" assertions are preserved as a disabled-by-ctx pattern test
+  // below (see F7 describe block).
 })
 
 // ---------------------------------------------------------------------------
 // F7 — honor `disabled(ctx)` + `disabledReasonKey` on active contributions.
-// Reserved (legacy `registerSettingsSection` without a component) is still
-// its own separate bucket below the divider; disabled-by-ctx rows render in
-// their natural order, styled disabled, with the reason key shown as title
-// tooltip (falls back to the key if i18n has no entry).
+// After PR-3 there is no reserved / coming-soon bucket — disabled-by-ctx
+// rows are the only non-clickable kind, rendered in their natural order.
 // ---------------------------------------------------------------------------
 
 describe('SettingsSidebar (F7: disabled-by-ctx)', () => {
@@ -97,7 +87,7 @@ describe('SettingsSidebar (F7: disabled-by-ctx)', () => {
     fireEvent.click(screen.getByText('GatedLabel'))
     expect(onSelect).not.toHaveBeenCalled()
     // `data-disabled-ctx="true"` so downstream code / tests can distinguish
-    // it from a reserved row.
+    // it from an enabled row.
     expect(row!.getAttribute('data-disabled-ctx')).toBe('true')
   })
 
@@ -158,11 +148,14 @@ describe('SettingsSidebar (F7: disabled-by-ctx)', () => {
     expect(onSelect).toHaveBeenCalledWith('plain')
   })
 
-  it('disabled-by-ctx rows appear in natural order (not grouped with reserved)', () => {
-    // reserved at order=10
-    registerSettingsSection({ id: 'reserved', label: 'Reserved', order: 10 })
-    // disabled-by-ctx active contribution at order=5 — should sort BEFORE reserved,
-    // since ordering is by `order`, not by enabled/disabled bucket.
+  it('disabled-by-ctx rows appear in natural order (sort by `order` ascending)', () => {
+    // Two active rows with a disabled-by-ctx row in between. Ordering is by
+    // `order`, not by enabled/disabled — so gated sits between the two
+    // enabled rows even though it is not clickable. The existing
+    // `appearance` row was registered + flushed by the describe-level
+    // beforeEach; we only push the two additional rows here via the direct
+    // new-registry path (avoids a second dispatch wiping the flushed
+    // `appearance` entry).
     registerSettingsContribution({
       moduleId: 'mod',
       id: 'mod.gated',
@@ -173,12 +166,21 @@ describe('SettingsSidebar (F7: disabled-by-ctx)', () => {
       component: FakeComp,
       disabled: () => true,
     })
+    registerSettingsContribution({
+      moduleId: 'mod',
+      id: 'mod.later',
+      localId: 'later',
+      scope: 'purdex',
+      order: 10,
+      labelKey: 'Later',
+      component: FakeComp,
+    })
 
     render(<SettingsSidebar activeSection="appearance" onSelectSection={vi.fn()} />)
     const labels = Array.from(document.querySelectorAll('[data-section]')).map((el) =>
       el.querySelector('span')?.textContent?.trim(),
     )
-    // order: appearance(0) → gated(5) → reserved(10)
-    expect(labels).toEqual(['Appearance', 'GatedLabel', 'Reserved'])
+    // order: appearance(0) → gated(5) → later(10)
+    expect(labels).toEqual(['Appearance', 'GatedLabel', 'Later'])
   })
 })

@@ -23,7 +23,6 @@ import { TerminalSection } from '../components/settings/TerminalSection'
 import { ElectronSection } from '../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../components/settings/DevEnvironmentSection'
 import { TmuxAgentMonitorSection } from '../components/settings/TmuxAgentMonitorSection'
-import { ModuleConfigSection } from '../components/settings/ModuleConfigSection'
 import { SyncSection } from '../components/settings/SyncSection'
 import { FileTreeWorkspaceView } from '../components/FileTreeView'
 import { FileTreeSessionView } from '../components/FileTreeSessionView'
@@ -273,14 +272,7 @@ export function registerBuiltinModules(): void {
     order: 2,
     component: InterfaceSectionHost,
   })
-  registerSettingsSection({ id: 'workspace', label: 'settings.section.workspace', order: 10 }) // reserved
   registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: 11, component: SyncSection })
-  registerSettingsSection({
-    id: 'module-config',
-    label: 'settings.section.modules',
-    order: 8,
-    component: () => <ModuleConfigSection scope="global" />,
-  })
   registerSettingsSection({
     id: 'editor-buffers',
     label: 'settings.section.editor_buffers',

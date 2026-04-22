@@ -14,7 +14,6 @@
   "settings.coming_soon": "即將推出",
   "settings.section.appearance": "外觀",
   "settings.section.terminal": "終端機",
-  "settings.section.workspace": "工作區",
   "settings.section.sync": "同步",
   "settings.sync.description": "在多裝置之間同步設定與工作區。",
   "settings.sync.provider.label": "提供者",
@@ -131,7 +130,6 @@
   "settings.interface.palette_unavailable": "此環境不可用",
   "settings.interface.canvas_drop_here": "拖曳 module 到此",
   "settings.section.agent": "Agent",
-  "settings.section.modules": "模組",
   "settings.section.editor_buffers": "編輯器暫存",
 
   "settings.agent.title": "Agent",

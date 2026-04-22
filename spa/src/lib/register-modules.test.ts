@@ -17,7 +17,6 @@ import { clearNewTabRegistry, getNewTabProviders } from './new-tab-registry'
 import {
   clearSettingsSectionRegistry,
   getSettingsSections,
-  listReservedItems,
   registerSettingsSection,
 } from './settings-section-registry'
 import { clearInterfaceSubsectionRegistry, getInterfaceSubsections } from './interface-subsection-registry'
@@ -316,25 +315,34 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
       .filter((c) => c.moduleId === '_builtin.legacy-section')
       .map((c) => c.localId)
 
-    // Core legacy set always present (no caps gating). Exact membership:
-    // appearance / terminal / interface / sync / module-config /
-    // editor-buffers. Electron / dev-environment / tmux-agent-monitor are
-    // gated by PlatformCapabilities / import.meta.env.DEV.
-    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'module-config', 'editor-buffers']) {
+    // Core legacy set always present (no caps gating). Exact membership
+    // after PR-3 (reserved `workspace` and global `module-config` removed):
+    // appearance / terminal / interface / sync / editor-buffers.
+    // Electron / dev-environment / tmux-agent-monitor are gated by
+    // PlatformCapabilities / import.meta.env.DEV.
+    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'editor-buffers']) {
       expect(legacyIds).toContain(id)
     }
-    expect(legacyIds.length).toBeGreaterThanOrEqual(6)
+    expect(legacyIds.length).toBeGreaterThanOrEqual(5)
   })
 
-  it('reserved workspace section stays in listReservedItems, not in the new registry', () => {
+  it('PR-3: reserved workspace section is no longer registered', () => {
     registerBuiltinModules()
-    const reserved = listReservedItems()
-    expect(reserved.map((r) => r.id)).toContain('workspace')
-    // workspace is the only reserved section shipped by register-modules today.
-    expect(reserved).toHaveLength(1)
-    // And it does NOT appear in the new registry under any moduleId.
+    // Removed by PR-3 per plan decision 5a: `workspace` was the sole reserved
+    // entry; after its removal the reserved-items plumbing has been dropped.
     const contribs = listContributions('purdex')
     expect(contribs.find((c) => c.localId === 'workspace')).toBeUndefined()
+    expect(getSettingsSections().find((s) => s.id === 'workspace')).toBeUndefined()
+  })
+
+  it('PR-3: global module-config section is no longer registered', () => {
+    registerBuiltinModules()
+    // Removed by PR-3: no production consumer of globalConfig; legacy
+    // workspaceConfig still renders via ModuleConfigSection inside
+    // WorkspaceSettingsPage directly.
+    const contribs = listContributions('purdex')
+    expect(contribs.find((c) => c.localId === 'module-config')).toBeUndefined()
+    expect(getSettingsSections().find((s) => s.id === 'module-config')).toBeUndefined()
   })
 
   it('dispatch timing: legacy contributions survive repeated dispatches', () => {
@@ -368,11 +376,15 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
   it('getSettingsSections() legacy view stays consistent with new registry', () => {
     registerBuiltinModules()
     const legacyView = getSettingsSections().map((s) => s.id)
-    // Legacy view is the filtered `_builtin.legacy-section.*` entries plus
-    // reserved (component undefined) entries. The set of localIds returned
-    // should cover all the built-in registerSettingsSection calls.
-    for (const id of ['appearance', 'terminal', 'interface', 'workspace', 'sync', 'module-config', 'editor-buffers']) {
+    // Legacy view is the filtered `_builtin.legacy-section.*` entries. After
+    // PR-3 there are no reserved entries and `module-config` is gone, so the
+    // active set returned by getSettingsSections() covers the remaining
+    // always-on built-in registerSettingsSection calls.
+    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'editor-buffers']) {
       expect(legacyView).toContain(id)
     }
+    // Removed by PR-3.
+    expect(legacyView).not.toContain('workspace')
+    expect(legacyView).not.toContain('module-config')
   })
 })

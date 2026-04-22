@@ -50,7 +50,6 @@ describe('SettingsPage', () => {
     clearContributions()
     registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: AppearanceSection })
     registerSettingsSection({ id: 'terminal', label: 'Terminal', order: 1, component: TerminalSection })
-    registerSettingsSection({ id: 'workspace', label: 'Workspace', order: 10 })
     registerSettingsSection({ id: 'sync', label: 'Sync', order: 11, component: SyncStub })
     dispatchSettingsContributions([])
   })
