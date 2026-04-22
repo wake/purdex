@@ -567,10 +567,6 @@ func traceTableExistsTx(tx *sql.Tx, table string) (bool, error) {
 }
 
 func rebuildLegacyTraceStepsTx(tx *sql.Tx) error {
-	cols, err := tableColumnsTx(tx, "agent_trace_steps")
-	if err != nil {
-		return err
-	}
 	stepRows, err := traceTableRowCountTx(tx, "agent_trace_steps")
 	if err != nil {
 		return err
@@ -607,37 +603,37 @@ func rebuildLegacyTraceStepsTx(tx *sql.Tx) error {
 	if err := createTraceStepsTableTx(tx); err != nil {
 		return err
 	}
-	var copyQuery string
-	if cols["seq"] {
-		copyQuery = `
-			INSERT INTO agent_trace_steps (
-				step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
-				agent_type, frame_id, parent_frame_id, event_name, decision, reason,
-				payload_json, before_json, after_json, created_at
-			)
-			SELECT
-				s.step_id,
-				s.chain_id,
-				s.parent_step_id,
-				s.seq,
-				s.kind,
-				s.tmux_session,
-				s.pane_id,
-				s.agent_type,
-				s.frame_id,
-				s.parent_frame_id,
-				s.event_name,
-				s.decision,
-				s.reason,
-				s.payload_json,
-				s.before_json,
-				s.after_json,
-				s.created_at
-			FROM agent_trace_steps_legacy s
-			ORDER BY s.chain_id ASC, s.seq ASC, s.created_at ASC, s.step_id ASC
-		`
-	} else {
-		copyQuery = `
+	// Re-read the legacy column set after rename so the copy query only
+	// references columns that actually exist. PR-1a added 10 Lights columns
+	// and PR-1b-0 added 11 more envelope columns; rebuild must preserve the
+	// actual values on any table that already has them instead of silently
+	// DEFAULT-ing them (which would corrupt deployed Lights history).
+	legacyCols, err := tableColumnsTx(tx, "agent_trace_steps_legacy")
+	if err != nil {
+		return err
+	}
+	copyQuery := buildLegacyTraceStepsCopyQuery(legacyCols)
+	if _, err = tx.Exec(copyQuery); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DROP TABLE agent_trace_steps_legacy`); err != nil {
+		return err
+	}
+	return nil
+}
+
+// buildLegacyTraceStepsCopyQuery composes an INSERT … SELECT that copies every
+// column present on the (now-renamed) legacy steps table into the freshly
+// created agent_trace_steps table. Columns absent on the legacy side are
+// omitted from both lists so SQLite applies the new-schema DEFAULTs (spec §3.5
+// envelope defaults) instead of NULL.
+func buildLegacyTraceStepsCopyQuery(legacyCols map[string]bool) string {
+	// Two very different legacy shapes: pre-PR-1a used step_name/step_index
+	// and did not have a seq column, so we derive the new schema values from
+	// the chains table. Everything after that point keeps the same column
+	// names as the current schema and can be copied 1:1.
+	if !legacyCols["seq"] {
+		return `
 			INSERT INTO agent_trace_steps (
 				step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
 				agent_type, frame_id, parent_frame_id, event_name, decision, reason,
@@ -666,13 +662,53 @@ func rebuildLegacyTraceStepsTx(tx *sql.Tx) error {
 			ORDER BY s.chain_id ASC, s.step_index ASC, s.created_at ASC, s.step_id ASC
 		`
 	}
-	if _, err = tx.Exec(copyQuery); err != nil {
-		return err
+
+	// Core 17 cols — always present on any post-PR-1a schema and always copied.
+	// parent_step_id keeps its nullable-TEXT form (cross-chain parents were
+	// rejected by legacyTraceCrossChainParentCountTx earlier in the rebuild).
+	core := []string{
+		"step_id", "chain_id", "parent_step_id", "seq", "kind",
+		"tmux_session", "pane_id", "agent_type", "frame_id", "parent_frame_id",
+		"event_name", "decision", "reason",
+		"payload_json", "before_json", "after_json", "created_at",
 	}
-	if _, err = tx.Exec(`DROP TABLE agent_trace_steps_legacy`); err != nil {
-		return err
+	// PR-1a Lights cols — preserve if present.
+	pr1aLights := []string{
+		"source_kind", "action", "reason_code", "outcome", "scenario_key",
+		"observed_generation", "decision_ports", "phase", "status", "watcher_token",
 	}
-	return nil
+	// PR-1b-0 envelope cols — preserve if present (robustness path; normally
+	// the rebuild triggers precisely because these are missing).
+	pr1b0Envelope := []string{
+		"trace_id", "reason_text", "attrs", "input_refs", "output_refs",
+		"state_before_ref", "state_after_ref", "evidence_refs",
+		"started_at", "ended_at", "otel_kind",
+	}
+
+	columns := make([]string, 0, len(core)+len(pr1aLights)+len(pr1b0Envelope))
+	columns = append(columns, core...)
+	for _, c := range pr1aLights {
+		if legacyCols[c] {
+			columns = append(columns, c)
+		}
+	}
+	for _, c := range pr1b0Envelope {
+		if legacyCols[c] {
+			columns = append(columns, c)
+		}
+	}
+
+	selectCols := make([]string, len(columns))
+	for i, c := range columns {
+		selectCols[i] = "s." + c
+	}
+
+	return fmt.Sprintf(`
+		INSERT INTO agent_trace_steps (%s)
+		SELECT %s
+		FROM agent_trace_steps_legacy s
+		ORDER BY s.chain_id ASC, s.seq ASC, s.created_at ASC, s.step_id ASC
+	`, strings.Join(columns, ", "), strings.Join(selectCols, ", "))
 }
 
 func traceTableRowCountTx(tx *sql.Tx, table string) (int, error) {

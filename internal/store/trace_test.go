@@ -617,6 +617,340 @@ func TestRebuildLegacyTraceSteps_BlocksCrossChainParent(t *testing.T) {
 	}
 }
 
+// TestRebuildLegacyTraceSteps_PreservesPR1aLightsColumns seeds a legacy table
+// carrying the PR-1a Lights columns (source_kind/action/reason_code/outcome/
+// scenario_key/observed_generation/decision_ports/phase/status/watcher_token)
+// and verifies that PR-1b-0's rebuild preserves their actual values instead of
+// resetting them to DEFAULT. Previous rebuild query only copied the original
+// 17 columns, which silently corrupted every deployed Lights row whenever the
+// migration triggered (e.g. any schema drift that flipped needsStepRebuildTx).
+func TestRebuildLegacyTraceSteps_PreservesPR1aLightsColumns(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	// Seed chains + a "PR-1a schema" steps table: 17 legacy cols + 10 PR-1a
+	// Lights cols, but WITHOUT the composite FK and WITHOUT the PR-1b-0
+	// envelope cols. This matches what any daemon pinned at PR-1a would see.
+	if err := createTraceChainsTable(s.db); err != nil {
+		t.Fatalf("create chains: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		CREATE TABLE agent_trace_steps (
+			step_id             TEXT PRIMARY KEY,
+			chain_id            TEXT NOT NULL,
+			parent_step_id      TEXT,
+			seq                 INTEGER NOT NULL,
+			kind                TEXT NOT NULL DEFAULT '',
+			tmux_session        TEXT NOT NULL DEFAULT '',
+			pane_id             TEXT NOT NULL DEFAULT '',
+			agent_type          TEXT NOT NULL DEFAULT '',
+			frame_id            TEXT NOT NULL DEFAULT '',
+			parent_frame_id     TEXT NOT NULL DEFAULT '',
+			event_name          TEXT NOT NULL DEFAULT '',
+			decision            TEXT NOT NULL DEFAULT '',
+			reason              TEXT NOT NULL DEFAULT '',
+			payload_json        TEXT NOT NULL DEFAULT 'null',
+			before_json         TEXT NOT NULL DEFAULT 'null',
+			after_json          TEXT NOT NULL DEFAULT 'null',
+			created_at          INTEGER NOT NULL DEFAULT 0,
+			source_kind         TEXT NOT NULL DEFAULT '',
+			action              TEXT NOT NULL DEFAULT '',
+			reason_code         TEXT NOT NULL DEFAULT '',
+			outcome             TEXT NOT NULL DEFAULT '',
+			scenario_key        TEXT NOT NULL DEFAULT '',
+			observed_generation INTEGER NOT NULL DEFAULT 0,
+			decision_ports      TEXT NOT NULL DEFAULT '[]',
+			phase               TEXT NOT NULL DEFAULT '',
+			status              TEXT NOT NULL DEFAULT '',
+			watcher_token       TEXT,
+			FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
+			FOREIGN KEY (parent_step_id) REFERENCES agent_trace_steps(step_id) ON DELETE SET NULL
+		)
+	`); err != nil {
+		t.Fatalf("create PR-1a steps: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, started_at, completed_at, terminal_status, terminal_reason,
+			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
+			latest_step_kind, latest_decision, latest_step_reason, step_count, updated_at
+		) VALUES
+		('chain-pr1a', 10, 20, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 1, 20)
+	`); err != nil {
+		t.Fatalf("seed chain: %v", err)
+	}
+	// Populate every PR-1a Lights column with a non-default value so we can
+	// detect any DEFAULT-clobber after rebuild.
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_steps (
+			step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+			agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+			payload_json, before_json, after_json, created_at,
+			source_kind, action, reason_code, outcome, scenario_key,
+			observed_generation, decision_ports, phase, status, watcher_token
+		) VALUES
+		('pr1a-1', 'chain-pr1a', NULL, 1, 'terminal', 'proj-a', '%1', 'cc', 'frame-1', 'frame-0',
+		 'Stop', 'done', 'completed',
+		 '{"x":1}', '{"b":1}', '{"a":1}', 15,
+		 'hook', 'terminal:done', 'completed', 'emitted', 'Stop',
+		 42, '[{"port":"statusline","decision":"ok"}]', 'committed', 'success', 'watcher-123')
+	`); err != nil {
+		t.Fatalf("seed step: %v", err)
+	}
+
+	// Trigger migrate: missing PR-1b-0 cols make needsStepRebuildTx return true
+	// and rebuild the table.
+	if _, err := s.Traces(); err != nil {
+		t.Fatalf("Traces migrate: %v", err)
+	}
+
+	store := &TraceStore{db: s.db, maxChains: 10, maxSteps: 10}
+	rec, err := store.GetChainRecord("chain-pr1a")
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if rec == nil || len(rec.Steps) != 1 {
+		t.Fatalf("rec = %+v", rec)
+	}
+	step := rec.Steps[0]
+	if step.SourceKind != "hook" {
+		t.Fatalf("source_kind = %q, want hook (rebuild clobbered)", step.SourceKind)
+	}
+	if step.Action != "terminal:done" {
+		t.Fatalf("action = %q, want terminal:done", step.Action)
+	}
+	if step.ReasonCode != "completed" {
+		t.Fatalf("reason_code = %q, want completed", step.ReasonCode)
+	}
+	if step.Outcome != "emitted" {
+		t.Fatalf("outcome = %q, want emitted", step.Outcome)
+	}
+	if step.ScenarioKey != "Stop" {
+		t.Fatalf("scenario_key = %q, want Stop", step.ScenarioKey)
+	}
+	if step.ObservedGeneration != 42 {
+		t.Fatalf("observed_generation = %d, want 42", step.ObservedGeneration)
+	}
+	if string(step.DecisionPorts) != `[{"port":"statusline","decision":"ok"}]` {
+		t.Fatalf("decision_ports = %s", string(step.DecisionPorts))
+	}
+	if step.Phase != "committed" {
+		t.Fatalf("phase = %q, want committed", step.Phase)
+	}
+	if step.Status != "success" {
+		t.Fatalf("status = %q, want success", step.Status)
+	}
+	if step.WatcherToken == nil || *step.WatcherToken != "watcher-123" {
+		t.Fatalf("watcher_token = %v, want watcher-123", step.WatcherToken)
+	}
+	// New PR-1b-0 cols absent from legacy table fall back to DEFAULTs.
+	if step.TraceID != "" || step.ReasonText != "" || step.StateBeforeRef != "" || step.StateAfterRef != "" || step.OTelKind != "" {
+		t.Fatalf("pr1b0 string cols must default to empty, got %+v", step)
+	}
+	if step.StartedAt != 0 || step.EndedAt != 0 {
+		t.Fatalf("pr1b0 timestamp defaults wrong: %d/%d", step.StartedAt, step.EndedAt)
+	}
+	if string(step.Attrs) != `{}` || string(step.InputRefs) != `[]` || string(step.OutputRefs) != `[]` || string(step.EvidenceRefs) != `[]` {
+		t.Fatalf("pr1b0 json defaults wrong: %s / %s / %s / %s",
+			string(step.Attrs), string(step.InputRefs), string(step.OutputRefs), string(step.EvidenceRefs))
+	}
+}
+
+// TestRebuildLegacyTraceSteps_PreservesAllLightsColumnsEvenIfFullSchemaExists
+// covers the robustness scenario where a legacy twin ends up with the full
+// PR-1b-0 schema (38 cols). Although this should never happen in practice
+// because needsStepRebuildTx also triggers on the missing composite FK, the
+// rebuild must still preserve every populated field instead of DEFAULT-ing it.
+func TestRebuildLegacyTraceSteps_PreservesAllLightsColumnsEvenIfFullSchemaExists(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	if err := createTraceChainsTable(s.db); err != nil {
+		t.Fatalf("create chains: %v", err)
+	}
+	// Full PR-1b-0 steps table but without the composite FK, so
+	// hasStepParentCompositeFKTx returns false and needsStepRebuildTx triggers
+	// a rebuild.
+	if _, err := s.db.Exec(`
+		CREATE TABLE agent_trace_steps (
+			step_id             TEXT PRIMARY KEY,
+			chain_id            TEXT NOT NULL,
+			parent_step_id      TEXT,
+			seq                 INTEGER NOT NULL,
+			kind                TEXT NOT NULL DEFAULT '',
+			tmux_session        TEXT NOT NULL DEFAULT '',
+			pane_id             TEXT NOT NULL DEFAULT '',
+			agent_type          TEXT NOT NULL DEFAULT '',
+			frame_id            TEXT NOT NULL DEFAULT '',
+			parent_frame_id     TEXT NOT NULL DEFAULT '',
+			event_name          TEXT NOT NULL DEFAULT '',
+			decision            TEXT NOT NULL DEFAULT '',
+			reason              TEXT NOT NULL DEFAULT '',
+			payload_json        TEXT NOT NULL DEFAULT 'null',
+			before_json         TEXT NOT NULL DEFAULT 'null',
+			after_json          TEXT NOT NULL DEFAULT 'null',
+			created_at          INTEGER NOT NULL DEFAULT 0,
+			source_kind         TEXT NOT NULL DEFAULT '',
+			action              TEXT NOT NULL DEFAULT '',
+			reason_code         TEXT NOT NULL DEFAULT '',
+			outcome             TEXT NOT NULL DEFAULT '',
+			scenario_key        TEXT NOT NULL DEFAULT '',
+			observed_generation INTEGER NOT NULL DEFAULT 0,
+			decision_ports      TEXT NOT NULL DEFAULT '[]',
+			phase               TEXT NOT NULL DEFAULT '',
+			status              TEXT NOT NULL DEFAULT '',
+			watcher_token       TEXT,
+			trace_id            TEXT NOT NULL DEFAULT '',
+			reason_text         TEXT NOT NULL DEFAULT '',
+			attrs               TEXT NOT NULL DEFAULT '{}',
+			input_refs          TEXT NOT NULL DEFAULT '[]',
+			output_refs         TEXT NOT NULL DEFAULT '[]',
+			state_before_ref    TEXT NOT NULL DEFAULT '',
+			state_after_ref     TEXT NOT NULL DEFAULT '',
+			evidence_refs       TEXT NOT NULL DEFAULT '[]',
+			started_at          INTEGER NOT NULL DEFAULT 0,
+			ended_at            INTEGER NOT NULL DEFAULT 0,
+			otel_kind           TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY (chain_id) REFERENCES agent_trace_chains(chain_id) ON DELETE CASCADE,
+			FOREIGN KEY (parent_step_id) REFERENCES agent_trace_steps(step_id) ON DELETE SET NULL
+		)
+	`); err != nil {
+		t.Fatalf("create full steps: %v", err)
+	}
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_chains (
+			chain_id, started_at, completed_at, terminal_status, terminal_reason,
+			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
+			latest_step_kind, latest_decision, latest_step_reason, step_count, updated_at
+		) VALUES
+		('chain-full', 10, 20, 'done', 'ok', 'proj-a', '%1', 'cc', 'Stop', 'root', 'terminal', 'done', 'ok', 1, 20)
+	`); err != nil {
+		t.Fatalf("seed chain: %v", err)
+	}
+	traceID := uuid.NewString()
+	if _, err := s.db.Exec(`
+		INSERT INTO agent_trace_steps (
+			step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id,
+			agent_type, frame_id, parent_frame_id, event_name, decision, reason,
+			payload_json, before_json, after_json, created_at,
+			source_kind, action, reason_code, outcome, scenario_key,
+			observed_generation, decision_ports, phase, status, watcher_token,
+			trace_id, reason_text, attrs, input_refs, output_refs,
+			state_before_ref, state_after_ref, evidence_refs,
+			started_at, ended_at, otel_kind
+		) VALUES
+		('full-1', 'chain-full', NULL, 1, 'terminal', 'proj-a', '%1', 'cc', 'frame-1', 'frame-0',
+		 'Stop', 'done', 'completed',
+		 '{"x":1}', '{"b":1}', '{"a":1}', 15,
+		 'hook', 'terminal:done', 'completed', 'emitted', 'Stop',
+		 42, '[{"port":"statusline","decision":"ok"}]', 'committed', 'success', 'watcher-123',
+		 ?, 'reason-text', '{"hook":"post"}', '[{"kind":"event"}]', '[{"kind":"frame"}]',
+		 'snap:before', 'snap:after', '[{"source":"tmux"}]',
+		 101, 102, 'internal')
+	`, traceID); err != nil {
+		t.Fatalf("seed step: %v", err)
+	}
+
+	if _, err := s.Traces(); err != nil {
+		t.Fatalf("Traces migrate: %v", err)
+	}
+
+	store := &TraceStore{db: s.db, maxChains: 10, maxSteps: 10}
+	rec, err := store.GetChainRecord("chain-full")
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if rec == nil || len(rec.Steps) != 1 {
+		t.Fatalf("rec = %+v", rec)
+	}
+	step := rec.Steps[0]
+	// PR-1a cols.
+	if step.SourceKind != "hook" || step.Action != "terminal:done" || step.ReasonCode != "completed" ||
+		step.Outcome != "emitted" || step.ScenarioKey != "Stop" || step.Phase != "committed" || step.Status != "success" {
+		t.Fatalf("pr1a cols wrong: %+v", step)
+	}
+	if step.ObservedGeneration != 42 {
+		t.Fatalf("observed_generation = %d", step.ObservedGeneration)
+	}
+	if string(step.DecisionPorts) != `[{"port":"statusline","decision":"ok"}]` {
+		t.Fatalf("decision_ports = %s", string(step.DecisionPorts))
+	}
+	if step.WatcherToken == nil || *step.WatcherToken != "watcher-123" {
+		t.Fatalf("watcher_token = %v", step.WatcherToken)
+	}
+	// PR-1b-0 cols.
+	if step.TraceID != traceID {
+		t.Fatalf("trace_id = %q, want %q", step.TraceID, traceID)
+	}
+	if step.ReasonText != "reason-text" {
+		t.Fatalf("reason_text = %q", step.ReasonText)
+	}
+	if string(step.Attrs) != `{"hook":"post"}` {
+		t.Fatalf("attrs = %s", string(step.Attrs))
+	}
+	if string(step.InputRefs) != `[{"kind":"event"}]` || string(step.OutputRefs) != `[{"kind":"frame"}]` {
+		t.Fatalf("ref cols wrong: %s / %s", string(step.InputRefs), string(step.OutputRefs))
+	}
+	if step.StateBeforeRef != "snap:before" || step.StateAfterRef != "snap:after" {
+		t.Fatalf("state refs = %q / %q", step.StateBeforeRef, step.StateAfterRef)
+	}
+	if string(step.EvidenceRefs) != `[{"source":"tmux"}]` {
+		t.Fatalf("evidence_refs = %s", string(step.EvidenceRefs))
+	}
+	if step.StartedAt != 101 || step.EndedAt != 102 {
+		t.Fatalf("started/ended = %d/%d", step.StartedAt, step.EndedAt)
+	}
+	if step.OTelKind != "internal" {
+		t.Fatalf("otel_kind = %q", step.OTelKind)
+	}
+}
+
+// TestRebuildLegacyTraceSteps_OldSchemaOnlyStillRestores confirms the
+// pre-PR-1a legacy schema (step_name/step_index, no Lights cols) still
+// rebuilds cleanly with every Lights field left at its DEFAULT — the existing
+// TestTraceStore_MigratesLegacy* tests cover behaviour, this adds an explicit
+// assertion on the Lights defaults after rebuild.
+func TestRebuildLegacyTraceSteps_OldSchemaOnlyStillRestores(t *testing.T) {
+	s := openTestAgentEventStore(t)
+	seedLegacyTraceSchema(t, s.db)
+	seedLegacyTraceData(t, s.db)
+
+	if _, err := s.Traces(); err != nil {
+		t.Fatalf("Traces migrate: %v", err)
+	}
+
+	store := &TraceStore{db: s.db, maxChains: 10, maxSteps: 10}
+	rec, err := store.GetChainRecord("legacy-chain")
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if rec == nil || len(rec.Steps) != 2 {
+		t.Fatalf("rec = %+v", rec)
+	}
+	for _, step := range rec.Steps {
+		if step.SourceKind != "" || step.Action != "" || step.Phase != "" || step.Status != "" ||
+			step.Outcome != "" || step.ScenarioKey != "" || step.ReasonCode != "" {
+			t.Fatalf("legacy schema rebuild must default PR-1a Lights cols, got %+v", step)
+		}
+		if step.ObservedGeneration != 0 {
+			t.Fatalf("observed_generation default = %d", step.ObservedGeneration)
+		}
+		if string(step.DecisionPorts) != `[]` {
+			t.Fatalf("decision_ports default = %s", string(step.DecisionPorts))
+		}
+		if step.WatcherToken != nil {
+			t.Fatalf("watcher_token = %v, want nil", step.WatcherToken)
+		}
+		if step.TraceID != "" || step.ReasonText != "" || step.OTelKind != "" ||
+			step.StateBeforeRef != "" || step.StateAfterRef != "" {
+			t.Fatalf("legacy schema rebuild must default PR-1b-0 envelope string cols, got %+v", step)
+		}
+		if step.StartedAt != 0 || step.EndedAt != 0 {
+			t.Fatalf("legacy schema rebuild must default envelope timestamps, got %d/%d", step.StartedAt, step.EndedAt)
+		}
+		if string(step.Attrs) != `{}` || string(step.InputRefs) != `[]` || string(step.OutputRefs) != `[]` || string(step.EvidenceRefs) != `[]` {
+			t.Fatalf("legacy schema rebuild must default PR-1b-0 json cols, got %s / %s / %s / %s",
+				string(step.Attrs), string(step.InputRefs), string(step.OutputRefs), string(step.EvidenceRefs))
+		}
+	}
+}
+
 // TestMigrateTraceDB_ResumableIfLegacyTableRemains ensures a second Traces()
 // call after a crash-interrupted migration (legacy rename committed, new table
 // not yet populated) surfaces the stale state as an error rather than silently
