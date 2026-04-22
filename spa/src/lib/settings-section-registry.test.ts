@@ -243,7 +243,11 @@ describe('settings-section-registry', () => {
     expect(listReservedItems()).toEqual([])
   })
 
-  it('cross-id guard: module-declared and legacy with same localId coexist (different moduleIds)', () => {
+  it('cross-id guard (F1): module-declared and legacy with same localId under same scope throws', () => {
+    // Per F1 dispatch invariant: within a scope, localId must be unique across
+    // modules — the shell uses localId as URL/selection/React key, so two
+    // contributions with the same localId (regardless of differing moduleId
+    // prefixes) are ambiguous at the UI layer.
     registerModule({
       id: 'foo',
       name: 'Foo',
@@ -252,9 +256,13 @@ describe('settings-section-registry', () => {
       ],
     })
     registerSettingsSection({ id: 'appearance', label: 'legacy', order: 0, component: FakeComponent2 })
-    expect(() => dispatchSettingsContributions()).not.toThrow()
-    const ids = listContributions('purdex').map((c) => c.id)
-    expect(ids).toContain('foo.appearance')
-    expect(ids).toContain('_builtin.legacy-section.appearance')
+    let thrown: Error | undefined
+    try {
+      dispatchSettingsContributions()
+    } catch (e) {
+      thrown = e as Error
+    }
+    expect(thrown).toBeDefined()
+    expect(thrown!.message).toMatch(/localId "appearance"/)
   })
 })

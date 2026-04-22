@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { clearModuleRegistry, registerModule, type ModuleDefinition } from './module-registry'
 import { clearContributions, listContributions } from './settings-contribution-registry'
 import { dispatchSettingsContributions } from './dispatch-settings-contributions'
-import { drainLegacyContributionQueue } from './settings-section-registry'
+import {
+  drainLegacyContributionQueue,
+  registerSettingsSection,
+  clearLegacyPending,
+} from './settings-section-registry'
 
 const FakeComponent = () => null
 
@@ -11,6 +15,7 @@ function resetRegistries() {
   clearContributions()
   // Drain any leftover legacy pending buffer from previous tests.
   drainLegacyContributionQueue()
+  clearLegacyPending()
 }
 
 describe('dispatchSettingsContributions', () => {
@@ -70,5 +75,124 @@ describe('dispatchSettingsContributions', () => {
     expect(listContributions('purdex')).toEqual([])
     expect(listContributions('host')).toEqual([])
     expect(listContributions('workspace')).toEqual([])
+  })
+
+  // --- F1: per-scope localId uniqueness at dispatch -----------------------
+
+  describe('F1: per-scope localId uniqueness', () => {
+    it('throws when two modules declare the same localId under the same scope', () => {
+      registerModule({
+        id: 'moduleA',
+        name: 'Module A',
+        settings: [
+          { localId: 'general', scope: 'purdex', order: 0, labelKey: 'a.general', component: FakeComponent },
+        ],
+      })
+      registerModule({
+        id: 'moduleB',
+        name: 'Module B',
+        settings: [
+          { localId: 'general', scope: 'purdex', order: 1, labelKey: 'b.general', component: FakeComponent },
+        ],
+      })
+
+      // Error must name both sources so the author can locate them.
+      let thrown: Error | undefined
+      try {
+        dispatchSettingsContributions()
+      } catch (e) {
+        thrown = e as Error
+      }
+      expect(thrown).toBeDefined()
+      expect(thrown!.message).toMatch(/localId "general"/)
+      expect(thrown!.message).toMatch(/purdex/)
+      expect(thrown!.message).toMatch(/moduleA\.general/)
+      expect(thrown!.message).toMatch(/moduleB\.general/)
+    })
+
+    it('throws when a legacy section collides with a module-declared localId in purdex scope', () => {
+      registerModule({
+        id: 'foo',
+        name: 'Foo',
+        settings: [
+          { localId: 'appearance', scope: 'purdex', order: 0, labelKey: 'foo.appearance', component: FakeComponent },
+        ],
+      })
+      registerSettingsSection({ id: 'appearance', label: 'Legacy', order: 0, component: FakeComponent })
+
+      let thrown: Error | undefined
+      try {
+        dispatchSettingsContributions()
+      } catch (e) {
+        thrown = e as Error
+      }
+      expect(thrown).toBeDefined()
+      expect(thrown!.message).toMatch(/localId "appearance"/)
+      expect(thrown!.message).toMatch(/purdex/)
+    })
+
+    it('does NOT throw when same localId appears under different scopes', () => {
+      registerModule({
+        id: 'moduleA',
+        name: 'Module A',
+        settings: [
+          { localId: 'general', scope: 'purdex', order: 0, labelKey: 'a.general', component: FakeComponent },
+        ],
+      })
+      registerModule({
+        id: 'moduleB',
+        name: 'Module B',
+        settings: [
+          { localId: 'general', scope: 'host', order: 0, labelKey: 'b.general', component: FakeComponent },
+        ],
+      })
+
+      expect(() => dispatchSettingsContributions()).not.toThrow()
+      expect(listContributions('purdex').map((c) => c.id)).toEqual(['moduleA.general'])
+      expect(listContributions('host').map((c) => c.id)).toEqual(['moduleB.general'])
+    })
+
+    it('does NOT throw when different localIds coexist under the same scope', () => {
+      registerModule({
+        id: 'moduleA',
+        name: 'Module A',
+        settings: [
+          { localId: 'general', scope: 'purdex', order: 0, labelKey: 'a.general', component: FakeComponent },
+          { localId: 'advanced', scope: 'purdex', order: 1, labelKey: 'a.advanced', component: FakeComponent },
+        ],
+      })
+
+      expect(() => dispatchSettingsContributions()).not.toThrow()
+      expect(listContributions('purdex').map((c) => c.localId)).toEqual(['general', 'advanced'])
+    })
+
+    it('leaves registry state unchanged when a localId collision throws', () => {
+      registerModule({
+        id: 'moduleA',
+        name: 'Module A',
+        settings: [
+          { localId: 'general', scope: 'purdex', order: 0, labelKey: 'a.general', component: FakeComponent },
+        ],
+      })
+      registerModule({
+        id: 'moduleB',
+        name: 'Module B',
+        settings: [
+          { localId: 'general', scope: 'purdex', order: 1, labelKey: 'b.general', component: FakeComponent },
+        ],
+      })
+
+      let thrown: Error | undefined
+      try {
+        dispatchSettingsContributions()
+      } catch (e) {
+        thrown = e as Error
+      }
+      expect(thrown).toBeDefined()
+      // No partial write — nothing registered at all.
+      expect(listContributions('purdex')).toEqual([])
+      expect(listContributions('host')).toEqual([])
+      expect(listContributions('workspace')).toEqual([])
+    })
   })
 })
