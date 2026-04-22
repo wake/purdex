@@ -159,9 +159,9 @@ func TestBuilder_InvalidPhase_Error(t *testing.T) {
 	}
 }
 
-// ── 8: Missing ObservedAt ────────────────────────────────────────────────────
+// ── 8: Zero ObservedAt ───────────────────────────────────────────────────────
 
-func TestBuilder_MissingObservedAt_Error(t *testing.T) {
+func TestBuilder_ZeroObservedAt_Error(t *testing.T) {
 	_, err := minimalBuilder().ObservedAt(time.Time{}).Build()
 	if err == nil {
 		t.Fatal("Build() error = nil; want ErrMissingRequiredField")
@@ -171,6 +171,32 @@ func TestBuilder_MissingObservedAt_Error(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "observed_at") {
 		t.Errorf("err.Error() = %q; want to contain %q", err.Error(), "observed_at")
+	}
+}
+
+// ── 8b: No-proposal case (zero Proposal.ActorKey with non-zero SessionID/Generation)
+//
+// Reconcile-only observations (spec §3.4.5) emit trace without a proposal.
+// Zero ActorKey must skip mismatch checks even when SessionID/ObservedGeneration
+// on the observation are non-zero. This guards against the comment in builder.go
+// becoming a regression over time.
+
+func TestBuilder_NoProposal_OK(t *testing.T) {
+	obs, err := observation.NewBuilder().
+		TraceID("trace-reconcile").
+		SessionID("sess-abc").
+		SourceKind(observation.SourceReconcile).
+		Action("actor.stale_detected").
+		Phase(observation.PhaseProposed).
+		ObservedGeneration(5).
+		ObservedAt(time.Now()).
+		Build()
+
+	if err != nil {
+		t.Fatalf("Build() error = %v; want nil (no-proposal path)", err)
+	}
+	if (obs.Proposal.ActorKey != observation.ActorKey{}) {
+		t.Errorf("Proposal.ActorKey = %+v; want zero", obs.Proposal.ActorKey)
 	}
 }
 

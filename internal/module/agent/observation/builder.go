@@ -177,7 +177,11 @@ func (b *Builder) Build() (Observation, error) {
 		return Observation{}, ErrMissingWatcherToken
 	}
 
-	// --- ActorKey consistency (only when Proposal.ActorKey is non-zero) ---
+	// --- ActorKey consistency ---
+	// Zero ActorKey means "no proposal attached" — reconcile-only observations
+	// emit trace without a proposal target (spec §3.4.5: stale_detected trace with
+	// no actor mutation). Non-zero ActorKey MUST align with the observation's
+	// SessionID + ObservedGeneration per D3.
 	ak := b.obs.Proposal.ActorKey
 	if ak != (ActorKey{}) {
 		if ak.SessionID != b.obs.SessionID {
