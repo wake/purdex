@@ -5,6 +5,7 @@ import {
   registerSettingsContribution,
 } from './settings-contribution-registry'
 import {
+  clearLegacyPending,
   drainLegacyContributionQueue,
   peekLegacyContributionQueue,
 } from './settings-section-registry'
@@ -161,4 +162,20 @@ export function dispatchSettingsContributions(
   for (const contribution of batch) {
     registerSettingsContribution(contribution)
   }
+}
+
+/**
+ * HMR dispose helper — clears BOTH the committed contribution registry
+ * AND the legacy adapter's pending buffers, so the next module
+ * registration starts from a clean slate across HMR re-runs (F2).
+ *
+ * Consolidated here (rather than calling the two write APIs directly from
+ * `register-modules.tsx`) so the ESLint `no-restricted-imports` rule (F4)
+ * can keep `clearContributions` off the public surface. This is the
+ * canonical single entry point for HMR cleanup of settings contribution
+ * state.
+ */
+export function resetSettingsContributionsForHmr(): void {
+  clearContributions()
+  clearLegacyPending()
 }
