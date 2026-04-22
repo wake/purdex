@@ -99,6 +99,18 @@ func (m *Module) Dependencies() []string { return []string{"session"} }
 // and registers CC and Codex providers.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+
+	// Build arbmode Manager + handler BEFORE the session-provider check so the
+	// /api/agent/arbitrator/mode endpoint is always available even in the
+	// degraded path where session provider is missing. arbmode has no session
+	// dependency.
+	c.CfgMu.RLock()
+	initialArbMode := c.Cfg.Agent.ArbMode
+	c.CfgMu.RUnlock()
+	m.arbmodeMgr = arbmode.NewManager(os.Getenv("AGENT_ARB_MODE"), initialArbMode)
+	m.arbmodeHandler = arbmode.NewHandler(m.arbmodeMgr)
+	c.Registry.Register("agent.arbmode.manager", m.arbmodeMgr)
+
 	svc, ok := c.Registry.Get(session.RegistryKey)
 	if !ok {
 		log.Printf("[agent] warning: session provider not found")
@@ -130,14 +142,6 @@ func (m *Module) Init(c *core.Core) error {
 	m.prober.RegisterReadiness(codexProvider.Type(), codex.NewReadinessChecker(c.Tmux))
 	c.Registry.Register("agent.prober", m.prober)
 
-	// arbmode: env > config > default (passthrough)
-	c.CfgMu.RLock()
-	initialArbMode := c.Cfg.Agent.ArbMode
-	c.CfgMu.RUnlock()
-	m.arbmodeMgr = arbmode.NewManager(os.Getenv("AGENT_ARB_MODE"), initialArbMode)
-	m.arbmodeHandler = arbmode.NewHandler(m.arbmodeMgr)
-	c.Registry.Register("agent.arbmode.manager", m.arbmodeMgr)
-
 	// Listen for config changes to update mutable module state.
 	c.OnConfigChange(func() {
 		c.CfgMu.RLock()
@@ -149,9 +153,7 @@ func (m *Module) Init(c *core.Core) error {
 			m.uploadDir = newDir
 			m.mu.Unlock()
 		}
-		if m.arbmodeMgr != nil {
-			m.arbmodeMgr.OnConfigChange(newArbMode)
-		}
+		m.arbmodeMgr.OnConfigChange(newArbMode)
 	})
 
 	// Codex provider

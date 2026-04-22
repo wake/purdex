@@ -74,14 +74,17 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Validate agent.arb_mode if provided.
-	if req.Agent != nil && req.Agent.ArbMode != nil && *req.Agent.ArbMode != "" {
+	// Validate agent.arb_mode if provided. Empty string is accepted as "reset to
+	// default" — the arbmode Manager handles empty by falling back to passthrough.
+	// We duplicate the enum literals here rather than import arbmode.IsValid()
+	// because internal/core is a lower layer than internal/module/agent.
+	if req.Agent != nil && req.Agent.ArbMode != nil {
 		switch *req.Agent.ArbMode {
-		case "passthrough", "authoritative":
+		case "", "passthrough", "authoritative":
 			// valid
 		default:
 			c.CfgMu.Unlock()
-			http.Error(w, "invalid agent.arb_mode: must be passthrough or authoritative", http.StatusBadRequest)
+			http.Error(w, "invalid agent.arb_mode: must be passthrough or authoritative (or empty to reset)", http.StatusBadRequest)
 			return
 		}
 	}
@@ -120,8 +123,10 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		c.Cfg.UploadDir = *req.UploadDir
 	}
 
+	agentChanged := false
 	if req.Agent != nil && req.Agent.ArbMode != nil {
 		c.Cfg.Agent.ArbMode = *req.Agent.ArbMode
+		agentChanged = true
 	}
 
 	// Write back to config file
@@ -139,7 +144,7 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.Unlock()
 
 	// Notify registered callbacks about config changes (outside lock)
-	if detectChanged || req.UploadDir != nil || req.Agent != nil {
+	if detectChanged || req.UploadDir != nil || agentChanged {
 		c.NotifyConfigChange()
 	}
 

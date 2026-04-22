@@ -300,6 +300,50 @@ func TestPutConfig_Agent_ArbMode_TriggersOnConfigChange(t *testing.T) {
 	c.CfgMu.RUnlock()
 }
 
+// Empty arb_mode is accepted as "reset to default" — arbmode.Manager handles
+// the empty string by falling back to ModePassthrough. Validation + mutation
+// must stay symmetric, so this path is explicitly tested.
+func TestPutConfig_Agent_ArbMode_EmptyString_Accepted(t *testing.T) {
+	c := newTestCore()
+
+	var callbackCalled int
+	c.OnConfigChange(func() {
+		callbackCalled++
+	})
+
+	body := `{"agent":{"arb_mode":""}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 1, callbackCalled, "empty value counts as an agent change")
+
+	c.CfgMu.RLock()
+	assert.Equal(t, "", c.Cfg.Agent.ArbMode)
+	c.CfgMu.RUnlock()
+}
+
+// When the PUT body has `{"agent":{}}` (agent key present but arb_mode absent),
+// nothing actually changes — NotifyConfigChange must NOT fire, otherwise all
+// OnConfigChange subscribers get woken up for nothing.
+func TestPutConfig_Agent_Empty_DoesNotTriggerOnConfigChange(t *testing.T) {
+	c := newTestCore()
+
+	var callbackCalled int
+	c.OnConfigChange(func() {
+		callbackCalled++
+	})
+
+	body := `{"agent":{}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 0, callbackCalled, "no-op PUT must not trigger OnConfigChange")
+}
+
 func TestRegisterCoreRoutesIncludesConfigEndpoints(t *testing.T) {
 	c := newTestCore()
 	mux := http.NewServeMux()
