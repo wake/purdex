@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 
 vi.mock('../../lib/storage/sync', () => ({
   syncManager: { register: vi.fn(), notify: vi.fn(), destroy: vi.fn() },
@@ -106,5 +106,30 @@ describe('EditorHomePathWorkspaceSection', () => {
     fireEvent.change(input, { target: { value: '' } })
     fireEvent.blur(input)
     expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toEqual({ wrap: true })
+  })
+
+  it('does not clobber the draft while focused when store syncs externally (R2 codex)', () => {
+    useWorkspaceSettingsStore.getState().set('wsA', 'editor', { homePath: '/Users/old' })
+    render(<EditorHomePathWorkspaceSection ctx={ctx} />)
+    const input = screen.getByLabelText(/home path/i) as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '/Users/draft' } })
+    act(() => {
+      useWorkspaceSettingsStore.getState().set('wsA', 'editor', { homePath: '/Users/external' })
+    })
+    expect(input.value).toBe('/Users/draft')
+  })
+
+  it('commit() reads the latest store value, not the render-time snapshot (R2 codex)', () => {
+    useWorkspaceSettingsStore.getState().set('wsA', 'editor', { homePath: '/Users/old' })
+    render(<EditorHomePathWorkspaceSection ctx={ctx} />)
+    const input = screen.getByLabelText(/home path/i) as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '/Users/new' } })
+    act(() => {
+      useWorkspaceSettingsStore.getState().set('wsA', 'editor', { homePath: '/Users/new' })
+    })
+    fireEvent.blur(input)
+    expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toEqual({ homePath: '/Users/new' })
   })
 })

@@ -1,4 +1,4 @@
-import { useState, useEffect, useId } from 'react'
+import { useState, useEffect, useId, useRef } from 'react'
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { SettingsContextFor } from '../../lib/settings-contribution-types'
@@ -18,8 +18,17 @@ function Body({ hostId }: { hostId: string }) {
   const storedStr = typeof stored === 'string' ? stored : ''
   const [draft, setDraft] = useState(storedStr)
   const inputId = useId()
+  const focusedRef = useRef(false)
 
-  useEffect(() => { setDraft(storedStr) }, [storedStr])
+  // R2 codex: skip the sync while the user is editing so an external store
+  // update (e.g. BroadcastChannel from another window) can't clobber the
+  // in-progress draft. Focused edits reconcile against the latest store
+  // value in commit(), which re-reads getState() at blur.
+  useEffect(() => {
+    if (focusedRef.current) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDraft(storedStr)
+  }, [storedStr])
 
   const commit = () => {
     const trimmed = draft.trim()
@@ -27,7 +36,11 @@ function Body({ hostId }: { hostId: string }) {
     // the stored one — otherwise trailing whitespace lingers in the UI while
     // persisted state is clean.
     if (trimmed !== draft) setDraft(trimmed)
-    if (trimmed === storedStr) return
+    // Re-read the latest stored value — the snapshot captured at render can
+    // be stale if the store changed during editing (R2 codex).
+    const live = useHostSettingsStore.getState().hosts[hostId]?.editor?.homePath
+    const liveStr = typeof live === 'string' ? live : ''
+    if (trimmed === liveStr) return
     if (trimmed === '') {
       // R2 codex: only drop the homePath key — `clearModule` would wipe any
       // sibling editor settings (wrap / tabSize / ...) stored in the same bucket.
@@ -55,7 +68,8 @@ function Body({ hostId }: { hostId: string }) {
           placeholder={t('editor.settings.home_path.placeholder')}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
+          onFocus={() => { focusedRef.current = true }}
+          onBlur={() => { focusedRef.current = false; commit() }}
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
           className="flex-1 px-3 py-2 rounded-md bg-surface-muted text-text-primary border border-border-subtle focus:border-accent focus:outline-none text-sm"
         />

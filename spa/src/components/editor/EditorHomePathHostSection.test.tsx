@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 
 vi.mock('../../lib/storage/sync', () => ({
   syncManager: { register: vi.fn(), notify: vi.fn(), destroy: vi.fn() },
@@ -107,5 +107,33 @@ describe('EditorHomePathHostSection', () => {
     fireEvent.change(input, { target: { value: '' } })
     fireEvent.blur(input)
     expect(useHostSettingsStore.getState().get('h1', 'editor')).toEqual({ wrap: true })
+  })
+
+  it('does not clobber the draft while focused when store syncs externally (R2 codex)', () => {
+    useHostSettingsStore.getState().set('h1', 'editor', { homePath: '/home/old' })
+    render(<EditorHomePathHostSection ctx={ctx} />)
+    const input = screen.getByLabelText(/home path/i) as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '/home/draft' } })
+    // External write (simulates BroadcastChannel sync)
+    act(() => {
+      useHostSettingsStore.getState().set('h1', 'editor', { homePath: '/home/external' })
+    })
+    expect(input.value).toBe('/home/draft')
+  })
+
+  it('commit() reads the latest store value, not the render-time snapshot (R2 codex)', () => {
+    useHostSettingsStore.getState().set('h1', 'editor', { homePath: '/home/old' })
+    render(<EditorHomePathHostSection ctx={ctx} />)
+    const input = screen.getByLabelText(/home path/i) as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '/home/new' } })
+    // Another session writes the same value concurrently
+    act(() => {
+      useHostSettingsStore.getState().set('h1', 'editor', { homePath: '/home/new' })
+    })
+    fireEvent.blur(input)
+    // commit detects the no-op against live store and leaves state alone
+    expect(useHostSettingsStore.getState().get('h1', 'editor')).toEqual({ homePath: '/home/new' })
   })
 })
