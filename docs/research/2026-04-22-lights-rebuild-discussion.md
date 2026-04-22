@@ -261,3 +261,101 @@ bloat 圖：
 - bloat 最壞：形狀押錯，骨架 + 已對齊的 agent 都要改（乘法工作）
 
 **結論**：縮減版不是「不足」而是「留白」；bloat 圖不是「足夠小」而是「早期快照」。選擇取決於對 Phase 2-5 形狀的信心 — 若不確定則留白優於預設。
+
+---
+
+## 2026-04-23 補二：發現 TraceStore + Monitor API 完整存在（關鍵 reality check）
+
+### 發現
+
+1. **`internal/store/trace.go`** — 完整 `TraceStore`，含 `TraceChain` + `TraceStep` schema：
+   - `TraceStep` 欄位：Kind、TmuxSession、PaneID、AgentType、FrameID、ParentFrameID、EventName、Decision、Reason、PayloadJSON、BeforeJSON、AfterJSON、CreatedAt
+   - 每個 hook 進來會寫三階段 trace（verify / derive / apply）
+   - `handleEvent` 在 `handler.go:85` 已接 `beginHookTrace`
+
+2. **`internal/module/agent/monitor.go`** — 完整 Monitor HTTP API：
+   - `GET /api/agent/monitor/chains`（list with filter）
+   - `GET /api/agent/monitor/chains/{id}`（full chain + step tree）
+   - `GET /api/agent/monitor/projection`（current projection）
+   - `buildStepTree` 已組成 parent-child 樹
+
+### 對前面評估的修正
+
+先前誤差表 #12/#13 評估為：
+- 判斷點資料蒐集 — 已有（輕描淡寫）
+- Dev Inspector — 全缺（大誤差）
+
+**實際上**：
+- 判斷點資料蒐集 — ✅ **完整存表含 before/after snapshot，結構完整**
+- Dev Inspector — **中小誤差**：資料 + API 都在，只缺 SPA UI
+
+### bloat vs tightened 的重新評估
+
+bloat 版聲稱的 6 個價值主張中，5 個與 TraceStore/Monitor API 重疊或可從 trace 導出：
+
+| bloat 賣點 | TraceStore 是否已涵蓋 |
+|---|---|
+| Transition 型別一等公民 | ✅ TraceStep 即具象化 transition |
+| Inspector 友善結構 | ✅ Monitor API + buildStepTree |
+| Coverage 從 handler 推導 | ✅ 可 SQL 查 agent_trace_steps |
+| Unknown event typed path | 近似 ✅ — 只要加 `reason="event_not_in_catalog"` 即可 |
+| Phase 2 actor 延伸點 | ✅ ParentFrameID 已在每個 step |
+| Phase 5 Inspector 資料 | ✅ Monitor API 三 endpoint 齊備 |
+
+bloat 版獨特價值剩下兩個（皆非 TraceStore 可替代）：
+1. Runtime 派發結構（switch → registry）— 美學差異，功能等價
+2. 統一 hook + probe runtime 觸發 — trace 層下游已可統一呈現，runtime 不統一未造成實際問題
+
+### 結果
+
+- **bloat 版 85% 與現有 infra 重疊或平行**，實質變成「在 runtime 層建一套 TraceStore 的 in-memory 鏡像」
+- **兩套事實表示**（runtime Transition struct vs 持久化 TraceStep）演化時要同步 — bug 會長在接縫處
+- **tightened 版補在剛好缺的那塊**（agent 對齊宣告），其他層交給現有 infra
+
+### 重新框架（取代原本「留白 vs 押注」）
+
+```
+tightened = 補上對齊宣告 + TraceStore 繼續當 SOT + Phase 2-5 以 trace data 驅動
+bloat     = 忽略已有 TraceStore，建一套平行 runtime 結構（重建輪子）
+```
+
+「押注 vs 留白」是在**真空推斷**的前提下才成立；實際上 Phase 2-5 需求可由 trace data 觀察推導，不是押注。
+
+### Phase 2-5 的資料驅動路徑（不用猜）
+
+| Phase | 可查詢 | 預期看到 |
+|---|---|---|
+| Phase 2 proxy agent | `SELECT * FROM agent_trace_steps WHERE pane_id = ? AND created_at > ?` | 同 pane 短時間內跨 agent_type 的 hook pattern |
+| Phase 3 daemon 後啟動 | `WHERE reason = 'frame_missing'` | 發生比例 + pattern |
+| Phase 4 probe 誤判 | `WHERE kind = 'probe:activity' ... JOIN 下一個 hook_post` | probe 觸發後是否被 hook 矯正 |
+| Phase 5 Inspector | Monitor API 三 endpoint + step tree | 結構已在，只需 SPA UI |
+
+### 最終結論
+
+**tightened 不只是「比較小」，而是「與現有 infrastructure 最匹配」**。bloat 在發現 TraceStore 之前是個合理考慮，發現 TraceStore 之後是明顯 over-engineering — 因為它提議的結構大部分已經以不同形式存在於系統中。
+
+---
+
+## 約束 bloat 版（bounded bloat）評估
+
+### 機制列舉（可限制 bloat 成長）
+
+1. **結構約束**：單檔限制、LOC 預算、禁用介面/泛型、重用既有 registry
+2. **語意約束**：硬編碼設計決策並爆黑板、禁用 config flag / mode 切換
+3. **時間約束**：sunset clause（Phase 3 時重新檢視，無用就刪）、consumer-driven 開發
+4. **文化約束**：預先聲明拒絕的「自然下一步」列表
+
+### 核心問題
+
+bounded bloat 的本質是：
+- 現在不明原因先長大 + 用約束延後問題
+- 需求到了，約束還是要解開
+- value prop 建立在「約束能擋住 + 約束將來可撤」— 兩條都不是真正的 value
+
+相較之下：
+- **需求到了才長大** = 健康演化
+- **現在先長，之後受約束** = 延後的 over-engineering
+
+### 結論
+
+bounded bloat 不是比 tightened 好的折衷，是「延後 over-engineering 的變形」。**不採用**。
