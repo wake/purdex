@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wake/purdex/internal/module/agent/arbitrator"
+	"github.com/wake/purdex/internal/module/agent/observation"
 	"github.com/wake/purdex/internal/store"
 )
 
@@ -81,9 +83,20 @@ type hookTraceCollector struct {
 	frameStepID      string
 	projectionStepID string
 	finished         bool
+
+	// traceLookup + sessionCode + observedGeneration wire the chain trace_id
+	// to the shared (session, generation) → trace_id registry (plan D1.2 /
+	// issue #568). When lookup hits, every step reuses the adopted trace_id;
+	// on miss, the chain_id fallback fires once and lights_hook_trace_id_fallback
+	// is incremented. Fields remain zero when the module has no Arbitrator
+	// wired (degraded path); the collector then always falls back to chain_id.
+	traceLookup        observation.TraceIDLookup
+	sessionCode        string
+	observedGeneration int64
+	fallbackCounted    bool
 }
 
-func beginHookTrace(sink *hookTraceSink, req EventRequest) *hookTraceCollector {
+func beginHookTrace(sink *hookTraceSink, req EventRequest, lookup observation.TraceIDLookup, sessionCode string, observedGen int64) *hookTraceCollector {
 	if sink == nil {
 		return nil
 	}
@@ -98,7 +111,10 @@ func beginHookTrace(sink *hookTraceSink, req EventRequest) *hookTraceCollector {
 			RootEventName: req.EventName,
 			RootReason:    "hook_post",
 		},
-		nextSeq: 1,
+		nextSeq:            1,
+		traceLookup:        lookup,
+		sessionCode:        sessionCode,
+		observedGeneration: observedGen,
 	}
 	collector.triggerStepID = collector.append(traceStepInput{
 		Kind:      "trigger",
@@ -109,6 +125,27 @@ func beginHookTrace(sink *hookTraceSink, req EventRequest) *hookTraceCollector {
 		Payload:   req,
 	})
 	return collector
+}
+
+// resolveTraceID returns the shared (session, generation) trace_id when the
+// collector has been wired to the trace-id lookup; otherwise it falls back to
+// the chain_id and increments lights_hook_trace_id_fallback. The fallback is
+// counted once per collector so a single hook invocation with many steps does
+// not spam the counter.
+func (c *hookTraceCollector) resolveTraceID() string {
+	if c == nil {
+		return ""
+	}
+	if c.traceLookup != nil && c.sessionCode != "" {
+		if tid, ok := c.traceLookup.Get(c.sessionCode, c.observedGeneration); ok && tid != "" {
+			return tid
+		}
+	}
+	if !c.fallbackCounted {
+		c.fallbackCounted = true
+		arbitrator.Inc("lights_hook_trace_id_fallback")
+	}
+	return c.chain.ChainID
 }
 
 // traceStepInput carries the optional fields for a single trace step; zero
@@ -200,10 +237,12 @@ func (c *hookTraceCollector) append(in traceStepInput) string {
 		decisionPorts = "[]"
 	}
 	// PR-1b-0: trace_id defaults to chain_id (one hook invocation = one
-	// generation's trace); PR-1b-1 Observation path will mint its own.
+	// generation's trace); PR-1b-1c wires the shared (session, gen) →
+	// trace_id registry lookup and only falls back to chain_id on miss
+	// (transient bootstrap window — metric-only, #568).
 	traceID := in.TraceID
 	if traceID == "" {
-		traceID = c.chain.ChainID
+		traceID = c.resolveTraceID()
 	}
 	reasonText := in.ReasonText
 	if reasonText == "" {

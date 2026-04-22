@@ -14,6 +14,7 @@ import (
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/agent/arbitrator"
 	"github.com/wake/purdex/internal/module/session"
 )
 
@@ -82,7 +83,13 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	trace := beginHookTrace(m.traceSink, req)
+	// PR-1b-1c: compute the observedGeneration for this hook invocation
+	// BEFORE opening the trace collector so the trigger step's trace_id can
+	// resolve against the (session, gen) registry from the first append.
+	observedGen := m.computeObservedGen(req)
+	sessionCode := m.resolveSessionCode(req.TmuxSession)
+
+	trace := beginHookTrace(m.traceSink, req, m.traceLookup, sessionCode, observedGen)
 	traceFinished := false
 	defer func() {
 		if !traceFinished {
@@ -90,7 +97,28 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	if decision := verifyEventFn(m, req); !decision.Accepted {
+	decision := verifyEventFn(m, req)
+
+	// Dual-write boundary (plan D1.1): build + submit the Observation after
+	// verify resolves, for BOTH accept and reject branches. Legacy frame /
+	// broadcast / trace path below continues unchanged.
+	startTime := m.resolveStartTime(req)
+	obs := buildHookObservation(
+		sessionCode,
+		req.TmuxPaneID,
+		int64(req.SenderPID),
+		startTime,
+		int64(req.SenderPID),
+		req.AgentType,
+		req.EventName,
+		observedGen,
+		decision.Accepted,
+		decision.Reason,
+		time.Now(),
+	)
+	m.SubmitObservation(obs)
+
+	if !decision.Accepted {
 		trace.Verify(req, "rejected", decision.Reason, map[string]any{"decision": "rejected", "reason": decision.Reason})
 		trace.Finish("completed", "verify_rejected")
 		traceFinished = true
@@ -243,6 +271,47 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// computeObservedGen derives the ObservedGeneration for a hook observation
+// (plan D1.3). SessionStart advances the generation by one relative to the
+// current Arbitrator view; every other event reads the current generation
+// unchanged. Returns 0 when the Arbitrator is not wired (degraded path); the
+// downstream apply pipeline is a no-op in that mode.
+func (m *Module) computeObservedGen(req EventRequest) int64 {
+	if m.arbitrator == nil {
+		return 0
+	}
+	sid := m.resolveSessionCode(req.TmuxSession)
+	cur := m.arbitrator.CurrentGeneration(sid)
+	if req.EventName == "SessionStart" {
+		return cur + 1
+	}
+	return cur
+}
+
+// resolveStartTime returns the process start_time that goes into Observation
+// evidence (plan D1.4). The hook request's own SenderStartTime is the
+// preferred source; when it is empty (SenderUncertain == true), we fall back
+// to FramesStore.FindByPanePID(pane, pid). A final miss returns "" so the
+// builder can map it to "unknown". Fallback paths increment
+// lights_hook_identity_unknown so the divergence writer can monitor how often
+// hook producers ship without a ProcessStartTime.
+func (m *Module) resolveStartTime(req EventRequest) string {
+	if req.SenderStartTime != "" {
+		return req.SenderStartTime
+	}
+	// Fallback paths: metric fires regardless of whether the FramesStore
+	// lookup succeeds (the hook request itself was the deficient source).
+	arbitrator.Inc("lights_hook_identity_unknown", "event="+req.EventName)
+	if m.frames == nil {
+		return ""
+	}
+	frame, err := m.frames.FindByPanePID(req.TmuxPaneID, req.SenderPID)
+	if err != nil || frame == nil {
+		return ""
+	}
+	return frame.ProcessStartTime
 }
 
 // buildNormalized creates a NormalizedEvent from the derive result and current state.
