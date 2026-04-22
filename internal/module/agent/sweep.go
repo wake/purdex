@@ -71,10 +71,26 @@ func (m *Module) clearFrame(frame store.Frame, reason string) error {
 	if m.frames == nil {
 		return nil
 	}
+	// PR-1b-1c T8 / D3: emit a SourceSweep observation before the legacy
+	// clearFrame path runs. buildSweepObservation is pure; caller is
+	// responsible for (a) resolving the session code since store.Frame has
+	// no SessionCode field, and (b) passing the arbitrator's current
+	// generation — sweep never advances gen. On a nil arbitrator (degraded
+	// path) or a saturated input channel, SubmitObservation drops
+	// silently so the legacy clearFrame sequence below still runs
+	// (§D9 fail-open contract).
+	sessionName, code := m.resolvePaneSession(frame.PaneID)
+	var observedGen int64
+	if m.arbitrator != nil {
+		observedGen = m.arbitrator.CurrentGeneration(code)
+	}
+	obs := buildSweepObservation(frame, reason, observedGen, time.Now())
+	obs.SessionID = code
+	m.SubmitObservation(obs)
+
 	if err := m.frames.Delete(frame.FrameID); err != nil {
 		return err
 	}
-	sessionName, code := m.resolvePaneSession(frame.PaneID)
 	if sessionName != "" && m.events != nil {
 		if err := m.events.Delete(sessionName); err != nil {
 			return err
