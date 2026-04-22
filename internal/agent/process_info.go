@@ -69,9 +69,6 @@ func normalizeExecutablePath(raw string) (string, error) {
 			}
 		}
 	}
-	if resolved, err := filepath.EvalSymlinks(raw); err == nil {
-		raw = resolved
-	}
 	if abs, err := filepath.Abs(raw); err == nil {
 		raw = abs
 	}
