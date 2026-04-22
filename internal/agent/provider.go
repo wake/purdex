@@ -84,6 +84,15 @@ type StreamCapable interface {
 	ResumeCommand(state SessionState) string
 }
 
+// StatusSupporter is an optional capability for providers to declare which
+// Status values they can emit. Providers that do not implement this interface
+// are treated as "not declared" by the Coverage helper. Returning an empty
+// slice is a valid declaration meaning "supports no Status values" and is
+// distinct from not implementing the interface at all.
+type StatusSupporter interface {
+	SupportedStatuses() []Status
+}
+
 // SessionState holds agent session state for stream handoff.
 type SessionState struct {
 	SessionID string
