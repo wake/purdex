@@ -91,27 +91,14 @@ PR-1a merge 後 review 發現 §3.5 envelope 欄位仍缺 12 個（#560）、leg
 
 ### 4. Arbitrator 骨架 + channel admission control（§3.4、§3.5.1） — **PR-1b-1b**
 
-**1b-1b 範圍**（後續 1b-1c 補完的項目於下方標註）：
-
 - [ ] 測試：`arb_in` cap 1024 — proposed 滿載 drop non-blocking、committed 滿載 blocking 100ms timeout
-- [ ] 測試：TraceWriter priority buffer cap 4096 滿載按 spec §3.5.1 drop priority table 淘汰既有最低優先級項目（非 FIFO channel）— 見 pr-1b-1b plan D10
+- [ ] 測試：`retryCh` cap 256 滿載 drop retry tick 但 pending entry 仍在 buffer
+- [ ] 測試：`traceOut` cap 4096 滿載按 drop priority 丟（committed > proposed > trace-only）
 - [ ] 測試：Arbitrator 單 goroutine 擁有 pending buffer；三來源並發寫入無 race（go test `-race`）
-- [ ] 測試：Apply pipeline 9 步驟 + SessionStart helper + hook-storm pre-gate 各自覆蓋
-- [ ] 測試：Generation gate — `< frame.generation` reject `StaleGeneration`；`> frame.generation` 僅 `hook.SessionStart` 可推進（含 actor force-end / watcher clear / pending clear + per-obs SessionRestartCleared trace / minter mint+prune / arbmode Apply / boundary synthetic trace），其他 reject `UnauthorizedGenerationBump`
+- [ ] 測試：Apply pipeline 9 步驟（generation gate / watcher / idempotency / pending / source priority / monotone lifecycle / invariant / mode branch / trace）各自覆蓋
+- [ ] 測試：Generation gate — `< frame.generation` reject `StaleGeneration`；`> frame.generation` 僅 `hook.SessionStart` 可推進，其他 reject `UnauthorizedGenerationBump`
 - [ ] 測試：Pending window — per-session 8 entries evict、per-observation coalescing 16 筆 drop oldest、2s deadline drop proposal 不建 actor
 - [ ] 測試：Reconcile loop — 不改 actor.status，只進 trace（`outcome=skipped, reason_code=ReconcileStaleNoted`）
-- [ ] 測試：hook-storm 10ms / 50 obs per-session throttle（spec §3.4.2 line 414-416；pr-1b-1b D12）
-- [ ] 測試：authoritative mode fail-closed（1b-1b 過渡期；`reason_code=AuthoritativeNotSupportedPhase1`）
-
-**移至 PR-1b-1c**（上游有流量 + verify 流程接入後才有意義）：
-
-- [ ] 測試：`retryCh` cap 256 滿載 drop retry tick 但 pending entry 仍在 buffer（spec §5.4 retry schedule；verify producer 在 hook path）
-- [ ] 測試：Sampling sweep/synthetic proposed 1/10（spec §3.5.1 line 567）
-
-**移至 Phase 2**：
-
-- [ ] 測試：Trace retention 24h per-session TTL
-- [ ] Authoritative mode frame 寫入與 broadcast（frame schema 補 Generation + Actors JSON 後才做）
 
 ### 5. 雙寫 passthrough + divergence 比對（§8.1） — **PR-1b-1c**
 
