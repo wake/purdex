@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.204] - 2026-04-22
+
+### Feat(lights): PR-1b-1a — Observation types + AGENT_ARB_MODE + trace_id strategy (#575)
+
+- 新 `internal/module/agent/observation/` 套件：`Observation` 值型別（11 欄：ActorKey / DecisionPorts / Evidence / TraceID / ObservedAt / SessionID / Generation / ActorID / Source / Kind / ArbMode），`Builder` 採 single-use + deep-copy（DecisionPorts / Evidence / nested slices），第二次 `Build()` panic；`EvidenceRef.Value: any` 為 shallow copy（caller 不得在 Build 後改 Value 內容）。
+- 新 `internal/module/agent/arbmode/` 套件：`Manager.Snapshot()` 一次性回傳避免 torn read，不暴露分欄 getter；`env AGENT_ARB_MODE > config.AgentConfig.ArbMode > default("passthrough")`，env 鎖 hot reload；`PUT /api/config` 的空字串 `arb_mode=""` canonicalize 成 `"passthrough"` 再存（R2 共識修正）。
+- `TraceIDRegistry` + per-session watermark：`PruneSessionBefore` 推進 watermark；低於 watermark 的 `Mint` 回 `""` + log error，caller 必須 check empty（R2 P2 修正）。
+- `ActorKey` 非空要求完整 triple（SessionID + Generation + ActorID 全非空）；zero ActorKey 允許（reconcile 無 proposal 情境，R2 P2 修正）。
+- `internal/module/agent/module.go` Init：arbmode build 移到 session check 前，session provider 缺席時 `/api/agent/arbitrator/mode` + `OnConfigChange` 仍可運作（R1 P3 修正）。
+- Test：47 observation + 13 arbmode + 7 config/handler；全 repo `-race` clean。
+- Review：plan review（3 P0 / 4 P1 / 3 P2 / 1 P3 全修）+ 實作 9 輪 task-level review + R1 標準 + R2 三視角 parallel（4 攻擊 / 3 防守 / 2 體質），共識項全收斂；剩餘延後為 #578（Minter/Lookup interface split）+ #579（arbmode Apply epoch race），於 PR-1b-1b 處理。
+
 ## [1.0.0-alpha.203] - 2026-04-22
 
 ### Feat(spa): HSR PR-3 — Workspace settings shell + reserved cleanup (#573)
