@@ -174,3 +174,90 @@
 - Phase 4 event bus 是否真的需要？待 Phase 1-3 完成後評估。
 - Phase 5 Inspector 的觀察粒度（per-event / per-transition / per-frame）待設計。
 - proxy agent 判定條件細節：同 pane + 不同 agent_type 即算？還是需加時間窗 / PPID 驗證？
+
+---
+
+## 2026-04-23 補：骨架範圍收斂過程
+
+### 迭代軌跡
+
+1. **第一版**：提議完整骨架 — Status FSM (資料化) + Hook Handler Registry + State Entry Probe Registry + Combined Coverage。使用者質疑「是否又膨脹成前次 Lights」。
+2. **第二版（bloat 圖）**：
+   ```
+   Status FSM（骨架）—— states + transitions
+     ├─ 註冊 A：Hook Handler (hook, agent) → transition
+     └─ 註冊 B：State Entry Probe (state, agent) → auxiliary signal → transition
+   ```
+   使用者再次質疑膨脹；也質疑「事件骨架」的必要性（各 agent 的 hook 本就不同，canonical event 強加 CC 的 ontology 給其他 agent）。
+3. **第三版（縮減版）**：放棄 canonical event 層。骨架僅保留：
+   - `Status` enum（已存在）
+   - 各 agent 顯式宣告 `SupportedStatuses() []Status`（由使用者拍板：顯式優於隱式）
+   - `Coverage(registry) []CoverageRow` helper
+   - 現有 `DeriveStatus` switch 與 `manageActivityWatch` 保持不變（不 refactor）
+
+### 尺寸差距（bloat vs 縮減）
+
+| 指標 | bloat 圖 | 縮減版 | 倍數 |
+|---|---|---|---|
+| 新骨架檔行數 | ~250 | ~35 | 7× |
+| 新增測試行數 | ~200 | ~30 | 7× |
+| 既有檔案 refactor | ~90 行 | 0 行 | ∞ |
+| 新資料結構 | 7 個 | 1 個（CoverageRow） | 7→1 |
+| 新增方法 | ~10 個 | 1 個（`SupportedStatuses`） | 10→1 |
+
+### 與 Reverted Lights 的 pattern 比對
+
+Reverted Lights（2026-04-22 全撤 ~9000 行）：
+- L1 trace envelope / divergences table
+- L2 observation types
+- L3 arbitrator goroutine（單寫者）
+- L4 admission + 9-step apply pipeline
+
+bloat 圖：
+- L1 Status FSM 資料化
+- L2 Hook Handler registry
+- L3 State Entry Probe registry
+- L4 Combined coverage 推導
+
+**結構 pattern 同型**：兩者都以「把 working imperative code 轉成 declarative data + registry」為動機，且自然延伸路徑相似（priority / lifecycle / conflict resolution / 統一介面）。尺寸差 15× 僅為早期快照，動力學上 bloat 圖具備長大為 Lights 的壓力。
+
+**縮減版打斷了五個典型 bloat pattern**：
+1. 不把 working code 變 data
+2. 不新增 parallel registry
+3. 不以統一抽象覆蓋多種 case（probe 留原位）
+4. 不 refactor 既有 working code
+5. 不預埋 config flag / mode 切換
+
+### 決議
+
+- **Phase 0（骨架）= 縮減版**
+- 各 agent `SupportedStatuses()` 實作 = Phase 1
+- Probe formalization = Phase 4（可選）
+- 每個 Phase 先寫正式 spec + codex review 再實作
+
+### 正反評價（2026-04-23 新增）
+
+**縮減版的不足**：
+- 只答「誰支援什麼」，不答「怎麼達成」— 覆蓋率缺口需看 source 才知道 root cause
+- 無法形式化「未知事件追蹤不處理」原則，該原則得另行 hack 進 handler.go
+- Inspector (Phase 5) 只拿得到 declaration 矩陣，hook → transition 歷史仍要靠 `TraceStore` 原生資料
+- declaration 與實作可能漂移（需額外測試驗證；縮減版未納入）
+- Phase 2 subagent / proxy 情境零結構支持
+
+**bloat 圖的優勢**：
+- coverage 可從 handler 推導，對齊 declaration-vs-impl
+- hook / probe 產生的 transition 在 Inspector 呈現統一
+- 「未知事件」有天然型別路徑（`Lookup` sentinel），非 `Valid=false` overload
+- Phase 2 subagent 可在 `Transition` 延伸 actor 欄位
+- 支援 "declared-but-WIP" 狀態（如 codex 打算支援 waiting，未實作）
+
+**bloat 圖的成本**：
+- 1 PR ~550 行 refactor，touching `handleEvent` + `manageActivityWatch`
+- 具備同 Reverted Lights 的自然延伸動力（priority / lifecycle / conflict …）
+- 延伸形狀是押注 Phase 2-5 的實際需求，押錯則骨架要改 + agent 註冊跟著改（乘法工作）
+
+**縮減版的風險不對稱**：
+- 最壞：Phase 2-5 才發現需要結構，回頭補（增量工作）
+- bloat 最壞：形狀押錯，骨架 + 已對齊的 agent 都要改（乘法工作）
+
+**結論**：縮減版不是「不足」而是「留白」；bloat 圖不是「足夠小」而是「早期快照」。選擇取決於對 Phase 2-5 形狀的信心 — 若不確定則留白優於預設。
