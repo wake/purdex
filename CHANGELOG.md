@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.208] - 2026-04-22
+
+### Revert(lights): rip arbitrator / observation / arbmode stack + trace schema extensions (#594)
+
+- 撤回 Lights 子系統：PR-1a #559（trace schema +10 欄 + `frame_divergences` 表）、PR-1b-0 #564（trace envelope 再 +11 欄 + row class discriminator）、PR-1b-1a #575（observation types + AGENT_ARB_MODE + trace_id strategy）、PR-1b-1b #583（arbitrator goroutine + admission + 9 步 apply pipeline）共四個 merge 全部 revert，-14,577 行 / 56 files。
+- 撤回原因：盤點發現 SPA 現行 status 顯示全部走 legacy `internal/agent/{cc,codex,opencode}/status.go` → `AgentEventStore` → WS → `useAgentStore` 已 production 路徑；Lights 是平行建的第二套，main 上 `SubmitObservation` 零呼叫點，對使用者完全透明。繼續推進前發現 per-agent-type status enum / source authority mapping 未定義，架構根基需要重新收斂，決定全面 revert。
+- 保留項目：PR-0 #553 的 codex `HasReadiness` capability placeholder（無害、未來可能用到）；legacy hook / probe / sweep 路徑及 `internal/agent/*/status.go` 的 per-agent mapping（production 跑中）。
+- 還原 anchor：safety tag `pre-lights-revert-alpha206` → `4348e7bc`（revert 前 origin/main，可一鍵 `git reset --hard` 還原）；archive tag `pr-590-lights-1b-1c-archive` → `96458913`（原 PR #590 的 13 commit 全保存在 origin）。
+- PR #590 關閉並刪除遠端分支。相關 worktree / local branch 清理完成。
+- 驗證：`go build ./...` 通過、23 個 Go package test 全綠、SPA lint + build 通過、`npx vitest run` 2527/2530 pass（3 fail 在 `src/lib/sync/contributors/hosts.test.ts` 為 pre-existing，與本撤回無關）。
+
 ## [1.0.0-alpha.207] - 2026-04-22
 
 ### Feat(spa): add untitled editor document flow (#591)
