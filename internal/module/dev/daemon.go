@@ -161,16 +161,11 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	// Give SSE a moment to flush to the client before we vanish into Exec.
 	time.Sleep(200 * time.Millisecond)
 
-	self, err := os.Executable()
-	if err != nil {
-		writeEvent(daemonRebuildEvent{Type: "error", Message: "Executable: " + err.Error()})
-		return
-	}
 	// execSelf replaces this process; the function only returns on failure.
 	// In tests execSelf is nil (DevModule constructed directly without Init),
 	// so we skip exec entirely — safe, no risk of replacing the test binary.
 	if m.execSelf != nil {
-		if err := m.execSelf(self, os.Args, os.Environ()); err != nil {
+		if err := m.execSelf(finalPath, os.Args, os.Environ()); err != nil {
 			writeEvent(daemonRebuildEvent{Type: "error", Message: "exec: " + err.Error()})
 		}
 	}

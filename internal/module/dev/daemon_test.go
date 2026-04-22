@@ -78,6 +78,50 @@ func TestHandleDaemonRebuild_BuildsInTempRepo(t *testing.T) {
 	}
 }
 
+func TestHandleDaemonRebuild_ExecsRebuiltBinary(t *testing.T) {
+	t.Setenv("PDX_DEV_UPDATE", "1")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "cmd", "pdx"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cmd", "pdx", "main.go"), []byte("package main\nfunc main(){}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var execPath string
+	m := &DevModule{
+		repoRoot: dir,
+		execSelf: func(argv0 string, argv []string, envv []string) error {
+			execPath = argv0
+			return nil
+		},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/dev/daemon/rebuild", m.handleDaemonRebuild)
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/dev/daemon/rebuild", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if _, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+	}
+	if execPath != filepath.Join(dir, "bin", "pdx") {
+		t.Fatalf("exec path: want rebuilt binary, got %q", execPath)
+	}
+}
+
 func TestHandleDaemonRebuild_ConcurrentReturns409(t *testing.T) {
 	daemonRebuildMu.Lock()
 	defer daemonRebuildMu.Unlock()
