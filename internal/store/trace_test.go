@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -1824,5 +1825,332 @@ func seedIntermediateTraceData(t *testing.T, db *sql.DB) {
 		('a-1', 'chain-a', NULL, 1, 'root', 'proj-a', '%1', 'cc', 'frame-a', '', 'Stop', '', '', 'null', 'null', 'null', 1)
 	`); err != nil {
 		t.Fatalf("seed step: %v", err)
+	}
+}
+
+// ----- AppendSteps tests (PR-1b-1b Task 7 / D10.4) -------------------------
+//
+// AppendSteps is the TraceWriter's batch sink. Unlike SaveChain — which owns
+// an entire chain's lifecycle — AppendSteps inserts steps across arbitrary
+// chains and creates minimal chain rows on demand so the Arbitrator never has
+// to know whether a given chain already exists in SQLite.
+
+// makeLightsStep returns a canonical Lights step (all five discriminator
+// fields populated) for AppendSteps tests. Tests override fields per-case.
+func makeLightsStep(stepID, chainID string, seq int, startedAt int64) TraceStep {
+	return TraceStep{
+		StepID:      stepID,
+		ChainID:     chainID,
+		Seq:         seq,
+		Kind:        "decision",
+		TmuxSession: "proj-a",
+		PaneID:      "%5",
+		AgentType:   "cc",
+		EventName:   "Stop",
+		CreatedAt:   startedAt,
+		SourceKind:  "hook",
+		Action:      "decision:ok",
+		Outcome:     "emitted",
+		Phase:       "committed",
+		Status:      "success",
+		TraceID:     chainID,
+		StartedAt:   startedAt,
+		EndedAt:     startedAt,
+		OTelKind:    "internal",
+	}
+}
+
+func TestTraceStore_AppendSteps_NewChain_AutoCreatesChainRow(t *testing.T) {
+	s := openTestTraceStore(t)
+	step := makeLightsStep("auto-1", "auto-chain", 1, 123)
+	if err := s.AppendSteps([]TraceStep{step}); err != nil {
+		t.Fatalf("AppendSteps: %v", err)
+	}
+
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_trace_chains WHERE chain_id=?`, "auto-chain").Scan(&count); err != nil {
+		t.Fatalf("count chains: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("auto-created chain rows = %d, want 1", count)
+	}
+	var startedAt int64
+	if err := s.db.QueryRow(`SELECT started_at FROM agent_trace_chains WHERE chain_id=?`, "auto-chain").Scan(&startedAt); err != nil {
+		t.Fatalf("chain started_at: %v", err)
+	}
+	if startedAt != 123 {
+		t.Fatalf("chain started_at = %d, want 123", startedAt)
+	}
+
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_trace_steps WHERE chain_id=?`, "auto-chain").Scan(&count); err != nil {
+		t.Fatalf("count steps: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("steps = %d, want 1", count)
+	}
+}
+
+func TestTraceStore_AppendSteps_ExistingChain_AppendsSteps_ChainUntouched(t *testing.T) {
+	s := openTestTraceStore(t)
+	s.maxChains = 10
+	s.maxSteps = 100
+
+	original := TraceRecord{
+		Chain: TraceChain{
+			ChainID:          "keeper",
+			StartedAt:        50,
+			CompletedAt:      60,
+			TerminalStatus:   "done",
+			TerminalReason:   "finished",
+			TmuxSession:      "proj-a",
+			PaneID:           "%5",
+			RootAgentType:    "cc",
+			RootEventName:    "Stop",
+			RootReason:       "bootstrap",
+			LatestStepKind:   "decision",
+			LatestDecision:   "done",
+			LatestStepReason: "ok",
+		},
+		Steps: []TraceStep{makeLightsStep("keeper-1", "keeper", 1, 55)},
+	}
+	if err := s.SaveChain(original); err != nil {
+		t.Fatalf("SaveChain: %v", err)
+	}
+
+	extra := makeLightsStep("keeper-2", "keeper", 2, 200)
+	if err := s.AppendSteps([]TraceStep{extra}); err != nil {
+		t.Fatalf("AppendSteps: %v", err)
+	}
+
+	// Chain summary must be untouched — TerminalStatus, TerminalReason, etc.
+	var (
+		terminalStatus, terminalReason, latestStepKind string
+		startedAt, completedAt                         int64
+	)
+	if err := s.db.QueryRow(`
+		SELECT started_at, completed_at, terminal_status, terminal_reason, latest_step_kind
+		FROM agent_trace_chains WHERE chain_id=?`, "keeper").Scan(&startedAt, &completedAt, &terminalStatus, &terminalReason, &latestStepKind); err != nil {
+		t.Fatalf("chain summary: %v", err)
+	}
+	if startedAt != 50 || completedAt != 60 || terminalStatus != "done" || terminalReason != "finished" || latestStepKind != "decision" {
+		t.Fatalf("chain summary mutated: started=%d completed=%d terminal=%q/%q latest=%q",
+			startedAt, completedAt, terminalStatus, terminalReason, latestStepKind)
+	}
+
+	var stepCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_trace_steps WHERE chain_id=?`, "keeper").Scan(&stepCount); err != nil {
+		t.Fatalf("step count: %v", err)
+	}
+	if stepCount != 2 {
+		t.Fatalf("steps = %d, want 2", stepCount)
+	}
+}
+
+func TestTraceStore_AppendSteps_DuplicateStepID_Ignored(t *testing.T) {
+	s := openTestTraceStore(t)
+	step := makeLightsStep("dup-1", "dup-chain", 1, 10)
+	if err := s.AppendSteps([]TraceStep{step}); err != nil {
+		t.Fatalf("first AppendSteps: %v", err)
+	}
+	// Same step_id with a mutated field; INSERT OR IGNORE must keep first.
+	step2 := step
+	step2.ReasonText = "mutated"
+	if err := s.AppendSteps([]TraceStep{step2}); err != nil {
+		t.Fatalf("second AppendSteps (dup): %v", err)
+	}
+
+	var reasonText string
+	if err := s.db.QueryRow(`SELECT reason_text FROM agent_trace_steps WHERE step_id=?`, "dup-1").Scan(&reasonText); err != nil {
+		t.Fatalf("query reason_text: %v", err)
+	}
+	if reasonText != "" {
+		t.Fatalf("reason_text = %q, want first-write-wins (empty)", reasonText)
+	}
+
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_trace_steps WHERE step_id=?`, "dup-1").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("rows for dup-1 = %d, want 1", count)
+	}
+}
+
+func TestTraceStore_AppendSteps_MultiChain_SingleTransaction(t *testing.T) {
+	s := openTestTraceStore(t)
+	steps := []TraceStep{
+		makeLightsStep("a-1", "chain-a", 1, 100),
+		makeLightsStep("a-2", "chain-a", 2, 101),
+		makeLightsStep("b-1", "chain-b", 1, 102),
+		makeLightsStep("c-1", "chain-c", 1, 103),
+	}
+	if err := s.AppendSteps(steps); err != nil {
+		t.Fatalf("AppendSteps: %v", err)
+	}
+
+	var chainCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_trace_chains WHERE chain_id IN ('chain-a','chain-b','chain-c')`).Scan(&chainCount); err != nil {
+		t.Fatalf("chain count: %v", err)
+	}
+	if chainCount != 3 {
+		t.Fatalf("chains = %d, want 3", chainCount)
+	}
+	var stepCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_trace_steps WHERE chain_id IN ('chain-a','chain-b','chain-c')`).Scan(&stepCount); err != nil {
+		t.Fatalf("step count: %v", err)
+	}
+	if stepCount != 4 {
+		t.Fatalf("steps = %d, want 4", stepCount)
+	}
+}
+
+func TestTraceStore_AppendSteps_Rollback_OnError(t *testing.T) {
+	s := openTestTraceStore(t)
+	// First batch seeds two chains cleanly.
+	good := []TraceStep{
+		makeLightsStep("g-1", "chain-good", 1, 10),
+	}
+	if err := s.AppendSteps(good); err != nil {
+		t.Fatalf("seed good: %v", err)
+	}
+	// Bad batch: first step OK for a new chain, second step has malformed
+	// parent_step_id that violates the composite FK on commit.
+	bad := []TraceStep{
+		makeLightsStep("rollback-1", "chain-rollback", 1, 20),
+		func() TraceStep {
+			s := makeLightsStep("rollback-2", "chain-rollback", 2, 21)
+			s.ParentStepID = "does-not-exist"
+			return s
+		}(),
+	}
+	err := s.AppendSteps(bad)
+	if err == nil {
+		t.Fatal("expected AppendSteps to error on FK violation")
+	}
+	// After rollback: chain-rollback must not exist, nor should its steps.
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_trace_chains WHERE chain_id=?`, "chain-rollback").Scan(&count); err != nil {
+		t.Fatalf("post-rollback chain count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("chain-rollback survived rollback (%d rows)", count)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_trace_steps WHERE chain_id=?`, "chain-rollback").Scan(&count); err != nil {
+		t.Fatalf("post-rollback step count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("rollback-chain steps survived rollback (%d rows)", count)
+	}
+	// Earlier seeded data must be untouched.
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_trace_steps WHERE step_id=?`, "g-1").Scan(&count); err != nil {
+		t.Fatalf("seed verify: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("g-1 got blown away by rollback (%d)", count)
+	}
+}
+
+func TestTraceStore_AppendSteps_ConcurrentCallers_NoCorruption(t *testing.T) {
+	s := openTestTraceStore(t)
+	s.maxChains = 10000
+	s.maxSteps = 100000
+
+	const goroutines = 2
+	const perG = 1000
+	errCh := make(chan error, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func(g int) {
+			defer wg.Done()
+			steps := make([]TraceStep, 0, perG)
+			chainID := fmt.Sprintf("conc-%d", g)
+			for i := 0; i < perG; i++ {
+				steps = append(steps, makeLightsStep(fmt.Sprintf("%s-%d", chainID, i), chainID, i+1, int64(i)))
+			}
+			if err := s.AppendSteps(steps); err != nil {
+				errCh <- fmt.Errorf("goroutine %d: %w", g, err)
+			}
+		}(g)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent AppendSteps: %v", err)
+		}
+	}
+
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_trace_steps WHERE chain_id LIKE 'conc-%'`).Scan(&total); err != nil {
+		t.Fatalf("total count: %v", err)
+	}
+	if total != goroutines*perG {
+		t.Fatalf("concurrent steps = %d, want %d", total, goroutines*perG)
+	}
+}
+
+func TestTraceStore_AppendSteps_EnvelopeFields_Roundtrip(t *testing.T) {
+	s := openTestTraceStore(t)
+	traceID := uuid.NewString()
+	step := makeLightsStep("env-1", "env-chain", 1, 500)
+	step.TraceID = traceID
+	step.Attrs = json.RawMessage(`{"agent":"cc","phase":"decision"}`)
+	step.InputRefs = json.RawMessage(`[{"kind":"event","id":"e1"}]`)
+	step.OutputRefs = json.RawMessage(`[{"kind":"frame","id":"f1"}]`)
+	step.EvidenceRefs = json.RawMessage(`[{"source":"tmux"}]`)
+	step.DecisionPorts = json.RawMessage(`[{"port":"statusline"}]`)
+	step.ReasonText = "ok"
+	step.ReasonCode = "Committed"
+	step.StateBeforeRef = "snap:before"
+	step.StateAfterRef = "snap:after"
+	step.Status = "success"
+	step.Outcome = "emitted"
+
+	if err := s.AppendSteps([]TraceStep{step}); err != nil {
+		t.Fatalf("AppendSteps: %v", err)
+	}
+
+	var (
+		gotTraceID, gotReasonText, gotReasonCode string
+		gotAttrs, gotInputRefs, gotOutputRefs    string
+		gotEvidenceRefs, gotDecisionPorts        string
+		gotStateBefore, gotStateAfter            string
+		gotStatus, gotOutcome                    string
+	)
+	err := s.db.QueryRow(`
+		SELECT trace_id, reason_text, reason_code, attrs, input_refs, output_refs,
+		       evidence_refs, decision_ports, state_before_ref, state_after_ref,
+		       status, outcome
+		FROM agent_trace_steps WHERE step_id=?`, "env-1").Scan(
+		&gotTraceID, &gotReasonText, &gotReasonCode,
+		&gotAttrs, &gotInputRefs, &gotOutputRefs,
+		&gotEvidenceRefs, &gotDecisionPorts,
+		&gotStateBefore, &gotStateAfter,
+		&gotStatus, &gotOutcome,
+	)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if gotTraceID != traceID {
+		t.Fatalf("trace_id = %q, want %q", gotTraceID, traceID)
+	}
+	if gotReasonText != "ok" || gotReasonCode != "Committed" {
+		t.Fatalf("reason = %q/%q", gotReasonText, gotReasonCode)
+	}
+	if gotAttrs != `{"agent":"cc","phase":"decision"}` {
+		t.Fatalf("attrs = %s", gotAttrs)
+	}
+	if gotInputRefs != `[{"kind":"event","id":"e1"}]` || gotOutputRefs != `[{"kind":"frame","id":"f1"}]` {
+		t.Fatalf("refs = %s / %s", gotInputRefs, gotOutputRefs)
+	}
+	if gotEvidenceRefs != `[{"source":"tmux"}]` || gotDecisionPorts != `[{"port":"statusline"}]` {
+		t.Fatalf("evidence/decision = %s / %s", gotEvidenceRefs, gotDecisionPorts)
+	}
+	if gotStateBefore != "snap:before" || gotStateAfter != "snap:after" {
+		t.Fatalf("state refs = %q / %q", gotStateBefore, gotStateAfter)
+	}
+	if gotStatus != "success" || gotOutcome != "emitted" {
+		t.Fatalf("status/outcome = %q / %q", gotStatus, gotOutcome)
 	}
 }
