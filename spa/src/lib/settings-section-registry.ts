@@ -128,8 +128,19 @@ export function clearSettingsSectionRegistry(): void {
 
 /**
  * Drain pending legacy contributions into a fresh array, emptying the
- * internal buffer. Invoked by `dispatchSettingsContributions()` during the
- * flush pass. Returns a shallow copy — callers get full ownership.
+ * internal buffer. Returns a shallow copy — callers get full ownership.
+ *
+ * F3: COMMIT-ONLY. Only call this after full validation of the batch has
+ * succeeded — otherwise a validation failure downstream leaves the queue
+ * empty AND the new registry un-updated, so a retry (after the author
+ * fixes the offending declaration) silently drops every previously-queued
+ * legacy section because the drain already happened. Use
+ * `peekLegacyContributionQueue()` for non-destructive validation reads.
+ *
+ * The current caller,
+ * {@link dispatch-settings-contributions!buildSettingsContributionBatch},
+ * peeks first, runs full validation on both sources, and only then calls
+ * this function as part of the commit phase.
  */
 export function drainLegacyContributionQueue(): AnySettingsContributionDeclaration[] {
   const out: AnySettingsContributionDeclaration[] = Array.from(
@@ -137,6 +148,18 @@ export function drainLegacyContributionQueue(): AnySettingsContributionDeclarati
   )
   pendingLegacyContributions.clear()
   return out
+}
+
+/**
+ * Non-destructive view of the pending legacy contribution queue. Returns a
+ * shallow copy — callers may iterate freely but must not mutate the inner
+ * declarations. Used by the dispatch validation path (F3) to run collision
+ * checks without clearing state, so a thrown validation error leaves the
+ * queue intact for a retry after the author fixes the offending
+ * declaration.
+ */
+export function peekLegacyContributionQueue(): readonly AnySettingsContributionDeclaration[] {
+  return Array.from(pendingLegacyContributions.values())
 }
 
 /**

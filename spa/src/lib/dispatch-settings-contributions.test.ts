@@ -4,6 +4,7 @@ import { clearContributions, listContributions } from './settings-contribution-r
 import { dispatchSettingsContributions } from './dispatch-settings-contributions'
 import {
   drainLegacyContributionQueue,
+  peekLegacyContributionQueue,
   registerSettingsSection,
   clearLegacyPending,
 } from './settings-section-registry'
@@ -164,6 +165,90 @@ describe('dispatchSettingsContributions', () => {
 
       expect(() => dispatchSettingsContributions()).not.toThrow()
       expect(listContributions('purdex').map((c) => c.localId)).toEqual(['general', 'advanced'])
+    })
+
+    // --- F3: atomic legacy drain — validate before committing -------------
+
+    describe('F3: atomic legacy drain', () => {
+      it('legacy queue survives when module-declared validation fails', () => {
+        // A module with an invariant-violation (globalConfig + settings[scope=purdex]).
+        registerModule({
+          id: 'bad',
+          name: 'Bad',
+          globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+          settings: [
+            { localId: 'globalConfig', scope: 'purdex', order: 0, labelKey: 'bad.gc', component: FakeComponent },
+          ],
+        })
+        // A valid legacy section queued.
+        registerSettingsSection({ id: 'kept', label: 'Kept', order: 5, component: FakeComponent })
+
+        expect(() => dispatchSettingsContributions()).toThrow(/bad.*globalConfig.*purdex/)
+
+        // Legacy queue MUST be preserved so the next dispatch (after the
+        // user fixes the module) can still commit the previously-queued
+        // legacy sections without requiring the author to re-register them.
+        const peeked = peekLegacyContributionQueue()
+        expect(peeked).toHaveLength(1)
+        expect(peeked[0].localId).toBe('kept')
+      })
+
+      it('legacy queue survives when legacy-vs-module localId collision throws (F1)', () => {
+        registerModule({
+          id: 'foo',
+          name: 'Foo',
+          settings: [
+            { localId: 'appearance', scope: 'purdex', order: 0, labelKey: 'foo.appearance', component: FakeComponent },
+          ],
+        })
+        registerSettingsSection({ id: 'appearance', label: 'Legacy', order: 0, component: FakeComponent })
+
+        let thrown: Error | undefined
+        try {
+          dispatchSettingsContributions()
+        } catch (e) {
+          thrown = e as Error
+        }
+        expect(thrown).toBeDefined()
+        expect(peekLegacyContributionQueue()).toHaveLength(1)
+      })
+
+      it('retry after fixing the conflict succeeds without author re-registration', () => {
+        registerModule({
+          id: 'bad',
+          name: 'Bad',
+          globalConfig: [{ key: 'x', type: 'string', label: 'x' }],
+          settings: [
+            { localId: 'globalConfig', scope: 'purdex', order: 0, labelKey: 'bad.gc', component: FakeComponent },
+          ],
+        })
+        registerSettingsSection({ id: 'kept', label: 'Kept', order: 5, component: FakeComponent })
+
+        expect(() => dispatchSettingsContributions()).toThrow()
+
+        // Simulate fixing the module by removing the bad one, then retry.
+        clearModuleRegistry()
+        expect(() => dispatchSettingsContributions()).not.toThrow()
+
+        const ids = listContributions('purdex').map((c) => c.id)
+        expect(ids).toContain('_builtin.legacy-section.kept')
+      })
+
+      it('happy path: valid dispatch clears queue + populates registry (unchanged)', () => {
+        registerSettingsSection({ id: 'ok', label: 'OK', order: 0, component: FakeComponent })
+        dispatchSettingsContributions()
+        expect(peekLegacyContributionQueue()).toEqual([])
+        expect(listContributions('purdex').map((c) => c.id)).toContain('_builtin.legacy-section.ok')
+      })
+
+      it('peek is non-destructive — repeated calls return same data', () => {
+        registerSettingsSection({ id: 'a', label: 'A', order: 0, component: FakeComponent })
+        registerSettingsSection({ id: 'b', label: 'B', order: 1, component: FakeComponent })
+        const first = peekLegacyContributionQueue()
+        const second = peekLegacyContributionQueue()
+        expect(first.map((d) => d.localId)).toEqual(['a', 'b'])
+        expect(second.map((d) => d.localId)).toEqual(['a', 'b'])
+      })
     })
 
     it('leaves registry state unchanged when a localId collision throws', () => {

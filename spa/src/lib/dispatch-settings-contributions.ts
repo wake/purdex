@@ -4,7 +4,10 @@ import {
   clearContributions,
   registerSettingsContribution,
 } from './settings-contribution-registry'
-import { drainLegacyContributionQueue } from './settings-section-registry'
+import {
+  drainLegacyContributionQueue,
+  peekLegacyContributionQueue,
+} from './settings-section-registry'
 import type {
   AnySettingsContribution,
   SettingsScope,
@@ -115,11 +118,13 @@ export function buildSettingsContributionBatch(
     }
   }
 
-  // Drain legacy adapter pending buffer. PR-2 wires the real pending buffer
-  // through `registerSettingsSection()`. Each call pushes a declaration here
-  // that is composed with module-declared contributions under the same shared
-  // collision map (F1) in this single atomic pass.
-  const legacyDecls = drainLegacyContributionQueue()
+  // Peek (non-destructive) at the legacy adapter pending buffer — F3. The
+  // real drain happens only in `dispatchSettingsContributions()` AFTER full
+  // validation of both sources has succeeded. A validation failure here
+  // leaves the legacy queue intact, so after the author fixes the offending
+  // declaration the next dispatch can re-validate and commit the
+  // still-queued legacy sections without requiring re-registration.
+  const legacyDecls = peekLegacyContributionQueue()
   for (const decl of legacyDecls) {
     const full = {
       ...decl,
@@ -133,11 +138,26 @@ export function buildSettingsContributionBatch(
   return batch
 }
 
+/**
+ * Atomic dispatch of all settings contributions. Phase 1 validates the full
+ * batch (module-declared + peeked legacy queue) without mutating state.
+ * Only if Phase 1 succeeds does Phase 2 commit: clear the live registry,
+ * drain the legacy queue, and write the validated batch.
+ *
+ * Ordering within Phase 2 preserves the R1 Finding #1 atomic-two-phase
+ * property: clear first, then register — the registry never observes a
+ * mixed old/new state.
+ */
 export function dispatchSettingsContributions(
   modules: ModuleDefinition[] = getModules(),
 ): void {
+  // Phase 1 — validate without mutating. Throws on any collision (F1) or
+  // invariant violation. The legacy queue is peeked, not drained.
   const batch = buildSettingsContributionBatch(modules)
+
+  // Phase 2 — commit. Safe to mutate now: validation passed.
   clearContributions()
+  drainLegacyContributionQueue() // safe: staging already holds the validated set
   for (const contribution of batch) {
     registerSettingsContribution(contribution)
   }
