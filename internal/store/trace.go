@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -678,29 +679,49 @@ func buildLegacyTraceStepsCopyQuery(legacyCols map[string]bool) string {
 		"observed_generation", "decision_ports", "phase", "status", "watcher_token",
 	}
 	// PR-1b-0 envelope cols — preserve if present (robustness path; normally
-	// the rebuild triggers precisely because these are missing).
-	pr1b0Envelope := []string{
-		"trace_id", "reason_text", "attrs", "input_refs", "output_refs",
+	// the rebuild triggers precisely because these are missing). trace_id is
+	// handled separately below so we can backfill PR-1a Lights rows that never
+	// had the column (contract: source_kind!="" ⇒ trace_id required).
+	pr1b0EnvelopeExceptTraceID := []string{
+		"reason_text", "attrs", "input_refs", "output_refs",
 		"state_before_ref", "state_after_ref", "evidence_refs",
 		"started_at", "ended_at", "otel_kind",
 	}
 
-	columns := make([]string, 0, len(core)+len(pr1aLights)+len(pr1b0Envelope))
+	columns := make([]string, 0, len(core)+len(pr1aLights)+len(pr1b0EnvelopeExceptTraceID)+1)
+	selectCols := make([]string, 0, cap(columns))
 	columns = append(columns, core...)
+	for _, c := range core {
+		selectCols = append(selectCols, "s."+c)
+	}
 	for _, c := range pr1aLights {
 		if legacyCols[c] {
 			columns = append(columns, c)
+			selectCols = append(selectCols, "s."+c)
 		}
 	}
-	for _, c := range pr1b0Envelope {
+	// trace_id backfill: PR-1a Lights rows lack the column; per spec §3.5 a
+	// Lights row (source_kind!="") must carry trace_id, and PR-1b-0's agent
+	// trace emitter aliases trace_id = chain_id for its transition period. We
+	// mirror that aliasing here so post-migration Lights rows satisfy
+	// validateLightsRow. Legacy rows (source_kind="") stay at empty string.
+	if legacyCols["trace_id"] {
+		columns = append(columns, "trace_id")
+		if legacyCols["source_kind"] {
+			selectCols = append(selectCols,
+				`CASE WHEN s.trace_id != '' THEN s.trace_id WHEN s.source_kind != '' THEN s.chain_id ELSE '' END`)
+		} else {
+			selectCols = append(selectCols, "s.trace_id")
+		}
+	} else if legacyCols["source_kind"] {
+		columns = append(columns, "trace_id")
+		selectCols = append(selectCols, `CASE WHEN s.source_kind != '' THEN s.chain_id ELSE '' END`)
+	}
+	for _, c := range pr1b0EnvelopeExceptTraceID {
 		if legacyCols[c] {
 			columns = append(columns, c)
+			selectCols = append(selectCols, "s."+c)
 		}
-	}
-
-	selectCols := make([]string, len(columns))
-	for i, c := range columns {
-		selectCols[i] = "s." + c
 	}
 
 	return fmt.Sprintf(`
@@ -1004,6 +1025,9 @@ func normalizeTraceRecord(record TraceRecord) (TraceChain, []TraceStep, error) {
 		if err := validateLightsRow(steps[i]); err != nil {
 			return TraceChain{}, nil, err
 		}
+		if err := validateJSONShape(steps[i]); err != nil {
+			return TraceChain{}, nil, err
+		}
 		seen[steps[i].StepID] = struct{}{}
 	}
 
@@ -1302,12 +1326,17 @@ func nullableString(value *string) any {
 }
 
 // validateLightsRow enforces the row-class discriminator contract from spec
-// §3.5 / plan phase-1 #561: rows with a non-empty source_kind are Lights rows
-// and must carry the required envelope identifiers; rows with an empty
-// source_kind are legacy rows and are exempt so pre-PR-1a callers still
-// round-trip.
+// §3.5 / plan phase-1 #561 bidirectionally: any row carrying at least one
+// Lights envelope field is treated as a Lights row and must populate all five
+// required identifiers; rows with every Lights field empty are legacy rows
+// and pass through so pre-PR-1a callers still round-trip.
 func validateLightsRow(step TraceStep) error {
-	if step.SourceKind == "" {
+	hasLightsData := step.SourceKind != "" ||
+		step.TraceID != "" ||
+		step.Phase != "" ||
+		step.Outcome != "" ||
+		step.Action != ""
+	if !hasLightsData {
 		return nil
 	}
 	required := []struct {
@@ -1324,6 +1353,59 @@ func validateLightsRow(step TraceStep) error {
 		if field.value == "" {
 			return fmt.Errorf("lights row step %s missing required field %s", step.StepID, field.name)
 		}
+	}
+	return nil
+}
+
+// validateJSONShape rejects malformed JSON or wrong top-level shapes in the
+// envelope JSON fields before they hit SQLite. attrs is an object; input_refs
+// / output_refs / evidence_refs / decision_ports are arrays. Empty values fall
+// through to rawJSON*Text defaults and are accepted.
+func validateJSONShape(step TraceStep) error {
+	if err := validateJSONObject(step.StepID, "attrs", step.Attrs); err != nil {
+		return err
+	}
+	arrayFields := []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{"input_refs", step.InputRefs},
+		{"output_refs", step.OutputRefs},
+		{"evidence_refs", step.EvidenceRefs},
+		{"decision_ports", step.DecisionPorts},
+	}
+	for _, f := range arrayFields {
+		if err := validateJSONArray(step.StepID, f.name, f.raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateJSONObject(stepID, field string, raw json.RawMessage) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil
+	}
+	if !json.Valid(trimmed) {
+		return fmt.Errorf("step %s field %s: invalid JSON", stepID, field)
+	}
+	if trimmed[0] != '{' {
+		return fmt.Errorf("step %s field %s: expected JSON object", stepID, field)
+	}
+	return nil
+}
+
+func validateJSONArray(stepID, field string, raw json.RawMessage) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil
+	}
+	if !json.Valid(trimmed) {
+		return fmt.Errorf("step %s field %s: invalid JSON", stepID, field)
+	}
+	if trimmed[0] != '[' {
+		return fmt.Errorf("step %s field %s: expected JSON array", stepID, field)
 	}
 	return nil
 }
