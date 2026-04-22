@@ -20,8 +20,12 @@ func WithDevMode(dev bool) BuilderOption {
 }
 
 // Builder accumulates fields and produces a validated Observation via Build().
-// Safe to reuse across multiple observations within a single goroutine. Not
-// thread-safe — callers must hold their own synchronization if needed.
+//
+// Single-use: Build() does not deep-copy slices, so the returned Observation
+// shares DecisionPorts/Evidence backing arrays with the Builder. Mutating the
+// returned Observation's slices, or calling Build() again after Build(), will
+// produce undefined behaviour. Create a fresh Builder for each Observation.
+// Not thread-safe.
 type Builder struct {
 	dev bool
 	obs Observation
@@ -42,67 +46,56 @@ func (b *Builder) TraceID(v string) *Builder {
 	return b
 }
 
-// SpanID sets the span_id field.
 func (b *Builder) SpanID(v string) *Builder {
 	b.obs.SpanID = v
 	return b
 }
 
-// ParentSpanID sets the parent_span_id field.
 func (b *Builder) ParentSpanID(v string) *Builder {
 	b.obs.ParentSpanID = v
 	return b
 }
 
-// SessionID sets the session_id field.
 func (b *Builder) SessionID(v string) *Builder {
 	b.obs.SessionID = v
 	return b
 }
 
-// ObservedGeneration sets the observed_generation field.
 func (b *Builder) ObservedGeneration(v int64) *Builder {
 	b.obs.ObservedGeneration = v
 	return b
 }
 
-// SourceKind sets the source_kind field.
 func (b *Builder) SourceKind(v SourceKind) *Builder {
 	b.obs.SourceKind = v
 	return b
 }
 
-// WatcherToken sets the watcher_token field.
 func (b *Builder) WatcherToken(v string) *Builder {
 	b.obs.WatcherToken = v
 	return b
 }
 
-// Action sets the action field.
 func (b *Builder) Action(v string) *Builder {
 	b.obs.Action = v
 	return b
 }
 
-// Phase sets the phase field.
 func (b *Builder) Phase(v ObsPhase) *Builder {
 	b.obs.Phase = v
 	return b
 }
 
-// Proposal sets the proposal field.
 func (b *Builder) Proposal(v StateProposal) *Builder {
 	b.obs.Proposal = v
 	return b
 }
 
-// ReasonCode sets the reason_code field.
 func (b *Builder) ReasonCode(v string) *Builder {
 	b.obs.ReasonCode = v
 	return b
 }
 
-// ReasonText sets the reason_text field.
 func (b *Builder) ReasonText(v string) *Builder {
 	b.obs.ReasonText = v
 	return b
@@ -114,19 +107,16 @@ func (b *Builder) AddDecisionPort(v DecisionPort) *Builder {
 	return b
 }
 
-// Evidence sets the evidence field.
 func (b *Builder) Evidence(v []EvidenceRef) *Builder {
 	b.obs.Evidence = v
 	return b
 }
 
-// ObservedAt sets the observed_at field.
 func (b *Builder) ObservedAt(v time.Time) *Builder {
 	b.obs.ObservedAt = v
 	return b
 }
 
-// Seq sets the seq field.
 func (b *Builder) Seq(v int64) *Builder {
 	b.obs.Seq = v
 	return b

@@ -359,8 +359,7 @@ func TestBuilder_DecisionPorts_17_DevPanic(t *testing.T) {
 	for i := 0; i < 17; i++ {
 		b.AddDecisionPort(observation.DecisionPort{PortID: "p"})
 	}
-	//nolint:errcheck // expecting panic
-	b.Build() //nolint:errcheck
+	b.Build() //nolint:errcheck // expecting panic
 }
 
 // ── 18: Empty DecisionPorts — OK ────────────────────────────────────────────
