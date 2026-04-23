@@ -9,9 +9,23 @@ import (
 	"github.com/wake/purdex/internal/agent/opencode"
 )
 
+// pinCanonicalPdxPath anchors the canonical pdx path resolver to the
+// install-time literal so test installs and byte-exact checks render
+// the same managed template body. Without this stub the resolver would
+// fall back to the test binary's executable path and every valid-plugin
+// assertion would drift — intentional for Finding #3 but not what the
+// legacy install/check contract tests are exercising.
+func pinCanonicalPdxPath(t *testing.T, path string) {
+	t.Helper()
+	opencode.SetResolveCanonicalPdxPathForTesting(t, func() (string, bool) {
+		return path, true
+	})
+}
+
 func TestOpenCodeHooks_InstallCheckRemove(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	pinCanonicalPdxPath(t, "/usr/local/bin/pdx")
 
 	p := opencode.NewProvider()
 	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
@@ -67,6 +81,7 @@ func TestOpenCodeHooks_InstallCheckRemove(t *testing.T) {
 func TestOpenCodeCheckHooks_ReportsAll8EventsFromEventsList(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	pinCanonicalPdxPath(t, "/usr/local/bin/pdx")
 
 	p := opencode.NewProvider()
 	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
@@ -111,6 +126,7 @@ func TestOpenCodeCheckHooks_ReportsAll8EventsFromEventsList(t *testing.T) {
 func TestCheckHooks_ValidPlugin_AllInstalled(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	pinCanonicalPdxPath(t, "/usr/local/bin/pdx")
 
 	p := opencode.NewProvider()
 	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
@@ -141,6 +157,7 @@ func TestCheckHooks_ValidPlugin_AllInstalled(t *testing.T) {
 func TestCheckHooks_HandEditedPlugin_Unmanaged(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	pinCanonicalPdxPath(t, "/usr/local/bin/pdx")
 
 	p := opencode.NewProvider()
 	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
@@ -211,6 +228,7 @@ func TestCheckHooks_UnmanagedPlugin_NoMarker(t *testing.T) {
 func TestCheckHooks_CommentEditInPlugin_DetectedViaByteCompare(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	pinCanonicalPdxPath(t, "/usr/local/bin/pdx")
 
 	p := opencode.NewProvider()
 	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
@@ -234,12 +252,15 @@ func TestCheckHooks_CommentEditInPlugin_DetectedViaByteCompare(t *testing.T) {
 	}
 }
 
-// OH5 — plugin with marker present but pdxPath literal corrupted. The
-// extractPdxPath helper must fail cleanly (no panic) and CheckHooks must
-// fall back to a "body differs" issue rather than crashing.
-func TestCheckHooks_ExtractPdxPathFails_FallsBackToUnmanaged(t *testing.T) {
+// OH5 — plugin with marker present but the corrupted body no longer
+// byte-matches the managed template rendered from the trusted canonical
+// pdx path. CheckHooks must fall back to a "body differs" issue without
+// panicking. Replaces the v4 "extractPdxPath failure" test: pdxPath
+// extraction is no longer on the health path after Finding #3.
+func TestCheckHooks_CorruptPdxPathLine_ReportsBodyDiffers(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	pinCanonicalPdxPath(t, "/usr/local/bin/pdx")
 
 	p := opencode.NewProvider()
 	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
@@ -250,7 +271,8 @@ func TestCheckHooks_ExtractPdxPathFails_FallsBackToUnmanaged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read plugin: %v", err)
 	}
-	// Remove the entire pdxPath line — extractPdxPath must no longer match.
+	// Remove the entire pdxPath line; body must drift from the expected
+	// managed template regardless of the trusted pdxPath we render.
 	broken := strings.Replace(string(data), `const pdxPath = "/usr/local/bin/pdx"`, `const pdxPath = /* corrupt */`, 1)
 	if broken == string(data) {
 		t.Fatal("test setup: pdxPath line not found")
@@ -274,6 +296,121 @@ func TestCheckHooks_ExtractPdxPathFails_FallsBackToUnmanaged(t *testing.T) {
 	}
 	if len(status.Issues) == 0 {
 		t.Fatal("corrupt pdxPath: expected at least one issue")
+	}
+}
+
+// OH6 — path-only edit: a user edits only the pdxPath literal in an
+// otherwise-untouched managed plugin (e.g. to point at a tampered
+// binary). v4 extracted the literal from the file itself and rendered
+// expected with the same path → byte-exact self-round-trip → false
+// green. v5 (Finding #3) resolves the canonical pdx path from the
+// runtime (os.Executable + EvalSymlinks), so a path-only edit drifts
+// from the trusted render and CheckHooks must report the file as
+// drifted.
+func TestCheckHooks_PathOnlyEdit_DetectsAsDrifted(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	p := opencode.NewProvider()
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("install hooks: %v", err)
+	}
+	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "pdx-agent-hooks.js")
+	data, err := os.ReadFile(pluginPath)
+	if err != nil {
+		t.Fatalf("read plugin: %v", err)
+	}
+	// Swap in a different — attacker-controlled — pdx path literal.
+	tampered := strings.Replace(
+		string(data),
+		`const pdxPath = "/usr/local/bin/pdx"`,
+		`const pdxPath = "/fake/malicious/pdx"`,
+		1,
+	)
+	if tampered == string(data) {
+		t.Fatal("test setup: original pdxPath literal not found")
+	}
+	if err := os.WriteFile(pluginPath, []byte(tampered), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Pin the canonical resolver to the real install-time path so expected
+	// render matches the untampered template — the drift is the on-disk
+	// pdxPath, not the check baseline.
+	opencode.SetResolveCanonicalPdxPathForTesting(t, func() (string, bool) {
+		return "/usr/local/bin/pdx", true
+	})
+
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Installed {
+		t.Fatalf("path-only edit: Installed=true, want false (Finding #3)")
+	}
+	if !strings.Contains(strings.Join(status.Issues, " | "), "plugin body differs from managed template") {
+		t.Fatalf("path-only edit: issues=%v, want 'plugin body differs from managed template'", status.Issues)
+	}
+}
+
+// OH7 — canonical path trust loop: when canonical resolver reports the
+// same path the file already carries, an untouched managed plugin
+// byte-matches the expected render and CheckHooks must report all
+// events installed.
+func TestCheckHooks_TrustsCanonicalPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	p := opencode.NewProvider()
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("install hooks: %v", err)
+	}
+
+	opencode.SetResolveCanonicalPdxPathForTesting(t, func() (string, bool) {
+		return "/usr/local/bin/pdx", true
+	})
+
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if !status.Installed {
+		t.Fatalf("trusted canonical path: Installed=false, Issues=%v", status.Issues)
+	}
+}
+
+// OH8 — canonical resolver failure fallback: when os.Executable or
+// EvalSymlinks fails (e.g. daemon launched from an unusual path), the
+// checker must surface a body-differs issue rather than crash or
+// silently pass. Replaces OH5's panic-safety role.
+func TestCheckHooks_CanonicalResolveFails_ReportsBodyDiffers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	p := opencode.NewProvider()
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("install hooks: %v", err)
+	}
+
+	opencode.SetResolveCanonicalPdxPathForTesting(t, func() (string, bool) {
+		return "", false
+	})
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("CheckHooks panicked: %v", r)
+		}
+	}()
+
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Installed {
+		t.Fatalf("resolve-fail: Installed=true, want false")
+	}
+	if !strings.Contains(strings.Join(status.Issues, " | "), "plugin body differs from managed template") {
+		t.Fatalf("resolve-fail: issues=%v, want 'plugin body differs from managed template'", status.Issues)
 	}
 }
 

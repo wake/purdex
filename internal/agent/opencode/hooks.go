@@ -10,6 +10,24 @@ import (
 	"github.com/wake/purdex/internal/agent"
 )
 
+// resolveCanonicalPdxPath returns the daemon's own executable path with
+// symlinks resolved — the single trusted pdxPath CheckHooks renders the
+// managed template against. The second return reports whether resolution
+// succeeded; callers must treat false as "body differs" rather than
+// falling back to the on-disk literal (PR #616 review Finding #3). It is
+// a package-level var so tests can stub without touching os.Executable.
+var resolveCanonicalPdxPath = func() (string, bool) {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		return "", false
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil || resolved == "" {
+		return "", false
+	}
+	return resolved, true
+}
+
 func (p *Provider) InstallHooks(pdxPath string) error {
 	pluginPath, err := opencodePluginPath()
 	if err != nil {
@@ -66,29 +84,30 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		}, nil
 	}
 
-	// Plan §1.6: the opencode plugin is a single pdx-managed artifact, not
-	// a per-event configuration. CheckHooks succeeds only when the on-disk
-	// body byte-matches the rendered template for the pdxPath literal the
-	// file itself carries. Any deviation (comment, whitespace, dead code,
-	// broken switch/case) collapses every declared event to Installed=false
-	// — "managed body drifted, reinstall" is a uniform signal that matches
-	// the plugin's all-or-nothing semantics.
+	// Plan §1.6 + PR #616 review Finding #3: the opencode plugin is a
+	// single pdx-managed artifact. CheckHooks renders the expected template
+	// against the trusted runtime canonical pdxPath (daemon's own
+	// os.Executable, symlinks resolved) — never against the literal the
+	// file itself carries, which would make path-only edits silently pass
+	// their own round-trip. Any deviation (comment, whitespace, dead code,
+	// broken switch/case, tampered pdxPath literal) collapses every
+	// declared event to Installed=false — "managed body drifted,
+	// reinstall" matches the plugin's all-or-nothing semantics.
 	specs := p.Events()
-	pdxPath, ok := extractPdxPath(string(data))
-	if !ok {
-		events := make(map[string]agent.HookEventInfo, len(specs))
+	trustedPath, resolved := resolveCanonicalPdxPath()
+	events := make(map[string]agent.HookEventInfo, len(specs))
+	if !resolved {
 		for _, spec := range specs {
 			events[spec.Name] = agent.HookEventInfo{Installed: false, Command: pluginPath}
 		}
 		return agent.HookStatus{
 			Installed:    false,
 			Events:       events,
-			Issues:       []string{"plugin body differs from managed template (run reinstall)"},
+			Issues:       []string{"plugin body differs from managed template (cannot resolve canonical pdx path — run reinstall)"},
 			AgentVersion: agentVersion,
 		}, nil
 	}
-	expected := renderManagedPlugin(pdxPath)
-	events := make(map[string]agent.HookEventInfo, len(specs))
+	expected := renderManagedPlugin(trustedPath)
 	if !bytes.Equal(data, []byte(expected)) {
 		for _, spec := range specs {
 			events[spec.Name] = agent.HookEventInfo{Installed: false, Command: pluginPath}
@@ -96,7 +115,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		return agent.HookStatus{
 			Installed:    false,
 			Events:       events,
-			Issues:       []string{"plugin body differs from managed template (run reinstall)"},
+			Issues:       []string{"plugin body differs from managed template (pdx binary may have moved or file was edited — run reinstall)"},
 			AgentVersion: agentVersion,
 		}, nil
 	}
