@@ -31,10 +31,37 @@ type HookEvent struct {
 // --- Optional capabilities ---
 
 // HookInstaller can install/remove/check hook configurations for a specific agent.
+//
+// Events() is the single source of truth (SSoT) for the hook event catalog:
+// installer iteration, CheckHooks reporting, SupportedStatuses derivation, and
+// future Inspector UI all read from the same declaration. It supersedes any
+// package-local *HookEvents slice; do not introduce a parallel string list.
+// Any new HookInstaller implementation is required to implement Events().
 type HookInstaller interface {
 	InstallHooks(pdxPath string) error
 	RemoveHooks(pdxPath string) error
 	CheckHooks() (HookStatus, error)
+	Events() []HookEventSpec
+}
+
+// HookEventSpec declares one hook event the installer wires, the Status set
+// DeriveStatus may emit from that event, and a short human-readable blurb for
+// the Inspector UI. It is the build-time declaration contract; runtime hook
+// handling stays per-agent (policy dispersal, plumbing shared).
+//
+// Fields:
+//   - Name: matches the hook JSON event_name / pdx hook CLI subcommand.
+//   - EmitsStatus: non-empty Status values (Status != "") that DeriveStatus
+//     may return for this event across all sub-branches. Empty slice (not nil)
+//     means the event is detail-only (DeriveStatus returns Valid=true with
+//     Status=""); SubagentStart/Stop are the canonical examples. Polymorphic
+//     events (e.g. cc Notification) list the union of every sub-branch.
+//   - Description: short English sentence for Inspector display. No trailing
+//     period, no emoji; keep it under roughly 70 characters.
+type HookEventSpec struct {
+	Name        string
+	EmitsStatus []Status
+	Description string
 }
 
 // HookStatus reports the installation state of hooks for an agent.

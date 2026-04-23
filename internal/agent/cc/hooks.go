@@ -33,6 +33,14 @@ func (p *Provider) RemoveHooks(pdxPath string) error {
 	return mergeClaudeHooks(settingsPath, pdxPath, true)
 }
 
+// Events returns the hook event declarations for Claude Code. Stub; filled in
+// a later commit (HookInstaller.Events() plan §3 Commit 3). Returning nil
+// keeps the HookInstaller contract satisfied while the declaration content
+// is built up in a dedicated commit with its own tests.
+func (p *Provider) Events() []agent.HookEventSpec {
+	return nil
+}
+
 func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	settingsPath, err := ccSettingsPath()
 	if err != nil {

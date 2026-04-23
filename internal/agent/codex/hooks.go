@@ -36,6 +36,13 @@ func (p *Provider) RemoveHooks(pdxPath string) error {
 	return mergeCodexHooks(hooksPath, pdxPath, true)
 }
 
+// Events returns the hook event declarations for Codex. Stub; filled in a
+// later commit (HookInstaller.Events() plan §3 Commit 5 — the issue #613
+// installer expansion from 3 events to 9).
+func (p *Provider) Events() []agent.HookEventSpec {
+	return nil
+}
+
 func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

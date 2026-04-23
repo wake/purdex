@@ -49,6 +49,12 @@ func (p *Provider) RemoveHooks(_ string) error {
 	return nil
 }
 
+// Events returns the hook event declarations for OpenCode. Stub; filled in a
+// later commit (HookInstaller.Events() plan §3 Commit 4).
+func (p *Provider) Events() []agent.HookEventSpec {
+	return nil
+}
+
 func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	pluginPath, err := opencodePluginPath()
 	if err != nil {
