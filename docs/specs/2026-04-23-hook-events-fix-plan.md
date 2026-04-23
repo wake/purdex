@@ -1,16 +1,16 @@
 # Hook Events PR #616 Fix Plan
 
 - **Date**: 2026-04-23
-- **Version**: v2（依 plan codex review `review-mobsgj0y-rgwbdv` 四點 finding 全採納重寫）
+- **Version**: v3（依 plan codex review `review-mobsgj0y-rgwbdv`(v1 判) + `review-mobsrf0q-47acc5`(v2 判) 共 7 點 finding 全採納重寫）
 - **Spec**: `docs/specs/2026-04-23-lights-rebuild-spec.md` §2.4（架構護欄）
 - **Parent plan**: `docs/specs/2026-04-23-hook-events-declaration-plan.md`（既有，11 commits merged 進本分支）
 - **Worktree**: `lights-spec-guardrails`（branch `worktree-lights-spec-guardrails`，PR #616）
 - **依賴**: Phase 1 merged at alpha.215（§5 L2 對齊完成）；Events() SSoT 已在本分支建立
 - **範圍**: 修四路 codex review 攻擊/防守/體質視角提出的 4 個 findings（2 HIGH + 2 MED），讓 Events() SSoT 主張在 codex 與 opencode 端真正成立，且不因升級誤判既有安裝
 
-## 0. v1 → v2 重寫重點
+## 0. 迭代歷史 — v1 → v2 → v3
 
-Plan v1 被 codex review `review-mobsgj0y-rgwbdv` 判 needs-attention（2 HIGH + 2 MED finding）。v2 全數採納：
+### v1 → v2（codex review `review-mobsgj0y-rgwbdv` 4 findings 採納）
 
 | v1 設計 | v2 更正 | 依據 |
 |---|---|---|
@@ -20,6 +20,16 @@ Plan v1 被 codex review `review-mobsgj0y-rgwbdv` 判 needs-attention（2 HIGH +
 | Commit 順序: SupportedStatuses 收斂（2）→ drift 升級（4），中間 commit 紅 | drift 測試升級放在 SupportedStatuses 語意切換之前；**每 commit 真正全綠** | 自相矛盾：原 plan 同時要求每 commit 全綠 + 中間依賴後續 commit 補洞 |
 
 核心哲學修正：**`FutureOnly` 只影響 installer/checker 面向，不影響 DeriveStatus 能力宣告面向**。兩個面向獨立。
+
+### v2 → v3（codex review `review-mobsrf0q-47acc5` 3 findings 採納）
+
+| v2 設計 | v3 更正 | 依據 |
+|---|---|---|
+| State A 定義：「key 不存在 **或 entries 為空**」 | State A 嚴格限為「key 不存在」；entries 空/型別錯/無合法 pdx command → State B (broken) | `mergeCodexHooks` remove 路徑會留下 `hooks[event]=[]`；若歸 absent 則 FutureOnly 會假綠 |
+| opencode CheckHooks 用 `extractEmittedEvents` regex + per-event Installed map | **byte-exact template 比對**：從檔案抽 pdxPath，重新 render 後與檔案 byte-equal 比對；不一致 → 整個 unmanaged | regex 會被註解、字串常量、dead code 騙過；plugin 是 pdx 全權受管的原子檔，不應支援 per-event 健康判定 |
+| Commit 2 只在 `codexEventSpecs` 標 FutureOnly，宣稱無消費者讀取 → 綠 | Commit 2 同時更新三家 `Events()` defensive copy 帶上 `FutureOnly: spec.FutureOnly`；否則 CE1/CE2 在 commit 2 紅 | 既有 `Events()` 是手寫 field-by-field copy，不會自動帶新欄位 |
+
+核心哲學修正：**opencode plugin 是 atomic managed file，非 per-event 配置**。byte-exact 比對符合 plugin 實際語意，且消除整類 false-green 路徑。
 
 ## 1. 契約鎖定
 
@@ -81,9 +91,9 @@ codex `SupportedStatuses()` **維持 5 status**（Idle/Running/Waiting/Error/Cle
 `internal/agent/codex/hooks.go` `CheckHooks` 核心改動：對每個 event 依 FutureOnly 與現況分三態處理。
 
 對每個 event，讀 `hooks.json` 對應 key 得到狀態：
-- **State A: absent** — hooks.json 無此 event key（或 entries 為空）
-- **State B: present-but-broken** — key 存在但找不到正確 pdx command（例：legacy direct-entry、command 不正確、或已被人為改壞）
-- **State C: valid** — key 存在且 pdx command 正確
+- **State A: absent** — hooks.json **無此 event key**（`hooks` map 中該 key 完全不存在）。**僅此一情形**
+- **State B: present-but-broken** — key 存在但任一條件不成立：entries 為空陣列 `[]`、entries 型別非陣列、legacy direct-entry 格式、command 找不到、command 不含合法 pdx path
+- **State C: valid** — key 存在、entries 為 matcher-group 陣列、至少一組有合法 pdx command
 
 決策表：
 
@@ -101,12 +111,16 @@ codex `SupportedStatuses()` **維持 5 status**（Idle/Running/Waiting/Error/Cle
 - **FutureOnly present-but-broken** → 已配置卻壞掉，是確實的 bug，必須顯化並 block（避免「綠燈但實際壞」）
 - **FutureOnly valid** → 已升級完成，與 non-FutureOnly 同等認定
 
-實作：遍歷 `p.Events()`（取得含 FutureOnly bit 的 spec slice），而非 `p.eventNames()`。對每個 spec：
-1. 查 hooks[spec.Name] 現況
-2. `hasLegacyPdxDirectCodexEntry` → broken 分支
-3. `findPdxCommandInCodex` → valid 分支（有 command）或 broken 分支（key 存在但無 pdx command）
-4. key 不存在 → absent 分支
-5. 依 spec.FutureOnly 與 state 查表套用決策
+實作：遍歷 `p.Events()`（取得含 FutureOnly bit 的 spec slice）。對每個 spec：
+
+1. **Absent check**: `_, keyExists := hooks[spec.Name]` — 若 `keyExists == false` → State A，查表決策
+2. Key 存在進一步判斷：
+   - `hasLegacyPdxDirectCodexEntry(entries)` → State B (broken)
+   - `findPdxCommandInCodex(entries)` → 空字串 → State B (broken)
+   - command 非空且為 pdx → State C (valid)
+3. 依 spec.FutureOnly 與 state 查表套用決策
+
+**關鍵**：**必須用 `keyExists`（map 的雙回傳值）判斷 absent**，不能用「entries 是否為空」— 空陣列 `[]` 是可落地狀態（`mergeCodexHooks` 移除路徑會留下），歸 broken 方能讓 FutureOnly 顯化。
 
 **3-event legacy 使用者**（升級後）：SessionStart/UserPromptSubmit/Stop = valid（state C），6 個 FutureOnly = absent（state A）→ Issues 空、allInstalled=true。
 
@@ -114,36 +128,50 @@ codex `SupportedStatuses()` **維持 5 status**（Idle/Running/Waiting/Error/Cle
 
 **部分損壞**：若有 FutureOnly key 被手動改壞 → `Issues` 顯化 warning + allInstalled=false（避免假綠燈）。
 
-### 1.5 opencode renderManagedPlugin 從 Events 生成
+### 1.5 opencode renderManagedPlugin — 契約即 SSoT（render-time validation 擋漂移）
 
 Finding #2（PR #616 第 2 輪防守 HIGH + 體質 MED）核心：不讓 template 與 `opencodeEventSpecs` 成為兩份平行 SSoT。
 
-策略 A（選用）：template 保留固定 switch/case 結構，**但渲染時驗證** template 實際 emit 的 pdx event set ⊆ `opencodeEventSpecs.Name` 集合。
+策略：template 保留固定 switch/case 結構；**render 時以 `validateSpecsCoverEmitted` 強制檢查** template emit set == `opencodeEventSpecs.Name` set。build-time 契約檢查；runtime 不經這條路徑。
 
 具體：
 
-- `renderManagedPlugin(pdxPath string) string` 維持原簽名；函式尾部呼叫 `validateSpecsCoverEmitted(body, opencodeEventSpecs)` — 若 template 字串 emit 的 event name 不在 specs 內 → `panic("contract violation: template emits undeclared event: ...")` 
-- `extractEmittedEvents(body string) []string` — 用 regex `emit\(['"](\w+)['"]` 從 body 抽出 emit 的 event names
+- `renderManagedPlugin(pdxPath string) string` 維持原簽名；函式尾部呼叫 `validateSpecsCoverEmitted(body, opencodeEventSpecs)` — template 字串 emit 的 event name 與 specs 不等 → `panic("contract violation: template emits: <A,B>; specs declare: <C,D>")` 
+- `extractEmittedEvents(body string) []string` — regex `emit\(['"](\w+)['"]` 從 body 抽出 emit 的 event names（**只用於 render-time contract check，不用於 CheckHooks 健康判定**）
 - `validateSpecsCoverEmitted(body string, specs []HookEventSpec) error` — 強等：`set(extractEmittedEvents(body)) == set(specs.Name)`；任何一側 superset 都回 error
 
-**為什麼 panic 而非 error**：render 函式原簽名回 string，加 error 會改呼叫點。panic 只會在 build 測試階段觸發（因為 template 是 const-like 字串），release path 不會 runtime 爆。
+**為什麼 render panic 而非 error**：render 函式原簽名回 string，加 error 改呼叫點。panic 只在 build 測試階段觸發（因為 template 是 const-like），release path 不爆。
 
-**配合測試**（§2.3 PT1-PT3）驗證：
-- PT1：`extractEmittedEvents` 正確從 sample body 抽出 event names
-- PT2：`renderManagedPlugin("/p")` 產出的 body emit set == `opencodeEventSpecs.Name` set
-- PT3：用 synthetic specs（例移除 `Stop`）餵 `validateSpecsCoverEmitted` → return error（不經 renderManagedPlugin，避免要 mock package var）
+**`extractEmittedEvents` 的角色限制（v3 收斂）**：**僅用於 build-time 契約驗證**。任何 runtime 健康檢查（CheckHooks）都不讀此 regex — 改用 §1.6 的 byte-exact 比對。regex 對註解、字串常量、dead code、人為改壞的 JS 無法區分「可執行 emit」與「看起來像 emit 的文字」。
 
-### 1.6 opencode CheckHooks per-event emit 驗證
+**配合測試**（§2.3 PT1-PT5）驗證。
 
-`internal/agent/opencode/hooks.go` `CheckHooks` 對齊 §1.5 extraction 成為 per-event 驗證：
+### 1.6 opencode CheckHooks — byte-exact template 比對
 
-1. 讀檔、驗 marker（不變）
-2. 呼叫 `extractEmittedEvents(string(data))` 取 emit set
-3. 對每個 `opencodeEventSpecs` event：
-   - event name ∈ emit set → `Installed=true, Command=pluginPath`
-   - event name ∉ emit set → `Installed=false`，push `<name> emit missing in plugin` 
-4. opencode 當前無 FutureOnly event（§1.3），`allInstalled = (全部 events Installed=true)`
-5. 若 emit set 含有 specs 沒有的 event name（template 動到但 specs 沒補） → 加 issue `unexpected emit '<name>' not in catalog` + 不影響 allInstalled（此路徑 render 階段已 panic 擋掉，但 CheckHooks 對人為改動的 plugin 檔案仍做防禦）
+`internal/agent/opencode/hooks.go` `CheckHooks` 策略（v3 重新設計）：
+
+**Plugin 是 pdx 全權受管的原子 artifact，非 per-event 配置檔**。CheckHooks 採「template body byte-exact」語意：
+
+1. 讀檔（不變）
+2. 驗 marker（不變）
+3. 從檔案抽 `pdxPath`（template 內有 `const pdxPath = "..."` 可用 regex `const pdxPath = "([^"]+)"` 抽出）
+4. 以抽出的 pdxPath 重新 render template → `expected`
+5. **byte-exact 比較** `data == expected`：
+   - 相等 → `Installed=true`；每個 `opencodeEventSpecs` event 的 `events[name] = {Installed: true, Command: pluginPath}`；`Issues=[]`
+   - 不等 → `Installed=false`；issue 含 `plugin body differs from managed template (run reinstall)`；**所有 event `Installed=false`**（因為整份 plugin 視為不可信）
+6. 若 marker 不存在 → 既有 unmanaged 行為保留
+
+**新 helper**：`extractPdxPath(body string) (string, bool)` — 從受管 body 抽 pdxPath。regex `const pdxPath = "([^"]+)"`（單一行，單一出現位置）。若抽不到 → 當成 byte-mismatch。
+
+**為什麼不 per-event**：opencode plugin 是單檔 JavaScript，switch/case 結構內任何改動都可能影響其他 event（例 shared state `activeSubagents`、`suppressIdleForSession`）。將 plugin 視為「有 marker + byte-equal」二元狀態符合其語意：要嘛 pdx 受管、要嘛使用者自行負責。
+
+**效果**：完全消除 regex-based 假綠燈：
+- 註解內 `emit('Fake')` → 改動 → byte-mismatch → unmanaged
+- dead code 分支 → 改動 → byte-mismatch
+- 人為改 `switch` 邏輯但保留 emit string → byte-mismatch
+- 完全合法 pdx 受管 body → byte-equal → all installed
+
+**測試簡化**（§2.4 OH1-OH3）— v2 的 OH4 (unexpected emit) 不再需要（byte-exact 覆蓋全部異動 case）。
 
 ### 1.7 drift test per-event 強相等 + parser contract 保留
 
@@ -218,31 +246,34 @@ F2 是防呆測試，鎖定「DeriveSupportedStatuses 不因 FutureOnly 過濾�
 | CH3 | `TestCheckHooks_RequiredEventMissing_Blocks` | 只有 2 個 required event valid（缺 SessionStart） | `allInstalled=false`、Issues 含 `SessionStart hook not installed` |
 | CH4 | `TestCheckHooks_FutureOnlyBroken_WarnsAndBlocks` | hooks.json 3 required valid + 1 FutureOnly（Notification）key 存在但 command 錯誤 | `allInstalled=false`、Issues 含 `Notification hook: pdx command malformed...`、Notification Installed=false |
 | CH5 | `TestCheckHooks_FutureOnlyAbsent_DoesNotBlock` | hooks.json 3 required valid + 3 FutureOnly absent + 3 FutureOnly valid | `allInstalled=true`、Issues=[]、3 absent entries Installed=false、3 valid entries Installed=true |
+| CH6 | `TestCheckHooks_FutureOnlyEmptyArray_ClassifiesAsBroken` | hooks.json 3 required valid + 1 FutureOnly key 存在但 entries `[]`（空陣列） | `allInstalled=false`、Issues 含 `<name> hook: pdx command malformed...`、該 event `Installed=false`（不能因空陣列歸 absent 假綠） |
 
-### 2.3 opencode template 與 CheckHooks 對齊
+### 2.3 opencode template render-time contract validation
 
-`internal/agent/opencode/plugin_template_test.go` 新增：
+`internal/agent/opencode/plugin_template_test.go` 新增（只測 build-time 契約，不測 runtime 健康）：
 
 | # | 名稱 | 斷言 |
 |---|---|---|
-| PT1 | `TestExtractEmittedEvents` | helper 從 sample body 正確抽出 event names（含 regex corner：字串插值前後空白、單引號 vs 雙引號、兩個 emit 同行） |
+| PT1 | `TestExtractEmittedEvents` | helper 從 sample body 正確抽出 event names（含 regex corner：單引號、雙引號、多行、插值） |
 | PT2 | `TestValidateSpecsCoverEmitted_Equal` | `validateSpecsCoverEmitted(body, opencodeEventSpecs)` 對真 template body 回 nil |
 | PT3 | `TestValidateSpecsCoverEmitted_EmitNotInSpec` | synthetic body 含 `emit('Fake')` + specs 無 Fake → error |
 | PT4 | `TestValidateSpecsCoverEmitted_SpecNotInEmit` | synthetic body 缺某 event + specs 含它 → error |
-| PT5 | `TestRenderManagedPlugin_ProducesValidBody` | `renderManagedPlugin("/p")` 不 panic；結果 body 含 marker + 8 個 event emit |
+| PT5 | `TestRenderManagedPlugin_ProducesValidBody` | `renderManagedPlugin("/p")` 不 panic；結果 body 含 marker + 對齊 specs |
+| PT6 | `TestExtractPdxPath_RoundtripFromRender` | `renderManagedPlugin(p)` 後 `extractPdxPath(body)` 回 `p`（byte-exact 比對基石） |
 
-### 2.4 opencode hooks CheckHooks per-event emit
+### 2.4 opencode hooks CheckHooks — byte-exact template 比對
 
-`internal/agent/opencode/hooks_test.go` 新增：
+`internal/agent/opencode/hooks_test.go` 新增（v3 簡化：plugin 是 atomic managed file）：
 
 | # | 名稱 | 斷言 |
 |---|---|---|
-| OH1 | `TestCheckHooks_ValidPlugin_PerEventInstalled` | 用 `writeManagedPlugin` 寫合法 template → CheckHooks 每個 event `Installed=true`、Issues=[] |
-| OH2 | `TestCheckHooks_HandEditedPlugin_EventMissing` | 寫一份含 marker 但移除某 `emit('Stop',` 的 body → CheckHooks 該 event `Installed=false`、Issues 含 `Stop emit missing in plugin` |
-| OH3 | `TestCheckHooks_UnmanagedPlugin_ReturnsUnmanaged` | 既有行為保留：不帶 marker → Installed=false + Issues |
-| OH4 | `TestCheckHooks_UnexpectedEmitInPlugin_Flagged` | 寫一份含 marker + 額外 `emit('Fake', ...)` 的 body → Issues 含 `unexpected emit 'Fake' not in catalog`、allInstalled 不因此 false（現有 8 個 event 仍 valid） |
+| OH1 | `TestCheckHooks_ValidPlugin_AllInstalled` | 用 `writeManagedPlugin` 寫合法 template → CheckHooks 所有 event `Installed=true`、Issues=[] |
+| OH2 | `TestCheckHooks_HandEditedPlugin_Unmanaged` | 寫一份含 marker 但改動一個字（例移除某 `emit('Stop',`） → CheckHooks **整個 plugin** `Installed=false`、Issues 含 `plugin body differs from managed template`、**所有 event `Installed=false`** |
+| OH3 | `TestCheckHooks_UnmanagedPlugin_NoMarker` | 既有行為保留：不帶 marker → Installed=false + Issues `plugin file exists but is unmanaged` |
+| OH4 | `TestCheckHooks_CommentEditInPlugin_DetectedViaByteCompare` | 寫合法 template 後**只加一行註解** → byte-mismatch → Installed=false（驗證 regex 假綠盲點已由 byte-exact 覆蓋） |
+| OH5 | `TestCheckHooks_ExtractPdxPathFails_FallsBackToUnmanaged` | 寫檔案含 marker 但 `const pdxPath` 被改壞（regex 抽不到）→ CheckHooks 不 panic、回 Installed=false + issue |
 
-OH4 測 §1.6 對「template 動到、specs 沒補」的防禦路徑。
+**刪除**：v2 OH4 (per-event unexpected emit detection) — byte-exact 已天然覆蓋。
 
 ### 2.5 drift test per-event 強相等
 
@@ -265,23 +296,31 @@ D5 天然覆蓋 FutureOnly event（因為 fixtures 與 declaredSet 都包含）�
 - fixtures 不移除 → parser drift 不退化
 - CheckHooks 內部行為變化只影響 codex/hooks_test.go 本身
 
-### Commit 1 — `feat(agent): add FutureOnly bit to HookEventSpec`
-- 紅：寫 F1 + F2 → 失敗（F1 編譯錯 / F2 尚未驗證）
-- 綠：`provider.go` 加 `FutureOnly bool` 欄位 + 註解（§1.1）；`DeriveSupportedStatuses` **不動**；F1/F2 綠
-- 檢驗：cc / codex / opencode `Events()` 的 defensive copy 需保留 FutureOnly bit（目前 three-field literal copy 自動涵蓋 struct 所有欄位 — 確認一下）
+### Commit 1 — `feat(agent): add FutureOnly bit to HookEventSpec and defensive copies`
+- 紅：寫 F1 + F2 + CE2 的 defensive copy 預斷言 → 失敗
+- 綠：
+  1. `provider.go` 加 `FutureOnly bool` 欄位 + 註解（§1.1）
+  2. `DeriveSupportedStatuses` **不動**
+  3. **三家 `Events()` defensive copy 同步加 `FutureOnly: spec.FutureOnly`**：
+     - `cc/events.go` Events()
+     - `codex/events.go` Events()
+     - `opencode/events.go` Events()
+  4. F1/F2 綠；defensive copy 預檢查：既有測試（若有直接讀 `Events()` 的）不受影響（因為此 commit 尚未標任何 FutureOnly=true，所有 bit 仍預設 false）
 - 跑 `go test ./internal/agent/...` 全綠
 
+**為什麼 Commit 1 就改三家 `Events()`**：v2 Commit 2 宣稱「只標 `codexEventSpecs` 就綠」是錯的 — `Events()` 是手寫 field copy，若不先補 FutureOnly 傳遞，Commit 2 的 CE1/CE2 會直接紅（spec 欄位有但 copy 沒帶 → 測試測到的是 copy 後的 struct，會看到 false）。Commit 1 一併處理。
+
 ### Commit 2 — `feat(agent/codex): mark 6 future-only events`
-- 紅：寫 CE1 → 失敗（欄位未標 true）
-- 綠：`codex/events.go` 把 SubagentStart / SubagentStop / StopFailure / Notification / PermissionRequest / SessionEnd 六個 event 加 `FutureOnly: true`
-- 補：CE2（defensive copy 保留 FutureOnly bit）
-- 跑 `go test ./internal/agent/codex/...` 綠（現有 `TestCodexSupportedStatuses` 不動，仍 5 status — v2 下不需改）
-- 跑 `go test ./internal/agent/...` 全綠（drift 三向相等仍成立）
+- 紅：寫 CE1 → 失敗（6 個 event 尚未設 `FutureOnly: true`）
+- 綠：`codex/events.go` 把 SubagentStart / SubagentStop / StopFailure / Notification / PermissionRequest / SessionEnd 六個加 `FutureOnly: true`
+- 補：CE2 完整實作（defensive copy mutate 後獨立性；依賴 Commit 1 已修好的 copy）
+- 跑 `go test ./internal/agent/codex/...` 綠
+- 跑 `go test ./internal/agent/...` 全綠（drift 三向相等仍成立：SupportedStatuses 不讀 FutureOnly）
 
 ### Commit 3 — `feat(agent/codex): three-state CheckHooks with FutureOnly awareness`
-- 紅：寫 CH1-CH5 → 失敗（CheckHooks 尚未 aware）
-- 綠：`codex/hooks.go` 改 CheckHooks 遍歷用 `p.Events()`（取得 FutureOnly bit），決策表依 §1.4 實作三態
-- 留意：`hasLegacyPdxDirectCodexEntry` / `findPdxCommandInCodex` 已區分 broken state，主要改動是「broken + FutureOnly → warning issue + block」（以前並無 FutureOnly 概念，所有 broken 都 block）
+- 紅：寫 CH1-CH6 → 失敗（CheckHooks 尚未 aware）
+- 綠：`codex/hooks.go` 改 CheckHooks 遍歷用 `p.Events()`（取得 FutureOnly bit），決策表依 §1.4 三態（**嚴格以 `_, keyExists := hooks[spec.Name]` 判 absent；entries 空陣列歸 broken**）
+- 建議抽 helper `checkCodexEvent(spec HookEventSpec, rawEntries any, keyExists bool) (HookEventInfo, []string, bool /*blocks*/)` 便於單點測試（CH1-CH6 可呼叫或仍走 CheckHooks 整體 — subagent 依測試可讀性擇一）
 - 跑 `go test ./internal/agent/codex/...` 綠
 
 ### Commit 4 — `test(agent): per-event drift assertion`
@@ -289,32 +328,40 @@ D5 天然覆蓋 FutureOnly event（因為 fixtures 與 declaredSet 都包含）�
 - 綠：若紅，修 spec 或 fixture 對齊（最可能 case：cc 的 `Notification` EmitsStatus `[Waiting, Idle]` 對 fixtures 的 4 筆全綠 — 應直接綠）
 - 跑 `go test ./internal/agent/...` 綠
 
-### Commit 5 — `refactor(agent/opencode): extract emitted events helper`
-- 紅：寫 PT1 → 失敗（helper 不存在）
-- 綠：`plugin_template.go` 加 `extractEmittedEvents(body string) []string`
+### Commit 5 — `refactor(agent/opencode): extract emitted events + pdx path helpers`
+- 紅：寫 PT1 + PT6 → 失敗（helpers 不存在）
+- 綠：`plugin_template.go` 加
+  - `extractEmittedEvents(body string) []string`（regex `emit\(['"](\w+)['"]`）
+  - `extractPdxPath(body string) (string, bool)`（regex `const pdxPath = "([^"]+)"`）
 - 跑 `go test ./internal/agent/opencode/...` 綠
 
-### Commit 6 — `feat(agent/opencode): validate template emits declared events`
+### Commit 6 — `feat(agent/opencode): render-time contract validation`
 - 紅：寫 PT2 + PT3 + PT4 + PT5 → 失敗
 - 綠：加 `validateSpecsCoverEmitted(body string, specs []HookEventSpec) error`；`renderManagedPlugin` 結尾呼叫 validate，mismatch panic
-- PT5 確認正常 template 不 panic
+- PT5 確認常態 template 不 panic
 - 跑 `go test ./internal/agent/opencode/...` 綠
 
-### Commit 7 — `feat(agent/opencode): CheckHooks verifies per-event emit`
-- 紅：寫 OH1 + OH2 + OH3 + OH4 → 失敗（CheckHooks 仍假綠回填）
-- 綠：`opencode/hooks.go` CheckHooks 依 §1.6 改寫：讀檔 → extract → per-event 檢查 + 超集防禦
+### Commit 7 — `feat(agent/opencode): byte-exact CheckHooks against managed template`
+- 紅：寫 OH1 + OH2 + OH3 + OH4 + OH5 → 失敗（CheckHooks 仍用舊邏輯）
+- 綠：`opencode/hooks.go` CheckHooks 依 §1.6 改寫：
+  1. 讀檔 + 驗 marker（既有）
+  2. `extractPdxPath(body)` — 若抽不到 → unmanaged 風格 issue
+  3. `expected := renderManagedPlugin(pdxPath)`
+  4. `bytes.Equal(data, []byte(expected))` → 所有 event Installed=true 或全部 Installed=false + `plugin body differs from managed template` issue
+- 刪除舊 per-event extraction 用於 CheckHooks 的程式路徑（若 Commit 5 有順手掛到 CheckHooks，在此 commit 明確清除）
 - 跑 `go test ./internal/agent/opencode/...` 綠
 
 ### Commit 8 — `docs: hook events fix plan retrospective（可選）`
 若 §3 順序與實際有偏差，補歷史註記。
 
-**Commit 綠燈分析**：
-- Commit 1 → DeriveSupportedStatuses 不變；codex SupportedStatuses 5 status 不變；drift 測試仍綠
-- Commit 2 → 只是在 event spec 上加 FutureOnly bit；無消費者讀取 → 所有行為不變
-- Commit 3 → CheckHooks 行為變，但只影響 `codex/hooks_test.go` 與新增 CH1-CH5
+**Commit 綠燈分析**（v3 收斂）：
+- Commit 1 → 加 FutureOnly 欄位 + 三家 `Events()` defensive copy 同步；DeriveSupportedStatuses 不變；codex SupportedStatuses 5 status 不變；drift 測試仍綠。F1/F2 綠
+- Commit 2 → 6 個 codex event 標 FutureOnly=true；無消費者讀取（CheckHooks 要等 Commit 3、drift 不過濾、SupportedStatuses 不讀）→ 所有既有測試行為不變；CE1/CE2 綠（Commit 1 已補好 defensive copy 傳遞）
+- Commit 3 → CheckHooks 三態行為變，但只影響 `codex/hooks_test.go`；新增 CH1-CH6 綠
 - Commit 4 → D5 新增；既有 D1/D2/D3/D4 + fixtures 不變
-- Commit 5/6/7 → opencode package 內部
-- **每一 commit 後全套 go test 綠**
+- Commit 5/6 → opencode helpers + render-time validation；runtime 路徑不變
+- Commit 7 → opencode CheckHooks 替換；OH1-OH5 綠
+- **每一 commit 後全套 go test 綠**（v3 已驗證依賴鏈封閉）
 
 ## 4. 實作檔案預估
 
@@ -322,17 +369,19 @@ D5 天然覆蓋 FutureOnly event（因為 fixtures 與 declaredSet 都包含）�
 |---|---|---|
 | `internal/agent/provider.go` | +`FutureOnly bool` 欄位 + 註解 | +8 |
 | `internal/agent/supported_statuses_test.go` 或 `provider_test.go` | +F1/F2 | +25 |
-| `internal/agent/codex/events.go` | 6 event 加 `FutureOnly: true` | +6 |
+| `internal/agent/cc/events.go` | Events() defensive copy 加 `FutureOnly: spec.FutureOnly` | +1 |
+| `internal/agent/codex/events.go` | 6 event 加 `FutureOnly: true` + Events() defensive copy 同步 | +7 |
 | `internal/agent/codex/events_test.go` | +CE1/CE2 | +40 |
-| `internal/agent/codex/hooks.go` | CheckHooks 三態決策 | +25 |
-| `internal/agent/codex/hooks_test.go` | +CH1-CH5 | +120 |
-| `internal/agent/opencode/plugin_template.go` | +`extractEmittedEvents` + `validateSpecsCoverEmitted` + render panic | +40 |
-| `internal/agent/opencode/plugin_template_test.go` | +PT1-PT5 | +80 |
-| `internal/agent/opencode/hooks.go` | CheckHooks per-event emit + unexpected defense | +25 |
-| `internal/agent/opencode/hooks_test.go` | +OH1-OH4 | +90 |
+| `internal/agent/codex/hooks.go` | CheckHooks 三態決策 + `checkCodexEvent` helper | +40 |
+| `internal/agent/codex/hooks_test.go` | +CH1-CH6 | +140 |
+| `internal/agent/opencode/events.go` | Events() defensive copy 加 `FutureOnly: spec.FutureOnly` | +1 |
+| `internal/agent/opencode/plugin_template.go` | +`extractEmittedEvents` + `extractPdxPath` + `validateSpecsCoverEmitted` + render panic | +45 |
+| `internal/agent/opencode/plugin_template_test.go` | +PT1-PT6 | +95 |
+| `internal/agent/opencode/hooks.go` | CheckHooks byte-exact template 比對 | +30 |
+| `internal/agent/opencode/hooks_test.go` | +OH1-OH5 | +100 |
 | `internal/agent/drift_test.go` | +D5（無 fixture 刪除、無 FutureOnly skip） | +45 |
-| `docs/specs/2026-04-23-hook-events-fix-plan.md` | 本檔 v2 | +400 |
-| **合計** | | **~900 行**（含 plan 文件） |
+| `docs/specs/2026-04-23-hook-events-fix-plan.md` | 本檔 v3 | +480 |
+| **合計** | | **~1050 行**（含 plan 文件） |
 
 ## 5. 不做項目清單（防自動擴展）
 
@@ -344,13 +393,15 @@ D5 天然覆蓋 FutureOnly event（因為 fixtures 與 declaredSet 都包含）�
 - **不改 codex `provider_test.go` SupportedStatuses 斷言**（仍 5 status）
 - **不探測 codex CLI 版本** — FutureOnly 是 build-time 靜態標記
 - **不引入 `/api/hooks/codex/capability` endpoint**
-- **不重寫 opencode template 為完全 codegen**
+- **不重寫 opencode template 為完全 codegen**（v3 確認：template 保固定結構 + render-time validate）
+- **不對 opencode CheckHooks 做 per-event extraction**（v3 決定：byte-exact template 比對）
+- **不接受 codex absent 定義包含空陣列**（v3 嚴格限：`_, ok := hooks[key]; ok == false` 才是 absent）
 - **不把 cc 任何 event 標為 FutureOnly**
 - **不調整 `Coverage()` 簽名或回傳欄位**
 - **不改 SPA 任何檔案**
 - **不 force push / rebase** — 保留全歷史
 - **不合併 fix commits** — 分 7 commits 便於 reviewer 逐步追蹤
-- **不順手修其他 finding** — 四路 review 只有這 4 個 finding
+- **不順手修其他 finding** — 只修原 4 findings + v2/v3 延伸的 7 findings 全部列出；其餘盲點開 gh issue 延後
 
 ## 6. Subagent 開發指引
 
@@ -368,14 +419,15 @@ D5 天然覆蓋 FutureOnly event（因為 fixtures 與 declaredSet 都包含）�
 
 - [ ] 7 個 commits 符合上述 message 規範
 - [ ] `go build ./...` 綠
-- [ ] `go test ./...` 全綠（含 F1-F2 / CE1-CE2 / CH1-CH5 / D5 / PT1-PT5 / OH1-OH4 共 19 個新測試）
+- [ ] `go test ./...` 全綠（含 F1-F2 / CE1-CE2 / CH1-CH6 / D5 / PT1-PT6 / OH1-OH5 共 22 個新測試）
 - [ ] `go vet ./...` 無 warning
-- [ ] PR diff 僅涉及 §4 表格列出的 12 個檔 + plan 文件，**其餘不得出現**
+- [ ] PR diff 僅涉及 §4 表格列出的 14 個檔 + plan 文件，**其餘不得出現**
 - [ ] codex `SupportedStatuses()` 仍回傳 5 個 Status（不動）
-- [ ] codex `Events()` 中 6 個 FutureOnly event 的 bit 為 true，其餘 false
+- [ ] codex `Events()` 中 6 個 FutureOnly event 的 bit 為 true，其餘 false；defensive copy 保留 bit（mutate 第一次不影響第二次）
 - [ ] codex `CheckHooks()` 對 legacy 3-event hooks.json 回 `allInstalled=true` + Issues=[]
 - [ ] codex `CheckHooks()` 對「FutureOnly key 存在但 command 錯誤」回 `allInstalled=false` + warning issue
-- [ ] opencode `CheckHooks()` 對手改過、少 emit 的 plugin 正確標 `Installed=false` + issue
+- [ ] codex `CheckHooks()` 對「FutureOnly key 存在 entries 為 []」歸 broken 而非 absent（**v3 新驗收點**）
+- [ ] opencode `CheckHooks()` 對**任何**手改過的 plugin（包含註解變動）回 `Installed=false` + `plugin body differs` issue（byte-exact）
 - [ ] opencode `renderManagedPlugin` 對人為構造的不合法 specs/body 會 panic（僅在 mock 下 — 真 runtime 不 panic）
 - [ ] drift per-event 斷言（D5）對每個 provider/spec 覆蓋正確
 
@@ -384,11 +436,14 @@ D5 天然覆蓋 FutureOnly event（因為 fixtures 與 declaredSet 都包含）�
 | 風險 | 機率 | 影響 | 緩解 |
 |---|---|---|---|
 | FutureOnly 語意仍可能被後續開發者誤用為 SupportedStatuses 過濾 | 中 | 未來 regression | F2 測試鎖定契約；`provider.go` FutureOnly 欄位註解明寫「不影響 DeriveStatus 能力宣告」 |
-| CheckHooks 三態決策複雜度累積 | 低 | 新增 FutureOnly 時 regression | 抽 `checkCodexEvent` helper；CH1-CH5 覆蓋所有交叉組合 |
-| `extractEmittedEvents` regex 遇到 JS 註解誤判 | 低 | CheckHooks 假陽性 | PT1 測 edge case（註解、插值、單雙引號） |
+| CheckHooks 三態決策複雜度累積 | 低 | 新增 FutureOnly 時 regression | 抽 `checkCodexEvent` helper；CH1-CH6 覆蓋所有交叉組合 |
+| `extractEmittedEvents` regex 對 CheckHooks 的假綠風險 | **已消除** | n/a | v3 決定：`extractEmittedEvents` 只用於 render-time contract check；CheckHooks 走 byte-exact |
+| opencode byte-exact 太嚴格：使用者若自行 patch plugin 會立刻回 unmanaged | 中 | UX | 這是預期行為 — plugin 是 pdx 受管原子檔。若有合法 customization 需求，未來另開 `unmanaged` 模式 |
+| `extractPdxPath` regex 遇到 odd-formed pdxPath 抽不到 | 低 | CheckHooks fallback unmanaged | OH5 覆蓋此 case；fallback 回 unmanaged 而非 panic |
 | opencode render panic 在 production 路徑誤觸 | 低 | Install 失敗 | template 是 const-like 字串；panic 只在 specs/template 不同步時發生；PT5 常態 smoke test |
 | drift fixtures 保留後，若 FutureOnly event 在 DeriveStatus 邏輯日後被刪除但 fixture 沒刪 | 低 | 測試失敗警告到位 | D5 per-event 強相等會紅，指向確切 spec/event；是有益的警告 |
 | commit 4 D5 對既有 spec/fixture 跑起來紅（有過度宣告） | 中 | 需額外修 spec 或 fixture | 先跑一次 D5 preview；若紅先修 spec 再加 D5 斷言 |
+| 三家 `Events()` defensive copy 改動 commit 1 執行時漏改某家 | 中 | commit 2 紅（CE1/CE2） | Commit 1 明列 3 個檔案 + 紅綠 TDD 會立即暴露 |
 
 ## 9. 第 3 輪 Codex Review 預期 focus
 
