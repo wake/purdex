@@ -26,6 +26,29 @@ func TestCCDeriveStatus_SessionStartCompact(t *testing.T) {
 	if r.Valid {
 		t.Fatal("compact SessionStart should be ignored")
 	}
+	if r.Reason != "compact_ignored" {
+		t.Fatalf("expected reason=compact_ignored, got %q", r.Reason)
+	}
+}
+
+func TestCCDeriveStatus_NotificationUnknownTypeReason(t *testing.T) {
+	r := deriveViaProvider("Notification", map[string]any{"notification_type": "weird"})
+	if r.Valid {
+		t.Fatal("unknown notification_type should be invalid")
+	}
+	if r.Reason != "notification_unknown_type" {
+		t.Fatalf("expected reason=notification_unknown_type, got %q", r.Reason)
+	}
+}
+
+func TestCCDeriveStatus_UnknownEventEmptyReason(t *testing.T) {
+	r := deriveViaProvider("FutureEvent", map[string]any{})
+	if r.Valid {
+		t.Fatal("unknown event should be invalid")
+	}
+	if r.Reason != "" {
+		t.Fatalf("expected empty Reason for unknown event name, got %q", r.Reason)
+	}
 }
 
 func TestCCDeriveStatus_UserPromptSubmit(t *testing.T) {

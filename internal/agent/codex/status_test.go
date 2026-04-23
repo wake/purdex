@@ -90,11 +90,27 @@ func TestCodexDeriveStatus_NotificationAuthSuccess(t *testing.T) {
 	}
 }
 
-// CD3: Notification(unknown subtype) → Valid=false (mirrors cc)
+// CD3: Notification(unknown subtype) → Valid=false + Reason=notification_unknown_type
+// (so handler can distinguish payload-schema drift from truly unknown event names).
 func TestCodexDeriveStatus_NotificationUnknown(t *testing.T) {
 	r := deriveWithRaw("Notification", `{"notification_type":"weird"}`)
 	if r.Valid {
 		t.Fatalf("expected Valid=false for unknown notification subtype, got %+v", r)
+	}
+	if r.Reason != "notification_unknown_type" {
+		t.Fatalf("expected reason=notification_unknown_type, got %q", r.Reason)
+	}
+}
+
+// Truly unknown event names (not in catalog) must leave Reason empty so the
+// handler can fall back to the generic "event_not_in_catalog" classification.
+func TestCodexDeriveStatus_UnknownEventEmptyReason(t *testing.T) {
+	r := deriveViaProvider("FutureMysteryEvent")
+	if r.Valid {
+		t.Fatalf("expected Valid=false, got %+v", r)
+	}
+	if r.Reason != "" {
+		t.Fatalf("expected empty Reason for unknown event name, got %q", r.Reason)
 	}
 }
 

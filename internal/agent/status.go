@@ -17,6 +17,14 @@ type DeriveResult struct {
 	Valid  bool           // false = event should be ignored
 	Model  string         // extracted model name (if any)
 	Detail map[string]any // event-specific data for frontend notifications
+	// Reason explains why Valid=false. Empty means truly unknown event name
+	// ("event_not_in_catalog"). Non-empty signals a known event whose payload
+	// cannot be mapped to a Status (e.g. "compact_ignored" for the cc
+	// SessionStart compact subtype, or "notification_unknown_type" for an
+	// unrecognized notification_type subtype). Handler uses this to keep
+	// trace observability for known-but-unmappable events instead of folding
+	// them into the generic catalog miss bucket. Ignored when Valid=true.
+	Reason string
 }
 
 // NormalizedEvent is broadcast to WS subscribers.

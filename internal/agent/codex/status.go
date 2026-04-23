@@ -28,7 +28,7 @@ func deriveCodexStatus(eventName string, rawEvent json.RawMessage) agent.DeriveR
 		case "idle_prompt", "auth_success":
 			status = agent.StatusIdle
 		default:
-			return agent.DeriveResult{Valid: false}
+			return agent.DeriveResult{Valid: false, Reason: "notification_unknown_type"}
 		}
 		return agent.DeriveResult{
 			Valid:  true,

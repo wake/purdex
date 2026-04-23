@@ -13,7 +13,7 @@ func deriveCCStatus(eventName string, rawEvent json.RawMessage) agent.DeriveResu
 	switch eventName {
 	case "SessionStart":
 		if raw["source"] == "compact" {
-			return agent.DeriveResult{Valid: false}
+			return agent.DeriveResult{Valid: false, Reason: "compact_ignored"}
 		}
 		return agent.DeriveResult{
 			Valid:  true,
@@ -36,7 +36,7 @@ func deriveCCStatus(eventName string, rawEvent json.RawMessage) agent.DeriveResu
 		case "idle_prompt", "auth_success":
 			status = agent.StatusIdle
 		default:
-			return agent.DeriveResult{Valid: false}
+			return agent.DeriveResult{Valid: false, Reason: "notification_unknown_type"}
 		}
 		return agent.DeriveResult{
 			Valid:  true,
