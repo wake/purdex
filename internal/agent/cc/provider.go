@@ -59,17 +59,12 @@ func (p *Provider) DeriveStatus(eventName string, rawEvent json.RawMessage) agen
 }
 
 // SupportedStatuses declares the Status values cc.Provider's DeriveStatus may
-// emit. Returns a fresh slice on each call so callers cannot mutate provider
-// internal state. See coverage.go for the contract; drift_test.go enforces
-// the declaration matches the actual emit paths.
+// emit, derived from Events().EmitsStatus. Events() is the single source of
+// truth; this shim exists so the StatusSupporter contract (Phase 1) keeps
+// working. Return order is lexicographic for determinism (see
+// DeriveSupportedStatuses). drift_test.go enforces declaration ↔ emit parity.
 func (p *Provider) SupportedStatuses() []agent.Status {
-	return []agent.Status{
-		agent.StatusRunning,
-		agent.StatusWaiting,
-		agent.StatusIdle,
-		agent.StatusError,
-		agent.StatusClear,
-	}
+	return agent.DeriveSupportedStatuses(p.Events())
 }
 
 func (p *Provider) IsAlive(tmuxTarget string) bool {

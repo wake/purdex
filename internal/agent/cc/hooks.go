@@ -10,11 +10,6 @@ import (
 	"github.com/wake/purdex/internal/agent"
 )
 
-var ccHookEvents = []string{
-	"SessionStart", "UserPromptSubmit", "SubagentStart", "SubagentStop",
-	"Stop", "StopFailure", "Notification", "PermissionRequest", "SessionEnd",
-}
-
 const ccHooksSupportedVersion = "2.1.114"
 
 func (p *Provider) InstallHooks(pdxPath string) error {
@@ -31,14 +26,6 @@ func (p *Provider) RemoveHooks(pdxPath string) error {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
 	return mergeClaudeHooks(settingsPath, pdxPath, true)
-}
-
-// Events returns the hook event declarations for Claude Code. Stub; filled in
-// a later commit (HookInstaller.Events() plan §3 Commit 3). Returning nil
-// keeps the HookInstaller contract satisfied while the declaration content
-// is built up in a dedicated commit with its own tests.
-func (p *Provider) Events() []agent.HookEventSpec {
-	return nil
 }
 
 func (p *Provider) CheckHooks() (agent.HookStatus, error) {
@@ -63,10 +50,11 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		return agent.HookStatus{}, fmt.Errorf("parse settings.json: %w", err)
 	}
 	hooks, _ := settings["hooks"].(map[string]any)
-	events := make(map[string]agent.HookEventInfo, len(ccHookEvents))
+	eventNames := p.eventNames()
+	events := make(map[string]agent.HookEventInfo, len(eventNames))
 	var issues []string
 	allInstalled := true
-	for _, eventName := range ccHookEvents {
+	for _, eventName := range eventNames {
 		entries, ok := hooks[eventName]
 		if !ok {
 			events[eventName] = agent.HookEventInfo{Installed: false}
@@ -108,7 +96,7 @@ func mergeClaudeHooks(path, pdxPath string, remove bool) error {
 	if hooks == nil {
 		hooks = make(map[string]any)
 	}
-	for _, event := range ccHookEvents {
+	for _, event := range ccEventNames() {
 		entries := toEntrySlice(hooks[event])
 		entries = filterOutPdx(entries)
 		if !remove {

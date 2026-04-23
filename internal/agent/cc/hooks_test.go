@@ -77,7 +77,7 @@ func TestMergeClaudeHooks_EmptyFile(t *testing.T) {
 	settings := readSettings(t, path)
 	hooks := hooksMap(t, settings)
 
-	for _, event := range ccHookEvents {
+	for _, event := range expectedCCEventNames {
 		entries, ok := hooks[event]
 		if !ok {
 			t.Errorf("event %s not found in hooks", event)
@@ -88,8 +88,8 @@ func TestMergeClaudeHooks_EmptyFile(t *testing.T) {
 			t.Errorf("event %s has no entries", event)
 		}
 	}
-	if len(hooks) != len(ccHookEvents) {
-		t.Errorf("expected %d hook events, got %d", len(ccHookEvents), len(hooks))
+	if len(hooks) != len(expectedCCEventNames) {
+		t.Errorf("expected %d hook events, got %d", len(expectedCCEventNames), len(hooks))
 	}
 }
 
@@ -108,7 +108,7 @@ func TestMergeClaudeHooks_Idempotent(t *testing.T) {
 	settings := readSettings(t, path)
 	hooks := hooksMap(t, settings)
 
-	for _, event := range ccHookEvents {
+	for _, event := range expectedCCEventNames {
 		entries, ok := hooks[event].([]any)
 		if !ok {
 			t.Fatalf("event %s: not an array", event)
@@ -222,7 +222,7 @@ func TestMergeClaudeHooks_RemoveMode(t *testing.T) {
 	settings = readSettings(t, path)
 	hooks = hooksMap(t, settings)
 
-	for _, event := range ccHookEvents {
+	for _, event := range expectedCCEventNames {
 		entries, _ := hooks[event].([]any)
 		for _, e := range entries {
 			if entryIsPdx(e) {
@@ -268,7 +268,7 @@ func TestMergeClaudeHooks_DifferentPathReplaces(t *testing.T) {
 	settings := readSettings(t, path)
 	hooks := hooksMap(t, settings)
 
-	for _, event := range ccHookEvents {
+	for _, event := range expectedCCEventNames {
 		entries, _ := hooks[event].([]any)
 		pdxCount := 0
 		hasNewPath := false
@@ -302,6 +302,88 @@ func TestMergeClaudeHooks_DifferentPathReplaces(t *testing.T) {
 		if hasOldPath {
 			t.Errorf("event %s: old pdx path still present", event)
 		}
+	}
+}
+
+// ---- InstallHooks / CheckHooks use Events() as SSoT ----
+
+// TestCCInstallHooks_WritesAllEventsFromEventsList drives mergeClaudeHooks and
+// asserts the written settings.json has one key per Event from Events() —
+// i.e. the installer no longer relies on the legacy ccHookEvents var.
+func TestCCInstallHooks_WritesAllEventsFromEventsList(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(dir, "settings.json")
+
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("mergeClaudeHooks: %v", err)
+	}
+
+	settings := readSettings(t, path)
+	hooks := hooksMap(t, settings)
+
+	p := NewProvider(nil, nil, nil, nil)
+	events := p.Events()
+	if len(events) == 0 {
+		t.Fatal("cc Events() returned empty; installer iteration would be vacuous")
+	}
+	for _, e := range events {
+		entries, ok := hooks[e.Name]
+		if !ok {
+			t.Errorf("event %s (from Events()) not found in written hooks", e.Name)
+			continue
+		}
+		arr, ok := entries.([]any)
+		if !ok || len(arr) == 0 {
+			t.Errorf("event %s: no entries written", e.Name)
+		}
+	}
+	if len(hooks) != len(events) {
+		t.Errorf("settings.json hooks len=%d, want %d (one per Events())", len(hooks), len(events))
+	}
+}
+
+// TestCCCheckHooks_ReportsAllEventsFromEventsList writes a settings.json that
+// deliberately omits Notification and asserts CheckHooks reports the full
+// Events() key set, with Notification.Installed=false.
+func TestCCCheckHooks_ReportsAllEventsFromEventsList(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(settingsDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	settingsPath := filepath.Join(settingsDir, "settings.json")
+
+	// Write an install-complete settings.json then strip Notification out.
+	if err := mergeClaudeHooks(settingsPath, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("seed install: %v", err)
+	}
+	settings := readSettings(t, settingsPath)
+	hooks := hooksMap(t, settings)
+	delete(hooks, "Notification")
+	settings["hooks"] = hooks
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+		t.Fatalf("write stripped: %v", err)
+	}
+
+	p := NewProvider(nil, nil, nil, nil)
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	for _, e := range p.Events() {
+		if _, ok := status.Events[e.Name]; !ok {
+			t.Errorf("CheckHooks.Events missing key %q (from Events())", e.Name)
+		}
+	}
+	if status.Events["Notification"].Installed {
+		t.Error("Notification must be reported Installed=false after deletion")
+	}
+	if status.Installed {
+		t.Error("Installed must be false when any event is missing")
 	}
 }
 

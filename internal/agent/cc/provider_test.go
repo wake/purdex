@@ -84,6 +84,39 @@ func TestCCSupportedStatuses(t *testing.T) {
 	}
 }
 
+// TestCCSupportedStatuses_DerivesFromEvents asserts the post-Commit-3
+// invariant that SupportedStatuses is computed from Events().EmitsStatus
+// union rather than a hard-coded literal. Compared as sets.
+func TestCCSupportedStatuses_DerivesFromEvents(t *testing.T) {
+	p := cc.NewProvider(nil, nil, nil, nil)
+	ss := any(p).(agent.StatusSupporter)
+	got := ss.SupportedStatuses()
+
+	gotSet := make(map[agent.Status]bool, len(got))
+	for _, s := range got {
+		gotSet[s] = true
+	}
+	wantSet := make(map[agent.Status]bool)
+	for _, e := range p.Events() {
+		for _, s := range e.EmitsStatus {
+			wantSet[s] = true
+		}
+	}
+	if len(gotSet) != len(wantSet) {
+		t.Fatalf("SupportedStatuses=%v, events union=%v (len mismatch)", got, wantSet)
+	}
+	for s := range wantSet {
+		if !gotSet[s] {
+			t.Errorf("SupportedStatuses missing %q (from events union)", s)
+		}
+	}
+	for s := range gotSet {
+		if !wantSet[s] {
+			t.Errorf("SupportedStatuses contains %q not in events union", s)
+		}
+	}
+}
+
 // TestSupportedStatusesReturnsFreshSlice guards the defensive-copy convention
 // (per plan §1.1): mutating a returned slice must not affect a subsequent
 // call. Verified on cc; codex/opencode follow the same literal-return pattern.
