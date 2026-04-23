@@ -40,6 +40,19 @@ func (p *Provider) DeriveStatus(eventName string, rawEvent json.RawMessage) agen
 	return deriveOpenCodeStatus(eventName, rawEvent)
 }
 
+// SupportedStatuses declares the Status values opencode.Provider's
+// DeriveStatus may emit. Returns a fresh slice on each call (defensive copy
+// per Phase 1 plan §1.1). Drift test enforces declaration matches emit.
+func (p *Provider) SupportedStatuses() []agent.Status {
+	return []agent.Status{
+		agent.StatusRunning,
+		agent.StatusWaiting,
+		agent.StatusIdle,
+		agent.StatusError,
+		agent.StatusClear,
+	}
+}
+
 func (p *Provider) IsAlive(tmuxTarget string) bool {
 	return false
 }

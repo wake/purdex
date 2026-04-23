@@ -4,6 +4,7 @@ import { OpenAiLogo } from '@phosphor-icons/react'
 import ClaudeCodeBotSvg from '@lobehub/icons-static-svg/icons/claudecode.svg?react'
 import ClaudeStarSvg from '@lobehub/icons-static-svg/icons/claude.svg?react'
 import CodexLobeSvg from '@lobehub/icons-static-svg/icons/codex.svg?react'
+import OpenCodeSvg from '@lobehub/icons-static-svg/icons/opencode.svg?react'
 import type { CcIconVariant, CodexIconVariant } from '../stores/useUISettingsStore'
 
 type SvgComponent = ComponentType<SVGProps<SVGSVGElement>>
@@ -30,6 +31,10 @@ const CODEX_VARIANTS: Record<CodexIconVariant, AgentIconComponent> = {
   codex: wrapSvg(CodexLobeSvg),
 }
 
+// Single brand icon for opencode (no variant system — plan §5 explicitly
+// rejects introducing opencodeVariant for a single official svg).
+const OPENCODE_ICON: AgentIconComponent = wrapSvg(OpenCodeSvg)
+
 export interface GetAgentIconOptions {
   ccVariant: CcIconVariant
   codexVariant: CodexIconVariant
@@ -40,6 +45,7 @@ export interface GetAgentIconOptions {
 export function getAgentIcon(agentType: string, options: GetAgentIconOptions): AgentIconComponent | undefined {
   if (agentType === 'cc') return CC_VARIANTS[options.ccVariant]
   if (agentType === 'codex') return CODEX_VARIANTS[options.codexVariant]
+  if (agentType === 'opencode') return OPENCODE_ICON
   return undefined
 }
 

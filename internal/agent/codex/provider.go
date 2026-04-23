@@ -40,6 +40,19 @@ func (p *Provider) DeriveStatus(eventName string, rawEvent json.RawMessage) agen
 	return deriveCodexStatus(eventName, rawEvent)
 }
 
+// SupportedStatuses declares the Status values codex.Provider's DeriveStatus
+// may emit after the Phase 1 expansion (Commit 3 brought codex to parity
+// with cc). Returns a fresh slice each call.
+func (p *Provider) SupportedStatuses() []agent.Status {
+	return []agent.Status{
+		agent.StatusRunning,
+		agent.StatusWaiting,
+		agent.StatusIdle,
+		agent.StatusError,
+		agent.StatusClear,
+	}
+}
+
 func (p *Provider) IsAlive(tmuxTarget string) bool {
 	return false // Deprecated: agent module uses prober.IsAliveFor directly
 }

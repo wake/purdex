@@ -58,6 +58,20 @@ func (p *Provider) DeriveStatus(eventName string, rawEvent json.RawMessage) agen
 	return deriveCCStatus(eventName, rawEvent)
 }
 
+// SupportedStatuses declares the Status values cc.Provider's DeriveStatus may
+// emit. Returns a fresh slice on each call so callers cannot mutate provider
+// internal state. See coverage.go for the contract; drift_test.go enforces
+// the declaration matches the actual emit paths.
+func (p *Provider) SupportedStatuses() []agent.Status {
+	return []agent.Status{
+		agent.StatusRunning,
+		agent.StatusWaiting,
+		agent.StatusIdle,
+		agent.StatusError,
+		agent.StatusClear,
+	}
+}
+
 func (p *Provider) IsAlive(tmuxTarget string) bool {
 	if p.prober == nil {
 		return false

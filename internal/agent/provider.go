@@ -89,6 +89,15 @@ type StreamCapable interface {
 // are treated as "not declared" by the Coverage helper. Returning an empty
 // slice is a valid declaration meaning "supports no Status values" and is
 // distinct from not implementing the interface at all.
+//
+// Scope: this declares the full status set DeriveStatus is *capable* of
+// returning, independent of which hook events the agent's hook installer
+// currently wires. Declaration may legitimately exceed the installer's
+// current event coverage (e.g. when the provider is preparing for a future
+// CLI version, or when events arrive via proxy / parent agents). The drift
+// test (internal/agent/drift_test.go) keeps DeriveStatus implementations
+// honest against this declaration; alignment with the hook installer event
+// catalog is a separate concern tracked by per-agent installer phases.
 type StatusSupporter interface {
 	SupportedStatuses() []Status
 }

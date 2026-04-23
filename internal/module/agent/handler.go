@@ -113,6 +113,42 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		result = provider.DeriveStatus(req.EventName, req.RawEvent)
 	}
 
+	// Invalid result: provider returned Valid=false. Two sub-classes:
+	//   - Reason=="" → truly unknown event name → "event_not_in_catalog"
+	//   - Reason!="" → known event but payload not mappable → use that reason
+	//     (e.g. "compact_ignored", "notification_unknown_type")
+	//
+	// Both branches:
+	//   - record a verify-kind trace step (decision=skipped) with the chosen reason
+	//   - clear any legacy agent_events row so replay/snapshot don't surface
+	//     stale state on top of an unprocessed event (matches the cleanup the
+	//     valid path performs at line ~163)
+	//   - return 200 OK with the reason in the body
+	//   - skip frame / projection / broadcast / activity-watch
+	//
+	// 200 (vs verify_rejected's 202) signals "received and acknowledged, no retry".
+	// Hook CLI only retries on non-2xx.
+	if !result.Valid {
+		reason := result.Reason
+		if reason == "" {
+			reason = "event_not_in_catalog"
+		}
+		trace.Verify(req, "skipped", reason, nil)
+		if req.TmuxSession != "" && m.events != nil {
+			if err := m.events.Delete(req.TmuxSession); err != nil {
+				log.Printf("[agent] clear legacy event on invalid result: %v", err)
+			}
+		}
+		trace.Finish("completed", reason)
+		traceFinished = true
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "ok",
+			"reason": reason,
+		})
+		return
+	}
+
 	// Error guard: when in error state, only whitelisted events can clear it
 	if result.Valid && result.Status != "" && result.Status != agentpkg.StatusError {
 		m.mu.Lock()
@@ -120,9 +156,12 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 		if current == agentpkg.StatusError {
 			canClear := req.EventName == "UserPromptSubmit" || req.EventName == "SessionStart"
-			if req.AgentType == "opencode" {
-				canClear = canClear || req.EventName == "SessionEnd"
-			} else {
+			// SessionEnd carries StatusClear and unconditionally tears down
+			// session state — it must always pass the error guard or the
+			// session would stay stuck red after a StopFailure followed by a
+			// real session shutdown.
+			canClear = canClear || req.EventName == "SessionEnd"
+			if req.AgentType != "opencode" {
 				canClear = canClear || req.EventName == "Stop"
 			}
 			if !canClear {

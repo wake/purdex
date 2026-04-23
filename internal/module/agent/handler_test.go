@@ -12,6 +12,7 @@ import (
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	agentcc "github.com/wake/purdex/internal/agent/cc"
+	agentcodex "github.com/wake/purdex/internal/agent/codex"
 	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
@@ -1316,6 +1317,261 @@ func TestHandleAgentStatusTestPrefixWithoutObserverFallsThroughToProduction(t *t
 	env.module.snapshotMu.RUnlock()
 	if !persisted {
 		t.Fatal("expected production-path payload to persist in statusSnapshots")
+	}
+}
+
+// --- Phase 1: Catalog miss (Valid=false → early-return + trace) ---
+
+// catalogMissModule wires up a Module + cc provider + tmux + sessions + core
+// in the minimum configuration required to exercise the catalog-miss path
+// end-to-end (including trace persistence and broadcast suppression).
+func catalogMissModule(t *testing.T) *Module {
+	t.Helper()
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.prober = probe.New(fakeTmux)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+	return m
+}
+
+func catalogMissRequest() *http.Request {
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"FutureMysteryEvent","raw_event":{"foo":"bar"},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// H1: catalog miss returns 200 with explicit reason and the trace chain
+// records a verify-kind step with decision=skipped, reason=event_not_in_catalog.
+// It must NOT contain frame / projection / emit steps.
+func TestHandleEvent_CatalogMiss_WritesTraceAndReturnsOK(t *testing.T) {
+	m := catalogMissModule(t)
+	w := httptest.NewRecorder()
+	m.handleEvent(w, catalogMissRequest())
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s), want 200", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["status"] != "ok" {
+		t.Errorf("status field = %q, want ok", resp["status"])
+	}
+	if resp["reason"] != "event_not_in_catalog" {
+		t.Errorf("reason field = %q, want event_not_in_catalog", resp["reason"])
+	}
+
+	page := waitForTraceChains(t, m, "work", 1)
+	if len(page.Chains) != 1 {
+		t.Fatalf("len(page.Chains) = %d, want 1", len(page.Chains))
+	}
+	chain := page.Chains[0]
+	if chain.TerminalStatus != "completed" {
+		t.Errorf("TerminalStatus = %q, want completed", chain.TerminalStatus)
+	}
+	if chain.TerminalReason != "event_not_in_catalog" {
+		t.Errorf("TerminalReason = %q, want event_not_in_catalog", chain.TerminalReason)
+	}
+	if chain.LatestStepKind != "verify" {
+		t.Errorf("LatestStepKind = %q, want verify (catalog miss reuses verify kind)", chain.LatestStepKind)
+	}
+	if chain.LatestDecision != "skipped" {
+		t.Errorf("LatestDecision = %q, want skipped", chain.LatestDecision)
+	}
+
+	record, err := m.traces.GetChainRecord(chain.ChainID)
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	// Expect exactly: trigger + verify(accepted) + verify(skipped, catalog).
+	// Frame / projection / emit MUST NOT appear.
+	for _, step := range record.Steps {
+		switch step.Kind {
+		case "frame", "projection", "emit":
+			t.Errorf("unexpected step kind %q in catalog-miss chain (steps=%+v)", step.Kind, record.Steps)
+		}
+	}
+	// Find the catalog-miss step explicitly.
+	var foundCatalog bool
+	for _, step := range record.Steps {
+		if step.Kind == "verify" && step.Decision == "skipped" && step.Reason == "event_not_in_catalog" {
+			foundCatalog = true
+		}
+	}
+	if !foundCatalog {
+		t.Errorf("no verify-step with decision=skipped reason=event_not_in_catalog (steps=%+v)", record.Steps)
+	}
+}
+
+// H2: catalog miss must not mutate currentStatus / subagents / broadcast.
+func TestHandleEvent_CatalogMiss_NoStatusUpdate(t *testing.T) {
+	m := catalogMissModule(t)
+	// Seed pre-existing state to verify it's untouched.
+	m.mu.Lock()
+	m.currentStatus["work"] = agentpkg.StatusRunning
+	m.subagents["work"] = []string{"existing-sub"}
+	m.mu.Unlock()
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	w := httptest.NewRecorder()
+	m.handleEvent(w, catalogMissRequest())
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	m.mu.Lock()
+	gotStatus := m.currentStatus["work"]
+	gotSubs := append([]string(nil), m.subagents["work"]...)
+	m.mu.Unlock()
+	if gotStatus != agentpkg.StatusRunning {
+		t.Errorf("currentStatus = %q, want running (catalog miss must not mutate)", gotStatus)
+	}
+	if len(gotSubs) != 1 || gotSubs[0] != "existing-sub" {
+		t.Errorf("subagents = %v, want [existing-sub]", gotSubs)
+	}
+
+	select {
+	case msg := <-sub.SendCh():
+		t.Errorf("unexpected broadcast on catalog miss: %s", string(msg))
+	case <-time.After(50 * time.Millisecond):
+		// expected — no broadcast
+	}
+}
+
+// H3: catalog miss must not start an activity watcher.
+func TestHandleEvent_CatalogMiss_NoActivityWatch(t *testing.T) {
+	m := catalogMissModule(t)
+	w := httptest.NewRecorder()
+	m.handleEvent(w, catalogMissRequest())
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	m.mu.Lock()
+	_, watching := m.activeWatchers["work"]
+	m.mu.Unlock()
+	if watching {
+		t.Error("catalog miss should not start an activity watcher")
+	}
+}
+
+// H4: when provider returns Valid=false with a non-empty Reason (known event
+// with unmappable payload — e.g. cc SessionStart{source:compact}), the handler
+// must surface that reason rather than mislabeling it as event_not_in_catalog.
+// Without this distinction every Claude Code session compaction would write
+// false-positive catalog-miss trace rows.
+func TestHandleEvent_InvalidWithReason_UsesProviderReason(t *testing.T) {
+	m := catalogMissModule(t)
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{"source":"compact"},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s), want 200", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["reason"] != "compact_ignored" {
+		t.Errorf("reason field = %q, want compact_ignored (provider's reason should pass through)", resp["reason"])
+	}
+
+	page := waitForTraceChains(t, m, "work", 1)
+	if len(page.Chains) != 1 {
+		t.Fatalf("len(page.Chains) = %d, want 1", len(page.Chains))
+	}
+	chain := page.Chains[0]
+	if chain.TerminalReason != "compact_ignored" {
+		t.Errorf("TerminalReason = %q, want compact_ignored", chain.TerminalReason)
+	}
+}
+
+// H_ErrorGuardCodexSessionEnd: when codex enters StatusError (e.g. via
+// StopFailure), a subsequent SessionEnd must be allowed to clear the error
+// state. Without the guard exception, codex sessions would stay stuck red
+// even after the real session terminates, defeating the cleanup purpose of
+// the new SessionEnd→Clear mapping. Mirrors opencode's existing exception.
+func TestHandleEvent_CodexSessionEndClearsErrorGuard(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.prober = probe.New(fakeTmux)
+	m.registry.Register(agentcodex.NewProvider())
+	// Stub identify to accept codex events through verify.
+	origRead := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1, ExePath: "/usr/local/bin/codex", Argv: []string{"codex"}}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origRead })
+
+	// Seed Error state for the session (e.g. from a prior StopFailure).
+	m.mu.Lock()
+	m.currentStatus["work"] = agentpkg.StatusError
+	m.mu.Unlock()
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionEnd","raw_event":{},"agent_type":"codex"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s), want 200", w.Code, w.Body.String())
+	}
+	// After Clear, the session entry should have been removed from
+	// currentStatus (StatusClear handler at handler.go:~210 deletes it).
+	m.mu.Lock()
+	_, stillPresent := m.currentStatus["work"]
+	m.mu.Unlock()
+	if stillPresent {
+		t.Errorf("currentStatus[\"work\"] should have been cleared by SessionEnd, but error guard blocked it")
+	}
+}
+
+// H5: any invalid result (including known-but-unmappable like compact) must
+// clear the legacy agent_events row for the session so replay/snapshot logic
+// does not later resurface a stale event on top of one we already chose to
+// skip. This is the regression flagged by the codex attack-view review:
+// catalog-miss early-return previously skipped m.events.Delete entirely.
+func TestHandleEvent_InvalidResult_ClearsLegacyEventRow(t *testing.T) {
+	m := catalogMissModule(t)
+
+	// Seed a stale legacy row for this session.
+	if err := m.events.Set("work", "OldEvent", json.RawMessage(`{"old":"row"}`), "cc", 0); err != nil {
+		t.Fatalf("seed legacy event: %v", err)
+	}
+	// Sanity: row exists.
+	if ev, _ := m.events.Get("work"); ev == nil {
+		t.Fatal("seed failed: legacy row missing")
+	}
+
+	w := httptest.NewRecorder()
+	m.handleEvent(w, catalogMissRequest())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	ev, err := m.events.Get("work")
+	if err != nil {
+		t.Fatalf("events.Get: %v", err)
+	}
+	if ev != nil {
+		t.Errorf("legacy row should be cleared on invalid result, got %+v", ev)
 	}
 }
 
