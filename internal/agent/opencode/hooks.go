@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,10 +65,43 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			AgentVersion: agentVersion,
 		}, nil
 	}
-	eventNames := p.eventNames()
-	events := make(map[string]agent.HookEventInfo, len(eventNames))
-	for _, event := range eventNames {
-		events[event] = agent.HookEventInfo{Installed: true, Command: pluginPath}
+
+	// Plan §1.6: the opencode plugin is a single pdx-managed artifact, not
+	// a per-event configuration. CheckHooks succeeds only when the on-disk
+	// body byte-matches the rendered template for the pdxPath literal the
+	// file itself carries. Any deviation (comment, whitespace, dead code,
+	// broken switch/case) collapses every declared event to Installed=false
+	// — "managed body drifted, reinstall" is a uniform signal that matches
+	// the plugin's all-or-nothing semantics.
+	specs := p.Events()
+	pdxPath, ok := extractPdxPath(string(data))
+	if !ok {
+		events := make(map[string]agent.HookEventInfo, len(specs))
+		for _, spec := range specs {
+			events[spec.Name] = agent.HookEventInfo{Installed: false, Command: pluginPath}
+		}
+		return agent.HookStatus{
+			Installed:    false,
+			Events:       events,
+			Issues:       []string{"plugin body differs from managed template (run reinstall)"},
+			AgentVersion: agentVersion,
+		}, nil
+	}
+	expected := renderManagedPlugin(pdxPath)
+	events := make(map[string]agent.HookEventInfo, len(specs))
+	if !bytes.Equal(data, []byte(expected)) {
+		for _, spec := range specs {
+			events[spec.Name] = agent.HookEventInfo{Installed: false, Command: pluginPath}
+		}
+		return agent.HookStatus{
+			Installed:    false,
+			Events:       events,
+			Issues:       []string{"plugin body differs from managed template (run reinstall)"},
+			AgentVersion: agentVersion,
+		}, nil
+	}
+	for _, spec := range specs {
+		events[spec.Name] = agent.HookEventInfo{Installed: true, Command: pluginPath}
 	}
 	return agent.HookStatus{Installed: true, Events: events, Issues: []string{}, AgentVersion: agentVersion}, nil
 }
