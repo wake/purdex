@@ -236,9 +236,10 @@ func isPdxCommandCodex(cmd string) bool {
 
 // isPdxCommandCodexForEvent reports whether cmd is a well-formed pdx hook
 // command for the given event name. Rules (all must hold):
-//  1. The first non-empty token, stripped of a leading/trailing ", has
-//     basename "pdx" (covers "/abs/path/pdx", "pdx", and the quoted forms
-//     mergeCodexHooks writes).
+//  1. The first non-empty token, stripped of surrounding quotes, has
+//     basename "pdx" (covers "/abs/path/pdx", "pdx", the quoted forms
+//     mergeCodexHooks writes, and paths containing spaces such as
+//     "/Applications/Purdex Beta/pdx").
 //  2. Some later token equals "hook".
 //  3. Two consecutive tokens "--agent" "codex" appear after "hook".
 //  4. The final non-empty token equals eventName exactly.
@@ -246,19 +247,16 @@ func isPdxCommandCodex(cmd string) bool {
 // A non-pdx third-party command, a pdx command targeting a different
 // agent, or a copy of a pdx command whose event-name tail does not
 // match the key it is filed under, all return false. Token splitting
-// uses strings.Fields; the current installer only emits simple double-
-// quoted paths ("/abs/pdx"), so the Fields-then-trim-quotes approach
-// is sufficient for the on-disk shapes we own. A path containing a
-// literal space would still round-trip because Fields splits on any
-// run of whitespace — such a path would already fail on the installer
-// write side (no shell quoting), and the managed installer output we
-// need to validate never contains one.
+// is quote-aware (see tokenizeCodexCommand) so double-quoted paths
+// with literal spaces round-trip correctly — the installer emits
+// "<pdxPath>" hook --agent codex <event>, where pdxPath may contain
+// spaces on macOS app-bundle layouts.
 func isPdxCommandCodexForEvent(cmd string, eventName string) bool {
-	tokens := strings.Fields(cmd)
+	tokens := tokenizeCodexCommand(cmd)
 	if len(tokens) == 0 {
 		return false
 	}
-	first := strings.Trim(tokens[0], `"`)
+	first := tokens[0]
 	if first == "" {
 		return false
 	}
@@ -278,8 +276,51 @@ func isPdxCommandCodexForEvent(cmd string, eventName string) bool {
 	if !hasHook || !hasAgentCodex {
 		return false
 	}
-	tail := strings.Trim(tokens[len(tokens)-1], `"`)
-	return tail == eventName
+	return tokens[len(tokens)-1] == eventName
+}
+
+// tokenizeCodexCommand splits a codex hook command string into tokens,
+// respecting single and double quotes. Whitespace inside a quoted run
+// is preserved; quote characters themselves are stripped. This lets
+// the installer's output "<pdxPath>" hook --agent codex <event>
+// round-trip correctly when pdxPath contains spaces (e.g. macOS
+// "/Applications/Purdex Beta/pdx"). Escape sequences are not
+// interpreted — the installer never emits them.
+func tokenizeCodexCommand(cmd string) []string {
+	var tokens []string
+	var cur strings.Builder
+	inQuote := false
+	var quoteChar byte
+	flush := func() {
+		if cur.Len() > 0 {
+			tokens = append(tokens, cur.String())
+			cur.Reset()
+		}
+	}
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		if inQuote {
+			if c == quoteChar {
+				inQuote = false
+				quoteChar = 0
+				continue
+			}
+			cur.WriteByte(c)
+			continue
+		}
+		if c == '"' || c == '\'' {
+			inQuote = true
+			quoteChar = c
+			continue
+		}
+		if c == ' ' || c == '\t' || c == '\n' {
+			flush()
+			continue
+		}
+		cur.WriteByte(c)
+	}
+	flush()
+	return tokens
 }
 
 // findPdxCommandInCodexForEvent walks the matcher-group list and returns the

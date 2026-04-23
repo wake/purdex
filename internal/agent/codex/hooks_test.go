@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -961,6 +962,11 @@ func TestIsPdxCommandCodexForEvent(t *testing.T) {
 		{`pdx hook --agent codex SessionStart`, "SessionStart"},
 		{`/usr/local/bin/pdx hook --agent codex UserPromptSubmit`, "UserPromptSubmit"},
 		{`"/usr/local/bin/pdx" hook --agent codex Notification`, "Notification"},
+		// Round-3 review E2: spaces inside a quoted path must not
+		// break the match. Macs installing Purdex as an app bundle
+		// end up with a pdxPath like /Applications/Purdex Beta/pdx.
+		{`"/Applications/Purdex Beta/pdx" hook --agent codex Stop`, "Stop"},
+		{`"/path with two  spaces/pdx" hook --agent codex SessionEnd`, "SessionEnd"},
 	}
 	for _, tc := range positive {
 		if !isPdxCommandCodexForEvent(tc.cmd, tc.event) {
@@ -981,6 +987,31 @@ func TestIsPdxCommandCodexForEvent(t *testing.T) {
 	for _, tc := range negative {
 		if isPdxCommandCodexForEvent(tc.cmd, tc.event) {
 			t.Errorf("expected invalid for %q / event=%s (%s)", tc.cmd, tc.event, tc.reason)
+		}
+	}
+}
+
+// Round-3 review E2: quote-aware tokenizer must preserve spaces inside
+// quoted runs so installer output for app-bundle pdxPaths is accepted
+// by isPdxCommandCodexForEvent. strings.Fields collapses runs of
+// whitespace regardless of surrounding quotes and cannot be used.
+func TestTokenizeCodexCommand(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{`pdx hook --agent codex Stop`, []string{"pdx", "hook", "--agent", "codex", "Stop"}},
+		{`"/abs/pdx" hook --agent codex Stop`, []string{"/abs/pdx", "hook", "--agent", "codex", "Stop"}},
+		{`"/Applications/Purdex Beta/pdx" hook --agent codex Stop`, []string{"/Applications/Purdex Beta/pdx", "hook", "--agent", "codex", "Stop"}},
+		{`"/path with two  spaces/pdx" hook --agent codex SessionEnd`, []string{"/path with two  spaces/pdx", "hook", "--agent", "codex", "SessionEnd"}},
+		{`'/single quoted/pdx' hook --agent codex Stop`, []string{"/single quoted/pdx", "hook", "--agent", "codex", "Stop"}},
+		{``, nil},
+		{`   `, nil},
+	}
+	for _, tc := range cases {
+		got := tokenizeCodexCommand(tc.in)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("tokenizeCodexCommand(%q) = %#v, want %#v", tc.in, got, tc.want)
 		}
 	}
 }
