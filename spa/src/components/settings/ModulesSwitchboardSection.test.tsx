@@ -3,7 +3,6 @@ import { render, screen, fireEvent } from '@testing-library/react'
 
 const registerSpy = vi.hoisted(() => vi.fn())
 const notifySpy = vi.hoisted(() => vi.fn())
-const setLocationMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../../lib/storage/sync', () => ({
   syncManager: {
@@ -14,30 +13,13 @@ vi.mock('../../lib/storage/sync', () => ({
   createSyncManager: vi.fn(),
 }))
 
-vi.mock('wouter', () => ({
-  useLocation: () => ['/settings/module-config', setLocationMock],
-}))
-
 import { ModulesSwitchboardSection } from './ModulesSwitchboardSection'
-import {
-  clearModuleRegistry,
-  registerModule,
-} from '../../lib/module-registry'
+import { clearModuleRegistry, registerModule } from '../../lib/module-registry'
 import { useModuleEnabledStore } from '../../stores/useModuleEnabledStore'
-import { clearContributions } from '../../lib/settings-contribution-registry'
-import {
-  dispatchSettingsContributions,
-  resetSettingsContributionsForHmr,
-} from '../../lib/dispatch-settings-contributions'
-
-const FakeComponent = () => null
 
 function resetAll() {
   clearModuleRegistry()
-  clearContributions()
-  resetSettingsContributionsForHmr()
   useModuleEnabledStore.setState({ enabled: {}, baseline: null })
-  setLocationMock.mockClear()
 }
 
 const purdexCtx = { scope: 'purdex' as const }
@@ -88,50 +70,10 @@ describe('ModulesSwitchboardSection', () => {
     expect(useModuleEnabledStore.getState().isEnabled('editor')).toBe(true)
   })
 
-  it('T3-5: "Open settings" link only appears when the module has a purdex contribution', () => {
-    registerModule({
-      id: 'editor',
-      name: 'Editor',
-      disableable: true,
-      settings: [
-        { localId: 'workspace-home-path', scope: 'workspace', order: 0, labelKey: 'x', component: FakeComponent },
-        { localId: 'editor-prefs', scope: 'purdex', order: 0, labelKey: 'x', component: FakeComponent },
-      ],
-    })
-    registerModule({
-      id: 'files',
-      name: 'Files',
-      disableable: true,
-      // no purdex contribution
-    })
-    dispatchSettingsContributions()
-
-    render(<ModulesSwitchboardSection ctx={purdexCtx} />)
-    const editorRow = screen.getByText('Editor').closest('[data-module-id]') as HTMLElement
-    const filesRow = screen.getByText('Files').closest('[data-module-id]') as HTMLElement
-    expect(editorRow.querySelector('[data-open-settings]')).toBeTruthy()
-    expect(filesRow.querySelector('[data-open-settings]')).toBeNull()
-  })
-
-  it('T3-6: "Open settings" link is aria-disabled and does not navigate when module is disabled', () => {
-    registerModule({
-      id: 'editor',
-      name: 'Editor',
-      disableable: true,
-      settings: [
-        { localId: 'editor-prefs', scope: 'purdex', order: 0, labelKey: 'x', component: FakeComponent },
-      ],
-    })
-    dispatchSettingsContributions()
-    useModuleEnabledStore.setState({ enabled: { editor: false }, baseline: null })
-
-    render(<ModulesSwitchboardSection ctx={purdexCtx} />)
-    const link = document.querySelector('[data-open-settings]') as HTMLElement
-    expect(link).toBeTruthy()
-    expect(link.getAttribute('aria-disabled')).toBe('true')
-    fireEvent.click(link)
-    expect(setLocationMock).not.toHaveBeenCalled()
-  })
+  // T3-5 / T3-6 removed in AR-2 fixup — the "Open settings" CTA they
+  // exercised was 100% dead code for the four initial opt-in modules (none
+  // of them declare a purdex-scope contribution). The CTA + tests will
+  // return in PR 2 once Editor migrates Buffers to a real `settings: []`.
 
   it('T3-7: reload-required banner is shown when hasPendingChanges is true', () => {
     registerModule({ id: 'editor', name: 'Editor', disableable: true })

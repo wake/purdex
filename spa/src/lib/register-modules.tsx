@@ -275,8 +275,11 @@ export function registerBuiltinModules(): void {
   registerModule({
     id: 'files',
     name: 'Files',
-    disableable: true,
-    descriptionKey: 'modules.files.description',
+    // SR-2 (codex review #617): intentionally NOT flagged disableable yet.
+    // The module's only settings surface lives in `workspaceConfig`, which
+    // `WorkspaceSettingsPage` renders through `ModuleConfigSection` — a path
+    // that does not consult `useModuleEnabledStore`. Toggling would be a lie
+    // until PR 3 wires workspace-scope legacy contributions into the filter.
     workspaceConfig: [
       { key: 'projectPath', type: 'string', label: '專案路徑' },
     ],

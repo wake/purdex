@@ -116,4 +116,59 @@ describe('useModuleEnabledStore', () => {
     expect(state.enabled).toEqual({})
     expect(state.baseline).toEqual({ editor: false })
   })
+
+  // AR-1 (codex adversarial review #617): rehydrate must reject malformed
+  // payloads so a corrupted localStorage cannot silently hide / un-hide
+  // module settings contributions.
+  it('T1-13: rehydrate drops non-boolean values', async () => {
+    registerModule({ id: 'editor', name: 'Editor', disableable: true })
+    localStorage.setItem(
+      STORAGE_KEYS.MODULE_ENABLED,
+      JSON.stringify({
+        state: { enabled: { editor: 'false', files: 1, browser: null, memory: false } },
+        version: 1,
+      }),
+    )
+    await useModuleEnabledStore.persist.rehydrate()
+    const state = useModuleEnabledStore.getState()
+    expect(state.enabled).toEqual({ memory: false })
+  })
+
+  it('T1-14: rehydrate drops prototype-polluting and non-string keys', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.MODULE_ENABLED,
+      JSON.stringify({
+        state: {
+          enabled: {
+            __proto__: true,
+            constructor: false,
+            prototype: true,
+            '': false,
+            safe: true,
+          },
+        },
+        version: 1,
+      }),
+    )
+    await useModuleEnabledStore.persist.rehydrate()
+    const state = useModuleEnabledStore.getState()
+    expect(state.enabled).toEqual({ safe: true })
+    // Prototype integrity: no accidental pollution.
+    expect(({} as Record<string, unknown>).__proto__).toBe(Object.prototype)
+  })
+
+  it('T1-15: rehydrate tolerates non-object payloads without throwing', async () => {
+    // All three shapes represent real corruption modes: enabled missing,
+    // enabled is a string, outer state is a primitive.
+    const payloads = [
+      { state: {}, version: 1 },
+      { state: { enabled: 'not-an-object' }, version: 1 },
+      { state: { enabled: null }, version: 1 },
+    ]
+    for (const p of payloads) {
+      localStorage.setItem(STORAGE_KEYS.MODULE_ENABLED, JSON.stringify(p))
+      await useModuleEnabledStore.persist.rehydrate()
+      expect(useModuleEnabledStore.getState().enabled).toEqual({})
+    }
+  })
 })

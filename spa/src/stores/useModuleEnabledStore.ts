@@ -3,6 +3,25 @@ import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
 import { getModule } from '../lib/module-registry'
 
+// AR-1 (codex adversarial review #617): persist payload sanitizer.
+// Silently drops malformed entries (non-string keys, non-boolean values,
+// prototype-polluting keys, non-object payloads) so a corrupted
+// localStorage — user hand-edit, failed migration, serialization crash —
+// cannot silently hide or un-hide module settings contributions.
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function sanitizeEnabled(raw: unknown): Record<string, boolean> {
+  if (raw === null || typeof raw !== 'object') return {}
+  const out: Record<string, boolean> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof key !== 'string' || key.length === 0) continue
+    if (UNSAFE_KEYS.has(key)) continue
+    if (typeof value !== 'boolean') continue
+    out[key] = value
+  }
+  return out
+}
+
 /**
  * User-controlled enable/disable state for disableable modules.
  *
@@ -85,6 +104,14 @@ export const useModuleEnabledStore = create<ModuleEnabledState>()(
       // defeat its purpose (baseline must reflect what the current session
       // booted with, not what some earlier session captured).
       partialize: (state) => ({ enabled: state.enabled }),
+      merge: (persisted, current) => {
+        // AR-1: sanitize every rehydrated payload. `merge` is the right hook
+        // because it runs BEFORE the merged state becomes observable, so the
+        // first `isEnabled()` call already sees the cleaned map.
+        const p = persisted as { enabled?: unknown } | null | undefined
+        const enabled = sanitizeEnabled(p?.enabled)
+        return { ...current, enabled }
+      },
     },
   ),
 )
