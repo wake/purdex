@@ -353,7 +353,7 @@ Inspector 僅讀取不 mutation。若 Phase 2-4 在 Inspector 設計期間仍變
 - **Bump 策略**：每 Phase merge 後獨立 bump alpha PR，`VERSION` / `package.json` / `spa/package.json` 三處同步
 - **Known issues 管理**：review 問題以「信心 / 關聯 / 複雜」三維度彙整；低關聯 + 中高複雜可延後成 gh issue（label 按 CLAUDE.md 兩維度：type 必選一、scope 可多選）
 - **Worktree 使用**：Phase 0 使用現有 `lights-rebuild-spec`；Phase 1+ 各自另起 worktree 避免 diff 混淆
-- **Phase 4 條件判斷**：4a 為必做；4b 僅在 Phase 1-3 過程中出現明確需求時執行，否則 Phase 4 於 4a 結案、Readiness callsite 缺失另開 issue
+- **Phase 4 執行策略**：4a 為必做；4b 於 Phase 3 完成後、Phase 5 之前執行（延後必做，見 §2.4.2、§8.2）；Readiness callsite 缺失於 4b 一併解決
 
 ## 11. Open Questions
 
