@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.217] - 2026-04-24
+
+### Feat(agent): Lights rebuild — Hook events declaration (#613) + §2.4 guardrails (#616)
+
+把 Hook events 的 SSoT 從分散在三家的 emitter 集中到 `HookInstaller.Events()`，讓 installer / CheckHooks / SupportedStatuses derivation / 未來 Inspector UI 讀同一份 `HookEventSpec` 清單；順帶補齊 codex 9-event installer、drift 測試、plan spec §2.4 架構護欄，以及上一輪 code review 後三輪 codex review 的 11 個 findings 修復（含 FutureOnly bit、byte-exact template 比對、quote-aware command tokenizer 等）。
+
+- `HookEventSpec{Name, EmitsStatus, Description, FutureOnly}` 取代分散在三家的 string slice；`DeriveSupportedStatuses(specs)` 以 union 推導 `SupportedStatuses()`
+- `HookStatus{Managed, UpgradesAvailable}` + `HookEventInfo{FutureOnly}` 新欄位讓 UI 區分三面向：是否受管（Remove 按鈕條件）、可否升級（Install 按鈕條件）、per-event 是否為 FutureOnly tolerated-absent
+- codex installer 擴張到 9 event（3 主線 + 6 FutureOnly: SubagentStart/Stop、StopFailure、Notification、PermissionRequest、SessionEnd）；legacy 3-event 安裝保持健康且可自助升級
+- codex `CheckHooks` 嚴格 per-event 驗證 — `isPdxCommandCodexForEvent(cmd, eventName)` + quote-aware `tokenizeCodexCommand` 支援 `/Applications/Purdex Beta/pdx` 含空白路徑
+- opencode `CheckHooks` 改 byte-exact template 比對；`resolveCanonicalPdxPath()` 用 `os.Executable() + EvalSymlinks` 取 trusted path，檔內 `pdxPath` 不再自我圓滿
+- drift test per-event 強相等斷言；template/specs parity 改 `TestTemplateSpecsParity` test-only guard（`renderManagedPlugin` 不再 runtime panic）
+- `HookModuleCard`：Remove 按鈕 `managed ?? installed`（tmux 等無 managed 欄位 API 相容）；Install 對 `upgradesAvailable` 非空仍 enable + FutureOnly event 灰色標籤
+- codex review 軌跡：4 輪 plan review（findings 4→3→2；v4 user-cancel）+ 2 輪 4 路 code review（第 2 輪 4 findings + 第 3 輪 5 findings）+ 1 輪限定 standard review（2 findings）— 全數採納
+- deferred finding #5 追蹤為 follow-up（結構化 parser / codegen 取代 regex；install/check 路徑也跑 validator）
+
 ## [1.0.0-alpha.216] - 2026-04-24
 
 ### Feat(spa): Modules Switchboard + module-owned contribution marker (#617)
