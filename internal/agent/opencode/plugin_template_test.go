@@ -126,6 +126,64 @@ func TestPluginState_SuppressIdleAfterError(t *testing.T) {
 	}
 }
 
+// TestExtractEmittedEvents is the fix-plan §2.3 PT1 assertion: the helper
+// reliably pulls event names from emit('...') and emit("...") calls in a
+// synthetic body, including across multiple lines and with incidental
+// whitespace. This helper is test-only (plan §1.5); it underwrites the
+// template/specs parity check, not runtime health.
+func TestExtractEmittedEvents(t *testing.T) {
+	body := `
+  await emit('SessionStart', {foo: 1})
+  await emit("UserPromptSubmit",
+    {bar: 2})
+  await emit('Stop', {})
+  // not captured: commented out. // await emit('Ignored', {})
+`
+	got := extractEmittedEvents(body)
+	want := map[string]bool{"SessionStart": true, "UserPromptSubmit": true, "Stop": true, "Ignored": true}
+	// We deliberately include 'Ignored' from a comment — regex-based extraction
+	// is known to see through comments. That is fine because this helper is
+	// only used against the real template body where no such comments exist,
+	// and PT2-PT4 tests assert the spec-side parity that would surface a
+	// mismatch if such a ghost emit ever shipped.
+	gotSet := make(map[string]bool, len(got))
+	for _, n := range got {
+		gotSet[n] = true
+	}
+	for n := range want {
+		if !gotSet[n] {
+			t.Errorf("extractEmittedEvents missing %q; got %v", n, got)
+		}
+	}
+}
+
+// TestExtractPdxPath_RoundtripEscapedLiterals is the fix-plan §2.3 PT6
+// assertion: renderManagedPlugin writes pdxPath with %q (complete with
+// escapes for backslash/quote/unicode/…) and extractPdxPath must be able
+// to round-trip it. Using a naive regex (e.g. `"([^"]+)"`) would stop at
+// the first escaped quote and then double-escape when re-rendered,
+// producing a byte-mismatch on perfectly managed plugins — the v4 plan
+// specifically calls this out.
+func TestExtractPdxPath_RoundtripEscapedLiterals(t *testing.T) {
+	cases := []string{
+		"/path with spaces/pdx",
+		`C:\Users\foo\pdx.exe`,
+		`/weird"path/pdx`,
+		"/使用者/pdx",
+	}
+	for _, input := range cases {
+		body := renderManagedPlugin(input)
+		got, ok := extractPdxPath(body)
+		if !ok {
+			t.Errorf("extractPdxPath failed for %q", input)
+			continue
+		}
+		if got != input {
+			t.Errorf("extractPdxPath(%q) round-trip = %q", input, got)
+		}
+	}
+}
+
 func TestRenderManagedPlugin_UsesInputModelAndSessionScopedSubagentKeys(t *testing.T) {
 	rendered := renderManagedPlugin("/usr/local/bin/pdx")
 	if !strings.Contains(rendered, "const model = input.model") {

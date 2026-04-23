@@ -1,6 +1,10 @@
 package opencode
 
-import "fmt"
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+)
 
 const managedMarker = "pdx-managed:opencode-hooks:v1"
 
@@ -196,6 +200,60 @@ export const PurdexOpenCodeHooks = async () => {
   }
 }
 `, managedMarker, pdxPath)
+}
+
+// emittedEventPattern matches `emit('Name', …)` / `emit("Name", …)` inside
+// the plugin body. Strictly used by test-layer parity checks (plan §1.5):
+// runtime health goes through byte-exact template comparison, so this
+// regex's well-known blind spots (comment strings, dead code) never reach
+// production judgement. Keeping the expression scoped to the single
+// emit() call shape keeps the helper understandable for that test-only
+// role.
+var emittedEventPattern = regexp.MustCompile(`emit\(['"](\w+)['"]`)
+
+// pdxPathLiteralPattern captures the complete quoted Go string literal
+// that renderManagedPlugin writes with %q. The [^"\\]|\\. alternation
+// covers escaped quotes and backslashes, which a naive `"([^"]+)"` regex
+// would otherwise cut short. The capture intentionally includes the
+// enclosing double quotes so strconv.Unquote can consume it verbatim
+// (plan §1.6 / v4 findings).
+var pdxPathLiteralPattern = regexp.MustCompile(`const pdxPath = ("(?:[^"\\]|\\.)*")`)
+
+// extractEmittedEvents returns every event name that the given body
+// invokes emit() with. Order preserves first appearance. Test-only helper
+// per plan §1.5 — do not wire it into CheckHooks.
+func extractEmittedEvents(body string) []string {
+	matches := emittedEventPattern.FindAllStringSubmatch(body, -1)
+	seen := make(map[string]bool, len(matches))
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		if len(m) < 2 {
+			continue
+		}
+		name := m[1]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
+// extractPdxPath pulls the pdxPath literal out of a managed plugin body
+// and unescapes it to the original path string. Returns ok=false on any
+// failure (literal not found, malformed escape) so CheckHooks can fall
+// back to the unmanaged path rather than panic (v4 plan §1.6).
+func extractPdxPath(body string) (string, bool) {
+	m := pdxPathLiteralPattern.FindStringSubmatch(body)
+	if len(m) < 2 {
+		return "", false
+	}
+	unquoted, err := strconv.Unquote(m[1])
+	if err != nil {
+		return "", false
+	}
+	return unquoted, true
 }
 
 func firstString(values map[string]any, keys ...string) string {
