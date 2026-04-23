@@ -73,3 +73,12 @@ export type AnySettingsContributionDeclaration = {
 export type AnySettingsContribution = {
   [S in SettingsScope]: SettingsContribution<S>
 }[SettingsScope]
+
+// True when the contribution was declared by a real module (via
+// `ModuleDefinition.settings`) rather than by a built-in adapter.
+// Built-in adapters use the `_builtin.*` moduleId namespace
+// (`_builtin.legacy-section`, `_builtin.host`).  Consumed by sidebars /
+// section renderers to badge independently-disableable module entries.
+export function isModuleOwnedContribution(c: { moduleId: string }): boolean {
+  return !c.moduleId.startsWith('_builtin.')
+}

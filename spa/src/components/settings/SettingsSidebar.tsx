@@ -1,6 +1,10 @@
 import { useMemo } from 'react'
+import { PuzzlePiece } from '@phosphor-icons/react'
 import { listContributions } from '../../lib/settings-contribution-registry'
-import type { SettingsContextFor } from '../../lib/settings-contribution-types'
+import {
+  isModuleOwnedContribution,
+  type SettingsContextFor,
+} from '../../lib/settings-contribution-types'
 import { useI18nStore } from '../../stores/useI18nStore'
 
 interface Props {
@@ -23,6 +27,7 @@ interface SidebarRow {
   order: number
   kind: 'active-enabled' | 'active-disabled'
   disabledReasonKey?: string
+  moduleOwned: boolean
 }
 
 export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
@@ -44,6 +49,7 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
         order: c.order,
         kind: isDisabled ? 'active-disabled' : 'active-enabled',
         disabledReasonKey: c.disabledReasonKey,
+        moduleOwned: isModuleOwnedContribution(c),
       }
     })
     .sort((a, b) => a.order - b.order)
@@ -69,7 +75,7 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
               onClick={() => {
                 if (clickable) onSelectSection(row.id)
               }}
-              className={`w-full text-left px-4 py-2 text-sm flex items-center transition-colors ${
+              className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors ${
                 !clickable
                   ? 'text-text-muted cursor-not-allowed'
                   : isActive
@@ -77,7 +83,15 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
                     : 'text-text-secondary cursor-pointer hover:bg-white/5'
               }`}
             >
-              <span>{t(row.labelKey)}</span>
+              <span className="flex-1">{t(row.labelKey)}</span>
+              {row.moduleOwned && (
+                <PuzzlePiece
+                  size={12}
+                  weight="fill"
+                  className="flex-shrink-0 rotate-[-12deg] text-text-muted"
+                  aria-hidden
+                />
+              )}
             </button>
           </div>
         )
