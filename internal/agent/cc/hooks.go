@@ -50,33 +50,64 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		return agent.HookStatus{}, fmt.Errorf("parse settings.json: %w", err)
 	}
 	hooks, _ := settings["hooks"].(map[string]any)
-	eventNames := p.eventNames()
-	events := make(map[string]agent.HookEventInfo, len(eventNames))
+	specs := p.Events()
+	events := make(map[string]agent.HookEventInfo, len(specs))
 	var issues []string
+	var upgrades []string
 	allInstalled := true
-	for _, eventName := range eventNames {
-		entries, ok := hooks[eventName]
-		if !ok {
-			events[eventName] = agent.HookEventInfo{Installed: false}
-			issues = append(issues, eventName+" hook not installed")
+	for _, spec := range specs {
+		entries, keyExists := hooks[spec.Name]
+		if !keyExists {
+			events[spec.Name] = agent.HookEventInfo{Installed: false, FutureOnly: spec.FutureOnly}
+			if spec.FutureOnly {
+				upgrades = append(upgrades, spec.Name)
+				continue
+			}
+			issues = append(issues, spec.Name+" hook not installed")
 			allInstalled = false
 			continue
 		}
 		command := findPdxCommand(entries)
-		events[eventName] = agent.HookEventInfo{Installed: command != "", Command: command}
+		events[spec.Name] = agent.HookEventInfo{
+			Installed:  command != "",
+			Command:    command,
+			FutureOnly: spec.FutureOnly,
+		}
 		if command == "" {
-			issues = append(issues, eventName+" hook: pdx command not found")
+			issues = append(issues, spec.Name+" hook: pdx command not found")
 			allInstalled = false
 		}
 	}
+	managed := ccHooksManaged(hooks, specs)
 	return agent.HookStatus{
-		Installed:        allInstalled,
-		Events:           events,
-		Issues:           issues,
-		AgentVersion:     agentVersion,
-		SupportedVersion: ccHooksSupportedVersion,
-		ExceedsSupport:   agent.CompareHookAgentVersions(agentVersion, ccHooksSupportedVersion) > 0,
+		Installed:         allInstalled,
+		Managed:           managed,
+		UpgradesAvailable: upgrades,
+		Events:            events,
+		Issues:            issues,
+		AgentVersion:      agentVersion,
+		SupportedVersion:  ccHooksSupportedVersion,
+		ExceedsSupport:    agent.CompareHookAgentVersions(agentVersion, ccHooksSupportedVersion) > 0,
 	}, nil
+}
+
+// ccHooksManaged reports whether settings.json has any pdx-owned hook
+// entry across the declared event set. Parallel to codex.codexHooksManaged
+// — keeps Managed/Installed distinct so the UI Remove button stays
+// enabled on drifted-but-managed state (Finding #2).
+func ccHooksManaged(hooks map[string]any, specs []agent.HookEventSpec) bool {
+	for _, spec := range specs {
+		entries, ok := hooks[spec.Name].([]any)
+		if !ok {
+			continue
+		}
+		for _, entry := range entries {
+			if entryIsPdx(entry) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func mergeClaudeHooks(path, pdxPath string, remove bool) error {

@@ -387,6 +387,95 @@ func TestCCCheckHooks_ReportsAllEventsFromEventsList(t *testing.T) {
 	}
 }
 
+// TestCCCheckHooks_ManagedReflectsPdxEntries asserts HookStatus.Managed
+// is true when any pdx command is present (even broken) and false
+// otherwise. Finding #2: UI Remove button must stay enabled for
+// drifted-but-managed state.
+func TestCCCheckHooks_ManagedReflectsPdxEntries(t *testing.T) {
+	t.Run("pdx entry present", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		settingsPath := filepath.Join(home, ".claude", "settings.json")
+		if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := mergeClaudeHooks(settingsPath, "/usr/local/bin/pdx", false); err != nil {
+			t.Fatalf("install: %v", err)
+		}
+		p := NewProvider(nil, nil, nil, nil)
+		status, err := p.CheckHooks()
+		if err != nil {
+			t.Fatalf("CheckHooks: %v", err)
+		}
+		if !status.Managed {
+			t.Fatal("pdx entries present: Managed=false, want true")
+		}
+	})
+	t.Run("no pdx entries", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		settingsPath := filepath.Join(home, ".claude", "settings.json")
+		if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		bare := map[string]any{
+			"hooks": map[string]any{
+				"SessionStart": []any{
+					map[string]any{
+						"hooks": []any{
+							map[string]any{
+								"type":    "command",
+								"command": "/usr/bin/notify-me start",
+							},
+						},
+					},
+				},
+			},
+		}
+		data, _ := json.MarshalIndent(bare, "", "  ")
+		if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		p := NewProvider(nil, nil, nil, nil)
+		status, err := p.CheckHooks()
+		if err != nil {
+			t.Fatalf("CheckHooks: %v", err)
+		}
+		if status.Managed {
+			t.Fatal("no pdx entries: Managed=true, want false")
+		}
+	})
+}
+
+// TestCCCheckHooks_UpgradesAvailableEmptyForFullFutureOnlyFalse asserts
+// cc has no FutureOnly events in its current catalog → UpgradesAvailable
+// must be empty on a fresh install and HookEventInfo.FutureOnly must be
+// false for every event.
+func TestCCCheckHooks_UpgradesAvailableEmptyForFullFutureOnlyFalse(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := mergeClaudeHooks(settingsPath, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	p := NewProvider(nil, nil, nil, nil)
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if len(status.UpgradesAvailable) != 0 {
+		t.Errorf("cc UpgradesAvailable=%v, want empty", status.UpgradesAvailable)
+	}
+	for name, info := range status.Events {
+		if info.FutureOnly {
+			t.Errorf("cc event %q FutureOnly=true, want false", name)
+		}
+	}
+}
+
 // ---- atomic write: no .tmp file left after success ----
 
 func TestMergeClaudeHooks_AtomicWrite_NoTmpLeft(t *testing.T) {

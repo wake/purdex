@@ -76,19 +76,33 @@ type HookEventSpec struct {
 }
 
 // HookStatus reports the installation state of hooks for an agent.
+//
+// Managed and UpgradesAvailable are the Finding #2 / #4 contract
+// extensions (PR #616 review): the SPA needs to distinguish (a) "pdx
+// left artifacts on disk" from "all required events are installed"
+// so the Remove button stays enabled on drifted-but-managed state,
+// and (b) "install is valid but 6 new FutureOnly events are
+// available" so the Install button / upgrade hint is not dead.
 type HookStatus struct {
-	Installed        bool                     `json:"installed"`
-	Events           map[string]HookEventInfo `json:"events"`
-	Issues           []string                 `json:"issues"`
-	AgentVersion     string                   `json:"agentVersion,omitempty"`
-	SupportedVersion string                   `json:"supportedVersion,omitempty"`
-	ExceedsSupport   bool                     `json:"exceedsSupport,omitempty"`
+	Installed         bool                     `json:"installed"`
+	Managed           bool                     `json:"managed"`
+	UpgradesAvailable []string                 `json:"upgradesAvailable,omitempty"`
+	Events            map[string]HookEventInfo `json:"events"`
+	Issues            []string                 `json:"issues"`
+	AgentVersion      string                   `json:"agentVersion,omitempty"`
+	SupportedVersion  string                   `json:"supportedVersion,omitempty"`
+	ExceedsSupport    bool                     `json:"exceedsSupport,omitempty"`
 }
 
 // HookEventInfo describes the state of a single hook event.
+//
+// FutureOnly mirrors HookEventSpec.FutureOnly so the UI can render
+// "tolerated absent" (grey FutureOnly badge, no red error) vs
+// "missing installer-required event" (hard red).
 type HookEventInfo struct {
-	Installed bool   `json:"installed"`
-	Command   string `json:"command"`
+	Installed  bool   `json:"installed"`
+	Command    string `json:"command"`
+	FutureOnly bool   `json:"futureOnly,omitempty"`
 }
 
 // StatuslineInstaller manages CC's statusLine.command in ~/.claude/settings.json.

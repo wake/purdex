@@ -53,25 +53,73 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		return agent.HookStatus{}, fmt.Errorf("parse hooks.json: %w", err)
 	}
 	hooks, _ := hooksFile["hooks"].(map[string]any)
-	events := make(map[string]agent.HookEventInfo, len(codexEventSpecs))
+	specs := p.Events()
+	events := make(map[string]agent.HookEventInfo, len(specs))
 	var issues []string
+	var upgrades []string
 	allInstalled := true
-	for _, spec := range p.Events() {
+	for _, spec := range specs {
 		info, addIssues, blocks := checkCodexEvent(spec, hooks)
+		// Propagate the FutureOnly bit to HookEventInfo so the UI can
+		// render "tolerated absent" vs "required missing" distinctly.
+		info.FutureOnly = spec.FutureOnly
 		events[spec.Name] = info
 		issues = append(issues, addIssues...)
 		if blocks {
 			allInstalled = false
 		}
+		if spec.FutureOnly && !info.Installed {
+			// Tolerated-absent FutureOnly → advertise as available upgrade.
+			if _, keyExists := hooks[spec.Name]; !keyExists {
+				upgrades = append(upgrades, spec.Name)
+			}
+		}
 	}
+	managed := codexHooksManaged(hooks, specs)
 	return agent.HookStatus{
-		Installed:        allInstalled,
-		Events:           events,
-		Issues:           issues,
-		AgentVersion:     agentVersion,
-		SupportedVersion: codexHooksSupportedVersion,
-		ExceedsSupport:   agent.CompareHookAgentVersions(agentVersion, codexHooksSupportedVersion) > 0,
+		Installed:         allInstalled,
+		Managed:           managed,
+		UpgradesAvailable: upgrades,
+		Events:            events,
+		Issues:            issues,
+		AgentVersion:      agentVersion,
+		SupportedVersion:  codexHooksSupportedVersion,
+		ExceedsSupport:    agent.CompareHookAgentVersions(agentVersion, codexHooksSupportedVersion) > 0,
 	}, nil
+}
+
+// codexHooksManaged reports whether hooks.json contains any pdx-owned
+// entry (per-event matcher-group shape OR legacy direct-entry shape).
+// Distinct from CheckHooks.Installed: a drifted-but-pdx-owned state has
+// Managed=true and Installed=false, which the UI needs so the Remove
+// button stays enabled.
+func codexHooksManaged(hooks map[string]any, specs []agent.HookEventSpec) bool {
+	for _, spec := range specs {
+		entries, ok := hooks[spec.Name]
+		if !ok {
+			continue
+		}
+		if hasLegacyPdxDirectCodexEntry(entries) {
+			return true
+		}
+		for _, groupEntry := range codexMatcherGroups(entries) {
+			group, ok := groupEntry.(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, entry := range toCodexEntrySlice(group["hooks"]) {
+				m, ok := entry.(map[string]any)
+				if !ok {
+					continue
+				}
+				cmd, _ := m["command"].(string)
+				if isPdxCommandCodex(cmd) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // checkCodexEvent classifies a single hook event as absent / broken / valid

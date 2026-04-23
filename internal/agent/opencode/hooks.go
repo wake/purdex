@@ -78,6 +78,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	if !isManagedPlugin(data) {
 		return agent.HookStatus{
 			Installed:    false,
+			Managed:      false,
 			Events:       map[string]agent.HookEventInfo{},
 			Issues:       []string{"plugin file exists but is unmanaged"},
 			AgentVersion: agentVersion,
@@ -98,10 +99,13 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	events := make(map[string]agent.HookEventInfo, len(specs))
 	if !resolved {
 		for _, spec := range specs {
-			events[spec.Name] = agent.HookEventInfo{Installed: false, Command: pluginPath}
+			events[spec.Name] = agent.HookEventInfo{Installed: false, Command: pluginPath, FutureOnly: spec.FutureOnly}
 		}
+		// Managed=true: the marker is present, we just can't verify body.
+		// UI Remove button must stay enabled.
 		return agent.HookStatus{
 			Installed:    false,
+			Managed:      true,
 			Events:       events,
 			Issues:       []string{"plugin body differs from managed template (cannot resolve canonical pdx path — run reinstall)"},
 			AgentVersion: agentVersion,
@@ -110,19 +114,20 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	expected := renderManagedPlugin(trustedPath)
 	if !bytes.Equal(data, []byte(expected)) {
 		for _, spec := range specs {
-			events[spec.Name] = agent.HookEventInfo{Installed: false, Command: pluginPath}
+			events[spec.Name] = agent.HookEventInfo{Installed: false, Command: pluginPath, FutureOnly: spec.FutureOnly}
 		}
 		return agent.HookStatus{
 			Installed:    false,
+			Managed:      true,
 			Events:       events,
 			Issues:       []string{"plugin body differs from managed template (pdx binary may have moved or file was edited — run reinstall)"},
 			AgentVersion: agentVersion,
 		}, nil
 	}
 	for _, spec := range specs {
-		events[spec.Name] = agent.HookEventInfo{Installed: true, Command: pluginPath}
+		events[spec.Name] = agent.HookEventInfo{Installed: true, Command: pluginPath, FutureOnly: spec.FutureOnly}
 	}
-	return agent.HookStatus{Installed: true, Events: events, Issues: []string{}, AgentVersion: agentVersion}, nil
+	return agent.HookStatus{Installed: true, Managed: true, Events: events, Issues: []string{}, AgentVersion: agentVersion}, nil
 }
 
 func opencodePluginPath() (string, error) {

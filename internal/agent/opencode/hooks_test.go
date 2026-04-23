@@ -414,6 +414,103 @@ func TestCheckHooks_CanonicalResolveFails_ReportsBodyDiffers(t *testing.T) {
 	}
 }
 
+// TestOpenCodeCheckHooks_ManagedReflectsMarker asserts HookStatus.Managed
+// is driven by marker presence, not by byte-match. Finding #2: UI Remove
+// button must stay enabled for drifted-but-managed opencode plugin.
+func TestOpenCodeCheckHooks_ManagedReflectsMarker(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	pinCanonicalPdxPath(t, "/usr/local/bin/pdx")
+
+	p := opencode.NewProvider()
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("install hooks: %v", err)
+	}
+	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "pdx-agent-hooks.js")
+	data, err := os.ReadFile(pluginPath)
+	if err != nil {
+		t.Fatalf("read plugin: %v", err)
+	}
+	// Drift the body by prepending a comment — marker remains, byte-match fails.
+	if err := os.WriteFile(pluginPath, []byte("// user note\n"+string(data)), 0644); err != nil {
+		t.Fatalf("write drift: %v", err)
+	}
+
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Installed {
+		t.Fatal("drifted managed plugin: Installed=true, want false")
+	}
+	if !status.Managed {
+		t.Fatal("drifted managed plugin: Managed=false, want true (marker present)")
+	}
+}
+
+// TestOpenCodeCheckHooks_ManagedFalseWhenUnmanagedOrAbsent covers the
+// two Managed=false cases: no file at all, and a file that pre-dates
+// pdx (marker absent).
+func TestOpenCodeCheckHooks_ManagedFalseWhenUnmanagedOrAbsent(t *testing.T) {
+	t.Run("absent file", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+
+		status, err := opencode.NewProvider().CheckHooks()
+		if err != nil {
+			t.Fatalf("CheckHooks: %v", err)
+		}
+		if status.Managed {
+			t.Fatal("absent file: Managed=true, want false")
+		}
+	})
+	t.Run("unmanaged file", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "pdx-agent-hooks.js")
+		if err := os.MkdirAll(filepath.Dir(pluginPath), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(pluginPath, []byte("export const Existing = () => ({})\n"), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+
+		status, err := opencode.NewProvider().CheckHooks()
+		if err != nil {
+			t.Fatalf("CheckHooks: %v", err)
+		}
+		if status.Managed {
+			t.Fatal("unmanaged file: Managed=true, want false")
+		}
+	})
+}
+
+// TestOpenCodeCheckHooks_UpgradesAvailableAlwaysEmpty asserts opencode
+// has no FutureOnly events in its current catalog, so UpgradesAvailable
+// is empty on every valid install.
+func TestOpenCodeCheckHooks_UpgradesAvailableAlwaysEmpty(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	pinCanonicalPdxPath(t, "/usr/local/bin/pdx")
+
+	p := opencode.NewProvider()
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("install hooks: %v", err)
+	}
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if len(status.UpgradesAvailable) != 0 {
+		t.Errorf("opencode UpgradesAvailable=%v, want empty", status.UpgradesAvailable)
+	}
+	for _, info := range status.Events {
+		if info.FutureOnly {
+			t.Errorf("opencode event info.FutureOnly=true, want false for every spec")
+		}
+	}
+}
+
 func TestOpenCodeHooks_UnmanagedFileRejected(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

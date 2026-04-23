@@ -739,6 +739,147 @@ func TestCheckHooks_FutureOnlyAbsent_DoesNotBlock(t *testing.T) {
 	}
 }
 
+// CH10 — HookStatus.Managed reflects "is there any pdx-managed artifact in
+// hooks.json?": present for even a single broken pdx entry, absent when
+// no pdx entries exist. PR #616 review Finding #2: UI Remove button must
+// stay enabled for drifted-but-managed state.
+func TestCheckHooks_Managed_ReflectsArtifactPresence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Legacy direct-entry shape (broken, pdx-owned) → Managed=true.
+	writeHooksFile(t, home, map[string]any{
+		"SessionStart": []any{
+			map[string]any{
+				"type":    "command",
+				"command": `"/usr/local/bin/pdx" hook --agent codex SessionStart`,
+				"timeout": 5,
+			},
+		},
+	})
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Installed {
+		t.Fatal("legacy direct entry: allInstalled=true, want false")
+	}
+	if !status.Managed {
+		t.Fatal("legacy direct entry present: Managed=false, want true")
+	}
+}
+
+// CH11 — Managed=false when hooks.json has no pdx entries anywhere.
+func TestCheckHooks_Managed_FalseWhenNoPdxEntries(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"SessionStart": []any{
+			map[string]any{
+				"hooks": []any{
+					map[string]any{
+						"type":    "command",
+						"command": "/usr/bin/notify-me start",
+						"timeout": 5,
+					},
+				},
+			},
+		},
+	})
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Managed {
+		t.Fatal("no pdx entries: Managed=true, want false")
+	}
+}
+
+// CH12 — UpgradesAvailable lists FutureOnly events absent from hooks.json
+// when the overall install is otherwise valid (legacy 3-event user).
+// Finding #4: UI must be able to surface "6 new events available" even
+// though Installed=true.
+func TestCheckHooks_UpgradesAvailable_PopulatedForLegacyCodex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
+		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("Stop")},
+	})
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if !status.Installed {
+		t.Fatalf("legacy 3-event: Installed=false, Issues=%v", status.Issues)
+	}
+	want := map[string]bool{
+		"SubagentStart":     true,
+		"SubagentStop":      true,
+		"StopFailure":       true,
+		"Notification":      true,
+		"PermissionRequest": true,
+		"SessionEnd":        true,
+	}
+	if len(status.UpgradesAvailable) != len(want) {
+		t.Fatalf("UpgradesAvailable=%v, want %d entries", status.UpgradesAvailable, len(want))
+	}
+	for _, name := range status.UpgradesAvailable {
+		if !want[name] {
+			t.Errorf("unexpected upgrade name %q", name)
+		}
+	}
+}
+
+// CH13 — UpgradesAvailable is empty once every FutureOnly event is
+// installed.
+func TestCheckHooks_UpgradesAvailable_EmptyOnFullInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	full := map[string]any{}
+	for _, name := range expectedCodexInstallerNames {
+		full[name] = []any{pdxGroupEntry(name)}
+	}
+	writeHooksFile(t, home, full)
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if len(status.UpgradesAvailable) != 0 {
+		t.Fatalf("full install: UpgradesAvailable=%v, want empty", status.UpgradesAvailable)
+	}
+}
+
+// CH14 — per-event HookEventInfo carries FutureOnly bit for the UI to
+// distinguish "tolerated absent" from "missing installer-required event".
+func TestCheckHooks_EventInfoCarriesFutureOnly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	full := map[string]any{}
+	for _, name := range expectedCodexInstallerNames {
+		full[name] = []any{pdxGroupEntry(name)}
+	}
+	writeHooksFile(t, home, full)
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	requiredFalse := []string{"SessionStart", "UserPromptSubmit", "Stop"}
+	for _, name := range requiredFalse {
+		if status.Events[name].FutureOnly {
+			t.Errorf("event %q FutureOnly=true, want false", name)
+		}
+	}
+	futureOnly := []string{"SubagentStart", "SubagentStop", "StopFailure", "Notification", "PermissionRequest", "SessionEnd"}
+	for _, name := range futureOnly {
+		if !status.Events[name].FutureOnly {
+			t.Errorf("event %q FutureOnly=false, want true", name)
+		}
+	}
+}
+
 // CH7 — cross-event mis-filing: a valid-looking pdx command for the Stop
 // event is copied into the Notification key (e.g. user hand-edit or
 // legacy tooling). The substring-only check `strings.Contains(cmd,
