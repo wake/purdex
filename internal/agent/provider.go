@@ -31,26 +31,78 @@ type HookEvent struct {
 // --- Optional capabilities ---
 
 // HookInstaller can install/remove/check hook configurations for a specific agent.
+//
+// Events() is the single source of truth (SSoT) for the hook event catalog:
+// installer iteration, CheckHooks reporting, SupportedStatuses derivation, and
+// future Inspector UI all read from the same declaration. It supersedes any
+// package-local *HookEvents slice; do not introduce a parallel string list.
+// Any new HookInstaller implementation is required to implement Events().
 type HookInstaller interface {
 	InstallHooks(pdxPath string) error
 	RemoveHooks(pdxPath string) error
 	CheckHooks() (HookStatus, error)
+	Events() []HookEventSpec
+}
+
+// HookEventSpec declares one hook event the installer wires, the Status set
+// DeriveStatus may emit from that event, and a short human-readable blurb for
+// the Inspector UI. It is the build-time declaration contract; runtime hook
+// handling stays per-agent (policy dispersal, plumbing shared).
+//
+// Fields:
+//   - Name: matches the hook JSON event_name / pdx hook CLI subcommand.
+//   - EmitsStatus: non-empty Status values (Status != "") that DeriveStatus
+//     may return for this event across all sub-branches. Empty slice (not nil)
+//     means the event is detail-only (DeriveStatus returns Valid=true with
+//     Status=""); SubagentStart/Stop are the canonical examples. Polymorphic
+//     events (e.g. cc Notification) list the union of every sub-branch.
+//   - Description: short English sentence for Inspector display. No trailing
+//     period, no emoji; keep it under roughly 70 characters.
+//   - FutureOnly: installer/checker-facet flag ONLY. When true, the hook is
+//     declared (installer writes it, DeriveStatus parses it) but the current
+//     CLI path is not guaranteed to emit it; CheckHooks therefore tolerates
+//     an absent hooks.json entry (legacy user who installed before the
+//     expansion) while still surfacing present-but-broken entries. The flag
+//     does NOT affect DeriveStatus-capability declarations:
+//     DeriveSupportedStatuses (and thus StatusSupporter.SupportedStatuses)
+//     unions every spec's EmitsStatus regardless of FutureOnly — proxy paths
+//     and future CLI versions may legitimately emit the event. Default false
+//     means "installer-required; missing is an issue". See fix plan §1.1.
+type HookEventSpec struct {
+	Name        string
+	EmitsStatus []Status
+	Description string
+	FutureOnly  bool
 }
 
 // HookStatus reports the installation state of hooks for an agent.
+//
+// Managed and UpgradesAvailable are the Finding #2 / #4 contract
+// extensions (PR #616 review): the SPA needs to distinguish (a) "pdx
+// left artifacts on disk" from "all required events are installed"
+// so the Remove button stays enabled on drifted-but-managed state,
+// and (b) "install is valid but 6 new FutureOnly events are
+// available" so the Install button / upgrade hint is not dead.
 type HookStatus struct {
-	Installed        bool                     `json:"installed"`
-	Events           map[string]HookEventInfo `json:"events"`
-	Issues           []string                 `json:"issues"`
-	AgentVersion     string                   `json:"agentVersion,omitempty"`
-	SupportedVersion string                   `json:"supportedVersion,omitempty"`
-	ExceedsSupport   bool                     `json:"exceedsSupport,omitempty"`
+	Installed         bool                     `json:"installed"`
+	Managed           bool                     `json:"managed"`
+	UpgradesAvailable []string                 `json:"upgradesAvailable,omitempty"`
+	Events            map[string]HookEventInfo `json:"events"`
+	Issues            []string                 `json:"issues"`
+	AgentVersion      string                   `json:"agentVersion,omitempty"`
+	SupportedVersion  string                   `json:"supportedVersion,omitempty"`
+	ExceedsSupport    bool                     `json:"exceedsSupport,omitempty"`
 }
 
 // HookEventInfo describes the state of a single hook event.
+//
+// FutureOnly mirrors HookEventSpec.FutureOnly so the UI can render
+// "tolerated absent" (grey FutureOnly badge, no red error) vs
+// "missing installer-required event" (hard red).
 type HookEventInfo struct {
-	Installed bool   `json:"installed"`
-	Command   string `json:"command"`
+	Installed  bool   `json:"installed"`
+	Command    string `json:"command"`
+	FutureOnly bool   `json:"futureOnly,omitempty"`
 }
 
 // StatuslineInstaller manages CC's statusLine.command in ~/.claude/settings.json.

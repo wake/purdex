@@ -97,20 +97,24 @@ func statusSetSorted(set map[agent.Status]bool) []string {
 	return out
 }
 
-// TestDriftDeclaredEqualsEmitted asserts that, for every registered provider,
-// EVERY fixture independently produces its declared (wantValid, wantStatus)
-// AND the union of emitted statuses exactly equals SupportedStatuses().
+// TestDriftThreeWayEquality asserts that, for every registered provider,
+// three sets of Status values are pairwise equal:
 //
-// Per-fixture assertion (not just set equality) is the load-bearing change
-// from the codex review: deleting one polymorphic Notification sub-branch
-// (e.g. "elicitation_dialog" → Waiting) would not change the set
-// {Waiting,Idle,Running,Error,Clear} because Waiting is still produced by
-// other branches. Per-fixture assertion catches that exact regression.
+//  1. declaredSet — union of Events().EmitsStatus
+//  2. emittedSet  — actually produced by DeriveStatus on the provider's
+//     fixtures (Valid=true, Status != "")
+//  3. supportedSet — returned by SupportedStatuses()
 //
-// Set-equality is kept as a complementary safeguard for the inverse
-// direction — emitting a status that no fixture covers, or declaring one
-// no fixture exercises.
-func TestDriftDeclaredEqualsEmitted(t *testing.T) {
+// This is the post-`Events()-SSoT` upgrade of the prior two-way drift test
+// (TestDriftDeclaredEqualsEmitted). SupportedStatuses is now derived from
+// Events() via DeriveSupportedStatuses, so in steady state 1 == 3 by
+// construction; the assertion still fires if anyone re-introduces a
+// hard-coded SupportedStatuses literal that disagrees with Events().
+//
+// Per-fixture assertion is retained (Phase 1 review finding): set-equality
+// alone cannot catch the deletion of a polymorphic Notification sub-branch
+// because other branches keep the aggregate Status set intact.
+func TestDriftThreeWayEquality(t *testing.T) {
 	r := driftRegistry()
 	rows := agent.Coverage(r)
 	if len(rows) == 0 {
@@ -129,11 +133,25 @@ func TestDriftDeclaredEqualsEmitted(t *testing.T) {
 				t.Fatalf("no driftFixture entry for provider %q — add fixtures or remove provider", row.AgentType)
 			}
 
-			declaredSet := make(map[agent.Status]bool, len(row.Declared))
+			// supportedSet comes from StatusSupporter (via Coverage row).
+			supportedSet := make(map[agent.Status]bool, len(row.Declared))
 			for _, s := range row.Declared {
-				declaredSet[s] = true
+				supportedSet[s] = true
 			}
 
+			// declaredSet comes from the Events() EmitsStatus union.
+			declaredSet := make(map[agent.Status]bool)
+			installer, ok := provider.(agent.HookInstaller)
+			if !ok {
+				t.Fatalf("provider %q does not implement HookInstaller — Events() unavailable", row.AgentType)
+			}
+			for _, spec := range installer.Events() {
+				for _, s := range spec.EmitsStatus {
+					declaredSet[s] = true
+				}
+			}
+
+			// emittedSet comes from DeriveStatus driven by fixtures.
 			emittedSet := make(map[agent.Status]bool)
 			for i, fx := range fixtures {
 				result := provider.DeriveStatus(fx.eventName, json.RawMessage(fx.rawJSON))
@@ -153,18 +171,59 @@ func TestDriftDeclaredEqualsEmitted(t *testing.T) {
 				}
 			}
 
-			if !setsEqual(declaredSet, emittedSet) {
-				t.Fatalf("drift for provider %q: declared=%v, emitted=%v\n"+
-					"  declared-not-emitted (fix: add fixture covering this status, or remove from declaration): %v\n"+
-					"  emitted-not-declared (fix: add to SupportedStatuses, or remove from DeriveStatus): %v",
+			// Report any pair-wise mismatch with three-way diagnostic context.
+			if !setsEqual(declaredSet, emittedSet) ||
+				!setsEqual(declaredSet, supportedSet) ||
+				!setsEqual(emittedSet, supportedSet) {
+				t.Fatalf("drift for provider %q three-way mismatch:\n"+
+					"  declared (from Events().EmitsStatus union): %v\n"+
+					"  emitted (from DeriveStatus fixtures):       %v\n"+
+					"  supported (from SupportedStatuses()):       %v\n"+
+					"  declared-not-emitted (fix: add fixture, or remove from Events().EmitsStatus): %v\n"+
+					"  emitted-not-declared (fix: add to Events().EmitsStatus, or remove from DeriveStatus): %v\n"+
+					"  declared-not-supported (fix: SupportedStatuses no longer derives from Events()): %v\n"+
+					"  supported-not-declared (fix: reverse of the previous row): %v",
 					row.AgentType,
 					statusSetSorted(declaredSet),
 					statusSetSorted(emittedSet),
+					statusSetSorted(supportedSet),
 					statusSetSorted(diffSet(declaredSet, emittedSet)),
 					statusSetSorted(diffSet(emittedSet, declaredSet)),
+					statusSetSorted(diffSet(declaredSet, supportedSet)),
+					statusSetSorted(diffSet(supportedSet, declaredSet)),
 				)
 			}
 		})
+	}
+}
+
+// TestDriftFixtureCoversAllEvents asserts every Events() event for each
+// provider appears in providerFixtures at least once. Guards the SSoT
+// invariant that declared hook events all have executable coverage, so
+// "declared but untested" events cannot silently accumulate.
+func TestDriftFixtureCoversAllEvents(t *testing.T) {
+	r := driftRegistry()
+	for _, row := range agent.Coverage(r) {
+		provider, ok := r.Get(row.AgentType)
+		if !ok {
+			t.Errorf("registry.Get(%q) failed", row.AgentType)
+			continue
+		}
+		installer, ok := provider.(agent.HookInstaller)
+		if !ok {
+			continue
+		}
+		fixtures := providerFixtures[row.AgentType]
+		covered := make(map[string]bool, len(fixtures))
+		for _, fx := range fixtures {
+			covered[fx.eventName] = true
+		}
+		for _, spec := range installer.Events() {
+			if !covered[spec.Name] {
+				t.Errorf("provider %q: Events() declares %q but providerFixtures has no entry (add a fixture or remove from Events())",
+					row.AgentType, spec.Name)
+			}
+		}
 	}
 }
 
@@ -182,6 +241,84 @@ func TestDriftFixtureCoverageNonEmpty(t *testing.T) {
 		if len(fixtures) == 0 {
 			t.Errorf("provider %q has empty fixture slice", row.AgentType)
 		}
+	}
+}
+
+// TestDriftPerEventEmitsStatusMatch is the fix-plan §2.5 D5 assertion:
+// for every provider × every declared event × every fixture of that event,
+// the set of Status values DeriveStatus actually returns must equal the
+// spec's EmitsStatus set (bidirectional strong equality).
+//
+// Why set-equality per-event and not aggregate: the aggregate test
+// (TestDriftThreeWayEquality) unions across events and therefore cannot
+// detect a single event that over-declares EmitsStatus while another event
+// happens to cover the over-declared Status. Example failure mode this
+// guards: marking Stop's EmitsStatus as [Idle, Clear] — aggregate still
+// matches because SessionEnd emits Clear — but no Stop fixture ever emits
+// Clear, so the declaration is a lie. D5 catches it because Stop's emitSet
+// would be {Idle}, not equal to {Idle, Clear}.
+//
+// Detail-only events (EmitsStatus = []) are checked: no fixture of that
+// event may emit a non-empty Status.
+//
+// FutureOnly events are covered naturally — their EmitsStatus is declared,
+// providerFixtures has their fixtures, and the per-event set-equality fires
+// either way. This is deliberate per plan §2.5 (no "D6 fixture-must-not-
+// include-FutureOnly" guard): FutureOnly is an installer/checker-facet bit
+// only, not a DeriveStatus-capability filter.
+func TestDriftPerEventEmitsStatusMatch(t *testing.T) {
+	r := driftRegistry()
+	for _, row := range agent.Coverage(r) {
+		row := row
+		t.Run(row.AgentType, func(t *testing.T) {
+			provider, ok := r.Get(row.AgentType)
+			if !ok {
+				t.Fatalf("registry.Get(%q) failed", row.AgentType)
+			}
+			installer, ok := provider.(agent.HookInstaller)
+			if !ok {
+				t.Fatalf("provider %q does not implement HookInstaller", row.AgentType)
+			}
+			fixturesByEvent := make(map[string][]driftFixture)
+			for _, fx := range providerFixtures[row.AgentType] {
+				fixturesByEvent[fx.eventName] = append(fixturesByEvent[fx.eventName], fx)
+			}
+			for _, spec := range installer.Events() {
+				spec := spec
+				t.Run(spec.Name, func(t *testing.T) {
+					fxs, ok := fixturesByEvent[spec.Name]
+					if !ok || len(fxs) == 0 {
+						t.Fatalf("provider %q event %q has no fixture", row.AgentType, spec.Name)
+					}
+					// Declared set (from the spec).
+					declared := make(map[agent.Status]bool, len(spec.EmitsStatus))
+					for _, s := range spec.EmitsStatus {
+						declared[s] = true
+					}
+					// Emitted set (from every fixture).
+					emitted := make(map[agent.Status]bool)
+					for _, fx := range fxs {
+						result := provider.DeriveStatus(fx.eventName, json.RawMessage(fx.rawJSON))
+						if result.Valid && result.Status != "" {
+							emitted[result.Status] = true
+						}
+					}
+					if !setsEqual(declared, emitted) {
+						t.Fatalf("provider %q event %q emits-status mismatch:\n"+
+							"  declared: %v\n"+
+							"  emitted:  %v\n"+
+							"  declared-not-emitted (remove from EmitsStatus or add a fixture): %v\n"+
+							"  emitted-not-declared (add to EmitsStatus or fix DeriveStatus):   %v",
+							row.AgentType, spec.Name,
+							statusSetSorted(declared),
+							statusSetSorted(emitted),
+							statusSetSorted(diffSet(declared, emitted)),
+							statusSetSorted(diffSet(emitted, declared)),
+						)
+					}
+				})
+			}
+		})
 	}
 }
 

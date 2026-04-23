@@ -6,10 +6,25 @@ import type { NormalizedEvent } from '../stores/useAgentStore'
 export interface HookModuleEvent {
   installed: boolean
   command?: string | null
+  futureOnly?: boolean
 }
 
 export interface HookModuleStatus {
   installed: boolean
+  /**
+   * Managed is true when the host has pdx-owned artifacts on disk even
+   * if the install has drifted. Drives whether the Remove button is
+   * enabled (Finding #2).
+   */
+  managed?: boolean
+  /**
+   * UpgradesAvailable lists declared-but-not-installed FutureOnly
+   * events. Non-empty while installed=true means "install is valid
+   * but new events are available" — drives the Upgrade hint and
+   * keeps the Install button enabled on legacy pre-expansion users
+   * (Finding #4).
+   */
+  upgradesAvailable?: string[]
   events: Record<string, HookModuleEvent>
   issues?: string[]
   agentVersion?: string

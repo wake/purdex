@@ -52,6 +52,39 @@ func TestCodexProvider_Identify_Negative(t *testing.T) {
 	}
 }
 
+// TestCodexSupportedStatuses_DerivesFromEvents asserts the post-Commit-5
+// invariant that SupportedStatuses is computed from Events().EmitsStatus
+// union rather than a hard-coded literal.
+func TestCodexSupportedStatuses_DerivesFromEvents(t *testing.T) {
+	p := codex.NewProvider()
+	ss := any(p).(agent.StatusSupporter)
+	got := ss.SupportedStatuses()
+
+	gotSet := make(map[agent.Status]bool, len(got))
+	for _, s := range got {
+		gotSet[s] = true
+	}
+	wantSet := make(map[agent.Status]bool)
+	for _, e := range p.Events() {
+		for _, s := range e.EmitsStatus {
+			wantSet[s] = true
+		}
+	}
+	if len(gotSet) != len(wantSet) {
+		t.Fatalf("SupportedStatuses=%v, events union=%v (len mismatch)", got, wantSet)
+	}
+	for s := range wantSet {
+		if !gotSet[s] {
+			t.Errorf("SupportedStatuses missing %q (from events union)", s)
+		}
+	}
+	for s := range gotSet {
+		if !wantSet[s] {
+			t.Errorf("SupportedStatuses contains %q not in events union", s)
+		}
+	}
+}
+
 // TestCodexSupportedStatuses asserts codex.Provider implements
 // StatusSupporter and declares the same Phase 1 status set as cc/opencode
 // post-DeriveStatus expansion (Commit 3).

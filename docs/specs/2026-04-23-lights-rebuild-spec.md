@@ -8,6 +8,8 @@
 
 Lights 子系統曾於 2026-04-22 回退一版 ~9000 行的膨脹重構。本 spec 採 **tightened 路線**：骨架最小、其他層沿用既有 infra（TraceStore / Monitor API / frame_ops / probe），分六個獨立 PR 小步推進。每 Phase 獨立 spec 節、獨立 merge、獨立 bump alpha、獨立 codex 兩輪 review。
 
+**2026-04-23 更新**：Phase 0/1 完成後討論 Phase 2 前的架構對齊，新增 §2.4「Architecture Guardrails」作為後續開發護欄；§8.2 Phase 4b 由條件執行升級為延後必做；§11 Open Question 3 已決議。
+
 ## 2. 核心概念
 
 ### 2.1 Status 對齊矩陣
@@ -41,6 +43,66 @@ Readiness callsite 缺失處理方向在 Open Questions 第 1 題，本 spec 預
 
 三個 concern（hook → status、frame model、probe）在 runtime 層保持獨立演化；TraceStore 提供統一的歷史事實紀錄；Phase 5 Inspector 由 trace 跨 concern 拼接呈現，而不由 runtime 強制統一。
 
+### 2.4 Architecture Guardrails
+
+本節鎖定 Phase 2-5 開發必須遵守的架構原則，防止向中央化收斂造成膨脹。護欄於 2026-04-23 討論定案，適用整份 spec。
+
+#### 2.4.1 中央 vs 分散判準
+
+收斂對象決定是否膨脹：
+
+| 收斂對象 | 膨脹 | 範例 |
+|---|---|---|
+| **宣告層**（build-time 可查、runtime 仍分散） | 不膨脹 | `Events() []HookEventSpec`、`Coverage()`、Inspector UI |
+| **實作層**（runtime 要跑過中央物件） | 嚴重膨脹 | 中央 FSM、共用 event resolver、統一 transition table |
+
+提案遇到「抽取 / 統一 / 收斂」衝動時，問：「這個收斂在 build time 還是 runtime 時起作用？」build-time 可做、runtime 不做。
+
+#### 2.4.2 Hook 與 Probe 架構同型
+
+兩類本質同型，都是「policy 分散 + plumbing 共用 + 宣告對齊」：
+
+| | Hook | Probe |
+|---|---|---|
+| 共用層 | plumbing（handler / broadcast / trace） | engine（hash diff / pane read / signal transport） |
+| 宣告層 | `Events() []HookEventSpec`（issue #613 擴展） | `ProbeIntents() []ProbeIntent`（§8.2） |
+| per-agent 差異 | 事件集合、payload schema | 何時啟 / 看什麼 / signal→status 映射、特徵辨識 |
+
+**Hook + Probe 衝突解法**：hook 時間窗 —— 加 `lastHookAt[session]` timestamp，probe callback 檢查距離 lastHook 是否 < graceWindow（例 2 秒），太近跳過。邏輯為「hook 權威、probe 推論」的冷卻窗，非絕對壓過。約 20 行改動，獨立小 PR，排 Phase 4a 前後均可。
+
+#### 2.4.3 三家 Agent 事件對齊策略
+
+三家事件集合差異（cc 9 / codex 3 / opencode 8）**不是 bug，是 CLI 客觀限制** —— 分散架構不強制行為一致。對齊分三層：
+
+- **Status 宣告**：Phase 1 做完（drift_test 守住）
+- **事件集合自洽**（installer 裝幾個 vs DeriveStatus 支援幾個 vs Inspector 宣告幾個）：併入 issue #613 擴展（`HookInstaller.Events()`）自然解，不開獨立 phase
+  - **更新 2026-04-23**：已於 Events() PR 實作完成（plan 檔 `docs/specs/2026-04-23-hook-events-declaration-plan.md`）；cc/codex/opencode 三家共享 `HookEventSpec` 宣告，codex installer 從 3 事件擴展到 9 事件，`SupportedStatuses()` 改由 `Events()` derive，drift test 升級為三向等價
+- **DeriveStatus 行為**：drift test 已守
+
+#### 2.4.4 Policy 分散 + Plumbing 共用 的完整長相
+
+分散架構不是「只有宣告對齊」，完整結構如下：
+
+| 層次 | 分散 or 共用 | 誰提供 |
+|---|---|---|
+| Policy（event→status、狀態判讀） | **分散** | 各家 `status.go` switch |
+| 宣告對齊 | **共用** | `SupportedStatuses` / `Events` / `Coverage` / drift test |
+| Plumbing（invalid 早退、error guard、broadcast schema） | **共用** | `handler.go` / `NormalizedEvent` |
+| Probe engine（Activity / Liveness 畫面偵測） | **共用** | `probe.Prober` |
+| Observability（trace / frame / projection） | **共用** | `TraceStore` / `frame_ops` |
+
+關鍵區別：**Policy 共用化 = 中央化 = 膨脹**（硬塞各家差異進統一模型）；**Plumbing 共用化 = 正常分層**（不膨脹）。
+
+#### 2.4.5 Bloat 警覺詞
+
+以下三個詞出現在討論或提案中時立刻警戒並回到 §2.4.1 判準：
+
+- **Central FSM** / **Central State Machine**
+- **Event catalog**
+- **Transition registry**
+
+前例：2026-04-22 Reverted Lights（9000 行）vs tightened 骨架（~65 行），15× bloat。詳細五大 bloat 徵兆見記憶檔 `feedback_skeleton_convergence.md`：把 working code 變 data / parallel registry / 統一抽象 / refactor working code / config flag。
+
 ## 3. Phase Roadmap
 
 | Phase | 範圍 | 風險 | 依賴 |
@@ -50,7 +112,7 @@ Readiness callsite 缺失處理方向在 Open Questions 第 1 題，本 spec 預
 | 2 | L3 Subagent 結構升級 + proxy 偵測 + frame idle sweep | 中 | Phase 1 |
 | 3 | L1 邊界補強（daemon 後啟動補回 + 沒 parent 以 agent_type 為基準顯式化） | 中 | Phase 2 |
 | 4a | Activity probe 內部強化（彩虹字 / spinner） | 低 | Phase 3 |
-| 4b | 可選 `ProbeIntentProvider`（依 Phase 1-3 觀察決定是否做） | 中 | Phase 4a |
+| 4b | `ProbeIntentProvider` + 前置 probe audit（延後必做） | 中 | Phase 4a |
 | 5 | Dev Inspector UI | 低 | Phase 4 |
 
 每 Phase 節固定四段：**目的 / 改動觸及 / 驗收條件 / 備註**。
@@ -221,11 +283,11 @@ activity probe 目前靠畫面 hash diff 判定，但 cc 提問後若使用者�
 
 本 Phase 僅動 activity probe 內部判定邏輯，**不改** `manageActivityWatch` 的出場條件（仍是 hook 後 + status ∈ {waiting, running, idle}）。
 
-### 8.2 Phase 4b — 可選 `ProbeIntentProvider`（條件執行）
+### 8.2 Phase 4b — `ProbeIntentProvider`（延後必做）
 
 #### 目的
 
-讓 agent 宣告自己期望的 probe 觸發條件與 signal mapping，讓 probe 出場條件**從寫死擴充為 agent 驅動**，並順便整合 readiness（解決現況 callsite 缺失）。僅在 Phase 1-3 過程中出現明確需求時執行。
+讓 agent 宣告自己期望的 probe 觸發條件與 signal mapping，讓 probe 出場條件**從寫死擴充為 agent 驅動**，並順便整合 readiness（解決現況 callsite 缺失）。**執行時機**：Phase 3 完成後、Phase 5 之前。先做前置 audit（查 `agent_trace_steps` 找出三家在哪些 status 轉換缺乏 hook 訊息、需要 probe 補位），再設計 ProbeIntent 結構。
 
 #### 改動觸及
 
@@ -251,12 +313,7 @@ activity probe 目前靠畫面 hash diff 判定，但 cc 提問後若使用者�
 
 #### 備註
 
-執行門檻：Phase 1-3 結束後查 `agent_trace_steps`，若發現以下任一情境頻繁出現，才執行 Phase 4b：
-- 彩虹字強化（4a）仍無法覆蓋的誤判
-- 多 agent 需要差異化 probe 策略
-- readiness callsite 缺失成為實際 bug
-
-否則 readiness 現況問題另開 gh issue 追蹤，Phase 4 在 4a 後結案。
+**執行依據**：2026-04-23 討論確認 probe per-agent 差異（cc readiness 真實 / codex stub / opencode 無 readiness）是客觀事實，不是 hypothetical —— Phase 4b 為延後必做，不再是條件執行。readiness 現況問題（§2.2 表格 Open Question 1）在 Phase 4b 一併解決。
 
 ---
 
@@ -297,13 +354,13 @@ Inspector 僅讀取不 mutation。若 Phase 2-4 在 Inspector 設計期間仍變
 - **Bump 策略**：每 Phase merge 後獨立 bump alpha PR，`VERSION` / `package.json` / `spa/package.json` 三處同步
 - **Known issues 管理**：review 問題以「信心 / 關聯 / 複雜」三維度彙整；低關聯 + 中高複雜可延後成 gh issue（label 按 CLAUDE.md 兩維度：type 必選一、scope 可多選）
 - **Worktree 使用**：Phase 0 使用現有 `lights-rebuild-spec`；Phase 1+ 各自另起 worktree 避免 diff 混淆
-- **Phase 4 條件判斷**：4a 為必做；4b 僅在 Phase 1-3 過程中出現明確需求時執行，否則 Phase 4 於 4a 結案、Readiness callsite 缺失另開 issue
+- **Phase 4 執行策略**：4a 為必做；4b 於 Phase 3 完成後、Phase 5 之前執行（延後必做，見 §2.4.2、§8.2）；Readiness callsite 缺失於 4b 一併解決
 
 ## 11. Open Questions
 
 1. **Readiness 模組層無 callsite 如何處理** — 選項：(a) Phase 4b 整合（現 spec 預設）(b) Phase 1 補齊整合 (c) 明確標註本次不處理、開 issue 追蹤
 2. **Phase 2 是否拆 2a（schema 升級）+ 2b（proxy + sweep）** — 依 review 負擔決定，到時再拆
-3. **Phase 4b 條件是否成立** — 以 Phase 1–3 的 trace 資料為判斷依據，非預設
+3. **Phase 4b 前置 audit 範圍** — ✅ 2026-04-23 已決議升級為延後必做（見 §2.4.2、§8.2）；尚待確認的是 audit 具體範圍（每家 agent 各取多少 trace / 以哪些 status 切換為重點）。由 Phase 3 完成時再定
 4. **Phase 5 Inspector 觀察粒度** — 先以 chain（既有 `TraceChain`）為單位；per-event / per-transition 作為後續迭代
 5. **Proxy 判定條件是否加時間窗 / PPID 驗證** — Phase 2 初版僅 pane + agent_type；若 Phase 3 揭露誤判再強化
 6. **Frame idle sweep 閾值** — 初值 1 小時；以實際觀察校準

@@ -1,6 +1,14 @@
 package opencode
 
-import "fmt"
+import (
+	"fmt"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/wake/purdex/internal/agent"
+)
 
 const managedMarker = "pdx-managed:opencode-hooks:v1"
 
@@ -196,6 +204,102 @@ export const PurdexOpenCodeHooks = async () => {
   }
 }
 `, managedMarker, pdxPath)
+}
+
+// emittedEventPattern matches `emit('Name', …)` / `emit("Name", …)` inside
+// the plugin body. Strictly used by test-layer parity checks (plan §1.5):
+// runtime health goes through byte-exact template comparison, so this
+// regex's well-known blind spots (comment strings, dead code) never reach
+// production judgement. Keeping the expression scoped to the single
+// emit() call shape keeps the helper understandable for that test-only
+// role.
+var emittedEventPattern = regexp.MustCompile(`emit\(['"](\w+)['"]`)
+
+// pdxPathLiteralPattern captures the complete quoted Go string literal
+// that renderManagedPlugin writes with %q. The [^"\\]|\\. alternation
+// covers escaped quotes and backslashes, which a naive `"([^"]+)"` regex
+// would otherwise cut short. The capture intentionally includes the
+// enclosing double quotes so strconv.Unquote can consume it verbatim
+// (plan §1.6 / v4 findings).
+var pdxPathLiteralPattern = regexp.MustCompile(`const pdxPath = ("(?:[^"\\]|\\.)*")`)
+
+// extractEmittedEvents returns every event name that the given body
+// invokes emit() with. Order preserves first appearance. Test-only helper
+// per plan §1.5 — do not wire it into CheckHooks.
+func extractEmittedEvents(body string) []string {
+	matches := emittedEventPattern.FindAllStringSubmatch(body, -1)
+	seen := make(map[string]bool, len(matches))
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		if len(m) < 2 {
+			continue
+		}
+		name := m[1]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
+// validateSpecsCoverEmitted enforces bidirectional parity between the
+// event names a managed plugin body emits and the HookEventSpec slice
+// driving Go-side installer / checker / Inspector paths. A superset on
+// either side yields an error. Scoped to test layer (plan §1.5): runtime
+// never calls this — a build-time drift blocks merge via
+// TestTemplateSpecsParity (PT7) rather than panicking production code.
+func validateSpecsCoverEmitted(body string, specs []agent.HookEventSpec) error {
+	emitted := make(map[string]bool)
+	for _, name := range extractEmittedEvents(body) {
+		emitted[name] = true
+	}
+	declared := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		declared[spec.Name] = true
+	}
+	var missingInSpec []string
+	for name := range emitted {
+		if !declared[name] {
+			missingInSpec = append(missingInSpec, name)
+		}
+	}
+	var missingInEmit []string
+	for name := range declared {
+		if !emitted[name] {
+			missingInEmit = append(missingInEmit, name)
+		}
+	}
+	if len(missingInSpec) == 0 && len(missingInEmit) == 0 {
+		return nil
+	}
+	sort.Strings(missingInSpec)
+	sort.Strings(missingInEmit)
+	var parts []string
+	if len(missingInSpec) > 0 {
+		parts = append(parts, fmt.Sprintf("template emits %v but specs do not declare them", missingInSpec))
+	}
+	if len(missingInEmit) > 0 {
+		parts = append(parts, fmt.Sprintf("specs declare %v but template never emits them", missingInEmit))
+	}
+	return fmt.Errorf("template/specs parity: %s", strings.Join(parts, "; "))
+}
+
+// extractPdxPath pulls the pdxPath literal out of a managed plugin body
+// and unescapes it to the original path string. Returns ok=false on any
+// failure (literal not found, malformed escape) so CheckHooks can fall
+// back to the unmanaged path rather than panic (v4 plan §1.6).
+func extractPdxPath(body string) (string, bool) {
+	m := pdxPathLiteralPattern.FindStringSubmatch(body)
+	if len(m) < 2 {
+		return "", false
+	}
+	unquoted, err := strconv.Unquote(m[1])
+	if err != nil {
+		return "", false
+	}
+	return unquoted, true
 }
 
 func firstString(values map[string]any, keys ...string) string {
