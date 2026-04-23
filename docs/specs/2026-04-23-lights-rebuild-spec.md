@@ -76,6 +76,7 @@ Readiness callsite 缺失處理方向在 Open Questions 第 1 題，本 spec 預
 
 - **Status 宣告**：Phase 1 做完（drift_test 守住）
 - **事件集合自洽**（installer 裝幾個 vs DeriveStatus 支援幾個 vs Inspector 宣告幾個）：併入 issue #613 擴展（`HookInstaller.Events()`）自然解，不開獨立 phase
+  - **更新 2026-04-23**：已於 Events() PR 實作完成（plan 檔 `docs/specs/2026-04-23-hook-events-declaration-plan.md`）；cc/codex/opencode 三家共享 `HookEventSpec` 宣告，codex installer 從 3 事件擴展到 9 事件，`SupportedStatuses()` 改由 `Events()` derive，drift test 升級為三向等價
 - **DeriveStatus 行為**：drift test 已守
 
 #### 2.4.4 Policy 分散 + Plumbing 共用 的完整長相
