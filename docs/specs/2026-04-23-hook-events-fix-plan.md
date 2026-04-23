@@ -1,7 +1,7 @@
 # Hook Events PR #616 Fix Plan
 
 - **Date**: 2026-04-23
-- **Version**: v3（依 plan codex review `review-mobsgj0y-rgwbdv`(v1 判) + `review-mobsrf0q-47acc5`(v2 判) 共 7 點 finding 全採納重寫）
+- **Version**: v4（v1 review 4 + v2 review 3 + v3 review 2 — 共 9 個 findings 全採納；v3 review `review-mobt3cru-xq3lyg` 確認前 7 個已覆蓋，新增 2 個 runtime 安全 finding）
 - **Spec**: `docs/specs/2026-04-23-lights-rebuild-spec.md` §2.4（架構護欄）
 - **Parent plan**: `docs/specs/2026-04-23-hook-events-declaration-plan.md`（既有，11 commits merged 進本分支）
 - **Worktree**: `lights-spec-guardrails`（branch `worktree-lights-spec-guardrails`，PR #616）
@@ -30,6 +30,15 @@
 | Commit 2 只在 `codexEventSpecs` 標 FutureOnly，宣稱無消費者讀取 → 綠 | Commit 2 同時更新三家 `Events()` defensive copy 帶上 `FutureOnly: spec.FutureOnly`；否則 CE1/CE2 在 commit 2 紅 | 既有 `Events()` 是手寫 field-by-field copy，不會自動帶新欄位 |
 
 核心哲學修正：**opencode plugin 是 atomic managed file，非 per-event 配置**。byte-exact 比對符合 plugin 實際語意，且消除整類 false-green 路徑。
+
+### v3 → v4（codex review `review-mobt3cru-xq3lyg` 2 findings 採納；前 7 findings 已確認覆蓋）
+
+| v3 設計 | v4 更正 | 依據 |
+|---|---|---|
+| `renderManagedPlugin` 在 template/specs 不一致時 panic | **移除 runtime panic**；template/specs parity 改為 **test-only** 斷言（`TestTemplateSpecsParity`） | `renderManagedPlugin` 被 `writeManagedPlugin`（Install 路徑）與 `CheckHooks`（byte-compare）同時呼叫；runtime panic 會把 build-time 契約錯誤升級成可見程序終止 |
+| `extractPdxPath` 直接把 regex 擷取結果重用 | 抓完整 `"..."` quoted literal → `strconv.Unquote(quoted)` 還原後才 pass 給 `renderManagedPlugin` | `renderManagedPlugin` 用 `%q` 寫 pdxPath；regex 抓到的是已 escape 的 JS 源碼；直接 round-trip 含反斜線路徑會二次 escape 假紅 |
+
+核心哲學修正：**契約 drift 是 build-time 問題，test 層面防禦已足；runtime 不做永不恢復的 panic**。
 
 ## 1. 契約鎖定
 
@@ -128,21 +137,22 @@ codex `SupportedStatuses()` **維持 5 status**（Idle/Running/Waiting/Error/Cle
 
 **部分損壞**：若有 FutureOnly key 被手動改壞 → `Issues` 顯化 warning + allInstalled=false（避免假綠燈）。
 
-### 1.5 opencode renderManagedPlugin — 契約即 SSoT（render-time validation 擋漂移）
+### 1.5 opencode renderManagedPlugin — 契約即 SSoT（test-only parity check）
 
 Finding #2（PR #616 第 2 輪防守 HIGH + 體質 MED）核心：不讓 template 與 `opencodeEventSpecs` 成為兩份平行 SSoT。
 
-策略：template 保留固定 switch/case 結構；**render 時以 `validateSpecsCoverEmitted` 強制檢查** template emit set == `opencodeEventSpecs.Name` set。build-time 契約檢查；runtime 不經這條路徑。
+策略（v4 收斂）：template 保留固定 switch/case 結構；**契約檢查只在 test 層面執行**；`renderManagedPlugin` **不做任何 runtime validation、不 panic**，純粹 render 字串後返回。
 
 具體：
 
-- `renderManagedPlugin(pdxPath string) string` 維持原簽名；函式尾部呼叫 `validateSpecsCoverEmitted(body, opencodeEventSpecs)` — template 字串 emit 的 event name 與 specs 不等 → `panic("contract violation: template emits: <A,B>; specs declare: <C,D>")` 
-- `extractEmittedEvents(body string) []string` — regex `emit\(['"](\w+)['"]` 從 body 抽出 emit 的 event names（**只用於 render-time contract check，不用於 CheckHooks 健康判定**）
-- `validateSpecsCoverEmitted(body string, specs []HookEventSpec) error` — 強等：`set(extractEmittedEvents(body)) == set(specs.Name)`；任何一側 superset 都回 error
+- `renderManagedPlugin(pdxPath string) string` — 維持原簽名、原行為；**不呼叫 validate、不 panic**
+- `extractEmittedEvents(body string) []string` — regex `emit\(['"](\w+)['"]` 從 body 抽出 emit 的 event names。**只由測試使用**
+- `validateSpecsCoverEmitted(body string, specs []HookEventSpec) error` — 強等：`set(extractEmittedEvents(body)) == set(specs.Name)`；任何一側 superset 都回 error。**只由測試使用**
+- **測試層強制 parity**：在 `plugin_template_test.go` 增加 `TestTemplateSpecsParity`，對 `renderManagedPlugin("/fake")` 的結果跑 `validateSpecsCoverEmitted`，不等則 test fail
 
-**為什麼 render panic 而非 error**：render 函式原簽名回 string，加 error 改呼叫點。panic 只在 build 測試階段觸發（因為 template 是 const-like），release path 不爆。
+**為什麼移除 runtime panic**（v4 決定）：`renderManagedPlugin` 被 `writeManagedPlugin`（Install 路徑）和 `CheckHooks`（byte-compare 重新 render）呼叫；runtime panic 會把 build-time 契約錯誤升級成可見程序終止。test-only 防線已足以擋下 drift — 測試通過表示 specs 與 template 對齊，合併後不可能出現 mismatched 版本。
 
-**`extractEmittedEvents` 的角色限制（v3 收斂）**：**僅用於 build-time 契約驗證**。任何 runtime 健康檢查（CheckHooks）都不讀此 regex — 改用 §1.6 的 byte-exact 比對。regex 對註解、字串常量、dead code、人為改壞的 JS 無法區分「可執行 emit」與「看起來像 emit 的文字」。
+**`extractEmittedEvents` 角色**：**僅供測試使用**。runtime 健康檢查（CheckHooks）走 §1.6 的 byte-exact 比對。regex 對 JS 靜態分析不可靠，本就不適合 runtime。
 
 **配合測試**（§2.3 PT1-PT5）驗證。
 
@@ -161,7 +171,22 @@ Finding #2（PR #616 第 2 輪防守 HIGH + 體質 MED）核心：不讓 templat
    - 不等 → `Installed=false`；issue 含 `plugin body differs from managed template (run reinstall)`；**所有 event `Installed=false`**（因為整份 plugin 視為不可信）
 6. 若 marker 不存在 → 既有 unmanaged 行為保留
 
-**新 helper**：`extractPdxPath(body string) (string, bool)` — 從受管 body 抽 pdxPath。regex `const pdxPath = "([^"]+)"`（單一行，單一出現位置）。若抽不到 → 當成 byte-mismatch。
+**新 helper**：`extractPdxPath(body string) (string, bool)` — 從受管 body 抽 pdxPath。
+
+**關鍵**：template 以 `%q` 寫 pdxPath，反斜線、引號、非 ASCII 都已被 Go 字串 escape。regex 必須抓**完整 quoted literal**（含前後雙引號），再用 `strconv.Unquote` 還原成原始路徑：
+
+1. regex `const pdxPath = (\"(?:[^\"\\\\]|\\\\.)*\")` — 捕獲含跳脫處理的完整 `"..."` 字串（包含外層雙引號），支援 `\\` `\"` `\n` 等 escape sequence
+2. 對捕獲結果呼叫 `strconv.Unquote(quoted)` — Go string quoting 規則與 `%q` 對稱，含 `\`、`\"`、Unicode escape 都能還原
+3. `Unquote` 失敗（格式錯誤或找不到匹配）→ 回 `("", false)` → CheckHooks 視為 byte-mismatch
+
+**為什麼不能直接用 regex `"([^"]+)"` 抓內容**：該 regex 會在遇到 `\"` 時提早結束，抽到殘缺字串；再 render 會二次 escape 假紅。
+
+**測試覆蓋**（PT6 擴充）：round-trip 必須對以下路徑全綠：
+- 空白：`/path with spaces/pdx`
+- 反斜線（Windows-style）：`C:\Users\foo\pdx.exe`
+- 雙引號（罕見但合法）：`/weird"path/pdx`
+- 非 ASCII：`/使用者/pdx`
+- 控制字元不測試（install 路徑不會產生）
 
 **為什麼不 per-event**：opencode plugin 是單檔 JavaScript，switch/case 結構內任何改動都可能影響其他 event（例 shared state `activeSubagents`、`suppressIdleForSession`）。將 plugin 視為「有 marker + byte-equal」二元狀態符合其語意：要嘛 pdx 受管、要嘛使用者自行負責。
 
@@ -258,8 +283,9 @@ F2 是防呆測試，鎖定「DeriveSupportedStatuses 不因 FutureOnly 過濾�
 | PT2 | `TestValidateSpecsCoverEmitted_Equal` | `validateSpecsCoverEmitted(body, opencodeEventSpecs)` 對真 template body 回 nil |
 | PT3 | `TestValidateSpecsCoverEmitted_EmitNotInSpec` | synthetic body 含 `emit('Fake')` + specs 無 Fake → error |
 | PT4 | `TestValidateSpecsCoverEmitted_SpecNotInEmit` | synthetic body 缺某 event + specs 含它 → error |
-| PT5 | `TestRenderManagedPlugin_ProducesValidBody` | `renderManagedPlugin("/p")` 不 panic；結果 body 含 marker + 對齊 specs |
-| PT6 | `TestExtractPdxPath_RoundtripFromRender` | `renderManagedPlugin(p)` 後 `extractPdxPath(body)` 回 `p`（byte-exact 比對基石） |
+| PT5 | `TestRenderManagedPlugin_ProducesValidBody` | `renderManagedPlugin("/p")` 不 panic；結果 body 含 marker |
+| PT6 | `TestExtractPdxPath_RoundtripEscapedLiterals` | 對下列 pdxPath 驗證 `render → extract → equals input`：`/path with spaces/pdx`、`C:\Users\foo\pdx.exe`、`/weird"path/pdx`、`/使用者/pdx` |
+| PT7 | `TestTemplateSpecsParity` | 對 `renderManagedPlugin("/fake")` 呼叫 `validateSpecsCoverEmitted(body, opencodeEventSpecs)` → nil（build-time contract guard）|
 
 ### 2.4 opencode hooks CheckHooks — byte-exact template 比對
 
@@ -331,14 +357,17 @@ D5 天然覆蓋 FutureOnly event（因為 fixtures 與 declaredSet 都包含）�
 ### Commit 5 — `refactor(agent/opencode): extract emitted events + pdx path helpers`
 - 紅：寫 PT1 + PT6 → 失敗（helpers 不存在）
 - 綠：`plugin_template.go` 加
-  - `extractEmittedEvents(body string) []string`（regex `emit\(['"](\w+)['"]`）
-  - `extractPdxPath(body string) (string, bool)`（regex `const pdxPath = "([^"]+)"`）
+  - `extractEmittedEvents(body string) []string`（regex `emit\(['"](\w+)['"]`）— **僅供測試**
+  - `extractPdxPath(body string) (string, bool)` — regex 抓完整 quoted literal `const pdxPath = (\"(?:[^\"\\\\]|\\\\.)*\")`，用 `strconv.Unquote` 還原（§1.6 細節）
+- PT6 必須覆蓋 space / backslash / quote / 非 ASCII 四種 escape round-trip
 - 跑 `go test ./internal/agent/opencode/...` 綠
 
-### Commit 6 — `feat(agent/opencode): render-time contract validation`
-- 紅：寫 PT2 + PT3 + PT4 + PT5 → 失敗
-- 綠：加 `validateSpecsCoverEmitted(body string, specs []HookEventSpec) error`；`renderManagedPlugin` 結尾呼叫 validate，mismatch panic
-- PT5 確認常態 template 不 panic
+### Commit 6 — `test(agent/opencode): template ↔ specs parity (test-only)`
+- 紅：寫 PT2 + PT3 + PT4 + PT5 + PT7 → 失敗
+- 綠：
+  1. 加 `validateSpecsCoverEmitted(body string, specs []HookEventSpec) error`（package-internal，**僅供測試使用**）
+  2. **`renderManagedPlugin` 不動**（不呼叫 validate、不 panic）
+  3. PT7 在 test 層跑 parity check — 即 build-time guard（若 template/specs 漂移 → 測試紅，阻止 merge）
 - 跑 `go test ./internal/agent/opencode/...` 綠
 
 ### Commit 7 — `feat(agent/opencode): byte-exact CheckHooks against managed template`
@@ -375,8 +404,8 @@ D5 天然覆蓋 FutureOnly event（因為 fixtures 與 declaredSet 都包含）�
 | `internal/agent/codex/hooks.go` | CheckHooks 三態決策 + `checkCodexEvent` helper | +40 |
 | `internal/agent/codex/hooks_test.go` | +CH1-CH6 | +140 |
 | `internal/agent/opencode/events.go` | Events() defensive copy 加 `FutureOnly: spec.FutureOnly` | +1 |
-| `internal/agent/opencode/plugin_template.go` | +`extractEmittedEvents` + `extractPdxPath` + `validateSpecsCoverEmitted` + render panic | +45 |
-| `internal/agent/opencode/plugin_template_test.go` | +PT1-PT6 | +95 |
+| `internal/agent/opencode/plugin_template.go` | +`extractEmittedEvents` + `extractPdxPath` (含 Unquote) + `validateSpecsCoverEmitted`（**無 runtime panic**） | +50 |
+| `internal/agent/opencode/plugin_template_test.go` | +PT1-PT7（PT6 escape round-trip / PT7 parity） | +120 |
 | `internal/agent/opencode/hooks.go` | CheckHooks byte-exact template 比對 | +30 |
 | `internal/agent/opencode/hooks_test.go` | +OH1-OH5 | +100 |
 | `internal/agent/drift_test.go` | +D5（無 fixture 刪除、無 FutureOnly skip） | +45 |
@@ -393,7 +422,9 @@ D5 天然覆蓋 FutureOnly event（因為 fixtures 與 declaredSet 都包含）�
 - **不改 codex `provider_test.go` SupportedStatuses 斷言**（仍 5 status）
 - **不探測 codex CLI 版本** — FutureOnly 是 build-time 靜態標記
 - **不引入 `/api/hooks/codex/capability` endpoint**
-- **不重寫 opencode template 為完全 codegen**（v3 確認：template 保固定結構 + render-time validate）
+- **不重寫 opencode template 為完全 codegen**（v3 確認：template 保固定結構 + **test-only** parity validate，v4 移除 runtime panic）
+- **renderManagedPlugin 不做 runtime validation / panic**（v4：contract drift 由測試層防禦，runtime 純 render）
+- **不用 naive regex `"([^"]+)"` 抓 pdxPath**（v4：必抓完整 quoted literal + strconv.Unquote）
 - **不對 opencode CheckHooks 做 per-event extraction**（v3 決定：byte-exact template 比對）
 - **不接受 codex absent 定義包含空陣列**（v3 嚴格限：`_, ok := hooks[key]; ok == false` 才是 absent）
 - **不把 cc 任何 event 標為 FutureOnly**
@@ -419,7 +450,7 @@ D5 天然覆蓋 FutureOnly event（因為 fixtures 與 declaredSet 都包含）�
 
 - [ ] 7 個 commits 符合上述 message 規範
 - [ ] `go build ./...` 綠
-- [ ] `go test ./...` 全綠（含 F1-F2 / CE1-CE2 / CH1-CH6 / D5 / PT1-PT6 / OH1-OH5 共 22 個新測試）
+- [ ] `go test ./...` 全綠（含 F1-F2 / CE1-CE2 / CH1-CH6 / D5 / PT1-PT7 / OH1-OH5 共 23 個新測試）
 - [ ] `go vet ./...` 無 warning
 - [ ] PR diff 僅涉及 §4 表格列出的 14 個檔 + plan 文件，**其餘不得出現**
 - [ ] codex `SupportedStatuses()` 仍回傳 5 個 Status（不動）
@@ -428,7 +459,8 @@ D5 天然覆蓋 FutureOnly event（因為 fixtures 與 declaredSet 都包含）�
 - [ ] codex `CheckHooks()` 對「FutureOnly key 存在但 command 錯誤」回 `allInstalled=false` + warning issue
 - [ ] codex `CheckHooks()` 對「FutureOnly key 存在 entries 為 []」歸 broken 而非 absent（**v3 新驗收點**）
 - [ ] opencode `CheckHooks()` 對**任何**手改過的 plugin（包含註解變動）回 `Installed=false` + `plugin body differs` issue（byte-exact）
-- [ ] opencode `renderManagedPlugin` 對人為構造的不合法 specs/body 會 panic（僅在 mock 下 — 真 runtime 不 panic）
+- [ ] opencode `renderManagedPlugin` **不 panic**（任何路徑）；template/specs parity 由 `TestTemplateSpecsParity` test-only guard
+- [ ] opencode `extractPdxPath` 對含 space/backslash/quote/非 ASCII 的路徑能 round-trip（PT6）
 - [ ] drift per-event 斷言（D5）對每個 provider/spec 覆蓋正確
 
 ## 8. 風險與緩解
@@ -440,7 +472,8 @@ D5 天然覆蓋 FutureOnly event（因為 fixtures 與 declaredSet 都包含）�
 | `extractEmittedEvents` regex 對 CheckHooks 的假綠風險 | **已消除** | n/a | v3 決定：`extractEmittedEvents` 只用於 render-time contract check；CheckHooks 走 byte-exact |
 | opencode byte-exact 太嚴格：使用者若自行 patch plugin 會立刻回 unmanaged | 中 | UX | 這是預期行為 — plugin 是 pdx 受管原子檔。若有合法 customization 需求，未來另開 `unmanaged` 模式 |
 | `extractPdxPath` regex 遇到 odd-formed pdxPath 抽不到 | 低 | CheckHooks fallback unmanaged | OH5 覆蓋此 case；fallback 回 unmanaged 而非 panic |
-| opencode render panic 在 production 路徑誤觸 | 低 | Install 失敗 | template 是 const-like 字串；panic 只在 specs/template 不同步時發生；PT5 常態 smoke test |
+| opencode render panic 在 production 路徑誤觸 | **已消除** | n/a | v4：renderManagedPlugin 不 panic；contract drift 由 TestTemplateSpecsParity test-only guard |
+| `extractPdxPath` 對特殊字元路徑 round-trip 失敗 | **已消除** | n/a | v4：strconv.Unquote 處理完整 quoted literal；PT6 覆蓋 4 種 escape case |
 | drift fixtures 保留後，若 FutureOnly event 在 DeriveStatus 邏輯日後被刪除但 fixture 沒刪 | 低 | 測試失敗警告到位 | D5 per-event 強相等會紅，指向確切 spec/event；是有益的警告 |
 | commit 4 D5 對既有 spec/fixture 跑起來紅（有過度宣告） | 中 | 需額外修 spec 或 fixture | 先跑一次 D5 preview；若紅先修 spec 再加 D5 斷言 |
 | 三家 `Events()` defensive copy 改動 commit 1 執行時漏改某家 | 中 | commit 2 紅（CE1/CE2） | Commit 1 明列 3 個檔案 + 紅綠 TDD 會立即暴露 |
