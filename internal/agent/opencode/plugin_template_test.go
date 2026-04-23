@@ -3,6 +3,8 @@ package opencode
 import (
 	"strings"
 	"testing"
+
+	"github.com/wake/purdex/internal/agent"
 )
 
 func TestPluginState_TaskStartMapsSubagentStart(t *testing.T) {
@@ -123,6 +125,70 @@ func TestPluginState_SuppressIdleAfterError(t *testing.T) {
 	}
 	if event.Name != "Stop" {
 		t.Fatalf("event name = %q, want Stop", event.Name)
+	}
+}
+
+// TestValidateSpecsCoverEmitted_Equal is the fix-plan §2.3 PT2 assertion:
+// the real rendered body and opencodeEventSpecs agree on the event set.
+// Together with PT7 this is the build-time contract guard that keeps the
+// JS template and Go-side specs from drifting apart (plan §1.5 — runtime
+// is deliberately not involved).
+func TestValidateSpecsCoverEmitted_Equal(t *testing.T) {
+	body := renderManagedPlugin("/fake/pdx")
+	if err := validateSpecsCoverEmitted(body, opencodeEventSpecs); err != nil {
+		t.Fatalf("validateSpecsCoverEmitted for the real template must be nil; got %v", err)
+	}
+}
+
+// TestValidateSpecsCoverEmitted_EmitNotInSpec is the fix-plan §2.3 PT3
+// assertion: a template that emits an event not listed in specs must
+// error. Failure mode this catches: someone adding a new emit() without
+// updating opencodeEventSpecs.
+func TestValidateSpecsCoverEmitted_EmitNotInSpec(t *testing.T) {
+	body := renderManagedPlugin("/fake/pdx") + "\nawait emit('Ghost', {})\n"
+	if err := validateSpecsCoverEmitted(body, opencodeEventSpecs); err == nil {
+		t.Fatal("expected error for emit-not-in-spec; got nil")
+	}
+}
+
+// TestValidateSpecsCoverEmitted_SpecNotInEmit is the fix-plan §2.3 PT4
+// assertion: a specs list that declares an event the template never
+// emits must error. Failure mode this catches: removing an emit without
+// updating opencodeEventSpecs.
+func TestValidateSpecsCoverEmitted_SpecNotInEmit(t *testing.T) {
+	body := renderManagedPlugin("/fake/pdx")
+	extended := append([]agent.HookEventSpec(nil), opencodeEventSpecs...)
+	extended = append(extended, agent.HookEventSpec{Name: "Phantom"})
+	if err := validateSpecsCoverEmitted(body, extended); err == nil {
+		t.Fatal("expected error for spec-not-in-emit; got nil")
+	}
+}
+
+// TestRenderManagedPlugin_ProducesValidBody is the fix-plan §2.3 PT5
+// assertion: rendering does not panic and the body contains the managed
+// marker that CheckHooks keys off of.
+func TestRenderManagedPlugin_ProducesValidBody(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("renderManagedPlugin panicked: %v", r)
+		}
+	}()
+	body := renderManagedPlugin("/fake/pdx")
+	if !strings.Contains(body, managedMarker) {
+		t.Fatalf("rendered body missing managed marker %q", managedMarker)
+	}
+}
+
+// TestTemplateSpecsParity is the fix-plan §2.3 PT7 build-time contract
+// guard. If the template emits X and specs do not declare X (or vice
+// versa) this test fails and blocks the merge — so commits never ship an
+// inconsistent pair. Per v4 plan §1.5 this replaces a runtime panic that
+// would have punished every CheckHooks / Install call for a build-time
+// drift; contract enforcement belongs at test layer.
+func TestTemplateSpecsParity(t *testing.T) {
+	body := renderManagedPlugin("/fake/pdx")
+	if err := validateSpecsCoverEmitted(body, opencodeEventSpecs); err != nil {
+		t.Fatalf("template/specs parity drifted: %v", err)
 	}
 }
 

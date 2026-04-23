@@ -3,7 +3,11 @@ package opencode
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
+	"strings"
+
+	"github.com/wake/purdex/internal/agent"
 )
 
 const managedMarker = "pdx-managed:opencode-hooks:v1"
@@ -238,6 +242,48 @@ func extractEmittedEvents(body string) []string {
 		out = append(out, name)
 	}
 	return out
+}
+
+// validateSpecsCoverEmitted enforces bidirectional parity between the
+// event names a managed plugin body emits and the HookEventSpec slice
+// driving Go-side installer / checker / Inspector paths. A superset on
+// either side yields an error. Scoped to test layer (plan §1.5): runtime
+// never calls this — a build-time drift blocks merge via
+// TestTemplateSpecsParity (PT7) rather than panicking production code.
+func validateSpecsCoverEmitted(body string, specs []agent.HookEventSpec) error {
+	emitted := make(map[string]bool)
+	for _, name := range extractEmittedEvents(body) {
+		emitted[name] = true
+	}
+	declared := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		declared[spec.Name] = true
+	}
+	var missingInSpec []string
+	for name := range emitted {
+		if !declared[name] {
+			missingInSpec = append(missingInSpec, name)
+		}
+	}
+	var missingInEmit []string
+	for name := range declared {
+		if !emitted[name] {
+			missingInEmit = append(missingInEmit, name)
+		}
+	}
+	if len(missingInSpec) == 0 && len(missingInEmit) == 0 {
+		return nil
+	}
+	sort.Strings(missingInSpec)
+	sort.Strings(missingInEmit)
+	var parts []string
+	if len(missingInSpec) > 0 {
+		parts = append(parts, fmt.Sprintf("template emits %v but specs do not declare them", missingInSpec))
+	}
+	if len(missingInEmit) > 0 {
+		parts = append(parts, fmt.Sprintf("specs declare %v but template never emits them", missingInEmit))
+	}
+	return fmt.Errorf("template/specs parity: %s", strings.Join(parts, "; "))
 }
 
 // extractPdxPath pulls the pdxPath literal out of a managed plugin body
