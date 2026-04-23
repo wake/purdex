@@ -12,6 +12,7 @@ import (
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	agentcc "github.com/wake/purdex/internal/agent/cc"
+	agentcodex "github.com/wake/purdex/internal/agent/codex"
 	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
@@ -1494,6 +1495,51 @@ func TestHandleEvent_InvalidWithReason_UsesProviderReason(t *testing.T) {
 	chain := page.Chains[0]
 	if chain.TerminalReason != "compact_ignored" {
 		t.Errorf("TerminalReason = %q, want compact_ignored", chain.TerminalReason)
+	}
+}
+
+// H_ErrorGuardCodexSessionEnd: when codex enters StatusError (e.g. via
+// StopFailure), a subsequent SessionEnd must be allowed to clear the error
+// state. Without the guard exception, codex sessions would stay stuck red
+// even after the real session terminates, defeating the cleanup purpose of
+// the new SessionEnd→Clear mapping. Mirrors opencode's existing exception.
+func TestHandleEvent_CodexSessionEndClearsErrorGuard(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.prober = probe.New(fakeTmux)
+	m.registry.Register(agentcodex.NewProvider())
+	// Stub identify to accept codex events through verify.
+	origRead := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1, ExePath: "/usr/local/bin/codex", Argv: []string{"codex"}}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origRead })
+
+	// Seed Error state for the session (e.g. from a prior StopFailure).
+	m.mu.Lock()
+	m.currentStatus["work"] = agentpkg.StatusError
+	m.mu.Unlock()
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionEnd","raw_event":{},"agent_type":"codex"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s), want 200", w.Code, w.Body.String())
+	}
+	// After Clear, the session entry should have been removed from
+	// currentStatus (StatusClear handler at handler.go:~210 deletes it).
+	m.mu.Lock()
+	_, stillPresent := m.currentStatus["work"]
+	m.mu.Unlock()
+	if stillPresent {
+		t.Errorf("currentStatus[\"work\"] should have been cleared by SessionEnd, but error guard blocked it")
 	}
 }
 

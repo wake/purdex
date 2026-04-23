@@ -156,9 +156,12 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 		if current == agentpkg.StatusError {
 			canClear := req.EventName == "UserPromptSubmit" || req.EventName == "SessionStart"
-			if req.AgentType == "opencode" {
-				canClear = canClear || req.EventName == "SessionEnd"
-			} else {
+			// SessionEnd carries StatusClear and unconditionally tears down
+			// session state — it must always pass the error guard or the
+			// session would stay stuck red after a StopFailure followed by a
+			// real session shutdown.
+			canClear = canClear || req.EventName == "SessionEnd"
+			if req.AgentType != "opencode" {
 				canClear = canClear || req.EventName == "Stop"
 			}
 			if !canClear {
