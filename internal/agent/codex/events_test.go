@@ -119,3 +119,4 @@ func TestCodexEvents_DescriptionsNonEmpty(t *testing.T) {
 		}
 	}
 }
+

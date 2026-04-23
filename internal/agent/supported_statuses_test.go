@@ -60,3 +60,32 @@ func TestDeriveSupportedStatuses_EmptyInput(t *testing.T) {
 		t.Fatalf("DeriveSupportedStatuses([]) len = %d, want 0", len(got))
 	}
 }
+
+// TestHookEventSpecFutureOnlyDefaultsToFalse is the fix-plan §2.1 F1 guard:
+// a HookEventSpec literal that omits FutureOnly must observe the zero value
+// (false). This pins the "FutureOnly is an installer/checker bit layered on
+// top of the existing declaration; pre-existing specs remain required" rule
+// so a future rename/retype cannot silently flip the default.
+func TestHookEventSpecFutureOnlyDefaultsToFalse(t *testing.T) {
+	spec := agent.HookEventSpec{Name: "X"}
+	if spec.FutureOnly {
+		t.Fatalf("HookEventSpec zero-value FutureOnly = true, want false")
+	}
+}
+
+// TestDeriveSupportedStatusesIgnoresFutureOnlyBit is the fix-plan §2.1 F2
+// contract lock: DeriveSupportedStatuses must NOT filter out FutureOnly
+// specs. FutureOnly is an installer/checker-facet flag only; the
+// DeriveStatus-capability facet (StatusSupporter.SupportedStatuses, which
+// this helper backs) remains the full declared union. Tripping this test
+// means somebody wired FutureOnly into SupportedStatuses filtering — plan
+// §1.2 forbids it (see the comment on HookEventSpec.FutureOnly).
+func TestDeriveSupportedStatusesIgnoresFutureOnlyBit(t *testing.T) {
+	specs := []agent.HookEventSpec{
+		{Name: "Future", EmitsStatus: []agent.Status{agent.StatusWaiting}, FutureOnly: true},
+	}
+	got := agent.DeriveSupportedStatuses(specs)
+	if len(got) != 1 || got[0] != agent.StatusWaiting {
+		t.Fatalf("DeriveSupportedStatuses = %v, want [Waiting] (FutureOnly must not filter)", got)
+	}
+}

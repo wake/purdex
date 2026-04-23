@@ -58,10 +58,21 @@ type HookInstaller interface {
 //     events (e.g. cc Notification) list the union of every sub-branch.
 //   - Description: short English sentence for Inspector display. No trailing
 //     period, no emoji; keep it under roughly 70 characters.
+//   - FutureOnly: installer/checker-facet flag ONLY. When true, the hook is
+//     declared (installer writes it, DeriveStatus parses it) but the current
+//     CLI path is not guaranteed to emit it; CheckHooks therefore tolerates
+//     an absent hooks.json entry (legacy user who installed before the
+//     expansion) while still surfacing present-but-broken entries. The flag
+//     does NOT affect DeriveStatus-capability declarations:
+//     DeriveSupportedStatuses (and thus StatusSupporter.SupportedStatuses)
+//     unions every spec's EmitsStatus regardless of FutureOnly — proxy paths
+//     and future CLI versions may legitimately emit the event. Default false
+//     means "installer-required; missing is an issue". See fix plan §1.1.
 type HookEventSpec struct {
 	Name        string
 	EmitsStatus []Status
 	Description string
+	FutureOnly  bool
 }
 
 // HookStatus reports the installation state of hooks for an agent.

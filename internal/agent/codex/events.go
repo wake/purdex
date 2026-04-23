@@ -71,6 +71,7 @@ func (p *Provider) Events() []agent.HookEventSpec {
 			Name:        spec.Name,
 			EmitsStatus: append([]agent.Status(nil), spec.EmitsStatus...),
 			Description: spec.Description,
+			FutureOnly:  spec.FutureOnly,
 		}
 		if out[i].EmitsStatus == nil {
 			out[i].EmitsStatus = []agent.Status{}

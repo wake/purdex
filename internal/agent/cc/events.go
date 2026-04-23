@@ -70,6 +70,7 @@ func (p *Provider) Events() []agent.HookEventSpec {
 			Name:        spec.Name,
 			EmitsStatus: append([]agent.Status(nil), spec.EmitsStatus...),
 			Description: spec.Description,
+			FutureOnly:  spec.FutureOnly,
 		}
 		// Ensure a detail-only spec round-trips as an explicit empty slice,
 		// not nil — callers distinguish "explicitly empty" from "unknown".
