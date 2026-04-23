@@ -209,6 +209,64 @@ func TestCoverageRealProviders(t *testing.T) {
 	}
 }
 
+// TestCoverageDeclaredMatchesEventsUnion is the cross-contract check that
+// a provider's Coverage row `Declared` set equals its Events().EmitsStatus
+// union, for every real provider. Phase 1 expressed the same relationship
+// via hard-coded literals; post-Events()-SSoT both sides derive from
+// Events(), so this test locks in the "Events is the single source of
+// truth" invariant across the Coverage and Events contracts.
+func TestCoverageDeclaredMatchesEventsUnion(t *testing.T) {
+	r := agent.NewRegistry()
+	r.Register(cc.NewProvider(nil, nil, nil, nil))
+	r.Register(codex.NewProvider())
+	r.Register(opencode.NewProvider())
+
+	rows := agent.Coverage(r)
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(rows))
+	}
+
+	for _, row := range rows {
+		provider, ok := r.Get(row.AgentType)
+		if !ok {
+			t.Errorf("registry.Get(%q) failed", row.AgentType)
+			continue
+		}
+		installer, ok := provider.(agent.HookInstaller)
+		if !ok {
+			t.Errorf("provider %q: missing HookInstaller — cannot reach Events()", row.AgentType)
+			continue
+		}
+
+		declaredSet := make(map[agent.Status]bool, len(row.Declared))
+		for _, s := range row.Declared {
+			declaredSet[s] = true
+		}
+
+		unionSet := make(map[agent.Status]bool)
+		for _, spec := range installer.Events() {
+			for _, s := range spec.EmitsStatus {
+				unionSet[s] = true
+			}
+		}
+
+		if len(declaredSet) != len(unionSet) {
+			t.Errorf("provider %q: Coverage.Declared set size %d != Events union size %d (Declared=%v)",
+				row.AgentType, len(declaredSet), len(unionSet), row.Declared)
+		}
+		for s := range declaredSet {
+			if !unionSet[s] {
+				t.Errorf("provider %q: Coverage declares %q but Events() union does not include it", row.AgentType, s)
+			}
+		}
+		for s := range unionSet {
+			if !declaredSet[s] {
+				t.Errorf("provider %q: Events() union includes %q but Coverage does not declare it", row.AgentType, s)
+			}
+		}
+	}
+}
+
 func TestCoverageMixed(t *testing.T) {
 	r := agent.NewRegistry()
 	r.Register(&supporterStub{
