@@ -9,6 +9,7 @@ const HOST_ID = 'test-host'
 
 const OK_STATUS: HookModuleStatus = {
   installed: true,
+  managed: true,
   events: { SessionStart: { installed: true }, Stop: { installed: true } },
   issues: [],
   agentVersion: '0.121.0',
@@ -17,11 +18,44 @@ const OK_STATUS: HookModuleStatus = {
 
 const NOT_INSTALLED: HookModuleStatus = {
   installed: false,
+  managed: false,
   events: { SessionStart: { installed: false } },
   issues: ['SessionStart hook not installed'],
   agentVersion: '0.122.0',
   supportedVersion: '0.121.0',
   exceedsSupport: true,
+}
+
+// LEGACY_WITH_UPGRADES: the Finding #4 case — installed=true but 6
+// FutureOnly events are declared-but-absent. Install button must stay
+// enabled so the user can add them; Remove stays enabled because
+// managed=true.
+const LEGACY_WITH_UPGRADES: HookModuleStatus = {
+  installed: true,
+  managed: true,
+  upgradesAvailable: ['SubagentStart', 'SubagentStop', 'StopFailure', 'Notification', 'PermissionRequest', 'SessionEnd'],
+  events: {
+    SessionStart: { installed: true },
+    UserPromptSubmit: { installed: true },
+    Stop: { installed: true },
+    SubagentStart: { installed: false, futureOnly: true },
+    SubagentStop: { installed: false, futureOnly: true },
+    StopFailure: { installed: false, futureOnly: true },
+    Notification: { installed: false, futureOnly: true },
+    PermissionRequest: { installed: false, futureOnly: true },
+    SessionEnd: { installed: false, futureOnly: true },
+  },
+  issues: [],
+}
+
+// DRIFTED_MANAGED: the Finding #2 case — pdx artifact is on disk
+// (managed=true) but the install is not valid. Install is enabled
+// (retry / repair); Remove stays enabled.
+const DRIFTED_MANAGED: HookModuleStatus = {
+  installed: false,
+  managed: true,
+  events: { SessionStart: { installed: false } },
+  issues: ['plugin body differs from managed template (run reinstall)'],
 }
 
 function mockModule(overrides?: Partial<HookModule>): HookModule {
@@ -111,6 +145,48 @@ describe('HookModuleCard', () => {
     await waitForLoaded()
     expect(screen.getByRole('button', { name: /Install/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /Remove/i })).not.toBeDisabled()
+  })
+
+  // Finding #4: legacy codex user with FutureOnly upgrades available.
+  // Install must stay enabled so the upgrade path works; Remove stays
+  // enabled because managed=true.
+  it('keeps Install enabled and shows upgrade hint when upgrades are available', async () => {
+    const mod = mockModule({ fetchStatus: () => Promise.resolve(LEGACY_WITH_UPGRADES) })
+    render(<HookModuleCard module={mod} hostId={HOST_ID} refreshKey={0} />)
+    await waitForLoaded()
+    expect(screen.getByRole('button', { name: /Install/i })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: /Remove/i })).not.toBeDisabled()
+    expect(screen.getByText(/6.*升級|6.*upgrade|hook_upgrade_available/i)).toBeInTheDocument()
+  })
+
+  // Finding #2: drifted but pdx-managed state. Install is enabled for
+  // repair and Remove stays enabled because managed=true.
+  it('keeps Remove enabled when managed=true even if installed=false', async () => {
+    const mod = mockModule({ fetchStatus: () => Promise.resolve(DRIFTED_MANAGED) })
+    render(<HookModuleCard module={mod} hostId={HOST_ID} refreshKey={0} />)
+    await waitForLoaded()
+    expect(screen.getByRole('button', { name: /Remove/i })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: /Install/i })).not.toBeDisabled()
+  })
+
+  // Complement: not installed AND not managed → Remove disabled
+  // (nothing to remove), Install enabled.
+  it('disables Remove when managed=false', async () => {
+    const mod = mockModule({ fetchStatus: () => Promise.resolve(NOT_INSTALLED) })
+    render(<HookModuleCard module={mod} hostId={HOST_ID} refreshKey={0} />)
+    await waitForLoaded()
+    expect(screen.getByRole('button', { name: /Remove/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Install/i })).not.toBeDisabled()
+  })
+
+  // Per-event FutureOnly rendering: grey neutral badge, not red.
+  it('renders FutureOnly label for tolerated-absent events', async () => {
+    const mod = mockModule({ fetchStatus: () => Promise.resolve(LEGACY_WITH_UPGRADES) })
+    render(<HookModuleCard module={mod} hostId={HOST_ID} refreshKey={0} />)
+    await waitForLoaded()
+    // Count of FutureOnly labels should match the 6 FutureOnly events.
+    const labels = screen.getAllByText(/FutureOnly/i)
+    expect(labels.length).toBeGreaterThanOrEqual(6)
   })
 
   it('calls setup on button click', async () => {

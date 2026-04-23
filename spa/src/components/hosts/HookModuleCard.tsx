@@ -85,22 +85,42 @@ export function HookModuleCard({ module, hostId, refreshKey }: Props) {
         </div>
       )}
 
+      {status && status.upgradesAvailable && status.upgradesAvailable.length > 0 && (
+        <div className="flex items-center gap-1 text-xs text-amber-400 mb-3">
+          <WarningCircle size={12} />
+          <span>{t('hosts.hook_upgrade_available', { n: status.upgradesAvailable.length })}</span>
+        </div>
+      )}
+
       {status && eventEntries.length > 0 && (
         <div className="space-y-1 mb-3">
-          {eventEntries.map(([event, detail]) => (
-            <div key={event} className="flex items-center gap-3 text-xs py-1">
-              <span className="text-text-secondary w-40 shrink-0 font-mono">{event}</span>
-              <span className={`inline-flex items-center gap-1 ${detail.installed ? 'text-green-400' : 'text-text-muted'}`}>
-                {detail.installed ? <CheckCircle size={12} /> : <XCircle size={12} />}
-                {detail.installed ? t('hosts.installed') : t('hosts.not_installed')}
-              </span>
-              {lastTrigger?.[event] && (
-                <span className="text-text-muted ml-auto">
-                  {formatRelativeTime(lastTrigger[event], t)}
-                </span>
-              )}
-            </div>
-          ))}
+          {eventEntries.map(([event, detail]) => {
+            // FutureOnly + not installed → neutral "FutureOnly" badge
+            // (tolerated absent). Avoids the red-light pressure Finding #4
+            // warned about for pre-expansion users.
+            const isToleratedFutureOnly = detail.futureOnly && !detail.installed
+            return (
+              <div key={event} className="flex items-center gap-3 text-xs py-1">
+                <span className="text-text-secondary w-40 shrink-0 font-mono">{event}</span>
+                {isToleratedFutureOnly ? (
+                  <span className="inline-flex items-center gap-1 text-text-muted">
+                    <WarningCircle size={12} />
+                    FutureOnly
+                  </span>
+                ) : (
+                  <span className={`inline-flex items-center gap-1 ${detail.installed ? 'text-green-400' : 'text-text-muted'}`}>
+                    {detail.installed ? <CheckCircle size={12} /> : <XCircle size={12} />}
+                    {detail.installed ? t('hosts.installed') : t('hosts.not_installed')}
+                  </span>
+                )}
+                {lastTrigger?.[event] && (
+                  <span className="text-text-muted ml-auto">
+                    {formatRelativeTime(lastTrigger[event], t)}
+                  </span>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -118,7 +138,15 @@ export function HookModuleCard({ module, hostId, refreshKey }: Props) {
       <div className="flex gap-2">
         <button
           onClick={() => setup('install')}
-          disabled={isOffline || loading || !!status?.installed}
+          // Install is disabled only when the install is fully complete
+          // (installed=true AND no FutureOnly upgrades pending). Finding
+          // #4: legacy 3-event users must still be able to trigger an
+          // upgrade even while installed=true.
+          disabled={
+            isOffline ||
+            loading ||
+            (!!status?.installed && !(status?.upgradesAvailable && status.upgradesAvailable.length > 0))
+          }
           className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50"
         >
           <DownloadSimple size={14} />
@@ -126,7 +154,11 @@ export function HookModuleCard({ module, hostId, refreshKey }: Props) {
         </button>
         <button
           onClick={() => setup('remove')}
-          disabled={isOffline || loading || !status?.installed}
+          // Remove is enabled whenever there is a pdx artifact on disk,
+          // not only when installed=true. Finding #2: drifted-but-
+          // managed state (opencode plugin body mismatch, stale codex
+          // legacy entry) still needs to be removable.
+          disabled={isOffline || loading || !status?.managed}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-red-500/10 text-red-400 border border-red-500/30 cursor-pointer disabled:opacity-50"
         >
           <Trash size={14} />
