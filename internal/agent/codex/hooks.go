@@ -10,12 +10,6 @@ import (
 	"github.com/wake/purdex/internal/agent"
 )
 
-var codexHookEvents = []string{
-	"SessionStart",
-	"UserPromptSubmit",
-	"Stop",
-}
-
 const codexHooksSupportedVersion = "0.121.0"
 
 func (p *Provider) InstallHooks(pdxPath string) error {
@@ -34,13 +28,6 @@ func (p *Provider) RemoveHooks(pdxPath string) error {
 	}
 	hooksPath := filepath.Join(home, ".codex", "hooks.json")
 	return mergeCodexHooks(hooksPath, pdxPath, true)
-}
-
-// Events returns the hook event declarations for Codex. Stub; filled in a
-// later commit (HookInstaller.Events() plan §3 Commit 5 — the issue #613
-// installer expansion from 3 events to 9).
-func (p *Provider) Events() []agent.HookEventSpec {
-	return nil
 }
 
 func (p *Provider) CheckHooks() (agent.HookStatus, error) {
@@ -66,10 +53,11 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		return agent.HookStatus{}, fmt.Errorf("parse hooks.json: %w", err)
 	}
 	hooks, _ := hooksFile["hooks"].(map[string]any)
-	events := make(map[string]agent.HookEventInfo, len(codexHookEvents))
+	eventNames := p.eventNames()
+	events := make(map[string]agent.HookEventInfo, len(eventNames))
 	var issues []string
 	allInstalled := true
-	for _, eventName := range codexHookEvents {
+	for _, eventName := range eventNames {
 		entries, ok := hooks[eventName]
 		if !ok {
 			events[eventName] = agent.HookEventInfo{Installed: false}
@@ -117,7 +105,7 @@ func mergeCodexHooks(path, pdxPath string, remove bool) error {
 	if hooks == nil {
 		hooks = make(map[string]any)
 	}
-	for _, event := range codexHookEvents {
+	for _, event := range codexEventNames() {
 		entries := filterOutPdxCodex(hooks[event])
 		if !remove {
 			entries = append(entries, map[string]any{

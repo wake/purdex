@@ -111,7 +111,7 @@ func TestMergeCodexHooks_EmptyFile(t *testing.T) {
 	m := readHooksFile(t, path)
 	hooks := hooksSection(t, m)
 
-	for _, event := range codexHookEvents {
+	for _, event := range expectedCodexInstallerNames {
 		entries, ok := hooks[event]
 		if !ok {
 			t.Errorf("event %s not found", event)
@@ -128,8 +128,8 @@ func TestMergeCodexHooks_EmptyFile(t *testing.T) {
 			t.Errorf("event %s has no hook handlers", event)
 		}
 	}
-	if len(hooks) != len(codexHookEvents) {
-		t.Errorf("expected %d hook events, got %d", len(codexHookEvents), len(hooks))
+	if len(hooks) != len(expectedCodexInstallerNames) {
+		t.Errorf("expected %d hook events, got %d", len(expectedCodexInstallerNames), len(hooks))
 	}
 }
 
@@ -148,7 +148,7 @@ func TestMergeCodexHooks_Idempotent(t *testing.T) {
 	m := readHooksFile(t, path)
 	hooks := hooksSection(t, m)
 
-	for _, event := range codexHookEvents {
+	for _, event := range expectedCodexInstallerNames {
 		pdxCount := 0
 		for _, groupEntry := range codexMatcherGroups(hooks[event]) {
 			group, _ := groupEntry.(map[string]any)
@@ -265,7 +265,7 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 	m = readHooksFile(t, path)
 	hooks = hooksSection(t, m)
 
-	for _, event := range codexHookEvents {
+	for _, event := range expectedCodexInstallerNames {
 		for _, groupEntry := range codexMatcherGroups(hooks[event]) {
 			group, _ := groupEntry.(map[string]any)
 			for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
@@ -298,6 +298,103 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 	}
 	if !found {
 		t.Error("non-pdx hook was incorrectly removed")
+	}
+}
+
+// expectedCodexInstallerNames is the post-expansion 9-event installer set
+// (plan §1.4 / issue #613). Shared across TestMergeCodexHooks_* so the
+// installer tests migrate off codexHookEvents cleanly.
+var expectedCodexInstallerNames = []string{
+	"SessionStart",
+	"UserPromptSubmit",
+	"SubagentStart",
+	"SubagentStop",
+	"Stop",
+	"StopFailure",
+	"Notification",
+	"PermissionRequest",
+	"SessionEnd",
+}
+
+// TestCodexInstallHooks_Writes9EventsAfterExpansion is the primary issue
+// #613 regression guard: installer must write the full 9-event set,
+// especially the 6 newly added (SubagentStart/Stop, StopFailure,
+// Notification, PermissionRequest, SessionEnd). Any future change that
+// shrinks the installer back to the pre-expansion 3-event set trips here.
+func TestCodexInstallHooks_Writes9EventsAfterExpansion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+
+	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("mergeCodexHooks: %v", err)
+	}
+
+	m := readHooksFile(t, path)
+	hooks := hooksSection(t, m)
+
+	if len(hooks) != 9 {
+		t.Errorf("codex installer wrote %d events, want 9 (issue #613 expansion)", len(hooks))
+	}
+
+	wantExpanded := []string{
+		"SubagentStart",
+		"SubagentStop",
+		"StopFailure",
+		"Notification",
+		"PermissionRequest",
+		"SessionEnd",
+	}
+	for _, name := range wantExpanded {
+		if _, ok := hooks[name]; !ok {
+			t.Errorf("expanded event %q not written to hooks.json (issue #613 regression)", name)
+		}
+	}
+	for _, name := range expectedCodexInstallerNames {
+		entries, ok := hooks[name]
+		if !ok {
+			t.Errorf("event %q not written to hooks.json", name)
+			continue
+		}
+		groups := codexMatcherGroups(entries)
+		if len(groups) == 0 {
+			t.Errorf("event %q has no matcher groups", name)
+		}
+	}
+}
+
+// TestCodexCheckHooks_ReportsAll9Events asserts CheckHooks sees every event
+// in the expanded set.
+func TestCodexCheckHooks_ReportsAll9Events(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := mergeCodexHooks(hooksPath, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("seed install: %v", err)
+	}
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if len(status.Events) != 9 {
+		t.Errorf("CheckHooks reported %d events, want 9", len(status.Events))
+	}
+	for _, name := range expectedCodexInstallerNames {
+		info, ok := status.Events[name]
+		if !ok {
+			t.Errorf("CheckHooks.Events missing key %q", name)
+			continue
+		}
+		if !info.Installed {
+			t.Errorf("event %q: Installed=false after fresh install", name)
+		}
+	}
+	if !status.Installed {
+		t.Errorf("Installed=false after full install, issues=%v", status.Issues)
 	}
 }
 
@@ -384,13 +481,19 @@ func TestCheckHooks_ThirdPartyLegacyEntryDoesNotTriggerReinstall(t *testing.T) {
 		"command": "/usr/bin/notify-me start",
 		"timeout": 5,
 	}
-	mixed := map[string]any{
-		"hooks": map[string]any{
-			"SessionStart":     []any{pdxGroup("SessionStart"), thirdPartyLegacy},
-			"UserPromptSubmit": []any{pdxGroup("UserPromptSubmit")},
-			"Stop":             []any{pdxGroup("Stop")},
-		},
+	// Post-expansion: installer writes 9 events (issue #613), so the fixture
+	// must cover all 9 to keep the test focused on the third-party coexistence
+	// assertion rather than tripping on the expansion itself.
+	hooksSect := map[string]any{
+		"SessionStart": []any{pdxGroup("SessionStart"), thirdPartyLegacy},
 	}
+	for _, name := range expectedCodexInstallerNames {
+		if name == "SessionStart" {
+			continue
+		}
+		hooksSect[name] = []any{pdxGroup(name)}
+	}
+	mixed := map[string]any{"hooks": hooksSect}
 	data, _ := json.MarshalIndent(mixed, "", "  ")
 	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
 		t.Fatalf("write: %v", err)
