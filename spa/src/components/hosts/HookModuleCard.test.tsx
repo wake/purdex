@@ -58,6 +58,21 @@ const DRIFTED_MANAGED: HookModuleStatus = {
   issues: ['plugin body differs from managed template (run reinstall)'],
 }
 
+// LEGACY_NO_MANAGED_FIELD: Round-3 review E1 — modules predating the
+// managed field (e.g. tmux /api/hooks/tmux/status) omit it entirely.
+// Remove must fall back to `installed` so existing UX is preserved.
+const LEGACY_NO_MANAGED_FIELD_INSTALLED: HookModuleStatus = {
+  installed: true,
+  events: { SessionStart: { installed: true } },
+  issues: [],
+}
+
+const LEGACY_NO_MANAGED_FIELD_UNINSTALLED: HookModuleStatus = {
+  installed: false,
+  events: { SessionStart: { installed: false } },
+  issues: ['SessionStart hook not installed'],
+}
+
 function mockModule(overrides?: Partial<HookModule>): HookModule {
   return {
     id: 'test',
@@ -173,6 +188,23 @@ describe('HookModuleCard', () => {
   // (nothing to remove), Install enabled.
   it('disables Remove when managed=false', async () => {
     const mod = mockModule({ fetchStatus: () => Promise.resolve(NOT_INSTALLED) })
+    render(<HookModuleCard module={mod} hostId={HOST_ID} refreshKey={0} />)
+    await waitForLoaded()
+    expect(screen.getByRole('button', { name: /Remove/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Install/i })).not.toBeDisabled()
+  })
+
+  // Round-3 review E1: legacy modules (tmux) omit the managed field.
+  // Remove must fall back to `installed` so existing Remove UX works.
+  it('falls back to installed for Remove when managed field absent (installed=true)', async () => {
+    const mod = mockModule({ fetchStatus: () => Promise.resolve(LEGACY_NO_MANAGED_FIELD_INSTALLED) })
+    render(<HookModuleCard module={mod} hostId={HOST_ID} refreshKey={0} />)
+    await waitForLoaded()
+    expect(screen.getByRole('button', { name: /Remove/i })).not.toBeDisabled()
+  })
+
+  it('falls back to installed for Remove when managed field absent (installed=false)', async () => {
+    const mod = mockModule({ fetchStatus: () => Promise.resolve(LEGACY_NO_MANAGED_FIELD_UNINSTALLED) })
     render(<HookModuleCard module={mod} hostId={HOST_ID} refreshKey={0} />)
     await waitForLoaded()
     expect(screen.getByRole('button', { name: /Remove/i })).toBeDisabled()

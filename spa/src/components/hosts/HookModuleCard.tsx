@@ -157,8 +157,10 @@ export function HookModuleCard({ module, hostId, refreshKey }: Props) {
           // Remove is enabled whenever there is a pdx artifact on disk,
           // not only when installed=true. Finding #2: drifted-but-
           // managed state (opencode plugin body mismatch, stale codex
-          // legacy entry) still needs to be removable.
-          disabled={isOffline || loading || !status?.managed}
+          // legacy entry) still needs to be removable. Modules that
+          // pre-date the managed field (e.g. tmux /api/hooks/tmux/status)
+          // fall back to `installed` so existing Remove UX stays intact.
+          disabled={isOffline || loading || !(status?.managed ?? status?.installed)}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-red-500/10 text-red-400 border border-red-500/30 cursor-pointer disabled:opacity-50"
         >
           <Trash size={14} />
