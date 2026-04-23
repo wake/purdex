@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.216] - 2026-04-24
+
+### Feat(spa): Modules Switchboard + module-owned contribution marker (#617)
+
+把閒置已久的 Settings → Modules tab 重新實作為 **Module 開關面板**（switchboard），並加上一個 puzzle-piece UI marker，讓使用者可以辨識哪些設定入口來自真正的 module（非 built-in / legacy adapter）。
+
+- `ModuleDefinition.disableable?: boolean` + `descriptionKey?: string` — 預設 `false`，opt-in 形式，core module 不進 switchboard
+- `useModuleEnabledStore` — persist 的 `Record<moduleId, boolean>` + session 內 in-memory baseline；`hasPendingChanges()` 驅動「Reload required」banner
+- `buildSettingsContributionBatch` 對 disabled module 整批跳過 `settings: [...]` dispatch（purdex / workspace / host 三 scope 皆影響）；legacy adapter 與 host-builtin contributions 不受影響
+- 初期 3 個 module flag `disableable: true`：`editor` / `browser` / `memory-monitor`
+- `ModulesSwitchboardSection` 註冊在舊 `module-config` 位置（URL 保留），每行：名稱 + 描述 + Toggle + 上方 Reload banner
+- `isModuleOwnedContribution(c)` helper（`moduleId` 不以 `_builtin.` 開頭）→ `SettingsSidebar` / `HostSidebar` / `WorkspaceSettingsPage` 在 row/section title 尾端渲染 `PuzzlePiece`（rotated -12°）
+- 關閉 #574；兩輪 codex review 4/4 採納（SR-2 + AR-1/2/3），1 個 deferred finding 建 issue #618（legacy `globalConfig` / `workspaceConfig` + `ModuleConfigSection` 全面退場 cleanup）
+
+不在本 PR（追蹤中）：
+- PR 2：Editor Buffers → Editor 重命名 + HSR migration + Buffers 管理 pane + breadcrumb quick-switch popover
+- PR 3：pane-level / fs-backend / file-opener disable 整合 + runtime hot-switch + workspace-scope legacy filter（之後 `files` 可重新 flag `disableable`）
+
 ## [1.0.0-alpha.215] - 2026-04-23
 
 ### Feat(agent): Lights rebuild — Phase 1 L2 status alignment (#612)
