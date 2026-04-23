@@ -113,22 +113,38 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		result = provider.DeriveStatus(req.EventName, req.RawEvent)
 	}
 
-	// Catalog miss: provider rejected the event (Valid=false) — record it as
-	// a verify-kind trace step (decision=skipped, reason=event_not_in_catalog)
-	// and return 200 OK without running any frame / projection / broadcast /
-	// activity-watch logic. catalog miss is "received but not recognized";
-	// distinct from verify_rejected (202 Accepted, identity / staleness fail).
-	// The hook CLI treats anything but non-200 as success, so 200 here means
-	// "no retry needed". Per Phase 1 plan §1.4 — this branch is the explicit
-	// early return previously missing from the pipeline.
+	// Invalid result: provider returned Valid=false. Two sub-classes:
+	//   - Reason=="" → truly unknown event name → "event_not_in_catalog"
+	//   - Reason!="" → known event but payload not mappable → use that reason
+	//     (e.g. "compact_ignored", "notification_unknown_type")
+	//
+	// Both branches:
+	//   - record a verify-kind trace step (decision=skipped) with the chosen reason
+	//   - clear any legacy agent_events row so replay/snapshot don't surface
+	//     stale state on top of an unprocessed event (matches the cleanup the
+	//     valid path performs at line ~163)
+	//   - return 200 OK with the reason in the body
+	//   - skip frame / projection / broadcast / activity-watch
+	//
+	// 200 (vs verify_rejected's 202) signals "received and acknowledged, no retry".
+	// Hook CLI only retries on non-2xx.
 	if !result.Valid {
-		trace.Verify(req, "skipped", "event_not_in_catalog", nil)
-		trace.Finish("completed", "event_not_in_catalog")
+		reason := result.Reason
+		if reason == "" {
+			reason = "event_not_in_catalog"
+		}
+		trace.Verify(req, "skipped", reason, nil)
+		if req.TmuxSession != "" && m.events != nil {
+			if err := m.events.Delete(req.TmuxSession); err != nil {
+				log.Printf("[agent] clear legacy event on invalid result: %v", err)
+			}
+		}
+		trace.Finish("completed", reason)
 		traceFinished = true
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
 			"status": "ok",
-			"reason": "event_not_in_catalog",
+			"reason": reason,
 		})
 		return
 	}

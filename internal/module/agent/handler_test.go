@@ -1463,6 +1463,72 @@ func TestHandleEvent_CatalogMiss_NoActivityWatch(t *testing.T) {
 	}
 }
 
+// H4: when provider returns Valid=false with a non-empty Reason (known event
+// with unmappable payload — e.g. cc SessionStart{source:compact}), the handler
+// must surface that reason rather than mislabeling it as event_not_in_catalog.
+// Without this distinction every Claude Code session compaction would write
+// false-positive catalog-miss trace rows.
+func TestHandleEvent_InvalidWithReason_UsesProviderReason(t *testing.T) {
+	m := catalogMissModule(t)
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{"source":"compact"},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s), want 200", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["reason"] != "compact_ignored" {
+		t.Errorf("reason field = %q, want compact_ignored (provider's reason should pass through)", resp["reason"])
+	}
+
+	page := waitForTraceChains(t, m, "work", 1)
+	if len(page.Chains) != 1 {
+		t.Fatalf("len(page.Chains) = %d, want 1", len(page.Chains))
+	}
+	chain := page.Chains[0]
+	if chain.TerminalReason != "compact_ignored" {
+		t.Errorf("TerminalReason = %q, want compact_ignored", chain.TerminalReason)
+	}
+}
+
+// H5: any invalid result (including known-but-unmappable like compact) must
+// clear the legacy agent_events row for the session so replay/snapshot logic
+// does not later resurface a stale event on top of one we already chose to
+// skip. This is the regression flagged by the codex attack-view review:
+// catalog-miss early-return previously skipped m.events.Delete entirely.
+func TestHandleEvent_InvalidResult_ClearsLegacyEventRow(t *testing.T) {
+	m := catalogMissModule(t)
+
+	// Seed a stale legacy row for this session.
+	if err := m.events.Set("work", "OldEvent", json.RawMessage(`{"old":"row"}`), "cc", 0); err != nil {
+		t.Fatalf("seed legacy event: %v", err)
+	}
+	// Sanity: row exists.
+	if ev, _ := m.events.Get("work"); ev == nil {
+		t.Fatal("seed failed: legacy row missing")
+	}
+
+	w := httptest.NewRecorder()
+	m.handleEvent(w, catalogMissRequest())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	ev, err := m.events.Get("work")
+	if err != nil {
+		t.Fatalf("events.Get: %v", err)
+	}
+	if ev != nil {
+		t.Errorf("legacy row should be cleared on invalid result, got %+v", ev)
+	}
+}
+
 func TestHandleStatuslineSetup_RemoveBroadcastsCleared(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
