@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.215] - 2026-04-23
+
+### Feat(agent): Lights rebuild — Phase 1 L2 status alignment (#612)
+
+Lights 子系統 rebuild 系列第二棒，把 Phase 0 留白的宣告矩陣填滿、補齊 codex 事件覆蓋、處理未知/已知不可導出事件的觀測性。
+
+- 三家 provider（`cc` / `codex` / `opencode`）實作 `SupportedStatuses()`，宣告 `[Running, Waiting, Idle, Error, Clear]`
+- `codex/status.go` `DeriveStatus` 補齊 5 個事件：`Notification`（permission/elicitation→Waiting，idle/auth_success→Idle）、`PermissionRequest`、`SubagentStart`/`SubagentStop`（detail-only）、`SessionEnd`（Clear）、`StopFailure`（Error）
+- `spa/src/lib/agent-icons.tsx` 補上 OpenCode brand icon（`@lobehub/icons-static-svg/icons/opencode.svg`）
+- `handler.go` 新加 invalid-result 早退分支：`DeriveResult.Reason` 區分 `event_not_in_catalog` / `compact_ignored` / `notification_unknown_type`，trace 寫一筆 verify-kind step + 清除 legacy `agent_events` row（避免 replay/snapshot 回灌）
+- Error guard 對 `SessionEnd` 統一放行（codex StopFailure→Error 後 SessionEnd 終於可清）
+- 新檔 `internal/agent/drift_test.go`：宣告 ↔ 實作的 per-fixture + set-equality 雙重斷言，確保刪掉任一 Notification 子分支會被抓到
+
+13 commits（8 implementation + 5 review-fix）。兩輪 codex review（標準 + 3 parallel 攻防體質），6 findings 採納修復（5 必修 + 1 doc + issue），2 follow-up issues：#613（codex hook installer alignment）+ #614（file-quality cleanup）。
+
 ## [1.0.0-alpha.214] - 2026-04-23
 
 ### Feat(agent): Lights rebuild — Phase 0 Status alignment skeleton (#610)
