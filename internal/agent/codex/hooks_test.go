@@ -739,6 +739,111 @@ func TestCheckHooks_FutureOnlyAbsent_DoesNotBlock(t *testing.T) {
 	}
 }
 
+// CH7 — cross-event mis-filing: a valid-looking pdx command for the Stop
+// event is copied into the Notification key (e.g. user hand-edit or
+// legacy tooling). The substring-only check `strings.Contains(cmd,
+// "pdx hook")` classifies this as valid; strict per-event tokenization
+// must reject it and report the event broken. This is the Finding #1
+// regression guard.
+func TestCheckHooks_WrongEventNameCommand_ClassifiesAsBroken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
+		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("Stop")},
+		// Notification key with a pdx command whose event-name token is
+		// "Stop" — must be classified as broken for Notification, not valid.
+		"Notification": []any{pdxGroupEntry("Stop")},
+	})
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Installed {
+		t.Fatal("wrong-event-name command: allInstalled=true, want false")
+	}
+	if status.Events["Notification"].Installed {
+		t.Fatal("Notification Installed=true, want false (command tail is 'Stop', not 'Notification')")
+	}
+	if !issuesContain(status.Issues, "Notification hook: pdx command malformed") {
+		t.Fatalf("wrong-event-name: issues=%v, want malformed warning", status.Issues)
+	}
+}
+
+// CH8 — wrong agent in command: Notification key contains a command
+// that targets --agent cc instead of --agent codex. Must be classified
+// as broken. Also Finding #1 regression guard.
+func TestCheckHooks_WrongAgentCommand_ClassifiesAsBroken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
+		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("Stop")},
+		"Notification": []any{
+			map[string]any{
+				"hooks": []any{
+					map[string]any{
+						"type":    "command",
+						"command": `"/usr/local/bin/pdx" hook --agent cc Notification`,
+						"timeout": 5,
+					},
+				},
+			},
+		},
+	})
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Installed {
+		t.Fatal("wrong-agent command: allInstalled=true, want false")
+	}
+	if status.Events["Notification"].Installed {
+		t.Fatal("Notification Installed=true, want false (--agent cc, not codex)")
+	}
+	if !issuesContain(status.Issues, "Notification hook: pdx command malformed") {
+		t.Fatalf("wrong-agent: issues=%v, want malformed warning", status.Issues)
+	}
+}
+
+// CH9 — unit coverage of the new per-event command validator. Positive
+// cases: unquoted abs-path pdx, quoted abs-path pdx, bare pdx. Negative
+// cases: missing --agent codex, wrong event-name tail, non-pdx binary.
+func TestIsPdxCommandCodexForEvent(t *testing.T) {
+	positive := []struct {
+		cmd, event string
+	}{
+		{`pdx hook --agent codex SessionStart`, "SessionStart"},
+		{`/usr/local/bin/pdx hook --agent codex UserPromptSubmit`, "UserPromptSubmit"},
+		{`"/usr/local/bin/pdx" hook --agent codex Notification`, "Notification"},
+	}
+	for _, tc := range positive {
+		if !isPdxCommandCodexForEvent(tc.cmd, tc.event) {
+			t.Errorf("expected valid for %q / event=%s", tc.cmd, tc.event)
+		}
+	}
+
+	negative := []struct {
+		cmd, event string
+		reason     string
+	}{
+		{`pdx hook codex SessionStart`, "SessionStart", "missing --agent codex"},
+		{`pdx hook --agent codex Stop`, "Notification", "wrong event-name tail"},
+		{`/usr/local/bin/pdx hook --agent cc Notification`, "Notification", "wrong agent"},
+		{`other-tool hook --agent codex Stop`, "Stop", "non-pdx binary"},
+		{`"/usr/local/bin/pdx" hook --agent codex`, "Stop", "missing event name"},
+	}
+	for _, tc := range negative {
+		if isPdxCommandCodexForEvent(tc.cmd, tc.event) {
+			t.Errorf("expected invalid for %q / event=%s (%s)", tc.cmd, tc.event, tc.reason)
+		}
+	}
+}
+
 // CH6 — the strict-absent distinction (plan §1.4): a FutureOnly event with
 // an empty entry array (hooks[event]=[]) is classified as broken, not
 // absent, because mergeCodexHooks' remove path can legitimately leave []

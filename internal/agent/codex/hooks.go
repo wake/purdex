@@ -103,9 +103,12 @@ func checkCodexEvent(spec agent.HookEventSpec, hooks map[string]any) (agent.Hook
 			[]string{spec.Name + " hook uses legacy format; reinstall required"},
 			true
 	}
-	// Find a pdx command inside the matcher-group list. Empty entries, wrong
-	// shape, or no pdx command all collapse to command == "" here → State B.
-	command := findPdxCommandInCodex(entries)
+	// Find a pdx command inside the matcher-group list that passes strict
+	// per-event validation (tokenized binary / --agent codex / matching event
+	// name tail). Empty entries, wrong shape, wrong agent, wrong event-name
+	// tail all collapse to command == "" here → State B. Substring matches
+	// alone no longer qualify: PR #616 review Finding #1.
+	command := findPdxCommandInCodexForEvent(entries, spec.Name)
 	if command == "" {
 		if spec.FutureOnly {
 			return agent.HookEventInfo{Installed: false},
@@ -171,13 +174,71 @@ func mergeCodexHooks(path, pdxPath string, remove bool) error {
 	return nil
 }
 
+// isPdxCommandCodex is the relaxed shape check used by filter / legacy
+// detection paths where we only need to know "does this look like any pdx
+// hook command?" — e.g. when mergeCodexHooks strips all pdx entries before
+// rewriting, or when hasLegacyPdxDirectCodexEntry tags the pre-0.121
+// direct-entry shape. Per-event health assertions must not use this; see
+// isPdxCommandCodexForEvent (PR #616 review Finding #1).
 func isPdxCommandCodex(cmd string) bool {
 	// Match both quoted ("/path/pdx" hook) and unquoted (/path/pdx hook) forms.
 	normalized := strings.ReplaceAll(cmd, `"`, "")
 	return strings.Contains(normalized, "pdx hook")
 }
 
-func findPdxCommandInCodex(entries any) string {
+// isPdxCommandCodexForEvent reports whether cmd is a well-formed pdx hook
+// command for the given event name. Rules (all must hold):
+//  1. The first non-empty token, stripped of a leading/trailing ", has
+//     basename "pdx" (covers "/abs/path/pdx", "pdx", and the quoted forms
+//     mergeCodexHooks writes).
+//  2. Some later token equals "hook".
+//  3. Two consecutive tokens "--agent" "codex" appear after "hook".
+//  4. The final non-empty token equals eventName exactly.
+//
+// A non-pdx third-party command, a pdx command targeting a different
+// agent, or a copy of a pdx command whose event-name tail does not
+// match the key it is filed under, all return false. Token splitting
+// uses strings.Fields; the current installer only emits simple double-
+// quoted paths ("/abs/pdx"), so the Fields-then-trim-quotes approach
+// is sufficient for the on-disk shapes we own. A path containing a
+// literal space would still round-trip because Fields splits on any
+// run of whitespace — such a path would already fail on the installer
+// write side (no shell quoting), and the managed installer output we
+// need to validate never contains one.
+func isPdxCommandCodexForEvent(cmd string, eventName string) bool {
+	tokens := strings.Fields(cmd)
+	if len(tokens) == 0 {
+		return false
+	}
+	first := strings.Trim(tokens[0], `"`)
+	if first == "" {
+		return false
+	}
+	if filepath.Base(first) != "pdx" {
+		return false
+	}
+	hasHook := false
+	hasAgentCodex := false
+	for i := 1; i < len(tokens); i++ {
+		if tokens[i] == "hook" {
+			hasHook = true
+		}
+		if tokens[i] == "--agent" && i+1 < len(tokens) && tokens[i+1] == "codex" {
+			hasAgentCodex = true
+		}
+	}
+	if !hasHook || !hasAgentCodex {
+		return false
+	}
+	tail := strings.Trim(tokens[len(tokens)-1], `"`)
+	return tail == eventName
+}
+
+// findPdxCommandInCodexForEvent walks the matcher-group list and returns the
+// first command that passes isPdxCommandCodexForEvent for the given event
+// name. Empty return means no qualifying command was found → checkCodexEvent
+// classifies the event as broken.
+func findPdxCommandInCodexForEvent(entries any, eventName string) string {
 	for _, groupEntry := range codexMatcherGroups(entries) {
 		group, ok := groupEntry.(map[string]any)
 		if !ok {
@@ -189,7 +250,7 @@ func findPdxCommandInCodex(entries any) string {
 				continue
 			}
 			cmd, _ := m["command"].(string)
-			if isPdxCommandCodex(cmd) {
+			if isPdxCommandCodexForEvent(cmd, eventName) {
 				return cmd
 			}
 		}
