@@ -102,6 +102,77 @@ func TestCodexEvents_DetailOnlyHaveEmptyEmitsStatus(t *testing.T) {
 	}
 }
 
+// TestCodexEventsFutureOnlyFlags is the fix-plan §2.2 CE1 assertion: codex
+// Events() declares exactly 3 non-FutureOnly events (SessionStart,
+// UserPromptSubmit, Stop — the pre-expansion 3-event installer set that
+// the codex CLI reliably emits today) and the remaining 6 events as
+// FutureOnly=true. See plan §1.3 for the matrix.
+func TestCodexEventsFutureOnlyFlags(t *testing.T) {
+	wantFutureOnly := map[string]bool{
+		"SessionStart":      false,
+		"UserPromptSubmit":  false,
+		"Stop":              false,
+		"SubagentStart":     true,
+		"SubagentStop":      true,
+		"StopFailure":       true,
+		"Notification":      true,
+		"PermissionRequest": true,
+		"SessionEnd":        true,
+	}
+	p := codex.NewProvider()
+	events := p.Events()
+	got := make(map[string]bool, len(events))
+	for _, e := range events {
+		got[e.Name] = e.FutureOnly
+	}
+	for name, want := range wantFutureOnly {
+		if g, ok := got[name]; !ok {
+			t.Errorf("codex Events missing %q", name)
+		} else if g != want {
+			t.Errorf("codex Events %q FutureOnly = %v, want %v", name, g, want)
+		}
+	}
+	if len(events) != len(wantFutureOnly) {
+		t.Fatalf("codex Events count = %d, want %d", len(events), len(wantFutureOnly))
+	}
+}
+
+// TestCodexEventsDefensiveCopyPreservesFutureOnly is the fix-plan §2.2 CE2
+// assertion: Events() returns a fresh copy on every call including the
+// FutureOnly bit. Mutating the returned slice's FutureOnly field must not
+// leak into the next Events() call — the installer-facing flag must survive
+// the defensive copy just like EmitsStatus does.
+func TestCodexEventsDefensiveCopyPreservesFutureOnly(t *testing.T) {
+	p := codex.NewProvider()
+	first := p.Events()
+	if len(first) == 0 {
+		t.Fatal("codex Events returned empty slice")
+	}
+	idx := -1
+	for i, e := range first {
+		if e.FutureOnly {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal("codex Events has no FutureOnly=true spec; cannot exercise defensive copy")
+	}
+	originalName := first[idx].Name
+	first[idx].FutureOnly = false
+
+	second := p.Events()
+	for _, e := range second {
+		if e.Name == originalName {
+			if !e.FutureOnly {
+				t.Fatalf("codex Events second call spec %q FutureOnly = false, want true (defensive copy failed)", e.Name)
+			}
+			return
+		}
+	}
+	t.Fatalf("codex Events second call missing %q", originalName)
+}
+
 // TestCodexEvents_DescriptionsNonEmpty asserts descriptions are non-empty
 // and emoji-free.
 func TestCodexEvents_DescriptionsNonEmpty(t *testing.T) {

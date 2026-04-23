@@ -29,11 +29,13 @@ var codexEventSpecs = []agent.HookEventSpec{
 		Name:        "SubagentStart",
 		EmitsStatus: []agent.Status{},
 		Description: "Nested sub-agent task dispatched",
+		FutureOnly:  true,
 	},
 	{
 		Name:        "SubagentStop",
 		EmitsStatus: []agent.Status{},
 		Description: "Nested sub-agent task completed",
+		FutureOnly:  true,
 	},
 	{
 		Name:        "Stop",
@@ -44,21 +46,25 @@ var codexEventSpecs = []agent.HookEventSpec{
 		Name:        "StopFailure",
 		EmitsStatus: []agent.Status{agent.StatusError},
 		Description: "Agent stopped due to an error",
+		FutureOnly:  true,
 	},
 	{
 		Name:        "Notification",
 		EmitsStatus: []agent.Status{agent.StatusWaiting, agent.StatusIdle},
 		Description: "Permission/elicitation/idle prompt notifications",
+		FutureOnly:  true,
 	},
 	{
 		Name:        "PermissionRequest",
 		EmitsStatus: []agent.Status{agent.StatusWaiting},
 		Description: "Tool permission request awaiting user approval",
+		FutureOnly:  true,
 	},
 	{
 		Name:        "SessionEnd",
 		EmitsStatus: []agent.Status{agent.StatusClear},
 		Description: "Codex session ended",
+		FutureOnly:  true,
 	},
 }
 
