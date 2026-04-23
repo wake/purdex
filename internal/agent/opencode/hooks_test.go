@@ -61,6 +61,41 @@ func TestOpenCodeHooks_InstallCheckRemove(t *testing.T) {
 	}
 }
 
+// TestOpenCodeCheckHooks_ReportsAll8EventsFromEventsList asserts CheckHooks
+// reports one Events entry per HookEventSpec — i.e. the check path reads from
+// Events() rather than a legacy opencodeHookEvents slice.
+func TestOpenCodeCheckHooks_ReportsAll8EventsFromEventsList(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	p := opencode.NewProvider()
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("install hooks: %v", err)
+	}
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+
+	events := p.Events()
+	if len(events) == 0 {
+		t.Fatal("opencode Events() returned empty; CheckHooks iteration would be vacuous")
+	}
+	if len(status.Events) != len(events) {
+		t.Errorf("status.Events len=%d, want %d (one per Events())", len(status.Events), len(events))
+	}
+	for _, e := range events {
+		info, ok := status.Events[e.Name]
+		if !ok {
+			t.Errorf("status.Events missing key %q (from Events())", e.Name)
+			continue
+		}
+		if !info.Installed {
+			t.Errorf("event %q: Installed=false after fresh install", e.Name)
+		}
+	}
+}
+
 func TestOpenCodeHooks_UnmanagedFileRejected(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

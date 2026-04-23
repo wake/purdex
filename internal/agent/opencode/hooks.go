@@ -9,17 +9,6 @@ import (
 	"github.com/wake/purdex/internal/agent"
 )
 
-var opencodeHookEvents = []string{
-	"SessionStart",
-	"UserPromptSubmit",
-	"SubagentStart",
-	"SubagentStop",
-	"PermissionRequest",
-	"Stop",
-	"StopFailure",
-	"SessionEnd",
-}
-
 func (p *Provider) InstallHooks(pdxPath string) error {
 	pluginPath, err := opencodePluginPath()
 	if err != nil {
@@ -49,12 +38,6 @@ func (p *Provider) RemoveHooks(_ string) error {
 	return nil
 }
 
-// Events returns the hook event declarations for OpenCode. Stub; filled in a
-// later commit (HookInstaller.Events() plan §3 Commit 4).
-func (p *Provider) Events() []agent.HookEventSpec {
-	return nil
-}
-
 func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	pluginPath, err := opencodePluginPath()
 	if err != nil {
@@ -81,8 +64,9 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			AgentVersion: agentVersion,
 		}, nil
 	}
-	events := make(map[string]agent.HookEventInfo, len(opencodeHookEvents))
-	for _, event := range opencodeHookEvents {
+	eventNames := p.eventNames()
+	events := make(map[string]agent.HookEventInfo, len(eventNames))
+	for _, event := range eventNames {
 		events[event] = agent.HookEventInfo{Installed: true, Command: pluginPath}
 	}
 	return agent.HookStatus{Installed: true, Events: events, Issues: []string{}, AgentVersion: agentVersion}, nil
