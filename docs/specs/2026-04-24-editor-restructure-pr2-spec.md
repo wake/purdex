@@ -2,9 +2,10 @@
 
 - **Version**: 1.0.0-alpha.217 (target bump)
 - **Date**: 2026-04-24
+- **Spec revision**: v1.1 (2026-04-24) — incorporates Round-1 codex review findings
 - **Base**: `bb5ce0c1` (main @ alpha.216)
 - **Author**: claude-code + wake
-- **Status**: Draft (pending codex review)
+- **Status**: Draft (pending Round-2 codex plan review)
 
 ## 1. Context
 
@@ -51,11 +52,29 @@ puzzle-piece marker.
   and the store behind Monaco options.
 - No cleanup of `globalConfig` / `workspaceConfig` / `ModuleConfigSection`
   (tracked as `#618`; post-PR-2).
-- No Tiptap (WYSIWYG) settings beyond `fontSize` (propagated via CSS
-  variable — see §5.3 risk). Tab / word-wrap / lineNumbers / minimap are
-  Monaco-only.
+- **No Tiptap integration in this PR.** `useEditorSettingsStore` wires
+  only to Monaco. Tiptap `fontSize` propagation is deferred to a
+  follow-up (needs a stable strategy — either CSS custom property
+  applied to `.tiptap-editor` or a prose-style override). Revision
+  note: spec v1.0 proposed an inline-style approach; v1.1 removes it
+  from scope after Round-1 review flagged that Tiptap's `prose
+  prose-sm` classes on the editable node make a naive style override
+  unreliable.
+- **Monaco option changes do not retroactively reformat existing
+  text.** Changing `tabSize` / `insertSpaces` applies to new input
+  only; existing whitespace stays as-is. This matches VS Code's
+  default UX and is an explicit non-goal, not a risk.
+- **No FS backend API changes.** `FileEntry` keeps `{name, isDir,
+  size}` only. Per-entry `mtime` would require extending the daemon's
+  Go list handler, the daemon HTTP API contract, and the Electron
+  preload IPC — all out of scope. Consequence: `EditorBuffersPane`
+  sorts by name (ascending) instead of mtime-descending.
 - No HSR schema changes: we use the existing
   `SettingsContributionDeclaration<'purdex'>` shape.
+- **No `/buffer/*` subfolder operations exposed in the UI.**
+  `InAppBackend.rename()` does not create intermediate directories
+  (line 105-109), and `list()` only returns direct children (line
+  62-83). Rename is flat-only; subfolder support is a follow-up.
 
 ## 3. Invariants
 
@@ -77,8 +96,13 @@ puzzle-piece marker.
    filesystem logic.
 6. The breadcrumb popover is purely additive — disabling / never
    opening it leaves the current EditorToolbar rendering identical.
-7. All three commits keep the test suite green (`npx vitest run &&
-   pnpm run lint && pnpm run build`).
+7. All three commits keep the test suite green. Verification is run
+   from the `spa/` subdirectory (the repo root has no `build` script):
+   `cd spa && pnpm run lint && npx vitest run && pnpm run build`.
+8. The new `editor-buffers` pane kind is integrated across the
+   pane-aware switch sites: `tabToUrl()`, `getPaneLabel()`,
+   `getPaneIcon()`, and the NewTab provider module-filter. Any pane
+   kind missing from one of these is a bug.
 
 ## 4. Design
 
@@ -113,8 +137,9 @@ interface EditorSettingsState {
 ### 4.2 HSR migration — Editor module settings
 
 In `register-modules.tsx`, the `editor` module's `settings: [...]` grows
-from 2 to 3 entries. The new entry sits first (lowest `order`) so it
-appears at the top of the Editor's collapsed sidebar group:
+from 2 to 3 entries. The new entry sits first among purdex-scope
+entries (the Settings sidebar is flat, not grouped; "order" only
+sorts within a scope):
 
 ```ts
 settings: [
@@ -150,6 +175,15 @@ reference the `'editor-buffers'` id — they are updated to reference
 `'editor'` instead (or removed if redundant with the new HSR-aware
 assertions). No test coverage is lost.
 
+**Legacy route compatibility**: `SettingsPage` (`spa/src/components/
+SettingsPage.tsx:92-99`) resolves an unknown section id by falling
+back to the first available section. To avoid a bad experience for
+users whose URL bar or history contains `/settings/editor-buffers`,
+add a single-line alias map before the fallback: when the requested
+section id is `editor-buffers`, redirect to the new `editor`
+purdex-scope contribution id. This is a one-liner; the full HSR
+routing is unchanged.
+
 ### 4.3 `EditorPurdexSettingsSection`
 
 New component at
@@ -169,9 +203,9 @@ Sections (in order):
    - `Font size` — number input, clamped 10-24
 
 Each control is wired to the corresponding `set*` action in
-`useEditorSettingsStore`. A small note below the sections explains that
-only the Monaco code editor respects all settings; Tiptap WYSIWYG only
-respects `fontSize`.
+`useEditorSettingsStore`. A small note below the sections states:
+"These settings apply to the Monaco code editor. Rich-text (Tiptap)
+integration arrives in a follow-up." (See non-goals.)
 
 **Commit 1 transitional state only:** below these preferences, the
 existing `<BufferListSection />` is rendered as-is (it takes no props
@@ -222,40 +256,61 @@ panes: [
 
 **Component**: `spa/src/components/editor/EditorBuffersPane.tsx`
 
-- Lists all `/buffer/*` entries (from `InAppBackend.list('/buffer/')`),
-  sorted by `mtime desc`.
-- Columns: Name (path relative to `/buffer/`), Modified, size.
-- Toolbar actions: `New`, `Rename` (only when exactly one selected),
-  `Delete` (one or more), `Open` (one selected).
+- Lists `/buffer/*` entries returned by `InAppBackend.list('/buffer')`
+  (direct children only — subfolders are out of scope, see non-goals).
+- Columns: **Name** (relative to `/buffer/`), **Size** (bytes,
+  human-formatted). Sorted alphabetically ascending (by `name`).
+  `Modified` column is explicitly omitted because `FileEntry` does
+  not carry `mtime` and extending the FS backend contract is out of
+  scope for this PR.
+- Toolbar actions: `New`, `Rename` (enabled iff exactly one
+  selected), `Delete` (enabled iff ≥1 selected), `Open` (enabled iff
+  exactly one selected).
 - Multi-select via checkbox + shift-click range.
 - Double-click row = Open (smart behavior — see §4.6).
 - Empty state: illustration + `New Buffer` CTA.
 - Error / loading states: basic toast or inline message.
 
-**Rename dialog**: reuses `RenamePopover` pattern. Accepts arbitrary
-target paths — a user can rename `/buffer/foo.md` to
-`/buffer/drafts/foo.md`, creating the subfolder. Uses
-`InAppBackend.rename(from, to)` which already supports this.
+**Rename dialog**: reuses `RenamePopover` pattern. **Flat rename
+only** — the popover's `validateName` rejects any input containing
+`/`. Subfolder moves (`/buffer/foo.md` → `/buffer/drafts/foo.md`) are
+out of scope because `InAppBackend.rename()` (line 105-109) does not
+create intermediate directory entries — it only reassigns the
+keyed entry. A follow-up PR can patch `rename()` to reuse `write()`'s
+parent-dir logic and relax this validator.
 
 ### 4.6 Smart-open flow
 
-When the user clicks `Open` on a buffer entry:
+**Correction over spec v1.0**: `EditorPane` reads its buffer from
+`pane.content.filePath` (EditorPane.tsx:116-143), not from
+`useEditorStore.paneStates`. Therefore swapping the displayed buffer
+requires `useTabStore.setPaneContent(tabId, paneId, newContent)` —
+*not* `useEditorStore.attachPane()`, which only updates the editor
+store's internal view state. `attachPane` remains useful for the
+breadcrumb popover swap (same-pane same-source) because it preserves
+the existing pane's dirty state; for cross-pane targeting from the
+management view, `setPaneContent` is the right tool.
 
-1. Iterate `useTabStore.getState().tabs` preserving `tabOrder`; for
-   each tab traverse its `layout` tree.
-2. Find the first pane satisfying:
-   - `pane.content.kind === 'editor'` (the code/editor pane, not
-     `editor-buffers` or previews).
-   - The tab is not the current buffers-management tab (don't
-     self-overwrite).
-3. If found: call `useEditorStore.attachPane(paneId, newBufferKey)` —
-   swapping buffer. Set that tab active.
-4. If not found: `useTabStore.addTab(createTab({ kind: 'editor',
-   source: { type: 'inapp' }, path: bufferPath, ... }))`. Set it
-   active.
+**Targeting order** (stop at first match):
 
-This keeps buffer-editing in one pane slot instead of spawning a new
-tab per open — matches the user's "hybrid" mental model.
+1. **Active tab's first editor pane.** If the active tab has a pane
+   with `content.kind === 'editor'` (regardless of `source`), target
+   that pane. This respects the user's current focus.
+2. **Any other tab's first editor pane** (scanned in `tabOrder`).
+   Skip the buffers-management tab itself (it has no `editor` panes
+   anyway, but the guard is explicit).
+3. **Fallback**: open a new tab with `{ kind: 'editor', source:
+   { type: 'inapp' }, filePath: '/buffer/' + name }`.
+
+**Action on match**: build `newContent = { kind: 'editor', source:
+{ type: 'inapp' }, filePath: '/buffer/' + name }` and call
+`useTabStore.getState().setPaneContent(targetTabId, targetPaneId,
+newContent)`. Then `setActiveTab(targetTabId)`. `setPaneContent` is
+the existing, well-tested pathway (used by NewTab flows).
+
+This policy keeps buffer-editing in one pane slot where possible —
+matches VS Code's "reveal in editor" behavior — without depending on
+`attachPane` to do something it does not do.
 
 ### 4.7 NewTab entry — "Manage Buffers"
 
@@ -267,19 +322,40 @@ registerNewTabProvider({
   id: 'editor-buffers',
   label: 'newTab.editor.buffers.label',
   icon: 'Stack',  // Phosphor icon
-  order: ??,  // placed next to the existing Editor card
+  order: 6,       // immediately after the existing Editor card (order: 5)
   component: ManageBuffersNewTabCard,
 })
 ```
 
-`ManageBuffersNewTabCard` is a thin wrapper that calls `props.onSelect({
-kind: 'editor-buffers' })` when clicked. The NewTab grid will display it
-as a card, and the card's click opens the buffers management pane in a
-new tab (via `openSingletonTab`).
+`ManageBuffersNewTabCard` is a thin wrapper that calls
+`props.onSelect({ kind: 'editor-buffers' })` when clicked.
+
+**Correction over spec v1.0**: This does *not* open a singleton tab.
+The existing NewTab flow (`register-modules.tsx:66-76`) handles
+`onSelect` by calling `setPaneContent(tabId, pane.id, content)` —
+it replaces the content of the current NewTab pane. That is the
+uniform pattern shared with the `sessions`, `editor`, and `browser`
+cards, and the "Manage Buffers" card follows it.
+
+**Re-opening a separate buffers management tab**: Spec v1.0
+incorrectly conflated the card behavior with `openSingletonTab`.
+Cleanly: if the user already has a NewTab open, clicking "Manage
+Buffers" transforms that NewTab into a buffers pane in place. If
+they want to open a *new* buffers tab while editing, they use the
+breadcrumb popover's `Manage buffers...` link (§4.8), which calls
+`useTabStore.openSingletonTab({ kind: 'editor-buffers' })` directly
+— that is the correct place for singleton semantics.
 
 Alternative we decided against: replacing the Editor card's default
 action. Rejected because (a) users expect "Editor" to open a blank
 editor, and (b) two separate cards make discovery obvious.
+
+**Visibility gating**: NewTab providers today have no module-aware
+filter (`new-tab-registry.ts:19-25`). This PR adds a thin filter at
+the NewTab consumer site (`NewTabPage.tsx:27-60`) so cards owned by
+a disabled module are hidden. The filter reuses the same
+`isModuleOwnedContribution` / `useModuleEnabledStore` pattern from
+PR #617's settings filter. See §4.9.3.
 
 ### 4.8 Breadcrumb popover (Commit 3)
 
@@ -298,6 +374,26 @@ toggles a popover:
 )}
 ```
 
+**Note on `attachPane` here vs `setPaneContent` in §4.6**: The
+popover is wired into an editor pane that is already displaying an
+inapp buffer. Switching between inapp buffers within the same pane
+keeps the same `pane.content` shape (kind + source stay `'editor'` +
+`'inapp'`) — only the `filePath` changes. `attachPane` is the
+correct internal-state transition here because it preserves the
+editor pane's `paneStates` binding. The §4.6 cross-pane case has to
+change `pane.content` (the filePath differs) and therefore uses
+`setPaneContent` plus a downstream reconciliation.
+
+(Both `attachPane` and `setPaneContent` accept a filePath update;
+the distinction is scope of side effects — `attachPane` only rebinds
+inside `useEditorStore`, while `setPaneContent` rewrites
+`useTabStore`'s layout. EditorPane reads `pane.content.filePath`
+from `useTabStore`, so a buffer swap *must* include a
+`setPaneContent` call. In the popover case, EditorToolbar calls
+both: first update `pane.content.filePath` via `setPaneContent`,
+then reuse the editor-store binding via `attachPane` to avoid
+flash-remount. See plan for the exact sequence.)
+
 `BreadcrumbPopover` (new component):
 - Positioned below chip using anchored rect (reuse `RenamePopover`
   positioning helper if viable).
@@ -314,6 +410,66 @@ Only rendered when `source.type === 'inapp'` (same gate as the
 original chip). Non-inapp paths (remote hosts, workspace files, etc.)
 preserve the pre-PR toolbar.
 
+### 4.9 Ancillary integration (Commit 2)
+
+Adding a new `PaneContent` kind requires updates at four other
+pane-aware switch sites. Spec v1.0 missed these; v1.1 makes them
+explicit.
+
+#### 4.9.1 `tabToUrl()` — route serialization
+`spa/src/lib/route-utils.ts:98-121` has a switch on `content.kind`
+that produces the deep-link URL for a tab. Add a branch for
+`'editor-buffers'` → `/editor/buffers` (or similar — plan phase
+picks the exact path after grepping existing convention). Missing
+this branch causes `/` to appear in the URL bar for buffers tabs,
+which breaks back-button restoration.
+
+#### 4.9.2 `getPaneLabel()` + `getPaneIcon()` — tab bar rendering
+`spa/src/lib/pane-labels.ts:19-82` returns the tab title and icon
+based on pane kind. Add:
+- `getPaneLabel`: `'editor-buffers' → t('newTab.editor.buffers.label')`
+  or a specific `'editor.buffers.tab_title'` key.
+- `getPaneIcon`: `'editor-buffers' → 'Stack'` (Phosphor name,
+  matching the NewTab card).
+Without these, the tab bar shows "Untitled" and a generic icon.
+
+#### 4.9.3 Module-aware NewTab provider filter
+`new-tab-registry.ts` currently stores providers as a flat list with
+no module linkage. Spec v1.1 adds:
+- A field `moduleId?: string` to `NewTabProvider` (optional; legacy
+  providers without it are always visible).
+- A consumer-site filter in `NewTabPage.tsx:27-60` that hides
+  providers whose `moduleId` is owned by a disabled module (via
+  `useModuleEnabledStore.isEnabled(moduleId)`).
+- The `editor-buffers` provider (this PR) and the existing `editor`
+  provider (moved as part of this PR) set `moduleId: 'editor'`.
+
+This keeps the NewTab registry contract backwards-compatible and
+aligned with PR #617's module-gating philosophy.
+
+#### 4.9.4 `PaneContent` union + `createTab()` compatibility
+`spa/src/types/tab.ts:36-47` adds `| { kind: 'editor-buffers' }`.
+`createTab()` (wherever it normalizes content for new tabs) must
+accept this without throwing. `useTabStore.setPaneContent` already
+accepts any `PaneContent` — no type narrowing needed there.
+
+#### 4.9.5 Handling deletion of the currently-open buffer
+If a user deletes a buffer in the management pane that is currently
+open in an `editor` pane elsewhere, that pane's `content.filePath`
+points at a now-missing file. Define the behavior:
+
+1. Before calling `backend.delete(path)`, find panes with
+   `content.kind === 'editor'` and `content.source.type === 'inapp'`
+   and `content.filePath === path`.
+2. For each such pane, call `setPaneContent(tabId, paneId, { kind:
+   'editor', source: { type: 'inapp' }, filePath: null })` — reset
+   to the inapp untitled/empty state.
+3. Then call `backend.delete(path)` and refresh the buffers list.
+
+`useTabStore.renameEditorPanes` handles renames (line 78-107) but
+*not* deletions; this new flow is a small helper (~15 LOC) inside
+`EditorBuffersPane` — it does not require a new tabStore method.
+
 ## 5. Risks & mitigations
 
 ### 5.1 `BufferListSection` double-render during Commit 1
@@ -325,30 +481,22 @@ buffers would appear in two places. Mitigation: both changes happen in
 the same commit; the legacy call is deleted atomically with the HSR
 `settings: []` addition.
 
-### 5.2 Monaco option re-apply glitches
-Changing `tabSize` or `insertSpaces` on Monaco mid-edit may not
-retroactively reformat existing text — it only affects new input. This
-is standard Monaco behavior and acceptable (VS Code behaves the same
-way). No mitigation beyond matching the VS Code UX; spec note only.
+### 5.2 Monaco option re-apply (moved to §2 non-goals)
+Spec v1.0 listed this as a risk; it is actually a non-goal — Monaco
+behaves like VS Code and applies new options only to subsequent
+input. Documented above in §2.
 
-### 5.3 Tiptap `fontSize` propagation
-Tiptap doesn't expose a `fontSize` prop. Options considered:
-1. **CSS variable** (`--editor-font-size: 13px`) applied to the Tiptap
-   container via inline style and consumed by the Tiptap-rendered HTML.
-2. **Tailwind arbitrary value** (`style={{ fontSize: Xpx }}`) on the
-   wrapper.
-3. Ship PR 2 without Tiptap `fontSize` support; ship as a follow-up.
+### 5.3 Tiptap `fontSize` propagation (moved to §2 non-goals)
+Spec v1.0 picked an inline-style approach for Tiptap; v1.1 postpones
+the integration to a follow-up because Tiptap's `prose` classes on
+the editable node make a naive override unreliable. See §2.
 
-Decision: option 1 — inline `style={{ fontSize: fontSize + 'px' }}` on
-Tiptap's parent div. Matches how most rich-text editors do it. Simple,
-no extension needed.
-
-### 5.4 Subfolder creation on rename
-`InAppBackend.rename('/buffer/foo.md', '/buffer/drafts/foo.md')` must
-create the `/buffer/drafts/` directory. We rely on the existing rename
-implementation; if it does not auto-create intermediate dirs, the spec
-adds that capability as a prerequisite. Plan phase will verify via
-existing tests or a probe.
+### 5.4 Ancillary switch-site drift
+Adding a new `PaneContent` kind without updating every downstream
+switch (`tabToUrl`, `getPaneLabel`, `getPaneIcon`) silently degrades
+the UX (wrong URL, generic icon). Mitigation: §4.9 lists every
+required site; the plan's test matrix asserts each one; code review
+checklist explicitly checks for coverage.
 
 ### 5.5 Outside-click dismissal on breadcrumb popover
 Popovers layered inside pane contents are susceptible to z-index
@@ -373,82 +521,129 @@ Plan phase encodes this in every step.
 
 | Case | Behavior |
 |---|---|
-| User has `editor-buffers` singleton tab open, clicks "Manage buffers" in popover | `openSingletonTab` focuses existing tab |
-| User switches buffer via popover while current pane has unsaved diff | Reuses `attachPane` — existing semantics: if the current buffer has unsaved work, Monaco persists it under its local key (no data loss) |
-| Rename buffer to a path outside `/buffer/*` | Validation in rename dialog rejects; inline error shown |
-| Delete the currently open buffer | Other panes showing it close via existing `renameEditorPanes` untitled fallback |
+| User has `editor-buffers` singleton tab open, clicks "Manage buffers" in popover | `openSingletonTab({kind:'editor-buffers'})` focuses existing tab |
+| User switches buffer via popover while current pane has unsaved diff | `setPaneContent` + `attachPane` reuse; Monaco persists unsaved buffer under its local key (no data loss) |
+| Rename buffer to name containing `/` | Validation rejects; inline error "Subfolders not supported" (see non-goals) |
+| Delete currently open buffer (this or another pane) | Per §4.9.5: every affected pane is reset to `filePath: null` via `setPaneContent` *before* `backend.delete` runs |
+| Delete currently open buffer (breadcrumb popover is showing it) | Same as above; popover closes on refresh |
 | All `/buffer/*` entries deleted while buffers pane is open | Pane shows empty state with "New buffer" CTA |
 | `useEditorSettingsStore` persist state corrupted | `merge` fn returns defaults; tests assert this |
-| Monaco mounted with `fontSize: NaN` (e.g. from corrupted storage) | Store setter clamps → fallback to 13; test covers |
-| Two tabs both have editor panes open; smart-open picks which? | First in `tabOrder`. Test asserts ordering |
-| User disables Editor module in Switchboard while `editor-buffers` pane is open | Pane keeps rendering (lifetime is bound to the tab, not the module registration). Module-off only hides future settings and NewTab card. Acceptable; existing behavior for panes. |
-| i18n locale missing `settings.section.editor` key | `t()` falls back to key literal; not ideal but not crashing. Test ensures both locales have the key. |
+| Monaco mounted with `fontSize: NaN` (corrupted storage) | Store setter clamps → fallback to 13; test covers |
+| Smart-open: active tab has editor pane | Target is active tab's first editor pane (§4.6 rule 1) |
+| Smart-open: active tab has no editor pane, another tab does | Target is first editor pane in `tabOrder` (§4.6 rule 2) |
+| Smart-open: no editor panes open anywhere | New tab opened with `setPaneContent` initial state (§4.6 rule 3) |
+| User disables Editor module in Switchboard while `editor-buffers` pane is open | Pane keeps rendering (pane lifetime bound to tab, not module). Module-off hides *future* settings + NewTab card (via §4.9.3 filter); existing panes persist — documented behavior |
+| User loads `/settings/editor-buffers` URL (bookmarked before upgrade) | `SettingsPage` alias map (§4.2) redirects to the new `editor` section |
+| i18n locale missing `settings.section.editor` key | `t()` falls back to key literal; test ensures both locales have the key |
 
 ## 7. Acceptance criteria
+
+All verification commands run from the `spa/` subdirectory:
+`cd spa && pnpm run lint && npx vitest run && pnpm run build`.
 
 ### Commit 1
 - [ ] `useEditorSettingsStore` exists with 6 persisted fields and sane
       defaults.
 - [ ] `EditorPurdexSettingsSection` renders 6 controls bound to the
       store.
-- [ ] `MonacoWrapper` reads all 4 relevant options from the store
-      (tabSize/insertSpaces/wordWrap/lineNumbers/minimap/fontSize).
+- [ ] `MonacoWrapper` reads all 6 options from the store
+      (tabSize / insertSpaces / wordWrap / lineNumbers / minimap /
+      fontSize); no hardcoded values remain.
 - [ ] Editor module in `register-modules.tsx` has `settings: [...]`
-      with 3 entries, `localId: 'editor'` first (`order: 9`).
+      with 3 entries; `localId: 'editor'` present with `scope: 'purdex'`
+      and `order: 9`.
 - [ ] Legacy `registerSettingsSection({ id: 'editor-buffers', ... })`
       removed.
 - [ ] i18n keys: `settings.section.editor` added (EN + zh-TW);
       `settings.section.editor_buffers` removed (EN + zh-TW).
 - [ ] `register-modules.test.ts` references `'editor'` not
       `'editor-buffers'`.
+- [ ] `SettingsPage` redirects `editor-buffers` → `editor` (legacy
+      URL compatibility, §4.2).
 - [ ] Settings sidebar "Editor" row visibly carries the puzzle-piece
-      marker (by virtue of `isModuleOwnedContribution` returning true).
+      marker (via `isModuleOwnedContribution`).
 - [ ] `BufferListSection` rendered as transitional block inside
-      `EditorPurdexSettingsSection` (commit-1 only; removed in Commit 2).
-- [ ] `pnpm run lint && npx vitest run && pnpm run build` all green.
+      `EditorPurdexSettingsSection` (commit-1 only; removed in
+      Commit 2).
+- [ ] All verification commands green.
 
 ### Commit 2
-- [ ] New pane kind `editor-buffers` exists in `PaneContent` union.
-- [ ] `EditorBuffersPane` renders list, create, rename (incl. move),
-      delete, open.
-- [ ] Smart-open swaps the current editor pane's buffer when an
-      editor pane exists; opens new tab otherwise.
-- [ ] "Manage Buffers" NewTab card registered; clicking opens
-      `editor-buffers` singleton tab.
+- [ ] `{kind:'editor-buffers'}` added to `PaneContent` union in
+      `types/tab.ts`.
+- [ ] `EditorBuffersPane` renders list, create, rename (flat-only),
+      delete (single + multi), open.
+- [ ] Smart-open uses `setPaneContent` (not `attachPane`) and prefers
+      the active tab's first editor pane; falls back to `tabOrder`
+      scan; finally opens a new tab (§4.6).
+- [ ] Deletion of a buffer resets `filePath: null` on every open
+      editor pane pointing at it *before* calling `backend.delete`
+      (§4.9.5).
+- [ ] "Manage Buffers" NewTab card registered with
+      `moduleId: 'editor'`, `order: 6`, icon `Stack`; click replaces
+      current NewTab pane via `onSelect` (not `openSingletonTab`).
+- [ ] Ancillary integration complete (§4.9): `tabToUrl`,
+      `getPaneLabel`, `getPaneIcon`, and NewTab provider module-filter
+      all recognise `editor-buffers`.
 - [ ] `BufferListSection` removed from `EditorPurdexSettingsSection`
-      and its source file deleted.
-- [ ] Commit message explicitly notes transitional removal.
+      and its source file deleted; no imports remain anywhere in the
+      codebase.
 - [ ] All verification commands green.
 
 ### Commit 3
 - [ ] EditorToolbar "Purdex" chip is a `<button>` on
-      `source.type === 'inapp'` paths, renders unchanged visually when
+      `source.type === 'inapp'` paths, renders visually unchanged when
       popover is closed.
-- [ ] Breadcrumb popover lists all `/buffer/*` with current marked,
-      and a Manage link.
+- [ ] Breadcrumb popover lists all `/buffer/*` (direct children),
+      marks current, and shows a "Manage buffers..." link that calls
+      `openSingletonTab({kind:'editor-buffers'})` — the *only* place
+      singleton semantics apply.
 - [ ] Popover dismisses on outside click, Escape, and after switch /
-      manage.
-- [ ] Non-inapp paths: chip unchanged (still `<span>`, no popover).
+      manage actions.
+- [ ] Popover renders in a React portal at `document.body` with
+      z-index 100 (above RenamePopover's z-50 and Monaco popups).
+- [ ] Non-inapp paths: chip unchanged (still a `<span>`, no popover).
+- [ ] Popover buffer-switch uses `setPaneContent` + `attachPane`
+      sequence (§4.8 note) to avoid flash-remount.
 - [ ] All verification commands green.
 
 ## 8. Open questions
 
-1. **Manage Buffers card icon**: Phosphor `Stack`? Or `Files`? I'll
-   pick during plan phase unless codex suggests a better semantic
-   match.
-2. **Editor purdex section label in zh-TW**: `"編輯器"` or `"編輯
-   器偏好"`? Short is better for sidebar density; I'll default to
-   `"編輯器"` unless pushback.
-3. **Clamp bounds for `fontSize`**: spec says `[10, 24]`. Some users
-   may want `>24` for presentations. Easy to relax later; keeping
-   conservative for now.
-4. **Breadcrumb popover position**: below chip (flowing under "/") or
-   to the right of the filename? Below feels natural for breadcrumb
-   semantics; plan phase will prototype.
-5. **Multi-select delete confirmation**: plain JS `confirm()` or a
-   proper modal? For consistency with other delete flows in Purdex, a
-   modal would be nicer — plan phase will check what pattern exists.
+Decisions taken in v1.1 (removed from open-question status):
+- NewTab card icon → `Stack` (Phosphor)
+- zh-TW label → `"編輯器"` (short, matches sidebar density)
+- Legacy `/settings/editor-buffers` URL → alias redirect in
+  `SettingsPage` (§4.2)
+- NewTab card singleton behavior → not singleton; standard `onSelect`
+  replaces NewTab pane in place (§4.7)
+- Smart-open targeting → active tab first, then `tabOrder` scan, then
+  new tab (§4.6)
+- `FileEntry.mtime` extension → out of scope; buffers sort by name
+  (§2 non-goals)
+- Tiptap `fontSize` integration → deferred to follow-up (§2 non-goals)
+
+Still open:
+1. **`fontSize` clamp bounds `[10, 24]`** — conservative default;
+   easy to relax later. Keep as-is unless a reviewer objects.
+2. **Breadcrumb popover position** — below chip (flowing under the
+   `/`) is the plan default; plan phase will prototype and adjust if
+   awkward.
+3. **Multi-select delete confirmation** — plan uses `window.confirm()`
+   for Commit 2 simplicity. A proper modal is a scope increase; if a
+   reviewer prefers, file a follow-up.
+4. **Sidebar naming collision** — the `editor` contribution is
+   labeled "Editor" and sits alongside two other Editor-module
+   entries ("Home Path — Workspace", "Home Path — Host"). Visually
+   verified there is no duplicate "Editor" heading because the
+   sidebar is flat (§4.2). Plan acceptance includes a manual check
+   step.
+5. **NewTab `moduleId` field rollout** — spec v1.1 adds an optional
+   `moduleId` to `NewTabProvider` (§4.9.3). Should the existing
+   `editor` and `sessions` providers also set `moduleId` in this PR
+   (to exercise the filter), or wait for a dedicated alignment PR?
+   Plan default: set `moduleId: 'editor'` for the two Editor-module
+   providers only (`editor`, `editor-buffers`); leave `sessions` /
+   `browser` untouched this PR.
 
 ---
 
-*End of spec.*
+*End of spec v1.1.*
