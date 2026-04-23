@@ -53,28 +53,14 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		return agent.HookStatus{}, fmt.Errorf("parse hooks.json: %w", err)
 	}
 	hooks, _ := hooksFile["hooks"].(map[string]any)
-	eventNames := p.eventNames()
-	events := make(map[string]agent.HookEventInfo, len(eventNames))
+	events := make(map[string]agent.HookEventInfo, len(codexEventSpecs))
 	var issues []string
 	allInstalled := true
-	for _, eventName := range eventNames {
-		entries, ok := hooks[eventName]
-		if !ok {
-			events[eventName] = agent.HookEventInfo{Installed: false}
-			issues = append(issues, eventName+" hook not installed")
-			allInstalled = false
-			continue
-		}
-		if hasLegacyPdxDirectCodexEntry(entries) {
-			events[eventName] = agent.HookEventInfo{Installed: false}
-			issues = append(issues, eventName+" hook uses legacy format; reinstall required")
-			allInstalled = false
-			continue
-		}
-		command := findPdxCommandInCodex(entries)
-		events[eventName] = agent.HookEventInfo{Installed: command != "", Command: command}
-		if command == "" {
-			issues = append(issues, eventName+" hook: pdx command not found")
+	for _, spec := range p.Events() {
+		info, addIssues, blocks := checkCodexEvent(spec, hooks)
+		events[spec.Name] = info
+		issues = append(issues, addIssues...)
+		if blocks {
 			allInstalled = false
 		}
 	}
@@ -86,6 +72,52 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		SupportedVersion: codexHooksSupportedVersion,
 		ExceedsSupport:   agent.CompareHookAgentVersions(agentVersion, codexHooksSupportedVersion) > 0,
 	}, nil
+}
+
+// checkCodexEvent classifies a single hook event as absent / broken / valid
+// per fix-plan §1.4 and applies the FutureOnly-aware decision table. It
+// takes the full hooks map so absent vs present-but-empty can be told apart
+// via the double-return form `entries, ok := hooks[spec.Name]` — a value of
+// `[]any{}` (what mergeCodexHooks leaves behind when the last pdx entry is
+// removed) must be classified as broken, not absent.
+//
+// Returns:
+//   - HookEventInfo for events[spec.Name]
+//   - zero or more Issue strings to append
+//   - whether this event blocks allInstalled
+func checkCodexEvent(spec agent.HookEventSpec, hooks map[string]any) (agent.HookEventInfo, []string, bool) {
+	entries, keyExists := hooks[spec.Name]
+	// State A — absent (strict: key not present in map).
+	if !keyExists {
+		info := agent.HookEventInfo{Installed: false}
+		if spec.FutureOnly {
+			// Tolerated legacy: no issue, does not block.
+			return info, nil, false
+		}
+		return info, []string{spec.Name + " hook not installed"}, true
+	}
+	// Legacy direct-entry shape is its own signal (present but uses the
+	// pre-0.121 shape pdx installer no longer writes).
+	if hasLegacyPdxDirectCodexEntry(entries) {
+		return agent.HookEventInfo{Installed: false},
+			[]string{spec.Name + " hook uses legacy format; reinstall required"},
+			true
+	}
+	// Find a pdx command inside the matcher-group list. Empty entries, wrong
+	// shape, or no pdx command all collapse to command == "" here → State B.
+	command := findPdxCommandInCodex(entries)
+	if command == "" {
+		if spec.FutureOnly {
+			return agent.HookEventInfo{Installed: false},
+				[]string{spec.Name + " hook: pdx command malformed (FutureOnly event has existing hook entry but pdx path incorrect — run install to repair)"},
+				true
+		}
+		return agent.HookEventInfo{Installed: false},
+			[]string{spec.Name + " hook: pdx command not found"},
+			true
+	}
+	// State C — valid.
+	return agent.HookEventInfo{Installed: true, Command: command}, nil, false
 }
 
 func mergeCodexHooks(path, pdxPath string, remove bool) error {

@@ -510,3 +510,261 @@ func TestCheckHooks_ThirdPartyLegacyEntryDoesNotTriggerReinstall(t *testing.T) {
 		t.Fatal("SessionStart should be installed despite coexisting third-party legacy entry")
 	}
 }
+
+// ---- fix-plan §1.4 / §2.2 CheckHooks three-state tests (CH1-CH6) ----
+//
+// The fix-plan §1.4 decision table partitions every declared event into
+// three states — absent / present-but-broken / valid — and applies a
+// FutureOnly-aware policy:
+//
+//	| FutureOnly | state          | Installed | Issues append           | blocks allInstalled |
+//	|------------|----------------|-----------|-------------------------|---------------------|
+//	| false      | absent         | false     | "<name> hook not installed" | yes             |
+//	| false      | broken         | false     | "<name> hook: pdx command not found" | yes    |
+//	| false      | valid          | true      | —                       | no                  |
+//	| true       | absent         | false     | (tolerated, silent)     | no                  |
+//	| true       | broken         | false     | "<name> hook: pdx command malformed …" | yes  |
+//	| true       | valid          | true      | —                       | no                  |
+//
+// State A (absent) is defined strictly as "key not present in hooks map"
+// (plan §1.4). An empty array value ([]) is State B (broken) because the
+// mergeCodexHooks remove path leaves hooks[event]=[] behind — treating it
+// as absent would silently hide a real uninstall event for a FutureOnly
+// hook.
+
+// pdxGroupEntry builds a correctly-installed matcher-group entry for an
+// event name, matching the shape mergeCodexHooks writes.
+func pdxGroupEntry(event string) map[string]any {
+	return map[string]any{
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": `"/usr/local/bin/pdx" hook --agent codex ` + event,
+				"timeout": 5,
+			},
+		},
+	}
+}
+
+// writeHooksFile serialises a hooks-section map to hooks.json under the
+// given HOME, creating parent dirs as needed.
+func writeHooksFile(t *testing.T, home string, hooksSect map[string]any) {
+	t.Helper()
+	path := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	data, err := json.MarshalIndent(map[string]any{"hooks": hooksSect}, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+}
+
+// issuesContain reports whether any issue contains the given substring.
+func issuesContain(issues []string, substr string) bool {
+	for _, iss := range issues {
+		if strings.Contains(iss, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// CH1 — legacy 3-event user (pre-expansion install): the three required
+// events are valid; the six FutureOnly events have no key in hooks.json.
+// allInstalled must remain true and Issues must be empty.
+func TestCheckHooks_LegacyThreeEvent_ReportsInstalled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
+		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("Stop")},
+	})
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if !status.Installed {
+		t.Fatalf("legacy 3-event user: allInstalled=false, Issues=%v", status.Issues)
+	}
+	if len(status.Issues) != 0 {
+		t.Fatalf("legacy 3-event user: Issues=%v, want empty", status.Issues)
+	}
+	futureOnly := []string{
+		"SubagentStart", "SubagentStop", "StopFailure",
+		"Notification", "PermissionRequest", "SessionEnd",
+	}
+	for _, name := range futureOnly {
+		info, ok := status.Events[name]
+		if !ok {
+			t.Errorf("status.Events missing FutureOnly event %q", name)
+			continue
+		}
+		if info.Installed {
+			t.Errorf("FutureOnly event %q Installed=true, want false (absent)", name)
+		}
+	}
+}
+
+// CH2 — full 9-event install: every event valid, no issues.
+func TestCheckHooks_NineEvent_FullyInstalled_NoIssues(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	full := map[string]any{}
+	for _, name := range expectedCodexInstallerNames {
+		full[name] = []any{pdxGroupEntry(name)}
+	}
+	writeHooksFile(t, home, full)
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if !status.Installed {
+		t.Fatalf("full 9-event install: allInstalled=false, Issues=%v", status.Issues)
+	}
+	if len(status.Issues) != 0 {
+		t.Fatalf("full 9-event install: Issues=%v, want empty", status.Issues)
+	}
+	for _, name := range expectedCodexInstallerNames {
+		info := status.Events[name]
+		if !info.Installed {
+			t.Errorf("event %q Installed=false after full install", name)
+		}
+	}
+}
+
+// CH3 — required event missing (here SessionStart is absent): must block
+// allInstalled and surface a "hook not installed" issue.
+func TestCheckHooks_RequiredEventMissing_Blocks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("Stop")},
+	})
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Installed {
+		t.Fatal("missing required SessionStart: allInstalled=true, want false")
+	}
+	if !issuesContain(status.Issues, "SessionStart hook not installed") {
+		t.Fatalf("missing required SessionStart: issues=%v", status.Issues)
+	}
+}
+
+// CH4 — FutureOnly key present but pdx command missing (user manually
+// replaced the pdx entry with something else): classify as broken, emit a
+// "malformed" warning, and block allInstalled. The 3 required events are
+// valid and do not by themselves unblock.
+func TestCheckHooks_FutureOnlyBroken_WarnsAndBlocks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
+		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("Stop")},
+		"Notification": []any{
+			map[string]any{
+				"hooks": []any{
+					map[string]any{
+						"type":    "command",
+						"command": "/usr/bin/notify-me not-pdx",
+						"timeout": 5,
+					},
+				},
+			},
+		},
+	})
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Installed {
+		t.Fatal("FutureOnly broken: allInstalled=true, want false")
+	}
+	if !issuesContain(status.Issues, "Notification hook: pdx command malformed") {
+		t.Fatalf("FutureOnly broken: issues=%v, want malformed warning for Notification", status.Issues)
+	}
+	if status.Events["Notification"].Installed {
+		t.Fatal("Notification Installed=true, want false")
+	}
+}
+
+// CH5 — the mixed-tolerance case: 3 required valid, 3 FutureOnly absent,
+// 3 FutureOnly valid. allInstalled stays true because absent FutureOnly is
+// the "legacy user, no need to reinstall" tolerance case.
+func TestCheckHooks_FutureOnlyAbsent_DoesNotBlock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
+		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("Stop")},
+		// 3 FutureOnly valid
+		"StopFailure":       []any{pdxGroupEntry("StopFailure")},
+		"Notification":      []any{pdxGroupEntry("Notification")},
+		"PermissionRequest": []any{pdxGroupEntry("PermissionRequest")},
+		// SubagentStart / SubagentStop / SessionEnd intentionally absent.
+	})
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if !status.Installed {
+		t.Fatalf("mixed FutureOnly absent/valid: allInstalled=false, Issues=%v", status.Issues)
+	}
+	if len(status.Issues) != 0 {
+		t.Fatalf("mixed FutureOnly absent/valid: Issues=%v, want empty", status.Issues)
+	}
+	for _, absent := range []string{"SubagentStart", "SubagentStop", "SessionEnd"} {
+		if status.Events[absent].Installed {
+			t.Errorf("absent FutureOnly %q Installed=true, want false", absent)
+		}
+	}
+	for _, valid := range []string{"StopFailure", "Notification", "PermissionRequest"} {
+		if !status.Events[valid].Installed {
+			t.Errorf("valid FutureOnly %q Installed=false, want true", valid)
+		}
+	}
+}
+
+// CH6 — the strict-absent distinction (plan §1.4): a FutureOnly event with
+// an empty entry array (hooks[event]=[]) is classified as broken, not
+// absent, because mergeCodexHooks' remove path can legitimately leave []
+// behind — treating it as absent would hide a real FutureOnly uninstall
+// event as a silent "legacy user" false-green.
+func TestCheckHooks_FutureOnlyEmptyArray_ClassifiesAsBroken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
+		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("Stop")},
+		"Notification":     []any{}, // present key, empty array — must be broken not absent
+	})
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Installed {
+		t.Fatal("FutureOnly empty-array: allInstalled=true, want false")
+	}
+	if !issuesContain(status.Issues, "Notification hook: pdx command malformed") {
+		t.Fatalf("FutureOnly empty-array: issues=%v, want malformed warning", status.Issues)
+	}
+	if status.Events["Notification"].Installed {
+		t.Fatal("Notification Installed=true, want false (empty array = broken)")
+	}
+}
