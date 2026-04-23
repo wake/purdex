@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { registerModule } from './module-registry'
+import { getModules, registerModule } from './module-registry'
 import { registerNewTabProvider } from './new-tab-registry'
 import { registerSettingsSection } from './settings-section-registry'
 import {
@@ -23,7 +23,7 @@ import { TerminalSection } from '../components/settings/TerminalSection'
 import { ElectronSection } from '../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../components/settings/DevEnvironmentSection'
 import { TmuxAgentMonitorSection } from '../components/settings/TmuxAgentMonitorSection'
-import { ModuleConfigSection } from '../components/settings/ModuleConfigSection'
+import { ModulesSwitchboardSection } from '../components/settings/ModulesSwitchboardSection'
 import { SyncSection } from '../components/settings/SyncSection'
 import { FileTreeWorkspaceView } from '../components/FileTreeView'
 import { FileTreeSessionView } from '../components/FileTreeSessionView'
@@ -55,6 +55,7 @@ import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { openBrowserTab } from './open-browser-tab'
 import { getDefaultOpener } from './file-opener-registry'
 import { setHostBuiltinSections } from './host-builtin-sections'
+import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 import { OverviewSection } from '../components/hosts/OverviewSection'
 import { SessionsSection } from '../components/hosts/SessionsSection'
 import { HooksSection } from '../components/hosts/HooksSection'
@@ -148,6 +149,8 @@ export function registerBuiltinModules(): void {
   registerModule({
     id: 'browser',
     name: 'Browser',
+    disableable: true,
+    descriptionKey: 'modules.browser.description',
     panes: [{
       kind: 'browser',
       component: BrowserPaneWrapper,
@@ -156,6 +159,8 @@ export function registerBuiltinModules(): void {
   registerModule({
     id: 'memory-monitor',
     name: 'Memory Monitor',
+    disableable: true,
+    descriptionKey: 'modules.memory_monitor.description',
     panes: [{
       kind: 'memory-monitor',
       component: MemoryMonitorPaneWrapper,
@@ -171,6 +176,8 @@ export function registerBuiltinModules(): void {
   registerModule({
     id: 'editor',
     name: 'Editor',
+    disableable: true,
+    descriptionKey: 'modules.editor.description',
     panes: [
       { kind: 'editor', component: EditorPane },
       { kind: 'image-preview', component: ImagePreviewPane },
@@ -268,6 +275,8 @@ export function registerBuiltinModules(): void {
   registerModule({
     id: 'files',
     name: 'Files',
+    disableable: true,
+    descriptionKey: 'modules.files.description',
     workspaceConfig: [
       { key: 'projectPath', type: 'string', label: '專案路徑' },
     ],
@@ -299,15 +308,14 @@ export function registerBuiltinModules(): void {
     component: InterfaceSectionHost,
   })
   registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: 11, component: SyncSection })
-  // F3: retained until HSR PR-5 deprecates `ModuleDefinition.globalConfig`.
-  // Dropping this section (PR-3 commit 2) left the `globalConfig` API
-  // live-but-unreachable — any module declaring `globalConfig` had no UI
-  // surface. Removal tracked by #574.
+  // Modules Switchboard — replaces the long-dormant `globalConfig` UI with a
+  // module enable/disable panel. Keeps the id `module-config` for URL
+  // stability (`/settings/module-config`).
   registerSettingsSection({
     id: 'module-config',
     label: 'settings.section.modules',
     order: 8,
-    component: () => <ModuleConfigSection scope="global" />,
+    component: ModulesSwitchboardSection,
   })
   registerSettingsSection({
     id: 'editor-buffers',
@@ -423,6 +431,19 @@ export function registerBuiltinModules(): void {
     { localId: 'uploads',   labelKey: 'hosts.uploads',   order: 4, component: UploadSection },
     { localId: 'logs',      labelKey: 'hosts.logs',      order: 5, component: LogsSection },
   ])
+
+  // Capture the module-enabled baseline for the Modules Switchboard. Runs
+  // after all registerModule(...) calls so `getModules()` returns the fully
+  // populated set with their `disableable` flags resolved. `captureBaseline`
+  // is a first-call-wins no-op, so HMR re-runs of this function don't
+  // overwrite the session baseline (spec I7).
+  const baselineSnapshot: Record<string, boolean> = {}
+  for (const m of getModules()) {
+    if (m.disableable === true) {
+      baselineSnapshot[m.id] = useModuleEnabledStore.getState().isEnabled(m.id)
+    }
+  }
+  useModuleEnabledStore.getState().captureBaseline(baselineSnapshot)
 
   // Dispatch module-declared settings contributions into the contribution registry.
   // Must run AFTER all registerModule(...) calls so every module is visible.

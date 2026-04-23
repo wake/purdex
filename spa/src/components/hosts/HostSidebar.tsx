@@ -1,6 +1,7 @@
-import { Plus, CaretDown, CaretRight, Circle, LockSimple, Spinner, Warning } from '@phosphor-icons/react'
+import { Plus, CaretDown, CaretRight, Circle, LockSimple, PuzzlePiece, Spinner, Warning } from '@phosphor-icons/react'
 import { useState } from 'react'
 import { listContributions } from '../../lib/settings-contribution-registry'
+import { isModuleOwnedContribution } from '../../lib/settings-contribution-types'
 import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 
@@ -101,6 +102,7 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
                       isDisabled && page.disabledReasonKey
                         ? t(page.disabledReasonKey)
                         : undefined
+                    const moduleOwned = isModuleOwnedContribution(page)
                     return (
                       <button
                         key={page.localId}
@@ -109,7 +111,7 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
                         onClick={() => {
                           if (!isDisabled) onSelect(hostId, page.localId)
                         }}
-                        className={`w-full text-left px-2 py-1 rounded text-xs ${
+                        className={`w-full text-left px-2 py-1 rounded text-xs flex items-center gap-2 ${
                           isDisabled
                             ? 'text-text-muted cursor-not-allowed'
                             : isActive
@@ -117,7 +119,15 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
                               : 'text-text-muted hover:text-text-secondary cursor-pointer'
                         }`}
                       >
-                        {t(page.labelKey)}
+                        <span className="flex-1 truncate">{t(page.labelKey)}</span>
+                        {moduleOwned && (
+                          <PuzzlePiece
+                            size={10}
+                            weight="fill"
+                            className="flex-shrink-0 rotate-[-12deg] text-text-muted"
+                            aria-hidden
+                          />
+                        )}
                       </button>
                     )
                   })}

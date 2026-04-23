@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from 'react'
-import { Trash } from '@phosphor-icons/react'
+import { PuzzlePiece, Trash } from '@phosphor-icons/react'
 import { useWorkspaceStore } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -7,9 +7,10 @@ import { getPrimaryPane } from '../../../lib/pane-tree'
 import { getPaneLabel } from '../../../lib/pane-labels'
 import { closeTab } from '../../../lib/tab-lifecycle'
 import { listContributions } from '../../../lib/settings-contribution-registry'
-import type {
-  SettingsContextFor,
-  SettingsContribution,
+import {
+  isModuleOwnedContribution,
+  type SettingsContextFor,
+  type SettingsContribution,
 } from '../../../lib/settings-contribution-types'
 import { WorkspaceIcon } from './WorkspaceIcon'
 
@@ -141,6 +142,7 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
           const title = isDisabled && c.disabledReasonKey
             ? (t(c.disabledReasonKey) ?? c.disabledReasonKey)
             : undefined
+          const moduleOwned = isModuleOwnedContribution(c)
           const Body = c.component
           return (
             <section
@@ -151,11 +153,19 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
               className="mb-8"
             >
               <h3
-                className={`text-xs font-semibold uppercase tracking-wider mb-3 ${
+                className={`text-xs font-semibold uppercase tracking-wider mb-3 flex items-center gap-2 ${
                   isDisabled ? 'text-text-muted' : 'text-text-secondary'
                 }`}
               >
-                {t(c.labelKey) ?? c.labelKey}
+                <span>{t(c.labelKey) ?? c.labelKey}</span>
+                {moduleOwned && (
+                  <PuzzlePiece
+                    size={12}
+                    weight="fill"
+                    className="flex-shrink-0 rotate-[-12deg] text-text-muted"
+                    aria-hidden
+                  />
+                )}
               </h3>
               {!isDisabled && <Body ctx={ctx} />}
             </section>

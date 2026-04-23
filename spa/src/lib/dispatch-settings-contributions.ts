@@ -19,6 +19,7 @@ import type {
   AnySettingsContribution,
   SettingsScope,
 } from './settings-contribution-types'
+import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 
 // Legacy adapter namespace constant — sections registered through the legacy
 // `registerSettingsSection()` API are flushed into the new registry under this
@@ -147,6 +148,12 @@ export function buildSettingsContributionBatch(
   }
 
   for (const module of modules) {
+    // Modules Switchboard: disabled modules skip their entire `settings: [...]`
+    // block (all scopes). Note the filter precedes the localId/collision
+    // checks, so a disabled module's localIds cannot clash with an enabled
+    // module's (spec EC-3).
+    if (!useModuleEnabledStore.getState().isEnabled(module.id)) continue
+
     const settings = module.settings
     if (!settings || settings.length === 0) continue
 

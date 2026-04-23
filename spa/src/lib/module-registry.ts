@@ -76,6 +76,16 @@ export interface ModuleDefinition {
   globalConfig?: ConfigDef[]
   commands?: CommandContribution[]
   settings?: AnySettingsContributionDeclaration[]
+  /**
+   * When `true`, the module appears in the Modules Switchboard and can be
+   * disabled by the user. Default `false` — a safe, explicit opt-in: module
+   * owners must deliberately mark a module as independent enough to be
+   * toggled off. Core / system modules (sessions / settings / hosts / etc.)
+   * omit this flag and can never be disabled.
+   */
+  disableable?: boolean
+  /** i18n key for the row description rendered in the Modules Switchboard. */
+  descriptionKey?: string
 }
 
 // === Registry ===

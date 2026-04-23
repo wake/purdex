@@ -16,6 +16,7 @@ import {
   HOST_BUILTIN_MODULE_ID,
   setHostBuiltinSections,
 } from './host-builtin-sections'
+import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 
 const FakeComponent = () => null
 const FakeHostSection = ({ hostId: _ }: { hostId: string }) => null
@@ -28,6 +29,8 @@ function resetRegistries() {
   clearLegacyPending()
   // Clear the host-builtin source map so #586 tests start from a clean state.
   clearHostBuiltinSources()
+  // Reset module-enabled store so disabled-module filter tests start clean.
+  useModuleEnabledStore.setState({ enabled: {}, baseline: null })
 }
 
 describe('dispatchSettingsContributions', () => {
@@ -356,6 +359,109 @@ describe('dispatchSettingsContributions', () => {
       resetSettingsContributionsForHmr()
       dispatchSettingsContributions()
       expect(listContributions('host')).toEqual([])
+    })
+  })
+
+  // --- Modules Switchboard: disabled-module filter --------------------------
+
+  describe('disabled module filter (useModuleEnabledStore)', () => {
+    it('T2-1: disabled module settings are excluded from dispatch', () => {
+      registerModule({
+        id: 'a',
+        name: 'A',
+        disableable: true,
+        settings: [
+          { localId: 'alpha', scope: 'purdex', order: 0, labelKey: 'a.alpha', component: FakeComponent },
+        ],
+      })
+      useModuleEnabledStore.setState({ enabled: { a: false }, baseline: null })
+      dispatchSettingsContributions()
+      expect(listContributions('purdex').map((c) => c.id)).not.toContain('a.alpha')
+    })
+
+    it('T2-2: enabled module settings dispatch normally', () => {
+      registerModule({
+        id: 'a',
+        name: 'A',
+        disableable: true,
+        settings: [
+          { localId: 'alpha', scope: 'purdex', order: 0, labelKey: 'a.alpha', component: FakeComponent },
+        ],
+      })
+      useModuleEnabledStore.setState({ enabled: { a: true }, baseline: null })
+      dispatchSettingsContributions()
+      expect(listContributions('purdex').map((c) => c.id)).toContain('a.alpha')
+    })
+
+    it('T2-3: disabled module does not participate in localId collision', () => {
+      registerModule({
+        id: 'a',
+        name: 'A',
+        disableable: true,
+        settings: [
+          { localId: 'x', scope: 'purdex', order: 0, labelKey: 'a.x', component: FakeComponent },
+        ],
+      })
+      registerModule({
+        id: 'b',
+        name: 'B',
+        settings: [
+          { localId: 'x', scope: 'purdex', order: 1, labelKey: 'b.x', component: FakeComponent },
+        ],
+      })
+      useModuleEnabledStore.setState({ enabled: { a: false }, baseline: null })
+      expect(() => dispatchSettingsContributions()).not.toThrow()
+      expect(listContributions('purdex').map((c) => c.id)).toEqual(['b.x'])
+    })
+
+    it('T2-4: legacy adapter contributions are unaffected by the filter', () => {
+      registerModule({
+        id: 'a',
+        name: 'A',
+        disableable: true,
+        settings: [
+          { localId: 'alpha', scope: 'purdex', order: 0, labelKey: 'a.alpha', component: FakeComponent },
+        ],
+      })
+      registerSettingsSection({ id: 'legacy', label: 'Legacy', order: 0, component: FakeComponent })
+      useModuleEnabledStore.setState({ enabled: { a: false }, baseline: null })
+      dispatchSettingsContributions()
+      const ids = listContributions('purdex').map((c) => c.id)
+      expect(ids).toContain('_builtin.legacy-section.legacy')
+      expect(ids).not.toContain('a.alpha')
+    })
+
+    it('T2-5: host-builtin contributions are unaffected by the filter', () => {
+      setHostBuiltinSections([
+        { localId: 'overview', labelKey: 'hosts.overview', order: 0, component: FakeHostSection },
+      ])
+      registerModule({
+        id: 'a',
+        name: 'A',
+        disableable: true,
+        settings: [
+          { localId: 'host-stuff', scope: 'host', order: 0, labelKey: 'a.host', component: FakeComponent },
+        ],
+      })
+      useModuleEnabledStore.setState({ enabled: { a: false }, baseline: null })
+      dispatchSettingsContributions()
+      const hostIds = listContributions('host').map((c) => c.id)
+      expect(hostIds).toContain(`${HOST_BUILTIN_MODULE_ID}.overview`)
+      expect(hostIds).not.toContain('a.host-stuff')
+    })
+
+    it('T2-6: disabled module workspace-scope contributions are also skipped', () => {
+      registerModule({
+        id: 'a',
+        name: 'A',
+        disableable: true,
+        settings: [
+          { localId: 'ws-section', scope: 'workspace', order: 0, labelKey: 'a.ws', component: FakeComponent },
+        ],
+      })
+      useModuleEnabledStore.setState({ enabled: { a: false }, baseline: null })
+      dispatchSettingsContributions()
+      expect(listContributions('workspace').map((c) => c.id)).not.toContain('a.ws-section')
     })
   })
 })
