@@ -12,58 +12,69 @@ import (
 )
 
 // driftFixture is one event input case used by the drift test.
+//
+// wantStatus is the Status this fixture is designed to provoke (or "" if the
+// event is detail-only such as SubagentStart/Stop). wantValid encodes the
+// expected Valid bit; non-mappable cases (e.g. cc compact SessionStart) live
+// in cc-specific tests, not here.
+//
+// Per-fixture assertion is required (Phase 1 review finding): set-equality
+// alone cannot detect the deletion of a polymorphic sub-branch like
+// Notification(elicitation_dialog), because Waiting is still emitted via
+// other branches. Each fixture must independently match its wantStatus.
 type driftFixture struct {
-	eventName string
-	rawJSON   string
+	eventName  string
+	rawJSON    string
+	wantStatus agent.Status // empty for detail-only events
+	wantValid  bool         // currently always true; placeholder for future negative fixtures
 }
 
 // providerFixtures enumerates representative event payloads for each provider
 // such that the union of `DeriveStatus(...)` results covers EVERY Status the
-// provider declares via SupportedStatuses. Per Phase 1 plan §1.5: fixtures
-// MUST cover each declared Status's emit path (including sub-branches like
-// Notification(idle_prompt) → Idle), or D1 produces a false positive.
+// provider declares via SupportedStatuses. Per Phase 1 plan §1.5 + the codex
+// review finding: every emit path AND sub-branch is asserted individually.
 //
-// SubagentStart/Stop are intentionally included for cc/opencode (and codex
-// post-Phase-1) — they Valid=true with Status="" and are filtered from the
-// emittedSet, so they document the catalog without polluting the comparison.
+// SubagentStart/Stop are intentionally included for cc/codex/opencode —
+// they Valid=true with Status="" and are filtered from the emittedSet so they
+// document the catalog without polluting the set-equality comparison.
 var providerFixtures = map[string][]driftFixture{
 	"cc": {
-		{"SessionStart", `{}`},                                  // → Idle
-		{"UserPromptSubmit", `{}`},                              // → Running
-		{"Notification", `{"notification_type":"permission_prompt"}`}, // → Waiting
-		{"Notification", `{"notification_type":"elicitation_dialog"}`}, // → Waiting (sub-branch)
-		{"Notification", `{"notification_type":"idle_prompt"}`},  // → Idle (sub-branch)
-		{"Notification", `{"notification_type":"auth_success"}`}, // → Idle (sub-branch)
-		{"PermissionRequest", `{"tool_name":"Bash"}`},           // → Waiting
-		{"Stop", `{}`},                                          // → Idle
-		{"StopFailure", `{"error":"x"}`},                        // → Error
-		{"SessionEnd", `{}`},                                    // → Clear
-		{"SubagentStart", `{"agent_id":"a"}`},                   // Valid=true, Status="" (filtered)
-		{"SubagentStop", `{"agent_id":"a"}`},                    // Valid=true, Status="" (filtered)
+		{"SessionStart", `{}`, agent.StatusIdle, true},
+		{"UserPromptSubmit", `{}`, agent.StatusRunning, true},
+		{"Notification", `{"notification_type":"permission_prompt"}`, agent.StatusWaiting, true},
+		{"Notification", `{"notification_type":"elicitation_dialog"}`, agent.StatusWaiting, true},
+		{"Notification", `{"notification_type":"idle_prompt"}`, agent.StatusIdle, true},
+		{"Notification", `{"notification_type":"auth_success"}`, agent.StatusIdle, true},
+		{"PermissionRequest", `{"tool_name":"Bash"}`, agent.StatusWaiting, true},
+		{"Stop", `{}`, agent.StatusIdle, true},
+		{"StopFailure", `{"error":"x"}`, agent.StatusError, true},
+		{"SessionEnd", `{}`, agent.StatusClear, true},
+		{"SubagentStart", `{"agent_id":"a"}`, "", true}, // Valid=true, Status="" (filtered)
+		{"SubagentStop", `{"agent_id":"a"}`, "", true},  // Valid=true, Status="" (filtered)
 	},
 	"codex": {
-		{"SessionStart", `{}`},                                  // → Idle
-		{"UserPromptSubmit", `{}`},                              // → Running
-		{"Notification", `{"notification_type":"permission_prompt"}`}, // → Waiting
-		{"Notification", `{"notification_type":"elicitation_dialog"}`}, // → Waiting
-		{"Notification", `{"notification_type":"idle_prompt"}`},  // → Idle
-		{"Notification", `{"notification_type":"auth_success"}`}, // → Idle
-		{"PermissionRequest", `{"tool_name":"Bash"}`},           // → Waiting
-		{"Stop", `{}`},                                          // → Idle
-		{"StopFailure", `{"error":"x"}`},                        // → Error
-		{"SessionEnd", `{}`},                                    // → Clear
-		{"SubagentStart", `{"agent_id":"a"}`},                   // Valid=true, Status=""
-		{"SubagentStop", `{"agent_id":"a"}`},                    // Valid=true, Status=""
+		{"SessionStart", `{}`, agent.StatusIdle, true},
+		{"UserPromptSubmit", `{}`, agent.StatusRunning, true},
+		{"Notification", `{"notification_type":"permission_prompt"}`, agent.StatusWaiting, true},
+		{"Notification", `{"notification_type":"elicitation_dialog"}`, agent.StatusWaiting, true},
+		{"Notification", `{"notification_type":"idle_prompt"}`, agent.StatusIdle, true},
+		{"Notification", `{"notification_type":"auth_success"}`, agent.StatusIdle, true},
+		{"PermissionRequest", `{"tool_name":"Bash"}`, agent.StatusWaiting, true},
+		{"Stop", `{}`, agent.StatusIdle, true},
+		{"StopFailure", `{"error":"x"}`, agent.StatusError, true},
+		{"SessionEnd", `{}`, agent.StatusClear, true},
+		{"SubagentStart", `{"agent_id":"a"}`, "", true},
+		{"SubagentStop", `{"agent_id":"a"}`, "", true},
 	},
 	"opencode": {
-		{"SessionStart", `{}`},                                  // → Idle
-		{"UserPromptSubmit", `{}`},                              // → Running
-		{"PermissionRequest", `{"request_type":"tool"}`},        // → Waiting
-		{"Stop", `{}`},                                          // → Idle
-		{"StopFailure", `{"error":"x"}`},                        // → Error
-		{"SessionEnd", `{}`},                                    // → Clear
-		{"SubagentStart", `{"agent_id":"a"}`},                   // Valid=true, Status=""
-		{"SubagentStop", `{"agent_id":"a"}`},                    // Valid=true, Status=""
+		{"SessionStart", `{}`, agent.StatusIdle, true},
+		{"UserPromptSubmit", `{}`, agent.StatusRunning, true},
+		{"PermissionRequest", `{"request_type":"tool"}`, agent.StatusWaiting, true},
+		{"Stop", `{}`, agent.StatusIdle, true},
+		{"StopFailure", `{"error":"x"}`, agent.StatusError, true},
+		{"SessionEnd", `{}`, agent.StatusClear, true},
+		{"SubagentStart", `{"agent_id":"a"}`, "", true},
+		{"SubagentStop", `{"agent_id":"a"}`, "", true},
 	},
 }
 
@@ -87,11 +98,18 @@ func statusSetSorted(set map[agent.Status]bool) []string {
 }
 
 // TestDriftDeclaredEqualsEmitted asserts that, for every registered provider,
-// the set of statuses returned by SupportedStatuses() is exactly equal to the
-// set of statuses actually emitted (Valid=true, Status!="") when DeriveStatus
-// is called against the per-provider fixture catalog. Bidirectional check:
-// drift in either direction (declared-but-never-emitted, emitted-but-not-
-// declared) fails the test.
+// EVERY fixture independently produces its declared (wantValid, wantStatus)
+// AND the union of emitted statuses exactly equals SupportedStatuses().
+//
+// Per-fixture assertion (not just set equality) is the load-bearing change
+// from the codex review: deleting one polymorphic Notification sub-branch
+// (e.g. "elicitation_dialog" → Waiting) would not change the set
+// {Waiting,Idle,Running,Error,Clear} because Waiting is still produced by
+// other branches. Per-fixture assertion catches that exact regression.
+//
+// Set-equality is kept as a complementary safeguard for the inverse
+// direction — emitting a status that no fixture covers, or declaring one
+// no fixture exercises.
 func TestDriftDeclaredEqualsEmitted(t *testing.T) {
 	r := driftRegistry()
 	rows := agent.Coverage(r)
@@ -117,15 +135,22 @@ func TestDriftDeclaredEqualsEmitted(t *testing.T) {
 			}
 
 			emittedSet := make(map[agent.Status]bool)
-			for _, fx := range fixtures {
+			for i, fx := range fixtures {
 				result := provider.DeriveStatus(fx.eventName, json.RawMessage(fx.rawJSON))
-				if !result.Valid {
+				// Per-fixture assertion — each branch independently verified.
+				if result.Valid != fx.wantValid {
+					t.Errorf("provider %q fixture[%d] %s %s: Valid=%v, want %v",
+						row.AgentType, i, fx.eventName, fx.rawJSON, result.Valid, fx.wantValid)
 					continue
 				}
-				if result.Status == "" {
+				if result.Status != fx.wantStatus {
+					t.Errorf("provider %q fixture[%d] %s %s: Status=%q, want %q",
+						row.AgentType, i, fx.eventName, fx.rawJSON, result.Status, fx.wantStatus)
 					continue
 				}
-				emittedSet[result.Status] = true
+				if result.Valid && result.Status != "" {
+					emittedSet[result.Status] = true
+				}
 			}
 
 			if !setsEqual(declaredSet, emittedSet) {
