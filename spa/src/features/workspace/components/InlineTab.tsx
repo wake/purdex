@@ -39,7 +39,7 @@ export function InlineTab({
     IconComponent,
     agentStatus,
     isUnread,
-    subagentCount,
+    subagentRefs,
     tabIndicatorStyle,
     isHostOffline,
   } = useTabDisplay(tab)
@@ -108,7 +108,7 @@ export function InlineTab({
         agentStatus,
         tabIndicatorStyle,
         isActive,
-        subagentCount,
+        subagentRefs,
         isUnread,
       })}
       <span data-testid="inline-tab-title" className="flex-1 truncate">

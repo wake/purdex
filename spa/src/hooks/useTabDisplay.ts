@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react'
 import type { Tab } from '../types/tab'
-import type { AgentStatus } from '../stores/useAgentStore'
+import type { AgentStatus, SubagentRef } from '../stores/useAgentStore'
 import type { TabIndicatorStyle } from '../stores/useUISettingsStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
@@ -16,6 +16,7 @@ import { ICON_MAP } from '../components/tab-icon-map'
 import type { Session } from '../lib/host-api'
 
 const EMPTY_SESSIONS: Session[] = []
+const EMPTY_SUBAGENT_REFS: SubagentRef[] = []
 
 export type TabIconComponent = ComponentType<{ size: number; className?: string }>
 
@@ -25,6 +26,7 @@ export interface TabDisplayData {
   agentStatus: AgentStatus | undefined
   isUnread: boolean
   subagentCount: number
+  subagentRefs: SubagentRef[]
   tabIndicatorStyle: TabIndicatorStyle
   isHostOffline: boolean
   isTerminated: boolean
@@ -49,7 +51,8 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
 
   const agentStatus = useAgentStore((s) => (ck ? s.statuses[ck] : undefined))
   const isUnread = useAgentStore((s) => (ck ? !!s.unread[ck] : false))
-  const subagentCount = useAgentStore((s) => (ck ? (s.subagents[ck]?.length ?? 0) : 0))
+  const subagentRefs = useAgentStore((s) => (ck ? (s.subagents[ck] ?? EMPTY_SUBAGENT_REFS) : EMPTY_SUBAGENT_REFS))
+  const subagentCount = subagentRefs.length
   const agentType = useAgentStore((s) => (ck ? s.agentTypes[ck] : undefined))
   const tabIndicatorStyle = useUISettingsStore((s) => s.tabIndicatorStyle)
   const ccIconVariant = useUISettingsStore((s) => s.ccIconVariant)
@@ -81,6 +84,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
     agentStatus,
     isUnread,
     subagentCount,
+    subagentRefs,
     tabIndicatorStyle,
     isHostOffline,
     isTerminated,

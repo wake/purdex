@@ -47,6 +47,16 @@ func (p *Prober) StopAllWatches() {
 	p.watcherMu.Unlock()
 }
 
+// HasWatcher reports whether a watcher is currently registered for the given
+// target. Intended for tests that verify StopWatch was invoked as part of
+// cleanup paths (frame sweep, session rename, etc).
+func (p *Prober) HasWatcher(target string) bool {
+	p.watcherMu.Lock()
+	defer p.watcherMu.Unlock()
+	_, ok := p.watchers[target]
+	return ok
+}
+
 func (p *Prober) activityLoop(ctx context.Context, id *struct{}, target string, cb ActivityCallback) {
 	defer func() {
 		p.watcherMu.Lock()

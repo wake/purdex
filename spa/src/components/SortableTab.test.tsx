@@ -240,6 +240,32 @@ describe('SortableTab renderTabIcon modes', () => {
     expect(screen.getByTestId('tab-status-error')).toBeTruthy()
   })
 
+  it('dot mode + proxy subagent: SubagentDots renders outlined dot (prop-wiring)', () => {
+    // Seed a proxy SubagentRef on this session. Tests that the
+    // subagentRefs prop chain (useTabDisplay → SortableTab → TabIcon →
+    // SubagentDots) is intact end-to-end.
+    seedAgent('dot')
+    useAgentStore.setState({
+      subagents: {
+        'h1:sc1': [
+          {
+            id: 'proxy:codex:200:t200',
+            type: 'codex',
+            started_at: 0,
+            source_pid: 200,
+            source_start_time: 't200',
+            is_proxy: true,
+          },
+        ],
+      },
+    } as never)
+    const { container } = render(<SortableTab {...defaultProps} />)
+    const dot = container.querySelector<HTMLElement>('[data-testid="subagent-dot"]')!
+    expect(dot).toBeTruthy()
+    expect(dot.getAttribute('data-is-proxy')).toBe('true')
+    expect(dot.getAttribute('data-subagent-type')).toBe('codex')
+  })
+
   it('terminated session: no status dot even when agent event exists', () => {
     seedAgent('badge')
     const terminatedTab: Tab = createTab(

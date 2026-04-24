@@ -1,11 +1,28 @@
 package agent
 
 import (
+	"fmt"
 	"sort"
+	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/store"
 )
+
+// proxyMaxDepth caps the PPID ancestor walk during proxy subagent detection.
+// 5 is enough to cover observed layouts like codex → codex-companion → cc
+// (2 hops) with 3 hops of buffer for shell/tmux wrappers; beyond that we
+// fall back to creating a new frame rather than paying unbounded syscall
+// cost on a genuinely deep chain.
+const proxyMaxDepth = 5
+
+// proxyUpsertMaxAttempts caps optimistic-concurrency retries when two
+// near-simultaneous proxy attaches (or detaches) race on the same parent
+// frame's subagents list. Each attempt reloads the parent row, re-merges
+// the ref through updateSubagents, and re-issues UpsertIfUnchanged. After
+// exhausting attempts the caller surfaces an error — production scenarios
+// that hit this limit are genuine hot loops, not ordinary concurrency.
+const proxyUpsertMaxAttempts = 3
 
 type FrameTraceMeta struct {
 	FrameID       string
@@ -46,6 +63,25 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 				Before:        before,
 				After:         map[string]any{},
 			}, err
+		}
+		// frame == nil: sender has no frame of its own. This is either a
+		// genuine orphan SessionEnd, or the SessionEnd of a process that was
+		// previously proxy-attached to another frame (Phase 2 PR-2b §1.5).
+		// Probe the pane's frames for a matching proxy ref and detach it.
+		removed, parentFrame, parentBefore, parentAfter, err := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs)
+		if err != nil {
+			return nil, FrameTraceMeta{}, err
+		}
+		if removed {
+			projection, perr := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				FrameID:       parentFrame.FrameID,
+				ParentFrameID: parentFrame.ParentFrameID,
+				Decision:      "updated_frame",
+				Reason:        "proxy_subagent_detached",
+				Before:        parentBefore,
+				After:         parentAfter,
+			}, perr
 		}
 		projection, err := m.projectPane(req.TmuxPaneID)
 		return projection, FrameTraceMeta{
@@ -89,11 +125,27 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			// refs have no distinct source process identity. Proxy attaches (PR-2b)
 			// set these explicitly.
 		}
-		frame.Subagents = updateSubagents(frame.Subagents, req.EventName, ref)
-		frame.LastSeenAt = broadcastTs
-		stored, err := m.frames.Upsert(*frame)
-		if err != nil {
-			return nil, FrameTraceMeta{}, err
+		// Optimistic-concurrency native mutation (#632 continuation):
+		// two cc SubagentStarts from a concurrent Task-tool dispatch can
+		// land in near-simultaneously; the same read-modify-write race
+		// that motivated the proxy atomic fix applies here. Delegate to
+		// the shared helper that reloads + re-merges on UpsertIfUnchanged
+		// conflict.
+		applied, stored, merr := m.mutateSubagentsWithRetry(*frame, req.EventName, ref, broadcastTs)
+		if merr != nil {
+			return nil, FrameTraceMeta{}, merr
+		}
+		if !applied {
+			// Frame was deleted mid-flight (concurrent sweep / SessionEnd).
+			// Report frame_missing so downstream treats this like the
+			// frame == nil branch above.
+			projection, perr := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				Decision: "skipped",
+				Reason:   "frame_missing",
+				Before:   before,
+				After:    map[string]any{},
+			}, perr
 		}
 		projection, err := m.projectPane(req.TmuxPaneID)
 		return projection, FrameTraceMeta{
@@ -106,21 +158,64 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		}, err
 	}
 
+	// Proxy subagent fast-path (Phase 2 PR-2b, plan §1.4): when a SessionStart
+	// arrives from a sender that has no existing frame of its own and a PPID
+	// ancestor walk locates an alive cross-type parent in the same pane, we
+	// collapse the event into a proxy ref attached to that parent rather than
+	// creating a standalone frame. Observed in practice for codex spawned from
+	// inside a cc session via codex-companion: cc owns the UX, codex should
+	// show as a dot on cc's tab, not as a separate lit-up frame.
+	if req.EventName == "SessionStart" && frame == nil {
+		parent, perr := m.findProxyParent(req)
+		if perr != nil {
+			return nil, FrameTraceMeta{}, perr
+		}
+		if parent != nil {
+			parentBefore := summarizeFrame(parent)
+			ref := agentpkg.SubagentRef{
+				ID:              fmt.Sprintf("proxy:%s:%d:%s", req.AgentType, req.SenderPID, req.SenderStartTime),
+				Type:            req.AgentType,
+				StartedAt:       broadcastTs,
+				SourcePID:       req.SenderPID,
+				SourceStartTime: req.SenderStartTime,
+				IsProxy:         true,
+			}
+			// Optimistic-concurrency attach: read-modify-write on the parent
+			// row is racy when two proxy SessionStarts land on the same
+			// parent simultaneously (issue #632). UpsertIfUnchanged +
+			// reload-on-conflict serializes the writes without a lock; the
+			// retry loop merges both refs before persistence.
+			attached, stored, aerr := m.attachProxyRefWithRetry(*parent, ref, broadcastTs)
+			if aerr != nil {
+				return nil, FrameTraceMeta{}, aerr
+			}
+			if attached {
+				projection, err := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					FrameID:       stored.FrameID,
+					ParentFrameID: stored.ParentFrameID,
+					Decision:      "updated_frame",
+					Reason:        "proxy_subagent_attached",
+					Before:        parentBefore,
+					After:         summarizeFrame(&stored),
+				}, err
+			}
+			// Parent vanished mid-flight (swept or deleted by concurrent
+			// SessionEnd). Fall through to the legacy create-new-frame path
+			// so the sender still gets represented somewhere.
+		}
+	}
+
 	info, err := readProcessInfoFn(req.SenderPID)
 	if err != nil {
 		return nil, FrameTraceMeta{}, err
 	}
 
-	subagents := []agentpkg.SubagentRef{}
 	startedAt := broadcastTs
 	parentFrameID := ""
 	if frame != nil {
-		subagents = append([]agentpkg.SubagentRef(nil), frame.Subagents...)
 		startedAt = frame.StartedAt
 		parentFrameID = frame.ParentFrameID
-	}
-	if req.EventName == "SessionStart" {
-		subagents = []agentpkg.SubagentRef{}
 	}
 	if parentFrameID == "" {
 		parent, err := m.frames.FindByPanePID(req.TmuxPaneID, info.PPID)
@@ -140,22 +235,60 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		status = agentpkg.StatusIdle
 	}
 
-	stored, err := m.frames.Upsert(store.Frame{
-		FrameID:          frameID(frame),
-		PaneID:           req.TmuxPaneID,
-		AgentType:        req.AgentType,
-		PID:              req.SenderPID,
-		PPID:             info.PPID,
-		ProcessStartTime: req.SenderStartTime,
-		ParentFrameID:    parentFrameID,
-		Subagents:        subagents,
-		Status:           status,
-		StartedAt:        startedAt,
-		LastSeenAt:       broadcastTs,
-		Verified:         true,
-	})
-	if err != nil {
-		return nil, FrameTraceMeta{}, err
+	var stored store.Frame
+	if frame != nil {
+		// Existing frame: narrow column update (#632 R8). Writing the full
+		// frame would round-trip a stale Subagents baseline and clobber
+		// concurrent proxy/native attach/detach mutations on the same row.
+		// Subagents changes flow through mutateSubagentsWithRetry /
+		// attachProxyRefWithRetry / removeProxyRefForSender, not here.
+		//
+		// Exception: SessionStart on an existing frame intentionally resets
+		// the subagent list (old session's refs no longer apply). Use the
+		// reset variant so subagents_json = '[]' lands in the same SQL.
+		updated := *frame
+		updated.AgentType = req.AgentType
+		updated.PPID = info.PPID
+		updated.ParentFrameID = parentFrameID
+		updated.Status = status
+		updated.LastSeenAt = broadcastTs
+		updated.Verified = true
+		var updateErr error
+		if req.EventName == "SessionStart" {
+			updateErr = m.frames.UpdateHookPathAndResetSubagents(updated)
+		} else {
+			updateErr = m.frames.UpdateHookPath(updated)
+		}
+		if updateErr != nil {
+			return nil, FrameTraceMeta{}, updateErr
+		}
+		reloaded, err := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
+		if err != nil {
+			return nil, FrameTraceMeta{}, err
+		}
+		if reloaded == nil {
+			return nil, FrameTraceMeta{}, nil
+		}
+		stored = *reloaded
+	} else {
+		// New frame: insert via Upsert. No existing subagents to clobber;
+		// start the row with an empty list.
+		stored, err = m.frames.Upsert(store.Frame{
+			PaneID:           req.TmuxPaneID,
+			AgentType:        req.AgentType,
+			PID:              req.SenderPID,
+			PPID:             info.PPID,
+			ProcessStartTime: req.SenderStartTime,
+			ParentFrameID:    parentFrameID,
+			Subagents:        []agentpkg.SubagentRef{},
+			Status:           status,
+			StartedAt:        startedAt,
+			LastSeenAt:       broadcastTs,
+			Verified:         true,
+		})
+		if err != nil {
+			return nil, FrameTraceMeta{}, err
+		}
 	}
 	projection, err := m.projectPane(req.TmuxPaneID)
 	reason := "parent_frame_missing"
@@ -213,10 +346,16 @@ func summarizeFrame(frame *store.Frame) map[string]any {
 }
 
 // updateSubagents mutates a frame's subagent list in response to a
-// SubagentStart / SubagentStop event. Matching is by ref.ID only; Type does
-// not participate so a cross-type hook (proxy path in PR-2b) cleanly replaces
-// a native ref on stop. On SubagentStart the first-write wins — an existing
-// ref keeps its StartedAt/SourcePID/SourceStartTime/IsProxy.
+// SubagentStart / SubagentStop event. On SubagentStart the first-write wins;
+// an existing ref keeps its StartedAt/SourcePID/SourceStartTime/IsProxy.
+//
+// Identity key is kind-aware (R2 fix): proxy refs identify by
+// (SourcePID, SourceStartTime) — the sender process — while native refs
+// identify by ID (the agent_id string supplied by the provider). Cross-kind
+// refs (one proxy, one native) never match even if ID strings coincide.
+// This isolates namespaces so a native ref whose agent_id happens to collide
+// with a synthesized proxy ID cannot shadow or evict a proxy ref, and vice
+// versa.
 func updateSubagents(current []agentpkg.SubagentRef, eventName string, ref agentpkg.SubagentRef) []agentpkg.SubagentRef {
 	if current == nil {
 		current = []agentpkg.SubagentRef{}
@@ -224,7 +363,7 @@ func updateSubagents(current []agentpkg.SubagentRef, eventName string, ref agent
 	switch eventName {
 	case "SubagentStart":
 		for _, existing := range current {
-			if existing.ID == ref.ID {
+			if subagentRefMatches(existing, ref) {
 				return current
 			}
 		}
@@ -232,7 +371,7 @@ func updateSubagents(current []agentpkg.SubagentRef, eventName string, ref agent
 	case "SubagentStop":
 		filtered := make([]agentpkg.SubagentRef, 0, len(current))
 		for _, existing := range current {
-			if existing.ID != ref.ID {
+			if !subagentRefMatches(existing, ref) {
 				filtered = append(filtered, existing)
 			}
 		}
@@ -240,6 +379,20 @@ func updateSubagents(current []agentpkg.SubagentRef, eventName string, ref agent
 	default:
 		return current
 	}
+}
+
+// subagentRefMatches returns true when two refs identify the same subagent.
+// Proxy refs compare by (SourcePID, SourceStartTime); native refs compare by
+// ID. Cross-kind (one proxy, one native) is never a match — preserves the
+// isolation between the two namespaces (see updateSubagents doc).
+func subagentRefMatches(a, b agentpkg.SubagentRef) bool {
+	if a.IsProxy != b.IsProxy {
+		return false
+	}
+	if a.IsProxy {
+		return a.SourcePID == b.SourcePID && a.SourceStartTime == b.SourceStartTime
+	}
+	return a.ID == b.ID
 }
 
 func syncProjectionState(currentStatus map[string]agentpkg.Status, subagents map[string][]agentpkg.SubagentRef, tmuxSession string, projection *SessionProjection) {
@@ -300,9 +453,12 @@ func (m *Module) setProjectionTopStatus(sessionName string, status agentpkg.Stat
 	if err != nil || projection == nil || projection.TopFrame == nil {
 		return projection, err
 	}
-	frame := *projection.TopFrame
-	frame.Status = status
-	if _, err := m.frames.Upsert(frame); err != nil {
+	// Narrow update only status + last_seen_at (#632 R7): a whole-frame
+	// Upsert from this path would round-trip a stale Subagents baseline
+	// and clobber concurrent proxy/native attach/detach mutations on the
+	// same row. Probe-driven status transitions have no business changing
+	// Subagents — decouple the columns at the SQL layer.
+	if err := m.frames.UpdateStatusAndLastSeen(projection.TopFrame.FrameID, status, time.Now().UnixNano()); err != nil {
 		return nil, err
 	}
 	return m.projectionForSession(sessionName)
@@ -375,4 +531,222 @@ func projectionSortGreater(candidate, current SessionProjection) bool {
 		return candidate.TopFrame.StartedAt > current.TopFrame.StartedAt
 	}
 	return candidate.TopFrame.FrameID > current.TopFrame.FrameID
+}
+
+// removeProxyRefForSender scans the pane's frames for a proxy SubagentRef
+// whose SourcePID+SourceStartTime match the sender that is emitting SessionEnd,
+// filters it out, refreshes the owning frame's LastSeenAt and persists via
+// Upsert. Matching is by identity fields (SourcePID+SourceStartTime), not by
+// ref.ID string, so the detach remains robust across potential future ID
+// format changes.
+//
+// Returns (removed, ownerFrameAfter, ownerBefore, ownerAfter, err):
+//   - removed=true with ownerFrameAfter populated when a ref was detached.
+//   - removed=false, zeroFrame, nil, nil, nil when nothing matched.
+func (m *Module) removeProxyRefForSender(paneID string, senderPID int, senderStartTime string, broadcastTs int64) (bool, store.Frame, any, any, error) {
+	if m.frames == nil {
+		return false, store.Frame{}, nil, nil, nil
+	}
+	frames, err := m.frames.ListByPane(paneID)
+	if err != nil {
+		return false, store.Frame{}, nil, nil, err
+	}
+	for _, frame := range frames {
+		if !subagentsContainProxySender(frame.Subagents, senderPID, senderStartTime) {
+			continue
+		}
+		before := summarizeFrame(&frame)
+		// Optimistic-concurrency detach: see attachProxyRefWithRetry doc.
+		// #632 — the scan/list/update triplet is racy if two SessionEnds (or
+		// a SessionEnd concurrent with a SessionStart) land on the same
+		// parent. Reload + filter + UpsertIfUnchanged with retry.
+		detached, stored, derr := m.detachProxyRefWithRetry(frame, senderPID, senderStartTime, broadcastTs)
+		if derr != nil {
+			return false, store.Frame{}, nil, nil, derr
+		}
+		if detached {
+			return true, stored, before, summarizeFrame(&stored), nil
+		}
+		// Frame vanished or its ref was already removed by a concurrent
+		// writer. Continue scanning other frames in the pane — a different
+		// owner may still carry our sender's proxy ref.
+	}
+	return false, store.Frame{}, nil, nil, nil
+}
+
+// subagentsContainProxySender is a side-effect-free check used to short-
+// circuit frames that don't need the read-modify-write retry loop.
+func subagentsContainProxySender(refs []agentpkg.SubagentRef, senderPID int, senderStartTime string) bool {
+	for _, ref := range refs {
+		if ref.IsProxy && ref.SourcePID == senderPID && ref.SourceStartTime == senderStartTime {
+			return true
+		}
+	}
+	return false
+}
+
+// mutateSubagentsWithRetry applies an updateSubagents mutation
+// (SubagentStart add or SubagentStop remove) to frame.Subagents under
+// optimistic concurrency. Each attempt re-merges via updateSubagents on top
+// of the current baseline and issues UpsertIfUnchanged; on conflict it
+// reloads via GetByIdentity and retries, bounded by proxyUpsertMaxAttempts.
+//
+// Returns (true, stored, nil) when the mutation is persisted;
+// (false, zeroFrame, nil) when the frame was deleted mid-flight (caller
+// decides whether to fall back, continue scanning, or report frame_missing).
+// A non-nil error is only returned for storage failures or exhausted retries.
+//
+// Serves both native SubagentStart/Stop (from hook events) and proxy
+// attach (via attachProxyRefWithRetry). All three paths share the same
+// subagents_json read-modify-write cycle and would race without this helper.
+func (m *Module) mutateSubagentsWithRetry(frame store.Frame, eventName string, ref agentpkg.SubagentRef, broadcastTs int64) (bool, store.Frame, error) {
+	current := frame
+	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+		expected := current.LastSeenAt
+		current.Subagents = updateSubagents(current.Subagents, eventName, ref)
+		current.LastSeenAt = broadcastTs
+		ok, stored, err := m.frames.UpsertIfUnchanged(current, expected)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if ok {
+			return true, stored, nil
+		}
+		reloaded, err := m.frames.GetByIdentity(frame.PaneID, frame.PID, frame.ProcessStartTime)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if reloaded == nil {
+			return false, store.Frame{}, nil
+		}
+		current = *reloaded
+	}
+	return false, store.Frame{}, fmt.Errorf("subagent mutation %s: exceeded %d retries for frame %s", eventName, proxyUpsertMaxAttempts, frame.FrameID)
+}
+
+// attachProxyRefWithRetry is a thin wrapper over mutateSubagentsWithRetry
+// specialized for the proxy-attach path. Kept as a separate helper so the
+// caller at applyFrameEvent reads as "attach proxy ref" rather than
+// "SubagentStart mutation on the parent".
+func (m *Module) attachProxyRefWithRetry(parent store.Frame, ref agentpkg.SubagentRef, broadcastTs int64) (bool, store.Frame, error) {
+	return m.mutateSubagentsWithRetry(parent, "SubagentStart", ref, broadcastTs)
+}
+
+// detachProxyRefWithRetry mirrors attachProxyRefWithRetry for the SessionEnd
+// cleanup path: reload parent, filter out the matching proxy ref, persist
+// via UpsertIfUnchanged, retry on conflict. Returns (false, zeroFrame, nil)
+// when the frame was already gone or its ref was already cleaned up by a
+// concurrent writer (caller continues scanning other frames in the pane).
+func (m *Module) detachProxyRefWithRetry(owner store.Frame, senderPID int, senderStartTime string, broadcastTs int64) (bool, store.Frame, error) {
+	current := owner
+	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+		hit := -1
+		for i, ref := range current.Subagents {
+			if ref.IsProxy && ref.SourcePID == senderPID && ref.SourceStartTime == senderStartTime {
+				hit = i
+				break
+			}
+		}
+		if hit < 0 {
+			// Ref already removed by a concurrent writer.
+			return false, store.Frame{}, nil
+		}
+		expected := current.LastSeenAt
+		filtered := make([]agentpkg.SubagentRef, 0, len(current.Subagents)-1)
+		filtered = append(filtered, current.Subagents[:hit]...)
+		filtered = append(filtered, current.Subagents[hit+1:]...)
+		current.Subagents = filtered
+		current.LastSeenAt = broadcastTs
+		ok, stored, err := m.frames.UpsertIfUnchanged(current, expected)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if ok {
+			return true, stored, nil
+		}
+		reloaded, err := m.frames.GetByIdentity(owner.PaneID, owner.PID, owner.ProcessStartTime)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if reloaded == nil {
+			return false, store.Frame{}, nil
+		}
+		current = *reloaded
+	}
+	return false, store.Frame{}, fmt.Errorf("proxy detach: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, owner.FrameID)
+}
+
+// findProxyParent walks the sender's PPID ancestor chain (capped at
+// proxyMaxDepth) looking for an alive, identity-verified, cross-type frame in
+// the same pane. See plan §1.4 for full contract.
+//
+// Returns (parent, nil) when a proxy candidate is found; (nil, nil) when the
+// walk should not proxy-attach (no ancestor has a frame / same-type hard
+// stop / all cross-type candidates stale or dead / depth exceeded / proc info
+// or start_time read errors that make identity unverifiable). Non-nil error
+// is returned only when the frames store fails.
+func (m *Module) findProxyParent(req EventRequest) (*store.Frame, error) {
+	if m.frames == nil {
+		return nil, nil
+	}
+	info, err := readProcessInfoFn(req.SenderPID)
+	if err != nil {
+		return nil, nil
+	}
+	ppid := info.PPID
+	for depth := 0; depth < proxyMaxDepth; depth++ {
+		if ppid <= 1 {
+			return nil, nil
+		}
+		candidate, err := m.frames.FindByPanePID(req.TmuxPaneID, ppid)
+		if err != nil {
+			return nil, err
+		}
+		if candidate != nil {
+			// Liveness + identity gating applies to BOTH same-type and
+			// cross-type candidates (R3 fix). A stale same-type frame (PID
+			// reused, or process dead) is leftover data, not a real
+			// "re-session of an existing live sibling"; it must not
+			// hard-stop the walk or we'd strand a legitimate proxy attach
+			// to a live cross-type ancestor above it.
+			if isPidAliveFn(candidate.PID) {
+				actualStart, serr := processStartTimeFn(candidate.PID)
+				if serr != nil {
+					// v5 rule: identity unverifiable → abort walk (consistent
+					// with verify.go's "lookup error → don't infer" convention).
+					// Prevents mis-attaching to an outer cross-type ancestor
+					// when the immediate candidate's start_time is transiently
+					// unreadable.
+					return nil, nil
+				}
+				if actualStart == candidate.ProcessStartTime {
+					// Live + identity-verified candidate.
+					if candidate.AgentType == req.AgentType {
+						// Same-type live ancestor: pane already owns a live
+						// frame of our agent_type, so this SessionStart is a
+						// re-session / update of that frame — not a cross-type
+						// proxy. Hard-stop the walk here (don't continue to a
+						// cross-type grandparent that would be semantically wrong).
+						return nil, nil
+					}
+					// Cross-type live ancestor: this is our proxy parent.
+					return candidate, nil
+				}
+				// Identity mismatch (PID reused) → stale frame; continue walk
+				// to look for a real parent further up. Applies to both
+				// same-type and cross-type.
+			}
+			// Dead candidate: also continue walk; sweep will clear it.
+		}
+		// No frame at this PID — walk one more level up.
+		ancestorInfo, err := readProcessInfoFn(ppid)
+		if err != nil {
+			return nil, nil
+		}
+		if ancestorInfo.PPID == ppid {
+			return nil, nil
+		}
+		ppid = ancestorInfo.PPID
+	}
+	return nil, nil
 }

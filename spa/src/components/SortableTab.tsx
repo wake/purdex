@@ -40,7 +40,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     IconComponent,
     agentStatus,
     isUnread,
-    subagentCount,
+    subagentRefs,
     tabIndicatorStyle,
     isHostOffline,
   } = useTabDisplay(tab)
@@ -89,7 +89,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
             : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
         }`}
       >
-        <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentCount={subagentCount} isUnread={isUnread} />
+        <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} />
         {tab.locked && <Lock size={10} className="absolute bottom-0.5 right-0.5" />}
         {!isActive && isUnread && shouldShowGlobalUnreadPip(tabIndicatorStyle, agentStatus) && (
           <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
@@ -129,7 +129,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
       }`}
     >
-      <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentCount={subagentCount} isUnread={isUnread} />
+      <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} />
       <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
       <HoverTooltip placement="top">{label}</HoverTooltip>
       {isHostOffline && <WifiSlash size={12} className="text-red-400 flex-shrink-0" />}

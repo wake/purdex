@@ -1732,3 +1732,98 @@ func TestHandleStatuslineSetup_RemoveBroadcastsCleared(t *testing.T) {
 		t.Error("agent.status.cleared broadcast not seen")
 	}
 }
+
+// HB2 (Lights Phase 2 plan §2.8) — after cc SessionStart and a codex
+// SessionStart whose PPID resolves to the cc frame, the subsequent broadcast
+// payload must contain a SubagentRef with is_proxy=true, type="codex",
+// source_pid=<codex.PID>.
+func TestHandleEvent_ProxyBroadcastCarriesIsProxyTrue(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+	})
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "codex",
+		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+	})
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	// Shape the probe seams so PPID walk hits the cc frame.
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 300 {
+			return agentpkg.ProcessInfo{PID: 300, PPID: 200}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	processStartTimeFn = func(int) (string, error) { return "Sun Apr 20 01:30:00 2026", nil }
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	// cc SessionStart first.
+	for _, body := range []string{
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":300,"sender_start_time":"Sun Apr 20 01:35:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"codex"}`,
+	} {
+		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		m.handleEvent(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+		}
+	}
+
+	// Drain cc SessionStart broadcast.
+	select {
+	case <-sub.SendCh():
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for cc SessionStart broadcast")
+	}
+
+	// Second broadcast is the proxy attach.
+	select {
+	case msg := <-sub.SendCh():
+		var env struct {
+			Value string `json:"value"`
+		}
+		if err := json.Unmarshal(msg, &env); err != nil {
+			t.Fatalf("unmarshal broadcast: %v", err)
+		}
+		var payload struct {
+			Subagents []map[string]any `json:"subagents"`
+		}
+		if err := json.Unmarshal([]byte(env.Value), &payload); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		if len(payload.Subagents) != 1 {
+			t.Fatalf("subagents len = %d, want 1 (payload=%s)", len(payload.Subagents), env.Value)
+		}
+		ref := payload.Subagents[0]
+		if ref["is_proxy"] != true {
+			t.Errorf("subagents[0].is_proxy = %v, want true", ref["is_proxy"])
+		}
+		if ref["type"] != "codex" {
+			t.Errorf("subagents[0].type = %v, want codex", ref["type"])
+		}
+		srcPID, _ := ref["source_pid"].(float64)
+		if int(srcPID) != 300 {
+			t.Errorf("subagents[0].source_pid = %v, want 300", ref["source_pid"])
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for proxy broadcast")
+	}
+}
