@@ -136,7 +136,7 @@
   "settings.interface.palette_unavailable": "此環境不可用",
   "settings.interface.canvas_drop_here": "拖曳 module 到此",
   "settings.section.agent": "Agent",
-  "settings.section.editor_buffers": "編輯器暫存",
+  "settings.section.editor": "編輯器",
 
   "settings.agent.title": "Agent",
   "settings.agent.desc": "Agent 通知與 Hook 設定",

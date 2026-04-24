@@ -27,7 +27,10 @@ import {
   listContributions,
   getContribution,
 } from './settings-contribution-registry'
+import { isModuleOwnedContribution } from './settings-contribution-types'
 import { clearHostBuiltinSources } from './host-builtin-sections'
+import enLocale from '../locales/en.json'
+import zhLocale from '../locales/zh-TW.json'
 
 const FakeComponent = () => null
 
@@ -325,13 +328,15 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
     // `workspace` row stays removed (PR-3 decision 5a — nothing
     // consumes the reserved-items plumbing and the entry itself is dead).
     //
-    // Always-on: appearance / terminal / interface / sync / module-config /
-    // editor-buffers.  Electron / dev-environment / tmux-agent-monitor are
-    // gated by PlatformCapabilities / import.meta.env.DEV.
-    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'module-config', 'editor-buffers']) {
+    // Always-on: appearance / terminal / interface / sync / module-config.
+    // Electron / dev-environment / tmux-agent-monitor are gated by
+    // PlatformCapabilities / import.meta.env.DEV.
+    // `editor-buffers` was removed when the Editor module migrated to HSR —
+    // see R1-3 below.
+    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'module-config']) {
       expect(legacyIds).toContain(id)
     }
-    expect(legacyIds.length).toBeGreaterThanOrEqual(6)
+    expect(legacyIds.length).toBeGreaterThanOrEqual(5)
   })
 
   it('PR-3: reserved workspace section is no longer registered', () => {
@@ -390,10 +395,13 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
     // After the F3 follow-up `module-config` is back (tracked by #574 for
     // removal alongside globalConfig deprecation).  Reserved `workspace`
     // stays removed.
-    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'module-config', 'editor-buffers']) {
+    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'module-config']) {
       expect(legacyView).toContain(id)
     }
     expect(legacyView).not.toContain('workspace')
+    // Post-HSR: legacy view no longer carries editor-buffers (migrated to
+    // editor module's HSR settings — R1-3).
+    expect(legacyView).not.toContain('editor-buffers')
   })
 })
 
@@ -527,5 +535,63 @@ describe('ModuleDefinition.globalConfig / workspaceConfig deprecation (PR-5)', (
       (c) => String(c[0]).includes('retrymod') && String(c[0]).includes('deprecated'),
     ).length
     expect(afterHits).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Commit 1: Editor HSR migration — the built-in Editor module's settings
+// now owns 3 HSR contributions (editor / workspace-home-path /
+// host-home-path) and the legacy `editor-buffers` registerSettingsSection
+// is gone.  Exercised both through the module registry surface and through
+// the two locale JSONs to prevent silent key drift.
+// ---------------------------------------------------------------------------
+
+describe('Commit 1: Editor HSR migration', () => {
+  beforeEach(() => {
+    clearAll()
+  })
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).electronAPI
+    clearAll()
+  })
+
+  it('R1-1: editor module declares exactly 3 HSR settings entries', () => {
+    registerBuiltinModules()
+    const editor = getModules().find((m) => m.id === 'editor')
+    expect(editor).toBeDefined()
+    expect(editor?.settings?.length).toBe(3)
+  })
+
+  it('R1-2: editor.editor contribution is purdex-scope', () => {
+    registerBuiltinModules()
+    const entry = getContribution('editor.editor')
+    expect(entry).toBeDefined()
+    expect(entry?.scope).toBe('purdex')
+  })
+
+  it('R1-3: legacy editor-buffers contribution is gone from every scope', () => {
+    registerBuiltinModules()
+    expect(getSettingsSections().find((s) => s.id === 'editor-buffers')).toBeUndefined()
+    const purdex = listContributions('purdex')
+    expect(purdex.find((c) => c.localId === 'editor-buffers')).toBeUndefined()
+    expect(purdex.find((c) => c.id.endsWith('.editor-buffers'))).toBeUndefined()
+  })
+
+  it('R1-4: both locales carry the new settings.section.editor key', () => {
+    const en = enLocale as Record<string, string>
+    const zh = zhLocale as Record<string, string>
+    expect(en['settings.section.editor']).toBe('Editor')
+    expect(zh['settings.section.editor']).toBe('編輯器')
+    // The old `editor_buffers` key must be gone in both.
+    expect(en['settings.section.editor_buffers']).toBeUndefined()
+    expect(zh['settings.section.editor_buffers']).toBeUndefined()
+  })
+
+  it('R1-5: editor.editor contribution is module-owned (carries the puzzle-piece marker)', () => {
+    registerBuiltinModules()
+    const entry = getContribution('editor.editor')
+    expect(entry).toBeDefined()
+    expect(isModuleOwnedContribution(entry!)).toBe(true)
   })
 })

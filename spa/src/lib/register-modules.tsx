@@ -35,9 +35,9 @@ import { EditorPane } from '../components/editor/EditorPane'
 import { ImagePreviewPane } from '../components/editor/ImagePreviewPane'
 import { PdfPreviewPane } from '../components/editor/PdfPreviewPane'
 import { EditorNewTabSection } from '../components/editor/EditorNewTabSection'
-import { BufferListSection } from '../components/editor/BufferListSection'
 import { EditorHomePathWorkspaceSection } from '../components/editor/EditorHomePathWorkspaceSection'
 import { EditorHomePathHostSection } from '../components/editor/EditorHomePathHostSection'
+import { EditorPurdexSettingsSection } from '../components/settings/EditorPurdexSettingsSection'
 import { InAppBackend } from './fs-backend-inapp'
 import { DaemonBackend } from './fs-backend-daemon'
 import { LocalBackend } from './fs-backend-local'
@@ -185,6 +185,13 @@ export function registerBuiltinModules(): void {
     ],
     settings: [
       {
+        localId: 'editor',
+        scope: 'purdex',
+        order: 9,
+        labelKey: 'settings.section.editor',
+        component: EditorPurdexSettingsSection,
+      },
+      {
         localId: 'workspace-home-path',
         scope: 'workspace',
         order: 0,
@@ -320,13 +327,6 @@ export function registerBuiltinModules(): void {
     order: 8,
     component: ModulesSwitchboardSection,
   })
-  registerSettingsSection({
-    id: 'editor-buffers',
-    label: 'settings.section.editor_buffers',
-    order: 9,
-    component: BufferListSection,
-  })
-
   // Interface subsections
   registerInterfaceSubsection({
     id: 'new-tab',

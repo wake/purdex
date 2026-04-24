@@ -136,7 +136,7 @@
   "settings.interface.palette_unavailable": "unavailable here",
   "settings.interface.canvas_drop_here": "Drop module here",
   "settings.section.agent": "Agent",
-  "settings.section.editor_buffers": "Editor Buffers",
+  "settings.section.editor": "Editor",
 
   "settings.agent.title": "Agent",
   "settings.agent.desc": "Agent notification and hook settings",
