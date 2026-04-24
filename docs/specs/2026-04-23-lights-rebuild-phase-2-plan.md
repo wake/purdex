@@ -1,6 +1,6 @@
-# Phase 2 TDD Plan v4 — L3 Subagent 升級 + Proxy + Frame Idle Sweep
+# Phase 2 TDD Plan v5 — L3 Subagent 升級 + Proxy + Frame Idle Sweep
 
-- **Date**: 2026-04-24（v1→v2: `review-mobwvdpq-w6kftz`; v2→v3: `review-mobxgl16-mfkzav`; v3→v4: `review-mocgelr5-z0v0a4`）
+- **Date**: 2026-04-24（v1→v2: `review-mobwvdpq-w6kftz`; v2→v3: `review-mobxgl16-mfkzav`; v3→v4: `review-mocgelr5-z0v0a4`; v4→v5: `review-mocgnzun-lu31px`）
 - **Spec**: `docs/specs/2026-04-23-lights-rebuild-spec.md` §6
 - **Worktree**: `lights-phase-2`（branch `worktree-lights-phase-2`）
 - **依賴**: Phase 1（merged at `d1d60b2c`）+ Hook Events PR #616（merged at `fd9f8f8f`, alpha.217）
@@ -186,14 +186,19 @@ func (m *Module) findProxyParent(req EventRequest) (*store.Frame, error) {
             if candidate.AgentType == req.AgentType {
                 return nil, nil
             }
-            // v4 identity rule: 不只 PID alive，也要 process_start_time match
-            // 避免 PID 重用誤掛到舊 stale frame。
+            // v4 identity rule + v5 error handling:
+            // 1. alive + start_time 讀成功且 match → 命中 return
+            // 2. alive + start_time 讀成功但 mismatch → stale frame，跳過此 candidate 續爬
+            // 3. alive + start_time 讀失敗 → identity 無法確認，abort walk（與 verify.go 慣例一致）
             if isPidAliveFn(candidate.PID) {
                 actualStart, serr := processStartTimeFn(candidate.PID)
-                if serr == nil && actualStart == candidate.ProcessStartTime {
-                    return candidate, nil // 命中：cross-type + alive + start_time match
+                if serr != nil {
+                    return nil, nil // v5: read error abort walk, fallback 建新 frame
                 }
-                // start_time mismatch or read error → candidate 是 stale frame，跳過續爬
+                if actualStart == candidate.ProcessStartTime {
+                    return candidate, nil // 命中：cross-type + alive + identity match
+                }
+                // 明確 mismatch → 續爬（可能上一層才是真正 parent）
             }
         }
         // 沒命中 alive parent，往上一層
@@ -210,12 +215,15 @@ func (m *Module) findProxyParent(req EventRequest) (*store.Frame, error) {
 }
 ```
 
-**Walk 規則**（v4 rewrite）：
+**Walk 規則**（v5 rewrite）：
 - 每層 `FindByPanePID(paneID, ppid)` 取 candidate
 - `candidate == nil`（該 ppid 在此 pane 沒 frame）→ 續爬上一層
 - **Same-type 硬停**：`candidate.AgentType == req.AgentType` → 立即 `return nil`（不續爬，不 proxy）。語意：pane 內有同類 frame 意味新 hook 是 re-session / update，不是 proxy。
-- **Identity check**：`candidate` 要同時滿足 `isPidAliveFn(pid)` + `processStartTimeFn(pid) == candidate.ProcessStartTime` 才算命中
-  - Alive 但 start_time mismatch → candidate 是 stale（真正進程是 PID 重用的另一個），跳過該 candidate 續爬（**不** return nil，因為可能上層有真正 parent）
+- **Identity check（v5 三分支）**：
+  - Candidate alive + start_time 讀成功且 match → 命中 return
+  - Candidate alive + start_time **明確 mismatch**（讀成功但值不同）→ stale frame，跳過該 candidate 續爬（上層可能有真正 parent）
+  - Candidate alive + start_time **讀取失敗**（serr != nil）→ identity 無法確認，**abort walk return nil** fallback 建新 frame（與 `verify.go` 慣例一致：lookup error 不推理）
+  - Candidate dead → 不算命中，續爬上一層（dead frame 由 sweep 清）
 - **Depth 定義**：`proxyMaxDepth = 5` 嚴格代表「檢查 5 個 ancestor」（depth 迴圈跑 5 次）。第 6 層的 ancestor 不會被檢查；超深 chain 一律 fallback 建新 frame
 
 **觸發條件**（全部成立才算 proxy）：
@@ -608,6 +616,7 @@ interface Props {
 | PR12 | `TestProxySubagent_PartialChainOnReadError` | codex SessionStart PPID 200；readProcessInfoFn(200) 回 error | 放棄 walk，fallback 建新 codex frame |
 | **PR13 v4-new** | `TestProxySubagent_SkipsStaleFrameByStartTimeMismatch` | cc frame PID 100 start "t100"；codex SessionStart PPID=100；`isPidAliveFn(100)=true` 但 `processStartTimeFn(100)="t_different"`（PID 重用新進程） | 不 proxy 到 stale cc frame；walk 續爬上層，上層 PPID 亦無 frame → fallback 建新 codex frame；stale cc.LastSeenAt 不被刷新 |
 | **PR14 v4-new** | `TestProxySubagent_SameTypeAncestorStopsWalk` | pane 內 cc frame PID 100 + codex frame PID 200 PPID 100；codex SessionStart PID 400 PPID 300 PPID 200 (companion 串到 codex parent) | 遇 same-type codex frame 硬停，不續爬到 cc；建新 codex frame（不 proxy） |
+| **PR15 v5-new** | `TestProxySubagent_AbortsWalkOnStartTimeReadError` | cc frame PID 100 start "t100"；codex SessionStart PPID 100；`isPidAliveFn(100)=true` 但 `processStartTimeFn(100)` 回 error（暫時性 lstat / ps 失敗） | `findProxyParent` return nil；建新 codex frame（**不** 續爬到更上層的其他 cross-type ancestor） |
 
 ### 2.6 SessionEnd Proxy Cleanup（PR-2b）
 
@@ -706,8 +715,8 @@ interface Props {
 - 跑 `go test ./internal/store/...` 綠
 
 #### Commit 7 — `feat(module/agent): detect proxy subagents via PPID ancestor walk`
-- 紅：PR1-PR12 → 失敗
-- 綠：`frame_ops.go` applyFrameEvent 加 proxy 偵測分支 + `findProxyParent` helper（depth 5 PPID walk）+ proxyIDFor helper
+- 紅：PR1-PR15（含 v4 新增 PR13/PR14 + v5 新增 PR15）→ 失敗
+- 綠：`frame_ops.go` applyFrameEvent 加 proxy 偵測分支 + `findProxyParent` helper（depth 5 PPID walk + v5 三分支 identity check）+ proxyIDFor helper
 - 跑 `go test ./internal/module/agent/...` 綠
 
 #### Commit 8 — `feat(module/agent): remove proxy ref on SessionEnd`
@@ -767,8 +776,8 @@ interface Props {
 |---|---|---|
 | `internal/store/frames.go` | `DeleteIfUnchanged` method | +20 |
 | `internal/store/frames_test.go` | F4-F6 | +50 |
-| `internal/module/agent/frame_ops.go` | proxy 偵測分支 + `findProxyParent`（tree walk depth 5 + start_time identity check + same-type hard stop）+ `removeProxyRefForSender` | +140 |
-| `internal/module/agent/frame_ops_test.go` | PR1-PR14 + SE1-SE3（14 proxy + 3 session end = 17 case，含 tree walk mocks） | +420 |
+| `internal/module/agent/frame_ops.go` | proxy 偵測分支 + `findProxyParent`（tree walk depth 5 + start_time identity 三分支 + same-type hard stop）+ `removeProxyRefForSender` | +145 |
+| `internal/module/agent/frame_ops_test.go` | PR1-PR15 + SE1-SE3（15 proxy + 3 session end = 18 case，含 tree walk + error mocks） | +440 |
 | `internal/module/agent/sweep.go` | nowFn + threshold + 第三條規則 + afterFrameCleared 抽出 + StopWatch fix | +50 |
 | `internal/module/agent/sweep_test.go` | IS1-IS5 | +160 |
 | `internal/module/agent/handler_test.go` | HB2 | +40 |
@@ -798,7 +807,7 @@ interface Props {
 - **不做** boot hard-fail 舊格式偵測（同上，成本 > 收益）
 - **不加** `SubagentRef.Status` / `SubagentRef.LastSeenAt`（Phase 4/5 再評估）
 - **不做** proxy ref 的獨立 liveness 檢查（Phase 3 / 4b；SessionEnd 清理已涵蓋大多數 case）
-- **不做** PPID 樹狀遍歷（Phase 3/4 再加；單層 PPID 命中率實測先看）
+- **不做** 無界 / 泛化 PPID 樹狀遍歷（Phase 2 範圍內**只接受 `proxyMaxDepth = 5` 的有限深度 walk**；Phase 3/4 視實測調整深度 or 加權策略，不在 Phase 2 改）
 - **不處理** 非 SessionStart 的 proxy 事件（Phase 3/4）
 - **不改** `/api/agent/monitor/*` endpoint shape（Phase 5 Inspector 統一）
 - **不重整** `handler.go` / `module.go`（Phase 2 是 frame_ops / sweep 局部增加）
@@ -843,7 +852,13 @@ interface Props {
 
 - [ ] 5 個 commits 符合規範（6-10）
 - [ ] 每個 commit 邊界 `go build ./...` + tests 綠
-- [ ] `go test ./...` 綠（F4-F6 / PR1-PR7 / SE1-SE3 / IS1-IS5 / HB2 共 19 測試）
+- [ ] `go test ./...` 綠 — 必跑全集合：
+  - F4-F6（3 個 DeleteIfUnchanged store tests）
+  - **PR1-PR15**（15 個 proxy tests，含 v4 PR13/PR14、v5 PR15 的 identity + error regression）
+  - SE1-SE3（3 個 SessionEnd proxy cleanup tests）
+  - IS1-IS5（5 個 idle sweep tests）
+  - HB2（1 個 handler broadcast IsProxy smoke）
+  - **小計：27 個新測試**
 - [ ] `cd spa && pnpm run lint && pnpm run build && npx vitest run` 綠
 - [ ] PR diff 檔案：§4 PR-2b 表格列出的檔案
 - [ ] 手動場景：
@@ -942,6 +957,16 @@ interface Props {
 | **新增 PR14 `SameTypeAncestorStopsWalk`** | v3 #2 修正的回歸測試：同 type 硬停 |
 | `findProxyParent` 行數 +10（start_time check + stale frame 跳過邏輯） | v3 #1+#2 實作 |
 | 測試從 PR1-PR12 擴到 PR1-PR14 | 2 個新 case |
+
+### v4 → v5
+
+| 改動 | 原因 |
+|---|---|
+| **`processStartTimeFn` 讀取失敗改 abort walk**（§1.4 identity 三分支：命中 / mismatch 續爬 / error abort） | Codex v4 #1: v4 把 read error 跟 mismatch 混用，暫時錯誤會誤掛更上層；與 `verify.go` 慣例（lookup error 不推理）不一致 |
+| **§5 刪「不做 PPID 樹狀遍歷」** 改「不做無界 / 泛化樹狀遍歷，Phase 2 只接受 depth=5」 | Codex v4 #2: v3 納入 ancestor walk 為正式方案，舊 §5 禁令未同步 → subagent 看 §5 可能 rollback |
+| **§3 Commit 7 TDD gate 改 PR1-PR15** | Codex v4 #3: v4 新增 PR13/PR14 未進 commit 必跑集合 |
+| **§7 PR-2b 驗收列明必跑總集合** 27 測試（F4-F6 / PR1-PR15 / SE1-SE3 / IS1-IS5 / HB2） | Codex v4 #3: v4 驗收仍寫「19 測試」舊數 |
+| **新增 PR15 `AbortsWalkOnStartTimeReadError`** | v4 #1 修正的回歸測試 |
 
 ---
 
