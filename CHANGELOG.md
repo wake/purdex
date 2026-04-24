@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.222] - 2026-04-25
+
+### Feat(agent): add tmux metadata dynamic titles (#634)
+
+Agent dynamic title 改以 tmux active pane metadata 作為 source of truth，並在 Host > Agents 補上 `allow-set-title` integration 狀態與安裝/移除控制。
+
+- 後端新增 tmux active pane metadata 查詢與 sanitize，讓 session/tab display 可從 pane title、window name 與 pane command 推導 agent title。
+- Host > Agents 新增 `Agent title` 區塊，可檢查/安裝/移除 Purdex managed `allow-set-title` marker block；remove 不強制關閉 tmux runtime option。
+- `allow-set-title` runtime check 改用 `tmux show-options -w -g -q -v`，避免新版 tmux 的 `show-window-option -q` 不支援錯誤。
+- SPA title preference、agent store 與 sync contributor 同步支援新的 dynamic title source。
+
 ## [1.0.0-alpha.221] - 2026-04-25
 
 ### Feat(agent): Phase 2 PR-2b — proxy detection + idle sweep + SubagentDots visual (#631)
