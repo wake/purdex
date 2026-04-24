@@ -85,7 +85,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         onContextMenu={handleContextMenu}
         className={`group relative flex items-center justify-center w-9 rounded-[6px] cursor-pointer transition-colors duration-150 ease-out ${
           isActive
-            ? 'text-white bg-surface-active border border-accent-muted'
+            ? 'text-white bg-surface-active border border-transparent'
             : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
         }`}
       >
@@ -125,7 +125,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       onContextMenu={handleContextMenu}
       className={`group relative flex items-center gap-1.5 pl-2 pr-1 text-xs whitespace-nowrap cursor-pointer transition-colors duration-150 ease-out rounded-[6px] ${
         isActive
-          ? 'text-white bg-surface-active border border-accent-muted'
+          ? 'text-white bg-surface-active border border-transparent'
           : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
       }`}
     >
