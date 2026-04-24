@@ -318,6 +318,42 @@ func TestFirstAliveAgentInTree_RegistryOrder(t *testing.T) {
 	}
 }
 
+// TestFirstAliveAgentInTree_UsesActivePanePID is a regression guard for
+// PR #638 codex review round 1 P2: FirstAliveAgentInTree must resolve the
+// pane PID via ActivePanePID (which uses `tmux display-message` and honors
+// pane id targets exactly) rather than PanePID (which uses `tmux list-panes`
+// that resolves a pane id target to its containing window and returns the
+// FIRST listed pane — wrong for multi-pane windows where the hook came from
+// a non-first sibling pane).
+//
+// Setup: distinct PanePID (100) and ActivePanePID (200) for the same target.
+// Identifier matches PID 200 only. If the implementation regresses to PanePID,
+// it will probe pid=100 (sibling pane), find no match, and return ("", 0, nil).
+func TestFirstAliveAgentInTree_UsesActivePanePID(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	fake.SetPanePID("%5", "100")       // would-be wrong PID (list-panes first row sibling)
+	fake.SetActivePanePID("%5", "200") // correct PID (display-message of pane %5)
+	p := New(fake)
+	p.RegisterIdentifier("cc", func(info agentpkg.ProcessInfo) bool {
+		return info.PID == 200
+	})
+	stubLivenessSeams(t)
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, ExePath: "/bin/irrelevant"}, nil
+	}
+	listProcessTreeFn = func() (map[int][]int, error) {
+		return map[int][]int{200: {}}, nil
+	}
+
+	agentType, pid, err := p.FirstAliveAgentInTree("%5")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if agentType != "cc" || pid != 200 {
+		t.Fatalf("expected (cc, 200, nil) proving ActivePanePID path; got (%q, %d, %v) — regression to PanePID would yield (\"\", 0, nil)", agentType, pid, err)
+	}
+}
+
 func TestRegisterIdentifier_PreservesOrder(t *testing.T) {
 	p := New(tmux.NewFakeExecutor())
 	p.RegisterIdentifier("codex", func(info agentpkg.ProcessInfo) bool { return false })

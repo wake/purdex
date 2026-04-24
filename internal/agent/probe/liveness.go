@@ -32,12 +32,20 @@ var (
 // agent_type after daemon restart, when the hook event's lookup chain
 // (GetByIdentity → findProxyParent → FindByPanePID) all miss; the caller is
 // expected to fail-soft on errors.
+//
+// Pane PID resolution: uses ActivePanePID rather than PanePID. PanePID is
+// implemented via `tmux list-panes -t <target>`, which resolves a pane id
+// target (e.g. `%5`) to its containing window and then returns the FIRST
+// pane's PID — wrong for multi-pane windows where the hook came from a
+// non-first sibling. ActivePanePID uses `tmux display-message -p -t <target>
+// '#{pane_pid}'`, which honors pane id targets exactly. (PR #638 codex
+// review round 1 P2 fix.)
 func (p *Prober) FirstAliveAgentInTree(target string) (string, int, error) {
 	if p.tmux == nil {
 		return "", 0, nil
 	}
 
-	panePIDRaw, err := p.tmux.PanePID(target)
+	panePIDRaw, err := p.tmux.ActivePanePID(target)
 	if err != nil {
 		return "", 0, err
 	}
