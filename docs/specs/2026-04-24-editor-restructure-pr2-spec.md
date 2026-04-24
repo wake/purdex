@@ -544,28 +544,32 @@ aligned with PR #617's module-gating philosophy.
 accept this without throwing. `useTabStore.setPaneContent` already
 accepts any `PaneContent` — no type narrowing needed there.
 
-#### 4.9.6 `useEditorSettingsStore.merge` payload shape (v1.4 CRIT fix for R4-F1)
+#### 4.9.6 `useEditorSettingsStore.merge` payload shape (v1.4 — R4-F1 WITHDRAWN as false positive)
 
-Zustand's `persist` middleware passes the FULL persisted envelope
-`{ state, version }` to the `merge` function — not just the state
-object. v1.3's implementation sanitized `persisted` directly,
-dropping every saved field on rehydrate.
+**Resolution**: after implementation started, the assigned engineer
+verified that Zustand's `persist` middleware at
+`node_modules/zustand/esm/middleware.mjs:405` returns
+`[false, deserializedStorageValue.state]` — i.e. the `merge` function
+receives the **unwrapped** state, not the envelope. Empirically
+reproduced: v1.3's `sanitize(persisted)` correctly restores
+non-default values on reload; applying the originally-prescribed
+`persisted.state` unwrap actually **breaks** persist (the new
+`stored` is `undefined`, sanitize returns `{}`, all defaults).
 
-Correct shape:
-```
-merge: (persisted, current) => {
-  const stored = (persisted as { state?: unknown } | null)?.state
-  // sanitize `stored` field-by-field, fall back to current for invalid
-  return { ...current, ...sanitized }
-}
-```
+R4 reviewers independently diagnosed this as a CRIT bug; it is not.
+The false-positive consensus is a useful lesson: four independent
+reviewers pattern-matched against a different persist library's
+behavior and none verified against the actual Zustand source.
 
-Test coverage gap to close (S1-9): existing tests S1-7 / S1-8 only
-exercise malformed and null payloads, so they never caught this bug.
-The regression test must (a) save non-default values via
-`useEditorSettingsStore.setWordWrap('off')` etc., (b) simulate app
-reload by re-creating the store from the persisted `localStorage`
-snapshot, and (c) assert the non-default values survive.
+Existing `useModuleEnabledStore.ts:111-113` confirms the repo
+convention (`const p = persisted as {enabled?: unknown}` directly —
+no envelope unwrap).
+
+**Residual value**: S1-9 is retained as a **regression guard** —
+a happy-path rehydrate test that locks in the currently-working
+behavior. It asserts that non-default values written via the store's
+setters survive a simulated reload. Future refactors of `merge` that
+would reintroduce the misdiagnosed bug will fail this test.
 
 #### 4.9.7 NewTabPage empty state when all columns are filtered out (v1.4 fix for R4-F8)
 
@@ -841,11 +845,10 @@ All verification commands run from the `spa/` subdirectory:
 
 All fix-up work lands in a single commit after Commits 1-3. 7 new tests.
 
-- [ ] **F1** `useEditorSettingsStore.merge` correctly reads
-      `persisted.state` (not `persisted` directly). S1-9 asserts
-      happy-path rehydrate: non-default values written, store
-      state.version bumps persisted payload, rehydrate restores
-      them.
+- [ ] **F1 (WITHDRAWN)** persist is not broken — R4 diagnosis
+      was a false positive (Zustand passes unwrapped state to
+      `merge`; see §4.9.6). S1-9 retained as a regression guard
+      asserting happy-path rehydrate of non-default values.
 - [ ] **F4** `handleRenameConfirm` pre-checks destination with
       `backend.stat`; if exists, inline error via
       `editor.buffers.rename_exists_error`; rename aborted (§4.5).

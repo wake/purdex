@@ -770,20 +770,46 @@ Delete: nothing.
 
 ### 5b.2 TDD steps
 
-**Step 1 — Persist fix (F1)**
+**Step 1 — Persist regression guard (F1 withdrawn; S1-9 retained)**
 
-Write S1-9 first. Existing S1-7/S1-8 mock the envelope poorly for a happy path — S1-9 must (a) call setters on the live store, (b) read `localStorage.getItem(STORAGE_KEYS.EDITOR_SETTINGS)` and confirm it's an envelope string, (c) simulate reload by re-initializing the store via whatever Zustand `persist` mechanism the existing pattern uses (likely resetting module-level state or explicitly calling the internal rehydrate). Expect failure against v1.3 code (returns defaults).
+Spec v1.4 §4.9.6 withdraws F1 after implementation verified that
+Zustand's `merge` receives unwrapped state — the originally-
+prescribed "fix" (unwrapping `persisted.state`) would break persist
+entirely. Current v1.3 code is correct.
 
-Fix: in `useEditorSettingsStore.ts` `merge`, replace
+**S1-9 is still written**, but as a regression guard — it asserts
+happy-path rehydrate works (non-defaults survive reload), so any
+future refactor that introduces the misdiagnosed bug fails this
+test. **Do not modify** `useEditorSettingsStore.ts`.
+
+Test shape:
 ```
-sanitize(persisted, current)
+// Write non-defaults via the public API
+useEditorSettingsStore.getState().setWordWrap('off')
+useEditorSettingsStore.getState().setTabSize(4)
+useEditorSettingsStore.getState().setFontSize(18)
+
+// Simulate reload: read the localStorage envelope, reset the
+// in-memory store (setState to initial defaults via merge-mode),
+// then trigger rehydrate.
+const raw = localStorage.getItem(STORAGE_KEYS.EDITOR_SETTINGS)
+expect(raw).toBeTruthy()
+expect(JSON.parse(raw!)).toMatchObject({ state: { wordWrap: 'off', tabSize: 4, fontSize: 18 } })
+
+// Reset in-memory state (mirror beforeEach behavior)
+useEditorSettingsStore.setState(DEFAULT_EDITOR_SETTINGS, false)
+expect(useEditorSettingsStore.getState().wordWrap).toBe('on')  // confirm reset
+
+// Rehydrate from the persisted payload
+await useEditorSettingsStore.persist.rehydrate()
+const s = useEditorSettingsStore.getState()
+expect(s.wordWrap).toBe('off')
+expect(s.tabSize).toBe(4)
+expect(s.fontSize).toBe(18)
 ```
-with
-```
-const stored = (persisted as { state?: unknown } | null)?.state
-sanitize(stored, current)
-```
-Run S1-9: passes. S1-7 + S1-8 still pass (sanitize handles null / malformed `stored`).
+
+S1-9 passes immediately against current v1.3 code. S1-7 + S1-8
+remain unchanged.
 
 **Step 2 — Rename existence check (F4)**
 
