@@ -272,6 +272,60 @@ func (s *FramesStore) DeleteIfUnchanged(frameID string, lastSeenAt int64) (bool,
 	return affected > 0, nil
 }
 
+// UpsertIfUnchanged updates an existing frame atomically, returning
+// (false, zeroFrame, nil) if the row's last_seen_at no longer matches
+// expectedLastSeenAt — i.e. a concurrent writer changed the row between our
+// read and write. Used by subagents-mutation paths (proxy attach / detach /
+// SubagentStart / SubagentStop) to serialize read-modify-write cycles.
+//
+// Unlike Upsert, this is update-only: the frame must already exist and
+// frame.FrameID must be set. Caller retries by reloading the row, re-merging
+// the subagents list against the new baseline, and calling again.
+func (s *FramesStore) UpsertIfUnchanged(frame Frame, expectedLastSeenAt int64) (bool, Frame, error) {
+	if frame.FrameID == "" {
+		return false, Frame{}, fmt.Errorf("UpsertIfUnchanged: frame.FrameID required")
+	}
+	if frame.Subagents == nil {
+		frame.Subagents = []agentpkg.SubagentRef{}
+	}
+	subagentsJSON, err := json.Marshal(frame.Subagents)
+	if err != nil {
+		return false, Frame{}, fmt.Errorf("marshal subagents: %w", err)
+	}
+	res, err := s.db.Exec(`
+		UPDATE agent_frames SET
+			agent_type = ?,
+			ppid = ?,
+			parent_frame_id = ?,
+			subagents_json = ?,
+			status = ?,
+			started_at = ?,
+			last_seen_at = ?,
+			verified = ?
+		WHERE frame_id = ? AND last_seen_at = ?
+	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID),
+		string(subagentsJSON), string(frame.Status), frame.StartedAt, frame.LastSeenAt,
+		boolToInt(frame.Verified), frame.FrameID, expectedLastSeenAt)
+	if err != nil {
+		return false, Frame{}, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, Frame{}, err
+	}
+	if affected == 0 {
+		return false, Frame{}, nil
+	}
+	stored, err := s.GetByIdentity(frame.PaneID, frame.PID, frame.ProcessStartTime)
+	if err != nil {
+		return false, Frame{}, err
+	}
+	if stored == nil {
+		return false, Frame{}, sql.ErrNoRows
+	}
+	return true, *stored, nil
+}
+
 func collectFrames(rows *sql.Rows) ([]Frame, error) {
 	var frames []Frame
 	for rows.Next() {

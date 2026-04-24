@@ -16,6 +16,14 @@ import (
 // cost on a genuinely deep chain.
 const proxyMaxDepth = 5
 
+// proxyUpsertMaxAttempts caps optimistic-concurrency retries when two
+// near-simultaneous proxy attaches (or detaches) race on the same parent
+// frame's subagents list. Each attempt reloads the parent row, re-merges
+// the ref through updateSubagents, and re-issues UpsertIfUnchanged. After
+// exhausting attempts the caller surfaces an error — production scenarios
+// that hit this limit are genuine hot loops, not ordinary concurrency.
+const proxyUpsertMaxAttempts = 3
+
 type FrameTraceMeta struct {
 	FrameID       string
 	ParentFrameID string
@@ -156,21 +164,29 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 				SourceStartTime: req.SenderStartTime,
 				IsProxy:         true,
 			}
-			parent.Subagents = updateSubagents(parent.Subagents, "SubagentStart", ref)
-			parent.LastSeenAt = broadcastTs
-			stored, err := m.frames.Upsert(*parent)
-			if err != nil {
-				return nil, FrameTraceMeta{}, err
+			// Optimistic-concurrency attach: read-modify-write on the parent
+			// row is racy when two proxy SessionStarts land on the same
+			// parent simultaneously (issue #632). UpsertIfUnchanged +
+			// reload-on-conflict serializes the writes without a lock; the
+			// retry loop merges both refs before persistence.
+			attached, stored, aerr := m.attachProxyRefWithRetry(*parent, ref, broadcastTs)
+			if aerr != nil {
+				return nil, FrameTraceMeta{}, aerr
 			}
-			projection, err := m.projectPane(req.TmuxPaneID)
-			return projection, FrameTraceMeta{
-				FrameID:       stored.FrameID,
-				ParentFrameID: stored.ParentFrameID,
-				Decision:      "updated_frame",
-				Reason:        "proxy_subagent_attached",
-				Before:        parentBefore,
-				After:         summarizeFrame(&stored),
-			}, err
+			if attached {
+				projection, err := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					FrameID:       stored.FrameID,
+					ParentFrameID: stored.ParentFrameID,
+					Decision:      "updated_frame",
+					Reason:        "proxy_subagent_attached",
+					Before:        parentBefore,
+					After:         summarizeFrame(&stored),
+				}, err
+			}
+			// Parent vanished mid-flight (swept or deleted by concurrent
+			// SessionEnd). Fall through to the legacy create-new-frame path
+			// so the sender still gets represented somewhere.
 		}
 	}
 
@@ -489,29 +505,113 @@ func (m *Module) removeProxyRefForSender(paneID string, senderPID int, senderSta
 		return false, store.Frame{}, nil, nil, err
 	}
 	for _, frame := range frames {
+		if !subagentsContainProxySender(frame.Subagents, senderPID, senderStartTime) {
+			continue
+		}
+		before := summarizeFrame(&frame)
+		// Optimistic-concurrency detach: see attachProxyRefWithRetry doc.
+		// #632 — the scan/list/update triplet is racy if two SessionEnds (or
+		// a SessionEnd concurrent with a SessionStart) land on the same
+		// parent. Reload + filter + UpsertIfUnchanged with retry.
+		detached, stored, derr := m.detachProxyRefWithRetry(frame, senderPID, senderStartTime, broadcastTs)
+		if derr != nil {
+			return false, store.Frame{}, nil, nil, derr
+		}
+		if detached {
+			return true, stored, before, summarizeFrame(&stored), nil
+		}
+		// Frame vanished or its ref was already removed by a concurrent
+		// writer. Continue scanning other frames in the pane — a different
+		// owner may still carry our sender's proxy ref.
+	}
+	return false, store.Frame{}, nil, nil, nil
+}
+
+// subagentsContainProxySender is a side-effect-free check used to short-
+// circuit frames that don't need the read-modify-write retry loop.
+func subagentsContainProxySender(refs []agentpkg.SubagentRef, senderPID int, senderStartTime string) bool {
+	for _, ref := range refs {
+		if ref.IsProxy && ref.SourcePID == senderPID && ref.SourceStartTime == senderStartTime {
+			return true
+		}
+	}
+	return false
+}
+
+// attachProxyRefWithRetry mutates parent.Subagents to include ref, persists
+// via UpsertIfUnchanged, and reloads + re-merges on concurrent-write
+// conflicts. Returns (true, stored, nil) when the ref is persisted;
+// (false, zeroFrame, nil) when the parent row was deleted mid-flight and
+// the caller should fall back to the legacy create-new-frame path.
+func (m *Module) attachProxyRefWithRetry(parent store.Frame, ref agentpkg.SubagentRef, broadcastTs int64) (bool, store.Frame, error) {
+	current := parent
+	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+		expected := current.LastSeenAt
+		current.Subagents = updateSubagents(current.Subagents, "SubagentStart", ref)
+		current.LastSeenAt = broadcastTs
+		ok, stored, err := m.frames.UpsertIfUnchanged(current, expected)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if ok {
+			return true, stored, nil
+		}
+		reloaded, err := m.frames.GetByIdentity(parent.PaneID, parent.PID, parent.ProcessStartTime)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if reloaded == nil {
+			// Parent was deleted by a concurrent sweep or SessionEnd. The
+			// caller falls back to building a standalone frame.
+			return false, store.Frame{}, nil
+		}
+		current = *reloaded
+	}
+	return false, store.Frame{}, fmt.Errorf("proxy attach: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, parent.FrameID)
+}
+
+// detachProxyRefWithRetry mirrors attachProxyRefWithRetry for the SessionEnd
+// cleanup path: reload parent, filter out the matching proxy ref, persist
+// via UpsertIfUnchanged, retry on conflict. Returns (false, zeroFrame, nil)
+// when the frame was already gone or its ref was already cleaned up by a
+// concurrent writer (caller continues scanning other frames in the pane).
+func (m *Module) detachProxyRefWithRetry(owner store.Frame, senderPID int, senderStartTime string, broadcastTs int64) (bool, store.Frame, error) {
+	current := owner
+	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
 		hit := -1
-		for i, ref := range frame.Subagents {
-			if ref.SourcePID == senderPID && ref.SourceStartTime == senderStartTime {
+		for i, ref := range current.Subagents {
+			if ref.IsProxy && ref.SourcePID == senderPID && ref.SourceStartTime == senderStartTime {
 				hit = i
 				break
 			}
 		}
 		if hit < 0 {
-			continue
+			// Ref already removed by a concurrent writer.
+			return false, store.Frame{}, nil
 		}
-		before := summarizeFrame(&frame)
-		filtered := make([]agentpkg.SubagentRef, 0, len(frame.Subagents)-1)
-		filtered = append(filtered, frame.Subagents[:hit]...)
-		filtered = append(filtered, frame.Subagents[hit+1:]...)
-		frame.Subagents = filtered
-		frame.LastSeenAt = broadcastTs
-		stored, err := m.frames.Upsert(frame)
+		expected := current.LastSeenAt
+		filtered := make([]agentpkg.SubagentRef, 0, len(current.Subagents)-1)
+		filtered = append(filtered, current.Subagents[:hit]...)
+		filtered = append(filtered, current.Subagents[hit+1:]...)
+		current.Subagents = filtered
+		current.LastSeenAt = broadcastTs
+		ok, stored, err := m.frames.UpsertIfUnchanged(current, expected)
 		if err != nil {
-			return false, store.Frame{}, nil, nil, err
+			return false, store.Frame{}, err
 		}
-		return true, stored, before, summarizeFrame(&stored), nil
+		if ok {
+			return true, stored, nil
+		}
+		reloaded, err := m.frames.GetByIdentity(owner.PaneID, owner.PID, owner.ProcessStartTime)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if reloaded == nil {
+			return false, store.Frame{}, nil
+		}
+		current = *reloaded
 	}
-	return false, store.Frame{}, nil, nil, nil
+	return false, store.Frame{}, fmt.Errorf("proxy detach: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, owner.FrameID)
 }
 
 // findProxyParent walks the sender's PPID ancestor chain (capped at

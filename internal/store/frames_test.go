@@ -548,6 +548,125 @@ func TestFrames_DeleteIfUnchanged_NotFound(t *testing.T) {
 	}
 }
 
+// F7 — UpsertIfUnchanged updates atomically when last_seen_at matches.
+func TestFrames_UpsertIfUnchanged_UpdatesWhenMatching(t *testing.T) {
+	s := openTestFramesStore(t)
+
+	stored, err := s.Upsert(Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "A",
+		Subagents:        []agentpkg.SubagentRef{{ID: "s1", Type: "cc", StartedAt: 10}},
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	})
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	stored.Subagents = append(stored.Subagents, agentpkg.SubagentRef{ID: "s2", Type: "codex", StartedAt: 20})
+	stored.LastSeenAt = 20
+	ok, got, err := s.UpsertIfUnchanged(stored, 10)
+	if err != nil {
+		t.Fatalf("UpsertIfUnchanged: %v", err)
+	}
+	if !ok {
+		t.Fatal("UpsertIfUnchanged returned false with matching baseline; want true")
+	}
+	if len(got.Subagents) != 2 {
+		t.Fatalf("Subagents len = %d, want 2 (s1 + s2 merged atomically)", len(got.Subagents))
+	}
+	if got.LastSeenAt != 20 {
+		t.Fatalf("LastSeenAt = %d, want 20 (refreshed)", got.LastSeenAt)
+	}
+}
+
+// F8 — UpsertIfUnchanged returns (false, zero, nil) when a concurrent writer
+// has moved last_seen_at past the provided baseline.
+func TestFrames_UpsertIfUnchanged_SkipsWhenStale(t *testing.T) {
+	s := openTestFramesStore(t)
+
+	stored, err := s.Upsert(Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "A",
+		Subagents:        []agentpkg.SubagentRef{{ID: "s1", Type: "cc", StartedAt: 10}},
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	})
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	// Simulate a concurrent writer bumping last_seen_at to 30.
+	racer := stored
+	racer.LastSeenAt = 30
+	racer.Subagents = append(racer.Subagents, agentpkg.SubagentRef{ID: "racer", Type: "codex", StartedAt: 25})
+	if _, err := s.Upsert(racer); err != nil {
+		t.Fatalf("racer Upsert: %v", err)
+	}
+
+	// Our baseline is still 10; UpsertIfUnchanged should refuse.
+	stored.Subagents = append(stored.Subagents, agentpkg.SubagentRef{ID: "stale", Type: "opencode", StartedAt: 15})
+	stored.LastSeenAt = 20
+	ok, got, err := s.UpsertIfUnchanged(stored, 10)
+	if err != nil {
+		t.Fatalf("UpsertIfUnchanged: %v", err)
+	}
+	if ok {
+		t.Fatal("UpsertIfUnchanged returned true with stale baseline; want false")
+	}
+	if got.FrameID != "" {
+		t.Fatalf("stored.FrameID = %q, want zero Frame (stale)", got.FrameID)
+	}
+
+	// Verify the racer's write is still in the DB, not clobbered.
+	row, err := s.GetByIdentity("%5", 200, "A")
+	if err != nil {
+		t.Fatalf("GetByIdentity: %v", err)
+	}
+	if row == nil {
+		t.Fatal("frame missing")
+	}
+	if row.LastSeenAt != 30 {
+		t.Fatalf("LastSeenAt = %d, want 30 (racer preserved)", row.LastSeenAt)
+	}
+	// Racer's subagent list had 2 entries (s1 + racer). Our stale write
+	// should not have clobbered them with our (s1 + stale) version.
+	if len(row.Subagents) != 2 {
+		t.Fatalf("Subagents len = %d, want 2 (racer version preserved)", len(row.Subagents))
+	}
+	foundRacer := false
+	for _, ref := range row.Subagents {
+		if ref.ID == "racer" {
+			foundRacer = true
+		}
+		if ref.ID == "stale" {
+			t.Fatal("stale write clobbered racer (UpsertIfUnchanged invariant violated)")
+		}
+	}
+	if !foundRacer {
+		t.Fatal("racer ref missing from DB after UpsertIfUnchanged conflict")
+	}
+}
+
+// F9 — UpsertIfUnchanged requires frame.FrameID; rejects zero-ID insert path.
+func TestFrames_UpsertIfUnchanged_RejectsEmptyFrameID(t *testing.T) {
+	s := openTestFramesStore(t)
+	_, _, err := s.UpsertIfUnchanged(Frame{PaneID: "%5", PID: 100, ProcessStartTime: "A"}, 0)
+	if err == nil {
+		t.Fatal("UpsertIfUnchanged with empty FrameID should error; got nil")
+	}
+}
+
 func TestMigrateFramesDB_PreservesNewSubagentsJSON(t *testing.T) {
 	s := openTestFramesStore(t)
 
