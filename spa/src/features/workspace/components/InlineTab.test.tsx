@@ -382,11 +382,7 @@ describe('InlineTab — statusline display', () => {
       />,
     )
     const tooltip = screen.getByTestId('inline-tab-tooltip')
-    // placement=right uses left-full (mirrors ActivityBarNarrow pattern).
-    // placement=top would use bottom-full, which can be clipped by the sidebar's
-    // vertical scroll container near the top edge.
-    expect(tooltip.className).toContain('left-full')
-    expect(tooltip.className).not.toContain('bottom-full')
+    expect(tooltip).toHaveAttribute('data-placement', 'right')
   })
 })
 
