@@ -1,6 +1,24 @@
 # Changelog
 
-## [1.0.0-alpha.217] - 2026-04-24
+## [1.0.0-alpha.218] - 2026-04-24
+
+### Feat(agent): Phase 2 PR-2a — SubagentRef schema + wire breaking upgrade (#622)
+
+Lights rebuild 系列 Phase 2 第一棒，把 subagent 從 ID-only 字串升級為結構化 `SubagentRef`（agent ID + canonical Type + StartedAt + SourcePID + SourceStartTime + IsProxy），為下一棒 PR-2b 的 proxy 偵測 / frame idle sweep / SPA 視覺區分鋪路。此棒只升 schema + wire + migration，視覺仍為 count-based。
+
+- 新型別 `internal/agent/subagent.go` — `SubagentRef{ID, Type, StartedAt, SourcePID, SourceStartTime, IsProxy}`；`IsProxy,omitempty`；`source_pid` / `source_start_time` 非 omitempty（native refs 顯式序列化 0）；`Type` 固定用 `frame.AgentType`（canonical agent family，不吃 detail.agent_type）
+- `store.Frame.Subagents` / `SessionProjection.Subagents` / `Module.subagents` map / `NormalizedEvent.Subagents` / SPA `useAgentStore` — 全部從 `[]string` → `[]SubagentRef`
+- `updateSubagents(current, eventName, ref) → refs` 取代 string 版
+- **Schema upgrade safety**：`migrateFramesDB` 掃全表 `subagents_json` 三態處理 — new schema ✅ pass / legacy `[]string` → truncate / malformed → `fmt.Errorf` block daemon 啟動（operator-visible，不靜默吞）
+- `Module.New` frames init 失敗 fatal（不吞）；traces init 失敗 log warning + continue nil（best-effort，不阻啟動）
+- SPA TabIcon / SortableTab / InlineTab / renderInlineTabIcon 仍 count-based — 視覺升級留給 PR-2b
+- 新 test helper `store.AgentEventStore.ExecRawForTest` + `framesInitFn` / `tracesInitFn` test seams（顯式 ForTest 命名 + cross-package test seed）
+- 14 個新 Go tests：SubagentRef JSON R1-R3 / store F1-F3 / updateSubagents U1-U5 / HB1 broadcast shape / Migration legacy-mixed-malformed-new（4）/ New fail-on-malformed + traces-best-effort（2）；配 ~20 SPA fixture upgrade
+- **破壞式升級通知**：daemon 首次啟動會自動把舊 `[]string` 形式的 `subagents_json` truncate 為空陣列；如遇 malformed JSON 會 refuse 啟動並 log row id，需手動修（不會靜默丟資料）
+
+11 commits：5 subagent TDD + 6 codex fix + 6 plan docs。Plan review 5 輪（v1→v6，findings 4→2→2→2→0）；Code review 4 輪全採納：R1 標準（P1 legacy DB 500 + P2 canonical Type）、R2 3 parallel 攻防體質（P1 LIMIT 1 probe miss mixed + P2 malformed wipe）、R3 sanity（P1 Module.New 吞 err）、R4 sanity（P1 R3 修過頭 traces 誤 fatal）。
+
+
 
 ### Feat(agent): Lights rebuild — Hook events declaration (#613) + §2.4 guardrails (#616)
 
