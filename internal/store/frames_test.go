@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -327,5 +328,72 @@ func TestFrames_SubagentsJSONShapeSmoke(t *testing.T) {
 		if !strings.Contains(raw, key) {
 			t.Errorf("subagents_json missing key %s: %s", key, raw)
 		}
+	}
+}
+
+// Seeds a legacy `["id"]` shape row directly via SQL (bypassing Upsert) to
+// simulate an agent.sqlite that predates the Phase 2 SubagentRef schema.
+func seedLegacyFrameRow(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO agent_frames (
+		frame_id, pane_id, agent_type, pid, ppid, process_start_time,
+		parent_frame_id, subagents_json, status, started_at, last_seen_at, verified
+	) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`,
+		"legacy-frame", "%5", "cc", 200, 100, "A",
+		`["legacy-sub-1","legacy-sub-2"]`, "idle", 10, 10, 1); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+}
+
+func TestMigrateFramesDB_ClearsLegacySubagentsJSON(t *testing.T) {
+	events := openTestAgentEventStore(t)
+	if _, err := events.Frames(); err != nil {
+		t.Fatalf("initial Frames: %v", err)
+	}
+	seedLegacyFrameRow(t, events.db)
+
+	// Re-run migration (simulates daemon restart).
+	if err := migrateFramesDB(events.db); err != nil {
+		t.Fatalf("migrateFramesDB: %v", err)
+	}
+
+	var count int
+	if err := events.db.QueryRow(`SELECT COUNT(*) FROM agent_frames`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("agent_frames count = %d after migrate, want 0 (table should be truncated)", count)
+	}
+}
+
+func TestMigrateFramesDB_PreservesNewSubagentsJSON(t *testing.T) {
+	s := openTestFramesStore(t)
+
+	if _, err := s.Upsert(Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "A",
+		Subagents:        []agentpkg.SubagentRef{{ID: "s1", Type: "cc", StartedAt: 10}},
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	// Re-run migration: new-format row must survive.
+	if err := migrateFramesDB(s.db); err != nil {
+		t.Fatalf("migrateFramesDB: %v", err)
+	}
+
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_frames`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("agent_frames count = %d after migrate, want 1 (new-format row should survive)", count)
 	}
 }

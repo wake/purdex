@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/google/uuid"
 	agentpkg "github.com/wake/purdex/internal/agent"
@@ -58,6 +59,35 @@ func migrateFramesDB(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_frames_agent_type ON agent_frames(agent_type)`); err != nil {
 		return err
 	}
+	return clearStaleSubagentsJSON(db)
+}
+
+// clearStaleSubagentsJSON detects pre-Phase-2 `subagents_json` rows (string
+// array shape `["id"]`) and truncates the table. Frames are ephemeral
+// telemetry — clearing them on schema upgrade is lossless and avoids the
+// alternative: every subsequent hook 500s because scanFrame can't unmarshal
+// the old shape into []SubagentRef.
+func clearStaleSubagentsJSON(db *sql.DB) error {
+	var probe sql.NullString
+	err := db.QueryRow(`SELECT subagents_json FROM agent_frames LIMIT 1`).Scan(&probe)
+	if err == sql.ErrNoRows {
+		return nil // empty table, nothing to check
+	}
+	if err != nil {
+		return err
+	}
+	if !probe.Valid {
+		return nil
+	}
+	var dst []agentpkg.SubagentRef
+	if json.Unmarshal([]byte(probe.String), &dst) == nil {
+		return nil // already in new format
+	}
+	// Unmarshal failed — row is in legacy shape. Truncate the table.
+	if _, err := db.Exec(`DELETE FROM agent_frames`); err != nil {
+		return err
+	}
+	log.Printf("[store] cleared agent_frames: legacy subagents_json schema detected, see Phase 2 PR-2a notes")
 	return nil
 }
 
