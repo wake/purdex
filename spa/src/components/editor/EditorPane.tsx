@@ -12,8 +12,12 @@ import { EditorStatusBar } from './EditorStatusBar'
 import { RenamePopover } from '../RenamePopover'
 import { findPane } from '../../lib/pane-tree'
 import type { FileSource } from '../../types/fs'
-import type { EditorBufferMetadata, EditorLanguageSource } from '../../stores/useEditorStore'
 import type { UntitledDocumentState } from '../../types/tab'
+import {
+  createMetadata,
+  untitledStoragePath,
+  untitledSuggestedName,
+} from '../../lib/editor-language'
 
 const TiptapEditor = lazy(() =>
   import('./TiptapEditor').then((m) => ({ default: m.TiptapEditor }))
@@ -24,35 +28,8 @@ function bufferKey(source: FileSource, filePath: string): string {
   return `${source.type}:${filePath}`
 }
 
-function detectLanguage(filePath: string): string {
-  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
-  const map: Record<string, string> = {
-    ts: 'typescript', tsx: 'typescriptreact', js: 'javascript', jsx: 'javascriptreact',
-    json: 'json', md: 'markdown', css: 'css', html: 'html', go: 'go',
-    py: 'python', rs: 'rust', sh: 'shell', yml: 'yaml', yaml: 'yaml',
-    sql: 'sql', php: 'php', rb: 'ruby', swift: 'swift', kt: 'kotlin',
-    java: 'java', c: 'c', cpp: 'cpp', h: 'c', hpp: 'cpp',
-  }
-  return map[ext] ?? 'plaintext'
-}
-
-function detectLanguageSource(source: FileSource, filePath: string): EditorLanguageSource {
-  if (source.type === 'inapp' && /^\/buffer\/Untitled(?:-\d+)?\./.test(filePath)) {
-    return 'template'
-  }
-  return 'extension'
-}
-
 function isUntitledPath(filePath: string): boolean {
   return filePath.startsWith('untitled:')
-}
-
-function untitledSuggestedName(untitled: UntitledDocumentState): string {
-  return untitled.hasBeenRenamed ? untitled.name : `${untitled.name}${untitled.suggestedExtension}`
-}
-
-function untitledStoragePath(name: string): string {
-  return `/buffer/${name}`
 }
 
 function displayName(filePath: string, untitled?: UntitledDocumentState): string {
@@ -61,20 +38,6 @@ function displayName(filePath: string, untitled?: UntitledDocumentState): string
 
 function renamePath(filePath: string, nextName: string, untitled?: UntitledDocumentState): string {
   return untitled ? `untitled:${nextName}` : siblingPath(filePath, nextName)
-}
-
-function createMetadata(source: FileSource, filePath: string, untitled?: UntitledDocumentState): Pick<EditorBufferMetadata, 'language' | 'languageSource' | 'untitled'> {
-  const resolvedPath = untitled
-    ? untitledStoragePath(untitledSuggestedName(untitled))
-    : filePath
-
-  return {
-    language: detectLanguage(resolvedPath),
-    languageSource: !untitled || untitled.hasBeenRenamed
-      ? detectLanguageSource(source, resolvedPath)
-      : 'template',
-    untitled,
-  }
 }
 
 function fileName(filePath: string): string {

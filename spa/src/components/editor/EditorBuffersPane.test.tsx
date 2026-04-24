@@ -724,6 +724,119 @@ describe('EditorBuffersPane', () => {
     )
   })
 
+  it('B2-16b: rename across extensions refreshes buffer metadata (v1.5 R6 MED)', async () => {
+    // `performBufferRename` must mirror EditorPane's rename flow not
+    // only in key/path movement but also in metadata refresh. Crossing
+    // extensions (foo.md → foo.ts) must update the buffer's language
+    // and languageSource; otherwise the editor stays in the old
+    // syntax mode until the pane is torn down and reopened.
+    mockBackend.list.mockResolvedValue([
+      { name: 'foo.md', isDir: false, size: 10 },
+    ] as FileEntry[])
+    mockBackend.stat.mockRejectedValue(new Error('not found'))
+    tabStoreState.tabs = {
+      T1: makeEditorTab('T1', 'P1', '/buffer/foo.md', false),
+    }
+    tabStoreState.tabOrder = ['T1']
+    tabStoreState.activeTabId = 'T1'
+    const editorModule = await import('../../stores/useEditorStore')
+    editorModule.useEditorStore.setState({
+      buffers: {
+        'inapp:/buffer/foo.md': {
+          content: 'hello',
+          savedContent: '',
+          isDirty: false,
+          lastStat: null,
+          modelId: 'm-foo',
+          language: 'markdown',
+          languageSource: 'extension',
+          eol: 'lf',
+          encoding: 'utf8',
+        },
+      },
+      paneStates: {
+        P1: {
+          bufferKey: 'inapp:/buffer/foo.md',
+          editorMode: 'raw',
+          showDiff: false,
+          cursorPosition: { line: 1, column: 1 },
+          monacoViewState: null,
+        },
+      },
+    })
+    render(<EditorBuffersPane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    fireEvent.click(row)
+    fireEvent.click(screen.getByTestId('toolbar-rename'))
+    const input = await screen.findByTestId('rename-input')
+    fireEvent.change(input, { target: { value: 'foo.ts' } })
+    fireEvent.click(screen.getByTestId('rename-confirm'))
+
+    await waitFor(() => {
+      expect(mockBackend.rename).toHaveBeenCalledWith('/buffer/foo.md', '/buffer/foo.ts')
+    })
+    await waitFor(() => {
+      const next = editorModule.useEditorStore.getState().buffers['inapp:/buffer/foo.ts']
+      expect(next).toBeDefined()
+      expect(next?.language).toBe('typescript')
+      expect(next?.languageSource).toBe('extension')
+    })
+  })
+
+  it('B2-16c: rename preserves manual language override (v1.5 R6 MED)', async () => {
+    // When the user has manually overridden the language, renaming
+    // must NOT recompute language from the new extension — the manual
+    // override takes precedence (same contract as EditorPane).
+    mockBackend.list.mockResolvedValue([
+      { name: 'foo.md', isDir: false, size: 10 },
+    ] as FileEntry[])
+    mockBackend.stat.mockRejectedValue(new Error('not found'))
+    tabStoreState.tabs = {
+      T1: makeEditorTab('T1', 'P1', '/buffer/foo.md', false),
+    }
+    tabStoreState.tabOrder = ['T1']
+    tabStoreState.activeTabId = 'T1'
+    const editorModule = await import('../../stores/useEditorStore')
+    editorModule.useEditorStore.setState({
+      buffers: {
+        'inapp:/buffer/foo.md': {
+          content: 'hello',
+          savedContent: '',
+          isDirty: false,
+          lastStat: null,
+          modelId: 'm-foo',
+          language: 'rust',
+          languageSource: 'manual',
+          eol: 'lf',
+          encoding: 'utf8',
+        },
+      },
+      paneStates: {
+        P1: {
+          bufferKey: 'inapp:/buffer/foo.md',
+          editorMode: 'raw',
+          showDiff: false,
+          cursorPosition: { line: 1, column: 1 },
+          monacoViewState: null,
+        },
+      },
+    })
+    render(<EditorBuffersPane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    fireEvent.click(row)
+    fireEvent.click(screen.getByTestId('toolbar-rename'))
+    const input = await screen.findByTestId('rename-input')
+    fireEvent.change(input, { target: { value: 'foo.ts' } })
+    fireEvent.click(screen.getByTestId('rename-confirm'))
+
+    await waitFor(() => {
+      const next = editorModule.useEditorStore.getState().buffers['inapp:/buffer/foo.ts']
+      expect(next).toBeDefined()
+      expect(next?.language).toBe('rust')
+      expect(next?.languageSource).toBe('manual')
+    })
+  })
+
   it('B2-17: delete cleans editor store for background tabs (v1.5 G2)', async () => {
     // Background tab scenario: tab is not active, EditorPane never
     // mounted / already unmounted — so the editor-store still holds a

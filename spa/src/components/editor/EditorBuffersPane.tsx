@@ -11,6 +11,7 @@ import type { FileEntry } from '../../types/fs'
 import type { FileSource } from '../../types/fs'
 import type { Pane, PaneContent, Tab } from '../../types/tab'
 import { RenamePopover } from '../RenamePopover'
+import { createMetadata } from '../../lib/editor-language'
 
 // Local copy of EditorPane's private `bufferKey` helper — until a shared
 // util is extracted, keep the formula in lock-step.  inapp sources alone
@@ -26,6 +27,11 @@ function bufferKeyFor(source: FileSource, filePath: string): string {
 // would write to the stale filename and a re-open would resurrect a
 // ghost buffer. Reused only inside `handleRenameConfirm`, but extracted
 // so the three calls stay visually grouped.
+//
+// v1.5 R6-MED follow-up — the `renameBuffer` metadata argument must also
+// refresh language + languageSource when crossing file extensions; see
+// `EditorPane.handleRenameSubmit` lines 376-380 for the canonical pattern
+// (preserve manual overrides, otherwise recompute from the new path).
 async function performBufferRename(fromPath: string, targetPath: string) {
   const backend = getFsBackend({ type: 'inapp' })
   if (!backend) throw new Error('InApp backend unavailable')
@@ -34,7 +40,11 @@ async function performBufferRename(fromPath: string, targetPath: string) {
   useTabStore.getState().renameEditorPanes(source, fromPath, targetPath)
   const oldKey = bufferKeyFor(source, fromPath)
   const newKey = bufferKeyFor(source, targetPath)
-  useEditorStore.getState().renameBuffer(oldKey, newKey)
+  const currentBuffer = useEditorStore.getState().buffers[oldKey]
+  const nextMetadata = currentBuffer?.languageSource === 'manual'
+    ? { language: currentBuffer.language, languageSource: 'manual' as const }
+    : createMetadata(source, targetPath)
+  useEditorStore.getState().renameBuffer(oldKey, newKey, nextMetadata)
 }
 
 /**
