@@ -2,6 +2,7 @@ package probe
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -351,6 +352,71 @@ func TestFirstAliveAgentInTree_UsesActivePanePID(t *testing.T) {
 	}
 	if agentType != "cc" || pid != 200 {
 		t.Fatalf("expected (cc, 200, nil) proving ActivePanePID path; got (%q, %d, %v) — regression to PanePID would yield (\"\", 0, nil)", agentType, pid, err)
+	}
+}
+
+// TestFirstAliveAgentInTree_IdentifierPanic_RecoveredAsNoMatch verifies that
+// a panic from a provider's Identify function is caught at the per-call
+// boundary (safeIdentifyPID) and treated as a no-match — the walk continues
+// to other PIDs and other identifiers, rather than crashing through to the
+// hook handler. Regression guard for PR #638 codex review round 2 #2.
+func TestFirstAliveAgentInTree_IdentifierPanic_RecoveredAsNoMatch(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	fake.SetPanePID("sess:", "100")
+	p := New(fake)
+	// First identifier panics on every PID; should not crash, walk continues.
+	p.RegisterIdentifier("buggy", func(info agentpkg.ProcessInfo) bool {
+		panic("simulated provider Identify panic")
+	})
+	// Second identifier matches PID=200 — must still be reachable after
+	// the buggy identifier panics on all PIDs.
+	p.RegisterIdentifier("cc", func(info agentpkg.ProcessInfo) bool {
+		return info.PID == 200
+	})
+	stubLivenessSeams(t)
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid}, nil
+	}
+	listProcessTreeFn = func() (map[int][]int, error) {
+		return map[int][]int{100: {200}}, nil
+	}
+
+	agentType, pid, err := p.FirstAliveAgentInTree("sess:")
+	if err != nil {
+		t.Fatalf("unexpected error after identifier panic: %v", err)
+	}
+	if agentType != "cc" || pid != 200 {
+		t.Fatalf("expected (cc, 200, nil) — walk should continue past panicking identifier; got (%q, %d, %v)", agentType, pid, err)
+	}
+}
+
+// TestFirstAliveAgentInTree_TopLevelPanic_BecomesError verifies the outer
+// defer recover converts an uncaught panic (e.g. from cachedDescendants
+// internals) into an error so the rebuild caller can fail-soft instead of
+// panicking through to the hook handler. Regression guard for PR #638
+// codex review round 2 #2 (outer boundary).
+func TestFirstAliveAgentInTree_TopLevelPanic_BecomesError(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	fake.SetPanePID("sess:", "100")
+	p := New(fake)
+	p.RegisterIdentifier("cc", func(info agentpkg.ProcessInfo) bool { return false })
+	stubLivenessSeams(t)
+	// listProcessTreeFn panics — bypasses the per-call safeIdentifyPID
+	// recovery and would crash the hook handler without the outer defer.
+	listProcessTreeFn = func() (map[int][]int, error) {
+		panic("simulated process tree query panic")
+	}
+
+	agentType, pid, err := p.FirstAliveAgentInTree("sess:")
+	if err == nil {
+		t.Fatal("expected error from top-level panic recovery")
+	}
+	if agentType != "" || pid != 0 {
+		t.Fatalf("expected (\"\", 0, err); got (%q, %d, %v)", agentType, pid, err)
+	}
+	// err message should mention panic for caller diagnostics
+	if !strings.Contains(err.Error(), "panic") {
+		t.Errorf("expected error message to mention panic, got %q", err.Error())
 	}
 }
 

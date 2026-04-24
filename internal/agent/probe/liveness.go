@@ -40,7 +40,23 @@ var (
 // non-first sibling. ActivePanePID uses `tmux display-message -p -t <target>
 // '#{pane_pid}'`, which honors pane id targets exactly. (PR #638 codex
 // review round 1 P2 fix.)
-func (p *Prober) FirstAliveAgentInTree(target string) (string, int, error) {
+//
+// Panic safety: provider Identify functions are user-supplied; a panic from
+// readProcessInfoFn or identify() is caught at the per-call boundary and
+// treated as a no-match for that PID (walk continues to other PIDs and other
+// identifiers). The outer function is also wrapped in a top-level recover
+// that converts any uncaught panic into an error so the caller (Phase 3
+// rebuild path) can fail-soft to no_parent_fallback rather than crashing the
+// hook handler. (PR #638 codex review round 2 #2 fix.)
+func (p *Prober) FirstAliveAgentInTree(target string) (matchedType string, matchedPID int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			matchedType = ""
+			matchedPID = 0
+			err = fmt.Errorf("FirstAliveAgentInTree panic: %v", r)
+		}
+	}()
+
 	if p.tmux == nil {
 		return "", 0, nil
 	}
@@ -89,22 +105,42 @@ func (p *Prober) FirstAliveAgentInTree(target string) (string, int, error) {
 	// Iterate identifiers in registration order; for each, scan all candidates
 	// and return on first match. Guarantees deterministic first-match-wins
 	// when multiple identifiers recognize the same PID.
+	//
+	// Per-call panic recovery: identify() is user-supplied (provider plugin),
+	// and readProcessInfoFn touches /proc — both can panic in pathological
+	// inputs. Catching here lets the walk continue to other PIDs / agent
+	// types instead of crashing the hook handler.
 	for _, agentType := range order {
 		identify, ok := identifiers[agentType]
 		if !ok || identify == nil {
 			continue
 		}
 		for _, pid := range candidates {
-			info, infoErr := readProcessInfoFn(pid)
-			if infoErr != nil {
-				continue
-			}
-			if identify(info) {
+			if matched := safeIdentifyPID(identify, pid); matched {
 				return agentType, pid, nil
 			}
 		}
 	}
 	return "", 0, nil
+}
+
+// safeIdentifyPID runs readProcessInfoFn + identify under a recover so a
+// panic in either is treated as a no-match for this PID. Returns false on
+// any error or panic; true only when identify(info) returns true.
+func safeIdentifyPID(identify IdentifyFunc, pid int) (matched bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Panic during identify or process info read — treat as no-match
+			// and let the outer walk try the next PID/identifier. Logged at
+			// the rebuild caller boundary, not here, to avoid spamming.
+			matched = false
+		}
+	}()
+	info, infoErr := readProcessInfoFn(pid)
+	if infoErr != nil {
+		return false
+	}
+	return identify(info)
 }
 
 // IsAliveFor checks whether the tmux target's pane PID tree contains a process
