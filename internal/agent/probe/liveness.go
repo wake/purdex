@@ -18,6 +18,87 @@ var (
 	listProcessTreeFn = listProcessTree
 )
 
+// FirstAliveAgentInTree walks the tmux target's pane PID descendant tree and
+// returns the agent type of the first descendant matched by any registered
+// identifier (iterated in registry insertion order). Returns ("", 0, nil) when
+// no descendant matches any identifier.
+//
+// Honors the same 250ms descendant cache as IsAliveFor (delegates to
+// cachedDescendants internally).
+//
+// Errors (tmux PanePID failure, pane PID parse failure, descendants query
+// failure) are propagated to the caller — unlike IsAliveFor which swallows
+// them. Used by frame_ops.tryRebuildFromProcessTree (Phase 3) to recover frame
+// agent_type after daemon restart, when the hook event's lookup chain
+// (GetByIdentity → findProxyParent → FindByPanePID) all miss; the caller is
+// expected to fail-soft on errors.
+func (p *Prober) FirstAliveAgentInTree(target string) (string, int, error) {
+	if p.tmux == nil {
+		return "", 0, nil
+	}
+
+	panePIDRaw, err := p.tmux.PanePID(target)
+	if err != nil {
+		return "", 0, err
+	}
+	panePID, err := strconv.Atoi(strings.TrimSpace(panePIDRaw))
+	if err != nil {
+		return "", 0, fmt.Errorf("parse pane pid %q: %w", panePIDRaw, err)
+	}
+	if panePID <= 0 {
+		return "", 0, fmt.Errorf("invalid pane pid %d", panePID)
+	}
+
+	p.livenessMu.Lock()
+	p.pruneExpiredDescendantCacheLocked(p.now())
+	p.livenessMu.Unlock()
+
+	descendants, err := p.cachedDescendants(target, panePID)
+	if err != nil {
+		return "", 0, err
+	}
+
+	// Snapshot ordered identifiers under registry lock to avoid holding the
+	// lock while running user-supplied identify funcs.
+	p.registryMu.RLock()
+	order := append([]string(nil), p.identifierOrder...)
+	identifiers := make(map[string]IdentifyFunc, len(p.identifiers))
+	for k, v := range p.identifiers {
+		identifiers[k] = v
+	}
+	p.registryMu.RUnlock()
+
+	if len(order) == 0 {
+		return "", 0, nil
+	}
+
+	// Candidate PIDs: panePID first, then its recursive descendants (matches
+	// IsAliveFor behavior).
+	candidates := make([]int, 0, len(descendants)+1)
+	candidates = append(candidates, panePID)
+	candidates = append(candidates, descendants...)
+
+	// Iterate identifiers in registration order; for each, scan all candidates
+	// and return on first match. Guarantees deterministic first-match-wins
+	// when multiple identifiers recognize the same PID.
+	for _, agentType := range order {
+		identify, ok := identifiers[agentType]
+		if !ok || identify == nil {
+			continue
+		}
+		for _, pid := range candidates {
+			info, infoErr := readProcessInfoFn(pid)
+			if infoErr != nil {
+				continue
+			}
+			if identify(info) {
+				return agentType, pid, nil
+			}
+		}
+	}
+	return "", 0, nil
+}
+
 // IsAliveFor checks whether the tmux target's pane PID tree contains a process
 // identified as the given agent type.
 func (p *Prober) IsAliveFor(agentType, target string) bool {
