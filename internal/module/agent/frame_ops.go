@@ -77,8 +77,13 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			}, err
 		}
 		ref := agentpkg.SubagentRef{
-			ID:        agentID,
-			Type:      firstNonEmpty(strFromDetail(result.Detail, "agent_type"), frame.AgentType),
+			ID: agentID,
+			// Type is the canonical agent family that owns this subagent (cc /
+			// codex / opencode), not the payload's per-subagent sub-variant
+			// (e.g. opencode's `agent_type: "Explore"`). Keeping Type aligned
+			// to frame.AgentType lets the SPA use it for agent-family color
+			// lookup without provider-specific special cases.
+			Type:      frame.AgentType,
 			StartedAt: broadcastTs,
 			// SourcePID / SourceStartTime / IsProxy left zero: native SubagentStart
 			// refs have no distinct source process identity. Proxy attaches (PR-2b)
@@ -268,14 +273,6 @@ func buildProjectionNormalized(projection *SessionProjection, fallbackAgentType,
 	normalized.AgentType = projection.TopFrame.AgentType
 	normalized.Status = string(projection.TopFrame.Status)
 	return normalized
-}
-
-// firstNonEmpty returns a if non-empty, else b.
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 // strFromDetail looks up a string field in a DeriveResult.Detail map.

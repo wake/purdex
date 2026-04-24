@@ -422,8 +422,12 @@ func TestHandleEvent_OpenCodeValidSubagentBroadcasts(t *testing.T) {
 		if !strings.Contains(env.Value, `"id":"call-1"`) {
 			t.Fatalf("broadcast value missing subagent id=call-1: %s", env.Value)
 		}
-		if !strings.Contains(env.Value, `"type":"Explore"`) {
-			t.Fatalf("broadcast value missing subagent type=Explore: %s", env.Value)
+		// Type is canonical agent family (opencode), NOT opencode's per-subagent
+		// sub-variant from detail.agent_type ("Explore"). See Phase 2 PR-2a
+		// round-1 codex P2: SubagentRef.Type should stay stable for
+		// agent-family lookup (SPA color table etc).
+		if !strings.Contains(env.Value, `"type":"opencode"`) {
+			t.Fatalf("broadcast value missing subagent type=opencode: %s", env.Value)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for SubagentStart broadcast")
