@@ -1,6 +1,6 @@
-# Phase 2 TDD Plan v2 — L3 Subagent 升級 + Proxy + Frame Idle Sweep
+# Phase 2 TDD Plan v3 — L3 Subagent 升級 + Proxy + Frame Idle Sweep
 
-- **Date**: 2026-04-24（v1 → v2 revision after codex adversarial review `review-mobwvdpq-w6kftz`）
+- **Date**: 2026-04-24（v1 → v2 revision after codex review `review-mobwvdpq-w6kftz`; v2 → v3 after codex review `review-mobxgl16-mfkzav`）
 - **Spec**: `docs/specs/2026-04-23-lights-rebuild-spec.md` §6
 - **Worktree**: `lights-phase-2`（branch `worktree-lights-phase-2`）
 - **依賴**: Phase 1（merged at `d1d60b2c`）+ Hook Events PR #616（merged at `fd9f8f8f`, alpha.217）
@@ -9,22 +9,36 @@
 
 ## 0. 拆分策略（已確定）
 
-### PR-2a — Schema + 型別升級（純骨架，無新行為）
+### PR-2a — Schema + Wire Breaking Upgrade（行為語意不變但破壞儲存與 wire 相容）
 
-- `SubagentRef` 型別定義（含 SourcePID/SourceStartTime/IsProxy 等欄位，但本 PR **不會有任何 ref.IsProxy=true 產生**）
+**定性**（對 codex review v2 #3 修正）：本 PR **不是** pure refactor。它包含兩個 user-visible breaking change：
+
+1. **On-disk schema break**：`agent_frames.subagents_json` 格式從 `["id"]` 改 `[{id, type, started_at, source_pid, source_start_time, is_proxy?}]`；升級後舊 row 讀取會 error，需手動重建 DB
+2. **WS wire break**：`NormalizedEvent.subagents` 型別從 `string[]` 改 `SubagentRef[]`；daemon + SPA 要**一起升級**，Electron dev update skew 期間可能出現 subagents UI 空白
+
+**Product 語意層**：行為不變（SubagentStart/Stop 走既有路徑、產生 IsProxy=false 的 native ref；SubagentDots 維持 count-based API；proxy 偵測 / idle sweep / 新視覺都在 PR-2b）。
+
+**Reviewer 注意**：
+- 這是 staging PR — 先把 schema + wire 立好，PR-2b 才能產生 `IsProxy=true` 資料
+- Rollout：merge → bump alpha.218 → 使用者**先重建 DB** → 重啟 daemon → SPA reload 一次
+- Rollback：revert PR-2a + 重建 DB 回舊 schema（alpha 允許）
+
+**範圍內**：
+- `SubagentRef` 型別定義（含 SourcePID/SourceStartTime/IsProxy 等欄位）
 - Frame.Subagents / SessionProjection.Subagents / m.subagents map / NormalizedEvent.Subagents / SPA store 型別同步升級
 - `updateSubagents` 簽名升級，行為語意不變（SubagentStart 新增、SubagentStop 移除）
 - SPA SubagentDots **維持 count-based API**（新視覺留 PR-2b）
-- **行為不變**：SubagentStart/Stop 走既有路徑，產生 `SubagentRef{ID, Type=frame.AgentType, StartedAt=broadcastTs}` — IsProxy 永遠 false
+- SPA 所有 count-based consumer 的測試 seed 升級（subagents Record 型別）
 - 預估 ~600 行（含測試 + plan）
 
 ### PR-2b — Proxy 偵測 + Idle Sweep + SubagentDots 新視覺
 
-- `applyFrameEvent` PPID-first proxy 偵測分支（SessionStart only）
+- `applyFrameEvent` **PPID 祖先鏈** proxy 偵測分支（SessionStart only，深度上限 5）
 - SessionEnd proxy cleanup（從 parent.Subagents 移匹配 SourcePID+SourceStartTime 的 ref）
 - Frame idle sweep（1h 閾值 + conditional DELETE `DeleteIfUnchanged` + orphan watcher clean）
 - SubagentDots 視覺：type color（cc 藍 / codex 黃 / opencode 橘）+ proxy outline
-- 預估 ~450 行（含測試）
+- **SPA scope 擴充**（對 codex review v2 #1 修正）：`SortableTab.tsx` / `InlineTab.tsx` / `renderInlineTabIcon.tsx` 全數改吃 refs（非只 TabIcon）
+- 預估 ~900 行（含測試）
 
 PR-2a merge → 單獨 bump alpha → PR-2b 在 PR-2a 基礎上開 branch。
 
@@ -137,30 +151,58 @@ ref := agentpkg.SubagentRef{
 }
 ```
 
-### 1.4 Proxy 偵測分支（PR-2b 新增，PPID-first）
+### 1.4 Proxy 偵測分支（PR-2b 新增，PPID 祖先鏈 walk）
+
+**v2 → v3 改動**（對 codex review v2 #2 修正）：原 v2 寫「PPID 單層 match」，但 codex-companion.mjs 中介使得 codex 的 PPID 指向 companion 而非 cc，單層必然 miss Phase 2 的 headline UX（使用者期待 `cc → /codex:*` collapse 到 cc frame）。v3 改走**有限深度祖先鏈 walk**（上限 5 層），在 pane 範圍內尋找合適 parent。
 
 在 `applyFrameEvent` 當前「建/更 frame」主路徑**之前**插入 proxy 判斷：
 
-**前置取得 parent**（重用既有程式碼路徑）：
+**前置**：觸發條件 1-2 成立才進 walk（省 syscall）：
+1. `req.EventName == "SessionStart"` — 只對 SessionStart 偵測 proxy
+2. `frame == nil` — sender identity (pid, start) 無既有 frame
+
+**Walk 邏輯**（helper `findProxyParent`）：
+
 ```go
-info, err := readProcessInfoFn(req.SenderPID)  // 已在現有 frame_ops 取得
-if err != nil {
-    return nil, FrameTraceMeta{}, err
-}
-parentCandidate, err := m.frames.FindByPanePID(req.TmuxPaneID, info.PPID)
-if err != nil {
-    return nil, FrameTraceMeta{}, err
+const proxyMaxDepth = 5
+
+func (m *Module) findProxyParent(req EventRequest) (*store.Frame, error) {
+    info, err := readProcessInfoFn(req.SenderPID)
+    if err != nil {
+        return nil, nil // 讀不到 sender proc info，放棄 proxy walk，fallback 建新 frame
+    }
+    ppid := info.PPID
+    for depth := 0; depth < proxyMaxDepth; depth++ {
+        if ppid <= 1 {
+            return nil, nil // 走到 init / launchd
+        }
+        candidate, err := m.frames.FindByPanePID(req.TmuxPaneID, ppid)
+        if err != nil {
+            return nil, err
+        }
+        if candidate != nil && candidate.AgentType != req.AgentType && isPidAliveFn(candidate.PID) {
+            return candidate, nil // 命中：同 pane、跨 agent type、存活
+        }
+        // 沒命中，往上一層
+        ancestorInfo, err := readProcessInfoFn(ppid)
+        if err != nil {
+            return nil, nil // partial chain，放棄
+        }
+        if ancestorInfo.PPID == ppid {
+            return nil, nil // 自環保護
+        }
+        ppid = ancestorInfo.PPID
+    }
+    return nil, nil // 超過深度上限
 }
 ```
 
-**觸發條件**（**全部成立才算 proxy**）：
-1. `req.EventName == "SessionStart"`（目前只對 SessionStart 偵測 proxy；其他事件走 legacy 路徑）
-2. `frame == nil`（sender identity (pid, start) 無既有 frame，表「新來的」）
-3. `parentCandidate != nil` — **PPID 單層在同 pane 找到 frame**
-4. `parentCandidate.AgentType != req.AgentType` — 跨 agent type
-5. `isPidAliveFn(parentCandidate.PID)` — parent 還活著（避免掛殭屍）
+**觸發條件**（全部成立才算 proxy）：
+1. `req.EventName == "SessionStart"`
+2. `frame == nil`
+3. `findProxyParent(req)` 回 non-nil frame
 
-**命中行為**：
+**命中行為**（不變）：
 - 組 `ref`:
   ```go
   ref := agentpkg.SubagentRef{
@@ -172,23 +214,21 @@ if err != nil {
       IsProxy:         true,
   }
   ```
-- `parentCandidate.Subagents = updateSubagents(parentCandidate.Subagents, "SubagentStart", ref)`
-- `parentCandidate.LastSeenAt = broadcastTs`
-- `m.frames.Upsert(*parentCandidate)` — **不建新 frame**
+- `parent.Subagents = updateSubagents(parent.Subagents, "SubagentStart", ref)`
+- `parent.LastSeenAt = broadcastTs`
+- `m.frames.Upsert(*parent)` — **不建新 frame**
 - Trace meta：`Decision="updated_frame", Reason="proxy_subagent_attached"`，`FrameID/ParentFrameID` 指 parent
 - projection 回傳 parent pane 的投影
 
-**不命中條件 → fallback 建新 frame（既有路徑）**：
-- `req.EventName != "SessionStart"` → 走既有 legacy（其他事件不會 trigger proxy）
-- `frame != nil` → 已有 frame，走 Upsert 更新
-- `parentCandidate == nil` → PPID 單層找不到 frame；**不用 pane-only fallback**（codex #2 指出的回歸）
-- `parentCandidate.AgentType == req.AgentType` → 真的是同類 re-session（例 cc exit 後 cc 再起）
-- parent PID 已死 → 走既有建 frame 路徑（不掛殭屍；死 parent 交由 sweep 清）
+**不命中條件 → fallback 建新 frame**：
+- 條件 1/2 任一不成立
+- `findProxyParent` 回 nil（包含：所有祖先都無 frame / 有 frame 但同 type / parent 已死 / 超過深度 / 讀 proc 錯）
 
-**PPID 單層的 trade-off**（對 codex #2 + 使用者決策 A 的註記）：
-- codex-companion 若是 cc 的直接 child，則 codex 的 PPID = codex-companion PID，再上一階才是 cc；單層 PPID match 可能找不到 cc frame
-- Phase 2 **接受此限制**：PPID 單層命中 ≥ 50% case 可驗證 UX；若實測顯示 codex-companion 中介造成 proxy 大量失手，Phase 3/4 再加 PPID tree walk（spec §11-5 已保留空間）
-- 失手時不影響功能 — 走 fallback 建 codex frame（與目前行為一致，只是沒命中 proxy）
+**Walk 安全邊界**：
+- **深度 5**：cover `codex → codex-companion → cc`（2 層內）；留 3 層 buffer 應付複雜 shell wrapper / tmux control mode。超過 5 層表示極端嵌套，不為該罕見 case 付成本
+- **Pane 過濾**：每層都走 `FindByPanePID(paneID, ppid)`，跨 pane 的 process（例 tmux server、shell）即使 PPID 撞也不命中
+- **Syscall 成本**：最多 5 次 `readProcessInfoFn`（最壞 ~5 次 open+read `/proc/<pid>/stat` 或 `ps`），只在 SessionStart 觸發，非 hot path
+- **自環保護**：`ancestorInfo.PPID == ppid` 防止 kernel 回報自我 parent（罕見但 defensive）
 
 **非 SessionStart 的 proxy 事件**：Phase 2 不處理。觀察實際行為若 codex proxy 沒先送 SessionStart 再開工，Phase 3/4 補。
 
@@ -433,9 +473,23 @@ interface Props {
 
 **useTabDisplay.ts**（PR-2a 先改 `subagentCount = refs.length`，保 TabIcon 既有 prop；PR-2b 回傳 `subagentRefs`）：
 - PR-2a：`useAgentStore((s) => s.subagents[ck]?.length ?? 0)` 改為從 `SubagentRef[]?.length`（型別自動變，行為不變）
-- PR-2b：新增 `subagentRefs` 回傳欄位
+- PR-2b：新增 `subagentRefs` 回傳欄位（可與 subagentCount 並存或取代，依呼叫點）
+
+**補充 SPA consumer 更新**（對 codex review v2 #1 修正 — v2 遺漏 scope）：
+
+以下檔案在 PR-2b **也必須改**，否則 TypeScript 編譯失敗：
+
+| 檔案 | v3 改動 |
+|---|---|
+| `spa/src/components/SortableTab.tsx` | `subagentCount` prop → `subagentRefs`；兩處 TabIcon 調用（line 92 + 132）傳 refs |
+| `spa/src/features/workspace/components/InlineTab.tsx` | `subagentCount` prop → `subagentRefs`（line 42, 111 轉介）|
+| `spa/src/features/workspace/lib/renderInlineTabIcon.tsx` | 三處 `<SubagentDots count={subagentCount} />` 改 `<SubagentDots refs={subagentRefs} />`（dot/iconDot/badge 三模式） |
 
 **SubagentDots 測試**：保留既有 count-based case 概念（refs 長度取代 count input），新加兩個 case — type 色差 + proxy outline。
+
+**SortableTab / InlineTab / renderInlineTabIcon 測試**（PR-2b）：
+- 既有 snapshot / render assertion 若吃 `subagentCount` prop，改為 `subagentRefs` 並 seed `SubagentRef[]`
+- 新增：測 `subagentRefs` 帶 1 個 `is_proxy:true` 的 ref → 渲染 outline dot（validate prop wiring 有接起來）
 
 ### 1.14 零改動邊界
 
@@ -447,8 +501,23 @@ interface Props {
 - `internal/store/frames.go` SQL schema（column 不變；JSON shape 變）
 - `internal/module/agent/verify.go` / `upload*.go` / `monitor.go` / `statusline*.go`
 - `internal/agent/status.go` 除 NormalizedEvent.Subagents 型別
-- `spa/src/**` 除 `useAgentStore.ts` / `SubagentDots.tsx` / `TabIcon.tsx` / `useTabDisplay.ts` + 測試 seed 檔
 - `/api/agent/monitor/*` endpoint shape（Phase 5 Inspector 統一）
+
+**SPA 允許改動**（v3 修正 — v2 scope 遺漏 3 檔）：
+
+| PR | 檔案 | 改動性質 |
+|---|---|---|
+| PR-2a | `spa/src/stores/useAgentStore.ts` | SubagentRef type + Record 升級 |
+| PR-2a | `spa/src/components/*.test.tsx`、`spa/src/hooks/*.test.ts` | seed 升級（subagents 型別） |
+| PR-2b | `spa/src/components/SubagentDots.tsx` | API + type color + proxy outline |
+| PR-2b | `spa/src/components/SubagentDots.test.tsx` | 新檔測試 |
+| PR-2b | `spa/src/components/TabIcon.tsx` | prop count → refs |
+| PR-2b | `spa/src/components/SortableTab.tsx` | prop count → refs（含 line 43/92/132 三處） |
+| PR-2b | `spa/src/features/workspace/components/InlineTab.tsx` | prop count → refs（line 42/111 轉介） |
+| PR-2b | `spa/src/features/workspace/lib/renderInlineTabIcon.tsx` | 三處 SubagentDots 呼叫改吃 refs |
+| PR-2b | `spa/src/hooks/useTabDisplay.ts` | 回傳 subagentRefs |
+
+其餘 SPA 檔案不動。
 
 ---
 
@@ -498,17 +567,22 @@ interface Props {
 
 ### 2.5 Proxy 偵測整合（PR-2b）
 
-`internal/module/agent/frame_ops_test.go`:
+`internal/module/agent/frame_ops_test.go`：mock `readProcessInfoFn` 與 `isPidAliveFn` 模擬 PPID 鏈。
 
 | # | 名稱 | 情境 | 斷言 |
 |---|---|---|---|
-| PR1 | `TestProxySubagent_CodexHookWithCCPPIDAttachesToCCParent` | cc SessionStart (PID 100, pane %5) → codex SessionStart (PID 200, PPID 100, pane %5) | pane 有 1 frame（cc），cc.Subagents 有 ref `{Type:"codex", IsProxy:true, SourcePID:200, SourceStartTime:"..."}` |
-| PR2 | `TestProxySubagent_SkipsWhenPPIDNotMatchFrame` | codex SessionStart (PPID=9999, pane 無 frame with PID 9999) | 建新 codex frame（fallback），不 proxy |
-| PR3 | `TestProxySubagent_SkipsWhenParentSameType` | cc SessionStart → cc SessionStart 不同 pid/start，PPID 指第一個 cc | 建新 cc frame，不 proxy（same type） |
-| PR4 | `TestProxySubagent_SkipsWhenParentPidDead` | cc frame 存在但 isPidAliveFn 回 false for cc PID → codex SessionStart PPID=cc.PID | 建新 codex frame，不 proxy |
-| PR5 | `TestProxySubagent_SkipsWhenEventNotSessionStart` | cc frame 存在 → codex UserPromptSubmit PPID=cc.PID | 走 legacy 路徑（目前可能建 frame 可能不建，依 DeriveStatus result；不偏移現狀）；驗證不走 proxy 路徑 |
-| PR6 | `TestProxySubagent_TraceMetaCorrect` | PR1 情境 | trace meta decision="updated_frame"、reason="proxy_subagent_attached"、FrameID=parent.FrameID |
-| PR7 | `TestProxySubagent_DoesNotDoubleAttachOnReHook` | PR1 後再送同 codex SessionStart (same PID+StartTime) | cc.Subagents 仍 1 筆，StartedAt 為首次時間 |
+| PR1 | `TestProxySubagent_DirectPPIDAttachesToCCParent` | cc frame PID 100 in pane %5；codex SessionStart PID 200 PPID 100 | pane 有 1 frame（cc），cc.Subagents 有 ref `{Type:"codex", IsProxy:true, SourcePID:200}` |
+| **PR2 new** | `TestProxySubagent_TreeWalkThroughCodexCompanion` | cc frame PID 100；codex SessionStart PID 300 PPID 200（companion）；readProcessInfoFn(200) 回 PPID=100 | Tree walk 第 2 層命中 cc，掛 proxy ref；pane 仍 1 frame |
+| **PR3 new** | `TestProxySubagent_TreeWalkDepthLimit` | cc frame PID 100；codex SessionStart PID 600 with chain 600 → 500 → 400 → 300 → 200 → 100 (深度 5)；第 5 層才到 cc | 不命中 proxy（超過 maxDepth）— 建新 codex frame；cc 不受影響 |
+| PR4 | `TestProxySubagent_SkipsWhenNoAncestorHasFrame` | codex SessionStart PPID 9999（pane 無 frame with PID 9999, walk 到 init） | 建新 codex frame（fallback），不 proxy |
+| PR5 | `TestProxySubagent_SkipsWhenParentSameType` | cc frame PID 100；另一 cc SessionStart PID 200 PPID 100 | 建新 cc frame，不 proxy（same type） |
+| PR6 | `TestProxySubagent_SkipsWhenParentPidDead` | cc frame PID 100 存在但 isPidAliveFn(100)=false；codex SessionStart PPID=100 | 建新 codex frame，不 proxy（parent 死） |
+| PR7 | `TestProxySubagent_SkipsWhenEventNotSessionStart` | cc frame 存在 → codex UserPromptSubmit PPID=cc.PID | 走 legacy 路徑（不走 proxy） |
+| PR8 | `TestProxySubagent_TraceMetaCorrect` | PR1 情境 | trace meta decision="updated_frame"、reason="proxy_subagent_attached"、FrameID=parent.FrameID |
+| PR9 | `TestProxySubagent_DoesNotDoubleAttachOnReHook` | PR1 後再送同 codex SessionStart (same PID+StartTime) | cc.Subagents 仍 1 筆，StartedAt 為首次時間 |
+| **PR10 new** | `TestProxySubagent_CrossPaneAncestorNotMatched` | cc frame in pane %5 PID 100；codex SessionStart in pane %7 PID 200 PPID 100 | pane %7 建新 codex frame，cc 在 %5 不受影響（PaneID filter 驗證） |
+| **PR11 new** | `TestProxySubagent_SelfCycleGuard` | codex SessionStart PID 200，readProcessInfoFn(200).PPID=200（自環） | 不 panic，不無限 loop，建新 codex frame |
+| **PR12 new** | `TestProxySubagent_PartialChainOnReadError` | codex SessionStart PPID 200；readProcessInfoFn(200) 回 error | 放棄 walk，fallback 建新 codex frame |
 
 ### 2.6 SessionEnd Proxy Cleanup（PR-2b）
 
@@ -543,12 +617,21 @@ interface Props {
 
 ### 2.9 SPA 測試升級（PR-2a + PR-2b）
 
-- **PR-2a**：所有 seed `subagents: {}` / `subagents: { key: [...] }` 的測試檔升級 mock 為 `SubagentRef[]`
-  - `SortableTab.test.tsx` / `StatusBar.test.tsx` / `TerminalView.test.tsx` / `HookModuleCard.test.tsx` / `useNotificationDispatcher.test.ts` / `useTabDisplay.test.ts`
-- **PR-2b**：`SubagentDots.test.tsx`（新檔）：
+**PR-2a**：所有 seed `subagents: {}` / `subagents: { key: [...] }` 的測試檔升級 mock 為 `SubagentRef[]`
+  - `SortableTab.test.tsx`（seed 改；prop 還是吃 subagentCount: number —— PR-2b 再改）
+  - `StatusBar.test.tsx` / `TerminalView.test.tsx` / `HookModuleCard.test.tsx`
+  - `useNotificationDispatcher.test.ts` / `useTabDisplay.test.ts`（line 160 的 `as never` cast 改為正規 SubagentRef）
+
+**PR-2b**（v3 擴充）：
+- `SubagentDots.test.tsx`（新檔）：
   - `TestSubagentDots_Count`：refs 1/2/3 → 對應 dot 數
   - `TestSubagentDots_TypeColors`：三家 type → 三個不同 backgroundColor
   - `TestSubagentDots_ProxyOutline`：ref with `is_proxy:true` → border 1px + backgroundColor transparent；`is_proxy:false/undefined` → solid background
+- `SortableTab.test.tsx`：把 prop 從 `subagentCount: N` 改為 `subagentRefs: SubagentRef[N]`；新加一個 case `subagentRefs` 含 `is_proxy:true` ref → 渲染 outline dot
+- `InlineTab.test.tsx`（若存在，否則新建）：同上，驗證 prop 從 count → refs 接起
+- `renderInlineTabIcon.test.tsx`（若存在，否則新建）：三個 render 模式（dot/iconDot/badge）都驗證 proxy outline 能流到 SubagentDots
+
+**若 `InlineTab.test.tsx` / `renderInlineTabIcon.test.tsx` 不存在**：不為 PR-2b 強求新建（零覆蓋的檔案不要為測試而開）；由 SortableTab.test.tsx + SubagentDots.test.tsx 覆蓋 prop-wiring 正確性即可。Subagent 執行時發現檔案不存在，在 PR description 明示「無既有測試，新增覆蓋 by SubagentDots + SortableTab」。
 
 ---
 
@@ -597,9 +680,9 @@ interface Props {
 - 綠：`frames.go` 新增 method
 - 跑 `go test ./internal/store/...` 綠
 
-#### Commit 7 — `feat(module/agent): detect proxy subagents via PPID match`
-- 紅：PR1-PR7 → 失敗
-- 綠：`frame_ops.go` applyFrameEvent 加 proxy 偵測分支（PPID-first）+ proxyIDFor helper
+#### Commit 7 — `feat(module/agent): detect proxy subagents via PPID ancestor walk`
+- 紅：PR1-PR12 → 失敗
+- 綠：`frame_ops.go` applyFrameEvent 加 proxy 偵測分支 + `findProxyParent` helper（depth 5 PPID walk）+ proxyIDFor helper
 - 跑 `go test ./internal/module/agent/...` 綠
 
 #### Commit 8 — `feat(module/agent): remove proxy ref on SessionEnd`
@@ -613,8 +696,14 @@ interface Props {
 - 跑 `go test ./internal/module/agent/...` 綠
 
 #### Commit 10 — `feat(spa): SubagentDots takes SubagentRef[] with type color + proxy outline`
-- 紅：SubagentDots.test.tsx 三個 case → 失敗
-- 綠：SubagentDots API 升級；TabIcon 改吃 refs；useTabDisplay 回傳 refs
+- 紅：SubagentDots.test.tsx 三個 case + SortableTab.test.tsx proxy outline case → 失敗
+- 綠（同 commit 完成，避免 compile 破）：
+  - SubagentDots API `count` → `refs` 升級
+  - TabIcon prop `subagentCount` → `subagentRefs`
+  - SortableTab prop `subagentCount` → `subagentRefs`（兩處 TabIcon 調用）
+  - InlineTab prop `subagentCount` → `subagentRefs`（line 42/111）
+  - renderInlineTabIcon prop + 三處 `<SubagentDots count={...} />` → `<SubagentDots refs={...} />`
+  - useTabDisplay 回傳 `subagentRefs`
 - 跑 `cd spa && pnpm run lint && pnpm run build && npx vitest run` 綠
 
 #### Commit 11 — `docs: phase 2 plan retrospective notes`（可選）
@@ -653,20 +742,26 @@ interface Props {
 |---|---|---|
 | `internal/store/frames.go` | `DeleteIfUnchanged` method | +20 |
 | `internal/store/frames_test.go` | F4-F6 | +50 |
-| `internal/module/agent/frame_ops.go` | proxy 偵測分支 + `removeProxyRefForSender` | +100 |
-| `internal/module/agent/frame_ops_test.go` | PR1-PR7 + SE1-SE3 | +240 |
+| `internal/module/agent/frame_ops.go` | proxy 偵測分支 + `findProxyParent`（tree walk depth 5）+ `removeProxyRefForSender` | +130 |
+| `internal/module/agent/frame_ops_test.go` | PR1-PR12 + SE1-SE3（12 proxy + 3 session end = 15 case，含 tree walk mocks） | +360 |
 | `internal/module/agent/sweep.go` | nowFn + threshold + 第三條規則 + afterFrameCleared 抽出 + StopWatch fix | +50 |
 | `internal/module/agent/sweep_test.go` | IS1-IS5 | +160 |
 | `internal/module/agent/handler_test.go` | HB2 | +40 |
 | `spa/src/components/SubagentDots.tsx` | API + type color + proxy outline | +40 (-20) |
 | `spa/src/components/SubagentDots.test.tsx` | 新檔 3 case | +110 |
 | `spa/src/components/TabIcon.tsx` | count → refs | ~15 |
-| `spa/src/hooks/useTabDisplay.ts` | 回傳 subagentRefs | ~8 |
-| **PR-2b 合計** | | **~800 行** |
+| `spa/src/components/SortableTab.tsx` | prop subagentCount → subagentRefs（兩處 TabIcon 調用） | ~10 |
+| `spa/src/components/SortableTab.test.tsx` | prop 升級 + proxy outline case | +25 |
+| `spa/src/features/workspace/components/InlineTab.tsx` | prop count → refs（line 42/111） | ~6 |
+| `spa/src/features/workspace/lib/renderInlineTabIcon.tsx` | 三處 SubagentDots 呼叫 | ~12 |
+| `spa/src/hooks/useTabDisplay.ts` | 回傳 subagentRefs 欄位 | ~8 |
+| **PR-2b 合計** | | **~1000 行** |
 
 ### 總計
 
-**~1300 行 code**（不含 plan）— 比 v1 的 950 多 350 行主要是 proxy identity 欄位擴充、SessionEnd cleanup、DeleteIfUnchanged、afterFrameCleared 抽出、測試擴充。
+**~1500 行 code**（不含 plan）— 比 v2 的 1300 多 200 行主要是：
+- PPID tree walk `findProxyParent` helper + 3 個新 test case（PR2/PR3/PR10-PR12）
+- SPA scope 擴充到 5 檔（v2 遺漏 3 檔）
 
 ---
 
@@ -739,13 +834,15 @@ interface Props {
 | 風險 | 機率 | 影響 | 緩解 |
 |---|---|---|---|
 | 使用者升級後忘了重建 DB | 高 | daemon log noisy 500 | CHANGELOG 紅字 + bump PR description 明示；使用者重建即解 |
-| PPID 單層 match 命中率低（codex-companion 中介） | 中-高 | proxy 偵測大量 fallback 建新 frame | 接受 — Phase 2 以「能驗證 UX 為目標」；Phase 3/4 補 tree walk |
+| **v3：PPID tree walk 深度 5 不夠 cover 極端嵌套** | 低 | 少數 proxy case 仍 fallback 建新 frame | codex-companion 已知是 2 層內；深度 5 留 buffer；超出 case 極罕見，Phase 3/4 再調 |
+| **v3：PPID tree walk 讀 `/proc/<pid>/stat` 或 `ps` 成本** | 低 | 每次 SessionStart 最多 5 次 syscall | SessionStart 非 hot path；5 次 syscall 在 <1ms 級；非擴展問題 |
+| **v3：tree walk 對 kernel 上報自環或 PPID=0 的穩健性** | 低 | goroutine 卡 loop | `info.PPID == ppid` self-cycle guard + `<=1` 終止；PR11 測試覆蓋 |
 | Idle 1h 太短（使用者長跑任務） | 低 | 活躍 frame 誤清 | LastSeenAt 由 hook 刷新；真正長跑有 activity watcher 維持；觀察 1-2 週再調 |
 | SubagentDots 新視覺 a11y 退化 | 低 | 色盲看不出 proxy | outline vs solid 雙通道（形狀+顏色），符合 WCAG |
 | 測試 seed 遺漏 CI 紅 | 中 | subagent 反覆修 | Commit 5 專跑 SPA seed sweep；主 session push 前跑全測 |
 | SPA + daemon skew（Electron dev update 時差） | 中 | subagents 欄位型別短暫 mismatch | 使用者單人，協調一次升級 |
 | DeleteIfUnchanged 在 SQLite 的 race 邊界 | 低 | `DELETE ... WHERE` 在 SQLite 下是 atomic，行為可靠 | modernc.org/sqlite 的 serialization 保證；IS5 測試覆蓋 |
-| PPID 為 0（init process）導致 `FindByPanePID(0)` 誤中 | 低 | 不可能（init 不會是 pane 內 frame） | 但加 guard：`if info.PPID <= 1 { parentCandidate = nil }` |
+| **v3：PR-2b SPA 改動橫跨 5 檔 + 4 props** | 中 | commit 10 一口氣改多檔，容易漏 | atomic commit 10 確保 compile 綠；type check 會抓漏 |
 
 ---
 
@@ -781,20 +878,33 @@ interface Props {
 
 ---
 
-## 10. Plan v2 relative v1 的變動摘要
+## 10. Plan 版本變動摘要
 
-| v1 → v2 改動 | 原因 |
+### v1 → v2
+
+| 改動 | 原因 |
 |---|---|
-| SubagentRef 新增 `SourcePID` + `SourceStartTime` 欄位 | Codex #1: PID 重用 collision-safe |
-| Proxy 偵測改 PPID-first（+ §1.4 rewrite） | Codex #2: pane-only 是回歸 |
-| SessionEnd 清 proxy ref 分支新增（§1.5 rewrite） | Codex #1: 死 proxy 回收路徑 |
-| Idle sweep 改 `DeleteIfUnchanged`（新 store method） | Codex #3: TOCTOU race |
+| SubagentRef 新增 `SourcePID` + `SourceStartTime` 欄位 | Codex v1 #1: PID 重用 collision-safe |
+| Proxy 偵測改 PPID-first（+ §1.4 rewrite） | Codex v1 #2: pane-only 是回歸 |
+| SessionEnd 清 proxy ref 分支新增（§1.5 rewrite） | Codex v1 #1: 死 proxy 回收路徑 |
+| Idle sweep 改 `DeleteIfUnchanged`（新 store method） | Codex v1 #3: TOCTOU race |
 | 移除 migration / boot hard-fail 討論；改 plain rebuild DB | 使用者決策 |
-| Commit 2+3 合併為 atomic schema upgrade | Codex #5: 每 commit 綠 |
+| Commit 2+3 合併為 atomic schema upgrade | Codex v1 #5: 每 commit 綠 |
 | `afterFrameCleared` 抽出；順便修 pid_dead/pid_reused 的 orphan watcher bug | 共用到 idle_timeout 路徑的意外收益 |
-| **確定拆 PR-2a + PR-2b**（§0 重寫） | Codex 建議 + 使用者確認 |
+| 確定拆 PR-2a + PR-2b（§0 重寫） | Codex 建議 + 使用者確認 |
 | `PPID <= 1` guard | v2 自行補的邊界 |
-| 新增 IS5 `conditional DELETE race` 測試 | Codex #3 修正配套 |
+| 新增 IS5 `conditional DELETE race` 測試 | Codex v1 #3 修正配套 |
+
+### v2 → v3
+
+| 改動 | 原因 |
+|---|---|
+| **Proxy 偵測改 PPID 祖先鏈 walk**（depth=5，新 §1.4 rewrite + `findProxyParent` helper） | Codex v2 #2: 單層 PPID 對 codex-companion 架構太弱，會漏 Phase 2 headline UX |
+| **PR-2b SPA scope 擴充**：加 `SortableTab.tsx` / `InlineTab.tsx` / `renderInlineTabIcon.tsx`（§1.14 + §2.9 + §4） | Codex v2 #1: v2 scope 只列 TabIcon / useTabDisplay，實際 5 個 consumer 都吃 `subagentCount` |
+| **§0 PR-2a 改稱 "Schema + Wire Breaking Upgrade"**，拿掉「純骨架，無新行為」字樣 | Codex v2 #3: 不誠實；schema break + wire break 是實質 operational 行為 |
+| Proxy 測試從 PR1-PR7 擴到 PR1-PR12 | Tree walk 新增 3 case（companion hop / depth limit / self-cycle）+ 2 case（cross-pane / partial chain） |
+| `findProxyParent` helper 行數 +30；測試 +120 | Tree walk 實作複雜度 |
+| Commit 10 明列 SortableTab/InlineTab/renderInlineTabIcon 要一起改 | 避免 PR-2b 實作時漏 compile |
 
 ---
 
