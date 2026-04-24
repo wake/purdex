@@ -430,6 +430,88 @@ func TestHandleEvent_OpenCodeValidSubagentBroadcasts(t *testing.T) {
 	}
 }
 
+// HB1 (Lights Phase 2 plan §2.8) — the WS broadcast payload for a native cc
+// SubagentStart carries SubagentRef objects (id + type + started_at) not
+// bare id strings, and native refs omit is_proxy (omitempty).
+func TestHandleEvent_BroadcastPayloadCarriesSubagentRefs(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
+			switch event {
+			case "SessionStart":
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			case "SubagentStart":
+				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": "sub-1"}}
+			default:
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			}
+		},
+	})
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	for _, body := range []string{
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SubagentStart","raw_event":{"agent_id":"sub-1"},"agent_type":"cc"}`,
+	} {
+		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		m.handleEvent(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+	}
+
+	// Drain the SessionStart broadcast.
+	select {
+	case <-sub.SendCh():
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for SessionStart broadcast")
+	}
+
+	select {
+	case msg := <-sub.SendCh():
+		var env struct {
+			Type    string `json:"type"`
+			Session string `json:"session"`
+			Value   string `json:"value"`
+		}
+		if err := json.Unmarshal(msg, &env); err != nil {
+			t.Fatalf("unmarshal broadcast: %v", err)
+		}
+		// Decode the inner normalized event payload.
+		var payload struct {
+			Subagents []map[string]any `json:"subagents"`
+		}
+		if err := json.Unmarshal([]byte(env.Value), &payload); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		if len(payload.Subagents) != 1 {
+			t.Fatalf("subagents len = %d, want 1 (payload=%s)", len(payload.Subagents), env.Value)
+		}
+		ref := payload.Subagents[0]
+		if ref["type"] != "cc" {
+			t.Errorf("subagents[0].type = %v, want cc", ref["type"])
+		}
+		startedAt, ok := ref["started_at"].(float64)
+		if !ok || startedAt == 0 {
+			t.Errorf("subagents[0].started_at should be a non-zero number, got %v", ref["started_at"])
+		}
+		if _, hasProxy := ref["is_proxy"]; hasProxy {
+			t.Errorf("subagents[0] should not contain is_proxy for native ref: %v", ref)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for SubagentStart broadcast")
+	}
+}
+
 func TestHandleEvent_OpenCodeMalformedSubagentDoesNotBroadcast(t *testing.T) {
 	m := newTestModule(t)
 	fakeTmux := tmux.NewFakeExecutor()
