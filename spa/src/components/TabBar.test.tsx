@@ -6,6 +6,23 @@ import type { Tab } from '../types/tab'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { useSessionStore } from '../stores/useSessionStore'
 
+const scrollOverflowState = vi.hoisted(() => ({
+  canScrollLeft: false,
+  canScrollRight: false,
+  scrollLeft: vi.fn(),
+  scrollRight: vi.fn(),
+}))
+
+vi.mock('../hooks/useScrollOverflow', () => ({
+  useScrollOverflow: () => ({
+    containerRef: { current: null },
+    canScrollLeft: scrollOverflowState.canScrollLeft,
+    canScrollRight: scrollOverflowState.canScrollRight,
+    scrollLeft: scrollOverflowState.scrollLeft,
+    scrollRight: scrollOverflowState.scrollRight,
+  }),
+}))
+
 beforeEach(() => {
   cleanup()
   clearModuleRegistry()
@@ -13,6 +30,10 @@ beforeEach(() => {
   registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: () => null }] })
   // Provide sessions keyed by hostId for SortableTab's label lookups
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+  scrollOverflowState.canScrollLeft = false
+  scrollOverflowState.canScrollRight = false
+  scrollOverflowState.scrollLeft.mockClear()
+  scrollOverflowState.scrollRight.mockClear()
 })
 
 const defaultHandlers = {
@@ -147,5 +168,33 @@ describe('TabBar', () => {
     // No pinned/normal zone divider (h-4 height, distinct from tab separators which are h-3.5)
     const zoneDividers = container.querySelectorAll('.w-px.h-4.bg-border-default')
     expect(zoneDividers.length).toBe(0)
+  })
+
+  it('lets normal tabs shrink before the scroller overflows', () => {
+    const { container } = render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} />)
+    const scroller = container.querySelector('.overflow-x-auto.scrollbar-hide')!
+    const strip = scroller.firstElementChild as HTMLElement
+
+    expect(strip.className).toContain('flex-1')
+    expect(strip.className).toContain('min-w-0')
+    expect(strip.style.minWidth).toBe('')
+    expect(strip.style.maxWidth).toBe('max-content')
+  })
+
+  it('renders right scroll control with a fade area and opaque button', () => {
+    scrollOverflowState.canScrollRight = true
+
+    const { container } = render(<TabBar tabs={mockTabs} activeTabId="t1" {...defaultHandlers} />)
+    const fade = container.querySelector('[data-testid="tab-scroll-right-fade"]')!
+    const gradient = container.querySelector('[data-testid="tab-scroll-right-gradient"]')!
+    const button = fade.querySelector('button')!
+
+    expect(fade.className).toContain('w-16')
+    expect(fade.className).toContain('pointer-events-none')
+    expect(gradient.className).toContain('bg-gradient-to-r')
+    expect(gradient.className).toContain('from-transparent')
+    expect(gradient.className).toContain('to-surface-secondary')
+    expect(button.className).toContain('bg-surface-secondary')
+    expect(button.className).toContain('pointer-events-auto')
   })
 })

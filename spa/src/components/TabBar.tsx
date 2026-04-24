@@ -119,16 +119,19 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
         {/* Normal zone with overflow arrows */}
         <div className="relative flex-1 min-w-0 h-full">
           {canScrollLeft && (
-            <button
-              onClick={scrollLeft}
-              className="absolute left-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-gradient-to-r from-surface-secondary to-transparent cursor-pointer"
-              aria-label={t('nav.scroll_left')}
-            >
-              <CaretLeft size={14} className="text-text-secondary" />
-            </button>
+            <div data-testid="tab-scroll-left-fade" className="absolute left-0 top-0 bottom-0 z-10 w-16 flex justify-start pointer-events-none">
+              <button
+                onClick={scrollLeft}
+                className="w-8 h-full flex items-center justify-center bg-surface-secondary cursor-pointer pointer-events-auto"
+                aria-label={t('nav.scroll_left')}
+              >
+                <CaretLeft size={14} className="text-text-secondary" />
+              </button>
+              <div data-testid="tab-scroll-left-gradient" className="w-8 h-full bg-gradient-to-r from-surface-secondary to-transparent" />
+            </div>
           )}
           <div ref={normalZoneRef} className="flex items-center h-full overflow-x-auto scrollbar-hide">
-            <div ref={normalTabsRef} className="flex items-center h-full" style={{ minWidth: 'min-content' }}>
+            <div ref={normalTabsRef} className="flex items-center h-full flex-1 min-w-0" style={{ maxWidth: 'max-content' }}>
               <SortableContext items={normalIds} strategy={horizontalListSortingStrategy}>
                 {normalTabs.map((tab, i) => (
                   <Fragment key={tab.id}>
@@ -159,13 +162,16 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
             </button>
           </div>
           {canScrollRight && (
-            <button
-              onClick={scrollRight}
-              className="absolute right-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-gradient-to-l from-surface-secondary to-transparent cursor-pointer"
-              aria-label={t('nav.scroll_right')}
-            >
-              <CaretRight size={14} className="text-text-secondary" />
-            </button>
+            <div data-testid="tab-scroll-right-fade" className="absolute right-0 top-0 bottom-0 z-10 w-16 flex justify-end pointer-events-none">
+              <div data-testid="tab-scroll-right-gradient" className="w-8 h-full bg-gradient-to-r from-transparent to-surface-secondary" />
+              <button
+                onClick={scrollRight}
+                className="w-8 h-full flex items-center justify-center bg-surface-secondary cursor-pointer pointer-events-auto"
+                aria-label={t('nav.scroll_right')}
+              >
+                <CaretRight size={14} className="text-text-secondary" />
+              </button>
+            </div>
           )}
         </div>
       </DndContext>
