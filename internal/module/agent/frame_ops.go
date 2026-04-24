@@ -1,11 +1,19 @@
 package agent
 
 import (
+	"fmt"
 	"sort"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/store"
 )
+
+// proxyMaxDepth caps the PPID ancestor walk during proxy subagent detection.
+// 5 is enough to cover observed layouts like codex → codex-companion → cc
+// (2 hops) with 3 hops of buffer for shell/tmux wrappers; beyond that we
+// fall back to creating a new frame rather than paying unbounded syscall
+// cost on a genuinely deep chain.
+const proxyMaxDepth = 5
 
 type FrameTraceMeta struct {
 	FrameID       string
@@ -104,6 +112,46 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			Before:        before,
 			After:         summarizeFrame(&stored),
 		}, err
+	}
+
+	// Proxy subagent fast-path (Phase 2 PR-2b, plan §1.4): when a SessionStart
+	// arrives from a sender that has no existing frame of its own and a PPID
+	// ancestor walk locates an alive cross-type parent in the same pane, we
+	// collapse the event into a proxy ref attached to that parent rather than
+	// creating a standalone frame. Observed in practice for codex spawned from
+	// inside a cc session via codex-companion: cc owns the UX, codex should
+	// show as a dot on cc's tab, not as a separate lit-up frame.
+	if req.EventName == "SessionStart" && frame == nil {
+		parent, perr := m.findProxyParent(req)
+		if perr != nil {
+			return nil, FrameTraceMeta{}, perr
+		}
+		if parent != nil {
+			parentBefore := summarizeFrame(parent)
+			ref := agentpkg.SubagentRef{
+				ID:              fmt.Sprintf("proxy:%s:%d:%s", req.AgentType, req.SenderPID, req.SenderStartTime),
+				Type:            req.AgentType,
+				StartedAt:       broadcastTs,
+				SourcePID:       req.SenderPID,
+				SourceStartTime: req.SenderStartTime,
+				IsProxy:         true,
+			}
+			parent.Subagents = updateSubagents(parent.Subagents, "SubagentStart", ref)
+			parent.LastSeenAt = broadcastTs
+			stored, err := m.frames.Upsert(*parent)
+			if err != nil {
+				return nil, FrameTraceMeta{}, err
+			}
+			projection, err := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				FrameID:       stored.FrameID,
+				ParentFrameID: stored.ParentFrameID,
+				Decision:      "updated_frame",
+				Reason:        "proxy_subagent_attached",
+				Before:        parentBefore,
+				After:         summarizeFrame(&stored),
+			}, err
+		}
 	}
 
 	info, err := readProcessInfoFn(req.SenderPID)
@@ -375,4 +423,69 @@ func projectionSortGreater(candidate, current SessionProjection) bool {
 		return candidate.TopFrame.StartedAt > current.TopFrame.StartedAt
 	}
 	return candidate.TopFrame.FrameID > current.TopFrame.FrameID
+}
+
+// findProxyParent walks the sender's PPID ancestor chain (capped at
+// proxyMaxDepth) looking for an alive, identity-verified, cross-type frame in
+// the same pane. See plan §1.4 for full contract.
+//
+// Returns (parent, nil) when a proxy candidate is found; (nil, nil) when the
+// walk should not proxy-attach (no ancestor has a frame / same-type hard
+// stop / all cross-type candidates stale or dead / depth exceeded / proc info
+// or start_time read errors that make identity unverifiable). Non-nil error
+// is returned only when the frames store fails.
+func (m *Module) findProxyParent(req EventRequest) (*store.Frame, error) {
+	if m.frames == nil {
+		return nil, nil
+	}
+	info, err := readProcessInfoFn(req.SenderPID)
+	if err != nil {
+		return nil, nil
+	}
+	ppid := info.PPID
+	for depth := 0; depth < proxyMaxDepth; depth++ {
+		if ppid <= 1 {
+			return nil, nil
+		}
+		candidate, err := m.frames.FindByPanePID(req.TmuxPaneID, ppid)
+		if err != nil {
+			return nil, err
+		}
+		if candidate != nil {
+			// Same-type ancestor: pane already has a frame of our agent_type,
+			// meaning this SessionStart is a re-session / update of that frame
+			// — not a cross-type proxy. Hard-stop the walk (don't continue to
+			// some cross-type grandparent that would be a semantic mismatch).
+			if candidate.AgentType == req.AgentType {
+				return nil, nil
+			}
+			if isPidAliveFn(candidate.PID) {
+				actualStart, serr := processStartTimeFn(candidate.PID)
+				if serr != nil {
+					// v5 rule: identity unverifiable → abort walk (consistent
+					// with verify.go's "lookup error → don't infer" convention).
+					// Prevents mis-attaching to an outer cross-type ancestor
+					// when the immediate candidate's start_time is transiently
+					// unreadable.
+					return nil, nil
+				}
+				if actualStart == candidate.ProcessStartTime {
+					return candidate, nil
+				}
+				// Identity mismatch (PID reused) → stale frame; continue walk
+				// to look for a real parent further up.
+			}
+			// Dead candidate: also continue walk; sweep will clear it.
+		}
+		// No frame at this PID — walk one more level up.
+		ancestorInfo, err := readProcessInfoFn(ppid)
+		if err != nil {
+			return nil, nil
+		}
+		if ancestorInfo.PPID == ppid {
+			return nil, nil
+		}
+		ppid = ancestorInfo.PPID
+	}
+	return nil, nil
 }
