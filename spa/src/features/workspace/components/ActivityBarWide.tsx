@@ -258,7 +258,8 @@ export function ActivityBarWide(props: ActivityBarProps) {
   return (
     <>
       <div
-        className="hidden lg:flex flex-col bg-surface-tertiary border-r border-border-subtle py-2 gap-0.5 flex-shrink-0 overflow-y-auto"
+        data-testid="activity-bar-wide"
+        className="hidden min-h-0 flex-col bg-surface-tertiary border-r border-border-subtle py-2 gap-0.5 flex-shrink-0 overflow-hidden lg:flex"
         style={{ width: renderedSize }}
       >
         <DndContext
@@ -282,35 +283,40 @@ export function ActivityBarWide(props: ActivityBarProps) {
           />
 
           {workspaces.length > 0 && (
-            <div className="mx-3 my-1 h-px bg-border-default" />
+            <div data-testid="activity-bar-workspace-separator" className="mx-3 my-1 h-px shrink-0 bg-border-default" />
           )}
 
-          <SortableContext items={wsIds} strategy={verticalListSortingStrategy}>
-            <div className="flex flex-col gap-0.5">
-              {workspaces.map((ws) => (
-                <WorkspaceRow
-                  key={ws.id}
-                  workspace={ws}
-                  isActive={
-                    activeWorkspaceId === ws.id && !activeStandaloneTabId
-                  }
-                  tabsById={tabsById}
-                  activeTabId={activeTabId}
-                  onSelectWorkspace={onSelectWorkspace}
-                  onContextMenuWorkspace={onContextMenuWorkspace}
-                  onSelectTab={selectTab}
-                  onCloseTab={closeTab}
-                  onMiddleClickTab={middleClickTab}
-                  onContextMenuTab={contextMenuTab}
-                  onRenameTab={renameTab}
-                  onAddTabToWorkspace={addTabToWs}
-                />
-              ))}
-            </div>
-          </SortableContext>
+          <div
+            data-testid="activity-bar-workspace-scroll"
+            className="activity-bar-workspace-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain py-0.5"
+          >
+            <SortableContext items={wsIds} strategy={verticalListSortingStrategy}>
+              <div className="flex flex-col gap-0.5">
+                {workspaces.map((ws) => (
+                  <WorkspaceRow
+                    key={ws.id}
+                    workspace={ws}
+                    isActive={
+                      activeWorkspaceId === ws.id && !activeStandaloneTabId
+                    }
+                    tabsById={tabsById}
+                    activeTabId={activeTabId}
+                    onSelectWorkspace={onSelectWorkspace}
+                    onContextMenuWorkspace={onContextMenuWorkspace}
+                    onSelectTab={selectTab}
+                    onCloseTab={closeTab}
+                    onMiddleClickTab={middleClickTab}
+                    onContextMenuTab={contextMenuTab}
+                    onRenameTab={renameTab}
+                    onAddTabToWorkspace={addTabToWs}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </div>
         </DndContext>
 
-        <div className="mt-auto flex flex-col gap-1 px-2 pb-1 pt-2">
+        <div className="flex shrink-0 flex-col gap-1 px-2 pb-1 pt-2">
           <button
             title={t('nav.new_workspace')}
             onClick={onAddWorkspace}

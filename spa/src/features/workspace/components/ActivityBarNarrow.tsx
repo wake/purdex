@@ -133,8 +133,8 @@ export function ActivityBarNarrow({
   const isHomeActive = !activeWorkspaceId
   const showHomeBadge = (!isHomeActive || !!activeStandaloneTabId) && homeUnreadCount > 0
   return (
-    <div className="group/narrow-bar relative hidden lg:flex">
-      <div className="w-11 flex flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 px-px gap-2.5 flex-shrink-0">
+    <div className="group/narrow-bar relative hidden min-h-0 lg:flex">
+      <div className="w-11 flex min-h-0 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 px-px gap-2.5 flex-shrink-0 overflow-hidden">
       {/* Home — standalone tabs */}
       <div className="relative group">
         {homeStatus && (!isHomeActive || !!activeStandaloneTabId) && (
@@ -173,27 +173,33 @@ export function ActivityBarNarrow({
         )}
       </div>
 
-      {workspaces.length > 0 && <div className="w-5 h-px bg-border-default my-0.5" />}
+      {workspaces.length > 0 && <div data-testid="activity-bar-workspace-separator" className="w-5 h-px bg-border-default my-0.5 shrink-0" />}
 
       {/* Workspaces — sortable */}
-      <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVertical]} onDragEnd={handleDragEnd}>
-        <SortableContext items={wsIds} strategy={verticalListSortingStrategy}>
-          <div ref={wsZoneRef} className="flex flex-col items-center gap-2.5">
-            {workspaces.map((ws) => (
-              <SortableWorkspaceButton
-                key={ws.id}
-                workspace={ws}
-                isActive={activeWorkspaceId === ws.id && !activeStandaloneTabId}
-                onSelect={onSelectWorkspace}
-                onContextMenu={onContextMenuWorkspace}
-              />
-            ))}
-          </div>
-        </SortableContext>
-      </DndContext>
+      <div
+        ref={wsZoneRef}
+        data-testid="activity-bar-workspace-scroll"
+        className="activity-bar-workspace-scroll min-h-0 w-full flex-1 overflow-x-hidden overflow-y-auto overscroll-contain py-px"
+      >
+        <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVertical]} onDragEnd={handleDragEnd}>
+          <SortableContext items={wsIds} strategy={verticalListSortingStrategy}>
+            <div className="flex flex-col items-center gap-2.5">
+              {workspaces.map((ws) => (
+                <SortableWorkspaceButton
+                  key={ws.id}
+                  workspace={ws}
+                  isActive={activeWorkspaceId === ws.id && !activeStandaloneTabId}
+                  onSelect={onSelectWorkspace}
+                  onContextMenu={onContextMenuWorkspace}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+      </div>
 
       {/* Add + Settings */}
-      <div className="mt-auto flex flex-col items-center gap-2 pb-1">
+      <div className="flex shrink-0 flex-col items-center gap-2 pb-1">
         <button
           title={t('nav.new_workspace')}
           onClick={onAddWorkspace}

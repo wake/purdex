@@ -68,6 +68,32 @@ describe('ActivityBarWide', () => {
     const handle = document.querySelector('[data-testid="activity-bar-resize"]')
     expect(handle).toBeInTheDocument()
   })
+
+  it('scrolls only the workspace region and keeps the divider fixed below Home', () => {
+    const { container } = render(
+      <ActivityBarWide
+        workspaces={[ws('w1', 'Purdex'), ws('w2', 'Client A')]}
+        activeWorkspaceId="w1"
+        activeStandaloneTabId={null}
+        onSelectWorkspace={() => {}}
+        onSelectHome={() => {}}
+        standaloneTabIds={[]}
+        onAddWorkspace={() => {}}
+        onOpenHosts={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    )
+
+    const workspaceScroll = screen.getByTestId('activity-bar-workspace-scroll')
+    expect(workspaceScroll).toHaveClass('overflow-y-auto')
+    expect(screen.getByTestId('home-header').closest('[data-testid="activity-bar-workspace-scroll"]')).toBeNull()
+    expect(screen.getByTestId('ws-header-w1').closest('[data-testid="activity-bar-workspace-scroll"]')).toBe(workspaceScroll)
+    expect(container.querySelector('[data-testid="activity-bar-workspace-separator"]')?.closest('[data-testid="activity-bar-workspace-scroll"]')).toBeNull()
+
+    const activityBarRoot = workspaceScroll.closest('[data-testid="activity-bar-wide"]')
+    expect(activityBarRoot).not.toHaveClass('overflow-y-auto')
+    expect(activityBarRoot).toHaveClass('overflow-hidden')
+  })
 })
 
 describe('ActivityBarWide Phase 2 — inline tabs', () => {
