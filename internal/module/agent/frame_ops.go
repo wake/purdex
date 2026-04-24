@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/store"
@@ -369,6 +370,11 @@ func (m *Module) setProjectionTopStatus(sessionName string, status agentpkg.Stat
 	}
 	frame := *projection.TopFrame
 	frame.Status = status
+	// Refresh LastSeenAt so probe-driven status transitions count as "recent
+	// activity" for the idle sweep rule (sweep.go frameIdleThreshold). Without
+	// this bump, a live agent at a shell prompt that emits no hooks for 1h
+	// would be mis-classified as idle and have its frame silently deleted.
+	frame.LastSeenAt = time.Now().UnixNano()
 	if _, err := m.frames.Upsert(frame); err != nil {
 		return nil, err
 	}

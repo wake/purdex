@@ -496,6 +496,58 @@ func TestSweep_IdleConditionalDeleteSkipsOnConcurrentRefresh(t *testing.T) {
 	}
 }
 
+// IS6 — probe-driven status transitions (setProjectionTopStatus) refresh
+// LastSeenAt so the idle rule does not mis-classify a live agent at a shell
+// prompt as idle. R1 regression: v6 plan assumed hook traffic was the only
+// LastSeenAt source, but probe activity is the normal signal for
+// waiting/running/idle while hooks may be silent for > 1h.
+func TestSweep_PreservesLiveFrameAfterProbeActivity(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "live",
+		Status:           agentpkg.StatusRunning,
+		StartedAt:        0,
+		LastSeenAt:       0, // stale baseline — > 1h in the past from sweep's POV
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+
+	probeTime := time.Now().UnixNano()
+	if _, err := m.setProjectionTopStatus("work", agentpkg.StatusIdle); err != nil {
+		t.Fatalf("setProjectionTopStatus: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "live", nil }
+	// Sweep 30 min after probe activity — well within the 1h idle threshold.
+	nowFn = func() time.Time { return time.Unix(0, probeTime+int64(30*time.Minute)) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (probe-bumped LastSeenAt keeps frame alive)", len(frames))
+	}
+	if frames[0].LastSeenAt < probeTime {
+		t.Fatalf("LastSeenAt = %d, want >= %d (setProjectionTopStatus should have bumped it)", frames[0].LastSeenAt, probeTime)
+	}
+}
+
 func TestSweep_ClearingFramePreservesSiblings(t *testing.T) {
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{
