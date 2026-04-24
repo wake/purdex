@@ -548,6 +548,72 @@ func TestSweep_PreservesLiveFrameAfterProbeActivity(t *testing.T) {
 	}
 }
 
+// IS7 — R7 regression: setProjectionTopStatus does narrow column update
+// (status + last_seen_at only), so probe-driven status transitions do not
+// clobber concurrent Subagents mutations on the same row. Before the narrow
+// update fix, status updates round-tripped a stale Subagents baseline and
+// could overwrite refs added by concurrent proxy/native attaches.
+func TestSetProjectionTopStatus_DoesNotClobberConcurrentSubagents(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "live",
+		Subagents:        []agentpkg.SubagentRef{{ID: "a", Type: "cc", StartedAt: 10}},
+		Status:           agentpkg.StatusRunning,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert baseline: %v", err)
+	}
+
+	// Simulate a concurrent subagents mutation landing on the row after the
+	// probe callback has already read the projection but before its status
+	// write. Under the old whole-frame Upsert path, the probe callback's
+	// stale Subagents baseline would clobber this write.
+	racerBaseline, _ := m.frames.GetByIdentity("%5", 200, "live")
+	racerBaseline.Subagents = append(racerBaseline.Subagents,
+		agentpkg.SubagentRef{ID: "b", Type: "cc", StartedAt: 20},
+		agentpkg.SubagentRef{ID: "c", Type: "cc", StartedAt: 30})
+	racerBaseline.LastSeenAt = 30
+	if _, err := m.frames.Upsert(*racerBaseline); err != nil {
+		t.Fatalf("racer Upsert: %v", err)
+	}
+
+	// Probe callback fires. setProjectionTopStatus reads the (now-stale)
+	// projection, but under the narrow-update fix it only writes status +
+	// last_seen_at — the subagents_json column is untouched.
+	if _, err := m.setProjectionTopStatus("work", agentpkg.StatusIdle); err != nil {
+		t.Fatalf("setProjectionTopStatus: %v", err)
+	}
+
+	final, err := m.frames.GetByIdentity("%5", 200, "live")
+	if err != nil {
+		t.Fatalf("final read: %v", err)
+	}
+	if final == nil {
+		t.Fatal("frame vanished")
+	}
+	if final.Status != agentpkg.StatusIdle {
+		t.Fatalf("Status = %q, want Idle", final.Status)
+	}
+	if len(final.Subagents) != 3 {
+		t.Fatalf("Subagents len = %d, want 3 (concurrent writer's refs preserved); got %+v", len(final.Subagents), final.Subagents)
+	}
+	ids := make(map[string]bool)
+	for _, ref := range final.Subagents {
+		ids[ref.ID] = true
+	}
+	for _, want := range []string{"a", "b", "c"} {
+		if !ids[want] {
+			t.Fatalf("Subagents missing ID=%q; subagents_json was clobbered by status write", want)
+		}
+	}
+}
+
 func TestSweep_ClearingFramePreservesSiblings(t *testing.T) {
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{

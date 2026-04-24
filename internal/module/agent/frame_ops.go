@@ -420,14 +420,12 @@ func (m *Module) setProjectionTopStatus(sessionName string, status agentpkg.Stat
 	if err != nil || projection == nil || projection.TopFrame == nil {
 		return projection, err
 	}
-	frame := *projection.TopFrame
-	frame.Status = status
-	// Refresh LastSeenAt so probe-driven status transitions count as "recent
-	// activity" for the idle sweep rule (sweep.go frameIdleThreshold). Without
-	// this bump, a live agent at a shell prompt that emits no hooks for 1h
-	// would be mis-classified as idle and have its frame silently deleted.
-	frame.LastSeenAt = time.Now().UnixNano()
-	if _, err := m.frames.Upsert(frame); err != nil {
+	// Narrow update only status + last_seen_at (#632 R7): a whole-frame
+	// Upsert from this path would round-trip a stale Subagents baseline
+	// and clobber concurrent proxy/native attach/detach mutations on the
+	// same row. Probe-driven status transitions have no business changing
+	// Subagents — decouple the columns at the SQL layer.
+	if err := m.frames.UpdateStatusAndLastSeen(projection.TopFrame.FrameID, status, time.Now().UnixNano()); err != nil {
 		return nil, err
 	}
 	return m.projectionForSession(sessionName)

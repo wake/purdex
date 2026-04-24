@@ -272,6 +272,29 @@ func (s *FramesStore) DeleteIfUnchanged(frameID string, lastSeenAt int64) (bool,
 	return affected > 0, nil
 }
 
+// UpdateStatusAndLastSeen updates only the status + last_seen_at columns of
+// the frame identified by frameID. Narrow by design: probe-driven status
+// transitions must not round-trip through a whole-frame write because doing
+// so would clobber concurrent Subagents mutations (see #632 R7). Returns
+// sql.ErrNoRows if the frame does not exist.
+func (s *FramesStore) UpdateStatusAndLastSeen(frameID string, status agentpkg.Status, lastSeenAt int64) error {
+	res, err := s.db.Exec(`
+		UPDATE agent_frames SET status = ?, last_seen_at = ?
+		WHERE frame_id = ?
+	`, string(status), lastSeenAt, frameID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // UpsertIfUnchanged updates an existing frame atomically, returning
 // (false, zeroFrame, nil) if the row's last_seen_at no longer matches
 // expectedLastSeenAt — i.e. a concurrent writer changed the row between our
