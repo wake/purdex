@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -41,5 +42,41 @@ func TestNew_FailsOnMalformedFramesStore(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "malformed subagents_json") {
 		t.Fatalf("New error = %q, want to mention 'malformed subagents_json'", err.Error())
+	}
+}
+
+// TestNew_TracesErrorIsNotFatal guards against round-4 regression: the
+// module already tolerates m.traces == nil (monitor endpoints degrade, hook
+// processing still runs). A trace-store init failure must NOT be elevated to
+// a daemon-fatal condition (as it accidentally was in round 3).
+func TestNew_TracesErrorIsNotFatal(t *testing.T) {
+	events, err := store.OpenAgentEvent(":memory:")
+	if err != nil {
+		t.Fatalf("OpenAgentEvent: %v", err)
+	}
+	t.Cleanup(func() { _ = events.Close() })
+
+	origTraces := tracesInitFn
+	tracesInitFn = func(*store.AgentEventStore) (*store.TraceStore, error) {
+		return nil, errors.New("simulated trace migration failure")
+	}
+	t.Cleanup(func() { tracesInitFn = origTraces })
+
+	m, err := New(events)
+	if err != nil {
+		t.Fatalf("New: want nil error when traces init fails, got %v", err)
+	}
+	if m == nil {
+		t.Fatal("module should be constructed despite trace init failure")
+	}
+	if m.traces != nil {
+		t.Fatal("m.traces must be nil after simulated trace error (degraded mode)")
+	}
+	if m.traceSink != nil {
+		t.Fatal("m.traceSink must be nil after simulated trace error (degraded mode)")
+	}
+	// Frames must still be wired — they use the real init path.
+	if m.frames == nil {
+		t.Fatal("m.frames must be non-nil when events is non-nil and frames init succeeds")
 	}
 }

@@ -63,25 +63,40 @@ type Module struct {
 	sweepWG     sync.WaitGroup
 }
 
-// New creates a new agent Module backed by the given AgentEventStore. Returns
-// an error if the frames / traces stores fail to migrate — most notably if
-// the on-disk agent_frames contains malformed subagents_json that cannot be
-// classified as either the legacy []string shape or the Phase 2 []SubagentRef
-// shape. Surfacing the error here lets the daemon refuse to start rather than
-// continuing with m.frames == nil (which would degrade silently via the
-// module's m.frames == nil fallbacks).
+// Test seams for Module.New. framesInitFn failure is fatal (hook processing
+// depends on frames); tracesInitFn failure is best-effort (trace
+// observability degrades to nil, daemon continues).
+var (
+	framesInitFn = func(e *store.AgentEventStore) (*store.FramesStore, error) { return e.Frames() }
+	tracesInitFn = func(e *store.AgentEventStore) (*store.TraceStore, error) { return e.Traces() }
+)
+
+// New creates a new agent Module backed by the given AgentEventStore.
+//
+// Returns an error ONLY when the frames store cannot be initialized —
+// typically when on-disk agent_frames contains malformed subagents_json
+// that migrateFramesDB refuses to classify. That failure is fatal because
+// hook processing depends on m.frames; continuing with m.frames == nil
+// would degrade silently via the module's m.frames == nil fallbacks.
+//
+// Trace store initialization is best-effort: the module already tolerates
+// m.traces == nil / m.traceSink == nil in normal operation (monitor
+// endpoints degrade, hook processing still runs). A trace-table migration
+// or corruption error is logged and the module continues without trace
+// observability, not treated as a daemon-fatal condition.
 func New(events *store.AgentEventStore) (*Module, error) {
 	var frames *store.FramesStore
 	var traces *store.TraceStore
 	if events != nil {
 		var err error
-		frames, err = events.Frames()
+		frames, err = framesInitFn(events)
 		if err != nil {
 			return nil, fmt.Errorf("agent module: frames store: %w", err)
 		}
-		traces, err = events.Traces()
+		traces, err = tracesInitFn(events)
 		if err != nil {
-			return nil, fmt.Errorf("agent module: traces store: %w", err)
+			log.Printf("[agent] traces store unavailable, continuing without trace observability: %v", err)
+			traces = nil
 		}
 	}
 	m := &Module{
