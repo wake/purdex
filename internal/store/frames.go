@@ -256,6 +256,22 @@ func (s *FramesStore) Delete(frameID string) error {
 	return err
 }
 
+// DeleteIfUnchanged removes the frame only if its last_seen_at matches the
+// provided value — a concurrent Upsert that refreshed the row will bump
+// last_seen_at and cause this DELETE to match 0 rows, returning (false, nil).
+// Caller should treat (false, nil) as "frame got refreshed, skip this sweep".
+func (s *FramesStore) DeleteIfUnchanged(frameID string, lastSeenAt int64) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM agent_frames WHERE frame_id = ? AND last_seen_at = ?`, frameID, lastSeenAt)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 func collectFrames(rows *sql.Rows) ([]Frame, error) {
 	var frames []Frame
 	for rows.Next() {

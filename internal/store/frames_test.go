@@ -447,6 +447,107 @@ func TestMigrateFramesDB_FailsOnMalformedSubagentsJSON(t *testing.T) {
 	}
 }
 
+func TestFrames_DeleteIfUnchanged_DeletesWhenMatching(t *testing.T) {
+	s := openTestFramesStore(t)
+
+	frame, err := s.Upsert(Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "A",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	})
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	deleted, err := s.DeleteIfUnchanged(frame.FrameID, 10)
+	if err != nil {
+		t.Fatalf("DeleteIfUnchanged: %v", err)
+	}
+	if !deleted {
+		t.Fatal("DeleteIfUnchanged returned (false, nil); want (true, nil) for matching last_seen_at")
+	}
+
+	got, err := s.GetByIdentity("%5", 200, "A")
+	if err != nil {
+		t.Fatalf("GetByIdentity: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("frame still present after DeleteIfUnchanged: %+v", *got)
+	}
+}
+
+func TestFrames_DeleteIfUnchanged_SkipsWhenStale(t *testing.T) {
+	s := openTestFramesStore(t)
+
+	frame, err := s.Upsert(Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "A",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	})
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	// Simulate concurrent refresh: LastSeenAt bumped from 10 to 20 before our DELETE runs.
+	if _, err := s.Upsert(Frame{
+		FrameID:          frame.FrameID,
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "A",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       20,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert refresh: %v", err)
+	}
+
+	deleted, err := s.DeleteIfUnchanged(frame.FrameID, 10)
+	if err != nil {
+		t.Fatalf("DeleteIfUnchanged: %v", err)
+	}
+	if deleted {
+		t.Fatal("DeleteIfUnchanged returned true for stale last_seen_at; want false (concurrent refresh)")
+	}
+
+	got, err := s.GetByIdentity("%5", 200, "A")
+	if err != nil {
+		t.Fatalf("GetByIdentity: %v", err)
+	}
+	if got == nil {
+		t.Fatal("frame missing after skip; want preserved")
+	}
+	if got.LastSeenAt != 20 {
+		t.Fatalf("LastSeenAt = %d, want 20", got.LastSeenAt)
+	}
+}
+
+func TestFrames_DeleteIfUnchanged_NotFound(t *testing.T) {
+	s := openTestFramesStore(t)
+
+	deleted, err := s.DeleteIfUnchanged("no-such-frame", 10)
+	if err != nil {
+		t.Fatalf("DeleteIfUnchanged: %v", err)
+	}
+	if deleted {
+		t.Fatal("DeleteIfUnchanged returned true for missing frame; want false")
+	}
+}
+
 func TestMigrateFramesDB_PreservesNewSubagentsJSON(t *testing.T) {
 	s := openTestFramesStore(t)
 
