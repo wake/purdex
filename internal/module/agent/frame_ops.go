@@ -32,6 +32,18 @@ type FrameTraceMeta struct {
 	Reason        string
 	Before        any
 	After         any
+	// MatchedAgentType is set on the daemon_restart_recovery path when
+	// tryRebuildFromProcessTree confirms an alive agent in the pane process
+	// tree. Empty otherwise. Carries the agent family that the live process
+	// matched, which may differ from req.AgentType (the hook event's
+	// declared agent_type) — divergence is the diagnostic signal Phase 3
+	// rebuild path is meant to surface.
+	//
+	// PR #638 codex review round 2 #3 fix: previously the matched type was
+	// dropped silently (`_ = matchedType`), making rebuild trace unable to
+	// distinguish "rebuild confirmed hook owner" vs "rebuild only saw a
+	// different agent in the same pane (e.g. cc parent of a codex hook)".
+	MatchedAgentType string
 }
 
 func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult, broadcastTs int64) (*SessionProjection, FrameTraceMeta, error) {
@@ -241,6 +253,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	// Fail-soft: a probe error must not abort the hook. Log and fall through
 	// to the降階 no-parent path (reason="no_parent_fallback", see plan §1.4).
 	rebuiltMatched := false
+	rebuiltAgentType := ""
 	if frame == nil && parentFrameID == "" {
 		matchedType, ok, rerr := m.tryRebuildFromProcessTree(req)
 		if rerr != nil {
@@ -248,7 +261,13 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		}
 		if ok {
 			rebuiltMatched = true
-			_ = matchedType // req.AgentType is SOT; matched type is diagnostic only
+			// req.AgentType remains the SOT for frame.AgentType (the hook
+			// event is authoritative). matchedType is preserved separately
+			// for trace diagnostics — divergence (e.g. cc pane with codex
+			// hook) is the signal Inspector / Phase 5 reparent uses to
+			// triage suspected proxy collapse failures. (PR #638 codex
+			// review round 2 #3 fix.)
+			rebuiltAgentType = matchedType
 		}
 	}
 
@@ -333,12 +352,13 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		decision = "updated_frame"
 	}
 	return projection, FrameTraceMeta{
-		FrameID:       stored.FrameID,
-		ParentFrameID: stored.ParentFrameID,
-		Decision:      decision,
-		Reason:        reason,
-		Before:        before,
-		After:         summarizeFrame(&stored),
+		FrameID:          stored.FrameID,
+		ParentFrameID:    stored.ParentFrameID,
+		Decision:         decision,
+		Reason:           reason,
+		Before:           before,
+		After:            summarizeFrame(&stored),
+		MatchedAgentType: rebuiltAgentType,
 	}, err
 }
 

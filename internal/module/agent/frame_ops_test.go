@@ -1791,6 +1791,73 @@ func TestApplyFrameEvent_RebuildHit_TraceReason(t *testing.T) {
 	}
 }
 
+// R9 — rebuild 命中時 meta.MatchedAgentType 設為 prober 回的 agent type
+// （等於 req.AgentType 的同家情境）。PR #638 codex review round 2 #3 fix
+// 的 unit-level guard：previously matchedType 被丟棄；現在保留進 trace
+// payload 給 Inspector / Phase 5 reparent 用。
+func TestApplyFrameEvent_RebuildHit_MetaIncludesMatchedAgentType(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.MatchedAgentType != "cc" {
+		t.Fatalf("MatchedAgentType = %q, want cc (rebuild matched cc, same family as hook)", meta.MatchedAgentType)
+	}
+	if meta.Reason != "daemon_restart_recovery" {
+		t.Fatalf("reason = %q, want daemon_restart_recovery", meta.Reason)
+	}
+}
+
+// R10 — rebuild 命中時 matched type 與 hook event AgentType 不同（mismatch
+// 場景，e.g. cc pane 跑 codex hook 但只 cc alive）。frame.AgentType 仍取
+// req.AgentType（hook event 是 SOT），但 meta.MatchedAgentType 帶 rebuild
+// 看到的真實 type — 給 Inspector / Phase 5 reparent loop 觸發 proxy collapse
+// 補正用。PR #638 codex review round 2 #3 fix 的 mismatch 路徑 guard。
+func TestApplyFrameEvent_RebuildHit_MismatchedTypePreservedInMeta(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		// rebuild 看到 pane 內 cc alive，但 hook event 是 codex（典型 mismatch）
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 300, SenderStartTime: "t300"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.MatchedAgentType != "cc" {
+		t.Fatalf("MatchedAgentType = %q, want cc (preserved diagnostic, even when ≠ req.AgentType)", meta.MatchedAgentType)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 || frames[0].AgentType != "codex" {
+		t.Fatalf("frame.AgentType = %v, want codex (req.AgentType remains SOT despite mismatch)", frames)
+	}
+}
+
 // R6 — rebuild 命中 → 接著 SubagentStart 仍正確累積 ref（驗證 native path 不壞）.
 func TestApplyFrameEvent_RebuildHit_ThenSubagentStart(t *testing.T) {
 	m := newProxyTestModule(t)
