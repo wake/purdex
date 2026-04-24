@@ -1,15 +1,16 @@
 # Editor Restructure (PR 2) — Plan
 
-- Spec: `docs/specs/2026-04-24-editor-restructure-pr2-spec.md` v1.2
-- Plan revision: **v1.2** (2026-04-24) — aligned with spec v1.2 after
-  Round-2 codex review (v1.1 had 3 HIGH blockers)
+- Spec: `docs/specs/2026-04-24-editor-restructure-pr2-spec.md` v1.3
+- Plan revision: **v1.3** (2026-04-24) — aligned with spec v1.3 after
+  Round-3 codex review (v1.2 had 4 HIGH findings: 2 plan residues +
+  dirty-UX + locked-tab)
 - Base commit: `bb5ce0c1` (main @ alpha.216)
 - Target version: 1.0.0-alpha.217
 
 ## 0. Orientation
 
 ### Spec reference
-Spec v1.2. Three-commit PR targeting alpha.217.
+Spec v1.3. Three-commit PR targeting alpha.217.
 
 ### Out of scope (mirroring spec §2)
 - No changes to IndexedDB / InAppBackend storage layer internals.
@@ -99,10 +100,10 @@ Anchors confirmed accurate as of base commit `bb5ce0c1`:
 
 ## 2. TDD test matrix
 
-Total: **39 tests** across 3 commits (v1.2 delta vs v1.1: +M1-1
-Monaco-from-store, +A2-5 moduleId-undefined back-compat, +A2-6
-module-disabled-pane-still-renders; B2-10 rewritten to assert
-`closePane`; L1-1 + A2-1 simplified to match real source signatures).
+Total: **41 tests** across 3 commits (v1.3 delta vs v1.2: +B2-11
+delete-with-locked-tab, +C3-6 popover-switch-dirty-confirm; A2-1
+asserts exact `'/'`; B2-10 pseudocode now fully uses `closePane`
+with no `filePath:null` residue).
 
 | ID | File | Test name | Asserts (one-line) | Commit |
 |----|------|-----------|-------------------|--------|
@@ -120,7 +121,7 @@ module-disabled-pane-still-renders; B2-10 rewritten to assert
 | R1-4 | `lib/register-modules.test.ts` | i18n keys present | both locales have `settings.section.editor` | 1 |
 | R1-5 | `lib/register-modules.test.ts` | module-owned | `isModuleOwnedContribution(editor.editor) === true` | 1 |
 | L1-1 | `components/SettingsPage.test.tsx` | legacy route alias redirects | render `<SettingsPage />` after setting `location.hash` or whatever URL mechanism SettingsPage uses (check 71-99 in implementation; plan step 8 picks the right API) to `editor-buffers` → rendered heading matches the `editor` section | 1 |
-| M1-1 | `components/editor/MonacoWrapper.test.tsx` | options read from store | render `<MonacoWrapper />` with mocked `@monaco-editor/react` that captures the `options` prop; mutate `useEditorSettingsStore.setState({fontSize:20})`; re-render; assert captured options include `fontSize:20` (and similarly tabSize/wordWrap/lineNumbers/minimap/insertSpaces) | 1 |
+| M1-1 | `components/editor/MonacoWrapper.test.tsx` (extend existing) | options read from store | existing file already mocks `@monaco-editor/react` default `Editor` with `editorPropsSpy` (MonacoWrapper.test.tsx:15). Add cases: mutate `useEditorSettingsStore.setState({fontSize:20, tabSize:4, ...}, false)`; re-render `<MonacoWrapper />`; assert `editorPropsSpy.options` reflects all 6 fields (fontSize/tabSize/insertSpaces/wordWrap/lineNumbers/minimap). | 1 |
 | P2-1 | `types/tab.test.ts` | editor-buffers is valid kind | `createTab({kind:'editor-buffers'})` round-trips | 2 |
 | B2-1 | `components/editor/EditorBuffersPane.test.tsx` | empty state | backend.list=[] → empty-state text | 2 |
 | B2-2 | `components/editor/EditorBuffersPane.test.tsx` | lists entries by name asc | backend.list returns 3 → 3 rows in alphabetical order | 2 |
@@ -131,11 +132,12 @@ module-disabled-pane-still-renders; B2-10 rewritten to assert
 | B2-7 | `components/editor/EditorBuffersPane.test.tsx` | smart-open: active tab editor pane | active tab has editor pane → `setPaneContent(activeTabId, paneId, ...)` called; `setActiveTab` called with activeTabId; no addTab | 2 |
 | B2-8 | `components/editor/EditorBuffersPane.test.tsx` | smart-open: other tab editor pane | active tab has none, other does → `setPaneContent(otherTabId, ...)` called + `setActiveTab(otherTabId)` | 2 |
 | B2-9 | `components/editor/EditorBuffersPane.test.tsx` | smart-open: fallback new tab | no editor panes anywhere → `addTab` called with editor content | 2 |
-| B2-10 | `components/editor/EditorBuffersPane.test.tsx` | delete closes open panes | deleting `/buffer/x.md` with 2 open editor panes on it → `useTabStore.closePane` called for each affected tab/pane pair BEFORE `backend.delete`; ordering asserted via event log (`reset:<paneId>` / `delete:<path>`) | 2 |
+| B2-10 | `components/editor/EditorBuffersPane.test.tsx` | delete closes open panes | deleting `/buffer/x.md` with 2 open editor panes on it → `useTabStore.closePane` called for each affected tab/pane pair BEFORE `backend.delete`; ordering asserted via event log (`close:<paneId>` / `delete:<path>`) | 2 |
+| B2-11 | `components/editor/EditorBuffersPane.test.tsx` | delete with locked tab | buffer open in a **locked** tab with single editor pane → `closePane` called (but useTabStore mock confirms no-op for locked); pane & tab remain in mocked state; `backend.delete` still runs. Asserts EditorBuffersPane does not assume successful closure | 2 |
 | N2-1 | `lib/register-modules.test.ts` | buffers NewTab provider registered | `getNewTabProviders().find(p=>p.id==='editor-buffers')` defined | 2 |
 | N2-2 | `lib/register-modules.test.ts` | provider order after editor | `editor-buffers.order > editor.order` | 2 |
 | N2-3 | `components/editor/ManageBuffersNewTabCard.test.tsx` | card onSelect payload | click → `onSelect({kind:'editor-buffers'})` (NOT openSingletonTab) | 2 |
-| A2-1 | `lib/route-utils.test.ts` | tabToUrl handles editor-buffers | `tabToUrl('tab1', {kind:'editor-buffers'})` returns workspace-root fallback string (whatever existing ephemeral kinds return — plan step derives from grep) | 2 |
+| A2-1 | `lib/route-utils.test.ts` | tabToUrl handles editor-buffers | `tabToUrl('tab1', {kind:'editor-buffers'})` returns `'/'` (same as other ephemeral kinds — confirmed route-utils.ts:100) | 2 |
 | A2-2 | `lib/pane-labels.test.ts` | getPaneLabel handles editor-buffers | `getPaneLabel({kind:'editor-buffers'})` returns resolved i18n string | 2 |
 | A2-3 | `lib/pane-labels.test.ts` | getPaneIcon handles editor-buffers | `getPaneIcon({kind:'editor-buffers'})` returns `'Stack'` | 2 |
 | A2-4 | `components/NewTabPage.test.tsx` | module-disabled filter hides provider | with `useModuleEnabledStore.setState({enabled: {editor: false}}, false)` → NewTab grid omits `editor-buffers` and `editor` cards | 2 |
@@ -146,14 +148,15 @@ module-disabled-pane-still-renders; B2-10 rewritten to assert
 | C3-3 | `components/editor/BreadcrumbPopover.test.tsx` | click switch | non-current click → `onSwitch` called with that key | 3 |
 | C3-4 | `components/editor/BreadcrumbPopover.test.tsx` | Escape dismisses | keydown Escape → `onDismiss` | 3 |
 | C3-5 | `components/editor/BreadcrumbPopover.test.tsx` | manage link | click Manage → `onManage` | 3 |
+| C3-6 | `components/editor/EditorToolbar.test.tsx` | popover switch with dirty buffer prompts confirm | with `useEditorStore.setState({buffers:{[currentKey]:{...,isDirty:true}}})` → click non-current buffer item; `window.confirm` called; on cancel, `setPaneContent` NOT called; on OK, `setPaneContent` called. (Tests both branches via two `window.confirm = vi.fn(() => true\|false)` permutations.) | 3 |
 | T3-1 | `components/editor/EditorToolbar.test.tsx` | inapp chip is button | `source.type='inapp'` → Purdex `<button>` rendered | 3 |
 | T3-2 | `components/editor/EditorToolbar.test.tsx` | non-inapp no chip | `source.type='daemon'` → no Purdex chip | 3 |
 
-Note: A2-1's expected return value will be derived in Commit 2 by
-greping `tabToUrl` for what existing ephemeral kinds (`new-tab`,
-`history`, `hosts`, `dashboard`, etc.) return — likely the workspace
-root `/` or empty string. No dedicated `/editor/buffers` route
-(dropped in spec v1.2 §4.9.1).
+Note: A2-1 asserts `'/'` exactly (confirmed from existing ephemeral
+kind cases at `route-utils.ts:100`). No dedicated route for
+`editor-buffers` (spec v1.3 §4.9.1). `parseRoute('/')` is a no-op,
+so the tab is intentionally non-addressable — no round-trip test
+needed or possible.
 
 ---
 
@@ -385,7 +388,7 @@ not exist).
 
 **Step 3: Implement ancillary integration**
 
-- `route-utils.ts`: add `case 'editor-buffers': return '/editor/buffers'` (or matching existing convention).
+- `route-utils.ts`: add `case 'editor-buffers': return '/'` — matches existing ephemeral kinds at route-utils.ts:100. Deliberately non-addressable (spec v1.3 §4.9.1).
 - `pane-labels.ts` getPaneLabel: add `case 'editor-buffers': return t('editor.buffers.tab_title')`.
 - `pane-labels.ts` getPaneIcon: add `case 'editor-buffers': return 'Stack'`.
 - `new-tab-registry.ts`: add optional `moduleId?: string` to
@@ -426,11 +429,19 @@ Create `EditorBuffersPane.test.tsx`:
 // B2-9 smart-open fallback new tab:
 //   seed: no editor panes anywhere
 //   select + Open -> addTab called with {kind:'editor', source:{type:'inapp'}, filePath:'/buffer/...'}
-// B2-10 delete resets open panes BEFORE backend.delete:
-//   seed: 2 tabs each with editor pane pointing to '/buffer/x.md'
+// B2-10 delete closes open panes BEFORE backend.delete:
+//   seed: 2 unlocked tabs each with editor pane pointing to '/buffer/x.md'
 //   select '/buffer/x.md' + Delete -> assertions:
-//     setPaneContent called twice with filePath:null BEFORE mockBackend.delete is called
-//   (verify ordering via mock.instances / vi.spyOn.getMockCall sequence)
+//     useTabStore.closePane called twice (once per tab/pane pair) BEFORE mockBackend.delete
+//     (event log pushes 'close:<paneId>' and 'delete:<path>' — assert all 'close:' indices precede 'delete:')
+// B2-11 delete with locked tab:
+//   seed: 1 locked tab with single editor pane pointing to '/buffer/x.md'
+//        (mock closePane to no-op when tab.locked, matching real useTabStore behavior)
+//   select + Delete -> assertions:
+//     useTabStore.closePane called once (still invoked — helper doesn't check lock)
+//     mocked tab state unchanged (pane remains)
+//     backend.delete called
+//     (confirms EditorBuffersPane tolerates closePane no-op gracefully)
 ```
 
 Expected: 10 fail (pane doesn't exist).
@@ -459,22 +470,27 @@ Action: `spa/src/components/editor/EditorBuffersPane.tsx`:
 // Delete (helper fn deleteWithPaneCleanup):
 //   const targets = Array.from(selected).map(n => '/buffer/'+n)
 //   if selected.size > 1 and not window.confirm(...): return
-//   // Step 1: close every open editor pane pointing at any deleted path
-//   const tabs = useTabStore.getState().tabs
-//   const panesToClose: Array<[tabId, paneId]> = []
-//   for (const [tabId, tab] of Object.entries(tabs)):
-//     for each leaf in scanPaneTree(tab.layout):
-//       if leaf.content.kind==='editor'
-//          && leaf.content.source?.type==='inapp'
-//          && targets.includes(leaf.content.filePath):
-//         panesToClose.push([tabId, leaf.id])
-//   for (const [tabId, paneId] of panesToClose):
-//     useTabStore.getState().closePane(tabId, paneId)
-//   // Step 2: actual deletion (after panes are closed)
-//   for (const path of targets): await backend.delete(path)
-//   refresh; clear selection
-// Note: closePane closes the tab if its last pane closes —
-//   existing useTabStore.closePane behavior. Deliberate.
+//   setLoading(true)   // disable UI during async loop (R3 Part 2 F concurrency guard)
+//   try:
+//     // Step 1: close every open editor pane pointing at any deleted path
+//     //         (snapshot tabs BEFORE closing; closing invalidates references)
+//     const tabs = useTabStore.getState().tabs
+//     const panesToClose: Array<[tabId, paneId]> = []
+//     for (const [tabId, tab] of Object.entries(tabs)):
+//       for each leaf in scanPaneTree(tab.layout):
+//         if leaf.content.kind==='editor'
+//            && leaf.content.source?.type==='inapp'
+//            && targets.includes(leaf.content.filePath):
+//           panesToClose.push([tabId, leaf.id])
+//     for (const [tabId, paneId] of panesToClose):
+//       useTabStore.getState().closePane(tabId, paneId)
+//       // closePane is no-op when tab is locked (useTabStore.ts:195 via closeTab guard)
+//       // EditorBuffersPane does not need to check this — behavior is intentional
+//     // Step 2: actual deletion (after panes are closed where possible)
+//     for (const path of targets): await backend.delete(path)
+//     clear selection; setRefreshKey(r=>r+1)
+//   finally:
+//     setLoading(false)
 // Open (smartOpen helper):
 //   const path = '/buffer/'+selectedName
 //   const newContent = {kind:'editor', source:{type:'inapp'}, filePath: path}
@@ -655,20 +671,37 @@ Postcondition: T3-1, T3-2 pass.
 
 Action: Edit `EditorPane.tsx` where `<EditorToolbar />` is rendered.
 Pass callbacks:
-- `onBufferSwitch={(newKey) => {`
-    `  const tabId = findTabIdForPane(pane.id)  // use existing helper or scan useTabStore.tabs`
-    `  const newContent = {kind:'editor', source:{type:'inapp'}, filePath: newKey}`
-    `  useTabStore.getState().setPaneContent(tabId, pane.id, newContent)`
-    `  // Do NOT call attachPane — EditorPane's own useEffect at line 141-143 fires it on key change.`
-  `}`
-- `onManage={() => useTabStore.getState().openSingletonTab({kind:'editor-buffers'})}`
-- `onNewBuffer={async () => {`
-    `  const path = '/buffer/Untitled-'+Date.now()+'.md'`
-    `  await getFsBackend({type:'inapp'})?.write(path, new Uint8Array(0))`
-    `  const tabId = findTabIdForPane(pane.id)`
-    `  useTabStore.getState().setPaneContent(tabId, pane.id,`
-    `    {kind:'editor', source:{type:'inapp'}, filePath: path})`
-  `}`
+```
+// Local helper (EditorPane.tsx) — no shared util exists:
+// function findTabIdForPane(paneId: string): string | undefined {
+//   const tabs = useTabStore.getState().tabs
+//   for (const [tabId, tab] of Object.entries(tabs)) {
+//     if (findPane(tab.layout, paneId)) return tabId   // findPane is pane-tree.ts:13
+//   }
+//   return undefined
+// }
+
+// onBufferSwitch (with dirty-guard per spec v1.3 §4.8):
+//   const currentKey = bufferKey({type:'inapp'}, content.filePath)
+//   const buf = useEditorStore.getState().buffers[currentKey]
+//   if (buf?.isDirty && !window.confirm(t('editor.buffers.confirm_switch_dirty'))) return
+//   const tabId = findTabIdForPane(pane.id)
+//   if (!tabId) return
+//   useTabStore.getState().setPaneContent(tabId, pane.id,
+//     { kind:'editor', source:{type:'inapp'}, filePath: newKey })
+//   // Do NOT call attachPane — EditorPane's own useEffect at 141-143 fires it on key change.
+
+// onManage:
+//   useTabStore.getState().openSingletonTab({kind:'editor-buffers'})
+
+// onNewBuffer (no dirty-guard needed — new blank buffer doesn't displace):
+//   const path = '/buffer/Untitled-'+Date.now()+'.md'
+//   await getFsBackend({type:'inapp'})?.write(path, new Uint8Array(0))
+//   const tabId = findTabIdForPane(pane.id)
+//   if (!tabId) return
+//   useTabStore.getState().setPaneContent(tabId, pane.id,
+//     { kind:'editor', source:{type:'inapp'}, filePath: path })
+```
 
 Spec v1.2 §4.8 confirms: caller only calls setPaneContent; the
 editor-store rebind happens automatically via EditorPane's existing
@@ -737,7 +770,9 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/editor-restructure-pr2 &&
 | React portal in BreadcrumbPopover breaks jsdom | Medium | `vi.mock('react-dom', async o => ({...await o(), createPortal: n => n}))` at top of BreadcrumbPopover test. |
 | `window.confirm` in multi-delete untestable by default | Medium | `window.confirm = vi.fn(() => true)` in `beforeEach`; B2-10's multi-delete path covered under this mock. Single-delete path needs no confirm. |
 | Popover `onBufferSwitch` accidentally calls `attachPane` directly (as in earlier spec drafts) and races with EditorPane's useEffect | Low (after spec v1.2 clarification) | Plan step 4 of C3 explicitly comments "Do NOT call attachPane" inline. `useEditorStore.attachPane` is not imported by EditorToolbar or BreadcrumbPopover. A lint / grep check in the done-definition ensures this. |
-| Dirty buffer lost when user switches (spec §2 explicit non-goal) | High (user-visible) | Behavior matches VS Code. Ship as-is; issue tracker could capture "prompt before switching dirty buffer" as a follow-up UX improvement. |
+| Dirty buffer lost when user switches via popover | Reduced to Low | Spec v1.3 §4.8 adds `window.confirm` dirty-guard at the popover's onSwitch boundary. Smart-open from management pane intentionally does not prompt (different mental model). Tested by C3-6. |
+| `closePane` on locked single-pane tab is a silent no-op | Medium | Documented in spec v1.3 §4.9.5 and §6 edge cases. EditorBuffersPane calls closePane unconditionally; useTabStore's closeTab:195 guards locked tabs. Affected pane shows EditorPane's existing "file not found" banner after backend.delete. Tested by B2-11. |
+| Concurrent state drift during multi-file delete (user closes a tab between snapshot and close loop) | Low | Helper sets `loading: true` during the async delete loop to disable user actions in EditorBuffersPane. `closePane` on a non-existent tab/pane is a no-op in useTabStore (early return on `!state.tabs[id]`). Safe. |
 | `filePath: string` type still accepts `''` / junk — smart-open could produce an invalid path | Low | All callers construct via `'/buffer/' + name` where `name` is a validated FileEntry. B2-5 covers slash rejection for user input. |
 | `closePane` in delete flow may close the user's currently-active tab unexpectedly | Medium | Documented edge case in spec §4.9.5 — "closes the tab if its last pane closes" — matches useTabStore existing behavior. B2-10 integration test covers tab-close cascade via mocked tabStore actions. |
 | `tabToUrl` fallback string not stable across other ephemeral kinds | Low | A2-1 derives expected value from existing ephemeral cases; implementation copies the exact pattern. If cases disagree on what `/` vs `''` means, plan step in C2 picks the most common and documents. |
@@ -776,8 +811,8 @@ PR ready to merge when:
 - [ ] All 3 commits pass `cd spa && pnpm run lint && npx vitest run &&
       pnpm run build` independently (green on each HEAD, not just the
       final merge).
-- [ ] All 39 Vitest cases green (no skipped / pending / .todo).
-- [ ] Spec v1.2 §7 acceptance lists for C1/C2/C3 fully ticked.
+- [ ] All 41 Vitest cases green (no skipped / pending / .todo).
+- [ ] Spec v1.3 §7 acceptance lists for C1/C2/C3 fully ticked.
 - [ ] `grep -r editor_buffers spa/src` empty (except migration guards
       if any).
 - [ ] `grep -r BufferListSection spa/src` empty (post Commit 2).
@@ -795,4 +830,4 @@ PR ready to merge when:
       fontSize integration, `editor-buffers` deep-link URL, dirty-
       buffer-switch prompt UX).
 
-*End of plan v1.2.*
+*End of plan v1.3.*
