@@ -239,8 +239,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	// ones).
 	//
 	// Fail-soft: a probe error must not abort the hook. Log and fall through
-	// to the legacy no-parent path (reason="parent_frame_missing" today;
-	// renamed to "no_parent_fallback" in Commit 4).
+	// to the降階 no-parent path (reason="no_parent_fallback", see plan §1.4).
 	rebuiltMatched := false
 	if frame == nil && parentFrameID == "" {
 		matchedType, ok, rerr := m.tryRebuildFromProcessTree(req)
@@ -317,11 +316,13 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		}
 	}
 	projection, err := m.projectPane(req.TmuxPaneID)
-	// Phase 3 Commit 3 — three-state reason (plan §1.4):
+	// Phase 3 — three-state reason (plan §1.4):
 	//   parent_frame_found       → legacy lookup hit (line 220-228)
-	//   daemon_restart_recovery  → rebuild via process tree hit
-	//   parent_frame_missing     → fallback (renamed to no_parent_fallback in Commit 4)
-	reason := "parent_frame_missing"
+	//   daemon_restart_recovery  → rebuild via process tree hit (commit 3)
+	//   no_parent_fallback       → all lookups + rebuild missed; frame still
+	//                              created using req.AgentType as SOT (commit 4).
+	// The Inspector uses these to distinguish recovered frames from降階 ones.
+	reason := "no_parent_fallback"
 	if stored.ParentFrameID != "" {
 		reason = "parent_frame_found"
 	} else if rebuiltMatched {

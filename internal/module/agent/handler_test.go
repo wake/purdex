@@ -2204,3 +2204,74 @@ func TestHandleEvent_DaemonRestart_RebuildRecoversForExistingPane(t *testing.T) 
 		t.Errorf("Subagents[0].ID = %q, want sub-1", framesAfter[0].Subagents[0].ID)
 	}
 }
+
+// I3 (Commit 4) — Mid-connection gone integration: frames table is empty and
+// the rebuild seam returns a silent miss ("", 0, nil). The handler still
+// accepts the SessionStart hook and creates a frame using req.AgentType as
+// the SOT, but the trace chain records reason="no_parent_fallback" to mark
+// the降階 path explicitly. Complements I1/I2 (rebuild hit → daemon_restart_
+// recovery) by exercising the cold-path fallback end-to-end through the
+// HTTP handler.
+func TestHandleEvent_MidConnectionGone_NoParentFallback(t *testing.T) {
+	m := rebuildIntegrationModule(t)
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "", 0, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (降階 still creates frame from hook)", len(frames))
+	}
+	if frames[0].AgentType != "cc" {
+		t.Errorf("AgentType = %q, want cc (hook event AgentType is SOT on降階)", frames[0].AgentType)
+	}
+	if frames[0].ParentFrameID != "" {
+		t.Errorf("ParentFrameID = %q, want empty (no_parent_fallback has no parent)", frames[0].ParentFrameID)
+	}
+
+	page := waitForTraceChains(t, m, "work", 1)
+	if len(page.Chains) != 1 {
+		t.Fatalf("chain count = %d, want 1", len(page.Chains))
+	}
+	record, err := m.traces.GetChainRecord(page.Chains[0].ChainID)
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	var frameStep *store.TraceStep
+	for i := range record.Steps {
+		if record.Steps[i].Kind == "frame" {
+			frameStep = &record.Steps[i]
+			break
+		}
+	}
+	if frameStep == nil {
+		t.Fatalf("no frame-kind step in chain (steps=%+v)", record.Steps)
+	}
+	if frameStep.Reason != "no_parent_fallback" {
+		t.Errorf("frame step reason = %q, want no_parent_fallback", frameStep.Reason)
+	}
+	if frameStep.Decision != "created_frame" {
+		t.Errorf("frame step decision = %q, want created_frame", frameStep.Decision)
+	}
+	if frameStep.FrameID != frames[0].FrameID {
+		t.Errorf("frame step FrameID = %q, want %q", frameStep.FrameID, frames[0].FrameID)
+	}
+	if frameStep.ParentFrameID != "" {
+		t.Errorf("frame step ParentFrameID = %q, want empty", frameStep.ParentFrameID)
+	}
+}

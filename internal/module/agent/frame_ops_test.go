@@ -1881,7 +1881,9 @@ func TestApplyFrameEvent_ProxyHit_SkipsRebuild(t *testing.T) {
 	}
 }
 
-// R8 — rebuild err → fail-soft → falls through to parent_frame_missing reason.
+// R8 — rebuild err → fail-soft → falls through to no_parent_fallback reason.
+// (Commit 4 renamed the terminal fallback reason to make the降階 explicit;
+// see plan §1.4 for the three-state contract.)
 func TestApplyFrameEvent_RebuildErrorFailsSoft(t *testing.T) {
 	m := newProxyTestModule(t)
 
@@ -1902,10 +1904,8 @@ func TestApplyFrameEvent_RebuildErrorFailsSoft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyFrameEvent err = %v, want nil (fail-soft)", err)
 	}
-	// Commit 3 stage: reason is still "parent_frame_missing"; commit 4
-	// renames this to "no_parent_fallback".
-	if meta.Reason != "parent_frame_missing" {
-		t.Fatalf("reason = %q, want parent_frame_missing (rebuild err → fail-soft)", meta.Reason)
+	if meta.Reason != "no_parent_fallback" {
+		t.Fatalf("reason = %q, want no_parent_fallback (rebuild err → fail-soft)", meta.Reason)
 	}
 	if meta.Decision != "created_frame" {
 		t.Fatalf("decision = %q, want created_frame", meta.Decision)
@@ -1913,6 +1913,50 @@ func TestApplyFrameEvent_RebuildErrorFailsSoft(t *testing.T) {
 	frames, _ := m.frames.ListByPane("%5")
 	if len(frames) != 1 {
 		t.Fatalf("frame count = %d, want 1 (fallback path still creates frame)", len(frames))
+	}
+}
+
+// N1 (Commit 4) — rebuild returns silent miss ("", 0, nil): all lookup and
+// rebuild paths miss without error → trace reason = no_parent_fallback.
+// Distinguishes the "probe succeeded but found no alive agent" path from the
+// "probe errored out" path (R8). Both end in the same降階 reason, but via
+// different code branches — N1 is the dominant production path when a daemon
+// restart hits a pane whose agent has genuinely exited before the hook fires.
+func TestApplyFrameEvent_NoParentFallback_TraceReason(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "", 0, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "no_parent_fallback" {
+		t.Fatalf("reason = %q, want no_parent_fallback (silent rebuild miss)", meta.Reason)
+	}
+	if meta.Decision != "created_frame" {
+		t.Fatalf("decision = %q, want created_frame", meta.Decision)
+	}
+	if meta.ParentFrameID != "" {
+		t.Fatalf("ParentFrameID = %q, want empty (降階 path has no parent)", meta.ParentFrameID)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (fallback still creates frame)", len(frames))
+	}
+	if frames[0].AgentType != "cc" {
+		t.Fatalf("AgentType = %q, want cc (req.AgentType is SOT)", frames[0].AgentType)
 	}
 }
 
