@@ -1145,3 +1145,117 @@ var errFake = fakeErr("fake read error")
 type fakeErr string
 
 func (e fakeErr) Error() string { return string(e) }
+
+// ---------------------------------------------------------------------------
+// SessionEnd proxy cleanup (Phase 2 PR-2b, plan §1.5 + §2.6)
+// ---------------------------------------------------------------------------
+
+// SE1 — codex SessionEnd with no frame of its own removes the proxy ref from
+// its cc parent and emits a proxy_subagent_detached trace.
+func TestSessionEnd_RemovesProxyRefFromParent(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) { return "t100", nil }
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	// First: proxy attach.
+	startReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	if _, meta, err := m.applyFrameEvent(startReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("attach: %v", err)
+	} else if meta.Reason != "proxy_subagent_attached" {
+		t.Fatalf("attach reason = %q", meta.Reason)
+	}
+
+	// Then: SessionEnd with same identity — should remove the ref.
+	endReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionEnd", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(endReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent SessionEnd: %v", err)
+	}
+	if meta.Decision != "updated_frame" || meta.Reason != "proxy_subagent_detached" {
+		t.Fatalf("trace meta = %q/%q, want updated_frame/proxy_subagent_detached", meta.Decision, meta.Reason)
+	}
+	if meta.FrameID != parent.FrameID {
+		t.Fatalf("FrameID = %q, want parent %q", meta.FrameID, parent.FrameID)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty", frames[0].Subagents)
+	}
+}
+
+// SE2 — orphan SessionEnd (no matching ref) falls back to legacy skip path.
+func TestSessionEnd_OrphanFallsBackToExistingSkip(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	// No proxy ref attached.
+
+	endReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionEnd", AgentType: "codex", SenderPID: 999, SenderStartTime: "t999"}
+	_, meta, err := m.applyFrameEvent(endReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "session_end_without_frame" {
+		t.Fatalf("reason = %q, want session_end_without_frame (orphan fallback)", meta.Reason)
+	}
+}
+
+// SE3 — SessionEnd on a frame that owns its own identity deletes the frame
+// (the owning frame delete removes any proxy refs it was carrying, which is
+// fine as a side effect).
+func TestSessionEnd_OwnFrameDeletePreservesOtherProxyRefs(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) { return "t100", nil }
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	startReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	if _, _, err := m.applyFrameEvent(startReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("proxy attach: %v", err)
+	}
+
+	// Now SessionEnd on cc itself (the owning frame).
+	endReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionEnd", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	_, meta, err := m.applyFrameEvent(endReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}, 300)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "deleted_frame" || meta.Reason != "session_end" {
+		t.Fatalf("trace meta = %q/%q, want deleted_frame/session_end", meta.Decision, meta.Reason)
+	}
+	if meta.FrameID != parent.FrameID {
+		t.Fatalf("FrameID = %q, want parent %q", meta.FrameID, parent.FrameID)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0 (cc frame deleted)", len(frames))
+	}
+}

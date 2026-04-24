@@ -55,6 +55,25 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 				After:         map[string]any{},
 			}, err
 		}
+		// frame == nil: sender has no frame of its own. This is either a
+		// genuine orphan SessionEnd, or the SessionEnd of a process that was
+		// previously proxy-attached to another frame (Phase 2 PR-2b §1.5).
+		// Probe the pane's frames for a matching proxy ref and detach it.
+		removed, parentFrame, parentBefore, parentAfter, err := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs)
+		if err != nil {
+			return nil, FrameTraceMeta{}, err
+		}
+		if removed {
+			projection, perr := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				FrameID:       parentFrame.FrameID,
+				ParentFrameID: parentFrame.ParentFrameID,
+				Decision:      "updated_frame",
+				Reason:        "proxy_subagent_detached",
+				Before:        parentBefore,
+				After:         parentAfter,
+			}, perr
+		}
 		projection, err := m.projectPane(req.TmuxPaneID)
 		return projection, FrameTraceMeta{
 			Decision: "skipped",
@@ -423,6 +442,50 @@ func projectionSortGreater(candidate, current SessionProjection) bool {
 		return candidate.TopFrame.StartedAt > current.TopFrame.StartedAt
 	}
 	return candidate.TopFrame.FrameID > current.TopFrame.FrameID
+}
+
+// removeProxyRefForSender scans the pane's frames for a proxy SubagentRef
+// whose SourcePID+SourceStartTime match the sender that is emitting SessionEnd,
+// filters it out, refreshes the owning frame's LastSeenAt and persists via
+// Upsert. Matching is by identity fields (SourcePID+SourceStartTime), not by
+// ref.ID string, so the detach remains robust across potential future ID
+// format changes.
+//
+// Returns (removed, ownerFrameAfter, ownerBefore, ownerAfter, err):
+//   - removed=true with ownerFrameAfter populated when a ref was detached.
+//   - removed=false, zeroFrame, nil, nil, nil when nothing matched.
+func (m *Module) removeProxyRefForSender(paneID string, senderPID int, senderStartTime string, broadcastTs int64) (bool, store.Frame, any, any, error) {
+	if m.frames == nil {
+		return false, store.Frame{}, nil, nil, nil
+	}
+	frames, err := m.frames.ListByPane(paneID)
+	if err != nil {
+		return false, store.Frame{}, nil, nil, err
+	}
+	for _, frame := range frames {
+		hit := -1
+		for i, ref := range frame.Subagents {
+			if ref.SourcePID == senderPID && ref.SourceStartTime == senderStartTime {
+				hit = i
+				break
+			}
+		}
+		if hit < 0 {
+			continue
+		}
+		before := summarizeFrame(&frame)
+		filtered := make([]agentpkg.SubagentRef, 0, len(frame.Subagents)-1)
+		filtered = append(filtered, frame.Subagents[:hit]...)
+		filtered = append(filtered, frame.Subagents[hit+1:]...)
+		frame.Subagents = filtered
+		frame.LastSeenAt = broadcastTs
+		stored, err := m.frames.Upsert(frame)
+		if err != nil {
+			return false, store.Frame{}, nil, nil, err
+		}
+		return true, stored, before, summarizeFrame(&stored), nil
+	}
+	return false, store.Frame{}, nil, nil, nil
 }
 
 // findProxyParent walks the sender's PPID ancestor chain (capped at
