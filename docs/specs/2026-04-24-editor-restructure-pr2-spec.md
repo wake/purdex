@@ -2,7 +2,7 @@
 
 - **Version**: 1.0.0-alpha.217 (target bump)
 - **Date**: 2026-04-24
-- **Spec revision**: v1.2 (2026-04-24) — incorporates Round-2 codex review findings (v1.1 introduced 3 new HIGH blockers verified against source)
+- **Spec revision**: v1.3 (2026-04-24) — incorporates Round-3 codex findings (dirty-buffer UX + locked-tab edge case + deliberate non-addressability)
 - **Base**: `bb5ce0c1` (main @ alpha.216)
 - **Author**: claude-code + wake
 - **Status**: Draft (pending Round-2 codex plan review)
@@ -410,10 +410,27 @@ As described in §4.6, `EditorPane`'s `useEffect(attachPane, [key])`
 auto-rebinds the editor store once React re-renders the pane with the
 new `content.filePath`. The caller does not invoke `attachPane`.
 
+**Dirty-buffer guard (added v1.3)**: Before calling `setPaneContent`,
+the popover's `onSwitch` handler checks
+`useEditorStore.getState().buffers[currentBufferKey]?.isDirty`. If the
+current buffer is dirty, prompt with `window.confirm(t('editor.buffers.
+confirm_switch_dirty'))`; abort on cancel. This addresses the R3
+finding that "silent dirty-buffer loss is one-click-triggerable" —
+§2's non-goal ("no dirty-buffer preservation") is fine as a design
+principle, but leaving it silently exploitable via the popover is a
+UX trap. A `confirm()` matches the multi-select-delete pattern and
+keeps the added surface area minimal. `smart-open` from the
+management pane does NOT add this check — users navigating from a
+management view have a different mental model ("open this file")
+and the confirm would feel intrusive; the dirty state is still
+discarded, but the interaction is semantically "open another file"
+rather than "hot-swap this editor".
+
 Consequence documented in §2 non-goals: switching buffers discards the
-previous buffer's pane state (cursor, Monaco view state) and may
-discard the previous buffer entirely if no other pane references it.
-Users should save before switching — standard VS Code semantics.
+previous buffer's pane state (cursor, Monaco view state) and, absent
+the popover's dirty-guard, may discard the previous buffer entirely
+if no other pane references it. Users should save before switching —
+standard VS Code semantics.
 
 `BreadcrumbPopover` (new component):
 - Positioned below chip using anchored rect (reuse `RenamePopover`
@@ -439,16 +456,22 @@ explicit.
 
 #### 4.9.1 `tabToUrl()` — route serialization
 `spa/src/lib/route-utils.ts:98-121` has a switch on `content.kind`.
-Add an `editor-buffers` branch that returns the workspace root (or
-the same fallback used by other ephemeral, non-addressable pane
-kinds — grep existing cases during implementation).
+Add an `editor-buffers` branch that returns `'/'` — the same value
+existing non-addressable ephemeral kinds (`new-tab`, `dashboard`,
+`history`, `hosts`, etc.) return (confirmed by inspection of
+`route-utils.ts:100`).
 
-**Deliberate omission**: no matching `parseRoute` branch. The buffers
-management tab is a pure-UI tab and not a deep-link target. Spec v1.1
-speculated a dedicated `/editor/buffers` URL with round-trip; v1.2
-drops this per R2 finding #3 — a serializer without a parser is
-worse than no serializer. If deep-linking becomes desired, a future
-PR adds both sides together with a round-trip test.
+**Deliberately non-addressable** (v1.3 clarification): `parseRoute('/')`
+is a no-op (route-utils.ts:27). An `editor-buffers` tab serialized to
+`'/'` will NOT round-trip — reloading the app or navigating via URL
+bar to `/` will not restore a buffers tab. This is intentional: the
+buffers management tab is a transient UI entry invoked from the
+breadcrumb popover's Manage link or the NewTab card; it should not
+persist across reload. A future PR that wants bookmark support must
+add both a `tabToUrl` branch (non-`/` path) and a matching
+`parseRoute` branch, plus a round-trip test. Spec v1.1 speculated
+`/editor/buffers` with round-trip; v1.2 removed it because a
+serializer without a parser is strictly worse.
 
 #### 4.9.2 `getPaneLabel()` + `getPaneIcon()` — tab bar rendering
 `spa/src/lib/pane-labels.ts:19-82` returns the tab title and icon
@@ -490,12 +513,23 @@ error inside `EditorPane`. Resolution:
    `content.source.type === 'inapp'` and
    `content.filePath === path`.
 2. For each match, call
-   `useTabStore.getState().closePane(tabId, paneId)`. If the tab's
-   last pane is closed, `closePane` closes the tab itself — this is
-   existing `useTabStore.closePane` behavior (see store). **Do not
-   close the buffers management pane itself even if it is somehow
-   in that list** — but this cannot happen in practice because
-   `editor-buffers` is a different `content.kind`.
+   `useTabStore.getState().closePane(tabId, paneId)`.
+   - If the tab is **not locked** and this is its last pane,
+     `closePane` delegates to `closeTab` and the tab is removed —
+     existing `useTabStore.closePane` → `closeTab` behavior
+     (useTabStore.ts:192-207).
+   - If the tab **is locked**, `closeTab` is a no-op
+     (useTabStore.ts:195). The pane therefore stays in the layout
+     with `content.filePath` pointing at the now-deleted file.
+     `EditorPane`'s read effect will fail with the backend's
+     "file not found" error, which is rendered as an error banner
+     inside the pane. **This is intentional** — the locked tab
+     flag exists precisely so the user's layout state is never
+     altered by background events. The user can manually unlock /
+     close the tab if they wish.
+   - The buffers management pane itself cannot appear in the match
+     list because its `content.kind === 'editor-buffers'`, not
+     `'editor'`.
 3. Then call `backend.delete(path)` and refresh the buffers list.
 
 **Why `closePane` instead of changing `filePath`**: `PaneContent`
@@ -564,7 +598,9 @@ Plan phase encodes this in every step.
 | Case | Behavior |
 |---|---|
 | User has `editor-buffers` singleton tab open, clicks "Manage buffers" in popover | `openSingletonTab({kind:'editor-buffers'})` focuses existing tab |
-| User switches buffer via popover while current pane has unsaved diff | `setPaneContent` fires; `EditorPane`'s `attachPane` useEffect rebinds → VS Code-style semantics: previous buffer's pane state is discarded; users should save before switching (§2 non-goal) |
+| User switches buffer via popover while current pane has unsaved diff | Popover's onSwitch checks `useEditorStore.buffers[key]?.isDirty`; if true, `window.confirm(t('editor.buffers.confirm_switch_dirty'))`; abort on cancel. On confirm, `setPaneContent` fires; `EditorPane`'s `attachPane` useEffect rebinds → previous buffer discarded (§4.8) |
+| User opens a buffer from the buffers management pane while a dirty editor pane exists | smart-open does NOT prompt — mental model is "open file", not "hot-swap editor". Dirty state is still discarded under VS Code semantics (§2 non-goal) |
+| User deletes a buffer that is open in a **locked** tab's single editor pane | `closePane` → `closeTab` is a no-op for locked tab (useTabStore.ts:195); pane stays with dangling filePath; EditorPane displays "file not found" error banner. Locked-tab semantics intentionally protect layout state (§4.9.5) |
 | Rename buffer to name containing `/` | Validation rejects; inline error "Subfolders not supported" (see non-goals) |
 | Delete currently open buffer (any pane) | Per §4.9.5: every affected pane is closed via `useTabStore.closePane` *before* `backend.delete`; tabs whose last pane closes are closed too |
 | Delete currently open buffer (breadcrumb popover is showing it) | Hosting pane is closed by §4.9.5 flow; popover unmounts with its host `EditorToolbar` |
@@ -617,9 +653,12 @@ All verification commands run from the `spa/` subdirectory:
 - [ ] Smart-open uses `setPaneContent` (not `attachPane`) and prefers
       the active tab's first editor pane; falls back to `tabOrder`
       scan; finally opens a new tab (§4.6).
-- [ ] Deletion of a buffer closes every open editor pane pointing
-      at it via `useTabStore.closePane` *before* calling
+- [ ] Deletion of a buffer calls `useTabStore.closePane` on every
+      open editor pane pointing at it *before* calling
       `backend.delete` (§4.9.5).
+- [ ] Deletion when the pane sits in a locked tab: `closePane` is a
+      no-op (by `closeTab` locking guard); the pane stays and shows
+      EditorPane's read-error banner. Verified by test B2-11.
 - [ ] "Manage Buffers" NewTab card registered with
       `moduleId: 'editor'`, `order: 6`, icon `Stack`; click replaces
       current NewTab pane via `onSelect` (not `openSingletonTab`).
@@ -650,6 +689,11 @@ All verification commands run from the `spa/` subdirectory:
 - [ ] Popover buffer-switch calls `setPaneContent` only
       (§4.8); `attachPane` rebind happens automatically via
       `EditorPane`'s existing `useEffect`.
+- [ ] Popover buffer-switch with dirty current buffer shows
+      `window.confirm` dialog; cancel aborts switch, OK proceeds
+      (§4.8 dirty-guard).
+- [ ] i18n: `editor.buffers.confirm_switch_dirty` added (both
+      locales).
 - [ ] All verification commands green.
 
 ## 8. Open questions
@@ -667,7 +711,7 @@ Decisions taken in v1.1 (carried forward):
   (§2 non-goals)
 - Tiptap `fontSize` integration → deferred to follow-up (§2 non-goals)
 
-Decisions taken in v1.2 (new):
+Decisions taken in v1.2:
 - Delete-open-buffer flow → `closePane` (not `setPaneContent` with
   a null/untitled fallback). §4.9.5.
 - Buffer-switch semantics → caller invokes `setPaneContent` only;
@@ -676,6 +720,16 @@ Decisions taken in v1.2 (new):
   "save before switching" behavior. §4.6 + §4.8 + §2 non-goals.
 - `editor-buffers` deep-link URL → omitted this PR; `tabToUrl`
   returns workspace-root fallback, no `parseRoute` branch. §4.9.1.
+
+Decisions taken in v1.3 (new):
+- Popover switch while buffer is dirty → `window.confirm` guard
+  (§4.8 dirty-guard). Smart-open from management pane does NOT
+  prompt — different mental model.
+- Delete targeting a locked tab's pane → no-op (existing
+  `closeTab` locking guard); pane stays, user sees read-error
+  banner. Locked-tab semantics intentionally protect layout.
+- `tabToUrl` returns `'/'` (confirmed from existing ephemeral
+  kinds); `editor-buffers` is deliberately non-addressable.
 
 Still open:
 1. **`fontSize` clamp bounds `[10, 24]`** — conservative default;
@@ -702,4 +756,4 @@ Still open:
 
 ---
 
-*End of spec v1.2.*
+*End of spec v1.3.*
