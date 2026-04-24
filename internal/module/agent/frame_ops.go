@@ -541,13 +541,12 @@ func (m *Module) findProxyParent(req EventRequest) (*store.Frame, error) {
 			return nil, err
 		}
 		if candidate != nil {
-			// Same-type ancestor: pane already has a frame of our agent_type,
-			// meaning this SessionStart is a re-session / update of that frame
-			// — not a cross-type proxy. Hard-stop the walk (don't continue to
-			// some cross-type grandparent that would be a semantic mismatch).
-			if candidate.AgentType == req.AgentType {
-				return nil, nil
-			}
+			// Liveness + identity gating applies to BOTH same-type and
+			// cross-type candidates (R3 fix). A stale same-type frame (PID
+			// reused, or process dead) is leftover data, not a real
+			// "re-session of an existing live sibling"; it must not
+			// hard-stop the walk or we'd strand a legitimate proxy attach
+			// to a live cross-type ancestor above it.
 			if isPidAliveFn(candidate.PID) {
 				actualStart, serr := processStartTimeFn(candidate.PID)
 				if serr != nil {
@@ -559,10 +558,21 @@ func (m *Module) findProxyParent(req EventRequest) (*store.Frame, error) {
 					return nil, nil
 				}
 				if actualStart == candidate.ProcessStartTime {
+					// Live + identity-verified candidate.
+					if candidate.AgentType == req.AgentType {
+						// Same-type live ancestor: pane already owns a live
+						// frame of our agent_type, so this SessionStart is a
+						// re-session / update of that frame — not a cross-type
+						// proxy. Hard-stop the walk here (don't continue to a
+						// cross-type grandparent that would be semantically wrong).
+						return nil, nil
+					}
+					// Cross-type live ancestor: this is our proxy parent.
 					return candidate, nil
 				}
 				// Identity mismatch (PID reused) → stale frame; continue walk
-				// to look for a real parent further up.
+				// to look for a real parent further up. Applies to both
+				// same-type and cross-type.
 			}
 			// Dead candidate: also continue walk; sweep will clear it.
 		}

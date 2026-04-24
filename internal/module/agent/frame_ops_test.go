@@ -1183,6 +1183,65 @@ type fakeErr string
 
 func (e fakeErr) Error() string { return string(e) }
 
+// PR16 — R3 regression: a stale same-type ancestor (dead process, or PID
+// reused with mismatched start_time) must NOT hard-stop the walk. The walk
+// must continue upward to locate a live cross-type parent. Before R3 fix,
+// the same-type check fired before the liveness/identity gate, erroneously
+// aborting the walk for leftover data that sweep had not yet cleared.
+func TestProxySubagent_StaleSameTypeAncestorDoesNotBlockWalk(t *testing.T) {
+	m := newProxyTestModule(t)
+	// Live cc frame at PID 100.
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	// Stale codex frame at PID 200 — row still in DB but process is dead.
+	seedFrame(t, m, "%5", "codex", 200, "t200_old", 5)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 400:
+			return agentpkg.ProcessInfo{PID: 400, PPID: 200}, nil
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, PPID: 1}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(pid int) bool {
+		// Stale codex PID 200 dead; live cc PID 100 alive.
+		return pid == 100
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	req := EventRequest{
+		TmuxSession:     "work",
+		TmuxPaneID:      "%5",
+		EventName:       "SessionStart",
+		AgentType:       "codex",
+		SenderPID:       400,
+		SenderStartTime: "t400",
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "proxy_subagent_attached" {
+		t.Fatalf("walk should skip dead stale codex and proxy-attach to live cc; got reason=%q meta=%+v", meta.Reason, meta)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // SessionEnd proxy cleanup (Phase 2 PR-2b, plan §1.5 + §2.6)
 // ---------------------------------------------------------------------------
