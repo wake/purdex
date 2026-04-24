@@ -2,7 +2,7 @@
 
 - **Version**: 1.0.0-alpha.217 (target bump)
 - **Date**: 2026-04-24
-- **Spec revision**: v1.1 (2026-04-24) — incorporates Round-1 codex review findings
+- **Spec revision**: v1.2 (2026-04-24) — incorporates Round-2 codex review findings (v1.1 introduced 3 new HIGH blockers verified against source)
 - **Base**: `bb5ce0c1` (main @ alpha.216)
 - **Author**: claude-code + wake
 - **Status**: Draft (pending Round-2 codex plan review)
@@ -75,6 +75,23 @@ puzzle-piece marker.
   `InAppBackend.rename()` does not create intermediate directories
   (line 105-109), and `list()` only returns direct children (line
   62-83). Rename is flat-only; subfolder support is a follow-up.
+- **No deep-link URL for the buffers management tab.** Spec v1.1
+  speculated `/editor/buffers`; v1.2 drops that. `tabToUrl` for
+  `editor-buffers` returns the same fallback as other ephemeral,
+  non-addressable tabs (current workspace root). `parseRoute` is
+  not extended. A future PR can add a dedicated route with a
+  matching `parseRoute` branch and a round-trip test.
+- **No preservation of dirty-buffer state across pane-content
+  swaps.** Switching `pane.content.filePath` (via smart-open,
+  popover switch, or delete-then-reopen) causes
+  `EditorPane`'s `useEffect(attachPane, [key])` to rebind the pane
+  to the new buffer key. `attachPane` resets pane state
+  (editorMode, showDiff, cursor, Monaco view state) and, if the
+  previous buffer has no other pane referencing it, removes the
+  buffer from `useEditorStore.buffers`. This is existing
+  `EditorPane` behavior — VS Code-style "save before switching"
+  semantics. Users must save manually; this PR does NOT add an
+  unsaved-changes prompt.
 
 ## 3. Invariants
 
@@ -286,10 +303,17 @@ parent-dir logic and relax this validator.
 `useEditorStore.paneStates`. Therefore swapping the displayed buffer
 requires `useTabStore.setPaneContent(tabId, paneId, newContent)` —
 *not* `useEditorStore.attachPane()`, which only updates the editor
-store's internal view state. `attachPane` remains useful for the
-breadcrumb popover swap (same-pane same-source) because it preserves
-the existing pane's dirty state; for cross-pane targeting from the
-management view, `setPaneContent` is the right tool.
+store's internal view state.
+
+**Caller does not call `attachPane` directly**: `EditorPane` has a
+`useEffect(() => attachPane(paneId, key), [paneId, key])` at
+line 141-143. When `setPaneContent` mutates the pane's `content.filePath`,
+React re-renders `EditorPane`, `key` changes, and the useEffect fires
+`attachPane` automatically. Smart-open, popover switch, and
+`onNewBuffer` all just call `setPaneContent` — the editor-store
+rebind happens as a downstream effect without explicit orchestration.
+(See non-goals: `attachPane` resets pane state and may discard the
+previous buffer. This is pre-existing VS Code-style semantics.)
 
 **Targeting order** (stop at first match):
 
@@ -306,11 +330,12 @@ management view, `setPaneContent` is the right tool.
 { type: 'inapp' }, filePath: '/buffer/' + name }` and call
 `useTabStore.getState().setPaneContent(targetTabId, targetPaneId,
 newContent)`. Then `setActiveTab(targetTabId)`. `setPaneContent` is
-the existing, well-tested pathway (used by NewTab flows).
+the existing pathway (used by NewTab flows) and is the only call the
+caller makes — `EditorPane`'s `useEffect` performs the editor-store
+rebind as described above.
 
 This policy keeps buffer-editing in one pane slot where possible —
-matches VS Code's "reveal in editor" behavior — without depending on
-`attachPane` to do something it does not do.
+matches VS Code's "reveal in editor" behavior.
 
 ### 4.7 NewTab entry — "Manage Buffers"
 
@@ -368,31 +393,27 @@ toggles a popover:
   <BreadcrumbPopoverTrigger
     buffers={bufferList}
     currentBufferKey={path}
-    onSwitch={(newKey) => useEditorStore.attachPane(paneId, newKey)}
-    onManage={() => useTabStore.openSingletonTab({ kind: 'editor-buffers' })}
+    onSwitch={(newKey) => {
+      // tabId resolved by the caller (EditorPane passes paneId + finds tabId)
+      useTabStore.getState().setPaneContent(tabId, paneId,
+        { kind: 'editor', source: { type: 'inapp' }, filePath: newKey })
+    }}
+    onManage={() =>
+      useTabStore.getState().openSingletonTab({ kind: 'editor-buffers' })
+    }
   />
 )}
 ```
 
-**Note on `attachPane` here vs `setPaneContent` in §4.6**: The
-popover is wired into an editor pane that is already displaying an
-inapp buffer. Switching between inapp buffers within the same pane
-keeps the same `pane.content` shape (kind + source stay `'editor'` +
-`'inapp'`) — only the `filePath` changes. `attachPane` is the
-correct internal-state transition here because it preserves the
-editor pane's `paneStates` binding. The §4.6 cross-pane case has to
-change `pane.content` (the filePath differs) and therefore uses
-`setPaneContent` plus a downstream reconciliation.
+**`setPaneContent` is the only state transition the popover triggers.**
+As described in §4.6, `EditorPane`'s `useEffect(attachPane, [key])`
+auto-rebinds the editor store once React re-renders the pane with the
+new `content.filePath`. The caller does not invoke `attachPane`.
 
-(Both `attachPane` and `setPaneContent` accept a filePath update;
-the distinction is scope of side effects — `attachPane` only rebinds
-inside `useEditorStore`, while `setPaneContent` rewrites
-`useTabStore`'s layout. EditorPane reads `pane.content.filePath`
-from `useTabStore`, so a buffer swap *must* include a
-`setPaneContent` call. In the popover case, EditorToolbar calls
-both: first update `pane.content.filePath` via `setPaneContent`,
-then reuse the editor-store binding via `attachPane` to avoid
-flash-remount. See plan for the exact sequence.)
+Consequence documented in §2 non-goals: switching buffers discards the
+previous buffer's pane state (cursor, Monaco view state) and may
+discard the previous buffer entirely if no other pane references it.
+Users should save before switching — standard VS Code semantics.
 
 `BreadcrumbPopover` (new component):
 - Positioned below chip using anchored rect (reuse `RenamePopover`
@@ -417,12 +438,17 @@ pane-aware switch sites. Spec v1.0 missed these; v1.1 makes them
 explicit.
 
 #### 4.9.1 `tabToUrl()` — route serialization
-`spa/src/lib/route-utils.ts:98-121` has a switch on `content.kind`
-that produces the deep-link URL for a tab. Add a branch for
-`'editor-buffers'` → `/editor/buffers` (or similar — plan phase
-picks the exact path after grepping existing convention). Missing
-this branch causes `/` to appear in the URL bar for buffers tabs,
-which breaks back-button restoration.
+`spa/src/lib/route-utils.ts:98-121` has a switch on `content.kind`.
+Add an `editor-buffers` branch that returns the workspace root (or
+the same fallback used by other ephemeral, non-addressable pane
+kinds — grep existing cases during implementation).
+
+**Deliberate omission**: no matching `parseRoute` branch. The buffers
+management tab is a pure-UI tab and not a deep-link target. Spec v1.1
+speculated a dedicated `/editor/buffers` URL with round-trip; v1.2
+drops this per R2 finding #3 — a serializer without a parser is
+worse than no serializer. If deep-linking becomes desired, a future
+PR adds both sides together with a round-trip test.
 
 #### 4.9.2 `getPaneLabel()` + `getPaneIcon()` — tab bar rendering
 `spa/src/lib/pane-labels.ts:19-82` returns the tab title and icon
@@ -456,19 +482,35 @@ accepts any `PaneContent` — no type narrowing needed there.
 #### 4.9.5 Handling deletion of the currently-open buffer
 If a user deletes a buffer in the management pane that is currently
 open in an `editor` pane elsewhere, that pane's `content.filePath`
-points at a now-missing file. Define the behavior:
+points at a now-missing file — triggering a "file not found" read
+error inside `EditorPane`. Resolution:
 
-1. Before calling `backend.delete(path)`, find panes with
-   `content.kind === 'editor'` and `content.source.type === 'inapp'`
-   and `content.filePath === path`.
-2. For each such pane, call `setPaneContent(tabId, paneId, { kind:
-   'editor', source: { type: 'inapp' }, filePath: null })` — reset
-   to the inapp untitled/empty state.
+1. Before calling `backend.delete(path)`, scan `useTabStore.tabs`
+   for panes where `content.kind === 'editor'` and
+   `content.source.type === 'inapp'` and
+   `content.filePath === path`.
+2. For each match, call
+   `useTabStore.getState().closePane(tabId, paneId)`. If the tab's
+   last pane is closed, `closePane` closes the tab itself — this is
+   existing `useTabStore.closePane` behavior (see store). **Do not
+   close the buffers management pane itself even if it is somehow
+   in that list** — but this cannot happen in practice because
+   `editor-buffers` is a different `content.kind`.
 3. Then call `backend.delete(path)` and refresh the buffers list.
 
+**Why `closePane` instead of changing `filePath`**: `PaneContent`
+editor variant requires `filePath: string` (tab.ts:45) — setting it
+to `null` is a type error. Changing it to an untitled path
+(`'untitled:Untitled'` + `untitled` metadata) is technically valid
+but creates a confusing UX (a new Untitled document appears out of
+nowhere). Closing the pane is the simplest, least surprising
+behavior that matches what VS Code does when a file is deleted
+externally while open.
+
 `useTabStore.renameEditorPanes` handles renames (line 78-107) but
-*not* deletions; this new flow is a small helper (~15 LOC) inside
-`EditorBuffersPane` — it does not require a new tabStore method.
+not deletions; `useTabStore.closePane` is the right primitive here.
+This flow is a small helper (~20 LOC) inside `EditorBuffersPane` —
+no new tabStore method needed.
 
 ## 5. Risks & mitigations
 
@@ -522,10 +564,10 @@ Plan phase encodes this in every step.
 | Case | Behavior |
 |---|---|
 | User has `editor-buffers` singleton tab open, clicks "Manage buffers" in popover | `openSingletonTab({kind:'editor-buffers'})` focuses existing tab |
-| User switches buffer via popover while current pane has unsaved diff | `setPaneContent` + `attachPane` reuse; Monaco persists unsaved buffer under its local key (no data loss) |
+| User switches buffer via popover while current pane has unsaved diff | `setPaneContent` fires; `EditorPane`'s `attachPane` useEffect rebinds → VS Code-style semantics: previous buffer's pane state is discarded; users should save before switching (§2 non-goal) |
 | Rename buffer to name containing `/` | Validation rejects; inline error "Subfolders not supported" (see non-goals) |
-| Delete currently open buffer (this or another pane) | Per §4.9.5: every affected pane is reset to `filePath: null` via `setPaneContent` *before* `backend.delete` runs |
-| Delete currently open buffer (breadcrumb popover is showing it) | Same as above; popover closes on refresh |
+| Delete currently open buffer (any pane) | Per §4.9.5: every affected pane is closed via `useTabStore.closePane` *before* `backend.delete`; tabs whose last pane closes are closed too |
+| Delete currently open buffer (breadcrumb popover is showing it) | Hosting pane is closed by §4.9.5 flow; popover unmounts with its host `EditorToolbar` |
 | All `/buffer/*` entries deleted while buffers pane is open | Pane shows empty state with "New buffer" CTA |
 | `useEditorSettingsStore` persist state corrupted | `merge` fn returns defaults; tests assert this |
 | Monaco mounted with `fontSize: NaN` (corrupted storage) | Store setter clamps → fallback to 13; test covers |
@@ -575,15 +617,16 @@ All verification commands run from the `spa/` subdirectory:
 - [ ] Smart-open uses `setPaneContent` (not `attachPane`) and prefers
       the active tab's first editor pane; falls back to `tabOrder`
       scan; finally opens a new tab (§4.6).
-- [ ] Deletion of a buffer resets `filePath: null` on every open
-      editor pane pointing at it *before* calling `backend.delete`
-      (§4.9.5).
+- [ ] Deletion of a buffer closes every open editor pane pointing
+      at it via `useTabStore.closePane` *before* calling
+      `backend.delete` (§4.9.5).
 - [ ] "Manage Buffers" NewTab card registered with
       `moduleId: 'editor'`, `order: 6`, icon `Stack`; click replaces
       current NewTab pane via `onSelect` (not `openSingletonTab`).
-- [ ] Ancillary integration complete (§4.9): `tabToUrl`,
-      `getPaneLabel`, `getPaneIcon`, and NewTab provider module-filter
-      all recognise `editor-buffers`.
+- [ ] Ancillary integration complete (§4.9): `tabToUrl`
+      (workspace-root fallback — no dedicated route), `getPaneLabel`,
+      `getPaneIcon`, and NewTab provider module-filter all
+      recognise `editor-buffers`.
 - [ ] `BufferListSection` removed from `EditorPurdexSettingsSection`
       and its source file deleted; no imports remain anywhere in the
       codebase.
@@ -601,14 +644,17 @@ All verification commands run from the `spa/` subdirectory:
       manage actions.
 - [ ] Popover renders in a React portal at `document.body` with
       z-index 100 (above RenamePopover's z-50 and Monaco popups).
-- [ ] Non-inapp paths: chip unchanged (still a `<span>`, no popover).
-- [ ] Popover buffer-switch uses `setPaneContent` + `attachPane`
-      sequence (§4.8 note) to avoid flash-remount.
+- [ ] Non-inapp paths (`source.type !== 'inapp'`): no Purdex chip
+      rendered at all (the `showInAppPrefix` gate is unchanged); no
+      popover mounted.
+- [ ] Popover buffer-switch calls `setPaneContent` only
+      (§4.8); `attachPane` rebind happens automatically via
+      `EditorPane`'s existing `useEffect`.
 - [ ] All verification commands green.
 
 ## 8. Open questions
 
-Decisions taken in v1.1 (removed from open-question status):
+Decisions taken in v1.1 (carried forward):
 - NewTab card icon → `Stack` (Phosphor)
 - zh-TW label → `"編輯器"` (short, matches sidebar density)
 - Legacy `/settings/editor-buffers` URL → alias redirect in
@@ -620,6 +666,16 @@ Decisions taken in v1.1 (removed from open-question status):
 - `FileEntry.mtime` extension → out of scope; buffers sort by name
   (§2 non-goals)
 - Tiptap `fontSize` integration → deferred to follow-up (§2 non-goals)
+
+Decisions taken in v1.2 (new):
+- Delete-open-buffer flow → `closePane` (not `setPaneContent` with
+  a null/untitled fallback). §4.9.5.
+- Buffer-switch semantics → caller invokes `setPaneContent` only;
+  `attachPane` auto-fires via `EditorPane`'s existing useEffect.
+  Dirty-state preservation is NOT promised — standard VS Code
+  "save before switching" behavior. §4.6 + §4.8 + §2 non-goals.
+- `editor-buffers` deep-link URL → omitted this PR; `tabToUrl`
+  returns workspace-root fallback, no `parseRoute` branch. §4.9.1.
 
 Still open:
 1. **`fontSize` clamp bounds `[10, 24]`** — conservative default;
@@ -646,4 +702,4 @@ Still open:
 
 ---
 
-*End of spec v1.1.*
+*End of spec v1.2.*
