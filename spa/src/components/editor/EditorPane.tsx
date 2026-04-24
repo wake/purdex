@@ -430,6 +430,14 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
           useTabStore.getState().openSingletonTab({ kind: 'editor-buffers' })
         }}
         onNewBuffer={async () => {
+          // v1.4 §4.8 extension (F7): mirror the onBufferSwitch dirty
+          // guard here. A user clicking "New buffer" from the popover
+          // while the current pane has unsaved edits would otherwise
+          // have their work discarded on pane swap.
+          const currentKey = bufferKey({ type: 'inapp' }, filePath)
+          const currentBuf = useEditorStore.getState().buffers[currentKey]
+          if (currentBuf?.isDirty && !window.confirm(t('editor.buffers.confirm_switch_dirty'))) return
+
           const path = `/buffer/Untitled-${Date.now()}.md`
           const backend = getFsBackend({ type: 'inapp' })
           if (!backend) return

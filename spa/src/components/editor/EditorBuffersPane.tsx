@@ -3,12 +3,22 @@ import { FilePlus, PencilSimple, Stack, Trash, FolderOpen } from '@phosphor-icon
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { getFsBackend } from '../../lib/fs-backend'
 import { scanPaneTree } from '../../lib/pane-tree'
+import { useEditorStore } from '../../stores/useEditorStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { createTab } from '../../types/tab'
 import type { FileEntry } from '../../types/fs'
-import type { PaneContent, Tab } from '../../types/tab'
+import type { FileSource } from '../../types/fs'
+import type { Pane, PaneContent, Tab } from '../../types/tab'
 import { RenamePopover } from '../RenamePopover'
+
+// Local copy of EditorPane's private `bufferKey` helper — until a shared
+// util is extracted, keep the formula in lock-step.  inapp sources alone
+// are relevant here, but the helper is kept source-aware for parity.
+function bufferKeyFor(source: FileSource, filePath: string): string {
+  if (source.type === 'daemon') return `daemon:${source.hostId}:${filePath}`
+  return `${source.type}:${filePath}`
+}
 
 /**
  * EditorBuffersPane — management UI for `/buffer/*` entries (spec §4.5).
@@ -28,6 +38,7 @@ export function EditorBuffersPane(_: PaneRendererProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
+  const [renameError, setRenameError] = useState<string | null>(null)
   const renameAnchorRef = useRef<HTMLButtonElement | null>(null)
 
   // Load files whenever `refreshKey` changes or on mount.
@@ -95,6 +106,7 @@ export function EditorBuffersPane(_: PaneRendererProps) {
 
   const handleOpenRename = useCallback(() => {
     if (!singleSelected) return
+    setRenameError(null)
     setRenameTarget(singleSelected)
   }, [singleSelected])
 
@@ -103,16 +115,33 @@ export function EditorBuffersPane(_: PaneRendererProps) {
       if (!renameTarget) return
       const backend = getFsBackend({ type: 'inapp' })
       if (!backend) return
+      const fromPath = `/buffer/${renameTarget}`
+      const targetPath = `/buffer/${newName}`
+      // F4 (spec §4.5): `InAppBackend.rename` is a blind overwrite
+      // (store.set(to, ...) + store.delete(from)); a collision silently
+      // destroys the existing file. Pre-check with `stat` so the rename
+      // is aborted before any backend mutation.
+      if (targetPath !== fromPath) {
+        const exists = await backend
+          .stat(targetPath)
+          .then(() => true)
+          .catch(() => false)
+        if (exists) {
+          setRenameError(t('editor.buffers.rename_exists_error'))
+          return
+        }
+      }
       try {
-        await backend.rename(`/buffer/${renameTarget}`, `/buffer/${newName}`)
+        await backend.rename(fromPath, targetPath)
         setRenameTarget(null)
+        setRenameError(null)
         setSelected(new Set())
         refresh()
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
       }
     },
-    [renameTarget, refresh],
+    [renameTarget, refresh, t],
   )
 
   const validateRename = useCallback(
@@ -129,32 +158,70 @@ export function EditorBuffersPane(_: PaneRendererProps) {
     if (selectedArray.length === 0) return
     const backend = getFsBackend({ type: 'inapp' })
     if (!backend) return
-    if (selectedArray.length > 1) {
-      const ok = window.confirm(t('editor.buffers.confirm_delete', { count: selectedArray.length }))
+
+    const targets = selectedArray.map((n) => `/buffer/${n}`)
+
+    // Snapshot every editor pane whose content points at one of the
+    // targeted paths. This is shared by the locked/dirty pre-check and
+    // the later close loop.
+    const { tabs } = useTabStore.getState()
+    const openPanes: Array<[string, Pane]> = []
+    for (const [tabId, tab] of Object.entries(tabs) as Array<[string, Tab]>) {
+      scanPaneTree(tab.layout, (pane) => {
+        const c = pane.content
+        if (
+          c.kind === 'editor' &&
+          c.source.type === 'inapp' &&
+          targets.includes(c.filePath)
+        ) {
+          openPanes.push([tabId, pane])
+        }
+      })
+    }
+
+    // F2 (spec §4.9.5): refuse delete outright if any affected pane
+    // lives in a locked tab. The user must unlock or close the tab
+    // before any backend mutation. closePane is ALSO a no-op for
+    // locked single-pane tabs, so without this guard the backend
+    // delete would silently resurrect after save.
+    const lockedHit = openPanes.some(([tabId]) => tabs[tabId]?.locked)
+    if (lockedHit) {
+      setError(t('editor.buffers.delete_locked_refused'))
+      return
+    }
+
+    // F5 (spec §4.9.5): dirty-specific confirm wins over generic.
+    const dirtyHits = openPanes.filter(([, pane]) => {
+      const content = pane.content
+      if (content.kind !== 'editor') return false
+      const key = bufferKeyFor(content.source, content.filePath)
+      return useEditorStore.getState().buffers[key]?.isDirty === true
+    })
+
+    // Confirm based on strongest applicable message.
+    if (dirtyHits.length > 0) {
+      const ok = window.confirm(
+        t('editor.buffers.delete_dirty_confirm', { count: dirtyHits.length }),
+      )
+      if (!ok) return
+    } else if (selectedArray.length === 1) {
+      // F6 (spec §4.9.5): single-delete confirms too.
+      const ok = window.confirm(t('editor.buffers.delete_one_confirm'))
+      if (!ok) return
+    } else {
+      const ok = window.confirm(
+        t('editor.buffers.confirm_delete', { count: selectedArray.length }),
+      )
       if (!ok) return
     }
-    const targets = selectedArray.map((n) => `/buffer/${n}`)
+
     setLoading(true)
+    setError(null)
     try {
-      // Step 1: snapshot every editor pane pointing at a targeted path and
-      // close it BEFORE deleting the underlying file. closePane is a no-op
-      // for locked tabs (useTabStore.ts:195) — intentional per spec §4.9.5.
-      const { tabs } = useTabStore.getState()
-      const panesToClose: Array<[string, string]> = []
-      for (const [tabId, tab] of Object.entries(tabs) as Array<[string, Tab]>) {
-        scanPaneTree(tab.layout, (pane) => {
-          const c = pane.content
-          if (
-            c.kind === 'editor' &&
-            c.source.type === 'inapp' &&
-            targets.includes(c.filePath)
-          ) {
-            panesToClose.push([tabId, pane.id])
-          }
-        })
-      }
-      for (const [tabId, paneId] of panesToClose) {
-        useTabStore.getState().closePane(tabId, paneId)
+      // Step 1: close every affected pane BEFORE deleting the underlying
+      // file. All panes are guaranteed unlocked (pre-check guard above).
+      for (const [tabId, pane] of openPanes) {
+        useTabStore.getState().closePane(tabId, pane.id)
       }
       // Step 2: actually delete the files.
       for (const path of targets) {
@@ -180,19 +247,30 @@ export function EditorBuffersPane(_: PaneRendererProps) {
     const { tabs, tabOrder, activeTabId, setPaneContent, setActiveTab, addTab } =
       useTabStore.getState()
 
-    function firstEditorPaneId(tab: Tab | undefined): string | null {
+    // F3 (spec §4.6 v1.4): eligibility is (a) kind 'editor', (b) source
+    // 'inapp' (daemon/local editor panes are foreign storage — never
+    // overwrite them), AND (c) the currently-bound buffer is clean.
+    // Dirty panes are skipped so a management-pane open doesn't silently
+    // destroy unsaved work. Falls through to "new tab" if no pane is
+    // eligible.
+    function firstEligibleEditorPaneId(tab: Tab | undefined): string | null {
       if (!tab) return null
       let found: string | null = null
       scanPaneTree(tab.layout, (p) => {
         if (found) return
-        if (p.content.kind === 'editor') found = p.id
+        const c = p.content
+        if (c.kind !== 'editor') return
+        if (c.source.type !== 'inapp') return
+        const key = bufferKeyFor(c.source, c.filePath)
+        if (useEditorStore.getState().buffers[key]?.isDirty === true) return
+        found = p.id
       })
       return found
     }
 
     // Rule 1: active tab.
     if (activeTabId && tabs[activeTabId]) {
-      const pid = firstEditorPaneId(tabs[activeTabId])
+      const pid = firstEligibleEditorPaneId(tabs[activeTabId])
       if (pid) {
         setPaneContent(activeTabId, pid, newContent)
         setActiveTab(activeTabId)
@@ -202,7 +280,7 @@ export function EditorBuffersPane(_: PaneRendererProps) {
     // Rule 2: tabOrder scan.
     for (const tid of tabOrder) {
       if (tid === activeTabId) continue
-      const pid = firstEditorPaneId(tabs[tid])
+      const pid = firstEligibleEditorPaneId(tabs[tid])
       if (pid) {
         setPaneContent(tid, pid, newContent)
         setActiveTab(tid)
@@ -334,7 +412,12 @@ export function EditorBuffersPane(_: PaneRendererProps) {
           }
           currentName={renameTarget}
           onConfirm={handleRenameConfirm}
-          onCancel={() => setRenameTarget(null)}
+          onCancel={() => {
+            setRenameTarget(null)
+            setRenameError(null)
+          }}
+          error={renameError ?? undefined}
+          onClearError={() => setRenameError(null)}
           validateName={validateRename}
         />
       )}

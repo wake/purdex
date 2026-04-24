@@ -435,6 +435,10 @@
   "editor.buffers.confirm_delete": "Delete {{count}} buffer(s)?",
   "editor.buffers.confirm_switch_dirty": "Current buffer has unsaved changes. Switch anyway?",
   "editor.buffers.rename_slash_error": "Subfolders not supported",
+  "editor.buffers.rename_exists_error": "A buffer with that name already exists.",
+  "editor.buffers.delete_locked_refused": "This buffer is open in a locked tab. Unlock or close the tab first.",
+  "editor.buffers.delete_dirty_confirm": "Delete {{count}} buffer(s) with unsaved changes?",
+  "editor.buffers.delete_one_confirm": "Delete this buffer?",
   "newTab.editor.buffers.label": "Manage Buffers",
 
   "monitor.provider_label": "Memory Monitor",

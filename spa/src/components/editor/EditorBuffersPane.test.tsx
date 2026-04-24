@@ -77,17 +77,20 @@ vi.mock('../RenamePopover', () => ({
     onConfirm,
     onCancel,
     validateName,
+    error,
   }: {
     currentName: string
     onConfirm: (name: string) => Promise<void>
     onCancel: () => void
     validateName?: (name: string, cur: string) => string | undefined
+    error?: string
   }) => (
     <RenameHarness
       currentName={currentName}
       onConfirm={onConfirm}
       onCancel={onCancel}
       validateName={validateName}
+      externalError={error}
     />
   ),
 }))
@@ -98,14 +101,17 @@ function RenameHarness({
   onConfirm,
   onCancel,
   validateName,
+  externalError,
 }: {
   currentName: string
   onConfirm: (name: string) => Promise<void>
   onCancel: () => void
   validateName?: (name: string, cur: string) => string | undefined
+  externalError?: string
 }) {
   const [value, setValue] = useState(currentName)
-  const error = validateName?.(value.trim(), currentName)
+  const validationError = validateName?.(value.trim(), currentName)
+  const error = validationError ?? externalError
   return (
     <div data-testid="rename-popover-harness">
       <input
@@ -114,7 +120,7 @@ function RenameHarness({
         onChange={(e: React.ChangeEvent<HTMLInputElement>) => setValue(e.target.value)}
       />
       {error && <p data-testid="rename-error">{error}</p>}
-      <button data-testid="rename-confirm" disabled={!!error} onClick={() => onConfirm(value.trim())}>
+      <button data-testid="rename-confirm" disabled={!!validationError} onClick={() => onConfirm(value.trim())}>
         confirm
       </button>
       <button data-testid="rename-cancel" onClick={onCancel}>
@@ -277,6 +283,9 @@ describe('EditorBuffersPane', () => {
     mockBackend.list.mockResolvedValue([
       { name: 'foo.md', isDir: false, size: 10 },
     ] as FileEntry[])
+    // F4 (v1.4) pre-check: rename stat-probes the destination; reject
+    // for unknown paths so the handler proceeds.
+    mockBackend.stat.mockRejectedValue(new Error('not found'))
     render(<EditorBuffersPane pane={makePane()} isActive />)
     const row = await screen.findByTestId('buffer-row')
     fireEvent.click(row)
@@ -395,13 +404,15 @@ describe('EditorBuffersPane', () => {
     expect(closePaneSpy).toHaveBeenCalledWith('TB', 'P2')
   })
 
-  it('B2-11: delete with locked tab still calls closePane + backend.delete', async () => {
+  it('B2-11: delete with locked tab is refused outright (v1.4 F2)', async () => {
+    // Under v1.4 §4.9.5 the delete pre-check refuses if any affected pane
+    // lives in a locked tab. This replaces v1.3's closePane-no-op flow
+    // (which allowed backend.delete to fire, silently resurrected on
+    // save). B2-13 covers the same refusal with a multi-select scenario;
+    // B2-11 stays as the single-target smoke test.
     mockBackend.list.mockResolvedValue([
       { name: 'x.md', isDir: false, size: 10 },
     ] as FileEntry[])
-    // Locked tab — real useTabStore's closePane → closeTab is a no-op, but
-    // EditorBuffersPane still invokes closePane unconditionally. The mock
-    // just records the call without mutating state.
     tabStoreState.tabs = { TA: makeEditorTab('TA', 'P1', '/buffer/x.md', true) }
     tabStoreState.tabOrder = ['TA']
     tabStoreState.activeTabId = 'TA'
@@ -409,13 +420,195 @@ describe('EditorBuffersPane', () => {
     const row = await screen.findByTestId('buffer-row')
     fireEvent.click(row)
     fireEvent.click(screen.getByTestId('toolbar-delete'))
+    // The refusal surfaces via the inline error banner; backend.delete
+    // and closePane are both untouched.
     await waitFor(() => {
-      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/x.md')
+      expect(screen.getByText('editor.buffers.delete_locked_refused')).toBeTruthy()
     })
-    expect(closePaneSpy).toHaveBeenCalledWith('TA', 'P1')
-    // Pane state in the mock is not mutated — confirms the helper tolerates
-    // closePane being a no-op for locked tabs.
+    expect(mockBackend.delete).not.toHaveBeenCalled()
+    expect(closePaneSpy).not.toHaveBeenCalled()
     expect(tabStoreState.tabs.TA).toBeDefined()
+  })
+
+  it('B2-12: rename aborts with inline error when destination exists (v1.4 F4)', async () => {
+    mockBackend.list.mockResolvedValue([
+      { name: 'foo.md', isDir: false, size: 10 },
+      { name: 'bar.md', isDir: false, size: 10 },
+    ] as FileEntry[])
+    // Stat resolves for the destination → it exists → rename must abort
+    // before any backend mutation, surfacing the inline error key.
+    mockBackend.stat.mockImplementation(async (path: string) => {
+      if (path === '/buffer/bar.md') {
+        return { size: 10, mtime: 0, isDirectory: false, isFile: true } as FileStat
+      }
+      throw new Error('not found')
+    })
+    render(<EditorBuffersPane pane={makePane()} isActive />)
+    const rows = await screen.findAllByTestId('buffer-row')
+    // Select foo.md.
+    fireEvent.click(rows[1]) // sorted alphabetically: bar.md, foo.md
+    fireEvent.click(screen.getByTestId('toolbar-rename'))
+    const input = await screen.findByTestId('rename-input')
+    fireEvent.change(input, { target: { value: 'bar.md' } })
+    // Slash validator doesn't fire for flat name; the stat pre-check
+    // surfaces the existence error after confirm.
+    expect(screen.queryByTestId('rename-error')).toBeNull()
+    fireEvent.click(screen.getByTestId('rename-confirm'))
+    await waitFor(() => {
+      expect(screen.getByTestId('rename-error').textContent).toBe(
+        'editor.buffers.rename_exists_error',
+      )
+    })
+    expect(mockBackend.rename).not.toHaveBeenCalled()
+  })
+
+  it('B2-13: multi-select delete refused when ANY target is in a locked tab (v1.4 F2)', async () => {
+    mockBackend.list.mockResolvedValue([
+      { name: 'x.md', isDir: false, size: 10 },
+      { name: 'y.md', isDir: false, size: 10 },
+    ] as FileEntry[])
+    // y.md lives in a locked tab; x.md's tab is unlocked. The pre-check
+    // must refuse the whole operation — no partial delete.
+    tabStoreState.tabs = {
+      TA: makeEditorTab('TA', 'P1', '/buffer/x.md', false),
+      TB: makeEditorTab('TB', 'P2', '/buffer/y.md', true),
+    }
+    tabStoreState.tabOrder = ['TA', 'TB']
+    tabStoreState.activeTabId = 'TA'
+    render(<EditorBuffersPane pane={makePane()} isActive />)
+    const rows = await screen.findAllByTestId('buffer-row')
+    fireEvent.click(rows[0]) // x.md
+    fireEvent.click(rows[1]) // y.md
+    fireEvent.click(screen.getByTestId('toolbar-delete'))
+    await waitFor(() => {
+      expect(screen.getByText('editor.buffers.delete_locked_refused')).toBeTruthy()
+    })
+    expect(mockBackend.delete).not.toHaveBeenCalled()
+    expect(closePaneSpy).not.toHaveBeenCalled()
+  })
+
+  it('B2-14: delete confirms with dirty-specific (cancel) and single-specific (OK) messages (v1.4 F5+F6)', async () => {
+    // Two sub-cases share one `it()` to keep the test count aligned with
+    // spec v1.4 (+7 new tests). Each branch re-renders with a fresh pane
+    // so they don't cross-pollute.
+
+    // Sub-case (a): DIRTY buffer → dirty-specific message → cancel → no-op.
+    {
+      mockBackend.list.mockResolvedValueOnce([
+        { name: 'z.md', isDir: false, size: 10 },
+      ] as FileEntry[])
+      tabStoreState.tabs = {
+        TA: makeEditorTab('TA', 'P1', '/buffer/z.md', false),
+      }
+      tabStoreState.tabOrder = ['TA']
+      tabStoreState.activeTabId = 'TA'
+      const editorModule = await import('../../stores/useEditorStore')
+      editorModule.useEditorStore.setState({
+        buffers: {
+          'inapp:/buffer/z.md': {
+            content: 'dirty',
+            savedContent: '',
+            isDirty: true,
+            lastStat: null,
+            modelId: 'm1',
+            language: 'markdown',
+            languageSource: 'extension',
+            eol: 'lf',
+            encoding: 'utf8',
+          },
+        },
+        paneStates: {},
+      })
+      const confirmFalse = vi.fn(() => false)
+      vi.stubGlobal('confirm', confirmFalse)
+      const { unmount } = render(<EditorBuffersPane pane={makePane()} isActive />)
+      const row = await screen.findByTestId('buffer-row')
+      fireEvent.click(row)
+      fireEvent.click(screen.getByTestId('toolbar-delete'))
+      expect(confirmFalse).toHaveBeenCalledWith('editor.buffers.delete_dirty_confirm')
+      expect(mockBackend.delete).not.toHaveBeenCalled()
+      expect(closePaneSpy).not.toHaveBeenCalled()
+      unmount()
+    }
+
+    // Sub-case (b): CLEAN single-target → single-specific message → OK → delete fires.
+    {
+      mockBackend.list.mockResolvedValueOnce([
+        { name: 'only.md', isDir: false, size: 10 },
+      ] as FileEntry[])
+      tabStoreState.tabs = {}
+      tabStoreState.tabOrder = []
+      tabStoreState.activeTabId = null
+      const editorModule = await import('../../stores/useEditorStore')
+      editorModule.useEditorStore.setState({ buffers: {}, paneStates: {} })
+      const confirmTrue = vi.fn(() => true)
+      vi.stubGlobal('confirm', confirmTrue)
+      render(<EditorBuffersPane pane={makePane()} isActive />)
+      const row = await screen.findByTestId('buffer-row')
+      fireEvent.click(row)
+      fireEvent.click(screen.getByTestId('toolbar-delete'))
+      expect(confirmTrue).toHaveBeenCalledWith('editor.buffers.delete_one_confirm')
+      await waitFor(() => {
+        expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/only.md')
+      })
+    }
+  })
+
+  it('B2-15: smart-open skips dirty and non-inapp panes, falls through to a new tab (v1.4 F3)', async () => {
+    mockBackend.list.mockResolvedValue([
+      { name: 'target.md', isDir: false, size: 10 },
+    ] as FileEntry[])
+    // Active tab: inapp editor pane but buffer is dirty → ineligible.
+    // Other tab: daemon editor pane (non-inapp) → ineligible.
+    tabStoreState.tabs = {
+      TA: makeEditorTab('TA', 'P1', '/buffer/dirty.md', false),
+      TB: {
+        id: 'TB',
+        pinned: false,
+        locked: false,
+        createdAt: Date.now(),
+        layout: {
+          type: 'leaf',
+          pane: {
+            id: 'PD',
+            content: {
+              kind: 'editor',
+              source: { type: 'daemon', hostId: 'remote' },
+              filePath: '/home/user/file.md',
+            },
+          },
+        },
+      },
+    }
+    tabStoreState.tabOrder = ['TA', 'TB']
+    tabStoreState.activeTabId = 'TA'
+    // Seed editor store: inapp pane is dirty.
+    const editorModule = await import('../../stores/useEditorStore')
+    editorModule.useEditorStore.setState({
+      buffers: {
+        'inapp:/buffer/dirty.md': {
+          content: 'unsaved',
+          savedContent: '',
+          isDirty: true,
+          lastStat: null,
+          modelId: 'm2',
+          language: 'markdown',
+          languageSource: 'extension',
+          eol: 'lf',
+          encoding: 'utf8',
+        },
+      },
+      paneStates: {},
+    })
+    render(<EditorBuffersPane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    fireEvent.click(row)
+    fireEvent.click(screen.getByTestId('toolbar-open'))
+    await waitFor(() => {
+      expect(addTabSpy).toHaveBeenCalledTimes(1)
+    })
+    // Neither pane was targeted for overwrite.
+    expect(setPaneContentSpy).not.toHaveBeenCalled()
   })
 
   it('A2-6: pane keeps rendering when the editor module is disabled', async () => {

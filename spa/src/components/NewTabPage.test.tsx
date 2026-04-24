@@ -123,4 +123,52 @@ describe('NewTabPage — module-aware provider filter', () => {
 
     expect(screen.getByTestId('card-sessions')).toBeTruthy()
   })
+
+  it('A2-7: renders the empty state when every column pins only filtered-out providers (v1.4 F8)', () => {
+    // A module-aware provider AND a legacy provider exist; the
+    // pinned profile, however, only references the module-aware
+    // cards. When the Editor module is disabled every column entry
+    // resolves to null → old code rendered an empty grid silently.
+    // v1.4 falls back to the shared empty state instead. The legacy
+    // `sessions` provider stays registered (so `providers.length`
+    // is non-zero) to exercise the NEW `hasAnyVisibleEntry` gate
+    // rather than the pre-existing zero-providers shortcut.
+    registerNewTabProvider({
+      id: 'editor',
+      label: 'editor.provider_label',
+      icon: 'File',
+      order: 5,
+      component: FakeEditorCard,
+      moduleId: 'editor',
+    })
+    registerNewTabProvider({
+      id: 'editor-buffers',
+      label: 'newTab.editor.buffers.label',
+      icon: 'Stack',
+      order: 6,
+      component: FakeEditorBuffersCard,
+      moduleId: 'editor',
+    })
+    registerNewTabProvider({
+      id: 'sessions',
+      label: 'session.provider_label',
+      icon: 'List',
+      order: 0,
+      component: FakeSessionsCard,
+      // no moduleId — always visible
+    })
+    // Profile pins ONLY the editor-module providers; `sessions` is
+    // visible but not pinned, so every column entry filters out.
+    primeLayout(['editor', 'editor-buffers'])
+    useModuleEnabledStore.setState({ enabled: { editor: false }, baseline: null })
+
+    render(<NewTabPage onSelect={() => {}} />)
+
+    // Empty-state fallback fires via the new `hasAnyVisibleEntry`
+    // gate; no cards render.
+    expect(screen.getByTestId('newtab-empty-state')).toBeTruthy()
+    expect(screen.queryByTestId('card-editor')).toBeNull()
+    expect(screen.queryByTestId('card-editor-buffers')).toBeNull()
+    expect(screen.queryByTestId('card-sessions')).toBeNull()
+  })
 })

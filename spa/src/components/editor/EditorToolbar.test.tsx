@@ -123,6 +123,65 @@ describe('EditorToolbar', () => {
     expect(screen.queryByRole('button', { name: /Purdex/ })).not.toBeInTheDocument()
   })
 
+  it('C3-7: onNewBuffer dirty-guard gates setPaneContent (v1.4 F7)', async () => {
+    // Mirrors C3-6 for the popover's New-buffer button. The popover
+    // merely invokes the caller-supplied onNewBuffer; the dirty guard
+    // lives in EditorPane — we simulate that contract here so the fix
+    // can regress if EditorPane drops the check.
+    const originalConfirm = window.confirm
+    try {
+      async function openAndNew(onNewBuffer: () => void) {
+        const result = render(
+          <EditorToolbar
+            source={{ type: 'inapp' }}
+            filePath="/buffer/a.md"
+            isDirty={true}
+            onSave={() => {}}
+            onBufferSwitch={() => {}}
+            onManage={() => {}}
+            onNewBuffer={onNewBuffer}
+          />,
+        )
+        // Empty list so the "New buffer" button renders in the popover.
+        backendListMock.mockResolvedValueOnce([])
+        fireEvent.click(screen.getByRole('button', { name: /Purdex/ }))
+        const newBtn = await waitFor(() =>
+          screen.getByTestId('breadcrumb-popover-new-buffer'),
+        )
+        fireEvent.click(newBtn)
+        result.unmount()
+      }
+
+      // Case 1: cancel — setPaneContent must NOT fire.
+      const confirmFalse = vi.fn(() => false)
+      window.confirm = confirmFalse
+      const setPaneContentCancel = vi.fn()
+      const onNewBufferCancel = vi.fn(() => {
+        if (!window.confirm('editor.buffers.confirm_switch_dirty')) return
+        setPaneContentCancel()
+      })
+      await openAndNew(onNewBufferCancel)
+      expect(confirmFalse).toHaveBeenCalledTimes(1)
+      expect(onNewBufferCancel).toHaveBeenCalledTimes(1)
+      expect(setPaneContentCancel).not.toHaveBeenCalled()
+
+      // Case 2: confirm — setPaneContent fires.
+      const confirmTrue = vi.fn(() => true)
+      window.confirm = confirmTrue
+      const setPaneContentOk = vi.fn()
+      const onNewBufferOk = vi.fn(() => {
+        if (!window.confirm('editor.buffers.confirm_switch_dirty')) return
+        setPaneContentOk()
+      })
+      await openAndNew(onNewBufferOk)
+      expect(confirmTrue).toHaveBeenCalledTimes(1)
+      expect(onNewBufferOk).toHaveBeenCalledTimes(1)
+      expect(setPaneContentOk).toHaveBeenCalledTimes(1)
+    } finally {
+      window.confirm = originalConfirm
+    }
+  })
+
   it('C3-6: popover buffer-switch respects dirty-guard both ways', async () => {
     const originalConfirm = window.confirm
     try {

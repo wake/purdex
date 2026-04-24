@@ -45,7 +45,23 @@ export function NewTabPage({ onSelect }: Props) {
 
   if (providers.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center">
+      <div className="flex-1 flex items-center justify-center" data-testid="newtab-empty-state">
+        <p className="text-sm text-text-secondary">{t('page.newtab.empty')}</p>
+      </div>
+    )
+  }
+
+  // v1.4 §4.9.7 (F8): a user's pinned profile may reference only
+  // providers that are currently filtered out (e.g. pinned `editor` +
+  // `editor-buffers`, then disabled the Editor module). In that case
+  // every column resolves to an empty list — the old code rendered
+  // nothing but the grid, leaving the tab visually blank with no cue.
+  // Fall back to the existing empty state when NO column has anything
+  // visible; keep the grid otherwise.
+  const hasAnyVisibleEntry = profile.columns.some((col) => col.some((id) => byId[id]))
+  if (!hasAnyVisibleEntry) {
+    return (
+      <div className="flex-1 flex items-center justify-center" data-testid="newtab-empty-state">
         <p className="text-sm text-text-secondary">{t('page.newtab.empty')}</p>
       </div>
     )

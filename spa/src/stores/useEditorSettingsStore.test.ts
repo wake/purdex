@@ -117,4 +117,62 @@ describe('useEditorSettingsStore', () => {
     expect(s.minimap).toBe(true)
     expect(s.fontSize).toBe(13)
   })
+
+  // S1-9: regression guard for R4 F1 (WITHDRAWN as false positive).
+  // Zustand's persist middleware passes the UNWRAPPED state (not the
+  // `{state, version}` envelope) to `merge`. A future refactor that
+  // accidentally reintroduces envelope-unwrapping — the originally-
+  // prescribed "fix" — would break persist entirely. This test locks
+  // in the happy-path rehydrate behavior so such a regression fails
+  // loudly. See spec §4.9.6 and commit 803d737e for full context.
+  //
+  // Note: we can't use the public setters to seed localStorage and then
+  // rely on setState to "simulate fresh memory" — Zustand's persist
+  // middleware wraps setState to re-write localStorage on every call
+  // (node_modules/zustand/esm/middleware.mjs:363-367), so a merge-mode
+  // reset clobbers the envelope with defaults. Instead, we write the
+  // envelope directly (mirroring S1-7/S1-8) and rehydrate from the
+  // default in-memory state. This still exercises the merge path the
+  // R4 diagnosis would have broken — if a future refactor pulls
+  // `.state` off `persisted` inside `merge`, `persisted.state` is
+  // `undefined`, sanitize returns `{}`, and rehydrate yields
+  // all-defaults, failing the assertions.
+  it('S1-9: happy-path rehydrate restores non-default persisted values', async () => {
+    // Confirm baseline in-memory state is defaults.
+    const before = useEditorSettingsStore.getState()
+    expect(before.wordWrap).toBe('on')
+    expect(before.tabSize).toBe(2)
+    expect(before.fontSize).toBe(13)
+
+    // Write the persisted envelope directly — same shape Zustand would
+    // produce via `setItem` (see the existing S1-6 for evidence).
+    localStorage.setItem(
+      STORAGE_KEYS.EDITOR_SETTINGS,
+      JSON.stringify({
+        state: {
+          tabSize: 4,
+          insertSpaces: true,
+          wordWrap: 'off',
+          lineNumbers: 'on',
+          minimap: true,
+          fontSize: 18,
+        },
+        version: 1,
+      }),
+    )
+
+    // Rehydrate. Under correct Zustand behavior, the unwrapped state
+    // flows into `merge(persisted, current)` → sanitize picks up the
+    // non-defaults → store restores them.
+    await useEditorSettingsStore.persist.rehydrate()
+
+    const s = useEditorSettingsStore.getState()
+    expect(s.wordWrap).toBe('off')
+    expect(s.tabSize).toBe(4)
+    expect(s.fontSize).toBe(18)
+    // Other fields stay at defaults (unchanged in envelope).
+    expect(s.insertSpaces).toBe(true)
+    expect(s.lineNumbers).toBe('on')
+    expect(s.minimap).toBe(true)
+  })
 })
