@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.224] - 2026-04-25
+
+### Fix(spa): keep activity bar home fixed (#640)
+
+Activity bar 的 Home、workspace 分隔線與底部 actions 固定在原位，只有 workspace 清單區域捲動；同時修正 tab hover tooltip 被 overflow 容器裁切的問題。
+
+- 窄版與寬版 activity bar 都改為 Home / divider / workspace scroll / footer actions 的固定結構，避免 Home 被納入捲動範圍。
+- workspace 分隔線固定在 scroll 區外並加上 `shrink-0`，防止 flex 壓縮導致分隔線忽隱忽現。
+- workspace scroll bar 使用 Purdex theme token 與透明 track，符合現有視覺風格。
+- `HoverTooltip` 改用 body portal + fixed positioning，讓上方 TabBar 與左側 inline tabs 的完整 tab name tooltip 不再被 overflow 裁切。
+- 補 activity bar scroll boundary、divider placement 與 tooltip portal regression tests。
+
 ## [1.0.0-alpha.223] - 2026-04-25
 
 ### Fix(spa): restore tab bar shrink behavior (#636)
