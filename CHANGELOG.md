@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.223] - 2026-04-25
+
+### Fix(spa): restore tab bar shrink behavior (#636)
+
+Tab bar layout 修正，讓 tabs 在空間不足時先縮到最小寬度，再進入水平捲動，並清掉 overflow/active 視覺瑕疵。
+
+- normal tab strip 改回可吃剩餘寬度並加上 `min-w-0`，移除 `min-content` minimum 導致 tab 無法 shrink 的約束；保留 `max-content` 讓 tab 少時新增按鈕仍貼在最後一個 tab 後方。
+- 左右 scroll controls 拆成「漸層 fade 區 + 不透明按鈕區」，避免箭頭底下透出 tab label。
+- active tab 改用透明 border，移除上緣不等長亮色邊框，同時保留 border 佔位避免尺寸跳動。
+- 補 `TabBar` / `SortableTab` regression tests，鎖住 shrink layout、右側 scroll fade 結構與 active tab border 視覺。
+
 ## [1.0.0-alpha.222] - 2026-04-25
 
 ### Feat(agent): add tmux metadata dynamic titles (#634)
