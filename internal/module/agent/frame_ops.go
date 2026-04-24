@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"log"
 	"sort"
 	"time"
 
@@ -227,6 +228,31 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		}
 	}
 
+	// Phase 3 Commit 3 — daemon-restart recovery (plan §1.2.4 / §1.4):
+	// When the standard lookup chain (GetByIdentity → findProxyParent →
+	// FindByPanePID) all miss on a hook event, fall back to inspecting the
+	// pane's live process tree via the Prober. A hit means "some agent we
+	// know is alive somewhere under this pane" — enough to recover frame
+	// state lost to a daemon restart without trusting the hook event blindly
+	// (the hook's AgentType remains the SOT; rebuild only marks the trace
+	// reason so the Inspector can distinguish recovered frames from fresh
+	// ones).
+	//
+	// Fail-soft: a probe error must not abort the hook. Log and fall through
+	// to the legacy no-parent path (reason="parent_frame_missing" today;
+	// renamed to "no_parent_fallback" in Commit 4).
+	rebuiltMatched := false
+	if frame == nil && parentFrameID == "" {
+		matchedType, ok, rerr := m.tryRebuildFromProcessTree(req)
+		if rerr != nil {
+			log.Printf("[agent] rebuild_from_process_tree_failed: pane=%s err=%v", req.TmuxPaneID, rerr)
+		}
+		if ok {
+			rebuiltMatched = true
+			_ = matchedType // req.AgentType is SOT; matched type is diagnostic only
+		}
+	}
+
 	status := result.Status
 	if status == "" && frame != nil {
 		status = frame.Status
@@ -291,9 +317,15 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		}
 	}
 	projection, err := m.projectPane(req.TmuxPaneID)
+	// Phase 3 Commit 3 — three-state reason (plan §1.4):
+	//   parent_frame_found       → legacy lookup hit (line 220-228)
+	//   daemon_restart_recovery  → rebuild via process tree hit
+	//   parent_frame_missing     → fallback (renamed to no_parent_fallback in Commit 4)
 	reason := "parent_frame_missing"
 	if stored.ParentFrameID != "" {
 		reason = "parent_frame_found"
+	} else if rebuiltMatched {
+		reason = "daemon_restart_recovery"
 	}
 	decision := "created_frame"
 	if frame != nil {

@@ -1741,4 +1741,224 @@ var errProbeFailure = errorString("probe tree query failed")
 
 type errorString string
 
+// ---------------------------------------------------------------------------
+// Rebuild wiring into applyFrameEvent (Phase 3 Commit 3, plan §1.2.4 / §1.4)
+// ---------------------------------------------------------------------------
+//
+// Tests override firstAliveAgentInTreeFn directly (same pattern as the
+// helper-level tests above) and arrange the standard lookup chain to miss so
+// the rebuild fallback is the only path that can satisfy the event.
+
+// R5 — rebuild命中、既有 lookup chain 全 miss → trace reason daemon_restart_recovery.
+func TestApplyFrameEvent_RebuildHit_TraceReason(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	// Arrange proc info so readProcessInfoFn returns a PPID that doesn't
+	// resolve to any seeded frame (FindByPanePID miss). No frames seeded →
+	// GetByIdentity miss + findProxyParent miss (no ancestor frame).
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "daemon_restart_recovery" {
+		t.Fatalf("reason = %q, want daemon_restart_recovery (meta=%+v)", meta.Reason, meta)
+	}
+	if meta.Decision != "created_frame" {
+		t.Fatalf("decision = %q, want created_frame", meta.Decision)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (new frame created post-rebuild)", len(frames))
+	}
+	if frames[0].AgentType != "cc" {
+		t.Fatalf("AgentType = %q, want cc (req.AgentType is SOT)", frames[0].AgentType)
+	}
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty (rebuild does not restore refs)", frames[0].Subagents)
+	}
+}
+
+// R6 — rebuild 命中 → 接著 SubagentStart 仍正確累積 ref（驗證 native path 不壞）.
+func TestApplyFrameEvent_RebuildHit_ThenSubagentStart(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	startReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
+	if _, meta, err := m.applyFrameEvent(startReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500); err != nil {
+		t.Fatalf("rebuild SessionStart: %v", err)
+	} else if meta.Reason != "daemon_restart_recovery" {
+		t.Fatalf("rebuild SessionStart reason = %q, want daemon_restart_recovery", meta.Reason)
+	}
+
+	// After rebuild frame exists with subagents=[]; SubagentStart should
+	// append a native ref via mutateSubagentsWithRetry (happy path).
+	subReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SubagentStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(subReq, agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": "sub-1"}}, 600)
+	if err != nil {
+		t.Fatalf("SubagentStart: %v", err)
+	}
+	if meta.Decision != "updated_frame" || meta.Reason != "subagent_membership_changed" {
+		t.Fatalf("SubagentStart meta = %q/%q, want updated_frame/subagent_membership_changed", meta.Decision, meta.Reason)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if len(frames[0].Subagents) != 1 {
+		t.Fatalf("Subagents len = %d, want 1 (native ref accumulated after rebuild)", len(frames[0].Subagents))
+	}
+	if frames[0].Subagents[0].ID != "sub-1" {
+		t.Fatalf("Subagents[0].ID = %q, want sub-1", frames[0].Subagents[0].ID)
+	}
+}
+
+// R7 — SessionStart 走 findProxyParent 命中 → rebuild 不被呼叫（spy guard）.
+func TestApplyFrameEvent_ProxyHit_SkipsRebuild(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	origSeam := firstAliveAgentInTreeFn
+	rebuildCalls := 0
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		rebuildCalls++
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "proxy_subagent_attached" {
+		t.Fatalf("reason = %q, want proxy_subagent_attached (PR-2b path)", meta.Reason)
+	}
+	if rebuildCalls != 0 {
+		t.Fatalf("rebuild seam called %d times, want 0 (proxy hit should short-circuit)", rebuildCalls)
+	}
+}
+
+// R8 — rebuild err → fail-soft → falls through to parent_frame_missing reason.
+func TestApplyFrameEvent_RebuildErrorFailsSoft(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "", 0, errProbeFailure
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500)
+	if err != nil {
+		t.Fatalf("applyFrameEvent err = %v, want nil (fail-soft)", err)
+	}
+	// Commit 3 stage: reason is still "parent_frame_missing"; commit 4
+	// renames this to "no_parent_fallback".
+	if meta.Reason != "parent_frame_missing" {
+		t.Fatalf("reason = %q, want parent_frame_missing (rebuild err → fail-soft)", meta.Reason)
+	}
+	if meta.Decision != "created_frame" {
+		t.Fatalf("decision = %q, want created_frame", meta.Decision)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (fallback path still creates frame)", len(frames))
+	}
+}
+
+// N3 — parent 命中時 rebuild helper 不被呼叫（spy guard for FindByPanePID hit）.
+func TestApplyFrameEvent_RebuildSkipped_WhenParentFound(t *testing.T) {
+	m := newProxyTestModule(t)
+	// Seed a cc parent frame with PID 100.
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	// readProcessInfo returns PPID=100 so FindByPanePID(%5, 100) hits the
+	// seeded frame. Liveness stubs don't matter for FindByPanePID path.
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		// sender pid 300 maps up to cc parent via PPID chain.
+		if pid == 300 {
+			return agentpkg.ProcessInfo{PID: 300, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	// processStartTime/isPidAlive not overridden because we want findProxyParent
+	// to miss on liveness (parent.PID 100 is not alive under default stubs in
+	// newTestModule: isPidAliveFn=true but processStartTimeFn returns the
+	// default "Sun Apr 20 01:30:00 2026" which != seed "t100"). So proxy path
+	// bails, and we land in the non-proxy FindByPanePID lookup at line 221-228.
+
+	origSeam := firstAliveAgentInTreeFn
+	rebuildCalls := 0
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		rebuildCalls++
+		return "", 0, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 300, SenderStartTime: "t300"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "parent_frame_found" {
+		t.Fatalf("reason = %q, want parent_frame_found (FindByPanePID hit)", meta.Reason)
+	}
+	if rebuildCalls != 0 {
+		t.Fatalf("rebuild seam called %d times, want 0 (parent found short-circuits)", rebuildCalls)
+	}
+}
+
 func (e errorString) Error() string { return string(e) }
