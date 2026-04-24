@@ -595,3 +595,53 @@ describe('Commit 1: Editor HSR migration', () => {
     expect(isModuleOwnedContribution(entry!)).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Commit 2: EditorBuffersPane + NewTab entry (spec §4.5 / §4.7 / §4.9.3).
+// Editor module now owns:
+//   - A new `editor-buffers` pane kind (registered via `panes: [...]`).
+//   - A new NewTab provider `editor-buffers` with `moduleId: 'editor'`.
+//   - The existing `editor` NewTab provider also sets `moduleId: 'editor'`
+//     so the Switchboard-driven filter catches both at once.
+// ---------------------------------------------------------------------------
+
+describe('Commit 2: EditorBuffersPane + NewTab entry', () => {
+  beforeEach(() => {
+    clearAll()
+  })
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).electronAPI
+    clearAll()
+  })
+
+  it('N2-1: editor-buffers NewTab provider is registered with moduleId=editor', () => {
+    registerBuiltinModules()
+    const provider = getNewTabProviders().find((p) => p.id === 'editor-buffers')
+    expect(provider).toBeDefined()
+    expect(provider?.moduleId).toBe('editor')
+    expect(provider?.icon).toBe('Stack')
+  })
+
+  it('N2-2: editor-buffers provider order sits immediately after the editor provider', () => {
+    registerBuiltinModules()
+    const providers = getNewTabProviders()
+    const editor = providers.find((p) => p.id === 'editor')
+    const buffers = providers.find((p) => p.id === 'editor-buffers')
+    expect(editor).toBeDefined()
+    expect(buffers).toBeDefined()
+    expect(buffers!.order).toBeGreaterThan(editor!.order)
+  })
+
+  it('editor NewTab provider is tagged with moduleId=editor (so A2-4 filter applies)', () => {
+    registerBuiltinModules()
+    const editor = getNewTabProviders().find((p) => p.id === 'editor')
+    expect(editor?.moduleId).toBe('editor')
+  })
+
+  it('editor module declares the editor-buffers pane kind', () => {
+    registerBuiltinModules()
+    const editorMod = getModules().find((m) => m.id === 'editor')
+    expect(editorMod?.panes?.find((p) => p.kind === 'editor-buffers')).toBeDefined()
+  })
+})

@@ -34,6 +34,16 @@ describe('createTab', () => {
     expect(tab.pinned).toBe(true)
     expect(tab.locked).toBe(false)
   })
+
+  it('P2-1: creates a tab with editor-buffers content (Commit 2)', () => {
+    const tab = createTab({ kind: 'editor-buffers' })
+    expect(tab.id).toMatch(/^[0-9a-z]{6}$/)
+    expect(tab.locked).toBe(false)
+    expect(tab.layout.type).toBe('leaf')
+    if (tab.layout.type === 'leaf') {
+      expect(tab.layout.pane.content).toEqual({ kind: 'editor-buffers' })
+    }
+  })
 })
 
 describe('createWorkspace', () => {

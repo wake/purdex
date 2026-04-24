@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react'
 import { getNewTabProviders } from '../lib/new-tab-registry'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
+import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 import { useBreakpoint } from '../hooks/useBreakpoint'
 import { resolveProfile } from '../lib/resolve-profile'
 import { colsClass } from '../lib/cols-class'
@@ -24,7 +25,18 @@ export function NewTabPage({ onSelect }: Props) {
   const profileKey = resolveProfile(isWide, isMid, profiles)
   const profile = profiles[profileKey]
 
-  const providers = getNewTabProviders()
+  // Subscribe so module enable/disable flips re-render this component.
+  const enabledMap = useModuleEnabledStore((s) => s.enabled)
+  const isEnabled = useModuleEnabledStore((s) => s.isEnabled)
+  const providers = useMemo(() => {
+    // A2-4 / A2-5: providers carrying a `moduleId` are hidden when the owning
+    // module is disabled. Legacy providers with no `moduleId` are always
+    // visible (back-compat, spec §4.9.3).
+    // `enabledMap` is a dependency so the filter recomputes when the user
+    // flips a module in the Switchboard.
+    void enabledMap
+    return getNewTabProviders().filter((p) => !p.moduleId || isEnabled(p.moduleId))
+  }, [enabledMap, isEnabled])
   const byId = useMemo(() => Object.fromEntries(providers.map((p) => [p.id, p])), [providers])
 
   if (!hydrated) {

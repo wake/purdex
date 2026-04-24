@@ -4,7 +4,6 @@ import {
   useEditorSettingsStore,
   type TabSizeOption,
 } from '../../stores/useEditorSettingsStore'
-import { BufferListSection } from '../editor/BufferListSection'
 
 interface Props {
   ctx: SettingsContextFor<'purdex'>
@@ -13,10 +12,9 @@ interface Props {
 /**
  * Purdex-scope Editor settings section.
  *
- * Commit 1 transitional: also renders `<BufferListSection />` below the
- * preferences so users still have a way to manage `/buffer/*` entries while
- * the dedicated `editor-buffers` pane is being built (Commit 2). This
- * BufferListSection import disappears together with the file in Commit 2.
+ * Renders the Monaco preference controls (indentation + display) for the
+ * in-app editor. Buffer CRUD now lives in the dedicated `EditorBuffersPane`
+ * (spec §4.5) — the transitional legacy block was retired in Commit 2.
  *
  * Tiptap integration is deliberately out of scope for this PR — the note
  * below makes this explicit for users who expect the preferences to affect
@@ -134,12 +132,6 @@ export function EditorPurdexSettingsSection(_props: Props) {
         These settings apply to the Monaco code editor. Rich-text (Tiptap)
         integration arrives in a follow-up.
       </p>
-
-      {/* Commit 1 transitional — removed together with BufferListSection in Commit 2. */}
-      <section className="flex flex-col gap-2 pt-4 border-t border-border-subtle">
-        <h3 className="text-sm font-medium text-text-primary">Buffers</h3>
-        <BufferListSection />
-      </section>
     </div>
   )
 }
