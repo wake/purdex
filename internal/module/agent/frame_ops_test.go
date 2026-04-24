@@ -472,6 +472,43 @@ func TestUpdateSubagents_StopMissingIsNoop(t *testing.T) {
 	}
 }
 
+// U6 — R2 regression: a native subagent whose provider-supplied agent_id
+// happens to equal a synthesized proxy ID must NOT collide with a proxy ref
+// of the same ID string on the same list. Identity is kind-aware: proxy
+// matches by SourcePID+SourceStartTime, native matches by ID, cross-kind
+// never matches.
+func TestUpdateSubagents_ProxyNativeIDNamespacesAreIsolated(t *testing.T) {
+	// A native ref with a pathologically-shaped ID that happens to match
+	// the proxy ID synthesis pattern proxy:<type>:<pid>:<start_time>.
+	native := agentpkg.SubagentRef{ID: "proxy:cc:200:t200", Type: "cc"}
+	list := []agentpkg.SubagentRef{native}
+
+	// A real proxy SessionStart synthesizes the same-shaped ID but sets
+	// IsProxy=true + source identity fields. It must NOT be shadowed by the
+	// native ref already present — append expected.
+	proxy := agentpkg.SubagentRef{
+		ID:              "proxy:cc:200:t200",
+		Type:            "cc",
+		SourcePID:       200,
+		SourceStartTime: "t200",
+		IsProxy:         true,
+	}
+	afterStart := updateSubagents(list, "SubagentStart", proxy)
+	if len(afterStart) != 2 {
+		t.Fatalf("proxy SubagentStart with same ID as native should append cross-kind; got %d refs, want 2: %+v", len(afterStart), afterStart)
+	}
+
+	// A native SubagentStop with the same ID must remove only the native
+	// ref, not evict the proxy.
+	afterStop := updateSubagents(afterStart, "SubagentStop", native)
+	if len(afterStop) != 1 {
+		t.Fatalf("native SubagentStop removed wrong count; got %d, want 1: %+v", len(afterStop), afterStop)
+	}
+	if !afterStop[0].IsProxy {
+		t.Fatalf("native Stop evicted proxy ref (kind-isolation broken); got %+v", afterStop[0])
+	}
+}
+
 func TestSendSnapshot_IncludesLegacySessionsWithoutFrames(t *testing.T) {
 	m := newTestModule(t)
 	fakeTmux := tmux.NewFakeExecutor()

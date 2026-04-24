@@ -281,10 +281,16 @@ func summarizeFrame(frame *store.Frame) map[string]any {
 }
 
 // updateSubagents mutates a frame's subagent list in response to a
-// SubagentStart / SubagentStop event. Matching is by ref.ID only; Type does
-// not participate so a cross-type hook (proxy path in PR-2b) cleanly replaces
-// a native ref on stop. On SubagentStart the first-write wins — an existing
-// ref keeps its StartedAt/SourcePID/SourceStartTime/IsProxy.
+// SubagentStart / SubagentStop event. On SubagentStart the first-write wins;
+// an existing ref keeps its StartedAt/SourcePID/SourceStartTime/IsProxy.
+//
+// Identity key is kind-aware (R2 fix): proxy refs identify by
+// (SourcePID, SourceStartTime) — the sender process — while native refs
+// identify by ID (the agent_id string supplied by the provider). Cross-kind
+// refs (one proxy, one native) never match even if ID strings coincide.
+// This isolates namespaces so a native ref whose agent_id happens to collide
+// with a synthesized proxy ID cannot shadow or evict a proxy ref, and vice
+// versa.
 func updateSubagents(current []agentpkg.SubagentRef, eventName string, ref agentpkg.SubagentRef) []agentpkg.SubagentRef {
 	if current == nil {
 		current = []agentpkg.SubagentRef{}
@@ -292,7 +298,7 @@ func updateSubagents(current []agentpkg.SubagentRef, eventName string, ref agent
 	switch eventName {
 	case "SubagentStart":
 		for _, existing := range current {
-			if existing.ID == ref.ID {
+			if subagentRefMatches(existing, ref) {
 				return current
 			}
 		}
@@ -300,7 +306,7 @@ func updateSubagents(current []agentpkg.SubagentRef, eventName string, ref agent
 	case "SubagentStop":
 		filtered := make([]agentpkg.SubagentRef, 0, len(current))
 		for _, existing := range current {
-			if existing.ID != ref.ID {
+			if !subagentRefMatches(existing, ref) {
 				filtered = append(filtered, existing)
 			}
 		}
@@ -308,6 +314,20 @@ func updateSubagents(current []agentpkg.SubagentRef, eventName string, ref agent
 	default:
 		return current
 	}
+}
+
+// subagentRefMatches returns true when two refs identify the same subagent.
+// Proxy refs compare by (SourcePID, SourceStartTime); native refs compare by
+// ID. Cross-kind (one proxy, one native) is never a match — preserves the
+// isolation between the two namespaces (see updateSubagents doc).
+func subagentRefMatches(a, b agentpkg.SubagentRef) bool {
+	if a.IsProxy != b.IsProxy {
+		return false
+	}
+	if a.IsProxy {
+		return a.SourcePID == b.SourcePID && a.SourceStartTime == b.SourceStartTime
+	}
+	return a.ID == b.ID
 }
 
 func syncProjectionState(currentStatus map[string]agentpkg.Status, subagents map[string][]agentpkg.SubagentRef, tmuxSession string, projection *SessionProjection) {
