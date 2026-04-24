@@ -1,6 +1,7 @@
-# Phase 2 TDD Plan v5 — L3 Subagent 升級 + Proxy + Frame Idle Sweep
+# Phase 2 TDD Plan v6 — L3 Subagent 升級 + Proxy + Frame Idle Sweep
 
-- **Date**: 2026-04-24（v1→v2: `review-mobwvdpq-w6kftz`; v2→v3: `review-mobxgl16-mfkzav`; v3→v4: `review-mocgelr5-z0v0a4`; v4→v5: `review-mocgnzun-lu31px`）
+- **Date**: 2026-04-24（v1→v2: `review-mobwvdpq-w6kftz`; v2→v3: `review-mobxgl16-mfkzav`; v3→v4: `review-mocgelr5-z0v0a4`; v4→v5: `review-mocgnzun-lu31px`; v5→v6: `review-mocgvia3-yesygj`）
+- **狀態**: v5 收斂 no P1（proxy/sweep semantics ✅）；v6 修 SPA 測試 scope P2 → **ship-ready 門檻達成**
 - **Spec**: `docs/specs/2026-04-23-lights-rebuild-spec.md` §6
 - **Worktree**: `lights-phase-2`（branch `worktree-lights-phase-2`）
 - **依賴**: Phase 1（merged at `d1d60b2c`）+ Hook Events PR #616（merged at `fd9f8f8f`, alpha.217）
@@ -534,19 +535,22 @@ interface Props {
 - `internal/agent/status.go` 除 NormalizedEvent.Subagents 型別
 - `/api/agent/monitor/*` endpoint shape（Phase 5 Inspector 統一）
 
-**SPA 允許改動**（v3 修正 — v2 scope 遺漏 3 檔）：
+**SPA 允許改動**（v3 修正 — v2 scope 遺漏 3 檔；v6 補齊既有測試檔）：
 
 | PR | 檔案 | 改動性質 |
 |---|---|---|
 | PR-2a | `spa/src/stores/useAgentStore.ts` | SubagentRef type + Record 升級 |
-| PR-2a | `spa/src/components/*.test.tsx`、`spa/src/hooks/*.test.ts` | seed 升級（subagents 型別） |
+| **PR-2a v6-new** | `spa/src/stores/useAgentStore.test.ts` | string[] fixture / `event.subagents: ['agent-A']` 等 assertion 升級為 `SubagentRef[]`（含 L79/124/128/134/138/149/173/205/275/283/295 等 fixture 點） |
+| PR-2a | `spa/src/components/*.test.tsx`、`spa/src/hooks/*.test.ts` | 其他含 subagents seed 的測試 seed 升級 |
 | PR-2b | `spa/src/components/SubagentDots.tsx` | API + type color + proxy outline |
 | PR-2b | `spa/src/components/SubagentDots.test.tsx` | 新檔測試 |
 | PR-2b | `spa/src/components/TabIcon.tsx` | prop count → refs |
 | PR-2b | `spa/src/components/SortableTab.tsx` | prop count → refs（含 line 43/92/132 三處） |
+| PR-2b | `spa/src/components/SortableTab.test.tsx` | prop 升級 + proxy outline case |
 | PR-2b | `spa/src/features/workspace/components/InlineTab.tsx` | prop count → refs（line 42/111 轉介） |
+| **PR-2b v6-new** | `spa/src/features/workspace/components/InlineTab.test.tsx` | prop 升級 + prop-wiring 驗證 |
 | PR-2b | `spa/src/features/workspace/lib/renderInlineTabIcon.tsx` | 三處 SubagentDots 呼叫改吃 refs |
-| PR-2b | `spa/src/hooks/useTabDisplay.ts` | 回傳 subagentRefs |
+| **PR-2b v6-new** | `spa/src/features/workspace/lib/renderInlineTabIcon.test.tsx` | 三 render 模式（dot/iconDot/badge）驗證 refs 流到 SubagentDots |
 
 其餘 SPA 檔案不動。
 
@@ -652,20 +656,19 @@ interface Props {
 ### 2.9 SPA 測試升級（PR-2a + PR-2b）
 
 **PR-2a**：所有 seed `subagents: {}` / `subagents: { key: [...] }` 的測試檔升級 mock 為 `SubagentRef[]`
+  - **`useAgentStore.test.ts`**（v6-new；核心 store contract 測試，含 ~15 個 string-array fixture 需升級）
   - `SortableTab.test.tsx`（seed 改；prop 還是吃 subagentCount: number —— PR-2b 再改）
   - `StatusBar.test.tsx` / `TerminalView.test.tsx` / `HookModuleCard.test.tsx`
   - `useNotificationDispatcher.test.ts` / `useTabDisplay.test.ts`（line 160 的 `as never` cast 改為正規 SubagentRef）
 
-**PR-2b**（v3 擴充）：
+**PR-2b**（v3 擴充 + v6 補）：
 - `SubagentDots.test.tsx`（新檔）：
   - `TestSubagentDots_Count`：refs 1/2/3 → 對應 dot 數
   - `TestSubagentDots_TypeColors`：三家 type → 三個不同 backgroundColor
   - `TestSubagentDots_ProxyOutline`：ref with `is_proxy:true` → border 1px + backgroundColor transparent；`is_proxy:false/undefined` → solid background
 - `SortableTab.test.tsx`：把 prop 從 `subagentCount: N` 改為 `subagentRefs: SubagentRef[N]`；新加一個 case `subagentRefs` 含 `is_proxy:true` ref → 渲染 outline dot
-- `InlineTab.test.tsx`（若存在，否則新建）：同上，驗證 prop 從 count → refs 接起
-- `renderInlineTabIcon.test.tsx`（若存在，否則新建）：三個 render 模式（dot/iconDot/badge）都驗證 proxy outline 能流到 SubagentDots
-
-**若 `InlineTab.test.tsx` / `renderInlineTabIcon.test.tsx` 不存在**：不為 PR-2b 強求新建（零覆蓋的檔案不要為測試而開）；由 SortableTab.test.tsx + SubagentDots.test.tsx 覆蓋 prop-wiring 正確性即可。Subagent 執行時發現檔案不存在，在 PR description 明示「無既有測試，新增覆蓋 by SubagentDots + SortableTab」。
+- **`InlineTab.test.tsx`**（v6-new；檔案已存在，~11 KB）：prop 從 `subagentCount` 改為 `subagentRefs`；補一個 proxy outline prop-wiring case
+- **`renderInlineTabIcon.test.tsx`**（v6-new；檔案已存在，~2.5 KB）：三個 render 模式（dot/iconDot/badge）驗證 `subagentRefs` 被正確傳給 `<SubagentDots refs={...}>`；補 proxy outline case
 
 ---
 
@@ -765,6 +768,7 @@ interface Props {
 | `internal/module/agent/handler_test.go` | HB1 + 既有 seed | +60 |
 | `internal/module/agent/sweep_test.go` | 既有 seed 改（引入 SubagentRef） | +15 |
 | `spa/src/stores/useAgentStore.ts` | SubagentRef + Record 型別 | +12 |
+| `spa/src/stores/useAgentStore.test.ts` | v6-new：string[] fixtures 升級為 SubagentRef[] (~15 fixture 點) | ~40 |
 | `spa/src/components/*.test.tsx` (6 檔) | seed 改 | ~35 |
 | `spa/src/hooks/*.test.ts` (2 檔) | seed 改 | ~12 |
 | `docs/specs/2026-04-23-lights-rebuild-phase-2-plan.md` | 本檔 | +550 |
@@ -787,9 +791,11 @@ interface Props {
 | `spa/src/components/SortableTab.tsx` | prop subagentCount → subagentRefs（兩處 TabIcon 調用） | ~10 |
 | `spa/src/components/SortableTab.test.tsx` | prop 升級 + proxy outline case | +25 |
 | `spa/src/features/workspace/components/InlineTab.tsx` | prop count → refs（line 42/111） | ~6 |
+| `spa/src/features/workspace/components/InlineTab.test.tsx` | v6-new：prop 升級 + proxy outline prop-wiring case | ~30 |
 | `spa/src/features/workspace/lib/renderInlineTabIcon.tsx` | 三處 SubagentDots 呼叫 | ~12 |
+| `spa/src/features/workspace/lib/renderInlineTabIcon.test.tsx` | v6-new：三 render 模式 + proxy outline case | ~40 |
 | `spa/src/hooks/useTabDisplay.ts` | 回傳 subagentRefs 欄位 | ~8 |
-| **PR-2b 合計** | | **~1000 行** |
+| **PR-2b 合計** | | **~1070 行** |
 
 ### 總計
 
@@ -967,6 +973,17 @@ interface Props {
 | **§3 Commit 7 TDD gate 改 PR1-PR15** | Codex v4 #3: v4 新增 PR13/PR14 未進 commit 必跑集合 |
 | **§7 PR-2b 驗收列明必跑總集合** 27 測試（F4-F6 / PR1-PR15 / SE1-SE3 / IS1-IS5 / HB2） | Codex v4 #3: v4 驗收仍寫「19 測試」舊數 |
 | **新增 PR15 `AbortsWalkOnStartTimeReadError`** | v4 #1 修正的回歸測試 |
+
+### v5 → v6
+
+Verdict: **v5 收斂 no P1**（proxy/sweep semantics 確認 ship-ready）；v6 處理剩餘 2 個 P2（文件一致性）。
+
+| 改動 | 原因 |
+|---|---|
+| **PR-2a scope 補 `useAgentStore.test.ts`** | Codex v5 #1: 既存 store test 含 string-array fixtures（`subagents: ['agent-A']` 等 ~15 處）；PR-2a upgrade 必動但 §1.14 未列 |
+| **PR-2b scope 補 `InlineTab.test.tsx`、`renderInlineTabIcon.test.tsx`** | Codex v5 #2: 兩檔真實存在（~11KB + ~2.5KB），prop 從 count → refs 改必動，§4/§7 diff gate 未列會互斥 |
+| §4 PR-2a/2b 行數更新：PR-2a +~40 行、PR-2b +~70 行 | 補三個測試檔的擴展 |
+| §2.9 移除「若存在否則新建」措辭 | 兩檔已確認存在；措辭含糊會讓 subagent 誤判 |
 
 ---
 
