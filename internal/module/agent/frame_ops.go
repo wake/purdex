@@ -676,6 +676,44 @@ func (m *Module) detachProxyRefWithRetry(owner store.Frame, senderPID int, sende
 	return false, store.Frame{}, fmt.Errorf("proxy detach: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, owner.FrameID)
 }
 
+// firstAliveAgentInTreeFn is the test seam that indirects
+// Prober.FirstAliveAgentInTree so tryRebuildFromProcessTree can be exercised
+// without a wired-up prober (m.prober is nil in newTestModule). Mirrors the
+// pattern of readProcessInfoFn / isPidAliveFn / processStartTimeFn declared in
+// verify.go — unit tests override the package-level variable and restore it
+// via t.Cleanup.
+var firstAliveAgentInTreeFn = func(m *Module, target string) (string, int, error) {
+	if m == nil || m.prober == nil {
+		return "", 0, nil
+	}
+	return m.prober.FirstAliveAgentInTree(target)
+}
+
+// tryRebuildFromProcessTree attempts to recover a frame after daemon restart
+// by inspecting the pane's live process tree via the Prober. Triggered when
+// the standard lookup chain (GetByIdentity → findProxyParent → FindByPanePID)
+// all miss on a SessionStart (Phase 3 plan §1.2.2).
+//
+// Behavior:
+//   - Delegates to prober.FirstAliveAgentInTree(req.TmuxPaneID)
+//   - Match → returns (agentType, true, nil)
+//   - No match → returns ("", false, nil)
+//   - Any error → returns ("", false, err); caller is expected to fail-soft
+//
+// Unwired in Commit 2: applyFrameEvent does not yet call this helper — that
+// wiring lands in Commit 3, which also introduces the reason_code contract
+// for the rebuild path.
+func (m *Module) tryRebuildFromProcessTree(req EventRequest) (string, bool, error) {
+	agentType, _, err := firstAliveAgentInTreeFn(m, req.TmuxPaneID)
+	if err != nil {
+		return "", false, err
+	}
+	if agentType == "" {
+		return "", false, nil
+	}
+	return agentType, true, nil
+}
+
 // findProxyParent walks the sender's PPID ancestor chain (capped at
 // proxyMaxDepth) looking for an alive, identity-verified, cross-type frame in
 // the same pane. See plan §1.4 for full contract.

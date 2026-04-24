@@ -1650,3 +1650,95 @@ func TestSessionEnd_OwnFrameDeletePreservesOtherProxyRefs(t *testing.T) {
 		t.Fatalf("frame count = %d, want 0 (cc frame deleted)", len(frames))
 	}
 }
+
+// --- tryRebuildFromProcessTree tests (Phase 3 Commit 2) ---
+//
+// The helper delegates to Prober.FirstAliveAgentInTree via the
+// firstAliveAgentInTreeFn seam (sibling of readProcessInfoFn / isPidAliveFn /
+// processStartTimeFn in verify.go). Tests override the seam directly, so they
+// don't need m.prober to be wired up — same pattern as every other frame_ops
+// test that stubs a probe-layer dependency.
+
+func TestTryRebuildFromProcessTree_Hit(t *testing.T) {
+	m := newTestModule(t)
+
+	origSeam := firstAliveAgentInTreeFn
+	var gotTarget string
+	firstAliveAgentInTreeFn = func(_ *Module, target string) (string, int, error) {
+		gotTarget = target
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxPaneID: "%5", SenderPID: 200, SenderStartTime: "t200"}
+	agentType, ok, err := m.tryRebuildFromProcessTree(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if agentType != "cc" {
+		t.Fatalf("agentType = %q, want cc", agentType)
+	}
+	if gotTarget != "%5" {
+		t.Fatalf("seam target = %q, want %%5 (pane id)", gotTarget)
+	}
+}
+
+func TestTryRebuildFromProcessTree_Miss(t *testing.T) {
+	m := newTestModule(t)
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "", 0, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxPaneID: "%5", SenderPID: 200, SenderStartTime: "t200"}
+	agentType, ok, err := m.tryRebuildFromProcessTree(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Fatalf("ok = true, want false (no match)")
+	}
+	if agentType != "" {
+		t.Fatalf("agentType = %q, want empty", agentType)
+	}
+}
+
+func TestTryRebuildFromProcessTree_Error(t *testing.T) {
+	m := newTestModule(t)
+
+	origSeam := firstAliveAgentInTreeFn
+	wantErr := errProbeFailure
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "", 0, wantErr
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxPaneID: "%5", SenderPID: 200, SenderStartTime: "t200"}
+	agentType, ok, err := m.tryRebuildFromProcessTree(req)
+	if err == nil {
+		t.Fatalf("err = nil, want non-nil")
+	}
+	if err != wantErr {
+		t.Fatalf("err = %v, want %v", err, wantErr)
+	}
+	if ok {
+		t.Fatalf("ok = true, want false on error")
+	}
+	if agentType != "" {
+		t.Fatalf("agentType = %q, want empty on error", agentType)
+	}
+}
+
+// errProbeFailure is a sentinel used by TestTryRebuildFromProcessTree_Error to
+// verify that the helper propagates the probe's error verbatim (caller
+// fail-soft).
+var errProbeFailure = errorString("probe tree query failed")
+
+type errorString string
+
+func (e errorString) Error() string { return string(e) }
