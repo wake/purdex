@@ -817,10 +817,29 @@ func TestProxySubagent_SkipsWhenParentSameType(t *testing.T) {
 	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
 
 	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
 	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
 		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
 	}
-	t.Cleanup(func() { readProcessInfoFn = origInfo })
+	// R4 fix: force the same-type ancestor to be live + identity-verified so
+	// the hard-stop gate is exercised on its actual rule (live same-type
+	// ancestor → re-session) rather than incidentally passing through
+	// dead-skip+walk-up. Without these stubs the candidate's PID 100 would
+	// be dead under the real isPidAliveFn and the test would mask regressions
+	// in the hard-stop ordering.
+	isPidAliveFn = func(pid int) bool { return pid == 100 }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
 
 	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
@@ -1113,6 +1132,8 @@ func TestProxySubagent_SameTypeAncestorStopsWalk(t *testing.T) {
 	seedFrame(t, m, "%5", "codex", 200, "t200", 20)
 
 	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
 	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
 		switch pid {
 		case 400:
@@ -1124,7 +1145,27 @@ func TestProxySubagent_SameTypeAncestorStopsWalk(t *testing.T) {
 		}
 		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
 	}
-	t.Cleanup(func() { readProcessInfoFn = origInfo })
+	// R4 fix: force the same-type codex ancestor (PID 200) to be live +
+	// identity-verified so the hard-stop gate triggers on its real rule
+	// (live same-type → re-session) rather than walking past on a dead
+	// candidate. Without these stubs PR14 would incidentally pass by
+	// walking 200 (dead) → 100 (dead) → exhausted, which does not actually
+	// verify the same-type hard-stop.
+	isPidAliveFn = func(pid int) bool { return pid == 200 || pid == 100 }
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 200:
+			return "t200", nil
+		case 100:
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
 
 	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 400, SenderStartTime: "t400"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
@@ -1132,7 +1173,7 @@ func TestProxySubagent_SameTypeAncestorStopsWalk(t *testing.T) {
 		t.Fatalf("applyFrameEvent: %v", err)
 	}
 	if meta.Reason == "proxy_subagent_attached" {
-		t.Fatalf("walk should halt at same-type codex ancestor, not reach cc; meta=%+v", meta)
+		t.Fatalf("walk should halt at live same-type codex ancestor, not reach cc; meta=%+v", meta)
 	}
 }
 
