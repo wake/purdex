@@ -1,18 +1,20 @@
 # Editor Restructure (PR 2) — Plan
 
-- Spec: `docs/specs/2026-04-24-editor-restructure-pr2-spec.md` v1.4
-- Plan revision: **v1.4** (2026-04-24) — aligned with spec v1.4 after
-  Round-4 PR review (4-parallel, No-ship, 1 CRIT + 7 HIGH). Adds
-  Commit 4 as a single fix-up commit on top of Commits 1-3.
+- Spec: `docs/specs/2026-04-24-editor-restructure-pr2-spec.md` v1.5
+- Plan revision: **v1.5** (2026-04-24) — aligned with spec v1.5 after
+  Round-5 PR verification review (4-parallel, 0 CRIT + 2 HIGH + 4 MED
+  + 1 LOW). Adds Commit 5 as a single fix-up commit on top of
+  Commits 1-4. Commit 4 (R4 absorption, `17c1a405`) already landed.
 - Base commit: `bb5ce0c1` (main @ alpha.216)
-- Target version: 1.0.0-alpha.217
+- Target version: 1.0.0-alpha.219 (alpha.218 consumed by Lights Phase 2 PR-2a)
 
 ## 0. Orientation
 
 ### Spec reference
-Spec v1.4. Four-commit PR targeting alpha.217 (Commits 1-3 already
-landed as `b149d93c`, `7546a4ed`, `e58cc004`; Commit 4 is a fix-up
-for R4 findings).
+Spec v1.5. Five-commit PR targeting alpha.219. Commits 1-4 already
+landed (`b149d93c`, `7546a4ed`, `e58cc004`, `17c1a405`). Commit 5 is
+the fix-up for R5 must-fix findings G1/G2/G3/G7; G4/G5/G6 become
+follow-up issues.
 
 ### Out of scope (mirroring spec §2)
 - No changes to IndexedDB / InAppBackend storage layer internals.
@@ -102,11 +104,16 @@ Anchors confirmed accurate as of base commit `bb5ce0c1`:
 
 ## 2. TDD test matrix
 
-Total: **48 tests** across 4 commits (v1.4 delta vs v1.3: +7 in
-Commit 4 — S1-9 rehydrate happy-path, B2-12 rename-exists, B2-13
-delete-locked-refused, B2-14 delete-dirty-confirm + single-confirm,
-B2-15 smart-open skips dirty/non-inapp, C3-7 onNewBuffer dirty
-guard, A2-7 NewTabPage all-null columns empty state).
+Total: **51 tests** across 5 commits (v1.5 delta vs v1.4: +3 in
+Commit 5 — B2-16 rename syncs tab + editor stores, B2-17 delete
+cleans editor store in background tabs, B2-18 double-click opens
+correct buffer without stale closure).
+
+v1.4 delta (already landed in Commit 4, `17c1a405`): +7 — S1-9
+rehydrate happy-path, B2-12 rename-exists, B2-13 delete-locked-
+refused, B2-14 delete-dirty-confirm + single-confirm, B2-15 smart-
+open skips dirty/non-inapp, C3-7 onNewBuffer dirty guard, A2-7
+NewTabPage all-null columns empty state.
 
 | ID | File | Test name | Asserts (one-line) | Commit |
 |----|------|-----------|-------------------|--------|
@@ -161,6 +168,9 @@ guard, A2-7 NewTabPage all-null columns empty state).
 | B2-15 | `components/editor/EditorBuffersPane.test.tsx` | smart-open skips dirty / non-inapp panes | seed activeTab with editor pane where `content.source.type='inapp'` but buffer isDirty=true; other tab with `content.source.type='daemon'`; open a buffer → `setPaneContent` NOT called on either pane; `addTab` called (new-tab fallback) | 4 |
 | C3-7 | `components/editor/EditorToolbar.test.tsx` (extend) | onNewBuffer dirty confirm | current pane buffer isDirty=true, trigger `onNewBuffer`; `window.confirm` called; cancel → `setPaneContent` NOT called; OK → proceeds normally | 4 |
 | A2-7 | `components/NewTabPage.test.tsx` | all columns filter to null → empty state | seed profile with columns that all pin editor-module providers; disable editor module; assert empty-state element renders (not a blank grid); assert no `null` column render (queries by testid or role) | 4 |
+| B2-16 | `components/editor/EditorBuffersPane.test.tsx` | rename syncs tab layout + editor store | Seed `useTabStore` with a non-locked tab whose layout contains a single editor pane `content={kind:'editor', source:{type:'inapp'}, filePath:'/buffer/foo.md'}`. Seed `useEditorStore.buffers['inapp:/buffer/foo.md']` + matching `paneStates[paneId]`. Mock `backend.rename` / `backend.stat` / `backend.list`. Select foo, rename to `bar.md`. After the rename promise resolves: assert the pane's `content.filePath` === `/buffer/bar.md`; assert `useEditorStore.buffers['inapp:/buffer/bar.md']` exists AND `'inapp:/buffer/foo.md'` is absent; assert `paneStates[paneId].bufferKey === 'inapp:/buffer/bar.md'`. | 5 |
+| B2-17 | `components/editor/EditorBuffersPane.test.tsx` | delete cleans editor store (background keepAlive=0) | Seed `useTabStore` with a non-locked background tab (`keepAliveCount=0`, `isActive=false`) whose layout contains an editor pane pointing at `/buffer/x.md`. Seed `useEditorStore.buffers['inapp:/buffer/x.md']` with `isDirty:true` + `paneStates[paneId]` bound to it (simulating a prior mount that left stale state). Mock `backend.delete`. Confirm the dirty-delete prompt. After resolution: assert `useEditorStore.buffers` does NOT contain `'inapp:/buffer/x.md'`; assert `useEditorStore.paneStates[paneId]` is absent; assert `useTabStore.closePane` was called. | 5 |
+| B2-18 | `components/editor/EditorBuffersPane.test.tsx` | double-click opens buffer without stale closure | Render with 3 files, nothing pre-selected. Double-click the SECOND row (not the first). Seed active tab with an eligible editor pane. Assert `setPaneContent` called with `content.filePath === '/buffer/<second-row-name>'` (not `undefined`, not the first row). Implicitly verifies `openBufferByName` reads from the explicit arg, not `singleSelected`. | 5 |
 
 Note: A2-1 asserts `'/'` exactly (confirmed from existing ephemeral
 kind cases at `route-utils.ts:100`). No dedicated route for
@@ -941,10 +951,222 @@ Expected: all 48 new tests green; only 3 pre-existing `hosts.test.ts` failures r
 ### 5b.3 Acceptance (mirrors spec v1.4 §7 Commit 4)
 
 Verified via tests S1-9, B2-12, B2-13, B2-14, B2-15, C3-7, A2-7; plus:
-- `grep -n 'persisted.state' spa/src/stores/useEditorSettingsStore.ts` returns at least one line.
 - `grep -n 'editor.buffers.rename_exists_error\|delete_locked_refused' spa/src/components/editor/EditorBuffersPane.tsx` returns matches.
 
+Note (v1.5 G7 correction): the v1.4 draft of this acceptance
+included `grep -n 'persisted.state' spa/src/stores/useEditorSettingsStore.ts`
+— that check was based on the soon-withdrawn F1 fix. Zustand passes
+the unwrapped state to `merge`, so `persisted.state` should NOT
+appear in the store file. The accurate invariant is "S1-9 passes
+against current v1.3 code" (see spec v1.5 §4.9.6 F1-withdrawn note).
+
 ### 5b.4 Verification commands
+(same as other commits — see above).
+
+---
+
+## 5c. Commit 5 — R5 fix-up (v1.5, post-R5 PR verification review)
+
+Single commit addressing the four R5 must-fix findings (G1/G2/G3/G7)
+on top of Commit 4 (`17c1a405`). 3 new tests (48 → 51).
+
+### 5c.1 Files touched
+
+Modify:
+- `spa/src/components/editor/EditorBuffersPane.tsx` — add
+  `performBufferRename` helper + wire into `handleRenameConfirm`;
+  add `useEditorStore.closePane` to delete close loop; extract
+  `openBufferByName(name)` helper, rewire `handleOpen` +
+  `onDoubleClick`.
+- `spa/src/components/editor/EditorBuffersPane.test.tsx` — add
+  B2-16, B2-17, B2-18.
+- `docs/specs/2026-04-24-editor-restructure-pr2-spec.md` — v1.5 as
+  committed above.
+- `docs/specs/2026-04-24-editor-restructure-pr2-plan.md` — v1.5 as
+  committed above.
+
+Create: nothing.
+
+Delete: nothing.
+
+### 5c.2 TDD steps
+
+**Step 1 — Rename store-sync (G1)**
+
+Write B2-16 first.
+
+- `beforeEach`: reset `useTabStore` + `useEditorStore` via
+  merge-mode `setState` (pattern from existing test). Mock `backend`
+  via `vi.mock('../../lib/fs-backend', ...)`.
+- In the test body: call helpers to seed `useTabStore.setState({
+    tabs: {T1: {id:'T1', layout: {type:'leaf', id:'P1', content:
+    {kind:'editor', source:{type:'inapp'}, filePath:'/buffer/foo.md'}},
+    isActive:true, locked:false, keepAliveCount:1, ...}},
+    tabOrder:['T1'], activeTabId:'T1'
+  }, false)`.
+- `useEditorStore.setState({ buffers: {'inapp:/buffer/foo.md':
+    {content:..., savedContent:..., isDirty:true, ...}},
+    paneStates: {P1: {bufferKey:'inapp:/buffer/foo.md', ...}}
+  }, false)`.
+- Render `<EditorBuffersPane />`; select `foo.md`; click Rename;
+  type `bar.md`; submit.
+- After `await` the promise: assert
+  `useTabStore.getState().tabs.T1.layout.content.filePath === '/buffer/bar.md'`;
+  assert `useEditorStore.getState().buffers['inapp:/buffer/bar.md']` exists
+  with `isDirty:true`; assert `'inapp:/buffer/foo.md'` is absent;
+  assert `paneStates.P1.bufferKey === 'inapp:/buffer/bar.md'`.
+
+Expected: test fails (rename only calls `backend.rename`).
+
+Fix — in `EditorBuffersPane.tsx`, add at the top (next to
+`bufferKeyFor`):
+```ts
+async function performBufferRename(fromPath: string, targetPath: string) {
+  const backend = getFsBackend({ type: 'inapp' })
+  if (!backend) throw new Error('InApp backend unavailable')
+  await backend.rename(fromPath, targetPath)
+  const source: FileSource = { type: 'inapp' }
+  useTabStore.getState().renameEditorPanes(source, fromPath, targetPath)
+  const oldKey = bufferKeyFor(source, fromPath)
+  const newKey = bufferKeyFor(source, targetPath)
+  useEditorStore.getState().renameBuffer(oldKey, newKey)
+}
+```
+
+Inside `handleRenameConfirm`, replace the `await backend.rename(...)`
+line with `await performBufferRename(fromPath, targetPath)`.
+
+Keep the pre-rename `stat`-based collision check exactly as today —
+the new helper only covers the post-check path.
+
+Run B2-16 + existing B2-5/B2-6/B2-12: all pass.
+
+**Step 2 — Delete editor-store cleanup (G2)**
+
+Write B2-17 first.
+
+- `beforeEach`: as above.
+- Seed `useTabStore` with a non-locked **background** tab:
+  `{tabs: {T1: {…, isActive:false, keepAliveCount:0,
+    layout: {type:'leaf', id:'P1', content:{kind:'editor',
+    source:{type:'inapp'}, filePath:'/buffer/x.md'}}}},
+    tabOrder:['T1'], activeTabId:null}`.
+- Seed `useEditorStore` with
+  `{buffers: {'inapp:/buffer/x.md': {…, isDirty:true}},
+    paneStates: {P1: {bufferKey:'inapp:/buffer/x.md', …}}}`
+  (simulating the paneState that *should* have been cleaned up by
+  EditorPane unmount but wasn't — the exact failure mode G2 guards
+  against).
+- Stub `window.confirm = vi.fn(() => true)`.
+- Render `<EditorBuffersPane />`; select `x.md`; click Delete.
+- After promise settles, assert:
+  `useEditorStore.getState().buffers['inapp:/buffer/x.md']` is
+  `undefined`; `useEditorStore.getState().paneStates.P1` is
+  `undefined`; `useTabStore.getState().tabs.T1.layout` no longer
+  contains pane P1 (or `T1` itself is gone if last pane);
+  `backend.delete` called with `/buffer/x.md`.
+
+Expected: fails (existing delete loop only calls `useTabStore.closePane`).
+
+Fix — in the delete close loop inside `handleDelete`:
+```ts
+for (const [tabId, pane] of openPanes) {
+  useTabStore.getState().closePane(tabId, pane.id)
+  if (pane.content.kind === 'editor') {
+    const key = bufferKeyFor(pane.content.source, pane.content.filePath)
+    useEditorStore.getState().closePane(pane.id, key)
+  }
+}
+```
+
+Run B2-17 + existing B2-3/B2-10/B2-11/B2-13/B2-14: all pass.
+
+**Step 3 — `openBufferByName` helper (G3)**
+
+Write B2-18 first.
+
+- Seed 3 files via `backend.list` mock. Seed `useTabStore` with a
+  single eligible editor pane (clean, inapp).
+- Render; `await` for rows; double-click the SECOND row (index 1).
+- Assert `useTabStore.getState()` spy on `setPaneContent` received
+  the filePath matching the second row's name, not the first.
+
+Expected: fails — current code reads stale `singleSelected` and
+targets row 1 (or no-ops when nothing pre-selected).
+
+Fix — in `EditorBuffersPane.tsx`, extract:
+```ts
+const openBufferByName = useCallback((name: string) => {
+  const path = `/buffer/${name}`
+  const newContent: PaneContent = {
+    kind: 'editor', source: { type: 'inapp' }, filePath: path,
+  }
+  // paste the existing smart-open body from handleOpen, replacing
+  // `singleSelected` / `path` lookup with the `name` parameter.
+  // The eligibility predicate (firstEligibleEditorPaneId) is
+  // unchanged.
+}, [])
+
+const handleOpen = useCallback(() => {
+  if (!singleSelected) return
+  openBufferByName(singleSelected)
+}, [singleSelected, openBufferByName])
+```
+
+Rewire the row `onDoubleClick`:
+```tsx
+onDoubleClick={() => openBufferByName(f.name)}
+```
+
+(Remove the `setSelected(new Set([f.name]))` + `queueMicrotask(() =>
+handleOpen())` dance. Single-click selection is preserved via the
+existing `onClick={() => toggleSelect(f.name)}`.)
+
+Run B2-18 + existing B2-7/B2-8/B2-9/B2-15: all pass.
+
+**Step 4 — Docs hygiene (G7)**
+
+No code changes in this step — verify:
+- `grep -n 'persisted?.state\|persisted\.state' docs/specs/2026-04-24-editor-restructure-pr2-*.md`
+  returns ONLY the two lines inside spec §4.9.6 that explain *why*
+  the F1 unwrap fix was withdrawn (lines around the `persisted.state
+  unwrap actually breaks persist` paragraph). No acceptance checks
+  or plan grep directives that expect `persisted.state` to appear
+  in the store source file.
+- `grep -rn 'merge now unwraps' docs/specs/` returns empty.
+- Spec §8 v1.4 decisions list correctly marks F1 as WITHDRAWN.
+
+All three have already been addressed when the v1.5 spec landed
+(steps in task 2 above). This step is a `grep` re-verification
+before committing.
+
+**Step 5 — Final verification**
+
+```
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/editor-restructure-pr2 && cd spa && pnpm run lint
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/editor-restructure-pr2 && cd spa && npx vitest run
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/editor-restructure-pr2 && cd spa && pnpm run build
+```
+
+Expected: all 51 tests green (48 existing + 3 new B2-16/17/18); only
+3 pre-existing `hosts.test.ts` failures remain (unrelated, present
+on base).
+
+### 5c.3 Acceptance (mirrors spec v1.5 §7 Commit 5)
+
+Verified via tests B2-16, B2-17, B2-18; plus:
+- `grep -n 'performBufferRename' spa/src/components/editor/EditorBuffersPane.tsx`
+  returns a helper definition AND exactly one call site inside
+  `handleRenameConfirm`.
+- `grep -n 'useEditorStore.getState().closePane' spa/src/components/editor/EditorBuffersPane.tsx`
+  returns a call inside the delete close loop.
+- `grep -n 'openBufferByName' spa/src/components/editor/EditorBuffersPane.tsx`
+  returns a helper definition AND two call sites (`handleOpen` +
+  row `onDoubleClick`).
+- `grep -n 'queueMicrotask' spa/src/components/editor/EditorBuffersPane.tsx`
+  returns empty.
+
+### 5c.4 Verification commands
 (same as other commits — see above).
 
 ---
@@ -1021,11 +1243,11 @@ v1.1 have been resolved in spec v1.2. Remaining minor items:
 ## 9. Done definition
 
 PR ready to merge when:
-- [ ] All 3 commits pass `cd spa && pnpm run lint && npx vitest run &&
+- [ ] All 5 commits pass `cd spa && pnpm run lint && npx vitest run &&
       pnpm run build` independently (green on each HEAD, not just the
       final merge).
-- [ ] All 48 Vitest cases green (no skipped / pending / .todo).
-- [ ] Spec v1.4 §7 acceptance lists for C1/C2/C3/C4 fully ticked.
+- [ ] All 51 Vitest cases green (no skipped / pending / .todo).
+- [ ] Spec v1.5 §7 acceptance lists for C1/C2/C3/C4/C5 fully ticked.
 - [ ] `grep -r editor_buffers spa/src` empty (except migration guards
       if any).
 - [ ] `grep -r BufferListSection spa/src` empty (post Commit 2).
@@ -1037,10 +1259,18 @@ PR ready to merge when:
       findings.
 - [ ] Round-4 codex PR review (standard + adversarial 3-way) on the
       PR diff complete; HIGH-confidence findings addressed or
-      tracked.
+      tracked (landed as Commit 4 `17c1a405`).
+- [ ] Round-5 codex PR verification review (4-parallel) complete;
+      must-fix G1/G2/G3/G7 addressed as Commit 5; G4/G5/G6 opened as
+      GitHub follow-up issues.
+- [ ] Round-6 focused adversarial codex review (single agent,
+      targeted at G1/G2 fix correctness + buffer lifecycle cross-
+      store sync) complete with no HIGH findings.
 - [ ] PR description lists follow-up issues opened during review
       (at minimum: `InAppBackend.rename` subfolder patch, Tiptap
       fontSize integration, `editor-buffers` deep-link URL, dirty-
-      buffer-switch prompt UX).
+      buffer-switch prompt UX, G4 openSingletonTab primary-pane-only
+      scan, G5 S1-9 full round-trip, G6 lift locked-tab refusal
+      into `useTabStore.closePane`).
 
-*End of plan v1.4.*
+*End of plan v1.5.*

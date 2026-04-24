@@ -1,11 +1,11 @@
 # Editor Restructure (PR 2) — Spec
 
-- **Version**: 1.0.0-alpha.217 (target bump)
+- **Version**: 1.0.0-alpha.219 (target bump — alpha.218 consumed by Lights Phase 2 PR-2a)
 - **Date**: 2026-04-24
-- **Spec revision**: v1.4 (2026-04-24) — incorporates Round-4 PR review (8 findings: 1 CRIT persist bug + 7 HIGH data-loss / policy gaps from 4 parallel reviewers)
+- **Spec revision**: v1.5 (2026-04-24) — incorporates Round-5 PR verification review (7 findings: 2 HIGH rename/delete store-sync gaps + 4 MED + 1 LOW); supersedes v1.4 after R4 absorption landed as Commit 4 (`17c1a405`).
 - **Base**: `bb5ce0c1` (main @ alpha.216)
 - **Author**: claude-code + wake
-- **Status**: Draft (pending Round-2 codex plan review)
+- **Status**: Draft (pending focused adversarial R6 on Commit 5)
 
 ## 1. Context
 
@@ -314,6 +314,36 @@ panes: [
   A future PR may harden `InAppBackend.rename` itself to throw on
   existing destinations — but this PR guards at the UI layer to
   unblock the release.
+
+- **Tab + editor-store sync after rename (v1.5 fix for R5-G1)** —
+  `InAppBackend.rename` only moves the underlying file; it does NOT
+  touch the Zustand stores. Previous revisions called only
+  `backend.rename`, leaving open editor panes bound to the *old*
+  `filePath` and dirty buffers keyed under the *old* `bufferKey`. A
+  subsequent save from that stale pane rewrites the old name,
+  effectively resurrecting the renamed file. v1.5 requires
+  `handleRenameConfirm` to perform the same two-step sync that
+  `EditorPane.handleRenameSubmit` already does (EditorPane.tsx:273-
+  274 / 348-352 / 376-380):
+  ```ts
+  await backend.rename(fromPath, targetPath)  // as before
+  const source: FileSource = { type: 'inapp' }
+  useTabStore.getState().renameEditorPanes(source, fromPath, targetPath)
+  const oldKey = bufferKeyFor(source, fromPath)
+  const newKey = bufferKeyFor(source, targetPath)
+  useEditorStore.getState().renameBuffer(oldKey, newKey)
+  ```
+  `renameEditorPanes` walks every tab's layout and rewrites each
+  matching `editor` pane's `content.filePath` (useTabStore.ts:78-107);
+  `renameBuffer` moves the buffer entry and re-keys any paneState
+  pointing at it (useEditorStore.ts:169-191). Both are idempotent
+  on zero matches.
+
+  Extract the three-call sequence into a small helper
+  (`performBufferRename(from, to)`) to lock it in lock-step with
+  `EditorPane`'s rename path — duplicated logic is how G1 drifted
+  in the first place. Place the helper next to `bufferKeyFor` at
+  the top of `EditorBuffersPane.tsx`.
 
 ### 4.6 Smart-open flow
 
@@ -639,9 +669,22 @@ if (selected.size === 1 && dirtyHits.length === 0) {
     return
 }
 
-// Proceed: close every (now-unlocked, possibly-confirmed-dirty) pane
+// Proceed: close every (now-unlocked, possibly-confirmed-dirty) pane.
+// Both the layout-level AND the editor-store record must be removed.
+// useTabStore.closePane alone is NOT enough: if the hosting tab is a
+// background tab with keepAliveCount=0, EditorPane is already unmounted
+// and its unmount-cleanup has already run — but that cleanup fires on
+// *mount lifecycle*, not on "the pane disappeared from the layout". For
+// a pane that was never mounted in the current session (or that was
+// cleaned up earlier while still holding a dirty buffer), the editor
+// store's buffers/paneStates entries persist indefinitely. A stale save
+// triggered from any surviving reference rewrites the just-deleted file.
 for (const [tabId, pane] of openPanes) {
   useTabStore.getState().closePane(tabId, pane.id)
+  if (pane.content.kind === 'editor') {
+    const bufferKey = bufferKeyFor(pane.content.source, pane.content.filePath)
+    useEditorStore.getState().closePane(pane.id, bufferKey)
+  }
 }
 
 // Backend delete
@@ -662,6 +705,15 @@ Key properties:
   switch prompt.
 - **Single-delete now also confirms.** Previously only multi-delete
   confirmed — a slip for a destructive action.
+- **Editor-store is cleaned up explicitly (v1.5 G2 fix).** Each
+  affected pane has its editor-store paneState and (when
+  last-reference) buffer entry removed via
+  `useEditorStore.closePane(paneId, expectedBufferKey)` in the close
+  loop. The `expectedBufferKey` argument guards against the paneState
+  having been re-bound to a different buffer between the snapshot and
+  the close (useEditorStore.ts:216 aborts the removal on mismatch).
+  This is a no-op when the paneState already absent; idempotent and
+  safe to pair with every `useTabStore.closePane` call.
 - The buffers management pane's own layout (`content.kind === 'editor-buffers'`)
   cannot appear in `openPanes` — the `kind === 'editor'` filter
   excludes it.
@@ -685,6 +737,64 @@ externally while open.
 not deletions; `useTabStore.closePane` is the right primitive here.
 This flow is a small helper (~20 LOC) inside `EditorBuffersPane` —
 no new tabStore method needed.
+
+### 4.10 `openBufferByName` helper (v1.5 fix for R5-G3)
+
+Commits 1-4's `handleOpen` routed everything — the Open toolbar
+button AND double-click on a row — through the same callback, whose
+body read `singleSelected` from the enclosing closure:
+
+```tsx
+const handleOpen = useCallback(() => {
+  if (!singleSelected) return
+  const path = `/buffer/${singleSelected}`
+  …
+}, [singleSelected])
+
+<li onDoubleClick={() => {
+  setSelected(new Set([f.name]))
+  queueMicrotask(() => handleOpen())   // stale closure
+}}>
+```
+
+React's `setSelected` is asynchronous. The `queueMicrotask(handleOpen)`
+wrapper was meant to defer until the state committed, but the
+closure captured by `handleOpen` on *this render* still reads the
+pre-click `singleSelected`. When no row is pre-selected, that value
+is `null` and the double-click no-ops; when a different row was
+selected, it opens the *wrong* file. R5 (std + file-health) flagged
+this as a user-visible bug.
+
+v1.5 extracts a name-driven helper that does not depend on state
+observation:
+
+```tsx
+const openBufferByName = useCallback((name: string) => {
+  const path = `/buffer/${name}`
+  const newContent: PaneContent = {
+    kind: 'editor',
+    source: { type: 'inapp' },
+    filePath: path,
+  }
+  // smart-open rules §4.6 — active tab, then tabOrder scan, then new tab.
+  // eligibility filter reused from §4.6 v1.4: kind='editor', source='inapp',
+  // !isDirty.
+  …
+}, [])
+
+const handleOpen = useCallback(() => {
+  if (!singleSelected) return
+  openBufferByName(singleSelected)
+}, [singleSelected, openBufferByName])
+
+<li onDoubleClick={() => openBufferByName(f.name)}>   // direct name pass
+```
+
+Both the toolbar and the row pass an explicit `name` argument, so no
+closure captures state. The Open button retains the "exactly one
+selected" gate via `handleOpen`; the row bypasses selection state
+entirely — double-click is an "open this one" gesture regardless of
+what else is checked.
 
 ## 5. Risks & mitigations
 
@@ -746,7 +856,7 @@ Plan phase encodes this in every step.
 | User deletes buffer(s) with **dirty** unsaved pane | Pre-check shows `editor.buffers.delete_dirty_confirm` with count; abort on cancel, proceed on OK (§4.9.5) |
 | User deletes a single buffer that is NOT dirty | Pre-check shows `editor.buffers.delete_one_confirm`; OK proceeds (§4.9.5) |
 | User opens a blank NewTab after disabling the Editor module, but had pinned `editor` + `editor-buffers` cards | After filter, every column is null → NewTabPage renders its existing empty state (§4.9.7 v1.4 fix); previously rendered as entirely blank |
-| App reloads after user changed `tabSize` to 4 | `useEditorSettingsStore` rehydrates from `localStorage` — values survive because `merge` now unwraps the `{state,version}` envelope (§4.9.6 v1.4 fix) |
+| App reloads after user changed `tabSize` to 4 | `useEditorSettingsStore` rehydrates from `localStorage`. Zustand's `persist` passes the unwrapped state to `merge`, which sanitises each field against the spec schema. S1-9 locks in the happy-path rehydrate (§4.9.6). |
 | Rename buffer to name containing `/` | Validation rejects; inline error "Subfolders not supported" (see non-goals) |
 | Delete currently open buffer (any pane) | Per §4.9.5: every affected pane is closed via `useTabStore.closePane` *before* `backend.delete`; tabs whose last pane closes are closed too |
 | Delete currently open buffer (breadcrumb popover is showing it) | Hosting pane is closed by §4.9.5 flow; popover unmounts with its host `EditorToolbar` |
@@ -882,6 +992,52 @@ All fix-up work lands in a single commit after Commits 1-3. 7 new tests.
       must show the call guarded by the stat check (or moved
       into a helper named e.g. `performRename` that does both).
 - [ ] All verification commands green.
+
+### Commit 5 — R5 fix-up (v1.5 new)
+
+All R5 must-fix work (G1/G2/G3/G7) lands in a single commit after
+Commit 4. 3 new tests (48 → 51).
+
+- [ ] **G1** `handleRenameConfirm` calls, after successful
+      `backend.rename`:
+      `useTabStore.getState().renameEditorPanes({type:'inapp'},
+      fromPath, targetPath)` AND
+      `useEditorStore.getState().renameBuffer(oldKey, newKey)`.
+      The three calls are encapsulated in a helper
+      `performBufferRename(from, to)` reused nowhere else this PR
+      but extracted for maintainability.
+      B2-16 asserts: given a mocked tab layout with an editor pane
+      at `/buffer/foo.md` and a dirty buffer keyed `inapp:/buffer/foo.md`,
+      renaming `foo.md` → `bar.md` results in the pane's
+      `content.filePath` being `/buffer/bar.md` and the editor
+      store having `inapp:/buffer/bar.md` (isDirty preserved)
+      with `inapp:/buffer/foo.md` removed.
+- [ ] **G2** Delete close loop: for every entry `[tabId, pane]` in
+      `openPanes`, call both `useTabStore.closePane(tabId, pane.id)`
+      AND `useEditorStore.closePane(pane.id, bufferKey)`.
+      B2-17 asserts: seed `useEditorStore.buffers['inapp:/buffer/x.md']`
+      and `paneStates[P1]` with `bufferKey='inapp:/buffer/x.md'`;
+      seed `useTabStore` with the hosting tab having
+      `keepAliveCount=0` (background). Delete `x.md`. After
+      handleDelete resolves, assert: `useEditorStore.buffers`
+      does NOT contain the key; `useEditorStore.paneStates[P1]`
+      is absent.
+- [ ] **G3** `openBufferByName(name)` helper is extracted. Both
+      `handleOpen` (toolbar Open) and row `onDoubleClick` call it
+      with an explicit `name` string; no `queueMicrotask` / state-
+      read dance remains.
+      B2-18 asserts: render EditorBuffersPane with 3 rows, nothing
+      pre-selected; double-click the second row; assert
+      `setPaneContent` was called with the second row's filePath
+      (no longer a no-op as in v1.4 code).
+- [ ] **G7** Docs hygiene:
+      - `grep -n 'persisted.state\|persisted?.state' docs/specs/
+        2026-04-24-editor-restructure-pr2-*.md` returns only the
+        two lines that explain *why* F1 was withdrawn (the false-
+        positive discussion). No "prescribed fix" acceptance
+        pointing at the code.
+      - `grep -rn "merge now unwraps" docs/specs/` returns empty.
+      - Spec §8 v1.4 decisions list correctly marks F1 as WITHDRAWN.
 - [ ] All verification commands green.
 
 ## 8. Open questions
@@ -927,8 +1083,11 @@ Decisions taken in v1.4 (new — supersede relevant v1.3 items):
 - Delete dirty confirm + single-delete confirm added. §4.9.5.
 - `onNewBuffer` dirty guard added (matches popover switch). §4.8.
 - Rename existence check before `backend.rename`. §4.5.
-- `useEditorSettingsStore.merge` unwraps persisted envelope
-  (`persisted.state`) — fix persist-ineffective CRITICAL bug. §4.9.6.
+- `useEditorSettingsStore.merge` — **R4-F1 WITHDRAWN as false
+  positive.** Zustand's `persist` middleware passes the *unwrapped*
+  state to the `merge` callback; the v1.3 implementation is correct.
+  S1-9 is retained as a regression guard locking in happy-path
+  rehydrate. §4.9.6.
 - NewTabPage empty-state fallback when all columns filter to null.
   §4.9.7.
 
@@ -955,6 +1114,37 @@ Still open:
    providers only (`editor`, `editor-buffers`); leave `sessions` /
    `browser` untouched this PR.
 
+Decisions taken in v1.5 (new — supersede relevant v1.4 items):
+- **R4-F1 WITHDRAWN** as false positive; v1.4's proposed
+  `persisted.state` unwrap would break persist. S1-9 kept as a
+  regression guard. §4.9.6.
+- **Rename: Tab-layout + editor-store sync required** (R5-G1) —
+  `backend.rename` alone leaves open panes bound to the old path and
+  dirty buffers keyed under the old bufferKey. Add
+  `useTabStore.renameEditorPanes` + `useEditorStore.renameBuffer` in
+  lock-step with the backend call. §4.5.
+- **Delete: editor-store closePane required** (R5-G2) —
+  `useTabStore.closePane` removes the pane from the layout but the
+  editor store's paneState / buffer entry can outlive the layout
+  change (background tabs with `keepAliveCount=0`). Pair every
+  `useTabStore.closePane` with `useEditorStore.closePane(paneId,
+  expectedBufferKey)` in the delete close loop. §4.9.5.
+- **`openBufferByName(name)` helper** (R5-G3) — double-click was
+  reading stale `singleSelected` closure; pass the name explicitly
+  to a shared helper, invoked from both the toolbar Open button and
+  row double-click. §4.10.
+- **Deferred to follow-up issues** (not addressed in this PR):
+  - **R5-G4**: `openSingletonTab({kind:'editor-buffers'})` only
+    inspects the primary pane tree; secondary panes are ignored and a
+    duplicate buffers tab can be opened.
+  - **R5-G5**: S1-9 reaches into `localStorage` with a hand-crafted
+    envelope; upgrade to a full round-trip via public setters + fresh
+    store instance + `persist.rehydrate()`.
+  - **R5-G6**: Locked-tab refusal is a UI-layer private gate in
+    `EditorBuffersPane`; other callers of `useTabStore.closePane` are
+    not guarded. Lower the invariant into `useTabStore.closePane`
+    (or an adapter) so the policy applies globally.
+
 ---
 
-*End of spec v1.4.*
+*End of spec v1.5.*
