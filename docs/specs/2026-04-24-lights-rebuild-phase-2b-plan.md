@@ -1,15 +1,27 @@
 # Phase 2 PR-2b Delta Plan — Proxy + Idle Sweep + SubagentDots 視覺
 
-Baseline：`1.0.0-alpha.218`（main @ PR-2a #622 squash `8bf955e7` + bump #624 `6b461c1b`）。
+Baseline：`1.0.0-alpha.219`（main @ `8d96bd4c`；Editor restructure PR #623 已 merged 於 alpha.219）。
 Worktree：`.claude/worktrees/lights-phase-2b`（branch `worktree-lights-phase-2b`）。
+PR-2b merge 後預計 bump **alpha.220**。
 
 ---
 
 ## 0. 這份 plan 的定位（必讀）
 
-整個 Phase 2 的契約與 TDD 步驟 **已在 PR-2a plan 內完整定義**（經 5 輪 plan review + 4 輪 code review 收斂）。PR-2b 大量 reference 該文件：
+### 0.1 施工前必讀順序（Reading Order）
 
-**契約源文件**：`docs/specs/2026-04-23-lights-rebuild-phase-2-plan.md`（v6, 997 行）
+整個 Phase 2 的契約與 TDD 步驟 **已在 PR-2a plan 內完整定義**（經 5 輪 plan review + 4 輪 code review 收斂）。**此 delta plan 不自含 hard contracts** — subagent 開工前必須：
+
+1. **先讀 v6 plan** @ `docs/specs/2026-04-23-lights-rebuild-phase-2-plan.md`（997 行）的 §0 / §1.4 / §1.5 / §1.6 / §1.7 / §1.8 / §1.13 / §2.3 / §2.5 / §2.6 / §2.7 / §2.8 / §2.9 / §3 commits 6-10 / §4 PR-2b 表 / §5 / §7 PR-2b / §8 / §9 PR-2b — 這是**主 contract 源**，所有 pseudo-code、測試矩陣、命名、SQL 都在那裡
+2. **再讀本 delta plan**（274 行）— 記錄 v6 **不知道** 的四類事實：
+   - PR-2a 落地後實際 line 座標 / 檔案大小（§1）
+   - PR-2a 4 輪 code review 的 3 個教訓對 PR-2b 的延伸 impact（§3）
+   - v6 plan 本身有的小 omission（§1.6 的 useTabDisplay.ts）
+   - PR-2b 開工順序決策（subagentCount 保留、commit atomicity）
+
+每個 commit 開工前，subagent 應**先重讀對應 v6 章節**（本 delta §2 逐 commit 給 reference），再施工。
+
+### 0.2 契約源文件索引
 
 | 主題 | 源章節 |
 |---|---|
@@ -112,7 +124,7 @@ grep 當前 head（@ `6b461c1b`），v6 plan §1.14 表格列出的座標與實�
 v6 §1.14 SPA 允許改動表把 **`useTabDisplay.ts` 回傳擴充 `subagentRefs`** 歸為 PR-2b 改動（§1.13 段落確實提到），但 §1.14 的大表只列了下游 consumer 沒列 `useTabDisplay.ts` 自己。
 
 **PR-2b 實際要改**：
-- `spa/src/hooks/useTabDisplay.ts` — 加 `subagentRefs: SubagentRef[]` 回傳欄位（derive from `s.subagents[ck] ?? []`）。`subagentCount` 保留（後續 cleanup 時再決定是否移除；本 PR-2b 不碰，避免 scope 蔓延）
+- `spa/src/hooks/useTabDisplay.ts` — 加 `subagentRefs: SubagentRef[]` 回傳欄位（derive from `s.subagents[ck] ?? []`）；`subagentCount` **保留**（避免 scope 蔓延；後續 cleanup PR 另辦，不在本 PR-2b 範圍）
 - 若 useTabDisplay 的 TypeScript 型別 export 被其他檔案 import，連帶加 `subagentRefs` 欄位
 
 ### 1.7 PR-2a 新增的 test seams（對 PR-2b 測試有幫助，可選用）
@@ -172,8 +184,8 @@ PR-2a R2 + R4 code review 修復中引入：
     3. `SortableTab.tsx` prop rename + 兩處 TabIcon 呼叫（line 92, 132）
     4. `InlineTab.tsx` prop rename（line 42 destructure, line 111 轉介）
     5. `renderInlineTabIcon.tsx` prop rename + 三處 SubagentDots 呼叫
-    6. `useTabDisplay.ts` 擴充 `subagentRefs` 回傳（derive from `s.subagents[ck] ?? []`）
-  - **`subagentCount` 保留否**：建議**移除**（PR-2a 後 useTabDisplay 仍 export `subagentCount`，但 consumer 都 rename 吃 `subagentRefs`，`subagentCount` orphan；`refs.length` 一行取代）— PR-2b 連帶 clean up 避免死 field
+    6. `useTabDisplay.ts` 擴充 `subagentRefs` 回傳（derive from `s.subagents[ck] ?? []`）；**`subagentCount` 保留不動**（consumer rename 後仍 orphan 但不在本 PR 清）
+  - **`subagentCount` 最終決策（保留）**：PR-2b 不刪 useTabDisplay 的 `subagentCount` return field，即使 consumer 都已 rename。刪除動作留給後續 cleanup PR（可能與 `dropSubagentDotsCountAPI` / `useTabDisplay.subagentCount` deprecation 一起辦）。理由：避免 PR-2b scope 從 UI wiring 擴散到 hook 介面 breaking；reviewer 對 scope 的判準一致
   - **TYPE_COLOR 位置**：v6 §5 「不做」已寫不抽到 `agent-icons.tsx`，**在 SubagentDots.tsx 內 inline const table**：
     ```ts
     const TYPE_COLOR: Record<string, string> = {
@@ -214,7 +226,7 @@ PR-2a 4 輪 code review 修掉的問題中，**三項對 PR-2b 有延伸 impact*
 
 - **Schema**：PR-2a 已立 `subagents_json` JSON shape（`SubagentRef[]`）；PR-2b 寫入帶 `IsProxy=true` 的 ref 時 **沿用同 shape**，migrateFramesDB 的三態偵測仍能 pass new schema
 - **Wire**：PR-2a 已升級 `NormalizedEvent.Subagents` 為 `[]SubagentRef`；PR-2b 的 proxy ref 與 native ref **wire 型別一致**，SPA 不需再改 parse 邏輯（只改 render）
-- **Bump 版本**：PR-2b merge 後 bump `alpha.219`；CHANGELOG 標「proxy 偵測 + idle sweep 啟用」但**不需**標 schema breaking（已在 alpha.218 入過）
+- **Bump 版本**：PR-2b merge 後 bump `alpha.220`（baseline 已是 alpha.219）；CHANGELOG 標「proxy 偵測 + idle sweep 啟用」但**不需**標 schema breaking（已在 alpha.218 入過）
 
 ---
 
@@ -234,11 +246,19 @@ v6 §8 的風險清單仍全部適用。PR-2a 落地後新增兩條觀察：
 照 v6 §7 PR-2b 段執行，總結如下：
 
 - [ ] 5 個 commits（6-10）符合規範，每個 commit 邊界 `go build ./...` + tests 綠
-- [ ] `go test ./...` 綠；必跑 **27 個新測試**：F4-F6 / PR1-PR15 / SE1-SE3 / IS1-IS5 / HB2
+- [ ] Go 側 `go test ./...` 綠；必跑 **27 個新 Go 測試**：
+  - `internal/store/frames_test.go`：F4 / F5 / F6（DeleteIfUnchanged）
+  - `internal/module/agent/frame_ops_test.go`：PR1-PR15（15 個 proxy 偵測 case）+ SE1 / SE2 / SE3（3 個 SessionEnd cleanup）
+  - `internal/module/agent/sweep_test.go`：IS1 / IS2 / IS3 / IS4 / IS5（5 個 idle sweep case）
+  - `internal/module/agent/handler_test.go`：HB2（1 個 broadcast IsProxy smoke）
 - [ ] `go vet ./...` 無 warning
-- [ ] `cd spa && pnpm run lint && pnpm run build && npx vitest run` 綠
+- [ ] SPA 側 `cd spa && pnpm run lint && pnpm run build && npx vitest run` 綠；PR-2b 必跑 / 必加 SPA 測試（對應 v6 §2.9 PR-2b 段 + §4 PR-2b SPA 表）：
+  - **新檔** `spa/src/components/SubagentDots.test.tsx`：3 case — count（1/2/3 refs → dot 數）、type color（cc 藍 / codex 黃 / opencode 橘）、proxy outline（`is_proxy:true` → transparent bg + 1px border；`false/undefined` → solid bg）
+  - `spa/src/components/SortableTab.test.tsx`：既有 case `subagentCount: N` prop 升級為 `subagentRefs: SubagentRef[N]`；新加一個 case — `subagentRefs` 含 `is_proxy:true` ref → 渲染 outline dot（prop-wiring 驗證）
+  - `spa/src/features/workspace/components/InlineTab.test.tsx`：prop `subagentCount` → `subagentRefs` 升級；新加 proxy outline prop-wiring case
+  - `spa/src/features/workspace/lib/renderInlineTabIcon.test.tsx`：三個 render 模式（dot/iconDot/badge）驗證 `subagentRefs` 正確 forward 給 `<SubagentDots refs={...} />`；補 proxy outline case
 - [ ] PR diff 檔案：v6 §4 PR-2b 表格 + 本 delta §1.6（useTabDisplay.ts）列出的檔案；**其餘不得出現**
-- [ ] PR description 含 v6 §5「不做項目」聲明
+- [ ] PR description 含 v6 §5「不做項目」聲明 + §8 Open Question 1（proxy ID collision）的 PR description preemptive answer
 - [ ] 手動場景 4 項：
   - cc 啟動 → cc pane 內跑 `/codex:*` → SPA 只顯示 1 個 frame（cc），cc.Subagents 含 codex ref，SubagentDots 黃色 outline
   - 手造 idle frame（臨時改 threshold 到 1s 或 DB 改 LastSeenAt）→ sweep 後 frame 消失、broadcast reason `sweep:idle_timeout`
@@ -269,6 +289,7 @@ v6 §8 的風險清單仍全部適用。PR-2a 落地後新增兩條觀察：
 
 ## 8. Open Questions
 
-1. **`subagentCount` 是否完全移除**：本 delta §2 Commit 10 建議 `useTabDisplay.ts` 不再 return `subagentCount`；如果 reviewer 覺得 breaking 太大或有 external consumer 讀這欄位，改為 deprecated 保留（兩路都可）
-2. **proxy ref 的 agent_id collision**：v6 §9 PR-2b R2 攻擊預期有這問題 — 當 native SubagentStart 的 `agent_id` 字串碰巧開頭是 `proxy:`（非常罕見但非零機率）時，SessionEnd 的 `removeProxyRefForSender` 會不會誤刪？**不會**，因為 matching key 是 `SourcePID+SourceStartTime`（native ref 這兩欄為 0/空），不是 ID 字串。此答案寫進 PR description 防 R2 重問
-3. **dev update skew 期間 SPA 若吃到舊 daemon（alpha.218）送的 native-only subagents，新 SubagentDots 渲染**：fallback color 行為正確（`TYPE_COLOR[ref.type] ?? cc`），proxy 欄位 undefined 走 solid dot；不需額外 guard
+1. **proxy ref 的 agent_id collision**：v6 §9 PR-2b R2 攻擊預期有這問題 — 當 native SubagentStart 的 `agent_id` 字串碰巧開頭是 `proxy:`（非常罕見但非零機率）時，SessionEnd 的 `removeProxyRefForSender` 會不會誤刪？**不會**，因為 matching key 是 `SourcePID+SourceStartTime`（native ref 這兩欄為 0/空），不是 ID 字串。此答案寫進 PR description 防 R2 重問
+2. **dev update skew 期間 SPA 若吃到舊 daemon（alpha.219）送的 native-only subagents，新 SubagentDots 渲染**：fallback color 行為正確（`TYPE_COLOR[ref.type] ?? cc`），proxy 欄位 undefined 走 solid dot；不需額外 guard
+
+（原 Open Question 1「subagentCount 是否移除」已在 §1.6 + §2 Commit 10 確定為**保留**，不再 open）
