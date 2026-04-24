@@ -1,12 +1,13 @@
 # Phase 3 TDD Plan — L1 邊界補強
 
 - **Date**: 2026-04-25
+- **Version**: v2（v1 → v2 經 1 輪 codex plan review，2 P2/P3 finding 全採納）
 - **Spec**: `docs/specs/2026-04-23-lights-rebuild-spec.md` §7
 - **Worktree**: `lights-phase-3`（branch `worktree-lights-phase-3`）
 - **Baseline**: `1.0.0-alpha.221`（main @ `2633b88d`，Phase 2 PR-2b merged）
-- **依賴**: Phase 2 PR-2b ✅（`SubagentRef` 結構 + `findProxyParent` PPID walk + `cachedDescendants` + `Prober.Identify` 已就緒）
+- **依賴**: Phase 2 PR-2b ✅（`SubagentRef` 結構 + `findProxyParent` PPID walk + `Prober.IsAliveFor` 已就緒；本 phase 新增 `Prober.FirstAliveAgentInTree` public method）
 - **範圍**：`applyFrameEvent` fallback chain 末端補回 + `no_parent_fallback` reason 顯式化
-- **預估**：單 PR ~430 行 net（~80 prod + 250 test + 100 整合測試）
+- **預估**：單 PR ~580 行 net（~120 prod 含新 Prober method + 280 test + 120 整合測試 + 50 helper fixture）
 
 ---
 
@@ -34,9 +35,18 @@
 
 ### 0.3 設計核心思想
 
-採 **K8s reconciliation 對照組**：hook event = `watch event`、`cachedDescendants + Prober.Identify` = `live state read`、目前 fallback chain 失敗就 Upsert = `create-on-miss`。Phase 3 在「都未命中」與「Upsert 新 frame」之間插一條「先嘗試 process tree rebuild」的 reconciliation step，把 daemon downtime 期間遺失的 frame 識別補回。
+採 **K8s reconciliation 對照組**：hook event = `watch event`、Prober tree query = `live state read`、目前 fallback chain 失敗就 Upsert = `create-on-miss`。Phase 3 在「都未命中」與「Upsert 新 frame」之間插一條「先嘗試 process tree rebuild」的 reconciliation step，把 daemon downtime 期間遺失的 frame 識別補回。
 
 **未補回 = no_parent_fallback**：明確標記，等 Phase 4/5 的 reparent loop / Inspector 消費。
+
+### 0.4 Plan v1 → v2 review 軌跡
+
+Codex plan review round 1（job 由 `node codex-companion.mjs review --base origin/main --scope branch` 派發）抓到 2 個 finding，全採納：
+
+| # | 嚴重 | 內容 | v2 fix |
+|---|---|---|---|
+| 1 | P2 | v1 §1.2 寫「直接呼叫 `cachedDescendants` / `Prober.Identify`」— 但 `cachedDescendants` 是 probe package 私有 method、`Prober` **沒有** `Identify`（只有 `RegisterIdentifier` + `IsAliveFor`，`Identify` 是 provider 層）。照 v1 實作會卡在 package boundary。 | 新增 `Prober.FirstAliveAgentInTree(target)` public method（與 `IsAliveFor(agentType, target)` 同型結構，內部用既有 `cachedDescendants` + `identifiers` map）；§1.6 邊界改寫為「probe package 允許新 export method，不改既有 API」 |
+| 2 | P3 | v1 §6.1 引入第四態 reason `daemon_restart_recovery_mismatch`，但 §1.4 三態鎖定 + 測試矩陣只覆蓋三態 — 內部 contract 矛盾 | 刪除第四態。本 phase 信任 hook event AgentType 為 SOT；rebuild 命中只證實「該家 agent 有 alive process」。Mismatch 罕見 corner case 留 Phase 4/5 處理 |
 
 ---
 
@@ -55,59 +65,91 @@
 
 **Phase 3 插入點**：在 step 4 與 step 5 之間（line 228 之後、line 273 之前）插入 lazy rebuild。step 6 的 reason 同時升級。
 
-### 1.2 Lazy rebuild — `tryRebuildFromProcessTree` 新 helper
+### 1.2 Lazy rebuild — 新 Prober method + frame_ops 接線
 
-**簽名**（位置：`internal/module/agent/frame_ops.go`，與 `findProxyParent` 同檔）：
+#### 1.2.1 新 Prober method `FirstAliveAgentInTree`
+
+**位置**：`internal/agent/probe/probe.go`（與 `IsAliveFor` 同檔，liveness.go 也可，依現有 method group 而定）
+
+**簽名**：
 
 ```go
-// tryRebuildFromProcessTree attempts to recover a frame after daemon restart
-// by inspecting the pane's live process tree. Triggered when the standard
-// lookup chain (GetByIdentity → findProxyParent → FindByPanePID) all miss
-// on a SessionStart, indicating either a fresh start or a daemon-downtime
-// recovery scenario.
+// FirstAliveAgentInTree walks the tmux target's pane PID descendant tree
+// and returns the agent type of the first descendant matched by any
+// registered identifier (in registry insertion order). Returns
+// ("", 0, nil) when no descendant matches any identifier.
 //
-// Behavior:
-//   - Walk pane PID tree via cachedDescendants(panePID) (250ms cache)
-//   - For each descendant PID, call provider.Identify per registered agent type
-//   - First match wins (registry order)
-//   - Match → return constructed Frame fields; caller persists via Upsert
-//   - No match → return (nil, false, nil); caller falls through to no_parent_fallback
-//   - Any error during process scan → return (nil, false, err); caller surfaces
+// Honors the same 250ms descendant cache as IsAliveFor (delegates to
+// cachedDescendants internally).
 //
-// Subagent list is intentionally NOT rebuilt — left as []. Subsequent
-// SubagentStart hooks will populate refs naturally (kept simple per plan §1.3).
-func (m *Module) tryRebuildFromProcessTree(req EventRequest, info ProcessInfo) (rebuilt *RebuildResult, ok bool, err error)
-
-type RebuildResult struct {
-    AgentType string  // detected agent family
-    PID       int     // matched descendant PID (= req.SenderPID for happy path)
-    PPID      int     // info.PPID (kept consistent with caller)
-}
+// Used by frame_ops.tryRebuildFromProcessTree (Phase 3) to recover frame
+// agent_type after daemon restart, when the hook event's lookup chain
+// (GetByIdentity → findProxyParent → FindByPanePID) all miss.
+func (p *Prober) FirstAliveAgentInTree(target string) (agentType string, matchedPID int, err error)
 ```
 
-**呼叫點**（line 228 之後插入）：
+**內部實作**（pseudo）：
+1. `panePID, _ := p.tmux.PanePID(target)` — 取 pane root PID
+2. `descendants, err := p.cachedDescendants(target, panePID)` — 既有私有 method
+3. iterate registered identifiers（有序 — see §1.2.3）→ 對每個 desc PID 跑 identify → 第一命中即返
+4. 全不命中 → 回 `("", 0, nil)`
+
+#### 1.2.2 frame_ops `tryRebuildFromProcessTree` helper
+
+**位置**：`internal/module/agent/frame_ops.go`（與 `findProxyParent` 同檔）
+
+**簽名**：
+
+```go
+// tryRebuildFromProcessTree attempts to recover a frame after daemon
+// restart by inspecting the pane's live process tree via the Prober.
+// Triggered when the standard lookup chain (GetByIdentity →
+// findProxyParent → FindByPanePID) all miss on a SessionStart.
+//
+// Behavior:
+//   - Delegates to prober.FirstAliveAgentInTree(target)
+//   - Match → return (agentType, true, nil); caller marks trace
+//     reason="daemon_restart_recovery"
+//   - No match → return ("", false, nil); caller falls through to
+//     no_parent_fallback
+//   - Any error → return ("", false, err); caller logs + falls through
+//     to no_parent_fallback (fail-soft, see §6.3)
+//
+// Subagent list intentionally NOT rebuilt — left []. Subsequent
+// SubagentStart hooks populate refs naturally (see §1.3).
+func (m *Module) tryRebuildFromProcessTree(req EventRequest) (matchedAgentType string, ok bool, err error)
+```
+
+#### 1.2.3 Registry 註冊順序保證
+
+`FirstAliveAgentInTree` 第一命中規則需要穩定的 identifier 順序。Go map iteration 是無序的，故 `Prober.identifiers` 不能直接用 `range map`。
+
+**實作要求**：`Prober` 需維護 identifier insertion order — 加 `identifierOrder []string` slice 在 `RegisterIdentifier` 時 append；`FirstAliveAgentInTree` 用 slice 順序 iterate。
+
+**測試覆蓋**：R4 顯式驗證 cc 註冊在前 → 同 PID 取 cc。
+
+#### 1.2.4 `applyFrameEvent` 接線（line 228 之後插入）
 
 ```go
 // pseudo-code
+rebuiltMatched := false
 if frame == nil && parentFrameID == "" {
-    rebuilt, ok, rerr := m.tryRebuildFromProcessTree(req, info)
+    matchedType, ok, rerr := m.tryRebuildFromProcessTree(req)
     if rerr != nil {
         // fail-soft: log + fall through to no_parent_fallback
         m.logger.Warn("rebuild_from_process_tree_failed", "err", rerr, "pane", req.TmuxPaneID)
     }
     if ok {
-        // Use rebuilt.AgentType in subsequent Upsert; mark trace as rebuilt
-        // (req.AgentType still wins for the actual hook event's agent_type;
-        // RebuildResult only confirms an alive process matches that family.)
-        rebuiltMatched = true  // signals trace meta below
+        rebuiltMatched = true  // signals trace meta below (§1.4)
+        _ = matchedType        // not consumed by Upsert; req.AgentType is SOT (see below)
     }
 }
 ```
 
-**重要決策**（與 codex Q4 對齊）：
-- **first-match-wins**：registry 註冊順序決定優先序（cc / codex / opencode 三家同時跑時取第一命中）。實際情境下三家很少在同 pane tree 共存，但需文件化。
-- **不重建 SubagentRef**：`Frame.Subagents=[]`（見 §1.3）。
-- **rebuild 命中 ≠ 取代 hook event AgentType**：`req.AgentType` 仍是事實源（hook 帶來的權威），rebuild 只**證實**「process tree 中確實有該家 agent alive」、給 trace 標記用。若 rebuilt.AgentType ≠ req.AgentType（罕見）優先信 req（hook 是 source of truth）。
+**重要決策**：
+- **first-match-wins**：registry 註冊順序（§1.2.3）
+- **不重建 SubagentRef**：`Frame.Subagents=[]`（§1.3）
+- **rebuild 命中 ≠ 取代 hook event AgentType**：`req.AgentType` 是 SOT；rebuild 只**證實**「process tree 中該家 agent alive」、給 trace 標記用。`matchedAgentType` 在本 phase 不寫入 frame（故變數丟棄）— 若未來需要追蹤 mismatch 再從 `_` 接出來。Phase 3 不處理 mismatch（v1→v2 codex P3 fix 後簡化）。
 
 ### 1.3 SubagentRef rebuild 策略 — **不重建**
 
@@ -166,7 +208,7 @@ if stored.ParentFrameID != "" {
 - `internal/agent/provider.go` / `registry.go` / `coverage.go`（Phase 0）
 - `internal/agent/{cc,codex,opencode}/status.go`（Phase 1）
 - `internal/agent/{cc,codex,opencode}/hooks.go`（Hook Events #616 已收）
-- `internal/agent/probe/**`（lazy rebuild 透過 `Prober.Identify` + `cachedDescendants` 既有 API；新 helper 不入 probe package）
+- `internal/agent/{cc,codex,opencode}/provider.go` 的 `Identify` method 簽名（既有，不改）
 - `internal/agent/subagent.go`（PR-2a SubagentRef，不動）
 - `internal/store/frames.go`（PR-2b 已加 `DeleteIfUnchanged` / `UpsertIfUnchanged` / narrow updates；Phase 3 不擴 schema）
 - `internal/store/trace.go`（trace step 結構不動）
@@ -174,38 +216,53 @@ if stored.ParentFrameID != "" {
 - `internal/tmux/executor.go`（無 `ListPanesForSession`，YAGNI）
 - `spa/**`（純 backend phase）
 
+**有限改動（明列）**：
+- `internal/agent/probe/probe.go` — 加 `FirstAliveAgentInTree` public method（§1.2.1）+ `identifierOrder` slice 維護註冊順序（§1.2.3）；既有 `RegisterIdentifier` / `IsAliveFor` / `cachedDescendants` 行為**不變**
+- `internal/module/agent/frame_ops.go` — 加 `tryRebuildFromProcessTree` helper + `applyFrameEvent` line 228 後插入點（§1.2.2 + §1.2.4）；line 294-297 reason 改字串（§1.4）
+
 ---
 
 ## 2. 測試案例清單
 
-### 2.1 `internal/module/agent/frame_ops_test.go`（Phase 3 新增）
+### 2.1 `internal/agent/probe/probe_test.go`（新 method 單元測試）
 
 | # | 名稱 | 情境 | 斷言 |
 |---|---|---|---|
-| R1 | `TestRebuildFromProcessTree_HitFirstMatch` | descendants=[100,200,300]，stub Identify 在 PID=200 命中 cc | 回傳 `RebuildResult{AgentType:"cc",PID:200,...}`、`ok=true` |
-| R2 | `TestRebuildFromProcessTree_NoMatch` | descendants=[100,200]，stub Identify 全部不命中 | 回傳 `(nil, false, nil)` |
-| R3 | `TestRebuildFromProcessTree_DescendantsError` | `cachedDescendants` 回 err | 回傳 `(nil, false, err)`，err 非 nil |
-| R4 | `TestRebuildFromProcessTree_RegistryOrder` | 同 PID 同時被 cc 和 codex 識別，cc 註冊在前 | 取 cc（first-match-wins） |
+| P1 | `TestFirstAliveAgentInTree_HitFirstMatch` | stub tmux PanePID + descendants=[100,200,300]，stub identifier 在 PID=200 命中 cc | 回傳 `("cc", 200, nil)` |
+| P2 | `TestFirstAliveAgentInTree_NoMatch` | descendants=[100,200]，所有 identifier 全部不命中 | 回傳 `("", 0, nil)` |
+| P3 | `TestFirstAliveAgentInTree_DescendantsError` | tmux PanePID 失敗 / descendants query err | 回傳 `("", 0, err)` |
+| P4 | `TestFirstAliveAgentInTree_RegistryOrder` | cc 與 codex 都能識別同 PID=200，cc 先註冊 | 取 cc |
+| P5 | `TestRegisterIdentifier_PreservesOrder` | 註冊 codex/cc/opencode 三家 | iteration 順序為註冊順序（驗證 `identifierOrder` slice 機制） |
+
+### 2.2 `internal/module/agent/frame_ops_test.go`（Phase 3 新增）
+
+| # | 名稱 | 情境 | 斷言 |
+|---|---|---|---|
+| R1 | `TestTryRebuildFromProcessTree_Hit` | stub `Prober.FirstAliveAgentInTree` 回 `("cc", 200, nil)` | helper 回傳 `("cc", true, nil)` |
+| R2 | `TestTryRebuildFromProcessTree_Miss` | stub 回 `("", 0, nil)` | helper 回傳 `("", false, nil)` |
+| R3 | `TestTryRebuildFromProcessTree_Error` | stub 回 err | helper 回傳 `("", false, err)`，err 非 nil |
 | R5 | `TestApplyFrameEvent_RebuildHit_TraceReason` | mock rebuild 命中 + 既有 lookup chain 全失敗 | trace meta `Reason="daemon_restart_recovery"`，新 frame 建出 |
 | R6 | `TestApplyFrameEvent_RebuildHit_ThenSubagentStart` | rebuild 後立即進來 SubagentStart | subagent 正確累積（驗證 rebuild 後 native path 不壞） |
+| R7 | `TestApplyFrameEvent_ProxyHit_SkipsRebuild` | SessionStart 走 `findProxyParent` 命中 | rebuild helper call count == 0（PR-2b proxy 路徑優先） |
+| R8 | `TestApplyFrameEvent_RebuildErrorFailsSoft` | rebuild 回 err | trace meta `Reason="no_parent_fallback"`（fail-soft，不返錯） |
 | N1 | `TestApplyFrameEvent_NoParentFallback_TraceReason` | rebuild 未命中 + 既有 lookup chain 全失敗 | trace meta `Reason="no_parent_fallback"`（取代既有 `parent_frame_missing` 測試） |
 | N2 | `TestApplyFrameEvent_ParentFrameFound_Unchanged` | legacy `FindByPanePID` 命中 | trace meta `Reason="parent_frame_found"`（regression guard） |
 | N3 | `TestApplyFrameEvent_RebuildSkipped_WhenParentFound` | parent 命中時不呼叫 rebuild helper | spy verify `tryRebuildFromProcessTree` call count == 0 |
 
-### 2.2 整合測試（端到端，`handler_test.go` 或新檔）
+### 2.3 整合測試（端到端，`handler_test.go` 或新檔）
 
 模擬 spec §7 三情境：
 
 | # | 名稱 | 情境 | 斷言 |
 |---|---|---|---|
-| I1 | `TestHandleEvent_ColdStart_RebuildRecovers` | 空 frames table + alive process tree（stub Identify 命中） + SessionStart hook | DB 多一 row、reason=`daemon_restart_recovery`、SPA broadcast `NormalizedEvent` 帶新 frame_id |
+| I1 | `TestHandleEvent_ColdStart_RebuildRecovers` | 空 frames table + stub `FirstAliveAgentInTree` 命中 + SessionStart hook | DB 多一 row、reason=`daemon_restart_recovery`、SPA broadcast `NormalizedEvent` 帶新 frame_id |
 | I2 | `TestHandleEvent_DaemonRestart_RebuildRecoversForExistingPane` | 模擬 daemon 重啟（frames table reset） + 既有 pane 內 hook | rebuild 命中 + frame 重建、subagents=[] |
-| I3 | `TestHandleEvent_MidConnectionGone_NoParentFallback` | frames 空 + Identify 全不命中 + SessionStart hook | reason=`no_parent_fallback`、frame 仍建（用 hook agent_type） |
+| I3 | `TestHandleEvent_MidConnectionGone_NoParentFallback` | frames 空 + stub 全不命中 + SessionStart hook | reason=`no_parent_fallback`、frame 仍建（用 hook agent_type） |
 
-### 2.3 Drift / regression guard
+### 2.4 Regression guard
 
-- **PR-2b PPID proxy walk regression**：保證 SessionStart 走 `findProxyParent` 命中時**不**進入 rebuild 分支（rebuild 在 fallback 末端，proxy walk 是 fallback 前段）。新增 R7 `TestApplyFrameEvent_ProxyHit_SkipsRebuild`。
-- **既有 reason 字串依賴**：實作 commit 1 跑 `grep -rn "parent_frame_missing"` 確認 codebase 無依賴字串（測試以外）；如有需同步更新。
+- **PR-2b PPID proxy walk regression**：R7 顯式驗證 SessionStart 走 `findProxyParent` 命中時**不**進入 rebuild 分支
+- **既有 reason 字串依賴**：commit 3 第一步跑 `grep -rn "parent_frame_missing"` 確認 codebase 無依賴字串（測試以外）；如有需同步更新
 
 ---
 
@@ -213,13 +270,18 @@ if stored.ParentFrameID != "" {
 
 | # | Commit | 範圍 | 紅綠循環 |
 |---|---|---|---|
-| 1 | `feat(agent): tryRebuildFromProcessTree helper + Identify dispatch` | 新 helper + RebuildResult struct + R1-R4 + R7 | R1-R4 + R7 紅 → 實作 → 綠 |
-| 2 | `feat(agent): wire rebuild into applyFrameEvent fallback chain` | applyFrameEvent 插入 + R5/R6/N3 + I1/I2 整合測試 | 紅 → 實作（含 stub provider 註冊 hooks）→ 綠 |
-| 3 | `refactor(agent): no_parent_fallback reason explicit` | 既有 reason 改字串 + N1/N2 + I3 + grep guard | N1/N2/I3 紅 → 改字串 + 既有 `parent_frame_missing` 測試重命名 → 綠 |
+| 1 | `feat(probe): FirstAliveAgentInTree + ordered identifiers` | 新 Prober method + `identifierOrder` slice + P1-P5 | P1-P5 紅 → 實作 → 綠 |
+| 2 | `feat(agent): tryRebuildFromProcessTree helper` | frame_ops helper（不接線）+ R1-R3 | R1-R3 紅 → 實作 → 綠 |
+| 3 | `feat(agent): wire rebuild into applyFrameEvent fallback chain` | applyFrameEvent 插入 + R5/R6/R7/R8/N3 + I1/I2 整合測試 | 紅 → 實作 → 綠 |
+| 4 | `refactor(agent): no_parent_fallback reason explicit` | 既有 reason 改字串 + N1/N2 + I3 + grep guard | N1/N2/I3 紅 → 改字串 + 既有 `parent_frame_missing` 測試重命名 → 綠 |
 
-**Commit 1 → Commit 2 dependency**：commit 1 落地後 helper 存在但未接線；commit 2 接 wiring。中間 main 可保持 build green（helper 有 unit test 但 applyFrameEvent 未叫）。
+**Commit chain dependency**：
+- Commit 1 落地：probe API ready，frame_ops 尚未消費，main build green
+- Commit 2 落地：helper 存在但未接線，main build green（helper 有 unit test 但 applyFrameEvent 未叫）
+- Commit 3 落地：wiring 完成，daemon_restart_recovery 路徑通
+- Commit 4 落地：reason rename + 既有 testname 同步
 
-**Commit 3 獨立**：可單獨 review，與 commit 1/2 無 code 依賴（純字串改名 + 測試）。但放最後因為 N1 測試的命名假設 commit 1/2 已落地（rebuild reason `daemon_restart_recovery` 已存在）。
+每 commit 後跑全套 `go test ./...` 確保 0 regression。
 
 ---
 
@@ -227,13 +289,15 @@ if stored.ParentFrameID != "" {
 
 | 項目 | 估計行數 |
 |---|---|
-| `frame_ops.go` — `tryRebuildFromProcessTree` + `RebuildResult` + applyFrameEvent insertion | +90 / -3 |
-| `frame_ops_test.go` — R1-R7 + N1-N3 | +280 |
+| `probe.go` — `FirstAliveAgentInTree` + `identifierOrder` 維護 | +50 / -2 |
+| `probe_test.go` — P1-P5 | +120 |
+| `frame_ops.go` — `tryRebuildFromProcessTree` + applyFrameEvent insertion + reason rename | +70 / -5 |
+| `frame_ops_test.go` — R1-R3, R5-R8, N1-N3 | +280 |
 | `handler_test.go` — I1-I3 | +120 |
-| 整合測試 helper（stub Prober + descendants） | +50 |
-| 文件（本 plan） | ~600 |
-| **Total code 淨增** | **~540** |
-| **Total（含 plan）** | **~1140** |
+| 整合測試 helper（stub Prober interface） | +50 |
+| 文件（本 plan v2） | ~700 |
+| **Total code 淨增** | **~690** |
+| **Total（含 plan）** | **~1390** |
 
 ---
 
@@ -254,14 +318,15 @@ if stored.ParentFrameID != "" {
 
 ## 6. 風險與護欄
 
-### 6.1 `Prober.Identify` 跨 provider 順序
+### 6.1 `FirstAliveAgentInTree` 跨 provider 順序
 
 **風險**：cc / codex / opencode 三家若同時 match 同 PID（例如 cc 內呼 codex），rebuild 取的不一定是 hook event 的真正 owner。
 
 **護欄**：
-- registry 註冊順序文件化（首登記者優先）；本 phase 不改既有註冊順序
+- `Prober.identifierOrder` slice 維護註冊順序（§1.2.3），保證 iteration deterministic
+- 既有 module init 註冊順序保持不變（cc → codex → opencode；本 phase 不改）
 - Rebuild 結果僅用於 trace 標記 + 證實 process tree 中該家 agent alive；frame.AgentType 仍取 `req.AgentType`（hook event 是 SOT）
-- 若 rebuilt.AgentType ≠ req.AgentType（mismatch），記入 trace meta `reason="daemon_restart_recovery_mismatch"`（**追加分支**）— Phase 3 觀察用，未來資料統計足夠多再決定行為
+- **不追蹤 mismatch**（v1→v2 codex P3 fix 後簡化）：若 `matchedAgentType ≠ req.AgentType`，本 phase 信任 hook event、丟棄 rebuild 結果中的 type 資訊；mismatch corner case 留 Phase 4/5 處理（Inspector 出現後再評估資料統計需求）
 
 ### 6.2 `cachedDescendants` 250ms cache 可能 stale
 
@@ -310,30 +375,40 @@ if stored.ParentFrameID != "" {
 ## 8. Review focus 預期（Round 1 standard）
 
 可能被抓到（已預先處理）：
-- ✅ rebuild fail-soft 不吞錯（log + fall through，§6.3）
-- ✅ Identify 跨 provider 順序文件化（§6.1）
-- ✅ reason 改名 grep guard（§6.4 + commit 3 第一步）
+- ✅ rebuild fail-soft 不吞錯（log + fall through，§6.3 + R8 測試）
+- ✅ Identifier 跨 provider 順序穩定性（§1.2.3 + §6.1 + P5 測試）
+- ✅ reason 改名 grep guard（§6.4 + commit 4 第一步）
 - ✅ SubagentRef 不重建決策論述（§1.3）
 - ✅ Phase 2 0 regression 顯式驗證（R7）
+- ✅ Package boundary 修正（§1.6 「有限改動」+ §1.2.1 新 public method；v1→v2 codex P2 fix）
+- ✅ Mismatch reason 不引入第四態（§6.1 + v1→v2 codex P3 fix）
 
 可能被抓到（待 review 看）：
-- rebuild 命中時 `RebuildResult.AgentType` 與 `req.AgentType` mismatch 的處理是否完整（§6.1 提到追加 trace reason，但細節留 review）
 - I1/I2/I3 測試的 stub Prober 是否真實 emulate 了 daemon 重啟條件（測試 fixture 的真實度）
-- `Prober.Identify` 是否被 export 到 module package（package boundary）
+- `Prober.FirstAliveAgentInTree` 介面 vs frame_ops 透過 interface 抽象（dependency inversion 是否需做）
+- `identifierOrder` slice 與 `identifiers` map 雙寫的並發安全（既有 RegisterIdentifier 是否有 mutex）
 
 ---
 
 ## 9. 相關檔案速查
 
-- 主改動：`internal/module/agent/frame_ops.go`（applyFrameEvent + 新 helper）
-- 主測試：`internal/module/agent/frame_ops_test.go` + `handler_test.go`
-- 既有依賴：
-  - `internal/agent/probe/probe.go` — `Prober.Identify(agentType, pid)`
-  - `internal/agent/probe/liveness.go` — `cachedDescendants(target, panePID)` + `ProcessStartTime` + `IsPidAlive`
+- 主改動：
+  - `internal/agent/probe/probe.go`（新 `FirstAliveAgentInTree` + `identifierOrder`）
+  - `internal/module/agent/frame_ops.go`（applyFrameEvent insertion + helper + reason rename）
+- 主測試：
+  - `internal/agent/probe/probe_test.go`（P1-P5）
+  - `internal/module/agent/frame_ops_test.go`（R1-R3, R5-R8, N1-N3）
+  - `internal/module/agent/handler_test.go`（I1-I3）
+- 既有依賴（不改）：
+  - `internal/agent/probe/probe.go` — `RegisterIdentifier` / `IsAliveFor` 既有行為不變
+  - `internal/agent/probe/liveness.go` — `cachedDescendants(target, panePID)` 私有 method 透過新 public method 走
+  - `internal/agent/{cc,codex,opencode}/provider.go` — `Identify(ProcessInfo) bool` 既有
   - `internal/agent/registry.go` — provider 註冊順序
   - `internal/store/frames.go` — `Upsert` / `GetByIdentity` / `FindByPanePID`
   - `internal/module/agent/trace.go` — `hookTraceCollector.Frame()` 自動寫 reason
 - Spec / Discussion：
   - `docs/specs/2026-04-23-lights-rebuild-spec.md` §7
   - `docs/research/2026-04-22-lights-rebuild-discussion.md`（架構討論）
-- Codex consulting：job `af47a0fd51ca6667e`（2026-04-25 high-effort architectural review）
+- Codex consulting：
+  - architectural review job `af47a0fd51ca6667e`（2026-04-25 high-effort）— 設計依據
+  - plan v1 review job — 抓 P2 package boundary + P3 reason contract，全採納（§0.4）
