@@ -62,32 +62,62 @@ func migrateFramesDB(db *sql.DB) error {
 	return clearStaleSubagentsJSON(db)
 }
 
-// clearStaleSubagentsJSON detects pre-Phase-2 `subagents_json` rows (string
-// array shape `["id"]`) and truncates the table. Frames are ephemeral
-// telemetry — clearing them on schema upgrade is lossless and avoids the
-// alternative: every subsequent hook 500s because scanFrame can't unmarshal
-// the old shape into []SubagentRef.
+// clearStaleSubagentsJSON scans every `agent_frames.subagents_json` and
+// classifies rows as new ([]SubagentRef) / legacy ([]string) / malformed.
+// All new → no-op. Any legacy (and nothing malformed) → TRUNCATE table;
+// frames are ephemeral telemetry so clearing is lossless. Any malformed →
+// return a startup error so the daemon refuses to run rather than silently
+// wiping unknown on-disk state.
+//
+// Full-table scan (not LIMIT 1) because SQLite does not guarantee row order
+// and a single probe can hit a new-format row while legacy rows survive —
+// scanFrame would then crash on later ListAll/GetByIdentity calls.
 func clearStaleSubagentsJSON(db *sql.DB) error {
-	var probe sql.NullString
-	err := db.QueryRow(`SELECT subagents_json FROM agent_frames LIMIT 1`).Scan(&probe)
-	if err == sql.ErrNoRows {
-		return nil // empty table, nothing to check
-	}
+	rows, err := db.Query(`SELECT frame_id, subagents_json FROM agent_frames`)
 	if err != nil {
 		return err
 	}
-	if !probe.Valid {
+	defer rows.Close()
+
+	var hasLegacy bool
+	var malformedID string // non-empty = malformed detected
+	for rows.Next() {
+		var id string
+		var js sql.NullString
+		if err := rows.Scan(&id, &js); err != nil {
+			return err
+		}
+		raw := ""
+		if js.Valid {
+			raw = js.String
+		}
+		var newDst []agentpkg.SubagentRef
+		if json.Unmarshal([]byte(raw), &newDst) == nil {
+			continue
+		}
+		var legacyDst []string
+		if json.Unmarshal([]byte(raw), &legacyDst) == nil {
+			hasLegacy = true
+			continue
+		}
+		if malformedID == "" {
+			malformedID = id
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if malformedID != "" {
+		return fmt.Errorf("agent_frames row %q has malformed subagents_json; refusing to start — inspect or remove the row manually (Phase 2 PR-2a)", malformedID)
+	}
+	if !hasLegacy {
 		return nil
 	}
-	var dst []agentpkg.SubagentRef
-	if json.Unmarshal([]byte(probe.String), &dst) == nil {
-		return nil // already in new format
-	}
-	// Unmarshal failed — row is in legacy shape. Truncate the table.
 	if _, err := db.Exec(`DELETE FROM agent_frames`); err != nil {
 		return err
 	}
-	log.Printf("[store] cleared agent_frames: legacy subagents_json schema detected, see Phase 2 PR-2a notes")
+	log.Printf("[store] cleared agent_frames: legacy subagents_json schema detected (Phase 2 PR-2a upgrade)")
 	return nil
 }
 
