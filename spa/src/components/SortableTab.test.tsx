@@ -91,6 +91,23 @@ describe('SortableTab', () => {
     expect(event.defaultPrevented).toBe(true)
   })
 
+  it('does not render a bright border on active tabs', () => {
+    const { container } = render(<SortableTab {...defaultProps} isActive />)
+    const el = container.querySelector('[data-tab-id="t1"]')!
+
+    expect(el.className).not.toContain('border-accent-muted')
+    expect(el.className).toContain('border-transparent')
+  })
+
+  it('does not render a bright border on active pinned tabs', () => {
+    const pinnedTab = makeTestTab('t1', { pinned: true })
+    const { container } = render(<SortableTab {...defaultProps} tab={pinnedTab} isActive pinned />)
+    const el = container.querySelector('[data-tab-id="t1"]')!
+
+    expect(el.className).not.toContain('border-accent-muted')
+    expect(el.className).toContain('border-transparent')
+  })
+
   it('does not call preventDefault on inactive tab pointerDown', () => {
     const { container } = render(<SortableTab {...defaultProps} isActive={false} />)
     const el = container.querySelector('[data-tab-id="t1"]')!
