@@ -32,12 +32,28 @@ function omitKeys<T>(
   return out
 }
 
+/**
+ * Subagent reference — mirrors Go `internal/agent.SubagentRef`. Covers native
+ * SubagentStart refs (source_pid=0 / source_start_time="" / is_proxy omitted)
+ * and cross-agent proxy refs (source_pid/source_start_time populated +
+ * is_proxy:true). Phase 2 PR-2a wires the type end-to-end; PR-2b lights up
+ * proxy detection and the dot visual (type color + outline).
+ */
+export interface SubagentRef {
+  id: string
+  type: string
+  started_at: number
+  source_pid: number
+  source_start_time: string
+  is_proxy?: boolean
+}
+
 /** Normalized event from backend (replaces AgentHookEvent). */
 export interface NormalizedEvent {
   agent_type: string
   status: string             // running | waiting | idle | error | clear
   model?: string
-  subagents?: string[]
+  subagents?: SubagentRef[]
   raw_event_name: string
   broadcast_ts: number
   detail?: Record<string, unknown>
@@ -54,7 +70,7 @@ interface AgentState {
   statuses: Record<string, AgentStatus>
   agentTypes: Record<string, string>
   models: Record<string, string>
-  subagents: Record<string, string[]>
+  subagents: Record<string, SubagentRef[]>
   lastEvents: Record<string, NormalizedEvent>  // for notification dispatcher
   oscTitles: Record<string, string>  // latest OSC 0/2 title per session (ephemeral)
   ccStatus: Record<string, CcStatusEntry>  // latest CC statusLine snapshot (ephemeral)

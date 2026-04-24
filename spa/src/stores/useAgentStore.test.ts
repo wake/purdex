@@ -3,9 +3,13 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { useAgentStore, sanitizeOscTitle } from './useAgentStore'
 import { useTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
-import type { NormalizedEvent } from './useAgentStore'
+import type { NormalizedEvent, SubagentRef } from './useAgentStore'
 
 const H = 'test-host'
+
+function ref(id: string, type: string = 'cc'): SubagentRef {
+  return { id, type, started_at: 0, source_pid: 0, source_start_time: '' }
+}
 
 beforeEach(() => {
   useAgentStore.setState({
@@ -76,7 +80,7 @@ describe('useAgentStore', () => {
       statuses: { [`${H}:dev`]: 'idle' },
       agentTypes: { [`${H}:dev`]: 'cc' },
       models: { [`${H}:dev`]: 'claude-sonnet-4-6' },
-      subagents: { [`${H}:dev`]: ['sub-1'] },
+      subagents: { [`${H}:dev`]: [ref('sub-1')] },
       lastEvents: { [`${H}:dev`]: { agent_type: 'cc', status: 'idle', raw_event_name: 'Stop', broadcast_ts: 1 } },
       unread: { [`${H}:dev`]: true },
     })
@@ -118,14 +122,16 @@ describe('useAgentStore', () => {
 
   it('subagent tracking from event.subagents array', () => {
     // Event with subagents
+    const a = ref('agent-A')
+    const b = ref('agent-B')
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', {
       agent_type: 'cc',
       status: 'running',
-      subagents: ['agent-A', 'agent-B'],
+      subagents: [a, b],
       raw_event_name: 'UserPromptSubmit',
       broadcast_ts: Date.now(),
     })
-    expect(useAgentStore.getState().subagents[`${H}:dev`]).toEqual(['agent-A', 'agent-B'])
+    expect(useAgentStore.getState().subagents[`${H}:dev`]).toEqual([a, b])
 
     // Event with empty subagents removes the entry
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', {
@@ -139,14 +145,15 @@ describe('useAgentStore', () => {
   })
 
   it('event without subagents field does not clear existing subagents', () => {
-    useAgentStore.setState({ subagents: { [`${H}:dev`]: ['agent-A'] } })
+    const a = ref('agent-A')
+    useAgentStore.setState({ subagents: { [`${H}:dev`]: [a] } })
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', {
       agent_type: 'cc',
       status: 'running',
       raw_event_name: 'UserPromptSubmit',
       broadcast_ts: Date.now(),
     })
-    expect(useAgentStore.getState().subagents[`${H}:dev`]).toEqual(['agent-A'])
+    expect(useAgentStore.getState().subagents[`${H}:dev`]).toEqual([a])
   })
 
   it('markRead → clears unread', () => {
@@ -171,8 +178,8 @@ describe('useAgentStore', () => {
         ['other-host:dev']: 'claude-opus-4-6',
       },
       subagents: {
-        [`${H}:dev`]: ['agent-A'],
-        ['other-host:dev']: ['agent-B'],
+        [`${H}:dev`]: [ref('agent-A')],
+        ['other-host:dev']: [ref('agent-B')],
       },
       lastEvents: {
         [`${H}:dev`]: { agent_type: 'cc', status: 'idle', raw_event_name: 'Stop', broadcast_ts: 1 },
@@ -202,7 +209,7 @@ describe('useAgentStore', () => {
     expect(state.statuses['other-host:dev']).toBe('waiting')
     expect(state.agentTypes['other-host:dev']).toBe('codex')
     expect(state.models['other-host:dev']).toBe('claude-opus-4-6')
-    expect(state.subagents['other-host:dev']).toEqual(['agent-B'])
+    expect(state.subagents['other-host:dev']).toEqual([ref('agent-B')])
     expect(state.lastEvents['other-host:dev']).toBeDefined()
     expect(state.unread['other-host:dev']).toBe(true)
   })
@@ -269,10 +276,11 @@ describe('useAgentStore', () => {
 
   it('event with empty status string does not update statuses', () => {
     useAgentStore.setState({ statuses: { [`${H}:dev`]: 'running' } })
+    const a = ref('agent-A')
     const event: NormalizedEvent = {
       agent_type: 'cc',
       status: '',
-      subagents: ['agent-A'],
+      subagents: [a],
       raw_event_name: 'SubagentStart',
       broadcast_ts: Date.now(),
     }
@@ -280,7 +288,7 @@ describe('useAgentStore', () => {
     // Status unchanged
     expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('running')
     // But subagents updated
-    expect(useAgentStore.getState().subagents[`${H}:dev`]).toEqual(['agent-A'])
+    expect(useAgentStore.getState().subagents[`${H}:dev`]).toEqual([a])
   })
 
   it('models map returns undefined for unknown key', () => {
@@ -292,7 +300,7 @@ describe('useAgentStore', () => {
       statuses: { [`${H}:dev`]: 'idle', [`${H}:staging`]: 'running' },
       agentTypes: { [`${H}:dev`]: 'cc' },
       models: { [`${H}:dev`]: 'claude-sonnet-4-6' },
-      subagents: { [`${H}:dev`]: ['sub-1', 'sub-2'] },
+      subagents: { [`${H}:dev`]: [ref('sub-1'), ref('sub-2')] },
       lastEvents: { [`${H}:dev`]: { agent_type: 'cc', status: 'idle', raw_event_name: 'Stop', broadcast_ts: 1 } },
       unread: { [`${H}:dev`]: true, [`${H}:staging`]: true },
     })
