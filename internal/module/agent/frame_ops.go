@@ -125,11 +125,27 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			// refs have no distinct source process identity. Proxy attaches (PR-2b)
 			// set these explicitly.
 		}
-		frame.Subagents = updateSubagents(frame.Subagents, req.EventName, ref)
-		frame.LastSeenAt = broadcastTs
-		stored, err := m.frames.Upsert(*frame)
-		if err != nil {
-			return nil, FrameTraceMeta{}, err
+		// Optimistic-concurrency native mutation (#632 continuation):
+		// two cc SubagentStarts from a concurrent Task-tool dispatch can
+		// land in near-simultaneously; the same read-modify-write race
+		// that motivated the proxy atomic fix applies here. Delegate to
+		// the shared helper that reloads + re-merges on UpsertIfUnchanged
+		// conflict.
+		applied, stored, merr := m.mutateSubagentsWithRetry(*frame, req.EventName, ref, broadcastTs)
+		if merr != nil {
+			return nil, FrameTraceMeta{}, merr
+		}
+		if !applied {
+			// Frame was deleted mid-flight (concurrent sweep / SessionEnd).
+			// Report frame_missing so downstream treats this like the
+			// frame == nil branch above.
+			projection, perr := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				Decision: "skipped",
+				Reason:   "frame_missing",
+				Before:   before,
+				After:    map[string]any{},
+			}, perr
 		}
 		projection, err := m.projectPane(req.TmuxPaneID)
 		return projection, FrameTraceMeta{
@@ -538,16 +554,25 @@ func subagentsContainProxySender(refs []agentpkg.SubagentRef, senderPID int, sen
 	return false
 }
 
-// attachProxyRefWithRetry mutates parent.Subagents to include ref, persists
-// via UpsertIfUnchanged, and reloads + re-merges on concurrent-write
-// conflicts. Returns (true, stored, nil) when the ref is persisted;
-// (false, zeroFrame, nil) when the parent row was deleted mid-flight and
-// the caller should fall back to the legacy create-new-frame path.
-func (m *Module) attachProxyRefWithRetry(parent store.Frame, ref agentpkg.SubagentRef, broadcastTs int64) (bool, store.Frame, error) {
-	current := parent
+// mutateSubagentsWithRetry applies an updateSubagents mutation
+// (SubagentStart add or SubagentStop remove) to frame.Subagents under
+// optimistic concurrency. Each attempt re-merges via updateSubagents on top
+// of the current baseline and issues UpsertIfUnchanged; on conflict it
+// reloads via GetByIdentity and retries, bounded by proxyUpsertMaxAttempts.
+//
+// Returns (true, stored, nil) when the mutation is persisted;
+// (false, zeroFrame, nil) when the frame was deleted mid-flight (caller
+// decides whether to fall back, continue scanning, or report frame_missing).
+// A non-nil error is only returned for storage failures or exhausted retries.
+//
+// Serves both native SubagentStart/Stop (from hook events) and proxy
+// attach (via attachProxyRefWithRetry). All three paths share the same
+// subagents_json read-modify-write cycle and would race without this helper.
+func (m *Module) mutateSubagentsWithRetry(frame store.Frame, eventName string, ref agentpkg.SubagentRef, broadcastTs int64) (bool, store.Frame, error) {
+	current := frame
 	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
 		expected := current.LastSeenAt
-		current.Subagents = updateSubagents(current.Subagents, "SubagentStart", ref)
+		current.Subagents = updateSubagents(current.Subagents, eventName, ref)
 		current.LastSeenAt = broadcastTs
 		ok, stored, err := m.frames.UpsertIfUnchanged(current, expected)
 		if err != nil {
@@ -556,18 +581,24 @@ func (m *Module) attachProxyRefWithRetry(parent store.Frame, ref agentpkg.Subage
 		if ok {
 			return true, stored, nil
 		}
-		reloaded, err := m.frames.GetByIdentity(parent.PaneID, parent.PID, parent.ProcessStartTime)
+		reloaded, err := m.frames.GetByIdentity(frame.PaneID, frame.PID, frame.ProcessStartTime)
 		if err != nil {
 			return false, store.Frame{}, err
 		}
 		if reloaded == nil {
-			// Parent was deleted by a concurrent sweep or SessionEnd. The
-			// caller falls back to building a standalone frame.
 			return false, store.Frame{}, nil
 		}
 		current = *reloaded
 	}
-	return false, store.Frame{}, fmt.Errorf("proxy attach: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, parent.FrameID)
+	return false, store.Frame{}, fmt.Errorf("subagent mutation %s: exceeded %d retries for frame %s", eventName, proxyUpsertMaxAttempts, frame.FrameID)
+}
+
+// attachProxyRefWithRetry is a thin wrapper over mutateSubagentsWithRetry
+// specialized for the proxy-attach path. Kept as a separate helper so the
+// caller at applyFrameEvent reads as "attach proxy ref" rather than
+// "SubagentStart mutation on the parent".
+func (m *Module) attachProxyRefWithRetry(parent store.Frame, ref agentpkg.SubagentRef, broadcastTs int64) (bool, store.Frame, error) {
+	return m.mutateSubagentsWithRetry(parent, "SubagentStart", ref, broadcastTs)
 }
 
 // detachProxyRefWithRetry mirrors attachProxyRefWithRetry for the SessionEnd

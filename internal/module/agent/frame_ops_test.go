@@ -509,6 +509,85 @@ func TestUpdateSubagents_ProxyNativeIDNamespacesAreIsolated(t *testing.T) {
 	}
 }
 
+// U7 — #632 extended: native SubagentStart path also uses the atomic
+// mutate-with-retry helper, so two concurrent hook-driven Task tool
+// dispatches that attach different agent_ids to the same cc frame both
+// land. Same race shape as PR17 but through the SubagentStart event path
+// rather than the proxy fast-path.
+func TestSubagentStart_ConcurrentNativeStartsBothLand(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	// Start #1: native SubagentStart with agent_id "s1".
+	req1 := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		EventName: "SubagentStart", AgentType: "cc",
+		SenderPID: 100, SenderStartTime: "t100",
+	}
+	result1 := agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning, Detail: map[string]any{"agent_id": "s1"}}
+	_, meta1, err := m.applyFrameEvent(req1, result1, 100)
+	if err != nil {
+		t.Fatalf("start #1: %v", err)
+	}
+	if meta1.Reason != "subagent_membership_changed" {
+		t.Fatalf("start #1 reason = %q, want subagent_membership_changed", meta1.Reason)
+	}
+
+	// Simulate a concurrent racer write (e.g. a probe-driven LastSeenAt
+	// bump or another SubagentStart that landed first but hasn't been
+	// observed by request #2's read yet).
+	racer := agentpkg.SubagentRef{ID: "racer", Type: "cc", StartedAt: 150}
+	cur, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil {
+		t.Fatalf("racer baseline read: %v", err)
+	}
+	cur.Subagents = append(cur.Subagents, racer)
+	cur.LastSeenAt = 180
+	if _, err := m.frames.Upsert(*cur); err != nil {
+		t.Fatalf("racer Upsert: %v", err)
+	}
+
+	// Start #2: native SubagentStart with agent_id "s2". applyFrameEvent's
+	// earlier GetByIdentity read still sees the pre-racer baseline; the
+	// atomic retry loop must reload, observe racer + s1, append s2, persist.
+	req2 := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		EventName: "SubagentStart", AgentType: "cc",
+		SenderPID: 100, SenderStartTime: "t100",
+	}
+	result2 := agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning, Detail: map[string]any{"agent_id": "s2"}}
+	_, meta2, err := m.applyFrameEvent(req2, result2, 200)
+	if err != nil {
+		t.Fatalf("start #2: %v", err)
+	}
+	if meta2.Reason != "subagent_membership_changed" {
+		t.Fatalf("start #2 reason = %q, want subagent_membership_changed", meta2.Reason)
+	}
+
+	// All three refs should coexist on the parent: s1 from start #1,
+	// racer from the injected concurrent write, s2 from start #2.
+	final, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil {
+		t.Fatalf("final read: %v", err)
+	}
+	if final == nil {
+		t.Fatal("parent vanished")
+	}
+	ids := make(map[string]bool)
+	for _, ref := range final.Subagents {
+		ids[ref.ID] = true
+	}
+	for _, want := range []string{"s1", "s2", "racer"} {
+		if !ids[want] {
+			t.Fatalf("Subagents missing ID=%q; parent=%+v", want, final.Subagents)
+		}
+	}
+	if len(final.Subagents) != 3 {
+		t.Fatalf("Subagents len = %d, want 3; parent=%+v", len(final.Subagents), final.Subagents)
+	}
+	_ = parent
+}
+
 func TestSendSnapshot_IncludesLegacySessionsWithoutFrames(t *testing.T) {
 	m := newTestModule(t)
 	fakeTmux := tmux.NewFakeExecutor()
