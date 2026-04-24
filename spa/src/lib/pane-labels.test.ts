@@ -79,6 +79,10 @@ describe('getPaneLabel', () => {
   it('returns i18n key for memory-monitor', () => {
     expect(getPaneLabel({ kind: 'memory-monitor' }, mockSessionStore, mockWorkspaceStore, mockT)).toBe('monitor.title')
   })
+
+  it('A2-2: returns i18n key for editor-buffers', () => {
+    expect(getPaneLabel({ kind: 'editor-buffers' }, mockSessionStore, mockWorkspaceStore, mockT)).toBe('editor.buffers.tab_title')
+  })
 })
 
 describe('getPaneIcon', () => {
@@ -125,5 +129,9 @@ describe('getPaneIcon', () => {
 
   it('returns GitDiff for editor diff mode', () => {
     expect(getPaneIcon({ kind: 'editor', filePath: '/x.ts', source: { type: 'local' }, diff: { against: 'saved' } })).toBe('GitDiff')
+  })
+
+  it('A2-3: returns Stack for editor-buffers', () => {
+    expect(getPaneIcon({ kind: 'editor-buffers' })).toBe('Stack')
   })
 })

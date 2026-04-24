@@ -221,6 +221,14 @@ describe('tabToUrl', () => {
   it('generates new-tab URL as dashboard', () => {
     expect(tabToUrl('abc123', { kind: 'new-tab' })).toBe('/')
   })
+
+  it('A2-1: generates root URL for editor-buffers (non-addressable ephemeral)', () => {
+    // editor-buffers is deliberately non-addressable — the same fallback as
+    // other ephemeral kinds (see route-utils.ts:100). A future PR that wants
+    // bookmark support must add both a tabToUrl branch and a matching
+    // parseRoute branch plus a round-trip test.
+    expect(tabToUrl('abc123', { kind: 'editor-buffers' })).toBe('/')
+  })
 })
 
 describe('parseRoute settings subsection', () => {

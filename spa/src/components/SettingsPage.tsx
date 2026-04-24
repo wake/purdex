@@ -65,7 +65,12 @@ function GlobalSettingsPage() {
     ? location.slice('/settings/'.length)
     : null
   const parts = pathAfterSettings ? pathAfterSettings.split('/') : []
-  const urlSection = parts[0] || null
+  const rawUrlSection = parts[0] || null
+  // Legacy URL alias: pre-HSR the Editor Buffers tab lived at
+  // `/settings/editor-buffers`; the new Editor section id is `editor`.
+  // Bookmarks / browser history entries must keep resolving — map the old
+  // id to the new one before the normal selection logic runs.
+  const urlSection = rawUrlSection === 'editor-buffers' ? 'editor' : rawUrlSection
   const urlSubsection = parts[1] || null
 
   const [activeSection, setActiveSection] = useState(() => {
@@ -93,6 +98,13 @@ function GlobalSettingsPage() {
     if (!urlSection) return
     if (!isSelectable(urlSection)) {
       setLocation(`/settings/${activeSection}`, { replace: true })
+      return
+    }
+    // Legacy URL alias (spec §4.2): if the raw URL was rewritten to a new
+    // canonical id (e.g. `editor-buffers` → `editor`), push the canonical
+    // URL so the history entry matches the mounted section.
+    if (rawUrlSection && rawUrlSection !== urlSection) {
+      setLocation(`/settings/${urlSection}`, { replace: true })
       return
     }
     if (parts.length > 2) {

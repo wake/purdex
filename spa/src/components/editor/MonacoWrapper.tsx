@@ -1,6 +1,7 @@
 import Editor, { type OnMount } from '@monaco-editor/react'
 import { useCallback, useEffect, useRef } from 'react'
 import type { editor } from 'monaco-editor'
+import { useEditorSettingsStore } from '../../stores/useEditorSettingsStore'
 
 interface Props {
   content: string
@@ -18,6 +19,12 @@ export function MonacoWrapper({ content, language, modelId, isActive, initialVie
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const onSaveRef = useRef(onSave)
   const onViewStateChangeRef = useRef(onViewStateChange)
+  const tabSize = useEditorSettingsStore((s) => s.tabSize)
+  const insertSpaces = useEditorSettingsStore((s) => s.insertSpaces)
+  const wordWrap = useEditorSettingsStore((s) => s.wordWrap)
+  const lineNumbers = useEditorSettingsStore((s) => s.lineNumbers)
+  const minimap = useEditorSettingsStore((s) => s.minimap)
+  const fontSize = useEditorSettingsStore((s) => s.fontSize)
 
   useEffect(() => {
     onSaveRef.current = onSave
@@ -65,10 +72,12 @@ export function MonacoWrapper({ content, language, modelId, isActive, initialVie
       onMount={handleMount}
       keepCurrentModel={true}
       options={{
-        minimap: { enabled: true },
-        fontSize: 13,
-        lineNumbers: 'on',
-        wordWrap: 'on',
+        minimap: { enabled: minimap },
+        fontSize,
+        lineNumbers,
+        wordWrap,
+        tabSize,
+        insertSpaces,
         scrollBeyondLastLine: false,
         automaticLayout: true,
       }}

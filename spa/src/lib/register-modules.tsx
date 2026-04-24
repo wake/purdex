@@ -32,12 +32,14 @@ import { useTabStore } from '../stores/useTabStore'
 import type { PaneContent } from '../types/tab'
 import type { PaneRendererProps } from './module-registry'
 import { EditorPane } from '../components/editor/EditorPane'
+import { EditorBuffersPane } from '../components/editor/EditorBuffersPane'
 import { ImagePreviewPane } from '../components/editor/ImagePreviewPane'
 import { PdfPreviewPane } from '../components/editor/PdfPreviewPane'
 import { EditorNewTabSection } from '../components/editor/EditorNewTabSection'
-import { BufferListSection } from '../components/editor/BufferListSection'
+import { ManageBuffersNewTabCard } from '../components/editor/ManageBuffersNewTabCard'
 import { EditorHomePathWorkspaceSection } from '../components/editor/EditorHomePathWorkspaceSection'
 import { EditorHomePathHostSection } from '../components/editor/EditorHomePathHostSection'
+import { EditorPurdexSettingsSection } from '../components/settings/EditorPurdexSettingsSection'
 import { InAppBackend } from './fs-backend-inapp'
 import { DaemonBackend } from './fs-backend-daemon'
 import { LocalBackend } from './fs-backend-local'
@@ -180,10 +182,18 @@ export function registerBuiltinModules(): void {
     descriptionKey: 'modules.editor.description',
     panes: [
       { kind: 'editor', component: EditorPane },
+      { kind: 'editor-buffers', component: EditorBuffersPane },
       { kind: 'image-preview', component: ImagePreviewPane },
       { kind: 'pdf-preview', component: PdfPreviewPane },
     ],
     settings: [
+      {
+        localId: 'editor',
+        scope: 'purdex',
+        order: 9,
+        labelKey: 'settings.section.editor',
+        component: EditorPurdexSettingsSection,
+      },
       {
         localId: 'workspace-home-path',
         scope: 'workspace',
@@ -320,13 +330,6 @@ export function registerBuiltinModules(): void {
     order: 8,
     component: ModulesSwitchboardSection,
   })
-  registerSettingsSection({
-    id: 'editor-buffers',
-    label: 'settings.section.editor_buffers',
-    order: 9,
-    component: BufferListSection,
-  })
-
   // Interface subsections
   registerInterfaceSubsection({
     id: 'new-tab',
@@ -366,6 +369,16 @@ export function registerBuiltinModules(): void {
     icon: 'File',
     order: 5,
     component: EditorNewTabSection,
+    moduleId: 'editor',
+  })
+
+  registerNewTabProvider({
+    id: 'editor-buffers',
+    label: 'newTab.editor.buffers.label',
+    icon: 'Stack',
+    order: 6,
+    component: ManageBuffersNewTabCard,
+    moduleId: 'editor',
   })
 
   registerNewTabProvider({

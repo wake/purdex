@@ -360,3 +360,60 @@ describe('SettingsPage (F7: disabled contribution gating)', () => {
     expect((history as string[]).at(-1)).toBe('/settings/second')
   })
 })
+
+// ---------------------------------------------------------------------------
+// L1-1 — Legacy URL alias: bookmarked `/settings/editor-buffers` must still
+// land on the new Editor section after the legacy registerSettingsSection
+// call is removed (spec §4.2).
+// ---------------------------------------------------------------------------
+
+describe('SettingsPage (legacy editor-buffers alias)', () => {
+  beforeEach(() => {
+    resetLastSection()
+    clearSettingsSectionRegistry()
+    clearContributions()
+    clearModuleRegistry()
+  })
+
+  it('L1-1: redirects /settings/editor-buffers to the new `editor` section', async () => {
+    const EditorBody = () => <div>EDITOR_SECTION_BODY</div>
+    const AppearanceBody = () => <div>APPEARANCE_SECTION_BODY</div>
+    registerSettingsContribution({
+      moduleId: '_builtin.legacy-section',
+      id: '_builtin.legacy-section.appearance',
+      localId: 'appearance',
+      scope: 'purdex',
+      order: 0,
+      labelKey: 'Appearance',
+      component: AppearanceBody,
+    })
+    registerSettingsContribution({
+      moduleId: 'editor',
+      id: 'editor.editor',
+      localId: 'editor',
+      scope: 'purdex',
+      order: 9,
+      labelKey: 'Editor',
+      component: EditorBody,
+    })
+
+    const { hook, history } = memoryLocation({
+      path: '/settings/editor-buffers',
+      record: true,
+    })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+
+    // The Editor section (localId 'editor') is rendered, not the default
+    // `appearance` fallback.
+    expect(screen.getByText('EDITOR_SECTION_BODY')).toBeTruthy()
+    expect(screen.queryByText('APPEARANCE_SECTION_BODY')).toBeNull()
+    // URL self-heals to the canonical new section id.
+    await waitFor(() => {
+      expect((history as string[]).at(-1)).toBe('/settings/editor')
+    })
+  })
+})

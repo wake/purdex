@@ -2,6 +2,10 @@ import { cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { editor } from 'monaco-editor'
 import { MonacoWrapper } from './MonacoWrapper'
+import {
+  DEFAULT_EDITOR_SETTINGS,
+  useEditorSettingsStore,
+} from '../../stores/useEditorSettingsStore'
 
 const editorPropsSpy = vi.hoisted(() => vi.fn())
 const editorMock = vi.hoisted(() => ({
@@ -24,10 +28,13 @@ vi.mock('@monaco-editor/react', () => ({
 describe('MonacoWrapper', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // merge-mode reset so zustand actions stay on the store.
+    useEditorSettingsStore.setState({ ...DEFAULT_EDITOR_SETTINGS })
   })
 
   afterEach(() => {
     cleanup()
+    useEditorSettingsStore.setState({ ...DEFAULT_EDITOR_SETTINGS })
   })
 
   it('uses the provided modelId as Monaco path', () => {
@@ -182,5 +189,42 @@ describe('MonacoWrapper', () => {
     )
 
     expect(editorMock.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('M1-1: Editor options reflect useEditorSettingsStore values', () => {
+    useEditorSettingsStore.setState({
+      tabSize: 4,
+      insertSpaces: false,
+      wordWrap: 'off',
+      lineNumbers: 'off',
+      minimap: false,
+      fontSize: 20,
+    })
+
+    render(
+      <MonacoWrapper
+        content="hello"
+        language="markdown"
+        modelId="model-1"
+        isActive={true}
+        initialViewState={null}
+        onChange={() => {}}
+        onCursorChange={() => {}}
+        onViewStateChange={() => {}}
+        onSave={() => {}}
+      />,
+    )
+
+    const lastCall = editorPropsSpy.mock.calls.at(-1)?.[0] as { options: Record<string, unknown> }
+    expect(lastCall.options).toEqual(
+      expect.objectContaining({
+        tabSize: 4,
+        insertSpaces: false,
+        wordWrap: 'off',
+        lineNumbers: 'off',
+        minimap: { enabled: false },
+        fontSize: 20,
+      }),
+    )
   })
 })

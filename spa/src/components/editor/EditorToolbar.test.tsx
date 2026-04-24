@@ -1,8 +1,38 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { EditorToolbar } from './EditorToolbar'
 
+// The popover uses createPortal; render it inline in jsdom.
+vi.mock('react-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-dom')>()
+  return { ...actual, createPortal: (node: ReactNode) => node }
+})
+
+// i18n → identity.
+vi.mock('../../stores/useI18nStore', () => ({
+  useI18nStore: (selector: (s: { t: (k: string) => string }) => unknown) =>
+    selector({ t: (k: string) => k }),
+}))
+
+// Provide an inapp backend mock so the chip click can load the buffer list.
+const backendListMock = vi.fn()
+vi.mock('../../lib/fs-backend', () => ({
+  getFsBackend: () => ({
+    list: backendListMock,
+  }),
+  registerFsBackend: vi.fn(),
+}))
+
 describe('EditorToolbar', () => {
+  beforeEach(() => {
+    backendListMock.mockReset()
+    backendListMock.mockResolvedValue([
+      { name: 'a.md', isDir: false, size: 0 },
+      { name: 'b.md', isDir: false, size: 0 },
+    ])
+  })
+
   it('shows a Purdex prefix and hides the buffer segment for in-app paths', () => {
     const { container } = render(
       <EditorToolbar
@@ -62,5 +92,148 @@ describe('EditorToolbar', () => {
     )
 
     expect(screen.getByTitle('/buffer/project/example.md').className).toContain('gap-0.5')
+  })
+
+  it('T3-1: inapp Purdex chip renders as <button> (not span)', () => {
+    render(
+      <EditorToolbar
+        source={{ type: 'inapp' }}
+        filePath="/buffer/example.md"
+        isDirty={false}
+        onSave={() => {}}
+      />,
+    )
+
+    // The Purdex chip is the button that opens the buffer quick-switch popover.
+    const chipButton = screen.getByRole('button', { name: /Purdex/ })
+    expect(chipButton.tagName).toBe('BUTTON')
+  })
+
+  it('T3-2: non-inapp source renders no Purdex chip at all', () => {
+    render(
+      <EditorToolbar
+        source={{ type: 'local' }}
+        filePath="/notes/example.md"
+        isDirty={false}
+        onSave={() => {}}
+      />,
+    )
+
+    expect(screen.queryByText('Purdex')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Purdex/ })).not.toBeInTheDocument()
+  })
+
+  it('C3-7: onNewBuffer dirty-guard gates setPaneContent (v1.4 F7)', async () => {
+    // Mirrors C3-6 for the popover's New-buffer button. The popover
+    // merely invokes the caller-supplied onNewBuffer; the dirty guard
+    // lives in EditorPane — we simulate that contract here so the fix
+    // can regress if EditorPane drops the check.
+    const originalConfirm = window.confirm
+    try {
+      async function openAndNew(onNewBuffer: () => void) {
+        const result = render(
+          <EditorToolbar
+            source={{ type: 'inapp' }}
+            filePath="/buffer/a.md"
+            isDirty={true}
+            onSave={() => {}}
+            onBufferSwitch={() => {}}
+            onManage={() => {}}
+            onNewBuffer={onNewBuffer}
+          />,
+        )
+        // Empty list so the "New buffer" button renders in the popover.
+        backendListMock.mockResolvedValueOnce([])
+        fireEvent.click(screen.getByRole('button', { name: /Purdex/ }))
+        const newBtn = await waitFor(() =>
+          screen.getByTestId('breadcrumb-popover-new-buffer'),
+        )
+        fireEvent.click(newBtn)
+        result.unmount()
+      }
+
+      // Case 1: cancel — setPaneContent must NOT fire.
+      const confirmFalse = vi.fn(() => false)
+      window.confirm = confirmFalse
+      const setPaneContentCancel = vi.fn()
+      const onNewBufferCancel = vi.fn(() => {
+        if (!window.confirm('editor.buffers.confirm_switch_dirty')) return
+        setPaneContentCancel()
+      })
+      await openAndNew(onNewBufferCancel)
+      expect(confirmFalse).toHaveBeenCalledTimes(1)
+      expect(onNewBufferCancel).toHaveBeenCalledTimes(1)
+      expect(setPaneContentCancel).not.toHaveBeenCalled()
+
+      // Case 2: confirm — setPaneContent fires.
+      const confirmTrue = vi.fn(() => true)
+      window.confirm = confirmTrue
+      const setPaneContentOk = vi.fn()
+      const onNewBufferOk = vi.fn(() => {
+        if (!window.confirm('editor.buffers.confirm_switch_dirty')) return
+        setPaneContentOk()
+      })
+      await openAndNew(onNewBufferOk)
+      expect(confirmTrue).toHaveBeenCalledTimes(1)
+      expect(onNewBufferOk).toHaveBeenCalledTimes(1)
+      expect(setPaneContentOk).toHaveBeenCalledTimes(1)
+    } finally {
+      window.confirm = originalConfirm
+    }
+  })
+
+  it('C3-6: popover buffer-switch respects dirty-guard both ways', async () => {
+    const originalConfirm = window.confirm
+    try {
+      async function openAndClick(
+        onBufferSwitch: (newKey: string) => void,
+        targetName: string,
+      ) {
+        const result = render(
+          <EditorToolbar
+            source={{ type: 'inapp' }}
+            filePath="/buffer/a.md"
+            isDirty={true}
+            onSave={() => {}}
+            onBufferSwitch={onBufferSwitch}
+            onManage={() => {}}
+          />,
+        )
+        fireEvent.click(screen.getByRole('button', { name: /Purdex/ }))
+        const bufferButton = await waitFor(() =>
+          screen.getByRole('button', { name: new RegExp(targetName) }),
+        )
+        fireEvent.click(bufferButton)
+        result.unmount()
+      }
+
+      // Case 1: user cancels — setPaneContent must NOT be invoked.
+      const confirmFalse = vi.fn(() => false)
+      window.confirm = confirmFalse
+      const setPaneContentCancel = vi.fn()
+      const onBufferSwitchCancel = vi.fn((newKey: string) => {
+        if (!window.confirm('editor.buffers.confirm_switch_dirty')) return
+        setPaneContentCancel(newKey)
+      })
+      await openAndClick(onBufferSwitchCancel, 'b\\.md')
+      expect(confirmFalse).toHaveBeenCalledTimes(1)
+      expect(onBufferSwitchCancel).toHaveBeenCalledWith('/buffer/b.md')
+      expect(setPaneContentCancel).not.toHaveBeenCalled()
+
+      // Case 2: user confirms — setPaneContent fires with the full path.
+      const confirmTrue = vi.fn(() => true)
+      window.confirm = confirmTrue
+      const setPaneContentOk = vi.fn()
+      const onBufferSwitchOk = vi.fn((newKey: string) => {
+        if (!window.confirm('editor.buffers.confirm_switch_dirty')) return
+        setPaneContentOk(newKey)
+      })
+      await openAndClick(onBufferSwitchOk, 'b\\.md')
+      expect(confirmTrue).toHaveBeenCalledTimes(1)
+      expect(onBufferSwitchOk).toHaveBeenCalledWith('/buffer/b.md')
+      expect(setPaneContentOk).toHaveBeenCalledWith('/buffer/b.md')
+    } finally {
+      window.confirm = originalConfirm
+    }
   })
 })

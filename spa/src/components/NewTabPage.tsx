@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react'
 import { getNewTabProviders } from '../lib/new-tab-registry'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
+import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 import { useBreakpoint } from '../hooks/useBreakpoint'
 import { resolveProfile } from '../lib/resolve-profile'
 import { colsClass } from '../lib/cols-class'
@@ -24,7 +25,18 @@ export function NewTabPage({ onSelect }: Props) {
   const profileKey = resolveProfile(isWide, isMid, profiles)
   const profile = profiles[profileKey]
 
-  const providers = getNewTabProviders()
+  // Subscribe so module enable/disable flips re-render this component.
+  const enabledMap = useModuleEnabledStore((s) => s.enabled)
+  const isEnabled = useModuleEnabledStore((s) => s.isEnabled)
+  const providers = useMemo(() => {
+    // A2-4 / A2-5: providers carrying a `moduleId` are hidden when the owning
+    // module is disabled. Legacy providers with no `moduleId` are always
+    // visible (back-compat, spec §4.9.3).
+    // `enabledMap` is a dependency so the filter recomputes when the user
+    // flips a module in the Switchboard.
+    void enabledMap
+    return getNewTabProviders().filter((p) => !p.moduleId || isEnabled(p.moduleId))
+  }, [enabledMap, isEnabled])
   const byId = useMemo(() => Object.fromEntries(providers.map((p) => [p.id, p])), [providers])
 
   if (!hydrated) {
@@ -33,7 +45,23 @@ export function NewTabPage({ onSelect }: Props) {
 
   if (providers.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center">
+      <div className="flex-1 flex items-center justify-center" data-testid="newtab-empty-state">
+        <p className="text-sm text-text-secondary">{t('page.newtab.empty')}</p>
+      </div>
+    )
+  }
+
+  // v1.4 §4.9.7 (F8): a user's pinned profile may reference only
+  // providers that are currently filtered out (e.g. pinned `editor` +
+  // `editor-buffers`, then disabled the Editor module). In that case
+  // every column resolves to an empty list — the old code rendered
+  // nothing but the grid, leaving the tab visually blank with no cue.
+  // Fall back to the existing empty state when NO column has anything
+  // visible; keep the grid otherwise.
+  const hasAnyVisibleEntry = profile.columns.some((col) => col.some((id) => byId[id]))
+  if (!hasAnyVisibleEntry) {
+    return (
+      <div className="flex-1 flex items-center justify-center" data-testid="newtab-empty-state">
         <p className="text-sm text-text-secondary">{t('page.newtab.empty')}</p>
       </div>
     )

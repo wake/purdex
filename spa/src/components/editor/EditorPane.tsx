@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useCallback, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 import { getFsBackend } from '../../lib/fs-backend'
 import { MonacoWrapper } from './MonacoWrapper'
 import { DiffView } from './DiffView'
@@ -11,8 +12,12 @@ import { EditorStatusBar } from './EditorStatusBar'
 import { RenamePopover } from '../RenamePopover'
 import { findPane } from '../../lib/pane-tree'
 import type { FileSource } from '../../types/fs'
-import type { EditorBufferMetadata, EditorLanguageSource } from '../../stores/useEditorStore'
 import type { UntitledDocumentState } from '../../types/tab'
+import {
+  createMetadata,
+  untitledStoragePath,
+  untitledSuggestedName,
+} from '../../lib/editor-language'
 
 const TiptapEditor = lazy(() =>
   import('./TiptapEditor').then((m) => ({ default: m.TiptapEditor }))
@@ -23,35 +28,8 @@ function bufferKey(source: FileSource, filePath: string): string {
   return `${source.type}:${filePath}`
 }
 
-function detectLanguage(filePath: string): string {
-  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
-  const map: Record<string, string> = {
-    ts: 'typescript', tsx: 'typescriptreact', js: 'javascript', jsx: 'javascriptreact',
-    json: 'json', md: 'markdown', css: 'css', html: 'html', go: 'go',
-    py: 'python', rs: 'rust', sh: 'shell', yml: 'yaml', yaml: 'yaml',
-    sql: 'sql', php: 'php', rb: 'ruby', swift: 'swift', kt: 'kotlin',
-    java: 'java', c: 'c', cpp: 'cpp', h: 'c', hpp: 'cpp',
-  }
-  return map[ext] ?? 'plaintext'
-}
-
-function detectLanguageSource(source: FileSource, filePath: string): EditorLanguageSource {
-  if (source.type === 'inapp' && /^\/buffer\/Untitled(?:-\d+)?\./.test(filePath)) {
-    return 'template'
-  }
-  return 'extension'
-}
-
 function isUntitledPath(filePath: string): boolean {
   return filePath.startsWith('untitled:')
-}
-
-function untitledSuggestedName(untitled: UntitledDocumentState): string {
-  return untitled.hasBeenRenamed ? untitled.name : `${untitled.name}${untitled.suggestedExtension}`
-}
-
-function untitledStoragePath(name: string): string {
-  return `/buffer/${name}`
 }
 
 function displayName(filePath: string, untitled?: UntitledDocumentState): string {
@@ -60,20 +38,6 @@ function displayName(filePath: string, untitled?: UntitledDocumentState): string
 
 function renamePath(filePath: string, nextName: string, untitled?: UntitledDocumentState): string {
   return untitled ? `untitled:${nextName}` : siblingPath(filePath, nextName)
-}
-
-function createMetadata(source: FileSource, filePath: string, untitled?: UntitledDocumentState): Pick<EditorBufferMetadata, 'language' | 'languageSource' | 'untitled'> {
-  const resolvedPath = untitled
-    ? untitledStoragePath(untitledSuggestedName(untitled))
-    : filePath
-
-  return {
-    language: detectLanguage(resolvedPath),
-    languageSource: !untitled || untitled.hasBeenRenamed
-      ? detectLanguageSource(source, resolvedPath)
-      : 'template',
-    untitled,
-  }
 }
 
 function fileName(filePath: string): string {
@@ -106,6 +70,17 @@ function sourceIdentity(source: FileSource): string {
   return source.type === 'daemon' ? `daemon:${source.hostId}` : source.type
 }
 
+// Local helper — walks the tabStore layouts to find which tab owns a given pane.
+// No shared util exists; inline scan is cheap and only runs on explicit user
+// actions (breadcrumb popover switch, manage, new buffer).
+function findTabIdForPane(paneId: string): string | undefined {
+  const tabs = useTabStore.getState().tabs
+  for (const [tabId, tab] of Object.entries(tabs)) {
+    if (findPane(tab.layout, paneId)) return tabId
+  }
+  return undefined
+}
+
 // Outer component does kind guard to avoid hooks-after-early-return
 export function EditorPane({ pane, isActive }: PaneRendererProps) {
   const content = pane.content
@@ -114,6 +89,7 @@ export function EditorPane({ pane, isActive }: PaneRendererProps) {
 }
 
 function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { paneId: string; source: FileSource; filePath: string; untitled?: UntitledDocumentState; isActive: boolean }) {
+  const t = useI18nStore((s) => s.t)
   const key = bufferKey(source, filePath)
   const sourceId = sourceIdentity(source)
   const isUntitled = isUntitledPath(filePath)
@@ -393,6 +369,49 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
           setRenameAnchorRect(anchorRect)
           setRenameInitialValue(undefined)
           setRenameWarning(undefined)
+        }}
+        onBufferSwitch={(newKey) => {
+          // Dirty-guard (spec v1.3 §4.8): prompt before swapping content of a
+          // dirty pane. Smart-open from EditorBuffersPane intentionally
+          // bypasses this — that flow has different mental semantics.
+          const currentKey = bufferKey({ type: 'inapp' }, filePath)
+          const currentBuf = useEditorStore.getState().buffers[currentKey]
+          if (currentBuf?.isDirty && !window.confirm(t('editor.buffers.confirm_switch_dirty'))) return
+
+          const tabId = findTabIdForPane(paneId)
+          if (!tabId) return
+          useTabStore.getState().setPaneContent(tabId, paneId, {
+            kind: 'editor',
+            source: { type: 'inapp' },
+            filePath: newKey,
+          })
+          // NOTE: NEVER call `attachPane` here. EditorPane's own
+          // `useEffect(() => attachPane(paneId, key), [paneId, key])`
+          // rebinds the editor store when React re-renders with the new key.
+        }}
+        onManage={() => {
+          useTabStore.getState().openSingletonTab({ kind: 'editor-buffers' })
+        }}
+        onNewBuffer={async () => {
+          // v1.4 §4.8 extension (F7): mirror the onBufferSwitch dirty
+          // guard here. A user clicking "New buffer" from the popover
+          // while the current pane has unsaved edits would otherwise
+          // have their work discarded on pane swap.
+          const currentKey = bufferKey({ type: 'inapp' }, filePath)
+          const currentBuf = useEditorStore.getState().buffers[currentKey]
+          if (currentBuf?.isDirty && !window.confirm(t('editor.buffers.confirm_switch_dirty'))) return
+
+          const path = `/buffer/Untitled-${Date.now()}.md`
+          const backend = getFsBackend({ type: 'inapp' })
+          if (!backend) return
+          await backend.write(path, new Uint8Array(0))
+          const tabId = findTabIdForPane(paneId)
+          if (!tabId) return
+          useTabStore.getState().setPaneContent(tabId, paneId, {
+            kind: 'editor',
+            source: { type: 'inapp' },
+            filePath: path,
+          })
         }}
       />
       <div className="flex-1 min-h-0 overflow-hidden">

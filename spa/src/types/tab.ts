@@ -43,6 +43,7 @@ export type PaneContent =
   | { kind: 'browser'; url: string }
   | { kind: 'memory-monitor' }
   | { kind: 'editor'; source: FileSource; filePath: string; untitled?: UntitledDocumentState; diff?: { against: 'saved' | string } }
+  | { kind: 'editor-buffers' }
   | { kind: 'image-preview'; source: FileSource; filePath: string }
   | { kind: 'pdf-preview'; source: FileSource; filePath: string }
 

@@ -12,6 +12,12 @@ export interface NewTabProvider {
   component: React.ComponentType<NewTabProviderProps>
   disabled?: boolean
   disabledReason?: string // i18n key
+  /**
+   * Optional — ties a provider to a module registered in `useModuleEnabledStore`.
+   * `NewTabPage` filters out providers whose owning module is disabled; legacy
+   * providers with no `moduleId` are always visible (spec §4.9.3).
+   */
+  moduleId?: string
 }
 
 const providers: NewTabProvider[] = []
