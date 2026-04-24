@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useCallback, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 import { getFsBackend } from '../../lib/fs-backend'
 import { MonacoWrapper } from './MonacoWrapper'
 import { DiffView } from './DiffView'
@@ -106,6 +107,17 @@ function sourceIdentity(source: FileSource): string {
   return source.type === 'daemon' ? `daemon:${source.hostId}` : source.type
 }
 
+// Local helper — walks the tabStore layouts to find which tab owns a given pane.
+// No shared util exists; inline scan is cheap and only runs on explicit user
+// actions (breadcrumb popover switch, manage, new buffer).
+function findTabIdForPane(paneId: string): string | undefined {
+  const tabs = useTabStore.getState().tabs
+  for (const [tabId, tab] of Object.entries(tabs)) {
+    if (findPane(tab.layout, paneId)) return tabId
+  }
+  return undefined
+}
+
 // Outer component does kind guard to avoid hooks-after-early-return
 export function EditorPane({ pane, isActive }: PaneRendererProps) {
   const content = pane.content
@@ -114,6 +126,7 @@ export function EditorPane({ pane, isActive }: PaneRendererProps) {
 }
 
 function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { paneId: string; source: FileSource; filePath: string; untitled?: UntitledDocumentState; isActive: boolean }) {
+  const t = useI18nStore((s) => s.t)
   const key = bufferKey(source, filePath)
   const sourceId = sourceIdentity(source)
   const isUntitled = isUntitledPath(filePath)
@@ -393,6 +406,41 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
           setRenameAnchorRect(anchorRect)
           setRenameInitialValue(undefined)
           setRenameWarning(undefined)
+        }}
+        onBufferSwitch={(newKey) => {
+          // Dirty-guard (spec v1.3 §4.8): prompt before swapping content of a
+          // dirty pane. Smart-open from EditorBuffersPane intentionally
+          // bypasses this — that flow has different mental semantics.
+          const currentKey = bufferKey({ type: 'inapp' }, filePath)
+          const currentBuf = useEditorStore.getState().buffers[currentKey]
+          if (currentBuf?.isDirty && !window.confirm(t('editor.buffers.confirm_switch_dirty'))) return
+
+          const tabId = findTabIdForPane(paneId)
+          if (!tabId) return
+          useTabStore.getState().setPaneContent(tabId, paneId, {
+            kind: 'editor',
+            source: { type: 'inapp' },
+            filePath: newKey,
+          })
+          // NOTE: NEVER call `attachPane` here. EditorPane's own
+          // `useEffect(() => attachPane(paneId, key), [paneId, key])`
+          // rebinds the editor store when React re-renders with the new key.
+        }}
+        onManage={() => {
+          useTabStore.getState().openSingletonTab({ kind: 'editor-buffers' })
+        }}
+        onNewBuffer={async () => {
+          const path = `/buffer/Untitled-${Date.now()}.md`
+          const backend = getFsBackend({ type: 'inapp' })
+          if (!backend) return
+          await backend.write(path, new Uint8Array(0))
+          const tabId = findTabIdForPane(paneId)
+          if (!tabId) return
+          useTabStore.getState().setPaneContent(tabId, paneId, {
+            kind: 'editor',
+            source: { type: 'inapp' },
+            filePath: path,
+          })
         }}
       />
       <div className="flex-1 min-h-0 overflow-hidden">
