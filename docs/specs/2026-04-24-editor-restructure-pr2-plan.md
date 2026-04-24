@@ -1,16 +1,18 @@
 # Editor Restructure (PR 2) — Plan
 
-- Spec: `docs/specs/2026-04-24-editor-restructure-pr2-spec.md` v1.3
-- Plan revision: **v1.3** (2026-04-24) — aligned with spec v1.3 after
-  Round-3 codex review (v1.2 had 4 HIGH findings: 2 plan residues +
-  dirty-UX + locked-tab)
+- Spec: `docs/specs/2026-04-24-editor-restructure-pr2-spec.md` v1.4
+- Plan revision: **v1.4** (2026-04-24) — aligned with spec v1.4 after
+  Round-4 PR review (4-parallel, No-ship, 1 CRIT + 7 HIGH). Adds
+  Commit 4 as a single fix-up commit on top of Commits 1-3.
 - Base commit: `bb5ce0c1` (main @ alpha.216)
 - Target version: 1.0.0-alpha.217
 
 ## 0. Orientation
 
 ### Spec reference
-Spec v1.3. Three-commit PR targeting alpha.217.
+Spec v1.4. Four-commit PR targeting alpha.217 (Commits 1-3 already
+landed as `b149d93c`, `7546a4ed`, `e58cc004`; Commit 4 is a fix-up
+for R4 findings).
 
 ### Out of scope (mirroring spec §2)
 - No changes to IndexedDB / InAppBackend storage layer internals.
@@ -100,10 +102,11 @@ Anchors confirmed accurate as of base commit `bb5ce0c1`:
 
 ## 2. TDD test matrix
 
-Total: **41 tests** across 3 commits (v1.3 delta vs v1.2: +B2-11
-delete-with-locked-tab, +C3-6 popover-switch-dirty-confirm; A2-1
-asserts exact `'/'`; B2-10 pseudocode now fully uses `closePane`
-with no `filePath:null` residue).
+Total: **48 tests** across 4 commits (v1.4 delta vs v1.3: +7 in
+Commit 4 — S1-9 rehydrate happy-path, B2-12 rename-exists, B2-13
+delete-locked-refused, B2-14 delete-dirty-confirm + single-confirm,
+B2-15 smart-open skips dirty/non-inapp, C3-7 onNewBuffer dirty
+guard, A2-7 NewTabPage all-null columns empty state).
 
 | ID | File | Test name | Asserts (one-line) | Commit |
 |----|------|-----------|-------------------|--------|
@@ -151,6 +154,13 @@ with no `filePath:null` residue).
 | C3-6 | `components/editor/EditorToolbar.test.tsx` | popover switch with dirty buffer prompts confirm | with `useEditorStore.setState({buffers:{[currentKey]:{...,isDirty:true}}})` → click non-current buffer item; `window.confirm` called; on cancel, `setPaneContent` NOT called; on OK, `setPaneContent` called. (Tests both branches via two `window.confirm = vi.fn(() => true\|false)` permutations.) | 3 |
 | T3-1 | `components/editor/EditorToolbar.test.tsx` | inapp chip is button | `source.type='inapp'` → Purdex `<button>` rendered | 3 |
 | T3-2 | `components/editor/EditorToolbar.test.tsx` | non-inapp no chip | `source.type='daemon'` → no Purdex chip | 3 |
+| S1-9 | `stores/useEditorSettingsStore.test.ts` | happy-path rehydrate restores persisted values | write non-defaults (e.g. wordWrap='off', tabSize=4, fontSize=18); simulate reload by re-reading `localStorage` payload and reinitializing the store; assert non-defaults survive. Fails against v1.3 code because `merge` reads envelope instead of `envelope.state` | 4 |
+| B2-12 | `components/editor/EditorBuffersPane.test.tsx` | rename rejects when destination exists | seed backend with `/buffer/foo.md` + `/buffer/bar.md`; select foo, rename to `bar.md`; assert inline `editor.buffers.rename_exists_error`; `backend.rename` NOT called | 4 |
+| B2-13 | `components/editor/EditorBuffersPane.test.tsx` | delete refused when any affected pane is in locked tab | seed tabStore with locked tab containing editor pane for `/buffer/x.md`; click Delete; assert error `editor.buffers.delete_locked_refused`; `backend.delete` NOT called; `closePane` NOT called | 4 |
+| B2-14 | `components/editor/EditorBuffersPane.test.tsx` | delete confirms for single / dirty | (a) dirty case: pane has isDirty=true → `window.confirm` with dirty-specific message; cancel aborts, OK proceeds. (b) single-clean case: confirm with single-specific message. Use `window.confirm = vi.fn()` spy | 4 |
+| B2-15 | `components/editor/EditorBuffersPane.test.tsx` | smart-open skips dirty / non-inapp panes | seed activeTab with editor pane where `content.source.type='inapp'` but buffer isDirty=true; other tab with `content.source.type='daemon'`; open a buffer → `setPaneContent` NOT called on either pane; `addTab` called (new-tab fallback) | 4 |
+| C3-7 | `components/editor/EditorToolbar.test.tsx` (extend) | onNewBuffer dirty confirm | current pane buffer isDirty=true, trigger `onNewBuffer`; `window.confirm` called; cancel → `setPaneContent` NOT called; OK → proceeds normally | 4 |
+| A2-7 | `components/NewTabPage.test.tsx` | all columns filter to null → empty state | seed profile with columns that all pin editor-module providers; disable editor module; assert empty-state element renders (not a blank grid); assert no `null` column render (queries by testid or role) | 4 |
 
 Note: A2-1 asserts `'/'` exactly (confirmed from existing ephemeral
 kind cases at `route-utils.ts:100`). No dedicated route for
@@ -736,6 +746,183 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/editor-restructure-pr2 &&
 
 ---
 
+## 5b. Commit 4 — Fix-up (v1.4, post-R4 PR review)
+
+Single commit addressing 8 R4 findings. Landing AFTER Commit 3 lands
+(`e58cc004`).
+
+### 5b.1 Files touched
+
+Modify:
+- `spa/src/stores/useEditorSettingsStore.ts` — fix `merge` to unwrap persisted envelope (§4.9.6)
+- `spa/src/stores/useEditorSettingsStore.test.ts` — add S1-9 happy-path rehydrate
+- `spa/src/components/editor/EditorBuffersPane.tsx` — rewrite rename/delete/smart-open per spec v1.4 §4.5/§4.6/§4.9.5
+- `spa/src/components/editor/EditorBuffersPane.test.tsx` — add B2-12/B2-13/B2-14/B2-15
+- `spa/src/components/editor/EditorPane.tsx` — add dirty guard to `onNewBuffer`
+- `spa/src/components/editor/EditorToolbar.test.tsx` — add C3-7
+- `spa/src/components/NewTabPage.tsx` — empty-state fallback when every column resolves to null after filter
+- `spa/src/components/NewTabPage.test.tsx` — add A2-7
+- `spa/src/locales/{en,zh-TW}.json` — add 4 new i18n keys
+
+Create: nothing — all work lives in existing files.
+
+Delete: nothing.
+
+### 5b.2 TDD steps
+
+**Step 1 — Persist fix (F1)**
+
+Write S1-9 first. Existing S1-7/S1-8 mock the envelope poorly for a happy path — S1-9 must (a) call setters on the live store, (b) read `localStorage.getItem(STORAGE_KEYS.EDITOR_SETTINGS)` and confirm it's an envelope string, (c) simulate reload by re-initializing the store via whatever Zustand `persist` mechanism the existing pattern uses (likely resetting module-level state or explicitly calling the internal rehydrate). Expect failure against v1.3 code (returns defaults).
+
+Fix: in `useEditorSettingsStore.ts` `merge`, replace
+```
+sanitize(persisted, current)
+```
+with
+```
+const stored = (persisted as { state?: unknown } | null)?.state
+sanitize(stored, current)
+```
+Run S1-9: passes. S1-7 + S1-8 still pass (sanitize handles null / malformed `stored`).
+
+**Step 2 — Rename existence check (F4)**
+
+Write B2-12 first. Seed mocked backend with two files. Wire mocked `backend.stat` to resolve for known paths and reject otherwise.
+
+Fix: in `EditorBuffersPane.tsx`, add to the rename submit handler:
+```
+if (targetPath !== renameTarget) {
+  const exists = await backend.stat(targetPath).then(() => true).catch(() => false)
+  if (exists) {
+    setRenameError(t('editor.buffers.rename_exists_error'))
+    return
+  }
+}
+await backend.rename(renameTarget, targetPath)
+```
+Run B2-12 + existing B2-5/B2-6: all pass.
+
+**Step 3 — Delete pre-check gate (F2 + F5 + F6)**
+
+Write B2-13 + B2-14. B2-13 sets `tab.locked = true` in the mocked tabStore state. B2-14 sets buffer `isDirty = true` for the affected filePath. Both should fail against v1.3's `deleteWithPaneCleanup`.
+
+Fix: rewrite the handler. Helper structure:
+```
+async function handleDelete() {
+  const targets = selected.map(n => '/buffer/' + n)
+  const openPanes = collectOpenEditorPanesFor(targets)  // [[tabId, pane], ...]
+
+  // Refusal: locked tabs
+  const tabs = useTabStore.getState().tabs
+  if (openPanes.some(([tid]) => tabs[tid]?.locked)) {
+    setErrorToast(t('editor.buffers.delete_locked_refused'))
+    return
+  }
+
+  // Confirm: dirty
+  const dirtyCount = openPanes.filter(([_, pane]) => {
+    const key = bufferKey(pane.content.source, pane.content.filePath)
+    return useEditorStore.getState().buffers[key]?.isDirty === true
+  }).length
+  if (dirtyCount > 0) {
+    if (!window.confirm(t('editor.buffers.delete_dirty_confirm', { count: dirtyCount }))) return
+  } else if (selected.size === 1) {
+    if (!window.confirm(t('editor.buffers.delete_one_confirm'))) return
+  } else {
+    if (!window.confirm(t('editor.buffers.confirm_delete', { count: selected.size }))) return
+  }
+
+  setLoading(true)
+  try {
+    for (const [tabId, pane] of openPanes) {
+      useTabStore.getState().closePane(tabId, pane.id)
+    }
+    for (const path of targets) await backend.delete(path)
+    clear selection; setRefreshKey(r => r + 1)
+  } finally { setLoading(false) }
+}
+```
+Run B2-13 + B2-14 + existing B2-3 + B2-10 + B2-11: all pass. (B2-10/B2-11 should pass because behavior is unchanged for unlocked/clean paths except a single new window.confirm for multi-delete, which is already expected.)
+
+**Step 4 — Smart-open tightening (F3)**
+
+Write B2-15. Seed tabs carefully: activeTab has a dirty inapp editor pane; other tab has a clean daemon editor pane. Expect `addTab` fallback, not `setPaneContent` on either.
+
+Fix: in `smartOpen`, change the `findFirstEditorPane` predicate from
+```
+leaf.content.kind === 'editor'
+```
+to
+```
+leaf.content.kind === 'editor'
+  && leaf.content.source?.type === 'inapp'
+  && !useEditorStore.getState().buffers[bufferKey(leaf.content.source, leaf.content.filePath)]?.isDirty
+```
+Run B2-15 + existing B2-7/B2-8/B2-9: all pass.
+
+**Step 5 — onNewBuffer dirty guard (F7)**
+
+Write C3-7. Mock `useEditorStore` buffers so current `filePath` is dirty. Trigger `onNewBuffer`. Spy `window.confirm`. Two branches: cancel aborts setPaneContent; OK proceeds.
+
+Fix: in `EditorPane.tsx`'s `onNewBuffer` callback:
+```
+const currentKey = bufferKey({type:'inapp'}, filePath)
+const buf = useEditorStore.getState().buffers[currentKey]
+if (buf?.isDirty && !window.confirm(t('editor.buffers.confirm_switch_dirty'))) return
+// proceed with write + setPaneContent
+```
+(This is identical to the existing `onBufferSwitch` dirty guard from Commit 3; extract a tiny helper if both become repetitive.)
+
+Run C3-7: passes.
+
+**Step 6 — NewTabPage empty state (F8)**
+
+Write A2-7. Seed a profile with columns all pinning editor-module providers; disable editor module; assert empty-state element renders.
+
+Fix: in `NewTabPage.tsx`:
+```
+const filteredProviders = providers.filter(...)
+const byId = new Map(filteredProviders.map(p => [p.id, p]))
+const visibleColumns = profile.columns
+  .map(col => col.entries.map(e => byId.get(e.id)).filter(Boolean))
+  .filter(col => col.length > 0)
+
+if (visibleColumns.length === 0) {
+  return <NewTabEmptyState />  // reuse existing empty-state component
+}
+// else render grid using filteredProviders / visibleColumns
+```
+Run A2-7 + existing A2-4 + A2-5: all pass.
+
+**Step 7 — i18n keys (both locales)**
+
+Add:
+- `editor.buffers.rename_exists_error` — "A buffer with that name already exists." / "已存在同名暫存檔。"
+- `editor.buffers.delete_locked_refused` — "This buffer is open in a locked tab. Unlock or close the tab first." / "此暫存檔在鎖定的分頁中開啟。請先解鎖或關閉該分頁。"
+- `editor.buffers.delete_dirty_confirm` — "Delete {count} buffer(s) with unsaved changes?" / "刪除 {count} 個有未儲存變更的暫存檔？"
+- `editor.buffers.delete_one_confirm` — "Delete this buffer?" / "確定刪除此暫存檔？"
+
+**Step 8 — Final verification**
+
+```
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/editor-restructure-pr2 && cd spa && pnpm run lint
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/editor-restructure-pr2 && cd spa && npx vitest run
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/editor-restructure-pr2 && cd spa && pnpm run build
+```
+
+Expected: all 48 new tests green; only 3 pre-existing `hosts.test.ts` failures remain.
+
+### 5b.3 Acceptance (mirrors spec v1.4 §7 Commit 4)
+
+Verified via tests S1-9, B2-12, B2-13, B2-14, B2-15, C3-7, A2-7; plus:
+- `grep -n 'persisted.state' spa/src/stores/useEditorSettingsStore.ts` returns at least one line.
+- `grep -n 'editor.buffers.rename_exists_error\|delete_locked_refused' spa/src/components/editor/EditorBuffersPane.tsx` returns matches.
+
+### 5b.4 Verification commands
+(same as other commits — see above).
+
+---
+
 ## 6. Cross-commit dependencies
 
 **Commit 2 → Commit 1:**
@@ -811,8 +998,8 @@ PR ready to merge when:
 - [ ] All 3 commits pass `cd spa && pnpm run lint && npx vitest run &&
       pnpm run build` independently (green on each HEAD, not just the
       final merge).
-- [ ] All 41 Vitest cases green (no skipped / pending / .todo).
-- [ ] Spec v1.3 §7 acceptance lists for C1/C2/C3 fully ticked.
+- [ ] All 48 Vitest cases green (no skipped / pending / .todo).
+- [ ] Spec v1.4 §7 acceptance lists for C1/C2/C3/C4 fully ticked.
 - [ ] `grep -r editor_buffers spa/src` empty (except migration guards
       if any).
 - [ ] `grep -r BufferListSection spa/src` empty (post Commit 2).
@@ -830,4 +1017,4 @@ PR ready to merge when:
       fontSize integration, `editor-buffers` deep-link URL, dirty-
       buffer-switch prompt UX).
 
-*End of plan v1.3.*
+*End of plan v1.4.*
