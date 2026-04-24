@@ -48,7 +48,7 @@ func TestProjection_CcAndCodexCoexist(t *testing.T) {
 			AgentType: "codex",
 			Status:    agentpkg.StatusRunning,
 			StartedAt: 20,
-			Subagents: []string{"sub-1"},
+			Subagents: []agentpkg.SubagentRef{{ID: "sub-1", Type: "codex"}},
 		},
 	})
 
@@ -61,7 +61,7 @@ func TestProjection_CcAndCodexCoexist(t *testing.T) {
 	if projections[0].TopFrame == nil || projections[0].TopFrame.AgentType != "codex" {
 		t.Fatalf("top = %+v, want codex", projections[0].TopFrame)
 	}
-	if len(projections[0].Subagents) != 1 || projections[0].Subagents[0] != "sub-1" {
+	if len(projections[0].Subagents) != 1 || projections[0].Subagents[0].ID != "sub-1" {
 		t.Fatalf("subagents = %v, want [sub-1]", projections[0].Subagents)
 	}
 }

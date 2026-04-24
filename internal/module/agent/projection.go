@@ -3,6 +3,7 @@ package agent
 import (
 	"sort"
 
+	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/store"
 )
 
@@ -10,7 +11,7 @@ type SessionProjection struct {
 	PaneID       string
 	PrimaryFrame *store.Frame
 	TopFrame     *store.Frame
-	Subagents    []string
+	Subagents    []agentpkg.SubagentRef
 }
 
 func BuildSessionProjections(frames []store.Frame) []SessionProjection {
@@ -36,7 +37,7 @@ func BuildSessionProjections(frames []store.Frame) []SessionProjection {
 
 func buildPaneProjection(paneID string, frames []store.Frame) SessionProjection {
 	if len(frames) == 0 {
-		return SessionProjection{PaneID: paneID, Subagents: []string{}}
+		return SessionProjection{PaneID: paneID, Subagents: []agentpkg.SubagentRef{}}
 	}
 	sorted := append([]store.Frame(nil), frames...)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -48,9 +49,9 @@ func buildPaneProjection(paneID string, frames []store.Frame) SessionProjection 
 
 	primary := sorted[0]
 	top := sorted[len(sorted)-1]
-	subagents := append([]string(nil), top.Subagents...)
+	subagents := append([]agentpkg.SubagentRef(nil), top.Subagents...)
 	if subagents == nil {
-		subagents = []string{}
+		subagents = []agentpkg.SubagentRef{}
 	}
 	return SessionProjection{
 		PaneID:       paneID,

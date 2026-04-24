@@ -76,7 +76,15 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 				After:         before,
 			}, err
 		}
-		frame.Subagents = updateSubagents(frame.Subagents, req.EventName, agentID)
+		ref := agentpkg.SubagentRef{
+			ID:        agentID,
+			Type:      firstNonEmpty(strFromDetail(result.Detail, "agent_type"), frame.AgentType),
+			StartedAt: broadcastTs,
+			// SourcePID / SourceStartTime / IsProxy left zero: native SubagentStart
+			// refs have no distinct source process identity. Proxy attaches (PR-2b)
+			// set these explicitly.
+		}
+		frame.Subagents = updateSubagents(frame.Subagents, req.EventName, ref)
 		frame.LastSeenAt = broadcastTs
 		stored, err := m.frames.Upsert(*frame)
 		if err != nil {
@@ -98,16 +106,16 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		return nil, FrameTraceMeta{}, err
 	}
 
-	subagents := []string{}
+	subagents := []agentpkg.SubagentRef{}
 	startedAt := broadcastTs
 	parentFrameID := ""
 	if frame != nil {
-		subagents = append([]string(nil), frame.Subagents...)
+		subagents = append([]agentpkg.SubagentRef(nil), frame.Subagents...)
 		startedAt = frame.StartedAt
 		parentFrameID = frame.ParentFrameID
 	}
 	if req.EventName == "SessionStart" {
-		subagents = []string{}
+		subagents = []agentpkg.SubagentRef{}
 	}
 	if parentFrameID == "" {
 		parent, err := m.frames.FindByPanePID(req.TmuxPaneID, info.PPID)
@@ -195,26 +203,31 @@ func summarizeFrame(frame *store.Frame) map[string]any {
 		"parent_frame_id":  frame.ParentFrameID,
 		"process_start_at": frame.ProcessStartTime,
 		"status":           string(frame.Status),
-		"subagents":        append([]string(nil), frame.Subagents...),
+		"subagents":        append([]agentpkg.SubagentRef(nil), frame.Subagents...),
 	}
 }
 
-func updateSubagents(current []string, eventName, agentID string) []string {
+// updateSubagents mutates a frame's subagent list in response to a
+// SubagentStart / SubagentStop event. Matching is by ref.ID only; Type does
+// not participate so a cross-type hook (proxy path in PR-2b) cleanly replaces
+// a native ref on stop. On SubagentStart the first-write wins — an existing
+// ref keeps its StartedAt/SourcePID/SourceStartTime/IsProxy.
+func updateSubagents(current []agentpkg.SubagentRef, eventName string, ref agentpkg.SubagentRef) []agentpkg.SubagentRef {
 	if current == nil {
-		current = []string{}
+		current = []agentpkg.SubagentRef{}
 	}
 	switch eventName {
 	case "SubagentStart":
 		for _, existing := range current {
-			if existing == agentID {
+			if existing.ID == ref.ID {
 				return current
 			}
 		}
-		return append(current, agentID)
+		return append(current, ref)
 	case "SubagentStop":
-		filtered := make([]string, 0, len(current))
+		filtered := make([]agentpkg.SubagentRef, 0, len(current))
 		for _, existing := range current {
-			if existing != agentID {
+			if existing.ID != ref.ID {
 				filtered = append(filtered, existing)
 			}
 		}
@@ -224,14 +237,14 @@ func updateSubagents(current []string, eventName, agentID string) []string {
 	}
 }
 
-func syncProjectionState(currentStatus map[string]agentpkg.Status, subagents map[string][]string, tmuxSession string, projection *SessionProjection) {
+func syncProjectionState(currentStatus map[string]agentpkg.Status, subagents map[string][]agentpkg.SubagentRef, tmuxSession string, projection *SessionProjection) {
 	if projection == nil || projection.TopFrame == nil {
 		delete(currentStatus, tmuxSession)
 		delete(subagents, tmuxSession)
 		return
 	}
 	currentStatus[tmuxSession] = projection.TopFrame.Status
-	subagents[tmuxSession] = append([]string(nil), projection.Subagents...)
+	subagents[tmuxSession] = append([]agentpkg.SubagentRef(nil), projection.Subagents...)
 }
 
 func buildProjectionNormalized(projection *SessionProjection, fallbackAgentType, eventName string, broadcastTs int64, result agentpkg.DeriveResult) agentpkg.NormalizedEvent {
@@ -239,7 +252,7 @@ func buildProjectionNormalized(projection *SessionProjection, fallbackAgentType,
 		AgentType:    fallbackAgentType,
 		Status:       string(result.Status),
 		Model:        result.Model,
-		Subagents:    []string{},
+		Subagents:    []agentpkg.SubagentRef{},
 		RawEventName: eventName,
 		BroadcastTs:  broadcastTs,
 		Detail:       result.Detail,
@@ -247,7 +260,7 @@ func buildProjectionNormalized(projection *SessionProjection, fallbackAgentType,
 	if projection == nil {
 		return normalized
 	}
-	normalized.Subagents = append([]string(nil), projection.Subagents...)
+	normalized.Subagents = append([]agentpkg.SubagentRef(nil), projection.Subagents...)
 	if projection.TopFrame == nil {
 		normalized.Status = string(agentpkg.StatusClear)
 		return normalized
@@ -255,6 +268,26 @@ func buildProjectionNormalized(projection *SessionProjection, fallbackAgentType,
 	normalized.AgentType = projection.TopFrame.AgentType
 	normalized.Status = string(projection.TopFrame.Status)
 	return normalized
+}
+
+// firstNonEmpty returns a if non-empty, else b.
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// strFromDetail looks up a string field in a DeriveResult.Detail map.
+// Returns "" when the key is missing or the value is not a string.
+func strFromDetail(detail map[string]any, key string) string {
+	if detail == nil {
+		return ""
+	}
+	if v, ok := detail[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 func (m *Module) projectionForSession(sessionName string) (*SessionProjection, error) {

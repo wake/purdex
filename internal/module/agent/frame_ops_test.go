@@ -417,6 +417,61 @@ func TestSendSnapshot_CollapsesMultiplePanesInSession(t *testing.T) {
 	}
 }
 
+func TestUpdateSubagents_StartAddsRef(t *testing.T) {
+	start := agentpkg.SubagentRef{ID: "a", Type: "cc", StartedAt: 10}
+	got := updateSubagents(nil, "SubagentStart", start)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0] != start {
+		t.Fatalf("got[0] = %+v, want %+v", got[0], start)
+	}
+}
+
+func TestUpdateSubagents_StartDuplicateIDKeepsExisting(t *testing.T) {
+	existing := agentpkg.SubagentRef{ID: "a", Type: "cc", StartedAt: 10}
+	dup := agentpkg.SubagentRef{ID: "a", Type: "cc", StartedAt: 20}
+	got := updateSubagents([]agentpkg.SubagentRef{existing}, "SubagentStart", dup)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0] != existing {
+		t.Fatalf("got[0] = %+v, want %+v (no overwrite)", got[0], existing)
+	}
+}
+
+func TestUpdateSubagents_StopRemovesByID(t *testing.T) {
+	a := agentpkg.SubagentRef{ID: "a", Type: "cc"}
+	b := agentpkg.SubagentRef{ID: "b", Type: "cc"}
+	got := updateSubagents([]agentpkg.SubagentRef{a, b}, "SubagentStop", agentpkg.SubagentRef{ID: "a"})
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0] != b {
+		t.Fatalf("got[0] = %+v, want %+v", got[0], b)
+	}
+}
+
+func TestUpdateSubagents_StopIgnoresType(t *testing.T) {
+	existing := agentpkg.SubagentRef{ID: "a", Type: "cc"}
+	// Stop ref has Type="codex" but ID matches; Type must not participate in matching.
+	got := updateSubagents([]agentpkg.SubagentRef{existing}, "SubagentStop", agentpkg.SubagentRef{ID: "a", Type: "codex"})
+	if len(got) != 0 {
+		t.Fatalf("len = %d, want 0 (ID match removes regardless of Type)", len(got))
+	}
+}
+
+func TestUpdateSubagents_StopMissingIsNoop(t *testing.T) {
+	a := agentpkg.SubagentRef{ID: "a", Type: "cc"}
+	got := updateSubagents([]agentpkg.SubagentRef{a}, "SubagentStop", agentpkg.SubagentRef{ID: "b"})
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0] != a {
+		t.Fatalf("got[0] = %+v, want %+v", got[0], a)
+	}
+}
+
 func TestSendSnapshot_IncludesLegacySessionsWithoutFrames(t *testing.T) {
 	m := newTestModule(t)
 	fakeTmux := tmux.NewFakeExecutor()

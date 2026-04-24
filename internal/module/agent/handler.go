@@ -287,7 +287,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 // buildNormalized creates a NormalizedEvent from the derive result and current state.
 func (m *Module) buildNormalized(tmuxSession, eventName, agentType string, broadcastTs int64, result agentpkg.DeriveResult) agentpkg.NormalizedEvent {
 	m.mu.Lock()
-	subs := make([]string, len(m.subagents[tmuxSession]))
+	subs := make([]agentpkg.SubagentRef, len(m.subagents[tmuxSession]))
 	copy(subs, m.subagents[tmuxSession])
 	m.mu.Unlock()
 

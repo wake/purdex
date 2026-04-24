@@ -17,7 +17,7 @@ type Frame struct {
 	PPID             int
 	ProcessStartTime string
 	ParentFrameID    string
-	Subagents        []string
+	Subagents        []agentpkg.SubagentRef
 	Status           agentpkg.Status
 	StartedAt        int64
 	LastSeenAt       int64
@@ -87,7 +87,7 @@ func (s *FramesStore) Upsert(frame Frame) (Frame, error) {
 			frame.StartedAt = frame.LastSeenAt
 		}
 		if frame.Subagents == nil {
-			frame.Subagents = []string{}
+			frame.Subagents = []agentpkg.SubagentRef{}
 		}
 	}
 	if frame.LastSeenAt == 0 {
@@ -242,7 +242,7 @@ func scanFrame(scanner frameScanner) (Frame, error) {
 		return Frame{}, fmt.Errorf("unmarshal subagents: %w", err)
 	}
 	if frame.Subagents == nil {
-		frame.Subagents = []string{}
+		frame.Subagents = []agentpkg.SubagentRef{}
 	}
 	return frame, nil
 }

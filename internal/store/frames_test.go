@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
@@ -225,5 +226,106 @@ func TestFramesStore_UpsertSameIdentityKeepsStoredFrameID(t *testing.T) {
 	}
 	if got.PPID != 101 || got.Status != agentpkg.StatusRunning {
 		t.Fatalf("stored frame = %+v, want updated fields", *got)
+	}
+}
+
+func TestFrames_UpsertAndReadSubagentRefs(t *testing.T) {
+	s := openTestFramesStore(t)
+
+	want := []agentpkg.SubagentRef{{ID: "s1", Type: "cc", StartedAt: 10}}
+	if _, err := s.Upsert(Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "A",
+		Subagents:        want,
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	got, err := s.GetByIdentity("%5", 200, "A")
+	if err != nil {
+		t.Fatalf("GetByIdentity: %v", err)
+	}
+	if got == nil {
+		t.Fatal("frame not found")
+	}
+	if len(got.Subagents) != 1 {
+		t.Fatalf("subagents len = %d, want 1", len(got.Subagents))
+	}
+	if got.Subagents[0] != want[0] {
+		t.Fatalf("subagents[0] = %+v, want %+v", got.Subagents[0], want[0])
+	}
+}
+
+func TestFrames_EmptySubagentsPreserved(t *testing.T) {
+	s := openTestFramesStore(t)
+
+	if _, err := s.Upsert(Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "A",
+		Subagents:        nil,
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	got, err := s.GetByIdentity("%5", 200, "A")
+	if err != nil {
+		t.Fatalf("GetByIdentity: %v", err)
+	}
+	if got == nil {
+		t.Fatal("frame not found")
+	}
+	if got.Subagents == nil {
+		t.Fatal("Subagents should be non-nil empty slice, got nil")
+	}
+	if len(got.Subagents) != 0 {
+		t.Fatalf("Subagents len = %d, want 0", len(got.Subagents))
+	}
+}
+
+func TestFrames_SubagentsJSONShapeSmoke(t *testing.T) {
+	s := openTestFramesStore(t)
+
+	if _, err := s.Upsert(Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "A",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:        "s1",
+			Type:      "cc",
+			StartedAt: 10,
+		}},
+		Status:     agentpkg.StatusIdle,
+		StartedAt:  10,
+		LastSeenAt: 10,
+		Verified:   true,
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	var raw string
+	err := s.db.QueryRow(`SELECT subagents_json FROM agent_frames WHERE pane_id = ? AND pid = ? AND process_start_time = ?`, "%5", 200, "A").Scan(&raw)
+	if err != nil {
+		t.Fatalf("QueryRow: %v", err)
+	}
+	for _, key := range []string{`"id"`, `"type"`, `"started_at"`, `"source_pid"`, `"source_start_time"`} {
+		if !strings.Contains(raw, key) {
+			t.Errorf("subagents_json missing key %s: %s", key, raw)
+		}
 	}
 }

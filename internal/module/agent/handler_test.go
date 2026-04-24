@@ -419,8 +419,11 @@ func TestHandleEvent_OpenCodeValidSubagentBroadcasts(t *testing.T) {
 		if !strings.Contains(env.Value, `"raw_event_name":"SubagentStart"`) {
 			t.Fatalf("broadcast value missing raw_event_name: %s", env.Value)
 		}
-		if !strings.Contains(env.Value, `"subagents":["call-1"]`) {
-			t.Fatalf("broadcast value missing subagent membership: %s", env.Value)
+		if !strings.Contains(env.Value, `"id":"call-1"`) {
+			t.Fatalf("broadcast value missing subagent id=call-1: %s", env.Value)
+		}
+		if !strings.Contains(env.Value, `"type":"Explore"`) {
+			t.Fatalf("broadcast value missing subagent type=Explore: %s", env.Value)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for SubagentStart broadcast")
@@ -518,7 +521,10 @@ func TestBuildNormalized_EmptySubagentsIsNotNil(t *testing.T) {
 func TestBuildNormalized_WithSubagents(t *testing.T) {
 	m := newTestModule(t)
 	m.mu.Lock()
-	m.subagents["work"] = []string{"agent-1", "agent-2"}
+	m.subagents["work"] = []agentpkg.SubagentRef{
+		{ID: "agent-1", Type: "cc"},
+		{ID: "agent-2", Type: "cc"},
+	}
 	m.mu.Unlock()
 
 	result := agentpkg.DeriveResult{Valid: true}
@@ -533,7 +539,7 @@ func TestBuildNormalized_WithSubagents(t *testing.T) {
 func TestRenameSession(t *testing.T) {
 	m := newTestModule(t)
 	m.mu.Lock()
-	m.subagents["old-session"] = []string{"agent-1"}
+	m.subagents["old-session"] = []agentpkg.SubagentRef{{ID: "agent-1", Type: "cc"}}
 	m.currentStatus["old-session"] = agentpkg.StatusRunning
 	m.mu.Unlock()
 
@@ -548,7 +554,7 @@ func TestRenameSession(t *testing.T) {
 	if _, ok := m.currentStatus["old-session"]; ok {
 		t.Error("old-session should be removed from currentStatus")
 	}
-	if subs := m.subagents["new-session"]; len(subs) != 1 || subs[0] != "agent-1" {
+	if subs := m.subagents["new-session"]; len(subs) != 1 || subs[0].ID != "agent-1" {
 		t.Errorf("new-session subagents: want [agent-1], got %v", subs)
 	}
 	if m.currentStatus["new-session"] != agentpkg.StatusRunning {
@@ -573,7 +579,7 @@ func TestRenameSession_NoOldData(t *testing.T) {
 func TestRenameSessionAtomic_Success(t *testing.T) {
 	m := newTestModule(t)
 	m.mu.Lock()
-	m.subagents["old-name"] = []string{"agent-1"}
+	m.subagents["old-name"] = []agentpkg.SubagentRef{{ID: "agent-1", Type: "cc"}}
 	m.currentStatus["old-name"] = agentpkg.StatusRunning
 	m.mu.Unlock()
 
@@ -591,7 +597,7 @@ func TestRenameSessionAtomic_Success(t *testing.T) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if subs := m.subagents["new-name"]; len(subs) != 1 || subs[0] != "agent-1" {
+	if subs := m.subagents["new-name"]; len(subs) != 1 || subs[0].ID != "agent-1" {
 		t.Errorf("subagents should be transferred to new-name, got %v", subs)
 	}
 	if _, ok := m.subagents["old-name"]; ok {
@@ -602,7 +608,7 @@ func TestRenameSessionAtomic_Success(t *testing.T) {
 func TestRenameSessionAtomic_CallbackErrorSkipsTransfer(t *testing.T) {
 	m := newTestModule(t)
 	m.mu.Lock()
-	m.subagents["old-name"] = []string{"agent-1"}
+	m.subagents["old-name"] = []agentpkg.SubagentRef{{ID: "agent-1", Type: "cc"}}
 	m.mu.Unlock()
 
 	wantErr := errStub("rename failed")
@@ -1415,7 +1421,7 @@ func TestHandleEvent_CatalogMiss_NoStatusUpdate(t *testing.T) {
 	// Seed pre-existing state to verify it's untouched.
 	m.mu.Lock()
 	m.currentStatus["work"] = agentpkg.StatusRunning
-	m.subagents["work"] = []string{"existing-sub"}
+	m.subagents["work"] = []agentpkg.SubagentRef{{ID: "existing-sub", Type: "cc"}}
 	m.mu.Unlock()
 
 	sub := m.core.Events.AddTestSubscriber()
@@ -1430,12 +1436,12 @@ func TestHandleEvent_CatalogMiss_NoStatusUpdate(t *testing.T) {
 
 	m.mu.Lock()
 	gotStatus := m.currentStatus["work"]
-	gotSubs := append([]string(nil), m.subagents["work"]...)
+	gotSubs := append([]agentpkg.SubagentRef(nil), m.subagents["work"]...)
 	m.mu.Unlock()
 	if gotStatus != agentpkg.StatusRunning {
 		t.Errorf("currentStatus = %q, want running (catalog miss must not mutate)", gotStatus)
 	}
-	if len(gotSubs) != 1 || gotSubs[0] != "existing-sub" {
+	if len(gotSubs) != 1 || gotSubs[0].ID != "existing-sub" {
 		t.Errorf("subagents = %v, want [existing-sub]", gotSubs)
 	}
 

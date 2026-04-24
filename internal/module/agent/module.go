@@ -39,7 +39,7 @@ type Module struct {
 
 	mu             sync.Mutex
 	currentStatus  map[string]agentpkg.Status
-	subagents      map[string][]string
+	subagents      map[string][]agentpkg.SubagentRef
 	activeWatchers map[string]string // tmuxSession → agentType
 
 	// statusSnapshots caches the latest statusline payload per sessionCode.
@@ -76,7 +76,7 @@ func New(events *store.AgentEventStore) *Module {
 		traces:          traces,
 		registry:        agentpkg.NewRegistry(),
 		currentStatus:   make(map[string]agentpkg.Status),
-		subagents:       make(map[string][]string),
+		subagents:       make(map[string][]agentpkg.SubagentRef),
 		activeWatchers:  make(map[string]string),
 		statusSnapshots: make(map[string]statusSnapshot),
 		testObservers:   make(map[string]*testObserver),
