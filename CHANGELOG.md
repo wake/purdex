@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.220] - 2026-04-25
+
+### Fix(spa): Editor UI polish — rotation, alignment, line highlight, settings layout (#629)
+
+Editor Restructure 落地後的四個小 polish，純視覺對齊、無邏輯變動。
+
+- 拼圖片（module-owned contribution marker）改為往右 30° 旋轉（原本 -12°），在 sidebar 10-12px 下輪廓更清晰；SettingsSidebar / HostSidebar / WorkspaceSettingsPage 三處同步
+- EditorPurdexSettingsSection 重寫對齊 canonical pattern（Appearance / Terminal / Sync / Interface 共用的 `<h2>` + `<SettingItem>` 佈局），並把所有字串抽到 `settings.editor.*` i18n keys（EN + zh-TW 共 16 條）
+- EditorToolbar 麵包屑路徑原本 `items-start` + `pt-0.5` nudge 導致文字偏上；改為 `items-center` 讓 path 與 action 按鈕同軸
+- Monaco 當前行高亮從預設邊框改為 VSCode 風格的淡背景亮度：新定義 `purdex-dark` theme 繼承 `vs-dark`，將 `editor.lineHighlightBorder` 設為透明、`editor.lineHighlightBackground` 設為 `#FFFFFF0D`（約 5% 白）
+
 ## [1.0.0-alpha.219] - 2026-04-24
 
 ### Feat(spa): Editor restructure — Buffers pane + HSR migration + breadcrumb popover (#623)
