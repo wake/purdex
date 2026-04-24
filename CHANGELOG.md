@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0-alpha.219] - 2026-04-24
+
+### Feat(spa): Editor restructure — Buffers pane + HSR migration + breadcrumb popover (#623)
+
+把 Editor 模組收攏到 PR #617 的 module-owned contribution framework 下，同時把 `/buffer/*` 從 legacy settings tab 升級成正式 pane + breadcrumb popover 快切，並透過 `EditorPurdexSettingsSection` 讓 Monaco 六個 preference 成為使用者可控。六個 commit / 53 tests / 六輪 codex review（3 spec + 3 PR-diff）。
+
+- 新 `useEditorSettingsStore`（Zustand + persist，key `purdex-editor-settings`）：`tabSize` / `insertSpaces` / `wordWrap` / `lineNumbers` / `minimap` / `fontSize` 六欄位 + 合理 defaults + clamp / merge-sanitize rehydrate；S1-9 regression guard 鎖住 happy-path rehydrate
+- `MonacoWrapper.tsx` 所有 option 從 store 讀，無 hardcoded 殘留
+- Editor 模組取得 `localId:'editor'` HSR entry（scope:`purdex`, order:9）；legacy `registerSettingsSection({id:'editor-buffers',...})` 移除；sidebar "Editor" 行為**首個**帶 puzzle-piece marker（`isModuleOwnedContribution` 首次 true）
+- `SettingsPage` 對舊書籤 `/settings/editor-buffers` URL 做 alias redirect 自動導到新 section；i18n `settings.section.editor_buffers` → `settings.section.editor`（EN "Editor" / zh-TW "編輯器"）
+- 新 pane kind `editor-buffers`：list（`/buffer/*` 直子，name-asc 排序）+ toolbar（New / Rename / Delete / Open）+ multi-select + smart-open + empty-state；`ManageBuffersNewTabCard`（order 6, `moduleId:'editor'`）以標準 `onSelect` 取代當前 NewTab pane（**非** singleton）
+- Smart-open（spec §4.6）：active tab → tabOrder scan → fallback 新 tab；eligibility filter（`source==='inapp'` AND buffer 非 dirty）— 來源不同或 dirty 的 pane 跳過，永不靜默吞資料
+- Delete flow（spec §4.9.5）：locked-tab 硬拒 + dirty-specific confirm + single-confirm；close loop 同時呼叫 `useTabStore.closePane` **與** `useEditorStore.closePane(paneId, bufferKey)` 避免背景 tab 的 stale buffer 復活已刪檔（G2）
+- Rename：pre-check `backend.stat` 防止覆寫同名（F4）；`performBufferRename` helper 三步 sync（`backend.rename` → `useTabStore.renameEditorPanes` → `useEditorStore.renameBuffer`），rename 後 pane `filePath` + buffer key + paneState.bufferKey + buffer metadata（language / languageSource）全部跟進（G1 + R6 MED）
+- Breadcrumb popover：EditorToolbar 的 Purdex chip 在 `source.type==='inapp'` 時成為 `<button>`；React portal + z-100（高於 Monaco popup）；列出所有 `/buffer/*`（aria-current 標當前）+ "Manage buffers..." 連結；`onSwitch` / `onNewBuffer` 帶 dirty guard（`window.confirm`）
+- `openBufferByName(name)` helper — toolbar Open 與 row double-click 走同一入口，用顯式 name argument 取代 stale `singleSelected` closure（G3）
+- Ancillary switch sites：`tabToUrl` / `getPaneLabel` / `getPaneIcon` 全加 `editor-buffers` branch；`NewTabProvider.moduleId?:string` 新欄位 + `NewTabPage` module-aware filter；NewTabPage 全 column filter 為 null 時 fallback 到 empty state（F8）
+- Refactor：`createMetadata` / `detectLanguage` / `detectLanguageSource` / `untitledStoragePath` / `untitledSuggestedName` 抽到新的 `spa/src/lib/editor-language.ts` util，兩個 editor 元件共用，防止下一次 rename 流程再度漂移
+
+53 個 Vitest cases：S1-1..9 / R1-1..5 / L1-1 / M1-1 / P2-1 / B2-1..18 / B2-16b / B2-16c / N2-1..3 / A2-1..7 / C3-1..7 / T3-1..2。
+
+Review 歷程：Spec 三輪（R1 15 findings → R2 3 HIGH → R3 4 HIGH，全吸收 v1.1→v1.3）→ PR-diff 三輪（R4 1 CRIT 撤回 + 7 HIGH 作 Commit 4；R5 0 CRIT + 2 HIGH + 4 MED + 1 LOW，must-fix G1/G2/G3/G7 作 Commit 5；R6 focused adversarial 9/10 probe clean + 1 MED 作 Commit 6）。R5 的 G4/G5/G6 開 follow-up issue #625 / #626 / #627。
+
+
+
 ## [1.0.0-alpha.218] - 2026-04-24
 
 ### Feat(agent): Phase 2 PR-2a — SubagentRef schema + wire breaking upgrade (#622)
