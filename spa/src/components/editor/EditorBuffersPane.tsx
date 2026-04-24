@@ -20,6 +20,23 @@ function bufferKeyFor(source: FileSource, filePath: string): string {
   return `${source.type}:${filePath}`
 }
 
+// v1.5 G1 fix — mirror EditorPane's rename three-step sync (backend →
+// tab-layout → editor-store). Without this, renaming via the buffers
+// pane leaves the editor store keyed by the old path: a subsequent Save
+// would write to the stale filename and a re-open would resurrect a
+// ghost buffer. Reused only inside `handleRenameConfirm`, but extracted
+// so the three calls stay visually grouped.
+async function performBufferRename(fromPath: string, targetPath: string) {
+  const backend = getFsBackend({ type: 'inapp' })
+  if (!backend) throw new Error('InApp backend unavailable')
+  await backend.rename(fromPath, targetPath)
+  const source: FileSource = { type: 'inapp' }
+  useTabStore.getState().renameEditorPanes(source, fromPath, targetPath)
+  const oldKey = bufferKeyFor(source, fromPath)
+  const newKey = bufferKeyFor(source, targetPath)
+  useEditorStore.getState().renameBuffer(oldKey, newKey)
+}
+
 /**
  * EditorBuffersPane — management UI for `/buffer/*` entries (spec §4.5).
  *
@@ -132,7 +149,7 @@ export function EditorBuffersPane(_: PaneRendererProps) {
         }
       }
       try {
-        await backend.rename(fromPath, targetPath)
+        await performBufferRename(fromPath, targetPath)
         setRenameTarget(null)
         setRenameError(null)
         setSelected(new Set())
@@ -220,8 +237,18 @@ export function EditorBuffersPane(_: PaneRendererProps) {
     try {
       // Step 1: close every affected pane BEFORE deleting the underlying
       // file. All panes are guaranteed unlocked (pre-check guard above).
+      // v1.5 G2 fix — also drop the editor-store paneState + buffer.
+      // `useTabStore.closePane` only tears down the tab-layout pane; if
+      // the hosting tab is inactive (EditorPane already unmounted /
+      // never mounted), the editor store keeps the stale entry and the
+      // post-delete backend write resurrects the buffer on next mount.
+      // `expectedBufferKey` guards against a concurrent pane rebind.
       for (const [tabId, pane] of openPanes) {
         useTabStore.getState().closePane(tabId, pane.id)
+        if (pane.content.kind === 'editor') {
+          const key = bufferKeyFor(pane.content.source, pane.content.filePath)
+          useEditorStore.getState().closePane(pane.id, key)
+        }
       }
       // Step 2: actually delete the files.
       for (const path of targets) {
@@ -236,9 +263,14 @@ export function EditorBuffersPane(_: PaneRendererProps) {
     }
   }, [selectedArray, t, refresh])
 
-  const handleOpen = useCallback(() => {
-    if (!singleSelected) return
-    const path = `/buffer/${singleSelected}`
+  // v1.5 G3 fix — explicit-arg helper so double-click passes the
+  // clicked row's name directly instead of racing the `setSelected`
+  // state commit. Previously `handleOpen` read `singleSelected` from a
+  // stale closure inside `queueMicrotask`, which captured `null` (or
+  // the wrong row) and silently no-op'd. Toolbar Open and row double-
+  // click now share one entry point.
+  const openBufferByName = useCallback((name: string) => {
+    const path = `/buffer/${name}`
     const newContent: PaneContent = {
       kind: 'editor',
       source: { type: 'inapp' },
@@ -291,7 +323,12 @@ export function EditorBuffersPane(_: PaneRendererProps) {
     const tab = createTab(newContent)
     addTab(tab)
     setActiveTab(tab.id)
-  }, [singleSelected])
+  }, [])
+
+  const handleOpen = useCallback(() => {
+    if (!singleSelected) return
+    openBufferByName(singleSelected)
+  }, [singleSelected, openBufferByName])
 
   // --- Render ---
 
@@ -372,11 +409,7 @@ export function EditorBuffersPane(_: PaneRendererProps) {
                     data-name={f.name}
                     aria-selected={isSelected}
                     onClick={() => toggleSelect(f.name)}
-                    onDoubleClick={() => {
-                      setSelected(new Set([f.name]))
-                      // Defer so state commits before handleOpen reads it.
-                      queueMicrotask(() => handleOpen())
-                    }}
+                    onDoubleClick={() => openBufferByName(f.name)}
                     className={
                       'w-full flex items-center justify-between px-3 py-2 text-left text-xs transition-colors ' +
                       (isSelected

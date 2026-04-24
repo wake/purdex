@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { EditorBuffersPane } from './EditorBuffersPane'
 import type { Pane, Tab } from '../../types/tab'
 import type { FsBackend } from '../../lib/fs-backend'
-import type { FileEntry, FileStat } from '../../types/fs'
+import type { FileEntry, FileStat, FileSource } from '../../types/fs'
 
 // Mock fs-backend: list/write/delete/rename are per-test spies. `stat/mkdir/read`
 // are stubbed with inert defaults. The helper below installs a fresh mock into
@@ -45,11 +45,13 @@ vi.mock('../../stores/useI18nStore', () => ({
 
 // useTabStore mock — spies + controllable state. `setPaneContent`, `setActiveTab`,
 // `addTab`, and `closePane` all log an event so ordering assertions are
-// straightforward.
+// straightforward. `renameEditorPanes` mutates `tabStoreState.tabs` so that
+// B2-16 can assert on post-rename tab-layout state as if it were real.
 const setPaneContentSpy = vi.fn()
 const setActiveTabSpy = vi.fn()
 const addTabSpy = vi.fn()
 const closePaneSpy = vi.fn()
+const renameEditorPanesSpy = vi.fn()
 
 type TabStoreState = {
   tabs: Record<string, Tab>
@@ -59,6 +61,7 @@ type TabStoreState = {
   setActiveTab: typeof setActiveTabSpy
   addTab: typeof addTabSpy
   closePane: typeof closePaneSpy
+  renameEditorPanes: typeof renameEditorPanesSpy
 }
 
 let tabStoreState: TabStoreState
@@ -163,6 +166,7 @@ beforeEach(() => {
   setActiveTabSpy.mockReset()
   addTabSpy.mockReset()
   closePaneSpy.mockReset()
+  renameEditorPanesSpy.mockReset()
 
   setPaneContentSpy.mockImplementation((tabId: string, paneId: string) => {
     eventLog.push(`setPaneContent:${tabId}:${paneId}`)
@@ -176,6 +180,36 @@ beforeEach(() => {
   closePaneSpy.mockImplementation((tabId: string, paneId: string) => {
     eventLog.push(`close:${tabId}:${paneId}`)
   })
+  // Real-ish rename: walk every tab layout and swap any editor-pane
+  // `filePath` === oldPath (inapp source only, matching production helper).
+  // Keeps B2-16's assertions checking live state rather than a bare spy.
+  renameEditorPanesSpy.mockImplementation(
+    (source: FileSource, oldPath: string, newPath: string) => {
+      eventLog.push(`renameEditorPanes:${oldPath}:${newPath}`)
+      const nextTabs: Record<string, Tab> = {}
+      for (const [tabId, tab] of Object.entries(tabStoreState.tabs)) {
+        if (tab.layout.type === 'leaf') {
+          const c = tab.layout.pane.content
+          if (
+            c.kind === 'editor' &&
+            c.source.type === source.type &&
+            c.filePath === oldPath
+          ) {
+            nextTabs[tabId] = {
+              ...tab,
+              layout: {
+                type: 'leaf',
+                pane: { ...tab.layout.pane, content: { ...c, filePath: newPath } },
+              },
+            }
+            continue
+          }
+        }
+        nextTabs[tabId] = tab
+      }
+      tabStoreState.tabs = nextTabs
+    },
+  )
 
   tabStoreState = {
     tabs: {},
@@ -185,6 +219,7 @@ beforeEach(() => {
     setActiveTab: setActiveTabSpy,
     addTab: addTabSpy,
     closePane: closePaneSpy,
+    renameEditorPanes: renameEditorPanesSpy,
   }
 
   mockBackend = {
@@ -609,6 +644,178 @@ describe('EditorBuffersPane', () => {
     })
     // Neither pane was targeted for overwrite.
     expect(setPaneContentSpy).not.toHaveBeenCalled()
+  })
+
+  it('B2-16: rename syncs tab layout + editor store (v1.5 G1)', async () => {
+    // Seed a tab whose layout hosts an editor pane bound to
+    // /buffer/foo.md; seed editor-store with a dirty buffer at the
+    // matching key + a paneState. After rename(foo → bar) the pane's
+    // filePath, the buffer key, and the paneState.bufferKey must all
+    // refer to bar.md — otherwise Save lands on the wrong path (the
+    // exact failure mode G1 guards against).
+    mockBackend.list.mockResolvedValue([
+      { name: 'foo.md', isDir: false, size: 10 },
+    ] as FileEntry[])
+    // Destination does not exist → rename proceeds past the pre-check.
+    mockBackend.stat.mockRejectedValue(new Error('not found'))
+    tabStoreState.tabs = {
+      T1: makeEditorTab('T1', 'P1', '/buffer/foo.md', false),
+    }
+    tabStoreState.tabOrder = ['T1']
+    tabStoreState.activeTabId = 'T1'
+    const editorModule = await import('../../stores/useEditorStore')
+    editorModule.useEditorStore.setState({
+      buffers: {
+        'inapp:/buffer/foo.md': {
+          content: 'hello',
+          savedContent: '',
+          isDirty: true,
+          lastStat: null,
+          modelId: 'm-foo',
+          language: 'markdown',
+          languageSource: 'extension',
+          eol: 'lf',
+          encoding: 'utf8',
+        },
+      },
+      paneStates: {
+        P1: {
+          bufferKey: 'inapp:/buffer/foo.md',
+          editorMode: 'raw',
+          showDiff: false,
+          cursorPosition: { line: 1, column: 1 },
+          monacoViewState: null,
+        },
+      },
+    })
+    render(<EditorBuffersPane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    fireEvent.click(row)
+    fireEvent.click(screen.getByTestId('toolbar-rename'))
+    const input = await screen.findByTestId('rename-input')
+    fireEvent.change(input, { target: { value: 'bar.md' } })
+    fireEvent.click(screen.getByTestId('rename-confirm'))
+
+    await waitFor(() => {
+      expect(mockBackend.rename).toHaveBeenCalledWith('/buffer/foo.md', '/buffer/bar.md')
+    })
+    // Tab layout updated via renameEditorPanes.
+    await waitFor(() => {
+      const leaf = tabStoreState.tabs.T1.layout
+      expect(leaf.type).toBe('leaf')
+      if (leaf.type !== 'leaf') throw new Error('expected leaf')
+      expect(leaf.pane.content).toMatchObject({
+        kind: 'editor',
+        source: { type: 'inapp' },
+        filePath: '/buffer/bar.md',
+      })
+    })
+    // Editor-store buffer re-keyed; dirty preserved.
+    const editorState = editorModule.useEditorStore.getState()
+    expect(editorState.buffers['inapp:/buffer/bar.md']).toBeDefined()
+    expect(editorState.buffers['inapp:/buffer/bar.md']?.isDirty).toBe(true)
+    expect(editorState.buffers['inapp:/buffer/foo.md']).toBeUndefined()
+    // paneState bufferKey follows the rename.
+    expect(editorState.paneStates.P1?.bufferKey).toBe('inapp:/buffer/bar.md')
+    expect(renameEditorPanesSpy).toHaveBeenCalledWith(
+      { type: 'inapp' },
+      '/buffer/foo.md',
+      '/buffer/bar.md',
+    )
+  })
+
+  it('B2-17: delete cleans editor store for background tabs (v1.5 G2)', async () => {
+    // Background tab scenario: tab is not active, EditorPane never
+    // mounted / already unmounted — so the editor-store still holds a
+    // stale buffer + paneState. Delete must clean them up explicitly;
+    // otherwise a later re-open would resurrect the dirty buffer.
+    mockBackend.list.mockResolvedValue([
+      { name: 'x.md', isDir: false, size: 10 },
+    ] as FileEntry[])
+    tabStoreState.tabs = {
+      T1: makeEditorTab('T1', 'P1', '/buffer/x.md', false),
+    }
+    tabStoreState.tabOrder = ['T1']
+    tabStoreState.activeTabId = null // background (not active)
+    const editorModule = await import('../../stores/useEditorStore')
+    editorModule.useEditorStore.setState({
+      buffers: {
+        'inapp:/buffer/x.md': {
+          content: 'unsaved',
+          savedContent: '',
+          isDirty: true,
+          lastStat: null,
+          modelId: 'm-x',
+          language: 'markdown',
+          languageSource: 'extension',
+          eol: 'lf',
+          encoding: 'utf8',
+        },
+      },
+      paneStates: {
+        P1: {
+          bufferKey: 'inapp:/buffer/x.md',
+          editorMode: 'raw',
+          showDiff: false,
+          cursorPosition: { line: 1, column: 1 },
+          monacoViewState: null,
+        },
+      },
+    })
+    // Dirty buffer → dirty-specific confirm → accept.
+    vi.stubGlobal('confirm', vi.fn(() => true))
+
+    render(<EditorBuffersPane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    fireEvent.click(row)
+    fireEvent.click(screen.getByTestId('toolbar-delete'))
+
+    await waitFor(() => {
+      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/x.md')
+    })
+    const editorState = editorModule.useEditorStore.getState()
+    expect(editorState.buffers['inapp:/buffer/x.md']).toBeUndefined()
+    expect(editorState.paneStates.P1).toBeUndefined()
+    expect(closePaneSpy).toHaveBeenCalledWith('T1', 'P1')
+  })
+
+  it('B2-18: double-click opens the row actually clicked (v1.5 G3)', async () => {
+    // No pre-selection. Double-clicking the SECOND row must open that
+    // row's buffer — not the first, not a no-op. The old code called
+    // `setSelected(...)` then `queueMicrotask(handleOpen)`; the
+    // microtask's closure captured a STALE `singleSelected === null`
+    // because state updates aren't observable in the same tick. v1.5
+    // extracts `openBufferByName(name)` so the explicit arg wins.
+    mockBackend.list.mockResolvedValue([
+      { name: 'a.md', isDir: false, size: 10 },
+      { name: 'b.md', isDir: false, size: 10 },
+      { name: 'c.md', isDir: false, size: 10 },
+    ] as FileEntry[])
+    // Seed an eligible active tab editor pane (clean, inapp) so the
+    // smart-open lands in Rule 1 rather than creating a new tab.
+    tabStoreState.tabs = {
+      TA: makeEditorTab('TA', 'P1', '/buffer/existing.md', false),
+    }
+    tabStoreState.tabOrder = ['TA']
+    tabStoreState.activeTabId = 'TA'
+    const editorModule = await import('../../stores/useEditorStore')
+    editorModule.useEditorStore.setState({ buffers: {}, paneStates: {} })
+
+    render(<EditorBuffersPane pane={makePane()} isActive />)
+    const rows = await screen.findAllByTestId('buffer-row')
+    // Sorted alphabetically: a, b, c. Double-click b.md (index 1).
+    fireEvent.doubleClick(rows[1])
+
+    await waitFor(() => {
+      expect(setPaneContentSpy).toHaveBeenCalledWith('TA', 'P1', {
+        kind: 'editor',
+        source: { type: 'inapp' },
+        filePath: '/buffer/b.md',
+      })
+    })
+    // Not the first row, not a no-op.
+    expect(setPaneContentSpy).toHaveBeenCalledTimes(1)
+    expect(addTabSpy).not.toHaveBeenCalled()
   })
 
   it('A2-6: pane keeps rendering when the editor module is disabled', async () => {
