@@ -347,7 +347,7 @@ func (r *RealExecutor) SetWindowOptionGlobal(option, value string) error {
 }
 
 func (r *RealExecutor) ShowWindowOption(option string) (string, error) {
-	out, err := exec.Command("tmux", "show-window-option", "-gqv", option).Output()
+	out, err := exec.Command("tmux", "show-options", "-w", "-g", "-q", "-v", option).Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			stderr := string(exitErr.Stderr)
@@ -355,7 +355,7 @@ func (r *RealExecutor) ShowWindowOption(option string) (string, error) {
 				return "", nil
 			}
 		}
-		return "", fmt.Errorf("tmux show-window-option %s: %w", option, err)
+		return "", fmt.Errorf("tmux show-options -w %s: %w", option, err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
