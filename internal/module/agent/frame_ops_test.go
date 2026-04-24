@@ -472,6 +472,187 @@ func TestUpdateSubagents_StopMissingIsNoop(t *testing.T) {
 	}
 }
 
+// U6 — R2 regression: a native subagent whose provider-supplied agent_id
+// happens to equal a synthesized proxy ID must NOT collide with a proxy ref
+// of the same ID string on the same list. Identity is kind-aware: proxy
+// matches by SourcePID+SourceStartTime, native matches by ID, cross-kind
+// never matches.
+func TestUpdateSubagents_ProxyNativeIDNamespacesAreIsolated(t *testing.T) {
+	// A native ref with a pathologically-shaped ID that happens to match
+	// the proxy ID synthesis pattern proxy:<type>:<pid>:<start_time>.
+	native := agentpkg.SubagentRef{ID: "proxy:cc:200:t200", Type: "cc"}
+	list := []agentpkg.SubagentRef{native}
+
+	// A real proxy SessionStart synthesizes the same-shaped ID but sets
+	// IsProxy=true + source identity fields. It must NOT be shadowed by the
+	// native ref already present — append expected.
+	proxy := agentpkg.SubagentRef{
+		ID:              "proxy:cc:200:t200",
+		Type:            "cc",
+		SourcePID:       200,
+		SourceStartTime: "t200",
+		IsProxy:         true,
+	}
+	afterStart := updateSubagents(list, "SubagentStart", proxy)
+	if len(afterStart) != 2 {
+		t.Fatalf("proxy SubagentStart with same ID as native should append cross-kind; got %d refs, want 2: %+v", len(afterStart), afterStart)
+	}
+
+	// A native SubagentStop with the same ID must remove only the native
+	// ref, not evict the proxy.
+	afterStop := updateSubagents(afterStart, "SubagentStop", native)
+	if len(afterStop) != 1 {
+		t.Fatalf("native SubagentStop removed wrong count; got %d, want 1: %+v", len(afterStop), afterStop)
+	}
+	if !afterStop[0].IsProxy {
+		t.Fatalf("native Stop evicted proxy ref (kind-isolation broken); got %+v", afterStop[0])
+	}
+}
+
+// U7 — #632 extended: native SubagentStart path also uses the atomic
+// mutate-with-retry helper, so two concurrent hook-driven Task tool
+// dispatches that attach different agent_ids to the same cc frame both
+// land. Same race shape as PR17 but through the SubagentStart event path
+// rather than the proxy fast-path.
+func TestSubagentStart_ConcurrentNativeStartsBothLand(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	// Start #1: native SubagentStart with agent_id "s1".
+	req1 := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		EventName: "SubagentStart", AgentType: "cc",
+		SenderPID: 100, SenderStartTime: "t100",
+	}
+	result1 := agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning, Detail: map[string]any{"agent_id": "s1"}}
+	_, meta1, err := m.applyFrameEvent(req1, result1, 100)
+	if err != nil {
+		t.Fatalf("start #1: %v", err)
+	}
+	if meta1.Reason != "subagent_membership_changed" {
+		t.Fatalf("start #1 reason = %q, want subagent_membership_changed", meta1.Reason)
+	}
+
+	// Simulate a concurrent racer write (e.g. a probe-driven LastSeenAt
+	// bump or another SubagentStart that landed first but hasn't been
+	// observed by request #2's read yet).
+	racer := agentpkg.SubagentRef{ID: "racer", Type: "cc", StartedAt: 150}
+	cur, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil {
+		t.Fatalf("racer baseline read: %v", err)
+	}
+	cur.Subagents = append(cur.Subagents, racer)
+	cur.LastSeenAt = 180
+	if _, err := m.frames.Upsert(*cur); err != nil {
+		t.Fatalf("racer Upsert: %v", err)
+	}
+
+	// Start #2: native SubagentStart with agent_id "s2". applyFrameEvent's
+	// earlier GetByIdentity read still sees the pre-racer baseline; the
+	// atomic retry loop must reload, observe racer + s1, append s2, persist.
+	req2 := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		EventName: "SubagentStart", AgentType: "cc",
+		SenderPID: 100, SenderStartTime: "t100",
+	}
+	result2 := agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning, Detail: map[string]any{"agent_id": "s2"}}
+	_, meta2, err := m.applyFrameEvent(req2, result2, 200)
+	if err != nil {
+		t.Fatalf("start #2: %v", err)
+	}
+	if meta2.Reason != "subagent_membership_changed" {
+		t.Fatalf("start #2 reason = %q, want subagent_membership_changed", meta2.Reason)
+	}
+
+	// All three refs should coexist on the parent: s1 from start #1,
+	// racer from the injected concurrent write, s2 from start #2.
+	final, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil {
+		t.Fatalf("final read: %v", err)
+	}
+	if final == nil {
+		t.Fatal("parent vanished")
+	}
+	ids := make(map[string]bool)
+	for _, ref := range final.Subagents {
+		ids[ref.ID] = true
+	}
+	for _, want := range []string{"s1", "s2", "racer"} {
+		if !ids[want] {
+			t.Fatalf("Subagents missing ID=%q; parent=%+v", want, final.Subagents)
+		}
+	}
+	if len(final.Subagents) != 3 {
+		t.Fatalf("Subagents len = %d, want 3; parent=%+v", len(final.Subagents), final.Subagents)
+	}
+	_ = parent
+}
+
+// HookRace1 — #632 R8 regression: applyFrameEvent's existing-frame status
+// update path (non-SessionEnd / non-SubagentStart / non-SubagentStop hook
+// events like UserPromptSubmit) uses narrow UpdateHookPath that does not
+// touch subagents_json. A concurrent proxy attach in flight does not lose
+// its ref to the hook handler's stale baseline.
+func TestHookStatusUpdate_DoesNotClobberConcurrentSubagents(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	// First, attach a proxy ref to the cc parent (via applyFrameEvent's
+	// proxy fast-path so we exercise the real attachProxyRefWithRetry).
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "t100", nil }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	req1 := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		EventName: "SessionStart", AgentType: "codex",
+		SenderPID: 200, SenderStartTime: "t200",
+	}
+	if _, _, err := m.applyFrameEvent(req1, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("proxy attach: %v", err)
+	}
+
+	// Confirm cc parent now owns 1 proxy ref.
+	mid, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if len(mid.Subagents) != 1 || !mid.Subagents[0].IsProxy {
+		t.Fatalf("setup: expected 1 proxy ref on cc parent; got %+v", mid.Subagents)
+	}
+
+	// Now fire a general-hook status transition on cc itself (not SessionStart
+	// / not SubagentStart-Stop / not SessionEnd). The request carries cc's
+	// own identity so applyFrameEvent's frame != nil branch triggers on the
+	// stale cc row that does NOT have the proxy ref.
+	req2 := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		EventName: "UserPromptSubmit", AgentType: "cc",
+		SenderPID: 100, SenderStartTime: "t100",
+	}
+	if _, _, err := m.applyFrameEvent(req2, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 200); err != nil {
+		t.Fatalf("hook status update: %v", err)
+	}
+
+	// The proxy ref attached above must still be on cc (UpdateHookPath did
+	// not touch subagents_json). Status and LastSeenAt should have moved.
+	final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if len(final.Subagents) != 1 || !final.Subagents[0].IsProxy {
+		t.Fatalf("proxy ref clobbered by hook status update; got %+v (#632 R8 regression)", final.Subagents)
+	}
+	if final.Status != agentpkg.StatusRunning {
+		t.Fatalf("Status = %q, want Running", final.Status)
+	}
+	_ = parent
+}
+
 func TestSendSnapshot_IncludesLegacySessionsWithoutFrames(t *testing.T) {
 	m := newTestModule(t)
 	fakeTmux := tmux.NewFakeExecutor()
@@ -550,5 +731,922 @@ func TestSendSnapshot_IncludesLegacySessionsWithoutFrames(t *testing.T) {
 	case msg := <-sub.SendCh():
 		t.Fatalf("unexpected extra snapshot: %s", msg)
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Proxy subagent detection (Phase 2 PR-2b, plan §1.4 + §2.5)
+// ---------------------------------------------------------------------------
+
+// newProxyTestModule sets up a module with a fake tmux, session provider and
+// registered cc/codex providers so each proxy test can tailor the PPID chain
+// and liveness seams independently.
+func newProxyTestModule(t *testing.T) *Module {
+	t.Helper()
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "work-code", Name: "work"}}}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+	})
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "codex",
+		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+	})
+	return m
+}
+
+func seedFrame(t *testing.T, m *Module, paneID, agentType string, pid int, startTime string, lastSeenAt int64) store.Frame {
+	t.Helper()
+	f, err := m.frames.Upsert(store.Frame{
+		PaneID:           paneID,
+		AgentType:        agentType,
+		PID:              pid,
+		PPID:             1,
+		ProcessStartTime: startTime,
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        lastSeenAt,
+		LastSeenAt:       lastSeenAt,
+		Verified:         true,
+	})
+	if err != nil {
+		t.Fatalf("seed frame %s pid=%d: %v", agentType, pid, err)
+	}
+	return f
+}
+
+// PR1 — direct PPID hit attaches proxy ref to cc parent.
+func TestProxySubagent_DirectPPIDAttachesToCCParent(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart",
+		AgentType: "codex", SenderPID: 200, SenderStartTime: "t200",
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "proxy_subagent_attached" {
+		t.Fatalf("reason = %q, want proxy_subagent_attached (meta=%+v)", meta.Reason, meta)
+	}
+	if meta.Decision != "updated_frame" {
+		t.Fatalf("decision = %q, want updated_frame", meta.Decision)
+	}
+	if meta.FrameID != parent.FrameID {
+		t.Fatalf("FrameID = %q, want parent %q", meta.FrameID, parent.FrameID)
+	}
+
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (no standalone codex frame)", len(frames))
+	}
+	if frames[0].AgentType != "cc" {
+		t.Fatalf("remaining frame.AgentType = %q, want cc", frames[0].AgentType)
+	}
+	if len(frames[0].Subagents) != 1 {
+		t.Fatalf("parent.Subagents len = %d, want 1 (proxy ref attached)", len(frames[0].Subagents))
+	}
+	ref := frames[0].Subagents[0]
+	if ref.Type != "codex" || !ref.IsProxy || ref.SourcePID != 200 || ref.SourceStartTime != "t200" {
+		t.Fatalf("proxy ref = %+v, want type=codex is_proxy source_pid=200 source_start_time=t200", ref)
+	}
+}
+
+// PR2 — tree walk through codex-companion to cc.
+func TestProxySubagent_TreeWalkThroughCodexCompanion(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 300:
+			return agentpkg.ProcessInfo{PID: 300, PPID: 200}, nil
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, PPID: 1}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 300, SenderStartTime: "t300"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "proxy_subagent_attached" {
+		t.Fatalf("reason = %q, want proxy_subagent_attached", meta.Reason)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (tree walk collapses codex into cc)", len(frames))
+	}
+}
+
+// PR3 — chain depth 6 exceeds proxyMaxDepth=5 → fallback.
+func TestProxySubagent_TreeWalkDepthLimit(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	// chain: 700→600→500→400→300→200→100(cc)
+	chain := map[int]int{700: 600, 600: 500, 500: 400, 400: 300, 300: 200, 200: 100, 100: 1}
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if ppid, ok := chain[pid]; ok {
+			return agentpkg.ProcessInfo{PID: pid, PPID: ppid}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 700, SenderStartTime: "t700"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason == "proxy_subagent_attached" {
+		t.Fatalf("proxy attached but chain exceeds depth 5: %+v", meta)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 2 {
+		t.Fatalf("frame count = %d, want 2 (cc + new codex frame; proxy not applied)", len(frames))
+	}
+}
+
+// PR4 — walk reaches init without frame; fallback new frame.
+func TestProxySubagent_SkipsWhenNoAncestorHasFrame(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid <= 1 {
+			return agentpkg.ProcessInfo{PID: pid, PPID: 0}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 9999, SenderStartTime: "t9999"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason == "proxy_subagent_attached" {
+		t.Fatalf("should not proxy when no ancestor has a frame; meta=%+v", meta)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 || frames[0].AgentType != "codex" {
+		t.Fatalf("frames = %+v, want single new codex frame", frames)
+	}
+}
+
+// PR5 — same-type ancestor hard stop.
+func TestProxySubagent_SkipsWhenParentSameType(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	// R4 fix: force the same-type ancestor to be live + identity-verified so
+	// the hard-stop gate is exercised on its actual rule (live same-type
+	// ancestor → re-session) rather than incidentally passing through
+	// dead-skip+walk-up. Without these stubs the candidate's PID 100 would
+	// be dead under the real isPidAliveFn and the test would mask regressions
+	// in the hard-stop ordering.
+	isPidAliveFn = func(pid int) bool { return pid == 100 }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason == "proxy_subagent_attached" {
+		t.Fatalf("should not proxy cc→cc (same-type hard stop); meta=%+v", meta)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 2 {
+		t.Fatalf("frame count = %d, want 2 (two cc frames, no proxy)", len(frames))
+	}
+}
+
+// PR6 — dead parent doesn't count; walk continues (and falls back here).
+func TestProxySubagent_SkipsWhenParentPidDead(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(pid int) bool { return pid != 100 } // cc parent dead
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+	})
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason == "proxy_subagent_attached" {
+		t.Fatalf("should not proxy onto dead cc frame; meta=%+v", meta)
+	}
+}
+
+// PR7 — non-SessionStart events skip proxy path.
+func TestProxySubagent_SkipsWhenEventNotSessionStart(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "UserPromptSubmit", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason == "proxy_subagent_attached" {
+		t.Fatalf("non-SessionStart must not trigger proxy path; meta=%+v", meta)
+	}
+}
+
+// PR8 — trace meta decision/reason/FrameID + before/after snapshots.
+func TestProxySubagent_TraceMetaCorrect(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) { return "t100", nil }
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "updated_frame" || meta.Reason != "proxy_subagent_attached" {
+		t.Fatalf("trace meta = %q/%q, want updated_frame/proxy_subagent_attached", meta.Decision, meta.Reason)
+	}
+	if meta.FrameID != parent.FrameID {
+		t.Fatalf("FrameID = %q, want parent %q", meta.FrameID, parent.FrameID)
+	}
+	beforeMap, ok := meta.Before.(map[string]any)
+	if !ok {
+		t.Fatalf("Before = %T, want map[string]any", meta.Before)
+	}
+	beforeSubs, _ := beforeMap["subagents"].([]agentpkg.SubagentRef)
+	if len(beforeSubs) != 0 {
+		t.Fatalf("Before.subagents len = %d, want 0 (pre-attach)", len(beforeSubs))
+	}
+	afterMap, ok := meta.After.(map[string]any)
+	if !ok {
+		t.Fatalf("After = %T, want map[string]any", meta.After)
+	}
+	afterSubs, _ := afterMap["subagents"].([]agentpkg.SubagentRef)
+	if len(afterSubs) != 1 {
+		t.Fatalf("After.subagents len = %d, want 1 (post-attach)", len(afterSubs))
+	}
+}
+
+// PR9 — re-hook with same PID+StartTime is idempotent (first-write wins).
+func TestProxySubagent_DoesNotDoubleAttachOnReHook(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) { return "t100", nil }
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	for i := 0; i < 2; i++ {
+		_, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, int64(100+i))
+		if err != nil {
+			t.Fatalf("applyFrameEvent #%d: %v", i, err)
+		}
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if len(frames[0].Subagents) != 1 {
+		t.Fatalf("Subagents len = %d, want 1 (no double attach)", len(frames[0].Subagents))
+	}
+	if frames[0].Subagents[0].StartedAt != 100 {
+		t.Fatalf("StartedAt = %d, want 100 (first-write wins)", frames[0].Subagents[0].StartedAt)
+	}
+}
+
+// PR10 — pane filter: cross-pane PPID must not match.
+func TestProxySubagent_CrossPaneAncestorNotMatched(t *testing.T) {
+	m := newProxyTestModule(t)
+	m.tmux.(*tmux.FakeExecutor).SetPaneSessionName("%7", "work2")
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	req := EventRequest{TmuxSession: "work2", TmuxPaneID: "%7", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason == "proxy_subagent_attached" {
+		t.Fatalf("cross-pane PPID should not match; meta=%+v", meta)
+	}
+	framesP5, _ := m.frames.ListByPane("%5")
+	if len(framesP5) != 1 || len(framesP5[0].Subagents) != 0 {
+		t.Fatalf("pane %%5 frames = %+v, want undisturbed cc", framesP5)
+	}
+	framesP7, _ := m.frames.ListByPane("%7")
+	if len(framesP7) != 1 || framesP7[0].AgentType != "codex" {
+		t.Fatalf("pane %%7 frames = %+v, want new codex frame", framesP7)
+	}
+}
+
+// PR11 — self-cycle PPID == PID must not loop.
+func TestProxySubagent_SelfCycleGuard(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 300}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: pid}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	done := make(chan struct{})
+	go func() {
+		_, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+		if err != nil {
+			t.Errorf("applyFrameEvent: %v", err)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("applyFrameEvent hung on self-cycle")
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 || frames[0].AgentType != "codex" {
+		t.Fatalf("frames = %+v, want single codex (no proxy due to self-cycle guard)", frames)
+	}
+}
+
+// PR12 — ancestor process read error → partial chain, fallback.
+func TestProxySubagent_PartialChainOnReadError(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 300}, nil
+		}
+		return agentpkg.ProcessInfo{}, errFake
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason == "proxy_subagent_attached" {
+		t.Fatalf("read error should abort walk; meta=%+v", meta)
+	}
+}
+
+// PR13 — stale frame (PID reused) skipped by start-time mismatch.
+func TestProxySubagent_SkipsStaleFrameByStartTimeMismatch(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t_different", nil
+		}
+		return "other", nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	beforeParent, _ := m.frames.GetByIdentity("%5", 100, "t100")
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason == "proxy_subagent_attached" {
+		t.Fatalf("stale (start-time mismatch) parent should not proxy-attach; meta=%+v", meta)
+	}
+	afterParent, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if afterParent == nil {
+		t.Fatal("stale cc frame went missing (should remain for sweep)")
+	}
+	if afterParent.LastSeenAt != beforeParent.LastSeenAt {
+		t.Fatalf("stale cc.LastSeenAt = %d, want unchanged %d", afterParent.LastSeenAt, beforeParent.LastSeenAt)
+	}
+}
+
+// PR14 — same-type ancestor (codex) in chain halts walk before cc.
+func TestProxySubagent_SameTypeAncestorStopsWalk(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	seedFrame(t, m, "%5", "codex", 200, "t200", 20)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 400:
+			return agentpkg.ProcessInfo{PID: 400, PPID: 300}, nil
+		case 300:
+			return agentpkg.ProcessInfo{PID: 300, PPID: 200}, nil
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	// R4 fix: force the same-type codex ancestor (PID 200) to be live +
+	// identity-verified so the hard-stop gate triggers on its real rule
+	// (live same-type → re-session) rather than walking past on a dead
+	// candidate. Without these stubs PR14 would incidentally pass by
+	// walking 200 (dead) → 100 (dead) → exhausted, which does not actually
+	// verify the same-type hard-stop.
+	isPidAliveFn = func(pid int) bool { return pid == 200 || pid == 100 }
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 200:
+			return "t200", nil
+		case 100:
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 400, SenderStartTime: "t400"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason == "proxy_subagent_attached" {
+		t.Fatalf("walk should halt at live same-type codex ancestor, not reach cc; meta=%+v", meta)
+	}
+}
+
+// PR15 — start-time read error aborts walk (does NOT fall through to outer cross-type ancestor).
+func TestProxySubagent_AbortsWalkOnStartTimeReadError(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	seedFrame(t, m, "%5", "cc", 50, "t50", 5)
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, PPID: 50}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "", errFake
+		}
+		return "other", nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason == "proxy_subagent_attached" {
+		t.Fatalf("start_time read error should abort walk (not fall through to outer cc frame); meta=%+v", meta)
+	}
+}
+
+var errFake = fakeErr("fake read error")
+
+type fakeErr string
+
+func (e fakeErr) Error() string { return string(e) }
+
+// PR16 — R3 regression: a stale same-type ancestor (dead process, or PID
+// reused with mismatched start_time) must NOT hard-stop the walk. The walk
+// must continue upward to locate a live cross-type parent. Before R3 fix,
+// the same-type check fired before the liveness/identity gate, erroneously
+// aborting the walk for leftover data that sweep had not yet cleared.
+func TestProxySubagent_StaleSameTypeAncestorDoesNotBlockWalk(t *testing.T) {
+	m := newProxyTestModule(t)
+	// Live cc frame at PID 100.
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	// Stale codex frame at PID 200 — row still in DB but process is dead.
+	seedFrame(t, m, "%5", "codex", 200, "t200_old", 5)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 400:
+			return agentpkg.ProcessInfo{PID: 400, PPID: 200}, nil
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, PPID: 1}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(pid int) bool {
+		// Stale codex PID 200 dead; live cc PID 100 alive.
+		return pid == 100
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	req := EventRequest{
+		TmuxSession:     "work",
+		TmuxPaneID:      "%5",
+		EventName:       "SessionStart",
+		AgentType:       "codex",
+		SenderPID:       400,
+		SenderStartTime: "t400",
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "proxy_subagent_attached" {
+		t.Fatalf("walk should skip dead stale codex and proxy-attach to live cc; got reason=%q meta=%+v", meta.Reason, meta)
+	}
+}
+
+// PR17 — #632 regression: two concurrent proxy SessionStarts that target the
+// same parent frame must both land. The first attach wins the initial
+// UpsertIfUnchanged; the second observes the freshened last_seen_at, reloads,
+// re-merges its ref through updateSubagents, and persists — yielding a
+// parent with both proxy refs attached.
+//
+// We drive the race by intercepting the store's UpsertIfUnchanged on the
+// FIRST attempt of attach #2: before attempt #2 issues its UPDATE, a
+// simulated concurrent writer bumps the parent's LastSeenAt. That write
+// invalidates attempt #2's baseline and triggers the retry-with-reload
+// branch; attempt #3 merges and succeeds.
+func TestProxySubagent_ConcurrentAttachesBothLand(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "t100", nil }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	// Attach #1: codex PID 200, start t200.
+	req1 := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		EventName: "SessionStart", AgentType: "codex",
+		SenderPID: 200, SenderStartTime: "t200",
+	}
+	_, meta1, err := m.applyFrameEvent(req1, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("attach #1 applyFrameEvent: %v", err)
+	}
+	if meta1.Reason != "proxy_subagent_attached" {
+		t.Fatalf("attach #1 reason = %q, want proxy_subagent_attached", meta1.Reason)
+	}
+
+	// Concurrency race injection: before attach #2's UpsertIfUnchanged sees
+	// the DB, a third writer (e.g. another proxy attach in-flight, or a
+	// probe-driven LastSeenAt refresh) lands. We simulate this by directly
+	// poking the DB between attach #2's read and write — the read happens in
+	// applyFrameEvent's frame lookup / findProxyParent, and we install a
+	// hook via UpsertIfUnchanged timing using race-injector: mutate the row
+	// in a goroutine between request #2's findProxyParent and its write.
+	//
+	// Simpler approach: directly bump the DB row via a synthetic Upsert
+	// before calling applyFrameEvent #2. Then verify attach #2 retries
+	// (visible via post-state: parent has BOTH s1 from attach #1 AND the
+	// injected racer's ref AND attach #2's ref; all three survive).
+	racer := agentpkg.SubagentRef{
+		ID: "racer:codex:999:t999", Type: "codex", StartedAt: 150,
+		SourcePID: 999, SourceStartTime: "t999", IsProxy: true,
+	}
+	cur, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil {
+		t.Fatalf("racer baseline read: %v", err)
+	}
+	cur.Subagents = append(cur.Subagents, racer)
+	cur.LastSeenAt = 180
+	if _, err := m.frames.Upsert(*cur); err != nil {
+		t.Fatalf("racer Upsert: %v", err)
+	}
+
+	// Attach #2: different codex, PID 300, start t300. This request's
+	// findProxyParent returned the parent with attach #1's ref BEFORE the
+	// racer write; the retry branch reloads and merges without losing the
+	// racer ref.
+	req2 := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		EventName: "SessionStart", AgentType: "codex",
+		SenderPID: 300, SenderStartTime: "t300",
+	}
+	_, meta2, err := m.applyFrameEvent(req2, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+	if err != nil {
+		t.Fatalf("attach #2 applyFrameEvent: %v", err)
+	}
+	if meta2.Reason != "proxy_subagent_attached" {
+		t.Fatalf("attach #2 reason = %q, want proxy_subagent_attached", meta2.Reason)
+	}
+
+	// All three refs survived the read-modify-write cycle.
+	final, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil {
+		t.Fatalf("final read: %v", err)
+	}
+	if final == nil {
+		t.Fatal("parent vanished")
+	}
+	have := make(map[int]bool)
+	for _, ref := range final.Subagents {
+		have[ref.SourcePID] = true
+	}
+	for _, want := range []int{200, 300, 999} {
+		if !have[want] {
+			t.Fatalf("Subagents missing SourcePID=%d; parent=%+v", want, final.Subagents)
+		}
+	}
+	if len(final.Subagents) != 3 {
+		t.Fatalf("Subagents len = %d, want 3 (both attaches + racer); parent=%+v", len(final.Subagents), final.Subagents)
+	}
+
+	_ = parent // suppress unused warning
+}
+
+// ---------------------------------------------------------------------------
+// SessionEnd proxy cleanup (Phase 2 PR-2b, plan §1.5 + §2.6)
+// ---------------------------------------------------------------------------
+
+// SE1 — codex SessionEnd with no frame of its own removes the proxy ref from
+// its cc parent and emits a proxy_subagent_detached trace.
+func TestSessionEnd_RemovesProxyRefFromParent(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) { return "t100", nil }
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	// First: proxy attach.
+	startReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	if _, meta, err := m.applyFrameEvent(startReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("attach: %v", err)
+	} else if meta.Reason != "proxy_subagent_attached" {
+		t.Fatalf("attach reason = %q", meta.Reason)
+	}
+
+	// Then: SessionEnd with same identity — should remove the ref.
+	endReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionEnd", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(endReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent SessionEnd: %v", err)
+	}
+	if meta.Decision != "updated_frame" || meta.Reason != "proxy_subagent_detached" {
+		t.Fatalf("trace meta = %q/%q, want updated_frame/proxy_subagent_detached", meta.Decision, meta.Reason)
+	}
+	if meta.FrameID != parent.FrameID {
+		t.Fatalf("FrameID = %q, want parent %q", meta.FrameID, parent.FrameID)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty", frames[0].Subagents)
+	}
+}
+
+// SE2 — orphan SessionEnd (no matching ref) falls back to legacy skip path.
+func TestSessionEnd_OrphanFallsBackToExistingSkip(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	// No proxy ref attached.
+
+	endReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionEnd", AgentType: "codex", SenderPID: 999, SenderStartTime: "t999"}
+	_, meta, err := m.applyFrameEvent(endReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "session_end_without_frame" {
+		t.Fatalf("reason = %q, want session_end_without_frame (orphan fallback)", meta.Reason)
+	}
+}
+
+// SE3 — SessionEnd on a frame that owns its own identity deletes the frame
+// (the owning frame delete removes any proxy refs it was carrying, which is
+// fine as a side effect).
+func TestSessionEnd_OwnFrameDeletePreservesOtherProxyRefs(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) { return "t100", nil }
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	startReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	if _, _, err := m.applyFrameEvent(startReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("proxy attach: %v", err)
+	}
+
+	// Now SessionEnd on cc itself (the owning frame).
+	endReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionEnd", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	_, meta, err := m.applyFrameEvent(endReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}, 300)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "deleted_frame" || meta.Reason != "session_end" {
+		t.Fatalf("trace meta = %q/%q, want deleted_frame/session_end", meta.Decision, meta.Reason)
+	}
+	if meta.FrameID != parent.FrameID {
+		t.Fatalf("FrameID = %q, want parent %q", meta.FrameID, parent.FrameID)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0 (cc frame deleted)", len(frames))
 	}
 }

@@ -2,10 +2,13 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/agent/probe"
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
@@ -79,11 +82,16 @@ func TestSweep_PreservesLiveFrames(t *testing.T) {
 	}
 	origAlive := isPidAliveFn
 	origStart := processStartTimeFn
+	origNow := nowFn
 	isPidAliveFn = func(pid int) bool { return true }
 	processStartTimeFn = func(pid int) (string, error) { return "live", nil }
+	// Pin "now" close to LastSeenAt so the idle_timeout rule does not fire
+	// on fixture frames using a simple sentinel LastSeenAt value.
+	nowFn = func() time.Time { return time.Unix(0, 10) }
 	t.Cleanup(func() {
 		isPidAliveFn = origAlive
 		processStartTimeFn = origStart
+		nowFn = origNow
 	})
 
 	if err := m.sweepOnce(); err != nil {
@@ -212,11 +220,14 @@ func TestSweep_DoesNotMassDeleteOnTmuxOutage(t *testing.T) {
 	}
 	origAlive := isPidAliveFn
 	origStart := processStartTimeFn
+	origNow := nowFn
 	isPidAliveFn = func(pid int) bool { return true }
 	processStartTimeFn = func(pid int) (string, error) { return "live", nil }
+	nowFn = func() time.Time { return time.Unix(0, 10) }
 	t.Cleanup(func() {
 		isPidAliveFn = origAlive
 		processStartTimeFn = origStart
+		nowFn = origNow
 	})
 
 	if err := m.sweepOnce(); err != nil {
@@ -228,6 +239,378 @@ func TestSweep_DoesNotMassDeleteOnTmuxOutage(t *testing.T) {
 	}
 	if len(frames) != 1 {
 		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Idle sweep (Phase 2 PR-2b, plan §1.6 + §1.8 + §2.7)
+// ---------------------------------------------------------------------------
+
+// IS1 — frame idle past threshold is cleared with broadcast reason=sweep:idle_timeout.
+func TestSweep_ClearsIdleFramesByLastSeen(t *testing.T) {
+	m := newSweepTestModule(t)
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: m.tmux}
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	// Seed frame with LastSeenAt=0; fake nowFn returns 2×threshold so the
+	// elapsed delta > threshold triggers the idle_timeout rule.
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "live",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        0,
+		LastSeenAt:       0,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "live", nil }
+	nowFn = func() time.Time { return time.Unix(0, int64(2*frameIdleThreshold)) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0 (idle frame should be cleared)", len(frames))
+	}
+
+	// Drain broadcast with reason=sweep:idle_timeout (inside escaped payload).
+	select {
+	case msg := <-sub.SendCh():
+		if !strings.Contains(string(msg), `sweep:idle_timeout`) {
+			t.Fatalf("broadcast = %s, want reason sweep:idle_timeout", msg)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for idle_timeout broadcast")
+	}
+}
+
+// IS2 — fresh frame (LastSeenAt within threshold) is preserved.
+func TestSweep_PreservesFreshFrames(t *testing.T) {
+	m := newSweepTestModule(t)
+
+	// Pretend "now" is 1h — fresh frame LastSeenAt at now-1min (delta < threshold).
+	fakeNow := int64(60 * time.Minute)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "live",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        fakeNow - int64(time.Minute),
+		LastSeenAt:       fakeNow - int64(time.Minute),
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "live", nil }
+	nowFn = func() time.Time { return time.Unix(0, fakeNow) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (fresh frame preserved)", len(frames))
+	}
+}
+
+// IS3 — idle sweep also stops the orphan activity watcher.
+func TestSweep_IdleClearStopsOrphanWatcher(t *testing.T) {
+	m := newSweepTestModule(t)
+	m.prober = probe.New(m.tmux)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "live",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        0,
+		LastSeenAt:       0,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+
+	// Register an active watcher for this session (simulating an in-flight
+	// Activity probe left over from a running/waiting status).
+	m.activeWatchers["work"] = "cc"
+	m.prober.StartWatch("work:", func(string, probe.ActivitySignal) {})
+	t.Cleanup(func() { m.prober.StopAllWatches() })
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "live", nil }
+	nowFn = func() time.Time { return time.Unix(0, int64(2*frameIdleThreshold)) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	if _, ok := m.activeWatchers["work"]; ok {
+		t.Fatal("activeWatchers[work] should be cleared after idle_timeout sweep")
+	}
+	if m.prober.HasWatcher("work:") {
+		t.Fatal("prober watcher for work: should be stopped after idle_timeout sweep")
+	}
+}
+
+// IS4 — pid_dead path also stops the orphan watcher (regression for the
+// pre-PR-2b bug that only deleted the map entry).
+func TestSweep_DeadPidAlsoStopsOrphanWatcher(t *testing.T) {
+	m := newSweepTestModule(t)
+	m.prober = probe.New(m.tmux)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "live",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+
+	m.activeWatchers["work"] = "cc"
+	m.prober.StartWatch("work:", func(string, probe.ActivitySignal) {})
+	t.Cleanup(func() { m.prober.StopAllWatches() })
+
+	origAlive := isPidAliveFn
+	isPidAliveFn = func(int) bool { return false } // dead
+	t.Cleanup(func() { isPidAliveFn = origAlive })
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	if _, ok := m.activeWatchers["work"]; ok {
+		t.Fatal("activeWatchers[work] should be cleared after pid_dead sweep")
+	}
+	if m.prober.HasWatcher("work:") {
+		t.Fatal("prober watcher should be stopped after pid_dead sweep (StopWatch leak fix)")
+	}
+}
+
+// IS5 — concurrent refresh between ListAll and DeleteIfUnchanged causes the
+// optimistic sweep to skip the frame rather than clobber the refreshed row.
+func TestSweep_IdleConditionalDeleteSkipsOnConcurrentRefresh(t *testing.T) {
+	m := newSweepTestModule(t)
+
+	// The frame starts idle (LastSeenAt=0). sweepOnce() will read the list
+	// first, then iterate. We simulate a concurrent hook refresh by bumping
+	// LastSeenAt between ListAll and the DELETE — achieved by swapping nowFn
+	// to run an Upsert on first call.
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "live",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        0,
+		LastSeenAt:       0,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "live", nil }
+	// First call (isPidAliveFn before idle check) reads the baseline now; we
+	// piggyback on nowFn to force a concurrent Upsert before the DELETE runs.
+	var raced bool
+	nowFn = func() time.Time {
+		if !raced {
+			raced = true
+			// Simulate concurrent hook refresh before our sweep DELETE.
+			_, _ = m.frames.Upsert(store.Frame{
+				PaneID:           "%5",
+				AgentType:        "cc",
+				PID:              200,
+				PPID:             1,
+				ProcessStartTime: "live",
+				Status:           agentpkg.StatusIdle,
+				StartedAt:        0,
+				LastSeenAt:       int64(30 * time.Minute),
+				Verified:         true,
+			})
+		}
+		return time.Unix(0, int64(2*frameIdleThreshold))
+	}
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (DeleteIfUnchanged should skip on refresh)", len(frames))
+	}
+	if frames[0].LastSeenAt != int64(30*time.Minute) {
+		t.Fatalf("LastSeenAt = %d, want refreshed value (concurrent Upsert preserved)", frames[0].LastSeenAt)
+	}
+}
+
+// IS6 — probe-driven status transitions (setProjectionTopStatus) refresh
+// LastSeenAt so the idle rule does not mis-classify a live agent at a shell
+// prompt as idle. R1 regression: v6 plan assumed hook traffic was the only
+// LastSeenAt source, but probe activity is the normal signal for
+// waiting/running/idle while hooks may be silent for > 1h.
+func TestSweep_PreservesLiveFrameAfterProbeActivity(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "live",
+		Status:           agentpkg.StatusRunning,
+		StartedAt:        0,
+		LastSeenAt:       0, // stale baseline — > 1h in the past from sweep's POV
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+
+	probeTime := time.Now().UnixNano()
+	if _, err := m.setProjectionTopStatus("work", agentpkg.StatusIdle); err != nil {
+		t.Fatalf("setProjectionTopStatus: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "live", nil }
+	// Sweep 30 min after probe activity — well within the 1h idle threshold.
+	nowFn = func() time.Time { return time.Unix(0, probeTime+int64(30*time.Minute)) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (probe-bumped LastSeenAt keeps frame alive)", len(frames))
+	}
+	if frames[0].LastSeenAt < probeTime {
+		t.Fatalf("LastSeenAt = %d, want >= %d (setProjectionTopStatus should have bumped it)", frames[0].LastSeenAt, probeTime)
+	}
+}
+
+// IS7 — R7 regression: setProjectionTopStatus does narrow column update
+// (status + last_seen_at only), so probe-driven status transitions do not
+// clobber concurrent Subagents mutations on the same row. Before the narrow
+// update fix, status updates round-tripped a stale Subagents baseline and
+// could overwrite refs added by concurrent proxy/native attaches.
+func TestSetProjectionTopStatus_DoesNotClobberConcurrentSubagents(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "live",
+		Subagents:        []agentpkg.SubagentRef{{ID: "a", Type: "cc", StartedAt: 10}},
+		Status:           agentpkg.StatusRunning,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert baseline: %v", err)
+	}
+
+	// Simulate a concurrent subagents mutation landing on the row after the
+	// probe callback has already read the projection but before its status
+	// write. Under the old whole-frame Upsert path, the probe callback's
+	// stale Subagents baseline would clobber this write.
+	racerBaseline, _ := m.frames.GetByIdentity("%5", 200, "live")
+	racerBaseline.Subagents = append(racerBaseline.Subagents,
+		agentpkg.SubagentRef{ID: "b", Type: "cc", StartedAt: 20},
+		agentpkg.SubagentRef{ID: "c", Type: "cc", StartedAt: 30})
+	racerBaseline.LastSeenAt = 30
+	if _, err := m.frames.Upsert(*racerBaseline); err != nil {
+		t.Fatalf("racer Upsert: %v", err)
+	}
+
+	// Probe callback fires. setProjectionTopStatus reads the (now-stale)
+	// projection, but under the narrow-update fix it only writes status +
+	// last_seen_at — the subagents_json column is untouched.
+	if _, err := m.setProjectionTopStatus("work", agentpkg.StatusIdle); err != nil {
+		t.Fatalf("setProjectionTopStatus: %v", err)
+	}
+
+	final, err := m.frames.GetByIdentity("%5", 200, "live")
+	if err != nil {
+		t.Fatalf("final read: %v", err)
+	}
+	if final == nil {
+		t.Fatal("frame vanished")
+	}
+	if final.Status != agentpkg.StatusIdle {
+		t.Fatalf("Status = %q, want Idle", final.Status)
+	}
+	if len(final.Subagents) != 3 {
+		t.Fatalf("Subagents len = %d, want 3 (concurrent writer's refs preserved); got %+v", len(final.Subagents), final.Subagents)
+	}
+	ids := make(map[string]bool)
+	for _, ref := range final.Subagents {
+		ids[ref.ID] = true
+	}
+	for _, want := range []string{"a", "b", "c"} {
+		if !ids[want] {
+			t.Fatalf("Subagents missing ID=%q; subagents_json was clobbered by status write", want)
+		}
 	}
 }
 
@@ -261,6 +644,7 @@ func TestSweep_ClearingFramePreservesSiblings(t *testing.T) {
 	}
 	origAlive := isPidAliveFn
 	origStart := processStartTimeFn
+	origNow := nowFn
 	isPidAliveFn = func(pid int) bool { return pid != 300 }
 	processStartTimeFn = func(pid int) (string, error) {
 		if pid == 200 {
@@ -268,9 +652,11 @@ func TestSweep_ClearingFramePreservesSiblings(t *testing.T) {
 		}
 		return "B", nil
 	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
 	t.Cleanup(func() {
 		isPidAliveFn = origAlive
 		processStartTimeFn = origStart
+		nowFn = origNow
 	})
 
 	if err := m.sweepOnce(); err != nil {

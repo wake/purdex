@@ -1,5 +1,55 @@
 # Changelog
 
+## [1.0.0-alpha.221] - 2026-04-25
+
+### Feat(agent): Phase 2 PR-2b — proxy detection + idle sweep + SubagentDots visual (#631)
+
+Lights rebuild Phase 2 收尾棒（PR-2a schema + wire 已於 alpha.218 落地）。把 PPID 祖先鏈 proxy 偵測、frame idle sweep、SubagentDots 視覺升級、以及 `subagents_json` 的多路 atomic RMW 全在一個 PR 內收齊。13 commits / 5 feat + 7 review-fix + 1 R4 test stub / 9 輪 codex review 全收斂 / R9 RMW inventory ship-ready approve。
+
+**後端（internal/agent + internal/store + internal/module/agent）**
+
+- **PPID 祖先鏈 proxy 偵測**（`findProxyParent`，depth=5）：cc pane 跑 `/codex:*` 不再建獨立 codex frame，而是掛進 cc parent 的 `Subagents` 標 `IsProxy=true`；live-only same-type hard-stop（dead/PID 重用的 stale 同 type ancestor 走 skip+walk-up，不阻 walk）+ `(SourcePID, SourceStartTime)` start_time identity 三分支
+- **SessionEnd proxy cleanup**（`removeProxyRefForSender`）：proxy 來源 agent 結束時從 parent 移除 ref
+- **Idle sweep 第三條規則**（1h + conditional DELETE）：無 hook 活動 1h 的 frame 被 sweep 清；用新 `DeleteIfUnchanged` store method 防 concurrent refresh 被 clobber；`setProjectionTopStatus` 在 probe 活動轉 Status 同時 bump `LastSeenAt` 避免誤清 live frame
+- **`clearFrame` 拆 `afterFrameCleared` 共用 helper**：pid_dead / pid_reused / idle_timeout 三路徑統一 side-effects pipeline；同步修正 orphan StopWatch bug（清 frame 時若 session 有 active activity watcher 補 `StopWatch`）
+- **Kind-aware `subagentRefMatches`**：`updateSubagents` 比對時 proxy 用 `(SourcePID, SourceStartTime)`、native 用 `ID`，`IsProxy` 不同永不 match — 防 proxy 合成 ID 字串與 native agent_id 撞
+- **Atomic RMW on `subagents_json`**：新 `UpsertIfUnchanged` + `mutateSubagentsWithRetry` helper（proxy attach/detach + native SubagentStart/Stop 共用，bounded retry `proxyUpsertMaxAttempts = 3`）；probe path / general hook path / SessionStart reset 改 narrow column updates（`UpdateStatusAndLastSeen` / `UpdateHookPath` / `UpdateHookPathAndResetSubagents`），不碰 `subagents_json` — race 消失於 SQL 層
+
+**SPA（spa/src/components + hooks）**
+
+- `SubagentDots` API 從 `{count}` 升 `{refs: SubagentRef[]}`：每 dot 依 agent type 上色（`TYPE_COLOR` cc 藍 / codex 黃 / opencode 橘），proxy ref 渲染 hollow ring outline，native ref 保 solid fill
+- 5 consumer props 同步：`TabIcon` / `SortableTab` / `InlineTab` / `renderInlineTabIcon` / `useTabDisplay`
+
+**Tests**
+
+- 29 新 Go tests：PR1-PR17（proxy walk + same-type hard-stop + identity 三分支 + R3/R6 race regression）/ F4-F9（store DeleteIfUnchanged / UpsertIfUnchanged / narrow updates）/ SE1-SE3（SessionEnd proxy cleanup）/ IS1-IS7（idle sweep + R1/R7 LastSeenAt bumps + RMW probe path）/ HB2（broadcast shape）/ U6-U7（kind-aware match + retry helper）/ HookRace1（R8 general hook RMW guard）
+- 12 新 SPA tests + 1 regression（SubagentDots TYPE_COLOR + outline + 5 consumer props 整合）
+- Go build/vet/test clean / SPA lint+build+vitest clean（baseline 3 hosts.test.ts pre-existing 無關）
+
+**Review 收斂（9 輪）**
+
+R1 standard（1 P2 idle sweep live-frame regression → `f26888a9`）/ R2 3-parallel adversarial（1 P1 proxy/native ID collision → `9f29e123`）/ R3 sanity（1 P1 stale same-type 阻 walk → `c46de72b`）/ R4 sanity（test coverage stub → `16485c44`）/ R5 final-gate（1 P2 proxy attach race，使用者判斷 in-PR 修 → `9ca25a3f`）/ R6 sanity（1 P2 native SubagentStart/Stop race → `269022e4`）/ R7 sanity（1 P2 probe status RMW race → `bd729cb7`）/ R8 sanity（1 P2 general hook RMW race → `bc39cbb3`）/ R9 RMW inventory（0 findings — approve ship-ready）。所有 9 路 `subagents_json` 寫路徑 R9 入清單分類驗證：proxy attach/detach + native SubagentStart/Stop 走 atomic-retry / 一般 hook 走 narrow / SessionStart reset 走 narrow-reset / new frame 走 insert-only / SessionEnd / probe / replay / migrate 各自封口。
+
+關閉 #632（Proxy attach/detach on Subagents is not atomic — R5 follow-up，已在 R5/R6 兩路 atomic helper 一併修完）。
+
+**關鍵技術決策**
+
+- Proxy ID 格式：`fmt.Sprintf("proxy:%s:%d:%s", req.AgentType, req.SenderPID, req.SenderStartTime)` — kind-aware identity key 防 native agent_id 撞
+- Proxy walk depth = 5（cover codex→codex-companion→cc layout + 3 hops buffer）
+- Same-type hard-stop 前置於 alive + identity gate
+- Store API invariant：`Upsert` 只給 new-frame insert；`UpsertIfUnchanged` 服務所有 RMW；narrow updates 不碰 `subagents_json` 除 explicit reset
+
+## [1.0.0-alpha.220] - 2026-04-25
+
+### Fix(spa): Editor UI polish — rotation, alignment, line highlight, settings layout (#629)
+
+Editor Restructure 落地後的四個小 polish，純視覺對齊、無邏輯變動。
+
+- 拼圖片（module-owned contribution marker）改為往右 30° 旋轉（原本 -12°），在 sidebar 10-12px 下輪廓更清晰；SettingsSidebar / HostSidebar / WorkspaceSettingsPage 三處同步
+- EditorPurdexSettingsSection 重寫對齊 canonical pattern（Appearance / Terminal / Sync / Interface 共用的 `<h2>` + `<SettingItem>` 佈局），並把所有字串抽到 `settings.editor.*` i18n keys（EN + zh-TW 共 16 條）
+- EditorToolbar 麵包屑路徑原本 `items-start` + `pt-0.5` nudge 導致文字偏上；改為 `items-center` 讓 path 與 action 按鈕同軸
+- Monaco 當前行高亮從預設邊框改為 VSCode 風格的淡背景亮度：新定義 `purdex-dark` theme 繼承 `vs-dark`，將 `editor.lineHighlightBorder` 設為透明、`editor.lineHighlightBackground` 設為 `#FFFFFF0D`（約 5% 白）
+
 ## [1.0.0-alpha.219] - 2026-04-24
 
 ### Feat(spa): Editor restructure — Buffers pane + HSR migration + breadcrumb popover (#623)
