@@ -156,6 +156,41 @@ describe('InlineTab — close button visibility', () => {
   })
 })
 
+describe('InlineTab — subagent dots (prop wiring)', () => {
+  it('renders outlined proxy dot when subagents contains an is_proxy ref', () => {
+    useUISettingsStore.setState({ tabIndicatorStyle: 'dot' })
+    useAgentStore.setState({
+      statuses: { 'h1:S1': 'running' },
+      subagents: {
+        'h1:S1': [
+          {
+            id: 'proxy:codex:200:t200',
+            type: 'codex',
+            started_at: 0,
+            source_pid: 200,
+            source_start_time: 't200',
+            is_proxy: true,
+          },
+        ],
+      },
+    } as never)
+    const { container } = render(
+      <InlineTab
+        tab={baseTab}
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    const dot = container.querySelector<HTMLElement>('[data-testid="subagent-dot"]')
+    expect(dot).toBeTruthy()
+    expect(dot!.getAttribute('data-is-proxy')).toBe('true')
+    expect(dot!.getAttribute('data-subagent-type')).toBe('codex')
+  })
+})
+
 describe('InlineTab — unread dot', () => {
   it('shows unread dot when unread and not active', () => {
     useAgentStore.setState({ unread: { 'h1:S1': true } })

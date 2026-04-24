@@ -1,4 +1,4 @@
-import type { AgentStatus } from '../../../stores/useAgentStore'
+import type { AgentStatus, SubagentRef } from '../../../stores/useAgentStore'
 import type { TabIndicatorStyle } from '../../../stores/useUISettingsStore'
 import { TabStatusIndicator } from '../../../components/TabStatusIndicator'
 import { SubagentDots } from '../../../components/SubagentDots'
@@ -8,7 +8,7 @@ interface Params {
   agentStatus: AgentStatus | undefined
   tabIndicatorStyle: TabIndicatorStyle
   isActive: boolean
-  subagentCount: number
+  subagentRefs: SubagentRef[]
   isUnread?: boolean
 }
 
@@ -32,7 +32,7 @@ export function renderInlineTabIcon({
   agentStatus,
   tabIndicatorStyle,
   isActive,
-  subagentCount,
+  subagentRefs,
   isUnread = false,
 }: Params) {
   // icon-only OR no agent event → plain icon slot
@@ -55,7 +55,7 @@ export function renderInlineTabIcon({
       >
         <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
         {showDotUnreadPip && UNREAD_PIP}
-        {subagentCount > 0 && <SubagentDots count={subagentCount} />}
+        {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} />}
       </span>
     )
   }
@@ -69,7 +69,7 @@ export function renderInlineTabIcon({
         >
           <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
           {showDotUnreadPip && UNREAD_PIP}
-          {subagentCount > 0 && <SubagentDots count={subagentCount} />}
+          {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} />}
         </span>
         {IconComponent && <IconComponent size={ICON_SIZE} className="flex-shrink-0" />}
       </span>
@@ -90,7 +90,7 @@ export function renderInlineTabIcon({
         isActive={isActive}
         isUnread={isUnread && !isActive}
       />
-      {subagentCount > 0 && <SubagentDots count={subagentCount} left={-4} />}
+      {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} left={-4} />}
     </span>
   )
 }

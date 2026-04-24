@@ -1,5 +1,5 @@
 // spa/src/components/TabIcon.tsx
-import type { AgentStatus } from '../stores/useAgentStore'
+import type { AgentStatus, SubagentRef } from '../stores/useAgentStore'
 import type { TabIndicatorStyle } from '../stores/useUISettingsStore'
 import { TabStatusIndicator } from './TabStatusIndicator'
 import { SubagentDots } from './SubagentDots'
@@ -26,7 +26,7 @@ interface Props {
   tabIndicatorStyle: TabIndicatorStyle
   isActive: boolean
   iconSize: number
-  subagentCount: number
+  subagentRefs: SubagentRef[]
   isUnread: boolean
 }
 
@@ -36,7 +36,7 @@ export function TabIcon({
   tabIndicatorStyle,
   isActive,
   iconSize,
-  subagentCount,
+  subagentRefs,
   isUnread,
 }: Props) {
   const iconBox = (
@@ -56,7 +56,7 @@ export function TabIcon({
       <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[1.5px] lowdpi:ml-px">
         <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
         {showDotUnreadPip && <UnreadPip />}
-        {subagentCount > 0 && <SubagentDots count={subagentCount} />}
+        {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} />}
       </span>
     )
   }
@@ -67,7 +67,7 @@ export function TabIcon({
         <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
           <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
           {showDotUnreadPip && <UnreadPip />}
-          {subagentCount > 0 && <SubagentDots count={subagentCount} />}
+          {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} />}
         </span>
         {IconComponent && <IconComponent size={iconSize} className="flex-shrink-0" />}
       </span>
@@ -89,7 +89,7 @@ export function TabIcon({
         isActive={isActive}
         isUnread={isUnread && !isActive}
       />
-      {subagentCount > 0 && <SubagentDots count={subagentCount} left={-4} />}
+      {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} left={-4} />}
     </span>
   )
 }
