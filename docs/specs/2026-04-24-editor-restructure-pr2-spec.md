@@ -2,7 +2,7 @@
 
 - **Version**: 1.0.0-alpha.217 (target bump)
 - **Date**: 2026-04-24
-- **Spec revision**: v1.3 (2026-04-24) — incorporates Round-3 codex findings (dirty-buffer UX + locked-tab edge case + deliberate non-addressability)
+- **Spec revision**: v1.4 (2026-04-24) — incorporates Round-4 PR review (8 findings: 1 CRIT persist bug + 7 HIGH data-loss / policy gaps from 4 parallel reviewers)
 - **Base**: `bb5ce0c1` (main @ alpha.216)
 - **Author**: claude-code + wake
 - **Status**: Draft (pending Round-2 codex plan review)
@@ -288,13 +288,32 @@ panes: [
 - Empty state: illustration + `New Buffer` CTA.
 - Error / loading states: basic toast or inline message.
 
-**Rename dialog**: reuses `RenamePopover` pattern. **Flat rename
-only** — the popover's `validateName` rejects any input containing
-`/`. Subfolder moves (`/buffer/foo.md` → `/buffer/drafts/foo.md`) are
-out of scope because `InAppBackend.rename()` (line 105-109) does not
-create intermediate directory entries — it only reassigns the
-keyed entry. A follow-up PR can patch `rename()` to reuse `write()`'s
-parent-dir logic and relax this validator.
+**Rename dialog**: reuses `RenamePopover` pattern.
+
+- **Flat rename only** — the popover's `validateName` rejects any
+  input containing `/`. Subfolder moves are out of scope because
+  `InAppBackend.rename()` (line 105-109) does not create intermediate
+  directory entries.
+- **Existence check (v1.4 fix for R4-F4)** — `InAppBackend.rename(from, to)`
+  is a blind overwrite: `store.set(to, ...)` followed by
+  `store.delete(from)`. If the destination already exists, its
+  content is silently destroyed. `handleRenameConfirm` MUST check
+  before calling rename:
+  ```
+  const targetPath = '/buffer/' + newName
+  if (targetPath !== renameTarget) {
+    const exists = await backend.stat(targetPath)
+      .then(() => true).catch(() => false)
+    if (exists) {
+      setRenameError(t('editor.buffers.rename_exists_error'))
+      return  // abort rename; popover stays open for the user to fix
+    }
+  }
+  await backend.rename(renameTarget, targetPath)
+  ```
+  A future PR may harden `InAppBackend.rename` itself to throw on
+  existing destinations — but this PR guards at the UI layer to
+  unblock the release.
 
 ### 4.6 Smart-open flow
 
@@ -315,16 +334,30 @@ rebind happens as a downstream effect without explicit orchestration.
 (See non-goals: `attachPane` resets pane state and may discard the
 previous buffer. This is pre-existing VS Code-style semantics.)
 
-**Targeting order** (stop at first match):
+**Targeting order** (stop at first match; **v1.4 tightened** —
+see below):
 
-1. **Active tab's first editor pane.** If the active tab has a pane
-   with `content.kind === 'editor'` (regardless of `source`), target
-   that pane. This respects the user's current focus.
-2. **Any other tab's first editor pane** (scanned in `tabOrder`).
-   Skip the buffers-management tab itself (it has no `editor` panes
-   anyway, but the guard is explicit).
+1. **Active tab's first eligible editor pane.** Eligible means:
+   `content.kind === 'editor'` **AND** `content.source.type === 'inapp'`
+   **AND** the pane is NOT currently hosting a dirty buffer.
+2. **Any other tab's first eligible editor pane** (scanned in
+   `tabOrder`). Same eligibility rule.
 3. **Fallback**: open a new tab with `{ kind: 'editor', source:
    { type: 'inapp' }, filePath: '/buffer/' + name }`.
+
+**Dirty guard (v1.4 fix for R4-F3)**: The previous v1.3 rule
+("find first editor pane regardless of source") allowed smart-open
+to silently replace a local / daemon editor pane or a pane with
+unsaved in-app edits, discarding work with one click. v1.4 tightens
+the filter: reuse requires both (a) matching source (inapp ↔ inapp)
+and (b) clean buffer state. This turns the failure mode from silent
+data loss into "a new tab is opened" — a UX downgrade, not a data
+downgrade, which is acceptable for a file-manager-style flow.
+
+To read dirty state, smart-open looks up the pane's buffer via
+`bufferKey(content.source, content.filePath)` and checks
+`useEditorStore.getState().buffers[key]?.isDirty`. An absent buffer
+entry (never mounted) counts as clean.
 
 **Action on match**: build `newContent = { kind: 'editor', source:
 { type: 'inapp' }, filePath: '/buffer/' + name }` and call
@@ -410,27 +443,36 @@ As described in §4.6, `EditorPane`'s `useEffect(attachPane, [key])`
 auto-rebinds the editor store once React re-renders the pane with the
 new `content.filePath`. The caller does not invoke `attachPane`.
 
-**Dirty-buffer guard (added v1.3)**: Before calling `setPaneContent`,
-the popover's `onSwitch` handler checks
-`useEditorStore.getState().buffers[currentBufferKey]?.isDirty`. If the
-current buffer is dirty, prompt with `window.confirm(t('editor.buffers.
-confirm_switch_dirty'))`; abort on cancel. This addresses the R3
-finding that "silent dirty-buffer loss is one-click-triggerable" —
-§2's non-goal ("no dirty-buffer preservation") is fine as a design
-principle, but leaving it silently exploitable via the popover is a
-UX trap. A `confirm()` matches the multi-select-delete pattern and
-keeps the added surface area minimal. `smart-open` from the
-management pane does NOT add this check — users navigating from a
-management view have a different mental model ("open this file")
-and the confirm would feel intrusive; the dirty state is still
-discarded, but the interaction is semantically "open another file"
-rather than "hot-swap this editor".
+**Dirty-buffer guard (added v1.3, extended v1.4)**: Before calling
+`setPaneContent`, the popover's `onSwitch` handler — and similarly
+`onNewBuffer` — checks
+`useEditorStore.getState().buffers[currentBufferKey]?.isDirty`. If
+the current buffer is dirty, prompt with `window.confirm(t('editor.
+buffers.confirm_switch_dirty'))`; abort on cancel.
 
-Consequence documented in §2 non-goals: switching buffers discards the
-previous buffer's pane state (cursor, Monaco view state) and, absent
-the popover's dirty-guard, may discard the previous buffer entirely
-if no other pane references it. Users should save before switching —
-standard VS Code semantics.
+**v1.4 scope widening**: v1.3 limited this guard to the popover
+switch handler on the premise that smart-open ("open this file" from
+a management view) had a different mental model and should not
+prompt. R4 review disagreed: silent data-loss is silent data-loss
+regardless of UI entry point, and the practical cost of one extra
+confirm click is minimal. v1.4 therefore applies the dirty-protection
+pattern to every place that reuses an existing editor pane:
+
+- **Popover `onSwitch`** — unchanged from v1.3 (`window.confirm`).
+- **Popover `onNewBuffer`** — NEW in v1.4: same `window.confirm`
+  before replacing the current pane with the freshly-written file.
+- **Smart-open from management pane** — handled differently (§4.6):
+  dirty panes are **skipped during targeting**, so smart-open never
+  silently overwrites them. No prompt needed — the pane simply isn't
+  eligible. If all editor panes are dirty, smart-open falls through
+  to "open new tab".
+- **Delete (§4.9.5)** — handled via its own refusal-or-confirm
+  pre-check gate.
+
+Consequence for §2 non-goals: "no preservation of dirty-buffer state
+across pane-content swaps" remains true, BUT v1.4 adds
+UI-layer guards (confirm or skip-and-fallback) so that no single
+click of a normal UI affordance silently destroys unsaved work.
 
 `BreadcrumbPopover` (new component):
 - Positioned below chip using anchored rect (reuse `RenamePopover`
@@ -502,35 +544,129 @@ aligned with PR #617's module-gating philosophy.
 accept this without throwing. `useTabStore.setPaneContent` already
 accepts any `PaneContent` — no type narrowing needed there.
 
-#### 4.9.5 Handling deletion of the currently-open buffer
-If a user deletes a buffer in the management pane that is currently
-open in an `editor` pane elsewhere, that pane's `content.filePath`
-points at a now-missing file — triggering a "file not found" read
-error inside `EditorPane`. Resolution:
+#### 4.9.6 `useEditorSettingsStore.merge` payload shape (v1.4 CRIT fix for R4-F1)
 
-1. Before calling `backend.delete(path)`, scan `useTabStore.tabs`
-   for panes where `content.kind === 'editor'` and
-   `content.source.type === 'inapp'` and
-   `content.filePath === path`.
-2. For each match, call
-   `useTabStore.getState().closePane(tabId, paneId)`.
-   - If the tab is **not locked** and this is its last pane,
-     `closePane` delegates to `closeTab` and the tab is removed —
-     existing `useTabStore.closePane` → `closeTab` behavior
-     (useTabStore.ts:192-207).
-   - If the tab **is locked**, `closeTab` is a no-op
-     (useTabStore.ts:195). The pane therefore stays in the layout
-     with `content.filePath` pointing at the now-deleted file.
-     `EditorPane`'s read effect will fail with the backend's
-     "file not found" error, which is rendered as an error banner
-     inside the pane. **This is intentional** — the locked tab
-     flag exists precisely so the user's layout state is never
-     altered by background events. The user can manually unlock /
-     close the tab if they wish.
-   - The buffers management pane itself cannot appear in the match
-     list because its `content.kind === 'editor-buffers'`, not
-     `'editor'`.
-3. Then call `backend.delete(path)` and refresh the buffers list.
+Zustand's `persist` middleware passes the FULL persisted envelope
+`{ state, version }` to the `merge` function — not just the state
+object. v1.3's implementation sanitized `persisted` directly,
+dropping every saved field on rehydrate.
+
+Correct shape:
+```
+merge: (persisted, current) => {
+  const stored = (persisted as { state?: unknown } | null)?.state
+  // sanitize `stored` field-by-field, fall back to current for invalid
+  return { ...current, ...sanitized }
+}
+```
+
+Test coverage gap to close (S1-9): existing tests S1-7 / S1-8 only
+exercise malformed and null payloads, so they never caught this bug.
+The regression test must (a) save non-default values via
+`useEditorSettingsStore.setWordWrap('off')` etc., (b) simulate app
+reload by re-creating the store from the persisted `localStorage`
+snapshot, and (c) assert the non-default values survive.
+
+#### 4.9.7 NewTabPage empty state when all columns are filtered out (v1.4 fix for R4-F8)
+
+`NewTabPage.tsx:31-39` currently filters the flat provider list by
+module-enabled state but the render still iterates `profile.columns`
+using the pre-filter `providerId → provider` map. When a user's
+profile pins providers that have since been hidden (e.g. pinned
+`editor` and `editor-buffers`, then disabled the Editor module), every
+column resolves to `null` and the page renders as an entirely blank
+tab — not a usable empty state.
+
+Fix: after computing the filtered provider map, check whether at
+least one column would resolve to a visible provider. If none do,
+render the existing NewTabPage empty state (the one shown when the
+user has an empty `profile.columns`). Keep the column grouping when
+at least one column survives; only fall back to the empty state when
+**all** columns are null after filtering.
+
+#### 4.9.5 Handling deletion of the currently-open buffer (v1.4 rewrite)
+
+Previous revisions (v1.2/v1.3) relied on `closePane` doing the right
+thing. R4 review revealed two problems:
+
+- `closePane` only respects `locked` when **the tab's last pane is
+  being closed** (delegates to `closeTab:195`). A locked tab with
+  multiple panes happily removes a single pane → layout altered
+  despite the lock.
+- Even in the locked-single-pane case where `closePane` is a no-op,
+  the pane stays mounted on the deleted path. The editor buffer
+  remains in `useEditorStore.buffers` and a subsequent save will
+  re-write the file, undoing the deletion.
+
+**v1.4 policy — pre-check gate with two refusal conditions** (fix
+for R4 F2 + F5 + F6):
+
+`handleDelete` runs this pre-check BEFORE touching the backend or
+the pane tree:
+
+```
+const targets: string[] = selected.map(n => '/buffer/' + n)
+const openPanes = scanAllTabs(tabs => {
+  yield panes where content.kind==='editor'
+    && content.source.type==='inapp'
+    && targets.includes(content.filePath)
+})
+
+// Refusal 1: any affected pane lives in a locked tab
+const lockedHits = openPanes.filter(([tabId, _]) => tabs[tabId].locked)
+if (lockedHits.length > 0) {
+  showError(t('editor.buffers.delete_locked_refused'))  // "Unlock / close the tab first"
+  return  // do NOT touch backend
+}
+
+// Refusal 2: any affected pane hosts a dirty buffer
+const dirtyHits = openPanes.filter(([_, pane]) => {
+  const key = bufferKey(pane.content.source, pane.content.filePath)
+  return useEditorStore.getState().buffers[key]?.isDirty === true
+})
+if (dirtyHits.length > 0) {
+  if (!window.confirm(t('editor.buffers.delete_dirty_confirm', {count: dirtyHits.length})))
+    return
+}
+
+// Single-delete also needs a confirm (previously only multi did)
+if (selected.size === 1 && dirtyHits.length === 0) {
+  if (!window.confirm(t('editor.buffers.delete_one_confirm')))
+    return
+}
+
+// Proceed: close every (now-unlocked, possibly-confirmed-dirty) pane
+for (const [tabId, pane] of openPanes) {
+  useTabStore.getState().closePane(tabId, pane.id)
+}
+
+// Backend delete
+for (const path of targets) await backend.delete(path)
+
+// Refresh + clear selection
+```
+
+Key properties:
+
+- **Locked tabs block deletion unconditionally.** A user must
+  explicitly unlock or close the hosting tab before the backend is
+  touched. Delete is therefore authoritative — no way to resurrect
+  a deleted buffer via a zombie locked pane.
+- **Dirty panes require explicit destructive confirmation.** This
+  matches the popover's dirty guard but uses a content-loss-specific
+  message ("Delete N buffer(s) with unsaved changes?"), not a generic
+  switch prompt.
+- **Single-delete now also confirms.** Previously only multi-delete
+  confirmed — a slip for a destructive action.
+- The buffers management pane's own layout (`content.kind === 'editor-buffers'`)
+  cannot appear in `openPanes` — the `kind === 'editor'` filter
+  excludes it.
+
+i18n keys (both locales):
+- `editor.buffers.delete_locked_refused` → `"This buffer is open in a locked tab. Unlock or close the tab first."` / `"此暫存檔在鎖定的分頁中開啟。請先解鎖或關閉該分頁。"`
+- `editor.buffers.delete_dirty_confirm` → `"Delete {count} buffer(s) with unsaved changes?"` / `"刪除 {count} 個有未儲存變更的暫存檔？"`
+- `editor.buffers.delete_one_confirm` → `"Delete this buffer?"` / `"確定刪除此暫存檔？"`
+- `editor.buffers.rename_exists_error` → `"A buffer with that name already exists."` / `"已存在同名暫存檔。"`
 
 **Why `closePane` instead of changing `filePath`**: `PaneContent`
 editor variant requires `filePath: string` (tab.ts:45) — setting it
@@ -598,9 +734,15 @@ Plan phase encodes this in every step.
 | Case | Behavior |
 |---|---|
 | User has `editor-buffers` singleton tab open, clicks "Manage buffers" in popover | `openSingletonTab({kind:'editor-buffers'})` focuses existing tab |
-| User switches buffer via popover while current pane has unsaved diff | Popover's onSwitch checks `useEditorStore.buffers[key]?.isDirty`; if true, `window.confirm(t('editor.buffers.confirm_switch_dirty'))`; abort on cancel. On confirm, `setPaneContent` fires; `EditorPane`'s `attachPane` useEffect rebinds → previous buffer discarded (§4.8) |
-| User opens a buffer from the buffers management pane while a dirty editor pane exists | smart-open does NOT prompt — mental model is "open file", not "hot-swap editor". Dirty state is still discarded under VS Code semantics (§2 non-goal) |
-| User deletes a buffer that is open in a **locked** tab's single editor pane | `closePane` → `closeTab` is a no-op for locked tab (useTabStore.ts:195); pane stays with dangling filePath; EditorPane displays "file not found" error banner. Locked-tab semantics intentionally protect layout state (§4.9.5) |
+| User switches buffer via popover while current pane has unsaved diff | Popover's onSwitch `window.confirm('editor.buffers.confirm_switch_dirty')`; abort on cancel. On confirm, `setPaneContent` fires; `EditorPane`'s `attachPane` useEffect rebinds → previous buffer discarded (§4.8) |
+| User clicks `New Buffer` from popover empty-state while current buffer is dirty | Popover's `onNewBuffer` also shows the confirm dialog (v1.4 scope widening §4.8); abort on cancel, proceed to write + attach on OK |
+| User opens a buffer from the management pane while an editor pane has unsaved work | Smart-open's targeting filter (§4.6 v1.4) skips dirty panes AND non-`inapp` panes → silent overwrite impossible. Falls through to "open new tab" if every editor pane is dirty or non-inapp |
+| User renames a buffer to a name that already exists | Pre-rename `backend.stat(target)` check; if exists, RenamePopover shows `editor.buffers.rename_exists_error` inline and stays open for user to correct (§4.5) |
+| User deletes buffer(s) open in a **locked** tab (any pane count) | Pre-check refuses outright: `editor.buffers.delete_locked_refused` error shown; backend untouched. User must unlock or close the tab first (§4.9.5) |
+| User deletes buffer(s) with **dirty** unsaved pane | Pre-check shows `editor.buffers.delete_dirty_confirm` with count; abort on cancel, proceed on OK (§4.9.5) |
+| User deletes a single buffer that is NOT dirty | Pre-check shows `editor.buffers.delete_one_confirm`; OK proceeds (§4.9.5) |
+| User opens a blank NewTab after disabling the Editor module, but had pinned `editor` + `editor-buffers` cards | After filter, every column is null → NewTabPage renders its existing empty state (§4.9.7 v1.4 fix); previously rendered as entirely blank |
+| App reloads after user changed `tabSize` to 4 | `useEditorSettingsStore` rehydrates from `localStorage` — values survive because `merge` now unwraps the `{state,version}` envelope (§4.9.6 v1.4 fix) |
 | Rename buffer to name containing `/` | Validation rejects; inline error "Subfolders not supported" (see non-goals) |
 | Delete currently open buffer (any pane) | Per §4.9.5: every affected pane is closed via `useTabStore.closePane` *before* `backend.delete`; tabs whose last pane closes are closed too |
 | Delete currently open buffer (breadcrumb popover is showing it) | Hosting pane is closed by §4.9.5 flow; popover unmounts with its host `EditorToolbar` |
@@ -694,6 +836,49 @@ All verification commands run from the `spa/` subdirectory:
       (§4.8 dirty-guard).
 - [ ] i18n: `editor.buffers.confirm_switch_dirty` added (both
       locales).
+
+### Commit 4 — Fix-up (v1.4 new)
+
+All fix-up work lands in a single commit after Commits 1-3. 7 new tests.
+
+- [ ] **F1** `useEditorSettingsStore.merge` correctly reads
+      `persisted.state` (not `persisted` directly). S1-9 asserts
+      happy-path rehydrate: non-default values written, store
+      state.version bumps persisted payload, rehydrate restores
+      them.
+- [ ] **F4** `handleRenameConfirm` pre-checks destination with
+      `backend.stat`; if exists, inline error via
+      `editor.buffers.rename_exists_error`; rename aborted (§4.5).
+      B2-12 asserts: given `/buffer/bar.md` exists, renaming
+      `/buffer/foo.md` → `bar.md` calls NO `backend.rename` and
+      shows the inline error.
+- [ ] **F2 + F5 + F6** `handleDelete` pre-check gate (§4.9.5):
+      - Refuses delete when any affected pane is in a locked tab
+        (B2-13).
+      - Confirms delete with dirty-specific message when affected
+        pane is dirty (B2-14).
+      - Single-delete also confirms (B2-14 part 2).
+- [ ] **F3** `smartOpen` filters candidates by source `== 'inapp'`
+      AND buffer `!isDirty`. Dirty or non-inapp panes are skipped
+      → falls through to new tab (B2-15).
+- [ ] **F7** `EditorPane.onNewBuffer` checks current buffer dirty
+      state; if dirty, `window.confirm(t('editor.buffers.confirm_switch_dirty'))`
+      before `setPaneContent` (§4.8 v1.4 widening). C3-7 asserts:
+      two branches (cancel aborts, OK proceeds).
+- [ ] **F8** `NewTabPage` renders empty state when every
+      `profile.columns` entry resolves to `null` after
+      module-filter. A2-7 asserts: with editor module disabled and
+      a profile pinning only editor providers, empty-state element
+      is present (not a blank render).
+- [ ] New i18n keys (both locales):
+      `editor.buffers.rename_exists_error`,
+      `editor.buffers.delete_locked_refused`,
+      `editor.buffers.delete_dirty_confirm`,
+      `editor.buffers.delete_one_confirm`.
+- [ ] `grep -n "backend.rename(" spa/src/components/editor/EditorBuffersPane.tsx`
+      must show the call guarded by the stat check (or moved
+      into a helper named e.g. `performRename` that does both).
+- [ ] All verification commands green.
 - [ ] All verification commands green.
 
 ## 8. Open questions
@@ -721,15 +906,28 @@ Decisions taken in v1.2:
 - `editor-buffers` deep-link URL → omitted this PR; `tabToUrl`
   returns workspace-root fallback, no `parseRoute` branch. §4.9.1.
 
-Decisions taken in v1.3 (new):
+Decisions taken in v1.3:
 - Popover switch while buffer is dirty → `window.confirm` guard
-  (§4.8 dirty-guard). Smart-open from management pane does NOT
-  prompt — different mental model.
-- Delete targeting a locked tab's pane → no-op (existing
-  `closeTab` locking guard); pane stays, user sees read-error
-  banner. Locked-tab semantics intentionally protect layout.
+  (§4.8 dirty-guard).
 - `tabToUrl` returns `'/'` (confirmed from existing ephemeral
   kinds); `editor-buffers` is deliberately non-addressable.
+
+Decisions taken in v1.4 (new — supersede relevant v1.3 items):
+- Smart-open dirty/source policy — **changed from v1.3**: was
+  "don't prompt, just switch"; now "skip ineligible panes during
+  targeting" (source must be `'inapp'` and buffer must be clean).
+  No prompt; fall through to new tab if every eligible pane is
+  ineligible. §4.6.
+- Locked-tab delete — **changed from v1.3**: was "closePane no-op
+  accepted; pane shows read-error banner"; now "refuse delete
+  outright with UI error; user must unlock or close first". §4.9.5.
+- Delete dirty confirm + single-delete confirm added. §4.9.5.
+- `onNewBuffer` dirty guard added (matches popover switch). §4.8.
+- Rename existence check before `backend.rename`. §4.5.
+- `useEditorSettingsStore.merge` unwraps persisted envelope
+  (`persisted.state`) — fix persist-ineffective CRITICAL bug. §4.9.6.
+- NewTabPage empty-state fallback when all columns filter to null.
+  §4.9.7.
 
 Still open:
 1. **`fontSize` clamp bounds `[10, 24]`** — conservative default;
@@ -756,4 +954,4 @@ Still open:
 
 ---
 
-*End of spec v1.3.*
+*End of spec v1.4.*
