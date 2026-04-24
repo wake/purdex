@@ -1,9 +1,10 @@
-import { useId } from 'react'
 import type { SettingsContextFor } from '../../lib/settings-contribution-types'
+import { useI18nStore } from '../../stores/useI18nStore'
 import {
   useEditorSettingsStore,
   type TabSizeOption,
 } from '../../stores/useEditorSettingsStore'
+import { SettingItem } from './SettingItem'
 
 interface Props {
   ctx: SettingsContextFor<'purdex'>
@@ -12,15 +13,13 @@ interface Props {
 /**
  * Purdex-scope Editor settings section.
  *
- * Renders the Monaco preference controls (indentation + display) for the
- * in-app editor. Buffer CRUD now lives in the dedicated `EditorBuffersPane`
- * (spec §4.5) — the transitional legacy block was retired in Commit 2.
- *
- * Tiptap integration is deliberately out of scope for this PR — the note
- * below makes this explicit for users who expect the preferences to affect
- * rich-text editors too.
+ * Renders Monaco preference controls using the canonical
+ * `<h2>` + `<SettingItem>` layout shared with Appearance, Terminal,
+ * Sync, etc. Buffer CRUD lives in the dedicated `EditorBuffersPane`
+ * (spec §4.5). Tiptap wiring is deferred; see the trailing note.
  */
 export function EditorPurdexSettingsSection(_props: Props) {
+  const t = useI18nStore((s) => s.t)
   const tabSize = useEditorSettingsStore((s) => s.tabSize)
   const insertSpaces = useEditorSettingsStore((s) => s.insertSpaces)
   const wordWrap = useEditorSettingsStore((s) => s.wordWrap)
@@ -34,103 +33,93 @@ export function EditorPurdexSettingsSection(_props: Props) {
   const setMinimap = useEditorSettingsStore((s) => s.setMinimap)
   const setFontSize = useEditorSettingsStore((s) => s.setFontSize)
 
-  const tabSizeId = useId()
-  const fontSizeId = useId()
-
   return (
-    <div className="flex flex-col gap-6">
-      <section className="flex flex-col gap-3">
-        <h3 className="text-sm font-medium text-text-primary">Indentation</h3>
+    <div>
+      <h2 className="text-lg text-text-primary">{t('settings.editor.title')}</h2>
+      <p className="text-xs text-text-secondary mb-6">{t('settings.editor.desc')}</p>
 
-        <label className="flex items-center justify-between gap-4 text-sm text-text-secondary">
-          <span>
-            <span className="block">Tab size</span>
-            <span className="block text-xs text-text-muted">
-              Number of spaces a Tab character represents.
-            </span>
-          </span>
-          <select
-            id={tabSizeId}
-            value={tabSize}
-            onChange={(e) => setTabSize(Number(e.target.value) as TabSizeOption)}
-            className="px-2 py-1 rounded-md bg-surface-muted text-text-primary border border-border-subtle focus:border-accent focus:outline-none text-sm"
-          >
-            <option value={2}>2</option>
-            <option value={4}>4</option>
-            <option value={8}>8</option>
-          </select>
-        </label>
+      <SettingItem
+        label={t('settings.editor.tab_size.label')}
+        description={t('settings.editor.tab_size.desc')}
+      >
+        <select
+          aria-label={t('settings.editor.tab_size.aria')}
+          value={tabSize}
+          onChange={(e) => setTabSize(Number(e.target.value) as TabSizeOption)}
+          className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-20 hover:border-text-muted focus:border-border-active focus:outline-none"
+        >
+          <option value={2}>2</option>
+          <option value={4}>4</option>
+          <option value={8}>8</option>
+        </select>
+      </SettingItem>
 
-        <label className="flex items-center justify-between gap-4 text-sm text-text-secondary">
-          <span>
-            <span className="block">Insert spaces</span>
-            <span className="block text-xs text-text-muted">
-              Insert spaces instead of the Tab character on key press.
-            </span>
-          </span>
-          <input
-            type="checkbox"
-            checked={insertSpaces}
-            onChange={(e) => setInsertSpaces(e.target.checked)}
-            className="h-4 w-4"
-          />
-        </label>
-      </section>
+      <SettingItem
+        label={t('settings.editor.insert_spaces.label')}
+        description={t('settings.editor.insert_spaces.desc')}
+      >
+        <input
+          type="checkbox"
+          checked={insertSpaces}
+          onChange={(e) => setInsertSpaces(e.target.checked)}
+          className="h-4 w-4"
+        />
+      </SettingItem>
 
-      <section className="flex flex-col gap-3">
-        <h3 className="text-sm font-medium text-text-primary">Display</h3>
+      <SettingItem
+        label={t('settings.editor.word_wrap.label')}
+        description={t('settings.editor.word_wrap.desc')}
+      >
+        <input
+          type="checkbox"
+          checked={wordWrap === 'on'}
+          onChange={(e) => setWordWrap(e.target.checked ? 'on' : 'off')}
+          className="h-4 w-4"
+        />
+      </SettingItem>
 
-        <label className="flex items-center justify-between gap-4 text-sm text-text-secondary">
-          <span>Word wrap</span>
-          <input
-            type="checkbox"
-            checked={wordWrap === 'on'}
-            onChange={(e) => setWordWrap(e.target.checked ? 'on' : 'off')}
-            className="h-4 w-4"
-          />
-        </label>
+      <SettingItem
+        label={t('settings.editor.line_numbers.label')}
+        description={t('settings.editor.line_numbers.desc')}
+      >
+        <input
+          type="checkbox"
+          checked={lineNumbers === 'on'}
+          onChange={(e) => setLineNumbers(e.target.checked ? 'on' : 'off')}
+          className="h-4 w-4"
+        />
+      </SettingItem>
 
-        <label className="flex items-center justify-between gap-4 text-sm text-text-secondary">
-          <span>Line numbers</span>
-          <input
-            type="checkbox"
-            checked={lineNumbers === 'on'}
-            onChange={(e) => setLineNumbers(e.target.checked ? 'on' : 'off')}
-            className="h-4 w-4"
-          />
-        </label>
+      <SettingItem
+        label={t('settings.editor.minimap.label')}
+        description={t('settings.editor.minimap.desc')}
+      >
+        <input
+          type="checkbox"
+          checked={minimap}
+          onChange={(e) => setMinimap(e.target.checked)}
+          className="h-4 w-4"
+        />
+      </SettingItem>
 
-        <label className="flex items-center justify-between gap-4 text-sm text-text-secondary">
-          <span>Minimap</span>
-          <input
-            type="checkbox"
-            checked={minimap}
-            onChange={(e) => setMinimap(e.target.checked)}
-            className="h-4 w-4"
-          />
-        </label>
+      <SettingItem
+        label={t('settings.editor.font_size.label')}
+        description={t('settings.editor.font_size.desc')}
+      >
+        <input
+          aria-label={t('settings.editor.font_size.aria')}
+          type="number"
+          min={10}
+          max={24}
+          step={1}
+          value={fontSize}
+          onChange={(e) => setFontSize(Number(e.target.value))}
+          className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-20 hover:border-text-muted focus:border-border-active focus:outline-none"
+        />
+      </SettingItem>
 
-        <label className="flex items-center justify-between gap-4 text-sm text-text-secondary">
-          <span>
-            <span className="block">Font size</span>
-            <span className="block text-xs text-text-muted">Clamped to 10–24.</span>
-          </span>
-          <input
-            id={fontSizeId}
-            type="number"
-            min={10}
-            max={24}
-            step={1}
-            value={fontSize}
-            onChange={(e) => setFontSize(Number(e.target.value))}
-            className="w-20 px-2 py-1 rounded-md bg-surface-muted text-text-primary border border-border-subtle focus:border-accent focus:outline-none text-sm"
-          />
-        </label>
-      </section>
-
-      <p className="text-xs text-text-muted">
-        These settings apply to the Monaco code editor. Rich-text (Tiptap)
-        integration arrives in a follow-up.
+      <p className="text-xs text-text-muted mt-4">
+        {t('settings.editor.tiptap_note')}
       </p>
     </div>
   )

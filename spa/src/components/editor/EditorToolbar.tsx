@@ -63,7 +63,7 @@ export function EditorToolbar({
   }
 
   return (
-    <div className="flex items-start justify-between gap-2 px-3 py-1 border-b border-border-subtle bg-surface-secondary">
+    <div className="flex items-center justify-between gap-2 px-3 py-1 border-b border-border-subtle bg-surface-secondary">
       <div className="min-w-0 flex items-center gap-2 text-xs text-text-secondary">
         <div className="min-w-0 flex items-center gap-0.5 overflow-hidden" title={pathForDisplay}>
             {showInAppPrefix ? (
@@ -107,7 +107,7 @@ export function EditorToolbar({
         </div>
         {saveEnabled && <span className="text-accent-base" title="Unsaved changes">●</span>}
       </div>
-      <div className="flex items-center gap-1 pt-0.5">
+      <div className="flex items-center gap-1">
         {isDirty && onDiff && (
           <button
             onClick={onDiff}

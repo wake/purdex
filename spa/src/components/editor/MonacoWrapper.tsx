@@ -1,7 +1,21 @@
-import Editor, { type OnMount } from '@monaco-editor/react'
+import Editor, { type BeforeMount, type OnMount } from '@monaco-editor/react'
 import { useCallback, useEffect, useRef } from 'react'
 import type { editor } from 'monaco-editor'
 import { useEditorSettingsStore } from '../../stores/useEditorSettingsStore'
+
+// Custom dark theme: match VSCode's current-line highlight (subtle
+// background tint) instead of Monaco's default thin border. Everything
+// else inherits from `vs-dark`.
+const PURDEX_THEME_ID = 'purdex-dark'
+const PURDEX_THEME_DATA: editor.IStandaloneThemeData = {
+  base: 'vs-dark',
+  inherit: true,
+  rules: [],
+  colors: {
+    'editor.lineHighlightBackground': '#FFFFFF0D',
+    'editor.lineHighlightBorder': '#00000000',
+  },
+}
 
 interface Props {
   content: string
@@ -33,6 +47,10 @@ export function MonacoWrapper({ content, language, modelId, isActive, initialVie
   useEffect(() => {
     onViewStateChangeRef.current = onViewStateChange
   }, [onViewStateChange])
+
+  const handleBeforeMount: BeforeMount = useCallback((monaco) => {
+    monaco.editor.defineTheme(PURDEX_THEME_ID, PURDEX_THEME_DATA)
+  }, [])
 
   const handleMount: OnMount = useCallback((ed, monaco) => {
     editorRef.current = ed
@@ -67,7 +85,8 @@ export function MonacoWrapper({ content, language, modelId, isActive, initialVie
       path={modelId}
       value={content}
       language={language}
-      theme="vs-dark"
+      theme={PURDEX_THEME_ID}
+      beforeMount={handleBeforeMount}
       onChange={(value) => onChange(value ?? '')}
       onMount={handleMount}
       keepCurrentModel={true}
