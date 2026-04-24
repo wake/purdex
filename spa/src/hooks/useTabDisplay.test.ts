@@ -41,7 +41,8 @@ beforeEach(() => {
     tabIndicatorStyle: 'badge',
     ccIconVariant: 'bot',
     codexIconVariant: 'openai',
-    showOscTitle: false,
+    dynamicTabName: false,
+    showAgentTitleInStatusBar: false,
   })
   useI18nStore.setState({ t: (k: string) => k })
 })
@@ -81,40 +82,61 @@ describe('useTabDisplay — label resolution', () => {
   })
 })
 
-describe('useTabDisplay — OSC title override', () => {
-  it('uses OSC title when showOscTitle + agentType + oscTitle are all set', () => {
+describe('useTabDisplay — agent title override', () => {
+  it('uses pane_title - sessionLabel when dynamicTabName=true and agent type exists', () => {
     useSessionStore.setState({
-      sessions: { h1: [{ code: 'sc1', name: 'base' }] as never },
+      sessions: { h1: [{ code: 'sc1', name: 'base', pane_title: 'plan review' }] as never },
       activeHostId: null,
       activeCode: null,
     })
-    useUISettingsStore.setState({ showOscTitle: true })
+    useUISettingsStore.setState({ dynamicTabName: true })
     useAgentStore.setState({
       agentTypes: { 'h1:sc1': 'cc' },
       oscTitles: { 'h1:sc1': 'claude' },
     })
     const { result } = renderHook(() => useTabDisplay(makeTab()))
-    expect(result.current.displayTitle).toBe('claude - base')
+    expect(result.current.displayTitle).toBe('plan review - base')
   })
 
-  it('ignores OSC when showOscTitle is off', () => {
-    useUISettingsStore.setState({ showOscTitle: false })
+  it('ignores oscTitles when pane_title is absent', () => {
+    useSessionStore.setState({
+      sessions: { h1: [{ code: 'sc1', name: 'base' }] as never },
+      activeHostId: null,
+      activeCode: null,
+    })
+    useUISettingsStore.setState({ dynamicTabName: true })
     useAgentStore.setState({
       agentTypes: { 'h1:sc1': 'cc' },
       oscTitles: { 'h1:sc1': 'claude' },
     })
-    const { result } = renderHook(() => useTabDisplay(makeTab({ cachedName: 'fallback' })))
-    expect(result.current.displayTitle).toBe('fallback')
+    const { result } = renderHook(() => useTabDisplay(makeTab()))
+    expect(result.current.displayTitle).toBe('base')
   })
 
-  it('ignores OSC on terminated session', () => {
-    useUISettingsStore.setState({ showOscTitle: true })
+  it('preserves plain sessionLabel when dynamicTabName=false', () => {
+    useSessionStore.setState({
+      sessions: { h1: [{ code: 'sc1', name: 'base', pane_title: 'plan review' }] as never },
+      activeHostId: null,
+      activeCode: null,
+    })
+    useUISettingsStore.setState({ dynamicTabName: false })
+    useAgentStore.setState({ agentTypes: { 'h1:sc1': 'cc' } })
+    const { result } = renderHook(() => useTabDisplay(makeTab()))
+    expect(result.current.displayTitle).toBe('base')
+  })
+
+  it('ignores pane_title on terminated session', () => {
+    useSessionStore.setState({
+      sessions: { h1: [{ code: 'sc1', name: 'base', pane_title: 'plan review' }] as never },
+      activeHostId: null,
+      activeCode: null,
+    })
+    useUISettingsStore.setState({ dynamicTabName: true })
     useAgentStore.setState({
       agentTypes: { 'h1:sc1': 'cc' },
-      oscTitles: { 'h1:sc1': 'claude' },
     })
-    const { result } = renderHook(() => useTabDisplay(makeTab({ terminated: true, cachedName: 'gone' })))
-    expect(result.current.displayTitle).toBe('gone（Terminated）')
+    const { result } = renderHook(() => useTabDisplay(makeTab({ terminated: true, cachedName: 'base' })))
+    expect(result.current.displayTitle).toBe('base（Terminated）')
   })
 })
 

@@ -14,7 +14,8 @@ describe('TerminalSection', () => {
       tabIndicatorStyle: 'badge',
       ccIconVariant: 'bot',
       codexIconVariant: 'openai',
-      showOscTitle: false,
+      dynamicTabName: false,
+      showAgentTitleInStatusBar: false,
     })
   })
 
@@ -135,12 +136,22 @@ describe('TerminalSection', () => {
     expect(screen.getAllByText(/no visible effect/i)).toHaveLength(2)
   })
 
-  it('toggles showOscTitle', () => {
+  it('renders Dynamic tab name and Show in status bar controls', () => {
     render(<TerminalSection />)
-    fireEvent.click(screen.getByLabelText('Show agent dynamic title'))
-    expect(useUISettingsStore.getState().showOscTitle).toBe(true)
-    fireEvent.click(screen.getByLabelText('Show agent dynamic title'))
-    expect(useUISettingsStore.getState().showOscTitle).toBe(false)
+    expect(screen.getByLabelText('Dynamic tab name')).toBeTruthy()
+    expect(screen.getByLabelText('Show in status bar')).toBeTruthy()
+  })
+
+  it('toggles dynamic tab name', () => {
+    render(<TerminalSection />)
+    fireEvent.click(screen.getByLabelText('Dynamic tab name'))
+    expect(useUISettingsStore.getState().dynamicTabName).toBe(true)
+  })
+
+  it('toggles show in status bar', () => {
+    render(<TerminalSection />)
+    fireEvent.click(screen.getByLabelText('Show in status bar'))
+    expect(useUISettingsStore.getState().showAgentTitleInStatusBar).toBe(true)
   })
 
 })

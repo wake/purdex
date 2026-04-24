@@ -41,6 +41,7 @@ func (m *SessionModule) ListSessions() ([]SessionInfo, error) {
 			Mode:   "terminal", // default
 			Cwd:    s.Cwd,
 		}
+		m.applyActivePaneMetadata(&info)
 
 		// Merge meta from DB (Cwd always comes from tmux — SOT)
 		meta, err := m.meta.GetMeta(s.ID)
@@ -81,6 +82,7 @@ func (m *SessionModule) GetSession(code string) (*SessionInfo, error) {
 				Mode:   "terminal",
 				Cwd:    s.Cwd,
 			}
+			m.applyActivePaneMetadata(info)
 
 			// Merge meta from DB (Cwd always comes from tmux — SOT)
 			meta, err := m.meta.GetMeta(s.ID)
@@ -100,6 +102,16 @@ func (m *SessionModule) GetSession(code string) (*SessionInfo, error) {
 	// Not found in tmux — clean up orphan meta
 	_ = m.meta.DeleteMeta(tmuxID)
 	return nil, nil
+}
+
+func (m *SessionModule) applyActivePaneMetadata(info *SessionInfo) {
+	metadata, err := m.tmux.ActivePaneMetadata(info.Name)
+	if err != nil {
+		return
+	}
+	info.PaneTitle = metadata.PaneTitle
+	info.WindowName = metadata.WindowName
+	info.CurrentCommand = metadata.PaneCurrentCommand
 }
 
 // UpdateMeta performs a partial meta update for the session identified by code.

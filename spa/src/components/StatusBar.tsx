@@ -122,9 +122,7 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   const hostRuntime = useHostStore((s) => agentHostId ? s.runtime[agentHostId] : null)
   const agentLabel = useAgentStore((s) => agentCk ? s.models[agentCk] ?? null : null)
   const agentType = useAgentStore((s) => agentCk ? s.agentTypes[agentCk] ?? null : null)
-  const showOscTitle = useUISettingsStore((s) => s.showOscTitle)
-  const rawOscTitle = useAgentStore((s) => agentCk ? s.oscTitles[agentCk] ?? null : null)
-  const oscTitle = showOscTitle && agentType ? rawOscTitle : null
+  const showAgentTitleInStatusBar = useUISettingsStore((s) => s.showAgentTitleInStatusBar)
   const closeMenu = useCallback(() => setMenuOpen(false), [])
   useClickOutside(menuRef, closeMenu)
 
@@ -158,6 +156,7 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
 
   // Session pane — show host, session name, status, viewMode toggle
   const sessionName = session?.name ?? content.sessionCode
+  const paneTitle = showAgentTitleInStatusBar && agentType && !content.terminated ? session?.pane_title : null
   const hostName = hostConfig?.name ?? 'Unknown'
   const status = hostRuntime?.status ?? 'disconnected'
 
@@ -202,16 +201,16 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
         </span>
       )}
       <UploadStatus hostId={agentHostId} sessionCode={agentSessionCode} t={t} />
-      {oscTitle && (
+      {paneTitle && (
         <span
-          data-testid="osc-title"
+          data-testid="agent-pane-title"
           className="ml-auto max-w-[40ch] truncate text-text-muted"
-          title={oscTitle}
+          title={paneTitle}
         >
-          {oscTitle}
+          {paneTitle}
         </span>
       )}
-      <span className={`${oscTitle ? '' : 'ml-auto'} flex items-center`}>
+      <span className={`${paneTitle ? '' : 'ml-auto'} flex items-center`}>
         <div className="relative" ref={menuRef}>
           <button
             title={t('nav.toggle_view')}

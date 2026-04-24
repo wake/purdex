@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useUISettingsStore, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM, clampKeepAlive } from './useUISettingsStore'
+import { STORAGE_KEYS } from '../lib/storage'
 
 describe('useUISettingsStore', () => {
   beforeEach(() => {
+    localStorage.clear()
     useUISettingsStore.setState({
       terminalRevealDelay: 300,
       terminalRenderer: 'webgl',
@@ -130,7 +132,8 @@ describe('useUISettingsStore — tab/icon preferences', () => {
       tabIndicatorStyle: 'badge',
       ccIconVariant: 'bot',
       codexIconVariant: 'openai',
-      showOscTitle: false,
+      dynamicTabName: false,
+      showAgentTitleInStatusBar: false,
     })
   })
 
@@ -167,12 +170,33 @@ describe('useUISettingsStore — tab/icon preferences', () => {
     expect(useUISettingsStore.getState().codexIconVariant).toBe('openai')
   })
 
-  it('showOscTitle toggles the flag', () => {
-    expect(useUISettingsStore.getState().showOscTitle).toBe(false)
-    useUISettingsStore.getState().setShowOscTitle(true)
-    expect(useUISettingsStore.getState().showOscTitle).toBe(true)
-    useUISettingsStore.getState().setShowOscTitle(false)
-    expect(useUISettingsStore.getState().showOscTitle).toBe(false)
+  it('dynamicTabName toggles the flag', () => {
+    expect(useUISettingsStore.getState().dynamicTabName).toBe(false)
+    useUISettingsStore.getState().setDynamicTabName(true)
+    expect(useUISettingsStore.getState().dynamicTabName).toBe(true)
+    useUISettingsStore.getState().setDynamicTabName(false)
+    expect(useUISettingsStore.getState().dynamicTabName).toBe(false)
+  })
+
+  it('showAgentTitleInStatusBar toggles the flag', () => {
+    expect(useUISettingsStore.getState().showAgentTitleInStatusBar).toBe(false)
+    useUISettingsStore.getState().setShowAgentTitleInStatusBar(true)
+    expect(useUISettingsStore.getState().showAgentTitleInStatusBar).toBe(true)
+    useUISettingsStore.getState().setShowAgentTitleInStatusBar(false)
+    expect(useUISettingsStore.getState().showAgentTitleInStatusBar).toBe(false)
+  })
+
+  it('migration maps old showOscTitle to both new flags', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.UI_SETTINGS,
+      JSON.stringify({
+        state: { showOscTitle: true, terminalRenderer: 'webgl', keepAliveCount: 0 },
+        version: 2,
+      }),
+    )
+    await useUISettingsStore.persist.rehydrate()
+    expect(useUISettingsStore.getState().dynamicTabName).toBe(true)
+    expect(useUISettingsStore.getState().showAgentTitleInStatusBar).toBe(true)
   })
 })
 

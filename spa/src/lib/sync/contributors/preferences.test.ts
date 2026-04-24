@@ -17,6 +17,8 @@ const DEFAULT_STATE = {
   keepAliveCount: 0,
   keepAlivePinned: false,
   terminalSettingsVersion: 0,
+  dynamicTabName: false,
+  showAgentTitleInStatusBar: false,
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +81,8 @@ describe('createPreferencesContributor', () => {
     expect(keys).toContain('keepAliveCount')
     expect(keys).toContain('keepAlivePinned')
     expect(keys).toContain('terminalSettingsVersion')
+    expect(keys).toContain('dynamicTabName')
+    expect(keys).toContain('showAgentTitleInStatusBar')
 
     // Must NOT contain setter functions
     expect(keys).not.toContain('setTerminalRevealDelay')
@@ -126,6 +130,19 @@ describe('createPreferencesContributor', () => {
     expect(state.terminalSettingsVersion).toBe(5)
   })
 
+  it('deserialize with full-replace migrates legacy showOscTitle', () => {
+    const incoming: FullPayload = {
+      version: 1,
+      data: { showOscTitle: true },
+    }
+
+    contributor.deserialize(incoming, { type: 'full-replace' })
+
+    const state = useUISettingsStore.getState()
+    expect(state.dynamicTabName).toBe(true)
+    expect(state.showAgentTitleInStatusBar).toBe(true)
+  })
+
   // -------------------------------------------------------------------------
   // deserialize — field-merge
   // -------------------------------------------------------------------------
@@ -171,6 +188,23 @@ describe('createPreferencesContributor', () => {
     expect(state.terminalRenderer).toBe('webgl')
     expect(state.keepAliveCount).toBe(2)
     expect(state.terminalSettingsVersion).toBe(1)
+  })
+
+  it('deserialize with field-merge migrates legacy showOscTitle when resolved remote', () => {
+    useUISettingsStore.setState({ dynamicTabName: false, showAgentTitleInStatusBar: false })
+    const incoming: FullPayload = {
+      version: 1,
+      data: { showOscTitle: true },
+    }
+
+    contributor.deserialize(incoming, {
+      type: 'field-merge',
+      resolved: { showOscTitle: 'remote' },
+    })
+
+    const state = useUISettingsStore.getState()
+    expect(state.dynamicTabName).toBe(true)
+    expect(state.showAgentTitleInStatusBar).toBe(true)
   })
 
   it('deserialize with field-merge ignores fields not present in resolved', () => {

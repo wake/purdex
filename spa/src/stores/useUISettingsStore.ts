@@ -64,8 +64,10 @@ interface UISettings {
   setCcIconVariant: (variant: CcIconVariant) => void
   codexIconVariant: CodexIconVariant
   setCodexIconVariant: (variant: CodexIconVariant) => void
-  showOscTitle: boolean
-  setShowOscTitle: (show: boolean) => void
+  dynamicTabName: boolean
+  setDynamicTabName: (show: boolean) => void
+  showAgentTitleInStatusBar: boolean
+  setShowAgentTitleInStatusBar: (show: boolean) => void
 }
 
 export const useUISettingsStore = create<UISettings>()(
@@ -98,34 +100,46 @@ export const useUISettingsStore = create<UISettings>()(
       setCcIconVariant: (variant) => set({ ccIconVariant: variant }),
       codexIconVariant: 'openai' as CodexIconVariant,
       setCodexIconVariant: (variant) => set({ codexIconVariant: variant }),
-      showOscTitle: false,
-      setShowOscTitle: (show) => set({ showOscTitle: show }),
+      dynamicTabName: false,
+      setDynamicTabName: (show) => set({ dynamicTabName: show }),
+      showAgentTitleInStatusBar: false,
+      setShowAgentTitleInStatusBar: (show) => set({ showAgentTitleInStatusBar: show }),
     }),
     {
       name: STORAGE_KEYS.UI_SETTINGS,
       storage: purdexStorage,
-      version: 2,
+      version: 3,
       migrate: (persisted: unknown, fromVersion: number): unknown => {
         const base = (persisted ?? {}) as Record<string, unknown>
-        if (fromVersion >= 2) return base
+        if (fromVersion >= 3) return base
+
+        const migrateShowOscTitle = (state: Record<string, unknown>): Record<string, unknown> => {
+          const { showOscTitle, ...rest } = state
+          if (typeof showOscTitle === 'boolean') {
+            return { ...rest, dynamicTabName: showOscTitle, showAgentTitleInStatusBar: showOscTitle }
+          }
+          return rest
+        }
+
+        if (fromVersion >= 2) return migrateShowOscTitle(base)
 
         // Import UI prefs that used to live in useAgentStore's persist slice (v4 or v5).
         // Keep it best-effort: any parse/shape error just falls back to defaults.
         try {
-          if (typeof window === 'undefined') return base
+          if (typeof window === 'undefined') return migrateShowOscTitle(base)
           const raw = window.localStorage.getItem(STORAGE_KEYS.AGENT)
-          if (!raw) return base
+          if (!raw) return migrateShowOscTitle(base)
           const parsed = JSON.parse(raw)
           const oldState = parsed?.state as Record<string, unknown> | undefined
-          if (!oldState) return base
+          if (!oldState) return migrateShowOscTitle(base)
           const imported: Record<string, unknown> = {}
           if (typeof oldState.tabIndicatorStyle === 'string') imported.tabIndicatorStyle = oldState.tabIndicatorStyle
           if (typeof oldState.ccIconVariant === 'string') imported.ccIconVariant = oldState.ccIconVariant
           if (typeof oldState.codexIconVariant === 'string') imported.codexIconVariant = oldState.codexIconVariant
           if (typeof oldState.showOscTitle === 'boolean') imported.showOscTitle = oldState.showOscTitle
-          return { ...base, ...imported }
+          return migrateShowOscTitle({ ...base, ...imported })
         } catch {
-          return base
+          return migrateShowOscTitle(base)
         }
       },
       onRehydrateStorage: () => (state) => {
