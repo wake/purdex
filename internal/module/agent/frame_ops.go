@@ -211,16 +211,11 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		return nil, FrameTraceMeta{}, err
 	}
 
-	subagents := []agentpkg.SubagentRef{}
 	startedAt := broadcastTs
 	parentFrameID := ""
 	if frame != nil {
-		subagents = append([]agentpkg.SubagentRef(nil), frame.Subagents...)
 		startedAt = frame.StartedAt
 		parentFrameID = frame.ParentFrameID
-	}
-	if req.EventName == "SessionStart" {
-		subagents = []agentpkg.SubagentRef{}
 	}
 	if parentFrameID == "" {
 		parent, err := m.frames.FindByPanePID(req.TmuxPaneID, info.PPID)
@@ -240,22 +235,60 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		status = agentpkg.StatusIdle
 	}
 
-	stored, err := m.frames.Upsert(store.Frame{
-		FrameID:          frameID(frame),
-		PaneID:           req.TmuxPaneID,
-		AgentType:        req.AgentType,
-		PID:              req.SenderPID,
-		PPID:             info.PPID,
-		ProcessStartTime: req.SenderStartTime,
-		ParentFrameID:    parentFrameID,
-		Subagents:        subagents,
-		Status:           status,
-		StartedAt:        startedAt,
-		LastSeenAt:       broadcastTs,
-		Verified:         true,
-	})
-	if err != nil {
-		return nil, FrameTraceMeta{}, err
+	var stored store.Frame
+	if frame != nil {
+		// Existing frame: narrow column update (#632 R8). Writing the full
+		// frame would round-trip a stale Subagents baseline and clobber
+		// concurrent proxy/native attach/detach mutations on the same row.
+		// Subagents changes flow through mutateSubagentsWithRetry /
+		// attachProxyRefWithRetry / removeProxyRefForSender, not here.
+		//
+		// Exception: SessionStart on an existing frame intentionally resets
+		// the subagent list (old session's refs no longer apply). Use the
+		// reset variant so subagents_json = '[]' lands in the same SQL.
+		updated := *frame
+		updated.AgentType = req.AgentType
+		updated.PPID = info.PPID
+		updated.ParentFrameID = parentFrameID
+		updated.Status = status
+		updated.LastSeenAt = broadcastTs
+		updated.Verified = true
+		var updateErr error
+		if req.EventName == "SessionStart" {
+			updateErr = m.frames.UpdateHookPathAndResetSubagents(updated)
+		} else {
+			updateErr = m.frames.UpdateHookPath(updated)
+		}
+		if updateErr != nil {
+			return nil, FrameTraceMeta{}, updateErr
+		}
+		reloaded, err := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
+		if err != nil {
+			return nil, FrameTraceMeta{}, err
+		}
+		if reloaded == nil {
+			return nil, FrameTraceMeta{}, nil
+		}
+		stored = *reloaded
+	} else {
+		// New frame: insert via Upsert. No existing subagents to clobber;
+		// start the row with an empty list.
+		stored, err = m.frames.Upsert(store.Frame{
+			PaneID:           req.TmuxPaneID,
+			AgentType:        req.AgentType,
+			PID:              req.SenderPID,
+			PPID:             info.PPID,
+			ProcessStartTime: req.SenderStartTime,
+			ParentFrameID:    parentFrameID,
+			Subagents:        []agentpkg.SubagentRef{},
+			Status:           status,
+			StartedAt:        startedAt,
+			LastSeenAt:       broadcastTs,
+			Verified:         true,
+		})
+		if err != nil {
+			return nil, FrameTraceMeta{}, err
+		}
 	}
 	projection, err := m.projectPane(req.TmuxPaneID)
 	reason := "parent_frame_missing"

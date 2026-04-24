@@ -588,6 +588,71 @@ func TestSubagentStart_ConcurrentNativeStartsBothLand(t *testing.T) {
 	_ = parent
 }
 
+// HookRace1 — #632 R8 regression: applyFrameEvent's existing-frame status
+// update path (non-SessionEnd / non-SubagentStart / non-SubagentStop hook
+// events like UserPromptSubmit) uses narrow UpdateHookPath that does not
+// touch subagents_json. A concurrent proxy attach in flight does not lose
+// its ref to the hook handler's stale baseline.
+func TestHookStatusUpdate_DoesNotClobberConcurrentSubagents(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	// First, attach a proxy ref to the cc parent (via applyFrameEvent's
+	// proxy fast-path so we exercise the real attachProxyRefWithRetry).
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "t100", nil }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	req1 := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		EventName: "SessionStart", AgentType: "codex",
+		SenderPID: 200, SenderStartTime: "t200",
+	}
+	if _, _, err := m.applyFrameEvent(req1, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("proxy attach: %v", err)
+	}
+
+	// Confirm cc parent now owns 1 proxy ref.
+	mid, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if len(mid.Subagents) != 1 || !mid.Subagents[0].IsProxy {
+		t.Fatalf("setup: expected 1 proxy ref on cc parent; got %+v", mid.Subagents)
+	}
+
+	// Now fire a general-hook status transition on cc itself (not SessionStart
+	// / not SubagentStart-Stop / not SessionEnd). The request carries cc's
+	// own identity so applyFrameEvent's frame != nil branch triggers on the
+	// stale cc row that does NOT have the proxy ref.
+	req2 := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		EventName: "UserPromptSubmit", AgentType: "cc",
+		SenderPID: 100, SenderStartTime: "t100",
+	}
+	if _, _, err := m.applyFrameEvent(req2, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 200); err != nil {
+		t.Fatalf("hook status update: %v", err)
+	}
+
+	// The proxy ref attached above must still be on cc (UpdateHookPath did
+	// not touch subagents_json). Status and LastSeenAt should have moved.
+	final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if len(final.Subagents) != 1 || !final.Subagents[0].IsProxy {
+		t.Fatalf("proxy ref clobbered by hook status update; got %+v (#632 R8 regression)", final.Subagents)
+	}
+	if final.Status != agentpkg.StatusRunning {
+		t.Fatalf("Status = %q, want Running", final.Status)
+	}
+	_ = parent
+}
+
 func TestSendSnapshot_IncludesLegacySessionsWithoutFrames(t *testing.T) {
 	m := newTestModule(t)
 	fakeTmux := tmux.NewFakeExecutor()

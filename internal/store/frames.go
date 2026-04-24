@@ -295,6 +295,71 @@ func (s *FramesStore) UpdateStatusAndLastSeen(frameID string, status agentpkg.St
 	return nil
 }
 
+// UpdateHookPath updates the columns that a general-hook status transition
+// (applyFrameEvent's frame != nil branch for non-SessionEnd/SubagentStart/
+// SubagentStop events) needs to touch on an existing frame — everything
+// except started_at and, crucially, subagents_json. Leaving subagents_json
+// out of the SQL prevents a hook handler's stale baseline from clobbering
+// concurrent proxy/native subagent mutations on the same row (#632 R8).
+// Returns sql.ErrNoRows if the frame does not exist.
+func (s *FramesStore) UpdateHookPath(frame Frame) error {
+	res, err := s.db.Exec(`
+		UPDATE agent_frames SET
+			agent_type = ?,
+			ppid = ?,
+			parent_frame_id = ?,
+			status = ?,
+			last_seen_at = ?,
+			verified = ?
+		WHERE frame_id = ?
+	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID),
+		string(frame.Status), frame.LastSeenAt, boolToInt(frame.Verified), frame.FrameID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// UpdateHookPathAndResetSubagents is UpdateHookPath plus an explicit
+// subagents_json = '[]' write, used only by SessionStart on an existing
+// frame where the intent is to wipe the previous session's ref list.
+// Race semantics under concurrent attach are "SessionStart wins" — the
+// new session's empty list overwrites any in-flight attach; the attach's
+// sender will emit its own SubagentStart afterward if still relevant.
+// Returns sql.ErrNoRows if the frame does not exist.
+func (s *FramesStore) UpdateHookPathAndResetSubagents(frame Frame) error {
+	res, err := s.db.Exec(`
+		UPDATE agent_frames SET
+			agent_type = ?,
+			ppid = ?,
+			parent_frame_id = ?,
+			subagents_json = '[]',
+			status = ?,
+			last_seen_at = ?,
+			verified = ?
+		WHERE frame_id = ?
+	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID),
+		string(frame.Status), frame.LastSeenAt, boolToInt(frame.Verified), frame.FrameID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // UpsertIfUnchanged updates an existing frame atomically, returning
 // (false, zeroFrame, nil) if the row's last_seen_at no longer matches
 // expectedLastSeenAt — i.e. a concurrent writer changed the row between our
