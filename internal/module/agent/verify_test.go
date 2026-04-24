@@ -15,7 +15,10 @@ func newVerifyTestModule(t *testing.T) *Module {
 		t.Fatalf("open agent event store: %v", err)
 	}
 	t.Cleanup(func() { _ = events.Close() })
-	m := New(events)
+	m, err := New(events)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	m.registry = agentpkg.NewRegistry()
 	m.tmux = tmux.NewFakeExecutor()
 	if m.traceSink != nil {

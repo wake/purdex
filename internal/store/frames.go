@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/google/uuid"
 	agentpkg "github.com/wake/purdex/internal/agent"
@@ -17,7 +18,7 @@ type Frame struct {
 	PPID             int
 	ProcessStartTime string
 	ParentFrameID    string
-	Subagents        []string
+	Subagents        []agentpkg.SubagentRef
 	Status           agentpkg.Status
 	StartedAt        int64
 	LastSeenAt       int64
@@ -58,6 +59,65 @@ func migrateFramesDB(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_frames_agent_type ON agent_frames(agent_type)`); err != nil {
 		return err
 	}
+	return clearStaleSubagentsJSON(db)
+}
+
+// clearStaleSubagentsJSON scans every `agent_frames.subagents_json` and
+// classifies rows as new ([]SubagentRef) / legacy ([]string) / malformed.
+// All new → no-op. Any legacy (and nothing malformed) → TRUNCATE table;
+// frames are ephemeral telemetry so clearing is lossless. Any malformed →
+// return a startup error so the daemon refuses to run rather than silently
+// wiping unknown on-disk state.
+//
+// Full-table scan (not LIMIT 1) because SQLite does not guarantee row order
+// and a single probe can hit a new-format row while legacy rows survive —
+// scanFrame would then crash on later ListAll/GetByIdentity calls.
+func clearStaleSubagentsJSON(db *sql.DB) error {
+	rows, err := db.Query(`SELECT frame_id, subagents_json FROM agent_frames`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var hasLegacy bool
+	var malformedID string // non-empty = malformed detected
+	for rows.Next() {
+		var id string
+		var js sql.NullString
+		if err := rows.Scan(&id, &js); err != nil {
+			return err
+		}
+		raw := ""
+		if js.Valid {
+			raw = js.String
+		}
+		var newDst []agentpkg.SubagentRef
+		if json.Unmarshal([]byte(raw), &newDst) == nil {
+			continue
+		}
+		var legacyDst []string
+		if json.Unmarshal([]byte(raw), &legacyDst) == nil {
+			hasLegacy = true
+			continue
+		}
+		if malformedID == "" {
+			malformedID = id
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if malformedID != "" {
+		return fmt.Errorf("agent_frames row %q has malformed subagents_json; refusing to start — inspect or remove the row manually (Phase 2 PR-2a)", malformedID)
+	}
+	if !hasLegacy {
+		return nil
+	}
+	if _, err := db.Exec(`DELETE FROM agent_frames`); err != nil {
+		return err
+	}
+	log.Printf("[store] cleared agent_frames: legacy subagents_json schema detected (Phase 2 PR-2a upgrade)")
 	return nil
 }
 
@@ -87,7 +147,7 @@ func (s *FramesStore) Upsert(frame Frame) (Frame, error) {
 			frame.StartedAt = frame.LastSeenAt
 		}
 		if frame.Subagents == nil {
-			frame.Subagents = []string{}
+			frame.Subagents = []agentpkg.SubagentRef{}
 		}
 	}
 	if frame.LastSeenAt == 0 {
@@ -242,7 +302,7 @@ func scanFrame(scanner frameScanner) (Frame, error) {
 		return Frame{}, fmt.Errorf("unmarshal subagents: %w", err)
 	}
 	if frame.Subagents == nil {
-		frame.Subagents = []string{}
+		frame.Subagents = []agentpkg.SubagentRef{}
 	}
 	return frame, nil
 }

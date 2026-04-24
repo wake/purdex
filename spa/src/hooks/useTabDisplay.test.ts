@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useAgentStore } from '../stores/useAgentStore'
+import type { SubagentRef } from '../stores/useAgentStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
@@ -157,7 +158,11 @@ describe('useTabDisplay — agent store fields', () => {
     useAgentStore.setState({
       statuses: { 'h1:sc1': 'running' },
       unread: { 'h1:sc1': true },
-      subagents: { 'h1:sc1': [{ id: 's1' }] as never },
+      subagents: {
+        'h1:sc1': [
+          { id: 's1', type: 'cc', started_at: 0, source_pid: 0, source_start_time: '' } satisfies SubagentRef,
+        ],
+      },
     })
     useUISettingsStore.setState({ tabIndicatorStyle: 'dot' })
     const { result } = renderHook(() => useTabDisplay(makeTab()))

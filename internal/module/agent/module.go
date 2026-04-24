@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -39,7 +40,7 @@ type Module struct {
 
 	mu             sync.Mutex
 	currentStatus  map[string]agentpkg.Status
-	subagents      map[string][]string
+	subagents      map[string][]agentpkg.SubagentRef
 	activeWatchers map[string]string // tmuxSession → agentType
 
 	// statusSnapshots caches the latest statusline payload per sessionCode.
@@ -62,13 +63,41 @@ type Module struct {
 	sweepWG     sync.WaitGroup
 }
 
+// Test seams for Module.New. framesInitFn failure is fatal (hook processing
+// depends on frames); tracesInitFn failure is best-effort (trace
+// observability degrades to nil, daemon continues).
+var (
+	framesInitFn = func(e *store.AgentEventStore) (*store.FramesStore, error) { return e.Frames() }
+	tracesInitFn = func(e *store.AgentEventStore) (*store.TraceStore, error) { return e.Traces() }
+)
+
 // New creates a new agent Module backed by the given AgentEventStore.
-func New(events *store.AgentEventStore) *Module {
+//
+// Returns an error ONLY when the frames store cannot be initialized —
+// typically when on-disk agent_frames contains malformed subagents_json
+// that migrateFramesDB refuses to classify. That failure is fatal because
+// hook processing depends on m.frames; continuing with m.frames == nil
+// would degrade silently via the module's m.frames == nil fallbacks.
+//
+// Trace store initialization is best-effort: the module already tolerates
+// m.traces == nil / m.traceSink == nil in normal operation (monitor
+// endpoints degrade, hook processing still runs). A trace-table migration
+// or corruption error is logged and the module continues without trace
+// observability, not treated as a daemon-fatal condition.
+func New(events *store.AgentEventStore) (*Module, error) {
 	var frames *store.FramesStore
 	var traces *store.TraceStore
 	if events != nil {
-		frames, _ = events.Frames()
-		traces, _ = events.Traces()
+		var err error
+		frames, err = framesInitFn(events)
+		if err != nil {
+			return nil, fmt.Errorf("agent module: frames store: %w", err)
+		}
+		traces, err = tracesInitFn(events)
+		if err != nil {
+			log.Printf("[agent] traces store unavailable, continuing without trace observability: %v", err)
+			traces = nil
+		}
 	}
 	m := &Module{
 		events:          events,
@@ -76,7 +105,7 @@ func New(events *store.AgentEventStore) *Module {
 		traces:          traces,
 		registry:        agentpkg.NewRegistry(),
 		currentStatus:   make(map[string]agentpkg.Status),
-		subagents:       make(map[string][]string),
+		subagents:       make(map[string][]agentpkg.SubagentRef),
 		activeWatchers:  make(map[string]string),
 		statusSnapshots: make(map[string]statusSnapshot),
 		testObservers:   make(map[string]*testObserver),
@@ -84,7 +113,7 @@ func New(events *store.AgentEventStore) *Module {
 	if traces != nil {
 		m.traceSink = newHookTraceSink(traces)
 	}
-	return m
+	return m, nil
 }
 
 func (m *Module) Name() string           { return "agent" }

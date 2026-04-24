@@ -30,7 +30,10 @@ func newTestModule(t *testing.T) *Module {
 		t.Fatalf("open agent event store: %v", err)
 	}
 	t.Cleanup(func() { events.Close() })
-	m := New(events)
+	m, err := New(events)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	m.registry = agentpkg.NewRegistry()
 	origVerify := verifyEventFn
 	verifyEventFn = func(*Module, EventRequest) verifyDecision { return verifyDecision{Accepted: true} }
@@ -419,8 +422,97 @@ func TestHandleEvent_OpenCodeValidSubagentBroadcasts(t *testing.T) {
 		if !strings.Contains(env.Value, `"raw_event_name":"SubagentStart"`) {
 			t.Fatalf("broadcast value missing raw_event_name: %s", env.Value)
 		}
-		if !strings.Contains(env.Value, `"subagents":["call-1"]`) {
-			t.Fatalf("broadcast value missing subagent membership: %s", env.Value)
+		if !strings.Contains(env.Value, `"id":"call-1"`) {
+			t.Fatalf("broadcast value missing subagent id=call-1: %s", env.Value)
+		}
+		// Type is canonical agent family (opencode), NOT opencode's per-subagent
+		// sub-variant from detail.agent_type ("Explore"). See Phase 2 PR-2a
+		// round-1 codex P2: SubagentRef.Type should stay stable for
+		// agent-family lookup (SPA color table etc).
+		if !strings.Contains(env.Value, `"type":"opencode"`) {
+			t.Fatalf("broadcast value missing subagent type=opencode: %s", env.Value)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for SubagentStart broadcast")
+	}
+}
+
+// HB1 (Lights Phase 2 plan §2.8) — the WS broadcast payload for a native cc
+// SubagentStart carries SubagentRef objects (id + type + started_at) not
+// bare id strings, and native refs omit is_proxy (omitempty).
+func TestHandleEvent_BroadcastPayloadCarriesSubagentRefs(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
+			switch event {
+			case "SessionStart":
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			case "SubagentStart":
+				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": "sub-1"}}
+			default:
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			}
+		},
+	})
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	for _, body := range []string{
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SubagentStart","raw_event":{"agent_id":"sub-1"},"agent_type":"cc"}`,
+	} {
+		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		m.handleEvent(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+	}
+
+	// Drain the SessionStart broadcast.
+	select {
+	case <-sub.SendCh():
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for SessionStart broadcast")
+	}
+
+	select {
+	case msg := <-sub.SendCh():
+		var env struct {
+			Type    string `json:"type"`
+			Session string `json:"session"`
+			Value   string `json:"value"`
+		}
+		if err := json.Unmarshal(msg, &env); err != nil {
+			t.Fatalf("unmarshal broadcast: %v", err)
+		}
+		// Decode the inner normalized event payload.
+		var payload struct {
+			Subagents []map[string]any `json:"subagents"`
+		}
+		if err := json.Unmarshal([]byte(env.Value), &payload); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		if len(payload.Subagents) != 1 {
+			t.Fatalf("subagents len = %d, want 1 (payload=%s)", len(payload.Subagents), env.Value)
+		}
+		ref := payload.Subagents[0]
+		if ref["type"] != "cc" {
+			t.Errorf("subagents[0].type = %v, want cc", ref["type"])
+		}
+		startedAt, ok := ref["started_at"].(float64)
+		if !ok || startedAt == 0 {
+			t.Errorf("subagents[0].started_at should be a non-zero number, got %v", ref["started_at"])
+		}
+		if _, hasProxy := ref["is_proxy"]; hasProxy {
+			t.Errorf("subagents[0] should not contain is_proxy for native ref: %v", ref)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for SubagentStart broadcast")
@@ -518,7 +610,10 @@ func TestBuildNormalized_EmptySubagentsIsNotNil(t *testing.T) {
 func TestBuildNormalized_WithSubagents(t *testing.T) {
 	m := newTestModule(t)
 	m.mu.Lock()
-	m.subagents["work"] = []string{"agent-1", "agent-2"}
+	m.subagents["work"] = []agentpkg.SubagentRef{
+		{ID: "agent-1", Type: "cc"},
+		{ID: "agent-2", Type: "cc"},
+	}
 	m.mu.Unlock()
 
 	result := agentpkg.DeriveResult{Valid: true}
@@ -533,7 +628,7 @@ func TestBuildNormalized_WithSubagents(t *testing.T) {
 func TestRenameSession(t *testing.T) {
 	m := newTestModule(t)
 	m.mu.Lock()
-	m.subagents["old-session"] = []string{"agent-1"}
+	m.subagents["old-session"] = []agentpkg.SubagentRef{{ID: "agent-1", Type: "cc"}}
 	m.currentStatus["old-session"] = agentpkg.StatusRunning
 	m.mu.Unlock()
 
@@ -548,7 +643,7 @@ func TestRenameSession(t *testing.T) {
 	if _, ok := m.currentStatus["old-session"]; ok {
 		t.Error("old-session should be removed from currentStatus")
 	}
-	if subs := m.subagents["new-session"]; len(subs) != 1 || subs[0] != "agent-1" {
+	if subs := m.subagents["new-session"]; len(subs) != 1 || subs[0].ID != "agent-1" {
 		t.Errorf("new-session subagents: want [agent-1], got %v", subs)
 	}
 	if m.currentStatus["new-session"] != agentpkg.StatusRunning {
@@ -573,7 +668,7 @@ func TestRenameSession_NoOldData(t *testing.T) {
 func TestRenameSessionAtomic_Success(t *testing.T) {
 	m := newTestModule(t)
 	m.mu.Lock()
-	m.subagents["old-name"] = []string{"agent-1"}
+	m.subagents["old-name"] = []agentpkg.SubagentRef{{ID: "agent-1", Type: "cc"}}
 	m.currentStatus["old-name"] = agentpkg.StatusRunning
 	m.mu.Unlock()
 
@@ -591,7 +686,7 @@ func TestRenameSessionAtomic_Success(t *testing.T) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if subs := m.subagents["new-name"]; len(subs) != 1 || subs[0] != "agent-1" {
+	if subs := m.subagents["new-name"]; len(subs) != 1 || subs[0].ID != "agent-1" {
 		t.Errorf("subagents should be transferred to new-name, got %v", subs)
 	}
 	if _, ok := m.subagents["old-name"]; ok {
@@ -602,7 +697,7 @@ func TestRenameSessionAtomic_Success(t *testing.T) {
 func TestRenameSessionAtomic_CallbackErrorSkipsTransfer(t *testing.T) {
 	m := newTestModule(t)
 	m.mu.Lock()
-	m.subagents["old-name"] = []string{"agent-1"}
+	m.subagents["old-name"] = []agentpkg.SubagentRef{{ID: "agent-1", Type: "cc"}}
 	m.mu.Unlock()
 
 	wantErr := errStub("rename failed")
@@ -1415,7 +1510,7 @@ func TestHandleEvent_CatalogMiss_NoStatusUpdate(t *testing.T) {
 	// Seed pre-existing state to verify it's untouched.
 	m.mu.Lock()
 	m.currentStatus["work"] = agentpkg.StatusRunning
-	m.subagents["work"] = []string{"existing-sub"}
+	m.subagents["work"] = []agentpkg.SubagentRef{{ID: "existing-sub", Type: "cc"}}
 	m.mu.Unlock()
 
 	sub := m.core.Events.AddTestSubscriber()
@@ -1430,12 +1525,12 @@ func TestHandleEvent_CatalogMiss_NoStatusUpdate(t *testing.T) {
 
 	m.mu.Lock()
 	gotStatus := m.currentStatus["work"]
-	gotSubs := append([]string(nil), m.subagents["work"]...)
+	gotSubs := append([]agentpkg.SubagentRef(nil), m.subagents["work"]...)
 	m.mu.Unlock()
 	if gotStatus != agentpkg.StatusRunning {
 		t.Errorf("currentStatus = %q, want running (catalog miss must not mutate)", gotStatus)
 	}
-	if len(gotSubs) != 1 || gotSubs[0] != "existing-sub" {
+	if len(gotSubs) != 1 || gotSubs[0].ID != "existing-sub" {
 		t.Errorf("subagents = %v, want [existing-sub]", gotSubs)
 	}
 
