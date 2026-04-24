@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -62,13 +63,26 @@ type Module struct {
 	sweepWG     sync.WaitGroup
 }
 
-// New creates a new agent Module backed by the given AgentEventStore.
-func New(events *store.AgentEventStore) *Module {
+// New creates a new agent Module backed by the given AgentEventStore. Returns
+// an error if the frames / traces stores fail to migrate — most notably if
+// the on-disk agent_frames contains malformed subagents_json that cannot be
+// classified as either the legacy []string shape or the Phase 2 []SubagentRef
+// shape. Surfacing the error here lets the daemon refuse to start rather than
+// continuing with m.frames == nil (which would degrade silently via the
+// module's m.frames == nil fallbacks).
+func New(events *store.AgentEventStore) (*Module, error) {
 	var frames *store.FramesStore
 	var traces *store.TraceStore
 	if events != nil {
-		frames, _ = events.Frames()
-		traces, _ = events.Traces()
+		var err error
+		frames, err = events.Frames()
+		if err != nil {
+			return nil, fmt.Errorf("agent module: frames store: %w", err)
+		}
+		traces, err = events.Traces()
+		if err != nil {
+			return nil, fmt.Errorf("agent module: traces store: %w", err)
+		}
 	}
 	m := &Module{
 		events:          events,
@@ -84,7 +98,7 @@ func New(events *store.AgentEventStore) *Module {
 	if traces != nil {
 		m.traceSink = newHookTraceSink(traces)
 	}
-	return m
+	return m, nil
 }
 
 func (m *Module) Name() string           { return "agent" }

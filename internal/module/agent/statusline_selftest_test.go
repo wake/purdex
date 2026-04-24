@@ -83,7 +83,10 @@ func ackReady(t *testing.T, env *handlerTestEnv, nonce string) {
 }
 
 func TestTestObserversRegisterSignalDeregister(t *testing.T) {
-	m := New(nil) // AgentEventStore allowed to be nil; observers don't touch it
+	m, err := New(nil) // AgentEventStore allowed to be nil; observers don't touch it
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	obs := m.registerTestObserver("__pdx_test_aaaa1111")
 
 	go m.signalTestStage("__pdx_test_aaaa1111", testStageReceived)
@@ -104,7 +107,10 @@ func TestTestObserversRegisterSignalDeregister(t *testing.T) {
 }
 
 func TestSignalTestStageUnknownNonceIsNoOp(t *testing.T) {
-	m := New(nil)
+	m, err := New(nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	// Must not panic, must not hang.
 	m.signalTestStage("__pdx_test_zzzz9999", testStageReceived)
 }

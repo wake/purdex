@@ -30,7 +30,10 @@ func newTestModule(t *testing.T) *Module {
 		t.Fatalf("open agent event store: %v", err)
 	}
 	t.Cleanup(func() { events.Close() })
-	m := New(events)
+	m, err := New(events)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	m.registry = agentpkg.NewRegistry()
 	origVerify := verifyEventFn
 	verifyEventFn = func(*Module, EventRequest) verifyDecision { return verifyDecision{Accepted: true} }

@@ -70,6 +70,14 @@ func migrateAgentEventDB(db *sql.DB) error {
 // Close closes the underlying DB connection.
 func (s *AgentEventStore) Close() error { return s.db.Close() }
 
+// ExecRawForTest runs a raw SQL statement on the underlying DB. It exists
+// solely for cross-package tests that need to seed rows the public API
+// does not allow (e.g. a malformed `subagents_json` to exercise the
+// migration fail path). Do not call from production code.
+func (s *AgentEventStore) ExecRawForTest(query string, args ...any) (sql.Result, error) {
+	return s.db.Exec(query, args...)
+}
+
 // Set upserts the latest agent hook event for a tmux session.
 func (s *AgentEventStore) Set(tmuxSession, eventName string, rawEvent json.RawMessage, agentType string, broadcastTs int64) error {
 	_, err := s.db.Exec(`

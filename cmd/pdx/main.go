@@ -152,7 +152,11 @@ func runServe(args []string) {
 	// 5. Add modules (order doesn't matter — topoSort handles dependencies)
 	c.AddModule(session.NewSessionModule(meta))
 	c.AddModule(stream.New())
-	c.AddModule(agent.New(agentEvents))
+	agentMod, err := agent.New(agentEvents)
+	if err != nil {
+		log.Fatalf("agent module: %v", err)
+	}
+	c.AddModule(agentMod)
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	c.AddModule(syncmod.New())
