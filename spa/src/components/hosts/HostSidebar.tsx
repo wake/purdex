@@ -124,7 +124,7 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
                           <PuzzlePiece
                             size={10}
                             weight="fill"
-                            className="flex-shrink-0 rotate-[-12deg] text-text-muted"
+                            className="flex-shrink-0 rotate-[30deg] text-text-muted"
                             aria-hidden
                           />
                         )}
