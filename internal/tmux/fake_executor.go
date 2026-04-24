@@ -21,6 +21,7 @@ type SetWindowOptionCall struct {
 	Target string
 	Option string
 	Value  string
+	Global bool
 }
 
 type PasteCall struct {
@@ -35,40 +36,46 @@ type FakeExecutor struct {
 	nextID               int                    // auto-incrementing ID counter
 	paneCommands         map[string]string      // target → command name
 	paneCommandCalls     map[string]int         // target → PaneCurrentCommand call count
-	paneContents         map[string]string      // target → captured text
-	paneChildren         map[string][]string    // target → child command names
-	paneDescendants      map[string][]string    // target → recursive descendant command names
-	panePIDs             map[string]string      // target → pane pid
-	activePanePIDs       map[string]string      // target → active pane pid
-	paneSessions         map[string]string      // target → session name
-	paneCwds             map[string]string      // target → pane_current_path
-	paneSizes            map[string][2]int      // target → [cols, rows]
+	activePaneMetadata   map[string]TmuxPaneMetadata
+	activePaneMetaErrors map[string]error
+	paneContents         map[string]string   // target → captured text
+	paneChildren         map[string][]string // target → child command names
+	paneDescendants      map[string][]string // target → recursive descendant command names
+	panePIDs             map[string]string   // target → pane pid
+	activePanePIDs       map[string]string   // target → active pane pid
+	paneSessions         map[string]string   // target → session name
+	paneCwds             map[string]string   // target → pane_current_path
+	paneSizes            map[string][2]int   // target → [cols, rows]
 	rawKeysCalls         []RawKeysCall
 	keysCalls            []KeysCall
 	pasteCalls           []PasteCall
 	autoResizeCalls      []string              // targets passed to ResizeWindowAuto
 	setWindowOptionCalls []SetWindowOptionCall // calls to SetWindowOption
-	listCallCount        int                   // how many times ListSessions was called
-	alive                bool                  // whether tmux server is "alive"
-	HooksOutput          string                // returned by ShowHooksGlobal
-	FailSendKeys         bool                  // if true, SendKeysRaw returns an error
-	FailPasteText        bool                  // if true, PasteText returns an error
+	windowOptions        map[string]string
+	listCallCount        int    // how many times ListSessions was called
+	alive                bool   // whether tmux server is "alive"
+	HooksOutput          string // returned by ShowHooksGlobal
+	FailSendKeys         bool   // if true, SendKeysRaw returns an error
+	FailPasteText        bool   // if true, PasteText returns an error
 }
 
 func NewFakeExecutor() *FakeExecutor {
 	return &FakeExecutor{
-		sessions:         make(map[string]TmuxSession),
-		paneCommands:     make(map[string]string),
-		paneCommandCalls: make(map[string]int),
-		paneContents:     make(map[string]string),
-		paneChildren:     make(map[string][]string),
-		paneDescendants:  make(map[string][]string),
-		panePIDs:         make(map[string]string),
-		activePanePIDs:   make(map[string]string),
-		paneSessions:     make(map[string]string),
-		paneCwds:         make(map[string]string),
-		paneSizes:        make(map[string][2]int),
-		alive:            true,
+		sessions:             make(map[string]TmuxSession),
+		paneCommands:         make(map[string]string),
+		paneCommandCalls:     make(map[string]int),
+		activePaneMetadata:   make(map[string]TmuxPaneMetadata),
+		activePaneMetaErrors: make(map[string]error),
+		paneContents:         make(map[string]string),
+		paneChildren:         make(map[string][]string),
+		paneDescendants:      make(map[string][]string),
+		panePIDs:             make(map[string]string),
+		activePanePIDs:       make(map[string]string),
+		paneSessions:         make(map[string]string),
+		paneCwds:             make(map[string]string),
+		paneSizes:            make(map[string][2]int),
+		windowOptions:        make(map[string]string),
+		alive:                true,
 	}
 }
 
@@ -101,6 +108,40 @@ func (f *FakeExecutor) ListSessions() ([]TmuxSession, error) {
 		}
 	}
 	return out, nil
+}
+
+func (f *FakeExecutor) SetActivePaneMetadata(sessionName string, metadata TmuxPaneMetadata) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.activePaneMetadata[sessionName] = metadata
+	delete(f.activePaneMetaErrors, sessionName)
+}
+
+func (f *FakeExecutor) SetActivePaneMetadataError(sessionName string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.activePaneMetaErrors[sessionName] = err
+	delete(f.activePaneMetadata, sessionName)
+}
+
+func (f *FakeExecutor) ActivePaneMetadata(sessionName string) (TmuxPaneMetadata, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err, ok := f.activePaneMetaErrors[sessionName]; ok {
+		return TmuxPaneMetadata{}, err
+	}
+	metadata, ok := f.activePaneMetadata[sessionName]
+	if !ok {
+		return TmuxPaneMetadata{}, fmt.Errorf("active pane metadata not configured for %s", sessionName)
+	}
+	metadata.SessionID = sanitizeTmuxMetadata(metadata.SessionID)
+	metadata.SessionName = sanitizeTmuxMetadata(metadata.SessionName)
+	metadata.WindowID = sanitizeTmuxMetadata(metadata.WindowID)
+	metadata.PaneID = sanitizeTmuxMetadata(metadata.PaneID)
+	metadata.PaneTitle = sanitizeTmuxMetadata(metadata.PaneTitle)
+	metadata.WindowName = sanitizeTmuxMetadata(metadata.WindowName)
+	metadata.PaneCurrentCommand = sanitizeTmuxMetadata(metadata.PaneCurrentCommand)
+	return metadata, nil
 }
 
 // ListCallCount returns how many times ListSessions was called.
@@ -399,7 +440,32 @@ func (f *FakeExecutor) SetWindowOption(target, option, value string) error {
 		Option: option,
 		Value:  value,
 	})
+	f.windowOptions[option] = value
 	return nil
+}
+
+func (f *FakeExecutor) SetWindowOptionGlobal(option, value string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.setWindowOptionCalls = append(f.setWindowOptionCalls, SetWindowOptionCall{
+		Option: option,
+		Value:  value,
+		Global: true,
+	})
+	f.windowOptions[option] = value
+	return nil
+}
+
+func (f *FakeExecutor) SetWindowOptionValue(option, value string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.windowOptions[option] = value
+}
+
+func (f *FakeExecutor) ShowWindowOption(option string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.windowOptions[option], nil
 }
 
 func (f *FakeExecutor) SetWindowOptionCalls() []SetWindowOptionCall {

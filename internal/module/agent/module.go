@@ -192,6 +192,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/cc/statusline/test", m.handleStatuslineTest)
 	mux.HandleFunc("POST /api/agent/cc/statusline/test/ready", m.handleStatuslineTestReady)
 	mux.HandleFunc("POST /api/agent/status", m.handleAgentStatus)
+	mux.HandleFunc("GET /api/agent/title/status", m.handleTitleStatus)
+	mux.HandleFunc("POST /api/agent/title/setup", m.handleTitleSetup)
 	mux.HandleFunc("GET /api/agents/detect", m.handleDetect)
 
 	// History (delegates to provider)

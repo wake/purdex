@@ -19,6 +19,8 @@ type SessionInfo struct {
 	Name           string `json:"name"`
 	Exists         bool   `json:"-"`
 	CurrentCommand string `json:"current_command,omitempty"`
+	PaneTitle      string `json:"pane_title,omitempty"`
+	WindowName     string `json:"window_name,omitempty"`
 
 	// Meta cache (stored in DB)
 	Mode        string `json:"mode"`

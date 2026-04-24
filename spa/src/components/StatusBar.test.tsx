@@ -7,6 +7,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useUploadStore } from '../stores/useUploadStore'
+import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { compositeKey } from '../lib/composite-key'
 
 const HOST_ID = 'test-host'
@@ -32,6 +33,8 @@ function setupStores() {
     },
     activeHostId: HOST_ID,
   })
+  useAgentStore.setState({ agentTypes: {}, oscTitles: {}, models: {}, lastEvents: {}, statuses: {}, unread: {}, subagents: {} })
+  useUISettingsStore.setState({ showAgentTitleInStatusBar: false })
 }
 
 function makeTab(id: string, content: PaneContent): Tab {
@@ -197,5 +200,54 @@ describe('StatusBar agent label badge', () => {
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
     expect(screen.queryByTestId('agent-label')).toBeNull()
+  })
+})
+
+describe('StatusBar agent pane title', () => {
+  beforeEach(() => {
+    setupStores()
+    useUploadStore.setState({ sessions: {} })
+  })
+
+  it('shows pane_title left of the terminal/stream switch when showAgentTitleInStatusBar=true', () => {
+    const ck = compositeKey(HOST_ID, 'dev001')
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'plan review' },
+        ],
+      },
+      activeHostId: HOST_ID,
+      activeCode: null,
+    })
+    useAgentStore.setState({ agentTypes: { [ck]: 'cc' }, oscTitles: { [ck]: 'osc fallback' } })
+    useUISettingsStore.setState({ showAgentTitleInStatusBar: true })
+
+    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+
+    const title = screen.getByTestId('agent-pane-title')
+    expect(title.textContent).toBe('plan review')
+    expect(title.compareDocumentPosition(screen.getByTitle('Toggle view mode')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('hides title when showAgentTitleInStatusBar=false', () => {
+    const ck = compositeKey(HOST_ID, 'dev001')
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'plan review' },
+        ],
+      },
+      activeHostId: HOST_ID,
+      activeCode: null,
+    })
+    useAgentStore.setState({ agentTypes: { [ck]: 'cc' } })
+    useUISettingsStore.setState({ showAgentTitleInStatusBar: false })
+
+    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+
+    expect(screen.queryByTestId('agent-pane-title')).toBeNull()
   })
 })

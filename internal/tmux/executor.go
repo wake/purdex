@@ -18,9 +18,20 @@ type TmuxSession struct {
 	Cwd  string
 }
 
+type TmuxPaneMetadata struct {
+	SessionID          string
+	SessionName        string
+	WindowID           string
+	PaneID             string
+	PaneTitle          string
+	WindowName         string
+	PaneCurrentCommand string
+}
+
 // Executor abstracts tmux CLI for testability.
 type Executor interface {
 	ListSessions() ([]TmuxSession, error)
+	ActivePaneMetadata(sessionName string) (TmuxPaneMetadata, error)
 	NewSession(name, cwd string) error
 	KillSession(name string) error
 	RenameSession(oldName, newName string) error
@@ -38,6 +49,8 @@ type Executor interface {
 	ResizeWindow(target string, cols, rows int) error
 	ResizeWindowAuto(target string) error
 	SetWindowOption(target, option, value string) error
+	SetWindowOptionGlobal(option, value string) error
+	ShowWindowOption(option string) (string, error)
 	SetHookGlobal(event, command string) error
 	RemoveHookGlobal(event string) error
 	ShowHooksGlobal() (string, error)
@@ -82,6 +95,74 @@ func (r *RealExecutor) ListSessions() ([]TmuxSession, error) {
 		sessions = append(sessions, s)
 	}
 	return sessions, nil
+}
+
+func (r *RealExecutor) ActivePaneMetadata(sessionName string) (TmuxPaneMetadata, error) {
+	target := activePaneTarget(sessionName)
+	query := func(format string) (string, error) {
+		out, err := exec.Command("tmux", "display-message", "-p", "-t", target, format).Output()
+		if err != nil {
+			return "", fmt.Errorf("tmux display-message %s: %w", format, err)
+		}
+		return sanitizeTmuxMetadata(strings.TrimSuffix(string(out), "\n")), nil
+	}
+
+	sessionID, err := query("#{session_id}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+	resolvedSessionName, err := query("#{session_name}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+	windowID, err := query("#{window_id}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+	paneID, err := query("#{pane_id}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+	paneTitle, err := query("#{pane_title}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+	windowName, err := query("#{window_name}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+	paneCurrentCommand, err := query("#{pane_current_command}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+
+	return TmuxPaneMetadata{
+		SessionID:          sessionID,
+		SessionName:        resolvedSessionName,
+		WindowID:           windowID,
+		PaneID:             paneID,
+		PaneTitle:          paneTitle,
+		WindowName:         windowName,
+		PaneCurrentCommand: paneCurrentCommand,
+	}, nil
+}
+
+func activePaneTarget(sessionName string) string {
+	return "=" + sessionName + ":"
+}
+
+func sanitizeTmuxMetadata(s string) string {
+	mapped := strings.Map(func(r rune) rune {
+		switch r {
+		case '\t', '\n', '\r':
+			return ' '
+		}
+		if (r >= 0 && r < 0x20) || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return ' '
+		}
+		return r
+	}, s)
+	return strings.Join(strings.Fields(mapped), " ")
 }
 
 func (r *RealExecutor) NewSession(name, cwd string) error {
@@ -259,6 +340,24 @@ func (r *RealExecutor) ResizeWindowAuto(target string) error {
 
 func (r *RealExecutor) SetWindowOption(target, option, value string) error {
 	return exec.Command("tmux", "set-window-option", "-t", target, option, value).Run()
+}
+
+func (r *RealExecutor) SetWindowOptionGlobal(option, value string) error {
+	return exec.Command("tmux", "set-window-option", "-g", option, value).Run()
+}
+
+func (r *RealExecutor) ShowWindowOption(option string) (string, error) {
+	out, err := exec.Command("tmux", "show-options", "-w", "-g", "-q", "-v", option).Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr := string(exitErr.Stderr)
+			if strings.Contains(stderr, "no server running") {
+				return "", nil
+			}
+		}
+		return "", fmt.Errorf("tmux show-options -w %s: %w", option, err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (r *RealExecutor) SetHookGlobal(event, command string) error {

@@ -46,7 +46,7 @@ beforeEach(() => {
     oscTitles: {},
   })
   useUISettingsStore.setState({
-    showOscTitle: false,
+    dynamicTabName: false,
     tabIndicatorStyle: 'badge',
     ccIconVariant: 'bot',
     codexIconVariant: 'openai',
@@ -270,8 +270,13 @@ describe('InlineTab — host offline', () => {
 })
 
 describe('InlineTab — statusline display', () => {
-  it('shows "{oscTitle} - {baseLabel}" when showOscTitle + oscTitle + agentType all set', () => {
-    useUISettingsStore.setState({ showOscTitle: true })
+  it('shows "{paneTitle} - {baseLabel}" when dynamicTabName + pane_title + agentType all set', () => {
+    useSessionStore.setState({
+      sessions: { h1: [{ code: 'S1', name: 'work', pane_title: 'my-feature' }] as never },
+      activeHostId: null,
+      activeCode: null,
+    })
+    useUISettingsStore.setState({ dynamicTabName: true })
     useAgentStore.setState({
       agentTypes: { 'h1:S1': 'cc' },
       oscTitles: { 'h1:S1': 'my-feature' },
@@ -290,8 +295,8 @@ describe('InlineTab — statusline display', () => {
     expect(title.textContent).toBe('my-feature - work')
   })
 
-  it('shows only baseLabel when oscTitle absent', () => {
-    useUISettingsStore.setState({ showOscTitle: true })
+  it('shows only baseLabel when pane_title absent', () => {
+    useUISettingsStore.setState({ dynamicTabName: true })
     useAgentStore.setState({
       agentTypes: { 'h1:S1': 'cc' },
       oscTitles: {},
@@ -311,8 +316,13 @@ describe('InlineTab — statusline display', () => {
     expect(title.textContent).not.toContain(' - ')
   })
 
-  it('shows only baseLabel when showOscTitle is disabled', () => {
-    useUISettingsStore.setState({ showOscTitle: false })
+  it('shows only baseLabel when dynamicTabName is disabled', () => {
+    useSessionStore.setState({
+      sessions: { h1: [{ code: 'S1', name: 'work', pane_title: 'my-feature' }] as never },
+      activeHostId: null,
+      activeCode: null,
+    })
+    useUISettingsStore.setState({ dynamicTabName: false })
     useAgentStore.setState({
       agentTypes: { 'h1:S1': 'cc' },
       oscTitles: { 'h1:S1': 'my-feature' },
@@ -332,7 +342,12 @@ describe('InlineTab — statusline display', () => {
   })
 
   it('renders HoverTooltip with combined text (not native title attr)', () => {
-    useUISettingsStore.setState({ showOscTitle: true })
+    useSessionStore.setState({
+      sessions: { h1: [{ code: 'S1', name: 'work', pane_title: 'my-feature' }] as never },
+      activeHostId: null,
+      activeCode: null,
+    })
+    useUISettingsStore.setState({ dynamicTabName: true })
     useAgentStore.setState({
       agentTypes: { 'h1:S1': 'cc' },
       oscTitles: { 'h1:S1': 'my-feature' },

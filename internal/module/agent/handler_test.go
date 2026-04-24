@@ -57,6 +57,215 @@ func newTestModule(t *testing.T) *Module {
 	return m
 }
 
+func TestHandleTitleStatus_ReturnsTmuxTitleIntegrationState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".tmux.conf"), []byte("# >>> purdex agent-title >>>\nset -gw allow-set-title on\n# <<< purdex agent-title <<<\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	fake := tmux.NewFakeExecutor()
+	fake.SetWindowOptionValue("allow-set-title", "on")
+	m := newTestModule(t)
+	m.tmux = fake
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/title/status", nil)
+	w := httptest.NewRecorder()
+	m.handleTitleStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		AllowSetTitle     bool   `json:"allow_set_title"`
+		Installed         bool   `json:"installed"`
+		RuntimeApplied    bool   `json:"runtime_applied"`
+		ManagedConfigPath string `json:"managed_config_path"`
+		Error             string `json:"error"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body.AllowSetTitle || !body.Installed || !body.RuntimeApplied {
+		t.Fatalf("unexpected title status: %+v", body)
+	}
+	if body.ManagedConfigPath != filepath.Join(home, ".tmux.conf") {
+		t.Fatalf("managed_config_path = %q", body.ManagedConfigPath)
+	}
+	if body.Error != "" {
+		t.Fatalf("error = %q", body.Error)
+	}
+}
+
+func TestHandleTitleSetup_InstallWritesMarkerOnlyAndAppliesRuntime(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	existing := "set -g mouse on\nset -gw allow-set-title off\n"
+	if err := os.WriteFile(filepath.Join(home, ".tmux.conf"), []byte(existing), 0644); err != nil {
+		t.Fatal(err)
+	}
+	fake := tmux.NewFakeExecutor()
+	m := newTestModule(t)
+	m.tmux = fake
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/title/setup", strings.NewReader(`{"action":"install"}`))
+	w := httptest.NewRecorder()
+	m.handleTitleSetup(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s)", w.Code, w.Body.String())
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".tmux.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, existing) {
+		t.Fatalf("existing config changed: %q", text)
+	}
+	marker := "# >>> purdex agent-title >>>\nset -gw allow-set-title on\n# <<< purdex agent-title <<<"
+	if strings.Count(text, marker) != 1 {
+		t.Fatalf("marker count mismatch in %q", text)
+	}
+	calls := fake.SetWindowOptionCalls()
+	if len(calls) != 1 || !calls[0].Global || calls[0].Target != "" || calls[0].Option != "allow-set-title" || calls[0].Value != "on" {
+		t.Fatalf("runtime calls = %+v", calls)
+	}
+}
+
+func TestInstallTitleMarkerRejectsMalformedMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".tmux.conf")
+	conf := "set -g mouse on\n# >>> purdex agent-title >>>\nset -gw allow-set-title on\nset -g status on\n"
+	if err := os.WriteFile(path, []byte(conf), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installTitleMarker(path); err == nil {
+		t.Fatal("expected malformed marker error")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != conf {
+		t.Fatalf("malformed config changed: %q", string(data))
+	}
+}
+
+func TestTitleMarkerRejectsNestedMalformedMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".tmux.conf")
+	conf := "set -g mouse on\n# >>> purdex agent-title >>>\nset -g status on\n# >>> purdex agent-title >>>\nset -gw allow-set-title on\n# <<< purdex agent-title <<<\nset -g base-index 1\n"
+	if err := os.WriteFile(path, []byte(conf), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installTitleMarker(path); err == nil {
+		t.Fatal("expected malformed marker error on install")
+	}
+	if err := removeTitleMarker(path); err == nil {
+		t.Fatal("expected malformed marker error on remove")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != conf {
+		t.Fatalf("malformed config changed: %q", string(data))
+	}
+}
+
+func TestRemoveTitleMarkerBytesRemovesDuplicateManagedBlocks(t *testing.T) {
+	block := titleMarkerStart + "\n" + titleMarkerLine + "\n" + titleMarkerEnd + "\n"
+	conf := "set -g mouse on\n" + block + "set -g status on\n" + block + "set -g base-index 1\n"
+
+	got := string(removeTitleMarkerBytes([]byte(conf)))
+	want := "set -g mouse on\nset -g status on\nset -g base-index 1\n"
+	if got != want {
+		t.Fatalf("removeTitleMarkerBytes() = %q, want %q", got, want)
+	}
+}
+
+func TestHandleTitleSetup_RemoveDeletesOnlyMarkerAndLeavesRuntime(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	conf := "set -g mouse on\n# >>> purdex agent-title >>>\nset -gw allow-set-title on\n# <<< purdex agent-title <<<\nset -gw allow-set-title off\n"
+	if err := os.WriteFile(filepath.Join(home, ".tmux.conf"), []byte(conf), 0644); err != nil {
+		t.Fatal(err)
+	}
+	fake := tmux.NewFakeExecutor()
+	fake.SetWindowOptionValue("allow-set-title", "on")
+	m := newTestModule(t)
+	m.tmux = fake
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/title/setup", strings.NewReader(`{"action":"remove"}`))
+	w := httptest.NewRecorder()
+	m.handleTitleSetup(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s)", w.Code, w.Body.String())
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".tmux.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "purdex agent-title") {
+		t.Fatalf("marker not removed: %q", text)
+	}
+	if !strings.Contains(text, "set -g mouse on") || !strings.Contains(text, "set -gw allow-set-title off") {
+		t.Fatalf("unmanaged config changed: %q", text)
+	}
+	if calls := fake.SetWindowOptionCalls(); len(calls) != 0 {
+		t.Fatalf("remove should not touch runtime: %+v", calls)
+	}
+}
+
+func TestTitleCapabilities_CoversSupportedAgents(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	origGetenv := getenvFn
+	getenvFn = func(key string) string {
+		if key == "CLAUDE_CODE_DISABLE_TERMINAL_TITLE" {
+			return "1"
+		}
+		return ""
+	}
+	t.Cleanup(func() { getenvFn = origGetenv })
+
+	caps := titleCapabilities()
+	if got := caps["cc"].State; got != "disabled" {
+		t.Fatalf("claude state = %q", got)
+	}
+	if got := caps["codex"].State; got != "missing" {
+		t.Fatalf("codex missing state = %q", got)
+	}
+	if got := caps["opencode"].State; got != "unknown" {
+		t.Fatalf("opencode state = %q", got)
+	}
+
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(home, ".codex", "config.toml")
+	if err := os.WriteFile(config, []byte("terminal_title = []\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := titleCapabilities()["codex"].State; got != "disabled" {
+		t.Fatalf("codex disabled state = %q", got)
+	}
+	if err := os.WriteFile(config, []byte("terminal_title = [\"model\"]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := titleCapabilities()["codex"].State; got != "configured" {
+		t.Fatalf("codex configured state = %q", got)
+	}
+	if err := os.WriteFile(config, []byte("terminal_title = [\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := titleCapabilities()["codex"].State; got != "unknown" {
+		t.Fatalf("codex unparsable state = %q", got)
+	}
+}
+
 func TestHandleEvent_StoresAndReturns(t *testing.T) {
 	m := newTestModule(t)
 

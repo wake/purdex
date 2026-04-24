@@ -18,11 +18,26 @@ const DATA_FIELDS = [
   'tabIndicatorStyle',
   'ccIconVariant',
   'codexIconVariant',
-  'showOscTitle',
+  'dynamicTabName',
+  'showAgentTitleInStatusBar',
 ] as const
 
 type PreferencesData = {
   [K in (typeof DATA_FIELDS)[number]]: ReturnType<typeof useUISettingsStore.getState>[K]
+}
+
+type IncomingPreferencesData = Partial<PreferencesData> & {
+  showOscTitle?: unknown
+}
+
+function normalizeIncoming(data: IncomingPreferencesData): Partial<PreferencesData> {
+  const { showOscTitle, ...rest } = data
+  const normalized: Partial<PreferencesData> = { ...rest }
+  if (typeof showOscTitle === 'boolean') {
+    normalized.dynamicTabName = showOscTitle
+    normalized.showAgentTitleInStatusBar = showOscTitle
+  }
+  return normalized
 }
 
 // ---------------------------------------------------------------------------
@@ -49,7 +64,8 @@ export function createPreferencesContributor(): SyncContributor {
 
     deserialize(payload: unknown, merge: MergeStrategy): void {
       const fp = payload as FullPayload
-      const incoming = fp.data as Partial<PreferencesData>
+      const rawIncoming = (fp.data ?? {}) as IncomingPreferencesData
+      const incoming = normalizeIncoming(rawIncoming)
 
       if (merge.type === 'full-replace') {
         useUISettingsStore.setState(incoming as PreferencesData)
@@ -61,6 +77,12 @@ export function createPreferencesContributor(): SyncContributor {
       for (const field of DATA_FIELDS) {
         if (merge.resolved[field] === 'remote' && field in incoming) {
           ;(patch as Record<string, unknown>)[field] = incoming[field]
+        }
+      }
+      if (rawIncoming.showOscTitle !== undefined && merge.resolved.showOscTitle === 'remote') {
+        if (typeof rawIncoming.showOscTitle === 'boolean') {
+          patch.dynamicTabName = rawIncoming.showOscTitle
+          patch.showAgentTitleInStatusBar = rawIncoming.showOscTitle
         }
       }
 

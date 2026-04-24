@@ -195,3 +195,26 @@ func TestWatcherNoRepeatBroadcastInTmuxDown(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+func TestHashSessionsChangesWhenPaneTitleChanges(t *testing.T) {
+	base := []SessionInfo{{
+		Code:      "aa",
+		TmuxID:    "$0",
+		Name:      "dev",
+		Exists:    true,
+		Mode:      "terminal",
+		Cwd:       "/tmp",
+		PaneTitle: "first title",
+	}}
+	changed := []SessionInfo{{
+		Code:      "aa",
+		TmuxID:    "$0",
+		Name:      "dev",
+		Exists:    true,
+		Mode:      "terminal",
+		Cwd:       "/tmp",
+		PaneTitle: "second title",
+	}}
+
+	assert.NotEqual(t, hashSessions(base), hashSessions(changed))
+}

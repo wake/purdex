@@ -119,11 +119,11 @@ describe('SortableTab', () => {
 
   it('renders HoverTooltip with combined text on regular tab (not native title attr)', () => {
     useSessionStore.setState({
-      sessions: { h1: [{ code: 'sc1', name: 'work' }] as never },
+      sessions: { h1: [{ code: 'sc1', name: 'work', pane_title: 'my-feature' }] as never },
       activeHostId: null,
       activeCode: null,
     })
-    useUISettingsStore.setState({ tabIndicatorStyle: 'badge', showOscTitle: true })
+    useUISettingsStore.setState({ tabIndicatorStyle: 'badge', dynamicTabName: true })
     useAgentStore.setState({
       unread: {},
       statuses: {},
@@ -144,11 +144,11 @@ describe('SortableTab', () => {
 
   it('renders HoverTooltip on pinned tab (not native title attr)', () => {
     useSessionStore.setState({
-      sessions: { h1: [{ code: 'sc1', name: 'work' }] as never },
+      sessions: { h1: [{ code: 'sc1', name: 'work', pane_title: 'my-feature' }] as never },
       activeHostId: null,
       activeCode: null,
     })
-    useUISettingsStore.setState({ tabIndicatorStyle: 'badge', showOscTitle: true })
+    useUISettingsStore.setState({ tabIndicatorStyle: 'badge', dynamicTabName: true })
     useAgentStore.setState({
       unread: {},
       statuses: {},

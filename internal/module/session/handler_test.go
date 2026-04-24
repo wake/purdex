@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/wake/purdex/internal/store"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // --- Provider method tests ---
@@ -43,6 +44,67 @@ func TestListSessionsMergesMeta(t *testing.T) {
 	assert.Equal(t, "prod", sessions[1].Name)
 	assert.Equal(t, "terminal", sessions[1].Mode)
 	assert.NotEmpty(t, sessions[1].Code)
+}
+
+func TestListSessionsIncludesPaneTitleMetadata(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+
+	fake.AddSession("dev", "/home/dev")
+	fake.SetActivePaneMetadata("dev", tmux.TmuxPaneMetadata{
+		SessionID:          "$0",
+		SessionName:        "dev",
+		WindowID:           "@1",
+		PaneID:             "%2",
+		PaneTitle:          "Planning",
+		WindowName:         "editor",
+		PaneCurrentCommand: "claude",
+	})
+
+	sessions, err := mod.ListSessions()
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "Planning", sessions[0].PaneTitle)
+	assert.Equal(t, "editor", sessions[0].WindowName)
+	assert.Equal(t, "claude", sessions[0].CurrentCommand)
+}
+
+func TestListSessionsContinuesWhenPaneMetadataFails(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+
+	fake.AddSession("dev", "/home/dev")
+	fake.SetActivePaneMetadataError("dev", errors.New("display-message failed"))
+
+	sessions, err := mod.ListSessions()
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "dev", sessions[0].Name)
+	assert.Empty(t, sessions[0].PaneTitle)
+	assert.Empty(t, sessions[0].WindowName)
+	assert.Empty(t, sessions[0].CurrentCommand)
+}
+
+func TestListSessionsUsesActivePaneTitleForMultiPaneSession(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+
+	fake.AddSession("multi", "/workspace")
+	fake.SetPaneCommand("multi:0.0", "wrong-pane-command")
+	fake.SetActivePaneMetadata("multi", tmux.TmuxPaneMetadata{
+		SessionID:          "$0",
+		SessionName:        "multi",
+		WindowID:           "@active",
+		PaneID:             "%active",
+		PaneTitle:          "active pane title",
+		WindowName:         "active window",
+		PaneCurrentCommand: "active-command",
+	})
+
+	sessions, err := mod.ListSessions()
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "active pane title", sessions[0].PaneTitle)
+	assert.Equal(t, "active window", sessions[0].WindowName)
+	assert.Equal(t, "active-command", sessions[0].CurrentCommand)
+	assert.Zero(t, fake.PaneCommandCallCount("multi:0.0"), "session list should not merge arbitrary list-panes data")
 }
 
 func TestListSessionsCleansOrphans(t *testing.T) {

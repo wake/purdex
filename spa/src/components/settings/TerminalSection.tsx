@@ -27,8 +27,10 @@ export function TerminalSection() {
   const setCcIconVariant = useUISettingsStore((s) => s.setCcIconVariant)
   const codexIconVariant = useUISettingsStore((s) => s.codexIconVariant)
   const setCodexIconVariant = useUISettingsStore((s) => s.setCodexIconVariant)
-  const showOscTitle = useUISettingsStore((s) => s.showOscTitle)
-  const setShowOscTitle = useUISettingsStore((s) => s.setShowOscTitle)
+  const dynamicTabName = useUISettingsStore((s) => s.dynamicTabName)
+  const setDynamicTabName = useUISettingsStore((s) => s.setDynamicTabName)
+  const showAgentTitleInStatusBar = useUISettingsStore((s) => s.showAgentTitleInStatusBar)
+  const setShowAgentTitleInStatusBar = useUISettingsStore((s) => s.setShowAgentTitleInStatusBar)
 
   const t = useI18nStore((s) => s.t)
 
@@ -116,8 +118,12 @@ export function TerminalSection() {
         <SegmentControl options={TAB_INDICATOR_OPTIONS} value={tabIndicatorStyle} onChange={setTabIndicatorStyle} />
       </SettingItem>
 
-      <SettingItem label={t('settings.terminal.osc_title.label')} description={t('settings.terminal.osc_title.desc')}>
-        <ToggleSwitch label={t('settings.terminal.osc_title.label')} checked={showOscTitle} onChange={setShowOscTitle} />
+      <SettingItem label={t('settings.terminal.dynamic_tab_name.label')} description={t('settings.terminal.dynamic_tab_name.desc')}>
+        <ToggleSwitch label={t('settings.terminal.dynamic_tab_name.label')} checked={dynamicTabName} onChange={setDynamicTabName} />
+      </SettingItem>
+
+      <SettingItem label={t('settings.terminal.agent_title_status_bar.label')} description={t('settings.terminal.agent_title_status_bar.desc')}>
+        <ToggleSwitch label={t('settings.terminal.agent_title_status_bar.label')} checked={showAgentTitleInStatusBar} onChange={setShowAgentTitleInStatusBar} />
       </SettingItem>
 
       <SettingItem label={t('settings.terminal.cc_icon.label')} description={t('settings.terminal.cc_icon.desc')}>

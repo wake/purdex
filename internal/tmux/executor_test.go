@@ -3,6 +3,8 @@ package tmux_test
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -236,6 +238,29 @@ func TestFakeExecutor_PaneCurrentPath(t *testing.T) {
 	}
 	if got != "/home/user/proj" {
 		t.Errorf("got %q, want /home/user/proj", got)
+	}
+}
+
+func TestRealExecutorShowWindowOptionUsesWindowShowOptions(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+if [ "$1" != "show-options" ] || [ "$2" != "-w" ] || [ "$3" != "-g" ] || [ "$4" != "-q" ] || [ "$5" != "-v" ] || [ "$6" != "allow-set-title" ] || [ -n "$7" ]; then
+  printf 'unexpected args: %s\n' "$*" >&2
+  exit 2
+fi
+printf 'on\n'
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	value, err := (&tmux.RealExecutor{}).ShowWindowOption("allow-set-title")
+	if err != nil {
+		t.Fatalf("ShowWindowOption returned error: %v", err)
+	}
+	if value != "on" {
+		t.Fatalf("ShowWindowOption() = %q, want on", value)
 	}
 }
 

@@ -205,17 +205,11 @@ export const useAgentStore = create<AgentState>()(
       const key = compositeKey(hostId, sessionCode)
       const entry: CcStatusEntry = { receivedAt: Date.now(), raw }
       set((s) => ({ ccStatus: { ...s.ccStatus, [key]: entry } }))
-      // Mirror session_name → oscTitle (statusline's channel for cc session name).
-      // Empty / missing session_name → setOscTitle deletes the key via sanitizeOscTitle.
-      const sessionName = typeof raw?.session_name === 'string' ? raw.session_name : ''
-      get().setOscTitle(hostId, sessionCode, sessionName)
     },
 
     /**
-     * Wipe CC statusLine state for a host: all ccStatus entries with the host's
-     * prefix, plus the oscTitles entries that were mirrored from those ccStatus
-     * snapshots (same composite keys). Non-CC oscTitles (from terminal OSC
-     * 0/2 sequences) are preserved.
+     * Wipe CC statusLine state for a host. Terminal OSC 0/2 title state is
+     * preserved because CC statusLine no longer owns title display.
      *
      * Called on the `agent.status.cleared` WS event, broadcast by the daemon
      * when the CC statusLine wrapper is uninstalled.
@@ -229,13 +223,9 @@ export const useAgentStore = create<AgentState>()(
       const prefix = `${hostId}:`
       const ccKeysToRemove = Object.keys(s.ccStatus).filter((k) => k.startsWith(prefix))
       if (ccKeysToRemove.length === 0) return s
-      const removeSet = new Set(ccKeysToRemove)
-      const shouldOmit = (k: string) => removeSet.has(k)
       return {
-        ccStatus: omitKeys(s.ccStatus, shouldOmit),
-        oscTitles: omitKeys(s.oscTitles, shouldOmit),
+        ccStatus: omitKeys(s.ccStatus, (k) => k.startsWith(prefix)),
       }
     }),
   }),
 )
-

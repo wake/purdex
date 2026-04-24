@@ -34,7 +34,7 @@ export interface TabDisplayData {
 
 /**
  * Shared tab display state for InlineTab (activity bar) and SortableTab (top
- * TabBar). Centralises label + OSC title resolution, agent-icon fallback,
+ * TabBar). Centralises label + agent title resolution, agent-icon fallback,
  * host-offline detection, and agent store reads so both surfaces render
  * identically.
  */
@@ -57,8 +57,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const tabIndicatorStyle = useUISettingsStore((s) => s.tabIndicatorStyle)
   const ccIconVariant = useUISettingsStore((s) => s.ccIconVariant)
   const codexIconVariant = useUISettingsStore((s) => s.codexIconVariant)
-  const showOscTitle = useUISettingsStore((s) => s.showOscTitle)
-  const oscTitle = useAgentStore((s) => (ck ? s.oscTitles[ck] : undefined))
+  const dynamicTabName = useUISettingsStore((s) => s.dynamicTabName)
 
   const isHostOffline = useHostStore((s) => {
     if (!hostId || isTerminated) return false
@@ -74,9 +73,10 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const sessionLookup = { getByCode: (code: string) => sessions.find((sess) => sess.code === code) }
   const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
   const baseLabel = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
+  const session = sessionCode ? sessionLookup.getByCode(sessionCode) : undefined
 
-  const useOsc = showOscTitle && !isTerminated && !!agentType && !!oscTitle
-  const displayTitle = useOsc && oscTitle ? `${oscTitle} - ${baseLabel}` : baseLabel
+  const paneTitle = dynamicTabName && !isTerminated && !!agentType ? session?.pane_title : undefined
+  const displayTitle = paneTitle ? `${paneTitle} - ${baseLabel}` : baseLabel
 
   return {
     displayTitle,

@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -21,6 +23,27 @@ import (
 // CC settings.json is a shared resource; atomic rename doesn't protect
 // read-modify-write ordering across simultaneous install/remove calls.
 var statuslineMutex sync.Mutex
+
+var getenvFn = os.Getenv
+
+const (
+	titleMarkerStart = "# >>> purdex agent-title >>>"
+	titleMarkerLine  = "set -gw allow-set-title on"
+	titleMarkerEnd   = "# <<< purdex agent-title <<<"
+)
+
+type titleStatusResponse struct {
+	AllowSetTitle     bool   `json:"allow_set_title"`
+	Installed         bool   `json:"installed"`
+	RuntimeApplied    bool   `json:"runtime_applied"`
+	ManagedConfigPath string `json:"managed_config_path"`
+	Error             string `json:"error"`
+}
+
+type titleCapability struct {
+	State string `json:"state"`
+	Note  string `json:"note"`
+}
 
 // testNoncePrefix identifies statusline self-test POSTs to /api/agent/status.
 // Real tmux session names cannot start with this prefix; the SPA self-test
@@ -528,6 +551,224 @@ func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
 	m.handleStatuslineStatus(w, r)
 }
 
+func (m *Module) handleTitleStatus(w http.ResponseWriter, r *http.Request) {
+	state := m.titleStatus()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(state)
+}
+
+func (m *Module) handleTitleSetup(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	path, err := tmuxConfigPath()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(titleStatusResponse{Error: err.Error()})
+		return
+	}
+
+	switch req.Action {
+	case "install":
+		if err := installTitleMarker(path); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(titleStatusResponse{ManagedConfigPath: path, Error: err.Error()})
+			return
+		}
+		if m.tmux != nil {
+			if err := m.tmux.SetWindowOptionGlobal("allow-set-title", "on"); err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				state := m.titleStatus()
+				state.Error = err.Error()
+				_ = json.NewEncoder(w).Encode(state)
+				return
+			}
+		}
+	case "remove":
+		if err := removeTitleMarker(path); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(titleStatusResponse{ManagedConfigPath: path, Error: err.Error()})
+			return
+		}
+	default:
+		http.Error(w, `{"error":"action must be install or remove"}`, http.StatusBadRequest)
+		return
+	}
+
+	m.handleTitleStatus(w, r)
+}
+
+func (m *Module) titleStatus() titleStatusResponse {
+	path, err := tmuxConfigPath()
+	if err != nil {
+		return titleStatusResponse{Error: err.Error()}
+	}
+	state := titleStatusResponse{ManagedConfigPath: path}
+	data, err := os.ReadFile(path)
+	if err == nil {
+		if hasMalformedTitleMarker(data) {
+			state.Error = "malformed purdex agent-title marker block"
+		} else {
+			state.Installed = bytes.Contains(data, []byte(titleMarkerStart)) && bytes.Contains(data, []byte(titleMarkerEnd))
+			state.AllowSetTitle = state.Installed && bytes.Contains(data, []byte(titleMarkerLine))
+		}
+	} else if !os.IsNotExist(err) {
+		state.Error = err.Error()
+	}
+	if m.tmux != nil {
+		value, err := m.tmux.ShowWindowOption("allow-set-title")
+		if err != nil {
+			state.Error = err.Error()
+		} else {
+			state.RuntimeApplied = strings.TrimSpace(value) == "on"
+		}
+	}
+	return state
+}
+
+func tmuxConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".tmux.conf"), nil
+}
+
+func installTitleMarker(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if hasMalformedTitleMarker(data) {
+		return errors.New("malformed purdex agent-title marker block")
+	}
+	clean := removeTitleMarkerBytes(data)
+	block := []byte(titleMarkerStart + "\n" + titleMarkerLine + "\n" + titleMarkerEnd + "\n")
+	if len(clean) > 0 && !bytes.HasSuffix(clean, []byte("\n")) {
+		clean = append(clean, '\n')
+	}
+	clean = append(clean, block...)
+	return os.WriteFile(path, clean, 0644)
+}
+
+func removeTitleMarker(path string) error {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if hasMalformedTitleMarker(data) {
+		return errors.New("malformed purdex agent-title marker block")
+	}
+	return os.WriteFile(path, removeTitleMarkerBytes(data), 0644)
+}
+
+func removeTitleMarkerBytes(data []byte) []byte {
+	text := string(data)
+	for {
+		start := strings.Index(text, titleMarkerStart)
+		if start == -1 {
+			return []byte(text)
+		}
+		end := strings.Index(text[start:], titleMarkerEnd)
+		if end == -1 {
+			return []byte(text)
+		}
+		end += start + len(titleMarkerEnd)
+		if end < len(text) && text[end] == '\r' {
+			end++
+		}
+		if end < len(text) && text[end] == '\n' {
+			end++
+		}
+		text = text[:start] + text[end:]
+	}
+}
+
+func hasMalformedTitleMarker(data []byte) bool {
+	text := string(data)
+	start := strings.Index(text, titleMarkerStart)
+	for start != -1 {
+		end := strings.Index(text[start:], titleMarkerEnd)
+		if end == -1 {
+			return true
+		}
+		between := text[start+len(titleMarkerStart) : start+end]
+		if strings.Contains(between, titleMarkerStart) {
+			return true
+		}
+		nextOffset := start + end + len(titleMarkerEnd)
+		remaining := text[nextOffset:]
+		next := strings.Index(remaining, titleMarkerStart)
+		if next == -1 {
+			return false
+		}
+		start = nextOffset + next
+	}
+	return false
+}
+
+func titleCapabilities() map[string]titleCapability {
+	return map[string]titleCapability{
+		"cc":       claudeTitleCapability(),
+		"codex":    codexTitleCapability(),
+		"opencode": {State: "unknown", Note: "OpenCode has no documented persistent title toggle."},
+	}
+}
+
+func claudeTitleCapability() titleCapability {
+	if getenvFn("CLAUDE_CODE_DISABLE_TERMINAL_TITLE") == "1" {
+		return titleCapability{State: "disabled", Note: "CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 disables Claude terminal titles for daemon-launched sessions."}
+	}
+	return titleCapability{State: "enabled", Note: "Claude terminal titles are likely enabled; session-local environment overrides may differ."}
+}
+
+func codexTitleCapability() titleCapability {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return titleCapability{State: "unknown", Note: "Codex terminal title config could not be checked."}
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	if os.IsNotExist(err) {
+		return titleCapability{State: "missing", Note: "Codex terminal title uses its default behavior; no config file was found."}
+	}
+	if err != nil {
+		return titleCapability{State: "unknown", Note: "Codex terminal title config could not be read."}
+	}
+	return parseCodexTitleCapability(string(data))
+}
+
+func parseCodexTitleCapability(config string) titleCapability {
+	idx := strings.Index(config, "terminal_title")
+	if idx == -1 {
+		return titleCapability{State: "missing", Note: "Codex terminal title uses its default behavior; terminal_title is not configured."}
+	}
+	line := strings.TrimSpace(strings.SplitN(config[idx:], "\n", 2)[0])
+	parts := strings.SplitN(line, "=", 2)
+	if len(parts) != 2 {
+		return titleCapability{State: "unknown", Note: "Codex terminal title config could not be parsed."}
+	}
+	value := strings.TrimSpace(parts[1])
+	if value == "[]" {
+		return titleCapability{State: "disabled", Note: "Codex terminal title is disabled with terminal_title = []."}
+	}
+	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+		return titleCapability{State: "configured", Note: "Codex terminal title is configured in ~/.codex/config.toml."}
+	}
+	return titleCapability{State: "unknown", Note: "Codex terminal title config could not be parsed."}
+}
+
 // handleHistory handles GET /api/sessions/{code}/history.
 func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
@@ -687,9 +928,10 @@ func (m *Module) sendStatuslineSnapshot(sub *core.EventSubscriber) {
 // Checks if agent CLIs (claude, codex) are available on the host.
 func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
 	type agentInfo struct {
-		Installed bool   `json:"installed"`
-		Path      string `json:"path,omitempty"`
-		Version   string `json:"version,omitempty"`
+		Installed    bool            `json:"installed"`
+		Path         string          `json:"path,omitempty"`
+		Version      string          `json:"version,omitempty"`
+		DynamicTitle titleCapability `json:"dynamic_title"`
 	}
 
 	detect := func(cmd string, versionArgs ...string) agentInfo {
@@ -709,10 +951,15 @@ func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
 		return info
 	}
 
+	capabilities := titleCapabilities()
 	result := map[string]agentInfo{
 		"cc":       detect("claude", "--version"),
 		"codex":    detect("codex", "--version"),
 		"opencode": detect("opencode", "--version"),
+	}
+	for agentType, info := range result {
+		info.DynamicTitle = capabilities[agentType]
+		result[agentType] = info
 	}
 
 	w.Header().Set("Content-Type", "application/json")
