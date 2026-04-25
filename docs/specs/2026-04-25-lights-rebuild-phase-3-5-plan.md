@@ -1,13 +1,15 @@
-# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v2)
+# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v3)
 
 Baseline：`1.0.0-alpha.224`（main @ `75b4d166`）。
 Worktree：`.claude/worktrees/lights-phase-3-5`（branch `worktree-lights-phase-3-5`）。
 Branch base：`origin/main`（與 Phase 3 PR #638 並行；merge 順序 Phase 3 → rebase 3.5 → 一次 bump alpha.225）。
 
-**v1 → v2 由 codex adversarial round 1 收斂**（job 在 §13；3 個 high/medium findings 全採納）：
-- F1 high — ancestor-late interleaving（單向 reconcile 不夠）→ 升 **bidirectional canonicalization**（§2.1.2）
-- F2 high — DeleteIfUnchanged 失敗造成 SPA 雙顯示 → 加 **bounded retry + rollback**（§2.1.1）
-- F3 medium — mock 測試掩蓋 race → integration test 從 optional 升 **必要 ship gate**（§3.1）
+**v1 → v2 由 codex adversarial round 1 收斂**（§13；3 finding 全採納）：F1 ancestor-late race → bidirectional / F2 partial delete → retry + rollback / F3 mock test → integration ship gate。
+
+**v2 → v3 由 codex adversarial round 2 收斂**（§13；3 finding 全採納）：
+- G1 high — rollback 也會失敗，仍殘留雙顯示 → **sweep canonicalization 納入本 PR**（§4 重新定位）+ **rollback 失敗 propagate error + trace 標 `partial_canonicalization`**（§2.1.1）
+- G2 high — descendant scan 缺 identity gate（PID reuse 誤抓） → 加 **`processStartTimeFn` 比對**（§2.1.2）
+- G3 medium — existing descendant 路徑永久漏網 → **sweep canonicalization 兜底**（§4）+ IT10 補測試（§3.1）
 
 ---
 
@@ -149,19 +151,24 @@ func (m *Module) reconcileCreatedFrameAsProxy(
         }
         expectedLastSeen = reloaded.LastSeenAt
     }
-    // All retries failed: rollback the proxy attach so we don't leave the
-    // inconsistent (parent has proxy + child still standalone) state visible
-    // to SPA. After rollback, child is canonical standalone (will be picked
-    // up by ancestor-side descendant scan on next SessionStart, or by sweep).
+    // Bounded retry exhausted: try rollback the proxy attach. Rollback can
+    // itself fail (storage error or its own retry exhaustion under sustained
+    // contention) — propagate that as a partial-state observable signal
+    // rather than swallowing it (codex round 2 G1 fix). The sweep
+    // canonicalization pass (§4) is the unconditional defensive layer that
+    // eventually repairs partial states regardless of which path failed.
     rollback, _, rerr := m.detachProxyRefWithRetry(parentStored, req.SenderPID, req.SenderStartTime, broadcastTs)
     if rerr != nil {
-        return false, store.Frame{}, rerr
+        log.Printf("phase3.5: reconcile rollback FAILED for child frame %s parent %s: %v — sweep canonicalize will repair", stored.FrameID, parentStored.FrameID, rerr)
+        return false, store.Frame{}, fmt.Errorf("phase3.5 reconcile partial state: attach succeeded, delete retry exhausted, rollback errored: %w", rerr)
     }
     if !rollback {
-        // Detach also lost (extreme: parent vanished between attach and
-        // detach). Final state: parent gone (sweep cleared) or its proxy
-        // already removed by another writer; child standalone — also
-        // consistent. Fall through to canonicalized=false trace.
+        // Detach completed without error but didn't find the ref to remove —
+        // either parent vanished or another writer beat us to it. Final
+        // state: child standalone, parent has no inconsistent ref. Trace
+        // marks partial so observability captures the path.
+        log.Printf("phase3.5: reconcile delete-retry exhausted, rollback no-op (parent gone) for child %s", stored.FrameID)
+        return false, store.Frame{}, nil
     }
     log.Printf("phase3.5: reconcile delete-retry exhausted for child frame %s; rolled back proxy attach on parent %s", stored.FrameID, parentStored.FrameID)
     return false, store.Frame{}, nil
@@ -207,9 +214,24 @@ func (m *Module) canonicalizeDescendantsAfterUpsert(
         if !pidIsAncestorOfWithCap(candidate.PID, self.PID, proxyMaxDepth) {
             continue
         }
-        // Identity verify candidate is alive (else it's stale and will be
-        // swept; not worth proxy'ing a dead frame onto self).
+        // Identity gate (codex round 2 G2 fix): align with findProxyParent's
+        // alive + start_time identity verification. Without start_time check,
+        // a PID-reused stale row would be folded onto self with the OLD
+        // ProcessStartTime, producing a stale proxy ref AND deleting the
+        // (already-stale) row. Reads the live OS process's start_time and
+        // compares against the candidate row's stored ProcessStartTime;
+        // mismatch (or read error) → skip, leave for sweep to clean up.
         if !isPidAliveFn(candidate.PID) {
+            continue
+        }
+        actualStart, sterr := processStartTimeFn(candidate.PID)
+        if sterr != nil {
+            // Identity unverifiable → don't infer (consistent with verify.go
+            // / findProxyParent convention).
+            continue
+        }
+        if actualStart != candidate.ProcessStartTime {
+            // PID reuse — stale row; sweep will clear by liveness later.
             continue
         }
         ref := agentpkg.SubagentRef{
@@ -390,6 +412,8 @@ if req.EventName == "SessionStart" {
 | `updated_frame` | `proxy_subagent_attached` | PR-2b pre-Upsert proxy fast-path（既有，不改）|
 | `created_frame` | `parent_frame_found` / `parent_frame_missing` | 一般 new frame 路徑（既有，不改）|
 | `updated_frame` | `post_upsert_canonicalization_self` | **v2 新**，self 變 proxy 收編成功 |
+| `created_frame` | `parent_frame_found` / `parent_frame_missing`（沿用） + log line | **v3** rollback 成功 / no-op 後（child standalone、parent 不含 proxy）|
+| `partial_canonicalization` | `partial_canonicalization` | **v3 新**，applyFrameEvent 仍回 `created_frame` decision，但 reason 升 `partial_canonicalization`；同時整體 applyFrameEvent 回 error 觸發 handler 重試/log；sweep 兜底|
 | 沿用原 trace | 原 reason | descendant scan 不改 trace（scan 是 side effect of attaching descendants；主決策仍是「建/更新此 frame」）|
 
 descendant scan 不改 trace 的原因：scan 把其他 frame 收編進來，但本 SessionStart 的主語義仍是「建立或更新 self」 — trace 應反映 self 視角。被收編的 descendant 留在 reconcile-as-descendant 那條路徑的 trace（前一次 SessionStart 留下的 created_frame trace）。
@@ -419,6 +443,9 @@ descendant scan 不改 trace 的原因：scan 把其他 frame 收編進來，但
 | IT7 | `existing_frame_session_start_runs_descendant_scan_only` | (a) cc SessionStart 建 frame；(b) codex 在 race window 內 standalone 進場；(c) cc SessionStart 又來一次（reset，frame != nil 路徑）→ UpdateHookPathAndResetSubagents 清 subagents（PR-2b 既有 `[]`）+ descendant scan 重新收編 codex | cc.Subagents 含 codex proxy ref（reset 後又 re-collapse） |
 | IT8 | `non_session_start_event_does_not_trigger_canonicalization` | codex Notification 在 frame == nil 路徑建 frame（少見邊界） | reconcile + descendant scan 都不觸發；trace decision/reason 沿用既有 `created_frame` 路徑；scan side-effects 不殘留 |
 | IT9 | `findproxyparent_storage_error_aborts_apply` | reconcile 內 `findProxyParent` mock 回 storage error | applyFrameEvent 整體錯誤 propagate（既有 storage error 一致）|
+| IT10 | `existing_descendant_session_start_swept_canonicalizes_via_sweep` (G3) | (a) cc SessionStart 建 frame；(b) codex 在 race window 內 standalone（applyFrameEvent 走完）；(c) codex 又一個 SessionStart（frame != nil existing path → §2.2.2 不做 self-reconcile，已禁）；(d) 觸發 sweep canonicalization | sweep 後 cc.Subagents 含 codex proxy ref；codex frame 已刪 |
+| IT11 | `descendant_scan_skips_pid_reuse_stale_row` (G2) | pane 內有 codex stale standalone（PID 已被 OS reuse 為他者，actualStart != stored.ProcessStartTime）；cc SessionStart descendant scan | scan 跳過 stale candidate（identity gate 擋住）；不收編；stale row 留給 sweep 清 |
+| IT12 | `rollback_failure_propagates_error_observable` (G1) | reconcile 走到 rollback path，mock detachProxyRefWithRetry 回 storage error | applyFrameEvent 回 error；hot path 不 hide 不一致；sweep canonicalization 跑後 final state 收斂 |
 
 **為什麼 IT4 是核心驗證**：直接針對 codex F1 finding 的 ancestor-late interleaving。若 IT4 過綠則 v2 雙向設計成立。
 
@@ -441,15 +468,126 @@ descendant scan 不改 trace 的原因：scan 把其他 frame 收編進來，但
 
 ---
 
-## 4. Sweep canonicalization（**仍不做** — rollback 已兜底）
+## 4. Sweep canonicalization（**v3 納入本 PR** — 兜底 G1 + G3）
 
-v1 plan 因為 delete 失敗只 log 而漏網，需要 sweep 補；v2 用 bounded retry + rollback 後，**delete 失敗永遠不會留下「parent 含 proxy + child standalone」的雙顯示狀態**：
+v2 假設「rollback 已兜底所以 sweep 不需要」— codex round 2 G1 + G3 揭穿這個論證的兩個漏洞：
 
-- delete 成功 → child 沒了 ✓
-- delete 失敗 + rollback 成功 → parent 不含 proxy + child 還在 → 下次 SessionStart descendant-scan 重新嘗試收編
-- delete 失敗 + rollback 失敗（極端）→ 兩邊都 race 輸；下次 SessionStart 仍會重新 attempt
+- **G1**：rollback 自身可能失敗（`detachProxyRefWithRetry` storage error / retry exhaustion）→ 仍殘留 parent 含 proxy + child standalone
+- **G3**：existing descendant 走 SessionStart existing path 時 self-reconcile 被禁，descendant-scan 已在 ancestor 的 SessionStart 跑過一次但不會再跑 → 永久 standalone
 
-故 sweep canonicalization 在本 PR 不需要。如果 reviewer 強烈要求作 defense-in-depth：開 follow-up issue，定 SLO 後再決定是否 backport。
+兩個漏網路徑都需要 background loop 兜底。**v3 在 sweep 加 lightweight canonicalization pass**：
+
+```go
+// canonicalizePane is invoked by sweepOnce per live pane, after the existing
+// dead-frame and idle-timeout passes. Walks the pane's standalone frames,
+// for each one walks its PPID chain (capped at proxyMaxDepth) looking for a
+// same-pane + alive + identity-verified + cross-type ancestor frame. If
+// found, attaches a proxy ref + DeleteIfUnchanged the standalone row.
+//
+// Cost analysis: O(F × D × C) per pane per sweep cycle, where F = standalone
+// frames in pane (≤10 typical), D = walk depth (≤5), C = ListByPane cost.
+// Sweep runs at low frequency (default 1h interval matches idle sweep), so
+// the absolute cost is negligible.
+//
+// Idempotent: each call is independent of prior. Failures (attach race lost,
+// delete race lost, identity unverifiable) are skipped silently — next
+// sweep cycle retries.
+//
+// This is the unconditional defensive layer that ensures eventual
+// canonicalization regardless of which pre-Upsert / post-Upsert / rollback
+// path failed earlier.
+func (m *Module) canonicalizePane(paneID string, broadcastTs int64) error {
+    frames, err := m.frames.ListByPane(paneID)
+    if err != nil {
+        return err
+    }
+    // Build a self-frame map keyed by PID for ancestor lookup.
+    framesByPID := make(map[int]store.Frame, len(frames))
+    for _, frame := range frames {
+        framesByPID[frame.PID] = frame
+    }
+    for _, candidate := range frames {
+        // Walk candidate's PPID chain looking for a cross-type live
+        // ancestor that is also a frame in this pane.
+        ancestor, found := m.findCanonicalAncestor(candidate, framesByPID)
+        if !found {
+            continue
+        }
+        ref := agentpkg.SubagentRef{
+            ID:              fmt.Sprintf("proxy:%s:%d:%s", candidate.AgentType, candidate.PID, candidate.ProcessStartTime),
+            Type:            candidate.AgentType,
+            StartedAt:       broadcastTs,
+            SourcePID:       candidate.PID,
+            SourceStartTime: candidate.ProcessStartTime,
+            IsProxy:         true,
+        }
+        attached, parentStored, aerr := m.attachProxyRefWithRetry(ancestor, ref, broadcastTs)
+        if aerr != nil || !attached {
+            continue
+        }
+        // Best-effort delete; rollback on full failure as in §2.1.1
+        if !m.deleteWithRetryOrRollback(candidate, parentStored, broadcastTs) {
+            log.Printf("phase3.5 sweep: canonicalize partial — child %s under parent %s; next cycle retries", candidate.FrameID, parentStored.FrameID)
+        }
+    }
+    return nil
+}
+
+// findCanonicalAncestor walks candidate's PPID chain looking for a
+// cross-type alive identity-verified frame in the same pane. Returns
+// (frame, true) on hit; (zero, false) on miss / depth exhaust / identity
+// unverifiable.
+func (m *Module) findCanonicalAncestor(candidate store.Frame, framesByPID map[int]store.Frame) (store.Frame, bool) {
+    info, err := readProcessInfoFn(candidate.PID)
+    if err != nil {
+        return store.Frame{}, false
+    }
+    ppid := info.PPID
+    for depth := 0; depth < proxyMaxDepth; depth++ {
+        if ppid <= 1 {
+            return store.Frame{}, false
+        }
+        ancestor, ok := framesByPID[ppid]
+        if ok {
+            if ancestor.AgentType == candidate.AgentType {
+                // Same-type ancestor: hard-stop (PR-2b semantics).
+                return store.Frame{}, false
+            }
+            if isPidAliveFn(ancestor.PID) {
+                actualStart, sterr := processStartTimeFn(ancestor.PID)
+                if sterr == nil && actualStart == ancestor.ProcessStartTime {
+                    return ancestor, true
+                }
+            }
+            // Stale ancestor row; continue walking up
+        }
+        ancestorInfo, err := readProcessInfoFn(ppid)
+        if err != nil {
+            return store.Frame{}, false
+        }
+        if ancestorInfo.PPID == ppid {
+            return store.Frame{}, false
+        }
+        ppid = ancestorInfo.PPID
+    }
+    return store.Frame{}, false
+}
+```
+
+**Wire 進 sweepOnce**：sweep.go 在現有 dead-frame + idle-timeout 兩 pass 後加第三 pass：
+
+```go
+// In sweepOnce after existing passes:
+panes := uniquePaneIDsFromFrames(allFrames)
+broadcastTs := time.Now().UnixNano()
+for _, paneID := range panes {
+    if cerr := m.canonicalizePane(paneID, broadcastTs); cerr != nil {
+        log.Printf("phase3.5 sweep canonicalize pane %s: %v", paneID, cerr)
+    }
+}
+```
+
+**Sweep 與 hot-path canonicalization 的關係**：hot path（reconcile + descendant scan）目標是 SPA 即時看到正確 collapse；sweep 是兜底（hot path 失敗、existing descendant 漏網、cold-start race window 殘留）。雙層防禦不衝突，sweep 的 `attachProxyRefWithRetry` 與 hot path 共享同一 RMW 路徑，並發安全。
 
 ---
 
@@ -458,11 +596,10 @@ v1 plan 因為 delete 失敗只 log 而漏網，需要 sweep 補；v2 用 bounde
 - ❌ per-pane mutex / pane-level claim table（違背 PR-2b 無 lock atomic RMW 哲學）
 - ❌ SQL UNIQUE constraint on `(pane_id, agent_type)`（cc + codex proxy 同 pane 是合法）
 - ❌ delay window / SessionStart deadline（hack，影響 hook latency）
-- ❌ Sweep canonicalization pass（§4）
-- ❌ 對 non-SessionStart event 觸發 canonicalization（IT8 守此邊界）
+- ❌ 對 non-SessionStart event 觸發 hot-path canonicalization（IT8 守此邊界；sweep 兜底）
 - ❌ 修 Phase 3 fallback chain race（那條獨立路徑由 Phase 3 PR #638 處理）
 - ❌ rebuild Inspector / SPA 變更（Phase 5 才做）
-- ❌ 對 existing frame 路徑做 self-as-descendant reconcile（§2.2.2 解釋）
+- ❌ 對 existing frame 路徑做 self-as-descendant reconcile（§2.2.2 解釋；sweep 兜底）
 
 ---
 
@@ -471,11 +608,13 @@ v1 plan 因為 delete 失敗只 log 而漏網，需要 sweep 補；v2 用 bounde
 | # | Commit | 範圍 |
 |---|---|---|
 | 1 | `docs: Phase 3.5 plan v1 — cold-start proxy canonicalization` | 已 commit `bb382870` |
-| 2 | `docs: Phase 3.5 plan v2 — bidirectional + retry/rollback (codex round 1 fixes)` | 此檔 |
-| 3 | `feat(agent): pidIsAncestorOfWithCap + canonicalizeDescendantsAfterUpsert (unwired)` | 兩個新 helper + RC1-RC4 unit |
-| 4 | `feat(agent): reconcileCreatedFrameAsProxy with bounded retry + rollback (unwired)` | reconcile helper（含 §2.1.1 retry/rollback）+ deleteWithRetryOrRollback shared helper |
-| 5 | `feat(agent): wire bidirectional canonicalization into applyFrameEvent` | §2.2.1 + §2.2.2 接線 + trace meta |
-| 6 | `test(agent): integration tests for cold-start race canonicalization` | IT1-IT9 用真 sqlite |
+| 2 | `docs: Phase 3.5 plan v2 — bidirectional + retry/rollback` | 已 commit `dd29be46` |
+| 3 | `docs: Phase 3.5 plan v3 — sweep canonicalize + identity gate + rollback observability` | 此檔（codex round 2 fixes）|
+| 4 | `feat(agent): pidIsAncestorOfWithCap + canonicalizeDescendantsAfterUpsert with identity gate (unwired)` | helper + RC1-RC4 + RC5 PID-reuse skip |
+| 5 | `feat(agent): reconcileCreatedFrameAsProxy with bounded retry + rollback + error propagation (unwired)` | reconcile helper（含 §2.1.1 retry + rollback + propagation）+ deleteWithRetryOrRollback shared helper |
+| 6 | `feat(agent): wire bidirectional canonicalization into applyFrameEvent` | §2.2.1 + §2.2.2 接線 + trace meta（含 partial_canonicalization）|
+| 7 | `feat(agent): sweep canonicalizePane defensive layer` | §4 sweep 第三 pass + findCanonicalAncestor + IT10/IT12 sweep 觀察測試 |
+| 8 | `test(agent): integration tests for cold-start race canonicalization` | IT1-IT12 用真 sqlite |
 
 **Unwired 模式**（commits 3 + 4）沿用 Phase 3 commit `f109b258`，降低 review 對 wire-and-test 同 commit 的審讀負擔。
 
@@ -485,17 +624,19 @@ v1 plan 因為 delete 失敗只 log 而漏網，需要 sweep 補；v2 用 bounde
 
 | 區塊 | 估計 |
 |---|---|
-| `frame_ops.go` reconcileCreatedFrameAsProxy（含 retry/rollback） | ~75 行 |
-| `frame_ops.go` canonicalizeDescendantsAfterUpsert | ~70 行 |
+| `frame_ops.go` reconcileCreatedFrameAsProxy（含 retry/rollback/propagate） | ~85 行 |
+| `frame_ops.go` canonicalizeDescendantsAfterUpsert（含 identity gate） | ~85 行 |
 | `frame_ops.go` pidIsAncestorOfWithCap | ~20 行 |
 | `frame_ops.go` deleteWithRetryOrRollback shared helper | ~30 行 |
-| `frame_ops.go` 接線 § 2.2.1 + §2.2.2 + trace | ~50 行 |
-| `frame_ops_test.go` RC1-RC4 unit | ~120 行 |
-| `module_test.go` / new file IT1-IT9 integration | ~450-550 行 |
-| Plan docs（此檔 v2） | ~430 行 |
-| **總 net code（不含 plan docs）** | **~815-915 行** |
+| `frame_ops.go` 接線 §2.2.1 + §2.2.2 + trace（含 partial_canonicalization） | ~55 行 |
+| `sweep.go` canonicalizePane + findCanonicalAncestor | ~110 行 |
+| `frame_ops_test.go` RC1-RC5 unit | ~150 行 |
+| `module_test.go` / new file IT1-IT12 integration | ~600-700 行 |
+| `sweep_test.go` 加 sweep canonicalize 測試 | ~100 行 |
+| Plan docs（此檔 v3） | ~700 行 |
+| **總 net code（不含 plan docs）** | **~1235-1335 行** |
 
-落在「中-大 PR」邊界（PR-2b 是 ~+1700 行 net）。Review 負擔比 PR-2b 小但比 v1 estimate（~325-425 行）翻倍 — 主要在 integration 測試。
+落在「中-大 PR」邊界（PR-2b 是 ~+1700 行 net）。Sweep 第三 pass + IT10-IT12 把 v2 估計（~815-915）拉到 ~1235-1335。Review 負擔依然比 PR-2b 小但接近邊界 — 修一個有 codex consulting backing 的單點 race，但因兩輪收斂後加上必要 defense-in-depth。
 
 ---
 
@@ -570,5 +711,6 @@ PR 跑過兩輪 codex review 收斂後：
 
 | Round | Job | Verdict | Findings | Resolution |
 |---|---|---|---|---|
-| Plan v1 round 1（adversarial） | 在 §0 摘要的 adversarial run（內聯結果，無 background job ID）| needs-attention | F1 high ancestor-late race / F2 high delete-race 雙顯示 / F3 medium mock test 不足 | v2 全採納（§0.2 / §2.1.1+2.1.2 / §3.1 升 ship gate）|
-| Plan v2 round 2 | (待執行) | (pending) | — | — |
+| Plan v1 round 1（adversarial）| 內聯 | needs-attention | F1 ancestor-late / F2 partial delete / F3 mock test | v2 全採納 |
+| Plan v2 round 2（adversarial）| 內聯 | needs-attention | G1 high rollback 也會失敗 / G2 high descendant scan 缺 identity gate / G3 medium existing descendant 漏網 | v3 全採納（§4 sweep 納入 / §2.1.2 identity gate / §2.1.1 propagate error；IT10-IT12 補測試）|
+| Plan v3 round 3 | (待執行) | (pending) | — | — |
