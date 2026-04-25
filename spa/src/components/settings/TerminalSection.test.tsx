@@ -15,6 +15,7 @@ describe('TerminalSection', () => {
       ccIconVariant: 'bot',
       codexIconVariant: 'openai',
       dynamicTabName: false,
+      tabNameTooltipMode: 'both',
       showAgentTitleInStatusBar: false,
     })
   })
@@ -115,7 +116,7 @@ describe('TerminalSection', () => {
     render(<TerminalSection />)
     fireEvent.click(screen.getByRole('button', { name: /Star/ }))
     expect(useUISettingsStore.getState().ccIconVariant).toBe('star')
-    fireEvent.click(screen.getByRole('button', { name: /Bot/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Bot$/ }))
     expect(useUISettingsStore.getState().ccIconVariant).toBe('bot')
   })
 
@@ -146,6 +147,23 @@ describe('TerminalSection', () => {
     render(<TerminalSection />)
     fireEvent.click(screen.getByLabelText('Dynamic tab name'))
     expect(useUISettingsStore.getState().dynamicTabName).toBe(true)
+  })
+
+  it('renders tab name tooltip setting below Dynamic tab name', () => {
+    render(<TerminalSection />)
+    const dynamicControl = screen.getByLabelText('Dynamic tab name')
+    const tooltipControl = screen.getByText('Tab name tooltip')
+    expect(dynamicControl.compareDocumentPosition(tooltipControl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByText('None')).toBeTruthy()
+    expect(screen.getByText('Top')).toBeTruthy()
+    expect(screen.getByText('Left')).toBeTruthy()
+    expect(screen.getByText('Both')).toBeTruthy()
+  })
+
+  it('updates tab name tooltip mode', () => {
+    render(<TerminalSection />)
+    fireEvent.click(screen.getByText('Left'))
+    expect(useUISettingsStore.getState().tabNameTooltipMode).toBe('left')
   })
 
   it('toggles show in status bar', () => {

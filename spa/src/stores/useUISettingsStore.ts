@@ -6,6 +6,7 @@ export type TerminalRenderer = 'webgl' | 'dom'
 export type TabIndicatorStyle = 'icon' | 'dot' | 'iconDot' | 'badge'
 export type CcIconVariant = 'bot' | 'star'
 export type CodexIconVariant = 'openai' | 'codex'
+export type TabNameTooltipMode = 'none' | 'top' | 'left' | 'both'
 
 export const KEEPALIVE_MAX_WEBGL = 6
 export const KEEPALIVE_MAX_DOM = 10
@@ -66,6 +67,8 @@ interface UISettings {
   setCodexIconVariant: (variant: CodexIconVariant) => void
   dynamicTabName: boolean
   setDynamicTabName: (show: boolean) => void
+  tabNameTooltipMode: TabNameTooltipMode
+  setTabNameTooltipMode: (mode: TabNameTooltipMode) => void
   showAgentTitleInStatusBar: boolean
   setShowAgentTitleInStatusBar: (show: boolean) => void
 }
@@ -102,6 +105,8 @@ export const useUISettingsStore = create<UISettings>()(
       setCodexIconVariant: (variant) => set({ codexIconVariant: variant }),
       dynamicTabName: false,
       setDynamicTabName: (show) => set({ dynamicTabName: show }),
+      tabNameTooltipMode: 'both' as TabNameTooltipMode,
+      setTabNameTooltipMode: (mode) => set({ tabNameTooltipMode: mode }),
       showAgentTitleInStatusBar: false,
       setShowAgentTitleInStatusBar: (show) => set({ showAgentTitleInStatusBar: show }),
     }),

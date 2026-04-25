@@ -1,4 +1,4 @@
-import { useUISettingsStore, type TerminalRenderer, type TabIndicatorStyle, type CcIconVariant, type CodexIconVariant, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
+import { useUISettingsStore, type TerminalRenderer, type TabIndicatorStyle, type CcIconVariant, type CodexIconVariant, type TabNameTooltipMode, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
 import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS } from '../../lib/agent-icons'
 import { SettingItem } from './SettingItem'
 import { SegmentControl } from './SegmentControl'
@@ -29,6 +29,8 @@ export function TerminalSection() {
   const setCodexIconVariant = useUISettingsStore((s) => s.setCodexIconVariant)
   const dynamicTabName = useUISettingsStore((s) => s.dynamicTabName)
   const setDynamicTabName = useUISettingsStore((s) => s.setDynamicTabName)
+  const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
+  const setTabNameTooltipMode = useUISettingsStore((s) => s.setTabNameTooltipMode)
   const showAgentTitleInStatusBar = useUISettingsStore((s) => s.showAgentTitleInStatusBar)
   const setShowAgentTitleInStatusBar = useUISettingsStore((s) => s.setShowAgentTitleInStatusBar)
 
@@ -54,6 +56,13 @@ export function TerminalSection() {
   const CODEX_ICON_OPTIONS: { value: CodexIconVariant; label: string }[] = [
     { value: 'openai', label: t('settings.terminal.codex_icon.openai') },
     { value: 'codex', label: t('settings.terminal.codex_icon.codex') },
+  ]
+
+  const TAB_NAME_TOOLTIP_OPTIONS: { value: TabNameTooltipMode; label: string }[] = [
+    { value: 'none', label: t('settings.terminal.tab_name_tooltip.none') },
+    { value: 'top', label: t('settings.terminal.tab_name_tooltip.top') },
+    { value: 'left', label: t('settings.terminal.tab_name_tooltip.left') },
+    { value: 'both', label: t('settings.terminal.tab_name_tooltip.both') },
   ]
 
   // Atomic: renderer + version + optional keepAlive clamp in one setState()
@@ -120,6 +129,10 @@ export function TerminalSection() {
 
       <SettingItem label={t('settings.terminal.dynamic_tab_name.label')} description={t('settings.terminal.dynamic_tab_name.desc')}>
         <ToggleSwitch label={t('settings.terminal.dynamic_tab_name.label')} checked={dynamicTabName} onChange={setDynamicTabName} />
+      </SettingItem>
+
+      <SettingItem label={t('settings.terminal.tab_name_tooltip.label')} description={t('settings.terminal.tab_name_tooltip.desc')}>
+        <SegmentControl options={TAB_NAME_TOOLTIP_OPTIONS} value={tabNameTooltipMode} onChange={setTabNameTooltipMode} />
       </SettingItem>
 
       <SettingItem label={t('settings.terminal.agent_title_status_bar.label')} description={t('settings.terminal.agent_title_status_bar.desc')}>

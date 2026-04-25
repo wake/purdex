@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 
 export type HoverTooltipPlacement = 'top' | 'right'
@@ -10,11 +10,19 @@ interface Props {
 }
 
 const HOVER_TOOLTIP_OFFSET = 8
+const HOVER_TOOLTIP_DELAY_MS = 800
 
 export function HoverTooltip({ children, placement = 'right', 'data-testid': testId }: Props) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const [visible, setVisible] = useState(false)
   const [style, setStyle] = useState<CSSProperties>({ top: 0, left: 0 })
+  const showTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null)
+
+  const clearShowTimer = useCallback(() => {
+    if (!showTimerRef.current) return
+    window.clearTimeout(showTimerRef.current)
+    showTimerRef.current = null
+  }, [])
 
   const updatePosition = useCallback(() => {
     if (!anchor) return
@@ -37,21 +45,29 @@ export function HoverTooltip({ children, placement = 'right', 'data-testid': tes
   useLayoutEffect(() => {
     if (!anchor) return
     const show = () => {
-      updatePosition()
-      setVisible(true)
+      clearShowTimer()
+      showTimerRef.current = window.setTimeout(() => {
+        updatePosition()
+        setVisible(true)
+        showTimerRef.current = null
+      }, HOVER_TOOLTIP_DELAY_MS)
     }
-    const hide = () => setVisible(false)
+    const hide = () => {
+      clearShowTimer()
+      setVisible(false)
+    }
     anchor.addEventListener('mouseenter', show)
     anchor.addEventListener('mouseleave', hide)
     anchor.addEventListener('focusin', show)
     anchor.addEventListener('focusout', hide)
     return () => {
+      clearShowTimer()
       anchor.removeEventListener('mouseenter', show)
       anchor.removeEventListener('mouseleave', hide)
       anchor.removeEventListener('focusin', show)
       anchor.removeEventListener('focusout', hide)
     }
-  }, [anchor, updatePosition])
+  }, [anchor, clearShowTimer, updatePosition])
 
   useLayoutEffect(() => {
     if (!visible) return

@@ -58,7 +58,7 @@ beforeEach(() => {
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
   useHostStore.setState({ runtime: {} })
   useAgentStore.setState({ unread: {}, statuses: {}, subagents: {} })
-  useUISettingsStore.setState({ tabIndicatorStyle: 'badge' })
+  useUISettingsStore.setState({ tabIndicatorStyle: 'badge', tabNameTooltipMode: 'both' })
   useI18nStore.setState({ t: (k: string) => k })
 })
 
@@ -179,6 +179,12 @@ describe('SortableTab', () => {
     expect(tabRoot.getAttribute('title')).toBeNull()
     const tooltip = screen.getByRole('tooltip')
     expect(tooltip.textContent).toBe('my-feature - work')
+  })
+
+  it('does not render HoverTooltip when top tab tooltip is disabled', () => {
+    useUISettingsStore.setState({ tabNameTooltipMode: 'left' })
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.queryByRole('tooltip')).toBeNull()
   })
 })
 

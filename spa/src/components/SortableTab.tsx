@@ -6,6 +6,7 @@ import { useTabDisplay } from '../hooks/useTabDisplay'
 import { TabIcon } from './TabIcon'
 import { HoverTooltip } from './HoverTooltip'
 import { shouldShowGlobalUnreadPip } from './tab-icon-helpers'
+import { useUISettingsStore } from '../stores/useUISettingsStore'
 
 interface Props {
   tab: Tab
@@ -35,6 +36,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   }
 
   const t = useI18nStore((s) => s.t)
+  const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
   const {
     displayTitle: label,
     IconComponent,
@@ -67,6 +69,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const handleDoubleClick = () => onRename?.(tab.id)
 
   const tabBg = isActive ? TAB_BG_ACTIVE : TAB_BG_INACTIVE
+  const showTooltip = tabNameTooltipMode === 'top' || tabNameTooltipMode === 'both'
 
   if (pinned) {
     return (
@@ -95,7 +98,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
             style={{ backgroundColor: '#ef4444' }} />
         )}
-        <HoverTooltip placement="top">{label}</HoverTooltip>
+        {showTooltip && <HoverTooltip placement="top">{label}</HoverTooltip>}
       </button>
     )
   }
@@ -131,7 +134,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     >
       <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} />
       <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
-      <HoverTooltip placement="top">{label}</HoverTooltip>
+      {showTooltip && <HoverTooltip placement="top">{label}</HoverTooltip>}
       {isHostOffline && <WifiSlash size={12} className="text-red-400 flex-shrink-0" />}
       {tab.locked && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
       {!isActive && isUnread && shouldShowGlobalUnreadPip(tabIndicatorStyle, agentStatus) && (
