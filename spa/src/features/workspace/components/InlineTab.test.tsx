@@ -47,6 +47,7 @@ beforeEach(() => {
   })
   useUISettingsStore.setState({
     dynamicTabName: false,
+    tabNameTooltipMode: 'both',
     tabIndicatorStyle: 'badge',
     ccIconVariant: 'bot',
     codexIconVariant: 'openai',
@@ -383,6 +384,21 @@ describe('InlineTab — statusline display', () => {
     )
     const tooltip = screen.getByTestId('inline-tab-tooltip')
     expect(tooltip).toHaveAttribute('data-placement', 'right')
+  })
+
+  it('does not render tooltip when left tab tooltip is disabled', () => {
+    useUISettingsStore.setState({ tabNameTooltipMode: 'top' })
+    render(
+      <InlineTab
+        tab={baseTab}
+        isActive={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onMiddleClick={() => {}}
+        onContextMenu={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('inline-tab-tooltip')).toBeNull()
   })
 })
 

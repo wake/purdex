@@ -6,6 +6,7 @@ import { useTabDisplay } from '../../../hooks/useTabDisplay'
 import { shouldShowGlobalUnreadPip } from '../../../components/tab-icon-helpers'
 import { HoverTooltip } from '../../../components/HoverTooltip'
 import { renderInlineTabIcon } from '../lib/renderInlineTabIcon'
+import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 
 interface Props {
   tab: Tab
@@ -29,6 +30,7 @@ export function InlineTab({
   onRename,
 }: Props) {
   const t = useI18nStore((s) => s.t)
+  const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: tab.id,
     data: { type: 'tab', tabId: tab.id, sourceWsId, isPinned: tab.pinned },
@@ -80,6 +82,7 @@ export function InlineTab({
   }
 
   const showClose = !tab.locked
+  const showTooltip = tabNameTooltipMode === 'left' || tabNameTooltipMode === 'both'
 
   // Active surface — no visible border; both states keep a transparent 1px
   // border so sibling rows don't shift when toggling active state.
@@ -119,9 +122,11 @@ export function InlineTab({
         overflow-y-auto scroll container, so a top-anchored tooltip can be
         clipped near the edge. Right escapes into the main content area.
       */}
-      <HoverTooltip placement="right" data-testid="inline-tab-tooltip">
-        {displayTitle}
-      </HoverTooltip>
+      {showTooltip && (
+        <HoverTooltip placement="right" data-testid="inline-tab-tooltip">
+          {displayTitle}
+        </HoverTooltip>
+      )}
       {isHostOffline && (
         <WifiSlash
           size={12}
