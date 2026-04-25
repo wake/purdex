@@ -64,6 +64,7 @@ Therefore this PR must not touch:
 - `internal/module/agent/frame_ops.go`
 - `internal/module/agent/frame_ops_test.go`
 - `internal/module/agent/handler_test.go`
+- `internal/module/agent/trace.go`
 
 This hotfix may modify only:
 
@@ -83,6 +84,7 @@ This hotfix may modify only:
 - `internal/agent/opencode/hooks_test.go`
 - `internal/agent/opencode/plugin_template.go`
 - `internal/agent/opencode/plugin_template_test.go`
+- `internal/agent/opencode/testdata/opencode-1.14.23-*`
 - `internal/agent/opencode/status.go`
 - `internal/agent/opencode/status_test.go`
 - `spa/src/lib/agent-icons.test.tsx`
@@ -174,6 +176,8 @@ This hotfix adds only icon registry tests. Rendering pipeline changes are out of
 
 Add a lightweight classification field to hook declarations without introducing a central runtime dispatcher. Raw `HookEventSpec.Handling` must not be read directly by installer/checker code; consumers use the helper functions below so zero-value legacy specs remain safe.
 
+`HookInstaller.Events()` becomes the provider's classified upstream hook catalog. It is no longer synonymous with the installable subset. Installer/checker/template consumers must derive installable events through `IsInstallableHookSpec`.
+
 Proposed extension in `internal/agent/provider.go`:
 
 ```go
@@ -182,8 +186,8 @@ type HookHandling string
 const (
     HookHandlingStatus     HookHandling = "status"      // may emit non-empty Status
     HookHandlingDetail     HookHandling = "detail"      // Valid=true, Status="" detail-only
-    HookHandlingIgnored    HookHandling = "ignored"     // known upstream event, intentionally not installed/parsed
-    HookHandlingUnsupported HookHandling = "unsupported" // known upstream event not supported by this Purdex version
+    HookHandlingIgnored    HookHandling = "ignored"     // current upstream event intentionally irrelevant to status/detail behavior
+    HookHandlingUnsupported HookHandling = "unsupported" // current upstream event that may be relevant but is not safely parsed/installed yet
 )
 
 type HookEventSpec struct {
@@ -207,11 +211,21 @@ Rules:
 - `EffectiveHookHandling` maps empty `Handling` to `status` when `EmitsStatus` is non-empty.
 - `EffectiveHookHandling` maps empty `Handling` to `detail` when `EmitsStatus` is empty. This preserves existing SubagentStart/Stop behavior during migration.
 - Upstream events Purdex chooses not to install use `ignored` or `unsupported`.
+- Newly added upstream non-installable specs must set `Handling` explicitly to `ignored` or `unsupported`; they must not rely on the empty-to-`detail` migration default.
+- Ignored/unsupported specs must have empty `EmitsStatus`. If a future event should contribute status, it must be promoted to `status` handling with parser/install support.
 - `SupportedStatuses()` continues to union only `EmitsStatus`.
 - `IsInstallableHookSpec` returns true only for effective `status` and `detail`.
 - `InstallHooks` installs only installable events unless a provider explicitly decides otherwise.
-- `CheckHooks` reports installed state only for installable events; ignored/unsupported events can be exposed later to Inspector but must not block install completeness.
+- `CheckHooks.Events` contains installable specs only in this hotfix. Ignored/unsupported events remain in `Provider.Events()` for catalog/tests and can be exposed later to Inspector, but must not block install completeness.
 - Template/spec parity checks compare template emissions against installable specs only.
+- Each provider's `Events()` defensive copy must preserve `Handling`; otherwise ignored/unsupported specs can incorrectly fall back to `detail` and become installable.
+
+Stale ignored/unsupported artifacts already present on disk:
+
+- Install must never add Purdex commands for ignored/unsupported events.
+- CheckHooks must not include ignored/unsupported events in install completeness and must not report them as missing or broken.
+- `Managed=true` may be based on any Purdex-owned artifact, including stale ignored/unsupported entries, so users can run remove.
+- RemoveHooks must remove stale Purdex-owned ignored/unsupported commands while preserving third-party entries.
 
 Derived predicate table:
 
@@ -238,7 +252,9 @@ Keep current installed set as-is:
 - `PermissionRequest`
 - `SessionEnd`
 
-Add explicit known-but-not-installed declarations for current documented hook events such as:
+Add an exact version-pinned upstream catalog table before implementation. The table must include every current documented upstream event name, source URL or runtime/source provenance, `Handling`, `FutureOnly`, normalized Purdex event name when installable, and reason when non-installable. Tests must compare the full event-name set exactly against that table.
+
+Initial Claude Code non-installed candidates to verify and classify include:
 
 - `PreToolUse`
 - `PostToolUse`
@@ -278,7 +294,9 @@ FutureOnly tolerated-absent set remains parser-capable and opportunistically ins
 
 Installer behavior remains broad: Purdex writes all installable status/detail Codex events (the 4 required events plus the 5 FutureOnly events). `FutureOnly` changes checker tolerance, not whether reinstall can seed the hook entry.
 
-Add explicit known ignored/unsupported entries for current documented events that Purdex does not install yet:
+Add an exact Codex `0.124.0` upstream catalog table before implementation. The table must include every current documented upstream event name, source URL or runtime/source provenance, `Handling`, `FutureOnly`, normalized Purdex event name when installable, and reason when non-installable. Tests must compare the full event-name set exactly against that table.
+
+Initial known ignored/unsupported candidates to verify and classify:
 
 - `PreToolUse`
 - `PostToolUse`
@@ -297,6 +315,8 @@ Keep currently intended normalized events:
 - `UserPromptSubmit` from the current prompt/message event after verification
 - `SubagentStart` / `SubagentStop` from `tool.execute.before/after` task calls
 
+Add an exact OpenCode `1.14.23` plugin event table before implementation. The table must include every current documented/runtime plugin event key, source URL or runtime/source provenance, `Handling`, normalized Purdex event name when installable, payload paths consumed by the template, and reason when non-installable. Tests must compare the full event-key set exactly against that table.
+
 Explicitly document all current OpenCode plugin events not installed/mapped as ignored/unsupported.
 
 OpenCode template/spec parity and CheckHooks event installation must use only `IsInstallableHookSpec(spec) == true`. Ignored/unsupported OpenCode upstream events must appear in the catalog but must not be expected in the managed plugin body and must not be marked installed by `CheckHooks`.
@@ -306,9 +326,11 @@ OpenCode template/spec parity and CheckHooks event installation must use only `I
 Install:
 
 - Ensure `~/.codex/config.toml` exists.
-- Preserve all existing config content as much as practical.
+- Preserve existing TOML semantic keys/values; comments, formatting, and ordering are not guaranteed.
 - Ensure `[features].codex_hooks = true`.
-- Then write `~/.codex/hooks.json`.
+- Parse both existing `config.toml` and `hooks.json` before writing either file; missing files are treated as empty config/hook maps.
+- If either parse fails, return before writing; both files must remain byte-for-byte unchanged.
+- After successful parse, write `config.toml`, then write `hooks.json`.
 
 Check:
 
@@ -342,15 +364,25 @@ Claude checker should mirror Codex per-event validation:
 
 `filterOutPdx` should remove only commands that are valid Purdex hook commands for `cc`, not arbitrary `pdx hook --agent codex` commands.
 
+For checker validation, event matching is per-key strict: the final command token must equal the settings event key. For remove/reinstall filtering, remove any well-formed `pdx hook --agent cc <supported-event>` entry even if it is currently filed under the wrong Claude event key; this cleans stale Purdex-owned commands while preserving non-cc commands.
+
 ### 2.6 OpenCode Version Status
 
 Add `opencodeHooksSupportedVersion = "1.14.23"` and return `SupportedVersion` / `ExceedsSupport` in all `CheckHooks` paths for parity with cc/codex.
 
 ### 2.7 OpenCode Mapping Verification Gate
 
-Before changing `renderManagedPlugin`, capture or verify the current OpenCode `1.14.23` prompt/message event contract. The implementation commit must name the exact event key and payload fields in this plan or a retrospective note before production code changes.
+Before changing `renderManagedPlugin`, capture or verify every OpenCode `1.14.23` event key and payload path consumed by the managed template, including `session.*`, `permission.asked`, `question.asked` if kept, prompt/message events, `tool.execute.before`, and `tool.execute.after`.
 
-If no stable current prompt event is confirmed, keep the production template unchanged in this hotfix and limit OpenCode changes to catalog classification, version reporting, and tests that document the uncertainty.
+The verification commit must add a checked-in provenance artifact under `internal/agent/opencode/testdata/opencode-1.14.23-*` with:
+
+- exact `opencode --version` output
+- source/docs URL and commit/tag, or a captured runtime trace
+- exact event keys consumed by `renderManagedPlugin`
+- minimal JSON payload fixtures containing every field the template reads
+- tests that fail if the fixtures no longer support the template mapping
+
+If any template-consumed event lacks stable verification, keep the production template unchanged in this hotfix and limit OpenCode changes to catalog classification, version reporting, and tests that document the uncertainty.
 
 ---
 
@@ -371,11 +403,14 @@ Tests:
 |---|---|---|
 | HC1 | `TestEffectiveHookHandlingDefaults` | empty handling + non-empty `EmitsStatus` derives `status`; empty handling + empty `EmitsStatus` derives `detail` |
 | HC1b | `TestIsInstallableHookSpec` | `status/detail` are installable; `ignored/unsupported` are not |
-| HC2 | `TestSupportedStatusesIgnoresIgnoredHooks` | ignored/unsupported hooks with empty `EmitsStatus` do not affect status set |
-| HC3 | `TestCCEventsClassifyKnownUpstreamHooks` | documented non-installed cc hooks exist and are `ignored` / `unsupported` |
-| HC4 | `TestCodexEventsClassifyCurrentDocs` | `PermissionRequest` is non-FutureOnly; `PreToolUse`/`PostToolUse` are explicitly classified |
+| HC2 | `TestNonInstallableHookSpecsMustNotEmitStatus` | provider catalog tests fail if any ignored/unsupported spec has non-empty `EmitsStatus` |
+| HC3 | `TestCCEventsClassifyKnownUpstreamHooks` | full documented cc hook set matches the checked-in version-pinned catalog table |
+| HC3b | `TestProviderEventsPreserveHandling` | ignored/unsupported specs round-trip through each provider `Events()` defensive copy |
+| HC4 | `TestCodexEventsClassifyCurrentDocs` | `PreToolUse`/`PostToolUse` and all current documented non-installed Codex events are explicitly classified |
 | HC5 | `TestOpenCodeEventsClassifyPluginSurface` | OpenCode plugin docs events not mapped are explicitly classified |
-| HC6 | `TestInstallableEventNamesStayStable` | installable sets remain cc=9, codex=9, opencode=8 before provider-specific changes |
+| HC6 | `TestInstallableEventNamesStayStable` | installable sets remain cc=9, codex=9, opencode=8 after upstream catalog expansion |
+| HC6b | `TestInstallableFilteringUsesHandling` | synthetic ignored/unsupported specs are excluded from event-name helpers, checker completeness, and OpenCode template parity |
+| HC7 | `TestStaleNonInstallablePdxArtifactsDoNotBlockInstall` | stale Purdex-owned ignored/unsupported entries set `Managed=true`, do not affect `Installed`, and are removed by remove |
 
 ### 3.2 Codex Feature Flag Tests
 
@@ -389,6 +424,7 @@ Tests:
 | CF2 | `TestCodexInstallHooks_PreservesExistingConfig` | unrelated TOML keys survive install |
 | CF2b | `TestCodexInstallHooks_MergesExistingFeaturesTable` | existing `[features]` entries survive and `codex_hooks` flips true |
 | CF2c | `TestCodexInstallHooks_MalformedConfigReturnsError` | malformed TOML returns error and does not overwrite file |
+| CF2d | `TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite` | malformed `config.toml` or `hooks.json` leaves both files byte-for-byte unchanged |
 | CF3 | `TestCodexCheckHooks_FeatureFlagMissingBlocks` | valid hooks.json + missing flag => `Installed=false`, `Managed=true`, issue present |
 | CF4 | `TestCodexCheckHooks_FeatureFlagFalseBlocks` | `codex_hooks=false` blocks install completeness |
 | CF5 | `TestCodexRemoveHooks_DoesNotDisableFeatureFlag` | remove leaves `codex_hooks=true` unchanged |
@@ -407,6 +443,8 @@ Tests:
 | CP4 | `TestMergeCodexHooks_RemoveDeletesEmptyEventKeys` | remove deletes keys with no remaining third-party hooks |
 | CP5 | `TestCheckHooks_AfterPurdexRemoveFutureOnlyAbsentDoesNotWarn` | installer remove no longer creates empty-array broken warnings |
 
+CP2, CP3, and CP5 fixtures must include `features.codex_hooks=true` unless the test is specifically about feature flag handling.
+
 ### 3.4 Claude Strict Checker Tests
 
 File: `internal/agent/cc/hooks_test.go`
@@ -420,6 +458,7 @@ Tests:
 | CS3 | `TestCCCheckHooks_QuotedPathWithSpacesValid` | `"/Applications/Purdex Beta/pdx" hook --agent cc Stop` passes |
 | CS4 | `TestMergeClaudeHooks_DoesNotRemoveOtherAgentPdxHook` | remove keeps `--agent codex` command in Claude settings |
 | CS5 | `TestMergeClaudeHooks_ReplacesOnlyCcPdxEntries` | reinstall replaces old cc pdx path but preserves third-party and non-cc pdx hooks |
+| CS6 | `TestMergeClaudeHooks_RemovesWrongEventCcPdxEntry` | remove/reinstall deletes well-formed `--agent cc` commands even when filed under the wrong event key |
 
 ### 3.5 OpenCode Plugin Mapping / Version Tests
 
@@ -433,11 +472,11 @@ Tests:
 
 | ID | Test | Red Assertion |
 |---|---|---|
-| OC1 | `TestOpenCodePluginTemplate_UsesCurrentPromptEvent` | template uses the verified current event for prompt/running transition, not stale API |
-| OC1a | `TestOpenCodePromptEventContractDocumented` | test fixture names the current verified prompt/message event and required payload fields |
+| OC1 | `TestOpenCodePluginTemplate_UsesVerifiedEvents` | template uses verified current event keys and payload paths, not stale API assumptions |
+| OC1a | `TestOpenCodeTemplateEventContractsDocumented` | checked-in provenance fixture names every consumed OpenCode event key and payload field |
 | OC2 | `TestTemplateSpecsParity` | emitted template events match installable specs only |
 | OC3 | `TestOpenCodeEvents_ClassifiesCurrentPluginEvents` | current documented OpenCode plugin events are classified |
-| OC4 | `TestOpenCodeCheckHooks_ReportsSupportedVersion` | status includes `SupportedVersion=1.14.23` |
+| OC4 | `TestOpenCodeCheckHooks_ReportsSupportedVersion` | table tests every `CheckHooks` return path includes `SupportedVersion=1.14.23` |
 | OC5 | `TestOpenCodeCheckHooks_ExceedsSupport` | version comparison warning works when detected version is greater |
 
 ### 3.6 OpenCode Icon Guard Test
@@ -461,12 +500,13 @@ OI1/OI2 are coverage guards on the current baseline; they are allowed to pass im
 
 Red:
 
-- HC1-HC2 fail.
+- HC1-HC1b fail.
 
 Green:
 
 - Add `HookHandling` field/types.
 - Add `EffectiveHookHandling` and `IsInstallableHookSpec` in `internal/agent/provider.go`.
+- Update `HookInstaller.Events` and `HookEventSpec` comments to say `Events()` returns the classified upstream catalog, not the installable subset.
 - Keep existing provider event declarations unchanged.
 - Ensure `SupportedStatuses` tests stay green and use effective handling only where classification matters.
 
@@ -478,14 +518,15 @@ Run:
 
 Red:
 
-- HC6 fails.
-- Existing exact catalog/template/checker tests fail if they read raw catalog size after ignored/unsupported entries are introduced.
+- HC6b fails.
+- Synthetic ignored/unsupported specs fail installer-name filtering and OpenCode template parity filtering until consumers use `IsInstallableHookSpec`.
 
 Green:
 
 - Migrate cc/codex/opencode event-name helpers, installers, checkers, and OpenCode template/spec parity to `IsInstallableHookSpec`.
 - Split tests into full upstream catalog assertions and installable set assertions.
 - Preserve installable sets before provider-specific changes: cc=9, codex=9, opencode=8.
+- Do not add upstream ignored/unsupported declarations in this commit.
 
 Run:
 
@@ -495,12 +536,16 @@ Run:
 
 Red:
 
-- HC3-HC5 fail.
+- HC2-HC6 and HC7 fail.
 
 Green:
 
 - Add known upstream ignored/unsupported declarations for cc/codex/opencode.
+- Add exact version-pinned provider catalog tables and full catalog set assertions.
+- Copy `Handling` through every provider `Events()` defensive copy.
+- Assert every newly added non-installable declaration has explicit `ignored`/`unsupported` handling and empty `EmitsStatus`.
 - Keep ignored/unsupported entries out of install completeness and OpenCode template parity.
+- Define and test stale ignored/unsupported Purdex-owned artifacts: they do not affect `Installed`, may make `Managed=true`, and are removed by remove.
 - Keep runtime status derivation unchanged for installable status/detail events.
 
 Run:
@@ -511,12 +556,13 @@ Run:
 
 Red:
 
-- CF1-CF5 and CF2b-CF2c fail.
+- CF1-CF5 and CF2b-CF2d fail.
 - CP1-CP3 fail.
 
 Green:
 
 - Add TOML read/write helpers for `~/.codex/config.toml`.
+- Preflight-parse both `config.toml` and `hooks.json`; any parse failure leaves both files byte-for-byte unchanged.
 - Install enables `features.codex_hooks`.
 - Check blocks when feature flag missing/false.
 - Preserve TOML semantic keys while accepting formatting/comment/order rewrites.
@@ -537,6 +583,7 @@ Green:
 
 - `mergeCodexHooks(remove=true)` deletes event key when no entries remain.
 - Preserve third-party matcher groups.
+- Ensure CP5 fixtures include `features.codex_hooks=true` so the test isolates empty-key behavior.
 - Keep CheckHooks strict present-but-empty behavior for manually broken files.
 
 Run:
@@ -547,13 +594,14 @@ Run:
 
 Red:
 
-- CS1-CS5 fail.
+- CS1-CS6 fail.
 
 Green:
 
 - Add quote-aware tokenizer / per-event validator for cc.
 - Use strict validator for `CheckHooks`.
 - Use cc-scoped filtering for install/remove.
+- Remove stale well-formed `--agent cc` Purdex commands even when filed under the wrong event key.
 
 Run:
 
@@ -568,29 +616,31 @@ Red:
 Green:
 
 - Add supported version reporting for OpenCode.
+- Cover every `CheckHooks` return path: missing plugin, unmanaged plugin, path resolution failure, managed body drift, and fully installed.
 
 Run:
 
 - `go test ./internal/agent/opencode ./internal/agent -count=1`
 
-### Commit 5b — `test(agent/opencode): document prompt event contract`
+### Commit 5b — `test(agent/opencode): document template event contracts`
 
 Red:
 
-- OC1a fails until a current OpenCode `1.14.23` prompt/message event key and required payload fields are documented from source/runtime verification.
+- OC1a fails until current OpenCode `1.14.23` event keys and required payload fields for every template-consumed event are documented from source/runtime verification.
 
 Green:
 
-- Add a fixture or test note naming the verified event contract.
+- Add checked-in provenance under `internal/agent/opencode/testdata/opencode-1.14.23-*` with version output, source/docs URL or runtime trace, event keys, and minimal payload fixtures.
+- Add fixture-driven tests for every event key and payload path consumed by `renderManagedPlugin`.
 - Do not change `renderManagedPlugin` unless the verified contract proves `chat.message` is stale.
 
 Run:
 
 - `go test ./internal/agent/opencode -count=1`
 
-### Commit 5c — `fix(agent/opencode): refresh plugin prompt mapping`
+### Commit 5c — `fix(agent/opencode): refresh plugin event mapping`
 
-Only needed if Commit 5b proves the existing `chat.message` mapping is stale.
+Only needed if Commit 5b proves any existing managed template event key or payload path is stale.
 
 Red:
 
@@ -599,7 +649,7 @@ Red:
 
 Green:
 
-- Update prompt/running event mapping to the verified current event and payload contract.
+- Update event mappings to the verified current event and payload contract.
 - Keep template/spec parity scoped to installable specs.
 
 Run:
@@ -634,10 +684,12 @@ Run:
 ## 5. Acceptance Criteria
 
 - Codex install/check cannot report green unless `features.codex_hooks=true` and required current events are valid.
+- Codex install preflights both config and hooks files; malformed input leaves both files unchanged.
 - Codex `PermissionRequest` is required, not FutureOnly.
 - Codex remove does not leave empty event keys that Purdex itself later reports as broken.
 - Claude CheckHooks rejects wrong-agent and wrong-event `pdx hook` commands.
-- OpenCode plugin event mapping is verified against current OpenCode docs/runtime shape.
+- Ignored/unsupported hook declarations never enter install completeness, but stale Purdex-owned entries can be removed safely.
+- OpenCode plugin event mapping is verified against current OpenCode docs/runtime shape with checked-in provenance fixtures.
 - OpenCode CheckHooks reports version support fields like cc/codex.
 - OpenCode icon registry has explicit tests.
 - No files under `internal/module/agent/*`, `internal/agent/probe/*`, `internal/store/*`, or tab rendering are modified.
@@ -646,7 +698,7 @@ Run:
 
 ## 6. Risks
 
-- TOML round-trip may rewrite user formatting in `~/.codex/config.toml`. Keep helper minimal and document this if unavoidable.
+- TOML round-trip may rewrite user formatting in `~/.codex/config.toml`; semantic keys/values are preserved, but comments/order are not guaranteed.
 - Full upstream hook catalog classification may grow long. Keep it declarative and provider-local; do not add a central runtime dispatcher.
-- OpenCode prompt event mapping may require runtime verification if docs do not identify a direct replacement for `chat.message`. If uncertain, split into a smaller PR that only adds tests and version reporting first.
+- OpenCode event mapping may require runtime verification if docs do not identify stable event keys and payload paths. If uncertain, split into a smaller PR that only adds tests and version reporting first.
 - Existing tests may assume exactly 9 cc / 9 codex / 8 opencode events. Update those tests to count installed events separately from known upstream declarations.
