@@ -702,3 +702,53 @@ Run:
 - Full upstream hook catalog classification may grow long. Keep it declarative and provider-local; do not add a central runtime dispatcher.
 - OpenCode event mapping may require runtime verification if docs do not identify stable event keys and payload paths. If uncertain, split into a smaller PR that only adds tests and version reporting first.
 - Existing tests may assume exactly 9 cc / 9 codex / 8 opencode events. Update those tests to count installed events separately from known upstream declarations.
+
+---
+
+## 7. Review-Sized PR Slicing
+
+Codex review found that the foundation PR could still ship false-green Codex hook state if Codex current-runtime correctness stayed deferred. The review-sized split is therefore adjusted as follows:
+
+### PR 1 — Hook Foundation + Codex Current Correctness
+
+Include:
+
+- Commit 1a hook handling helpers.
+- Commit 1b installable-subset filtering for installers/checkers/template parity.
+- Owner-scoped cleanup for cc/codex Purdex hook artifacts so remove does not delete other-provider hooks.
+- Codex `features.codex_hooks=true` install/check gating with parse-before-write preflight.
+- Codex `PermissionRequest` requiredness and supported version update.
+- Codex remove empty-key cleanup for owned installable and stale/retired Codex hook entries.
+
+Rationale:
+
+- These changes share the same user-visible contract: `CheckHooks.Installed=true` must mean the agent will actually load and emit Purdex hooks.
+- The size is still reviewable because it is limited to `internal/agent/provider.go`, provider hook code/tests, and this plan document.
+- It remains outside lights runtime/probe/module files.
+
+### PR 2 — Upstream Catalog Classification
+
+Include:
+
+- Exact version-pinned cc/codex/opencode upstream catalog tables.
+- Real ignored/unsupported declarations and full catalog set assertions.
+- Provider catalog validation that newly added non-installable upstream entries must explicitly set `Handling` and must not emit statuses.
+
+### PR 3 — Remaining Claude Strictness, If Needed
+
+Include only behavior not already covered by PR 1 owner-scoped cleanup/checker strictness, such as additional reinstall/remove edge cases that are not required for installable-subset safety.
+
+### PR 4 — OpenCode Version + Event Contract
+
+Include:
+
+- OpenCode supported-version reporting.
+- Checked-in OpenCode event contract provenance fixtures for every template-consumed event.
+
+### PR 5 — OpenCode Mapping Refresh, Conditional
+
+Only create this PR if PR 4 proves an existing managed template event key or payload path is stale. Keep it separate because it can affect lights frame/projection behavior.
+
+### PR 6 — OpenCode Icon Guard
+
+Coverage-only SPA test. May be bundled with PR 4 if review load is low; otherwise keep as a small test-only PR.

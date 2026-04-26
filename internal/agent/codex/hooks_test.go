@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -371,6 +372,88 @@ func TestCodexInstallHooks_Writes9EventsAfterExpansion(t *testing.T) {
 	}
 }
 
+func TestCodexInstallHooks_EnablesFeatureFlagAndPreservesConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	existing := "model = \"gpt-5\"\n\n[features]\nother = true\ncodex_hooks = false\n"
+	if err := os.WriteFile(configPath, []byte(existing), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("InstallHooks: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{`model = "gpt-5"`, "other = true", "codex_hooks = true"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("config.toml missing %q after install:\n%s", want, text)
+		}
+	}
+}
+
+func TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite(t *testing.T) {
+	t.Run("malformed config leaves hooks unchanged", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		configPath := filepath.Join(home, ".codex", "config.toml")
+		hooksPath := filepath.Join(home, ".codex", "hooks.json")
+		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		badConfig := []byte("[features\ncodex_hooks = false\n")
+		originalHooks := []byte(`{"hooks":{"SessionStart":[]}}`)
+		if err := os.WriteFile(configPath, badConfig, 0644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		if err := os.WriteFile(hooksPath, originalHooks, 0644); err != nil {
+			t.Fatalf("write hooks: %v", err)
+		}
+		if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("InstallHooks succeeded with malformed config")
+		}
+		gotConfig, _ := os.ReadFile(configPath)
+		gotHooks, _ := os.ReadFile(hooksPath)
+		if string(gotConfig) != string(badConfig) || string(gotHooks) != string(originalHooks) {
+			t.Fatalf("files changed after malformed config; config=%q hooks=%q", gotConfig, gotHooks)
+		}
+	})
+
+	t.Run("malformed hooks leaves config unchanged", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		configPath := filepath.Join(home, ".codex", "config.toml")
+		hooksPath := filepath.Join(home, ".codex", "hooks.json")
+		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		originalConfig := []byte("model = \"gpt-5\"\n")
+		badHooks := []byte(`{"hooks":`)
+		if err := os.WriteFile(configPath, originalConfig, 0644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		if err := os.WriteFile(hooksPath, badHooks, 0644); err != nil {
+			t.Fatalf("write hooks: %v", err)
+		}
+		if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("InstallHooks succeeded with malformed hooks")
+		}
+		gotConfig, _ := os.ReadFile(configPath)
+		gotHooks, _ := os.ReadFile(hooksPath)
+		if string(gotConfig) != string(originalConfig) || string(gotHooks) != string(badHooks) {
+			t.Fatalf("files changed after malformed hooks; config=%q hooks=%q", gotConfig, gotHooks)
+		}
+	})
+}
+
 func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 	original := codexEventSpecs
 	codexEventSpecs = append(append([]agent.HookEventSpec(nil), codexEventSpecs...),
@@ -403,6 +486,7 @@ func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 	if err := mergeCodexHooks(homeHooksPath, "/usr/local/bin/pdx", false); err != nil {
 		t.Fatalf("seed install: %v", err)
 	}
+	writeCodexFeatureFlag(t, home, true)
 	status, err := (&Provider{}).CheckHooks()
 	if err != nil {
 		t.Fatalf("CheckHooks: %v", err)
@@ -499,6 +583,7 @@ func TestCodexCheckHooks_ReportsAll9Events(t *testing.T) {
 	if err := mergeCodexHooks(hooksPath, "/usr/local/bin/pdx", false); err != nil {
 		t.Fatalf("seed install: %v", err)
 	}
+	writeCodexFeatureFlag(t, home, true)
 
 	status, err := (&Provider{}).CheckHooks()
 	if err != nil {
@@ -519,6 +604,68 @@ func TestCodexCheckHooks_ReportsAll9Events(t *testing.T) {
 	}
 	if !status.Installed {
 		t.Errorf("Installed=false after full install, issues=%v", status.Issues)
+	}
+}
+
+func TestCodexCheckHooks_FeatureFlagMissingOrFalseBlocks(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		writeFlag bool
+		value     bool
+	}{
+		{name: "missing"},
+		{name: "false", writeFlag: true, value: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			hooksPath := filepath.Join(home, ".codex", "hooks.json")
+			if err := mergeCodexHooks(hooksPath, "/usr/local/bin/pdx", false); err != nil {
+				t.Fatalf("seed install: %v", err)
+			}
+			if tt.writeFlag {
+				writeCodexFeatureFlag(t, home, tt.value)
+			}
+			status, err := (&Provider{}).CheckHooks()
+			if err != nil {
+				t.Fatalf("CheckHooks: %v", err)
+			}
+			if status.Installed {
+				t.Fatal("Installed=true with codex hooks feature flag disabled")
+			}
+			if !status.Managed {
+				t.Fatal("Managed=false with valid hooks but disabled feature flag")
+			}
+			if !issuesContain(status.Issues, "codex hooks feature flag disabled") {
+				t.Fatalf("issues=%v, want feature flag disabled issue", status.Issues)
+			}
+		})
+	}
+}
+
+func TestCodexCheckHooks_PermissionRequestMissingBlocks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
+		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("Stop")},
+	})
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Installed {
+		t.Fatal("Installed=true with missing PermissionRequest")
+	}
+	if !issuesContain(status.Issues, "PermissionRequest hook not installed") {
+		t.Fatalf("issues=%v, want missing PermissionRequest issue", status.Issues)
+	}
+	for _, name := range status.UpgradesAvailable {
+		if name == "PermissionRequest" {
+			t.Fatalf("PermissionRequest appeared in UpgradesAvailable: %v", status.UpgradesAvailable)
+		}
 	}
 }
 
@@ -560,6 +707,7 @@ func TestCheckHooks_LegacyDirectEntryReportedUninstalled(t *testing.T) {
 	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	writeCodexFeatureFlag(t, dir, true)
 
 	status, err := (&Provider{}).CheckHooks()
 	if err != nil {
@@ -622,6 +770,7 @@ func TestCheckHooks_ThirdPartyLegacyEntryDoesNotTriggerReinstall(t *testing.T) {
 	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	writeCodexFeatureFlag(t, dir, true)
 
 	status, err := (&Provider{}).CheckHooks()
 	if err != nil {
@@ -685,6 +834,19 @@ func writeHooksFile(t *testing.T, home string, hooksSect map[string]any) {
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	writeCodexFeatureFlag(t, home, true)
+}
+
+func writeCodexFeatureFlag(t *testing.T, home string, enabled bool) {
+	t.Helper()
+	path := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	data := []byte(fmt.Sprintf("[features]\ncodex_hooks = %t\n", enabled))
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 }
 
 // issuesContain reports whether any issue contains the given substring.
@@ -697,16 +859,16 @@ func issuesContain(issues []string, substr string) bool {
 	return false
 }
 
-// CH1 — legacy 3-event user (pre-expansion install): the three required
-// events are valid; the six FutureOnly events have no key in hooks.json.
+// CH1 — current required events are valid; FutureOnly events have no key in hooks.json.
 // allInstalled must remain true and Issues must be empty.
 func TestCheckHooks_LegacyThreeEvent_ReportsInstalled(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeHooksFile(t, home, map[string]any{
-		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
-		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
-		"Stop":             []any{pdxGroupEntry("Stop")},
+		"SessionStart":      []any{pdxGroupEntry("SessionStart")},
+		"UserPromptSubmit":  []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":              []any{pdxGroupEntry("Stop")},
+		"PermissionRequest": []any{pdxGroupEntry("PermissionRequest")},
 	})
 
 	status, err := (&Provider{}).CheckHooks()
@@ -719,10 +881,7 @@ func TestCheckHooks_LegacyThreeEvent_ReportsInstalled(t *testing.T) {
 	if len(status.Issues) != 0 {
 		t.Fatalf("legacy 3-event user: Issues=%v, want empty", status.Issues)
 	}
-	futureOnly := []string{
-		"SubagentStart", "SubagentStop", "StopFailure",
-		"Notification", "PermissionRequest", "SessionEnd",
-	}
+	futureOnly := []string{"SubagentStart", "SubagentStop", "StopFailure", "Notification", "SessionEnd"}
 	for _, name := range futureOnly {
 		info, ok := status.Events[name]
 		if !ok {
@@ -943,17 +1102,51 @@ func TestCheckHooks_Managed_FalseForOtherAgentPdxEntry(t *testing.T) {
 	}
 }
 
+func TestCodexRemoveHooks_RemovesOwnedRetiredEventKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	data, _ := json.MarshalIndent(map[string]any{
+		"hooks": map[string]any{
+			"RetiredEvent": []any{pdxGroupEntry("RetiredEvent")},
+		},
+	}, "", "  ")
+	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
+		t.Fatalf("write hooks: %v", err)
+	}
+	writeCodexFeatureFlag(t, home, true)
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if !status.Managed {
+		t.Fatal("retired codex pdx entry: Managed=false, want true")
+	}
+	if err := (&Provider{}).RemoveHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("RemoveHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, hooksPath))
+	if _, ok := hooks["RetiredEvent"]; ok {
+		t.Fatal("RemoveHooks left retired owned Codex hook key")
+	}
+}
+
 // CH12 — UpgradesAvailable lists FutureOnly events absent from hooks.json
-// when the overall install is otherwise valid (legacy 3-event user).
-// Finding #4: UI must be able to surface "6 new events available" even
+// when the overall install is otherwise valid.
+// Finding #4: UI must be able to surface new events available even
 // though Installed=true.
 func TestCheckHooks_UpgradesAvailable_PopulatedForLegacyCodex(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeHooksFile(t, home, map[string]any{
-		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
-		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
-		"Stop":             []any{pdxGroupEntry("Stop")},
+		"SessionStart":      []any{pdxGroupEntry("SessionStart")},
+		"UserPromptSubmit":  []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":              []any{pdxGroupEntry("Stop")},
+		"PermissionRequest": []any{pdxGroupEntry("PermissionRequest")},
 	})
 	status, err := (&Provider{}).CheckHooks()
 	if err != nil {
@@ -963,12 +1156,11 @@ func TestCheckHooks_UpgradesAvailable_PopulatedForLegacyCodex(t *testing.T) {
 		t.Fatalf("legacy 3-event: Installed=false, Issues=%v", status.Issues)
 	}
 	want := map[string]bool{
-		"SubagentStart":     true,
-		"SubagentStop":      true,
-		"StopFailure":       true,
-		"Notification":      true,
-		"PermissionRequest": true,
-		"SessionEnd":        true,
+		"SubagentStart": true,
+		"SubagentStop":  true,
+		"StopFailure":   true,
+		"Notification":  true,
+		"SessionEnd":    true,
 	}
 	if len(status.UpgradesAvailable) != len(want) {
 		t.Fatalf("UpgradesAvailable=%v, want %d entries", status.UpgradesAvailable, len(want))
@@ -1015,13 +1207,13 @@ func TestCheckHooks_EventInfoCarriesFutureOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckHooks: %v", err)
 	}
-	requiredFalse := []string{"SessionStart", "UserPromptSubmit", "Stop"}
+	requiredFalse := []string{"SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest"}
 	for _, name := range requiredFalse {
 		if status.Events[name].FutureOnly {
 			t.Errorf("event %q FutureOnly=true, want false", name)
 		}
 	}
-	futureOnly := []string{"SubagentStart", "SubagentStop", "StopFailure", "Notification", "PermissionRequest", "SessionEnd"}
+	futureOnly := []string{"SubagentStart", "SubagentStop", "StopFailure", "Notification", "SessionEnd"}
 	for _, name := range futureOnly {
 		if !status.Events[name].FutureOnly {
 			t.Errorf("event %q FutureOnly=false, want true", name)

@@ -58,7 +58,6 @@ var codexEventSpecs = []agent.HookEventSpec{
 		Name:        "PermissionRequest",
 		EmitsStatus: []agent.Status{agent.StatusWaiting},
 		Description: "Tool permission request awaiting user approval",
-		FutureOnly:  true,
 	},
 	{
 		Name:        "SessionEnd",

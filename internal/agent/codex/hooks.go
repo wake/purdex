@@ -1,16 +1,18 @@
 package codex
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/wake/purdex/internal/agent"
 )
 
-const codexHooksSupportedVersion = "0.121.0"
+const codexHooksSupportedVersion = "0.124.0"
 
 func (p *Provider) InstallHooks(pdxPath string) error {
 	home, err := os.UserHomeDir()
@@ -18,7 +20,8 @@ func (p *Provider) InstallHooks(pdxPath string) error {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
 	hooksPath := filepath.Join(home, ".codex", "hooks.json")
-	return mergeCodexHooks(hooksPath, pdxPath, false)
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	return installCodexHooks(configPath, hooksPath, pdxPath)
 }
 
 func (p *Provider) RemoveHooks(pdxPath string) error {
@@ -82,6 +85,14 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		}
 	}
 	managed := codexHooksManaged(hooks, allSpecs)
+	featureEnabled, err := codexHooksFeatureEnabled(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		return agent.HookStatus{}, err
+	}
+	if !featureEnabled {
+		allInstalled = false
+		issues = append(issues, "codex hooks feature flag disabled; run install to enable features.codex_hooks")
+	}
 	return agent.HookStatus{
 		Installed:         allInstalled,
 		Managed:           managed,
@@ -94,17 +105,30 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	}, nil
 }
 
+func installCodexHooks(configPath, hooksPath, pdxPath string) error {
+	config, err := readCodexConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", configPath, err)
+	}
+	hooksFile, err := readCodexHooksFile(hooksPath)
+	if err != nil {
+		return err
+	}
+	setCodexHooksFeature(config)
+	mergeCodexHooksFile(hooksFile, pdxPath, false)
+	if err := writeCodexConfig(configPath, config); err != nil {
+		return err
+	}
+	return writeCodexHooksFile(hooksPath, hooksFile)
+}
+
 // codexHooksManaged reports whether hooks.json contains any pdx-owned
 // entry (per-event matcher-group shape OR legacy direct-entry shape).
 // Distinct from CheckHooks.Installed: a drifted-but-pdx-owned state has
 // Managed=true and Installed=false, which the UI needs so the Remove
 // button stays enabled.
-func codexHooksManaged(hooks map[string]any, specs []agent.HookEventSpec) bool {
-	for _, spec := range specs {
-		entries, ok := hooks[spec.Name]
-		if !ok {
-			continue
-		}
+func codexHooksManaged(hooks map[string]any, _ []agent.HookEventSpec) bool {
+	for _, entries := range hooks {
 		if hasLegacyPdxDirectCodexEntry(entries) {
 			return true
 		}
@@ -177,15 +201,15 @@ func checkCodexEvent(spec agent.HookEventSpec, hooks map[string]any) (agent.Hook
 }
 
 func mergeCodexHooks(path, pdxPath string, remove bool) error {
-	hooksFile := make(map[string]any)
-	data, err := os.ReadFile(path)
-	if err == nil {
-		if err := json.Unmarshal(data, &hooksFile); err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read %s: %w", path, err)
+	hooksFile, err := readCodexHooksFile(path)
+	if err != nil {
+		return err
 	}
+	mergeCodexHooksFile(hooksFile, pdxPath, remove)
+	return writeCodexHooksFile(path, hooksFile)
+}
+
+func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) {
 	var hooks map[string]any
 	if h, ok := hooksFile["hooks"]; ok {
 		hooks, _ = h.(map[string]any)
@@ -193,44 +217,56 @@ func mergeCodexHooks(path, pdxPath string, remove bool) error {
 	if hooks == nil {
 		hooks = make(map[string]any)
 	}
-	for _, spec := range codexEventSpecs {
-		installable := agent.IsInstallableHookSpec(spec)
-		if !remove && !installable {
-			continue
-		}
-		event := spec.Name
-		if remove && !installable {
-			existing, ok := hooks[event]
-			if !ok {
-				continue
-			}
+	if remove {
+		for event, existing := range hooks {
 			entries := filterOutPdxCodexKnownEvents(existing)
 			if len(entries) == 0 {
 				delete(hooks, event)
 			} else {
 				hooks[event] = entries
 			}
+		}
+		hooksFile["hooks"] = hooks
+		return
+	}
+	for _, spec := range codexEventSpecs {
+		installable := agent.IsInstallableHookSpec(spec)
+		if !installable {
 			continue
 		}
+		event := spec.Name
 		entries := filterOutPdxCodexKnownEvents(hooks[event])
-		if !remove {
-			entries = append(entries, map[string]any{
-				"hooks": []any{
-					map[string]any{
-						"type":    "command",
-						"command": fmt.Sprintf(`"%s" hook --agent codex %s`, pdxPath, event),
-						"timeout": 5,
-					},
+		entries = append(entries, map[string]any{
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": fmt.Sprintf(`"%s" hook --agent codex %s`, pdxPath, event),
+					"timeout": 5,
 				},
-			})
-		}
-		if remove && len(entries) == 0 {
-			delete(hooks, event)
-		} else {
-			hooks[event] = entries
-		}
+			},
+		})
+		hooks[event] = entries
 	}
 	hooksFile["hooks"] = hooks
+
+}
+
+func readCodexHooksFile(path string) (map[string]any, error) {
+	hooksFile := make(map[string]any)
+	data, err := os.ReadFile(path)
+	if err == nil {
+		if err := json.Unmarshal(data, &hooksFile); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
+		}
+		return hooksFile, nil
+	}
+	if os.IsNotExist(err) {
+		return hooksFile, nil
+	}
+	return nil, fmt.Errorf("read %s: %w", path, err)
+}
+
+func writeCodexHooksFile(path string, hooksFile map[string]any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
@@ -247,6 +283,62 @@ func mergeCodexHooks(path, pdxPath string, remove bool) error {
 		return fmt.Errorf("rename: %w", err)
 	}
 	return nil
+}
+
+func readCodexConfig(path string) (map[string]any, error) {
+	config := make(map[string]any)
+	data, err := os.ReadFile(path)
+	if err == nil {
+		if _, err := toml.Decode(string(data), &config); err != nil {
+			return nil, err
+		}
+		return config, nil
+	}
+	if os.IsNotExist(err) {
+		return config, nil
+	}
+	return nil, err
+}
+
+func writeCodexConfig(path string, config map[string]any) error {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(config); err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename config: %w", err)
+	}
+	return nil
+}
+
+func setCodexHooksFeature(config map[string]any) {
+	features, _ := config["features"].(map[string]any)
+	if features == nil {
+		features = make(map[string]any)
+	}
+	features["codex_hooks"] = true
+	config["features"] = features
+}
+
+func codexHooksFeatureEnabled(path string) (bool, error) {
+	config, err := readCodexConfig(path)
+	if err != nil {
+		return false, fmt.Errorf("parse %s: %w", path, err)
+	}
+	features, _ := config["features"].(map[string]any)
+	if features == nil {
+		return false, nil
+	}
+	enabled, _ := features["codex_hooks"].(bool)
+	return enabled, nil
 }
 
 // isPdxCommandCodex is the relaxed shape check used by filter / legacy
@@ -415,7 +507,7 @@ func hasLegacyPdxDirectCodexEntry(v any) bool {
 			continue
 		}
 		cmd, _ := m["command"].(string)
-		if isPdxCommandCodex(cmd) {
+		if isPdxCommandCodexOwned(cmd) {
 			return true
 		}
 	}
