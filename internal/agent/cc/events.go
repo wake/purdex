@@ -15,6 +15,12 @@ import "github.com/wake/purdex/internal/agent"
 //     auth_success → Idle). Drift test pins each sub-branch separately.
 var ccEventSpecs = []agent.HookEventSpec{
 	{
+		Name:        "Setup",
+		EmitsStatus: []agent.Status{},
+		Description: "Claude Code setup hook initialization",
+		Handling:    agent.HookHandlingUnsupported,
+	},
+	{
 		Name:        "SessionStart",
 		EmitsStatus: []agent.Status{agent.StatusIdle},
 		Description: "Claude Code session started (non-compact source)",

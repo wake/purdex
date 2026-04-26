@@ -26,6 +26,7 @@ var expectedCCEventNames = expectedCCInstallableEventNames
 // expectedCCCatalogHandling is pinned to the Claude Code hooks reference,
 // fetched 2026-04-26 from https://docs.anthropic.com/en/docs/claude-code/hooks.
 var expectedCCCatalogHandling = map[string]agent.HookHandling{
+	"Setup":               agent.HookHandlingUnsupported,
 	"SessionStart":        agent.HookHandlingStatus,
 	"UserPromptSubmit":    agent.HookHandlingStatus,
 	"UserPromptExpansion": agent.HookHandlingUnsupported,

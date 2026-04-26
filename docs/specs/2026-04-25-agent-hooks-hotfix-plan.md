@@ -782,7 +782,8 @@ Rationale:
 
 Include:
 
-- Exact version-pinned cc/Codex upstream catalog tables.
+- Exact version-pinned cc upstream catalog table.
+- Codex current-docs upstream subset assertion plus existing Purdex compatibility installable entries, so this catalog-only PR does not change Codex runtime installation behavior.
 - Real ignored/unsupported declarations and full catalog set assertions.
 - Provider catalog validation that newly added non-installable upstream entries must explicitly set `Handling` and must not emit statuses.
 - Keep existing installable sets stable: cc=9, Codex=9.

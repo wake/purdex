@@ -25,10 +25,21 @@ var expectedCodexInstallableEventNames = []string{
 
 var expectedCodexEventNames = expectedCodexInstallableEventNames
 
-// expectedCodexCatalogHandling is pinned to Codex hooks docs, fetched
-// 2026-04-26 from https://developers.openai.com/codex/hooks. The existing
-// Purdex installable FutureOnly entries remain classified to avoid runtime
-// behavior changes in this catalog-only PR.
+// expectedCodexCurrentUpstreamEventNames is pinned to Codex hooks docs,
+// fetched 2026-04-26 from https://developers.openai.com/codex/hooks.
+var expectedCodexCurrentUpstreamEventNames = []string{
+	"SessionStart",
+	"PreToolUse",
+	"PermissionRequest",
+	"PostToolUse",
+	"UserPromptSubmit",
+	"Stop",
+}
+
+// expectedCodexCatalogHandling covers the current upstream Codex hook surface
+// plus Purdex compatibility entries that were already installable before this
+// catalog-only PR. The compatibility entries are intentionally kept installable
+// to avoid changing runtime hook behavior here.
 var expectedCodexCatalogHandling = map[string]agent.HookHandling{
 	"SessionStart":      agent.HookHandlingStatus,
 	"UserPromptSubmit":  agent.HookHandlingStatus,
@@ -87,6 +98,19 @@ func TestCodexEventsClassifyCurrentDocs(t *testing.T) {
 		}
 		if !agent.IsInstallableHookSpec(e) && len(e.EmitsStatus) != 0 {
 			t.Errorf("codex non-installable %s EmitsStatus = %v, want empty", e.Name, e.EmitsStatus)
+		}
+	}
+}
+
+func TestCodexEvents_CurrentUpstreamDocsSubset(t *testing.T) {
+	p := codex.NewProvider()
+	got := map[string]bool{}
+	for _, e := range p.Events() {
+		got[e.Name] = true
+	}
+	for _, name := range expectedCodexCurrentUpstreamEventNames {
+		if !got[name] {
+			t.Errorf("codex catalog missing current upstream event %q", name)
 		}
 	}
 }
