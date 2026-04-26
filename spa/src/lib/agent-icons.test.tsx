@@ -26,6 +26,18 @@ describe('getAgentIcon', () => {
     expect(CODEX_ICON_VARIANTS.openai).not.toBe(CODEX_ICON_VARIANTS.codex)
   })
 
+  it('returns opencode icon for opencode agent type', () => {
+    expect(getAgentIcon('opencode', { ccVariant: 'bot', codexVariant: 'openai' })).toBeDefined()
+  })
+
+  it('opencode icon ignores cc and codex variants', () => {
+    const icon = getAgentIcon('opencode', { ccVariant: 'bot', codexVariant: 'openai' })
+
+    expect(getAgentIcon('opencode', { ccVariant: 'bot', codexVariant: 'codex' })).toBe(icon)
+    expect(getAgentIcon('opencode', { ccVariant: 'star', codexVariant: 'openai' })).toBe(icon)
+    expect(getAgentIcon('opencode', { ccVariant: 'star', codexVariant: 'codex' })).toBe(icon)
+  })
+
   it('codex branch ignores ccVariant and respects codexVariant', () => {
     const withBot = getAgentIcon('codex', { ccVariant: 'bot', codexVariant: 'codex' })
     const withStar = getAgentIcon('codex', { ccVariant: 'star', codexVariant: 'codex' })
