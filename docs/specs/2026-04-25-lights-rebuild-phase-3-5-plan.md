@@ -940,3 +940,107 @@ PR 跑過 codex round 4 review 收斂後：
 | Plan v4 round 4（adversarial）| inline | needs-attention | I1 high existing-frame reset 清掉 live proxy / I2 medium SLO 不可量測 | v5 全採納（§2.2.2 preserve live proxies + IT17/IT18/IT19；§2.6 移除 SLO 聲明，改三 evidence point；§0.2 設計論證重整）|
 | Plan v5 round 5（adversarial）| inline | needs-attention | J1 high snapshot/reset/re-attach 三步非原子，並發 attach 在 race window 內被抹除 | v6 採納（§2.2.2 改為 filter-merge-retry pattern，取代三步法；新 IT20 守規）|
 | Plan v6 round 6（adversarial）| review-mof9wjzs-7q8wrs | needs-attention | K1 high §8 ship gate 漏列 IT17-IT20（含 J1 regression test）+ IT17 描述沿用 v5 已移除路徑 | v7 採納（純文檔修；§8 改 IT1-IT20 全綠 + IT17 描述更新）。**設計層面六輪後完整收斂 — round 6 無架構/race/邏輯 finding**；依 feedback_codex_review_termination.md 進實作 |
+
+---
+
+## 14. Delivery plan：2-PR split（kickoff scope vs v7 規模對齊）
+
+v7 規模相對 kickoff 原始設計擴張 ~7-10 倍（150-250 LOC → 1620-1720 LOC），單 PR review 負擔過大。設計分層天然可拆 — 依 **user-visible correctness 邊界** 切兩 PR：
+
+### PR-3.5a「Cold-start race fix + projection dedup + SessionEnd cleanup」
+
+**目標**：消除 user-visible incorrectness。SPA 永遠看到正確的 frame collapse（並發冷啟動下也是）；codex SessionEnd 不留 orphan lit dot。**獨立可 ship，無需依賴 PR-3.5b**。
+
+**範圍**（commits 6/7/8/9/10/11）：
+
+- `internal/agent/metrics.go`（新檔）— 4 個 expvar counter
+- `internal/module/agent/frame_ops.go`：
+  - `pidIsAncestorOfWithCap` helper
+  - `canonicalizeDescendantsAfterUpsert`（含 identity gate）
+  - `reconcileCreatedFrameAsProxy`（best-effort，無 rollback）
+  - applyFrameEvent §2.2.1 接線（new-frame post-Upsert）
+  - applyFrameEvent §2.2.2 接線（existing-frame **filter-merge-retry**）
+  - applyFrameEvent SessionEnd hot-path proxy cleanup（§2.3）
+- `internal/module/agent/projection.go`：`buildPaneProjection` dedup（§2.4）
+
+**測試**（必跑 ship gate）：
+
+- Unit：RC1-RC5 + PD1-PD3
+- Integration：IT1-IT9, IT11, IT12, IT15-IT20（**IT4 + IT5 + IT12 + IT17/IT18/IT19/IT20 是 race-fix regression guards 不可跳**）
+
+**LOC 預估**：~850-950 行 net（含 ~17 個 IT）
+
+**為什麼 SessionEnd cleanup + projection dedup 必須在 PR-3.5a 而不能延到 3.5b**：
+
+- projection_dedup 處理「parent 含 proxy ref + child standalone」雙顯示，是 hot-path canonicalization 的 user-visible 必要兜底
+- SessionEnd cleanup 處理「source 死後 parent 仍含 proxy ref → 永久 lit dot」 — projection_dedup 對此**無能為力**（沒有 standalone 可 hide），必須走 detach
+- 兩者缺一，PR-3.5a 出貨就有 user-visible bug
+
+### PR-3.5b「Sweep defensive layer」
+
+**目標**：背景 eventual-consistency repair，補 PR-3.5a hot path 漏網的 partial state（DeleteIfUnchanged failure / existing-descendant 漏網 / daemon crash 中 SessionEnd 等）。**Defense-in-depth；user-visible correctness 已由 3.5a 保證**，3.5b 是穩健性升級。
+
+**範圍**（commits 12/13）：
+
+- `internal/module/agent/sweep.go`：
+  - `canonicalizePane`（含 candidate identity gate，§4.2）
+  - `findCanonicalAncestor`
+  - `pruneDeadProxyRefs`（§4.3）
+  - sweepOnce 加第三 pass
+
+**測試**：Integration IT10, IT13, IT14 + sweep-specific tests
+
+**LOC 預估**：~300-400 行 net
+
+**Ship 時機選擇**：
+- 立即接 3.5a 後出貨（保守）
+- 觀察 3.5a metric `partial_canonicalization_created` rate；如低於 SLO 可延後
+- 不 ship 也是合法決策（3.5a 已 user-correct，3.5b 是優化）
+
+### Release 策略（取代 §12）
+
+| 階段 | 動作 |
+|---|---|
+| 1 | Phase 3 PR #638 merge（不 bump） |
+| 2 | Rebase **PR-3.5a** 到 main（解 applyFrameEvent + SessionEnd 衝突）|
+| 3 | PR-3.5a 開 PR + 兩輪 codex review + merge（不 bump） |
+| 4 | 開 bump PR alpha.225（涵蓋 Phase 3 + Phase 3.5a）|
+| 5 | Bump merge → main @ alpha.225 |
+| 6 | （依 metric 與優先級決定）開 **PR-3.5b** + review + merge → bump alpha.226 |
+| 7 | ExitWorktree 清 `lights-phase-3-5`（PR-3.5b 完成後）|
+| 8 | 更新 kickoff：標 Phase 3 + Phase 3.5（a/b 個別狀態）|
+
+### Branch 策略
+
+`worktree-lights-phase-3-5` 同 worktree 連續開兩 PR：
+
+- PR-3.5a branch：可沿用既有 `worktree-lights-phase-3-5`，head reset 到 v7 docs commit `cbd66c3c` 後直接做 PR-3.5a 實作 commits
+- PR-3.5b branch：merged PR-3.5a 後，rebase fresh main，新 commits
+
+或起新 branch `worktree-lights-phase-3-5b` for 3.5b — 兩種都可，視 PR-3.5a 實作完成時 main 進度而定。
+
+### 對 v7 plan 的 §6/§7/§8 影響
+
+§6 commits 表的對應 PR boundary：
+
+| # | Commit | PR |
+|---|---|---|
+| 1-5c | docs commits（v1-v7）| 3.5a 帶 |
+| 6 | metrics counters | 3.5a |
+| 7 | pidIsAncestorOfWithCap + canonicalizeDescendantsAfterUpsert | 3.5a |
+| 8 | reconcileCreatedFrameAsProxy | 3.5a |
+| 9 | wire bidirectional + filter-merge-retry | 3.5a |
+| 10 | SessionEnd hot-path proxy cleanup | 3.5a |
+| 11 | buildPaneProjection dedup | 3.5a |
+| 12 | sweep canonicalizePane | 3.5b |
+| 13 | sweep pruneDeadProxyRefs | 3.5b |
+| 14 | integration tests | **拆**：IT1-9/11/12/15-20 進 3.5a；IT10/13/14 進 3.5b |
+
+§8 ship gate 對應 PR：
+
+- **PR-3.5a ship gate**：IT1-IT9, IT11, IT12, IT15-IT20 + RC1-RC5 + PD1-PD3 全綠 + go build/vet/test 全綠 + SPA 無變更 + codex 兩輪 review 收斂
+- **PR-3.5b ship gate**：IT10, IT13, IT14 + sweep-specific tests 全綠 + 不 regress 3.5a 既有測試
+
+§7 LOC 預估維持（總和），但分 PR：
+- 3.5a：~850-950 LOC + plan docs
+- 3.5b：~300-400 LOC
