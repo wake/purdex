@@ -2622,6 +2622,56 @@ func TestPhase35_IT20_ExistingFrameSessionStartPreservesConcurrentlyAttachedProx
 	}
 }
 
+// IT12 — session_end_clears_parent_proxy_ref (plan §2.3 / Side B SessionEnd
+// hot-path cleanup). Partial state: cc parent has codex proxy ref +
+// codex standalone frame. codex SessionEnd must delete its own frame AND
+// detach the proxy ref from cc — projection dedup can't help here (no
+// standalone left to hide behind once the child SessionEnd is processed).
+func TestPhase35_IT12_SessionEndClearsParentProxyRef(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	// Seed cc parent with a codex proxy ref AND a codex standalone frame
+	// (the partial state cold-start race could leave behind).
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	parent.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:codex:200:t200",
+		Type:            "codex",
+		StartedAt:       50,
+		SourcePID:       200,
+		SourceStartTime: "t200",
+		IsProxy:         true,
+	}}
+	parent.LastSeenAt = 50
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed cc + proxy: %v", err)
+	}
+	codexStandalone := seedFrame(t, m, "%5", "codex", 200, "t200", 60)
+
+	// codex SessionEnd: own-frame delete path + new §2.3 proxy cleanup.
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionEnd", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "deleted_frame" || meta.Reason != "session_end" {
+		t.Fatalf("meta = %+v, want deleted_frame / session_end", meta)
+	}
+
+	// codex standalone gone.
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (codex deleted)", len(frames))
+	}
+	if frames[0].AgentType != "cc" {
+		t.Fatalf("remaining AgentType = %q, want cc", frames[0].AgentType)
+	}
+	// Proxy ref also removed from cc.
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("cc.Subagents = %+v, want empty (proxy detached by SessionEnd hot-path)", frames[0].Subagents)
+	}
+	_ = codexStandalone
+}
+
 // RC4b — positive case: live identity-verified cross-type descendant under
 // self.PID is folded into a proxy ref + standalone deleted.
 func TestCanonicalizeDescendantsAfterUpsert_FoldsLiveCrossTypeDescendant(t *testing.T) {
