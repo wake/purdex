@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"log"
 	"sort"
 	"time"
 
@@ -31,6 +32,18 @@ type FrameTraceMeta struct {
 	Reason        string
 	Before        any
 	After         any
+	// MatchedAgentType is set on the daemon_restart_recovery path when
+	// tryRebuildFromProcessTree confirms an alive agent in the pane process
+	// tree. Empty otherwise. Carries the agent family that the live process
+	// matched, which may differ from req.AgentType (the hook event's
+	// declared agent_type) — divergence is the diagnostic signal Phase 3
+	// rebuild path is meant to surface.
+	//
+	// PR #638 codex review round 2 #3 fix: previously the matched type was
+	// dropped silently (`_ = matchedType`), making rebuild trace unable to
+	// distinguish "rebuild confirmed hook owner" vs "rebuild only saw a
+	// different agent in the same pane (e.g. cc parent of a codex hook)".
+	MatchedAgentType string
 }
 
 func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult, broadcastTs int64) (*SessionProjection, FrameTraceMeta, error) {
@@ -227,6 +240,37 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		}
 	}
 
+	// Phase 3 Commit 3 — daemon-restart recovery (plan §1.2.4 / §1.4):
+	// When the standard lookup chain (GetByIdentity → findProxyParent →
+	// FindByPanePID) all miss on a hook event, fall back to inspecting the
+	// pane's live process tree via the Prober. A hit means "some agent we
+	// know is alive somewhere under this pane" — enough to recover frame
+	// state lost to a daemon restart without trusting the hook event blindly
+	// (the hook's AgentType remains the SOT; rebuild only marks the trace
+	// reason so the Inspector can distinguish recovered frames from fresh
+	// ones).
+	//
+	// Fail-soft: a probe error must not abort the hook. Log and fall through
+	// to the降階 no-parent path (reason="no_parent_fallback", see plan §1.4).
+	rebuiltMatched := false
+	rebuiltAgentType := ""
+	if frame == nil && parentFrameID == "" {
+		matchedType, ok, rerr := m.tryRebuildFromProcessTree(req)
+		if rerr != nil {
+			log.Printf("[agent] rebuild_from_process_tree_failed: pane=%s err=%v", req.TmuxPaneID, rerr)
+		}
+		if ok {
+			rebuiltMatched = true
+			// req.AgentType remains the SOT for frame.AgentType (the hook
+			// event is authoritative). matchedType is preserved separately
+			// for trace diagnostics — divergence (e.g. cc pane with codex
+			// hook) is the signal Inspector / Phase 5 reparent uses to
+			// triage suspected proxy collapse failures. (PR #638 codex
+			// review round 2 #3 fix.)
+			rebuiltAgentType = matchedType
+		}
+	}
+
 	status := result.Status
 	if status == "" && frame != nil {
 		status = frame.Status
@@ -291,21 +335,30 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		}
 	}
 	projection, err := m.projectPane(req.TmuxPaneID)
-	reason := "parent_frame_missing"
+	// Phase 3 — three-state reason (plan §1.4):
+	//   parent_frame_found       → legacy lookup hit (line 220-228)
+	//   daemon_restart_recovery  → rebuild via process tree hit (commit 3)
+	//   no_parent_fallback       → all lookups + rebuild missed; frame still
+	//                              created using req.AgentType as SOT (commit 4).
+	// The Inspector uses these to distinguish recovered frames from降階 ones.
+	reason := "no_parent_fallback"
 	if stored.ParentFrameID != "" {
 		reason = "parent_frame_found"
+	} else if rebuiltMatched {
+		reason = "daemon_restart_recovery"
 	}
 	decision := "created_frame"
 	if frame != nil {
 		decision = "updated_frame"
 	}
 	return projection, FrameTraceMeta{
-		FrameID:       stored.FrameID,
-		ParentFrameID: stored.ParentFrameID,
-		Decision:      decision,
-		Reason:        reason,
-		Before:        before,
-		After:         summarizeFrame(&stored),
+		FrameID:          stored.FrameID,
+		ParentFrameID:    stored.ParentFrameID,
+		Decision:         decision,
+		Reason:           reason,
+		Before:           before,
+		After:            summarizeFrame(&stored),
+		MatchedAgentType: rebuiltAgentType,
 	}, err
 }
 
@@ -674,6 +727,44 @@ func (m *Module) detachProxyRefWithRetry(owner store.Frame, senderPID int, sende
 		current = *reloaded
 	}
 	return false, store.Frame{}, fmt.Errorf("proxy detach: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, owner.FrameID)
+}
+
+// firstAliveAgentInTreeFn is the test seam that indirects
+// Prober.FirstAliveAgentInTree so tryRebuildFromProcessTree can be exercised
+// without a wired-up prober (m.prober is nil in newTestModule). Mirrors the
+// pattern of readProcessInfoFn / isPidAliveFn / processStartTimeFn declared in
+// verify.go — unit tests override the package-level variable and restore it
+// via t.Cleanup.
+var firstAliveAgentInTreeFn = func(m *Module, target string) (string, int, error) {
+	if m == nil || m.prober == nil {
+		return "", 0, nil
+	}
+	return m.prober.FirstAliveAgentInTree(target)
+}
+
+// tryRebuildFromProcessTree attempts to recover a frame after daemon restart
+// by inspecting the pane's live process tree via the Prober. Triggered when
+// the standard lookup chain (GetByIdentity → findProxyParent → FindByPanePID)
+// all miss on a SessionStart (Phase 3 plan §1.2.2).
+//
+// Behavior:
+//   - Delegates to prober.FirstAliveAgentInTree(req.TmuxPaneID)
+//   - Match → returns (agentType, true, nil)
+//   - No match → returns ("", false, nil)
+//   - Any error → returns ("", false, err); caller is expected to fail-soft
+//
+// Unwired in Commit 2: applyFrameEvent does not yet call this helper — that
+// wiring lands in Commit 3, which also introduces the reason_code contract
+// for the rebuild path.
+func (m *Module) tryRebuildFromProcessTree(req EventRequest) (string, bool, error) {
+	agentType, _, err := firstAliveAgentInTreeFn(m, req.TmuxPaneID)
+	if err != nil {
+		return "", false, err
+	}
+	if agentType == "" {
+		return "", false, nil
+	}
+	return agentType, true, nil
 }
 
 // findProxyParent walks the sender's PPID ancestor chain (capped at

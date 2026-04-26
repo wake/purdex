@@ -170,6 +170,25 @@ func (c *hookTraceCollector) Frame(req EventRequest, meta FrameTraceMeta) {
 	if c == nil || meta.Decision == "" {
 		return
 	}
+	// Phase 3: when daemon_restart_recovery hits, merge matched_agent_type
+	// into the `after` payload so Inspector / Phase 5 reparent can detect
+	// divergence between hook event AgentType (req.AgentType) and the
+	// agent family the live process tree confirmed (meta.MatchedAgentType).
+	// Equal values mean rebuild confirmed the hook owner; divergent values
+	// mean the pane has a different alive agent (e.g. cc parent of a codex
+	// hook) — diagnostic signal for proxy collapse failures.
+	// (PR #638 codex review round 2 #3 fix.)
+	after := meta.After
+	if meta.MatchedAgentType != "" {
+		if afterMap, ok := after.(map[string]any); ok {
+			merged := make(map[string]any, len(afterMap)+1)
+			for k, v := range afterMap {
+				merged[k] = v
+			}
+			merged["matched_agent_type"] = meta.MatchedAgentType
+			after = merged
+		}
+	}
 	c.frameStepID = c.append(
 		c.verifyStepID,
 		"frame",
@@ -181,7 +200,7 @@ func (c *hookTraceCollector) Frame(req EventRequest, meta FrameTraceMeta) {
 		meta.Reason,
 		req,
 		meta.Before,
-		meta.After,
+		after,
 	)
 }
 

@@ -36,9 +36,10 @@ type IdentifyFunc func(agent.ProcessInfo) bool
 type Prober struct {
 	tmux tmux.Executor
 
-	registryMu  sync.RWMutex
-	identifiers map[string]IdentifyFunc     // agentType → identify
-	readiness   map[string]ReadinessChecker // agentType → checker
+	registryMu      sync.RWMutex
+	identifiers     map[string]IdentifyFunc     // agentType → identify
+	identifierOrder []string                    // insertion order of identifier registrations (FirstAliveAgentInTree relies on this for deterministic first-match; Go map iteration is unordered)
+	readiness       map[string]ReadinessChecker // agentType → checker
 
 	livenessMu      sync.Mutex
 	descendantCache map[string]descendantCacheEntry // target → recursive descendant snapshot
@@ -67,8 +68,20 @@ func New(tmux tmux.Executor) *Prober {
 
 func (p *Prober) RegisterIdentifier(agentType string, identify IdentifyFunc) {
 	p.registryMu.Lock()
+	if _, exists := p.identifiers[agentType]; !exists {
+		p.identifierOrder = append(p.identifierOrder, agentType)
+	}
 	p.identifiers[agentType] = identify
 	p.registryMu.Unlock()
+}
+
+// identifierOrderSnapshot returns a copy of the registered identifier names in
+// insertion order. Used by tests and by FirstAliveAgentInTree to iterate
+// deterministically.
+func (p *Prober) identifierOrderSnapshot() []string {
+	p.registryMu.RLock()
+	defer p.registryMu.RUnlock()
+	return append([]string(nil), p.identifierOrder...)
 }
 
 // RegisterReadiness registers a ReadinessChecker for a given agent type.

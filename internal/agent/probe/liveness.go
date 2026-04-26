@@ -18,6 +18,131 @@ var (
 	listProcessTreeFn = listProcessTree
 )
 
+// FirstAliveAgentInTree walks the tmux target's pane PID descendant tree and
+// returns the agent type of the first descendant matched by any registered
+// identifier (iterated in registry insertion order). Returns ("", 0, nil) when
+// no descendant matches any identifier.
+//
+// Honors the same 250ms descendant cache as IsAliveFor (delegates to
+// cachedDescendants internally).
+//
+// Errors (tmux PanePID failure, pane PID parse failure, descendants query
+// failure) are propagated to the caller — unlike IsAliveFor which swallows
+// them. Used by frame_ops.tryRebuildFromProcessTree (Phase 3) to recover frame
+// agent_type after daemon restart, when the hook event's lookup chain
+// (GetByIdentity → findProxyParent → FindByPanePID) all miss; the caller is
+// expected to fail-soft on errors.
+//
+// Pane PID resolution: uses ActivePanePID rather than PanePID. PanePID is
+// implemented via `tmux list-panes -t <target>`, which resolves a pane id
+// target (e.g. `%5`) to its containing window and then returns the FIRST
+// pane's PID — wrong for multi-pane windows where the hook came from a
+// non-first sibling. ActivePanePID uses `tmux display-message -p -t <target>
+// '#{pane_pid}'`, which honors pane id targets exactly. (PR #638 codex
+// review round 1 P2 fix.)
+//
+// Panic safety: provider Identify functions are user-supplied; a panic from
+// readProcessInfoFn or identify() is caught at the per-call boundary and
+// treated as a no-match for that PID (walk continues to other PIDs and other
+// identifiers). The outer function is also wrapped in a top-level recover
+// that converts any uncaught panic into an error so the caller (Phase 3
+// rebuild path) can fail-soft to no_parent_fallback rather than crashing the
+// hook handler. (PR #638 codex review round 2 #2 fix.)
+func (p *Prober) FirstAliveAgentInTree(target string) (matchedType string, matchedPID int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			matchedType = ""
+			matchedPID = 0
+			err = fmt.Errorf("FirstAliveAgentInTree panic: %v", r)
+		}
+	}()
+
+	if p.tmux == nil {
+		return "", 0, nil
+	}
+
+	panePIDRaw, err := p.tmux.ActivePanePID(target)
+	if err != nil {
+		return "", 0, err
+	}
+	panePID, err := strconv.Atoi(strings.TrimSpace(panePIDRaw))
+	if err != nil {
+		return "", 0, fmt.Errorf("parse pane pid %q: %w", panePIDRaw, err)
+	}
+	if panePID <= 0 {
+		return "", 0, fmt.Errorf("invalid pane pid %d", panePID)
+	}
+
+	p.livenessMu.Lock()
+	p.pruneExpiredDescendantCacheLocked(p.now())
+	p.livenessMu.Unlock()
+
+	descendants, err := p.cachedDescendants(target, panePID)
+	if err != nil {
+		return "", 0, err
+	}
+
+	// Snapshot ordered identifiers under registry lock to avoid holding the
+	// lock while running user-supplied identify funcs.
+	p.registryMu.RLock()
+	order := append([]string(nil), p.identifierOrder...)
+	identifiers := make(map[string]IdentifyFunc, len(p.identifiers))
+	for k, v := range p.identifiers {
+		identifiers[k] = v
+	}
+	p.registryMu.RUnlock()
+
+	if len(order) == 0 {
+		return "", 0, nil
+	}
+
+	// Candidate PIDs: panePID first, then its recursive descendants (matches
+	// IsAliveFor behavior).
+	candidates := make([]int, 0, len(descendants)+1)
+	candidates = append(candidates, panePID)
+	candidates = append(candidates, descendants...)
+
+	// Iterate identifiers in registration order; for each, scan all candidates
+	// and return on first match. Guarantees deterministic first-match-wins
+	// when multiple identifiers recognize the same PID.
+	//
+	// Per-call panic recovery: identify() is user-supplied (provider plugin),
+	// and readProcessInfoFn touches /proc — both can panic in pathological
+	// inputs. Catching here lets the walk continue to other PIDs / agent
+	// types instead of crashing the hook handler.
+	for _, agentType := range order {
+		identify, ok := identifiers[agentType]
+		if !ok || identify == nil {
+			continue
+		}
+		for _, pid := range candidates {
+			if matched := safeIdentifyPID(identify, pid); matched {
+				return agentType, pid, nil
+			}
+		}
+	}
+	return "", 0, nil
+}
+
+// safeIdentifyPID runs readProcessInfoFn + identify under a recover so a
+// panic in either is treated as a no-match for this PID. Returns false on
+// any error or panic; true only when identify(info) returns true.
+func safeIdentifyPID(identify IdentifyFunc, pid int) (matched bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Panic during identify or process info read — treat as no-match
+			// and let the outer walk try the next PID/identifier. Logged at
+			// the rebuild caller boundary, not here, to avoid spamming.
+			matched = false
+		}
+	}()
+	info, infoErr := readProcessInfoFn(pid)
+	if infoErr != nil {
+		return false
+	}
+	return identify(info)
+}
+
 // IsAliveFor checks whether the tmux target's pane PID tree contains a process
 // identified as the given agent type.
 func (p *Prober) IsAliveFor(agentType, target string) bool {

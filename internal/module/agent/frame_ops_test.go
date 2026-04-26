@@ -1650,3 +1650,426 @@ func TestSessionEnd_OwnFrameDeletePreservesOtherProxyRefs(t *testing.T) {
 		t.Fatalf("frame count = %d, want 0 (cc frame deleted)", len(frames))
 	}
 }
+
+// --- tryRebuildFromProcessTree tests (Phase 3 Commit 2) ---
+//
+// The helper delegates to Prober.FirstAliveAgentInTree via the
+// firstAliveAgentInTreeFn seam (sibling of readProcessInfoFn / isPidAliveFn /
+// processStartTimeFn in verify.go). Tests override the seam directly, so they
+// don't need m.prober to be wired up — same pattern as every other frame_ops
+// test that stubs a probe-layer dependency.
+
+func TestTryRebuildFromProcessTree_Hit(t *testing.T) {
+	m := newTestModule(t)
+
+	origSeam := firstAliveAgentInTreeFn
+	var gotTarget string
+	firstAliveAgentInTreeFn = func(_ *Module, target string) (string, int, error) {
+		gotTarget = target
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxPaneID: "%5", SenderPID: 200, SenderStartTime: "t200"}
+	agentType, ok, err := m.tryRebuildFromProcessTree(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if agentType != "cc" {
+		t.Fatalf("agentType = %q, want cc", agentType)
+	}
+	if gotTarget != "%5" {
+		t.Fatalf("seam target = %q, want %%5 (pane id)", gotTarget)
+	}
+}
+
+func TestTryRebuildFromProcessTree_Miss(t *testing.T) {
+	m := newTestModule(t)
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "", 0, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxPaneID: "%5", SenderPID: 200, SenderStartTime: "t200"}
+	agentType, ok, err := m.tryRebuildFromProcessTree(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Fatalf("ok = true, want false (no match)")
+	}
+	if agentType != "" {
+		t.Fatalf("agentType = %q, want empty", agentType)
+	}
+}
+
+func TestTryRebuildFromProcessTree_Error(t *testing.T) {
+	m := newTestModule(t)
+
+	origSeam := firstAliveAgentInTreeFn
+	wantErr := errProbeFailure
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "", 0, wantErr
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxPaneID: "%5", SenderPID: 200, SenderStartTime: "t200"}
+	agentType, ok, err := m.tryRebuildFromProcessTree(req)
+	if err == nil {
+		t.Fatalf("err = nil, want non-nil")
+	}
+	if err != wantErr {
+		t.Fatalf("err = %v, want %v", err, wantErr)
+	}
+	if ok {
+		t.Fatalf("ok = true, want false on error")
+	}
+	if agentType != "" {
+		t.Fatalf("agentType = %q, want empty on error", agentType)
+	}
+}
+
+// errProbeFailure is a sentinel used by TestTryRebuildFromProcessTree_Error to
+// verify that the helper propagates the probe's error verbatim (caller
+// fail-soft).
+var errProbeFailure = errorString("probe tree query failed")
+
+type errorString string
+
+// ---------------------------------------------------------------------------
+// Rebuild wiring into applyFrameEvent (Phase 3 Commit 3, plan §1.2.4 / §1.4)
+// ---------------------------------------------------------------------------
+//
+// Tests override firstAliveAgentInTreeFn directly (same pattern as the
+// helper-level tests above) and arrange the standard lookup chain to miss so
+// the rebuild fallback is the only path that can satisfy the event.
+
+// R5 — rebuild命中、既有 lookup chain 全 miss → trace reason daemon_restart_recovery.
+func TestApplyFrameEvent_RebuildHit_TraceReason(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	// Arrange proc info so readProcessInfoFn returns a PPID that doesn't
+	// resolve to any seeded frame (FindByPanePID miss). No frames seeded →
+	// GetByIdentity miss + findProxyParent miss (no ancestor frame).
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "daemon_restart_recovery" {
+		t.Fatalf("reason = %q, want daemon_restart_recovery (meta=%+v)", meta.Reason, meta)
+	}
+	if meta.Decision != "created_frame" {
+		t.Fatalf("decision = %q, want created_frame", meta.Decision)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (new frame created post-rebuild)", len(frames))
+	}
+	if frames[0].AgentType != "cc" {
+		t.Fatalf("AgentType = %q, want cc (req.AgentType is SOT)", frames[0].AgentType)
+	}
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty (rebuild does not restore refs)", frames[0].Subagents)
+	}
+}
+
+// R9 — rebuild 命中時 meta.MatchedAgentType 設為 prober 回的 agent type
+// （等於 req.AgentType 的同家情境）。PR #638 codex review round 2 #3 fix
+// 的 unit-level guard：previously matchedType 被丟棄；現在保留進 trace
+// payload 給 Inspector / Phase 5 reparent 用。
+func TestApplyFrameEvent_RebuildHit_MetaIncludesMatchedAgentType(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.MatchedAgentType != "cc" {
+		t.Fatalf("MatchedAgentType = %q, want cc (rebuild matched cc, same family as hook)", meta.MatchedAgentType)
+	}
+	if meta.Reason != "daemon_restart_recovery" {
+		t.Fatalf("reason = %q, want daemon_restart_recovery", meta.Reason)
+	}
+}
+
+// R10 — rebuild 命中時 matched type 與 hook event AgentType 不同（mismatch
+// 場景，e.g. cc pane 跑 codex hook 但只 cc alive）。frame.AgentType 仍取
+// req.AgentType（hook event 是 SOT），但 meta.MatchedAgentType 帶 rebuild
+// 看到的真實 type — 給 Inspector / Phase 5 reparent loop 觸發 proxy collapse
+// 補正用。PR #638 codex review round 2 #3 fix 的 mismatch 路徑 guard。
+func TestApplyFrameEvent_RebuildHit_MismatchedTypePreservedInMeta(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		// rebuild 看到 pane 內 cc alive，但 hook event 是 codex（典型 mismatch）
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 300, SenderStartTime: "t300"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.MatchedAgentType != "cc" {
+		t.Fatalf("MatchedAgentType = %q, want cc (preserved diagnostic, even when ≠ req.AgentType)", meta.MatchedAgentType)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 || frames[0].AgentType != "codex" {
+		t.Fatalf("frame.AgentType = %v, want codex (req.AgentType remains SOT despite mismatch)", frames)
+	}
+}
+
+// R6 — rebuild 命中 → 接著 SubagentStart 仍正確累積 ref（驗證 native path 不壞）.
+func TestApplyFrameEvent_RebuildHit_ThenSubagentStart(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	startReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
+	if _, meta, err := m.applyFrameEvent(startReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500); err != nil {
+		t.Fatalf("rebuild SessionStart: %v", err)
+	} else if meta.Reason != "daemon_restart_recovery" {
+		t.Fatalf("rebuild SessionStart reason = %q, want daemon_restart_recovery", meta.Reason)
+	}
+
+	// After rebuild frame exists with subagents=[]; SubagentStart should
+	// append a native ref via mutateSubagentsWithRetry (happy path).
+	subReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SubagentStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(subReq, agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": "sub-1"}}, 600)
+	if err != nil {
+		t.Fatalf("SubagentStart: %v", err)
+	}
+	if meta.Decision != "updated_frame" || meta.Reason != "subagent_membership_changed" {
+		t.Fatalf("SubagentStart meta = %q/%q, want updated_frame/subagent_membership_changed", meta.Decision, meta.Reason)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if len(frames[0].Subagents) != 1 {
+		t.Fatalf("Subagents len = %d, want 1 (native ref accumulated after rebuild)", len(frames[0].Subagents))
+	}
+	if frames[0].Subagents[0].ID != "sub-1" {
+		t.Fatalf("Subagents[0].ID = %q, want sub-1", frames[0].Subagents[0].ID)
+	}
+}
+
+// R7 — SessionStart 走 findProxyParent 命中 → rebuild 不被呼叫（spy guard）.
+func TestApplyFrameEvent_ProxyHit_SkipsRebuild(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	origSeam := firstAliveAgentInTreeFn
+	rebuildCalls := 0
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		rebuildCalls++
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "proxy_subagent_attached" {
+		t.Fatalf("reason = %q, want proxy_subagent_attached (PR-2b path)", meta.Reason)
+	}
+	if rebuildCalls != 0 {
+		t.Fatalf("rebuild seam called %d times, want 0 (proxy hit should short-circuit)", rebuildCalls)
+	}
+}
+
+// R8 — rebuild err → fail-soft → falls through to no_parent_fallback reason.
+// (Commit 4 renamed the terminal fallback reason to make the降階 explicit;
+// see plan §1.4 for the three-state contract.)
+func TestApplyFrameEvent_RebuildErrorFailsSoft(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "", 0, errProbeFailure
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500)
+	if err != nil {
+		t.Fatalf("applyFrameEvent err = %v, want nil (fail-soft)", err)
+	}
+	if meta.Reason != "no_parent_fallback" {
+		t.Fatalf("reason = %q, want no_parent_fallback (rebuild err → fail-soft)", meta.Reason)
+	}
+	if meta.Decision != "created_frame" {
+		t.Fatalf("decision = %q, want created_frame", meta.Decision)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (fallback path still creates frame)", len(frames))
+	}
+}
+
+// N1 (Commit 4) — rebuild returns silent miss ("", 0, nil): all lookup and
+// rebuild paths miss without error → trace reason = no_parent_fallback.
+// Distinguishes the "probe succeeded but found no alive agent" path from the
+// "probe errored out" path (R8). Both end in the same降階 reason, but via
+// different code branches — N1 is the dominant production path when a daemon
+// restart hits a pane whose agent has genuinely exited before the hook fires.
+func TestApplyFrameEvent_NoParentFallback_TraceReason(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "", 0, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "no_parent_fallback" {
+		t.Fatalf("reason = %q, want no_parent_fallback (silent rebuild miss)", meta.Reason)
+	}
+	if meta.Decision != "created_frame" {
+		t.Fatalf("decision = %q, want created_frame", meta.Decision)
+	}
+	if meta.ParentFrameID != "" {
+		t.Fatalf("ParentFrameID = %q, want empty (降階 path has no parent)", meta.ParentFrameID)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (fallback still creates frame)", len(frames))
+	}
+	if frames[0].AgentType != "cc" {
+		t.Fatalf("AgentType = %q, want cc (req.AgentType is SOT)", frames[0].AgentType)
+	}
+}
+
+// N3 — parent 命中時 rebuild helper 不被呼叫（spy guard for FindByPanePID hit）.
+func TestApplyFrameEvent_RebuildSkipped_WhenParentFound(t *testing.T) {
+	m := newProxyTestModule(t)
+	// Seed a cc parent frame with PID 100.
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	// readProcessInfo returns PPID=100 so FindByPanePID(%5, 100) hits the
+	// seeded frame. Liveness stubs don't matter for FindByPanePID path.
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		// sender pid 300 maps up to cc parent via PPID chain.
+		if pid == 300 {
+			return agentpkg.ProcessInfo{PID: 300, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	// processStartTime/isPidAlive not overridden because we want findProxyParent
+	// to miss on liveness (parent.PID 100 is not alive under default stubs in
+	// newTestModule: isPidAliveFn=true but processStartTimeFn returns the
+	// default "Sun Apr 20 01:30:00 2026" which != seed "t100"). So proxy path
+	// bails, and we land in the non-proxy FindByPanePID lookup at line 221-228.
+
+	origSeam := firstAliveAgentInTreeFn
+	rebuildCalls := 0
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		rebuildCalls++
+		return "", 0, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 300, SenderStartTime: "t300"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "parent_frame_found" {
+		t.Fatalf("reason = %q, want parent_frame_found (FindByPanePID hit)", meta.Reason)
+	}
+	if rebuildCalls != 0 {
+		t.Fatalf("rebuild seam called %d times, want 0 (parent found short-circuits)", rebuildCalls)
+	}
+}
+
+func (e errorString) Error() string { return string(e) }

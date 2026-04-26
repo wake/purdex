@@ -2036,3 +2036,242 @@ func TestHandleEvent_ProxyBroadcastCarriesIsProxyTrue(t *testing.T) {
 		t.Fatal("timed out waiting for proxy broadcast")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Rebuild wiring — handler-level integration (Phase 3 Commit 3, plan §2.3)
+// ---------------------------------------------------------------------------
+
+// rebuildIntegrationModule sets up the minimum wiring required to exercise the
+// rebuild fallback end-to-end through handleEvent: cc provider, fake tmux +
+// session provider, broadcaster, prober (so the unit-level seam path mirrors
+// production).
+func rebuildIntegrationModule(t *testing.T) *Module {
+	t.Helper()
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.prober = probe.New(fakeTmux)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+	})
+	return m
+}
+
+// I1 — Cold-start handler integration: empty frames table + rebuild stub hit +
+// SessionStart hook → DB gets a new frame row + reason=daemon_restart_recovery
+// recorded in the chain + broadcast carries the new frame_id (subagents empty).
+func TestHandleEvent_ColdStart_RebuildRecovers(t *testing.T) {
+	m := rebuildIntegrationModule(t)
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	// newTestModule stubs readProcessInfoFn to return PPID=1, so the default
+	// lookup chain misses naturally: GetByIdentity → nil (empty DB),
+	// findProxyParent → nil (no ancestor frame), FindByPanePID(pane, 1) → nil.
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (rebuild created new frame)", len(frames))
+	}
+	if frames[0].AgentType != "cc" {
+		t.Errorf("AgentType = %q, want cc", frames[0].AgentType)
+	}
+	if len(frames[0].Subagents) != 0 {
+		t.Errorf("Subagents = %+v, want empty (rebuild does not restore refs)", frames[0].Subagents)
+	}
+
+	page := waitForTraceChains(t, m, "work", 1)
+	if len(page.Chains) != 1 {
+		t.Fatalf("chain count = %d, want 1", len(page.Chains))
+	}
+	record, err := m.traces.GetChainRecord(page.Chains[0].ChainID)
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	var frameStep *store.TraceStep
+	for i := range record.Steps {
+		if record.Steps[i].Kind == "frame" {
+			frameStep = &record.Steps[i]
+			break
+		}
+	}
+	if frameStep == nil {
+		t.Fatalf("no frame-kind step in chain (steps=%+v)", record.Steps)
+	}
+	if frameStep.Reason != "daemon_restart_recovery" {
+		t.Errorf("frame step reason = %q, want daemon_restart_recovery", frameStep.Reason)
+	}
+	if frameStep.Decision != "created_frame" {
+		t.Errorf("frame step decision = %q, want created_frame", frameStep.Decision)
+	}
+	if frameStep.FrameID != frames[0].FrameID {
+		t.Errorf("frame step FrameID = %q, want %q", frameStep.FrameID, frames[0].FrameID)
+	}
+}
+
+// I2 — Daemon restart simulation: a pane's hook fires after the frames table
+// was wiped (simulated by not pre-seeding anything) and the rebuild seam
+// confirms the agent is alive. Like I1 but emphasizes the "existing pane"
+// semantics — the frame gets rebuilt with subagents=[] regardless of whatever
+// refs existed pre-restart.
+func TestHandleEvent_DaemonRestart_RebuildRecoversForExistingPane(t *testing.T) {
+	m := rebuildIntegrationModule(t)
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "cc", 200, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	// Fire SessionStart for an "existing" pane (daemon restart scenario:
+	// pane was already running cc, the daemon came back up, hook arrives).
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (rebuild recovered the pane)", len(frames))
+	}
+	rebuiltFrameID := frames[0].FrameID
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty after rebuild (refs re-accumulate via hooks)", frames[0].Subagents)
+	}
+
+	// Now a SubagentStart hook arrives post-rebuild — ref must accumulate.
+	subBody := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SubagentStart","raw_event":{},"agent_type":"cc"}`
+	// Need a provider that emits agent_id for SubagentStart.
+	m.registry = agentpkg.NewRegistry()
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
+			if event == "SubagentStart" {
+				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": "sub-1"}}
+			}
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
+	})
+	subReq := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(subBody))
+	subReq.Header.Set("Content-Type", "application/json")
+	subW := httptest.NewRecorder()
+	m.handleEvent(subW, subReq)
+	if subW.Code != http.StatusOK {
+		t.Fatalf("SubagentStart status = %d (body=%s), want 200", subW.Code, subW.Body.String())
+	}
+
+	framesAfter, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane after SubagentStart: %v", err)
+	}
+	if len(framesAfter) != 1 {
+		t.Fatalf("frame count = %d, want 1 (no duplicate frames)", len(framesAfter))
+	}
+	if framesAfter[0].FrameID != rebuiltFrameID {
+		t.Errorf("FrameID changed after SubagentStart: %q → %q", rebuiltFrameID, framesAfter[0].FrameID)
+	}
+	if len(framesAfter[0].Subagents) != 1 {
+		t.Fatalf("Subagents len = %d, want 1 (native ref accumulated)", len(framesAfter[0].Subagents))
+	}
+	if framesAfter[0].Subagents[0].ID != "sub-1" {
+		t.Errorf("Subagents[0].ID = %q, want sub-1", framesAfter[0].Subagents[0].ID)
+	}
+}
+
+// I3 (Commit 4) — Mid-connection gone integration: frames table is empty and
+// the rebuild seam returns a silent miss ("", 0, nil). The handler still
+// accepts the SessionStart hook and creates a frame using req.AgentType as
+// the SOT, but the trace chain records reason="no_parent_fallback" to mark
+// the降階 path explicitly. Complements I1/I2 (rebuild hit → daemon_restart_
+// recovery) by exercising the cold-path fallback end-to-end through the
+// HTTP handler.
+func TestHandleEvent_MidConnectionGone_NoParentFallback(t *testing.T) {
+	m := rebuildIntegrationModule(t)
+
+	origSeam := firstAliveAgentInTreeFn
+	firstAliveAgentInTreeFn = func(_ *Module, _ string) (string, int, error) {
+		return "", 0, nil
+	}
+	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (降階 still creates frame from hook)", len(frames))
+	}
+	if frames[0].AgentType != "cc" {
+		t.Errorf("AgentType = %q, want cc (hook event AgentType is SOT on降階)", frames[0].AgentType)
+	}
+	if frames[0].ParentFrameID != "" {
+		t.Errorf("ParentFrameID = %q, want empty (no_parent_fallback has no parent)", frames[0].ParentFrameID)
+	}
+
+	page := waitForTraceChains(t, m, "work", 1)
+	if len(page.Chains) != 1 {
+		t.Fatalf("chain count = %d, want 1", len(page.Chains))
+	}
+	record, err := m.traces.GetChainRecord(page.Chains[0].ChainID)
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	var frameStep *store.TraceStep
+	for i := range record.Steps {
+		if record.Steps[i].Kind == "frame" {
+			frameStep = &record.Steps[i]
+			break
+		}
+	}
+	if frameStep == nil {
+		t.Fatalf("no frame-kind step in chain (steps=%+v)", record.Steps)
+	}
+	if frameStep.Reason != "no_parent_fallback" {
+		t.Errorf("frame step reason = %q, want no_parent_fallback", frameStep.Reason)
+	}
+	if frameStep.Decision != "created_frame" {
+		t.Errorf("frame step decision = %q, want created_frame", frameStep.Decision)
+	}
+	if frameStep.FrameID != frames[0].FrameID {
+		t.Errorf("frame step FrameID = %q, want %q", frameStep.FrameID, frames[0].FrameID)
+	}
+	if frameStep.ParentFrameID != "" {
+		t.Errorf("frame step ParentFrameID = %q, want empty", frameStep.ParentFrameID)
+	}
+}
