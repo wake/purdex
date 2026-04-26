@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.232] - 2026-04-27
+
+### Test(spa): guard OpenCode agent icon (#662)
+
+Add focused coverage for the already-shipped OpenCode agent icon lookup.
+
+- Verify `getAgentIcon('opencode')` renders the OpenCode SVG marker rather than a cc/Codex variant.
+- Verify the OpenCode icon remains stable across the full cc/Codex icon variant matrix.
+- Document PR6 as a coverage-only guard with no production icon or tab rendering changes.
+
 ## [1.0.0-alpha.231] - 2026-04-27
 
 ### Fix(agent/opencode): report hook support version (#659)
