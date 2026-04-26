@@ -800,6 +800,67 @@ Include:
 - OpenCode supported-version reporting.
 - Checked-in OpenCode event contract provenance fixtures for every template-consumed event.
 
+TDD scope:
+
+- Keep `renderManagedPlugin` unchanged in PR 4. If provenance proves any event key or payload path is stale, document the finding and move production mapping changes to PR 5.
+- Keep installable OpenCode set stable at 8 events. Do not add ignored/unsupported OpenCode catalog entries in PR 4 unless the event contract artifact already captures the full upstream event table with stable provenance.
+- Do not touch `internal/module/agent/*`, `internal/agent/probe/*`, `internal/store/*`, tab rendering, or light projection files.
+
+PR 4 files:
+
+- `internal/agent/opencode/hooks.go`
+- `internal/agent/opencode/hooks_test.go`
+- `internal/agent/opencode/plugin_template.go`
+- `internal/agent/opencode/plugin_template_test.go`
+- `internal/agent/opencode/testdata/opencode-1.14.23-contract.json`
+- `docs/specs/2026-04-25-agent-hooks-hotfix-plan.md`
+
+PR 4 test IDs:
+
+| ID | Test | Red Assertion |
+|---|---|---|
+| OV0 | `TestOpenCodeCheckHooks_ReportsSupportedVersionOnHomeDirError` | home-dir resolution error result has `SupportedVersion=1.14.23` |
+| OV1 | `TestOpenCodeCheckHooks_ReportsSupportedVersionOnMissingPlugin` | missing plugin result has `SupportedVersion=1.14.23` |
+| OV2 | `TestOpenCodeCheckHooks_ReportsSupportedVersionOnUnmanagedPlugin` | unmanaged plugin result has `SupportedVersion=1.14.23` |
+| OV3 | `TestOpenCodeCheckHooks_ReportsSupportedVersionOnPathResolutionFailure` | managed plugin with unresolved canonical path still reports support fields |
+| OV4 | `TestOpenCodeCheckHooks_ReportsSupportedVersionOnManagedBodyDrift` | managed-but-drifted plugin still reports support fields |
+| OV5 | `TestOpenCodeCheckHooks_ReportsSupportedVersionOnInstalledPlugin` | fully installed plugin reports support fields |
+| OV6 | `TestOpenCodeCheckHooks_ExceedsSupport` | detected version greater than `1.14.23` sets `ExceedsSupport=true` |
+| OV7 | `TestOpenCodeCheckHooks_DoesNotExceedSupportForEqualLowerMissingOrUnparsedVersions` | equal, lower, missing, and unparsable detected versions do not set `ExceedsSupport` |
+| OC1a | `TestOpenCodeTemplateEventContractsDocumented` | checked-in fixture names every OpenCode event key consumed by `renderManagedPlugin` |
+| OC1b | `TestOpenCodeTemplatePayloadPathsDocumented` | checked-in fixture names every payload path read by the template |
+| OC1c | `TestOpenCodeTemplateUsesOnlyDocumentedContractEvents` | `session.created`, `permission.asked`, `question.asked`, `session.error`, `session.idle`, `session.deleted`, `chat.message`, `tool.execute.before`, and `tool.execute.after` are all present in the fixture |
+| OC1d | `TestOpenCodeTemplateContractFixtureHasProvenance` | fixture records exact OpenCode version output and source/docs/runtime provenance |
+
+Commit A — `fix(agent/opencode): report hook support version`:
+
+- Red: add OV0-OV7 and confirm they fail because OpenCode `CheckHooks` currently omits `SupportedVersion` and `ExceedsSupport`.
+- Green: add `opencodeHooksSupportedVersion = "1.14.23"`; populate `SupportedVersion` and `ExceedsSupport` on every `CheckHooks` return path.
+- Keep issue strings and install/remove behavior unchanged.
+- Tests that fake `opencode --version` must call `agent.ResetHookAgentVersionCache()` before and after each case because `DetectHookAgentVersion` caches per binary name.
+- Run: `go test ./internal/agent/opencode ./internal/agent -count=1`.
+
+Commit B — `test(agent/opencode): document template event contract`:
+
+- Red: add OC1a-OC1d plus an empty or missing fixture and confirm tests fail.
+- Green: add `internal/agent/opencode/testdata/opencode-1.14.23-contract.json` containing version output, provenance source, consumed event keys, consumed payload paths, and minimal fixture payloads.
+- Fixture must cover template-consumed event callback cases: `session.created`, `permission.asked`, `question.asked`, `session.error`, `session.idle`, `session.deleted`.
+- Fixture must cover template-consumed plugin hook methods: `chat.message`, `tool.execute.before`, `tool.execute.after`.
+- Fixture must document every template-read path, including `event.properties.sessionID`, `event.properties.permission`, `event.properties.patterns`, `event.properties.questions`, `event.properties.error.name`, `event.properties.error.data.message`, `input.model.providerID`, `input.model.modelID`, `input.sessionID`, `input.messageID`, `input.agent`, `output.message.id`, `output.message.agent`, `input.tool`, `input.callID`, `output.args.subagent_type`, `output.args.agent`, `output.args.description`, `output.args.prompt`, `output.title`, and `output.output`.
+- Every fixture event key and payload path must carry evidence metadata: `kind` (`docs`, `source`, or `runtime`), `source`, and either a source range, commit/tag, or raw captured sample reference. Runtime evidence must preserve raw callback input/output samples from OpenCode `1.14.23`; minimized payloads may be derived from them but cannot be the only evidence.
+- Tests must compare fixture-declared consumed event keys and payload paths as exact sets against the template-derived contract. Extra fixture keys or paths should fail unless they are in a separately named upstream-reference table that is not used to bless the production template.
+- Template-derived contract extraction must have its own negative tests or mutation tests. At minimum, controlled changes to a callback key and to a payload path in a copy of the template body must fail OC1a/OC1b so the tests cannot pass by only updating a hand-maintained list.
+- Tests should not execute Bun or OpenCode in CI.
+- If `chat.message` or any consumed path cannot be verified from source/docs/runtime evidence, stop PR 4 after Commit A or add a blocking note in this plan; do not silently bless stale mapping.
+- Run: `go test ./internal/agent/opencode -count=1`.
+
+PR 4 final verification:
+
+- `go test ./internal/agent/opencode ./internal/agent -count=1`
+- `go test ./internal/agent/... -count=1`
+- Codex standard review with `--base origin/main --scope branch`
+- Codex focused adversarial review asking whether the fixture creates a false confidence path for stale OpenCode event keys or payload fields.
+
 ### PR 5 — OpenCode Mapping Refresh, Conditional
 
 Only create this PR if PR 4 proves an existing managed template event key or payload path is stale. Keep it separate because it can affect lights frame/projection behavior.
