@@ -315,22 +315,26 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		// reload picks up the newer ref before the next prune pass.
 		if req.EventName == "SessionStart" {
 			var success bool
+			// prevWrittenNativeIDs tracks native ref IDs we wrote in the
+			// most recent attempt's candidate.Subagents. nil at attempt 0
+			// — SessionStart's primary semantic is "reset previous
+			// session's native subagent state", so the baseline native
+			// refs read into frame.Subagents must be dropped. From
+			// attempt 1 onward (after IfUnchanged conflict + reload), a
+			// native ref appearing in the reloaded baseline that is NOT
+			// in prevWrittenNativeIDs is a concurrent SubagentStart that
+			// landed between attempts — preserve it (v8 M3, codex round
+			// PR-2 attack). Native refs already in prevWrittenNativeIDs
+			// were carried by us across attempts and are still subject
+			// to the SessionStart reset (they shouldn't accumulate).
+			var prevWrittenNativeIDs map[string]struct{}
 			for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
-				// v8 M3 fix (codex round PR-2 attack): the loop must
-				// PRUNE stale IsProxy refs while preserving every other
-				// ref. The previous "keep only live IsProxy" filter
-				// dropped concurrently-attached native SubagentStart
-				// refs (IsProxy=false) on every conflict reload, so a
-				// SubagentStart that landed between attempt N's read
-				// and attempt N+1's reload would silently disappear.
-				// Native refs have no separate source identity to
-				// verify (the agent's own process is alive — we just
-				// hit GetByIdentity on it); only IsProxy refs need the
-				// liveness gate because their source is a separate
-				// child process.
 				pruned := make([]agentpkg.SubagentRef, 0, len(frame.Subagents))
 				for _, ref := range frame.Subagents {
 					if ref.IsProxy {
+						// IsProxy refs survive SessionStart reset when
+						// their source process is alive + identity
+						// matches (PR-2b proxy-collapse semantics).
 						if !isPidAliveFn(ref.SourcePID) {
 							continue
 						}
@@ -338,8 +342,18 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 						if sterr != nil || actualStart != ref.SourceStartTime {
 							continue
 						}
+						pruned = append(pruned, ref)
+						continue
 					}
-					pruned = append(pruned, ref)
+					// Native ref: keep only if it appeared between
+					// attempts (concurrent SubagentStart). At attempt 0
+					// prevWrittenNativeIDs is nil, so SessionStart's
+					// reset semantic cleanly drops every native baseline.
+					if prevWrittenNativeIDs != nil {
+						if _, seen := prevWrittenNativeIDs[ref.ID]; !seen {
+							pruned = append(pruned, ref)
+						}
+					}
 				}
 
 				candidate := *frame
@@ -362,8 +376,16 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 				}
 				// Conflict — concurrent writer touched the row (proxy
 				// attach, SubagentStart hook, probe status update).
-				// Reload + retry; the new read includes any IsProxy ref
-				// the racer added so the next filter pass preserves it.
+				// Record what we attempted to write so the next prune
+				// pass can distinguish concurrent attaches (kept) from
+				// stale baseline native refs (dropped). Then reload +
+				// retry.
+				prevWrittenNativeIDs = make(map[string]struct{}, len(pruned))
+				for _, ref := range pruned {
+					if !ref.IsProxy {
+						prevWrittenNativeIDs[ref.ID] = struct{}{}
+					}
+				}
 				reloaded, rerr := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
 				if rerr != nil {
 					return nil, FrameTraceMeta{}, rerr
@@ -1041,6 +1063,21 @@ func (m *Module) canonicalizeDescendantsAfterUpsert(self store.Frame, broadcastT
 			continue
 		}
 		if !pidIsAncestorOfWithCap(candidate.PID, current.PID, proxyMaxDepth) {
+			continue
+		}
+		// v8 M2 fix (codex round PR-2 attack): skip a candidate that
+		// has accumulated its own subagent state (native SubagentStart
+		// refs from hooks, or its own IsProxy refs from being a parent
+		// in another canonicalization). Folding such a candidate would
+		// silently drop those refs — DeleteIfUnchanged below removes
+		// the candidate row outright, taking subagent state with it.
+		// Race-window standalones that motivate this scan have empty
+		// Subagents (a fresh SessionStart row), so guarding on
+		// len > 0 cleanly separates "race artifact safe to fold"
+		// from "live frame that owns state we must not lose". Sweep
+		// canonicalize (PR-3.5b) handles the stateful-candidate case
+		// out-of-band by reconciling refs across siblings.
+		if len(candidate.Subagents) > 0 {
 			continue
 		}
 		// Identity gate (PR-2b alignment + plan §2.1.2). Mirrors

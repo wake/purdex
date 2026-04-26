@@ -2222,6 +2222,81 @@ func TestCanonicalizeDescendantsAfterUpsert_SkipsPidReuseViaIdentityGate(t *test
 // ---------------------------------------------------------------------------
 
 // IT3 — concurrent_descendant_first_then_reconcile_hits_post_upsert.
+// IT22 — descendant scan skips a candidate that has accumulated its own
+// subagent state (native SubagentRef from a SubagentStart hook, or its own
+// IsProxy ref). Plan §2.1.2 v8 M2 regression guard: previously the scan
+// folded any cross-type live PPID-descendant unconditionally, so a codex
+// frame that had already attached its own task ref would be DELETE'd in
+// the fold, silently losing that ref. Race-window standalones safe to
+// fold have empty Subagents; len(candidate.Subagents) > 0 is the signal
+// the candidate owns state we must preserve.
+func TestPhase35_IT22_DescendantScanSkipsCandidateWithSubagents(t *testing.T) {
+	m := newProxyTestModule(t)
+	self := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	candidate := seedFrame(t, m, "%5", "codex", 200, "t200", 11)
+	// Candidate has its own native subagent ref (e.g. from a previous
+	// SubagentStart hook landing on the codex frame).
+	candidate.Subagents = []agentpkg.SubagentRef{{
+		ID:        "task-codex-1",
+		Type:      "codex",
+		StartedAt: 12,
+	}}
+	candidate.LastSeenAt = 12
+	if _, err := m.frames.Upsert(candidate); err != nil {
+		t.Fatalf("seed candidate with subagents: %v", err)
+	}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	// PPID chain would otherwise fold codex into cc.
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	updated, err := m.canonicalizeDescendantsAfterUpsert(self, 100)
+	if err != nil {
+		t.Fatalf("canonicalizeDescendantsAfterUpsert: %v", err)
+	}
+	if len(updated.Subagents) != 0 {
+		t.Fatalf("self.Subagents = %+v, want empty (candidate skipped because it owns subagent state)", updated.Subagents)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 2 {
+		t.Fatalf("frame count = %d, want 2 (candidate not folded); frames=%+v", len(frames), frames)
+	}
+	var preservedCodex *store.Frame
+	for i := range frames {
+		if frames[i].AgentType == "codex" {
+			preservedCodex = &frames[i]
+		}
+	}
+	if preservedCodex == nil {
+		t.Fatalf("codex frame deleted; frames=%+v", frames)
+	}
+	if len(preservedCodex.Subagents) != 1 || preservedCodex.Subagents[0].ID != "task-codex-1" {
+		t.Fatalf("codex.Subagents = %+v, want preserved native task ref", preservedCodex.Subagents)
+	}
+}
+
 // codex applyFrameEvent: pre-walk findProxyParent misses (cc not yet
 // visible to walk; readProcessInfoFn returns dud PPID on calls 1+2),
 // then reconcile post-Upsert hits (cc visible on call 3+; readProcessInfoFn
