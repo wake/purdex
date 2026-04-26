@@ -1153,7 +1153,7 @@ func TestSweep_OwnerReadErrorPreservesFrame(t *testing.T) {
 // the diff at the squash level — fewer per-test t.Skip edits to revert
 // across commits.
 var (
-	canonicalizeWired = false
+	canonicalizeWired = true
 	broadcastWired    = false
 )
 
@@ -1524,19 +1524,21 @@ func TestSweep_CanonicalizePartialWhenDeleteUnchangedFails(t *testing.T) {
 		}
 		return agentpkg.ProcessInfo{PID: pid, PPID: ppid}, nil
 	}
-	// On the candidate's second start_time read (the one inside
-	// canonicalizePane after sweepOnce's main loop already saw it),
-	// race a concurrent refresh that bumps codex.LastSeenAt — defeating
-	// DeleteIfUnchanged's optimistic check.
-	bumped := false
+	// processStartTimeFn(200) is called at least twice: once by
+	// sweepOnce's main loop (frame identity gate), once by
+	// canonicalizePane (candidate identity gate). Race on the SECOND
+	// call: bump codex.LastSeenAt so canonicalizePane's later
+	// DeleteIfUnchanged sees a stale baseline and returns false.
+	pid200Calls := 0
 	processStartTimeFn = func(pid int) (string, error) {
 		switch pid {
 		case 100:
 			return "t100", nil
 		case 200:
-			if !bumped {
-				bumped = true
-				// Upsert a new codex row with bumped LastSeenAt.
+			pid200Calls++
+			if pid200Calls == 2 {
+				// Concurrent refresh — bump codex.LastSeenAt before
+				// canonicalizePane's DeleteIfUnchanged runs.
 				_, _ = m.frames.Upsert(store.Frame{
 					FrameID:          codex.FrameID,
 					PaneID:           "%5",
