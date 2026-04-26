@@ -252,6 +252,65 @@ func TestMergeClaudeHooks_RemoveMode(t *testing.T) {
 	}
 }
 
+func TestMergeClaudeHooks_RemovesOwnedPdxUnderUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	settings := map[string]any{
+		"hooks": map[string]any{
+			"UnknownHookKey": []any{makePdxEntry("/usr/local/bin/pdx", "cc", "SessionStart")},
+		},
+	}
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("mergeClaudeHooks remove: %v", err)
+	}
+	hooks := hooksMap(t, readSettings(t, path))
+	if _, ok := hooks["UnknownHookKey"]; ok {
+		t.Fatal("remove left owned Claude event under unknown hook key")
+	}
+}
+
+func TestMergeClaudeHooks_PreservesWrapperLikePdxCommand(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	settings := map[string]any{
+		"hooks": map[string]any{
+			"SessionStart": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": `pdx exec hook --agent cc SessionStart`}}}},
+		},
+	}
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	status, err := NewProvider(nil, nil, nil, nil).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Managed {
+		t.Fatal("wrapper-like pdx command: Managed=true, want false")
+	}
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("mergeClaudeHooks remove: %v", err)
+	}
+	hooks := hooksMap(t, readSettings(t, path))
+	entries := toEntrySlice(hooks["SessionStart"])
+	if len(entries) != 1 {
+		t.Fatalf("remove kept %d entries, want wrapper-like command preserved", len(entries))
+	}
+	if findPdxCommandForEvent(entries, "SessionStart") != "" {
+		t.Fatal("wrapper-like pdx command became valid per-event hook command")
+	}
+}
+
 // ---- mergeClaudeHooks: different path replaces old pdx entry ----
 
 func TestMergeClaudeHooks_DifferentPathReplaces(t *testing.T) {

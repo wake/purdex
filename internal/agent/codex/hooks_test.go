@@ -407,6 +407,24 @@ func TestCodexInstallHooks_EnablesFeatureFlagAndPreservesConfig(t *testing.T) {
 	}
 }
 
+func TestCodexInstallHooks_NewConfigUsesOwnerOnlyMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configPath := filepath.Join(home, ".codex", "config.toml")
+
+	if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("InstallHooks: %v", err)
+	}
+
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("new config.toml mode=%#o, want 0600", got)
+	}
+}
+
 func TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite(t *testing.T) {
 	t.Run("malformed config leaves hooks unchanged", func(t *testing.T) {
 		home := t.TempDir()
@@ -1189,6 +1207,52 @@ func TestCodexRemoveHooks_PreservesUnknownRetiredEventKey(t *testing.T) {
 	}
 }
 
+func TestCodexRemoveHooks_RemovesOwnedEventUnderUnknownKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	data, _ := json.MarshalIndent(map[string]any{
+		"hooks": map[string]any{
+			"UnknownHookKey": []any{
+				pdxGroupEntry("SessionStart"),
+				pdxGroupEntry("Bogus"),
+			},
+		},
+	}, "", "  ")
+	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
+		t.Fatalf("write hooks: %v", err)
+	}
+
+	if err := (&Provider{}).RemoveHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("RemoveHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, hooksPath))
+	groups := codexMatcherGroups(hooks["UnknownHookKey"])
+	if len(groups) != 1 {
+		t.Fatalf("RemoveHooks kept %d groups under unknown hook key, want 1 unknown token", len(groups))
+	}
+	if findPdxCommandInCodexForEvent(groups, "SessionStart") != "" {
+		t.Fatal("RemoveHooks left owned Codex event under unknown hook key")
+	}
+	foundUnknown := false
+	for _, groupEntry := range groups {
+		group, _ := groupEntry.(map[string]any)
+		for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
+			m, _ := hookEntry.(map[string]any)
+			cmd, _ := m["command"].(string)
+			if strings.Contains(cmd, "--agent codex Bogus") {
+				foundUnknown = true
+			}
+		}
+	}
+	if !foundUnknown {
+		t.Fatal("RemoveHooks dropped unknown Codex event token under unknown hook key")
+	}
+}
+
 // CH12 — UpgradesAvailable lists FutureOnly events absent from hooks.json
 // when the overall install is otherwise valid.
 // Finding #4: UI must be able to surface new events available even
@@ -1383,6 +1447,44 @@ func TestIsPdxCommandCodexForEvent(t *testing.T) {
 		if isPdxCommandCodexForEvent(tc.cmd, tc.event) {
 			t.Errorf("expected invalid for %q / event=%s (%s)", tc.cmd, tc.event, tc.reason)
 		}
+	}
+}
+
+func TestCodexRemoveHooks_PreservesWrapperLikePdxCommand(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	data, _ := json.MarshalIndent(map[string]any{
+		"hooks": map[string]any{
+			"SessionStart": []any{
+				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": `pdx exec hook --agent codex SessionStart`, "timeout": 5}}},
+			},
+		},
+	}, "", "  ")
+	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
+		t.Fatalf("write hooks: %v", err)
+	}
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Managed {
+		t.Fatal("wrapper-like pdx command: Managed=true, want false")
+	}
+	if err := (&Provider{}).RemoveHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("RemoveHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, hooksPath))
+	groups := codexMatcherGroups(hooks["SessionStart"])
+	if len(groups) != 1 {
+		t.Fatalf("RemoveHooks kept %d groups, want wrapper-like command preserved", len(groups))
+	}
+	if findPdxCommandInCodexForEvent(groups, "SessionStart") != "" {
+		t.Fatal("wrapper-like pdx command became valid per-event hook command")
 	}
 }
 
