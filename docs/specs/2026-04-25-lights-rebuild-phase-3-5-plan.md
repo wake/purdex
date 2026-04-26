@@ -1,8 +1,13 @@
-# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v4 / Hybrid B+)
+# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v5 / Hybrid B+)
 
 Baseline：`1.0.0-alpha.224`（main @ `75b4d166`）。
 Worktree：`.claude/worktrees/lights-phase-3-5`（branch `worktree-lights-phase-3-5`）。
 Branch base：`origin/main`（與 Phase 3 PR #638 並行；merge 順序 Phase 3 → rebase 3.5 → 一次 bump alpha.225）。
+
+**v4 → v5 由 codex round 4 收斂**（§13；2 finding 全採納）：
+
+- **I1 high** — existing-frame SessionStart 的 reset 把已成功 canonicalize 的 live proxy ref 清掉，descendant scan 無 standalone 可補回 → 永久漏顯 → §2.2.2 加 **pre-reset snapshot + re-attach live proxies**（identity gate 通過的才保留）；新增 IT17 守規
+- **I2 medium** — v4 §2.6 聲稱 SLO 1/1000 觸發升級到 SQL tx，但 expvar 不接 endpoint + 無 denominator + daemon restart 歸零 → **觀察前提塌陷** → §2.6 改寫誠實版（in-process counter foundation；SLO 量測為 follow-up）；§0.2 設計論證改為三 evidence point（不再依賴「observable 為 ship gate」）
 
 **v3 → v4 由兩 codex 平行架構 consulting 收斂**（§13；採 Side B Hybrid B+，捨棄 Side A SQL transaction）：
 
@@ -33,19 +38,22 @@ Branch base：`origin/main`（與 Phase 3 PR #638 並行；merge 順序 Phase 3 
 
 `agent_frames` 表是 **ephemeral telemetry**（store migration 註解明確說 legacy 偵測時可 lossless clear `internal/store/frames.go:65`）。它不是 durable domain state，row-level 跨表強一致性標準過高。
 
-**partial state 在這張表是合法的中間狀態**，只要：
-1. **User-visible（projection / SPA）永遠看不到 partial** — projection 層 dedup
-2. **Eventual consistency 在 bounded time** — sweep 2s 一輪即收斂
-3. **Observable** — metric 計數器顯示 partial 發生率，超 SLO 才升級到強一致設計
+**partial state 在這張表是合法的中間狀態**，依三 evidence point（不依賴 SLO 量測，因 v5 I2 揭穿本 PR 內 SLO 不可量測）：
+
+1. **Ephemeral telemetry 性質** — `agent_frames` 表 store migration 註解明確說 legacy 偵測時可 lossless clear（`internal/store/frames.go:65`），表本身不是 durable invariant
+2. **User-visible（projection / SPA）永遠看不到 partial** — projection 層 dedup（§2.4）
+3. **Eventual consistency 在 bounded time** — sweep 2s 一輪即收斂（`sweep.go:20` `sweepInterval = 2 * time.Second`，user-visible 觀察延遲 ≤ 2s）
+
+Metrics 是 in-process 觀察基礎，**不是 ship gate**，也不是「partial state 接受性」的依據（前述三 evidence point 才是）。SLO-based 升級到強一致（Side A SQL transaction）是 follow-up phase 的決策，需先補上 metrics endpoint + denominator 才有量測前提。
 
 依此設計分四層：
 
 | 層 | 職責 | 實作 |
 |---|---|---|
-| **Hot path** | best-effort canonicalization；失敗不 retry/rollback；繼續 | `reconcileCreatedFrameAsProxy` + `canonicalizeDescendantsAfterUpsert` + SessionEnd `removeProxyRefForSender` |
+| **Hot path** | best-effort canonicalization；失敗不 retry/rollback；繼續 | `reconcileCreatedFrameAsProxy` + `canonicalizeDescendantsAfterUpsert` + SessionEnd `removeProxyRefForSender` + **existing-frame SessionStart preserve live proxies**（v5 I1 fix）|
 | **Projection** | 隱藏 partial（**唯一 strongly consistent 邊界**）| `buildPaneProjection` dedup：parent.Subagents 含 IsProxy + (SourcePID, SourceStartTime) → 排除 matching standalone frame |
 | **Sweep** | bounded-time recovery（2s 一輪）| `canonicalizePane` 補 hot-path 漏網 + `pruneDeadProxyRefs` 清死 proxy ref |
-| **Observability** | partial 發生率可量化 | expvar counters |
+| **Observability**（in-process）| partial 發生率累計（daemon run 內）| expvar counters；**endpoint exposure 為 follow-up，本 PR 不掛 ship gate**（v5 I2 fix）|
 
 ### 0.3 與 Phase 3 的關係
 
@@ -270,21 +278,58 @@ func pidIsAncestorOfWithCap(descendantPID, ancestorPID, maxDepth int) bool {
 
 #### 2.2.2 Existing frame 路徑（line 256-272 之後）
 
+**v5 I1 fix**：reset 前 snapshot 仍 live identity-verified IsProxy refs，reset 後 re-attach。reset 的原意是「old session's native subagent refs no longer apply」，但 cross-type IsProxy refs 指向同 pane 內仍 live 的 OS process — 不該在 parent's session-restart 時失蹤（descendant 沒 standalone 可補回）。
+
 ```go
+// v5 I1: snapshot live IsProxy refs BEFORE reset. The store-level reset
+// clears subagents_json wholesale; live cross-type proxies pointing to OS
+// processes that still exist must survive the parent's SessionStart
+// restart. Without this, an already-canonicalized proxy ref from a prior
+// race window vanishes from projection — descendant scan can't recover
+// it because the standalone child frame was deleted at canonicalize time.
+var preservedProxies []agentpkg.SubagentRef
+if req.EventName == "SessionStart" && frame != nil {
+    for _, ref := range frame.Subagents {
+        if !ref.IsProxy {
+            continue
+        }
+        if !isPidAliveFn(ref.SourcePID) {
+            continue
+        }
+        actualStart, sterr := processStartTimeFn(ref.SourcePID)
+        if sterr != nil || actualStart != ref.SourceStartTime {
+            continue
+        }
+        preservedProxies = append(preservedProxies, ref)
+    }
+}
+
 if req.EventName == "SessionStart" {
     updateErr = m.frames.UpdateHookPathAndResetSubagents(updated)
 } else {
     updateErr = m.frames.UpdateHookPath(updated)
 }
 if updateErr != nil { return nil, FrameTraceMeta{}, updateErr }
+
 reloaded, err := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
 if err != nil { return nil, FrameTraceMeta{}, err }
 if reloaded == nil { return nil, FrameTraceMeta{}, nil }
 stored = *reloaded
 
-// Phase 3.5: existing-frame SessionStart runs descendant-scan only (no
-// self-reconcile — existing frame is stable identity, collapsing into
-// ancestor would orphan user's session).
+// v5 I1: re-attach preserved proxies via existing helper (atomic retry,
+// merge-aware via updateSubagents). StartedAt refreshed to broadcastTs to
+// reflect that they survived this SessionStart cycle.
+for _, ref := range preservedProxies {
+    ref.StartedAt = broadcastTs
+    attached, parentStored, aerr := m.attachProxyRefWithRetry(stored, ref, broadcastTs)
+    if aerr != nil { return nil, FrameTraceMeta{}, aerr }
+    if attached {
+        stored = parentStored
+    }
+}
+
+// Phase 3.5: descendant scan (catches any cold-start race window children
+// whose SessionStart raced with this existing-frame's SessionStart).
 if req.EventName == "SessionStart" {
     updated, cerr := m.canonicalizeDescendantsAfterUpsert(stored, broadcastTs)
     if cerr != nil {
@@ -293,6 +338,11 @@ if req.EventName == "SessionStart" {
     stored = updated
 }
 ```
+
+**為什麼 re-attach 而不是「reset 不清 IsProxy」**：
+
+- store-level `UpdateHookPathAndResetSubagents` 是 narrow update 設計（PR-2b R8）— 改它的語意（conditional reset）會把 store 層拉進 IsProxy semantics，違反 narrow update 哲學
+- 在 module 接線層做 snapshot + re-attach 保留 store-level cleanliness；attachProxyRefWithRetry 的 RMW retry 邏輯也直接重用
 
 ### 2.3 SessionEnd proxy cleanup（v4 新，修 Side B 抓的 SessionEnd 漏洞）
 
@@ -434,9 +484,9 @@ func buildPaneProjection(paneID string, frames []store.Frame) SessionProjection 
 
 descendant scan 收編 standalone children 不改 trace（與 v3 一致）— scan 是 self 視角的 side effect，主決策仍是「建/更新此 frame」。
 
-### 2.6 Metrics（v4 新）
+### 2.6 Metrics（v5 誠實版 — 移除 SLO 聲明）
 
-用 Go stdlib `expvar`（無新依賴；既有 daemon 若無 expvar 啟動則 graceful degrade，僅內部變數）：
+用 Go stdlib `expvar` 累積 in-process counter（無新依賴；不掛 metrics endpoint，不在本 PR 範圍）：
 
 ```go
 package agent
@@ -451,12 +501,20 @@ var (
 )
 ```
 
-**SLO 觀察點**：
-- partial_canonicalization_created：partial state 發生率；超過 1/1000 SessionStart 升級到強一致設計
-- projection_dedup_hidden：dedup 實際生效次數；應趨近 partial_canonicalization 數
-- sweep_canonicalized / sweep_pruned_proxy：sweep 兜底頻次；持續高表示 hot-path 失敗率高
+**用途（in-process only）**：
 
-不依賴 expvar handler 暴露；本 PR 不掛 metrics endpoint，留 follow-up issue（觀察先在 daemon 內測量）。
+- daemon 開發 / debug 期間可用 `runtime.ReadMemStats` 等 in-process 機制 inspect counter，或在單元/整合測試直接 `metric.Value()` 斷言
+- 提供 future endpoint exposure 的 instrumentation 基礎（counter 已埋好，只需接 `expvar.Handler()` 或 Prometheus exporter）
+
+**v5 I2 揭穿的限制**（誠實寫明）：
+
+- ❌ **無 metrics endpoint**：本 PR 不掛 `/debug/vars` 或 Prometheus exporter；外部監控無法讀取
+- ❌ **無 SessionStart denominator**：counter 是絕對值，不是 ratio；無法直接算 partial rate
+- ❌ **daemon restart 歸零**：expvar 是 in-process variable，不持久化；長期 SLO 觀察需另外加 persisted counter（不在本 PR）
+
+**因此 v5 不主張**「partial 發生率超 1/1000 觸發升級到 SQL transaction」這類 SLO 聲明。partial state 接受性的論證走 §0.2 三 evidence point（ephemeral 性質 + projection dedup + sweep 2s），與 metrics 量測無關。
+
+**Follow-up issue（建議）**：補上 metrics endpoint + SessionStart denominator + 持久化 counter，是觀察 partial 真實發生率所必須。本 PR 留 instrumentation 鉤子但不承諾 SLO 量測機制。
 
 ### 2.7 Wire compatibility
 
@@ -488,6 +546,9 @@ var (
 | IT14 | `sweep_prune_dead_proxy_ref_when_pid_reused` (v4 新) | cc.Subagents 含 codex proxy（SourcePID alive 但 actualStart != ref.SourceStartTime — PID reuse）；sweep | cc.Subagents 不含 codex proxy（identity mismatch 視為 dead）|
 | IT15 | `partial_metric_increments_on_partial_state` (v4 新) | mock DeleteIfUnchanged 持續失敗；reconcile 走 partial path | metricPartialCanonicalizationCreated 對應 +1；trace decision 仍 `created_frame`（無 partial reason）|
 | IT16 | `projection_dedup_metric_increments` (v4 新) | DB 多個 partial state；多 paneID call buildPaneProjection | metricProjectionDedupHidden 累加 |
+| IT17 | `existing_frame_session_start_preserves_live_proxy_refs` (v5 I1) | (a) cc frame 已存在且 cc.Subagents 含 codex proxy ref（live + identity verified）；(b) cc 又收 SessionStart（existing path）→ pre-reset snapshot + reset + re-attach；(c) 之後 codex 進程仍 alive，無新 SessionStart | cc.Subagents 仍含 codex proxy ref（StartedAt 刷新到本次 broadcastTs）；projection dedup 也仍工作 |
+| IT18 | `existing_frame_session_start_skips_dead_proxy_during_reset` (v5 I1 negative) | (a) cc frame 已存在含 codex proxy ref，但 codex 進程已死（isPidAliveFn = false）；(b) cc SessionStart | reset 後 cc.Subagents 不含該 dead proxy ref（preserve 不通過 identity gate）|
+| IT19 | `existing_frame_session_start_skips_pid_reused_proxy` (v5 I1 negative) | (a) cc frame 含 codex proxy；(b) codex PID 已被 OS reuse（actualStart != ref.SourceStartTime）；(c) cc SessionStart | reset 後不 preserve 該 stale proxy（identity 不過 gate）|
 
 ### 3.2 Unit 測試
 
@@ -694,16 +755,17 @@ func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
 | 1 | `docs: Phase 3.5 plan v1 — cold-start proxy canonicalization` ✅ `bb382870` |
 | 2 | `docs: Phase 3.5 plan v2 — bidirectional + retry/rollback` ✅ `dd29be46` |
 | 3 | `docs: Phase 3.5 plan v3 — sweep canonicalize + identity gate` ✅ `148a2309` |
-| 4 | `docs: Phase 3.5 plan v4 — Hybrid B+ (consulting-driven redesign)` 此檔 |
-| 5 | `feat(agent): metrics counters for phase 3.5 canonicalization observability` | metric 4 個 + import 註冊 |
-| 6 | `feat(agent): pidIsAncestorOfWithCap + canonicalizeDescendantsAfterUpsert with identity gate (unwired)` | helper + RC1-RC5 unit |
-| 7 | `feat(agent): reconcileCreatedFrameAsProxy best-effort (unwired)` | reconcile helper（無 rollback）|
-| 8 | `feat(agent): wire bidirectional canonicalization into applyFrameEvent` | §2.2.1 + §2.2.2 |
-| 9 | `feat(agent): SessionEnd hot-path proxy cleanup` | §2.3 + IT12 |
-| 10 | `feat(agent): buildPaneProjection dedup proxy-claimed standalone frames` | §2.4 + PD1-PD3 + IT5 |
-| 11 | `feat(agent): sweep canonicalizePane with candidate identity gate` | §4.2 + IT10 |
-| 12 | `feat(agent): sweep pruneDeadProxyRefs` | §4.3 + IT13 / IT14 |
-| 13 | `test(agent): integration tests for cold-start race canonicalization end-to-end` | IT1-IT11 + IT15 / IT16 用真 sqlite |
+| 4 | `docs: Phase 3.5 plan v4 — Hybrid B+ (consulting-driven redesign)` ✅ `a338f6d3` |
+| 5 | `docs: Phase 3.5 plan v5 — preserve live proxies + honest metrics` 此檔 |
+| 6 | `feat(agent): metrics counters for phase 3.5 canonicalization observability` | metric 4 個 + import 註冊（無 endpoint） |
+| 7 | `feat(agent): pidIsAncestorOfWithCap + canonicalizeDescendantsAfterUpsert with identity gate (unwired)` | helper + RC1-RC5 unit |
+| 8 | `feat(agent): reconcileCreatedFrameAsProxy best-effort (unwired)` | reconcile helper（無 rollback）|
+| 9 | `feat(agent): wire bidirectional canonicalization + preserve live proxies into applyFrameEvent` | §2.2.1 + §2.2.2（含 v5 I1 preserve）+ IT17/IT18/IT19 |
+| 10 | `feat(agent): SessionEnd hot-path proxy cleanup` | §2.3 + IT12 |
+| 11 | `feat(agent): buildPaneProjection dedup proxy-claimed standalone frames` | §2.4 + PD1-PD3 + IT5 |
+| 12 | `feat(agent): sweep canonicalizePane with candidate identity gate` | §4.2 + IT10 |
+| 13 | `feat(agent): sweep pruneDeadProxyRefs` | §4.3 + IT13 / IT14 |
+| 14 | `test(agent): integration tests for cold-start race canonicalization end-to-end` | IT1-IT11 + IT15 / IT16 用真 sqlite |
 
 ---
 
@@ -716,17 +778,17 @@ func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
 | `frame_ops.go` canonicalizeDescendantsAfterUpsert（含 identity gate） | ~85 行 |
 | `frame_ops.go` pidIsAncestorOfWithCap | ~20 行 |
 | `frame_ops.go` SessionEnd proxy cleanup | ~10 行（既有 case 改 4 行）|
-| `frame_ops.go` 接線 §2.2.1 + §2.2.2 | ~40 行 |
+| `frame_ops.go` 接線 §2.2.1 + §2.2.2（含 v5 preserve live proxies）| ~75 行 |
 | `projection.go` dedup | ~40 行 |
 | `sweep.go` canonicalizePane + findCanonicalAncestor + pruneDeadProxyRefs | ~140 行 |
 | `frame_ops_test.go` RC1-RC5 unit | ~150 行 |
 | `projection_test.go` PD1-PD3 | ~80 行 |
-| `module_test.go` / new file IT1-IT16 integration | ~700-800 行 |
+| `module_test.go` / new file IT1-IT19 integration | ~800-900 行 |
 | `sweep_test.go` 加 sweep canonicalize/prune 測試 | ~120 行 |
-| Plan docs（此檔 v4） | ~720 行 |
-| **總 net code（不含 plan docs）** | **~1460-1560 行** |
+| Plan docs（此檔 v5） | ~870 行 |
+| **總 net code（不含 plan docs）** | **~1595-1695 行** |
 
-v4 LOC 比 v3 估計（~1235-1335）略升 ~200，主要在 IT12-IT16 + sweep prune。但移除了 rollback 分支 + partial trace 邏輯，淨複雜度比 v3 低（更多直線、更少分支與失敗路徑）。
+v5 LOC 比 v4（~1460-1560）+135：preserve live proxies wiring（~35 行）+ IT17/IT18/IT19（~100 行）。但複雜度仍比 v3 低（單一 best-effort 路徑 + projection dedup boundary，不是 retry/rollback/propagate maze）。
 
 ---
 
@@ -805,4 +867,5 @@ PR 跑過 codex round 4 review 收斂後：
 | Plan v3 round 3（adversarial）| inline | needs-attention | H1 rollback helper 同類 partial / H2 sweep 缺 identity / H3 partial trace 不會寫入 | **三輪 partial state meta-drift signal 觸發** → consulting |
 | Side A consulting | task-moeupstr-z0oilf | (technical spec) | 提議 SQL transaction 根除 partial 物理層 | 不採納（標準對 ephemeral 表過高），但細節（BEGIN IMMEDIATE / busy code / FK）保留參考 |
 | Side B consulting | task-moeuqbnn-jart97 | (adversarial argument) | 證據壓倒：sweep 2s 不是 1h / agent_frames 是 ephemeral / projection 是 user-visible 邊界 / SessionEnd 漏 cleanup proxy | **採納為 v4 核心**（Hybrid B+）|
-| Plan v4 round 4 | (待執行) | (pending) | — | — |
+| Plan v4 round 4（adversarial）| inline | needs-attention | I1 high existing-frame reset 清掉 live proxy / I2 medium SLO 不可量測 | v5 全採納（§2.2.2 preserve live proxies + IT17/IT18/IT19；§2.6 移除 SLO 聲明，改三 evidence point；§0.2 設計論證重整）|
+| Plan v5 round 5 | (待執行) | (pending) | — | — |
