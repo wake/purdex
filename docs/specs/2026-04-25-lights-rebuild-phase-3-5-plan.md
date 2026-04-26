@@ -1,4 +1,4 @@
-# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v10 / Hybrid B+)
+# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v11 / Hybrid B+)
 
 Baseline：`1.0.0-alpha.225`（main @ `92fb5d05`，Phase 3 已 merged）。
 Worktree：`.claude/worktrees/lights-phase-3-5`（branch `worktree-lights-phase-3-5`，已 rebase 上 `92fb5d05`）。
@@ -654,7 +654,7 @@ var (
 | RC4 | `canonicalizeDescendantsAfterUpsert_skips_same_type` |
 | RC5 | `canonicalizeDescendantsAfterUpsert_skips_pid_reuse_via_identity_gate` |
 
-`projection_test.go` 加 `PD1`-`PD8`：
+`projection_test.go` 加 `PD1`-`PD9`：
 
 | # | 名稱 |
 |---|---|
@@ -666,6 +666,7 @@ var (
 | PD6 | `dedup_merges_hidden_stateful_child_subagents`（v10 R1：parent older, child newer with native, hide + merge）|
 | PD7 | `dedup_merges_hidden_stateful_child_subagents_parent_newer`（v10 R1 對稱：parent newer, child older with native, merge 仍 run）|
 | PD8 | `dedup_merge_avoids_duplicate_proxy_ref`（v10 R1 boundary：same proxy identity 兩側都有 → merge dedup 後只一個 entry）|
+| PD9 | `cross_frame_native_id_collision_preserved`（v11 S1：cc 與 codex 各自的 native ref 同 ID 不同 Type，merge 不可誤砍 → 兩條 native ref + proxy ref 三條全留；驗 owner-aware dedup）|
 
 ### 3.3 不加的測試
 
@@ -975,6 +976,8 @@ PR-3.5a 跑過兩輪 codex review 收斂後：
 | PR-3.5a 第二輪 code review round 1（standard）| (round 2 standard) | (review) | 標準 cross-model 二意見（v8 patch 後）| findings 併入 round 2 adversarial 彙整 |
 | PR-3.5a 第二輪 code review round 2（adversarial 三視角）| attack / defend / health（round 2）| needs-attention | O1 high filter-merge prevWrittenNativeIDs 多 retry 下 regress 丟 native / Q1 high projection dedup 隱藏 stateful child（partial+並發 SubagentStart）/ O2 medium descendant scan candidate guard 過寬把 stale-only IsProxy 算 state / O3 medium pruneDeadProxyRefs read-error 時 fail-destructive / P1 medium prune detach 後不 broadcast | **v9 全採納**：C13 initialNativeIDs baseline + IT21b / C14 dedup len==0 guard + PD4/PD5 / C15 candidate state classification + IT22b/IT22c / C16 prune fail-safe + IT14b / C17 broadcastProxyPruned + IT13c |
 | PR-3.5a 第三輪 code review round 3 | (round 3) | needs-attention | R1 high projection dedup Q1 fix 仍丟資訊（child 留 visible 後 TopFrame 選一→另一邊 Subagents 丟）／ R2 medium sweepOnce owner-identity read error 時 bare continue 把 frame 丟出 survivors → pane 不進 prune → O3 fail-safe 被繞過 | **v10 全採納**：C18 dedup hide-and-merge + PD4 改寫 + PD6/PD7/PD8 / C19 owner-read-error 加入 survivors + IT13d/IT14c |
+| PR-3.5a code review round 4（adversarial sanity）| review-mofh79kq-djlhr3 | needs-attention | S1 high R1 merge dedup 用 `subagentRefMatches`（native by ID-only），跨 frame 不同 agent family 的 native ID collision 被誤判 duplicate → 隱藏 child 的 native ref 從 wire 輸出消失 | **v11 採納**：merge 改 owner-aware inline dedup（proxy by `SourcePID+SourceStartTime`、native by `Type+ID`）；新增 PD9 守規。`subagentRefMatches` 語義不變（within-frame caller in `frame_ops.go` 不受影響）|
+| PR-3.5a code review round 5（待執行）| — | — | v11 patch（C21 fix + C22 docs）後再跑一輪 sanity；預期收斂無 high finding 進 ship | — |
 
 ---
 
