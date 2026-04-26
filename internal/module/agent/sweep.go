@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
@@ -122,9 +123,266 @@ func (m *Module) sweepOnce() error {
 	panes := uniquePaneIDs(survivors)
 	broadcastTs := nowFn().UnixNano()
 	for _, paneID := range panes {
+		// PR-3.5b §2.1 — canonicalize first so newly-attached proxy
+		// refs land before pruneDeadProxyRefs validates this pane's
+		// proxy refs. Both passes are identity-gated (live + start_time
+		// match), so a freshly attached canonical ref is recognized as
+		// healthy by prune in the same tick. Reverse order would also
+		// work but canonicalize-first is the natural narrative: fix
+		// partials, then verify pane health.
+		m.canonicalizePane(paneID, broadcastTs)
 		m.pruneDeadProxyRefs(paneID, broadcastTs)
 	}
 	return nil
+}
+
+// canonicalizePane folds standalone live cross-type child frames into
+// their canonical ancestor's proxy ref within the same pane. Defense-
+// in-depth backstop for PR-3.5a hot-path canonicalization paths that
+// left a partial state (DeleteIfUnchanged failure / readProcessInfoFn
+// transient error / existing-frame SessionStart path that does not run
+// self-as-descendant reconcile).
+//
+// User-visible correctness is already guaranteed by projection dedup
+// (PR-3.5a §2.4) — this pass closes the DB-level eventual consistency
+// loop in ≤ 2s instead of waiting for the child's own SessionEnd /
+// pid_dead / 1h idle timeout.
+//
+// Single-direction rule (matches hot path): descendant becomes proxy
+// of ancestor; ancestor is never reverted to descendant. Identity gate
+// applied to BOTH candidate and ancestor — stale (PID-reused) frames
+// never participate, leaving them for pid_reused / pid_dead cleanup.
+//
+// Owned-state guard: candidates carrying native subagent refs or live
+// identity-verified IsProxy refs are preserved (folding would lose
+// state). See candidateHasOwnedState in frame_ops.go for the full
+// classifier shared with the hot path. The round 1 high finding
+// (sweep erasing child native state during partial recovery) is
+// gated by this guard; IT10n is the regression test.
+//
+// Best-effort: any storage error / failed gate / failed Upsert / failed
+// DeleteIfUnchanged makes this candidate skip; next sweep tick (2s)
+// retries. No rollback on partial.
+func (m *Module) canonicalizePane(paneID string, broadcastTs int64) {
+	if m.frames == nil {
+		return
+	}
+	frames, err := m.frames.ListByPane(paneID)
+	if err != nil {
+		return
+	}
+	framesByPID := make(map[int]store.Frame, len(frames))
+	for _, frame := range frames {
+		framesByPID[frame.PID] = frame
+	}
+	canonicalizedAny := false
+	var anyAncestor store.Frame
+	for _, candidate := range frames {
+		// Candidate identity gate — stale (dead PID / PID-reuse) frames
+		// skip canonicalize; pid_dead / pid_reused passes handle them.
+		if !isPidAliveFn(candidate.PID) {
+			continue
+		}
+		actualStart, sterr := processStartTimeFn(candidate.PID)
+		if sterr != nil || actualStart != candidate.ProcessStartTime {
+			continue
+		}
+		ancestor, found := m.findCanonicalAncestor(candidate, framesByPID)
+		if !found {
+			continue
+		}
+		// Review F2 (round 2 defender) — owned-state classification
+		// happens AFTER ancestor lookup so we can branch on whether
+		// the parent already claims this candidate via a matching
+		// proxy ref.
+		//
+		// Four cases:
+		//
+		//  parent has ref + owned state    → silent skip (already
+		//                                   canonical at projection
+		//                                   layer; nothing to do; no
+		//                                   broadcast spam every tick)
+		//  parent has ref + no owned state → delete-only path (the
+		//                                   row was a partial leftover
+		//                                   from a successful hot-path
+		//                                   attach + failed delete;
+		//                                   sweep finishes the cleanup)
+		//  parent missing ref + owned state    → attach-only recovery
+		//                                       (the F2 case; closes
+		//                                       round 2 defender high.
+		//                                       Without this, an owned-
+		//                                       state child whose hot
+		//                                       path failed to attach
+		//                                       would never converge —
+		//                                       projection_dedup needs
+		//                                       a proxy ref on the
+		//                                       parent to hide the
+		//                                       child)
+		//  parent missing ref + no owned state → attach + delete (main
+		//                                       canonicalization path)
+		parentHasMatchingProxy := subagentsContainProxySender(ancestor.Subagents, candidate.PID, candidate.ProcessStartTime)
+		ownedState := candidateHasOwnedState(candidate)
+		if parentHasMatchingProxy && ownedState {
+			continue
+		}
+		parentStored := ancestor
+		if !parentHasMatchingProxy {
+			ref := agentpkg.SubagentRef{
+				ID:              fmt.Sprintf("proxy:%s:%d:%s", candidate.AgentType, candidate.PID, candidate.ProcessStartTime),
+				Type:            candidate.AgentType,
+				StartedAt:       broadcastTs,
+				SourcePID:       candidate.PID,
+				SourceStartTime: candidate.ProcessStartTime,
+				IsProxy:         true,
+			}
+			attached, ps, aerr := m.attachProxyRefWithRetry(ancestor, ref, broadcastTs)
+			if aerr != nil || !attached {
+				continue
+			}
+			parentStored = ps
+		}
+		if ownedState {
+			// Review F2 — deliberate partial: attach succeeded (or was
+			// already there), but the candidate carries owned native
+			// state we must not lose. Skip delete; projection_dedup
+			// hides + merges this child's Subagents into the parent
+			// projection at read time.
+			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
+			canonicalizedAny = true
+			anyAncestor = parentStored
+			continue
+		}
+		// Review F1 + F4 (round 2 attacker / round 3 closure) —
+		// revalidate ancestor identity BEFORE delete. findCanonicalAncestor
+		// only proves the ancestor was live at classification time; the
+		// ancestor PID may die between then and this point. Without
+		// this gate, we would delete the live candidate row into a
+		// dead parent (whose next sweep tick clears it along with all
+		// its Subagents, severing the only DB link to the live
+		// candidate). Hoisted to the common pre-delete point so BOTH
+		// the attach-then-delete branch (parent missing ref) AND the
+		// delete-only branch (parent already has matching ref via a
+		// prior partial recovery) share the same protection. Round 3
+		// caught the original F1 patch missing this delete-only path.
+		//
+		// On revalidation failure: leave the proxy ref attached (the
+		// dead parent is cleared on the next sweep tick along with all
+		// its Subagents) and skip delete. Mirrors the "no rollback on
+		// partial" Hybrid B+ rule.
+		if !isPidAliveFn(parentStored.PID) {
+			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
+			canonicalizedAny = true
+			anyAncestor = parentStored
+			continue
+		}
+		actualAncestorStart, ancestorErr := processStartTimeFn(parentStored.PID)
+		if ancestorErr != nil || actualAncestorStart != parentStored.ProcessStartTime {
+			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
+			canonicalizedAny = true
+			anyAncestor = parentStored
+			continue
+		}
+		deleted, _ := m.frames.DeleteIfUnchanged(candidate.FrameID, candidate.LastSeenAt)
+		if !deleted {
+			// Partial — concurrent refresh / hot-path won the race.
+			// Next sweep tick re-evaluates. Projection dedup already
+			// hides this for SPA. No rollback. Per plan: success =
+			// attach + delete both, so MetricSweepCanonicalized is
+			// NOT incremented in the partial case.
+			continue
+		}
+		agentpkg.MetricSweepCanonicalized.Add(1)
+		canonicalizedAny = true
+		anyAncestor = parentStored
+	}
+	if canonicalizedAny {
+		m.broadcastProxyCanonicalized(anyAncestor)
+	}
+}
+
+// broadcastProxyCanonicalized emits a "hook" broadcast with reason=
+// sweep:proxy_canonicalized after canonicalizePane attached at least
+// one proxy ref + deleted at least one standalone child in a pane.
+// Mirrors broadcastProxyPruned so SPA + m.subagents / m.currentStatus
+// stay in sync without waiting for an unrelated hook.
+//
+// Best-effort: errors swallowed (next sweep tick re-evaluates).
+// Per-pane (not per-attach) so multiple folds in the same pane
+// coalesce into one broadcast — matches broadcastProxyPruned's
+// granularity. PR-3.5b §2.4.
+func (m *Module) broadcastProxyCanonicalized(reference store.Frame) {
+	sessionName, code := m.resolvePaneSession(reference.PaneID)
+	projection, err := m.projectionForSession(sessionName)
+	if err != nil {
+		return
+	}
+	if sessionName != "" {
+		m.mu.Lock()
+		syncProjectionState(m.currentStatus, m.subagents, sessionName, projection)
+		m.mu.Unlock()
+	}
+	if code == "" || m.core == nil {
+		return
+	}
+	normalized := buildProjectionNormalized(projection, reference.AgentType, "sweep:proxy_canonicalized", nowFn().UnixNano(), agentpkg.DeriveResult{})
+	payload, _ := json.Marshal(normalized)
+	m.core.Events.Broadcast(code, "hook", string(payload))
+}
+
+// findCanonicalAncestor walks descendant's PPID chain looking for a
+// cross-type frame in the same pane that is live and identity-verified.
+// Caps walk at proxyMaxDepth (5) to bound syscall cost.
+//
+// Returns (frame, true) on a successful match. Returns (zero, false)
+// when:
+//   - readProcessInfoFn errors mid-walk (transient — next sweep tick retries)
+//   - PPID hits init (<=1) or self-loop (PPID == current PID)
+//   - depth exhausted without finding a frame in the pane
+//   - a same-type ancestor is encountered (cross-type-only proxy semantics;
+//     a same-type ancestor in chain means we're "inside" the same agent
+//     tree and won't find a different cross-type ancestor higher up either,
+//     by design — mirrors findProxyParent's same-type hard-stop)
+//   - the matched ancestor fails identity gate (dead PID / PID-reused)
+//
+// Note: framesByPID is keyed by PID, not (PID, paneID), but caller passes
+// only frames from a single pane (ListByPane), so cross-pane PID
+// collision is impossible.
+func (m *Module) findCanonicalAncestor(candidate store.Frame, framesByPID map[int]store.Frame) (store.Frame, bool) {
+	info, err := readProcessInfoFn(candidate.PID)
+	if err != nil {
+		return store.Frame{}, false
+	}
+	ppid := info.PPID
+	for depth := 0; depth < proxyMaxDepth; depth++ {
+		if ppid <= 1 {
+			return store.Frame{}, false
+		}
+		ancestor, ok := framesByPID[ppid]
+		if ok {
+			if ancestor.AgentType == candidate.AgentType {
+				// Same-type — not a proxy relationship. Hard-stop the
+				// walk (mirrors findProxyParent semantics).
+				return store.Frame{}, false
+			}
+			if isPidAliveFn(ancestor.PID) {
+				actualStart, sterr := processStartTimeFn(ancestor.PID)
+				if sterr == nil && actualStart == ancestor.ProcessStartTime {
+					return ancestor, true
+				}
+			}
+			// Ancestor matched in pane but failed identity gate — keep
+			// walking; a deeper ancestor might still match.
+		}
+		ancestorInfo, err := readProcessInfoFn(ppid)
+		if err != nil {
+			return store.Frame{}, false
+		}
+		if ancestorInfo.PPID == ppid {
+			return store.Frame{}, false
+		}
+		ppid = ancestorInfo.PPID
+	}
+	return store.Frame{}, false
 }
 
 // uniquePaneIDs collects distinct pane IDs from a frame slice in the order
