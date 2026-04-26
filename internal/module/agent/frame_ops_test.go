@@ -2622,6 +2622,611 @@ func TestPhase35_IT20_ExistingFrameSessionStartPreservesConcurrentlyAttachedProx
 	}
 }
 
+// IT1 — descendant_then_ancestor_canonicalizes_via_descendant_scan.
+// codex SessionStart lands first (no cc parent yet → standalone codex).
+// cc SessionStart lands second (new-frame Upsert + descendant scan finds
+// codex via PPID 200 → 100 + folds it). Verifies plan §2.2.1 descendant
+// scan path on the new-frame branch.
+func TestPhase35_IT1_DescendantThenAncestorCanonicalizesViaDescendantScan(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, PPID: 1}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	// codex first → standalone (no cc parent yet).
+	codexReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	if _, _, err := m.applyFrameEvent(codexReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 50); err != nil {
+		t.Fatalf("codex apply: %v", err)
+	}
+	mid, _ := m.frames.ListByPane("%5")
+	if len(mid) != 1 || mid[0].AgentType != "codex" {
+		t.Fatalf("after codex SessionStart: frames=%+v, want 1 standalone codex", mid)
+	}
+
+	// cc next → Upsert + descendant scan folds codex.
+	ccReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	if _, _, err := m.applyFrameEvent(ccReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("cc apply: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 || frames[0].AgentType != "cc" {
+		t.Fatalf("final frames = %+v, want 1 cc", frames)
+	}
+	if len(frames[0].Subagents) != 1 || frames[0].Subagents[0].SourcePID != 200 {
+		t.Fatalf("cc.Subagents = %+v, want 1 codex proxy", frames[0].Subagents)
+	}
+
+	// projection top must be cc.
+	proj, _ := m.projectPane("%5")
+	if proj == nil || proj.TopFrame == nil || proj.TopFrame.AgentType != "cc" {
+		t.Fatalf("projection top = %+v, want cc", proj)
+	}
+}
+
+// IT2 — ancestor_then_descendant via PR-2b fast-path. cc first creates a
+// frame; codex follows under cc's PPID chain → existing pre-Upsert
+// findProxyParent fast-path collapses codex into a proxy ref. Sanity
+// check that PR-3.5a wiring did not regress PR-2b behavior.
+func TestPhase35_IT2_AncestorThenDescendantUsesPR2bFastPath(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, PPID: 1}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	// cc first.
+	ccReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	if _, _, err := m.applyFrameEvent(ccReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 50); err != nil {
+		t.Fatalf("cc apply: %v", err)
+	}
+
+	// codex → PR-2b fast-path collapses.
+	codexReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(codexReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("codex apply: %v", err)
+	}
+	if meta.Reason != "proxy_subagent_attached" {
+		t.Fatalf("reason = %q, want proxy_subagent_attached (PR-2b fast-path)", meta.Reason)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 || frames[0].AgentType != "cc" {
+		t.Fatalf("frames = %+v, want 1 cc", frames)
+	}
+	if len(frames[0].Subagents) != 1 || frames[0].Subagents[0].SourcePID != 200 {
+		t.Fatalf("Subagents = %+v, want 1 codex proxy", frames[0].Subagents)
+	}
+}
+
+// IT6 — descendant_scan_partial_skip_does_not_block_others. Two standalone
+// children (codex + opencode); concurrent writer bumps codex's LastSeenAt
+// during the scan so DeleteIfUnchanged for codex fails (partial state) but
+// opencode's delete succeeds. cc's descendant scan attaches both proxy
+// refs but only deletes opencode's standalone row.
+func TestPhase35_IT6_DescendantScanPartialDoesNotBlockOthers(t *testing.T) {
+	m := newProxyTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "opencode",
+		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+	})
+
+	// Seed two standalone children directly (skip applyFrameEvent paths so
+	// state is exactly: cc not in DB yet, codex + opencode standalone).
+	codex := seedFrame(t, m, "%5", "codex", 200, "t200", 11)
+	openc := seedFrame(t, m, "%5", "opencode", 300, "t300", 12)
+	_ = codex
+	_ = openc
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 200, 300:
+			return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, PPID: 1}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	// Hook on processStartTimeFn(200) → bump codex's LastSeenAt to force
+	// its DeleteIfUnchanged to fail. Fires once per applyFrameEvent run.
+	bumped := false
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			if !bumped {
+				bumped = true
+				cur, _ := m.frames.GetByIdentity("%5", 200, "t200")
+				if cur != nil {
+					cur.LastSeenAt = 999
+					if _, err := m.frames.Upsert(*cur); err != nil {
+						t.Fatalf("bump codex: %v", err)
+					}
+				}
+			}
+			return "t200", nil
+		case 300:
+			return "t300", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	startMetric := agentpkg.MetricPartialCanonicalizationCreated.Value()
+	ccReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	if _, _, err := m.applyFrameEvent(ccReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200); err != nil {
+		t.Fatalf("cc apply: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	// Expect: cc + codex standalone (delete failed). opencode folded + deleted.
+	if len(frames) != 2 {
+		t.Fatalf("frames count = %d, want 2 (cc + codex partial); frames=%+v", len(frames), frames)
+	}
+	var ccFrame *store.Frame
+	for i := range frames {
+		if frames[i].AgentType == "cc" {
+			ccFrame = &frames[i]
+		}
+	}
+	if ccFrame == nil {
+		t.Fatalf("no cc frame found")
+	}
+	// cc.Subagents must contain BOTH codex (partial — proxy attached, child
+	// not yet deleted) and opencode proxy refs.
+	pids := map[int]bool{}
+	for _, ref := range ccFrame.Subagents {
+		pids[ref.SourcePID] = true
+	}
+	if !pids[200] || !pids[300] {
+		t.Fatalf("cc.Subagents SourcePIDs = %v, want both 200 + 300", pids)
+	}
+
+	// Partial metric must have incremented at least once for codex.
+	if delta := agentpkg.MetricPartialCanonicalizationCreated.Value() - startMetric; delta < 1 {
+		t.Fatalf("MetricPartialCanonicalizationCreated delta = %d, want >= 1 (codex partial)", delta)
+	}
+}
+
+// IT7 — existing_frame_session_start_runs_descendant_scan_only.
+// (a) cc creates frame; (b) codex lands standalone (race); (c) cc gets
+// SessionStart again — existing-frame filter-merge path runs descendant
+// scan and folds codex.
+func TestPhase35_IT7_ExistingFrameSessionStartDescendantScan(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, PPID: 1}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	// (a) cc SessionStart.
+	ccReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	if _, _, err := m.applyFrameEvent(ccReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 50); err != nil {
+		t.Fatalf("cc apply 1: %v", err)
+	}
+
+	// (b) Inject codex standalone directly (simulating cold-start race that
+	// raced past PR-2b's pre-walk in real conditions).
+	codex := seedFrame(t, m, "%5", "codex", 200, "t200", 60)
+	_ = codex
+
+	// (c) cc SessionStart again (existing frame). Filter-merge path +
+	// descendant scan should fold codex.
+	if _, _, err := m.applyFrameEvent(ccReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("cc apply 2: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 || frames[0].AgentType != "cc" {
+		t.Fatalf("frames = %+v, want 1 cc", frames)
+	}
+	if len(frames[0].Subagents) != 1 || frames[0].Subagents[0].SourcePID != 200 {
+		t.Fatalf("Subagents = %+v, want 1 codex proxy ref", frames[0].Subagents)
+	}
+}
+
+// IT8 — non_session_start_event_no_canonicalization. Notification event
+// in frame == nil path goes through legacy create-frame behavior;
+// reconcile + descendant scan are gated on req.EventName == "SessionStart"
+// so they must NOT trigger.
+func TestPhase35_IT8_NonSessionStartEventNoCanonicalization(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	// Seed cc parent so a candidate ancestor exists in the pane.
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	// codex Notification (non-SessionStart). Should hit fallback create-
+	// frame and emit created_frame trace; no canonicalization.
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "Notification", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "created_frame" {
+		t.Fatalf("decision = %q, want created_frame", meta.Decision)
+	}
+	if meta.Reason == "post_upsert_canonicalization_self" {
+		t.Fatalf("reason = %q, must not be canonicalization for non-SessionStart", meta.Reason)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 2 {
+		t.Fatalf("frames count = %d, want 2 (cc + standalone codex)", len(frames))
+	}
+}
+
+// IT9 — filter-merge-retry exhaustion aborts applyFrameEvent. Storage
+// errors and exhausted-retry both surface to the caller as a non-nil
+// error from applyFrameEvent. We exercise the exhausted-retry surface
+// (mutateSubagentsWithRetry / filter-merge-retry caller) because the
+// concrete sqlite path can be triggered without a store interface seam.
+//
+// Setup: cc frame with one live codex proxy ref. processStartTimeFn(200)
+// is hooked to bump cc's LastSeenAt on every call — fires once per
+// filter-merge attempt's filter pass — so each UpsertIfUnchanged sees
+// its expected LastSeenAt was already mutated by the bump that just ran
+// during the same attempt's filter scan. Three attempts conflict back-
+// to-back → exhausted error → applyFrameEvent propagates.
+func TestPhase35_IT9_FilterMergeExhaustedRetryAbortsApply(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	parent.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:codex:200:t200",
+		Type:            "codex",
+		SourcePID:       200,
+		SourceStartTime: "t200",
+		IsProxy:         true,
+	}}
+	parent.LastSeenAt = 50
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed cc + ref: %v", err)
+	}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	// Every call to processStartTimeFn(200) bumps cc's row — fires on each
+	// filter pass, so each attempt's UpsertIfUnchanged conflicts.
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			cur, _ := m.frames.GetByIdentity("%5", 100, "t100")
+			if cur != nil {
+				cur.LastSeenAt = cur.LastSeenAt + 1
+				if _, err := m.frames.Upsert(*cur); err != nil {
+					t.Fatalf("bump cc: %v", err)
+				}
+			}
+			return "t200", nil
+		}
+		return "t100", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	// cc SessionStart on existing cc frame triggers filter-merge-retry.
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	_, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err == nil {
+		t.Fatalf("expected exhausted-retry error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeded") {
+		t.Fatalf("error = %v, want 'exceeded' retry message", err)
+	}
+}
+
+// IT11 — descendant_scan_skips_pid_reuse_stale at end-to-end level.
+// pane has a stale codex standalone (PID reused; actualStart != stored).
+// cc SessionStart's descendant scan must skip it (identity gate fails),
+// leave the row for sweep, and not fold a stale ref.
+func TestPhase35_IT11_DescendantScanSkipsPidReuseStale(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	// Seed stale codex with stored start_time "stale-t200".
+	seedFrame(t, m, "%5", "codex", 200, "stale-t200", 11)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, PPID: 1}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	// PID 200 alive, but actualStart = "fresh-t200" ≠ stored "stale-t200".
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "fresh-t200", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	ccReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	if _, _, err := m.applyFrameEvent(ccReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("cc apply: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 2 {
+		t.Fatalf("frames count = %d, want 2 (cc + stale codex left for sweep)", len(frames))
+	}
+	var ccFrame *store.Frame
+	for i := range frames {
+		if frames[i].AgentType == "cc" {
+			ccFrame = &frames[i]
+		}
+	}
+	if ccFrame == nil {
+		t.Fatalf("no cc frame found")
+	}
+	if len(ccFrame.Subagents) != 0 {
+		t.Fatalf("cc.Subagents = %+v, want empty (stale candidate skipped by identity gate)", ccFrame.Subagents)
+	}
+}
+
+// IT15 — partial_metric_increments_on_partial_state. mock DeleteIfUnchanged
+// (via LastSeenAt bump hook) → reconcile partial path runs in the new-
+// frame branch, MetricPartialCanonicalizationCreated +1.
+func TestPhase35_IT15_PartialMetricIncrementsOnPartialState(t *testing.T) {
+	m := newProxyTestModule(t)
+	// Seed cc parent so reconcile finds an ancestor.
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: pidPPIDForIT15()}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	// Hook on processStartTimeFn(100) — fires inside reconcile's
+	// findProxyParent identity gate AFTER the codex standalone has been
+	// Upserted but BEFORE DeleteIfUnchanged. Bump codex's LastSeenAt to
+	// force the IfUnchanged delete to fail (partial state).
+	bumped := false
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			if !bumped {
+				bumped = true
+				cur, _ := m.frames.GetByIdentity("%5", 200, "t200")
+				if cur != nil {
+					cur.LastSeenAt = 999
+					if _, err := m.frames.Upsert(*cur); err != nil {
+						t.Fatalf("bump codex: %v", err)
+					}
+				}
+			}
+			return "t100", nil
+		}
+		if pid == 200 {
+			return "t200", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		phase35IT15Reset()
+	})
+
+	startMetric := agentpkg.MetricPartialCanonicalizationCreated.Value()
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	// Partial path returns canonicalized=false → caller falls through to
+	// descendant scan (no candidates) → emits a created_frame trace
+	// (no partial reason — plan §2.5 dropped partial_canonicalization).
+	if meta.Decision != "created_frame" {
+		t.Fatalf("decision = %q, want created_frame (partial path falls through)", meta.Decision)
+	}
+	if meta.Reason == "post_upsert_canonicalization_self" {
+		t.Fatalf("reason = %q, must not claim canonicalize success on partial", meta.Reason)
+	}
+
+	if delta := agentpkg.MetricPartialCanonicalizationCreated.Value() - startMetric; delta < 1 {
+		t.Fatalf("MetricPartialCanonicalizationCreated delta = %d, want >= 1", delta)
+	}
+
+	// Final state: parent has codex proxy ref (partial); codex standalone
+	// row remains.
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 2 {
+		t.Fatalf("frames count = %d, want 2 (parent + standalone partial)", len(frames))
+	}
+}
+
+// IT15 PPID toggle: same pattern as IT3/IT9 — calls 1+2 return 999, then
+// 100. Lets PR-2b pre-walk miss while reconcile post-walk hits cc.
+var phase35IT15Calls int
+
+func pidPPIDForIT15() int {
+	phase35IT15Calls++
+	if phase35IT15Calls <= 2 {
+		return 999
+	}
+	return 100
+}
+
+func phase35IT15Reset() { phase35IT15Calls = 0 }
+
+// IT16 — projection_dedup_metric_increments across multiple panes.
+func TestPhase35_IT16_ProjectionDedupMetricIncrements(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	// Pane %5: cc with codex proxy ref + codex standalone (partial).
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	parent.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:codex:200:t200",
+		Type:            "codex",
+		SourcePID:       200,
+		SourceStartTime: "t200",
+		IsProxy:         true,
+	}}
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed pane 1: %v", err)
+	}
+	seedFrame(t, m, "%5", "codex", 200, "t200", 50)
+
+	// Pane %6: codex with cc proxy ref + cc standalone (partial).
+	parent2 := seedFrame(t, m, "%6", "codex", 400, "t400", 10)
+	parent2.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:cc:300:t300",
+		Type:            "cc",
+		SourcePID:       300,
+		SourceStartTime: "t300",
+		IsProxy:         true,
+	}}
+	if _, err := m.frames.Upsert(parent2); err != nil {
+		t.Fatalf("seed pane 2: %v", err)
+	}
+	seedFrame(t, m, "%6", "cc", 300, "t300", 50)
+
+	startMetric := agentpkg.MetricProjectionDedupHidden.Value()
+	if _, err := m.projectPane("%5"); err != nil {
+		t.Fatalf("projectPane %%5: %v", err)
+	}
+	if _, err := m.projectPane("%6"); err != nil {
+		t.Fatalf("projectPane %%6: %v", err)
+	}
+	delta := agentpkg.MetricProjectionDedupHidden.Value() - startMetric
+	if delta != 2 {
+		t.Fatalf("MetricProjectionDedupHidden delta = %d, want +2 (one per pane)", delta)
+	}
+}
+
 // IT12 — session_end_clears_parent_proxy_ref (plan §2.3 / Side B SessionEnd
 // hot-path cleanup). Partial state: cc parent has codex proxy ref +
 // codex standalone frame. codex SessionEnd must delete its own frame AND
