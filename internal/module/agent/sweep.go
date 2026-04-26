@@ -68,6 +68,18 @@ func (m *Module) sweepOnce() error {
 		}
 		startTime, err := processStartTimeFn(frame.PID)
 		if err != nil {
+			// Codex round 3 #R2 fix: identity unverifiable for this
+			// frame's owner — keep it as a survivor so the pane still
+			// enters pruneDeadProxyRefs below. Previously this branch
+			// did a bare `continue`, which bypassed the prune pass for
+			// every pane whose owner identity read transiently failed,
+			// defeating round 2 #O3's per-ref fail-safe at the pane
+			// level. Treating the frame as a survivor here is conserva-
+			// tive (don't trigger destructive pid_reused cleanup on a
+			// read error) and consistent with pruneDeadProxyRefs's own
+			// fail-safe, which only detaches refs on CONFIRMED dead /
+			// reused source.
+			survivors = append(survivors, frame)
 			continue
 		}
 		if startTime != frame.ProcessStartTime {

@@ -1002,3 +1002,126 @@ func TestSweep_PruneDeadProxyRefs_DetachesPidReused(t *testing.T) {
 		t.Fatalf("MetricSweepPrunedProxy delta = %d, want 1", delta)
 	}
 }
+
+// IT13d — codex round 3 #R2 fix: when sweepOnce's owner-identity read
+// (processStartTimeFn for the FRAME's own PID) returns an error, the
+// frame must still flow into the survivors list so its pane reaches
+// pruneDeadProxyRefs. Previously a bare `continue` skipped the entire
+// pane's prune pass, leaving any stale proxy refs lit until a sweep
+// tick happened to land while the owner's /proc read succeeded.
+//
+// Scenario: cc owner at PID 200 with a stale codex proxy ref pointing
+// to PID 300 (confirmed dead source). processStartTimeFn(200) returns
+// a transient error; processStartTimeFn(300) is irrelevant because the
+// per-ref fail-safe (#O3) already gates on isPidAliveFn(300) first.
+// Expected: pane still enters prune; stale codex ref detached.
+func TestSweep_PruneRunsWhenOwnerStartTimeReadErrors(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:codex:300:dead-t300",
+			Type:            "codex",
+			SourcePID:       300,
+			SourceStartTime: "dead-t300",
+			IsProxy:         true,
+		}},
+		Status:     agentpkg.StatusIdle,
+		StartedAt:  10,
+		LastSeenAt: 10,
+		Verified:   true,
+	}); err != nil {
+		t.Fatalf("Upsert cc + dead proxy ref: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	// Owner (PID 200) alive; proxy source (PID 300) confirmed dead.
+	isPidAliveFn = func(pid int) bool { return pid == 200 }
+	// Owner identity read errors transiently; proxy source read is
+	// short-circuited by the alive check in pruneDeadProxyRefs.
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			return "", errStub("owner /proc transient")
+		}
+		return "", nil
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	startMetric := agentpkg.MetricSweepPrunedProxy.Value()
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (owner preserved on read error)", len(frames))
+	}
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("cc.Subagents = %+v, want empty — R2 regression: prune skipped because owner read errored", frames[0].Subagents)
+	}
+	if delta := agentpkg.MetricSweepPrunedProxy.Value() - startMetric; delta != 1 {
+		t.Fatalf("MetricSweepPrunedProxy delta = %d, want 1 (prune ran despite owner read error)", delta)
+	}
+}
+
+// IT14c — codex round 3 #R2 boundary: owner read error must not
+// destructively delete the owner frame as a "pid_reused" cleanup. A
+// transient /proc failure for the owner's PID returns ("", err), and
+// the previous bare-continue path silently skipped the frame this round
+// without any cleanup — equally important is that the new survivor
+// path also doesn't trigger pid_reused (which compares startTime to
+// frame.ProcessStartTime). Verifies the owner row is intact after the
+// sweep.
+func TestSweep_OwnerReadErrorPreservesFrame(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert cc: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) {
+		return "", errStub("owner /proc transient")
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (owner read error must not delete)", len(frames))
+	}
+	if frames[0].ProcessStartTime != "A" {
+		t.Fatalf("ProcessStartTime = %q, want A (frame untouched)", frames[0].ProcessStartTime)
+	}
+}
