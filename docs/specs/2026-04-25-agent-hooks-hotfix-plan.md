@@ -335,10 +335,11 @@ Install:
 
 - Ensure `~/.codex/config.toml` exists.
 - Preserve existing TOML semantic keys/values; comments, formatting, and ordering are not guaranteed.
+- Preserve an existing `config.toml` file mode; new config files default to owner-readable/writeable (`0600`).
 - Ensure `[features].codex_hooks = true`.
 - Parse both existing `config.toml` and `hooks.json` before writing either file; missing files are treated as empty config/hook maps.
 - If either parse fails, return before writing; both files must remain byte-for-byte unchanged.
-- After successful parse, write `config.toml`, then write `hooks.json`.
+- After successful parse, write `hooks.json` before enabling `config.toml`; hook write failure must leave `config.toml` byte-for-byte unchanged so failed install cannot enable `features.codex_hooks` without current Purdex hooks.
 
 Check:
 

@@ -380,7 +380,7 @@ func TestCodexInstallHooks_EnablesFeatureFlagAndPreservesConfig(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	existing := "model = \"gpt-5\"\n\n[features]\nother = true\ncodex_hooks = false\n"
-	if err := os.WriteFile(configPath, []byte(existing), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(existing), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -397,6 +397,13 @@ func TestCodexInstallHooks_EnablesFeatureFlagAndPreservesConfig(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("config.toml missing %q after install:\n%s", want, text)
 		}
+	}
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("config.toml mode=%#o, want 0600", got)
 	}
 }
 
@@ -450,6 +457,35 @@ func TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite(t *testing.T) {
 		gotHooks, _ := os.ReadFile(hooksPath)
 		if string(gotConfig) != string(originalConfig) || string(gotHooks) != string(badHooks) {
 			t.Fatalf("files changed after malformed hooks; config=%q hooks=%q", gotConfig, gotHooks)
+		}
+	})
+
+	t.Run("hooks write failure leaves config unchanged", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		configPath := filepath.Join(home, ".codex", "config.toml")
+		hooksPath := filepath.Join(home, ".codex", "hooks.json")
+		codexDir := filepath.Dir(configPath)
+		if err := os.MkdirAll(codexDir, 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		originalConfig := []byte("model = \"gpt-5\"\n")
+		if err := os.WriteFile(configPath, originalConfig, 0644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		if err := os.WriteFile(hooksPath, []byte(`{"hooks":{}}`), 0644); err != nil {
+			t.Fatalf("write hooks: %v", err)
+		}
+		if err := os.Chmod(codexDir, 0500); err != nil {
+			t.Fatalf("chmod codex dir: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(codexDir, 0700) })
+		if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("InstallHooks succeeded with unwritable hooks directory")
+		}
+		gotConfig, _ := os.ReadFile(configPath)
+		if string(gotConfig) != string(originalConfig) {
+			t.Fatalf("config changed after hooks write failure; got %q", gotConfig)
 		}
 	})
 }
@@ -540,19 +576,23 @@ func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 		t.Fatal("remove left owned installable event SessionStart")
 	}
 	staleGroups := codexMatcherGroups(staleHooks["IgnoredSynthetic"])
-	if len(staleGroups) != 3 {
-		t.Fatalf("remove kept %d unknown/third-party groups, want 3", len(staleGroups))
+	if len(staleGroups) != 4 {
+		t.Fatalf("remove kept %d unknown/third-party groups, want 4", len(staleGroups))
 	}
+	foundSyntheticCodexPdx := false
 	foundCCPdx := false
 	foundUnknownCodexPdx := false
-	knownCodexEvents := codexKnownEventNames()
+	ownedCodexEvents := codexOwnedCleanupEventNames()
 	for _, groupEntry := range staleGroups {
 		group, _ := groupEntry.(map[string]any)
 		for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
 			m, _ := hookEntry.(map[string]any)
 			cmd, _ := m["command"].(string)
-			if isPdxCommandCodexKnownEvent(cmd, knownCodexEvents) {
-				t.Fatalf("remove left stale non-installable pdx entry: %#v", hookEntry)
+			if isPdxCommandCodexOwnedEvent(cmd, ownedCodexEvents) {
+				t.Fatalf("remove left owned pdx entry: %#v", hookEntry)
+			}
+			if strings.Contains(cmd, "--agent codex IgnoredSynthetic") {
+				foundSyntheticCodexPdx = true
 			}
 			if strings.Contains(cmd, "--agent cc") {
 				foundCCPdx = true
@@ -561,6 +601,9 @@ func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 				foundUnknownCodexPdx = true
 			}
 		}
+	}
+	if !foundSyntheticCodexPdx {
+		t.Fatal("remove dropped non-owned synthetic Codex pdx hook under non-installable key")
 	}
 	if !foundCCPdx {
 		t.Fatal("remove dropped non-codex pdx hook under non-installable key")
@@ -1334,6 +1377,7 @@ func TestIsPdxCommandCodexForEvent(t *testing.T) {
 		{`/usr/local/bin/pdx hook --agent cc Notification`, "Notification", "wrong agent"},
 		{`other-tool hook --agent codex Stop`, "Stop", "non-pdx binary"},
 		{`"/usr/local/bin/pdx" hook --agent codex`, "Stop", "missing event name"},
+		{`pdx exec hook --agent codex SessionStart`, "SessionStart", "hook is not first subcommand"},
 	}
 	for _, tc := range negative {
 		if isPdxCommandCodexForEvent(tc.cmd, tc.event) {

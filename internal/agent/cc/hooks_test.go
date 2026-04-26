@@ -34,6 +34,7 @@ func TestIsPdxCommand_Negative(t *testing.T) {
 		`/usr/bin/bash -c "echo hello"`,
 		``,
 		`pdx-ng hook something`,
+		`pdx exec hook --agent cc SessionStart`,
 	}
 	for _, cmd := range cases {
 		if isPdxCommand(cmd) {
@@ -424,6 +425,7 @@ func TestCCInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 	staleSettingsPath := filepath.Join(dir, "stale-settings.json")
 	stale := map[string]any{
 		"hooks": map[string]any{
+			"Bogus": []any{makePdxEntry("/usr/local/bin/pdx", "cc", "SessionStart")},
 			"IgnoredSynthetic": []any{
 				makePdxEntry("/usr/local/bin/pdx", "cc", "IgnoredSynthetic"),
 				makePdxEntry("/usr/local/bin/pdx", "codex", "IgnoredSynthetic"),
@@ -439,18 +441,28 @@ func TestCCInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 		t.Fatalf("remove stale non-installable hook: %v", err)
 	}
 	staleHooks := hooksMap(t, readSettings(t, staleSettingsPath))
-	staleEntries := toEntrySlice(staleHooks["IgnoredSynthetic"])
-	if len(staleEntries) != 2 {
-		t.Fatalf("remove kept %d non-installable third-party entries, want 2", len(staleEntries))
+	if _, ok := staleHooks["Bogus"]; ok {
+		t.Fatal("remove left owned cc hook filed under unknown key Bogus")
 	}
+	staleEntries := toEntrySlice(staleHooks["IgnoredSynthetic"])
+	if len(staleEntries) != 3 {
+		t.Fatalf("remove kept %d non-owned/third-party entries, want 3", len(staleEntries))
+	}
+	foundSyntheticCCPdx := false
 	foundCodexPdx := false
 	for _, entry := range staleEntries {
 		if entryIsPdx(entry) {
-			t.Fatalf("remove left stale non-installable pdx entry: %#v", entry)
+			t.Fatalf("remove left owned pdx entry: %#v", entry)
+		}
+		if commandEntryContains(entry, "--agent cc IgnoredSynthetic") {
+			foundSyntheticCCPdx = true
 		}
 		if commandEntryContains(entry, "--agent codex") {
 			foundCodexPdx = true
 		}
+	}
+	if !foundSyntheticCCPdx {
+		t.Fatal("remove dropped non-owned synthetic cc hook under non-installable key")
 	}
 	if !foundCodexPdx {
 		t.Fatal("remove dropped non-cc pdx hook under non-installable key")
@@ -628,6 +640,30 @@ func TestCCCheckHooks_ManagedReflectsPdxEntries(t *testing.T) {
 		}
 		if status.Managed {
 			t.Fatal("no pdx entries: Managed=true, want false")
+		}
+	})
+	t.Run("owned pdx under unknown key", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		settingsPath := filepath.Join(home, ".claude", "settings.json")
+		if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		settings := map[string]any{
+			"hooks": map[string]any{
+				"Bogus": []any{makePdxEntry("/usr/local/bin/pdx", "cc", "SessionStart")},
+			},
+		}
+		data, _ := json.MarshalIndent(settings, "", "  ")
+		if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		status, err := NewProvider(nil, nil, nil, nil).CheckHooks()
+		if err != nil {
+			t.Fatalf("CheckHooks: %v", err)
+		}
+		if !status.Managed {
+			t.Fatal("owned pdx under unknown key: Managed=false, want true")
 		}
 	})
 }

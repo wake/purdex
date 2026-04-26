@@ -116,10 +116,10 @@ func installCodexHooks(configPath, hooksPath, pdxPath string) error {
 	}
 	setCodexHooksFeature(config)
 	mergeCodexHooksFile(hooksFile, pdxPath, false)
-	if err := writeCodexConfig(configPath, config); err != nil {
+	if err := writeCodexHooksFile(hooksPath, hooksFile); err != nil {
 		return err
 	}
-	return writeCodexHooksFile(hooksPath, hooksFile)
+	return writeCodexConfig(configPath, config)
 }
 
 // codexHooksManaged reports whether hooks.json contains any pdx-owned
@@ -309,15 +309,33 @@ func writeCodexConfig(path string, config map[string]any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
+	mode, err := existingFileMode(path, 0600)
+	if err != nil {
+		return fmt.Errorf("stat config: %w", err)
+	}
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, buf.Bytes(), mode); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("rename config: %w", err)
 	}
+	if err := os.Chmod(path, mode); err != nil {
+		return fmt.Errorf("chmod config: %w", err)
+	}
 	return nil
+}
+
+func existingFileMode(path string, defaultMode os.FileMode) (os.FileMode, error) {
+	info, err := os.Stat(path)
+	if err == nil {
+		return info.Mode().Perm(), nil
+	}
+	if os.IsNotExist(err) {
+		return defaultMode, nil
+	}
+	return 0, err
 }
 
 func setCodexHooksFeature(config map[string]any) {
@@ -349,9 +367,7 @@ func codexHooksFeatureEnabled(path string) (bool, error) {
 // direct-entry shape. Per-event health assertions must not use this; see
 // isPdxCommandCodexForEvent (PR #616 review Finding #1).
 func isPdxCommandCodex(cmd string) bool {
-	// Match both quoted ("/path/pdx" hook) and unquoted (/path/pdx hook) forms.
-	normalized := strings.ReplaceAll(cmd, `"`, "")
-	return strings.Contains(normalized, "pdx hook")
+	return isPdxCommandCodexOwned(cmd)
 }
 
 // isPdxCommandCodexForEvent reports whether cmd is a well-formed pdx hook
@@ -360,7 +376,7 @@ func isPdxCommandCodex(cmd string) bool {
 //     basename "pdx" (covers "/abs/path/pdx", "pdx", the quoted forms
 //     mergeCodexHooks writes, and paths containing spaces such as
 //     "/Applications/Purdex Beta/pdx").
-//  2. Some later token equals "hook".
+//  2. The first subcommand token equals "hook".
 //  3. Two consecutive tokens "--agent" "codex" appear after "hook".
 //  4. The final non-empty token equals eventName exactly.
 //
@@ -383,17 +399,16 @@ func isPdxCommandCodexForEvent(cmd string, eventName string) bool {
 	if filepath.Base(first) != "pdx" {
 		return false
 	}
-	hasHook := false
 	hasAgentCodex := false
-	for i := 1; i < len(tokens); i++ {
-		if tokens[i] == "hook" {
-			hasHook = true
-		}
+	if len(tokens) < 2 || tokens[1] != "hook" {
+		return false
+	}
+	for i := 2; i < len(tokens); i++ {
 		if tokens[i] == "--agent" && i+1 < len(tokens) && tokens[i+1] == "codex" {
 			hasAgentCodex = true
 		}
 	}
-	if !hasHook || !hasAgentCodex {
+	if !hasAgentCodex {
 		return false
 	}
 	return tokens[len(tokens)-1] == eventName
@@ -595,17 +610,16 @@ func isPdxCommandCodexOwned(cmd string) bool {
 	if len(tokens) == 0 || filepath.Base(tokens[0]) != "pdx" {
 		return false
 	}
-	hasHook := false
 	hasAgentCodex := false
-	for i := 1; i < len(tokens); i++ {
-		if tokens[i] == "hook" {
-			hasHook = true
-		}
+	if len(tokens) < 2 || tokens[1] != "hook" {
+		return false
+	}
+	for i := 2; i < len(tokens); i++ {
 		if tokens[i] == "--agent" && i+1 < len(tokens) && tokens[i+1] == "codex" {
 			hasAgentCodex = true
 		}
 	}
-	return hasHook && hasAgentCodex
+	return hasAgentCodex
 }
 
 func lastCodexCommandToken(cmd string) string {
@@ -625,5 +639,15 @@ func codexKnownEventNames() map[string]bool {
 }
 
 func codexOwnedCleanupEventNames() map[string]bool {
-	return codexKnownEventNames()
+	return map[string]bool{
+		"SessionStart":      true,
+		"UserPromptSubmit":  true,
+		"SubagentStart":     true,
+		"SubagentStop":      true,
+		"Stop":              true,
+		"StopFailure":       true,
+		"Notification":      true,
+		"PermissionRequest": true,
+		"SessionEnd":        true,
+	}
 }

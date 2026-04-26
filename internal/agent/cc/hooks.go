@@ -98,17 +98,14 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 }
 
 // ccHooksManaged reports whether settings.json has any pdx-owned hook
-// entry across the declared event set. Parallel to codex.codexHooksManaged
+// entry across any configured hook key. Parallel to codex.codexHooksManaged
 // — keeps Managed/Installed distinct so the UI Remove button stays
 // enabled on drifted-but-managed state (Finding #2).
 func ccHooksManaged(hooks map[string]any, specs []agent.HookEventSpec) bool {
-	for _, spec := range specs {
-		entries, ok := hooks[spec.Name].([]any)
-		if !ok {
-			continue
-		}
-		for _, entry := range entries {
-			if entryIsPdx(entry) {
+	owned := ccOwnedCleanupEventNames()
+	for _, entries := range hooks {
+		for _, entry := range toEntrySlice(entries) {
+			if entryIsPdxCCKnownEvent(entry, owned) {
 				return true
 			}
 		}
@@ -133,33 +130,34 @@ func mergeClaudeHooks(path, pdxPath string, remove bool) error {
 	if hooks == nil {
 		hooks = make(map[string]any)
 	}
-	for _, spec := range ccEventSpecs {
-		installable := agent.IsInstallableHookSpec(spec)
-		if !remove && !installable {
-			continue
-		}
-		event := spec.Name
-		if remove && !installable {
-			existing, ok := hooks[event]
-			if !ok {
-				continue
-			}
+	if remove {
+		for event, existing := range hooks {
 			entries := filterOutPdx(toEntrySlice(existing))
 			if len(entries) == 0 {
 				delete(hooks, event)
 			} else {
 				hooks[event] = entries
 			}
+		}
+		settings["hooks"] = hooks
+		return writeClaudeSettings(path, settings)
+	}
+	for _, spec := range ccEventSpecs {
+		installable := agent.IsInstallableHookSpec(spec)
+		if !installable {
 			continue
 		}
+		event := spec.Name
 		entries := toEntrySlice(hooks[event])
 		entries = filterOutPdx(entries)
-		if !remove {
-			entries = append(entries, makePdxEntry(pdxPath, "cc", event))
-		}
+		entries = append(entries, makePdxEntry(pdxPath, "cc", event))
 		hooks[event] = entries
 	}
 	settings["hooks"] = hooks
+	return writeClaudeSettings(path, settings)
+}
+
+func writeClaudeSettings(path string, settings map[string]any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
@@ -239,7 +237,7 @@ func filterOutPdx(entries []any) []any {
 }
 
 func filterOutPdxKnownCCEvents(entries []any) []any {
-	known := ccKnownEventNames()
+	known := ccOwnedCleanupEventNames()
 	result := []any{}
 	for _, e := range entries {
 		if !entryIsPdxCCKnownEvent(e, known) {
@@ -250,7 +248,7 @@ func filterOutPdxKnownCCEvents(entries []any) []any {
 }
 
 func entryIsPdx(entry any) bool {
-	return entryIsPdxCCKnownEvent(entry, ccKnownEventNames())
+	return entryIsPdxCCKnownEvent(entry, ccOwnedCleanupEventNames())
 }
 
 func entryIsPdxCCKnownEvent(entry any, known map[string]bool) bool {
@@ -299,17 +297,16 @@ func isPdxCommandCC(cmd string, eventOK func(string) bool) bool {
 	if len(tokens) == 0 || filepath.Base(tokens[0]) != "pdx" {
 		return false
 	}
-	hasHook := false
 	hasAgentCC := false
-	for i := 1; i < len(tokens); i++ {
-		if tokens[i] == "hook" {
-			hasHook = true
-		}
+	if len(tokens) < 2 || tokens[1] != "hook" {
+		return false
+	}
+	for i := 2; i < len(tokens); i++ {
 		if tokens[i] == "--agent" && i+1 < len(tokens) && tokens[i+1] == "cc" {
 			hasAgentCC = true
 		}
 	}
-	return hasHook && hasAgentCC && eventOK(tokens[len(tokens)-1])
+	return hasAgentCC && eventOK(tokens[len(tokens)-1])
 }
 
 func tokenizeCCCommand(cmd string) []string {
@@ -355,4 +352,18 @@ func ccKnownEventNames() map[string]bool {
 		known[spec.Name] = true
 	}
 	return known
+}
+
+func ccOwnedCleanupEventNames() map[string]bool {
+	return map[string]bool{
+		"SessionStart":      true,
+		"UserPromptSubmit":  true,
+		"SubagentStart":     true,
+		"SubagentStop":      true,
+		"Stop":              true,
+		"StopFailure":       true,
+		"Notification":      true,
+		"PermissionRequest": true,
+		"SessionEnd":        true,
+	}
 }
