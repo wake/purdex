@@ -71,6 +71,7 @@ func (p *Provider) Events() []agent.HookEventSpec {
 			EmitsStatus: append([]agent.Status(nil), spec.EmitsStatus...),
 			Description: spec.Description,
 			FutureOnly:  spec.FutureOnly,
+			Handling:    spec.Handling,
 		}
 		// Ensure a detail-only spec round-trips as an explicit empty slice,
 		// not nil — callers distinguish "explicitly empty" from "unknown".
@@ -81,8 +82,8 @@ func (p *Provider) Events() []agent.HookEventSpec {
 	return out
 }
 
-// eventNames returns the ordered event Name list for installer / check
-// iteration, derived from ccEventSpecs so there is no parallel SSoT.
+// eventNames returns the ordered installable event Name list for installer /
+// check iteration, derived from ccEventSpecs so there is no parallel SSoT.
 func (p *Provider) eventNames() []string {
 	return ccEventNames()
 }
@@ -93,6 +94,9 @@ func (p *Provider) eventNames() []string {
 func ccEventNames() []string {
 	out := make([]string, 0, len(ccEventSpecs))
 	for _, spec := range ccEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
 		out = append(out, spec.Name)
 	}
 	return out

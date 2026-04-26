@@ -50,7 +50,13 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		return agent.HookStatus{}, fmt.Errorf("parse settings.json: %w", err)
 	}
 	hooks, _ := settings["hooks"].(map[string]any)
-	specs := p.Events()
+	allSpecs := p.Events()
+	specs := make([]agent.HookEventSpec, 0, len(allSpecs))
+	for _, spec := range allSpecs {
+		if agent.IsInstallableHookSpec(spec) {
+			specs = append(specs, spec)
+		}
+	}
 	events := make(map[string]agent.HookEventInfo, len(specs))
 	var issues []string
 	var upgrades []string
@@ -78,7 +84,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			allInstalled = false
 		}
 	}
-	managed := ccHooksManaged(hooks, specs)
+	managed := ccHooksManaged(hooks, allSpecs)
 	return agent.HookStatus{
 		Installed:         allInstalled,
 		Managed:           managed,
@@ -127,7 +133,11 @@ func mergeClaudeHooks(path, pdxPath string, remove bool) error {
 	if hooks == nil {
 		hooks = make(map[string]any)
 	}
-	for _, event := range ccEventNames() {
+	for _, spec := range ccEventSpecs {
+		if !remove && !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		event := spec.Name
 		entries := toEntrySlice(hooks[event])
 		entries = filterOutPdx(entries)
 		if !remove {

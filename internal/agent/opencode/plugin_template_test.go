@@ -1,6 +1,8 @@
 package opencode
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -161,6 +163,54 @@ func TestValidateSpecsCoverEmitted_SpecNotInEmit(t *testing.T) {
 	extended = append(extended, agent.HookEventSpec{Name: "Phantom"})
 	if err := validateSpecsCoverEmitted(body, extended); err == nil {
 		t.Fatal("expected error for spec-not-in-emit; got nil")
+	}
+}
+
+func TestValidateSpecsCoverEmitted_IgnoresNonInstallableSpecs(t *testing.T) {
+	body := renderManagedPlugin("/fake/pdx")
+	extended := append([]agent.HookEventSpec(nil), opencodeEventSpecs...)
+	extended = append(extended,
+		agent.HookEventSpec{Name: "IgnoredSynthetic", Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
+		agent.HookEventSpec{Name: "UnsupportedSynthetic", Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
+	)
+	if err := validateSpecsCoverEmitted(body, extended); err != nil {
+		t.Fatalf("validateSpecsCoverEmitted should ignore non-installable specs; got %v", err)
+	}
+}
+
+func TestOpenCodeCheckHooks_ExcludesNonInstallableSpecs(t *testing.T) {
+	original := opencodeEventSpecs
+	opencodeEventSpecs = append(append([]agent.HookEventSpec(nil), opencodeEventSpecs...),
+		agent.HookEventSpec{Name: "IgnoredSynthetic", Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
+		agent.HookEventSpec{Name: "UnsupportedSynthetic", Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
+	)
+	t.Cleanup(func() { opencodeEventSpecs = original })
+
+	for _, name := range opencodeEventNames() {
+		if name == "IgnoredSynthetic" || name == "UnsupportedSynthetic" {
+			t.Fatalf("opencodeEventNames included non-installable spec %q", name)
+		}
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	SetResolveCanonicalPdxPathForTesting(t, func() (string, bool) { return "/usr/local/bin/pdx", true })
+	p := NewProvider()
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("InstallHooks: %v", err)
+	}
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "pdx-agent-hooks.js")
+	if _, err := os.Stat(pluginPath); err != nil {
+		t.Fatalf("expected managed plugin at %s: %v", pluginPath, err)
+	}
+	for _, name := range []string{"IgnoredSynthetic", "UnsupportedSynthetic"} {
+		if _, ok := status.Events[name]; ok {
+			t.Errorf("CheckHooks.Events included non-installable event %q", name)
+		}
 	}
 }
 

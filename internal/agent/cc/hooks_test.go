@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wake/purdex/internal/agent"
 )
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
@@ -341,6 +343,73 @@ func TestCCInstallHooks_WritesAllEventsFromEventsList(t *testing.T) {
 	}
 	if len(hooks) != len(events) {
 		t.Errorf("settings.json hooks len=%d, want %d (one per Events())", len(hooks), len(events))
+	}
+}
+
+func TestCCInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
+	original := ccEventSpecs
+	ccEventSpecs = append(append([]agent.HookEventSpec(nil), ccEventSpecs...),
+		agent.HookEventSpec{Name: "IgnoredSynthetic", Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
+		agent.HookEventSpec{Name: "UnsupportedSynthetic", Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
+	)
+	t.Cleanup(func() { ccEventSpecs = original })
+
+	for _, name := range ccEventNames() {
+		if name == "IgnoredSynthetic" || name == "UnsupportedSynthetic" {
+			t.Fatalf("ccEventNames included non-installable spec %q", name)
+		}
+	}
+
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	if err := mergeClaudeHooks(settingsPath, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("mergeClaudeHooks: %v", err)
+	}
+	hooks := hooksMap(t, readSettings(t, settingsPath))
+	for _, name := range []string{"IgnoredSynthetic", "UnsupportedSynthetic"} {
+		if _, ok := hooks[name]; ok {
+			t.Errorf("mergeClaudeHooks wrote non-installable event %q", name)
+		}
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	installedPath := filepath.Join(claudeDir, "settings.json")
+	if err := mergeClaudeHooks(installedPath, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("seed install: %v", err)
+	}
+	status, err := NewProvider(nil, nil, nil, nil).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	for _, name := range []string{"IgnoredSynthetic", "UnsupportedSynthetic"} {
+		if _, ok := status.Events[name]; ok {
+			t.Errorf("CheckHooks.Events included non-installable event %q", name)
+		}
+	}
+
+	staleSettingsPath := filepath.Join(dir, "stale-settings.json")
+	stale := map[string]any{
+		"hooks": map[string]any{
+			"IgnoredSynthetic": []any{makePdxEntry("/usr/local/bin/pdx", "cc", "IgnoredSynthetic")},
+		},
+	}
+	staleData, _ := json.MarshalIndent(stale, "", "  ")
+	if err := os.WriteFile(staleSettingsPath, staleData, 0644); err != nil {
+		t.Fatalf("write stale settings: %v", err)
+	}
+	if err := mergeClaudeHooks(staleSettingsPath, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("remove stale non-installable hook: %v", err)
+	}
+	staleHooks := hooksMap(t, readSettings(t, staleSettingsPath))
+	for _, entry := range toEntrySlice(staleHooks["IgnoredSynthetic"]) {
+		if entryIsPdx(entry) {
+			t.Fatalf("remove left stale non-installable pdx entry: %#v", entry)
+		}
 	}
 }
 

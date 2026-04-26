@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/wake/purdex/internal/agent"
 )
 
 // ---- filterOutPdxCodex ----
@@ -359,6 +361,74 @@ func TestCodexInstallHooks_Writes9EventsAfterExpansion(t *testing.T) {
 		groups := codexMatcherGroups(entries)
 		if len(groups) == 0 {
 			t.Errorf("event %q has no matcher groups", name)
+		}
+	}
+}
+
+func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
+	original := codexEventSpecs
+	codexEventSpecs = append(append([]agent.HookEventSpec(nil), codexEventSpecs...),
+		agent.HookEventSpec{Name: "IgnoredSynthetic", Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
+		agent.HookEventSpec{Name: "UnsupportedSynthetic", Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
+	)
+	t.Cleanup(func() { codexEventSpecs = original })
+
+	for _, name := range codexEventNames() {
+		if name == "IgnoredSynthetic" || name == "UnsupportedSynthetic" {
+			t.Fatalf("codexEventNames included non-installable spec %q", name)
+		}
+	}
+
+	dir := t.TempDir()
+	hooksPath := filepath.Join(dir, "hooks.json")
+	if err := mergeCodexHooks(hooksPath, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("mergeCodexHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, hooksPath))
+	for _, name := range []string{"IgnoredSynthetic", "UnsupportedSynthetic"} {
+		if _, ok := hooks[name]; ok {
+			t.Errorf("mergeCodexHooks wrote non-installable event %q", name)
+		}
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	homeHooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := mergeCodexHooks(homeHooksPath, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("seed install: %v", err)
+	}
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	for _, name := range []string{"IgnoredSynthetic", "UnsupportedSynthetic"} {
+		if _, ok := status.Events[name]; ok {
+			t.Errorf("CheckHooks.Events included non-installable event %q", name)
+		}
+	}
+
+	staleHooksPath := filepath.Join(dir, "stale-hooks.json")
+	stale := map[string]any{
+		"hooks": map[string]any{
+			"IgnoredSynthetic": []any{pdxGroupEntry("IgnoredSynthetic")},
+		},
+	}
+	staleData, _ := json.MarshalIndent(stale, "", "  ")
+	if err := os.WriteFile(staleHooksPath, staleData, 0644); err != nil {
+		t.Fatalf("write stale hooks: %v", err)
+	}
+	if err := mergeCodexHooks(staleHooksPath, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("remove stale non-installable hook: %v", err)
+	}
+	staleHooks := hooksSection(t, readHooksFile(t, staleHooksPath))
+	for _, groupEntry := range codexMatcherGroups(staleHooks["IgnoredSynthetic"]) {
+		group, _ := groupEntry.(map[string]any)
+		for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
+			m, _ := hookEntry.(map[string]any)
+			cmd, _ := m["command"].(string)
+			if isPdxCommandCodex(cmd) {
+				t.Fatalf("remove left stale non-installable pdx entry: %#v", hookEntry)
+			}
 		}
 	}
 }

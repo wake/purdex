@@ -94,7 +94,13 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	// broken switch/case, tampered pdxPath literal) collapses every
 	// declared event to Installed=false — "managed body drifted,
 	// reinstall" matches the plugin's all-or-nothing semantics.
-	specs := p.Events()
+	allSpecs := p.Events()
+	specs := make([]agent.HookEventSpec, 0, len(allSpecs))
+	for _, spec := range allSpecs {
+		if agent.IsInstallableHookSpec(spec) {
+			specs = append(specs, spec)
+		}
+	}
 	trustedPath, resolved := resolveCanonicalPdxPath()
 	events := make(map[string]agent.HookEventInfo, len(specs))
 	if !resolved {

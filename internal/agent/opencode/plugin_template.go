@@ -257,6 +257,9 @@ func validateSpecsCoverEmitted(body string, specs []agent.HookEventSpec) error {
 	}
 	declared := make(map[string]bool, len(specs))
 	for _, spec := range specs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
 		declared[spec.Name] = true
 	}
 	var missingInSpec []string

@@ -78,6 +78,7 @@ func (p *Provider) Events() []agent.HookEventSpec {
 			EmitsStatus: append([]agent.Status(nil), spec.EmitsStatus...),
 			Description: spec.Description,
 			FutureOnly:  spec.FutureOnly,
+			Handling:    spec.Handling,
 		}
 		if out[i].EmitsStatus == nil {
 			out[i].EmitsStatus = []agent.Status{}
@@ -86,8 +87,8 @@ func (p *Provider) Events() []agent.HookEventSpec {
 	return out
 }
 
-// eventNames returns the ordered event Name list for installer / check
-// iteration, derived from codexEventSpecs so there is no parallel SSoT.
+// eventNames returns the ordered installable event Name list for installer /
+// check iteration, derived from codexEventSpecs so there is no parallel SSoT.
 func (p *Provider) eventNames() []string {
 	return codexEventNames()
 }
@@ -97,6 +98,9 @@ func (p *Provider) eventNames() []string {
 func codexEventNames() []string {
 	out := make([]string, 0, len(codexEventSpecs))
 	for _, spec := range codexEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
 		out = append(out, spec.Name)
 	}
 	return out

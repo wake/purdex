@@ -53,7 +53,13 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		return agent.HookStatus{}, fmt.Errorf("parse hooks.json: %w", err)
 	}
 	hooks, _ := hooksFile["hooks"].(map[string]any)
-	specs := p.Events()
+	allSpecs := p.Events()
+	specs := make([]agent.HookEventSpec, 0, len(allSpecs))
+	for _, spec := range allSpecs {
+		if agent.IsInstallableHookSpec(spec) {
+			specs = append(specs, spec)
+		}
+	}
 	events := make(map[string]agent.HookEventInfo, len(specs))
 	var issues []string
 	var upgrades []string
@@ -75,7 +81,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			}
 		}
 	}
-	managed := codexHooksManaged(hooks, specs)
+	managed := codexHooksManaged(hooks, allSpecs)
 	return agent.HookStatus{
 		Installed:         allInstalled,
 		Managed:           managed,
@@ -188,7 +194,11 @@ func mergeCodexHooks(path, pdxPath string, remove bool) error {
 	if hooks == nil {
 		hooks = make(map[string]any)
 	}
-	for _, event := range codexEventNames() {
+	for _, spec := range codexEventSpecs {
+		if !remove && !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		event := spec.Name
 		entries := filterOutPdxCodex(hooks[event])
 		if !remove {
 			entries = append(entries, map[string]any{
