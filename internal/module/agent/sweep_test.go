@@ -2084,6 +2084,87 @@ func TestSweep_CanonicalizePreservesChildNativeAfterPartialRecovery(t *testing.T
 	}
 }
 
+// IT10r (review F2 — round 2 defender) — owned-state candidate with NO
+// existing parent proxy ref. The hot path failed to attach (e.g.
+// readProcessInfoFn transient error during PPID walk) and the child
+// then accumulated owned native state. Without this recovery path,
+// candidateHasOwnedState would early-skip and the partial would
+// persist forever: parent has no proxy ref to claim the child, so
+// projection_dedup cannot hide it; the child would render as a
+// separate top-frame indefinitely.
+//
+// Recovery: idempotently attach proxy ref on ancestor (enables
+// projection_dedup at next read) but skip delete (preserves owned
+// native state). MetricPartialCanonicalizationCreated +1 marks the
+// deliberate partial; MetricSweepCanonicalized stays unchanged
+// (semantics: only fully canonicalized rows count).
+func TestSweep_CanonicalizeAttachesAncestorProxyForOwnedStateCandidate(t *testing.T) {
+	m := newSweepTestModule(t)
+	// cc frame with EMPTY Subagents — hot path failed to attach.
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
+		ProcessStartTime: "t100",
+		Status:           agentpkg.StatusIdle, StartedAt: 50, LastSeenAt: 50, Verified: true,
+	}); err != nil {
+		t.Fatalf("Upsert cc: %v", err)
+	}
+	// codex standalone, owned native subagent state.
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID: "%5", AgentType: "codex", PID: 200, PPID: 100,
+		ProcessStartTime: "t200",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:        "task-defender-1",
+			Type:      "codex",
+			StartedAt: 70,
+			IsProxy:   false, // NATIVE — must be preserved
+		}},
+		Status: agentpkg.StatusRunning, StartedAt: 51, LastSeenAt: 51, Verified: true,
+	}); err != nil {
+		t.Fatalf("Upsert codex + native ref: %v", err)
+	}
+
+	installSweepCanonicalSeams(t,
+		map[int]bool{100: true, 200: true},
+		map[int]string{100: "t100", 200: "t200"},
+		map[int]int{200: 100},
+	)
+
+	startSweep := agentpkg.MetricSweepCanonicalized.Value()
+	startPartial := agentpkg.MetricPartialCanonicalizationCreated.Value()
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 2 {
+		t.Fatalf("frames = %+v, want 2 (codex row preserved with owned state)", frames)
+	}
+	var cc, codex *store.Frame
+	for i := range frames {
+		switch frames[i].AgentType {
+		case "cc":
+			cc = &frames[i]
+		case "codex":
+			codex = &frames[i]
+		}
+	}
+	if cc == nil || codex == nil {
+		t.Fatalf("frames = %+v, missing cc or codex", frames)
+	}
+	if len(cc.Subagents) != 1 || !cc.Subagents[0].IsProxy || cc.Subagents[0].SourcePID != 200 {
+		t.Fatalf("cc.Subagents = %+v, want exactly 1 codex IsProxy (newly attached by F2)", cc.Subagents)
+	}
+	if len(codex.Subagents) != 1 || codex.Subagents[0].IsProxy || codex.Subagents[0].ID != "task-defender-1" {
+		t.Fatalf("codex.Subagents = %+v, want native task-defender-1 preserved (owned state)", codex.Subagents)
+	}
+	if delta := agentpkg.MetricSweepCanonicalized.Value() - startSweep; delta != 0 {
+		t.Fatalf("MetricSweepCanonicalized delta = %d, want 0 (delete deliberately skipped)", delta)
+	}
+	if delta := agentpkg.MetricPartialCanonicalizationCreated.Value() - startPartial; delta != 1 {
+		t.Fatalf("MetricPartialCanonicalizationCreated delta = %d, want 1 (deliberate partial: attach without delete)", delta)
+	}
+}
+
 // IT10o — candidate carrying ONLY stale (dead) IsProxy refs is folded
 // (stale ref dropped along with the row; equivalent to sweep prune
 // detaching it then sweep folding next tick).
@@ -2374,8 +2455,20 @@ func TestFindCanonicalAncestor_ReturnsFalseOnReadProcessInfoTransientError(t *te
 }
 
 // IT10p — candidate carrying a LIVE identity-verified IsProxy ref is
-// skipped. The candidate is itself acting as ancestor for some other
-// sub-tree; folding it would lose that role.
+// preserved as a frame (the candidate itself is acting as ancestor for
+// some other sub-tree; folding its row would lose that role) BUT the
+// canonical proxy ref is still attached on the higher ancestor so the
+// pane projection consolidates the whole tree under one top frame.
+//
+// Round 2 defender (review F2) reorganization: owned-state guard no
+// longer early-skips before findCanonicalAncestor. Instead, when a
+// canonical ancestor exists AND the candidate carries owned state,
+// sweep idempotently attaches the proxy ref on the ancestor (so
+// projection_dedup can hide + merge the candidate at read time) and
+// skips delete (so the candidate's owned state is preserved). Net
+// effect for IT10p: cc gains a codex IsProxy ref; codex row stays put
+// with its opencode IsProxy ref intact; projection sees a single cc
+// top frame with [codex IsProxy + opencode IsProxy] merged refs.
 func TestSweep_CanonicalizeSkipsCandidateWithLiveProxy(t *testing.T) {
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{
@@ -2392,7 +2485,7 @@ func TestSweep_CanonicalizeSkipsCandidateWithLiveProxy(t *testing.T) {
 			ID: "proxy:opencode:300:t300", Type: "opencode",
 			SourcePID: 300, SourceStartTime: "t300", IsProxy: true,
 		}},
-		Status: agentpkg.StatusRunning, StartedAt: 50, LastSeenAt: 50, Verified: true,
+		Status: agentpkg.StatusRunning, StartedAt: 51, LastSeenAt: 51, Verified: true,
 	}); err != nil {
 		t.Fatalf("Upsert codex with live proxy: %v", err)
 	}
@@ -2403,7 +2496,8 @@ func TestSweep_CanonicalizeSkipsCandidateWithLiveProxy(t *testing.T) {
 		map[int]int{200: 100},
 	)
 
-	startMetric := agentpkg.MetricSweepCanonicalized.Value()
+	startSweep := agentpkg.MetricSweepCanonicalized.Value()
+	startPartial := agentpkg.MetricPartialCanonicalizationCreated.Value()
 	if err := m.sweepOnce(); err != nil {
 		t.Fatalf("sweepOnce: %v", err)
 	}
@@ -2412,12 +2506,28 @@ func TestSweep_CanonicalizeSkipsCandidateWithLiveProxy(t *testing.T) {
 	if len(frames) != 2 {
 		t.Fatalf("frames = %+v, want 2 (codex preserved as sub-ancestor)", frames)
 	}
-	for _, f := range frames {
-		if f.AgentType == "cc" && len(f.Subagents) != 0 {
-			t.Fatalf("cc.Subagents = %+v, want empty (codex must not be folded — owns live IsProxy)", f.Subagents)
+	var cc, codex *store.Frame
+	for i := range frames {
+		switch frames[i].AgentType {
+		case "cc":
+			cc = &frames[i]
+		case "codex":
+			codex = &frames[i]
 		}
 	}
-	if delta := agentpkg.MetricSweepCanonicalized.Value() - startMetric; delta != 0 {
-		t.Fatalf("MetricSweepCanonicalized delta = %d, want 0 (gated)", delta)
+	if cc == nil || codex == nil {
+		t.Fatalf("frames = %+v, missing cc or codex", frames)
+	}
+	if len(cc.Subagents) != 1 || !cc.Subagents[0].IsProxy || cc.Subagents[0].SourcePID != 200 {
+		t.Fatalf("cc.Subagents = %+v, want exactly 1 codex IsProxy attached by F2 attach-only recovery", cc.Subagents)
+	}
+	if len(codex.Subagents) != 1 || !codex.Subagents[0].IsProxy || codex.Subagents[0].SourcePID != 300 {
+		t.Fatalf("codex.Subagents = %+v, want preserved opencode IsProxy (sub-tree role intact)", codex.Subagents)
+	}
+	if delta := agentpkg.MetricSweepCanonicalized.Value() - startSweep; delta != 0 {
+		t.Fatalf("MetricSweepCanonicalized delta = %d, want 0 (delete deliberately skipped)", delta)
+	}
+	if delta := agentpkg.MetricPartialCanonicalizationCreated.Value() - startPartial; delta != 1 {
+		t.Fatalf("MetricPartialCanonicalizationCreated delta = %d, want 1 (deliberate partial: attach without delete)", delta)
 	}
 }

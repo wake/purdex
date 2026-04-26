@@ -187,55 +187,91 @@ func (m *Module) canonicalizePane(paneID string, broadcastTs int64) {
 		if sterr != nil || actualStart != candidate.ProcessStartTime {
 			continue
 		}
-		// PR-3.5b §2.2.1 — protect candidates that own LIVE state.
-		// Mirrors hot-path canonicalizeDescendantsAfterUpsert via the
-		// shared candidateHasOwnedState helper (frame_ops.go) so any
-		// drift between hot-path and sweep is impossible at compile
-		// time.
-		if candidateHasOwnedState(candidate) {
-			continue
-		}
 		ancestor, found := m.findCanonicalAncestor(candidate, framesByPID)
 		if !found {
 			continue
 		}
-		ref := agentpkg.SubagentRef{
-			ID:              fmt.Sprintf("proxy:%s:%d:%s", candidate.AgentType, candidate.PID, candidate.ProcessStartTime),
-			Type:            candidate.AgentType,
-			StartedAt:       broadcastTs,
-			SourcePID:       candidate.PID,
-			SourceStartTime: candidate.ProcessStartTime,
-			IsProxy:         true,
-		}
-		attached, parentStored, aerr := m.attachProxyRefWithRetry(ancestor, ref, broadcastTs)
-		if aerr != nil || !attached {
-			continue
-		}
-		// Review F1 (round 2 attacker) — revalidate ancestor identity
-		// AFTER attach, BEFORE delete. findCanonicalAncestor only
-		// proves the ancestor was live at classification time; the
-		// ancestor PID may die between then and this point. Without
-		// this gate, we would attach a proxy ref onto a dead parent
-		// and then delete the live child row, severing the only DB
-		// link to the live child until its next hook event (the dead
-		// parent gets cleared on the next sweep tick along with all
-		// its Subagents).
+		// Review F2 (round 2 defender) — owned-state classification
+		// happens AFTER ancestor lookup so we can branch on whether
+		// the parent already claims this candidate via a matching
+		// proxy ref.
 		//
-		// On revalidation failure: leave the proxy ref attached
-		// (idempotent next tick if the parent is gone; harmless if
-		// somehow still alive) and skip delete. The standalone child
-		// row stays and continues to serve until either it is
-		// canonicalized into a healthier ancestor next tick or the
-		// parent is cleared and the ref vanishes with it. Mirrors the
-		// "no rollback on partial" Hybrid B+ rule.
-		if !isPidAliveFn(parentStored.PID) {
-			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
-			canonicalizedAny = true
-			anyAncestor = parentStored
+		// Four cases:
+		//
+		//  parent has ref + owned state    → silent skip (already
+		//                                   canonical at projection
+		//                                   layer; nothing to do; no
+		//                                   broadcast spam every tick)
+		//  parent has ref + no owned state → delete-only path (the
+		//                                   row was a partial leftover
+		//                                   from a successful hot-path
+		//                                   attach + failed delete;
+		//                                   sweep finishes the cleanup)
+		//  parent missing ref + owned state    → attach-only recovery
+		//                                       (the F2 case; closes
+		//                                       round 2 defender high.
+		//                                       Without this, an owned-
+		//                                       state child whose hot
+		//                                       path failed to attach
+		//                                       would never converge —
+		//                                       projection_dedup needs
+		//                                       a proxy ref on the
+		//                                       parent to hide the
+		//                                       child)
+		//  parent missing ref + no owned state → attach + delete (main
+		//                                       canonicalization path)
+		parentHasMatchingProxy := subagentsContainProxySender(ancestor.Subagents, candidate.PID, candidate.ProcessStartTime)
+		ownedState := candidateHasOwnedState(candidate)
+		if parentHasMatchingProxy && ownedState {
 			continue
 		}
-		actualAncestorStart, ancestorErr := processStartTimeFn(parentStored.PID)
-		if ancestorErr != nil || actualAncestorStart != parentStored.ProcessStartTime {
+		parentStored := ancestor
+		if !parentHasMatchingProxy {
+			ref := agentpkg.SubagentRef{
+				ID:              fmt.Sprintf("proxy:%s:%d:%s", candidate.AgentType, candidate.PID, candidate.ProcessStartTime),
+				Type:            candidate.AgentType,
+				StartedAt:       broadcastTs,
+				SourcePID:       candidate.PID,
+				SourceStartTime: candidate.ProcessStartTime,
+				IsProxy:         true,
+			}
+			attached, ps, aerr := m.attachProxyRefWithRetry(ancestor, ref, broadcastTs)
+			if aerr != nil || !attached {
+				continue
+			}
+			parentStored = ps
+			// Review F1 (round 2 attacker) — revalidate ancestor identity
+			// AFTER attach, BEFORE delete. findCanonicalAncestor only
+			// proves the ancestor was live at classification time; the
+			// ancestor PID may die between then and this point. Without
+			// this gate, we would attach a proxy ref onto a dead parent
+			// and then delete the live child row, severing the only DB
+			// link to the live child until its next hook event.
+			//
+			// On revalidation failure: leave the proxy ref attached
+			// (the dead parent is cleared on the next sweep tick along
+			// with all its Subagents) and skip delete. Mirrors the
+			// "no rollback on partial" Hybrid B+ rule.
+			if !isPidAliveFn(parentStored.PID) {
+				agentpkg.MetricPartialCanonicalizationCreated.Add(1)
+				canonicalizedAny = true
+				anyAncestor = parentStored
+				continue
+			}
+			actualAncestorStart, ancestorErr := processStartTimeFn(parentStored.PID)
+			if ancestorErr != nil || actualAncestorStart != parentStored.ProcessStartTime {
+				agentpkg.MetricPartialCanonicalizationCreated.Add(1)
+				canonicalizedAny = true
+				anyAncestor = parentStored
+				continue
+			}
+		}
+		if ownedState {
+			// Review F2 — deliberate partial: attach succeeded (or was
+			// already there), but the candidate carries owned native
+			// state we must not lose. Skip delete; projection_dedup
+			// hides + merges this child's Subagents into the parent
+			// projection at read time.
 			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
 			canonicalizedAny = true
 			anyAncestor = parentStored
