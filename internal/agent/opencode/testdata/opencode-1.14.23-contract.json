@@ -15,7 +15,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/session.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "254-260"
+        "lineRange": "254-260",
+        "sampleRef": "samples.session.created.event.type"
       }
     },
     {
@@ -25,7 +26,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/permission/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "75-76"
+        "lineRange": "75-76",
+        "sampleRef": "samples.permission.asked.event.type"
       }
     },
     {
@@ -35,7 +37,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/question/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "61-68,96-98"
+        "lineRange": "61-68,96-98",
+        "sampleRef": "samples.question.asked.event.type"
       }
     },
     {
@@ -45,7 +48,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/session.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "281-288"
+        "lineRange": "281-288",
+        "sampleRef": "samples.session.error.event.type"
       }
     },
     {
@@ -55,7 +59,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/status.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "28-42"
+        "lineRange": "28-42",
+        "sampleRef": "samples.session.idle.event.type"
       }
     },
     {
@@ -65,7 +70,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/session.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "268-273"
+        "lineRange": "268-273",
+        "sampleRef": "samples.session.deleted.event.type"
       }
     },
     {
@@ -75,7 +81,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "230-242"
+        "lineRange": "230-242",
+        "sampleRef": "samples.chat.message.eventKey"
       }
     },
     {
@@ -85,7 +92,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "265-268"
+        "lineRange": "265-268",
+        "sampleRef": "samples.tool.execute.before.eventKey"
       }
     },
     {
@@ -95,7 +103,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "273-280"
+        "lineRange": "273-280",
+        "sampleRef": "samples.tool.execute.after.eventKey"
       }
     }
   ],
@@ -107,7 +116,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/session.ts and https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/status.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "session.ts:249-260,281-288; status.ts:37-42"
+        "lineRange": "session.ts:249-260,281-288; status.ts:37-42",
+        "sampleRef": "samples.session.created.event.properties.sessionID"
       }
     },
     {
@@ -117,7 +127,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/permission/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "40-49,75-76"
+        "lineRange": "40-49,75-76",
+        "sampleRef": "samples.permission.asked.event.properties.permission"
       }
     },
     {
@@ -127,7 +138,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/permission/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "40-49,75-76"
+        "lineRange": "40-49,75-76",
+        "sampleRef": "samples.permission.asked.event.properties.patterns"
       }
     },
     {
@@ -137,7 +149,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/question/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "61-68,96-98"
+        "lineRange": "61-68,96-98",
+        "sampleRef": "samples.question.asked.event.properties.questions"
       }
     },
     {
@@ -147,7 +160,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/session.ts and https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/message-v2.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "session.ts:281-288; message-v2.ts:443-454,529-536"
+        "lineRange": "session.ts:281-288; message-v2.ts:443-454,529-536",
+        "sampleRef": "samples.session.error.event.properties.error.name"
       }
     },
     {
@@ -157,7 +171,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/session.ts and https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/util/error.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "session.ts:281-288; util/error.ts:29-30,72"
+        "lineRange": "session.ts:281-288; util/error.ts:29-30,72",
+        "sampleRef": "samples.session.error.event.properties.error.data.message"
       }
     },
     {
@@ -167,7 +182,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "233-240"
+        "lineRange": "233-240",
+        "sampleRef": "samples.chat.message.input.model.providerID"
       }
     },
     {
@@ -177,7 +193,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "233-240"
+        "lineRange": "233-240",
+        "sampleRef": "samples.chat.message.input.model.modelID"
       }
     },
     {
@@ -187,7 +204,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "233-240,265-280"
+        "lineRange": "233-240,265-280",
+        "sampleRef": "samples.chat.message.input.sessionID"
       }
     },
     {
@@ -197,7 +215,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "233-240"
+        "lineRange": "233-240",
+        "sampleRef": "samples.chat.message.input.messageID"
       }
     },
     {
@@ -207,7 +226,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "233-240"
+        "lineRange": "233-240",
+        "sampleRef": "samples.chat.message.input.agent"
       }
     },
     {
@@ -217,7 +237,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts and https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/message-v2.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "plugin/index.ts:233-242; message-v2.ts:529-544"
+        "lineRange": "plugin/index.ts:233-242; message-v2.ts:529-544",
+        "sampleRef": "samples.chat.message.output.message.id"
       }
     },
     {
@@ -227,7 +248,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts and https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/message-v2.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "plugin/index.ts:233-242; message-v2.ts:529-544"
+        "lineRange": "plugin/index.ts:233-242; message-v2.ts:529-544",
+        "sampleRef": "samples.chat.message.output.message.agent"
       }
     },
     {
@@ -237,7 +259,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "265-280"
+        "lineRange": "265-280",
+        "sampleRef": "samples.tool.execute.before.input.tool"
       }
     },
     {
@@ -247,7 +270,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "265-280"
+        "lineRange": "265-280",
+        "sampleRef": "samples.tool.execute.before.input.callID"
       }
     },
     {
@@ -257,7 +281,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/prompt.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "574-583"
+        "lineRange": "574-583",
+        "sampleRef": "samples.tool.execute.before.output.args.subagent_type"
       }
     },
     {
@@ -267,7 +292,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "265-268"
+        "lineRange": "265-268",
+        "sampleRef": "samples.tool.execute.before.output.args.agent"
       }
     },
     {
@@ -277,7 +303,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/prompt.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "574-583"
+        "lineRange": "574-583",
+        "sampleRef": "samples.tool.execute.before.output.args.description"
       }
     },
     {
@@ -287,7 +314,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/prompt.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "574-583"
+        "lineRange": "574-583",
+        "sampleRef": "samples.tool.execute.before.output.args.prompt"
       }
     },
     {
@@ -297,7 +325,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "273-280"
+        "lineRange": "273-280",
+        "sampleRef": "samples.tool.execute.after.output.title"
       }
     },
     {
@@ -307,7 +336,8 @@
         "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
         "tag": "v1.14.23",
         "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
-        "lineRange": "273-280"
+        "lineRange": "273-280",
+        "sampleRef": "samples.tool.execute.after.output.output"
       }
     }
   ],
@@ -377,6 +407,7 @@
       }
     },
     "chat.message": {
+      "eventKey": "chat.message",
       "input": {
         "sessionID": "ses_01",
         "agent": "build",
@@ -389,6 +420,7 @@
       }
     },
     "tool.execute.before": {
+      "eventKey": "tool.execute.before",
       "input": { "tool": "task", "sessionID": "ses_01", "callID": "part_01" },
       "output": {
         "args": {
@@ -400,6 +432,7 @@
       }
     },
     "tool.execute.after": {
+      "eventKey": "tool.execute.after",
       "input": { "tool": "task", "sessionID": "ses_01", "callID": "part_01" },
       "output": {
         "title": "Task complete",

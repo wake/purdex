@@ -42,10 +42,13 @@ type contractEvidence struct {
 }
 
 var (
-	contractEventCasePattern      = regexp.MustCompile(`case '([^']+)':`)
-	contractCallbackKeyPattern    = regexp.MustCompile(`(?m)^\s*'([^']+)'\s*:\s*async\s*\(`)
-	contractPayloadPathPattern    = regexp.MustCompile(`\b(?:event\.properties|input|output)(?:\??\.[A-Za-z_][A-Za-z0-9_]*)+`)
-	contractModelAliasPathPattern = regexp.MustCompile(`\bmodel\.(providerID|modelID)\b`)
+	contractEventCasePattern   = regexp.MustCompile(`case '([^']+)':`)
+	contractCallbackKeyPattern = regexp.MustCompile(`(?m)^\s*'([^']+)'\s*:\s*async\s*\(`)
+	contractPayloadPathPattern = regexp.MustCompile(`\b(?:event\.properties|input|output)(?:\??\.[A-Za-z_][A-Za-z0-9_]*)+`)
+	contractAliasPattern       = regexp.MustCompile(`\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*([^\n]+)`)
+	contractDestructurePattern = regexp.MustCompile(`\b(?:const|let|var)\s+\{([^}]+)\}\s*=\s*([^\n]+)`)
+	contractFunctionPattern    = regexp.MustCompile(`(?s)\bfunction\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\)\s*\{(.*?)\n\s*\}`)
+	contractPathExprPattern    = regexp.MustCompile(`^(?:event\.properties|[A-Za-z_$][A-Za-z0-9_$]*)(?:\.[A-Za-z_][A-Za-z0-9_]*)*$`)
 )
 
 func loadOpenCodeContractFixture(t *testing.T) opencodeContractFixture {
@@ -79,20 +82,30 @@ func extractTemplateConsumedEventKeys(body string) []string {
 
 func extractTemplateConsumedPayloadPaths(body string) []string {
 	seen := map[string]bool{}
-	for _, match := range contractPayloadPathPattern.FindAllString(body, -1) {
-		path := strings.ReplaceAll(match, "?.", ".")
-		seen[path] = true
-	}
-	if strings.Contains(body, "const model = input.model") {
-		for _, match := range contractModelAliasPathPattern.FindAllStringSubmatch(body, -1) {
-			if len(match) >= 2 {
-				seen["input.model."+match[1]] = true
-			}
+	addConsumedPayloadPathsFromScope(body, map[string]string{
+		"event.properties": "event.properties",
+		"input":            "input",
+		"output":           "output",
+	}, seen)
+	for _, fn := range contractFunctionPattern.FindAllStringSubmatch(body, -1) {
+		if len(fn) < 4 {
+			continue
 		}
-	}
-	if strings.Contains(body, "agentTypeFromArgs(output.args)") {
-		seen["output.args.subagent_type"] = true
-		seen["output.args.agent"] = true
+		callPattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(fn[1]) + `\s*\(\s*([^)]*?)\s*\)`)
+		for _, call := range callPattern.FindAllStringSubmatch(body, -1) {
+			if len(call) < 2 {
+				continue
+			}
+			argPath, ok := resolveContractPath(strings.TrimSpace(call[1]), map[string]string{
+				"event.properties": "event.properties",
+				"input":            "input",
+				"output":           "output",
+			})
+			if !ok {
+				continue
+			}
+			addConsumedPayloadPathsFromScope(fn[3], map[string]string{fn[2]: argPath}, seen)
+		}
 	}
 	delete(seen, "input.model")
 	delete(seen, "output.args")
@@ -102,6 +115,111 @@ func extractTemplateConsumedPayloadPaths(body string) []string {
 	}
 	sort.Strings(paths)
 	return paths
+}
+
+func addConsumedPayloadPathsFromScope(body string, aliases map[string]string, seen map[string]bool) {
+	aliases = cloneStringMap(aliases)
+	for _, match := range contractPayloadPathPattern.FindAllString(body, -1) {
+		path := strings.ReplaceAll(match, "?.", ".")
+		seen[path] = true
+	}
+	for {
+		changed := false
+		for _, match := range contractAliasPattern.FindAllStringSubmatch(body, -1) {
+			if len(match) < 3 {
+				continue
+			}
+			path, ok := resolveContractPath(match[2], aliases)
+			if !ok || aliases[match[1]] == path {
+				continue
+			}
+			aliases[match[1]] = path
+			seen[path] = true
+			changed = true
+		}
+		for _, match := range contractDestructurePattern.FindAllStringSubmatch(body, -1) {
+			if len(match) < 3 {
+				continue
+			}
+			base, ok := resolveContractPath(match[2], aliases)
+			if !ok {
+				continue
+			}
+			for _, field := range strings.Split(match[1], ",") {
+				name, alias, ok := parseContractDestructuredField(field)
+				if !ok {
+					continue
+				}
+				path := base + "." + name
+				if aliases[alias] != path {
+					aliases[alias] = path
+					changed = true
+				}
+				seen[path] = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	for alias, base := range aliases {
+		if strings.Contains(alias, ".") {
+			continue
+		}
+		aliasPathPattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(alias) + `(?:\??\.[A-Za-z_][A-Za-z0-9_]*)+`)
+		for _, match := range aliasPathPattern.FindAllString(body, -1) {
+			path, ok := resolveContractPath(match, aliases)
+			if ok {
+				seen[path] = true
+			}
+		}
+		if base != alias {
+			seen[base] = true
+		}
+	}
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func resolveContractPath(expr string, aliases map[string]string) (string, bool) {
+	expr = strings.TrimSpace(strings.ReplaceAll(expr, "?.", "."))
+	expr = strings.Trim(expr, "() ")
+	expr = strings.TrimRight(expr, ";,")
+	if !contractPathExprPattern.MatchString(expr) {
+		return "", false
+	}
+	for alias, base := range aliases {
+		if expr == alias {
+			return base, true
+		}
+		if strings.HasPrefix(expr, alias+".") {
+			return base + strings.TrimPrefix(expr, alias), true
+		}
+	}
+	return "", false
+}
+
+func parseContractDestructuredField(field string) (name, alias string, ok bool) {
+	field = strings.TrimSpace(field)
+	if field == "" || strings.Contains(field, "...") {
+		return "", "", false
+	}
+	parts := strings.Split(field, ":")
+	name = strings.TrimSpace(parts[0])
+	alias = name
+	if len(parts) > 1 {
+		alias = strings.TrimSpace(parts[1])
+	}
+	if name == "" || alias == "" || strings.ContainsAny(alias, "{}[]= ") {
+		return "", "", false
+	}
+	return name, alias, true
 }
 
 func fixtureConsumedEventKeys(fixture opencodeContractFixture) []string {
@@ -153,6 +271,84 @@ func requireContractEvidence(t *testing.T, name string, evidence contractEvidenc
 	if evidence.LineRange == "" {
 		t.Fatalf("%s evidence missing source range", name)
 	}
+}
+
+func requireContractSampleRef(t *testing.T, fixture opencodeContractFixture, name string, evidence contractEvidence) any {
+	t.Helper()
+	if evidence.SampleRef == "" {
+		t.Fatalf("%s evidence missing sampleRef", name)
+	}
+	value, ok := resolveContractSampleRef(fixture.Samples, evidence.SampleRef)
+	if !ok {
+		t.Fatalf("%s sampleRef %q does not resolve into fixture samples", name, evidence.SampleRef)
+	}
+	return value
+}
+
+func resolveContractSampleRef(samples map[string]any, ref string) (any, bool) {
+	const prefix = "samples."
+	if !strings.HasPrefix(ref, prefix) {
+		return nil, false
+	}
+	path := strings.TrimPrefix(ref, prefix)
+	for sampleKey, sample := range samples {
+		if path == sampleKey {
+			return sample, true
+		}
+		if strings.HasPrefix(path, sampleKey+".") {
+			return resolveContractSamplePath(sample, strings.TrimPrefix(path, sampleKey+"."))
+		}
+	}
+	return nil, false
+}
+
+func resolveContractSamplePath(value any, path string) (any, bool) {
+	current := value
+	for _, part := range strings.Split(path, ".") {
+		node, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = node[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func requireContractSampleEvent(t *testing.T, fixture opencodeContractFixture, event contractEvent) {
+	t.Helper()
+	value := requireContractSampleRef(t, fixture, "event "+event.Key, event.Evidence)
+	if got, ok := value.(string); !ok || got != event.Key {
+		t.Fatalf("event %s sampleRef resolves to %#v, want event key", event.Key, value)
+	}
+}
+
+func requireContractSamplePayloadPath(t *testing.T, fixture opencodeContractFixture, path contractPath) {
+	t.Helper()
+	relativePath, ok := contractSampleRefRelativePath(fixture.Samples, path.Evidence.SampleRef)
+	if !ok {
+		t.Fatalf("path %s sampleRef %q does not resolve into a fixture sample", path.Path, path.Evidence.SampleRef)
+	}
+	if relativePath != path.Path {
+		t.Fatalf("path %s sampleRef %q points at %s", path.Path, path.Evidence.SampleRef, relativePath)
+	}
+	requireContractSampleRef(t, fixture, "path "+path.Path, path.Evidence)
+}
+
+func contractSampleRefRelativePath(samples map[string]any, ref string) (string, bool) {
+	const prefix = "samples."
+	if !strings.HasPrefix(ref, prefix) {
+		return "", false
+	}
+	path := strings.TrimPrefix(ref, prefix)
+	for sampleKey := range samples {
+		if strings.HasPrefix(path, sampleKey+".") {
+			return strings.TrimPrefix(path, sampleKey+"."), true
+		}
+	}
+	return "", false
 }
 
 func TestPluginState_TaskStartMapsSubagentStart(t *testing.T) {
@@ -393,6 +589,9 @@ func TestOpenCodeTemplateContractFixtureHasProvenance(t *testing.T) {
 		t.Fatalf("version exactOutput = %q, want 1.14.23", fixture.Version.ExactOutput)
 	}
 	requireContractEvidence(t, "version", fixture.Version.Evidence)
+	if got := requireContractSampleRef(t, fixture, "version", fixture.Version.Evidence); got != "1.14.23\n" {
+		t.Fatalf("version sampleRef resolves to %#v, want version stdout", got)
+	}
 	if len(fixture.Samples) == 0 {
 		t.Fatal("fixture samples are empty")
 	}
@@ -401,12 +600,14 @@ func TestOpenCodeTemplateContractFixtureHasProvenance(t *testing.T) {
 			t.Fatal("fixture contains event with empty key")
 		}
 		requireContractEvidence(t, "event "+event.Key, event.Evidence)
+		requireContractSampleEvent(t, fixture, event)
 	}
 	for _, path := range fixture.ConsumedPayloadPaths {
 		if path.Path == "" {
 			t.Fatal("fixture contains empty payload path")
 		}
 		requireContractEvidence(t, "path "+path.Path, path.Evidence)
+		requireContractSamplePayloadPath(t, fixture, path)
 	}
 }
 
@@ -432,6 +633,73 @@ func TestOpenCodeTemplateContractExtractionRejectsMutatedPayloadPath(t *testing.
 	if strings.Join(got, "\x00") == strings.Join(want, "\x00") {
 		t.Fatalf("mutated payload path still matched fixture contract: %v", got)
 	}
+}
+
+func TestOpenCodeTemplateContractExtractionRejectsMutatedHelperLocalPayloadPath(t *testing.T) {
+	fixture := loadOpenCodeContractFixture(t)
+	body := strings.Replace(renderManagedPlugin("/fake/pdx"), "args.subagent_type", "args.worker_type", 1)
+	got := extractTemplateConsumedPayloadPaths(body)
+	want := fixtureConsumedPayloadPaths(fixture)
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "\x00") == strings.Join(want, "\x00") {
+		t.Fatalf("mutated helper-local payload path still matched fixture contract: %v", got)
+	}
+}
+
+func TestOpenCodeTemplateContractExtractionRejectsMutatedAliasPayloadPath(t *testing.T) {
+	fixture := loadOpenCodeContractFixture(t)
+	body := strings.Replace(renderManagedPlugin("/fake/pdx"), "model.providerID", "model.providerName", 1)
+	got := extractTemplateConsumedPayloadPaths(body)
+	want := fixtureConsumedPayloadPaths(fixture)
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "\x00") == strings.Join(want, "\x00") {
+		t.Fatalf("mutated alias payload path still matched fixture contract: %v", got)
+	}
+}
+
+func TestOpenCodeTemplateContractExtractionRejectsMutatedDestructuredPayloadPath(t *testing.T) {
+	fixture := loadOpenCodeContractFixture(t)
+	body := strings.Replace(renderManagedPlugin("/fake/pdx"),
+		"const modelName = model ? (model.providerID + '/' + model.modelID) : ''",
+		"const { providerID, modelID, providerName } = model || {}\n      const modelName = providerName || (providerID + '/' + modelID)", 1)
+	got := extractTemplateConsumedPayloadPaths(body)
+	want := fixtureConsumedPayloadPaths(fixture)
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "\x00") == strings.Join(want, "\x00") {
+		t.Fatalf("mutated destructured payload path still matched fixture contract: %v", got)
+	}
+}
+
+func TestOpenCodeTemplateContractExtractionFindsHelperLocalPayloadPaths(t *testing.T) {
+	body := `
+function agentTypeFromArgs(args) {
+  if (typeof args.subagent_type === 'string') return args.subagent_type
+  if (typeof args.agent === 'string') return args.agent
+  return 'task'
+}
+'tool.execute.before': async (input, output) => {
+  const agentType = agentTypeFromArgs(output.args)
+}
+`
+	got := extractTemplateConsumedPayloadPaths(body)
+	want := []string{"output.args.agent", "output.args.subagent_type"}
+	requireExactStringSet(t, "helper-local payload paths", got, want)
+}
+
+func TestOpenCodeTemplateContractExtractionFindsAliasAndDestructuredPayloadPaths(t *testing.T) {
+	body := `
+'chat.message': async (input, output) => {
+  const model = input.model
+  const { providerID, modelID: modelName } = model
+  await emit('UserPromptSubmit', { providerID, modelName })
+}
+`
+	got := extractTemplateConsumedPayloadPaths(body)
+	want := []string{"input.model.providerID", "input.model.modelID"}
+	requireExactStringSet(t, "alias/destructured payload paths", got, want)
 }
 
 // TestRenderManagedPlugin_ProducesValidBody is the fix-plan §2.3 PT5
