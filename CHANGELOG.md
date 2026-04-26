@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.231] - 2026-04-27
+
+### Fix(agent/opencode): report hook support version (#659)
+
+Report OpenCode hook support metadata without changing the managed plugin mapping.
+
+- Add OpenCode `SupportedVersion=1.14.23` and `ExceedsSupport` reporting across `CheckHooks` result paths.
+- Cover missing, unmanaged, drifted, installed, and version comparison paths.
+- Defer deep OpenCode runtime/source contract validation to #658 to match the cc/Codex install-check verification depth.
+
 ## [1.0.0-alpha.230] - 2026-04-26
 
 ### Feat(agent): classify cc and Codex hook catalogs (#655)
