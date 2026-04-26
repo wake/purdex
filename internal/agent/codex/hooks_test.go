@@ -2,11 +2,14 @@ package codex
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/wake/purdex/internal/agent"
 )
 
 // ---- filterOutPdxCodex ----
@@ -48,7 +51,7 @@ func TestFilterOutPdxCodex_MatchesAndPreserves(t *testing.T) {
 	}
 }
 
-func TestFilterOutPdxCodex_LegacyDirectEntryMigrated(t *testing.T) {
+func TestFilterOutPdxCodex_NonOwnedDirectEntryPreserved(t *testing.T) {
 	entries := []any{
 		map[string]any{
 			"type":    "command",
@@ -57,13 +60,8 @@ func TestFilterOutPdxCodex_LegacyDirectEntryMigrated(t *testing.T) {
 		},
 	}
 	result := filterOutPdxCodex(entries)
-	if len(result) != 1 {
-		t.Fatalf("expected 1 matcher group after migration, got %d", len(result))
-	}
-	group, _ := result[0].(map[string]any)
-	hookEntries := toCodexEntrySlice(group["hooks"])
-	if len(hookEntries) != 1 {
-		t.Fatalf("expected 1 migrated hook entry, got %d", len(hookEntries))
+	if !reflect.DeepEqual(result, entries) {
+		t.Fatalf("non-owned direct entry changed; got %#v want %#v", result, entries)
 	}
 }
 
@@ -267,6 +265,12 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 	hooks = hooksSection(t, m)
 
 	for _, event := range expectedCodexInstallerNames {
+		if event != "SessionStart" {
+			if _, ok := hooks[event]; ok {
+				t.Errorf("event %s: remove left empty event key", event)
+			}
+			continue
+		}
 		for _, groupEntry := range codexMatcherGroups(hooks[event]) {
 			group, _ := groupEntry.(map[string]any)
 			for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
@@ -363,6 +367,330 @@ func TestCodexInstallHooks_Writes9EventsAfterExpansion(t *testing.T) {
 	}
 }
 
+func TestCodexInstallHooks_EnablesFeatureFlagAndPreservesConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	existing := "model = \"gpt-5\"\n\n[features]\nother = true\ncodex_hooks = false\n"
+	if err := os.WriteFile(configPath, []byte(existing), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("InstallHooks: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{`model = "gpt-5"`, "other = true", "codex_hooks = true"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("config.toml missing %q after install:\n%s", want, text)
+		}
+	}
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("config.toml mode=%#o, want 0600", got)
+	}
+}
+
+func TestCodexInstallHooks_NewConfigUsesOwnerOnlyMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configPath := filepath.Join(home, ".codex", "config.toml")
+
+	if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("InstallHooks: %v", err)
+	}
+
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("new config.toml mode=%#o, want 0600", got)
+	}
+}
+
+func TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite(t *testing.T) {
+	t.Run("malformed config leaves hooks unchanged", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		configPath := filepath.Join(home, ".codex", "config.toml")
+		hooksPath := filepath.Join(home, ".codex", "hooks.json")
+		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		badConfig := []byte("[features\ncodex_hooks = false\n")
+		originalHooks := []byte(`{"hooks":{"SessionStart":[]}}`)
+		if err := os.WriteFile(configPath, badConfig, 0644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		if err := os.WriteFile(hooksPath, originalHooks, 0644); err != nil {
+			t.Fatalf("write hooks: %v", err)
+		}
+		if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("InstallHooks succeeded with malformed config")
+		}
+		gotConfig, _ := os.ReadFile(configPath)
+		gotHooks, _ := os.ReadFile(hooksPath)
+		if string(gotConfig) != string(badConfig) || string(gotHooks) != string(originalHooks) {
+			t.Fatalf("files changed after malformed config; config=%q hooks=%q", gotConfig, gotHooks)
+		}
+	})
+
+	t.Run("malformed hooks leaves config unchanged", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		configPath := filepath.Join(home, ".codex", "config.toml")
+		hooksPath := filepath.Join(home, ".codex", "hooks.json")
+		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		originalConfig := []byte("model = \"gpt-5\"\n")
+		badHooks := []byte(`{"hooks":`)
+		if err := os.WriteFile(configPath, originalConfig, 0644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		if err := os.WriteFile(hooksPath, badHooks, 0644); err != nil {
+			t.Fatalf("write hooks: %v", err)
+		}
+		if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("InstallHooks succeeded with malformed hooks")
+		}
+		gotConfig, _ := os.ReadFile(configPath)
+		gotHooks, _ := os.ReadFile(hooksPath)
+		if string(gotConfig) != string(originalConfig) || string(gotHooks) != string(badHooks) {
+			t.Fatalf("files changed after malformed hooks; config=%q hooks=%q", gotConfig, gotHooks)
+		}
+	})
+
+	t.Run("hooks write failure leaves config unchanged", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		configPath := filepath.Join(home, ".codex", "config.toml")
+		hooksPath := filepath.Join(home, ".codex", "hooks.json")
+		codexDir := filepath.Dir(configPath)
+		if err := os.MkdirAll(codexDir, 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		originalConfig := []byte("model = \"gpt-5\"\n")
+		if err := os.WriteFile(configPath, originalConfig, 0644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		if err := os.WriteFile(hooksPath, []byte(`{"hooks":{}}`), 0644); err != nil {
+			t.Fatalf("write hooks: %v", err)
+		}
+		if err := os.Mkdir(hooksPath+".tmp", 0755); err != nil {
+			t.Fatalf("mkdir hooks temp collision: %v", err)
+		}
+		if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("InstallHooks succeeded with hooks temp path blocked by directory")
+		}
+		gotConfig, _ := os.ReadFile(configPath)
+		if string(gotConfig) != string(originalConfig) {
+			t.Fatalf("config changed after hooks write failure; got %q", gotConfig)
+		}
+	})
+
+	t.Run("unsupported installable hook shape leaves files unchanged", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		configPath := filepath.Join(home, ".codex", "config.toml")
+		hooksPath := filepath.Join(home, ".codex", "hooks.json")
+		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		originalConfig := []byte("model = \"gpt-5\"\n")
+		originalHooks := []byte(`{"hooks":{"SessionStart":"custom-scalar","Stop":{"custom":true}}}`)
+		if err := os.WriteFile(configPath, originalConfig, 0644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		if err := os.WriteFile(hooksPath, originalHooks, 0644); err != nil {
+			t.Fatalf("write hooks: %v", err)
+		}
+		if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("InstallHooks succeeded with unsupported installable hook value shape")
+		}
+		gotConfig, _ := os.ReadFile(configPath)
+		gotHooks, _ := os.ReadFile(hooksPath)
+		if string(gotConfig) != string(originalConfig) || string(gotHooks) != string(originalHooks) {
+			t.Fatalf("files changed after unsupported hook shape; config=%q hooks=%q", gotConfig, gotHooks)
+		}
+	})
+
+	t.Run("unsupported hooks root leaves files unchanged", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		configPath := filepath.Join(home, ".codex", "config.toml")
+		hooksPath := filepath.Join(home, ".codex", "hooks.json")
+		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		originalConfig := []byte("model = \"gpt-5\"\n")
+		originalHooks := []byte(`{"hooks":"custom-root"}`)
+		if err := os.WriteFile(configPath, originalConfig, 0644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		if err := os.WriteFile(hooksPath, originalHooks, 0644); err != nil {
+			t.Fatalf("write hooks: %v", err)
+		}
+		if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("InstallHooks succeeded with unsupported hooks root shape")
+		}
+		if err := (&Provider{}).RemoveHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("RemoveHooks succeeded with unsupported hooks root shape")
+		}
+		gotConfig, _ := os.ReadFile(configPath)
+		gotHooks, _ := os.ReadFile(hooksPath)
+		if string(gotConfig) != string(originalConfig) || string(gotHooks) != string(originalHooks) {
+			t.Fatalf("files changed after unsupported hooks root; config=%q hooks=%q", gotConfig, gotHooks)
+		}
+	})
+}
+
+func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
+	original := codexEventSpecs
+	codexEventSpecs = append(append([]agent.HookEventSpec(nil), codexEventSpecs...),
+		agent.HookEventSpec{Name: "IgnoredSynthetic", Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
+		agent.HookEventSpec{Name: "UnsupportedSynthetic", Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
+	)
+	t.Cleanup(func() { codexEventSpecs = original })
+
+	for _, name := range codexEventNames() {
+		if name == "IgnoredSynthetic" || name == "UnsupportedSynthetic" {
+			t.Fatalf("codexEventNames included non-installable spec %q", name)
+		}
+	}
+
+	dir := t.TempDir()
+	hooksPath := filepath.Join(dir, "hooks.json")
+	if err := mergeCodexHooks(hooksPath, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("mergeCodexHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, hooksPath))
+	for _, name := range []string{"IgnoredSynthetic", "UnsupportedSynthetic"} {
+		if _, ok := hooks[name]; ok {
+			t.Errorf("mergeCodexHooks wrote non-installable event %q", name)
+		}
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	homeHooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := mergeCodexHooks(homeHooksPath, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("seed install: %v", err)
+	}
+	writeCodexFeatureFlag(t, home, true)
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	for _, name := range []string{"IgnoredSynthetic", "UnsupportedSynthetic"} {
+		if _, ok := status.Events[name]; ok {
+			t.Errorf("CheckHooks.Events included non-installable event %q", name)
+		}
+	}
+	if !status.Installed || !status.Managed || len(status.Issues) != 0 {
+		t.Fatalf("clean install with non-installable specs status=%+v, want installed managed with no issues", status)
+	}
+
+	installedFile := readHooksFile(t, homeHooksPath)
+	installedHooks := hooksSection(t, installedFile)
+	installedHooks["IgnoredSynthetic"] = []any{pdxGroupEntry("IgnoredSynthetic")}
+	installedFile["hooks"] = installedHooks
+	installedData, _ := json.MarshalIndent(installedFile, "", "  ")
+	if err := os.WriteFile(homeHooksPath, installedData, 0644); err != nil {
+		t.Fatalf("write stale installed hooks: %v", err)
+	}
+	status, err = (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks stale non-installable: %v", err)
+	}
+	if !status.Installed || !status.Managed || len(status.Issues) != 0 {
+		t.Fatalf("stale non-installable hook status=%+v, want installed managed with no issues", status)
+	}
+
+	staleHooksPath := filepath.Join(dir, "stale-hooks.json")
+	stale := map[string]any{
+		"hooks": map[string]any{
+			"SessionStart": []any{pdxGroupEntry("SessionStart")},
+			"IgnoredSynthetic": []any{
+				pdxGroupEntry("IgnoredSynthetic"),
+				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": `"/usr/local/bin/pdx" hook --agent codex Bogus`, "timeout": 5}}},
+				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": `"/usr/local/bin/pdx" hook --agent cc IgnoredSynthetic`, "timeout": 5}}},
+				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "/usr/bin/notify ignored", "timeout": 5}}},
+			},
+		},
+	}
+	staleData, _ := json.MarshalIndent(stale, "", "  ")
+	if err := os.WriteFile(staleHooksPath, staleData, 0644); err != nil {
+		t.Fatalf("write stale hooks: %v", err)
+	}
+	if err := mergeCodexHooks(staleHooksPath, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("remove stale non-installable hook: %v", err)
+	}
+	staleHooks := hooksSection(t, readHooksFile(t, staleHooksPath))
+	if _, ok := staleHooks["SessionStart"]; ok {
+		t.Fatal("remove left owned installable event SessionStart")
+	}
+	staleGroups := codexMatcherGroups(staleHooks["IgnoredSynthetic"])
+	if len(staleGroups) != 4 {
+		t.Fatalf("remove kept %d unknown/third-party groups, want 4", len(staleGroups))
+	}
+	foundSyntheticCodexPdx := false
+	foundCCPdx := false
+	foundUnknownCodexPdx := false
+	ownedCodexEvents := codexOwnedCleanupEventNames()
+	for _, groupEntry := range staleGroups {
+		group, _ := groupEntry.(map[string]any)
+		for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
+			m, _ := hookEntry.(map[string]any)
+			cmd, _ := m["command"].(string)
+			if isPdxCommandCodexOwnedEvent(cmd, ownedCodexEvents) {
+				t.Fatalf("remove left owned pdx entry: %#v", hookEntry)
+			}
+			if strings.Contains(cmd, "--agent codex IgnoredSynthetic") {
+				foundSyntheticCodexPdx = true
+			}
+			if strings.Contains(cmd, "--agent cc") {
+				foundCCPdx = true
+			}
+			if strings.Contains(cmd, "--agent codex Bogus") {
+				foundUnknownCodexPdx = true
+			}
+		}
+	}
+	if !foundSyntheticCodexPdx {
+		t.Fatal("remove dropped non-owned synthetic Codex pdx hook under non-installable key")
+	}
+	if !foundCCPdx {
+		t.Fatal("remove dropped non-codex pdx hook under non-installable key")
+	}
+	if !foundUnknownCodexPdx {
+		t.Fatal("remove dropped unknown Codex pdx hook under non-installable key")
+	}
+	absentHooksPath := filepath.Join(dir, "absent-hooks.json")
+	if err := os.WriteFile(absentHooksPath, []byte(`{"hooks":{}}`), 0644); err != nil {
+		t.Fatalf("write absent hooks: %v", err)
+	}
+	if err := mergeCodexHooks(absentHooksPath, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("remove absent non-installable hook: %v", err)
+	}
+	absentHooks := hooksSection(t, readHooksFile(t, absentHooksPath))
+	if _, ok := absentHooks["IgnoredSynthetic"]; ok {
+		t.Fatal("remove created absent non-installable key IgnoredSynthetic")
+	}
+}
+
 // TestCodexCheckHooks_ReportsAll9Events asserts CheckHooks sees every event
 // in the expanded set.
 func TestCodexCheckHooks_ReportsAll9Events(t *testing.T) {
@@ -376,6 +704,7 @@ func TestCodexCheckHooks_ReportsAll9Events(t *testing.T) {
 	if err := mergeCodexHooks(hooksPath, "/usr/local/bin/pdx", false); err != nil {
 		t.Fatalf("seed install: %v", err)
 	}
+	writeCodexFeatureFlag(t, home, true)
 
 	status, err := (&Provider{}).CheckHooks()
 	if err != nil {
@@ -396,6 +725,68 @@ func TestCodexCheckHooks_ReportsAll9Events(t *testing.T) {
 	}
 	if !status.Installed {
 		t.Errorf("Installed=false after full install, issues=%v", status.Issues)
+	}
+}
+
+func TestCodexCheckHooks_FeatureFlagMissingOrFalseBlocks(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		writeFlag bool
+		value     bool
+	}{
+		{name: "missing"},
+		{name: "false", writeFlag: true, value: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			hooksPath := filepath.Join(home, ".codex", "hooks.json")
+			if err := mergeCodexHooks(hooksPath, "/usr/local/bin/pdx", false); err != nil {
+				t.Fatalf("seed install: %v", err)
+			}
+			if tt.writeFlag {
+				writeCodexFeatureFlag(t, home, tt.value)
+			}
+			status, err := (&Provider{}).CheckHooks()
+			if err != nil {
+				t.Fatalf("CheckHooks: %v", err)
+			}
+			if status.Installed {
+				t.Fatal("Installed=true with codex hooks feature flag disabled")
+			}
+			if !status.Managed {
+				t.Fatal("Managed=false with valid hooks but disabled feature flag")
+			}
+			if !issuesContain(status.Issues, "codex hooks feature flag disabled") {
+				t.Fatalf("issues=%v, want feature flag disabled issue", status.Issues)
+			}
+		})
+	}
+}
+
+func TestCodexCheckHooks_PermissionRequestMissingBlocks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
+		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("Stop")},
+	})
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Installed {
+		t.Fatal("Installed=true with missing PermissionRequest")
+	}
+	if !issuesContain(status.Issues, "PermissionRequest hook not installed") {
+		t.Fatalf("issues=%v, want missing PermissionRequest issue", status.Issues)
+	}
+	for _, name := range status.UpgradesAvailable {
+		if name == "PermissionRequest" {
+			t.Fatalf("PermissionRequest appeared in UpgradesAvailable: %v", status.UpgradesAvailable)
+		}
 	}
 }
 
@@ -437,6 +828,7 @@ func TestCheckHooks_LegacyDirectEntryReportedUninstalled(t *testing.T) {
 	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	writeCodexFeatureFlag(t, dir, true)
 
 	status, err := (&Provider{}).CheckHooks()
 	if err != nil {
@@ -499,6 +891,7 @@ func TestCheckHooks_ThirdPartyLegacyEntryDoesNotTriggerReinstall(t *testing.T) {
 	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	writeCodexFeatureFlag(t, dir, true)
 
 	status, err := (&Provider{}).CheckHooks()
 	if err != nil {
@@ -562,6 +955,19 @@ func writeHooksFile(t *testing.T, home string, hooksSect map[string]any) {
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	writeCodexFeatureFlag(t, home, true)
+}
+
+func writeCodexFeatureFlag(t *testing.T, home string, enabled bool) {
+	t.Helper()
+	path := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	data := []byte(fmt.Sprintf("[features]\ncodex_hooks = %t\n", enabled))
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 }
 
 // issuesContain reports whether any issue contains the given substring.
@@ -574,16 +980,16 @@ func issuesContain(issues []string, substr string) bool {
 	return false
 }
 
-// CH1 — legacy 3-event user (pre-expansion install): the three required
-// events are valid; the six FutureOnly events have no key in hooks.json.
+// CH1 — current required events are valid; FutureOnly events have no key in hooks.json.
 // allInstalled must remain true and Issues must be empty.
 func TestCheckHooks_LegacyThreeEvent_ReportsInstalled(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeHooksFile(t, home, map[string]any{
-		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
-		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
-		"Stop":             []any{pdxGroupEntry("Stop")},
+		"SessionStart":      []any{pdxGroupEntry("SessionStart")},
+		"UserPromptSubmit":  []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":              []any{pdxGroupEntry("Stop")},
+		"PermissionRequest": []any{pdxGroupEntry("PermissionRequest")},
 	})
 
 	status, err := (&Provider{}).CheckHooks()
@@ -596,10 +1002,7 @@ func TestCheckHooks_LegacyThreeEvent_ReportsInstalled(t *testing.T) {
 	if len(status.Issues) != 0 {
 		t.Fatalf("legacy 3-event user: Issues=%v, want empty", status.Issues)
 	}
-	futureOnly := []string{
-		"SubagentStart", "SubagentStop", "StopFailure",
-		"Notification", "PermissionRequest", "SessionEnd",
-	}
+	futureOnly := []string{"SubagentStart", "SubagentStop", "StopFailure", "Notification", "SessionEnd"}
 	for _, name := range futureOnly {
 		info, ok := status.Events[name]
 		if !ok {
@@ -795,17 +1198,193 @@ func TestCheckHooks_Managed_FalseWhenNoPdxEntries(t *testing.T) {
 	}
 }
 
+func TestCheckHooks_Managed_FalseForOtherAgentPdxEntry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"SessionStart": []any{
+			map[string]any{
+				"hooks": []any{
+					map[string]any{
+						"type":    "command",
+						"command": `"/usr/local/bin/pdx" hook --agent cc SessionStart`,
+						"timeout": 5,
+					},
+				},
+			},
+		},
+	})
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Managed {
+		t.Fatal("other-agent pdx entry: Managed=true, want false")
+	}
+}
+
+func TestCodexRemoveHooks_PreservesUnknownRetiredEventKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	data, _ := json.MarshalIndent(map[string]any{
+		"hooks": map[string]any{
+			"RetiredEvent": []any{pdxGroupEntry("RetiredEvent")},
+		},
+	}, "", "  ")
+	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
+		t.Fatalf("write hooks: %v", err)
+	}
+	writeCodexFeatureFlag(t, home, true)
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Managed {
+		t.Fatal("unknown codex pdx entry: Managed=true, want false")
+	}
+	if err := (&Provider{}).RemoveHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("RemoveHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, hooksPath))
+	if _, ok := hooks["RetiredEvent"]; !ok {
+		t.Fatal("RemoveHooks removed unknown Codex hook key")
+	}
+}
+
+func TestCodexRemoveHooks_PreservesUnknownNonArrayHookValues(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	wantObject := map[string]any{"custom": true}
+	data, _ := json.MarshalIndent(map[string]any{
+		"hooks": map[string]any{
+			"UnknownObject": wantObject,
+			"SessionStart":  "custom-scalar",
+			"OwnedKey":      []any{pdxGroupEntry("SessionStart")},
+		},
+	}, "", "  ")
+	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
+		t.Fatalf("write hooks: %v", err)
+	}
+
+	if err := (&Provider{}).RemoveHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("RemoveHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, hooksPath))
+	if !reflect.DeepEqual(hooks["UnknownObject"], wantObject) {
+		t.Fatalf("RemoveHooks changed unknown object hook value: %#v", hooks["UnknownObject"])
+	}
+	if hooks["SessionStart"] != "custom-scalar" {
+		t.Fatalf("RemoveHooks changed unknown scalar hook value: %#v", hooks["SessionStart"])
+	}
+	if _, ok := hooks["OwnedKey"]; ok {
+		t.Fatal("RemoveHooks left owned array hook key")
+	}
+}
+
+func TestCodexMergeHooks_PreservesNonOwnedDirectEntryShape(t *testing.T) {
+	for _, remove := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remove=%v", remove), func(t *testing.T) {
+			dir := t.TempDir()
+			hooksPath := filepath.Join(dir, "hooks.json")
+			direct := map[string]any{"type": "command", "command": "/usr/bin/notify third-party", "timeout": float64(5)}
+			data, _ := json.MarshalIndent(map[string]any{
+				"hooks": map[string]any{
+					"SessionStart": []any{direct},
+				},
+			}, "", "  ")
+			if err := os.WriteFile(hooksPath, data, 0644); err != nil {
+				t.Fatalf("write hooks: %v", err)
+			}
+
+			if err := mergeCodexHooks(hooksPath, "/usr/local/bin/pdx", remove); err != nil {
+				t.Fatalf("mergeCodexHooks: %v", err)
+			}
+			hooks := hooksSection(t, readHooksFile(t, hooksPath))
+			entries := toCodexEntrySlice(hooks["SessionStart"])
+			foundDirect := false
+			for _, entry := range entries {
+				m, _ := entry.(map[string]any)
+				if _, hasHooks := m["hooks"]; hasHooks {
+					continue
+				}
+				if reflect.DeepEqual(m, direct) {
+					foundDirect = true
+				}
+			}
+			if !foundDirect {
+				t.Fatalf("mergeCodexHooks changed non-owned direct entry shape: %#v", entries)
+			}
+		})
+	}
+}
+
+func TestCodexRemoveHooks_RemovesOwnedEventUnderUnknownKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	data, _ := json.MarshalIndent(map[string]any{
+		"hooks": map[string]any{
+			"UnknownHookKey": []any{
+				pdxGroupEntry("SessionStart"),
+				pdxGroupEntry("Bogus"),
+			},
+		},
+	}, "", "  ")
+	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
+		t.Fatalf("write hooks: %v", err)
+	}
+
+	if err := (&Provider{}).RemoveHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("RemoveHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, hooksPath))
+	groups := codexMatcherGroups(hooks["UnknownHookKey"])
+	if len(groups) != 1 {
+		t.Fatalf("RemoveHooks kept %d groups under unknown hook key, want 1 unknown token", len(groups))
+	}
+	if findPdxCommandInCodexForEvent(groups, "SessionStart") != "" {
+		t.Fatal("RemoveHooks left owned Codex event under unknown hook key")
+	}
+	foundUnknown := false
+	for _, groupEntry := range groups {
+		group, _ := groupEntry.(map[string]any)
+		for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
+			m, _ := hookEntry.(map[string]any)
+			cmd, _ := m["command"].(string)
+			if strings.Contains(cmd, "--agent codex Bogus") {
+				foundUnknown = true
+			}
+		}
+	}
+	if !foundUnknown {
+		t.Fatal("RemoveHooks dropped unknown Codex event token under unknown hook key")
+	}
+}
+
 // CH12 — UpgradesAvailable lists FutureOnly events absent from hooks.json
-// when the overall install is otherwise valid (legacy 3-event user).
-// Finding #4: UI must be able to surface "6 new events available" even
+// when the overall install is otherwise valid.
+// Finding #4: UI must be able to surface new events available even
 // though Installed=true.
 func TestCheckHooks_UpgradesAvailable_PopulatedForLegacyCodex(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeHooksFile(t, home, map[string]any{
-		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
-		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
-		"Stop":             []any{pdxGroupEntry("Stop")},
+		"SessionStart":      []any{pdxGroupEntry("SessionStart")},
+		"UserPromptSubmit":  []any{pdxGroupEntry("UserPromptSubmit")},
+		"Stop":              []any{pdxGroupEntry("Stop")},
+		"PermissionRequest": []any{pdxGroupEntry("PermissionRequest")},
 	})
 	status, err := (&Provider{}).CheckHooks()
 	if err != nil {
@@ -815,12 +1394,11 @@ func TestCheckHooks_UpgradesAvailable_PopulatedForLegacyCodex(t *testing.T) {
 		t.Fatalf("legacy 3-event: Installed=false, Issues=%v", status.Issues)
 	}
 	want := map[string]bool{
-		"SubagentStart":     true,
-		"SubagentStop":      true,
-		"StopFailure":       true,
-		"Notification":      true,
-		"PermissionRequest": true,
-		"SessionEnd":        true,
+		"SubagentStart": true,
+		"SubagentStop":  true,
+		"StopFailure":   true,
+		"Notification":  true,
+		"SessionEnd":    true,
 	}
 	if len(status.UpgradesAvailable) != len(want) {
 		t.Fatalf("UpgradesAvailable=%v, want %d entries", status.UpgradesAvailable, len(want))
@@ -867,13 +1445,13 @@ func TestCheckHooks_EventInfoCarriesFutureOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckHooks: %v", err)
 	}
-	requiredFalse := []string{"SessionStart", "UserPromptSubmit", "Stop"}
+	requiredFalse := []string{"SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest"}
 	for _, name := range requiredFalse {
 		if status.Events[name].FutureOnly {
 			t.Errorf("event %q FutureOnly=true, want false", name)
 		}
 	}
-	futureOnly := []string{"SubagentStart", "SubagentStop", "StopFailure", "Notification", "PermissionRequest", "SessionEnd"}
+	futureOnly := []string{"SubagentStart", "SubagentStop", "StopFailure", "Notification", "SessionEnd"}
 	for _, name := range futureOnly {
 		if !status.Events[name].FutureOnly {
 			t.Errorf("event %q FutureOnly=false, want true", name)
@@ -983,11 +1561,50 @@ func TestIsPdxCommandCodexForEvent(t *testing.T) {
 		{`/usr/local/bin/pdx hook --agent cc Notification`, "Notification", "wrong agent"},
 		{`other-tool hook --agent codex Stop`, "Stop", "non-pdx binary"},
 		{`"/usr/local/bin/pdx" hook --agent codex`, "Stop", "missing event name"},
+		{`pdx exec hook --agent codex SessionStart`, "SessionStart", "hook is not first subcommand"},
 	}
 	for _, tc := range negative {
 		if isPdxCommandCodexForEvent(tc.cmd, tc.event) {
 			t.Errorf("expected invalid for %q / event=%s (%s)", tc.cmd, tc.event, tc.reason)
 		}
+	}
+}
+
+func TestCodexRemoveHooks_PreservesWrapperLikePdxCommand(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	data, _ := json.MarshalIndent(map[string]any{
+		"hooks": map[string]any{
+			"SessionStart": []any{
+				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": `pdx exec hook --agent codex SessionStart`, "timeout": 5}}},
+			},
+		},
+	}, "", "  ")
+	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
+		t.Fatalf("write hooks: %v", err)
+	}
+
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Managed {
+		t.Fatal("wrapper-like pdx command: Managed=true, want false")
+	}
+	if err := (&Provider{}).RemoveHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("RemoveHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, hooksPath))
+	groups := codexMatcherGroups(hooks["SessionStart"])
+	if len(groups) != 1 {
+		t.Fatalf("RemoveHooks kept %d groups, want wrapper-like command preserved", len(groups))
+	}
+	if findPdxCommandInCodexForEvent(groups, "SessionStart") != "" {
+		t.Fatal("wrapper-like pdx command became valid per-event hook command")
 	}
 }
 

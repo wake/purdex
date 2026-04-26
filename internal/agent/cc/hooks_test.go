@@ -2,10 +2,13 @@ package cc
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wake/purdex/internal/agent"
 )
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
@@ -32,6 +35,7 @@ func TestIsPdxCommand_Negative(t *testing.T) {
 		`/usr/bin/bash -c "echo hello"`,
 		``,
 		`pdx-ng hook something`,
+		`pdx exec hook --agent cc SessionStart`,
 	}
 	for _, cmd := range cases {
 		if isPdxCommand(cmd) {
@@ -249,6 +253,134 @@ func TestMergeClaudeHooks_RemoveMode(t *testing.T) {
 	}
 }
 
+func TestMergeClaudeHooks_RemovesOwnedPdxUnderUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	settings := map[string]any{
+		"hooks": map[string]any{
+			"UnknownHookKey": []any{makePdxEntry("/usr/local/bin/pdx", "cc", "SessionStart")},
+		},
+	}
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("mergeClaudeHooks remove: %v", err)
+	}
+	hooks := hooksMap(t, readSettings(t, path))
+	if _, ok := hooks["UnknownHookKey"]; ok {
+		t.Fatal("remove left owned Claude event under unknown hook key")
+	}
+}
+
+func TestMergeClaudeHooks_PreservesUnknownNonArrayHookValues(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	wantObject := map[string]any{"custom": true}
+	settings := map[string]any{
+		"hooks": map[string]any{
+			"UnknownObject": wantObject,
+			"SessionStart":  "custom-scalar",
+			"OwnedKey":      []any{makePdxEntry("/usr/local/bin/pdx", "cc", "SessionStart")},
+		},
+	}
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("mergeClaudeHooks remove: %v", err)
+	}
+	hooks := hooksMap(t, readSettings(t, path))
+	if got, ok := hooks["UnknownObject"].(map[string]any); !ok || got["custom"] != true {
+		t.Fatalf("remove changed unknown object hook value: %#v", hooks["UnknownObject"])
+	}
+	if hooks["SessionStart"] != "custom-scalar" {
+		t.Fatalf("remove changed unknown scalar hook value: %#v", hooks["SessionStart"])
+	}
+	if _, ok := hooks["OwnedKey"]; ok {
+		t.Fatal("remove left owned array hook key")
+	}
+}
+
+func TestMergeClaudeHooks_UnsupportedInstallableHookShapeReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	originalSettings := []byte(`{"hooks":{"SessionStart":"custom-scalar","Stop":{"custom":true}}}`)
+	if err := os.WriteFile(path, originalSettings, 0644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", false); err == nil {
+		t.Fatal("mergeClaudeHooks install succeeded with unsupported installable hook value shape")
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != string(originalSettings) {
+		t.Fatalf("settings changed after unsupported hook shape; got %q", got)
+	}
+}
+
+func TestMergeClaudeHooks_UnsupportedHooksRootReturnsError(t *testing.T) {
+	for _, remove := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remove=%v", remove), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "settings.json")
+			originalSettings := []byte(`{"hooks":"custom-root"}`)
+			if err := os.WriteFile(path, originalSettings, 0644); err != nil {
+				t.Fatalf("write settings: %v", err)
+			}
+
+			if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", remove); err == nil {
+				t.Fatal("mergeClaudeHooks succeeded with unsupported hooks root shape")
+			}
+			got, _ := os.ReadFile(path)
+			if string(got) != string(originalSettings) {
+				t.Fatalf("settings changed after unsupported hooks root; got %q", got)
+			}
+		})
+	}
+}
+
+func TestMergeClaudeHooks_PreservesWrapperLikePdxCommand(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	settings := map[string]any{
+		"hooks": map[string]any{
+			"SessionStart": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": `pdx exec hook --agent cc SessionStart`}}}},
+		},
+	}
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	status, err := NewProvider(nil, nil, nil, nil).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Managed {
+		t.Fatal("wrapper-like pdx command: Managed=true, want false")
+	}
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("mergeClaudeHooks remove: %v", err)
+	}
+	hooks := hooksMap(t, readSettings(t, path))
+	entries := toEntrySlice(hooks["SessionStart"])
+	if len(entries) != 1 {
+		t.Fatalf("remove kept %d entries, want wrapper-like command preserved", len(entries))
+	}
+	if findPdxCommandForEvent(entries, "SessionStart") != "" {
+		t.Fatal("wrapper-like pdx command became valid per-event hook command")
+	}
+}
+
 // ---- mergeClaudeHooks: different path replaces old pdx entry ----
 
 func TestMergeClaudeHooks_DifferentPathReplaces(t *testing.T) {
@@ -324,14 +456,14 @@ func TestCCInstallHooks_WritesAllEventsFromEventsList(t *testing.T) {
 	hooks := hooksMap(t, settings)
 
 	p := NewProvider(nil, nil, nil, nil)
-	events := p.Events()
+	events := installableCCEvents(p.Events())
 	if len(events) == 0 {
 		t.Fatal("cc Events() returned empty; installer iteration would be vacuous")
 	}
 	for _, e := range events {
 		entries, ok := hooks[e.Name]
 		if !ok {
-			t.Errorf("event %s (from Events()) not found in written hooks", e.Name)
+			t.Errorf("event %s (from installable Events()) not found in written hooks", e.Name)
 			continue
 		}
 		arr, ok := entries.([]any)
@@ -340,8 +472,163 @@ func TestCCInstallHooks_WritesAllEventsFromEventsList(t *testing.T) {
 		}
 	}
 	if len(hooks) != len(events) {
-		t.Errorf("settings.json hooks len=%d, want %d (one per Events())", len(hooks), len(events))
+		t.Errorf("settings.json hooks len=%d, want %d (one per installable Events())", len(hooks), len(events))
 	}
+}
+
+func installableCCEvents(events []agent.HookEventSpec) []agent.HookEventSpec {
+	out := make([]agent.HookEventSpec, 0, len(events))
+	for _, event := range events {
+		if agent.IsInstallableHookSpec(event) {
+			out = append(out, event)
+		}
+	}
+	return out
+}
+
+func TestCCInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
+	original := ccEventSpecs
+	ccEventSpecs = append(append([]agent.HookEventSpec(nil), ccEventSpecs...),
+		agent.HookEventSpec{Name: "IgnoredSynthetic", Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
+		agent.HookEventSpec{Name: "UnsupportedSynthetic", Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
+	)
+	t.Cleanup(func() { ccEventSpecs = original })
+
+	for _, name := range ccEventNames() {
+		if name == "IgnoredSynthetic" || name == "UnsupportedSynthetic" {
+			t.Fatalf("ccEventNames included non-installable spec %q", name)
+		}
+	}
+
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	if err := mergeClaudeHooks(settingsPath, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("mergeClaudeHooks: %v", err)
+	}
+	hooks := hooksMap(t, readSettings(t, settingsPath))
+	for _, name := range []string{"IgnoredSynthetic", "UnsupportedSynthetic"} {
+		if _, ok := hooks[name]; ok {
+			t.Errorf("mergeClaudeHooks wrote non-installable event %q", name)
+		}
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	installedPath := filepath.Join(claudeDir, "settings.json")
+	if err := mergeClaudeHooks(installedPath, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("seed install: %v", err)
+	}
+	status, err := NewProvider(nil, nil, nil, nil).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	for _, name := range []string{"IgnoredSynthetic", "UnsupportedSynthetic"} {
+		if _, ok := status.Events[name]; ok {
+			t.Errorf("CheckHooks.Events included non-installable event %q", name)
+		}
+	}
+	if !status.Installed || !status.Managed || len(status.Issues) != 0 {
+		t.Fatalf("clean install with non-installable specs status=%+v, want installed managed with no issues", status)
+	}
+
+	settings := readSettings(t, installedPath)
+	installedHooks := hooksMap(t, settings)
+	installedHooks["IgnoredSynthetic"] = []any{makePdxEntry("/usr/local/bin/pdx", "cc", "IgnoredSynthetic")}
+	settings["hooks"] = installedHooks
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(installedPath, data, 0644); err != nil {
+		t.Fatalf("write stale installed settings: %v", err)
+	}
+	status, err = NewProvider(nil, nil, nil, nil).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks stale non-installable: %v", err)
+	}
+	if !status.Installed || !status.Managed || len(status.Issues) != 0 {
+		t.Fatalf("stale non-installable hook status=%+v, want installed managed with no issues", status)
+	}
+
+	staleSettingsPath := filepath.Join(dir, "stale-settings.json")
+	stale := map[string]any{
+		"hooks": map[string]any{
+			"Bogus": []any{makePdxEntry("/usr/local/bin/pdx", "cc", "SessionStart")},
+			"IgnoredSynthetic": []any{
+				makePdxEntry("/usr/local/bin/pdx", "cc", "IgnoredSynthetic"),
+				makePdxEntry("/usr/local/bin/pdx", "codex", "IgnoredSynthetic"),
+				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "/usr/bin/notify ignored"}}},
+			},
+		},
+	}
+	staleData, _ := json.MarshalIndent(stale, "", "  ")
+	if err := os.WriteFile(staleSettingsPath, staleData, 0644); err != nil {
+		t.Fatalf("write stale settings: %v", err)
+	}
+	if err := mergeClaudeHooks(staleSettingsPath, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("remove stale non-installable hook: %v", err)
+	}
+	staleHooks := hooksMap(t, readSettings(t, staleSettingsPath))
+	if _, ok := staleHooks["Bogus"]; ok {
+		t.Fatal("remove left owned cc hook filed under unknown key Bogus")
+	}
+	staleEntries := toEntrySlice(staleHooks["IgnoredSynthetic"])
+	if len(staleEntries) != 3 {
+		t.Fatalf("remove kept %d non-owned/third-party entries, want 3", len(staleEntries))
+	}
+	foundSyntheticCCPdx := false
+	foundCodexPdx := false
+	for _, entry := range staleEntries {
+		if entryIsPdx(entry) {
+			t.Fatalf("remove left owned pdx entry: %#v", entry)
+		}
+		if commandEntryContains(entry, "--agent cc IgnoredSynthetic") {
+			foundSyntheticCCPdx = true
+		}
+		if commandEntryContains(entry, "--agent codex") {
+			foundCodexPdx = true
+		}
+	}
+	if !foundSyntheticCCPdx {
+		t.Fatal("remove dropped non-owned synthetic cc hook under non-installable key")
+	}
+	if !foundCodexPdx {
+		t.Fatal("remove dropped non-cc pdx hook under non-installable key")
+	}
+	absentSettingsPath := filepath.Join(dir, "absent-settings.json")
+	if err := os.WriteFile(absentSettingsPath, []byte(`{"hooks":{}}`), 0644); err != nil {
+		t.Fatalf("write absent settings: %v", err)
+	}
+	if err := mergeClaudeHooks(absentSettingsPath, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("remove absent non-installable hook: %v", err)
+	}
+	absentHooks := hooksMap(t, readSettings(t, absentSettingsPath))
+	if _, ok := absentHooks["IgnoredSynthetic"]; ok {
+		t.Fatal("remove created absent non-installable key IgnoredSynthetic")
+	}
+}
+
+func commandEntryContains(entry any, needle string) bool {
+	m, ok := entry.(map[string]any)
+	if !ok {
+		return false
+	}
+	arr, ok := m["hooks"].([]any)
+	if !ok {
+		return false
+	}
+	for _, hook := range arr {
+		hm, ok := hook.(map[string]any)
+		if !ok {
+			continue
+		}
+		cmd, _ := hm["command"].(string)
+		if strings.Contains(cmd, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestCCCheckHooks_ReportsAllEventsFromEventsList writes a settings.json that
@@ -374,7 +661,7 @@ func TestCCCheckHooks_ReportsAllEventsFromEventsList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckHooks: %v", err)
 	}
-	for _, e := range p.Events() {
+	for _, e := range installableCCEvents(p.Events()) {
 		if _, ok := status.Events[e.Name]; !ok {
 			t.Errorf("CheckHooks.Events missing key %q (from Events())", e.Name)
 		}
@@ -384,6 +671,45 @@ func TestCCCheckHooks_ReportsAllEventsFromEventsList(t *testing.T) {
 	}
 	if status.Installed {
 		t.Error("Installed must be false when any event is missing")
+	}
+}
+
+func TestCCCheckHooks_WrongAgentOrEventCommandNotInstalled(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{name: "wrong agent", command: `"/usr/local/bin/pdx" hook --agent codex SessionStart`},
+		{name: "wrong event", command: `"/usr/local/bin/pdx" hook --agent cc Stop`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			settingsPath := filepath.Join(home, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			settings := map[string]any{
+				"hooks": map[string]any{
+					"SessionStart": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": tt.command}}}},
+				},
+			}
+			data, _ := json.MarshalIndent(settings, "", "  ")
+			if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+				t.Fatalf("write settings: %v", err)
+			}
+			status, err := NewProvider(nil, nil, nil, nil).CheckHooks()
+			if err != nil {
+				t.Fatalf("CheckHooks: %v", err)
+			}
+			if status.Events["SessionStart"].Installed {
+				t.Fatalf("SessionStart Installed=true for %s command", tt.name)
+			}
+			if status.Installed {
+				t.Fatal("overall Installed=true with invalid SessionStart command")
+			}
+		})
 	}
 }
 
@@ -443,6 +769,30 @@ func TestCCCheckHooks_ManagedReflectsPdxEntries(t *testing.T) {
 		}
 		if status.Managed {
 			t.Fatal("no pdx entries: Managed=true, want false")
+		}
+	})
+	t.Run("owned pdx under unknown key", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		settingsPath := filepath.Join(home, ".claude", "settings.json")
+		if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		settings := map[string]any{
+			"hooks": map[string]any{
+				"Bogus": []any{makePdxEntry("/usr/local/bin/pdx", "cc", "SessionStart")},
+			},
+		}
+		data, _ := json.MarshalIndent(settings, "", "  ")
+		if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		status, err := NewProvider(nil, nil, nil, nil).CheckHooks()
+		if err != nil {
+			t.Fatalf("CheckHooks: %v", err)
+		}
+		if !status.Managed {
+			t.Fatal("owned pdx under unknown key: Managed=false, want true")
 		}
 	})
 }

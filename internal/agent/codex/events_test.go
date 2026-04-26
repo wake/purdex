@@ -102,11 +102,9 @@ func TestCodexEvents_DetailOnlyHaveEmptyEmitsStatus(t *testing.T) {
 	}
 }
 
-// TestCodexEventsFutureOnlyFlags is the fix-plan §2.2 CE1 assertion: codex
-// Events() declares exactly 3 non-FutureOnly events (SessionStart,
-// UserPromptSubmit, Stop — the pre-expansion 3-event installer set that
-// the codex CLI reliably emits today) and the remaining 6 events as
-// FutureOnly=true. See plan §1.3 for the matrix.
+// TestCodexEventsFutureOnlyFlags asserts Codex current required events are not
+// FutureOnly while parser-capable events that are not guaranteed in current
+// installs remain tolerated absent.
 func TestCodexEventsFutureOnlyFlags(t *testing.T) {
 	wantFutureOnly := map[string]bool{
 		"SessionStart":      false,
@@ -116,7 +114,7 @@ func TestCodexEventsFutureOnlyFlags(t *testing.T) {
 		"SubagentStop":      true,
 		"StopFailure":       true,
 		"Notification":      true,
-		"PermissionRequest": true,
+		"PermissionRequest": false,
 		"SessionEnd":        true,
 	}
 	p := codex.NewProvider()
@@ -190,4 +188,3 @@ func TestCodexEvents_DescriptionsNonEmpty(t *testing.T) {
 		}
 	}
 }
-

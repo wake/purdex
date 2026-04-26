@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/agent/opencode"
 )
 
@@ -92,12 +93,12 @@ func TestOpenCodeCheckHooks_ReportsAll8EventsFromEventsList(t *testing.T) {
 		t.Fatalf("CheckHooks: %v", err)
 	}
 
-	events := p.Events()
+	events := installableOpenCodeEvents(p.Events())
 	if len(events) == 0 {
 		t.Fatal("opencode Events() returned empty; CheckHooks iteration would be vacuous")
 	}
 	if len(status.Events) != len(events) {
-		t.Errorf("status.Events len=%d, want %d (one per Events())", len(status.Events), len(events))
+		t.Errorf("status.Events len=%d, want %d (one per installable Events())", len(status.Events), len(events))
 	}
 	for _, e := range events {
 		info, ok := status.Events[e.Name]
@@ -109,6 +110,16 @@ func TestOpenCodeCheckHooks_ReportsAll8EventsFromEventsList(t *testing.T) {
 			t.Errorf("event %q: Installed=false after fresh install", e.Name)
 		}
 	}
+}
+
+func installableOpenCodeEvents(events []agent.HookEventSpec) []agent.HookEventSpec {
+	out := make([]agent.HookEventSpec, 0, len(events))
+	for _, event := range events {
+		if agent.IsInstallableHookSpec(event) {
+			out = append(out, event)
+		}
+	}
+	return out
 }
 
 // ---- fix-plan §2.4 byte-exact CheckHooks tests (OH1-OH5) ----
@@ -142,7 +153,7 @@ func TestCheckHooks_ValidPlugin_AllInstalled(t *testing.T) {
 	if len(status.Issues) != 0 {
 		t.Fatalf("valid plugin: Issues=%v, want empty", status.Issues)
 	}
-	for _, spec := range p.Events() {
+	for _, spec := range installableOpenCodeEvents(p.Events()) {
 		if info, ok := status.Events[spec.Name]; !ok {
 			t.Errorf("status.Events missing %q", spec.Name)
 		} else if !info.Installed {
@@ -188,7 +199,7 @@ func TestCheckHooks_HandEditedPlugin_Unmanaged(t *testing.T) {
 	if !strings.Contains(joined, "plugin body differs from managed template") {
 		t.Fatalf("hand-edited plugin: issues=%v, want 'plugin body differs from managed template'", status.Issues)
 	}
-	for _, spec := range p.Events() {
+	for _, spec := range installableOpenCodeEvents(p.Events()) {
 		if info, ok := status.Events[spec.Name]; ok && info.Installed {
 			t.Errorf("event %q Installed=true after byte-mismatch, want false", spec.Name)
 		}
