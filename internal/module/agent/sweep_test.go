@@ -2067,6 +2067,248 @@ func TestSweep_CanonicalizeFoldsCandidateWithOnlyStaleProxy(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// PR-3.5b §3.2 — findCanonicalAncestor unit tests (RC6-RC11).
+//
+// Pure helper — no DB I/O. Each test seeds a framesByPID map and
+// exercises one return path: cross-type match, same-type hard-stop,
+// dead/PID-reused identity gate fail-safe, depth exhaustion, self-loop
+// detection, and readProcessInfoFn transient error.
+// ---------------------------------------------------------------------------
+
+func newCanonicalAncestorTestModule(t *testing.T) *Module {
+	t.Helper()
+	return newSweepTestModule(t)
+}
+
+// RC6 — happy path: descendant walks one PPID hop, finds cross-type
+// ancestor frame in pane, ancestor passes identity gate → returns (frame, true).
+func TestFindCanonicalAncestor_WalksToCrossTypeMatch(t *testing.T) {
+	m := newCanonicalAncestorTestModule(t)
+	cc := store.Frame{
+		FrameID: "cc-1", PaneID: "%5", AgentType: "cc",
+		PID: 100, PPID: 1, ProcessStartTime: "t100",
+	}
+	candidate := store.Frame{
+		FrameID: "codex-1", PaneID: "%5", AgentType: "codex",
+		PID: 200, PPID: 100, ProcessStartTime: "t200",
+	}
+	framesByPID := map[int]store.Frame{100: cc, 200: candidate}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	ancestor, ok := m.findCanonicalAncestor(candidate, framesByPID)
+	if !ok || ancestor.PID != 100 || ancestor.AgentType != "cc" {
+		t.Fatalf("findCanonicalAncestor = (%+v, %v), want cc PID=100", ancestor, ok)
+	}
+}
+
+// RC7 — same-type immediate match → returns false (not a proxy
+// relationship; mirrors findProxyParent hard-stop).
+func TestFindCanonicalAncestor_ReturnsFalseOnSameTypeImmediateMatch(t *testing.T) {
+	m := newCanonicalAncestorTestModule(t)
+	parent := store.Frame{
+		FrameID: "cc-1", PaneID: "%5", AgentType: "cc",
+		PID: 100, PPID: 1, ProcessStartTime: "t100",
+	}
+	candidate := store.Frame{
+		FrameID: "cc-2", PaneID: "%5", AgentType: "cc",
+		PID: 200, PPID: 100, ProcessStartTime: "t200",
+	}
+	framesByPID := map[int]store.Frame{100: parent, 200: candidate}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "t100", nil }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	if _, ok := m.findCanonicalAncestor(candidate, framesByPID); ok {
+		t.Fatal("findCanonicalAncestor = true, want false (same-type ancestor must hard-stop)")
+	}
+}
+
+// RC8 — ancestor PID dead → identity gate fail-safe; helper continues
+// walking (next ppid hop). When chain exhausts without finding a live
+// match, returns false.
+func TestFindCanonicalAncestor_ReturnsFalseOnDeadAncestorIdentityGate(t *testing.T) {
+	m := newCanonicalAncestorTestModule(t)
+	cc := store.Frame{
+		FrameID: "cc-1", PaneID: "%5", AgentType: "cc",
+		PID: 100, PPID: 1, ProcessStartTime: "t100",
+	}
+	candidate := store.Frame{
+		FrameID: "codex-1", PaneID: "%5", AgentType: "codex",
+		PID: 200, PPID: 100, ProcessStartTime: "t200",
+	}
+	framesByPID := map[int]store.Frame{100: cc, 200: candidate}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, PPID: 1}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	// PID 100 (cc) is DEAD.
+	isPidAliveFn = func(pid int) bool { return pid != 100 }
+	processStartTimeFn = func(int) (string, error) { return "t100", nil }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	if _, ok := m.findCanonicalAncestor(candidate, framesByPID); ok {
+		t.Fatal("findCanonicalAncestor = true, want false (dead ancestor identity gate must skip)")
+	}
+}
+
+// RC9 — depth exhaustion: long PPID chain with no frame match within
+// proxyMaxDepth → false.
+func TestFindCanonicalAncestor_ReturnsFalseOnDepthExhaustion(t *testing.T) {
+	m := newCanonicalAncestorTestModule(t)
+	candidate := store.Frame{
+		FrameID: "codex-1", PaneID: "%5", AgentType: "codex",
+		PID: 200, PPID: 1000, ProcessStartTime: "t200",
+	}
+	// PPID chain: 200 → 1000 → 1001 → 1002 → 1003 → 1004 → 1005 (still
+	// no frame in pane; depth cap stops after 5 hops).
+	framesByPID := map[int]store.Frame{200: candidate}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, PPID: 1000}, nil
+		case 1000:
+			return agentpkg.ProcessInfo{PID: 1000, PPID: 1001}, nil
+		case 1001:
+			return agentpkg.ProcessInfo{PID: 1001, PPID: 1002}, nil
+		case 1002:
+			return agentpkg.ProcessInfo{PID: 1002, PPID: 1003}, nil
+		case 1003:
+			return agentpkg.ProcessInfo{PID: 1003, PPID: 1004}, nil
+		case 1004:
+			return agentpkg.ProcessInfo{PID: 1004, PPID: 1005}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: pid + 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "irrelevant", nil }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	if _, ok := m.findCanonicalAncestor(candidate, framesByPID); ok {
+		t.Fatal("findCanonicalAncestor = true, want false (depth exhausted)")
+	}
+}
+
+// RC10 — self-loop: ancestor's PPID equals its own PID → false.
+func TestFindCanonicalAncestor_ReturnsFalseOnLoopDetectionPpidEqPid(t *testing.T) {
+	m := newCanonicalAncestorTestModule(t)
+	candidate := store.Frame{
+		FrameID: "codex-1", PaneID: "%5", AgentType: "codex",
+		PID: 200, PPID: 1000, ProcessStartTime: "t200",
+	}
+	framesByPID := map[int]store.Frame{200: candidate}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, PPID: 1000}, nil
+		case 1000:
+			// Self-loop: PPID == PID.
+			return agentpkg.ProcessInfo{PID: 1000, PPID: 1000}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "irrelevant", nil }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	if _, ok := m.findCanonicalAncestor(candidate, framesByPID); ok {
+		t.Fatal("findCanonicalAncestor = true, want false (self-loop must abort walk)")
+	}
+}
+
+// RC11 — readProcessInfoFn returns transient error → false (caller
+// retries next sweep tick).
+func TestFindCanonicalAncestor_ReturnsFalseOnReadProcessInfoTransientError(t *testing.T) {
+	m := newCanonicalAncestorTestModule(t)
+	candidate := store.Frame{
+		FrameID: "codex-1", PaneID: "%5", AgentType: "codex",
+		PID: 200, PPID: 100, ProcessStartTime: "t200",
+	}
+	framesByPID := map[int]store.Frame{200: candidate}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{}, errStub("proc transient")
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "irrelevant", nil }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	if _, ok := m.findCanonicalAncestor(candidate, framesByPID); ok {
+		t.Fatal("findCanonicalAncestor = true, want false (transient read error must abort)")
+	}
+}
+
 // IT10p — candidate carrying a LIVE identity-verified IsProxy ref is
 // skipped. The candidate is itself acting as ancestor for some other
 // sub-tree; folding it would lose that role.

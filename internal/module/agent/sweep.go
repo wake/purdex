@@ -127,6 +127,62 @@ func (m *Module) sweepOnce() error {
 	return nil
 }
 
+// findCanonicalAncestor walks descendant's PPID chain looking for a
+// cross-type frame in the same pane that is live and identity-verified.
+// Caps walk at proxyMaxDepth (5) to bound syscall cost.
+//
+// Returns (frame, true) on a successful match. Returns (zero, false)
+// when:
+//   - readProcessInfoFn errors mid-walk (transient — next sweep tick retries)
+//   - PPID hits init (<=1) or self-loop (PPID == current PID)
+//   - depth exhausted without finding a frame in the pane
+//   - a same-type ancestor is encountered (cross-type-only proxy semantics;
+//     a same-type ancestor in chain means we're "inside" the same agent
+//     tree and won't find a different cross-type ancestor higher up either,
+//     by design — mirrors findProxyParent's same-type hard-stop)
+//   - the matched ancestor fails identity gate (dead PID / PID-reused)
+//
+// Note: framesByPID is keyed by PID, not (PID, paneID), but caller passes
+// only frames from a single pane (ListByPane), so cross-pane PID
+// collision is impossible.
+func (m *Module) findCanonicalAncestor(candidate store.Frame, framesByPID map[int]store.Frame) (store.Frame, bool) {
+	info, err := readProcessInfoFn(candidate.PID)
+	if err != nil {
+		return store.Frame{}, false
+	}
+	ppid := info.PPID
+	for depth := 0; depth < proxyMaxDepth; depth++ {
+		if ppid <= 1 {
+			return store.Frame{}, false
+		}
+		ancestor, ok := framesByPID[ppid]
+		if ok {
+			if ancestor.AgentType == candidate.AgentType {
+				// Same-type — not a proxy relationship. Hard-stop the
+				// walk (mirrors findProxyParent semantics).
+				return store.Frame{}, false
+			}
+			if isPidAliveFn(ancestor.PID) {
+				actualStart, sterr := processStartTimeFn(ancestor.PID)
+				if sterr == nil && actualStart == ancestor.ProcessStartTime {
+					return ancestor, true
+				}
+			}
+			// Ancestor matched in pane but failed identity gate — keep
+			// walking; a deeper ancestor might still match.
+		}
+		ancestorInfo, err := readProcessInfoFn(ppid)
+		if err != nil {
+			return store.Frame{}, false
+		}
+		if ancestorInfo.PPID == ppid {
+			return store.Frame{}, false
+		}
+		ppid = ancestorInfo.PPID
+	}
+	return store.Frame{}, false
+}
+
 // uniquePaneIDs collects distinct pane IDs from a frame slice in the order
 // they first appear. Used by sweepOnce to drive the pruneDeadProxyRefs pass
 // without re-listing per-pane.
