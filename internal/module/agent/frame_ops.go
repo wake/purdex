@@ -316,19 +316,28 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		// reload picks up the newer ref before the next prune pass.
 		if req.EventName == "SessionStart" {
 			var success bool
-			// prevWrittenNativeIDs tracks native ref IDs we wrote in the
-			// most recent attempt's candidate.Subagents. nil at attempt 0
-			// — SessionStart's primary semantic is "reset previous
-			// session's native subagent state", so the baseline native
-			// refs read into frame.Subagents must be dropped. From
-			// attempt 1 onward (after IfUnchanged conflict + reload), a
-			// native ref appearing in the reloaded baseline that is NOT
-			// in prevWrittenNativeIDs is a concurrent SubagentStart that
-			// landed between attempts — preserve it (v8 M3, codex round
-			// PR-2 attack). Native refs already in prevWrittenNativeIDs
-			// were carried by us across attempts and are still subject
-			// to the SessionStart reset (they shouldn't accumulate).
-			var prevWrittenNativeIDs map[string]struct{}
+			// initialNativeIDs is the BASELINE native ref ID set captured
+			// before the retry loop. SessionStart's reset semantic drops
+			// the old session's native subagent state, which the cc
+			// hook saw at attempt 0 entry. Any native ref appearing in
+			// the reloaded baseline on a later retry that is NOT in
+			// initialNativeIDs is — by construction — a concurrent
+			// SubagentStart that landed AFTER our baseline snapshot
+			// (post our SessionStart). Such refs belong to the new
+			// session and must be preserved across all retries.
+			//
+			// Codex round 2 #O1 fix: the previous prevWrittenNativeIDs
+			// approach regressed across multiple conflicts — a native
+			// preserved at attempt 1 was recorded in prevWrittenNativeIDs
+			// itself, so attempt 2 dropped it as a "carried-forward
+			// baseline native". Snapshotting an immutable baseline
+			// before the loop sidesteps the regression entirely.
+			initialNativeIDs := make(map[string]struct{}, len(frame.Subagents))
+			for _, ref := range frame.Subagents {
+				if !ref.IsProxy {
+					initialNativeIDs[ref.ID] = struct{}{}
+				}
+			}
 			for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
 				pruned := make([]agentpkg.SubagentRef, 0, len(frame.Subagents))
 				for _, ref := range frame.Subagents {
@@ -346,14 +355,12 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 						pruned = append(pruned, ref)
 						continue
 					}
-					// Native ref: keep only if it appeared between
-					// attempts (concurrent SubagentStart). At attempt 0
-					// prevWrittenNativeIDs is nil, so SessionStart's
-					// reset semantic cleanly drops every native baseline.
-					if prevWrittenNativeIDs != nil {
-						if _, seen := prevWrittenNativeIDs[ref.ID]; !seen {
-							pruned = append(pruned, ref)
-						}
+					// Native ref: drop if it was in the initial
+					// baseline (SessionStart reset semantic for old
+					// session refs). Otherwise (appeared after baseline
+					// snapshot via concurrent SubagentStart) preserve.
+					if _, baseline := initialNativeIDs[ref.ID]; !baseline {
+						pruned = append(pruned, ref)
 					}
 				}
 
@@ -377,16 +384,11 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 				}
 				// Conflict — concurrent writer touched the row (proxy
 				// attach, SubagentStart hook, probe status update).
-				// Record what we attempted to write so the next prune
-				// pass can distinguish concurrent attaches (kept) from
-				// stale baseline native refs (dropped). Then reload +
-				// retry.
-				prevWrittenNativeIDs = make(map[string]struct{}, len(pruned))
-				for _, ref := range pruned {
-					if !ref.IsProxy {
-						prevWrittenNativeIDs[ref.ID] = struct{}{}
-					}
-				}
+				// Reload and retry; initialNativeIDs is UNCHANGED across
+				// retries, so any native ID appearing in the reloaded
+				// baseline that is not in initialNativeIDs is a true
+				// concurrent attach and gets preserved by the next
+				// filter pass.
 				reloaded, rerr := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
 				if rerr != nil {
 					return nil, FrameTraceMeta{}, rerr

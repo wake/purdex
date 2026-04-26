@@ -2803,6 +2803,184 @@ func TestPhase35_IT21_ExistingFrameSessionStartPreservesConcurrentNativeSubagent
 	}
 }
 
+// IT21b — existing_frame SessionStart preserves natives that arrive across
+// MULTIPLE conflict retries. Codex round 2 #O1 regression guard: the
+// prevWrittenNativeIDs strategy (v8 M3) preserved natives that appeared
+// after attempt 0 once, but then recorded them in prevWrittenNativeIDs
+// itself — so a second IfUnchanged conflict (e.g. probe status update +
+// another concurrent attach) caused attempt 2 to "drop" what attempt 1
+// had just preserved, racing the native into oblivion. The fix is the
+// initialNativeIDs baseline: snapshot the BASELINE native ID set before
+// the retry loop and only drop those across all retries; any native
+// appearing in a reloaded frame after baseline snapshot is unconditionally
+// concurrent and preserved.
+//
+// Setup — three concurrent attaches across two conflicts:
+//   - cc seeded with one BASELINE native (baseline-task-1) at LastSeenAt=50
+//   - attempt 0 conflict (mock — bump LastSeenAt to 60 + add concurrent-task-1)
+//   - attempt 1 conflict (mock — bump LastSeenAt to 70 + add concurrent-task-2)
+//   - attempt 2 succeeds
+//
+// Assertions: final.Subagents contains concurrent-task-1 + concurrent-task-2;
+// baseline-task-1 is dropped (SessionStart reset semantic).
+func TestPhase35_IT21b_ExistingFrameSessionStartPreservesNativeAcrossMultiConflict(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	parent.Subagents = []agentpkg.SubagentRef{{
+		ID:        "baseline-task-1",
+		Type:      "cc",
+		StartedAt: 5,
+	}}
+	parent.LastSeenAt = 50
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed cc + baseline native: %v", err)
+	}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	// We don't have IsProxy refs in this test, so the filter loop's
+	// processStartTimeFn calls only happen for non-existent IsProxy refs
+	// (zero in baseline). Drive the conflict via a counter on a different
+	// seam: each attempt's UpsertIfUnchanged will reload, and we use a
+	// counter to simulate concurrent natives appearing during reload via
+	// readProcessInfoFn (but readProcessInfoFn is also called once before
+	// the loop). Instead, drive the race via a per-attempt counter on
+	// processStartTimeFn — but we have no IsProxy refs to trigger it.
+	//
+	// Simpler approach: inject natives BEFORE applyFrameEvent's first
+	// reload by piggy-backing on isPidAliveFn (called for every IsProxy
+	// in the loop — but we have no IsProxy refs). Final approach: use
+	// readProcessInfoFn (called once before the loop) to set up a
+	// counter-driven concurrent inject directly via a side channel.
+	//
+	// Cleanest: put the inject in a custom seam. Since we don't have an
+	// existing per-attempt seam to hook for native-only frames, we'll
+	// instead use TWO IsProxy refs in the baseline (which will be kept
+	// across conflicts because they pass identity check) to drive the
+	// processStartTimeFn count, and the seeded native (baseline-task-1)
+	// to verify reset semantic.
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	// Reseed with two IsProxy refs (PIDs 200, 300) so processStartTimeFn
+	// is called at least twice per filter pass — gives us a counter to
+	// drive concurrent inject across attempts.
+	parent.Subagents = []agentpkg.SubagentRef{
+		{
+			ID:        "baseline-task-1",
+			Type:      "cc",
+			StartedAt: 5,
+		},
+		{
+			ID:              "proxy:codex:200:t200",
+			Type:            "codex",
+			SourcePID:       200,
+			SourceStartTime: "t200",
+			IsProxy:         true,
+		},
+	}
+	parent.LastSeenAt = 50
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("re-seed: %v", err)
+	}
+
+	// Counter on processStartTimeFn(200): each invocation corresponds to
+	// one filter pass. Inject concurrent natives BEFORE the IfUnchanged
+	// write at the END of attempts 0 and 1 — but processStartTimeFn runs
+	// at the START of each attempt's filter pass. Instead use a hook on
+	// each call AFTER the filter pass: rely on the fact that each attempt
+	// calls processStartTimeFn(200) exactly once (the lone IsProxy in the
+	// reloaded baseline). For each call N (1-indexed), at the END of the
+	// callback inject the racer that conflicts THIS attempt's write.
+	attempt := 0
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t100", nil
+		}
+		if pid != 200 {
+			return "other", nil
+		}
+		// Each call indicates we're in attempt N's filter pass for the
+		// codex IsProxy ref. After returning, applyFrameEvent will issue
+		// IfUnchanged. To force a conflict, mutate the row right now —
+		// the LastSeenAt bump invalidates the optimistic write.
+		attempt++
+		if attempt <= 2 {
+			racer, _ := m.frames.GetByIdentity("%5", 100, "t100")
+			if racer != nil {
+				newID := "concurrent-task-" + map[int]string{1: "1", 2: "2"}[attempt]
+				racer.Subagents = append(racer.Subagents, agentpkg.SubagentRef{
+					ID:        newID,
+					Type:      "cc",
+					StartedAt: int64(60 + 10*attempt),
+				})
+				racer.LastSeenAt = int64(50 + 10*attempt)
+				if _, err := m.frames.Upsert(*racer); err != nil {
+					t.Fatalf("concurrent inject attempt=%d: %v", attempt, err)
+				}
+			}
+		}
+		return "t200", nil
+	}
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	if _, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+
+	if attempt < 3 {
+		t.Fatalf("filter-merge ran only %d attempts, expected at least 3 (2 conflicts + final success)", attempt)
+	}
+
+	final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if final == nil {
+		t.Fatalf("cc frame disappeared")
+	}
+	hasBaseline := false
+	hasConcurrent1 := false
+	hasConcurrent2 := false
+	hasCodexProxy := false
+	for _, ref := range final.Subagents {
+		switch {
+		case !ref.IsProxy && ref.ID == "baseline-task-1":
+			hasBaseline = true
+		case !ref.IsProxy && ref.ID == "concurrent-task-1":
+			hasConcurrent1 = true
+		case !ref.IsProxy && ref.ID == "concurrent-task-2":
+			hasConcurrent2 = true
+		case ref.IsProxy && ref.SourcePID == 200:
+			hasCodexProxy = true
+		}
+	}
+	if hasBaseline {
+		t.Fatalf("baseline-task-1 still present in %+v — SessionStart reset must drop initial natives", final.Subagents)
+	}
+	if !hasConcurrent1 {
+		t.Fatalf("concurrent-task-1 missing from %+v — multi-conflict regression: attempt 2's filter dropped it (initialNativeIDs baseline broken)", final.Subagents)
+	}
+	if !hasConcurrent2 {
+		t.Fatalf("concurrent-task-2 missing from %+v — last-conflict native wasn't preserved", final.Subagents)
+	}
+	if !hasCodexProxy {
+		t.Fatalf("codex IsProxy ref missing from %+v — proxy preservation regression", final.Subagents)
+	}
+}
+
 // IT1 — descendant_then_ancestor_canonicalizes_via_descendant_scan.
 // codex SessionStart lands first (no cc parent yet → standalone codex).
 // cc SessionStart lands second (new-frame Upsert + descendant scan finds
