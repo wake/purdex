@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.228] - 2026-04-26
+
+### Fix(agent): hook install and cleanup correctness (#645)
+
+Agent hook installer/checker hotfix. Hook handling now distinguishes classified catalog entries from installable events, and cc/Codex cleanup ownership is explicit and provider-local.
+
+- Add `HookHandling` helpers and scope installer/checker/template completeness to installable `status/detail` events.
+- Codex hook install now enables and checks `features.codex_hooks`, preserves config file permissions, and treats `PermissionRequest` as a current required event.
+- Codex/Claude cleanup now removes only Purdex-owned hook commands, preserves unknown same-provider tokens and third-party shapes, and rejects unsupported hook roots/install shapes before writing.
+- Codex remove no longer leaves empty event keys that Purdex later reports as broken.
+- Regression tests cover installable filtering, ownership cleanup edges, unsupported shape preservation, and strict `pdx hook` command grammar.
+
 ## [1.0.0-alpha.227] - 2026-04-26
 
 ### Feat(agent): Phase 3.5b — sweep canonicalize defense-in-depth (#650)
