@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.225] - 2026-04-26
+
+### Feat(spa): add tab name tooltip controls (#642)
+
+Tab name tooltip 新增可設定顯示範圍，並延後到滑鼠懸停 800ms 後才顯示，降低短暫滑過 tab 時的視覺干擾。
+
+- Terminal 設定在 Dynamic tab name 下方新增 `Tab name tooltip`，可選不顯示、上方、左邊或都顯示。
+- 上方 tab 與左側 activity bar inline tab 依設定分別控制完整 tab name tooltip 是否渲染。
+- `HoverTooltip` 新增 800ms 延遲與離開前取消邏輯，並補對應 regression tests。
+
 ## [1.0.0-alpha.224] - 2026-04-25
 
 ### Fix(spa): keep activity bar home fixed (#640)
