@@ -841,4 +841,37 @@ Only create this PR if issue #658 or another mechanically verified source/runtim
 
 ### PR 6 — OpenCode Icon Guard
 
-Coverage-only SPA test. May be bundled with PR 4 if review load is low; otherwise keep as a small test-only PR.
+Coverage-only SPA test.
+
+Scope:
+
+- Add explicit coverage that `getAgentIcon('opencode', ...)` returns a defined icon component.
+- Add coverage that the OpenCode icon component is stable across the full cc/Codex icon variant option matrix because OpenCode has no variant setting.
+- Do not change production icon code in PR 6. If the guard fails on the current baseline, stop and split a separate fix.
+- Do not add `opencodeVariant` or settings UI.
+- Do not touch tab rendering, workspace projection, daemon hook code, or generated icon metadata.
+
+Implementation files:
+
+- `spa/src/lib/agent-icons.test.tsx`
+
+Plan file:
+
+- `docs/specs/2026-04-25-agent-hooks-hotfix-plan.md`
+
+Test IDs:
+
+| ID | Test | Assertion |
+|---|---|---|
+| OI1 | `returns opencode icon for opencode agent type` | `getAgentIcon('opencode', ...)` returns a defined component |
+| OI2 | `opencode icon ignores cc and codex variants` | OpenCode icon component identity is stable across the 2x2 cc/Codex variant matrix |
+
+TDD note:
+
+- This is a coverage guard for already-shipped production behavior, so OI1/OI2 are allowed to pass immediately on `origin/main`.
+- If either test fails, do not fix production in PR 6; stop and decide whether to open a separate production fix PR.
+
+Verification:
+
+- `pnpm --prefix spa exec vitest run src/lib/agent-icons.test.tsx`
+- `git diff --check`
