@@ -157,14 +157,27 @@ func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
 			if !ref.IsProxy {
 				continue
 			}
-			if isPidAliveFn(ref.SourcePID) {
+			// Codex round 2 #O3 fix: detach only on CONFIRMED staleness.
+			// Read errors from processStartTimeFn (transient /proc
+			// failure / platform probe issue) must not destructively
+			// reap a possibly-live proxy ref. Fail-safe: keep the ref,
+			// retry next sweep tick (2s).
+			var shouldPrune bool
+			if !isPidAliveFn(ref.SourcePID) {
+				shouldPrune = true // confirmed dead source
+			} else {
 				actualStart, sterr := processStartTimeFn(ref.SourcePID)
-				if sterr == nil && actualStart == ref.SourceStartTime {
-					// Source still alive + identity-verified — keep.
+				if sterr != nil {
+					// Read error → keep, retry next sweep.
 					continue
 				}
+				if actualStart != ref.SourceStartTime {
+					shouldPrune = true // confirmed PID reuse
+				}
 			}
-			// Source dead, identity unreadable, or PID reused → detach.
+			if !shouldPrune {
+				continue // alive + identity-verified
+			}
 			detached, _, derr := m.detachProxyRefWithRetry(frame, ref.SourcePID, ref.SourceStartTime, broadcastTs)
 			if derr == nil && detached {
 				agentpkg.MetricSweepPrunedProxy.Add(1)

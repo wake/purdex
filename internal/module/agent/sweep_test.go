@@ -802,6 +802,72 @@ func TestSweep_PruneDeadProxyRefs_KeepsLiveProxy(t *testing.T) {
 	}
 }
 
+// IT14b — codex round 2 #O3 fix: sweep pruneDeadProxyRefs preserves a
+// proxy ref when processStartTimeFn returns an error (transient /proc
+// read failure / platform probe issue). Previously the fall-through
+// after a `sterr != nil` test detached the ref — fail-destructive,
+// could falsely reap a live proxy whose start_time read transiently
+// failed. Fail-safe: only detach on CONFIRMED dead source or CONFIRMED
+// identity mismatch. Read error → keep, retry next sweep.
+func TestSweep_PruneDeadProxyRefs_KeepsProxyOnStartTimeError(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:codex:300:t300",
+			Type:            "codex",
+			SourcePID:       300,
+			SourceStartTime: "t300",
+			IsProxy:         true,
+		}},
+		Status:     agentpkg.StatusIdle,
+		StartedAt:  10,
+		LastSeenAt: 10,
+		Verified:   true,
+	}); err != nil {
+		t.Fatalf("Upsert cc + proxy ref: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	// PID 300 alive, but processStartTimeFn returns transient error.
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			return "A", nil
+		}
+		// PID 300 (the proxy's source): transient read error.
+		return "", errStub("ps transient failure")
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	startMetric := agentpkg.MetricSweepPrunedProxy.Value()
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if len(frames[0].Subagents) != 1 || frames[0].Subagents[0].SourcePID != 300 {
+		t.Fatalf("cc.Subagents = %+v, want proxy preserved on read error (fail-safe)", frames[0].Subagents)
+	}
+	if delta := agentpkg.MetricSweepPrunedProxy.Value() - startMetric; delta != 0 {
+		t.Fatalf("MetricSweepPrunedProxy delta = %d, want 0 (read error must not detach)", delta)
+	}
+}
+
 // IT14 — sweep pruneDeadProxyRefs detaches a proxy ref whose source PID
 // has been reused (alive but stored start_time mismatches actualStart).
 // Plan §4.3 PID-reuse case.
