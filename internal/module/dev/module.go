@@ -159,11 +159,11 @@ func (m *DevModule) defaultBuild(session *BuildSession) error {
 func (m *DevModule) RegisterRoutes(mux *http.ServeMux) {
 	// Two-layer gate. Layer 1 (config.Dev.Update in main.go) decides whether
 	// to instantiate this module at all — when false, DevModule isn't even
-	// constructed. Layer 2 (PDX_DEV_UPDATE=1 env var, below) gates route
+	// constructed. Layer 2 (PDX_DEV_MODE=1 env var, below) gates route
 	// registration so operators can run the module without exposing the dev
 	// endpoints (useful for staging or partial rollouts). Both must be set
 	// to serve /api/dev/* requests.
-	if os.Getenv("PDX_DEV_UPDATE") != "1" {
+	if os.Getenv("PDX_DEV_MODE") != "1" {
 		return
 	}
 	mux.HandleFunc("GET /api/dev/update/check", m.handleCheck)
@@ -174,8 +174,8 @@ func (m *DevModule) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (m *DevModule) Start(_ context.Context) error {
-	if os.Getenv("PDX_DEV_UPDATE") != "1" {
-		log.Println("[dev] update endpoints disabled (requires config.Dev.Update=true AND PDX_DEV_UPDATE=1)")
+	if os.Getenv("PDX_DEV_MODE") != "1" {
+		log.Println("[dev] update endpoints disabled (requires config.Dev.Update=true AND PDX_DEV_MODE=1)")
 		return nil
 	}
 	log.Println("[dev] update endpoints enabled")

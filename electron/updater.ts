@@ -31,7 +31,7 @@ export function getAppInfo(): AppInfo {
     version: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'unknown',
     electronHash: typeof __ELECTRON_HASH__ !== 'undefined' ? __ELECTRON_HASH__ : 'unknown',
     spaHash: typeof __SPA_HASH__ !== 'undefined' ? __SPA_HASH__ : 'unknown',
-    devUpdateEnabled: !!process.env.PDX_DEV_UPDATE,
+    devUpdateEnabled: !!process.env.PDX_DEV_MODE,
   }
 }
 

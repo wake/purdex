@@ -12,7 +12,7 @@ import (
 )
 
 func TestHandleDaemonCheck_ReturnsHashes(t *testing.T) {
-	t.Setenv("PDX_DEV_UPDATE", "1")
+	t.Setenv("PDX_DEV_MODE", "1")
 	m := New(".") // repoRoot = cwd (git worktree)
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)
@@ -38,7 +38,7 @@ func TestHandleDaemonCheck_ReturnsHashes(t *testing.T) {
 }
 
 func TestHandleDaemonRebuild_BuildsInTempRepo(t *testing.T) {
-	t.Setenv("PDX_DEV_UPDATE", "1")
+	t.Setenv("PDX_DEV_MODE", "1")
 	dir := t.TempDir()
 	// Minimal go module that builds at ./cmd/pdx.
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0644); err != nil {
@@ -79,7 +79,7 @@ func TestHandleDaemonRebuild_BuildsInTempRepo(t *testing.T) {
 }
 
 func TestHandleDaemonRebuild_ExecsRebuiltBinary(t *testing.T) {
-	t.Setenv("PDX_DEV_UPDATE", "1")
+	t.Setenv("PDX_DEV_MODE", "1")
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestHandleDaemonRebuild_ConcurrentReturns409(t *testing.T) {
 }
 
 func TestHandleDaemonRebuild_BuildFailureEmitsError(t *testing.T) {
-	t.Setenv("PDX_DEV_UPDATE", "1")
+	t.Setenv("PDX_DEV_MODE", "1")
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestHandleDaemonRebuild_BuildFailureEmitsError(t *testing.T) {
 }
 
 func TestHandleDaemonRebuild_RenameFailureEmitsError(t *testing.T) {
-	t.Setenv("PDX_DEV_UPDATE", "1")
+	t.Setenv("PDX_DEV_MODE", "1")
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -204,7 +204,7 @@ func TestHandleDaemonCheck_AvailableFlag(t *testing.T) {
 	defer func() { BakedInHash = old }()
 
 	BakedInHash = "definitely-not-a-real-hash-0000"
-	t.Setenv("PDX_DEV_UPDATE", "1")
+	t.Setenv("PDX_DEV_MODE", "1")
 	m := New(".")
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)

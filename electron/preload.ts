@@ -119,8 +119,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     rename: (from: string, to: string) => ipcRenderer.invoke('fs:rename', from, to),
   },
 
-  // Dev Update (only exposed when PDX_DEV_UPDATE=1)
-  ...(process.env.PDX_DEV_UPDATE ? {
+  // Dev Update (only exposed when PDX_DEV_MODE=1)
+  ...(process.env.PDX_DEV_MODE ? {
     getAppInfo: () => ipcRenderer.invoke('dev:app-info'),
     checkUpdate: (daemonUrl: string, token?: string) => ipcRenderer.invoke('dev:check-update', daemonUrl, token),
     applyUpdate: (daemonUrl: string, token?: string) => ipcRenderer.invoke('dev:apply-update', daemonUrl, token),

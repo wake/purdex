@@ -22,7 +22,7 @@
 - SPA dev server 會把 `/api` 與 `/ws` proxy 到 `localhost:7860`；只跑前端時，daemon 也要在本機 `7860`。
 - `spa/scripts/generate-icon-data.mjs` 會重建 `spa/public/icons/*.json` 與 `spa/src/features/workspace/generated/icon-meta.json`；這些是產物，不要手改。
 - `out/` 與 `dist/` 都是建置輸出，不要手改。
-- Dev update 是雙重 gate：daemon 端要 `config.Dev.Update=true`，而且 `PDX_DEV_UPDATE=1` 也必須存在，`/api/dev/*` 路由與 Electron preload API 才會真的露出。
+- Dev update 是雙重 gate：daemon 端要 `config.Dev.Update=true`，而且 `PDX_DEV_MODE=1` 也必須存在，`/api/dev/*` 路由與 Electron preload API 才會真的露出。
 - `VERSION` 是版本 SOT；bump 時同步 `package.json` 與 `spa/package.json`。`electron.vite.config.ts` 和 `internal/module/dev` 都直接讀這個檔。
 - Locale 變更要同時更新 `spa/src/locales/en.json` 與 `spa/src/locales/zh-TW.json`；repo 內有 completeness tests 會檢查兩邊 key set。
 
