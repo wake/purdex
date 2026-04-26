@@ -1154,7 +1154,7 @@ func TestSweep_OwnerReadErrorPreservesFrame(t *testing.T) {
 // across commits.
 var (
 	canonicalizeWired = true
-	broadcastWired    = false
+	broadcastWired    = true
 )
 
 func skipUntilCanonicalizeWired(t *testing.T) {

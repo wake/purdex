@@ -224,11 +224,38 @@ func (m *Module) canonicalizePane(paneID string, broadcastTs int64) {
 		canonicalizedAny = true
 		anyAncestor = parentStored
 	}
-	// Broadcast wiring lands in commit 8 (broadcastProxyCanonicalized).
-	// Until then this is a no-op except for storage + metric.
 	if canonicalizedAny {
-		_ = anyAncestor
+		m.broadcastProxyCanonicalized(anyAncestor)
 	}
+}
+
+// broadcastProxyCanonicalized emits a "hook" broadcast with reason=
+// sweep:proxy_canonicalized after canonicalizePane attached at least
+// one proxy ref + deleted at least one standalone child in a pane.
+// Mirrors broadcastProxyPruned so SPA + m.subagents / m.currentStatus
+// stay in sync without waiting for an unrelated hook.
+//
+// Best-effort: errors swallowed (next sweep tick re-evaluates).
+// Per-pane (not per-attach) so multiple folds in the same pane
+// coalesce into one broadcast — matches broadcastProxyPruned's
+// granularity. PR-3.5b §2.4.
+func (m *Module) broadcastProxyCanonicalized(reference store.Frame) {
+	sessionName, code := m.resolvePaneSession(reference.PaneID)
+	projection, err := m.projectionForSession(sessionName)
+	if err != nil {
+		return
+	}
+	if sessionName != "" {
+		m.mu.Lock()
+		syncProjectionState(m.currentStatus, m.subagents, sessionName, projection)
+		m.mu.Unlock()
+	}
+	if code == "" || m.core == nil {
+		return
+	}
+	normalized := buildProjectionNormalized(projection, reference.AgentType, "sweep:proxy_canonicalized", nowFn().UnixNano(), agentpkg.DeriveResult{})
+	payload, _ := json.Marshal(normalized)
+	m.core.Events.Broadcast(code, "hook", string(payload))
 }
 
 // findCanonicalAncestor walks descendant's PPID chain looking for a
