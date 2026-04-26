@@ -287,33 +287,110 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		// Subagents changes flow through mutateSubagentsWithRetry /
 		// attachProxyRefWithRetry / removeProxyRefForSender, not here.
 		//
-		// Exception: SessionStart on an existing frame intentionally resets
-		// the subagent list (old session's refs no longer apply). Use the
-		// reset variant so subagents_json = '[]' lands in the same SQL.
-		updated := *frame
-		updated.AgentType = req.AgentType
-		updated.PPID = info.PPID
-		updated.ParentFrameID = parentFrameID
-		updated.Status = status
-		updated.LastSeenAt = broadcastTs
-		updated.Verified = true
-		var updateErr error
+		// Exception: SessionStart on an existing frame must reset the
+		// previous session's refs while preserving any IsProxy ref whose
+		// SourcePID is still alive + identity-verified. Phase 3.5 plan
+		// §2.2.2 (v6 J1) replaces the old "snapshot → reset → re-attach"
+		// three-step pattern (race window between steps could lose a
+		// concurrently-attached proxy) with a single filter-merge-retry:
+		// each attempt re-reads frame.Subagents (so any concurrent attach
+		// is naturally preserved), filters via the live identity gate,
+		// and writes via UpsertIfUnchanged. A conflict reload picks up
+		// the newer ref before the next filter pass.
 		if req.EventName == "SessionStart" {
-			updateErr = m.frames.UpdateHookPathAndResetSubagents(updated)
+			var success bool
+			for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+				filtered := make([]agentpkg.SubagentRef, 0, len(frame.Subagents))
+				for _, ref := range frame.Subagents {
+					if !ref.IsProxy {
+						continue
+					}
+					if !isPidAliveFn(ref.SourcePID) {
+						continue
+					}
+					actualStart, sterr := processStartTimeFn(ref.SourcePID)
+					if sterr != nil || actualStart != ref.SourceStartTime {
+						continue
+					}
+					filtered = append(filtered, ref)
+				}
+
+				candidate := *frame
+				candidate.AgentType = req.AgentType
+				candidate.PPID = info.PPID
+				candidate.ParentFrameID = parentFrameID
+				candidate.Status = status
+				candidate.LastSeenAt = broadcastTs
+				candidate.Verified = true
+				candidate.Subagents = filtered
+
+				ok, written, uerr := m.frames.UpsertIfUnchanged(candidate, frame.LastSeenAt)
+				if uerr != nil {
+					return nil, FrameTraceMeta{}, uerr
+				}
+				if ok {
+					stored = written
+					success = true
+					break
+				}
+				// Conflict — concurrent writer touched the row (proxy
+				// attach, SubagentStart hook, probe status update).
+				// Reload + retry; the new read includes any IsProxy ref
+				// the racer added so the next filter pass preserves it.
+				reloaded, rerr := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
+				if rerr != nil {
+					return nil, FrameTraceMeta{}, rerr
+				}
+				if reloaded == nil {
+					// Frame deleted mid-flight. Treat as frame_missing.
+					projection, perr := m.projectPane(req.TmuxPaneID)
+					return projection, FrameTraceMeta{
+						Decision: "skipped",
+						Reason:   "frame_missing",
+						Before:   before,
+						After:    map[string]any{},
+					}, perr
+				}
+				frame = reloaded
+			}
+			if !success {
+				return nil, FrameTraceMeta{}, fmt.Errorf("session_start filter-merge: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, frame.FrameID)
+			}
 		} else {
-			updateErr = m.frames.UpdateHookPath(updated)
+			// Non-SessionStart existing-frame path: original narrow
+			// column update (#632 R8 — don't round-trip subagents).
+			updated := *frame
+			updated.AgentType = req.AgentType
+			updated.PPID = info.PPID
+			updated.ParentFrameID = parentFrameID
+			updated.Status = status
+			updated.LastSeenAt = broadcastTs
+			updated.Verified = true
+			if err := m.frames.UpdateHookPath(updated); err != nil {
+				return nil, FrameTraceMeta{}, err
+			}
+			reloaded, rerr := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
+			if rerr != nil {
+				return nil, FrameTraceMeta{}, rerr
+			}
+			if reloaded == nil {
+				return nil, FrameTraceMeta{}, nil
+			}
+			stored = *reloaded
 		}
-		if updateErr != nil {
-			return nil, FrameTraceMeta{}, updateErr
+
+		// Phase 3.5 §2.2.2 — descendant scan after successful filter-
+		// merge. Catches any cold-start race where a child's
+		// SessionStart raced this existing-frame's SessionStart and
+		// landed standalone instead of being collapsed via PR-2b's
+		// pre-Upsert proxy fast-path.
+		if req.EventName == "SessionStart" {
+			updated, cerr := m.canonicalizeDescendantsAfterUpsert(stored, broadcastTs)
+			if cerr != nil {
+				return nil, FrameTraceMeta{}, cerr
+			}
+			stored = updated
 		}
-		reloaded, err := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
-		if err != nil {
-			return nil, FrameTraceMeta{}, err
-		}
-		if reloaded == nil {
-			return nil, FrameTraceMeta{}, nil
-		}
-		stored = *reloaded
 	} else {
 		// New frame: insert via Upsert. No existing subagents to clobber;
 		// start the row with an empty list.
@@ -332,6 +409,38 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		})
 		if err != nil {
 			return nil, FrameTraceMeta{}, err
+		}
+
+		// Phase 3.5 §2.2.1 — bidirectional canonicalization (best-effort).
+		// On a SessionStart we just created a standalone frame for, try
+		// once more (post-Upsert) to fold either:
+		//   (a) self into an alive cross-type ancestor (reconcile, plan
+		//       §2.1.1), or
+		//   (b) any standalone cross-type descendants whose SessionStart
+		//       raced ours and landed before our PPID-walk could see us
+		//       as an ancestor (descendant scan, plan §2.1.2).
+		if req.EventName == "SessionStart" {
+			canonicalized, parentStored, rerr := m.reconcileCreatedFrameAsProxy(stored, req, broadcastTs)
+			if rerr != nil {
+				return nil, FrameTraceMeta{}, rerr
+			}
+			if canonicalized {
+				projection, perr := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					FrameID:       parentStored.FrameID,
+					ParentFrameID: parentStored.ParentFrameID,
+					Decision:      "updated_frame",
+					Reason:        "post_upsert_canonicalization_self",
+					Before:        before,
+					After:         summarizeFrame(&parentStored),
+				}, perr
+			}
+			// self stays standalone (or partial); try descendant scan.
+			updated, cerr := m.canonicalizeDescendantsAfterUpsert(stored, broadcastTs)
+			if cerr != nil {
+				return nil, FrameTraceMeta{}, cerr
+			}
+			stored = updated
 		}
 	}
 	projection, err := m.projectPane(req.TmuxPaneID)

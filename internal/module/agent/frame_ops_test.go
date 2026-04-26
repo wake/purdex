@@ -2216,6 +2216,412 @@ func TestCanonicalizeDescendantsAfterUpsert_SkipsPidReuseViaIdentityGate(t *test
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Phase 3.5 PR-3.5a — Integration tests for cold-start race canonicalization
+// (plan §3.1)
+// ---------------------------------------------------------------------------
+
+// IT3 — concurrent_descendant_first_then_reconcile_hits_post_upsert.
+// codex applyFrameEvent: pre-walk findProxyParent misses (cc not yet
+// visible to walk; readProcessInfoFn returns dud PPID on calls 1+2),
+// then reconcile post-Upsert hits (cc visible on call 3+; readProcessInfoFn
+// returns PPID=100 with cc seeded). Verifies the §2.2.1 reconcile path
+// is wired and emits post_upsert_canonicalization_self.
+func TestPhase35_IT3_PreWalkMiss_PostReconcileHit(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	// Counter swaps PPID for codex sender (PID=200) so PR-2b's findProxyParent
+	// (calls 1+2: pre-walk + line-222 info read) sees PPID=999 = no parent
+	// in DB, fall-through to new-frame Upsert. Then post-Upsert reconcile's
+	// findProxyParent (call 3+) sees PPID=100 = cc → fold.
+	calls := 0
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			calls++
+			if calls <= 2 {
+				return agentpkg.ProcessInfo{PID: 200, PPID: 999}, nil
+			}
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "post_upsert_canonicalization_self" {
+		t.Fatalf("reason = %q, want post_upsert_canonicalization_self", meta.Reason)
+	}
+	if meta.Decision != "updated_frame" {
+		t.Fatalf("decision = %q, want updated_frame", meta.Decision)
+	}
+	if meta.FrameID != parent.FrameID {
+		t.Fatalf("FrameID = %q, want parent %q", meta.FrameID, parent.FrameID)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (codex folded into cc)", len(frames))
+	}
+	if frames[0].AgentType != "cc" {
+		t.Fatalf("remaining AgentType = %q, want cc", frames[0].AgentType)
+	}
+	if len(frames[0].Subagents) != 1 || frames[0].Subagents[0].SourcePID != 200 {
+		t.Fatalf("cc.Subagents = %+v, want 1 codex proxy ref", frames[0].Subagents)
+	}
+}
+
+// IT4 — concurrent_descendant_post_reconcile_also_misses_recovered_by_ancestor_scan.
+// Core ancestor-late race: codex SessionStart races first, both pre-walk and
+// post-walk miss → standalone codex frame. Then cc SessionStart fires —
+// new-frame post-Upsert descendant scan must locate codex and fold it.
+func TestPhase35_IT4_AncestorLateRecoveredByDescendantScan(t *testing.T) {
+	m := newProxyTestModule(t)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	// codex sender PID=200 PPID=100; cc sender PID=100 PPID=1.
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		switch pid {
+		case 200:
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		case 100:
+			return agentpkg.ProcessInfo{PID: 100, PPID: 1}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	// Step (a): codex SessionStart with cc not yet in DB → pre-walk misses
+	// (FindByPanePID(100) = nil), reconcile post-walk also misses (same
+	// reason), new standalone codex created.
+	req1 := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	if _, _, err := m.applyFrameEvent(req1, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("codex applyFrameEvent: %v", err)
+	}
+	mid, _ := m.frames.ListByPane("%5")
+	if len(mid) != 1 || mid[0].AgentType != "codex" {
+		t.Fatalf("after codex SessionStart: frames=%+v, want 1 standalone codex", mid)
+	}
+
+	// Step (b): cc SessionStart — new-frame Upsert + descendant scan must
+	// find codex (PPID 200→100) + fold.
+	req2 := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	if _, _, err := m.applyFrameEvent(req2, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200); err != nil {
+		t.Fatalf("cc applyFrameEvent: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (codex folded into cc); frames=%+v", len(frames), frames)
+	}
+	if frames[0].AgentType != "cc" {
+		t.Fatalf("remaining AgentType = %q, want cc", frames[0].AgentType)
+	}
+	if len(frames[0].Subagents) != 1 {
+		t.Fatalf("cc.Subagents = %+v, want 1 codex proxy ref", frames[0].Subagents)
+	}
+	ref := frames[0].Subagents[0]
+	if !ref.IsProxy || ref.Type != "codex" || ref.SourcePID != 200 || ref.SourceStartTime != "t200" {
+		t.Fatalf("ref = %+v, want codex proxy SourcePID=200 t200", ref)
+	}
+}
+
+// IT17 — existing_frame SessionStart preserves a live identity-verified
+// IsProxy ref via filter-merge-retry (plan §2.2.2 v6 J1).
+func TestPhase35_IT17_ExistingFrameSessionStartPreservesLiveProxyRef(t *testing.T) {
+	m := newProxyTestModule(t)
+	// Seed cc parent with an existing codex IsProxy ref.
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	parent.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:codex:200:t200",
+		Type:            "codex",
+		StartedAt:       50,
+		SourcePID:       200,
+		SourceStartTime: "t200",
+		IsProxy:         true,
+	}}
+	parent.LastSeenAt = 50
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed proxy ref: %v", err)
+	}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	// cc SessionStart on existing cc frame (same PID + start_time) — exists
+	// path triggers filter-merge-retry. Live + identity-verified codex ref
+	// must survive the reset.
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	if _, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+
+	final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if final == nil {
+		t.Fatalf("cc frame disappeared")
+	}
+	if len(final.Subagents) != 1 {
+		t.Fatalf("Subagents = %+v, want 1 (live codex proxy preserved)", final.Subagents)
+	}
+	ref := final.Subagents[0]
+	if !ref.IsProxy || ref.SourcePID != 200 || ref.SourceStartTime != "t200" {
+		t.Fatalf("ref = %+v, want codex proxy alive 200 t200", ref)
+	}
+	if final.LastSeenAt != 100 {
+		t.Fatalf("LastSeenAt = %d, want 100 (broadcastTs)", final.LastSeenAt)
+	}
+}
+
+// IT18 — existing_frame SessionStart filter-merge drops a proxy ref whose
+// SourcePID is dead (isPidAliveFn=false). Plan §2.2.2 negative case.
+func TestPhase35_IT18_ExistingFrameSessionStartSkipsDeadProxy(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	parent.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:codex:200:t200",
+		Type:            "codex",
+		SourcePID:       200,
+		SourceStartTime: "t200",
+		IsProxy:         true,
+	}}
+	parent.LastSeenAt = 50
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	// Codex PID 200 is dead.
+	isPidAliveFn = func(pid int) bool { return pid != 200 }
+	processStartTimeFn = func(pid int) (string, error) { return "t100", nil }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	if _, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if final == nil {
+		t.Fatalf("cc frame disappeared")
+	}
+	if len(final.Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty (dead proxy dropped)", final.Subagents)
+	}
+}
+
+// IT19 — existing_frame SessionStart filter-merge drops a proxy ref whose
+// SourcePID is alive but stored start_time mismatches actualStart (PID
+// reused). Plan §2.2.2 negative case.
+func TestPhase35_IT19_ExistingFrameSessionStartSkipsPidReusedProxy(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	parent.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:codex:200:stale-t200",
+		Type:            "codex",
+		SourcePID:       200,
+		SourceStartTime: "stale-t200",
+		IsProxy:         true,
+	}}
+	parent.LastSeenAt = 50
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	// PID 200 alive but start_time changed (reused).
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			return "fresh-t200", nil
+		}
+		return "t100", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	if _, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if final == nil {
+		t.Fatalf("cc frame disappeared")
+	}
+	if len(final.Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty (PID-reused proxy dropped)", final.Subagents)
+	}
+}
+
+// IT20 — filter-merge-retry preserves a proxy ref attached concurrently
+// during attempt 1 (race window between read and UpsertIfUnchanged).
+// Plan §2.2.2 v6 J1 regression guard.
+//
+// Setup: cc frame seeded with codex proxy ref at LastSeenAt=50.
+// applyFrameEvent's GetByIdentity reads frame at 50. processStartTimeFn
+// is hooked so that the FIRST call (during attempt 1's filter pass) writes
+// a concurrent opencode proxy ref into the row, bumping LastSeenAt to 60.
+// attempt 1's UpsertIfUnchanged(expected=50) then conflicts; reload picks
+// up both refs at LastSeenAt=60; attempt 2 filters both refs (alive),
+// IfUnchanged(expected=60) succeeds. Both refs survive — J1 violated
+// would have lost the opencode ref.
+func TestPhase35_IT20_ExistingFrameSessionStartPreservesConcurrentlyAttachedProxy(t *testing.T) {
+	m := newProxyTestModule(t)
+	// Seed cc with one codex proxy ref at LastSeenAt=50.
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	parent.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:codex:200:t200",
+		Type:            "codex",
+		SourcePID:       200,
+		SourceStartTime: "t200",
+		IsProxy:         true,
+	}}
+	parent.LastSeenAt = 50
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed cc + codex ref: %v", err)
+	}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	// First call to processStartTimeFn(200) — happens during attempt 1's
+	// filter pass — triggers the concurrent attach side effect (+
+	// LastSeenAt bump to 60). Subsequent calls return start_time normally.
+	concurrentInjected := false
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 && !concurrentInjected {
+			concurrentInjected = true
+			racer, _ := m.frames.GetByIdentity("%5", 100, "t100")
+			if racer != nil {
+				racer.Subagents = append(racer.Subagents, agentpkg.SubagentRef{
+					ID:              "proxy:opencode:300:t300",
+					Type:            "opencode",
+					SourcePID:       300,
+					SourceStartTime: "t300",
+					IsProxy:         true,
+				})
+				racer.LastSeenAt = 60
+				if _, err := m.frames.Upsert(*racer); err != nil {
+					t.Fatalf("concurrent inject: %v", err)
+				}
+			}
+			return "t200", nil
+		}
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		case 300:
+			return "t300", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	if _, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+
+	if !concurrentInjected {
+		t.Fatalf("concurrent inject hook never fired — filter-merge loop didn't run")
+	}
+
+	final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if final == nil {
+		t.Fatalf("cc frame disappeared")
+	}
+	if len(final.Subagents) != 2 {
+		t.Fatalf("Subagents count = %d, want 2 (both proxies preserved across retry); refs=%+v", len(final.Subagents), final.Subagents)
+	}
+	ids := map[int]bool{}
+	for _, ref := range final.Subagents {
+		ids[ref.SourcePID] = true
+	}
+	if !ids[200] || !ids[300] {
+		t.Fatalf("ref SourcePIDs=%v, want both 200 and 300", ids)
+	}
+	if final.LastSeenAt != 100 {
+		t.Fatalf("LastSeenAt = %d, want 100 (broadcastTs from final write)", final.LastSeenAt)
+	}
+}
+
 // RC4b — positive case: live identity-verified cross-type descendant under
 // self.PID is folded into a proxy ref + standalone deleted.
 func TestCanonicalizeDescendantsAfterUpsert_FoldsLiveCrossTypeDescendant(t *testing.T) {
