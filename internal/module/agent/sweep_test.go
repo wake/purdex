@@ -670,3 +670,198 @@ func TestSweep_ClearingFramePreservesSiblings(t *testing.T) {
 		t.Fatalf("frames = %+v, want only cc sibling preserved", frames)
 	}
 }
+
+// IT13 — sweep pruneDeadProxyRefs detaches a proxy ref whose source
+// process is dead. Plan §4.3 (lifted from PR-3.5b into PR-3.5a per v8 L1
+// fix). Hot-path SessionEnd is now detach-first + propagate, but a
+// daemon crash between the detach and Delete — or a removeProxyRef
+// retry exhaustion that the caller logged and continued past — would
+// still leave a stale proxy ref permanently lit on the parent without
+// this sweep pass.
+func TestSweep_PruneDeadProxyRefs_DetachesDeadSource(t *testing.T) {
+	m := newSweepTestModule(t)
+	// cc parent alive at PID 200 with a codex IsProxy ref whose source
+	// (PID 300) is dead. No standalone codex frame — projection_dedup
+	// can't help.
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:codex:300:dead-t300",
+			Type:            "codex",
+			SourcePID:       300,
+			SourceStartTime: "dead-t300",
+			IsProxy:         true,
+		}},
+		Status:     agentpkg.StatusIdle,
+		StartedAt:  10,
+		LastSeenAt: 10,
+		Verified:   true,
+	}); err != nil {
+		t.Fatalf("Upsert cc + dead proxy ref: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(pid int) bool { return pid == 200 }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			return "A", nil
+		}
+		return "", nil
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	startMetric := agentpkg.MetricSweepPrunedProxy.Value()
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 || frames[0].AgentType != "cc" {
+		t.Fatalf("frames = %+v, want cc parent preserved", frames)
+	}
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("cc.Subagents = %+v, want empty (dead proxy detached)", frames[0].Subagents)
+	}
+	if delta := agentpkg.MetricSweepPrunedProxy.Value() - startMetric; delta != 1 {
+		t.Fatalf("MetricSweepPrunedProxy delta = %d, want 1", delta)
+	}
+}
+
+// IT13b — sweep pruneDeadProxyRefs preserves a proxy ref whose source is
+// alive and identity-verified. Negative case for the prune pass.
+func TestSweep_PruneDeadProxyRefs_KeepsLiveProxy(t *testing.T) {
+	m := newSweepTestModule(t)
+	// cc parent at PID 200 with codex IsProxy whose source (PID 300) is
+	// alive + start_time matches.
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:codex:300:t300",
+			Type:            "codex",
+			SourcePID:       300,
+			SourceStartTime: "t300",
+			IsProxy:         true,
+		}},
+		Status:     agentpkg.StatusIdle,
+		StartedAt:  10,
+		LastSeenAt: 10,
+		Verified:   true,
+	}); err != nil {
+		t.Fatalf("Upsert cc + live proxy ref: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 200:
+			return "A", nil
+		case 300:
+			return "t300", nil
+		}
+		return "", nil
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	startMetric := agentpkg.MetricSweepPrunedProxy.Value()
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if len(frames[0].Subagents) != 1 || frames[0].Subagents[0].SourcePID != 300 {
+		t.Fatalf("cc.Subagents = %+v, want live codex proxy preserved", frames[0].Subagents)
+	}
+	if delta := agentpkg.MetricSweepPrunedProxy.Value() - startMetric; delta != 0 {
+		t.Fatalf("MetricSweepPrunedProxy delta = %d, want 0 (live proxy kept)", delta)
+	}
+}
+
+// IT14 — sweep pruneDeadProxyRefs detaches a proxy ref whose source PID
+// has been reused (alive but stored start_time mismatches actualStart).
+// Plan §4.3 PID-reuse case.
+func TestSweep_PruneDeadProxyRefs_DetachesPidReused(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:codex:300:stale-t300",
+			Type:            "codex",
+			SourcePID:       300,
+			SourceStartTime: "stale-t300",
+			IsProxy:         true,
+		}},
+		Status:     agentpkg.StatusIdle,
+		StartedAt:  10,
+		LastSeenAt: 10,
+		Verified:   true,
+	}); err != nil {
+		t.Fatalf("Upsert cc + pid-reused proxy ref: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(int) bool { return true }
+	// PID 300 alive but identity changed.
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 200:
+			return "A", nil
+		case 300:
+			return "fresh-t300", nil
+		}
+		return "", nil
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	startMetric := agentpkg.MetricSweepPrunedProxy.Value()
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("cc.Subagents = %+v, want empty (pid-reused proxy detached)", frames[0].Subagents)
+	}
+	if delta := agentpkg.MetricSweepPrunedProxy.Value() - startMetric; delta != 1 {
+		t.Fatalf("MetricSweepPrunedProxy delta = %d, want 1", delta)
+	}
+}
