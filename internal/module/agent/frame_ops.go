@@ -25,6 +25,18 @@ const proxyMaxDepth = 5
 // that hit this limit are genuine hot loops, not ordinary concurrency.
 const proxyUpsertMaxAttempts = 3
 
+// nativeBaselineKey identifies a native (IsProxy=false) subagent ref for the
+// SessionStart filter-merge baseline (Phase 3.5 plan §2.2.2 v12 T1 fix). The
+// triple (Type, ID, StartedAt) survives ID collision between an old-session
+// baseline ref and a concurrent SubagentStart that happens to reuse the
+// same ID — the new ref's StartedAt is a fresh broadcastTs distinct from
+// any baseline ref, so the new ref doesn't match baseline and is preserved.
+type nativeBaselineKey struct {
+	typ       string
+	id        string
+	startedAt int64
+}
+
 type FrameTraceMeta struct {
 	FrameID       string
 	ParentFrameID string
@@ -64,6 +76,21 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	switch req.EventName {
 	case "SessionEnd":
 		if frame != nil {
+			// Phase 3.5 §2.3 (v8 L1 fix, codex round PR-2 attack):
+			// detach-first ordering. The previous delete-first +
+			// best-effort detach left a permanent orphan whenever
+			// removeProxyRefForSender failed (storage error, retry
+			// exhaustion, daemon crash mid-handler) — the child row
+			// was gone so projection_dedup could no longer hide the
+			// ancestor's stale proxy ref, and PR-3.5a ships without
+			// pruneDeadProxyRefs. By detaching first and propagating
+			// the error before Delete, a hook handler failure leaves
+			// the DB in a recoverable state (child row + parent ref
+			// both still present; sweep canonicalize / next
+			// SessionEnd retry can fix it).
+			if _, _, _, _, derr := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs); derr != nil {
+				return nil, FrameTraceMeta{}, derr
+			}
 			if err := m.frames.Delete(frame.FrameID); err != nil {
 				return nil, FrameTraceMeta{}, err
 			}
@@ -287,33 +314,162 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		// Subagents changes flow through mutateSubagentsWithRetry /
 		// attachProxyRefWithRetry / removeProxyRefForSender, not here.
 		//
-		// Exception: SessionStart on an existing frame intentionally resets
-		// the subagent list (old session's refs no longer apply). Use the
-		// reset variant so subagents_json = '[]' lands in the same SQL.
-		updated := *frame
-		updated.AgentType = req.AgentType
-		updated.PPID = info.PPID
-		updated.ParentFrameID = parentFrameID
-		updated.Status = status
-		updated.LastSeenAt = broadcastTs
-		updated.Verified = true
-		var updateErr error
+		// Exception: SessionStart on an existing frame must prune any
+		// stale IsProxy refs (source process dead or PID-reused) while
+		// preserving everything else — including concurrently-attached
+		// native SubagentStart refs (IsProxy=false) that landed between
+		// attempts. Phase 3.5 plan §2.2.2 (v6 J1, v8 M3) replaces the
+		// old "snapshot → reset → re-attach" three-step pattern (race
+		// window between steps could lose a concurrently-attached
+		// proxy) with a single filter-merge-retry: each attempt
+		// re-reads frame.Subagents (so any concurrent attach is
+		// naturally preserved), prunes stale IsProxy via the live
+		// identity gate, and writes via UpsertIfUnchanged. A conflict
+		// reload picks up the newer ref before the next prune pass.
 		if req.EventName == "SessionStart" {
-			updateErr = m.frames.UpdateHookPathAndResetSubagents(updated)
+			var success bool
+			// initialNativeBaseline is the BASELINE native ref identity
+			// set captured before the retry loop. SessionStart's reset
+			// semantic drops the old session's native subagent state,
+			// which the cc hook saw at attempt 0 entry. Any native ref
+			// appearing in the reloaded baseline on a later retry that
+			// is NOT in initialNativeBaseline is — by construction — a
+			// concurrent SubagentStart that landed AFTER our baseline
+			// snapshot (post our SessionStart). Such refs belong to
+			// the new session and must be preserved across all retries.
+			//
+			// Codex round 2 #O1 fix: the previous prevWrittenNativeIDs
+			// approach regressed across multiple conflicts — a native
+			// preserved at attempt 1 was recorded in prevWrittenNativeIDs
+			// itself, so attempt 2 dropped it as a "carried-forward
+			// baseline native". Snapshotting an immutable baseline
+			// before the loop sidesteps the regression entirely.
+			//
+			// Codex round 5 #T1 fix: the v11 baseline used ID-only
+			// identity. Native IDs are provider-supplied strings and
+			// cross-session ID reuse is provider-dependent (cc/codex
+			// tend toward UUID-like, opencode may be more deterministic),
+			// so a SessionStart racing a concurrent SubagentStart whose
+			// new native ref reused an old-session ID would silently
+			// drop the new ref — classified as baseline by ID alone.
+			// Track baseline by (Type, ID, StartedAt) instead: the new
+			// SubagentStart's StartedAt will be a fresh broadcastTs
+			// distinct from any baseline ref, so the new ref survives
+			// the filter even when its ID collides with a baseline ref.
+			initialNativeBaseline := make(map[nativeBaselineKey]struct{}, len(frame.Subagents))
+			for _, ref := range frame.Subagents {
+				if !ref.IsProxy {
+					initialNativeBaseline[nativeBaselineKey{ref.Type, ref.ID, ref.StartedAt}] = struct{}{}
+				}
+			}
+			for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+				pruned := make([]agentpkg.SubagentRef, 0, len(frame.Subagents))
+				for _, ref := range frame.Subagents {
+					if ref.IsProxy {
+						// IsProxy refs survive SessionStart reset when
+						// their source process is alive + identity
+						// matches (PR-2b proxy-collapse semantics).
+						if !isPidAliveFn(ref.SourcePID) {
+							continue
+						}
+						actualStart, sterr := processStartTimeFn(ref.SourcePID)
+						if sterr != nil || actualStart != ref.SourceStartTime {
+							continue
+						}
+						pruned = append(pruned, ref)
+						continue
+					}
+					// Native ref: drop if it was in the initial
+					// baseline (SessionStart reset semantic for old
+					// session refs). Otherwise (appeared after baseline
+					// snapshot via concurrent SubagentStart) preserve.
+					// Identity is (Type, ID, StartedAt) — a concurrent
+					// SubagentStart reusing an old-session ID will have
+					// a fresh StartedAt and will not match baseline.
+					if _, baseline := initialNativeBaseline[nativeBaselineKey{ref.Type, ref.ID, ref.StartedAt}]; !baseline {
+						pruned = append(pruned, ref)
+					}
+				}
+
+				candidate := *frame
+				candidate.AgentType = req.AgentType
+				candidate.PPID = info.PPID
+				candidate.ParentFrameID = parentFrameID
+				candidate.Status = status
+				candidate.LastSeenAt = broadcastTs
+				candidate.Verified = true
+				candidate.Subagents = pruned
+
+				ok, written, uerr := m.frames.UpsertIfUnchanged(candidate, frame.LastSeenAt)
+				if uerr != nil {
+					return nil, FrameTraceMeta{}, uerr
+				}
+				if ok {
+					stored = written
+					success = true
+					break
+				}
+				// Conflict — concurrent writer touched the row (proxy
+				// attach, SubagentStart hook, probe status update).
+				// Reload and retry; initialNativeIDs is UNCHANGED across
+				// retries, so any native ID appearing in the reloaded
+				// baseline that is not in initialNativeIDs is a true
+				// concurrent attach and gets preserved by the next
+				// filter pass.
+				reloaded, rerr := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
+				if rerr != nil {
+					return nil, FrameTraceMeta{}, rerr
+				}
+				if reloaded == nil {
+					// Frame deleted mid-flight. Treat as frame_missing.
+					projection, perr := m.projectPane(req.TmuxPaneID)
+					return projection, FrameTraceMeta{
+						Decision: "skipped",
+						Reason:   "frame_missing",
+						Before:   before,
+						After:    map[string]any{},
+					}, perr
+				}
+				frame = reloaded
+			}
+			if !success {
+				return nil, FrameTraceMeta{}, fmt.Errorf("session_start filter-merge: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, frame.FrameID)
+			}
 		} else {
-			updateErr = m.frames.UpdateHookPath(updated)
+			// Non-SessionStart existing-frame path: original narrow
+			// column update (#632 R8 — don't round-trip subagents).
+			updated := *frame
+			updated.AgentType = req.AgentType
+			updated.PPID = info.PPID
+			updated.ParentFrameID = parentFrameID
+			updated.Status = status
+			updated.LastSeenAt = broadcastTs
+			updated.Verified = true
+			if err := m.frames.UpdateHookPath(updated); err != nil {
+				return nil, FrameTraceMeta{}, err
+			}
+			reloaded, rerr := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
+			if rerr != nil {
+				return nil, FrameTraceMeta{}, rerr
+			}
+			if reloaded == nil {
+				return nil, FrameTraceMeta{}, nil
+			}
+			stored = *reloaded
 		}
-		if updateErr != nil {
-			return nil, FrameTraceMeta{}, updateErr
+
+		// Phase 3.5 §2.2.2 — descendant scan after successful filter-
+		// merge. Catches any cold-start race where a child's
+		// SessionStart raced this existing-frame's SessionStart and
+		// landed standalone instead of being collapsed via PR-2b's
+		// pre-Upsert proxy fast-path.
+		if req.EventName == "SessionStart" {
+			updated, cerr := m.canonicalizeDescendantsAfterUpsert(stored, broadcastTs)
+			if cerr != nil {
+				return nil, FrameTraceMeta{}, cerr
+			}
+			stored = updated
 		}
-		reloaded, err := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
-		if err != nil {
-			return nil, FrameTraceMeta{}, err
-		}
-		if reloaded == nil {
-			return nil, FrameTraceMeta{}, nil
-		}
-		stored = *reloaded
 	} else {
 		// New frame: insert via Upsert. No existing subagents to clobber;
 		// start the row with an empty list.
@@ -332,6 +488,38 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		})
 		if err != nil {
 			return nil, FrameTraceMeta{}, err
+		}
+
+		// Phase 3.5 §2.2.1 — bidirectional canonicalization (best-effort).
+		// On a SessionStart we just created a standalone frame for, try
+		// once more (post-Upsert) to fold either:
+		//   (a) self into an alive cross-type ancestor (reconcile, plan
+		//       §2.1.1), or
+		//   (b) any standalone cross-type descendants whose SessionStart
+		//       raced ours and landed before our PPID-walk could see us
+		//       as an ancestor (descendant scan, plan §2.1.2).
+		if req.EventName == "SessionStart" {
+			canonicalized, parentStored, rerr := m.reconcileCreatedFrameAsProxy(stored, req, broadcastTs)
+			if rerr != nil {
+				return nil, FrameTraceMeta{}, rerr
+			}
+			if canonicalized {
+				projection, perr := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					FrameID:       parentStored.FrameID,
+					ParentFrameID: parentStored.ParentFrameID,
+					Decision:      "updated_frame",
+					Reason:        "post_upsert_canonicalization_self",
+					Before:        before,
+					After:         summarizeFrame(&parentStored),
+				}, perr
+			}
+			// self stays standalone (or partial); try descendant scan.
+			updated, cerr := m.canonicalizeDescendantsAfterUpsert(stored, broadcastTs)
+			if cerr != nil {
+				return nil, FrameTraceMeta{}, cerr
+			}
+			stored = updated
 		}
 	}
 	projection, err := m.projectPane(req.TmuxPaneID)
@@ -765,6 +953,232 @@ func (m *Module) tryRebuildFromProcessTree(req EventRequest) (string, bool, erro
 		return "", false, nil
 	}
 	return agentType, true, nil
+}
+
+// reconcileCreatedFrameAsProxy attempts to canonicalize a freshly-created
+// SessionStart frame against an alive cross-type ancestor. If
+// findProxyParent locates a candidate, attaches a proxy ref to the
+// ancestor + best-effort deletes self's standalone row.
+//
+// Best-effort delete: if DeleteIfUnchanged fails because a concurrent
+// writer touched the child row (sweep tick, SubagentStart hook, etc.),
+// MetricPartialCanonicalizationCreated +1 and we return — sweep
+// canonicalize will retry within sweepInterval=2s and projection-layer
+// dedup hides the partial state from SPA in the meantime. Plan §2.1.1.
+//
+// Returns:
+//
+//	(true, parentStored, nil)  — attach + delete both succeeded; caller
+//	                             should project the pane and emit a
+//	                             post_upsert_canonicalization_self trace.
+//	(false, zero, nil)         — no ancestor / parent vanished
+//	                             mid-attach / partial state (attach
+//	                             succeeded, delete failed; counted in
+//	                             metrics, repaired by sweep).
+//	(false, zero, err)         — storage failure; caller propagates.
+//
+// Unlike v2/v3 of this design there is no rollback path: partial state
+// is treated as a legal transient (see plan §0.2 evidence points).
+func (m *Module) reconcileCreatedFrameAsProxy(stored store.Frame, req EventRequest, broadcastTs int64) (bool, store.Frame, error) {
+	parent, err := m.findProxyParent(req)
+	if err != nil {
+		return false, store.Frame{}, err
+	}
+	if parent == nil {
+		return false, store.Frame{}, nil
+	}
+	ref := agentpkg.SubagentRef{
+		ID:              fmt.Sprintf("proxy:%s:%d:%s", req.AgentType, req.SenderPID, req.SenderStartTime),
+		Type:            req.AgentType,
+		StartedAt:       broadcastTs,
+		SourcePID:       req.SenderPID,
+		SourceStartTime: req.SenderStartTime,
+		IsProxy:         true,
+	}
+	attached, parentStored, aerr := m.attachProxyRefWithRetry(*parent, ref, broadcastTs)
+	if aerr != nil {
+		return false, store.Frame{}, aerr
+	}
+	if !attached {
+		// Parent vanished mid-flight (concurrent SessionEnd / sweep).
+		// Caller falls back to leaving self standalone.
+		return false, store.Frame{}, nil
+	}
+	deleted, derr := m.frames.DeleteIfUnchanged(stored.FrameID, stored.LastSeenAt)
+	if derr != nil {
+		return false, store.Frame{}, derr
+	}
+	if !deleted {
+		// Partial state: parent has the proxy ref, self still
+		// standalone. Acceptable transient — projection dedup hides
+		// the orphan child from SPA, sweep canonicalize repairs
+		// within 2s. v8 M4 fix (codex round PR-2 attack): we still
+		// report canonicalized=true here so the caller emits an
+		// updated_frame / post_upsert_canonicalization_self trace
+		// that matches what the SPA actually sees (parent + proxy
+		// ref). Reporting canonicalized=false would have routed the
+		// caller to the standalone created_frame trace, diverging
+		// from projection (trace ≠ projection). Metric still +1 to
+		// surface partial-state rate via expvar.
+		agentpkg.MetricPartialCanonicalizationCreated.Add(1)
+		log.Printf("phase3.5: reconcile partial state child %s parent %s (sweep will repair within 2s)", stored.FrameID, parentStored.FrameID)
+	}
+	return true, parentStored, nil
+}
+
+// pidIsAncestorOfWithCap walks descendantPID's PPID chain (capped at
+// maxDepth) looking for ancestorPID. Returns true on hit; false on miss,
+// depth exhaustion, readProcessInfoFn error, or self-loop (info.PPID ==
+// info.PID).
+//
+// Used by canonicalizeDescendantsAfterUpsert to confirm a candidate
+// descendant frame's process actually descends from self.PID before
+// folding it into a proxy ref. Mirrors findProxyParent's PPID walk
+// semantics but starts from descendant↑ rather than self↑.
+//
+// Phase 3.5 plan §2.1.2.
+func pidIsAncestorOfWithCap(descendantPID, ancestorPID, maxDepth int) bool {
+	current := descendantPID
+	for depth := 0; depth < maxDepth; depth++ {
+		info, err := readProcessInfoFn(current)
+		if err != nil {
+			return false
+		}
+		if info.PPID == ancestorPID {
+			return true
+		}
+		if info.PPID <= 1 || info.PPID == current {
+			return false
+		}
+		current = info.PPID
+	}
+	return false
+}
+
+// canonicalizeDescendantsAfterUpsert scans self.PaneID for standalone
+// cross-type descendants whose live PPID chain passes through self.PID and
+// whose stored ProcessStartTime matches the live process's actual start
+// time, folding each as a proxy ref on self. Plan §2.1.2.
+//
+// Best-effort delete: when DeleteIfUnchanged returns (false, nil) due to a
+// concurrent writer touching the candidate row, the partial state (ref
+// attached on self + standalone candidate still present) is acceptable —
+// projection-layer dedup hides it from SPA, sweep canonicalizePane
+// retries within 2s. Increments MetricPartialCanonicalizationCreated.
+//
+// Identity gate (alive + processStartTimeFn match) prevents PID-reuse
+// stale rows from polluting self.Subagents (codex round 2 G2; same logic
+// landed in PR-2b findProxyParent). Same-AgentType candidates are skipped
+// — proxy refs are cross-type-only by definition.
+//
+// Returns the latest stored self frame (carrying all successful folds);
+// callers replace their local copy with this value because each
+// attachProxyRefWithRetry can bump self.LastSeenAt. Storage errors
+// propagate as a non-nil error and abort further folds — the partial
+// progress is left for sweep.
+func (m *Module) canonicalizeDescendantsAfterUpsert(self store.Frame, broadcastTs int64) (store.Frame, error) {
+	if m.frames == nil {
+		return self, nil
+	}
+	frames, err := m.frames.ListByPane(self.PaneID)
+	if err != nil {
+		return self, err
+	}
+	current := self
+	for _, candidate := range frames {
+		if candidate.FrameID == current.FrameID {
+			continue
+		}
+		if candidate.AgentType == current.AgentType {
+			continue
+		}
+		if !pidIsAncestorOfWithCap(candidate.PID, current.PID, proxyMaxDepth) {
+			continue
+		}
+		// Codex round 2 #O2 refinement: protect candidates that own
+		// LIVE state (native refs or live identity-verified IsProxy
+		// refs) from being folded. The original v8 M2 guard (len > 0)
+		// over-protected — a candidate carrying ONLY stale dead/PID-
+		// reused IsProxy refs is still a race-window artifact safe
+		// to fold (the stale ref would be reaped by sweep prune
+		// anyway, and dropping it along with the candidate row is
+		// equivalent). Distinguishing these classes lets the hot-path
+		// fold race-window standalones even when sweep prune has not
+		// yet cleared their stale leftovers.
+		hasOwnedState := false
+		for _, ref := range candidate.Subagents {
+			if !ref.IsProxy {
+				// Native ref → real owned state.
+				hasOwnedState = true
+				break
+			}
+			// IsProxy: live + identity-verified counts as owned;
+			// dead/PID-reused is stale and safe to drop with the fold.
+			if !isPidAliveFn(ref.SourcePID) {
+				continue
+			}
+			actualStart, sterr := processStartTimeFn(ref.SourcePID)
+			if sterr != nil {
+				// Read error → defensive; treat as owned (don't drop
+				// state on uncertainty). Mirrors findProxyParent's
+				// "lookup error → don't infer" convention.
+				hasOwnedState = true
+				break
+			}
+			if actualStart != ref.SourceStartTime {
+				continue // PID reuse; stale
+			}
+			// Live + identity-verified IsProxy → owned.
+			hasOwnedState = true
+			break
+		}
+		if hasOwnedState {
+			continue
+		}
+		// Identity gate (PR-2b alignment + plan §2.1.2). Mirrors
+		// findProxyParent's "live + start_time match" check on the
+		// other end of the walk — keeps both sides of canonicalization
+		// honest about which candidates count as alive descendants.
+		if !isPidAliveFn(candidate.PID) {
+			continue
+		}
+		actualStart, sterr := processStartTimeFn(candidate.PID)
+		if sterr != nil || actualStart != candidate.ProcessStartTime {
+			continue
+		}
+		ref := agentpkg.SubagentRef{
+			ID:              fmt.Sprintf("proxy:%s:%d:%s", candidate.AgentType, candidate.PID, candidate.ProcessStartTime),
+			Type:            candidate.AgentType,
+			StartedAt:       broadcastTs,
+			SourcePID:       candidate.PID,
+			SourceStartTime: candidate.ProcessStartTime,
+			IsProxy:         true,
+		}
+		attached, parentStored, aerr := m.attachProxyRefWithRetry(current, ref, broadcastTs)
+		if aerr != nil {
+			return current, aerr
+		}
+		if !attached {
+			// Self frame vanished mid-flight (sweep / SessionEnd).
+			// Stop folding — caller will project the pane and surface
+			// frame_missing.
+			return current, nil
+		}
+		deleted, derr := m.frames.DeleteIfUnchanged(candidate.FrameID, candidate.LastSeenAt)
+		if derr != nil {
+			return parentStored, derr
+		}
+		if !deleted {
+			// Partial state: proxy attached on self + candidate row
+			// still standalone. Acceptable transient — projection
+			// dedup hides from SPA, sweep canonicalize repairs within
+			// 2s. Continue scanning other candidates.
+			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
+			log.Printf("phase3.5: descendant scan partial state child %s parent %s (sweep will repair within 2s)", candidate.FrameID, parentStored.FrameID)
+		}
+		current = parentStored
+	}
+	return current, nil
 }
 
 // findProxyParent walks the sender's PPID ancestor chain (capped at

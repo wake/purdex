@@ -55,6 +55,7 @@ func (m *Module) sweepOnce() error {
 	if err != nil {
 		return err
 	}
+	survivors := make([]store.Frame, 0, len(frames))
 	for _, frame := range frames {
 		if !frame.Verified {
 			continue
@@ -67,6 +68,18 @@ func (m *Module) sweepOnce() error {
 		}
 		startTime, err := processStartTimeFn(frame.PID)
 		if err != nil {
+			// Codex round 3 #R2 fix: identity unverifiable for this
+			// frame's owner — keep it as a survivor so the pane still
+			// enters pruneDeadProxyRefs below. Previously this branch
+			// did a bare `continue`, which bypassed the prune pass for
+			// every pane whose owner identity read transiently failed,
+			// defeating round 2 #O3's per-ref fail-safe at the pane
+			// level. Treating the frame as a survivor here is conserva-
+			// tive (don't trigger destructive pid_reused cleanup on a
+			// read error) and consistent with pruneDeadProxyRefs's own
+			// fail-safe, which only detaches refs on CONFIRMED dead /
+			// reused source.
+			survivors = append(survivors, frame)
 			continue
 		}
 		if startTime != frame.ProcessStartTime {
@@ -88,14 +101,146 @@ func (m *Module) sweepOnce() error {
 			if !deleted {
 				// Concurrent refresh raced us — the row is still live.
 				// Not an error; skip this frame this round.
+				survivors = append(survivors, frame)
 				continue
 			}
 			if err := m.afterFrameCleared(frame, "idle_timeout"); err != nil {
 				return err
 			}
+			continue
 		}
+		survivors = append(survivors, frame)
+	}
+	// Phase 3.5 §4.3 — pruneDeadProxyRefs (lifted from PR-3.5b into
+	// PR-3.5a per v8 L1 fix). Detach IsProxy SubagentRefs whose source
+	// process is gone or has been replaced (PID reuse). Without this,
+	// any hot-path SessionEnd that skipped the detach (storage error,
+	// daemon crash mid-handler, removeProxyRefForSender exhaustion)
+	// leaves a stale proxy ref permanently lit on the parent —
+	// projection_dedup cannot hide it because there is no standalone
+	// child frame to hide behind.
+	panes := uniquePaneIDs(survivors)
+	broadcastTs := nowFn().UnixNano()
+	for _, paneID := range panes {
+		m.pruneDeadProxyRefs(paneID, broadcastTs)
 	}
 	return nil
+}
+
+// uniquePaneIDs collects distinct pane IDs from a frame slice in the order
+// they first appear. Used by sweepOnce to drive the pruneDeadProxyRefs pass
+// without re-listing per-pane.
+func uniquePaneIDs(frames []store.Frame) []string {
+	seen := make(map[string]struct{}, len(frames))
+	out := make([]string, 0, len(frames))
+	for _, f := range frames {
+		if _, ok := seen[f.PaneID]; ok {
+			continue
+		}
+		seen[f.PaneID] = struct{}{}
+		out = append(out, f.PaneID)
+	}
+	return out
+}
+
+// pruneDeadProxyRefs detaches IsProxy SubagentRefs from every frame in the
+// pane whose source process is gone or has been replaced (PID reuse). The
+// hot-path SessionEnd handler is now detach-first + propagate (frame_ops.go,
+// v8 L1), but a daemon crash mid-handler — or a removeProxyRefForSender
+// retry exhaustion that the caller logs and continues past — can still
+// leave a stale IsProxy ref on a parent. Without this sweep pass that ref
+// would never be reaped: projection_dedup can't hide it because the
+// standalone child it claimed is gone, so the parent shows a permanent
+// lit dot.
+//
+// Errors from detachProxyRefWithRetry are logged via the metric increment
+// failing (no-op) and otherwise swallowed — the next sweep tick (2s) gets
+// another shot, consistent with sweepOnce's other best-effort passes.
+//
+// Codex round 2 #P1 fix: after at least one successful detach in the pane,
+// emit a "hook" broadcast with reason=sweep:proxy_pruned so SPA + in-memory
+// state (m.subagents / m.currentStatus) reflect the change immediately.
+// Mirrors the afterFrameCleared broadcast that pid_dead/pid_reused/idle_timeout
+// already emit. Per-pane (not per-detach) so multiple stale refs in the same
+// pane coalesce into one broadcast — matches afterFrameCleared's per-frame
+// granularity.
+func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
+	if m.frames == nil {
+		return
+	}
+	frames, err := m.frames.ListByPane(paneID)
+	if err != nil {
+		return
+	}
+	detachedAny := false
+	var anyOwner store.Frame
+	for _, frame := range frames {
+		for _, ref := range frame.Subagents {
+			if !ref.IsProxy {
+				continue
+			}
+			// Codex round 2 #O3 fix: detach only on CONFIRMED staleness.
+			// Read errors from processStartTimeFn (transient /proc
+			// failure / platform probe issue) must not destructively
+			// reap a possibly-live proxy ref. Fail-safe: keep the ref,
+			// retry next sweep tick (2s).
+			var shouldPrune bool
+			if !isPidAliveFn(ref.SourcePID) {
+				shouldPrune = true // confirmed dead source
+			} else {
+				actualStart, sterr := processStartTimeFn(ref.SourcePID)
+				if sterr != nil {
+					// Read error → keep, retry next sweep.
+					continue
+				}
+				if actualStart != ref.SourceStartTime {
+					shouldPrune = true // confirmed PID reuse
+				}
+			}
+			if !shouldPrune {
+				continue // alive + identity-verified
+			}
+			detached, _, derr := m.detachProxyRefWithRetry(frame, ref.SourcePID, ref.SourceStartTime, broadcastTs)
+			if derr == nil && detached {
+				agentpkg.MetricSweepPrunedProxy.Add(1)
+				if !detachedAny {
+					anyOwner = frame
+					detachedAny = true
+				}
+			}
+		}
+	}
+	if detachedAny {
+		m.broadcastProxyPruned(anyOwner)
+	}
+}
+
+// broadcastProxyPruned emits a "hook" broadcast with reason=sweep:proxy_pruned
+// after pruneDeadProxyRefs detached at least one stale ref in a pane. Mirrors
+// afterFrameCleared's broadcast path so SPA + m.subagents / m.currentStatus
+// stay in sync with storage without waiting for an unrelated hook.
+//
+// Best-effort: errors from projection / broadcast resolution are logged via
+// metric (no-op) and otherwise swallowed — the next sweep tick (2s) will
+// re-emit if any stale refs remain. Consistent with sweepOnce's other
+// best-effort passes. Codex round 2 #P1 fix.
+func (m *Module) broadcastProxyPruned(reference store.Frame) {
+	sessionName, code := m.resolvePaneSession(reference.PaneID)
+	projection, err := m.projectionForSession(sessionName)
+	if err != nil {
+		return
+	}
+	if sessionName != "" {
+		m.mu.Lock()
+		syncProjectionState(m.currentStatus, m.subagents, sessionName, projection)
+		m.mu.Unlock()
+	}
+	if code == "" || m.core == nil {
+		return
+	}
+	normalized := buildProjectionNormalized(projection, reference.AgentType, "sweep:proxy_pruned", nowFn().UnixNano(), agentpkg.DeriveResult{})
+	payload, _ := json.Marshal(normalized)
+	m.core.Events.Broadcast(code, "hook", string(payload))
 }
 
 // clearFrame is the eager delete path used for pid_dead / pid_reused sweeps

@@ -670,3 +670,458 @@ func TestSweep_ClearingFramePreservesSiblings(t *testing.T) {
 		t.Fatalf("frames = %+v, want only cc sibling preserved", frames)
 	}
 }
+
+// IT13 — sweep pruneDeadProxyRefs detaches a proxy ref whose source
+// process is dead. Plan §4.3 (lifted from PR-3.5b into PR-3.5a per v8 L1
+// fix). Hot-path SessionEnd is now detach-first + propagate, but a
+// daemon crash between the detach and Delete — or a removeProxyRef
+// retry exhaustion that the caller logged and continued past — would
+// still leave a stale proxy ref permanently lit on the parent without
+// this sweep pass.
+func TestSweep_PruneDeadProxyRefs_DetachesDeadSource(t *testing.T) {
+	m := newSweepTestModule(t)
+	// cc parent alive at PID 200 with a codex IsProxy ref whose source
+	// (PID 300) is dead. No standalone codex frame — projection_dedup
+	// can't help.
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:codex:300:dead-t300",
+			Type:            "codex",
+			SourcePID:       300,
+			SourceStartTime: "dead-t300",
+			IsProxy:         true,
+		}},
+		Status:     agentpkg.StatusIdle,
+		StartedAt:  10,
+		LastSeenAt: 10,
+		Verified:   true,
+	}); err != nil {
+		t.Fatalf("Upsert cc + dead proxy ref: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(pid int) bool { return pid == 200 }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			return "A", nil
+		}
+		return "", nil
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	startMetric := agentpkg.MetricSweepPrunedProxy.Value()
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 || frames[0].AgentType != "cc" {
+		t.Fatalf("frames = %+v, want cc parent preserved", frames)
+	}
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("cc.Subagents = %+v, want empty (dead proxy detached)", frames[0].Subagents)
+	}
+	if delta := agentpkg.MetricSweepPrunedProxy.Value() - startMetric; delta != 1 {
+		t.Fatalf("MetricSweepPrunedProxy delta = %d, want 1", delta)
+	}
+}
+
+// IT13b — sweep pruneDeadProxyRefs preserves a proxy ref whose source is
+// alive and identity-verified. Negative case for the prune pass.
+func TestSweep_PruneDeadProxyRefs_KeepsLiveProxy(t *testing.T) {
+	m := newSweepTestModule(t)
+	// cc parent at PID 200 with codex IsProxy whose source (PID 300) is
+	// alive + start_time matches.
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:codex:300:t300",
+			Type:            "codex",
+			SourcePID:       300,
+			SourceStartTime: "t300",
+			IsProxy:         true,
+		}},
+		Status:     agentpkg.StatusIdle,
+		StartedAt:  10,
+		LastSeenAt: 10,
+		Verified:   true,
+	}); err != nil {
+		t.Fatalf("Upsert cc + live proxy ref: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 200:
+			return "A", nil
+		case 300:
+			return "t300", nil
+		}
+		return "", nil
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	startMetric := agentpkg.MetricSweepPrunedProxy.Value()
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if len(frames[0].Subagents) != 1 || frames[0].Subagents[0].SourcePID != 300 {
+		t.Fatalf("cc.Subagents = %+v, want live codex proxy preserved", frames[0].Subagents)
+	}
+	if delta := agentpkg.MetricSweepPrunedProxy.Value() - startMetric; delta != 0 {
+		t.Fatalf("MetricSweepPrunedProxy delta = %d, want 0 (live proxy kept)", delta)
+	}
+}
+
+// IT13c — codex round 2 #P1 fix: sweep pruneDeadProxyRefs broadcasts a
+// projection update after detaching a stale proxy ref. Previously the
+// detach was visible in storage but m.subagents/m.currentStatus and the
+// SPA stayed stale until an unrelated hook fired. Sweep prune now emits
+// "hook" payload with reason=sweep:proxy_pruned (matching the existing
+// idle_timeout / pid_dead broadcast pattern in afterFrameCleared).
+func TestSweep_PruneDeadProxyRefs_BroadcastsProjectionAfterDetach(t *testing.T) {
+	m := newSweepTestModule(t)
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: m.tmux}
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:codex:300:dead-t300",
+			Type:            "codex",
+			SourcePID:       300,
+			SourceStartTime: "dead-t300",
+			IsProxy:         true,
+		}},
+		Status:     agentpkg.StatusIdle,
+		StartedAt:  10,
+		LastSeenAt: 10,
+		Verified:   true,
+	}); err != nil {
+		t.Fatalf("Upsert cc + dead proxy ref: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(pid int) bool { return pid == 200 }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			return "A", nil
+		}
+		return "", nil
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	// Verify storage: proxy ref detached.
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 || len(frames[0].Subagents) != 0 {
+		t.Fatalf("frames = %+v, want cc with empty subagents (detach storage step)", frames)
+	}
+
+	// Verify broadcast: payload contains reason=sweep:proxy_pruned.
+	select {
+	case msg := <-sub.SendCh():
+		if !strings.Contains(string(msg), "sweep:proxy_pruned") {
+			t.Fatalf("broadcast payload = %s, want reason sweep:proxy_pruned (P1 broadcast missing)", msg)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for sweep:proxy_pruned broadcast — P1 fix missing")
+	}
+}
+
+// IT14b — codex round 2 #O3 fix: sweep pruneDeadProxyRefs preserves a
+// proxy ref when processStartTimeFn returns an error (transient /proc
+// read failure / platform probe issue). Previously the fall-through
+// after a `sterr != nil` test detached the ref — fail-destructive,
+// could falsely reap a live proxy whose start_time read transiently
+// failed. Fail-safe: only detach on CONFIRMED dead source or CONFIRMED
+// identity mismatch. Read error → keep, retry next sweep.
+func TestSweep_PruneDeadProxyRefs_KeepsProxyOnStartTimeError(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:codex:300:t300",
+			Type:            "codex",
+			SourcePID:       300,
+			SourceStartTime: "t300",
+			IsProxy:         true,
+		}},
+		Status:     agentpkg.StatusIdle,
+		StartedAt:  10,
+		LastSeenAt: 10,
+		Verified:   true,
+	}); err != nil {
+		t.Fatalf("Upsert cc + proxy ref: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	// PID 300 alive, but processStartTimeFn returns transient error.
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			return "A", nil
+		}
+		// PID 300 (the proxy's source): transient read error.
+		return "", errStub("ps transient failure")
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	startMetric := agentpkg.MetricSweepPrunedProxy.Value()
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if len(frames[0].Subagents) != 1 || frames[0].Subagents[0].SourcePID != 300 {
+		t.Fatalf("cc.Subagents = %+v, want proxy preserved on read error (fail-safe)", frames[0].Subagents)
+	}
+	if delta := agentpkg.MetricSweepPrunedProxy.Value() - startMetric; delta != 0 {
+		t.Fatalf("MetricSweepPrunedProxy delta = %d, want 0 (read error must not detach)", delta)
+	}
+}
+
+// IT14 — sweep pruneDeadProxyRefs detaches a proxy ref whose source PID
+// has been reused (alive but stored start_time mismatches actualStart).
+// Plan §4.3 PID-reuse case.
+func TestSweep_PruneDeadProxyRefs_DetachesPidReused(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:codex:300:stale-t300",
+			Type:            "codex",
+			SourcePID:       300,
+			SourceStartTime: "stale-t300",
+			IsProxy:         true,
+		}},
+		Status:     agentpkg.StatusIdle,
+		StartedAt:  10,
+		LastSeenAt: 10,
+		Verified:   true,
+	}); err != nil {
+		t.Fatalf("Upsert cc + pid-reused proxy ref: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(int) bool { return true }
+	// PID 300 alive but identity changed.
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 200:
+			return "A", nil
+		case 300:
+			return "fresh-t300", nil
+		}
+		return "", nil
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	startMetric := agentpkg.MetricSweepPrunedProxy.Value()
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("cc.Subagents = %+v, want empty (pid-reused proxy detached)", frames[0].Subagents)
+	}
+	if delta := agentpkg.MetricSweepPrunedProxy.Value() - startMetric; delta != 1 {
+		t.Fatalf("MetricSweepPrunedProxy delta = %d, want 1", delta)
+	}
+}
+
+// IT13d — codex round 3 #R2 fix: when sweepOnce's owner-identity read
+// (processStartTimeFn for the FRAME's own PID) returns an error, the
+// frame must still flow into the survivors list so its pane reaches
+// pruneDeadProxyRefs. Previously a bare `continue` skipped the entire
+// pane's prune pass, leaving any stale proxy refs lit until a sweep
+// tick happened to land while the owner's /proc read succeeded.
+//
+// Scenario: cc owner at PID 200 with a stale codex proxy ref pointing
+// to PID 300 (confirmed dead source). processStartTimeFn(200) returns
+// a transient error; processStartTimeFn(300) is irrelevant because the
+// per-ref fail-safe (#O3) already gates on isPidAliveFn(300) first.
+// Expected: pane still enters prune; stale codex ref detached.
+func TestSweep_PruneRunsWhenOwnerStartTimeReadErrors(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:codex:300:dead-t300",
+			Type:            "codex",
+			SourcePID:       300,
+			SourceStartTime: "dead-t300",
+			IsProxy:         true,
+		}},
+		Status:     agentpkg.StatusIdle,
+		StartedAt:  10,
+		LastSeenAt: 10,
+		Verified:   true,
+	}); err != nil {
+		t.Fatalf("Upsert cc + dead proxy ref: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	// Owner (PID 200) alive; proxy source (PID 300) confirmed dead.
+	isPidAliveFn = func(pid int) bool { return pid == 200 }
+	// Owner identity read errors transiently; proxy source read is
+	// short-circuited by the alive check in pruneDeadProxyRefs.
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			return "", errStub("owner /proc transient")
+		}
+		return "", nil
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	startMetric := agentpkg.MetricSweepPrunedProxy.Value()
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (owner preserved on read error)", len(frames))
+	}
+	if len(frames[0].Subagents) != 0 {
+		t.Fatalf("cc.Subagents = %+v, want empty — R2 regression: prune skipped because owner read errored", frames[0].Subagents)
+	}
+	if delta := agentpkg.MetricSweepPrunedProxy.Value() - startMetric; delta != 1 {
+		t.Fatalf("MetricSweepPrunedProxy delta = %d, want 1 (prune ran despite owner read error)", delta)
+	}
+}
+
+// IT14c — codex round 3 #R2 boundary: owner read error must not
+// destructively delete the owner frame as a "pid_reused" cleanup. A
+// transient /proc failure for the owner's PID returns ("", err), and
+// the previous bare-continue path silently skipped the frame this round
+// without any cleanup — equally important is that the new survivor
+// path also doesn't trigger pid_reused (which compares startTime to
+// frame.ProcessStartTime). Verifies the owner row is intact after the
+// sweep.
+func TestSweep_OwnerReadErrorPreservesFrame(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert cc: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) {
+		return "", errStub("owner /proc transient")
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (owner read error must not delete)", len(frames))
+	}
+	if frames[0].ProcessStartTime != "A" {
+		t.Fatalf("ProcessStartTime = %q, want A (frame untouched)", frames[0].ProcessStartTime)
+	}
+}
