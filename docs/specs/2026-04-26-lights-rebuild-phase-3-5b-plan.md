@@ -1,12 +1,19 @@
-# Lights Rebuild — Phase 3.5b Plan v2
+# Lights Rebuild — Phase 3.5b Plan v3
 
-**Status**: Draft, codex round 1 passed (1 high finding 採納)
+**Status**: Draft, pending codex round 3
 **Round 1**: needs-attention — high (canonicalizePane 漏 hasOwnedState 守衛 → child 自己的 native subagent state 被砍)
-**Round 1 fix**: §2.2 加 candidate state classifier（mirror `canonicalizeDescendantsAfterUpsert` frame_ops.go:1098-1137）+ IT10n/IT10o/IT10p 新增驗證（stateful native skip / stale-only IsProxy fold OK / live IsProxy skip）+ RC12/RC13 unit
+**Round 1 fix（v2）**: §2.2 加 candidate state classifier（mirror `canonicalizeDescendantsAfterUpsert` frame_ops.go:1098-1137）+ IT10n/IT10o/IT10p 新增驗證
+**Round 2**: needs-attention — high (IT10n 漏掉 round 1 原始時序 — attach 成功 + DeleteIfUnchanged 失敗 + 後續 native SubagentStart 三步序列；ship gate §6 沒納入 v2 新增 IT/RC)
+**Round 2 fix（v3）**: §3.1 IT10n 重寫為 round 1 原始時序組合 IT10m partial state（pre-existing parent proxy + child standalone with bumped LastSeenAt + native ref）；§6 ship gate 擴到 IT10/IT10b-p + RC6-RC16 全綠
 **Round 1 verbatim** (`019dc937-beb0-7a83-a02b-42679ad4fbc1`):
 
 > high — canonicalizePane can erase stateful child subagents during partial recovery (§2.2 lines 114-140). Plan §2.2 folds any live candidate with a canonical ancestor, then deletes the candidate row after attach. There is no candidate-owned-state guard before lines 136-140. This is unsafe for the exact partial state created when attach succeeds and DeleteIfUnchanged fails because the child was concurrently refreshed by SubagentStart: PR-3.5a projection currently hides that standalone child while merging its Subagents, but this sweep would attach only a proxy ref to the ancestor and then delete the child row, losing native child refs. Existing hot-path canonicalizeDescendantsAfterUpsert has an owned-state classification for this class of bug; the sweep plan does not carry it over, and IT10g/IT10m do not cover a stateful child with native refs.
 > Recommendation: Add an owned-state check before attach/delete, mirroring the existing hot-path rule: skip candidates with native refs or live identity-verified IsProxy refs, allow only empty or stale-only proxy candidates. Alternatively, explicitly migrate candidate.Subagents into the ancestor with owner-aware dedup before DeleteIfUnchanged. Add an IT case for attach-success/delete-failure followed by a native SubagentStart on the child, proving sweep preserves the native ref after recovery.
+
+**Round 2 verbatim** (`019dc93d-7f4e-7892-bdf6-45779388604f`):
+
+> high — Round 1 data-loss regression is not actually gated by the v2 plan (§3.1 359-431). §3.1 的 IT10n 只預先放一個帶 native ref 的 standalone child，沒有同時建立 round 1 high 的關鍵 partial state：ancestor 已經有 child 的 proxy ref，child 因 DeleteIfUnchanged 失敗仍存在，接著 child 收到 native SubagentStart。這會驗到 candidateHasOwnedState 的基本 guard，但沒有證明 sweep 在 attach-success/delete-failure 的既有 parent proxy 狀態下保留 child native state。更嚴重的是 §6 ship gate 仍只要求 IT10/IT10b-m + RC6-RC11，漏掉 v2 新增的 IT10n/o/p 與 RC12-RC16；實作即使沒有跑 round 1 closure tests 也能照 plan 過 gate。
+> Recommendation: 把 IT10n 改成組合 IT10m 的 already-proxied partial：cc.Subagents 先含 codex IsProxy，codex standalone 的 LastSeenAt 模擬被 SubagentStart bump 並含 native ref；sweep 後 assert codex row/native ref 保留、parent proxy 不重複、MetricSweepCanonicalized 不增。同步把 §6 ship gate 改為要求 IT10/IT10b-p + RC6-RC16 全綠。
 **Scope**: Sweep canonicalize defense-in-depth layer
 **Base**: `main` @ alpha.226 (`78ae7273`)
 **Branch**: `worktree-lights-phase-3-5b`
@@ -356,7 +363,7 @@ Plan v12 §2.5 已決定 sweep canonicalize 不寫獨立 trace decision（消費
 | **IT10k** | `sweep_canonicalize_no_broadcast_when_nothing_succeeded` | 全部 candidate skip / partial；sweep | 無 `sweep:proxy_canonicalized` broadcast |
 | **IT10l** | `sweep_canonicalize_cross_pane_isolation` | pane A 有 standalone codex 可 fold 進 cc；pane B 有 standalone codex 但 ancestor 不在；sweep | pane A canonicalize 成功；pane B 不影響；MetricSweepCanonicalized +1 |
 | **IT10m** | `sweep_canonicalize_skips_already_proxied_candidate` | codex 既有 standalone frame（live）但同時 cc.Subagents 已含 codex IsProxy ref（hot-path 半成品 — attach 成 + delete 失敗的歷史 partial）；sweep | findCanonicalAncestor 找到 cc → attach 重試 → `attachProxyRefWithRetry` 內 RMW 看到既有 ref（同 SourcePID + SourceStartTime + IsProxy）需要驗：mutateSubagentsWithRetry 對 SubagentStart 用 updateSubagents replace by match → 不重複 → DeleteIfUnchanged 嘗試刪 standalone → 成 → cc.Subagents 仍只有一條 codex IsProxy；MetricSweepCanonicalized +1（這是 PR-3.5a partial recovery 的核心場景）|
-| **IT10n** (v2) | `sweep_canonicalize_skips_candidate_with_native_subagent` | (a) cc frame；(b) codex standalone live + identity-verified；(c) codex.Subagents 含 native task SubagentStart ref（IsProxy=false，模擬 race window 期間 codex 收 SubagentStart 事件後尚未被收編）；sweep | candidate hasOwnedState → skip；codex standalone 仍在；codex.Subagents 仍含 native ref；MetricSweepCanonicalized 不變；projection dedup 期間繼續 hide + merge（PR-3.5a 既有行為）|
+| **IT10n** (v3 重寫) | `sweep_canonicalize_preserves_child_native_after_partial_recovery` | **Round 1 high 原始時序的精準回歸 guard**：(a) cc frame；(b) codex standalone live + identity-verified（PR-3.5a hot-path attach 成功後的 partial）；(c) cc.Subagents 已含 codex IsProxy ref（hot-path 的 successful attach）；(d) codex frame.LastSeenAt 被後續 SubagentStart 事件 bump 過（DeleteIfUnchanged failed 的原因）；(e) codex.Subagents 含 native task SubagentStart ref（IsProxy=false）；(f) sweep 跑 | candidate hasOwnedState=true（native ref 觸發）→ skip；codex standalone 列保留；codex.Subagents 的 native ref 保留；cc.Subagents 仍只一條 codex IsProxy（不重複 attach）；**MetricSweepCanonicalized 不變**（gated case 不算 progress）；projection dedup 在後續 read 時繼續 hide codex standalone 並 merge native ref 進 cc projection（PR-3.5a 既有行為延續）|
 | **IT10o** (v2) | `sweep_canonicalize_folds_candidate_with_only_stale_proxy` | codex standalone live + identity-verified；codex.Subagents 含 IsProxy ref 但 SourcePID 已死（stale）；sweep | candidate hasOwnedState=false（stale-only proxy 不算 owned）→ fold；codex standalone 已刪；cc.Subagents 含 codex IsProxy；stale proxy 跟 codex frame 一起消失（與 sweep prune 等效）；MetricSweepCanonicalized +1 |
 | **IT10p** (v2) | `sweep_canonicalize_skips_candidate_with_live_proxy` | codex standalone；codex.Subagents 含一個 IsProxy ref（SourcePID 對應某 opencode live 進程，identity verified — 表示 codex 自己當 ancestor 收編了 opencode）；sweep | candidate hasOwnedState=true（live IsProxy）→ skip；保 codex 自己作為某 sub-tree 的 ancestor 角色不被砍 |
 
@@ -428,9 +435,11 @@ Plan v12 §2.5 已決定 sweep canonicalize 不寫獨立 trace decision（消費
 |---|---|
 | `go build ./... && go vet ./... && go test ./...` | 全綠 |
 | 23 packages 總體 | 0 regression |
-| IT10/IT10b-m + RC6-RC11 | 全綠 |
-| MetricSweepCanonicalized | 觀察 +1 在預期 case |
-| Codex review | 一輪標準 cross-model（3.5a 5 輪 review 已涵蓋 §4.2 設計，3.5b 為實作 + 測試擴展，一輪足夠 — 如 round 1 verdict !== clean 才 escalate）|
+| **IT10 + IT10b-IT10p（共 16 條 integration tests）** | **全綠**（v3 round 2 fix — 含 round 1 closure regression guard IT10n）|
+| **RC6-RC16（共 11 條 unit tests）** | **全綠**（v3 round 2 fix — 含 candidateHasOwnedState 完整覆蓋 RC12-RC16）|
+| MetricSweepCanonicalized | 觀察 +1 在預期 case；IT10g/IT10h/IT10n 確認**不**增（partial / gated case）|
+| MetricSweepPrunedProxy | 既有 PR-3.5a 行為不 regress |
+| Codex review | round 1 (high → fixed v2) + round 2 (high → fixed v3) → round 3 verdict 是 clean / nit-only 即可 ship；如再有 high/medium 繼續迭代直到收斂（per `feedback_codex_review_termination.md`）|
 
 ---
 
