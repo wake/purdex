@@ -15,6 +15,12 @@ import "github.com/wake/purdex/internal/agent"
 //     auth_success → Idle). Drift test pins each sub-branch separately.
 var ccEventSpecs = []agent.HookEventSpec{
 	{
+		Name:        "Setup",
+		EmitsStatus: []agent.Status{},
+		Description: "Claude Code setup hook initialization",
+		Handling:    agent.HookHandlingUnsupported,
+	},
+	{
 		Name:        "SessionStart",
 		EmitsStatus: []agent.Status{agent.StatusIdle},
 		Description: "Claude Code session started (non-compact source)",
@@ -58,6 +64,120 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Name:        "SessionEnd",
 		EmitsStatus: []agent.Status{agent.StatusClear},
 		Description: "Claude Code session ended",
+	},
+	{
+		Name:        "UserPromptExpansion",
+		EmitsStatus: []agent.Status{},
+		Description: "User command expanded before model processing",
+		Handling:    agent.HookHandlingUnsupported,
+	},
+	{
+		Name:        "PreToolUse",
+		EmitsStatus: []agent.Status{},
+		Description: "Tool call about to execute",
+		Handling:    agent.HookHandlingUnsupported,
+	},
+	{
+		Name:        "PermissionDenied",
+		EmitsStatus: []agent.Status{},
+		Description: "Tool permission denied by auto mode classifier",
+		Handling:    agent.HookHandlingIgnored,
+	},
+	{
+		Name:        "PostToolUse",
+		EmitsStatus: []agent.Status{},
+		Description: "Tool call completed successfully",
+		Handling:    agent.HookHandlingIgnored,
+	},
+	{
+		Name:        "PostToolUseFailure",
+		EmitsStatus: []agent.Status{},
+		Description: "Tool call failed",
+		Handling:    agent.HookHandlingIgnored,
+	},
+	{
+		Name:        "PostToolBatch",
+		EmitsStatus: []agent.Status{},
+		Description: "Parallel tool call batch resolved",
+		Handling:    agent.HookHandlingUnsupported,
+	},
+	{
+		Name:        "TaskCreated",
+		EmitsStatus: []agent.Status{},
+		Description: "Task was created",
+		Handling:    agent.HookHandlingIgnored,
+	},
+	{
+		Name:        "TaskCompleted",
+		EmitsStatus: []agent.Status{},
+		Description: "Task was completed",
+		Handling:    agent.HookHandlingIgnored,
+	},
+	{
+		Name:        "TeammateIdle",
+		EmitsStatus: []agent.Status{},
+		Description: "Agent team teammate is about to go idle",
+		Handling:    agent.HookHandlingIgnored,
+	},
+	{
+		Name:        "InstructionsLoaded",
+		EmitsStatus: []agent.Status{},
+		Description: "Project instructions were loaded",
+		Handling:    agent.HookHandlingIgnored,
+	},
+	{
+		Name:        "ConfigChange",
+		EmitsStatus: []agent.Status{},
+		Description: "Claude Code configuration changed",
+		Handling:    agent.HookHandlingIgnored,
+	},
+	{
+		Name:        "CwdChanged",
+		EmitsStatus: []agent.Status{},
+		Description: "Working directory changed",
+		Handling:    agent.HookHandlingIgnored,
+	},
+	{
+		Name:        "FileChanged",
+		EmitsStatus: []agent.Status{},
+		Description: "Watched file changed on disk",
+		Handling:    agent.HookHandlingUnsupported,
+	},
+	{
+		Name:        "WorktreeCreate",
+		EmitsStatus: []agent.Status{},
+		Description: "Worktree is being created",
+		Handling:    agent.HookHandlingUnsupported,
+	},
+	{
+		Name:        "WorktreeRemove",
+		EmitsStatus: []agent.Status{},
+		Description: "Worktree is being removed",
+		Handling:    agent.HookHandlingUnsupported,
+	},
+	{
+		Name:        "PreCompact",
+		EmitsStatus: []agent.Status{},
+		Description: "Context compaction is about to run",
+		Handling:    agent.HookHandlingUnsupported,
+	},
+	{
+		Name:        "PostCompact",
+		EmitsStatus: []agent.Status{},
+		Description: "Context compaction completed",
+		Handling:    agent.HookHandlingIgnored,
+	},
+	{
+		Name:        "Elicitation",
+		EmitsStatus: []agent.Status{},
+		Description: "MCP server requested user input",
+		Handling:    agent.HookHandlingIgnored,
+	},
+	{
+		Name:        "ElicitationResult",
+		EmitsStatus: []agent.Status{},
+		Description: "MCP elicitation response was submitted",
+		Handling:    agent.HookHandlingIgnored,
 	},
 }
 

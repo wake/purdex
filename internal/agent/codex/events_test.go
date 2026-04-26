@@ -8,11 +8,10 @@ import (
 	"github.com/wake/purdex/internal/agent/codex"
 )
 
-// expectedCodexEventNames is the post-expansion 9-event list (plan §1.4,
-// issue #613). Pre-expansion codex only installed {SessionStart,
-// UserPromptSubmit, Stop}; this PR brings the installer up to the full set
-// DeriveStatus has already supported since Phase 1.
-var expectedCodexEventNames = []string{
+// expectedCodexInstallableEventNames lists the hook events Purdex currently
+// installs for Codex. Keep this stable while upstream catalog entries grow
+// around it.
+var expectedCodexInstallableEventNames = []string{
 	"SessionStart",
 	"UserPromptSubmit",
 	"SubagentStart",
@@ -24,13 +23,44 @@ var expectedCodexEventNames = []string{
 	"SessionEnd",
 }
 
-// TestCodexEvents_ExpandedTo9 is the core issue #613 assertion — codex
-// Events() now declares 9 events, matching cc.
+var expectedCodexEventNames = expectedCodexInstallableEventNames
+
+// expectedCodexCurrentUpstreamEventNames is pinned to Codex hooks docs,
+// fetched 2026-04-26 from https://developers.openai.com/codex/hooks.
+var expectedCodexCurrentUpstreamEventNames = []string{
+	"SessionStart",
+	"PreToolUse",
+	"PermissionRequest",
+	"PostToolUse",
+	"UserPromptSubmit",
+	"Stop",
+}
+
+// expectedCodexCatalogHandling covers the current upstream Codex hook surface
+// plus Purdex compatibility entries that were already installable before this
+// catalog-only PR. The compatibility entries are intentionally kept installable
+// to avoid changing runtime hook behavior here.
+var expectedCodexCatalogHandling = map[string]agent.HookHandling{
+	"SessionStart":      agent.HookHandlingStatus,
+	"UserPromptSubmit":  agent.HookHandlingStatus,
+	"SubagentStart":     agent.HookHandlingDetail,
+	"SubagentStop":      agent.HookHandlingDetail,
+	"Stop":              agent.HookHandlingStatus,
+	"StopFailure":       agent.HookHandlingStatus,
+	"Notification":      agent.HookHandlingStatus,
+	"PermissionRequest": agent.HookHandlingStatus,
+	"SessionEnd":        agent.HookHandlingStatus,
+	"PreToolUse":        agent.HookHandlingUnsupported,
+	"PostToolUse":       agent.HookHandlingUnsupported,
+}
+
+// TestCodexEvents_ExpandedToCatalog asserts Events() exposes the classified
+// upstream catalog while the installer still derives its installable subset.
 func TestCodexEvents_ExpandedTo9(t *testing.T) {
 	p := codex.NewProvider()
 	events := p.Events()
-	if len(events) != 9 {
-		t.Fatalf("codex Events count = %d, want 9 (issue #613 installer expansion)", len(events))
+	if len(events) != len(expectedCodexCatalogHandling) {
+		t.Fatalf("codex Events count = %d, want %d", len(events), len(expectedCodexCatalogHandling))
 	}
 
 	got := make(map[string]bool, len(events))
@@ -40,8 +70,8 @@ func TestCodexEvents_ExpandedTo9(t *testing.T) {
 		}
 		got[e.Name] = true
 	}
-	want := make(map[string]bool, len(expectedCodexEventNames))
-	for _, n := range expectedCodexEventNames {
+	want := make(map[string]bool, len(expectedCodexCatalogHandling))
+	for n := range expectedCodexCatalogHandling {
 		want[n] = true
 	}
 	for n := range want {
@@ -52,6 +82,62 @@ func TestCodexEvents_ExpandedTo9(t *testing.T) {
 	for n := range got {
 		if !want[n] {
 			t.Errorf("codex Events contains unexpected Name %q", n)
+		}
+	}
+}
+
+func TestCodexEventsClassifyCurrentDocs(t *testing.T) {
+	p := codex.NewProvider()
+	for _, e := range p.Events() {
+		want, ok := expectedCodexCatalogHandling[e.Name]
+		if !ok {
+			continue
+		}
+		if got := agent.EffectiveHookHandling(e); got != want {
+			t.Errorf("codex %s handling = %q, want %q", e.Name, got, want)
+		}
+		if !agent.IsInstallableHookSpec(e) && len(e.EmitsStatus) != 0 {
+			t.Errorf("codex non-installable %s EmitsStatus = %v, want empty", e.Name, e.EmitsStatus)
+		}
+	}
+}
+
+func TestCodexEvents_CurrentUpstreamDocsSubset(t *testing.T) {
+	p := codex.NewProvider()
+	got := map[string]bool{}
+	for _, e := range p.Events() {
+		got[e.Name] = true
+	}
+	for _, name := range expectedCodexCurrentUpstreamEventNames {
+		if !got[name] {
+			t.Errorf("codex catalog missing current upstream event %q", name)
+		}
+	}
+}
+
+func TestCodexEvents_InstallableSetStaysStable(t *testing.T) {
+	p := codex.NewProvider()
+	got := map[string]bool{}
+	for _, e := range p.Events() {
+		if agent.IsInstallableHookSpec(e) {
+			got[e.Name] = true
+		}
+	}
+	want := map[string]bool{}
+	for _, name := range expectedCodexInstallableEventNames {
+		want[name] = true
+	}
+	if len(got) != len(want) {
+		t.Fatalf("codex installable count = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("codex installable set missing %q", name)
+		}
+	}
+	for name := range got {
+		if !want[name] {
+			t.Errorf("codex installable set contains unexpected %q", name)
 		}
 	}
 }
@@ -116,6 +202,8 @@ func TestCodexEventsFutureOnlyFlags(t *testing.T) {
 		"Notification":      true,
 		"PermissionRequest": false,
 		"SessionEnd":        true,
+		"PreToolUse":        false,
+		"PostToolUse":       false,
 	}
 	p := codex.NewProvider()
 	events := p.Events()
