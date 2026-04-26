@@ -122,16 +122,39 @@ func buildPaneProjection(paneID string, frames []store.Frame) SessionProjection 
 		subagents = []agentpkg.SubagentRef{}
 	}
 	// R1 merge: append refs from hidden stateful children that aren't
-	// already represented in TopFrame.Subagents. Dedup uses the kind-
-	// aware identity matcher (proxy refs by SourcePID+SourceStartTime,
-	// native by ID; cross-kind never matches) so we never double-list
-	// the same logical subagent.
+	// already represented in TopFrame.Subagents.
+	//
+	// Codex round 4 #S1: dedup must be owner-aware here because frames
+	// being merged come from different agent families. subagentRefMatches
+	// compares native refs by ID alone (correct WITHIN a frame, where the
+	// same agent family doesn't generate colliding IDs), but cross-frame
+	// native IDs are independent ID spaces — cc's "call-1" and codex's
+	// "call-1" are distinct subagents. Inline owner-aware dedup:
+	//   - Proxy refs: dedup by (SourcePID, SourceStartTime). IsProxy
+	//     claims target the SAME source process across frames, so the
+	//     identity carries across the frame boundary.
+	//   - Native refs: dedup by (Type, ID). Different Type means a
+	//     different agent family, hence a different ID space.
+	// subagentRefMatches semantics are unchanged — within-frame callers
+	// in frame_ops.go (SubagentStart/Stop on a single frame) never see a
+	// cross-family collision because each frame belongs to one family.
 	for _, refFromHidden := range mergedFromHidden {
 		duplicate := false
 		for _, existing := range subagents {
-			if subagentRefMatches(existing, refFromHidden) {
-				duplicate = true
-				break
+			if refFromHidden.IsProxy {
+				if existing.IsProxy &&
+					existing.SourcePID == refFromHidden.SourcePID &&
+					existing.SourceStartTime == refFromHidden.SourceStartTime {
+					duplicate = true
+					break
+				}
+			} else {
+				if !existing.IsProxy &&
+					existing.Type == refFromHidden.Type &&
+					existing.ID == refFromHidden.ID {
+					duplicate = true
+					break
+				}
 			}
 		}
 		if !duplicate {

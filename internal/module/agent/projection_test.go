@@ -478,6 +478,62 @@ func TestProjection_DedupMergeAvoidsDuplicateProxyRef(t *testing.T) {
 	}
 }
 
+// PD9 — codex round 4 #S1: cross-frame native ID collision must NOT be
+// treated as duplicate. Different agent families generate native IDs
+// independently (e.g. cc's "call-1" vs codex's "call-1" are distinct
+// subagents in independent ID spaces). The merge dedup must compare
+// (Type, ID) for natives, not ID alone, otherwise the hidden child's
+// native ref is silently dropped from the wire output.
+func TestBuildPaneProjection_PD9_CrossFrameNativeIDCollisionPreserved(t *testing.T) {
+	parent := store.Frame{
+		FrameID: "frame-cc-1", PaneID: "%1", AgentType: "cc",
+		PID: 100, ProcessStartTime: "T1", StartedAt: 200,
+		Subagents: []agentpkg.SubagentRef{
+			// cc has its own native call-1
+			{ID: "call-1", Type: "cc", IsProxy: false},
+			// cc also claims codex (race-window proxy attach happened)
+			{ID: "proxy:codex:200:T2", Type: "codex", IsProxy: true,
+				SourcePID: 200, SourceStartTime: "T2"},
+		},
+	}
+	child := store.Frame{
+		FrameID: "frame-codex-1", PaneID: "%1", AgentType: "codex",
+		PID: 200, ProcessStartTime: "T2", StartedAt: 100,
+		Subagents: []agentpkg.SubagentRef{
+			// codex has its own native call-1 — same ID as cc's but different Type
+			{ID: "call-1", Type: "codex", IsProxy: false},
+		},
+	}
+	projection := buildPaneProjection("%1", []store.Frame{parent, child})
+	if projection.TopFrame == nil || projection.TopFrame.FrameID != "frame-cc-1" {
+		t.Fatalf("expected cc as TopFrame, got %v", projection.TopFrame)
+	}
+	// Both native refs must survive into projection.Subagents
+	var ccCallSeen, codexCallSeen, proxySeen bool
+	for _, ref := range projection.Subagents {
+		switch {
+		case !ref.IsProxy && ref.Type == "cc" && ref.ID == "call-1":
+			ccCallSeen = true
+		case !ref.IsProxy && ref.Type == "codex" && ref.ID == "call-1":
+			codexCallSeen = true
+		case ref.IsProxy && ref.SourcePID == 200 && ref.SourceStartTime == "T2":
+			proxySeen = true
+		}
+	}
+	if !ccCallSeen {
+		t.Errorf("cc native call-1 missing from projection.Subagents: %+v", projection.Subagents)
+	}
+	if !codexCallSeen {
+		t.Errorf("codex native call-1 dropped by cross-frame ID dedup (S1 regression): %+v", projection.Subagents)
+	}
+	if !proxySeen {
+		t.Errorf("proxy ref missing from projection.Subagents: %+v", projection.Subagents)
+	}
+	if len(projection.Subagents) != 3 {
+		t.Errorf("expected 3 refs (cc native, codex native, proxy), got %d: %+v", len(projection.Subagents), projection.Subagents)
+	}
+}
+
 // IT5 — projection dedup hides a standalone frame whose proxy ref already
 // lives on the canonical parent (plan §3.1).
 func TestProjection_IT5_PartialStateHiddenByProjectionDedup(t *testing.T) {
