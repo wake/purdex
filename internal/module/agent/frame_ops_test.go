@@ -3146,22 +3146,24 @@ func TestPhase35_IT15_PartialMetricIncrementsOnPartialState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
 	}
-	// Partial path returns canonicalized=false → caller falls through to
-	// descendant scan (no candidates) → emits a created_frame trace
-	// (no partial reason — plan §2.5 dropped partial_canonicalization).
-	if meta.Decision != "created_frame" {
-		t.Fatalf("decision = %q, want created_frame (partial path falls through)", meta.Decision)
+	// v8 M4 fix: partial path now reports canonicalized=true so the
+	// caller emits the updated_frame / post_upsert_canonicalization_self
+	// trace consistent with what the SPA actually sees (projection dedup
+	// hides the orphan child; user-visible state is parent + proxy ref).
+	// Reporting created_frame would have desynced trace from projection.
+	if meta.Decision != "updated_frame" {
+		t.Fatalf("decision = %q, want updated_frame (partial reports canonicalized=true so trace matches projection)", meta.Decision)
 	}
-	if meta.Reason == "post_upsert_canonicalization_self" {
-		t.Fatalf("reason = %q, must not claim canonicalize success on partial", meta.Reason)
+	if meta.Reason != "post_upsert_canonicalization_self" {
+		t.Fatalf("reason = %q, want post_upsert_canonicalization_self", meta.Reason)
 	}
 
 	if delta := agentpkg.MetricPartialCanonicalizationCreated.Value() - startMetric; delta < 1 {
-		t.Fatalf("MetricPartialCanonicalizationCreated delta = %d, want >= 1", delta)
+		t.Fatalf("MetricPartialCanonicalizationCreated delta = %d, want >= 1 (partial state metric still increments)", delta)
 	}
 
 	// Final state: parent has codex proxy ref (partial); codex standalone
-	// row remains.
+	// row remains. Sweep canonicalize (PR-3.5b) repairs within 2s.
 	frames, _ := m.frames.ListByPane("%5")
 	if len(frames) != 2 {
 		t.Fatalf("frames count = %d, want 2 (parent + standalone partial)", len(frames))

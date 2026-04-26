@@ -945,15 +945,18 @@ func (m *Module) reconcileCreatedFrameAsProxy(stored store.Frame, req EventReque
 	}
 	if !deleted {
 		// Partial state: parent has the proxy ref, self still
-		// standalone. Acceptable — projection dedup hides; sweep
-		// repairs within 2s. Increment metric and report
-		// canonicalized=false so caller emits the standard
-		// created_frame trace (the proxy attach is a side effect
-		// the trace surfaces via parent's own next event, not via
-		// this hook's decision string).
+		// standalone. Acceptable transient — projection dedup hides
+		// the orphan child from SPA, sweep canonicalize repairs
+		// within 2s. v8 M4 fix (codex round PR-2 attack): we still
+		// report canonicalized=true here so the caller emits an
+		// updated_frame / post_upsert_canonicalization_self trace
+		// that matches what the SPA actually sees (parent + proxy
+		// ref). Reporting canonicalized=false would have routed the
+		// caller to the standalone created_frame trace, diverging
+		// from projection (trace ≠ projection). Metric still +1 to
+		// surface partial-state rate via expvar.
 		agentpkg.MetricPartialCanonicalizationCreated.Add(1)
 		log.Printf("phase3.5: reconcile partial state child %s parent %s (sweep will repair within 2s)", stored.FrameID, parentStored.FrameID)
-		return false, store.Frame{}, nil
 	}
 	return true, parentStored, nil
 }
