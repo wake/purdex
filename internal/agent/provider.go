@@ -33,12 +33,12 @@ type HookEvent struct {
 // HookInstaller can install/remove/check hook configurations for a specific agent.
 //
 // Events() is the single source of truth (SSoT) for the provider's classified
-// upstream hook event catalog. It supersedes any package-local *HookEvents
-// slice; do not introduce a parallel string list. Installer iteration,
-// CheckHooks reporting, and template parity must derive their installable
-// subset with IsInstallableHookSpec rather than assuming every catalog entry is
-// wired. SupportedStatuses derivation still reads the same declaration. Any
-// new HookInstaller implementation is required to implement Events().
+// hook event catalog. It supersedes any package-local *HookEvents slice; do not
+// introduce a parallel string list. Installer iteration, CheckHooks reporting,
+// and template parity must derive their installable subset with
+// IsInstallableHookSpec rather than assuming every catalog entry is wired.
+// SupportedStatuses derivation still reads the same declaration. Any new
+// HookInstaller implementation is required to implement Events().
 type HookInstaller interface {
 	InstallHooks(pdxPath string) error
 	RemoveHooks(pdxPath string) error

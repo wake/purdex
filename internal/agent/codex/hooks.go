@@ -119,7 +119,7 @@ func codexHooksManaged(hooks map[string]any, specs []agent.HookEventSpec) bool {
 					continue
 				}
 				cmd, _ := m["command"].(string)
-				if isPdxCommandCodex(cmd) {
+				if isPdxCommandCodexOwned(cmd) {
 					return true
 				}
 			}
@@ -131,9 +131,8 @@ func codexHooksManaged(hooks map[string]any, specs []agent.HookEventSpec) bool {
 // checkCodexEvent classifies a single hook event as absent / broken / valid
 // per fix-plan §1.4 and applies the FutureOnly-aware decision table. It
 // takes the full hooks map so absent vs present-but-empty can be told apart
-// via the double-return form `entries, ok := hooks[spec.Name]` — a value of
-// `[]any{}` (what mergeCodexHooks leaves behind when the last pdx entry is
-// removed) must be classified as broken, not absent.
+// via the double-return form `entries, ok := hooks[spec.Name]` — a hand-edited
+// value of `[]any{}` must be classified as broken, not absent.
 //
 // Returns:
 //   - HookEventInfo for events[spec.Name]
@@ -225,7 +224,11 @@ func mergeCodexHooks(path, pdxPath string, remove bool) error {
 				},
 			})
 		}
-		hooks[event] = entries
+		if remove && len(entries) == 0 {
+			delete(hooks, event)
+		} else {
+			hooks[event] = entries
+		}
 	}
 	hooksFile["hooks"] = hooks
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -432,10 +435,7 @@ func filterOutPdxCodex(entries any) []any {
 }
 
 func filterOutPdxCodexKnownEvents(entries any) []any {
-	known := codexKnownEventNames()
-	return filterOutPdxCodexWithPredicate(entries, func(cmd string) bool {
-		return isPdxCommandCodexKnownEvent(cmd, known)
-	})
+	return filterOutPdxCodexWithPredicate(entries, isPdxCommandCodexOwned)
 }
 
 func filterOutPdxCodexWithPredicate(entries any, isOwned func(string) bool) []any {
@@ -483,6 +483,10 @@ func filterOutPdxCodexWithPredicate(entries any, isOwned func(string) bool) []an
 }
 
 func isPdxCommandCodexKnownEvent(cmd string, known map[string]bool) bool {
+	return isPdxCommandCodexOwned(cmd) && known[lastCodexCommandToken(cmd)]
+}
+
+func isPdxCommandCodexOwned(cmd string) bool {
 	tokens := tokenizeCodexCommand(cmd)
 	if len(tokens) == 0 || filepath.Base(tokens[0]) != "pdx" {
 		return false
@@ -497,7 +501,15 @@ func isPdxCommandCodexKnownEvent(cmd string, known map[string]bool) bool {
 			hasAgentCodex = true
 		}
 	}
-	return hasHook && hasAgentCodex && known[tokens[len(tokens)-1]]
+	return hasHook && hasAgentCodex
+}
+
+func lastCodexCommandToken(cmd string) string {
+	tokens := tokenizeCodexCommand(cmd)
+	if len(tokens) == 0 {
+		return ""
+	}
+	return tokens[len(tokens)-1]
 }
 
 func codexKnownEventNames() map[string]bool {

@@ -269,6 +269,12 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 	hooks = hooksSection(t, m)
 
 	for _, event := range expectedCodexInstallerNames {
+		if event != "SessionStart" {
+			if _, ok := hooks[event]; ok {
+				t.Errorf("event %s: remove left empty event key", event)
+			}
+			continue
+		}
 		for _, groupEntry := range codexMatcherGroups(hooks[event]) {
 			group, _ := groupEntry.(map[string]any)
 			for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
@@ -431,6 +437,7 @@ func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 		"hooks": map[string]any{
 			"IgnoredSynthetic": []any{
 				pdxGroupEntry("IgnoredSynthetic"),
+				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": `"/usr/local/bin/pdx" hook --agent codex Bogus`, "timeout": 5}}},
 				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": `"/usr/local/bin/pdx" hook --agent cc IgnoredSynthetic`, "timeout": 5}}},
 				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "/usr/bin/notify ignored", "timeout": 5}}},
 			},
@@ -908,6 +915,31 @@ func TestCheckHooks_Managed_FalseWhenNoPdxEntries(t *testing.T) {
 	}
 	if status.Managed {
 		t.Fatal("no pdx entries: Managed=true, want false")
+	}
+}
+
+func TestCheckHooks_Managed_FalseForOtherAgentPdxEntry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"SessionStart": []any{
+			map[string]any{
+				"hooks": []any{
+					map[string]any{
+						"type":    "command",
+						"command": `"/usr/local/bin/pdx" hook --agent cc SessionStart`,
+						"timeout": 5,
+					},
+				},
+			},
+		},
+	})
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.Managed {
+		t.Fatal("other-agent pdx entry: Managed=true, want false")
 	}
 }
 
