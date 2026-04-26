@@ -767,6 +767,74 @@ func (m *Module) tryRebuildFromProcessTree(req EventRequest) (string, bool, erro
 	return agentType, true, nil
 }
 
+// reconcileCreatedFrameAsProxy attempts to canonicalize a freshly-created
+// SessionStart frame against an alive cross-type ancestor. If
+// findProxyParent locates a candidate, attaches a proxy ref to the
+// ancestor + best-effort deletes self's standalone row.
+//
+// Best-effort delete: if DeleteIfUnchanged fails because a concurrent
+// writer touched the child row (sweep tick, SubagentStart hook, etc.),
+// MetricPartialCanonicalizationCreated +1 and we return — sweep
+// canonicalize will retry within sweepInterval=2s and projection-layer
+// dedup hides the partial state from SPA in the meantime. Plan §2.1.1.
+//
+// Returns:
+//
+//	(true, parentStored, nil)  — attach + delete both succeeded; caller
+//	                             should project the pane and emit a
+//	                             post_upsert_canonicalization_self trace.
+//	(false, zero, nil)         — no ancestor / parent vanished
+//	                             mid-attach / partial state (attach
+//	                             succeeded, delete failed; counted in
+//	                             metrics, repaired by sweep).
+//	(false, zero, err)         — storage failure; caller propagates.
+//
+// Unlike v2/v3 of this design there is no rollback path: partial state
+// is treated as a legal transient (see plan §0.2 evidence points).
+func (m *Module) reconcileCreatedFrameAsProxy(stored store.Frame, req EventRequest, broadcastTs int64) (bool, store.Frame, error) {
+	parent, err := m.findProxyParent(req)
+	if err != nil {
+		return false, store.Frame{}, err
+	}
+	if parent == nil {
+		return false, store.Frame{}, nil
+	}
+	ref := agentpkg.SubagentRef{
+		ID:              fmt.Sprintf("proxy:%s:%d:%s", req.AgentType, req.SenderPID, req.SenderStartTime),
+		Type:            req.AgentType,
+		StartedAt:       broadcastTs,
+		SourcePID:       req.SenderPID,
+		SourceStartTime: req.SenderStartTime,
+		IsProxy:         true,
+	}
+	attached, parentStored, aerr := m.attachProxyRefWithRetry(*parent, ref, broadcastTs)
+	if aerr != nil {
+		return false, store.Frame{}, aerr
+	}
+	if !attached {
+		// Parent vanished mid-flight (concurrent SessionEnd / sweep).
+		// Caller falls back to leaving self standalone.
+		return false, store.Frame{}, nil
+	}
+	deleted, derr := m.frames.DeleteIfUnchanged(stored.FrameID, stored.LastSeenAt)
+	if derr != nil {
+		return false, store.Frame{}, derr
+	}
+	if !deleted {
+		// Partial state: parent has the proxy ref, self still
+		// standalone. Acceptable — projection dedup hides; sweep
+		// repairs within 2s. Increment metric and report
+		// canonicalized=false so caller emits the standard
+		// created_frame trace (the proxy attach is a side effect
+		// the trace surfaces via parent's own next event, not via
+		// this hook's decision string).
+		agentpkg.MetricPartialCanonicalizationCreated.Add(1)
+		log.Printf("phase3.5: reconcile partial state child %s parent %s (sweep will repair within 2s)", stored.FrameID, parentStored.FrameID)
+		return false, store.Frame{}, nil
+	}
+	return true, parentStored, nil
+}
+
 // pidIsAncestorOfWithCap walks descendantPID's PPID chain (capped at
 // maxDepth) looking for ancestorPID. Returns true on hit; false on miss,
 // depth exhaustion, readProcessInfoFn error, or self-loop (info.PPID ==
