@@ -1,8 +1,12 @@
-# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v5 / Hybrid B+)
+# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v6 / Hybrid B+)
 
 Baseline：`1.0.0-alpha.224`（main @ `75b4d166`）。
 Worktree：`.claude/worktrees/lights-phase-3-5`（branch `worktree-lights-phase-3-5`）。
 Branch base：`origin/main`（與 Phase 3 PR #638 並行；merge 順序 Phase 3 → rebase 3.5 → 一次 bump alpha.225）。
+
+**v5 → v6 由 codex round 5 收斂**（§13；1 high finding 採納）：
+
+- **J1 high** — v5 §2.2.2「snapshot live proxies → reset → re-attach」三步非原子，並發 child SessionStart attach 新 proxy + 刪 child standalone 後，我的 reset 把新 proxy 也清掉、re-attach 只還原舊 ref → 新 proxy 永久消失。**v6 修法**：合併成單一 **filter-merge-retry pattern**（與 PR-2b `mutateSubagentsWithRetry` 同型，但語意是 filter 而非 add），消除中間態 race window。新 IT20 守規。
 
 **v4 → v5 由 codex round 4 收斂**（§13；2 finding 全採納）：
 
@@ -276,73 +280,132 @@ func pidIsAncestorOfWithCap(descendantPID, ancestorPID, maxDepth int) bool {
 }
 ```
 
-#### 2.2.2 Existing frame 路徑（line 256-272 之後）
+#### 2.2.2 Existing frame 路徑（line 256-272 區）
 
-**v5 I1 fix**：reset 前 snapshot 仍 live identity-verified IsProxy refs，reset 後 re-attach。reset 的原意是「old session's native subagent refs no longer apply」，但 cross-type IsProxy refs 指向同 pane 內仍 live 的 OS process — 不該在 parent's session-restart 時失蹤（descendant 沒 standalone 可補回）。
+**v6 J1 fix**：替換「snapshot → reset → re-attach」三步非原子序列為**單一 filter-merge-retry pattern**。
+
+語意：SessionStart 對 existing frame 的 reset 不該清掉「同 pane 仍 live 的 cross-type IsProxy refs」（v5 I1）。但三步法在 snapshot 後、reset 前的 race window 內，並發 child SessionStart 可能新 attach proxy 後被 reset 抹除（v5 J1）。
+
+修法 — 在 retry loop 內 filter live IsProxy + 寫入：每次 retry 重讀 subagents（包含 race window 內的並發 attach），filter 後 UpsertIfUnchanged。concurrent attach 會 bump frame.LastSeenAt → 我的 IfUnchanged 看到 mismatch → reload → 新一輪 filter 保留新 ref → 收斂。**全程無中間態暴露**。
 
 ```go
-// v5 I1: snapshot live IsProxy refs BEFORE reset. The store-level reset
-// clears subagents_json wholesale; live cross-type proxies pointing to OS
-// processes that still exist must survive the parent's SessionStart
-// restart. Without this, an already-canonicalized proxy ref from a prior
-// race window vanishes from projection — descendant scan can't recover
-// it because the standalone child frame was deleted at canonicalize time.
-var preservedProxies []agentpkg.SubagentRef
-if req.EventName == "SessionStart" && frame != nil {
-    for _, ref := range frame.Subagents {
-        if !ref.IsProxy {
-            continue
-        }
-        if !isPidAliveFn(ref.SourcePID) {
-            continue
-        }
-        actualStart, sterr := processStartTimeFn(ref.SourcePID)
-        if sterr != nil || actualStart != ref.SourceStartTime {
-            continue
-        }
-        preservedProxies = append(preservedProxies, ref)
-    }
-}
-
-if req.EventName == "SessionStart" {
-    updateErr = m.frames.UpdateHookPathAndResetSubagents(updated)
 } else {
-    updateErr = m.frames.UpdateHookPath(updated)
-}
-if updateErr != nil { return nil, FrameTraceMeta{}, updateErr }
+    // SessionStart on existing frame: filter-merge-retry to preserve
+    // live identity-verified IsProxy refs across reset semantics. Other
+    // events use the existing UpdateHookPath narrow update.
+    if req.EventName == "SessionStart" {
+        // v6 J1 fix: replace "snapshot live proxies → bulk reset → re-attach"
+        // (v5) which had a race window between snapshot and reset (concurrent
+        // child SessionStart's attach + delete would be lost). Filter-merge-
+        // retry reads frame.Subagents on every retry, so concurrent attach
+        // is naturally preserved (next reload includes the new ref).
+        var success bool
+        for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+            filtered := []agentpkg.SubagentRef{}
+            for _, ref := range frame.Subagents {
+                if !ref.IsProxy {
+                    continue
+                }
+                if !isPidAliveFn(ref.SourcePID) {
+                    continue
+                }
+                actualStart, sterr := processStartTimeFn(ref.SourcePID)
+                if sterr != nil || actualStart != ref.SourceStartTime {
+                    continue
+                }
+                filtered = append(filtered, ref)
+            }
 
-reloaded, err := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
-if err != nil { return nil, FrameTraceMeta{}, err }
-if reloaded == nil { return nil, FrameTraceMeta{}, nil }
-stored = *reloaded
+            candidate := *frame
+            candidate.AgentType = req.AgentType
+            candidate.PPID = info.PPID
+            candidate.ParentFrameID = parentFrameID
+            candidate.Status = status
+            candidate.LastSeenAt = broadcastTs
+            candidate.Verified = true
+            candidate.Subagents = filtered
 
-// v5 I1: re-attach preserved proxies via existing helper (atomic retry,
-// merge-aware via updateSubagents). StartedAt refreshed to broadcastTs to
-// reflect that they survived this SessionStart cycle.
-for _, ref := range preservedProxies {
-    ref.StartedAt = broadcastTs
-    attached, parentStored, aerr := m.attachProxyRefWithRetry(stored, ref, broadcastTs)
-    if aerr != nil { return nil, FrameTraceMeta{}, aerr }
-    if attached {
-        stored = parentStored
+            ok, written, err := m.frames.UpsertIfUnchanged(candidate, frame.LastSeenAt)
+            if err != nil {
+                return nil, FrameTraceMeta{}, err
+            }
+            if ok {
+                stored = written
+                success = true
+                break
+            }
+            // Conflict: concurrent writer touched the row (proxy attach,
+            // SubagentStart hook, probe status update). Reload + retry —
+            // re-read includes any new IsProxy ref the racer added, and
+            // next iteration's filter preserves it.
+            reloaded, rerr := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
+            if rerr != nil {
+                return nil, FrameTraceMeta{}, rerr
+            }
+            if reloaded == nil {
+                // Frame deleted mid-flight. Treat as frame_missing (caller
+                // path will project pane and emit skipped trace).
+                projection, perr := m.projectPane(req.TmuxPaneID)
+                return projection, FrameTraceMeta{
+                    Decision: "skipped",
+                    Reason:   "frame_missing",
+                    Before:   before,
+                    After:    map[string]any{},
+                }, perr
+            }
+            frame = reloaded
+        }
+        if !success {
+            return nil, FrameTraceMeta{}, fmt.Errorf("session_start filter-merge: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, frame.FrameID)
+        }
+    } else {
+        // Non-SessionStart existing frame: original narrow update path
+        // (PR-2b R8 — don't round-trip subagents).
+        updated := *frame
+        updated.AgentType = req.AgentType
+        updated.PPID = info.PPID
+        updated.ParentFrameID = parentFrameID
+        updated.Status = status
+        updated.LastSeenAt = broadcastTs
+        updated.Verified = true
+        if err := m.frames.UpdateHookPath(updated); err != nil {
+            return nil, FrameTraceMeta{}, err
+        }
+        reloaded, rerr := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
+        if rerr != nil {
+            return nil, FrameTraceMeta{}, rerr
+        }
+        if reloaded == nil {
+            return nil, FrameTraceMeta{}, nil
+        }
+        stored = *reloaded
     }
-}
 
-// Phase 3.5: descendant scan (catches any cold-start race window children
-// whose SessionStart raced with this existing-frame's SessionStart).
-if req.EventName == "SessionStart" {
-    updated, cerr := m.canonicalizeDescendantsAfterUpsert(stored, broadcastTs)
-    if cerr != nil {
-        return nil, FrameTraceMeta{}, cerr
+    // Phase 3.5: descendant scan after successful filter-merge or narrow
+    // update. Catches any cold-start race window children whose
+    // SessionStart raced with this existing-frame's SessionStart.
+    if req.EventName == "SessionStart" {
+        updated, cerr := m.canonicalizeDescendantsAfterUpsert(stored, broadcastTs)
+        if cerr != nil {
+            return nil, FrameTraceMeta{}, cerr
+        }
+        stored = updated
     }
-    stored = updated
 }
 ```
 
-**為什麼 re-attach 而不是「reset 不清 IsProxy」**：
+**為什麼用 UpsertIfUnchanged 而非 narrow update + reset helper**：
 
-- store-level `UpdateHookPathAndResetSubagents` 是 narrow update 設計（PR-2b R8）— 改它的語意（conditional reset）會把 store 層拉進 IsProxy semantics，違反 narrow update 哲學
-- 在 module 接線層做 snapshot + re-attach 保留 store-level cleanliness；attachProxyRefWithRetry 的 RMW retry 邏輯也直接重用
+- v5 I1 fix 原本嘗試在 narrow update 邊界外做 snapshot + re-attach；J1 揭示三步法的非原子性根本問題
+- v6 採 UpsertIfUnchanged 寫整個 frame（含 subagents），但因為 subagents 是「filtered live IsProxy」**有意決策值**，不是「stale baseline」 — 不違反 PR-2b R8 narrow update 哲學（避免 round-trip stale subagents）。我們是**主動決定**這個值，並透過 IfUnchanged 確保決策對應的 baseline 沒被搶先改
+- 該 store-level helper `UpdateHookPathAndResetSubagents` 在 v6 SessionStart existing-frame 路徑不再使用；non-SessionStart 路徑沿用 `UpdateHookPath` 不變（narrow column update）
+- 仍在 module 層解決，store layer 介面不擴展（不加新 helper）
+
+**對既有 helper 的影響**：
+
+- `UpdateHookPathAndResetSubagents` 在 v6 後**仍存在**（store-level helper 不變），但 SessionStart existing-frame 路徑不再呼叫它
+- 若仍有其他呼叫者（grep 確認只有 frame_ops.go SessionStart 路徑用），可在 v6 commit 9 把它從 store API 移除作為 cleanup；不確定的話留著無害
+- 接線 commit 9 的 unwired-then-wired 模式仍維持：commit 9 同時完成 §2.2.1 + §2.2.2 接線
 
 ### 2.3 SessionEnd proxy cleanup（v4 新，修 Side B 抓的 SessionEnd 漏洞）
 
@@ -549,6 +612,7 @@ var (
 | IT17 | `existing_frame_session_start_preserves_live_proxy_refs` (v5 I1) | (a) cc frame 已存在且 cc.Subagents 含 codex proxy ref（live + identity verified）；(b) cc 又收 SessionStart（existing path）→ pre-reset snapshot + reset + re-attach；(c) 之後 codex 進程仍 alive，無新 SessionStart | cc.Subagents 仍含 codex proxy ref（StartedAt 刷新到本次 broadcastTs）；projection dedup 也仍工作 |
 | IT18 | `existing_frame_session_start_skips_dead_proxy_during_reset` (v5 I1 negative) | (a) cc frame 已存在含 codex proxy ref，但 codex 進程已死（isPidAliveFn = false）；(b) cc SessionStart | reset 後 cc.Subagents 不含該 dead proxy ref（preserve 不通過 identity gate）|
 | IT19 | `existing_frame_session_start_skips_pid_reused_proxy` (v5 I1 negative) | (a) cc frame 含 codex proxy；(b) codex PID 已被 OS reuse（actualStart != ref.SourceStartTime）；(c) cc SessionStart | reset 後不 preserve 該 stale proxy（identity 不過 gate）|
+| IT20 | `existing_frame_session_start_preserves_concurrently_attached_proxy` (v6 J1) | (a) cc frame 已存在 + 一個 codex proxy ref；(b) cc SessionStart filter-merge attempt 1 — 同時 mock UpsertIfUnchanged 第 1 次回 conflict（模擬並發 child SessionStart 在 attempt 1 之間 attach 第二個 opencode proxy 並刪除其 standalone）；(c) attempt 2 reload 看到兩個 IsProxy ref，filter 通過 gate，UpsertIfUnchanged 成功 | cc.Subagents 含 codex 與 opencode 兩個 proxy ref；無 ref 在 race window 中遺失 |
 
 ### 3.2 Unit 測試
 
@@ -756,11 +820,12 @@ func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
 | 2 | `docs: Phase 3.5 plan v2 — bidirectional + retry/rollback` ✅ `dd29be46` |
 | 3 | `docs: Phase 3.5 plan v3 — sweep canonicalize + identity gate` ✅ `148a2309` |
 | 4 | `docs: Phase 3.5 plan v4 — Hybrid B+ (consulting-driven redesign)` ✅ `a338f6d3` |
-| 5 | `docs: Phase 3.5 plan v5 — preserve live proxies + honest metrics` 此檔 |
+| 5 | `docs: Phase 3.5 plan v5 — preserve live proxies + honest metrics` ✅ `285599e4` |
+| 5b | `docs: Phase 3.5 plan v6 — filter-merge-retry (codex round 5 J1 fix)` 此檔 |
 | 6 | `feat(agent): metrics counters for phase 3.5 canonicalization observability` | metric 4 個 + import 註冊（無 endpoint） |
 | 7 | `feat(agent): pidIsAncestorOfWithCap + canonicalizeDescendantsAfterUpsert with identity gate (unwired)` | helper + RC1-RC5 unit |
 | 8 | `feat(agent): reconcileCreatedFrameAsProxy best-effort (unwired)` | reconcile helper（無 rollback）|
-| 9 | `feat(agent): wire bidirectional canonicalization + preserve live proxies into applyFrameEvent` | §2.2.1 + §2.2.2（含 v5 I1 preserve）+ IT17/IT18/IT19 |
+| 9 | `feat(agent): wire bidirectional canonicalization + filter-merge-retry into applyFrameEvent` | §2.2.1 + §2.2.2（**v6 filter-merge-retry**，取代 v5 三步 snapshot + reset + re-attach）+ IT17/IT18/IT19/IT20 |
 | 10 | `feat(agent): SessionEnd hot-path proxy cleanup` | §2.3 + IT12 |
 | 11 | `feat(agent): buildPaneProjection dedup proxy-claimed standalone frames` | §2.4 + PD1-PD3 + IT5 |
 | 12 | `feat(agent): sweep canonicalizePane with candidate identity gate` | §4.2 + IT10 |
@@ -778,17 +843,17 @@ func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
 | `frame_ops.go` canonicalizeDescendantsAfterUpsert（含 identity gate） | ~85 行 |
 | `frame_ops.go` pidIsAncestorOfWithCap | ~20 行 |
 | `frame_ops.go` SessionEnd proxy cleanup | ~10 行（既有 case 改 4 行）|
-| `frame_ops.go` 接線 §2.2.1 + §2.2.2（含 v5 preserve live proxies）| ~75 行 |
+| `frame_ops.go` 接線 §2.2.1 + §2.2.2（v6 filter-merge-retry）| ~85 行 |
 | `projection.go` dedup | ~40 行 |
 | `sweep.go` canonicalizePane + findCanonicalAncestor + pruneDeadProxyRefs | ~140 行 |
 | `frame_ops_test.go` RC1-RC5 unit | ~150 行 |
 | `projection_test.go` PD1-PD3 | ~80 行 |
-| `module_test.go` / new file IT1-IT19 integration | ~800-900 行 |
+| `module_test.go` / new file IT1-IT20 integration | ~830-930 行 |
 | `sweep_test.go` 加 sweep canonicalize/prune 測試 | ~120 行 |
-| Plan docs（此檔 v5） | ~870 行 |
-| **總 net code（不含 plan docs）** | **~1595-1695 行** |
+| Plan docs（此檔 v6） | ~895 行 |
+| **總 net code（不含 plan docs）** | **~1620-1720 行** |
 
-v5 LOC 比 v4（~1460-1560）+135：preserve live proxies wiring（~35 行）+ IT17/IT18/IT19（~100 行）。但複雜度仍比 v3 低（單一 best-effort 路徑 + projection dedup boundary，不是 retry/rollback/propagate maze）。
+v6 LOC 比 v5（~1595-1695）+25：filter-merge-retry +10 行（取代三步法）+ IT20 約 +30 行。設計複雜度反而降低 — 三步法非原子→單一 retry loop，與 PR-2b 既有 retry pattern 同型，認知負擔小。
 
 ---
 
@@ -868,4 +933,5 @@ PR 跑過 codex round 4 review 收斂後：
 | Side A consulting | task-moeupstr-z0oilf | (technical spec) | 提議 SQL transaction 根除 partial 物理層 | 不採納（標準對 ephemeral 表過高），但細節（BEGIN IMMEDIATE / busy code / FK）保留參考 |
 | Side B consulting | task-moeuqbnn-jart97 | (adversarial argument) | 證據壓倒：sweep 2s 不是 1h / agent_frames 是 ephemeral / projection 是 user-visible 邊界 / SessionEnd 漏 cleanup proxy | **採納為 v4 核心**（Hybrid B+）|
 | Plan v4 round 4（adversarial）| inline | needs-attention | I1 high existing-frame reset 清掉 live proxy / I2 medium SLO 不可量測 | v5 全採納（§2.2.2 preserve live proxies + IT17/IT18/IT19；§2.6 移除 SLO 聲明，改三 evidence point；§0.2 設計論證重整）|
-| Plan v5 round 5 | (待執行) | (pending) | — | — |
+| Plan v5 round 5（adversarial）| inline | needs-attention | J1 high snapshot/reset/re-attach 三步非原子，並發 attach 在 race window 內被抹除 | v6 採納（§2.2.2 改為 filter-merge-retry pattern，取代三步法；新 IT20 守規）|
+| Plan v6 round 6 | (待執行) | (pending) | — | — |
