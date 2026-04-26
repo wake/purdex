@@ -51,7 +51,7 @@ func TestFilterOutPdxCodex_MatchesAndPreserves(t *testing.T) {
 	}
 }
 
-func TestFilterOutPdxCodex_LegacyDirectEntryMigrated(t *testing.T) {
+func TestFilterOutPdxCodex_NonOwnedDirectEntryPreserved(t *testing.T) {
 	entries := []any{
 		map[string]any{
 			"type":    "command",
@@ -60,13 +60,8 @@ func TestFilterOutPdxCodex_LegacyDirectEntryMigrated(t *testing.T) {
 		},
 	}
 	result := filterOutPdxCodex(entries)
-	if len(result) != 1 {
-		t.Fatalf("expected 1 matcher group after migration, got %d", len(result))
-	}
-	group, _ := result[0].(map[string]any)
-	hookEntries := toCodexEntrySlice(group["hooks"])
-	if len(hookEntries) != 1 {
-		t.Fatalf("expected 1 migrated hook entry, got %d", len(hookEntries))
+	if !reflect.DeepEqual(result, entries) {
+		t.Fatalf("non-owned direct entry changed; got %#v want %#v", result, entries)
 	}
 }
 
@@ -494,12 +489,11 @@ func TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite(t *testing.T) {
 		if err := os.WriteFile(hooksPath, []byte(`{"hooks":{}}`), 0644); err != nil {
 			t.Fatalf("write hooks: %v", err)
 		}
-		if err := os.Chmod(codexDir, 0500); err != nil {
-			t.Fatalf("chmod codex dir: %v", err)
+		if err := os.Mkdir(hooksPath+".tmp", 0755); err != nil {
+			t.Fatalf("mkdir hooks temp collision: %v", err)
 		}
-		t.Cleanup(func() { _ = os.Chmod(codexDir, 0700) })
 		if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
-			t.Fatal("InstallHooks succeeded with unwritable hooks directory")
+			t.Fatal("InstallHooks succeeded with hooks temp path blocked by directory")
 		}
 		gotConfig, _ := os.ReadFile(configPath)
 		if string(gotConfig) != string(originalConfig) {
@@ -1204,6 +1198,77 @@ func TestCodexRemoveHooks_PreservesUnknownRetiredEventKey(t *testing.T) {
 	hooks := hooksSection(t, readHooksFile(t, hooksPath))
 	if _, ok := hooks["RetiredEvent"]; !ok {
 		t.Fatal("RemoveHooks removed unknown Codex hook key")
+	}
+}
+
+func TestCodexRemoveHooks_PreservesUnknownNonArrayHookValues(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	wantObject := map[string]any{"custom": true}
+	data, _ := json.MarshalIndent(map[string]any{
+		"hooks": map[string]any{
+			"UnknownObject": wantObject,
+			"SessionStart":  "custom-scalar",
+			"OwnedKey":      []any{pdxGroupEntry("SessionStart")},
+		},
+	}, "", "  ")
+	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
+		t.Fatalf("write hooks: %v", err)
+	}
+
+	if err := (&Provider{}).RemoveHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("RemoveHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, hooksPath))
+	if !reflect.DeepEqual(hooks["UnknownObject"], wantObject) {
+		t.Fatalf("RemoveHooks changed unknown object hook value: %#v", hooks["UnknownObject"])
+	}
+	if hooks["SessionStart"] != "custom-scalar" {
+		t.Fatalf("RemoveHooks changed unknown scalar hook value: %#v", hooks["SessionStart"])
+	}
+	if _, ok := hooks["OwnedKey"]; ok {
+		t.Fatal("RemoveHooks left owned array hook key")
+	}
+}
+
+func TestCodexMergeHooks_PreservesNonOwnedDirectEntryShape(t *testing.T) {
+	for _, remove := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remove=%v", remove), func(t *testing.T) {
+			dir := t.TempDir()
+			hooksPath := filepath.Join(dir, "hooks.json")
+			direct := map[string]any{"type": "command", "command": "/usr/bin/notify third-party", "timeout": float64(5)}
+			data, _ := json.MarshalIndent(map[string]any{
+				"hooks": map[string]any{
+					"SessionStart": []any{direct},
+				},
+			}, "", "  ")
+			if err := os.WriteFile(hooksPath, data, 0644); err != nil {
+				t.Fatalf("write hooks: %v", err)
+			}
+
+			if err := mergeCodexHooks(hooksPath, "/usr/local/bin/pdx", remove); err != nil {
+				t.Fatalf("mergeCodexHooks: %v", err)
+			}
+			hooks := hooksSection(t, readHooksFile(t, hooksPath))
+			entries := toCodexEntrySlice(hooks["SessionStart"])
+			foundDirect := false
+			for _, entry := range entries {
+				m, _ := entry.(map[string]any)
+				if _, hasHooks := m["hooks"]; hasHooks {
+					continue
+				}
+				if reflect.DeepEqual(m, direct) {
+					foundDirect = true
+				}
+			}
+			if !foundDirect {
+				t.Fatalf("mergeCodexHooks changed non-owned direct entry shape: %#v", entries)
+			}
+		})
 	}
 }
 

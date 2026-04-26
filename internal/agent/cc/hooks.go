@@ -132,7 +132,11 @@ func mergeClaudeHooks(path, pdxPath string, remove bool) error {
 	}
 	if remove {
 		for event, existing := range hooks {
-			entries := filterOutPdx(toEntrySlice(existing))
+			entries, ok := existing.([]any)
+			if !ok {
+				continue
+			}
+			entries = filterOutPdx(entries)
 			if len(entries) == 0 {
 				delete(hooks, event)
 			} else {

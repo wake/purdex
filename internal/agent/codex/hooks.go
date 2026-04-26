@@ -220,6 +220,9 @@ func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) 
 	}
 	if remove {
 		for event, existing := range hooks {
+			if _, ok := existing.([]any); !ok {
+				continue
+			}
 			entries := filterOutPdxCodexKnownEvents(existing)
 			if len(entries) == 0 {
 				delete(hooks, event)
@@ -567,16 +570,19 @@ func filterOutPdxCodexWithPredicate(entries any, isOwned func(string) bool) []an
 				if isOwned(cmd) {
 					continue
 				}
-				result = append(result, map[string]any{
-					"hooks": []any{cloneCodexMap(group)},
-				})
+				result = append(result, entry)
 				continue
 			}
 			result = append(result, entry)
 			continue
 		}
 		var kept []any
-		for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
+		hooks, ok := group["hooks"].([]any)
+		if !ok {
+			result = append(result, entry)
+			continue
+		}
+		for _, hookEntry := range hooks {
 			m, ok := hookEntry.(map[string]any)
 			if !ok {
 				kept = append(kept, hookEntry)

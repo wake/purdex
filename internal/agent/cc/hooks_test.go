@@ -274,6 +274,37 @@ func TestMergeClaudeHooks_RemovesOwnedPdxUnderUnknownKey(t *testing.T) {
 	}
 }
 
+func TestMergeClaudeHooks_PreservesUnknownNonArrayHookValues(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	wantObject := map[string]any{"custom": true}
+	settings := map[string]any{
+		"hooks": map[string]any{
+			"UnknownObject": wantObject,
+			"SessionStart":  "custom-scalar",
+			"OwnedKey":      []any{makePdxEntry("/usr/local/bin/pdx", "cc", "SessionStart")},
+		},
+	}
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("mergeClaudeHooks remove: %v", err)
+	}
+	hooks := hooksMap(t, readSettings(t, path))
+	if got, ok := hooks["UnknownObject"].(map[string]any); !ok || got["custom"] != true {
+		t.Fatalf("remove changed unknown object hook value: %#v", hooks["UnknownObject"])
+	}
+	if hooks["SessionStart"] != "custom-scalar" {
+		t.Fatalf("remove changed unknown scalar hook value: %#v", hooks["SessionStart"])
+	}
+	if _, ok := hooks["OwnedKey"]; ok {
+		t.Fatal("remove left owned array hook key")
+	}
+}
+
 func TestMergeClaudeHooks_PreservesWrapperLikePdxCommand(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
