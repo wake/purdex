@@ -319,7 +319,7 @@ Keep currently intended normalized events:
 - `StopFailure` from `session.error`
 - `Stop` from `session.idle`
 - `SessionEnd` from `session.deleted`
-- `UserPromptSubmit` from the current prompt/message event after verification
+- `UserPromptSubmit` from the existing prompt/message mapping; runtime/source validation is deferred to issue #658
 - `SubagentStart` / `SubagentStop` from `tool.execute.before/after` task calls
 
 Do not add an exact OpenCode `1.14.23` plugin event table in PR 4. The attempted fixture/table approach was deferred to issue #658 because it requires mechanically verifiable source/type snapshots or raw runtime captures to avoid false confidence.
