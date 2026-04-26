@@ -7,10 +7,9 @@ import (
 	"github.com/wake/purdex/internal/agent"
 )
 
-// expectedCCEventNames lists the 9 hook events cc's installer wires. Kept as
-// a fixed slice to guard against silent drift in Events() ordering/contents.
-// Order matches plan §1.4 cc table, which mirrors the installer's emit order.
-var expectedCCEventNames = []string{
+// expectedCCInstallableEventNames lists the hook events cc's installer wires.
+// Keep this stable while the upstream catalog grows around it.
+var expectedCCInstallableEventNames = []string{
 	"SessionStart",
 	"UserPromptSubmit",
 	"SubagentStart",
@@ -22,16 +21,52 @@ var expectedCCEventNames = []string{
 	"SessionEnd",
 }
 
-// TestCCEvents_Count locks the declared event count at 9 (plan §1.4).
+var expectedCCEventNames = expectedCCInstallableEventNames
+
+// expectedCCCatalogHandling is pinned to the Claude Code hooks reference,
+// fetched 2026-04-26 from https://docs.anthropic.com/en/docs/claude-code/hooks.
+var expectedCCCatalogHandling = map[string]agent.HookHandling{
+	"SessionStart":        agent.HookHandlingStatus,
+	"UserPromptSubmit":    agent.HookHandlingStatus,
+	"UserPromptExpansion": agent.HookHandlingUnsupported,
+	"PreToolUse":          agent.HookHandlingUnsupported,
+	"PermissionRequest":   agent.HookHandlingStatus,
+	"PermissionDenied":    agent.HookHandlingIgnored,
+	"PostToolUse":         agent.HookHandlingIgnored,
+	"PostToolUseFailure":  agent.HookHandlingIgnored,
+	"PostToolBatch":       agent.HookHandlingUnsupported,
+	"Notification":        agent.HookHandlingStatus,
+	"SubagentStart":       agent.HookHandlingDetail,
+	"SubagentStop":        agent.HookHandlingDetail,
+	"TaskCreated":         agent.HookHandlingIgnored,
+	"TaskCompleted":       agent.HookHandlingIgnored,
+	"Stop":                agent.HookHandlingStatus,
+	"StopFailure":         agent.HookHandlingStatus,
+	"TeammateIdle":        agent.HookHandlingIgnored,
+	"InstructionsLoaded":  agent.HookHandlingIgnored,
+	"ConfigChange":        agent.HookHandlingIgnored,
+	"CwdChanged":          agent.HookHandlingIgnored,
+	"FileChanged":         agent.HookHandlingUnsupported,
+	"WorktreeCreate":      agent.HookHandlingUnsupported,
+	"WorktreeRemove":      agent.HookHandlingUnsupported,
+	"PreCompact":          agent.HookHandlingUnsupported,
+	"PostCompact":         agent.HookHandlingIgnored,
+	"Elicitation":         agent.HookHandlingIgnored,
+	"ElicitationResult":   agent.HookHandlingIgnored,
+	"SessionEnd":          agent.HookHandlingStatus,
+}
+
+// TestCCEvents_Count locks the classified upstream event count.
 func TestCCEvents_Count(t *testing.T) {
 	p := NewProvider(nil, nil, nil, nil)
 	events := p.Events()
-	if len(events) != 9 {
-		t.Fatalf("cc Events count = %d, want 9 (plan §1.4)", len(events))
+	if len(events) != len(expectedCCCatalogHandling) {
+		t.Fatalf("cc Events count = %d, want %d", len(events), len(expectedCCCatalogHandling))
 	}
 }
 
-// TestCCEvents_NamesMatchExpected asserts the Event Name set matches §1.4.
+// TestCCEvents_NamesMatchExpected asserts the Event Name set matches the
+// version-pinned upstream catalog.
 func TestCCEvents_NamesMatchExpected(t *testing.T) {
 	p := NewProvider(nil, nil, nil, nil)
 	events := p.Events()
@@ -43,8 +78,8 @@ func TestCCEvents_NamesMatchExpected(t *testing.T) {
 		}
 		got[e.Name] = true
 	}
-	want := make(map[string]bool, len(expectedCCEventNames))
-	for _, n := range expectedCCEventNames {
+	want := make(map[string]bool, len(expectedCCCatalogHandling))
+	for n := range expectedCCCatalogHandling {
 		want[n] = true
 	}
 	for n := range want {
@@ -55,6 +90,49 @@ func TestCCEvents_NamesMatchExpected(t *testing.T) {
 	for n := range got {
 		if !want[n] {
 			t.Errorf("cc Events contains unexpected Name %q", n)
+		}
+	}
+}
+
+func TestCCEvents_ClassifyKnownUpstreamHooks(t *testing.T) {
+	p := NewProvider(nil, nil, nil, nil)
+	for _, e := range p.Events() {
+		want, ok := expectedCCCatalogHandling[e.Name]
+		if !ok {
+			continue
+		}
+		if got := agent.EffectiveHookHandling(e); got != want {
+			t.Errorf("cc %s handling = %q, want %q", e.Name, got, want)
+		}
+		if !agent.IsInstallableHookSpec(e) && len(e.EmitsStatus) != 0 {
+			t.Errorf("cc non-installable %s EmitsStatus = %v, want empty", e.Name, e.EmitsStatus)
+		}
+	}
+}
+
+func TestCCEvents_InstallableSetStaysStable(t *testing.T) {
+	p := NewProvider(nil, nil, nil, nil)
+	got := map[string]bool{}
+	for _, e := range p.Events() {
+		if agent.IsInstallableHookSpec(e) {
+			got[e.Name] = true
+		}
+	}
+	want := map[string]bool{}
+	for _, name := range expectedCCInstallableEventNames {
+		want[name] = true
+	}
+	if len(got) != len(want) {
+		t.Fatalf("cc installable count = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("cc installable set missing %q", name)
+		}
+	}
+	for name := range got {
+		if !want[name] {
+			t.Errorf("cc installable set contains unexpected %q", name)
 		}
 	}
 }

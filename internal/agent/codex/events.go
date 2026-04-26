@@ -65,6 +65,18 @@ var codexEventSpecs = []agent.HookEventSpec{
 		Description: "Codex session ended",
 		FutureOnly:  true,
 	},
+	{
+		Name:        "PreToolUse",
+		EmitsStatus: []agent.Status{},
+		Description: "Tool call about to execute",
+		Handling:    agent.HookHandlingUnsupported,
+	},
+	{
+		Name:        "PostToolUse",
+		EmitsStatus: []agent.Status{},
+		Description: "Tool call completed",
+		Handling:    agent.HookHandlingUnsupported,
+	},
 }
 
 // Events returns a fresh defensive copy of the codex hook event catalog on

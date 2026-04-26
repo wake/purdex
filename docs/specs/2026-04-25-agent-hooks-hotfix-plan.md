@@ -778,13 +778,15 @@ Rationale:
 - The size is still reviewable because it is limited to `internal/agent/provider.go`, provider hook code/tests, and this plan document.
 - It remains outside lights runtime/probe/module files.
 
-### PR 2 — Upstream Catalog Classification
+### PR 2 — cc/Codex Upstream Catalog Classification
 
 Include:
 
-- Exact version-pinned cc/codex/opencode upstream catalog tables.
+- Exact version-pinned cc/Codex upstream catalog tables.
 - Real ignored/unsupported declarations and full catalog set assertions.
 - Provider catalog validation that newly added non-installable upstream entries must explicitly set `Handling` and must not emit statuses.
+- Keep existing installable sets stable: cc=9, Codex=9.
+- Do not add OpenCode event contract or mapping changes in this PR; OpenCode remains in PR 4/PR 5 because current event-key verification can affect hook emission and lights behavior.
 
 ### PR 3 — Remaining Claude Strictness, If Needed
 
