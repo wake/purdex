@@ -1,10 +1,23 @@
-# Lights Rebuild — Phase 3.5b Plan v3
+# Lights Rebuild — Phase 3.5b Plan v4 (ship-ready snapshot)
 
-**Status**: Draft, pending codex round 3
-**Round 1**: needs-attention — high (canonicalizePane 漏 hasOwnedState 守衛 → child 自己的 native subagent state 被砍)
-**Round 1 fix（v2）**: §2.2 加 candidate state classifier（mirror `canonicalizeDescendantsAfterUpsert` frame_ops.go:1098-1137）+ IT10n/IT10o/IT10p 新增驗證
-**Round 2**: needs-attention — high (IT10n 漏掉 round 1 原始時序 — attach 成功 + DeleteIfUnchanged 失敗 + 後續 native SubagentStart 三步序列；ship gate §6 沒納入 v2 新增 IT/RC)
-**Round 2 fix（v3）**: §3.1 IT10n 重寫為 round 1 原始時序組合 IT10m partial state（pre-existing parent proxy + child standalone with bumped LastSeenAt + native ref）；§6 ship gate 擴到 IT10/IT10b-p + RC6-RC16 全綠
+**Status**: Ship-ready post-implementation (v4 reflects PR-level review rounds 1-4 outcomes)
+**Plan rounds (pre-impl)**:
+- Round 1: needs-attention — 1 high (canonicalizePane 漏 hasOwnedState 守衛 → v2 fix)
+- Round 2: needs-attention — 1 high (IT10n 漏 round 1 原始時序 + ship gate 沒納入 v2 IT/RC → v3 fix)
+- Round 3: **approve** — clean, ship-ready
+
+**PR rounds (post-impl, against PR #650)**:
+- Round 1 (standard): clean
+- Round 2 (3-parallel adversarial):
+  - Attacker high (F1) — sweep.go: ancestor can die between identity gate and DeleteIfUnchanged → live child row deleted into dead parent. **Fixed** in `3c4ebd07` (post-attach revalidation; later refined as F4)
+  - Defender high (F2) — sweep.go: owned-state candidate skipped forever; defender's transient-error path never converges. **Fixed** in `38eef1a6` (reorg main loop into 4 cases: silent-skip / delete-only / attach-only F2 recovery / attach+delete main path)
+  - File-health medium (F3) — sweep_test.go: canonicalizeWired/broadcastWired skip gates left in final diff as foot-gun. **Fixed** in `a2aafdf2` (removed flags + skipUntil helpers + all skipUntil calls)
+- Round 3 (closure verification): high (F4) — F1 only protected attach branch; F2's delete-only branch bypasses revalidation, reopening data-loss class. **Fixed** in `f46f616c` (hoisted revalidation to common pre-delete point covering BOTH paths)
+- Round 4 (closure verification): medium — plan ship gate stale (this v4 update closes it)
+
+**Convergence signal**: 3 plan rounds + 4 PR rounds = 7 total review passes. Findings count: 1 high (R1) → 1 high (R2 plan) → 0 (R3 plan approve) → 1 high (R1 PR clean) → 3 R2 PR (1 attacker + 1 defender + 1 file-health) → 1 high (R3 PR closure F4) → 1 medium (R4 PR closure plan drift). Diminishing severity past R2 PR; R3+R4 are review-driven refinements + doc cleanup.
+
+> **Note on §2.2 / §2.2.1 / §2.3 / §2.4 below**: these sections describe the v3 design baseline as reviewed/approved by plan rounds 1-3. The shipped code in `sweep.go` after F1/F2/F4 reorganizes the main loop into the 4-case branching documented in commit `38eef1a6`. Read commits `3c4ebd07` / `38eef1a6` / `a2aafdf2` / `f46f616c` for the post-review impl deltas. Plan §2.2 is preserved as the design source-of-truth at design time, not the merged shape.
 **Round 1 verbatim** (`019dc937-beb0-7a83-a02b-42679ad4fbc1`):
 
 > high — canonicalizePane can erase stateful child subagents during partial recovery (§2.2 lines 114-140). Plan §2.2 folds any live candidate with a canonical ancestor, then deletes the candidate row after attach. There is no candidate-owned-state guard before lines 136-140. This is unsafe for the exact partial state created when attach succeeds and DeleteIfUnchanged fails because the child was concurrently refreshed by SubagentStart: PR-3.5a projection currently hides that standalone child while merging its Subagents, but this sweep would attach only a proxy ref to the ancestor and then delete the child row, losing native child refs. Existing hot-path canonicalizeDescendantsAfterUpsert has an owned-state classification for this class of bug; the sweep plan does not carry it over, and IT10g/IT10m do not cover a stateful child with native refs.
@@ -435,11 +448,13 @@ Plan v12 §2.5 已決定 sweep canonicalize 不寫獨立 trace decision（消費
 |---|---|
 | `go build ./... && go vet ./... && go test ./...` | 全綠 |
 | 23 packages 總體 | 0 regression |
-| **IT10 + IT10b-IT10p（共 16 條 integration tests）** | **全綠**（v3 round 2 fix — 含 round 1 closure regression guard IT10n）|
-| **RC6-RC16（共 11 條 unit tests）** | **全綠**（v3 round 2 fix — 含 candidateHasOwnedState 完整覆蓋 RC12-RC16）|
-| MetricSweepCanonicalized | 觀察 +1 在預期 case；IT10g/IT10h/IT10n 確認**不**增（partial / gated case）|
+| **IT10 + IT10b-IT10s（共 19 條 integration tests）** | **全綠**（v4 round 4 fix — 含 R1 plan high closure IT10n + R2 PR F1/F2 closure IT10q/IT10r + R3 PR F4 closure IT10s）|
+| **RC6-RC16（共 11 條 unit tests）** | **全綠**（含 candidateHasOwnedState 完整覆蓋 RC12-RC16）|
+| **總計 30 個 PR-3.5b 測試** | 無 skip，全綠 |
+| MetricSweepCanonicalized | 觀察 +1 在預期 case；IT10g/h/n/q/r/s 確認**不**增（partial / gated / silent-skip case）|
+| MetricPartialCanonicalizationCreated | 觀察 +1 在 deliberate-partial cases（F1/F4 ancestor 死亡 revalidation; F2 attach-only owned-state 保留）|
 | MetricSweepPrunedProxy | 既有 PR-3.5a 行為不 regress |
-| Codex review | round 1 (high → fixed v2) + round 2 (high → fixed v3) → round 3 verdict 是 clean / nit-only 即可 ship；如再有 high/medium 繼續迭代直到收斂（per `feedback_codex_review_termination.md`）|
+| Codex review | 4 輪 PR 評審收斂（R1 standard clean → R2 三角度 3 findings F1/F2/F3 → R3 closure F4 high → R4 closure 1 medium plan drift）；無 critical/P1 殘留；多輪 high 嚴重性遞減符合 `feedback_codex_review_termination.md` 終止條件 |
 
 ---
 
@@ -455,6 +470,9 @@ Plan v12 §2.5 已決定 sweep canonicalize 不寫獨立 trace decision（消費
 | 新 helper `broadcastProxyCanonicalized` 與 `broadcastProxyPruned` 重複| **預期** | 先 duplicate（避免 3.5b 拓展 scope），commit 結束附 simplifier 做 helper 抽出。或 codex review 建議共通化再做 |
 | **v2 新增**：sweep 砍掉 child 自己的 native subagent state（codex round 1 high）| **已修** | §2.2.1 抽 `candidateHasOwnedState` 共享 helper；hot-path 與 sweep 編譯期保證語意一致；IT10n/IT10o/IT10p 三個 IT 守 |
 | **v2 新增**：抽 helper 改動 hot-path 既有檔案（違反「out of scope: 改 hot-path」）| **可控** | pure refactor，0 行為變更；hot-path 既有 test（PR-3.5a R2 #O2 specifically tests stale-only proxy fold + native ref skip）是 baseline 守衛；diff 是「移動命名」可一目了然 |
+| **v4 新增 (R2 PR attacker)**：ancestor 在 findCanonicalAncestor 與 DeleteIfUnchanged 之間死亡，導致 live child 被刪進 dead parent | **已修** F4 | sweep.go 將 isPidAliveFn + processStartTimeFn 重驗 hoist 到 delete 共同前置點，覆蓋 attach-then-delete 與 delete-only 兩條路徑；IT10q + IT10s regression guard |
+| **v4 新增 (R2 PR defender)**：owned-state child 與 hot-path 失敗的 ancestor 從 v3 早 skip → DB partial 永不收斂 | **已修** F2 | sweep.go reorg 為 4-case branching；attach-only recovery 在無 ref 時將 proxy ref 上去（projection_dedup 可隱藏 + merge）；IT10r regression guard |
+| **v4 新增 (R2 PR file-health)**：TDD intermediate skip gates `canonicalizeWired` / `broadcastWired` 留在 final diff 成 foot-gun | **已修** F3 | 移除 vars + skipUntil helpers + skipUntil calls；30 個 PR-3.5b 測試無條件全跑 |
 
 ---
 
