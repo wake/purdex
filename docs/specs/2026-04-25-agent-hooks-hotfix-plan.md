@@ -845,7 +845,7 @@ Coverage-only SPA test.
 
 Scope:
 
-- Add explicit coverage that `getAgentIcon('opencode', ...)` returns a defined icon component.
+- Add explicit coverage that `getAgentIcon('opencode', ...)` returns the OpenCode icon component, not only any defined component.
 - Add coverage that the OpenCode icon component is stable across the full cc/Codex icon variant option matrix because OpenCode has no variant setting.
 - Do not change production icon code in PR 6. If the guard fails on the current baseline, stop and split a separate fix.
 - Do not add `opencodeVariant` or settings UI.
@@ -863,7 +863,7 @@ Test IDs:
 
 | ID | Test | Assertion |
 |---|---|---|
-| OI1 | `returns opencode icon for opencode agent type` | `getAgentIcon('opencode', ...)` returns a defined component |
+| OI1 | `returns opencode icon for opencode agent type` | `getAgentIcon('opencode', ...)` renders a mocked OpenCode SVG marker and is distinct from cc/Codex variants |
 | OI2 | `opencode icon ignores cc and codex variants` | OpenCode icon component identity is stable across the 2x2 cc/Codex variant matrix |
 
 TDD note:

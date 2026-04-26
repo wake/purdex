@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest'
+import { render } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
 import { getAgentIcon, CC_ICON_VARIANTS, CODEX_ICON_VARIANTS } from './agent-icons'
+
+vi.mock('@lobehub/icons-static-svg/icons/opencode.svg?react', () => ({
+  default: (props: import('react').SVGProps<SVGSVGElement>) => (
+    <svg data-testid="opencode-svg-marker" {...props} />
+  ),
+}))
 
 describe('getAgentIcon', () => {
   it('returns bot variant for cc when ccVariant=bot', () => {
@@ -27,15 +34,34 @@ describe('getAgentIcon', () => {
   })
 
   it('returns opencode icon for opencode agent type', () => {
-    expect(getAgentIcon('opencode', { ccVariant: 'bot', codexVariant: 'openai' })).toBeDefined()
+    const Icon = getAgentIcon('opencode', { ccVariant: 'bot', codexVariant: 'openai' })
+
+    expect(Icon).toBeDefined()
+    expect(Icon).not.toBe(CC_ICON_VARIANTS.bot)
+    expect(Icon).not.toBe(CC_ICON_VARIANTS.star)
+    expect(Icon).not.toBe(CODEX_ICON_VARIANTS.openai)
+    expect(Icon).not.toBe(CODEX_ICON_VARIANTS.codex)
+
+    const { container } = render(Icon ? <Icon size={16} /> : null)
+    expect(container.querySelector('[data-testid="opencode-svg-marker"]')).toBeTruthy()
   })
 
   it('opencode icon ignores cc and codex variants', () => {
     const icon = getAgentIcon('opencode', { ccVariant: 'bot', codexVariant: 'openai' })
+    const matrix = [
+      { ccVariant: 'bot', codexVariant: 'openai' },
+      { ccVariant: 'bot', codexVariant: 'codex' },
+      { ccVariant: 'star', codexVariant: 'openai' },
+      { ccVariant: 'star', codexVariant: 'codex' },
+    ] as const
 
-    expect(getAgentIcon('opencode', { ccVariant: 'bot', codexVariant: 'codex' })).toBe(icon)
-    expect(getAgentIcon('opencode', { ccVariant: 'star', codexVariant: 'openai' })).toBe(icon)
-    expect(getAgentIcon('opencode', { ccVariant: 'star', codexVariant: 'codex' })).toBe(icon)
+    for (const options of matrix) {
+      const Icon = getAgentIcon('opencode', options)
+      expect(Icon).toBe(icon)
+
+      const { container } = render(Icon ? <Icon size={16} /> : null)
+      expect(container.querySelector('[data-testid="opencode-svg-marker"]')).toBeTruthy()
+    }
   })
 
   it('codex branch ignores ccVariant and respects codexVariant', () => {
