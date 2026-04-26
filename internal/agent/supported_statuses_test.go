@@ -73,6 +73,71 @@ func TestHookEventSpecFutureOnlyDefaultsToFalse(t *testing.T) {
 	}
 }
 
+func TestEffectiveHookHandlingDefaults(t *testing.T) {
+	tests := []struct {
+		name string
+		spec agent.HookEventSpec
+		want agent.HookHandling
+	}{
+		{
+			name: "explicit status wins",
+			spec: agent.HookEventSpec{Handling: agent.HookHandlingStatus},
+			want: agent.HookHandlingStatus,
+		},
+		{
+			name: "explicit detail wins",
+			spec: agent.HookEventSpec{Handling: agent.HookHandlingDetail, EmitsStatus: []agent.Status{agent.StatusRunning}},
+			want: agent.HookHandlingDetail,
+		},
+		{
+			name: "empty handling with status defaults status",
+			spec: agent.HookEventSpec{EmitsStatus: []agent.Status{agent.StatusRunning}},
+			want: agent.HookHandlingStatus,
+		},
+		{
+			name: "empty handling with empty statuses defaults detail",
+			spec: agent.HookEventSpec{EmitsStatus: []agent.Status{}},
+			want: agent.HookHandlingDetail,
+		},
+		{
+			name: "empty handling with nil statuses defaults detail",
+			spec: agent.HookEventSpec{},
+			want: agent.HookHandlingDetail,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agent.EffectiveHookHandling(tt.spec); got != tt.want {
+				t.Fatalf("EffectiveHookHandling(%+v) = %q, want %q", tt.spec, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsInstallableHookSpec(t *testing.T) {
+	tests := []struct {
+		name string
+		spec agent.HookEventSpec
+		want bool
+	}{
+		{name: "explicit status", spec: agent.HookEventSpec{Handling: agent.HookHandlingStatus}, want: true},
+		{name: "explicit detail", spec: agent.HookEventSpec{Handling: agent.HookHandlingDetail}, want: true},
+		{name: "default status", spec: agent.HookEventSpec{EmitsStatus: []agent.Status{agent.StatusRunning}}, want: true},
+		{name: "default detail", spec: agent.HookEventSpec{}, want: true},
+		{name: "ignored", spec: agent.HookEventSpec{Handling: agent.HookHandlingIgnored}, want: false},
+		{name: "unsupported", spec: agent.HookEventSpec{Handling: agent.HookHandlingUnsupported}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agent.IsInstallableHookSpec(tt.spec); got != tt.want {
+				t.Fatalf("IsInstallableHookSpec(%+v) = %v, want %v", tt.spec, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestDeriveSupportedStatusesIgnoresFutureOnlyBit is the fix-plan §2.1 F2
 // contract lock: DeriveSupportedStatuses must NOT filter out FutureOnly
 // specs. FutureOnly is an installer/checker-facet flag only; the

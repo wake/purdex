@@ -32,11 +32,13 @@ type HookEvent struct {
 
 // HookInstaller can install/remove/check hook configurations for a specific agent.
 //
-// Events() is the single source of truth (SSoT) for the hook event catalog:
-// installer iteration, CheckHooks reporting, SupportedStatuses derivation, and
-// future Inspector UI all read from the same declaration. It supersedes any
-// package-local *HookEvents slice; do not introduce a parallel string list.
-// Any new HookInstaller implementation is required to implement Events().
+// Events() is the single source of truth (SSoT) for the provider's classified
+// upstream hook event catalog. It supersedes any package-local *HookEvents
+// slice; do not introduce a parallel string list. Installer iteration,
+// CheckHooks reporting, and template parity must derive their installable
+// subset with IsInstallableHookSpec rather than assuming every catalog entry is
+// wired. SupportedStatuses derivation still reads the same declaration. Any
+// new HookInstaller implementation is required to implement Events().
 type HookInstaller interface {
 	InstallHooks(pdxPath string) error
 	RemoveHooks(pdxPath string) error
@@ -44,10 +46,10 @@ type HookInstaller interface {
 	Events() []HookEventSpec
 }
 
-// HookEventSpec declares one hook event the installer wires, the Status set
-// DeriveStatus may emit from that event, and a short human-readable blurb for
-// the Inspector UI. It is the build-time declaration contract; runtime hook
-// handling stays per-agent (policy dispersal, plumbing shared).
+// HookEventSpec declares one upstream hook event, the Status set DeriveStatus
+// may emit from that event when it is installable, and a short human-readable
+// blurb for the Inspector UI. It is the build-time declaration contract;
+// runtime hook handling stays per-agent (policy dispersal, plumbing shared).
 //
 // Fields:
 //   - Name: matches the hook JSON event_name / pdx hook CLI subcommand.
@@ -68,11 +70,45 @@ type HookInstaller interface {
 //     unions every spec's EmitsStatus regardless of FutureOnly — proxy paths
 //     and future CLI versions may legitimately emit the event. Default false
 //     means "installer-required; missing is an issue". See fix plan §1.1.
+//   - Handling: classifies whether this catalog entry is installed/parsed.
+//     Empty values preserve the legacy defaults via EffectiveHookHandling:
+//     specs with EmitsStatus default to status, and empty-status specs default
+//     to detail. Newly added non-installable upstream entries must set this
+//     explicitly to ignored or unsupported.
+type HookHandling string
+
+const (
+	HookHandlingStatus      HookHandling = "status"
+	HookHandlingDetail      HookHandling = "detail"
+	HookHandlingIgnored     HookHandling = "ignored"
+	HookHandlingUnsupported HookHandling = "unsupported"
+)
+
 type HookEventSpec struct {
 	Name        string
 	EmitsStatus []Status
 	Description string
 	FutureOnly  bool
+	Handling    HookHandling
+}
+
+func EffectiveHookHandling(spec HookEventSpec) HookHandling {
+	if spec.Handling != "" {
+		return spec.Handling
+	}
+	if len(spec.EmitsStatus) > 0 {
+		return HookHandlingStatus
+	}
+	return HookHandlingDetail
+}
+
+func IsInstallableHookSpec(spec HookEventSpec) bool {
+	switch EffectiveHookHandling(spec) {
+	case HookHandlingStatus, HookHandlingDetail:
+		return true
+	default:
+		return false
+	}
 }
 
 // HookStatus reports the installation state of hooks for an agent.
