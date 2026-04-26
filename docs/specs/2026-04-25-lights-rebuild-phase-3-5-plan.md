@@ -1,9 +1,13 @@
-# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v11 / Hybrid B+)
+# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v12 / Hybrid B+)
 
 Baseline：`1.0.0-alpha.225`（main @ `92fb5d05`，Phase 3 已 merged）。
 Worktree：`.claude/worktrees/lights-phase-3-5`（branch `worktree-lights-phase-3-5`，已 rebase 上 `92fb5d05`）。
 Phase 3 PR #638：✅ squash-merged at `92fb5d05`（2026-04-26）。
 Bump 策略：本 PR 系列 + Phase 3 一起 bump **alpha.226**（注意：alpha.225 已被 parallel session 為 SPA tooltip 功能 PR #643 占用，與 Phase 3 無關）。
+
+**v11 → v12 由 PR-3.5a 第五輪 codex review 收斂**（§13；1 high finding 採納）：
+
+- **T1 high / round 5** — v11 SessionStart filter-merge `initialNativeIDs` baseline 用 ID-only 識別。Native IDs 是 provider-supplied strings；SessionStart reset 並發 SubagentStart 若新 native ref reused 舊 session 同 ID，新 ref 會被 baseline match 誤當「舊 session 殘留」silently drop → 使用者新 spawn 的 subagent 靜默消失。**v12 修法**（C23）：baseline 改為 `(Type, ID, StartedAt)` 三元組；新 SubagentStart 的 StartedAt 是 fresh broadcastTs，與 baseline ref 不同 → 不會被誤當 baseline drop。新增 IT21c 守規（baseline native call-1 + 並發 SubagentStart 同 ID 不同 StartedAt）。**Round 5 是 PR-3.5a 最後一輪 review**（trend：round 4 → 5 各 1 high finding，per `feedback_codex_review_termination.md` 進 ship；不再 review）。
 
 **v9 → v10 由 PR-3.5a 第三輪 codex review 收斂**（§13；2 unique finding 全採納）：
 
@@ -894,10 +898,10 @@ v10 LOC 比 v9（~1790-1890）+30：projection.go +20 行（hide + merge collect
 
 ## 8. 驗收 / Ship 條件
 
-- 所有 **IT1-IT22 + IT21b + IT22b + IT22c + IT13/IT13b/IT13c/IT13d + IT14/IT14b/IT14c** + RC1-RC5 + PD1-PD8 + 既有測試全綠（IT17-IT22, IT21b/IT22b/IT22c/IT13c/IT13d/IT14b/IT14c/PD4-PD8 為 race-fix regression guards 不可跳過 — codex round 6 K1 + round 2 v9 fix + round 3 v10 fix）
+- 所有 **IT1-IT22 + IT21b + IT21c + IT22b + IT22c + IT13/IT13b/IT13c/IT13d + IT14/IT14b/IT14c** + RC1-RC5 + PD1-PD9 + 既有測試全綠（IT17-IT22, IT21b/IT21c/IT22b/IT22c/IT13c/IT13d/IT14b/IT14c/PD4-PD9 為 race-fix regression guards 不可跳過 — codex round 6 K1 + round 2 v9 fix + round 3 v10 fix + round 4 v11 fix + round 5 v12 fix）
 - `go build/vet/test ./...` 23 packages 全綠
 - SPA 無變更
-- 委派 codex round 2（v8）+ round 2 second wave（v9）+ round 3（v10）review 收斂；採納或合理 deferred all findings
+- 委派 codex round 2（v8）+ round 2 second wave（v9）+ round 3（v10）+ round 4（v11）+ round 5（v12）review 收斂；採納或合理 deferred all findings；round 5 為最後一輪（trend：round 4 / round 5 各 1 high finding；per `feedback_codex_review_termination.md` 進 ship）
 - Phase 3 PR #638 merged 後 rebase Phase 3.5 到 main
 
 ---
@@ -977,7 +981,9 @@ PR-3.5a 跑過兩輪 codex review 收斂後：
 | PR-3.5a 第二輪 code review round 2（adversarial 三視角）| attack / defend / health（round 2）| needs-attention | O1 high filter-merge prevWrittenNativeIDs 多 retry 下 regress 丟 native / Q1 high projection dedup 隱藏 stateful child（partial+並發 SubagentStart）/ O2 medium descendant scan candidate guard 過寬把 stale-only IsProxy 算 state / O3 medium pruneDeadProxyRefs read-error 時 fail-destructive / P1 medium prune detach 後不 broadcast | **v9 全採納**：C13 initialNativeIDs baseline + IT21b / C14 dedup len==0 guard + PD4/PD5 / C15 candidate state classification + IT22b/IT22c / C16 prune fail-safe + IT14b / C17 broadcastProxyPruned + IT13c |
 | PR-3.5a 第三輪 code review round 3 | (round 3) | needs-attention | R1 high projection dedup Q1 fix 仍丟資訊（child 留 visible 後 TopFrame 選一→另一邊 Subagents 丟）／ R2 medium sweepOnce owner-identity read error 時 bare continue 把 frame 丟出 survivors → pane 不進 prune → O3 fail-safe 被繞過 | **v10 全採納**：C18 dedup hide-and-merge + PD4 改寫 + PD6/PD7/PD8 / C19 owner-read-error 加入 survivors + IT13d/IT14c |
 | PR-3.5a code review round 4（adversarial sanity）| review-mofh79kq-djlhr3 | needs-attention | S1 high R1 merge dedup 用 `subagentRefMatches`（native by ID-only），跨 frame 不同 agent family 的 native ID collision 被誤判 duplicate → 隱藏 child 的 native ref 從 wire 輸出消失 | **v11 採納**：merge 改 owner-aware inline dedup（proxy by `SourcePID+SourceStartTime`、native by `Type+ID`）；新增 PD9 守規。`subagentRefMatches` 語義不變（within-frame caller in `frame_ops.go` 不受影響）|
-| PR-3.5a code review round 5（待執行）| — | — | v11 patch（C21 fix + C22 docs）後再跑一輪 sanity；預期收斂無 high finding 進 ship | — |
+| PR-3.5a code review round 5（adversarial sanity）| review-mofi1dy2-ppe860 | needs-attention | T1 high SessionStart filter-merge `initialNativeIDs` baseline 用 ID-only 識別，並發 SubagentStart 同 ID 不同 StartedAt 被誤當 baseline drop → 使用者新 spawn subagent 靜默消失 | **v12 採納**：baseline 改 `(Type, ID, StartedAt)` 三元組；新增 IT21c 守規。**Round 5 為 PR-3.5a 最後一輪 review**（trend：round 4 → 5 各 1 high finding；per `feedback_codex_review_termination.md` convergence pattern 進 ship；不再 review）|
+
+**PR-3.5a review 累計**：5 輪 standard + adversarial review；landed findings：v8 (4)+ v9 (5) + v10 (2) + v11 (1) + v12 (1) = 13 採納 / deferred follow-up：N1（hot-path liveness syscall 成本）+ IT12b 衍生 store interface abstraction 需求。Ship-ready @ v12。
 
 ---
 
