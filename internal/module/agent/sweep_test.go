@@ -1141,36 +1141,6 @@ func TestSweep_OwnerReadErrorPreservesFrame(t *testing.T) {
 // freshly-introduced symbol.
 // ---------------------------------------------------------------------------
 
-// canonicalizeWired / broadcastWired are TDD gates flipped to true as
-// commits 7/8 implement canonicalizePane + broadcast. Until then,
-// IT10/IT10b-IT10p integration tests skip via skipUntilCanonicalizeWired
-// / skipUntilBroadcastWired so the test file compiles and the suite
-// stays green.
-//
-// commit 7 flips canonicalizeWired (canonicalizePane + sweep wire);
-// commit 8 flips broadcastWired (broadcastProxyCanonicalized). Both
-// helpers reduce to no-ops once their gate is true and disappear from
-// the diff at the squash level — fewer per-test t.Skip edits to revert
-// across commits.
-var (
-	canonicalizeWired = true
-	broadcastWired    = true
-)
-
-func skipUntilCanonicalizeWired(t *testing.T) {
-	t.Helper()
-	if !canonicalizeWired {
-		t.Skip("PR-3.5b commit 7+: canonicalizePane not yet wired")
-	}
-}
-
-func skipUntilBroadcastWired(t *testing.T) {
-	t.Helper()
-	if !broadcastWired {
-		t.Skip("PR-3.5b commit 8: broadcastProxyCanonicalized not yet wired")
-	}
-}
-
 // installSweepCanonicalSeams sets up the standard seam overrides for
 // IT10 tests: every PID in the alivePIDs/startTimes maps is alive and
 // identity-verified, every other PID is dead. nowFn is pinned close to
@@ -1219,7 +1189,6 @@ func installSweepCanonicalSeams(t *testing.T, alivePIDs map[int]bool, startTimes
 // chain reaches cc) → after sweep: cc.Subagents has codex IsProxy ref;
 // codex frame deleted; MetricSweepCanonicalized +1.
 func TestSweep_CanonicalizesStandaloneDescendantIntoAncestor(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{
 		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
@@ -1266,7 +1235,6 @@ func TestSweep_CanonicalizesStandaloneDescendantIntoAncestor(t *testing.T) {
 // IT10b — candidate identity gate: PID-reused candidate → skip; cc
 // untouched; pid_reused pass cleans the codex frame.
 func TestSweep_CanonicalizeSkipsPidReuseCandidate(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{
 		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
@@ -1310,7 +1278,6 @@ func TestSweep_CanonicalizeSkipsPidReuseCandidate(t *testing.T) {
 // IT10c — candidate identity gate: dead PID candidate → skip; pid_dead
 // pass clears it.
 func TestSweep_CanonicalizeSkipsDeadCandidate(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{
 		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
@@ -1355,7 +1322,6 @@ func TestSweep_CanonicalizeSkipsDeadCandidate(t *testing.T) {
 // is dead → findCanonicalAncestor identity gate skips → no fold; cc is
 // cleared by pid_dead pass.
 func TestSweep_CanonicalizeSkipsWhenAncestorDead(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{
 		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
@@ -1400,7 +1366,6 @@ func TestSweep_CanonicalizeSkipsWhenAncestorDead(t *testing.T) {
 // where the second's PPID chain reaches the first → findCanonicalAncestor
 // returns false (cc → cc is not a proxy relationship); both frames stay.
 func TestSweep_CanonicalizeSkipsSameTypeAncestor(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{
 		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
@@ -1445,7 +1410,6 @@ func TestSweep_CanonicalizeSkipsSameTypeAncestor(t *testing.T) {
 // IT10f — no ancestor frame in the pane: PPID chain walks to init
 // without finding a frame; candidate left alone.
 func TestSweep_CanonicalizeSkipsWhenNoAncestorInPane(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{
 		PaneID: "%5", AgentType: "codex", PID: 200, PPID: 999,
@@ -1487,7 +1451,6 @@ func TestSweep_CanonicalizeSkipsWhenNoAncestorInPane(t *testing.T) {
 // gate) so when sweep later issues DeleteIfUnchanged with the original
 // LastSeenAt it returns false.
 func TestSweep_CanonicalizePartialWhenDeleteUnchangedFails(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{
 		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
@@ -1590,7 +1553,6 @@ func TestSweep_CanonicalizePartialWhenDeleteUnchangedFails(t *testing.T) {
 // attachProxyRefWithRetry's first UpsertIfUnchanged. The reload via
 // GetByIdentity returns nil → attached=false.
 func TestSweep_CanonicalizePartialWhenAttachFails(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	cc, err := m.frames.Upsert(store.Frame{
 		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
@@ -1668,7 +1630,6 @@ func TestSweep_CanonicalizePartialWhenAttachFails(t *testing.T) {
 // Same tick: canonicalize attaches opencode IsProxy → prune detaches
 // stale codex IsProxy. Final cc.Subagents = [opencode IsProxy].
 func TestSweep_CanonicalizeThenPruneSameTick(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{
 		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
@@ -1724,7 +1685,6 @@ func TestSweep_CanonicalizeThenPruneSameTick(t *testing.T) {
 // IT10j — successful canonicalize emits broadcast with reason=
 // sweep:proxy_canonicalized. Verifies broadcast wiring (commit 8).
 func TestSweep_CanonicalizeEmitsBroadcastWhenAnySucceeded(t *testing.T) {
-	skipUntilBroadcastWired(t)
 	m := newSweepTestModule(t)
 	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: m.tmux}
 	sub := m.core.Events.AddTestSubscriber()
@@ -1772,7 +1732,6 @@ func TestSweep_CanonicalizeEmitsBroadcastWhenAnySucceeded(t *testing.T) {
 
 // IT10k — no successful canonicalize → no broadcast emitted.
 func TestSweep_CanonicalizeNoBroadcastWhenNothingSucceeded(t *testing.T) {
-	skipUntilBroadcastWired(t)
 	m := newSweepTestModule(t)
 	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: m.tmux}
 	sub := m.core.Events.AddTestSubscriber()
@@ -1816,7 +1775,6 @@ func TestSweep_CanonicalizeNoBroadcastWhenNothingSucceeded(t *testing.T) {
 // Each pane is canonicalized independently; pane B does not see pane
 // A's ancestor and vice-versa.
 func TestSweep_CanonicalizeCrossPaneIsolation(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	fakeTmux, _ := m.tmux.(*tmux.FakeExecutor)
 	fakeTmux.SetPaneSessionName("%6", "work2")
@@ -1879,7 +1837,6 @@ func TestSweep_CanonicalizeCrossPaneIsolation(t *testing.T) {
 // the standalone row. Final state: cc.Subagents has exactly 1 codex
 // IsProxy ref (no duplicate), codex standalone deleted.
 func TestSweep_CanonicalizeSkipsAlreadyProxiedCandidate(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{
 		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
@@ -1947,7 +1904,6 @@ func TestSweep_CanonicalizeSkipsAlreadyProxiedCandidate(t *testing.T) {
 // the cc projection at read time, hiding the standalone child without
 // data loss.
 func TestSweep_CanonicalizePreservesChildNativeAfterPartialRecovery(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	// (a) cc frame with codex IsProxy already attached.
 	if _, err := m.frames.Upsert(store.Frame{
@@ -2025,7 +1981,6 @@ func TestSweep_CanonicalizePreservesChildNativeAfterPartialRecovery(t *testing.T
 // (stale ref dropped along with the row; equivalent to sweep prune
 // detaching it then sweep folding next tick).
 func TestSweep_CanonicalizeFoldsCandidateWithOnlyStaleProxy(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{
 		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
@@ -2315,7 +2270,6 @@ func TestFindCanonicalAncestor_ReturnsFalseOnReadProcessInfoTransientError(t *te
 // skipped. The candidate is itself acting as ancestor for some other
 // sub-tree; folding it would lose that role.
 func TestSweep_CanonicalizeSkipsCandidateWithLiveProxy(t *testing.T) {
-	skipUntilCanonicalizeWired(t)
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{
 		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
