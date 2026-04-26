@@ -128,8 +128,9 @@ func installCodexHooks(configPath, hooksPath, pdxPath string) error {
 // Managed=true and Installed=false, which the UI needs so the Remove
 // button stays enabled.
 func codexHooksManaged(hooks map[string]any, _ []agent.HookEventSpec) bool {
+	owned := codexOwnedCleanupEventNames()
 	for _, entries := range hooks {
-		if hasLegacyPdxDirectCodexEntry(entries) {
+		if hasLegacyPdxDirectCodexEntryOwned(entries, owned) {
 			return true
 		}
 		for _, groupEntry := range codexMatcherGroups(entries) {
@@ -143,7 +144,7 @@ func codexHooksManaged(hooks map[string]any, _ []agent.HookEventSpec) bool {
 					continue
 				}
 				cmd, _ := m["command"].(string)
-				if isPdxCommandCodexOwned(cmd) {
+				if isPdxCommandCodexOwnedEvent(cmd, owned) {
 					return true
 				}
 			}
@@ -495,6 +496,10 @@ func codexMatcherGroups(v any) []any {
 // of a third-party legacy entry alongside a correctly-installed pdx matcher
 // group is not a pdx reinstall trigger and must not report false.
 func hasLegacyPdxDirectCodexEntry(v any) bool {
+	return hasLegacyPdxDirectCodexEntryOwned(v, codexOwnedCleanupEventNames())
+}
+
+func hasLegacyPdxDirectCodexEntryOwned(v any, owned map[string]bool) bool {
 	for _, entry := range toCodexEntrySlice(v) {
 		m, ok := entry.(map[string]any)
 		if !ok {
@@ -507,7 +512,7 @@ func hasLegacyPdxDirectCodexEntry(v any) bool {
 			continue
 		}
 		cmd, _ := m["command"].(string)
-		if isPdxCommandCodexOwned(cmd) {
+		if isPdxCommandCodexOwnedEvent(cmd, owned) {
 			return true
 		}
 	}
@@ -527,7 +532,10 @@ func filterOutPdxCodex(entries any) []any {
 }
 
 func filterOutPdxCodexKnownEvents(entries any) []any {
-	return filterOutPdxCodexWithPredicate(entries, isPdxCommandCodexOwned)
+	owned := codexOwnedCleanupEventNames()
+	return filterOutPdxCodexWithPredicate(entries, func(cmd string) bool {
+		return isPdxCommandCodexOwnedEvent(cmd, owned)
+	})
 }
 
 func filterOutPdxCodexWithPredicate(entries any, isOwned func(string) bool) []any {
@@ -578,6 +586,10 @@ func isPdxCommandCodexKnownEvent(cmd string, known map[string]bool) bool {
 	return isPdxCommandCodexOwned(cmd) && known[lastCodexCommandToken(cmd)]
 }
 
+func isPdxCommandCodexOwnedEvent(cmd string, owned map[string]bool) bool {
+	return isPdxCommandCodexOwned(cmd) && owned[lastCodexCommandToken(cmd)]
+}
+
 func isPdxCommandCodexOwned(cmd string) bool {
 	tokens := tokenizeCodexCommand(cmd)
 	if len(tokens) == 0 || filepath.Base(tokens[0]) != "pdx" {
@@ -610,4 +622,8 @@ func codexKnownEventNames() map[string]bool {
 		known[spec.Name] = true
 	}
 	return known
+}
+
+func codexOwnedCleanupEventNames() map[string]bool {
+	return codexKnownEventNames()
 }

@@ -227,6 +227,14 @@ Stale ignored/unsupported artifacts already present on disk:
 - `Managed=true` may be based on any Purdex-owned artifact, including stale ignored/unsupported entries, so users can run remove.
 - RemoveHooks must remove stale Purdex-owned ignored/unsupported commands while preserving third-party entries.
 
+Purdex ownership for cleanup is provider-local and explicit:
+
+- Remove/managed detection may scan all configured hook keys, including keys not present in the current installable set.
+- A command is Purdex-owned only when its tokenized shape targets this provider and its event token is in that provider's owned cleanup set.
+- The owned cleanup set includes currently installable events plus any historically installed Purdex events that were later retired.
+- Unknown event tokens are preserved by default, even when they use `pdx hook --agent <provider>`, because they may be user-authored, future upstream events, or third-party integrations.
+- If a future Purdex release removes an event from installable handling, it must keep the event in the owned cleanup set so uninstall can clean artifacts from older Purdex versions.
+
 Derived predicate table:
 
 | Effective handling | Installed by installer | Blocks `Installed=true` when missing | Contributes `SupportedStatuses` | Runtime parser required |

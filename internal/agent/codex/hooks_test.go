@@ -519,6 +519,7 @@ func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 	staleHooksPath := filepath.Join(dir, "stale-hooks.json")
 	stale := map[string]any{
 		"hooks": map[string]any{
+			"SessionStart": []any{pdxGroupEntry("SessionStart")},
 			"IgnoredSynthetic": []any{
 				pdxGroupEntry("IgnoredSynthetic"),
 				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": `"/usr/local/bin/pdx" hook --agent codex Bogus`, "timeout": 5}}},
@@ -535,11 +536,15 @@ func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 		t.Fatalf("remove stale non-installable hook: %v", err)
 	}
 	staleHooks := hooksSection(t, readHooksFile(t, staleHooksPath))
+	if _, ok := staleHooks["SessionStart"]; ok {
+		t.Fatal("remove left owned installable event SessionStart")
+	}
 	staleGroups := codexMatcherGroups(staleHooks["IgnoredSynthetic"])
-	if len(staleGroups) != 2 {
-		t.Fatalf("remove kept %d non-installable third-party groups, want 2", len(staleGroups))
+	if len(staleGroups) != 3 {
+		t.Fatalf("remove kept %d unknown/third-party groups, want 3", len(staleGroups))
 	}
 	foundCCPdx := false
+	foundUnknownCodexPdx := false
 	knownCodexEvents := codexKnownEventNames()
 	for _, groupEntry := range staleGroups {
 		group, _ := groupEntry.(map[string]any)
@@ -552,10 +557,16 @@ func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 			if strings.Contains(cmd, "--agent cc") {
 				foundCCPdx = true
 			}
+			if strings.Contains(cmd, "--agent codex Bogus") {
+				foundUnknownCodexPdx = true
+			}
 		}
 	}
 	if !foundCCPdx {
 		t.Fatal("remove dropped non-codex pdx hook under non-installable key")
+	}
+	if !foundUnknownCodexPdx {
+		t.Fatal("remove dropped unknown Codex pdx hook under non-installable key")
 	}
 	absentHooksPath := filepath.Join(dir, "absent-hooks.json")
 	if err := os.WriteFile(absentHooksPath, []byte(`{"hooks":{}}`), 0644); err != nil {
@@ -1102,7 +1113,7 @@ func TestCheckHooks_Managed_FalseForOtherAgentPdxEntry(t *testing.T) {
 	}
 }
 
-func TestCodexRemoveHooks_RemovesOwnedRetiredEventKey(t *testing.T) {
+func TestCodexRemoveHooks_PreservesUnknownRetiredEventKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	hooksPath := filepath.Join(home, ".codex", "hooks.json")
@@ -1123,15 +1134,15 @@ func TestCodexRemoveHooks_RemovesOwnedRetiredEventKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckHooks: %v", err)
 	}
-	if !status.Managed {
-		t.Fatal("retired codex pdx entry: Managed=false, want true")
+	if status.Managed {
+		t.Fatal("unknown codex pdx entry: Managed=true, want false")
 	}
 	if err := (&Provider{}).RemoveHooks("/usr/local/bin/pdx"); err != nil {
 		t.Fatalf("RemoveHooks: %v", err)
 	}
 	hooks := hooksSection(t, readHooksFile(t, hooksPath))
-	if _, ok := hooks["RetiredEvent"]; ok {
-		t.Fatal("RemoveHooks left retired owned Codex hook key")
+	if _, ok := hooks["RetiredEvent"]; !ok {
+		t.Fatal("RemoveHooks removed unknown Codex hook key")
 	}
 }
 
