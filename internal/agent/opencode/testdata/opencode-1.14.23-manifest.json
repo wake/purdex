@@ -1,0 +1,17 @@
+{
+  "tag": "v1.14.23",
+  "commitSha": "3d31ae2",
+  "version": "1.14.23",
+  "normalizedVersion": "1.14.23",
+  "auditReport": "docs/specs/2026-04-26-opencode-1.14.23-hook-audit.md",
+  "auditedAt": "2026-04-27",
+  "schemaStage": "lite",
+  "schemaStageNotes": "PR-4a-0 Commit 2 manifest — payloadFixtureDir intentionally absent (added in Commit 4 with full schema). Plan v1.3 §2.4 mandates separate lite vs full schemas; this file is the lite stage and must not include payloadFixtureDir until Commit 4.",
+  "catalogSummary": {
+    "busEvents": 48,
+    "strongHooks": 19,
+    "installable": 8,
+    "ignored": 37,
+    "unsupported": 20
+  }
+}

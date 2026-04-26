@@ -1,0 +1,741 @@
+{
+  "version": "1.14.23",
+  "tag": "v1.14.23",
+  "commitSha": "3d31ae2",
+  "auditedAt": "2026-04-27",
+  "auditReport": "docs/specs/2026-04-26-opencode-1.14.23-hook-audit.md",
+  "sourceRepo": "github.com/sst/opencode",
+  "schemaNotes": "Bipartite naming per plan v1.3 §2.2: installable entries use Purdex normalized PascalCase Names (events.go); ignored/unsupported entries use upstream key (dotted lowercase) as Name. Collision policy: upstreamKey unique across busEvents+strongHooks; Name in opencodeEventSpecs unique. Three Bus publish mechanisms documented per audit §2 / §7.2: typed-bus (default), global-bus-only (bypasses typed Bus.subscribe), sse-only (server-sent only). Purdex's plugin uses bus.subscribeAll() so receives all three.",
+
+  "busEvents": [
+    {
+      "upstreamKey": "session.idle",
+      "definedAt": "packages/opencode/src/session/status.ts:37",
+      "publishedAt": ["packages/opencode/src/session/status.ts:75"],
+      "publishMechanism": "typed-bus",
+      "deprecation": {
+        "marker": "// deprecated comment at packages/opencode/src/session/status.ts:36",
+        "stillEmitted": true,
+        "replacement": "session.status({type:\"idle\"})"
+      },
+      "payloadFields": ["sessionID"],
+      "purdex": {
+        "kind": "ignored",
+        "reason": "Superseded by session.status({type:\"idle\"}) per Decision 3 switch (audit §3.3); Purdex no longer subscribes after Commit 5",
+        "stalenessPolicy": {
+          "state": "deprecated-but-emit",
+          "decision": "switch",
+          "switchTarget": "session.status({type:\"idle\"})",
+          "switchTargetUpstreamKey": "session.status",
+          "rationale": "Upstream canonical replacement; switch to single canonical event per Decision 3"
+        }
+      }
+    },
+    {
+      "upstreamKey": "session.status",
+      "definedAt": "packages/opencode/src/session/status.ts:29",
+      "publishedAt": ["packages/opencode/src/session/status.ts:73"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["sessionID", "status"],
+      "payloadStatusUnion": ["idle", "retry { attempt, message, next }", "busy"],
+      "purdex": {
+        "kind": "installable",
+        "purdexEventName": "Stop",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:<NEW-LINE-AFTER-COMMIT-5>",
+        "templateConsumesAtNote": "Plugin filters payload to status.type === 'idle' only (Decision 3 switch); busy/retry variants received-but-no-op (Decision 4 defer; trigger conditions tracked in follow-up issue #661)",
+        "stalenessPolicy": null
+      }
+    },
+    {
+      "upstreamKey": "session.error",
+      "definedAt": "packages/opencode/src/session/session.ts:281",
+      "publishedAt": [
+        "packages/opencode/src/config/agent.ts:123",
+        "packages/opencode/src/config/agent.ts:160",
+        "packages/opencode/src/config/command.ts:40",
+        "packages/opencode/src/server/routes/instance/session.ts:921",
+        "packages/opencode/src/skill/index.ts:85",
+        "packages/opencode/src/plugin/index.ts:117",
+        "packages/opencode/src/session/prompt.ts:591",
+        "packages/opencode/src/session/prompt.ts:733",
+        "packages/opencode/src/session/prompt.ts:908",
+        "packages/opencode/src/session/prompt.ts:931",
+        "packages/opencode/src/session/prompt.ts:1132",
+        "packages/opencode/src/session/prompt.ts:1154",
+        "packages/opencode/src/session/prompt.ts:1401",
+        "packages/opencode/src/session/prompt.ts:1557",
+        "packages/opencode/src/session/prompt.ts:1617",
+        "packages/opencode/src/session/processor.ts:528",
+        "packages/opencode/src/session/processor.ts:532"
+      ],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["sessionID?", "error"],
+      "purdex": {
+        "kind": "installable",
+        "purdexEventName": "StopFailure",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:148",
+        "stalenessPolicy": null
+      }
+    },
+    {
+      "upstreamKey": "session.created",
+      "definedAt": "packages/opencode/src/session/session.ts:255",
+      "publishedAt": ["packages/opencode/src/session/session.ts:456 (via SyncEvent.run)"],
+      "publishMechanism": "typed-bus",
+      "syncEvent": true,
+      "payloadFields": ["sessionID", "info"],
+      "purdex": {
+        "kind": "installable",
+        "purdexEventName": "SessionStart",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:132",
+        "stalenessPolicy": null
+      }
+    },
+    {
+      "upstreamKey": "session.updated",
+      "definedAt": "packages/opencode/src/session/session.ts:261",
+      "publishedAt": ["packages/opencode/src/session/session.ts:461 (legacy backwards-compat manual publish, gated by Flag.OPENCODE_EXPERIMENTAL_WORKSPACES)", "implicit via SyncEvent.run(Event.Updated, ...)"],
+      "publishMechanism": "typed-bus",
+      "syncEvent": true,
+      "payloadFields": ["sessionID", "info"],
+      "purdex": {
+        "kind": "unsupported",
+        "reason": "Not currently subscribed; future may react to title/share/permission updates"
+      }
+    },
+    {
+      "upstreamKey": "session.deleted",
+      "definedAt": "packages/opencode/src/session/session.ts:268",
+      "publishedAt": ["implicit via SyncEvent.run(Event.Deleted, ...)"],
+      "publishMechanism": "typed-bus",
+      "syncEvent": true,
+      "payloadFields": ["sessionID", "info"],
+      "purdex": {
+        "kind": "installable",
+        "purdexEventName": "SessionEnd",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:162",
+        "stalenessPolicy": null
+      }
+    },
+    {
+      "upstreamKey": "session.diff",
+      "definedAt": "packages/opencode/src/session/session.ts:274",
+      "publishedAt": ["packages/opencode/src/session/summary.ts:120", "packages/opencode/src/session/revert.ts:81"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["sessionID", "diff[]"],
+      "purdex": {"kind": "ignored", "reason": "File-diff metadata; not status-bearing for tmux session view"}
+    },
+    {
+      "upstreamKey": "session.compacted",
+      "definedAt": "packages/opencode/src/session/compaction.ts:25",
+      "publishedAt": ["packages/opencode/src/session/compaction.ts:559"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["sessionID"],
+      "purdex": {"kind": "ignored", "reason": "Single-fire informational; future candidate for detail enrichment"}
+    },
+    {
+      "upstreamKey": "permission.asked",
+      "definedAt": "packages/opencode/src/permission/index.ts:76",
+      "publishedAt": ["packages/opencode/src/permission/index.ts:206"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["id", "sessionID", "permission", "patterns", "metadata", "always", "tool?"],
+      "purdex": {
+        "kind": "installable",
+        "purdexEventName": "PermissionRequest",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:135",
+        "templateConsumesAtNote": "Maps to PermissionRequest with request_type:'permission'; same Purdex Name as question.asked (dual upstream → single Purdex name)",
+        "stalenessPolicy": null
+      }
+    },
+    {
+      "upstreamKey": "permission.replied",
+      "definedAt": "packages/opencode/src/permission/index.ts:77",
+      "publishedAt": ["packages/opencode/src/permission/index.ts:221", "packages/opencode/src/permission/index.ts:236", "packages/opencode/src/permission/index.ts:264"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["sessionID", "requestID", "reply"],
+      "purdex": {"kind": "unsupported", "reason": "Not subscribed; future may explicitly clear waiting state on reply"}
+    },
+    {
+      "upstreamKey": "question.asked",
+      "definedAt": "packages/opencode/src/question/index.ts:97",
+      "publishedAt": ["packages/opencode/src/question/index.ts:172"],
+      "publishMechanism": "typed-bus",
+      "publicDocsGap": true,
+      "publicDocsGapNote": "Not listed at https://opencode.ai/docs/plugins/ but source-stable; reachable via bus.subscribeAll() at plugin/index.ts:244 (Round 1 finding confirmed)",
+      "payloadFields": ["id", "sessionID", "questions[]", "tool?"],
+      "purdex": {
+        "kind": "installable",
+        "purdexEventName": "PermissionRequest",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:142",
+        "templateConsumesAtNote": "Maps to PermissionRequest with request_type:'question'; same Purdex Name as permission.asked",
+        "stalenessPolicy": null
+      }
+    },
+    {
+      "upstreamKey": "question.replied",
+      "definedAt": "packages/opencode/src/question/index.ts:98",
+      "publishedAt": ["packages/opencode/src/question/index.ts:194"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["sessionID", "requestID", "answers[]"],
+      "purdex": {"kind": "unsupported", "reason": "Not subscribed; future may explicitly clear question waiting state"}
+    },
+    {
+      "upstreamKey": "question.rejected",
+      "definedAt": "packages/opencode/src/question/index.ts:99",
+      "publishedAt": ["packages/opencode/src/question/index.ts:211"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["sessionID", "requestID"],
+      "purdex": {"kind": "unsupported", "reason": "Not subscribed; future may explicitly clear question state on dismissal"}
+    },
+    {
+      "upstreamKey": "message.updated",
+      "definedAt": "packages/opencode/src/session/message-v2.ts:600",
+      "publishedAt": ["implicit via SyncEvent.run(MessageV2.Event.Updated, ...)"],
+      "publishMechanism": "typed-bus",
+      "syncEvent": true,
+      "payloadFields": ["sessionID", "info"],
+      "purdex": {"kind": "ignored", "reason": "High-volume sync stream; Purdex doesn't render messages"}
+    },
+    {
+      "upstreamKey": "message.removed",
+      "definedAt": "packages/opencode/src/session/message-v2.ts:606",
+      "publishedAt": ["implicit via SyncEvent.run(MessageV2.Event.Removed, ...)"],
+      "publishMechanism": "typed-bus",
+      "syncEvent": true,
+      "payloadFields": ["sessionID", "messageID"],
+      "purdex": {"kind": "ignored", "reason": "High-volume sync stream"}
+    },
+    {
+      "upstreamKey": "message.part.updated",
+      "definedAt": "packages/opencode/src/session/message-v2.ts:612",
+      "publishedAt": ["implicit via SyncEvent.run(MessageV2.Event.PartUpdated, ...)"],
+      "publishMechanism": "typed-bus",
+      "syncEvent": true,
+      "payloadFields": ["sessionID", "part", "time"],
+      "purdex": {"kind": "ignored", "reason": "Very high-frequency stream during assistant generation"}
+    },
+    {
+      "upstreamKey": "message.part.delta",
+      "definedAt": "packages/opencode/src/session/message-v2.ts:618",
+      "publishedAt": ["packages/opencode/src/session/session.ts:697"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["sessionID", "messageID", "partID", "field", "delta"],
+      "purdex": {"kind": "ignored", "reason": "Highest-frequency event; character-by-character streaming"}
+    },
+    {
+      "upstreamKey": "message.part.removed",
+      "definedAt": "packages/opencode/src/session/message-v2.ts:628",
+      "publishedAt": ["implicit via SyncEvent.run(MessageV2.Event.PartRemoved, ...)"],
+      "publishMechanism": "typed-bus",
+      "syncEvent": true,
+      "payloadFields": ["sessionID", "messageID", "partID"],
+      "purdex": {"kind": "ignored", "reason": "High-volume sync stream"}
+    },
+    {
+      "upstreamKey": "todo.updated",
+      "definedAt": "packages/opencode/src/session/todo.ts:23",
+      "publishedAt": ["packages/opencode/src/session/todo.ts:62"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["sessionID", "todos[]"],
+      "purdex": {"kind": "ignored", "reason": "Todo metadata; future status-line enrichment candidate"}
+    },
+    {
+      "upstreamKey": "command.executed",
+      "definedAt": "packages/opencode/src/command/index.ts:19",
+      "publishedAt": ["packages/opencode/src/session/prompt.ts:1657"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["name", "sessionID", "arguments", "messageID"],
+      "purdex": {"kind": "ignored", "reason": "Slash-command informational"}
+    },
+    {
+      "upstreamKey": "file.edited",
+      "definedAt": "packages/opencode/src/file/index.ts:77",
+      "publishedAt": ["packages/opencode/src/tool/edit.ts:110", "packages/opencode/src/tool/edit.ts:154", "packages/opencode/src/tool/apply_patch.ts:250", "packages/opencode/src/tool/write.ts:67"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["file"],
+      "purdex": {"kind": "ignored", "reason": "Filesystem metadata; out of Purdex scope"}
+    },
+    {
+      "upstreamKey": "file.watcher.updated",
+      "definedAt": "packages/opencode/src/file/watcher.ts:26",
+      "publishedAt": ["packages/opencode/src/file/watcher.ts:100", "packages/opencode/src/file/watcher.ts:101", "packages/opencode/src/file/watcher.ts:102", "packages/opencode/src/tool/edit.ts:111", "packages/opencode/src/tool/edit.ts:155", "packages/opencode/src/tool/apply_patch.ts:256", "packages/opencode/src/tool/write.ts:68"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["file", "event"],
+      "purdex": {"kind": "ignored", "reason": "Filesystem watcher metadata"}
+    },
+    {
+      "upstreamKey": "lsp.updated",
+      "definedAt": "packages/opencode/src/lsp/lsp.ts:22",
+      "publishedAt": ["packages/opencode/src/lsp/lsp.ts:309"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": [],
+      "purdex": {"kind": "ignored", "reason": "LSP config changed; out of Purdex scope"}
+    },
+    {
+      "upstreamKey": "lsp.client.diagnostics",
+      "definedAt": "packages/opencode/src/lsp/client.ts:43",
+      "publishedAt": ["packages/opencode/src/lsp/client.ts:169"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["serverID", "path"],
+      "purdex": {"kind": "ignored", "reason": "LSP diagnostics; out of Purdex scope"}
+    },
+    {
+      "upstreamKey": "pty.created",
+      "definedAt": "packages/opencode/src/pty/index.ts:94",
+      "publishedAt": ["packages/opencode/src/pty/index.ts:264"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["info"],
+      "purdex": {"kind": "ignored", "reason": "OpenCode internal pty (agent's bash tool); NOT Purdex's tmux"}
+    },
+    {
+      "upstreamKey": "pty.updated",
+      "definedAt": "packages/opencode/src/pty/index.ts:95",
+      "publishedAt": ["packages/opencode/src/pty/index.ts:278"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["info"],
+      "purdex": {"kind": "ignored", "reason": "OpenCode internal pty"}
+    },
+    {
+      "upstreamKey": "pty.exited",
+      "definedAt": "packages/opencode/src/pty/index.ts:96",
+      "publishedAt": ["packages/opencode/src/pty/index.ts:260"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["id", "exitCode"],
+      "purdex": {"kind": "ignored", "reason": "OpenCode internal pty"}
+    },
+    {
+      "upstreamKey": "pty.deleted",
+      "definedAt": "packages/opencode/src/pty/index.ts:97",
+      "publishedAt": ["packages/opencode/src/pty/index.ts:161"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["id"],
+      "purdex": {"kind": "ignored", "reason": "OpenCode internal pty"}
+    },
+    {
+      "upstreamKey": "mcp.tools.changed",
+      "definedAt": "packages/opencode/src/mcp/index.ts:48",
+      "publishedAt": ["packages/opencode/src/mcp/index.ts:485"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["server"],
+      "purdex": {"kind": "ignored", "reason": "MCP server tool reload; out of Purdex scope"}
+    },
+    {
+      "upstreamKey": "mcp.browser.open.failed",
+      "definedAt": "packages/opencode/src/mcp/index.ts:55",
+      "publishedAt": ["packages/opencode/src/mcp/index.ts:833"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["mcpName", "url"],
+      "purdex": {"kind": "ignored", "reason": "MCP OAuth fail-open; out of Purdex scope"}
+    },
+    {
+      "upstreamKey": "installation.updated",
+      "definedAt": "packages/opencode/src/installation/index.ts:22",
+      "publishedAt": ["packages/opencode/src/cli/upgrade.ts:31"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["version"],
+      "purdex": {"kind": "ignored", "reason": "CLI update lifecycle"}
+    },
+    {
+      "upstreamKey": "installation.update-available",
+      "definedAt": "packages/opencode/src/installation/index.ts:28",
+      "publishedAt": ["packages/opencode/src/cli/upgrade.ts:16", "packages/opencode/src/cli/upgrade.ts:25"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["version"],
+      "purdex": {"kind": "ignored", "reason": "CLI update lifecycle"}
+    },
+    {
+      "upstreamKey": "ide.installed",
+      "definedAt": "packages/opencode/src/ide/index.ts:19",
+      "publishedAt": [],
+      "publishMechanism": "none-dead",
+      "deadInVersion": true,
+      "payloadFields": ["ide"],
+      "purdex": {"kind": "ignored", "reason": "DEAD in v1.14.23 — defined but no publish callsite"}
+    },
+    {
+      "upstreamKey": "vcs.branch.updated",
+      "definedAt": "packages/opencode/src/project/vcs.ts:108",
+      "publishedAt": ["packages/opencode/src/project/vcs.ts:184"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["branch?"],
+      "purdex": {"kind": "ignored", "reason": "Project metadata; future detail enrichment candidate"}
+    },
+    {
+      "upstreamKey": "project.updated",
+      "definedAt": "packages/opencode/src/project/project.ts:56",
+      "publishedAt": ["packages/opencode/src/project/project.ts:147"],
+      "publishMechanism": "global-bus-only",
+      "publishMechanismNote": "Published only via GlobalBus.emit; bypasses typed Bus.subscribe(def, cb). Reachable via bus.subscribeAll() (Purdex's mechanism) and SSE.",
+      "payloadFields": ["info (full Project struct)"],
+      "purdex": {"kind": "ignored", "reason": "Project-level metadata; not session-scoped"}
+    },
+    {
+      "upstreamKey": "worktree.ready",
+      "definedAt": "packages/opencode/src/worktree/index.ts:27",
+      "publishedAt": ["packages/opencode/src/worktree/index.ts:283"],
+      "publishMechanism": "global-bus-only",
+      "payloadFields": ["name", "branch"],
+      "purdex": {"kind": "ignored", "reason": "OpenCode-internal worktree lifecycle"}
+    },
+    {
+      "upstreamKey": "worktree.failed",
+      "definedAt": "packages/opencode/src/worktree/index.ts:34",
+      "publishedAt": ["packages/opencode/src/worktree/index.ts:253", "packages/opencode/src/worktree/index.ts:272"],
+      "publishMechanism": "global-bus-only",
+      "payloadFields": ["message"],
+      "purdex": {"kind": "ignored", "reason": "OpenCode-internal worktree lifecycle"}
+    },
+    {
+      "upstreamKey": "workspace.ready",
+      "definedAt": "packages/opencode/src/control-plane/workspace.ts:48",
+      "publishedAt": [],
+      "publishMechanism": "none-dead",
+      "deadInVersion": true,
+      "payloadFields": ["name"],
+      "purdex": {"kind": "ignored", "reason": "DEAD in v1.14.23 — defined but no publish callsite"}
+    },
+    {
+      "upstreamKey": "workspace.failed",
+      "definedAt": "packages/opencode/src/control-plane/workspace.ts:54",
+      "publishedAt": [],
+      "publishMechanism": "none-dead",
+      "deadInVersion": true,
+      "payloadFields": ["message"],
+      "purdex": {"kind": "ignored", "reason": "DEAD in v1.14.23 — defined but no publish callsite"}
+    },
+    {
+      "upstreamKey": "workspace.restore",
+      "definedAt": "packages/opencode/src/control-plane/workspace.ts:60",
+      "publishedAt": ["packages/opencode/src/control-plane/workspace.ts:199", "packages/opencode/src/control-plane/workspace.ts:266"],
+      "publishMechanism": "global-bus-only",
+      "payloadFields": ["workspaceID", "sessionID", "total", "step"],
+      "purdex": {"kind": "ignored", "reason": "Cross-host workspace replay progress; out of Purdex scope"}
+    },
+    {
+      "upstreamKey": "workspace.status",
+      "definedAt": "packages/opencode/src/control-plane/workspace.ts:61",
+      "publishedAt": ["packages/opencode/src/control-plane/workspace.ts:353"],
+      "publishMechanism": "global-bus-only",
+      "payloadFields": ["workspaceID", "status"],
+      "purdex": {"kind": "ignored", "reason": "Workspace-level connectivity; not session state"}
+    },
+    {
+      "upstreamKey": "server.connected",
+      "definedAt": "packages/opencode/src/server/event.ts:5",
+      "publishedAt": ["packages/opencode/src/server/routes/global.ts:30 (SSE handshake frame)", "packages/opencode/src/server/routes/instance/event.ts:45 (SSE handshake frame)"],
+      "publishMechanism": "sse-only",
+      "publishMechanismNote": "Synthesized SSE frame, not via Bus.publish; emitted as initial connection acknowledgement.",
+      "payloadFields": [],
+      "purdex": {"kind": "ignored", "reason": "SSE handshake artifact"}
+    },
+    {
+      "upstreamKey": "global.disposed",
+      "definedAt": "packages/opencode/src/server/event.ts:6 + packages/opencode/src/server/routes/global.ts:21 (DUPLICATE define — last-write-wins; both have same Schema.Struct({}))",
+      "publishedAt": ["packages/opencode/src/server/routes/global.ts:204"],
+      "publishMechanism": "global-bus-only",
+      "duplicateDefinition": true,
+      "payloadFields": [],
+      "purdex": {"kind": "ignored", "reason": "Global daemon shutdown signal"}
+    },
+    {
+      "upstreamKey": "server.instance.disposed",
+      "definedAt": "packages/opencode/src/bus/index.ts:13",
+      "publishedAt": ["packages/opencode/src/bus/index.ts:54 (PubSub.publish wildcard, finalizer)", "packages/opencode/src/project/instance.ts:131", "packages/opencode/src/project/instance.ts:152"],
+      "publishMechanism": "mixed",
+      "publishMechanismNote": "Mixed: 1 PubSub.publish (Bus finalizer wildcard) + 2 GlobalBus.emit",
+      "payloadFields": ["directory"],
+      "purdex": {"kind": "unsupported", "reason": "Future may use as cleanup signal; deprioritized"}
+    },
+    {
+      "upstreamKey": "tui.prompt.append",
+      "definedAt": "packages/opencode/src/cli/cmd/tui/event.ts:6",
+      "publishedAt": ["packages/opencode/src/server/routes/instance/tui.ts:104", "packages/opencode/src/server/routes/instance/tui.ts:356"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["text"],
+      "purdex": {"kind": "ignored", "reason": "TUI-only command channel; Purdex isn't a TUI"}
+    },
+    {
+      "upstreamKey": "tui.command.execute",
+      "definedAt": "packages/opencode/src/cli/cmd/tui/event.ts:7",
+      "publishedAt": ["packages/opencode/src/server/routes/instance/tui.ts:126", "packages/opencode/src/server/routes/instance/tui.ts:150", "packages/opencode/src/server/routes/instance/tui.ts:174", "packages/opencode/src/server/routes/instance/tui.ts:198", "packages/opencode/src/server/routes/instance/tui.ts:222", "packages/opencode/src/server/routes/instance/tui.ts:246", "packages/opencode/src/server/routes/instance/tui.ts:273", "packages/opencode/src/server/routes/instance/tui.ts:313", "packages/opencode/src/server/routes/instance/tui.ts:356"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["command"],
+      "purdex": {"kind": "ignored", "reason": "TUI-only"}
+    },
+    {
+      "upstreamKey": "tui.toast.show",
+      "definedAt": "packages/opencode/src/cli/cmd/tui/event.ts:33",
+      "publishedAt": ["packages/opencode/src/server/routes/instance/tui.ts:313", "packages/opencode/src/server/routes/instance/tui.ts:356"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["title?", "message", "variant", "duration?"],
+      "purdex": {"kind": "ignored", "reason": "TUI-only"}
+    },
+    {
+      "upstreamKey": "tui.session.select",
+      "definedAt": "packages/opencode/src/cli/cmd/tui/event.ts:42",
+      "publishedAt": ["packages/opencode/src/server/routes/instance/tui.ts:386", "packages/opencode/src/server/routes/instance/tui.ts:356"],
+      "publishMechanism": "typed-bus",
+      "payloadFields": ["sessionID"],
+      "purdex": {"kind": "ignored", "reason": "TUI-only"}
+    }
+  ],
+
+  "strongHooks": [
+    {
+      "upstreamKey": "event",
+      "interfaceLocation": "packages/plugin/src/index.ts:223",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/plugin/index.ts:248",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/plugin/index.ts:248"],
+      "adoptability": "present",
+      "dispatchType": "bus-fanout",
+      "dispatchTypeNote": "Not Plugin.trigger; Bus.subscribeAll() fan-out forwards every Bus event to every plugin's event handler.",
+      "payloadFields": ["event (discriminated union of all Bus events)"],
+      "purdex": {
+        "kind": "core-mechanism",
+        "purdexEventName": null,
+        "purdexEventNameNote": "Not a discrete catalog entry — this is the primary Bus messaging mechanism Purdex's plugin uses to receive all Bus events.",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:130"
+      }
+    },
+    {
+      "upstreamKey": "config",
+      "interfaceLocation": "packages/plugin/src/index.ts:224",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/plugin/index.ts:236",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/plugin/index.ts:236"],
+      "adoptability": "present",
+      "dispatchType": "one-shot-lifecycle",
+      "dispatchTypeNote": "Fires once per plugin instance after all plugins load; not on config reload.",
+      "payloadFields": ["Config (full)"],
+      "purdex": {"kind": "unsupported", "reason": "One-shot lifecycle; not used by Purdex"}
+    },
+    {
+      "upstreamKey": "tool",
+      "interfaceLocation": "packages/plugin/src/index.ts:225-227",
+      "interfacePresent": true,
+      "triggerCallsiteAt": null,
+      "triggerCallsitePresent": false,
+      "callsiteFiles": [],
+      "adoptability": "present",
+      "dispatchType": "declarative",
+      "dispatchTypeNote": "Declarative tool registration; consumed by tool registry at startup. NOT a runtime trigger; triggerCallsitePresent is intentionally false because declarative entries have no Plugin.trigger callsite.",
+      "payloadFields": [],
+      "purdex": {"kind": "unsupported", "reason": "Declarative tool registration; out of Purdex's event-sink scope"}
+    },
+    {
+      "upstreamKey": "auth",
+      "interfaceLocation": "packages/plugin/src/index.ts:228",
+      "interfacePresent": true,
+      "triggerCallsiteAt": null,
+      "triggerCallsitePresent": false,
+      "callsiteFiles": ["packages/opencode/src/cli/cmd/providers.ts:197 (read-only descriptor consumption)"],
+      "adoptability": "present",
+      "dispatchType": "descriptor",
+      "payloadFields": [],
+      "purdex": {"kind": "unsupported", "reason": "Descriptor only; not relevant to Purdex"}
+    },
+    {
+      "upstreamKey": "provider",
+      "interfaceLocation": "packages/plugin/src/index.ts:229",
+      "interfacePresent": true,
+      "triggerCallsiteAt": null,
+      "triggerCallsitePresent": false,
+      "callsiteFiles": ["packages/opencode/src/provider/provider.ts:1304 (read-only descriptor consumption)"],
+      "adoptability": "present",
+      "dispatchType": "descriptor",
+      "payloadFields": [],
+      "purdex": {"kind": "unsupported", "reason": "Descriptor only; not relevant to Purdex"}
+    },
+    {
+      "upstreamKey": "chat.message",
+      "interfaceLocation": "packages/plugin/src/index.ts:233-242",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/session/prompt.ts:1237",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/session/prompt.ts:1237"],
+      "adoptability": "present",
+      "dispatchType": "plugin.trigger",
+      "payloadFields": ["sessionID", "agent?", "model?", "messageID?", "variant?", "message", "parts"],
+      "purdex": {
+        "kind": "installable",
+        "purdexEventName": "UserPromptSubmit",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:167",
+        "stalenessPolicy": null
+      }
+    },
+    {
+      "upstreamKey": "chat.params",
+      "interfaceLocation": "packages/plugin/src/index.ts:246-255",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/session/llm.ts:162",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/session/llm.ts:162"],
+      "adoptability": "present",
+      "dispatchType": "plugin.trigger",
+      "payloadFields": ["sessionID", "agent", "model", "provider", "message", "temperature", "topP", "topK", "maxOutputTokens", "options"],
+      "purdex": {"kind": "unsupported", "reason": "Mutator hook (LLM call params); not an event sink"}
+    },
+    {
+      "upstreamKey": "chat.headers",
+      "interfaceLocation": "packages/plugin/src/index.ts:256-259",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/session/llm.ts:182",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/session/llm.ts:182"],
+      "adoptability": "present",
+      "dispatchType": "plugin.trigger",
+      "payloadFields": ["sessionID", "agent", "model", "provider", "message", "headers"],
+      "purdex": {"kind": "unsupported", "reason": "Mutator hook (HTTP headers); not an event sink"}
+    },
+    {
+      "upstreamKey": "permission.ask",
+      "interfaceLocation": "packages/plugin/src/index.ts:260",
+      "interfacePresent": true,
+      "triggerCallsiteAt": null,
+      "triggerCallsitePresent": false,
+      "callsiteFiles": [],
+      "adoptability": "interface-only-no-callsite",
+      "adoptabilityNote": "DEAD strong hook (audit §1.9 + §3.2). Confirmed by 6 grep variants and 22-callsite full enumeration cross-check. Round 2 AM1 + Round 3 AL1 hard rule: must NOT adopt without re-verification.",
+      "dispatchType": "plugin.trigger",
+      "payloadFields": ["Permission (input)", "status (output: 'ask'/'deny'/'allow')"],
+      "purdex": {"kind": "unsupported", "reason": "DEAD strong hook (interface-only-no-callsite per Round 2 AM1)"}
+    },
+    {
+      "upstreamKey": "command.execute.before",
+      "interfaceLocation": "packages/plugin/src/index.ts:261-264",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/session/prompt.ts:1643",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/session/prompt.ts:1643"],
+      "adoptability": "present",
+      "dispatchType": "plugin.trigger",
+      "payloadFields": ["command", "sessionID", "arguments", "parts"],
+      "purdex": {"kind": "unsupported", "reason": "Slash-command execution hook; Purdex doesn't track slash commands"}
+    },
+    {
+      "upstreamKey": "tool.execute.before",
+      "interfaceLocation": "packages/plugin/src/index.ts:265-268",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/session/prompt.ts:580",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/session/prompt.ts:417", "packages/opencode/src/session/prompt.ts:458", "packages/opencode/src/session/prompt.ts:580"],
+      "adoptability": "present",
+      "dispatchType": "plugin.trigger",
+      "callsiteFilesNote": "3 callsites — fires for every tool path: custom SDK tools (:417), MCP tools (:458), TaskTool dispatch (:580). Purdex filters by tool === 'task' for SubagentStart.",
+      "payloadFields": ["tool", "sessionID", "callID", "args"],
+      "purdex": {
+        "kind": "installable",
+        "purdexEventName": "SubagentStart",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:178",
+        "templateFilter": "input.tool === 'task'",
+        "stalenessPolicy": null
+      }
+    },
+    {
+      "upstreamKey": "shell.env",
+      "interfaceLocation": "packages/plugin/src/index.ts:269-272",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/tool/bash.ts:396",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/pty/index.ts:185", "packages/opencode/src/tool/bash.ts:396", "packages/opencode/src/session/prompt.ts:827"],
+      "adoptability": "present",
+      "dispatchType": "plugin.trigger",
+      "payloadFields": ["cwd", "sessionID?", "callID?", "env"],
+      "purdex": {"kind": "unsupported", "reason": "Mutator hook (env vars); not an event sink"}
+    },
+    {
+      "upstreamKey": "tool.execute.after",
+      "interfaceLocation": "packages/plugin/src/index.ts:273-280",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/session/prompt.ts:659",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/session/prompt.ts:432", "packages/opencode/src/session/prompt.ts:467", "packages/opencode/src/session/prompt.ts:659"],
+      "adoptability": "present",
+      "dispatchType": "plugin.trigger",
+      "callsiteFilesNote": "Symmetric with tool.execute.before. Cancellation gap: TaskTool path (line 659) skips this hook on Effect.onInterrupt (lines 630-649); cancelled subagents don't fire SubagentStop. Tracked as known limitation.",
+      "payloadFields": ["tool", "sessionID", "callID", "args", "title", "output", "metadata"],
+      "purdex": {
+        "kind": "installable",
+        "purdexEventName": "SubagentStop",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:191",
+        "templateFilter": "input.tool === 'task'",
+        "stalenessPolicy": null
+      }
+    },
+    {
+      "upstreamKey": "experimental.chat.messages.transform",
+      "interfaceLocation": "packages/plugin/src/index.ts:281-289",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/session/prompt.ts:1474",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/session/prompt.ts:1474", "packages/opencode/src/session/compaction.ts:404"],
+      "adoptability": "present",
+      "dispatchType": "plugin.trigger",
+      "payloadFields": ["messages[]"],
+      "purdex": {"kind": "unsupported", "reason": "Experimental namespace + mutator"}
+    },
+    {
+      "upstreamKey": "experimental.chat.system.transform",
+      "interfaceLocation": "packages/plugin/src/index.ts:290-295",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/session/llm.ts:114",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/agent/agent.ts:342", "packages/opencode/src/session/llm.ts:114"],
+      "adoptability": "present",
+      "dispatchType": "plugin.trigger",
+      "payloadFields": ["sessionID?", "model", "system[]"],
+      "purdex": {"kind": "unsupported", "reason": "Experimental namespace + mutator"}
+    },
+    {
+      "upstreamKey": "experimental.session.compacting",
+      "interfaceLocation": "packages/plugin/src/index.ts:303-306",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/session/compaction.ts:397",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/session/compaction.ts:397"],
+      "adoptability": "present",
+      "dispatchType": "plugin.trigger",
+      "payloadFields": ["sessionID", "context[]", "prompt?"],
+      "purdex": {"kind": "unsupported", "reason": "Experimental namespace + mutator"}
+    },
+    {
+      "upstreamKey": "experimental.compaction.autocontinue",
+      "interfaceLocation": "packages/plugin/src/index.ts:314-324",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/session/compaction.ts:508",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/session/compaction.ts:508"],
+      "adoptability": "present",
+      "dispatchType": "plugin.trigger",
+      "payloadFields": ["sessionID", "agent", "model", "provider", "message", "overflow", "enabled"],
+      "purdex": {"kind": "unsupported", "reason": "Experimental namespace + mutator"}
+    },
+    {
+      "upstreamKey": "experimental.text.complete",
+      "interfaceLocation": "packages/plugin/src/index.ts:325-328",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/session/processor.ts:436",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/session/processor.ts:436"],
+      "adoptability": "present",
+      "dispatchType": "plugin.trigger",
+      "payloadFields": ["sessionID", "messageID", "partID", "text"],
+      "purdex": {"kind": "unsupported", "reason": "Experimental namespace + mutator"}
+    },
+    {
+      "upstreamKey": "tool.definition",
+      "interfaceLocation": "packages/plugin/src/index.ts:332",
+      "interfacePresent": true,
+      "triggerCallsiteAt": "packages/opencode/src/tool/registry.ts:301",
+      "triggerCallsitePresent": true,
+      "callsiteFiles": ["packages/opencode/src/tool/registry.ts:301"],
+      "adoptability": "present",
+      "dispatchType": "plugin.trigger",
+      "payloadFields": ["toolID", "description", "parameters"],
+      "purdex": {"kind": "unsupported", "reason": "Mutator hook (override tool description/parameters)"}
+    }
+  ]
+}
