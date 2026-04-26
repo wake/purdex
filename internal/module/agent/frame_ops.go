@@ -1055,6 +1055,49 @@ func pidIsAncestorOfWithCap(descendantPID, ancestorPID, maxDepth int) bool {
 	return false
 }
 
+// candidateHasOwnedState reports whether a frame carries live state that
+// must be preserved during canonicalization. Returns true when the frame
+// has any native (IsProxy=false) subagent ref OR any live identity-
+// verified IsProxy ref. Returns true conservatively on a
+// processStartTime read error to avoid dropping state on uncertainty.
+//
+// Used by both hot-path canonicalizeDescendantsAfterUpsert and sweep
+// canonicalizePane (PR-3.5b §2.2.1) to decide whether folding a
+// candidate as a proxy ref of an ancestor (and deleting its row) is
+// safe. Sharing one classifier ensures both call sites cannot drift on
+// the owned-state semantics — any change here lands in both at once.
+//
+// A candidate carrying ONLY stale (dead PID / PID-reused) IsProxy refs
+// is considered free of owned state — those refs would be reaped by
+// pruneDeadProxyRefs anyway, so dropping them with the row is
+// equivalent to letting prune detach them later.
+func candidateHasOwnedState(candidate store.Frame) bool {
+	for _, ref := range candidate.Subagents {
+		if !ref.IsProxy {
+			// Native ref → real owned state.
+			return true
+		}
+		// IsProxy: live + identity-verified counts as owned;
+		// dead/PID-reused is stale and safe to drop with the fold.
+		if !isPidAliveFn(ref.SourcePID) {
+			continue
+		}
+		actualStart, sterr := processStartTimeFn(ref.SourcePID)
+		if sterr != nil {
+			// Read error → defensive; treat as owned (don't drop
+			// state on uncertainty). Mirrors findProxyParent's
+			// "lookup error → don't infer" convention.
+			return true
+		}
+		if actualStart != ref.SourceStartTime {
+			continue // PID reuse; stale
+		}
+		// Live + identity-verified IsProxy → owned.
+		return true
+	}
+	return false
+}
+
 // canonicalizeDescendantsAfterUpsert scans self.PaneID for standalone
 // cross-type descendants whose live PPID chain passes through self.PID and
 // whose stored ProcessStartTime matches the live process's actual start
@@ -1105,34 +1148,12 @@ func (m *Module) canonicalizeDescendantsAfterUpsert(self store.Frame, broadcastT
 		// equivalent). Distinguishing these classes lets the hot-path
 		// fold race-window standalones even when sweep prune has not
 		// yet cleared their stale leftovers.
-		hasOwnedState := false
-		for _, ref := range candidate.Subagents {
-			if !ref.IsProxy {
-				// Native ref → real owned state.
-				hasOwnedState = true
-				break
-			}
-			// IsProxy: live + identity-verified counts as owned;
-			// dead/PID-reused is stale and safe to drop with the fold.
-			if !isPidAliveFn(ref.SourcePID) {
-				continue
-			}
-			actualStart, sterr := processStartTimeFn(ref.SourcePID)
-			if sterr != nil {
-				// Read error → defensive; treat as owned (don't drop
-				// state on uncertainty). Mirrors findProxyParent's
-				// "lookup error → don't infer" convention.
-				hasOwnedState = true
-				break
-			}
-			if actualStart != ref.SourceStartTime {
-				continue // PID reuse; stale
-			}
-			// Live + identity-verified IsProxy → owned.
-			hasOwnedState = true
-			break
-		}
-		if hasOwnedState {
+		//
+		// PR-3.5b §2.2.1: classifier extracted as candidateHasOwnedState
+		// so sweep canonicalizePane shares the exact same semantics —
+		// any drift between the two would create different fold
+		// decisions for identical candidate states.
+		if candidateHasOwnedState(candidate) {
 			continue
 		}
 		// Identity gate (PR-2b alignment + plan §2.1.2). Mirrors

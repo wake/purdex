@@ -3958,3 +3958,154 @@ func TestCanonicalizeDescendantsAfterUpsert_FoldsLiveCrossTypeDescendant(t *test
 	}
 	_ = candidate
 }
+
+// ---------------------------------------------------------------------------
+// PR-3.5b §3.2 — candidateHasOwnedState unit tests (RC12-RC16).
+//
+// Pure classifier — exercises the four code paths in the helper:
+//   - native ref (IsProxy=false) → owned
+//   - live + identity-verified IsProxy → owned
+//   - only stale (dead PID / PID-reused) IsProxy → not owned
+//   - processStartTime read error on a live IsProxy → defensively owned
+//   - empty subagents → not owned
+//
+// Each case overrides isPidAliveFn / processStartTimeFn package-level
+// seams (already used by hot-path tests above) to drive the helper's
+// branches without going through the database. Helper is invoked
+// directly so the failing test pinpoints classification, not
+// canonicalize integration.
+// ---------------------------------------------------------------------------
+
+// RC12 — candidate carrying a native (IsProxy=false) ref → owned.
+func TestCandidateHasOwnedState_NativeRefReturnsTrue(t *testing.T) {
+	candidate := store.Frame{
+		Subagents: []agentpkg.SubagentRef{{
+			ID:      "task-1",
+			Type:    "cc",
+			IsProxy: false,
+		}},
+	}
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "live", nil }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+	if !candidateHasOwnedState(candidate) {
+		t.Fatal("candidateHasOwnedState = false, want true (native ref must be treated as owned state)")
+	}
+}
+
+// RC13 — candidate carrying a live + identity-verified IsProxy ref → owned.
+func TestCandidateHasOwnedState_LiveProxyReturnsTrue(t *testing.T) {
+	candidate := store.Frame{
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:opencode:300:t300",
+			Type:            "opencode",
+			SourcePID:       300,
+			SourceStartTime: "t300",
+			IsProxy:         true,
+		}},
+	}
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	isPidAliveFn = func(pid int) bool { return pid == 300 }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 300 {
+			return "t300", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+	if !candidateHasOwnedState(candidate) {
+		t.Fatal("candidateHasOwnedState = false, want true (live identity-verified IsProxy must count as owned)")
+	}
+}
+
+// RC14 — candidate carrying ONLY stale IsProxy refs (dead PID and PID-
+// reused) → not owned (sweep prune would reap them anyway).
+func TestCandidateHasOwnedState_OnlyStaleProxyReturnsFalse(t *testing.T) {
+	candidate := store.Frame{
+		Subagents: []agentpkg.SubagentRef{
+			{
+				ID:              "proxy:opencode:888:dead",
+				Type:            "opencode",
+				SourcePID:       888,
+				SourceStartTime: "dead-t888",
+				IsProxy:         true,
+			},
+			{
+				ID:              "proxy:opencode:889:reused",
+				Type:            "opencode",
+				SourcePID:       889,
+				SourceStartTime: "stale-t889",
+				IsProxy:         true,
+			},
+		},
+	}
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	// 888 is dead; 889 is alive but identity changed.
+	isPidAliveFn = func(pid int) bool { return pid == 889 }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 889 {
+			return "fresh-t889", nil
+		}
+		return "", nil
+	}
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+	if candidateHasOwnedState(candidate) {
+		t.Fatal("candidateHasOwnedState = true, want false (only stale IsProxy refs — sweep prune would reap them)")
+	}
+}
+
+// RC15 — processStartTime read error on a live IsProxy → defensively
+// treated as owned (don't drop state on uncertainty).
+func TestCandidateHasOwnedState_ProxyReadErrorTreatsAsOwned(t *testing.T) {
+	candidate := store.Frame{
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:opencode:300:t300",
+			Type:            "opencode",
+			SourcePID:       300,
+			SourceStartTime: "t300",
+			IsProxy:         true,
+		}},
+	}
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) {
+		return "", errStub("ps transient failure")
+	}
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+	if !candidateHasOwnedState(candidate) {
+		t.Fatal("candidateHasOwnedState = false, want true (read error must defensively treat as owned)")
+	}
+}
+
+// RC16 — empty subagents list → not owned (nothing to preserve).
+func TestCandidateHasOwnedState_EmptySubagentsReturnsFalse(t *testing.T) {
+	candidate := store.Frame{}
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(int) (string, error) { return "live", nil }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+	if candidateHasOwnedState(candidate) {
+		t.Fatal("candidateHasOwnedState = true, want false (empty subagents — no state to preserve)")
+	}
+}
