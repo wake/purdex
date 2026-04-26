@@ -63,22 +63,31 @@ func buildPaneProjection(paneID string, frames []store.Frame) SessionProjection 
 
 	visible := make([]store.Frame, 0, len(frames))
 	var hidden int
+	// Codex round 3 #R1: collect Subagents from claimed-and-stateful
+	// frames so their refs survive into the projection even though the
+	// child frame is suppressed by dedup. Without this, the partial-
+	// canonicalization race (reconcileCreatedFrameAsProxy attached the
+	// child as proxy on parent then DeleteIfUnchanged failed) followed
+	// by a concurrent SubagentStart on the child leaves wire-format
+	// dropping either the parent's proxy ref (if child becomes Top) or
+	// the child's native ref (if parent becomes Top). Merging into
+	// output preserves both on the canonical parent's subagents list
+	// until sweep canonicalize (PR-3.5b) migrates the refs.
+	var mergedFromHidden []agentpkg.SubagentRef
 	for _, frame := range frames {
 		if claimed[claim{frame.PID, frame.ProcessStartTime}] {
-			// Codex round 2 #Q1: dedup hides race-window standalones
-			// (no own state) so SPA sees the canonical parent + proxy
-			// ref. But if a partial canonicalization (parent attached
-			// proxy ref + DeleteIfUnchanged failed) is followed by a
-			// concurrent SubagentStart on the still-standalone child,
-			// the child has accumulated its own native ref. Hiding
-			// such a frame would erase that ref from projection — the
-			// parent's IsProxy ref aggregates the child as a single
-			// dot, not a fan-out. Keep stateful children visible
-			// until sweep canonicalize (PR-3.5b) migrates the refs.
+			// Race-window standalone with no own state: hide entirely.
 			if len(frame.Subagents) == 0 {
 				hidden++
 				continue
 			}
+			// Stateful claimed child: hide the frame from visible
+			// TopFrame selection BUT merge its Subagents into the
+			// output. Suppresses visual duplication while preserving
+			// subagent state on wire.
+			mergedFromHidden = append(mergedFromHidden, frame.Subagents...)
+			hidden++
+			continue
 		}
 		visible = append(visible, frame)
 	}
@@ -92,6 +101,10 @@ func buildPaneProjection(paneID string, frames []store.Frame) SessionProjection 
 		// projection avoids dropping the pane entirely; sweep prune
 		// would otherwise repair via pruneDeadProxyRefs (PR-3.5b).
 		visible = frames
+		// In the fallback path, the merged-hidden refs are already
+		// represented on the visible frames themselves (visible == frames),
+		// so skip merging to avoid double-listing.
+		mergedFromHidden = nil
 	}
 
 	sorted := append([]store.Frame(nil), visible...)
@@ -107,6 +120,23 @@ func buildPaneProjection(paneID string, frames []store.Frame) SessionProjection 
 	subagents := append([]agentpkg.SubagentRef(nil), top.Subagents...)
 	if subagents == nil {
 		subagents = []agentpkg.SubagentRef{}
+	}
+	// R1 merge: append refs from hidden stateful children that aren't
+	// already represented in TopFrame.Subagents. Dedup uses the kind-
+	// aware identity matcher (proxy refs by SourcePID+SourceStartTime,
+	// native by ID; cross-kind never matches) so we never double-list
+	// the same logical subagent.
+	for _, refFromHidden := range mergedFromHidden {
+		duplicate := false
+		for _, existing := range subagents {
+			if subagentRefMatches(existing, refFromHidden) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			subagents = append(subagents, refFromHidden)
+		}
 	}
 	return SessionProjection{
 		PaneID:       paneID,
