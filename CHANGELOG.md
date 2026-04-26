@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.230] - 2026-04-26
+
+### Feat(agent): classify cc and Codex hook catalogs (#655)
+
+Classify Claude Code and Codex hook catalogs without changing runtime install behavior.
+
+- Add version-pinned Claude Code upstream hook catalog assertions, including non-installable `ignored` / `unsupported` events.
+- Add Codex current-docs upstream subset assertions while retaining existing Purdex compatibility installable entries.
+- Keep installable hook sets stable: Claude Code = 9, Codex = 9.
+- Keep OpenCode event contract and mapping refresh deferred to follow-up PRs.
+
 ## [1.0.0-alpha.229] - 2026-04-26
 
 ### Chore(dev): rename `PDX_DEV_UPDATE` env var to `PDX_DEV_MODE` (#653)
