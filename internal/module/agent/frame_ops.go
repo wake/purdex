@@ -767,6 +767,121 @@ func (m *Module) tryRebuildFromProcessTree(req EventRequest) (string, bool, erro
 	return agentType, true, nil
 }
 
+// pidIsAncestorOfWithCap walks descendantPID's PPID chain (capped at
+// maxDepth) looking for ancestorPID. Returns true on hit; false on miss,
+// depth exhaustion, readProcessInfoFn error, or self-loop (info.PPID ==
+// info.PID).
+//
+// Used by canonicalizeDescendantsAfterUpsert to confirm a candidate
+// descendant frame's process actually descends from self.PID before
+// folding it into a proxy ref. Mirrors findProxyParent's PPID walk
+// semantics but starts from descendant↑ rather than self↑.
+//
+// Phase 3.5 plan §2.1.2.
+func pidIsAncestorOfWithCap(descendantPID, ancestorPID, maxDepth int) bool {
+	current := descendantPID
+	for depth := 0; depth < maxDepth; depth++ {
+		info, err := readProcessInfoFn(current)
+		if err != nil {
+			return false
+		}
+		if info.PPID == ancestorPID {
+			return true
+		}
+		if info.PPID <= 1 || info.PPID == current {
+			return false
+		}
+		current = info.PPID
+	}
+	return false
+}
+
+// canonicalizeDescendantsAfterUpsert scans self.PaneID for standalone
+// cross-type descendants whose live PPID chain passes through self.PID and
+// whose stored ProcessStartTime matches the live process's actual start
+// time, folding each as a proxy ref on self. Plan §2.1.2.
+//
+// Best-effort delete: when DeleteIfUnchanged returns (false, nil) due to a
+// concurrent writer touching the candidate row, the partial state (ref
+// attached on self + standalone candidate still present) is acceptable —
+// projection-layer dedup hides it from SPA, sweep canonicalizePane
+// retries within 2s. Increments MetricPartialCanonicalizationCreated.
+//
+// Identity gate (alive + processStartTimeFn match) prevents PID-reuse
+// stale rows from polluting self.Subagents (codex round 2 G2; same logic
+// landed in PR-2b findProxyParent). Same-AgentType candidates are skipped
+// — proxy refs are cross-type-only by definition.
+//
+// Returns the latest stored self frame (carrying all successful folds);
+// callers replace their local copy with this value because each
+// attachProxyRefWithRetry can bump self.LastSeenAt. Storage errors
+// propagate as a non-nil error and abort further folds — the partial
+// progress is left for sweep.
+func (m *Module) canonicalizeDescendantsAfterUpsert(self store.Frame, broadcastTs int64) (store.Frame, error) {
+	if m.frames == nil {
+		return self, nil
+	}
+	frames, err := m.frames.ListByPane(self.PaneID)
+	if err != nil {
+		return self, err
+	}
+	current := self
+	for _, candidate := range frames {
+		if candidate.FrameID == current.FrameID {
+			continue
+		}
+		if candidate.AgentType == current.AgentType {
+			continue
+		}
+		if !pidIsAncestorOfWithCap(candidate.PID, current.PID, proxyMaxDepth) {
+			continue
+		}
+		// Identity gate (PR-2b alignment + plan §2.1.2). Mirrors
+		// findProxyParent's "live + start_time match" check on the
+		// other end of the walk — keeps both sides of canonicalization
+		// honest about which candidates count as alive descendants.
+		if !isPidAliveFn(candidate.PID) {
+			continue
+		}
+		actualStart, sterr := processStartTimeFn(candidate.PID)
+		if sterr != nil || actualStart != candidate.ProcessStartTime {
+			continue
+		}
+		ref := agentpkg.SubagentRef{
+			ID:              fmt.Sprintf("proxy:%s:%d:%s", candidate.AgentType, candidate.PID, candidate.ProcessStartTime),
+			Type:            candidate.AgentType,
+			StartedAt:       broadcastTs,
+			SourcePID:       candidate.PID,
+			SourceStartTime: candidate.ProcessStartTime,
+			IsProxy:         true,
+		}
+		attached, parentStored, aerr := m.attachProxyRefWithRetry(current, ref, broadcastTs)
+		if aerr != nil {
+			return current, aerr
+		}
+		if !attached {
+			// Self frame vanished mid-flight (sweep / SessionEnd).
+			// Stop folding — caller will project the pane and surface
+			// frame_missing.
+			return current, nil
+		}
+		deleted, derr := m.frames.DeleteIfUnchanged(candidate.FrameID, candidate.LastSeenAt)
+		if derr != nil {
+			return parentStored, derr
+		}
+		if !deleted {
+			// Partial state: proxy attached on self + candidate row
+			// still standalone. Acceptable transient — projection
+			// dedup hides from SPA, sweep canonicalize repairs within
+			// 2s. Continue scanning other candidates.
+			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
+			log.Printf("phase3.5: descendant scan partial state child %s parent %s (sweep will repair within 2s)", candidate.FrameID, parentStored.FrameID)
+		}
+		current = parentStored
+	}
+	return current, nil
+}
+
 // findProxyParent walks the sender's PPID ancestor chain (capped at
 // proxyMaxDepth) looking for an alive, identity-verified, cross-type frame in
 // the same pane. See plan §1.4 for full contract.

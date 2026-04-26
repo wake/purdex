@@ -2073,3 +2073,195 @@ func TestApplyFrameEvent_RebuildSkipped_WhenParentFound(t *testing.T) {
 }
 
 func (e errorString) Error() string { return string(e) }
+
+// ---------------------------------------------------------------------------
+// Phase 3.5 PR-3.5a — Cold-start race canonicalization helpers
+// (plan §2.1.2 + §2.1.1 / §3.2 unit tests RC1-RC5)
+// ---------------------------------------------------------------------------
+
+// RC1 — pidIsAncestorOfWithCap returns false when the walk runs past
+// proxyMaxDepth before hitting the candidate ancestor.
+func TestPidIsAncestorOfWithCap_DepthExhaustion(t *testing.T) {
+	origInfo := readProcessInfoFn
+	// Each PID's PPID is one less, forming a long chain: 100→99→98→...→1.
+	// Looking for ancestorPID=1 starting at descendantPID=100 needs 99 hops
+	// — far exceeds proxyMaxDepth=5.
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: pid - 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	if pidIsAncestorOfWithCap(100, 1, proxyMaxDepth) {
+		t.Fatalf("expected false (depth exhausted before reaching ancestor)")
+	}
+}
+
+// RC2 — pidIsAncestorOfWithCap returns false when readProcessInfoFn returns
+// a self-loop (info.PPID == info.PID), preventing infinite walk.
+func TestPidIsAncestorOfWithCap_LoopDetectionPpidEqPid(t *testing.T) {
+	origInfo := readProcessInfoFn
+	// Descendant 200's parent is itself — loop guard must short-circuit.
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 200}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	if pidIsAncestorOfWithCap(200, 100, proxyMaxDepth) {
+		t.Fatalf("expected false (PPID == PID self-loop)")
+	}
+}
+
+// RC3 — pidIsAncestorOfWithCap returns false when readProcessInfoFn errors
+// out partway through the walk.
+func TestPidIsAncestorOfWithCap_ProcessInfoError(t *testing.T) {
+	origInfo := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{}, errProbeFailure
+	}
+	t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+	if pidIsAncestorOfWithCap(200, 100, proxyMaxDepth) {
+		t.Fatalf("expected false (read error mid-walk)")
+	}
+}
+
+// RC4 — canonicalizeDescendantsAfterUpsert skips candidates whose AgentType
+// matches self.AgentType (same-type frames are not proxy-attachment subjects).
+func TestCanonicalizeDescendantsAfterUpsert_SkipsSameType(t *testing.T) {
+	m := newProxyTestModule(t)
+	// Self = cc PID 100. Candidate = cc PID 200 (same agent_type).
+	self := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	seedFrame(t, m, "%5", "cc", 200, "t200", 11)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	// 200's PPID = 100 — would normally pass ancestor check.
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			return "t200", nil
+		}
+		return "t100", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	updated, err := m.canonicalizeDescendantsAfterUpsert(self, 100)
+	if err != nil {
+		t.Fatalf("canonicalizeDescendantsAfterUpsert: %v", err)
+	}
+	if len(updated.Subagents) != 0 {
+		t.Fatalf("self.Subagents = %+v, want empty (same-type candidate skipped)", updated.Subagents)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 2 {
+		t.Fatalf("frame count = %d, want 2 (no fold for same-type)", len(frames))
+	}
+}
+
+// RC5 — canonicalizeDescendantsAfterUpsert skips a candidate whose stored
+// ProcessStartTime no longer matches the live actualStart (PID reused).
+func TestCanonicalizeDescendantsAfterUpsert_SkipsPidReuseViaIdentityGate(t *testing.T) {
+	m := newProxyTestModule(t)
+	// Self = cc PID 100; descendant codex PID 200 stored with start_time
+	// "stale-t200" but live process at PID 200 reports "fresh-t200".
+	self := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	seedFrame(t, m, "%5", "codex", 200, "stale-t200", 11)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			return "fresh-t200", nil // mismatch with stored "stale-t200"
+		}
+		return "t100", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	updated, err := m.canonicalizeDescendantsAfterUpsert(self, 100)
+	if err != nil {
+		t.Fatalf("canonicalizeDescendantsAfterUpsert: %v", err)
+	}
+	if len(updated.Subagents) != 0 {
+		t.Fatalf("self.Subagents = %+v, want empty (identity gate fails)", updated.Subagents)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 2 {
+		t.Fatalf("frame count = %d, want 2 (stale candidate left for sweep)", len(frames))
+	}
+}
+
+// RC4b — positive case: live identity-verified cross-type descendant under
+// self.PID is folded into a proxy ref + standalone deleted.
+func TestCanonicalizeDescendantsAfterUpsert_FoldsLiveCrossTypeDescendant(t *testing.T) {
+	m := newProxyTestModule(t)
+	self := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	candidate := seedFrame(t, m, "%5", "codex", 200, "t200", 11)
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	updated, err := m.canonicalizeDescendantsAfterUpsert(self, 100)
+	if err != nil {
+		t.Fatalf("canonicalizeDescendantsAfterUpsert: %v", err)
+	}
+	if len(updated.Subagents) != 1 {
+		t.Fatalf("self.Subagents = %+v, want 1 proxy ref", updated.Subagents)
+	}
+	ref := updated.Subagents[0]
+	if !ref.IsProxy || ref.Type != "codex" || ref.SourcePID != 200 || ref.SourceStartTime != "t200" {
+		t.Fatalf("ref = %+v, want codex IsProxy=true source_pid=200 source_start_time=t200", ref)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (codex folded + deleted)", len(frames))
+	}
+	_ = candidate
+}
