@@ -64,23 +64,24 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	switch req.EventName {
 	case "SessionEnd":
 		if frame != nil {
+			// Phase 3.5 §2.3 (v8 L1 fix, codex round PR-2 attack):
+			// detach-first ordering. The previous delete-first +
+			// best-effort detach left a permanent orphan whenever
+			// removeProxyRefForSender failed (storage error, retry
+			// exhaustion, daemon crash mid-handler) — the child row
+			// was gone so projection_dedup could no longer hide the
+			// ancestor's stale proxy ref, and PR-3.5a ships without
+			// pruneDeadProxyRefs. By detaching first and propagating
+			// the error before Delete, a hook handler failure leaves
+			// the DB in a recoverable state (child row + parent ref
+			// both still present; sweep canonicalize / next
+			// SessionEnd retry can fix it).
+			if _, _, _, _, derr := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs); derr != nil {
+				return nil, FrameTraceMeta{}, derr
+			}
 			if err := m.frames.Delete(frame.FrameID); err != nil {
 				return nil, FrameTraceMeta{}, err
 			}
-			// Phase 3.5 §2.3 — best-effort proxy cleanup for the
-			// partial-state case where this frame was simultaneously a
-			// standalone row AND attached as a proxy ref on an ancestor
-			// (cold-start race partial that hot-path canonicalize +
-			// projection dedup left in place). Without this, the
-			// ancestor's proxy ref outlives the child's SessionEnd
-			// permanently — projection dedup cannot fix it because
-			// there's no standalone frame left to hide behind, so the
-			// ancestor would show a stale lit dot.
-			//
-			// Errors / no-match are ignored — sweep pruneDeadProxyRefs
-			// (PR-3.5b) covers the daemon-crash / removeProxyRef-failure
-			// permutations.
-			_, _, _, _, _ = m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs)
 			projection, err := m.projectPane(req.TmuxPaneID)
 			return projection, FrameTraceMeta{
 				FrameID:       frame.FrameID,
