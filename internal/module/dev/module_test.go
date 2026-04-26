@@ -175,7 +175,7 @@ func TestDefaultBuild_WrapsStepErrorWithLabel(t *testing.T) {
 }
 
 func TestRegisterRoutes_DisabledByDefault(t *testing.T) {
-	t.Setenv("PDX_DEV_UPDATE", "")
+	t.Setenv("PDX_DEV_MODE", "")
 	m := &DevModule{}
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)
@@ -190,7 +190,7 @@ func TestRegisterRoutes_DisabledByDefault(t *testing.T) {
 }
 
 func TestRegisterRoutes_EnabledWithEnv(t *testing.T) {
-	t.Setenv("PDX_DEV_UPDATE", "1")
+	t.Setenv("PDX_DEV_MODE", "1")
 	m := &DevModule{}
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)
