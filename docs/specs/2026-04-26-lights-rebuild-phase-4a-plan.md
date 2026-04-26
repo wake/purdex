@@ -1,13 +1,14 @@
-# Lights Rebuild — Phase 4a Plan v1.2 (PR-4a-0 OpenCode Hooks Completion)
+# Lights Rebuild — Phase 4a Plan v1.3 (PR-4a-0 OpenCode Hooks Completion)
 
-**Status**: Draft v1.2（Round 2 convergence fixes — 2 high + 4 medium + 2 low + 1 nit applied）
+**Status**: Draft v1.3（Round 3 final fixes — 1 high + 3 medium + 2 low + 2 audit findings applied；user-decided ship after R3 — meta-drift on H3-1 evaluated as progressive test-contract precision, not architectural drift；no Round 4）
 **Date**: 2026-04-27
 **Worktree**: `.claude/worktrees/lights-phase-4-audit`（branch `worktree-lights-phase-4-audit`）
 **Baseline**: `origin/main @ 63168dd9` (`1.0.0-alpha.230`)
-**Audit issue**: [#656 v5.2](https://github.com/wake/purdex/issues/656)
+**Audit issue**: [#656 v5.3](https://github.com/wake/purdex/issues/656)
 **Codex review trail (non-normative — see §11)**:
 - Round 1: `task-mog1gsb0-0idiaa` (audit) + `task-mog1gtot-c79vs7` (plan) — 27 findings → v1.1 + v5.1 fixes
 - Round 2: `task-mog24leu-l5lbd0` (audit) + `task-mog24m6r-ql5fdt` (plan) — 11 findings → v1.2 + v5.2 fixes
+- Round 3: `task-mog2wse0-8sd9ak` (audit, SHIP-READY) + `task-mog2wt6m-r1ymhm` (plan, NEEDS-R4 + meta-drift YES on H3-1) — 8 findings → v1.3 + v5.3 fixes（user-decided ship; no R4）
 
 **Related specs**:
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` §2.4 / §8.1 / §71（原方向，audit 已記錄偏離）
@@ -19,13 +20,13 @@
 
 ## 0. 來龍去脈
 
-Phase 3.5b 完工後（alpha.227）轉入 Phase 4a — **probe primitive rebuild + module-layer policy + graceWindow**。Audit issue #656 v5.2 記錄了：
+Phase 3.5b 完工後（alpha.227）轉入 Phase 4a — **probe primitive rebuild + module-layer policy + graceWindow**。Audit issue #656 v5.3 記錄了：
 
 1. **設計方向偏離原 spec §8.1**（字元偵測砍掉、probe layer 純 plumbing、policy 全分散到 agent module）
 2. **三家 agent catalog 對齊度** — cc / codex 在 hooks-hotfix-plan PR #645 + #655 完成 `HookHandling` 四態完整 catalog；opencode 線**未完成**
 3. **Phase 4a Slice 6（opencode module 接新 primitive）** 在 alpha.230 上**無法 e2e 驗證** — 因為 plugin template 用 `chat.message` / `session.idle` 等 key 是否仍為 1.14.x current API 未驗證
 
-**方案 A 決議**（2026-04-27 主工作流）：將 hooks-hotfix-plan opencode 收尾工作收編為 Phase 4a 的 **PR-4a-0**。本 plan v1.2 聚焦 PR-4a-0 完整細節；PR-4a-1 / PR-4a-2 僅給大綱 + Slice 6 design-impact checkpoint。
+**方案 A 決議**（2026-04-27 主工作流）：將 hooks-hotfix-plan opencode 收尾工作收編為 Phase 4a 的 **PR-4a-0**。本 plan v1.3 聚焦 PR-4a-0 完整細節；PR-4a-1 / PR-4a-2 僅給大綱 + Slice 6 design-impact checkpoint。
 
 **Directive 加碼項**（user 2026-04-27）：
 
@@ -56,7 +57,7 @@ Phase 3.5b 完工後（alpha.227）轉入 Phase 4a — **probe primitive rebuild
 - 不改 `internal/agent/opencode/status.go`（status mapping 為 frame layer concern，不在 hook surface）
 - 不動 `internal/store/*` / tab rendering / `spa/src/features/**` 非 icon test 的檔案
 
-### 1.3 PR-4a-1 / PR-4a-2 大綱（不在本 plan v1.2 細部，待 PR-4a-0 對齊結果後起草下一版 plan）
+### 1.3 PR-4a-1 / PR-4a-2 大綱（不在本 plan v1.3 細部，待 PR-4a-0 對齊結果後起草下一版 plan）
 
 詳見 §7。**注意**：§7.3 Slice 6 design-impact checkpoint 是 PR-4a-0 ship 前的 stop/go gate，含 evidence-based fail rule（Round 2 M4）。
 
@@ -207,7 +208,11 @@ OpenCode catalog 是**bipartite naming**：
     {
       "upstreamKey": "chat.message",
       "interfaceLocation": "packages/plugin/src/index.ts:LINE",
-      "triggerCallsiteAt": "packages/opencode/src/chat/...:LINE",  // Round 2 AM1 必填
+      "interfacePresent": true,                                     // Round 3 AL1 — generalized to all strong hooks
+      "triggerCallsiteAt": "packages/opencode/src/chat/...:LINE",   // **required** (Round 2 AM1 + Round 3 AL1 — 強制 required，非 optional)
+      "triggerCallsitePresent": true,                               // Round 3 AL1 — boolean (false 時 callsiteFiles 為空)
+      "callsiteFiles": ["packages/opencode/src/chat/...:LINE"],     // Round 3 AL1 — array of file:line
+      "adoptability": "present",                                    // Round 3 AL1 — enum: "present" | "interface-only-no-callsite" | "unknown"
       "payloadFields": [...],
       "purdex": {
         "kind": "installable",
@@ -216,10 +221,22 @@ OpenCode catalog 是**bipartite naming**：
         "stalenessPolicy": null
       }
     }
-    // ... 16+ entries
+    // ... 16+ entries — 每個 strong hook 都必須帶 interfacePresent / triggerCallsitePresent / callsiteFiles / adoptability 四欄
   ]
 }
 ```
+
+**Strong hook callsite evidence rule（Round 3 AL1 通用化 — 由 Round 2 AM1 從 `permission.ask` 個案擴及全 strong hooks）**：
+
+- `interfacePresent`：`packages/plugin/src/index.ts` 的 `Hooks` interface 是否包含此 hook
+- `triggerCallsitePresent`：是否能在 `packages/opencode/src/**` grep 到 `Plugin.trigger("<hookName>")` 至少一處
+- `callsiteFiles`：所有 trigger callsite 的 `file:line` 列表（`triggerCallsitePresent == false` 時為空陣列 `[]`）
+- `adoptability`：
+  - `"present"` — interface 與 callsite 都存在 → 可安全採用
+  - `"interface-only-no-callsite"` — interface 存在但 grep 不到 trigger callsite → **dead strong hook，Purdex 不採用**（分類為 `unsupported`）；採用前必須 reverify
+  - `"unknown"` — audit 未完整 grep（不應 ship；R3 AL1 後此狀態僅作為 audit 進行中過渡值）
+
+**`permission.ask` 仍保留 AM1 原硬性規則**：採用前必須有 callsite + 同步更新 plan §7.3 Waiting checkpoint + OC1 fixture + template consumed-keys exact match。其他 strong hooks 也記錄 callsite evidence — 日後採用時不必重新驗 callsite。
 
 **`stalenessPolicy` 規則**（Round 2 H2）：
 
@@ -288,11 +305,12 @@ internal/agent/opencode/testdata/
     └── tool.execute.after.json
 ```
 
-**Two-stage manifest build（Round 2 M1）**：
+**Two-stage manifest build（Round 2 M1 + Round 3 M3-1 強制 separate schema）**：
 
-- **Commit 2**：建立 `manifest.json` 但**不**含 `payloadFixtureDir` 欄（因為 fixtures 在 Commit 4 才建）
-- **Commit 4**：補上 `manifest.json` 的 `payloadFixtureDir` 欄 → 此時 manifest 完整
-- 兩階段都通過自動 schema 驗證（用 `omitempty` JSON tag 或 separate Commit-2 / Commit-4 schema）
+- **Commit 2**：用 **`lite manifest schema`** — 建立 `manifest.json` 但**不**含 `payloadFixtureDir` 欄（因為 fixtures 在 Commit 4 才建）
+- **Commit 4**：用 **`full manifest schema`** — 補上 `manifest.json` 的 `payloadFixtureDir` 欄 → 此時 manifest 完整
+- **Round 3 M3-1 強制 separate schema**：兩階段必須通過**對應版本**的 schema 驗證（lite vs full）；**不接受** `omitempty` JSON tag 作為 final ship 解法
+- **§6 ship gate 適用 full manifest schema**，要求 `payloadFixtureDir` (a) present + (b) non-empty + (c) 目錄存在 + (d) payload fixture set 與 template-consumed keys exact match
 
 **fixture 內容規則**：
 
@@ -362,7 +380,7 @@ describe('opencode', () => {
 
 | ID | Test | File | Red Assertion | TDD type |
 |---|---|---|---|---|
-| HC5 | `TestOpenCodeEvents_ClassifyAgainstFrozenManifest` | `internal/agent/opencode/events_test.go` | 從 `testdata/opencode-1.14.23-events.json` load 上游 entries，斷言每 entry 在 `opencodeEventSpecs` 內或被顯式標記 ignored/unsupported 在 manifest 內。**獨立可信 SSoT** | red |
+| HC5 | `TestOpenCodeEvents_ClassifyAgainstFrozenManifest` | `internal/agent/opencode/events_test.go` | **Bidirectional exact set assertion**（Round 3 H3-1）— (a) 對 `events.json.busEvents` + `events.json.strongHooks` 每個 entry：`kind == "installable"` → `purdex.purdexEventName` 必須 exactly match 一個 `opencodeEventSpecs` entry 的 `Name`（其 `Handling` 為 status/detail）；`kind == "ignored"` 或 `"unsupported"` → `upstreamKey` 必須 exactly match 一個 `opencodeEventSpecs` entry 的 `Name`（其 `Handling` 為對應 ignored/unsupported）。(b) 對 `opencodeEventSpecs` 每個 entry：必須 exactly match `events.json` 某 entry（**不允許 events.go-only 條目**）。(c) manifest-only ignored/unsupported 不算通過 — 必須補進 events.go。**獨立可信 SSoT** | red |
 | HC5b | `TestOpenCodeEvents_NonInstallableHaveExplicitHandlingAndNoNameCollision` | `internal/agent/opencode/events_test.go` | (a) 新加 ignored/unsupported 條目顯式設 `Handling`；(b) **collision check** — `Name` ∉ installable normalized name set（Round 2 M3）| red |
 | HC5c | `TestOpenCodeEvents_NonInstallableHaveEmptyEmitsStatus` | `internal/agent/opencode/events_test.go` | ignored/unsupported 條目 `EmitsStatus` 為 empty slice | red |
 | **HC5d** | `TestOpenCodeManifestCatalogSummaryMatchesEvents`（**new — Round 2 M2**）| `internal/agent/opencode/events_test.go` | (a) `manifest.catalogSummary.busEvents` == `events.json.busEvents.length`；(b) `strongHooks` 同；(c) `installable`/`ignored`/`unsupported` count 與 `opencodeEventSpecs` 統計一致 | red |
@@ -498,7 +516,7 @@ pnpm --prefix spa exec vitest run src/lib/agent-icons.test.tsx
 ```
 go test ./internal/agent/... -count=1
 pnpm --prefix spa exec vitest run src/lib/agent-icons.test.tsx
-scripts/check-pr-4a0-boundary.sh origin/main    # H6.3 enforcement — fails if any changed file outside §5 Allowed paths
+scripts/check-pr-4a0-boundary.sh origin/main    # H6.3 enforcement (local + reviewer checklist) — fails if any changed file outside §5 Allowed paths
 ```
 
 PR 提交前：
@@ -530,7 +548,7 @@ scripts/check-pr-4a0-boundary.sh origin/main
 - `spa/src/lib/agent-icons.test.tsx`
 - `scripts/check-pr-4a0-boundary.sh`（new — H6.3 enforcement script）
 
-**Forbidden paths**（CI / boundary script 必擋）：
+**Forbidden paths**（boundary script + reviewer checklist 必擋 — Round 3 M3-3 移除 CI 字樣，PR-4a-0 不引入 GitHub Actions job；若日後想加 CI 另開獨立 PR）：
 
 - `internal/module/agent/*` — 屬 PR-4a-1/2
 - `internal/agent/probe/*` — 屬 PR-4a-1
@@ -602,8 +620,9 @@ PR-4a-0 ship 必須全綠：
 | OI1 / OI2 | SPA characterization test 綠 |
 | **H6.1 events.json ↔ events.go exact match** | HC5 + HC5d 自動化測試斷言 |
 | **H6.2 template consumed keys ↔ payload fixtures exact match** | OC1a 自動化測試斷言 |
-| **H6.3 changed-file boundary check** | `scripts/check-pr-4a0-boundary.sh origin/main` 退出碼 0（CI / 本機 final verification 必跑 — Round 2 H1）|
-| **H6.4 partial-stale policy documented and accepted**（new — Round 2 H2）| 對每個 `stalenessPolicy != null` 的 entry：(a) `decision` 必填三選一；(b) audit 報告對應段落 list rationale；(c) 若 `decision == "retain"`，§7.3 Slice 6 summary 必須 explicit 寫入 known residual risk + Go/Stop 結論 |
+| **H6.3 changed-file boundary check** | `scripts/check-pr-4a0-boundary.sh origin/main` 退出碼 0（本機 final verification + reviewer checklist 必跑 — Round 2 H1 + Round 3 M3-3 移除 CI 字樣）|
+| **H6.4 partial-stale policy documented and accepted**（Round 2 H2 + Round 3 M3-2 加 switch/dualSubscribe 完整性要求）| 對每個 `stalenessPolicy != null` 的 entry：(a) `decision` 必填三選一；(b) audit 報告對應段落 list rationale；(c) 若 `decision == "retain"`，§7.3 Slice 6 summary 必須 explicit 寫入 known residual risk + Go/Stop 結論；(d) 若 `decision == "switch"`：`switchTarget` 必填 + `templateConsumesAt` / OC1 expectation 已更新（同步指向新鍵）；(e) 若 `decision == "dualSubscribe"`：`dedupRequired == true` + OC1c 必須存在並通過 |
+| **H6.5 PR description audit trail**（new — Round 3 L3-1）| PR description 必須包含進 worktree 前的 `pre-reset git status -s` 輸出（對應 §8 Risk row 6「主 repo 並發 session 留痕」要求）— reviewer 對 PR description checkpoint，無此段視為違反 Risk 留痕約定 |
 | `go test ./...` 全綠 | 含 `internal/agent/supported_statuses_test.go` |
 | `pnpm --prefix spa run lint` 綠 | |
 | `pnpm --prefix spa run build` 綠 | |
@@ -737,10 +756,11 @@ PR-4a-0 ship 前**必須**產出 `Slice 6 design impact summary`（一段 plan v
 - Lights rebuild spec: `docs/specs/2026-04-23-lights-rebuild-spec.md` §2.4 / §8.1 / §71
 - 前置 phase: PR #644（3.5a）/ PR #650（3.5b）/ PR #645（hotfix PR 1）/ PR #655（hotfix PR 2）
 
-**Codex review trail（non-normative — Round 2 L2）**：以下 job IDs 是 transient artifact，僅供開發歷程追溯，非規範性引用。Round 1/2 findings 已 inline 入本 plan 各節 + audit issue body，後續 review 不需重新讀 job log：
+**Codex review trail（non-normative — Round 2 L2）**：以下 job IDs 是 transient artifact，僅供開發歷程追溯，非規範性引用。Round 1/2/3 findings 已 inline 入本 plan 各節 + audit issue body，後續 review 不需重新讀 job log：
 
 - Round 1: `task-mog1gsb0-0idiaa`（audit）+ `task-mog1gtot-c79vs7`（plan）
 - Round 2: `task-mog24leu-l5lbd0`（audit）+ `task-mog24m6r-ql5fdt`（plan）
+- Round 3: `task-mog2wse0-8sd9ak`（audit, SHIP-READY）+ `task-mog2wt6m-r1ymhm`（plan, NEEDS-R4 + meta-drift YES on H3-1）— user 評估 H3-1 為 progressive test-contract precision，非架構性 drift；ship plan 並進實作；no R4
 
 **待產出**：
 
