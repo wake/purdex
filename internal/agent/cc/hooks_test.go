@@ -305,6 +305,23 @@ func TestMergeClaudeHooks_PreservesUnknownNonArrayHookValues(t *testing.T) {
 	}
 }
 
+func TestMergeClaudeHooks_UnsupportedInstallableHookShapeReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	originalSettings := []byte(`{"hooks":{"SessionStart":"custom-scalar","Stop":{"custom":true}}}`)
+	if err := os.WriteFile(path, originalSettings, 0644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", false); err == nil {
+		t.Fatal("mergeClaudeHooks install succeeded with unsupported installable hook value shape")
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != string(originalSettings) {
+		t.Fatalf("settings changed after unsupported hook shape; got %q", got)
+	}
+}
+
 func TestMergeClaudeHooks_PreservesWrapperLikePdxCommand(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

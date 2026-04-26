@@ -146,6 +146,9 @@ func mergeClaudeHooks(path, pdxPath string, remove bool) error {
 		settings["hooks"] = hooks
 		return writeClaudeSettings(path, settings)
 	}
+	if err := validateClaudeInstallableHookShapes(hooks); err != nil {
+		return err
+	}
 	for _, spec := range ccEventSpecs {
 		installable := agent.IsInstallableHookSpec(spec)
 		if !installable {
@@ -159,6 +162,22 @@ func mergeClaudeHooks(path, pdxPath string, remove bool) error {
 	}
 	settings["hooks"] = hooks
 	return writeClaudeSettings(path, settings)
+}
+
+func validateClaudeInstallableHookShapes(hooks map[string]any) error {
+	for _, spec := range ccEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		value, ok := hooks[spec.Name]
+		if !ok || value == nil {
+			continue
+		}
+		if _, ok := value.([]any); !ok {
+			return fmt.Errorf("claude hook %s has unsupported value shape", spec.Name)
+		}
+	}
+	return nil
 }
 
 func writeClaudeSettings(path string, settings map[string]any) error {

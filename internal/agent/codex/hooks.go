@@ -114,6 +114,9 @@ func installCodexHooks(configPath, hooksPath, pdxPath string) error {
 	if err != nil {
 		return err
 	}
+	if err := validateCodexInstallableHookShapes(hooksFile); err != nil {
+		return err
+	}
 	setCodexHooksFeature(config)
 	mergeCodexHooksFile(hooksFile, pdxPath, false)
 	if err := writeCodexHooksFile(hooksPath, hooksFile); err != nil {
@@ -206,8 +209,33 @@ func mergeCodexHooks(path, pdxPath string, remove bool) error {
 	if err != nil {
 		return err
 	}
+	if !remove {
+		if err := validateCodexInstallableHookShapes(hooksFile); err != nil {
+			return err
+		}
+	}
 	mergeCodexHooksFile(hooksFile, pdxPath, remove)
 	return writeCodexHooksFile(path, hooksFile)
+}
+
+func validateCodexInstallableHookShapes(hooksFile map[string]any) error {
+	hooks, _ := hooksFile["hooks"].(map[string]any)
+	if hooks == nil {
+		return nil
+	}
+	for _, spec := range codexEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		value, ok := hooks[spec.Name]
+		if !ok || value == nil {
+			continue
+		}
+		if _, ok := value.([]any); !ok {
+			return fmt.Errorf("codex hook %s has unsupported value shape", spec.Name)
+		}
+	}
+	return nil
 }
 
 func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) {
