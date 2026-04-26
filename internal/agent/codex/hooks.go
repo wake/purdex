@@ -205,7 +205,7 @@ func mergeCodexHooks(path, pdxPath string, remove bool) error {
 			if !ok {
 				continue
 			}
-			entries := filterOutPdxCodex(existing)
+			entries := filterOutPdxCodexKnownEvents(existing)
 			if len(entries) == 0 {
 				delete(hooks, event)
 			} else {
@@ -213,7 +213,7 @@ func mergeCodexHooks(path, pdxPath string, remove bool) error {
 			}
 			continue
 		}
-		entries := filterOutPdxCodex(hooks[event])
+		entries := filterOutPdxCodexKnownEvents(hooks[event])
 		if !remove {
 			entries = append(entries, map[string]any{
 				"hooks": []any{
@@ -428,6 +428,17 @@ func cloneCodexMap(src map[string]any) map[string]any {
 }
 
 func filterOutPdxCodex(entries any) []any {
+	return filterOutPdxCodexWithPredicate(entries, isPdxCommandCodex)
+}
+
+func filterOutPdxCodexKnownEvents(entries any) []any {
+	known := codexKnownEventNames()
+	return filterOutPdxCodexWithPredicate(entries, func(cmd string) bool {
+		return isPdxCommandCodexKnownEvent(cmd, known)
+	})
+}
+
+func filterOutPdxCodexWithPredicate(entries any, isOwned func(string) bool) []any {
 	var result []any
 	for _, entry := range toCodexEntrySlice(entries) {
 		group, ok := entry.(map[string]any)
@@ -438,7 +449,7 @@ func filterOutPdxCodex(entries any) []any {
 		if _, ok := group["hooks"]; !ok {
 			if _, ok := group["type"]; ok {
 				cmd, _ := group["command"].(string)
-				if isPdxCommandCodex(cmd) {
+				if isOwned(cmd) {
 					continue
 				}
 				result = append(result, map[string]any{
@@ -457,7 +468,7 @@ func filterOutPdxCodex(entries any) []any {
 				continue
 			}
 			cmd, _ := m["command"].(string)
-			if !isPdxCommandCodex(cmd) {
+			if !isOwned(cmd) {
 				kept = append(kept, hookEntry)
 			}
 		}
@@ -469,4 +480,30 @@ func filterOutPdxCodex(entries any) []any {
 		result = append(result, cloned)
 	}
 	return result
+}
+
+func isPdxCommandCodexKnownEvent(cmd string, known map[string]bool) bool {
+	tokens := tokenizeCodexCommand(cmd)
+	if len(tokens) == 0 || filepath.Base(tokens[0]) != "pdx" {
+		return false
+	}
+	hasHook := false
+	hasAgentCodex := false
+	for i := 1; i < len(tokens); i++ {
+		if tokens[i] == "hook" {
+			hasHook = true
+		}
+		if tokens[i] == "--agent" && i+1 < len(tokens) && tokens[i+1] == "codex" {
+			hasAgentCodex = true
+		}
+	}
+	return hasHook && hasAgentCodex && known[tokens[len(tokens)-1]]
+}
+
+func codexKnownEventNames() map[string]bool {
+	known := make(map[string]bool, len(codexEventSpecs))
+	for _, spec := range codexEventSpecs {
+		known[spec.Name] = true
+	}
+	return known
 }

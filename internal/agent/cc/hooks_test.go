@@ -426,6 +426,7 @@ func TestCCInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 		"hooks": map[string]any{
 			"IgnoredSynthetic": []any{
 				makePdxEntry("/usr/local/bin/pdx", "cc", "IgnoredSynthetic"),
+				makePdxEntry("/usr/local/bin/pdx", "codex", "IgnoredSynthetic"),
 				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "/usr/bin/notify ignored"}}},
 			},
 		},
@@ -439,13 +440,20 @@ func TestCCInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 	}
 	staleHooks := hooksMap(t, readSettings(t, staleSettingsPath))
 	staleEntries := toEntrySlice(staleHooks["IgnoredSynthetic"])
-	if len(staleEntries) != 1 {
-		t.Fatalf("remove kept %d non-installable third-party entries, want 1", len(staleEntries))
+	if len(staleEntries) != 2 {
+		t.Fatalf("remove kept %d non-installable third-party entries, want 2", len(staleEntries))
 	}
+	foundCodexPdx := false
 	for _, entry := range staleEntries {
 		if entryIsPdx(entry) {
 			t.Fatalf("remove left stale non-installable pdx entry: %#v", entry)
 		}
+		if commandEntryContains(entry, "--agent codex") {
+			foundCodexPdx = true
+		}
+	}
+	if !foundCodexPdx {
+		t.Fatal("remove dropped non-cc pdx hook under non-installable key")
 	}
 	absentSettingsPath := filepath.Join(dir, "absent-settings.json")
 	if err := os.WriteFile(absentSettingsPath, []byte(`{"hooks":{}}`), 0644); err != nil {
@@ -458,6 +466,28 @@ func TestCCInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 	if _, ok := absentHooks["IgnoredSynthetic"]; ok {
 		t.Fatal("remove created absent non-installable key IgnoredSynthetic")
 	}
+}
+
+func commandEntryContains(entry any, needle string) bool {
+	m, ok := entry.(map[string]any)
+	if !ok {
+		return false
+	}
+	arr, ok := m["hooks"].([]any)
+	if !ok {
+		return false
+	}
+	for _, hook := range arr {
+		hm, ok := hook.(map[string]any)
+		if !ok {
+			continue
+		}
+		cmd, _ := hm["command"].(string)
+		if strings.Contains(cmd, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestCCCheckHooks_ReportsAllEventsFromEventsList writes a settings.json that
@@ -500,6 +530,45 @@ func TestCCCheckHooks_ReportsAllEventsFromEventsList(t *testing.T) {
 	}
 	if status.Installed {
 		t.Error("Installed must be false when any event is missing")
+	}
+}
+
+func TestCCCheckHooks_WrongAgentOrEventCommandNotInstalled(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{name: "wrong agent", command: `"/usr/local/bin/pdx" hook --agent codex SessionStart`},
+		{name: "wrong event", command: `"/usr/local/bin/pdx" hook --agent cc Stop`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			settingsPath := filepath.Join(home, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			settings := map[string]any{
+				"hooks": map[string]any{
+					"SessionStart": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": tt.command}}}},
+				},
+			}
+			data, _ := json.MarshalIndent(settings, "", "  ")
+			if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+				t.Fatalf("write settings: %v", err)
+			}
+			status, err := NewProvider(nil, nil, nil, nil).CheckHooks()
+			if err != nil {
+				t.Fatalf("CheckHooks: %v", err)
+			}
+			if status.Events["SessionStart"].Installed {
+				t.Fatalf("SessionStart Installed=true for %s command", tt.name)
+			}
+			if status.Installed {
+				t.Fatal("overall Installed=true with invalid SessionStart command")
+			}
+		})
 	}
 }
 

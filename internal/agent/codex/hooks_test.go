@@ -431,6 +431,7 @@ func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 		"hooks": map[string]any{
 			"IgnoredSynthetic": []any{
 				pdxGroupEntry("IgnoredSynthetic"),
+				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": `"/usr/local/bin/pdx" hook --agent cc IgnoredSynthetic`, "timeout": 5}}},
 				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "/usr/bin/notify ignored", "timeout": 5}}},
 			},
 		},
@@ -444,18 +445,26 @@ func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 	}
 	staleHooks := hooksSection(t, readHooksFile(t, staleHooksPath))
 	staleGroups := codexMatcherGroups(staleHooks["IgnoredSynthetic"])
-	if len(staleGroups) != 1 {
-		t.Fatalf("remove kept %d non-installable third-party groups, want 1", len(staleGroups))
+	if len(staleGroups) != 2 {
+		t.Fatalf("remove kept %d non-installable third-party groups, want 2", len(staleGroups))
 	}
+	foundCCPdx := false
+	knownCodexEvents := codexKnownEventNames()
 	for _, groupEntry := range staleGroups {
 		group, _ := groupEntry.(map[string]any)
 		for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
 			m, _ := hookEntry.(map[string]any)
 			cmd, _ := m["command"].(string)
-			if isPdxCommandCodex(cmd) {
+			if isPdxCommandCodexKnownEvent(cmd, knownCodexEvents) {
 				t.Fatalf("remove left stale non-installable pdx entry: %#v", hookEntry)
 			}
+			if strings.Contains(cmd, "--agent cc") {
+				foundCCPdx = true
+			}
 		}
+	}
+	if !foundCCPdx {
+		t.Fatal("remove dropped non-codex pdx hook under non-installable key")
 	}
 	absentHooksPath := filepath.Join(dir, "absent-hooks.json")
 	if err := os.WriteFile(absentHooksPath, []byte(`{"hooks":{}}`), 0644); err != nil {

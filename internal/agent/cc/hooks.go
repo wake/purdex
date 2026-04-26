@@ -73,7 +73,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			allInstalled = false
 			continue
 		}
-		command := findPdxCommand(entries)
+		command := findPdxCommandForEvent(entries, spec.Name)
 		events[spec.Name] = agent.HookEventInfo{
 			Installed:  command != "",
 			Command:    command,
@@ -190,6 +190,10 @@ func makePdxEntry(pdxPath, agentType, event string) map[string]any {
 }
 
 func findPdxCommand(entries any) string {
+	return findPdxCommandForEvent(entries, "")
+}
+
+func findPdxCommandForEvent(entries any, eventName string) string {
 	arr, ok := entries.([]any)
 	if !ok {
 		return ""
@@ -209,7 +213,10 @@ func findPdxCommand(entries any) string {
 				continue
 			}
 			cmd, _ := hookMap["command"].(string)
-			if strings.Contains(strings.ReplaceAll(cmd, `"`, ""), "pdx hook") {
+			if eventName != "" && isPdxCommandForCCEvent(cmd, eventName) {
+				return cmd
+			}
+			if eventName == "" && isPdxCommand(cmd) {
 				return cmd
 			}
 		}
@@ -228,9 +235,14 @@ func toEntrySlice(v any) []any {
 }
 
 func filterOutPdx(entries []any) []any {
+	return filterOutPdxKnownCCEvents(entries)
+}
+
+func filterOutPdxKnownCCEvents(entries []any) []any {
+	known := ccKnownEventNames()
 	result := []any{}
 	for _, e := range entries {
-		if !entryIsPdx(e) {
+		if !entryIsPdxCCKnownEvent(e, known) {
 			result = append(result, e)
 		}
 	}
@@ -238,6 +250,10 @@ func filterOutPdx(entries []any) []any {
 }
 
 func entryIsPdx(entry any) bool {
+	return entryIsPdxCCKnownEvent(entry, ccKnownEventNames())
+}
+
+func entryIsPdxCCKnownEvent(entry any, known map[string]bool) bool {
 	m, ok := entry.(map[string]any)
 	if !ok {
 		return false
@@ -259,7 +275,7 @@ func entryIsPdx(entry any) bool {
 		if !ok {
 			continue
 		}
-		if isPdxCommand(cmd) {
+		if isPdxCommandCCKnownEvent(cmd, known) {
 			return true
 		}
 	}
@@ -267,11 +283,76 @@ func entryIsPdx(entry any) bool {
 }
 
 func isPdxCommand(cmd string) bool {
-	if strings.Contains(cmd, `/pdx" hook`) || strings.HasPrefix(cmd, `"pdx" hook`) {
-		return true
+	return isPdxCommandCCKnownEvent(cmd, ccKnownEventNames())
+}
+
+func isPdxCommandForCCEvent(cmd string, eventName string) bool {
+	return isPdxCommandCC(cmd, func(got string) bool { return got == eventName })
+}
+
+func isPdxCommandCCKnownEvent(cmd string, known map[string]bool) bool {
+	return isPdxCommandCC(cmd, func(eventName string) bool { return known[eventName] })
+}
+
+func isPdxCommandCC(cmd string, eventOK func(string) bool) bool {
+	tokens := tokenizeCCCommand(cmd)
+	if len(tokens) == 0 || filepath.Base(tokens[0]) != "pdx" {
+		return false
 	}
-	if strings.Contains(cmd, `/pdx hook`) || strings.HasPrefix(cmd, `pdx hook`) {
-		return true
+	hasHook := false
+	hasAgentCC := false
+	for i := 1; i < len(tokens); i++ {
+		if tokens[i] == "hook" {
+			hasHook = true
+		}
+		if tokens[i] == "--agent" && i+1 < len(tokens) && tokens[i+1] == "cc" {
+			hasAgentCC = true
+		}
 	}
-	return false
+	return hasHook && hasAgentCC && eventOK(tokens[len(tokens)-1])
+}
+
+func tokenizeCCCommand(cmd string) []string {
+	var tokens []string
+	var cur strings.Builder
+	inQuote := false
+	var quoteChar byte
+	flush := func() {
+		if cur.Len() > 0 {
+			tokens = append(tokens, cur.String())
+			cur.Reset()
+		}
+	}
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		if inQuote {
+			if c == quoteChar {
+				inQuote = false
+				quoteChar = 0
+				continue
+			}
+			cur.WriteByte(c)
+			continue
+		}
+		if c == '"' || c == '\'' {
+			inQuote = true
+			quoteChar = c
+			continue
+		}
+		if c == ' ' || c == '\t' || c == '\n' {
+			flush()
+			continue
+		}
+		cur.WriteByte(c)
+	}
+	flush()
+	return tokens
+}
+
+func ccKnownEventNames() map[string]bool {
+	known := make(map[string]bool, len(ccEventSpecs))
+	for _, spec := range ccEventSpecs {
+		known[spec.Name] = true
+	}
+	return known
 }
