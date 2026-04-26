@@ -65,8 +65,20 @@ func buildPaneProjection(paneID string, frames []store.Frame) SessionProjection 
 	var hidden int
 	for _, frame := range frames {
 		if claimed[claim{frame.PID, frame.ProcessStartTime}] {
-			hidden++
-			continue
+			// Codex round 2 #Q1: dedup hides race-window standalones
+			// (no own state) so SPA sees the canonical parent + proxy
+			// ref. But if a partial canonicalization (parent attached
+			// proxy ref + DeleteIfUnchanged failed) is followed by a
+			// concurrent SubagentStart on the still-standalone child,
+			// the child has accumulated its own native ref. Hiding
+			// such a frame would erase that ref from projection — the
+			// parent's IsProxy ref aggregates the child as a single
+			// dot, not a fan-out. Keep stateful children visible
+			// until sweep canonicalize (PR-3.5b) migrates the refs.
+			if len(frame.Subagents) == 0 {
+				hidden++
+				continue
+			}
 		}
 		visible = append(visible, frame)
 	}

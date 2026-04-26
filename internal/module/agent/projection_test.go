@@ -172,6 +172,129 @@ func TestProjection_NoProxyRefsUnchangedBehavior(t *testing.T) {
 	}
 }
 
+// PD4 — codex round 2 #Q1 fix: projection dedup keeps a claimed standalone
+// VISIBLE when it has accumulated its own native subagent state. Hiding
+// such a frame would erase the child's native subagents from the SPA,
+// because the parent's IsProxy ref aggregates the child as a single dot
+// without that child's own subagent fan-out. The race scenario:
+//
+//   1. cc + codex SessionStart race → standalone codex created
+//   2. cc reconcile attaches IsProxy ref to cc but the DeleteIfUnchanged
+//      against the codex row fails (concurrent writer)
+//   3. A SubagentStart hook for codex arrives and writes a native ref
+//      into codex.Subagents
+//   4. Sweep canonicalize would normally repair this but until it runs,
+//      hiding codex would drop the SPA's view of the codex native ref
+//
+// Fix: dedup hide is gated on len(frame.Subagents) == 0. A claimed
+// standalone with refs of its own stays visible (sweep canonicalizePane
+// in PR-3.5b will migrate the refs and remove the parent's stale claim).
+func TestProjection_DedupKeepsClaimedStandaloneWithNativeSubagents(t *testing.T) {
+	startMetric := agentpkg.MetricProjectionDedupHidden.Value()
+	projection := buildPaneProjection("%5", []store.Frame{
+		{
+			FrameID:          "cc-1",
+			PaneID:           "%5",
+			AgentType:        "cc",
+			PID:              100,
+			ProcessStartTime: "t100",
+			StartedAt:        10,
+			Subagents: []agentpkg.SubagentRef{{
+				ID:              "proxy:codex:200:t200",
+				Type:            "codex",
+				SourcePID:       200,
+				SourceStartTime: "t200",
+				IsProxy:         true,
+			}},
+		},
+		{
+			FrameID:          "codex-standalone-with-state",
+			PaneID:           "%5",
+			AgentType:        "codex",
+			PID:              200,
+			ProcessStartTime: "t200",
+			StartedAt:        20,
+			// Codex frame has own native subagent (post-partial-state
+			// concurrent SubagentStart)
+			Subagents: []agentpkg.SubagentRef{{
+				ID:        "task-codex-1",
+				Type:      "codex",
+				StartedAt: 30,
+			}},
+		},
+	})
+
+	// Both frames must be visible: cc with its proxy claim, codex with
+	// its native task ref.
+	if projection.TopFrame == nil {
+		t.Fatalf("TopFrame is nil — codex with state should remain visible")
+	}
+	// Build a pane lookup to verify both frames are present in projection.
+	frames := []store.Frame{}
+	if projection.PrimaryFrame != nil {
+		frames = append(frames, *projection.PrimaryFrame)
+	}
+	if projection.TopFrame != nil && (projection.PrimaryFrame == nil || projection.TopFrame.FrameID != projection.PrimaryFrame.FrameID) {
+		frames = append(frames, *projection.TopFrame)
+	}
+	hasCC := false
+	hasCodex := false
+	for _, f := range frames {
+		if f.FrameID == "cc-1" {
+			hasCC = true
+		}
+		if f.FrameID == "codex-standalone-with-state" {
+			hasCodex = true
+		}
+	}
+	if !hasCC || !hasCodex {
+		t.Fatalf("projection frames hasCC=%v hasCodex=%v, want both visible — Q1 regression: codex with native ref hidden", hasCC, hasCodex)
+	}
+	delta := agentpkg.MetricProjectionDedupHidden.Value() - startMetric
+	if delta != 0 {
+		t.Fatalf("MetricProjectionDedupHidden delta = %d, want 0 (stateful child must not be hidden)", delta)
+	}
+}
+
+// PD5 — guard the existing PD1 case still hides empty-Subagents standalone.
+// Together with PD4 these establish the gate boundary at len > 0.
+func TestProjection_DedupStillHidesEmptyStandalone(t *testing.T) {
+	startMetric := agentpkg.MetricProjectionDedupHidden.Value()
+	projection := buildPaneProjection("%5", []store.Frame{
+		{
+			FrameID:          "cc-1",
+			PaneID:           "%5",
+			AgentType:        "cc",
+			PID:              100,
+			ProcessStartTime: "t100",
+			StartedAt:        10,
+			Subagents: []agentpkg.SubagentRef{{
+				ID:              "proxy:codex:200:t200",
+				Type:            "codex",
+				SourcePID:       200,
+				SourceStartTime: "t200",
+				IsProxy:         true,
+			}},
+		},
+		{
+			FrameID:          "codex-empty",
+			PaneID:           "%5",
+			AgentType:        "codex",
+			PID:              200,
+			ProcessStartTime: "t200",
+			StartedAt:        20,
+			// No own subagents — race-window standalone safe to hide
+		},
+	})
+	if projection.TopFrame == nil || projection.TopFrame.FrameID != "cc-1" {
+		t.Fatalf("TopFrame = %+v, want cc-1 (empty standalone must still be hidden)", projection.TopFrame)
+	}
+	delta := agentpkg.MetricProjectionDedupHidden.Value() - startMetric
+	if delta != 1 {
+		t.Fatalf("MetricProjectionDedupHidden delta = %d, want +1 (empty standalone hidden)", delta)
+	}
+}
+
 // IT5 — projection dedup hides a standalone frame whose proxy ref already
 // lives on the canonical parent (plan §3.1).
 func TestProjection_IT5_PartialStateHiddenByProjectionDedup(t *testing.T) {
