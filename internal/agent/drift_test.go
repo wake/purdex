@@ -219,8 +219,11 @@ func TestDriftFixtureCoversAllEvents(t *testing.T) {
 			covered[fx.eventName] = true
 		}
 		for _, spec := range installer.Events() {
+			if !agent.IsInstallableHookSpec(spec) {
+				continue
+			}
 			if !covered[spec.Name] {
-				t.Errorf("provider %q: Events() declares %q but providerFixtures has no entry (add a fixture or remove from Events())",
+				t.Errorf("provider %q: installable Events() declares %q but providerFixtures has no entry (add a fixture or make the spec non-installable)",
 					row.AgentType, spec.Name)
 			}
 		}
@@ -284,6 +287,9 @@ func TestDriftPerEventEmitsStatusMatch(t *testing.T) {
 				fixturesByEvent[fx.eventName] = append(fixturesByEvent[fx.eventName], fx)
 			}
 			for _, spec := range installer.Events() {
+				if !agent.IsInstallableHookSpec(spec) {
+					continue
+				}
 				spec := spec
 				t.Run(spec.Name, func(t *testing.T) {
 					fxs, ok := fixturesByEvent[spec.Name]

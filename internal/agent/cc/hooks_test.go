@@ -326,14 +326,14 @@ func TestCCInstallHooks_WritesAllEventsFromEventsList(t *testing.T) {
 	hooks := hooksMap(t, settings)
 
 	p := NewProvider(nil, nil, nil, nil)
-	events := p.Events()
+	events := installableCCEvents(p.Events())
 	if len(events) == 0 {
 		t.Fatal("cc Events() returned empty; installer iteration would be vacuous")
 	}
 	for _, e := range events {
 		entries, ok := hooks[e.Name]
 		if !ok {
-			t.Errorf("event %s (from Events()) not found in written hooks", e.Name)
+			t.Errorf("event %s (from installable Events()) not found in written hooks", e.Name)
 			continue
 		}
 		arr, ok := entries.([]any)
@@ -342,8 +342,18 @@ func TestCCInstallHooks_WritesAllEventsFromEventsList(t *testing.T) {
 		}
 	}
 	if len(hooks) != len(events) {
-		t.Errorf("settings.json hooks len=%d, want %d (one per Events())", len(hooks), len(events))
+		t.Errorf("settings.json hooks len=%d, want %d (one per installable Events())", len(hooks), len(events))
 	}
+}
+
+func installableCCEvents(events []agent.HookEventSpec) []agent.HookEventSpec {
+	out := make([]agent.HookEventSpec, 0, len(events))
+	for _, event := range events {
+		if agent.IsInstallableHookSpec(event) {
+			out = append(out, event)
+		}
+	}
+	return out
 }
 
 func TestCCInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
@@ -391,11 +401,33 @@ func TestCCInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 			t.Errorf("CheckHooks.Events included non-installable event %q", name)
 		}
 	}
+	if !status.Installed || !status.Managed || len(status.Issues) != 0 {
+		t.Fatalf("clean install with non-installable specs status=%+v, want installed managed with no issues", status)
+	}
+
+	settings := readSettings(t, installedPath)
+	installedHooks := hooksMap(t, settings)
+	installedHooks["IgnoredSynthetic"] = []any{makePdxEntry("/usr/local/bin/pdx", "cc", "IgnoredSynthetic")}
+	settings["hooks"] = installedHooks
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(installedPath, data, 0644); err != nil {
+		t.Fatalf("write stale installed settings: %v", err)
+	}
+	status, err = NewProvider(nil, nil, nil, nil).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks stale non-installable: %v", err)
+	}
+	if !status.Installed || !status.Managed || len(status.Issues) != 0 {
+		t.Fatalf("stale non-installable hook status=%+v, want installed managed with no issues", status)
+	}
 
 	staleSettingsPath := filepath.Join(dir, "stale-settings.json")
 	stale := map[string]any{
 		"hooks": map[string]any{
-			"IgnoredSynthetic": []any{makePdxEntry("/usr/local/bin/pdx", "cc", "IgnoredSynthetic")},
+			"IgnoredSynthetic": []any{
+				makePdxEntry("/usr/local/bin/pdx", "cc", "IgnoredSynthetic"),
+				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "/usr/bin/notify ignored"}}},
+			},
 		},
 	}
 	staleData, _ := json.MarshalIndent(stale, "", "  ")
@@ -406,10 +438,25 @@ func TestCCInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 		t.Fatalf("remove stale non-installable hook: %v", err)
 	}
 	staleHooks := hooksMap(t, readSettings(t, staleSettingsPath))
-	for _, entry := range toEntrySlice(staleHooks["IgnoredSynthetic"]) {
+	staleEntries := toEntrySlice(staleHooks["IgnoredSynthetic"])
+	if len(staleEntries) != 1 {
+		t.Fatalf("remove kept %d non-installable third-party entries, want 1", len(staleEntries))
+	}
+	for _, entry := range staleEntries {
 		if entryIsPdx(entry) {
 			t.Fatalf("remove left stale non-installable pdx entry: %#v", entry)
 		}
+	}
+	absentSettingsPath := filepath.Join(dir, "absent-settings.json")
+	if err := os.WriteFile(absentSettingsPath, []byte(`{"hooks":{}}`), 0644); err != nil {
+		t.Fatalf("write absent settings: %v", err)
+	}
+	if err := mergeClaudeHooks(absentSettingsPath, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("remove absent non-installable hook: %v", err)
+	}
+	absentHooks := hooksMap(t, readSettings(t, absentSettingsPath))
+	if _, ok := absentHooks["IgnoredSynthetic"]; ok {
+		t.Fatal("remove created absent non-installable key IgnoredSynthetic")
 	}
 }
 
@@ -443,7 +490,7 @@ func TestCCCheckHooks_ReportsAllEventsFromEventsList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckHooks: %v", err)
 	}
-	for _, e := range p.Events() {
+	for _, e := range installableCCEvents(p.Events()) {
 		if _, ok := status.Events[e.Name]; !ok {
 			t.Errorf("CheckHooks.Events missing key %q (from Events())", e.Name)
 		}

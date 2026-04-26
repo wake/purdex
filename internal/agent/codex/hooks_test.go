@@ -406,11 +406,33 @@ func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 			t.Errorf("CheckHooks.Events included non-installable event %q", name)
 		}
 	}
+	if !status.Installed || !status.Managed || len(status.Issues) != 0 {
+		t.Fatalf("clean install with non-installable specs status=%+v, want installed managed with no issues", status)
+	}
+
+	installedFile := readHooksFile(t, homeHooksPath)
+	installedHooks := hooksSection(t, installedFile)
+	installedHooks["IgnoredSynthetic"] = []any{pdxGroupEntry("IgnoredSynthetic")}
+	installedFile["hooks"] = installedHooks
+	installedData, _ := json.MarshalIndent(installedFile, "", "  ")
+	if err := os.WriteFile(homeHooksPath, installedData, 0644); err != nil {
+		t.Fatalf("write stale installed hooks: %v", err)
+	}
+	status, err = (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks stale non-installable: %v", err)
+	}
+	if !status.Installed || !status.Managed || len(status.Issues) != 0 {
+		t.Fatalf("stale non-installable hook status=%+v, want installed managed with no issues", status)
+	}
 
 	staleHooksPath := filepath.Join(dir, "stale-hooks.json")
 	stale := map[string]any{
 		"hooks": map[string]any{
-			"IgnoredSynthetic": []any{pdxGroupEntry("IgnoredSynthetic")},
+			"IgnoredSynthetic": []any{
+				pdxGroupEntry("IgnoredSynthetic"),
+				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "/usr/bin/notify ignored", "timeout": 5}}},
+			},
 		},
 	}
 	staleData, _ := json.MarshalIndent(stale, "", "  ")
@@ -421,7 +443,11 @@ func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 		t.Fatalf("remove stale non-installable hook: %v", err)
 	}
 	staleHooks := hooksSection(t, readHooksFile(t, staleHooksPath))
-	for _, groupEntry := range codexMatcherGroups(staleHooks["IgnoredSynthetic"]) {
+	staleGroups := codexMatcherGroups(staleHooks["IgnoredSynthetic"])
+	if len(staleGroups) != 1 {
+		t.Fatalf("remove kept %d non-installable third-party groups, want 1", len(staleGroups))
+	}
+	for _, groupEntry := range staleGroups {
 		group, _ := groupEntry.(map[string]any)
 		for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
 			m, _ := hookEntry.(map[string]any)
@@ -430,6 +456,17 @@ func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 				t.Fatalf("remove left stale non-installable pdx entry: %#v", hookEntry)
 			}
 		}
+	}
+	absentHooksPath := filepath.Join(dir, "absent-hooks.json")
+	if err := os.WriteFile(absentHooksPath, []byte(`{"hooks":{}}`), 0644); err != nil {
+		t.Fatalf("write absent hooks: %v", err)
+	}
+	if err := mergeCodexHooks(absentHooksPath, "/usr/local/bin/pdx", true); err != nil {
+		t.Fatalf("remove absent non-installable hook: %v", err)
+	}
+	absentHooks := hooksSection(t, readHooksFile(t, absentHooksPath))
+	if _, ok := absentHooks["IgnoredSynthetic"]; ok {
+		t.Fatal("remove created absent non-installable key IgnoredSynthetic")
 	}
 }
 

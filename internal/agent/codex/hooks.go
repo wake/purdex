@@ -195,10 +195,24 @@ func mergeCodexHooks(path, pdxPath string, remove bool) error {
 		hooks = make(map[string]any)
 	}
 	for _, spec := range codexEventSpecs {
-		if !remove && !agent.IsInstallableHookSpec(spec) {
+		installable := agent.IsInstallableHookSpec(spec)
+		if !remove && !installable {
 			continue
 		}
 		event := spec.Name
+		if remove && !installable {
+			existing, ok := hooks[event]
+			if !ok {
+				continue
+			}
+			entries := filterOutPdxCodex(existing)
+			if len(entries) == 0 {
+				delete(hooks, event)
+			} else {
+				hooks[event] = entries
+			}
+			continue
+		}
 		entries := filterOutPdxCodex(hooks[event])
 		if !remove {
 			entries = append(entries, map[string]any{
