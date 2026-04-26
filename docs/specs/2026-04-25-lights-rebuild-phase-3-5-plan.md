@@ -1,8 +1,12 @@
-# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v6 / Hybrid B+)
+# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v7 / Hybrid B+)
 
 Baseline：`1.0.0-alpha.224`（main @ `75b4d166`）。
 Worktree：`.claude/worktrees/lights-phase-3-5`（branch `worktree-lights-phase-3-5`）。
 Branch base：`origin/main`（與 Phase 3 PR #638 並行；merge 順序 Phase 3 → rebase 3.5 → 一次 bump alpha.225）。
+
+**v6 → v7 由 codex round 6 收斂**（§13；1 high doc-gate finding 採納）：
+
+- **K1 high** — §8 ship gate 寫「IT1-IT16 全綠」但 v5/v6 加了 IT17-IT20 沒同步，實作者照原 gate 可跳過 IT20（J1 regression test）→ race 可悄悄回歸；同時 IT17 描述沿用 v5 已被 v6 移除的「snapshot + reset + re-attach」語意。**v7 修法**：§8 改 IT1-IT20 全綠 + 更新 IT17 描述為 filter-merge-retry 語意。**設計層面六輪後完整收斂**（round 6 無任何架構/race/邏輯 finding）。
 
 **v5 → v6 由 codex round 5 收斂**（§13；1 high finding 採納）：
 
@@ -609,7 +613,7 @@ var (
 | IT14 | `sweep_prune_dead_proxy_ref_when_pid_reused` (v4 新) | cc.Subagents 含 codex proxy（SourcePID alive 但 actualStart != ref.SourceStartTime — PID reuse）；sweep | cc.Subagents 不含 codex proxy（identity mismatch 視為 dead）|
 | IT15 | `partial_metric_increments_on_partial_state` (v4 新) | mock DeleteIfUnchanged 持續失敗；reconcile 走 partial path | metricPartialCanonicalizationCreated 對應 +1；trace decision 仍 `created_frame`（無 partial reason）|
 | IT16 | `projection_dedup_metric_increments` (v4 新) | DB 多個 partial state；多 paneID call buildPaneProjection | metricProjectionDedupHidden 累加 |
-| IT17 | `existing_frame_session_start_preserves_live_proxy_refs` (v5 I1) | (a) cc frame 已存在且 cc.Subagents 含 codex proxy ref（live + identity verified）；(b) cc 又收 SessionStart（existing path）→ pre-reset snapshot + reset + re-attach；(c) 之後 codex 進程仍 alive，無新 SessionStart | cc.Subagents 仍含 codex proxy ref（StartedAt 刷新到本次 broadcastTs）；projection dedup 也仍工作 |
+| IT17 | `existing_frame_session_start_preserves_live_proxy_refs` (v5 I1 / v6 filter-merge) | (a) cc frame 已存在且 cc.Subagents 含 codex proxy ref（live + identity verified）；(b) cc 又收 SessionStart（existing path）→ filter-merge-retry pattern：filter 通過 identity gate 的 IsProxy 直接寫進 UpsertIfUnchanged；(c) 之後 codex 進程仍 alive，無新 SessionStart | cc.Subagents 仍含 codex proxy ref（subagents_json 含此 ref，新 LastSeenAt = broadcastTs）；projection dedup 仍工作 |
 | IT18 | `existing_frame_session_start_skips_dead_proxy_during_reset` (v5 I1 negative) | (a) cc frame 已存在含 codex proxy ref，但 codex 進程已死（isPidAliveFn = false）；(b) cc SessionStart | reset 後 cc.Subagents 不含該 dead proxy ref（preserve 不通過 identity gate）|
 | IT19 | `existing_frame_session_start_skips_pid_reused_proxy` (v5 I1 negative) | (a) cc frame 含 codex proxy；(b) codex PID 已被 OS reuse（actualStart != ref.SourceStartTime）；(c) cc SessionStart | reset 後不 preserve 該 stale proxy（identity 不過 gate）|
 | IT20 | `existing_frame_session_start_preserves_concurrently_attached_proxy` (v6 J1) | (a) cc frame 已存在 + 一個 codex proxy ref；(b) cc SessionStart filter-merge attempt 1 — 同時 mock UpsertIfUnchanged 第 1 次回 conflict（模擬並發 child SessionStart 在 attempt 1 之間 attach 第二個 opencode proxy 並刪除其 standalone）；(c) attempt 2 reload 看到兩個 IsProxy ref，filter 通過 gate，UpsertIfUnchanged 成功 | cc.Subagents 含 codex 與 opencode 兩個 proxy ref；無 ref 在 race window 中遺失 |
@@ -821,7 +825,8 @@ func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
 | 3 | `docs: Phase 3.5 plan v3 — sweep canonicalize + identity gate` ✅ `148a2309` |
 | 4 | `docs: Phase 3.5 plan v4 — Hybrid B+ (consulting-driven redesign)` ✅ `a338f6d3` |
 | 5 | `docs: Phase 3.5 plan v5 — preserve live proxies + honest metrics` ✅ `285599e4` |
-| 5b | `docs: Phase 3.5 plan v6 — filter-merge-retry (codex round 5 J1 fix)` 此檔 |
+| 5b | `docs: Phase 3.5 plan v6 — filter-merge-retry (codex round 5 J1 fix)` ✅ `d47d367d` |
+| 5c | `docs: Phase 3.5 plan v7 — ship gate IT1-IT20 + IT17 wording (codex round 6 K1 fix)` 此檔 |
 | 6 | `feat(agent): metrics counters for phase 3.5 canonicalization observability` | metric 4 個 + import 註冊（無 endpoint） |
 | 7 | `feat(agent): pidIsAncestorOfWithCap + canonicalizeDescendantsAfterUpsert with identity gate (unwired)` | helper + RC1-RC5 unit |
 | 8 | `feat(agent): reconcileCreatedFrameAsProxy best-effort (unwired)` | reconcile helper（無 rollback）|
@@ -859,7 +864,7 @@ v6 LOC 比 v5（~1595-1695）+25：filter-merge-retry +10 行（取代三步法�
 
 ## 8. 驗收 / Ship 條件
 
-- 所有 IT1-IT16 + RC1-RC5 + PD1-PD3 + 既有測試全綠
+- 所有 **IT1-IT20** + RC1-RC5 + PD1-PD3 + 既有測試全綠（IT17-IT20 為 v5/v6 race-fix regression guards，不可跳過 — codex round 6 K1）
 - `go build/vet/test ./...` 23 packages 全綠
 - SPA 無變更
 - 委派 codex round 4 review 收斂；採納或合理 deferred all findings
@@ -934,4 +939,4 @@ PR 跑過 codex round 4 review 收斂後：
 | Side B consulting | task-moeuqbnn-jart97 | (adversarial argument) | 證據壓倒：sweep 2s 不是 1h / agent_frames 是 ephemeral / projection 是 user-visible 邊界 / SessionEnd 漏 cleanup proxy | **採納為 v4 核心**（Hybrid B+）|
 | Plan v4 round 4（adversarial）| inline | needs-attention | I1 high existing-frame reset 清掉 live proxy / I2 medium SLO 不可量測 | v5 全採納（§2.2.2 preserve live proxies + IT17/IT18/IT19；§2.6 移除 SLO 聲明，改三 evidence point；§0.2 設計論證重整）|
 | Plan v5 round 5（adversarial）| inline | needs-attention | J1 high snapshot/reset/re-attach 三步非原子，並發 attach 在 race window 內被抹除 | v6 採納（§2.2.2 改為 filter-merge-retry pattern，取代三步法；新 IT20 守規）|
-| Plan v6 round 6 | (待執行) | (pending) | — | — |
+| Plan v6 round 6（adversarial）| review-mof9wjzs-7q8wrs | needs-attention | K1 high §8 ship gate 漏列 IT17-IT20（含 J1 regression test）+ IT17 描述沿用 v5 已移除路徑 | v7 採納（純文檔修；§8 改 IT1-IT20 全綠 + IT17 描述更新）。**設計層面六輪後完整收斂 — round 6 無架構/race/邏輯 finding**；依 feedback_codex_review_termination.md 進實作 |
