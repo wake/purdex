@@ -1625,6 +1625,113 @@ func TestSweep_CanonicalizePartialWhenAttachFails(t *testing.T) {
 	}
 }
 
+// IT10q (review F1 — round 2 attacker) — ancestor dies between
+// findCanonicalAncestor's identity gate and DeleteIfUnchanged. Without
+// the post-attach revalidation, sweep would attach codex IsProxy on
+// cc (succeeds), then delete the live codex standalone row, leaving
+// the live codex process with NO DB representation until its next
+// hook event (the dead cc row is cleared on the next sweep tick along
+// with its Subagents, severing the only link).
+//
+// Race trick: count isPidAliveFn(100) calls. Without F1 fix, exactly
+// three calls happen — sweepOnce survivor (1), candidate=cc gate (2),
+// findCanonicalAncestor when iterating codex (3). With F1 fix, the
+// post-attach revalidation adds a 4th call. Returning false on the
+// 4th call simulates cc dying after attach succeeded but before the
+// candidate row was deleted; sweep must skip delete and leave the
+// codex row standing.
+func TestSweep_CanonicalizeSkipsDeleteWhenAncestorDiesPostAttach(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
+		ProcessStartTime: "t100", Status: agentpkg.StatusIdle,
+		StartedAt: 50, LastSeenAt: 50, Verified: true,
+	}); err != nil {
+		t.Fatalf("Upsert cc: %v", err)
+	}
+	codex, err := m.frames.Upsert(store.Frame{
+		PaneID: "%5", AgentType: "codex", PID: 200, PPID: 100,
+		ProcessStartTime: "t200", Status: agentpkg.StatusRunning,
+		StartedAt: 51, LastSeenAt: 51, Verified: true,
+	})
+	if err != nil {
+		t.Fatalf("Upsert codex: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origInfo := readProcessInfoFn
+	origNow := nowFn
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		readProcessInfoFn = origInfo
+		nowFn = origNow
+	})
+
+	pid100AliveCalls := 0
+	isPidAliveFn = func(pid int) bool {
+		switch pid {
+		case 100:
+			pid100AliveCalls++
+			// First three calls (survivor pass + cc-as-candidate gate +
+			// findCanonicalAncestor for codex) say alive. The 4th call
+			// — only reachable with the F1 post-attach revalidation —
+			// reports cc as dead.
+			return pid100AliveCalls < 4
+		case 200:
+			return true
+		}
+		return false
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		}
+		return "", errStub("ps unknown pid")
+	}
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		ppid := 1
+		if pid == 200 {
+			ppid = 100
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: ppid}, nil
+	}
+	nowFn = func() time.Time { return time.Unix(0, 100) }
+
+	startSweep := agentpkg.MetricSweepCanonicalized.Value()
+	startPartial := agentpkg.MetricPartialCanonicalizationCreated.Value()
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	var ccRow, codexRow *store.Frame
+	for i := range frames {
+		switch frames[i].AgentType {
+		case "cc":
+			ccRow = &frames[i]
+		case "codex":
+			codexRow = &frames[i]
+		}
+	}
+	if codexRow == nil || codexRow.FrameID != codex.FrameID {
+		t.Fatalf("codex row missing or replaced; want preserved live row, got frames = %+v", frames)
+	}
+	if ccRow == nil || len(ccRow.Subagents) != 1 || !ccRow.Subagents[0].IsProxy || ccRow.Subagents[0].SourcePID != 200 {
+		t.Fatalf("cc row = %+v, want exactly 1 IsProxy ref attached pre-revalidation", ccRow)
+	}
+	if delta := agentpkg.MetricSweepCanonicalized.Value() - startSweep; delta != 0 {
+		t.Fatalf("MetricSweepCanonicalized delta = %d, want 0 (delete skipped because ancestor died)", delta)
+	}
+	if delta := agentpkg.MetricPartialCanonicalizationCreated.Value() - startPartial; delta != 1 {
+		t.Fatalf("MetricPartialCanonicalizationCreated delta = %d, want 1 (deliberate partial — ancestor died post-attach)", delta)
+	}
+}
+
 // IT10i — canonicalize → prune ordering in the same tick. cc has a
 // stale codex IsProxy ref AND a live opencode descendant standalone.
 // Same tick: canonicalize attaches opencode IsProxy → prune detaches

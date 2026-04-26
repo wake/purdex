@@ -211,6 +211,36 @@ func (m *Module) canonicalizePane(paneID string, broadcastTs int64) {
 		if aerr != nil || !attached {
 			continue
 		}
+		// Review F1 (round 2 attacker) — revalidate ancestor identity
+		// AFTER attach, BEFORE delete. findCanonicalAncestor only
+		// proves the ancestor was live at classification time; the
+		// ancestor PID may die between then and this point. Without
+		// this gate, we would attach a proxy ref onto a dead parent
+		// and then delete the live child row, severing the only DB
+		// link to the live child until its next hook event (the dead
+		// parent gets cleared on the next sweep tick along with all
+		// its Subagents).
+		//
+		// On revalidation failure: leave the proxy ref attached
+		// (idempotent next tick if the parent is gone; harmless if
+		// somehow still alive) and skip delete. The standalone child
+		// row stays and continues to serve until either it is
+		// canonicalized into a healthier ancestor next tick or the
+		// parent is cleared and the ref vanishes with it. Mirrors the
+		// "no rollback on partial" Hybrid B+ rule.
+		if !isPidAliveFn(parentStored.PID) {
+			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
+			canonicalizedAny = true
+			anyAncestor = parentStored
+			continue
+		}
+		actualAncestorStart, ancestorErr := processStartTimeFn(parentStored.PID)
+		if ancestorErr != nil || actualAncestorStart != parentStored.ProcessStartTime {
+			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
+			canonicalizedAny = true
+			anyAncestor = parentStored
+			continue
+		}
 		deleted, _ := m.frames.DeleteIfUnchanged(candidate.FrameID, candidate.LastSeenAt)
 		if !deleted {
 			// Partial — concurrent refresh / hot-path won the race.
