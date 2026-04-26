@@ -1,5 +1,49 @@
 # Changelog
 
+## [1.0.0-alpha.227] - 2026-04-26
+
+### Feat(agent): Phase 3.5b — sweep canonicalize defense-in-depth (#650)
+
+Sweep 加第三 pass `canonicalizePane`，把 PR-3.5a hot-path 漏網的 standalone descendant frame 在 2s 內 fold 進 cross-type ancestor proxy ref，補完 DB-level eventual consistency。Defense-in-depth — user-visible correctness 已由 PR-3.5a projection dedup 保證；3.5b 把 DB 層 partial state 的存活時間從「等 SessionEnd / 1h idle / pid_dead」縮到「下次 sweep tick ≤ 2s」。13 commits（4 plan v1→v4 + 5 impl + 4 review fix）；4 plan rounds + 5 PR rounds 共 9 輪 codex review 收斂。
+
+**Hybrid B+ 四層架構完成**
+
+| 層 | 職責 | 落地 |
+|---|---|---|
+| Hot path | best-effort canonicalization；失敗不 retry/rollback | 3.5a |
+| Projection | 隱藏 partial（**唯一 strongly consistent 邊界**） | 3.5a |
+| **Sweep** | **bounded-time recovery（2s）** | 3.5a prune + **3.5b canonicalize** |
+| Observability | partial 發生率 expvar | 3.5a + 3.5b 接 `MetricSweepCanonicalized` |
+
+**新增 / 改動**
+
+- `internal/module/agent/frame_ops.go`：抽出 `candidateHasOwnedState(candidate)` 共享 helper（mirror hot-path inline block 1098-1137；pure refactor 0 行為變更）
+- `internal/module/agent/sweep.go`：
+  - `canonicalizePane(paneID, broadcastTs)` — 四 case branching：silent-skip（parent 已有 ref + owned state）/ delete-only（parent 已有 ref + 無 owned state）/ attach-only F2 recovery（parent 缺 ref + owned state）/ attach+delete 主路徑
+  - `findCanonicalAncestor(candidate, framesByPID)` — PPID 鏈走 `proxyMaxDepth=5` 找 cross-type live identity-verified ancestor frame
+  - `broadcastProxyCanonicalized` — per-pane broadcast pattern
+  - `sweepOnce` 第三 pass：每 pane `canonicalizePane` 跑在 `pruneDeadProxyRefs` 之前
+  - **F1+F4 hoisted ancestor revalidation** — `isPidAliveFn` + `processStartTimeFn` 在 DeleteIfUnchanged 前共同前置點重驗，覆蓋 attach-then-delete 與 delete-only 兩條路徑
+  - **F2 owned-state attach-only recovery** — 在 parent 缺 proxy ref 且 child 有 owned state 時 attach（projection_dedup 可隱藏 + merge），不刪 row 保留 native state
+- `internal/agent/metrics.go`：`MetricSweepCanonicalized` 接上 caller（PR-3.5a 已宣告但無 caller）
+
+**測試**
+
+- 19 個 integration tests（IT10 + IT10b-IT10s）涵蓋 race interleavings、identity gates、partial recovery 路徑、F1/F2/F4 closure regression guards
+- 11 個 unit tests（RC6-RC11 `findCanonicalAncestor` + RC12-RC16 `candidateHasOwnedState`）
+- 23 packages 全綠；無 skip
+
+**Codex review trail**
+
+- Plan：R1 high (hasOwnedState 缺) → v2 / R2 high (IT10n 不精準) → v3 / R3 approve
+- PR：R1 standard clean / R2 三角度 3 findings (F1 attacker high + F2 defender high + F3 file-health medium) / R3 closure F4 high (delete-only bypass) / R4 closure 1 medium (plan drift) / R5 approve
+- Fix commits：F1 → `3c4ebd07` / F2 → `38eef1a6` / F3 → `a2aafdf2` / F4 → `f46f616c` / Plan v4 → `d8c454cf`
+- 多輪 high 嚴重性遞減符合 `feedback_codex_review_termination.md` 終止條件
+
+**Plan**
+
+`docs/specs/2026-04-26-lights-rebuild-phase-3-5b-plan.md` v4（含完整 review trail）
+
 ## [1.0.0-alpha.226] - 2026-04-26
 
 ### Feat(agent): Phase 3 — daemon restart frame recovery + no_parent_fallback (#638)
