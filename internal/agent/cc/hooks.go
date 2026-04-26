@@ -123,12 +123,9 @@ func mergeClaudeHooks(path, pdxPath string, remove bool) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
-	var hooks map[string]any
-	if h, ok := settings["hooks"]; ok {
-		hooks, _ = h.(map[string]any)
-	}
-	if hooks == nil {
-		hooks = make(map[string]any)
+	hooks, err := claudeHooksMapForMerge(settings)
+	if err != nil {
+		return err
 	}
 	if remove {
 		for event, existing := range hooks {
@@ -162,6 +159,18 @@ func mergeClaudeHooks(path, pdxPath string, remove bool) error {
 	}
 	settings["hooks"] = hooks
 	return writeClaudeSettings(path, settings)
+}
+
+func claudeHooksMapForMerge(settings map[string]any) (map[string]any, error) {
+	h, ok := settings["hooks"]
+	if !ok || h == nil {
+		return make(map[string]any), nil
+	}
+	hooks, ok := h.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("claude hooks root has unsupported value shape")
+	}
+	return hooks, nil
 }
 
 func validateClaudeInstallableHookShapes(hooks map[string]any) error {

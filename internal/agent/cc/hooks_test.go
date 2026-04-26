@@ -2,6 +2,7 @@ package cc
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -319,6 +320,27 @@ func TestMergeClaudeHooks_UnsupportedInstallableHookShapeReturnsError(t *testing
 	got, _ := os.ReadFile(path)
 	if string(got) != string(originalSettings) {
 		t.Fatalf("settings changed after unsupported hook shape; got %q", got)
+	}
+}
+
+func TestMergeClaudeHooks_UnsupportedHooksRootReturnsError(t *testing.T) {
+	for _, remove := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remove=%v", remove), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "settings.json")
+			originalSettings := []byte(`{"hooks":"custom-root"}`)
+			if err := os.WriteFile(path, originalSettings, 0644); err != nil {
+				t.Fatalf("write settings: %v", err)
+			}
+
+			if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", remove); err == nil {
+				t.Fatal("mergeClaudeHooks succeeded with unsupported hooks root shape")
+			}
+			got, _ := os.ReadFile(path)
+			if string(got) != string(originalSettings) {
+				t.Fatalf("settings changed after unsupported hooks root; got %q", got)
+			}
+		})
 	}
 }
 

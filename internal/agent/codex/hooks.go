@@ -118,7 +118,9 @@ func installCodexHooks(configPath, hooksPath, pdxPath string) error {
 		return err
 	}
 	setCodexHooksFeature(config)
-	mergeCodexHooksFile(hooksFile, pdxPath, false)
+	if err := mergeCodexHooksFile(hooksFile, pdxPath, false); err != nil {
+		return err
+	}
 	if err := writeCodexHooksFile(hooksPath, hooksFile); err != nil {
 		return err
 	}
@@ -214,14 +216,16 @@ func mergeCodexHooks(path, pdxPath string, remove bool) error {
 			return err
 		}
 	}
-	mergeCodexHooksFile(hooksFile, pdxPath, remove)
+	if err := mergeCodexHooksFile(hooksFile, pdxPath, remove); err != nil {
+		return err
+	}
 	return writeCodexHooksFile(path, hooksFile)
 }
 
 func validateCodexInstallableHookShapes(hooksFile map[string]any) error {
-	hooks, _ := hooksFile["hooks"].(map[string]any)
-	if hooks == nil {
-		return nil
+	hooks, err := codexHooksMapForMerge(hooksFile)
+	if err != nil {
+		return err
 	}
 	for _, spec := range codexEventSpecs {
 		if !agent.IsInstallableHookSpec(spec) {
@@ -238,13 +242,22 @@ func validateCodexInstallableHookShapes(hooksFile map[string]any) error {
 	return nil
 }
 
-func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) {
-	var hooks map[string]any
-	if h, ok := hooksFile["hooks"]; ok {
-		hooks, _ = h.(map[string]any)
+func codexHooksMapForMerge(hooksFile map[string]any) (map[string]any, error) {
+	h, ok := hooksFile["hooks"]
+	if !ok || h == nil {
+		return make(map[string]any), nil
 	}
-	if hooks == nil {
-		hooks = make(map[string]any)
+	hooks, ok := h.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("codex hooks root has unsupported value shape")
+	}
+	return hooks, nil
+}
+
+func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) error {
+	hooks, err := codexHooksMapForMerge(hooksFile)
+	if err != nil {
+		return err
 	}
 	if remove {
 		for event, existing := range hooks {
@@ -259,7 +272,7 @@ func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) 
 			}
 		}
 		hooksFile["hooks"] = hooks
-		return
+		return nil
 	}
 	for _, spec := range codexEventSpecs {
 		installable := agent.IsInstallableHookSpec(spec)
@@ -280,6 +293,7 @@ func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) 
 		hooks[event] = entries
 	}
 	hooksFile["hooks"] = hooks
+	return nil
 
 }
 

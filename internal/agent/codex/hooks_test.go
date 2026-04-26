@@ -526,6 +526,35 @@ func TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite(t *testing.T) {
 			t.Fatalf("files changed after unsupported hook shape; config=%q hooks=%q", gotConfig, gotHooks)
 		}
 	})
+
+	t.Run("unsupported hooks root leaves files unchanged", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		configPath := filepath.Join(home, ".codex", "config.toml")
+		hooksPath := filepath.Join(home, ".codex", "hooks.json")
+		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		originalConfig := []byte("model = \"gpt-5\"\n")
+		originalHooks := []byte(`{"hooks":"custom-root"}`)
+		if err := os.WriteFile(configPath, originalConfig, 0644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		if err := os.WriteFile(hooksPath, originalHooks, 0644); err != nil {
+			t.Fatalf("write hooks: %v", err)
+		}
+		if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("InstallHooks succeeded with unsupported hooks root shape")
+		}
+		if err := (&Provider{}).RemoveHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("RemoveHooks succeeded with unsupported hooks root shape")
+		}
+		gotConfig, _ := os.ReadFile(configPath)
+		gotHooks, _ := os.ReadFile(hooksPath)
+		if string(gotConfig) != string(originalConfig) || string(gotHooks) != string(originalHooks) {
+			t.Fatalf("files changed after unsupported hooks root; config=%q hooks=%q", gotConfig, gotHooks)
+		}
+	})
 }
 
 func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
