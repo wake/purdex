@@ -1,9 +1,17 @@
-# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v7 / Hybrid B+)
+# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v8 / Hybrid B+)
 
 Baseline：`1.0.0-alpha.225`（main @ `92fb5d05`，Phase 3 已 merged）。
 Worktree：`.claude/worktrees/lights-phase-3-5`（branch `worktree-lights-phase-3-5`，已 rebase 上 `92fb5d05`）。
 Phase 3 PR #638：✅ squash-merged at `92fb5d05`（2026-04-26）。
 Bump 策略：本 PR 系列 + Phase 3 一起 bump **alpha.226**（注意：alpha.225 已被 parallel session 為 SPA tooltip 功能 PR #643 占用，與 Phase 3 無關）。
+
+**v7 → v8 由 PR-3.5a 兩輪 codex review 收斂**（§13；5 finding 採納 / 1 deferred 開 follow-up）：
+
+- **M4 medium / round PR-2 attack** — `reconcileCreatedFrameAsProxy` partial 路徑回 `canonicalized=false` 走 `created_frame` trace（child 視角），但 projection_dedup 顯示 parent + proxy ref → trace ≠ projection。**v8 修法**：partial 仍回 `canonicalized=true`，caller 走 `updated_frame / post_upsert_canonicalization_self` 與 projection 一致；metric 仍 +1。
+- **M3 high / round PR-2 attack** — filter-merge-retry「只保留 IsProxy」filter 在 conflict reload 時把並發 SubagentStart attach 的 native ref 一併 drop。**v8 修法**：改 prune-stale-IsProxy 語意；attempt 0 仍 reset baseline native（SessionStart 主語意），attempt N>0 透過 `prevWrittenNativeIDs` 區分 baseline vs concurrent attach，concurrent 保留 baseline 清掉。
+- **M2 high / round PR-2 attack** — `canonicalizeDescendantsAfterUpsert` scan 直接 fold 任何 cross-type live PPID-descendant；若 candidate 已累積 native subagent / 自己 IsProxy ref，DELETE 會靜默吞掉。**v8 修法**：scan 跳過 `len(candidate.Subagents) > 0` 的 candidate（race-window standalone 必為空）。
+- **L1 high / round PR-2 attack** — SessionEnd 走 delete-first + best-effort detach；detach 失敗（storage / retry exhaust / daemon crash 中段）→ child 沒了 + parent 留 stale proxy ref → 永久 lit dot；PR-3.5a 無 sweep prune 兜底。**v8 修法**：(a) SessionEnd 改 detach-first + propagate（detach error 不 delete）；(b) `pruneDeadProxyRefs` 從 PR-3.5b 移進 PR-3.5a sweep.go（sweepOnce 第三 pass）。
+- **N1 high / round PR-2 attack（deferred）** — projection_dedup 信任 IsProxy claim 隱藏 standalone；codex 擔心 PID 重用 race。實作已用 (PID, StartTime) identity 比對防 PID reuse（startTime 是 jiffies precision 不會 collision），且 dedup 在 hot-path read 加 syscall 影響 perf。**不修，open follow-up**：PR-3.5b `pruneDeadProxyRefs` + 本 PR sweep 兜底已涵蓋 90% 場景；hot-path liveness 升級交給 metric 觸發。
 
 **v6 → v7 由 codex round 6 收斂**（§13；1 high doc-gate finding 採納）：
 
@@ -942,6 +950,8 @@ PR-3.5a 跑過兩輪 codex review 收斂後：
 | Plan v4 round 4（adversarial）| inline | needs-attention | I1 high existing-frame reset 清掉 live proxy / I2 medium SLO 不可量測 | v5 全採納（§2.2.2 preserve live proxies + IT17/IT18/IT19；§2.6 移除 SLO 聲明，改三 evidence point；§0.2 設計論證重整）|
 | Plan v5 round 5（adversarial）| inline | needs-attention | J1 high snapshot/reset/re-attach 三步非原子，並發 attach 在 race window 內被抹除 | v6 採納（§2.2.2 改為 filter-merge-retry pattern，取代三步法；新 IT20 守規）|
 | Plan v6 round 6（adversarial）| review-mof9wjzs-7q8wrs | needs-attention | K1 high §8 ship gate 漏列 IT17-IT20（含 J1 regression test）+ IT17 描述沿用 v5 已移除路徑 | v7 採納（純文檔修；§8 改 IT1-IT20 全綠 + IT17 描述更新）。**設計層面六輪後完整收斂 — round 6 無架構/race/邏輯 finding**；依 feedback_codex_review_termination.md 進實作 |
+| PR-3.5a code review round 1（standard）| mofcixya-889fj5 | (review) | 標準 cross-model 二意見 | findings 併入 round 2 彙整 |
+| PR-3.5a code review round 2（adversarial 三視角）| attack mofcj6pe-pxh09c / defend mofcjln6-f0hq8x / health mofcjerd-sm4p6m | needs-attention | M4 medium reconcile partial trace 反 projection / M3 high filter-merge 丟 native concurrent / M2 high descendant scan fold 有狀態 candidate / L1 high SessionEnd delete-first 留 orphan / N1 high dedup 信任 IsProxy（過嚴 deferred）| v8 採納 4/5（M4/M3/M2/L1 fix + sweep prune 從 PR-3.5b 移進 PR-3.5a）；N1 deferred 開 follow-up issue |
 
 ---
 
@@ -949,28 +959,29 @@ PR-3.5a 跑過兩輪 codex review 收斂後：
 
 v7 規模相對 kickoff 原始設計擴張 ~7-10 倍（150-250 LOC → 1620-1720 LOC），單 PR review 負擔過大。設計分層天然可拆 — 依 **user-visible correctness 邊界** 切兩 PR：
 
-### PR-3.5a「Cold-start race fix + projection dedup + SessionEnd cleanup」
+### PR-3.5a「Cold-start race fix + projection dedup + SessionEnd cleanup + sweep prune」
 
-**目標**：消除 user-visible incorrectness。SPA 永遠看到正確的 frame collapse（並發冷啟動下也是）；codex SessionEnd 不留 orphan lit dot。**獨立可 ship，無需依賴 PR-3.5b**。
+**目標**：消除 user-visible incorrectness。SPA 永遠看到正確的 frame collapse（並發冷啟動下也是）；codex SessionEnd 不留 orphan lit dot；sweep eventual-consistency 兜底 SessionEnd 漏網場景。**獨立可 ship，無需依賴 PR-3.5b**。
 
-**範圍**（commits 6/7/8/9/10/11）：
+**範圍**（commits 6/7/8/9/10/11/12 + v8 fix commits）：
 
 - `internal/agent/metrics.go`（新檔）— 4 個 expvar counter
 - `internal/module/agent/frame_ops.go`：
   - `pidIsAncestorOfWithCap` helper
-  - `canonicalizeDescendantsAfterUpsert`（含 identity gate）
-  - `reconcileCreatedFrameAsProxy`（best-effort，無 rollback）
+  - `canonicalizeDescendantsAfterUpsert`（含 identity gate **+ v8 M2 candidate-with-subagents skip**）
+  - `reconcileCreatedFrameAsProxy`（best-effort，無 rollback；**v8 M4 partial 回 canonicalized=true**）
   - applyFrameEvent §2.2.1 接線（new-frame post-Upsert）
-  - applyFrameEvent §2.2.2 接線（existing-frame **filter-merge-retry**）
-  - applyFrameEvent SessionEnd hot-path proxy cleanup（§2.3）
+  - applyFrameEvent §2.2.2 接線（existing-frame **filter-merge-retry + v8 M3 prune-stale-IsProxy + prevWrittenNativeIDs**）
+  - applyFrameEvent SessionEnd **detach-first + propagate**（§2.3 + v8 L1）
 - `internal/module/agent/projection.go`：`buildPaneProjection` dedup（§2.4）
+- `internal/module/agent/sweep.go`：`pruneDeadProxyRefs` + sweepOnce 第三 pass（§4.3，**v8 L1 從 PR-3.5b 移進 PR-3.5a**）
 
 **測試**（必跑 ship gate）：
 
 - Unit：RC1-RC5 + PD1-PD3
-- Integration：IT1-IT9, IT11, IT12, IT15-IT20（**IT4 + IT5 + IT12 + IT17/IT18/IT19/IT20 是 race-fix regression guards 不可跳**）
+- Integration：IT1-IT9, IT11, IT12, IT13, IT13b, IT14, IT15-IT22（**IT4 + IT5 + IT12 + IT13/IT14 + IT17-IT22 是 race-fix regression guards 不可跳**）
 
-**LOC 預估**：~850-950 行 net（含 ~17 個 IT）
+**LOC 預估**：~1100-1200 行 net（含 ~21 個 IT；v8 比 v7 PR-3.5a 多 ~250 LOC：sweep prune + IT13/IT13b/IT14/IT21/IT22）
 
 **為什麼 SessionEnd cleanup + projection dedup 必須在 PR-3.5a 而不能延到 3.5b**：
 
@@ -978,21 +989,20 @@ v7 規模相對 kickoff 原始設計擴張 ~7-10 倍（150-250 LOC → 1620-1720
 - SessionEnd cleanup 處理「source 死後 parent 仍含 proxy ref → 永久 lit dot」 — projection_dedup 對此**無能為力**（沒有 standalone 可 hide），必須走 detach
 - 兩者缺一，PR-3.5a 出貨就有 user-visible bug
 
-### PR-3.5b「Sweep defensive layer」
+### PR-3.5b「Sweep canonicalize layer」
 
-**目標**：背景 eventual-consistency repair，補 PR-3.5a hot path 漏網的 partial state（DeleteIfUnchanged failure / existing-descendant 漏網 / daemon crash 中 SessionEnd 等）。**Defense-in-depth；user-visible correctness 已由 3.5a 保證**，3.5b 是穩健性升級。
+**目標**：背景 eventual-consistency repair，補 PR-3.5a hot path 漏網的 partial state（DeleteIfUnchanged failure / existing-descendant 漏網等）。**Defense-in-depth；user-visible correctness 已由 3.5a 保證 + sweep prune 已在 3.5a**，3.5b 是穩健性升級。
 
-**範圍**（commits 12/13）：
+**範圍**（commit 12 — sweep canonicalize；prune 在 v8 L1 修法中已移進 3.5a）：
 
 - `internal/module/agent/sweep.go`：
   - `canonicalizePane`（含 candidate identity gate，§4.2）
   - `findCanonicalAncestor`
-  - `pruneDeadProxyRefs`（§4.3）
-  - sweepOnce 加第三 pass
+  - sweepOnce 加 canonicalize pass
 
-**測試**：Integration IT10, IT13, IT14 + sweep-specific tests
+**測試**：Integration IT10 + sweep-specific tests
 
-**LOC 預估**：~300-400 行 net
+**LOC 預估**：~150-250 行 net（v8 比 v7 PR-3.5b 少 ~100-150 LOC：prune + IT13/IT14 已移進 PR-3.5a）
 
 **Ship 時機選擇**：
 - 立即接 3.5a 後出貨（保守）
@@ -1038,14 +1048,15 @@ v7 規模相對 kickoff 原始設計擴張 ~7-10 倍（150-250 LOC → 1620-1720
 | 10 | SessionEnd hot-path proxy cleanup | 3.5a |
 | 11 | buildPaneProjection dedup | 3.5a |
 | 12 | sweep canonicalizePane | 3.5b |
-| 13 | sweep pruneDeadProxyRefs | 3.5b |
-| 14 | integration tests | **拆**：IT1-9/11/12/15-20 進 3.5a；IT10/13/14 進 3.5b |
+| 13 | sweep pruneDeadProxyRefs | **3.5a**（v8 L1 fix；從 3.5b 移進）|
+| 14 | integration tests | **拆**：IT1-9/11/12/13/13b/14/15-22 進 3.5a；IT10 進 3.5b |
+| C8-C12 | v8 fix commits（M4/M3/M2/L1 + sweep prune）| 3.5a |
 
 §8 ship gate 對應 PR：
 
-- **PR-3.5a ship gate**：IT1-IT9, IT11, IT12, IT15-IT20 + RC1-RC5 + PD1-PD3 全綠 + go build/vet/test 全綠 + SPA 無變更 + codex 兩輪 review 收斂
-- **PR-3.5b ship gate**：IT10, IT13, IT14 + sweep-specific tests 全綠 + 不 regress 3.5a 既有測試
+- **PR-3.5a ship gate**：IT1-IT9, IT11, IT12, IT13, IT13b, IT14, IT15-IT22 + RC1-RC5 + PD1-PD3 全綠 + go build/vet/test 全綠 + SPA 無變更 + codex 兩輪 review 收斂
+- **PR-3.5b ship gate**：IT10 + sweep-specific tests 全綠 + 不 regress 3.5a 既有測試
 
 §7 LOC 預估維持（總和），但分 PR：
-- 3.5a：~850-950 LOC + plan docs
-- 3.5b：~300-400 LOC
+- 3.5a：~1100-1200 LOC + plan docs（v8 含 sweep prune + 5 IT 新增）
+- 3.5b：~150-250 LOC（v8 只剩 canonicalizePane）
