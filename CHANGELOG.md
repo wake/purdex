@@ -1,5 +1,52 @@
 # Changelog
 
+## [1.0.0-alpha.226] - 2026-04-26
+
+### Feat(agent): Phase 3 — daemon restart frame recovery + no_parent_fallback (#638)
+
+Lights rebuild Phase 3。daemon 重啟後若 hook 事件抵達時 frame 不在記憶體，改走 PPID descendant tree 重建擁有者；沒有 parent 時走 explicit `no_parent_fallback` reason 而非舊的 binary `parent_frame_found / missing`。2 輪 plan review + 2 輪 code review 收斂。
+
+- `Prober.FirstAliveAgentInTree` + `identifierOrder` slice 提供 PPID descendant tree 上對 cc/codex/opencode 的 deterministic first-match（避開 Go map iteration 不穩定）。
+- `tryRebuildFromProcessTree` helper 在 `applyFrameEvent` fallback 鏈中先試重建 frame ownership，再退到 `no_parent_fallback`。
+- 三態 reason（`parent_frame_found` / `daemon_restart_recovery` / `no_parent_fallback`）取代舊的 binary，配合 grep guard 確認 production code 無遺留舊字串。
+- `FrameTraceMeta.MatchedAgentType` 把 type 信號保留到 trace step `after` payload（給 Inspector / 未來 reparent 使用）。
+- Code R1（standard）：`PanePID` 在多 pane window 會選到錯 pane → 改用 `ActivePanePID`，補測試與註解。
+- Code R2（adversarial）：fail-soft missed identifier 在 `FirstAliveAgentInTree` 會 panic → double-deferred recover 包 `safeIdentifyPID` + outer top-level，新增 P7/P8 + R9/R10 regression。
+- Tests：23 個 probe / frame_ops / handler 測試（P1-P8 / R1-R3+R5-R8+R9-R10 / N1-N3 / I1-I3）；既有 PR-2b 0 regression。Pre-existing same-type bugs（`verify.go:82` / `IsAliveFor`）out of PR scope，由 issue #639 追蹤。
+
+### Feat(agent): Phase 3.5a — cold-start proxy canonicalization (#644)
+
+修正 PR-2b（alpha.221）`findProxyParent` 留下的 cold-start race：兩個跨 type 的 SessionStart 同時抵達同一 pane（典型情境：daemon 重啟同時 cc + codex proxy spawn）時，pre-Upsert PPID walk 兩邊都 miss，造成兩個 standalone frame，少了 canonical parent + proxy ref。Hybrid B+ 設計（consulting 驅動）— 接受 partial state 為 ephemeral telemetry table 的合法狀態，user-visible correctness 由 daemon-side projection dedup 保證；DB-level eventual consistency 留給 sweep（PR-3.5b 後續）。5 輪 codex review，14 個 finding fix + 2 個 deferred。
+
+**後端 race fix（`internal/module/agent/frame_ops.go`）**
+
+- `pidIsAncestorOfWithCap`（深度 5）走 descendant 的 PPID 鏈找 ancestor PID。
+- `canonicalizeDescendantsAfterUpsert`（self-as-ancestor）：ancestor SessionStart 後掃 pane 上跨 type、live、identity-verified 的 standalone descendant，PPID 鏈穿過 self 就 fold 成 proxy ref + best-effort 刪除原 standalone 列。
+- `reconcileCreatedFrameAsProxy`（self-as-descendant）：descendant 在 post-Upsert 走 ancestor walk + attach proxy ref + best-effort delete 自己 standalone frame；**沒有 rollback** — partial state 合法、由 sweep 修。
+- `applyFrameEvent` 三段 wiring：§2.2.1 new-frame post-Upsert（reconcile → descendant-scan）、§2.2.2 existing-frame **filter-merge-retry**（取代 v5 三步 snapshot+reset+re-attach 的 concurrent-attach race）、§2.3 SessionEnd hot-path proxy cleanup（best-effort `removeProxyRefForSender`，先 detach 後 delete）。
+- Cross-frame native ID collision（S1）：proxy dedup baseline 改 owner-aware，`(IsProxy, ID, SourcePID, SourceStartTime)` 同時比對。
+- Filter-merge baseline（T1）：`(Type, ID, StartedAt)` 三元組做 identity gate，避免 ID-only 漏 reset 同 ID 的舊 subagent。
+
+**Projection dedup（`internal/module/agent/projection.go`）— 唯一 strongly-consistent 邊界**
+
+- `buildPaneProjection` 在 parent.Subagents 含 `IsProxy + (SourcePID, SourceStartTime)` 時，把對應的 standalone frame 從 `TopFrame` 候選中排除 — SPA 永遠看不到 partial。
+- 全部被 claim 時 fallback 回 unfiltered（極端 edge case）。
+
+**Observability（`internal/agent/metrics.go`，新檔）**
+
+- 4 個 expvar counter（in-process）：`partial_state_observed` / `projection_dedup_applied` / `partial_canonicalization_created` / `sessionend_cleanup_applied`。Endpoint exposure 之後 follow-up。
+
+**Tests — 全部 23 packages 綠**
+
+- Unit：RC1-RC8 race interleavings、PD1-PD3 projection dedup edge cases。
+- Integration（real sqlite）：IT1-IT9 + IT11 + IT12 + IT15-IT20，含 IT4 ancestor-late race（核心 J1/F1 regression guard）、IT12 SessionEnd ghost dot（Side B 發現的 bug）、IT20 concurrent attach during retry（J1 regression guard）。
+
+**Plan + review trail**
+
+- Plan v1→v12，2 輪平行 architectural consulting（Side A SQL transaction vs Side B Hybrid B+）。v3→v4 為 paradigm shift（接受 partial state 取代 patch-over-patch retry/rollback）。
+- 5 輪 codex review 後 finding 收斂在 1 high/輪（diminishing returns）；所有 high/medium 修完，2 個 deferred 開 follow-up issue（N1 projection dedup hot-path liveness syscall perf；IT12b detach error injection 需要 `m.frames` interface 抽象 refactor）。
+- 完整 plan：`docs/specs/2026-04-25-lights-rebuild-phase-3-5-plan.md`。
+
 ## [1.0.0-alpha.225] - 2026-04-26
 
 ### Feat(spa): add tab name tooltip controls (#642)
