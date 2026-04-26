@@ -2297,6 +2297,142 @@ func TestPhase35_IT22_DescendantScanSkipsCandidateWithSubagents(t *testing.T) {
 	}
 }
 
+// IT22b — codex round 2 #O2 fix: descendant scan FOLDS a candidate whose
+// only Subagents are stale dead IsProxy refs. The previous len > 0 guard
+// over-protected: a candidate carrying a single dead-source IsProxy (e.g.
+// a stale ref left over from PR-2b's filter-merge missing a hook race)
+// still represents a race-window standalone whose own state is empty
+// (the dead IsProxy doesn't represent live state — sweep prune would
+// remove it). Folding such a candidate is safe because the dead ref is
+// dropped along with the candidate row.
+func TestPhase35_IT22b_DescendantScanFoldsCandidateWithOnlyStaleProxyRef(t *testing.T) {
+	m := newProxyTestModule(t)
+	self := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	candidate := seedFrame(t, m, "%5", "codex", 200, "t200", 11)
+	// Candidate has only a STALE dead IsProxy ref (source PID 999 is
+	// dead). No native refs, no live identity-verified IsProxy refs.
+	candidate.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:opencode:999:t999-dead",
+		Type:            "opencode",
+		SourcePID:       999,
+		SourceStartTime: "t999-dead",
+		IsProxy:         true,
+	}}
+	candidate.LastSeenAt = 12
+	if _, err := m.frames.Upsert(candidate); err != nil {
+		t.Fatalf("seed candidate with stale dead proxy: %v", err)
+	}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	// PID 999 (the stale ref's source) is DEAD. Self (100) and candidate
+	// (200) are alive.
+	isPidAliveFn = func(pid int) bool {
+		return pid != 999
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	updated, err := m.canonicalizeDescendantsAfterUpsert(self, 100)
+	if err != nil {
+		t.Fatalf("canonicalizeDescendantsAfterUpsert: %v", err)
+	}
+	// candidate should be folded: cc.Subagents now contains a codex IsProxy
+	// ref (the stale opencode ref is gone, dropped along with the
+	// candidate frame).
+	if len(updated.Subagents) != 1 {
+		t.Fatalf("self.Subagents = %+v, want 1 codex IsProxy ref (candidate folded; stale opencode dropped)", updated.Subagents)
+	}
+	ref := updated.Subagents[0]
+	if !ref.IsProxy || ref.SourcePID != 200 {
+		t.Fatalf("ref = %+v, want codex IsProxy SourcePID=200", ref)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 || frames[0].FrameID != self.FrameID {
+		t.Fatalf("frames = %+v, want only cc surviving (codex deleted by fold)", frames)
+	}
+}
+
+// IT22c — codex round 2 #O2 fix (negative case): descendant scan still
+// SKIPS a candidate carrying a live identity-verified IsProxy ref. The
+// live IsProxy represents real owned state — folding would lose it.
+func TestPhase35_IT22c_DescendantScanSkipsCandidateWithLiveProxyRef(t *testing.T) {
+	m := newProxyTestModule(t)
+	self := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	candidate := seedFrame(t, m, "%5", "codex", 200, "t200", 11)
+	// Candidate has a LIVE identity-verified IsProxy ref (source PID 300
+	// is alive + start_time matches).
+	candidate.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:opencode:300:t300",
+		Type:            "opencode",
+		SourcePID:       300,
+		SourceStartTime: "t300",
+		IsProxy:         true,
+	}}
+	candidate.LastSeenAt = 12
+	if _, err := m.frames.Upsert(candidate); err != nil {
+		t.Fatalf("seed candidate with live proxy: %v", err)
+	}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		if pid == 200 {
+			return agentpkg.ProcessInfo{PID: 200, PPID: 100}, nil
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		case 300:
+			return "t300", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	updated, err := m.canonicalizeDescendantsAfterUpsert(self, 100)
+	if err != nil {
+		t.Fatalf("canonicalizeDescendantsAfterUpsert: %v", err)
+	}
+	if len(updated.Subagents) != 0 {
+		t.Fatalf("self.Subagents = %+v, want empty (candidate skipped — owns live IsProxy state)", updated.Subagents)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 2 {
+		t.Fatalf("frame count = %d, want 2 (candidate not folded)", len(frames))
+	}
+}
+
 // codex applyFrameEvent: pre-walk findProxyParent misses (cc not yet
 // visible to walk; readProcessInfoFn returns dud PPID on calls 1+2),
 // then reconcile post-Upsert hits (cc visible on call 3+; readProcessInfoFn

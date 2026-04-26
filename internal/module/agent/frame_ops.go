@@ -1068,19 +1068,44 @@ func (m *Module) canonicalizeDescendantsAfterUpsert(self store.Frame, broadcastT
 		if !pidIsAncestorOfWithCap(candidate.PID, current.PID, proxyMaxDepth) {
 			continue
 		}
-		// v8 M2 fix (codex round PR-2 attack): skip a candidate that
-		// has accumulated its own subagent state (native SubagentStart
-		// refs from hooks, or its own IsProxy refs from being a parent
-		// in another canonicalization). Folding such a candidate would
-		// silently drop those refs — DeleteIfUnchanged below removes
-		// the candidate row outright, taking subagent state with it.
-		// Race-window standalones that motivate this scan have empty
-		// Subagents (a fresh SessionStart row), so guarding on
-		// len > 0 cleanly separates "race artifact safe to fold"
-		// from "live frame that owns state we must not lose". Sweep
-		// canonicalize (PR-3.5b) handles the stateful-candidate case
-		// out-of-band by reconciling refs across siblings.
-		if len(candidate.Subagents) > 0 {
+		// Codex round 2 #O2 refinement: protect candidates that own
+		// LIVE state (native refs or live identity-verified IsProxy
+		// refs) from being folded. The original v8 M2 guard (len > 0)
+		// over-protected — a candidate carrying ONLY stale dead/PID-
+		// reused IsProxy refs is still a race-window artifact safe
+		// to fold (the stale ref would be reaped by sweep prune
+		// anyway, and dropping it along with the candidate row is
+		// equivalent). Distinguishing these classes lets the hot-path
+		// fold race-window standalones even when sweep prune has not
+		// yet cleared their stale leftovers.
+		hasOwnedState := false
+		for _, ref := range candidate.Subagents {
+			if !ref.IsProxy {
+				// Native ref → real owned state.
+				hasOwnedState = true
+				break
+			}
+			// IsProxy: live + identity-verified counts as owned;
+			// dead/PID-reused is stale and safe to drop with the fold.
+			if !isPidAliveFn(ref.SourcePID) {
+				continue
+			}
+			actualStart, sterr := processStartTimeFn(ref.SourcePID)
+			if sterr != nil {
+				// Read error → defensive; treat as owned (don't drop
+				// state on uncertainty). Mirrors findProxyParent's
+				// "lookup error → don't infer" convention.
+				hasOwnedState = true
+				break
+			}
+			if actualStart != ref.SourceStartTime {
+				continue // PID reuse; stale
+			}
+			// Live + identity-verified IsProxy → owned.
+			hasOwnedState = true
+			break
+		}
+		if hasOwnedState {
 			continue
 		}
 		// Identity gate (PR-2b alignment + plan §2.1.2). Mirrors
