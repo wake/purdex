@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.229] - 2026-04-26
+
+### Chore(dev): rename `PDX_DEV_UPDATE` env var to `PDX_DEV_MODE` (#653)
+
+Generalize the dev mode env flag to host future dev observation features (e.g., Phase 4a graceWindow logging). Pure search & replace across live code + docs; historical CHANGELOG entries and archived `docs/superpowers/{plans,specs}/2026-04-18-*` are intentionally preserved as immutable historical record.
+
+- `internal/module/dev/module.go` — env check + log message + comment
+- `internal/module/dev/{module,daemon}_test.go` — `t.Setenv` calls
+- `electron/{preload,updater}.ts` — `process.env` access + comment
+- `CLAUDE.md` + `AGENTS.md` — docs
+
+`config.Dev.Update` config field is unchanged — it specifically gates the update feature; only the env var was generalized.
+
 ## [1.0.0-alpha.228] - 2026-04-26
 
 ### Fix(agent): hook install and cleanup correctness (#645)
