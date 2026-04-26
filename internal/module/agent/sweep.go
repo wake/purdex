@@ -240,31 +240,6 @@ func (m *Module) canonicalizePane(paneID string, broadcastTs int64) {
 				continue
 			}
 			parentStored = ps
-			// Review F1 (round 2 attacker) — revalidate ancestor identity
-			// AFTER attach, BEFORE delete. findCanonicalAncestor only
-			// proves the ancestor was live at classification time; the
-			// ancestor PID may die between then and this point. Without
-			// this gate, we would attach a proxy ref onto a dead parent
-			// and then delete the live child row, severing the only DB
-			// link to the live child until its next hook event.
-			//
-			// On revalidation failure: leave the proxy ref attached
-			// (the dead parent is cleared on the next sweep tick along
-			// with all its Subagents) and skip delete. Mirrors the
-			// "no rollback on partial" Hybrid B+ rule.
-			if !isPidAliveFn(parentStored.PID) {
-				agentpkg.MetricPartialCanonicalizationCreated.Add(1)
-				canonicalizedAny = true
-				anyAncestor = parentStored
-				continue
-			}
-			actualAncestorStart, ancestorErr := processStartTimeFn(parentStored.PID)
-			if ancestorErr != nil || actualAncestorStart != parentStored.ProcessStartTime {
-				agentpkg.MetricPartialCanonicalizationCreated.Add(1)
-				canonicalizedAny = true
-				anyAncestor = parentStored
-				continue
-			}
 		}
 		if ownedState {
 			// Review F2 — deliberate partial: attach succeeded (or was
@@ -272,6 +247,36 @@ func (m *Module) canonicalizePane(paneID string, broadcastTs int64) {
 			// state we must not lose. Skip delete; projection_dedup
 			// hides + merges this child's Subagents into the parent
 			// projection at read time.
+			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
+			canonicalizedAny = true
+			anyAncestor = parentStored
+			continue
+		}
+		// Review F1 + F4 (round 2 attacker / round 3 closure) —
+		// revalidate ancestor identity BEFORE delete. findCanonicalAncestor
+		// only proves the ancestor was live at classification time; the
+		// ancestor PID may die between then and this point. Without
+		// this gate, we would delete the live candidate row into a
+		// dead parent (whose next sweep tick clears it along with all
+		// its Subagents, severing the only DB link to the live
+		// candidate). Hoisted to the common pre-delete point so BOTH
+		// the attach-then-delete branch (parent missing ref) AND the
+		// delete-only branch (parent already has matching ref via a
+		// prior partial recovery) share the same protection. Round 3
+		// caught the original F1 patch missing this delete-only path.
+		//
+		// On revalidation failure: leave the proxy ref attached (the
+		// dead parent is cleared on the next sweep tick along with all
+		// its Subagents) and skip delete. Mirrors the "no rollback on
+		// partial" Hybrid B+ rule.
+		if !isPidAliveFn(parentStored.PID) {
+			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
+			canonicalizedAny = true
+			anyAncestor = parentStored
+			continue
+		}
+		actualAncestorStart, ancestorErr := processStartTimeFn(parentStored.PID)
+		if ancestorErr != nil || actualAncestorStart != parentStored.ProcessStartTime {
 			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
 			canonicalizedAny = true
 			anyAncestor = parentStored

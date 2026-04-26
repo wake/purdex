@@ -1732,6 +1732,118 @@ func TestSweep_CanonicalizeSkipsDeleteWhenAncestorDiesPostAttach(t *testing.T) {
 	}
 }
 
+// IT10s (review F4 — round 3 closure) — already-proxied delete-only
+// path: when the parent already has a matching IsProxy ref AND the
+// candidate carries no owned state, the F2 reorganization routes
+// straight to DeleteIfUnchanged without going through the attach
+// branch where the F1 post-attach revalidation lives. Same data-loss
+// hazard as F1 reopens through the new path: ancestor can die between
+// findCanonicalAncestor and DeleteIfUnchanged, leaving the live
+// candidate row deleted into a dead parent that the next sweep tick
+// will clear (taking the proxy ref with it).
+//
+// Race trick mirrors IT10q: count isPidAliveFn(ancestor) calls and
+// flip false on the 4th call — the call introduced only by the F4
+// hoisted revalidation. Without F4 the 4th call never runs and the
+// codex row is incorrectly deleted.
+func TestSweep_CanonicalizeSkipsDeleteWhenAncestorDiesPostMatchCheck(t *testing.T) {
+	m := newSweepTestModule(t)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1,
+		ProcessStartTime: "t100",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:        "proxy:codex:200:t200",
+			Type:      "codex",
+			StartedAt: 30,
+			SourcePID: 200, SourceStartTime: "t200",
+			IsProxy: true,
+		}},
+		Status: agentpkg.StatusIdle, StartedAt: 30, LastSeenAt: 80, Verified: true,
+	}); err != nil {
+		t.Fatalf("Upsert cc with pre-existing proxy: %v", err)
+	}
+	codex, err := m.frames.Upsert(store.Frame{
+		PaneID: "%5", AgentType: "codex", PID: 200, PPID: 100,
+		ProcessStartTime: "t200", Status: agentpkg.StatusRunning,
+		StartedAt: 51, LastSeenAt: 51, Verified: true,
+	})
+	if err != nil {
+		t.Fatalf("Upsert codex orphan: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origInfo := readProcessInfoFn
+	origNow := nowFn
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		readProcessInfoFn = origInfo
+		nowFn = origNow
+	})
+
+	pid100AliveCalls := 0
+	isPidAliveFn = func(pid int) bool {
+		switch pid {
+		case 100:
+			pid100AliveCalls++
+			// Calls 1-3: survivor pass + cc-as-candidate gate +
+			// findCanonicalAncestor. Call 4 (only reachable via
+			// F4 hoisted revalidation) reports cc dead.
+			return pid100AliveCalls < 4
+		case 200:
+			return true
+		}
+		return false
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		}
+		return "", errStub("ps unknown pid")
+	}
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		ppid := 1
+		if pid == 200 {
+			ppid = 100
+		}
+		return agentpkg.ProcessInfo{PID: pid, PPID: ppid}, nil
+	}
+	nowFn = func() time.Time { return time.Unix(0, 100) }
+
+	startSweep := agentpkg.MetricSweepCanonicalized.Value()
+	startPartial := agentpkg.MetricPartialCanonicalizationCreated.Value()
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	frames, _ := m.frames.ListByPane("%5")
+	var ccRow, codexRow *store.Frame
+	for i := range frames {
+		switch frames[i].AgentType {
+		case "cc":
+			ccRow = &frames[i]
+		case "codex":
+			codexRow = &frames[i]
+		}
+	}
+	if codexRow == nil || codexRow.FrameID != codex.FrameID {
+		t.Fatalf("codex row missing or replaced; want preserved live row, got frames = %+v", frames)
+	}
+	if ccRow == nil || len(ccRow.Subagents) != 1 || !ccRow.Subagents[0].IsProxy || ccRow.Subagents[0].SourcePID != 200 {
+		t.Fatalf("cc row = %+v, want pre-existing IsProxy ref intact", ccRow)
+	}
+	if delta := agentpkg.MetricSweepCanonicalized.Value() - startSweep; delta != 0 {
+		t.Fatalf("MetricSweepCanonicalized delta = %d, want 0 (delete skipped because ancestor died after match-check)", delta)
+	}
+	if delta := agentpkg.MetricPartialCanonicalizationCreated.Value() - startPartial; delta != 1 {
+		t.Fatalf("MetricPartialCanonicalizationCreated delta = %d, want 1 (deliberate partial — F4 hoisted revalidation)", delta)
+	}
+}
+
 // IT10i — canonicalize → prune ordering in the same tick. cc has a
 // stale codex IsProxy ref AND a live opencode descendant standalone.
 // Same tick: canonicalize attaches opencode IsProxy → prune detaches
