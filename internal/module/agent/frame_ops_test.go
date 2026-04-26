@@ -3117,6 +3117,141 @@ func TestPhase35_IT21b_ExistingFrameSessionStartPreservesNativeAcrossMultiConfli
 	}
 }
 
+// IT21c — existing_frame SessionStart preserves a concurrent SubagentStart
+// whose native ID HAPPENS TO COLLIDE with an old-session baseline native ID.
+// Codex round 5 #T1 regression guard: the v11 initialNativeIDs baseline used
+// ID-only identity, so a SessionStart reset racing with a concurrent
+// SubagentStart whose new native ref reuses an old-session ID would silently
+// drop the new ref — classified as baseline old-session state by ID match
+// alone. Native IDs are provider-supplied strings; cross-session ID reuse
+// is provider-dependent (cc/codex tend toward UUID-like, opencode may be
+// more deterministic). The fix is to track baseline by (Type, ID, StartedAt)
+// — the new SubagentStart's StartedAt will be a fresh broadcastTs distinct
+// from baseline refs, so the new ref doesn't match baseline and survives
+// filter-merge.
+//
+// Setup:
+//   - cc seeded with baseline native {ID:"call-1", Type:"cc", StartedAt:5}
+//     plus an IsProxy ref (PID 200) that drives the per-attempt seam.
+//   - attempt 0: processStartTimeFn(200) injects a NEW SubagentStart with
+//     SAME ID "call-1" but distinct StartedAt 65, then bumps LastSeenAt
+//     to force IfUnchanged conflict.
+//   - attempt 1: filter pass should preserve the new {ID:"call-1",
+//     StartedAt:65} ref while still dropping the baseline {ID:"call-1",
+//     StartedAt:5} ref. IfUnchanged write succeeds.
+//
+// Assertions: final.Subagents contains the new ref (ID="call-1",
+// StartedAt=65); the baseline ref (ID="call-1", StartedAt=5) is dropped;
+// codex IsProxy ref preserved.
+func TestPhase35_IT21c_ExistingFrameSessionStartPreservesNewNativeWithReusedID(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	parent.Subagents = []agentpkg.SubagentRef{
+		{
+			ID:        "call-1",
+			Type:      "cc",
+			StartedAt: 5,
+		},
+		{
+			ID:              "proxy:codex:200:t200",
+			Type:            "codex",
+			SourcePID:       200,
+			SourceStartTime: "t200",
+			IsProxy:         true,
+		},
+	}
+	parent.LastSeenAt = 50
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed cc + baseline native + codex proxy: %v", err)
+	}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	// Per-attempt seam: each call to processStartTimeFn(200) corresponds to
+	// one filter pass for the codex IsProxy ref. After attempt 0 only,
+	// inject a new SubagentStart with SAME ID "call-1" but distinct
+	// StartedAt 65, and bump LastSeenAt to force IfUnchanged conflict.
+	// Attempt 1's filter must preserve the new ref despite ID collision
+	// with baseline.
+	attempt := 0
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			return "t100", nil
+		}
+		if pid != 200 {
+			return "other", nil
+		}
+		attempt++
+		if attempt == 1 {
+			racer, _ := m.frames.GetByIdentity("%5", 100, "t100")
+			if racer != nil {
+				// Concurrent SubagentStart with ID colliding against the
+				// baseline ID "call-1", but distinct StartedAt 65 (fresh
+				// broadcastTs). With T1 fix, baseline is keyed by (Type,
+				// ID, StartedAt) so this new ref does NOT match baseline.
+				racer.Subagents = append(racer.Subagents, agentpkg.SubagentRef{
+					ID:        "call-1",
+					Type:      "cc",
+					StartedAt: 65,
+				})
+				racer.LastSeenAt = 60
+				if _, err := m.frames.Upsert(*racer); err != nil {
+					t.Fatalf("concurrent inject attempt=%d: %v", attempt, err)
+				}
+			}
+		}
+		return "t200", nil
+	}
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	if _, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+
+	if attempt < 2 {
+		t.Fatalf("filter-merge ran only %d attempts, expected at least 2 (1 conflict + final success)", attempt)
+	}
+
+	final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if final == nil {
+		t.Fatalf("cc frame disappeared")
+	}
+
+	hasNewNative := false           // ID="call-1", StartedAt=65 (NEW concurrent SubagentStart)
+	hasBaselineNative := false      // ID="call-1", StartedAt=5  (OLD baseline — must be dropped)
+	hasCodexProxy := false
+	for _, ref := range final.Subagents {
+		switch {
+		case !ref.IsProxy && ref.ID == "call-1" && ref.StartedAt == 65:
+			hasNewNative = true
+		case !ref.IsProxy && ref.ID == "call-1" && ref.StartedAt == 5:
+			hasBaselineNative = true
+		case ref.IsProxy && ref.SourcePID == 200:
+			hasCodexProxy = true
+		}
+	}
+	if !hasNewNative {
+		t.Fatalf("new SubagentStart ref (ID=call-1, StartedAt=65) missing from %+v — T1 regression: ID-only baseline dropped concurrent native that reused old-session ID", final.Subagents)
+	}
+	if hasBaselineNative {
+		t.Fatalf("baseline native (ID=call-1, StartedAt=5) still present in %+v — SessionStart reset must drop initial natives", final.Subagents)
+	}
+	if !hasCodexProxy {
+		t.Fatalf("codex IsProxy ref missing from %+v — proxy preservation regression", final.Subagents)
+	}
+}
+
 // IT1 — descendant_then_ancestor_canonicalizes_via_descendant_scan.
 // codex SessionStart lands first (no cc parent yet → standalone codex).
 // cc SessionStart lands second (new-frame Upsert + descendant scan finds

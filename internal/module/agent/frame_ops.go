@@ -25,6 +25,18 @@ const proxyMaxDepth = 5
 // that hit this limit are genuine hot loops, not ordinary concurrency.
 const proxyUpsertMaxAttempts = 3
 
+// nativeBaselineKey identifies a native (IsProxy=false) subagent ref for the
+// SessionStart filter-merge baseline (Phase 3.5 plan §2.2.2 v12 T1 fix). The
+// triple (Type, ID, StartedAt) survives ID collision between an old-session
+// baseline ref and a concurrent SubagentStart that happens to reuse the
+// same ID — the new ref's StartedAt is a fresh broadcastTs distinct from
+// any baseline ref, so the new ref doesn't match baseline and is preserved.
+type nativeBaselineKey struct {
+	typ       string
+	id        string
+	startedAt int64
+}
+
 type FrameTraceMeta struct {
 	FrameID       string
 	ParentFrameID string
@@ -316,15 +328,15 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		// reload picks up the newer ref before the next prune pass.
 		if req.EventName == "SessionStart" {
 			var success bool
-			// initialNativeIDs is the BASELINE native ref ID set captured
-			// before the retry loop. SessionStart's reset semantic drops
-			// the old session's native subagent state, which the cc
-			// hook saw at attempt 0 entry. Any native ref appearing in
-			// the reloaded baseline on a later retry that is NOT in
-			// initialNativeIDs is — by construction — a concurrent
-			// SubagentStart that landed AFTER our baseline snapshot
-			// (post our SessionStart). Such refs belong to the new
-			// session and must be preserved across all retries.
+			// initialNativeBaseline is the BASELINE native ref identity
+			// set captured before the retry loop. SessionStart's reset
+			// semantic drops the old session's native subagent state,
+			// which the cc hook saw at attempt 0 entry. Any native ref
+			// appearing in the reloaded baseline on a later retry that
+			// is NOT in initialNativeBaseline is — by construction — a
+			// concurrent SubagentStart that landed AFTER our baseline
+			// snapshot (post our SessionStart). Such refs belong to
+			// the new session and must be preserved across all retries.
 			//
 			// Codex round 2 #O1 fix: the previous prevWrittenNativeIDs
 			// approach regressed across multiple conflicts — a native
@@ -332,10 +344,22 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			// itself, so attempt 2 dropped it as a "carried-forward
 			// baseline native". Snapshotting an immutable baseline
 			// before the loop sidesteps the regression entirely.
-			initialNativeIDs := make(map[string]struct{}, len(frame.Subagents))
+			//
+			// Codex round 5 #T1 fix: the v11 baseline used ID-only
+			// identity. Native IDs are provider-supplied strings and
+			// cross-session ID reuse is provider-dependent (cc/codex
+			// tend toward UUID-like, opencode may be more deterministic),
+			// so a SessionStart racing a concurrent SubagentStart whose
+			// new native ref reused an old-session ID would silently
+			// drop the new ref — classified as baseline by ID alone.
+			// Track baseline by (Type, ID, StartedAt) instead: the new
+			// SubagentStart's StartedAt will be a fresh broadcastTs
+			// distinct from any baseline ref, so the new ref survives
+			// the filter even when its ID collides with a baseline ref.
+			initialNativeBaseline := make(map[nativeBaselineKey]struct{}, len(frame.Subagents))
 			for _, ref := range frame.Subagents {
 				if !ref.IsProxy {
-					initialNativeIDs[ref.ID] = struct{}{}
+					initialNativeBaseline[nativeBaselineKey{ref.Type, ref.ID, ref.StartedAt}] = struct{}{}
 				}
 			}
 			for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
@@ -359,7 +383,10 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 					// baseline (SessionStart reset semantic for old
 					// session refs). Otherwise (appeared after baseline
 					// snapshot via concurrent SubagentStart) preserve.
-					if _, baseline := initialNativeIDs[ref.ID]; !baseline {
+					// Identity is (Type, ID, StartedAt) — a concurrent
+					// SubagentStart reusing an old-session ID will have
+					// a fresh StartedAt and will not match baseline.
+					if _, baseline := initialNativeBaseline[nativeBaselineKey{ref.Type, ref.ID, ref.StartedAt}]; !baseline {
 						pruned = append(pruned, ref)
 					}
 				}
