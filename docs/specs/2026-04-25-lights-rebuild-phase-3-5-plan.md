@@ -1,11 +1,19 @@
-# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v8 / Hybrid B+)
+# Phase 3.5 Plan — Cold-start Proxy Canonicalization (v9 / Hybrid B+)
 
 Baseline：`1.0.0-alpha.225`（main @ `92fb5d05`，Phase 3 已 merged）。
 Worktree：`.claude/worktrees/lights-phase-3-5`（branch `worktree-lights-phase-3-5`，已 rebase 上 `92fb5d05`）。
 Phase 3 PR #638：✅ squash-merged at `92fb5d05`（2026-04-26）。
 Bump 策略：本 PR 系列 + Phase 3 一起 bump **alpha.226**（注意：alpha.225 已被 parallel session 為 SPA tooltip 功能 PR #643 占用，與 Phase 3 無關）。
 
-**v7 → v8 由 PR-3.5a 兩輪 codex review 收斂**（§13；5 finding 採納 / 1 deferred 開 follow-up）：
+**v8 → v9 由 PR-3.5a 第二輪 codex review（standard + adversarial 三視角）收斂**（§13；5 unique finding 全採納）：
+
+- **O1 high / round 2 attack** — filter-merge `prevWrittenNativeIDs` 在多 retry 下 regress：attempt 1 preserved 的 native ref 被寫進 prev → attempt 2 把它當 baseline drop。**v9 修法**（C13）：改用 **`initialNativeIDs` baseline**（loop 前 snapshot frame.Subagents 中的 native ID set），整個 retry 期間 immutable；任何 reload 後出現但不在 baseline 的 native 視為 concurrent attach，**永遠保留**。`prevWrittenNativeIDs` 機制移除。新增 IT21b 守規（2 conflict + 2 concurrent native）。
+- **Q1 high / round 2 health** — projection dedup 隱藏 stateful child：reconcile partial（attach OK + delete fail）+ 並發 SubagentStart 給 child 加 native → child 留下且有 native subagent → dedup hide → SPA 看不到 child native。**v9 修法**（C14）：dedup hide 加 `len(frame.Subagents) == 0` guard；非空保留 visible（child 的 native subagent 不能消失於 SPA）。新增 PD4（stateful 保留）/ PD5（empty 仍 hide）。
+- **O2 medium / round 2 defend** — `canonicalizeDescendantsAfterUpsert` candidate guard `len(Subagents) > 0` 太寬：stale-only dead IsProxy ref 也算 state 阻 fold；hot-path 漏網無 sweep canonicalize 兜底。**v9 修法**（C15）：分類掃 candidate.Subagents — 含 native ref 或 live identity-verified IsProxy → skip（保護 state）；只含 stale dead/PID-reuse IsProxy → 視同 race-window standalone，**允許 fold**；read error 防禦性 skip。新增 IT22b（fold stale-only）/ IT22c（skip live IsProxy 負例）。
+- **O3 medium / round 2 attack** — `pruneDeadProxyRefs` `processStartTimeFn` 回 error 時 detach（fail-destructive）— 暫時 /proc 讀失敗會誤砍 live proxy。**v9 修法**（C16）：fail-safe；只在 `isPidAlive == false` 或 `actualStart != ref.SourceStartTime` confirmed mismatch 才 detach；read error → continue（保留 ref，下次 sweep 再嘗試）。新增 IT14b 守規。
+- **P1 medium / round 2 health** — `pruneDeadProxyRefs` detach 成功後不 broadcast projection — `m.subagents` / `currentStatus` 不同步，SPA 看不到修正直到下個無關 hook。**v9 修法**（C17）：新增 `broadcastProxyPruned` helper（mirror `afterFrameCleared` 路徑），偵測到至少一個 detach 後在 pane 維度發出一次 `sweep:proxy_pruned` 廣播；多個 stale ref 在同 pane 自動 coalesce。新增 IT13c 守規。
+
+**v7 → v8 由 PR-3.5a 第一輪 codex review 收斂**（§13；5 finding 採納 / 1 deferred 開 follow-up）：
 
 - **M4 medium / round PR-2 attack** — `reconcileCreatedFrameAsProxy` partial 路徑回 `canonicalized=false` 走 `created_frame` trace（child 視角），但 projection_dedup 顯示 parent + proxy ref → trace ≠ projection。**v8 修法**：partial 仍回 `canonicalized=true`，caller 走 `updated_frame / post_upsert_canonicalization_self` 與 projection 一致；metric 仍 +1。
 - **M3 high / round PR-2 attack** — filter-merge-retry「只保留 IsProxy」filter 在 conflict reload 時把並發 SubagentStart attach 的 native ref 一併 drop。**v8 修法**：改 prune-stale-IsProxy 語意；attempt 0 仍 reset baseline native（SessionStart 主語意），attempt N>0 透過 `prevWrittenNativeIDs` 區分 baseline vs concurrent attach，concurrent 保留 baseline 清掉。
@@ -873,10 +881,10 @@ v6 LOC 比 v5（~1595-1695）+25：filter-merge-retry +10 行（取代三步法�
 
 ## 8. 驗收 / Ship 條件
 
-- 所有 **IT1-IT20** + RC1-RC5 + PD1-PD3 + 既有測試全綠（IT17-IT20 為 v5/v6 race-fix regression guards，不可跳過 — codex round 6 K1）
+- 所有 **IT1-IT22 + IT21b + IT22b + IT22c + IT13/IT13b/IT13c + IT14/IT14b** + RC1-RC5 + PD1-PD5 + 既有測試全綠（IT17-IT22, IT21b/IT22b/IT22c/IT13c/IT14b/PD4/PD5 為 race-fix regression guards 不可跳過 — codex round 6 K1 + round 2 v9 fix）
 - `go build/vet/test ./...` 23 packages 全綠
 - SPA 無變更
-- 委派 codex round 4 review 收斂；採納或合理 deferred all findings
+- 委派 codex round 2（v8）+ round 2 second wave（v9）review 收斂；採納或合理 deferred all findings
 - Phase 3 PR #638 merged 後 rebase Phase 3.5 到 main
 
 ---
@@ -952,6 +960,8 @@ PR-3.5a 跑過兩輪 codex review 收斂後：
 | Plan v6 round 6（adversarial）| review-mof9wjzs-7q8wrs | needs-attention | K1 high §8 ship gate 漏列 IT17-IT20（含 J1 regression test）+ IT17 描述沿用 v5 已移除路徑 | v7 採納（純文檔修；§8 改 IT1-IT20 全綠 + IT17 描述更新）。**設計層面六輪後完整收斂 — round 6 無架構/race/邏輯 finding**；依 feedback_codex_review_termination.md 進實作 |
 | PR-3.5a code review round 1（standard）| mofcixya-889fj5 | (review) | 標準 cross-model 二意見 | findings 併入 round 2 彙整 |
 | PR-3.5a code review round 2（adversarial 三視角）| attack mofcj6pe-pxh09c / defend mofcjln6-f0hq8x / health mofcjerd-sm4p6m | needs-attention | M4 medium reconcile partial trace 反 projection / M3 high filter-merge 丟 native concurrent / M2 high descendant scan fold 有狀態 candidate / L1 high SessionEnd delete-first 留 orphan / N1 high dedup 信任 IsProxy（過嚴 deferred）| v8 採納 4/5（M4/M3/M2/L1 fix + sweep prune 從 PR-3.5b 移進 PR-3.5a）；N1 deferred 開 follow-up issue |
+| PR-3.5a 第二輪 code review round 1（standard）| (round 2 standard) | (review) | 標準 cross-model 二意見（v8 patch 後）| findings 併入 round 2 adversarial 彙整 |
+| PR-3.5a 第二輪 code review round 2（adversarial 三視角）| attack / defend / health（round 2）| needs-attention | O1 high filter-merge prevWrittenNativeIDs 多 retry 下 regress 丟 native / Q1 high projection dedup 隱藏 stateful child（partial+並發 SubagentStart）/ O2 medium descendant scan candidate guard 過寬把 stale-only IsProxy 算 state / O3 medium pruneDeadProxyRefs read-error 時 fail-destructive / P1 medium prune detach 後不 broadcast | **v9 全採納**：C13 initialNativeIDs baseline + IT21b / C14 dedup len==0 guard + PD4/PD5 / C15 candidate state classification + IT22b/IT22c / C16 prune fail-safe + IT14b / C17 broadcastProxyPruned + IT13c |
 
 ---
 
@@ -963,25 +973,25 @@ v7 規模相對 kickoff 原始設計擴張 ~7-10 倍（150-250 LOC → 1620-1720
 
 **目標**：消除 user-visible incorrectness。SPA 永遠看到正確的 frame collapse（並發冷啟動下也是）；codex SessionEnd 不留 orphan lit dot；sweep eventual-consistency 兜底 SessionEnd 漏網場景。**獨立可 ship，無需依賴 PR-3.5b**。
 
-**範圍**（commits 6/7/8/9/10/11/12 + v8 fix commits）：
+**範圍**（commits 6/7/8/9/10/11/12 + v8 fix commits + v9 fix commits C13-C17）：
 
 - `internal/agent/metrics.go`（新檔）— 4 個 expvar counter
 - `internal/module/agent/frame_ops.go`：
   - `pidIsAncestorOfWithCap` helper
-  - `canonicalizeDescendantsAfterUpsert`（含 identity gate **+ v8 M2 candidate-with-subagents skip**）
+  - `canonicalizeDescendantsAfterUpsert`（含 identity gate **+ v9 O2 candidate state classification（native / live IsProxy / stale IsProxy 分類）**；舊 v8 M2 `len > 0` guard 已被 v9 取代）
   - `reconcileCreatedFrameAsProxy`（best-effort，無 rollback；**v8 M4 partial 回 canonicalized=true**）
   - applyFrameEvent §2.2.1 接線（new-frame post-Upsert）
-  - applyFrameEvent §2.2.2 接線（existing-frame **filter-merge-retry + v8 M3 prune-stale-IsProxy + prevWrittenNativeIDs**）
+  - applyFrameEvent §2.2.2 接線（existing-frame **filter-merge-retry + v9 O1 initialNativeIDs baseline**；舊 v8 M3 `prevWrittenNativeIDs` 機制已被 v9 取代）
   - applyFrameEvent SessionEnd **detach-first + propagate**（§2.3 + v8 L1）
-- `internal/module/agent/projection.go`：`buildPaneProjection` dedup（§2.4）
-- `internal/module/agent/sweep.go`：`pruneDeadProxyRefs` + sweepOnce 第三 pass（§4.3，**v8 L1 從 PR-3.5b 移進 PR-3.5a**）
+- `internal/module/agent/projection.go`：`buildPaneProjection` dedup（§2.4）**+ v9 Q1 stateful-child guard（`len(frame.Subagents) == 0` 才 hide）**
+- `internal/module/agent/sweep.go`：`pruneDeadProxyRefs` + sweepOnce 第三 pass（§4.3，**v8 L1 從 PR-3.5b 移進 PR-3.5a**）**+ v9 O3 fail-safe（read-error 時 keep）+ v9 P1 broadcastProxyPruned（detach 後 emit `sweep:proxy_pruned` 廣播）**
 
 **測試**（必跑 ship gate）：
 
-- Unit：RC1-RC5 + PD1-PD3
-- Integration：IT1-IT9, IT11, IT12, IT13, IT13b, IT14, IT15-IT22（**IT4 + IT5 + IT12 + IT13/IT14 + IT17-IT22 是 race-fix regression guards 不可跳**）
+- Unit：RC1-RC5 + PD1-PD5（v9 加 PD4/PD5）
+- Integration：IT1-IT9, IT11, IT12, IT13, IT13b, **IT13c**, IT14, **IT14b**, IT15-IT22, **IT21b**, **IT22b**, **IT22c**（**IT4 + IT5 + IT12 + IT13/IT14 + IT17-IT22 + v9 新增 IT21b/IT22b/IT22c/IT13c/IT14b 是 race-fix regression guards 不可跳**）
 
-**LOC 預估**：~1100-1200 行 net（含 ~21 個 IT；v8 比 v7 PR-3.5a 多 ~250 LOC：sweep prune + IT13/IT13b/IT14/IT21/IT22）
+**LOC 預估**：~1300-1400 行 net（v9 比 v8 多 ~200 LOC：5 finding 修法 + IT13c/IT14b/IT21b/IT22b/IT22c/PD4/PD5）
 
 **為什麼 SessionEnd cleanup + projection dedup 必須在 PR-3.5a 而不能延到 3.5b**：
 
