@@ -802,6 +802,77 @@ func TestSweep_PruneDeadProxyRefs_KeepsLiveProxy(t *testing.T) {
 	}
 }
 
+// IT13c — codex round 2 #P1 fix: sweep pruneDeadProxyRefs broadcasts a
+// projection update after detaching a stale proxy ref. Previously the
+// detach was visible in storage but m.subagents/m.currentStatus and the
+// SPA stayed stale until an unrelated hook fired. Sweep prune now emits
+// "hook" payload with reason=sweep:proxy_pruned (matching the existing
+// idle_timeout / pid_dead broadcast pattern in afterFrameCleared).
+func TestSweep_PruneDeadProxyRefs_BroadcastsProjectionAfterDetach(t *testing.T) {
+	m := newSweepTestModule(t)
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: m.tmux}
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Subagents: []agentpkg.SubagentRef{{
+			ID:              "proxy:codex:300:dead-t300",
+			Type:            "codex",
+			SourcePID:       300,
+			SourceStartTime: "dead-t300",
+			IsProxy:         true,
+		}},
+		Status:     agentpkg.StatusIdle,
+		StartedAt:  10,
+		LastSeenAt: 10,
+		Verified:   true,
+	}); err != nil {
+		t.Fatalf("Upsert cc + dead proxy ref: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(pid int) bool { return pid == 200 }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			return "A", nil
+		}
+		return "", nil
+	}
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	// Verify storage: proxy ref detached.
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 || len(frames[0].Subagents) != 0 {
+		t.Fatalf("frames = %+v, want cc with empty subagents (detach storage step)", frames)
+	}
+
+	// Verify broadcast: payload contains reason=sweep:proxy_pruned.
+	select {
+	case msg := <-sub.SendCh():
+		if !strings.Contains(string(msg), "sweep:proxy_pruned") {
+			t.Fatalf("broadcast payload = %s, want reason sweep:proxy_pruned (P1 broadcast missing)", msg)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for sweep:proxy_pruned broadcast — P1 fix missing")
+	}
+}
+
 // IT14b — codex round 2 #O3 fix: sweep pruneDeadProxyRefs preserves a
 // proxy ref when processStartTimeFn returns an error (transient /proc
 // read failure / platform probe issue). Previously the fall-through

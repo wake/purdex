@@ -144,6 +144,14 @@ func uniquePaneIDs(frames []store.Frame) []string {
 // Errors from detachProxyRefWithRetry are logged via the metric increment
 // failing (no-op) and otherwise swallowed — the next sweep tick (2s) gets
 // another shot, consistent with sweepOnce's other best-effort passes.
+//
+// Codex round 2 #P1 fix: after at least one successful detach in the pane,
+// emit a "hook" broadcast with reason=sweep:proxy_pruned so SPA + in-memory
+// state (m.subagents / m.currentStatus) reflect the change immediately.
+// Mirrors the afterFrameCleared broadcast that pid_dead/pid_reused/idle_timeout
+// already emit. Per-pane (not per-detach) so multiple stale refs in the same
+// pane coalesce into one broadcast — matches afterFrameCleared's per-frame
+// granularity.
 func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
 	if m.frames == nil {
 		return
@@ -152,6 +160,8 @@ func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
 	if err != nil {
 		return
 	}
+	detachedAny := false
+	var anyOwner store.Frame
 	for _, frame := range frames {
 		for _, ref := range frame.Subagents {
 			if !ref.IsProxy {
@@ -181,9 +191,44 @@ func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
 			detached, _, derr := m.detachProxyRefWithRetry(frame, ref.SourcePID, ref.SourceStartTime, broadcastTs)
 			if derr == nil && detached {
 				agentpkg.MetricSweepPrunedProxy.Add(1)
+				if !detachedAny {
+					anyOwner = frame
+					detachedAny = true
+				}
 			}
 		}
 	}
+	if detachedAny {
+		m.broadcastProxyPruned(anyOwner)
+	}
+}
+
+// broadcastProxyPruned emits a "hook" broadcast with reason=sweep:proxy_pruned
+// after pruneDeadProxyRefs detached at least one stale ref in a pane. Mirrors
+// afterFrameCleared's broadcast path so SPA + m.subagents / m.currentStatus
+// stay in sync with storage without waiting for an unrelated hook.
+//
+// Best-effort: errors from projection / broadcast resolution are logged via
+// metric (no-op) and otherwise swallowed — the next sweep tick (2s) will
+// re-emit if any stale refs remain. Consistent with sweepOnce's other
+// best-effort passes. Codex round 2 #P1 fix.
+func (m *Module) broadcastProxyPruned(reference store.Frame) {
+	sessionName, code := m.resolvePaneSession(reference.PaneID)
+	projection, err := m.projectionForSession(sessionName)
+	if err != nil {
+		return
+	}
+	if sessionName != "" {
+		m.mu.Lock()
+		syncProjectionState(m.currentStatus, m.subagents, sessionName, projection)
+		m.mu.Unlock()
+	}
+	if code == "" || m.core == nil {
+		return
+	}
+	normalized := buildProjectionNormalized(projection, reference.AgentType, "sweep:proxy_pruned", nowFn().UnixNano(), agentpkg.DeriveResult{})
+	payload, _ := json.Marshal(normalized)
+	m.core.Events.Broadcast(code, "hook", string(payload))
 }
 
 // clearFrame is the eager delete path used for pid_dead / pid_reused sweeps
