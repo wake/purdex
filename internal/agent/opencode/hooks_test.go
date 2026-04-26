@@ -522,6 +522,199 @@ func TestOpenCodeCheckHooks_UpgradesAvailableAlwaysEmpty(t *testing.T) {
 	}
 }
 
+const wantOpenCodeHooksSupportedVersion = "1.14.23"
+
+func assertOpenCodeSupportFields(t *testing.T, status agent.HookStatus, wantExceeds bool) {
+	t.Helper()
+	if status.SupportedVersion != wantOpenCodeHooksSupportedVersion {
+		t.Fatalf("SupportedVersion=%q, want %q (status=%+v)", status.SupportedVersion, wantOpenCodeHooksSupportedVersion, status)
+	}
+	if status.ExceedsSupport != wantExceeds {
+		t.Fatalf("ExceedsSupport=%v, want %v (status=%+v)", status.ExceedsSupport, wantExceeds, status)
+	}
+}
+
+func fakeOpenCodeVersion(t *testing.T, output string) {
+	t.Helper()
+	agent.ResetHookAgentVersionCache()
+	t.Cleanup(agent.ResetHookAgentVersionCache)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "opencode")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' '"+output+"'\n"), 0755); err != nil {
+		t.Fatalf("write fake opencode: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func missingOpenCodeVersion(t *testing.T) {
+	t.Helper()
+	agent.ResetHookAgentVersionCache()
+	t.Cleanup(agent.ResetHookAgentVersionCache)
+	t.Setenv("PATH", t.TempDir())
+}
+
+// OV0 — home-dir resolution errors still include the supported hooks version.
+func TestOpenCodeCheckHooks_ReportsSupportedVersionOnHomeDirError(t *testing.T) {
+	missingOpenCodeVersion(t)
+	t.Setenv("HOME", "")
+
+	status, err := opencode.NewProvider().CheckHooks()
+	if err == nil {
+		t.Fatal("CheckHooks error=nil, want home-dir error")
+	}
+	assertOpenCodeSupportFields(t, status, false)
+}
+
+// OV1 — missing plugin results include the supported hooks version.
+func TestOpenCodeCheckHooks_ReportsSupportedVersionOnMissingPlugin(t *testing.T) {
+	missingOpenCodeVersion(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	status, err := opencode.NewProvider().CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	assertOpenCodeSupportFields(t, status, false)
+}
+
+// OV2 — unmanaged plugin results include the supported hooks version.
+func TestOpenCodeCheckHooks_ReportsSupportedVersionOnUnmanagedPlugin(t *testing.T) {
+	missingOpenCodeVersion(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "pdx-agent-hooks.js")
+	if err := os.MkdirAll(filepath.Dir(pluginPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pluginPath, []byte("export const Existing = async () => ({})\n"), 0644); err != nil {
+		t.Fatalf("write unmanaged: %v", err)
+	}
+
+	status, err := opencode.NewProvider().CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	assertOpenCodeSupportFields(t, status, false)
+}
+
+// OV3 — canonical path resolution failure still reports support fields.
+func TestOpenCodeCheckHooks_ReportsSupportedVersionOnPathResolutionFailure(t *testing.T) {
+	missingOpenCodeVersion(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	p := opencode.NewProvider()
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("install hooks: %v", err)
+	}
+	opencode.SetResolveCanonicalPdxPathForTesting(t, func() (string, bool) { return "", false })
+
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	assertOpenCodeSupportFields(t, status, false)
+}
+
+// OV4 — managed body drift still reports support fields.
+func TestOpenCodeCheckHooks_ReportsSupportedVersionOnManagedBodyDrift(t *testing.T) {
+	missingOpenCodeVersion(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	pinCanonicalPdxPath(t, "/usr/local/bin/pdx")
+
+	p := opencode.NewProvider()
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("install hooks: %v", err)
+	}
+	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "pdx-agent-hooks.js")
+	data, err := os.ReadFile(pluginPath)
+	if err != nil {
+		t.Fatalf("read plugin: %v", err)
+	}
+	if err := os.WriteFile(pluginPath, []byte("// drift\n"+string(data)), 0644); err != nil {
+		t.Fatalf("write drift: %v", err)
+	}
+
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	assertOpenCodeSupportFields(t, status, false)
+}
+
+// OV5 — fully installed plugin reports support fields.
+func TestOpenCodeCheckHooks_ReportsSupportedVersionOnInstalledPlugin(t *testing.T) {
+	missingOpenCodeVersion(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	pinCanonicalPdxPath(t, "/usr/local/bin/pdx")
+
+	p := opencode.NewProvider()
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("install hooks: %v", err)
+	}
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	assertOpenCodeSupportFields(t, status, false)
+}
+
+// OV6 — detected versions newer than the supported hooks version warn.
+func TestOpenCodeCheckHooks_ExceedsSupport(t *testing.T) {
+	fakeOpenCodeVersion(t, "opencode 1.14.24")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	status, err := opencode.NewProvider().CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if status.AgentVersion != "1.14.24" {
+		t.Fatalf("AgentVersion=%q, want 1.14.24", status.AgentVersion)
+	}
+	assertOpenCodeSupportFields(t, status, true)
+}
+
+// OV7 — equal, lower, missing, and unparsable versions do not warn.
+func TestOpenCodeCheckHooks_DoesNotExceedSupportForEqualLowerMissingOrUnparsedVersions(t *testing.T) {
+	cases := []struct {
+		name       string
+		versionOut string
+		wantAgent  string
+		fake       bool
+	}{
+		{name: "equal", versionOut: "opencode 1.14.23", wantAgent: "1.14.23", fake: true},
+		{name: "lower", versionOut: "opencode 1.14.22", wantAgent: "1.14.22", fake: true},
+		{name: "missing"},
+		{name: "unparsed", versionOut: "opencode dev build", fake: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.fake {
+				fakeOpenCodeVersion(t, tc.versionOut)
+			} else {
+				missingOpenCodeVersion(t)
+			}
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+
+			status, err := opencode.NewProvider().CheckHooks()
+			if err != nil {
+				t.Fatalf("CheckHooks: %v", err)
+			}
+			if status.AgentVersion != tc.wantAgent {
+				t.Fatalf("AgentVersion=%q, want %q", status.AgentVersion, tc.wantAgent)
+			}
+			assertOpenCodeSupportFields(t, status, false)
+		})
+	}
+}
+
 func TestOpenCodeHooks_UnmanagedFileRejected(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
