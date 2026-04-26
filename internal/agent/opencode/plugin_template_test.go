@@ -1,13 +1,159 @@
 package opencode
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/agent"
 )
+
+type opencodeContractFixture struct {
+	Version struct {
+		ExactOutput string           `json:"exactOutput"`
+		Evidence    contractEvidence `json:"evidence"`
+	} `json:"version"`
+	ConsumedEvents       []contractEvent `json:"consumedEvents"`
+	ConsumedPayloadPaths []contractPath  `json:"consumedPayloadPaths"`
+	Samples              map[string]any  `json:"samples"`
+}
+
+type contractEvent struct {
+	Key      string           `json:"key"`
+	Evidence contractEvidence `json:"evidence"`
+}
+
+type contractPath struct {
+	Path     string           `json:"path"`
+	Evidence contractEvidence `json:"evidence"`
+}
+
+type contractEvidence struct {
+	Kind      string `json:"kind"`
+	Source    string `json:"source"`
+	Tag       string `json:"tag"`
+	Commit    string `json:"commit"`
+	LineRange string `json:"lineRange"`
+	SampleRef string `json:"sampleRef"`
+}
+
+var (
+	contractEventCasePattern      = regexp.MustCompile(`case '([^']+)':`)
+	contractCallbackKeyPattern    = regexp.MustCompile(`(?m)^\s*'([^']+)'\s*:\s*async\s*\(`)
+	contractPayloadPathPattern    = regexp.MustCompile(`\b(?:event\.properties|input|output)(?:\??\.[A-Za-z_][A-Za-z0-9_]*)+`)
+	contractModelAliasPathPattern = regexp.MustCompile(`\bmodel\.(providerID|modelID)\b`)
+)
+
+func loadOpenCodeContractFixture(t *testing.T) opencodeContractFixture {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "opencode-1.14.23-contract.json"))
+	if err != nil {
+		t.Fatalf("read OpenCode contract fixture: %v", err)
+	}
+	var fixture opencodeContractFixture
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatalf("parse OpenCode contract fixture: %v", err)
+	}
+	return fixture
+}
+
+func extractTemplateConsumedEventKeys(body string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, re := range []*regexp.Regexp{contractEventCasePattern, contractCallbackKeyPattern} {
+		for _, match := range re.FindAllStringSubmatch(body, -1) {
+			if len(match) < 2 || seen[match[1]] {
+				continue
+			}
+			seen[match[1]] = true
+			out = append(out, match[1])
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func extractTemplateConsumedPayloadPaths(body string) []string {
+	seen := map[string]bool{}
+	for _, match := range contractPayloadPathPattern.FindAllString(body, -1) {
+		path := strings.ReplaceAll(match, "?.", ".")
+		seen[path] = true
+	}
+	if strings.Contains(body, "const model = input.model") {
+		for _, match := range contractModelAliasPathPattern.FindAllStringSubmatch(body, -1) {
+			if len(match) >= 2 {
+				seen["input.model."+match[1]] = true
+			}
+		}
+	}
+	if strings.Contains(body, "agentTypeFromArgs(output.args)") {
+		seen["output.args.subagent_type"] = true
+		seen["output.args.agent"] = true
+	}
+	delete(seen, "input.model")
+	delete(seen, "output.args")
+	paths := make([]string, 0, len(seen))
+	for path := range seen {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func fixtureConsumedEventKeys(fixture opencodeContractFixture) []string {
+	out := make([]string, 0, len(fixture.ConsumedEvents))
+	for _, event := range fixture.ConsumedEvents {
+		out = append(out, event.Key)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func fixtureConsumedPayloadPaths(fixture opencodeContractFixture) []string {
+	out := make([]string, 0, len(fixture.ConsumedPayloadPaths))
+	for _, path := range fixture.ConsumedPayloadPaths {
+		out = append(out, path.Path)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func requireExactStringSet(t *testing.T, name string, got, want []string) {
+	t.Helper()
+	got = append([]string(nil), got...)
+	want = append([]string(nil), want...)
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("%s mismatch\n got: %v\nwant: %v", name, got, want)
+	}
+}
+
+func requireContractEvidence(t *testing.T, name string, evidence contractEvidence) {
+	t.Helper()
+	if evidence.Kind != "docs" && evidence.Kind != "source" && evidence.Kind != "runtime" {
+		t.Fatalf("%s evidence kind = %q, want docs/source/runtime", name, evidence.Kind)
+	}
+	if evidence.Source == "" {
+		t.Fatalf("%s evidence source is empty", name)
+	}
+	if evidence.Kind == "runtime" {
+		if evidence.SampleRef == "" {
+			t.Fatalf("%s runtime evidence missing sampleRef", name)
+		}
+		return
+	}
+	if evidence.Tag == "" && evidence.Commit == "" {
+		t.Fatalf("%s evidence missing tag or commit", name)
+	}
+	if evidence.LineRange == "" {
+		t.Fatalf("%s evidence missing source range", name)
+	}
+}
 
 func TestPluginState_TaskStartMapsSubagentStart(t *testing.T) {
 	state := newPluginState()
@@ -211,6 +357,80 @@ func TestOpenCodeCheckHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 		if _, ok := status.Events[name]; ok {
 			t.Errorf("CheckHooks.Events included non-installable event %q", name)
 		}
+	}
+}
+
+func TestOpenCodeTemplateEventContractsDocumented(t *testing.T) {
+	fixture := loadOpenCodeContractFixture(t)
+	requireExactStringSet(t, "consumed event keys", fixtureConsumedEventKeys(fixture), extractTemplateConsumedEventKeys(renderManagedPlugin("/fake/pdx")))
+}
+
+func TestOpenCodeTemplatePayloadPathsDocumented(t *testing.T) {
+	fixture := loadOpenCodeContractFixture(t)
+	requireExactStringSet(t, "consumed payload paths", fixtureConsumedPayloadPaths(fixture), extractTemplateConsumedPayloadPaths(renderManagedPlugin("/fake/pdx")))
+}
+
+func TestOpenCodeTemplateUsesOnlyDocumentedContractEvents(t *testing.T) {
+	fixture := loadOpenCodeContractFixture(t)
+	want := []string{
+		"chat.message",
+		"permission.asked",
+		"question.asked",
+		"session.created",
+		"session.deleted",
+		"session.error",
+		"session.idle",
+		"tool.execute.after",
+		"tool.execute.before",
+	}
+	requireExactStringSet(t, "documented OpenCode callback events", extractTemplateConsumedEventKeys(renderManagedPlugin("/fake/pdx")), want)
+	requireExactStringSet(t, "fixture OpenCode callback events", fixtureConsumedEventKeys(fixture), want)
+}
+
+func TestOpenCodeTemplateContractFixtureHasProvenance(t *testing.T) {
+	fixture := loadOpenCodeContractFixture(t)
+	if fixture.Version.ExactOutput != "1.14.23" {
+		t.Fatalf("version exactOutput = %q, want 1.14.23", fixture.Version.ExactOutput)
+	}
+	requireContractEvidence(t, "version", fixture.Version.Evidence)
+	if len(fixture.Samples) == 0 {
+		t.Fatal("fixture samples are empty")
+	}
+	for _, event := range fixture.ConsumedEvents {
+		if event.Key == "" {
+			t.Fatal("fixture contains event with empty key")
+		}
+		requireContractEvidence(t, "event "+event.Key, event.Evidence)
+	}
+	for _, path := range fixture.ConsumedPayloadPaths {
+		if path.Path == "" {
+			t.Fatal("fixture contains empty payload path")
+		}
+		requireContractEvidence(t, "path "+path.Path, path.Evidence)
+	}
+}
+
+func TestOpenCodeTemplateContractExtractionRejectsMutatedCallbackKey(t *testing.T) {
+	fixture := loadOpenCodeContractFixture(t)
+	body := strings.Replace(renderManagedPlugin("/fake/pdx"), "'chat.message': async", "'message.updated': async", 1)
+	got := extractTemplateConsumedEventKeys(body)
+	want := fixtureConsumedEventKeys(fixture)
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "\x00") == strings.Join(want, "\x00") {
+		t.Fatalf("mutated callback key still matched fixture contract: %v", got)
+	}
+}
+
+func TestOpenCodeTemplateContractExtractionRejectsMutatedPayloadPath(t *testing.T) {
+	fixture := loadOpenCodeContractFixture(t)
+	body := strings.Replace(renderManagedPlugin("/fake/pdx"), "output.output || ''", "output.text || ''", 1)
+	got := extractTemplateConsumedPayloadPaths(body)
+	want := fixtureConsumedPayloadPaths(fixture)
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "\x00") == strings.Join(want, "\x00") {
+		t.Fatalf("mutated payload path still matched fixture contract: %v", got)
 	}
 }
 

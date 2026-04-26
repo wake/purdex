@@ -1,0 +1,411 @@
+{
+  "version": {
+    "exactOutput": "1.14.23",
+    "evidence": {
+      "kind": "runtime",
+      "source": "/tmp/opencode-1.14.23-check/opencode --version",
+      "sampleRef": "samples.version.stdout"
+    }
+  },
+  "consumedEvents": [
+    {
+      "key": "session.created",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/session.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "254-260"
+      }
+    },
+    {
+      "key": "permission.asked",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/permission/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "75-76"
+      }
+    },
+    {
+      "key": "question.asked",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/question/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "61-68,96-98"
+      }
+    },
+    {
+      "key": "session.error",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/session.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "281-288"
+      }
+    },
+    {
+      "key": "session.idle",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/status.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "28-42"
+      }
+    },
+    {
+      "key": "session.deleted",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/session.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "268-273"
+      }
+    },
+    {
+      "key": "chat.message",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "230-242"
+      }
+    },
+    {
+      "key": "tool.execute.before",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "265-268"
+      }
+    },
+    {
+      "key": "tool.execute.after",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "273-280"
+      }
+    }
+  ],
+  "consumedPayloadPaths": [
+    {
+      "path": "event.properties.sessionID",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/session.ts and https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/status.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "session.ts:249-260,281-288; status.ts:37-42"
+      }
+    },
+    {
+      "path": "event.properties.permission",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/permission/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "40-49,75-76"
+      }
+    },
+    {
+      "path": "event.properties.patterns",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/permission/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "40-49,75-76"
+      }
+    },
+    {
+      "path": "event.properties.questions",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/question/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "61-68,96-98"
+      }
+    },
+    {
+      "path": "event.properties.error.name",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/session.ts and https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/message-v2.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "session.ts:281-288; message-v2.ts:443-454,529-536"
+      }
+    },
+    {
+      "path": "event.properties.error.data.message",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/session.ts and https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/util/error.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "session.ts:281-288; util/error.ts:29-30,72"
+      }
+    },
+    {
+      "path": "input.model.providerID",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "233-240"
+      }
+    },
+    {
+      "path": "input.model.modelID",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "233-240"
+      }
+    },
+    {
+      "path": "input.sessionID",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "233-240,265-280"
+      }
+    },
+    {
+      "path": "input.messageID",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "233-240"
+      }
+    },
+    {
+      "path": "input.agent",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "233-240"
+      }
+    },
+    {
+      "path": "output.message.id",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts and https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/message-v2.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "plugin/index.ts:233-242; message-v2.ts:529-544"
+      }
+    },
+    {
+      "path": "output.message.agent",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts and https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/message-v2.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "plugin/index.ts:233-242; message-v2.ts:529-544"
+      }
+    },
+    {
+      "path": "input.tool",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "265-280"
+      }
+    },
+    {
+      "path": "input.callID",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "265-280"
+      }
+    },
+    {
+      "path": "output.args.subagent_type",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/prompt.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "574-583"
+      }
+    },
+    {
+      "path": "output.args.agent",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "265-268"
+      }
+    },
+    {
+      "path": "output.args.description",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/prompt.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "574-583"
+      }
+    },
+    {
+      "path": "output.args.prompt",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/opencode/src/session/prompt.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "574-583"
+      }
+    },
+    {
+      "path": "output.title",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "273-280"
+      }
+    },
+    {
+      "path": "output.output",
+      "evidence": {
+        "kind": "source",
+        "source": "https://github.com/sst/opencode/blob/v1.14.23/packages/plugin/src/index.ts",
+        "tag": "v1.14.23",
+        "commit": "3d31ae28b041ecad9d8f59351b1977fe5434b4a5",
+        "lineRange": "273-280"
+      }
+    }
+  ],
+  "samples": {
+    "version": {
+      "stdout": "1.14.23\n"
+    },
+    "session.created": {
+      "event": {
+        "type": "session.created",
+        "properties": {
+          "sessionID": "ses_01",
+          "info": { "id": "ses_01" }
+        }
+      }
+    },
+    "permission.asked": {
+      "event": {
+        "type": "permission.asked",
+        "properties": {
+          "sessionID": "ses_01",
+          "permission": "edit",
+          "patterns": ["/tmp/example.ts"]
+        }
+      }
+    },
+    "question.asked": {
+      "event": {
+        "type": "question.asked",
+        "properties": {
+          "sessionID": "ses_01",
+          "questions": [
+            {
+              "question": "Choose an option",
+              "header": "Choice",
+              "options": [{ "label": "A", "description": "First option" }]
+            }
+          ]
+        }
+      }
+    },
+    "session.error": {
+      "event": {
+        "type": "session.error",
+        "properties": {
+          "sessionID": "ses_01",
+          "error": {
+            "name": "UnknownError",
+            "data": { "message": "boom" }
+          }
+        }
+      }
+    },
+    "session.idle": {
+      "event": {
+        "type": "session.idle",
+        "properties": { "sessionID": "ses_01" }
+      }
+    },
+    "session.deleted": {
+      "event": {
+        "type": "session.deleted",
+        "properties": {
+          "sessionID": "ses_01",
+          "info": { "id": "ses_01" }
+        }
+      }
+    },
+    "chat.message": {
+      "input": {
+        "sessionID": "ses_01",
+        "agent": "build",
+        "model": { "providerID": "anthropic", "modelID": "claude-sonnet-4-5" },
+        "messageID": "msg_01"
+      },
+      "output": {
+        "message": { "id": "msg_01", "agent": "build" },
+        "parts": []
+      }
+    },
+    "tool.execute.before": {
+      "input": { "tool": "task", "sessionID": "ses_01", "callID": "part_01" },
+      "output": {
+        "args": {
+          "subagent_type": "build",
+          "agent": "build",
+          "description": "Implement change",
+          "prompt": "Edit files"
+        }
+      }
+    },
+    "tool.execute.after": {
+      "input": { "tool": "task", "sessionID": "ses_01", "callID": "part_01" },
+      "output": {
+        "title": "Task complete",
+        "output": "Done",
+        "metadata": {}
+      }
+    }
+  }
+}
