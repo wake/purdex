@@ -1,8 +1,9 @@
 # Phase 3.5 Plan — Cold-start Proxy Canonicalization (v7 / Hybrid B+)
 
-Baseline：`1.0.0-alpha.224`（main @ `75b4d166`）。
-Worktree：`.claude/worktrees/lights-phase-3-5`（branch `worktree-lights-phase-3-5`）。
-Branch base：`origin/main`（與 Phase 3 PR #638 並行；merge 順序 Phase 3 → rebase 3.5 → 一次 bump alpha.225）。
+Baseline：`1.0.0-alpha.225`（main @ `92fb5d05`，Phase 3 已 merged）。
+Worktree：`.claude/worktrees/lights-phase-3-5`（branch `worktree-lights-phase-3-5`，已 rebase 上 `92fb5d05`）。
+Phase 3 PR #638：✅ squash-merged at `92fb5d05`（2026-04-26）。
+Bump 策略：本 PR 系列 + Phase 3 一起 bump **alpha.226**（注意：alpha.225 已被 parallel session 為 SPA tooltip 功能 PR #643 占用，與 Phase 3 無關）。
 
 **v6 → v7 由 codex round 6 收斂**（§13；1 high doc-gate finding 採納）：
 
@@ -65,7 +66,7 @@ Metrics 是 in-process 觀察基礎，**不是 ship gate**，也不是「partial
 
 ### 0.3 與 Phase 3 的關係
 
-不變：獨立 PR；rebase 順序 Phase 3 → Phase 3.5；衝突點在 `applyFrameEvent` 不同區塊。
+Phase 3 PR #638 已 merged at `92fb5d05`（2026-04-26）。Phase 3.5 worktree 已 rebase 上新 main，docs commits replay 無衝突（docs-only 不動 code）。後續 3.5a 實作 commits 起於 alpha.225 era main，接線位置（applyFrameEvent fallback chain 由 Phase 3 加在 line ~228 後；Phase 3.5 接線在 new-frame Upsert 後 line ~286 + existing-frame Update 後 line ~272 + SessionEnd line ~53）— 區塊不同，無衝突。
 
 ---
 
@@ -879,7 +880,7 @@ v6 LOC 比 v5（~1595-1695）+25：filter-merge-retry +10 行（取代三步法�
 | R1 | Projection dedup 把不該 hide 的 frame hide 掉（false positive）| Identity 用 (PID, ProcessStartTime) 比對；只 hide standalone PID 等於 proxy 的 SourcePID — 同 process；理論上不可能 false positive |
 | R2 | `pruneDeadProxyRefs` 把 alive 但 startTime 讀錯的 proxy 誤砍 | identity gate fail-safe：read error → skip（不砍）；只在 actualStart != ref.SourceStartTime 確定 mismatch 才砍 |
 | R3 | Sweep canonicalize 走 ListByPane O(n) per pane per 2s | proxyMaxDepth=5 + pane frame 數一般 < 10；2s 一輪總成本 < 50ms；可接受 |
-| R4 | rebase Phase 3 後 applyFrameEvent 衝突 | Phase 3 改 fallback chain（line 220 區塊），Phase 3.5 改 new-frame Upsert 後 + existing-frame Update 後 + SessionEnd（line 286 + 272 + 53）；位置不同；極端衝突手動解 |
+| R4 | ~~rebase Phase 3 後 applyFrameEvent 衝突~~ | ✅ 已解決：Phase 3 merged at `92fb5d05`（2026-04-26），Phase 3.5 worktree rebase 完成 docs commits 無衝突。3.5a 實作開工後接線位置（line 286 / 272 / 53）與 Phase 3 fallback chain（line ~228）區塊不同 — 預期無衝突 |
 | R5 | metric 累加在熱 path 影響 latency | expvar.Int.Add 是 atomic，sub-microsecond；可忽略 |
 | R6 | partial state 在 metric SLO 突破時要升級為強一致 | metric 已埋；超過 1/1000 的話開 follow-up phase 升級到 Side A SQL transaction |
 | R7 | dedup 邏輯改 buildPaneProjection 影響既有 BuildSessionProjections / projectPane / projectionForSession 所有 caller | dedup 是純 frame filter；caller 看到的 SessionProjection 結構不變；既有測試（projection_test.go）守 regression |
@@ -916,15 +917,16 @@ v6 LOC 比 v5（~1595-1695）+25：filter-merge-retry +10 行（取代三步法�
 
 ## 12. 結束條件
 
-PR 跑過 codex round 4 review 收斂後：
+PR-3.5a 跑過兩輪 codex review 收斂後：
 
-1. Phase 3 PR #638 merge 到 main（不 bump）
-2. Rebase 本 PR 到 main（解 applyFrameEvent + SessionEnd 衝突）
-3. 本 PR merge 到 main（不 bump）
-4. 開 bump PR alpha.225 + CHANGELOG
-5. Bump merge → main @ alpha.225
-6. ExitWorktree 清掉 `lights-phase-3-5` worktree
-7. 更新 kickoff_lights_rebuild.md：標 Phase 3 + Phase 3.5 ✅ at alpha.225
+1. Phase 3 PR #638 merge 到 main ✅ 完成（`92fb5d05`）
+2. Rebase 本 PR 到 main ✅ 完成（docs-only rebase 無衝突）
+3. 本 PR-3.5a merge 到 main（不 bump）
+4. 開 bump PR alpha.226 + CHANGELOG（涵蓋 Phase 3 + Phase 3.5a）
+5. Bump merge → main @ alpha.226
+6. PR-3.5b 視 metric 決定 ship 時機（可延後）
+7. ExitWorktree 清掉 `lights-phase-3-5` worktree（最後 PR 完成後）
+8. 更新 kickoff_lights_rebuild.md：標 Phase 3 ✅ + Phase 3.5a/b 個別狀態
 
 ---
 
@@ -999,16 +1001,19 @@ v7 規模相對 kickoff 原始設計擴張 ~7-10 倍（150-250 LOC → 1620-1720
 
 ### Release 策略（取代 §12）
 
-| 階段 | 動作 |
-|---|---|
-| 1 | Phase 3 PR #638 merge（不 bump） |
-| 2 | Rebase **PR-3.5a** 到 main（解 applyFrameEvent + SessionEnd 衝突）|
-| 3 | PR-3.5a 開 PR + 兩輪 codex review + merge（不 bump） |
-| 4 | 開 bump PR alpha.225（涵蓋 Phase 3 + Phase 3.5a）|
-| 5 | Bump merge → main @ alpha.225 |
-| 6 | （依 metric 與優先級決定）開 **PR-3.5b** + review + merge → bump alpha.226 |
-| 7 | ExitWorktree 清 `lights-phase-3-5`（PR-3.5b 完成後）|
-| 8 | 更新 kickoff：標 Phase 3 + Phase 3.5（a/b 個別狀態）|
+| 階段 | 動作 | 狀態 |
+|---|---|---|
+| 1 | Phase 3 PR #638 squash merge（不 bump） | ✅ 完成（`92fb5d05`，2026-04-26）|
+| 2 | Rebase Phase 3.5 worktree onto new main | ✅ 完成（8 docs commits replay 無衝突）|
+| 3 | PR-3.5a TDD 實作 + push | ⏳ pending（subagent driven）|
+| 4 | PR-3.5a 開 PR + 兩輪 codex review + merge（不 bump） | ⏳ pending |
+| 5 | 開 bump PR **alpha.226**（涵蓋 Phase 3 + Phase 3.5a） | ⏳ pending |
+| 6 | Bump merge → main @ alpha.226 | ⏳ pending |
+| 7 | （依 metric 與優先級決定）開 **PR-3.5b** + review + merge → bump alpha.227 | optional |
+| 8 | ExitWorktree 清 `lights-phase-3-5`（最後 PR 完成後） | optional |
+| 9 | 更新 kickoff：標 Phase 3 + Phase 3.5（a/b 個別狀態） | pending |
+
+**注意 alpha 編號變化**：原 plan §14 寫「bump alpha.225」是 v7 撰寫時 main 在 alpha.224；rebase 後發現 alpha.225 已被 parallel session（PR #643 SPA tooltip）占用，本 PR 系列改 bump alpha.226。此屬 main 並發前進的常態，依 `feedback_concurrent_session_safety.md` 不假設 branch 穩定。
 
 ### Branch 策略
 
