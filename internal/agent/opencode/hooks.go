@@ -60,8 +60,7 @@ func (p *Provider) RemoveHooks(_ string) error {
 }
 
 func (p *Provider) CheckHooks() (agent.HookStatus, error) {
-	agentVersion := agent.DetectHookAgentVersion("opencode", "--version")
-	withSupport := func(status agent.HookStatus) agent.HookStatus {
+	withSupport := func(status agent.HookStatus, agentVersion string) agent.HookStatus {
 		status.AgentVersion = agentVersion
 		status.SupportedVersion = opencodeHooksSupportedVersion
 		status.ExceedsSupport = agent.CompareHookAgentVersions(agentVersion, opencodeHooksSupportedVersion) > 0
@@ -70,8 +69,9 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 
 	pluginPath, err := opencodePluginPath()
 	if err != nil {
-		return withSupport(agent.HookStatus{Issues: []string{"cannot find home dir"}}), err
+		return withSupport(agent.HookStatus{Issues: []string{"cannot find home dir"}}, ""), err
 	}
+	agentVersion := agent.DetectHookAgentVersion("opencode", "--version")
 	data, err := os.ReadFile(pluginPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -79,9 +79,9 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 				Installed: false,
 				Events:    map[string]agent.HookEventInfo{},
 				Issues:    []string{"pdx-agent-hooks.js not found"},
-			}), nil
+			}, agentVersion), nil
 		}
-		return withSupport(agent.HookStatus{}), fmt.Errorf("read plugin: %w", err)
+		return withSupport(agent.HookStatus{}, agentVersion), fmt.Errorf("read plugin: %w", err)
 	}
 	if !isManagedPlugin(data) {
 		return withSupport(agent.HookStatus{
@@ -89,7 +89,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			Managed:   false,
 			Events:    map[string]agent.HookEventInfo{},
 			Issues:    []string{"plugin file exists but is unmanaged"},
-		}), nil
+		}, agentVersion), nil
 	}
 
 	// Plan §1.6 + PR #616 review Finding #3: the opencode plugin is a
@@ -121,7 +121,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			Managed:   true,
 			Events:    events,
 			Issues:    []string{"plugin body differs from managed template (cannot resolve canonical pdx path — run reinstall)"},
-		}), nil
+		}, agentVersion), nil
 	}
 	expected := renderManagedPlugin(trustedPath)
 	if !bytes.Equal(data, []byte(expected)) {
@@ -133,12 +133,12 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			Managed:   true,
 			Events:    events,
 			Issues:    []string{"plugin body differs from managed template (pdx binary may have moved or file was edited — run reinstall)"},
-		}), nil
+		}, agentVersion), nil
 	}
 	for _, spec := range specs {
 		events[spec.Name] = agent.HookEventInfo{Installed: true, Command: pluginPath, FutureOnly: spec.FutureOnly}
 	}
-	return withSupport(agent.HookStatus{Installed: true, Managed: true, Events: events, Issues: []string{}}), nil
+	return withSupport(agent.HookStatus{Installed: true, Managed: true, Events: events, Issues: []string{}}, agentVersion), nil
 }
 
 func opencodePluginPath() (string, error) {

@@ -84,7 +84,6 @@ This hotfix may modify only:
 - `internal/agent/opencode/hooks_test.go`
 - `internal/agent/opencode/plugin_template.go`
 - `internal/agent/opencode/plugin_template_test.go`
-- `internal/agent/opencode/testdata/opencode-1.14.23-*`
 - `internal/agent/opencode/status.go`
 - `internal/agent/opencode/status_test.go`
 - `spa/src/lib/agent-icons.test.tsx`
@@ -323,11 +322,9 @@ Keep currently intended normalized events:
 - `UserPromptSubmit` from the current prompt/message event after verification
 - `SubagentStart` / `SubagentStop` from `tool.execute.before/after` task calls
 
-Add an exact OpenCode `1.14.23` plugin event table before implementation. The table must include every current documented/runtime plugin event key, source URL or runtime/source provenance, `Handling`, normalized Purdex event name when installable, payload paths consumed by the template, and reason when non-installable. Tests must compare the full event-key set exactly against that table.
+Do not add an exact OpenCode `1.14.23` plugin event table in PR 4. The attempted fixture/table approach was deferred to issue #658 because it requires mechanically verifiable source/type snapshots or raw runtime captures to avoid false confidence.
 
-Explicitly document all current OpenCode plugin events not installed/mapped as ignored/unsupported.
-
-OpenCode template/spec parity and CheckHooks event installation must use only `IsInstallableHookSpec(spec) == true`. Ignored/unsupported OpenCode upstream events must appear in the catalog but must not be expected in the managed plugin body and must not be marked installed by `CheckHooks`.
+OpenCode template/spec parity and CheckHooks event installation must continue to use only `IsInstallableHookSpec(spec) == true`. PR 4 does not expand the OpenCode catalog or classify ignored/unsupported OpenCode upstream events.
 
 ### 2.3 Codex Feature Flag Contract
 
@@ -381,17 +378,15 @@ Add `opencodeHooksSupportedVersion = "1.14.23"` and return `SupportedVersion` / 
 
 ### 2.7 OpenCode Mapping Verification Gate
 
-Before changing `renderManagedPlugin`, capture or verify every OpenCode `1.14.23` event key and payload path consumed by the managed template, including `session.*`, `permission.asked`, `question.asked` if kept, prompt/message events, `tool.execute.before`, and `tool.execute.after`.
+Before changing `renderManagedPlugin`, require concrete stale evidence from issue #658 or another mechanically verified source/runtime artifact. PR 4 intentionally does not add checked-in OpenCode contract fixtures and does not claim to prove upstream runtime emission.
 
-The verification commit must add a checked-in provenance artifact under `internal/agent/opencode/testdata/opencode-1.14.23-*` with:
+Acceptable future evidence includes:
 
-- exact `opencode --version` output
-- source/docs URL and commit/tag, or a captured runtime trace
-- exact event keys consumed by `renderManagedPlugin`
-- minimal JSON payload fixtures containing every field the template reads
-- tests that fail if the fixtures no longer support the template mapping
+- raw callback input/output captures from OpenCode `1.14.23` or the newly supported version
+- pinned `@opencode-ai/plugin` type/source snapshots that CI can hash and inspect
+- non-blocking runtime diagnostics showing missing expected payload fields in a managed plugin callback
 
-If any template-consumed event lacks stable verification, keep the production template unchanged in this hotfix and limit OpenCode changes to catalog classification, version reporting, and tests that document the uncertainty.
+If no mechanically verified evidence exists, keep the production template unchanged and treat OpenCode mapping refresh as issue-driven follow-up work.
 
 ---
 
@@ -492,10 +487,7 @@ Tests:
 
 | ID | Test | Red Assertion |
 |---|---|---|
-| OC1 | `TestOpenCodePluginTemplate_UsesVerifiedEvents` | template uses verified current event keys and payload paths, not stale API assumptions |
-| OC1a | `TestOpenCodeTemplateEventContractsDocumented` | checked-in provenance fixture names every consumed OpenCode event key and payload field |
 | OC2 | `TestTemplateSpecsParity` | emitted template events match installable specs only |
-| OC3 | `TestOpenCodeEvents_ClassifiesCurrentPluginEvents` | current documented OpenCode plugin events are classified |
 | OC4 | `TestOpenCodeCheckHooks_ReportsSupportedVersion` | table tests every `CheckHooks` return path includes `SupportedVersion=1.14.23` |
 | OC5 | `TestOpenCodeCheckHooks_ExceedsSupport` | version comparison warning works when detected version is greater |
 
@@ -667,29 +659,23 @@ Run:
 
 - `go test ./internal/agent/opencode ./internal/agent -count=1`
 
-### Commit 5b — `test(agent/opencode): document template event contracts`
+### Commit 5b — Deferred OpenCode contract validation
 
-Red:
+Deferred to issue #658. Do not add OpenCode `1.14.23` contract fixtures in PR 4.
 
-- OC1a fails until current OpenCode `1.14.23` event keys and required payload fields for every template-consumed event are documented from source/runtime verification.
+Rationale:
 
-Green:
-
-- Add checked-in provenance under `internal/agent/opencode/testdata/opencode-1.14.23-*` with version output, source/docs URL or runtime trace, event keys, and minimal payload fixtures.
-- Add fixture-driven tests for every event key and payload path consumed by `renderManagedPlugin`.
-- Do not change `renderManagedPlugin` unless the verified contract proves `chat.message` is stale.
-
-Run:
-
-- `go test ./internal/agent/opencode -count=1`
+- The cc/Codex hook checks verify config shape and managed command wiring; they do not prove upstream runtime emission.
+- OpenCode should use the same verification depth unless concrete stale mapping evidence appears.
+- A useful contract fixture must be based on raw runtime captures or mechanically verified source/type snapshots, not handwritten summaries or internal-consistency checks.
 
 ### Commit 5c — `fix(agent/opencode): refresh plugin event mapping`
 
-Only needed if Commit 5b proves any existing managed template event key or payload path is stale.
+Only needed if issue #658 or another mechanically verified source/runtime artifact proves any existing managed template event key or payload path is stale.
 
 Red:
 
-- OC1 fails.
+- A focused stale-mapping test fails based on the mechanically verified source/runtime evidence from #658.
 - OC2 fails if template/spec parity is not scoped to installable specs.
 
 Green:
@@ -737,7 +723,7 @@ Run:
 - Hook command matching requires `hook` as the first `pdx` subcommand; wrapper-like commands such as `pdx exec hook ...` are not Purdex-owned hook commands.
 - Ignored/unsupported hook declarations never enter install completeness.
 - Cleanup ownership is provider-local and explicit: owned current/retired event tokens are removable across all configured hook keys, while unknown same-provider tokens are preserved.
-- OpenCode plugin event mapping is verified against current OpenCode docs/runtime shape with checked-in provenance fixtures.
+- OpenCode deep runtime/source contract validation is deferred to issue #658; PR4 does not claim to prove upstream OpenCode callback emission.
 - OpenCode CheckHooks reports version support fields like cc/codex.
 - OpenCode icon registry has explicit tests.
 - No files under `internal/module/agent/*`, `internal/agent/probe/*`, `internal/store/*`, or tab rendering are modified.
@@ -851,7 +837,7 @@ PR 4 final verification:
 
 ### PR 5 — OpenCode Mapping Refresh, Conditional
 
-Only create this PR if PR 4 proves an existing managed template event key or payload path is stale. Keep it separate because it can affect lights frame/projection behavior.
+Only create this PR if issue #658 or another mechanically verified source/runtime artifact proves an existing managed template event key or payload path is stale. Keep it separate because it can affect lights frame/projection behavior.
 
 ### PR 6 — OpenCode Icon Guard
 
