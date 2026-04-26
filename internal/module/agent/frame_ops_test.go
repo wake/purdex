@@ -2622,6 +2622,112 @@ func TestPhase35_IT20_ExistingFrameSessionStartPreservesConcurrentlyAttachedProx
 	}
 }
 
+// IT21 — existing_frame SessionStart preserves a concurrently-attached
+// native subagent ref (IsProxy=false) across the filter-merge retry. Plan
+// §2.2.2 v8 M3 regression guard: the previous "keep only IsProxy" filter
+// dropped ALL native refs, so a SubagentStart that landed between
+// applyFrameEvent's GetByIdentity and the IfUnchanged conflict's reload
+// would silently disappear when attempt 2 re-filtered the reloaded
+// baseline.
+//
+// Setup mirrors IT20: cc frame seeded with one codex IsProxy ref at
+// LastSeenAt=50; processStartTimeFn(200)'s first call (during attempt 1's
+// prune pass) injects a concurrent native SubagentStart-style ref into
+// the row at LastSeenAt=60. attempt 1's IfUnchanged(expected=50) then
+// conflicts; reload picks up codex IsProxy + new native ref at 60;
+// attempt 2's prune pass keeps both (codex passes identity gate, native
+// is preserved by the new pruning semantics). IfUnchanged(expected=60)
+// succeeds. Both refs survive — M3 violated would have lost the native.
+func TestPhase35_IT21_ExistingFrameSessionStartPreservesConcurrentNativeSubagent(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	parent.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:codex:200:t200",
+		Type:            "codex",
+		SourcePID:       200,
+		SourceStartTime: "t200",
+		IsProxy:         true,
+	}}
+	parent.LastSeenAt = 50
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed cc + codex proxy: %v", err)
+	}
+
+	origInfo := readProcessInfoFn
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	concurrentInjected := false
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 && !concurrentInjected {
+			concurrentInjected = true
+			racer, _ := m.frames.GetByIdentity("%5", 100, "t100")
+			if racer != nil {
+				// Native ref (IsProxy=false) — simulating a concurrent
+				// SubagentStart hook landing on cc's row.
+				racer.Subagents = append(racer.Subagents, agentpkg.SubagentRef{
+					ID:        "task-abc",
+					Type:      "cc",
+					StartedAt: 60,
+				})
+				racer.LastSeenAt = 60
+				if _, err := m.frames.Upsert(*racer); err != nil {
+					t.Fatalf("concurrent native inject: %v", err)
+				}
+			}
+			return "t200", nil
+		}
+		switch pid {
+		case 100:
+			return "t100", nil
+		case 200:
+			return "t200", nil
+		}
+		return "other", nil
+	}
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+	})
+
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", EventName: "SessionStart", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	if _, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+
+	if !concurrentInjected {
+		t.Fatalf("concurrent native inject hook never fired — filter-merge loop didn't run")
+	}
+
+	final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if final == nil {
+		t.Fatalf("cc frame disappeared")
+	}
+	if len(final.Subagents) != 2 {
+		t.Fatalf("Subagents count = %d, want 2 (codex proxy + native task ref preserved); refs=%+v", len(final.Subagents), final.Subagents)
+	}
+	hasCodexProxy := false
+	hasNative := false
+	for _, ref := range final.Subagents {
+		if ref.IsProxy && ref.SourcePID == 200 {
+			hasCodexProxy = true
+		}
+		if !ref.IsProxy && ref.ID == "task-abc" {
+			hasNative = true
+		}
+	}
+	if !hasCodexProxy {
+		t.Fatalf("codex proxy ref missing from %+v", final.Subagents)
+	}
+	if !hasNative {
+		t.Fatalf("native task ref missing from %+v — M3 regression: native refs dropped by filter", final.Subagents)
+	}
+}
+
 // IT1 — descendant_then_ancestor_canonicalizes_via_descendant_scan.
 // codex SessionStart lands first (no cc parent yet → standalone codex).
 // cc SessionStart lands second (new-frame Upsert + descendant scan finds

@@ -301,32 +301,45 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		// Subagents changes flow through mutateSubagentsWithRetry /
 		// attachProxyRefWithRetry / removeProxyRefForSender, not here.
 		//
-		// Exception: SessionStart on an existing frame must reset the
-		// previous session's refs while preserving any IsProxy ref whose
-		// SourcePID is still alive + identity-verified. Phase 3.5 plan
-		// §2.2.2 (v6 J1) replaces the old "snapshot → reset → re-attach"
-		// three-step pattern (race window between steps could lose a
-		// concurrently-attached proxy) with a single filter-merge-retry:
-		// each attempt re-reads frame.Subagents (so any concurrent attach
-		// is naturally preserved), filters via the live identity gate,
-		// and writes via UpsertIfUnchanged. A conflict reload picks up
-		// the newer ref before the next filter pass.
+		// Exception: SessionStart on an existing frame must prune any
+		// stale IsProxy refs (source process dead or PID-reused) while
+		// preserving everything else — including concurrently-attached
+		// native SubagentStart refs (IsProxy=false) that landed between
+		// attempts. Phase 3.5 plan §2.2.2 (v6 J1, v8 M3) replaces the
+		// old "snapshot → reset → re-attach" three-step pattern (race
+		// window between steps could lose a concurrently-attached
+		// proxy) with a single filter-merge-retry: each attempt
+		// re-reads frame.Subagents (so any concurrent attach is
+		// naturally preserved), prunes stale IsProxy via the live
+		// identity gate, and writes via UpsertIfUnchanged. A conflict
+		// reload picks up the newer ref before the next prune pass.
 		if req.EventName == "SessionStart" {
 			var success bool
 			for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
-				filtered := make([]agentpkg.SubagentRef, 0, len(frame.Subagents))
+				// v8 M3 fix (codex round PR-2 attack): the loop must
+				// PRUNE stale IsProxy refs while preserving every other
+				// ref. The previous "keep only live IsProxy" filter
+				// dropped concurrently-attached native SubagentStart
+				// refs (IsProxy=false) on every conflict reload, so a
+				// SubagentStart that landed between attempt N's read
+				// and attempt N+1's reload would silently disappear.
+				// Native refs have no separate source identity to
+				// verify (the agent's own process is alive — we just
+				// hit GetByIdentity on it); only IsProxy refs need the
+				// liveness gate because their source is a separate
+				// child process.
+				pruned := make([]agentpkg.SubagentRef, 0, len(frame.Subagents))
 				for _, ref := range frame.Subagents {
-					if !ref.IsProxy {
-						continue
+					if ref.IsProxy {
+						if !isPidAliveFn(ref.SourcePID) {
+							continue
+						}
+						actualStart, sterr := processStartTimeFn(ref.SourcePID)
+						if sterr != nil || actualStart != ref.SourceStartTime {
+							continue
+						}
 					}
-					if !isPidAliveFn(ref.SourcePID) {
-						continue
-					}
-					actualStart, sterr := processStartTimeFn(ref.SourcePID)
-					if sterr != nil || actualStart != ref.SourceStartTime {
-						continue
-					}
-					filtered = append(filtered, ref)
+					pruned = append(pruned, ref)
 				}
 
 				candidate := *frame
@@ -336,7 +349,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 				candidate.Status = status
 				candidate.LastSeenAt = broadcastTs
 				candidate.Verified = true
-				candidate.Subagents = filtered
+				candidate.Subagents = pruned
 
 				ok, written, uerr := m.frames.UpsertIfUnchanged(candidate, frame.LastSeenAt)
 				if uerr != nil {
