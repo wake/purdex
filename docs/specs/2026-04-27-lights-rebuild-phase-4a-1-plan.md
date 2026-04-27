@@ -1,6 +1,6 @@
-# Lights Rebuild — Phase 4a-1 Plan v1.5 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v1.6 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v1.5（Round 5 codex review fix — 1 P2 internal-inconsistency finding 採納）
+**Status**: draft v1.6（Round 6 codex review fix — 2 P2 internal-consistency findings 採納）
 
 ## v1.x 演進
 
@@ -12,6 +12,7 @@
 | v1.3 | R3 codex review fix（1 P1 deadlock）：v1.2 §2.3.1 orchestrator API docstring 寫 `stopWatch` / `startWatch` 會 clear `activeWatchers`，但 `renameSessionLocked` 持 `m.mu` 時呼叫，會與內部要 acquire `m.mu` 的清理路徑互鎖（非可重入 mutex）。**改 API contract**：orchestrator 只碰 `prober` + `lastHookAt` + metrics，**不觸 `activeWatchers`**；caller（module.go wrapper）管理 `activeWatchers`。同時對齊 `interpretScreenEvent` 的 Error Guard 邏輯沿用 legacy 既有 lock 模式（讀 + 寫各自一次 m.mu.Lock/Unlock，不持鎖跨呼叫）|
 | v1.4 | R4 codex review fix（1 P2 stale-callback guard）：legacy `onActivityDetected` (module.go:473) 開頭檢查 `activeWatchers[session]` 不存在則 return，這個 stale-callback guard v1.3 plan 漏搬。新 watch-loop-owned watcher fire callback 多次（不像 legacy fire 一次就退），**此 guard 比 legacy 更必要** — stopWatch / rename race 中 in-flight callback 會在 watcher 已停的情況下繼續更新 status / broadcast。`interpretScreenEvent` 開頭加 `currentAgent, active := m.activeWatchers[session]; if !active \|\| currentAgent != agentType { return }`；新增 OR6 regression test |
 | v1.5 | R5 codex review fix（1 P2 internal-inconsistency）：plan §1.2 列「Slice 8（清舊 onActivityDetected / shouldWatchActivity / ActivitySignal enum 解讀）— 留 PR-4a-2」與 §1.1 / §2.4.2 衝突（後者要求本 PR 必移除 `ActivitySignal` 等舊 API 否則無法 compile）。釐清：本 PR 必清 `ActivitySignal` enum + legacy `StartWatch` API + `activityLoop` + `onActivityDetected`（compile 必要）；保留 `shouldWatchActivity`（wrapper 仍用的政策函式）；PR-4a-2 範圍縮為「Slice 5/6 codex/opencode profile 接 primitive」+「**視需要** refactor `shouldWatchActivity`」 |
+| v1.6 | R6 codex review fix（2 P2 internal-consistency）：(1) §1.1 Slice 3 摘要還寫「`stopProbeWatch` 含 activeWatchers map cleanup」與 R3 修法（orchestrator 不碰 activeWatchers）矛盾；改正為「停止 prober watcher」並引向 §2.3.1 R3 fix；(2) Commit 5 TDD 清單只列 CC1-CC5，漏掉 CC6 (R2 fix #1 + R3 deadlock-freedom regression)；補入 written-first 清單 |
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -59,9 +60,9 @@ PR-4a-1 把目前 `internal/agent/probe/activity.go` 的 watcher 從「probe 解
 **Slice 3**：Module 共用 orchestrator helper
 - 新增 `internal/module/agent/probe_orchestrator.go`（暫名）
 - 抽出 `manageActivityWatch` + `onActivityDetected` 共用邏輯為：
-  - `startProbeWatch(session, agentType)` — 啟動 watcher（依 agent profile 決定 TopN 行數）
-  - `stopProbeWatch(session)` — 停止 watcher（含 activeWatchers map cleanup）
-  - `interpretScreenEvent(session, agentType, event)` — 把 ScreenChangeEvent 解讀為 Status，套用 graceWindow + Error Guard + projection update + broadcast
+  - `startWatch(session, agentType)` — 啟動 prober watcher（依 agent profile 決定 TopN / IdleStableTicks）；**不觸 `activeWatchers` map**（caller 管理；R3 fix）
+  - `stopWatch(session)` — 停止 prober watcher；**不觸 `activeWatchers` map**（caller 管理；R3 fix；詳 §2.3.1）
+  - `interpretScreenEvent(session, agentType, event)` — 把 ScreenChangeEvent 解讀為 Status，套用 stale-callback guard（R4 fix）+ graceWindow + Error Guard + projection update + broadcast
 - `agentpkg.Provider` 新增 optional interface `ProbeProfileProvider`（暫名）
   - `ProbeProfile()` → `{TopLines int, IdleStableTicks int}` 等 per-agent tuning
   - cc 在 Slice 4 實作；未實作的 agent 走 default profile（沿用現行 10 行 / 3 ticks）
@@ -585,11 +586,11 @@ Slice 3 一半（介面 + helper skeleton）：
 - `internal/module/agent/probe_orchestrator.go` skeleton（newProbeOrchestrator + startWatch + stopWatch；interpretScreenEvent 暫不接 graceWindow）
 - 接管 module.go 的 `manageActivityWatch` 路徑
 
-### Commit 4 — `feat(probe): graceWindow + screen event interpretation`
+### Commit 4 — `feat(probe): graceWindow + screen event interpretation + stale guard`
 
 Slice 3 後半 + Slice 7 主體：
-- OR3-OR5 + OB1-OB4 written first
-- orchestrator.interpretScreenEvent 完整邏輯（graceWindow + ScreenStable shellPrompt 分支 + Error Guard + projection + broadcast）
+- OR3-OR6 + OB1-OB4 written first（含 R4 fix OR6 stale-callback regression）
+- orchestrator.interpretScreenEvent 完整邏輯（stale-callback guard + graceWindow + ScreenStable shellPrompt 分支 + Error Guard + projection + broadcast）
 - `internal/agent/metrics.go` 4 個新 expvar
 - `isDevMode()` helper + `[probe]` log 點
 - `recordHookAt` integration into module.go hook path
@@ -597,9 +598,10 @@ Slice 3 後半 + Slice 7 主體：
 ### Commit 5 — `feat(agent/cc): adopt new probe primitive via profile`
 
 Slice 4：
-- CC1-CC5 written first
+- **CC1-CC6 written first**（R6 fix — 補入 CC6 rename rewatch / R3 deadlock-freedom regression；CC6 是 R2 fix #1 + R3 fix 的核心 regression test，必納入 written-first 清單）
 - `internal/agent/cc/probe_profile.go`（cc 實作 ProbeProfileProvider）
 - module.go 確認 cc path 走 orchestrator + recordHookAt 在 cc hook handler call 到
+- module.go `renameSessionLocked` 改走 orchestrator stop+start（R2 fix #1）；`renameSessionLocked` 持 `m.mu` 不會 deadlock（R3 fix）
 
 ### Final Verification
 
