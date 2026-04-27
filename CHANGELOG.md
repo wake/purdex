@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.240] - 2026-04-28
+
+### Feat(spa): quick-commands v2 — Phase 1b (Settings UI + executor + workspace context menu) (#686)
+
+Phase 1b of Quick Commands v2 — the first user-visible mount point for the v2 capability/binding/slot model. Settings UI lets users create / edit / delete commands and bind them to slots; right-clicking a workspace in the sidebar shows the bound `WORKSPACE_ACTIONS` chips and runs them through `slot-executor` (create session → optional host picker → send keys → switch focus). Five rounds of codex review converged.
+
+- `inferWorkspaceHostId` — majority-vote host resolution from a workspace's tmux-session tabs (spec §3.2.1) with deterministic tie-break; returns null when the workspace has no tmux-session tabs so callers can open `HostPickerPopover`.
+- `<HostPickerPopover>` — reusable host picker honouring spec §3.2.2 lifecycle contract (resolves to null on unmount / outside-click / duplicate-resolve).
+- `<CommandSlot>` — shared component bridging bindings → bound capabilities → executor; `mountTo` / `hostId` / `busy` / optional custom `render` props.
+- `slot-executor` — three-stage failure UX (create-session / send-keys / switch) per spec §3.3 with toast-precedence decision matrix; `assertContextLive` callback blocks `executeCommand` if the workspace was deleted while `createSession` was in flight (codex round-4 — destructive commands must not ship to a session whose context is gone).
+- `useUndoToast` schema — optional `action` / `actionLabel` so create-session and switch failures can omit the action button while send-keys failure carries Retry (spec §3.3 / codex round-1 B4).
+- `QuickCommandsSettingsSection` — list + edit dialog + multi-select mount chips with arrow-key roving focus (codex round-1 C15) and a11y (focus trap / Esc / aria).
+- `WorkspaceQuickCommandsContextMenu` — mounts `<CommandSlot mountTo=WORKSPACE_ACTIONS>` on `WorkspaceRow` right-click; transactional `switchToSession` with pre-check, read-back, and rollback (closeTab + restore prevActiveTabId) so a deleted-workspace race leaves no orphan tab and no dangling active-tab mutation. Inherits `cwd` from `workspace.moduleConfig.files.projectPath` (spec §3.2).
+- `quick-command-bindings.ts` consumers (CommandSlot / WorkspaceContextMenu / WorkspaceQuickCommandsContextMenu / QuickCommandsSettingsSection) all route binding lookups through `getBindingTargets` so capability ids colliding with inherited Object.prototype methods (`toString` / `valueOf` / etc.) can't crash the slot host.
+- Five rounds of codex review converged: R1 standard (2 P2) → R2 attacker / defender / file-quality (4 findings) → R3 transaction layer B (orphan tab) → R4 transaction layer C (destructive command) → R5 final approve. 13 findings closed; 2 follow-ups tracked: #689 (server-side orphan session cleanup) and #690 (assertContextLive wiring enforcement).
+
 ## [1.0.0-alpha.239] - 2026-04-28
 
 ### Feat(spa): tabs cluster by kind on insert (P2) (#684)
