@@ -271,3 +271,129 @@ func TestFakeExecutor_PaneCurrentPath_NotSet(t *testing.T) {
 		t.Error("expected error for unset pane cwd")
 	}
 }
+
+// --- Slice 0: CapturePaneRange / CapturePaneTopLines tests (TT1-TT4) ---
+
+// TT1: RealExecutor passes -S/-E args through to tmux capture-pane.
+func TestCapturePaneRange_RealExecutor_PassesArgs(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+if [ "$1" != "capture-pane" ] || [ "$2" != "-p" ] || [ "$3" != "-t" ] || [ "$4" != "sess:" ] || [ "$5" != "-S" ] || [ "$6" != "2" ] || [ "$7" != "-E" ] || [ "$8" != "5" ]; then
+  printf 'unexpected args: %s\n' "$*" >&2
+  exit 2
+fi
+printf 'line2\nline3\nline4\nline5\n'
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	out, err := (&tmux.RealExecutor{}).CapturePaneRange("sess:", 2, 5)
+	if err != nil {
+		t.Fatalf("CapturePaneRange returned error: %v", err)
+	}
+	if out != "line2\nline3\nline4\nline5\n" {
+		t.Fatalf("CapturePaneRange = %q, want 4 lines", out)
+	}
+}
+
+// TT2: CapturePaneTopLines delegates to CapturePaneRange(target, 0, n-1).
+func TestCapturePaneTopLines_DelegatesToRange(t *testing.T) {
+	cases := []struct {
+		n       int
+		wantEnd string // expected $6 (the -E value) in the script-mode mock
+	}{
+		{n: 1, wantEnd: "0"},
+		{n: 3, wantEnd: "2"},
+		{n: 10, wantEnd: "9"},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("n=%d", tc.n), func(t *testing.T) {
+			dir := t.TempDir()
+			script := filepath.Join(dir, "tmux")
+			body := fmt.Sprintf(`#!/bin/sh
+if [ "$1" != "capture-pane" ] || [ "$2" != "-p" ] || [ "$3" != "-t" ] || [ "$4" != "sess:" ] || [ "$5" != "-S" ] || [ "$6" != "0" ] || [ "$7" != "-E" ] || [ "$8" != "%s" ]; then
+  printf 'unexpected args: %%s\n' "$*" >&2
+  exit 2
+fi
+printf 'ok\n'
+`, tc.wantEnd)
+			if err := os.WriteFile(script, []byte(body), 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			out, err := (&tmux.RealExecutor{}).CapturePaneTopLines("sess:", tc.n)
+			if err != nil {
+				t.Fatalf("CapturePaneTopLines(n=%d) error: %v", tc.n, err)
+			}
+			if out != "ok\n" {
+				t.Fatalf("CapturePaneTopLines(n=%d) = %q, want %q", tc.n, out, "ok\n")
+			}
+		})
+	}
+}
+
+// TT3: CapturePaneTopLines with n<=0 returns "" without invoking tmux.
+func TestCapturePaneTopLines_ZeroOrNegative_ReturnsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	// A tmux shim that fails the test if invoked.
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+printf 'tmux must not be invoked for n<=0\n' >&2
+exit 99
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, n := range []int{0, -1} {
+		out, err := (&tmux.RealExecutor{}).CapturePaneTopLines("sess:", n)
+		if err != nil {
+			t.Errorf("CapturePaneTopLines(n=%d) error = %v, want nil", n, err)
+		}
+		if out != "" {
+			t.Errorf("CapturePaneTopLines(n=%d) = %q, want \"\"", n, out)
+		}
+	}
+}
+
+// TT4: FakeExecutor range methods round-trip per-line content.
+func TestFakeExecutor_RangeMethods_Roundtrip(t *testing.T) {
+	f := tmux.NewFakeExecutor()
+	lines := []string{"line0", "line1", "line2", "line3", "line4"}
+	f.SetPaneContentByRange("sess:", lines)
+
+	cases := []struct {
+		name  string
+		start int
+		end   int
+		want  string
+	}{
+		{name: "single line 0", start: 0, end: 0, want: "line0\n"},
+		{name: "lines 1..3", start: 1, end: 3, want: "line1\nline2\nline3\n"},
+		{name: "all 0..4", start: 0, end: 4, want: "line0\nline1\nline2\nline3\nline4\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := f.CapturePaneRange("sess:", tc.start, tc.end)
+			if err != nil {
+				t.Fatalf("CapturePaneRange(%d,%d) error: %v", tc.start, tc.end, err)
+			}
+			if got != tc.want {
+				t.Errorf("CapturePaneRange(%d,%d) = %q, want %q", tc.start, tc.end, got, tc.want)
+			}
+		})
+	}
+
+	// CapturePaneTopLines(_, 3) → first 3 lines.
+	got, err := f.CapturePaneTopLines("sess:", 3)
+	if err != nil {
+		t.Fatalf("CapturePaneTopLines(3) error: %v", err)
+	}
+	want := "line0\nline1\nline2\n"
+	if got != want {
+		t.Errorf("CapturePaneTopLines(3) = %q, want %q", got, want)
+	}
+}

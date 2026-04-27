@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -39,6 +40,7 @@ type FakeExecutor struct {
 	activePaneMetadata   map[string]TmuxPaneMetadata
 	activePaneMetaErrors map[string]error
 	paneContents         map[string]string   // target → captured text
+	paneContentByRange   map[string][]string // target → per-line slice (for CapturePaneRange / CapturePaneTopLines)
 	paneChildren         map[string][]string // target → child command names
 	paneDescendants      map[string][]string // target → recursive descendant command names
 	panePIDs             map[string]string   // target → pane pid
@@ -67,6 +69,7 @@ func NewFakeExecutor() *FakeExecutor {
 		activePaneMetadata:   make(map[string]TmuxPaneMetadata),
 		activePaneMetaErrors: make(map[string]error),
 		paneContents:         make(map[string]string),
+		paneContentByRange:   make(map[string][]string),
 		paneChildren:         make(map[string][]string),
 		paneDescendants:      make(map[string][]string),
 		panePIDs:             make(map[string]string),
@@ -387,6 +390,46 @@ func (f *FakeExecutor) CapturePaneContent(target string, lastN int) (string, err
 		return "", fmt.Errorf("no pane content for target %q", target)
 	}
 	return content, nil
+}
+
+// SetPaneContentByRange installs a per-line slice for the target. Both
+// CapturePaneRange and CapturePaneTopLines read from this same source so
+// tests can inject any window of lines and assert the slice they receive.
+func (f *FakeExecutor) SetPaneContentByRange(target string, lines []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paneContentByRange[target] = append([]string(nil), lines...)
+}
+
+func (f *FakeExecutor) CapturePaneRange(target string, start, endInclusive int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	lines, ok := f.paneContentByRange[target]
+	if !ok {
+		return "", fmt.Errorf("no pane content by range for target %q", target)
+	}
+	if start < 0 {
+		start = 0
+	}
+	if endInclusive >= len(lines) {
+		endInclusive = len(lines) - 1
+	}
+	if start > endInclusive {
+		return "", nil
+	}
+	var b strings.Builder
+	for i := start; i <= endInclusive; i++ {
+		b.WriteString(lines[i])
+		b.WriteByte('\n')
+	}
+	return b.String(), nil
+}
+
+func (f *FakeExecutor) CapturePaneTopLines(target string, n int) (string, error) {
+	if n <= 0 {
+		return "", nil
+	}
+	return f.CapturePaneRange(target, 0, n-1)
 }
 
 func (f *FakeExecutor) SetPaneSize(target string, cols, rows int) {
