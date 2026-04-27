@@ -1,6 +1,13 @@
-# Lights Rebuild — Phase 4a-1 Plan v1 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v1.1 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v1（plan 第一輪起草，待 codex review）
+**Status**: draft v1.1（Round 1 codex review fix — `review-moh40grn-u7wxgv`，2 P2 findings 全採納）
+
+## v1.x 演進
+
+| 版本 | 變更 |
+|---|---|
+| v1 | 初版起草（6 slices / 24 tests / ~305 LoC）|
+| v1.1 | R1 codex review fix：(1) API gap — `WatchTopLines` / `WatchFullScreen` 無法接收 `IdleStableTicks`；併為單一 `Watch(target, opts, cb)` + `WatchOptions{TopLines, IdleStableTicks}`；(2) repeated stable emission — `stableEmitted` flag 確保每次 changed→stable transition 只觸發一次 ScreenStable；新增 PR2b 測試覆蓋連續穩定無重發 |
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -36,9 +43,9 @@ PR-4a-1 把目前 `internal/agent/probe/activity.go` 的 watcher 從「probe 解
 
 **Slice 1**：Probe primitive 重構
 - 新增 `ScreenChangeEvent` struct + `ScreenChangeCallback`
-- 新增 `WatchTopLines(target, lines, cb)`（PR-4a-1 cc / codex / opencode 主用）
-- 新增 `WatchFullScreen(target, cb)`（保留 escape hatch；目前無 caller，但 readiness extension 可能用）
-- `watchLoop` 統一內部 poll 機制；watcher 自治（callback 不再 cancel/delete）
+- 新增 `WatchOptions{TopLines int, IdleStableTicks int}`（R1 fix #1 — 統一收 caller tuning，避免雙 API 分歧 + IdleStableTicks 無入口）
+- 新增 `Watch(target, opts, cb)` — 單一 entry：`opts.TopLines == 0` 走 full screen；`> 0` 走 top-N
+- `watchLoop` 統一內部 poll 機制；watcher 自治（callback 不再 cancel/delete）；**`stableEmitted` flag**（R1 fix #2）— ScreenStable 每次 changed→stable transition 只觸發一次，避免 idle 重發
 - **移除**：`activityLoop` 對 `ActivitySignal{Running, Idle, ShellPrompt}` 的解讀；`StartWatch` 簽名換成新 primitive；舊 callback 路徑由 module 層接管
 - **保留**：`StopWatch` / `StopAllWatches` / `HasWatcher` 維持原語意
 
@@ -148,44 +155,65 @@ const (
 type ScreenChangeCallback func(ScreenChangeEvent)
 ```
 
-#### 2.1.2 新增 `WatchTopLines` / `WatchFullScreen`
+#### 2.1.2 新增 `WatchOptions` + 單一 `Watch` API（R1 fix #1）
 
 ```go
-// WatchTopLines starts a watcher on the top n lines of the target.
-// Emits ScreenChanged on first hash diff; emits ScreenStable on N
-// consecutive identical hashes (default N=3, configurable via opts in
-// Slice 3). The watcher persists until StopWatch is called — callbacks
-// do NOT terminate the watcher (kickoff Decision 13: watch-loop-owned).
-func (p *Prober) WatchTopLines(target string, lines int, cb ScreenChangeCallback) {...}
+// WatchOptions tunes the watch loop behavior. Zero values fall back to
+// safe defaults (TopLines = 0 → full screen; IdleStableTicks = 0 → 3).
+type WatchOptions struct {
+    // TopLines limits captured content to the top N lines via
+    // tmux.CapturePaneTopLines. 0 means full screen (CapturePaneContent).
+    TopLines int
 
-// WatchFullScreen starts a watcher on the full visible pane content.
-// Equivalent to the legacy hash-the-whole-pane mode; retained for
-// readiness/debug callers that need full-screen sampling.
-func (p *Prober) WatchFullScreen(target string, cb ScreenChangeCallback) {...}
+    // IdleStableTicks is the number of consecutive identical-hash ticks
+    // before ScreenStable is emitted. 0 means default 3.
+    IdleStableTicks int
+}
+
+// Watch starts a screen change watcher on the target.
+// Emits ScreenChanged on hash diff; emits ScreenStable exactly once per
+// changed→stable transition (see watchLoop §2.1.3). The watcher persists
+// until StopWatch is called — callbacks do NOT terminate the watcher
+// (kickoff Decision 13: watch-loop-owned).
+func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback) {...}
 ```
 
-#### 2.1.3 `watchLoop` 內部 poll 機制
+**設計理由**（R1 fix #1）：
+- 單一 entry 比雙 API 簡潔；`TopLines == 0` 是天然 full-screen sentinel
+- `WatchOptions` 結構體擴展性好，未來加 poll interval / hash algorithm 等不破壞 API
+- IdleStableTicks 經由 opts 結構流入 watchLoop，OR1 test 可以對 cc profile `{Lines:5, IdleStableTicks:2}` 驗 stable threshold
 
-- 啟動：`captureFn` (closure 鎖住 `WatchTopLines` 或 `WatchFullScreen` 的 capture 邏輯) → ticker 500ms → ctx loop
+**caller 端**：orchestrator 拿 ProbeProfile 後組成 `WatchOptions{TopLines: profile.TopLines, IdleStableTicks: profile.IdleStableTicks}` 傳入 `Watch`（§2.3.3 詳述）。
+
+#### 2.1.3 `watchLoop` 內部 poll 機制（含 R1 fix #2）
+
+- 啟動：`captureFn` (closure 依 `opts.TopLines` 決定呼叫 `CapturePaneTopLines(target, opts.TopLines)` 或 `CapturePaneContent(target, fullScreenLineCount)`) → ticker 500ms → ctx loop
 - 邏輯：
   ```
-  baseline = capture()  // 失敗則退出，無 baseline 不發事件
+  idleStableTicks = opts.IdleStableTicks; if idleStableTicks == 0 { idleStableTicks = 3 }
+  baseline, ok = capture(); if !ok { return }  // 無 baseline 不發事件
+  stableCount = 0
+  stableEmitted = false  // R1 fix #2: 每次 changed→stable transition 只觸發一次
   loop:
     select ctx.Done -> return
     select tick:
-      current = capture()
-      if err: continue (skip tick, don't fire false event)
+      current, ok = capture()
+      if !ok: continue (skip tick, don't fire false event)
       if hash(current) != hash(baseline):
         cb(ScreenChanged{Content: current})
         baseline = current
         stableCount = 0
-        continue loop  // 繼續觀察，不退出
+        stableEmitted = false  // change resets, future stable-emit allowed
+        continue
+      // hash unchanged
       stableCount++
-      if stableCount >= idleStableTicks (default 3):
+      if !stableEmitted && stableCount >= idleStableTicks:
         cb(ScreenStable{Content: current})
-        stableCount = 0  // reset，allow re-fire on next change-stable cycle
+        stableEmitted = true
+        // do NOT reset stableCount; do NOT re-emit ScreenStable until next change
   ```
-- **關鍵差異 vs legacy `activityLoop`**：watcher 不退出；可發多次 ScreenChanged + ScreenStable 事件；callback 不擁有 watcher 生命週期
+- **關鍵差異 vs legacy `activityLoop`**：watcher 不退出；可發多次 ScreenChanged + ScreenStable transitions；callback 不擁有 watcher 生命週期；同一 stable run 不會重發 ScreenStable
+- **R1 fix #2 rationale**：legacy `activityLoop` 自動退出後不存在 repeated emission 問題；新 watch-loop-owned 設計若不加 `stableEmitted` flag，idle pane 會每 N ticks 重發 ScreenStable → orchestrator 對應重發 StatusIdle broadcast → metrics counter 無限累積 + log 噴 + WS 客戶端收 idle 風暴。`stableEmitted` 確保「stable run 視為一個 transition，到下次 change 才再 arm」
 
 #### 2.1.4 Watcher ownership 變更
 
@@ -196,20 +224,21 @@ func (p *Prober) WatchFullScreen(target string, cb ScreenChangeCallback) {...}
 #### 2.1.5 移除的東西
 
 - `ActivitySignal` enum + `ActivityCallback` type — 由 ScreenChangeCallback / ScreenChangeEvent 取代；舊 callsite 由 module 層轉接（Slice 3）
-- `StartWatch(target, ActivityCallback)` 公開 API — 改名 / 替換為 `WatchTopLines` / `WatchFullScreen`
+- `StartWatch(target, ActivityCallback)` 公開 API — 替換為 `Watch(target, opts, cb)`
 - `activityLoop` 內部 method — 改成 `watchLoop`
 - `hashCapture` 內部 method — 改成支援 captureFn closure 的版本
 
-#### 2.1.6 測試（6 tests）
+#### 2.1.6 測試（7 tests — R1 +1 PR2b）
 
 | Test | 重點 |
 |------|------|
-| PR1 `TestWatchTopLines_FiresChangedOnDiff` | 注入兩次 capture（同 → 異），驗證單次 ScreenChanged callback、Content 為新內容 |
-| PR2 `TestWatchTopLines_FiresStableAfterNIdenticalSamples` | 連續 4 次同 capture，驗證單次 ScreenStable callback（baseline + 3 stable ticks）|
-| PR3 `TestWatchTopLines_DoesNotExitOnCallback` | 一次 ScreenChanged callback 後再注入 diff，驗證再發 ScreenChanged（loop 持續）|
-| PR4 `TestWatchTopLines_StopWatch_CancelsLoop` | StopWatch 後 capture mock 不再被 call、HasWatcher false |
-| PR5 `TestWatchFullScreen_UsesEntirePane` | 注入 only-bottom-line-changed scenario，FullScreen 報 changed、TopLines (n=3) 不報 changed |
-| PR6 `TestWatchTopLines_TmuxErrorTickSkipped` | capture err 在 tick 中發生 → 不 fire ScreenChanged，下一 tick 復原 → 報 ScreenChanged |
+| PR1 `TestWatch_FiresChangedOnDiff` | 注入兩次 capture（同 → 異），驗證單次 ScreenChanged callback、Content 為新內容 |
+| PR2 `TestWatch_FiresStableAfterNIdenticalSamples` | 連續 4 次同 capture，驗證單次 ScreenStable callback（baseline + 3 stable ticks）|
+| PR2b `TestWatch_StableEmittedOnceUntilNextChange`（**R1 fix #2 regression**）| 注入 6 次同 capture（baseline + 5 stable）— 驗證 ScreenStable 只 fire 1 次；接著注入 diff → ScreenChanged fire；再注入 4 同 → ScreenStable 再 fire 1 次（changed→stable 切換才 re-arm）|
+| PR3 `TestWatch_DoesNotExitOnCallback` | 一次 ScreenChanged callback 後再注入 diff，驗證再發 ScreenChanged（loop 持續）|
+| PR4 `TestWatch_StopWatch_CancelsLoop` | StopWatch 後 capture mock 不再被 call、HasWatcher false |
+| PR5 `TestWatch_TopLinesIgnoresBottomChanges` | 注入 only-bottom-line-changed scenario，opts.TopLines=3 不報 changed；opts.TopLines=0（full screen）報 changed |
+| PR6 `TestWatch_TmuxErrorTickSkipped` | capture err 在 tick 中發生 → 不 fire ScreenChanged，下一 tick 復原 → 報 ScreenChanged |
 
 ---
 
@@ -271,7 +300,7 @@ type ProbeProfile struct {
 
 放 `internal/agent/provider.go`。沿用 `StatusSupporter` / `HookInstaller` 的 optional interface 模式。
 
-#### 2.3.3 default profile
+#### 2.3.3 default profile（R1 fix #1：opts 結構流入 prober）
 
 定義於 orchestrator package：
 
@@ -285,11 +314,11 @@ profile := defaultProbeProfile
 if pp, ok := agentProvider.(agentpkg.ProbeProfileProvider); ok {
     profile = pp.ProbeProfile()
 }
-if profile.TopLines > 0 {
-    o.parent.prober.WatchTopLines(target, profile.TopLines, o.makeCallback(session, agentType))
-} else {
-    o.parent.prober.WatchFullScreen(target, o.makeCallback(session, agentType))
+opts := probe.WatchOptions{
+    TopLines:        profile.TopLines,        // 0 = full screen
+    IdleStableTicks: profile.IdleStableTicks, // 0 = default 3 (handled by watchLoop)
 }
+o.parent.prober.Watch(target, opts, o.makeCallback(session, agentType))
 ```
 
 #### 2.3.4 graceWindow 解讀
@@ -440,13 +469,13 @@ log 點（gated）：
 | Slice | Test ID 區段 | 數量 | 涵蓋 |
 |-------|--------------|------|------|
 | 0 | TT1-TT4 | 4 | tmux range API + fake executor parity |
-| 1 | PR1-PR6 | 6 | watcher 自治 / Top-N vs FullScreen / 多次 fire / err tick skip |
+| 1 | PR1-PR2b + PR3-PR6 | 7 | watcher 自治 / Top-N vs full screen / 多次 fire / err tick skip / **stable-emit-once（R1 fix #2）**|
 | 2 | (沿用既有) | 0 | shell prompt utility（純 visibility）|
 | 3 | OR1-OR5 | 5 | profile / graceWindow / Error Guard |
 | 4 | CC1-CC5 | 5 | cc profile + module wiring + E2E |
 | 7 | OB1-OB4 | 4 | expvar + PDX_DEV_MODE log |
 
-**總計**：24 tests（與 plan v1.3 §7.1 estimate 對齊）。
+**總計**：25 tests（plan v1.3 §7.1 estimate 24 → +1 PR2b R1 regression test）。
 
 ---
 
@@ -464,8 +493,8 @@ Slice 0 全部。包含：
 ### Commit 2 — `refactor(probe): extract pure ScreenChangeEvent primitive`
 
 Slice 1 + Slice 2。包含：
-- PR1-PR6 全 written first
-- 新增 `ScreenChangeEvent` / `ScreenChangeCallback` / `WatchTopLines` / `WatchFullScreen` / `watchLoop`
+- PR1-PR2b + PR3-PR6 全 written first（含 R1 fix #2 regression PR2b）
+- 新增 `ScreenChangeEvent` / `ScreenChangeCallback` / `WatchOptions` / `Watch` / `watchLoop`（含 `stableEmitted` flag）
 - 移除 `ActivitySignal` / `ActivityCallback` / `activityLoop` / `StartWatch (legacy)` / `hashCapture`（或改名）
 - `LooksLikeShellPrompt` / `StripANSI` export
 - **Caller 端**：`module.go` 暫時 build error 容忍（下個 commit 修）— 用 `// TODO Slice 3` 註記；或這個 commit 同時把 module.go 改為 stub 呼叫（建議後者，避免 broken intermediate state）
@@ -578,14 +607,14 @@ scripts/check-pr-4a-1-boundary.sh (new)
 | Slice | 估 LoC | 估 tests |
 |-------|--------|----------|
 | 0 tmux API | ~40 | 4 |
-| 1 probe primitive | ~80 | 6 |
+| 1 probe primitive | ~85 | 7（R1 +PR2b）|
 | 2 shell prompt export | ~5 | 0 |
 | 3 module orchestrator | ~80 | 5 |
 | 4 cc adoption | ~40 | 5 |
 | 7 graceWindow + dev log + expvar | ~30 | 4 |
 | (extra) boundary script | ~30 | 0 |
 
-**總計**：~305 LoC + 24 tests（plan v1.3 §7.1 estimate ~250 略高 — 主因新 ScreenChangeEvent type + ProbeProfileProvider interface + boundary script，仍在 PR 合理 size 內）。
+**總計**：~310 LoC + 25 tests（plan v1.3 §7.1 estimate ~250+24，本版 R1 +5 LoC `stableEmitted` + `WatchOptions` + 1 PR2b regression test，仍在 PR 合理 size 內）。
 
 **屬中型 PR**。`go test` 預期 elapsed < 30s 內。
 
