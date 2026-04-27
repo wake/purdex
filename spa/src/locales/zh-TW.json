@@ -743,5 +743,17 @@
 
   "workspace.tear_off": "獨立到新視窗",
   "workspace.merge_to": "合併到視窗",
-  "workspace.merge_loading": "載入中..."
+  "workspace.merge_loading": "載入中...",
+
+  "quick_commands.host_picker.label": "選擇主機",
+  "quick_commands.host_picker.empty": "尚未設定任何主機",
+  "quick_commands.host_picker.online": "線上",
+  "quick_commands.host_picker.offline": "離線",
+  "quick_commands.host_picker.close": "關閉",
+  "quick_commands.toast.create_failed": "無法建立 session：{{reason}}",
+  "quick_commands.toast.send_keys_failed": "Session 已建立，但指令送出失敗。",
+  "quick_commands.toast.switch_failed": "已建立並送出指令，但無法切換焦點；請至 sessions 列表查看。",
+  "quick_commands.toast.retry": "重試",
+  "quick_commands.aria.toolbar": "快速指令",
+  "quick_commands.aria.workspace_actions": "工作區快速動作"
 }

@@ -743,5 +743,17 @@
 
   "workspace.tear_off": "Move to New Window",
   "workspace.merge_to": "Move to Window",
-  "workspace.merge_loading": "Loading..."
+  "workspace.merge_loading": "Loading...",
+
+  "quick_commands.host_picker.label": "Choose host",
+  "quick_commands.host_picker.empty": "No hosts available",
+  "quick_commands.host_picker.online": "online",
+  "quick_commands.host_picker.offline": "offline",
+  "quick_commands.host_picker.close": "Close",
+  "quick_commands.toast.create_failed": "Failed to start session: {{reason}}",
+  "quick_commands.toast.send_keys_failed": "Session created, but command failed.",
+  "quick_commands.toast.switch_failed": "Created and sent, but could not switch focus; check the sessions list.",
+  "quick_commands.toast.retry": "Retry",
+  "quick_commands.aria.toolbar": "Quick commands",
+  "quick_commands.aria.workspace_actions": "Workspace quick actions"
 }
