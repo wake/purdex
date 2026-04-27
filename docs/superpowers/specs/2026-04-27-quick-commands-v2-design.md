@@ -187,8 +187,9 @@ function inferWorkspaceHostId(workspace: Workspace, tabs: Record<string, Tab>): 
   const winners = [...counts.entries()].filter(([, c]) => c === max).map(([h]) => h)
   if (winners.length === 1) return winners[0]
 
-  // 3. 平手 tie-break：active tab 是 tmux-session **且其 hostId 在 winners 內**才用
-  //    （active 是少數派時跳過此條，繼續往條 4 — 避免少數派偷渡為勝者）
+  // 3. 平手 tie-break：active tab 為 tmux-session 時，**僅當其 hostId 同時出現在 winners
+  //    集合內**才採用；active hostId 是少數派（不在 winners 內）時跳過此條，繼續往條 4。
+  //    這是必要規則，避免少數派 hostId 因 active 偷渡成勝者。
   if (workspace.activeTabId) {
     const activeTab = tabs[workspace.activeTabId]
     if (activeTab) {
@@ -223,7 +224,7 @@ function inferWorkspaceHostId(workspace: Workspace, tabs: Record<string, Tab>): 
 **Picker 細節契約**：
 - **Anchor 由 caller 提供**：context menu 場景用 click 座標 (`{ x, y }`)；inline trigger（hover popover）用 trigger 的 `HTMLElement` ref。Picker 元件支援兩種 anchor 形式
 - **Offline host 不 disable**：user 可能就是要 force route 到 offline host（執行後若 host 連不上，executor 呼叫 createSession 失敗自然會 toast）— 不擅自代為決策
-- **空 hostOrder**：顯示空狀態文案 + close button（理論上不會發生，因為 user 至少有一個 host 才能用本系統）
+- **空 hostOrder**：顯示空狀態文案 **+ close button**（除 Esc 外的滑鼠可達退場路徑）。理論上不會發生（user 至少有一個 host 才能用本系統），但仍須提供，避免極端狀態下卡死
 
 此 picker 元件（`HostPickerPopover`）為**獨立可重用**設計，未來 multi-host workspace + default launcher binding 系統上線後可繼續使用。
 
@@ -231,11 +232,13 @@ function inferWorkspaceHostId(workspace: Workspace, tabs: Record<string, Tab>): 
 
 孤兒 session 是 user 困擾的主因。失敗時要讓 user 看到結果。
 
-| 階段 | 失敗 | 行為 |
-|---|---|---|
-| 建 session | error | toast: "Failed to start session: <reason>"，不切焦點 |
-| 建 session ✅ + send-keys | error | **仍切到該 session**，toast 帶 action button: "Session created, but command failed. <Retry> <Dismiss>"（透過 `useUndoToast` 擴 `actionLabel?` schema 提供，預設 fallback 'Undo'） |
-| 切到 session | error（罕見） | toast 提示，session 仍存在於 sessions 列表 |
+| 階段 | 失敗 | 行為 | Toast action button |
+|---|---|---|---|
+| 建 session | error | toast: "Failed to start session: <reason>"，不切焦點 | **無**（純通知） |
+| 建 session ✅ + send-keys | error | **仍切到該 session**，toast: "Session created, but command failed." | **有** — `<Retry>`（重跑送 keys） |
+| 切到 session | error（罕見） | toast 提示，session 仍存在於 sessions 列表 | **無**（純通知） |
+
+`useUndoToast` schema 須擴為 `action?` + `actionLabel?` **皆 optional**：`action == null` 時 button 完全不渲染（非顯示為 disabled）。`actionLabel` 預設 fallback `'Undo'`（為相容既有 callsite）。
 
 關鍵：**send-keys 失敗也要切過去**，user 才知道 session 在那、可以手動跑 — 這比「保留 session 但不切」少一個孤兒問題。
 
@@ -321,7 +324,7 @@ Edit dialog 欄位：
 - Multi-select chips 支援 Space / Enter 切換、方向鍵移動
 - Slot button 必有 `aria-label`（`name` + `category` 後綴）+ `title` tooltip 顯示 `command` 內容（debug 用）
 - Slot button 群可 Tab 線性走訪
-- Toast 採 `role="status"` 或 `role="alert"`
+- Toast 採 `role="status"`（一般通知）或 `role="alert"`（錯誤）— 由 `GlobalUndoToast` 元件統一提供 live region；caller 不需各自加 role
 - Plus button hover popover：`onFocusCapture` / `onBlurCapture` 等同於 hover；popover 內按鈕可 Tab 走訪；Esc 收回
 - HostPickerPopover：Esc 取消（no-op）、方向鍵移動 host item、Enter 選定
 
