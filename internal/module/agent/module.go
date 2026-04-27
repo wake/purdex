@@ -273,7 +273,8 @@ func (m *Module) renameSessionLocked(oldName, newName string) {
 		// Restart watcher with new name
 		m.activeWatchers[newName] = agentType
 		if m.prober != nil {
-			m.prober.StartWatch(newName+":", m.onActivityDetected(newName, agentType))
+			// TODO Slice 3 — orchestrator wiring restores status-mapping callback.
+			m.prober.Watch(newName+":", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
 		}
 	}
 }
@@ -437,7 +438,10 @@ func (m *Module) resolvePaneSession(paneID string) (string, string) {
 	return sessionName, m.resolveSessionCode(sessionName)
 }
 
-// manageActivityWatch handles starting/stopping Activity watchers in response to hook events.
+// manageActivityWatch handles starting/stopping Activity watchers in response
+// to hook events. The status-mapping callback (legacy onActivityDetected) is
+// intentionally a no-op in this commit; Slice 3 (Commit 3+4) wires the
+// orchestrator that interprets ScreenChangeEvent into status transitions.
 func (m *Module) manageActivityWatch(session, agentType string, newStatus agentpkg.Status) {
 	m.mu.Lock()
 	_, wasWatching := m.activeWatchers[session]
@@ -451,7 +455,9 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 		m.mu.Lock()
 		m.activeWatchers[session] = agentType
 		m.mu.Unlock()
-		m.prober.StartWatch(session+":", m.onActivityDetected(session, agentType))
+		// TODO Slice 3 — orchestrator wiring will replace the no-op callback
+		// with a status-mapping handler driven by ProbeProfile.
+		m.prober.Watch(session+":", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
 	}
 }
 
@@ -461,61 +467,5 @@ func shouldWatchActivity(status agentpkg.Status) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-// onActivityDetected returns a callback for screen-activity transitions while a
-// waiting/running/idle session is being watched. The callback checks if the
-// watcher is still active and then maps the activity signal to a new status or
-// triggers a sweep hint for shell-prompt + dead-PID cases.
-func (m *Module) onActivityDetected(session, agentType string) func(string, probe.ActivitySignal) {
-	return func(target string, signal probe.ActivitySignal) {
-		m.mu.Lock()
-		if _, active := m.activeWatchers[session]; !active {
-			m.mu.Unlock()
-			return
-		}
-		delete(m.activeWatchers, session)
-		m.mu.Unlock()
-
-		status := agentpkg.StatusIdle
-		switch signal {
-		case probe.ActivitySignalRunning:
-			status = agentpkg.StatusRunning
-		case probe.ActivitySignalIdle:
-			status = agentpkg.StatusIdle
-		case probe.ActivitySignalShellPrompt:
-			projection, err := m.projectionForSession(session)
-			if err == nil && projection != nil && projection.TopFrame != nil && !isPidAliveFn(projection.TopFrame.PID) {
-				_ = m.sweepOnce()
-				return
-			}
-			status = agentpkg.StatusIdle
-		default:
-			return
-		}
-
-		// Issue #1: Error Guard — don't overwrite StatusError
-		m.mu.Lock()
-		if m.currentStatus[session] == agentpkg.StatusError {
-			m.mu.Unlock()
-			return // respect Error Guard
-		}
-		m.currentStatus[session] = status
-		m.mu.Unlock()
-
-		if projection, err := m.setProjectionTopStatus(session, status); err == nil && projection != nil {
-			normalized := buildProjectionNormalized(projection, agentType, "probe:activity", time.Now().UnixNano(), agentpkg.DeriveResult{})
-			m.broadcastToSession(session, normalized)
-			return
-		}
-
-		normalized := agentpkg.NormalizedEvent{
-			AgentType:    agentType,
-			Status:       string(status),
-			RawEventName: "probe:activity",
-			BroadcastTs:  time.Now().UnixNano(),
-		}
-		m.broadcastToSession(session, normalized)
 	}
 }
