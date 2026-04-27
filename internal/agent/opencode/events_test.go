@@ -162,10 +162,24 @@ type frozenEvents struct {
 type frozenEventEntry struct {
 	UpstreamKey string `json:"upstreamKey"`
 	Purdex      struct {
-		Kind             string `json:"kind"`
-		PurdexEventName  string `json:"purdexEventName,omitempty"`
-		Reason           string `json:"reason,omitempty"`
+		Kind               string                 `json:"kind"`
+		PurdexEventName    string                 `json:"purdexEventName,omitempty"`
+		Reason             string                 `json:"reason,omitempty"`
+		TemplateConsumesAt string                 `json:"templateConsumesAt,omitempty"`
+		StalenessPolicy    *frozenStalenessPolicy `json:"stalenessPolicy,omitempty"`
 	} `json:"purdex"`
+}
+
+// frozenStalenessPolicy mirrors the purdex.stalenessPolicy block in
+// testdata/opencode-1.14.23-events.json. Pointer indirection on the parent
+// struct lets absence ↔ nil so HC5e can iterate only the policied entries.
+type frozenStalenessPolicy struct {
+	State                   string `json:"state,omitempty"`
+	Decision                string `json:"decision"`
+	SwitchTarget            string `json:"switchTarget,omitempty"`
+	SwitchTargetUpstreamKey string `json:"switchTargetUpstreamKey,omitempty"`
+	Rationale               string `json:"rationale,omitempty"`
+	DedupRequired           bool   `json:"dedupRequired,omitempty"`
 }
 
 func loadFrozenManifest(t *testing.T) frozenManifest {
@@ -369,4 +383,83 @@ func TestOpenCodeManifestCatalogSummaryMatchesEvents(t *testing.T) {
 	if got, want := manifest.CatalogSummary.Unsupported, unsupported; got != want {
 		t.Errorf("manifest.catalogSummary.unsupported=%d, opencodeEventSpecs unsupported count=%d (HC5d c)", got, want)
 	}
+}
+
+// HC5e: partial-stale policy contract enforcement.
+// Plan v1.3 §6 H6.4 mandates that for every events.json entry whose
+// purdex.stalenessPolicy is non-null, the policy block must satisfy:
+//   (a) decision ∈ {"retain", "switch", "dualSubscribe"}.
+//   (d) decision == "switch" → switchTarget non-empty AND the entry resolved
+//       via switchTargetUpstreamKey has templateConsumesAt non-empty
+//       (i.e. switching to a target the plugin actually consumes).
+//   (e) decision == "dualSubscribe" → dedupRequired == true.
+// Rules (b) and (c) — audit doc rationale section presence and §7.3 retain
+// residual-risk note — remain manual reviewer responsibilities and are out of
+// automation scope.
+//
+// Codex adversarial review (review-mognq5p2-icfowm) flagged H6.4 as
+// documented but not mechanically enforced; HC5e closes that gap.
+func TestOpenCodeEvents_StalenessPolicyContract(t *testing.T) {
+	frozen := loadFrozenEvents(t)
+
+	// Build a (upstreamKey -> templateConsumesAt) index so we can resolve
+	// switch targets without iterating twice.
+	templateConsumesByKey := make(map[string]string)
+	collect := func(entries []frozenEventEntry) {
+		for _, e := range entries {
+			templateConsumesByKey[e.UpstreamKey] = e.Purdex.TemplateConsumesAt
+		}
+	}
+	collect(frozen.BusEvents)
+	collect(frozen.StrongHooks)
+
+	allowedDecisions := map[string]bool{
+		"retain":         true,
+		"switch":         true,
+		"dualSubscribe":  true,
+	}
+
+	check := func(prefix string, entries []frozenEventEntry) {
+		for _, e := range entries {
+			pol := e.Purdex.StalenessPolicy
+			if pol == nil {
+				continue
+			}
+			// (a) decision in allowed set.
+			if !allowedDecisions[pol.Decision] {
+				t.Errorf("%s[%s] stalenessPolicy.decision=%q; want one of retain/switch/dualSubscribe (H6.4 a)", prefix, e.UpstreamKey, pol.Decision)
+				continue
+			}
+			switch pol.Decision {
+			case "switch":
+				// (d) switchTarget non-empty and resolved switchTargetUpstreamKey
+				// entry has templateConsumesAt.
+				if strings.TrimSpace(pol.SwitchTarget) == "" {
+					t.Errorf("%s[%s] decision=switch but switchTarget is empty (H6.4 d)", prefix, e.UpstreamKey)
+				}
+				if strings.TrimSpace(pol.SwitchTargetUpstreamKey) == "" {
+					t.Errorf("%s[%s] decision=switch but switchTargetUpstreamKey is empty; cannot resolve templateConsumesAt (H6.4 d)", prefix, e.UpstreamKey)
+					continue
+				}
+				targetConsumes, ok := templateConsumesByKey[pol.SwitchTargetUpstreamKey]
+				if !ok {
+					t.Errorf("%s[%s] decision=switch switchTargetUpstreamKey=%q has no matching events.json entry (H6.4 d)", prefix, e.UpstreamKey, pol.SwitchTargetUpstreamKey)
+					continue
+				}
+				if strings.TrimSpace(targetConsumes) == "" {
+					t.Errorf("%s[%s] decision=switch switchTargetUpstreamKey=%q has empty templateConsumesAt; switch must point at an entry the plugin consumes (H6.4 d)", prefix, e.UpstreamKey, pol.SwitchTargetUpstreamKey)
+				}
+			case "dualSubscribe":
+				// (e) dedupRequired must be true. (No catalog entry currently
+				// uses dualSubscribe, so this branch is reserved for future
+				// catalog growth.)
+				if !pol.DedupRequired {
+					t.Errorf("%s[%s] decision=dualSubscribe but dedupRequired=false; dual-subscribe must be paired with deduplication (H6.4 e)", prefix, e.UpstreamKey)
+				}
+			}
+		}
+	}
+
+	check("busEvents", frozen.BusEvents)
+	check("strongHooks", frozen.StrongHooks)
 }
