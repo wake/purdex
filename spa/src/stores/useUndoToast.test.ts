@@ -12,12 +12,12 @@ describe('useUndoToast', () => {
   })
 
   it('show sets toast', () => {
-    const restore = vi.fn()
-    useUndoToast.getState().show('Deleted host', restore)
+    const action = vi.fn()
+    useUndoToast.getState().show('Deleted host', action)
     const toast = useUndoToast.getState().toast
     expect(toast).not.toBeNull()
     expect(toast!.message).toBe('Deleted host')
-    expect(toast!.restore).toBe(restore)
+    expect(toast!.action).toBe(action)
   })
 
   it('dismiss clears toast', () => {
@@ -27,12 +27,39 @@ describe('useUndoToast', () => {
   })
 
   it('calling show again replaces previous toast', () => {
-    const restore1 = vi.fn()
-    const restore2 = vi.fn()
-    useUndoToast.getState().show('first', restore1)
-    useUndoToast.getState().show('second', restore2)
+    const action1 = vi.fn()
+    const action2 = vi.fn()
+    useUndoToast.getState().show('first', action1)
+    useUndoToast.getState().show('second', action2)
     const toast = useUndoToast.getState().toast
     expect(toast!.message).toBe('second')
-    expect(toast!.restore).toBe(restore2)
+    expect(toast!.action).toBe(action2)
+  })
+})
+
+describe('useUndoToast — optional action / actionLabel (codex round-1 B4)', () => {
+  beforeEach(() => {
+    useUndoToast.setState({ toast: null })
+  })
+
+  it('back-compat: show(msg, fn) keeps action defined and actionLabel undefined', () => {
+    useUndoToast.getState().show('msg', () => {})
+    const toast = useUndoToast.getState().toast
+    expect(toast?.action).toBeTypeOf('function')
+    expect(toast?.actionLabel).toBeUndefined()
+  })
+
+  it('show(msg) with no action stores undefined for both', () => {
+    useUndoToast.getState().show('Failed')
+    const toast = useUndoToast.getState().toast
+    expect(toast?.action).toBeUndefined()
+    expect(toast?.actionLabel).toBeUndefined()
+  })
+
+  it('show(msg, fn, label) stores both', () => {
+    useUndoToast.getState().show('Send keys failed', () => {}, 'Retry')
+    const toast = useUndoToast.getState().toast
+    expect(toast?.action).toBeTypeOf('function')
+    expect(toast?.actionLabel).toBe('Retry')
   })
 })
