@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.0.0-alpha.234] - 2026-04-27
+
+### Feat(probe): probe primitive + cc + helper + dev log (#670)
+
+Phase 4a PR-4a-1. Architectural pivot: probe layer is now **dumb** — it
+observes raw screen events; the orchestrator (new
+`internal/module/agent/probe_orchestrator.go`) owns status-transition
+dedup via `currentStatus` comparison. No emit-once flags, no Rearm API.
+
+- New `tmux.CapturePaneRange` + `CapturePaneTopLines` (with `-e` to
+  preserve ANSI so spinner color changes still produce diff hashes).
+- Probe primitive: `Watch(target, opts, cb)` long-lived watcher emits
+  `ScreenChanged` on every diff tick and `ScreenStable` every
+  `IdleStableTicks` consecutive identical hashes. Replaces the legacy
+  `ActivityCallback` fire-once-then-exit watcher.
+- New `agentpkg.ProbeProfileProvider` optional interface lets agents
+  tune capture region + idle threshold. cc adopts it (TopLines: 12,
+  IdleStableTicks: 3); codex/opencode fall through to default profile
+  (BottomLines: 10, IdleStableTicks: 3) — same capture region as
+  legacy `activityLoop`.
+- Orchestrator `interpretScreenEvent` applies: stale-callback guard,
+  graceWindow suppress (2s post-hook hook authority), Error Guard,
+  v2.0 transition gate, atomic stale-callback revalidation, and a
+  ScreenStable cheap pre-gate (skip bottom capture when already Idle
+  with alive top-frame PID).
+- 4 new expvar counters under `purdex_probe_*` (kept separate from
+  `purdex_phase35_*`). `PDX_DEV_MODE=1` enables `[probe]` log channel.
+- `manageActivityWatch` + `renameSessionLocked` migrated to orchestrator;
+  `lastHookAt` migrates across rename so graceWindow stays in effect.
+- Plan went through 15 rounds of codex review + a v2.0 architectural
+  pivot (consulting B vetoed dedup-in-probe premise) + 3 rounds on the
+  PR (1 standard + 3 adversarial + 1 convergence check). 39 new tests,
+  race-clean.
+
 ## [1.0.0-alpha.233] - 2026-04-27
 
 ### Feat(agent/opencode): OpenCode 1.14.23 hooks completion (#664)
