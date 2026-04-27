@@ -184,57 +184,65 @@ OR-codex / OR-opencode 直接沿用既有 `internal/module/agent/probe_orchestra
 
 **不新增 helper**（如 `LastWatchOptions`），保持 PR diff 最小化。若 implementer 跑時發現直讀 map 太冗長導致 OR-codex / OR-opencode body 過大，可選擇加同型 helper（必須在 commit 內 docu rationale）。
 
-## 4. Implementer 採樣 confirm 流程（落實 spec G7）
+## 4. Validation 雙管：ship-time sampling + runtime observability
+
+### 4.1 Ship-time sampling（short-horizon, falsifies catastrophic profile mismatches）
 
 每 commit 在實作 `ProbeProfile()` method 後、commit 前：
 
 1. **準備真實 session**：
-   - codex：開一個 codex CLI session 在某 tmux pane（target 例：`%41`）
+   - codex：開一個 codex CLI session 在某 tmux pane
    - opencode：開一個 opencode session 在某 tmux pane
 
-2. **三狀態採樣**（每狀態 3 次 capture，間隔 0.5s — 對齊 spec IdleStableTicks=3 約定）：
+2. **30s × 1s static-idle 採樣**（user 須完全靜止三 session）：
 
-   採樣命令統一使用與 production 一致的 `CapturePaneTopLines` 等價命令（per `internal/tmux/executor.go:344` → `CapturePaneRange(target, 0, n-1)` → `tmux capture-pane -e -p -t <target> -S 0 -E 9`）。**`-e` 必須加** — production 保留 ANSI escape 以區分 spinner color 動畫（per executor.go:332-336 註解）；移除 `-e` 會讓採樣跟 production 行為不同步。
+   採樣命令統一使用與 production 一致的 `CapturePaneTopLines` 等價命令（per `internal/tmux/executor.go:344` → `CapturePaneRange(target, 0, n-1)` → `tmux capture-pane -e -p -t <target> -S 0 -E 9`）。**`-e` 必須加** — production 保留 ANSI escape 以區分 spinner color 動畫（per executor.go:332-336 註解）。
 
    ```bash
-   TARGET=<codex-or-opencode-tmux-target>     # e.g. %41 or session:window.pane
-   CAPTURE() { tmux capture-pane -e -p -t "$TARGET" -S 0 -E 9; }
-   HASH() { CAPTURE | md5; }
-
-   # State A: idle（agent 沒在處理，user 也沒輸入）
-   echo "=== State A capture ==="; CAPTURE
-   echo "=== State A hashes (3 ticks @ 0.5s) ==="
-   HASH; sleep 0.5; HASH; sleep 0.5; HASH
-
-   # State B: running with active output（spinner 持續轉、輸出滾動）
-   echo "=== State B capture ==="; CAPTURE
-   echo "=== State B hashes (3 ticks @ 0.5s) ==="
-   HASH; sleep 0.5; HASH; sleep 0.5; HASH
-
-   # State C: spinner-only（agent 在等模型回應，僅 spinner 動，無新輸出 scroll 到頂部）
-   echo "=== State C capture ==="; CAPTURE
-   echo "=== State C hashes (3 ticks @ 0.5s) ==="
-   HASH; sleep 0.5; HASH; sleep 0.5; HASH
+   SAMPLE() {
+     local target=$1 lines=$2 label=$3
+     local prev="" changes=0
+     for i in $(seq 0 29); do
+       H=$(tmux capture-pane -e -p -t "$target" -S 0 -E $((lines - 1)) | md5)
+       [ -n "$prev" ] && [ "$H" != "$prev" ] && changes=$((changes + 1))
+       echo "t+${i}s: $H"
+       prev="$H"
+       [ $i -lt 29 ] && sleep 1
+     done
+     echo "→ Total changes: $changes / 30 ticks"
+   }
+   SAMPLE "<codex-target>"    10 "CODEX"    > codex.txt &
+   SAMPLE "<opencode-target>" 10 "OPENCODE" > opencode.txt &
+   wait
    ```
 
-3. **判讀**（3 次 hash 為一組）：
-   - **State A — idle stable**：3 次 hash 全部**相同** → 對應 watch-loop 連續 3 ticks 一致即 fire ScreenStable，PASS
-   - **State B — top scrolls on new turn**：3 次 hash 至少**有一次變動** → 對應 watch-loop fire ScreenChanged，PASS
-   - **State C — spinner doesn't reach top**：3 次 hash 全部**相同** → 證明底部 spinner 不污染頂部 10 行；TopLines vs BottomLines 的關鍵差異，PASS
-   - 頂部 10 行**內容檢查**（State A capture）：**不應**含 elapsed timer（如 `(12s elapsed)` / `[1.5s]`）、braille spinner（`⠋⠙⠹...`）、旋轉系列（`/─\|`）字元
+3. **判讀** — 30s static-idle window 全部 hash 相同（`Total changes = 0`）→ 證明 idle 階段頂部 N 行 stable，profile 至少不會立刻誤觸發。State B（new turn scrolls）+ State C（spinner-only top stable）由 idle stability 邏輯推論：State A 證明 top window 不含 background-animating 元素 → State C 等價 State A；新 turn 進來會推 content 到 top → State B 自然會看到 hash 變動（已在自然觀察中見過）。
 
-4. **PR description 留痕**（per spec §5 G7）：每家 agent 段落含：
-   - 採樣命令（含 TARGET 值；session 內容若敏感可遮蔽用戶輸入但保留 hash）
-   - State A / B / C 各自的 capture 輸出前 5 行（ANSI 可保留為 raw escape）
-   - State A / B / C 各自 3 次 hash 列表
-   - 三狀態 PASS / FAIL 判讀
-   - 「頂部 10 行不含動態字元」的 yes/no 觀察
+4. **採樣記錄寫進 `docs/specs/2026-04-28-lights-rebuild-phase-4a-2-sampling.md`**（in-tree artifact，PR diff 內可審）— 不只 PR description prose（codex sandbox 看不到 PR body）。每家 agent 段落含：
+   - 採樣命令（與本節同型）
+   - 30 個 hash 列表（或標 `Total changes = 0` 結論）
+   - 頂部 10/12 行 capture 內容（ANSI 可保留為 raw escape；敏感內容遮蔽）
+   - 「頂部 N 行不含動態字元」的 yes/no 觀察
 
-5. **若任一條件不過**：
-   - State A 失敗（idle 3 hash 不全同）→ top 區域不穩定（可能 codex 在頂部畫了某個動態元件）→ 改用較大 IdleStableTicks 或改 capture mode；spec §2.2 / §2.3 同步修
-   - State B 失敗（new turn 3 hash 全同）→ top 區域不會被 new turn 變動 → TopLines hash 永遠 stable → idle 判定誤報 → 應改用 BottomLines 或調整 N
-   - State C 失敗（spinner-only 3 hash 不全同）→ 頂部含動態字元 → 改 BottomLines 反而不行（同樣動態）→ 增大 N 跳過動態區，或改全 pane（`{TopLines: 0, BottomLines: 0}`）+ 加 IdleStableTicks
-   - 任一情況 → spec 修值或改設計後重採樣，不硬上
+### 4.2 Runtime observability（long-horizon, catches arbitrary background-tick periods）
+
+短期採樣不能 rule out period > 採樣 window 的背景 tick（30s heartbeat / 60s auth refresh / 5min 慢 status repaint 等）。但 **probe layer v2.0 dumb 設計**對這類 tick 已有保底：
+
+- 若有定時 tick：probe fire ScreenChanged → reset stable counter → IdleStableTicks=3 ticks (1.5s) 後 fire ScreenStable → user UI 看到「短暫 1.5s flicker 一次 / tick period」
+- 不是 silent corruption — 是 **user-visible noise that surfaces itself**
+
+對此，runtime observability 是更強的 evidence：
+
+- PR-4a-1 已 ship `[probe] graceWindow suppress` + `[probe] status` 兩條 dev log
+- 本 PR Commit 3 補 4 條：`[probe] startWatch` (profile resolution) / `[probe] stale callback re-check race` / `[probe] error guard suppress` / `[probe] transition dedup`
+- developer 開 `PDX_DEV_MODE=1` 後在實際 daemon log 跑 hours-of-real-usage 觀察，能看到實際是否有 spurious transitions / 哪 session / 哪 agent — 比 indefinitely 拉長 ship-time 採樣 window 更有效
+
+### 4.3 採樣失敗 → spec/plan 修值
+
+無論 (4.1) 還是 (4.2) 觀察到問題：
+- State A 失敗（30s static idle hash 不全同）→ top 區域不穩定（可能 codex 在頂部畫了動態元件）→ 改用較大 IdleStableTicks 或改 capture mode；spec §2.2 / §2.3 同步修
+- Runtime log 大量 transition flicker 對應特定 agent → 該 agent profile 需 retune（換 BottomLines / 加大 N / 改 IdleStableTicks）
+- 任一情況 → spec 修值或改設計後 commit + 開新 PR / sampling artifact 補新 evidence，不硬上
 
 ## 5. Final Verification
 
@@ -266,11 +274,10 @@ pnpm --prefix spa exec vitest run
 | Summary | 1-2 句說明「為 codex / opencode 加自訂 ProbeProfileProvider，profile = TopLines:10 + IdleStableTicks:3」 |
 | Spec link | `docs/specs/2026-04-28-lights-rebuild-phase-4a-2-spec.md` |
 | Plan link | `docs/specs/2026-04-28-lights-rebuild-phase-4a-2-plan.md` |
-| Commit list | C1 codex（含 CDX1 + OR-codex）/ C2 opencode（含 OCD1 + OR-opencode）— 每 commit 一行說明 |
-| Sampling Evidence — codex | 三狀態採樣輸出（前 5 行 + hash） + 判讀結論（State A/B/C 各 PASS）|
-| Sampling Evidence — opencode | 同上 |
+| Commit list | C1 codex（含 CDX1 + OR-codex）/ C2 opencode（含 OCD1 + OR-opencode）/ C3 PDX_DEV_MODE log expansion（OB5/OB6/OB7/OB8） — 每 commit 一行說明 |
+| Sampling Evidence link | `docs/specs/2026-04-28-lights-rebuild-phase-4a-2-sampling.md`（in-tree artifact，PR diff 內審）— 不只 PR description prose |
 | Worktree origin | `git status -s` clean check 留痕（per CLAUDE.md feedback_concurrent_session_safety） |
-| Test summary | 4 new tests（CDX1 / OCD1 / OR-codex / OR-opencode），全 repo go test + SPA lint/build/vitest 全綠 |
+| Test summary | 8 new tests（CDX1 / OCD1 / OR-codex / OR-opencode / OB5 / OB6 / OB7 / OB8），全 repo go test + SPA lint/build/vitest 全綠 |
 | Out of scope | spec §3 anchor 提示，避免 reviewer 期待此 PR 做 readiness 整合 / shouldWatchActivity per-agent 化 |
 
 ## 7. Risk
@@ -293,8 +300,9 @@ pnpm --prefix spa exec vitest run
 |---|---|---|---|
 | 1: codex probe_profile.go + CDX1 + OR-codex | ~25 (impl) + ~20 (CDX1) + ~30 (OR-codex) | 2 (CDX1 + OR-codex) | mirrors cc/probe_profile.go shape；OR-codex 沿用 OR1 line 758-781 形狀，直讀 `rec.watchOpts["sess:"]`，不新加 helper |
 | 2: opencode probe_profile.go + OCD1 + OR-opencode | ~25 (impl) + ~20 (OCD1) + ~30 (OR-opencode) | 2 (OCD1 + OR-opencode) | mirrors codex |
+| 3: PDX_DEV_MODE log expansion + OB5/OB6/OB7/OB8 | ~15 (4 log lines in probe_orchestrator.go) + ~130 (4 dev-log tests) | 4 (OB5 profile / OB6 stale race / OB7 error guard / OB8 dedup) | adds runtime observability for the 4 silent suppress paths PR review R2a flagged as un-debuggable |
 
-**總計**：~150 LoC + 4 tests。**屬小型 PR**（per spec scope 縮減）。
+**總計**：~295 LoC + 8 tests。屬小型 PR（即使含 Commit 3 dev-log expansion）— per spec scope。
 
 ## 10. 結束條件
 
