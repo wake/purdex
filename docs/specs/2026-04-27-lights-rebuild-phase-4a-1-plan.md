@@ -1,6 +1,6 @@
-# Lights Rebuild — Phase 4a-1 Plan v1.12 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v1.13 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v1.12（Round 12 codex review fix — 1 P1 substantive 採納）
+**Status**: draft v1.13（Round 13 codex review fix — 1 P1 + 1 P2 採納）
 
 ## v1.x 演進
 
@@ -19,6 +19,7 @@
 | v1.10 | R10 codex review fix（2 P2 — R9-propagation gaps）：(1) §2.1.3 watchLoop pseudo-code 啟動描述只 branch `opts.TopLines`，沒處理新加的 `opts.BottomLines`；implementer 照寫，default profile `{BottomLines: 10}` 會 fallback 到 full pane capture，破壞 G5 parity；補成三分支（TopLines / BottomLines / 全零=full pane）；(2) §2.3.3 殘留 v1.8 stale 宣告 `var defaultProbeProfile = ProbeProfile{TopLines: 10, IdleStableTicks: 3}`，與下一段 R9 fix 的 `{BottomLines: 10}` 互斥同存；移除 stale 宣告 |
 | v1.11 | R11 codex review fix（1 P2 substantive + 1 P2 editorial）：(1) **substantive** — 新 watch-loop-owned watcher 對 spinner / elapsed-timer 每 tick fire ScreenChanged；orchestrator 每 500ms 重廣播 Running，違反 G5 parity（legacy fires once 後退出）。對稱於 R1 fix #2 的 `stableEmitted`，加 `changedEmitted` flag — 每次 stable→changed transition fire ScreenChanged 一次，下次 ScreenStable fire 後重新 arm；新增 PR1b 測試覆蓋連續 changed 無重發；(2) **editorial** — OR2 default profile fallback 期待還寫 `{TopLines: 10, IdleStableTicks: 3}`，與 R9/R10 default `{BottomLines: 10}` 矛盾；修為 `{BottomLines: 10, IdleStableTicks: 3}` |
 | v1.12 | R12 codex review fix（1 P1 substantive — graceWindow / changedEmitted 互動 bug）：場景：hook 觸發 → orchestrator.recordHookAt → graceWindow 2s 內 watcher fire ScreenChanged → probe 已 set `changedEmitted=true` 但 orchestrator suppress 廣播；若 pane 之後持續 changing（spinner / elapsed timer），watch loop 不會見到 ScreenStable transition → `changedEmitted` 永不 reset → 後續 ScreenChanged 不再 fire → 狀態永遠停在 hook-derived。修法：probe 加 `RearmChanged(target string)` + `RearmStable(target string)` 公開 API（symmetric 對稱），orchestrator 在 graceWindow suppress 時呼叫 `RearmChanged` 讓 probe 下次 diff 重新 emit；新增 PR4c + OR3b regression test |
+| v1.13 | R13 codex review fix（1 P1 + 1 P2）：(1) **P1** — v1.12 watchLoop pseudo 是 `cb() → changedEmitted=true`，但 cb 同步呼叫 `RearmChanged` 會 `Store(false)`，下一行又覆蓋成 `true` → R12 fix 失效。修為「先 set flag，再 call cb」順序（symmetric 對 stableEmitted 也修）；明列 watch loop **必須** 用 set-before-cb 順序，禁止 set-after-cb 實作；(2) **P2** — PR3 `TestWatch_DoesNotExitOnCallback` v1 期待「一次 ScreenChanged 後再注入 diff 再 fire ScreenChanged」與 R11 changedEmitted 行為矛盾（同一 changing run 不再 fire）。改寫為 PR3 `TestWatch_LoopContinuesAcrossTransitions`：驗證 changed → stable → changed 完整 cycle，watcher 不退出；single-cycle continuous diff 由 PR1b 覆蓋 |
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -255,8 +256,12 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
       if !ok: continue (skip tick, don't fire false event)
       if hash(current) != hash(baseline):
         if !changedEmitted:
-          cb(ScreenChanged{Content: current})
+          // R13 fix: set flag BEFORE cb to survive synchronous Rearm
+          // calls in the callback (orchestrator graceWindow → RearmChanged).
+          // If cb's RearmChanged sets changedEmitted=false, that wins
+          // (intended); set-after-cb would silently overwrite Rearm.
           changedEmitted = true
+          cb(ScreenChanged{Content: current})
         stableEmitted = false  // change re-arms stable for next cycle
         baseline = current
         stableCount = 0
@@ -264,11 +269,14 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
       // hash unchanged
       stableCount++
       if !stableEmitted && stableCount >= idleStableTicks:
-        cb(ScreenStable{Content: current})
+        // R13 fix (symmetric): set flag BEFORE cb (same reason as above).
         stableEmitted = true
         changedEmitted = false  // R11 fix: stable re-arms changed for next cycle
+        cb(ScreenStable{Content: current})
         // do NOT reset stableCount; do NOT re-emit ScreenStable until next change
   ```
+
+**R13 fix 順序約束**：watch loop **必須**用 set-emit-flag-before-cb 順序。set-after-cb 路徑禁止 — 會與 callback 同步呼叫 `RearmChanged` / `RearmStable` 互覆蓋（callback 設為 false → loop 設回 true → R12 修的 stuck-status bug 復現）。本約束適用兩個 emit 點。
 - **關鍵差異 vs legacy `activityLoop`**：watcher 不退出；可發多次 ScreenChanged + ScreenStable transitions；callback 不擁有 watcher 生命週期；同一 stable run 不會重發 ScreenStable；同一 changing run 不會重發 ScreenChanged
 - **R1 fix #2 rationale**：legacy `activityLoop` 自動退出後不存在 repeated emission 問題；新 watch-loop-owned 設計若不加 `stableEmitted` flag，idle pane 會每 N ticks 重發 ScreenStable → orchestrator 對應重發 StatusIdle broadcast → metrics counter 無限累積 + log 噴 + WS 客戶端收 idle 風暴。`stableEmitted` 確保「stable run 視為一個 transition，到下次 change 才再 arm」
 - **R11 fix rationale**：對稱於 R1 fix #2 — spinner / elapsed-timer 場景每 tick hash diff，若不加 `changedEmitted` flag，新 watch-loop-owned 會每 500ms fire ScreenChanged → orchestrator 重廣播 StatusRunning → 同樣 ws/metrics 風暴；違反 G5 default-profile parity（legacy fire once 後退出，behavior 上 Running 只廣播一次）。雙 flag 形成「changed↔stable 兩 transition，各 arm/disarm 對方」狀態機，每個 transition 各自只 fire 一次
@@ -322,7 +330,7 @@ select <-rearmStable:  stableEmitted = false; continue
 | PR1b `TestWatch_ChangedEmittedOnceUntilNextStable`（**R11 fix #1 regression**）| 注入連續 6 次不同 capture（baseline + 5 diff）— 驗證 ScreenChanged 只 fire 1 次（changedEmitted 後續 tick 抑制）；接著注入 4 次同 capture → ScreenStable fire；再注入 1 次 diff → ScreenChanged 再 fire 1 次（stable→changed re-arm）|
 | PR2 `TestWatch_FiresStableAfterNIdenticalSamples` | 連續 4 次同 capture，驗證單次 ScreenStable callback（baseline + 3 stable ticks）|
 | PR2b `TestWatch_StableEmittedOnceUntilNextChange`（**R1 fix #2 regression**）| 注入 6 次同 capture（baseline + 5 stable）— 驗證 ScreenStable 只 fire 1 次；接著注入 diff → ScreenChanged fire；再注入 4 同 → ScreenStable 再 fire 1 次（changed→stable 切換才 re-arm）|
-| PR3 `TestWatch_DoesNotExitOnCallback` | 一次 ScreenChanged callback 後再注入 diff，驗證再發 ScreenChanged（loop 持續）|
+| PR3 `TestWatch_LoopContinuesAcrossTransitions`（**R13 fix — 重寫**）| 注入 changed → 4 stable → diff 完整 cycle（baseline + diff → ScreenChanged + 4 同 → ScreenStable + diff → ScreenChanged 再 fire）；驗證 watcher 不退出、stable 與 changed 都各 fire 兩次（兩次 transition）；single-cycle continuous-diff 不重發 由 PR1b 覆蓋 |
 | PR4 `TestWatch_StopWatch_CancelsLoop` | StopWatch 後 capture mock 不再被 call、HasWatcher false |
 | PR4b `TestWatch_BaselineFailure_CleansMapEntry`（**R2 fix #2 regression**）| capture mock 對 first call 回 err；驗證 `Watch` 啟動後 200ms 內 `HasWatcher(target) == false`（goroutine 自己清 entry）|
 | PR4c `TestWatch_RearmChanged_AllowsReEmission`（**R12 fix regression**）| 注入 1 次 diff → ScreenChanged fire；不等 ScreenStable，直接 call `RearmChanged(target)`；再注入 1 次 diff → ScreenChanged 再 fire；symmetric for RearmStable |
