@@ -16,8 +16,16 @@
 
 **Phase 順序（強制 1a → 1b → 1c）：**
 1. **Phase 1a** — 純資料層；單一 PR；UI 零改動。
-2. **Phase 1b** — Settings UI + WORKSPACE_ACTIONS 入口；單一 PR，**必須與 Settings UI 同 PR ship**（spec §6 不 ship 設了沒效果的中間態）。
-3. **Phase 1c** — HOST_ACTIONS 入口；小 PR。
+2. **Phase 1b** — Settings UI + WORKSPACE_ACTIONS 入口；單一 PR，**必須與 Settings UI 同 PR ship**（spec §6 不 ship 設了沒效果的中間態）。Workspace 入口採雙進入點：(i) `WorkspaceRow` 右鍵 context menu；(ii) `WorkspaceRow` Plus 按鈕 hover 往左展開的 popover chip 列。兩入口共用同一個 `WORKSPACE_ACTIONS` slot + executor。
+3. **Phase 1c** — HOST_ACTIONS 入口；小 PR。Host 入口落於 `SessionsSection`：在 new-session 按鈕旁並列 `<CommandSlot mountTo=HOST_ACTIONS>`；同 PR 移除 `SessionsSection` 每個 session row 上殘留的 v1 `QuickCommandMenu`（功能集中至 new-session 入口；`QuickCommandMenu` 元件本身保留，因為仍被 `PaneLayoutRenderer.tsx` 使用）。
+
+**Mount UX 決策（覆蓋 spec §4.2 / §4.3 中的「位置由實作時定」）：**
+- **Workspace 入口** — `WorkspaceRow.tsx` 兩處：
+  - 右鍵 → 透過既有 `onContextMenuWorkspace` callback（App.tsx L155 `handleWsContextMenu` → 渲染 `WorkspaceContextMenu`），新增一個 `WorkspaceQuickCommandsContextMenu` 區塊或於原 `WorkspaceContextMenu` 加 quick-commands section
+  - Plus 按鈕（`WorkspaceRow.tsx` L108-121）hover → 一個 absolute popover 向左展開 chip 列（半透明漸層壓底；mouseleave Plus AND popover 收回；鍵盤 focus 同等於 hover）
+- **Host 入口** — `SessionsSection.tsx` 兩件事：
+  - new-session 按鈕（L167-174）旁並列 `<CommandSlot mountTo=HOST_ACTIONS>`；視覺與 Plus 對齊（直接列 chip，無 popover）
+  - 移除 row 上的 v1 `<QuickCommandMenu>`（L231-239）整合，但**保留** `QuickCommandMenu` 元件本身（`PaneLayoutRenderer.tsx` 仍使用）
 
 **測試指令備忘（主 Claude 機器跑，subagent 寫 plan 不執行）：**
 - SPA test: `cd spa && npx vitest run`
@@ -1020,6 +1028,125 @@ feat(spa): add <CommandSlot> shared component for v2 binding model
 
 ---
 
+### Task 1b.1.5: 擴 `useUndoToast` schema 支援自訂 action label（Retry）
+
+**Files:**
+- Modify: `spa/src/stores/useUndoToast.ts`
+- Modify: `spa/src/stores/useUndoToast.test.ts`
+- Modify: `spa/src/components/GlobalUndoToast.tsx`
+
+**動機：** Task 1b.2 的 slot-executor 在 send-keys 失敗時要顯示 toast 帶「Retry」按鈕（spec §3.3 表格第 2 列；user 決策採方案 (a) — 直接擴 schema），與既有 `OverviewSection.tsx` 的「Undo」按鈕共用同一條 toast。預設保留 `'Undo'` 維持向下相容。
+
+**既有 callsite 影響範圍盤點（grep `useUndoToast.*show|getState\(\)\.show`）：**
+- Production：`spa/src/components/hosts/OverviewSection.tsx:85`（`show(message, restore)` — 不傳 actionLabel，續用 `'Undo'`）
+- Test：`spa/src/stores/useUndoToast.test.ts`（自身單元測試）+ `spa/src/lib/host-lifecycle.test.ts`（只重置 toast=null，不呼叫 `show`，不受影響）
+- 共 1 個 production callsite，2 個測試檔；schema 擴充採 optional 第 3 參數，**無需修改既有 callsite 的呼叫形式**
+
+- [ ] **Step 1: Write the failing test**
+
+Edit `spa/src/stores/useUndoToast.test.ts` 加新測試（不要動既有測試 — 它們驗證向下相容）：
+
+```ts
+describe('useUndoToast — custom action label', () => {
+  beforeEach(() => {
+    useUndoToast.setState({ toast: null })
+  })
+
+  it('defaults actionLabel to undefined when not provided (back-compat)', () => {
+    useUndoToast.getState().show('msg', () => {})
+    const toast = useUndoToast.getState().toast
+    expect(toast?.actionLabel).toBeUndefined()
+  })
+
+  it('stores actionLabel when provided', () => {
+    useUndoToast.getState().show('Send keys failed', () => {}, 'Retry')
+    const toast = useUndoToast.getState().toast
+    expect(toast?.actionLabel).toBe('Retry')
+  })
+})
+```
+
+Edit `spa/src/components/GlobalUndoToast.tsx` 也加一條 component test（若該檔已有 test 則 append；若無則新建 `GlobalUndoToast.test.tsx`）：
+
+```tsx
+import { describe, it, expect, beforeEach } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import { GlobalUndoToast } from './GlobalUndoToast'
+import { useUndoToast } from '../stores/useUndoToast'
+
+describe('GlobalUndoToast — actionLabel', () => {
+  beforeEach(() => useUndoToast.setState({ toast: null }))
+
+  it('renders default Undo label when actionLabel is omitted', () => {
+    useUndoToast.getState().show('Deleted host', () => {})
+    render(<GlobalUndoToast />)
+    expect(screen.getByRole('button')).toHaveTextContent(/Undo/i)
+  })
+
+  it('renders custom actionLabel when provided (e.g. Retry)', () => {
+    useUndoToast.getState().show('Send keys failed', () => {}, 'Retry')
+    render(<GlobalUndoToast />)
+    expect(screen.getByRole('button')).toHaveTextContent(/Retry/i)
+  })
+})
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd spa && npx vitest run src/stores/useUndoToast.test.ts src/components/GlobalUndoToast.test.tsx`
+Expected: FAIL — `actionLabel` 欄位不存在 / 元件還沒讀。
+
+- [ ] **Step 3: Implement schema extension**
+
+Edit `spa/src/stores/useUndoToast.ts`：
+
+```ts
+// spa/src/stores/useUndoToast.ts — Global undo toast state
+import { create } from 'zustand'
+
+interface UndoToastState {
+  toast: { message: string; restore: () => void; actionLabel?: string } | null
+  show: (message: string, restore: () => void, actionLabel?: string) => void
+  dismiss: () => void
+}
+
+export const useUndoToast = create<UndoToastState>()((set) => ({
+  toast: null,
+  show: (message, restore, actionLabel) =>
+    set({ toast: { message, restore, actionLabel } }),
+  dismiss: () => set({ toast: null }),
+}))
+```
+
+Edit `spa/src/components/GlobalUndoToast.tsx` 改 button label 取用：
+
+```tsx
+<button
+  className="text-sm text-blue-400 hover:text-blue-300 font-medium cursor-pointer"
+  onClick={() => {
+    toast.restore()
+    dismiss()
+  }}
+>
+  {toast.actionLabel ?? t('hosts.undo')}
+</button>
+```
+
+註：`actionLabel` 由 caller 傳 i18n 化字串（例如 `t('quick_commands.toast.retry')`）；`'hosts.undo'` 維持作為**未指定時的預設**，確保 `OverviewSection` 既有行為不變。
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cd spa && npx vitest run src/stores/useUndoToast.test.ts src/components/GlobalUndoToast.test.tsx`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```
+feat(spa): extend useUndoToast schema with optional actionLabel (back-compat)
+```
+
+---
+
 ### Task 1b.2: Slot executor lib（建 session + 送 keys + 失敗 UX）
 
 **Files:**
@@ -1114,6 +1241,9 @@ describe('runWorkspaceSlot', () => {
     const toast = useUndoToast.getState().toast
     expect(toast).not.toBeNull()
     expect(toast!.message).toMatch(/Session created.*command failed/i)
+    // Task 1b.1.5 — actionLabel must surface 'Retry' (translated key allowed) instead of default 'Undo'
+    expect(toast!.actionLabel).toBeDefined()
+    expect(toast!.actionLabel).toMatch(/retry/i)
     // restore = retry — calling it should trigger executeCommand again
     ;(executeCommand as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
     toast!.restore()
@@ -1222,6 +1352,7 @@ export async function runWorkspaceSlot(
       () => {
         void executeCommand(ctx.hostId, sessionCode, cmd.command).catch(() => undefined)
       },
+      t('quick_commands.toast.retry'),  // ← Task 1b.1.5 introduced actionLabel; default ('Undo') doesn't fit retry semantics
     )
     return
   }
@@ -1800,6 +1931,7 @@ In `spa/src/locales/zh-TW.json` 加入：
   "quick_commands.toast.create_failed": "無法建立 session：{{reason}}",
   "quick_commands.toast.send_keys_failed": "Session 已建立，但指令送出失敗。",
   "quick_commands.toast.switch_failed": "已建立並送出指令，但無法切換焦點；請至 sessions 列表查看。",
+  "quick_commands.toast.retry": "重試",
 ```
 
 In `spa/src/locales/en.json` 對應加入：
@@ -1821,6 +1953,7 @@ In `spa/src/locales/en.json` 對應加入：
   "quick_commands.toast.create_failed": "Failed to start session: {{reason}}",
   "quick_commands.toast.send_keys_failed": "Session created, but command failed.",
   "quick_commands.toast.switch_failed": "Created and sent, but could not switch focus; check the sessions list.",
+  "quick_commands.toast.retry": "Retry",
 ```
 
 註：若 `common.edit` 已存在，跳過該行。檢查指令：`grep '"common.edit"' spa/src/locales/zh-TW.json`。
@@ -1838,125 +1971,513 @@ feat(spa): wire Quick Commands settings contribution + i18n keys
 
 ---
 
-### Task 1b.5: Workspace 入口 — 在 NewTabPage 顯示 quick actions（spec §4.2）
+### Task 1b.5a: Workspace 入口 (i) — `WorkspaceQuickCommandsContextMenu` + 整合 WorkspaceRow 右鍵
 
 **Files:**
-- Modify: `spa/src/components/NewTabPage.tsx`
-- Modify: `spa/src/components/NewTabPage.test.tsx`（若存在；否則新建 quick-actions-only test 檔）
+- Create: `spa/src/features/workspace/components/WorkspaceQuickCommandsContextMenu.tsx`
+- Create: `spa/src/features/workspace/components/WorkspaceQuickCommandsContextMenu.test.tsx`
+- Modify: `spa/src/features/workspace/components/WorkspaceContextMenu.tsx`（嵌入新 section 或改由外層組合，見實作策略）
+- Modify: `spa/src/App.tsx`（`handleWsContextMenu` 已會接收 wsId — 需把 wsId 傳遞到下層以解析 hostId / 取 bindings）
+- Modify: `spa/src/features/workspace/components/WorkspaceContextMenu.test.tsx`（追加 quick commands section 測試）
 
-實作策略：在 NewTabPage 主格線**之上**加一條 `<CommandSlot mountTo={WORKSPACE_ACTIONS}>` toolbar。為什麼選 NewTabPage：
+**實作策略：** 既有 `WorkspaceContextMenu`（`spa/src/features/workspace/components/WorkspaceContextMenu.tsx`）已涵蓋 Settings / Tear-off / Merge-to。在現有「Settings」按鈕之上**插入** quick commands section（依 user 決策 (i)），保留 Settings/Tear-off/Merge-to 的 separator 規則。預設：
 
-1. NewTabPage 是 user 進到 workspace 後最常見的入口（每次新 tab 都在這），spec §4.2「workspace 主面板」最自然的對應。
-2. 已具有 hostId / activeWorkspaceId 取用路徑（透過 store）。
-3. 不破壞既有 PaneLayoutRenderer 的 v1 `QuickCommandMenu`（保留，不動）。
+1. 新元件 `WorkspaceQuickCommandsContextMenu` 渲染 mount=`WORKSPACE_ACTIONS` 的所有 bound commands；點擊執行 executor 並關閉 menu。
+2. 在 `WorkspaceContextMenu` 內部 `Settings` 按鈕**之前**渲染此新元件，並在其後加 `border-t` separator（若有任一個 quick command 顯示）。
+3. `App.tsx` 的 `WorkspaceContextMenu` 渲染處需新增傳 `workspaceId={wsContextMenu.wsId}` prop，使其能解析該 workspace 對應 host（透過 `useWorkspaceStore` 找 `workspace.hostId` — 若 store schema 有對應欄位；否則用 `activeHostId`）。
 
-替代方案候選（若 reviewer 反對放 NewTabPage，請討論後選一）：
-
-- 候選 A：`WorkspaceSettingsPage` 標題下方（user 開設定才看得到，過深）
-- 候選 B：`InlineTabList` / `WorkspaceRow` 同列 hover 顯示（過小、易誤觸）
-- **候選 C（採用）**：`NewTabPage` 頂部 toolbar，empty / pinned-only 兩種畫面都一致
+**重要：** `<CommandSlot>` 已具備 `isEnabled` short-circuit 與「無 binding 不渲染」邏輯，所以無 quick commands 時 menu 內部自動只剩既有項目，不會出現空 separator。
 
 - [ ] **Step 1: Write the failing test**
 
-Create or extend `spa/src/components/NewTabPage.test.tsx`：
+Create `spa/src/features/workspace/components/WorkspaceQuickCommandsContextMenu.test.tsx`：
 
 ```tsx
-// 在既有 imports 末尾加：
-import { useQuickCommandStore } from '../stores/useQuickCommandStore'
-import { useHostStore } from '../stores/useHostStore'
-import { useWorkspaceStore } from '../features/workspace/store'
-import { QUICK_COMMAND_SLOTS } from '../lib/quick-command-slots'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { WorkspaceQuickCommandsContextMenu } from './WorkspaceQuickCommandsContextMenu'
+import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
+import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
+import { clearModuleRegistry, registerModule } from '../../../lib/module-registry'
 
-describe('NewTabPage — workspace quick actions slot (Phase 1b)', () => {
-  it('renders <CommandSlot mountTo=WORKSPACE_ACTIONS> with active hostId + workspaceId', () => {
-    // 設置 host + workspace + bind 一個 cmd 至 WORKSPACE_ACTIONS
-    useHostStore.setState({ activeHostId: 'h1', hostOrder: ['h1'] })
-    useWorkspaceStore.setState({ activeWorkspaceId: 'w1' })
-    useQuickCommandStore.setState({
-      global: [{ id: 'cmd-a', name: 'Alpha', command: 'echo' }],
-      byHost: {},
-      bindings: { 'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS] },
-    })
-    render(<NewTabPage onSelect={() => undefined} />)
+function setup(workspaceId = 'w1', hostId = 'h1') {
+  useQuickCommandStore.setState({
+    global: [
+      { id: 'cmd-a', name: 'Alpha', command: 'a' },
+      { id: 'cmd-b', name: 'Bravo', command: 'b' },
+    ],
+    byHost: {},
+    bindings: { 'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS] },
+  })
+  useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+  clearModuleRegistry()
+  registerModule({ id: 'quick-commands', name: 'Quick Commands', disableable: true })
+  return { workspaceId, hostId }
+}
+
+describe('WorkspaceQuickCommandsContextMenu', () => {
+  beforeEach(() => setup())
+
+  it('renders bound WORKSPACE_ACTIONS commands and hides unbound ones', () => {
+    render(<WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId="h1" onClose={() => {}} />)
     expect(screen.getByLabelText(/^Alpha/)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/^Bravo/)).toBeNull()
   })
 
-  it('hides slot toolbar when no commands are bound', () => {
-    useQuickCommandStore.setState({ global: [], byHost: {}, bindings: {} })
-    render(<NewTabPage onSelect={() => undefined} />)
-    expect(screen.queryByRole('toolbar', { name: /Quick commands/i })).toBeNull()
+  it('returns null when no commands are bound (lets parent skip separator)', () => {
+    useQuickCommandStore.setState({ bindings: {} })
+    const { container } = render(
+      <WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId="h1" onClose={() => {}} />,
+    )
+    expect(container.firstChild).toBeNull()
   })
+
+  it('clicking a command calls onClose', () => {
+    const onClose = vi.fn()
+    render(<WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId="h1" onClose={onClose} />)
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('returns null when quick-commands module is disabled', () => {
+    useModuleEnabledStore.getState().setEnabled('quick-commands', false)
+    const { container } = render(
+      <WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId="h1" onClose={() => {}} />,
+    )
+    expect(container.firstChild).toBeNull()
+  })
+})
+```
+
+也在 `WorkspaceContextMenu.test.tsx` 追加 integration 測試：
+
+```tsx
+it('renders quick commands section above Settings when WORKSPACE_ACTIONS bindings exist', () => {
+  // 設定一個 binding（簡化：直接 mock useQuickCommandStore）
+  useQuickCommandStore.setState({
+    global: [{ id: 'cmd-x', name: 'XCmd', command: 'x' }],
+    byHost: {},
+    bindings: { 'cmd-x': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS] },
+  })
+  // … 既有 setup（registerModule quick-commands etc）…
+  render(
+    <WorkspaceContextMenu
+      position={{ x: 0, y: 0 }}
+      workspaceId="w1"
+      hostId="h1"
+      onSettings={vi.fn()}
+      onClose={vi.fn()}
+    />,
+  )
+  expect(screen.getByLabelText(/^XCmd/)).toBeInTheDocument()
 })
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd spa && npx vitest run src/components/NewTabPage.test.tsx`
-Expected: FAIL — slot 未掛載。
+Run: `cd spa && npx vitest run src/features/workspace/components/WorkspaceQuickCommandsContextMenu.test.tsx src/features/workspace/components/WorkspaceContextMenu.test.tsx`
+Expected: FAIL — module not found / props missing。
 
-- [ ] **Step 3: Implement workspace entry**
+- [ ] **Step 3: Implement**
 
-In `spa/src/components/NewTabPage.tsx`：
-
-加 import：
+Create `spa/src/features/workspace/components/WorkspaceQuickCommandsContextMenu.tsx`：
 
 ```tsx
-import { CommandSlot } from './CommandSlot'
-import { runWorkspaceSlot } from '../lib/slot-executor'
-import { QUICK_COMMAND_SLOTS } from '../lib/quick-command-slots'
-import { useHostStore } from '../stores/useHostStore'
-import { useWorkspaceStore } from '../features/workspace/store'
-import { useTabStore } from '../stores/useTabStore'
-```
+import { CommandSlot } from '../../../components/CommandSlot'
+import { runWorkspaceSlot } from '../../../lib/slot-executor'
+import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
+import { useTabStore } from '../../../stores/useTabStore'
 
-在 `return (...)` 主 grid container **外層**包一個 flex column；slot toolbar 在 grid 之前：
+interface Props {
+  workspaceId: string
+  hostId: string
+  onClose: () => void
+}
 
-```tsx
-  const activeHostId = useHostStore((s) => s.activeHostId)
-  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
-
-  // ... 原 hydration / providers 邏輯不變
-  // (直到 return)
-
+/**
+ * 渲染 mount=WORKSPACE_ACTIONS 的 quick commands，作為 WorkspaceContextMenu 的子 section。
+ * <CommandSlot> 自身會 short-circuit module disabled / no-bindings 兩個情況。
+ * 為了讓 parent 能正確 toggle separator，**沒有 bound commands 時整個 wrapper 也回 null**
+ * — 透過讀同樣的 store 直接判斷（避免引入新 prop）。
+ */
+export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose }: Props) {
   return (
-    <div className="flex-1 flex flex-col">
-      {activeHostId && (
-        <div className="px-6 pt-4">
-          <CommandSlot
-            mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
-            ctx={{ hostId: activeHostId, workspaceId: activeWorkspaceId }}
-            executor={(cmd, ctx) =>
-              runWorkspaceSlot(cmd, ctx, {
-                switchToSession: (hostId, sessionCode) => {
-                  useTabStore.getState().openSingletonTab({
-                    kind: 'tmux-session',
-                    hostId,
-                    sessionCode,
-                  })
-                },
-              })
-            }
-          />
-        </div>
-      )}
-      <div className={`flex-1 grid overflow-hidden gap-6 px-6 pt-8 ${gridCols}`}>
-        {/* … 原 columns 渲染 … */}
-      </div>
+    <div className="py-1">
+      <CommandSlot
+        mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
+        ctx={{ hostId, workspaceId }}
+        executor={async (cmd, ctx) => {
+          try {
+            await runWorkspaceSlot(cmd, ctx, {
+              switchToSession: (h, sessionCode) => {
+                useTabStore.getState().openSingletonTab({
+                  kind: 'tmux-session',
+                  hostId: h,
+                  sessionCode,
+                })
+              },
+            })
+          } finally {
+            onClose()
+          }
+        }}
+        render={(cmd) => (
+          <button
+            type="button"
+            aria-label={cmd.name}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer transition-colors"
+          >
+            <span className="truncate">{cmd.name}</span>
+            {cmd.category && (
+              <span className="text-[10px] text-text-muted bg-surface-primary px-1.5 py-0.5 rounded ml-auto">
+                {cmd.category}
+              </span>
+            )}
+          </button>
+        )}
+      />
     </div>
   )
+}
 ```
 
-註：`openSingletonTab` 已存在於 `useTabStore`（既有 terminal-link skill 用過此 path，見 `register-modules.tsx` L429）。如果 PaneContent type 對 `tmux-session` 必填欄位不同，請查 `spa/src/types/tab.ts` 並補。
+**注意 render prop 與 onClick：** `<CommandSlot>` 預設 button 已含 `onClick`，但提供 `render` 時 wrapper 是 `<span>`（見 Task 1b.1 實作 L979）。我們需要**改用 default button** 才能讓 executor 跑；這代表此 task 不傳 `render` prop，採用 default 渲染（chip 樣式不適合 menu 列表，但 v1 可接受；若 reviewer 要求 menu 列表外觀，需要在 Task 1b.1 補一個 `containerClassName` / `itemClassName` prop，或讓 `render` 包外層 + 提供 onClick，二擇一）。
+
+**簡化決議：** **保持 default 渲染**（不傳 render），用 `containerClassName` 覆蓋 `flex flex-wrap gap-1.5`（若 Task 1b.1 沒提供，需擴 `<CommandSlot>` 介面 — 在此 task 內微擴）。
+
+→ **追加 sub-step 0**: 擴 `<CommandSlot>` 加一個 optional `containerClassName?: string` prop，預設沿用既有 toolbar 樣式；context menu 用 `flex flex-col`。修改 `spa/src/components/CommandSlot.tsx` 與其 test。Diff：
+
+```tsx
+interface Props {
+  mountTo: QuickCommandSlotId
+  ctx: SlotContext
+  executor: SlotExecutor
+  render?: SlotRenderer
+  containerClassName?: string  // ← new
+}
+
+// in JSX:
+<div className={containerClassName ?? 'flex flex-wrap items-center gap-1.5'} role="toolbar" aria-label="Quick commands">
+```
+
+並在 `WorkspaceQuickCommandsContextMenu` 改傳 `containerClassName="flex flex-col"`。
+
+更新後 `WorkspaceContextMenu.tsx`：
+
+```tsx
+interface Props {
+  position: { x: number; y: number }
+  workspaceId?: string  // ← new (optional 維持向下相容；測試 setup 內全部要傳)
+  hostId?: string       // ← new
+  onSettings: () => void
+  onTearOff?: () => void
+  onMergeTo?: (targetWindowId: string) => void
+  onClose: () => void
+}
+
+// JSX 中於 Settings 按鈕之前加：
+{workspaceId && hostId && (
+  <>
+    <WorkspaceQuickCommandsContextMenu
+      workspaceId={workspaceId}
+      hostId={hostId}
+      onClose={onClose}
+    />
+    <div className="border-t border-border-default my-1" />
+  </>
+)}
+```
+
+**注意：** separator 渲染條件 — 應僅當「真有 commands 顯示」才 separator，否則會出現「空 wrapper + separator」的視覺空隙。`<CommandSlot>` 在 0 commands 時回 `null`，但 wrapper `<div>` 仍存在。**解法**：把 separator 也透過讀 store 判斷：
+
+```tsx
+// 在 WorkspaceContextMenu.tsx，新增 helper：
+import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
+import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
+
+// 計算 hasQuickCommands：
+const hasQuickCommands = useQuickCommandStore((s) => {
+  if (!hostId) return false
+  const cmds = s.getCommands(hostId)
+  return cmds.some((c) => s.bindings[c.id]?.includes(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS))
+})
+const moduleEnabled = useModuleEnabledStore((s) => s.isEnabled('quick-commands'))
+const showQuickCommandsSection = workspaceId && hostId && moduleEnabled && hasQuickCommands
+
+// JSX：
+{showQuickCommandsSection && (
+  <>
+    <WorkspaceQuickCommandsContextMenu workspaceId={workspaceId!} hostId={hostId} onClose={onClose} />
+    <div className="border-t border-border-default my-1" />
+  </>
+)}
+```
+
+修改 `App.tsx` 的 `<WorkspaceContextMenu>` 呼叫處（L322-329）：
+
+```tsx
+{wsContextMenu && (() => {
+  const ws = workspaces.find((w) => w.id === wsContextMenu.wsId)
+  // hostId 來源：workspace 上的 hostId 欄位（若 schema 有），否則用 useHostStore.activeHostId fallback
+  const hostId = (ws as { hostId?: string } | undefined)?.hostId ?? useHostStore.getState().activeHostId
+  return (
+    <WorkspaceContextMenu
+      position={wsContextMenu.position}
+      workspaceId={wsContextMenu.wsId}
+      hostId={hostId ?? undefined}
+      onSettings={() => openWsSettings(wsContextMenu.wsId)}
+      onTearOff={window.electronAPI ? () => handleWsTearOff(wsContextMenu.wsId) : undefined}
+      onMergeTo={window.electronAPI ? (targetWindowId) => handleWsMergeTo(wsContextMenu.wsId, targetWindowId) : undefined}
+      onClose={handleCloseWsContextMenu}
+    />
+  )
+})()}
+```
+
+註：`workspaces[].hostId` 是否存在須在實作前由 subagent grep 確認（`rg "hostId" spa/src/types/tab.ts`）；若不存在則 fallback 到 `useHostStore.activeHostId`。
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd spa && npx vitest run src/components/NewTabPage.test.tsx`
+Run: `cd spa && npx vitest run src/features/workspace/components/WorkspaceQuickCommandsContextMenu.test.tsx src/features/workspace/components/WorkspaceContextMenu.test.tsx src/components/CommandSlot.test.tsx`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```
-feat(spa): mount WORKSPACE_ACTIONS slot in NewTabPage header
+feat(spa): mount WORKSPACE_ACTIONS slot in workspace right-click context menu
+```
+
+---
+
+### Task 1b.5b: Workspace 入口 (ii) — `WorkspaceQuickActionsPopover` + WorkspaceRow Plus hover
+
+**Files:**
+- Create: `spa/src/features/workspace/components/WorkspaceQuickActionsPopover.tsx`
+- Create: `spa/src/features/workspace/components/WorkspaceQuickActionsPopover.test.tsx`
+- Modify: `spa/src/features/workspace/components/WorkspaceRow.tsx`
+- Modify: `spa/src/features/workspace/components/WorkspaceRow.test.tsx`
+
+**實作策略：**
+- 改造 `WorkspaceRow.tsx` L107-121 的 Plus 按鈕：保留原 click 行為（`onAddTabToWorkspace`）但**外層**多包一個 `<div onMouseEnter={...} onMouseLeave={...} onFocusCapture={...} onBlurCapture={...}>` 作 hover hub。
+- 該 div 內含 Plus button + 一個 absolute popover（`<WorkspaceQuickActionsPopover>`），popover `right-full mr-1`（Plus 按鈕左側）展開。
+- popover 內部用 `<CommandSlot mountTo=WORKSPACE_ACTIONS>` 渲染 chip 列。
+- Hover 收回邏輯：使用 single boolean state `popoverOpen`；mouseenter Plus 或 popover 任一觸發開啟，mouseleave 整個 hub 觸發關閉（用 wrapper div 圍住兩者，事件冒泡判斷即可）。
+- 鍵盤可達性：Plus 按鈕 focus 時 popover 開啟（`onFocusCapture`），整個 wrapper blur 時關閉（`onBlurCapture` + 比對 `relatedTarget` 是否仍在 wrapper 內）。
+- 視覺 cue：popover 含半透明漸層壓底（`bg-gradient-to-l from-surface-secondary/0 to-surface-secondary/95` 或同等 token）。
+- **Plus 原本 hover 才顯**（L117 `opacity-0 group-hover/ws-header:opacity-100`）— 此邏輯保留。
+
+**短路條件：** `<CommandSlot>` 已內建 module-disabled / no-bindings short-circuit；`WorkspaceQuickActionsPopover` 額外用同邏輯（讀 store 並 early-return null）避免在無 commands 時渲染空 popover wrapper（避免 hover 觸發後出現空白浮層）。
+
+- [ ] **Step 1: Write the failing test**
+
+Create `spa/src/features/workspace/components/WorkspaceQuickActionsPopover.test.tsx`：
+
+```tsx
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import { WorkspaceQuickActionsPopover } from './WorkspaceQuickActionsPopover'
+import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
+import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
+import { clearModuleRegistry, registerModule } from '../../../lib/module-registry'
+
+function setup() {
+  useQuickCommandStore.setState({
+    global: [{ id: 'cmd-a', name: 'Alpha', command: 'a' }],
+    byHost: {},
+    bindings: { 'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS] },
+  })
+  useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+  clearModuleRegistry()
+  registerModule({ id: 'quick-commands', name: 'Quick Commands', disableable: true })
+}
+
+describe('WorkspaceQuickActionsPopover', () => {
+  beforeEach(setup)
+
+  it('renders bound commands as chips', () => {
+    render(<WorkspaceQuickActionsPopover workspaceId="w1" hostId="h1" />)
+    expect(screen.getByLabelText(/^Alpha/)).toBeInTheDocument()
+  })
+
+  it('returns null when no commands bound', () => {
+    useQuickCommandStore.setState({ bindings: {} })
+    const { container } = render(
+      <WorkspaceQuickActionsPopover workspaceId="w1" hostId="h1" />,
+    )
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('returns null when module disabled', () => {
+    useModuleEnabledStore.getState().setEnabled('quick-commands', false)
+    const { container } = render(
+      <WorkspaceQuickActionsPopover workspaceId="w1" hostId="h1" />,
+    )
+    expect(container.firstChild).toBeNull()
+  })
+})
+```
+
+並於 `WorkspaceRow.test.tsx` 追加 hover 行為測試：
+
+```tsx
+it('opens popover on Plus hover, closes on mouseleave (with WORKSPACE_ACTIONS bindings)', () => {
+  // 既有 ws-header render setup（保持原 props 模式）
+  // 設定一個 WORKSPACE_ACTIONS binding
+  useQuickCommandStore.setState({
+    global: [{ id: 'cmd-x', name: 'X', command: 'x' }],
+    byHost: {},
+    bindings: { 'cmd-x': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS] },
+  })
+  // 確保 hostId 路徑解析成功（mock useHostStore.activeHostId 或 workspace.hostId）
+  // … render(<WorkspaceRow … />) …
+
+  // 預設未 hover → popover 不在 DOM
+  expect(screen.queryByLabelText(/^X/)).toBeNull()
+
+  // hover Plus → popover 顯示
+  fireEvent.mouseEnter(screen.getByLabelText(/Add tab to/i).parentElement!)
+  expect(screen.getByLabelText(/^X/)).toBeInTheDocument()
+
+  // mouseleave wrapper → popover 收回
+  fireEvent.mouseLeave(screen.getByLabelText(/Add tab to/i).parentElement!)
+  expect(screen.queryByLabelText(/^X/)).toBeNull()
+})
+
+it('does NOT open popover when no WORKSPACE_ACTIONS bindings exist', () => {
+  useQuickCommandStore.setState({ bindings: {} })
+  // … render WorkspaceRow …
+  fireEvent.mouseEnter(screen.getByLabelText(/Add tab to/i).parentElement!)
+  expect(screen.queryByRole('toolbar', { name: /Quick commands/i })).toBeNull()
+})
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd spa && npx vitest run src/features/workspace/components/WorkspaceQuickActionsPopover.test.tsx src/features/workspace/components/WorkspaceRow.test.tsx`
+Expected: FAIL — module not found / popover 不顯示。
+
+- [ ] **Step 3: Implement popover + WorkspaceRow integration**
+
+Create `spa/src/features/workspace/components/WorkspaceQuickActionsPopover.tsx`：
+
+```tsx
+import { CommandSlot } from '../../../components/CommandSlot'
+import { runWorkspaceSlot } from '../../../lib/slot-executor'
+import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
+import { useTabStore } from '../../../stores/useTabStore'
+import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
+
+interface Props {
+  workspaceId: string
+  hostId: string
+}
+
+/**
+ * Popover chip-list rendered to the LEFT of the Plus-button on each
+ * WorkspaceRow on hover/focus. Uses CommandSlot internally — already
+ * short-circuits when module disabled / no bindings; we additionally
+ * skip rendering the popover wrapper itself in those cases so the
+ * hover trigger doesn't expose an empty floating panel.
+ */
+export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
+  const moduleEnabled = useModuleEnabledStore((s) => s.isEnabled('quick-commands'))
+  const hasBindings = useQuickCommandStore((s) => {
+    const cmds = s.getCommands(hostId)
+    return cmds.some((c) => s.bindings[c.id]?.includes(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS))
+  })
+  if (!moduleEnabled || !hasBindings) return null
+
+  return (
+    <div
+      role="group"
+      aria-label="Workspace quick actions"
+      className="absolute right-full top-1/2 -translate-y-1/2 mr-1 flex items-center gap-1 px-2 py-1 rounded-md bg-gradient-to-l from-surface-secondary/0 to-surface-secondary/95 backdrop-blur-sm shadow-md z-30"
+    >
+      <CommandSlot
+        mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
+        ctx={{ hostId, workspaceId }}
+        executor={(cmd, ctx) =>
+          runWorkspaceSlot(cmd, ctx, {
+            switchToSession: (h, sessionCode) => {
+              useTabStore.getState().openSingletonTab({
+                kind: 'tmux-session',
+                hostId: h,
+                sessionCode,
+              })
+            },
+          })
+        }
+      />
+    </div>
+  )
+}
+```
+
+修改 `spa/src/features/workspace/components/WorkspaceRow.tsx` Plus 按鈕區段（L107-121）：
+
+```tsx
+import { useState, useRef } from 'react'
+// … 既有 imports
+import { useHostStore } from '../../../stores/useHostStore'
+import { WorkspaceQuickActionsPopover } from './WorkspaceQuickActionsPopover'
+
+// 在 WorkspaceRow 函式內：
+const [popoverOpen, setPopoverOpen] = useState(false)
+const hubRef = useRef<HTMLDivElement>(null)
+// hostId 解析（同 1b.5a：先看 workspace.hostId，否則 active）
+const hostId = (workspace as { hostId?: string }).hostId
+  ?? useHostStore((s) => s.activeHostId) ?? null
+
+// 改 Plus 區段（保留原條件 showTabs）：
+{showTabs && (
+  <div
+    ref={hubRef}
+    className="relative inline-flex"
+    onMouseEnter={() => setPopoverOpen(true)}
+    onMouseLeave={() => setPopoverOpen(false)}
+    onFocusCapture={() => setPopoverOpen(true)}
+    onBlurCapture={(e) => {
+      // 只有焦點離開整個 hub 才關閉（避免 popover 內部 chip 之間 tab 也觸發）
+      if (!hubRef.current?.contains(e.relatedTarget as Node | null)) {
+        setPopoverOpen(false)
+      }
+    }}
+  >
+    <button
+      type="button"
+      aria-label={t('nav.add_tab_to_workspace', { name: workspace.name })}
+      title={t('nav.add_tab_to_workspace', { name: workspace.name })}
+      onClick={(e) => {
+        e.stopPropagation()
+        onAddTabToWorkspace(workspace.id)
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      className="p-0.5 rounded hover:bg-surface-secondary hover:text-text-primary cursor-pointer opacity-0 group-hover/ws-header:opacity-100 focus:opacity-100 transition-opacity focus:outline-none"
+    >
+      <Plus size={12} />
+    </button>
+    {popoverOpen && hostId && (
+      <WorkspaceQuickActionsPopover workspaceId={workspace.id} hostId={hostId} />
+    )}
+  </div>
+)}
+```
+
+註：popover 觸發 hover 時 Plus 仍是 hover 中（同一個 group），不會閃。`WorkspaceQuickActionsPopover` 內部已 short-circuit 模組停用 / 無 binding，這層也再加 hostId guard。
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cd spa && npx vitest run src/features/workspace/components/WorkspaceQuickActionsPopover.test.tsx src/features/workspace/components/WorkspaceRow.test.tsx`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```
+feat(spa): add hover popover for WORKSPACE_ACTIONS chips beside WorkspaceRow Plus button
 ```
 
 ---
@@ -1992,19 +2513,22 @@ Expected: clean
 
 啟動 daemon + dev SPA，user flow：
 1. Settings → Quick Commands → New → 輸入 Name + Command + 勾 Workspace → Save
-2. 開新 tab，看到 toolbar 出現按鈕
-3. 點按鈕 → 建 session、送 cmd、自動切到該 session
-4. 模擬失敗（停 daemon → 點按鈕 → 應有 toast）
+2. 在 sidebar Workspace 行 **右鍵** → context menu 出現該 quick command；點擊執行
+3. 在 sidebar Workspace 行 **hover Plus 按鈕** → 左側 popover 展開 chip；點擊執行
+4. 兩條路徑都應：建 session、送 cmd、自動切到該 session
+5. 模擬失敗（停 daemon → 點按鈕 → 應有 toast）；send-keys 失敗的 toast 應顯 'Retry' 按鈕（Task 1b.1.5 + 1b.2 共同支撐）
 
 ### Phase 1b 驗收清單
 
 - [x] Settings 頁面可建 / 編 / 刪 commands；mount chips 可多選
 - [x] 對話框 a11y：focus trap / Esc / aria-label / 觸發鍵盤可達
-- [x] 設 mount = WORKSPACE 後，回 NewTabPage 立即看到按鈕（無需 reload）
+- [x] 設 mount = WORKSPACE 後，回 sidebar 即可在「Workspace 右鍵 menu」與「Plus hover popover」兩個入口看到按鈕（無需 reload）
+- [x] 兩個入口共用同一個 executor，行為一致
+- [x] Plus hover popover：mouseleave Plus AND popover 收回；鍵盤 focus 同等於 hover；無 binding 時不展開
 - [x] 點擊按鈕：建 session + 送 keys + 切過去
-- [x] 三層失敗 UX 符合 spec §3.3：建失敗 / 送 keys 失敗仍切過去 + retry / 切失敗 toast
-- [x] 停用 quick-commands module → slot 立即消失（CommandSlot short-circuit）
-- [x] i18n: zh-TW + en 全部 key 齊全（`pnpm run lint` 含 locale-completeness 檢查）
+- [x] 三層失敗 UX 符合 spec §3.3：建失敗 / 送 keys 失敗仍切過去 + **toast 顯 'Retry' 按鈕** / 切失敗 toast
+- [x] 停用 quick-commands module → 兩個入口皆立即消失（CommandSlot short-circuit）
+- [x] i18n: zh-TW + en 全部 key 齊全（含新增 `quick_commands.toast.retry`；`pnpm run lint` 含 locale-completeness 檢查）
 
 ---
 
@@ -2012,60 +2536,111 @@ Expected: clean
 
 **目標：** Host 詳情頁加 quick actions 區塊；user 設 mount = HOST 即可在 host 頁看到按鈕。
 
-### Task 1c.1: Host 詳情頁加 `<CommandSlot mountTo=HOST_ACTIONS>`
+### Task 1c.1a: 移除 `SessionsSection` row 上殘留的 v1 `QuickCommandMenu` 整合
 
 **Files:**
-- Modify: `spa/src/components/hosts/OverviewSection.tsx`
-- Modify: `spa/src/components/hosts/OverviewSection.test.tsx`
+- Modify: `spa/src/components/hosts/SessionsSection.tsx`
+- Modify: `spa/src/components/hosts/SessionsSection.test.tsx`（若有測試覆蓋 row 上 QuickCommandMenu，更新）
 
-實作位置：`OverviewSection` 是 host 詳情的第一個 section，user 進 host 頁預設看到。在主標題 / 連線狀態列**之下**加一條 `<CommandSlot>` toolbar。HostSidebar 之外的容器是 `HostPage` 的 `<div className="flex-1 overflow-y-auto p-6">`，OverviewSection 直接渲染進去。
+**動機（user 決策）：** 把 quick commands 功能集中在「new-session 入口」（Task 1c.1b），row 上不再重複；spec §3.4「保留現狀」原則被 user 明確覆蓋。
 
-替代方案候選（若 reviewer 想放在更外層）：
+**重要：** v1 `QuickCommandMenu` 元件本身**不刪**，因為仍被 `spa/src/components/PaneLayoutRenderer.tsx` 使用。本 task 只刪 `SessionsSection.tsx` 內的整合。
 
-- 候選 A（採用）：`OverviewSection` 標題下方，user 多半從 sidebar 進來都先停在 overview
-- 候選 B：`HostPage` 上方共通容器（強制每個 host sub-page 都看到，但會干擾 sessions / agents 的本身排版）
+**Diff scope（`SessionsSection.tsx`）：**
+1. 移除 L12 的 `import { QuickCommandMenu } from '../QuickCommandMenu'`
+2. 移除 L13 的 `import { executeCommand } from '../../lib/execute-command'`（若無其他用途；先 grep 該檔案內其他 `executeCommand` 引用，確認可刪）
+3. 移除 L231-239 的 `<QuickCommandMenu hostId=... onExecute=... disabled=... />` JSX 與其包圍的閒置 wrapper（若 row 移除 menu 後 `<div className="flex items-center justify-end gap-1">` 仍要保留供其他 buttons 使用，**保留**該 div，只刪 `<QuickCommandMenu>` 一段）
+4. 任何已成 unused 的 import / branch / state 一併清理（lint 會抓 unused，但先手動掃）
+
+- [ ] **Step 1: Update tests to assert removal**
+
+Edit `spa/src/components/hosts/SessionsSection.test.tsx`：
+- 若有測試斷言「session row 顯示 quick command 按鈕」，改為斷言「session row 不再有該按鈕」（或 `getAllByLabelText(/Quick Command/i)` 為空）
+- 若沒對應測試，新增一條保護性測試：
+
+```tsx
+it('does NOT render v1 QuickCommandMenu inside session rows (moved to new-session adjacency, Phase 1c)', () => {
+  // 既有 setup：mock host / sessions store，render <SessionsSection hostId="h1" />
+  // 假設 v1 QuickCommandMenu 的 trigger 有 aria-label 含 "Quick Commands"
+  expect(screen.queryAllByRole('button', { name: /quick commands/i }).length).toBe(0)
+})
+```
+
+註：實際 aria-label 由 `QuickCommandMenu` 元件決定（subagent 實作前先讀 `spa/src/components/QuickCommandMenu.tsx` 確認 trigger 的 accessible name；若不同請對齊）。
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd spa && npx vitest run src/components/hosts/SessionsSection.test.tsx`
+Expected: FAIL — row 上仍有 v1 menu。
+
+- [ ] **Step 3: Remove the integration**
+
+按 Diff scope 進行刪除。再驗證 lint：`cd spa && pnpm run lint`（unused imports/vars 必清）。
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cd spa && npx vitest run src/components/hosts/SessionsSection.test.tsx`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```
+refactor(spa): remove v1 QuickCommandMenu from SessionsSection rows (consolidated to new-session entry, see Task 1c.1b)
+```
+
+註：本 task 與 1c.1b 是**獨立 commits 同一個 PR**；先刪除（diff 純減量、易 review），再加新（diff 純新增）。
+
+---
+
+### Task 1c.1b: `SessionsSection` new-session 旁加 `<CommandSlot mountTo=HOST_ACTIONS>`
+
+**Files:**
+- Modify: `spa/src/components/hosts/SessionsSection.tsx`
+- Modify: `spa/src/components/hosts/SessionsSection.test.tsx`
+
+**Mount 位置（user 決策）：** `SessionsSection.tsx` L165-175 的 `<div className="flex items-center justify-between mb-4">` 內，new-session 按鈕（L167-174）的**同一個 flex container**裡並列。`<CommandSlot>` 預設 chip toolbar 樣式恰好對應，視覺與 `Plus + 新增 session` 按鈕對齊；不做特殊 popover。
+
+**設計：** 把 new-session 按鈕外層改為 `<div className="flex items-center gap-2">`（包 CommandSlot + new-session button 兩者），整體右對齊（保留外層 `justify-between` 與標題的相對位置）。
 
 - [ ] **Step 1: Write the failing test**
 
-In `spa/src/components/hosts/OverviewSection.test.tsx` 加一段（或新建測試檔，視既有 OverviewSection.test 的 setup 而定）：
+Edit `spa/src/components/hosts/SessionsSection.test.tsx`：
 
 ```tsx
 import { useQuickCommandStore } from '../../stores/useQuickCommandStore'
 import { QUICK_COMMAND_SLOTS } from '../../lib/quick-command-slots'
 
-describe('OverviewSection — host quick actions slot (Phase 1c)', () => {
-  it('renders <CommandSlot mountTo=HOST_ACTIONS> with given hostId', () => {
+describe('SessionsSection — host quick actions slot adjacent to new-session button (Phase 1c)', () => {
+  it('renders <CommandSlot mountTo=HOST_ACTIONS> chips next to the new-session button', () => {
     useQuickCommandStore.setState({
       global: [{ id: 'cmd-h', name: 'HostCmd', command: 'echo h' }],
       byHost: {},
       bindings: { 'cmd-h': [QUICK_COMMAND_SLOTS.HOST_ACTIONS] },
     })
-    // (preserve existing host store setup)
-    useHostStore.setState({
-      hosts: { 'h1': { id: 'h1', name: 'Mini', /* … */ } as never },
-      hostOrder: ['h1'],
-      runtime: { 'h1': { status: 'connected' } as never },
-    })
-    render(<OverviewSection hostId="h1" />)
+    // 既有 host store setup（hostId='h1' connected）
+    render(<SessionsSection hostId="h1" />)
+    // chip 與 new-session 按鈕同一 flex 容器；簡化驗證：兩者都在 DOM
     expect(screen.getByLabelText(/^HostCmd/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /new session/i })).toBeInTheDocument()
   })
 
-  it('hides slot when no commands are bound to HOST_ACTIONS', () => {
+  it('hides slot when no commands are bound to HOST_ACTIONS (new-session button still visible)', () => {
     useQuickCommandStore.setState({ global: [], byHost: {}, bindings: {} })
-    render(<OverviewSection hostId="h1" />)
+    render(<SessionsSection hostId="h1" />)
     expect(screen.queryByLabelText(/^HostCmd/)).toBeNull()
+    expect(screen.getByRole('button', { name: /new session/i })).toBeInTheDocument()
   })
 })
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd spa && npx vitest run src/components/hosts/OverviewSection.test.tsx`
+Run: `cd spa && npx vitest run src/components/hosts/SessionsSection.test.tsx`
 Expected: FAIL — slot 未掛載。
 
 - [ ] **Step 3: Mount the slot**
 
-In `spa/src/components/hosts/OverviewSection.tsx`：
+In `spa/src/components/hosts/SessionsSection.tsx`：
 
 加 imports：
 
@@ -2076,37 +2651,50 @@ import { QUICK_COMMAND_SLOTS } from '../../lib/quick-command-slots'
 import { useTabStore } from '../../stores/useTabStore'
 ```
 
-在 OverviewSection JSX root 的開頭區塊加（host 名稱 / status 區塊**之後**）：
+修改 L165-175 區段：
 
 ```tsx
-<CommandSlot
-  mountTo={QUICK_COMMAND_SLOTS.HOST_ACTIONS}
-  ctx={{ hostId }}
-  executor={(cmd, ctx) =>
-    runWorkspaceSlot(cmd, ctx, {
-      switchToSession: (h, sessionCode) => {
-        useTabStore.getState().openSingletonTab({
-          kind: 'tmux-session',
-          hostId: h,
-          sessionCode,
+<div className="flex items-center justify-between mb-4">
+  <h2 className="text-lg font-semibold">{t('hosts.sessions')}</h2>
+  <div className="flex items-center gap-2">
+    <CommandSlot
+      mountTo={QUICK_COMMAND_SLOTS.HOST_ACTIONS}
+      ctx={{ hostId }}
+      executor={(cmd, ctx) =>
+        runWorkspaceSlot(cmd, ctx, {
+          switchToSession: (h, sessionCode) => {
+            useTabStore.getState().openSingletonTab({
+              kind: 'tmux-session',
+              hostId: h,
+              sessionCode,
+            })
+          },
         })
-      },
-    })
-  }
-/>
+      }
+    />
+    <button
+      onClick={() => setShowNew(true)}
+      disabled={isOffline}
+      className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50"
+    >
+      <Plus size={14} />
+      {t('hosts.new_session')}
+    </button>
+  </div>
+</div>
 ```
 
 註：HOST_ACTIONS slot 和 WORKSPACE_ACTIONS 共用同一個 `runWorkspaceSlot`（spec §3.2 兩列行為差只在 cwd 取值來源；Phase 1 兩者都 fallback 到 host default `~`，所以 helper 命名雖叫 `runWorkspaceSlot` 仍正確；Phase 2 若 cwd 取值要分流再拆）。
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd spa && npx vitest run src/components/hosts/OverviewSection.test.tsx`
+Run: `cd spa && npx vitest run src/components/hosts/SessionsSection.test.tsx`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```
-feat(spa): mount HOST_ACTIONS slot in host overview section
+feat(spa): mount HOST_ACTIONS slot beside new-session button in SessionsSection
 ```
 
 ---
@@ -2140,23 +2728,25 @@ Expected: clean
 
 ### Phase 1c 驗收清單
 
-- [x] User 能在 Settings 設 mount = HOST，並在 host 詳情 overview 看到按鈕
-- [x] 按鈕點擊：建 session（cwd 取 host default）+ 送 cmd + 切過去
+- [x] User 能在 Settings 設 mount = HOST，並在 host 詳情 sessions section 標題列、new-session 按鈕**旁邊**看到 chip
+- [x] Chip 點擊：建 session（cwd 取 host default）+ 送 cmd + 切過去
 - [x] HOST_ACTIONS slot 與 WORKSPACE_ACTIONS slot 共存無衝突（兩者都可同時 mount）
+- [x] `SessionsSection` 內**每個 session row 不再**出現 v1 `QuickCommandMenu`（改集中至 new-session 入口）
+- [x] `PaneLayoutRenderer.tsx` 的 v1 `QuickCommandMenu` 仍維持運作（元件本身未被刪）
 
 ---
 
 ## Phase 完成順序檢查清單（送 reviewer 前確認）
 
 - [ ] Phase 1a 已 merge → main，且 alpha bump 完成（或一個 PR sequence 規劃中）
-- [ ] Phase 1b 已 merge → main，**Settings UI 與 WORKSPACE_ACTIONS 入口同 PR**（不可拆兩 PR）
-- [ ] Phase 1c 已 merge → main
+- [ ] Phase 1b 已 merge → main，**Settings UI 與 WORKSPACE_ACTIONS 兩個入口（context menu + hover popover）同 PR**（不可拆）
+- [ ] Phase 1c 已 merge → main，**1c.1a（移除 SessionsSection row 的 v1 整合）→ 1c.1b（new-session 旁掛 HOST_ACTIONS）兩個 commits 同 PR、依序 ship**（先 commit 純減量，再 commit 純新增；diff 易 review）
 - [ ] Phase 1a 不可單獨 ship 在沒有 Phase 1b 計畫的情況（純資料層 user 看不到任何成果，會困惑）— 但 1a + 1b 兩個 PR 接力 ship 是允許的（spec §6 只要求 Settings UI 出現時必有 slot 生效）
 
 ## 範圍邊界（Phase 1 不做）
 
 - 不動 `PaneLayoutRenderer` 內 `extraActions` 的 v1 `QuickCommandMenu`（spec §3.4）
-- 不動 `SessionsSection` row actions 的 v1 `QuickCommandMenu`（spec §3.4）
+- ~~不動 `SessionsSection` row actions 的 v1 `QuickCommandMenu`~~ — **已調整：Phase 1c Task 1c.1a 將 SessionsSection row 的 v1 整合移除**（user 決策；功能集中至 new-session 入口；spec §3.4 的「保留現狀」對 SessionsSection 不再適用，但對 `PaneLayoutRenderer` 仍適用）
 - 不做 per-host bindings UI（store 支援，UI 推到 Phase 2）
 - 不做 mode 設定 / 動態 function command / command palette / 快捷鍵（spec §6 不在範圍）
 - 不做 `module-registry.commands?` legacy 收編（Phase 2 decision gate，spec §8.2）
