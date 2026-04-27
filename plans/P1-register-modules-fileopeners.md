@@ -380,243 +380,198 @@ git commit -m "feat(spa): add fileOpeners field to ModuleDefinition"
 
 ---
 
-## Task 1.2 — Module-driven opener registration helper
+## Task 1.2 — Wire `applyModuleFileOpeners` into bootstrap
 
 **Files:**
-- Modify: `spa/src/lib/register-modules.tsx`（新增 helper function 並導出供測試）
-- Test: `spa/src/lib/register-modules.test.tsx`
+- Modify: `spa/src/lib/register-modules/index.tsx`（在 `registerBuiltinModules()` 末尾呼叫 `applyModuleFileOpeners()`）
+
+> **動機**：Task 1.0c 已建立 `applyModuleFileOpeners()` + 完整測試覆蓋。本 task 僅做 wire-in，把 helper 接到 bootstrap 流程末段。
 
 - [ ] **Step 1: Write failing test**
 
-新增 `spa/src/lib/register-modules.test.tsx`：
+擴 `spa/src/lib/register-modules/__tests__/orchestrator.test.tsx`：
 
 ```tsx
 import { describe, it, expect, beforeEach } from 'vitest'
-import {
-  registerModule,
-  unregisterModule,
-  type ModuleDefinition,
-} from './module-registry'
-import {
-  clearFileOpenerRegistry,
-  getFileOpeners,
-} from './file-opener-registry'
-import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
-import { applyModuleFileOpeners } from './register-modules'
-import type { FileInfo } from '../types/fs'
+import { registerBuiltinModules } from '../index'
+import { getDefaultOpener, clearAllForHmr } from '../../file-opener-registry'
 
-const mkOpener = (id: string) => ({
-  id, label: id, icon: 'File',
-  match: (_: FileInfo) => true, priority: 'default' as const,
-  createContent: (s: never, f: never) => ({ kind: 'editor', source: s, filePath: (f as { path: string }).path } as never),
-})
+beforeEach(() => clearAllForHmr())
 
-describe('applyModuleFileOpeners', () => {
-  beforeEach(() => {
-    clearFileOpenerRegistry()
-    unregisterModule('always-on')
-    unregisterModule('toggleable')
-  })
-
-  it('registers openers from non-disableable modules unconditionally', () => {
-    const def: ModuleDefinition = { id: 'always-on', name: 'AO', fileOpeners: [mkOpener('ao-opener')] }
-    registerModule(def)
-    applyModuleFileOpeners()
-    const ids = getFileOpeners({ path: '/x', name: 'x', extension: '', isDirectory: false } as FileInfo).map((o) => o.id)
-    expect(ids).toContain('ao-opener')
-  })
-
-  it('skips openers from disableable modules when disabled', () => {
-    const def: ModuleDefinition = { id: 'toggleable', name: 'T', disableable: true, fileOpeners: [mkOpener('t-opener')] }
-    registerModule(def)
-    useModuleEnabledStore.getState().setEnabled('toggleable', false)
-    applyModuleFileOpeners()
-    const ids = getFileOpeners({ path: '/x', name: 'x', extension: '', isDirectory: false } as FileInfo).map((o) => o.id)
-    expect(ids).not.toContain('t-opener')
-  })
-
-  it('registers openers from disableable modules when enabled', () => {
-    const def: ModuleDefinition = { id: 'toggleable', name: 'T', disableable: true, fileOpeners: [mkOpener('t-opener')] }
-    registerModule(def)
-    useModuleEnabledStore.getState().setEnabled('toggleable', true)
-    applyModuleFileOpeners()
-    const ids = getFileOpeners({ path: '/x', name: 'x', extension: '', isDirectory: false } as FileInfo).map((o) => o.id)
-    expect(ids).toContain('t-opener')
-  })
+it('registerBuiltinModules registers Editor file openers via apply step', () => {
+  registerBuiltinModules()
+  // Editor 提供 monaco-editor opener for .txt
+  const txt = { path: '/a.txt', name: 'a.txt', extension: 'txt', isDirectory: false }
+  expect(getDefaultOpener(txt as never)?.id).toBe('monaco-editor')
 })
 ```
 
 - [ ] **Step 2: Run test, expect FAIL**
 
-`applyModuleFileOpeners` 尚未 export — TS error `has no exported member 'applyModuleFileOpeners'`。
+Editor module 此時只是 `registerModule(editorModuleDefinition)` 進去（fileOpeners 還是空陣列；Task 1.3 才把 inline opener 搬進 fileOpeners 欄位）；或 bootstrap 末尾還沒呼叫 `applyModuleFileOpeners()`。
 
-- [ ] **Step 3: Add helper to register-modules.tsx**
+- [ ] **Step 3: Wire**
 
-在 `spa/src/lib/register-modules.tsx` 加 export（`registerBuiltinModules` 上方適合的位置）：
+在 `spa/src/lib/register-modules/index.tsx` 的 `registerBuiltinModules()` 末尾（所有 `registerModule(...)` / `setHostBuiltinSections(...)` 之後、`captureBaseline` 之前）加：
 
 ```tsx
-import { clearFileOpenerRegistry as _clearFileOpenerRegistry } from './file-opener-registry'
+import { applyModuleFileOpeners } from './module-file-openers'
 
-/**
- * Walk all registered modules and register their fileOpeners into the
- * file-opener registry, respecting disableable + useModuleEnabledStore.
- *
- * Idempotent within a session: clears the registry before re-applying so
- * HMR dispose + re-run leaves the registry clean.
- */
-export function applyModuleFileOpeners(): void {
-  _clearFileOpenerRegistry()
-  for (const m of getModules()) {
-    if (!m.fileOpeners) continue
-    if (m.disableable && !useModuleEnabledStore.getState().isEnabled(m.id)) continue
-    for (const opener of m.fileOpeners) registerFileOpener(opener)
-  }
+export function registerBuiltinModules(): void {
+  registerBuiltinFsBackends()
+  registerModule(editorModuleDefinition)
+  // …其他 module def
+  setHostBuiltinSections(...)
+  applyModuleFileOpeners()  // ← new
+  captureBaseline?.()
 }
 ```
 
-(`getModules` / `useModuleEnabledStore` / `registerFileOpener` 都已在檔案內 import；若缺則補。)
-
-- [ ] **Step 4: Run test, expect PASS**
+- [ ] **Step 4: Run test, expect PASS**（Task 1.3 完成後此 case 才會綠；本 task 至少要把 wire 做好，allow `expect(...).toBeDefined()` 暫代直到 1.3）
 
 ```
-cd spa && npx vitest run src/lib/register-modules.test.tsx
+cd spa && npx vitest run src/lib/register-modules/__tests__/orchestrator.test.tsx
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/lib/register-modules.tsx spa/src/lib/register-modules.test.tsx
-git commit -m "feat(spa): apply module-declared fileOpeners with enable filter"
+git add spa/src/lib/register-modules/index.tsx spa/src/lib/register-modules/__tests__/orchestrator.test.tsx
+git commit -m "feat(spa): wire applymodulefileopeners into bootstrap"
 ```
 
 ---
 
-## Task 1.3 — Editor module 收編三個 file opener
+## Task 1.3 — Editor module 收編三個 file opener（在 `register-modules/editor-module.tsx`）
 
 **Files:**
-- Modify: `spa/src/lib/register-modules.tsx`
+- Modify: `spa/src/lib/register-modules/editor-module.tsx`（Task 1.0b 已建立檔案，此 task 把 inline `registerFileOpener` 三段搬進 `fileOpeners` 欄位）
+- Test: `spa/src/lib/register-modules/__tests__/editor-module.test.tsx`（新建）
+
+> **動機**：Task 1.0b 拆檔時把 inline `registerFileOpener` 三段（image-preview / pdf-viewer / monaco-editor）移到 `editor-module.tsx`；本 task 把它們從 inline call 改成 `editorModuleDefinition.fileOpeners` 陣列宣告。**完全不再修改 `spa/src/lib/register-modules.tsx`（已是過渡 shim）**。
 
 - [ ] **Step 1: Write failing test**
 
-擴 `spa/src/lib/register-modules.test.tsx`，加 case：
+新建 `spa/src/lib/register-modules/__tests__/editor-module.test.tsx`：
 
 ```tsx
-import { registerBuiltinModules } from './register-modules'
-import { getModule } from './module-registry'
+import { describe, it, expect } from 'vitest'
+import { editorModuleDefinition } from '../editor-module'
 
-it('editor module declares its three file openers via fileOpeners field', () => {
-  registerBuiltinModules()
-  const editor = getModule('editor')
-  expect(editor?.fileOpeners?.map((o) => o.id).sort()).toEqual(
-    ['image-preview', 'monaco-editor', 'pdf-viewer'],
-  )
+describe('editorModuleDefinition.fileOpeners', () => {
+  it('declares its three file openers via fileOpeners field', () => {
+    expect(editorModuleDefinition.fileOpeners?.map((o) => o.id).sort()).toEqual(
+      ['image-preview', 'monaco-editor', 'pdf-viewer'],
+    )
+  })
+
+  it('image-preview opener matches png/jpg/jpeg/gif/webp/svg/ico', () => {
+    const opener = editorModuleDefinition.fileOpeners?.find((o) => o.id === 'image-preview')
+    expect(opener?.match({ path: '/a.png', extension: 'png', isDirectory: false } as never)).toBe(true)
+    expect(opener?.match({ path: '/a.txt', extension: 'txt', isDirectory: false } as never)).toBe(false)
+  })
+
+  it('monaco-editor opener matches non-binary text files', () => {
+    const opener = editorModuleDefinition.fileOpeners?.find((o) => o.id === 'monaco-editor')
+    expect(opener?.match({ path: '/a.txt', extension: 'txt', isDirectory: false } as never)).toBe(true)
+    expect(opener?.match({ path: '/a.png', extension: 'png', isDirectory: false } as never)).toBe(false)
+  })
 })
 ```
 
 - [ ] **Step 2: Run test, expect FAIL**
 
-Editor 模組目前無 `fileOpeners` 欄位 → `editor?.fileOpeners` 是 undefined。
+Editor module 此時 `fileOpeners` 欄位是空 / undefined（Task 1.0b 只搬了 inline `registerFileOpener` 三段，還沒改成 `fileOpeners` 陣列）。
 
-- [ ] **Step 3: Move three openers into Editor module definition**
+- [ ] **Step 3: Move openers into `editorModuleDefinition.fileOpeners`**
 
-在 `spa/src/lib/register-modules.tsx` 找 Editor module `registerModule({ id: 'editor', ... })`：
-
-把 inline `registerFileOpener(...)` 三處（image-preview / pdf-viewer / monaco-editor）原本實作搬到 Editor module 定義的 `fileOpeners` 欄位內：
+在 `spa/src/lib/register-modules/editor-module.tsx`：
 
 ```tsx
-  // === existing constants kept intact ===
-  const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'])
-  const PDF_EXTS = new Set(['pdf'])
-  const BINARY_EXTS = new Set([...IMAGE_EXTS, ...PDF_EXTS])
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'])
+const PDF_EXTS = new Set(['pdf'])
+const BINARY_EXTS = new Set([...IMAGE_EXTS, ...PDF_EXTS])
 
-  registerModule({
-    id: 'editor',
-    name: 'Editor',
-    disableable: true,
-    descriptionKey: 'modules.editor.description',
-    panes: [
-      { kind: 'editor', component: EditorPane },
-      { kind: 'editor-buffers', component: EditorBuffersPane },
-      { kind: 'image-preview', component: ImagePreviewPane },
-      { kind: 'pdf-preview', component: PdfPreviewPane },
-    ],
-    fileOpeners: [
-      {
-        id: 'image-preview',
-        label: 'Image Preview',
-        icon: 'Image',
-        match: (file) => IMAGE_EXTS.has(file.extension.toLowerCase()),
-        priority: 'default',
-        createContent: (source, file) => ({ kind: 'image-preview', source, filePath: file.path }) as PaneContent,
-      },
-      {
-        id: 'pdf-viewer',
-        label: 'PDF Viewer',
-        icon: 'FilePdf',
-        match: (file) => PDF_EXTS.has(file.extension.toLowerCase()),
-        priority: 'default',
-        createContent: (source, file) => ({ kind: 'pdf-preview', source, filePath: file.path }) as PaneContent,
-      },
-      {
-        id: 'monaco-editor',
-        label: 'Text Editor',
-        icon: 'File',
-        match: (file) => !file.isDirectory && !BINARY_EXTS.has(file.extension.toLowerCase()),
-        priority: 'default',
-        createContent: (source, file) => ({ kind: 'editor', source, filePath: file.path }) as PaneContent,
-      },
-    ],
-    settings: [
-      // ... existing settings list unchanged
-    ],
-  })
+export const editorModuleDefinition: ModuleDefinition = {
+  id: 'editor',
+  name: 'Editor',
+  disableable: true,
+  descriptionKey: 'modules.editor.description',
+  panes: [
+    { kind: 'editor', component: EditorPane },
+    { kind: 'editor-buffers', component: EditorBuffersPane },
+    { kind: 'image-preview', component: ImagePreviewPane },
+    { kind: 'pdf-preview', component: PdfPreviewPane },
+  ],
+  fileOpeners: [
+    {
+      id: 'image-preview',
+      label: 'Image Preview',
+      icon: 'Image',
+      match: (file) => IMAGE_EXTS.has(file.extension.toLowerCase()),
+      priority: 'default',
+      createContent: (source, file) => ({ kind: 'image-preview', source, filePath: file.path }) as PaneContent,
+    },
+    {
+      id: 'pdf-viewer',
+      label: 'PDF Viewer',
+      icon: 'FilePdf',
+      match: (file) => PDF_EXTS.has(file.extension.toLowerCase()),
+      priority: 'default',
+      createContent: (source, file) => ({ kind: 'pdf-preview', source, filePath: file.path }) as PaneContent,
+    },
+    {
+      id: 'monaco-editor',
+      label: 'Text Editor',
+      icon: 'File',
+      match: (file) => !file.isDirectory && !BINARY_EXTS.has(file.extension.toLowerCase()),
+      priority: 'default',
+      createContent: (source, file) => ({ kind: 'editor', source, filePath: file.path }) as PaneContent,
+    },
+  ],
+  settings: [
+    // ... existing settings array unchanged
+  ],
+}
 ```
 
-刪除原本 inline 的三段 `registerFileOpener({ ... })` 呼叫；`IMAGE_EXTS` / `PDF_EXTS` / `BINARY_EXTS` 常數保留（仍會被 Editor 定義使用）。
+**刪除** `editor-module.tsx` 內 Task 1.0b 暫時搬入的 inline `registerFileOpener({...})` 三段呼叫 — `applyModuleFileOpeners()`（已在 Task 1.2 wire 到 bootstrap 末尾）會走過 `editorModuleDefinition.fileOpeners` 並用 `ownerModuleId: 'editor'` 註冊。
 
-- [ ] **Step 4: Wire `applyModuleFileOpeners()` into bootstrap**
-
-在 `registerBuiltinModules()` **末尾**（所有 `registerModule(...)` / `setHostBuiltinSections(...)` 之後、`captureBaseline` 之前）加一行：
-
-```tsx
-  applyModuleFileOpeners()
-```
-
-- [ ] **Step 5: Run all related tests, expect PASS**
+- [ ] **Step 4: Run all related tests, expect PASS**
 
 ```
-cd spa && npx vitest run src/lib/register-modules.test.tsx src/lib/file-opener-registry.test.ts
+cd spa && npx vitest run src/lib/register-modules/
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/lib/register-modules.tsx spa/src/lib/register-modules.test.tsx
-git commit -m "refactor(spa): editor module owns its three file openers"
+git add spa/src/lib/register-modules/editor-module.tsx spa/src/lib/register-modules/__tests__/editor-module.test.tsx
+git commit -m "refactor(spa): editor module declares its three file openers"
 ```
 
 ---
 
-## Task 1.4 — HMR dispose 串接 file-opener registry
+## Task 1.4 — HMR dispose 串接 file-opener registry（在 `register-modules/index.tsx`）
 
 **Files:**
-- Modify: `spa/src/lib/register-modules.tsx`（既有 `import.meta.hot.dispose` block）
+- Modify: `spa/src/lib/register-modules/index.tsx`（既有 `import.meta.hot.dispose` block）
+
+> **動機**：HMR dispose 必須清空 owner-scoped registry 後重新 apply（搭配 Task 1.0a 的 `clearAllForHmr` + Task 1.0c 的 `applyModuleFileOpeners`），確保 hot reload 後 opener 不重複、不殘留。
 
 - [ ] **Step 1: Write failing test**
 
-在 `spa/src/lib/register-modules.test.tsx` 加 case：
+擴 `spa/src/lib/register-modules/__tests__/orchestrator.test.tsx`：
 
 ```tsx
-import { getFileOpeners as _getOpeners } from './file-opener-registry'
+import { getRegisteredOpeners, clearAllForHmr } from '../../file-opener-registry'
 
 it('HMR dispose helper clears file opener registry', async () => {
-  const { resetFileOpenerRegistryForHmr } = await import('./register-modules')
-  // populate
+  const { resetFileOpenerRegistryForHmr, registerBuiltinModules } = await import('../index')
   registerBuiltinModules()
-  expect(_getOpeners({ path: '/x.txt', name: 'x.txt', extension: 'txt', isDirectory: false } as never).length).toBeGreaterThan(0)
-  // dispose
+  expect(getRegisteredOpeners().length).toBeGreaterThan(0)
   resetFileOpenerRegistryForHmr()
-  expect(_getOpeners({ path: '/x.txt', name: 'x.txt', extension: 'txt', isDirectory: false } as never).length).toBe(0)
+  expect(getRegisteredOpeners().length).toBe(0)
 })
 ```
 
@@ -626,36 +581,37 @@ it('HMR dispose helper clears file opener registry', async () => {
 
 - [ ] **Step 3: Add export + wire HMR dispose**
 
-在 `register-modules.tsx` 加 export：
+在 `spa/src/lib/register-modules/index.tsx`：
 
 ```tsx
+import { clearAllForHmr } from '../file-opener-registry'
+
 export function resetFileOpenerRegistryForHmr(): void {
-  _clearFileOpenerRegistry()
+  clearAllForHmr()
 }
-```
 
-擴 既有 HMR dispose hook：
-
-```tsx
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     resetSettingsContributionsForHmr()
-    resetFileOpenerRegistryForHmr()  // ← new
+    resetFileOpenerRegistryForHmr()
+    // 重新 apply 在 hot reload re-import 時自動執行（registerBuiltinModules() bootstrap 末尾呼 applyModuleFileOpeners）
   })
 }
 ```
 
+> **不再修改 `spa/src/lib/register-modules.tsx`**（過渡 shim）— 所有 HMR / bootstrap 邏輯都在 `register-modules/index.tsx` 落地。
+
 - [ ] **Step 4: Run test, expect PASS**
 
 ```
-cd spa && npx vitest run src/lib/register-modules.test.tsx
+cd spa && npx vitest run src/lib/register-modules/
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/lib/register-modules.tsx spa/src/lib/register-modules.test.tsx
-git commit -m "feat(spa): clear file-opener registry on HMR dispose"
+git add spa/src/lib/register-modules/index.tsx spa/src/lib/register-modules/__tests__/orchestrator.test.tsx
+git commit -m "feat(spa): clear file-opener registry on hmr dispose"
 ```
 
 ---

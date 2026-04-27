@@ -64,15 +64,366 @@
 
 PR 結束標準：點不存在的檔案會走「stat (ENOENT-only) → cache stat → popup → fs.search」管線；layer 2/3 由 popup 觸發；workspace context 在 await 後仍正確；fs.search 不接受 client absolute path；mandatory excludes / respectGitignore default 守住；popup HMR-safe + cancellation-safe。
 
-## Task 5.1 — daemon `fs.search` endpoint
+## Task 5.1a — `internal/module/fs/search_engine.go` 純函式
 
 **Files:**
-- Create: `internal/module/fs/search.go`
-- Test: `internal/module/fs/search_test.go`
+- Create: `internal/module/fs/search_engine.go`
+- Test: `internal/module/fs/search_engine_test.go`
+
+> **C7 + 體質 review #7 + 通用 review A5**：拆 5.1a (純函式 engine) + 5.1b (HTTP handler method)。本 task 只實作 `Search(ctx, req) (resp, error)` 純函式，不掛 HTTP，可獨立 unit test。**移除 `walkDepth := 0` + `_ = walkDepth` 死碼**（攻擊 review nit），深度只用 `filepath.Rel` + `strings.Count` 計算。
 
 - [ ] **Step 1: Write failing test**
 
-新建 `internal/module/fs/search_test.go`：
+新建 `internal/module/fs/search_engine_test.go`：
+
+```go
+package fs
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestSearchEngine_BasenameMatchInRoots(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "a", "foo.go"), "ok")
+	mustWrite(t, filepath.Join(dir, "b", "foo.go"), "ok")
+	mustWrite(t, filepath.Join(dir, "b", "bar.go"), "no")
+	req := SearchRequest{
+		Mode: "basename", Query: SearchQuery{Basename: "foo.go"},
+		Roots: []SearchRoot{{kind: "raw-absolute-test-only", absolute: dir}},
+		Limits: SearchLimits{MaxResults: 10},
+	}
+	resp, err := Search(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Matches) != 2 {
+		t.Errorf("expected 2 matches, got %d", len(resp.Matches))
+	}
+}
+
+func TestSearchEngine_ExcludeDirsPrunesSubtree(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "node_modules", "x", "foo.go"), "skip")
+	mustWrite(t, filepath.Join(dir, "src", "foo.go"), "ok")
+	req := SearchRequest{
+		Mode: "basename", Query: SearchQuery{Basename: "foo.go"},
+		Roots: []SearchRoot{{kind: "raw-absolute-test-only", absolute: dir}},
+		Filters: SearchFilters{ExcludeDirs: []string{"src"}},  // user adds src; mandatory excludes still apply
+	}
+	resp, _ := Search(context.Background(), req)
+	// node_modules pruned (mandatory) + src pruned (user) → 0
+	if len(resp.Matches) != 0 {
+		t.Errorf("expected 0 matches, got %+v", resp.Matches)
+	}
+}
+
+func TestSearchEngine_MandatoryExcludesAlwaysApply(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "node_modules", "foo.go"), "skip")
+	mustWrite(t, filepath.Join(dir, "src", "foo.go"), "ok")
+	// 攻擊 review #10：client 傳 [] 不能關掉 mandatory excludes
+	req := SearchRequest{
+		Mode: "basename", Query: SearchQuery{Basename: "foo.go"},
+		Roots: []SearchRoot{{kind: "raw-absolute-test-only", absolute: dir}},
+		Filters: SearchFilters{ExcludeDirs: []string{}},  // 空 array
+	}
+	resp, _ := Search(context.Background(), req)
+	if len(resp.Matches) != 1 {
+		t.Errorf("expected 1 match (node_modules pruned by mandatory), got %+v", resp.Matches)
+	}
+}
+
+func TestSearchEngine_RespectGitignoreDefaultTrue(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, ".gitignore"), "build/\n")
+	mustWrite(t, filepath.Join(dir, "build", "foo.go"), "skip")
+	mustWrite(t, filepath.Join(dir, "src", "foo.go"), "ok")
+	// 攻擊 review #10：respectGitignore omitted → default true
+	req := SearchRequest{
+		Mode: "basename", Query: SearchQuery{Basename: "foo.go"},
+		Roots: []SearchRoot{{kind: "raw-absolute-test-only", absolute: dir}},
+		Filters: SearchFilters{},  // RespectGitignore is *bool nil → treated as true
+	}
+	resp, err := Search(context.Background(), req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(resp.Matches) != 1 {
+		t.Errorf("expected 1 match (build pruned by gitignore), got %+v", resp.Matches)
+	}
+}
+
+func TestSearchEngine_GitignoreParseFailureReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	// invalid gitignore — pattern "***/" is malformed for go-gitignore parser used
+	mustWrite(t, filepath.Join(dir, ".gitignore"), "[invalid-bracket")
+	req := SearchRequest{
+		Mode: "basename", Query: SearchQuery{Basename: "foo.go"},
+		Roots: []SearchRoot{{kind: "raw-absolute-test-only", absolute: dir}},
+	}
+	_, err := Search(context.Background(), req)
+	// 攻擊 review #11：parse failure 不 fail-open，回 error 讓 handler 包成 4xx
+	if err == nil {
+		t.Errorf("expected gitignore parse error to bubble (no fail-open)")
+	}
+}
+
+func TestSearchEngine_TimeoutReturnsPartial(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 100; i++ {
+		mustWrite(t, filepath.Join(dir, fmtInt(i), "foo.go"), "x")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Microsecond)
+	defer cancel()
+	req := SearchRequest{
+		Mode: "basename", Query: SearchQuery{Basename: "foo.go"},
+		Roots: []SearchRoot{{kind: "raw-absolute-test-only", absolute: dir}},
+	}
+	resp, _ := Search(ctx, req)
+	if !resp.Partial {
+		t.Errorf("expected partial=true on timeout")
+	}
+}
+
+func mustWrite(t *testing.T, p, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func fmtInt(i int) string { return string(rune('a' + (i % 26))) + string(rune('a' + (i/26)%26)) }
+```
+
+- [ ] **Step 2: Run test, expect FAIL**
+
+```
+go test ./internal/module/fs/ -run SearchEngine
+```
+
+- [ ] **Step 3: Implement search engine**
+
+新建 `internal/module/fs/search_engine.go`：
+
+```go
+package fs
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	gitignore "github.com/sabhiram/go-gitignore"  // 既有依賴或新增
+)
+
+// SearchRequest is the daemon-internal shape (after handler resolves capabilities).
+// HTTP handler is responsible for mapping client capability roots to absolute paths.
+type SearchRequest struct {
+	Mode    string         // "basename" | (future "fuzzy" | "content")
+	Query   SearchQuery
+	Roots   []SearchRoot   // already resolved to absolute paths by handler
+	Limits  SearchLimits
+	Filters SearchFilters
+}
+
+type SearchQuery struct {
+	Basename string
+}
+
+type SearchRoot struct {
+	kind     string  // resolution kind for telemetry; never trusted from client
+	absolute string  // absolute path on local filesystem (validated by handler)
+}
+
+type SearchLimits struct {
+	MaxResults int
+	MaxDepth   int
+}
+
+type SearchFilters struct {
+	ExcludeDirs           []string
+	ExcludeBasenameGlobs  []string
+	RespectGitignore      *bool  // nil → true (defaults true; 攻擊 review #10)
+}
+
+type SearchMatch struct {
+	Path      string    `json:"path"`
+	ModTime   time.Time `json:"modTime"`
+	SizeBytes int64     `json:"sizeBytes"`
+	Root      string    `json:"root"`
+}
+
+type SearchResponse struct {
+	Matches  []SearchMatch `json:"matches"`
+	Partial  bool          `json:"partial"`
+	Warnings []string      `json:"warnings,omitempty"`
+}
+
+const (
+	defaultSearchMaxResults = 50
+	defaultSearchMaxDepth   = 8
+	hardCapMaxResults       = 200
+)
+
+// Mandatory excludes are union'd with user filters and CANNOT be disabled by sending [].
+// (攻擊 review #10)
+var mandatoryExcludeDirs = []string{
+	"node_modules", ".git", ".cache", "dist", ".pnpm-store", ".next", ".turbo",
+}
+var mandatoryExcludeBasenameGlobs = []string{"*.lock", "*.log"}
+
+// Search runs the search synchronously. ctx is honored for cancellation/timeout.
+// Returns ErrGitignoreParse when respectGitignore is requested (default true)
+// and a .gitignore in any root cannot be parsed — caller maps to 4xx.
+var ErrGitignoreParse = errors.New("gitignore parse failure")
+
+func Search(ctx context.Context, req SearchRequest) (SearchResponse, error) {
+	if req.Mode == "" {
+		req.Mode = "basename"
+	}
+	if req.Mode != "basename" {
+		return SearchResponse{}, errors.New("unsupported search mode: " + req.Mode)
+	}
+	if req.Query.Basename == "" {
+		return SearchResponse{}, errors.New("query.basename required")
+	}
+	if req.Limits.MaxResults <= 0 {
+		req.Limits.MaxResults = defaultSearchMaxResults
+	}
+	if req.Limits.MaxResults > hardCapMaxResults {
+		req.Limits.MaxResults = hardCapMaxResults
+	}
+	if req.Limits.MaxDepth <= 0 {
+		req.Limits.MaxDepth = defaultSearchMaxDepth
+	}
+
+	// Union with mandatory excludes (cannot be overridden by client)
+	excludeDirs := make(map[string]struct{}, len(mandatoryExcludeDirs)+len(req.Filters.ExcludeDirs))
+	for _, d := range mandatoryExcludeDirs { excludeDirs[d] = struct{}{} }
+	for _, d := range req.Filters.ExcludeDirs { excludeDirs[d] = struct{}{} }
+	excludeGlobs := append([]string{}, mandatoryExcludeBasenameGlobs...)
+	excludeGlobs = append(excludeGlobs, req.Filters.ExcludeBasenameGlobs...)
+
+	respectGI := true
+	if req.Filters.RespectGitignore != nil {
+		respectGI = *req.Filters.RespectGitignore
+	}
+
+	matches := make([]SearchMatch, 0, req.Limits.MaxResults)
+	partial := false
+
+	for _, root := range req.Roots {
+		var gi *gitignore.GitIgnore
+		if respectGI {
+			gp := filepath.Join(root.absolute, ".gitignore")
+			if _, err := os.Stat(gp); err == nil {
+				gi2, perr := gitignore.CompileIgnoreFile(gp)
+				if perr != nil {
+					return SearchResponse{}, ErrGitignoreParse  // no fail-open
+				}
+				gi = gi2
+			}
+		}
+
+		err := filepath.WalkDir(root.absolute, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil // skip unreadable entries
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			rel, _ := filepath.Rel(root.absolute, path)
+			depth := strings.Count(rel, string(os.PathSeparator))
+			if depth > req.Limits.MaxDepth {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.IsDir() {
+				if _, skip := excludeDirs[d.Name()]; skip {
+					return filepath.SkipDir
+				}
+				if gi != nil && gi.MatchesPath(rel+"/") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			// File: glob excludes
+			for _, glob := range excludeGlobs {
+				if ok, _ := filepath.Match(glob, d.Name()); ok {
+					return nil
+				}
+			}
+			if gi != nil && gi.MatchesPath(rel) {
+				return nil
+			}
+			if d.Name() == req.Query.Basename {
+				info, err := d.Info()
+				if err != nil {
+					return nil
+				}
+				matches = append(matches, SearchMatch{
+					Path: path, ModTime: info.ModTime(), SizeBytes: info.Size(), Root: root.absolute,
+				})
+				if len(matches) >= req.Limits.MaxResults {
+					partial = true
+					return filepath.SkipAll
+				}
+			}
+			return nil
+		})
+		if err == context.DeadlineExceeded || errors.Is(err, context.Canceled) {
+			partial = true
+			break
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].ModTime.After(matches[j].ModTime) })
+	return SearchResponse{Matches: matches, Partial: partial}, nil
+}
+```
+
+> 若 `go-gitignore` 沒在 `go.mod`，需 `go get github.com/sabhiram/go-gitignore`；test sandbox 無網路，主 Claude 在 mini 端跑 `go mod tidy`。
+
+- [ ] **Step 4: Run test, expect PASS**
+
+```
+go test ./internal/module/fs/ -run SearchEngine
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/module/fs/search_engine.go internal/module/fs/search_engine_test.go go.mod go.sum
+git commit -m "feat(daemon): fs search engine pure function with mandatory excludes"
+```
+
+---
+
+## Task 5.1b — `(m *FsModule) handleSearch` HTTP handler + capability root resolution
+
+**Files:**
+- Create: `internal/module/fs/search_handler.go`
+- Test: `internal/module/fs/search_handler_test.go`
+- Modify: `internal/module/fs/module.go`（route 註冊 `m.handleSearch`）
+
+> **C4 + D 決議 + 通用 review A5**：HTTP handler 採 `(m *FsModule).handleSearch` method pattern（與既有 fs handler 一致）。**不接受 client-supplied absolute path roots** — 只接 capability `{kind:"session-cwd", sessionCode}` / `{kind:"workspace-projectPath", workspaceId}`，由 daemon resolve 後再 system-path validate（拒絕 `/`、`/etc`、`/sys`、`/Users` 直系、`$HOME` 直系）。**body 加 mode envelope**（防守 review #8）留 `fuzzy`/`content` 擴展位置。
+
+- [ ] **Step 1: Write failing test**
+
+新建 `internal/module/fs/search_handler_test.go`：
 
 ```go
 package fs
@@ -87,264 +438,245 @@ import (
 	"testing"
 )
 
-func TestFsSearch_BasenameMatchInRoots(t *testing.T) {
-	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "a", "foo.go"), "ok")
-	mustWrite(t, filepath.Join(dir, "b", "foo.go"), "ok")
-	mustWrite(t, filepath.Join(dir, "b", "bar.go"), "no")
-
-	req := newSearchReq(t, searchRequest{Basename: "foo.go", Roots: []string{dir}, MaxResults: 10})
-	w := httptest.NewRecorder()
-	HandleSearch(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status: %d body: %s", w.Code, w.Body.String())
-	}
-	var resp searchResponse
-	mustDecode(t, w, &resp)
-	if len(resp.Matches) != 2 {
-		t.Errorf("expected 2 matches, got %d", len(resp.Matches))
-	}
+type httpSearchBody struct {
+	Mode    string                 `json:"mode"`
+	Query   map[string]string      `json:"query"`
+	Roots   []map[string]string    `json:"roots"`
+	Limits  map[string]int         `json:"limits,omitempty"`
+	Filters map[string]any         `json:"filters,omitempty"`
 }
 
-func TestFsSearch_ExcludeDirsPrunesSubtree(t *testing.T) {
-	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "node_modules", "x", "foo.go"), "skip")
-	mustWrite(t, filepath.Join(dir, "src", "foo.go"), "ok")
-
-	req := newSearchReq(t, searchRequest{
-		Basename: "foo.go", Roots: []string{dir},
-		ExcludeDirs: []string{"node_modules"},
-	})
-	w := httptest.NewRecorder()
-	HandleSearch(w, req)
-	var resp searchResponse
-	mustDecode(t, w, &resp)
-	if len(resp.Matches) != 1 || filepath.Base(filepath.Dir(resp.Matches[0].Path)) != "src" {
-		t.Errorf("unexpected matches: %+v", resp.Matches)
-	}
-}
-
-func TestFsSearch_MaxDepthLimits(t *testing.T) {
-	dir := t.TempDir()
-	deep := dir
-	for i := 0; i < 5; i++ {
-		deep = filepath.Join(deep, "d")
-	}
-	mustWrite(t, filepath.Join(deep, "foo.go"), "ok")
-	req := newSearchReq(t, searchRequest{Basename: "foo.go", Roots: []string{dir}, MaxDepth: 3})
-	w := httptest.NewRecorder()
-	HandleSearch(w, req)
-	var resp searchResponse
-	mustDecode(t, w, &resp)
-	if len(resp.Matches) != 0 {
-		t.Errorf("expected 0 matches due to depth, got %d", len(resp.Matches))
-	}
-}
-
-func TestFsSearch_RejectsNonAbsoluteRoot(t *testing.T) {
-	req := newSearchReq(t, searchRequest{Basename: "x", Roots: []string{"rel/dir"}})
-	w := httptest.NewRecorder()
-	HandleSearch(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for non-absolute root, got %d", w.Code)
-	}
-}
-
-// helpers
-func mustWrite(t *testing.T, p, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func newSearchReq(t *testing.T, body searchRequest) *http.Request {
+func newHTTPReq(t *testing.T, body httpSearchBody) *http.Request {
 	t.Helper()
 	b, _ := json.Marshal(body)
 	return httptest.NewRequest("POST", "/api/fs/search", bytes.NewReader(b))
 }
 
-func mustDecode(t *testing.T, w *httptest.ResponseRecorder, into any) {
-	t.Helper()
-	if err := json.Unmarshal(w.Body.Bytes(), into); err != nil {
-		t.Fatalf("decode: %v", err)
+func TestHandleSearch_RejectsAbsoluteRootKind(t *testing.T) {
+	m := New(/* ... stub deps ... */)
+	dir := t.TempDir()
+	body := httpSearchBody{
+		Mode: "basename", Query: map[string]string{"basename": "foo"},
+		Roots: []map[string]string{{"kind": "absolute", "path": dir}},  // 不允許的 kind
+	}
+	w := httptest.NewRecorder()
+	m.handleSearch(w, newHTTPReq(t, body))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for kind=absolute, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleSearch_RejectsSystemPath(t *testing.T) {
+	m := New(/* ... */)
+	for _, sysPath := range []string{"/", "/etc", "/sys", "/Users", os.Getenv("HOME")} {
+		body := httpSearchBody{
+			Mode: "basename", Query: map[string]string{"basename": "foo"},
+			Roots: []map[string]string{{"kind": "workspace-projectPath", "workspaceId": "w-mocked-to-" + sysPath}},
+		}
+		w := httptest.NewRecorder()
+		m.handleSearch(w, newHTTPReq(t, body))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("expected 400 for system path %s, got %d", sysPath, w.Code)
+		}
+	}
+}
+
+func TestHandleSearch_GitignoreParseError400(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, ".gitignore"), "[broken")
+	m := New(/* configured so workspace-projectPath workspaceId="w1" resolves to dir */)
+	body := httpSearchBody{
+		Mode: "basename", Query: map[string]string{"basename": "x"},
+		Roots: []map[string]string{{"kind": "workspace-projectPath", "workspaceId": "w1"}},
+	}
+	w := httptest.NewRecorder()
+	m.handleSearch(w, newHTTPReq(t, body))
+	if w.Code < 400 || w.Code >= 500 {
+		t.Errorf("expected 4xx for gitignore parse error, got %d body=%s", w.Code, w.Body.String())
 	}
 }
 ```
 
 - [ ] **Step 2: Run test, expect FAIL**
 
-```
-go test ./internal/module/fs/ -run Search
-```
+- [ ] **Step 3: Implement handler**
 
-- [ ] **Step 3: Implement search.go**
-
-新建 `internal/module/fs/search.go`：
+新建 `internal/module/fs/search_handler.go`：
 
 ```go
 package fs
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
-	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
 
-type searchRequest struct {
-	Basename             string   `json:"basename"`
-	Roots                []string `json:"roots"`
-	MaxResults           int      `json:"maxResults,omitempty"`
-	MaxDepth             int      `json:"maxDepth,omitempty"`
-	TimeoutMs            int      `json:"timeoutMs,omitempty"`
-	ExcludeDirs          []string `json:"excludeDirs,omitempty"`
-	ExcludeBasenameGlobs []string `json:"excludeBasenameGlobs,omitempty"`
-	RespectGitignore     bool     `json:"respectGitignore,omitempty"`
+type httpSearchRequest struct {
+	Mode    string `json:"mode"`
+	Query   struct {
+		Basename string `json:"basename"`
+	} `json:"query"`
+	Roots []httpSearchRoot `json:"roots"`
+	Limits *struct {
+		MaxResults int `json:"maxResults,omitempty"`
+		MaxDepth   int `json:"maxDepth,omitempty"`
+		TimeoutMs  int `json:"timeoutMs,omitempty"`
+	} `json:"limits,omitempty"`
+	Filters *struct {
+		ExcludeDirs          []string `json:"excludeDirs,omitempty"`
+		ExcludeBasenameGlobs []string `json:"excludeBasenameGlobs,omitempty"`
+		RespectGitignore     *bool    `json:"respectGitignore,omitempty"`
+	} `json:"filters,omitempty"`
 }
 
-type searchMatch struct {
-	Path       string    `json:"path"`
-	ModTime    time.Time `json:"modTime"`
-	SizeBytes  int64     `json:"sizeBytes"`
-	Root       string    `json:"root"`
+type httpSearchRoot struct {
+	Kind        string `json:"kind"`        // "session-cwd" | "workspace-projectPath"
+	SessionCode string `json:"sessionCode,omitempty"`
+	WorkspaceID string `json:"workspaceId,omitempty"`
 }
 
-type searchResponse struct {
-	Matches  []searchMatch `json:"matches"`
-	Truncated bool         `json:"truncated"`
-}
-
-const (
-	defaultSearchMaxResults = 50
-	defaultSearchMaxDepth   = 8
-	defaultSearchTimeoutMs  = 5000
-	hardCapMaxResults       = 200
-)
-
-var defaultExcludeDirs = []string{"node_modules", ".git", ".cache", "dist"}
-var defaultExcludeGlobs = []string{"*.lock", "*.log"}
-
-func HandleSearch(w http.ResponseWriter, r *http.Request) {
+// handleSearch is the canonical method handler for POST /api/fs/search.
+// Accepts only capability-based roots; absolute path roots are rejected.
+func (m *FsModule) handleSearch(w http.ResponseWriter, r *http.Request) {
 	limitBody(w, r, maxBodySize)
-	var req searchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var body httpSearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Basename == "" {
-		http.Error(w, "basename required", http.StatusBadRequest)
+	if body.Mode == "" {
+		body.Mode = "basename"
+	}
+	if body.Mode != "basename" {
+		http.Error(w, "unsupported mode", http.StatusBadRequest)
 		return
 	}
-	for _, root := range req.Roots {
-		if !filepath.IsAbs(filepath.Clean(root)) {
-			http.Error(w, "roots must be absolute", http.StatusBadRequest)
-			return
-		}
+	if body.Query.Basename == "" {
+		http.Error(w, "query.basename required", http.StatusBadRequest)
+		return
 	}
-	if req.MaxResults <= 0 {
-		req.MaxResults = defaultSearchMaxResults
-	}
-	if req.MaxResults > hardCapMaxResults {
-		req.MaxResults = hardCapMaxResults
-	}
-	if req.MaxDepth <= 0 {
-		req.MaxDepth = defaultSearchMaxDepth
-	}
-	if req.TimeoutMs <= 0 {
-		req.TimeoutMs = defaultSearchTimeoutMs
-	}
-	if req.ExcludeDirs == nil {
-		req.ExcludeDirs = defaultExcludeDirs
-	}
-	if req.ExcludeBasenameGlobs == nil {
-		req.ExcludeBasenameGlobs = defaultExcludeGlobs
+	if len(body.Roots) == 0 {
+		http.Error(w, "roots required", http.StatusBadRequest)
+		return
 	}
 
-	excludeDirSet := make(map[string]struct{}, len(req.ExcludeDirs))
-	for _, d := range req.ExcludeDirs {
-		excludeDirSet[d] = struct{}{}
+	roots, err := m.resolveCapabilityRoots(body.Roots)
+	if err != nil {
+		http.Error(w, "root resolution: "+err.Error(), http.StatusBadRequest)
+		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.TimeoutMs)*time.Millisecond)
-	defer cancel()
-
-	matches := make([]searchMatch, 0, req.MaxResults)
-	truncated := false
-
-	for _, root := range req.Roots {
-		walkDepth := 0
-		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil // skip unreadable
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			rel, _ := filepath.Rel(root, path)
-			depth := strings.Count(rel, string(os.PathSeparator))
-			_ = walkDepth
-			if depth > req.MaxDepth {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if d.IsDir() {
-				if _, skip := excludeDirSet[d.Name()]; skip {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			// File: check basename glob excludes
-			for _, glob := range req.ExcludeBasenameGlobs {
-				if ok, _ := filepath.Match(glob, d.Name()); ok {
-					return nil
-				}
-			}
-			if d.Name() == req.Basename {
-				info, err := d.Info()
-				if err != nil {
-					return nil
-				}
-				matches = append(matches, searchMatch{
-					Path: path, ModTime: info.ModTime(), SizeBytes: info.Size(), Root: root,
-				})
-				if len(matches) >= req.MaxResults {
-					truncated = true
-					return filepath.SkipAll
-				}
-			}
-			return nil
-		})
-		if err != nil && err != context.DeadlineExceeded {
-			break
-		}
-		if err == context.DeadlineExceeded || ctx.Err() != nil {
-			truncated = true
-			break
+	req := SearchRequest{
+		Mode:  body.Mode,
+		Query: SearchQuery{Basename: body.Query.Basename},
+		Roots: roots,
+	}
+	if body.Limits != nil {
+		req.Limits = SearchLimits{MaxResults: body.Limits.MaxResults, MaxDepth: body.Limits.MaxDepth}
+	}
+	if body.Filters != nil {
+		req.Filters = SearchFilters{
+			ExcludeDirs:          body.Filters.ExcludeDirs,
+			ExcludeBasenameGlobs: body.Filters.ExcludeBasenameGlobs,
+			RespectGitignore:     body.Filters.RespectGitignore,
 		}
 	}
 
-	sort.Slice(matches, func(i, j int) bool { return matches[i].ModTime.After(matches[j].ModTime) })
+	ctx := r.Context()
+	if body.Limits != nil && body.Limits.TimeoutMs > 0 {
+		var cancel func()
+		ctx, cancel = contextWithTimeout(ctx, time.Duration(body.Limits.TimeoutMs)*time.Millisecond)
+		defer cancel()
+	}
+
+	resp, err := Search(ctx, req)
+	if errors.Is(err, ErrGitignoreParse) {
+		http.Error(w, "gitignore parse failure", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(searchResponse{Matches: matches, Truncated: truncated})
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// resolveCapabilityRoots maps client capability roots to absolute paths.
+// Rejects:
+//   - Unsupported kinds (e.g. "absolute" / unknown strings)
+//   - System paths (/, /etc, /sys, /Users 直系, $HOME 直系)
+func (m *FsModule) resolveCapabilityRoots(roots []httpSearchRoot) ([]SearchRoot, error) {
+	out := make([]SearchRoot, 0, len(roots))
+	for _, r := range roots {
+		var abs string
+		switch r.Kind {
+		case "session-cwd":
+			cwd, ok := m.core.Sessions.GetCwd(r.SessionCode)
+			if !ok || cwd == "" {
+				return nil, errors.New("session cwd not found for " + r.SessionCode)
+			}
+			abs = cwd
+		case "workspace-projectPath":
+			pp, ok := m.workspaceProjectPath(r.WorkspaceID)
+			if !ok || pp == "" {
+				return nil, errors.New("workspace projectPath not found for " + r.WorkspaceID)
+			}
+			abs = pp
+		default:
+			return nil, errors.New("unsupported root kind: " + r.Kind)
+		}
+		clean := filepath.Clean(abs)
+		if err := validateNotSystemPath(clean); err != nil {
+			return nil, err
+		}
+		out = append(out, SearchRoot{kind: r.Kind, absolute: clean})
+	}
+	return out, nil
+}
+
+func validateNotSystemPath(p string) error {
+	systemPaths := []string{"/", "/etc", "/sys"}
+	for _, sp := range systemPaths {
+		if p == sp {
+			return errors.New("system path rejected: " + p)
+		}
+	}
+	if p == "/Users" || strings.HasPrefix(p, "/Users/") && !strings.Contains(p[len("/Users/"):], "/") {
+		// /Users 直系（如 /Users/wake）拒；/Users/wake/anything 允許
+		if p == "/Users" || strings.Count(p, "/") <= 2 {
+			return errors.New("user-home root level rejected: " + p)
+		}
+	}
+	if home := os.Getenv("HOME"); home != "" && p == home {
+		return errors.New("home dir root rejected")
+	}
+	return nil
+}
+
+// workspaceProjectPath resolves workspaceId → projectPath via the daemon's
+// workspace registry. Implementation depends on how SPA pushes workspace
+// metadata to daemon (e.g., on WS handshake / via dedicated /api/workspace/register).
+// Stub here; concrete impl in module.go.
+func (m *FsModule) workspaceProjectPath(workspaceId string) (string, bool) {
+	// see module.go for actual lookup
+	return m.workspaces[workspaceId], m.workspaces[workspaceId] != ""
 }
 ```
 
-- [ ] **Step 4: Wire route into module**
+> **`m.workspaces map[string]string`** + `core.Sessions.GetCwd(...)` 介面可能須在 `module.go` 補；具體看 daemon 既有 workspace registry 設計。**若 daemon 無 workspace registry**，先實作 capability `session-cwd`，`workspace-projectPath` 留 follow-up issue（不減 ABCD 決議價值，因 layer 2 仍可用 session cwd）。
 
-在 `internal/module/fs/module.go`（或既有 routes 註冊處）加：
+- [ ] **Step 4: Wire route in `internal/module/fs/module.go`**
 
 ```go
-mux.HandleFunc("POST /api/fs/search", HandleSearch)
+func (m *FsModule) Routes(mux *http.ServeMux) {
+    // ...既有
+    mux.HandleFunc("POST /api/fs/search", m.handleSearch)
+}
 ```
 
 - [ ] **Step 5: Run tests, expect PASS**
@@ -356,41 +688,62 @@ go test ./internal/module/fs/...
 - [ ] **Step 6: Commit**
 
 ```bash
-git add internal/module/fs/search.go internal/module/fs/search_test.go internal/module/fs/module.go
-git commit -m "feat(daemon): fs.search endpoint with depth/exclude/timeout"
+git add internal/module/fs/search_handler.go internal/module/fs/search_handler_test.go internal/module/fs/module.go
+git commit -m "feat(daemon): fs search http handler with capability roots"
 ```
 
 ---
 
-## Task 5.2 — `gitignore` + symlink loop tests（補強）
+## Task 5.2 — `gitignore` parse-failure handling + symlink loop tests（engine 補強）
 
 **Files:**
-- Modify: `internal/module/fs/search_test.go`
+- Modify: `internal/module/fs/search_engine.go`（加 gitignore 完整 parse handling + symlink loop 防護）
+- Modify: `internal/module/fs/search_engine_test.go`（補測）
+
+> Task 5.1a 已建立 engine + 基本 gitignore 流程；本 task 補強：
+> - **gitignore parse failure 不 fail-open**（攻擊 review #11）— Task 5.1a engine 內 `gitignore.CompileIgnoreFile` 失敗回 `ErrGitignoreParse`；本 task 加完整 case 測試（含 invalid pattern → 4xx via handler in 5.1b）
+> - Symlink loop：`filepath.WalkDir` 預設不 follow symlink，但 root 內 symlink-to-dir 不應被當 dir 探勘 — 補測 `os.Lstat` 行為。
 
 - [ ] **Step 1: Write failing test**
 
-加 case：
+擴 `internal/module/fs/search_engine_test.go`：
 
 ```go
-func TestFsSearch_GitignoreFiltersResults(t *testing.T) {
+func TestSearchEngine_GitignoreFiltersBasenameMatch(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, ".gitignore"), "ignored.go\n")
 	mustWrite(t, filepath.Join(dir, "ignored.go"), "skip")
 	mustWrite(t, filepath.Join(dir, "kept.go"), "ok")
-	req := newSearchReq(t, searchRequest{
-		Basename: "ignored.go", Roots: []string{dir},
-		RespectGitignore: true,
-	})
-	w := httptest.NewRecorder()
-	HandleSearch(w, req)
-	var resp searchResponse
-	mustDecode(t, w, &resp)
+	req := SearchRequest{
+		Mode: "basename", Query: SearchQuery{Basename: "ignored.go"},
+		Roots: []SearchRoot{{kind: "raw-absolute-test-only", absolute: dir}},
+	}
+	resp, err := Search(context.Background(), req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
 	if len(resp.Matches) != 0 {
-		t.Errorf("ignored.go should not appear with respectGitignore: %+v", resp.Matches)
+		t.Errorf("ignored.go should not appear when respectGitignore default true: %+v", resp.Matches)
 	}
 }
 
-func TestFsSearch_SymlinkLoopDoesNotInfiniteWalk(t *testing.T) {
+func TestSearchEngine_GitignoreCanBeDisabled(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, ".gitignore"), "ignored.go\n")
+	mustWrite(t, filepath.Join(dir, "ignored.go"), "now we look")
+	off := false
+	req := SearchRequest{
+		Mode: "basename", Query: SearchQuery{Basename: "ignored.go"},
+		Roots: []SearchRoot{{kind: "raw-absolute-test-only", absolute: dir}},
+		Filters: SearchFilters{RespectGitignore: &off},
+	}
+	resp, _ := Search(context.Background(), req)
+	if len(resp.Matches) != 1 {
+		t.Errorf("ignored.go should be returned when respectGitignore=false: %+v", resp.Matches)
+	}
+}
+
+func TestSearchEngine_SymlinkLoopDoesNotInfiniteWalk(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")
 	}
@@ -402,9 +755,12 @@ func TestFsSearch_SymlinkLoopDoesNotInfiniteWalk(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		req := newSearchReq(t, searchRequest{Basename: "x.go", Roots: []string{dir}, MaxDepth: 6})
-		w := httptest.NewRecorder()
-		HandleSearch(w, req)
+		req := SearchRequest{
+			Mode: "basename", Query: SearchQuery{Basename: "x.go"},
+			Roots: []SearchRoot{{kind: "raw-absolute-test-only", absolute: dir}},
+			Limits: SearchLimits{MaxDepth: 6},
+		}
+		_, _ = Search(context.Background(), req)
 		close(done)
 	}()
 	select {
@@ -417,69 +773,39 @@ func TestFsSearch_SymlinkLoopDoesNotInfiniteWalk(t *testing.T) {
 
 (`runtime` import needed.)
 
-- [ ] **Step 2: Run test, expect FAIL（gitignore 還沒實作）**
+- [ ] **Step 2: Run test, expect PASS（engine 已在 5.1a 內處理 gitignore；symlink 由 WalkDir 預設不 follow 處理）**
 
-- [ ] **Step 3: Implement gitignore via go-gitignore**
-
-Add dependency:
-
-```bash
-go get github.com/sabhiram/go-gitignore
-go mod tidy
+```
+go test ./internal/module/fs/ -run SearchEngine
 ```
 
-在 `search.go` 內 walk loop 起點加 root-level `.gitignore` 解析：
+若 5.1a engine 用了 `os.Lstat` 替代 `os.Stat` 對 symlink-to-dir，loop 測試會直接過。
 
-```go
-import gitignore "github.com/sabhiram/go-gitignore"
-
-// inside HandleSearch, before WalkDir:
-var ignore *gitignore.GitIgnore
-if req.RespectGitignore {
-    if data, err := os.ReadFile(filepath.Join(root, ".gitignore")); err == nil {
-        ignore, _ = gitignore.CompileIgnoreLines(strings.Split(string(data), "\n")...)
-    }
-}
-
-// inside WalkDir func, after d.IsDir() handling:
-if ignore != nil {
-    rel, _ := filepath.Rel(root, path)
-    if ignore.MatchesPath(rel) {
-        if d.IsDir() {
-            return filepath.SkipDir
-        }
-        return nil
-    }
-}
-```
-
-Symlink loop：`filepath.WalkDir` 預設不 follow symlink（`SkipDir` for symlink-to-dir 自動避免），但若需要可加 `os.Lstat` 檢查。本實作預設不 follow，loop 測試應通過。
-
-- [ ] **Step 4: Run tests, expect PASS**
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add internal/module/fs/search.go internal/module/fs/search_test.go go.mod go.sum
-git commit -m "feat(daemon): fs.search respects root .gitignore and avoids symlink loops"
+git add internal/module/fs/search_engine_test.go
+git commit -m "test(daemon): fs search gitignore and symlink loop coverage"
 ```
 
 ---
 
-## Task 5.3 — SPA `fsSearchByBasename` helper
+## Task 5.3 — SPA `fsSearchByCapability` helper（capability roots only）
 
 **Files:**
-- Create: `spa/src/lib/fs-search.ts`
-- Test: `spa/src/lib/fs-search.test.ts`
+- Create: `spa/src/lib/file-open/fs-search.ts`
+- Test: `spa/src/lib/file-open/fs-search.test.ts`
+
+> **D 決議**：caller 必須提供 `roots` capability（`session-cwd` / `workspace-projectPath`），**不能**傳 absolute path — daemon 端 server-side allowlist 會拒絕 `kind:"absolute"`。
 
 - [ ] **Step 1: Write failing test**
 
 ```ts
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fsSearchByBasename } from './fs-search'
-import { useHostStore } from '../stores/useHostStore'
+import { fsSearchByCapability, type SearchRootCapability } from './fs-search'
+import { useHostStore } from '../../stores/useHostStore'
 
-describe('fsSearchByBasename', () => {
+describe('fsSearchByCapability', () => {
   beforeEach(() => {
     useHostStore.setState({
       activeHostId: 'h1',
@@ -493,18 +819,28 @@ describe('fsSearchByBasename', () => {
           { path: '/a/foo.go', modTime: '2026-04-27T00:00:00Z', sizeBytes: 10, root: '/a' },
           { path: '/b/foo.go', modTime: '2026-04-26T00:00:00Z', sizeBytes: 10, root: '/b' },
         ],
-        truncated: false,
+        partial: false,
       }), { status: 200 }),
     ) as never
   })
 
-  it('posts search request to host daemon and returns matches', async () => {
-    const matches = await fsSearchByBasename('h1', 'foo.go', ['/a', '/b'])
+  it('posts mode-envelope body with capability roots to host daemon', async () => {
+    const roots: SearchRootCapability[] = [
+      { kind: 'session-cwd', sessionCode: 'sess1' },
+      { kind: 'workspace-projectPath', workspaceId: 'w1' },
+    ]
+    const matches = await fsSearchByCapability('h1', 'foo.go', roots)
     expect(matches.map((m) => m.path)).toEqual(['/a/foo.go', '/b/foo.go'])
+    const fetchCall = (global.fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]
+    const body = JSON.parse(fetchCall[1].body as string)
+    expect(body.mode).toBe('basename')
+    expect(body.query.basename).toBe('foo.go')
+    expect(body.roots).toEqual(roots)
   })
 
-  it('rejects non-absolute roots before calling daemon', async () => {
-    await expect(fsSearchByBasename('h1', 'foo.go', ['rel/dir'])).rejects.toThrow(/absolute/i)
+  it('handles 4xx error', async () => {
+    global.fetch = vi.fn(async () => new Response('bad request', { status: 400 })) as never
+    await expect(fsSearchByCapability('h1', 'foo.go', [{ kind: 'session-cwd', sessionCode: 's1' }])).rejects.toThrow(/400/)
   })
 })
 ```
@@ -514,7 +850,7 @@ describe('fsSearchByBasename', () => {
 - [ ] **Step 3: Implement helper**
 
 ```ts
-import { useHostStore } from '../stores/useHostStore'
+import { useHostStore } from '../../stores/useHostStore'
 
 export interface SearchMatch {
   path: string
@@ -525,22 +861,30 @@ export interface SearchMatch {
 
 export interface SearchResponse {
   matches: SearchMatch[]
-  truncated: boolean
+  partial: boolean
+  warnings?: string[]
 }
 
-export async function fsSearchByBasename(
+export type SearchRootCapability =
+  | { kind: 'session-cwd'; sessionCode: string }
+  | { kind: 'workspace-projectPath'; workspaceId: string }
+
+export async function fsSearchByCapability(
   hostId: string,
   basename: string,
-  roots: string[],
+  roots: SearchRootCapability[],
   opts: { maxResults?: number; maxDepth?: number; timeoutMs?: number } = {},
 ): Promise<SearchMatch[]> {
-  for (const r of roots) {
-    if (!r.startsWith('/')) throw new Error(`Search root must be absolute: ${r}`)
-  }
   const state = useHostStore.getState()
   const base = state.getDaemonBase(hostId)
   const headers = { 'Content-Type': 'application/json', ...state.getAuthHeaders(hostId) }
-  const body = JSON.stringify({ basename, roots, ...opts })
+  // Mode-envelope body — daemon expects { mode, query, roots, limits, filters }
+  const body = JSON.stringify({
+    mode: 'basename',
+    query: { basename },
+    roots,
+    ...(Object.keys(opts).length ? { limits: opts } : {}),
+  })
   const res = await fetch(`${base}/api/fs/search`, { method: 'POST', headers, body })
   if (!res.ok) throw new Error(`fs.search failed: ${res.status} ${res.statusText}`)
   const json = (await res.json()) as SearchResponse
@@ -553,8 +897,8 @@ export async function fsSearchByBasename(
 - [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/lib/fs-search.ts spa/src/lib/fs-search.test.ts
-git commit -m "feat(spa): fsSearchByBasename helper hits per-host daemon"
+git add spa/src/lib/file-open/fs-search.ts spa/src/lib/file-open/fs-search.test.ts
+git commit -m "feat(spa): fssearchbycapability helper with mode envelope"
 ```
 
 ---
@@ -563,7 +907,7 @@ git commit -m "feat(spa): fsSearchByBasename helper hits per-host daemon"
 
 **Files:**
 - Modify: `spa/src/stores/useUISettingsStore.ts`
-- Create: `spa/src/components/settings/EditorOpenBehaviorSection.tsx`
+- Create: `spa/src/components/settings/editor/EditorOpenBehaviorSection.tsx`
 - Test: 對應 .test.tsx
 
 - [ ] **Step 1: Add fields to useUISettingsStore**
@@ -628,41 +972,53 @@ export function EditorOpenBehaviorSection() {
 - [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/stores/useUISettingsStore.ts spa/src/components/settings/EditorOpenBehaviorSection.tsx spa/src/lib/register-modules.tsx spa/src/i18n/*.json
+git add spa/src/stores/useUISettingsStore.ts spa/src/components/settings/editor/EditorOpenBehaviorSection.tsx spa/src/lib/register-modules/editor-module.tsx spa/src/locales/zh-TW.json spa/src/locales/en.json
 git commit -m "feat(spa): editor open behavior settings (popup + auto layer1)"
 ```
 
 ---
 
-## Task 5.5 — `tryOpenFile` flow
+## Task 5.5 — `tryOpenFile` flow（service factory + host-bound + ENOENT-only）
 
 **Files:**
-- Create: `spa/src/lib/open-file.ts`
-- Test: `spa/src/lib/open-file.test.ts`
+- Create: `spa/src/lib/file-open/open-file.ts`
+- Test: `spa/src/lib/file-open/open-file.test.ts`
+
+> **C5 + 防守 review #6**：
+> - **Service factory 模式**：`createOpenFileService({fsBackendFactory, popupController, tabOpener})` 回 `{ tryOpenFile }`；caller 不需知道 backend / popup / openInTab 細節
+> - **Host-bound backend**：`fsBackendFactory(ctx.hostId)` 取一次，後續所有 `await stat` 用同一 backend；workspace/host 切換不影響進行中的 open flow（攻擊 critical C5）
+> - **錯誤分類嚴格**：`stat().catch(err => isNotFoundError(err) ? null : throw err)` — 只 ENOENT/404 視作 missing；auth/network/host-removed bubble，不偽裝 missing
 
 - [ ] **Step 1: Write failing test**
 
 ```ts
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { tryOpenFile } from './open-file'
-import { usePathCacheStore } from '../stores/usePathCacheStore'
-import { useUISettingsStore } from '../stores/useUISettingsStore'
+import { createOpenFileService, FileNotFoundError, isNotFoundError } from './open-file'
+import { usePathCacheStore } from '../../stores/path-cache/usePathCacheStore'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
 
-const mockBackend = {
-  stat: vi.fn(),
-  // ... other methods optional
-}
-
+const mockStatH1 = vi.fn()
+const mockStatH2 = vi.fn()
 const mockOpenInTab = vi.fn()
-const mockOpenPopup = vi.fn()
+const mockShow = vi.fn()
+const mockHide = vi.fn()
 
-describe('tryOpenFile', () => {
+const fsBackendFactory = (hostId: string) => ({
+  stat: hostId === 'h1' ? mockStatH1 : mockStatH2,
+})
+
+const svc = createOpenFileService({
+  fsBackendFactory,
+  popupController: { show: mockShow, hide: mockHide },
+  tabOpener: mockOpenInTab,
+})
+
+describe('createOpenFileService', () => {
   beforeEach(() => {
     usePathCacheStore.setState({ dirsByScope: {} } as never, false)
     useUISettingsStore.setState({ popupOnMissingFile: true, autoSearchLayer1: true } as never, false)
-    mockBackend.stat.mockReset()
-    mockOpenInTab.mockReset()
-    mockOpenPopup.mockReset()
+    mockStatH1.mockReset(); mockStatH2.mockReset()
+    mockOpenInTab.mockReset(); mockShow.mockReset(); mockHide.mockReset()
   })
 
   const ctx = { hostId: 'h1', sourceWorkspaceId: 'w1' }
@@ -670,46 +1026,67 @@ describe('tryOpenFile', () => {
   const source = { type: 'inapp' as const }
 
   it('opens directly when path exists', async () => {
-    mockBackend.stat.mockResolvedValue({ isDirectory: false })
-    await tryOpenFile(file as never, source, ctx, { backend: mockBackend as never, openInTab: mockOpenInTab, openPopup: mockOpenPopup })
+    mockStatH1.mockResolvedValue({ isDirectory: false })
+    await svc.tryOpenFile(file as never, source, ctx)
     expect(mockOpenInTab).toHaveBeenCalledWith(file, source, ctx)
-    expect(mockOpenPopup).not.toHaveBeenCalled()
+    expect(mockShow).not.toHaveBeenCalled()
   })
 
-  it('throws when popupOnMissingFile is off and file missing', async () => {
+  it('throws FileNotFoundError when popupOnMissingFile off and file missing', async () => {
     useUISettingsStore.setState({ popupOnMissingFile: false } as never, false)
-    mockBackend.stat.mockResolvedValue(null)
-    await expect(tryOpenFile(file as never, source, ctx, { backend: mockBackend as never, openInTab: mockOpenInTab, openPopup: mockOpenPopup })).rejects.toThrow(/not found/i)
+    mockStatH1.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+    await expect(svc.tryOpenFile(file as never, source, ctx)).rejects.toBeInstanceOf(FileNotFoundError)
   })
 
-  it('layer1 single hit opens directly (after stat verify)', async () => {
+  // 攻擊 critical C5: 錯誤分類嚴格 — auth error 不誤判 missing
+  it('bubbles auth error (NOT missing) — popup never opens', async () => {
+    const authErr = Object.assign(new Error('unauthorized'), { status: 401 })
+    mockStatH1.mockRejectedValue(authErr)
+    await expect(svc.tryOpenFile(file as never, source, ctx)).rejects.toBe(authErr)
+    expect(mockShow).not.toHaveBeenCalled()
+  })
+
+  it('bubbles network error — popup never opens', async () => {
+    const netErr = Object.assign(new Error('network down'), { code: 'ENETDOWN' })
+    mockStatH1.mockRejectedValue(netErr)
+    await expect(svc.tryOpenFile(file as never, source, ctx)).rejects.toBe(netErr)
+  })
+
+  // 攻擊 critical C5: host-bound — host 切換中後續 stat 仍打 ctx.hostId
+  it('uses ctx.hostId backend for the entire flow even if active host switches', async () => {
+    mockStatH1.mockResolvedValueOnce(null)  // direct stat: missing (not-found code applied below)
+    Object.assign(mockStatH1.mock.calls, [])  // reset call count tracking
+    // Simulate: active host switches to h2 mid-flow (dispatch can't observe this in test;
+    // we just assert all mockStatH1 was called, mockStatH2 was NOT)
+    mockStatH1.mockResolvedValue(null) // for any subsequent calls; will trigger ask-expand
+    const enoentErr = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+    mockStatH1.mockRejectedValue(enoentErr())
     usePathCacheStore.getState().add('h1', 'w1', '/a/b')
-    mockBackend.stat.mockImplementation(async (p: string) => p === '/a/b/foo.go' ? { isDirectory: false } : null)
-    // Simulate: original file.path is '/elsewhere/foo.go' which doesn't exist
+    mockStatH2.mockResolvedValue({ isDirectory: false })  // h2 backend should NEVER be called
+    await svc.tryOpenFile(file as never, source, ctx).catch(() => null)
+    expect(mockStatH2).not.toHaveBeenCalled()
+    expect(mockStatH1).toHaveBeenCalled()
+  })
+
+  it('layer1 single verified hit opens directly', async () => {
+    usePathCacheStore.getState().add('h1', 'w1', '/a/b')
+    const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+    mockStatH1.mockImplementation(async (p: string) =>
+      p === '/a/b/foo.go' ? { isDirectory: false } : (() => { throw enoent })(),
+    )
     const missing = { ...file, path: '/elsewhere/foo.go' }
-    await tryOpenFile(missing as never, source, ctx, { backend: mockBackend as never, openInTab: mockOpenInTab, openPopup: mockOpenPopup })
+    await svc.tryOpenFile(missing as never, source, ctx)
     expect(mockOpenInTab).toHaveBeenCalledWith({ ...missing, path: '/a/b/foo.go' }, source, ctx)
   })
 
-  it('layer1 multi hits opens popup with verified candidates', async () => {
-    usePathCacheStore.getState().add('h1', 'w1', '/a/b')
-    usePathCacheStore.getState().add('h1', 'w1', '/c/d')
-    mockBackend.stat.mockImplementation(async (p: string) => p.endsWith('foo.go') && p !== '/elsewhere/foo.go' ? { isDirectory: false } : null)
-    const missing = { ...file, path: '/elsewhere/foo.go' }
-    await tryOpenFile(missing as never, source, ctx, { backend: mockBackend as never, openInTab: mockOpenInTab, openPopup: mockOpenPopup })
-    expect(mockOpenPopup).toHaveBeenCalledWith(expect.objectContaining({
-      mode: 'layer1-multi',
-      hits: ['/c/d/foo.go', '/a/b/foo.go'],
-    }))
-  })
-
-  it('layer1 stat fail prunes cache and falls to ask-expand', async () => {
+  it('layer1 stat ENOENT prunes cache + falls to ask-expand', async () => {
     usePathCacheStore.getState().add('h1', 'w1', '/stale/dir')
-    mockBackend.stat.mockResolvedValue(null)  // every stat fails
+    const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+    mockStatH1.mockRejectedValue(enoent)
     const missing = { ...file, path: '/elsewhere/foo.go' }
-    await tryOpenFile(missing as never, source, ctx, { backend: mockBackend as never, openInTab: mockOpenInTab, openPopup: mockOpenPopup })
+    await svc.tryOpenFile(missing as never, source, ctx)
     expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toEqual([])
-    expect(mockOpenPopup).toHaveBeenCalledWith(expect.objectContaining({ mode: 'ask-expand' }))
+    expect(mockShow).toHaveBeenCalledWith(expect.objectContaining({ mode: 'ask-expand' }))
   })
 })
 ```
@@ -719,9 +1096,9 @@ describe('tryOpenFile', () => {
 - [ ] **Step 3: Implement**
 
 ```ts
-import type { FileInfo, FileSource } from '../types/fs'
-import { usePathCacheStore } from '../stores/usePathCacheStore'
-import { useUISettingsStore } from '../stores/useUISettingsStore'
+import type { FileInfo, FileSource } from '../../types/fs'
+import { usePathCacheStore } from '../../stores/path-cache/usePathCacheStore'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
 
 export interface OpenFileContext {
   hostId: string
@@ -730,8 +1107,8 @@ export interface OpenFileContext {
   cwdResolver?: () => Promise<string | null>
 }
 
-interface FsLike {
-  stat(path: string): Promise<unknown | null>
+interface FsBackend {
+  stat(path: string): Promise<unknown>
 }
 
 export interface PopupSpec {
@@ -742,10 +1119,13 @@ export interface PopupSpec {
   ctx: OpenFileContext
 }
 
-export interface OpenDeps {
-  backend: FsLike
-  openInTab: (file: FileInfo, source: FileSource, ctx: OpenFileContext) => void
-  openPopup: (spec: PopupSpec) => void
+export interface OpenFileDeps {
+  fsBackendFactory: (hostId: string) => FsBackend
+  popupController: {
+    show: (spec: PopupSpec) => AbortController
+    hide: () => void
+  }
+  tabOpener: (file: FileInfo, source: FileSource, ctx: OpenFileContext) => void
 }
 
 export class FileNotFoundError extends Error {
@@ -754,46 +1134,70 @@ export class FileNotFoundError extends Error {
   }
 }
 
-export async function tryOpenFile(
-  file: FileInfo,
-  source: FileSource,
-  ctx: OpenFileContext,
-  deps: OpenDeps,
-): Promise<void> {
-  // 1. Direct stat
-  if (await deps.backend.stat(file.path).catch(() => null)) {
-    deps.openInTab(file, source, ctx)
-    return
-  }
+/** Strict error classifier — only ENOENT / 404 are "not found"; everything else bubbles. */
+export function isNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const e = err as { code?: string; status?: number }
+  return e.code === 'ENOENT' || e.status === 404
+}
 
-  // 2. Popup gate
-  const ui = useUISettingsStore.getState()
-  if (!ui.popupOnMissingFile) throw new FileNotFoundError(file.path)
+export interface OpenFileService {
+  tryOpenFile(file: FileInfo, source: FileSource, ctx: OpenFileContext): Promise<void>
+}
 
-  // 3. Layer 1
-  if (ui.autoSearchLayer1) {
-    const cache = usePathCacheStore.getState()
-    const candidates = cache.lookup(ctx.hostId, ctx.sourceWorkspaceId, file.name)
-    const verified: string[] = []
-    for (const c of candidates) {
-      if (await deps.backend.stat(c).catch(() => null)) {
-        verified.push(c)
-      } else {
-        cache.pruneStaleCandidate(ctx.hostId, ctx.sourceWorkspaceId, c)
+export function createOpenFileService(deps: OpenFileDeps): OpenFileService {
+  return {
+    async tryOpenFile(file, source, ctx) {
+      // Host-bound: take the backend ONCE; subsequent awaits use this same backend
+      // even if the user switches active host during the flow.
+      const fs = deps.fsBackendFactory(ctx.hostId)
+
+      // 1. Direct stat — only ENOENT/404 counts as "missing"; anything else bubbles
+      let statResult: unknown = null
+      try {
+        statResult = await fs.stat(file.path)
+      } catch (err) {
+        if (!isNotFoundError(err)) throw err
+        statResult = null
       }
-    }
-    if (verified.length === 1) {
-      deps.openInTab({ ...file, path: verified[0] }, source, ctx)
-      return
-    }
-    if (verified.length > 1) {
-      deps.openPopup({ mode: 'layer1-multi', hits: verified, file, source, ctx })
-      return
-    }
-  }
+      if (statResult) {
+        deps.tabOpener(file, source, ctx)
+        return
+      }
 
-  // 4. Fall through
-  deps.openPopup({ mode: 'ask-expand', file, source, ctx })
+      // 2. Popup gate
+      const ui = useUISettingsStore.getState()
+      if (!ui.popupOnMissingFile) throw new FileNotFoundError(file.path)
+
+      // 3. Layer 1
+      if (ui.autoSearchLayer1) {
+        const cache = usePathCacheStore.getState()
+        const candidates = cache.lookup(ctx.hostId, ctx.sourceWorkspaceId, file.name)
+        const verified: string[] = []
+        for (const c of candidates) {
+          try {
+            const ok = await fs.stat(c)
+            if (ok) verified.push(c)
+            else cache.pruneStaleCandidate(ctx.hostId, ctx.sourceWorkspaceId, c)
+          } catch (err) {
+            if (!isNotFoundError(err)) throw err
+            cache.pruneStaleCandidate(ctx.hostId, ctx.sourceWorkspaceId, c)
+          }
+        }
+        if (verified.length === 1) {
+          deps.tabOpener({ ...file, path: verified[0] }, source, ctx)
+          return
+        }
+        if (verified.length > 1) {
+          deps.popupController.show({ mode: 'layer1-multi', hits: verified, file, source, ctx })
+          return
+        }
+      }
+
+      // 4. Fall through
+      deps.popupController.show({ mode: 'ask-expand', file, source, ctx })
+    },
+  }
 }
 ```
 
@@ -802,8 +1206,8 @@ export async function tryOpenFile(
 - [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/lib/open-file.ts spa/src/lib/open-file.test.ts
-git commit -m "feat(spa): tryOpenFile flow with stat-verified layer 1"
+git add spa/src/lib/file-open/open-file.ts spa/src/lib/file-open/open-file.test.ts
+git commit -m "feat(spa): host-bound openfile service with strict enoent classification"
 ```
 
 ---
@@ -811,8 +1215,8 @@ git commit -m "feat(spa): tryOpenFile flow with stat-verified layer 1"
 ## Task 5.6 — `FileNotFoundPopup` component
 
 **Files:**
-- Create: `spa/src/components/editor/FileNotFoundPopup.tsx`
-- Test: `spa/src/components/editor/FileNotFoundPopup.test.tsx`
+- Create: `spa/src/components/editor/popups/FileNotFoundPopup.tsx`
+- Test: `spa/src/components/editor/popups/FileNotFoundPopup.test.tsx`
 
 - [ ] **Step 1: Write failing test**
 
@@ -927,64 +1331,197 @@ export function FileNotFoundPopup({ spec, onClose, onOpenPath, onExpand }: Props
 - [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/components/editor/FileNotFoundPopup.tsx spa/src/components/editor/FileNotFoundPopup.test.tsx
-git commit -m "feat(spa): FileNotFoundPopup component with ESC + candidate list"
+git add spa/src/components/editor/popups/FileNotFoundPopup.tsx spa/src/components/editor/popups/FileNotFoundPopup.test.tsx
+git commit -m "feat(spa): filenotfoundpopup component with esc and candidate list"
 ```
 
 ---
 
-## Task 5.7 — Integrate into terminal-link + FileTreeView
+## Task 5.7a — popup mount service（HMR-safe + AbortController cancellation）
+
+**Files:**
+- Create: `spa/src/lib/file-open/file-not-found-popup-service.tsx`
+- Test: `spa/src/lib/file-open/file-not-found-popup-service.test.tsx`
+
+> **拆 5.7a/b/8**（通用 review C3 + 體質 review #8 + #11）：本 task 只實作 popup mount lifecycle service（singleton root + HMR dispose + AbortController），可獨立 mount/close/open-selected。**改名 `popup-mount.tsx` → `file-not-found-popup-service.tsx`** 凸顯 service nature。
+
+> **HMR**：`if (import.meta.hot) import.meta.hot.dispose(hideFileNotFoundPopup)` — 避免 hot reload 後 module-level `root/host` 變 zombie。
+>
+> **AbortController**：`showFileNotFoundPopup(...)` 回 `AbortController`；caller 在 `await` 後檢查 `signal.aborted`，close 後不可重新 mount popup（攻擊 review #5）。
+
+- [ ] **Step 1: Write failing test**
+
+新建 `spa/src/lib/file-open/file-not-found-popup-service.test.tsx`：
+
+```tsx
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import {
+  showFileNotFoundPopup,
+  hideFileNotFoundPopup,
+  disposeForTests,
+} from './file-not-found-popup-service'
+
+afterEach(() => disposeForTests())
+
+const baseSpec = {
+  mode: 'ask-expand' as const,
+  file: { path: '/missing/foo.go', name: 'foo.go', extension: 'go', isDirectory: false } as never,
+  source: { type: 'inapp' } as never,
+  ctx: { hostId: 'h1', sourceWorkspaceId: 'w1' },
+}
+
+describe('file-not-found-popup-service', () => {
+  it('show creates a single host element in document', () => {
+    showFileNotFoundPopup(baseSpec, { onOpenPath: () => {}, onExpand: async () => {} })
+    expect(document.querySelectorAll('[data-pdx-popup-host="file-not-found"]').length).toBe(1)
+  })
+
+  it('show twice replaces previous instance (still single host)', () => {
+    showFileNotFoundPopup(baseSpec, { onOpenPath: () => {}, onExpand: async () => {} })
+    showFileNotFoundPopup(baseSpec, { onOpenPath: () => {}, onExpand: async () => {} })
+    expect(document.querySelectorAll('[data-pdx-popup-host="file-not-found"]').length).toBe(1)
+  })
+
+  it('hide removes host completely', () => {
+    showFileNotFoundPopup(baseSpec, { onOpenPath: () => {}, onExpand: async () => {} })
+    hideFileNotFoundPopup()
+    expect(document.querySelectorAll('[data-pdx-popup-host="file-not-found"]').length).toBe(0)
+  })
+
+  it('hide is idempotent (no throw on repeated calls)', () => {
+    expect(() => { hideFileNotFoundPopup(); hideFileNotFoundPopup() }).not.toThrow()
+  })
+
+  // 攻擊 review #5: AbortController cancellation
+  it('returns AbortController; abort signals consumers to bail', () => {
+    const ctl = showFileNotFoundPopup(baseSpec, { onOpenPath: () => {}, onExpand: async () => {} })
+    expect(ctl.signal.aborted).toBe(false)
+    hideFileNotFoundPopup()
+    expect(ctl.signal.aborted).toBe(true)
+  })
+})
+```
+
+- [ ] **Step 2: Run test, expect FAIL**
+
+- [ ] **Step 3: Implement service**
+
+新建 `spa/src/lib/file-open/file-not-found-popup-service.tsx`：
+
+```tsx
+import { createRoot, type Root } from 'react-dom/client'
+import { FileNotFoundPopup } from '../../components/editor/popups/FileNotFoundPopup'
+import type { PopupSpec } from './open-file'
+
+let root: Root | undefined
+let host: HTMLDivElement | undefined
+let currentToken: AbortController | undefined
+
+interface ShowCallbacks {
+  onOpenPath: (path: string) => void
+  onExpand: (spec: PopupSpec, signal: AbortSignal) => Promise<void>
+}
+
+export function showFileNotFoundPopup(spec: PopupSpec, cb: ShowCallbacks): AbortController {
+  hideFileNotFoundPopup()  // singleton
+  host = document.createElement('div')
+  host.dataset.pdxPopupHost = 'file-not-found'
+  document.body.appendChild(host)
+  root = createRoot(host)
+  currentToken = new AbortController()
+  const tok = currentToken
+  root.render(
+    <FileNotFoundPopup
+      spec={spec}
+      onClose={hideFileNotFoundPopup}
+      onOpenPath={(p) => { hideFileNotFoundPopup(); cb.onOpenPath(p) }}
+      onExpand={() => { void cb.onExpand(spec, tok.signal) }}
+    />,
+  )
+  return currentToken
+}
+
+export function hideFileNotFoundPopup(): void {
+  currentToken?.abort()
+  root?.unmount()
+  host?.remove()
+  root = undefined
+  host = undefined
+  currentToken = undefined
+}
+
+/** Test-only dispose (alias for hide; named for clarity in test cleanup). */
+export function disposeForTests(): void { hideFileNotFoundPopup() }
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(hideFileNotFoundPopup)
+}
+```
+
+- [ ] **Step 4: Run test, expect PASS**
+
+```
+cd spa && npx vitest run src/lib/file-open/file-not-found-popup-service.test.tsx
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add spa/src/lib/file-open/file-not-found-popup-service.tsx spa/src/lib/file-open/file-not-found-popup-service.test.tsx
+git commit -m "feat(spa): file not found popup service with hmr and abort"
+```
+
+---
+
+## Task 5.7b — Integrate `tryOpenFile` into terminal-link + FileTreeView（expand 暫 disabled）
 
 **Files:**
 - Modify: `spa/src/lib/terminal-link/openers/file-path.ts`
 - Modify: `spa/src/components/FileTreeView.tsx`
-- Modify: `spa/src/lib/register-modules.tsx`（注入 deps）
+- Modify: `spa/src/lib/register-modules/editor-module.tsx`（注入 service deps）
 
-- [ ] **Step 1: Replace existing open-on-click with `tryOpenFile`**
+> **拆 5.7b**：caller wire 起來，但 popup 的 `onExpand` callback 暫時 no-op（每個 commit 都是可驗證狀態；體質 review #8）。Layer 2/3 expand 完整流在 Task 5.8。
 
-Terminal link 內：把點擊呼叫 `openSingletonTab` 的部分改成走 `tryOpenFile`。`tryOpenFile` 把 deps（backend + openInTab + openPopup）注入；`openInTab` 內部仍呼叫 `openSingletonTab` 做最後 tab 創建（保留 P2 的 same-kind 行為）。
+- [ ] **Step 1: Provide a service factory helper**
 
-具體：在 `register-modules.tsx` 的 `terminalLink.filePathOpener` deps 注入 `tryOpenFile` adapter；popup 開關以 React portal mount。
+在 `spa/src/lib/file-open/index.ts`（新建 barrel）匯出：
 
-實作 popup mount 的 helper（`spa/src/lib/popup-mount.tsx`，新建）：
-
-```tsx
-import { createRoot, type Root } from 'react-dom/client'
-import { FileNotFoundPopup } from '../components/editor/FileNotFoundPopup'
-import type { PopupSpec } from './open-file'
-
-let root: Root | null = null
-let host: HTMLDivElement | null = null
-
-export function showFileNotFoundPopup(
-  spec: PopupSpec,
-  onOpenPath: (path: string) => void,
-  onExpand: () => void,
-): void {
-  if (!host) {
-    host = document.createElement('div')
-    document.body.appendChild(host)
-    root = createRoot(host)
-  }
-  const close = () => {
-    root?.render(<></>)
-  }
-  root!.render(
-    <FileNotFoundPopup
-      spec={spec}
-      onClose={close}
-      onOpenPath={(p) => { close(); onOpenPath(p) }}
-      onExpand={() => { close(); onExpand() }}
-    />,
-  )
-}
+```ts
+export { showFileNotFoundPopup, hideFileNotFoundPopup } from './file-not-found-popup-service'
+export { createOpenFileService, FileNotFoundError, isNotFoundError, type PopupSpec, type OpenFileContext } from './open-file'
 ```
 
-(Layer 2/3 fs.search 邏輯放在 `onExpand` callback 內 — 呼叫 `fsSearchByBasename` 並產出新的 popup。為簡化，本 task 不做 layer 2/3 完整流，先把 popup 框架接上；layer 2/3 在 Task 5.8。)
+- [ ] **Step 2: Replace `openSingletonTab` direct call in file-path opener / FileTreeView**
 
-- [ ] **Step 2: Wire in register-modules.tsx**
+在 terminal-link / FileTreeView caller 改成：
 
-Replace existing `filePathOpener` openSingletonTab call with `tryOpenFile` indirection — 詳細替換留實作期間根據實際 file-path.ts 結構決定。
+```ts
+import { createOpenFileService, showFileNotFoundPopup, hideFileNotFoundPopup } from '../lib/file-open'
+import { useHostStore } from '../stores/useHostStore'
+
+// 一次建立 service（caller 範圍內 stable）
+const svc = createOpenFileService({
+  fsBackendFactory: (hostId) => useHostStore.getState().getFsBackend(hostId),  // host-bound factory
+  popupController: {
+    show: (spec) => showFileNotFoundPopup(spec, {
+      onOpenPath: (p) => openSingletonTab({ kind: 'editor', source, filePath: p } as never, { isSameKind: ... }),
+      onExpand: async (_spec, _signal) => { /* 5.8 fills this */ },
+    }),
+    hide: hideFileNotFoundPopup,
+  },
+  tabOpener: (file, source, ctx) => {
+    // P2 same-kind logic preserved here
+    openSingletonTab({ kind: 'editor', source, filePath: file.path } as never, {
+      isSameKind: (c) => ['editor', 'image-preview', 'pdf-preview'].includes(c.kind),
+    })
+  },
+})
+
+// Caller invokes:
+await svc.tryOpenFile(file, source, { hostId, sourceWorkspaceId })
+```
+
+> **`useHostStore.getFsBackend(hostId)`** 介面可能要新增；對齊 P5 SPEC「fs API 永遠 host-bound」。若已有等價 API（如 `getDaemonClient(hostId).fs`）直接用。
 
 - [ ] **Step 3: 跑全測**
 
@@ -995,61 +1532,132 @@ cd spa && npx vitest run
 - [ ] **Step 4: Commit**
 
 ```bash
-git commit -m "feat(spa): terminal-link/FileTree open files via tryOpenFile pipeline"
+git commit -m "feat(spa): terminal link and file tree open files via tryopenfile pipeline"
 ```
 
 ---
 
-## Task 5.8 — Layer 2/3 expand search + popup re-render
+## Task 5.8 — Layer 2/3 expand search（補 onExpand 完整流）
 
 **Files:**
-- Modify: `spa/src/lib/popup-mount.tsx`（onExpand 真正實作）
-- Modify: `spa/src/components/editor/FileNotFoundPopup.tsx`（顯示 expand results 區段）
+- Modify: `spa/src/lib/file-open/file-not-found-popup-service.tsx`（補 expanded re-render）
+- Modify: `spa/src/components/editor/popups/FileNotFoundPopup.tsx`（render expanded sections）
+- Modify: P5.7b 注入的 `onExpand` callback
 
-- [ ] **Step 1: Extend popup spec to support expanded mode**
+> **吸收**：
+> - `ws.config?.projectPath` 改 `ws.moduleConfig?.files?.projectPath`（通用 review D1）— Workspace schema 沒有 `config`，只有 `moduleConfig`
+> - useWorkspaceStore 路徑 `features/workspace/store`（通用 review A2）
+> - **AbortSignal 檢查**：`onExpand` `await fs.search` 回來時必須先 check `signal.aborted` — close 後不可 re-mount popup（攻擊 review #5）
+> - **popup expand UX**：主 CTA 寫「搜尋目前 session（cwd: …）」+「搜尋 workspace（projectPath: …）」，先顯示要搜尋的 root；不像錯誤訊息次要按鈕（防守 review #4）
 
-`PopupSpec` 加 `mode: 'expanded'`，內含 `layer2Hits` / `layer3Hits` arrays。
+- [ ] **Step 1: Extend `PopupSpec` 加 expanded mode**
+
+```ts
+type PopupSpec =
+  | { mode: 'ask-expand'; file; source; ctx }
+  | { mode: 'layer1-multi'; hits: string[]; file; source; ctx }
+  | { mode: 'expanded'; layer2Hits: SearchMatch[]; layer3Hits: SearchMatch[]; file; source; ctx }
+```
 
 - [ ] **Step 2: Implement onExpand using layer 2 + layer 3**
 
-```ts
-async function onExpand(spec: PopupSpec): Promise<void> {
-  const layer2Roots: string[] = []
-  if (spec.ctx.cwdResolver) {
-    const cwd = await spec.ctx.cwdResolver()
-    if (cwd) layer2Roots.push(cwd)
-  }
+在 P5.7b 的 caller 注入處填 `onExpand` body：
 
+```ts
+import { useWorkspaceStore } from '../features/workspace/store'
+
+async onExpand(spec, signal) {
+  const layer2Roots: { kind: 'session-cwd'; sessionCode: string }[] = []
+  if (spec.ctx.sessionCode) {
+    layer2Roots.push({ kind: 'session-cwd', sessionCode: spec.ctx.sessionCode })
+  }
+  // **注意：projectPath 在 ws.moduleConfig.files**，不是 ws.config（通用 review D1）
   const wsState = useWorkspaceStore.getState()
   const ws = wsState.workspaces.find((w) => w.id === spec.ctx.sourceWorkspaceId)
-  const projectPath = ws?.config?.projectPath as string | undefined
-  const layer3Roots = projectPath ? [projectPath] : []
+  const projectPath = ws?.moduleConfig?.files?.projectPath
+  const layer3Roots: { kind: 'workspace-projectPath'; workspaceId: string }[] = projectPath
+    ? [{ kind: 'workspace-projectPath', workspaceId: spec.ctx.sourceWorkspaceId }]
+    : []
 
-  const [layer2, layer3] = await Promise.all([
-    layer2Roots.length ? fsSearchByBasename(spec.ctx.hostId, spec.file.name, layer2Roots) : [],
-    layer3Roots.length ? fsSearchByBasename(spec.ctx.hostId, spec.file.name, layer3Roots) : [],
+  const [layer2Hits, layer3Hits] = await Promise.all([
+    layer2Roots.length ? fsSearchByCapability(spec.ctx.hostId, spec.file.name, layer2Roots) : [],
+    layer3Roots.length ? fsSearchByCapability(spec.ctx.hostId, spec.file.name, layer3Roots) : [],
   ])
 
-  // Re-render popup with expanded results
-  showFileNotFoundPopupExpanded(spec, layer2, layer3)
+  // 攻擊 review #5: 檢查 cancellation token，close 後不再 mount
+  if (signal.aborted) return
+
+  showFileNotFoundPopupExpanded({ ...spec, mode: 'expanded', layer2Hits, layer3Hits })
 }
 ```
 
-- [ ] **Step 3: Update FileNotFoundPopup to render expanded results**
+- [ ] **Step 3: Update `FileNotFoundPopup` to render expanded results**
 
-加 sections for `layer2Hits` / `layer3Hits`，相同的 `<button onClick={() => onOpenPath(...)}>` pattern。
+加 sections for `layer2Hits` / `layer3Hits`；header 寫 `搜尋目前 session（cwd: <abs path>）` 和 `搜尋 workspace（projectPath: <abs path>）` — 先顯示 root，主 CTA 形式（防守 review #4）。
 
-- [ ] **Step 4: Test expansion path**
+- [ ] **Step 4: Test**
 
-加 `FileNotFoundPopup.test.tsx` case：`mode: 'expanded'` + 給 layer 2/3 hits → render 兩個 section + 點任一條 callback `onOpenPath`。
+擴 `FileNotFoundPopup.test.tsx` case：`mode: 'expanded'` + 給 layer 2/3 hits → render 兩個 section + 點任一條 → callback `onOpenPath`。
 
-- [ ] **Step 5: Commit + PR**
+加 `file-not-found-popup-service.test.tsx` regression：show → abort → resolve onExpand promise → 不應 re-mount popup。
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git commit -m "feat(spa): file-not-found popup expands search via layer 2/3"
+git commit -m "feat(spa): file not found popup expands via layer 2 and 3"
 ```
 
-PR + 兩輪 codex review。
+---
+
+## Task 5.9 — Phase 5 verification + PR
+
+- [ ] **Step 1: Full test + lint + build + go test**
+
+```bash
+cd spa && pnpm install && npx vitest run && pnpm run lint && pnpm run build
+go test ./...
+```
+
+- [ ] **Step 2: 開 PR**
+
+```bash
+git push -u origin worktree-worktree-editor-self-contained
+gh pr create --title "feat(spa+daemon): file-not-found popup with three-layer fallback" --body "$(cat <<'EOF'
+## Summary
+
+- daemon fs.search engine + http handler (capability roots only; mandatory excludes union; respectGitignore default true; gitignore parse failure 4xx; mode envelope)
+- SPA fsSearchByCapability helper (host-bound)
+- Editor open behavior settings (popupOnMissingFile / autoSearchLayer1)
+- Host-bound openFile service factory (ENOENT-only error classification)
+- FileNotFoundPopup component + popup mount service (HMR-safe + AbortController)
+- Terminal link / FileTreeView 改走 tryOpenFile pipeline
+- Layer 2 (session cwd) + Layer 3 (workspace projectPath via moduleConfig.files) expand search
+
+## Test plan
+
+- [ ] cd spa && pnpm install && npx vitest run && pnpm run lint && pnpm run build
+- [ ] go test ./...
+- [ ] 手動：點不存在的檔案 + popup off → 拋錯
+- [ ] 手動：點不存在的檔案 + cache 命中 1 個 → 直接開
+- [ ] 手動：點不存在的檔案 + cache 命中多個 → popup 列出 candidates
+- [ ] 手動：點不存在的檔案 + cache 0 命中 → popup ask-expand → 點 expand → fs.search 結果
+- [ ] 手動：popup 開啟後切 active host → 進行中的 stat 仍打 ctx.hostId
+- [ ] 手動：popup 開啟後 ESC → fs.search 回來時不重新 mount popup
+- [ ] 手動：fs.search body 傳 `kind: "absolute"` → daemon 拒（4xx）
+
+Spec: SPEC.md (rev 4, P5)
+EOF
+)"
+```
+
+- [ ] **Step 3: 委派 codex 兩輪 review**
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/cache/openai-codex/codex/1.0.2}/scripts/codex-companion.mjs" review --background
+node "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/cache/openai-codex/codex/1.0.2}/scripts/codex-companion.mjs" adversarial-review --background "P5 file-not-found popup + fs search server-side allowlist"
+```
+
+依「Review 問題彙整」表格規則處理 finding，merge 後 series 完成。
 
 ---
 

@@ -19,7 +19,7 @@ PR 結束標準：Editor purdex settings 有 3 個 file path 偵測開關；Term
 ## Task 3.1 — i18n key 遷移
 
 **Files:**
-- Modify: `spa/src/i18n/zh-TW.json`, `spa/src/i18n/en.json`
+- Modify: `spa/src/locales/zh-TW.json`, `spa/src/locales/en.json`
 
 - [ ] **Step 1: 移動 key**
 
@@ -30,7 +30,7 @@ PR 結束標準：Editor purdex settings 有 3 個 file path 偵測開關；Term
 - [ ] **Step 2: Commit**
 
 ```bash
-git add spa/src/i18n/zh-TW.json spa/src/i18n/en.json
+git add spa/src/locales/zh-TW.json spa/src/locales/en.json
 git commit -m "i18n: move file-path link detect keys to editor scope"
 ```
 
@@ -40,17 +40,17 @@ git commit -m "i18n: move file-path link detect keys to editor scope"
 
 **Files:**
 - Modify: `spa/src/components/settings/LinkDetectionSection.tsx`
-- Create: `spa/src/components/settings/EditorLinkDetectionSection.tsx`
+- Create: `spa/src/components/settings/editor/EditorLinkDetectionSection.tsx`
 - Test: 兩個對應 .test.tsx
 
 - [ ] **Step 1: Write failing tests**
 
-新建 `spa/src/components/settings/EditorLinkDetectionSection.test.tsx`：
+新建 `spa/src/components/settings/editor/EditorLinkDetectionSection.test.tsx`：
 
 ```tsx
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { EditorLinkDetectionSection } from './EditorLinkDetectionSection'
+import { EditorLinkDetectionSection } from './editor/EditorLinkDetectionSection'
 
 describe('EditorLinkDetectionSection', () => {
   it('renders absolute / tilde / relative_slash toggles', () => {
@@ -73,10 +73,10 @@ describe('EditorLinkDetectionSection', () => {
 新建檔案：
 
 ```tsx
-import { useUISettingsStore } from '../../stores/useUISettingsStore'
-import { useI18nStore } from '../../stores/useI18nStore'
-import { SettingItem } from './SettingItem'
-import { ToggleSwitch } from './ToggleSwitch'
+import { useUISettingsStore } from '../../../stores/useUISettingsStore'
+import { useI18nStore } from '../../../stores/useI18nStore'
+import { SettingItem } from '../SettingItem'
+import { ToggleSwitch } from '../ToggleSwitch'
 
 export function EditorLinkDetectionSection() {
   const linkDetectAbsolute = useUISettingsStore((s) => s.linkDetectAbsolute)
@@ -145,20 +145,20 @@ cd spa && npx vitest run src/components/settings/
 - [ ] **Step 6: Commit**
 
 ```bash
-git add spa/src/components/settings/EditorLinkDetectionSection.tsx spa/src/components/settings/LinkDetectionSection.tsx spa/src/components/settings/EditorLinkDetectionSection.test.tsx spa/src/components/settings/LinkDetectionSection.test.tsx
+git add spa/src/components/settings/editor/EditorLinkDetectionSection.tsx spa/src/components/settings/LinkDetectionSection.tsx spa/src/components/settings/editor/EditorLinkDetectionSection.test.tsx spa/src/components/settings/LinkDetectionSection.test.tsx
 git commit -m "feat(spa): split link detection between terminal and editor sections"
 ```
 
 ---
 
-## Task 3.3 — Wire `EditorLinkDetectionSection` into Editor module
+## Task 3.3 — Wire `EditorLinkDetectionSection` into editor module（在 `register-modules/editor-module.tsx`）
 
 **Files:**
-- Modify: `spa/src/lib/register-modules.tsx`
+- Modify: `spa/src/lib/register-modules/editor-module.tsx`（**不再修改 `register-modules.tsx`** 過渡 shim）
 
 - [ ] **Step 1: Append to editor module settings array**
 
-在 Editor module `settings: [...]` 陣列裡加：
+在 `editorModuleDefinition.settings: [...]` 陣列裡加：
 
 ```tsx
 {
@@ -170,10 +170,10 @@ git commit -m "feat(spa): split link detection between terminal and editor secti
 },
 ```
 
-並在頂部 import：
+並在 `editor-module.tsx` 頂部 import：
 
 ```tsx
-import { EditorLinkDetectionSection } from '../components/settings/EditorLinkDetectionSection'
+import { EditorLinkDetectionSection } from '../../components/settings/editor/EditorLinkDetectionSection'
 ```
 
 - [ ] **Step 2: Run integration test**
@@ -184,14 +184,59 @@ cd spa && npx vitest run
 
 預期全綠。
 
-- [ ] **Step 3: Commit + PR**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add spa/src/lib/register-modules.tsx
-git commit -m "feat(spa): wire EditorLinkDetectionSection into editor module"
+git add spa/src/lib/register-modules/editor-module.tsx
+git commit -m "feat(spa): wire editor link detection section into editor module"
 ```
 
-PR + 兩輪 codex review。
+---
+
+## Task 3.4 — Phase 3 verification + PR
+
+- [ ] **Step 1: Full test + lint + build + go test**
+
+```bash
+cd spa && pnpm install && npx vitest run && pnpm run lint && pnpm run build
+go test ./...
+```
+
+Expected：全綠。
+
+- [ ] **Step 2: 開 PR**
+
+```bash
+git push -u origin worktree-worktree-editor-self-contained
+gh pr create --title "refactor(spa): migrate file path link detection settings to editor" --body "$(cat <<'EOF'
+## Summary
+
+- 拆 LinkDetectionSection 為兩個元件（Terminal section 只剩 bare；Editor purdex section 有三個 file path 開關）
+- i18n key 從 settings.terminal.link_detect.{absolute,tilde,relative_slash}.* 移到 settings.editor.link_detect.* （路徑 spa/src/locales/）
+- EditorLinkDetectionSection 放 components/settings/editor/ 子目錄
+- wire 進 register-modules/editor-module.tsx 的 settings 陣列
+
+## Test plan
+
+- [ ] cd spa && pnpm install && npx vitest run && pnpm run lint && pnpm run build
+- [ ] go test ./...
+- [ ] 手動：Editor 啟用 → Settings → Editor → 三個 file path 開關出現
+- [ ] 手動：Editor 停用 + 重載 → 三個 file path 開關消失
+- [ ] 手動：Terminal Settings 只剩 bare filename 開關
+
+Spec: SPEC.md (rev 4, P3)
+EOF
+)"
+```
+
+- [ ] **Step 3: 委派 codex 兩輪 review**
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/cache/openai-codex/codex/1.0.2}/scripts/codex-companion.mjs" review --background
+node "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/cache/openai-codex/codex/1.0.2}/scripts/codex-companion.mjs" adversarial-review --background "P3 link detection migration"
+```
+
+依「Review 問題彙整」表格規則處理 finding，merge 後進 P4。
 
 ---
 

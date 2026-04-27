@@ -9,7 +9,7 @@
 | **2.1** | `find-browser-insert-target.ts` 改名 `find-insert-target.ts` 並**搬到 `spa/src/lib/tab-insert/find-insert-target.ts` 子目錄** | 體質 review #15 |
 | **2.3** | **failing test 必須 seed `[s1, editor1, s2]` 三 tab**（用 `createTab` helper），設 `activeTabId='s1'`，assert 結果順序 `[s1, editor1, newEditor, s2]`；不是「assert tabOrder.length === 1」這種骨架 | 通用 review B1 |
 | **2.3** | **`openSingletonTab` 內不要呼叫 `wsState.insertTab(...)`** — caller (terminal-link / register-modules / FileTreeView) 已自行 insert workspace；store 層只處理 tabOrder/active tab；workspace insertion 仍由 caller 決定 | 通用 review A3 |
-| **2.3** | useWorkspaceStore 實際路徑：`features/workspace/store`，**不是 `stores/useWorkspaceStore`** — 所有 import 改 `'../features/workspace/store'` 或對應相對 | 通用 review A2 |
+| **2.3** | useWorkspaceStore 實際路徑：`features/workspace/store`，**不是 `features/workspace/store`** — 所有 import 改 `'../features/workspace/store'` 或對應相對 | 通用 review A2 |
 | **2.4 / 2.5** | terminal-link / FileTreeView caller 走 `findInsertTarget` predicate `(c) => FILE_KINDS.includes(c.kind)` 自行算 `afterTabId` 後再 dispatch insert | A3 副作用 |
 | **All** | commit message lowercase（`feat(spa): file tree opens files clustered with file-kind tabs`，不寫 CamelCase） | 通用 review C2 |
 | **2.6** | Spec 引用改 `SPEC.md (rev 4, P2)` + verification gate 跑全 SPA + Go 測試 | 通用 review C1 |
@@ -21,23 +21,24 @@ PR 結束標準：所有 file 類分頁 + browser 都遵循同類聚集規則；
 ## Task 2.1 — 泛用化 `findInsertTarget`
 
 **Files:**
-- Rename: `spa/src/lib/find-browser-insert-target.ts` → `spa/src/lib/find-insert-target.ts`
-- Rename: `spa/src/lib/find-browser-insert-target.test.ts` → `spa/src/lib/find-insert-target.test.ts`
+- Rename: `spa/src/lib/find-browser-insert-target.ts` → `spa/src/lib/tab-insert/find-insert-target.ts`
+- Rename: `spa/src/lib/find-browser-insert-target.test.ts` → `spa/src/lib/tab-insert/find-insert-target.test.ts`
 
 - [ ] **Step 1: Rename file via git**
 
 ```bash
-git mv spa/src/lib/find-browser-insert-target.ts spa/src/lib/find-insert-target.ts
-git mv spa/src/lib/find-browser-insert-target.test.ts spa/src/lib/find-insert-target.test.ts
+mkdir -p spa/src/lib/tab-insert
+git mv spa/src/lib/find-browser-insert-target.ts spa/src/lib/tab-insert/find-insert-target.ts
+git mv spa/src/lib/find-browser-insert-target.test.ts spa/src/lib/tab-insert/find-insert-target.test.ts
 ```
 
 - [ ] **Step 2: Write failing test for new generic signature**
 
-替換 `spa/src/lib/find-insert-target.test.ts` 內容：
+替換 `spa/src/lib/tab-insert/find-insert-target.test.ts` 內容：
 
 ```ts
 import { describe, it, expect } from 'vitest'
-import { findInsertTarget } from './find-insert-target'
+import { findInsertTarget } from './tab-insert/find-insert-target'
 import type { Tab, PaneContent } from '../types/tab'
 
 const mkTab = (id: string, kind: PaneContent['kind']): Tab => ({
@@ -92,7 +93,7 @@ describe('findInsertTarget', () => {
 
 - [ ] **Step 4: Rewrite the function**
 
-替換 `spa/src/lib/find-insert-target.ts` 內容：
+替換 `spa/src/lib/tab-insert/find-insert-target.ts` 內容：
 
 ```ts
 import type { Tab, PaneContent } from '../types/tab'
@@ -133,7 +134,7 @@ cd spa && npx vitest run src/lib/find-insert-target.test.ts
 - [ ] **Step 6: Commit**
 
 ```bash
-git add spa/src/lib/find-insert-target.ts spa/src/lib/find-insert-target.test.ts
+git add spa/src/lib/tab-insert/find-insert-target.ts spa/src/lib/tab-insert/find-insert-target.test.ts
 git commit -m "refactor(spa): generalize findInsertTarget with predicate"
 ```
 
@@ -150,9 +151,9 @@ git commit -m "refactor(spa): generalize findInsertTarget with predicate"
 
 ```ts
 import { useTabStore } from '../stores/useTabStore'
-import { useWorkspaceStore } from '../stores/useWorkspaceStore'
+import { useWorkspaceStore } from '../features/workspace/store'
 import { createTab } from '../types/tab'
-import { findInsertTarget } from './find-insert-target'
+import { findInsertTarget } from './tab-insert/find-insert-target'
 
 export function openBrowserTab(url: string): void {
   const tab = createTab({ kind: 'browser', url })
@@ -202,11 +203,14 @@ git commit -m "refactor(spa): openBrowserTab uses generalized findInsertTarget"
 
 - [ ] **Step 1: Write failing test**
 
-擴 `spa/src/stores/useTabStore.test.ts`：
+擴 `spa/src/stores/useTabStore.test.ts`（**完整 fixture，不是 skeleton**；通用 review B1）：
 
 ```ts
-import { useTabStore } from './useTabStore'
-import { useWorkspaceStore } from './useWorkspaceStore'
+import { useTabStore, createTab } from './useTabStore'
+import { useWorkspaceStore } from '../features/workspace/store'
+
+const mkContent = (kind: 'tmux-session' | 'editor' | 'browser', extra: Record<string, unknown> = {}) =>
+  ({ kind, ...extra } as never)
 
 describe('openSingletonTab with opts.isSameKind', () => {
   beforeEach(() => {
@@ -214,36 +218,45 @@ describe('openSingletonTab with opts.isSameKind', () => {
     useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null } as never, false)
   })
 
-  it('inserts new tab after nearest same-kind tab right of active', () => {
-    // seed: [s1, editor1, s2] active=s1
-    const tabId = useTabStore.getState().openSingletonTab(
-      { kind: 'editor', source: { type: 'inapp' }, filePath: '/x.ts' } as never,
-      { isSameKind: (c) => c.kind === 'editor' || c.kind === 'image-preview' || c.kind === 'pdf-preview' },
+  it('inserts new editor tab right after nearest editor tab to the right of active', () => {
+    // seed [s1, editor1, s2] in same workspace, active=s1
+    const s1 = createTab(mkContent('tmux-session', { sessionCode: 's1' }))
+    const editor1 = createTab(mkContent('editor', { source: { type: 'inapp' }, filePath: '/x.ts' }))
+    const s2 = createTab(mkContent('tmux-session', { sessionCode: 's2' }))
+    useTabStore.setState({
+      tabs: { [s1.id]: s1, [editor1.id]: editor1, [s2.id]: s2 },
+      tabOrder: [s1.id, editor1.id, s2.id],
+      activeTabId: s1.id,
+    } as never, false)
+    useWorkspaceStore.setState({
+      workspaces: [{ id: 'w', name: 'W', tabs: [s1.id, editor1.id, s2.id], moduleConfig: {} }],
+      activeWorkspaceId: 'w',
+    } as never, false)
+
+    const newId = useTabStore.getState().openSingletonTab(
+      mkContent('editor', { source: { type: 'inapp' }, filePath: '/y.ts' }),
+      { isSameKind: (c: { kind: string }) => ['editor', 'image-preview', 'pdf-preview'].includes(c.kind) },
     )
-    // open second editor tab — should insert after editor1
-    // (skeleton — full setup with workspace store omitted; verify openSingletonTab returns id and tabOrder grows by 1)
-    expect(typeof tabId).toBe('string')
-    expect(useTabStore.getState().tabOrder.length).toBe(1)
+    // 結果順序必須是 [s1, editor1, newEditor, s2]
+    expect(useTabStore.getState().tabOrder).toEqual([s1.id, editor1.id, newId, s2.id])
   })
 
-  it('without opts, behaves like before (append)', () => {
-    useTabStore.getState().openSingletonTab({ kind: 'editor', source: { type: 'inapp' }, filePath: '/a' } as never)
-    useTabStore.getState().openSingletonTab({ kind: 'browser', url: 'https://x' } as never)
-    // both appended
+  it('without opts, behaves like before (append last)', () => {
+    useTabStore.getState().openSingletonTab(mkContent('editor', { source: { type: 'inapp' }, filePath: '/a' }))
+    useTabStore.getState().openSingletonTab(mkContent('browser', { url: 'https://x' }))
     expect(useTabStore.getState().tabOrder.length).toBe(2)
   })
 })
 ```
 
-- [ ] **Step 2: Run test, expect FAIL（簽名不匹配）**
+- [ ] **Step 2: Run test, expect FAIL（簽名不匹配 + 順序 mismatch）**
 
 - [ ] **Step 3: Update store signature + impl**
 
-在 `spa/src/stores/useTabStore.ts` 的 `TabState` interface 加 / 替換：
+在 `spa/src/stores/useTabStore.ts`：
 
 ```ts
-import { findInsertTarget } from '../lib/find-insert-target'
-import { useWorkspaceStore } from './useWorkspaceStore'
+import { findInsertTarget } from '../lib/tab-insert/find-insert-target'
 
 interface OpenSingletonOpts {
   isSameKind?: (content: PaneContent) => boolean
@@ -255,7 +268,7 @@ interface TabState {
 }
 ```
 
-實作改寫：
+實作改寫（**只動 tabOrder / addTab / setActiveTab**；**不再呼叫 `wsState.insertTab(...)`** — workspace insertion 由 caller 負責，per 通用 review A3）：
 
 ```ts
 openSingletonTab: (content, opts) => {
@@ -270,22 +283,31 @@ openSingletonTab: (content, opts) => {
       return id
     }
   }
-  // Not found — create + insert after current
+  // Not found — create + insert after current within same workspace
   const tab = createTab(content)
-  const wsState = useWorkspaceStore.getState()
-  const wsId = wsState.activeWorkspaceId
-  const ws = wsId ? wsState.workspaces.find((w) => w.id === wsId) : null
-  const visibleOrder = ws ? ws.tabs.filter((tid) => !!state.tabs[tid]) : state.tabOrder
-  const afterTabId =
-    opts?.isSameKind && state.activeTabId
-      ? findInsertTarget(visibleOrder, state.activeTabId, state.tabs, opts.isSameKind)
-      : undefined
+  let afterTabId: string | undefined
+  if (opts?.isSameKind && state.activeTabId) {
+    // 取 active workspace 的 visibleOrder（dedup with state.tabs 確保都是 live tab）
+    const wsState = useWorkspaceStore.getState()
+    const wsId = wsState.activeWorkspaceId
+    const ws = wsId ? wsState.workspaces.find((w) => w.id === wsId) : null
+    const visibleOrder = ws ? ws.tabs.filter((tid) => !!state.tabs[tid]) : state.tabOrder
+    afterTabId = findInsertTarget(visibleOrder, state.activeTabId, state.tabs, opts.isSameKind)
+  }
   get().addTab(tab, afterTabId)
   get().setActiveTab(tab.id)
-  if (wsId) wsState.insertTab(tab.id, wsId, afterTabId)
+  // 注意：不在這裡呼叫 useWorkspaceStore.insertTab；caller (terminal-link / register-modules / FileTreeView) 已自行 insert workspace
   return tab.id
 },
 ```
+
+- [ ] **Step 4: 同步調整 caller — 補回 workspace insertion**
+
+```bash
+grep -rn "openSingletonTab" spa/src/ | grep -v test
+```
+
+對每個 caller 確認：若 caller 期望 store 自動 insert workspace，必須改成 caller 自己呼叫 `useWorkspaceStore.getState().insertTab(tab.id, wsId, afterTabId)`。**目前 terminal-link / register-modules / FileTreeView 已這樣做（per 通用 review A3 註明），無需動**；其他 caller 若有依賴須補。
 
 - [ ] **Step 4: Run test, expect PASS**
 
@@ -297,7 +319,7 @@ cd spa && npx vitest run src/stores/useTabStore.test.ts
 
 ```bash
 git add spa/src/stores/useTabStore.ts spa/src/stores/useTabStore.test.ts
-git commit -m "feat(spa): openSingletonTab supports same-kind insertion"
+git commit -m "feat(spa): opensingletontab supports same-kind insertion"
 ```
 
 ---

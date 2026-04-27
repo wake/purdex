@@ -296,7 +296,9 @@ openSingletonTab: (
 ) => string
 ```
 
-實作：找不到既有 tab 時，用 active tab id + `isSameKind` predicate 算 `afterTabId`，傳給 `addTab(tab, afterTabId)`；同步呼叫 `useWorkspaceStore.insertTab(tab.id, wsId, afterTabId)`。
+實作：找不到既有 tab 時，用 active tab id + `isSameKind` predicate 算 `afterTabId`，傳給 `addTab(tab, afterTabId)`。
+
+> **`openSingletonTab` 內不呼叫 `useWorkspaceStore.insertTab(...)`**（通用 review A3 修正）：caller（terminal-link / register-modules / FileTreeView）已自行 insert workspace；store 層只處理 `tabOrder` / active tab；workspace insertion 仍由 caller 負責，避免雙重操作。
 
 ### 4. Terminal-link file-path opener 帶 file-kind predicate
 
@@ -800,10 +802,11 @@ Resp: { matches: []{ path, modTime, sizeBytes, root }, partial: bool, warnings: 
 
 **設計要點**：
 
-- **Root resolution**（D 決議）：daemon 端從 capability resolve 到 absolute path
-  - `session-cwd`：透過 `core.Sessions.Get(sessionCode).Cwd` 取
-  - `workspace-projectPath`：daemon 沒有 SPA workspace state，**SPA 端必須把 `workspaceId` + 對應 `projectPath` 一起傳**（介面改：`{ kind: "workspace-projectPath", projectPath: string }`，但 daemon 仍 validate 是否 absolute + 是否在合理白名單範圍）
-  - 實際 SPEC 落定：兩種都改成 SPA 解析後傳 absolute path，daemon validate 不在 system path（`/`、`/etc`、`/sys`、`$HOME` 直系、`/Users` 直系）
+- **Root resolution**（D 決議；capability-only，不接受 absolute path）：
+  - `{ kind: "session-cwd", sessionCode: string }` → daemon 透過 `core.Sessions.Get(sessionCode).Cwd` 解析
+  - `{ kind: "workspace-projectPath", workspaceId: string }` → daemon 透過內部 workspace registry / 由 SPA 在 WS handshake 時告知的 mapping 解析（無此 mapping 時拒絕）
+  - 兩種解析結果都再經 system-path validate，拒絕 `/`、`/etc`、`/sys`、`$HOME` 直系、`/Users` 直系
+  - **不接受** `{ kind: "absolute", path }` 或任何 SPA-supplied absolute path（攻擊 critical C4 + D 決議）；schema reject
 - **Mandatory excludes union**（攻擊 review #10）：daemon-side hard-coded `["node_modules", ".git", ".cache", "dist", ".pnpm-store", ".next", ".turbo"]` ∪ client `excludeDirs`。空 array 不能關掉。
 - **Mandatory basename excludes**：daemon-side `["*.lock", "*.log"]` ∪ client。
 - **`respectGitignore` 默認 true**（攻擊 review #10）：欄位 `*bool`，nil → true。
@@ -922,7 +925,7 @@ UI 放 Editor purdex scope 新區塊 `EditorOpenBehaviorSection`（與 P3 並列
 - [ ] symlink loop（A → B → A）→ 不無限遞迴
 - [ ] `maxDepth: 8` → 第 9 層不掃
 - [ ] **body 接受 `roots: [{kind:"session-cwd", sessionCode}]`** → daemon resolve 成 absolute path
-- [ ] **body 接受 `roots: [{kind:"workspace-projectPath", projectPath}]`** → daemon validate 後使用
+- [ ] **body 接受 `roots: [{kind:"workspace-projectPath", workspaceId}]`** → daemon 透過內部 mapping resolve 成 absolute path（無 mapping 拒絕）
 - [ ] **system path 被拒絕**：`/`、`/etc`、`/sys`、`/Users` 直系、`$HOME` 直系（return 4xx）
 - [ ] **client 傳 `roots: [{kind:"absolute", path:"..."}]` → schema reject**（無此 kind）
 

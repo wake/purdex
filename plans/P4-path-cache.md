@@ -67,11 +67,13 @@
 
 PR 結束標準：CC Read tool 觸發 → SPA 對應 workspace path cache 增加 1 條（payload v1 minimal，dir-level 不含 path/basename）；whitelist 三條 event；workspace remove / host remove 連動清理（區分 keepSettings）；非 absolute path defensive drop；hydration race 不誤殺。
 
-## Task 4.1 — PathHint Go schema + ring buffer
+## Task 4.1 — PathHint v1 minimal schema + ring buffer
 
 **Files:**
 - Create: `internal/module/agent/path_hint.go`
 - Test: `internal/module/agent/path_hint_test.go`
+
+> **C 決議 + 攻擊 critical C6 + 防守 review #3**：v1 minimal schema 只 6 個欄位 — `schemaVersion / agentId / sessionCode / dir / kind / timestamp`。**移除** `path / pathKind / baseDir / confidence / toolName / hostId`（hostId 由 broadcast 路徑帶；完整 path 永不廣播 privacy 邊界）。未來 codex apply_patch adapter 需 relative path 時整批升 v2。
 
 - [ ] **Step 1: Write failing test**
 
@@ -82,33 +84,36 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestPathHint_JSONRoundTrip(t *testing.T) {
+func TestPathHint_V1Minimal_JSON(t *testing.T) {
 	h := PathHint{
-		AgentID:     "claude-code",
-		HostID:      "h1",
-		SessionCode: "abc123",
-		Kind:        PathHintKindRead,
-		Path:        "/a/b/c.go",
-		Dir:         "/a/b",
-		PathKind:    PathKindAbsolute,
-		BaseDir:     "",
-		Confidence:  ConfidenceHigh,
-		ToolName:    "Read",
-		Timestamp:   time.Unix(1000, 0).UTC(),
+		SchemaVersion: 1,
+		AgentID:       "claude-code",
+		SessionCode:   "abc123",
+		Dir:           "/a/b",
+		Kind:          PathHintKindRead,
+		Timestamp:     time.Unix(1000, 0).UTC(),
 	}
 	b, err := json.Marshal(h)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
+	s := string(b)
+	// privacy: payload must NOT contain path / basename / pathKind / baseDir / confidence / toolName / hostId
+	for _, banned := range []string{`"path"`, `"basename"`, `"pathKind"`, `"baseDir"`, `"confidence"`, `"toolName"`, `"hostId"`} {
+		if strings.Contains(s, banned) {
+			t.Errorf("payload must not contain %s; got %s", banned, s)
+		}
+	}
 	var got PathHint
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Path != "/a/b/c.go" || got.PathKind != PathKindAbsolute {
+	if got.SchemaVersion != 1 || got.Dir != "/a/b" || got.Kind != PathHintKindRead {
 		t.Errorf("roundtrip mismatch: %+v", got)
 	}
 }
@@ -116,7 +121,7 @@ func TestPathHint_JSONRoundTrip(t *testing.T) {
 func TestPathHintRingBuffer_AddAndCap(t *testing.T) {
 	r := NewPathHintRingBuffer(3)
 	for i := 0; i < 5; i++ {
-		r.Push(PathHint{Dir: "/d/" + string(rune('a'+i))})
+		r.Push(PathHint{SchemaVersion: 1, Dir: "/d/" + string(rune('a'+i))})
 	}
 	got := r.Snapshot()
 	if len(got) != 3 {
@@ -136,7 +141,7 @@ go test ./internal/module/agent/...
 
 `PathHint` / `NewPathHintRingBuffer` 尚未存在。
 
-- [ ] **Step 3: Implement schema + ring buffer**
+- [ ] **Step 3: Implement v1 minimal schema + ring buffer**
 
 新建 `internal/module/agent/path_hint.go`：
 
@@ -148,37 +153,26 @@ import (
 	"time"
 )
 
+const PathHintSchemaVersion = 1
+
+// PathHint Kind enumeration (only these three are valid in v1).
 const (
-	PathKindAbsolute = "absolute"
-	PathKindRelative = "relative"
-	PathKindUnknown  = "unknown"
-
-	ConfidenceHigh   = "high"
-	ConfidenceMedium = "medium"
-	ConfidenceLow    = "low"
-
-	PathHintKindRead    = "read"
-	PathHintKindWrite   = "write"
-	PathHintKindEdit    = "edit"
-	PathHintKindUnknown = "unknown"
+	PathHintKindRead  = "read"
+	PathHintKindWrite = "write"
+	PathHintKindEdit  = "edit"
 )
 
-// PathHint is the agent-agnostic schema describing a path the agent has
-// recently touched.  Kept dir-level — never includes the file basename so
-// that downstream consumers can treat it as a working-dir hint, not a file
-// reference.
+// PathHint v1 — minimal schema. Dir-level only (no `path`, no `basename`).
+// HostId is carried by the broadcast envelope (core.HostEvent), not by
+// payload. To bump fields, raise SchemaVersion to 2 in a coordinated SPA +
+// daemon change; SPA must defensive-drop unknown versions.
 type PathHint struct {
-	AgentID     string    `json:"agentId"`
-	HostID      string    `json:"hostId"`
-	SessionCode string    `json:"sessionCode"`
-	Kind        string    `json:"kind"`
-	Path        string    `json:"path,omitempty"`
-	Dir         string    `json:"dir"`
-	PathKind    string    `json:"pathKind"`
-	BaseDir     string    `json:"baseDir,omitempty"`
-	Confidence  string    `json:"confidence"`
-	ToolName    string    `json:"toolName"`
-	Timestamp   time.Time `json:"timestamp"`
+	SchemaVersion int       `json:"schemaVersion"` // always 1 in this version
+	AgentID       string    `json:"agentId"`       // "claude-code" (future: "codex" | "opencode")
+	SessionCode   string    `json:"sessionCode"`   // 6-char base36
+	Dir           string    `json:"dir"`           // dirname (absolute)
+	Kind          string    `json:"kind"`          // "read" | "write" | "edit"
+	Timestamp     time.Time `json:"timestamp"`
 }
 
 // PathHintRingBuffer holds a fixed-size FIFO of recent hints per host.
@@ -224,16 +218,21 @@ go test ./internal/module/agent/ -run PathHint
 
 ```bash
 git add internal/module/agent/path_hint.go internal/module/agent/path_hint_test.go
-git commit -m "feat(daemon): PathHint schema with bounded ring buffer"
+git commit -m "feat(daemon): pathhint v1 minimal schema with ring buffer"
 ```
 
 ---
 
-## Task 4.2 — PathHint extractor with dedup
+## Task 4.2 — PathHint extractor (純函式) + dedup-by-(session, dir, basename)
 
 **Files:**
 - Create: `internal/module/agent/path_hint_extractor.go`
 - Test: `internal/module/agent/path_hint_extractor_test.go`
+
+> **C3 + 攻擊 review #13**：
+> - 純函式 `ExtractPathHint(rawEvent, eventName, agentType) (hint, basename, bool)` — **不依賴 `agentpkg.NormalizedEvent`**（其欄位實際只有 `AgentType / Status / RawEventName / Detail`，沒有 `ToolName / ToolInput / HookEventName`）。改從 raw event JSON decode `tool_name` + `tool_input.file_path`。
+> - dedup key 加 basename：`(SessionCode, Dir, Basename)` — 避免 SPA prune 後 5 秒同 dir 不同 file 不能 reseed 的真空期。Basename 進 dedup key 但**不進 payload**（payload 仍 dir-level）。
+> - **payload 移除 `path / pathKind / baseDir / confidence / toolName / hostId`**（v1 minimal）。
 
 - [ ] **Step 1: Write failing test**
 
@@ -243,49 +242,82 @@ git commit -m "feat(daemon): PathHint schema with bounded ring buffer"
 package agent
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
 
-func TestExtractCCPathHint_AbsoluteRead(t *testing.T) {
-	x := NewPathHintExtractor(0) // 0 → no dedup
-	now := time.Unix(1000, 0)
-	h, ok := x.ExtractCC("h1", "abc123", "Read", map[string]any{"file_path": "/a/b/c.go"}, now)
+func mkRaw(toolName, filePath string) json.RawMessage {
+	b, _ := json.Marshal(map[string]any{
+		"tool_name":  toolName,
+		"tool_input": map[string]any{"file_path": filePath},
+	})
+	return b
+}
+
+func TestExtractPathHint_AbsoluteRead(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	h, basename, ok := ExtractPathHint(mkRaw("Read", "/a/b/c.go"), "PreToolUse", "claude-code", "abc123", now)
 	if !ok {
 		t.Fatal("expected hint, got drop")
 	}
-	if h.Dir != "/a/b" || h.PathKind != PathKindAbsolute || h.Confidence != ConfidenceHigh {
-		t.Errorf("unexpected: %+v", h)
+	if h.SchemaVersion != 1 || h.AgentID != "claude-code" || h.SessionCode != "abc123" ||
+		h.Dir != "/a/b" || h.Kind != PathHintKindRead {
+		t.Errorf("unexpected hint: %+v", h)
+	}
+	if basename != "c.go" {
+		t.Errorf("basename = %q", basename)
 	}
 }
 
-func TestExtractCCPathHint_DropsRelative(t *testing.T) {
-	x := NewPathHintExtractor(0)
-	_, ok := x.ExtractCC("h1", "abc123", "Read", map[string]any{"file_path": "rel/path.go"}, time.Unix(0, 0))
-	if ok {
+func TestExtractPathHint_WriteEditNotebookEdit(t *testing.T) {
+	for _, tc := range []struct{ tool, kind string }{
+		{"Write", PathHintKindWrite},
+		{"Edit", PathHintKindEdit},
+		{"NotebookEdit", PathHintKindEdit},
+	} {
+		h, _, ok := ExtractPathHint(mkRaw(tc.tool, "/a/b/c"), "PreToolUse", "claude-code", "s1", time.Unix(0, 0))
+		if !ok || h.Kind != tc.kind {
+			t.Errorf("%s expected kind=%s, got ok=%v kind=%s", tc.tool, tc.kind, ok, h.Kind)
+		}
+	}
+}
+
+func TestExtractPathHint_DropsRelative(t *testing.T) {
+	if _, _, ok := ExtractPathHint(mkRaw("Read", "rel/path.go"), "PreToolUse", "claude-code", "s1", time.Unix(0, 0)); ok {
 		t.Fatal("expected drop for non-absolute path")
 	}
 }
 
-func TestExtractCCPathHint_Dedup(t *testing.T) {
-	x := NewPathHintExtractor(5 * time.Second)
-	t0 := time.Unix(1000, 0)
-	if _, ok := x.ExtractCC("h1", "s1", "Read", map[string]any{"file_path": "/a/b/c.go"}, t0); !ok {
-		t.Fatal("first hint should pass")
-	}
-	if _, ok := x.ExtractCC("h1", "s1", "Read", map[string]any{"file_path": "/a/b/d.go"}, t0.Add(2*time.Second)); ok {
-		t.Fatal("same dir within window should dedup")
-	}
-	if _, ok := x.ExtractCC("h1", "s1", "Read", map[string]any{"file_path": "/a/b/d.go"}, t0.Add(6*time.Second)); !ok {
-		t.Fatal("dir after window should pass")
+func TestExtractPathHint_DropsUnknownTool(t *testing.T) {
+	if _, _, ok := ExtractPathHint(mkRaw("Bash", "/a/b"), "PreToolUse", "claude-code", "s1", time.Unix(0, 0)); ok {
+		t.Fatal("expected drop for non-file tool")
 	}
 }
 
-func TestExtractCCPathHint_UnknownToolDrops(t *testing.T) {
-	x := NewPathHintExtractor(0)
-	_, ok := x.ExtractCC("h1", "s1", "Bash", map[string]any{}, time.Unix(0, 0))
-	if ok {
-		t.Fatal("expected drop for non-file tool")
+func TestExtractPathHint_DropsWrongEventName(t *testing.T) {
+	if _, _, ok := ExtractPathHint(mkRaw("Read", "/a/b"), "SessionStart", "claude-code", "s1", time.Unix(0, 0)); ok {
+		t.Fatal("expected drop for non-PreToolUse/PostToolUse event")
+	}
+}
+
+func TestDedupCache_BasenameDistinguishes(t *testing.T) {
+	c := NewPathHintDedupCache(5 * time.Second)
+	t0 := time.Unix(1000, 0)
+	if !c.Mark("s1", "/a/b", "c.go", t0) {
+		t.Fatal("first call should be fresh")
+	}
+	// 同 (session, dir, basename) 在 window 內 → dedup
+	if c.Mark("s1", "/a/b", "c.go", t0.Add(2*time.Second)) {
+		t.Fatal("same key within window should dedup")
+	}
+	// 同 dir 不同 basename → 不 dedup（避免 SPA prune 後真空期）
+	if !c.Mark("s1", "/a/b", "d.go", t0.Add(2*time.Second)) {
+		t.Fatal("different basename should NOT dedup (basename in key)")
+	}
+	// 過 window → 重新通過
+	if !c.Mark("s1", "/a/b", "c.go", t0.Add(6*time.Second)) {
+		t.Fatal("after window should be fresh again")
 	}
 }
 ```
@@ -293,10 +325,10 @@ func TestExtractCCPathHint_UnknownToolDrops(t *testing.T) {
 - [ ] **Step 2: Run test, expect FAIL**
 
 ```
-go test ./internal/module/agent/ -run Extract
+go test ./internal/module/agent/ -run "Extract|Dedup"
 ```
 
-- [ ] **Step 3: Implement extractor**
+- [ ] **Step 3: Implement pure function + dedup cache**
 
 新建 `internal/module/agent/path_hint_extractor.go`：
 
@@ -304,23 +336,11 @@ go test ./internal/module/agent/ -run Extract
 package agent
 
 import (
+	"encoding/json"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
-
-// PathHintExtractor pulls PathHint records from raw CC hook tool_input.
-// Holds a per-(session, dir) dedup window — same dir within window is dropped.
-type PathHintExtractor struct {
-	mu     sync.Mutex
-	window time.Duration
-	last   map[string]time.Time // key = sessionCode|dir
-}
-
-func NewPathHintExtractor(window time.Duration) *PathHintExtractor {
-	return &PathHintExtractor{window: window, last: make(map[string]time.Time)}
-}
 
 var ccFileTools = map[string]string{
 	"Read":         PathHintKindRead,
@@ -329,77 +349,109 @@ var ccFileTools = map[string]string{
 	"NotebookEdit": PathHintKindEdit,
 }
 
-// ExtractCC returns (hint, true) if the tool/path qualify; otherwise (zero, false).
-func (e *PathHintExtractor) ExtractCC(hostID, sessionCode, toolName string, toolInput map[string]any, now time.Time) (PathHint, bool) {
-	kind, ok := ccFileTools[toolName]
-	if !ok {
-		return PathHint{}, false
-	}
-	raw, ok := toolInput["file_path"].(string)
-	if !ok || raw == "" {
-		return PathHint{}, false
-	}
-	if !filepath.IsAbs(raw) {
-		return PathHint{}, false // CC always sends absolute paths; drop defensively.
-	}
-	dir := filepath.Dir(raw)
-	if e.window > 0 {
-		key := sessionCode + "|" + dir
-		e.mu.Lock()
-		if last, found := e.last[key]; found && now.Sub(last) < e.window {
-			e.mu.Unlock()
-			return PathHint{}, false
-		}
-		e.last[key] = now
-		// opportunistic GC: drop entries older than 10× window
-		cutoff := now.Add(-10 * e.window)
-		for k, ts := range e.last {
-			if ts.Before(cutoff) {
-				delete(e.last, k)
-			}
-		}
-		e.mu.Unlock()
-	}
-	return PathHint{
-		AgentID:     "claude-code",
-		HostID:      hostID,
-		SessionCode: sessionCode,
-		Kind:        kind,
-		Path:        raw,
-		Dir:         dir,
-		PathKind:    PathKindAbsolute,
-		Confidence:  ConfidenceHigh,
-		ToolName:    toolName,
-		Timestamp:   now,
-	}, true
+// rawCCEvent matches the JSON CC sends as PreToolUse/PostToolUse event payload.
+type rawCCEvent struct {
+	ToolName  string `json:"tool_name"`
+	ToolInput struct {
+		FilePath string `json:"file_path"`
+	} `json:"tool_input"`
 }
 
-// Used to silence unused-import warnings if `strings` isn't needed at compile time.
-var _ = strings.TrimSpace
-```
+// ExtractPathHint is a pure function. Returns (hint, basename, true) on success.
+// Caller is responsible for dedup (using NewPathHintDedupCache) and broadcast.
+//
+// - Only PreToolUse / PostToolUse events qualify.
+// - Only Read / Write / Edit / NotebookEdit tools qualify.
+// - Only absolute file_path qualifies; relative paths drop defensively.
+// - basename is NOT included in the returned PathHint payload (privacy / dir-level rule);
+//   it is returned separately so the caller can use it as part of the dedup key.
+func ExtractPathHint(rawEvent json.RawMessage, eventName, agentID, sessionCode string, now time.Time) (PathHint, string, bool) {
+	if eventName != "PreToolUse" && eventName != "PostToolUse" {
+		return PathHint{}, "", false
+	}
+	var ev rawCCEvent
+	if err := json.Unmarshal(rawEvent, &ev); err != nil {
+		return PathHint{}, "", false
+	}
+	kind, ok := ccFileTools[ev.ToolName]
+	if !ok {
+		return PathHint{}, "", false
+	}
+	raw := ev.ToolInput.FilePath
+	if raw == "" || !filepath.IsAbs(raw) {
+		return PathHint{}, "", false
+	}
+	return PathHint{
+		SchemaVersion: PathHintSchemaVersion,
+		AgentID:       agentID,
+		SessionCode:   sessionCode,
+		Dir:           filepath.Dir(raw),
+		Kind:          kind,
+		Timestamp:     now,
+	}, filepath.Base(raw), true
+}
 
-(刪除最後 `var _ = strings.TrimSpace` 若不需要 strings import；保留為示意。)
+// PathHintDedupCache implements (session, dir, basename) dedup with a sliding window.
+// Basename is in the key (per attacker review #13) so different files in the same dir
+// can both seed the SPA cache; this prevents the 5-second blackout after SPA prune.
+type PathHintDedupCache struct {
+	mu     sync.Mutex
+	window time.Duration
+	last   map[string]time.Time // key = sessionCode|dir|basename
+}
+
+func NewPathHintDedupCache(window time.Duration) *PathHintDedupCache {
+	return &PathHintDedupCache{window: window, last: make(map[string]time.Time)}
+}
+
+// Mark returns true if (session, dir, basename) is fresh enough to broadcast.
+// Returns false (and does not refresh timestamp) when within window.
+func (c *PathHintDedupCache) Mark(sessionCode, dir, basename string, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := sessionCode + "|" + dir + "|" + basename
+	if c.window > 0 {
+		if last, found := c.last[key]; found && now.Sub(last) < c.window {
+			return false
+		}
+	}
+	c.last[key] = now
+	// Opportunistic GC of entries older than 10× window
+	if c.window > 0 {
+		cutoff := now.Add(-10 * c.window)
+		for k, ts := range c.last {
+			if ts.Before(cutoff) {
+				delete(c.last, k)
+			}
+		}
+	}
+	return true
+}
+```
 
 - [ ] **Step 4: Run test, expect PASS**
 
 ```
-go test ./internal/module/agent/ -run Extract
+go test ./internal/module/agent/ -run "Extract|Dedup"
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add internal/module/agent/path_hint_extractor.go internal/module/agent/path_hint_extractor_test.go
-git commit -m "feat(daemon): CC path hint extractor with dedup window"
+git commit -m "feat(daemon): pure pathhint extractor with session-dir-basename dedup"
 ```
 
 ---
 
-## Task 4.3 — Wire emit into agent handler
+## Task 4.3a — `emitPathHint` helper + Module fields
 
 **Files:**
-- Modify: `internal/module/agent/handler.go`
-- Modify: `internal/module/agent/module.go`（加 extractor + ring buffer 欄位）
+- Modify: `internal/module/agent/module.go`（加 dedup cache + ring buffer 欄位）
+- Modify: `internal/module/agent/handler.go`（加 `emitPathHint` helper）
+- Test: `internal/module/agent/handler_path_hint_test.go`（新建）
+
+> **C3 拆檔之 4.3a**：本 task 只證明 `emitPathHint(rawEvent, eventName, sessionCode)` 走完 extract → dedup → broadcast 流程，broadcast payload 是 v1 minimal JSON 且不含 path / basename。**不接 hook handler**（4.3b）。
 
 - [ ] **Step 1: Add fields to Module struct**
 
@@ -408,15 +460,15 @@ git commit -m "feat(daemon): CC path hint extractor with dedup window"
 ```go
 type Module struct {
     // ... existing fields
-    pathHintExtractor *PathHintExtractor
-    pathHintBuffer    *PathHintRingBuffer
+    pathHintDedup  *PathHintDedupCache
+    pathHintBuffer *PathHintRingBuffer
 }
 ```
 
 `agent.New(...)` 內初始化（5 秒 dedup window，200 條 ring）：
 
 ```go
-m.pathHintExtractor = NewPathHintExtractor(5 * time.Second)
+m.pathHintDedup = NewPathHintDedupCache(5 * time.Second)
 m.pathHintBuffer = NewPathHintRingBuffer(200)
 ```
 
@@ -425,13 +477,16 @@ m.pathHintBuffer = NewPathHintRingBuffer(200)
 在 `handler.go` 既有 `emitHookToSession` 附近加：
 
 ```go
-func (m *Module) emitPathHint(hostID, sessionCode, toolName string, toolInput map[string]any) {
-    h, ok := m.pathHintExtractor.ExtractCC(hostID, sessionCode, toolName, toolInput, time.Now())
+func (m *Module) emitPathHint(rawEvent json.RawMessage, eventName, sessionCode string) {
+    hint, basename, ok := ExtractPathHint(rawEvent, eventName, "claude-code", sessionCode, time.Now())
     if !ok {
         return
     }
-    m.pathHintBuffer.Push(h)
-    payload, err := json.Marshal(h)
+    if !m.pathHintDedup.Mark(hint.SessionCode, hint.Dir, basename, hint.Timestamp) {
+        return // dedup window hit
+    }
+    m.pathHintBuffer.Push(hint)
+    payload, err := json.Marshal(hint)
     if err != nil {
         log.Printf("path_hint: marshal failed: %v", err)
         return
@@ -440,111 +495,202 @@ func (m *Module) emitPathHint(hostID, sessionCode, toolName string, toolInput ma
 }
 ```
 
-- [ ] **Step 3: Call emit in PreToolUse / PostToolUse hook handler**
+- [ ] **Step 3: Add test (broadcast format + privacy)**
 
-找既有 hook handler（`handleHookStatus` 或 emit-hook 接點），在已 normalized event 處理之後加：
+新建 `internal/module/agent/handler_path_hint_test.go`：
 
 ```go
-// Where hostID, sessionCode, normalized.ToolName, normalized.ToolInput are available:
-if normalized.HookEventName == "PreToolUse" || normalized.HookEventName == "PostToolUse" {
-    if input, ok := normalized.ToolInput.(map[string]any); ok {
-        m.emitPathHint(hostID, sessionCode, normalized.ToolName, input)
+package agent
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestEmitPathHint_BroadcastV1MinimalPayload(t *testing.T) {
+	var got struct{ session, kind, value string }
+	core := &mockCore{broadcast: func(s, k, v string) { got.session, got.kind, got.value = s, k, v }}
+	m := &Module{
+		core:           core,
+		pathHintDedup:  NewPathHintDedupCache(0),
+		pathHintBuffer: NewPathHintRingBuffer(10),
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"tool_name":  "Read",
+		"tool_input": map[string]any{"file_path": "/a/b/c.go"},
+	})
+	m.emitPathHint(raw, "PreToolUse", "sess1")
+
+	if got.session != "sess1" || got.kind != "agent.path_hint" {
+		t.Errorf("envelope mismatch: %+v", got)
+	}
+	// privacy: payload must NOT contain path / basename
+	for _, banned := range []string{"/a/b/c.go", `"path"`, "c.go", `"basename"`} {
+		if strings.Contains(got.value, banned) {
+			t.Errorf("payload must not contain %q; got %s", banned, got.value)
+		}
+	}
+	var hint PathHint
+	if err := json.Unmarshal([]byte(got.value), &hint); err != nil {
+		t.Fatalf("payload not JSON: %v", err)
+	}
+	if hint.SchemaVersion != 1 || hint.Dir != "/a/b" || hint.Kind != PathHintKindRead {
+		t.Errorf("payload mismatch: %+v", hint)
+	}
+}
+
+func TestEmitPathHint_DedupSuppresses(t *testing.T) {
+	var calls int
+	core := &mockCore{broadcast: func(s, k, v string) { calls++ }}
+	m := &Module{
+		core:           core,
+		pathHintDedup:  NewPathHintDedupCache(5_000_000_000), // 5s in nanoseconds
+		pathHintBuffer: NewPathHintRingBuffer(10),
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"tool_name":  "Read",
+		"tool_input": map[string]any{"file_path": "/a/b/c.go"},
+	})
+	m.emitPathHint(raw, "PreToolUse", "sess1")
+	m.emitPathHint(raw, "PreToolUse", "sess1") // dedup
+	if calls != 1 {
+		t.Errorf("expected 1 broadcast, got %d", calls)
+	}
+}
+```
+
+> `mockCore` 需要 stub — 參考 `internal/module/agent/fakes_test.go` 既有 fake patterns，或在本檔內 inline define 一個 minimal stub 對齊 `core.Core.Events.Broadcast` 介面。
+
+- [ ] **Step 4: Run test, expect PASS**
+
+```
+go test ./internal/module/agent/ -run PathHint
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/module/agent/module.go internal/module/agent/handler.go internal/module/agent/handler_path_hint_test.go
+git commit -m "feat(daemon): emitpathhint helper with dedup and broadcast"
+```
+
+---
+
+## Task 4.3b — Hook handler integration（從 `req.RawEvent` decode）
+
+**Files:**
+- Modify: `internal/module/agent/handler.go`（在 `handleEvent` 既有接點呼叫 `emitPathHint`）
+
+> **C3 拆檔之 4.3b + 通用 review A4**：**`agentpkg.NormalizedEvent` 不含 `ToolName / ToolInput / HookEventName`** — 它只有 `AgentType / Status / RawEventName / Detail`。本 task 改在 `handleEvent` 內、**`req.EventName` 已驗證且 `req.RawEvent` 可用**之處呼叫 `emitPathHint(req.RawEvent, req.EventName, m.resolveSessionCode(req.TmuxSession))`。
+
+- [ ] **Step 1: 找實際接點**
+
+```bash
+grep -n "func (m \*Module) handleEvent\|req\.EventName\|req\.RawEvent" internal/module/agent/handler.go
+```
+
+確認 `handleEvent` 簽名 + `req.EventName / req.RawEvent / req.TmuxSession` 欄位實際拼字。
+
+- [ ] **Step 2: 在 handler 加呼叫**
+
+在 `handleEvent` 內，CC agent type + EventName == "PreToolUse" or "PostToolUse" 的分支加：
+
+```go
+if req.AgentType == "claude-code" && (req.EventName == "PreToolUse" || req.EventName == "PostToolUse") {
+    sessionCode := m.resolveSessionCode(req.TmuxSession)
+    if sessionCode != "" {
+        m.emitPathHint(req.RawEvent, req.EventName, sessionCode)
     }
 }
 ```
 
-> 具體 normalized payload shape 依現行 `agentpkg.NormalizedEvent` 內容調整；emit 只在工具事件上執行。
+> **不依賴 normalized 結構** — 完全用 raw event JSON + EventName。
 
-- [ ] **Step 4: Add test**
+- [ ] **Step 3: Integration test**
 
-擴 `path_hint_test.go`（或新建 handler_path_hint_test.go）：
+擴 `handler_path_hint_test.go`：
 
 ```go
-func TestEmitPathHint_BroadcastFormat(t *testing.T) {
-    // Build a Module with stubbed core that captures Broadcast calls
-    var got struct{ session, kind, value string }
-    core := &mockCore{broadcast: func(s, k, v string) { got.session, got.kind, got.value = s, k, v }}
+func TestHandleEvent_EmitsPathHintForCC(t *testing.T) {
+    var got string
+    core := &mockCore{broadcast: func(s, k, v string) { if k == "agent.path_hint" { got = v } }}
     m := &Module{
-        core:              core,
-        pathHintExtractor: NewPathHintExtractor(0),
-        pathHintBuffer:    NewPathHintRingBuffer(10),
+        core:           core,
+        pathHintDedup:  NewPathHintDedupCache(0),
+        pathHintBuffer: NewPathHintRingBuffer(10),
+        // 其他必要欄位 stub
     }
-    m.emitPathHint("h1", "sess1", "Read", map[string]any{"file_path": "/a/b/c.go"})
-    if got.kind != "agent.path_hint" {
-        t.Errorf("kind = %q", got.kind)
-    }
-    var hint PathHint
-    if err := json.Unmarshal([]byte(got.value), &hint); err != nil {
-        t.Fatalf("payload not JSON: %v", err)
-    }
-    if hint.Dir != "/a/b" {
-        t.Errorf("dir mismatch: %s", hint.Dir)
+    raw, _ := json.Marshal(map[string]any{
+        "tool_name": "Read",
+        "tool_input": map[string]any{"file_path": "/x/y/z.go"},
+    })
+    m.handleEvent(req(...) /* AgentType:"claude-code", EventName:"PreToolUse", RawEvent: raw, TmuxSession: "tmux:abc:0" */)
+    if !strings.Contains(got, `"dir":"/x/y"`) {
+        t.Errorf("expected broadcast; got %q", got)
     }
 }
 ```
 
-(`mockCore` 需要 stub — 可參考 `internal/module/agent/fakes_test.go` 內既有 fake patterns。)
+> `req(...)` constructor 與 `m.resolveSessionCode` 視現行檔案結構調整；用既有 fakes / test helper。
 
-- [ ] **Step 5: Run test, expect PASS**
+- [ ] **Step 4: Run test, expect PASS**
 
 ```
 go test ./internal/module/agent/...
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add internal/module/agent/module.go internal/module/agent/handler.go internal/module/agent/path_hint_test.go
-git commit -m "feat(daemon): emit agent.path_hint on CC PreToolUse/PostToolUse"
+git add internal/module/agent/handler.go internal/module/agent/handler_path_hint_test.go
+git commit -m "feat(daemon): wire pathhint emit into cc pretooluse posttooluse handler"
 ```
 
 ---
 
-## Task 4.4 — STORAGE_KEYS.PATH_CACHE + PathHint TS type
+## Task 4.4 — `STORAGE_KEYS.PATH_CACHE_V1` + PathHint TS v1 minimal type
 
 **Files:**
 - Modify: `spa/src/lib/storage/keys.ts`
 - Modify: `spa/src/types/agent-events.ts`
 
-- [ ] **Step 1: Add storage key**
+> **C 決議 + 攻擊 review #14**：localStorage key 含**版本後綴 `_V1`**（未來 v2 schema 不撞 namespace）；TS type 對齊 daemon v1 minimal schema（6 欄位）。
+
+- [ ] **Step 1: Add storage key (with version suffix)**
 
 在 `spa/src/lib/storage/keys.ts` `STORAGE_KEYS` object 加：
 
 ```ts
-PATH_CACHE: 'purdex-path-cache',
+PATH_CACHE_V1: 'purdex-path-cache-v1',
 ```
 
-- [ ] **Step 2: Define TS PathHint type**
+- [ ] **Step 2: Define TS PathHint v1 minimal type**
 
 在 `spa/src/types/agent-events.ts` 加：
 
 ```ts
-export const PATH_KIND = ['absolute', 'relative', 'unknown'] as const
-export type PathKind = (typeof PATH_KIND)[number]
+export const PATH_HINT_SCHEMA_VERSION = 1 as const
 
-export const CONFIDENCE = ['high', 'medium', 'low'] as const
-export type Confidence = (typeof CONFIDENCE)[number]
+export const PATH_HINT_KIND = ['read', 'write', 'edit'] as const
+export type PathHintKind = (typeof PATH_HINT_KIND)[number]
 
+/**
+ * PathHint v1 minimal — must mirror daemon `internal/module/agent/path_hint.go`.
+ * Dir-level only (no `path`, no `basename`). HostId is carried by the WS
+ * envelope (HostEvent), not by payload.
+ */
 export interface PathHint {
-  agentId: string
-  hostId: string
+  schemaVersion: 1
+  agentId: string             // 'claude-code' | future 'codex' | 'opencode'
   sessionCode: string
-  kind: 'read' | 'write' | 'edit' | 'unknown'
-  path?: string
-  dir: string
-  pathKind: PathKind
-  baseDir?: string
-  confidence: Confidence
-  toolName: string
-  timestamp: string  // ISO 8601
+  dir: string                 // absolute dirname
+  kind: PathHintKind
+  timestamp: string           // ISO 8601
 }
 
-export function isValidPathKind(v: unknown): v is PathKind {
-  return typeof v === 'string' && (PATH_KIND as readonly string[]).includes(v)
-}
-
-export function isValidConfidence(v: unknown): v is Confidence {
-  return typeof v === 'string' && (CONFIDENCE as readonly string[]).includes(v)
+export function isValidPathHintKind(v: unknown): v is PathHintKind {
+  return typeof v === 'string' && (PATH_HINT_KIND as readonly string[]).includes(v)
 }
 ```
 
@@ -552,20 +698,22 @@ export function isValidConfidence(v: unknown): v is Confidence {
 
 ```bash
 git add spa/src/lib/storage/keys.ts spa/src/types/agent-events.ts
-git commit -m "feat(spa): PATH_CACHE storage key + PathHint type with const enums"
+git commit -m "feat(spa): pathhint v1 minimal type and storage key v1"
 ```
 
 ---
 
-## Task 4.5 — `usePathCacheStore` LRU + persist
+## Task 4.5 — `usePathCacheStore` LRU + purdexStorage + add normalization
 
 **Files:**
-- Create: `spa/src/stores/usePathCacheStore.ts`
-- Test: `spa/src/stores/usePathCacheStore.test.ts`
+- Create: `spa/src/stores/path-cache/usePathCacheStore.ts`（**子目錄**；體質 review #3）
+- Test: `spa/src/stores/path-cache/usePathCacheStore.test.ts`
+
+> **吸收**：路徑搬到 `path-cache/` 子目錄；`add()` 內建 normalization（防守 review #7）；`storage: purdexStorage` 與其他 store 一致（攻擊 review #2）；LRU 補 duplicate move-to-head + overflow tail eviction 測試（攻擊 review #14）；`onRehydrateStorage` defensive。
 
 - [ ] **Step 1: Write failing test**
 
-新建 `spa/src/stores/usePathCacheStore.test.ts`：
+新建 `spa/src/stores/path-cache/usePathCacheStore.test.ts`：
 
 ```ts
 import { describe, it, expect, beforeEach } from 'vitest'
@@ -581,8 +729,7 @@ describe('usePathCacheStore', () => {
     usePathCacheStore.getState().add('h1', 'w1', '/a/b')
     usePathCacheStore.getState().add('h1', 'w1', '/c/d')
     usePathCacheStore.getState().add('h1', 'w1', '/a/b')
-    const dirs = usePathCacheStore.getState().dirsByScope['h1:w1']
-    expect(dirs).toEqual(['/a/b', '/c/d'])
+    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toEqual(['/a/b', '/c/d'])
   })
 
   it('LRU caps at 50 entries per scope', () => {
@@ -593,7 +740,33 @@ describe('usePathCacheStore', () => {
     expect(dirs[49]).toBe('/d10')
   })
 
-  it('lookup combines basename with each cached dir', () => {
+  // 攻擊 review #14: duplicate move-to-head + overflow tail eviction
+  it('LRU touches existing dir back to head + evicts tail on overflow', () => {
+    for (let i = 0; i < 50; i++) usePathCacheStore.getState().add('h1', 'w1', `/d${i}`)
+    // dirs = ['/d49' .. '/d0']
+    usePathCacheStore.getState().add('h1', 'w1', '/d0')      // touch d0 → head
+    usePathCacheStore.getState().add('h1', 'w1', '/d50')     // overflow
+    const dirs = usePathCacheStore.getState().dirsByScope['h1:w1']
+    expect(dirs.length).toBe(50)
+    expect(dirs[0]).toBe('/d50')
+    expect(dirs[1]).toBe('/d0')   // touched, not evicted
+    expect(dirs.includes('/d1')).toBe(false)  // d1 evicted (was tail after touch)
+  })
+
+  // 防守 review #7: add() normalize
+  it('add silently rejects non-absolute path', () => {
+    usePathCacheStore.getState().add('h1', 'w1', 'rel/path')
+    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
+  })
+
+  it('add normalizes trailing slash and `./..`', () => {
+    usePathCacheStore.getState().add('h1', 'w1', '/a/b/')
+    usePathCacheStore.getState().add('h1', 'w1', '/a/./b')
+    usePathCacheStore.getState().add('h1', 'w1', '/a/c/../b')
+    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toEqual(['/a/b'])  // all dedup to /a/b
+  })
+
+  it('lookup combines basename with each cached dir (head first)', () => {
     usePathCacheStore.getState().add('h1', 'w1', '/a/b')
     usePathCacheStore.getState().add('h1', 'w1', '/c/d')
     expect(usePathCacheStore.getState().lookup('h1', 'w1', 'foo.go')).toEqual([
@@ -607,12 +780,21 @@ describe('usePathCacheStore', () => {
     expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toEqual([])
   })
 
-  it('clearScope removes only the targeted scope', () => {
+  it('clearScope removes in-memory + persisted by default', () => {
     usePathCacheStore.getState().add('h1', 'w1', '/a')
     usePathCacheStore.getState().add('h1', 'w2', '/b')
     usePathCacheStore.getState().clearScope('h1', 'w1')
     expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
+    expect(usePathCacheStore.getState().dirsByScope['h2:w1']).toBeUndefined() // 沒污染
     expect(usePathCacheStore.getState().dirsByScope['h1:w2']).toEqual(['/b'])
+  })
+
+  // 防守 review #11: keepPersisted: true 只清 in-memory
+  it('clearScope({ keepPersisted: true }) does not touch localStorage', () => {
+    usePathCacheStore.getState().add('h1', 'w1', '/a')
+    usePathCacheStore.getState().clearScope('h1', 'w1', { keepPersisted: true })
+    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
+    // localStorage 不應被改寫（caller 必須能 reload 後恢復；本測測試該行為由 P4.9 / integration test 補）
   })
 
   it('clearHost removes all scopes for that host', () => {
@@ -627,20 +809,29 @@ describe('usePathCacheStore', () => {
 
 - [ ] **Step 2: Run test, expect FAIL**
 
+```
+cd spa && npx vitest run src/stores/path-cache/usePathCacheStore.test.ts
+```
+
 - [ ] **Step 3: Implement store**
 
-新建 `spa/src/stores/usePathCacheStore.ts`：
+新建 `spa/src/stores/path-cache/usePathCacheStore.ts`：
 
 ```ts
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { STORAGE_KEYS } from '../lib/storage/keys'
+import { STORAGE_KEYS } from '../../lib/storage/keys'
+import { purdexStorage } from '../../lib/storage/purdex-storage'
+import path from 'path-browserify'
 
 const MAX_DIRS_PER_SCOPE = 50
 const scopeKey = (hostId: string, workspaceId: string) => `${hostId}:${workspaceId}`
-const dirname = (p: string) => {
-  const idx = p.lastIndexOf('/')
-  return idx <= 0 ? '/' : p.slice(0, idx)
+
+function normalizeDir(raw: string): string | null {
+  if (typeof raw !== 'string' || !raw.startsWith('/')) return null
+  // path.normalize: collapses ./.. and dedup slashes; trim trailing /
+  const norm = path.normalize(raw).replace(/\/+$/, '')
+  return norm === '' ? '/' : norm
 }
 
 interface PathCacheState {
@@ -648,7 +839,7 @@ interface PathCacheState {
   add: (hostId: string, workspaceId: string, dir: string) => void
   lookup: (hostId: string, workspaceId: string, basename: string) => string[]
   pruneStaleCandidate: (hostId: string, workspaceId: string, candidatePath: string) => void
-  clearScope: (hostId: string, workspaceId: string) => void
+  clearScope: (hostId: string, workspaceId: string, opts?: { keepPersisted?: boolean }) => void
   clearHost: (hostId: string) => void
 }
 
@@ -659,10 +850,12 @@ export const usePathCacheStore = create<PathCacheState>()(
 
       add: (hostId, workspaceId, dir) =>
         set((state) => {
+          const norm = normalizeDir(dir)
+          if (!norm) return state  // silently reject non-absolute
           const key = scopeKey(hostId, workspaceId)
           const existing = state.dirsByScope[key] ?? []
-          const filtered = existing.filter((d) => d !== dir)
-          const next = [dir, ...filtered].slice(0, MAX_DIRS_PER_SCOPE)
+          const filtered = existing.filter((d) => d !== norm)
+          const next = [norm, ...filtered].slice(0, MAX_DIRS_PER_SCOPE)
           return { dirsByScope: { ...state.dirsByScope, [key]: next } }
         }),
 
@@ -677,17 +870,28 @@ export const usePathCacheStore = create<PathCacheState>()(
           const key = scopeKey(hostId, workspaceId)
           const existing = state.dirsByScope[key]
           if (!existing) return state
-          const dir = dirname(candidatePath)
+          const dir = normalizeDir(path.dirname(candidatePath))
+          if (!dir) return state
           const next = existing.filter((d) => d !== dir)
           if (next.length === existing.length) return state
           return { dirsByScope: { ...state.dirsByScope, [key]: next } }
         }),
 
-      clearScope: (hostId, workspaceId) =>
+      clearScope: (hostId, workspaceId, opts) =>
         set((state) => {
           const key = scopeKey(hostId, workspaceId)
           if (!(key in state.dirsByScope)) return state
           const { [key]: _, ...rest } = state.dirsByScope
+          // keepPersisted: true → 只清 in-memory；persist 透過 partialize 寫回 localStorage
+          //   會在下一個 set 觸發時用最新 state（含 rest）覆寫；要避免 persisted 變動，
+          //   在 caller 端用 useStore.persist.pause() 或寫回原值（auto-cleanup 會處理）。
+          //   本 store 的責任：不主動清 persisted；caller 控制是否 set 觸發 persist。
+          if (opts?.keepPersisted) {
+            // 用 setState bypass persist：透過 vanilla store 內部 API（zustand persist 預設會
+            // 在每次 setState 時 stringify 並寫回；要 skip，使用 useStore.persist.pause()
+            // 後再 setState，呼叫端負責；這裡 set 本身仍會寫，因此 keepPersisted 必須由
+            // auto-cleanup.ts 額外處理 — 見 4.9）
+          }
           return { dirsByScope: rest }
         }),
 
@@ -702,76 +906,104 @@ export const usePathCacheStore = create<PathCacheState>()(
         }),
     }),
     {
-      name: STORAGE_KEYS.PATH_CACHE,
+      name: STORAGE_KEYS.PATH_CACHE_V1,
+      storage: purdexStorage,
       partialize: (s) => ({ dirsByScope: s.dirsByScope }),
+      // defensive：localStorage 內容 malformed → reset
+      onRehydrateStorage: () => (state, error) => {
+        if (error || !state || typeof state.dirsByScope !== 'object') {
+          usePathCacheStore.setState({ dirsByScope: {} } as never, false)
+          return
+        }
+        // sanitize: 確保所有 value 都是 string array
+        const cleaned: Record<string, string[]> = {}
+        for (const [k, v] of Object.entries(state.dirsByScope)) {
+          if (Array.isArray(v) && v.every((x) => typeof x === 'string')) cleaned[k] = v
+        }
+        usePathCacheStore.setState({ dirsByScope: cleaned } as never, false)
+      },
     },
   ),
 )
 ```
 
+> **`keepPersisted: true` 的真正實作** 在 `auto-cleanup.ts`（Task 4.9）— 用 `usePathCacheStore.persist.pause()` 後 setState、再 unpause；store 本體只做 in-memory clear。
+
 - [ ] **Step 4: Run test, expect PASS**
 
 ```
-cd spa && npx vitest run src/stores/usePathCacheStore.test.ts
+cd spa && npx vitest run src/stores/path-cache/usePathCacheStore.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/stores/usePathCacheStore.ts spa/src/stores/usePathCacheStore.test.ts
-git commit -m "feat(spa): usePathCacheStore with LRU and persist"
+git add spa/src/stores/path-cache/usePathCacheStore.ts spa/src/stores/path-cache/usePathCacheStore.test.ts
+git commit -m "feat(spa): pathcache store with normalization and lru and purdex storage"
 ```
 
 ---
 
-## Task 4.6 — `resolveWorkspaceForSession` helper
+## Task 4.6 — `resolveWorkspaceIdForAgentSession` helper（多重命中 drop）
 
 **Files:**
-- Create: `spa/src/lib/resolve-workspace-for-session.ts`
-- Test: `spa/src/lib/resolve-workspace-for-session.test.ts`
+- Create: `spa/src/lib/agent-ws/resolve-workspace-id-for-agent-session.ts`（**子目錄**；體質 review #4 + #9）
+- Test: `spa/src/lib/agent-ws/resolve-workspace-id-for-agent-session.test.ts`
+
+> **吸收**：
+> - 改名 `resolveWorkspaceIdForAgentSession`（更具體，避免被誤用為泛用 workspace resolver；體質 review #9）
+> - 放 `lib/agent-ws/` 子目錄（體質 review #4）
+> - useWorkspaceStore 實際路徑 `features/workspace/store`（通用 review A2）
+> - **多重 workspace 命中 → return null**（不取 active 捷徑），避免寫到「使用者剛切過去的 workspace」（攻擊 review #6 + 防守 review #5）
+> - 測試 fixture **必須用 `{type:'leaf', pane:{id, content}}` PaneLayout shape**（通用 review B2）
 
 - [ ] **Step 1: Write failing test**
 
-新建 test：
+新建 `spa/src/lib/agent-ws/resolve-workspace-id-for-agent-session.test.ts`：
 
 ```ts
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useTabStore } from '../stores/useTabStore'
-import { useWorkspaceStore } from '../stores/useWorkspaceStore'
-import { resolveWorkspaceForSession } from './resolve-workspace-for-session'
+import { useTabStore, createTab } from '../../stores/useTabStore'
+import { useWorkspaceStore } from '../../features/workspace/store'
+import { resolveWorkspaceIdForAgentSession } from './resolve-workspace-id-for-agent-session'
 
-describe('resolveWorkspaceForSession', () => {
+const seedTab = (id: string, content: { kind: string; hostId?: string; sessionCode?: string }) => ({
+  id,
+  layout: { type: 'leaf' as const, pane: { id: `p_${id}`, content } },
+})
+
+describe('resolveWorkspaceIdForAgentSession', () => {
   beforeEach(() => {
     useTabStore.setState({ tabs: {}, tabOrder: [] } as never, false)
     useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null } as never, false)
   })
 
   it('returns null when no tab matches the session', () => {
-    expect(resolveWorkspaceForSession('h1', 'sess')).toBeNull()
+    expect(resolveWorkspaceIdForAgentSession('h1', 'sess')).toBeNull()
   })
 
-  it('returns active workspace when a tab in it matches', () => {
-    useTabStore.setState({
-      tabs: { t1: { id: 't1', layout: { id: 'p', content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'sess' } } } },
-      tabOrder: ['t1'],
-    } as never, false)
+  it('returns the unique workspace when only one tab matches', () => {
+    const t = seedTab('t1', { kind: 'tmux-session', hostId: 'h1', sessionCode: 'sess' })
+    useTabStore.setState({ tabs: { t1: t }, tabOrder: ['t1'] } as never, false)
     useWorkspaceStore.setState({
-      workspaces: [{ id: 'w1', tabs: ['t1'], activeTabId: 't1' }, { id: 'w2', tabs: [], activeTabId: null }],
-      activeWorkspaceId: 'w1',
+      workspaces: [{ id: 'w1', tabs: ['t1'], moduleConfig: {} }, { id: 'w2', tabs: [], moduleConfig: {} }],
+      activeWorkspaceId: 'w2',  // active 是 w2 但匹配在 w1 — 必須回 w1（不取 active 捷徑）
     } as never, false)
-    expect(resolveWorkspaceForSession('h1', 'sess')).toBe('w1')
+    expect(resolveWorkspaceIdForAgentSession('h1', 'sess')).toBe('w1')
   })
 
-  it('falls back to any workspace if active workspace has no match', () => {
-    useTabStore.setState({
-      tabs: { t1: { id: 't1', layout: { id: 'p', content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'sess' } } } },
-      tabOrder: ['t1'],
-    } as never, false)
+  it('returns null when multiple workspaces own matching tabs (avoids racy active-priority)', () => {
+    const t1 = seedTab('t1', { kind: 'tmux-session', hostId: 'h1', sessionCode: 'sess' })
+    const t2 = seedTab('t2', { kind: 'tmux-session', hostId: 'h1', sessionCode: 'sess' })
+    useTabStore.setState({ tabs: { t1, t2 }, tabOrder: ['t1', 't2'] } as never, false)
     useWorkspaceStore.setState({
-      workspaces: [{ id: 'w1', tabs: [], activeTabId: null }, { id: 'w2', tabs: ['t1'], activeTabId: 't1' }],
-      activeWorkspaceId: 'w1',
+      workspaces: [
+        { id: 'w1', tabs: ['t1'], moduleConfig: {} },
+        { id: 'w2', tabs: ['t2'], moduleConfig: {} },
+      ],
+      activeWorkspaceId: 'w2',
     } as never, false)
-    expect(resolveWorkspaceForSession('h1', 'sess')).toBe('w2')
+    expect(resolveWorkspaceIdForAgentSession('h1', 'sess')).toBeNull()
   })
 })
 ```
@@ -780,36 +1012,45 @@ describe('resolveWorkspaceForSession', () => {
 
 - [ ] **Step 3: Implement helper**
 
+新建 `spa/src/lib/agent-ws/resolve-workspace-id-for-agent-session.ts`：
+
 ```ts
-import { useTabStore } from '../stores/useTabStore'
-import { useWorkspaceStore } from '../stores/useWorkspaceStore'
-import { getPrimaryPane } from './pane-tree'
+import { useTabStore } from '../../stores/useTabStore'
+import { useWorkspaceStore } from '../../features/workspace/store'
+import { getPrimaryPane } from '../pane-tree'
 
 /**
- * Find the workspace that owns a tab matching (hostId, sessionCode).
- * Active workspace wins if it matches; otherwise any workspace; null if
- * no tab corresponds (standalone session or stale code).
+ * Find the workspace that owns a tab matching (hostId, sessionCode) for an
+ * agent session event (e.g. PathHint dispatch).
+ *
+ * Returns:
+ *   - workspaceId  — when exactly one workspace owns a matching tab
+ *   - null          — when no tab matches OR multiple workspaces match
+ *
+ * The "multiple match → null" rule is intentional (attacker review #6):
+ * it avoids racy writes to the workspace the user just switched to during
+ * tear-off / merge transitions. PathHint with no clear owner is dropped.
  */
-export function resolveWorkspaceForSession(hostId: string, sessionCode: string): string | null {
+export function resolveWorkspaceIdForAgentSession(hostId: string, sessionCode: string): string | null {
   const tabs = useTabStore.getState().tabs
-  const matchingTabIds: string[] = []
+  const matchingTabIds = new Set<string>()
   for (const [tabId, tab] of Object.entries(tabs)) {
     if (!tab) continue
     const c = getPrimaryPane(tab.layout).content
-    if (c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode) {
-      matchingTabIds.push(tabId)
+    if (
+      c.kind === 'tmux-session' &&
+      (c as { hostId?: string }).hostId === hostId &&
+      (c as { sessionCode?: string }).sessionCode === sessionCode
+    ) {
+      matchingTabIds.add(tabId)
     }
   }
-  if (matchingTabIds.length === 0) return null
+  if (matchingTabIds.size === 0) return null
 
   const wsState = useWorkspaceStore.getState()
-  const active = wsState.workspaces.find((w) => w.id === wsState.activeWorkspaceId)
-  if (active && matchingTabIds.some((tid) => active.tabs.includes(tid))) return active.id
-
-  for (const ws of wsState.workspaces) {
-    if (matchingTabIds.some((tid) => ws.tabs.includes(tid))) return ws.id
-  }
-  return null
+  const owners = wsState.workspaces.filter((w) => w.tabs.some((tid: string) => matchingTabIds.has(tid)))
+  if (owners.length !== 1) return null  // 0 or multiple → drop
+  return owners[0].id
 }
 ```
 
@@ -818,121 +1059,175 @@ export function resolveWorkspaceForSession(hostId: string, sessionCode: string):
 - [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/lib/resolve-workspace-for-session.ts spa/src/lib/resolve-workspace-for-session.test.ts
-git commit -m "feat(spa): resolveWorkspaceForSession helper with active priority"
+git add spa/src/lib/agent-ws/resolve-workspace-id-for-agent-session.ts spa/src/lib/agent-ws/resolve-workspace-id-for-agent-session.test.ts
+git commit -m "feat(spa): resolve workspace id for agent session with multi-hit drop"
 ```
 
 ---
 
-## Task 4.7 — `agent-ws-dispatch.ts` 加 `agent.path_hint` case
+## Task 4.7 — `agent-ws/path-hint-dispatch.ts` + 拆 `agent-ws-dispatch.ts` 為子目錄
 
 **Files:**
-- Modify: `spa/src/lib/agent-ws-dispatch.ts`
-- Modify: `spa/src/lib/agent-ws-dispatch.test.ts`
+- Create: `spa/src/lib/agent-ws/index.ts`（router 入口；體質 review #4）
+- Create: `spa/src/lib/agent-ws/status-dispatch.ts`（既有 status 邏輯搬入）
+- Create: `spa/src/lib/agent-ws/path-hint-dispatch.ts`
+- Create: `spa/src/lib/agent-ws/path-hint-dispatch.test.ts`
+- Modify: `spa/src/lib/agent-ws-dispatch.ts` → `export * from './agent-ws'` 過渡 shim
 
-- [ ] **Step 1: Write failing test**
+> **吸收**：
+> - 拆子目錄（體質 review #4）— `agent-ws-dispatch.ts` 不應同時兼 status + path-hint router；改名 `agent-ws/index.ts`
+> - PathHint v1 minimal payload（只有 `schemaVersion / agentId / sessionCode / dir / kind / timestamp`）— 不再 check `pathKind / confidence`
+> - **schemaVersion check：!== 1 → defensive drop**（C 決議）
+> - **try/catch 包整段 + resolver throw regression test**（攻擊 review #3）
+> - useWorkspaceStore 路徑 `features/workspace/store`
+> - fixture leaf shape `{type:'leaf', pane:{...}}`
 
-擴 既有 test：
+- [ ] **Step 1: 拆子目錄 + 過渡 shim（先做架構搬遷，不改行為）**
+
+```bash
+mkdir -p spa/src/lib/agent-ws
+git mv spa/src/lib/agent-ws-dispatch.ts spa/src/lib/agent-ws/status-dispatch.ts
+```
+
+新建 `spa/src/lib/agent-ws/index.ts`：
 
 ```ts
-import { dispatchAgentWsEvent } from './agent-ws-dispatch'
-import { usePathCacheStore } from '../stores/usePathCacheStore'
+import { handleStatusEvent } from './status-dispatch'
+import { handlePathHintEvent } from './path-hint-dispatch'
 
-describe('dispatchAgentWsEvent agent.path_hint', () => {
-  beforeEach(() => {
-    usePathCacheStore.setState({ dirsByScope: {} } as never, false)
-    useTabStore.setState({
-      tabs: { t1: { id: 't1', layout: { id: 'p', content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'sess' } } } },
-      tabOrder: ['t1'],
-    } as never, false)
-    useWorkspaceStore.setState({
-      workspaces: [{ id: 'w1', tabs: ['t1'], activeTabId: 't1' }],
-      activeWorkspaceId: 'w1',
-    } as never, false)
-  })
+export function dispatchAgentWsEvent(hostId: string, event: { type: string; session: string; value: string }): void {
+  if (event.type === 'agent.status' || event.type === 'agent.status.cleared') {
+    handleStatusEvent(hostId, event)
+    return
+  }
+  if (event.type === 'agent.path_hint') {
+    handlePathHintEvent(hostId, event)
+    return
+  }
+}
+```
 
-  it('absolute hint adds dir to path cache for resolved workspace', () => {
-    const payload = JSON.stringify({
-      agentId: 'claude-code', hostId: 'h1', sessionCode: 'sess',
-      kind: 'read', path: '/a/b/c.go', dir: '/a/b',
-      pathKind: 'absolute', confidence: 'high', toolName: 'Read',
-      timestamp: '2026-04-27T00:00:00Z',
-    })
-    dispatchAgentWsEvent('h1', { type: 'agent.path_hint', session: 'sess', value: payload })
+`spa/src/lib/agent-ws-dispatch.ts` 重寫為 `export * from './agent-ws'`（過渡 shim，避免破 caller import path）。
+
+`status-dispatch.ts` 內把原本的 `dispatchAgentWsEvent` body 抽成 `export function handleStatusEvent(hostId, event)`。
+
+- [ ] **Step 2: Write failing test for path-hint-dispatch**
+
+新建 `spa/src/lib/agent-ws/path-hint-dispatch.test.ts`：
+
+```ts
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { useTabStore, createTab } from '../../stores/useTabStore'
+import { useWorkspaceStore } from '../../features/workspace/store'
+import { usePathCacheStore } from '../../stores/path-cache/usePathCacheStore'
+import { handlePathHintEvent } from './path-hint-dispatch'
+
+const seedTab = (id: string, content: { kind: string; hostId?: string; sessionCode?: string }) => ({
+  id,
+  layout: { type: 'leaf' as const, pane: { id: `p_${id}`, content } },
+})
+
+const v1 = (overrides: Record<string, unknown> = {}) => JSON.stringify({
+  schemaVersion: 1,
+  agentId: 'claude-code',
+  sessionCode: 'sess',
+  dir: '/a/b',
+  kind: 'read',
+  timestamp: '2026-04-27T00:00:00Z',
+  ...overrides,
+})
+
+beforeEach(() => {
+  usePathCacheStore.setState({ dirsByScope: {} } as never, false)
+  const t = seedTab('t1', { kind: 'tmux-session', hostId: 'h1', sessionCode: 'sess' })
+  useTabStore.setState({ tabs: { t1: t }, tabOrder: ['t1'] } as never, false)
+  useWorkspaceStore.setState({
+    workspaces: [{ id: 'w1', tabs: ['t1'], moduleConfig: {} }],
+    activeWorkspaceId: 'w1',
+  } as never, false)
+})
+
+describe('handlePathHintEvent', () => {
+  it('v1 payload adds dir to resolved workspace cache', () => {
+    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1() })
     expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toEqual(['/a/b'])
   })
 
-  it('non-absolute path hints are dropped', () => {
-    const payload = JSON.stringify({
-      agentId: 'codex', hostId: 'h1', sessionCode: 'sess',
-      kind: 'read', dir: 'rel/dir',
-      pathKind: 'relative', confidence: 'medium', toolName: 'apply_patch',
-      timestamp: '2026-04-27T00:00:00Z',
-    })
-    dispatchAgentWsEvent('h1', { type: 'agent.path_hint', session: 'sess', value: payload })
+  it('schemaVersion !== 1 → defensive drop', () => {
+    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1({ schemaVersion: 2 }) })
     expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
   })
 
-  it('unknown pathKind is dropped defensively', () => {
-    const payload = JSON.stringify({
-      agentId: 'claude-code', hostId: 'h1', sessionCode: 'sess',
-      kind: 'read', dir: '/a/b',
-      pathKind: 'galaxy-brain', confidence: 'high', toolName: 'Read',
-      timestamp: '2026-04-27T00:00:00Z',
-    })
-    dispatchAgentWsEvent('h1', { type: 'agent.path_hint', session: 'sess', value: payload })
+  it('non-absolute dir → defensive drop', () => {
+    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1({ dir: 'rel/dir' }) })
     expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
   })
 
-  it('hint with no resolvable workspace is dropped', () => {
+  it('malformed JSON → drop without throwing', () => {
+    expect(() => handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: 'not-json' })).not.toThrow()
+  })
+
+  it('unresolvable workspace → drop', () => {
     useTabStore.setState({ tabs: {}, tabOrder: [] } as never, false)
-    const payload = JSON.stringify({
-      agentId: 'claude-code', hostId: 'h1', sessionCode: 'sess',
-      kind: 'read', dir: '/a/b',
-      pathKind: 'absolute', confidence: 'high', toolName: 'Read',
-      timestamp: '2026-04-27T00:00:00Z',
-    })
-    dispatchAgentWsEvent('h1', { type: 'agent.path_hint', session: 'sess', value: payload })
+    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1() })
     expect(Object.keys(usePathCacheStore.getState().dirsByScope)).toEqual([])
+  })
+
+  it('resolver throwing → does not crash dispatcher', async () => {
+    // 攻擊 review #3：mock resolver throw
+    const mod = await import('./resolve-workspace-id-for-agent-session')
+    const spy = vi.spyOn(mod, 'resolveWorkspaceIdForAgentSession').mockImplementation(() => {
+      throw new Error('boom')
+    })
+    expect(() => handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1() })).not.toThrow()
+    spy.mockRestore()
   })
 })
 ```
 
-- [ ] **Step 2: Run test, expect FAIL**
+- [ ] **Step 3: Run test, expect FAIL**
 
-- [ ] **Step 3: Add case to dispatcher**
+`handlePathHintEvent` not exported.
 
-在 `spa/src/lib/agent-ws-dispatch.ts` 既有 if-block 後加：
+- [ ] **Step 4: Implement path-hint-dispatch**
+
+新建 `spa/src/lib/agent-ws/path-hint-dispatch.ts`：
 
 ```ts
-import type { PathHint } from '../types/agent-events'
-import { isValidPathKind, isValidConfidence } from '../types/agent-events'
-import { resolveWorkspaceForSession } from './resolve-workspace-for-session'
-import { usePathCacheStore } from '../stores/usePathCacheStore'
+import type { PathHint } from '../../types/agent-events'
+import {
+  PATH_HINT_SCHEMA_VERSION,
+  isValidPathHintKind,
+} from '../../types/agent-events'
+import { resolveWorkspaceIdForAgentSession } from './resolve-workspace-id-for-agent-session'
+import { usePathCacheStore } from '../../stores/path-cache/usePathCacheStore'
 
-// ... at end of dispatchAgentWsEvent:
-  if (event.type === 'agent.path_hint') {
-    try {
-      const hint = JSON.parse(event.value) as PathHint
-      if (!isValidPathKind(hint.pathKind) || !isValidConfidence(hint.confidence)) return
-      if (hint.pathKind !== 'absolute' || !hint.dir) return
-      const wsId = resolveWorkspaceForSession(hostId, hint.sessionCode)
-      if (!wsId) return
-      usePathCacheStore.getState().add(hostId, wsId, hint.dir)
-    } catch {
-      // Malformed payload — drop silently.
-    }
-    return
+export function handlePathHintEvent(hostId: string, event: { type: string; session: string; value: string }): void {
+  try {
+    const hint = JSON.parse(event.value) as PathHint
+    if (hint.schemaVersion !== PATH_HINT_SCHEMA_VERSION) return  // unknown version → drop
+    if (typeof hint.dir !== 'string' || !hint.dir.startsWith('/')) return
+    if (!isValidPathHintKind(hint.kind)) return
+    const wsId = resolveWorkspaceIdForAgentSession(hostId, hint.sessionCode)
+    if (!wsId) return
+    usePathCacheStore.getState().add(hostId, wsId, hint.dir)
+  } catch {
+    // malformed payload OR resolver throw — drop silently, never crash WS pipeline
   }
+}
 ```
 
-- [ ] **Step 4: Run test, expect PASS**
+- [ ] **Step 5: Run test, expect PASS**
 
-- [ ] **Step 5: Commit**
+```
+cd spa && npx vitest run src/lib/agent-ws/
+```
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add spa/src/lib/agent-ws-dispatch.ts spa/src/lib/agent-ws-dispatch.test.ts
-git commit -m "feat(spa): dispatch agent.path_hint into usePathCacheStore"
+git add spa/src/lib/agent-ws/ spa/src/lib/agent-ws-dispatch.ts
+git commit -m "feat(spa): split agent-ws dispatch and add path-hint handler"
 ```
 
 ---
@@ -948,131 +1243,266 @@ git commit -m "feat(spa): dispatch agent.path_hint into usePathCacheStore"
 grep -n "agent\." spa/src/hooks/useMultiHostEventWs.ts
 ```
 
-- [ ] **Step 2: Replace filter**
+- [ ] **Step 2: Replace filter — whitelist 三條 event type**（**禁用 `startsWith('agent.')` broad filter**；防守 review #9）
 
-把 `if (event.type === 'agent.status' || event.type === 'agent.status.cleared')` 改成：
+把既有 filter 改成：
 
 ```ts
-if (event.type.startsWith('agent.')) dispatchAgentWsEvent(hostId, event)
+const AGENT_DISPATCH_TYPES = new Set([
+  'agent.status',
+  'agent.status.cleared',
+  'agent.path_hint',
+])
+
+// inside event handler:
+if (AGENT_DISPATCH_TYPES.has(event.type)) {
+  dispatchAgentWsEvent(hostId, event)
+}
 ```
 
-- [ ] **Step 3: Run all tests**
+未來新 `agent.*` event 必須**顯式加進 whitelist**，避免被錯誤歸類為 agent store event。
+
+- [ ] **Step 3: Add regression test**
+
+擴 `spa/src/hooks/useMultiHostEventWs.test.ts`（若無檔案則新建）：
+
+```ts
+import { describe, it, expect, vi } from 'vitest'
+
+it('agent.foo (not in whitelist) is NOT dispatched', () => {
+  const dispatchSpy = vi.fn()
+  // setup hook with mock dispatch
+  // simulate event { type: 'agent.foo', ... } → expect dispatchSpy NOT called
+})
+
+it('agent.path_hint IS dispatched', () => {
+  // simulate event { type: 'agent.path_hint', ... } → expect dispatchSpy called once
+})
+```
+
+- [ ] **Step 4: Run all tests**
 
 ```
 cd spa && npx vitest run
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/hooks/useMultiHostEventWs.ts
-git commit -m "refactor(spa): dispatch all agent.* WS events to dispatcher"
+git add spa/src/hooks/useMultiHostEventWs.ts spa/src/hooks/useMultiHostEventWs.test.ts
+git commit -m "refactor(spa): whitelist three agent event types for dispatch"
 ```
 
 ---
 
-## Task 4.9 — workspace remove + host remove subscribers
+## Task 4.9 — workspace/host remove subscribers — `path-cache/auto-cleanup.ts`
 
 **Files:**
-- Modify: `spa/src/stores/usePathCacheStore.ts`（加 `attachAutoCleanup` 助手）
-- Modify: `spa/src/main.tsx`（呼叫一次）
+- Create: `spa/src/stores/path-cache/auto-cleanup.ts`（**獨立檔**；體質 review #3 + #17）
+- Test: `spa/src/stores/path-cache/auto-cleanup.test.ts`
+- Modify: `spa/src/main.tsx`（呼叫一次，並保留回傳的 dispose function）
+
+> **吸收**：
+> - 獨立檔（store 本體不 import workspace/host store；避免循環依賴）
+> - **回傳 dispose function**（攻擊 review #7）— 測試 `afterEach` 必須呼叫；HMR `import.meta.hot.dispose` 也呼叫
+> - 用 zustand subscribe 的 **`prevState` 算 removed ids**（不要用 closure `lastWsIds` Set）
+> - **hydration race**：等 `useWorkspaceStore.persist.hasHydrated()` / `onFinishHydration` 才 attach；防止以空 workspace set 作 baseline 誤刪 cache（攻擊 review #2）
+> - **`keepSettings: true`（tear-off）→ 只清 in-memory（`keepPersisted: true`）**；`keepSettings: false`（真 delete）→ in-memory + persisted 都清（防守 review #11 修正）
+> - host remove → `clearHost` 清整 host
 
 - [ ] **Step 1: Write failing test**
 
-擴 `usePathCacheStore.test.ts`：
+新建 `spa/src/stores/path-cache/auto-cleanup.test.ts`：
 
 ```ts
-import { useWorkspaceStore } from './useWorkspaceStore'
-import { useHostStore } from './useHostStore'
-import { attachPathCacheAutoCleanup } from './usePathCacheStore'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { useWorkspaceStore } from '../../features/workspace/store'
+import { useHostStore } from '../useHostStore'
+import { usePathCacheStore } from './usePathCacheStore'
+import { attachPathCacheAutoCleanup } from './auto-cleanup'
 
-it('workspace removal clears its scope', () => {
-  attachPathCacheAutoCleanup()
+let dispose: (() => void) | undefined
+
+beforeEach(() => {
+  usePathCacheStore.setState({ dirsByScope: {} } as never, false)
   useWorkspaceStore.setState({
-    workspaces: [{ id: 'w1', tabs: [] }, { id: 'w2', tabs: [] }],
+    workspaces: [{ id: 'w1', tabs: [], moduleConfig: {} }, { id: 'w2', tabs: [], moduleConfig: {} }],
     activeWorkspaceId: 'w1',
   } as never, false)
-  usePathCacheStore.getState().add('h1', 'w1', '/a')
-  usePathCacheStore.getState().add('h1', 'w2', '/b')
-  // simulate w1 removal
-  useWorkspaceStore.setState({
-    workspaces: [{ id: 'w2', tabs: [] }],
-    activeWorkspaceId: 'w2',
-  } as never, false)
-  expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
-  expect(usePathCacheStore.getState().dirsByScope['h1:w2']).toEqual(['/b'])
+  useHostStore.setState({ hostOrder: ['h1', 'h2'] } as never, false)
+  dispose = attachPathCacheAutoCleanup()
 })
 
-it('host removal clears all its scopes', () => {
-  attachPathCacheAutoCleanup()
-  useHostStore.setState({ hostOrder: ['h1', 'h2'] } as never, false)
-  usePathCacheStore.getState().add('h1', 'w1', '/a')
-  usePathCacheStore.getState().add('h2', 'w1', '/b')
-  useHostStore.setState({ hostOrder: ['h2'] } as never, false)
-  expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
-  expect(usePathCacheStore.getState().dirsByScope['h2:w1']).toEqual(['/b'])
+afterEach(() => {
+  dispose?.()
+  dispose = undefined
+})
+
+describe('attachPathCacheAutoCleanup', () => {
+  it('returns a dispose function', () => {
+    expect(typeof dispose).toBe('function')
+  })
+
+  it('workspace removal (real delete) clears in-memory + persisted', () => {
+    usePathCacheStore.getState().add('h1', 'w1', '/a')
+    usePathCacheStore.getState().add('h1', 'w2', '/b')
+    useWorkspaceStore.setState({
+      workspaces: [{ id: 'w2', tabs: [], moduleConfig: {} }],
+      activeWorkspaceId: 'w2',
+    } as never, false)
+    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
+    expect(usePathCacheStore.getState().dirsByScope['h1:w2']).toEqual(['/b'])
+  })
+
+  it('workspace tear-off (keepSettings:true) only clears in-memory, NOT persisted', () => {
+    usePathCacheStore.getState().add('h1', 'w1', '/a')
+    // 模擬 tear-off: workspaces 移除 w1，但 keepSettings flag 透過 actionMeta 傳達
+    // (假設 features/workspace/store 在 removeWorkspace({keepSettings:true}) 時 set workspaceMeta.lastRemoveKeepSettings = id)
+    useWorkspaceStore.setState({
+      workspaces: [{ id: 'w2', tabs: [], moduleConfig: {} }],
+      activeWorkspaceId: 'w2',
+      _lastRemovedKeepSettings: 'w1',  // metadata
+    } as never, false)
+    // expect: in-memory 清；persisted 仍含 w1
+    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
+    // assert localStorage 仍含 'h1:w1' — 用 vi 監聽 storage.setItem 或讀 mock storage
+  })
+
+  it('host removal clears all its scopes', () => {
+    usePathCacheStore.getState().add('h1', 'w1', '/a')
+    usePathCacheStore.getState().add('h2', 'w1', '/b')
+    useHostStore.setState({ hostOrder: ['h2'] } as never, false)
+    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
+    expect(usePathCacheStore.getState().dirsByScope['h2:w1']).toEqual(['/b'])
+  })
+
+  it('repeated attach without dispose still installs single subscriber', () => {
+    const dispose2 = attachPathCacheAutoCleanup()
+    usePathCacheStore.getState().add('h1', 'w1', '/a')
+    useWorkspaceStore.setState({
+      workspaces: [{ id: 'w2', tabs: [], moduleConfig: {} }],
+      activeWorkspaceId: 'w2',
+    } as never, false)
+    // 不應 double-clear / 不應拋
+    expect(() => dispose2()).not.toThrow()
+  })
+
+  it('after dispose, no longer cleans on workspace removal', () => {
+    dispose?.()
+    dispose = undefined
+    usePathCacheStore.getState().add('h1', 'w1', '/a')
+    useWorkspaceStore.setState({
+      workspaces: [{ id: 'w2', tabs: [], moduleConfig: {} }],
+      activeWorkspaceId: 'w2',
+    } as never, false)
+    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toEqual(['/a'])  // 仍在
+  })
 })
 ```
 
 - [ ] **Step 2: Run test, expect FAIL**
 
-- [ ] **Step 3: Implement subscribers**
+- [ ] **Step 3: Implement auto-cleanup**
 
-在 `usePathCacheStore.ts` 末尾加：
+新建 `spa/src/stores/path-cache/auto-cleanup.ts`：
 
 ```ts
-import { useWorkspaceStore } from './useWorkspaceStore'
-import { useHostStore } from './useHostStore'
+import { useWorkspaceStore } from '../../features/workspace/store'
+import { useHostStore } from '../useHostStore'
+import { usePathCacheStore } from './usePathCacheStore'
 
-let _attached = false
+/**
+ * Subscribe path cache to workspace/host removal events. Returns a dispose
+ * function — caller MUST call it on HMR dispose / test cleanup.
+ *
+ * Honors workspace tear-off semantics:
+ *   - real delete (keepSettings absent / false) → clear in-memory + persisted
+ *   - tear-off (keepSettings: true) → clear in-memory only; persisted survives
+ *     so other windows of the same origin retain the cache.
+ *
+ * Hydration-aware: defers attach until workspace store finishes hydration to
+ * avoid using empty baseline (which would erase persisted cache on mount).
+ */
+export function attachPathCacheAutoCleanup(): () => void {
+  let unsubWs: (() => void) | undefined
+  let unsubHost: (() => void) | undefined
+  let disposed = false
 
-export function attachPathCacheAutoCleanup(): void {
-  if (_attached) return
-  _attached = true
+  const start = () => {
+    if (disposed) return
 
-  let lastWsIds = new Set(useWorkspaceStore.getState().workspaces.map((w) => w.id))
-  useWorkspaceStore.subscribe((state) => {
-    const current = new Set(state.workspaces.map((w) => w.id))
-    for (const id of lastWsIds) {
-      if (!current.has(id)) {
-        // Iterate all hosts referencing this workspace and clear.
-        const dirs = usePathCacheStore.getState().dirsByScope
+    unsubWs = useWorkspaceStore.subscribe((state, prevState) => {
+      const prevIds = new Set((prevState as { workspaces: { id: string }[] }).workspaces.map((w) => w.id))
+      const currIds = new Set(state.workspaces.map((w: { id: string }) => w.id))
+      const removed: string[] = []
+      for (const id of prevIds) if (!currIds.has(id)) removed.push(id)
+      if (removed.length === 0) return
+
+      // workspaceMeta hint: caller (workspace store) sets `_lastRemovedKeepSettings`
+      // when removeWorkspace was invoked with keepSettings:true. Treat unset as false.
+      const keepSettingsId = (state as { _lastRemovedKeepSettings?: string })._lastRemovedKeepSettings
+
+      const dirs = usePathCacheStore.getState().dirsByScope
+      for (const wsId of removed) {
         for (const key of Object.keys(dirs)) {
-          const [hostId, wsId] = key.split(':')
-          if (wsId === id) usePathCacheStore.getState().clearScope(hostId, wsId)
+          const [hostId, scopeWsId] = key.split(':')
+          if (scopeWsId === wsId) {
+            const keepPersisted = wsId === keepSettingsId
+            // keepPersisted: 用 persist.pause/resume 防止 set 觸發 localStorage 寫
+            if (keepPersisted) {
+              usePathCacheStore.persist.pause()
+              usePathCacheStore.getState().clearScope(hostId, scopeWsId, { keepPersisted: true })
+              usePathCacheStore.persist.resume()
+            } else {
+              usePathCacheStore.getState().clearScope(hostId, scopeWsId)
+            }
+          }
         }
       }
-    }
-    lastWsIds = current
-  })
+    })
 
-  let lastHostIds = new Set(useHostStore.getState().hostOrder)
-  useHostStore.subscribe((state) => {
-    const current = new Set(state.hostOrder)
-    for (const id of lastHostIds) {
-      if (!current.has(id)) usePathCacheStore.getState().clearHost(id)
-    }
-    lastHostIds = current
-  })
+    unsubHost = useHostStore.subscribe((state, prevState) => {
+      const prevIds = new Set((prevState as { hostOrder: string[] }).hostOrder)
+      const currIds = new Set(state.hostOrder)
+      for (const id of prevIds) if (!currIds.has(id)) usePathCacheStore.getState().clearHost(id)
+    })
+  }
+
+  if (useWorkspaceStore.persist.hasHydrated()) start()
+  else useWorkspaceStore.persist.onFinishHydration(start)
+
+  return () => {
+    disposed = true
+    unsubWs?.()
+    unsubHost?.()
+    unsubWs = unsubHost = undefined
+  }
 }
 ```
+
+> **`features/workspace/store` 需要設定 `_lastRemovedKeepSettings` metadata field** — 在 `removeWorkspace(id, opts)` 內 `set({ workspaces, _lastRemovedKeepSettings: opts?.keepSettings ? id : undefined })`。若該 store 沒這欄位，須一併加（小改動）。
 
 - [ ] **Step 4: Wire into bootstrap**
 
 在 `spa/src/main.tsx` 既有 store 初始化後（registerBuiltinModules 之後）加：
 
 ```tsx
-import { attachPathCacheAutoCleanup } from './stores/usePathCacheStore'
-attachPathCacheAutoCleanup()
+import { attachPathCacheAutoCleanup } from './stores/path-cache/auto-cleanup'
+const disposePathCache = attachPathCacheAutoCleanup()
+if (import.meta.hot) import.meta.hot.dispose(() => disposePathCache())
 ```
 
 - [ ] **Step 5: Run test, expect PASS**
 
+```
+cd spa && npx vitest run src/stores/path-cache/
+```
+
 - [ ] **Step 6: Commit**
 
 ```bash
-git add spa/src/stores/usePathCacheStore.ts spa/src/stores/usePathCacheStore.test.ts spa/src/main.tsx
-git commit -m "feat(spa): path cache auto-clears on workspace/host removal"
+git add spa/src/stores/path-cache/auto-cleanup.ts spa/src/stores/path-cache/auto-cleanup.test.ts spa/src/main.tsx
+git commit -m "feat(spa): pathcache auto-cleanup with dispose and keepsettings semantics"
 ```
 
 ---
