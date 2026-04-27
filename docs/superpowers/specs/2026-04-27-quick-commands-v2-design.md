@@ -163,8 +163,63 @@ interface SlotConfig {
 
 | Slot | Ctx | Executor 行為 |
 |---|---|---|
-| `WORKSPACE_ACTIONS` | `{ hostId, workspaceId, cwd? }` | `POST /api/sessions` 對該 wks 的 host 建 session（cwd 取 wks default → host default fallback）→ `executeCommand(send-keys)` 送 cmd → 切到該 session |
+| `WORKSPACE_ACTIONS` | `{ workspaceId, hostId\|null, cwd? }` | 見 §3.2.1 hostId 解析；建 session（cwd 取 `workspace.moduleConfig?.files?.projectPath`）→ `executeCommand(send-keys)` 送 cmd → 切到該 session |
 | `HOST_ACTIONS` | `{ hostId, cwd? }` | `POST /api/sessions` 對該 host 建 session（cwd 取 host default）→ `executeCommand` → 切到該 session |
+
+#### 3.2.1 WORKSPACE_ACTIONS hostId 解析
+
+Workspace type 沒有 `hostId` 欄位（純前端容器），實作上不可推測「current active host」(focus tab / `activeHostId` 都會在跨 workspace 切換時錯位)。改採**多數決**：
+
+```ts
+function inferWorkspaceHostId(workspace: Workspace, tabs: Record<string, Tab>): string | null {
+  // 1. 蒐集 workspace.tabs 中所有 tmux-session content 的 hostId
+  const candidates = workspace.tabs
+    .map((tabId) => tabs[tabId])
+    .filter((t): t is Tab => !!t)
+    .flatMap((t) => collectTmuxSessionHostIds(t.layout))
+
+  if (candidates.length === 0) return null  // 邊界 → §3.2.2
+
+  // 2. 多數決
+  const counts = new Map<string, number>()
+  for (const h of candidates) counts.set(h, (counts.get(h) ?? 0) + 1)
+  const max = Math.max(...counts.values())
+  const winners = [...counts.entries()].filter(([, c]) => c === max).map(([h]) => h)
+  if (winners.length === 1) return winners[0]
+
+  // 3. 平手 tie-break：active tab 是 tmux-session 用其 hostId
+  if (workspace.activeTabId) {
+    const activeTab = tabs[workspace.activeTabId]
+    if (activeTab) {
+      const activeHosts = collectTmuxSessionHostIds(activeTab.layout)
+      const winner = activeHosts.find((h) => winners.includes(h))
+      if (winner) return winner
+    }
+  }
+
+  // 4. 仍平手 → tabs 順序中第一個 winner
+  for (const tabId of workspace.tabs) {
+    const tab = tabs[tabId]
+    if (!tab) continue
+    const hosts = collectTmuxSessionHostIds(tab.layout)
+    const first = hosts.find((h) => winners.includes(h))
+    if (first) return first
+  }
+  return winners[0]  // 理論不會到這
+}
+```
+
+`collectTmuxSessionHostIds(layout)` 遞迴遍歷 `Layout` tree（含 split children），收集所有 `pane.content.kind === 'tmux-session'` 的 `hostId`。
+
+#### 3.2.2 邊界：workspace 無 tmux-session tabs（hostId = null）
+
+點擊 quick command 時若 `inferWorkspaceHostId` 回傳 `null`：
+- **不**靜默 fallback 到 `activeHostId`（會送 keys 到錯誤 host）
+- **不**直接 disable（這個 workspace 仍可被 user 主動配對 host）
+- **顯示 host picker popover**：列出 `useHostStore.hostOrder` 中的所有 hosts（host 名 + online/offline 指示），user 點選後以該 hostId 跑 executor
+- 取消 picker → no-op
+
+此 picker 元件（`HostPickerPopover`）為**獨立可重用**設計，未來 multi-host workspace + default launcher binding 系統上線後可繼續使用。
 
 ### 3.3 失敗處理 UX
 
@@ -173,15 +228,24 @@ interface SlotConfig {
 | 階段 | 失敗 | 行為 |
 |---|---|---|
 | 建 session | error | toast: "Failed to start session: <reason>"，不切焦點 |
-| 建 session ✅ + send-keys | error | **仍切到該 session**，toast 帶 action button: "Session created, but command failed. <Retry> <Dismiss>" |
+| 建 session ✅ + send-keys | error | **仍切到該 session**，toast 帶 action button: "Session created, but command failed. <Retry> <Dismiss>"（透過 `useUndoToast` 擴 `actionLabel?` schema 提供，預設 fallback 'Undo'） |
 | 切到 session | error（罕見） | toast 提示，session 仍存在於 sessions 列表 |
 
 關鍵：**send-keys 失敗也要切過去**，user 才知道 session 在那、可以手動跑 — 這比「保留 session 但不切」少一個孤兒問題。
 
 ### 3.4 不在 Phase 1 範圍
 
-- `pane.extra-actions`、`sessions.row-actions` 兩個既有整合保留現狀（直接 `useCommands` + 硬寫 onExecute）
-- 後續 phase 再遷移為 `CommandSlot`，屆時把 binding 模型套用整個系統
+- `PaneLayoutRenderer` 內 `extraActions` 的 v1 `QuickCommandMenu` 整合保留現狀（後續 phase 再遷移為 `CommandSlot`）
+- ~~`SessionsSection` row 上的 v1 `QuickCommandMenu` 整合~~ → **Phase 1c 移除**（user 決策：功能集中至 new-session 入口；`QuickCommandMenu` 元件本身保留供 `PaneLayoutRenderer` 使用）
+
+### 3.5 Forward-compat：未來 multi-host workspace binding
+
+未來路線（不在 v2 範圍）：
+- Workspace 將支援多重 `(hostId, path)` binding（不只 files module 的單一 `projectPath`）
+- Quick commands module 啟用時，每個 binding 旁出現「預設快速啟動」checkbox
+- 該標記的 binding 直接提供 `WORKSPACE_ACTIONS` 的 `(hostId, cwd)`；`inferWorkspaceHostId` 多數決退為 binding 不存在時的 fallback
+
+設計上保留接點：`SlotContext` 用 `hostId | null` 而非「必有 hostId」契約 — 未來無論是多數決還是 default launcher binding 都接得進來，executor 不需重寫。
 
 ---
 
@@ -214,20 +278,22 @@ Edit dialog 欄位：
 
 空狀態：「No quick commands yet — Start by creating one.」
 
-### 4.2 Workspace 入口
+### 4.2 Workspace 入口（Sidebar `WorkspaceRow` 兩個進入點）
 
-Workspace 主面板新增 quick actions 區塊（位置由實作時定，原則上靠近 workspace header）：
+實作位置：`spa/src/features/workspace/components/WorkspaceRow.tsx`。兩個入口共用 `WORKSPACE_ACTIONS` slot；hostId 解析依 §3.2.1 多數決，邊界依 §3.2.2 顯示 host picker。
 
-```
-[ Workspace Name ]
-[ ⚡ Start CC ] [ 🔧 Build ]    ← bindings mountTo: WORKSPACE_ACTIONS 的 commands
-```
+**(i) 右鍵 context menu**（已有 `onContextMenuWorkspace` callback）：
+- 在既有 `WorkspaceContextMenu` 中插入 quick commands section（Settings 之上 + separator）
+- 列出 mount=WORKSPACE_ACTIONS 的 commands 為 menu items；無 binding 時整段隱藏（含 separator）
 
-按鈕點擊 → executor 建 session + 送 keys + 切過去。
+**(ii) Plus 按鈕 hover popover**（既有 [+] 按鈕，L108-121）：
+- Hover 觸發向左展開的 chip 列；半透明漸層壓底
+- mouseleave + focus blur 收回；無 binding 不展開
+- ⚠ 此入口為**過渡實作**：未來可能遷移到其他位置；Phase 1 不需精雕細琢
 
 ### 4.3 Host 詳情頁入口
 
-Host 詳情頁（Sessions section 之外、靠近 host 標題的 quick actions 區）：
+實作位置：`spa/src/components/hosts/SessionsSection.tsx`。new session 按鈕並列 + 移除 row 殘留 v1 整合：
 
 ```
 [ Host: Mini-Lab (online) ]
@@ -249,6 +315,8 @@ Host 詳情頁（Sessions section 之外、靠近 host 標題的 quick actions �
 - Slot button 必有 `aria-label`（`name` + `category` 後綴）+ `title` tooltip 顯示 `command` 內容（debug 用）
 - Slot button 群可 Tab 線性走訪
 - Toast 採 `role="status"` 或 `role="alert"`
+- Plus button hover popover：`onFocusCapture` / `onBlurCapture` 等同於 hover；popover 內按鈕可 Tab 走訪；Esc 收回
+- HostPickerPopover：Esc 取消（no-op）、方向鍵移動 host item、Enter 選定
 
 **Responsive / dark theme**：
 - Slot button 群在窄寬度 wrap（不橫向 overflow）
