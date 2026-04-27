@@ -154,7 +154,7 @@ describe('useTabStore', () => {
     expect(useTabStore.getState().activeTabId).toBe(tab.id)
   })
 
-  describe('openSingletonTab with opts.isSameKind', () => {
+  describe('openSingletonTab with opts.afterTabId', () => {
     beforeEach(() => {
       useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
     })
@@ -162,8 +162,7 @@ describe('useTabStore', () => {
     const editorContent = (path: string): PaneContent =>
       ({ kind: 'editor', source: { type: 'inapp' }, filePath: path } as never)
 
-    it('inserts new editor tab right after nearest editor tab to the right of active', () => {
-      // seed [s1, editor1, s2] in same workspace, active=s1
+    it('inserts new tab right after the supplied afterTabId', () => {
       const s1 = makeSessionTab('s1')
       const editor1 = createTab(editorContent('/x.ts'))
       const s2 = makeSessionTab('s2')
@@ -172,22 +171,15 @@ describe('useTabStore', () => {
         tabOrder: [s1.id, editor1.id, s2.id],
         activeTabId: s1.id,
       })
-      useWorkspaceStore.setState({
-        workspaces: [{
-          id: 'w', name: 'W', tabs: [s1.id, editor1.id, s2.id], activeTabId: s1.id, moduleConfig: {},
-        }],
-        activeWorkspaceId: 'w',
-      })
 
       const newId = useTabStore.getState().openSingletonTab(
         editorContent('/y.ts'),
-        { isSameKind: (c) => ['editor', 'image-preview', 'pdf-preview'].includes(c.kind) },
+        { afterTabId: editor1.id },
       )
-
       expect(useTabStore.getState().tabOrder).toEqual([s1.id, editor1.id, newId, s2.id])
     })
 
-    it('without opts, behaves like before (append last)', () => {
+    it('without opts, appends at end (legacy behaviour)', () => {
       const s1 = makeSessionTab('s1')
       useTabStore.setState({
         tabs: { [s1.id]: s1 },
@@ -198,30 +190,7 @@ describe('useTabStore', () => {
       expect(useTabStore.getState().tabOrder).toEqual([s1.id, newId])
     })
 
-    it('falls back to appending after active when no same-kind tab to the right', () => {
-      const s1 = makeSessionTab('s1')
-      const s2 = makeSessionTab('s2')
-      useTabStore.setState({
-        tabs: { [s1.id]: s1, [s2.id]: s2 },
-        tabOrder: [s1.id, s2.id],
-        activeTabId: s1.id,
-      })
-      useWorkspaceStore.setState({
-        workspaces: [{
-          id: 'w', name: 'W', tabs: [s1.id, s2.id], activeTabId: s1.id, moduleConfig: {},
-        }],
-        activeWorkspaceId: 'w',
-      })
-
-      const newId = useTabStore.getState().openSingletonTab(
-        editorContent('/y.ts'),
-        { isSameKind: (c) => c.kind === 'editor' },
-      )
-      // no editor in order → addTab uses afterTabId=s1 → inserts after s1
-      expect(useTabStore.getState().tabOrder).toEqual([s1.id, newId, s2.id])
-    })
-
-    it('does not call workspaceStore.insertTab — caller owns workspace insertion', () => {
+    it('does not touch useWorkspaceStore — caller is responsible for workspace.tabs', () => {
       const s1 = makeSessionTab('s1')
       useTabStore.setState({
         tabs: { [s1.id]: s1 },
@@ -234,12 +203,10 @@ describe('useTabStore', () => {
         }],
         activeWorkspaceId: 'w',
       })
-
       const newId = useTabStore.getState().openSingletonTab(
         editorContent('/y.ts'),
-        { isSameKind: (c) => c.kind === 'editor' },
+        { afterTabId: s1.id },
       )
-      // workspace ws.tabs should NOT contain newId — caller handles that
       const ws = useWorkspaceStore.getState().workspaces[0]
       expect(ws.tabs).toEqual([s1.id])
       expect(useTabStore.getState().tabs[newId]).toBeDefined()

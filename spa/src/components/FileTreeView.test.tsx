@@ -136,18 +136,16 @@ describe('FileTreeWorkspaceView', () => {
       { type: 'daemon', hostId: 'test-host' },
       expect.objectContaining({ name: 'README.md', path: '/home/user/README.md', extension: 'md' }),
     )
+    // openClusteredTab forwards a single afterTabId to BOTH stores so
+    // tabOrder and workspace.tabs agree on placement (the TabBar
+    // renders from workspace.tabs). The exact afterTabId depends on
+    // workspace state — here no active tab is seeded, so it falls
+    // through as undefined (append at end).
     expect(openSingletonTab).toHaveBeenCalledWith(
       mockContent,
-      expect.objectContaining({ isSameKind: expect.any(Function) }),
+      { afterTabId: undefined },
     )
-    expect(insertTab).toHaveBeenCalledWith('new-tab-id', TEST_WORKSPACE_ID)
-    // Predicate should classify file kinds (editor / image-preview / pdf-preview)
-    // as same-kind so file tabs cluster together.
-    const opts = openSingletonTab.mock.calls[0][1] as { isSameKind: (c: { kind: string }) => boolean }
-    expect(opts.isSameKind({ kind: 'editor' })).toBe(true)
-    expect(opts.isSameKind({ kind: 'image-preview' })).toBe(true)
-    expect(opts.isSameKind({ kind: 'pdf-preview' })).toBe(true)
-    expect(opts.isSameKind({ kind: 'tmux-session' })).toBe(false)
+    expect(insertTab).toHaveBeenCalledWith('new-tab-id', TEST_WORKSPACE_ID, undefined)
   })
 
   it('shows setup prompt when projectPath is not configured', () => {

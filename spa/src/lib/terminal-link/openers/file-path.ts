@@ -5,14 +5,21 @@ import type { FileOpener } from '../../file-opener-registry'
 import { resolveEditorHomePath } from '../../editor-home-resolver'
 
 export interface OpenSingletonTabOpts {
-  isSameKind?: (content: PaneContent) => boolean
+  afterTabId?: string
 }
 
 export interface FilePathOpenerDeps {
   getDefaultOpener(file: FileInfo): FileOpener | null
   openSingletonTab(content: PaneContent, opts?: OpenSingletonTabOpts): string
-  insertTab(tabId: string, workspaceId: string): void
+  insertTab(tabId: string, workspaceId: string, afterTabId?: string): void
   getActiveWorkspaceId(): string | null
+  /**
+   * Returns the tabId after which a new clustered tab should be
+   * inserted within `workspaceId`, or undefined to append at end. The
+   * returned value MUST be used both for `openSingletonTab` and
+   * `insertTab` — see `computeClusterInsertTarget` rationale for why.
+   */
+  computeInsertTarget(workspaceId: string | null, isSameKind: (c: PaneContent) => boolean): string | undefined
   fetchPaneCwd(hostId: string, sessionCode: string, signal?: AbortSignal): Promise<string>
   fetchPaneHome(hostId: string, sessionCode: string, signal?: AbortSignal): Promise<string>
 }
@@ -165,8 +172,9 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
       const content = opener.createContent(source, file)
       const targetWorkspaceId = sourceWorkspaceId ?? deps.getActiveWorkspaceId()
       if (!targetWorkspaceId) return
-      const tabId = deps.openSingletonTab(content, { isSameKind: isFileKind })
-      deps.insertTab(tabId, targetWorkspaceId)
+      const afterTabId = deps.computeInsertTarget(targetWorkspaceId, isFileKind)
+      const tabId = deps.openSingletonTab(content, { afterTabId })
+      deps.insertTab(tabId, targetWorkspaceId, afterTabId)
     },
   }
 }

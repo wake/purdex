@@ -5,9 +5,7 @@ import type { FileSource } from '../types/fs'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, findPane, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern } from '../lib/pane-tree'
 import { contentMatches } from '../lib/pane-utils'
-import { findInsertTarget } from '../lib/tab-insert/find-insert-target'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import { useWorkspaceStore } from './useWorkspaceStore'
 import type { UntitledDocumentState } from '../types/tab'
 
 // --- Persist migration helpers ---
@@ -110,13 +108,14 @@ function renameEditorPanesInLayout(
 
 export interface OpenSingletonOpts {
   /**
-   * Predicate over a tab's primary-pane content. When provided and no
-   * existing singleton match is found, the new tab is inserted right
-   * after the nearest matching tab to the right of activeTabId (within
-   * the active workspace). Without opts, the new tab is appended to the
-   * end of tabOrder (legacy behavior).
+   * Insert the new tab right after this tabId in tabOrder. Caller is
+   * responsible for computing this — typically via
+   * `computeClusterInsertTarget` so the same value can be forwarded to
+   * `useWorkspaceStore.insertTab` and keep workspace.tabs / tabOrder
+   * agreed on placement (the TabBar renders from workspace.tabs, so a
+   * mismatch silently regresses the clustering UX).
    */
-  isSameKind?: (content: PaneContent) => boolean
+  afterTabId?: string
 }
 
 interface TabState {
@@ -195,20 +194,11 @@ export const useTabStore = create<TabState>()(
             return id
           }
         }
-        // Not found — create + insert. If caller passes isSameKind, find
-        // the nearest matching tab to the right of activeTabId within the
-        // active workspace's visible order; otherwise append to the end.
-        // Workspace insertion (ws.tabs) is the caller's responsibility.
+        // Not found — create + insert at caller-supplied position
+        // (or append at end). Workspace insertion (ws.tabs) is the
+        // caller's responsibility.
         const tab = createTab(content)
-        let afterTabId: string | undefined
-        if (opts?.isSameKind && state.activeTabId) {
-          const wsState = useWorkspaceStore.getState()
-          const wsId = wsState.activeWorkspaceId
-          const ws = wsId ? wsState.workspaces.find((w) => w.id === wsId) : null
-          const visibleOrder = ws ? ws.tabs.filter((tid) => !!state.tabs[tid]) : state.tabOrder
-          afterTabId = findInsertTarget(visibleOrder, state.activeTabId, state.tabs, opts.isSameKind)
-        }
-        get().addTab(tab, afterTabId)
+        get().addTab(tab, opts?.afterTabId)
         get().setActiveTab(tab.id)
         return tab.id
       },

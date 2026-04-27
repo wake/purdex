@@ -40,6 +40,7 @@ import {
 import { InterfaceSection } from '../../components/settings/InterfaceSection'
 import { NewTabSubsection } from '../../components/settings/new-tab/NewTabSubsection'
 import { registerBuiltinTerminalLinks } from '../terminal-link'
+import { computeClusterInsertTarget } from '../tab-insert/compute-cluster-insert-target'
 import { fetchSessionCwd, fetchSessionHome } from '../host-api'
 import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
 import { openBrowserTab } from '../open-browser-tab'
@@ -315,8 +316,9 @@ export function registerBuiltinModules(): void {
     filePathOpener: {
       getDefaultOpener,
       openSingletonTab: (content, opts) => useTabStore.getState().openSingletonTab(content, opts),
-      insertTab: (tabId, wsId) => useWorkspaceStore.getState().insertTab(tabId, wsId),
+      insertTab: (tabId, wsId, afterTabId) => useWorkspaceStore.getState().insertTab(tabId, wsId, afterTabId),
       getActiveWorkspaceId: () => useWorkspaceStore.getState().activeWorkspaceId,
+      computeInsertTarget: (wsId, isSameKind) => computeClusterInsertTarget(wsId, isSameKind),
       fetchPaneCwd: (hostId, sessionCode, signal) => fetchSessionCwd(hostId, sessionCode, signal),
       fetchPaneHome: (hostId, sessionCode, signal) => fetchSessionHome(hostId, sessionCode, signal),
     },

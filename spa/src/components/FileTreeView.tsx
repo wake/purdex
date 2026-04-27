@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { FolderSimple, File, CaretRight, CaretDown } from '@phosphor-icons/react'
 import { useHostStore } from '../stores/useHostStore'
 import { useWorkspaceStore } from '../features/workspace/store'
-import { useTabStore } from '../stores/useTabStore'
 import { getFsBackend } from '../lib/fs-backend'
 import { getDefaultOpener } from '../lib/file-opener-registry'
+import { openClusteredTab } from '../lib/tab-insert/open-clustered-tab'
 import type { ViewProps } from '../lib/module-registry'
 import type { FileSource, FileInfo, FileEntry } from '../types/fs'
 import type { PaneContent } from '../types/tab'
@@ -134,8 +134,7 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
                   const opener = getDefaultOpener(fileInfo)
                   if (opener) {
                     const content = opener.createContent(source, fileInfo)
-                    const tabId = useTabStore.getState().openSingletonTab(content, { isSameKind: isFileKind })
-                    useWorkspaceStore.getState().insertTab(tabId, workspaceId)
+                    openClusteredTab(content, isFileKind, workspaceId)
                   }
                 }
               }}
