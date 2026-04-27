@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { registerBuiltinModules } from '../index'
+import { registerBuiltinModules, resetFileOpenerRegistryForHmr } from '../index'
 import {
   clearAllForHmr,
   getDefaultOpener,
@@ -46,5 +46,11 @@ describe('registerBuiltinModules orchestrator', () => {
   it('returns image-preview as the default opener for png files', () => {
     const png = { name: 'a.png', path: '/a.png', extension: 'png', size: 1, isDirectory: false }
     expect(getDefaultOpener(png)?.id).toBe('image-preview')
+  })
+
+  it('resetFileOpenerRegistryForHmr clears every registered opener', () => {
+    expect(getRegisteredOpeners().length).toBeGreaterThan(0)
+    resetFileOpenerRegistryForHmr()
+    expect(getRegisteredOpeners()).toEqual([])
   })
 })

@@ -57,6 +57,7 @@ import { LogsSection } from '../../components/hosts/LogsSection'
 import { editorModuleDefinition } from './editor-module'
 import { registerBuiltinFsBackends } from './fs-backends'
 import { applyModuleFileOpeners } from './module-file-openers'
+import { clearAllForHmr as clearFileOpenerRegistryForHmr } from '../file-opener-registry'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
   const handleSelect = (content: PaneContent) => {
@@ -94,6 +95,16 @@ function InterfaceSectionHost() {
 
 export { dispatchSettingsContributions } from '../dispatch-settings-contributions'
 
+/**
+ * Clear every entry in the file-opener registry. Wired into HMR dispose so
+ * editing this module (or any module that owns openers) doesn't leave stale
+ * duplicates after re-import. Re-registration runs through
+ * `applyModuleFileOpeners()` at the next bootstrap.
+ */
+export function resetFileOpenerRegistryForHmr(): void {
+  clearFileOpenerRegistryForHmr()
+}
+
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     // F2 + F4: the HMR dispose hook must clear BOTH the committed
@@ -103,6 +114,7 @@ if (import.meta.hot) {
     // point that keeps the write-side registry APIs off this module's
     // import surface (lint-enforced by F4).
     resetSettingsContributionsForHmr()
+    resetFileOpenerRegistryForHmr()
   })
 }
 
