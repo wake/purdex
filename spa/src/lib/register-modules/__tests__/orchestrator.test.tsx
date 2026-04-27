@@ -1,24 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { registerBuiltinModules, resetFileOpenerRegistryForHmr } from '../index'
+import { resetFileOpenerRegistryForHmr } from '../index'
+import { getDefaultOpener, getRegisteredOpeners } from '../../file-opener-registry'
+import { getModule } from '../../module-registry'
 import {
-  clearAllForHmr,
-  getDefaultOpener,
-  getRegisteredOpeners,
-} from '../../file-opener-registry'
-import { clearModuleRegistry, getModule } from '../../module-registry'
-import { clearContributions } from '../../settings-contribution-registry'
+  clearAllBuiltinModuleRegistries,
+  resetAndRegisterBuiltinModules,
+  resetModuleEnabledStore,
+} from '../../__tests__/test-bootstrap-harness'
 
 beforeEach(() => {
-  clearContributions()
-  clearModuleRegistry()
-  clearAllForHmr()
-  registerBuiltinModules()
+  resetAndRegisterBuiltinModules()
 })
 
 afterEach(() => {
-  clearContributions()
-  clearModuleRegistry()
-  clearAllForHmr()
+  clearAllBuiltinModuleRegistries()
+  resetModuleEnabledStore()
 })
 
 describe('registerBuiltinModules orchestrator', () => {

@@ -65,6 +65,10 @@ export default defineConfig([
       '**/settings-section-registry.ts',
       '**/*.test.ts',
       '**/*.test.tsx',
+      // Test-only helpers under __tests__/ (e.g. shared bootstrap harness)
+      // need the same access as test files themselves.
+      '**/__tests__/**/*.ts',
+      '**/__tests__/**/*.tsx',
     ],
     rules: {
       'no-restricted-imports': 'off',

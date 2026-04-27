@@ -2,10 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { registerBuiltinModules } from '../register-modules'
 import { useModuleEnabledStore } from '../../stores/useModuleEnabledStore'
-import { clearAllForHmr, getDefaultOpener } from '../file-opener-registry'
-import { clearModuleRegistry, resolvePaneRenderer } from '../module-registry'
-import { clearContributions } from '../settings-contribution-registry'
+import { getDefaultOpener } from '../file-opener-registry'
+import { resolvePaneRenderer } from '../module-registry'
 import { PaneLayoutRenderer } from '../../components/PaneLayoutRenderer'
+import {
+  clearAllBuiltinModuleRegistries,
+  resetAndRegisterBuiltinModules,
+  resetModuleEnabledStore,
+} from './test-bootstrap-harness'
 import type { PaneLayout } from '../../types/tab'
 
 const txtFile = { name: 'a.txt', path: '/a.txt', extension: 'txt', size: 1, isDirectory: false }
@@ -17,19 +21,13 @@ const editorLeaf: PaneLayout = {
 
 beforeEach(() => {
   cleanup()
-  clearContributions()
-  clearModuleRegistry()
-  clearAllForHmr()
-  useModuleEnabledStore.setState({ enabled: {}, baseline: null })
-  registerBuiltinModules()
+  resetAndRegisterBuiltinModules()
 })
 
 afterEach(() => {
   cleanup()
-  clearContributions()
-  clearModuleRegistry()
-  clearAllForHmr()
-  useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+  clearAllBuiltinModuleRegistries()
+  resetModuleEnabledStore()
 })
 
 describe('Editor disable flow (end-to-end)', () => {
@@ -39,9 +37,7 @@ describe('Editor disable flow (end-to-end)', () => {
 
   it('disabling editor and re-bootstrapping leaves no opener for text files', () => {
     useModuleEnabledStore.getState().setEnabled('editor', false)
-    clearContributions()
-    clearModuleRegistry()
-    clearAllForHmr()
+    clearAllBuiltinModuleRegistries()
     registerBuiltinModules()
     expect(getDefaultOpener(txtFile)).toBeNull()
   })
@@ -64,16 +60,12 @@ describe('Editor disable flow (end-to-end)', () => {
 
   it('re-enabling editor through the placeholder restores the monaco-editor opener after bootstrap', () => {
     useModuleEnabledStore.getState().setEnabled('editor', false)
-    clearContributions()
-    clearModuleRegistry()
-    clearAllForHmr()
+    clearAllBuiltinModuleRegistries()
     registerBuiltinModules()
     expect(getDefaultOpener(txtFile)).toBeNull()
 
     useModuleEnabledStore.getState().setEnabled('editor', true)
-    clearContributions()
-    clearModuleRegistry()
-    clearAllForHmr()
+    clearAllBuiltinModuleRegistries()
     registerBuiltinModules()
     expect(getDefaultOpener(txtFile)?.id).toBe('monaco-editor')
   })
