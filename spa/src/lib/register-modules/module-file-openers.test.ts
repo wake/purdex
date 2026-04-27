@@ -7,6 +7,7 @@ import {
 import {
   clearAllForHmr,
   getRegisteredOpeners,
+  registerFileOpener,
   type FileOpener,
 } from '../file-opener-registry'
 import { useModuleEnabledStore } from '../../stores/useModuleEnabledStore'
@@ -85,5 +86,15 @@ describe('applyModuleFileOpeners', () => {
     registerModule({ id: 'm2', name: 'm2' })
     applyModuleFileOpeners()
     expect(getRegisteredOpeners().map((o) => o.id)).toEqual(['a'])
+  })
+
+  it('preserves openers registered through other paths when their module has no fileOpeners', () => {
+    // Simulates the Task 1.2 bootstrap state where Editor inline-registers
+    // three openers via registerEditorFileOpeners() before applyModuleFileOpeners
+    // runs, and Editor's ModuleDefinition does not yet declare fileOpeners.
+    registerModule({ id: 'm1', name: 'm1' })
+    registerFileOpener({ ...mkOpener('inline'), ownerModuleId: 'm1' })
+    applyModuleFileOpeners()
+    expect(getRegisteredOpeners().map((o) => o.id)).toEqual(['inline'])
   })
 })

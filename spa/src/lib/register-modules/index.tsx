@@ -56,6 +56,7 @@ import { UploadSection } from '../../components/hosts/UploadSection'
 import { LogsSection } from '../../components/hosts/LogsSection'
 import { editorModuleDefinition, registerEditorFileOpeners } from './editor-module'
 import { registerBuiltinFsBackends } from './fs-backends'
+import { applyModuleFileOpeners } from './module-file-openers'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
   const handleSelect = (content: PaneContent) => {
@@ -332,6 +333,14 @@ export function registerBuiltinModules(): void {
     { localId: 'uploads',   labelKey: 'hosts.uploads',   order: 4, component: UploadSection },
     { localId: 'logs',      labelKey: 'hosts.logs',      order: 5, component: LogsSection },
   ])
+
+  // Reconcile module-declared file openers with the file-opener registry.
+  // Must run after every registerModule(...) call so getModules() returns the
+  // fully populated set; iterating earlier would miss late-registered modules.
+  // No-op until Task 1.3 promotes Editor's inline file openers into
+  // editorModuleDefinition.fileOpeners — at which point this becomes the
+  // authoritative wire-up and registerEditorFileOpeners() goes away.
+  applyModuleFileOpeners()
 
   // Capture the module-enabled baseline for the Modules Switchboard. Runs
   // after all registerModule(...) calls so `getModules()` returns the fully
