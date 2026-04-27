@@ -1,6 +1,6 @@
-# Lights Rebuild — Phase 4a-1 Plan v1.9 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v1.10 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v1.9（Round 9 codex review fix — 1 P2 substantive 採納）
+**Status**: draft v1.10（Round 10 codex review fix — 2 P2 R9-propagation gaps 採納）
 
 ## v1.x 演進
 
@@ -16,6 +16,7 @@
 | v1.7 | R7 codex review fix（1 P2 + 1 P3）：(1) §2.3.3 startWatch pseudo-code 用未定義 `target`，既有 callsite 都是 `session + ":"` 形式；明寫 `target := session + ":"` 在 startWatch / stopWatch contract，避免 implementer 編譯失敗或 bare-session 啟 watcher；(2) §2.4.4 標題寫「測試（5 tests）」但表格列 CC1-CC6 共 6 個；改為「測試（6 tests — R2 +CC6）」 |
 | v1.8 | R8 codex review fix（1 P2 + 1 P3）：(1) §2.3.3 startWatch pseudo-code 仍用未定義 `agentProvider` 變數 + `defaultProbeProfile` 為 unqualified type；補完整 provider lookup（registry → agentType → provider）+ 改 `agentpkg.ProbeProfile` qualified 命名；(2) §2.1.6 標題「測試（7 tests — R1 +PR2b）」與 §3 矩陣（8 tests）+ 表內列出 8 個 testID 不符；改為「測試（8 tests — R1 +PR2b / R2 +PR4b）」 |
 | v1.9 | R9 codex review fix（1 P2 substantive — **regression risk**）：legacy `CapturePaneContent(target, 10)` 是 **last 10 lines**（`tmux capture-pane -S -10`，hash bottom 10 行），但 v1.8 default profile `{TopLines: 10}` 配 `CapturePaneTopLines` 會 hash **top 10 lines**。codex/opencode 沒有 ProbeProfileProvider 走 default → 行為被默默改掉，違反 §6 G5 default profile parity gate（明訂「不實作 ProbeProfileProvider 的 agent 行為與 PR-4a-1 前等價」）。修法：擴 `WatchOptions` 加 `BottomLines int` field（與 `TopLines` 互斥）；default profile 改用 `{BottomLines: 10}` 保留 legacy capture 語意；新增 PR5b 測試覆蓋 BottomLines vs TopLines 行為差異 |
+| v1.10 | R10 codex review fix（2 P2 — R9-propagation gaps）：(1) §2.1.3 watchLoop pseudo-code 啟動描述只 branch `opts.TopLines`，沒處理新加的 `opts.BottomLines`；implementer 照寫，default profile `{BottomLines: 10}` 會 fallback 到 full pane capture，破壞 G5 parity；補成三分支（TopLines / BottomLines / 全零=full pane）；(2) §2.3.3 殘留 v1.8 stale 宣告 `var defaultProbeProfile = ProbeProfile{TopLines: 10, IdleStableTicks: 3}`，與下一段 R9 fix 的 `{BottomLines: 10}` 互斥同存；移除 stale 宣告 |
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -51,8 +52,8 @@ PR-4a-1 把目前 `internal/agent/probe/activity.go` 的 watcher 從「probe 解
 
 **Slice 1**：Probe primitive 重構
 - 新增 `ScreenChangeEvent` struct + `ScreenChangeCallback`
-- 新增 `WatchOptions{TopLines int, IdleStableTicks int}`（R1 fix #1 — 統一收 caller tuning，避免雙 API 分歧 + IdleStableTicks 無入口）
-- 新增 `Watch(target, opts, cb)` — 單一 entry：`opts.TopLines == 0` 走 full screen；`> 0` 走 top-N
+- 新增 `WatchOptions{TopLines int, BottomLines int, IdleStableTicks int}`（R1 fix #1 — 統一收 caller tuning，避免雙 API 分歧 + IdleStableTicks 無入口；R9 fix — 加 BottomLines 保留 legacy capture 語意）
+- 新增 `Watch(target, opts, cb)` — 單一 entry，三 capture mode（互斥）：`TopLines > 0` → top-N / `BottomLines > 0` → legacy last-N / 全零 → full pane
 - `watchLoop` 統一內部 poll 機制；watcher 自治（callback 不再 cancel/delete）；**`stableEmitted` flag**（R1 fix #2）— ScreenStable 每次 changed→stable transition 只觸發一次，避免 idle 重發
 - **移除**：`activityLoop` 對 `ActivitySignal{Running, Idle, ShellPrompt}` 的解讀；`StartWatch` 簽名換成新 primitive；舊 callback 路徑由 module 層接管
 - **保留**：`StopWatch` / `StopAllWatches` / `HasWatcher` 維持原語意
@@ -223,7 +224,11 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
 
 #### 2.1.3 `watchLoop` 內部 poll 機制（含 R1 fix #2）
 
-- 啟動：`captureFn` (closure 依 `opts.TopLines` 決定呼叫 `CapturePaneTopLines(target, opts.TopLines)` 或 `CapturePaneContent(target, fullScreenLineCount)`) → ticker 500ms → ctx loop
+- 啟動：`captureFn` (closure 依 opts 三分支選 capture 模式 — R10 fix 涵蓋 BottomLines)：
+  - `opts.TopLines > 0` → `tmux.CapturePaneTopLines(target, opts.TopLines)`
+  - `opts.BottomLines > 0` → `tmux.CapturePaneContent(target, opts.BottomLines)` （legacy semantics）
+  - both == 0 → `tmux.CapturePaneContent(target, 0)` （full visible pane）
+- 啟動 closure 後 → ticker 500ms → ctx loop
 - 邏輯：
   ```
   idleStableTicks = opts.IdleStableTicks; if idleStableTicks == 0 { idleStableTicks = 3 }
@@ -363,15 +368,11 @@ type ProbeProfile struct {
 
 放 `internal/agent/provider.go`。沿用 `StatusSupporter` / `HookInstaller` 的 optional interface 模式。
 
-#### 2.3.3 default profile（R1 fix #1：opts 結構流入 prober）
+#### 2.3.3 default profile + startWatch 邏輯（R1/R7/R8/R9/R10 fixes 整合）
 
-定義於 orchestrator package：
+定義於 orchestrator package（位於 `internal/module/agent`，使用 agentpkg-qualified type）：
 
-```go
-var defaultProbeProfile = ProbeProfile{TopLines: 10, IdleStableTicks: 3}
-```
-
-orchestrator `startWatch` 邏輯（R7 fix — 顯式組 tmux target；R8 fix — 完整 provider lookup + qualified type）：
+orchestrator `startWatch` 邏輯：
 ```go
 // defaultProbeProfile is a package-level constant (defined in
 // internal/module/agent, not internal/agent). Uses agentpkg-qualified
