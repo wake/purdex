@@ -229,13 +229,16 @@ describe('WorkspaceQuickCommandsContextMenu', () => {
     expect(createSession).toHaveBeenCalledWith('h1', expect.any(String), '~', 'terminal')
   })
 
-  // codex round-2 (high) — concurrent-delete transaction safety. createSession
-  // is async; if the workspace is deleted while it's in flight, insertTab
-  // silently no-ops on a missing workspace but setActiveWorkspace would still
-  // mutate active state and create an orphan tab. Read-back after insertTab
-  // is the guard.
-  it('workspace deleted between createSession and insertTab does NOT activate the dead workspace', async () => {
+  // codex round-2 (high) + round-3 (high) — concurrent-delete transaction
+  // safety. round-2 only asserted activeWorkspaceId; round-3 noted the orphan
+  // tab + activeTabId mutation still leaked. The fix combines a pre-check
+  // (closes most races) with a rollback path (closeTab + restore prior
+  // activeTabId) for the residual window.
+  it('workspace deleted while createSession in flight → no orphan tab, no active-tab mutation, no active-workspace mutation', async () => {
     const onClose = vi.fn()
+    // Snapshot the pre-click tabStore state.
+    const prevTabsCount = Object.keys(useTabStore.getState().tabs).length
+    const prevActiveTabId = useTabStore.getState().activeTabId
     const initialActiveWs = useWorkspaceStore.getState().activeWorkspaceId
     render(
       <WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId="h1" onClose={onClose} />,
@@ -248,14 +251,12 @@ describe('WorkspaceQuickCommandsContextMenu', () => {
     } as Partial<ReturnType<typeof useWorkspaceStore.getState>> as never)
     await new Promise<void>((r) => setTimeout(r, 0))
 
-    // Tab was created (createSession + openSingletonTab already ran)
-    // but it must not have been attached to or activated the deleted workspace.
-    const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === 'w1')
-    expect(ws).toBeUndefined()
-    // active id was null after deletion; switchToSession threw → switch_failed
-    // toast surfaced, but activeWorkspaceId must NOT have been forced back to 'w1'.
+    // Pre-check fast-fails before openSingletonTab → tabStore unchanged.
+    expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(prevTabsCount)
+    expect(useTabStore.getState().activeTabId).toBe(prevActiveTabId)
+    // Workspace stays gone; activeWorkspaceId NOT forced back to 'w1'.
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === 'w1')).toBeUndefined()
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(null)
-    // initial sanity (setup defaulted it to 'w1')
     expect(initialActiveWs).toBe('w1')
     // executor's finally still fires onClose
     expect(onClose).toHaveBeenCalled()

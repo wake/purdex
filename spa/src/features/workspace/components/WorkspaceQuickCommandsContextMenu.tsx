@@ -108,15 +108,25 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
   // bound to the hook, so we replicate inline here using the same store
   // primitives it uses).
   //
-  // codex round-2 (high) — concurrent-delete transaction safety: createSession
-  // is async. If the workspace is deleted while it's in flight, `insertTab`
-  // silently no-ops on a missing workspace (store.ts:147,153) but
-  // `setActiveWorkspace` accepts any id — so without a read-back guard we'd
-  // create an orphan tab AND point activeWorkspaceId at a workspace that no
-  // longer exists. Read back the workspace's tab list after `insertTab` to
-  // confirm the insert actually landed before mutating active state.
+  // codex round-2 (high) + round-3 (high) — concurrent-delete transaction
+  // safety. createSession is async. If the workspace is deleted while it's in
+  // flight:
+  //   1. pre-check (closes most race windows before they open).
+  //   2. read-back guard after insertTab catches the residual race.
+  //   3. rollback on residual race: close the orphan tab and restore the
+  //      previous activeTabId so the deleted-workspace path leaves NO
+  //      observable mutation in tabStore. (round-2 only restored
+  //      activeWorkspaceId; the orphan tab and activeTabId mutation persisted.)
   const switchToSession = useCallback(
     (h: string, sessionCode: string) => {
+      // (1) pre-check — fail fast if workspace is already gone.
+      if (!useWorkspaceStore.getState().workspaces.some((w) => w.id === workspaceId)) {
+        throw new Error(
+          `WorkspaceQuickCommandsContextMenu: workspace ${workspaceId} no longer exists; aborting before tab creation`,
+        )
+      }
+      // Snapshot for rollback if the residual race fires.
+      const prevActiveTabId = useTabStore.getState().activeTabId
       // codex round-1 B5 — fill ALL tmux-session content fields per types/tab.ts
       const tabId = useTabStore.getState().openSingletonTab({
         kind: 'tmux-session',
@@ -127,18 +137,22 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
         tmuxInstance: '',
       })
       useWorkspaceStore.getState().insertTab(tabId, workspaceId)
+      // (2) read-back — workspace may have been deleted between the pre-check
+      // and insertTab.
       const inserted =
         useWorkspaceStore
           .getState()
           .workspaces.find((w) => w.id === workspaceId)
           ?.tabs.includes(tabId) ?? false
       if (!inserted) {
-        // Workspace was deleted between createSession and insertTab; bail out
-        // before touching activeWorkspaceId. Throw so slot-executor's trySwitch
-        // observes the failure and surfaces switch_failed instead of pretending
-        // the navigation succeeded.
+        // (3) rollback — close the freshly-created tab and restore the prior
+        // activeTabId so the failed switch leaves no orphan + no dangling
+        // active-tab mutation. closeTab is a no-op on a locked tab, but the
+        // tabs we create here are unlocked by default (createTab default).
+        useTabStore.getState().closeTab(tabId)
+        useTabStore.getState().setActiveTab(prevActiveTabId)
         throw new Error(
-          `WorkspaceQuickCommandsContextMenu: workspace ${workspaceId} no longer exists; tab ${tabId} created but not activated`,
+          `WorkspaceQuickCommandsContextMenu: workspace ${workspaceId} deleted mid-flight; rolled back tab ${tabId}`,
         )
       }
       useWorkspaceStore.getState().setActiveWorkspace(workspaceId)
