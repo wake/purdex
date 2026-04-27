@@ -136,8 +136,16 @@ describe('FileTreeWorkspaceView', () => {
       { type: 'daemon', hostId: 'test-host' },
       expect.objectContaining({ name: 'README.md', path: '/home/user/README.md', extension: 'md' }),
     )
-    expect(openSingletonTab).toHaveBeenCalledWith(mockContent)
-    expect(insertTab).toHaveBeenCalledWith('new-tab-id', TEST_WORKSPACE_ID)
+    // openClusteredTab forwards a single afterTabId to BOTH stores so
+    // tabOrder and workspace.tabs agree on placement (the TabBar
+    // renders from workspace.tabs). The exact afterTabId depends on
+    // workspace state — here no active tab is seeded, so it falls
+    // through as undefined (append at end).
+    expect(openSingletonTab).toHaveBeenCalledWith(
+      mockContent,
+      { afterTabId: undefined },
+    )
+    expect(insertTab).toHaveBeenCalledWith('new-tab-id', TEST_WORKSPACE_ID, undefined)
   })
 
   it('shows setup prompt when projectPath is not configured', () => {

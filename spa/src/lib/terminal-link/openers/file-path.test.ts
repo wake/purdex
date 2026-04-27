@@ -23,9 +23,10 @@ function makeDeps() {
   }
   const getDefaultOpener = vi.fn((): FileOpener | null => fakeOpener)
   const getActiveWorkspaceId = vi.fn((): string | null => 'ws-1')
+  const computeInsertTarget = vi.fn((): string | undefined => 'after-tab-id')
   const fetchPaneCwd = vi.fn(async (_h: string, _s: string, _sig?: AbortSignal) => '/home/user/proj')
   const fetchPaneHome = vi.fn(async (_h: string, _s: string, _sig?: AbortSignal) => '/home/user')
-  return { openSingletonTab, insertTab, getDefaultOpener, getActiveWorkspaceId, fetchPaneCwd, fetchPaneHome, fakeOpener, paneContent }
+  return { openSingletonTab, insertTab, getDefaultOpener, getActiveWorkspaceId, computeInsertTarget, fetchPaneCwd, fetchPaneHome, fakeOpener, paneContent }
 }
 
 describe('file-path opener', () => {
@@ -61,8 +62,23 @@ describe('file-path opener', () => {
       { type: 'daemon', hostId: 'h1' },
       expect.objectContaining({ path: '/a/b.ts' }),
     )
-    expect(deps.openSingletonTab).toHaveBeenCalledWith(deps.paneContent)
-    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-1')
+    // Caller forwards the same `afterTabId` to BOTH stores so tabOrder
+    // and workspace.tabs agree on placement (TabBar renders from
+    // workspace.tabs).
+    expect(deps.computeInsertTarget).toHaveBeenCalledWith('ws-1', expect.any(Function))
+    expect(deps.openSingletonTab).toHaveBeenCalledWith(
+      deps.paneContent,
+      { afterTabId: 'after-tab-id' },
+    )
+    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-1', 'after-tab-id')
+    // Predicate passed to computeInsertTarget should classify file kinds
+    // (editor / image-preview / pdf-preview) as same-kind.
+    const isSameKind = (deps.computeInsertTarget as ReturnType<typeof vi.fn>).mock.calls[0][1] as (c: { kind: string }) => boolean
+    expect(isSameKind({ kind: 'editor' })).toBe(true)
+    expect(isSameKind({ kind: 'image-preview' })).toBe(true)
+    expect(isSameKind({ kind: 'pdf-preview' })).toBe(true)
+    expect(isSameKind({ kind: 'tmux-session' })).toBe(false)
+    expect(isSameKind({ kind: 'browser' })).toBe(false)
   })
 
   it('no-op when no FileOpener matches', async () => {
@@ -89,7 +105,7 @@ describe('file-path opener', () => {
       { hostId: 'h1', workspaceId: 'ws-source' },
       new MouseEvent('click'),
     )
-    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-source')
+    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-source', 'after-tab-id')
   })
 
   it('prefers link-source workspace even when active workspace changes mid-await (R2 codex)', async () => {
@@ -105,7 +121,7 @@ describe('file-path opener', () => {
       { hostId: 'h1', sessionCode: 's1', workspaceId: 'ws-source' },
       new MouseEvent('click'),
     )
-    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-source')
+    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-source', 'after-tab-id')
   })
 
   it('prefers link-source workspace when active changes during cwd resolve for relative paths (R2 codex)', async () => {
@@ -120,7 +136,7 @@ describe('file-path opener', () => {
       { hostId: 'h1', sessionCode: 's1', workspaceId: 'ws-source' },
       new MouseEvent('click'),
     )
-    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-source')
+    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-source', 'after-tab-id')
   })
 
   it('no-op when ctx.workspaceId undefined and active workspace is null (R2 codex)', async () => {
@@ -146,7 +162,7 @@ describe('file-path opener', () => {
       { hostId: 'h1', sessionCode: 's1' /* no workspaceId */ },
       new MouseEvent('click'),
     )
-    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-after')
+    expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-after', 'after-tab-id')
   })
 
   it('no-op when direct open without meta.path (canOpen bypass)', async () => {

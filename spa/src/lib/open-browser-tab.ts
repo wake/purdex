@@ -1,7 +1,7 @@
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { createTab } from '../types/tab'
-import { findBrowserInsertTarget } from './find-browser-insert-target'
+import { findInsertTarget } from './tab-insert/find-insert-target'
 
 /**
  * Open a new browser tab with the given URL.
@@ -19,7 +19,7 @@ export function openBrowserTab(url: string): void {
   const visibleOrder = ws ? ws.tabs.filter((id) => !!tabState.tabs[id]) : tabState.tabOrder
 
   const afterTabId = activeTabId
-    ? findBrowserInsertTarget(visibleOrder, activeTabId, tabState.tabs)
+    ? findInsertTarget(visibleOrder, activeTabId, tabState.tabs, (c) => c.kind === 'browser')
     : undefined
 
   useTabStore.getState().addTab(tab, afterTabId)

@@ -106,6 +106,18 @@ function renameEditorPanesInLayout(
     : layout
 }
 
+export interface OpenSingletonOpts {
+  /**
+   * Insert the new tab right after this tabId in tabOrder. Caller is
+   * responsible for computing this — typically via
+   * `computeClusterInsertTarget` so the same value can be forwarded to
+   * `useWorkspaceStore.insertTab` and keep workspace.tabs / tabOrder
+   * agreed on placement (the TabBar renders from workspace.tabs, so a
+   * mismatch silently regresses the clustering UX).
+   */
+  afterTabId?: string
+}
+
 interface TabState {
   tabs: Record<string, Tab>
   tabOrder: string[]
@@ -113,7 +125,7 @@ interface TabState {
   visitHistory: string[]
 
   addTab: (tab: Tab, afterTabId?: string) => void
-  openSingletonTab: (content: PaneContent) => string
+  openSingletonTab: (content: PaneContent, opts?: OpenSingletonOpts) => string
   closeTab: (id: string) => void
   setActiveTab: (id: string | null) => void
   setViewMode: (tabId: string, paneId: string, mode: 'terminal' | 'stream') => void
@@ -170,7 +182,7 @@ export const useTabStore = create<TabState>()(
           }
         }),
 
-      openSingletonTab: (content) => {
+      openSingletonTab: (content, opts) => {
         const state = get()
         // Scan all tabs' primary pane for matching content
         for (const id of state.tabOrder) {
@@ -182,9 +194,11 @@ export const useTabStore = create<TabState>()(
             return id
           }
         }
-        // Not found — create new tab
+        // Not found — create + insert at caller-supplied position
+        // (or append at end). Workspace insertion (ws.tabs) is the
+        // caller's responsibility.
         const tab = createTab(content)
-        get().addTab(tab)
+        get().addTab(tab, opts?.afterTabId)
         get().setActiveTab(tab.id)
         return tab.id
       },

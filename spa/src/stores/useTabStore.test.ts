@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useTabStore } from './useTabStore'
+import { useWorkspaceStore } from './useWorkspaceStore'
 import { createTab } from '../types/tab'
 import type { PaneContent } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
@@ -151,6 +152,65 @@ describe('useTabStore', () => {
     // openSingletonTab should activate the existing dashboard tab
     useTabStore.getState().openSingletonTab(content)
     expect(useTabStore.getState().activeTabId).toBe(tab.id)
+  })
+
+  describe('openSingletonTab with opts.afterTabId', () => {
+    beforeEach(() => {
+      useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
+    })
+
+    const editorContent = (path: string): PaneContent =>
+      ({ kind: 'editor', source: { type: 'inapp' }, filePath: path } as never)
+
+    it('inserts new tab right after the supplied afterTabId', () => {
+      const s1 = makeSessionTab('s1')
+      const editor1 = createTab(editorContent('/x.ts'))
+      const s2 = makeSessionTab('s2')
+      useTabStore.setState({
+        tabs: { [s1.id]: s1, [editor1.id]: editor1, [s2.id]: s2 },
+        tabOrder: [s1.id, editor1.id, s2.id],
+        activeTabId: s1.id,
+      })
+
+      const newId = useTabStore.getState().openSingletonTab(
+        editorContent('/y.ts'),
+        { afterTabId: editor1.id },
+      )
+      expect(useTabStore.getState().tabOrder).toEqual([s1.id, editor1.id, newId, s2.id])
+    })
+
+    it('without opts, appends at end (legacy behaviour)', () => {
+      const s1 = makeSessionTab('s1')
+      useTabStore.setState({
+        tabs: { [s1.id]: s1 },
+        tabOrder: [s1.id],
+        activeTabId: s1.id,
+      })
+      const newId = useTabStore.getState().openSingletonTab(editorContent('/a.ts'))
+      expect(useTabStore.getState().tabOrder).toEqual([s1.id, newId])
+    })
+
+    it('does not touch useWorkspaceStore — caller is responsible for workspace.tabs', () => {
+      const s1 = makeSessionTab('s1')
+      useTabStore.setState({
+        tabs: { [s1.id]: s1 },
+        tabOrder: [s1.id],
+        activeTabId: s1.id,
+      })
+      useWorkspaceStore.setState({
+        workspaces: [{
+          id: 'w', name: 'W', tabs: [s1.id], activeTabId: s1.id, moduleConfig: {},
+        }],
+        activeWorkspaceId: 'w',
+      })
+      const newId = useTabStore.getState().openSingletonTab(
+        editorContent('/y.ts'),
+        { afterTabId: s1.id },
+      )
+      const ws = useWorkspaceStore.getState().workspaces[0]
+      expect(ws.tabs).toEqual([s1.id])
+      expect(useTabStore.getState().tabs[newId]).toBeDefined()
+    })
   })
 
   it('setViewMode updates pane mode', () => {
