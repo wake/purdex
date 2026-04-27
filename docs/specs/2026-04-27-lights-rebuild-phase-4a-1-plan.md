@@ -1,6 +1,6 @@
-# Lights Rebuild — Phase 4a-1 Plan v1.11 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v1.12 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v1.11（Round 11 codex review fix — 1 P2 substantive + 1 P2 editorial 採納）
+**Status**: draft v1.12（Round 12 codex review fix — 1 P1 substantive 採納）
 
 ## v1.x 演進
 
@@ -18,6 +18,7 @@
 | v1.9 | R9 codex review fix（1 P2 substantive — **regression risk**）：legacy `CapturePaneContent(target, 10)` 是 **last 10 lines**（`tmux capture-pane -S -10`，hash bottom 10 行），但 v1.8 default profile `{TopLines: 10}` 配 `CapturePaneTopLines` 會 hash **top 10 lines**。codex/opencode 沒有 ProbeProfileProvider 走 default → 行為被默默改掉，違反 §6 G5 default profile parity gate（明訂「不實作 ProbeProfileProvider 的 agent 行為與 PR-4a-1 前等價」）。修法：擴 `WatchOptions` 加 `BottomLines int` field（與 `TopLines` 互斥）；default profile 改用 `{BottomLines: 10}` 保留 legacy capture 語意；新增 PR5b 測試覆蓋 BottomLines vs TopLines 行為差異 |
 | v1.10 | R10 codex review fix（2 P2 — R9-propagation gaps）：(1) §2.1.3 watchLoop pseudo-code 啟動描述只 branch `opts.TopLines`，沒處理新加的 `opts.BottomLines`；implementer 照寫，default profile `{BottomLines: 10}` 會 fallback 到 full pane capture，破壞 G5 parity；補成三分支（TopLines / BottomLines / 全零=full pane）；(2) §2.3.3 殘留 v1.8 stale 宣告 `var defaultProbeProfile = ProbeProfile{TopLines: 10, IdleStableTicks: 3}`，與下一段 R9 fix 的 `{BottomLines: 10}` 互斥同存；移除 stale 宣告 |
 | v1.11 | R11 codex review fix（1 P2 substantive + 1 P2 editorial）：(1) **substantive** — 新 watch-loop-owned watcher 對 spinner / elapsed-timer 每 tick fire ScreenChanged；orchestrator 每 500ms 重廣播 Running，違反 G5 parity（legacy fires once 後退出）。對稱於 R1 fix #2 的 `stableEmitted`，加 `changedEmitted` flag — 每次 stable→changed transition fire ScreenChanged 一次，下次 ScreenStable fire 後重新 arm；新增 PR1b 測試覆蓋連續 changed 無重發；(2) **editorial** — OR2 default profile fallback 期待還寫 `{TopLines: 10, IdleStableTicks: 3}`，與 R9/R10 default `{BottomLines: 10}` 矛盾；修為 `{BottomLines: 10, IdleStableTicks: 3}` |
+| v1.12 | R12 codex review fix（1 P1 substantive — graceWindow / changedEmitted 互動 bug）：場景：hook 觸發 → orchestrator.recordHookAt → graceWindow 2s 內 watcher fire ScreenChanged → probe 已 set `changedEmitted=true` 但 orchestrator suppress 廣播；若 pane 之後持續 changing（spinner / elapsed timer），watch loop 不會見到 ScreenStable transition → `changedEmitted` 永不 reset → 後續 ScreenChanged 不再 fire → 狀態永遠停在 hook-derived。修法：probe 加 `RearmChanged(target string)` + `RearmStable(target string)` 公開 API（symmetric 對稱），orchestrator 在 graceWindow suppress 時呼叫 `RearmChanged` 讓 probe 下次 diff 重新 emit；新增 PR4c + OR3b regression test |
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -273,6 +274,33 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
 - **R11 fix rationale**：對稱於 R1 fix #2 — spinner / elapsed-timer 場景每 tick hash diff，若不加 `changedEmitted` flag，新 watch-loop-owned 會每 500ms fire ScreenChanged → orchestrator 重廣播 StatusRunning → 同樣 ws/metrics 風暴；違反 G5 default-profile parity（legacy fire once 後退出，behavior 上 Running 只廣播一次）。雙 flag 形成「changed↔stable 兩 transition，各 arm/disarm 對方」狀態機，每個 transition 各自只 fire 一次
 - **R2 fix #2 rationale**：legacy `activityLoop` 用 `defer` 統一在 goroutine 退出時清 watcher map entry，所以 baseline 失敗的 early-return 也涵蓋；新 ownership 文字寫成「cleanup only happens on ctx cancel」會漏掉 baseline-failure path → watcher map 殘留死 entry → `HasWatcher(target) == true` 但實際上 goroutine 已退 → 後續 `Watch(target, ...)` 會把同一個 entry 的 cancel 替換掉但既有 goroutine 已死 → 行為不可預測。修法：在 baseline 失敗 early-return 前同步清自己的 entry（only-if-still-mine 用 `id` 比對，避免清到後續 watch 的）
 
+#### 2.1.3a Rearm API（R12 fix）
+
+```go
+// RearmChanged resets the watcher's changedEmitted flag so the next
+// hash diff (re)emits ScreenChanged. Used by the orchestrator when
+// a graceWindow-suppressed event would otherwise leave the watcher
+// in changedEmitted=true state with no foreseeable ScreenStable to
+// release it (continuous-changing pane scenarios — spinner / elapsed
+// timer). Idempotent; no-op if no watcher entry exists for target.
+func (p *Prober) RearmChanged(target string) {...}
+
+// RearmStable is the symmetric variant for stableEmitted. Currently
+// has no production caller — included for API symmetry and to support
+// future orchestrator policies that might suppress ScreenStable too.
+func (p *Prober) RearmStable(target string) {...}
+```
+
+實作：watcher entry 加 `rearmChanged chan struct{}` / `rearmStable chan struct{}`（buffered=1）；watch loop select 多增一個 case：
+```
+select ctx.Done -> return
+select tick -> ...(現有邏輯)
+select <-rearmChanged: changedEmitted = false; continue
+select <-rearmStable:  stableEmitted = false; continue
+```
+
+或更簡單：用 `atomic.Bool` 取代 `bool`；Rearm 直接 `Store(false)`。實作時 implementer 選最簡途徑（test-only 概念差異不大）。
+
 #### 2.1.4 Watcher ownership 變更
 
 - **Legacy**：`activityLoop` defer 內 `delete(p.watchers, target)`；callback fire 一次後 goroutine 自動退出 + 清自己
@@ -286,7 +314,7 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
 - `activityLoop` 內部 method — 改成 `watchLoop`
 - `hashCapture` 內部 method — 改成支援 captureFn closure 的版本
 
-#### 2.1.6 測試（10 tests — R1 +PR2b / R2 +PR4b / R9 +PR5b / R11 +PR1b）
+#### 2.1.6 測試（11 tests — R1 +PR2b / R2 +PR4b / R9 +PR5b / R11 +PR1b / R12 +PR4c）
 
 | Test | 重點 |
 |------|------|
@@ -297,6 +325,7 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
 | PR3 `TestWatch_DoesNotExitOnCallback` | 一次 ScreenChanged callback 後再注入 diff，驗證再發 ScreenChanged（loop 持續）|
 | PR4 `TestWatch_StopWatch_CancelsLoop` | StopWatch 後 capture mock 不再被 call、HasWatcher false |
 | PR4b `TestWatch_BaselineFailure_CleansMapEntry`（**R2 fix #2 regression**）| capture mock 對 first call 回 err；驗證 `Watch` 啟動後 200ms 內 `HasWatcher(target) == false`（goroutine 自己清 entry）|
+| PR4c `TestWatch_RearmChanged_AllowsReEmission`（**R12 fix regression**）| 注入 1 次 diff → ScreenChanged fire；不等 ScreenStable，直接 call `RearmChanged(target)`；再注入 1 次 diff → ScreenChanged 再 fire；symmetric for RearmStable |
 | PR5 `TestWatch_TopLinesIgnoresBottomChanges` | 注入 only-bottom-line-changed scenario，opts.TopLines=3 不報 changed；opts={}（full pane）報 changed |
 | PR5b `TestWatch_BottomLinesIgnoresTopChanges`（**R9 fix regression**）| 注入 only-top-line-changed scenario，opts.BottomLines=3 不報 changed；opts.TopLines=3 報 changed；驗證 BottomLines vs TopLines 走不同 capture path 且互斥 |
 | PR6 `TestWatch_TmuxErrorTickSkipped` | capture err 在 tick 中發生 → 不 fire ScreenChanged，下一 tick 復原 → 報 ScreenChanged |
@@ -450,7 +479,7 @@ if !active || currentAgent != agentType {
 }
 ```
 
-**Guard 2 — graceWindow 解讀**：
+**Guard 2 — graceWindow 解讀（含 R12 fix — 重新 arm probe）**：
 
 ```go
 o.graceMu.Lock()
@@ -460,6 +489,19 @@ if hasHook && time.Since(last) < probeGraceWindow {
     metrics.MetricProbeGraceWindowSuppressed.Add(1)
     if isDevMode() {
         log.Printf("[probe] graceWindow suppress session=%s agent=%s kind=%s", session, agentType, ev.Kind)
+    }
+    // R12 fix: re-arm probe so a future change can re-emit even if
+    // the pane keeps changing without a stable interval. Without this,
+    // a graceWindow-suppressed first ScreenChanged would leave probe's
+    // changedEmitted=true; continuous-changing panes (spinner, elapsed
+    // timer) would never see another stable→changed transition and
+    // status would stay frozen at the hook-derived value.
+    target := session + ":"
+    switch ev.Kind {
+    case probe.ScreenChanged:
+        o.parent.prober.RearmChanged(target)
+    case probe.ScreenStable:
+        o.parent.prober.RearmStable(target)
     }
     return
 }
@@ -487,13 +529,14 @@ case probe.ScreenStable:
 
 接著套用 Error Guard + projection update + broadcast（與既有 `onActivityDetected` 同邏輯，整段搬入 helper）。
 
-#### 2.3.6 測試（6 tests — R4 +1 OR6）
+#### 2.3.6 測試（7 tests — R4 +OR6 / R12 +OR3b）
 
 | Test | 重點 |
 |------|------|
 | OR1 `TestOrchestrator_StartWatchUsesAgentProfile` | mock cc agent 回 `{TopLines: 5, IdleStableTicks: 2}`；驗證 prober 收到 lines=5 / stable=2 |
 | OR2 `TestOrchestrator_DefaultProfileWhenAgentMissing` | mock agent 不實作 ProbeProfileProvider；驗證 fallback 到 `{BottomLines: 10, IdleStableTicks: 3}`（R11 fix — 對齊 R9/R10 default profile 改為 BottomLines）|
 | OR3 `TestOrchestrator_GraceWindowSuppressesEventWithinWindow` | recordHookAt → 1s 後注入 ScreenChanged；驗證無狀態變化、metrics counter +1 |
+| OR3b `TestOrchestrator_GraceWindowSuppressionReArmsProbe`（**R12 fix regression**）| recordHookAt → 1s 內注入 ScreenChanged → orchestrator suppress + 呼叫 prober.RearmChanged；驗證 prober watcher entry 的 changedEmitted 已被 reset；接著（仍在 graceWindow 內或剛 expire 後）再注入 diff → ScreenChanged 再 fire；驗證沒有 stuck status |
 | OR4 `TestOrchestrator_GraceWindowExpiresAfterWindow` | recordHookAt → 3s 後注入 ScreenChanged；驗證 StatusRunning 廣播 |
 | OR5 `TestOrchestrator_ErrorGuardBlocksProbeOverwrite` | currentStatus=StatusError；ScreenStable 注入；驗證 StatusError 維持、無 broadcast |
 | OR6 `TestOrchestrator_StaleCallbackGuard`（**R4 fix regression**）| 兩 sub-case：(a) stopWatch 後注入 ScreenChanged → 無 broadcast、無 metrics；(b) renameSession 前 watch oldName，rename 後注入 oldName 的 ScreenChanged callback → 無 broadcast、無 status 更新（驗證 currentAgent != agentType 比對）|
@@ -623,13 +666,13 @@ log 點（gated）：
 | Slice | Test ID 區段 | 數量 | 涵蓋 |
 |-------|--------------|------|------|
 | 0 | TT1-TT4 | 4 | tmux range API + fake executor parity |
-| 1 | PR1-PR1b + PR2-PR2b + PR3-PR4b + PR5-PR5b + PR6 | 10 | watcher 自治 / Top-N vs full screen / 多次 fire / err tick skip / stable-emit-once（R1 fix #2）/ baseline-fail map cleanup（R2 fix #2）/ BottomLines vs TopLines mutually exclusive（R9 fix）/ **changed-emit-once（R11 fix）**|
+| 1 | PR1-PR1b + PR2-PR2b + PR3-PR4c + PR5-PR5b + PR6 | 11 | watcher 自治 / Top-N vs full screen / 多次 fire / err tick skip / stable-emit-once（R1 fix #2）/ baseline-fail map cleanup（R2 fix #2）/ BottomLines vs TopLines mutually exclusive（R9 fix）/ changed-emit-once（R11 fix）/ **Rearm API（R12 fix）**|
 | 2 | (沿用既有) | 0 | shell prompt utility（純 visibility）|
-| 3 | OR1-OR6 | 6 | profile / graceWindow / Error Guard / **stale-callback guard（R4 fix）**|
+| 3 | OR1-OR6 + OR3b | 7 | profile / graceWindow / Error Guard / stale-callback guard（R4 fix）/ **graceWindow re-arm probe（R12 fix）**|
 | 4 | CC1-CC6 | 6 | cc profile + module wiring + E2E + rename rewatch via orchestrator（R2 fix #1）|
 | 7 | OB1-OB4 | 4 | expvar + PDX_DEV_MODE log |
 
-**總計**：30 tests（plan v1.3 §7.1 estimate 24 → +1 PR2b R1 / +1 PR4b R2 / +1 CC6 R2 / +1 OR6 R4 / +1 PR5b R9 / +1 PR1b R11 regression tests）。
+**總計**：32 tests（plan v1.3 §7.1 estimate 24 → +1 PR2b R1 / +1 PR4b R2 / +1 CC6 R2 / +1 OR6 R4 / +1 PR5b R9 / +1 PR1b R11 / +1 PR4c R12 / +1 OR3b R12 regression tests）。
 
 ---
 
@@ -762,14 +805,14 @@ scripts/check-pr-4a-1-boundary.sh (new)
 | Slice | 估 LoC | 估 tests |
 |-------|--------|----------|
 | 0 tmux API | ~40 | 4 |
-| 1 probe primitive | ~100 | 10（R1 +PR2b / R2 +PR4b / R9 +PR5b / R11 +PR1b）|
+| 1 probe primitive | ~115 | 11（R1 +PR2b / R2 +PR4b / R9 +PR5b / R11 +PR1b / R12 +PR4c）|
 | 2 shell prompt export | ~5 | 0 |
-| 3 module orchestrator | ~85 | 6（R4 +OR6）|
+| 3 module orchestrator | ~95 | 7（R4 +OR6 / R12 +OR3b）|
 | 4 cc adoption | ~50 | 6（R2 +CC6 rename）|
 | 7 graceWindow + dev log + expvar | ~30 | 4 |
 | (extra) boundary script | ~30 | 0 |
 
-**總計**：~345 LoC + 30 tests（plan v1.3 §7.1 estimate 24 → R1 +1 / R2 +2 / R4 +1 / R9 +1 / R11 +1，總 +6 regression tests + R2 baseline-fail cleanup + rename callsite migration + R4 stale-callback guard + R9 BottomLines field + capture-mode dispatcher + R11 changedEmitted flag ~30 LoC，仍在 PR 合理 size 內）。
+**總計**：~370 LoC + 32 tests（plan v1.3 §7.1 estimate 24 → R1 +1 / R2 +2 / R4 +1 / R9 +1 / R11 +1 / R12 +2，總 +8 regression tests + R2 baseline-fail cleanup + rename callsite migration + R4 stale-callback guard + R9 BottomLines field + capture-mode dispatcher + R11 changedEmitted flag + R12 Rearm API ~50 LoC，仍在 PR 合理 size 內）。
 
 **屬中型 PR**。`go test` 預期 elapsed < 30s 內。
 
