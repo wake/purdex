@@ -1,0 +1,13 @@
+{
+  "kind": "strong-hook",
+  "hookName": "tool.execute.after",
+  "input": {
+    "sessionID": "ses_fixture_task_001",
+    "callID": "call_fixture_task_001",
+    "tool": "task"
+  },
+  "output": {
+    "title": "explore complete",
+    "output": "found 3 sessions"
+  }
+}

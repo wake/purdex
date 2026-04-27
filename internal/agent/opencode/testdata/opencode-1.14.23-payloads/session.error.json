@@ -1,0 +1,13 @@
+{
+  "kind": "bus-event",
+  "eventType": "session.error",
+  "properties": {
+    "sessionID": "ses_fixture_error_001",
+    "error": {
+      "name": "ProviderError",
+      "data": {
+        "message": "request timed out"
+      }
+    }
+  }
+}

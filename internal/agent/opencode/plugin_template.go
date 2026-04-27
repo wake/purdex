@@ -12,94 +12,13 @@ import (
 
 const managedMarker = "pdx-managed:opencode-hooks:v1"
 
+// mappedHookEvent describes a (Name, Payload) pair the JS template would
+// emit() for a given Bus event or strong-hook fixture. Used by OC1's
+// pluginSimState (the live JS-mirror) to assert renderManagedPlugin's
+// output without spawning a Bun runtime.
 type mappedHookEvent struct {
 	Name    string
 	Payload map[string]any
-}
-
-type pluginState struct {
-	activeSubagents map[string]string
-	suppressIdle    bool
-}
-
-func newPluginState() *pluginState {
-	return &pluginState{activeSubagents: make(map[string]string)}
-}
-
-func (s *pluginState) handleTaskStart(sessionID, callID string, args map[string]any) (mappedHookEvent, bool) {
-	key := subagentKey(sessionID, callID)
-	if key == "" {
-		return mappedHookEvent{}, false
-	}
-	if _, exists := s.activeSubagents[key]; exists {
-		return mappedHookEvent{}, false
-	}
-	agentType := firstString(args, "subagent_type", "agent")
-	if agentType == "" {
-		agentType = "task"
-	}
-	s.activeSubagents[key] = agentType
-	payload := map[string]any{
-		"agent_id":   callID,
-		"agent_type": agentType,
-	}
-	if description := strMapVal(args, "description"); description != "" {
-		payload["description"] = description
-	}
-	if prompt := strMapVal(args, "prompt"); prompt != "" {
-		payload["prompt"] = prompt
-	}
-	return mappedHookEvent{Name: "SubagentStart", Payload: payload}, true
-}
-
-func (s *pluginState) handleTaskStop(sessionID, callID, title, output string) (mappedHookEvent, bool) {
-	key := subagentKey(sessionID, callID)
-	if key == "" {
-		return mappedHookEvent{}, false
-	}
-	agentType, exists := s.activeSubagents[key]
-	if !exists {
-		return mappedHookEvent{}, false
-	}
-	delete(s.activeSubagents, key)
-	payload := map[string]any{
-		"agent_id":   callID,
-		"agent_type": agentType,
-	}
-	if title != "" {
-		payload["title"] = title
-	}
-	if output != "" {
-		payload["output"] = output
-	}
-	return mappedHookEvent{Name: "SubagentStop", Payload: payload}, true
-}
-
-func (s *pluginState) handleSessionError(errorName, errorDetails string) (mappedHookEvent, bool) {
-	s.suppressIdle = true
-	payload := map[string]any{}
-	if errorName != "" {
-		payload["error"] = errorName
-	}
-	if errorDetails != "" {
-		payload["error_details"] = errorDetails
-	}
-	return mappedHookEvent{Name: "StopFailure", Payload: payload}, true
-}
-
-func (s *pluginState) handleSessionIdle() (mappedHookEvent, bool) {
-	if s.suppressIdle {
-		s.suppressIdle = false
-		return mappedHookEvent{}, false
-	}
-	return mappedHookEvent{Name: "Stop", Payload: map[string]any{}}, true
-}
-
-func subagentKey(sessionID, callID string) string {
-	if sessionID == "" || callID == "" {
-		return ""
-	}
-	return sessionID + ":" + callID
 }
 
 func renderManagedPlugin(pdxPath string) string {
@@ -152,7 +71,8 @@ export const PurdexOpenCodeHooks = async () => {
             error_details: event.properties.error?.data?.message || '',
           })
           return
-        case 'session.idle':
+        case 'session.status':
+          if (event.properties.status?.type !== 'idle') return
           if (suppressIdleForSession.has(event.properties.sessionID)) {
             suppressIdleForSession.delete(event.properties.sessionID)
             return
@@ -165,6 +85,11 @@ export const PurdexOpenCodeHooks = async () => {
       }
     },
     'chat.message': async (input, output) => {
+      // New prompt cycle: clear any stale suppressIdleForSession entry
+      // the previous cycle's session.error armed. Without this, the next
+      // legitimate idle for this session is consumed by the stale entry
+      // and Stop is never emitted (session sticks Running/Error).
+      if (input.sessionID) suppressIdleForSession.delete(input.sessionID)
       const model = input.model
       const modelName = model ? (model.providerID + '/' + model.modelID) : ''
       await emit('UserPromptSubmit', {
@@ -303,15 +228,6 @@ func extractPdxPath(body string) (string, bool) {
 		return "", false
 	}
 	return unquoted, true
-}
-
-func firstString(values map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if value := strMapVal(values, key); value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func strMapVal(values map[string]any, key string) string {

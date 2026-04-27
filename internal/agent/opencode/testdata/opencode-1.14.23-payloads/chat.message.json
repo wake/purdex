@@ -1,0 +1,24 @@
+{
+  "kind": "strong-hook",
+  "hookName": "chat.message",
+  "input": {
+    "sessionID": "ses_fixture_chat_001",
+    "messageID": "msg_fixture_chat_001",
+    "agent": "build",
+    "model": {
+      "providerID": "anthropic",
+      "modelID": "claude-3-5-sonnet"
+    },
+    "variant": "default"
+  },
+  "output": {
+    "message": {
+      "id": "msg_fixture_chat_001",
+      "agent": "build",
+      "role": "user"
+    },
+    "parts": [
+      {"type": "text", "content": "hello"}
+    ]
+  }
+}

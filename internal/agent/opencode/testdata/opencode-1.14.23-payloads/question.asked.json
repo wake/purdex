@@ -1,0 +1,13 @@
+{
+  "kind": "bus-event",
+  "eventType": "question.asked",
+  "properties": {
+    "id": "q_fixture_asked_001",
+    "sessionID": "ses_fixture_q_001",
+    "questions": [
+      {"label": "approve?", "value": "approve"},
+      {"label": "deny?", "value": "deny"}
+    ],
+    "tool": "task"
+  }
+}

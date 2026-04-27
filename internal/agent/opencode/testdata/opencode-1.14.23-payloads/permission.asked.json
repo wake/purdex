@@ -1,0 +1,15 @@
+{
+  "kind": "bus-event",
+  "eventType": "permission.asked",
+  "properties": {
+    "id": "perm_fixture_asked_001",
+    "sessionID": "ses_fixture_perm_001",
+    "permission": "edit",
+    "patterns": ["src/**/*.ts"],
+    "metadata": {
+      "reason": "tool wants to edit"
+    },
+    "always": false,
+    "tool": "edit"
+  }
+}
