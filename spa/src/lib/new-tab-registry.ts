@@ -20,17 +20,34 @@ export interface NewTabProvider {
   moduleId?: string
 }
 
-const providers: NewTabProvider[] = []
+const providers = new Map<string, NewTabProvider>()
+
+function snapshot(): NewTabProvider[] {
+  return [...providers.values()].sort((a, b) => a.order - b.order)
+}
 
 export function registerNewTabProvider(provider: NewTabProvider): void {
-  providers.push(provider)
-  providers.sort((a, b) => a.order - b.order)
+  // Map-by-id storage means a re-register with the same id replaces the
+  // previous entry rather than duplicating it. HMR / bootstrap can call this
+  // repeatedly without leaking stale providers.
+  providers.set(provider.id, provider)
+}
+
+/**
+ * Drop every provider tagged with `moduleId === ownerModuleId`. Used by
+ * `registerEditorNewTabProviders()` (and any future module-owned helper) to
+ * stay idempotent across HMR / re-bootstrap.
+ */
+export function unregisterNewTabProvidersByModule(ownerModuleId: string): void {
+  for (const [id, p] of providers) {
+    if (p.moduleId === ownerModuleId) providers.delete(id)
+  }
 }
 
 export function getNewTabProviders(): NewTabProvider[] {
-  return [...providers]
+  return snapshot()
 }
 
 export function clearNewTabRegistry(): void {
-  providers.length = 0
+  providers.clear()
 }

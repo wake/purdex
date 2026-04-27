@@ -11,6 +11,7 @@ import {
   getModulesWithGlobalConfig,
   getModulesWithCommands,
   clearModuleRegistry,
+  resolvePaneRenderer,
 } from './module-registry'
 import type { ModuleDefinition } from './module-registry'
 
@@ -183,6 +184,119 @@ describe('workspaceConfig / globalConfig', () => {
     const result = getModulesWithGlobalConfig()
     expect(result).toHaveLength(1)
     expect(result[0].id).toBe('theme-mod')
+  })
+})
+
+describe('resolvePaneRenderer', () => {
+  it('returns kind=render with the component when the module is enabled', () => {
+    const Comp = DummyComponent
+    registerModule({
+      id: 'rt-enabled',
+      name: 'RT',
+      disableable: true,
+      panes: [{ kind: 'rt-pane', component: Comp }],
+    })
+    const r = resolvePaneRenderer('rt-pane', () => true)
+    expect(r.kind).toBe('render')
+    if (r.kind === 'render') expect(r.component).toBe(Comp)
+  })
+
+  it('returns kind=disabled when the disableable module is reported disabled', () => {
+    const Comp = DummyComponent
+    registerModule({
+      id: 'rt-disabled',
+      name: 'RT',
+      disableable: true,
+      panes: [{ kind: 'rt-pane', component: Comp }],
+    })
+    const r = resolvePaneRenderer('rt-pane', () => false)
+    expect(r.kind).toBe('disabled')
+    if (r.kind === 'disabled') {
+      expect(r.moduleId).toBe('rt-disabled')
+      expect(r.paneKind).toBe('rt-pane')
+      expect(r.customComponent).toBeUndefined()
+    }
+  })
+
+  it('passes through customComponent from module.disabledComponent', () => {
+    const Comp = DummyComponent
+    const Custom = (() => null) as React.FC<{ moduleId: string; paneKind: string }>
+    registerModule({
+      id: 'rt-custom',
+      name: 'RT',
+      disableable: true,
+      panes: [{ kind: 'rt-pane', component: Comp }],
+      disabledComponent: Custom,
+    })
+    const r = resolvePaneRenderer('rt-pane', () => false)
+    expect(r.kind).toBe('disabled')
+    if (r.kind === 'disabled') expect(r.customComponent).toBe(Custom)
+  })
+
+  it('non-disableable modules always render even when isEnabled returns false', () => {
+    const Comp = DummyComponent
+    registerModule({
+      id: 'rt-core',
+      name: 'RT',
+      panes: [{ kind: 'rt-pane', component: Comp }],
+    })
+    const r = resolvePaneRenderer('rt-pane', () => false)
+    expect(r.kind).toBe('render')
+  })
+
+  it('defaults isEnabled to () => true when no query is passed', () => {
+    const Comp = DummyComponent
+    registerModule({
+      id: 'rt-default',
+      name: 'RT',
+      disableable: true,
+      panes: [{ kind: 'rt-pane', component: Comp }],
+    })
+    const r = resolvePaneRenderer('rt-pane')
+    expect(r.kind).toBe('render')
+  })
+
+  it('returns kind=unknown when no module owns the pane kind', () => {
+    const r = resolvePaneRenderer('does-not-exist')
+    expect(r.kind).toBe('unknown')
+    if (r.kind === 'unknown') expect(r.paneKind).toBe('does-not-exist')
+  })
+})
+
+describe('module-registry fileOpeners and disabledComponent fields', () => {
+  it('preserves fileOpeners on ModuleDefinition through registration', () => {
+    const opener = {
+      id: 'noop',
+      label: 'Noop',
+      icon: 'File',
+      match: () => true,
+      priority: 'default' as const,
+      createContent: () => ({ kind: 'editor' }) as never,
+    }
+    registerModule({ id: 'mod-fo', name: 'FO', fileOpeners: [opener] })
+    expect(getModule('mod-fo')?.fileOpeners).toEqual([opener])
+  })
+
+  it('preserves disabledComponent reference without instantiating it', () => {
+    const Custom = (() => null) as React.FC<{ moduleId: string; paneKind: string }>
+    registerModule({
+      id: 'mod-dc',
+      name: 'DC',
+      disableable: true,
+      panes: [{ kind: 'dc-pane', component: DummyComponent }],
+      disabledComponent: Custom,
+    })
+    expect(getModule('mod-dc')?.disabledComponent).toBe(Custom)
+  })
+
+  it('disabledComponent defaults to undefined when not declared', () => {
+    registerModule({
+      id: 'mod-default',
+      name: 'Default',
+      disableable: true,
+      panes: [{ kind: 'd-pane', component: DummyComponent }],
+    })
+    expect(getModule('mod-default')?.disabledComponent).toBeUndefined()
   })
 })
 

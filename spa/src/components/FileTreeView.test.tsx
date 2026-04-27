@@ -113,6 +113,7 @@ describe('FileTreeWorkspaceView', () => {
     const mockContent = { kind: 'editor' as const, source: { type: 'daemon' as const, hostId: 'test-host' }, filePath: '/home/user/README.md' }
     const mockOpener = {
       id: 'monaco-editor',
+      ownerModuleId: 'editor',
       label: 'Text Editor',
       icon: 'File',
       match: () => true,

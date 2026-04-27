@@ -3,6 +3,7 @@ import {
   registerNewTabProvider,
   getNewTabProviders,
   clearNewTabRegistry,
+  unregisterNewTabProvidersByModule,
   type NewTabProviderProps,
 } from './new-tab-registry'
 
@@ -83,5 +84,32 @@ describe('new-tab-registry', () => {
     expect(getNewTabProviders()).toHaveLength(2)
     clearNewTabRegistry()
     expect(getNewTabProviders()).toHaveLength(0)
+  })
+
+  it('registerNewTabProvider replaces a previous entry with the same id', () => {
+    registerNewTabProvider({ id: 'x', label: 'A', icon: 'A', order: 1, component: Stub })
+    registerNewTabProvider({ id: 'x', label: 'B', icon: 'B', order: 2, component: Stub })
+    const all = getNewTabProviders()
+    expect(all).toHaveLength(1)
+    expect(all[0].label).toBe('B')
+    expect(all[0].order).toBe(2)
+  })
+
+  it('unregisterNewTabProvidersByModule removes only entries owned by that module', () => {
+    registerNewTabProvider({ id: 'a', label: 'a', icon: 'A', order: 0, component: Stub, moduleId: 'editor' })
+    registerNewTabProvider({ id: 'b', label: 'b', icon: 'B', order: 1, component: Stub, moduleId: 'editor' })
+    registerNewTabProvider({ id: 'c', label: 'c', icon: 'C', order: 2, component: Stub, moduleId: 'browser' })
+    registerNewTabProvider({ id: 'd', label: 'd', icon: 'D', order: 3, component: Stub })  // legacy, no moduleId
+
+    unregisterNewTabProvidersByModule('editor')
+
+    const remaining = getNewTabProviders().map((p) => p.id).sort()
+    expect(remaining).toEqual(['c', 'd'])
+  })
+
+  it('unregisterNewTabProvidersByModule is a no-op for unknown modules', () => {
+    registerNewTabProvider({ id: 'a', label: 'a', icon: 'A', order: 0, component: Stub, moduleId: 'editor' })
+    unregisterNewTabProvidersByModule('does-not-exist')
+    expect(getNewTabProviders()).toHaveLength(1)
   })
 })

@@ -1,5 +1,6 @@
-import { useRef } from 'react'
-import { getPaneRenderer } from '../lib/module-registry'
+import { useRef, useState } from 'react'
+import type { ComponentType } from 'react'
+import { resolvePaneRenderer } from '../lib/module-registry'
 import { getLayoutKey, collectLeaves, swapPaneContent } from '../lib/pane-tree'
 import { PaneSplitter } from './PaneSplitter'
 import { PaneHeader } from './PaneHeader'
@@ -8,7 +9,12 @@ import { isGrid4 } from './pane-layout-grid'
 import { executeCommand } from '../lib/execute-command'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
-import type { PaneLayout, SplitLayout } from '../types/tab'
+import {
+  useModuleEnabledStore,
+  isModuleEnabledIn,
+} from '../stores/useModuleEnabledStore'
+import { DisabledModulePlaceholder } from './modules/DisabledModulePlaceholder'
+import type { PaneLayout, Pane, SplitLayout } from '../types/tab'
 
 function isSplit(layout: PaneLayout): layout is SplitLayout {
   return layout.type === 'split'
@@ -23,17 +29,42 @@ interface Props {
 
 export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  // Snapshot the module-enabled map at component creation. The reload-required
+  // contract — DisabledModulePlaceholder hint, file-opener registry only
+  // reconciling at bootstrap, NewTabPage memoising once — must extend to the
+  // pane renderer too: any later parent re-render (active-tab change,
+  // showHeader flip, layout swap) must NOT cause the leaf to read a fresher
+  // enable state than the rest of the system. Round 4 codex review caught
+  // that an unconditional getState() at render time leaked the live state
+  // through that path; pinning the map in useState fixes it. Going
+  // fully-immediate is tracked in issue #678.
+  const [pinnedEnabled] = useState(() => useModuleEnabledStore.getState().enabled)
+  const isEnabledSnapshot = (moduleId: string) => isModuleEnabledIn(pinnedEnabled, moduleId)
 
   if (layout.type === 'leaf') {
-    const config = getPaneRenderer(layout.pane.content.kind)
-    if (!config) {
+    const resolution = resolvePaneRenderer(
+      layout.pane.content.kind,
+      isEnabledSnapshot,
+    )
+    if (resolution.kind === 'unknown') {
       return (
         <div className="flex-1 flex items-center justify-center text-text-muted">
-          No renderer for &quot;{layout.pane.content.kind}&quot;
+          No renderer for &quot;{resolution.paneKind}&quot;
         </div>
       )
     }
-    const Component = config.component
+    let Component: ComponentType<{ pane: Pane; isActive: boolean }>
+    if (resolution.kind === 'render') {
+      Component = resolution.component
+    } else {
+      // resolution.kind === 'disabled' — render the module-supplied custom
+      // component or fall back to the generic placeholder, ignoring pane /
+      // isActive (the disabled state has nothing meaningful to do with them).
+      const Custom = resolution.customComponent ?? DisabledModulePlaceholder
+      const moduleId = resolution.moduleId
+      const paneKind = resolution.paneKind
+      Component = () => <Custom moduleId={moduleId} paneKind={paneKind} />
+    }
     if (showHeader) {
       const allLeaves = (() => {
         const tab = useTabStore.getState().tabs[tabId]

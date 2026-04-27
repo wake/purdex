@@ -77,6 +77,14 @@ export interface ModuleDefinition {
   commands?: CommandContribution[]
   settings?: AnySettingsContributionDeclaration[]
   /**
+   * File openers contributed by this module. `applyModuleFileOpeners()`
+   * registers them into the file-opener registry (with `ownerModuleId = m.id`)
+   * and skips them when a `disableable` module is currently disabled.
+   * Module owners declare openers here instead of calling `registerFileOpener`
+   * directly so the registry stays in sync with module enable state.
+   */
+  fileOpeners?: import('./file-opener-registry').FileOpener[]
+  /**
    * When `true`, the module appears in the Modules Switchboard and can be
    * disabled by the user. Default `false` — a safe, explicit opt-in: module
    * owners must deliberately mark a module as independent enough to be
@@ -86,6 +94,17 @@ export interface ModuleDefinition {
   disableable?: boolean
   /** i18n key for the row description rendered in the Modules Switchboard. */
   descriptionKey?: string
+  /**
+   * Optional custom component to render when a pane of this module is shown
+   * but the module is disabled. If unset, PaneLayoutRenderer falls back to
+   * the generic `DisabledModulePlaceholder`. Use only if the module needs a
+   * domain-specific recovery affordance — not the default.
+   *
+   * NOTE: module-registry MUST NOT import this component. It is held only as
+   * a type reference; the concrete component is registered by the module
+   * owner inside register-modules/<module>.tsx.
+   */
+  disabledComponent?: React.ComponentType<{ moduleId: string; paneKind: string }>
 }
 
 // === Registry ===
@@ -117,6 +136,56 @@ export function getPaneRenderer(kind: string): PaneDefinition | undefined {
     }
   }
   return undefined
+}
+
+/**
+ * Discriminated metadata returned by `resolvePaneRenderer()`. Holds component
+ * references but never imports concrete UI components — the consumer (e.g.
+ * `PaneLayoutRenderer`) is responsible for falling back to its own
+ * `DisabledModulePlaceholder` when a `disabled` resolution surfaces without a
+ * `customComponent`. Keeping the lib → UI direction one-way is critical:
+ * `module-registry` must remain a leaf of the import graph.
+ */
+export type RendererResolution =
+  | { kind: 'render'; component: React.ComponentType<PaneRendererProps> }
+  | {
+      kind: 'disabled'
+      moduleId: string
+      paneKind: string
+      customComponent?: React.ComponentType<{ moduleId: string; paneKind: string }>
+    }
+  | { kind: 'unknown'; paneKind: string }
+
+/**
+ * Look up the pane definition for `paneKind` and return what the consumer
+ * should render: the actual component, a placeholder hint when the owning
+ * module is disabled, or an unknown-kind result.
+ *
+ * `isEnabled` is injected to avoid a circular `module-registry` ↔
+ * `useModuleEnabledStore` import (the store already calls `getModule` to
+ * decide whether an override applies). Pass
+ * `useModuleEnabledStore.getState().isEnabled` from the render layer; the
+ * default of `() => true` keeps unit tests free of store setup.
+ */
+export function resolvePaneRenderer(
+  paneKind: string,
+  isEnabled: (moduleId: string) => boolean = () => true,
+): RendererResolution {
+  for (const m of modules.values()) {
+    for (const p of m.panes ?? []) {
+      if (p.kind !== paneKind) continue
+      if (m.disableable && !isEnabled(m.id)) {
+        return {
+          kind: 'disabled',
+          moduleId: m.id,
+          paneKind,
+          customComponent: m.disabledComponent,
+        }
+      }
+      return { kind: 'render', component: p.component }
+    }
+  }
+  return { kind: 'unknown', paneKind }
 }
 
 export function getViewDefinition(viewId: string): ViewDefinition | undefined {

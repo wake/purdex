@@ -25,18 +25,23 @@ export function NewTabPage({ onSelect }: Props) {
   const profileKey = resolveProfile(isWide, isMid, profiles)
   const profile = profiles[profileKey]
 
-  // Subscribe so module enable/disable flips re-render this component.
-  const enabledMap = useModuleEnabledStore((s) => s.enabled)
-  const isEnabled = useModuleEnabledStore((s) => s.isEnabled)
+  // P1 reload-required contract (matches PaneLayoutRenderer + file-opener
+  // registry): module enable/disable does NOT flip the New Tab UI live —
+  // a fresh registerBuiltinModules() bootstrap is the canonical way to make
+  // the change visible. Reading isEnabled via getState() avoids a subscription
+  // that would otherwise hide editor entries the moment the user toggles
+  // Editor in the Switchboard while the actual openers / terminal-link
+  // bindings still wait for the next bootstrap. Going fully-immediate is
+  // tracked in issue #678.
   const providers = useMemo(() => {
     // A2-4 / A2-5: providers carrying a `moduleId` are hidden when the owning
     // module is disabled. Legacy providers with no `moduleId` are always
     // visible (back-compat, spec §4.9.3).
-    // `enabledMap` is a dependency so the filter recomputes when the user
-    // flips a module in the Switchboard.
-    void enabledMap
+    const isEnabled = useModuleEnabledStore.getState().isEnabled
     return getNewTabProviders().filter((p) => !p.moduleId || isEnabled(p.moduleId))
-  }, [enabledMap, isEnabled])
+    // Empty deps: providers / module enable state are deliberately captured
+    // at render-creation time only. Subsequent toggles wait for re-bootstrap.
+  }, [])
   const byId = useMemo(() => Object.fromEntries(providers.map((p) => [p.id, p])), [providers])
 
   if (!hydrated) {
