@@ -226,6 +226,21 @@ function inferWorkspaceHostId(workspace: Workspace, tabs: Record<string, Tab>): 
 - **Offline host 不 disable**：user 可能就是要 force route 到 offline host（執行後若 host 連不上，executor 呼叫 createSession 失敗自然會 toast）— 不擅自代為決策
 - **空 hostOrder**：顯示空狀態文案 **+ close button**（除 Esc 外的滑鼠可達退場路徑）。理論上不會發生（user 至少有一個 host 才能用本系統），但仍須提供，避免極端狀態下卡死
 
+**Resolver lifecycle 契約（picker owner 的合約義務）**：
+
+picker owner（持有 promise resolver 的元件）必須保證 `resolveHostId()` Promise 在以下**三種**情境下 settle 為 `null`：
+
+1. User 主動取消（Esc / close button / outside click）
+2. picker 元件 unmount（parent menu/popover 被外部 force-close、route 切換、tab 關閉等）
+3. duplicate select/cancel 呼叫（user 雙擊 / fast-double-tap）— resolver 必須在第一次 invocation 後 nulled-out，重複呼叫 no-op
+
+實作上：picker state shape `{ open, resolver, anchor }` 加 unmount-cleanup `useEffect`（cleanup 中觸發 `resolver?.(null)` 後立即將 resolver set 為 null）。確保：
+- Promise 必定 settle（不懸掛）
+- Executor `finally` 一定執行
+- 重複呼叫不 throw
+
+這是 contract 而非實作建議；caller 不可省略，否則 picker 在邊界情境會卡住整個 executor 流程。
+
 此 picker 元件（`HostPickerPopover`）為**獨立可重用**設計，未來 multi-host workspace + default launcher binding 系統上線後可繼續使用。
 
 ### 3.3 失敗處理 UX
