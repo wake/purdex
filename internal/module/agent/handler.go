@@ -278,6 +278,14 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		watchAgentType = projection.TopFrame.AgentType
 		watchStatus = projection.TopFrame.Status
 	}
+	// recordHookAt opens the probeGraceWindow so any screen-change event
+	// arriving in the next probeGraceWindow interval is suppressed — the
+	// hook (this code path) is the authoritative status source. Recorded
+	// once per accepted hook regardless of whether activity-watching is
+	// (re)started below; the orchestrator owns watcher state.
+	if req.TmuxSession != "" && m.probeOrch != nil && result.Valid {
+		m.probeOrch.recordHookAt(req.TmuxSession)
+	}
 	if req.TmuxSession != "" && m.prober != nil && result.Valid {
 		m.manageActivityWatch(req.TmuxSession, watchAgentType, watchStatus)
 	}
