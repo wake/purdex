@@ -7,6 +7,7 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { useWorkspaceStore } from '../../../stores/useWorkspaceStore'
 import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
 import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
+import { getBindingTargets } from '../../../lib/quick-command-bindings'
 
 interface Props {
   workspaceId: string
@@ -36,9 +37,14 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
   // wrapper <div>, no separator). Hooks must run before the early return so
   // React's hook order stays stable across re-renders.
   const moduleEnabled = useModuleEnabledStore((s) => s.isEnabled('quick-commands'))
+  // codex round-1 P2 — own-property guard: capability ids colliding with
+  // inherited Object.prototype methods would otherwise crash the slot.
   const hasBindings = useQuickCommandStore((s) => {
     const cmds = hostId == null ? s.global : s.getCommands(hostId)
-    return cmds.some((c) => s.bindings[c.id]?.includes(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS))
+    return cmds.some((c) => {
+      const targets = getBindingTargets(s.bindings, c.id)
+      return targets !== undefined && targets.includes(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS)
+    })
   })
 
   // codex round-2 — picker state shape pinned: open implied by resolver !== null;
@@ -54,6 +60,16 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
   // picker Promise without going through React state — `setPicker` updaters
   // do not run reliably on already-unmounted components.
   const pendingResolverRef = useRef<((hostId: string | null) => void) | null>(null)
+
+  // codex round-1 P2 — double-click race guard. When `hostId` is already known
+  // the picker never opens, so `picker?.open` stays false for the entire
+  // createSession + send-keys round-trip. Without an explicit pending flag a
+  // fast double-click would queue two executor pipelines and create two
+  // sessions for the same command. The ref is the synchronous guard (covers
+  // the same-tick double-fire that happens before React re-renders); the
+  // `executing` state drives the disabled UI in CommandSlot.
+  const executingRef = useRef(false)
+  const [executing, setExecuting] = useState(false)
 
   const resolveHostId = useCallback(
     () =>
@@ -115,15 +131,29 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
         ctx={{ hostId, workspaceId }}
         // codex round-1 B7 — flex-col override; default chip render keeps onClick + executor wiring intact.
         containerClassName="flex flex-col"
-        // codex round-1 C11 — disable buttons while picker is mid-flight (prevents double-click race).
-        busy={picker?.open ?? false}
+        // codex round-1 C11 + P2 — busy=true during picker mid-flight OR
+        // executor mid-flight; without `executing` the picker-less hostId
+        // path would never disable chips, allowing double-click duplicate
+        // session creation.
+        busy={(picker?.open ?? false) || executing}
         executor={async (cmd, ctx) => {
+          // codex round-1 P2 — synchronous ref guard catches the double-click
+          // window before React re-renders the disabled state. `executing` is
+          // mirrored to React state below for the disabled UI.
+          if (executingRef.current) return
+          executingRef.current = true
+          setExecuting(true)
           try {
             await runWorkspaceSlot(cmd, ctx, {
               switchToSession,
               resolveHostId,
             })
           } finally {
+            executingRef.current = false
+            // setState on an unmounted component is a silent no-op in React 18,
+            // so we don't need to guard against the parent's onClose() racing
+            // ahead of this finally block.
+            setExecuting(false)
             onClose()
           }
         }}

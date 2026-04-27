@@ -4,6 +4,7 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
 import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
 import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
+import { getBindingTargets } from '../../../lib/quick-command-bindings'
 import { WorkspaceQuickCommandsContextMenu } from './WorkspaceQuickCommandsContextMenu'
 
 interface Props {
@@ -42,9 +43,16 @@ export function WorkspaceContextMenu({
   // one binding into WORKSPACE_ACTIONS. Computed via a selector to avoid
   // re-rendering on unrelated store updates. hostId-null path uses globals
   // only (no per-host overrides reachable without a host).
+  // codex round-1 P2 — getBindingTargets guards against capability ids that
+  // collide with inherited Object.prototype methods (toString / valueOf etc.);
+  // raw `s.bindings[c.id]?.includes(...)` would throw on those ids and crash
+  // the context menu before it can render.
   const hasQuickCommands = useQuickCommandStore((s) => {
     const cmds = hostId == null ? s.global : s.getCommands(hostId)
-    return cmds.some((c) => s.bindings[c.id]?.includes(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS))
+    return cmds.some((c) => {
+      const targets = getBindingTargets(s.bindings, c.id)
+      return targets !== undefined && targets.includes(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS)
+    })
   })
   const quickCommandsModuleEnabled = useModuleEnabledStore((s) => s.isEnabled('quick-commands'))
   const showQuickCommandsSection = !!workspaceId && quickCommandsModuleEnabled && hasQuickCommands

@@ -176,6 +176,39 @@ describe('WorkspaceQuickCommandsContextMenu', () => {
     expect(createSession).not.toHaveBeenCalled()
   })
 
+  // codex round-1 P2 — double-click race: when hostId is already known the
+  // picker never opens, so without an explicit executing flag the chip stays
+  // enabled across the entire createSession + send-keys round-trip. A fast
+  // double-click would queue two pipelines and create two sessions.
+  it('double-click before executor finishes only triggers createSession once', async () => {
+    render(
+      <WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId="h1" onClose={vi.fn()} />,
+    )
+    const button = screen.getByLabelText(/^Alpha/)
+    fireEvent.click(button)
+    // Second click happens synchronously before the executor's first await
+    // resolves — exact reproduction of the original race window.
+    fireEvent.click(button)
+    await new Promise<void>((r) => setTimeout(r, 0))
+    expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
+  // codex round-1 P2 — capability ids that collide with inherited
+  // Object.prototype methods would otherwise crash the slot host before it
+  // could render. `getBindingTargets` is the own-property guard.
+  it('does not crash when capability id collides with Object.prototype method (toString)', () => {
+    useQuickCommandStore.setState({
+      global: [{ id: 'toString', name: 'Evil', command: 'evil' }],
+      byHost: {},
+      bindings: {},
+    })
+    expect(() =>
+      render(
+        <WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId="h1" onClose={vi.fn()} />,
+      ),
+    ).not.toThrow()
+  })
+
   it('duplicate onSelect / onCancel calls are safe (resolver is nulled-out after first invocation)', async () => {
     const onClose = vi.fn()
     render(

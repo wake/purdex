@@ -221,6 +221,32 @@ describe('WorkspaceContextMenu', () => {
     expect(screen.getByLabelText(/^XCmd/)).toBeInTheDocument()
   })
 
+  // codex round-1 P2 — own-property guard: a capability id colliding with an
+  // inherited Object.prototype method (toString / valueOf / hasOwnProperty)
+  // would have crashed the menu render via `bindings[c.id]?.includes(...)`
+  // resolving to a non-array function. `getBindingTargets` is the fix.
+  it('does not crash when a capability id collides with Object.prototype method (toString)', () => {
+    useQuickCommandStore.setState({
+      global: [{ id: 'toString', name: 'Evil', command: 'evil' }],
+      byHost: {},
+      bindings: {},
+    })
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+    clearModuleRegistry()
+    registerModule({ id: 'quick-commands', name: 'Quick Commands', disableable: true })
+    expect(() =>
+      render(
+        <WorkspaceContextMenu
+          position={{ x: 0, y: 0 }}
+          workspaceId="w1"
+          hostId="h1"
+          onSettings={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      ),
+    ).not.toThrow()
+  })
+
   it('omits the quick commands section (and its separator) when no WORKSPACE_ACTIONS bindings exist', () => {
     useQuickCommandStore.setState({ global: [], byHost: {}, bindings: {} })
     useModuleEnabledStore.setState({ enabled: {}, baseline: null })

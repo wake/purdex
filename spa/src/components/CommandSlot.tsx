@@ -2,7 +2,7 @@ import { useMemo, type ReactNode } from 'react'
 import { useQuickCommandStore } from '../stores/useQuickCommandStore'
 import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 import { useI18nStore } from '../stores/useI18nStore'
-import type { QuickCommand } from '../lib/quick-command-bindings'
+import { getBindingTargets, type QuickCommand } from '../lib/quick-command-bindings'
 import type { QuickCommandSlotId } from '../lib/quick-command-slots'
 
 /**
@@ -81,8 +81,17 @@ export function CommandSlot({
   )
 
   // Recompute boundCmds when bindings or capability list change.
+  // codex round-1 P2 — use getBindingTargets (own-property guard) instead of
+  // raw `bindings[c.id]?.includes`. A capability id that collides with an
+  // inherited Object.prototype method (toString / valueOf / hasOwnProperty)
+  // would otherwise resolve to that function and `.includes(mountTo)` would
+  // throw, crashing every slot host.
   const boundCmds = useMemo(
-    () => allCmds.filter((c) => bindings[c.id]?.includes(mountTo)),
+    () =>
+      allCmds.filter((c) => {
+        const targets = getBindingTargets(bindings, c.id)
+        return targets !== undefined && targets.includes(mountTo)
+      }),
     [allCmds, bindings, mountTo],
   )
 
