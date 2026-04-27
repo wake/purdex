@@ -11,6 +11,7 @@ import (
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/agent/codex"
+	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
@@ -829,6 +830,31 @@ func TestOrchestrator_RealCodexProviderUsesTopLinesProfile(t *testing.T) {
 	want := probe.WatchOptions{TopLines: 10, BottomLines: 0, IdleStableTicks: 3}
 	if got != want {
 		t.Fatalf("WatchOptions = %+v, want %+v (codex TopLines profile)", got, want)
+	}
+}
+
+// OR-opencode — orchestrator picks up the real opencode.Provider's
+// TopLines profile (TopLines=10) instead of falling back to
+// defaultProbeProfile. Regression for accidental ProbeProfile() removal
+// on opencode.Provider. Spec §2.5; plan §2 Commit 2.
+func TestOrchestrator_RealOpenCodeProviderUsesTopLinesProfile(t *testing.T) {
+	m := newTestModule(t)
+	rec := newRecordingProber()
+	m.probeOrch.watcher = rec
+
+	m.registry.Register(opencode.NewProvider())
+
+	m.probeOrch.startWatch("sess2", "opencode")
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	got, ok := rec.watchOpts["sess2:"]
+	if !ok {
+		t.Fatalf("expected Watch on target %q, got %v", "sess2:", rec.watchOpts)
+	}
+	want := probe.WatchOptions{TopLines: 10, BottomLines: 0, IdleStableTicks: 3}
+	if got != want {
+		t.Fatalf("WatchOptions = %+v, want %+v (opencode TopLines profile)", got, want)
 	}
 }
 
