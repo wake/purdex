@@ -186,6 +186,43 @@ describe('workspaceConfig / globalConfig', () => {
   })
 })
 
+describe('module-registry fileOpeners and disabledComponent fields', () => {
+  it('preserves fileOpeners on ModuleDefinition through registration', () => {
+    const opener = {
+      id: 'noop',
+      label: 'Noop',
+      icon: 'File',
+      match: () => true,
+      priority: 'default' as const,
+      createContent: () => ({ kind: 'editor' }) as never,
+    }
+    registerModule({ id: 'mod-fo', name: 'FO', fileOpeners: [opener] })
+    expect(getModule('mod-fo')?.fileOpeners).toEqual([opener])
+  })
+
+  it('preserves disabledComponent reference without instantiating it', () => {
+    const Custom = (() => null) as React.FC<{ moduleId: string; paneKind: string }>
+    registerModule({
+      id: 'mod-dc',
+      name: 'DC',
+      disableable: true,
+      panes: [{ kind: 'dc-pane', component: DummyComponent }],
+      disabledComponent: Custom,
+    })
+    expect(getModule('mod-dc')?.disabledComponent).toBe(Custom)
+  })
+
+  it('disabledComponent defaults to undefined when not declared', () => {
+    registerModule({
+      id: 'mod-default',
+      name: 'Default',
+      disableable: true,
+      panes: [{ kind: 'd-pane', component: DummyComponent }],
+    })
+    expect(getModule('mod-default')?.disabledComponent).toBeUndefined()
+  })
+})
+
 describe('module-registry commands', () => {
   it('getModulesWithCommands returns modules that have commands', () => {
     registerModule({ id: 'no-cmds', name: 'No Commands' })

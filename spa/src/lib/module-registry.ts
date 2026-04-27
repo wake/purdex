@@ -94,6 +94,17 @@ export interface ModuleDefinition {
   disableable?: boolean
   /** i18n key for the row description rendered in the Modules Switchboard. */
   descriptionKey?: string
+  /**
+   * Optional custom component to render when a pane of this module is shown
+   * but the module is disabled. If unset, PaneLayoutRenderer falls back to
+   * the generic `DisabledModulePlaceholder`. Use only if the module needs a
+   * domain-specific recovery affordance — not the default.
+   *
+   * NOTE: module-registry MUST NOT import this component. It is held only as
+   * a type reference; the concrete component is registered by the module
+   * owner inside register-modules/<module>.tsx.
+   */
+  disabledComponent?: React.ComponentType<{ moduleId: string; paneKind: string }>
 }
 
 // === Registry ===
