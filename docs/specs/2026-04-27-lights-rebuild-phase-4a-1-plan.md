@@ -1,6 +1,6 @@
-# Lights Rebuild — Phase 4a-1 Plan v1.7 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v1.8 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v1.7（Round 7 codex review fix — 1 P2 + 1 P3 採納）
+**Status**: draft v1.8（Round 8 codex review fix — 1 P2 + 1 P3 採納）
 
 ## v1.x 演進
 
@@ -14,6 +14,7 @@
 | v1.5 | R5 codex review fix（1 P2 internal-inconsistency）：plan §1.2 列「Slice 8（清舊 onActivityDetected / shouldWatchActivity / ActivitySignal enum 解讀）— 留 PR-4a-2」與 §1.1 / §2.4.2 衝突（後者要求本 PR 必移除 `ActivitySignal` 等舊 API 否則無法 compile）。釐清：本 PR 必清 `ActivitySignal` enum + legacy `StartWatch` API + `activityLoop` + `onActivityDetected`（compile 必要）；保留 `shouldWatchActivity`（wrapper 仍用的政策函式）；PR-4a-2 範圍縮為「Slice 5/6 codex/opencode profile 接 primitive」+「**視需要** refactor `shouldWatchActivity`」 |
 | v1.6 | R6 codex review fix（2 P2 internal-consistency）：(1) §1.1 Slice 3 摘要還寫「`stopProbeWatch` 含 activeWatchers map cleanup」與 R3 修法（orchestrator 不碰 activeWatchers）矛盾；改正為「停止 prober watcher」並引向 §2.3.1 R3 fix；(2) Commit 5 TDD 清單只列 CC1-CC5，漏掉 CC6 (R2 fix #1 + R3 deadlock-freedom regression)；補入 written-first 清單 |
 | v1.7 | R7 codex review fix（1 P2 + 1 P3）：(1) §2.3.3 startWatch pseudo-code 用未定義 `target`，既有 callsite 都是 `session + ":"` 形式；明寫 `target := session + ":"` 在 startWatch / stopWatch contract，避免 implementer 編譯失敗或 bare-session 啟 watcher；(2) §2.4.4 標題寫「測試（5 tests）」但表格列 CC1-CC6 共 6 個；改為「測試（6 tests — R2 +CC6）」 |
+| v1.8 | R8 codex review fix（1 P2 + 1 P3）：(1) §2.3.3 startWatch pseudo-code 仍用未定義 `agentProvider` 變數 + `defaultProbeProfile` 為 unqualified type；補完整 provider lookup（registry → agentType → provider）+ 改 `agentpkg.ProbeProfile` qualified 命名；(2) §2.1.6 標題「測試（7 tests — R1 +PR2b）」與 §3 矩陣（8 tests）+ 表內列出 8 個 testID 不符；改為「測試（8 tests — R1 +PR2b / R2 +PR4b）」 |
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -248,7 +249,7 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
 - `activityLoop` 內部 method — 改成 `watchLoop`
 - `hashCapture` 內部 method — 改成支援 captureFn closure 的版本
 
-#### 2.1.6 測試（7 tests — R1 +1 PR2b）
+#### 2.1.6 測試（8 tests — R1 +PR2b / R2 +PR4b）
 
 | Test | 重點 |
 |------|------|
@@ -337,14 +338,25 @@ type ProbeProfile struct {
 var defaultProbeProfile = ProbeProfile{TopLines: 10, IdleStableTicks: 3}
 ```
 
-orchestrator `startWatch` 邏輯（R7 fix — 顯式組 tmux target）：
+orchestrator `startWatch` 邏輯（R7 fix — 顯式組 tmux target；R8 fix — 完整 provider lookup + qualified type）：
 ```go
+// defaultProbeProfile is a package-level constant (defined in
+// internal/module/agent, not internal/agent). Uses agentpkg-qualified
+// ProbeProfile to match its definition site.
+var defaultProbeProfile = agentpkg.ProbeProfile{TopLines: 10, IdleStableTicks: 3}
+
 func (o *probeOrchestrator) startWatch(session, agentType string) {
     target := session + ":"  // tmux target convention; matches existing callsite
+
+    // R8 fix: resolve provider from registry; assert ProbeProfileProvider.
+    // Module field m.registry is *agentpkg.Registry (per module.go:34).
     profile := defaultProbeProfile
-    if pp, ok := agentProvider.(agentpkg.ProbeProfileProvider); ok {
-        profile = pp.ProbeProfile()
+    if provider, ok := o.parent.registry.Get(agentType); ok {
+        if pp, ok := provider.(agentpkg.ProbeProfileProvider); ok {
+            profile = pp.ProbeProfile()
+        }
     }
+
     opts := probe.WatchOptions{
         TopLines:        profile.TopLines,        // 0 = full screen
         IdleStableTicks: profile.IdleStableTicks, // 0 = default 3 (handled by watchLoop)
@@ -352,6 +364,10 @@ func (o *probeOrchestrator) startWatch(session, agentType string) {
     o.parent.prober.Watch(target, opts, o.makeCallback(session, agentType))
 }
 ```
+
+**Caller 端 contract**（R7 fix）：caller 傳 `session`（無 ":" 後綴），orchestrator 自己加 ":" 變成 tmux target；對齊既有 `m.prober.StartWatch(session+":", ...)` 慣例。
+
+**Registry lookup contract**（R8 fix）：orchestrator 透過 `o.parent.registry.Get(agentType)` 取得 `agentpkg.Provider`；type-assert `agentpkg.ProbeProfileProvider`；agentType 不存在或不實作介面 → fallback 到 `defaultProbeProfile`。`Registry.Get` 需確認簽名（若返回 `(Provider, bool)` 則照 §2.3.3 寫；若是 `Provider` + nil-check 則 implementer 對應調整）— 此 contract 由 implementer 在 Commit 3 對齊既有 `internal/agent/Registry` API。
 
 對應 `stopWatch`：
 ```go
