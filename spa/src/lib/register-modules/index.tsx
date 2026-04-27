@@ -32,8 +32,6 @@ import { FileTreeSessionView } from '../../components/FileTreeSessionView'
 import { useTabStore } from '../../stores/useTabStore'
 import type { PaneContent } from '../../types/tab'
 import type { PaneRendererProps } from '../module-registry'
-import { EditorNewTabSection } from '../../components/editor/EditorNewTabSection'
-import { ManageBuffersNewTabCard } from '../../components/editor/ManageBuffersNewTabCard'
 import { registerSyncContributors } from '../sync/register-sync'
 import {
   registerInterfaceSubsection,
@@ -54,7 +52,7 @@ import { HooksSection } from '../../components/hosts/HooksSection'
 import { AgentsSection } from '../../components/hosts/AgentsSection'
 import { UploadSection } from '../../components/hosts/UploadSection'
 import { LogsSection } from '../../components/hosts/LogsSection'
-import { editorModuleDefinition } from './editor-module'
+import { editorModuleDefinition, registerEditorNewTabProviders } from './editor-module'
 import { registerBuiltinFsBackends } from './fs-backends'
 import { applyModuleFileOpeners } from './module-file-openers'
 import { clearAllForHmr as clearFileOpenerRegistryForHmr } from '../file-opener-registry'
@@ -258,23 +256,7 @@ export function registerBuiltinModules(): void {
     component: SessionSection,
   })
 
-  registerNewTabProvider({
-    id: 'editor',
-    label: 'editor.provider_label',
-    icon: 'File',
-    order: 5,
-    component: EditorNewTabSection,
-    moduleId: 'editor',
-  })
-
-  registerNewTabProvider({
-    id: 'editor-buffers',
-    label: 'newTab.editor.buffers.label',
-    icon: 'Stack',
-    order: 6,
-    component: ManageBuffersNewTabCard,
-    moduleId: 'editor',
-  })
+  registerEditorNewTabProviders()
 
   registerNewTabProvider({
     id: 'browser',

@@ -1,9 +1,12 @@
 import type { ModuleDefinition } from '../module-registry'
 import type { PaneContent } from '../../types/tab'
+import { registerNewTabProvider } from '../new-tab-registry'
 import { EditorPane } from '../../components/editor/EditorPane'
 import { EditorBuffersPane } from '../../components/editor/EditorBuffersPane'
 import { ImagePreviewPane } from '../../components/editor/ImagePreviewPane'
 import { PdfPreviewPane } from '../../components/editor/PdfPreviewPane'
+import { EditorNewTabSection } from '../../components/editor/EditorNewTabSection'
+import { ManageBuffersNewTabCard } from '../../components/editor/ManageBuffersNewTabCard'
 import { EditorHomePathWorkspaceSection } from '../../components/editor/EditorHomePathWorkspaceSection'
 import { EditorHomePathHostSection } from '../../components/editor/EditorHomePathHostSection'
 import { EditorPurdexSettingsSection } from '../../components/settings/EditorPurdexSettingsSection'
@@ -76,4 +79,32 @@ export const editorModuleDefinition: ModuleDefinition = {
         ({ kind: 'editor', source, filePath: file.path }) as PaneContent,
     },
   ],
+}
+
+/**
+ * Register Editor's two new-tab providers (Files panel and Manage Buffers
+ * card). Kept beside `editorModuleDefinition` so all editor-owned bootstrap
+ * lives in one file; `register-modules/index.tsx` only orchestrates.
+ *
+ * Each provider carries `moduleId: 'editor'` so the New-Tab UI hides them
+ * when the module is disabled, matching the pane / file-opener side.
+ */
+export function registerEditorNewTabProviders(): void {
+  registerNewTabProvider({
+    id: 'editor',
+    label: 'editor.provider_label',
+    icon: 'File',
+    order: 5,
+    component: EditorNewTabSection,
+    moduleId: 'editor',
+  })
+
+  registerNewTabProvider({
+    id: 'editor-buffers',
+    label: 'newTab.editor.buffers.label',
+    icon: 'Stack',
+    order: 6,
+    component: ManageBuffersNewTabCard,
+    moduleId: 'editor',
+  })
 }
