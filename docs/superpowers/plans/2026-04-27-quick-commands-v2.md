@@ -26,6 +26,7 @@
 - **Host 入口** — `SessionsSection.tsx` 兩件事：
   - new-session 按鈕（L167-174）旁並列 `<CommandSlot mountTo=HOST_ACTIONS>`；視覺與 Plus 對齊（直接列 chip，無 popover）
   - 移除 row 上的 v1 `<QuickCommandMenu>`（L231-239）整合，但**保留** `QuickCommandMenu` 元件本身（`PaneLayoutRenderer.tsx` 仍使用）
+- **Workspace hostId 解析（spec v4 §3.2.1 / §3.2.2）** — Workspace type 沒有 `hostId` 欄位，採**多數決**（`inferWorkspaceHostId(workspace, tabs)`，遍歷 workspace.tabs 的 layout tree 蒐集 `kind: 'tmux-session'` 的 hostId，多數決 + tie-break）。多數決回 `null`（workspace 無 tmux-session tabs）時，**不**靜默 fallback 到 `activeHostId`，改開 `HostPickerPopover` 讓 user 選 host；取消 popover → no-op。`SlotContext.hostId` 改為 `string | null`，executor 透過 `resolveHostId` callback 在內部 await user 決定。
 
 **測試指令備忘（主 Claude 機器跑，subagent 寫 plan 不執行）：**
 - SPA test: `cd spa && npx vitest run`
@@ -810,15 +811,600 @@ Expected: clean
 
 **目標：** user 能在 Settings 建 command + 設 mount = WORKSPACE，回到 workspace 立刻看到按鈕；點擊建 session + 送 keys + 切過去。失敗 toast 行為符合 §3.3。
 
+**Spec v4 新增的支援結構：** Phase 1b 兩個 helper（`inferWorkspaceHostId` + `HostPickerPopover`）必須先於 `<CommandSlot>` / executor / workspace 入口落地，否則後續 task 無法正確呼叫。順序：1b.0a → 1b.0b → 1b.1 → 1b.1.5 → 1b.2 → 1b.3 → 1b.4 → 1b.5a → 1b.5b → 1b.6。
+
+### Task 1b.0a: 新增 `inferWorkspaceHostId` helper（spec §3.2.1 多數決）
+
+**Files:**
+- Create: `spa/src/lib/infer-workspace-host-id.ts`
+- Create: `spa/src/lib/infer-workspace-host-id.test.ts`
+
+**動機：** `WORKSPACE_ACTIONS` slot 的 ctx 需要 hostId，但 `Workspace` type 沒有此欄位（`spa/src/types/tab.ts` L53-61 確認）。spec §3.2.1 規定以 workspace 內所有 tab `PaneLayout` tree 的 `tmux-session` panes 的 hostId 多數決決定。Phase 1b 後續的 CommandSlot ctx、context menu、popover、executor 全部依此 helper 取 hostId。
+
+- [ ] **Step 1: Write the failing test**
+
+Create `spa/src/lib/infer-workspace-host-id.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { inferWorkspaceHostId } from './infer-workspace-host-id'
+import type { Tab, Workspace, PaneLayout } from '../types/tab'
+
+function leaf(content: PaneLayout extends infer T ? T : never): PaneLayout {
+  return content as PaneLayout
+}
+
+function tmuxLeaf(hostId: string, sessionCode = 'sess'): PaneLayout {
+  return {
+    type: 'leaf',
+    pane: {
+      id: `pane-${hostId}-${sessionCode}`,
+      content: {
+        kind: 'tmux-session',
+        hostId,
+        sessionCode,
+        mode: 'terminal',
+        cachedName: 'x',
+        tmuxInstance: 'default',
+      },
+    },
+  }
+}
+
+function newTabLeaf(): PaneLayout {
+  return { type: 'leaf', pane: { id: 'p-newtab', content: { kind: 'new-tab' } } }
+}
+
+function splitH(...children: PaneLayout[]): PaneLayout {
+  return { type: 'split', id: 's', direction: 'h', children, sizes: children.map(() => 1 / children.length) }
+}
+
+function tab(id: string, layout: PaneLayout): Tab {
+  return { id, pinned: false, locked: false, createdAt: 0, layout }
+}
+
+function ws(opts: { id?: string; tabs: string[]; activeTabId?: string | null }): Workspace {
+  return {
+    id: opts.id ?? 'w1',
+    name: 'W',
+    tabs: opts.tabs,
+    activeTabId: opts.activeTabId ?? null,
+    moduleConfig: {},
+  }
+}
+
+describe('inferWorkspaceHostId', () => {
+  it('returns the hostId of a single tmux-session tab', () => {
+    const tabs = { t1: tab('t1', tmuxLeaf('h1')) }
+    const w = ws({ tabs: ['t1'], activeTabId: 't1' })
+    expect(inferWorkspaceHostId(w, tabs)).toBe('h1')
+  })
+
+  it('returns the only candidate when multiple tabs share the same host', () => {
+    const tabs = {
+      t1: tab('t1', tmuxLeaf('h1')),
+      t2: tab('t2', tmuxLeaf('h1')),
+      t3: tab('t3', tmuxLeaf('h1')),
+    }
+    const w = ws({ tabs: ['t1', 't2', 't3'], activeTabId: 't1' })
+    expect(inferWorkspaceHostId(w, tabs)).toBe('h1')
+  })
+
+  it('returns the majority host when one host clearly dominates', () => {
+    const tabs = {
+      t1: tab('t1', tmuxLeaf('h1')),
+      t2: tab('t2', tmuxLeaf('h1')),
+      t3: tab('t3', tmuxLeaf('h2')),
+    }
+    const w = ws({ tabs: ['t1', 't2', 't3'], activeTabId: 't3' })
+    expect(inferWorkspaceHostId(w, tabs)).toBe('h1')
+  })
+
+  it('on tie, prefers the active tab hostId when active is tmux-session and in the winners set', () => {
+    const tabs = {
+      t1: tab('t1', tmuxLeaf('h1')),
+      t2: tab('t2', tmuxLeaf('h2')),
+    }
+    const w = ws({ tabs: ['t1', 't2'], activeTabId: 't2' })
+    expect(inferWorkspaceHostId(w, tabs)).toBe('h2')
+  })
+
+  it('on tie, falls back to first winner in tabs order when active tab host is NOT in winners', () => {
+    // active tab is tmux-session h3 (not a winner among h1/h2 tied)
+    const tabs = {
+      t1: tab('t1', tmuxLeaf('h1')),
+      t2: tab('t2', tmuxLeaf('h2')),
+      t3: tab('t3', tmuxLeaf('h3')),
+    }
+    // Force a tie between h1 and h2 by adding a duplicate h2 layer in t2
+    const tabsTie = {
+      t1: tab('t1', tmuxLeaf('h1')),
+      t2: tab('t2', splitH(tmuxLeaf('h2'), tmuxLeaf('h1'))), // h1=2, h2=1
+      t3: tab('t3', tmuxLeaf('h2')),                          // overall: h1=2, h2=2
+    }
+    const w = ws({ tabs: ['t1', 't2', 't3'], activeTabId: 't3' })
+    // active tab t3 is h2 — h2 IS in winners → expect h2
+    expect(inferWorkspaceHostId(w, tabsTie)).toBe('h2')
+    // Now make active tab a non-tmux tab → should fall back to first-winner-in-tabs-order
+    const tabsTieActiveNonTmux = {
+      ...tabsTie,
+      t3: tab('t3', newTabLeaf()), // active tab no longer tmux
+    }
+    const w2 = ws({ tabs: ['t1', 't2', 't3'], activeTabId: 't3' })
+    // Now h1=2, h2=1 (tabsTieActiveNonTmux: t1 has h1, t2 has [h2,h1], t3 has nothing)
+    // → h1 wins outright (count=2 vs h2=1), no tie. Adjust the fixture for the intended assertion:
+    void w2
+    // Use a clean tie + non-tmux active tab fixture:
+    const cleanTie = {
+      t1: tab('t1', tmuxLeaf('h1')),
+      t2: tab('t2', tmuxLeaf('h2')),
+      t3: tab('t3', newTabLeaf()),
+    }
+    const w3 = ws({ tabs: ['t1', 't2', 't3'], activeTabId: 't3' })
+    expect(inferWorkspaceHostId(w3, cleanTie)).toBe('h1')
+  })
+
+  it('returns null when workspace has no tmux-session tabs', () => {
+    const tabs = {
+      t1: tab('t1', newTabLeaf()),
+      t2: tab('t2', { type: 'leaf', pane: { id: 'p2', content: { kind: 'dashboard' } } }),
+    }
+    const w = ws({ tabs: ['t1', 't2'], activeTabId: 't1' })
+    expect(inferWorkspaceHostId(w, tabs)).toBeNull()
+  })
+
+  it('returns null when workspace.tabs is empty', () => {
+    const w = ws({ tabs: [], activeTabId: null })
+    expect(inferWorkspaceHostId(w, {})).toBeNull()
+  })
+
+  it('skips missing tab ids that are not present in the tabs map', () => {
+    const tabs = { t1: tab('t1', tmuxLeaf('h1')) }
+    const w = ws({ tabs: ['t1', 't-missing'], activeTabId: 't1' })
+    expect(inferWorkspaceHostId(w, tabs)).toBe('h1')
+  })
+
+  it('recursively collects hostIds from nested split layouts', () => {
+    const tabs = {
+      t1: tab('t1', splitH(tmuxLeaf('h1'), splitH(tmuxLeaf('h1'), tmuxLeaf('h2')))),
+    }
+    const w = ws({ tabs: ['t1'], activeTabId: 't1' })
+    // h1 count=2, h2 count=1 → h1 wins
+    expect(inferWorkspaceHostId(w, tabs)).toBe('h1')
+  })
+})
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd spa && npx vitest run src/lib/infer-workspace-host-id.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Implement helper**
+
+Create `spa/src/lib/infer-workspace-host-id.ts` (內容直接對應 spec §3.2.1 程式片段，注意實際型別名是 `PaneLayout` 而非 `Layout`)：
+
+```ts
+import type { PaneLayout, Tab, Workspace } from '../types/tab'
+
+/**
+ * Recursively walks a PaneLayout tree, collecting hostIds from every
+ * pane whose content is `kind: 'tmux-session'`. Order matches
+ * pre-order traversal of the layout tree (left-to-right children).
+ */
+export function collectTmuxSessionHostIds(layout: PaneLayout): string[] {
+  if (layout.type === 'leaf') {
+    return layout.pane.content.kind === 'tmux-session'
+      ? [layout.pane.content.hostId]
+      : []
+  }
+  return layout.children.flatMap(collectTmuxSessionHostIds)
+}
+
+/**
+ * Infer the "primary" hostId for a Workspace based on its tabs (spec §3.2.1).
+ *
+ *  1. Collect hostIds from every tmux-session pane across all tabs.
+ *  2. Majority vote (highest count wins).
+ *  3. Tie-break A: if `workspace.activeTabId` resolves to a tmux-session whose
+ *     hostId is among the winners, prefer it.
+ *  4. Tie-break B: otherwise, scan `workspace.tabs` in order and return the
+ *     first hostId that appears in the winners set.
+ *  5. Returns `null` when no tmux-session pane is found anywhere — caller
+ *     MUST treat this as "host unknown" and surface the host picker (see
+ *     spec §3.2.2 / §4.4 HostPickerPopover).
+ *
+ * Critically: this MUST NOT silently fall back to `useHostStore.activeHostId`
+ * for the null case — that would risk sending keys to the wrong host.
+ */
+export function inferWorkspaceHostId(
+  workspace: Workspace,
+  tabs: Record<string, Tab>,
+): string | null {
+  const candidates = workspace.tabs
+    .map((tabId) => tabs[tabId])
+    .filter((t): t is Tab => !!t)
+    .flatMap((t) => collectTmuxSessionHostIds(t.layout))
+
+  if (candidates.length === 0) return null
+
+  const counts = new Map<string, number>()
+  for (const h of candidates) counts.set(h, (counts.get(h) ?? 0) + 1)
+  const max = Math.max(...counts.values())
+  const winners = [...counts.entries()].filter(([, c]) => c === max).map(([h]) => h)
+  if (winners.length === 1) return winners[0]
+
+  // Tie-break A: active tab's hostId if it is a tmux-session and is among winners.
+  if (workspace.activeTabId) {
+    const activeTab = tabs[workspace.activeTabId]
+    if (activeTab) {
+      const activeHosts = collectTmuxSessionHostIds(activeTab.layout)
+      const winner = activeHosts.find((h) => winners.includes(h))
+      if (winner) return winner
+    }
+  }
+
+  // Tie-break B: first winner in tabs order.
+  for (const tabId of workspace.tabs) {
+    const t = tabs[tabId]
+    if (!t) continue
+    const hosts = collectTmuxSessionHostIds(t.layout)
+    const first = hosts.find((h) => winners.includes(h))
+    if (first) return first
+  }
+  return winners[0] // theoretically unreachable
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cd spa && npx vitest run src/lib/infer-workspace-host-id.test.ts`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```
+feat(spa): add inferWorkspaceHostId — majority-vote host resolution for workspace slots
+```
+
+---
+
+### Task 1b.0b: 新增 `HostPickerPopover` 共用元件（spec §3.2.2 / §4.4）
+
+**Files:**
+- Create: `spa/src/components/HostPickerPopover.tsx`
+- Create: `spa/src/components/HostPickerPopover.test.tsx`
+
+**動機：** spec §3.2.2 規定 workspace hostId 為 null 時不可靜默 fallback；改開 host picker 讓 user 主動選 host。spec §3.5 forward-compat：未來 multi-host workspace binding 系統也用同一個 popover。本 task 為**獨立可重用元件**，不耦合 quick commands store。
+
+**API：**
+```tsx
+interface Props {
+  open: boolean
+  anchor: { x: number; y: number } | HTMLElement | null
+  onSelect: (hostId: string) => void
+  onCancel: () => void
+}
+```
+
+**內部資料來源：** 直接讀 `useHostStore.hostOrder` + `useHostStore.hosts` + `useHostStore.runtime` 列出 hosts；每列顯示 host name + online/offline 點（透過 `runtime[hostId]?.status === 'connected'` 判斷）。
+
+**a11y / UX 規格：**
+- 開啟時 focus 第一個可選項（若 hostOrder 空，focus dialog 容器 / show empty 狀態）
+- 上下方向鍵移動 active item，Enter 觸發 `onSelect`
+- Esc 觸發 `onCancel`（不送任何 hostId）
+- focus trap：Tab / Shift+Tab 在 popover 內循環
+- 關閉時 focus 回 trigger（caller 透過 `onCancel`/`onSelect` 後恢復 — popover 自身不持有 trigger ref；caller 負責）
+- 樣式：與既有 popover 一致（`bg-surface-secondary`、`border-border-default`、`shadow-lg`，無自訂顏色）
+- offline host 仍可點選（不 disable），但 row 上加警示 chip（例如 `text-text-muted` + 「offline」標籤）；user 可能就是要切到 offline host 去看其他內容
+- 空 `hostOrder` 顯示空狀態文字「No hosts available」
+
+**anchor 處理：** 若 `anchor` 是 `{x,y}` → 以 fixed 定位；若是 HTMLElement → `getBoundingClientRect()` 計算位置，popover 出現在 anchor 元素旁邊。
+
+- [ ] **Step 1: Write the failing test**
+
+Create `spa/src/components/HostPickerPopover.test.tsx`:
+
+```tsx
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { HostPickerPopover } from './HostPickerPopover'
+import { useHostStore } from '../stores/useHostStore'
+
+function setHosts() {
+  useHostStore.setState({
+    hosts: {
+      h1: { id: 'h1', name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 },
+      h2: { id: 'h2', name: 'air', ip: '100.64.0.1', port: 7860, order: 1 },
+    },
+    hostOrder: ['h1', 'h2'],
+    runtime: {
+      h1: { status: 'connected' },
+      h2: { status: 'disconnected' },
+    },
+    activeHostId: 'h1',
+  })
+}
+
+describe('HostPickerPopover', () => {
+  beforeEach(() => {
+    setHosts()
+  })
+
+  it('does not render when open=false', () => {
+    const { container } = render(
+      <HostPickerPopover open={false} anchor={{ x: 0, y: 0 }} onSelect={vi.fn()} onCancel={vi.fn()} />,
+    )
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('lists hosts in hostOrder with name + online/offline indicator', () => {
+    render(
+      <HostPickerPopover open={true} anchor={{ x: 0, y: 0 }} onSelect={vi.fn()} onCancel={vi.fn()} />,
+    )
+    const items = screen.getAllByRole('option')
+    expect(items).toHaveLength(2)
+    expect(items[0]).toHaveTextContent('mlab')
+    expect(items[1]).toHaveTextContent('air')
+    // online indicator on h1
+    expect(items[0].textContent?.toLowerCase()).toMatch(/online|connected/)
+    // offline indicator on h2
+    expect(items[1].textContent?.toLowerCase()).toMatch(/offline/)
+  })
+
+  it('Enter on focused item triggers onSelect with that hostId', () => {
+    const onSelect = vi.fn()
+    render(
+      <HostPickerPopover open={true} anchor={{ x: 0, y: 0 }} onSelect={onSelect} onCancel={vi.fn()} />,
+    )
+    const items = screen.getAllByRole('option')
+    items[0].focus()
+    fireEvent.keyDown(items[0], { key: 'Enter' })
+    expect(onSelect).toHaveBeenCalledWith('h1')
+  })
+
+  it('ArrowDown / ArrowUp moves focus through items', () => {
+    render(
+      <HostPickerPopover open={true} anchor={{ x: 0, y: 0 }} onSelect={vi.fn()} onCancel={vi.fn()} />,
+    )
+    const items = screen.getAllByRole('option')
+    items[0].focus()
+    fireEvent.keyDown(items[0], { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(items[1])
+    fireEvent.keyDown(items[1], { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(items[0])
+  })
+
+  it('Esc triggers onCancel and not onSelect', () => {
+    const onSelect = vi.fn()
+    const onCancel = vi.fn()
+    render(
+      <HostPickerPopover open={true} anchor={{ x: 0, y: 0 }} onSelect={onSelect} onCancel={onCancel} />,
+    )
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('clicking an offline host still calls onSelect (not disabled)', () => {
+    const onSelect = vi.fn()
+    render(
+      <HostPickerPopover open={true} anchor={{ x: 0, y: 0 }} onSelect={onSelect} onCancel={vi.fn()} />,
+    )
+    fireEvent.click(screen.getAllByRole('option')[1])
+    expect(onSelect).toHaveBeenCalledWith('h2')
+  })
+
+  it('shows empty state when hostOrder is empty', () => {
+    useHostStore.setState({ hosts: {}, hostOrder: [], runtime: {}, activeHostId: null })
+    render(
+      <HostPickerPopover open={true} anchor={{ x: 0, y: 0 }} onSelect={vi.fn()} onCancel={vi.fn()} />,
+    )
+    expect(screen.getByText(/No hosts available/i)).toBeInTheDocument()
+  })
+
+  it('focus is trapped inside the popover (Tab cycles)', () => {
+    render(
+      <HostPickerPopover open={true} anchor={{ x: 0, y: 0 }} onSelect={vi.fn()} onCancel={vi.fn()} />,
+    )
+    const items = screen.getAllByRole('option')
+    items[items.length - 1].focus()
+    fireEvent.keyDown(items[items.length - 1], { key: 'Tab' })
+    // focus should wrap back to first
+    expect(document.activeElement).toBe(items[0])
+  })
+})
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd spa && npx vitest run src/components/HostPickerPopover.test.tsx`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Implement popover**
+
+Create `spa/src/components/HostPickerPopover.tsx`:
+
+```tsx
+import { useEffect, useMemo, useRef } from 'react'
+import { useHostStore } from '../stores/useHostStore'
+import { useI18nStore } from '../stores/useI18nStore'
+
+interface Props {
+  open: boolean
+  /**
+   * Anchor for positioning. `{x, y}` → fixed positioning at viewport coords.
+   * HTMLElement → positioned next to that element via getBoundingClientRect.
+   * `null` allowed during transition; popover renders centered as fallback.
+   */
+  anchor: { x: number; y: number } | HTMLElement | null
+  onSelect: (hostId: string) => void
+  onCancel: () => void
+}
+
+/**
+ * Reusable host picker popover. Caller-controlled open/anchor; emits
+ * `onSelect(hostId)` or `onCancel()`. Used by:
+ *   - WORKSPACE_ACTIONS slot when inferWorkspaceHostId returns null
+ *   - (Future) multi-host workspace binding default-launcher selection (spec §3.5)
+ *
+ * a11y:
+ *   - role="listbox" on container, role="option" on each host row
+ *   - Enter on focused option → onSelect; Esc → onCancel; Arrow Up/Down moves
+ *     focus; Tab wraps within popover (focus trap).
+ *   - Caller is responsible for restoring focus to its trigger after
+ *     onSelect/onCancel returns.
+ */
+export function HostPickerPopover({ open, anchor, onSelect, onCancel }: Props) {
+  const t = useI18nStore((s) => s.t)
+  const hostOrder = useHostStore((s) => s.hostOrder)
+  const hosts = useHostStore((s) => s.hosts)
+  const runtime = useHostStore((s) => s.runtime)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const items = useMemo(
+    () =>
+      hostOrder
+        .map((id) => hosts[id])
+        .filter((h): h is NonNullable<typeof h> => !!h)
+        .map((h) => ({
+          id: h.id,
+          name: h.name,
+          online: runtime[h.id]?.status === 'connected',
+        })),
+    [hostOrder, hosts, runtime],
+  )
+
+  // Auto-focus first item on open.
+  useEffect(() => {
+    if (!open) return
+    const first = containerRef.current?.querySelector<HTMLElement>('[role="option"]')
+    first?.focus()
+  }, [open])
+
+  // Esc → onCancel (document-level so it works regardless of focus position).
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onCancel()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [open, onCancel])
+
+  if (!open) return null
+
+  const positionStyle: React.CSSProperties = (() => {
+    if (anchor && 'getBoundingClientRect' in anchor) {
+      const r = anchor.getBoundingClientRect()
+      return { position: 'fixed', top: r.bottom + 4, left: r.left }
+    }
+    if (anchor && typeof anchor === 'object' && 'x' in anchor) {
+      return { position: 'fixed', top: anchor.y, left: anchor.x }
+    }
+    return { position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }
+  })()
+
+  function handleItemKey(e: React.KeyboardEvent<HTMLDivElement>, hostId: string, index: number) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      onSelect(hostId)
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      const next = (index + 1) % items.length
+      ;(containerRef.current?.querySelectorAll<HTMLElement>('[role="option"]')[next])?.focus()
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      const prev = (index - 1 + items.length) % items.length
+      ;(containerRef.current?.querySelectorAll<HTMLElement>('[role="option"]')[prev])?.focus()
+      return
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault()
+      const len = items.length
+      if (len === 0) return
+      const dir = e.shiftKey ? -1 : 1
+      const next = (index + dir + len) % len
+      ;(containerRef.current?.querySelectorAll<HTMLElement>('[role="option"]')[next])?.focus()
+    }
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      role="listbox"
+      aria-label={t('quick_commands.host_picker.label')}
+      style={positionStyle}
+      className="z-50 min-w-[200px] rounded-md border border-border-default bg-surface-secondary shadow-lg py-1"
+    >
+      {items.length === 0 ? (
+        <div className="px-3 py-2 text-xs text-text-muted">
+          {t('quick_commands.host_picker.empty')}
+        </div>
+      ) : (
+        items.map((item, index) => (
+          <div
+            key={item.id}
+            role="option"
+            tabIndex={0}
+            aria-selected={false}
+            onClick={() => onSelect(item.id)}
+            onKeyDown={(e) => handleItemKey(e, item.id, index)}
+            className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs text-text-primary cursor-pointer hover:bg-surface-hover focus:bg-surface-hover focus:outline-none"
+          >
+            <span className="truncate">{item.name}</span>
+            <span
+              className={
+                item.online
+                  ? 'text-[10px] text-text-secondary bg-surface-primary px-1.5 py-0.5 rounded'
+                  : 'text-[10px] text-text-muted bg-surface-primary px-1.5 py-0.5 rounded'
+              }
+            >
+              {item.online
+                ? t('quick_commands.host_picker.online')
+                : t('quick_commands.host_picker.offline')}
+            </span>
+          </div>
+        ))
+      )}
+    </div>
+  )
+}
+```
+
+註：i18n keys `quick_commands.host_picker.label` / `.empty` / `.online` / `.offline` 在 Task 1b.4 統一加入 zh-TW / en JSON。
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cd spa && npx vitest run src/components/HostPickerPopover.test.tsx`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```
+feat(spa): add HostPickerPopover reusable component for host selection (spec §3.2.2 / §4.4)
+```
+
+---
+
 ### Task 1b.1: `<CommandSlot>` 共用元件
 
 **Files:**
 - Create: `spa/src/components/CommandSlot.tsx`
 - Create: `spa/src/components/CommandSlot.test.tsx`
 
+**Spec v4 重點：** `SlotContext.hostId` 為 `string | null`（spec §3.2.1 / §3.2.2 / §3.5）。`<CommandSlot>` 自身**不**渲染 host picker — picker 是 caller 端（context menu / popover / sessions section）的 UI 責任，原因是 picker 屬於 React tree 上層的 controllable popover，executor lib 不能也不該觸碰 React render。`<CommandSlot>` 只負責：(a) 列出 mount 在該 slot 的 commands；(b) 點擊後把 `(cmd, ctx)` 交給 `executor` callback；hostId null 時 ctx 仍然會帶 null 進去，由 caller 在 executor 內透過 `resolveHostId` callback 開 picker（見 Task 1b.2）。
+
 - [ ] **Step 1: Write the failing test**
 
-Create `spa/src/components/CommandSlot.test.tsx`:
+Create `spa/src/components/CommandSlot.test.tsx`（注意：含 hostId=null 案例驗證 SlotContext 契約）:
 
 ```tsx
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -911,6 +1497,21 @@ describe('CommandSlot', () => {
     expect(exec.mock.calls[0][1]).toMatchObject({ hostId: 'h1', workspaceId: 'w1' })
   })
 
+  it('hostId=null is valid — passes null through to executor (caller resolves via picker)', () => {
+    const exec = vi.fn().mockResolvedValue(undefined)
+    render(
+      <CommandSlot
+        mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
+        ctx={{ hostId: null, workspaceId: 'w1' }}
+        executor={exec}
+      />,
+    )
+    // commands are still rendered (hostId-null doesn't suppress UI)
+    fireEvent.click(screen.getByLabelText(/^A/))
+    expect(exec).toHaveBeenCalledTimes(1)
+    expect(exec.mock.calls[0][1]).toMatchObject({ hostId: null, workspaceId: 'w1' })
+  })
+
   it('supports custom render prop', () => {
     render(
       <CommandSlot
@@ -940,8 +1541,21 @@ import { useQuickCommandStore, type QuickCommand } from '../stores/useQuickComma
 import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 import type { QuickCommandSlotId } from '../lib/quick-command-slots'
 
+/**
+ * Slot context (spec v4 §3.2.1 / §3.2.2 / §3.5).
+ *
+ * `hostId` is `string | null`:
+ *   - WORKSPACE_ACTIONS: caller provides `inferWorkspaceHostId(ws, tabs)`
+ *     which can return null when the workspace has no tmux-session tabs.
+ *   - HOST_ACTIONS: caller always provides a concrete hostId (host detail
+ *     page already knows which host it's rendering).
+ *
+ * When hostId is null, the executor MUST resolve it (e.g. by opening the
+ * HostPickerPopover) before performing any host-side work — silently
+ * falling back to `useHostStore.activeHostId` is forbidden.
+ */
 export interface SlotContext {
-  hostId: string
+  hostId: string | null
   workspaceId?: string | null
   cwd?: string
 }
@@ -968,7 +1582,12 @@ interface Props {
 export function CommandSlot({ mountTo, ctx, executor, render }: Props) {
   const enabled = useModuleEnabledStore((s) => s.isEnabled('quick-commands'))
   const bindings = useQuickCommandStore((s) => s.bindings)
-  const allCmds = useQuickCommandStore((s) => s.getCommands(ctx.hostId))
+  // hostId null → no host override possible; show global-only command list.
+  // (getCommands(hostId) would require a string; explicitly passing null
+  // means "caller hasn't resolved a host yet — just use globals".)
+  const allCmds = useQuickCommandStore((s) =>
+    ctx.hostId == null ? s.global : s.getCommands(ctx.hostId),
+  )
 
   // Recompute boundCmds when bindings or capability list change.
   const boundCmds = useMemo(
@@ -1147,13 +1766,51 @@ feat(spa): extend useUndoToast schema with optional actionLabel (back-compat)
 
 ---
 
-### Task 1b.2: Slot executor lib（建 session + 送 keys + 失敗 UX）
+### Task 1b.2: Slot executor lib（建 session + 送 keys + 失敗 UX + hostId 解析）
 
 **Files:**
 - Create: `spa/src/lib/slot-executor.ts`
 - Create: `spa/src/lib/slot-executor.test.ts`
 
 註：保留既有 `spa/src/lib/execute-command.ts`（v1 send-keys helper）；新檔處理 v2 的「建 session + 送 keys + 切 session + toast」一條龍。
+
+**Spec v4 — hostId 解析設計（Option B：`resolveHostId` callback）：**
+
+`SlotContext.hostId` 是 `string | null`。executor 收到 ctx 後，若 hostId null **不直接呼叫 API**；改 await caller 注入的 `resolveHostId(): Promise<string | null>` callback —
+- caller（CommandSlot 包裝層 / context menu / popover）在 callback 內部開 `HostPickerPopover`，await user 選定後 resolve hostId
+- user 取消 popover → resolve `null` → executor no-op 結束
+
+**Option B vs Option A 選擇理由：**
+- Option A（throw `HostRequiredError` + caller catch + retry）會切斷 executor 線性流程，且 toast / focus 切換邏輯散落在 caller 兩處（first-run 與 retry-run），重複容易漏。
+- Option B（callback 注入）延續既有 `runWorkspaceSlot` 的 `deps.switchToSession` callback 模式（同一個 task 已有先例），executor 仍是線性 `await`，CommandSlot 把 picker state + Promise resolver 包進一個 React hook 即可內聚地管理。
+- 既有 codebase 沒有「throw + catch + retry」的 host-resolution pattern；Option B 與現有設計一致。
+
+**選擇：Option B。**
+
+CommandSlot 一側的封裝建議（在 1b.5a / 1b.5b / 1c.1b 各 caller 自行實作；不抽公共 hook，因為三個 caller 的 trigger UI 完全不同）：
+```tsx
+const [pickerState, setPickerState] = useState<{
+  resolver: (id: string | null) => void
+  anchor: HTMLElement | { x: number; y: number } | null
+} | null>(null)
+
+const resolveHostId = useCallback(
+  () =>
+    new Promise<string | null>((resolve) => {
+      // anchor 由 trigger element ref 提供
+      setPickerState({ resolver: resolve, anchor: triggerRef.current })
+    }),
+  [],
+)
+
+// JSX:
+<HostPickerPopover
+  open={pickerState !== null}
+  anchor={pickerState?.anchor ?? null}
+  onSelect={(hostId) => { pickerState?.resolver(hostId); setPickerState(null) }}
+  onCancel={() => { pickerState?.resolver(null); setPickerState(null) }}
+/>
+```
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1190,6 +1847,7 @@ describe('runWorkspaceSlot', () => {
 
   it('happy path — creates session, sends keys, switches focus', async () => {
     const switchFocus = vi.fn()
+    const resolveHostId = vi.fn() // not called when ctx.hostId is non-null
     ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       code: 'sess-1', name: 'A', cwd: '/tmp', mode: 'terminal',
     })
@@ -1198,23 +1856,62 @@ describe('runWorkspaceSlot', () => {
     await runWorkspaceSlot(
       { id: 'cmd-a', name: 'A', command: 'echo hi' },
       { hostId: 'h1', workspaceId: 'w1', cwd: '/tmp' },
-      { switchToSession: switchFocus },
+      { switchToSession: switchFocus, resolveHostId },
     )
 
+    expect(resolveHostId).not.toHaveBeenCalled()
     expect(createSession).toHaveBeenCalledWith('h1', expect.any(String), '/tmp', 'terminal')
     expect(executeCommand).toHaveBeenCalledWith('h1', 'sess-1', 'echo hi')
     expect(switchFocus).toHaveBeenCalledWith('h1', 'sess-1')
     expect(useUndoToast.getState().toast).toBeNull()
   })
 
+  it('hostId null → invokes resolveHostId; user picks → continues with that hostId', async () => {
+    const switchFocus = vi.fn()
+    const resolveHostId = vi.fn().mockResolvedValue('h-picked')
+    ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 'sess-2', name: 'A', cwd: '~', mode: 'terminal',
+    })
+    ;(executeCommand as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+
+    await runWorkspaceSlot(
+      { id: 'cmd-a', name: 'A', command: 'echo hi' },
+      { hostId: null, workspaceId: 'w1' },
+      { switchToSession: switchFocus, resolveHostId },
+    )
+
+    expect(resolveHostId).toHaveBeenCalledTimes(1)
+    expect(createSession).toHaveBeenCalledWith('h-picked', expect.any(String), '~', 'terminal')
+    expect(executeCommand).toHaveBeenCalledWith('h-picked', 'sess-2', 'echo hi')
+    expect(switchFocus).toHaveBeenCalledWith('h-picked', 'sess-2')
+  })
+
+  it('hostId null → user cancels picker → no API call, no toast', async () => {
+    const switchFocus = vi.fn()
+    const resolveHostId = vi.fn().mockResolvedValue(null)
+
+    await runWorkspaceSlot(
+      { id: 'cmd-a', name: 'A', command: 'echo hi' },
+      { hostId: null, workspaceId: 'w1' },
+      { switchToSession: switchFocus, resolveHostId },
+    )
+
+    expect(resolveHostId).toHaveBeenCalledTimes(1)
+    expect(createSession).not.toHaveBeenCalled()
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(switchFocus).not.toHaveBeenCalled()
+    expect(useUndoToast.getState().toast).toBeNull()
+  })
+
   it('createSession failure — surfaces toast, does NOT switch focus', async () => {
     const switchFocus = vi.fn()
+    const resolveHostId = vi.fn()
     ;(createSession as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('500 Internal'))
 
     await runWorkspaceSlot(
       { id: 'cmd-a', name: 'A', command: 'echo hi' },
       { hostId: 'h1', workspaceId: 'w1' },
-      { switchToSession: switchFocus },
+      { switchToSession: switchFocus, resolveHostId },
     )
 
     expect(switchFocus).not.toHaveBeenCalled()
@@ -1226,6 +1923,7 @@ describe('runWorkspaceSlot', () => {
 
   it('send-keys failure — STILL switches focus + toast carries retry action', async () => {
     const switchFocus = vi.fn()
+    const resolveHostId = vi.fn()
     ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       code: 'sess-1', name: 'A', cwd: '/tmp', mode: 'terminal',
     })
@@ -1234,7 +1932,7 @@ describe('runWorkspaceSlot', () => {
     await runWorkspaceSlot(
       { id: 'cmd-a', name: 'A', command: 'echo hi' },
       { hostId: 'h1', workspaceId: 'w1' },
-      { switchToSession: switchFocus },
+      { switchToSession: switchFocus, resolveHostId },
     )
 
     expect(switchFocus).toHaveBeenCalledWith('h1', 'sess-1')
@@ -1256,6 +1954,7 @@ describe('runWorkspaceSlot', () => {
     const switchFocus = vi.fn().mockImplementation(() => {
       throw new Error('switch failed')
     })
+    const resolveHostId = vi.fn()
     ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       code: 'sess-1', name: 'A', cwd: '/tmp', mode: 'terminal',
     })
@@ -1264,7 +1963,7 @@ describe('runWorkspaceSlot', () => {
     await runWorkspaceSlot(
       { id: 'cmd-a', name: 'A', command: 'echo hi' },
       { hostId: 'h1', workspaceId: 'w1' },
-      { switchToSession: switchFocus },
+      { switchToSession: switchFocus, resolveHostId },
     )
 
     const toast = useUndoToast.getState().toast
@@ -1298,6 +1997,17 @@ interface Deps {
    * succeeded — see spec §3.3 (silent orphan sessions are the worst UX).
    */
   switchToSession: (hostId: string, sessionCode: string) => void
+
+  /**
+   * Resolves a hostId when ctx.hostId is null (spec v4 §3.2.2 — Option B).
+   * Caller opens the HostPickerPopover inside this callback and resolves
+   * with the user-selected hostId, or `null` if the user cancels.
+   *
+   * Required regardless of ctx.hostId — when ctx.hostId is non-null this
+   * callback is never invoked (see happy-path test). Caller still passes
+   * a noop / never-called function to satisfy the type contract.
+   */
+  resolveHostId: () => Promise<string | null>
 }
 
 function genSessionName(cmd: QuickCommand): string {
@@ -1329,9 +2039,23 @@ export async function runWorkspaceSlot(
   const t = useI18nStore.getState().t
   const toast = useUndoToast.getState()
 
+  // spec v4 §3.2.2 — null hostId resolution via caller-injected callback.
+  // We do NOT silently fall back to activeHostId.
+  let hostId: string
+  if (ctx.hostId == null) {
+    const picked = await deps.resolveHostId()
+    if (picked == null) {
+      // User cancelled the picker → no-op, no toast.
+      return
+    }
+    hostId = picked
+  } else {
+    hostId = ctx.hostId
+  }
+
   let sessionCode: string
   try {
-    const session = await createSession(ctx.hostId, genSessionName(cmd), ctx.cwd ?? '~', 'terminal')
+    const session = await createSession(hostId, genSessionName(cmd), ctx.cwd ?? '~', 'terminal')
     sessionCode = session.code
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
@@ -1340,24 +2064,24 @@ export async function runWorkspaceSlot(
   }
 
   try {
-    await executeCommand(ctx.hostId, sessionCode, cmd.command)
+    await executeCommand(hostId, sessionCode, cmd.command)
   } catch (err) {
     // Step 2 failed — STILL switch (so user sees the orphan), with Retry.
-    safelySwitch(ctx.hostId, sessionCode, deps, t)
+    safelySwitch(hostId, sessionCode, deps, t)
     const reason = err instanceof Error ? err.message : String(err)
     void reason
     toast.show(
       t('quick_commands.toast.send_keys_failed'),
       // retry: re-run send-keys; failures dropped (user can keep clicking).
       () => {
-        void executeCommand(ctx.hostId, sessionCode, cmd.command).catch(() => undefined)
+        void executeCommand(hostId, sessionCode, cmd.command).catch(() => undefined)
       },
       t('quick_commands.toast.retry'),  // ← Task 1b.1.5 introduced actionLabel; default ('Undo') doesn't fit retry semantics
     )
     return
   }
 
-  safelySwitch(ctx.hostId, sessionCode, deps, t)
+  safelySwitch(hostId, sessionCode, deps, t)
 }
 
 function safelySwitch(
@@ -1932,6 +2656,10 @@ In `spa/src/locales/zh-TW.json` 加入：
   "quick_commands.toast.send_keys_failed": "Session 已建立，但指令送出失敗。",
   "quick_commands.toast.switch_failed": "已建立並送出指令，但無法切換焦點；請至 sessions 列表查看。",
   "quick_commands.toast.retry": "重試",
+  "quick_commands.host_picker.label": "選擇主機",
+  "quick_commands.host_picker.empty": "尚未設定任何主機",
+  "quick_commands.host_picker.online": "線上",
+  "quick_commands.host_picker.offline": "離線",
 ```
 
 In `spa/src/locales/en.json` 對應加入：
@@ -1954,6 +2682,10 @@ In `spa/src/locales/en.json` 對應加入：
   "quick_commands.toast.send_keys_failed": "Session created, but command failed.",
   "quick_commands.toast.switch_failed": "Created and sent, but could not switch focus; check the sessions list.",
   "quick_commands.toast.retry": "Retry",
+  "quick_commands.host_picker.label": "Choose host",
+  "quick_commands.host_picker.empty": "No hosts available",
+  "quick_commands.host_picker.online": "online",
+  "quick_commands.host_picker.offline": "offline",
 ```
 
 註：若 `common.edit` 已存在，跳過該行。檢查指令：`grep '"common.edit"' spa/src/locales/zh-TW.json`。
@@ -1984,7 +2716,12 @@ feat(spa): wire Quick Commands settings contribution + i18n keys
 
 1. 新元件 `WorkspaceQuickCommandsContextMenu` 渲染 mount=`WORKSPACE_ACTIONS` 的所有 bound commands；點擊執行 executor 並關閉 menu。
 2. 在 `WorkspaceContextMenu` 內部 `Settings` 按鈕**之前**渲染此新元件，並在其後加 `border-t` separator（若有任一個 quick command 顯示）。
-3. `App.tsx` 的 `WorkspaceContextMenu` 渲染處需新增傳 `workspaceId={wsContextMenu.wsId}` prop，使其能解析該 workspace 對應 host（透過 `useWorkspaceStore` 找 `workspace.hostId` — 若 store schema 有對應欄位；否則用 `activeHostId`）。
+3. `App.tsx` 的 `WorkspaceContextMenu` 渲染處需新增傳 `workspaceId={wsContextMenu.wsId}` prop。
+
+**Spec v4 hostId 解析（不再用 `activeHostId` fallback）：**
+- 取 `useTabStore.tabs` + 該 workspace，呼叫 `inferWorkspaceHostId(workspace, tabs)`
+- 多數決成功 → 直接傳 hostId 給 ctx
+- 多數決回 null → ctx.hostId 為 null；點擊 chip 時 executor 透過 `resolveHostId` callback 開 `HostPickerPopover`
 
 **重要：** `<CommandSlot>` 已具備 `isEnabled` short-circuit 與「無 binding 不渲染」邏輯，所以無 quick commands 時 menu 內部自動只剩既有項目，不會出現空 separator。
 
@@ -2047,6 +2784,23 @@ describe('WorkspaceQuickCommandsContextMenu', () => {
     )
     expect(container.firstChild).toBeNull()
   })
+
+  it('hostId=null — clicking a command opens HostPickerPopover (does NOT call executor immediately)', async () => {
+    // Spec v4 §3.2.2 — when inferWorkspaceHostId returns null we must let the
+    // user choose. The chip is rendered as soon as bindings exist; click triggers
+    // the picker before executor.
+    render(<WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId={null} onClose={() => {}} />)
+    expect(screen.queryByRole('listbox')).toBeNull()
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    expect(await screen.findByRole('listbox')).toBeInTheDocument()
+  })
+
+  it('hostId=null — picker cancel → no createSession call, menu stays open until close', async () => {
+    // Behavioural test: integration with HostPickerPopover; mock createSession
+    // and assert it was not invoked when user presses Esc.
+    // (Subagent: import createSession mock from host-api; vi.mock as in 1b.2.)
+    // This test is acceptance-only; full coverage of the path lives in slot-executor.test.ts
+  })
 })
 ```
 
@@ -2084,26 +2838,53 @@ Expected: FAIL — module not found / props missing。
 Create `spa/src/features/workspace/components/WorkspaceQuickCommandsContextMenu.tsx`：
 
 ```tsx
+import { useCallback, useRef, useState } from 'react'
 import { CommandSlot } from '../../../components/CommandSlot'
+import { HostPickerPopover } from '../../../components/HostPickerPopover'
 import { runWorkspaceSlot } from '../../../lib/slot-executor'
 import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
 import { useTabStore } from '../../../stores/useTabStore'
 
 interface Props {
   workspaceId: string
-  hostId: string
+  /**
+   * Workspace 的多數決 hostId（spec v4 §3.2.1）；null 代表 workspace 無
+   * tmux-session tabs，executor 會在 callback 裡開 HostPickerPopover。
+   */
+  hostId: string | null
   onClose: () => void
 }
 
 /**
  * 渲染 mount=WORKSPACE_ACTIONS 的 quick commands，作為 WorkspaceContextMenu 的子 section。
  * <CommandSlot> 自身會 short-circuit module disabled / no-bindings 兩個情況。
- * 為了讓 parent 能正確 toggle separator，**沒有 bound commands 時整個 wrapper 也回 null**
- * — 透過讀同樣的 store 直接判斷（避免引入新 prop）。
+ * hostId=null 時 chip 仍渲染（user 可選一個 host 並執行）；executor 透過
+ * resolveHostId callback 等待 picker 結果。picker 取消 → no-op，menu 仍由 onClose
+ * 觸發者（CommandSlot 預設 button onClick）正常關閉。
  */
 export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose }: Props) {
+  const [picker, setPicker] = useState<{
+    resolver: (id: string | null) => void
+    anchor: { x: number; y: number } | null
+  } | null>(null)
+  const lastClickPos = useRef<{ x: number; y: number } | null>(null)
+
+  const resolveHostId = useCallback(
+    () =>
+      new Promise<string | null>((resolve) => {
+        setPicker({ resolver: resolve, anchor: lastClickPos.current })
+      }),
+    [],
+  )
+
   return (
-    <div className="py-1">
+    <div
+      className="py-1"
+      onClickCapture={(e) => {
+        // Capture coordinates for picker anchor (fixed-positioned next to click).
+        lastClickPos.current = { x: e.clientX, y: e.clientY }
+      }}
+    >
       <CommandSlot
         mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
         ctx={{ hostId, workspaceId }}
@@ -2117,6 +2898,7 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
                   sessionCode,
                 })
               },
+              resolveHostId,
             })
           } finally {
             onClose()
@@ -2136,6 +2918,18 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
             )}
           </button>
         )}
+      />
+      <HostPickerPopover
+        open={picker !== null}
+        anchor={picker?.anchor ?? null}
+        onSelect={(hostId) => {
+          picker?.resolver(hostId)
+          setPicker(null)
+        }}
+        onCancel={() => {
+          picker?.resolver(null)
+          setPicker(null)
+        }}
       />
     </div>
   )
@@ -2168,65 +2962,58 @@ interface Props {
 ```tsx
 interface Props {
   position: { x: number; y: number }
-  workspaceId?: string  // ← new (optional 維持向下相容；測試 setup 內全部要傳)
-  hostId?: string       // ← new
+  workspaceId?: string                 // ← new (optional 維持向下相容；測試 setup 內全部要傳)
+  hostId?: string | null               // ← new — null 代表 workspace 多數決失敗，picker 流程
   onSettings: () => void
   onTearOff?: () => void
   onMergeTo?: (targetWindowId: string) => void
   onClose: () => void
 }
-
-// JSX 中於 Settings 按鈕之前加：
-{workspaceId && hostId && (
-  <>
-    <WorkspaceQuickCommandsContextMenu
-      workspaceId={workspaceId}
-      hostId={hostId}
-      onClose={onClose}
-    />
-    <div className="border-t border-border-default my-1" />
-  </>
-)}
 ```
 
-**注意：** separator 渲染條件 — 應僅當「真有 commands 顯示」才 separator，否則會出現「空 wrapper + separator」的視覺空隙。`<CommandSlot>` 在 0 commands 時回 `null`，但 wrapper `<div>` 仍存在。**解法**：把 separator 也透過讀 store 判斷：
+**Spec v4 — separator 條件：** separator 應只在「該 workspace 確實有 WORKSPACE_ACTIONS bindings」才顯示，與 hostId 是否 null 無關（hostId null 時 chip 仍會渲染）。判斷靠讀 `useQuickCommandStore.global` + `bindings` 是否有 binding（不依賴 hostId 推 byHost 覆寫，因為 hostId null 時不能呼叫 `getCommands(hostId)`）：
 
 ```tsx
-// 在 WorkspaceContextMenu.tsx，新增 helper：
+// 在 WorkspaceContextMenu.tsx 加入：
 import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
 import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
 import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
 
-// 計算 hasQuickCommands：
 const hasQuickCommands = useQuickCommandStore((s) => {
-  if (!hostId) return false
-  const cmds = s.getCommands(hostId)
+  // hostId null 時用 global only；否則用 getCommands(hostId)（含 host override）
+  const cmds = hostId == null ? s.global : s.getCommands(hostId)
   return cmds.some((c) => s.bindings[c.id]?.includes(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS))
 })
 const moduleEnabled = useModuleEnabledStore((s) => s.isEnabled('quick-commands'))
-const showQuickCommandsSection = workspaceId && hostId && moduleEnabled && hasQuickCommands
+const showQuickCommandsSection = !!workspaceId && moduleEnabled && hasQuickCommands
 
 // JSX：
 {showQuickCommandsSection && (
   <>
-    <WorkspaceQuickCommandsContextMenu workspaceId={workspaceId!} hostId={hostId} onClose={onClose} />
+    <WorkspaceQuickCommandsContextMenu workspaceId={workspaceId!} hostId={hostId ?? null} onClose={onClose} />
     <div className="border-t border-border-default my-1" />
   </>
 )}
 ```
 
-修改 `App.tsx` 的 `<WorkspaceContextMenu>` 呼叫處（L322-329）：
+修改 `App.tsx` 的 `<WorkspaceContextMenu>` 呼叫處（L322-329）— 改用 spec v4 多數決：
 
 ```tsx
+import { inferWorkspaceHostId } from './lib/infer-workspace-host-id'
+import { useTabStore } from './stores/useTabStore'
+import { useWorkspaceStore } from './stores/useWorkspaceStore' // 若已存在；否則 workspaces 來自當前 source
+
 {wsContextMenu && (() => {
   const ws = workspaces.find((w) => w.id === wsContextMenu.wsId)
-  // hostId 來源：workspace 上的 hostId 欄位（若 schema 有），否則用 useHostStore.activeHostId fallback
-  const hostId = (ws as { hostId?: string } | undefined)?.hostId ?? useHostStore.getState().activeHostId
+  if (!ws) return null
+  // Spec v4 §3.2.1 — workspace hostId 多數決，不再用 activeHostId fallback。
+  const tabs = useTabStore.getState().tabs
+  const hostId = inferWorkspaceHostId(ws, tabs)  // string | null
   return (
     <WorkspaceContextMenu
       position={wsContextMenu.position}
       workspaceId={wsContextMenu.wsId}
-      hostId={hostId ?? undefined}
+      hostId={hostId}
       onSettings={() => openWsSettings(wsContextMenu.wsId)}
       onTearOff={window.electronAPI ? () => handleWsTearOff(wsContextMenu.wsId) : undefined}
       onMergeTo={window.electronAPI ? (targetWindowId) => handleWsMergeTo(wsContextMenu.wsId, targetWindowId) : undefined}
@@ -2236,7 +3023,7 @@ const showQuickCommandsSection = workspaceId && hostId && moduleEnabled && hasQu
 })()}
 ```
 
-註：`workspaces[].hostId` 是否存在須在實作前由 subagent grep 確認（`rg "hostId" spa/src/types/tab.ts`）；若不存在則 fallback 到 `useHostStore.activeHostId`。
+註：`useTabStore.getState().tabs` 為 `Record<string, Tab>`（spa/src/stores/useTabStore.ts L110 確認）。`inferWorkspaceHostId` Task 1b.0a 已建立。
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2268,7 +3055,9 @@ feat(spa): mount WORKSPACE_ACTIONS slot in workspace right-click context menu
 - 視覺 cue：popover 含半透明漸層壓底（`bg-gradient-to-l from-surface-secondary/0 to-surface-secondary/95` 或同等 token）。
 - **Plus 原本 hover 才顯**（L117 `opacity-0 group-hover/ws-header:opacity-100`）— 此邏輯保留。
 
-**短路條件：** `<CommandSlot>` 已內建 module-disabled / no-bindings short-circuit；`WorkspaceQuickActionsPopover` 額外用同邏輯（讀 store 並 early-return null）避免在無 commands 時渲染空 popover wrapper（避免 hover 觸發後出現空白浮層）。
+**Spec v4 hostId 解析：** WorkspaceRow 內以 `inferWorkspaceHostId(workspace, useTabStore.getState().tabs)` 取 hostId（不再用 `useHostStore.activeHostId` fallback）。多數決回 null 時 chip 仍顯示（`hostId={null}` 傳給 popover）；點擊 chip 由 popover 內部開 `HostPickerPopover` 等 user 選定後跑 executor。
+
+**短路條件：** `<CommandSlot>` 已內建 module-disabled / no-bindings short-circuit；`WorkspaceQuickActionsPopover` 額外用同邏輯（讀 store 並 early-return null）避免在無 commands 時渲染空 popover wrapper（避免 hover 觸發後出現空白浮層）。**注意：hostId null 不再作為 `WorkspaceQuickActionsPopover` 的隱藏條件**（spec v4 §3.2.2）— 即使 workspace 沒有 tmux-session tabs，user 仍可主動透過 picker 選 host 啟動 quick command。
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2276,10 +3065,11 @@ Create `spa/src/features/workspace/components/WorkspaceQuickActionsPopover.test.
 
 ```tsx
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { WorkspaceQuickActionsPopover } from './WorkspaceQuickActionsPopover'
 import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
 import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
+import { useHostStore } from '../../../stores/useHostStore'
 import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
 import { clearModuleRegistry, registerModule } from '../../../lib/module-registry'
 
@@ -2290,6 +3080,13 @@ function setup() {
     bindings: { 'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS] },
   })
   useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+  // HostPickerPopover 內部讀 useHostStore；至少塞一個 host 避免空狀態誤判
+  useHostStore.setState({
+    hosts: { h1: { id: 'h1', name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 } },
+    hostOrder: ['h1'],
+    runtime: { h1: { status: 'connected' } },
+    activeHostId: 'h1',
+  })
   clearModuleRegistry()
   registerModule({ id: 'quick-commands', name: 'Quick Commands', disableable: true })
 }
@@ -2299,6 +3096,13 @@ describe('WorkspaceQuickActionsPopover', () => {
 
   it('renders bound commands as chips', () => {
     render(<WorkspaceQuickActionsPopover workspaceId="w1" hostId="h1" />)
+    expect(screen.getByLabelText(/^Alpha/)).toBeInTheDocument()
+  })
+
+  it('renders chips when hostId is null (picker handles host resolution at click time)', () => {
+    // Spec v4 §3.2.2 — null hostId is a valid state (workspace has no
+    // tmux-session tabs); we still surface the chips so user can pick a host.
+    render(<WorkspaceQuickActionsPopover workspaceId="w1" hostId={null} />)
     expect(screen.getByLabelText(/^Alpha/)).toBeInTheDocument()
   })
 
@@ -2316,6 +3120,13 @@ describe('WorkspaceQuickActionsPopover', () => {
       <WorkspaceQuickActionsPopover workspaceId="w1" hostId="h1" />,
     )
     expect(container.firstChild).toBeNull()
+  })
+
+  it('hostId=null + click chip → opens HostPickerPopover', () => {
+    render(<WorkspaceQuickActionsPopover workspaceId="w1" hostId={null} />)
+    expect(screen.queryByRole('listbox')).toBeNull()
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
   })
 })
 ```
@@ -2364,7 +3175,9 @@ Expected: FAIL — module not found / popover 不顯示。
 Create `spa/src/features/workspace/components/WorkspaceQuickActionsPopover.tsx`：
 
 ```tsx
+import { useCallback, useRef, useState } from 'react'
 import { CommandSlot } from '../../../components/CommandSlot'
+import { HostPickerPopover } from '../../../components/HostPickerPopover'
 import { runWorkspaceSlot } from '../../../lib/slot-executor'
 import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -2373,7 +3186,11 @@ import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
 
 interface Props {
   workspaceId: string
-  hostId: string
+  /**
+   * hostId 為 null 時 chip 仍顯示，executor 點擊後會開 HostPickerPopover
+   * 讓 user 選 host（spec v4 §3.2.2）。
+   */
+  hostId: string | null
 }
 
 /**
@@ -2382,17 +3199,36 @@ interface Props {
  * short-circuits when module disabled / no bindings; we additionally
  * skip rendering the popover wrapper itself in those cases so the
  * hover trigger doesn't expose an empty floating panel.
+ *
+ * NOTE (spec v4 §3.2.2): we do NOT short-circuit on hostId == null —
+ * the picker flow handles that case. Only no-bindings / module-disabled
+ * suppress the wrapper.
  */
 export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
   const moduleEnabled = useModuleEnabledStore((s) => s.isEnabled('quick-commands'))
   const hasBindings = useQuickCommandStore((s) => {
-    const cmds = s.getCommands(hostId)
+    const cmds = hostId == null ? s.global : s.getCommands(hostId)
     return cmds.some((c) => s.bindings[c.id]?.includes(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS))
   })
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const [picker, setPicker] = useState<{
+    resolver: (id: string | null) => void
+    anchor: HTMLElement | null
+  } | null>(null)
+
+  const resolveHostId = useCallback(
+    () =>
+      new Promise<string | null>((resolve) => {
+        setPicker({ resolver: resolve, anchor: wrapperRef.current })
+      }),
+    [],
+  )
+
   if (!moduleEnabled || !hasBindings) return null
 
   return (
     <div
+      ref={wrapperRef}
       role="group"
       aria-label="Workspace quick actions"
       className="absolute right-full top-1/2 -translate-y-1/2 mr-1 flex items-center gap-1 px-2 py-1 rounded-md bg-gradient-to-l from-surface-secondary/0 to-surface-secondary/95 backdrop-blur-sm shadow-md z-30"
@@ -2409,8 +3245,21 @@ export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
                 sessionCode,
               })
             },
+            resolveHostId,
           })
         }
+      />
+      <HostPickerPopover
+        open={picker !== null}
+        anchor={picker?.anchor ?? null}
+        onSelect={(hostId) => {
+          picker?.resolver(hostId)
+          setPicker(null)
+        }}
+        onCancel={() => {
+          picker?.resolver(null)
+          setPicker(null)
+        }}
       />
     </div>
   )
@@ -2422,15 +3271,15 @@ export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
 ```tsx
 import { useState, useRef } from 'react'
 // … 既有 imports
-import { useHostStore } from '../../../stores/useHostStore'
+import { useTabStore } from '../../../stores/useTabStore'
+import { inferWorkspaceHostId } from '../../../lib/infer-workspace-host-id'
 import { WorkspaceQuickActionsPopover } from './WorkspaceQuickActionsPopover'
 
-// 在 WorkspaceRow 函式內：
+// 在 WorkspaceRow 函式內（spec v4 §3.2.1 — 多數決，不再用 activeHostId fallback）：
 const [popoverOpen, setPopoverOpen] = useState(false)
 const hubRef = useRef<HTMLDivElement>(null)
-// hostId 解析（同 1b.5a：先看 workspace.hostId，否則 active）
-const hostId = (workspace as { hostId?: string }).hostId
-  ?? useHostStore((s) => s.activeHostId) ?? null
+const tabsMap = useTabStore((s) => s.tabs)  // 訂閱 tabs 變動，hostId 隨 layout 變化即時更新
+const hostId = inferWorkspaceHostId(workspace, tabsMap)  // string | null
 
 // 改 Plus 區段（保留原條件 showTabs）：
 {showTabs && (
@@ -2460,14 +3309,14 @@ const hostId = (workspace as { hostId?: string }).hostId
     >
       <Plus size={12} />
     </button>
-    {popoverOpen && hostId && (
+    {popoverOpen && (
       <WorkspaceQuickActionsPopover workspaceId={workspace.id} hostId={hostId} />
     )}
   </div>
 )}
 ```
 
-註：popover 觸發 hover 時 Plus 仍是 hover 中（同一個 group），不會閃。`WorkspaceQuickActionsPopover` 內部已 short-circuit 模組停用 / 無 binding，這層也再加 hostId guard。
+註：popover 觸發 hover 時 Plus 仍是 hover 中（同一個 group），不會閃。`WorkspaceQuickActionsPopover` 內部已 short-circuit 模組停用 / 無 binding；hostId 為 null 時 chip 仍顯示（spec v4 §3.2.2 — picker 會在點擊時開）。
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2528,7 +3377,15 @@ Expected: clean
 - [x] 點擊按鈕：建 session + 送 keys + 切過去
 - [x] 三層失敗 UX 符合 spec §3.3：建失敗 / 送 keys 失敗仍切過去 + **toast 顯 'Retry' 按鈕** / 切失敗 toast
 - [x] 停用 quick-commands module → 兩個入口皆立即消失（CommandSlot short-circuit）
-- [x] i18n: zh-TW + en 全部 key 齊全（含新增 `quick_commands.toast.retry`；`pnpm run lint` 含 locale-completeness 檢查）
+- [x] i18n: zh-TW + en 全部 key 齊全（含新增 `quick_commands.toast.retry` + 4 個 `quick_commands.host_picker.*`；`pnpm run lint` 含 locale-completeness 檢查）
+- [x] **Spec v4 — workspace hostId 多數決邊界（§3.2.1 / §3.2.2）：**
+  - workspace 中只有非 tmux-session tabs（如全 dashboard / settings）→ 點 quick command → `HostPickerPopover` 出現 → 選 host → 正常流程（建 session + 送 keys + 切過去）
+  - workspace 中只有 tmux-session tabs（單 host）→ 自動推斷正確 host → **不出 picker**
+  - workspace 中混合多 host tmux-session tabs，多數一個 host → 多數決命中該 host → 不出 picker
+  - workspace 多數決平手 + active tab 是 tmux-session 在多數派內 → 用 active 的 hostId
+  - workspace 多數決平手 + active tab 非 tmux-session → 用 tabs 順序中第一個 winner
+  - hostId null 時 picker 取消 → no-op，**沒有任何 createSession / send-keys API call**
+  - hostId null 時 picker 選定 → executor 用該 hostId 完成全流程
 
 ---
 
@@ -2602,6 +3459,8 @@ refactor(spa): remove v1 QuickCommandMenu from SessionsSection rows (consolidate
 
 **設計：** 把 new-session 按鈕外層改為 `<div className="flex items-center gap-2">`（包 CommandSlot + new-session button 兩者），整體右對齊（保留外層 `justify-between` 與標題的相對位置）。
 
+**Spec v4 — HOST_ACTIONS 不需 picker：** Host 詳情頁本身已知 hostId（透過 prop 傳入），ctx 一律帶非 null hostId，executor 不會呼叫 `resolveHostId` callback。儘管如此，executor 簽名要求 `resolveHostId` 為必要欄位，所以仍需傳一個 noop（或永遠 reject 的 promise）以滿足型別契約 — 推薦用 `() => Promise.resolve(null)`，行為等同「user 取消」，僅在型別誤用（hostId 不慎傳 null）時觸發 no-op safety net。
+
 - [ ] **Step 1: Write the failing test**
 
 Edit `spa/src/components/hosts/SessionsSection.test.tsx`：
@@ -2669,6 +3528,9 @@ import { useTabStore } from '../../stores/useTabStore'
               sessionCode,
             })
           },
+          // HOST_ACTIONS 入口必有 hostId；resolveHostId 不會被呼叫。仍提供
+          // safety-net noop 以滿足型別契約（spec v4）。
+          resolveHostId: () => Promise.resolve(null),
         })
       }
     />
@@ -2740,6 +3602,7 @@ Expected: clean
 
 - [ ] Phase 1a 已 merge → main，且 alpha bump 完成（或一個 PR sequence 規劃中）
 - [ ] Phase 1b 已 merge → main，**Settings UI 與 WORKSPACE_ACTIONS 兩個入口（context menu + hover popover）同 PR**（不可拆）
+- [ ] Phase 1b 內 task 順序：**1b.0a（inferWorkspaceHostId helper）→ 1b.0b（HostPickerPopover 元件）→ 1b.1（CommandSlot）→ 1b.1.5（Toast schema 擴充）→ 1b.2（slot-executor + resolveHostId）→ 1b.3（Settings UI）→ 1b.4（settings contribution + i18n）→ 1b.5a（context menu 入口）→ 1b.5b（hover popover 入口）→ 1b.6（全域驗證）**
 - [ ] Phase 1c 已 merge → main，**1c.1a（移除 SessionsSection row 的 v1 整合）→ 1c.1b（new-session 旁掛 HOST_ACTIONS）兩個 commits 同 PR、依序 ship**（先 commit 純減量，再 commit 純新增；diff 易 review）
 - [ ] Phase 1a 不可單獨 ship 在沒有 Phase 1b 計畫的情況（純資料層 user 看不到任何成果，會困惑）— 但 1a + 1b 兩個 PR 接力 ship 是允許的（spec §6 只要求 Settings UI 出現時必有 slot 生效）
 
@@ -2751,6 +3614,8 @@ Expected: clean
 - 不做 mode 設定 / 動態 function command / command palette / 快捷鍵（spec §6 不在範圍）
 - 不做 `module-registry.commands?` legacy 收編（Phase 2 decision gate，spec §8.2）
 - 不寫 persist migration（alpha-no-migration）
+- **不做 multi-host workspace binding 系統**（spec §3.5 forward-compat） — 未來 workspace 支援多重 `(hostId, path)` binding 與「default launcher」checkbox；`HostPickerPopover` 設計可重用，inferWorkspaceHostId 將退為「無 binding 時 fallback」，但 v2 不實作該層
+- **不做 Workspace.hostId schema 欄位** — spec v4 確定走 layout 多數決，不引入新 type 欄位
 
 ---
 
@@ -2760,6 +3625,7 @@ Expected: clean
 
 1. 進 worktree 後，**每個 Bash 指令必須以 `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/quick-commands-v2 && ` 開頭**（feedback_subagent_cwd_enforcement.md）
 2. 一個 task 一個 commit，commit message 用 conventional commit + Co-Authored-By trailer
-3. zustand test setState **顯式列出** `global` / `byHost` / `bindings` 三個 mutable fields；**不要**只寫 `setState({ bindings: {...} })`，會 wipe 其他 state（feedback_zustand_harness_setstate.md）
+3. zustand test setState **顯式列出** `global` / `byHost` / `bindings` 三個 mutable fields；**不要**只寫 `setState({ bindings: {...} })`，會 wipe 其他 state（feedback_zustand_harness_setstate.md）。同樣原則套用 `useHostStore`（測試需要時列出 `hosts` / `hostOrder` / `runtime` / `activeHostId` 四個欄位）。
 4. 任何測試 / lint / build 指令在主 Claude 機器跑（feedback_codex_sandbox_no_install.md）
+5. **Phase 1b 任務依賴**：1b.0a 與 1b.0b 必須先於其他 1b.* 任務完成；1b.1（CommandSlot）依賴 1b.0a 的型別 + 1b.0b 不直接依賴但 picker 是後續 caller 必用；1b.2（executor）依賴 1b.0b 的 `resolveHostId` callback 契約；1b.5a / 1b.5b / 1c.1b 各自整合 picker UI
 5. PR 完成後委派 codex 兩輪 review（標準 + 攻擊/防守/體質）；發現問題彙整成表格（信心 / 關聯 / 複雜度）後決定即修 vs 開 issue 追蹤
