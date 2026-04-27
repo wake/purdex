@@ -1,6 +1,9 @@
 import type { ModuleDefinition } from '../module-registry'
 import type { PaneContent } from '../../types/tab'
-import { registerNewTabProvider } from '../new-tab-registry'
+import {
+  registerNewTabProvider,
+  unregisterNewTabProvidersByModule,
+} from '../new-tab-registry'
 import { EditorPane } from '../../components/editor/EditorPane'
 import { EditorBuffersPane } from '../../components/editor/EditorBuffersPane'
 import { ImagePreviewPane } from '../../components/editor/ImagePreviewPane'
@@ -87,9 +90,13 @@ export const editorModuleDefinition: ModuleDefinition = {
  * lives in one file; `register-modules/index.tsx` only orchestrates.
  *
  * Each provider carries `moduleId: 'editor'` so the New-Tab UI hides them
- * when the module is disabled, matching the pane / file-opener side.
+ * when the module is disabled, matching the pane / file-opener side. The
+ * helper drops any pre-existing editor-owned entries before re-registering
+ * so HMR / re-bootstrap stays idempotent.
  */
 export function registerEditorNewTabProviders(): void {
+  unregisterNewTabProvidersByModule('editor')
+
   registerNewTabProvider({
     id: 'editor',
     label: 'editor.provider_label',

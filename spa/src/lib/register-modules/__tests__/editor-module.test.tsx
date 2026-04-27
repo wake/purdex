@@ -53,6 +53,14 @@ describe('editorModuleDefinition.fileOpeners', () => {
       expect(byId['editor']?.order).toBe(5)
       expect(byId['editor-buffers']?.order).toBe(6)
     })
+
+    it('idempotent: calling twice does not duplicate the editor entries', () => {
+      registerEditorNewTabProviders()
+      registerEditorNewTabProviders()
+      const editorEntries = getNewTabProviders().filter((p) => p.moduleId === 'editor')
+      expect(editorEntries).toHaveLength(2)
+      expect(editorEntries.map((p) => p.id).sort()).toEqual(['editor', 'editor-buffers'])
+    })
   })
 
   it('createContent functions return the expected pane content kinds', () => {
