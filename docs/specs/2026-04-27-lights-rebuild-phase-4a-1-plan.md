@@ -1,6 +1,6 @@
-# Lights Rebuild — Phase 4a-1 Plan v1.13 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v1.14 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v1.13（Round 13 codex review fix — 1 P1 + 1 P2 採納）
+**Status**: draft v1.14（Round 14 codex review fix — 2 P2 substantive 採納）
 
 ## v1.x 演進
 
@@ -20,6 +20,7 @@
 | v1.11 | R11 codex review fix（1 P2 substantive + 1 P2 editorial）：(1) **substantive** — 新 watch-loop-owned watcher 對 spinner / elapsed-timer 每 tick fire ScreenChanged；orchestrator 每 500ms 重廣播 Running，違反 G5 parity（legacy fires once 後退出）。對稱於 R1 fix #2 的 `stableEmitted`，加 `changedEmitted` flag — 每次 stable→changed transition fire ScreenChanged 一次，下次 ScreenStable fire 後重新 arm；新增 PR1b 測試覆蓋連續 changed 無重發；(2) **editorial** — OR2 default profile fallback 期待還寫 `{TopLines: 10, IdleStableTicks: 3}`，與 R9/R10 default `{BottomLines: 10}` 矛盾；修為 `{BottomLines: 10, IdleStableTicks: 3}` |
 | v1.12 | R12 codex review fix（1 P1 substantive — graceWindow / changedEmitted 互動 bug）：場景：hook 觸發 → orchestrator.recordHookAt → graceWindow 2s 內 watcher fire ScreenChanged → probe 已 set `changedEmitted=true` 但 orchestrator suppress 廣播；若 pane 之後持續 changing（spinner / elapsed timer），watch loop 不會見到 ScreenStable transition → `changedEmitted` 永不 reset → 後續 ScreenChanged 不再 fire → 狀態永遠停在 hook-derived。修法：probe 加 `RearmChanged(target string)` + `RearmStable(target string)` 公開 API（symmetric 對稱），orchestrator 在 graceWindow suppress 時呼叫 `RearmChanged` 讓 probe 下次 diff 重新 emit；新增 PR4c + OR3b regression test |
 | v1.13 | R13 codex review fix（1 P1 + 1 P2）：(1) **P1** — v1.12 watchLoop pseudo 是 `cb() → changedEmitted=true`，但 cb 同步呼叫 `RearmChanged` 會 `Store(false)`，下一行又覆蓋成 `true` → R12 fix 失效。修為「先 set flag，再 call cb」順序（symmetric 對 stableEmitted 也修）；明列 watch loop **必須** 用 set-before-cb 順序，禁止 set-after-cb 實作；(2) **P2** — PR3 `TestWatch_DoesNotExitOnCallback` v1 期待「一次 ScreenChanged 後再注入 diff 再 fire ScreenChanged」與 R11 changedEmitted 行為矛盾（同一 changing run 不再 fire）。改寫為 PR3 `TestWatch_LoopContinuesAcrossTransitions`：驗證 changed → stable → changed 完整 cycle，watcher 不退出；single-cycle continuous diff 由 PR1b 覆蓋 |
+| v1.14 | R14 codex review fix（2 P2 substantive）：(1) **shell prompt capture region mismatch** — cc 用 `TopLines: 12` 時 `ev.Content` 只含頂部 12 行；ScreenStable shellprompt 分支 `LooksLikeShellPrompt(ev.Content)` 會 miss 底部 shell prompt → dead-PID + shellprompt 場景的 sweepOnce cleanup 不會跑 → 與 legacy bottom-line capture 行為不對齊。修法：orchestrator interpretScreenEvent ScreenStable 分支獨立做一次 `tmux.CapturePaneContent(target, 10)` 取底部 10 行作 shellprompt 分類（不依賴 ev.Content）；新增 OR8 regression 涵蓋 cc TopLines + bottom shell prompt + dead PID 場景；(2) **nil-prober guard 漏列** — orchestrator startWatch/stopWatch pseudocode 直接呼 `o.parent.prober.Watch`，但 plan 宣告 orchestrator 內部會做 prober nil-check（保留 legacy `if m.prober != nil` 行為）。補入 explicit nil guard 兩處 + 文件化 module 測試與部分初始化 path 的兼容契約 |
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -429,6 +430,13 @@ orchestrator `startWatch` 邏輯：
 var defaultProbeProfile = agentpkg.ProbeProfile{BottomLines: 10, IdleStableTicks: 3}
 
 func (o *probeOrchestrator) startWatch(session, agentType string) {
+    // R14 fix: nil-prober guard preserves legacy compatibility for
+    // module unit tests and partially-initialized Module instances
+    // that don't wire a real prober. Without this guard, the
+    // unconditional Watch call below panics on those paths.
+    if o.parent.prober == nil {
+        return
+    }
     target := session + ":"  // tmux target convention; matches existing callsite
 
     // R8 fix: resolve provider from registry; assert ProbeProfileProvider.
@@ -456,6 +464,9 @@ func (o *probeOrchestrator) startWatch(session, agentType string) {
 對應 `stopWatch`：
 ```go
 func (o *probeOrchestrator) stopWatch(session string) {
+    if o.parent.prober == nil {  // R14 fix — symmetric nil guard
+        return
+    }
     target := session + ":"  // R7 fix — same target convention
     o.parent.prober.StopWatch(target)
 }
@@ -515,14 +526,23 @@ if hasHook && time.Since(last) < probeGraceWindow {
 }
 ```
 
-#### 2.3.5 ScreenStable → Status 解讀
+#### 2.3.5 ScreenStable → Status 解讀（R14 fix — shell prompt 用獨立 bottom capture）
 
 ```go
 switch ev.Kind {
 case probe.ScreenChanged:
     status = StatusRunning
 case probe.ScreenStable:
-    if probe.LooksLikeShellPrompt(ev.Content) {
+    // R14 fix: ev.Content 反映 watcher's opts.TopLines / opts.BottomLines /
+    // full-pane 設定；對 cc 用 TopLines: 12 profile 時，ev.Content 只含
+    // 頂部 12 行，**不含** 底部 shell prompt。LooksLikeShellPrompt(ev.Content)
+    // 會 false-negative，dead-PID + shell-prompt sweep 失效，違反 legacy
+    // bottom-line capture 行為。修法：獨立做一次底部 capture 給 shell-prompt
+    // classifier，不依賴 ev.Content。
+    target := session + ":"
+    bottomContent, err := o.parent.tmux.CapturePaneContent(target, 10)
+    isShellPrompt := err == nil && probe.LooksLikeShellPrompt(bottomContent)
+    if isShellPrompt {
         // 保留 legacy 行為：dead PID + shell prompt → sweep
         if projection != nil && projection.TopFrame != nil && !isPidAliveFn(projection.TopFrame.PID) {
             o.parent.sweepOnce()
@@ -535,9 +555,11 @@ case probe.ScreenStable:
 }
 ```
 
+**Tmux capture err 處理**：err != nil 視同 isShellPrompt=false（保守 — 不能斷定就走一般 idle 路徑）；不擋整個 interpretScreenEvent，只是 shell-prompt 分類失敗。
+
 接著套用 Error Guard + projection update + broadcast（與既有 `onActivityDetected` 同邏輯，整段搬入 helper）。
 
-#### 2.3.6 測試（7 tests — R4 +OR6 / R12 +OR3b）
+#### 2.3.6 測試（9 tests — R4 +OR6 / R12 +OR3b / R14 +OR7 +OR8）
 
 | Test | 重點 |
 |------|------|
@@ -548,6 +570,8 @@ case probe.ScreenStable:
 | OR4 `TestOrchestrator_GraceWindowExpiresAfterWindow` | recordHookAt → 3s 後注入 ScreenChanged；驗證 StatusRunning 廣播 |
 | OR5 `TestOrchestrator_ErrorGuardBlocksProbeOverwrite` | currentStatus=StatusError；ScreenStable 注入；驗證 StatusError 維持、無 broadcast |
 | OR6 `TestOrchestrator_StaleCallbackGuard`（**R4 fix regression**）| 兩 sub-case：(a) stopWatch 後注入 ScreenChanged → 無 broadcast、無 metrics；(b) renameSession 前 watch oldName，rename 後注入 oldName 的 ScreenChanged callback → 無 broadcast、無 status 更新（驗證 currentAgent != agentType 比對）|
+| OR7 `TestOrchestrator_NilProberStartStopNoOp`（**R14 fix #2 regression**）| Module 沒 wired prober（unit test fixture）→ orchestrator.startWatch / stopWatch / 都是 no-op，不 panic；驗證 partial-init compatibility |
+| OR8 `TestOrchestrator_ScreenStableUsesBottomCaptureForShellPrompt`（**R14 fix #1 regression**）| cc agent 走 TopLines: 12 profile；mock tmux 回 ev.Content（top 12 行，**無** shell prompt）；orchestrator 收 ScreenStable → 獨立 call CapturePaneContent(target, 10) 拿底部 → mock 回 `"$ "` 終止行 → projection.TopFrame.PID dead → 驗證 `o.parent.sweepOnce` 被呼叫；對照組：bottomContent 沒 shell prompt → status=Idle 廣播，無 sweep |
 
 ---
 
@@ -676,11 +700,11 @@ log 點（gated）：
 | 0 | TT1-TT4 | 4 | tmux range API + fake executor parity |
 | 1 | PR1-PR1b + PR2-PR2b + PR3-PR4c + PR5-PR5b + PR6 | 11 | watcher 自治 / Top-N vs full screen / 多次 fire / err tick skip / stable-emit-once（R1 fix #2）/ baseline-fail map cleanup（R2 fix #2）/ BottomLines vs TopLines mutually exclusive（R9 fix）/ changed-emit-once（R11 fix）/ **Rearm API（R12 fix）**|
 | 2 | (沿用既有) | 0 | shell prompt utility（純 visibility）|
-| 3 | OR1-OR6 + OR3b | 7 | profile / graceWindow / Error Guard / stale-callback guard（R4 fix）/ **graceWindow re-arm probe（R12 fix）**|
+| 3 | OR1-OR6 + OR3b + OR7-OR8 | 9 | profile / graceWindow / Error Guard / stale-callback guard（R4 fix）/ graceWindow re-arm probe（R12 fix）/ **nil-prober no-op（R14 fix #2）/ shellprompt bottom-capture（R14 fix #1）**|
 | 4 | CC1-CC6 | 6 | cc profile + module wiring + E2E + rename rewatch via orchestrator（R2 fix #1）|
 | 7 | OB1-OB4 | 4 | expvar + PDX_DEV_MODE log |
 
-**總計**：32 tests（plan v1.3 §7.1 estimate 24 → +1 PR2b R1 / +1 PR4b R2 / +1 CC6 R2 / +1 OR6 R4 / +1 PR5b R9 / +1 PR1b R11 / +1 PR4c R12 / +1 OR3b R12 regression tests）。
+**總計**：34 tests（plan v1.3 §7.1 estimate 24 → +1 PR2b R1 / +1 PR4b R2 / +1 CC6 R2 / +1 OR6 R4 / +1 PR5b R9 / +1 PR1b R11 / +1 PR4c R12 / +1 OR3b R12 / +1 OR7 R14 / +1 OR8 R14 regression tests）。
 
 ---
 
@@ -815,12 +839,12 @@ scripts/check-pr-4a-1-boundary.sh (new)
 | 0 tmux API | ~40 | 4 |
 | 1 probe primitive | ~115 | 11（R1 +PR2b / R2 +PR4b / R9 +PR5b / R11 +PR1b / R12 +PR4c）|
 | 2 shell prompt export | ~5 | 0 |
-| 3 module orchestrator | ~95 | 7（R4 +OR6 / R12 +OR3b）|
+| 3 module orchestrator | ~110 | 9（R4 +OR6 / R12 +OR3b / R14 +OR7 +OR8）|
 | 4 cc adoption | ~50 | 6（R2 +CC6 rename）|
 | 7 graceWindow + dev log + expvar | ~30 | 4 |
 | (extra) boundary script | ~30 | 0 |
 
-**總計**：~370 LoC + 32 tests（plan v1.3 §7.1 estimate 24 → R1 +1 / R2 +2 / R4 +1 / R9 +1 / R11 +1 / R12 +2，總 +8 regression tests + R2 baseline-fail cleanup + rename callsite migration + R4 stale-callback guard + R9 BottomLines field + capture-mode dispatcher + R11 changedEmitted flag + R12 Rearm API ~50 LoC，仍在 PR 合理 size 內）。
+**總計**：~390 LoC + 34 tests（plan v1.3 §7.1 estimate 24 → R1 +1 / R2 +2 / R4 +1 / R9 +1 / R11 +1 / R12 +2 / R14 +2，總 +10 regression tests + R2 baseline-fail cleanup + rename callsite migration + R4 stale-callback guard + R9 BottomLines field + capture-mode dispatcher + R11 changedEmitted flag + R12 Rearm API + R14 bottom shellprompt capture + nil-prober guards ~70 LoC，仍在 PR 合理 size 內）。
 
 **屬中型 PR**。`go test` 預期 elapsed < 30s 內。
 
