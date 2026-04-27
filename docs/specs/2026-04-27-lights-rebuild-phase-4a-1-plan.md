@@ -1,6 +1,6 @@
-# Lights Rebuild — Phase 4a-1 Plan v2.0 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v2.1 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v2.0（**架構 pivot** — 移除 probe-layer dedup state machine；改採 orchestrator-only transition dedup。依 codex consulting `task-moh5xafl-gx2zt1` 結論執行）
+**Status**: draft v2.1（v2.0 pivot 後 R15 review fix — 2 P2 採納）
 
 ## v1.x 演進
 
@@ -22,6 +22,7 @@
 | v1.13 | R13 codex review fix（1 P1 + 1 P2）：(1) **P1** — v1.12 watchLoop pseudo 是 `cb() → changedEmitted=true`，但 cb 同步呼叫 `RearmChanged` 會 `Store(false)`，下一行又覆蓋成 `true` → R12 fix 失效。修為「先 set flag，再 call cb」順序（symmetric 對 stableEmitted 也修）；明列 watch loop **必須** 用 set-before-cb 順序，禁止 set-after-cb 實作；(2) **P2** — PR3 `TestWatch_DoesNotExitOnCallback` v1 期待「一次 ScreenChanged 後再注入 diff 再 fire ScreenChanged」與 R11 changedEmitted 行為矛盾（同一 changing run 不再 fire）。改寫為 PR3 `TestWatch_LoopContinuesAcrossTransitions`：驗證 changed → stable → changed 完整 cycle，watcher 不退出；single-cycle continuous diff 由 PR1b 覆蓋 |
 | v1.14 | R14 codex review fix（2 P2 substantive）：(1) **shell prompt capture region mismatch** — cc 用 `TopLines: 12` 時 `ev.Content` 只含頂部 12 行；ScreenStable shellprompt 分支 `LooksLikeShellPrompt(ev.Content)` 會 miss 底部 shell prompt → dead-PID + shellprompt 場景的 sweepOnce cleanup 不會跑 → 與 legacy bottom-line capture 行為不對齊。修法：orchestrator interpretScreenEvent ScreenStable 分支獨立做一次 `tmux.CapturePaneContent(target, 10)` 取底部 10 行作 shellprompt 分類（不依賴 ev.Content）；新增 OR8 regression 涵蓋 cc TopLines + bottom shell prompt + dead PID 場景；(2) **nil-prober guard 漏列** — orchestrator startWatch/stopWatch pseudocode 直接呼 `o.parent.prober.Watch`，但 plan 宣告 orchestrator 內部會做 prober nil-check（保留 legacy `if m.prober != nil` 行為）。補入 explicit nil guard 兩處 + 文件化 module 測試與部分初始化 path 的兼容契約 |
 | **v2.0** | **架構 pivot**（依 codex consulting `task-moh5xafl-gx2zt1` 投票結論）：v1.11-v1.13 的 changedEmitted / stableEmitted / Rearm API state machine 被連續 3 輪抓 corner case bug（R11 引入 → R12 graceWindow lifecycle → R13 cb-vs-set ordering），符合 `feedback_codex_meta_drift_signal.md` 「同類 meta-drift 連續 3 輪 = architectural smell，停手換架構」。執行 codex parallel consulting（A 假設前提為真求最佳實作；B 質疑前提）— **B 否決前提**：probe primitive 不該擁有 dedup state，dedup 應由 orchestrator 用 `currentStatus` 判 transition 處理。**移除**：`changedEmitted` / `stableEmitted` flags、`RearmChanged` / `RearmStable` public API、set-before-cb ordering rule、PR1b（changed-emit-once）/ PR2b（stable-emit-once）/ PR4c（Rearm regression）/ OR3b（graceWindow re-arm）四個 regression tests（在 Option 2 不再 applicable）。**簡化**：probe 變 dumb — diff 每 tick fire ScreenChanged；stableCount 達 threshold 後 fire ScreenStable + reset stableCount（每 N ticks fire 一次，無 emit-once flag）；orchestrator 用 `currentStatus[session]` 做 transition gate，only broadcast / metric / dev log on accepted transitions。**保留**：R3 deadlock fix / R4 stale-callback guard / R9-R10 BottomLines / R14 shellprompt bottom capture / R14 nil-prober guard（這些在 Option 2 仍 applicable）。**新增**：OR4（替換原 OR3b — graceWindow expire 後 continuous-changing 仍能 → Running，新版本不需 Rearm 即達成）+ OR9 / OR10 transition-dedup tests。Plan size: ~340 LoC + 32 tests（從 390 / 34 縮小）|
+| v2.1 | R15 review fix（2 P2）：(1) §1.2 寫「codex / opencode 接新 primitive 留 PR-4a-2」與 §1.1 Slice 3 + §2.4.2 寫「三家共用 default profile + 同一 helper」矛盾。釐清：本 PR **必含** codex / opencode 走 default profile 的 wiring（compile 必要 — `ActivitySignal` 移除後 codex / opencode hook handler 也要走 orchestrator）；PR-4a-2 範圍縮為「codex / opencode 各自實作 ProbeProfileProvider 自訂 profile」。(2) §6 G6 watcher 不洩漏 gate 引用 `TestModule_StopWatch_ClearsActiveWatchers` 但此 test 名稱在 codebase / 計畫測試清單都不存在；新增 CC2b 補位（測 manageActivityWatch off → HasWatcher false），G6 改引 CC2b |
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -94,7 +95,8 @@ PR-4a-1 把目前 `internal/agent/probe/activity.go` 的 watcher 從「probe 解
 
 ### 1.2 Out of scope（明列分流）
 
-- **Slice 5（codex 接新 primitive）/ Slice 6（opencode 接新 primitive）** — 留 PR-4a-2
+- **Slice 5（codex 自訂 ProbeProfileProvider）/ Slice 6（opencode 自訂 ProbeProfileProvider）** — 留 PR-4a-2
+- **本 PR 的 codex / opencode wiring**（**R15 fix — 釐清**）：本 PR **必含** codex / opencode 走 default profile 的 hook handler / orchestrator wiring（因為 `ActivitySignal` enum 與 legacy `StartWatch` API 在本 PR 移除，codex / opencode 不一起遷會 compile 失敗）；只有「自訂 profile values（agent-specific TopLines / BottomLines / IdleStableTicks tuning）」延到 PR-4a-2。本 PR 三家走同一 default profile = 行為向下相容（per §6 G5 parity gate）
 - **`shouldWatchActivity` per-agent refactor**（視需要）— 本 PR 保留 `shouldWatchActivity` 函式（wrapper 仍呼叫）；若 PR-4a-2 codex / opencode profile 化過程中發現該函式應 per-agent，再 refactor，本 PR 不動
 - **Phase 4b `ProbeIntentProvider`** — 整合 readiness 的 declarative intent 系統，留 Phase 4b
 - **Phase 5 Dev Inspector SPA UI** — `/api/agent/monitor/*` 視覺化，留 Phase 5
@@ -621,12 +623,13 @@ if agentType, ok := m.activeWatchers[oldName]; ok {
 
 `internal/module/agent/handler.go` 的 hook entry path（具體位置實作時定）：每個有效 hook 處理完前 call `m.probeOrch.recordHookAt(session)`，讓接下來 graceWindow 啟動。
 
-#### 2.4.4 測試（6 tests — R2 +CC6）
+#### 2.4.4 測試（7 tests — R2 +CC6 / R15 +CC2b）
 
 | Test | 重點 |
 |------|------|
 | CC1 `TestCCProvider_ProbeProfile` | cc.Provider.ProbeProfile() 回 {12, 3}（characterization；implementer 改值需 review）|
 | CC2 `TestModule_ManageActivityWatch_RoutesThroughOrchestrator` | mock orch；waiting → start watch called；off → stop watch called |
+| CC2b `TestModule_ManageActivityWatch_OffClearsActiveWatchers`（**R15 fix #2 — G6 watcher-leak gate**）| 真 prober + module 整合：waiting → manageActivityWatch 啟 watcher、`activeWatchers[session]` 含 entry；status off → manageActivityWatch 停 watcher、`activeWatchers[session]` 不含 entry、`HasWatcher(session+":")` false |
 | CC3 `TestModule_HookHandler_CallsRecordHookAt` | 注入 cc hook event；驗證 orchestrator.lastHookAt[session] 記錄到 |
 | CC4 `TestCC_E2E_ScreenChangedToRunning` | cc waiting → orchestrator.startWatch → 注入 ScreenChanged → status 廣播 Running |
 | CC5 `TestCC_E2E_ScreenStableToIdle` | cc running → orchestrator.startWatch → 注入 ScreenStable（non-shell-prompt）→ status 廣播 Idle |
@@ -678,10 +681,10 @@ log 點（gated）：
 | 1 | PR1-PR2 + PR3-PR4b + PR5-PR5b + PR6 | 8 | watcher 自治 / per-tick raw events（v2.0）/ baseline-fail map cleanup（R2 fix）/ BottomLines vs TopLines mutually exclusive（R9 fix）/ Top-N region / err tick skip / cycle 不退出 |
 | 2 | (沿用既有) | 0 | shell prompt utility（純 visibility）|
 | 3 | OR1-OR10 | 10 | profile / graceWindow + 自然 recovery（v2.0）/ Error Guard / stale-callback guard（R4 fix）/ nil-prober no-op（R14 fix #2）/ shellprompt bottom-capture（R14 fix #1）/ **transition dedup × 2（v2.0 OR9 / OR10）**|
-| 4 | CC1-CC6 | 6 | cc profile + module wiring + E2E + rename rewatch via orchestrator（R2 fix #1）|
+| 4 | CC1-CC2b + CC3-CC6 | 7 | cc profile + module wiring + E2E + rename rewatch via orchestrator（R2 fix #1）+ **watcher-leak gate（R15 fix #2 — CC2b）**|
 | 7 | OB1-OB4 | 4 | expvar + PDX_DEV_MODE log |
 
-**總計**：32 tests（v2.0 — 從 v1.14 的 34 縮回：移除 PR1b / PR2b / PR4c / OR3b 共 4 個 R11/R12/R13 regression（-4）；新增 OR9 / OR10 transition-dedup tests（+2）；保留 PR4b R2 / PR5b R9 / OR6 R4 / OR7 / OR8 R14 / CC6 R2 共 6 個 regression）。
+**總計**：33 tests（v2.1 — 從 v1.14 的 34 縮回：v2.0 移除 PR1b / PR2b / PR4c / OR3b 共 4 個 R11/R12/R13 regression（-4）；v2.0 新增 OR9 / OR10 transition-dedup tests（+2）；v2.1 新增 CC2b watcher-leak gate（+1）；保留 PR4b R2 / PR5b R9 / OR6 R4 / OR7 / OR8 R14 / CC6 R2 共 6 個 regression）。
 
 ---
 
@@ -728,10 +731,11 @@ Slice 3 後半 + Slice 7 主體（v2.0 — transition gate, no Rearm）：
 ### Commit 5 — `feat(agent/cc): adopt new probe primitive via profile`
 
 Slice 4：
-- **CC1-CC6 written first**（R6 fix — 補入 CC6 rename rewatch / R3 deadlock-freedom regression；CC6 是 R2 fix #1 + R3 fix 的核心 regression test，必納入 written-first 清單）
+- **CC1-CC2b + CC3-CC6 written first**（R6 fix CC6 rename rewatch / R3 deadlock-freedom regression + R15 fix CC2b watcher-leak gate；CC6 / CC2b 是核心 regression tests，必納入 written-first 清單）
 - `internal/agent/cc/probe_profile.go`（cc 實作 ProbeProfileProvider）
 - module.go 確認 cc path 走 orchestrator + recordHookAt 在 cc hook handler call 到
 - module.go `renameSessionLocked` 改走 orchestrator stop+start（R2 fix #1）；`renameSessionLocked` 持 `m.mu` 不會 deadlock（R3 fix）
+- codex / opencode hook handler 也改走 orchestrator（compile 必要 — `ActivitySignal` 移除後三家共用 default profile，行為向下相容；自訂 profile 留 PR-4a-2）
 
 ### Final Verification
 
@@ -791,7 +795,7 @@ scripts/check-pr-4a-1-boundary.sh (new)
 | G3 expvar | 啟動 daemon 跑一次任意 cc session，`/debug/vars` 看到 4 個 `purdex_probe_*` counter（手動驗 — 文件化於 PR description）|
 | G4 dev log | `PDX_DEV_MODE=1` 啟動跑一次 graceWindow hit，stderr 看到 `[probe]` log；unset 時無 log（手動驗 — 文件化於 PR description）|
 | G5 default profile parity | 不實作 ProbeProfileProvider 的 agent（codex / opencode）行為與 PR-4a-1 前等價（透過 `TestOrchestrator_DefaultProfileWhenAgentMissing` + cc / codex / opencode 三家既有 module integration tests 通過驗證）|
-| G6 watcher 不洩漏 | `TestModule_StopWatch_ClearsActiveWatchers` 驗證 manageActivityWatch(off) 後 HasWatcher false（regression — 既有測試應已涵蓋；本 PR 確認無回歸）|
+| G6 watcher 不洩漏 | `CC2b TestModule_ManageActivityWatch_OffClearsActiveWatchers`（R15 fix — 真 prober + module 整合驗證 manageActivityWatch(off) 後 `activeWatchers` 清空 + `HasWatcher(session+":")` false）|
 
 ---
 
@@ -818,11 +822,11 @@ scripts/check-pr-4a-1-boundary.sh (new)
 | 1 probe primitive | ~70 | 8（v2.0 dumb probe — 無 emit-once flags / 無 Rearm API）|
 | 2 shell prompt export | ~5 | 0 |
 | 3 module orchestrator | ~115 | 10（R4 +OR6 / R14 +OR7 +OR8 / v2.0 +OR9 +OR10 transition dedup）|
-| 4 cc adoption | ~50 | 6（R2 +CC6 rename）|
+| 4 cc adoption | ~55 | 7（R2 +CC6 rename / R15 +CC2b watcher-leak gate）|
 | 7 graceWindow + dev log + expvar | ~30 | 4 |
 | (extra) boundary script | ~30 | 0 |
 
-**總計**：~340 LoC + 32 tests（v2.0 pivot 後 — 從 v1.14 的 ~390/34 縮回 ~340/32。Slice 1 LoC 大幅縮（沒 emit-once flags / Rearm API / set-before-cb 結構約束）；Slice 3 略增（多 transition gate logic + 2 個新 test）。仍在 PR 合理 size 內，且 review 複雜度顯著下降）。
+**總計**：~345 LoC + 33 tests（v2.1 — 從 v1.14 的 ~390/34 縮回 ~345/33。Slice 1 LoC 大幅縮（沒 emit-once flags / Rearm API / set-before-cb 結構約束）；Slice 3 略增（多 transition gate logic + 2 個新 test）；Slice 4 略增（CC2b watcher-leak gate）。仍在 PR 合理 size 內，且 review 複雜度顯著下降）。
 
 **屬中型 PR**。`go test` 預期 elapsed < 30s 內。
 
