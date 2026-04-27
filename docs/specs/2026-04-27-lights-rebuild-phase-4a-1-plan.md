@@ -1,6 +1,6 @@
-# Lights Rebuild — Phase 4a-1 Plan v1.8 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v1.9 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v1.8（Round 8 codex review fix — 1 P2 + 1 P3 採納）
+**Status**: draft v1.9（Round 9 codex review fix — 1 P2 substantive 採納）
 
 ## v1.x 演進
 
@@ -15,6 +15,7 @@
 | v1.6 | R6 codex review fix（2 P2 internal-consistency）：(1) §1.1 Slice 3 摘要還寫「`stopProbeWatch` 含 activeWatchers map cleanup」與 R3 修法（orchestrator 不碰 activeWatchers）矛盾；改正為「停止 prober watcher」並引向 §2.3.1 R3 fix；(2) Commit 5 TDD 清單只列 CC1-CC5，漏掉 CC6 (R2 fix #1 + R3 deadlock-freedom regression)；補入 written-first 清單 |
 | v1.7 | R7 codex review fix（1 P2 + 1 P3）：(1) §2.3.3 startWatch pseudo-code 用未定義 `target`，既有 callsite 都是 `session + ":"` 形式；明寫 `target := session + ":"` 在 startWatch / stopWatch contract，避免 implementer 編譯失敗或 bare-session 啟 watcher；(2) §2.4.4 標題寫「測試（5 tests）」但表格列 CC1-CC6 共 6 個；改為「測試（6 tests — R2 +CC6）」 |
 | v1.8 | R8 codex review fix（1 P2 + 1 P3）：(1) §2.3.3 startWatch pseudo-code 仍用未定義 `agentProvider` 變數 + `defaultProbeProfile` 為 unqualified type；補完整 provider lookup（registry → agentType → provider）+ 改 `agentpkg.ProbeProfile` qualified 命名；(2) §2.1.6 標題「測試（7 tests — R1 +PR2b）」與 §3 矩陣（8 tests）+ 表內列出 8 個 testID 不符；改為「測試（8 tests — R1 +PR2b / R2 +PR4b）」 |
+| v1.9 | R9 codex review fix（1 P2 substantive — **regression risk**）：legacy `CapturePaneContent(target, 10)` 是 **last 10 lines**（`tmux capture-pane -S -10`，hash bottom 10 行），但 v1.8 default profile `{TopLines: 10}` 配 `CapturePaneTopLines` 會 hash **top 10 lines**。codex/opencode 沒有 ProbeProfileProvider 走 default → 行為被默默改掉，違反 §6 G5 default profile parity gate（明訂「不實作 ProbeProfileProvider 的 agent 行為與 PR-4a-1 前等價」）。修法：擴 `WatchOptions` 加 `BottomLines int` field（與 `TopLines` 互斥）；default profile 改用 `{BottomLines: 10}` 保留 legacy capture 語意；新增 PR5b 測試覆蓋 BottomLines vs TopLines 行為差異 |
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -165,15 +166,32 @@ const (
 type ScreenChangeCallback func(ScreenChangeEvent)
 ```
 
-#### 2.1.2 新增 `WatchOptions` + 單一 `Watch` API（R1 fix #1）
+#### 2.1.2 新增 `WatchOptions` + 單一 `Watch` API（R1 fix #1；R9 fix — 加 BottomLines）
 
 ```go
 // WatchOptions tunes the watch loop behavior. Zero values fall back to
-// safe defaults (TopLines = 0 → full screen; IdleStableTicks = 0 → 3).
+// safe defaults: when both TopLines and BottomLines are 0, the watcher
+// hashes the full visible pane via tmux.CapturePaneContent(target, 0);
+// IdleStableTicks = 0 → default 3.
+//
+// TopLines and BottomLines are mutually exclusive (only one may be > 0).
+// If both are set, watchLoop returns early without registering — caller
+// programming error.
 type WatchOptions struct {
     // TopLines limits captured content to the top N lines via
-    // tmux.CapturePaneTopLines. 0 means full screen (CapturePaneContent).
+    // tmux.CapturePaneTopLines (CapturePaneRange(target, 0, N-1)).
+    // 0 means "do not use top-line capture" — see BottomLines / fallback.
     TopLines int
+
+    // BottomLines limits captured content to the bottom N lines via
+    // legacy tmux.CapturePaneContent(target, N) semantics
+    // (capture-pane -S -N). 0 means "do not use bottom-line capture".
+    //
+    // R9 fix: this preserves legacy capture mode for agents without
+    // ProbeProfileProvider (default profile uses BottomLines: 10 to
+    // hash the same region the legacy activityLoop did, ensuring G5
+    // default-profile parity for codex/opencode).
+    BottomLines int
 
     // IdleStableTicks is the number of consecutive identical-hash ticks
     // before ScreenStable is emitted. 0 means default 3.
@@ -185,15 +203,23 @@ type WatchOptions struct {
 // changed→stable transition (see watchLoop §2.1.3). The watcher persists
 // until StopWatch is called — callbacks do NOT terminate the watcher
 // (kickoff Decision 13: watch-loop-owned).
+//
+// Capture mode is selected by opts:
+//   TopLines > 0      → CapturePaneTopLines(target, TopLines)
+//   BottomLines > 0   → CapturePaneContent(target, BottomLines)  // legacy
+//   both == 0         → CapturePaneContent(target, 0)            // full pane
 func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback) {...}
 ```
 
-**設計理由**（R1 fix #1）：
-- 單一 entry 比雙 API 簡潔；`TopLines == 0` 是天然 full-screen sentinel
+**設計理由**（R1 fix #1 + R9 fix）：
+- 單一 entry 比雙 API 簡潔；TopLines / BottomLines / both-zero 三種 capture mode 由 sentinel 表達
 - `WatchOptions` 結構體擴展性好，未來加 poll interval / hash algorithm 等不破壞 API
-- IdleStableTicks 經由 opts 結構流入 watchLoop，OR1 test 可以對 cc profile `{Lines:5, IdleStableTicks:2}` 驗 stable threshold
+- IdleStableTicks 經由 opts 結構流入 watchLoop，OR1 test 可以對 cc profile `{TopLines:5, IdleStableTicks:2}` 驗 stable threshold
+- **R9 fix**：BottomLines 保留 legacy `CapturePaneContent(target, N)` 語意（hash last N lines），讓 default profile = `{BottomLines: 10}` 對未實作 ProbeProfileProvider 的 agent 維持原行為，達成 G5 parity gate
 
-**caller 端**：orchestrator 拿 ProbeProfile 後組成 `WatchOptions{TopLines: profile.TopLines, IdleStableTicks: profile.IdleStableTicks}` 傳入 `Watch`（§2.3.3 詳述）。
+**caller 端**：orchestrator 拿 ProbeProfile 後組成 `WatchOptions{TopLines: profile.TopLines, BottomLines: profile.BottomLines, IdleStableTicks: profile.IdleStableTicks}` 傳入 `Watch`（§2.3.3 詳述）。
+
+**ProbeProfile 同步擴增**：`ProbeProfile` 也加 `BottomLines int` field（與 `TopLines` 互斥），讓 agent provider 可選擇 capture region 方向。詳 §2.3.2。
 
 #### 2.1.3 `watchLoop` 內部 poll 機制（含 R1 fix #2）
 
@@ -249,7 +275,7 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
 - `activityLoop` 內部 method — 改成 `watchLoop`
 - `hashCapture` 內部 method — 改成支援 captureFn closure 的版本
 
-#### 2.1.6 測試（8 tests — R1 +PR2b / R2 +PR4b）
+#### 2.1.6 測試（9 tests — R1 +PR2b / R2 +PR4b / R9 +PR5b）
 
 | Test | 重點 |
 |------|------|
@@ -259,7 +285,8 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
 | PR3 `TestWatch_DoesNotExitOnCallback` | 一次 ScreenChanged callback 後再注入 diff，驗證再發 ScreenChanged（loop 持續）|
 | PR4 `TestWatch_StopWatch_CancelsLoop` | StopWatch 後 capture mock 不再被 call、HasWatcher false |
 | PR4b `TestWatch_BaselineFailure_CleansMapEntry`（**R2 fix #2 regression**）| capture mock 對 first call 回 err；驗證 `Watch` 啟動後 200ms 內 `HasWatcher(target) == false`（goroutine 自己清 entry）|
-| PR5 `TestWatch_TopLinesIgnoresBottomChanges` | 注入 only-bottom-line-changed scenario，opts.TopLines=3 不報 changed；opts.TopLines=0（full screen）報 changed |
+| PR5 `TestWatch_TopLinesIgnoresBottomChanges` | 注入 only-bottom-line-changed scenario，opts.TopLines=3 不報 changed；opts={}（full pane）報 changed |
+| PR5b `TestWatch_BottomLinesIgnoresTopChanges`（**R9 fix regression**）| 注入 only-top-line-changed scenario，opts.BottomLines=3 不報 changed；opts.TopLines=3 報 changed；驗證 BottomLines vs TopLines 走不同 capture path 且互斥 |
 | PR6 `TestWatch_TmuxErrorTickSkipped` | capture err 在 tick 中發生 → 不 fire ScreenChanged，下一 tick 復原 → 報 ScreenChanged |
 
 ---
@@ -323,8 +350,14 @@ type ProbeProfileProvider interface {
 }
 
 type ProbeProfile struct {
-    TopLines        int  // 0 = use full screen
-    IdleStableTicks int  // 0 = default 3
+    // TopLines: hash the top N lines (CapturePaneTopLines). 0 = unused.
+    TopLines int
+    // BottomLines: hash the bottom N lines (legacy CapturePaneContent
+    // semantics). 0 = unused. Mutually exclusive with TopLines.
+    // R9 fix: enables default profile to preserve legacy capture mode.
+    BottomLines int
+    // IdleStableTicks: 0 = default 3.
+    IdleStableTicks int
 }
 ```
 
@@ -343,7 +376,12 @@ orchestrator `startWatch` 邏輯（R7 fix — 顯式組 tmux target；R8 fix —
 // defaultProbeProfile is a package-level constant (defined in
 // internal/module/agent, not internal/agent). Uses agentpkg-qualified
 // ProbeProfile to match its definition site.
-var defaultProbeProfile = agentpkg.ProbeProfile{TopLines: 10, IdleStableTicks: 3}
+//
+// R9 fix: BottomLines (not TopLines) preserves legacy
+// CapturePaneContent(target, 10) capture region for agents that do not
+// implement ProbeProfileProvider — keeps codex/opencode behaviorally
+// unchanged in PR-4a-1, satisfying §6 G5 default-profile parity gate.
+var defaultProbeProfile = agentpkg.ProbeProfile{BottomLines: 10, IdleStableTicks: 3}
 
 func (o *probeOrchestrator) startWatch(session, agentType string) {
     target := session + ":"  // tmux target convention; matches existing callsite
@@ -358,7 +396,8 @@ func (o *probeOrchestrator) startWatch(session, agentType string) {
     }
 
     opts := probe.WatchOptions{
-        TopLines:        profile.TopLines,        // 0 = full screen
+        TopLines:        profile.TopLines,
+        BottomLines:     profile.BottomLines,     // R9 fix: forward both modes
         IdleStableTicks: profile.IdleStableTicks, // 0 = default 3 (handled by watchLoop)
     }
     o.parent.prober.Watch(target, opts, o.makeCallback(session, agentType))
@@ -576,13 +615,13 @@ log 點（gated）：
 | Slice | Test ID 區段 | 數量 | 涵蓋 |
 |-------|--------------|------|------|
 | 0 | TT1-TT4 | 4 | tmux range API + fake executor parity |
-| 1 | PR1-PR2b + PR3-PR4b + PR5-PR6 | 8 | watcher 自治 / Top-N vs full screen / 多次 fire / err tick skip / stable-emit-once（R1 fix #2）/ baseline-fail map cleanup（R2 fix #2）|
+| 1 | PR1-PR2b + PR3-PR4b + PR5-PR5b + PR6 | 9 | watcher 自治 / Top-N vs full screen / 多次 fire / err tick skip / stable-emit-once（R1 fix #2）/ baseline-fail map cleanup（R2 fix #2）/ **BottomLines vs TopLines mutually exclusive（R9 fix）**|
 | 2 | (沿用既有) | 0 | shell prompt utility（純 visibility）|
 | 3 | OR1-OR6 | 6 | profile / graceWindow / Error Guard / **stale-callback guard（R4 fix）**|
 | 4 | CC1-CC6 | 6 | cc profile + module wiring + E2E + rename rewatch via orchestrator（R2 fix #1）|
 | 7 | OB1-OB4 | 4 | expvar + PDX_DEV_MODE log |
 
-**總計**：28 tests（plan v1.3 §7.1 estimate 24 → +1 PR2b R1 / +1 PR4b R2 / +1 CC6 R2 / +1 OR6 R4 regression tests）。
+**總計**：29 tests（plan v1.3 §7.1 estimate 24 → +1 PR2b R1 / +1 PR4b R2 / +1 CC6 R2 / +1 OR6 R4 / +1 PR5b R9 regression tests）。
 
 ---
 
@@ -715,14 +754,14 @@ scripts/check-pr-4a-1-boundary.sh (new)
 | Slice | 估 LoC | 估 tests |
 |-------|--------|----------|
 | 0 tmux API | ~40 | 4 |
-| 1 probe primitive | ~90 | 8（R1 +PR2b / R2 +PR4b）|
+| 1 probe primitive | ~95 | 9（R1 +PR2b / R2 +PR4b / R9 +PR5b）|
 | 2 shell prompt export | ~5 | 0 |
 | 3 module orchestrator | ~85 | 6（R4 +OR6）|
 | 4 cc adoption | ~50 | 6（R2 +CC6 rename）|
 | 7 graceWindow + dev log + expvar | ~30 | 4 |
 | (extra) boundary script | ~30 | 0 |
 
-**總計**：~330 LoC + 28 tests（plan v1.3 §7.1 estimate 24 → R1 +1 / R2 +2 / R4 +1，總 +4 regression tests + R2 baseline-fail cleanup + rename callsite migration + R4 stale-callback guard ~20 LoC，仍在 PR 合理 size 內）。
+**總計**：~340 LoC + 29 tests（plan v1.3 §7.1 estimate 24 → R1 +1 / R2 +2 / R4 +1 / R9 +1，總 +5 regression tests + R2 baseline-fail cleanup + rename callsite migration + R4 stale-callback guard + R9 BottomLines field + capture-mode dispatcher ~25 LoC，仍在 PR 合理 size 內）。
 
 **屬中型 PR**。`go test` 預期 elapsed < 30s 內。
 
