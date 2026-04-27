@@ -124,6 +124,38 @@ describe('NewTabPage — module-aware provider filter', () => {
     expect(screen.getByTestId('card-sessions')).toBeTruthy()
   })
 
+  it('reload-required: post-mount setEnabled(editor, false) does not hide editor cards until re-render via bootstrap', async () => {
+    const { act } = await import('react')
+    registerNewTabProvider({
+      id: 'editor',
+      label: 'editor.provider_label',
+      icon: 'File',
+      order: 5,
+      component: FakeEditorCard,
+      moduleId: 'editor',
+    })
+    registerNewTabProvider({
+      id: 'sessions',
+      label: 'session.provider_label',
+      icon: 'List',
+      order: 0,
+      component: FakeSessionsCard,
+    })
+    primeLayout(['sessions', 'editor'])
+
+    render(<NewTabPage onSelect={() => {}} />)
+    expect(screen.getByTestId('card-editor')).toBeTruthy()
+
+    await act(async () => {
+      useModuleEnabledStore.getState().setEnabled('editor', false)
+    })
+
+    // Editor card is still rendered — providers are snapshotted at render
+    // creation time and only refresh when registerBuiltinModules() runs again
+    // (matches PaneLayoutRenderer + file-opener registry contract).
+    expect(screen.getByTestId('card-editor')).toBeTruthy()
+  })
+
   it('A2-7: renders the empty state when every column pins only filtered-out providers (v1.4 F8)', () => {
     // A module-aware provider AND a legacy provider exist; the
     // pinned profile, however, only references the module-aware
