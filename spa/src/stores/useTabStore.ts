@@ -5,7 +5,9 @@ import type { FileSource } from '../types/fs'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, findPane, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern } from '../lib/pane-tree'
 import { contentMatches } from '../lib/pane-utils'
+import { findInsertTarget } from '../lib/tab-insert/find-insert-target'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
+import { useWorkspaceStore } from './useWorkspaceStore'
 import type { UntitledDocumentState } from '../types/tab'
 
 // --- Persist migration helpers ---
@@ -106,6 +108,17 @@ function renameEditorPanesInLayout(
     : layout
 }
 
+export interface OpenSingletonOpts {
+  /**
+   * Predicate over a tab's primary-pane content. When provided and no
+   * existing singleton match is found, the new tab is inserted right
+   * after the nearest matching tab to the right of activeTabId (within
+   * the active workspace). Without opts, the new tab is appended to the
+   * end of tabOrder (legacy behavior).
+   */
+  isSameKind?: (content: PaneContent) => boolean
+}
+
 interface TabState {
   tabs: Record<string, Tab>
   tabOrder: string[]
@@ -113,7 +126,7 @@ interface TabState {
   visitHistory: string[]
 
   addTab: (tab: Tab, afterTabId?: string) => void
-  openSingletonTab: (content: PaneContent) => string
+  openSingletonTab: (content: PaneContent, opts?: OpenSingletonOpts) => string
   closeTab: (id: string) => void
   setActiveTab: (id: string | null) => void
   setViewMode: (tabId: string, paneId: string, mode: 'terminal' | 'stream') => void
@@ -170,7 +183,7 @@ export const useTabStore = create<TabState>()(
           }
         }),
 
-      openSingletonTab: (content) => {
+      openSingletonTab: (content, opts) => {
         const state = get()
         // Scan all tabs' primary pane for matching content
         for (const id of state.tabOrder) {
@@ -182,9 +195,20 @@ export const useTabStore = create<TabState>()(
             return id
           }
         }
-        // Not found — create new tab
+        // Not found — create + insert. If caller passes isSameKind, find
+        // the nearest matching tab to the right of activeTabId within the
+        // active workspace's visible order; otherwise append to the end.
+        // Workspace insertion (ws.tabs) is the caller's responsibility.
         const tab = createTab(content)
-        get().addTab(tab)
+        let afterTabId: string | undefined
+        if (opts?.isSameKind && state.activeTabId) {
+          const wsState = useWorkspaceStore.getState()
+          const wsId = wsState.activeWorkspaceId
+          const ws = wsId ? wsState.workspaces.find((w) => w.id === wsId) : null
+          const visibleOrder = ws ? ws.tabs.filter((tid) => !!state.tabs[tid]) : state.tabOrder
+          afterTabId = findInsertTarget(visibleOrder, state.activeTabId, state.tabs, opts.isSameKind)
+        }
+        get().addTab(tab, afterTabId)
         get().setActiveTab(tab.id)
         return tab.id
       },
