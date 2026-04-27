@@ -1,6 +1,6 @@
-# Lights Rebuild — Phase 4a-1 Plan v1.3 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v1.4 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v1.3（Round 3 codex review fix — 1 P1 deadlock finding 採納）
+**Status**: draft v1.4（Round 4 codex review fix — 1 P2 stale-callback finding 採納）
 
 ## v1.x 演進
 
@@ -10,6 +10,7 @@
 | v1.1 | R1 codex review fix（`review-moh40grn-u7wxgv`，2 P2）：(1) API gap — `WatchTopLines` / `WatchFullScreen` 無法接收 `IdleStableTicks`；併為單一 `Watch(target, opts, cb)` + `WatchOptions{TopLines, IdleStableTicks}`；(2) repeated stable emission — `stableEmitted` flag 確保每次 changed→stable transition 只觸發一次 ScreenStable；新增 PR2b 測試覆蓋連續穩定無重發 |
 | v1.2 | R2 codex review fix（1 P1 + 1 P2）：(1) **rename rewatch path** — `renameSessionLocked` (module.go:258) 也呼叫 `StartWatch(newName+":", ...)`；plan 必須一併走 orchestrator + 加 rename regression test；(2) **baseline 失敗 cleanup race** — 初始 capture 失敗時 `watchLoop` 直接 return 但 watcher map 已註冊；新增 baseline-fail-cleanup 邏輯與 PR4b 測試 |
 | v1.3 | R3 codex review fix（1 P1 deadlock）：v1.2 §2.3.1 orchestrator API docstring 寫 `stopWatch` / `startWatch` 會 clear `activeWatchers`，但 `renameSessionLocked` 持 `m.mu` 時呼叫，會與內部要 acquire `m.mu` 的清理路徑互鎖（非可重入 mutex）。**改 API contract**：orchestrator 只碰 `prober` + `lastHookAt` + metrics，**不觸 `activeWatchers`**；caller（module.go wrapper）管理 `activeWatchers`。同時對齊 `interpretScreenEvent` 的 Error Guard 邏輯沿用 legacy 既有 lock 模式（讀 + 寫各自一次 m.mu.Lock/Unlock，不持鎖跨呼叫）|
+| v1.4 | R4 codex review fix（1 P2 stale-callback guard）：legacy `onActivityDetected` (module.go:473) 開頭檢查 `activeWatchers[session]` 不存在則 return，這個 stale-callback guard v1.3 plan 漏搬。新 watch-loop-owned watcher fire callback 多次（不像 legacy fire 一次就退），**此 guard 比 legacy 更必要** — stopWatch / rename race 中 in-flight callback 會在 watcher 已停的情況下繼續更新 status / broadcast。`interpretScreenEvent` 開頭加 `currentAgent, active := m.activeWatchers[session]; if !active \|\| currentAgent != agentType { return }`；新增 OR6 regression test |
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -343,9 +344,32 @@ opts := probe.WatchOptions{
 o.parent.prober.Watch(target, opts, o.makeCallback(session, agentType))
 ```
 
-#### 2.3.4 graceWindow 解讀
+#### 2.3.4 stale-callback guard（R4 fix） + graceWindow 解讀
 
-`interpretScreenEvent` 開頭：
+`interpretScreenEvent` 開頭兩個 guard，順序：
+
+**Guard 1 — stale callback 檢查（R4 fix）**：
+
+watch-loop-owned watcher 不再 fire-once-then-exit；callback 多次觸發。stopWatch / rename 都會與 in-flight callback 競態：
+- `stopWatch(session)` 後 callback 仍可能跑出來 — `activeWatchers[session]` 已 delete
+- `renameSessionLocked` 把 oldName 從 activeWatchers 搬到 newName — oldName 的 callback closure 仍 reference 舊 session 字串
+
+不檢查就 broadcast，會在 watcher 已停 / 已 rename 後對舊 session 廣播狀態（ghost broadcast）。
+
+```go
+o.parent.mu.Lock()
+currentAgent, active := o.parent.activeWatchers[session]
+o.parent.mu.Unlock()
+if !active || currentAgent != agentType {
+    // Stale callback (post-stop or post-rename); skip.
+    // Note: we intentionally do NOT delete from activeWatchers here,
+    //       unlike legacy onActivityDetected which fired once + exited.
+    return
+}
+```
+
+**Guard 2 — graceWindow 解讀**：
+
 ```go
 o.graceMu.Lock()
 last, hasHook := o.lastHookAt[session]
@@ -381,7 +405,7 @@ case probe.ScreenStable:
 
 接著套用 Error Guard + projection update + broadcast（與既有 `onActivityDetected` 同邏輯，整段搬入 helper）。
 
-#### 2.3.6 測試（5 tests）
+#### 2.3.6 測試（6 tests — R4 +1 OR6）
 
 | Test | 重點 |
 |------|------|
@@ -390,6 +414,7 @@ case probe.ScreenStable:
 | OR3 `TestOrchestrator_GraceWindowSuppressesEventWithinWindow` | recordHookAt → 1s 後注入 ScreenChanged；驗證無狀態變化、metrics counter +1 |
 | OR4 `TestOrchestrator_GraceWindowExpiresAfterWindow` | recordHookAt → 3s 後注入 ScreenChanged；驗證 StatusRunning 廣播 |
 | OR5 `TestOrchestrator_ErrorGuardBlocksProbeOverwrite` | currentStatus=StatusError；ScreenStable 注入；驗證 StatusError 維持、無 broadcast |
+| OR6 `TestOrchestrator_StaleCallbackGuard`（**R4 fix regression**）| 兩 sub-case：(a) stopWatch 後注入 ScreenChanged → 無 broadcast、無 metrics；(b) renameSession 前 watch oldName，rename 後注入 oldName 的 ScreenChanged callback → 無 broadcast、無 status 更新（驗證 currentAgent != agentType 比對）|
 
 ---
 
@@ -516,13 +541,13 @@ log 點（gated）：
 | Slice | Test ID 區段 | 數量 | 涵蓋 |
 |-------|--------------|------|------|
 | 0 | TT1-TT4 | 4 | tmux range API + fake executor parity |
-| 1 | PR1-PR2b + PR3-PR4b + PR5-PR6 | 8 | watcher 自治 / Top-N vs full screen / 多次 fire / err tick skip / stable-emit-once（R1 fix #2）/ **baseline-fail map cleanup（R2 fix #2）**|
+| 1 | PR1-PR2b + PR3-PR4b + PR5-PR6 | 8 | watcher 自治 / Top-N vs full screen / 多次 fire / err tick skip / stable-emit-once（R1 fix #2）/ baseline-fail map cleanup（R2 fix #2）|
 | 2 | (沿用既有) | 0 | shell prompt utility（純 visibility）|
-| 3 | OR1-OR5 | 5 | profile / graceWindow / Error Guard |
-| 4 | CC1-CC6 | 6 | cc profile + module wiring + E2E + **rename rewatch via orchestrator（R2 fix #1）**|
+| 3 | OR1-OR6 | 6 | profile / graceWindow / Error Guard / **stale-callback guard（R4 fix）**|
+| 4 | CC1-CC6 | 6 | cc profile + module wiring + E2E + rename rewatch via orchestrator（R2 fix #1）|
 | 7 | OB1-OB4 | 4 | expvar + PDX_DEV_MODE log |
 
-**總計**：27 tests（plan v1.3 §7.1 estimate 24 → +1 PR2b R1 + +1 PR4b R2 + +1 CC6 R2 regression tests）。
+**總計**：28 tests（plan v1.3 §7.1 estimate 24 → +1 PR2b R1 / +1 PR4b R2 / +1 CC6 R2 / +1 OR6 R4 regression tests）。
 
 ---
 
@@ -656,12 +681,12 @@ scripts/check-pr-4a-1-boundary.sh (new)
 | 0 tmux API | ~40 | 4 |
 | 1 probe primitive | ~90 | 8（R1 +PR2b / R2 +PR4b）|
 | 2 shell prompt export | ~5 | 0 |
-| 3 module orchestrator | ~80 | 5 |
+| 3 module orchestrator | ~85 | 6（R4 +OR6）|
 | 4 cc adoption | ~50 | 6（R2 +CC6 rename）|
 | 7 graceWindow + dev log + expvar | ~30 | 4 |
 | (extra) boundary script | ~30 | 0 |
 
-**總計**：~325 LoC + 27 tests（plan v1.3 §7.1 estimate 24，本版 R1 +1 / R2 +2 regression tests + R2 baseline-fail cleanup + rename callsite migration ~15 LoC，仍在 PR 合理 size 內）。
+**總計**：~330 LoC + 28 tests（plan v1.3 §7.1 estimate 24 → R1 +1 / R2 +2 / R4 +1，總 +4 regression tests + R2 baseline-fail cleanup + rename callsite migration + R4 stale-callback guard ~20 LoC，仍在 PR 合理 size 內）。
 
 **屬中型 PR**。`go test` 預期 elapsed < 30s 內。
 
