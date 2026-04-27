@@ -35,8 +35,9 @@ type Module struct {
 	uploadDir string
 	traceSink *hookTraceSink
 
-	prober *probe.Prober
-	tmux   tmux.Executor
+	prober    *probe.Prober
+	probeOrch *probeOrchestrator
+	tmux      tmux.Executor
 
 	mu             sync.Mutex
 	currentStatus  map[string]agentpkg.Status
@@ -113,6 +114,11 @@ func New(events *store.AgentEventStore) (*Module, error) {
 	if traces != nil {
 		m.traceSink = newHookTraceSink(traces)
 	}
+	// probeOrchestrator owns probe-watcher lifecycle. Created here (not in
+	// Init) so it is always available for tests that bypass Init and assign
+	// m.prober directly. The orchestrator resolves m.prober lazily, so
+	// "AFTER prober is set" semantics hold at startWatch call time.
+	m.probeOrch = newProbeOrchestrator(m)
 	return m, nil
 }
 
@@ -439,25 +445,29 @@ func (m *Module) resolvePaneSession(paneID string) (string, string) {
 }
 
 // manageActivityWatch handles starting/stopping Activity watchers in response
-// to hook events. The status-mapping callback (legacy onActivityDetected) is
-// intentionally a no-op in this commit; Slice 3 (Commit 3+4) wires the
-// orchestrator that interprets ScreenChangeEvent into status transitions.
+// to hook events. Watcher lifecycle is delegated to probeOrchestrator, which
+// resolves the agent's ProbeProfile (default profile when the provider does
+// not implement agentpkg.ProbeProfileProvider). The screen-change callback
+// installed by the orchestrator is a no-op stub in Commit 3; Commit 4 wires
+// interpretScreenEvent (graceWindow + transition gate + Error Guard +
+// broadcast).
+//
+// R3 fix: m.activeWatchers is owned by this function (and renameSessionLocked
+// in Commit 5); the orchestrator deliberately does not touch it.
 func (m *Module) manageActivityWatch(session, agentType string, newStatus agentpkg.Status) {
 	m.mu.Lock()
 	_, wasWatching := m.activeWatchers[session]
 	delete(m.activeWatchers, session)
 	m.mu.Unlock()
 	if wasWatching {
-		m.prober.StopWatch(session + ":")
+		m.probeOrch.stopWatch(session)
 	}
 
 	if shouldWatchActivity(newStatus) {
 		m.mu.Lock()
 		m.activeWatchers[session] = agentType
 		m.mu.Unlock()
-		// TODO Slice 3 — orchestrator wiring will replace the no-op callback
-		// with a status-mapping handler driven by ProbeProfile.
-		m.prober.Watch(session+":", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
+		m.probeOrch.startWatch(session, agentType)
 	}
 }
 
