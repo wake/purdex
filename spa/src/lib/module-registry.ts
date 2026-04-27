@@ -138,6 +138,56 @@ export function getPaneRenderer(kind: string): PaneDefinition | undefined {
   return undefined
 }
 
+/**
+ * Discriminated metadata returned by `resolvePaneRenderer()`. Holds component
+ * references but never imports concrete UI components — the consumer (e.g.
+ * `PaneLayoutRenderer`) is responsible for falling back to its own
+ * `DisabledModulePlaceholder` when a `disabled` resolution surfaces without a
+ * `customComponent`. Keeping the lib → UI direction one-way is critical:
+ * `module-registry` must remain a leaf of the import graph.
+ */
+export type RendererResolution =
+  | { kind: 'render'; component: React.ComponentType<PaneRendererProps> }
+  | {
+      kind: 'disabled'
+      moduleId: string
+      paneKind: string
+      customComponent?: React.ComponentType<{ moduleId: string; paneKind: string }>
+    }
+  | { kind: 'unknown'; paneKind: string }
+
+/**
+ * Look up the pane definition for `paneKind` and return what the consumer
+ * should render: the actual component, a placeholder hint when the owning
+ * module is disabled, or an unknown-kind result.
+ *
+ * `isEnabled` is injected to avoid a circular `module-registry` ↔
+ * `useModuleEnabledStore` import (the store already calls `getModule` to
+ * decide whether an override applies). Pass
+ * `useModuleEnabledStore.getState().isEnabled` from the render layer; the
+ * default of `() => true` keeps unit tests free of store setup.
+ */
+export function resolvePaneRenderer(
+  paneKind: string,
+  isEnabled: (moduleId: string) => boolean = () => true,
+): RendererResolution {
+  for (const m of modules.values()) {
+    for (const p of m.panes ?? []) {
+      if (p.kind !== paneKind) continue
+      if (m.disableable && !isEnabled(m.id)) {
+        return {
+          kind: 'disabled',
+          moduleId: m.id,
+          paneKind,
+          customComponent: m.disabledComponent,
+        }
+      }
+      return { kind: 'render', component: p.component }
+    }
+  }
+  return { kind: 'unknown', paneKind }
+}
+
 export function getViewDefinition(viewId: string): ViewDefinition | undefined {
   for (const m of modules.values()) {
     if (!m.views) continue
