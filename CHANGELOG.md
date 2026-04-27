@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.233] - 2026-04-27
+
+### Feat(agent/opencode): OpenCode 1.14.23 hooks completion (#664)
+
+Phase 4a PR-4a-0. Audit and freeze the OpenCode 1.14.23 hook surface, switch the plugin from the deprecated `session.idle` Bus event to the canonical `session.status` filtered to `{type:"idle"}`, and ship a boundary-enforcement script for the PR-4a-0 file scope.
+
+- Audit all 65 upstream OpenCode hooks (19 strong hooks + 48 Bus events) and freeze the catalog with a full-stage manifest + 9-event payload fixtures + provenance source map.
+- Decision 3 (switch): plugin template moves from `session.idle` to `session.status` filter; single `case` swap, no Map/dedup/dual-subscribe.
+- Decision 4 (defer): `session.status` busy/retry variants received-but-no-op; trigger conditions tracked in #661.
+- Add HC5 / HC5b / HC5c / HC5d catalog ↔ manifest contract tests; HC5e enforces H6.4 partial-stale policy invariants.
+- OC1 / OC1a contract tests (18 sub-tests) verify post-Decision-3 mapping against rendered-template payload fixtures.
+- Fix wave: clear stale idle suppression on new `chat.message`; correct SupportedVersion safety-net framing in audit doc; remove legacy pluginState dead code; add rendered-template parity guard.
+- Boundary script (`scripts/check-pr-4a0-boundary.sh`) uses three-dot diff to scope the file-scope assertion to HEAD changes only.
+- Five rounds of codex review (R1 standard + R2a/b/c adversarial + final re-check); five fix wave commits address Round 2 findings.
+
 ## [1.0.0-alpha.232] - 2026-04-27
 
 ### Test(spa): guard OpenCode agent icon (#662)
