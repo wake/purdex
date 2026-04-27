@@ -457,6 +457,169 @@ func TestOrchestrator_RepeatedScreenStableDedupsToOneBroadcast(t *testing.T) {
 	}
 }
 
+// FX3 — interpretScreenEvent re-validates the stale-callback guard inside
+// the final m.mu critical section in addition to the early fast-path check.
+// Regression for codex finding #4 (R2 attack HIGH): previously a concurrent
+// stop / rename could mutate activeWatchers between the early unlock and
+// the final lock — leaving a ghost broadcast for a watcher that no longer
+// exists.
+//
+// Approach: use the interruptBeforeFinalLockFn test seam. Production sets
+// it to a no-op; tests set it to delete activeWatchers["work"] (simulating
+// stopWatch winning the race). The orchestrator must observe the deletion
+// in the re-check inside the final critical section and return without
+// broadcasting / mutating currentStatus / incrementing the counter.
+func TestInterpretScreenEvent_RevalidatesStaleCallbackAtomically(t *testing.T) {
+	m, _, fake := orchTestModule(t)
+	seedOrchFrame(t, m, agentpkg.StatusRunning, 290)
+	m.mu.Lock()
+	m.activeWatchers["work"] = "cc"
+	m.currentStatus["work"] = agentpkg.StatusRunning
+	m.mu.Unlock()
+	// Bottom capture returns prose so ScreenStable would otherwise produce
+	// an Idle transition — any broadcast would be an actual ghost.
+	fake.setCaptureFn(func(string, int) (string, error) { return "user prose", nil })
+
+	origInterrupt := interruptBeforeFinalLockFn
+	interruptBeforeFinalLockFn = func(session string) {
+		m.mu.Lock()
+		delete(m.activeWatchers, session)
+		m.mu.Unlock()
+	}
+	t.Cleanup(func() { interruptBeforeFinalLockFn = origInterrupt })
+
+	before := snapshotMetrics()
+	cb := m.probeOrch.makeCallback("work", "cc")
+	cb(probe.ScreenChangeEvent{Kind: probe.ScreenStable, Target: "work:", OccurredAt: time.Now()})
+
+	after := snapshotMetrics()
+	if got := after.screenEvent - before.screenEvent; got != 0 {
+		t.Fatalf("screenEvent delta = %d, want 0 (atomic re-check should drop the event)", got)
+	}
+	m.mu.Lock()
+	status := m.currentStatus["work"]
+	m.mu.Unlock()
+	if status != agentpkg.StatusRunning {
+		t.Fatalf("currentStatus[work] = %q, want StatusRunning preserved (no transition)", status)
+	}
+}
+
+// FX4 — startWatch validates ProbeProfile (TopLines + BottomLines mutually
+// exclusive) and returns false on invalid; manageActivityWatch rolls back
+// its activeWatchers mutation. Regression for codex finding #7 (R2 defense
+// MEDIUM): previously a bad provider profile created a silent dead watcher
+// — stale-callback saw it as active, MetricProbeWatchStarted reported
+// "started", but no goroutine ran.
+func TestStartWatch_InvalidProfileRollsBackActiveWatchers(t *testing.T) {
+	m := newTestModule(t)
+	rec := newRecordingProber()
+	m.probeOrch.watcher = rec
+
+	provider := &fakeProfileProvider{
+		fakeAgentProvider: fakeAgentProvider{typeName: "bad-agent"},
+		profile:           agentpkg.ProbeProfile{TopLines: 5, BottomLines: 5},
+	}
+	m.registry.Register(provider)
+
+	before := snapshotMetrics()
+	m.manageActivityWatch("sess", "bad-agent", agentpkg.StatusRunning)
+	after := snapshotMetrics()
+
+	// activeWatchers must be rolled back so the orchestrator's stale-callback
+	// guard (and any future cleanup paths) treat the session as not watched.
+	m.mu.Lock()
+	_, present := m.activeWatchers["sess"]
+	m.mu.Unlock()
+	if present {
+		t.Fatalf("activeWatchers[sess] still present after invalid-profile startWatch — rollback missing")
+	}
+
+	// Metric must NOT increment — it is reserved for actually-registered
+	// watchers so /debug/vars stays an honest counter.
+	if got := after.watchStarted - before.watchStarted; got != 0 {
+		t.Fatalf("MetricProbeWatchStarted delta = %d, want 0 (invalid profile must not bump the counter)", got)
+	}
+
+	// And the prober must not have observed a Watch call for this target.
+	rec.mu.Lock()
+	_, watched := rec.watchOpts["sess:"]
+	rec.mu.Unlock()
+	if watched {
+		t.Fatalf("recordingProber observed Watch on sess: despite invalid profile")
+	}
+}
+
+// FX5a — ScreenStable on a stable-Idle session with a live top-frame PID
+// MUST skip the bottom CapturePaneContent and the transition entirely.
+// Regression for codex finding #8 (R2 體質 MEDIUM): continuous-stable Idle
+// panes were issuing tmux subprocess calls every N ticks just to be dropped
+// at the transition gate.
+func TestScreenStable_StableIdleAlivePidSkipsBottomCapture(t *testing.T) {
+	m, _, fake := orchTestModule(t)
+	seedOrchFrame(t, m, agentpkg.StatusIdle, 295)
+	m.mu.Lock()
+	m.activeWatchers["work"] = "cc"
+	m.currentStatus["work"] = agentpkg.StatusIdle
+	m.mu.Unlock()
+
+	// Force PID alive (default already does, but be explicit).
+	origAlive := isPidAliveFn
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() { isPidAliveFn = origAlive })
+
+	before := snapshotMetrics()
+	cb := m.probeOrch.makeCallback("work", "cc")
+	cb(probe.ScreenChangeEvent{Kind: probe.ScreenStable, Target: "work:", OccurredAt: time.Now()})
+
+	after := snapshotMetrics()
+	if got := after.screenEvent - before.screenEvent; got != 0 {
+		t.Fatalf("screenEvent delta = %d, want 0 (stable-Idle + alive PID is a no-op)", got)
+	}
+	fake.mu.Lock()
+	calls := len(fake.captureCall)
+	fake.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("CapturePaneContent calls = %d, want 0 (cheap gate must skip the bottom capture)", calls)
+	}
+}
+
+// FX5b — dead-PID + shell-prompt sweep path is preserved when prev == Idle.
+// The cheap gate must only skip when the top-frame PID is alive; a dead PID
+// still needs the bottom capture to drive shell-prompt classification +
+// sweep cleanup.
+func TestScreenStable_StableIdleDeadPidStillTriggersSweep(t *testing.T) {
+	m, _, fake := orchTestModule(t)
+	fake.SetPaneSessionName("%5", "work")
+	seedOrchFrame(t, m, agentpkg.StatusIdle, 296)
+	m.mu.Lock()
+	m.activeWatchers["work"] = "cc"
+	m.currentStatus["work"] = agentpkg.StatusIdle
+	m.mu.Unlock()
+
+	fake.setCaptureFn(func(target string, lastN int) (string, error) {
+		if lastN == 10 && target == "work:" {
+			return "$ ", nil
+		}
+		return "", nil
+	})
+
+	origAlive := isPidAliveFn
+	isPidAliveFn = func(int) bool { return false }
+	t.Cleanup(func() { isPidAliveFn = origAlive })
+
+	cb := m.probeOrch.makeCallback("work", "cc")
+	cb(probe.ScreenChangeEvent{Kind: probe.ScreenStable, Target: "work:", OccurredAt: time.Now()})
+
+	// Dead-PID + shell-prompt → sweepOnce runs and removes the frame.
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0 after dead-PID + shell-prompt sweep (cheap gate must NOT skip when PID dead)", len(frames))
+	}
+}
+
 // OB1 — startWatch/stopWatch increment the watch_started/watch_stopped counters.
 func TestMetrics_WatchStartedIncrements(t *testing.T) {
 	m := newTestModule(t)

@@ -40,6 +40,18 @@ const probeGraceWindow = 2 * time.Second
 // without sleeping. Package-private so the production path stays uncluttered.
 var orchNowFn = time.Now
 
+// recordHookAtHook is a test-only order-witness seam. Production leaves it
+// nil. Tests set it to capture in-memory state at the moment recordHookAt
+// fires, used by FX2 to verify recordHookAt runs BEFORE the handler's
+// currentStatus mutation (codex finding #3 regression).
+var recordHookAtHook func(session string)
+
+// interruptBeforeFinalLockFn is a test-only seam invoked just before the
+// final m.mu critical section in interpretScreenEvent. Production leaves it
+// nil. Tests set it to mutate activeWatchers concurrently — exercising the
+// atomic stale-callback re-check (codex finding #4 regression).
+var interruptBeforeFinalLockFn func(session string)
+
 // isDevMode reports whether the daemon is running with PDX_DEV_MODE=1. Probe
 // log gating uses this so production logs stay quiet. We read the env on
 // every call so flipping the var at runtime (e.g. in tests via t.Setenv)
@@ -114,10 +126,18 @@ func (o *probeOrchestrator) prober() proberWatcher {
 // Profile resolution (R8 fix): looks up the provider via parent.registry.Get
 // and asserts agentpkg.ProbeProfileProvider. Missing agentType or providers
 // that don't implement the interface fall back to defaultProbeProfile.
-func (o *probeOrchestrator) startWatch(session, agentType string) {
+//
+// Returns true iff a watcher was successfully registered. The caller
+// (manageActivityWatch / renameSessionLocked) uses this to roll back its
+// activeWatchers mutation when the profile is invalid (TopLines + BottomLines
+// mutually exclusive — probe.Watch would log + early-return without
+// registering, leaving a silent dead watcher otherwise; codex finding #7
+// regression). Returning false also skips the started-metric increment so
+// /debug/vars stays an honest counter of registered watchers.
+func (o *probeOrchestrator) startWatch(session, agentType string) bool {
 	pw := o.prober()
 	if pw == nil {
-		return
+		return false
 	}
 	target := session + ":"
 
@@ -130,6 +150,19 @@ func (o *probeOrchestrator) startWatch(session, agentType string) {
 		}
 	}
 
+	// Profile validation — must mirror probe.Watch's contract (TopLines +
+	// BottomLines mutually exclusive). Validating here lets the caller roll
+	// back its activeWatchers entry; without this, probe.Watch silently
+	// drops the call and the orchestrator is left with a "started" metric
+	// + an active map entry but no goroutine.
+	if profile.TopLines > 0 && profile.BottomLines > 0 {
+		if isDevMode() {
+			log.Printf("[probe] startWatch invalid profile session=%s agent=%s TopLines=%d BottomLines=%d — mutually exclusive; not registering",
+				session, agentType, profile.TopLines, profile.BottomLines)
+		}
+		return false
+	}
+
 	opts := probe.WatchOptions{
 		TopLines:        profile.TopLines,
 		BottomLines:     profile.BottomLines,
@@ -137,6 +170,7 @@ func (o *probeOrchestrator) startWatch(session, agentType string) {
 	}
 	pw.Watch(target, opts, o.makeCallback(session, agentType))
 	agentpkg.MetricProbeWatchStarted.Add(1)
+	return true
 }
 
 // stopWatch cancels the watcher for session. Same ":" suffix convention as
@@ -158,8 +192,25 @@ func (o *probeOrchestrator) recordHookAt(session string) {
 	o.graceMu.Lock()
 	o.lastHookAt[session] = orchNowFn()
 	o.graceMu.Unlock()
+	if hook := recordHookAtHook; hook != nil {
+		hook(session)
+	}
 	if isDevMode() {
 		log.Printf("[probe] recordHookAt session=%s", session)
+	}
+}
+
+// migrateLastHookAt transfers the lastHookAt entry from oldName to newName
+// under graceMu, preserving the active graceWindow across a session rename.
+// Codex finding #2 regression: without this, the orchestrator's screen-event
+// callback for newName would observe "no graceWindow active" within 2s of
+// rename and overwrite the hook-set status. No-op when oldName has no entry.
+func (o *probeOrchestrator) migrateLastHookAt(oldName, newName string) {
+	o.graceMu.Lock()
+	defer o.graceMu.Unlock()
+	if stamp, ok := o.lastHookAt[oldName]; ok {
+		delete(o.lastHookAt, oldName)
+		o.lastHookAt[newName] = stamp
 	}
 }
 
@@ -180,11 +231,19 @@ func (o *probeOrchestrator) makeCallback(session, agentType string) probe.Screen
 //  1. Stale-callback guard (R4): activeWatchers must contain (session →
 //     agentType). After stopWatch / rename the closure may still be invoked
 //     by the watch loop; we drop these events to avoid ghost broadcasts.
+//     Run as an EARLY fast-path AND re-checked atomically inside the final
+//     critical section (codex finding #4 regression — closes the race
+//     window between the early unlock and the final lock).
 //  2. graceWindow suppression (v2.0): events within probeGraceWindow of a
 //     recordHookAt are dropped + counted. Hook authority over probe.
 //  3. Kind → status mapping: ScreenChanged → Running; ScreenStable →
 //     independent bottom capture (R14 fix #1) for shell-prompt
-//     classification → Idle (or sweep on dead-PID + shell prompt).
+//     classification → Idle (or sweep on dead-PID + shell prompt). Cheap
+//     pre-gate (codex finding #8): a stable-Idle session with an alive
+//     top-frame PID skips the bottom CapturePaneContent entirely — there
+//     is no possible transition (gate would skip Idle→Idle anyway) and no
+//     cleanup work (sweep needs dead PID + shell prompt). Continuous-stable
+//     panes therefore stop issuing tmux subprocess calls every N ticks.
 //  4. Error Guard: never overwrite StatusError; probe is recovery-only.
 //  5. Transition gate (v2.0): same currentStatus → drop. Probe storms cannot
 //     saturate WS clients; first transition wins, repeats stay silent.
@@ -196,9 +255,10 @@ func (o *probeOrchestrator) interpretScreenEvent(session, agentType string, ev p
 	}
 	m := o.parent
 
-	// 1. Stale-callback guard.
+	// 1. Stale-callback guard (early fast-path).
 	m.mu.Lock()
 	currentAgent, active := m.activeWatchers[session]
+	prevStatus, hasPrev := m.currentStatus[session]
 	m.mu.Unlock()
 	if !active || currentAgent != agentType {
 		return
@@ -222,6 +282,20 @@ func (o *probeOrchestrator) interpretScreenEvent(session, agentType string, ev p
 	case probe.ScreenChanged:
 		status = agentpkg.StatusRunning
 	case probe.ScreenStable:
+		// Cheap pre-gate (codex finding #8): if already Idle and top-frame
+		// PID is alive, the bottom capture would only feed a transition
+		// gate that's about to drop Idle→Idle. Continuous-stable Idle
+		// panes are common (a session sitting at a shell prompt) — skipping
+		// the tmux subprocess here is a measurable cost win. Dead-PID
+		// branch falls through so the sweep cleanup path keeps working.
+		if hasPrev && prevStatus == agentpkg.StatusIdle {
+			projection, _ := m.projectionForSession(session)
+			if projection == nil || projection.TopFrame == nil || isPidAliveFn(projection.TopFrame.PID) {
+				return
+			}
+			// Stable Idle + dead PID: fall through to bottom capture for
+			// shell-prompt classification + sweep cleanup.
+		}
 		// R14 fix #1: ev.Content reflects the watcher's TopLines / BottomLines
 		// configuration. For agents on a TopLines profile the captured content
 		// won't include the bottom shell prompt, so LooksLikeShellPrompt would
@@ -246,8 +320,23 @@ func (o *probeOrchestrator) interpretScreenEvent(session, agentType string, ev p
 		return
 	}
 
-	// 4. Error Guard + 5. Transition gate (single critical section).
+	// Test-only seam: simulate a concurrent stop/rename that mutates
+	// activeWatchers between the early fast-path and the final critical
+	// section. Production leaves interruptBeforeFinalLockFn nil (no-op).
+	if hook := interruptBeforeFinalLockFn; hook != nil {
+		hook(session)
+	}
+
+	// 1 (re-check) + 4. Error Guard + 5. Transition gate.
+	// Single critical section; the re-check of activeWatchers closes the
+	// race window where stopWatch/rename mutated the map between the early
+	// unlock at step 1 and this lock (codex finding #4 regression).
 	m.mu.Lock()
+	currentAgent, active = m.activeWatchers[session]
+	if !active || currentAgent != agentType {
+		m.mu.Unlock()
+		return
+	}
 	if m.currentStatus[session] == agentpkg.StatusError {
 		m.mu.Unlock()
 		return

@@ -281,7 +281,19 @@ func (m *Module) renameSessionLocked(oldName, newName string) {
 		// + broadcast) so the renamed session keeps responding to screen events.
 		// nil-prober is handled inside startWatch/stopWatch (R14 fix).
 		m.probeOrch.stopWatch(oldName)
-		m.probeOrch.startWatch(newName, agentType)
+		if !m.probeOrch.startWatch(newName, agentType) {
+			// Codex finding #7 regression: invalid profile / nil prober — roll
+			// back the activeWatchers transfer so the orchestrator's stale-
+			// callback guard does not see a phantom watcher.
+			delete(m.activeWatchers, newName)
+		}
+		// Codex finding #2 regression: migrate the active graceWindow so a
+		// hook-set status that was just recorded under oldName cannot be
+		// overwritten by probe events arriving for newName within
+		// probeGraceWindow. Done AFTER orchestrator stop/start so it's
+		// clear that we preserve a brand-new graceWindow rather than
+		// starting fresh.
+		m.probeOrch.migrateLastHookAt(oldName, newName)
 	}
 }
 
@@ -467,7 +479,15 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 		m.mu.Lock()
 		m.activeWatchers[session] = agentType
 		m.mu.Unlock()
-		m.probeOrch.startWatch(session, agentType)
+		if !m.probeOrch.startWatch(session, agentType) {
+			// Codex finding #7 regression: invalid profile / nil prober — roll
+			// back the activeWatchers entry so the stale-callback guard sees
+			// the session as not watched and /debug/vars stays consistent
+			// (no "started" without a registered watcher).
+			m.mu.Lock()
+			delete(m.activeWatchers, session)
+			m.mu.Unlock()
+		}
 	}
 }
 

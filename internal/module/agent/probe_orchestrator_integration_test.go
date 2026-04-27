@@ -145,6 +145,67 @@ func TestModule_HookHandler_CallsRecordHookAt(t *testing.T) {
 	}
 }
 
+// FX2 — handler calls recordHookAt BEFORE the m.mu critical section that
+// writes currentStatus. Regression for codex finding #3 (R2 attack HIGH):
+// the previous order let an in-flight probe callback observe the new
+// currentStatus while lastHookAt was still empty — the graceWindow check
+// passed and the probe overwrote authoritative hook status.
+//
+// Order-witness: install recordHookAtHook (test-only seam) that captures
+// the value of currentStatus[session] at the moment recordHookAt fires.
+// If recordHookAt runs first (correct order), the captured value is the
+// pre-hook empty/legacy state; if currentStatus is written first (broken
+// order), the captured value is the new result.Status.
+func TestHandler_RecordHookAtBeforeCurrentStatus(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusWaiting}
+		},
+	})
+	rec := newRecordingProber()
+	m.probeOrch.watcher = rec
+
+	var captured agentpkg.Status
+	var capturedOK bool
+	origHook := recordHookAtHook
+	recordHookAtHook = func(session string) {
+		m.mu.Lock()
+		captured, capturedOK = m.currentStatus[session]
+		m.mu.Unlock()
+	}
+	t.Cleanup(func() { recordHookAtHook = origHook })
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"UserPromptSubmit","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+
+	// Correct order: recordHookAt fires BEFORE currentStatus write — the
+	// captured currentStatus is empty (pre-hook). If the broken order shipped,
+	// the captured value would be StatusWaiting.
+	if capturedOK && captured == agentpkg.StatusWaiting {
+		t.Fatalf("recordHookAt observed currentStatus[work] = %q (the new hook status) — recordHookAt was called AFTER the currentStatus write (broken order)", captured)
+	}
+	// And after the handler finishes, currentStatus must be the new status.
+	m.mu.Lock()
+	final := m.currentStatus["work"]
+	m.mu.Unlock()
+	if final != agentpkg.StatusWaiting {
+		t.Fatalf("post-handler currentStatus[work] = %q, want StatusWaiting", final)
+	}
+}
+
 // CC4 — E2E ScreenChanged → broadcast Running. cc registered with its real
 // ProbeProfile (TopLines=12). manageActivityWatch starts the watcher, then
 // we feed a ScreenChanged event through the orchestrator's callback and
@@ -251,6 +312,45 @@ func TestCC_E2E_ScreenStableToIdle(t *testing.T) {
 	m.mu.Unlock()
 	if got != agentpkg.StatusIdle {
 		t.Fatalf("currentStatus[work] = %q, want StatusIdle", got)
+	}
+}
+
+// FX1 — RenameSession migrates lastHookAt across the rename so a freshly-
+// set graceWindow stays in effect for the new session name. Regression for
+// codex finding #2 (R1 P2): without this, hook-set status could be
+// overwritten by probe events within 2s after rename because lastHookAt
+// stayed under the old name (probe targets the new name and observes "no
+// graceWindow active").
+func TestRenameSession_MigratesLastHookAt(t *testing.T) {
+	m := newTestModule(t)
+	rec := newRecordingProber()
+	m.probeOrch.watcher = rec
+	provider := &fakeAgentProvider{typeName: "cc"}
+	m.registry.Register(provider)
+
+	// Pre-state: oldname is being watched + has a fresh hook timestamp.
+	m.mu.Lock()
+	m.activeWatchers["oldname"] = "cc"
+	m.mu.Unlock()
+	m.probeOrch.recordHookAt("oldname")
+
+	m.RenameSession("oldname", "newname")
+
+	// graceWindow must follow the rename: lastHookAt[oldname] gone,
+	// lastHookAt[newname] populated and still within probeGraceWindow.
+	m.probeOrch.graceMu.Lock()
+	if _, ok := m.probeOrch.lastHookAt["oldname"]; ok {
+		m.probeOrch.graceMu.Unlock()
+		t.Fatalf("lastHookAt[oldname] still present after rename — graceWindow leaked")
+	}
+	stamp, ok := m.probeOrch.lastHookAt["newname"]
+	m.probeOrch.graceMu.Unlock()
+	if !ok {
+		t.Fatalf("lastHookAt[newname] missing after rename — graceWindow lost")
+	}
+	if time.Since(stamp) > probeGraceWindow {
+		t.Fatalf("lastHookAt[newname] = %v (age %v), want recent enough that graceWindow still active",
+			stamp, time.Since(stamp))
 	}
 }
 
