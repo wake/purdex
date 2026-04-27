@@ -1,13 +1,14 @@
-# Lights Rebuild — Phase 4a-1 Plan v1.1 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v1.2 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v1.1（Round 1 codex review fix — `review-moh40grn-u7wxgv`，2 P2 findings 全採納）
+**Status**: draft v1.2（Round 2 codex review fix — `review-moh4f3ts-XXXXXX`，1 P1 + 1 P2 findings 全採納）
 
 ## v1.x 演進
 
 | 版本 | 變更 |
 |---|---|
 | v1 | 初版起草（6 slices / 24 tests / ~305 LoC）|
-| v1.1 | R1 codex review fix：(1) API gap — `WatchTopLines` / `WatchFullScreen` 無法接收 `IdleStableTicks`；併為單一 `Watch(target, opts, cb)` + `WatchOptions{TopLines, IdleStableTicks}`；(2) repeated stable emission — `stableEmitted` flag 確保每次 changed→stable transition 只觸發一次 ScreenStable；新增 PR2b 測試覆蓋連續穩定無重發 |
+| v1.1 | R1 codex review fix（`review-moh40grn-u7wxgv`，2 P2）：(1) API gap — `WatchTopLines` / `WatchFullScreen` 無法接收 `IdleStableTicks`；併為單一 `Watch(target, opts, cb)` + `WatchOptions{TopLines, IdleStableTicks}`；(2) repeated stable emission — `stableEmitted` flag 確保每次 changed→stable transition 只觸發一次 ScreenStable；新增 PR2b 測試覆蓋連續穩定無重發 |
+| v1.2 | R2 codex review fix（1 P1 + 1 P2）：(1) **rename rewatch path** — `renameSessionLocked` (module.go:258) 也呼叫 `StartWatch(newName+":", ...)`；plan 必須一併走 orchestrator + 加 rename regression test；(2) **baseline 失敗 cleanup race** — 初始 capture 失敗時 `watchLoop` 直接 return 但 watcher map 已註冊；新增 baseline-fail-cleanup 邏輯與 PR4b 測試 |
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -191,7 +192,17 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
 - 邏輯：
   ```
   idleStableTicks = opts.IdleStableTicks; if idleStableTicks == 0 { idleStableTicks = 3 }
-  baseline, ok = capture(); if !ok { return }  // 無 baseline 不發事件
+  baseline, ok = capture()
+  if !ok {
+      // R2 fix #2: baseline-fail cleanup — watcher map 已在 Watch 內註冊
+      // 此 goroutine 即將退出，必須清自己的 entry，否則 HasWatcher 會說謊
+      p.watcherMu.Lock()
+      if entry, ok := p.watchers[target]; ok && entry.id == id {
+          delete(p.watchers, target)
+      }
+      p.watcherMu.Unlock()
+      return
+  }
   stableCount = 0
   stableEmitted = false  // R1 fix #2: 每次 changed→stable transition 只觸發一次
   loop:
@@ -214,6 +225,7 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
   ```
 - **關鍵差異 vs legacy `activityLoop`**：watcher 不退出；可發多次 ScreenChanged + ScreenStable transitions；callback 不擁有 watcher 生命週期；同一 stable run 不會重發 ScreenStable
 - **R1 fix #2 rationale**：legacy `activityLoop` 自動退出後不存在 repeated emission 問題；新 watch-loop-owned 設計若不加 `stableEmitted` flag，idle pane 會每 N ticks 重發 ScreenStable → orchestrator 對應重發 StatusIdle broadcast → metrics counter 無限累積 + log 噴 + WS 客戶端收 idle 風暴。`stableEmitted` 確保「stable run 視為一個 transition，到下次 change 才再 arm」
+- **R2 fix #2 rationale**：legacy `activityLoop` 用 `defer` 統一在 goroutine 退出時清 watcher map entry，所以 baseline 失敗的 early-return 也涵蓋；新 ownership 文字寫成「cleanup only happens on ctx cancel」會漏掉 baseline-failure path → watcher map 殘留死 entry → `HasWatcher(target) == true` 但實際上 goroutine 已退 → 後續 `Watch(target, ...)` 會把同一個 entry 的 cancel 替換掉但既有 goroutine 已死 → 行為不可預測。修法：在 baseline 失敗 early-return 前同步清自己的 entry（only-if-still-mine 用 `id` 比對，避免清到後續 watch 的）
 
 #### 2.1.4 Watcher ownership 變更
 
@@ -237,6 +249,7 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
 | PR2b `TestWatch_StableEmittedOnceUntilNextChange`（**R1 fix #2 regression**）| 注入 6 次同 capture（baseline + 5 stable）— 驗證 ScreenStable 只 fire 1 次；接著注入 diff → ScreenChanged fire；再注入 4 同 → ScreenStable 再 fire 1 次（changed→stable 切換才 re-arm）|
 | PR3 `TestWatch_DoesNotExitOnCallback` | 一次 ScreenChanged callback 後再注入 diff，驗證再發 ScreenChanged（loop 持續）|
 | PR4 `TestWatch_StopWatch_CancelsLoop` | StopWatch 後 capture mock 不再被 call、HasWatcher false |
+| PR4b `TestWatch_BaselineFailure_CleansMapEntry`（**R2 fix #2 regression**）| capture mock 對 first call 回 err；驗證 `Watch` 啟動後 200ms 內 `HasWatcher(target) == false`（goroutine 自己清 entry）|
 | PR5 `TestWatch_TopLinesIgnoresBottomChanges` | 注入 only-bottom-line-changed scenario，opts.TopLines=3 不報 changed；opts.TopLines=0（full screen）報 changed |
 | PR6 `TestWatch_TmuxErrorTickSkipped` | capture err 在 tick 中發生 → 不 fire ScreenChanged，下一 tick 復原 → 報 ScreenChanged |
 
@@ -388,9 +401,14 @@ func (p *Provider) ProbeProfile() agentpkg.ProbeProfile {
 
 具體 TopLines 值由實際觀察 cc UI layout 決定；本 plan 暫定 12，allowed to adjust during implementation 並文件化決定。
 
-#### 2.4.2 module.go 改為走 orchestrator
+#### 2.4.2 module.go 改為走 orchestrator（含 R2 fix #1 — 兩條 callsite 一起遷）
 
-把 `manageActivityWatch` / `onActivityDetected` 兩個 method 改成 thin wrapper：
+`module.go` 有 **兩處** 呼叫 legacy `m.prober.StartWatch`，新 plan 都必須遷到 orchestrator：
+
+1. **`manageActivityWatch`**（module.go:454）— hook event 觸發 status 變化時的 start/stop
+2. **`renameSessionLocked`**（module.go:276）— session rename 後重啟 watcher（callback closure 鎖了 oldName，必須 stop 舊 + start 新）
+
+把 `manageActivityWatch` / `onActivityDetected` 改成 thin wrapper：
 
 ```go
 func (m *Module) manageActivityWatch(session, agentType string, newStatus agentpkg.Status) {
@@ -410,6 +428,20 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 }
 ```
 
+把 `renameSessionLocked` 中的 watcher 段落改成（保留既有 m.mu held + activeWatchers transfer 邏輯）：
+
+```go
+// In renameSessionLocked, after activeWatchers transfer:
+if agentType, ok := m.activeWatchers[oldName]; ok {
+    delete(m.activeWatchers, oldName)
+    m.probeOrch.stopWatch(oldName)
+    m.activeWatchers[newName] = agentType
+    m.probeOrch.startWatch(newName, agentType)
+}
+```
+
+注意：orchestrator `startWatch` / `stopWatch` 內部會處理 prober nil-check（保留 legacy `if m.prober != nil` 行為），rename callsite 不必重複檢查。
+
 舊 `onActivityDetected` 整個刪掉（邏輯已搬到 orchestrator.interpretScreenEvent；本 PR 範圍內 cc 走新 path，codex / opencode 也透過 default profile 走同一份 helper — 但 codex / opencode 的 TopN 微調留 PR-4a-2，本 PR 三家共用 default profile = 行為向下相容）。
 
 #### 2.4.3 hook handler 呼叫 recordHookAt
@@ -425,6 +457,7 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 | CC3 `TestModule_HookHandler_CallsRecordHookAt` | 注入 cc hook event；驗證 orchestrator.lastHookAt[session] 記錄到 |
 | CC4 `TestCC_E2E_ScreenChangedToRunning` | cc waiting → orchestrator.startWatch → 注入 ScreenChanged → status 廣播 Running |
 | CC5 `TestCC_E2E_ScreenStableToIdle` | cc running → orchestrator.startWatch → 注入 ScreenStable（non-shell-prompt）→ status 廣播 Idle |
+| CC6 `TestCC_RenameSession_RestartsWatchViaOrchestrator`（**R2 fix #1 regression**）| cc running on `oldname:` → `RenameSession(oldname, newname)` → 驗證 orchestrator.stopWatch(oldname) + startWatch(newname) 各 call 一次 + activeWatchers map key 從 oldname 遷到 newname |
 
 ---
 
@@ -469,13 +502,13 @@ log 點（gated）：
 | Slice | Test ID 區段 | 數量 | 涵蓋 |
 |-------|--------------|------|------|
 | 0 | TT1-TT4 | 4 | tmux range API + fake executor parity |
-| 1 | PR1-PR2b + PR3-PR6 | 7 | watcher 自治 / Top-N vs full screen / 多次 fire / err tick skip / **stable-emit-once（R1 fix #2）**|
+| 1 | PR1-PR2b + PR3-PR4b + PR5-PR6 | 8 | watcher 自治 / Top-N vs full screen / 多次 fire / err tick skip / stable-emit-once（R1 fix #2）/ **baseline-fail map cleanup（R2 fix #2）**|
 | 2 | (沿用既有) | 0 | shell prompt utility（純 visibility）|
 | 3 | OR1-OR5 | 5 | profile / graceWindow / Error Guard |
-| 4 | CC1-CC5 | 5 | cc profile + module wiring + E2E |
+| 4 | CC1-CC6 | 6 | cc profile + module wiring + E2E + **rename rewatch via orchestrator（R2 fix #1）**|
 | 7 | OB1-OB4 | 4 | expvar + PDX_DEV_MODE log |
 
-**總計**：25 tests（plan v1.3 §7.1 estimate 24 → +1 PR2b R1 regression test）。
+**總計**：27 tests（plan v1.3 §7.1 estimate 24 → +1 PR2b R1 + +1 PR4b R2 + +1 CC6 R2 regression tests）。
 
 ---
 
@@ -607,14 +640,14 @@ scripts/check-pr-4a-1-boundary.sh (new)
 | Slice | 估 LoC | 估 tests |
 |-------|--------|----------|
 | 0 tmux API | ~40 | 4 |
-| 1 probe primitive | ~85 | 7（R1 +PR2b）|
+| 1 probe primitive | ~90 | 8（R1 +PR2b / R2 +PR4b）|
 | 2 shell prompt export | ~5 | 0 |
 | 3 module orchestrator | ~80 | 5 |
-| 4 cc adoption | ~40 | 5 |
+| 4 cc adoption | ~50 | 6（R2 +CC6 rename）|
 | 7 graceWindow + dev log + expvar | ~30 | 4 |
 | (extra) boundary script | ~30 | 0 |
 
-**總計**：~310 LoC + 25 tests（plan v1.3 §7.1 estimate ~250+24，本版 R1 +5 LoC `stableEmitted` + `WatchOptions` + 1 PR2b regression test，仍在 PR 合理 size 內）。
+**總計**：~325 LoC + 27 tests（plan v1.3 §7.1 estimate 24，本版 R1 +1 / R2 +2 regression tests + R2 baseline-fail cleanup + rename callsite migration ~15 LoC，仍在 PR 合理 size 內）。
 
 **屬中型 PR**。`go test` 預期 elapsed < 30s 內。
 
