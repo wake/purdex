@@ -77,6 +77,14 @@ export interface ModuleDefinition {
   commands?: CommandContribution[]
   settings?: AnySettingsContributionDeclaration[]
   /**
+   * File openers contributed by this module. `applyModuleFileOpeners()`
+   * registers them into the file-opener registry (with `ownerModuleId = m.id`)
+   * and skips them when a `disableable` module is currently disabled.
+   * Module owners declare openers here instead of calling `registerFileOpener`
+   * directly so the registry stays in sync with module enable state.
+   */
+  fileOpeners?: import('./file-opener-registry').FileOpener[]
+  /**
    * When `true`, the module appears in the Modules Switchboard and can be
    * disabled by the user. Default `false` — a safe, explicit opt-in: module
    * owners must deliberately mark a module as independent enough to be
