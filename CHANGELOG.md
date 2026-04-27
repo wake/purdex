@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.237] - 2026-04-28
+
+### Feat(spa): editor module owns file openers + disabled placeholder (P1) (#675)
+
+Editor module is now self-contained: it declares its three file openers (Image / PDF / Text) instead of having `register-modules.tsx` register them globally. When Editor is disabled, panes show a `DisabledModulePlaceholder` with reload-required hint instead of silently rendering nothing.
+
+- New `ModuleDefinition.fileOpeners` field; `applyModuleFileOpeners()` helper applies them owner-scoped.
+- `file-opener-registry` switched to nested `Map<owner, Map<id, opener>>` to avoid cross-module key collisions, with `clearFileOpenersForOwner()` HMR-safe disposal.
+- New `DisabledModulePlaceholder` component + i18n keys (`module.disabled.*`) used by `PaneLayoutRenderer` and `NewTabPage` when the owning module is disabled.
+- `module-registry.ts` now exposes `RendererResolution` metadata so renderers can stay free of UI imports (no lib→UI reverse dep).
+- 478-line `register-modules.tsx` split into `register-modules/{index,editor-module,fs-backends,module-file-openers}.tsx` (transitional shim re-exports from the subdir).
+- Reload-required contract locked across bootstrap: `applyModuleFileOpeners` / `registerEditorNewTabProviders` / `dispatchSettingsContributions` run at bootstrap; `PaneLayoutRenderer` snapshots `enabled` map at mount; `NewTabPage` uses `useMemo([])` to capture providers + isEnabled snapshot.
+- Five rounds of codex review converged (5 → 3 → 1 → 1 → 0 findings). Two follow-ups tracked: #678 (immediate enable/disable UX redesign) and #674 (baseline test failures: TabBar pinned tooltip + sync hosts token preservation).
+
 ## [1.0.0-alpha.236] - 2026-04-28
 
 ### Feat: quick-commands v2 — Phase 1a (data layer) (#677)
