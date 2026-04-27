@@ -816,7 +816,7 @@ Expected: clean
 
 **Spec v4 新增的支援結構：** Phase 1b 三個基礎件（`inferWorkspaceHostId` helper + `HostPickerPopover` 元件 + i18n keys）必須先於 `<CommandSlot>` / executor / workspace 入口落地，否則後續 task 在跑單元測試時會看到 raw i18n key（fallback to key），且 caller 無法正確呼叫。
 
-**Task 順序：** 1b.0a → 1b.0b → 1b.0c → 1b.1 → 1b.1.5 → 1b.2 → 1b.3 → 1b.4 → 1b.5a → 1b.6。（原 1b.5b 移到 Phase 1b'；1b.0c 為新增的「i18n keys 前置」task。）
+**Task 順序：** 1b.0a → 1b.0c → 1b.0b → 1b.1 → 1b.1.5 → 1b.2 → 1b.3 → 1b.4 → 1b.5a → 1b.6。（原 1b.5b 移到 Phase 1b'；1b.0c 為新增的「i18n keys 前置」task — 必須在 1b.0b HostPickerPopover 測試之前 ship，否則測試會比對到 raw i18n key 而誤綠。）
 
 ### Task 1b.0a: 新增 `inferWorkspaceHostId` helper（spec §3.2.1 多數決）
 
@@ -1091,13 +1091,96 @@ feat(spa): add inferWorkspaceHostId — majority-vote host resolution for worksp
 
 ---
 
+### Task 1b.0c: 前置 i18n keys（HostPicker / aria / executor / toast）
+
+**Files:**
+- Modify: `spa/src/locales/zh-TW.json`
+- Modify: `spa/src/locales/en.json`
+
+**動機（codex round-1 B9 / round-2 B9）：** 後續 task（HostPickerPopover、CommandSlot、slot-executor、context menu、popover）的單元測試會直接 render 元件、`screen.getByText(/No hosts available/i)` / `getByRole('button', { name: /retry/i })` 比對顯示文字。i18n 系統在 key 缺失時 fallback 回 raw key，會導致測試比對 `quick_commands.host_picker.empty` 而非實際翻譯，**綠／紅判定模糊**。把 keys 加入 JSON 必須**先於**任何用到這些 keys 的 caller / 元件測試開跑 — 因此 1b.0c 必須跑在 1b.0b（HostPickerPopover）之前。
+
+原 plan 的 1b.4（settings contribution + i18n）保留，但只負責 **Settings tab / dialog / module description / 模組元件外殼**等後續 keys；**HostPicker、aria-label、executor toast、retry 按鈕**等先放在 1b.0c。
+
+**i18n keys 清單（codex round-1 B9 + C16 — aria-label 也走 i18n）：**
+
+zh-TW + en 對照（同步加入）：
+
+```json
+{
+  "quick_commands.host_picker.label": "選擇主機" / "Choose host",
+  "quick_commands.host_picker.empty": "尚未設定任何主機" / "No hosts available",
+  "quick_commands.host_picker.online": "線上" / "online",
+  "quick_commands.host_picker.offline": "離線" / "offline",
+  "quick_commands.host_picker.close": "關閉" / "Close",
+  "quick_commands.toast.create_failed": "無法建立 session：{{reason}}" / "Failed to start session: {{reason}}",
+  "quick_commands.toast.send_keys_failed": "Session 已建立，但指令送出失敗。" / "Session created, but command failed.",
+  "quick_commands.toast.switch_failed": "已建立並送出指令，但無法切換焦點；請至 sessions 列表查看。" / "Created and sent, but could not switch focus; check the sessions list.",
+  "quick_commands.toast.retry": "重試" / "Retry",
+  "quick_commands.aria.toolbar": "快速指令" / "Quick commands",
+  "quick_commands.aria.workspace_actions": "工作區快速動作" / "Workspace quick actions"
+}
+```
+
+註：`settings.section.quick_commands` / `settings.quick_commands.*` / `modules.quick_commands.description` / `common.edit` 等 keys 留在 1b.4 一併加入（因為它們綁 settings UI 上下文，1b.4 才會 render 出來）。
+
+- [ ] **Step 1: Add keys to zh-TW.json**
+
+Edit `spa/src/locales/zh-TW.json`（按既有檔案的字典排序或群組原則插入；確認 trailing comma 不破壞 JSON 結構）：
+
+```json
+  "quick_commands.host_picker.label": "選擇主機",
+  "quick_commands.host_picker.empty": "尚未設定任何主機",
+  "quick_commands.host_picker.online": "線上",
+  "quick_commands.host_picker.offline": "離線",
+  "quick_commands.host_picker.close": "關閉",
+  "quick_commands.toast.create_failed": "無法建立 session：{{reason}}",
+  "quick_commands.toast.send_keys_failed": "Session 已建立，但指令送出失敗。",
+  "quick_commands.toast.switch_failed": "已建立並送出指令，但無法切換焦點；請至 sessions 列表查看。",
+  "quick_commands.toast.retry": "重試",
+  "quick_commands.aria.toolbar": "快速指令",
+  "quick_commands.aria.workspace_actions": "工作區快速動作",
+```
+
+- [ ] **Step 2: Add keys to en.json**
+
+Edit `spa/src/locales/en.json`：
+
+```json
+  "quick_commands.host_picker.label": "Choose host",
+  "quick_commands.host_picker.empty": "No hosts available",
+  "quick_commands.host_picker.online": "online",
+  "quick_commands.host_picker.offline": "offline",
+  "quick_commands.host_picker.close": "Close",
+  "quick_commands.toast.create_failed": "Failed to start session: {{reason}}",
+  "quick_commands.toast.send_keys_failed": "Session created, but command failed.",
+  "quick_commands.toast.switch_failed": "Created and sent, but could not switch focus; check the sessions list.",
+  "quick_commands.toast.retry": "Retry",
+  "quick_commands.aria.toolbar": "Quick commands",
+  "quick_commands.aria.workspace_actions": "Workspace quick actions",
+```
+
+- [ ] **Step 3: Verify locale completeness**
+
+Run: `cd spa && pnpm run lint`
+Expected: clean（既有 lint 已含 locale-completeness 檢查；所有新 keys 必須兩語對齊）。
+
+- [ ] **Step 4: Commit**
+
+```
+chore(spa): add i18n keys for quick commands HostPicker / aria / toast (codex round-1 B9)
+```
+
+註：Task 1b.0b 的 HostPickerPopover 測試 + 實作仰賴 `quick_commands.host_picker.*` keys；**順序鐵則：1b.0a → 1b.0c → 1b.0b**（i18n keys 必須先於 HostPickerPopover ship，否則測試會比對 raw i18n key 而誤綠，prod 端 fallback 顯示 raw key 文字）。1b.0c 純粹是 i18n keys 增量（`zh-TW.json` + `en.json`），與 0a/0b 無代碼依賴，可獨立先做。
+
+---
+
 ### Task 1b.0b: 新增 `HostPickerPopover` 共用元件（spec §3.2.2 / §4.4）
 
 **Files:**
 - Create: `spa/src/components/HostPickerPopover.tsx`
 - Create: `spa/src/components/HostPickerPopover.test.tsx`
 
-**動機：** spec §3.2.2 規定 workspace hostId 為 null 時不可靜默 fallback；改開 host picker 讓 user 主動選 host。spec §3.5 forward-compat：未來 multi-host workspace binding 系統也用同一個 popover。本 task 為**獨立可重用元件**，不耦合 quick commands store。
+**動機：** spec §3.2.2 規定 workspace hostId 為 null 時不可靜默 fallback；改開 host picker 讓 user 主動選 host。spec §3.5 forward-compat：未來 multi-host workspace binding 系統也用同一個 popover。本 task 為**獨立可重用元件**，不耦合 quick commands store。前置依賴：Task 1b.0c 必須先完成（i18n keys）。
 
 **API：**
 ```tsx
@@ -1411,7 +1494,7 @@ export function HostPickerPopover({ open, anchor, onSelect, onCancel }: Props) {
             aria-label={t('quick_commands.host_picker.close')}
             className="p-0.5 text-text-muted hover:text-text-primary cursor-pointer"
           >
-            {/* Use Phosphor X icon at runtime; placeholder marker for plan. */}
+            {/* Implementation note: use Phosphor `X` icon component at runtime. */}
             ×
           </button>
         </div>
@@ -1458,89 +1541,6 @@ Expected: PASS
 ```
 feat(spa): add HostPickerPopover reusable component for host selection (spec §3.2.2 / §4.4)
 ```
-
----
-
-### Task 1b.0c: 前置 i18n keys（HostPicker / aria / executor / toast）
-
-**Files:**
-- Modify: `spa/src/locales/zh-TW.json`
-- Modify: `spa/src/locales/en.json`
-
-**動機（codex round-1 B9）：** 後續 task（HostPickerPopover、CommandSlot、slot-executor、context menu、popover）的單元測試會直接 render 元件、`screen.getByText(/No hosts available/i)` / `getByRole('button', { name: /retry/i })` 比對顯示文字。i18n 系統在 key 缺失時 fallback 回 raw key，會導致測試比對 `quick_commands.host_picker.empty` 而非實際翻譯，**綠／紅判定模糊**。把 keys 加入 JSON 必須**先於**任何用到這些 keys 的 caller / 元件測試開跑。
-
-原 plan 的 1b.4（settings contribution + i18n）保留，但只負責 **Settings tab / dialog / module description / 模組元件外殼**等後續 keys；**HostPicker、aria-label、executor toast、retry 按鈕**等先放在 1b.0c。
-
-**i18n keys 清單（codex round-1 B9 + C16 — aria-label 也走 i18n）：**
-
-zh-TW + en 對照（同步加入）：
-
-```json
-{
-  "quick_commands.host_picker.label": "選擇主機" / "Choose host",
-  "quick_commands.host_picker.empty": "尚未設定任何主機" / "No hosts available",
-  "quick_commands.host_picker.online": "線上" / "online",
-  "quick_commands.host_picker.offline": "離線" / "offline",
-  "quick_commands.host_picker.close": "關閉" / "Close",
-  "quick_commands.toast.create_failed": "無法建立 session：{{reason}}" / "Failed to start session: {{reason}}",
-  "quick_commands.toast.send_keys_failed": "Session 已建立，但指令送出失敗。" / "Session created, but command failed.",
-  "quick_commands.toast.switch_failed": "已建立並送出指令，但無法切換焦點；請至 sessions 列表查看。" / "Created and sent, but could not switch focus; check the sessions list.",
-  "quick_commands.toast.retry": "重試" / "Retry",
-  "quick_commands.aria.toolbar": "快速指令" / "Quick commands",
-  "quick_commands.aria.workspace_actions": "工作區快速動作" / "Workspace quick actions"
-}
-```
-
-註：`settings.section.quick_commands` / `settings.quick_commands.*` / `modules.quick_commands.description` / `common.edit` 等 keys 留在 1b.4 一併加入（因為它們綁 settings UI 上下文，1b.4 才會 render 出來）。
-
-- [ ] **Step 1: Add keys to zh-TW.json**
-
-Edit `spa/src/locales/zh-TW.json`（按既有檔案的字典排序或群組原則插入；確認 trailing comma 不破壞 JSON 結構）：
-
-```json
-  "quick_commands.host_picker.label": "選擇主機",
-  "quick_commands.host_picker.empty": "尚未設定任何主機",
-  "quick_commands.host_picker.online": "線上",
-  "quick_commands.host_picker.offline": "離線",
-  "quick_commands.host_picker.close": "關閉",
-  "quick_commands.toast.create_failed": "無法建立 session：{{reason}}",
-  "quick_commands.toast.send_keys_failed": "Session 已建立，但指令送出失敗。",
-  "quick_commands.toast.switch_failed": "已建立並送出指令，但無法切換焦點；請至 sessions 列表查看。",
-  "quick_commands.toast.retry": "重試",
-  "quick_commands.aria.toolbar": "快速指令",
-  "quick_commands.aria.workspace_actions": "工作區快速動作",
-```
-
-- [ ] **Step 2: Add keys to en.json**
-
-Edit `spa/src/locales/en.json`：
-
-```json
-  "quick_commands.host_picker.label": "Choose host",
-  "quick_commands.host_picker.empty": "No hosts available",
-  "quick_commands.host_picker.online": "online",
-  "quick_commands.host_picker.offline": "offline",
-  "quick_commands.host_picker.close": "Close",
-  "quick_commands.toast.create_failed": "Failed to start session: {{reason}}",
-  "quick_commands.toast.send_keys_failed": "Session created, but command failed.",
-  "quick_commands.toast.switch_failed": "Created and sent, but could not switch focus; check the sessions list.",
-  "quick_commands.toast.retry": "Retry",
-  "quick_commands.aria.toolbar": "Quick commands",
-  "quick_commands.aria.workspace_actions": "Workspace quick actions",
-```
-
-- [ ] **Step 3: Verify locale completeness**
-
-Run: `cd spa && pnpm run lint`
-Expected: clean（既有 lint 已含 locale-completeness 檢查；所有新 keys 必須兩語對齊）。
-
-- [ ] **Step 4: Commit**
-
-```
-chore(spa): add i18n keys for quick commands HostPicker / aria / toast (codex round-1 B9)
-```
-
-註：Task 1b.0b 的 HostPickerPopover 測試 + 實作仰賴 `quick_commands.host_picker.*` keys；若工程實作時把 1b.0b 排在 1b.0c 之前（順序顛倒），HostPickerPopover 測試會比對 raw key 而綠燈，但實際 prod fallback 行為不正確。**順序鐵則：1b.0a → 1b.0b ≤ 1b.0c**（1b.0c 不晚於 1b.0b 也可，但必須早於 1b.1）。實務建議：把 1b.0c 寫在 1b.0b commit 之後、1b.1 commit 之前，做為「進入元件 / 測試前的最後一道 i18n 補位」。
 
 ---
 
@@ -1704,6 +1704,47 @@ describe('CommandSlot', () => {
     expect(screen.getAllByTestId('custom').map((n) => n.textContent)).toEqual(['cmd-a', 'cmd-c'])
   })
 
+  // codex round-2 — render prop receives `run` as 3rd arg so custom UIs can
+  // actually trigger executor. Without `run` custom render is an inert footgun.
+  it('custom render receives `run` callback that triggers executor', () => {
+    const exec = vi.fn().mockResolvedValue(undefined)
+    render(
+      <CommandSlot
+        mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
+        ctx={{ hostId: 'h1' }}
+        executor={exec}
+        render={(cmd, _ctx, run) => (
+          <button data-testid={`custom-${cmd.id}`} onClick={run}>
+            {cmd.name}
+          </button>
+        )}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('custom-cmd-a'))
+    expect(exec).toHaveBeenCalledTimes(1)
+    expect(exec.mock.calls[0][0].id).toBe('cmd-a')
+    expect(exec.mock.calls[0][1]).toMatchObject({ hostId: 'h1' })
+  })
+
+  it('custom render `run` respects busy guard (no executor when busy=true)', () => {
+    const exec = vi.fn().mockResolvedValue(undefined)
+    render(
+      <CommandSlot
+        mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
+        ctx={{ hostId: 'h1' }}
+        executor={exec}
+        busy={true}
+        render={(cmd, _ctx, run) => (
+          <button data-testid={`custom-${cmd.id}`} onClick={run}>
+            {cmd.name}
+          </button>
+        )}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('custom-cmd-a'))
+    expect(exec).not.toHaveBeenCalled()
+  })
+
   it('disables all chip buttons while busy=true (codex round-1 C11 — picker resolver race guard)', () => {
     // Picker open → caller flips busy=true to prevent double-click on chip
     // (which would create a second pending Promise and a second picker instance).
@@ -1763,7 +1804,15 @@ export interface SlotContext {
 }
 
 export type SlotExecutor = (cmd: QuickCommand, ctx: SlotContext) => Promise<void>
-export type SlotRenderer = (cmd: QuickCommand, ctx: SlotContext) => ReactNode
+/**
+ * codex round-2 — `run` is the 3rd argument injected by `<CommandSlot>` so a
+ * custom render can wire its own onClick to the executor pipeline. Without it
+ * a custom render becomes an inert UI footgun (the chip is visible but
+ * clicking does nothing). `run` is the same `executor(cmd, ctx)` Promise the
+ * default chip kicks off; callers should still respect `busy` and avoid
+ * double-firing.
+ */
+export type SlotRenderer = (cmd: QuickCommand, ctx: SlotContext, run: () => void) => ReactNode
 
 interface Props {
   mountTo: QuickCommandSlotId
@@ -1821,10 +1870,17 @@ export function CommandSlot({ mountTo, ctx, executor, render, containerClassName
       aria-label={t('quick_commands.aria.toolbar')}
     >
       {boundCmds.map((cmd) => {
+        // codex round-2 — `run` injected so custom render can wire its own
+        // onClick. Without it custom render becomes inert (chip visible, click
+        // does nothing) — the same footgun the original 2-arg signature shipped.
+        const run = () => {
+          if (busy) return
+          void executor(cmd, ctx)
+        }
         if (render) {
           return (
             <span key={cmd.id} className="inline-flex">
-              {render(cmd, ctx)}
+              {render(cmd, ctx, run)}
             </span>
           )
         }
@@ -1836,10 +1892,7 @@ export function CommandSlot({ mountTo, ctx, executor, render, containerClassName
             // codex round-1 C11 — busy guard prevents double-click from spawning
             // a second picker / executor pipeline while one is mid-flight.
             disabled={busy}
-            onClick={() => {
-              if (busy) return
-              void executor(cmd, ctx)
-            }}
+            onClick={run}
             aria-label={ariaLabel}
             title={cmd.command}
             className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
@@ -3124,7 +3177,7 @@ import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
 import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
 import { clearModuleRegistry, registerModule } from '../../../lib/module-registry'
 
-// codex round-1 B8 — full executable test body (no placeholder comments)
+// codex round-1 B8 — full executable test body (subagent must not insert TODO stubs)
 import { useTabStore } from '../../../stores/useTabStore'
 import { useWorkspaceStore } from '../../../stores/useWorkspaceStore'
 
@@ -3160,9 +3213,10 @@ function setup(workspaceId = 'w1', hostId = 'h1') {
     tabOrder: [],
     activeTabId: null,
   } as Partial<ReturnType<typeof useTabStore.getState>> as never)
+  // codex round-2 B8 — useWorkspaceStore.workspaces 是 Workspace[]（非 Record），
+  // 沒有 workspaceOrder 欄位（spa/src/features/workspace/store.ts:10 確認）。
   useWorkspaceStore.setState({
-    workspaces: { [workspaceId]: { id: workspaceId, name: 'WS', tabs: [], activeTabId: null, moduleConfig: {} } },
-    workspaceOrder: [workspaceId],
+    workspaces: [{ id: workspaceId, name: 'WS', tabs: [], activeTabId: null, moduleConfig: {} }],
     activeWorkspaceId: workspaceId,
   } as Partial<ReturnType<typeof useWorkspaceStore.getState>> as never)
   clearModuleRegistry()
@@ -3204,7 +3258,8 @@ describe('WorkspaceQuickCommandsContextMenu', () => {
     expect(createSession).toHaveBeenCalledWith('h1', expect.any(String), expect.any(String), 'terminal')
     // Tab should be inserted into the workspace (codex round-1 B6 — full
     // openSingletonAndSelect equivalent: openSingletonTab → insertTab → setActive).
-    const tabIds = useWorkspaceStore.getState().workspaces['w1']?.tabs ?? []
+    // codex round-2 B8 — workspaces 是 Workspace[]，用 .find() 不是 record key 索引
+    const tabIds = useWorkspaceStore.getState().workspaces.find((w) => w.id === 'w1')?.tabs ?? []
     expect(tabIds.length).toBeGreaterThan(0)
     const tabId = tabIds[tabIds.length - 1]
     const tab = useTabStore.getState().tabs[tabId]
@@ -3252,9 +3307,40 @@ describe('WorkspaceQuickCommandsContextMenu', () => {
     await new Promise<void>((r) => setTimeout(r, 0))
     expect(createSession).not.toHaveBeenCalled()
     // No tab inserted into workspace
-    expect(useWorkspaceStore.getState().workspaces['w1']?.tabs ?? []).toHaveLength(0)
+    // codex round-2 B8 — workspaces 是 Workspace[]，用 .find() 不是 record key 索引
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === 'w1')?.tabs ?? []).toHaveLength(0)
     // onClose still fires (executor's finally block runs even on cancel path)
     expect(onClose).toHaveBeenCalled()
+  })
+
+  // codex round-2 — picker resolver cleanup (parent unmount + duplicate resolve safety)
+  it('unmount while picker is open → pending Promise resolves to null, executor finally runs, no throw', async () => {
+    const onClose = vi.fn()
+    const { unmount } = render(
+      <WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId={null} onClose={onClose} />,
+    )
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    expect(await screen.findByRole('listbox')).toBeInTheDocument()
+    // simulate the parent menu closing externally (e.g. user clicks outside the
+    // WorkspaceContextMenu) while a picker resolver is mid-flight.
+    expect(() => unmount()).not.toThrow()
+    await new Promise<void>((r) => setTimeout(r, 0))
+    // executor's finally should have run despite no explicit user action
+    expect(onClose).toHaveBeenCalled()
+    expect(createSession).not.toHaveBeenCalled()
+  })
+
+  it('duplicate onSelect / onCancel calls are safe (resolver is nulled-out after first invocation)', async () => {
+    const onClose = vi.fn()
+    render(<WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId={null} onClose={onClose} />)
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    expect(await screen.findByRole('listbox')).toBeInTheDocument()
+    // First Esc → cancels normally
+    fireEvent.keyDown(document, { key: 'Escape' })
+    // Second Esc (e.g. fast double-tap) → must be a no-op, NOT throw
+    expect(() => fireEvent.keyDown(document, { key: 'Escape' })).not.toThrow()
+    await new Promise<void>((r) => setTimeout(r, 0))
+    expect(createSession).not.toHaveBeenCalled()
   })
 })
 ```
@@ -3323,7 +3409,7 @@ Expected: FAIL — module not found / props missing。
 Create `spa/src/features/workspace/components/WorkspaceQuickCommandsContextMenu.tsx`（codex round-1 B5/B6/B7 —使用 default chip render + `containerClassName="flex flex-col"`；executor 內部完整呼叫 `openSingletonTab` + `insertTab` + `setActiveWorkspace` + `setActiveTab`，並補齊所有 `tmux-session` 欄位）：
 
 ```tsx
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CommandSlot } from '../../../components/CommandSlot'
 import { HostPickerPopover } from '../../../components/HostPickerPopover'
 import { runWorkspaceSlot } from '../../../lib/slot-executor'
@@ -3354,8 +3440,12 @@ interface Props {
  * 以滿足 `spa/src/types/tab.ts` 的型別契約。
  */
 export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose }: Props) {
+  // codex round-2 — picker state shape pinned: open implied by resolver !== null;
+  // resolver is always nulled-out the moment it's invoked (idempotent guard against
+  // duplicate resolve which would no-op the Promise but is still a sign of a bug).
   const [picker, setPicker] = useState<{
-    resolver: (id: string | null) => void
+    open: boolean
+    resolver: ((hostId: string | null) => void) | null
     anchor: { x: number; y: number } | null
   } | null>(null)
   const lastClickPos = useRef<{ x: number; y: number } | null>(null)
@@ -3363,10 +3453,24 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
   const resolveHostId = useCallback(
     () =>
       new Promise<string | null>((resolve) => {
-        setPicker({ resolver: resolve, anchor: lastClickPos.current })
+        setPicker({ open: true, resolver: resolve, anchor: lastClickPos.current })
       }),
     [],
   )
+
+  // codex round-2 — dangling Promise cleanup. If the parent menu closes (unmount)
+  // or the popover gets force-dismissed externally while a picker resolver is
+  // still pending, we MUST resolve it as null so the executor's await returns,
+  // its `finally` runs, and onClose fires. Otherwise the Promise hangs forever
+  // and the executor stays mid-flight (busy=true sticks, chips stay disabled).
+  useEffect(() => {
+    return () => {
+      setPicker((current) => {
+        if (current?.resolver) current.resolver(null)
+        return null
+      })
+    }
+  }, [])
 
   // codex round-1 B6 — workspace caller must perform full openSingletonAndSelect
   // equivalent (the helper exists at spa/src/features/workspace/hooks.ts:200 but
@@ -3404,7 +3508,7 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
         // codex round-1 B7 — flex-col override; default chip render keeps onClick + executor wiring intact.
         containerClassName="flex flex-col"
         // codex round-1 C11 — disable buttons while picker is mid-flight (prevents double-click race).
-        busy={picker !== null}
+        busy={picker?.open ?? false}
         executor={async (cmd, ctx) => {
           try {
             await runWorkspaceSlot(cmd, ctx, {
@@ -3417,15 +3521,18 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
         }}
       />
       <HostPickerPopover
-        open={picker !== null}
+        open={picker?.open ?? false}
         anchor={picker?.anchor ?? null}
         onSelect={(hostId) => {
-          picker?.resolver(hostId)
+          // codex round-2 — null-out resolver before invoking to make duplicate-call safe
+          const resolver = picker?.resolver
           setPicker(null)
+          resolver?.(hostId)
         }}
         onCancel={() => {
-          picker?.resolver(null)
+          const resolver = picker?.resolver
           setPicker(null)
+          resolver?.(null)
         }}
       />
     </div>
@@ -3433,7 +3540,7 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
 }
 ```
 
-註（codex round-1 B7 解決舊版「render prop 與 onClick 矛盾」）：原本的舊 plan 同時傳 `render` 與 `executor`，但 CommandSlot 在有 `render` 時包 `<span>` 不掛 onClick → executor 永遠不跑。新版只用 `containerClassName="flex flex-col"` 改 layout，**不**傳 `render`，default button 帶 onClick 正常觸發 executor。CommandSlot 的 `containerClassName` prop 已在 Task 1b.1 加入。
+註（codex round-1 B7 + round-2）：原本的舊 plan 同時傳 `render` 與 `executor`，但 CommandSlot 在有 `render` 時包 `<span>` 不掛 onClick → executor 永遠不跑（unreachable UI footgun）。round-2 已把 `SlotRenderer` 升級為 3-arg `(cmd, ctx, run) => ReactNode`，custom render 拿 `run` 自行掛 onClick；但本 caller 用 `containerClassName="flex flex-col"` 改 layout 即足夠，不需 custom render，default button 帶 onClick 正常觸發 executor。CommandSlot 的 `containerClassName` prop 與 3-arg `run` 注入皆在 Task 1b.1 加入。
 
 更新後 `WorkspaceContextMenu.tsx`：
 
@@ -3736,6 +3843,15 @@ describe('WorkspaceQuickActionsPopover', () => {
     fireEvent.click(screen.getByLabelText(/^Alpha/))
     expect(screen.getByRole('listbox')).toBeInTheDocument()
   })
+
+  // codex round-2 — picker resolver cleanup (popover unmount via mouseleave on parent)
+  it('unmount while picker is open → pending Promise resolves to null, no throw', async () => {
+    const { unmount } = render(<WorkspaceQuickActionsPopover workspaceId="w1" hostId={null} />)
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+    // simulate parent hub mouseleave force-closing the popover wrapper.
+    expect(() => unmount()).not.toThrow()
+  })
 })
 ```
 
@@ -3789,21 +3905,37 @@ function setupHoverPopoverFixtures(opts: { withBindings: boolean }) {
   registerModule({ id: 'quick-commands', name: 'Quick Commands', disableable: true })
 }
 
+// codex round-2 B8 — props 依 WorkspaceRow.tsx 實際 Props 介面（spa/src/features/workspace/components/WorkspaceRow.tsx L11-24）對齊：
+// workspace / isActive / tabsById / activeTabId / onSelectWorkspace /
+// onContextMenuWorkspace? / onSelectTab / onCloseTab / onMiddleClickTab /
+// onContextMenuTab / onRenameTab? / onAddTabToWorkspace
 const baseProps = {
   workspace: { id: 'w1', name: 'WS', tabs: ['t1'], activeTabId: 't1', moduleConfig: {} },
   isActive: false,
-  isExpanded: true,
-  showTabs: true,
-  workspaceTabs: [],
-  selectedTabId: null,
-  onSelect: vi.fn(),
-  onToggleExpanded: vi.fn(),
-  onAddTabToWorkspace: vi.fn(),
-  onContextMenu: vi.fn(),
+  tabsById: {
+    t1: {
+      id: 't1', pinned: false, locked: false, createdAt: 0,
+      layout: {
+        type: 'leaf' as const,
+        pane: {
+          id: 'p1',
+          content: {
+            kind: 'tmux-session' as const, hostId: 'h1', sessionCode: 'sess', mode: 'terminal' as const,
+            cachedName: 'x', tmuxInstance: '',
+          },
+        },
+      },
+    },
+  },
+  activeTabId: 't1' as string | null,
+  onSelectWorkspace: vi.fn(),
+  onContextMenuWorkspace: vi.fn(),
   onSelectTab: vi.fn(),
   onCloseTab: vi.fn(),
-  onTabContextMenu: vi.fn(),
-  // … 其餘必要 props 依 WorkspaceRow 實際介面補
+  onMiddleClickTab: vi.fn(),
+  onContextMenuTab: vi.fn(),
+  onRenameTab: vi.fn(),
+  onAddTabToWorkspace: vi.fn(),
 }
 
 describe('WorkspaceRow — Plus hover popover (Phase 1b\\')', () => {
@@ -3905,7 +4037,7 @@ Expected: FAIL — module not found / popover 不顯示。
 Create `spa/src/features/workspace/components/WorkspaceQuickActionsPopover.tsx`（codex round-1 B5/B6/C16 — switchToSession 完整 tmux-session 欄位 + workspace insertTab + setActive + aria-label 走 i18n）：
 
 ```tsx
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CommandSlot } from '../../../components/CommandSlot'
 import { HostPickerPopover } from '../../../components/HostPickerPopover'
 import { runWorkspaceSlot } from '../../../lib/slot-executor'
@@ -3944,18 +4076,33 @@ export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
     return cmds.some((c) => s.bindings[c.id]?.includes(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS))
   })
   const wrapperRef = useRef<HTMLDivElement>(null)
+  // codex round-2 — picker state shape pinned: open implied by resolver !== null.
   const [picker, setPicker] = useState<{
-    resolver: (id: string | null) => void
+    open: boolean
+    resolver: ((id: string | null) => void) | null
     anchor: HTMLElement | null
   } | null>(null)
 
   const resolveHostId = useCallback(
     () =>
       new Promise<string | null>((resolve) => {
-        setPicker({ resolver: resolve, anchor: wrapperRef.current })
+        setPicker({ open: true, resolver: resolve, anchor: wrapperRef.current })
       }),
     [],
   )
+
+  // codex round-2 — dangling Promise cleanup. The popover lives behind a hover
+  // trigger; mouseleave on the parent hub will unmount this component while a
+  // resolver may still be pending. We MUST resolve null on unmount so the
+  // executor's await returns and busy state clears.
+  useEffect(() => {
+    return () => {
+      setPicker((current) => {
+        if (current?.resolver) current.resolver(null)
+        return null
+      })
+    }
+  }, [])
 
   // codex round-1 B5/B6 — full openSingletonAndSelect equivalent: complete
   // tmux-session content fields + insertTab into workspace + setActive.
@@ -3990,7 +4137,7 @@ export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
         mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
         ctx={{ hostId, workspaceId }}
         // codex round-1 C11 — picker race guard
-        busy={picker !== null}
+        busy={picker?.open ?? false}
         executor={(cmd, ctx) =>
           runWorkspaceSlot(cmd, ctx, {
             switchToSession,
@@ -3999,15 +4146,18 @@ export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
         }
       />
       <HostPickerPopover
-        open={picker !== null}
+        open={picker?.open ?? false}
         anchor={picker?.anchor ?? null}
         onSelect={(hostId) => {
-          picker?.resolver(hostId)
+          // codex round-2 — null-out resolver before invoking to make duplicate-call safe
+          const resolver = picker?.resolver
           setPicker(null)
+          resolver?.(hostId)
         }}
         onCancel={() => {
-          picker?.resolver(null)
+          const resolver = picker?.resolver
           setPicker(null)
+          resolver?.(null)
         }}
       />
     </div>
@@ -4147,14 +4297,14 @@ Expected: clean
 行動裝置 / 觸控（codex round-1 C17）：
 6. iOS Safari 或 Android Chrome 連上 dev URL（`https://*.mlab.host:5174`）
 7. 在 sidebar Plus 按鈕做 long-press（按住 ≥500ms 不放）→ popover 展開
-8. 仍按住手指 → tap chip → 建 session + 送 cmd + 切過去
+8. 放開後 tap chip → 建 session + 送 cmd + 切過去（codex round-2：long-press 觸發後 user 通常會放開手指；popover 已 latched-open，等待後續 tap）
 9. 短 tap Plus（<500ms）→ 應觸發原本的 add-tab，**不**展開 popover
 10. popover 開啟時 tap 螢幕其他位置 → popover 收回
 
 ### Phase 1b' 驗收清單
 
 - [x] Plus hover popover：mouseleave Plus AND popover 收回；鍵盤 focus 同等於 hover；無 binding 時不展開
-- [x] Long-press 500ms 開 popover；tap chip 執行；short tap 走原 click（C17 mobile/touch fallback）
+- [x] Long-press 500ms 開 popover（latched-open，touchend 不關閉）；放開後 tap chip 執行；short tap (<500ms) 走原 click（C17 mobile/touch fallback；codex round-2 文案修正）
 - [x] 點擊 hub 外（document pointerdown）→ popover 收回
 - [x] 行為與 Phase 1b context menu 入口共用同一 executor，結果一致
 - [x] hostId null 時 popover 仍顯示，chip 點擊觸發 HostPickerPopover
@@ -4192,28 +4342,37 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { SessionsSection } from './SessionsSection'
 import { useHostStore } from '../../stores/useHostStore'
+import { useSessionStore } from '../../stores/useSessionStore'
+
+// codex round-2 B8 — sessions 來自 useSessionStore.sessions[hostId]
+// （見 spa/src/components/hosts/SessionsSection.tsx:135 + 既有測試 SessionsSection.test.tsx:64）；
+// PaneContent / Tab schema 見 spa/src/types/tab.ts:36-48。Session row API 物件 schema
+// 見既有測試 L55-57：{ code, name, cwd, mode, cc_session_id, cc_model, has_relay }
+const HOST_ID = 'h1'
+const SESSIONS_FIXTURE = [
+  { code: 'sess-1', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+]
 
 describe('SessionsSection — v1 QuickCommandMenu removal (Phase 1c)', () => {
   beforeEach(() => {
     useHostStore.setState({
-      hosts: { h1: { id: 'h1', name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 } },
-      hostOrder: ['h1'],
-      runtime: { h1: { status: 'connected' } },
-      activeHostId: 'h1',
-      // sessions 視 SessionsSection 內部資料來源不同，可能在 useHostStore 下
-      // 或由 hostFetch hook 拉取；subagent 實作時依實際 API 補 fixture（≥1 個 session）
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 } },
+      hostOrder: [HOST_ID],
+      runtime: { [HOST_ID]: { status: 'connected' } },
+      activeHostId: HOST_ID,
     })
+    useSessionStore.setState({ sessions: { [HOST_ID]: SESSIONS_FIXTURE } })
   })
 
   it('does NOT render v1 QuickCommandMenu inside session rows (moved to new-session adjacency, Phase 1c)', () => {
-    render(<SessionsSection hostId="h1" />)
+    render(<SessionsSection hostId={HOST_ID} />)
     // v1 QuickCommandMenu 的 trigger 有 aria-label "Quick Commands" — 確認 0 個
     expect(screen.queryAllByRole('button', { name: /quick commands/i }).length).toBe(0)
   })
 })
 ```
 
-註：實際 aria-label 由 `QuickCommandMenu` 元件決定（subagent 實作前先讀 `spa/src/components/QuickCommandMenu.tsx` 確認 trigger 的 accessible name；若不同請對齊）。Sessions fixture（至少 1 row 才會渲染 row 區段）也須補；若 SessionsSection 內部 sessions 來自 `useHostStore.sessions[hostId]` 則直接 setState 加；若來自 `hostFetch` 則透過 `vi.mock('../../lib/host-api', ...)` 注入。
+註：實際 aria-label 由 `QuickCommandMenu` 元件決定（subagent 實作前先讀 `spa/src/components/QuickCommandMenu.tsx` 確認 trigger 的 accessible name；若不同請對齊）。Sessions fixture 已直接補上 `useSessionStore.setState({ sessions: { [HOST_ID]: SESSIONS_FIXTURE } })`，欄位對應 SessionsSection 既有測試 (L55-57) 的 row API schema。
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -4401,7 +4560,7 @@ Expected: clean
 
 - [ ] Phase 1a 已 merge → main，且 alpha bump 完成（或一個 PR sequence 規劃中）
 - [ ] **Phase 1b 已 merge → main**，含 Settings UI + 資料層 + Workspace **右鍵 context menu** 入口（單一 PR）
-  - Phase 1b 內 task 順序：**1b.0a（inferWorkspaceHostId helper）→ 1b.0b（HostPickerPopover 元件）→ 1b.0c（i18n keys 前置 — codex round-1 B9）→ 1b.1（CommandSlot + busy prop）→ 1b.1.5（Toast schema 擴充 — codex round-1 B4）→ 1b.2（slot-executor + resolveHostId）→ 1b.3（Settings UI + chip 方向鍵 — codex round-1 C15）→ 1b.4（settings contribution + 剩餘 i18n）→ 1b.5a（context menu 入口 — codex round-1 B5/B6/B7/B8 修正）→ 1b.6（全域驗證）**
+  - Phase 1b 內 task 順序：**1b.0a（inferWorkspaceHostId helper）→ 1b.0c（i18n keys 前置 — codex round-1 B9 / round-2 B9）→ 1b.0b（HostPickerPopover 元件 — 仰賴 0c keys）→ 1b.1（CommandSlot + busy prop）→ 1b.1.5（Toast schema 擴充 — codex round-1 B4）→ 1b.2（slot-executor + resolveHostId）→ 1b.3（Settings UI + chip 方向鍵 — codex round-1 C15）→ 1b.4（settings contribution + 剩餘 i18n）→ 1b.5a（context menu 入口 — codex round-1 B5/B6/B7/B8 修正）→ 1b.6（全域驗證）**
   - 此 PR 滿足 spec §6「Settings 首次出現時至少一個 slot 生效」要求 — context menu 是穩定入口
 - [ ] **Phase 1b' 已 merge → main**，**Plus hover popover 過渡入口獨立 PR**（codex round-1 結構性變更 — 風險隔離）
   - Phase 1b' 內 task 順序：**1b'.1（WorkspaceQuickActionsPopover + WorkspaceRow Plus hover + mobile/touch fallback — codex round-1 C17）→ 1b'.2（全域驗證）**
@@ -4431,7 +4590,7 @@ Expected: clean
 2. 一個 task 一個 commit，commit message 用 conventional commit + Co-Authored-By trailer
 3. zustand test setState **顯式列出** `global` / `byHost` / `bindings` 三個 mutable fields；**不要**只寫 `setState({ bindings: {...} })`，會 wipe 其他 state（feedback_zustand_harness_setstate.md）。同樣原則套用 `useHostStore`（測試需要時列出 `hosts` / `hostOrder` / `runtime` / `activeHostId` 四個欄位）。
 4. 任何測試 / lint / build 指令在主 Claude 機器跑（feedback_codex_sandbox_no_install.md）
-5. **Phase 1b 任務依賴**（codex round-1 後）：1b.0a → 1b.0b → 1b.0c（i18n 必須前置）→ 1b.1（CommandSlot）→ 1b.1.5（toast schema 擴充）→ 1b.2（executor）→ 1b.3 → 1b.4 → 1b.5a → 1b.6。其中 1b.5a 的 switchToSession 必須做完整 `openSingletonAndSelect` 等價邏輯（codex round-1 B5/B6）：openSingletonTab（含 mode/cachedName/tmuxInstance 完整欄位）→ insertTab → setActiveWorkspace + setActiveTab。
+5. **Phase 1b 任務依賴**（codex round-1/2 後）：1b.0a → 1b.0c（i18n 必須前置 — round-2 B9）→ 1b.0b（HostPickerPopover；仰賴 0c keys）→ 1b.1（CommandSlot）→ 1b.1.5（toast schema 擴充）→ 1b.2（executor）→ 1b.3 → 1b.4 → 1b.5a → 1b.6。其中 1b.5a 的 switchToSession 必須做完整 `openSingletonAndSelect` 等價邏輯（codex round-1 B5/B6）：openSingletonTab（含 mode/cachedName/tmuxInstance 完整欄位）→ insertTab → setActiveWorkspace + setActiveTab。
 6. **Phase 1b' 任務依賴**：必須在 Phase 1b PR merge 後才能開工；`<CommandSlot>`、`<HostPickerPopover>`、`runWorkspaceSlot`、`inferWorkspaceHostId`、i18n keys 全部就緒後再實作 hover popover + 與 1b.5a 同等的 switchToSession 邏輯。
 7. PR 完成後委派 codex 兩輪 review（標準 + 攻擊/防守/體質）；發現問題彙整成表格（信心 / 關聯 / 複雜度）後決定即修 vs 開 issue 追蹤
 8. **Toast 行為的 spec §3.3 對應**（codex round-1 B4）：create-session failure → `toast.show(msg)` 不傳 action；switch-to-session failure → `toast.show(msg)` 不傳 action；send-keys failure → `toast.show(msg, retryFn, t('quick_commands.toast.retry'))`。元件渲染規則：`toast.action == null` → 不渲染 button。
