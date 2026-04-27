@@ -257,6 +257,21 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// recordHookAt opens the probeGraceWindow so any screen-change event
+	// arriving in the next probeGraceWindow interval is suppressed — the
+	// hook (this code path) is the authoritative status source. Recorded
+	// once per accepted hook regardless of whether activity-watching is
+	// (re)started below; the orchestrator owns watcher state.
+	//
+	// Codex finding #3 regression: recordHookAt MUST run BEFORE the
+	// currentStatus write below. Otherwise an in-flight probe callback
+	// already past its early stale-check could observe the new
+	// currentStatus while lastHookAt is still empty, the graceWindow check
+	// passes, and the probe overwrites authoritative hook status.
+	if req.TmuxSession != "" && m.probeOrch != nil && result.Valid {
+		m.probeOrch.recordHookAt(req.TmuxSession)
+	}
+
 	// Update in-memory state
 	if result.Valid && result.Status != "" {
 		m.mu.Lock()

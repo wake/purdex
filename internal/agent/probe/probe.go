@@ -19,16 +19,61 @@ type ReadinessResult struct {
 	Raw    string // captured pane content (debug, optional)
 }
 
-type ActivitySignal string
+// ScreenChangeKind classifies a raw screen-watcher event. The probe layer is
+// dumb: it emits these without interpreting them as agent status. Callers
+// (agent module / orchestrator) own the policy of mapping events to status
+// transitions and deduplicating per-session.
+type ScreenChangeKind string
 
 const (
-	ActivitySignalRunning     ActivitySignal = "running"
-	ActivitySignalIdle        ActivitySignal = "idle"
-	ActivitySignalShellPrompt ActivitySignal = "shell_prompt"
+	// ScreenChanged is fired on every tick whose capture hash differs from
+	// the previous baseline. Continuous-changing panes therefore fire
+	// ScreenChanged every tick — orchestrator owns the dedup.
+	ScreenChanged ScreenChangeKind = "changed"
+
+	// ScreenStable is fired when the capture hash has matched the baseline
+	// for IdleStableTicks consecutive ticks. The internal stable counter
+	// resets after each fire so continuous-stable panes re-fire every N
+	// ticks; orchestrator owns the dedup.
+	ScreenStable ScreenChangeKind = "stable"
 )
 
-// ActivityCallback is called when the watcher reaches a state transition.
-type ActivityCallback func(target string, signal ActivitySignal)
+// ScreenChangeEvent is the raw output of a screen watcher. Probe layer emits
+// these without interpreting them as agent status.
+type ScreenChangeEvent struct {
+	Kind       ScreenChangeKind
+	Target     string    // tmux target e.g. "session-name:"
+	Content    string    // captured content at the moment of the event
+	OccurredAt time.Time // probe-layer wall clock
+}
+
+// ScreenChangeCallback receives screen-change events from a watcher. Callbacks
+// must NOT terminate the watcher — call StopWatch explicitly.
+type ScreenChangeCallback func(ScreenChangeEvent)
+
+// WatchOptions tunes the watch loop behavior. Zero values fall back to safe
+// defaults: when both TopLines and BottomLines are 0, the watcher hashes the
+// full visible pane via tmux.CapturePaneContent(target, 0); IdleStableTicks
+// = 0 → default 3.
+//
+// TopLines and BottomLines are mutually exclusive (only one may be > 0). If
+// both are set, Watch returns early without registering — caller programming
+// error.
+type WatchOptions struct {
+	// TopLines limits captured content to the top N lines via
+	// tmux.CapturePaneTopLines (CapturePaneRange(target, 0, N-1)).
+	TopLines int
+
+	// BottomLines limits captured content to the bottom N lines via
+	// legacy tmux.CapturePaneContent(target, N) semantics
+	// (capture-pane -S -N). Preserves legacy capture mode for default
+	// agent profiles (G5 parity gate).
+	BottomLines int
+
+	// IdleStableTicks is the number of consecutive identical-hash ticks
+	// before ScreenStable is emitted. 0 means default 3.
+	IdleStableTicks int
+}
 
 type IdentifyFunc func(agent.ProcessInfo) bool
 

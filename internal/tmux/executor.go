@@ -45,6 +45,16 @@ type Executor interface {
 	ActivePanePID(target string) (string, error)
 	PaneChildCommands(target string) ([]string, error)
 	CapturePaneContent(target string, lastN int) (string, error)
+	// CapturePaneRange returns lines [start, endInclusive] of the pane.
+	// Indexing follows tmux capture-pane -S/-E semantics:
+	//   - start/end are line indices; 0 = top of visible pane
+	//   - negative values reference history above the visible pane
+	// Empty output is legal (not treated as an error).
+	CapturePaneRange(target string, start, endInclusive int) (string, error)
+	// CapturePaneTopLines returns the top n lines (0..n-1) of the pane.
+	// Equivalent to CapturePaneRange(target, 0, n-1).
+	// n <= 0 returns "" without invoking tmux (caller-friendly disable).
+	CapturePaneTopLines(target string, n int) (string, error)
 	PaneSize(target string) (cols, rows int, err error)
 	ResizeWindow(target string, cols, rows int) error
 	ResizeWindowAuto(target string) error
@@ -314,6 +324,28 @@ func (r *RealExecutor) CapturePaneContent(target string, lastN int) (string, err
 		return "", fmt.Errorf("tmux capture-pane: %w", err)
 	}
 	return string(out), nil
+}
+
+func (r *RealExecutor) CapturePaneRange(target string, start, endInclusive int) (string, error) {
+	startArg := fmt.Sprintf("%d", start)
+	endArg := fmt.Sprintf("%d", endInclusive)
+	// -e preserves ANSI escape sequences. Without it, tmux normalizes the
+	// pane to plain text and ANSI-only changes (spinner color, status
+	// highlights) hash to the same content as the previous tick — so a
+	// TopLines watcher would miss "running" signals on agents that animate
+	// purely via color (cc's spinner is one). Mirrors CapturePaneContent.
+	out, err := exec.Command("tmux", "capture-pane", "-e", "-p", "-t", target, "-S", startArg, "-E", endArg).Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux capture-pane range: %w", err)
+	}
+	return string(out), nil
+}
+
+func (r *RealExecutor) CapturePaneTopLines(target string, n int) (string, error) {
+	if n <= 0 {
+		return "", nil
+	}
+	return r.CapturePaneRange(target, 0, n-1)
 }
 
 func (r *RealExecutor) PaneSize(target string) (cols, rows int, err error) {

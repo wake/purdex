@@ -934,63 +934,13 @@ func (e errStub) Error() string { return string(e) }
 
 // --- Activity watch integration tests ---
 
-func TestActivityWatch_YellowLightRecovery(t *testing.T) {
-	m := newTestModule(t)
-
-	fake := tmux.NewFakeExecutor()
-	m.prober = probe.New(fake)
-	m.prober.RegisterIdentifier("cc", func(info agentpkg.ProcessInfo) bool { return info.ExePath == "/usr/local/bin/claude" })
-	m.prober.RegisterReadiness("cc", agentcc.NewReadinessChecker(fake))
-
-	provider := &fakeAgentProvider{
-		typeName: "cc",
-		derive: func(eventName string, raw json.RawMessage) agentpkg.DeriveResult {
-			if eventName == "Notification" {
-				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusWaiting}
-			}
-			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
-		},
-	}
-	m.registry.Register(provider)
-
-	m.sessions = &fakeSessionProvider{
-		sessions: []session.SessionInfo{{Code: "s1", Name: "work"}},
-	}
-	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
-
-	fake.SetPaneCommand("work:", "claude")
-	fake.SetPaneContent("work:", "Allow  Deny")
-	fake.SetPaneSessionName("%5", "work")
-
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
-	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
-	w := httptest.NewRecorder()
-	m.handleEvent(w, req)
-
-	m.mu.Lock()
-	_, watching := m.activeWatchers["work"]
-	m.mu.Unlock()
-	if !watching {
-		t.Fatal("expected active watcher after waiting status")
-	}
-
-	time.Sleep(100 * time.Millisecond)
-	fake.SetPaneContent("work:", "⠋ Processing your request...")
-
-	time.Sleep(700 * time.Millisecond)
-
-	m.mu.Lock()
-	_, stillWatching := m.activeWatchers["work"]
-	status := m.currentStatus["work"]
-	m.mu.Unlock()
-
-	if stillWatching {
-		t.Fatal("watcher should have stopped after activity detection")
-	}
-	if status != agentpkg.StatusRunning {
-		t.Fatalf("expected status running after activity, got %s", status)
-	}
-}
+// Note (Commit 4 PR-4a-1): the legacy TestActivityWatch_YellowLightRecovery
+// test was deleted. Its semantics — yellow→running recovery via screen
+// activity — split across orchestrator unit tests (OR4 graceWindow expire +
+// OR9 ScreenChanged transition) where they can be exercised deterministically
+// without sleeping past poll intervals. The legacy test also relied on the
+// fire-once-then-stop-watching watcher contract that the dumb-probe v2.0
+// design intentionally retired.
 
 // --- Task 9: GET /api/agent/{agent}/statusline/status ---
 
@@ -1224,51 +1174,13 @@ func TestActivityWatch_StartsForRunningStatus(t *testing.T) {
 	}
 }
 
-func TestActivityWatch_ShellPromptDeadPidTriggersSweep(t *testing.T) {
-	m := newTestModule(t)
-	fake := tmux.NewFakeExecutor()
-	fake.SetPaneSessionName("%5", "work")
-	m.tmux = fake
-	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
-	m.sessions = &fakeSessionProvider{
-		sessions: []session.SessionInfo{{Code: "s1", Name: "work"}},
-	}
-	if _, err := m.frames.Upsert(store.Frame{
-		PaneID:           "%5",
-		AgentType:        "codex",
-		PID:              200,
-		PPID:             100,
-		ProcessStartTime: "dead",
-		Status:           agentpkg.StatusRunning,
-		StartedAt:        10,
-		LastSeenAt:       10,
-		Verified:         true,
-	}); err != nil {
-		t.Fatalf("Upsert frame: %v", err)
-	}
-	m.currentStatus["work"] = agentpkg.StatusRunning
-	m.activeWatchers["work"] = "codex"
-	origAlive := isPidAliveFn
-	isPidAliveFn = func(pid int) bool { return false }
-	t.Cleanup(func() { isPidAliveFn = origAlive })
-
-	cb := m.onActivityDetected("work", "codex")
-	cb("work:", probe.ActivitySignalShellPrompt)
-
-	if got := m.currentStatus["work"]; got != "" {
-		t.Fatalf("currentStatus = %q, want cleared", got)
-	}
-	frames, err := m.frames.ListByPane("%5")
-	if err != nil {
-		t.Fatalf("ListByPane: %v", err)
-	}
-	if len(frames) != 0 {
-		t.Fatalf("frame count = %d, want 0", len(frames))
-	}
-	if _, watching := m.activeWatchers["work"]; watching {
-		t.Fatal("watcher should be cleared after sweep")
-	}
-}
+// Note (Commit 4 PR-4a-1): the legacy
+// TestActivityWatch_ShellPromptDeadPidTriggersSweep test was deleted. Its
+// shell-prompt-on-dead-PID-sweeps-the-frame contract is now covered by
+// OR8 (TestOrchestrator_ScreenStableUsesBottomCaptureForShellPrompt), which
+// drives the orchestrator's interpretScreenEvent helper directly with an
+// independent bottom-capture (R14 fix #1) rather than relying on the
+// fire-once watcher contract retired in v2.0.
 
 // --- Task 10: POST /api/agent/{agent}/statusline/setup ---
 

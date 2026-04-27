@@ -37,3 +37,30 @@ var MetricSweepCanonicalized = expvar.NewInt("purdex_phase35_sweep_canonicalized
 // MetricSweepPrunedProxy counts dead/PID-reused proxy refs detached by the
 // sweep pruneDeadProxyRefs pass. Incremented in PR-3.5b sweep work.
 var MetricSweepPrunedProxy = expvar.NewInt("purdex_phase35_sweep_pruned_proxy_total")
+
+// --- Phase 4a PR-4a-1 probe-orchestrator counters --------------------------
+// Independent namespace ("purdex_probe_*") so dashboards built on
+// purdex_phase35_* keep working. Each counter is process-cumulative; daemon
+// restart resets to zero. Tests must compare deltas, never absolute values.
+
+// MetricProbeWatchStarted counts probeOrchestrator.startWatch invocations
+// that successfully reach the underlying prober.Watch call. Pre-watch nil
+// guards (no prober wired) do NOT increment — the counter measures real
+// watcher lifetimes, not orchestrator entry-points.
+var MetricProbeWatchStarted = expvar.NewInt("purdex_probe_watch_started_total")
+
+// MetricProbeWatchStopped is the symmetric counter for stopWatch.
+var MetricProbeWatchStopped = expvar.NewInt("purdex_probe_watch_stopped_total")
+
+// MetricProbeScreenEvent counts ACCEPTED status transitions driven by a
+// probe screen-change event. v2.0 semantics: incremented only when the
+// orchestrator's transition gate decides to broadcast (currentStatus !=
+// new status). Repeated ScreenChanged on a Running session does NOT count
+// — orchestrator dedups before broadcast.
+var MetricProbeScreenEvent = expvar.NewInt("purdex_probe_screen_event_total")
+
+// MetricProbeGraceWindowSuppressed counts probe events suppressed because
+// they arrived within probeGraceWindow of a recordHookAt call. Each
+// suppressed event +1 (no dedup) — the counter measures hook authority
+// over probe.
+var MetricProbeGraceWindowSuppressed = expvar.NewInt("purdex_probe_grace_window_suppressed_total")
