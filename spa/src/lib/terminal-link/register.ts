@@ -16,6 +16,19 @@ import type { FilePathOpenerDeps } from './openers/file-path'
 export interface BuiltinTerminalLinksDeps {
   urlOpener: UrlOpenerDeps
   filePathOpener: FilePathOpenerDeps
+  /**
+   * Bootstrap-time gate for the three Editor-owned file-path matchers
+   * (absolute / tilde / relative_slash). When the Editor module is
+   * disabled, the migrated settings UI under Editor → File path link
+   * detection is hidden (P3); registering the matchers anyway would
+   * leave the runtime detecting paths that the user has no way to
+   * reach the toggles for. Reload-required, mirroring how P1 handles
+   * file openers and other Editor-owned contributions.
+   *
+   * Defaults to true so existing callers and tests stay green. The
+   * bare-filename matcher is terminal-only and always registers.
+   */
+  editorFilePathMatchersEnabled?: boolean
 }
 
 // Invariant：此 flag 與 terminalLinkRegistry 的狀態必須同步。
@@ -27,22 +40,26 @@ export function registerBuiltinTerminalLinks(deps: BuiltinTerminalLinksDeps): vo
   if (registered) return
   registered = true
 
+  const editorMatchersEnabled = deps.editorFilePathMatchersEnabled !== false
+
   terminalLinkRegistry.registerMatcher(urlMatcher)
-  terminalLinkRegistry.registerMatcher(createFilePathMatcher({
-    id: 'builtin:file-path-absolute',
-    regex: ABS_RE,
-    isEnabled: () => useUISettingsStore.getState().linkDetectAbsolute,
-  }))
-  terminalLinkRegistry.registerMatcher(createFilePathMatcher({
-    id: 'builtin:file-path-tilde',
-    regex: TILDE_RE,
-    isEnabled: () => useUISettingsStore.getState().linkDetectTilde,
-  }))
-  terminalLinkRegistry.registerMatcher(createFilePathMatcher({
-    id: 'builtin:file-path-relative-slash',
-    regex: REL_RE,
-    isEnabled: () => useUISettingsStore.getState().linkDetectRelativeSlash,
-  }))
+  if (editorMatchersEnabled) {
+    terminalLinkRegistry.registerMatcher(createFilePathMatcher({
+      id: 'builtin:file-path-absolute',
+      regex: ABS_RE,
+      isEnabled: () => useUISettingsStore.getState().linkDetectAbsolute,
+    }))
+    terminalLinkRegistry.registerMatcher(createFilePathMatcher({
+      id: 'builtin:file-path-tilde',
+      regex: TILDE_RE,
+      isEnabled: () => useUISettingsStore.getState().linkDetectTilde,
+    }))
+    terminalLinkRegistry.registerMatcher(createFilePathMatcher({
+      id: 'builtin:file-path-relative-slash',
+      regex: REL_RE,
+      isEnabled: () => useUISettingsStore.getState().linkDetectRelativeSlash,
+    }))
+  }
   terminalLinkRegistry.registerMatcher(createFilePathMatcher({
     id: 'builtin:file-path-bare',
     regex: BARE_RE,

@@ -322,6 +322,9 @@ export function registerBuiltinModules(): void {
       fetchPaneCwd: (hostId, sessionCode, signal) => fetchSessionCwd(hostId, sessionCode, signal),
       fetchPaneHome: (hostId, sessionCode, signal) => fetchSessionHome(hostId, sessionCode, signal),
     },
+    // P3: keep matcher set in sync with the migrated Editor settings.
+    // Reload-required, snapshotted at bootstrap like P1 file openers.
+    editorFilePathMatchersEnabled: useModuleEnabledStore.getState().isEnabled('editor'),
   })
 
   // Built-in host sub-page contributions (PR-4 + #586).

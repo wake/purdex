@@ -70,4 +70,29 @@ describe('registerBuiltinTerminalLinks — 4 file-path matchers', () => {
     expect(ids).toContain('builtin:file-path-relative-slash')
     expect(ids).toContain('builtin:file-path-bare')
   })
+
+  // P3 codex round-1 finding: when Editor is disabled at bootstrap,
+  // the migrated Editor settings UI is gated by module-enabled state,
+  // so the three Editor-owned matchers must NOT register or the
+  // runtime will detect paths the user has no way to toggle off.
+  it('skips Editor-owned matchers when editorFilePathMatchersEnabled=false but keeps bare', () => {
+    registerBuiltinTerminalLinks({
+      urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
+      filePathOpener: {
+        getDefaultOpener: () => null,
+        openSingletonTab: () => 'tab',
+        insertTab: () => {},
+        getActiveWorkspaceId: () => 'ws',
+        computeInsertTarget: () => undefined,
+        fetchPaneCwd: async () => '/cwd',
+        fetchPaneHome: async () => '/home/user',
+      },
+      editorFilePathMatchersEnabled: false,
+    })
+    const ids = terminalLinkRegistry.getMatchers().map((m) => m.id)
+    expect(ids).not.toContain('builtin:file-path-absolute')
+    expect(ids).not.toContain('builtin:file-path-tilde')
+    expect(ids).not.toContain('builtin:file-path-relative-slash')
+    expect(ids).toContain('builtin:file-path-bare')
+  })
 })
