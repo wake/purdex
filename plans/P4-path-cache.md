@@ -51,8 +51,8 @@
 | **4.9** | `attachPathCacheAutoCleanup()` **回 dispose function**（`() => void`）；測試 `afterEach` 必須呼叫；HMR `import.meta.hot.dispose` 也呼叫 | 攻擊 review #7 |
 | **4.9** | 用 zustand subscribe 的 **prevState** 算 removed ids（不要用 closure 內 `lastWsIds` Set） | 攻擊 review #7 |
 | **4.9** | **hydration race**：等 `useWorkspaceStore.persist.hasHydrated()` / `onFinishHydration` 才 attach；防止以空 workspace set 作 baseline 誤刪 cache | 攻擊 review #2 |
-| **4.9** | **`keepSettings: true`（tear-off / merge）→ 只清本 window in-memory**，**保留 persisted localStorage**（避免影響其他同 origin window 的同 workspace cache） | 防守 review #11 修正 |
-| **4.9** | `keepSettings: false`（真 delete）→ in-memory + persisted 都清 | 同上 |
+| **4.9** | **`keepSettings: true`（tear-off / merge）→ auto-cleanup SKIP 整個 wsId**，in-memory + persisted 都保留（v6 簡化：tear-off 後 workspace 在本 window 不可見、無 lookup 路徑；其他 window 各自獨立；避免依賴 Zustand 不存在的 `persist.pause/resume` API） | v6 codex review #2 |
+| **4.9** | `keepSettings: false`（真 delete）→ `clearScope`（in-memory + persisted 都清） | 同上 |
 | **4.9** | host remove → 整 host 所有 scope 清 (in-memory + persisted) | — |
 | **4.9** | 測試：repeat attach 不重複 subscribe；dispose 後不再 cleanup；hydration 順序 race；keepSettings 場景區分 | 攻擊 review #7 |
 
@@ -61,7 +61,7 @@
 | Task | 修訂 | 來源 |
 |---|---|---|
 | **All** | commit message lowercase | 通用 review C2 |
-| **4.10** | Spec 引用改 `SPEC.md (rev 4, P4)`；verification gate 跑 SPA + Go 全測 | 通用 review C1 |
+| **4.10** | Spec 引用改 `SPEC.md (rev 6, P4)`；verification gate 跑 SPA + Go 全測 | 通用 review C1 |
 
 ---
 
@@ -472,32 +472,57 @@ m.pathHintDedup = NewPathHintDedupCache(5 * time.Second)
 m.pathHintBuffer = NewPathHintRingBuffer(200)
 ```
 
-- [ ] **Step 2: Add emit helper to handler.go**
+- [ ] **Step 2: Add broadcaster seam interface + pure helper + Module method**
 
-在 `handler.go` 既有 `emitHookToSession` 附近加：
+> **v6 codex review #1 修正**：原版 `&mockCore{broadcast: ...}` 假設 `Module.core` 是 interface — 實際是 `*core.Core` concrete type，無法塞 stub。改為**純函式 helper + 小 broadcaster interface**，測試直接呼叫 helper 不經 `Module`。
+
+新建 `internal/module/agent/path_hint_emit.go`（或加入 `handler.go`）：
 
 ```go
-func (m *Module) emitPathHint(rawEvent json.RawMessage, eventName, sessionCode string) {
-    hint, basename, ok := ExtractPathHint(rawEvent, eventName, "claude-code", sessionCode, time.Now())
+// Small seam to allow unit-testing emit logic without spinning up real core.
+type pathHintBroadcaster interface {
+    Broadcast(session, kind, value string)
+}
+
+// EmitPathHint is a pure helper. Production Module.emitPathHint wraps this
+// with m.core.Events / m.pathHintDedup / m.pathHintBuffer; tests pass stubs.
+func EmitPathHint(
+    b pathHintBroadcaster,
+    dedup *PathHintDedupCache,
+    buf *PathHintRingBuffer,
+    rawEvent json.RawMessage,
+    eventName, agentID, sessionCode string,
+) {
+    hint, basename, ok := ExtractPathHint(rawEvent, eventName, agentID, sessionCode, time.Now())
     if !ok {
         return
     }
-    if !m.pathHintDedup.Mark(hint.SessionCode, hint.Dir, basename, hint.Timestamp) {
+    if !dedup.Mark(hint.SessionCode, hint.Dir, basename, hint.Timestamp) {
         return // dedup window hit
     }
-    m.pathHintBuffer.Push(hint)
+    buf.Push(hint)
     payload, err := json.Marshal(hint)
     if err != nil {
         log.Printf("path_hint: marshal failed: %v", err)
         return
     }
-    m.core.Events.Broadcast(sessionCode, "agent.path_hint", string(payload))
+    b.Broadcast(sessionCode, "agent.path_hint", string(payload))
 }
 ```
 
-- [ ] **Step 3: Add test (broadcast format + privacy)**
+Module method（`handler.go`，wrapper）：
 
-新建 `internal/module/agent/handler_path_hint_test.go`：
+```go
+func (m *Module) emitPathHint(rawEvent json.RawMessage, eventName, sessionCode string) {
+    EmitPathHint(m.core.Events, m.pathHintDedup, m.pathHintBuffer, rawEvent, eventName, "claude-code", sessionCode)
+}
+```
+
+> 假設 `core.Core.Events` 已有 `Broadcast(session, kind, value string)` method（既有 agent event 慣例如此）— 跟 stream module 既有 broadcast pattern 對齊。若 `Events` 不直接提供，改 wrapper：`broadcasterAdapter{events: m.core.Events}.Broadcast(...)`。
+
+- [ ] **Step 3: Add test (broadcast format + privacy + dedup)**
+
+新建 `internal/module/agent/path_hint_emit_test.go`：
 
 ```go
 package agent
@@ -505,34 +530,45 @@ package agent
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
+// stubBroadcaster implements pathHintBroadcaster for tests.
+type stubBroadcaster struct {
+	mu    sync.Mutex
+	calls []struct{ session, kind, value string }
+}
+
+func (s *stubBroadcaster) Broadcast(session, kind, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, struct{ session, kind, value string }{session, kind, value})
+}
+
 func TestEmitPathHint_BroadcastV1MinimalPayload(t *testing.T) {
-	var got struct{ session, kind, value string }
-	core := &mockCore{broadcast: func(s, k, v string) { got.session, got.kind, got.value = s, k, v }}
-	m := &Module{
-		core:           core,
-		pathHintDedup:  NewPathHintDedupCache(0),
-		pathHintBuffer: NewPathHintRingBuffer(10),
-	}
+	b := &stubBroadcaster{}
+	dedup := NewPathHintDedupCache(0)
+	buf := NewPathHintRingBuffer(10)
 	raw, _ := json.Marshal(map[string]any{
 		"tool_name":  "Read",
 		"tool_input": map[string]any{"file_path": "/a/b/c.go"},
 	})
-	m.emitPathHint(raw, "PreToolUse", "sess1")
+	EmitPathHint(b, dedup, buf, raw, "PreToolUse", "claude-code", "sess1")
 
-	if got.session != "sess1" || got.kind != "agent.path_hint" {
-		t.Errorf("envelope mismatch: %+v", got)
+	if len(b.calls) != 1 || b.calls[0].session != "sess1" || b.calls[0].kind != "agent.path_hint" {
+		t.Fatalf("envelope mismatch: %+v", b.calls)
 	}
 	// privacy: payload must NOT contain path / basename
+	v := b.calls[0].value
 	for _, banned := range []string{"/a/b/c.go", `"path"`, "c.go", `"basename"`} {
-		if strings.Contains(got.value, banned) {
-			t.Errorf("payload must not contain %q; got %s", banned, got.value)
+		if strings.Contains(v, banned) {
+			t.Errorf("payload must not contain %q; got %s", banned, v)
 		}
 	}
 	var hint PathHint
-	if err := json.Unmarshal([]byte(got.value), &hint); err != nil {
+	if err := json.Unmarshal([]byte(v), &hint); err != nil {
 		t.Fatalf("payload not JSON: %v", err)
 	}
 	if hint.SchemaVersion != 1 || hint.Dir != "/a/b" || hint.Kind != PathHintKindRead {
@@ -541,26 +577,22 @@ func TestEmitPathHint_BroadcastV1MinimalPayload(t *testing.T) {
 }
 
 func TestEmitPathHint_DedupSuppresses(t *testing.T) {
-	var calls int
-	core := &mockCore{broadcast: func(s, k, v string) { calls++ }}
-	m := &Module{
-		core:           core,
-		pathHintDedup:  NewPathHintDedupCache(5_000_000_000), // 5s in nanoseconds
-		pathHintBuffer: NewPathHintRingBuffer(10),
-	}
+	b := &stubBroadcaster{}
+	dedup := NewPathHintDedupCache(5 * time.Second)
+	buf := NewPathHintRingBuffer(10)
 	raw, _ := json.Marshal(map[string]any{
 		"tool_name":  "Read",
 		"tool_input": map[string]any{"file_path": "/a/b/c.go"},
 	})
-	m.emitPathHint(raw, "PreToolUse", "sess1")
-	m.emitPathHint(raw, "PreToolUse", "sess1") // dedup
-	if calls != 1 {
-		t.Errorf("expected 1 broadcast, got %d", calls)
+	EmitPathHint(b, dedup, buf, raw, "PreToolUse", "claude-code", "sess1")
+	EmitPathHint(b, dedup, buf, raw, "PreToolUse", "claude-code", "sess1") // dedup
+	if len(b.calls) != 1 {
+		t.Errorf("expected 1 broadcast, got %d", len(b.calls))
 	}
 }
 ```
 
-> `mockCore` 需要 stub — 參考 `internal/module/agent/fakes_test.go` 既有 fake patterns，或在本檔內 inline define 一個 minimal stub 對齊 `core.Core.Events.Broadcast` 介面。
+> 純測 helper 不經 Module，避免假設 `core.Core` 內部結構。Module integration test 在 4.3b 用既有 `internal/module/agent/fakes_test.go` 內的 fake setup 跑 `m.handleEvent`。
 
 - [ ] **Step 4: Run test, expect PASS**
 
@@ -607,32 +639,45 @@ if req.AgentType == "claude-code" && (req.EventName == "PreToolUse" || req.Event
 
 > **不依賴 normalized 結構** — 完全用 raw event JSON + EventName。
 
-- [ ] **Step 3: Integration test**
+- [ ] **Step 3: Integration test (走 既有 fakes 設定真 Module)**
 
-擴 `handler_path_hint_test.go`：
+> **v6 codex review #1 修正**：不再用 `&mockCore{...}` stub（`Module.core` 是 concrete `*core.Core`，無法塞）。改用 `internal/module/agent/fakes_test.go` 既有 fake setup（`frame_ops_test.go` 內已有 `setupAgentModule(t, ...)` 之類 helper），用真 `core.New(...)` + `Registry.Register(session.RegistryKey, fake)`。`Events.Broadcast` 觀察用 `core.Events.AddSubscriber(handler)` 註冊 test subscriber。
+
+擴 `internal/module/agent/handler_path_hint_test.go`：
 
 ```go
 func TestHandleEvent_EmitsPathHintForCC(t *testing.T) {
-    var got string
-    core := &mockCore{broadcast: func(s, k, v string) { if k == "agent.path_hint" { got = v } }}
-    m := &Module{
-        core:           core,
-        pathHintDedup:  NewPathHintDedupCache(0),
-        pathHintBuffer: NewPathHintRingBuffer(10),
-        // 其他必要欄位 stub
-    }
+    // 依 internal/module/agent/frame_ops_test.go:195 既有 setup pattern 起 module
+    m, c := setupAgentModuleForTest(t, &fakeSessionProvider{ /* sessions w/ "abc" */ })
+    received := make(chan string, 1)
+    c.Events.AddSubscriber(func(session, kind, value string) {
+        if kind == "agent.path_hint" {
+            select { case received <- value: default: }
+        }
+    })
+
     raw, _ := json.Marshal(map[string]any{
         "tool_name": "Read",
         "tool_input": map[string]any{"file_path": "/x/y/z.go"},
     })
-    m.handleEvent(req(...) /* AgentType:"claude-code", EventName:"PreToolUse", RawEvent: raw, TmuxSession: "tmux:abc:0" */)
-    if !strings.Contains(got, `"dir":"/x/y"`) {
-        t.Errorf("expected broadcast; got %q", got)
+    err := m.handleEvent(buildHookEventReq(t, "claude-code", "PreToolUse", raw, "abc"))
+    if err != nil { t.Fatalf("handleEvent: %v", err) }
+
+    select {
+    case got := <-received:
+        if !strings.Contains(got, `"dir":"/x/y"`) {
+            t.Errorf("expected dir broadcast; got %q", got)
+        }
+        if strings.Contains(got, "z.go") || strings.Contains(got, `"path"`) {
+            t.Errorf("payload must not contain basename / path; got %q", got)
+        }
+    case <-time.After(time.Second):
+        t.Fatal("expected agent.path_hint broadcast within 1s")
     }
 }
 ```
 
-> `req(...)` constructor 與 `m.resolveSessionCode` 視現行檔案結構調整；用既有 fakes / test helper。
+> `setupAgentModuleForTest` / `buildHookEventReq` 是新 helper；參考 `frame_ops_test.go:195+` 既有 test setup 抽出。`core.Events.AddSubscriber` 介面假設既有；若不存在改用 `c.Events.Subscribe(ctx, ...)` 等 idiomatic API。實作期間先 grep `core.Events` 既有 method set 再寫。
 
 - [ ] **Step 4: Run test, expect PASS**
 
@@ -789,13 +834,8 @@ describe('usePathCacheStore', () => {
     expect(usePathCacheStore.getState().dirsByScope['h1:w2']).toEqual(['/b'])
   })
 
-  // 防守 review #11: keepPersisted: true 只清 in-memory
-  it('clearScope({ keepPersisted: true }) does not touch localStorage', () => {
-    usePathCacheStore.getState().add('h1', 'w1', '/a')
-    usePathCacheStore.getState().clearScope('h1', 'w1', { keepPersisted: true })
-    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
-    // localStorage 不應被改寫（caller 必須能 reload 後恢復；本測測試該行為由 P4.9 / integration test 補）
-  })
+  // v6 簡化：clearScope 永遠清 in-memory + persisted，不再有 keepPersisted opts
+  // tear-off 保留行為由 auto-cleanup.ts (Task 4.9) skip 整個 cleanup 來達成；本測 cover 一般情況
 
   it('clearHost removes all scopes for that host', () => {
     usePathCacheStore.getState().add('h1', 'w1', '/a')
@@ -839,7 +879,7 @@ interface PathCacheState {
   add: (hostId: string, workspaceId: string, dir: string) => void
   lookup: (hostId: string, workspaceId: string, basename: string) => string[]
   pruneStaleCandidate: (hostId: string, workspaceId: string, candidatePath: string) => void
-  clearScope: (hostId: string, workspaceId: string, opts?: { keepPersisted?: boolean }) => void
+  clearScope: (hostId: string, workspaceId: string) => void
   clearHost: (hostId: string) => void
 }
 
@@ -877,21 +917,16 @@ export const usePathCacheStore = create<PathCacheState>()(
           return { dirsByScope: { ...state.dirsByScope, [key]: next } }
         }),
 
-      clearScope: (hostId, workspaceId, opts) =>
+      // clearScope 永遠清 in-memory + persisted（Zustand persist 在每次 set 後 stringify 寫回）。
+      // tear-off (keepSettings:true) 場景**不該呼叫 clearScope** — 由 auto-cleanup.ts (Task 4.9)
+      // 在 dispatch 前 skip 整個 cleanup，這樣 in-memory + persisted 都自然保留。
+      // 此設計避免依賴 zustand persist.pause/resume — 該 API 在 Zustand 5 不存在
+      // (v6 codex review #2 修正)。
+      clearScope: (hostId, workspaceId) =>
         set((state) => {
           const key = scopeKey(hostId, workspaceId)
           if (!(key in state.dirsByScope)) return state
           const { [key]: _, ...rest } = state.dirsByScope
-          // keepPersisted: true → 只清 in-memory；persist 透過 partialize 寫回 localStorage
-          //   會在下一個 set 觸發時用最新 state（含 rest）覆寫；要避免 persisted 變動，
-          //   在 caller 端用 useStore.persist.pause() 或寫回原值（auto-cleanup 會處理）。
-          //   本 store 的責任：不主動清 persisted；caller 控制是否 set 觸發 persist。
-          if (opts?.keepPersisted) {
-            // 用 setState bypass persist：透過 vanilla store 內部 API（zustand persist 預設會
-            // 在每次 setState 時 stringify 並寫回；要 skip，使用 useStore.persist.pause()
-            // 後再 setState，呼叫端負責；這裡 set 本身仍會寫，因此 keepPersisted 必須由
-            // auto-cleanup.ts 額外處理 — 見 4.9）
-          }
           return { dirsByScope: rest }
         }),
 
@@ -927,7 +962,7 @@ export const usePathCacheStore = create<PathCacheState>()(
 )
 ```
 
-> **`keepPersisted: true` 的真正實作** 在 `auto-cleanup.ts`（Task 4.9）— 用 `usePathCacheStore.persist.pause()` 後 setState、再 unpause；store 本體只做 in-memory clear。
+> **`PathCacheState.clearScope` 不再有 opts 參數**（v6 簡化）— `keepSettings:true` tear-off 場景由 auto-cleanup (Task 4.9) 在 dispatch 前 skip 整個 cleanup 流程，不呼叫 clearScope；in-memory + persisted 都自然保留，避免依賴 Zustand 不存在的 `persist.pause/resume` API。
 
 - [ ] **Step 4: Run test, expect PASS**
 
@@ -1307,7 +1342,7 @@ git commit -m "refactor(spa): whitelist three agent event types for dispatch"
 > - **回傳 dispose function**（攻擊 review #7）— 測試 `afterEach` 必須呼叫；HMR `import.meta.hot.dispose` 也呼叫
 > - 用 zustand subscribe 的 **`prevState` 算 removed ids**（不要用 closure `lastWsIds` Set）
 > - **hydration race**：等 `useWorkspaceStore.persist.hasHydrated()` / `onFinishHydration` 才 attach；防止以空 workspace set 作 baseline 誤刪 cache（攻擊 review #2）
-> - **`keepSettings: true`（tear-off）→ 只清 in-memory（`keepPersisted: true`）**；`keepSettings: false`（真 delete）→ in-memory + persisted 都清（防守 review #11 修正）
+> - **`keepSettings: true`（tear-off）→ auto-cleanup SKIP 整個 wsId**（in-memory + persisted 都保留；v6 簡化）；`keepSettings: false`（真 delete）→ in-memory + persisted 都清
 > - host remove → `clearHost` 清整 host
 
 - [ ] **Step 1: Write failing test**
@@ -1354,18 +1389,20 @@ describe('attachPathCacheAutoCleanup', () => {
     expect(usePathCacheStore.getState().dirsByScope['h1:w2']).toEqual(['/b'])
   })
 
-  it('workspace tear-off (keepSettings:true) only clears in-memory, NOT persisted', () => {
+  // v6 簡化：tear-off (keepSettings:true) → auto-cleanup skip，in-memory + persisted 都保留
+  it('workspace tear-off (keepSettings:true) skips cleanup entirely (in-memory + persisted retained)', () => {
     usePathCacheStore.getState().add('h1', 'w1', '/a')
-    // 模擬 tear-off: workspaces 移除 w1，但 keepSettings flag 透過 actionMeta 傳達
-    // (假設 features/workspace/store 在 removeWorkspace({keepSettings:true}) 時 set workspaceMeta.lastRemoveKeepSettings = id)
+    // 模擬 tear-off: workspaces 移除 w1；workspace store 在 removeWorkspace({keepSettings:true}) 時
+    // set workspaceMeta._lastRemovedKeepSettings = 'w1'
     useWorkspaceStore.setState({
       workspaces: [{ id: 'w2', tabs: [], moduleConfig: {} }],
       activeWorkspaceId: 'w2',
-      _lastRemovedKeepSettings: 'w1',  // metadata
+      _lastRemovedKeepSettings: 'w1',
     } as never, false)
-    // expect: in-memory 清；persisted 仍含 w1
-    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
-    // assert localStorage 仍含 'h1:w1' — 用 vi 監聽 storage.setItem 或讀 mock storage
+    // expect: in-memory 仍保留 (auto-cleanup skip 整個 wsId)
+    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toEqual(['/a'])
+    // 理由：tear-off 後 workspace 在本 window 不再 visible，無 cache lookup 路徑；persisted
+    // 也不該動，避免影響其他 window
   })
 
   it('host removal clears all its scopes', () => {
@@ -1415,10 +1452,14 @@ import { usePathCacheStore } from './usePathCacheStore'
  * Subscribe path cache to workspace/host removal events. Returns a dispose
  * function — caller MUST call it on HMR dispose / test cleanup.
  *
- * Honors workspace tear-off semantics:
- *   - real delete (keepSettings absent / false) → clear in-memory + persisted
- *   - tear-off (keepSettings: true) → clear in-memory only; persisted survives
- *     so other windows of the same origin retain the cache.
+ * Honors workspace tear-off semantics (v6 simplified):
+ *   - real delete (keepSettings absent / false) → clearScope (in-memory + persisted)
+ *   - tear-off (keepSettings: true) → SKIP cleanup entirely; in-memory + persisted
+ *     both retained. Rationale: tear-off removes workspace from this window's
+ *     viewport so cache lookups for that workspace cease anyway; other windows
+ *     of the same origin keep their own in-memory state untouched and the
+ *     shared persisted cache survives. Avoids relying on Zustand's nonexistent
+ *     persist.pause/resume API (v6 codex review #2).
  *
  * Hydration-aware: defers attach until workspace store finishes hydration to
  * avoid using empty baseline (which would erase persisted cache on mount).
@@ -1444,18 +1485,11 @@ export function attachPathCacheAutoCleanup(): () => void {
 
       const dirs = usePathCacheStore.getState().dirsByScope
       for (const wsId of removed) {
+        if (wsId === keepSettingsId) continue  // tear-off: skip cleanup; retain both layers
         for (const key of Object.keys(dirs)) {
           const [hostId, scopeWsId] = key.split(':')
           if (scopeWsId === wsId) {
-            const keepPersisted = wsId === keepSettingsId
-            // keepPersisted: 用 persist.pause/resume 防止 set 觸發 localStorage 寫
-            if (keepPersisted) {
-              usePathCacheStore.persist.pause()
-              usePathCacheStore.getState().clearScope(hostId, scopeWsId, { keepPersisted: true })
-              usePathCacheStore.persist.resume()
-            } else {
-              usePathCacheStore.getState().clearScope(hostId, scopeWsId)
-            }
+            usePathCacheStore.getState().clearScope(hostId, scopeWsId)
           }
         }
       }

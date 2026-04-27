@@ -15,7 +15,7 @@ PR 結束標準：`register-modules.tsx`（god file）拆成 `register-modules/`
 - i18n 路徑 `spa/src/locales/*.json`（不是 `i18n/`）→ 修 Task 1.5
 - ModuleDefinition 預留 `disabledComponent?: ComponentType` opt-in → 修 Task 1.1
 - Commit message lowercase → 全檔 commit 統一 lowercase
-- Spec rev 4 → 修 Task 1.8
+- Spec rev 6 → 修 Task 1.8
 
 ## Task 1.0a — file-opener-registry 改 owner-scoped
 
@@ -375,7 +375,7 @@ cd spa && npx vitest run src/lib/module-registry.test.ts
 
 ```bash
 git add spa/src/lib/module-registry.ts spa/src/lib/module-registry.test.ts
-git commit -m "feat(spa): add fileOpeners field to ModuleDefinition"
+git commit -m "feat(spa): add fileopeners field to module definition"
 ```
 
 ---
@@ -1055,7 +1055,7 @@ gh pr create --title "feat(spa): editor module owns file openers + disabled plac
 - [ ] 手動：placeholder 內按 Enable → useModuleEnabledStore 切換生效
 - [ ] 手動：HMR (改 editor-module.tsx 一個字) → opener 無重複 / 無 zombie
 
-Spec: SPEC.md (rev 4, P1)
+Spec: SPEC.md (rev 6, P1)
 EOF
 )"
 ```

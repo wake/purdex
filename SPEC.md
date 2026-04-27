@@ -1,5 +1,15 @@
 # SPEC — Editor 模組自有資產化 + 開檔體驗強化
 
+> Rev 6 — 吸收第四輪 codex re-check (`task-moh7ff8d-32e1x3`) findings：
+>
+> - **fs.search root capability 降級為僅 `session-cwd`**（layer 2）。`workspace-projectPath`（layer 3）需要 daemon 端持有 SPA workspace projectPath mapping，本 PR 不做；列為 follow-up issue。SPEC P5 acceptance 對應更新（layer 3 不在本 PR）。
+> - 對應 daemon `FsModule` 新增 task：模仿 `stream` module pattern 加 `sessions session.SessionProvider` field + `Init(c *core.Core)` 從 registry 取 provider（codex review #3）。
+> - PLAN 內 `usePathCacheStore.persist.pause()/resume()` 不存在（Zustand 5 無此 API）— 簡化策略：**tear-off (`keepSettings: true`) 時 auto-cleanup 完全 skip**（in-memory + persisted 都保留），因為 tear-off 後 workspace 在本 window 不再 visible，無 lookup 路徑（codex review #2）。
+> - PLAN 內 P4 `mockCore` 假設不存在的 stub — 改用真 `core.New(...)` + 既有 broadcast 觀察 helper，或新增 broadcast test seam（codex review #1）。
+> - 多處 plan body import path / commit message lowercase 統一（codex review #5/#6/#7/#8）。
+>
+> Rev 5 — 修兩個內部矛盾：P2 line 299 拿掉 `openSingletonTab` 內 `useWorkspaceStore.insertTab` 同步呼叫；P5 fs.search root 改 capability-only allowlist（移除「SPA 端必須把 projectPath absolute 一起傳」矛盾段）。
+>
 > Rev 4 — 吸收 PLAN 第二輪 4 份 codex review（通用 / 攻擊 / 防守 / 體質）共 33 findings，並落實 ABCD 決議：
 >
 > - **A. PLAN 拆檔**：`PLAN.md` 拆 index + `plans/P1..P5-*.md` × 5（per-phase）。SPEC 維持單檔。
@@ -803,9 +813,9 @@ Resp: { matches: []{ path, modTime, sizeBytes, root }, partial: bool, warnings: 
 **設計要點**：
 
 - **Root resolution**（D 決議；capability-only，不接受 absolute path）：
-  - `{ kind: "session-cwd", sessionCode: string }` → daemon 透過 `core.Sessions.Get(sessionCode).Cwd` 解析
-  - `{ kind: "workspace-projectPath", workspaceId: string }` → daemon 透過內部 workspace registry / 由 SPA 在 WS handshake 時告知的 mapping 解析（無此 mapping 時拒絕）
-  - 兩種解析結果都再經 system-path validate，拒絕 `/`、`/etc`、`/sys`、`$HOME` 直系、`/Users` 直系
+  - `{ kind: "session-cwd", sessionCode: string }` → daemon 透過 `m.sessions.GetSession(sessionCode).Cwd` 解析（`FsModule.sessions` 為 `session.SessionProvider`，模仿 stream module pattern；本 PR 在 P5 task 5.0 補）
+  - **`{ kind: "workspace-projectPath", workspaceId: string }`** — **本 PR 不實作**（daemon 端缺 workspace registry；列入 follow-up issue）；schema 接受但回 `not-implemented`，SPA 端在 caller 處用 `if (!projectPath || layer3UnimplementedSentinel) skip`
+  - 解析結果再經 system-path validate，拒絕 `/`、`/etc`、`/sys`、`$HOME` 直系、`/Users` 直系
   - **不接受** `{ kind: "absolute", path }` 或任何 SPA-supplied absolute path（攻擊 critical C4 + D 決議）；schema reject
 - **Mandatory excludes union**（攻擊 review #10）：daemon-side hard-coded `["node_modules", ".git", ".cache", "dist", ".pnpm-store", ".next", ".turbo"]` ∪ client `excludeDirs`。空 array 不能關掉。
 - **Mandatory basename excludes**：daemon-side `["*.lock", "*.log"]` ∪ client。
@@ -925,7 +935,7 @@ UI 放 Editor purdex scope 新區塊 `EditorOpenBehaviorSection`（與 P3 並列
 - [ ] symlink loop（A → B → A）→ 不無限遞迴
 - [ ] `maxDepth: 8` → 第 9 層不掃
 - [ ] **body 接受 `roots: [{kind:"session-cwd", sessionCode}]`** → daemon resolve 成 absolute path
-- [ ] **body 接受 `roots: [{kind:"workspace-projectPath", workspaceId}]`** → daemon 透過內部 mapping resolve 成 absolute path（無 mapping 拒絕）
+- [ ] **body 接受 `roots: [{kind:"workspace-projectPath", workspaceId}]` schema** → 但本 PR daemon 回 `not-implemented`（layer 3 follow-up issue）
 - [ ] **system path 被拒絕**：`/`、`/etc`、`/sys`、`/Users` 直系、`$HOME` 直系（return 4xx）
 - [ ] **client 傳 `roots: [{kind:"absolute", path:"..."}]` → schema reject**（無此 kind）
 
@@ -1012,6 +1022,7 @@ UI 放 Editor purdex scope 新區塊 `EditorOpenBehaviorSection`（與 P3 並列
 
 ## 已知 Follow-up（不在這次 PR）
 
+- **fs.search layer 3 (`workspace-projectPath` capability)** — daemon 端需要 workspace registry endpoint（SPA push workspaceId → projectPath mapping）；本 PR 只實作 layer 2 (`session-cwd`)，layer 3 follow-up 補
 - `files` 模組標 `disableable: true` 待 PR 3 補 workspace-scope filter（既有 SR-2）
 - Codex HookInstaller adapter（待 [openai/codex#16732](https://github.com/openai/codex/issues/16732) 修復後評估）
 - OpenCode HookInstaller adapter（架構就緒後新議題）

@@ -12,7 +12,7 @@
 | **2.3** | useWorkspaceStore 實際路徑：`features/workspace/store`，**不是 `features/workspace/store`** — 所有 import 改 `'../features/workspace/store'` 或對應相對 | 通用 review A2 |
 | **2.4 / 2.5** | terminal-link / FileTreeView caller 走 `findInsertTarget` predicate `(c) => FILE_KINDS.includes(c.kind)` 自行算 `afterTabId` 後再 dispatch insert | A3 副作用 |
 | **All** | commit message lowercase（`feat(spa): file tree opens files clustered with file-kind tabs`，不寫 CamelCase） | 通用 review C2 |
-| **2.6** | Spec 引用改 `SPEC.md (rev 4, P2)` + verification gate 跑全 SPA + Go 測試 | 通用 review C1 |
+| **2.6** | Spec 引用改 `SPEC.md (rev 6, P2)` + verification gate 跑全 SPA + Go 測試 | 通用 review C1 |
 
 ---
 
@@ -135,7 +135,7 @@ cd spa && npx vitest run src/lib/find-insert-target.test.ts
 
 ```bash
 git add spa/src/lib/tab-insert/find-insert-target.ts spa/src/lib/tab-insert/find-insert-target.test.ts
-git commit -m "refactor(spa): generalize findInsertTarget with predicate"
+git commit -m "refactor(spa): generalize find-insert-target with predicate"
 ```
 
 ---
@@ -190,7 +190,7 @@ cd spa && npx vitest run src/lib/open-browser-tab.test.ts
 
 ```bash
 git add spa/src/lib/open-browser-tab.ts
-git commit -m "refactor(spa): openBrowserTab uses generalized findInsertTarget"
+git commit -m "refactor(spa): open browser tab uses generalized find-insert-target"
 ```
 
 ---
@@ -206,7 +206,8 @@ git commit -m "refactor(spa): openBrowserTab uses generalized findInsertTarget"
 擴 `spa/src/stores/useTabStore.test.ts`（**完整 fixture，不是 skeleton**；通用 review B1）：
 
 ```ts
-import { useTabStore, createTab } from './useTabStore'
+import { useTabStore } from './useTabStore'
+import { createTab } from '../types/tab'
 import { useWorkspaceStore } from '../features/workspace/store'
 
 const mkContent = (kind: 'tmux-session' | 'editor' | 'browser', extra: Record<string, unknown> = {}) =>
@@ -423,7 +424,7 @@ cd spa && npx vitest run src/components/FileTreeView.test.tsx
 
 ```bash
 git add spa/src/components/FileTreeView.tsx
-git commit -m "feat(spa): FileTreeView opens files clustered with file-kind tabs"
+git commit -m "feat(spa): file tree view opens files clustered with file-kind tabs"
 ```
 
 ---

@@ -10,7 +10,7 @@
 | **3.2** | `EditorLinkDetectionSection` 放 `spa/src/components/settings/editor/EditorLinkDetectionSection.tsx`（子目錄），不直接堆 `settings/` 根 | 體質 review #13 |
 | **3.3** | wire 進 P1 拆出來的 `register-modules/editor-module.tsx` 的 `settings` 陣列（不是原 `register-modules.tsx`） | B 決議副作用 |
 | **All** | commit message lowercase | 通用 review C2 |
-| **Verification** | 加一個 Phase 3 verification + PR task（與 P1/P2/P4 格式對齊）：跑 vitest + lint + build + go test，PR 描述引用 `SPEC.md (rev 4, P3)`，兩輪 codex review | 通用 review C1 |
+| **Verification** | 加一個 Phase 3 verification + PR task（與 P1/P2/P4 格式對齊）：跑 vitest + lint + build + go test，PR 描述引用 `SPEC.md (rev 6, P3)`，兩輪 codex review | 通用 review C1 |
 
 ---
 
@@ -50,7 +50,7 @@ git commit -m "i18n: move file-path link detect keys to editor scope"
 ```tsx
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { EditorLinkDetectionSection } from './editor/EditorLinkDetectionSection'
+import { EditorLinkDetectionSection } from './EditorLinkDetectionSection'
 
 describe('EditorLinkDetectionSection', () => {
   it('renders absolute / tilde / relative_slash toggles', () => {
@@ -224,7 +224,7 @@ gh pr create --title "refactor(spa): migrate file path link detection settings t
 - [ ] 手動：Editor 停用 + 重載 → 三個 file path 開關消失
 - [ ] 手動：Terminal Settings 只剩 bare filename 開關
 
-Spec: SPEC.md (rev 4, P3)
+Spec: SPEC.md (rev 6, P3)
 EOF
 )"
 ```

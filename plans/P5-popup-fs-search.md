@@ -10,7 +10,7 @@
 |---|---|---|
 | **5.1** | **拆 `5.1a search engine` (純函式 `Search(ctx, request)` in `internal/module/fs/search_engine.go`) + `5.1b HTTP handler` (in `internal/module/fs/search_handler.go`)** | 體質 review #7 + 通用 review C3 |
 | **5.1b** | **改用 `(m *FsModule) handleSearch(...)` method pattern**（與 fs/module.go 既有 handler pattern 一致），route `mux.HandleFunc("POST /api/fs/search", m.handleSearch)`，**不要寫 top-level `HandleSearch`** | 通用 review A5 |
-| **5.1** | **不接受 client-supplied absolute path roots**！只接 `roots: [{kind:"session-cwd", sessionCode} \| {kind:"workspace-projectPath", projectPath}]` capability，daemon 端解析；validate 不在 system path（`/`、`/etc`、`/sys`、`/Users` 直系、`$HOME` 直系） | D 決議 + 攻擊 critical C4 |
+| **5.1** | **不接受 client-supplied absolute path roots**！只接 `roots: [{kind:"session-cwd", sessionCode}]` capability（**v6 降級**：`workspace-projectPath` schema 接受但 daemon 回 `not-implemented` — daemon 缺 workspace registry，layer 3 follow-up）；validate 不在 system path（`/`、`/etc`、`/sys`、`/Users` 直系、`$HOME` 直系） | D 決議 + 攻擊 critical C4 + v6 codex review #3 |
 | **5.1** | **mandatory excludes union**：daemon-side hard-coded `["node_modules", ".git", ".cache", "dist", ".pnpm-store", ".next", ".turbo"]` ∪ client `excludeDirs`；空 array 不能關掉 | 攻擊 review #10 |
 | **5.1** | **mandatory basename excludes**：`["*.lock", "*.log"]` ∪ client | 同上 |
 | **5.1** | **`respectGitignore` 改 `*bool`，nil → true**（Go bool unmarshal 預設 false 會 fail-open；攻擊 critical） | 攻擊 review #10 |
@@ -57,12 +57,96 @@
 | Task | 修訂 | 來源 |
 |---|---|---|
 | **All** | commit message lowercase | 通用 review C2 |
-| **5.8** (or new 5.9) | **加 phase verification + PR task**（與 P1/P2/P4 對齊）：跑 vitest + lint + build + go test，PR 描述引用 `SPEC.md (rev 4, P5)`，兩輪 codex review | 通用 review C1 |
+| **5.8** (or new 5.9) | **加 phase verification + PR task**（與 P1/P2/P4 對齊）：跑 vitest + lint + build + go test，PR 描述引用 `SPEC.md (rev 6, P5)`，兩輪 codex review | 通用 review C1 |
 | **Final** | 補滿 `editor-open-flow.integration.test.tsx` 跨 phase regression：Editor enabled+cache hit / Editor disabled silent / missing+expand+search / tear-off keepSettings:true | 防守 review #14 |
 
 ---
 
-PR 結束標準：點不存在的檔案會走「stat (ENOENT-only) → cache stat → popup → fs.search」管線；layer 2/3 由 popup 觸發；workspace context 在 await 後仍正確；fs.search 不接受 client absolute path；mandatory excludes / respectGitignore default 守住；popup HMR-safe + cancellation-safe。
+PR 結束標準：點不存在的檔案會走「stat (ENOENT-only) → cache stat → popup → fs.search」管線；layer 2 由 popup 觸發（layer 3 v6 降級為 follow-up）；workspace context 在 await 後仍正確；fs.search 不接受 client absolute path；mandatory excludes / respectGitignore default 守住；popup HMR-safe + cancellation-safe。
+
+## Task 5.0 — FsModule 加 `sessions session.SessionProvider` field
+
+**Files:**
+- Modify: `internal/module/fs/module.go`（加 `sessions` field + `Init` 從 registry 取 provider）
+- Test: `internal/module/fs/module_test.go`（新建 / 擴；驗證 Init 後 sessions 不為 nil）
+
+> **v6 codex review #3**：`FsModule struct{}` 目前無 core/sessions 欄位；layer 2 的 `session-cwd` capability resolution 需要 `m.sessions.GetSession(sessionCode).Cwd`。模仿 `internal/module/stream/module.go:25,42` pattern。本 task 是 P5.1b 的前置條件。
+
+- [ ] **Step 1: Write failing test**
+
+新建 / 擴 `internal/module/fs/module_test.go`：
+
+```go
+package fs
+
+import (
+	"testing"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/session"
+)
+
+func TestFsModule_InitGetsSessionProvider(t *testing.T) {
+	c := core.New(/* 既有 test core helper；參考 stream module test */)
+	provider := &fakeSessionProvider{}
+	c.Registry.Register(session.RegistryKey, provider)
+	m := New()
+	if err := m.Init(c); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if m.sessions == nil {
+		t.Fatal("expected sessions provider to be set after Init")
+	}
+}
+
+// fakeSessionProvider — 可參考 internal/module/stream/handler_test.go:21 既有實作
+type fakeSessionProvider struct{ /* ... */ }
+// implement session.SessionProvider methods
+```
+
+- [ ] **Step 2: Run test, expect FAIL**
+
+```
+go test ./internal/module/fs/ -run InitGetsSessionProvider
+```
+
+`m.sessions` 欄位不存在 → compile error。
+
+- [ ] **Step 3: Add field + wire in Init**
+
+修 `internal/module/fs/module.go`：
+
+```go
+import (
+	// ... existing
+	"github.com/wake/purdex/internal/session"
+)
+
+type FsModule struct {
+	sessions session.SessionProvider
+}
+
+func (m *FsModule) Init(c *core.Core) error {
+	m.sessions = c.Registry.MustGet(session.RegistryKey).(session.SessionProvider)
+	return nil
+}
+```
+
+> 直接照 `internal/module/stream/module.go:25,42` 抄。
+
+- [ ] **Step 4: Run test, expect PASS**
+
+```
+go test ./internal/module/fs/...
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/module/fs/module.go internal/module/fs/module_test.go
+git commit -m "feat(daemon): fs module holds session provider for capability resolve"
+```
+
+---
 
 ## Task 5.1a — `internal/module/fs/search_engine.go` 純函式
 
@@ -610,23 +694,22 @@ func (m *FsModule) handleSearch(w http.ResponseWriter, r *http.Request) {
 // Rejects:
 //   - Unsupported kinds (e.g. "absolute" / unknown strings)
 //   - System paths (/, /etc, /sys, /Users 直系, $HOME 直系)
+//   - "workspace-projectPath" — v6 not-implemented; daemon lacks workspace registry
 func (m *FsModule) resolveCapabilityRoots(roots []httpSearchRoot) ([]SearchRoot, error) {
 	out := make([]SearchRoot, 0, len(roots))
 	for _, r := range roots {
 		var abs string
 		switch r.Kind {
 		case "session-cwd":
-			cwd, ok := m.core.Sessions.GetCwd(r.SessionCode)
-			if !ok || cwd == "" {
+			info, err := m.sessions.GetSession(r.SessionCode)
+			if err != nil || info == nil || info.Cwd == "" {
 				return nil, errors.New("session cwd not found for " + r.SessionCode)
 			}
-			abs = cwd
+			abs = info.Cwd
 		case "workspace-projectPath":
-			pp, ok := m.workspaceProjectPath(r.WorkspaceID)
-			if !ok || pp == "" {
-				return nil, errors.New("workspace projectPath not found for " + r.WorkspaceID)
-			}
-			abs = pp
+			// v6 降級：layer 3 follow-up；daemon 暫不實作 workspace registry。
+			// SPA caller 應在 5.7b/5.8 處看到此 error 後 skip layer 3 results。
+			return nil, errors.New("workspace-projectPath not implemented in this PR (layer 3 follow-up)")
 		default:
 			return nil, errors.New("unsupported root kind: " + r.Kind)
 		}
@@ -658,14 +741,9 @@ func validateNotSystemPath(p string) error {
 	return nil
 }
 
-// workspaceProjectPath resolves workspaceId → projectPath via the daemon's
-// workspace registry. Implementation depends on how SPA pushes workspace
-// metadata to daemon (e.g., on WS handshake / via dedicated /api/workspace/register).
-// Stub here; concrete impl in module.go.
-func (m *FsModule) workspaceProjectPath(workspaceId string) (string, bool) {
-	// see module.go for actual lookup
-	return m.workspaces[workspaceId], m.workspaces[workspaceId] != ""
-}
+// workspaceProjectPath — v6 not implemented; layer 3 follow-up.
+// When daemon gets a workspace registry endpoint, this resolver will return
+// the abs projectPath the SPA registered for `workspaceId`.
 ```
 
 > **`m.workspaces map[string]string`** + `core.Sessions.GetCwd(...)` 介面可能須在 `module.go` 補；具體看 daemon 既有 workspace registry 設計。**若 daemon 無 workspace registry**，先實作 capability `session-cwd`，`workspace-projectPath` 留 follow-up issue（不減 ABCD 決議價值，因 layer 2 仍可用 session cwd）。
@@ -926,10 +1004,12 @@ setAutoSearchLayer1: (v: boolean) => set({ autoSearchLayer1: v }),
 - [ ] **Step 2: Implement section**
 
 ```tsx
-import { useUISettingsStore } from '../../stores/useUISettingsStore'
-import { useI18nStore } from '../../stores/useI18nStore'
-import { SettingItem } from './SettingItem'
-import { ToggleSwitch } from './ToggleSwitch'
+// 檔案位置：spa/src/components/settings/editor/EditorOpenBehaviorSection.tsx
+// → 從 settings/editor/ 到 stores/ 是三層 (../../../)，到同層 SettingItem/ToggleSwitch 是 ../
+import { useUISettingsStore } from '../../../stores/useUISettingsStore'
+import { useI18nStore } from '../../../stores/useI18nStore'
+import { SettingItem } from '../SettingItem'
+import { ToggleSwitch } from '../ToggleSwitch'
 
 export function EditorOpenBehaviorSection() {
   const popup = useUISettingsStore((s) => s.popupOnMissingFile)
@@ -953,9 +1033,9 @@ export function EditorOpenBehaviorSection() {
 
 加 i18n key 到 zh-TW + en JSON。
 
-- [ ] **Step 3: Wire into Editor module settings**
+- [ ] **Step 3: Wire into Editor module settings（在 P1 拆出來的 `register-modules/editor-module.tsx`）**
 
-在 `register-modules.tsx` Editor module `settings` 陣列加：
+在 `spa/src/lib/register-modules/editor-module.tsx` 的 `editorModuleDefinition.settings: [...]` 陣列裡加（**不再修舊 `register-modules.tsx`** 過渡 shim）：
 
 ```tsx
 {
@@ -1579,10 +1659,13 @@ async onExpand(spec, signal) {
     ? [{ kind: 'workspace-projectPath', workspaceId: spec.ctx.sourceWorkspaceId }]
     : []
 
-  const [layer2Hits, layer3Hits] = await Promise.all([
-    layer2Roots.length ? fsSearchByCapability(spec.ctx.hostId, spec.file.name, layer2Roots) : [],
-    layer3Roots.length ? fsSearchByCapability(spec.ctx.hostId, spec.file.name, layer3Roots) : [],
-  ])
+  // v6 降級：layer 3 (workspace-projectPath) daemon 端未實作；本 PR 只跑 layer 2
+  // SPA-side 不打 layer 3 fs.search 呼叫，避免 daemon 回 not-implemented 錯誤
+  const layer2Hits = layer2Roots.length
+    ? await fsSearchByCapability(spec.ctx.hostId, spec.file.name, layer2Roots).catch(() => [])
+    : []
+  const layer3Hits: SearchMatch[] = []  // follow-up issue
+  void layer3Roots  // capability 結構保留供未來 layer 3 reference；本 PR 不執行
 
   // 攻擊 review #5: 檢查 cancellation token，close 後不再 mount
   if (signal.aborted) return
@@ -1645,7 +1728,7 @@ gh pr create --title "feat(spa+daemon): file-not-found popup with three-layer fa
 - [ ] 手動：popup 開啟後 ESC → fs.search 回來時不重新 mount popup
 - [ ] 手動：fs.search body 傳 `kind: "absolute"` → daemon 拒（4xx）
 
-Spec: SPEC.md (rev 4, P5)
+Spec: SPEC.md (rev 6, P5)
 EOF
 )"
 ```

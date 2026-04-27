@@ -12,7 +12,7 @@
 
 **Tech Stack:** React 19 / Zustand 5 / Vitest / Go net/http / gorilla/websocket。
 
-**Spec:** [SPEC.md](./SPEC.md)（rev 4）。
+**Spec:** [SPEC.md](./SPEC.md)（rev 6）。
 
 ---
 
