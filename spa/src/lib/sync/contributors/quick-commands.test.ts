@@ -4,8 +4,8 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createQuickCommandsContributor } from './quick-commands'
-import { useQuickCommandStore, sanitizeBindings } from '../../../stores/useQuickCommandStore'
-import type { QuickCommand } from '../../../stores/useQuickCommandStore'
+import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import { sanitizeBindings, type QuickCommand } from '../../quick-command-bindings'
 import type { FullPayload } from '../types'
 import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
 

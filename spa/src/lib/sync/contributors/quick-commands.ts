@@ -2,7 +2,8 @@
 // Sync Architecture — QuickCommandsContributor
 // =============================================================================
 
-import { useQuickCommandStore, sanitizeBindings } from '../../../stores/useQuickCommandStore'
+import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import { sanitizeBindings } from '../../quick-command-bindings'
 import type { SyncContributor, FullPayload, MergeStrategy } from '../types'
 
 // ---------------------------------------------------------------------------
