@@ -1,6 +1,5 @@
 import type { ModuleDefinition } from '../module-registry'
 import type { PaneContent } from '../../types/tab'
-import { registerFileOpener } from '../file-opener-registry'
 import { EditorPane } from '../../components/editor/EditorPane'
 import { EditorBuffersPane } from '../../components/editor/EditorBuffersPane'
 import { ImagePreviewPane } from '../../components/editor/ImagePreviewPane'
@@ -47,42 +46,34 @@ export const editorModuleDefinition: ModuleDefinition = {
       component: EditorHomePathHostSection,
     },
   ],
-}
-
-// Inline registrations remain here until Task 1.3 promotes them into
-// editorModuleDefinition.fileOpeners and applyModuleFileOpeners() takes over.
-export function registerEditorFileOpeners(): void {
-  registerFileOpener({
-    id: 'image-preview',
-    ownerModuleId: 'editor',
-    label: 'Image Preview',
-    icon: 'Image',
-    match: (file) => IMAGE_EXTS.has(file.extension.toLowerCase()),
-    priority: 'default',
-    createContent: (source, file) =>
-      ({ kind: 'image-preview', source, filePath: file.path }) as PaneContent,
-  })
-
-  registerFileOpener({
-    id: 'pdf-viewer',
-    ownerModuleId: 'editor',
-    label: 'PDF Viewer',
-    icon: 'FilePdf',
-    match: (file) => PDF_EXTS.has(file.extension.toLowerCase()),
-    priority: 'default',
-    createContent: (source, file) =>
-      ({ kind: 'pdf-preview', source, filePath: file.path }) as PaneContent,
-  })
-
-  registerFileOpener({
-    id: 'monaco-editor',
-    ownerModuleId: 'editor',
-    label: 'Text Editor',
-    icon: 'File',
-    match: (file) =>
-      !file.isDirectory && !BINARY_EXTS.has(file.extension.toLowerCase()),
-    priority: 'default',
-    createContent: (source, file) =>
-      ({ kind: 'editor', source, filePath: file.path }) as PaneContent,
-  })
+  fileOpeners: [
+    {
+      id: 'image-preview',
+      label: 'Image Preview',
+      icon: 'Image',
+      match: (file) => IMAGE_EXTS.has(file.extension.toLowerCase()),
+      priority: 'default',
+      createContent: (source, file) =>
+        ({ kind: 'image-preview', source, filePath: file.path }) as PaneContent,
+    },
+    {
+      id: 'pdf-viewer',
+      label: 'PDF Viewer',
+      icon: 'FilePdf',
+      match: (file) => PDF_EXTS.has(file.extension.toLowerCase()),
+      priority: 'default',
+      createContent: (source, file) =>
+        ({ kind: 'pdf-preview', source, filePath: file.path }) as PaneContent,
+    },
+    {
+      id: 'monaco-editor',
+      label: 'Text Editor',
+      icon: 'File',
+      match: (file) =>
+        !file.isDirectory && !BINARY_EXTS.has(file.extension.toLowerCase()),
+      priority: 'default',
+      createContent: (source, file) =>
+        ({ kind: 'editor', source, filePath: file.path }) as PaneContent,
+    },
+  ],
 }

@@ -54,7 +54,7 @@ import { HooksSection } from '../../components/hosts/HooksSection'
 import { AgentsSection } from '../../components/hosts/AgentsSection'
 import { UploadSection } from '../../components/hosts/UploadSection'
 import { LogsSection } from '../../components/hosts/LogsSection'
-import { editorModuleDefinition, registerEditorFileOpeners } from './editor-module'
+import { editorModuleDefinition } from './editor-module'
 import { registerBuiltinFsBackends } from './fs-backends'
 import { applyModuleFileOpeners } from './module-file-openers'
 
@@ -163,9 +163,6 @@ export function registerBuiltinModules(): void {
 
   // FS backends
   registerBuiltinFsBackends(caps)
-
-  // Editor-owned file openers
-  registerEditorFileOpeners()
 
   registerModule({
     id: 'files',
