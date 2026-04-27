@@ -329,7 +329,12 @@ func (r *RealExecutor) CapturePaneContent(target string, lastN int) (string, err
 func (r *RealExecutor) CapturePaneRange(target string, start, endInclusive int) (string, error) {
 	startArg := fmt.Sprintf("%d", start)
 	endArg := fmt.Sprintf("%d", endInclusive)
-	out, err := exec.Command("tmux", "capture-pane", "-p", "-t", target, "-S", startArg, "-E", endArg).Output()
+	// -e preserves ANSI escape sequences. Without it, tmux normalizes the
+	// pane to plain text and ANSI-only changes (spinner color, status
+	// highlights) hash to the same content as the previous tick — so a
+	// TopLines watcher would miss "running" signals on agents that animate
+	// purely via color (cc's spinner is one). Mirrors CapturePaneContent.
+	out, err := exec.Command("tmux", "capture-pane", "-e", "-p", "-t", target, "-S", startArg, "-E", endArg).Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux capture-pane range: %w", err)
 	}

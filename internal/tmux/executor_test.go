@@ -279,7 +279,7 @@ func TestCapturePaneRange_RealExecutor_PassesArgs(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "tmux")
 	if err := os.WriteFile(script, []byte(`#!/bin/sh
-if [ "$1" != "capture-pane" ] || [ "$2" != "-p" ] || [ "$3" != "-t" ] || [ "$4" != "sess:" ] || [ "$5" != "-S" ] || [ "$6" != "2" ] || [ "$7" != "-E" ] || [ "$8" != "5" ]; then
+if [ "$1" != "capture-pane" ] || [ "$2" != "-e" ] || [ "$3" != "-p" ] || [ "$4" != "-t" ] || [ "$5" != "sess:" ] || [ "$6" != "-S" ] || [ "$7" != "2" ] || [ "$8" != "-E" ] || [ "$9" != "5" ]; then
   printf 'unexpected args: %s\n' "$*" >&2
   exit 2
 fi
@@ -313,7 +313,7 @@ func TestCapturePaneTopLines_DelegatesToRange(t *testing.T) {
 			dir := t.TempDir()
 			script := filepath.Join(dir, "tmux")
 			body := fmt.Sprintf(`#!/bin/sh
-if [ "$1" != "capture-pane" ] || [ "$2" != "-p" ] || [ "$3" != "-t" ] || [ "$4" != "sess:" ] || [ "$5" != "-S" ] || [ "$6" != "0" ] || [ "$7" != "-E" ] || [ "$8" != "%s" ]; then
+if [ "$1" != "capture-pane" ] || [ "$2" != "-e" ] || [ "$3" != "-p" ] || [ "$4" != "-t" ] || [ "$5" != "sess:" ] || [ "$6" != "-S" ] || [ "$7" != "0" ] || [ "$8" != "-E" ] || [ "$9" != "%s" ]; then
   printf 'unexpected args: %%s\n' "$*" >&2
   exit 2
 fi
