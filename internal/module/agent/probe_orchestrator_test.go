@@ -10,6 +10,7 @@ import (
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/agent/codex"
 	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
@@ -805,3 +806,29 @@ func TestOrchestrator_DefaultProfileWhenAgentMissing(t *testing.T) {
 		t.Fatalf("WatchOptions = %+v, want %+v (default profile)", got, want)
 	}
 }
+
+// OR-codex — orchestrator picks up the real codex.Provider's TopLines
+// profile (TopLines=10) instead of falling back to defaultProbeProfile
+// (BottomLines=10). Regression for accidental ProbeProfile() removal on
+// codex.Provider. Spec §2.5; plan §2 Commit 1.
+func TestOrchestrator_RealCodexProviderUsesTopLinesProfile(t *testing.T) {
+	m := newTestModule(t)
+	rec := newRecordingProber()
+	m.probeOrch.watcher = rec
+
+	m.registry.Register(codex.NewProvider())
+
+	m.probeOrch.startWatch("sess", "codex")
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	got, ok := rec.watchOpts["sess:"]
+	if !ok {
+		t.Fatalf("expected Watch on target %q, got %v", "sess:", rec.watchOpts)
+	}
+	want := probe.WatchOptions{TopLines: 10, BottomLines: 0, IdleStableTicks: 3}
+	if got != want {
+		t.Fatalf("WatchOptions = %+v, want %+v (codex TopLines profile)", got, want)
+	}
+}
+
