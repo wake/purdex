@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.238] - 2026-04-28
+
+### Refactor(spa): extract quick-command-bindings module + split store tests (#682)
+
+Closes #679 (Q2 + Q3) — codex round-2 followups deferred from PR #677. Pure-data primitives (`QuickCommand` / `Bindings` / `QuickCommandData` / `UNSAFE_KEYS` / `sanitizeBindings` / `getBindingTargets` / `mergePersistedQuickCommandState`) move out of the store into a standalone module.
+
+- New `spa/src/lib/quick-command-bindings.ts` — schema, sanitizer, own-property guard, persist merge function. `useQuickCommandStore` reduces to state + actions + persist + sync glue and imports from the pure module. Sync contributor + its test import `sanitizeBindings` and `QuickCommand` directly from the pure module instead of pulling them through the store.
+- `mergePersistedQuickCommandState` is now generic over `T extends QuickCommandData` so the store can pass its full state (data + actions) and recover the same shape — action methods survive the merge. New test asserts this contract.
+- 366-line `useQuickCommandStore.test.ts` split into three focused files: `lib/quick-command-bindings.test.ts` (sanitizer + own-property guard + hydrate boundary), `stores/useQuickCommandStore.crud.test.ts` (capability CRUD), `stores/useQuickCommandStore.bindings.test.ts` (store-level binding integration + null-hostId + prototype-key safety).
+- Two rounds of codex review approved with no findings.
+
 ## [1.0.0-alpha.237] - 2026-04-28
 
 ### Feat(spa): editor module owns file openers + disabled placeholder (P1) (#675)
