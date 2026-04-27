@@ -4,9 +4,10 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createQuickCommandsContributor } from './quick-commands'
-import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import { useQuickCommandStore, sanitizeBindings } from '../../../stores/useQuickCommandStore'
 import type { QuickCommand } from '../../../stores/useQuickCommandStore'
 import type { FullPayload } from '../types'
+import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
 
 // ---------------------------------------------------------------------------
 // Default state (matches store defaults)
@@ -179,5 +180,108 @@ describe('createQuickCommandsContributor', () => {
     expect(globalCmds.some((c) => c.id === 'remote-cmd')).toBe(true)
     // byHost untouched
     expect(state.byHost['h-1']).toBeUndefined()
+  })
+})
+
+describe('createQuickCommandsContributor — bindings field (v2)', () => {
+  let contributor: ReturnType<typeof createQuickCommandsContributor>
+
+  beforeEach(() => {
+    useQuickCommandStore.setState({
+      global: [],
+      byHost: {},
+      bindings: {},
+    })
+    contributor = createQuickCommandsContributor()
+  })
+
+  it('serialize includes bindings field', () => {
+    useQuickCommandStore.getState().addCommand({ id: 'cmd-a', name: 'A', command: 'a' })
+    useQuickCommandStore.getState().setBinding('cmd-a', [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS])
+    const payload = contributor.serialize() as FullPayload
+    expect(payload.data.bindings).toEqual({ 'cmd-a': ['workspace.actions'] })
+  })
+
+  it('serialize keys exclude action functions but include bindings', () => {
+    const payload = contributor.serialize() as FullPayload
+    const keys = Object.keys(payload.data)
+    expect(keys).toContain('global')
+    expect(keys).toContain('byHost')
+    expect(keys).toContain('bindings')
+    expect(keys).not.toContain('setBinding')
+    expect(keys).not.toContain('getBoundCommands')
+  })
+
+  it('deserialize full-replace with bindings overwrites local bindings', () => {
+    useQuickCommandStore.setState({
+      global: [{ id: 'local', name: 'L', command: 'l' }],
+      byHost: {},
+      bindings: { 'local': ['workspace.actions'] },
+    })
+    const incoming: FullPayload = {
+      version: 1,
+      data: {
+        global: [{ id: 'remote', name: 'R', command: 'r' }],
+        byHost: {},
+        bindings: { 'remote': ['host.actions'] },
+      },
+    }
+    contributor.deserialize(incoming, { type: 'full-replace' })
+    const state = useQuickCommandStore.getState()
+    expect(state.bindings).toEqual({ 'remote': ['host.actions'] })
+  })
+
+  it('deserialize sanitizes incoming bindings (drops malformed entries)', () => {
+    const incoming: FullPayload = {
+      version: 1,
+      data: {
+        global: [{ id: 'cmd-a', name: 'A', command: 'a' }],
+        byHost: {},
+        bindings: {
+          'cmd-a': ['workspace.actions'],
+          // hostile payload variants — must all be dropped:
+          '__proto__': ['host.actions'],
+          'cmd-bad-targets': 'not-an-array' as unknown as string[],
+          '': ['host.actions'],
+        },
+      },
+    }
+    contributor.deserialize(incoming, { type: 'full-replace' })
+    const state = useQuickCommandStore.getState()
+    expect(state.bindings).toEqual({ 'cmd-a': ['workspace.actions'] })
+  })
+
+  it('field-merge: cross-field dangling — global=local + bindings=remote → getBoundCommands returns empty', () => {
+    // local has cmd-A only; remote bindings reference cmd-B (not in local global)
+    useQuickCommandStore.setState({
+      global: [{ id: 'cmd-a', name: 'A', command: 'a' }],
+      byHost: {},
+      bindings: {},
+    })
+    const incoming: FullPayload = {
+      version: 1,
+      data: {
+        global: [{ id: 'cmd-b', name: 'B', command: 'b' }],
+        byHost: {},
+        bindings: { 'cmd-b': ['workspace.actions'] },
+      },
+    }
+    contributor.deserialize(incoming, {
+      type: 'field-merge',
+      resolved: { global: 'local', bindings: 'remote' },
+    })
+    const state = useQuickCommandStore.getState()
+    // global stayed local — only cmd-a
+    expect(state.global.map((c) => c.id)).toEqual(['cmd-a'])
+    // bindings took remote — references cmd-b
+    expect(state.bindings['cmd-b']).toEqual(['workspace.actions'])
+    // BUT getBoundCommands filters dangling at read-time → empty
+    const bound = state.getBoundCommands(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, 'host-1')
+    expect(bound).toEqual([])
+  })
+
+  it('sanitizeBindings is idempotent on already-clean payload', () => {
+    const clean = { 'cmd-a': ['workspace.actions'] }
+    expect(sanitizeBindings(clean)).toEqual(clean)
   })
 })

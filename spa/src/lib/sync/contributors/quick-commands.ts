@@ -2,14 +2,14 @@
 // Sync Architecture — QuickCommandsContributor
 // =============================================================================
 
-import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import { useQuickCommandStore, sanitizeBindings } from '../../../stores/useQuickCommandStore'
 import type { SyncContributor, FullPayload, MergeStrategy } from '../types'
 
 // ---------------------------------------------------------------------------
 // Data field list (non-function fields from QuickCommandState)
 // ---------------------------------------------------------------------------
 
-const DATA_FIELDS = ['global', 'byHost'] as const
+const DATA_FIELDS = ['global', 'byHost', 'bindings'] as const
 
 type QuickCommandsData = {
   [K in (typeof DATA_FIELDS)[number]]: ReturnType<typeof useQuickCommandStore.getState>[K]
@@ -41,16 +41,24 @@ export function createQuickCommandsContributor(): SyncContributor {
       const fp = payload as FullPayload
       const incoming = fp.data as Partial<QuickCommandsData>
 
+      // Sanitize untrusted incoming bindings BEFORE applying. Mirrors the
+      // store's `merge` hook — sync payloads are equally untrusted.
+      const sanitizedIncoming: Partial<QuickCommandsData> = {
+        ...incoming,
+        ...(incoming.bindings !== undefined
+          ? { bindings: sanitizeBindings(incoming.bindings) }
+          : {}),
+      }
+
       if (merge.type === 'full-replace') {
-        useQuickCommandStore.setState(incoming as QuickCommandsData)
+        useQuickCommandStore.setState(sanitizedIncoming as QuickCommandsData)
         return
       }
 
-      // field-merge: only apply fields where resolved[field] === 'remote'
       const patch: Partial<QuickCommandsData> = {}
       for (const field of DATA_FIELDS) {
-        if (merge.resolved[field] === 'remote' && field in incoming) {
-          ;(patch as Record<string, unknown>)[field] = incoming[field]
+        if (merge.resolved[field] === 'remote' && field in sanitizedIncoming) {
+          ;(patch as Record<string, unknown>)[field] = sanitizedIncoming[field]
         }
       }
 
