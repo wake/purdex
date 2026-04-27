@@ -255,6 +255,7 @@ export function registerBuiltinModules(): void {
 
   registerFileOpener({
     id: 'image-preview',
+    ownerModuleId: 'editor',
     label: 'Image Preview',
     icon: 'Image',
     match: (file) => IMAGE_EXTS.has(file.extension.toLowerCase()),
@@ -264,6 +265,7 @@ export function registerBuiltinModules(): void {
 
   registerFileOpener({
     id: 'pdf-viewer',
+    ownerModuleId: 'editor',
     label: 'PDF Viewer',
     icon: 'FilePdf',
     match: (file) => PDF_EXTS.has(file.extension.toLowerCase()),
@@ -275,6 +277,7 @@ export function registerBuiltinModules(): void {
   const BINARY_EXTS = new Set([...IMAGE_EXTS, ...PDF_EXTS])
   registerFileOpener({
     id: 'monaco-editor',
+    ownerModuleId: 'editor',
     label: 'Text Editor',
     icon: 'File',
     match: (file) => !file.isDirectory && !BINARY_EXTS.has(file.extension.toLowerCase()),
