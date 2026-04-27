@@ -166,6 +166,11 @@ export const PurdexOpenCodeHooks = async () => {
       }
     },
     'chat.message': async (input, output) => {
+      // New prompt cycle: clear any stale suppressIdleForSession entry
+      // the previous cycle's session.error armed. Without this, the next
+      // legitimate idle for this session is consumed by the stale entry
+      // and Stop is never emitted (session sticks Running/Error).
+      if (input.sessionID) suppressIdleForSession.delete(input.sessionID)
       const model = input.model
       const modelName = model ? (model.providerID + '/' + model.modelID) : ''
       await emit('UserPromptSubmit', {

@@ -154,6 +154,13 @@ func (s *pluginSimState) simulateStrongHook(hookName string, input, output map[s
 
 func (s *pluginSimState) simulateChatMessage(input, output map[string]any) mappedHookEvent {
 	sessionID := strMapVal(input, "sessionID")
+	// New prompt cycle: clear any stale suppressIdleForSession entry the
+	// previous cycle's session.error armed. Without this, an idle that
+	// belongs to the new cycle would be consumed by the stale entry and
+	// Stop would never fire. Mirror of the JS template change.
+	if sessionID != "" {
+		delete(s.suppressIdleForSession, sessionID)
+	}
 	messageID := strMapVal(input, "messageID")
 	if messageID == "" {
 		if msg, ok := output["message"].(map[string]any); ok {
@@ -592,4 +599,89 @@ func prettyJSON(v any) string {
 		return fmt.Sprintf("%#v", v)
 	}
 	return string(b)
+}
+
+// TestOpenCodePluginTemplate_ChatMessageClearsStaleErrorSuppression covers
+// the cross-cycle leak where a session.error armed suppressIdleForSession
+// for sessionID S, but the next idle never came (e.g. user submitted a new
+// prompt before the runtime emitted a status event, or session.error →
+// session.deleted → user reused the same sessionID). Without the new
+// chat.message clear, the next legitimate idle was consumed by the stale
+// entry and Stop was never emitted — the session stuck visually as
+// Running/Error.
+//
+// Behavior expected: chat.message for sessionID S clears the stale entry
+// so the subsequent session.status idle emits Stop normally.
+func TestOpenCodePluginTemplate_ChatMessageClearsStaleErrorSuppression(t *testing.T) {
+	state := newPluginSimState()
+
+	// Step 1: session.error arms suppression for sessionID "S".
+	if _, ok := state.simulateBusEvent("session.error", map[string]any{
+		"sessionID": "S",
+		"error": map[string]any{
+			"name": "ProviderError",
+			"data": map[string]any{"message": "boom"},
+		},
+	}); !ok {
+		t.Fatal("session.error must emit StopFailure")
+	}
+	if !state.suppressIdleForSession["S"] {
+		t.Fatal("suppressIdleForSession[S] should be armed after session.error")
+	}
+
+	// Step 2: chat.message for the same sessionID begins a new prompt
+	// cycle and must clear the stale suppression.
+	state.simulateChatMessage(
+		map[string]any{"sessionID": "S", "messageID": "msg_1"},
+		map[string]any{"message": map[string]any{"id": "msg_1", "agent": "build"}},
+	)
+	if state.suppressIdleForSession["S"] {
+		t.Fatal("chat.message should clear stale suppressIdleForSession[S]")
+	}
+
+	// Step 3: session.status idle should now emit Stop, not be swallowed.
+	got, ok := state.simulateBusEvent("session.status", map[string]any{
+		"sessionID": "S",
+		"status":    map[string]any{"type": "idle"},
+	})
+	if !ok {
+		t.Fatal("idle after chat.message clear should emit Stop")
+	}
+	if got.Name != "Stop" {
+		t.Fatalf("event name = %q, want Stop", got.Name)
+	}
+	if sid := strMapVal(got.Payload, "session_id"); sid != "S" {
+		t.Fatalf("session_id = %q, want %q", sid, "S")
+	}
+}
+
+// TestOpenCodePluginTemplate_StaleSuppressionWithoutChatMessage proves the
+// boundary: when no chat.message intervenes between session.error and the
+// next session.status idle, the original suppression contract is
+// preserved (idle is consumed by the suppression, no Stop emitted). This
+// guards against over-clearing in the chat.message handler.
+func TestOpenCodePluginTemplate_StaleSuppressionWithoutChatMessage(t *testing.T) {
+	state := newPluginSimState()
+
+	if _, ok := state.simulateBusEvent("session.error", map[string]any{
+		"sessionID": "S",
+		"error": map[string]any{
+			"name": "ProviderError",
+			"data": map[string]any{"message": "boom"},
+		},
+	}); !ok {
+		t.Fatal("session.error must emit StopFailure")
+	}
+
+	// No chat.message between error and idle. The first idle should be
+	// suppressed (existing behavior preserved).
+	if _, ok := state.simulateBusEvent("session.status", map[string]any{
+		"sessionID": "S",
+		"status":    map[string]any{"type": "idle"},
+	}); ok {
+		t.Fatal("idle immediately after session.error must be suppressed")
+	}
+	if state.suppressIdleForSession["S"] {
+		t.Fatal("suppression should be consumed by the suppressed idle")
+	}
 }
