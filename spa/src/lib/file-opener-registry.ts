@@ -14,23 +14,26 @@ export interface RegisteredOpener extends FileOpener {
   ownerModuleId: string
 }
 
-const openers = new Map<string, RegisteredOpener>()
-
-const keyOf = (ownerModuleId: string, id: string) => `${ownerModuleId}:${id}`
+// Nested map: ownerModuleId → (opener.id → opener). Storing owner and opener
+// id in separate map levels avoids the cross-owner collisions that a flat
+// `${owner}:${id}` key would allow when either id happens to contain ':'.
+const openersByOwner = new Map<string, Map<string, RegisteredOpener>>()
 
 export function registerFileOpener(spec: FileOpener & { ownerModuleId: string }): void {
-  openers.set(keyOf(spec.ownerModuleId, spec.id), spec)
+  let bucket = openersByOwner.get(spec.ownerModuleId)
+  if (!bucket) {
+    bucket = new Map()
+    openersByOwner.set(spec.ownerModuleId, bucket)
+  }
+  bucket.set(spec.id, spec)
 }
 
 export function unregisterByOwner(ownerModuleId: string): void {
-  const prefix = `${ownerModuleId}:`
-  for (const key of [...openers.keys()]) {
-    if (key.startsWith(prefix)) openers.delete(key)
-  }
+  openersByOwner.delete(ownerModuleId)
 }
 
 export function clearAllForHmr(): void {
-  openers.clear()
+  openersByOwner.clear()
 }
 
 // Transitional alias kept for older callers (e.g. tests that pre-date owner
@@ -38,11 +41,15 @@ export function clearAllForHmr(): void {
 export const clearFileOpenerRegistry = clearAllForHmr
 
 export function getRegisteredOpeners(): RegisteredOpener[] {
-  return [...openers.values()]
+  const out: RegisteredOpener[] = []
+  for (const bucket of openersByOwner.values()) {
+    for (const opener of bucket.values()) out.push(opener)
+  }
+  return out
 }
 
 export function getFileOpeners(file: FileInfo): RegisteredOpener[] {
-  return [...openers.values()].filter((o) => o.match(file))
+  return getRegisteredOpeners().filter((o) => o.match(file))
 }
 
 export function getDefaultOpener(file: FileInfo): RegisteredOpener | null {

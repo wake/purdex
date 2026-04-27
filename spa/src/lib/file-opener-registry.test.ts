@@ -106,4 +106,24 @@ describe('file-opener-registry owner-scoped', () => {
     expect(openers).toHaveLength(1)
     expect(openers[0].label).toBe('second')
   })
+
+  it('owner ids that contain a colon do not collide with sibling owner+id pairs', () => {
+    // Without escaping, owner='a:b' + id='c' and owner='a' + id='b:c' would
+    // both serialise to the same flat key. Pin that they stay independent.
+    registerFileOpener(mkOpener('c', 'a:b', { label: 'colon-in-owner' }))
+    registerFileOpener(mkOpener('b:c', 'a', { label: 'colon-in-id' }))
+    const openers = getRegisteredOpeners()
+    expect(openers).toHaveLength(2)
+    const labels = openers.map((o) => o.label).sort()
+    expect(labels).toEqual(['colon-in-id', 'colon-in-owner'])
+  })
+
+  it('unregisterByOwner with a colon-bearing owner does not affect other owners', () => {
+    registerFileOpener(mkOpener('c', 'a:b'))
+    registerFileOpener(mkOpener('b:c', 'a'))
+    unregisterByOwner('a')
+    const remaining = getRegisteredOpeners()
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0].ownerModuleId).toBe('a:b')
+  })
 })
