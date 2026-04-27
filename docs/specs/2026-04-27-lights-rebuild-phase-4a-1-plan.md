@@ -1,6 +1,6 @@
-# Lights Rebuild — Phase 4a-1 Plan v1.4 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v1.5 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v1.4（Round 4 codex review fix — 1 P2 stale-callback finding 採納）
+**Status**: draft v1.5（Round 5 codex review fix — 1 P2 internal-inconsistency finding 採納）
 
 ## v1.x 演進
 
@@ -11,6 +11,7 @@
 | v1.2 | R2 codex review fix（1 P1 + 1 P2）：(1) **rename rewatch path** — `renameSessionLocked` (module.go:258) 也呼叫 `StartWatch(newName+":", ...)`；plan 必須一併走 orchestrator + 加 rename regression test；(2) **baseline 失敗 cleanup race** — 初始 capture 失敗時 `watchLoop` 直接 return 但 watcher map 已註冊；新增 baseline-fail-cleanup 邏輯與 PR4b 測試 |
 | v1.3 | R3 codex review fix（1 P1 deadlock）：v1.2 §2.3.1 orchestrator API docstring 寫 `stopWatch` / `startWatch` 會 clear `activeWatchers`，但 `renameSessionLocked` 持 `m.mu` 時呼叫，會與內部要 acquire `m.mu` 的清理路徑互鎖（非可重入 mutex）。**改 API contract**：orchestrator 只碰 `prober` + `lastHookAt` + metrics，**不觸 `activeWatchers`**；caller（module.go wrapper）管理 `activeWatchers`。同時對齊 `interpretScreenEvent` 的 Error Guard 邏輯沿用 legacy 既有 lock 模式（讀 + 寫各自一次 m.mu.Lock/Unlock，不持鎖跨呼叫）|
 | v1.4 | R4 codex review fix（1 P2 stale-callback guard）：legacy `onActivityDetected` (module.go:473) 開頭檢查 `activeWatchers[session]` 不存在則 return，這個 stale-callback guard v1.3 plan 漏搬。新 watch-loop-owned watcher fire callback 多次（不像 legacy fire 一次就退），**此 guard 比 legacy 更必要** — stopWatch / rename race 中 in-flight callback 會在 watcher 已停的情況下繼續更新 status / broadcast。`interpretScreenEvent` 開頭加 `currentAgent, active := m.activeWatchers[session]; if !active \|\| currentAgent != agentType { return }`；新增 OR6 regression test |
+| v1.5 | R5 codex review fix（1 P2 internal-inconsistency）：plan §1.2 列「Slice 8（清舊 onActivityDetected / shouldWatchActivity / ActivitySignal enum 解讀）— 留 PR-4a-2」與 §1.1 / §2.4.2 衝突（後者要求本 PR 必移除 `ActivitySignal` 等舊 API 否則無法 compile）。釐清：本 PR 必清 `ActivitySignal` enum + legacy `StartWatch` API + `activityLoop` + `onActivityDetected`（compile 必要）；保留 `shouldWatchActivity`（wrapper 仍用的政策函式）；PR-4a-2 範圍縮為「Slice 5/6 codex/opencode profile 接 primitive」+「**視需要** refactor `shouldWatchActivity`」 |
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -81,11 +82,14 @@ PR-4a-1 把目前 `internal/agent/probe/activity.go` 的 watcher 從「probe 解
 
 ### 1.2 Out of scope（明列分流）
 
-- **Slice 5（codex 接新 primitive）/ Slice 6（opencode 接新 primitive）/ Slice 8（清舊 onActivityDetected / shouldWatchActivity / ActivitySignal enum signal 解讀）** — 全部留 PR-4a-2
+- **Slice 5（codex 接新 primitive）/ Slice 6（opencode 接新 primitive）** — 留 PR-4a-2
+- **`shouldWatchActivity` per-agent refactor**（視需要）— 本 PR 保留 `shouldWatchActivity` 函式（wrapper 仍呼叫）；若 PR-4a-2 codex / opencode profile 化過程中發現該函式應 per-agent，再 refactor，本 PR 不動
 - **Phase 4b `ProbeIntentProvider`** — 整合 readiness 的 declarative intent 系統，留 Phase 4b
 - **Phase 5 Dev Inspector SPA UI** — `/api/agent/monitor/*` 視覺化，留 Phase 5
 - **Character-level detection（彩虹字 / spinner 偵測）** — kickoff Decision 2 已砍，Top-N hash 取代
 - **User typing vs agent loading 細緻分辨** — kickoff Decision 3 已砍
+
+**注意**（R5 fix）：plan v1.3 §7.2 / §7 大綱寫「Slice 8 清舊 onActivityDetected / shouldWatchActivity / ActivitySignal — 留 PR-4a-2」過於籠統。實際上 `ActivitySignal` enum + legacy `StartWatch` API + `activityLoop` + `onActivityDetected` **本 PR 必須移除**（不移除則新 `Watch(target, opts, cb)` API 與舊 `StartWatch(target, ActivityCallback)` 並存矛盾，code 無法 compile）。本版 plan 把這層在 §1.1 Slice 1 + §2.1.5 顯式標註為 in-scope removal；PR-4a-2 縮為「codex/opencode profile + 視需要 `shouldWatchActivity` per-agent 化」。
 
 ---
 
