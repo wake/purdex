@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { clearModuleRegistry, getModule } from './module-registry'
 import { registerBuiltinModules } from './register-modules'
 
-describe('register-modules — quick-commands module (Phase 1a)', () => {
+describe('register-modules — quick-commands module', () => {
   beforeEach(() => {
     clearModuleRegistry()
   })
@@ -15,9 +15,15 @@ describe('register-modules — quick-commands module (Phase 1a)', () => {
     expect(m!.descriptionKey).toBe('modules.quick_commands.description')
   })
 
-  it('Phase 1a: quick-commands has NO settings contribution yet (deferred to Phase 1b)', () => {
+  it('Phase 1b: quick-commands declares purdex-scope settings contribution', () => {
     registerBuiltinModules()
     const m = getModule('quick-commands')
-    expect(m!.settings ?? []).toHaveLength(0)
+    const settings = m!.settings ?? []
+    expect(settings).toHaveLength(1)
+    expect(settings[0]).toMatchObject({
+      localId: 'quick-commands',
+      scope: 'purdex',
+      labelKey: 'settings.section.quick_commands',
+    })
   })
 })
