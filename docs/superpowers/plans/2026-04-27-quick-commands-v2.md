@@ -14,15 +14,16 @@
 
 **Spec:** `docs/superpowers/specs/2026-04-27-quick-commands-v2-design.md`
 
-**Phase 順序（強制 1a → 1b → 1c）：**
+**Phase 順序（強制 1a → 1b → 1b' → 1c）：**
 1. **Phase 1a** — 純資料層；單一 PR；UI 零改動。
-2. **Phase 1b** — Settings UI + WORKSPACE_ACTIONS 入口；單一 PR，**必須與 Settings UI 同 PR ship**（spec §6 不 ship 設了沒效果的中間態）。Workspace 入口採雙進入點：(i) `WorkspaceRow` 右鍵 context menu；(ii) `WorkspaceRow` Plus 按鈕 hover 往左展開的 popover chip 列。兩入口共用同一個 `WORKSPACE_ACTIONS` slot + executor。
-3. **Phase 1c** — HOST_ACTIONS 入口；小 PR。Host 入口落於 `SessionsSection`：在 new-session 按鈕旁並列 `<CommandSlot mountTo=HOST_ACTIONS>`；同 PR 移除 `SessionsSection` 每個 session row 上殘留的 v1 `QuickCommandMenu`（功能集中至 new-session 入口；`QuickCommandMenu` 元件本身保留，因為仍被 `PaneLayoutRenderer.tsx` 使用）。
+2. **Phase 1b** — Settings UI + 資料層 helper + Workspace **context menu 入口**；單一 PR。**必須與 Settings UI 同 PR ship 一個穩定入口**（spec §6 不 ship 設了沒效果的中間態 — context menu 是 stable 入口）。涵蓋：`inferWorkspaceHostId` / `HostPickerPopover` / `<CommandSlot>` / `useUndoToast` schema 擴充 / slot-executor / Settings UI / context menu 入口 + i18n。
+3. **Phase 1b'** — Plus hover popover **過渡入口**（含 mobile/touch fallback）；獨立 PR。風險隔離：此入口未來可能遷移／重做，獨立 PR 便於日後整段 revert/replace；功能上是「錦上添花」，1b 已可單獨運作。
+4. **Phase 1c** — HOST_ACTIONS 入口；小 PR。Host 入口落於 `SessionsSection`：在 new-session 按鈕旁並列 `<CommandSlot mountTo=HOST_ACTIONS>`；同 PR 移除 `SessionsSection` 每個 session row 上殘留的 v1 `QuickCommandMenu`（功能集中至 new-session 入口；`QuickCommandMenu` 元件本身保留，因為仍被 `PaneLayoutRenderer.tsx` 使用）。
 
 **Mount UX 決策（覆蓋 spec §4.2 / §4.3 中的「位置由實作時定」）：**
-- **Workspace 入口** — `WorkspaceRow.tsx` 兩處：
-  - 右鍵 → 透過既有 `onContextMenuWorkspace` callback（App.tsx L155 `handleWsContextMenu` → 渲染 `WorkspaceContextMenu`），新增一個 `WorkspaceQuickCommandsContextMenu` 區塊或於原 `WorkspaceContextMenu` 加 quick-commands section
-  - Plus 按鈕（`WorkspaceRow.tsx` L108-121）hover → 一個 absolute popover 向左展開 chip 列（半透明漸層壓底；mouseleave Plus AND popover 收回；鍵盤 focus 同等於 hover）
+- **Workspace 入口** — `WorkspaceRow.tsx` 兩處（拆兩個 PR）：
+  - **(Phase 1b)** 右鍵 → 透過既有 `onContextMenuWorkspace` callback（App.tsx L155 `handleWsContextMenu` → 渲染 `WorkspaceContextMenu`），新增一個 `WorkspaceQuickCommandsContextMenu` 區塊或於原 `WorkspaceContextMenu` 加 quick-commands section
+  - **(Phase 1b')** Plus 按鈕（`WorkspaceRow.tsx` L108-121）hover → 一個 absolute popover 向左展開 chip 列（半透明漸層壓底；mouseleave Plus AND popover 收回；鍵盤 focus 同等於 hover；觸控裝置以 long-press / tap-to-toggle 替代 hover）
 - **Host 入口** — `SessionsSection.tsx` 兩件事：
   - new-session 按鈕（L167-174）旁並列 `<CommandSlot mountTo=HOST_ACTIONS>`；視覺與 Plus 對齊（直接列 chip，無 popover）
   - 移除 row 上的 v1 `<QuickCommandMenu>`（L231-239）整合，但**保留** `QuickCommandMenu` 元件本身（`PaneLayoutRenderer.tsx` 仍使用）
@@ -807,11 +808,15 @@ Expected: clean
 
 ---
 
-## Phase 1b — Settings UI + WORKSPACE_ACTIONS 入口（單一 PR）
+## Phase 1b — Settings UI + 資料層 + Workspace 右鍵入口（單一 PR）
 
-**目標：** user 能在 Settings 建 command + 設 mount = WORKSPACE，回到 workspace 立刻看到按鈕；點擊建 session + 送 keys + 切過去。失敗 toast 行為符合 §3.3。
+**目標：** user 能在 Settings 建 command + 設 mount = WORKSPACE，**回到 workspace 右鍵 row** 即可看到按鈕；點擊建 session + 送 keys + 切過去。失敗 toast 行為符合 §3.3。Plus hover popover 入口拆到 Phase 1b' 獨立 PR（過渡實作風險隔離）。
 
-**Spec v4 新增的支援結構：** Phase 1b 兩個 helper（`inferWorkspaceHostId` + `HostPickerPopover`）必須先於 `<CommandSlot>` / executor / workspace 入口落地，否則後續 task 無法正確呼叫。順序：1b.0a → 1b.0b → 1b.1 → 1b.1.5 → 1b.2 → 1b.3 → 1b.4 → 1b.5a → 1b.5b → 1b.6。
+**範圍邊界：** Phase 1b **只 ship context menu 入口**（穩定入口；spec §6「Settings 首次出現時至少一個 slot 生效」由它滿足）。Plus hover popover 不在 1b — 見 Phase 1b'。
+
+**Spec v4 新增的支援結構：** Phase 1b 三個基礎件（`inferWorkspaceHostId` helper + `HostPickerPopover` 元件 + i18n keys）必須先於 `<CommandSlot>` / executor / workspace 入口落地，否則後續 task 在跑單元測試時會看到 raw i18n key（fallback to key），且 caller 無法正確呼叫。
+
+**Task 順序：** 1b.0a → 1b.0b → 1b.0c → 1b.1 → 1b.1.5 → 1b.2 → 1b.3 → 1b.4 → 1b.5a → 1b.6。（原 1b.5b 移到 Phase 1b'；1b.0c 為新增的「i18n keys 前置」task。）
 
 ### Task 1b.0a: 新增 `inferWorkspaceHostId` helper（spec §3.2.1 多數決）
 
@@ -942,6 +947,23 @@ describe('inferWorkspaceHostId', () => {
     }
     const w3 = ws({ tabs: ['t1', 't2', 't3'], activeTabId: 't3' })
     expect(inferWorkspaceHostId(w3, cleanTie)).toBe('h1')
+  })
+
+  // codex round-1 B1 — minority-active fixture
+  it('on tie, IGNORES active tab hostId when active is a tmux-session of a minority host', () => {
+    // h1 count=2 (t1 + t2 split), h2 count=2 (t3 + t2 split), h3 count=1 (t4)
+    // → tie between h1 and h2; h3 is minority and NOT in winners.
+    // active tab t4 is h3 (minority). Tie-break A must NOT pick h3 just because
+    // it is the active tab's host; instead it falls through to Tie-break B
+    // (first winner in tabs order) → h1.
+    const tabs = {
+      t1: tab('t1', tmuxLeaf('h1')),
+      t2: tab('t2', splitH(tmuxLeaf('h1'), tmuxLeaf('h2'))),
+      t3: tab('t3', tmuxLeaf('h2')),
+      t4: tab('t4', tmuxLeaf('h3')),
+    }
+    const w = ws({ tabs: ['t1', 't2', 't3', 't4'], activeTabId: 't4' })
+    expect(inferWorkspaceHostId(w, tabs)).toBe('h1')
   })
 
   it('returns null when workspace has no tmux-session tabs', () => {
@@ -1097,9 +1119,9 @@ interface Props {
 - 關閉時 focus 回 trigger（caller 透過 `onCancel`/`onSelect` 後恢復 — popover 自身不持有 trigger ref；caller 負責）
 - 樣式：與既有 popover 一致（`bg-surface-secondary`、`border-border-default`、`shadow-lg`，無自訂顏色）
 - offline host 仍可點選（不 disable），但 row 上加警示 chip（例如 `text-text-muted` + 「offline」標籤）；user 可能就是要切到 offline host 去看其他內容
-- 空 `hostOrder` 顯示空狀態文字「No hosts available」
+- 空 `hostOrder` 顯示空狀態文字「No hosts available」**＋ 一個 close 按鈕**（icon `X`，aria-label = `t('quick_commands.host_picker.close')`），點擊呼叫 `onCancel`（spec §3.2.2 明寫；無此按鈕時空狀態 user 唯一逃離方式只剩 Esc，違反 a11y / 鼠標可達）
 
-**anchor 處理：** 若 `anchor` 是 `{x,y}` → 以 fixed 定位；若是 HTMLElement → `getBoundingClientRect()` 計算位置，popover 出現在 anchor 元素旁邊。
+**anchor 處理：** 若 `anchor` 是 `{x,y}` → 以 fixed 定位；若是 HTMLElement → `getBoundingClientRect()` 計算位置，popover 出現在 anchor 元素下方（top = `rect.bottom + 4`，left = `rect.left`）。
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1195,12 +1217,18 @@ describe('HostPickerPopover', () => {
     expect(onSelect).toHaveBeenCalledWith('h2')
   })
 
-  it('shows empty state when hostOrder is empty', () => {
+  it('shows empty state with close button when hostOrder is empty (codex round-1 B2)', () => {
     useHostStore.setState({ hosts: {}, hostOrder: [], runtime: {}, activeHostId: null })
+    const onCancel = vi.fn()
     render(
-      <HostPickerPopover open={true} anchor={{ x: 0, y: 0 }} onSelect={vi.fn()} onCancel={vi.fn()} />,
+      <HostPickerPopover open={true} anchor={{ x: 0, y: 0 }} onSelect={vi.fn()} onCancel={onCancel} />,
     )
     expect(screen.getByText(/No hosts available/i)).toBeInTheDocument()
+    // close button must exist in empty state — Esc-only is not enough (a11y / mouse users)
+    const closeBtn = screen.getByRole('button', { name: /close|cancel|關閉|取消/i })
+    expect(closeBtn).toBeInTheDocument()
+    fireEvent.click(closeBtn)
+    expect(onCancel).toHaveBeenCalledTimes(1)
   })
 
   it('focus is trapped inside the popover (Tab cycles)', () => {
@@ -1212,6 +1240,34 @@ describe('HostPickerPopover', () => {
     fireEvent.keyDown(items[items.length - 1], { key: 'Tab' })
     // focus should wrap back to first
     expect(document.activeElement).toBe(items[0])
+  })
+
+  // codex round-1 B3 — HTMLElement anchor positioning
+  it('positions popover below an HTMLElement anchor using getBoundingClientRect (codex round-1 B3)', () => {
+    const anchor = document.createElement('button')
+    anchor.getBoundingClientRect = () =>
+      ({
+        top: 100,
+        right: 250,
+        bottom: 130,
+        left: 200,
+        width: 50,
+        height: 30,
+        x: 200,
+        y: 100,
+        toJSON: () => ({}),
+      }) as DOMRect
+    document.body.appendChild(anchor)
+    const { container } = render(
+      <HostPickerPopover open={true} anchor={anchor} onSelect={vi.fn()} onCancel={vi.fn()} />,
+    )
+    const popover = container.querySelector('[role="listbox"]') as HTMLElement
+    expect(popover).not.toBeNull()
+    // top = rect.bottom + 4 = 134; left = rect.left = 200
+    expect(popover.style.top).toBe('134px')
+    expect(popover.style.left).toBe('200px')
+    expect(popover.style.position).toBe('fixed')
+    document.body.removeChild(anchor)
   })
 })
 ```
@@ -1345,8 +1401,19 @@ export function HostPickerPopover({ open, anchor, onSelect, onCancel }: Props) {
       className="z-50 min-w-[200px] rounded-md border border-border-default bg-surface-secondary shadow-lg py-1"
     >
       {items.length === 0 ? (
-        <div className="px-3 py-2 text-xs text-text-muted">
-          {t('quick_commands.host_picker.empty')}
+        // codex round-1 B2 — empty state must offer an explicit close button
+        // (mouse users / a11y; Esc-only is not sufficient).
+        <div className="px-3 py-2 text-xs text-text-muted flex items-center justify-between gap-2">
+          <span>{t('quick_commands.host_picker.empty')}</span>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label={t('quick_commands.host_picker.close')}
+            className="p-0.5 text-text-muted hover:text-text-primary cursor-pointer"
+          >
+            {/* Use Phosphor X icon at runtime; placeholder marker for plan. */}
+            ×
+          </button>
         </div>
       ) : (
         items.map((item, index) => (
@@ -1379,7 +1446,7 @@ export function HostPickerPopover({ open, anchor, onSelect, onCancel }: Props) {
 }
 ```
 
-註：i18n keys `quick_commands.host_picker.label` / `.empty` / `.online` / `.offline` 在 Task 1b.4 統一加入 zh-TW / en JSON。
+註：i18n keys `quick_commands.host_picker.label` / `.empty` / `.online` / `.offline` / `.close` 已在 Task **1b.0c**（前置）加入 zh-TW / en JSON — 此元件測試開跑時 keys 必須先存在，否則 `screen.getByText(/No hosts available/i)` 會比對到 raw key。
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1391,6 +1458,89 @@ Expected: PASS
 ```
 feat(spa): add HostPickerPopover reusable component for host selection (spec §3.2.2 / §4.4)
 ```
+
+---
+
+### Task 1b.0c: 前置 i18n keys（HostPicker / aria / executor / toast）
+
+**Files:**
+- Modify: `spa/src/locales/zh-TW.json`
+- Modify: `spa/src/locales/en.json`
+
+**動機（codex round-1 B9）：** 後續 task（HostPickerPopover、CommandSlot、slot-executor、context menu、popover）的單元測試會直接 render 元件、`screen.getByText(/No hosts available/i)` / `getByRole('button', { name: /retry/i })` 比對顯示文字。i18n 系統在 key 缺失時 fallback 回 raw key，會導致測試比對 `quick_commands.host_picker.empty` 而非實際翻譯，**綠／紅判定模糊**。把 keys 加入 JSON 必須**先於**任何用到這些 keys 的 caller / 元件測試開跑。
+
+原 plan 的 1b.4（settings contribution + i18n）保留，但只負責 **Settings tab / dialog / module description / 模組元件外殼**等後續 keys；**HostPicker、aria-label、executor toast、retry 按鈕**等先放在 1b.0c。
+
+**i18n keys 清單（codex round-1 B9 + C16 — aria-label 也走 i18n）：**
+
+zh-TW + en 對照（同步加入）：
+
+```json
+{
+  "quick_commands.host_picker.label": "選擇主機" / "Choose host",
+  "quick_commands.host_picker.empty": "尚未設定任何主機" / "No hosts available",
+  "quick_commands.host_picker.online": "線上" / "online",
+  "quick_commands.host_picker.offline": "離線" / "offline",
+  "quick_commands.host_picker.close": "關閉" / "Close",
+  "quick_commands.toast.create_failed": "無法建立 session：{{reason}}" / "Failed to start session: {{reason}}",
+  "quick_commands.toast.send_keys_failed": "Session 已建立，但指令送出失敗。" / "Session created, but command failed.",
+  "quick_commands.toast.switch_failed": "已建立並送出指令，但無法切換焦點；請至 sessions 列表查看。" / "Created and sent, but could not switch focus; check the sessions list.",
+  "quick_commands.toast.retry": "重試" / "Retry",
+  "quick_commands.aria.toolbar": "快速指令" / "Quick commands",
+  "quick_commands.aria.workspace_actions": "工作區快速動作" / "Workspace quick actions"
+}
+```
+
+註：`settings.section.quick_commands` / `settings.quick_commands.*` / `modules.quick_commands.description` / `common.edit` 等 keys 留在 1b.4 一併加入（因為它們綁 settings UI 上下文，1b.4 才會 render 出來）。
+
+- [ ] **Step 1: Add keys to zh-TW.json**
+
+Edit `spa/src/locales/zh-TW.json`（按既有檔案的字典排序或群組原則插入；確認 trailing comma 不破壞 JSON 結構）：
+
+```json
+  "quick_commands.host_picker.label": "選擇主機",
+  "quick_commands.host_picker.empty": "尚未設定任何主機",
+  "quick_commands.host_picker.online": "線上",
+  "quick_commands.host_picker.offline": "離線",
+  "quick_commands.host_picker.close": "關閉",
+  "quick_commands.toast.create_failed": "無法建立 session：{{reason}}",
+  "quick_commands.toast.send_keys_failed": "Session 已建立，但指令送出失敗。",
+  "quick_commands.toast.switch_failed": "已建立並送出指令，但無法切換焦點；請至 sessions 列表查看。",
+  "quick_commands.toast.retry": "重試",
+  "quick_commands.aria.toolbar": "快速指令",
+  "quick_commands.aria.workspace_actions": "工作區快速動作",
+```
+
+- [ ] **Step 2: Add keys to en.json**
+
+Edit `spa/src/locales/en.json`：
+
+```json
+  "quick_commands.host_picker.label": "Choose host",
+  "quick_commands.host_picker.empty": "No hosts available",
+  "quick_commands.host_picker.online": "online",
+  "quick_commands.host_picker.offline": "offline",
+  "quick_commands.host_picker.close": "Close",
+  "quick_commands.toast.create_failed": "Failed to start session: {{reason}}",
+  "quick_commands.toast.send_keys_failed": "Session created, but command failed.",
+  "quick_commands.toast.switch_failed": "Created and sent, but could not switch focus; check the sessions list.",
+  "quick_commands.toast.retry": "Retry",
+  "quick_commands.aria.toolbar": "Quick commands",
+  "quick_commands.aria.workspace_actions": "Workspace quick actions",
+```
+
+- [ ] **Step 3: Verify locale completeness**
+
+Run: `cd spa && pnpm run lint`
+Expected: clean（既有 lint 已含 locale-completeness 檢查；所有新 keys 必須兩語對齊）。
+
+- [ ] **Step 4: Commit**
+
+```
+chore(spa): add i18n keys for quick commands HostPicker / aria / toast (codex round-1 B9)
+```
+
+註：Task 1b.0b 的 HostPickerPopover 測試 + 實作仰賴 `quick_commands.host_picker.*` keys；若工程實作時把 1b.0b 排在 1b.0c 之前（順序顛倒），HostPickerPopover 測試會比對 raw key 而綠燈，但實際 prod fallback 行為不正確。**順序鐵則：1b.0a → 1b.0b ≤ 1b.0c**（1b.0c 不晚於 1b.0b 也可，但必須早於 1b.1）。實務建議：把 1b.0c 寫在 1b.0b commit 之後、1b.1 commit 之前，做為「進入元件 / 測試前的最後一道 i18n 補位」。
 
 ---
 
@@ -1441,7 +1591,7 @@ describe('CommandSlot', () => {
   beforeEach(() => resetStores())
   afterEach(() => clearModuleRegistry())
 
-  it('renders bound commands in capability order (cmd-a then cmd-c, NOT bindings key order)', () => {
+  it('renders bound commands in capability order (cmd-a then cmd-c, NOT bindings key order — codex round-1 C12)', () => {
     const exec = vi.fn().mockResolvedValue(undefined)
     render(
       <CommandSlot
@@ -1450,12 +1600,42 @@ describe('CommandSlot', () => {
         executor={exec}
       />,
     )
+    // codex round-1 C12 — assert exact order via accessible names; NOT arrayContaining
     const buttons = screen.getAllByRole('button')
-    expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual(
-      expect.arrayContaining([expect.stringMatching(/A/), expect.stringMatching(/C/)]),
-    )
-    // cmd-b not bound → not rendered
+    const names = buttons.map((b) => b.getAttribute('aria-label'))
+    // cmd-a first (capability index 0), cmd-c second (capability index 2);
+    // cmd-b is unbound → not in DOM at all
+    expect(names).toEqual(['A', 'C'])
     expect(screen.queryByLabelText(/^B/)).toBeNull()
+  })
+
+  it('order follows capability list even when bindings record key order is reversed (codex round-1 C13)', () => {
+    // Same global capability list; rebuild bindings in REVERSE key order.
+    // The order seen on screen must still be capability order (cmd-a → cmd-c).
+    useQuickCommandStore.setState({
+      global: [
+        { id: 'cmd-a', name: 'A', command: 'a' },
+        { id: 'cmd-b', name: 'B', command: 'b' },
+        { id: 'cmd-c', name: 'C', command: 'c' },
+      ],
+      byHost: {},
+      bindings: {
+        // Insert cmd-c first, then cmd-a — Object.keys order would be [cmd-c, cmd-a]
+        'cmd-c': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS],
+        'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS],
+      },
+    })
+    render(
+      <CommandSlot
+        mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
+        ctx={{ hostId: null, workspaceId: 'w1' }} // hostId=null per codex C13 ask
+        executor={vi.fn()}
+      />,
+    )
+    const buttons = screen.getAllByRole('button')
+    const names = buttons.map((b) => b.getAttribute('aria-label'))
+    // Capability order is cmd-a (index 0) then cmd-c (index 2) — NOT bindings record order
+    expect(names).toEqual(['A', 'C'])
   })
 
   it('returns null when quick-commands module is disabled (short-circuit)', () => {
@@ -1523,6 +1703,28 @@ describe('CommandSlot', () => {
     )
     expect(screen.getAllByTestId('custom').map((n) => n.textContent)).toEqual(['cmd-a', 'cmd-c'])
   })
+
+  it('disables all chip buttons while busy=true (codex round-1 C11 — picker resolver race guard)', () => {
+    // Picker open → caller flips busy=true to prevent double-click on chip
+    // (which would create a second pending Promise and a second picker instance).
+    const exec = vi.fn().mockResolvedValue(undefined)
+    render(
+      <CommandSlot
+        mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
+        ctx={{ hostId: null, workspaceId: 'w1' }}
+        executor={exec}
+        busy={true}
+      />,
+    )
+    const buttons = screen.getAllByRole('button')
+    expect(buttons.length).toBeGreaterThan(0)
+    buttons.forEach((b) => {
+      expect((b as HTMLButtonElement).disabled).toBe(true)
+    })
+    // Click while busy → executor must NOT fire
+    fireEvent.click(buttons[0])
+    expect(exec).not.toHaveBeenCalled()
+  })
 })
 ```
 
@@ -1568,6 +1770,18 @@ interface Props {
   ctx: SlotContext
   executor: SlotExecutor
   render?: SlotRenderer
+  /**
+   * Optional class for the outer container (codex round-1 B7 — used by the
+   * context-menu caller which prefers `flex flex-col` over the toolbar default).
+   */
+  containerClassName?: string
+  /**
+   * codex round-1 C11 — picker resolver race guard: when the caller's host
+   * picker is open, set `busy={true}` to disable every chip button. Prevents
+   * a second click from creating a second pending Promise (and a second picker
+   * instance fighting over the same resolver).
+   */
+  busy?: boolean
 }
 
 /**
@@ -1579,9 +1793,10 @@ interface Props {
  * stable `getCommands(hostId)` list), not `Object.keys(bindings)` — that's
  * the spec §4.4 stability guarantee against post-sync key-order divergence.
  */
-export function CommandSlot({ mountTo, ctx, executor, render }: Props) {
+export function CommandSlot({ mountTo, ctx, executor, render, containerClassName, busy }: Props) {
   const enabled = useModuleEnabledStore((s) => s.isEnabled('quick-commands'))
   const bindings = useQuickCommandStore((s) => s.bindings)
+  const t = useI18nStore((s) => s.t)
   // hostId null → no host override possible; show global-only command list.
   // (getCommands(hostId) would require a string; explicitly passing null
   // means "caller hasn't resolved a host yet — just use globals".)
@@ -1599,7 +1814,12 @@ export function CommandSlot({ mountTo, ctx, executor, render }: Props) {
   if (boundCmds.length === 0) return null
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5" role="toolbar" aria-label="Quick commands">
+    <div
+      className={containerClassName ?? 'flex flex-wrap items-center gap-1.5'}
+      role="toolbar"
+      // codex round-1 C16 — aria-label sourced from i18n, not hard-coded English
+      aria-label={t('quick_commands.aria.toolbar')}
+    >
       {boundCmds.map((cmd) => {
         if (render) {
           return (
@@ -1613,12 +1833,16 @@ export function CommandSlot({ mountTo, ctx, executor, render }: Props) {
           <button
             key={cmd.id}
             type="button"
+            // codex round-1 C11 — busy guard prevents double-click from spawning
+            // a second picker / executor pipeline while one is mid-flight.
+            disabled={busy}
             onClick={() => {
+              if (busy) return
               void executor(cmd, ctx)
             }}
             aria-label={ariaLabel}
             title={cmd.command}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer disabled:opacity-50"
+            className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <span className="truncate max-w-[12rem]">{cmd.name}</span>
             {cmd.category && (
@@ -1634,6 +1858,12 @@ export function CommandSlot({ mountTo, ctx, executor, render }: Props) {
 }
 ```
 
+註：`useI18nStore` import 已隨 codex round-1 C16 加入（替代原 hard-coded `aria-label="Quick commands"`）：
+
+```ts
+import { useI18nStore } from '../stores/useI18nStore'
+```
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd spa && npx vitest run src/components/CommandSlot.test.tsx`
@@ -1647,45 +1877,79 @@ feat(spa): add <CommandSlot> shared component for v2 binding model
 
 ---
 
-### Task 1b.1.5: 擴 `useUndoToast` schema 支援自訂 action label（Retry）
+### Task 1b.1.5: 擴 `useUndoToast` schema — optional `action` callback 與 `actionLabel`（codex round-1 B4）
 
 **Files:**
 - Modify: `spa/src/stores/useUndoToast.ts`
 - Modify: `spa/src/stores/useUndoToast.test.ts`
 - Modify: `spa/src/components/GlobalUndoToast.tsx`
+- Modify / Create: `spa/src/components/GlobalUndoToast.test.tsx`
 
-**動機：** Task 1b.2 的 slot-executor 在 send-keys 失敗時要顯示 toast 帶「Retry」按鈕（spec §3.3 表格第 2 列；user 決策採方案 (a) — 直接擴 schema），與既有 `OverviewSection.tsx` 的「Undo」按鈕共用同一條 toast。預設保留 `'Undo'` 維持向下相容。
+**動機（codex round-1 B4 修正）：** spec §3.3 三層失敗 UX 中，**create-session failure** 與 **switch-to-session failure** 不該顯示「假 Undo / 假 Retry」按鈕（user 沒東西可 undo / 重試也對應不到動作）；**只有 send-keys failure** 該帶 action button（Retry）。原 plan 直接複用既有 `useUndoToast.show(message, restore)` 兩參數簽名，會被迫傳一個 noop 給 restore — UX 上仍會渲染按鈕，誤導 user。
+
+修正：把 `action` 與 `actionLabel` 都升為 **optional**，元件渲染時 `action == null` 不渲染 button（toast 只剩 message）。`OverviewSection.tsx` 既有的 delete-host undo 仍走 `show(msg, undoFn)` — `action` 非空 → 渲染 button + 預設 label 'Undo'，**完全向下相容**。
+
+**API 設計：**
+
+```ts
+interface ToastShape {
+  message: string
+  action?: () => void      // ← optional：缺省時 button 不渲染
+  actionLabel?: string     // ← optional：缺省（且 action 非空時）回退到 'Undo'
+}
+
+show(message: string, action?: () => void, actionLabel?: string): void
+```
+
+**Render 規則（GlobalUndoToast）：**
+- `toast.action == null` → 完全不渲染 `<button>`
+- `toast.action != null && toast.actionLabel == null` → 渲染 button，label = `t('hosts.undo')`
+- `toast.action != null && toast.actionLabel != null` → 渲染 button，label = `toast.actionLabel`
+
+**Executor callsite 對應（與 Task 1b.2 同步）：**
+- create-session failure → `show(message)` （**無** action）
+- switch-to-session failure → `show(message)` （**無** action）
+- send-keys failure → `show(message, retryFn, t('quick_commands.toast.retry'))` （**有** action）
 
 **既有 callsite 影響範圍盤點（grep `useUndoToast.*show|getState\(\)\.show`）：**
-- Production：`spa/src/components/hosts/OverviewSection.tsx:85`（`show(message, restore)` — 不傳 actionLabel，續用 `'Undo'`）
-- Test：`spa/src/stores/useUndoToast.test.ts`（自身單元測試）+ `spa/src/lib/host-lifecycle.test.ts`（只重置 toast=null，不呼叫 `show`，不受影響）
-- 共 1 個 production callsite，2 個測試檔；schema 擴充採 optional 第 3 參數，**無需修改既有 callsite 的呼叫形式**
+- Production：`spa/src/components/hosts/OverviewSection.tsx:85`（`show(message, restore)` — 兩參數呼叫；新 schema 第 2 參數 `action` 仍是 function，相容）
+- Test：`spa/src/stores/useUndoToast.test.ts`（自身單元測試 — 測試斷言維持原樣，僅新增向下相容驗證）+ `spa/src/lib/host-lifecycle.test.ts`（只重置 toast=null，不呼叫 `show`，不受影響）
+- 共 1 個 production callsite，2 個測試檔；schema 擴充採 **action / actionLabel 都 optional**，**無需修改既有 callsite 的呼叫形式**
 
 - [ ] **Step 1: Write the failing test**
 
 Edit `spa/src/stores/useUndoToast.test.ts` 加新測試（不要動既有測試 — 它們驗證向下相容）：
 
 ```ts
-describe('useUndoToast — custom action label', () => {
+describe('useUndoToast — optional action / actionLabel (codex round-1 B4)', () => {
   beforeEach(() => {
     useUndoToast.setState({ toast: null })
   })
 
-  it('defaults actionLabel to undefined when not provided (back-compat)', () => {
+  it('back-compat: show(msg, fn) keeps action defined and actionLabel undefined', () => {
     useUndoToast.getState().show('msg', () => {})
     const toast = useUndoToast.getState().toast
+    expect(toast?.action).toBeTypeOf('function')
     expect(toast?.actionLabel).toBeUndefined()
   })
 
-  it('stores actionLabel when provided', () => {
+  it('show(msg) with no action stores undefined for both', () => {
+    useUndoToast.getState().show('Failed')
+    const toast = useUndoToast.getState().toast
+    expect(toast?.action).toBeUndefined()
+    expect(toast?.actionLabel).toBeUndefined()
+  })
+
+  it('show(msg, fn, label) stores both', () => {
     useUndoToast.getState().show('Send keys failed', () => {}, 'Retry')
     const toast = useUndoToast.getState().toast
+    expect(toast?.action).toBeTypeOf('function')
     expect(toast?.actionLabel).toBe('Retry')
   })
 })
 ```
 
-Edit `spa/src/components/GlobalUndoToast.tsx` 也加一條 component test（若該檔已有 test 則 append；若無則新建 `GlobalUndoToast.test.tsx`）：
+Edit/Create `spa/src/components/GlobalUndoToast.test.tsx`（若該檔不存在則新建）：
 
 ```tsx
 import { describe, it, expect, beforeEach } from 'vitest'
@@ -1693,19 +1957,34 @@ import { render, screen } from '@testing-library/react'
 import { GlobalUndoToast } from './GlobalUndoToast'
 import { useUndoToast } from '../stores/useUndoToast'
 
-describe('GlobalUndoToast — actionLabel', () => {
+describe('GlobalUndoToast — render rules (codex round-1 B4)', () => {
   beforeEach(() => useUndoToast.setState({ toast: null }))
 
-  it('renders default Undo label when actionLabel is omitted', () => {
+  it('renders default Undo label when action is provided but actionLabel is omitted', () => {
     useUndoToast.getState().show('Deleted host', () => {})
     render(<GlobalUndoToast />)
     expect(screen.getByRole('button')).toHaveTextContent(/Undo/i)
   })
 
-  it('renders custom actionLabel when provided (e.g. Retry)', () => {
+  it('renders custom actionLabel (Retry) when both action and actionLabel are provided', () => {
     useUndoToast.getState().show('Send keys failed', () => {}, 'Retry')
     render(<GlobalUndoToast />)
     expect(screen.getByRole('button')).toHaveTextContent(/Retry/i)
+  })
+
+  it('does NOT render any button when action is undefined (create / switch failure path)', () => {
+    useUndoToast.getState().show('Failed to start session: 500')
+    render(<GlobalUndoToast />)
+    // Message still shows
+    expect(screen.getByText(/Failed to start session/i)).toBeInTheDocument()
+    // No action button at all (codex round-1 B4 — no fake Undo / Retry)
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+
+  it('toast container has role=status (codex round-1 C14 — a11y live region)', () => {
+    useUndoToast.getState().show('Hello')
+    render(<GlobalUndoToast />)
+    expect(screen.getByRole('status')).toBeInTheDocument()
   })
 })
 ```
@@ -1717,41 +1996,101 @@ Expected: FAIL — `actionLabel` 欄位不存在 / 元件還沒讀。
 
 - [ ] **Step 3: Implement schema extension**
 
-Edit `spa/src/stores/useUndoToast.ts`：
+Edit `spa/src/stores/useUndoToast.ts`（codex round-1 B4 — `action` 與 `actionLabel` 都升為 optional；既有 callsite 傳 `(msg, fn)` 仍合法、行為不變）：
 
 ```ts
 // spa/src/stores/useUndoToast.ts — Global undo toast state
 import { create } from 'zustand'
 
+/**
+ * Toast schema (codex round-1 B4):
+ *  - action == null      → render no button (used by create / switch failure paths)
+ *  - action != null      → render button; label = actionLabel ?? t('hosts.undo')
+ *
+ * Renamed semantically from "restore" to "action" — the field can host an undo
+ * callback OR a retry callback; existing back-compat callers (delete-host undo)
+ * pass a function and stay green.
+ */
 interface UndoToastState {
-  toast: { message: string; restore: () => void; actionLabel?: string } | null
-  show: (message: string, restore: () => void, actionLabel?: string) => void
+  toast: {
+    message: string
+    action?: () => void
+    actionLabel?: string
+  } | null
+  show: (message: string, action?: () => void, actionLabel?: string) => void
   dismiss: () => void
 }
 
 export const useUndoToast = create<UndoToastState>()((set) => ({
   toast: null,
-  show: (message, restore, actionLabel) =>
-    set({ toast: { message, restore, actionLabel } }),
+  show: (message, action, actionLabel) =>
+    set({ toast: { message, action, actionLabel } }),
   dismiss: () => set({ toast: null }),
 }))
 ```
 
-Edit `spa/src/components/GlobalUndoToast.tsx` 改 button label 取用：
+Edit `spa/src/components/GlobalUndoToast.tsx`（render rules：`action == null` 不渲染 button；codex round-1 C14 加 `role="status"`）：
 
 ```tsx
-<button
-  className="text-sm text-blue-400 hover:text-blue-300 font-medium cursor-pointer"
-  onClick={() => {
-    toast.restore()
-    dismiss()
-  }}
->
-  {toast.actionLabel ?? t('hosts.undo')}
-</button>
+import { useEffect, useRef } from 'react'
+import { useUndoToast } from '../stores/useUndoToast'
+import { useI18nStore } from '../stores/useI18nStore'
+
+export function GlobalUndoToast() {
+  const toast = useUndoToast((s) => s.toast)
+  const dismiss = useUndoToast((s) => s.dismiss)
+  const t = useI18nStore((s) => s.t)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!toast) return
+    timerRef.current = setTimeout(() => dismiss(), 5000)
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+    }
+  }, [toast, dismiss])
+
+  if (!toast) return null
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-3 flex items-center gap-3 shadow-lg z-50"
+    >
+      <span className="text-sm text-zinc-300">{toast.message}</span>
+      {toast.action && (
+        <button
+          className="text-sm text-blue-400 hover:text-blue-300 font-medium cursor-pointer"
+          onClick={() => {
+            toast.action!()
+            dismiss()
+          }}
+        >
+          {toast.actionLabel ?? t('hosts.undo')}
+        </button>
+      )}
+    </div>
+  )
+}
 ```
 
-註：`actionLabel` 由 caller 傳 i18n 化字串（例如 `t('quick_commands.toast.retry')`）；`'hosts.undo'` 維持作為**未指定時的預設**，確保 `OverviewSection` 既有行為不變。
+註：`actionLabel` 由 caller 傳 i18n 化字串（例如 `t('quick_commands.toast.retry')`）；`'hosts.undo'` 維持作為**有 action 但未指定 label 時的預設**，確保 `OverviewSection` 既有 delete-host undo 行為不變。
+
+**callsite 影響盤點補充驗證（codex round-1 B4）：**
+
+執行 grep 檢查：
+```
+cd spa && grep -rn "useUndoToast" src/ --include="*.ts" --include="*.tsx" | grep -v "\.test\."
+```
+
+預期結果：
+- `src/stores/useUndoToast.ts`（store 自身）
+- `src/components/GlobalUndoToast.tsx`（render）
+- `src/components/hosts/OverviewSection.tsx`（既有 callsite，呼叫 `show(msg, undoFn)` — 新 schema 下：`action=undoFn`、`actionLabel=undefined` → button 渲染 + label 'Undo'，行為與舊 schema 完全一致）
+- `src/lib/host-lifecycle.test.ts`（測試 reset；不呼叫 show，不受影響）
+
+若 grep 出現未列入的 callsite，subagent 必須回報主 Claude 評估是否需要更新（理論上 codex round-1 已 audit 完畢，新增 callsite 是 plan 後續 task 引入的，那些 callsite 自身已遵循新 schema）。
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1761,7 +2100,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```
-feat(spa): extend useUndoToast schema with optional actionLabel (back-compat)
+feat(spa): extend useUndoToast schema with optional action / actionLabel (codex round-1 B4)
 ```
 
 ---
@@ -1787,7 +2126,7 @@ feat(spa): extend useUndoToast schema with optional actionLabel (back-compat)
 
 **選擇：Option B。**
 
-CommandSlot 一側的封裝建議（在 1b.5a / 1b.5b / 1c.1b 各 caller 自行實作；不抽公共 hook，因為三個 caller 的 trigger UI 完全不同）：
+CommandSlot 一側的封裝建議（在 1b.5a / 1b'.1 / 1c.1b 各 caller 自行實作；不抽公共 hook，因為三個 caller 的 trigger UI 完全不同）：
 ```tsx
 const [pickerState, setPickerState] = useState<{
   resolver: (id: string | null) => void
@@ -1903,7 +2242,7 @@ describe('runWorkspaceSlot', () => {
     expect(useUndoToast.getState().toast).toBeNull()
   })
 
-  it('createSession failure — surfaces toast, does NOT switch focus', async () => {
+  it('createSession failure — toast WITHOUT action button (codex round-1 B4)', async () => {
     const switchFocus = vi.fn()
     const resolveHostId = vi.fn()
     ;(createSession as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('500 Internal'))
@@ -1919,9 +2258,12 @@ describe('runWorkspaceSlot', () => {
     const toast = useUndoToast.getState().toast
     expect(toast).not.toBeNull()
     expect(toast!.message).toMatch(/Failed to start session/i)
+    // codex round-1 B4 — no action button on create-session failure
+    expect(toast!.action).toBeUndefined()
+    expect(toast!.actionLabel).toBeUndefined()
   })
 
-  it('send-keys failure — STILL switches focus + toast carries retry action', async () => {
+  it('send-keys failure — STILL switches focus + toast carries Retry action', async () => {
     const switchFocus = vi.fn()
     const resolveHostId = vi.fn()
     ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -1939,18 +2281,19 @@ describe('runWorkspaceSlot', () => {
     const toast = useUndoToast.getState().toast
     expect(toast).not.toBeNull()
     expect(toast!.message).toMatch(/Session created.*command failed/i)
-    // Task 1b.1.5 — actionLabel must surface 'Retry' (translated key allowed) instead of default 'Undo'
+    // codex round-1 B4 — send-keys failure DOES carry an action (retry)
+    expect(toast!.action).toBeTypeOf('function')
     expect(toast!.actionLabel).toBeDefined()
     expect(toast!.actionLabel).toMatch(/retry/i)
-    // restore = retry — calling it should trigger executeCommand again
+    // action = retry — calling it should trigger executeCommand again
     ;(executeCommand as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
-    toast!.restore()
+    toast!.action!()
     // retry is sync invocation; await microtask
     await Promise.resolve()
     expect(executeCommand).toHaveBeenCalledTimes(2)
   })
 
-  it('switchToSession failure — toast surfaced, session still listed elsewhere', async () => {
+  it('switchToSession failure — toast WITHOUT action button (codex round-1 B4)', async () => {
     const switchFocus = vi.fn().mockImplementation(() => {
       throw new Error('switch failed')
     })
@@ -1969,6 +2312,9 @@ describe('runWorkspaceSlot', () => {
     const toast = useUndoToast.getState().toast
     expect(toast).not.toBeNull()
     expect(toast!.message).toMatch(/Could not switch/i)
+    // codex round-1 B4 — no action button on switch failure
+    expect(toast!.action).toBeUndefined()
+    expect(toast!.actionLabel).toBeUndefined()
   })
 })
 ```
@@ -2058,15 +2404,17 @@ export async function runWorkspaceSlot(
     const session = await createSession(hostId, genSessionName(cmd), ctx.cwd ?? '~', 'terminal')
     sessionCode = session.code
   } catch (err) {
+    // codex round-1 B4 — create-session failure has NO retry/undo action;
+    // user has nothing meaningful to retry without re-clicking the chip.
     const reason = err instanceof Error ? err.message : String(err)
-    toast.show(t('quick_commands.toast.create_failed', { reason }), () => {})
+    toast.show(t('quick_commands.toast.create_failed', { reason }))
     return
   }
 
   try {
     await executeCommand(hostId, sessionCode, cmd.command)
   } catch (err) {
-    // Step 2 failed — STILL switch (so user sees the orphan), with Retry.
+    // Step 2 failed — STILL switch (so user sees the orphan), WITH Retry action.
     safelySwitch(hostId, sessionCode, deps, t)
     const reason = err instanceof Error ? err.message : String(err)
     void reason
@@ -2076,7 +2424,7 @@ export async function runWorkspaceSlot(
       () => {
         void executeCommand(hostId, sessionCode, cmd.command).catch(() => undefined)
       },
-      t('quick_commands.toast.retry'),  // ← Task 1b.1.5 introduced actionLabel; default ('Undo') doesn't fit retry semantics
+      t('quick_commands.toast.retry'),  // codex round-1 B4 — only this branch carries an action label
     )
     return
   }
@@ -2093,14 +2441,16 @@ function safelySwitch(
   try {
     deps.switchToSession(hostId, sessionCode)
   } catch (err) {
+    // codex round-1 B4 — switch failure has NO retry action either; the session
+    // is already alive elsewhere, the toast is purely informational.
     const reason = err instanceof Error ? err.message : String(err)
     void reason
-    useUndoToast.getState().show(t('quick_commands.toast.switch_failed'), () => {})
+    useUndoToast.getState().show(t('quick_commands.toast.switch_failed'))
   }
 }
 ```
 
-註（給實作者）：i18n keys 在 Task 1b.6 統一加入 zh-TW / en JSON。`createSession` 已存在於 `spa/src/lib/host-api.ts`（簽名 `(hostId, name, cwd, mode) => Promise<Session>`）。`executeCommand` 已存在於 `spa/src/lib/execute-command.ts`。`switchToSession` deps 由 caller 注入（避免 tab/workspace store 的循環相依）。
+註（給實作者）：i18n keys 已在 Task **1b.0c** 加入 zh-TW / en JSON（codex round-1 B9 — 必須前置）。`createSession` 已存在於 `spa/src/lib/host-api.ts`（簽名 `(hostId, name, cwd, mode) => Promise<Session>`）。`executeCommand` 已存在於 `spa/src/lib/execute-command.ts`。`switchToSession` deps 由 caller 注入（避免 tab/workspace store 的循環相依）。
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2231,8 +2581,41 @@ describe('QuickCommandsSettingsSection', () => {
     expect(state.global).toHaveLength(0)
     expect(state.bindings['cmd-a']).toBeUndefined()
   })
+
+  // codex round-1 C15 — keyboard accessibility on multi-select mount chips
+  it('mount-target chips support Space/Enter activation and ArrowRight/ArrowLeft roving focus', () => {
+    render(<QuickCommandsSettingsSection />)
+    fireEvent.click(screen.getByRole('button', { name: /New/i }))
+    const wsChip = screen.getByRole('button', { name: /Workspace/i })
+    const hostChip = screen.getByRole('button', { name: /Host/i })
+
+    // Focus first chip
+    wsChip.focus()
+    expect(document.activeElement).toBe(wsChip)
+
+    // Space toggles aria-pressed
+    expect(wsChip.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.keyDown(wsChip, { key: ' ' })
+    fireEvent.click(wsChip) // RTL: native button Space → click; explicit click for jsdom safety
+    expect(wsChip.getAttribute('aria-pressed')).toBe('true')
+
+    // Enter also toggles
+    fireEvent.keyDown(wsChip, { key: 'Enter' })
+    fireEvent.click(wsChip)
+    expect(wsChip.getAttribute('aria-pressed')).toBe('false')
+
+    // ArrowRight moves focus to next chip (roving focus)
+    fireEvent.keyDown(wsChip, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(hostChip)
+
+    // ArrowLeft moves focus back
+    fireEvent.keyDown(hostChip, { key: 'ArrowLeft' })
+    expect(document.activeElement).toBe(wsChip)
+  })
 })
 ```
+
+註（codex round-1 C15）：multi-select chip 元件需在 `onKeyDown` 內處理 ArrowLeft / ArrowRight 切換 focus（roving focus pattern）；Space / Enter 由 native button 的 keydown→click 自動觸發 `toggleTarget`。實作建議：在 `<fieldset>` 容器加 `onKeyDown`，比對 `e.key` 為方向鍵時找出當前 active button index 後 focus 鄰位 button。
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -2520,7 +2903,22 @@ function EditDialog({ initial, onClose, onSave }: DialogProps) {
           <legend className="text-xs text-text-secondary px-1">
             {t('settings.quick_commands.mount')}
           </legend>
-          <div className="flex gap-2 mt-1 flex-wrap">
+          {/* codex round-1 C15 — roving focus across chips via ArrowLeft / ArrowRight */}
+          <div
+            className="flex gap-2 mt-1 flex-wrap"
+            onKeyDown={(e) => {
+              if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+              const buttons = Array.from(
+                e.currentTarget.querySelectorAll<HTMLButtonElement>('button[type="button"]'),
+              )
+              const idx = buttons.indexOf(document.activeElement as HTMLButtonElement)
+              if (idx === -1) return
+              e.preventDefault()
+              const dir = e.key === 'ArrowRight' ? 1 : -1
+              const next = (idx + dir + buttons.length) % buttons.length
+              buttons[next]?.focus()
+            }}
+          >
             {(Object.values(QUICK_COMMAND_SLOTS) as QuickCommandSlotId[]).map((slot) => {
               const active = targets.includes(slot)
               return (
@@ -2636,7 +3034,7 @@ Update the `quick-commands` registration to include `settings`:
   })
 ```
 
-In `spa/src/locales/zh-TW.json` 加入：
+In `spa/src/locales/zh-TW.json` 加入（**Settings / module description 範圍** — host_picker / aria / toast 已在 Task 1b.0c 加入；此處不重複）：
 
 ```json
   "settings.section.quick_commands": "快速指令",
@@ -2651,15 +3049,8 @@ In `spa/src/locales/zh-TW.json` 加入：
   "settings.quick_commands.mount": "掛載位置",
   "settings.quick_commands.slot.workspace": "Workspace",
   "settings.quick_commands.slot.host": "Host",
+  "modules.quick_commands.description": "快速指令模組 — 在 workspace / host 入口顯示 chip，一鍵建 session 送指令",
   "common.edit": "編輯",
-  "quick_commands.toast.create_failed": "無法建立 session：{{reason}}",
-  "quick_commands.toast.send_keys_failed": "Session 已建立，但指令送出失敗。",
-  "quick_commands.toast.switch_failed": "已建立並送出指令，但無法切換焦點；請至 sessions 列表查看。",
-  "quick_commands.toast.retry": "重試",
-  "quick_commands.host_picker.label": "選擇主機",
-  "quick_commands.host_picker.empty": "尚未設定任何主機",
-  "quick_commands.host_picker.online": "線上",
-  "quick_commands.host_picker.offline": "離線",
 ```
 
 In `spa/src/locales/en.json` 對應加入：
@@ -2677,18 +3068,13 @@ In `spa/src/locales/en.json` 對應加入：
   "settings.quick_commands.mount": "Mount targets",
   "settings.quick_commands.slot.workspace": "Workspace",
   "settings.quick_commands.slot.host": "Host",
+  "modules.quick_commands.description": "Quick Commands — chip launchers on workspace / host entries that create a session and send a command in one click",
   "common.edit": "Edit",
-  "quick_commands.toast.create_failed": "Failed to start session: {{reason}}",
-  "quick_commands.toast.send_keys_failed": "Session created, but command failed.",
-  "quick_commands.toast.switch_failed": "Created and sent, but could not switch focus; check the sessions list.",
-  "quick_commands.toast.retry": "Retry",
-  "quick_commands.host_picker.label": "Choose host",
-  "quick_commands.host_picker.empty": "No hosts available",
-  "quick_commands.host_picker.online": "online",
-  "quick_commands.host_picker.offline": "offline",
 ```
 
 註：若 `common.edit` 已存在，跳過該行。檢查指令：`grep '"common.edit"' spa/src/locales/zh-TW.json`。
+
+註：以下 keys 已在 Task **1b.0c**（前置）加入，本 task **不重複**：`quick_commands.toast.create_failed` / `.send_keys_failed` / `.switch_failed` / `.retry` / `quick_commands.host_picker.label` / `.empty` / `.online` / `.offline` / `.close` / `quick_commands.aria.toolbar` / `.workspace_actions`。
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2738,6 +3124,26 @@ import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
 import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
 import { clearModuleRegistry, registerModule } from '../../../lib/module-registry'
 
+// codex round-1 B8 — full executable test body (no placeholder comments)
+import { useTabStore } from '../../../stores/useTabStore'
+import { useWorkspaceStore } from '../../../stores/useWorkspaceStore'
+
+vi.mock('../../../lib/host-api', async () => {
+  const actual = await vi.importActual<typeof import('../../../lib/host-api')>('../../../lib/host-api')
+  return {
+    ...actual,
+    createSession: vi.fn().mockResolvedValue({
+      code: 'sess-new', name: 'Alpha', cwd: '/tmp', mode: 'terminal',
+    }),
+  }
+})
+
+vi.mock('../../../lib/execute-command', () => ({
+  executeCommand: vi.fn().mockResolvedValue(undefined),
+}))
+
+import { createSession } from '../../../lib/host-api'
+
 function setup(workspaceId = 'w1', hostId = 'h1') {
   useQuickCommandStore.setState({
     global: [
@@ -2748,8 +3154,20 @@ function setup(workspaceId = 'w1', hostId = 'h1') {
     bindings: { 'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS] },
   })
   useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+  // Tab + workspace stores need a base shape so insertTab / setActiveTab don't blow up
+  useTabStore.setState({
+    tabs: {},
+    tabOrder: [],
+    activeTabId: null,
+  } as Partial<ReturnType<typeof useTabStore.getState>> as never)
+  useWorkspaceStore.setState({
+    workspaces: { [workspaceId]: { id: workspaceId, name: 'WS', tabs: [], activeTabId: null, moduleConfig: {} } },
+    workspaceOrder: [workspaceId],
+    activeWorkspaceId: workspaceId,
+  } as Partial<ReturnType<typeof useWorkspaceStore.getState>> as never)
   clearModuleRegistry()
   registerModule({ id: 'quick-commands', name: 'Quick Commands', disableable: true })
+  vi.clearAllMocks()
   return { workspaceId, hostId }
 }
 
@@ -2770,11 +3188,39 @@ describe('WorkspaceQuickCommandsContextMenu', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('clicking a command calls onClose', () => {
+  it('clicking a command calls onClose after executor finishes', async () => {
     const onClose = vi.fn()
     render(<WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId="h1" onClose={onClose} />)
     fireEvent.click(screen.getByLabelText(/^Alpha/))
+    // executor is async (createSession + executeCommand) → flush microtasks
+    await new Promise<void>((r) => setTimeout(r, 0))
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('happy path — calls createSession with the inferred hostId and inserts tab into workspace (codex round-1 B5/B6)', async () => {
+    render(<WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId="h1" onClose={() => {}} />)
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    await new Promise<void>((r) => setTimeout(r, 0))
+    expect(createSession).toHaveBeenCalledWith('h1', expect.any(String), expect.any(String), 'terminal')
+    // Tab should be inserted into the workspace (codex round-1 B6 — full
+    // openSingletonAndSelect equivalent: openSingletonTab → insertTab → setActive).
+    const tabIds = useWorkspaceStore.getState().workspaces['w1']?.tabs ?? []
+    expect(tabIds.length).toBeGreaterThan(0)
+    const tabId = tabIds[tabIds.length - 1]
+    const tab = useTabStore.getState().tabs[tabId]
+    expect(tab).toBeDefined()
+    // codex round-1 B5 — tmux-session content has all required fields populated
+    if (tab && tab.layout.type === 'leaf' && tab.layout.pane.content.kind === 'tmux-session') {
+      const c = tab.layout.pane.content
+      expect(c.hostId).toBe('h1')
+      expect(c.sessionCode).toBe('sess-new')
+      expect(c.mode).toBe('terminal')
+      expect(c.cachedName).toBeDefined()
+      expect(c.tmuxInstance).toBeDefined()
+    }
+    // active workspace + tab updated
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('w1')
+    expect(useTabStore.getState().activeTabId).toBe(tabId)
   })
 
   it('returns null when quick-commands module is disabled', () => {
@@ -2785,7 +3231,7 @@ describe('WorkspaceQuickCommandsContextMenu', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('hostId=null — clicking a command opens HostPickerPopover (does NOT call executor immediately)', async () => {
+  it('hostId=null — clicking a command opens HostPickerPopover (does NOT call createSession until user picks)', async () => {
     // Spec v4 §3.2.2 — when inferWorkspaceHostId returns null we must let the
     // user choose. The chip is rendered as soon as bindings exist; click triggers
     // the picker before executor.
@@ -2793,38 +3239,77 @@ describe('WorkspaceQuickCommandsContextMenu', () => {
     expect(screen.queryByRole('listbox')).toBeNull()
     fireEvent.click(screen.getByLabelText(/^Alpha/))
     expect(await screen.findByRole('listbox')).toBeInTheDocument()
+    // createSession not yet called — waiting for user to pick a host
+    expect(createSession).not.toHaveBeenCalled()
   })
 
-  it('hostId=null — picker cancel → no createSession call, menu stays open until close', async () => {
-    // Behavioural test: integration with HostPickerPopover; mock createSession
-    // and assert it was not invoked when user presses Esc.
-    // (Subagent: import createSession mock from host-api; vi.mock as in 1b.2.)
-    // This test is acceptance-only; full coverage of the path lives in slot-executor.test.ts
+  it('hostId=null — picker Esc cancel → no createSession, no insertTab (codex round-1 B8 — full assertion)', async () => {
+    const onClose = vi.fn()
+    render(<WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId={null} onClose={onClose} />)
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    expect(await screen.findByRole('listbox')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await new Promise<void>((r) => setTimeout(r, 0))
+    expect(createSession).not.toHaveBeenCalled()
+    // No tab inserted into workspace
+    expect(useWorkspaceStore.getState().workspaces['w1']?.tabs ?? []).toHaveLength(0)
+    // onClose still fires (executor's finally block runs even on cancel path)
+    expect(onClose).toHaveBeenCalled()
   })
 })
 ```
 
-也在 `WorkspaceContextMenu.test.tsx` 追加 integration 測試：
+也在 `WorkspaceContextMenu.test.tsx` 追加 integration 測試（codex round-1 B8 — full executable body）：
 
 ```tsx
-it('renders quick commands section above Settings when WORKSPACE_ACTIONS bindings exist', () => {
-  // 設定一個 binding（簡化：直接 mock useQuickCommandStore）
-  useQuickCommandStore.setState({
-    global: [{ id: 'cmd-x', name: 'XCmd', command: 'x' }],
-    byHost: {},
-    bindings: { 'cmd-x': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS] },
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import { WorkspaceContextMenu } from './WorkspaceContextMenu'
+import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
+import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
+import { clearModuleRegistry, registerModule } from '../../../lib/module-registry'
+
+describe('WorkspaceContextMenu — quick commands section integration (Phase 1b)', () => {
+  beforeEach(() => {
+    useQuickCommandStore.setState({ global: [], byHost: {}, bindings: {} })
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+    clearModuleRegistry()
+    registerModule({ id: 'quick-commands', name: 'Quick Commands', disableable: true })
   })
-  // … 既有 setup（registerModule quick-commands etc）…
-  render(
-    <WorkspaceContextMenu
-      position={{ x: 0, y: 0 }}
-      workspaceId="w1"
-      hostId="h1"
-      onSettings={vi.fn()}
-      onClose={vi.fn()}
-    />,
-  )
-  expect(screen.getByLabelText(/^XCmd/)).toBeInTheDocument()
+
+  it('renders quick commands section above Settings when WORKSPACE_ACTIONS bindings exist', () => {
+    useQuickCommandStore.setState({
+      global: [{ id: 'cmd-x', name: 'XCmd', command: 'x' }],
+      byHost: {},
+      bindings: { 'cmd-x': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS] },
+    })
+    render(
+      <WorkspaceContextMenu
+        position={{ x: 0, y: 0 }}
+        workspaceId="w1"
+        hostId="h1"
+        onSettings={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByLabelText(/^XCmd/)).toBeInTheDocument()
+  })
+
+  it('omits the quick commands section (and its separator) when no WORKSPACE_ACTIONS bindings exist', () => {
+    render(
+      <WorkspaceContextMenu
+        position={{ x: 0, y: 0 }}
+        workspaceId="w1"
+        hostId="h1"
+        onSettings={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    )
+    // No quick command chip; existing Settings button still present
+    expect(screen.queryByRole('toolbar', { name: /quick|快速/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /settings|設定/i })).toBeInTheDocument()
+  })
 })
 ```
 
@@ -2835,7 +3320,7 @@ Expected: FAIL — module not found / props missing。
 
 - [ ] **Step 3: Implement**
 
-Create `spa/src/features/workspace/components/WorkspaceQuickCommandsContextMenu.tsx`：
+Create `spa/src/features/workspace/components/WorkspaceQuickCommandsContextMenu.tsx`（codex round-1 B5/B6/B7 —使用 default chip render + `containerClassName="flex flex-col"`；executor 內部完整呼叫 `openSingletonTab` + `insertTab` + `setActiveWorkspace` + `setActiveTab`，並補齊所有 `tmux-session` 欄位）：
 
 ```tsx
 import { useCallback, useRef, useState } from 'react'
@@ -2844,6 +3329,7 @@ import { HostPickerPopover } from '../../../components/HostPickerPopover'
 import { runWorkspaceSlot } from '../../../lib/slot-executor'
 import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
 import { useTabStore } from '../../../stores/useTabStore'
+import { useWorkspaceStore } from '../../../stores/useWorkspaceStore'
 
 interface Props {
   workspaceId: string
@@ -2857,10 +3343,15 @@ interface Props {
 
 /**
  * 渲染 mount=WORKSPACE_ACTIONS 的 quick commands，作為 WorkspaceContextMenu 的子 section。
- * <CommandSlot> 自身會 short-circuit module disabled / no-bindings 兩個情況。
- * hostId=null 時 chip 仍渲染（user 可選一個 host 並執行）；executor 透過
- * resolveHostId callback 等待 picker 結果。picker 取消 → no-op，menu 仍由 onClose
- * 觸發者（CommandSlot 預設 button onClick）正常關閉。
+ *
+ * codex round-1 B7 — 不傳 `render` prop（會與 `executor` 衝突 — render 包出來的
+ * 是 `<span>`，沒有 onClick，executor 不會跑）。改用 `<CommandSlot>` default
+ * button render + `containerClassName="flex flex-col"` 改 layout 為 menu 條列。
+ *
+ * codex round-1 B5/B6 — switchToSession callback 必須做 `openSingletonAndSelect`
+ * 等價邏輯：open singleton tab → insertTab to workspace → setActiveWorkspace +
+ * setActiveTab。tmux-session content 欄位要齊全（mode / cachedName / tmuxInstance）
+ * 以滿足 `spa/src/types/tab.ts` 的型別契約。
  */
 export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose }: Props) {
   const [picker, setPicker] = useState<{
@@ -2877,6 +3368,28 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
     [],
   )
 
+  // codex round-1 B6 — workspace caller must perform full openSingletonAndSelect
+  // equivalent (the helper exists at spa/src/features/workspace/hooks.ts:200 but
+  // is bound to the hook, so we replicate inline here using the same store
+  // primitives it uses).
+  const switchToSession = useCallback(
+    (h: string, sessionCode: string) => {
+      // codex round-1 B5 — fill ALL tmux-session content fields per types/tab.ts:38
+      const tabId = useTabStore.getState().openSingletonTab({
+        kind: 'tmux-session',
+        hostId: h,
+        sessionCode,
+        mode: 'terminal',
+        cachedName: sessionCode,
+        tmuxInstance: '',
+      })
+      useWorkspaceStore.getState().insertTab(tabId, workspaceId)
+      useWorkspaceStore.getState().setActiveWorkspace(workspaceId)
+      useTabStore.getState().setActiveTab(tabId)
+    },
+    [workspaceId],
+  )
+
   return (
     <div
       className="py-1"
@@ -2888,36 +3401,20 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
       <CommandSlot
         mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
         ctx={{ hostId, workspaceId }}
+        // codex round-1 B7 — flex-col override; default chip render keeps onClick + executor wiring intact.
+        containerClassName="flex flex-col"
+        // codex round-1 C11 — disable buttons while picker is mid-flight (prevents double-click race).
+        busy={picker !== null}
         executor={async (cmd, ctx) => {
           try {
             await runWorkspaceSlot(cmd, ctx, {
-              switchToSession: (h, sessionCode) => {
-                useTabStore.getState().openSingletonTab({
-                  kind: 'tmux-session',
-                  hostId: h,
-                  sessionCode,
-                })
-              },
+              switchToSession,
               resolveHostId,
             })
           } finally {
             onClose()
           }
         }}
-        render={(cmd) => (
-          <button
-            type="button"
-            aria-label={cmd.name}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer transition-colors"
-          >
-            <span className="truncate">{cmd.name}</span>
-            {cmd.category && (
-              <span className="text-[10px] text-text-muted bg-surface-primary px-1.5 py-0.5 rounded ml-auto">
-                {cmd.category}
-              </span>
-            )}
-          </button>
-        )}
       />
       <HostPickerPopover
         open={picker !== null}
@@ -2936,26 +3433,7 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
 }
 ```
 
-**注意 render prop 與 onClick：** `<CommandSlot>` 預設 button 已含 `onClick`，但提供 `render` 時 wrapper 是 `<span>`（見 Task 1b.1 實作 L979）。我們需要**改用 default button** 才能讓 executor 跑；這代表此 task 不傳 `render` prop，採用 default 渲染（chip 樣式不適合 menu 列表，但 v1 可接受；若 reviewer 要求 menu 列表外觀，需要在 Task 1b.1 補一個 `containerClassName` / `itemClassName` prop，或讓 `render` 包外層 + 提供 onClick，二擇一）。
-
-**簡化決議：** **保持 default 渲染**（不傳 render），用 `containerClassName` 覆蓋 `flex flex-wrap gap-1.5`（若 Task 1b.1 沒提供，需擴 `<CommandSlot>` 介面 — 在此 task 內微擴）。
-
-→ **追加 sub-step 0**: 擴 `<CommandSlot>` 加一個 optional `containerClassName?: string` prop，預設沿用既有 toolbar 樣式；context menu 用 `flex flex-col`。修改 `spa/src/components/CommandSlot.tsx` 與其 test。Diff：
-
-```tsx
-interface Props {
-  mountTo: QuickCommandSlotId
-  ctx: SlotContext
-  executor: SlotExecutor
-  render?: SlotRenderer
-  containerClassName?: string  // ← new
-}
-
-// in JSX:
-<div className={containerClassName ?? 'flex flex-wrap items-center gap-1.5'} role="toolbar" aria-label="Quick commands">
-```
-
-並在 `WorkspaceQuickCommandsContextMenu` 改傳 `containerClassName="flex flex-col"`。
+註（codex round-1 B7 解決舊版「render prop 與 onClick 矛盾」）：原本的舊 plan 同時傳 `render` 與 `executor`，但 CommandSlot 在有 `render` 時包 `<span>` 不掛 onClick → executor 永遠不跑。新版只用 `containerClassName="flex flex-col"` 改 layout，**不**傳 `render`，default button 帶 onClick 正常觸發 executor。CommandSlot 的 `containerClassName` prop 已在 Task 1b.1 加入。
 
 更新後 `WorkspaceContextMenu.tsx`：
 
@@ -3038,7 +3516,81 @@ feat(spa): mount WORKSPACE_ACTIONS slot in workspace right-click context menu
 
 ---
 
-### Task 1b.5b: Workspace 入口 (ii) — `WorkspaceQuickActionsPopover` + WorkspaceRow Plus hover
+### Task 1b.6: Phase 1b 全域驗證
+
+- [ ] **Step 1: Run all SPA tests**
+
+Run: `cd spa && npx vitest run`
+Expected: all pass
+
+- [ ] **Step 2: Run SPA lint**
+
+Run: `cd spa && pnpm run lint`
+Expected: clean
+
+- [ ] **Step 3: Run SPA build**
+
+Run: `cd spa && pnpm run build`
+Expected: clean
+
+- [ ] **Step 4: Run all Go tests**
+
+Run: `go test ./...`
+Expected: all pass
+
+- [ ] **Step 5: Go build**
+
+Run: `go build ./...`
+Expected: clean
+
+- [ ] **Step 6: 手動冒煙（review reviewer 自行操作）**
+
+啟動 daemon + dev SPA，user flow（**Phase 1b 範圍** — 不含 Plus hover popover，後者在 Phase 1b'）：
+1. Settings → Quick Commands → New → 輸入 Name + Command + 勾 Workspace → Save
+2. 在 sidebar Workspace 行 **右鍵** → context menu 出現該 quick command；點擊執行
+3. 應：建 session、送 cmd、自動切到該 session（tab 落在該 workspace 下）
+4. 模擬失敗（停 daemon → 點按鈕 → 應有 toast）；send-keys 失敗的 toast 應顯 'Retry' 按鈕（codex round-1 B4 — create / switch failure 不顯 button）
+
+### Phase 1b 驗收清單
+
+- [x] Settings 頁面可建 / 編 / 刪 commands；mount chips 可多選
+- [x] 對話框 a11y：focus trap / Esc / aria-label / 觸發鍵盤可達
+- [x] 設 mount = WORKSPACE 後，回 sidebar **右鍵** Workspace row 即可看到按鈕（無需 reload）— 此為 Phase 1b 唯一入口；Plus hover popover 在 Phase 1b' ship
+- [x] 點擊按鈕：建 session + 送 keys + 切過去；tab 透過 `insertTab + setActive` 落在正確 workspace
+- [x] 三層失敗 UX 符合 spec §3.3（codex round-1 B4 修正）：
+  - 建 session 失敗 → toast，**無 button**
+  - 送 keys 失敗 → 仍切過去 + toast 帶 **'Retry' button**
+  - 切失敗 → toast，**無 button**
+- [x] 停用 quick-commands module → context menu 入口立即消失（CommandSlot short-circuit）
+- [x] i18n: zh-TW + en 全部 key 齊全（Task 1b.0c 已前置 host_picker / aria / toast keys；1b.4 補 settings keys；`pnpm run lint` 含 locale-completeness 檢查）
+- [x] **Spec v4 — workspace hostId 多數決邊界（§3.2.1 / §3.2.2）：**
+  - workspace 中只有非 tmux-session tabs（如全 dashboard / settings）→ 點 quick command → `HostPickerPopover` 出現 → 選 host → 正常流程（建 session + 送 keys + 切過去）
+  - workspace 中只有 tmux-session tabs（單 host）→ 自動推斷正確 host → **不出 picker**
+  - workspace 中混合多 host tmux-session tabs，多數一個 host → 多數決命中該 host → 不出 picker
+  - workspace 多數決平手 + active tab 是 tmux-session 在多數派內 → 用 active 的 hostId
+  - workspace 多數決平手 + active tab 非 tmux-session → 用 tabs 順序中第一個 winner
+  - workspace 多數決平手 + active tab 是少數派 tmux-session（codex round-1 B1）→ **忽略 active**，走 tabs 順序中第一個 winner
+  - hostId null 時 picker 取消 → no-op，**沒有任何 createSession / send-keys API call**
+  - hostId null 時 picker 選定 → executor 用該 hostId 完成全流程
+
+---
+
+## Phase 1b' — Plus hover popover 過渡入口（獨立 PR）
+
+**目標：** 在已 ship 的 Phase 1b（Settings + 資料層 + 右鍵 context menu）之上，加上 `WorkspaceRow` Plus 按鈕 hover 往左展開的 chip popover；同時設計 mobile/touch fallback。
+
+**為何拆獨立 PR（codex round-1 結構性變更）：**
+- User 標記此入口為**過渡實作** — 未來可能遷移到其他位置或重做為 command palette 風格。
+- 獨立 PR 風險隔離：未來要 revert / replace 整段時，single squash-merge commit 一鍵還原，不影響資料層 / Settings / context menu 的穩定基礎。
+- 1b 已可獨立運作（context menu 是穩定入口；spec §6 對「Settings 出現時必有生效入口」的要求已滿足）。
+
+**前置條件：** Phase 1b PR 已 merge（`<CommandSlot>` / `runWorkspaceSlot` / `HostPickerPopover` / `inferWorkspaceHostId` / i18n keys 全部就緒）。
+
+**Tasks：** 1b'.1（popover + WorkspaceRow Plus hover + mobile/touch fallback）→ 1b'.2（全域驗證）。
+
+---
+
+### Task 1b'.1: `WorkspaceQuickActionsPopover` + WorkspaceRow Plus hover + mobile/touch fallback
 
 **Files:**
 - Create: `spa/src/features/workspace/components/WorkspaceQuickActionsPopover.tsx`
@@ -3047,13 +3599,69 @@ feat(spa): mount WORKSPACE_ACTIONS slot in workspace right-click context menu
 - Modify: `spa/src/features/workspace/components/WorkspaceRow.test.tsx`
 
 **實作策略：**
-- 改造 `WorkspaceRow.tsx` L107-121 的 Plus 按鈕：保留原 click 行為（`onAddTabToWorkspace`）但**外層**多包一個 `<div onMouseEnter={...} onMouseLeave={...} onFocusCapture={...} onBlurCapture={...}>` 作 hover hub。
+- 改造 `WorkspaceRow.tsx` L107-121 的 Plus 按鈕：保留原 click 行為（`onAddTabToWorkspace`）但**外層**多包一個 `<div onMouseEnter={...} onMouseLeave={...} onFocusCapture={...} onBlurCapture={...} onTouchStart={...} onTouchEnd={...}>` 作 hover/touch hub。
 - 該 div 內含 Plus button + 一個 absolute popover（`<WorkspaceQuickActionsPopover>`），popover `right-full mr-1`（Plus 按鈕左側）展開。
 - popover 內部用 `<CommandSlot mountTo=WORKSPACE_ACTIONS>` 渲染 chip 列。
 - Hover 收回邏輯：使用 single boolean state `popoverOpen`；mouseenter Plus 或 popover 任一觸發開啟，mouseleave 整個 hub 觸發關閉（用 wrapper div 圍住兩者，事件冒泡判斷即可）。
 - 鍵盤可達性：Plus 按鈕 focus 時 popover 開啟（`onFocusCapture`），整個 wrapper blur 時關閉（`onBlurCapture` + 比對 `relatedTarget` 是否仍在 wrapper 內）。
 - 視覺 cue：popover 含半透明漸層壓底（`bg-gradient-to-l from-surface-secondary/0 to-surface-secondary/95` 或同等 token）。
 - **Plus 原本 hover 才顯**（L117 `opacity-0 group-hover/ws-header:opacity-100`）— 此邏輯保留。
+
+**Mobile / touch fallback（codex round-1 C17）：**
+
+桌面 hover 不存在於觸控裝置；在沒設計 fallback 的前提下，行動裝置 user **完全無法觸發 popover**。設計選擇：
+
+- **Long-press 開 popover + tap chip 執行**（建議方案，符合行動裝置慣例）
+  - `onTouchStart` 記下時間戳 + `setTimeout(500ms)` 觸發 `setPopoverOpen(true)`
+  - `onTouchEnd` 在 500ms 內取消 timer → 視為一般 click（執行原本的 `onAddTabToWorkspace`）
+  - popover 開啟後：點 popover 外（document `pointerdown` 偵測 hub 外）→ 收回；tap chip → 執行 executor
+  - 不採 tap-toggle（先點開 popover、再點 chip）的原因：兩次 tap 才能執行單一動作，比 long-press 模型多一步
+
+實作要點：
+```tsx
+const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+const longPressFiredRef = useRef(false)
+
+const handleTouchStart = () => {
+  longPressFiredRef.current = false
+  longPressTimerRef.current = setTimeout(() => {
+    longPressFiredRef.current = true
+    setPopoverOpen(true)
+  }, 500)
+}
+
+const handleTouchEnd = () => {
+  if (longPressTimerRef.current) {
+    clearTimeout(longPressTimerRef.current)
+    longPressTimerRef.current = null
+  }
+  // 若 long-press 沒觸發 → 視為一般 tap，讓 button onClick 自然處理
+  // 若 long-press 已觸發 → 不執行 add-tab，等 user 在 popover 內 tap chip
+}
+
+// onClick 仍掛 add-tab；touch 流：若 longPressFiredRef.current === true 則阻擋預設 click（瀏覽器 touch → click 兼容性）
+const handleClick = (e: React.MouseEvent) => {
+  if (longPressFiredRef.current) {
+    e.preventDefault()
+    e.stopPropagation()
+    return
+  }
+  e.stopPropagation()
+  onAddTabToWorkspace(workspace.id)
+}
+
+// document-level pointerdown to close popover when tapping outside the hub
+useEffect(() => {
+  if (!popoverOpen) return
+  const onPointer = (e: PointerEvent) => {
+    if (!hubRef.current?.contains(e.target as Node | null)) {
+      setPopoverOpen(false)
+    }
+  }
+  document.addEventListener('pointerdown', onPointer)
+  return () => document.removeEventListener('pointerdown', onPointer)
+}, [popoverOpen])
+```
 
 **Spec v4 hostId 解析：** WorkspaceRow 內以 `inferWorkspaceHostId(workspace, useTabStore.getState().tabs)` 取 hostId（不再用 `useHostStore.activeHostId` fallback）。多數決回 null 時 chip 仍顯示（`hostId={null}` 傳給 popover）；點擊 chip 由 popover 內部開 `HostPickerPopover` 等 user 選定後跑 executor。
 
@@ -3131,37 +3739,159 @@ describe('WorkspaceQuickActionsPopover', () => {
 })
 ```
 
-並於 `WorkspaceRow.test.tsx` 追加 hover 行為測試：
+並於 `WorkspaceRow.test.tsx` 追加 hover / touch / no-bindings 三組行為測試（codex round-1 B8 — full executable bodies；C17 — mobile/touch fallback；vi.useFakeTimers for long-press timing）：
 
 ```tsx
-it('opens popover on Plus hover, closes on mouseleave (with WORKSPACE_ACTIONS bindings)', () => {
-  // 既有 ws-header render setup（保持原 props 模式）
-  // 設定一個 WORKSPACE_ACTIONS binding
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent, act } from '@testing-library/react'
+import { WorkspaceRow } from './WorkspaceRow'
+import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
+import { useHostStore } from '../../../stores/useHostStore'
+import { useTabStore } from '../../../stores/useTabStore'
+import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
+import { clearModuleRegistry, registerModule } from '../../../lib/module-registry'
+
+function setupHoverPopoverFixtures(opts: { withBindings: boolean }) {
   useQuickCommandStore.setState({
-    global: [{ id: 'cmd-x', name: 'X', command: 'x' }],
+    global: opts.withBindings ? [{ id: 'cmd-x', name: 'X', command: 'x' }] : [],
     byHost: {},
-    bindings: { 'cmd-x': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS] },
+    bindings: opts.withBindings ? { 'cmd-x': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS] } : {},
   })
-  // 確保 hostId 路徑解析成功（mock useHostStore.activeHostId 或 workspace.hostId）
-  // … render(<WorkspaceRow … />) …
+  useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+  useHostStore.setState({
+    hosts: { h1: { id: 'h1', name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 } },
+    hostOrder: ['h1'],
+    runtime: { h1: { status: 'connected' } },
+    activeHostId: 'h1',
+  })
+  // workspace has a tmux-session tab so inferWorkspaceHostId returns 'h1' (no picker prompt)
+  useTabStore.setState({
+    tabs: {
+      t1: {
+        id: 't1', pinned: false, locked: false, createdAt: 0,
+        layout: {
+          type: 'leaf',
+          pane: {
+            id: 'p1',
+            content: {
+              kind: 'tmux-session', hostId: 'h1', sessionCode: 'sess', mode: 'terminal',
+              cachedName: 'x', tmuxInstance: '',
+            },
+          },
+        },
+      },
+    },
+    tabOrder: ['t1'],
+    activeTabId: 't1',
+  } as Partial<ReturnType<typeof useTabStore.getState>> as never)
+  clearModuleRegistry()
+  registerModule({ id: 'quick-commands', name: 'Quick Commands', disableable: true })
+}
 
-  // 預設未 hover → popover 不在 DOM
-  expect(screen.queryByLabelText(/^X/)).toBeNull()
+const baseProps = {
+  workspace: { id: 'w1', name: 'WS', tabs: ['t1'], activeTabId: 't1', moduleConfig: {} },
+  isActive: false,
+  isExpanded: true,
+  showTabs: true,
+  workspaceTabs: [],
+  selectedTabId: null,
+  onSelect: vi.fn(),
+  onToggleExpanded: vi.fn(),
+  onAddTabToWorkspace: vi.fn(),
+  onContextMenu: vi.fn(),
+  onSelectTab: vi.fn(),
+  onCloseTab: vi.fn(),
+  onTabContextMenu: vi.fn(),
+  // … 其餘必要 props 依 WorkspaceRow 實際介面補
+}
 
-  // hover Plus → popover 顯示
-  fireEvent.mouseEnter(screen.getByLabelText(/Add tab to/i).parentElement!)
-  expect(screen.getByLabelText(/^X/)).toBeInTheDocument()
+describe('WorkspaceRow — Plus hover popover (Phase 1b\\')', () => {
+  beforeEach(() => setupHoverPopoverFixtures({ withBindings: true }))
 
-  // mouseleave wrapper → popover 收回
-  fireEvent.mouseLeave(screen.getByLabelText(/Add tab to/i).parentElement!)
-  expect(screen.queryByLabelText(/^X/)).toBeNull()
+  it('opens popover on Plus hover, closes on mouseleave', () => {
+    render(<WorkspaceRow {...(baseProps as never)} />)
+    const plusBtn = screen.getByLabelText(/Add tab to/i)
+    const hub = plusBtn.parentElement!
+
+    // 預設未 hover → chip 不在 DOM
+    expect(screen.queryByLabelText(/^X/)).toBeNull()
+
+    // hover Plus → popover 顯示
+    fireEvent.mouseEnter(hub)
+    expect(screen.getByLabelText(/^X/)).toBeInTheDocument()
+
+    // mouseleave wrapper → popover 收回
+    fireEvent.mouseLeave(hub)
+    expect(screen.queryByLabelText(/^X/)).toBeNull()
+  })
+
+  it('does NOT open popover when no WORKSPACE_ACTIONS bindings exist', () => {
+    setupHoverPopoverFixtures({ withBindings: false })
+    render(<WorkspaceRow {...(baseProps as never)} />)
+    const plusBtn = screen.getByLabelText(/Add tab to/i)
+    fireEvent.mouseEnter(plusBtn.parentElement!)
+    expect(screen.queryByRole('toolbar', { name: /Quick commands|快速指令/i })).toBeNull()
+  })
 })
 
-it('does NOT open popover when no WORKSPACE_ACTIONS bindings exist', () => {
-  useQuickCommandStore.setState({ bindings: {} })
-  // … render WorkspaceRow …
-  fireEvent.mouseEnter(screen.getByLabelText(/Add tab to/i).parentElement!)
-  expect(screen.queryByRole('toolbar', { name: /Quick commands/i })).toBeNull()
+describe('WorkspaceRow — touch fallback (codex round-1 C17)', () => {
+  beforeEach(() => {
+    setupHoverPopoverFixtures({ withBindings: true })
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('long-press (>=500ms) on Plus opens the popover; tap chip executes', () => {
+    render(<WorkspaceRow {...(baseProps as never)} />)
+    const plusBtn = screen.getByLabelText(/Add tab to/i)
+    const hub = plusBtn.parentElement!
+
+    // touch start → wait 500ms → long-press fires
+    fireEvent.touchStart(hub)
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(screen.getByLabelText(/^X/)).toBeInTheDocument()
+    fireEvent.touchEnd(hub)
+    // popover stays open (long-press fired)
+    expect(screen.getByLabelText(/^X/)).toBeInTheDocument()
+  })
+
+  it('short tap (<500ms) on Plus triggers add-tab, NOT popover', () => {
+    const onAddTabToWorkspace = vi.fn()
+    render(<WorkspaceRow {...(baseProps as never)} onAddTabToWorkspace={onAddTabToWorkspace} />)
+    const plusBtn = screen.getByLabelText(/Add tab to/i)
+
+    fireEvent.touchStart(plusBtn.parentElement!)
+    act(() => {
+      vi.advanceTimersByTime(200) // less than 500ms
+    })
+    fireEvent.touchEnd(plusBtn.parentElement!)
+    fireEvent.click(plusBtn)
+
+    expect(onAddTabToWorkspace).toHaveBeenCalledWith('w1')
+    expect(screen.queryByLabelText(/^X/)).toBeNull()
+  })
+
+  it('tapping outside the hub closes an open touch-popover', () => {
+    render(<WorkspaceRow {...(baseProps as never)} />)
+    const plusBtn = screen.getByLabelText(/Add tab to/i)
+    const hub = plusBtn.parentElement!
+
+    fireEvent.touchStart(hub)
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(screen.getByLabelText(/^X/)).toBeInTheDocument()
+    fireEvent.touchEnd(hub)
+
+    // tap outside the hub
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByLabelText(/^X/)).toBeNull()
+  })
 })
 ```
 
@@ -3172,7 +3902,7 @@ Expected: FAIL — module not found / popover 不顯示。
 
 - [ ] **Step 3: Implement popover + WorkspaceRow integration**
 
-Create `spa/src/features/workspace/components/WorkspaceQuickActionsPopover.tsx`：
+Create `spa/src/features/workspace/components/WorkspaceQuickActionsPopover.tsx`（codex round-1 B5/B6/C16 — switchToSession 完整 tmux-session 欄位 + workspace insertTab + setActive + aria-label 走 i18n）：
 
 ```tsx
 import { useCallback, useRef, useState } from 'react'
@@ -3181,8 +3911,10 @@ import { HostPickerPopover } from '../../../components/HostPickerPopover'
 import { runWorkspaceSlot } from '../../../lib/slot-executor'
 import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
 import { useTabStore } from '../../../stores/useTabStore'
+import { useWorkspaceStore } from '../../../stores/useWorkspaceStore'
 import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
 import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
+import { useI18nStore } from '../../../stores/useI18nStore'
 
 interface Props {
   workspaceId: string
@@ -3205,6 +3937,7 @@ interface Props {
  * suppress the wrapper.
  */
 export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
+  const t = useI18nStore((s) => s.t)
   const moduleEnabled = useModuleEnabledStore((s) => s.isEnabled('quick-commands'))
   const hasBindings = useQuickCommandStore((s) => {
     const cmds = hostId == null ? s.global : s.getCommands(hostId)
@@ -3224,27 +3957,43 @@ export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
     [],
   )
 
+  // codex round-1 B5/B6 — full openSingletonAndSelect equivalent: complete
+  // tmux-session content fields + insertTab into workspace + setActive.
+  const switchToSession = useCallback(
+    (h: string, sessionCode: string) => {
+      const tabId = useTabStore.getState().openSingletonTab({
+        kind: 'tmux-session',
+        hostId: h,
+        sessionCode,
+        mode: 'terminal',
+        cachedName: sessionCode,
+        tmuxInstance: '',
+      })
+      useWorkspaceStore.getState().insertTab(tabId, workspaceId)
+      useWorkspaceStore.getState().setActiveWorkspace(workspaceId)
+      useTabStore.getState().setActiveTab(tabId)
+    },
+    [workspaceId],
+  )
+
   if (!moduleEnabled || !hasBindings) return null
 
   return (
     <div
       ref={wrapperRef}
       role="group"
-      aria-label="Workspace quick actions"
+      // codex round-1 C16 — i18n key, not hard-coded English
+      aria-label={t('quick_commands.aria.workspace_actions')}
       className="absolute right-full top-1/2 -translate-y-1/2 mr-1 flex items-center gap-1 px-2 py-1 rounded-md bg-gradient-to-l from-surface-secondary/0 to-surface-secondary/95 backdrop-blur-sm shadow-md z-30"
     >
       <CommandSlot
         mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
         ctx={{ hostId, workspaceId }}
+        // codex round-1 C11 — picker race guard
+        busy={picker !== null}
         executor={(cmd, ctx) =>
           runWorkspaceSlot(cmd, ctx, {
-            switchToSession: (h, sessionCode) => {
-              useTabStore.getState().openSingletonTab({
-                kind: 'tmux-session',
-                hostId: h,
-                sessionCode,
-              })
-            },
+            switchToSession,
             resolveHostId,
           })
         }
@@ -3266,10 +4015,10 @@ export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
 }
 ```
 
-修改 `spa/src/features/workspace/components/WorkspaceRow.tsx` Plus 按鈕區段（L107-121）：
+修改 `spa/src/features/workspace/components/WorkspaceRow.tsx` Plus 按鈕區段（L107-121）— 含 codex round-1 C17 的 touch fallback：
 
 ```tsx
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 // … 既有 imports
 import { useTabStore } from '../../../stores/useTabStore'
 import { inferWorkspaceHostId } from '../../../lib/infer-workspace-host-id'
@@ -3280,6 +4029,35 @@ const [popoverOpen, setPopoverOpen] = useState(false)
 const hubRef = useRef<HTMLDivElement>(null)
 const tabsMap = useTabStore((s) => s.tabs)  // 訂閱 tabs 變動，hostId 隨 layout 變化即時更新
 const hostId = inferWorkspaceHostId(workspace, tabsMap)  // string | null
+
+// codex round-1 C17 — touch fallback (long-press 500ms opens popover; tap < 500ms triggers add-tab)
+const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+const longPressFiredRef = useRef(false)
+
+const handleTouchStart = () => {
+  longPressFiredRef.current = false
+  longPressTimerRef.current = setTimeout(() => {
+    longPressFiredRef.current = true
+    setPopoverOpen(true)
+  }, 500)
+}
+const handleTouchEnd = () => {
+  if (longPressTimerRef.current) {
+    clearTimeout(longPressTimerRef.current)
+    longPressTimerRef.current = null
+  }
+  // long-press fired → user is now interacting with popover; do NOT trigger add-tab onClick.
+}
+useEffect(() => {
+  if (!popoverOpen) return
+  const onPointer = (e: PointerEvent) => {
+    if (!hubRef.current?.contains(e.target as Node | null)) {
+      setPopoverOpen(false)
+    }
+  }
+  document.addEventListener('pointerdown', onPointer)
+  return () => document.removeEventListener('pointerdown', onPointer)
+}, [popoverOpen])
 
 // 改 Plus 區段（保留原條件 showTabs）：
 {showTabs && (
@@ -3295,12 +4073,21 @@ const hostId = inferWorkspaceHostId(workspace, tabsMap)  // string | null
         setPopoverOpen(false)
       }
     }}
+    onTouchStart={handleTouchStart}
+    onTouchEnd={handleTouchEnd}
+    onTouchCancel={handleTouchEnd}
   >
     <button
       type="button"
       aria-label={t('nav.add_tab_to_workspace', { name: workspace.name })}
       title={t('nav.add_tab_to_workspace', { name: workspace.name })}
       onClick={(e) => {
+        // codex round-1 C17 — if long-press fired, suppress click (touch → click compat)
+        if (longPressFiredRef.current) {
+          e.preventDefault()
+          e.stopPropagation()
+          return
+        }
         e.stopPropagation()
         onAddTabToWorkspace(workspace.id)
       }}
@@ -3316,7 +4103,7 @@ const hostId = inferWorkspaceHostId(workspace, tabsMap)  // string | null
 )}
 ```
 
-註：popover 觸發 hover 時 Plus 仍是 hover 中（同一個 group），不會閃。`WorkspaceQuickActionsPopover` 內部已 short-circuit 模組停用 / 無 binding；hostId 為 null 時 chip 仍顯示（spec v4 §3.2.2 — picker 會在點擊時開）。
+註：popover 觸發 hover 時 Plus 仍是 hover 中（同一個 group），不會閃。`WorkspaceQuickActionsPopover` 內部已 short-circuit 模組停用 / 無 binding；hostId 為 null 時 chip 仍顯示（spec v4 §3.2.2 — picker 會在點擊時開）。Touch 流程：long-press 500ms 開 popover；短 tap 走原本 click。document `pointerdown` 偵測 hub 外點擊以收回。
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -3326,12 +4113,12 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```
-feat(spa): add hover popover for WORKSPACE_ACTIONS chips beside WorkspaceRow Plus button
+feat(spa): add hover/long-press popover for WORKSPACE_ACTIONS chips beside WorkspaceRow Plus button
 ```
 
 ---
 
-### Task 1b.6: Phase 1b 全域驗證
+### Task 1b'.2: Phase 1b' 全域驗證
 
 - [ ] **Step 1: Run all SPA tests**
 
@@ -3348,44 +4135,29 @@ Expected: clean
 Run: `cd spa && pnpm run build`
 Expected: clean
 
-- [ ] **Step 4: Run all Go tests**
+- [ ] **Step 4: 手動冒煙（review reviewer 自行操作）**
 
-Run: `go test ./...`
-Expected: all pass
+桌面：
+1. Settings → Quick Commands → 確認已有一個 mount=Workspace 的 command
+2. sidebar Workspace 行 hover Plus 按鈕 → 左側 popover 展開 chip
+3. 點擊 chip → 建 session + 送 cmd + 切過去
+4. mouseleave hub → popover 收回
+5. 鍵盤 Tab focus 到 Plus → popover 開；blur 整個 hub → popover 收
 
-- [ ] **Step 5: Go build**
+行動裝置 / 觸控（codex round-1 C17）：
+6. iOS Safari 或 Android Chrome 連上 dev URL（`https://*.mlab.host:5174`）
+7. 在 sidebar Plus 按鈕做 long-press（按住 ≥500ms 不放）→ popover 展開
+8. 仍按住手指 → tap chip → 建 session + 送 cmd + 切過去
+9. 短 tap Plus（<500ms）→ 應觸發原本的 add-tab，**不**展開 popover
+10. popover 開啟時 tap 螢幕其他位置 → popover 收回
 
-Run: `go build ./...`
-Expected: clean
+### Phase 1b' 驗收清單
 
-- [ ] **Step 6: 手動冒煙（review reviewer 自行操作）**
-
-啟動 daemon + dev SPA，user flow：
-1. Settings → Quick Commands → New → 輸入 Name + Command + 勾 Workspace → Save
-2. 在 sidebar Workspace 行 **右鍵** → context menu 出現該 quick command；點擊執行
-3. 在 sidebar Workspace 行 **hover Plus 按鈕** → 左側 popover 展開 chip；點擊執行
-4. 兩條路徑都應：建 session、送 cmd、自動切到該 session
-5. 模擬失敗（停 daemon → 點按鈕 → 應有 toast）；send-keys 失敗的 toast 應顯 'Retry' 按鈕（Task 1b.1.5 + 1b.2 共同支撐）
-
-### Phase 1b 驗收清單
-
-- [x] Settings 頁面可建 / 編 / 刪 commands；mount chips 可多選
-- [x] 對話框 a11y：focus trap / Esc / aria-label / 觸發鍵盤可達
-- [x] 設 mount = WORKSPACE 後，回 sidebar 即可在「Workspace 右鍵 menu」與「Plus hover popover」兩個入口看到按鈕（無需 reload）
-- [x] 兩個入口共用同一個 executor，行為一致
 - [x] Plus hover popover：mouseleave Plus AND popover 收回；鍵盤 focus 同等於 hover；無 binding 時不展開
-- [x] 點擊按鈕：建 session + 送 keys + 切過去
-- [x] 三層失敗 UX 符合 spec §3.3：建失敗 / 送 keys 失敗仍切過去 + **toast 顯 'Retry' 按鈕** / 切失敗 toast
-- [x] 停用 quick-commands module → 兩個入口皆立即消失（CommandSlot short-circuit）
-- [x] i18n: zh-TW + en 全部 key 齊全（含新增 `quick_commands.toast.retry` + 4 個 `quick_commands.host_picker.*`；`pnpm run lint` 含 locale-completeness 檢查）
-- [x] **Spec v4 — workspace hostId 多數決邊界（§3.2.1 / §3.2.2）：**
-  - workspace 中只有非 tmux-session tabs（如全 dashboard / settings）→ 點 quick command → `HostPickerPopover` 出現 → 選 host → 正常流程（建 session + 送 keys + 切過去）
-  - workspace 中只有 tmux-session tabs（單 host）→ 自動推斷正確 host → **不出 picker**
-  - workspace 中混合多 host tmux-session tabs，多數一個 host → 多數決命中該 host → 不出 picker
-  - workspace 多數決平手 + active tab 是 tmux-session 在多數派內 → 用 active 的 hostId
-  - workspace 多數決平手 + active tab 非 tmux-session → 用 tabs 順序中第一個 winner
-  - hostId null 時 picker 取消 → no-op，**沒有任何 createSession / send-keys API call**
-  - hostId null 時 picker 選定 → executor 用該 hostId 完成全流程
+- [x] Long-press 500ms 開 popover；tap chip 執行；short tap 走原 click（C17 mobile/touch fallback）
+- [x] 點擊 hub 外（document pointerdown）→ popover 收回
+- [x] 行為與 Phase 1b context menu 入口共用同一 executor，結果一致
+- [x] hostId null 時 popover 仍顯示，chip 點擊觸發 HostPickerPopover
 
 ---
 
@@ -3413,17 +4185,35 @@ Expected: clean
 
 Edit `spa/src/components/hosts/SessionsSection.test.tsx`：
 - 若有測試斷言「session row 顯示 quick command 按鈕」，改為斷言「session row 不再有該按鈕」（或 `getAllByLabelText(/Quick Command/i)` 為空）
-- 若沒對應測試，新增一條保護性測試：
+- 若沒對應測試，新增一條保護性測試（codex round-1 B8 — full executable body）：
 
 ```tsx
-it('does NOT render v1 QuickCommandMenu inside session rows (moved to new-session adjacency, Phase 1c)', () => {
-  // 既有 setup：mock host / sessions store，render <SessionsSection hostId="h1" />
-  // 假設 v1 QuickCommandMenu 的 trigger 有 aria-label 含 "Quick Commands"
-  expect(screen.queryAllByRole('button', { name: /quick commands/i }).length).toBe(0)
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import { SessionsSection } from './SessionsSection'
+import { useHostStore } from '../../stores/useHostStore'
+
+describe('SessionsSection — v1 QuickCommandMenu removal (Phase 1c)', () => {
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1', name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 } },
+      hostOrder: ['h1'],
+      runtime: { h1: { status: 'connected' } },
+      activeHostId: 'h1',
+      // sessions 視 SessionsSection 內部資料來源不同，可能在 useHostStore 下
+      // 或由 hostFetch hook 拉取；subagent 實作時依實際 API 補 fixture（≥1 個 session）
+    })
+  })
+
+  it('does NOT render v1 QuickCommandMenu inside session rows (moved to new-session adjacency, Phase 1c)', () => {
+    render(<SessionsSection hostId="h1" />)
+    // v1 QuickCommandMenu 的 trigger 有 aria-label "Quick Commands" — 確認 0 個
+    expect(screen.queryAllByRole('button', { name: /quick commands/i }).length).toBe(0)
+  })
 })
 ```
 
-註：實際 aria-label 由 `QuickCommandMenu` 元件決定（subagent 實作前先讀 `spa/src/components/QuickCommandMenu.tsx` 確認 trigger 的 accessible name；若不同請對齊）。
+註：實際 aria-label 由 `QuickCommandMenu` 元件決定（subagent 實作前先讀 `spa/src/components/QuickCommandMenu.tsx` 確認 trigger 的 accessible name；若不同請對齊）。Sessions fixture（至少 1 row 才會渲染 row 區段）也須補；若 SessionsSection 內部 sessions 來自 `useHostStore.sessions[hostId]` 則直接 setState 加；若來自 `hostFetch` 則透過 `vi.mock('../../lib/host-api', ...)` 注入。
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -3510,7 +4300,7 @@ import { QUICK_COMMAND_SLOTS } from '../../lib/quick-command-slots'
 import { useTabStore } from '../../stores/useTabStore'
 ```
 
-修改 L165-175 區段：
+修改 L165-175 區段（codex round-1 B5 — switchToSession 補完整 tmux-session content 欄位；HOST_ACTIONS 不需 workspace insertTab）：
 
 ```tsx
 <div className="flex items-center justify-between mb-4">
@@ -3522,11 +4312,18 @@ import { useTabStore } from '../../stores/useTabStore'
       executor={(cmd, ctx) =>
         runWorkspaceSlot(cmd, ctx, {
           switchToSession: (h, sessionCode) => {
+            // codex round-1 B5 — fill ALL tmux-session content fields per types/tab.ts:38
             useTabStore.getState().openSingletonTab({
               kind: 'tmux-session',
               hostId: h,
               sessionCode,
+              mode: 'terminal',
+              cachedName: sessionCode,
+              tmuxInstance: '',
             })
+            // codex round-1 B6 — HOST_ACTIONS does NOT insert into a workspace
+            // (host detail page is a standalone tab, not a workspace context).
+            // We just open the session tab and let user navigate via tab strip.
           },
           // HOST_ACTIONS 入口必有 hostId；resolveHostId 不會被呼叫。仍提供
           // safety-net noop 以滿足型別契約（spec v4）。
@@ -3600,11 +4397,18 @@ Expected: clean
 
 ## Phase 完成順序檢查清單（送 reviewer 前確認）
 
+**新 Phase 順序（codex round-1 結構性變更）：1a → 1b → 1b' → 1c。**
+
 - [ ] Phase 1a 已 merge → main，且 alpha bump 完成（或一個 PR sequence 規劃中）
-- [ ] Phase 1b 已 merge → main，**Settings UI 與 WORKSPACE_ACTIONS 兩個入口（context menu + hover popover）同 PR**（不可拆）
-- [ ] Phase 1b 內 task 順序：**1b.0a（inferWorkspaceHostId helper）→ 1b.0b（HostPickerPopover 元件）→ 1b.1（CommandSlot）→ 1b.1.5（Toast schema 擴充）→ 1b.2（slot-executor + resolveHostId）→ 1b.3（Settings UI）→ 1b.4（settings contribution + i18n）→ 1b.5a（context menu 入口）→ 1b.5b（hover popover 入口）→ 1b.6（全域驗證）**
-- [ ] Phase 1c 已 merge → main，**1c.1a（移除 SessionsSection row 的 v1 整合）→ 1c.1b（new-session 旁掛 HOST_ACTIONS）兩個 commits 同 PR、依序 ship**（先 commit 純減量，再 commit 純新增；diff 易 review）
+- [ ] **Phase 1b 已 merge → main**，含 Settings UI + 資料層 + Workspace **右鍵 context menu** 入口（單一 PR）
+  - Phase 1b 內 task 順序：**1b.0a（inferWorkspaceHostId helper）→ 1b.0b（HostPickerPopover 元件）→ 1b.0c（i18n keys 前置 — codex round-1 B9）→ 1b.1（CommandSlot + busy prop）→ 1b.1.5（Toast schema 擴充 — codex round-1 B4）→ 1b.2（slot-executor + resolveHostId）→ 1b.3（Settings UI + chip 方向鍵 — codex round-1 C15）→ 1b.4（settings contribution + 剩餘 i18n）→ 1b.5a（context menu 入口 — codex round-1 B5/B6/B7/B8 修正）→ 1b.6（全域驗證）**
+  - 此 PR 滿足 spec §6「Settings 首次出現時至少一個 slot 生效」要求 — context menu 是穩定入口
+- [ ] **Phase 1b' 已 merge → main**，**Plus hover popover 過渡入口獨立 PR**（codex round-1 結構性變更 — 風險隔離）
+  - Phase 1b' 內 task 順序：**1b'.1（WorkspaceQuickActionsPopover + WorkspaceRow Plus hover + mobile/touch fallback — codex round-1 C17）→ 1b'.2（全域驗證）**
+  - User 標記此入口為過渡實作；獨立 PR 便於日後 revert / replace
+- [ ] Phase 1c 已 merge → main，**1c.1a（移除 SessionsSection row 的 v1 整合 — codex round-1 B8）→ 1c.1b（new-session 旁掛 HOST_ACTIONS — codex round-1 B5）兩個 commits 同 PR、依序 ship**（先 commit 純減量，再 commit 純新增；diff 易 review）
 - [ ] Phase 1a 不可單獨 ship 在沒有 Phase 1b 計畫的情況（純資料層 user 看不到任何成果，會困惑）— 但 1a + 1b 兩個 PR 接力 ship 是允許的（spec §6 只要求 Settings UI 出現時必有 slot 生效）
+- [ ] Phase 1b' 與 1c 之間順序可彈性（user 可決定先 ship 哪個）；建議 1b' → 1c 因為 1b' 是 Phase 1b 的延伸，1c 是新 mount 點
 
 ## 範圍邊界（Phase 1 不做）
 
@@ -3627,5 +4431,7 @@ Expected: clean
 2. 一個 task 一個 commit，commit message 用 conventional commit + Co-Authored-By trailer
 3. zustand test setState **顯式列出** `global` / `byHost` / `bindings` 三個 mutable fields；**不要**只寫 `setState({ bindings: {...} })`，會 wipe 其他 state（feedback_zustand_harness_setstate.md）。同樣原則套用 `useHostStore`（測試需要時列出 `hosts` / `hostOrder` / `runtime` / `activeHostId` 四個欄位）。
 4. 任何測試 / lint / build 指令在主 Claude 機器跑（feedback_codex_sandbox_no_install.md）
-5. **Phase 1b 任務依賴**：1b.0a 與 1b.0b 必須先於其他 1b.* 任務完成；1b.1（CommandSlot）依賴 1b.0a 的型別 + 1b.0b 不直接依賴但 picker 是後續 caller 必用；1b.2（executor）依賴 1b.0b 的 `resolveHostId` callback 契約；1b.5a / 1b.5b / 1c.1b 各自整合 picker UI
-5. PR 完成後委派 codex 兩輪 review（標準 + 攻擊/防守/體質）；發現問題彙整成表格（信心 / 關聯 / 複雜度）後決定即修 vs 開 issue 追蹤
+5. **Phase 1b 任務依賴**（codex round-1 後）：1b.0a → 1b.0b → 1b.0c（i18n 必須前置）→ 1b.1（CommandSlot）→ 1b.1.5（toast schema 擴充）→ 1b.2（executor）→ 1b.3 → 1b.4 → 1b.5a → 1b.6。其中 1b.5a 的 switchToSession 必須做完整 `openSingletonAndSelect` 等價邏輯（codex round-1 B5/B6）：openSingletonTab（含 mode/cachedName/tmuxInstance 完整欄位）→ insertTab → setActiveWorkspace + setActiveTab。
+6. **Phase 1b' 任務依賴**：必須在 Phase 1b PR merge 後才能開工；`<CommandSlot>`、`<HostPickerPopover>`、`runWorkspaceSlot`、`inferWorkspaceHostId`、i18n keys 全部就緒後再實作 hover popover + 與 1b.5a 同等的 switchToSession 邏輯。
+7. PR 完成後委派 codex 兩輪 review（標準 + 攻擊/防守/體質）；發現問題彙整成表格（信心 / 關聯 / 複雜度）後決定即修 vs 開 issue 追蹤
+8. **Toast 行為的 spec §3.3 對應**（codex round-1 B4）：create-session failure → `toast.show(msg)` 不傳 action；switch-to-session failure → `toast.show(msg)` 不傳 action；send-keys failure → `toast.show(msg, retryFn, t('quick_commands.toast.retry'))`。元件渲染規則：`toast.action == null` → 不渲染 button。
