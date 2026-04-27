@@ -13,6 +13,7 @@ import { ManageBuffersNewTabCard } from '../../components/editor/ManageBuffersNe
 import { EditorHomePathWorkspaceSection } from '../../components/editor/EditorHomePathWorkspaceSection'
 import { EditorHomePathHostSection } from '../../components/editor/EditorHomePathHostSection'
 import { EditorPurdexSettingsSection } from '../../components/settings/EditorPurdexSettingsSection'
+import { EditorLinkDetectionSection } from '../../components/settings/editor/EditorLinkDetectionSection'
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'])
 const PDF_EXTS = new Set(['pdf'])
@@ -36,6 +37,13 @@ export const editorModuleDefinition: ModuleDefinition = {
       order: 9,
       labelKey: 'settings.section.editor',
       component: EditorPurdexSettingsSection,
+    },
+    {
+      localId: 'link-detect',
+      scope: 'purdex',
+      order: 8,
+      labelKey: 'settings.editor.link_detect.title',
+      component: EditorLinkDetectionSection,
     },
     {
       localId: 'workspace-home-path',
