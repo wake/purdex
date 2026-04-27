@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.235] - 2026-04-28
+
+### Fix(electron): stabilize mac signing for updates (#672)
+
+Stabilize macOS app identity for packaged builds and dev updates.
+
+- Stop explicitly disabling Electron macOS signing and verify final moved app bundles.
+- Re-sign the `.app` after dev update swaps bundled `out/` resources, preserving `dev.wake.purdex` identity.
+- Track `scripts/build-electron.mjs` in full-rebuild detection and add signing guard tests.
+
 ## [1.0.0-alpha.234] - 2026-04-27
 
 ### Feat(probe): probe primitive + cc + helper + dev log (#670)
