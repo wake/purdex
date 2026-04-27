@@ -1,5 +1,6 @@
 import { useRef } from 'react'
-import { getPaneRenderer } from '../lib/module-registry'
+import type { ComponentType } from 'react'
+import { resolvePaneRenderer } from '../lib/module-registry'
 import { getLayoutKey, collectLeaves, swapPaneContent } from '../lib/pane-tree'
 import { PaneSplitter } from './PaneSplitter'
 import { PaneHeader } from './PaneHeader'
@@ -8,7 +9,9 @@ import { isGrid4 } from './pane-layout-grid'
 import { executeCommand } from '../lib/execute-command'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
-import type { PaneLayout, SplitLayout } from '../types/tab'
+import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
+import { DisabledModulePlaceholder } from './modules/DisabledModulePlaceholder'
+import type { PaneLayout, Pane, SplitLayout } from '../types/tab'
 
 function isSplit(layout: PaneLayout): layout is SplitLayout {
   return layout.type === 'split'
@@ -25,15 +28,29 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
   const containerRef = useRef<HTMLDivElement>(null)
 
   if (layout.type === 'leaf') {
-    const config = getPaneRenderer(layout.pane.content.kind)
-    if (!config) {
+    const resolution = resolvePaneRenderer(
+      layout.pane.content.kind,
+      useModuleEnabledStore.getState().isEnabled,
+    )
+    if (resolution.kind === 'unknown') {
       return (
         <div className="flex-1 flex items-center justify-center text-text-muted">
-          No renderer for &quot;{layout.pane.content.kind}&quot;
+          No renderer for &quot;{resolution.paneKind}&quot;
         </div>
       )
     }
-    const Component = config.component
+    let Component: ComponentType<{ pane: Pane; isActive: boolean }>
+    if (resolution.kind === 'render') {
+      Component = resolution.component
+    } else {
+      // resolution.kind === 'disabled' — render the module-supplied custom
+      // component or fall back to the generic placeholder, ignoring pane /
+      // isActive (the disabled state has nothing meaningful to do with them).
+      const Custom = resolution.customComponent ?? DisabledModulePlaceholder
+      const moduleId = resolution.moduleId
+      const paneKind = resolution.paneKind
+      Component = () => <Custom moduleId={moduleId} paneKind={paneKind} />
+    }
     if (showHeader) {
       const allLeaves = (() => {
         const tab = useTabStore.getState().tabs[tabId]

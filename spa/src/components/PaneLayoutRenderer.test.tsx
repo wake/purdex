@@ -3,11 +3,13 @@ import { render, screen, cleanup } from '@testing-library/react'
 import { PaneLayoutRenderer } from './PaneLayoutRenderer'
 import { isGrid4 } from './pane-layout-grid'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
+import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 import type { PaneLayout } from '../types/tab'
 
 beforeEach(() => {
   cleanup()
   clearModuleRegistry()
+  useModuleEnabledStore.setState({ enabled: {}, baseline: null })
 })
 
 describe('isGrid4', () => {
@@ -208,6 +210,60 @@ describe('PaneLayoutRenderer', () => {
     expect(screen.getByTestId('dash-top')).toBeTruthy()
     expect(screen.getByTestId('dash-bl')).toBeTruthy()
     expect(screen.getByTestId('dash-br')).toBeTruthy()
+  })
+
+  describe('disabled module fallback', () => {
+    it('renders the actual component when the disableable module is enabled', () => {
+      registerModule({
+        id: 'feat-mod',
+        name: 'Feat',
+        disableable: true,
+        panes: [{ kind: 'feat-pane', component: ({ pane }) => <div data-testid="real">real:{pane.id}</div> }],
+      })
+      const layout: PaneLayout = {
+        type: 'leaf',
+        pane: { id: 'p1', content: { kind: 'feat-pane' } as never },
+      }
+      render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
+      expect(screen.getByTestId('real')).toBeTruthy()
+    })
+
+    it('renders DisabledModulePlaceholder when the module is disabled', () => {
+      registerModule({
+        id: 'feat-mod',
+        name: 'Feat',
+        disableable: true,
+        panes: [{ kind: 'feat-pane', component: ({ pane }) => <div data-testid="real">real:{pane.id}</div> }],
+      })
+      useModuleEnabledStore.getState().setEnabled('feat-mod', false)
+      const layout: PaneLayout = {
+        type: 'leaf',
+        pane: { id: 'p1', content: { kind: 'feat-pane' } as never },
+      }
+      render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
+      expect(screen.queryByTestId('real')).toBeNull()
+      expect(screen.getByRole('button', { name: /feat-mod/i })).toBeInTheDocument()
+    })
+
+    it('renders the module-supplied custom disabledComponent when present', () => {
+      const Custom = ({ moduleId, paneKind }: { moduleId: string; paneKind: string }) => (
+        <div data-testid="custom-disabled">custom:{moduleId}:{paneKind}</div>
+      )
+      registerModule({
+        id: 'custom-mod',
+        name: 'Custom',
+        disableable: true,
+        panes: [{ kind: 'custom-pane', component: () => <div data-testid="real" /> }],
+        disabledComponent: Custom,
+      })
+      useModuleEnabledStore.getState().setEnabled('custom-mod', false)
+      const layout: PaneLayout = {
+        type: 'leaf',
+        pane: { id: 'p1', content: { kind: 'custom-pane' } as never },
+      }
+      render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
+      expect(screen.getByTestId('custom-disabled').textContent).toBe('custom:custom-mod:custom-pane')
+    })
   })
 
   it('renders grid-4 layout with 4 pane areas', () => {
