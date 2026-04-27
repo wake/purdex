@@ -1,0 +1,11 @@
+{
+  "kind": "bus-event",
+  "eventType": "session.deleted",
+  "properties": {
+    "sessionID": "ses_fixture_deleted_001",
+    "info": {
+      "id": "ses_fixture_deleted_001",
+      "version": "1.14.23"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "kind": "strong-hook",
+  "hookName": "tool.execute.before",
+  "input": {
+    "sessionID": "ses_fixture_task_001",
+    "callID": "call_fixture_task_001",
+    "tool": "task"
+  },
+  "output": {
+    "args": {
+      "subagent_type": "Explore",
+      "description": "explore process tree",
+      "prompt": "find tmux sessions"
+    }
+  }
+}

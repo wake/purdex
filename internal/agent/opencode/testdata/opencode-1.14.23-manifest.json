@@ -5,8 +5,9 @@
   "normalizedVersion": "1.14.23",
   "auditReport": "docs/specs/2026-04-26-opencode-1.14.23-hook-audit.md",
   "auditedAt": "2026-04-27",
-  "schemaStage": "lite",
-  "schemaStageNotes": "PR-4a-0 Commit 2 manifest — payloadFixtureDir intentionally absent (added in Commit 4 with full schema). Plan v1.3 §2.4 mandates separate lite vs full schemas; this file is the lite stage and must not include payloadFixtureDir until Commit 4.",
+  "schemaStage": "full",
+  "schemaStageNotes": "PR-4a-0 Commit 4 manifest — full schema. payloadFixtureDir present and points at the per-event fixture directory used by OC1 / OC1a. Plan v1.3 §6 ship gate H6.2 (template consumed keys ↔ payload fixtures exact match) is enforced by TestOpenCodeTemplateEventContractsDocumented + TestOpenCodePluginTemplate_UsesVerifiedEvents.",
+  "payloadFixtureDir": "internal/agent/opencode/testdata/opencode-1.14.23-payloads/",
   "catalogSummary": {
     "busEvents": 48,
     "strongHooks": 19,
