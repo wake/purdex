@@ -245,6 +245,29 @@ describe('PaneLayoutRenderer', () => {
       expect(screen.getByRole('button', { name: /feat-mod/i })).toBeInTheDocument()
     })
 
+    it('switches from real component to placeholder when the store toggles enabled→disabled after mount', async () => {
+      const { act } = await import('react')
+      registerModule({
+        id: 'feat-mod',
+        name: 'Feat',
+        disableable: true,
+        panes: [{ kind: 'feat-pane', component: ({ pane }) => <div data-testid="real">real:{pane.id}</div> }],
+      })
+      const layout: PaneLayout = {
+        type: 'leaf',
+        pane: { id: 'p1', content: { kind: 'feat-pane' } as never },
+      }
+      render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
+      expect(screen.getByTestId('real')).toBeInTheDocument()
+
+      await act(async () => {
+        useModuleEnabledStore.getState().setEnabled('feat-mod', false)
+      })
+
+      expect(screen.queryByTestId('real')).toBeNull()
+      expect(screen.getByRole('button', { name: /feat-mod/i })).toBeInTheDocument()
+    })
+
     it('renders the module-supplied custom disabledComponent when present', () => {
       const Custom = ({ moduleId, paneKind }: { moduleId: string; paneKind: string }) => (
         <div data-testid="custom-disabled">custom:{moduleId}:{paneKind}</div>

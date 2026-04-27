@@ -26,6 +26,11 @@ interface Props {
 
 export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  // Subscribe to the enable-state map so a setEnabled(...) toggle invalidates
+  // this component and the disabled-pane fallback flips immediately. The
+  // returned value isn't used directly — `isEnabled` is read fresh from
+  // getState() on each render (it's a stable method on the store).
+  useModuleEnabledStore((s) => s.enabled)
 
   if (layout.type === 'leaf') {
     const resolution = resolvePaneRenderer(
