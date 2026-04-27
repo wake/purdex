@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.239] - 2026-04-28
+
+### Feat(spa): tabs cluster by kind on insert (P2) (#684)
+
+Editor P2 — tab insertion no longer appends every new file to the very end of the workspace tab strip. When a file kind already exists to the right of the active tab, the new tab clusters next to it instead.
+
+- New `findInsertTarget` predicate-based helper (generalized from the previous browser-only `findBrowserInsertTarget`).
+- New `computeClusterInsertTarget` helper anchors on `ws.activeTabId` (workspace-scoped) so async terminal-link opens that race a workspace switch can't return an `afterTabId` belonging to another workspace.
+- New `openClusteredTab` helper guarantees the same `afterTabId` is forwarded to BOTH `useTabStore.openSingletonTab` and `useWorkspaceStore.insertTab` — the TabBar renders from `workspace.tabs`, so the two stores must agree on placement.
+- Three call sites adopt the predicate: `open-browser-tab` (browser-only, refactored), `terminal-link` file-path opener, `FileTreeWorkspaceView`. Editor / image-preview / pdf-preview tabs cluster together; sessions and browser tabs are unaffected.
+- Three rounds of codex review: round-1 caught a tabOrder vs workspace.tabs divergence; round-2 (3-parallel attacker / defender / file-quality) independently flagged a cross-workspace `activeTabId` race; round-3 standard review saw no introduced bugs. Follow-up #685 tracks an intentional gap (existing singleton file tabs not auto-repositioning on re-open).
+
 ## [1.0.0-alpha.238] - 2026-04-28
 
 ### Refactor(spa): extract quick-command-bindings module + split store tests (#682)
