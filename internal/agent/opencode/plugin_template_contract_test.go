@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -683,5 +685,100 @@ func TestOpenCodePluginTemplate_StaleSuppressionWithoutChatMessage(t *testing.T)
 	}
 	if state.suppressIdleForSession["S"] {
 		t.Fatal("suppression should be consumed by the suppressed idle")
+	}
+}
+
+// caseKeyPattern captures Bus event keys from the rendered template's
+// `event` switch (e.g. `case 'session.created':`). The simulator-only
+// OC1 path runs against pluginSimState and never reads the rendered JS,
+// so a silent typo or removed case would not surface there. This static
+// check closes that gap (full Bun-runtime parity is tracked separately).
+var caseKeyPattern = regexp.MustCompile(`case\s+'([\w.]+)'\s*:`)
+
+// strongHookKeyPattern captures top-level strong-hook callback keys from
+// the rendered template (e.g. `'chat.message': async (input, output) =>`).
+var strongHookKeyPattern = regexp.MustCompile(`'([\w.]+)'\s*:\s*async\s*\(input`)
+
+func extractCaseKeys(body string) []string {
+	matches := caseKeyPattern.FindAllStringSubmatch(body, -1)
+	seen := make(map[string]bool, len(matches))
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		if len(m) < 2 || seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		out = append(out, m[1])
+	}
+	sort.Strings(out)
+	return out
+}
+
+func extractStrongHookKeys(body string) []string {
+	matches := strongHookKeyPattern.FindAllStringSubmatch(body, -1)
+	seen := make(map[string]bool, len(matches))
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		if len(m) < 2 || seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		out = append(out, m[1])
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestOpenCodePluginTemplate_RenderedTemplateMatchesContracts statically
+// inspects the JS body returned by renderManagedPlugin and asserts:
+//   - every Bus event in pluginContracts() (Kind="bus-event") appears as
+//     a `case 'X':` in the event switch, and vice versa
+//   - every strong hook in pluginContracts() (Kind="strong-hook") appears
+//     as a top-level `'X': async (input, output) =>` callback, and vice
+//     versa
+//
+// OC1 verifies pluginSimState (a Go mirror of the JS), not the rendered
+// JS itself. If renderManagedPlugin's template silently dropped a case
+// or reverted a key (e.g. session.status -> session.idle), OC1 would
+// stay green because it never reads the rendered string. This test
+// closes that simulator-vs-template gap statically. Full Bun-runtime
+// parity is tracked in a separate follow-up issue.
+func TestOpenCodePluginTemplate_RenderedTemplateMatchesContracts(t *testing.T) {
+	body := renderManagedPlugin("/fake/pdx")
+
+	var expectedBus, expectedHooks []string
+	for _, c := range pluginContracts() {
+		switch c.Kind {
+		case "bus-event":
+			expectedBus = append(expectedBus, c.Event)
+		case "strong-hook":
+			expectedHooks = append(expectedHooks, c.Event)
+		}
+	}
+	sort.Strings(expectedBus)
+	sort.Strings(expectedHooks)
+
+	gotBus := extractCaseKeys(body)
+	if !reflect.DeepEqual(gotBus, expectedBus) {
+		t.Errorf("rendered case keys mismatch\n  got:  %v\n  want: %v", gotBus, expectedBus)
+	}
+
+	gotHooks := extractStrongHookKeys(body)
+	if !reflect.DeepEqual(gotHooks, expectedHooks) {
+		t.Errorf("rendered strong-hook keys mismatch\n  got:  %v\n  want: %v", gotHooks, expectedHooks)
+	}
+}
+
+// TestOpenCodePluginTemplate_RenderedTemplateContainsExpectedFilter
+// guards the Decision 3 / Decision 4 filter line that turns a
+// `session.status` Bus subscription into an idle-only Stop signal. If
+// someone deletes the line, the template would emit Stop on every
+// status transition (busy/retry included), spamming the daemon and
+// flipping the state machine wrong.
+func TestOpenCodePluginTemplate_RenderedTemplateContainsExpectedFilter(t *testing.T) {
+	body := renderManagedPlugin("/fake/pdx")
+	const filterLine = "event.properties.status?.type !== 'idle'"
+	if !strings.Contains(body, filterLine) {
+		t.Fatalf("rendered template missing Decision 3/4 idle filter %q", filterLine)
 	}
 }
