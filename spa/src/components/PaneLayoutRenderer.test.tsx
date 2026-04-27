@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, type RenderResult } from '@testing-library/react'
 import { PaneLayoutRenderer } from './PaneLayoutRenderer'
 import { isGrid4 } from './pane-layout-grid'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
@@ -243,6 +243,38 @@ describe('PaneLayoutRenderer', () => {
       render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
       expect(screen.queryByTestId('real')).toBeNull()
       expect(screen.getByRole('button', { name: /feat-mod/i })).toBeInTheDocument()
+    })
+
+    it('does not flip when the parent re-renders the leaf after a toggle (snapshot at mount)', async () => {
+      const { act } = await import('react')
+      registerModule({
+        id: 'feat-mod',
+        name: 'Feat',
+        disableable: true,
+        panes: [{ kind: 'feat-pane', component: ({ pane }) => <div data-testid="real">real:{pane.id}</div> }],
+      })
+      const layout: PaneLayout = {
+        type: 'leaf',
+        pane: { id: 'p1', content: { kind: 'feat-pane' } as never },
+      }
+
+      const rendered: RenderResult = render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
+      expect(screen.getByTestId('real')).toBeInTheDocument()
+
+      // User toggles editor off in the Switchboard.
+      await act(async () => {
+        useModuleEnabledStore.getState().setEnabled('feat-mod', false)
+      })
+
+      // Parent re-renders the leaf for an unrelated reason (active-tab focus,
+      // showHeader flip, layout-tree swap). The leaf must keep rendering the
+      // real component because the enable map was snapshotted at mount.
+      rendered.rerender(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={false} />)
+      expect(screen.getByTestId('real')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /feat-mod/i })).toBeNull()
+
+      rendered.rerender(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} showHeader />)
+      expect(screen.getByTestId('real')).toBeInTheDocument()
     })
 
     it('does not flip post-mount when the store toggles enabled→disabled (reload required by SPEC contract)', async () => {

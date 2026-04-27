@@ -3,6 +3,32 @@ import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
 import { getModule } from '../lib/module-registry'
 
+/**
+ * Pure version of `isEnabled` that reads from a caller-supplied `enabled`
+ * map instead of the live store state. Used by both the store's own
+ * `isEnabled` action and by render-time snapshots in components that need
+ * to honour the reload-required contract (e.g. PaneLayoutRenderer captures
+ * the map at mount and feeds it into resolvePaneRenderer).
+ */
+export function isModuleEnabledIn(
+  enabled: Record<string, boolean>,
+  moduleId: string,
+): boolean {
+  const override = enabled[moduleId]
+  if (override !== undefined) {
+    // Only honour an override when the module is actually disableable.
+    // Prevents stale persist entries from disabling core modules if
+    // someone flips `disableable` from true → false.
+    const mod = getModule(moduleId)
+    if (mod?.disableable === true) return override
+    return true
+  }
+  // No override — default to enabled. Both disableable:true (user hasn't
+  // opted out) and disableable:false/undefined (not toggleable) resolve to
+  // true.
+  return true
+}
+
 // AR-1 (codex adversarial review #617): persist payload sanitizer.
 // Silently drops malformed entries (non-string keys, non-boolean values,
 // prototype-polluting keys, non-object payloads) so a corrupted
@@ -70,21 +96,7 @@ export const useModuleEnabledStore = create<ModuleEnabledState>()(
         set({ baseline: { ...snapshot } })
       },
 
-      isEnabled: (moduleId) => {
-        const override = get().enabled[moduleId]
-        if (override !== undefined) {
-          // Only honour an override when the module is actually disableable.
-          // Prevents stale persist entries from disabling core modules if
-          // someone flips `disableable` from true → false.
-          const mod = getModule(moduleId)
-          if (mod?.disableable === true) return override
-          return true
-        }
-        // No override — default to enabled. Both disableable:true (user
-        // hasn't opted out) and disableable:false/undefined (not toggleable)
-        // resolve to true.
-        return true
-      },
+      isEnabled: (moduleId) => isModuleEnabledIn(get().enabled, moduleId),
 
       hasPendingChanges: () => {
         const { baseline } = get()

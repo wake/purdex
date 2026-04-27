@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import type { ComponentType } from 'react'
 import { resolvePaneRenderer } from '../lib/module-registry'
 import { getLayoutKey, collectLeaves, swapPaneContent } from '../lib/pane-tree'
@@ -9,7 +9,10 @@ import { isGrid4 } from './pane-layout-grid'
 import { executeCommand } from '../lib/execute-command'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
-import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
+import {
+  useModuleEnabledStore,
+  isModuleEnabledIn,
+} from '../stores/useModuleEnabledStore'
 import { DisabledModulePlaceholder } from './modules/DisabledModulePlaceholder'
 import type { PaneLayout, Pane, SplitLayout } from '../types/tab'
 
@@ -26,21 +29,22 @@ interface Props {
 
 export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  // Snapshot the module-enabled map at component creation. The reload-required
+  // contract — DisabledModulePlaceholder hint, file-opener registry only
+  // reconciling at bootstrap, NewTabPage memoising once — must extend to the
+  // pane renderer too: any later parent re-render (active-tab change,
+  // showHeader flip, layout swap) must NOT cause the leaf to read a fresher
+  // enable state than the rest of the system. Round 4 codex review caught
+  // that an unconditional getState() at render time leaked the live state
+  // through that path; pinning the map in useState fixes it. Going
+  // fully-immediate is tracked in issue #678.
+  const [pinnedEnabled] = useState(() => useModuleEnabledStore.getState().enabled)
+  const isEnabledSnapshot = (moduleId: string) => isModuleEnabledIn(pinnedEnabled, moduleId)
 
   if (layout.type === 'leaf') {
-    // Read isEnabled via getState() rather than subscribing — the SPEC and
-    // DisabledModulePlaceholder both promise "reload required after enabling /
-    // disabling a module", so the renderer intentionally does not flip at
-    // setEnabled time. Round 2 codex review confirmed: subscribing here would
-    // make the pane track the toggle while the file-opener registry / new-tab
-    // providers wait for the next bootstrap, exposing inconsistent behaviour
-    // (e.g. disabled pane showing placeholder while FileTree click still opens
-    // an editor pane). Keeping bootstrap-only reconciliation across the whole
-    // surface is the cheaper way to stay consistent. Going fully-immediate is
-    // a deliberate, larger redesign tracked in a follow-up issue.
     const resolution = resolvePaneRenderer(
       layout.pane.content.kind,
-      useModuleEnabledStore.getState().isEnabled,
+      isEnabledSnapshot,
     )
     if (resolution.kind === 'unknown') {
       return (
