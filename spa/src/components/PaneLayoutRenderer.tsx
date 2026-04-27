@@ -26,13 +26,18 @@ interface Props {
 
 export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
-  // Subscribe to the enable-state map so a setEnabled(...) toggle invalidates
-  // this component and the disabled-pane fallback flips immediately. The
-  // returned value isn't used directly — `isEnabled` is read fresh from
-  // getState() on each render (it's a stable method on the store).
-  useModuleEnabledStore((s) => s.enabled)
 
   if (layout.type === 'leaf') {
+    // Read isEnabled via getState() rather than subscribing — the SPEC and
+    // DisabledModulePlaceholder both promise "reload required after enabling /
+    // disabling a module", so the renderer intentionally does not flip at
+    // setEnabled time. Round 2 codex review confirmed: subscribing here would
+    // make the pane track the toggle while the file-opener registry / new-tab
+    // providers wait for the next bootstrap, exposing inconsistent behaviour
+    // (e.g. disabled pane showing placeholder while FileTree click still opens
+    // an editor pane). Keeping bootstrap-only reconciliation across the whole
+    // surface is the cheaper way to stay consistent. Going fully-immediate is
+    // a deliberate, larger redesign tracked in a follow-up issue.
     const resolution = resolvePaneRenderer(
       layout.pane.content.kind,
       useModuleEnabledStore.getState().isEnabled,

@@ -245,7 +245,7 @@ describe('PaneLayoutRenderer', () => {
       expect(screen.getByRole('button', { name: /feat-mod/i })).toBeInTheDocument()
     })
 
-    it('switches from real component to placeholder when the store toggles enabled→disabled after mount', async () => {
+    it('does not flip post-mount when the store toggles enabled→disabled (reload required by SPEC contract)', async () => {
       const { act } = await import('react')
       registerModule({
         id: 'feat-mod',
@@ -264,8 +264,12 @@ describe('PaneLayoutRenderer', () => {
         useModuleEnabledStore.getState().setEnabled('feat-mod', false)
       })
 
-      expect(screen.queryByTestId('real')).toBeNull()
-      expect(screen.getByRole('button', { name: /feat-mod/i })).toBeInTheDocument()
+      // The pane must keep rendering the real component until a manual reload
+      // re-runs registerBuiltinModules(). This matches DisabledModulePlaceholder's
+      // "Reload the page after enabling" / 「啟用後請手動重載頁面」 hint and
+      // the file-opener / new-tab registries that only reconcile at bootstrap.
+      expect(screen.getByTestId('real')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /feat-mod/i })).toBeNull()
     })
 
     it('renders the module-supplied custom disabledComponent when present', () => {
