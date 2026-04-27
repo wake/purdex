@@ -1,6 +1,8 @@
 # SPEC — Editor 模組自有資產化 + 開檔體驗強化
 
-> Rev 2 — 吸收 codex review `task-mogonr3k-ks81et` 回饋。主要變更：P4/P5 順序對調（cache infra 先，popup 後）、移除假設不存在的 `pkg/eventbus`、補 Editor 停用後既有 tab 策略、補 race / symlink / 隱私邊界。
+> Rev 3 — 吸收第二輪 codex review `task-mogq6mtw-lz0fm6` 的 minor comments：補 `useMultiHostEventWs` 派發缺口、定義 `resolveWorkspaceForSession` helper 語意、`pruneStale` → `pruneStaleCandidate` 命名與語意對齊、enum 列舉值 const 化 + unknown drop、cwdResolver snapshot 行為、workspace remove `keepSettings` 場景處理。
+>
+> Rev 2 — 吸收第一輪 codex review `task-mogonr3k-ks81et` 回饋：P4/P5 順序對調（cache infra 先，popup 後）、移除假設不存在的 `pkg/eventbus`、補 Editor 停用後既有 tab 策略、補 race / symlink / 隱私邊界。
 
 ## Objective
 
@@ -352,20 +354,36 @@ func (m *Module) emitPathHint(hint PathHint) {
 
 `HostEvent.Value` 是 string；JSON 字串塞進去（既有 agent event 慣例）。
 
-### 4. SPA 端訂閱（擴 `agent-ws-dispatch.ts`）
+### 4. SPA 端訂閱（擴 `agent-ws-dispatch.ts` + `useMultiHostEventWs` 派發）
 
-既有 `dispatchAgentWsEvent` 已 switch on `event.type`，加 case：
+**4a. 擴 `useMultiHostEventWs` 把 `agent.*` 全交給 dispatcher**
+
+既有 `useMultiHostEventWs` 目前只在 `event.type === 'agent.status' || 'agent.status.cleared'` 時呼叫 `dispatchAgentWsEvent`，新 type 收不到。改為：
+
+```ts
+if (event.type.startsWith('agent.')) dispatchAgentWsEvent(hostId, event)
+```
+
+**4b. `dispatchAgentWsEvent` 加 `agent.path_hint` case**
 
 ```ts
 case 'agent.path_hint': {
   const hint = JSON.parse(event.value) as PathHint
   if (hint.pathKind !== 'absolute' || !hint.dir) return
-  const wsId = resolveWorkspaceForSession(hint.sessionCode)
-  if (!wsId) return
-  usePathCacheStore.getState().add(hint.hostId, wsId, hint.dir)
+  const wsId = resolveWorkspaceForSession(hostId, hint.sessionCode)
+  if (!wsId) return  // standalone session 或無對應 tab → 不寫 cache
+  usePathCacheStore.getState().add(hostId, wsId, hint.dir)
   break
 }
 ```
+
+**4c. 新 helper `resolveWorkspaceForSession(hostId, sessionCode): string | null`**（`spa/src/lib/resolve-workspace-for-session.ts` 新建）
+
+語意：
+1. 掃 `useTabStore.tabs` 找 primary pane 是 `tmux-session` 且 `(hostId, sessionCode)` 匹配的 tab
+2. 用 `useWorkspaceStore.findWorkspaceByTab(tabId)` 找對應 workspace
+3. 優先順序：active workspace 內命中 → 任一 workspace 命中 → `null`
+4. **standalone session（無 tab 對應）或 cross-host 來源不明 → `null`，不寫 cache**
 
 ### 5. SPA path cache store（`spa/src/stores/usePathCacheStore.ts` 新建）
 
@@ -375,16 +393,18 @@ interface PathCacheState {
   dirsByScope: Record<string, string[]>  // LRU; head = most recent
   add: (hostId: string, workspaceId: string, dir: string) => void
   lookup: (hostId: string, workspaceId: string, basename: string) => string[]
+  pruneStaleCandidate: (hostId: string, workspaceId: string, candidatePath: string) => void
   clearScope: (hostId: string, workspaceId: string) => void
-  clearHost: (hostId: string) => void  // host remove 時呼叫
+  clearHost: (hostId: string) => void
 }
 ```
 
 - LRU 容量 50 條 per scope，dedup 同 dir 移到 head
 - `lookup(basename)` 純字串組合：對每個 cached `dir` 回傳 `path.join(dir, basename)`，**不做 stat**（stat 留 P5 caller）
+- `pruneStaleCandidate(candidatePath)`：取 `dirname(candidatePath)`，從該 scope LRU 移除這個 dir entry（P5 stat 失敗時呼叫）
 - 持久化：localStorage `STORAGE_KEYS.PATH_CACHE`（per codex B3 — 用 SSoT keys.ts）
 - `partialize` 只存 `{ dirsByScope }`，不持久化 actions
-- 訂閱 `useWorkspaceStore` 的 workspace remove → 自動 `clearScope`
+- **Workspace remove 訂閱**：透過 `useWorkspaceStore.subscribe` 偵測 workspace 從 state 中消失 → 呼叫 `clearScope`。**Tear-off / merge（`removeWorkspace(wsId, { keepSettings: true })`）場景需區分**：本 window 視角 workspace 不見就清，避免 cache 殘留 — `keepSettings` 是設定保留語意，path cache 屬 runtime 資產，照清
 - 訂閱 `useHostStore` 的 host remove → 自動 `clearHost`
 - **不進 sync schema**（per `feedback_skeleton_convergence.md` + B3 codex review）
 
@@ -402,16 +422,19 @@ interface PathCacheState {
 
 ## 檔案影響
 
-- `internal/module/agent/path_hint.go` — schema + ring buffer (in-memory, max 200 per host)
+- `internal/module/agent/path_hint.go` — schema + ring buffer (in-memory, max 200 per host) + Go const for `PathKind` / `Confidence` / `Kind` 列舉值
 - `internal/module/agent/path_hint_extractor.go` — CC payload → PathHint
 - `internal/module/agent/path_hint_test.go` — daemon 測試（含 dedup window / non-absolute drop / broadcast format）
 - `internal/module/agent/handler.go` — 在既有 hook handler 接點加 emit 呼叫
 - `spa/src/stores/usePathCacheStore.ts` — LRU store
 - `spa/src/stores/usePathCacheStore.test.ts`
 - `spa/src/lib/storage/keys.ts` — 加 `PATH_CACHE`
+- `spa/src/lib/resolve-workspace-for-session.ts` — 新 helper
+- `spa/src/lib/resolve-workspace-for-session.test.ts`
 - `spa/src/lib/agent-ws-dispatch.ts` — 加 `agent.path_hint` case
 - `spa/src/lib/agent-ws-dispatch.test.ts` — case 測試
-- `spa/src/types/agent-events.ts` — `PathHint` type 定義（與 daemon 對齊）
+- `spa/src/hooks/useMultiHostEventWs.ts` — 擴展 `agent.*` 全部 dispatch
+- `spa/src/types/agent-events.ts` — `PathHint` type 定義（與 daemon 對齊；TS const 化列舉值，unknown value 保守 drop）
 
 ## Acceptance Criteria
 
@@ -419,12 +442,15 @@ interface PathCacheState {
 - [ ] payload 內 `pathKind === "absolute"`、`dir` 等於 file_path 的 dirname、`agentId === "claude-code"`、`confidence === "high"`
 - [ ] 5 秒內同 SessionCode + Dir 重複 → dedup 為 1 筆
 - [ ] 非 absolute path → drop，不廣播，metric 記錄
-- [ ] SPA `dispatchAgentWsEvent` 收到 `agent.path_hint` → `usePathCacheStore` 對應 `(hostId, workspaceId)` scope add 1 條
+- [ ] **`useMultiHostEventWs` 收到 `agent.path_hint` event 會 dispatch 給 `dispatchAgentWsEvent`**（不被既有 type filter 擋掉）
+- [ ] `dispatchAgentWsEvent` 收到 `agent.path_hint` → `resolveWorkspaceForSession(hostId, sessionCode)` 回 wsId → `usePathCacheStore` 對應 scope add 1 條
+- [ ] **`resolveWorkspaceForSession` 命中順序測試**：active workspace 優先、跨 workspace 命中次之、無對應 → null（不寫 cache）
 - [ ] LRU 容量 50；溢出最舊淘汰；同 dir 重複移到 head
 - [ ] 切換 workspace → cache 隔離不互相污染（不同 scope key）
 - [ ] localStorage 重啟保留前次 session 的 cache
-- [ ] workspace remove → 對應 scope 清空
+- [ ] workspace remove → 對應 scope 清空（含 `keepSettings: true` 的 tear-off 場景）
 - [ ] host remove → 整 host 所有 scope 清空
+- [ ] **未知 `pathKind` / `confidence` 值** → defensive drop，不寫 cache、不報錯
 - [ ] CC 以外 agent 沒 HookInstaller → daemon 不報錯、無 PathHint 推送（架構支援未來擴展）
 
 ---
@@ -474,7 +500,7 @@ interface OpenFileContext {
   hostId: string
   sourceWorkspaceId: string  // captured at click time, not read on each await
   sessionCode?: string       // 觸發來源 session（layer 2 用）
-  cwdResolver?: () => Promise<string | null>  // layer 2 動態解析
+  cwdResolver?: () => Promise<string | null>  // layer 2 動態解析；popup 開啟後仍用 captured ctx 不重讀 active session
 }
 
 async function tryOpenFile(
@@ -494,7 +520,7 @@ async function tryOpenFile(
     for (const candidate of cached) {
       const ok = await fs.stat(candidate).catch(() => null)
       if (ok) verified.push(candidate)
-      else usePathCacheStore.getState().pruneStale(ctx.hostId, ctx.sourceWorkspaceId, candidate)
+      else usePathCacheStore.getState().pruneStaleCandidate(ctx.hostId, ctx.sourceWorkspaceId, candidate)
     }
     if (verified.length === 1) return openInTab({ ...file, path: verified[0] }, source, ctx)
     if (verified.length > 1) return openPopup({ mode: 'layer1-multi', hits: verified, file, ctx })
@@ -568,7 +594,7 @@ UI 放 Editor purdex scope 新區塊 `EditorOpenBehaviorSection`（與 P3 並列
 - `spa/src/lib/terminal-link/openers/file-path.ts` — 改走 `tryOpenFile`（保留既有 normalization）
 - `spa/src/components/FileTreeView.tsx` — 改走 `tryOpenFile`
 - `spa/src/stores/useUISettingsStore.ts` — 加兩個 flag
-- `spa/src/stores/usePathCacheStore.ts` — 加 `pruneStale(hostId, wsId, path)`
+- `spa/src/stores/usePathCacheStore.ts` — 加 `pruneStaleCandidate(hostId, wsId, candidatePath)`（P4 已定義 API，P5 呼叫處）
 - `internal/module/fs/search.go` — 新建 daemon endpoint
 - `internal/module/fs/search_test.go` — daemon 測試
 - `spa/src/lib/register-modules.tsx` — Editor settings 加 `EditorOpenBehaviorSection`
@@ -582,7 +608,7 @@ UI 放 Editor purdex scope 新區塊 `EditorOpenBehaviorSection`（與 P3 並列
 - [ ] 開關 A on + B on + cache 命中多個 → popup `layer1-multi` 模式，列出全部已驗證 candidates
 - [ ] 開關 A on + B on + cache 0 命中 → popup `ask-expand` 模式
 - [ ] 開關 A on + B off → popup `ask-expand` 模式
-- [ ] cache candidate stat 失敗 → 從 cache 移除（`pruneStale`），不顯示在 popup 中
+- [ ] cache candidate stat 失敗 → 呼叫 `pruneStaleCandidate(candidate)` 從 cache 移除，不顯示在 popup 中
 - [ ] popup 開啟中，path cache 收到新 hint → 當前 popup candidates 不變（snapshot）
 
 ### Workspace context
