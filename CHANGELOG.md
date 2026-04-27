@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.236] - 2026-04-28
+
+### Feat: quick-commands v2 — Phase 1a (data layer) (#677)
+
+Pure data layer for the v2 capability/binding/slot architecture — no UI, no executor. Phase 1b will add the Settings dialog, CommandSlot rendering, and workspace context-menu entry.
+
+- New `QUICK_COMMAND_SLOTS` typed constants (`workspace.actions`, `host.actions`) — slot id namespace and mountTarget invariants.
+- `useQuickCommandStore` adds `bindings: Record<commandId, slotId[]>` + `sanitizeBindings` (accepts any non-empty string as a forward-compat slot id per spec §2.3) + `__proto__`/`constructor` unsafe-key guard.
+- Sync contributor exposes a `bindings` field; hydrate merges via `mergePersistedQuickCommandState`.
+- `quick-commands` is promoted to a disableable module (mirroring editor / browser) and can be toggled in Settings → Modules.
+- Two rounds of codex review: round-1 closed 2 P2 findings; round-2 ran three parallel reviewers (attacker / defender / file-quality) and closed 5 findings (prototype safety, sanitizer hardening, spec §2.3 forward-compat alignment, null-hostId ordering lock, sync normalize).
+
 ## [1.0.0-alpha.235] - 2026-04-28
 
 ### Fix(electron): stabilize mac signing for updates (#672)
