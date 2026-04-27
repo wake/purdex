@@ -81,20 +81,34 @@ describe('applyModuleFileOpeners', () => {
     expect(getRegisteredOpeners().map((o) => o.id)).toEqual(['b'])
   })
 
-  it('skips modules without fileOpeners without removing existing entries', () => {
-    registerModule(mkModule('m1', [mkOpener('a')]))
-    registerModule({ id: 'm2', name: 'm2' })
+  it('clears any pre-existing owner entries when a module declares no fileOpeners', () => {
+    // The reconciler must be authoritative: if a module's current declaration
+    // has no fileOpeners, any stale owner-scoped openers (from a previous
+    // declaration that did, or from a now-removed inline path) must be wiped.
+    registerModule({ id: 'm1', name: 'm1' })
+    registerFileOpener({ ...mkOpener('stale'), ownerModuleId: 'm1' })
     applyModuleFileOpeners()
-    expect(getRegisteredOpeners().map((o) => o.id)).toEqual(['a'])
+    expect(getRegisteredOpeners()).toHaveLength(0)
   })
 
-  it('preserves openers registered through other paths when their module has no fileOpeners', () => {
-    // Simulates the Task 1.2 bootstrap state where Editor inline-registers
-    // three openers via registerEditorFileOpeners() before applyModuleFileOpeners
-    // runs, and Editor's ModuleDefinition does not yet declare fileOpeners.
-    registerModule({ id: 'm1', name: 'm1' })
-    registerFileOpener({ ...mkOpener('inline'), ownerModuleId: 'm1' })
+  it('clears stale owner entries when a module replaces its declaration with one that has no fileOpeners', () => {
+    // Pins the regression: HMR or a runtime mutation that swaps a module
+    // definition from `fileOpeners: [opener]` to one without `fileOpeners`
+    // must not leave the original opener registered for that owner.
+    registerModule(mkModule('m1', [mkOpener('a')]))
     applyModuleFileOpeners()
-    expect(getRegisteredOpeners().map((o) => o.id)).toEqual(['inline'])
+    expect(getRegisteredOpeners().map((o) => o.id)).toEqual(['a'])
+
+    registerModule({ id: 'm1', name: 'm1' })  // same id, no fileOpeners
+    applyModuleFileOpeners()
+    expect(getRegisteredOpeners()).toEqual([])
+  })
+
+  it('does not touch entries owned by ids unknown to the module registry', () => {
+    // A non-module owner (e.g. plugin host registering directly) is outside
+    // the reconciler's responsibility.
+    registerFileOpener({ ...mkOpener('plugin-x'), ownerModuleId: 'plugin-host' })
+    applyModuleFileOpeners()
+    expect(getRegisteredOpeners().map((o) => o.id)).toEqual(['plugin-x'])
   })
 })
