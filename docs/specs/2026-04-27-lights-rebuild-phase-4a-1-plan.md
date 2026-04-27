@@ -1,6 +1,6 @@
-# Lights Rebuild — Phase 4a-1 Plan v1.2 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v1.3 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v1.2（Round 2 codex review fix — `review-moh4f3ts-XXXXXX`，1 P1 + 1 P2 findings 全採納）
+**Status**: draft v1.3（Round 3 codex review fix — 1 P1 deadlock finding 採納）
 
 ## v1.x 演進
 
@@ -9,6 +9,7 @@
 | v1 | 初版起草（6 slices / 24 tests / ~305 LoC）|
 | v1.1 | R1 codex review fix（`review-moh40grn-u7wxgv`，2 P2）：(1) API gap — `WatchTopLines` / `WatchFullScreen` 無法接收 `IdleStableTicks`；併為單一 `Watch(target, opts, cb)` + `WatchOptions{TopLines, IdleStableTicks}`；(2) repeated stable emission — `stableEmitted` flag 確保每次 changed→stable transition 只觸發一次 ScreenStable；新增 PR2b 測試覆蓋連續穩定無重發 |
 | v1.2 | R2 codex review fix（1 P1 + 1 P2）：(1) **rename rewatch path** — `renameSessionLocked` (module.go:258) 也呼叫 `StartWatch(newName+":", ...)`；plan 必須一併走 orchestrator + 加 rename regression test；(2) **baseline 失敗 cleanup race** — 初始 capture 失敗時 `watchLoop` 直接 return 但 watcher map 已註冊；新增 baseline-fail-cleanup 邏輯與 PR4b 測試 |
+| v1.3 | R3 codex review fix（1 P1 deadlock）：v1.2 §2.3.1 orchestrator API docstring 寫 `stopWatch` / `startWatch` 會 clear `activeWatchers`，但 `renameSessionLocked` 持 `m.mu` 時呼叫，會與內部要 acquire `m.mu` 的清理路徑互鎖（非可重入 mutex）。**改 API contract**：orchestrator 只碰 `prober` + `lastHookAt` + metrics，**不觸 `activeWatchers`**；caller（module.go wrapper）管理 `activeWatchers`。同時對齊 `interpretScreenEvent` 的 Error Guard 邏輯沿用 legacy 既有 lock 模式（讀 + 寫各自一次 m.mu.Lock/Unlock，不持鎖跨呼叫）|
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -282,9 +283,17 @@ func newProbeOrchestrator(m *Module) *probeOrchestrator {...}
 
 // startWatch starts a probe watcher for the session, using agent's profile.
 // Replaces inline call to m.prober.StartWatch in manageActivityWatch.
+// NOTE (R3 fix): orchestrator does NOT touch m.activeWatchers — see
+// stopWatch comment. Callers (module.go wrappers) own the activeWatchers
+// transitions; orchestrator just resolves profile + invokes prober.Watch.
 func (o *probeOrchestrator) startWatch(session, agentType string) {...}
 
-// stopWatch stops the probe watcher and clears activeWatchers entry.
+// stopWatch stops the probe watcher for the session.
+// NOTE (R3 fix): orchestrator does NOT touch m.activeWatchers — that
+// map is owned by Module.manageActivityWatch and renameSessionLocked
+// callers, which already serialize updates under m.mu. Keeping
+// orchestrator lock-free with respect to m.mu lets renameSessionLocked
+// call stopWatch/startWatch while holding m.mu without deadlocking.
 func (o *probeOrchestrator) stopWatch(session string) {...}
 
 // recordHookAt records that a hook event was just processed for this session.
@@ -431,16 +440,21 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 把 `renameSessionLocked` 中的 watcher 段落改成（保留既有 m.mu held + activeWatchers transfer 邏輯）：
 
 ```go
-// In renameSessionLocked, after activeWatchers transfer:
+// In renameSessionLocked, runs with m.mu held (caller contract):
 if agentType, ok := m.activeWatchers[oldName]; ok {
+    // activeWatchers transfer (m.mu-protected map mutation)
     delete(m.activeWatchers, oldName)
-    m.probeOrch.stopWatch(oldName)
     m.activeWatchers[newName] = agentType
+    // orchestrator calls (R3 fix: lock-free wrt m.mu, safe under hold)
+    m.probeOrch.stopWatch(oldName)
     m.probeOrch.startWatch(newName, agentType)
 }
 ```
 
-注意：orchestrator `startWatch` / `stopWatch` 內部會處理 prober nil-check（保留 legacy `if m.prober != nil` 行為），rename callsite 不必重複檢查。
+注意（R3 fix）：
+- `activeWatchers` map 的 transfer 由 `renameSessionLocked` 自己做（持 `m.mu` 是其 contract），orchestrator API 不觸 `activeWatchers`，故此處不會 deadlock
+- orchestrator `startWatch` / `stopWatch` 內部對 `prober` 的呼叫使用 `prober` 自己的 `watcherMu`（與 `m.mu` 不同 mutex），可重入安全
+- orchestrator 內部會處理 prober nil-check（保留 legacy `if m.prober != nil` 行為），rename callsite 不必重複檢查
 
 舊 `onActivityDetected` 整個刪掉（邏輯已搬到 orchestrator.interpretScreenEvent；本 PR 範圍內 cc 走新 path，codex / opencode 也透過 default profile 走同一份 helper — 但 codex / opencode 的 TopN 微調留 PR-4a-2，本 PR 三家共用 default profile = 行為向下相容）。
 
@@ -457,7 +471,7 @@ if agentType, ok := m.activeWatchers[oldName]; ok {
 | CC3 `TestModule_HookHandler_CallsRecordHookAt` | 注入 cc hook event；驗證 orchestrator.lastHookAt[session] 記錄到 |
 | CC4 `TestCC_E2E_ScreenChangedToRunning` | cc waiting → orchestrator.startWatch → 注入 ScreenChanged → status 廣播 Running |
 | CC5 `TestCC_E2E_ScreenStableToIdle` | cc running → orchestrator.startWatch → 注入 ScreenStable（non-shell-prompt）→ status 廣播 Idle |
-| CC6 `TestCC_RenameSession_RestartsWatchViaOrchestrator`（**R2 fix #1 regression**）| cc running on `oldname:` → `RenameSession(oldname, newname)` → 驗證 orchestrator.stopWatch(oldname) + startWatch(newname) 各 call 一次 + activeWatchers map key 從 oldname 遷到 newname |
+| CC6 `TestCC_RenameSession_RestartsWatchViaOrchestrator`（**R2 fix #1 + R3 deadlock-freedom regression**）| cc running on `oldname:` → `RenameSession(oldname, newname)` → 驗證 (a) orchestrator.stopWatch(oldname) + startWatch(newname) 各 call 一次；(b) activeWatchers map key 從 oldname 遷到 newname；(c) 整個操作在 t.Run 內 100ms timeout 完成（deadlock 會 hang，此測試 CI run with `-race -timeout=30s` 也是 fail-loud）|
 
 ---
 
