@@ -1,7 +1,9 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import type { QuickCommandSlotId } from '../lib/quick-command-slots'
+import { QUICK_COMMAND_SLOTS, type QuickCommandSlotId } from '../lib/quick-command-slots'
+
+const VALID_SLOT_IDS = new Set<string>(Object.values(QUICK_COMMAND_SLOTS))
 
 export interface QuickCommand {
   id: string
@@ -45,8 +47,9 @@ const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
  *  - Top-level value must be a plain object (rejects arrays, null, primitives).
  *  - Reject `__proto__` / `constructor` / `prototype` keys (prototype pollution).
  *  - Drop entries whose value is not an array.
- *  - Within each array, keep only non-empty strings (dedupe NOT done here —
- *    UI guarantees uniqueness; tolerating duplicates is forward-compatible).
+ *  - Within each array, keep only strings present in `QUICK_COMMAND_SLOTS`
+ *    (whitelist; rejects typos like `'workspace.action'` and forward-incompat
+ *    slot ids — if a future version adds slots, sanitizer ships in that PR).
  *  - Drop entries whose cleaned array is empty (matches setBinding(id, [])).
  */
 export function sanitizeBindings(raw: unknown): Bindings {
@@ -58,7 +61,7 @@ export function sanitizeBindings(raw: unknown): Bindings {
     if (!Array.isArray(targets)) continue
     const cleaned: QuickCommandSlotId[] = []
     for (const t of targets) {
-      if (typeof t === 'string' && t.length > 0) cleaned.push(t as QuickCommandSlotId)
+      if (typeof t === 'string' && VALID_SLOT_IDS.has(t)) cleaned.push(t as QuickCommandSlotId)
     }
     if (cleaned.length > 0) out[cmdId] = cleaned
   }

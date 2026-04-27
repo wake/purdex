@@ -43,6 +43,8 @@ export function createQuickCommandsContributor(): SyncContributor {
 
       // Sanitize untrusted incoming bindings BEFORE applying. Mirrors the
       // store's `merge` hook — sync payloads are equally untrusted.
+      // Only attach sanitized bindings when incoming has the field (preserves
+      // field-merge semantics: absent field → no patch → local untouched).
       const sanitizedIncoming: Partial<QuickCommandsData> = {
         ...incoming,
         ...(incoming.bindings !== undefined
@@ -51,10 +53,18 @@ export function createQuickCommandsContributor(): SyncContributor {
       }
 
       if (merge.type === 'full-replace') {
-        useQuickCommandStore.setState(sanitizedIncoming as QuickCommandsData)
+        // Full-replace: bindings MUST be a record after this call. If incoming
+        // omitted bindings (older bundle), default to {} so getBoundCommands
+        // and friends never see undefined leaked into the store.
+        useQuickCommandStore.setState({
+          ...sanitizedIncoming,
+          bindings: sanitizedIncoming.bindings ?? {},
+        } as QuickCommandsData)
         return
       }
 
+      // field-merge: only apply remote-resolved fields actually present in
+      // incoming. Absent bindings → leave local untouched (don't force {}).
       const patch: Partial<QuickCommandsData> = {}
       for (const field of DATA_FIELDS) {
         if (merge.resolved[field] === 'remote' && field in sanitizedIncoming) {

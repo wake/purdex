@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useQuickCommandStore } from './useQuickCommandStore'
+import { useQuickCommandStore, sanitizeBindings } from './useQuickCommandStore'
 import { QUICK_COMMAND_SLOTS } from '../lib/quick-command-slots'
 
 // 顯式列出所有 mutable fields — zustand setState merge 模式下，
@@ -135,5 +135,48 @@ describe('useQuickCommandStore — sanitizeBindings via merge', () => {
     //  這裡的合理代表是斷言 store 在惡意 payload 注入後仍維持 bindings = {})
     useQuickCommandStore.setState({ bindings: {} })
     expect(useQuickCommandStore.getState().bindings).toEqual({})
+  })
+})
+
+describe('sanitizeBindings — slot id whitelist (codex round-1 P2)', () => {
+  it('accepts known QUICK_COMMAND_SLOTS values', () => {
+    const out = sanitizeBindings({
+      'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, QUICK_COMMAND_SLOTS.HOST_ACTIONS],
+    })
+    expect(out).toEqual({
+      'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, QUICK_COMMAND_SLOTS.HOST_ACTIONS],
+    })
+  })
+
+  it('rejects unknown slot ids (typos / future slots)', () => {
+    const out = sanitizeBindings({
+      'cmd-a': ['workspace.action', 'workspaces.actions', 'host.action'],
+    })
+    // All three are typos / unknown → entry dropped (cleaned array empty)
+    expect(out).toEqual({})
+  })
+
+  it('keeps only whitelisted slot ids in mixed array', () => {
+    const out = sanitizeBindings({
+      'cmd-a': [
+        QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS,
+        'workspace.action',
+        QUICK_COMMAND_SLOTS.HOST_ACTIONS,
+        'random.target',
+      ],
+    })
+    expect(out).toEqual({
+      'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, QUICK_COMMAND_SLOTS.HOST_ACTIONS],
+    })
+  })
+
+  it('drops entries whose targets are all invalid', () => {
+    const out = sanitizeBindings({
+      'cmd-a': ['unknown'],
+      'cmd-b': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS],
+    })
+    expect(out).toEqual({
+      'cmd-b': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS],
+    })
   })
 })

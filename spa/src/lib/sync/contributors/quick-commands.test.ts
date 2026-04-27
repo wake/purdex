@@ -284,4 +284,71 @@ describe('createQuickCommandsContributor — bindings field (v2)', () => {
     const clean = { 'cmd-a': ['workspace.actions'] }
     expect(sanitizeBindings(clean)).toEqual(clean)
   })
+
+  // codex round-1 P2: missing/undefined bindings normalization
+  it('full-replace defaults missing bindings to {} (older payload bundle)', () => {
+    // simulate older sync bundle without bindings field
+    useQuickCommandStore.setState({
+      global: [{ id: 'cmd-a', name: 'A', command: 'a' }],
+      byHost: {},
+      bindings: { 'cmd-a': ['workspace.actions'] }, // local has stale bindings
+    })
+    const incoming: FullPayload = {
+      version: 1,
+      data: {
+        global: [{ id: 'cmd-b', name: 'B', command: 'b' }],
+        byHost: {},
+        // bindings absent — older format
+      } as unknown as Record<string, unknown>,
+    }
+    contributor.deserialize(incoming, { type: 'full-replace' })
+    const state = useQuickCommandStore.getState()
+    // bindings reset to {} — must be a record, NEVER undefined
+    expect(state.bindings).toEqual({})
+    expect(typeof state.bindings).toBe('object')
+  })
+
+  it('full-replace defaults null bindings to {} (corrupted payload)', () => {
+    useQuickCommandStore.setState({
+      global: [{ id: 'cmd-a', name: 'A', command: 'a' }],
+      byHost: {},
+      bindings: { 'cmd-a': ['workspace.actions'] },
+    })
+    const incoming: FullPayload = {
+      version: 1,
+      data: {
+        global: [],
+        byHost: {},
+        bindings: null,
+      } as unknown as Record<string, unknown>,
+    }
+    contributor.deserialize(incoming, { type: 'full-replace' })
+    expect(useQuickCommandStore.getState().bindings).toEqual({})
+  })
+
+  it('field-merge with missing bindings field leaves local bindings untouched', () => {
+    // Even when resolved says bindings='remote', if incoming omits the field,
+    // patch must NOT clear local (preserves field-merge "absent = no change" semantic).
+    useQuickCommandStore.setState({
+      global: [{ id: 'cmd-a', name: 'A', command: 'a' }],
+      byHost: {},
+      bindings: { 'cmd-a': ['workspace.actions'] },
+    })
+    const incoming: FullPayload = {
+      version: 1,
+      data: {
+        global: [{ id: 'cmd-a', name: 'A', command: 'a' }],
+        byHost: {},
+        // bindings absent
+      } as unknown as Record<string, unknown>,
+    }
+    contributor.deserialize(incoming, {
+      type: 'field-merge',
+      resolved: { bindings: 'remote' },
+    })
+    // Local bindings preserved (field absent → no patch applied)
+    expect(useQuickCommandStore.getState().bindings).toEqual({
+      'cmd-a': ['workspace.actions'],
+    })
+  })
 })
