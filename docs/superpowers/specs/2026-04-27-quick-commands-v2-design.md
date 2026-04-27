@@ -187,7 +187,8 @@ function inferWorkspaceHostId(workspace: Workspace, tabs: Record<string, Tab>): 
   const winners = [...counts.entries()].filter(([, c]) => c === max).map(([h]) => h)
   if (winners.length === 1) return winners[0]
 
-  // 3. 平手 tie-break：active tab 是 tmux-session 用其 hostId
+  // 3. 平手 tie-break：active tab 是 tmux-session **且其 hostId 在 winners 內**才用
+  //    （active 是少數派時跳過此條，繼續往條 4 — 避免少數派偷渡為勝者）
   if (workspace.activeTabId) {
     const activeTab = tabs[workspace.activeTabId]
     if (activeTab) {
@@ -218,6 +219,11 @@ function inferWorkspaceHostId(workspace: Workspace, tabs: Record<string, Tab>): 
 - **不**直接 disable（這個 workspace 仍可被 user 主動配對 host）
 - **顯示 host picker popover**：列出 `useHostStore.hostOrder` 中的所有 hosts（host 名 + online/offline 指示），user 點選後以該 hostId 跑 executor
 - 取消 picker → no-op
+
+**Picker 細節契約**：
+- **Anchor 由 caller 提供**：context menu 場景用 click 座標 (`{ x, y }`)；inline trigger（hover popover）用 trigger 的 `HTMLElement` ref。Picker 元件支援兩種 anchor 形式
+- **Offline host 不 disable**：user 可能就是要 force route 到 offline host（執行後若 host 連不上，executor 呼叫 createSession 失敗自然會 toast）— 不擅自代為決策
+- **空 hostOrder**：顯示空狀態文案 + close button（理論上不會發生，因為 user 至少有一個 host 才能用本系統）
 
 此 picker 元件（`HostPickerPopover`）為**獨立可重用**設計，未來 multi-host workspace + default launcher binding 系統上線後可繼續使用。
 
@@ -306,6 +312,7 @@ Edit dialog 欄位：
 
 **渲染順序穩定性（重要）**：
 - SlotHost 內部以「該 hostId 的 capability list」為基礎（即 `getCommands(hostId)` 的順序，merged global + host override），逐項判斷 `bindings[cmd.id]?.includes(slotId)` 來決定是否渲染
+- **`hostId === null` 場景**（WORKSPACE_ACTIONS 多數決失敗、尚未開 picker 時）：以 `state.global` 順序為基礎渲染（host override 暫不可知，picker 選定後 chip list 不重排 — 因為 picker 僅在點擊瞬間開啟，chip 已早先 render）
 - **不可** 遍歷 `Object.keys(bindings)` — Record 順序在 sync 後不可預期，會造成跨裝置順序不一致
 - Settings list 列出 commands 時同樣依 `getCommands(hostId)` 順序
 
