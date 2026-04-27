@@ -314,7 +314,7 @@ export function registerBuiltinModules(): void {
     },
     filePathOpener: {
       getDefaultOpener,
-      openSingletonTab: (content) => useTabStore.getState().openSingletonTab(content),
+      openSingletonTab: (content, opts) => useTabStore.getState().openSingletonTab(content, opts),
       insertTab: (tabId, wsId) => useWorkspaceStore.getState().insertTab(tabId, wsId),
       getActiveWorkspaceId: () => useWorkspaceStore.getState().activeWorkspaceId,
       fetchPaneCwd: (hostId, sessionCode, signal) => fetchSessionCwd(hostId, sessionCode, signal),

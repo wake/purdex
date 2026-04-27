@@ -61,8 +61,19 @@ describe('file-path opener', () => {
       { type: 'daemon', hostId: 'h1' },
       expect.objectContaining({ path: '/a/b.ts' }),
     )
-    expect(deps.openSingletonTab).toHaveBeenCalledWith(deps.paneContent)
+    expect(deps.openSingletonTab).toHaveBeenCalledWith(
+      deps.paneContent,
+      expect.objectContaining({ isSameKind: expect.any(Function) }),
+    )
     expect(deps.insertTab).toHaveBeenCalledWith('tab-1', 'ws-1')
+    // Predicate should classify file kinds (editor / image-preview / pdf-preview)
+    // as "same kind" so file tabs cluster together in tabOrder.
+    const opts = (deps.openSingletonTab as ReturnType<typeof vi.fn>).mock.calls[0][1]
+    expect(opts.isSameKind({ kind: 'editor' })).toBe(true)
+    expect(opts.isSameKind({ kind: 'image-preview' })).toBe(true)
+    expect(opts.isSameKind({ kind: 'pdf-preview' })).toBe(true)
+    expect(opts.isSameKind({ kind: 'tmux-session' })).toBe(false)
+    expect(opts.isSameKind({ kind: 'browser' })).toBe(false)
   })
 
   it('no-op when no FileOpener matches', async () => {

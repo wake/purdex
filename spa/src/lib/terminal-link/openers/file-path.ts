@@ -4,14 +4,21 @@ import type { PaneContent } from '../../../types/tab'
 import type { FileOpener } from '../../file-opener-registry'
 import { resolveEditorHomePath } from '../../editor-home-resolver'
 
+export interface OpenSingletonTabOpts {
+  isSameKind?: (content: PaneContent) => boolean
+}
+
 export interface FilePathOpenerDeps {
   getDefaultOpener(file: FileInfo): FileOpener | null
-  openSingletonTab(content: PaneContent): string
+  openSingletonTab(content: PaneContent, opts?: OpenSingletonTabOpts): string
   insertTab(tabId: string, workspaceId: string): void
   getActiveWorkspaceId(): string | null
   fetchPaneCwd(hostId: string, sessionCode: string, signal?: AbortSignal): Promise<string>
   fetchPaneHome(hostId: string, sessionCode: string, signal?: AbortSignal): Promise<string>
 }
+
+const FILE_KINDS = new Set<string>(['editor', 'image-preview', 'pdf-preview'])
+const isFileKind = (c: PaneContent): boolean => FILE_KINDS.has(c.kind)
 
 function buildFileInfo(path: string): FileInfo {
   const name = path.split('/').pop() ?? path
@@ -158,7 +165,7 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
       const content = opener.createContent(source, file)
       const targetWorkspaceId = sourceWorkspaceId ?? deps.getActiveWorkspaceId()
       if (!targetWorkspaceId) return
-      const tabId = deps.openSingletonTab(content)
+      const tabId = deps.openSingletonTab(content, { isSameKind: isFileKind })
       deps.insertTab(tabId, targetWorkspaceId)
     },
   }
