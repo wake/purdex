@@ -1,6 +1,6 @@
 export { terminalLinkRegistry, createRegistry } from './registry'
 export { createXtermLinkProvider } from './xterm-provider'
-export { registerBuiltinTerminalLinks } from './register'
+export { registerBuiltinTerminalLinks, __resetBuiltinTerminalLinks } from './register'
 export type { BuiltinTerminalLinksDeps } from './register'
 export type {
   LinkToken,
