@@ -21,6 +21,7 @@
   "modules.editor.description": "Text and rich content editor with syntax highlighting",
   "modules.browser.description": "Embedded web browser pane (requires desktop app)",
   "modules.memory_monitor.description": "System memory and renderer diagnostics",
+  "modules.quick_commands.description": "Quickly run frequently-used commands from Workspace and Host entry points",
   "settings.sync.description": "Synchronise settings and workspaces across devices.",
   "settings.sync.provider.label": "Provider",
   "settings.sync.provider.description": "Select where sync data is stored and exchanged.",

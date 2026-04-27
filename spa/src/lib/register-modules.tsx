@@ -211,6 +211,17 @@ export function registerBuiltinModules(): void {
     ],
   })
 
+  // Quick Commands v2 — Phase 1a registers the module shell only (disableable
+  // gate + Modules Switchboard listing). Settings contribution + UI surfaces
+  // ship together in Phase 1b (spec §6 — never ship a "configured but no
+  // effect" intermediate state).
+  registerModule({
+    id: 'quick-commands',
+    name: 'Quick Commands',
+    disableable: true,
+    descriptionKey: 'modules.quick_commands.description',
+  })
+
   // Register InApp FS backend (singleton — 避免熱重載時資料遺失)
   if (!getFsBackend({ type: 'inapp' })) {
     registerFsBackend('inapp', new InAppBackend())

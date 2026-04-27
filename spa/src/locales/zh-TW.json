@@ -21,6 +21,7 @@
   "modules.editor.description": "具語法高亮的文字與多樣內容編輯器",
   "modules.browser.description": "內嵌網頁瀏覽器面板（需桌面版）",
   "modules.memory_monitor.description": "系統記憶體與 renderer 診斷",
+  "modules.quick_commands.description": "讓你在 Workspace 與 Host 入口快速執行常用指令",
   "settings.sync.description": "在多裝置之間同步設定與工作區。",
   "settings.sync.provider.label": "提供者",
   "settings.sync.provider.description": "選擇同步資料的儲存與交換位置。",
