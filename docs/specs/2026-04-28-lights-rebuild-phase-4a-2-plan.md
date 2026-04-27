@@ -33,24 +33,62 @@
 
 ## 2. Commit 順序（TDD red → green，每 commit 獨立）
 
+合併原 C3（orchestrator regression test）進 C1 / C2 — OR-codex / OR-opencode 在 codex / opencode 尚未實作 `ProbeProfile()` 時，orchestrator type-assert 失敗會走 default `{BottomLines:10}`，正好作為 C1 / C2 紅燈的另一條斷言（codex review R1 plan finding #1）。
+
 ### Commit 1 — `feat(agent/codex): implement ProbeProfileProvider with TopLines profile`
+
+**改動 4 處**：
+- 新檔 `internal/agent/codex/probe_profile.go`
+- 新檔 `internal/agent/codex/probe_profile_test.go`（CDX1）
+- 既檔 `internal/module/agent/probe_orchestrator_test.go` +OR-codex test
+- 既檔 `internal/module/agent/probe_orchestrator_test.go` 加小 helper（見 §3.1，視 OR-codex 是否需 helper 簡化而定）
 
 **TDD 流程**：
 
-1. **紅燈**：先建 `internal/agent/codex/probe_profile_test.go`：
-   ```go
-   // CDX1 — characterization test pinning codex's ProbeProfile values.
-   // codex CLI is an append-only TUI: top hash signals new turns; bottom
-   // contains spinner + elapsed timer (variable). TopLines=10 captures
-   // the recent turn cluster while keeping captures cheap. IdleStableTicks=3
-   // matches the watch-loop default (BB-stable).
-   //
-   // If a future codex UI revision invalidates these tunings, prefer
-   // RE-SAMPLING (per spec §2.2.3) and updating values + this test
-   // together. See spec docs/specs/2026-04-28-lights-rebuild-phase-4a-2-spec.md §2.2.
-   func TestCodexProvider_ProbeProfile(t *testing.T) { ... }
-   ```
-   `go test ./internal/agent/codex/... -run TestCodexProvider_ProbeProfile` → **fail**（method 不存在）
+1. **紅燈 — 兩個 test 一起紅**：
+   - 建 `internal/agent/codex/probe_profile_test.go`（CDX1）：
+     ```go
+     // CDX1 — characterization test pinning codex's ProbeProfile values.
+     // See spec docs/specs/2026-04-28-lights-rebuild-phase-4a-2-spec.md §2.2.
+     func TestCodexProvider_ProbeProfile(t *testing.T) {
+         p := codex.NewProvider()
+         got := p.ProbeProfile()
+         want := agent.ProbeProfile{TopLines: 10, IdleStableTicks: 3}
+         if got != want {
+             t.Fatalf("ProbeProfile() = %+v, want %+v", got, want)
+         }
+     }
+     ```
+     `go test ./internal/agent/codex/... -run TestCodexProvider_ProbeProfile` → **fail**（`p.ProbeProfile undefined`）
+
+   - 在 `internal/module/agent/probe_orchestrator_test.go` 加 OR-codex（沿用既有 `newTestModule` + `recordingProber` + `rec.watchOpts["sess:"]` 模式，per OR1 line 758-781）：
+     ```go
+     // OR-codex — orchestrator picks up real codex.Provider's TopLines profile
+     // (not the default BottomLines fallback). Regression for accidental
+     // ProbeProfile() removal on codex.Provider.
+     func TestOrchestrator_RealCodexProviderUsesTopLinesProfile(t *testing.T) {
+         m := newTestModule(t)
+         rec := newRecordingProber()
+         m.probeOrch.watcher = rec
+         m.registry.Register(codex.NewProvider())
+
+         m.probeOrch.startWatch("sess", "codex")
+
+         rec.mu.Lock()
+         defer rec.mu.Unlock()
+         got, ok := rec.watchOpts["sess:"]
+         if !ok {
+             t.Fatalf("expected Watch on target %q, got %v", "sess:", rec.watchOpts)
+         }
+         want := probe.WatchOptions{TopLines: 10, BottomLines: 0, IdleStableTicks: 3}
+         if got != want {
+             t.Fatalf("WatchOptions = %+v, want %+v (codex TopLines profile)", got, want)
+         }
+     }
+     ```
+     在 codex.Provider 還沒實作 `ProbeProfile()` 之前，orchestrator type-assert 失敗 → fallback 到 `defaultProbeProfile = {BottomLines: 10, IdleStableTicks: 3}` → 與 want 不符 → **fail**。
+
+   - 在 `internal/module/agent/probe_orchestrator_test.go` 同檔加 import：`"github.com/wake/purdex/internal/agent/codex"`（若尚未 import）
 
 2. **綠燈**：建 `internal/agent/codex/probe_profile.go`：
    ```go
@@ -75,13 +113,9 @@
        }
    }
    ```
-   `go test ./internal/agent/codex/... -count=1` → **pass**
+   `go test ./internal/agent/codex/... ./internal/module/agent/... -count=1` → **pass**（CDX1 + OR-codex 都綠）
 
-3. **採樣 confirm（spec G7）**：implementer 在實作後對真實 codex session 跑：
-   ```bash
-   tmux capture-pane -t <codex-session>:0 -p -S -10 -E -1   # 上方 10 行
-   ```
-   三狀態各跑一次（idle / running with output / spinner-only）— 結果寫進 PR description 的 Sampling Evidence 段（per spec §5 G7）。
+3. **採樣 confirm（spec G7）**：implementer 在實作後對真實 codex session 跑採樣（命令見 §4），三狀態結果寫進 PR description 的 Sampling Evidence — codex 段。
 
 4. **Commit msg**：
    ```
@@ -92,18 +126,29 @@
    cluster while keeping captures cheap. IdleStableTicks=3 matches the
    watch-loop default.
 
+   Tests: CDX1 (characterization) + OR-codex (orchestrator regression
+   that real codex.Provider really implements ProbeProfileProvider).
+
    See docs/specs/2026-04-28-lights-rebuild-phase-4a-2-spec.md §2.2.
    ```
 
 ### Commit 2 — `feat(agent/opencode): implement ProbeProfileProvider with TopLines profile`
 
-**TDD 流程**：
+**改動 3-4 處**：
+- 新檔 `internal/agent/opencode/probe_profile.go`
+- 新檔 `internal/agent/opencode/probe_profile_test.go`（OCD1）
+- 既檔 `internal/module/agent/probe_orchestrator_test.go` +OR-opencode test（同 OR-codex 結構）
 
-1. **紅燈**：建 `internal/agent/opencode/probe_profile_test.go`（OCD1，結構同 CDX1，profile 同值）→ fail
+**TDD 流程**（與 Commit 1 同型）：
 
-2. **綠燈**：建 `internal/agent/opencode/probe_profile.go`（同型，註解強調 opencode TUI 結構與 codex 同型）→ pass
+1. **紅燈 — 兩個 test 一起紅**：
+   - 建 OCD1：與 CDX1 同型，change provider 為 `opencode.NewProvider()`，want 同值（`{TopLines: 10, IdleStableTicks: 3}`）
+   - 加 OR-opencode：與 OR-codex 同型，target `"sess2:"`，agentType `"opencode"`，import `"github.com/wake/purdex/internal/agent/opencode"`
+   - 兩者都 fail（opencode.Provider 沒 `ProbeProfile()` → type-assert 失敗 → default fallback 不符 want）
 
-3. **採樣 confirm**：對真實 opencode session 跑同樣三狀態採樣，結果寫進 PR description
+2. **綠燈**：建 `internal/agent/opencode/probe_profile.go`（同 codex 結構，註解強調「opencode TUI 與 codex 同型」+ 引用 spec §2.3）→ pass
+
+3. **採樣 confirm**：對真實 opencode session 跑同樣三狀態採樣，寫進 PR description
 
 4. **Commit msg**：
    ```
@@ -113,48 +158,9 @@
    bottom prompt + spinner. TopLines=10 + IdleStableTicks=3 mirror codex
    profile values; per-agent rationale documented in spec §2.3.
 
+   Tests: OCD1 (characterization) + OR-opencode (orchestrator regression).
+
    See docs/specs/2026-04-28-lights-rebuild-phase-4a-2-spec.md §2.3.
-   ```
-
-### Commit 3 — `test(module/agent): cover orchestrator with real codex/opencode providers`
-
-**目的**：驗證 orchestrator 對真實 codex / opencode provider type-assert `ProbeProfileProvider` 成功（不退到 default fallback）。
-
-**TDD 流程**：
-
-1. **紅燈/綠燈一體**：在 `internal/module/agent/probe_orchestrator_test.go` 加兩 case（不需先紅後綠 — 是 integration assertion，新加直接綠才有意義；若紅就是 Commit 1/2 沒過）：
-
-   ```go
-   // OR-codex — orchestrator picks up codex.Provider.ProbeProfile() (TopLines)
-   // not the default profile (BottomLines).
-   func TestProbeOrchestrator_StartWatch_CodexProvider(t *testing.T) {
-       harness := newTestHarness(t)
-       harness.registry.Register(codex.NewProvider())
-       harness.module.manageActivityWatch("S1", "codex", agentpkg.StatusRunning)
-
-       // Assert: prober.WatchOptions has TopLines=10, BottomLines=0
-       got := harness.fakeProber.LastWatchOptions("S1:")
-       if got.TopLines != 10 || got.BottomLines != 0 {
-           t.Fatalf("expected TopLines=10 BottomLines=0, got %+v", got)
-       }
-   }
-
-   // OR-opencode — orchestrator picks up opencode.Provider.ProbeProfile()
-   func TestProbeOrchestrator_StartWatch_OpenCodeProvider(t *testing.T) { ... }
-   ```
-
-2. **跑**：`go test ./internal/module/agent/... -run "TestProbeOrchestrator_StartWatch_CodexProvider|TestProbeOrchestrator_StartWatch_OpenCodeProvider" -count=1` → pass
-
-3. **不重複既有覆蓋**：OR1（fake provider with profile）+ OR2（fake provider without profile）已驗 type-assert 機制；OR-codex / OR-opencode 是「真實 provider 對接」regression 而非 mechanism re-test。
-
-4. **Commit msg**：
-   ```
-   test(module/agent): cover orchestrator with real codex/opencode providers
-
-   OR1/OR2 cover the type-assert mechanism via fakes; OR-codex / OR-opencode
-   add regression coverage that real codex.Provider / opencode.Provider
-   actually implement ProbeProfileProvider and produce the expected
-   TopLines profile (catches future accidental method removal).
    ```
 
 ## 3. 測試矩陣
@@ -163,10 +169,20 @@
 |---|---|---|
 | CDX1 `TestCodexProvider_ProbeProfile` | `internal/agent/codex/probe_profile_test.go` | codex profile values pinning（characterization） |
 | OCD1 `TestOpenCodeProvider_ProbeProfile` | `internal/agent/opencode/probe_profile_test.go` | opencode profile values pinning（characterization） |
-| OR-codex `TestProbeOrchestrator_StartWatch_CodexProvider` | `internal/module/agent/probe_orchestrator_test.go` | orchestrator 真實 codex provider type-assert + WatchOptions forward |
-| OR-opencode `TestProbeOrchestrator_StartWatch_OpenCodeProvider` | `internal/module/agent/probe_orchestrator_test.go` | orchestrator 真實 opencode provider type-assert + WatchOptions forward |
+| OR-codex `TestOrchestrator_RealCodexProviderUsesTopLinesProfile` | `internal/module/agent/probe_orchestrator_test.go` | orchestrator 真實 codex provider type-assert + WatchOptions forward |
+| OR-opencode `TestOrchestrator_RealOpenCodeProviderUsesTopLinesProfile` | `internal/module/agent/probe_orchestrator_test.go` | orchestrator 真實 opencode provider type-assert + WatchOptions forward |
 
 **淨增**：4 tests / 0 既有 test 動到（cc CC1 / OR1 / OR2 等全部不變）。
+
+### 3.1 既有 test infrastructure 沿用
+
+OR-codex / OR-opencode 直接沿用既有 `internal/module/agent/probe_orchestrator_test.go` 既有設施（per OR1 line 758-781）：
+
+- `newTestModule(t)` — module test fixture（fakes_test.go）
+- `newRecordingProber()` — recording fake prober；直接讀 `rec.watchOpts[target]` 取 last WatchOptions（**不需新加 helper**）
+- `m.registry.Register(...)` — provider registry registration
+
+**不新增 helper**（如 `LastWatchOptions`），保持 PR diff 最小化。若 implementer 跑時發現直讀 map 太冗長導致 OR-codex / OR-opencode body 過大，可選擇加同型 helper（必須在 commit 內 docu rationale）。
 
 ## 4. Implementer 採樣 confirm 流程（落實 spec G7）
 
@@ -176,36 +192,48 @@
    - codex：開一個 codex CLI session 在某 tmux pane（target 例：`%41`）
    - opencode：開一個 opencode session 在某 tmux pane
 
-2. **三狀態採樣**（每狀態跑一次）：
+2. **三狀態採樣**（每狀態 3 次 capture，間隔 0.5s — 對齊 spec IdleStableTicks=3 約定）：
+
+   採樣命令統一使用與 production 一致的 `CapturePaneTopLines` 等價命令（per `internal/tmux/executor.go:344` → `CapturePaneRange(target, 0, n-1)` → `tmux capture-pane -e -p -t <target> -S 0 -E 9`）。**`-e` 必須加** — production 保留 ANSI escape 以區分 spinner color 動畫（per executor.go:332-336 註解）；移除 `-e` 會讓採樣跟 production 行為不同步。
+
    ```bash
+   TARGET=<codex-or-opencode-tmux-target>     # e.g. %41 or session:window.pane
+   CAPTURE() { tmux capture-pane -e -p -t "$TARGET" -S 0 -E 9; }
+   HASH() { CAPTURE | md5; }
+
    # State A: idle（agent 沒在處理，user 也沒輸入）
-   tmux capture-pane -t <target> -p -S 0 -E 9            # 頂部 10 行
-   tmux capture-pane -t <target> -p -S 0 -E 9 | md5      # hash
+   echo "=== State A capture ==="; CAPTURE
+   echo "=== State A hashes (3 ticks @ 0.5s) ==="
+   HASH; sleep 0.5; HASH; sleep 0.5; HASH
 
    # State B: running with active output（spinner 持續轉、輸出滾動）
-   # （相隔 1.5s 跑兩次，比較頂部 10 行 hash 是否變動）
-   tmux capture-pane -t <target> -p -S 0 -E 9 | md5
-   sleep 1.5
-   tmux capture-pane -t <target> -p -S 0 -E 9 | md5
+   echo "=== State B capture ==="; CAPTURE
+   echo "=== State B hashes (3 ticks @ 0.5s) ==="
+   HASH; sleep 0.5; HASH; sleep 0.5; HASH
 
-   # State C: spinner-only（agent 在等模型回應，僅 spinner 動）
-   tmux capture-pane -t <target> -p -S 0 -E 9 | md5
-   sleep 1.5
-   tmux capture-pane -t <target> -p -S 0 -E 9 | md5
+   # State C: spinner-only（agent 在等模型回應，僅 spinner 動，無新輸出 scroll 到頂部）
+   echo "=== State C capture ==="; CAPTURE
+   echo "=== State C hashes (3 ticks @ 0.5s) ==="
+   HASH; sleep 0.5; HASH; sleep 0.5; HASH
    ```
 
-3. **判讀**：
-   - State A：兩次 hash 必須**相同**（idle stable）
-   - State B：兩次 hash 必須**不同**（new content scrolls top）
-   - State C：兩次 hash 必須**相同**（spinner 在底部不影響頂部）— 此即 TopLines vs BottomLines 的關鍵差異
-   - 頂部 10 行內容檢查：**不應**含 elapsed timer / spinner 字元
+3. **判讀**（3 次 hash 為一組）：
+   - **State A — idle stable**：3 次 hash 全部**相同** → 對應 watch-loop 連續 3 ticks 一致即 fire ScreenStable，PASS
+   - **State B — top scrolls on new turn**：3 次 hash 至少**有一次變動** → 對應 watch-loop fire ScreenChanged，PASS
+   - **State C — spinner doesn't reach top**：3 次 hash 全部**相同** → 證明底部 spinner 不污染頂部 10 行；TopLines vs BottomLines 的關鍵差異，PASS
+   - 頂部 10 行**內容檢查**（State A capture）：**不應**含 elapsed timer（如 `(12s elapsed)` / `[1.5s]`）、braille spinner（`⠋⠙⠹...`）、旋轉系列（`/─\|`）字元
 
-4. **PR description 留痕**：把每次 capture 輸出的前幾行（敏感內容遮蔽）+ hash + 判讀結論貼進 PR description 的 Sampling Evidence 段（per spec §5 G7）。
+4. **PR description 留痕**（per spec §5 G7）：每家 agent 段落含：
+   - 採樣命令（含 TARGET 值；session 內容若敏感可遮蔽用戶輸入但保留 hash）
+   - State A / B / C 各自的 capture 輸出前 5 行（ANSI 可保留為 raw escape）
+   - State A / B / C 各自 3 次 hash 列表
+   - 三狀態 PASS / FAIL 判讀
+   - 「頂部 10 行不含動態字元」的 yes/no 觀察
 
 5. **若任一條件不過**：
-   - State A 失敗 → top 區域不穩定（可能 codex 在頂部畫了某個動態元件）→ 改用較大 IdleStableTicks 或改 capture mode；spec §2.2 / §2.3 同步修
-   - State B 失敗 → top 區域不會被 new turn 變動 → TopLines hash 永遠 stable → idle 判定誤報 → 應改用 BottomLines 或調整 N
-   - State C 失敗 → 頂部含動態字元 → 改 BottomLines 反而不行（同樣動態）→ 增大 N 跳過動態區，或改全 pane + 加 IdleStableTicks
+   - State A 失敗（idle 3 hash 不全同）→ top 區域不穩定（可能 codex 在頂部畫了某個動態元件）→ 改用較大 IdleStableTicks 或改 capture mode；spec §2.2 / §2.3 同步修
+   - State B 失敗（new turn 3 hash 全同）→ top 區域不會被 new turn 變動 → TopLines hash 永遠 stable → idle 判定誤報 → 應改用 BottomLines 或調整 N
+   - State C 失敗（spinner-only 3 hash 不全同）→ 頂部含動態字元 → 改 BottomLines 反而不行（同樣動態）→ 增大 N 跳過動態區，或改全 pane（`{TopLines: 0, BottomLines: 0}`）+ 加 IdleStableTicks
    - 任一情況 → spec 修值或改設計後重採樣，不硬上
 
 ## 5. Final Verification
@@ -238,7 +266,7 @@ pnpm --prefix spa exec vitest run
 | Summary | 1-2 句說明「為 codex / opencode 加自訂 ProbeProfileProvider，profile = TopLines:10 + IdleStableTicks:3」 |
 | Spec link | `docs/specs/2026-04-28-lights-rebuild-phase-4a-2-spec.md` |
 | Plan link | `docs/specs/2026-04-28-lights-rebuild-phase-4a-2-plan.md` |
-| Commit list | C1 codex / C2 opencode / C3 orchestrator regression — 每 commit 一行說明 |
+| Commit list | C1 codex（含 CDX1 + OR-codex）/ C2 opencode（含 OCD1 + OR-opencode）— 每 commit 一行說明 |
 | Sampling Evidence — codex | 三狀態採樣輸出（前 5 行 + hash） + 判讀結論（State A/B/C 各 PASS）|
 | Sampling Evidence — opencode | 同上 |
 | Worktree origin | `git status -s` clean check 留痕（per CLAUDE.md feedback_concurrent_session_safety） |
@@ -263,9 +291,8 @@ pnpm --prefix spa exec vitest run
 
 | Commit | 估 LoC | 估 tests | 備註 |
 |---|---|---|---|
-| 1: codex probe_profile.go + test | ~25 (impl) + ~20 (test) | 1 (CDX1) | mirrors cc/probe_profile.go shape |
-| 2: opencode probe_profile.go + test | ~25 (impl) + ~20 (test) | 1 (OCD1) | mirrors codex |
-| 3: orchestrator integration tests | ~60 (test) | 2 (OR-codex / OR-opencode) | re-uses existing newTestHarness + fakeProber |
+| 1: codex probe_profile.go + CDX1 + OR-codex | ~25 (impl) + ~20 (CDX1) + ~30 (OR-codex) | 2 (CDX1 + OR-codex) | mirrors cc/probe_profile.go shape；OR-codex 沿用 OR1 line 758-781 形狀，直讀 `rec.watchOpts["sess:"]`，不新加 helper |
+| 2: opencode probe_profile.go + OCD1 + OR-opencode | ~25 (impl) + ~20 (OCD1) + ~30 (OR-opencode) | 2 (OCD1 + OR-opencode) | mirrors codex |
 
 **總計**：~150 LoC + 4 tests。**屬小型 PR**（per spec scope 縮減）。
 
@@ -275,9 +302,20 @@ pnpm --prefix spa exec vitest run
 
 - spec §5 G1-G8 全綠
 - PR merged
-- 對應 main bump PR ship（VERSION 進到 alpha.235）
+- 對應 main bump PR ship
 
-**Memory 更新**：
+**Bump PR 步驟**（per CLAUDE.md「VERSION 為 SOT，bump 時須同步 package.json + spa/package.json」+ `feedback_bump_base_origin_not_local`）：
+
+1. 進新 worktree（branch 名 `worktree-bump-alpha-235`），先 `git fetch origin main && git reset --hard origin/main`（避免 local main 並發 session commit）
+2. 改 `VERSION`：`1.0.0-alpha.234` → `1.0.0-alpha.235`
+3. 改 `package.json` `version` field 同步
+4. 改 `spa/package.json` `version` field 同步
+5. 加 `CHANGELOG.md` alpha.235 條目（含 PR-4a-2 PR 號 + 一行說明 codex/opencode ProbeProfile）
+6. Commit message: `chore: bump version to 1.0.0-alpha.235 (#<PR>)`
+7. 開 PR、merge
+8. 退 worktree
+
+**Memory 更新**（bump merge 後）：
 
 - `kickoff_lights_rebuild.md`：標 PR-4a-2 完成 + 觸發詞清掉「PR-4a-2」分支；Phase 4a 全完工 → 下個觸發改為「啟動 Phase 4b」
 - `project_progress.md`：alpha.235
