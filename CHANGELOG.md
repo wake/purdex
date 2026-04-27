@@ -1,5 +1,61 @@
 # Changelog
 
+## [1.0.0-alpha.236] - 2026-04-28
+
+### Feat: quick-commands v2 — Phase 1a (data layer) (#677)
+
+Pure data layer for the v2 capability/binding/slot architecture — no UI, no executor. Phase 1b will add the Settings dialog, CommandSlot rendering, and workspace context-menu entry.
+
+- New `QUICK_COMMAND_SLOTS` typed constants (`workspace.actions`, `host.actions`) — slot id namespace and mountTarget invariants.
+- `useQuickCommandStore` adds `bindings: Record<commandId, slotId[]>` + `sanitizeBindings` (accepts any non-empty string as a forward-compat slot id per spec §2.3) + `__proto__`/`constructor` unsafe-key guard.
+- Sync contributor exposes a `bindings` field; hydrate merges via `mergePersistedQuickCommandState`.
+- `quick-commands` is promoted to a disableable module (mirroring editor / browser) and can be toggled in Settings → Modules.
+- Two rounds of codex review: round-1 closed 2 P2 findings; round-2 ran three parallel reviewers (attacker / defender / file-quality) and closed 5 findings (prototype safety, sanitizer hardening, spec §2.3 forward-compat alignment, null-hostId ordering lock, sync normalize).
+
+## [1.0.0-alpha.235] - 2026-04-28
+
+### Fix(electron): stabilize mac signing for updates (#672)
+
+Stabilize macOS app identity for packaged builds and dev updates.
+
+- Stop explicitly disabling Electron macOS signing and verify final moved app bundles.
+- Re-sign the `.app` after dev update swaps bundled `out/` resources, preserving `dev.wake.purdex` identity.
+- Track `scripts/build-electron.mjs` in full-rebuild detection and add signing guard tests.
+
+## [1.0.0-alpha.234] - 2026-04-27
+
+### Feat(probe): probe primitive + cc + helper + dev log (#670)
+
+Phase 4a PR-4a-1. Architectural pivot: probe layer is now **dumb** — it
+observes raw screen events; the orchestrator (new
+`internal/module/agent/probe_orchestrator.go`) owns status-transition
+dedup via `currentStatus` comparison. No emit-once flags, no Rearm API.
+
+- New `tmux.CapturePaneRange` + `CapturePaneTopLines` (with `-e` to
+  preserve ANSI so spinner color changes still produce diff hashes).
+- Probe primitive: `Watch(target, opts, cb)` long-lived watcher emits
+  `ScreenChanged` on every diff tick and `ScreenStable` every
+  `IdleStableTicks` consecutive identical hashes. Replaces the legacy
+  `ActivityCallback` fire-once-then-exit watcher.
+- New `agentpkg.ProbeProfileProvider` optional interface lets agents
+  tune capture region + idle threshold. cc adopts it (TopLines: 12,
+  IdleStableTicks: 3); codex/opencode fall through to default profile
+  (BottomLines: 10, IdleStableTicks: 3) — same capture region as
+  legacy `activityLoop`.
+- Orchestrator `interpretScreenEvent` applies: stale-callback guard,
+  graceWindow suppress (2s post-hook hook authority), Error Guard,
+  v2.0 transition gate, atomic stale-callback revalidation, and a
+  ScreenStable cheap pre-gate (skip bottom capture when already Idle
+  with alive top-frame PID).
+- 4 new expvar counters under `purdex_probe_*` (kept separate from
+  `purdex_phase35_*`). `PDX_DEV_MODE=1` enables `[probe]` log channel.
+- `manageActivityWatch` + `renameSessionLocked` migrated to orchestrator;
+  `lastHookAt` migrates across rename so graceWindow stays in effect.
+- Plan went through 15 rounds of codex review + a v2.0 architectural
+  pivot (consulting B vetoed dedup-in-probe premise) + 3 rounds on the
+  PR (1 standard + 3 adversarial + 1 convergence check). 39 new tests,
+  race-clean.
+
 ## [1.0.0-alpha.233] - 2026-04-27
 
 ### Feat(agent/opencode): OpenCode 1.14.23 hooks completion (#664)

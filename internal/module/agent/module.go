@@ -35,8 +35,9 @@ type Module struct {
 	uploadDir string
 	traceSink *hookTraceSink
 
-	prober *probe.Prober
-	tmux   tmux.Executor
+	prober    *probe.Prober
+	probeOrch *probeOrchestrator
+	tmux      tmux.Executor
 
 	mu             sync.Mutex
 	currentStatus  map[string]agentpkg.Status
@@ -113,6 +114,11 @@ func New(events *store.AgentEventStore) (*Module, error) {
 	if traces != nil {
 		m.traceSink = newHookTraceSink(traces)
 	}
+	// probeOrchestrator owns probe-watcher lifecycle. Created here (not in
+	// Init) so it is always available for tests that bypass Init and assign
+	// m.prober directly. The orchestrator resolves m.prober lazily, so
+	// "AFTER prober is set" semantics hold at startWatch call time.
+	m.probeOrch = newProbeOrchestrator(m)
 	return m, nil
 }
 
@@ -265,16 +271,29 @@ func (m *Module) renameSessionLocked(oldName, newName string) {
 		delete(m.currentStatus, oldName)
 	}
 	if agentType, ok := m.activeWatchers[oldName]; ok {
+		// activeWatchers transfer (m.mu-protected map mutation; caller holds m.mu).
 		delete(m.activeWatchers, oldName)
-		// Stop old watcher — callback closure captured oldName, can't reuse
-		if m.prober != nil {
-			m.prober.StopWatch(oldName + ":")
-		}
-		// Restart watcher with new name
 		m.activeWatchers[newName] = agentType
-		if m.prober != nil {
-			m.prober.StartWatch(newName+":", m.onActivityDetected(newName, agentType))
+		// R2 fix #1 + R3 deadlock-freedom: orchestrator stop/start are lock-free
+		// wrt m.mu (they touch prober.watcherMu, a different mutex), so calling
+		// them while we hold m.mu is safe. The orchestrator restores the full
+		// status-mapping callback (graceWindow + transition gate + Error Guard
+		// + broadcast) so the renamed session keeps responding to screen events.
+		// nil-prober is handled inside startWatch/stopWatch (R14 fix).
+		m.probeOrch.stopWatch(oldName)
+		if !m.probeOrch.startWatch(newName, agentType) {
+			// Codex finding #7 regression: invalid profile / nil prober — roll
+			// back the activeWatchers transfer so the orchestrator's stale-
+			// callback guard does not see a phantom watcher.
+			delete(m.activeWatchers, newName)
 		}
+		// Codex finding #2 regression: migrate the active graceWindow so a
+		// hook-set status that was just recorded under oldName cannot be
+		// overwritten by probe events arriving for newName within
+		// probeGraceWindow. Done AFTER orchestrator stop/start so it's
+		// clear that we preserve a brand-new graceWindow rather than
+		// starting fresh.
+		m.probeOrch.migrateLastHookAt(oldName, newName)
 	}
 }
 
@@ -437,21 +456,38 @@ func (m *Module) resolvePaneSession(paneID string) (string, string) {
 	return sessionName, m.resolveSessionCode(sessionName)
 }
 
-// manageActivityWatch handles starting/stopping Activity watchers in response to hook events.
+// manageActivityWatch handles starting/stopping Activity watchers in response
+// to hook events. Watcher lifecycle is delegated to probeOrchestrator, which
+// resolves the agent's ProbeProfile (default profile when the provider does
+// not implement agentpkg.ProbeProfileProvider). The screen-change callback
+// installed by the orchestrator is a no-op stub in Commit 3; Commit 4 wires
+// interpretScreenEvent (graceWindow + transition gate + Error Guard +
+// broadcast).
+//
+// R3 fix: m.activeWatchers is owned by this function (and renameSessionLocked
+// in Commit 5); the orchestrator deliberately does not touch it.
 func (m *Module) manageActivityWatch(session, agentType string, newStatus agentpkg.Status) {
 	m.mu.Lock()
 	_, wasWatching := m.activeWatchers[session]
 	delete(m.activeWatchers, session)
 	m.mu.Unlock()
 	if wasWatching {
-		m.prober.StopWatch(session + ":")
+		m.probeOrch.stopWatch(session)
 	}
 
 	if shouldWatchActivity(newStatus) {
 		m.mu.Lock()
 		m.activeWatchers[session] = agentType
 		m.mu.Unlock()
-		m.prober.StartWatch(session+":", m.onActivityDetected(session, agentType))
+		if !m.probeOrch.startWatch(session, agentType) {
+			// Codex finding #7 regression: invalid profile / nil prober — roll
+			// back the activeWatchers entry so the stale-callback guard sees
+			// the session as not watched and /debug/vars stays consistent
+			// (no "started" without a registered watcher).
+			m.mu.Lock()
+			delete(m.activeWatchers, session)
+			m.mu.Unlock()
+		}
 	}
 }
 
@@ -461,61 +497,5 @@ func shouldWatchActivity(status agentpkg.Status) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-// onActivityDetected returns a callback for screen-activity transitions while a
-// waiting/running/idle session is being watched. The callback checks if the
-// watcher is still active and then maps the activity signal to a new status or
-// triggers a sweep hint for shell-prompt + dead-PID cases.
-func (m *Module) onActivityDetected(session, agentType string) func(string, probe.ActivitySignal) {
-	return func(target string, signal probe.ActivitySignal) {
-		m.mu.Lock()
-		if _, active := m.activeWatchers[session]; !active {
-			m.mu.Unlock()
-			return
-		}
-		delete(m.activeWatchers, session)
-		m.mu.Unlock()
-
-		status := agentpkg.StatusIdle
-		switch signal {
-		case probe.ActivitySignalRunning:
-			status = agentpkg.StatusRunning
-		case probe.ActivitySignalIdle:
-			status = agentpkg.StatusIdle
-		case probe.ActivitySignalShellPrompt:
-			projection, err := m.projectionForSession(session)
-			if err == nil && projection != nil && projection.TopFrame != nil && !isPidAliveFn(projection.TopFrame.PID) {
-				_ = m.sweepOnce()
-				return
-			}
-			status = agentpkg.StatusIdle
-		default:
-			return
-		}
-
-		// Issue #1: Error Guard — don't overwrite StatusError
-		m.mu.Lock()
-		if m.currentStatus[session] == agentpkg.StatusError {
-			m.mu.Unlock()
-			return // respect Error Guard
-		}
-		m.currentStatus[session] = status
-		m.mu.Unlock()
-
-		if projection, err := m.setProjectionTopStatus(session, status); err == nil && projection != nil {
-			normalized := buildProjectionNormalized(projection, agentType, "probe:activity", time.Now().UnixNano(), agentpkg.DeriveResult{})
-			m.broadcastToSession(session, normalized)
-			return
-		}
-
-		normalized := agentpkg.NormalizedEvent{
-			AgentType:    agentType,
-			Status:       string(status),
-			RawEventName: "probe:activity",
-			BroadcastTs:  time.Now().UnixNano(),
-		}
-		m.broadcastToSession(session, normalized)
 	}
 }

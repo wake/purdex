@@ -362,7 +362,7 @@ func TestSweep_IdleClearStopsOrphanWatcher(t *testing.T) {
 	// Register an active watcher for this session (simulating an in-flight
 	// Activity probe left over from a running/waiting status).
 	m.activeWatchers["work"] = "cc"
-	m.prober.StartWatch("work:", func(string, probe.ActivitySignal) {})
+	m.prober.Watch("work:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
 	t.Cleanup(func() { m.prober.StopAllWatches() })
 
 	origAlive := isPidAliveFn
@@ -409,7 +409,7 @@ func TestSweep_DeadPidAlsoStopsOrphanWatcher(t *testing.T) {
 	}
 
 	m.activeWatchers["work"] = "cc"
-	m.prober.StartWatch("work:", func(string, probe.ActivitySignal) {})
+	m.prober.Watch("work:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
 	t.Cleanup(func() { m.prober.StopAllWatches() })
 
 	origAlive := isPidAliveFn

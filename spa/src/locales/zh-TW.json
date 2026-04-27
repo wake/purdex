@@ -21,6 +21,7 @@
   "modules.editor.description": "具語法高亮的文字與多樣內容編輯器",
   "modules.browser.description": "內嵌網頁瀏覽器面板（需桌面版）",
   "modules.memory_monitor.description": "系統記憶體與 renderer 診斷",
+  "modules.quick_commands.description": "讓你在 Workspace 與 Host 入口快速執行常用指令",
   "module.disabled.title": "{{module}} 模組目前已停用",
   "module.disabled.body": "啟用後重載即可恢復這個 {{paneKind}} 分頁。",
   "module.disabled.enable": "啟用",

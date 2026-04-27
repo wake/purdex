@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "purdex",
-  "version": "1.0.0-alpha.233",
+  "version": "1.0.0-alpha.236",
   "license": "MIT",
   "main": "out/main/index.mjs",
   "scripts": {
@@ -21,7 +21,6 @@
     ],
     "mac": {
       "icon": "build/icon.icns",
-      "identity": null,
       "target": [
         {
           "target": "dir",

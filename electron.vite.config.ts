@@ -30,6 +30,7 @@ const REBUILD_TRACKED_PATHS = [
   'package.json',
   'pnpm-lock.yaml',
   'electron-builder.yml',
+  'scripts/build-electron.mjs',
   'build/',
 ]
 

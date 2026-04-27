@@ -21,6 +21,7 @@
   "modules.editor.description": "Text and rich content editor with syntax highlighting",
   "modules.browser.description": "Embedded web browser pane (requires desktop app)",
   "modules.memory_monitor.description": "System memory and renderer diagnostics",
+  "modules.quick_commands.description": "Quickly run frequently-used commands from Workspace and Host entry points",
   "module.disabled.title": "{{module}} module is disabled",
   "module.disabled.body": "Enable it and reload to restore this {{paneKind}} pane.",
   "module.disabled.enable": "Enable",

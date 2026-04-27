@@ -2,6 +2,15 @@ package dev
 
 import "testing"
 
+func TestRebuildTrackedPathsIncludesElectronBuilderScript(t *testing.T) {
+	for _, path := range rebuildTrackedPaths {
+		if path == "scripts/build-electron.mjs" {
+			return
+		}
+	}
+	t.Fatalf("rebuildTrackedPaths missing scripts/build-electron.mjs: %#v", rebuildTrackedPaths)
+}
+
 func TestDetectRequiresFullRebuild(t *testing.T) {
 	cases := []struct {
 		name        string
