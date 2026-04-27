@@ -152,7 +152,8 @@ export const PurdexOpenCodeHooks = async () => {
             error_details: event.properties.error?.data?.message || '',
           })
           return
-        case 'session.idle':
+        case 'session.status':
+          if (event.properties.status?.type !== 'idle') return
           if (suppressIdleForSession.has(event.properties.sessionID)) {
             suppressIdleForSession.delete(event.properties.sessionID)
             return

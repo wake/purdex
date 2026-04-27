@@ -108,7 +108,14 @@ func (s *pluginSimState) simulateBusEvent(eventType string, properties map[strin
 				"error_details": errDetails,
 			},
 		}, true
-	case "session.idle":
+	case "session.status":
+		// Decision 3 switch: subscribe session.status, filter to {type:"idle"}.
+		// Decision 4 defer: busy/retry variants no-op; trigger conditions
+		// for adoption are tracked in follow-up issue #661.
+		statusObj, _ := properties["status"].(map[string]any)
+		if strMapVal(statusObj, "type") != "idle" {
+			return mappedHookEvent{}, false
+		}
 		sessionID := strMapVal(properties, "sessionID")
 		if s.suppressIdleForSession[sessionID] {
 			delete(s.suppressIdleForSession, sessionID)
@@ -280,9 +287,10 @@ type pluginEventContract struct {
 	RequiredFields []string
 }
 
-// pluginContracts is the alpha.230 baseline event-to-handler map. Commit
-// 5 (Decision 3 switch) swaps session.idle for session.status filtered
-// to {type:"idle"} and updates the corresponding case here.
+// pluginContracts is the post-Commit-5 event-to-handler map. The
+// `session.status` entry is the Decision 3 switch target (filtered to
+// {type:"idle"} inside the simulator); pre-switch sessions used a bare
+// `session.idle` Bus event, deprecated upstream.
 func pluginContracts() []pluginEventContract {
 	return []pluginEventContract{
 		{
@@ -314,10 +322,10 @@ func pluginContracts() []pluginEventContract {
 			},
 		},
 		{
-			Event:          "session.idle",
-			FixtureFile:    "session.idle.json",
+			Event:          "session.status",
+			FixtureFile:    "session.status.json",
 			Kind:           "bus-event",
-			RequiredFields: []string{"properties.sessionID"},
+			RequiredFields: []string{"properties.sessionID", "properties.status.type"},
 		},
 		{
 			Event:          "session.deleted",
@@ -428,9 +436,9 @@ func isZeroValue(v any) bool {
 // simulator, and assert the (Name, Payload) the JS plugin would emit().
 // Unconditional (Round 1 C1).
 //
-// Commit 4 verifies the alpha.230 baseline mapping (session.idle → Stop).
-// Commit 5 (Decision 3 switch) replaces that case with session.status
-// filtered to {type:"idle"} and updates expectations here in lockstep.
+// Verifies the post-Decision-3 mapping where `session.status` filtered to
+// {type:"idle"} drives Stop; busy/retry variants are received-but-no-op
+// (Decision 4 defer).
 func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 	cases := []struct {
 		event         string
@@ -484,12 +492,12 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			},
 		},
 		{
-			event:       "session.idle",
-			fixtureFile: "session.idle.json",
+			event:       "session.status",
+			fixtureFile: "session.status.json",
 			kind:        "bus-event",
 			expectName:  "Stop",
 			expectPayload: map[string]any{
-				"session_id": "ses_fixture_idle_001",
+				"session_id": "ses_fixture_status_idle_001",
 			},
 		},
 		{

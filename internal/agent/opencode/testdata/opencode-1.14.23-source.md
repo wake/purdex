@@ -38,7 +38,7 @@ contract green if the runtime payload is a superset of source-derived.
 | `permission.asked.json` | source-derived | `busEvents[upstreamKey=permission.asked]` (definedAt `permission/index.ts:76`, schema `Request`) | `properties.permission`, `properties.patterns` |
 | `question.asked.json` | source-derived | `busEvents[upstreamKey=question.asked]` (definedAt `question/index.ts:97`, schema `QuestionRequest`) | `properties.questions` |
 | `session.error.json` | source-derived | `busEvents[upstreamKey=session.error]` (definedAt `session/session.ts:281`) | `properties.sessionID`, `properties.error.name`, `properties.error.data.message` |
-| `session.idle.json` | source-derived | `busEvents[upstreamKey=session.idle]` (definedAt `session/status.ts:37`, deprecated-but-emit per Decision 3 switch — fixture retained until Commit 5 swap) | `properties.sessionID` |
+| `session.status.json` | source-derived | `busEvents[upstreamKey=session.status]` (definedAt `session/status.ts:29`, schema `{sessionID, status: idle | retry | busy}` — fixture uses idle variant per Decision 3 switch / Decision 4 defer for busy/retry) | `properties.sessionID`, `properties.status.type` |
 | `session.deleted.json` | source-derived | `busEvents[upstreamKey=session.deleted]` (definedAt `session/session.ts:268`, SyncEvent) | `properties.sessionID` |
 
 ### Strong hooks

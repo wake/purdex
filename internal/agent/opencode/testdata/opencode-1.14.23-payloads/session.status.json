@@ -1,0 +1,10 @@
+{
+  "kind": "bus-event",
+  "eventType": "session.status",
+  "properties": {
+    "sessionID": "ses_fixture_status_idle_001",
+    "status": {
+      "type": "idle"
+    }
+  }
+}

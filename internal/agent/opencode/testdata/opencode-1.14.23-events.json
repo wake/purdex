@@ -41,7 +41,7 @@
       "purdex": {
         "kind": "installable",
         "purdexEventName": "Stop",
-        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:<NEW-LINE-AFTER-COMMIT-5>",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:155",
         "templateConsumesAtNote": "Plugin filters payload to status.type === 'idle' only (Decision 3 switch); busy/retry variants received-but-no-op (Decision 4 defer; trigger conditions tracked in follow-up issue #661)",
         "stalenessPolicy": null
       }
@@ -113,7 +113,7 @@
       "purdex": {
         "kind": "installable",
         "purdexEventName": "SessionEnd",
-        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:162",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:163",
         "stalenessPolicy": null
       }
     },
@@ -562,7 +562,7 @@
       "purdex": {
         "kind": "installable",
         "purdexEventName": "UserPromptSubmit",
-        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:167",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:168",
         "stalenessPolicy": null
       }
     },
@@ -629,7 +629,7 @@
       "purdex": {
         "kind": "installable",
         "purdexEventName": "SubagentStart",
-        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:178",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:179",
         "templateFilter": "input.tool === 'task'",
         "stalenessPolicy": null
       }
@@ -660,7 +660,7 @@
       "purdex": {
         "kind": "installable",
         "purdexEventName": "SubagentStop",
-        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:191",
+        "templateConsumesAt": "internal/agent/opencode/plugin_template.go:192",
         "templateFilter": "input.tool === 'task'",
         "stalenessPolicy": null
       }
