@@ -9,6 +9,7 @@ var rebuildTrackedPaths = []string{
 	"package.json",
 	"pnpm-lock.yaml",
 	"electron-builder.yml",
+	"scripts/build-electron.mjs",
 	"build/",
 }
 

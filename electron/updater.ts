@@ -1,12 +1,15 @@
 import { app } from 'electron'
+import { execFileSync } from 'child_process'
 import { existsSync, mkdirSync, rmSync, renameSync, cpSync, createWriteStream } from 'fs'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { pipeline } from 'stream/promises'
 import { extract } from 'tar'
 
 declare const __APP_VERSION__: string
 declare const __ELECTRON_HASH__: string
 declare const __SPA_HASH__: string
+
+const APP_ID = 'dev.wake.purdex'
 
 export interface AppInfo {
   version: string
@@ -37,6 +40,31 @@ export function getAppInfo(): AppInfo {
 
 function authHeaders(token?: string): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+function getAppBundlePath(): string | null {
+  if (process.platform !== 'darwin') return null
+  // /Foo.app/Contents/MacOS/Foo -> /Foo.app
+  return dirname(dirname(dirname(app.getPath('exe'))))
+}
+
+function resignAppBundle(): void {
+  const appBundle = getAppBundlePath()
+  if (!appBundle || process.env.PDX_SKIP_MAC_SIGN === '1') return
+
+  const identity = process.env.PDX_MAC_SIGN_IDENTITY || '-'
+  const signArgs = [
+    '--force',
+    '--deep',
+    '--options', 'runtime',
+    '--identifier', APP_ID,
+    '--sign', identity,
+  ]
+  if (identity === '-') signArgs.push('--timestamp=none')
+  signArgs.push(appBundle)
+
+  execFileSync('codesign', signArgs, { stdio: 'inherit' })
+  execFileSync('codesign', ['--verify', '--deep', '--strict', '--verbose=4', appBundle], { stdio: 'inherit' })
 }
 
 export async function checkUpdate(daemonUrl: string, token?: string): Promise<RemoteVersionInfo> {
@@ -158,6 +186,8 @@ export async function applyUpdate(
         renameSync(src, dst)
       }
     }
+    progress('signing')
+    resignAppBundle()
   } catch (err) {
     // Rollback: restore from backup — each target independently so one
     // failure does not prevent restoring the others
