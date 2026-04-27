@@ -326,6 +326,59 @@ describe('createQuickCommandsContributor — bindings field (v2)', () => {
     expect(useQuickCommandStore.getState().bindings).toEqual({})
   })
 
+  // codex round-2 A2: hostile sync payload action-method overwrite attack
+  it('full-replace ignores non-DATA_FIELDS keys (e.g. setBinding overwrite attempt)', () => {
+    useQuickCommandStore.setState({
+      global: [{ id: 'cmd-a', name: 'A', command: 'a' }],
+      byHost: {},
+      bindings: {},
+    })
+    const incoming: FullPayload = {
+      version: 1,
+      data: {
+        global: [],
+        byHost: {},
+        bindings: {},
+        // hostile keys attempting to overwrite zustand action methods
+        setBinding: null,
+        getBoundCommands: 'evil',
+        addCommand: () => {
+          throw new Error('hijacked')
+        },
+      } as unknown as Record<string, unknown>,
+    }
+    contributor.deserialize(incoming, { type: 'full-replace' })
+    const state = useQuickCommandStore.getState()
+    // Action methods MUST remain functions
+    expect(typeof state.setBinding).toBe('function')
+    expect(typeof state.getBoundCommands).toBe('function')
+    expect(typeof state.addCommand).toBe('function')
+    // And actually be callable (no hijack)
+    expect(() => state.addCommand({ id: 'safe', name: 'S', command: 's' })).not.toThrow()
+  })
+
+  it('field-merge ignores non-DATA_FIELDS keys', () => {
+    useQuickCommandStore.setState({
+      global: [{ id: 'cmd-a', name: 'A', command: 'a' }],
+      byHost: {},
+      bindings: {},
+    })
+    const incoming: FullPayload = {
+      version: 1,
+      data: {
+        global: [{ id: 'cmd-b', name: 'B', command: 'b' }],
+        setBinding: null, // hostile
+      } as unknown as Record<string, unknown>,
+    }
+    contributor.deserialize(incoming, {
+      type: 'field-merge',
+      resolved: { global: 'remote' },
+    })
+    const state = useQuickCommandStore.getState()
+    expect(typeof state.setBinding).toBe('function')
+    expect(state.global).toEqual([{ id: 'cmd-b', name: 'B', command: 'b' }])
+  })
+
   it('field-merge with missing bindings field leaves local bindings untouched', () => {
     // Even when resolved says bindings='remote', if incoming omits the field,
     // patch must NOT clear local (preserves field-merge "absent = no change" semantic).

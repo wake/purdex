@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useQuickCommandStore, sanitizeBindings } from './useQuickCommandStore'
+import {
+  useQuickCommandStore,
+  sanitizeBindings,
+  mergePersistedQuickCommandState,
+} from './useQuickCommandStore'
 import { QUICK_COMMAND_SLOTS } from '../lib/quick-command-slots'
 
 // 顯式列出所有 mutable fields — zustand setState merge 模式下，
@@ -138,7 +142,10 @@ describe('useQuickCommandStore — sanitizeBindings via merge', () => {
   })
 })
 
-describe('sanitizeBindings — slot id whitelist (codex round-1 P2)', () => {
+describe('sanitizeBindings — forward-compat with unknown slot ids (spec §2.3)', () => {
+  // Spec §2.3 explicitly allows unknown slot ids in Phase 1 so cross-version
+  // sync (older client pulls newer client's future slot binding) doesn't
+  // lose data. SlotHost ignores unknown ids at render time.
   it('accepts known QUICK_COMMAND_SLOTS values', () => {
     const out = sanitizeBindings({
       'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, QUICK_COMMAND_SLOTS.HOST_ACTIONS],
@@ -148,35 +155,212 @@ describe('sanitizeBindings — slot id whitelist (codex round-1 P2)', () => {
     })
   })
 
-  it('rejects unknown slot ids (typos / future slots)', () => {
+  it('preserves unknown / future slot ids verbatim (forward-compat)', () => {
     const out = sanitizeBindings({
-      'cmd-a': ['workspace.action', 'workspaces.actions', 'host.action'],
+      'cmd-a': ['future.actions', 'workspace.action'],
     })
-    // All three are typos / unknown → entry dropped (cleaned array empty)
-    expect(out).toEqual({})
+    // Both kept — spec requires forward-compat. SlotHost doesn't render them
+    // because no slot is registered, but data persists for newer clients.
+    expect(out).toEqual({
+      'cmd-a': ['future.actions', 'workspace.action'],
+    })
   })
 
-  it('keeps only whitelisted slot ids in mixed array', () => {
+  it('drops only empty / non-string targets', () => {
     const out = sanitizeBindings({
-      'cmd-a': [
-        QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS,
-        'workspace.action',
-        QUICK_COMMAND_SLOTS.HOST_ACTIONS,
-        'random.target',
+      'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, '', 123, null, 'host.actions'],
+    })
+    expect(out).toEqual({
+      'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, 'host.actions'],
+    })
+  })
+
+  it('drops entries whose value is not an array', () => {
+    const out = sanitizeBindings({
+      'cmd-a': 'workspace.actions', // not an array
+      'cmd-b': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS],
+    })
+    expect(out).toEqual({
+      'cmd-b': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS],
+    })
+  })
+
+  it('rejects prototype-pollution command id keys', () => {
+    const out = sanitizeBindings({
+      __proto__: ['workspace.actions'],
+      constructor: ['workspace.actions'],
+      prototype: ['workspace.actions'],
+      'cmd-a': ['workspace.actions'],
+    })
+    expect(out).toEqual({ 'cmd-a': ['workspace.actions'] })
+  })
+})
+
+describe('getBoundCommands — prototype-key safety (codex round-2 A1)', () => {
+  // Without own-property check, a command id that happens to match an
+  // Object.prototype method (toString / valueOf / hasOwnProperty / etc.)
+  // would resolve `bindings[c.id]` to an inherited function, and `.includes()`
+  // on a function would throw → DoS for every caller of getBoundCommands.
+  it('does NOT throw when capability id collides with Object.prototype method (toString)', () => {
+    useQuickCommandStore.setState({
+      global: [{ id: 'toString', name: 'Evil', command: 'rm -rf /' }],
+      byHost: {},
+      bindings: {}, // no binding for 'toString' — but Object.prototype.toString exists
+    })
+    expect(() =>
+      useQuickCommandStore
+        .getState()
+        .getBoundCommands(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, 'h1'),
+    ).not.toThrow()
+    // Should treat it as "no binding" — not render the evil command
+    const result = useQuickCommandStore
+      .getState()
+      .getBoundCommands(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, 'h1')
+    expect(result).toEqual([])
+  })
+
+  it('safe when bindings has prototype-method ids (valueOf / hasOwnProperty)', () => {
+    useQuickCommandStore.setState({
+      global: [
+        { id: 'valueOf', name: 'V', command: 'v' },
+        { id: 'hasOwnProperty', name: 'H', command: 'h' },
       ],
+      byHost: {},
+      bindings: {},
     })
-    expect(out).toEqual({
-      'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, QUICK_COMMAND_SLOTS.HOST_ACTIONS],
+    expect(() =>
+      useQuickCommandStore
+        .getState()
+        .getBoundCommands(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, 'h1'),
+    ).not.toThrow()
+  })
+})
+
+describe('getBoundCommands — null hostId (spec §4.4 / codex round-2 D2)', () => {
+  beforeEach(() => {
+    resetStore({
+      global: [
+        { id: 'cmd-a', name: 'A', command: 'a' },
+        { id: 'cmd-b', name: 'B', command: 'b' },
+        { id: 'cmd-c', name: 'C', command: 'c' },
+      ],
+      byHost: {
+        'h1': [{ id: 'cmd-a', name: 'A-host', command: 'a-host' }], // override
+      },
+      bindings: {
+        'cmd-c': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS],
+        'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS],
+      },
     })
   })
 
-  it('drops entries whose targets are all invalid', () => {
-    const out = sanitizeBindings({
-      'cmd-a': ['unknown'],
-      'cmd-b': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS],
+  it('hostId=null uses state.global (NOT host override) for capability order', () => {
+    const out = useQuickCommandStore
+      .getState()
+      .getBoundCommands(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, null)
+    // Order follows global (cmd-a appears before cmd-c)
+    expect(out.map((c) => c.id)).toEqual(['cmd-a', 'cmd-c'])
+    // 'cmd-a' is the global version, NOT the host override
+    expect(out[0].command).toBe('a')
+    expect(out[0].name).toBe('A')
+  })
+
+  it('hostId="h1" uses getCommands(h1) which applies override', () => {
+    const out = useQuickCommandStore
+      .getState()
+      .getBoundCommands(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, 'h1')
+    expect(out.map((c) => c.id)).toEqual(['cmd-a', 'cmd-c'])
+    expect(out[0].command).toBe('a-host') // override applied
+  })
+
+  it('hostId=null is stable regardless of bindings record key order', () => {
+    // Reset bindings with reversed key order — global capability order should still win
+    resetStore({
+      global: [
+        { id: 'cmd-a', name: 'A', command: 'a' },
+        { id: 'cmd-b', name: 'B', command: 'b' },
+        { id: 'cmd-c', name: 'C', command: 'c' },
+      ],
+      byHost: {},
+      bindings: {
+        // intentionally reversed
+        'cmd-c': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS],
+        'cmd-b': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS],
+        'cmd-a': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS],
+      },
     })
-    expect(out).toEqual({
-      'cmd-b': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS],
-    })
+    const out = useQuickCommandStore
+      .getState()
+      .getBoundCommands(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS, null)
+    expect(out.map((c) => c.id)).toEqual(['cmd-a', 'cmd-b', 'cmd-c'])
+  })
+})
+
+describe('mergePersistedQuickCommandState — real hydrate trust boundary (codex round-2 Q1)', () => {
+  // Drives the actual `merge` hook used by zustand persist on rehydrate,
+  // not a setState fake. Catches any future regression where someone
+  // inadvertently bypasses sanitizer at the hydrate trust boundary.
+  // mergePersistedQuickCommandState only reads the three data fields and
+  // spreads `current` for the rest. Tests don't exercise action methods,
+  // so a minimal data-only stub is sufficient (cast via unknown).
+  const baselineCurrent = {
+    global: [],
+    byHost: {},
+    bindings: {},
+  } as unknown as Parameters<typeof mergePersistedQuickCommandState>[1]
+
+  it('null persisted payload → returns current with empty bindings', () => {
+    const out = mergePersistedQuickCommandState(null, baselineCurrent)
+    expect(out.bindings).toEqual({})
+  })
+
+  it('hostile bindings payload (prototype keys) → sanitized to safe record', () => {
+    const out = mergePersistedQuickCommandState(
+      {
+        global: [],
+        byHost: {},
+        bindings: {
+          __proto__: ['workspace.actions'],
+          constructor: ['workspace.actions'],
+          'cmd-a': ['workspace.actions'],
+        },
+      },
+      baselineCurrent,
+    )
+    expect(out.bindings).toEqual({ 'cmd-a': ['workspace.actions'] })
+  })
+
+  it('non-array bindings → fallback to {}', () => {
+    const out = mergePersistedQuickCommandState(
+      { global: [], byHost: {}, bindings: 'not-an-object' },
+      baselineCurrent,
+    )
+    expect(out.bindings).toEqual({})
+  })
+
+  it('non-array global → keeps current.global (preserves alpha state)', () => {
+    const current = {
+      ...baselineCurrent,
+      global: [{ id: 'existing', name: 'E', command: 'e' }],
+    }
+    const out = mergePersistedQuickCommandState(
+      { global: 'corrupt', byHost: {}, bindings: {} },
+      current,
+    )
+    expect(out.global).toEqual([{ id: 'existing', name: 'E', command: 'e' }])
+  })
+
+  it('valid payload passes through (sanity)', () => {
+    const out = mergePersistedQuickCommandState(
+      {
+        global: [{ id: 'cmd-a', name: 'A', command: 'a' }],
+        byHost: { h1: [] },
+        bindings: { 'cmd-a': ['workspace.actions'] },
+      },
+      baselineCurrent,
+    )
+    expect(out.global).toEqual([{ id: 'cmd-a', name: 'A', command: 'a' }])
+    expect(out.byHost).toEqual({ h1: [] })
+    expect(out.bindings).toEqual({ 'cmd-a': ['workspace.actions'] })
   })
 })

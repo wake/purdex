@@ -1,9 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import { QUICK_COMMAND_SLOTS, type QuickCommandSlotId } from '../lib/quick-command-slots'
-
-const VALID_SLOT_IDS = new Set<string>(Object.values(QUICK_COMMAND_SLOTS))
+import type { QuickCommandSlotId } from '../lib/quick-command-slots'
 
 export interface QuickCommand {
   id: string
@@ -27,7 +25,10 @@ interface QuickCommandState {
   getCommands: (hostId: string) => QuickCommand[]
 
   setBinding: (commandId: string, targets: QuickCommandSlotId[]) => void
-  getBoundCommands: (mountTarget: QuickCommandSlotId, hostId: string) => QuickCommand[]
+  // hostId === null: workspace caller before HostPicker resolves a host;
+  // renderer uses state.global as capability order (spec §4.4).
+  // hostId !== null: per-host capability list from getCommands.
+  getBoundCommands: (mountTarget: QuickCommandSlotId, hostId: string | null) => QuickCommand[]
 }
 
 // v2: do NOT pre-seed defaults. Existing users who hydrated v1 defaults
@@ -43,13 +44,16 @@ const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
  * hand-edited localStorage, failed migration, hostile sync source — must
  * NEVER let arbitrary string keys silently mount commands into slots.
  *
- * Rules:
+ * Rules (spec §2.3 — forward-compat with future slot ids):
  *  - Top-level value must be a plain object (rejects arrays, null, primitives).
- *  - Reject `__proto__` / `constructor` / `prototype` keys (prototype pollution).
+ *  - Reject `__proto__` / `constructor` / `prototype` command id keys
+ *    (prototype pollution).
  *  - Drop entries whose value is not an array.
- *  - Within each array, keep only strings present in `QUICK_COMMAND_SLOTS`
- *    (whitelist; rejects typos like `'workspace.action'` and forward-incompat
- *    slot ids — if a future version adds slots, sanitizer ships in that PR).
+ *  - Within each array, keep only non-empty strings. NO slot id whitelist —
+ *    spec §2.3 explicitly requires accepting unknown slot ids in Phase 1
+ *    so cross-version sync (older client pulls newer client's future slot
+ *    binding) doesn't lose data; SlotHost simply ignores unknown slot ids
+ *    at render time.
  *  - Drop entries whose cleaned array is empty (matches setBinding(id, [])).
  */
 export function sanitizeBindings(raw: unknown): Bindings {
@@ -61,11 +65,52 @@ export function sanitizeBindings(raw: unknown): Bindings {
     if (!Array.isArray(targets)) continue
     const cleaned: QuickCommandSlotId[] = []
     for (const t of targets) {
-      if (typeof t === 'string' && VALID_SLOT_IDS.has(t)) cleaned.push(t as QuickCommandSlotId)
+      if (typeof t === 'string' && t.length > 0) cleaned.push(t as QuickCommandSlotId)
     }
     if (cleaned.length > 0) out[cmdId] = cleaned
   }
   return out
+}
+
+/**
+ * Read bindings[cmdId] safely. Prevents inherited-prop attacks where cmdId
+ * happens to match Object.prototype methods (toString / valueOf / hasOwnProperty
+ * / isPrototypeOf / etc.) — naive `bindings[cmdId]` would resolve to a
+ * non-array function and `.includes(slot)` would throw, crashing
+ * getBoundCommands for every caller (DoS).
+ *
+ * Returns undefined unless `bindings` has its OWN property `cmdId` AND that
+ * value is an array.
+ */
+function getBindingTargets(bindings: Bindings, cmdId: string): QuickCommandSlotId[] | undefined {
+  if (!Object.prototype.hasOwnProperty.call(bindings, cmdId)) return undefined
+  const targets = bindings[cmdId]
+  return Array.isArray(targets) ? targets : undefined
+}
+
+/**
+ * Pure merge function — used by zustand persist `merge` hook AND directly by
+ * tests to drive the real hydrate trust boundary with malformed payloads.
+ * Exporting this avoids the previous test pattern of using setState as a
+ * mock for hydrate, which never actually went through sanitizer.
+ */
+export function mergePersistedQuickCommandState(
+  persisted: unknown,
+  current: QuickCommandState,
+): QuickCommandState {
+  const p = persisted as
+    | { global?: unknown; byHost?: unknown; bindings?: unknown }
+    | null
+    | undefined
+  return {
+    ...current,
+    global: Array.isArray(p?.global) ? (p?.global as QuickCommand[]) : current.global,
+    byHost:
+      typeof p?.byHost === 'object' && p?.byHost !== null && !Array.isArray(p?.byHost)
+        ? (p?.byHost as Record<string, QuickCommand[]>)
+        : current.byHost,
+    bindings: sanitizeBindings(p?.bindings),
+  }
 }
 
 export const useQuickCommandStore = create<QuickCommandState>()(
@@ -146,13 +191,20 @@ export const useQuickCommandStore = create<QuickCommandState>()(
         }),
 
       getBoundCommands: (mountTarget, hostId) => {
+        // hostId === null: spec §4.4 — workspace caller before HostPicker
+        // resolved a host; render uses state.global as capability order so
+        // chip list isn't re-sorted when picker eventually picks a host.
+        // Non-null: per-host capability order from getCommands.
         // Iterate the capability list (stable, sync-safe order) — NOT
-        // Object.keys(bindings) which has unpredictable post-sync order
-        // (spec §4.4). Dangling binding entries (commandId without a matching
-        // capability) are skipped here as well as cleared at removeCommand.
-        const cmds = get().getCommands(hostId)
+        // Object.keys(bindings) which has unpredictable post-sync order.
+        // Dangling binding entries (commandId without a matching capability)
+        // are skipped here as well as cleared at removeCommand.
+        const cmds = hostId === null ? get().global : get().getCommands(hostId)
         const { bindings } = get()
-        return cmds.filter((c) => bindings[c.id]?.includes(mountTarget))
+        return cmds.filter((c) => {
+          const targets = getBindingTargets(bindings, c.id)
+          return targets !== undefined && targets.includes(mountTarget)
+        })
       },
     }),
     {
@@ -164,20 +216,8 @@ export const useQuickCommandStore = create<QuickCommandState>()(
         byHost: state.byHost,
         bindings: state.bindings,
       }),
-      merge: (persisted, current) => {
-        // AR-1: sanitize hydrated bindings BEFORE first read. global / byHost
-        // come from a known-shape v1 payload — keep as-is. Only bindings is
-        // newly added in v2 and must be clamped against hostile payloads.
-        const p = persisted as { global?: unknown; byHost?: unknown; bindings?: unknown } | null | undefined
-        return {
-          ...current,
-          global: Array.isArray(p?.global) ? (p?.global as QuickCommand[]) : current.global,
-          byHost: typeof p?.byHost === 'object' && p?.byHost !== null && !Array.isArray(p?.byHost)
-            ? (p?.byHost as Record<string, QuickCommand[]>)
-            : current.byHost,
-          bindings: sanitizeBindings(p?.bindings),
-        }
-      },
+      merge: (persisted, current) =>
+        mergePersistedQuickCommandState(persisted, current as QuickCommandState),
     },
   ),
 )
