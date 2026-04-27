@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { WorkspaceContextMenu } from './WorkspaceContextMenu'
+import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
+import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
+import { clearModuleRegistry, registerModule } from '../../../lib/module-registry'
 
 describe('WorkspaceContextMenu', () => {
   beforeEach(() => { cleanup() })
@@ -193,6 +197,73 @@ describe('WorkspaceContextMenu', () => {
     await waitFor(() => {
       expect(screen.getByText('Purdex')).toBeInTheDocument()
     })
+  })
+
+  // codex round-1 B8 — quick commands section integration (Phase 1b)
+  it('renders quick commands section above Settings when WORKSPACE_ACTIONS bindings exist', () => {
+    useQuickCommandStore.setState({
+      global: [{ id: 'cmd-x', name: 'XCmd', command: 'x' }],
+      byHost: {},
+      bindings: { 'cmd-x': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS] },
+    })
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+    clearModuleRegistry()
+    registerModule({ id: 'quick-commands', name: 'Quick Commands', disableable: true })
+    render(
+      <WorkspaceContextMenu
+        position={{ x: 0, y: 0 }}
+        workspaceId="w1"
+        hostId="h1"
+        onSettings={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByLabelText(/^XCmd/)).toBeInTheDocument()
+  })
+
+  // codex round-1 P2 — own-property guard: a capability id colliding with an
+  // inherited Object.prototype method (toString / valueOf / hasOwnProperty)
+  // would have crashed the menu render via `bindings[c.id]?.includes(...)`
+  // resolving to a non-array function. `getBindingTargets` is the fix.
+  it('does not crash when a capability id collides with Object.prototype method (toString)', () => {
+    useQuickCommandStore.setState({
+      global: [{ id: 'toString', name: 'Evil', command: 'evil' }],
+      byHost: {},
+      bindings: {},
+    })
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+    clearModuleRegistry()
+    registerModule({ id: 'quick-commands', name: 'Quick Commands', disableable: true })
+    expect(() =>
+      render(
+        <WorkspaceContextMenu
+          position={{ x: 0, y: 0 }}
+          workspaceId="w1"
+          hostId="h1"
+          onSettings={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      ),
+    ).not.toThrow()
+  })
+
+  it('omits the quick commands section (and its separator) when no WORKSPACE_ACTIONS bindings exist', () => {
+    useQuickCommandStore.setState({ global: [], byHost: {}, bindings: {} })
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+    clearModuleRegistry()
+    registerModule({ id: 'quick-commands', name: 'Quick Commands', disableable: true })
+    render(
+      <WorkspaceContextMenu
+        position={{ x: 0, y: 0 }}
+        workspaceId="w1"
+        hostId="h1"
+        onSettings={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    )
+    // No quick command chip; existing Settings button still present
+    expect(screen.queryByRole('toolbar', { name: /quick|快速/i })).toBeNull()
+    expect(screen.getByText(/settings/i)).toBeInTheDocument()
   })
 
   it('calls onMergeTo with windowId when merge target clicked', async () => {

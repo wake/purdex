@@ -57,6 +57,7 @@ import { editorModuleDefinition, registerEditorNewTabProviders } from './editor-
 import { registerBuiltinFsBackends } from './fs-backends'
 import { applyModuleFileOpeners } from './module-file-openers'
 import { clearAllForHmr as clearFileOpenerRegistryForHmr } from '../file-opener-registry'
+import { QuickCommandsSettingsSection } from '../../components/settings/QuickCommandsSettingsSection'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
   const handleSelect = (content: PaneContent) => {
@@ -172,15 +173,25 @@ export function registerBuiltinModules(): void {
   // Editor module
   registerModule(editorModuleDefinition)
 
-  // Quick Commands v2 — Phase 1a registers the module shell only (disableable
-  // gate + Modules Switchboard listing). Settings contribution + UI surfaces
-  // ship together in Phase 1b (spec §6 — never ship a "configured but no
-  // effect" intermediate state).
+  // Quick Commands v2 — Phase 1b adds the settings contribution alongside the
+  // workspace-context-menu entry point landed in this PR. Settings UI is the
+  // sole place to author commands + bindings; the workspace right-click menu
+  // surfaces them in the live UI (spec §6 — Settings out + at least one
+  // visible mount surface ship together).
   registerModule({
     id: 'quick-commands',
     name: 'Quick Commands',
     disableable: true,
     descriptionKey: 'modules.quick_commands.description',
+    settings: [
+      {
+        localId: 'quick-commands',
+        scope: 'purdex',
+        order: 10, // between editor (9) and sync (11), after module-config (8)
+        labelKey: 'settings.section.quick_commands',
+        component: QuickCommandsSettingsSection,
+      },
+    ],
   })
 
   // FS backends
