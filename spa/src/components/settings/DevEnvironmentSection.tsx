@@ -253,6 +253,7 @@ export function DevEnvironmentSection() {
     downloading: 'Downloading update…',
     extracting: 'Extracting…',
     applying: 'Applying update…',
+    signing: 'Signing app…',
     restarting: 'Restarting…',
   }
 

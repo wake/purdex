@@ -21,7 +21,6 @@
     ],
     "mac": {
       "icon": "build/icon.icns",
-      "identity": null,
       "target": [
         {
           "target": "dir",
