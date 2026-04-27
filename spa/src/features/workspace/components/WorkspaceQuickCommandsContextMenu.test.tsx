@@ -193,6 +193,74 @@ describe('WorkspaceQuickCommandsContextMenu', () => {
     expect(createSession).toHaveBeenCalledTimes(1)
   })
 
+  // codex round-2 — spec §3.2: WORKSPACE_ACTIONS sessions inherit
+  // workspace.moduleConfig.files.projectPath as cwd. Without this the slot
+  // executor falls back to ~ and right-click commands run in the wrong
+  // filesystem context.
+  it('passes workspace projectPath as cwd to createSession (spec §3.2)', async () => {
+    useWorkspaceStore.setState({
+      workspaces: [
+        {
+          id: 'w1',
+          name: 'WS',
+          tabs: [],
+          activeTabId: null,
+          moduleConfig: { files: { projectPath: '/projects/foo' } },
+        },
+      ],
+      activeWorkspaceId: 'w1',
+    } as Partial<ReturnType<typeof useWorkspaceStore.getState>> as never)
+    render(
+      <WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId="h1" onClose={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    await new Promise<void>((r) => setTimeout(r, 0))
+    expect(createSession).toHaveBeenCalledWith('h1', expect.any(String), '/projects/foo', 'terminal')
+  })
+
+  it('falls back to ~ when workspace has no projectPath configured', async () => {
+    // Default setup() builds a workspace without moduleConfig.files; assert
+    // the executor receives ~ as cwd.
+    render(
+      <WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId="h1" onClose={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    await new Promise<void>((r) => setTimeout(r, 0))
+    expect(createSession).toHaveBeenCalledWith('h1', expect.any(String), '~', 'terminal')
+  })
+
+  // codex round-2 (high) — concurrent-delete transaction safety. createSession
+  // is async; if the workspace is deleted while it's in flight, insertTab
+  // silently no-ops on a missing workspace but setActiveWorkspace would still
+  // mutate active state and create an orphan tab. Read-back after insertTab
+  // is the guard.
+  it('workspace deleted between createSession and insertTab does NOT activate the dead workspace', async () => {
+    const onClose = vi.fn()
+    const initialActiveWs = useWorkspaceStore.getState().activeWorkspaceId
+    render(
+      <WorkspaceQuickCommandsContextMenu workspaceId="w1" hostId="h1" onClose={onClose} />,
+    )
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    // Simulate concurrent deletion BEFORE the createSession Promise resolves.
+    useWorkspaceStore.setState({
+      workspaces: [],
+      activeWorkspaceId: null,
+    } as Partial<ReturnType<typeof useWorkspaceStore.getState>> as never)
+    await new Promise<void>((r) => setTimeout(r, 0))
+
+    // Tab was created (createSession + openSingletonTab already ran)
+    // but it must not have been attached to or activated the deleted workspace.
+    const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === 'w1')
+    expect(ws).toBeUndefined()
+    // active id was null after deletion; switchToSession threw → switch_failed
+    // toast surfaced, but activeWorkspaceId must NOT have been forced back to 'w1'.
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(null)
+    // initial sanity (setup defaulted it to 'w1')
+    expect(initialActiveWs).toBe('w1')
+    // executor's finally still fires onClose
+    expect(onClose).toHaveBeenCalled()
+  })
+
   // codex round-1 P2 — capability ids that collide with inherited
   // Object.prototype methods would otherwise crash the slot host before it
   // could render. `getBindingTargets` is the own-property guard.

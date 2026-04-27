@@ -104,6 +104,34 @@ describe('QuickCommandsSettingsSection', () => {
     expect(state.bindings['cmd-a']).toBeUndefined()
   })
 
+  // codex round-2 — own-property guard mirrors the slot-render fix from
+  // round-1 P2. Settings list previously did `bindings[cmd.id] ?? []` directly
+  // and the dialog's initialTargets the same; for a capability id colliding
+  // with an inherited Object.prototype method (toString / valueOf) those
+  // lookups resolved to a function and `.map(...)` would crash the section.
+  it('does not crash when capability id collides with Object.prototype method (toString) — list render', () => {
+    useQuickCommandStore.setState({
+      global: [{ id: 'toString', name: 'Evil', command: 'evil' }],
+      byHost: {},
+      bindings: {},
+    })
+    expect(() => render(<QuickCommandsSettingsSection />)).not.toThrow()
+    // Row still rendered and has zero mount chips
+    expect(screen.getByTestId('qc-row-toString')).toBeInTheDocument()
+  })
+
+  it('does not crash when editing a capability whose id is "toString" (dialog open)', () => {
+    useQuickCommandStore.setState({
+      global: [{ id: 'toString', name: 'Evil', command: 'evil' }],
+      byHost: {},
+      bindings: {},
+    })
+    render(<QuickCommandsSettingsSection />)
+    expect(() =>
+      fireEvent.click(screen.getByRole('button', { name: /^Edit$/i })),
+    ).not.toThrow()
+  })
+
   // codex round-1 C15 — keyboard accessibility on multi-select mount chips
   it('mount-target chips support Space/Enter activation and ArrowRight/ArrowLeft roving focus', () => {
     render(<QuickCommandsSettingsSection />)

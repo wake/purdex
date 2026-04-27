@@ -46,6 +46,16 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
       return targets !== undefined && targets.includes(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS)
     })
   })
+  // codex round-2 — spec §3.2 says WORKSPACE_ACTIONS sessions inherit
+  // `workspace.moduleConfig.files.projectPath` as cwd. Without this, slot
+  // execution falls back to `~` and right-click commands run in the wrong
+  // filesystem context. The selector returns `undefined` when the workspace
+  // has no projectPath configured; slot-executor then defaults to `~`.
+  const cwd = useWorkspaceStore((s) => {
+    const ws = s.workspaces.find((w) => w.id === workspaceId)
+    const path = ws?.moduleConfig?.['files']?.['projectPath']
+    return typeof path === 'string' && path.length > 0 ? path : undefined
+  })
 
   // codex round-2 — picker state shape pinned: open implied by resolver !== null;
   // resolver is always nulled-out the moment it's invoked (idempotent guard against
@@ -97,6 +107,14 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
   // equivalent (the helper exists at spa/src/features/workspace/hooks.ts but is
   // bound to the hook, so we replicate inline here using the same store
   // primitives it uses).
+  //
+  // codex round-2 (high) — concurrent-delete transaction safety: createSession
+  // is async. If the workspace is deleted while it's in flight, `insertTab`
+  // silently no-ops on a missing workspace (store.ts:147,153) but
+  // `setActiveWorkspace` accepts any id — so without a read-back guard we'd
+  // create an orphan tab AND point activeWorkspaceId at a workspace that no
+  // longer exists. Read back the workspace's tab list after `insertTab` to
+  // confirm the insert actually landed before mutating active state.
   const switchToSession = useCallback(
     (h: string, sessionCode: string) => {
       // codex round-1 B5 — fill ALL tmux-session content fields per types/tab.ts
@@ -109,6 +127,20 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
         tmuxInstance: '',
       })
       useWorkspaceStore.getState().insertTab(tabId, workspaceId)
+      const inserted =
+        useWorkspaceStore
+          .getState()
+          .workspaces.find((w) => w.id === workspaceId)
+          ?.tabs.includes(tabId) ?? false
+      if (!inserted) {
+        // Workspace was deleted between createSession and insertTab; bail out
+        // before touching activeWorkspaceId. Throw so slot-executor's trySwitch
+        // observes the failure and surfaces switch_failed instead of pretending
+        // the navigation succeeded.
+        throw new Error(
+          `WorkspaceQuickCommandsContextMenu: workspace ${workspaceId} no longer exists; tab ${tabId} created but not activated`,
+        )
+      }
       useWorkspaceStore.getState().setActiveWorkspace(workspaceId)
       useTabStore.getState().setActiveTab(tabId)
     },
@@ -128,7 +160,7 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
     >
       <CommandSlot
         mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
-        ctx={{ hostId, workspaceId }}
+        ctx={{ hostId, workspaceId, cwd }}
         // codex round-1 B7 — flex-col override; default chip render keeps onClick + executor wiring intact.
         containerClassName="flex flex-col"
         // codex round-1 C11 + P2 — busy=true during picker mid-flight OR

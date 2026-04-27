@@ -80,37 +80,44 @@ export async function runWorkspaceSlot(
     return
   }
 
+  let sendKeysOk = true
   try {
     await executeCommand(hostId, sessionCode, cmd.command)
   } catch {
-    // Step 2 failed — STILL switch (so user sees the orphan), WITH Retry action.
-    safelySwitch(hostId, sessionCode, deps, t)
-    toast.show(
-      t('quick_commands.toast.send_keys_failed'),
-      // retry: re-run send-keys; failures dropped (user can keep clicking).
-      () => {
-        void executeCommand(hostId, sessionCode, cmd.command).catch(() => undefined)
-      },
-      // codex round-1 B4 — only this branch carries an action label
-      t('quick_commands.toast.retry'),
-    )
+    sendKeysOk = false
+  }
+
+  // codex round-2 — three-stage failure precedence (replaces stitched-together
+  // toast handlers that overwrote each other). switchToSession failure is more
+  // serious than send-keys failure (an orphan session the user can't even see
+  // beats one they can see but can't drive), so when both fail we surface
+  // switch_failed and DROP the retry action — Retry would try to re-send to
+  // a session the user can't navigate to anyway.
+  const switchOk = trySwitch(deps, hostId, sessionCode)
+
+  if (sendKeysOk && switchOk) return
+
+  if (!switchOk) {
+    // Switch failure (with or without preceding send-keys failure) → no action button.
+    toast.show(t('quick_commands.toast.switch_failed'))
     return
   }
 
-  safelySwitch(hostId, sessionCode, deps, t)
+  // sendKeysOk = false, switchOk = true → user can see the orphan; offer Retry.
+  toast.show(
+    t('quick_commands.toast.send_keys_failed'),
+    () => {
+      void executeCommand(hostId, sessionCode, cmd.command).catch(() => undefined)
+    },
+    t('quick_commands.toast.retry'),
+  )
 }
 
-function safelySwitch(
-  hostId: string,
-  sessionCode: string,
-  deps: Deps,
-  t: ReturnType<typeof useI18nStore.getState>['t'],
-): void {
+function trySwitch(deps: Deps, hostId: string, sessionCode: string): boolean {
   try {
     deps.switchToSession(hostId, sessionCode)
+    return true
   } catch {
-    // codex round-1 B4 — switch failure has NO retry action either; the session
-    // is already alive elsewhere, the toast is purely informational.
-    useUndoToast.getState().show(t('quick_commands.toast.switch_failed'))
+    return false
   }
 }

@@ -172,4 +172,38 @@ describe('runWorkspaceSlot', () => {
     expect(toast!.action).toBeUndefined()
     expect(toast!.actionLabel).toBeUndefined()
   })
+
+  // codex round-2 — combined send-keys + switch failure: switch failure takes
+  // precedence over send-keys retry. Otherwise the user sees a Retry button
+  // for a session they cannot navigate to (orphan session, retry impotent).
+  it('send-keys AND switch BOTH fail — surfaces switch_failed (no retry action), not send_keys_failed retry', async () => {
+    const switchFocus = vi.fn().mockImplementation(() => {
+      throw new Error('switch failed')
+    })
+    const resolveHostId = vi.fn()
+    ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 'sess-orphan',
+      name: 'A',
+      cwd: '/tmp',
+      mode: 'terminal',
+    })
+    ;(executeCommand as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('send-keys failed'),
+    )
+
+    await runWorkspaceSlot(
+      { id: 'cmd-a', name: 'A', command: 'echo hi' },
+      { hostId: 'h1', workspaceId: 'w1' },
+      { switchToSession: switchFocus, resolveHostId },
+    )
+
+    const toast = useUndoToast.getState().toast
+    expect(toast).not.toBeNull()
+    // Precedence: switch failure wins
+    expect(toast!.message).toMatch(/could not switch/i)
+    expect(toast!.message).not.toMatch(/command failed/i)
+    // No retry — retry would re-send to a session the user cannot see
+    expect(toast!.action).toBeUndefined()
+    expect(toast!.actionLabel).toBeUndefined()
+  })
 })

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Plus, PencilSimple, Trash } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useQuickCommandStore } from '../../stores/useQuickCommandStore'
-import type { QuickCommand } from '../../lib/quick-command-bindings'
+import { getBindingTargets, type QuickCommand } from '../../lib/quick-command-bindings'
 import {
   QUICK_COMMAND_SLOTS,
   type QuickCommandSlotId,
@@ -68,7 +68,11 @@ export function QuickCommandsSettingsSection({ ctx: _ctx }: Props = {}) {
                   {cmd.command}
                 </div>
                 <div className="mt-1 flex gap-1 flex-wrap">
-                  {(bindings[cmd.id] ?? []).map((slot) => (
+                  {/* codex round-2 — own-property guard against capability ids
+                      colliding with inherited Object.prototype methods (toString
+                      / valueOf etc.); raw `bindings[cmd.id]` would resolve to
+                      that function and `.map(...)` would crash the section. */}
+                  {(getBindingTargets(bindings, cmd.id) ?? []).map((slot) => (
                     <span
                       key={slot}
                       className="text-[10px] text-text-secondary bg-surface-secondary px-1.5 py-0.5 rounded"
@@ -155,7 +159,8 @@ function EditDialog({ initial, onClose, onSave }: DialogProps) {
   const [icon, setIcon] = useState(initial?.icon ?? '')
   const [category, setCategory] = useState(initial?.category ?? '')
   const initialTargets = useMemo<QuickCommandSlotId[]>(
-    () => (initial ? allBindings[initial.id] ?? [] : []),
+    // codex round-2 — same own-property guard as the list row.
+    () => (initial ? getBindingTargets(allBindings, initial.id) ?? [] : []),
     [initial, allBindings],
   )
   const [targets, setTargets] = useState<QuickCommandSlotId[]>(initialTargets)
