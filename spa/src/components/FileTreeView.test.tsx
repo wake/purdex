@@ -136,8 +136,18 @@ describe('FileTreeWorkspaceView', () => {
       { type: 'daemon', hostId: 'test-host' },
       expect.objectContaining({ name: 'README.md', path: '/home/user/README.md', extension: 'md' }),
     )
-    expect(openSingletonTab).toHaveBeenCalledWith(mockContent)
+    expect(openSingletonTab).toHaveBeenCalledWith(
+      mockContent,
+      expect.objectContaining({ isSameKind: expect.any(Function) }),
+    )
     expect(insertTab).toHaveBeenCalledWith('new-tab-id', TEST_WORKSPACE_ID)
+    // Predicate should classify file kinds (editor / image-preview / pdf-preview)
+    // as same-kind so file tabs cluster together.
+    const opts = openSingletonTab.mock.calls[0][1] as { isSameKind: (c: { kind: string }) => boolean }
+    expect(opts.isSameKind({ kind: 'editor' })).toBe(true)
+    expect(opts.isSameKind({ kind: 'image-preview' })).toBe(true)
+    expect(opts.isSameKind({ kind: 'pdf-preview' })).toBe(true)
+    expect(opts.isSameKind({ kind: 'tmux-session' })).toBe(false)
   })
 
   it('shows setup prompt when projectPath is not configured', () => {

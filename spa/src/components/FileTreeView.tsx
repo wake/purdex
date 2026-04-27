@@ -7,6 +7,10 @@ import { getFsBackend } from '../lib/fs-backend'
 import { getDefaultOpener } from '../lib/file-opener-registry'
 import type { ViewProps } from '../lib/module-registry'
 import type { FileSource, FileInfo, FileEntry } from '../types/fs'
+import type { PaneContent } from '../types/tab'
+
+const FILE_KINDS = new Set<string>(['editor', 'image-preview', 'pdf-preview'])
+const isFileKind = (c: PaneContent): boolean => FILE_KINDS.has(c.kind)
 
 interface DirState {
   entries: FileEntry[]
@@ -130,7 +134,7 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
                   const opener = getDefaultOpener(fileInfo)
                   if (opener) {
                     const content = opener.createContent(source, fileInfo)
-                    const tabId = useTabStore.getState().openSingletonTab(content)
+                    const tabId = useTabStore.getState().openSingletonTab(content, { isSameKind: isFileKind })
                     useWorkspaceStore.getState().insertTab(tabId, workspaceId)
                   }
                 }
