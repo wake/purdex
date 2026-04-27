@@ -720,6 +720,136 @@ func TestDevMode_LogsGatedByEnv(t *testing.T) {
 	})
 }
 
+// captureProbeLogs returns a buffer that collects log output for the duration
+// of the test. Subsequent log assertions can read buf.String().
+func captureProbeLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	origOut := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(origOut) })
+	return &buf
+}
+
+// OB5 — startWatch logs the resolved profile source (provider vs default).
+// Runtime debug needs to answer "is my custom ProbeProfile actually being
+// used?" — the log makes that observable in PDX_DEV_MODE without a debugger.
+func TestDevMode_LogsProfileResolution(t *testing.T) {
+	t.Run("provider_source", func(t *testing.T) {
+		t.Setenv("PDX_DEV_MODE", "1")
+		m := newTestModule(t)
+		rec := newRecordingProber()
+		m.probeOrch.watcher = rec
+
+		provider := &fakeProfileProvider{
+			fakeAgentProvider: fakeAgentProvider{typeName: "fake-agent"},
+			profile:           agentpkg.ProbeProfile{TopLines: 7, IdleStableTicks: 2},
+		}
+		m.registry.Register(provider)
+
+		buf := captureProbeLogs(t)
+		m.probeOrch.startWatch("sess", "fake-agent")
+
+		got := buf.String()
+		if !strings.Contains(got, "[probe] startWatch") || !strings.Contains(got, "profile=provider") ||
+			!strings.Contains(got, "TopLines=7") || !strings.Contains(got, "IdleStableTicks=2") {
+			t.Fatalf("expected provider profile log, got %q", got)
+		}
+	})
+	t.Run("default_source", func(t *testing.T) {
+		t.Setenv("PDX_DEV_MODE", "1")
+		m := newTestModule(t)
+		rec := newRecordingProber()
+		m.probeOrch.watcher = rec
+
+		provider := &fakeAgentProvider{typeName: "plain-agent"}
+		m.registry.Register(provider)
+
+		buf := captureProbeLogs(t)
+		m.probeOrch.startWatch("sess", "plain-agent")
+
+		got := buf.String()
+		if !strings.Contains(got, "[probe] startWatch") || !strings.Contains(got, "profile=default") ||
+			!strings.Contains(got, "BottomLines=10") {
+			t.Fatalf("expected default profile log, got %q", got)
+		}
+	})
+}
+
+// OB6 — stale callback re-check race: callback that finds activeWatchers
+// mutated under the final lock (concurrent stop/rename) emits a log line so
+// "phantom transition disappeared" debugging has a paper trail.
+func TestDevMode_LogsStaleCallbackRecheckRace(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	m, _, fake := orchTestModule(t)
+	seedOrchFrame(t, m, agentpkg.StatusRunning, 250)
+	m.mu.Lock()
+	m.activeWatchers["work"] = "cc"
+	m.currentStatus["work"] = agentpkg.StatusRunning
+	m.mu.Unlock()
+	fake.setCaptureFn(func(string, int) (string, error) { return "user prose", nil })
+
+	origInterrupt := interruptBeforeFinalLockFn
+	interruptBeforeFinalLockFn = func(session string) {
+		m.mu.Lock()
+		delete(m.activeWatchers, session)
+		m.mu.Unlock()
+	}
+	t.Cleanup(func() { interruptBeforeFinalLockFn = origInterrupt })
+
+	buf := captureProbeLogs(t)
+	cb := m.probeOrch.makeCallback("work", "cc")
+	cb(probe.ScreenChangeEvent{Kind: probe.ScreenStable, Target: "work:", OccurredAt: time.Now()})
+
+	if !strings.Contains(buf.String(), "stale callback re-check race") {
+		t.Fatalf("expected stale-callback re-check log, got %q", buf.String())
+	}
+}
+
+// OB7 — Error Guard: probe events arriving for a StatusError session are
+// silently dropped to keep the error sticky. The log makes "why doesn't probe
+// recover from Error" debuggable.
+func TestDevMode_LogsErrorGuardSuppress(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	m, _, fake := orchTestModule(t)
+	seedOrchFrame(t, m, agentpkg.StatusError, 251)
+	m.mu.Lock()
+	m.activeWatchers["work"] = "cc"
+	m.currentStatus["work"] = agentpkg.StatusError
+	m.mu.Unlock()
+	fake.SetPaneContent("work:", "user prose")
+
+	buf := captureProbeLogs(t)
+	cb := m.probeOrch.makeCallback("work", "cc")
+	cb(probe.ScreenChangeEvent{Kind: probe.ScreenStable, Target: "work:", OccurredAt: time.Now()})
+
+	if !strings.Contains(buf.String(), "error guard suppress") {
+		t.Fatalf("expected error-guard suppress log, got %q", buf.String())
+	}
+}
+
+// OB8 — Transition gate dedup: probe fires ScreenChanged but currentStatus
+// is already StatusRunning → orchestrator drops without broadcasting. The log
+// makes "probe events fire but lights don't move" debuggable.
+func TestDevMode_LogsTransitionDedup(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	m, _, _ := orchTestModule(t)
+	seedOrchFrame(t, m, agentpkg.StatusRunning, 252)
+	m.mu.Lock()
+	m.activeWatchers["work"] = "cc"
+	m.currentStatus["work"] = agentpkg.StatusRunning
+	m.mu.Unlock()
+
+	buf := captureProbeLogs(t)
+	cb := m.probeOrch.makeCallback("work", "cc")
+	// ScreenChanged → status=Running; currentStatus already Running → dedup.
+	cb(probe.ScreenChangeEvent{Kind: probe.ScreenChanged, Target: "work:", OccurredAt: time.Now()})
+
+	got := buf.String()
+	if !strings.Contains(got, "transition dedup") || !strings.Contains(got, "status=running") {
+		t.Fatalf("expected transition-dedup log, got %q", got)
+	}
+}
 
 // recordingProber is a test fake that captures Watch/StopWatch invocations.
 // Implements the orchestrator's internal proberWatcher interface.

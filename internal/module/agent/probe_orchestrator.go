@@ -142,12 +142,18 @@ func (o *probeOrchestrator) startWatch(session, agentType string) bool {
 	target := session + ":"
 
 	profile := defaultProbeProfile
+	profileSource := "default"
 	if o.parent != nil && o.parent.registry != nil {
 		if provider, ok := o.parent.registry.Get(agentType); ok {
 			if pp, ok := provider.(agentpkg.ProbeProfileProvider); ok {
 				profile = pp.ProbeProfile()
+				profileSource = "provider"
 			}
 		}
+	}
+	if isDevMode() {
+		log.Printf("[probe] startWatch session=%s agent=%s profile=%s TopLines=%d BottomLines=%d IdleStableTicks=%d",
+			session, agentType, profileSource, profile.TopLines, profile.BottomLines, profile.IdleStableTicks)
 	}
 
 	// Profile validation — must mirror probe.Watch's contract (TopLines +
@@ -335,14 +341,23 @@ func (o *probeOrchestrator) interpretScreenEvent(session, agentType string, ev p
 	currentAgent, active = m.activeWatchers[session]
 	if !active || currentAgent != agentType {
 		m.mu.Unlock()
+		if isDevMode() {
+			log.Printf("[probe] stale callback re-check race session=%s agent=%s kind=%s", session, agentType, ev.Kind)
+		}
 		return
 	}
 	if m.currentStatus[session] == agentpkg.StatusError {
 		m.mu.Unlock()
+		if isDevMode() {
+			log.Printf("[probe] error guard suppress session=%s agent=%s kind=%s", session, agentType, ev.Kind)
+		}
 		return
 	}
 	if prev, ok := m.currentStatus[session]; ok && prev == status {
 		m.mu.Unlock()
+		if isDevMode() {
+			log.Printf("[probe] transition dedup session=%s agent=%s status=%s kind=%s", session, agentType, status, ev.Kind)
+		}
 		return
 	}
 	m.currentStatus[session] = status
