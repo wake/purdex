@@ -173,6 +173,61 @@ describe('runWorkspaceSlot', () => {
     expect(toast!.actionLabel).toBeUndefined()
   })
 
+  // codex round-4 — workspace liveness gate. If the surrounding context is
+  // destroyed while createSession is in flight, executeCommand MUST NOT run
+  // (destructive commands like `rm` would otherwise still ship to the
+  // orphaned session). switch_failed toast surfaces; no retry.
+  it('assertContextLive returning false after createSession aborts before executeCommand', async () => {
+    const switchFocus = vi.fn()
+    const resolveHostId = vi.fn()
+    const assertContextLive = vi.fn().mockReturnValue(false)
+    ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 'sess-orphan',
+      name: 'A',
+      cwd: '/tmp',
+      mode: 'terminal',
+    })
+    ;(executeCommand as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+
+    await runWorkspaceSlot(
+      { id: 'cmd-a', name: 'A', command: 'rm -rf /' },
+      { hostId: 'h1', workspaceId: 'w1' },
+      { switchToSession: switchFocus, resolveHostId, assertContextLive },
+    )
+
+    expect(createSession).toHaveBeenCalledTimes(1) // session was created server-side
+    expect(assertContextLive).toHaveBeenCalled()
+    expect(executeCommand).not.toHaveBeenCalled() // critical: command did NOT ship
+    expect(switchFocus).not.toHaveBeenCalled()
+    const toast = useUndoToast.getState().toast
+    expect(toast).not.toBeNull()
+    expect(toast!.message).toMatch(/could not switch/i)
+    expect(toast!.action).toBeUndefined() // no retry — context is gone
+  })
+
+  it('assertContextLive returning true allows the full flow (negative control)', async () => {
+    const switchFocus = vi.fn()
+    const resolveHostId = vi.fn()
+    const assertContextLive = vi.fn().mockReturnValue(true)
+    ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 'sess-1',
+      name: 'A',
+      cwd: '/tmp',
+      mode: 'terminal',
+    })
+    ;(executeCommand as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+
+    await runWorkspaceSlot(
+      { id: 'cmd-a', name: 'A', command: 'echo hi' },
+      { hostId: 'h1', workspaceId: 'w1' },
+      { switchToSession: switchFocus, resolveHostId, assertContextLive },
+    )
+
+    expect(assertContextLive).toHaveBeenCalled()
+    expect(executeCommand).toHaveBeenCalled()
+    expect(switchFocus).toHaveBeenCalled()
+  })
+
   // codex round-2 — combined send-keys + switch failure: switch failure takes
   // precedence over send-keys retry. Otherwise the user sees a Retry button
   // for a session they cannot navigate to (orphan session, retry impotent).

@@ -30,6 +30,7 @@ vi.mock('../../../lib/execute-command', () => ({
 }))
 
 import { createSession } from '../../../lib/host-api'
+import { executeCommand } from '../../../lib/execute-command'
 
 function setup(workspaceId = 'w1', hostId = 'h1') {
   useQuickCommandStore.setState({
@@ -258,6 +259,10 @@ describe('WorkspaceQuickCommandsContextMenu', () => {
     expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === 'w1')).toBeUndefined()
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(null)
     expect(initialActiveWs).toBe('w1')
+    // codex round-4 — assertContextLive returned false after createSession,
+    // so executeCommand MUST NOT have been called. (round-3 only checked tab
+    // state; destructive commands could still ship without this assertion.)
+    expect(executeCommand).not.toHaveBeenCalled()
     // executor's finally still fires onClose
     expect(onClose).toHaveBeenCalled()
   })

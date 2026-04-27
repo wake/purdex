@@ -23,6 +23,18 @@ interface Deps {
    * a noop / never-called function to satisfy the type contract.
    */
   resolveHostId: () => Promise<string | null>
+
+  /**
+   * codex round-4 — workspace liveness probe. Returns false if the surrounding
+   * UI context (e.g. workspace) was destroyed while async work was in flight.
+   * The executor calls this after `createSession` resolves and BEFORE
+   * `executeCommand` runs so destructive commands aren't sent to a session
+   * the user can no longer reach.
+   *
+   * Optional — HOST_ACTIONS callers (Phase 1c) don't have a workspace context
+   * to verify and pass `undefined` to opt out of this check.
+   */
+  assertContextLive?: () => boolean
 }
 
 function genSessionName(cmd: QuickCommand): string {
@@ -77,6 +89,18 @@ export async function runWorkspaceSlot(
     // user has nothing meaningful to retry without re-clicking the chip.
     const reason = err instanceof Error ? err.message : String(err)
     toast.show(t('quick_commands.toast.create_failed', { reason }))
+    return
+  }
+
+  // codex round-4 — workspace liveness gate. If the surrounding context (e.g.
+  // workspace) was destroyed while createSession was in flight, do NOT send
+  // the user command — destructive quick commands (rm / drop / etc.) must not
+  // execute remotely once their context is gone. The session is already
+  // created server-side; surface it as a switch failure (no retry) so the
+  // user knows the operation didn't reach completion. Cleanup of the
+  // server-side session is a separate concern (see PR follow-up).
+  if (deps.assertContextLive && !deps.assertContextLive()) {
+    toast.show(t('quick_commands.toast.switch_failed'))
     return
   }
 

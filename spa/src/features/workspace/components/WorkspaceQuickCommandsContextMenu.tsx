@@ -193,6 +193,12 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
             await runWorkspaceSlot(cmd, ctx, {
               switchToSession,
               resolveHostId,
+              // codex round-4 — workspace liveness probe; called by executor
+              // between createSession and executeCommand so destructive
+              // commands don't ship to a session whose workspace already
+              // disappeared.
+              assertContextLive: () =>
+                useWorkspaceStore.getState().workspaces.some((w) => w.id === workspaceId),
             })
           } finally {
             executingRef.current = false
