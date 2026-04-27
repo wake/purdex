@@ -271,17 +271,17 @@ func (m *Module) renameSessionLocked(oldName, newName string) {
 		delete(m.currentStatus, oldName)
 	}
 	if agentType, ok := m.activeWatchers[oldName]; ok {
+		// activeWatchers transfer (m.mu-protected map mutation; caller holds m.mu).
 		delete(m.activeWatchers, oldName)
-		// Stop old watcher — callback closure captured oldName, can't reuse
-		if m.prober != nil {
-			m.prober.StopWatch(oldName + ":")
-		}
-		// Restart watcher with new name
 		m.activeWatchers[newName] = agentType
-		if m.prober != nil {
-			// TODO Slice 3 — orchestrator wiring restores status-mapping callback.
-			m.prober.Watch(newName+":", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
-		}
+		// R2 fix #1 + R3 deadlock-freedom: orchestrator stop/start are lock-free
+		// wrt m.mu (they touch prober.watcherMu, a different mutex), so calling
+		// them while we hold m.mu is safe. The orchestrator restores the full
+		// status-mapping callback (graceWindow + transition gate + Error Guard
+		// + broadcast) so the renamed session keeps responding to screen events.
+		// nil-prober is handled inside startWatch/stopWatch (R14 fix).
+		m.probeOrch.stopWatch(oldName)
+		m.probeOrch.startWatch(newName, agentType)
 	}
 }
 
