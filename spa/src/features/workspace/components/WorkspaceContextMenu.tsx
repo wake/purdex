@@ -1,18 +1,53 @@
 import { useEffect, useState } from 'react'
 import { Sliders, ArrowSquareOut, ArrowSquareIn } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
+import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
+import { WorkspaceQuickCommandsContextMenu } from './WorkspaceQuickCommandsContextMenu'
 
 interface Props {
   position: { x: number; y: number }
+  /**
+   * Workspace this menu was opened against. Optional for back-compat with
+   * existing tests that don't exercise the quick-commands section; required
+   * to render the WORKSPACE_ACTIONS chip list.
+   */
+  workspaceId?: string
+  /**
+   * spec v4 §3.2.1 — multi-tab majority-vote hostId, or null when no
+   * tmux-session pane exists in the workspace. Forwarded to the quick-commands
+   * sub-menu which opens the HostPickerPopover lazily on click when null.
+   */
+  hostId?: string | null
   onSettings: () => void
   onTearOff?: () => void
   onMergeTo?: (targetWindowId: string) => void
   onClose: () => void
 }
 
-export function WorkspaceContextMenu({ position, onSettings, onTearOff, onMergeTo, onClose }: Props) {
+export function WorkspaceContextMenu({
+  position,
+  workspaceId,
+  hostId,
+  onSettings,
+  onTearOff,
+  onMergeTo,
+  onClose,
+}: Props) {
   const t = useI18nStore((s) => s.t)
   const [windowList, setWindowList] = useState<ElectronWindowInfo[] | null>(null)
+
+  // Quick Commands section visibility — depends on module enabled + at least
+  // one binding into WORKSPACE_ACTIONS. Computed via a selector to avoid
+  // re-rendering on unrelated store updates. hostId-null path uses globals
+  // only (no per-host overrides reachable without a host).
+  const hasQuickCommands = useQuickCommandStore((s) => {
+    const cmds = hostId == null ? s.global : s.getCommands(hostId)
+    return cmds.some((c) => s.bindings[c.id]?.includes(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS))
+  })
+  const quickCommandsModuleEnabled = useModuleEnabledStore((s) => s.isEnabled('quick-commands'))
+  const showQuickCommandsSection = !!workspaceId && quickCommandsModuleEnabled && hasQuickCommands
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -43,6 +78,18 @@ export function WorkspaceContextMenu({ position, onSettings, onTearOff, onMergeT
         className="fixed z-50 min-w-44 bg-surface-secondary border border-border-default rounded-lg shadow-xl py-1"
         style={{ left: position.x, top: position.y }}
       >
+        {/* Quick Commands — WORKSPACE_ACTIONS slot */}
+        {showQuickCommandsSection && (
+          <>
+            <WorkspaceQuickCommandsContextMenu
+              workspaceId={workspaceId!}
+              hostId={hostId ?? null}
+              onClose={onClose}
+            />
+            <div className="border-t border-border-default my-1" />
+          </>
+        )}
+
         {/* Settings */}
         <button
           onClick={() => { onSettings(); onClose() }}
