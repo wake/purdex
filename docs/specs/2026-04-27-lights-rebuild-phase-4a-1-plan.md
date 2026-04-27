@@ -1,6 +1,6 @@
-# Lights Rebuild — Phase 4a-1 Plan v1.6 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
+# Lights Rebuild — Phase 4a-1 Plan v1.7 (PR-4a-1 Probe Primitive + cc + Helper + Dev Log)
 
-**Status**: draft v1.6（Round 6 codex review fix — 2 P2 internal-consistency findings 採納）
+**Status**: draft v1.7（Round 7 codex review fix — 1 P2 + 1 P3 採納）
 
 ## v1.x 演進
 
@@ -13,6 +13,7 @@
 | v1.4 | R4 codex review fix（1 P2 stale-callback guard）：legacy `onActivityDetected` (module.go:473) 開頭檢查 `activeWatchers[session]` 不存在則 return，這個 stale-callback guard v1.3 plan 漏搬。新 watch-loop-owned watcher fire callback 多次（不像 legacy fire 一次就退），**此 guard 比 legacy 更必要** — stopWatch / rename race 中 in-flight callback 會在 watcher 已停的情況下繼續更新 status / broadcast。`interpretScreenEvent` 開頭加 `currentAgent, active := m.activeWatchers[session]; if !active \|\| currentAgent != agentType { return }`；新增 OR6 regression test |
 | v1.5 | R5 codex review fix（1 P2 internal-inconsistency）：plan §1.2 列「Slice 8（清舊 onActivityDetected / shouldWatchActivity / ActivitySignal enum 解讀）— 留 PR-4a-2」與 §1.1 / §2.4.2 衝突（後者要求本 PR 必移除 `ActivitySignal` 等舊 API 否則無法 compile）。釐清：本 PR 必清 `ActivitySignal` enum + legacy `StartWatch` API + `activityLoop` + `onActivityDetected`（compile 必要）；保留 `shouldWatchActivity`（wrapper 仍用的政策函式）；PR-4a-2 範圍縮為「Slice 5/6 codex/opencode profile 接 primitive」+「**視需要** refactor `shouldWatchActivity`」 |
 | v1.6 | R6 codex review fix（2 P2 internal-consistency）：(1) §1.1 Slice 3 摘要還寫「`stopProbeWatch` 含 activeWatchers map cleanup」與 R3 修法（orchestrator 不碰 activeWatchers）矛盾；改正為「停止 prober watcher」並引向 §2.3.1 R3 fix；(2) Commit 5 TDD 清單只列 CC1-CC5，漏掉 CC6 (R2 fix #1 + R3 deadlock-freedom regression)；補入 written-first 清單 |
+| v1.7 | R7 codex review fix（1 P2 + 1 P3）：(1) §2.3.3 startWatch pseudo-code 用未定義 `target`，既有 callsite 都是 `session + ":"` 形式；明寫 `target := session + ":"` 在 startWatch / stopWatch contract，避免 implementer 編譯失敗或 bare-session 啟 watcher；(2) §2.4.4 標題寫「測試（5 tests）」但表格列 CC1-CC6 共 6 個；改為「測試（6 tests — R2 +CC6）」 |
 
 **前置**：
 - `docs/specs/2026-04-23-lights-rebuild-spec.md` — 整體 Lights Rebuild 設計
@@ -336,18 +337,31 @@ type ProbeProfile struct {
 var defaultProbeProfile = ProbeProfile{TopLines: 10, IdleStableTicks: 3}
 ```
 
-orchestrator `startWatch` 邏輯：
+orchestrator `startWatch` 邏輯（R7 fix — 顯式組 tmux target）：
 ```go
-profile := defaultProbeProfile
-if pp, ok := agentProvider.(agentpkg.ProbeProfileProvider); ok {
-    profile = pp.ProbeProfile()
+func (o *probeOrchestrator) startWatch(session, agentType string) {
+    target := session + ":"  // tmux target convention; matches existing callsite
+    profile := defaultProbeProfile
+    if pp, ok := agentProvider.(agentpkg.ProbeProfileProvider); ok {
+        profile = pp.ProbeProfile()
+    }
+    opts := probe.WatchOptions{
+        TopLines:        profile.TopLines,        // 0 = full screen
+        IdleStableTicks: profile.IdleStableTicks, // 0 = default 3 (handled by watchLoop)
+    }
+    o.parent.prober.Watch(target, opts, o.makeCallback(session, agentType))
 }
-opts := probe.WatchOptions{
-    TopLines:        profile.TopLines,        // 0 = full screen
-    IdleStableTicks: profile.IdleStableTicks, // 0 = default 3 (handled by watchLoop)
-}
-o.parent.prober.Watch(target, opts, o.makeCallback(session, agentType))
 ```
+
+對應 `stopWatch`：
+```go
+func (o *probeOrchestrator) stopWatch(session string) {
+    target := session + ":"  // R7 fix — same target convention
+    o.parent.prober.StopWatch(target)
+}
+```
+
+**Caller 端 contract**（R7 fix）：caller 傳 `session`（無 ":" 後綴），orchestrator 自己加 ":" 變成 tmux target；對齊既有 `m.prober.StartWatch(session+":", ...)` 慣例。
 
 #### 2.3.4 stale-callback guard（R4 fix） + graceWindow 解讀
 
@@ -492,7 +506,7 @@ if agentType, ok := m.activeWatchers[oldName]; ok {
 
 `internal/module/agent/handler.go` 的 hook entry path（具體位置實作時定）：每個有效 hook 處理完前 call `m.probeOrch.recordHookAt(session)`，讓接下來 graceWindow 啟動。
 
-#### 2.4.4 測試（5 tests）
+#### 2.4.4 測試（6 tests — R2 +CC6）
 
 | Test | 重點 |
 |------|------|
