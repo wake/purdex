@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.245] - 2026-04-28
+
+### Feat(daemon+spa): pathhint v1 channel + spa path cache (P4) (#696)
+
+Editor P4 — daemon emits `agent.path_hint` events when CC PreToolUse / PostToolUse touches a file, and the SPA caches recent dirs per `(hostId, cwd)` so future P5 fuzzy lookups can resolve relative paths without round-tripping through the user. Cache scope is keyed by the agent's working directory (the real boundary), with `sessionCode` carried as a per-entry tag so lookups can sort same-session entries first. This survives CC restarts in the same repo (a common workflow when the context window fills up) and lets a Codex session in the same cwd benefit from CC's earlier hints, without crossing into unrelated repos in the same workspace.
+
+- **Daemon** — `agent.path_hint` v1 schema (`{ schemaVersion, agentId, sessionCode, cwd, dir, kind, timestamp }`) with 200-entry ring buffer; pure `ExtractPathHint` with cwd sourced from CC raw_event and `SessionInfo.Cwd` fallback; payload defenses (≤64 KiB raw event, ≤4 KiB file_path / cwd, no NUL/control chars); `normalizeCwd` preserves `/` so agents at root don't lose their cwd; `PathHintDedupCache` keyed by `(session, dir, basename)` to prevent 5s blackout after SPA prune; `EmitPathHint` wired into CC PreToolUse / PostToolUse right after verify accepts.
+- **SPA** — `usePathCacheStore` keyed by `(hostId, cwd)` with NUL-separator scope keys (so colon-bearing hostIds don't collide), 50-entry LRU per scope, and `lookup(currentSessionCode?)` priority of same-session-first then recency. `clearBySession(hostId, code)` is host-scoped per R3 P2 so cross-host sessionCode collisions don't wipe live entries. Persisted via `purdexStorage` with rehydrate sanitizer that replays the same invariants `add()` enforces (R2 file-quality F1). Intentionally NOT registered with `syncManager` — cache is per-window-owner; per-origin localStorage still survives tear-off.
+- **Dispatch** — `lib/agent-ws/` split into router + per-event-type handlers; `path-hint-dispatch.ts` validates `event.session === payload.sessionCode` (R2-D3), rejects payloads >64 KiB (R2-A2), drops on schema/cwd/dir/kind invariants. `AGENT_WS_EVENT_TYPES` SSoT (R2-F2) consumed by both router and `useMultiHostEventWs`.
+- **Privacy** — dir-level only; no full file path or basename in broadcast payload. HostId travels in the broadcast envelope.
+- **Review history** — R1 standard (2 P2 fixed) → R2 attacker / defender / file-quality (5 high/medium across the three lanes) → scope redesign `(host, workspace) → (host, cwd)` per user feedback (workspaces are free-form groupings; cwd is the real boundary; sessionCode demoted to per-entry priority tag) → R3 standard (1 P2 cross-host sessionCode collision + 1 P3 root cwd `/` collapsed by TrimRight, both fixed) → R4 standard (1 P2 NotebookEdit `notebook_path` field fix; remaining "no consumer" finding tracked as #703).
+
+### Followup issues
+
+- #703 — `usePathCacheStore.lookup` / `pruneStaleCandidate` need a production consumer; P5 (NewTabPage popup-mount + `fs.search` backend allowlist) is the planned wirepoint, plus the bare-filename Editor-disabled UX gap from P3.
+
 ## [1.0.0-alpha.244] - 2026-04-28
 
 ### Feat(spa): Quick Commands v2 Phase 1b' — Plus hover popover (WORKSPACE_ACTIONS) (#701)
