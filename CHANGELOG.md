@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.241] - 2026-04-28
+
+### Refactor(spa): migrate file path link detection settings to editor (P3) (#688)
+
+Editor P3 — file-path link detection (the terminal feature that turns `path/to/file.ts` and `path/to/file.ts:42:7` into clickable links that open in the editor) is now scoped to the Editor module instead of bleeding into Terminal Settings. When Editor is disabled, the matchers also stop detecting, eliminating the prior gap where settings were hidden but matchers still ran.
+
+- New `EditorLinkDetectionSection` component owns the file-path link detection toggles; Terminal Settings keeps only terminal-native link types.
+- i18n keys for file-path link detection moved from `terminal.*` to `editor.*` scope.
+- New `fileMatchersEnabled` flag gates all four file-path matchers (basename + path with/without line/column) on Editor module enablement; renamed from the round-1 `editorFilePathMatchersEnabled` after the defender / file-quality reviewers independently flagged the bare-filename matcher having the same boundary.
+- HMR dispose path now calls `__resetBuiltinTerminalLinks` so a hot reload doesn't leak stale matcher registrations.
+- Three rounds of codex review converged: R1 standard (1 P2 — settings hide but matchers still detect) → R2 attacker / defender / file-quality (2 medium — bare matcher boundary + HMR reset) → R3 approve (no actionable correctness issues). Known minor UX gap: bare-filename toggle remains visible in Terminal Settings when Editor is disabled, but runtime no longer detects (setting-without-effect; deferred polish).
+
 ## [1.0.0-alpha.240] - 2026-04-28
 
 ### Feat(spa): quick-commands v2 — Phase 1b (Settings UI + executor + workspace context menu) (#686)
