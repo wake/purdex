@@ -58,6 +58,13 @@ describe('fsSearchByCapability', () => {
     ).rejects.toThrow(/400/)
   })
 
+  it('R2-M1: passes AbortSignal into fetch so popup dismiss tears down the request', async () => {
+    const ac = new AbortController()
+    await fsSearchByCapability('h1', 'foo.go', [{ kind: 'session-cwd', sessionCode: 's1' }], undefined, ac.signal)
+    const fetchCall = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]
+    expect(fetchCall[1].signal).toBe(ac.signal)
+  })
+
   it('returns empty matches when daemon responds 501 not-implemented (caller should suppress)', async () => {
     // Layer 3 caller decides what to do; helper just exposes the status via thrown error.
     // For this contract: 501 is treated as a soft failure — helper throws Error tagged with status,

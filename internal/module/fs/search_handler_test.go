@@ -258,3 +258,64 @@ func TestHandleSearch_RejectsNonPOST(t *testing.T) {
 		t.Errorf("expected 405, got %d", w.Code)
 	}
 }
+
+// TestHandleSearch_SymlinkSessionCwdResolvedBeforeAllowlist — R2-H1: session
+// cwd that lexically lives in /tmp but symlinks into $HOME (or another blocked
+// area) must be rejected because EvalSymlinks runs before validateNotSystemPath.
+func TestHandleSearch_SymlinkSessionCwdRejectedWhenResolvesToHomeDirect(t *testing.T) {
+	tmp := t.TempDir()
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	link := filepath.Join(tmp, "home-link")
+	require.NoError(t, os.Symlink(home, link))
+	// Cwd is the symlink itself — resolves directly to $HOME (a system root).
+	m, _ := setupSearchHandlerTest(t, link)
+	body := httpSearchBodyT{
+		Mode:  "basename",
+		Query: map[string]string{"basename": "x"},
+		Roots: []map[string]any{{"kind": "session-cwd", "sessionCode": "sess1"}},
+	}
+	w := httptest.NewRecorder()
+	m.handleSearch(w, newHTTPReq(t, body))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 (symlink resolves to $HOME); got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleSearch_SymlinkResolvedDeepWorkspaceAllowed — control: a symlink
+// inside /tmp pointing to another /tmp dir is fine; resolved path is still
+// non-system.
+func TestHandleSearch_SymlinkResolvedDeepWorkspaceAllowed(t *testing.T) {
+	target := t.TempDir()
+	mustWrite(t, filepath.Join(target, "found.go"), "ok")
+	tmp := t.TempDir()
+	link := filepath.Join(tmp, "ws-link")
+	require.NoError(t, os.Symlink(target, link))
+	m, _ := setupSearchHandlerTest(t, link)
+	body := httpSearchBodyT{
+		Mode:  "basename",
+		Query: map[string]string{"basename": "found.go"},
+		Roots: []map[string]any{{"kind": "session-cwd", "sessionCode": "sess1"}},
+	}
+	w := httptest.NewRecorder()
+	m.handleSearch(w, newHTTPReq(t, body))
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 (resolved into another /tmp dir is fine); got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleSearch_SessionCwdNotExistRejected — non-existent cwd produces an
+// EvalSymlinks error that the handler must surface as 400 (not 500).
+func TestHandleSearch_SessionCwdNotExistRejected(t *testing.T) {
+	m, _ := setupSearchHandlerTest(t, "/nonexistent-path-on-purpose-xyz")
+	body := httpSearchBodyT{
+		Mode:  "basename",
+		Query: map[string]string{"basename": "x"},
+		Roots: []map[string]any{{"kind": "session-cwd", "sessionCode": "sess1"}},
+	}
+	w := httptest.NewRecorder()
+	m.handleSearch(w, newHTTPReq(t, body))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for non-existent cwd, got %d", w.Code)
+	}
+}

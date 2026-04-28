@@ -57,6 +57,7 @@ export async function fsSearchByCapability(
   basename: string,
   roots: SearchRootCapability[],
   limits?: SearchLimits,
+  signal?: AbortSignal,
 ): Promise<SearchMatch[]> {
   const state = useHostStore.getState()
   const base = state.getDaemonBase(hostId)
@@ -72,10 +73,16 @@ export async function fsSearchByCapability(
   if (limits && Object.keys(limits).length > 0) {
     body.limits = limits
   }
+  // R2-M1: thread the popup's AbortSignal so dismissing the popup actually
+  // tears down the in-flight HTTP request (and the daemon-side WalkDir).
+  // Without this, closing the popup left the request running until the
+  // daemon completed its scan, even though the SPA-side `if (signal.aborted)
+  // return` already prevented the result from being merged.
   const res = await fetch(`${base}/api/fs/search`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    signal,
   })
   if (!res.ok) {
     let text = ''

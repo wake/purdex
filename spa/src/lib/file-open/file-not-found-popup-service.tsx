@@ -32,12 +32,40 @@ export interface ShowCallbacks {
 
 /**
  * Mount (or replace) the popup with `spec`. Returns an AbortController whose
- * signal is aborted whenever the popup is hidden or replaced — async
- * callbacks (e.g. an in-flight fs.search) MUST check `signal.aborted` after
- * await before re-rendering.
+ * signal is aborted whenever the popup is *fully* dismissed (user click on
+ * close / ESC / `hideFileNotFoundPopup`) — async callbacks (e.g. an in-flight
+ * fs.search) MUST check `signal.aborted` after await before re-rendering.
+ *
+ * Critical (R2-M1): when this is called for a **controlled re-render** within
+ * the same logical popup session (e.g. the bootstrap merging in newly arrived
+ * Layer-2 / Layer-3 search results), the existing root is reused and the
+ * existing token is preserved. Re-rendering must NOT abort peer in-flight
+ * searches; only user-initiated dismissals do.
  */
 export function showFileNotFoundPopup(spec: PopupSpec, cb: ShowCallbacks): AbortController {
-  // Replace any current popup (also aborts the previous token).
+  if (root && currentToken) {
+    // Controlled re-render path — reuse the live root + token. This keeps any
+    // peer fs.search call's `signal` reference valid while we paint the new
+    // spec into the same popup host.
+    const tok = currentToken
+    root.render(
+      <FileNotFoundPopup
+        spec={spec}
+        sessionCwd={cb.sessionCwd}
+        projectPath={cb.projectPath}
+        onClose={hideFileNotFoundPopup}
+        onOpenPath={(p) => {
+          hideFileNotFoundPopup()
+          cb.onOpenPath(p)
+        }}
+        onSearchSessionCwd={() => cb.onSearchSessionCwd(spec, tok.signal)}
+        onSearchWorkspace={() => cb.onSearchWorkspace(spec, tok.signal)}
+      />,
+    )
+    return currentToken
+  }
+
+  // Fresh-mount path — defensive cleanup of any orphan root before allocating.
   hideFileNotFoundPopup()
 
   host = document.createElement('div')

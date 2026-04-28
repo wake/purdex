@@ -145,7 +145,21 @@ func (m *FsModule) resolveCapabilityRoots(roots []httpSearchRoot) ([]SearchRoot,
 			if info == nil || info.Cwd == "" {
 				return nil, http.StatusBadRequest, errors.New("session cwd not found for " + r.SessionCode)
 			}
-			abs := filepath.Clean(info.Cwd)
+			// R2-H1: Resolve symlinks before walking so the allowlist runs
+			// against the *real* tree. We validate BOTH forms — cleaned (catches
+			// lexical attempts like `/etc`, even though macOS resolves it to
+			// `/private/etc`) and resolved (catches sneaky symlinks that point
+			// from a benign-looking `/tmp/...` into `$HOME` or other system
+			// roots). The walker walks the resolved path, so it's the ground
+			// truth for trust.
+			cleaned := filepath.Clean(info.Cwd)
+			if err := validateNotSystemPath(cleaned); err != nil {
+				return nil, http.StatusBadRequest, err
+			}
+			abs, err := filepath.EvalSymlinks(cleaned)
+			if err != nil {
+				return nil, http.StatusBadRequest, errors.New("session cwd unresolvable: " + err.Error())
+			}
 			if err := validateNotSystemPath(abs); err != nil {
 				return nil, http.StatusBadRequest, err
 			}

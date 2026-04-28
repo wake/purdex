@@ -62,6 +62,25 @@ function resolveSessionCwd(hostId: string, sessionCode?: string): string | null 
  * projectPath not yet implemented in daemon registry) is silently treated
  * as no-results per the v6 degrade plan, NOT surfaced as an error.
  */
+/**
+ * Module-level merged search state (R2-M1 fix). When the user clicks both
+ * Layer-2 and Layer-3 CTAs in quick succession, runExpandedSearch is called
+ * twice with the same popup token. Without this accumulator, whichever
+ * search resolves second wipes the first layer's hits because each call
+ * built its expandedSpec from scratch (`layer2Hits: kind==='session' ? hits
+ * : []`). The accumulator merges by layer; the popup-service's controlled
+ * re-render path (showFileNotFoundPopup → reuse root + token) keeps any
+ * peer in-flight fetch's signal valid through the re-render.
+ *
+ * Reset whenever a fresh popup mounts (mode === 'ask-expand') so two
+ * successive missing-file events don't bleed cache.
+ */
+let mergedHits: { layer2: SearchMatch[]; layer3: SearchMatch[] } = { layer2: [], layer3: [] }
+
+function resetMergedHits(): void {
+  mergedHits = { layer2: [], layer3: [] }
+}
+
 async function runExpandedSearch(
   kind: 'session' | 'workspace',
   spec: PopupSpec,
@@ -77,13 +96,21 @@ async function runExpandedSearch(
 
   let hits: SearchMatch[] = []
   try {
-    hits = await fsSearchByCapability(spec.ctx.hostId, spec.file.name, roots)
+    // R2-M1: pass through the popup's signal so dismissing the popup
+    // actually tears down the daemon-side WalkDir, not just the SPA-side
+    // re-mount. AbortError surfaces below as a hits=[] result; the
+    // signal.aborted check then short-circuits before merging.
+    hits = await fsSearchByCapability(spec.ctx.hostId, spec.file.name, roots, undefined, signal)
   } catch (err) {
     if (err instanceof FsSearchError && err.status === 501) {
       // v6 degrade — workspace-projectPath not implemented in daemon yet;
       // suppress so the popup re-renders with empty layer3Hits rather than
       // surfacing a misleading server error.
       hits = []
+    } else if ((err as { name?: string }).name === 'AbortError') {
+      // Popup was dismissed while the fetch was in flight — caller does the
+      // cleanup; we simply unwind without re-rendering.
+      return
     } else {
       // Other errors → still re-render with empty bucket so the user sees
       // "No matches" rather than a stuck popup. Log for debugging.
@@ -94,23 +121,34 @@ async function runExpandedSearch(
 
   if (signal.aborted) return // user closed the popup mid-flight; do NOT re-mount
 
+  // Merge into the running accumulator (R2-M1) so a second-resolving layer
+  // doesn't blank the first layer's results.
+  if (kind === 'session') mergedHits.layer2 = hits
+  else mergedHits.layer3 = hits
+
   const expandedSpec: PopupSpec = {
     mode: 'expanded',
     file: spec.file,
     source: spec.source,
     ctx: spec.ctx,
-    layer2Hits: kind === 'session' ? hits : [],
-    layer3Hits: kind === 'workspace' ? hits : [],
+    layer2Hits: mergedHits.layer2,
+    layer3Hits: mergedHits.layer3,
   }
-  // Re-mount via the same controller — preserves the singleton invariant.
+  // Controlled re-render — popup service reuses the live root + token.
   buildPopupController().show(expandedSpec)
 }
 
 /** Factory shared by both surface bootstraps. */
 function buildPopupController(): PopupController {
   return {
-    show: (spec) =>
-      showFileNotFoundPopup(spec, {
+    show: (spec) => {
+      // R2-M1: a fresh popup session starts whenever tryOpenFile shows
+      // ask-expand / layer1-multi (mode 'expanded' is reserved for the
+      // controlled re-render path inside runExpandedSearch). Reset the
+      // accumulator so the new popup doesn't inherit hits from a previous
+      // missing-file event in the same window.
+      if (spec.mode !== 'expanded') resetMergedHits()
+      return showFileNotFoundPopup(spec, {
         sessionCwd: resolveSessionCwd(spec.ctx.hostId, spec.ctx.sessionCode),
         projectPath: resolveProjectPath(spec.ctx.sourceWorkspaceId),
         onOpenPath: (path) => {
@@ -134,7 +172,8 @@ function buildPopupController(): PopupController {
         onSearchWorkspace: (s, signal) => {
           void runExpandedSearch('workspace', s, signal)
         },
-      }),
+      })
+    },
     hide: hideFileNotFoundPopup,
   }
 }
@@ -216,4 +255,5 @@ export function resolveOpenContextCwdFromSessions(
 export function __resetFileOpenBootstrap(): void {
   _fileTreeService = undefined
   _terminalLinkService = undefined
+  resetMergedHits()
 }

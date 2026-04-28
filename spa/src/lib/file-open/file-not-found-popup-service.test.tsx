@@ -58,8 +58,23 @@ describe('file-not-found-popup-service', () => {
     expect(ctl.signal.aborted).toBe(true)
   })
 
-  it('show returns a fresh controller each time; previous one is aborted on replace', () => {
+  it('R2-M1: consecutive show calls within an open popup REUSE the controller (controlled re-render)', () => {
+    // R2 medium finding: previously each show() call aborted the prior token.
+    // That meant a layer-2 result arriving first would abort the in-flight
+    // layer-3 fetch via the popup token's `signal.addEventListener('abort')`.
+    // Now show() while a root is mounted re-renders without aborting; the
+    // token only flips on user dismiss.
     const a = showFileNotFoundPopup(baseSpec, baseUI)
+    const b = showFileNotFoundPopup(baseSpec, baseUI)
+    expect(a).toBe(b)
+    expect(a.signal.aborted).toBe(false)
+    hideFileNotFoundPopup()
+    expect(a.signal.aborted).toBe(true)
+  })
+
+  it('R2-M1: show after hide allocates a fresh controller (full lifecycle restart)', () => {
+    const a = showFileNotFoundPopup(baseSpec, baseUI)
+    hideFileNotFoundPopup()
     const b = showFileNotFoundPopup(baseSpec, baseUI)
     expect(a).not.toBe(b)
     expect(a.signal.aborted).toBe(true)
