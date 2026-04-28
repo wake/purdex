@@ -768,9 +768,9 @@ func TestCodexCheckHooks_PermissionRequestMissingBlocks(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeHooksFile(t, home, map[string]any{
-		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
-		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
-		"Stop":             []any{pdxGroupEntry("Stop")},
+		"SessionStart":     []any{pdxGroupEntry("PdxSessionStart")},
+		"UserPromptSubmit": []any{pdxGroupEntry("PdxUserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("PdxStop")},
 	})
 
 	status, err := (&Provider{}).CheckHooks()
@@ -858,12 +858,14 @@ func TestCheckHooks_ThirdPartyLegacyEntryDoesNotTriggerReinstall(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
+	// pdxGroup builds a post-W2 matcher-group: hooks.json key remains the
+	// upstream event name; the command's trailing token is the PurdexName.
 	pdxGroup := func(event string) map[string]any {
 		return map[string]any{
 			"hooks": []any{
 				map[string]any{
 					"type":    "command",
-					"command": `"/usr/local/bin/pdx" hook --agent codex ` + event,
+					"command": `"/usr/local/bin/pdx" hook --agent codex Pdx` + event,
 					"timeout": 5,
 				},
 			},
@@ -926,14 +928,17 @@ func TestCheckHooks_ThirdPartyLegacyEntryDoesNotTriggerReinstall(t *testing.T) {
 // as absent would silently hide a real uninstall event for a FutureOnly
 // hook.
 
-// pdxGroupEntry builds a correctly-installed matcher-group entry for an
-// event name, matching the shape mergeCodexHooks writes.
-func pdxGroupEntry(event string) map[string]any {
+// pdxGroupEntry builds a correctly-installed matcher-group entry. The token
+// passed in becomes the trailing command token verbatim — for post-W2 valid
+// installs that's the spec's PurdexName (PdxXxx); synthetic tests
+// (RetiredEvent / IgnoredSynthetic / Bogus etc.) pass the literal token they
+// want exercised against the predicate.
+func pdxGroupEntry(commandTail string) map[string]any {
 	return map[string]any{
 		"hooks": []any{
 			map[string]any{
 				"type":    "command",
-				"command": `"/usr/local/bin/pdx" hook --agent codex ` + event,
+				"command": `"/usr/local/bin/pdx" hook --agent codex ` + commandTail,
 				"timeout": 5,
 			},
 		},
@@ -986,10 +991,10 @@ func TestCheckHooks_LegacyThreeEvent_ReportsInstalled(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeHooksFile(t, home, map[string]any{
-		"SessionStart":      []any{pdxGroupEntry("SessionStart")},
-		"UserPromptSubmit":  []any{pdxGroupEntry("UserPromptSubmit")},
-		"Stop":              []any{pdxGroupEntry("Stop")},
-		"PermissionRequest": []any{pdxGroupEntry("PermissionRequest")},
+		"SessionStart":      []any{pdxGroupEntry("PdxSessionStart")},
+		"UserPromptSubmit":  []any{pdxGroupEntry("PdxUserPromptSubmit")},
+		"Stop":              []any{pdxGroupEntry("PdxStop")},
+		"PermissionRequest": []any{pdxGroupEntry("PdxPermissionRequest")},
 	})
 
 	status, err := (&Provider{}).CheckHooks()
@@ -1021,7 +1026,7 @@ func TestCheckHooks_NineEvent_FullyInstalled_NoIssues(t *testing.T) {
 	t.Setenv("HOME", home)
 	full := map[string]any{}
 	for _, name := range expectedCodexInstallerNames {
-		full[name] = []any{pdxGroupEntry(name)}
+		full[name] = []any{pdxGroupEntry("Pdx" + name)}
 	}
 	writeHooksFile(t, home, full)
 
@@ -1049,8 +1054,8 @@ func TestCheckHooks_RequiredEventMissing_Blocks(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeHooksFile(t, home, map[string]any{
-		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
-		"Stop":             []any{pdxGroupEntry("Stop")},
+		"UserPromptSubmit": []any{pdxGroupEntry("PdxUserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("PdxStop")},
 	})
 
 	status, err := (&Provider{}).CheckHooks()
@@ -1073,9 +1078,9 @@ func TestCheckHooks_FutureOnlyBroken_WarnsAndBlocks(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeHooksFile(t, home, map[string]any{
-		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
-		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
-		"Stop":             []any{pdxGroupEntry("Stop")},
+		"SessionStart":     []any{pdxGroupEntry("PdxSessionStart")},
+		"UserPromptSubmit": []any{pdxGroupEntry("PdxUserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("PdxStop")},
 		"Notification": []any{
 			map[string]any{
 				"hooks": []any{
@@ -1111,13 +1116,13 @@ func TestCheckHooks_FutureOnlyAbsent_DoesNotBlock(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeHooksFile(t, home, map[string]any{
-		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
-		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
-		"Stop":             []any{pdxGroupEntry("Stop")},
+		"SessionStart":     []any{pdxGroupEntry("PdxSessionStart")},
+		"UserPromptSubmit": []any{pdxGroupEntry("PdxUserPromptSubmit")},
+		"Stop":             []any{pdxGroupEntry("PdxStop")},
 		// 3 FutureOnly valid
-		"StopFailure":       []any{pdxGroupEntry("StopFailure")},
-		"Notification":      []any{pdxGroupEntry("Notification")},
-		"PermissionRequest": []any{pdxGroupEntry("PermissionRequest")},
+		"StopFailure":       []any{pdxGroupEntry("PdxStopFailure")},
+		"Notification":      []any{pdxGroupEntry("PdxNotification")},
+		"PermissionRequest": []any{pdxGroupEntry("PdxPermissionRequest")},
 		// SubagentStart / SubagentStop / SessionEnd intentionally absent.
 	})
 
@@ -1381,10 +1386,10 @@ func TestCheckHooks_UpgradesAvailable_PopulatedForLegacyCodex(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeHooksFile(t, home, map[string]any{
-		"SessionStart":      []any{pdxGroupEntry("SessionStart")},
-		"UserPromptSubmit":  []any{pdxGroupEntry("UserPromptSubmit")},
-		"Stop":              []any{pdxGroupEntry("Stop")},
-		"PermissionRequest": []any{pdxGroupEntry("PermissionRequest")},
+		"SessionStart":      []any{pdxGroupEntry("PdxSessionStart")},
+		"UserPromptSubmit":  []any{pdxGroupEntry("PdxUserPromptSubmit")},
+		"Stop":              []any{pdxGroupEntry("PdxStop")},
+		"PermissionRequest": []any{pdxGroupEntry("PdxPermissionRequest")},
 	})
 	status, err := (&Provider{}).CheckHooks()
 	if err != nil {
@@ -1417,7 +1422,7 @@ func TestCheckHooks_UpgradesAvailable_EmptyOnFullInstall(t *testing.T) {
 	t.Setenv("HOME", home)
 	full := map[string]any{}
 	for _, name := range expectedCodexInstallerNames {
-		full[name] = []any{pdxGroupEntry(name)}
+		full[name] = []any{pdxGroupEntry("Pdx" + name)}
 	}
 	writeHooksFile(t, home, full)
 
@@ -1437,7 +1442,7 @@ func TestCheckHooks_EventInfoCarriesFutureOnly(t *testing.T) {
 	t.Setenv("HOME", home)
 	full := map[string]any{}
 	for _, name := range expectedCodexInstallerNames {
-		full[name] = []any{pdxGroupEntry(name)}
+		full[name] = []any{pdxGroupEntry("Pdx" + name)}
 	}
 	writeHooksFile(t, home, full)
 
@@ -1660,5 +1665,144 @@ func TestCheckHooks_FutureOnlyEmptyArray_ClassifiesAsBroken(t *testing.T) {
 	}
 	if status.Events["Notification"].Installed {
 		t.Fatal("Notification Installed=true, want false (empty array = broken)")
+	}
+}
+
+// ---- P2-T3: hooks.json key == UpstreamKey, command tail == PurdexName ----
+
+// TestMergeCodexHooksFile_MatcherKeyIsUpstreamKey asserts the merged hooks.json
+// keys the per-event matcher map by upstream Codex event names (UpstreamKeys),
+// not by PurdexName. codex has one-to-one mapping so UpstreamKeys[0] == legacy
+// Name; the boundary is preserved so Phase 3 can drop Name without changing
+// the file shape.
+func TestMergeCodexHooksFile_MatcherKeyIsUpstreamKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+
+	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("mergeCodexHooks: %v", err)
+	}
+
+	hooks := hooksSection(t, readHooksFile(t, path))
+	want := map[string]bool{}
+	for _, spec := range codexEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		if len(spec.UpstreamKeys) == 0 {
+			t.Fatalf("installable spec %s has empty UpstreamKeys", spec.Name)
+		}
+		want[spec.UpstreamKeys[0]] = true
+	}
+	for key := range hooks {
+		if !want[key] {
+			t.Errorf("hooks.json contains unexpected key %q (not an UpstreamKey)", key)
+		}
+	}
+	for key := range want {
+		if _, ok := hooks[key]; !ok {
+			t.Errorf("hooks.json missing UpstreamKey %q", key)
+		}
+	}
+}
+
+// TestMergeCodexHooksFile_CommandTokenIsPurdexName asserts every installed
+// pdx-owned hook command's trailing token is the PurdexName (PdxXxx), not the
+// upstream key. After P2-T3 the daemon-internal canonical id flows through
+// the command tail; the upstream Codex hooks.json key remains the upstream
+// event name.
+func TestMergeCodexHooksFile_CommandTokenIsPurdexName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+
+	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("mergeCodexHooks: %v", err)
+	}
+
+	hooks := hooksSection(t, readHooksFile(t, path))
+	for _, spec := range codexEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		entries, _ := hooks[spec.UpstreamKeys[0]].([]any)
+		if len(entries) == 0 {
+			t.Errorf("spec %s: no entries under upstream key %q", spec.Name, spec.UpstreamKeys[0])
+			continue
+		}
+		var pdxCommand string
+		for _, groupEntry := range entries {
+			group, _ := groupEntry.(map[string]any)
+			for _, hookEntry := range toCodexEntrySlice(group["hooks"]) {
+				m, _ := hookEntry.(map[string]any)
+				cmd, _ := m["command"].(string)
+				if isPdxCommandCodex(cmd) {
+					pdxCommand = cmd
+				}
+			}
+		}
+		if pdxCommand == "" {
+			t.Errorf("spec %s: no pdx command found under upstream key %q", spec.Name, spec.UpstreamKeys[0])
+			continue
+		}
+		tokens := tokenizeCodexCommand(pdxCommand)
+		if got := tokens[len(tokens)-1]; got != spec.PurdexName {
+			t.Errorf("spec %s: command end token = %q, want PurdexName %q", spec.Name, got, spec.PurdexName)
+		}
+		if !strings.HasPrefix(spec.PurdexName, "Pdx") {
+			t.Errorf("spec %s: PurdexName %q lacks Pdx prefix (catalog drift)", spec.Name, spec.PurdexName)
+		}
+	}
+}
+
+// TestCheckCodexEvent_LooksUpByUpstreamKey asserts CheckHooks reads hooks.json
+// using spec.UpstreamKeys[0] (not spec.Name). After P2-T3 the read path
+// mirrors the write path: a hooks.json keyed by the upstream event name with
+// a command whose tail is the PurdexName must classify as Installed=true.
+func TestCheckCodexEvent_LooksUpByUpstreamKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("InstallHooks: %v", err)
+	}
+
+	hooks := hooksSection(t, readHooksFile(t, hooksPath))
+	for _, spec := range codexEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		// Sanity: upstream key actually present.
+		if _, ok := hooks[spec.UpstreamKeys[0]]; !ok {
+			t.Errorf("spec %s: hooks.json missing UpstreamKey %q", spec.Name, spec.UpstreamKeys[0])
+		}
+	}
+
+	// CheckHooks must report all installable events as Installed=true with the
+	// command read off the UpstreamKey-keyed entries.
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	for _, spec := range codexEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		info := status.Events[spec.Name]
+		if !info.Installed {
+			t.Errorf("spec %s: Events[%q].Installed=false; want true (UpstreamKey-keyed lookup)", spec.Name, spec.Name)
+		}
+		if !strings.Contains(info.Command, spec.PurdexName) {
+			t.Errorf("spec %s: Events[%q].Command=%q lacks PurdexName %q", spec.Name, spec.Name, info.Command, spec.PurdexName)
+		}
+	}
+	// Sanity: feature flag preserved separately by the config.toml writer.
+	if data, err := os.ReadFile(configPath); err == nil {
+		if !strings.Contains(string(data), "codex_hooks = true") {
+			t.Errorf("config.toml must keep codex_hooks=true after install:\n%s", string(data))
+		}
 	}
 }
