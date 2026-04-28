@@ -31,10 +31,12 @@ export const PurdexOpenCodeHooks = async () => {
   async function emit(eventName, payload = {}) {
     const proc = Bun.spawn({
       cmd: [pdxPath, 'hook', '--agent', 'opencode', eventName],
-      stdin: JSON.stringify(payload),
+      stdin: 'pipe',
       stdout: 'ignore',
       stderr: 'ignore',
     })
+    proc.stdin.write(JSON.stringify(payload))
+    proc.stdin.end()
     await proc.exited
   }
 
