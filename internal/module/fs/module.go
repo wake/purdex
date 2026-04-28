@@ -33,6 +33,7 @@ func (m *FsModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/fs/mkdir", m.handleMkdir)
 	mux.HandleFunc("POST /api/fs/delete", m.handleDelete)
 	mux.HandleFunc("POST /api/fs/rename", m.handleRename)
+	mux.HandleFunc("POST /api/fs/search", m.handleSearch)
 }
 
 func (m *FsModule) Start(_ context.Context) error {
