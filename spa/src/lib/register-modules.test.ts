@@ -556,11 +556,16 @@ describe('Commit 1: Editor HSR migration', () => {
     clearAll()
   })
 
-  it('R1-1: editor module declares exactly 3 HSR settings entries', () => {
+  it('R1-1: editor module declares exactly 4 settings entries (3 HSR + link-detect)', () => {
+    // P3 added a 4th entry under purdex scope (settings.editor.link_detect)
+    // that migrated from the Terminal section. The Editor module remains
+    // the owner of file-path link detection toggles.
     registerBuiltinModules()
     const editor = getModules().find((m) => m.id === 'editor')
     expect(editor).toBeDefined()
-    expect(editor?.settings?.length).toBe(3)
+    expect(editor?.settings?.length).toBe(4)
+    const localIds = editor?.settings?.map((s) => s.localId).sort()
+    expect(localIds).toEqual(['editor', 'host-home-path', 'link-detect', 'workspace-home-path'])
   })
 
   it('R1-2: editor.editor contribution is purdex-scope', () => {

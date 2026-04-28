@@ -70,4 +70,32 @@ describe('registerBuiltinTerminalLinks — 4 file-path matchers', () => {
     expect(ids).toContain('builtin:file-path-relative-slash')
     expect(ids).toContain('builtin:file-path-bare')
   })
+
+  // P3 codex round-1 + round-2 finding: when Editor is disabled at
+  // bootstrap, no file opener can act on a click, so all four
+  // file-path matchers (including bare) skip registration to avoid
+  // clickable-looking but silently no-op links. URL matcher is
+  // independent and always registers.
+  it('skips ALL four file-path matchers when fileMatchersEnabled=false', () => {
+    registerBuiltinTerminalLinks({
+      urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
+      filePathOpener: {
+        getDefaultOpener: () => null,
+        openSingletonTab: () => 'tab',
+        insertTab: () => {},
+        getActiveWorkspaceId: () => 'ws',
+        computeInsertTarget: () => undefined,
+        fetchPaneCwd: async () => '/cwd',
+        fetchPaneHome: async () => '/home/user',
+      },
+      fileMatchersEnabled: false,
+    })
+    const ids = terminalLinkRegistry.getMatchers().map((m) => m.id)
+    expect(ids).not.toContain('builtin:file-path-absolute')
+    expect(ids).not.toContain('builtin:file-path-tilde')
+    expect(ids).not.toContain('builtin:file-path-relative-slash')
+    expect(ids).not.toContain('builtin:file-path-bare')
+    // URL matcher independent of file-opening capability.
+    expect(ids).toContain('builtin:url')
+  })
 })
