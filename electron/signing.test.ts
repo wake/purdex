@@ -34,13 +34,17 @@ describe('Electron macOS signing configuration (static)', () => {
     expect(literals).toEqual(['downloading', 'extracting', 'applying'])
   })
 
-  it('preload still gates dev update API behind PDX_DEV_MODE', () => {
+  it('preload gates dev update API behind strict PDX_DEV_MODE === "1"', () => {
     const preload = readFileSync(resolve(root, 'electron/preload.ts'), 'utf8')
-    expect(preload).toMatch(/PDX_DEV_MODE/)
+    // Strict equality — accepts only PDX_DEV_MODE='1', not any truthy
+    // string ('0', 'false', 'no' would all pass a truthy ternary).
+    // Must match daemon-side gate in internal/module/dev/module.go.
+    expect(preload).toMatch(/process\.env\.PDX_DEV_MODE\s*===\s*['"]1['"]/)
     expect(preload).toMatch(/applyUpdate:/)
     expect(preload).toMatch(/checkUpdate:/)
     expect(preload).toMatch(/onUpdateProgress:/)
-    const gateIdx = preload.indexOf('PDX_DEV_MODE')
+    // The strict gate must precede applyUpdate in source order
+    const gateIdx = preload.search(/process\.env\.PDX_DEV_MODE\s*===\s*['"]1['"]/)
     const applyIdx = preload.indexOf('applyUpdate:')
     expect(gateIdx).toBeGreaterThan(-1)
     expect(applyIdx).toBeGreaterThan(gateIdx)
