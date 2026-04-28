@@ -4,6 +4,7 @@ import { useHostStore } from '../stores/useHostStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { getFsBackend } from '../lib/fs-backend'
 import { tryOpenFileForFileTree } from '../lib/register-modules/file-open-bootstrap'
+import { FileNotFoundError } from '../lib/file-open'
 import type { ViewProps } from '../lib/module-registry'
 import type { FileSource, FileInfo, FileEntry } from '../types/fs'
 
@@ -129,10 +130,25 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
                   // P5: route through openFile pipeline so missing files
                   // (e.g. between a stale list and the click) surface a
                   // popup instead of opening empty buffers.
-                  void tryOpenFileForFileTree(fileInfo, source, {
+                  // R4 P2: catch rejections (auth/network errors, plus
+                  // FileNotFoundError when popupOnMissingFile is off) so
+                  // the promise doesn't surface as an unhandled rejection.
+                  // Mirror the terminal-link opener's split: expected
+                  // missing-file (popup disabled) → warn; everything else
+                  // → error so console-watching surfaces broken transport.
+                  tryOpenFileForFileTree(fileInfo, source, {
                     hostId: activeHostId,
                     cwd: projectPath,
                     sourceWorkspaceId: workspaceId,
+                  }).catch((err) => {
+                    if (err instanceof FileNotFoundError) {
+                      console.warn(`[file-tree] file not found (popup disabled): ${fileInfo.path}`)
+                    } else {
+                      console.error(
+                        `[file-tree] tryOpenFile failed for ${fileInfo.path}: ${(err as Error)?.message ?? String(err)}`,
+                        err,
+                      )
+                    }
                   })
                 }
               }}
