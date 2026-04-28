@@ -688,43 +688,40 @@ func lastCodexCommandToken(cmd string) string {
 	return tokens[len(tokens)-1]
 }
 
+// codexKnownEventNames is the set of installable upstream hook keys derived
+// from the catalog (Filter(IsInstallable).UpstreamKeys union). Used for
+// upstream-key checks; command-token recognition uses
+// codexOwnedCleanupEventNames.
 func codexKnownEventNames() map[string]bool {
-	// W2 Phase 2 transitional: known-event recognition spans both legacy
-	// upstream-key tokens (pre-W2 installs) and new PurdexName tokens. P2-T4
-	// will derive this set from the catalog UpstreamKeys ∪ PurdexName.
-	known := make(map[string]bool, len(codexEventSpecs)*2)
+	known := make(map[string]bool)
 	for _, spec := range codexEventSpecs {
-		known[spec.Name] = true
-		known[spec.PurdexName] = true
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		for _, key := range spec.UpstreamKeys {
+			known[key] = true
+		}
 	}
 	return known
 }
 
+// codexOwnedCleanupEventNames is the three-set union per spec §6.1
+// invariant 6: installable specs' UpstreamKeys ∪ PurdexName ∪ legacy Name.
+// codex has one-to-one upstream/Pdx mapping so the union collapses to legacy
+// Name ∪ PurdexName at runtime. Legacy Name is preserved per plan G1 until
+// PR-W2-cleanup-followup so reinstalls following the alpha bump still
+// recognise pre-W2 command tokens.
 func codexOwnedCleanupEventNames() map[string]bool {
-	// W2 Phase 2 transitional: cleanup must recognise both legacy upstream-key
-	// command tokens (pre-W2 installs) and new Pdx-prefixed PurdexName tokens
-	// so reinstall round-trips don't leak duplicate entries. P2-T4 will derive
-	// this set from the catalog (UpstreamKeys ∪ PurdexName ∪ legacy Name three-
-	// way union, per spec §6.1 invariant 6); legacy Name set is preserved per
-	// plan G1 until PR-W2-cleanup-followup.
-	return map[string]bool{
-		"SessionStart":         true,
-		"UserPromptSubmit":     true,
-		"SubagentStart":        true,
-		"SubagentStop":         true,
-		"Stop":                 true,
-		"StopFailure":          true,
-		"Notification":         true,
-		"PermissionRequest":    true,
-		"SessionEnd":           true,
-		"PdxSessionStart":      true,
-		"PdxUserPromptSubmit":  true,
-		"PdxSubagentStart":     true,
-		"PdxSubagentStop":      true,
-		"PdxStop":              true,
-		"PdxStopFailure":       true,
-		"PdxNotification":      true,
-		"PdxPermissionRequest": true,
-		"PdxSessionEnd":        true,
+	owned := make(map[string]bool)
+	for _, spec := range codexEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		for _, key := range spec.UpstreamKeys {
+			owned[key] = true
+		}
+		owned[spec.PurdexName] = true
+		owned[spec.Name] = true
 	}
+	return owned
 }

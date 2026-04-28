@@ -1754,6 +1754,145 @@ func TestMergeCodexHooksFile_CommandTokenIsPurdexName(t *testing.T) {
 	}
 }
 
+// ---- P2-T4: known/cleanup sets derived from catalog ----
+
+// TestCodexKnownEventNames_DerivedFromUpstreamKeys asserts the set is the
+// installable specs' UpstreamKeys union — no parallel hardcoded list.
+func TestCodexKnownEventNames_DerivedFromUpstreamKeys(t *testing.T) {
+	got := codexKnownEventNames()
+	want := map[string]bool{}
+	for _, spec := range codexEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		for _, key := range spec.UpstreamKeys {
+			want[key] = true
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("codexKnownEventNames size = %d, want %d", len(got), len(want))
+	}
+	for key := range want {
+		if !got[key] {
+			t.Errorf("codexKnownEventNames missing UpstreamKey %q", key)
+		}
+	}
+	for key := range got {
+		if !want[key] {
+			t.Errorf("codexKnownEventNames has unexpected key %q (not an installable UpstreamKey)", key)
+		}
+	}
+}
+
+// TestCodexOwnedCleanupEventNames_ThreeSetUnion asserts the cleanup set is
+// the three-set union per spec §6.1 invariant 6: installable specs'
+// UpstreamKeys ∪ PurdexName ∪ legacy Name. codex has one-to-one mapping so
+// the union collapses to legacy Name ∪ PurdexName at runtime; the legacy
+// Name set is preserved per plan G1 until PR-W2-cleanup-followup.
+func TestCodexOwnedCleanupEventNames_ThreeSetUnion(t *testing.T) {
+	got := codexOwnedCleanupEventNames()
+	want := map[string]bool{}
+	for _, spec := range codexEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		for _, key := range spec.UpstreamKeys {
+			want[key] = true
+		}
+		want[spec.PurdexName] = true
+		want[spec.Name] = true
+	}
+	if len(got) != len(want) {
+		t.Errorf("codexOwnedCleanupEventNames size = %d, want %d", len(got), len(want))
+	}
+	for key := range want {
+		if !got[key] {
+			t.Errorf("codexOwnedCleanupEventNames missing %q", key)
+		}
+	}
+	for key := range got {
+		if !want[key] {
+			t.Errorf("codexOwnedCleanupEventNames has unexpected key %q", key)
+		}
+	}
+}
+
+// TestCodexOwnedCleanupEventNames_CleansLegacyAndNew asserts the cleanup set
+// recognises both legacy "Stop" and new "PdxStop" command tokens so a
+// reinstall round-trip leaves exactly one canonical PdxStop entry, even when
+// the input file has both shapes side by side (mid-migration state).
+func TestCodexOwnedCleanupEventNames_CleansLegacyAndNew(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+	hooksFile := map[string]any{
+		"hooks": map[string]any{
+			"Stop": []any{
+				map[string]any{
+					"hooks": []any{
+						map[string]any{
+							"type":    "command",
+							"command": `"/usr/local/bin/pdx" hook --agent codex Stop`,
+						},
+					},
+				},
+				map[string]any{
+					"hooks": []any{
+						map[string]any{
+							"type":    "command",
+							"command": `"/usr/local/bin/pdx" hook --agent codex PdxStop`,
+						},
+					},
+				},
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(hooksFile, "", "  ")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write hooks: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
+			t.Fatalf("run %d install: %v", i, err)
+		}
+	}
+
+	hooks := hooksSection(t, readHooksFile(t, path))
+	stopEntries, _ := hooks["Stop"].([]any)
+	pdxCount := 0
+	hasLegacyToken := false
+	hasPdxToken := false
+	for _, e := range stopEntries {
+		m, _ := e.(map[string]any)
+		inner, _ := m["hooks"].([]any)
+		for _, h := range inner {
+			hm, _ := h.(map[string]any)
+			cmd, _ := hm["command"].(string)
+			tokens := tokenizeCodexCommand(cmd)
+			if len(tokens) == 0 {
+				continue
+			}
+			tail := tokens[len(tokens)-1]
+			if tail == "Stop" {
+				hasLegacyToken = true
+			}
+			if tail == "PdxStop" {
+				hasPdxToken = true
+				pdxCount++
+			}
+		}
+	}
+	if hasLegacyToken {
+		t.Error("legacy Stop token survived reinstall round-trip")
+	}
+	if !hasPdxToken {
+		t.Error("PdxStop token missing after reinstall")
+	}
+	if pdxCount != 1 {
+		t.Errorf("expected 1 PdxStop entry, got %d", pdxCount)
+	}
+}
+
 // TestCheckCodexEvent_LooksUpByUpstreamKey asserts CheckHooks reads hooks.json
 // using spec.UpstreamKeys[0] (not spec.Name). After P2-T3 the read path
 // mirrors the write path: a hooks.json keyed by the upstream event name with
