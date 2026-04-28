@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CaretRight, CaretDown, Plus } from '@phosphor-icons/react'
 import { useDroppable } from '@dnd-kit/core'
 import { useSortable } from '@dnd-kit/sortable'
@@ -5,8 +6,11 @@ import { CSS } from '@dnd-kit/utilities'
 import type { Workspace, Tab } from '../../../types/tab'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { useTabStore } from '../../../stores/useTabStore'
+import { inferWorkspaceHostId } from '../../../lib/infer-workspace-host-id'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { InlineTabList } from './InlineTabList'
+import { WorkspaceQuickActionsPopover } from './WorkspaceQuickActionsPopover'
 
 interface Props {
   workspace: Workspace
@@ -43,6 +47,92 @@ export function WorkspaceRow(props: Props) {
   const toggleExpanded = useLayoutStore((s) => s.toggleWorkspaceExpanded)
   const tabPosition = useLayoutStore((s) => s.tabPosition)
   const showTabs = tabPosition !== 'top'
+
+  // Phase 1b' — Plus hover popover state + touch fallback (codex round-1 C17).
+  // hostId resolves via inferWorkspaceHostId (spec v4 §3.2.1 majority vote, no
+  // activeHostId fallback). Subscribing to tabsMap so hostId reacts to layout
+  // changes (e.g. user opens / closes a tmux pane).
+  const [popoverOpen, setPopoverOpen] = useState(false)
+  const hubRef = useRef<HTMLDivElement>(null)
+  const tabsMap = useTabStore((s) => s.tabs)
+  const hostId = inferWorkspaceHostId(workspace, tabsMap)
+
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const longPressFiredRef = useRef(false)
+  // codex round-1 P2 (F3 — picker hover-dismissal). When the popover's internal
+  // HostPickerPopover is up we must NOT collapse the hub on mouseleave /
+  // pointerdown — otherwise moving the pointer toward a host option unmounts
+  // the popover (and the picker with it) before the user can click. Tracked
+  // via refs because mouseleave/pointerdown handlers fire from event listeners
+  // whose closures snapshot stale state.
+  const pickerOpenRef = useRef(false)
+  const pointerInHubRef = useRef(false)
+  const handlePickerOpenChange = useCallback((open: boolean) => {
+    const wasOpen = pickerOpenRef.current
+    pickerOpenRef.current = open
+    // Only collapse on the open → closed transition. Initial mount notifies
+    // false (and so does the unmount cleanup); collapsing on that would shut
+    // the popover the moment it opens, especially on touch where mouseEnter
+    // never fires and pointerInHubRef stays false.
+    if (wasOpen && !open && !pointerInHubRef.current) {
+      setPopoverOpen(false)
+    }
+  }, [])
+
+  const handleTouchStart = () => {
+    longPressFiredRef.current = false
+    longPressTimerRef.current = setTimeout(() => {
+      longPressFiredRef.current = true
+      setPopoverOpen(true)
+    }, 500)
+  }
+  const handleTouchEnd = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
+    }
+    // long-press fired → user is now interacting with popover; do NOT trigger add-tab onClick.
+  }
+
+  // Cleanup any pending timer on unmount so we don't fire setPopoverOpen on a
+  // disposed component (silent in React 18 but a real bug if the component
+  // re-mounts at the same workspace.id).
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current)
+        longPressTimerRef.current = null
+      }
+    }
+  }, [])
+
+  // codex round-2 A2/F2 — clear the long-press click suppressor whenever the
+  // popover collapses. Without this the ref stays true after long-press → tap
+  // outside → next mouse/keyboard activation of Plus is silently dropped.
+  // (We also clear it inline in onClick when we actually consume the
+  // compatibility click; this useEffect catches the case where the browser
+  // skips the synthetic click entirely.)
+  useEffect(() => {
+    if (!popoverOpen) {
+      longPressFiredRef.current = false
+    }
+  }, [popoverOpen])
+
+  // Document-level pointerdown closes touch-popover when user taps outside hub.
+  // codex round-1 P2 (F3) — but NOT while the host picker is open; the picker
+  // is positioned outside the hub DOM and a pointerdown on a host option would
+  // otherwise close the popover before the picker's own onSelect handler fires.
+  useEffect(() => {
+    if (!popoverOpen) return
+    const onPointer = (e: PointerEvent) => {
+      if (pickerOpenRef.current) return
+      if (!hubRef.current?.contains(e.target as Node | null)) {
+        setPopoverOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', onPointer)
+    return () => document.removeEventListener('pointerdown', onPointer)
+  }, [popoverOpen])
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: workspace.id,
@@ -105,19 +195,63 @@ export function WorkspaceRow(props: Props) {
           </span>
         </button>
         {showTabs && (
-          <button
-            type="button"
-            aria-label={t('nav.add_tab_to_workspace', { name: workspace.name })}
-            title={t('nav.add_tab_to_workspace', { name: workspace.name })}
-            onClick={(e) => {
-              e.stopPropagation()
-              onAddTabToWorkspace(workspace.id)
+          <div
+            ref={hubRef}
+            className="relative inline-flex"
+            onMouseEnter={() => {
+              pointerInHubRef.current = true
+              setPopoverOpen(true)
             }}
-            onPointerDown={(e) => e.stopPropagation()}
-            className="p-0.5 rounded hover:bg-surface-secondary hover:text-text-primary cursor-pointer opacity-0 group-hover/ws-header:opacity-100 focus:opacity-100 transition-opacity focus:outline-none"
+            onMouseLeave={() => {
+              pointerInHubRef.current = false
+              // codex round-1 P2 (F3) — keep popover up while picker is open so
+              // the user can drift the pointer onto a host option without it
+              // disappearing.
+              if (pickerOpenRef.current) return
+              setPopoverOpen(false)
+            }}
+            onFocusCapture={() => setPopoverOpen(true)}
+            onBlurCapture={(e) => {
+              // Only close if focus actually left the hub (chip→chip Tab keeps focus inside).
+              if (!hubRef.current?.contains(e.relatedTarget as Node | null)) {
+                if (pickerOpenRef.current) return
+                setPopoverOpen(false)
+              }
+            }}
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchEnd}
           >
-            <Plus size={12} />
-          </button>
+            <button
+              type="button"
+              aria-label={t('nav.add_tab_to_workspace', { name: workspace.name })}
+              title={t('nav.add_tab_to_workspace', { name: workspace.name })}
+              onClick={(e) => {
+                // codex round-1 C17 — touch → click compat: if long-press fired, suppress click.
+                if (longPressFiredRef.current) {
+                  // codex round-2 A2 — one-shot suppressor: clear immediately
+                  // so the next mouse/keyboard activation isn't also dropped.
+                  longPressFiredRef.current = false
+                  e.preventDefault()
+                  e.stopPropagation()
+                  return
+                }
+                e.stopPropagation()
+                onAddTabToWorkspace(workspace.id)
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              className="p-0.5 rounded hover:bg-surface-secondary hover:text-text-primary cursor-pointer opacity-0 group-hover/ws-header:opacity-100 focus:opacity-100 transition-opacity focus:outline-none"
+            >
+              <Plus size={12} />
+            </button>
+            {popoverOpen && (
+              <WorkspaceQuickActionsPopover
+                workspaceId={workspace.id}
+                hostId={hostId}
+                onPickerOpenChange={handlePickerOpenChange}
+              />
+            )}
+          </div>
         )}
         {showTabs && (
           <button
