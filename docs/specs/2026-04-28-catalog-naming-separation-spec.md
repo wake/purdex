@@ -53,6 +53,13 @@ HOOK LAYER (per-agent installer + handler entry)
 - schema 加雙欄位卻不 rename → PurdexName 與 UpstreamKey 字串值今日相等 → 無法在測試與 review 中驗證「daemon 與 installer 分離」是否真的生效（測不出兩個欄位被誤用）
 - 一次到位 + 一次 reinstall，user 體驗成本最低
 
+**No user-facing migration / backward-compat**（per `feedback_no_alpha_migration`）：
+
+- daemon **不接受** post-W2 與 pre-W2 的「兩種 hook payload 形態並存」(no fallback / no two-step lookup)
+- user 升級 alpha 後**必須**跑 `pdx install --reinstall` 才能繼續用，否則該 agent 的 hook payload 會被當成 unknown event
+- 中間態風險（main 已進 Phase 1 但 user 還沒升）靠**延後 bump** 規避：三 phase **全 merge 完**才出單一 bump PR，bump 前 main 只是 dev-time work-in-progress，user 端永遠跑 pre-W2 daemon + 舊 hooks
+- 本 spec 中 `Name` 欄位的雙寫 transition（§3.4）是 **dev-time aid**，純粹給 main 上 Phase 1/2 期間 codex/opencode 的 catalog literal 過渡編譯用，**不是 runtime fallback**，daemon 在任何 phase 都只 dispatch 自家 PurdexName
+
 ### 0.2 與 W1 audit 的關係
 
 W1 audit doc (`docs/specs/2026-04-28-hook-status-audit-spec.md`) §4 與 §6/§7 工作池中的事件名稱（`SessionStart` / `Stop` / `PermissionRequest` 等）是 **pre-W2 PurdexName == UpstreamKey 時期的字面值**。本 spec 完成後 **audit doc 不需修改** — 因為：
@@ -75,7 +82,7 @@ W1 audit doc (`docs/specs/2026-04-28-hook-status-audit-spec.md`) §4 與 §6/§7
 | opencode | `internal/agent/opencode/{events,hooks,plugin_template,status}.go` 四檔；plugin emit RHS 改 Go 端常數注入 |
 | CLI | `cmd/pdx/hook.go` positional arg 語義升級（值轉變：UpstreamKey → PurdexName） |
 | Handler | `internal/module/agent/handler.go` `EventRequest` 欄位語義升級；JSON tag 更新；NormalizedEvent.RawEventName 語意保持 |
-| Tests | 三家 hooks_test / status_test / 共用 events_test；新增「installer key vs command arg 不同字串」斷言 |
+| Tests | 三家 hooks_test / status_test / 共用 events_test；新增「installer key vs command arg 不同字串」斷言 + handler per-agent_type per-phase 行為矩陣（§6.3）|
 | Documentation | 本 spec / kickoff memory / fix-spec §10 dev spec 路徑勾稽 |
 
 ### 1.2 不在範圍
@@ -98,7 +105,7 @@ W1 audit doc (`docs/specs/2026-04-28-hook-status-audit-spec.md`) §4 與 §6/§7
 4. ✅ Daemon handler / DeriveStatus 全用 PurdexName
 5. ✅ Go test (`go test ./...`) 全綠
 6. ✅ SPA 邊跑 vitest + lint + build 全綠（NormalizedEvent.RawEventName 字面值改變，需更新 fixture）
-7. ✅ 三 phase PR 全 ship + bump alpha
+7. ✅ 三 phase PR 依序 ship（PR-W2-1 → PR-W2-2 → PR-W2-3），全 merged 後**才**出單一 PR-W2-bump
 8. ✅ Post-ship 在 mlab 主機跑 `pdx install --reinstall` 並 ad-hoc 檢查三個 hook 檔案命名對齊
 9. ✅ Spec 過 codex review 兩輪（per CLAUDE.md PR Review 兩輪制）
 
@@ -141,11 +148,20 @@ type HookEventSpec struct {
 **lookup helpers**（共用層，新增）：
 
 ```go
-// LookupByPurdexName: O(N), 預期 N≤11，無需 index
+// LookupByPurdexName: O(N), 預期 N≤11，無需 index。
+// 給 daemon 內部所有 catalog 反查使用（包含 DeriveStatus / handler routing）。
 func LookupByPurdexName(specs []HookEventSpec, purdexName string) (HookEventSpec, bool)
 
-// LookupByUpstreamKey: O(N*M)，M = avg UpstreamKeys size，極小
-// opencode plugin 反查 Bus event → catalog 用
+// LookupByUpstreamKey: O(N*M)，M = avg UpstreamKeys size，極小。
+//
+// 限制（per spec §2.5）:
+//   - 僅適用於 cc / codex 等「UpstreamKey 與 PurdexName 1:1 對應」的 agent，
+//     可用於測試斷言或 dev tooling。
+//   - **不適合用於 opencode filter-based events 的 runtime routing**：
+//     opencode `session.status` / `tool.execute.before` / `tool.execute.after`
+//     需要 type / tool filter 才能正確映射到 catalog；catalog UpstreamKeys 不表達
+//     filter 條件，runtime routing 仍以 plugin 端 demux 為權威。Lookup 命中
+//     `session.status` 直接得到 `PdxStop` 在 busy/retry 子型情境下會誤判。
 func LookupByUpstreamKey(specs []HookEventSpec, upstreamKey string) (HookEventSpec, bool)
 ```
 
@@ -244,11 +260,11 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
 **範圍**：
 
 - `internal/agent/provider.go`：新增 `PurdexName` + `UpstreamKeys` 欄位 + lookup helpers + `Name` 欄位標 `// Deprecated:` comment（保留以利 codex/opencode phase 過渡編譯）
-- `internal/agent/cc/events.go`：catalog entry 加 PurdexName + UpstreamKeys 欄位；`Name` 暫保留（與 PurdexName 同字串去 prefix），phase 3 完成後刪除
+- `internal/agent/cc/events.go`：catalog entry 用共用 helper `agent.NewSpec(...)` 一次填 PurdexName + UpstreamKeys（同時 backfill `Name` deprecated 欄位以利 codex/opencode 過渡編譯）；phase 3 ship 同 PR 移除 `Name` backfill
 - `internal/agent/cc/hooks.go`：`mergeClaudeHooks` / `makePdxEntry` 改寫；`ccKnownEventNames` / `ccOwnedCleanupEventNames` 從 catalog 自動衍生（DRY 修補）
 - `internal/agent/cc/status.go`：`deriveCCStatus` switch case 改 `PdxXxx`
 - `cmd/pdx/hook.go`：positional[0] 註解改為 `purdexName`，buildHookPayload 第二參數命名同步
-- `internal/module/agent/handler.go`：`EventRequest.EventName` 改名 `PurdexName`（保留 `event_name` JSON tag 一個版本作 transition，下個 phase 移除 — see §3.4 transition 策略）
+- `internal/module/agent/handler.go`：`EventRequest.EventName` 改名 `PurdexName`，**primary JSON tag = `purdex_name`**；保留 `event_name` 為 unmarshal-only alias（Go custom UnmarshalJSON：兩鍵都接、`purdex_name` 優先；marshal 只送 `purdex_name`），Phase 3 ship 同 PR 移除 alias — see §3.4 / §4.1 transition 策略
 - `internal/module/agent/handler.go`：呼 `provider.DeriveStatus(req.PurdexName, req.RawEvent)`
 - 共用 `event_spec_test.go`（新檔）：測 lookup helpers + cc spec 的「PurdexName 與 UpstreamKeys 互斥（PurdexName 不能 == 任一 UpstreamKey）」斷言（防止退化成單一字串）
 - `cc/hooks_test.go`：新增測試「installer 寫入 settings.json 時 hooks key == UpstreamKey 且 command 字串末段 token == PurdexName」
@@ -284,11 +300,11 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
 
 **前置依賴**：Phase 1 ship（schema 已加雙欄位 + handler 已用 PurdexName）
 
-**並行可能**：與 Phase 3 可在 Phase 1 ship 後並行（不互依）
+**並行可能**：與 Phase 3 可在 Phase 1 ship 後並行 catalog 改寫部分；但 Phase 3 內含「移除 `Name` 欄位 + 移除 `event_name` JSON alias」cleanup step **必須在 Phase 2 merged 後**才能進行（否則 codex package 仍引用 `spec.Name` 編譯失敗）
 
 ---
 
-### Phase 3（S-M）— opencode plugin template
+### Phase 3（S-M）— opencode plugin template + transition cleanup
 
 **範圍**：
 
@@ -304,6 +320,10 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
   - 8 處 `emit('PdxXxx', ...)` 出現
   - 沒有殘留硬寫的 `emit('SessionStart', ...)` 形態
   - magic marker 仍為 `pdx-managed:opencode-hooks:v1`
+- **Transition cleanup（同 PR）**：
+  - 移除 `internal/agent/provider.go` 的 `Name` 欄位 + `agent.NewSpec` helper 的 `Name` backfill
+  - 移除 `EventRequest` 的 `event_name` JSON alias（custom UnmarshalJSON 簡化為單鍵 `purdex_name`）
+  - cc / codex 的 catalog literal 不再有 `Name`（前兩 phase 的 backfill 路徑全清）
 
 **驗證**：
 
@@ -313,39 +333,61 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
   - magic marker `pdx-managed:opencode-hooks:v1` 不變
 - 啟動實機 opencode session，觀察 daemon log 收到的 EventRequest.PurdexName 為 `PdxXxx`
 
-**前置依賴**：Phase 1 ship（schema 已加雙欄位 + handler 已用 PurdexName）；可與 Phase 2 並行
+**前置依賴**：**Phase 2 ship**（Phase 3 cleanup 步驟移除的 `Name` 欄位若 Phase 2 還沒 merge，codex package 仍會引用，編譯失敗）；catalog 改寫部分可與 Phase 2 並行起草，但 PR ship 順序強制 Phase 2 → Phase 3
 
 ---
 
-### 3.4 Transition 期間 `Name` 欄位的處理
+### 3.4 Dev-time transition 機制（**not** user-facing migration）
 
-Phase 1 加 `PurdexName` 後 `Name` 欄位**短暫並存**（cc 已用新欄位、codex/opencode 仍用舊）。具體：
+Phase 1 加 `PurdexName` 後 `Name` 欄位**短暫並存於 main**（cc 已用新欄位、codex/opencode 仍用舊）。**這是 main-branch dev-time 雙寫，不是 user-facing migration** — bump 之前 user 永遠跑 pre-W2 daemon（per §0.1 「No user-facing migration」），看不到 main 的中間態。
 
-| Phase | provider.go HookEventSpec | cc | codex | opencode |
+| Phase（main-only） | provider.go HookEventSpec | cc | codex | opencode |
 |---|---|---|---|---|
 | Pre-W2 | 只有 `Name` | 用 Name | 用 Name | 用 Name |
-| Phase 1 ship | 加 PurdexName + UpstreamKeys；Name 標 Deprecated | 用 PurdexName/UpstreamKeys | 仍用 Name（舊邏輯）| 仍用 Name（舊邏輯）|
-| Phase 2 ship | 同上 | 已遷 | 用 PurdexName/UpstreamKeys | 仍用 Name |
-| Phase 3 ship | 移除 Name 欄位 | 已遷 | 已遷 | 已遷 |
+| Phase 1 ship | 加 PurdexName + UpstreamKeys；Name 標 Deprecated；helper 雙寫 | 用 PurdexName/UpstreamKeys；DeriveStatus case=PdxXxx | 仍用 Name（catalog literal 經 helper 雙寫）；DeriveStatus case=Name | 仍用 Name（同上）；DeriveStatus case=Name |
+| Phase 2 ship | 同上 | 已遷 | 用 PurdexName/UpstreamKeys；DeriveStatus case=PdxXxx | 仍用 Name；DeriveStatus case=Name |
+| Phase 3 ship | 移除 Name 欄位 + helper 雙寫 + JSON alias | 已遷 | 已遷 | 已遷 |
+| Bump alpha | 三 phase 全 merge 後 single bump PR | — | — | — |
 
 Phase 1/2 期間 `Name` 與 `PurdexName` 並存：
 
-- 為避免雙寫漂移，**catalog literal 用 helper builder 自動生成兩欄位**：
+- 為避免雙寫漂移，**catalog literal 用共用 exported helper builder 自動生成兩欄位**：
 
 ```go
-// 共用 helper（Phase 1 加，Phase 3 ship 後刪）
-func newSpec(purdexName string, upstreamKeys ...string) HookEventSpec {
+// internal/agent/provider.go
+// NewSpec is a transition helper used by catalog packages (cc / codex / opencode)
+// to populate both the new PurdexName/UpstreamKeys fields and the deprecated Name
+// field in a single literal. Removed in Phase 3 ship together with the Name field.
+//
+// Exported because cc/codex/opencode are separate packages and cannot reference
+// a package-private helper.
+func NewSpec(purdexName string, upstreamKeys ...string) HookEventSpec {
     return HookEventSpec{
         PurdexName:   purdexName,
         UpstreamKeys: upstreamKeys,
-        Name:         strings.TrimPrefix(purdexName, "Pdx"), // transition only
+        Name:         strings.TrimPrefix(purdexName, "Pdx"), // dev-time backfill only
     }
 }
 ```
 
-- Phase 3 完成後：移除 `Name` 欄位 + `newSpec` helper 改為 inline 寫法
+Catalog 各 package 引用：
 
-**Transition compile guarantee**：Phase 1/2 期間若有第三方 / 漏改處引用 `spec.Name` 仍可編譯，但拿到的是 pre-W2 字面值（不含 Pdx 前綴）— 這是 **intentional safety net**，不是 long-term API。Phase 3 ship 同 PR 把 `Name` 欄位刪掉時，所有 stale reference 在編譯期就會被抓到。
+```go
+// internal/agent/cc/events.go (Phase 1 ship 起)
+var ccEventSpecs = []agent.HookEventSpec{
+    agent.NewSpec("PdxSessionStart", "SessionStart"), // PurdexName, then UpstreamKeys...
+    agent.NewSpec("PdxUserPromptSubmit", "UserPromptSubmit"),
+    // ...
+}
+```
+
+- Phase 3 ship（依賴 Phase 2 merged）：移除 `Name` 欄位 + `NewSpec` helper 改為 plain literal `agent.HookEventSpec{PurdexName: ..., UpstreamKeys: ...}`
+
+**Phase 1/2 main-only safety net**：Phase 1/2 期間若 codex / opencode package 仍引用 `spec.Name`，因 helper 自動 backfill `strings.TrimPrefix(purdexName, "Pdx")` 仍可編譯且行為正確（拿到 pre-W2 字面值）。**這是 dev-time transition aid 而非 user-facing fallback**：
+
+- main daemon binary 在 Phase 1/2 期間 build 出來時，cc 部分用新 catalog（DeriveStatus case=`PdxXxx`），codex/opencode 部分用舊 catalog（DeriveStatus case=`Xxx`）— 兩條 codepath 都對自家 hook payload 自洽，**無 cross-agent fallback / two-step lookup 行為**
+- bump 之前 user 永遠跑 pre-W2 daemon binary，所以 main 的這個 dev-time 中間態完全不暴露給 user
+- Phase 3 ship 同 PR 移除 `Name` + helper 雙寫，所有 stale reference 在編譯期被抓出
 
 ---
 
@@ -382,12 +424,42 @@ func newSpec(purdexName string, upstreamKeys ...string) HookEventSpec {
 
 ### 4.1 EventRequest JSON 欄位 transition
 
-考量現有 SPA / 任何 in-flight client 可能對 `event_name` 字段有依賴：
+EventRequest 是 daemon 內部 endpoint，**只有同版本 daemon 自帶的 `pdx hook` CLI 會送**（user 不會跨版本混用）。但因為 main 上 Phase 1/2 期間 codex/opencode 走「`spec.Name` backfill 路徑」生成 catalog literal，CLI 從 hooks file 讀到的字串仍是舊 `Name`（如 `"UserPromptSubmit"`，不含 Pdx prefix），所以 daemon 端在 Phase 1/2 期間需要對舊版 catalog 字串也合法接受 — 但**前提是該字串對應 agent 自家 catalog 的 PurdexName**（per §3.4 雙寫），不是跨 agent 混用。
 
-- Phase 1：`EventRequest` Go struct 改名 `PurdexName`，JSON tag 改為 `purdex_name`，**保留 `event_name` 為 deprecated alias**（Go 端 unmarshal 兩個都接，marshal 只送新名）
-- Phase 3 ship 同 PR：移除 `event_name` alias
+JSON tag 設計：
 
-實際上 EventRequest 是 daemon 內部 endpoint，**只有 `pdx hook` CLI（同版本）會送**。因此 alias 風險 surface 很小。但保留一個 phase 的相容期是廉價保險。
+- **Primary tag**：`purdex_name`（Phase 1 起）
+- **Unmarshal-only alias**：`event_name`（custom UnmarshalJSON 接受兩鍵，`purdex_name` 優先；marshal 永遠輸出 `purdex_name`）
+- **Phase 3 ship 同 PR 移除 alias**：unmarshal 只認 `purdex_name`
+
+```go
+// internal/module/agent/handler.go (Phase 1 ship 起，Phase 3 simplify)
+type EventRequest struct {
+    PurdexName string          `json:"purdex_name"`
+    RawEvent   json.RawMessage `json:"raw_event"`
+    AgentType  string          `json:"agent_type"`
+    // ... 其他欄位
+}
+
+// Phase 1/2 transition only; Phase 3 ship 移除整個 Method
+func (r *EventRequest) UnmarshalJSON(b []byte) error {
+    type alias EventRequest
+    var a struct {
+        *alias
+        EventNameAlias string `json:"event_name"`
+    }
+    a.alias = (*alias)(r)
+    if err := json.Unmarshal(b, &a); err != nil { return err }
+    if r.PurdexName == "" && a.EventNameAlias != "" {
+        r.PurdexName = a.EventNameAlias
+    }
+    return nil
+}
+```
+
+**為什麼是 alias 不是兩個獨立欄位**：避免 `pdx hook` CLI 送哪個鍵的 ambiguity；marshal 永遠單鍵輸出，alias 只在 unmarshal 期間 absorb 舊鍵。
+
+**alias 期間的 PurdexName 字串值**：handler 收到的字串值由 catalog 決定（cc Phase 1 後是 `PdxXxx`、codex Phase 2 前還是 `Xxx`、opencode Phase 3 前還是 `Xxx`）。daemon 把這個字串原封不動 forward 到對應 agent 的 DeriveStatus；後者根據自家 phase 進度匹配 case label。**daemon 端不做跨 agent 字串轉換 / 沒有 fallback 比對**。
 
 ---
 
@@ -424,13 +496,38 @@ func newSpec(purdexName string, upstreamKeys ...string) HookEventSpec {
 - codex：parse `~/.codex/hooks.json` 後 matcher group `"SessionStart"` 的 command 同上
 - opencode：renderManagedPlugin 輸出檢查 `emit('PdxSessionStart'`（或常數引用形態）出現 1 次、`emit('SessionStart'`（無 Pdx）不再出現
 
-### 6.3 Handler 行為測試
+### 6.3 Handler 行為測試（per agent_type，**反映 phase 進度**）
 
-`internal/module/agent/handler_test.go`：
+`internal/module/agent/handler_test.go`：每筆 case 必帶 `agent_type` 才能對 catalog literal 的 phase 狀態自洽斷言。
 
-- POST `{"purdex_name": "PdxUserPromptSubmit", ...}` → 200 + status=running
-- POST `{"event_name": "PdxUserPromptSubmit", ...}` (Phase 1/2 transition alias) → 200 + status=running
-- POST `{"purdex_name": "UserPromptSubmit", ...}` （舊 pre-W2 格式） → invalid + reason="event_not_in_catalog"
+**Phase 1 ship 後（cc 已遷、codex / opencode 未遷）**：
+
+| Test case | agent_type | purdex_name | 預期 |
+|---|---|---|---|
+| cc 新格式 primary tag | `cc` | `PdxUserPromptSubmit` | 200 + status=running |
+| cc 舊格式（pre-W2 字面值） | `cc` | `UserPromptSubmit` | invalid + `event_not_in_catalog` |
+| cc unmarshal alias `event_name` | `cc` | (`event_name="PdxUserPromptSubmit"`) | 200 + status=running |
+| codex 中間態仍合法（main only） | `codex` | `UserPromptSubmit` | 200 + status=running（codex catalog literal Phase 1 還是 `Name`）|
+| codex 提早送 PdxXxx（誤送） | `codex` | `PdxUserPromptSubmit` | invalid + `event_not_in_catalog`（catalog 還沒認）|
+| opencode 中間態仍合法 | `opencode` | `UserPromptSubmit` | 200 + status=running |
+
+**Phase 2 ship 後（cc + codex 已遷、opencode 未遷）**：
+
+| Test case | agent_type | purdex_name | 預期 |
+|---|---|---|---|
+| codex 新格式 | `codex` | `PdxUserPromptSubmit` | 200 + status=running |
+| codex 舊格式 | `codex` | `UserPromptSubmit` | invalid |
+| opencode 中間態仍合法 | `opencode` | `UserPromptSubmit` | 200 + status=running |
+
+**Phase 3 ship 後（三家全遷）**：
+
+| Test case | agent_type | purdex_name | 預期 |
+|---|---|---|---|
+| opencode 新格式 | `opencode` | `PdxUserPromptSubmit` | 200 + status=running |
+| opencode 舊格式 | `opencode` | `UserPromptSubmit` | invalid |
+| event_name alias 已移除 | any | (`event_name="PdxUserPromptSubmit"`) | invalid（alias 不再被 unmarshal） |
+
+每個 phase 對應 PR 在 `handler_test.go` 增測該 phase 後的合法 / 非法 case；同步 phase ship 時舊 phase 的「中間態仍合法」case 升為 invalid。
 
 ### 6.4 SPA 端
 
@@ -460,9 +557,11 @@ Phase 1 起即更新（影響 cc 相關 snapshot）。Phase 2/3 順帶更新各�
 
 | Risk | Mitigation |
 |---|---|
-| Phase 1/2 transition 期間 `Name` 與 `PurdexName` 雙欄位漂移 | helper `newSpec()` 強制兩欄位同源；catalog literal 不直接寫 `Name` 欄位 |
+| Phase 1/2 main 中間態誤 bump → user 升到 dev-only 中間態 daemon | §0.1 + §8 + §9 多處明示「三 phase 全 merge 後才出 bump PR」；PR-W2-bump 排在 PR-W2-3 後 |
+| Phase 1/2 transition 期間 `Name` 與 `PurdexName` 雙欄位漂移 | exported `agent.NewSpec(...)` helper 強制兩欄位同源；catalog literal 不直接寫 `Name` 欄位；Phase 3 ship 同 PR 移除 helper 確保 stale ref 編譯期被抓 |
 | 既有 SPA fixture / snapshot 大量需更新 | spec §6.4 一次性 grep 清單；每 phase 改自家 agent 對應 fixture |
 | EventRequest JSON `event_name` alias 期內潛伏 bug | 整合 test 同時測新舊 JSON；alias 在 Phase 3 同 PR 移除 |
+| `LookupByUpstreamKey` 被誤用於 opencode filter events 的 routing | helper godoc 明文限制（§2.1）+ §2.5 不得作為 plugin filter routing 的 SOT；如果未來真的需要表達 filter，另開 issue 設計 `UpstreamFilter` metadata（不在 W2 範圍）|
 | codex `codexOwnedCleanupEventNames` DRY 修補意外破壞 lifecycle | 修補同 PR 加 round-trip test：install → catalog 全 entry 都被 cleanup recognise；catalog 增刪 entry 時 cleanup 自動跟上 |
 | opencode plugin emit 改常數注入後 JS template 解析錯誤 | renderManagedPlugin 新增 unit test：模板渲染後 `Bun.spawn` 呼叫處字串為 PurdexName；磁碟寫入後 grep 反查 |
 | reinstall 對 user 環境破壞性 | alpha 階段允許（per `feedback_no_alpha_migration`）；ship + bump 同 commit chain，user 升 alpha 時 reinstall |
@@ -491,6 +590,8 @@ W2 範圍嚴格止於：
 
 ## 8. Post-ship 動作
 
+**Bump 時機（per §0.1 no-migration 原則）**：Phase 1 / 2 / 3 三個 PR **全部 merge 完才出單一 bump PR**。Phase 1 / 2 merged 期間 main daemon binary 處於 dev-time 中間態，**不 bump alpha**，user 不會升級到中間態 daemon。Phase 3 merge 後 main daemon binary 是完整 W2 形態，bump alpha → user 升級 + 一次性 reinstall。
+
 三 phase 全 ship + bump alpha 後（單一 bump PR）：
 
 1. **mlab 主機跑 reinstall**
@@ -512,12 +613,18 @@ W2 範圍嚴格止於：
 
 ## 9. PR 拆分與 review 節奏
 
-| PR | 範圍 | 預估行數 | Codex review |
-|---|---|---|---|
-| **PR-W2-1** | Phase 1（共用 schema + cc + handler）| ~600-900 | 兩輪：標準 + 防守視角（spec alignment 防線，per `feedback_codex_pr_review_spec_alignment`）|
-| **PR-W2-2** | Phase 2（codex + DRY 修補）| ~400-600 | 兩輪：標準 + 攻擊視角（race / 邊界）|
-| **PR-W2-3** | Phase 3（opencode plugin template + 移除 Name alias）| ~300-500 | 兩輪：標準 + 體質視角（plugin template 可讀性）|
-| **PR-W2-bump** | VERSION + CHANGELOG | <50 | 不需 codex |
+| PR | 範圍 | 前置依賴 | 預估行數 | Codex review |
+|---|---|---|---|---|
+| **PR-W2-1** | Phase 1（共用 schema + `agent.NewSpec` helper + cc + handler 含 unmarshal alias）| origin/main | ~600-900 | 兩輪：標準 + 防守視角（spec alignment 防線，per `feedback_codex_pr_review_spec_alignment`）|
+| **PR-W2-2** | Phase 2（codex catalog/installer/status + DRY 修補 codexOwnedCleanupEventNames）| PR-W2-1 merged | ~400-600 | 兩輪：標準 + 攻擊視角（race / 邊界）|
+| **PR-W2-3** | Phase 3（opencode plugin template + 移除 `Name` 欄位 / `agent.NewSpec` 雙寫 / `event_name` JSON alias）| PR-W2-2 merged | ~300-500 | 兩輪：標準 + 體質視角（plugin template 可讀性）|
+| **PR-W2-bump** | VERSION + CHANGELOG | PR-W2-3 merged | <50 | 不需 codex |
+
+**順序強制理由**：
+
+- PR-W2-2 依賴 PR-W2-1 提供的 schema 與 `agent.NewSpec` helper
+- PR-W2-3 cleanup step（移除 `Name` 欄位）依賴 PR-W2-2 已遷（否則 codex package 編譯失敗）
+- PR-W2-bump 只在三 phase 全 merge 後才出，避免 user 升級到中間態 daemon（per §0.1 no-migration 原則）
 
 每 PR 兩輪 review 沿用 CLAUDE.md PR Review 兩輪制。
 
