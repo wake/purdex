@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.0.0-alpha.249] - 2026-04-29
+
+### Fix(opencode): plugin emit() stdin TypeError hotfix (#715) (#716)
+
+Pre-existing bug since commit `ffdd4e14` (2026-04-21, initial opencode integration). The rendered opencode plugin's `emit()` helper passed a raw JSON string as `Bun.spawn`'s `stdin` field, which Bun rejects with `TypeError: ERR_INVALID_ARG_TYPE`. Every opencode hook event has thrown for 7 days; `agent_events.db` had zero `agent_type='opencode'` rows in production. Existing template tests only diffed rendered text and never exercised a real Bun runtime, so CI silently passed.
+
+- **Daemon `internal/agent/opencode/plugin_template.go`** — pull JSON encoding before `Bun.spawn` (`const encoded = JSON.stringify(payload)`), switch the `stdin` field to `'pipe'`, and write the payload through the FileSink lifecycle (`proc.stdin.write(encoded); proc.stdin.end(); await proc.exited`). Pre-encoding restores the pre-fix semantic where a serialization failure prevents the spawn entirely (rather than leaving the spawned `pdx hook` blocked on stdin EOF). The rendered body is byte-different from the broken era, so `CheckHooks` reports drift on pre-fix managed plugins and the next `pdx setup --agent opencode` writes the fixed body.
+- **Test `internal/agent/opencode/plugin_template_bun_integration_test.go`** (new) — real-Bun integration test that renders the plugin against a stub `pdx` shell binary, runs the result with `bun <plugin.mjs>`, and asserts the stub captured the JSON payload on stdin. Failure-mode classification distinguishes the pre-fix `ERR_INVALID_ARG_TYPE` red signal from harness failures (envelope mismatch, deadlock, syntax error). Four-layer skip gates: Windows / missing `/bin/sh` / no `bun` on `PATH` / `bun --version` failure — each is a `t.Skip` not a fail, so a single `go test ./...` run works across CI environments.
+- **Test `internal/agent/opencode/hooks_test.go`** — append `TestCheckHooks_PreFixManagedBodyReportsDrift` that synthesizes the actual pre-fix body (`stdin: JSON.stringify(payload)` with no `encoded` const, no `write`/`end` follow-up lines), writes it under HOME, and asserts `CheckHooks` reports drift on at least one event before `InstallHooks` returns the directory to the canonical state. Lifts spec AC3 from manual mlab observation into a CI-enforced unit assertion. `RenderManagedPluginForTesting` exposed via `hooks_export_test.go` (mirroring the existing `SetResolveCanonicalPdxPathForTesting` export pattern).
+
+### Live verification
+
+mlab on alpha.248 + spawn-fix branch captured 20 opencode events end-to-end: 4 `SessionStart`, 6 `UserPromptSubmit`, 5 `Stop`, 2 `SubagentStart`, 2 `SubagentStop`. All `latest_decision=broadcasted`, all `terminal_status=completed`. Pre-fix DB had **zero** opencode rows for the entire 7-day broken window.
+
+### Review history
+
+| Round | Findings | Outcome |
+|-------|----------|---------|
+| Spec review (`task-moiu936r-x7a8nh`) | 7 (5 P2 + 2 P3) — stdin types precision, await semantics note, `bun <script>` vs `bun run`, `bun --version` probe, Windows skip-gate, CheckHooks drift acceptance, acceptance-criteria scope | All addressed in spec v1.1 before plan |
+| Plan review (`task-moiufay4-0c5pdm`) | 6 (3 P2 + 3 P3) — TDD red precision, single-execution `CombinedOutput`, `.mjs` vs `.js` ESM, `/bin/sh` gate, AC3 in-repo unit test, DOD program/process split | All addressed in plan v1.1 before implementation |
+| R1 standard (`review-moiuppm6-63g2f2`) | 0 blockers | Approve |
+| R2 3-parallel (attack + defense + file-quality) | 2 medium (F1 0.78 partial-failure orphan subprocess; F2 0.87 drift fixture impossible hybrid body) + 1 approve | Both addressed in commit `147bd46c` |
+
+### Known follow-up (not blocking #715)
+
+- **#717** — opencode session indicator stays active after Ctrl+C exit because upstream opencode (anomalyco/opencode#10524) intercepts SIGINT/SIGTERM before plugin handlers run. `Stop` events fire correctly per prompt, but no `SessionEnd` ever fires — daemon-side liveness probe / heartbeat needed. Tracked separately.
+
 ## [1.0.0-alpha.248] - 2026-04-28
 
 ### Fix(electron): unsigned-aware preflight in dev update resign (#709 Stage 0) (#711)
