@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.0.0-alpha.247] - 2026-04-28
+
+### Feat(spa+daemon): file-not-found popup with three-layer fallback (P5) (#707)
+
+Editor P5 — final phase of the **Editor self-contained** series. Clicking a non-existent file path (terminal link or FileTreeView) no longer silent-fails: the new pipeline runs `stat → Layer-1 path-cache lookup → popup` and the popup's expand action triggers Layer-2 (session cwd) + Layer-3 (workspace projectPath) `fs.search` against a server-side capability allowlist.
+
+- **Daemon `internal/module/fs/search_engine.go`** — pure `Search(ctx, req)` with mandatory dir excludes (`node_modules`, `.git`, `.cache`, `dist`, `.pnpm-store`, `.next`, `.turbo`) and basename excludes (`*.lock`, `*.log`) UNIONed with client filters; `respectGitignore *bool` nil → true; gitignore parse failure returns 4xx (no fail-open); symlink loop avoidance; depth via `filepath.Rel`. In-house `preflightGitignore` + `bracketsBalanced` because `go-gitignore` silently drops bad lines.
+- **Daemon `internal/module/fs/search_handler.go`** — `(m *FsModule) handleSearch` capability-only roots: `{kind:"session-cwd", sessionCode}` resolves via `SessionProvider.GetSession(code).Cwd` and is **EvalSymlinks'd** so symlink hops can't bypass the system-path allowlist (R2 high — a `/tmp/ws/home-link/proj` symlink to `$HOME` would otherwise let WalkDir scan the user's home tree). Both lexical and resolved forms gate; `kind:"absolute"` → 4xx; `workspace-projectPath` → 501 (defer); system paths `/`, `/etc`, `/sys`, `$HOME` direct, `/Users` direct, `/Volumes` rejected.
+- **SPA `spa/src/lib/file-open/`** — host-bound `createOpenFileService({fsBackendFactory, popupController, tabOpener})` with strict ENOENT/404 error classification; `fsBackendFactory(hostId)` resolves once per call so workspace/host switch mid-flight can't corrupt the open. `fsSearchByCapability(hostId, basename, roots, limits?, signal?)` threads an AbortSignal into fetch so popup dismiss tears down the daemon-side WalkDir (R2 medium). `FileNotFoundError` re-thrown by tryOpenFile when `popupOnMissingFile` is off.
+- **SPA `file-not-found-popup-service.tsx`** — singleton mount with `import.meta.hot.dispose(hideFileNotFoundPopup)` and `AbortController` cancellation; controlled re-render reuses the live root + token instead of aborting (R2 medium — previously layer-2 results arriving first would abort the layer-3 fetch via the popup token).
+- **SPA `file-open-bootstrap.ts`** — module-level `mergedHits` accumulator so layer-2 + layer-3 results merge into the same expanded popup; reset on fresh ask-expand / layer1-multi mounts. Exports `openFileAsBufferDirect` for the tilde fallback when home resolve fails (R3 P2 — daemon rejects `stat('~/foo')` with 400, classified as auth/network not ENOENT, so the missing-file pipeline can't open a blank buffer).
+- **SPA `EditorOpenBehaviorSection`** — two new toggles in Editor settings (per `feedback_core_vs_module_settings`, `useEditorSettingsStore` not `useUISettingsStore`): `popupOnMissingFile` (default `true`) master gate; `autoSearchLayer1` (default `true`) cache auto-lookup.
+- **Terminal link / FileTreeView integration** — both consumers route through `tryOpenFile`; the previous `getDefaultOpener + openSingletonTab` direct calls move into the bootstrap-time `tabOpener`. Click-handler context: `FileNotFoundError` → `console.warn` (expected when popup off); auth/network/host removed → `console.error` so console-watching surfaces broken transport instead of silently dropping clicks (R1 P2 + R4 P2 symmetric fix in FileTreeView).
+- **Privacy** — fs.search payload sends only basename + capability roots; daemon resolves the capability and never echoes the resolved path beyond what the user already sees in the popup CTAs.
+
+### Review history
+
+| Round | Findings | Outcome |
+|-------|----------|---------|
+| R1 standard | 1 P1 (daemon stat 404 lost status — popup pipeline never triggered for daemon backend) + 1 P2 (terminal-link catch swallowed every error including auth) | Both fixed |
+| R2 adversarial | 1 high (symlink session cwd bypassed allowlist) + 1 medium (popup dismiss didn't cancel fetch; show() replacement aborted peer searches) | Both fixed; mergedHits accumulator added |
+| R3 standard | 1 P2 (unresolved tilde regression — `~/foo` → daemon 400 instead of new buffer) | Fixed; `openAsBuffer` direct-open dep added |
+| R4 standard | 1 P2 (FileTreeView voided promise — unhandled rejections from auth/popup-off) | Fixed; FileTreeView mirrors terminal-link error split |
+
+### Plan deviations
+
+1. Path cache keying — actual `usePathCacheStore` is keyed by `(hostId, cwd)` per the P4 redesign, not workspaceId. `OpenFileContext` carries `cwd` (captured at click time) for the cache and `sourceWorkspaceId` only for Layer-3.
+2. Settings store moved from `useUISettingsStore` to `useEditorSettingsStore` per `feedback_core_vs_module_settings`.
+3. Layer-3 501 silently treated as not-implemented (no surface error).
+4. `go-gitignore` library silently drops bad lines; in-house preflight catches the unbalanced `[...]` case the plan tests against.
+
+### Followup
+
+- closes #703 — `usePathCacheStore.lookup` / `pruneStaleCandidate` now have a production consumer.
+- daemon `workspace-projectPath` capability — needs workspace registry; deferred.
+- bare-filename Editor-disabled UX gap from P3 still open.
+
 ## [1.0.0-alpha.246] - 2026-04-28
 
 ### Feat(spa): Quick Commands v2 Phase 1c — HOST_ACTIONS entry with host liveness probe (#705)
