@@ -2,24 +2,7 @@ package agent
 
 import agentpkg "github.com/wake/purdex/internal/agent"
 
-// codexLegacyEventNames is the set of pre-W2 raw event-name literals codex
-// upstream may emit while the codex catalog has not yet been migrated to
-// W2's PurdexName / Lifecycle population. Phase 2 ship removes the codex
-// case from isLegacyHookForUnmigrated; this set goes with it once the
-// fallback path is no longer reachable.
-var codexLegacyEventNames = map[string]bool{
-	"SessionStart":      true,
-	"UserPromptSubmit":  true,
-	"Notification":      true,
-	"Stop":              true,
-	"StopFailure":       true,
-	"PermissionRequest": true,
-	"SessionEnd":        true,
-	"SubagentStart":     true,
-	"SubagentStop":      true,
-}
-
-// opencodeLegacyEventNames is the equivalent set for opencode (8 entries).
+// opencodeLegacyEventNames is the legacy set for opencode (8 entries).
 // Notably absent: Notification — the opencode catalog has no Notification
 // entry, so accepting "Notification" here would route an unknown event into
 // the legacy fallback path with a stale Lifecycle effect. PermissionRequest
@@ -37,9 +20,10 @@ var opencodeLegacyEventNames = map[string]bool{
 }
 
 // legacyLifecycleFor maps a pre-W2 raw upstream event-name literal back to
-// its LifecycleEventKind so the W2 fallback dispatch path can route
-// codex/opencode events whose catalogs have not yet migrated to PurdexName +
-// Lifecycle. Phase 3 ship removes this alongside isLegacyHookForUnmigrated.
+// its LifecycleEventKind so the W2 fallback dispatch path can route opencode
+// events whose catalog has not yet migrated to PurdexName + Lifecycle. Phase 3
+// ship removes this alongside isLegacyHookForUnmigrated. (codex migrated in
+// Phase 2 and no longer reaches this function.)
 func legacyLifecycleFor(name string) agentpkg.LifecycleEventKind {
 	switch name {
 	case "SessionStart":
@@ -64,12 +48,12 @@ func legacyLifecycleFor(name string) agentpkg.LifecycleEventKind {
 // to a pre-W2 raw event-name literal whose catalog entry has not yet been
 // migrated, so the daemon's lifecycle dispatch can fall back to legacy
 // string-comparison handling. Phase 3 ship removes the predicate entirely
-// once all three agents populate Lifecycle.
+// once opencode populates Lifecycle.
 //
-// The predicate is **per-agent**: the legacy event-name sets do not match
-// across agents (opencode lacks Notification; cc is already migrated in
-// Phase 1). A merged set would let unknown events leak into the fallback
-// branch.
+// Post-P2-T5: only opencode remains in the predicate. cc migrated in
+// Phase 1, codex migrated in Phase 2. opencode-only fallback prevents
+// unknown events from leaking into the fallback branch (e.g. opencode
+// catalog lacks Notification, so the predicate excludes it).
 // classifyLifecycleForReq is the Module-bound counterpart to classifyLifecycle:
 // it resolves the request's provider via m.registry and then runs the same
 // three-branch decision tree. Returns LifecycleNone when registry is missing
@@ -92,12 +76,13 @@ func (m *Module) classifyLifecycleForReq(req EventRequest) agentpkg.LifecycleEve
 //     legitimate hit value for events with no frame-mutation effect
 //     (PdxNotification, PdxPermissionRequest, etc.).
 //  2. Catalog miss + isLegacyHookForUnmigrated(agentType, name) — fallback
-//     to legacyLifecycleFor(name) so codex/opencode pre-migration traffic
-//     routes correctly during the W2 transition.
+//     to legacyLifecycleFor(name) so opencode pre-migration traffic routes
+//     correctly during the W2 transition. Post-P2-T5 only opencode remains
+//     in the predicate (cc / codex catalogs are migrated).
 //  3. Otherwise — return LifecycleNone (treated as no-op for lifecycle
-//     dispatch). Includes "codex sender prematurely emitting PdxXxx before
-//     codex catalog migrates" — branch 1 and 2 both miss, surfacing the
-//     event as catalog-invalid.
+//     dispatch). Includes "opencode sender prematurely emitting PdxXxx
+//     before opencode catalog migrates" — branch 1 and 2 both miss,
+//     surfacing the event as catalog-invalid.
 //
 // provider may be nil; branch 1 is then skipped. Phase 3 ship collapses
 // branches 2 + the helper alongside isLegacyHookForUnmigrated.
@@ -115,8 +100,6 @@ func classifyLifecycle(provider agentpkg.AgentProvider, req EventRequest) agentp
 
 func isLegacyHookForUnmigrated(agentType, name string) bool {
 	switch agentType {
-	case "codex":
-		return codexLegacyEventNames[name]
 	case "opencode":
 		return opencodeLegacyEventNames[name]
 	default:

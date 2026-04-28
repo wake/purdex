@@ -488,7 +488,7 @@ func TestHandleEvent_RejectedHookDoesNotOverwriteSession(t *testing.T) {
 		t.Fatalf("seed event: %v", err)
 	}
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"codex"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxStop","raw_event":{},"agent_type":"codex"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1206,7 +1206,7 @@ func TestActivityWatch_StartsForRunningStatus(t *testing.T) {
 	}
 	m.registry.Register(provider)
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"UserPromptSubmit","raw_event":{},"agent_type":"codex"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxUserPromptSubmit","raw_event":{},"agent_type":"codex"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	m.handleEvent(w, req)
@@ -2091,7 +2091,7 @@ func TestHandleEvent_ProxyBroadcastCarriesIsProxyTrue(t *testing.T) {
 	// cc SessionStart first.
 	for _, body := range []string{
 		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":300,"sender_start_time":"Sun Apr 20 01:35:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"codex"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":300,"sender_start_time":"Sun Apr 20 01:35:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"codex"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
