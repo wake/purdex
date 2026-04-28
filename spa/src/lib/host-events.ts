@@ -1,7 +1,15 @@
 // spa/src/lib/host-events.ts
 
 export interface HostEvent {
-  type: 'handoff' | 'relay' | 'hook' | 'sessions' | 'tmux' | 'agent.status' | 'agent.status.cleared'
+  type:
+    | 'handoff'
+    | 'relay'
+    | 'hook'
+    | 'sessions'
+    | 'tmux'
+    | 'agent.status'
+    | 'agent.status.cleared'
+    | 'agent.path_hint'
   session: string
   value: string
 }
