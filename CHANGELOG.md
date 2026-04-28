@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.0.0-alpha.250] - 2026-04-29
+
+### Refactor(electron): retire runtime codesign — Stage 1b (#709) (#720)
+
+Stage 1b of the macOS code-signing roadmap. Retires the runtime codesign concept (`detectSignedState` preflight + `resignAppBundle` helper) introduced in PR #672 / Stage 0. The runtime path was vestigial: macOS does not re-verify `CodeResources` post-launch on same-machine same-path relaunches, dev update is `PDX_DEV_MODE`-gated at three boundaries, and the OS never reads the signature record after first launch on a quarantine-cleared bundle.
+
+Stage 0 protected against a SIGKILL caused by an unnecessary action; Stage 1b removes the action entirely (Option β).
+
+- **`electron/updater.ts`** — delete `detectSignedState`, `resignAppBundle`, `getAppBundlePath`, `APP_ID`, `SignedState`, `PREFLIGHT_TIMEOUT_MS`, `NOT_SIGNED_PATTERN`, `stripAnsi`, the `__testing` namespace export, the `progress('signing')` call site, the now-stale `// no progress('restarting')` comment, the `node:child_process` import, and trim `path` import to `{ join }` (drop `dirname`). About 80 lines of code removed.
+- **`electron/signing.test.ts`** — replace 3rd presence-checking static test with absence smoke; add 4 new static guards (progress-sequence with literal-array equality + total-call count, preload strict gate, daemon strict gate, SPA-absence). Delete entire `describe('updater signing preflight (runtime)', ...)` block (17 mock-driven tests covering deleted code) plus the helpers / `vi.mock` setup that supported it. File: 281 → 65 lines.
+- **`spa/src/components/settings/DevEnvironmentSection.tsx`** — drop dead `signing` and `restarting` entries from `stepLabels`. `signing` was emitted by the deleted call site; `restarting` was always dead because `app.exit(0)` killed the process before any IPC could deliver. Daemon-rebuild flow's separate `daemonPhase === 'restarting'` render path is unaffected.
+- **`electron/preload.ts`** — Round-2 attacker fix: tighten dev-update bridge gate from truthy ternary (`process.env.PDX_DEV_MODE ? ... : {}`) to strict `=== '1'`, matching the daemon's `os.Getenv("PDX_DEV_MODE") == "1"`. The truthy form would have exposed `applyUpdate`, `checkUpdate`, `streamCheck`, `onUpdateProgress` for `PDX_DEV_MODE=0`/`false`/`no` — values commonly used to mean "off". Pre-existing bug from the original dev-update PR; codified contract via the new strict-equality preload-gate guard.
+- **`electron/main.ts`** — Round-2 defender fix: wrap `dev:*` `ipcMain.handle(...)` registrations in `if (process.env.PDX_DEV_MODE === '1')` block. Closes the spec §7 R7 "main-process boundary half-open" residual surface — now all three layers (preload + main + daemon) refuse dev update with the same strict gate.
+
+### Test gate
+
+39 → 27 tests, all green: `signing.test.ts` 20 → 8 (2 existing static + 1 absence smoke + 1 progress-sequence + 1 preload-gate + 1 daemon-gate + 1 SPA-absence + 1 main-gate); `keybindings.test.ts` 19 unchanged.
+
+### Live verification
+
+Manual Air verification (spec §8.2 unsigned bundle / §8.3 ad-hoc signed bundle) is the canonical Stage 1b safety gate. The `--verify --deep --strict` post-update failure on signed bundles is the **expected outcome** documented in §3.4 — the Stage 1b safety claim is "relaunch succeeds on same machine same path", not "signature stays cryptographically intact for redistribution".
+
+### Closes
+
+Closes #712 (darwin integration test for Stage 0 preflight — preflight retired, nothing to integration-test) and #713 (`APP_ID` constant drift across `updater.ts`/`package.json`/`build-electron.mjs` — `APP_ID` deleted from `updater.ts`).
+
+### Review history
+
+| Round | Findings | Outcome |
+|-------|----------|---------|
+| Spec review (`task-moivfw7n-a8x1ph`) | 8 (2 P1 + 4 P2 + 2 P3) — narrow §3.4 claim scope, ad-hoc signed bundle Stage-1b gate, PDX_DEV_MODE precision, progress guard, R2 split, bump separation, SPA dangling | All addressed in spec v1.1 before plan |
+| Plan review (`task-moiw8665-6ak7i6`) | 11 (3 P1 + 5 P2 + 3 P3) — preload/daemon gate static asserts, ordered array equality, T2 tsc gate placement, dirname trim, vitest imports, Run A/B independent installs, SPA grep gate, Closes syntax, T2 naming | All addressed in spec v1.2 + plan v1.1 before implementation |
+| R1 standard | 0 actionable defects | Approve |
+| R2 attacker (`review-moiyv5n5-eqxwcr`) | 1 P1 — preload truthy gate vs daemon strict gate | Fixed `fcb78091` |
+| R2 defender (`review-moiyz7eb-l7hofd`) | 3 (D1 manual gate / D2 main-process boundary half-closed / D3 progress guard imprecise) | D2/D3 fixed `9f20bcb1`; D1 manual verification deferred to Air post-merge |
+| R2 file-health (`review-moiyzrod-r7x9j2`) | 3 (F1 test SRP drift / F2 doc internal staleness / F3 dead `restarting` label) | F2/F3 fixed `9f20bcb1`; F1 deferred (rename ripple too wide) |
+
+### Known follow-up
+
+- **F1 (medium)** — `signing.test.ts` now owns gate contracts that exceed the "signing configuration" naming. Defer rename/split until file-health concern accumulates.
+- **Air manual verification** — Run A (unsigned) + Run B (ad-hoc signed) per spec §8.2/§8.3 / plan §5. Post-merge to be executed; relaunch failure on either run is a rollback trigger.
+
 ## [1.0.0-alpha.249] - 2026-04-29
 
 ### Fix(opencode): plugin emit() stdin TypeError hotfix (#715) (#716)
