@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.243] - 2026-04-28
+
+### Docs(specs): hook→status→燈號 audit (W1, fix-spec PR-2) (#692)
+
+Lights rebuild W1 — the canonical 577-line audit (`docs/specs/2026-04-28-hook-status-audit-spec.md`) for cc / codex / opencode that becomes the SOT for W3-W7. Drives §6 W5 燈號 bug 修復清單 (8 items) and §7 W6 ad-hoc ProbeIntent gap 清單 (6 items), and disciplines spec drift via §7.1 design constraints.
+
+- §6 / §7 are the canonical work pools — §4 三家 agent 矩陣 only short-references them.
+- §7.1 prevents the framework drift that triggered the fix-spec rewrite: probes go through `ProbeIntentProvider`, not synthetic hook events; no always-on probe; no generic `ProbeProfileProvider`; detectors live in `internal/agent/{cc,codex,opencode}/probe_intent_*.go`.
+- §7.2 picks W6-3 (codex error) as the first ProbeIntent so the interface gets finalised against a real, lazy-shaped need.
+- Two-round codex review converged with all findings addressed (R1 standard + R2 defender / spec-alignment per `feedback_codex_pr_review_spec_alignment`).
+- Follow-up issues filed: #698 (daemon restart 後 activeWatchers 不恢復, W4/W6 platform prerequisite) + #699 (audit doc 拆檔評估 after W3-W6 ship).
+- Pure docs change. Unblocks PR-3 W2 catalog naming separation (W1-independent) and PR-4 W3+W4 framework 撤回 + observability.
+
 ## [1.0.0-alpha.242] - 2026-04-28
 
 ### Feat(spa): enforce assertContextLive on runWorkspaceSlot Deps (#690) (#694)
