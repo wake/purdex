@@ -62,7 +62,8 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	var upgrades []string
 	allInstalled := true
 	for _, spec := range specs {
-		entries, keyExists := hooks[spec.Name]
+		key := spec.UpstreamKeys[0]
+		entries, keyExists := hooks[key]
 		if !keyExists {
 			events[spec.Name] = agent.HookEventInfo{Installed: false, FutureOnly: spec.FutureOnly}
 			if spec.FutureOnly {
@@ -73,7 +74,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			allInstalled = false
 			continue
 		}
-		command := findPdxCommandForEvent(entries, spec.Name)
+		command := findPdxCommandForEvent(entries, spec.PurdexName)
 		events[spec.Name] = agent.HookEventInfo{
 			Installed:  command != "",
 			Command:    command,
@@ -151,11 +152,11 @@ func mergeClaudeHooks(path, pdxPath string, remove bool) error {
 		if !installable {
 			continue
 		}
-		event := spec.Name
-		entries := toEntrySlice(hooks[event])
+		key := spec.UpstreamKeys[0]
+		entries := toEntrySlice(hooks[key])
 		entries = filterOutPdx(entries)
-		entries = append(entries, makePdxEntry(pdxPath, "cc", event))
-		hooks[event] = entries
+		entries = append(entries, makePdxEntry(pdxPath, "cc", spec.PurdexName))
+		hooks[key] = entries
 	}
 	settings["hooks"] = hooks
 	return writeClaudeSettings(path, settings)
@@ -178,12 +179,13 @@ func validateClaudeInstallableHookShapes(hooks map[string]any) error {
 		if !agent.IsInstallableHookSpec(spec) {
 			continue
 		}
-		value, ok := hooks[spec.Name]
+		key := spec.UpstreamKeys[0]
+		value, ok := hooks[key]
 		if !ok || value == nil {
 			continue
 		}
 		if _, ok := value.([]any); !ok {
-			return fmt.Errorf("claude hook %s has unsupported value shape", spec.Name)
+			return fmt.Errorf("claude hook %s has unsupported value shape", key)
 		}
 	}
 	return nil
@@ -379,23 +381,42 @@ func tokenizeCCCommand(cmd string) []string {
 }
 
 func ccKnownEventNames() map[string]bool {
-	known := make(map[string]bool, len(ccEventSpecs))
+	// W2 Phase 1 transitional: known-event recognition spans both legacy
+	// upstream-key tokens (pre-W2 installs) and new PurdexName tokens. P1-T10
+	// will derive this set from the catalog UpstreamKeys ∪ PurdexName.
+	known := make(map[string]bool, len(ccEventSpecs)*2)
 	for _, spec := range ccEventSpecs {
 		known[spec.Name] = true
+		known[spec.PurdexName] = true
 	}
 	return known
 }
 
 func ccOwnedCleanupEventNames() map[string]bool {
+	// W2 Phase 1 transitional: cleanup must recognise both legacy upstream-key
+	// command tokens (pre-W2 installs) and new Pdx-prefixed PurdexName tokens
+	// so reinstall round-trips don't leak duplicate entries. P1-T10 will
+	// derive this set from the catalog (UpstreamKeys ∪ PurdexName ∪ legacy
+	// Name three-way union, per spec §6.1 invariant 6); legacy Name set is
+	// preserved per plan G1 until PR-W2-cleanup-followup.
 	return map[string]bool{
-		"SessionStart":      true,
-		"UserPromptSubmit":  true,
-		"SubagentStart":     true,
-		"SubagentStop":      true,
-		"Stop":              true,
-		"StopFailure":       true,
-		"Notification":      true,
-		"PermissionRequest": true,
-		"SessionEnd":        true,
+		"SessionStart":         true,
+		"UserPromptSubmit":     true,
+		"SubagentStart":        true,
+		"SubagentStop":         true,
+		"Stop":                 true,
+		"StopFailure":          true,
+		"Notification":         true,
+		"PermissionRequest":    true,
+		"SessionEnd":           true,
+		"PdxSessionStart":      true,
+		"PdxUserPromptSubmit":  true,
+		"PdxSubagentStart":     true,
+		"PdxSubagentStop":      true,
+		"PdxStop":              true,
+		"PdxStopFailure":       true,
+		"PdxNotification":      true,
+		"PdxPermissionRequest": true,
+		"PdxSessionEnd":        true,
 	}
 }

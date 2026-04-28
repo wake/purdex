@@ -826,6 +826,109 @@ func TestCCCheckHooks_UpgradesAvailableEmptyForFullFutureOnlyFalse(t *testing.T)
 	}
 }
 
+// ---- P1-T9: settings.json hooks key == UpstreamKey ----
+
+// TestMergeClaudeHooks_KeyIsUpstreamKey asserts the merged settings.json keys
+// the hooks map by upstream Claude Code event names (UpstreamKeys), not by
+// PurdexName. cc has one-to-one mapping so UpstreamKeys[0] == legacy Name.
+func TestMergeClaudeHooks_KeyIsUpstreamKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("mergeClaudeHooks: %v", err)
+	}
+
+	hooks := hooksMap(t, readSettings(t, path))
+	want := map[string]bool{}
+	for _, spec := range ccEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		if len(spec.UpstreamKeys) == 0 {
+			t.Fatalf("installable spec %s has empty UpstreamKeys", spec.Name)
+		}
+		want[spec.UpstreamKeys[0]] = true
+	}
+	for key := range hooks {
+		if !want[key] {
+			t.Errorf("settings.json hooks contain unexpected key %q (not an UpstreamKey)", key)
+		}
+	}
+	for key := range want {
+		if _, ok := hooks[key]; !ok {
+			t.Errorf("settings.json hooks missing UpstreamKey %q", key)
+		}
+	}
+}
+
+// ---- P1-T9: command end token == PurdexName ----
+
+// TestMakePdxEntry_CommandTokenIsPurdexName asserts makePdxEntry's command
+// trailing token is the PurdexName (PdxXxx), not the upstream key.
+func TestMakePdxEntry_CommandTokenIsPurdexName(t *testing.T) {
+	for _, spec := range ccEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		entry := makePdxEntry("/usr/local/bin/pdx", "cc", spec.PurdexName)
+		inner, _ := entry["hooks"].([]any)
+		if len(inner) == 0 {
+			t.Fatalf("spec %s: entry has no inner hooks", spec.Name)
+		}
+		hookObj, _ := inner[0].(map[string]any)
+		cmd, _ := hookObj["command"].(string)
+		tokens := tokenizeCCCommand(cmd)
+		if len(tokens) == 0 {
+			t.Fatalf("spec %s: tokenize empty for command %q", spec.Name, cmd)
+		}
+		if got := tokens[len(tokens)-1]; got != spec.PurdexName {
+			t.Errorf("spec %s: command end token = %q, want PurdexName %q", spec.Name, got, spec.PurdexName)
+		}
+	}
+}
+
+// TestMergeClaudeHooks_CommandHasPdxPrefix asserts every installed pdx-owned
+// hook command contains the Pdx prefix in the trailing event-name token.
+func TestMergeClaudeHooks_CommandHasPdxPrefix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+
+	if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("mergeClaudeHooks: %v", err)
+	}
+
+	hooks := hooksMap(t, readSettings(t, path))
+	for _, spec := range ccEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		entries, _ := hooks[spec.UpstreamKeys[0]].([]any)
+		var pdxCommand string
+		for _, e := range entries {
+			m, _ := e.(map[string]any)
+			inner, _ := m["hooks"].([]any)
+			for _, h := range inner {
+				hm, _ := h.(map[string]any)
+				cmd, _ := hm["command"].(string)
+				if isPdxCommand(cmd) {
+					pdxCommand = cmd
+				}
+			}
+		}
+		if pdxCommand == "" {
+			t.Errorf("spec %s: no pdx command found under upstream key %q", spec.Name, spec.UpstreamKeys[0])
+			continue
+		}
+		if !strings.Contains(pdxCommand, spec.PurdexName) {
+			t.Errorf("spec %s: command %q lacks PurdexName %q", spec.Name, pdxCommand, spec.PurdexName)
+		}
+		if !strings.HasPrefix(spec.PurdexName, "Pdx") {
+			t.Errorf("spec %s: PurdexName %q lacks Pdx prefix (catalog drift)", spec.Name, spec.PurdexName)
+		}
+	}
+}
+
 // ---- atomic write: no .tmp file left after success ----
 
 func TestMergeClaudeHooks_AtomicWrite_NoTmpLeft(t *testing.T) {
