@@ -4,7 +4,9 @@
 **Issue**: [#690](https://github.com/wake/purdex/issues/690)
 **Phase**: Pre-Phase 1b'（小型 enforcement，不屬 1b' 本體）
 **Branch**: `feat/quick-commands-v2-assert-context-live-required`（off `origin/main` @ `3c999acf` alpha.240）
-**Estimate**: 1 commit / ~30 行 diff
+**Estimate**: 3 commits / ~120 行 diff（round-2 強化後）
+
+> **更新（2026-04-28，PR #694 round-2）**：原計畫 1 commit / ~30 行因 codex round-2 三 reviewer（attacker / defender / file-quality）找出 5 個 medium finding，擴張為 3 commit / ~120 行。最終形狀詳見下方「實際變更（PR 最終）」。
 
 ## Context recap
 
@@ -149,3 +151,42 @@ pnpm run lint                        # 無新 warning
   - **Attacker**：能否繞過 enforcement？例如 `as any` cast、`satisfies` 後 spread、interface widening
   - **Defender**：是否阻擋了合法用例？optional 是否真的不必要（HOST_ACTIONS 之外還有別的 path 嗎）
   - **File-quality**：slot-executor.ts SRP 是否被影響；test 檔加 `_typeCheck_*` 的 noise 是否可接受
+
+## 實際變更（PR 最終，#694 round-2 採納後）
+
+Round 2 三 reviewer needs-attention，5 個 medium finding 整理：
+
+| ID | Source | Finding | 採納 |
+|---|---|---|---|
+| **D1** | defender | `runWorkspaceSlot` ctx 仍吃 host-shaped（`workspaceId` optional），dummy probe 可繞過 spec §3.3.1 | 修：加 `WorkspaceSlotContext extends SlotContext { workspaceId: string }`；caller 端 spread `{ ...ctx, workspaceId }` 從 closure narrow |
+| **A1** | attacker | `@ts-expect-error` 不精準 — Deps 加新 required field 會吃掉 directive | 修：用 conditional type assertion（`IsAny` + `Pick`-required check + null-rejection check） |
+| **F1** | file-quality | type-level test 在 vitest 檔內，vitest 不跑 typecheck → false green 風險 | 修：test 名稱 + 註解明示「靠 tsc -b 保證，不靠 vitest」 |
+| **A2** | attacker | broken/cast-bypassed probe 拋例外會穿透 try/catch | 修：runtime fail-closed（typeof check + try/catch + strict bool check）；加 2 個對應 test |
+| **A3** | attacker | type escape hatch 只靠 reviewer checklist 沒有 ESLint enforcement | 延後：開 issue 追蹤（custom ESLint rule 是 nice-to-have 但 scope 比 #690 大） |
+
+### 變更（最終形狀）
+
+**`spa/src/lib/slot-executor.ts`**：
+- 新增 `export interface WorkspaceSlotContext extends SlotContext { workspaceId: string }`
+- `runWorkspaceSlot` ctx 型別 `SlotContext` → `WorkspaceSlotContext`
+- runtime guard 改 fail-closed（typeof + try/catch + strict bool）
+
+**`spa/src/lib/slot-executor.test.ts`**：
+- 7 個既有 test 補 `assertContextLive: () => true` 負控
+- 加 2 個 fail-closed test（probe throws / probe non-function cast）
+- 加 1 個 type-level invariant test（conditional types，靠 tsc -b 驗證；vitest 不檢查）
+
+**`spa/src/features/workspace/components/WorkspaceQuickCommandsContextMenu.tsx`**：
+- caller 端 `runWorkspaceSlot(cmd, { ...ctx, workspaceId }, deps)` — 用 closure 的 `workspaceId`（typed `string`）滿足 `WorkspaceSlotContext` narrow
+
+### 驗證（最終）
+
+- `pnpm run build` clean（tsc -b 全 src 型別檢查 + vite build）
+- `pnpm vitest run src/lib/slot-executor` — 12 test pass（原 7 + 1 round-4 + 1 round-4 negative + 2 round-2 fail-closed + 1 round-2 type invariant）
+- `pnpm vitest run src/features/workspace` — 359 test pass（caller narrow 不影響其他 component test）
+- `pnpm vitest run` 全套 — 2961+/2965+（4 pre-existing fail #674）
+- `pnpm run lint` clean
+
+### A3 followup issue
+
+ESLint custom rule 限制 `runWorkspaceSlot` 第二/第三參數必須是 inline object literal、禁 cast/spread/Object.assign — 開 issue 追蹤，scope 比 #690 大，不在本 PR 範圍。

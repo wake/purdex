@@ -187,10 +187,15 @@ export function WorkspaceQuickCommandsContextMenu({ workspaceId, hostId, onClose
           // window before React re-renders the disabled state. `executing` is
           // mirrored to React state below for the disabled UI.
           if (executingRef.current) return
+          // #690 round-2 D1 — runWorkspaceSlot now requires `ctx.workspaceId`
+          // as a non-null string. WORKSPACE_ACTIONS slots only mount inside
+          // workspace context, so this is a contract guarantee, not a
+          // user-facing error path. Use the closure `workspaceId` (typed as
+          // string from props) to satisfy the narrowed type.
           executingRef.current = true
           setExecuting(true)
           try {
-            await runWorkspaceSlot(cmd, ctx, {
+            await runWorkspaceSlot(cmd, { ...ctx, workspaceId }, {
               switchToSession,
               resolveHostId,
               // codex round-4 — workspace liveness probe; called by executor
