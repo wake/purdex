@@ -163,7 +163,14 @@ export function useMultiHostEventWs() {
               store.setHandoffProgress(hostId, event.session, event.value)
             }
           }
-          if (event.type === 'agent.status' || event.type === 'agent.status.cleared') {
+          // Whitelist the agent.* event types the SPA knows how to dispatch.
+          // New agent.* events must be added here AND in agent-ws/index.ts —
+          // no broad `startsWith('agent.')` filter (defender review #9).
+          if (
+            event.type === 'agent.status' ||
+            event.type === 'agent.status.cleared' ||
+            event.type === 'agent.path_hint'
+          ) {
             if (event.session.startsWith('__pdx_test_')) {
               debugStatuslineTest('ws.entry', {
                 hostId,
