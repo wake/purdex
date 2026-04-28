@@ -749,3 +749,83 @@ func TestOpenCodeHooks_UnmanagedFileRejected(t *testing.T) {
 		t.Fatalf("expected unmanaged issue text, got %+v", status.Issues)
 	}
 }
+
+// TestCheckHooks_PreFixManagedBodyReportsDrift documents AC3 from
+// 2026-04-29 spec §7: a managed plugin file shipped before the
+// stdin-pipe fix (byte-different from the fixed render) must surface
+// as drift via CheckHooks, and a subsequent InstallHooks must
+// converge it back. We synthesize the pre-fix body by string-replace
+// rather than vendor a snapshot — the contract under test is "if the
+// on-disk body differs from renderManagedPlugin's current output by
+// even one byte, CheckHooks reports drift."
+func TestCheckHooks_PreFixManagedBodyReportsDrift(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	pinCanonicalPdxPath(t, "/usr/local/bin/pdx")
+
+	p := opencode.NewProvider()
+
+	fixed := opencode.RenderManagedPluginForTesting("/usr/local/bin/pdx")
+	// Synthesize the actual pre-fix body: stdin: JSON.stringify(...) and
+	// no separate proc.stdin.write/.end lines (those lines did not exist
+	// before the fix). Without removing them this test would only prove
+	// "any byte difference triggers drift" rather than "the broken
+	// managed plugin from #715 is detected and repaired."
+	const fixedBlock = "    const encoded = JSON.stringify(payload)\n" +
+		"    const proc = Bun.spawn({\n" +
+		"      cmd: [pdxPath, 'hook', '--agent', 'opencode', eventName],\n" +
+		"      stdin: 'pipe',\n" +
+		"      stdout: 'ignore',\n" +
+		"      stderr: 'ignore',\n" +
+		"    })\n" +
+		"    proc.stdin.write(encoded)\n" +
+		"    proc.stdin.end()\n"
+	const preFixBlock = "    const proc = Bun.spawn({\n" +
+		"      cmd: [pdxPath, 'hook', '--agent', 'opencode', eventName],\n" +
+		"      stdin: JSON.stringify(payload),\n" +
+		"      stdout: 'ignore',\n" +
+		"      stderr: 'ignore',\n" +
+		"    })\n"
+	preFix := strings.Replace(fixed, fixedBlock, preFixBlock, 1)
+	if preFix == fixed {
+		t.Fatal("synthetic pre-fix body identical to fixed render; replace pattern stale — re-derive from current emit() shape")
+	}
+
+	pluginDir := filepath.Join(home, ".config", "opencode", "plugins")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	pluginPath := filepath.Join(pluginDir, "pdx-agent-hooks.js")
+	if err := os.WriteFile(pluginPath, []byte(preFix), 0o644); err != nil {
+		t.Fatalf("write pre-fix body: %v", err)
+	}
+
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks (pre-fix on disk): %v", err)
+	}
+	foundDrift := false
+	for name, ev := range status.Events {
+		if !ev.Installed {
+			foundDrift = true
+			t.Logf("drift on event %q (Installed=false)", name)
+		}
+	}
+	if !foundDrift {
+		t.Fatal("expected at least one event to report drift on pre-fix body; got all Installed=true")
+	}
+
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("InstallHooks (reinstall): %v", err)
+	}
+	after, err := p.CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks (post-reinstall): %v", err)
+	}
+	for name, ev := range after.Events {
+		if !ev.Installed {
+			t.Errorf("post-reinstall event %q still drifting", name)
+		}
+	}
+	_ = agent.HookEventSpec{}
+}
