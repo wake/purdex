@@ -4,7 +4,7 @@
 - **Date**: 2026-04-29
 - **Base**: `7463883f` (main @ alpha.249)
 - **Author**: claude-code + wake
-- **Status**: Draft
+- **Status**: Draft (revised after codex spec review job `task-moizea6l-z32mvg`; 3 P2 + 2 P3 findings, 0 P0/P1, all addressed)
 - **Tracking**: #717 (bug, daemon, spa)
 - **Worktree**: `.claude/worktrees/sweep-pid-dead-broadcast`
 - **Branch**: `worktree-sweep-pid-dead-broadcast`
@@ -124,25 +124,36 @@ if projection == nil {
 
 ## 4. Callsite Audit — Why the Guard is Safe
 
-`buildProjectionNormalized` has 7 callsites
-(`grep -n buildProjectionNormalized internal/module/agent/*.go`):
+`buildProjectionNormalized` has 8 callsites
+(`grep -n buildProjectionNormalized internal/module/agent/*.go`).
+`projection` source is "non-nil" iff the call structurally cannot
+receive `nil`; "nil-possible" means `projectionForSession` /
+`selectSessionProjection` may return `nil` when the session has no
+matching live frames.
 
-| Callsite | Projection | `result.Status` | Branch |
-|----------|-----------|-----------------|--------|
-| `module.go:388` (replay) | non-nil | `""` (DeriveResult{}) | [B] or [C] |
-| `handler.go:211` (error_guard_blocked) | **nil** | **non-empty** (gated by line 196: `result.Valid && result.Status != "" && result.Status != StatusError`) | [A] |
-| `handler.go:266` (event handler) | non-nil | derived | [B] or [C] |
-| `handler.go:328` (event handler) | non-nil | derived | [B] or [C] |
-| `probe_orchestrator.go:357` (probe:activity) | non-nil | `""` | [B] or [C] |
-| `sweep.go:327` (sweep:proxy_canonicalized) | non-nil | `""` | [C] |
-| `sweep.go:499` (sweep:proxy_pruned) | non-nil | `""` | [C] |
-| `sweep.go:551` (sweep:pid_dead) | **nil-or-non-nil** | `""` | **[A] or [B] or [C]** |
+| Callsite | Projection | `result.Status` | Guard fires? | Behavior |
+|----------|-----------|-----------------|--------------|----------|
+| `module.go:388` (replay) | **non-nil, TopFrame non-nil** by construction (`BuildSessionProjections` filters `TopFrame != nil` at `projection.go:31`) | `""` | No | Branch [C], `TopFrame.Status` |
+| `handler.go:211` (error_guard_blocked) | **nil** | **non-empty** (gated by line 196: `result.Valid && result.Status != "" && result.Status != StatusError`) | No | Branch [A], caller's status preserved (unchanged) |
+| `handler.go:266` (SubagentStart/Stop emit) | **nil-possible** | usually `""` (subagent events do not derive a status) | **Possibly** if `projection==nil` AND `result.Status==""` | Branch [A] guarded → `clear`. Race scenario: SubagentStart arrives after the session's last frame was reaped. Original behavior dropped the broadcast at SPA `if (status)`; new behavior actively clears the indicator — **desired**, the session truly has no frame to display. |
+| `handler.go:328` (general hook emit) | **nil-possible** | usually non-empty when `result.Valid` (derived from event), but `""` is reachable | **Possibly** if `projection==nil` AND `result.Status==""` | Same race semantics as 266; guard's clearing behavior is the desired outcome. |
+| `probe_orchestrator.go:357` (probe:activity) | non-nil by control flow: `setProjectionTopStatus` returns `(projection, nil)` only when `projection != nil && TopFrame != nil`; failure paths fall back to a directly-built `NormalizedEvent`, not this callsite (`probe_orchestrator.go:692-706`) | `""` (DeriveResult{}) | No | Branch [C], `TopFrame.Status` |
+| `sweep.go:327` (sweep:proxy_canonicalized) | non-nil with TopFrame (operates on live pane with surviving canonical) | `""` | No | Branch [C] |
+| `sweep.go:499` (sweep:proxy_pruned) | non-nil with TopFrame (proxy pruned but parent live) | `""` | No | Branch [C] |
+| `sweep.go:551` (sweep:pid_dead) | **nil-possible** (last frame may have been the one cleared) | `""` (DeriveResult{}) | **Yes** when `projection==nil` | Branch [A] guarded → `clear` (the bug fix) |
 
-The new guard only triggers when **projection is nil AND result.Status
-is empty**. The audit confirms that combination is unique to
-`sweep.go:551` (the bug case). `handler.go:211` is the only other
-nil-projection callsite, and line 196 guarantees a non-empty
-`result.Status` reaches it — guard is bypassed, behavior unchanged.
+**Net behavior change**: at `handler.go:266` and `handler.go:328`,
+when projection drops to nil mid-flight (race after the last frame is
+reaped) and the incoming hook does not derive a status, the broadcast
+now carries `status=clear` instead of empty. SPA goes from "ignore"
+to "actively clear indicator". This is the same correctness gap as
+the `sweep:pid_dead` bug — the SPA had no frame to display, but its
+indicator stayed at the last value because the broadcast carried no
+intent.
+
+Branch [A] callers that pass non-empty `result.Status` (handler.go:211)
+are unaffected: guard checks `if normalized.Status == ""` before
+overwriting.
 
 ## 5. Test Strategy
 
@@ -164,28 +175,38 @@ state combinations:
 | 3 | non-nil | nil | any | `"clear"` (branch [B], unchanged) |
 | 4 | non-nil | non-nil | any | `TopFrame.Status` (branch [C], unchanged) |
 
-Test #2 specifically guards against regression at `handler.go:211`.
+Test #2 specifically guards against regression at `handler.go:211`
+(and any future caller that legitimately passes nil projection with a
+non-empty status).
 
-### 5.3 sweep_test.go — broadcast capture
+### 5.3 sweep_test.go — broadcast capture (strict assertion)
 
 End-to-end test that exercises sweep → DB delete → broadcast pipeline:
 
-- **Test A**: Single frame, PID dies, sweep clears. Capture
-  `sweep:pid_dead` broadcast payload and assert
-  `event.status === "clear"`.
+- **Test A**: Single frame, PID dies, sweep clears. Capture the
+  `sweep:pid_dead` `core.HostEvent`, JSON-decode `Value` into
+  `agentpkg.NormalizedEvent`, assert
+  `normalized.Status == "clear"` AND
+  `normalized.RawEventName == "sweep:pid_dead"` AND
+  `normalized.AgentType == frame.AgentType` (fallback preserved).
 - **Test B**: Two frames in same session (different panes), one PID
-  dies, sweep clears it. Capture broadcast and assert
-  `event.status` reflects the surviving `TopFrame.Status` (i.e. the
-  guard does not over-clear when siblings exist).
+  dies, sweep clears it. JSON-decode the broadcast and assert
+  `normalized.Status == surviving TopFrame.Status` (i.e. the guard
+  does not over-clear when siblings exist).
+
+Substring assertions (`strings.Contains(payload, "sweep:pid_dead")`)
+are insufficient — they would pass for any broadcast that mentions
+the reason but carries the wrong status. The decoder-level assertion
+is required to defend the actual invariant.
 
 ### 5.4 Capture mechanism
 
 Inspect existing `newSweepTestModule` helper. If `m.core.Events` is
 already wired with a capture-friendly broadcaster, reuse it.
 Otherwise, install a minimal in-memory capture seam (e.g. a fake
-broadcaster that records `(code, kind, payload)` tuples). Do **not**
-introduce a new abstraction or production seam — capture is
-test-only.
+broadcaster that records `core.HostEvent` values and exposes them to
+the test). Do **not** introduce a new abstraction or production seam
+— capture is test-only.
 
 ### 5.5 SPA-side regression coverage
 
@@ -269,7 +290,10 @@ a single-line removal with no migration concerns.
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| Guard fires for an unintended callsite | Very low | Wrong status broadcast | Callsite audit (§4) + invariant test #2 |
+| Guard fires for an unintended callsite | Very low | Wrong status broadcast | Callsite audit (§4) + invariant test #2 (`projection==nil` + non-empty status passes through) |
+| `handler.go:266`/`328` race: SubagentStart/Stop or hook with `result.Status==""` lands when projection just dropped to nil | Low | Net change: SPA goes from "ignore" to "actively clear" the indicator | Behavior change is desired (the session truly has no displayable frame); §4 documents this; integration test in §5.3 Test A covers the same wire shape |
+| `module.go:388` (replay) starts hitting `projection==nil` | Cannot occur | n/a | Structurally impossible: `BuildSessionProjections` filters `TopFrame != nil` at `projection.go:31`; replay only iterates that filtered set |
+| `probe_orchestrator.go:357` starts hitting `projection==nil` | Cannot occur | n/a | Control flow at `setProjectionTopStatus` returns `(projection, nil)` only when `projection != nil && TopFrame != nil`; failure paths route to a different `NormalizedEvent` build, not this callsite |
 | Test capture seam leaks into production | Low | Code smell | Keep capture test-only (§5.4) |
 | SPA contract changes underneath | Very low | Fix becomes ineffective | SPA test suite covers `status === 'clear'`; no SPA changes in this PR |
 
