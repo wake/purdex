@@ -345,7 +345,10 @@ manual verification).
 - `spa/src/components/settings/DevEnvironmentSection.tsx` `stepLabels`
   has no `signing` entry.
 - `pnpm --prefix electron test` green. Expected count drops from 39
-  to 22 (signing.test.ts: 20 → 3; keybindings.test.ts: 19, unchanged).
+  to 23: `signing.test.ts` from 20 → 4 (2 existing static preserved
+  + 1 new absence smoke replaces the old 3rd presence test + 1 new
+  progress-sequence guard from §4.1b); `keybindings.test.ts` 19
+  unchanged.
 - `pnpm exec electron-vite build` green (no type/build regressions).
 - `pnpm --prefix spa exec tsc -p ../electron/tsconfig.json --noEmit`
   green (no dangling references).
