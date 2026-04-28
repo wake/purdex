@@ -314,8 +314,12 @@ func entryIsPdxCCKnownEvent(entry any, known map[string]bool) bool {
 	return false
 }
 
+// isPdxCommand reports whether cmd is a pdx-installed hook command. It
+// matches the cleanup set (UpstreamKeys ∪ PurdexName ∪ legacy Name three-way
+// union) so both pre-W2 and W2 command tokens are recognised; ccKnownEventNames
+// is reserved for upstream-key-only checks.
 func isPdxCommand(cmd string) bool {
-	return isPdxCommandCCKnownEvent(cmd, ccKnownEventNames())
+	return isPdxCommandCCKnownEvent(cmd, ccOwnedCleanupEventNames())
 }
 
 func isPdxCommandForCCEvent(cmd string, eventName string) bool {
@@ -380,43 +384,39 @@ func tokenizeCCCommand(cmd string) []string {
 	return tokens
 }
 
+// ccKnownEventNames is the set of installable upstream hook keys derived
+// from the catalog (Filter(IsInstallable).UpstreamKeys union). Used for
+// upstream-key checks; command-token recognition uses ccOwnedCleanupEventNames.
 func ccKnownEventNames() map[string]bool {
-	// W2 Phase 1 transitional: known-event recognition spans both legacy
-	// upstream-key tokens (pre-W2 installs) and new PurdexName tokens. P1-T10
-	// will derive this set from the catalog UpstreamKeys ∪ PurdexName.
-	known := make(map[string]bool, len(ccEventSpecs)*2)
+	known := make(map[string]bool)
 	for _, spec := range ccEventSpecs {
-		known[spec.Name] = true
-		known[spec.PurdexName] = true
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		for _, key := range spec.UpstreamKeys {
+			known[key] = true
+		}
 	}
 	return known
 }
 
+// ccOwnedCleanupEventNames is the three-set union per spec §6.1 invariant 6:
+// installable specs' UpstreamKeys ∪ PurdexName ∪ legacy Name. cc has
+// one-to-one upstream/Pdx mapping so the union collapses to legacy Name ∪
+// PurdexName at runtime. Legacy Name is preserved per plan G1 until
+// PR-W2-cleanup-followup so reinstalls following the alpha.244 ship still
+// recognise pre-W2 command tokens.
 func ccOwnedCleanupEventNames() map[string]bool {
-	// W2 Phase 1 transitional: cleanup must recognise both legacy upstream-key
-	// command tokens (pre-W2 installs) and new Pdx-prefixed PurdexName tokens
-	// so reinstall round-trips don't leak duplicate entries. P1-T10 will
-	// derive this set from the catalog (UpstreamKeys ∪ PurdexName ∪ legacy
-	// Name three-way union, per spec §6.1 invariant 6); legacy Name set is
-	// preserved per plan G1 until PR-W2-cleanup-followup.
-	return map[string]bool{
-		"SessionStart":         true,
-		"UserPromptSubmit":     true,
-		"SubagentStart":        true,
-		"SubagentStop":         true,
-		"Stop":                 true,
-		"StopFailure":          true,
-		"Notification":         true,
-		"PermissionRequest":    true,
-		"SessionEnd":           true,
-		"PdxSessionStart":      true,
-		"PdxUserPromptSubmit":  true,
-		"PdxSubagentStart":     true,
-		"PdxSubagentStop":      true,
-		"PdxStop":              true,
-		"PdxStopFailure":       true,
-		"PdxNotification":      true,
-		"PdxPermissionRequest": true,
-		"PdxSessionEnd":        true,
+	owned := make(map[string]bool)
+	for _, spec := range ccEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		for _, key := range spec.UpstreamKeys {
+			owned[key] = true
+		}
+		owned[spec.PurdexName] = true
+		owned[spec.Name] = true
 	}
+	return owned
 }

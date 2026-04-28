@@ -929,6 +929,148 @@ func TestMergeClaudeHooks_CommandHasPdxPrefix(t *testing.T) {
 	}
 }
 
+// ---- P1-T10: ccKnownEventNames derived from installable UpstreamKeys ----
+
+// TestCcKnownEventNames_DerivedFromUpstreamKeys asserts the known-key set
+// equals the union of installable specs' UpstreamKeys. Per spec §6.1.
+func TestCcKnownEventNames_DerivedFromUpstreamKeys(t *testing.T) {
+	got := ccKnownEventNames()
+	want := map[string]bool{}
+	for _, spec := range ccEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		for _, key := range spec.UpstreamKeys {
+			want[key] = true
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("ccKnownEventNames size = %d, want %d", len(got), len(want))
+	}
+	for key := range want {
+		if !got[key] {
+			t.Errorf("ccKnownEventNames missing UpstreamKey %q", key)
+		}
+	}
+	for key := range got {
+		if !want[key] {
+			t.Errorf("ccKnownEventNames has unexpected key %q (not an installable UpstreamKey)", key)
+		}
+	}
+}
+
+// ---- P1-T10: ccOwnedCleanupEventNames is the three-set union ----
+
+// TestCcOwnedCleanupEventNames_ThreeSetUnion asserts cleanup set == union of
+// installable specs' UpstreamKeys ∪ PurdexName ∪ legacy Name. Per spec §6.1
+// invariant 6. cc has one-to-one mapping so UpstreamKeys[0] == Name and the
+// union collapses to legacy Name ∪ PurdexName.
+func TestCcOwnedCleanupEventNames_ThreeSetUnion(t *testing.T) {
+	got := ccOwnedCleanupEventNames()
+	want := map[string]bool{}
+	for _, spec := range ccEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		for _, key := range spec.UpstreamKeys {
+			want[key] = true
+		}
+		want[spec.PurdexName] = true
+		want[spec.Name] = true
+	}
+	if len(got) != len(want) {
+		t.Errorf("ccOwnedCleanupEventNames size = %d, want %d", len(got), len(want))
+	}
+	for key := range want {
+		if !got[key] {
+			t.Errorf("ccOwnedCleanupEventNames missing %q", key)
+		}
+	}
+	for key := range got {
+		if !want[key] {
+			t.Errorf("ccOwnedCleanupEventNames has unexpected key %q", key)
+		}
+	}
+}
+
+// ---- P1-T10: round-trip cleans both legacy and Pdx command tokens ----
+
+// TestCcOwnedCleanupEventNames_CleansLegacyAndNew constructs a settings.json
+// that mixes a pre-W2 "Stop" command end token with a W2 "PdxStop" token,
+// runs reinstall twice, and verifies both old shapes get filtered out and
+// only one canonical pdx entry remains per upstream key.
+func TestCcOwnedCleanupEventNames_CleansLegacyAndNew(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	settings := map[string]any{
+		"hooks": map[string]any{
+			"Stop": []any{
+				map[string]any{
+					"hooks": []any{
+						map[string]any{
+							"type":    "command",
+							"command": `"/usr/local/bin/pdx" hook --agent cc Stop`,
+						},
+					},
+				},
+				map[string]any{
+					"hooks": []any{
+						map[string]any{
+							"type":    "command",
+							"command": `"/usr/local/bin/pdx" hook --agent cc PdxStop`,
+						},
+					},
+				},
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := mergeClaudeHooks(path, "/usr/local/bin/pdx", false); err != nil {
+			t.Fatalf("run %d install: %v", i, err)
+		}
+	}
+
+	hooks := hooksMap(t, readSettings(t, path))
+	stopEntries, _ := hooks["Stop"].([]any)
+	pdxCount := 0
+	hasLegacyToken := false
+	hasPdxToken := false
+	for _, e := range stopEntries {
+		m, _ := e.(map[string]any)
+		inner, _ := m["hooks"].([]any)
+		for _, h := range inner {
+			hm, _ := h.(map[string]any)
+			cmd, _ := hm["command"].(string)
+			tokens := tokenizeCCCommand(cmd)
+			if len(tokens) == 0 {
+				continue
+			}
+			tail := tokens[len(tokens)-1]
+			if tail == "Stop" {
+				hasLegacyToken = true
+			}
+			if tail == "PdxStop" {
+				hasPdxToken = true
+				pdxCount++
+			}
+		}
+	}
+	if hasLegacyToken {
+		t.Error("legacy Stop token survived reinstall round-trip")
+	}
+	if !hasPdxToken {
+		t.Error("PdxStop token missing after reinstall")
+	}
+	if pdxCount != 1 {
+		t.Errorf("expected 1 PdxStop entry, got %d", pdxCount)
+	}
+}
+
 // ---- atomic write: no .tmp file left after success ----
 
 func TestMergeClaudeHooks_AtomicWrite_NoTmpLeft(t *testing.T) {
