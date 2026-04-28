@@ -1,5 +1,50 @@
 # Changelog
 
+## [1.0.0-alpha.251] - 2026-04-29
+
+### Feat(agent): W2 Phase 1 — schema + cc catalog naming separation + lifecycle metadata (#710)
+
+Phase 1 of W2 (catalog naming separation) in the Lights system rebuild — see `docs/specs/2026-04-28-catalog-naming-separation-spec.md` for the full design and `docs/specs/2026-04-28-lights-rebuild-fix-spec.md` §1 for how W2 fits the larger rebuild.
+
+**Goal**: separate three previously-conflated dimensions of hook events — Purdex's daemon-internal canonical name, the upstream agent's hook map key, and the lifecycle/frame-mutation effect — so daemon code uses Pdx-prefixed canonical names everywhere internally and only translates at the input/output boundaries (cc settings.json, codex hooks, opencode plugin).
+
+**Phase scope**: cc end-to-end migration + shared schema + handler/frame_ops lifecycle metadata dispatch. codex / opencode catalogs remain on the legacy literal path via `isLegacyHookForUnmigrated` (Phase 2 / 3 migrate them); single user-facing alpha bump after all three phases land per spec §「W2 設計關鍵決議」#4.
+
+#### Schema additions
+
+- `HookEventSpec` gains `PurdexName` (Pdx-prefixed daemon-internal canonical), `UpstreamKeys []string` (upstream hook map keys), `Lifecycle LifecycleEventKind` (frame-mutation effect classification, 8 kinds). `Name` retained per plan G1 until PR-W2-cleanup-followup so legacy `~/.claude/settings.json` cleanup keeps working through the transition.
+- `LookupByPurdexName` / `LookupByUpstreamKey` free functions provide spec §2.5's calling convention.
+- `LifecycleEventKind` enum (`SessionStart` / `SessionEnd` / `UserPromptSubmit` / `Stop` / `StopFailure` / `SubagentStart` / `SubagentStop` / `None`) classifies frame-mutation effect independently of upstream naming.
+
+#### CC end-to-end migration
+
+- `EventRequest` / `hookPayload` JSON migrated to `purdex_name` (with `event_name` unmarshal alias for transition; Phase 3 removes the alias).
+- cc 28 catalog entries populated with the three new fields (including unsupported / ignored entries — `Pdx`+original name with `LifecycleNone`).
+- cc `DeriveStatus` + installer + cleanup/known sets all keyed by `PurdexName` / `UpstreamKey` via catalog-derived helpers; settings.json `command` trailing token now writes `pdx hook --agent cc PdxXxx` (matching the daemon-internal canonical), upstream hooks key remains `SessionStart` / `Notification` / etc.
+- SPA cc fixtures keyed under `agent_type='cc'` migrated from upstream-key strings to PdxXxx; `useAgentStore` Notification-idle no-unread branch accepts both literals during the transition.
+- SPA notification dispatch (`shouldNotify` informational suppression + `NotificationSettings.events` lookup + `buildNotificationContent` switch) normalizes the 4 user-facing PdxXxx names back to legacy at entry via `normalizeEventName`, so cc desktop notifications survive PdxXxx broadcasts (codex round-2 attack-side finding A-F01 — without normalization every cc permission prompt / Stop / StopFailure notification would silently drop).
+
+#### Lifecycle metadata-driven dispatch
+
+- `handler.handleEvent` error-guard, subagent transient-emit, and SessionStart subagent-reset paths key off `agentpkg.LifecycleEventKind` via `classifyLifecycle`'s spec §3.4.2 three-branch decision tree (catalog hit > legacy fallback > LifecycleNone). Catalog-hit `LifecycleNone` is a legitimate no-op classification; `LookupByPurdexName` + `isLegacyHookForUnmigrated` per-agent literal sets keep codex/opencode pre-migration traffic routing correctly.
+- `frame_ops.applyFrameEvent` (detail-only / SessionEnd / SubagentStart-Stop / four SessionStart hot paths), `updateSubagents` / `mutateSubagents`, and `path_hint_extractor` migrated to lifecycle metadata. Transitional `matchesLifecycleName` / `normalizeLifecycleName` helpers added in P1-T8 and removed in P1-T11 / P1-T12 alongside their final callers.
+- `isLegacyHookForUnmigrated` per-agent literal sets: codex 9 entries (includes Notification); opencode 8 entries (includes PermissionRequest, deliberately omits Notification — opencode's catalog has no Notification entry, accepting it would route an unknown event into the legacy fallback).
+
+#### Cross-agent catalog-miss invariant tests (D-F01 / Q-F01 drift guard)
+
+`TestHandleEvent_CodexPrematurePdxName_IsCatalogMiss` / `TestHandleEvent_OpencodeNotification_IsCatalogMiss` / `TestHandleEvent_CCPdxNotification_IsCatalogHitNotMiss` pin spec §3.4.2's three-branch boundary at the handler level so Phase 2/3 catalog migrations can't regress silently.
+
+#### Codex review history
+
+- **Spec / plan**: 5 codex review rounds on the spec, 1 on the plan; 5 plan-level findings (G1–G5) + 2 spec findings (S1–S2) all applied before implementation.
+- **PR review round 1 (standard, job `bvl94kd52`)**: 1 P1 finding (R1-F1, cc legacy hook upgrade compatibility) **dismissed** per spec §「W2 設計關鍵決議」#4 + alpha-stage breaking-change posture from `kickoff_lights_rebuild.md` §「對齊已決議的設計關鍵點」#8.
+- **PR review round 2 (3 parallel adversarial: attack `b4opavt0q` / defense `b0f8s7ahj` / file-quality `bhuqqc9i6`)**: A-F01 (SPA notification regression), Q-F03 (legacy_hook_test comment) fixed in this PR. D-F01 / Q-F01 (lifecycle classification overload) drift-guarded with new handler-level invariant tests; structural `EventResolution` refactor tracked as #722. Q-F02 (handleEvent SRP) tracked as #723. No critical / P1 findings outstanding.
+
+### Closes
+
+- Closes via review summary references throughout — no individual issue closes in this PR.
+- Follow-up issues opened: #722 (EventResolution refactor for lifecycle classification overload), #723 (handleEvent SRP split, depends on #722).
+
 ## [1.0.0-alpha.250] - 2026-04-29
 
 ### Refactor(electron): retire runtime codesign — Stage 1b (#709) (#720)
