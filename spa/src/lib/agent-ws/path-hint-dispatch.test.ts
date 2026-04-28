@@ -1,100 +1,94 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useTabStore } from '../../stores/useTabStore'
-import { useWorkspaceStore } from '../../features/workspace/store'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { usePathCacheStore } from '../../stores/path-cache/usePathCacheStore'
-import type { Tab, PaneContent } from '../../types/tab'
+import { scopeKey } from '../../stores/path-cache/path-utils'
 import { handlePathHintEvent } from './path-hint-dispatch'
-
-const seedTab = (id: string, content: PaneContent): Tab => ({
-  id,
-  pinned: false,
-  locked: false,
-  createdAt: 0,
-  layout: { type: 'leaf', pane: { id: `p_${id}`, content } },
-})
 
 const v1 = (overrides: Record<string, unknown> = {}) =>
   JSON.stringify({
     schemaVersion: 1,
     agentId: 'cc',
     sessionCode: 'sess',
-    dir: '/a/b',
+    cwd: '/repo',
+    dir: '/repo/src',
     kind: 'read',
     timestamp: '2026-04-27T00:00:00Z',
     ...overrides,
   })
 
 beforeEach(() => {
-  usePathCacheStore.setState({ dirsByScope: {} } as never, false)
-  const t = seedTab('t1', { kind: 'tmux-session', hostId: 'h1', sessionCode: 'sess', mode: 'terminal', cachedName: 'work', tmuxInstance: 'i1' })
-  useTabStore.setState({ tabs: { t1: t }, tabOrder: ['t1'] } as never, false)
-  useWorkspaceStore.setState({
-    workspaces: [{ id: 'w1', name: 'A', tabs: ['t1'], activeTabId: 't1', moduleConfig: {} }],
-    activeWorkspaceId: 'w1',
-  } as never, false)
+  usePathCacheStore.setState({ entriesByScope: {} } as never, false)
 })
 
 describe('handlePathHintEvent', () => {
-  it('v1 payload adds dir to resolved workspace cache', () => {
+  it('v1 payload adds dir to (host, cwd) scope', () => {
     handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1() })
-    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toEqual(['/a/b'])
+    const list = usePathCacheStore.getState().entriesByScope[scopeKey('h1', '/repo')]
+    expect(list?.map((e) => e.dir)).toEqual(['/repo/src'])
+    expect(list?.[0]?.sessionCode).toBe('sess')
   })
 
   it('schemaVersion !== 1 → drop', () => {
     handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1({ schemaVersion: 2 }) })
-    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
+    expect(Object.keys(usePathCacheStore.getState().entriesByScope)).toEqual([])
+  })
+
+  it('non-absolute cwd → drop', () => {
+    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1({ cwd: 'rel/cwd' }) })
+    expect(Object.keys(usePathCacheStore.getState().entriesByScope)).toEqual([])
   })
 
   it('non-absolute dir → drop', () => {
     handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1({ dir: 'rel/dir' }) })
-    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
+    expect(Object.keys(usePathCacheStore.getState().entriesByScope)).toEqual([])
   })
 
   it('invalid kind → drop', () => {
     handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1({ kind: 'delete' }) })
-    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
+    expect(Object.keys(usePathCacheStore.getState().entriesByScope)).toEqual([])
   })
 
   it('missing sessionCode → drop', () => {
     handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1({ sessionCode: '' }) })
-    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
+    expect(Object.keys(usePathCacheStore.getState().entriesByScope)).toEqual([])
+  })
+
+  it('envelope.session !== payload.sessionCode → drop (R2-D3)', () => {
+    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'envSess', value: v1({ sessionCode: 'payloadSess' }) })
+    expect(Object.keys(usePathCacheStore.getState().entriesByScope)).toEqual([])
+  })
+
+  it('payload exceeding MAX_PAYLOAD_BYTES → drop (R2-A2)', () => {
+    const huge = v1({ dir: '/repo/' + 'x'.repeat(70 * 1024) })
+    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: huge })
+    expect(Object.keys(usePathCacheStore.getState().entriesByScope)).toEqual([])
   })
 
   it('malformed JSON → drop without throwing', () => {
     expect(() =>
       handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: 'not-json' }),
     ).not.toThrow()
-    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
+    expect(Object.keys(usePathCacheStore.getState().entriesByScope)).toEqual([])
   })
 
   it('non-object JSON (array / null / primitive) → drop', () => {
     handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: '[1,2,3]' })
     handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: 'null' })
     handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: '"bare"' })
-    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
+    expect(Object.keys(usePathCacheStore.getState().entriesByScope)).toEqual([])
   })
 
-  it('unresolvable workspace (no matching tab) → drop', () => {
-    useTabStore.setState({ tabs: {}, tabOrder: [] } as never, false)
-    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1() })
-    expect(Object.keys(usePathCacheStore.getState().dirsByScope)).toEqual([])
+  it('two events same (host, cwd) different sessions accumulate together', () => {
+    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sessA', value: v1({ sessionCode: 'sessA', dir: '/repo/a' }) })
+    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sessB', value: v1({ sessionCode: 'sessB', dir: '/repo/b' }) })
+    const list = usePathCacheStore.getState().entriesByScope[scopeKey('h1', '/repo')]
+    expect(list?.map((e) => e.dir)).toEqual(['/repo/b', '/repo/a'])
+    expect(list?.map((e) => e.sessionCode)).toEqual(['sessB', 'sessA'])
   })
 
-  it('resolver throwing → does not crash dispatcher', async () => {
-    const mod = await import('./resolve-workspace-id-for-agent-session')
-    const spy = vi.spyOn(mod, 'resolveWorkspaceIdForAgentSession').mockImplementation(() => {
-      throw new Error('boom')
-    })
-    expect(() =>
-      handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1() }),
-    ).not.toThrow()
-    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
-    spy.mockRestore()
-  })
-
-  it('multiple distinct dirs from different events accumulate (head first)', () => {
-    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1({ dir: '/a/b' }) })
-    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1({ dir: '/c/d' }) })
-    expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toEqual(['/c/d', '/a/b'])
+  it('events from different cwds isolate scopes', () => {
+    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1({ cwd: '/repo-a', dir: '/repo-a/x' }) })
+    handlePathHintEvent('h1', { type: 'agent.path_hint', session: 'sess', value: v1({ cwd: '/repo-b', dir: '/repo-b/y' }) })
+    expect(usePathCacheStore.getState().entriesByScope[scopeKey('h1', '/repo-a')]?.[0]?.dir).toBe('/repo-a/x')
+    expect(usePathCacheStore.getState().entriesByScope[scopeKey('h1', '/repo-b')]?.[0]?.dir).toBe('/repo-b/y')
   })
 })
