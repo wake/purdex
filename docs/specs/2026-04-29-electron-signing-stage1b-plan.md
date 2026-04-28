@@ -191,6 +191,13 @@ runtime tests will fail compilation; tsc gate moves to T3).
   - **Trim `import { dirname, join } from 'path'` to
     `import { join } from 'path'`** — `dirname` was only consumed by
     `getAppBundlePath()` (P2-4).
+  - **Delete the `// Relaunch — no progress('restarting') here…`
+    block comment** above the `app.relaunch()` call (currently
+    lines 252-253). The progress-sequence guard (§4.1b) regex
+    matches the literal pattern inside that comment. Also the
+    comment is explaining the absence of a step that no longer
+    exists in any meaningful sense — Stage 1b removes the only
+    other inline step the comment was contrasting against.
 
 **Verification**:
 - `pnpm --prefix electron test` → mixed:
