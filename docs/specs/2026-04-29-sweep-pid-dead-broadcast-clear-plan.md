@@ -6,6 +6,7 @@
 - **Worktree**: `.claude/worktrees/sweep-pid-dead-broadcast`
 - **Branch**: `worktree-sweep-pid-dead-broadcast`
 - **Tracking**: #717
+- **Plan revision**: v1.1 (2026-04-29) — incorporates codex plan review job `task-moizmm1e-zakq8b` (1 P2 + 1 P3, 0 P0/P1, both addressed).
 
 ## 1. Scope summary
 
@@ -175,9 +176,11 @@ test would *also* pass against Option A — included to prove Option B
 does not regress relative to A):
 
 1. Same setup but two frames in pane "%5":
-   - cc parent (PID 200, alive, `StatusIdle`)
-   - codex child (PID 300, **dead**, `StatusRunning`)
-2. Stub `isPidAliveFn` so `pid != 300` is alive.
+   - cc parent — `PID: 200`, alive, `StatusIdle`, **`StartedAt: 10`**, `LastSeenAt: 10`, `ProcessStartTime: "A"`, `Verified: true`
+   - codex child — `PID: 300`, **dead**, `StatusRunning`, **`StartedAt: 20`**, `LastSeenAt: 20`, `PPID: 200`, `ProcessStartTime: "B"`, `Verified: true`
+2. Stub `isPidAliveFn` so `pid != 300` is alive;
+   `processStartTimeFn` returns `"A"` for 200, `"B"` for 300;
+   `nowFn` pinned to a fixed instant.
 3. Call `m.sweepOnce()`.
 4. Capture `sweep:pid_dead` broadcast.
 5. Decode and assert:
@@ -185,12 +188,14 @@ does not regress relative to A):
    - `normalized.RawEventName == "sweep:pid_dead"`
    - `normalized.AgentType == "cc"` (TopFrame override)
 
-**Note on TopFrame selection**: confirm via reading
-`buildPaneProjection` / `projectionSortGreater` that with two frames
-in the same pane the cc parent at `StatusIdle` is the surviving
-TopFrame. If sort surfaces the codex child instead, adjust the test
-to seed an unambiguous TopFrame ordering rather than tweaking the
-expected value.
+**Stability note (codex P2 0.94)**: `buildPaneProjection` /
+`projectionSortGreater` first compare `StartedAt`, then fall back to
+`FrameID` (assigned a random UUID by `frames.Upsert`). If both
+frames default `StartedAt` to `0`, tie-break flips to a non-
+deterministic FrameID order and the test goes flaky. Explicit
+non-equal `StartedAt` (10 vs 20) eliminates the tie. After sweep
+deletes the codex child, the cc parent is the unambiguous surviving
+TopFrame regardless of FrameID UUID.
 
 **Verify red:**
 
@@ -265,6 +270,18 @@ cd spa && pnpm install --frozen-lockfile && npx vitest run --reporter=dot
 cd spa && pnpm run lint
 ```
 
+If `pnpm install --frozen-lockfile` is unavailable (offline / cache
+miss), fall back to running tests against whatever node_modules is
+already present:
+
+```bash
+cd spa && pnpm exec vitest run --reporter=dot
+cd spa && pnpm exec eslint .
+```
+
+If both paths fail, document the gap in the PR body so the user can
+run vitest on mlab during manual verification.
+
 If any test or lint fails outside the patched area, investigate
 before declaring T4 done. Do **not** widen scope to fix unrelated
 breakage — open a separate issue.
@@ -310,12 +327,27 @@ Per `feedback_bump_base_origin_not_local`: enter the bump worktree
 and immediately `git reset --hard origin/main` to avoid pulling in
 parallel session commits from local `main`.
 
+**Pre-bump remote check (codex P3 0.62)**: local files only prove no
+in-flight bump in *this* checkout. Before reserving alpha.250,
+verify no other branch already claims it:
+
+```bash
+gh pr list --search "alpha.250 in:title is:open" --json number,title
+gh api repos/wake/purdex/branches --paginate --jq '.[].name' | grep -i bump
+```
+
+If any open PR or branch already targets alpha.250, jump to the
+next free version and update plan + commit message accordingly.
+
 ## 5. Out of scope (do not regress into)
 
 - ❌ Modifying `sweep.go` (any line). The fix is intentionally at
   `frame_ops.go` per spec §3.
 - ❌ Modifying `handler.go`, `module.go`, `probe_orchestrator.go`.
 - ❌ Modifying SPA files.
+- ❌ Modifying the WS payload schema (`core.HostEvent` /
+  `agentpkg.NormalizedEvent` field set). The fix populates an
+  existing field; it does not add or rename fields.
 - ❌ Adding liveness probe / heartbeat / process-tree watcher
   features.
 - ❌ Refactoring `buildProjectionNormalized` (collapsing branches,
