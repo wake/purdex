@@ -28,7 +28,11 @@ type rawCCEvent struct {
 	Cwd       string `json:"cwd"`
 	ToolName  string `json:"tool_name"`
 	ToolInput struct {
-		FilePath string `json:"file_path"`
+		// CC's Read / Write / Edit hooks put the path in tool_input.file_path;
+		// NotebookEdit uses tool_input.notebook_path instead. Decode both and
+		// fall back at the call site.
+		FilePath     string `json:"file_path"`
+		NotebookPath string `json:"notebook_path"`
 	} `json:"tool_input"`
 }
 
@@ -91,6 +95,9 @@ func ExtractPathHint(
 		return PathHint{}, "", false
 	}
 	raw := ev.ToolInput.FilePath
+	if raw == "" {
+		raw = ev.ToolInput.NotebookPath
+	}
 	if raw == "" || !filepath.IsAbs(raw) || len(raw) > MaxFilePathBytes || hasControlOrNul(raw) {
 		return PathHint{}, "", false
 	}

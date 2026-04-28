@@ -61,6 +61,44 @@ func TestExtractPathHint_WriteEditNotebookEdit(t *testing.T) {
 	}
 }
 
+func TestExtractPathHint_NotebookEditUsesNotebookPath(t *testing.T) {
+	// CC NotebookEdit hook puts the path in tool_input.notebook_path, not file_path.
+	raw, _ := json.Marshal(map[string]any{
+		"cwd":        "/repo",
+		"tool_name":  "NotebookEdit",
+		"tool_input": map[string]any{"notebook_path": "/repo/notebooks/foo.ipynb"},
+	})
+	h, basename, ok := ExtractPathHint(raw, "PreToolUse", "cc", "s1", "", time.Unix(0, 0))
+	if !ok {
+		t.Fatal("NotebookEdit with notebook_path should produce a hint")
+	}
+	if h.Dir != "/repo/notebooks" || h.Kind != PathHintKindEdit {
+		t.Errorf("unexpected hint: %+v", h)
+	}
+	if basename != "foo.ipynb" {
+		t.Errorf("basename = %q, want foo.ipynb", basename)
+	}
+}
+
+func TestExtractPathHint_FilePathTakesPrecedenceOverNotebookPath(t *testing.T) {
+	// If both fields are present (defensive), file_path wins.
+	raw, _ := json.Marshal(map[string]any{
+		"cwd":       "/repo",
+		"tool_name": "Edit",
+		"tool_input": map[string]any{
+			"file_path":     "/repo/src/c.go",
+			"notebook_path": "/repo/notebooks/x.ipynb",
+		},
+	})
+	h, basename, ok := ExtractPathHint(raw, "PreToolUse", "cc", "s1", "", time.Unix(0, 0))
+	if !ok {
+		t.Fatal("expected hint")
+	}
+	if h.Dir != "/repo/src" || basename != "c.go" {
+		t.Errorf("file_path should win; got dir=%q basename=%q", h.Dir, basename)
+	}
+}
+
 func TestExtractPathHint_DropsRelative(t *testing.T) {
 	if _, _, ok := ExtractPathHint(mkRaw("Read", "rel/path.go"), "PreToolUse", "cc", "s1", "", time.Unix(0, 0)); ok {
 		t.Fatal("expected drop for non-absolute path")
