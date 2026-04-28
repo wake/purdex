@@ -196,15 +196,25 @@ Before committing T2:
 
 ```bash
 pnpm --prefix electron test 2>&1 | tee /tmp/stage0-red.log
-# Expected:
+# Actual outcome (full electron test suite):
 #   - 22 existing tests pass (2 static + 20 keybindings)
-#   - smoke test passes (sees stub strings)
-#   - 11 new runtime tests fail with "Expected 'unsigned'/... but received 'unknown'" or thrown errors
-# Total: ~14 pass + 11 fail
+#   - 1 smoke test passes (sees stub strings)
+#   - 7 of 11 new runtime tests pass coincidentally:
+#     * 3 detectSignedState 'unknown' cases match the stub's hardcoded 'unknown'
+#     * 4 resignAppBundle paths already exercise existing sign-everything behaviour
+#       (PDX_SKIP_MAC_SIGN, non-darwin, ad-hoc identity, forced identity)
+#   - 4 of 11 fail with assertion mismatches — the new contract paths:
+#     ✗ detectSignedState returns "signed" when codesign exits 0
+#     ✗ detectSignedState returns "unsigned" on canonical stderr
+#     ✗ resignAppBundle skips codesign when bundle is unsigned
+#     ✗ resignAppBundle throws when detection returns "unknown"
+# Total: 29 pass + 4 fail (out of 33)
 ```
 
+The expected RED count is 4, not 11, because seven runtime tests pass coincidentally — both because the stub returns 'unknown' (matching three cases by design) and because the existing pre-refactor `resignAppBundle` happens to satisfy four assertions (skip env / non-darwin / ad-hoc default / forced identity). The 4 failing tests are exactly the ones that exercise the new contract paths; T3 turns those into pass.
+
 Confirm:
-- All 11 RED failures reference assertion mismatches or thrown messages, NOT `Cannot read properties of undefined`.
+- All 4 RED failures reference assertion mismatches or thrown messages, NOT `Cannot read properties of undefined`.
 - No other test regressed.
 
 **Commit**: `test(electron/updater): add three-state preflight tests + stub (RED)`

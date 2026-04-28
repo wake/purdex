@@ -50,15 +50,31 @@ function getAppBundlePath(): string | null {
 
 type SignedState = 'signed' | 'unsigned' | 'unknown'
 
+const PREFLIGHT_TIMEOUT_MS = 10_000
+
+// Loose match — tolerates ANSI escapes, leading paths/colons, case
+// differences, and varying whitespace. The phrase itself is documented
+// codesign output going back many macOS releases, but Apple makes no
+// stability guarantee, so we normalise both stdout and stderr before
+// matching.
+const NOT_SIGNED_PATTERN = /code object\s+is\s+not\s+signed\s+at\s+all/i
+
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+}
+
 function detectSignedState(appBundle: string): SignedState {
   const result = spawnSync('codesign', ['-dv', appBundle], {
     stdio: ['ignore', 'pipe', 'pipe'],
     encoding: 'utf8',
+    timeout: PREFLIGHT_TIMEOUT_MS,
   })
   if (result.status === 0) return 'signed'
-  if (result.status !== null && result.stderr?.includes('code object is not signed at all')) {
-    return 'unsigned'
-  }
+  // status === null covers SIGTERM kills, ETIMEDOUT, ENOENT, etc.
+  if (result.status === null || result.error) return 'unknown'
+  const merged = stripAnsi(`${result.stdout ?? ''}\n${result.stderr ?? ''}`)
+  if (NOT_SIGNED_PATTERN.test(merged)) return 'unsigned'
   return 'unknown'
 }
 
@@ -69,7 +85,10 @@ function resignAppBundle(): void {
   const state = detectSignedState(appBundle)
   if (state === 'unsigned') return
   if (state === 'unknown') {
-    throw new Error('codesign preflight detection failed; aborting re-sign')
+    throw new Error(
+      `codesign preflight detection failed for ${appBundle}; ` +
+      `set PDX_SKIP_MAC_SIGN=1 to bypass, or rebuild the app bundle.`
+    )
   }
   // state === 'signed'
   const identity = process.env.PDX_MAC_SIGN_IDENTITY || '-'
