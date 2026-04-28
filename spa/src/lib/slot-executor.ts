@@ -194,7 +194,8 @@ export interface HostSlotContext extends SlotContext {
 interface HostDeps {
   switchToSession: (hostId: string, sessionCode: string) => void
   /**
-   * Required — Finding 1 of plan-review job task-moijtc8w-w8rf8w.
+   * Required — Finding 1 of plan-review job task-moijtc8w-w8rf8w + R2 of
+   * codex PR #705 adversarial review.
    *
    * Host liveness probe. Must return false if the host record (the row
    * matching `hostId` in `useHostStore.hosts`) was deleted while async work
@@ -202,9 +203,20 @@ interface HostDeps {
    * `activeHostId ?? hostOrder[0]` when the host is gone, so without this
    * guard a destructive command can ship to the wrong host.
    *
-   * Called twice: after createSession resolves (before executeCommand), AND
-   * inside the retry action (because the toast can sit before the user
-   * clicks retry, and the host can be deleted in that window).
+   * Called at THREE sites for defense in depth:
+   *   1. Pre-create — at the top of runHostSlot, before createSession.
+   *      Catches the stale-click case (host already dead at click time, e.g.
+   *      Settings deletion before the chip re-renders disabled). Without
+   *      this, an orphan session would still be created on a fallback host.
+   *   2. Post-create — after createSession resolves, before executeCommand.
+   *      Catches the during-await race (host deleted during the createSession
+   *      Promise window). Stops destructive commands from shipping.
+   *   3. Retry — inside the retry action. Catches the between-toast-and-retry
+   *      window where the toast sits before the user clicks Retry.
+   *
+   * On a successful pipeline (host alive throughout) you'll see TWO calls:
+   * pre-create + post-create. With send-keys failure → user clicks Retry →
+   * three calls. Tests should expect ≥1 call rather than exact counts.
    */
   assertHostLive: (hostId: string) => boolean
 }

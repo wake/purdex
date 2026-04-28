@@ -4346,7 +4346,11 @@ Expected: clean
 - `HostSlotContext extends SlotContext { hostId: string }` — `hostId` 收窄為 required string（host 詳情頁 prop 來源即為非 null hostId）。`workspaceId` / `cwd` 沿用父 `SlotContext` 的 optional 欄位，不引入新欄位
 - `HostDeps { switchToSession; assertHostLive }`：
   - `switchToSession: (hostId, sessionCode) => void` — caller 決定如何呈現新 session（host page 在 workspace 就 insertTab(ws.id)，standalone 就只 setActiveTab；見 1c.1b 細節）
-  - `assertHostLive: (hostId: string) => boolean` — **required**。在 `createSession` resolve 後、`executeCommand` 前呼叫，回 false 即 fail-closed（toast `switch_failed`，不送 keys、不切焦點，避免送到誤 fallback 的 host）。retry action 內也要再呼叫一次 — 因為 retry 是 deferred 動作，user 可能在 toast 期間刪 host
+  - `assertHostLive: (hostId: string) => boolean` — **required**。在三個 call site fail-closed（PR #705 codex R2 adversarial finding 補強）：
+    - **Pre-create**：`runHostSlot` 入口、`createSession` 前 — 擋 stale click（host 已被刪、chip 尚未 re-render disable）。沒有此層仍會在 fallback host 建 orphan session
+    - **Post-create**：`createSession` resolve 後、`executeCommand` 前 — 擋 during-await race
+    - **Retry**：retry action 內 — 擋 toast-display-window race
+    - 成功流程會看到 2 次（pre + post）；含 retry 看到 3 次。Test 用 `mockReturnValueOnce` sequence 模擬不同階段；assertion 用 `>= 1` 避免未來 false-fail
   - 不需 `resolveHostId`（host 已知）、不需 `assertContextLive`（workspace 級 probe；spec §3.3.1 carve-out）
 - 失敗 UX：
   - createSession fail → `quick_commands.toast.create_failed`，no action
@@ -4668,7 +4672,8 @@ export interface HostSlotContext extends SlotContext {
 interface HostDeps {
   switchToSession: (hostId: string, sessionCode: string) => void
   /**
-   * Required — Finding 1 of plan-review job task-moijtc8w-w8rf8w.
+   * Required — Finding 1 of plan-review job task-moijtc8w-w8rf8w + R2 of
+   * codex PR #705 adversarial review.
    *
    * Host liveness probe. Must return false if the host record (the row
    * matching `hostId` in `useHostStore.hosts`) was deleted while async work
@@ -4676,9 +4681,16 @@ interface HostDeps {
    * `activeHostId ?? hostOrder[0]` when the host is gone, so without this
    * guard a destructive command can ship to the wrong host.
    *
-   * Called twice: after createSession resolves (before executeCommand), AND
-   * inside the retry action (because the toast can sit before the user
-   * clicks retry, and the host can be deleted in that window).
+   * Called at THREE sites for defense in depth:
+   *   1. Pre-create — at the top of runHostSlot, before createSession.
+   *      Catches the stale-click case (host already dead at click time).
+   *   2. Post-create — after createSession resolves, before executeCommand.
+   *      Catches the during-await race.
+   *   3. Retry — inside the retry action. Catches the between-toast-and-retry
+   *      window.
+   *
+   * Successful happy path → 2 calls (pre + post). Send-keys failure + Retry
+   * click → 3 calls. Tests should expect ≥1 rather than exact counts.
    */
   assertHostLive: (hostId: string) => boolean
 }
@@ -4695,6 +4707,14 @@ export async function runHostSlot(
 ): Promise<void> {
   const t = useI18nStore.getState().t
   const toast = useUndoToast.getState()
+
+  // R2 (codex PR #705 adversarial) — pre-create host liveness gate. Stops
+  // a stale chip click (host already deleted at click time) from creating
+  // an orphan session on a fallback host via getDaemonBase.
+  if (!isHostLive(deps, ctx.hostId)) {
+    toast.show(t('quick_commands.toast.switch_failed'))
+    return
+  }
 
   let sessionCode: string
   try {
@@ -4714,10 +4734,10 @@ export async function runHostSlot(
     return
   }
 
-  // Finding 1 — host liveness gate. Defense in depth (mirrors PR #686
-  // round-4 / #690 round-2 A2 for workspace): typeof + try/catch + strict
-  // bool. Even with type-level required, a cast-bypass or buggy probe must
-  // fail closed so executeCommand never ships to a fallback host.
+  // Finding 1 — post-create host liveness gate. Defense in depth (mirrors
+  // PR #686 round-4 / #690 round-2 A2 for workspace): typeof + try/catch +
+  // strict bool. Catches the during-await race (host deleted while
+  // createSession Promise was in flight).
   if (!isHostLive(deps, ctx.hostId)) {
     toast.show(t('quick_commands.toast.switch_failed'))
     return
