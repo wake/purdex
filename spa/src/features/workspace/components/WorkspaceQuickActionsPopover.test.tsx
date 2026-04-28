@@ -255,6 +255,54 @@ describe('WorkspaceQuickActionsPopover', () => {
     expect(createSession).not.toHaveBeenCalled()
   })
 
+  // codex round-3 R3 F1 — sync open notification. The hub's pickerOpenRef must
+  // be flipped BEFORE child popover effects fire (HostPickerPopover auto-focuses
+  // its first option, which steals focus from the chip and triggers the hub's
+  // onBlurCapture). If the notification ran in a useEffect (post-commit, AFTER
+  // child effects), pickerOpenRef would still be false during blur and the hub
+  // would unconditionally collapse popover, unmounting the picker before the
+  // user could click. Verify the very first post-click notify is `(true)` —
+  // i.e. fired synchronously inside resolveHostId, not asynchronously in a
+  // useEffect tick (which would have produced an unrelated initial-mount false
+  // first or fired after blur/render order).
+  it('R3 F1: onPickerOpenChange(true) fires synchronously inside resolveHostId, not via post-commit useEffect', () => {
+    const onPickerOpenChange = vi.fn()
+    render(
+      <WorkspaceQuickActionsPopover
+        workspaceId="w1"
+        hostId={null}
+        onPickerOpenChange={onPickerOpenChange}
+      />,
+    )
+    onPickerOpenChange.mockClear()
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    // The very first call after click MUST be (true). The legacy useEffect-based
+    // notify could produce other patterns; sync notify produces exactly (true)
+    // first, with no spurious initial false in between.
+    expect(onPickerOpenChange.mock.calls[0]?.[0]).toBe(true)
+  })
+
+  // codex round-3 R3 F1 — same race, settle path. Selecting a host must sync
+  // notify (false) so the hub's pickerOpenRef updates before HostPickerPopover
+  // unmounts (which would otherwise fire focus-restore blur events with
+  // pickerOpenRef still true → wrong, hub thinks picker is up).
+  it('R3 F1: onPickerOpenChange(false) fires synchronously inside settlePicker (select)', () => {
+    const onPickerOpenChange = vi.fn()
+    render(
+      <WorkspaceQuickActionsPopover
+        workspaceId="w1"
+        hostId={null}
+        onPickerOpenChange={onPickerOpenChange}
+      />,
+    )
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    onPickerOpenChange.mockClear()
+    fireEvent.click(screen.getByText(/mlab/))
+    // Sync settle: the very first call after select MUST be (false), no
+    // intervening true.
+    expect(onPickerOpenChange.mock.calls[0]?.[0]).toBe(false)
+  })
+
   // codex round-2 A1 — switchToSession transaction safety. If the workspace
   // is deleted in the executeCommand await window (after assertContextLive
   // already passed), switchToSession's pre-check fast-fails BEFORE

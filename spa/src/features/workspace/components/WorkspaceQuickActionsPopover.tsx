@@ -89,16 +89,26 @@ export function WorkspaceQuickActionsPopover({
     const resolver = pendingResolverRef.current
     pendingResolverRef.current = null
     setPicker(null)
+    // codex round-3 — sync notify so the parent hub's pickerOpenRef updates
+    // before any blur/pointer event fires from the unmounting picker.
+    onPickerOpenChange?.(false)
     if (resolver) resolver(id)
-  }, [])
+  }, [onPickerOpenChange])
 
   const resolveHostId = useCallback(
     () =>
       new Promise<string | null>((resolve) => {
         pendingResolverRef.current = resolve
+        // codex round-3 — sync notify BEFORE setPicker triggers HostPickerPopover
+        // render + auto-focus(first option). Without sync notify, pickerOpenRef
+        // would still be false when the child popover's focus() steals focus from
+        // the chip, causing the hub's onBlurCapture to collapse popover (and
+        // unmount the picker) before the user can click anything. The previous
+        // useEffect-based notify ran AFTER child effects — too late.
+        onPickerOpenChange?.(true)
         setPicker({ open: true, resolver: resolve, anchor: wrapperRef.current })
       }),
-    [],
+    [onPickerOpenChange],
   )
 
   // codex round-2 — dangling Promise cleanup. The popover lives behind a hover
@@ -113,14 +123,15 @@ export function WorkspaceQuickActionsPopover({
     }
   }, [])
 
-  // codex round-1 P2 (F3 — picker hover-dismissal) — propagate picker open state
-  // to the parent hub so it can suppress its mouseleave/pointerdown close logic
-  // while the picker is up. Cleanup notifies false on unmount so the hub never
-  // gets stuck thinking a picker is still open after the popover is gone.
+  // codex round-1 P2 (F3 — picker hover-dismissal) / round-3 — picker open
+  // notification is now sync'd from resolveHostId/settlePicker (see above) so
+  // the hub's pickerOpenRef is updated BEFORE child focus/blur events fire.
+  // The useEffect-based notify shipped initially is gone for that reason.
+  // We still need an unmount-cleanup notify to clear the hub's ref if the
+  // popover is torn down externally (mouseleave) without going through
+  // settlePicker first — e.g. picker never opened, or picker was open and
+  // unmount cleanup runs before settlePicker can.
   const pickerOpen = picker?.open ?? false
-  useEffect(() => {
-    onPickerOpenChange?.(pickerOpen)
-  }, [pickerOpen, onPickerOpenChange])
   useEffect(() => {
     return () => onPickerOpenChange?.(false)
   }, [onPickerOpenChange])
