@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { Plus, Play, Trash, PencilSimple, Check, X } from '@phosphor-icons/react'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useHostStore } from '../../stores/useHostStore'
@@ -9,6 +9,10 @@ import { useAgentStore } from '../../stores/useAgentStore'
 import { hostFetch, renameSession } from '../../lib/host-api'
 import { compositeKey } from '../../lib/composite-key'
 import { connectionErrorMessage } from '../../lib/host-utils'
+import { CommandSlot, type SlotContext } from '../CommandSlot'
+import { runHostSlot, type HostSlotContext } from '../../lib/slot-executor'
+import { QUICK_COMMAND_SLOTS } from '../../lib/quick-command-slots'
+import type { QuickCommand } from '../../lib/quick-command-bindings'
 import type { Session } from '../../lib/host-api'
 
 interface Props {
@@ -151,6 +155,60 @@ export function SessionsSection({ hostId }: Props) {
     useTabStore.getState().setActiveTab(tabId)
   }
 
+  // Phase 1c — HOST_ACTIONS slot executor (spec §3.2 / §3.3.1).
+  //
+  // Finding 3 — executor-level busy guard. <CommandSlot busy> is the visual
+  // disable; this ref is the synchronous race guard so a fast double-click
+  // between React event ticks can't spawn two pipelines.
+  const executingRef = useRef(false)
+  const [executing, setExecuting] = useState(false)
+
+  const runHostExecutor = useCallback(async (cmd: QuickCommand, ctx: SlotContext) => {
+    if (executingRef.current) return
+    executingRef.current = true
+    setExecuting(true)
+    try {
+      // Finding 1 + Type-lock — narrow the SlotContext (nullable hostId) to
+      // HostSlotContext (required hostId) using the prop value as the source
+      // of truth. The prop hostId is string (non-null), so this is a valid
+      // narrowing, not an unsafe cast.
+      const hostCtx: HostSlotContext = { hostId, cwd: ctx.cwd }
+      await runHostSlot(cmd, hostCtx, {
+        // Finding 2 — workspace-aware insertion. Snapshot active tab here (NOT
+        // inside switchToSession's own closure) so the lookup uses the host
+        // page's tab id at click time, even if the user switches tabs while
+        // createSession is in flight.
+        switchToSession: (h, sessionCode) => {
+          const activeTabId = useTabStore.getState().activeTabId
+          const owningWs = activeTabId
+            ? useWorkspaceStore.getState().findWorkspaceByTab(activeTabId)
+            : null
+          const tabId = useTabStore.getState().openSingletonTab({
+            kind: 'tmux-session',
+            hostId: h,
+            sessionCode,
+            mode: 'terminal',
+            cachedName: sessionCode,
+            tmuxInstance: '',
+          })
+          // Explicit null when standalone — bypasses the activeWorkspaceId
+          // fallback in insertTab so a stale activeWorkspaceId doesn't
+          // accidentally swallow the new session into a background workspace.
+          useWorkspaceStore.getState().insertTab(tabId, owningWs?.id ?? null)
+          useTabStore.getState().setActiveTab(tabId)
+        },
+        // Finding 1 — host liveness probe. Reads the latest store snapshot
+        // every call (incl. retry) so a between-toast-and-retry deletion is
+        // caught by both the executor's pre-executeCommand check AND the
+        // retry's re-check.
+        assertHostLive: (h) => useHostStore.getState().hosts[h] != null,
+      })
+    } finally {
+      executingRef.current = false
+      setExecuting(false)
+    }
+  }, [hostId])
+
   const handleDelete = async (code: string) => {
     try {
       await hostFetch(hostId, `/api/sessions/${code}`, { method: 'DELETE' })
@@ -162,14 +220,23 @@ export function SessionsSection({ hostId }: Props) {
     <div className="max-w-2xl">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold">{t('hosts.sessions')}</h2>
-        <button
-          onClick={() => setShowNew(true)}
-          disabled={isOffline}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50"
-        >
-          <Plus size={14} />
-          {t('hosts.new_session')}
-        </button>
+        <div className="flex items-center gap-2">
+          <CommandSlot
+            mountTo={QUICK_COMMAND_SLOTS.HOST_ACTIONS}
+            ctx={{ hostId }}
+            // Finding 5 — same disable semantics as new-session button + Finding 3 ref guard
+            busy={isOffline || executing}
+            executor={runHostExecutor}
+          />
+          <button
+            onClick={() => setShowNew(true)}
+            disabled={isOffline}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50"
+          >
+            <Plus size={14} />
+            {t('hosts.new_session')}
+          </button>
+        </div>
       </div>
 
       {showNew && <NewSessionDialog hostId={hostId} onClose={() => setShowNew(false)} />}

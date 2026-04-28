@@ -1,6 +1,6 @@
 // spa/src/components/hosts/SessionsSection.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { SessionsSection } from './SessionsSection'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useHostStore } from '../../stores/useHostStore'
@@ -9,6 +9,9 @@ import { useQuickCommandStore } from '../../stores/useQuickCommandStore'
 import { useModuleEnabledStore } from '../../stores/useModuleEnabledStore'
 import { compositeKey } from '../../lib/composite-key'
 import { clearModuleRegistry, registerModule } from '../../lib/module-registry'
+import { QUICK_COMMAND_SLOTS } from '../../lib/quick-command-slots'
+import { createSession } from '../../lib/host-api'
+import { executeCommand } from '../../lib/execute-command'
 
 const mockOpenSingletonTab = vi.fn(() => 'tab-1')
 const mockSetActiveTab = vi.fn()
@@ -62,6 +65,9 @@ beforeEach(() => {
   mockInsertTab.mockClear()
   mockFindWorkspaceByTab.mockReset()
   mockFindWorkspaceByTab.mockReturnValue(null)
+  vi.mocked(createSession).mockReset()
+  vi.mocked(executeCommand).mockReset()
+  vi.mocked(executeCommand).mockResolvedValue(undefined)
   useSessionStore.setState({ sessions: { [HOST_ID]: SESSIONS } })
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 } },
@@ -167,5 +173,133 @@ describe('SessionsSection — v1 QuickCommandMenu removal (Phase 1c, Finding 4)'
     expect(screen.queryAllByRole('button', { name: /quick commands/i }).length).toBe(0)
     // Double-safeguard via title queryByTitle (covers any aria fallback edge cases).
     expect(screen.queryByTitle('Quick Commands')).toBeNull()
+  })
+})
+
+describe('SessionsSection — host quick actions slot adjacent to new-session button (Phase 1c)', () => {
+  beforeEach(() => {
+    useQuickCommandStore.setState({
+      global: [{ id: 'cmd-h', name: 'HostCmd', command: 'echo h' }],
+      byHost: {},
+      bindings: { 'cmd-h': [QUICK_COMMAND_SLOTS.HOST_ACTIONS] },
+    })
+    // Default createSession return value (override in individual tests as needed).
+    vi.mocked(createSession).mockResolvedValue({
+      code: 'sess-h',
+      name: 'HostCmd',
+      cwd: '~',
+      mode: 'terminal',
+    } as Awaited<ReturnType<typeof createSession>>)
+    vi.mocked(executeCommand).mockResolvedValue(undefined)
+  })
+
+  it('renders <CommandSlot mountTo=HOST_ACTIONS> chips next to the new-session button', () => {
+    render(<SessionsSection hostId={HOST_ID} />)
+    expect(screen.getByLabelText(/^HostCmd/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /new session/i })).toBeInTheDocument()
+  })
+
+  it('hides slot when no commands are bound to HOST_ACTIONS (new-session button still visible)', () => {
+    useQuickCommandStore.setState({
+      global: [],
+      byHost: {},
+      bindings: {},
+    })
+    render(<SessionsSection hostId={HOST_ID} />)
+    expect(screen.queryByLabelText(/^HostCmd/)).toBeNull()
+    expect(screen.getByRole('button', { name: /new session/i })).toBeInTheDocument()
+  })
+
+  // Finding 5 — chip disabled when host disconnected (mirrors row actions /
+  // new-session button semantics).
+  it('disables HOST_ACTIONS chip when host runtime is disconnected (Finding 5)', () => {
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 } },
+      hostOrder: [HOST_ID],
+      runtime: { [HOST_ID]: { status: 'disconnected' } },
+      activeHostId: HOST_ID,
+    })
+    render(<SessionsSection hostId={HOST_ID} />)
+    expect(screen.getByLabelText(/^HostCmd/)).toBeDisabled()
+  })
+
+  // Finding 3 — fast double-click suppression. Without an executor-level
+  // busy ref the second click slips between React event ticks and creates
+  // a second session.
+  it('suppresses fast double-click on the chip — only one createSession call (Finding 3)', async () => {
+    let resolveCreate: ((value: unknown) => void) | null = null
+    vi.mocked(createSession).mockImplementation(
+      () => new Promise((r) => { resolveCreate = r as (v: unknown) => void }),
+    )
+    render(<SessionsSection hostId={HOST_ID} />)
+    const chip = screen.getByLabelText(/^HostCmd/)
+    fireEvent.click(chip)
+    fireEvent.click(chip) // second click during in-flight createSession
+    expect(createSession).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      resolveCreate?.({ code: 'sess-h', name: 'HostCmd', cwd: '~', mode: 'terminal' })
+      await Promise.resolve()
+    })
+  })
+
+  // Finding 2 — workspace-aware switchToSession. Host page IS in a workspace
+  // → insertTab targets that workspace explicitly (not stale activeWorkspaceId).
+  it('switchToSession inserts new tab into the workspace containing the host page (Finding 2)', async () => {
+    // findWorkspaceByTab returns a workspace whose tabs include 'tab-host'
+    mockFindWorkspaceByTab.mockReturnValue({ id: 'ws-with-host', name: 'A', tabs: ['tab-host'], activeTabId: 'tab-host' } as never)
+
+    render(<SessionsSection hostId={HOST_ID} />)
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText(/^HostCmd/))
+      // flush createSession + executeCommand microtasks
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // ws-with-host (the host page's actual workspace), NOT a stale activeWorkspaceId
+    expect(mockFindWorkspaceByTab).toHaveBeenCalledWith('tab-host')
+    expect(mockInsertTab).toHaveBeenCalledWith(expect.any(String), 'ws-with-host')
+  })
+
+  // Finding 2 — host page is standalone (no workspace owns its tab) → pass
+  // null explicitly so insertTab does NOT fall back to activeWorkspaceId.
+  it('switchToSession passes null when host page is standalone (Finding 2)', async () => {
+    mockFindWorkspaceByTab.mockReturnValue(null)
+
+    render(<SessionsSection hostId={HOST_ID} />)
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText(/^HostCmd/))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // explicit null — NOT a stale activeWorkspaceId fallback
+    expect(mockInsertTab).toHaveBeenCalledWith(expect.any(String), null)
+  })
+
+  // Finding 1 (smoke test for the wiring; full assertHostLive coverage lives
+  // in slot-executor.test.ts). Confirm SessionsSection passes a probe that
+  // returns false for an absent host.
+  it('assertHostLive caller returns false when host record is removed mid-flight (Finding 1)', async () => {
+    let resolveCreate: ((value: unknown) => void) | null = null
+    vi.mocked(createSession).mockImplementation(
+      () => new Promise((r) => { resolveCreate = r as (v: unknown) => void }),
+    )
+
+    render(<SessionsSection hostId={HOST_ID} />)
+    fireEvent.click(screen.getByLabelText(/^HostCmd/))
+
+    // Simulate Settings-side host deletion BEFORE createSession resolves
+    useHostStore.setState({ hosts: {}, hostOrder: [], runtime: {}, activeHostId: null })
+    await act(async () => {
+      resolveCreate?.({ code: 'sess-h', name: 'HostCmd', cwd: '~', mode: 'terminal' })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(executeCommand).not.toHaveBeenCalled() // command did NOT ship to fallback host
   })
 })
