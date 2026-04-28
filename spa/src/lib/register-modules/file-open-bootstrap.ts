@@ -7,9 +7,14 @@ import {
   createOpenFileService,
   showFileNotFoundPopup,
   hideFileNotFoundPopup,
+  fsSearchByCapability,
+  FsSearchError,
   type OpenFileService,
   type OpenFileContext,
   type PopupController,
+  type PopupSpec,
+  type SearchMatch,
+  type SearchRootCapability,
 } from '../file-open'
 import { createDaemonBackendForHost } from '../fs-backend-daemon'
 import type { FileInfo, FileSource } from '../../types/fs'
@@ -48,6 +53,59 @@ function resolveSessionCwd(hostId: string, sessionCode?: string): string | null 
   return sess?.cwd ?? null
 }
 
+/**
+ * Run an fs.search and re-mount the popup with the result, unless the
+ * caller's signal aborted while we were awaiting (attack review #5).
+ *
+ * `kind` chooses which capability + which result bucket — Layer 2 fills
+ * `layer2Hits`, Layer 3 fills `layer3Hits`. Daemon 501 (workspace
+ * projectPath not yet implemented in daemon registry) is silently treated
+ * as no-results per the v6 degrade plan, NOT surfaced as an error.
+ */
+async function runExpandedSearch(
+  kind: 'session' | 'workspace',
+  spec: PopupSpec,
+  signal: AbortSignal,
+): Promise<void> {
+  let roots: SearchRootCapability[] = []
+  if (kind === 'session' && spec.ctx.sessionCode) {
+    roots = [{ kind: 'session-cwd', sessionCode: spec.ctx.sessionCode }]
+  } else if (kind === 'workspace') {
+    roots = [{ kind: 'workspace-projectPath', workspaceId: spec.ctx.sourceWorkspaceId }]
+  }
+  if (roots.length === 0) return // capability missing — popup CTA should already be disabled
+
+  let hits: SearchMatch[] = []
+  try {
+    hits = await fsSearchByCapability(spec.ctx.hostId, spec.file.name, roots)
+  } catch (err) {
+    if (err instanceof FsSearchError && err.status === 501) {
+      // v6 degrade — workspace-projectPath not implemented in daemon yet;
+      // suppress so the popup re-renders with empty layer3Hits rather than
+      // surfacing a misleading server error.
+      hits = []
+    } else {
+      // Other errors → still re-render with empty bucket so the user sees
+      // "No matches" rather than a stuck popup. Log for debugging.
+      console.warn(`[file-open] fs.search failed: ${(err as Error)?.message ?? String(err)}`)
+      hits = []
+    }
+  }
+
+  if (signal.aborted) return // user closed the popup mid-flight; do NOT re-mount
+
+  const expandedSpec: PopupSpec = {
+    mode: 'expanded',
+    file: spec.file,
+    source: spec.source,
+    ctx: spec.ctx,
+    layer2Hits: kind === 'session' ? hits : [],
+    layer3Hits: kind === 'workspace' ? hits : [],
+  }
+  // Re-mount via the same controller — preserves the singleton invariant.
+  buildPopupController().show(expandedSpec)
+}
+
 /** Factory shared by both surface bootstraps. */
 function buildPopupController(): PopupController {
   return {
@@ -70,11 +128,12 @@ function buildPopupController(): PopupController {
           const tabId = useTabStore.getState().openSingletonTab(content, { afterTabId })
           useWorkspaceStore.getState().insertTab(tabId, targetWs, afterTabId)
         },
-        // 5.8 fills these in. For 5.7b the popup expand UI has the buttons
-        // but they're no-ops so the integration point is verifiable
-        // without dragging in fs.search wiring this commit.
-        onSearchSessionCwd: () => {},
-        onSearchWorkspace: () => {},
+        onSearchSessionCwd: (s, signal) => {
+          void runExpandedSearch('session', s, signal)
+        },
+        onSearchWorkspace: (s, signal) => {
+          void runExpandedSearch('workspace', s, signal)
+        },
       }),
     hide: hideFileNotFoundPopup,
   }
