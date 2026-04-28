@@ -422,18 +422,23 @@ cc 端：
 
 CLI / Handler：
 
-- `cmd/pdx/hook.go`：positional[0] 變數名改 `purdexName`，buildHookPayload 第二參數命名同步
+- `cmd/pdx/hook.go`：
+  - positional[0] 變數名改 `purdexName`，buildHookPayload 第二參數命名同步
+  - `hookPayload` struct 欄位 `EventName` → `PurdexName`，JSON tag `purdex_name`（與 daemon `EventRequest` 對齊；marshal 只送 `purdex_name`，**CLI 端不需要 alias**因 CLI 與 daemon 同版本同步發版）
 - `internal/module/agent/handler.go`：
   - `EventRequest.EventName` → `PurdexName`，primary JSON tag `purdex_name`
-  - 加 custom UnmarshalJSON：unmarshal 接受 `purdex_name`（優先）+ `event_name`（alias），marshal 只送 `purdex_name`
+  - 加 custom UnmarshalJSON：unmarshal 接受 `purdex_name`（優先）+ `event_name`（alias 僅吸收歷史 wire payload，CLI 端不再產生），marshal 只送 `purdex_name`
   - 呼 `provider.DeriveStatus(req.PurdexName, req.RawEvent)`
 
-Lifecycle 改造（W2 範圍內必做，per §2.3.1）：
+Lifecycle 改造（W2 範圍內必做，per §2.3.1 + §3.4.2 三分支 decision tree）：
 
-- `internal/module/agent/handler.go:181/186/187-189/278-285/301-305`：所有硬編 event-name 字面值改為 `LookupByPurdexName(req.PurdexName).Lifecycle == LifecycleXxx`
-- `internal/module/agent/frame_ops.go`：frame mutation 路徑同步改 lifecycle metadata-driven
+- `internal/module/agent/handler.go:181/186/187-189/278-285/301-305`：所有硬編 event-name 字面值改為 `LookupByPurdexName(req.PurdexName).Lifecycle == LifecycleXxx`，未命中時走 `isLegacyHookForUnmigrated` predicate fallback
+- `internal/module/agent/frame_ops.go`：frame mutation 路徑同步改 lifecycle metadata-driven（含 fallback 分支）
 - `req.AgentType != "opencode"` 這條 opencode-specific Stop guard **保留**（per-agent 行為差異不是字面值問題）
-- 改寫後 daemon 對 cc Phase 1 後送 `PdxSessionEnd` / codex/opencode 中間態送 `SessionEnd`（catalog literal `Name=SessionEnd`、`Lifecycle=LifecycleSessionEnd`）兩者都正確 match → frame 處理一致
+- **Phase 1 兩條路徑分別正確 match**：
+  - cc Phase 1 後送 `PdxSessionEnd` → `LookupByPurdexName` ok，Lifecycle=SessionEnd → metadata path 處理
+  - codex/opencode 中間態送 `SessionEnd`（catalog literal 仍 `Name="SessionEnd"`，PurdexName/Lifecycle 為 zero-value 未填）→ `LookupByPurdexName` miss → `isLegacyHookForUnmigrated` 通過 → legacy fallback path 處理（per §3.4.2）
+  - 兩條路徑都正確 frame 處理，**不**走 metadata path（codex/opencode catalog Phase 1 沒填 Lifecycle）
 
 **測試**：
 
@@ -589,11 +594,28 @@ default:
 }
 ```
 
-`isLegacyHookForUnmigrated` 是 phase-aware predicate：
+`isLegacyHookForUnmigrated` 是 phase-aware **per-agent** predicate（每家 agent 的 pre-W2 字面值集合不同；不可共用）：
 
-- Phase 1 期間：返回 true 當 `AgentType ∈ {codex, opencode}` 且 `PurdexName ∈ {SessionStart, UserPromptSubmit, Stop, StopFailure, Notification, PermissionRequest, SessionEnd, SubagentStart, SubagentStop}`（pre-W2 字面值）
-- Phase 2 期間：codex 已遷，predicate 限縮 `AgentType == opencode`
-- Phase 3 ship 同 PR：predicate + 整段 fallback case 移除
+```go
+func isLegacyHookForUnmigrated(agentType, name string) bool {
+    switch agentType {
+    case "codex":
+        // codex Phase 1 期間未遷；Phase 2 ship 同 PR 移除這個 case
+        return codexLegacyEventNames[name]   // 9 installable + 2 unsupported pre-W2 names
+    case "opencode":
+        // opencode Phase 1/2 期間未遷；Phase 3 ship 同 PR 移除這個 case + 整個函式
+        return opencodeLegacyEventNames[name] // 8 installable pre-W2 names — **不**含 Notification（opencode catalog 無此 entry）
+    default:
+        return false
+    }
+}
+```
+
+- Phase 1 期間：codex case 與 opencode case 都生效；cc 不在 fallback 範圍（已遷）
+- Phase 2 ship 同 PR：移除 codex case
+- Phase 3 ship 同 PR：移除整個 predicate + fallback case
+
+**per-agent set 不可合併**：opencode catalog 沒有 `Notification` / `PermissionRequest`（後者用 `permission.asked`+`question.asked` plugin demux，僅 1 個 catalog entry；cf. §2.3 表）— 若用共用 set 會誤讓 opencode `Notification` 命中 fallback、得到錯誤 lifecycle 副作用，破壞 catalog miss 防線。Negative test：`agent_type=opencode + purdex_name=Notification` 應得 invalid + `event_not_in_catalog`（不命中 fallback）。
 
 注意：fallback path 是**main-only dev-time** — bump 前 user 看不到。同 §0.1「No user-facing migration」原則：daemon 不對未升級 user 的 raw payload 做 fallback，僅對 main 上 catalog literal 的 phase 進度做 fallback。Phase 3 ship 同 PR 整段 fallback 移除。
 
@@ -684,7 +706,14 @@ func (r *EventRequest) UnmarshalJSON(b []byte) error {
 
 **為什麼是 alias 不是兩個獨立欄位**：避免 `pdx hook` CLI 送哪個鍵的 ambiguity；marshal 永遠單鍵輸出，alias 只在 unmarshal 期間 absorb 舊鍵。
 
-**alias 期間的 PurdexName 字串值**：handler 收到的字串值由 catalog 決定（cc Phase 1 後是 `PdxXxx`、codex Phase 2 前還是 `Xxx`、opencode Phase 3 前還是 `Xxx`）。daemon 把這個字串原封不動 forward 到對應 agent 的 DeriveStatus；後者根據自家 phase 進度匹配 case label。**daemon 端不做跨 agent 字串轉換 / 沒有 fallback 比對**。
+**alias 期間的 PurdexName 字串值**：handler 收到的字串值由 catalog 決定（cc Phase 1 後是 `PdxXxx`、codex Phase 2 前還是 `Xxx`、opencode Phase 3 前還是 `Xxx`）。daemon 把這個字串原封不動 forward 到對應 agent 的 DeriveStatus；後者根據自家 phase 進度匹配 case label。
+
+**daemon fallback 範圍精確化**（與 §3.4.2 三分支 decision tree 對齊）：
+
+- **沒有的：** **跨版本 user-facing migration** — daemon 不對「user 沒升級 / 沒 reinstall」做任何 payload 轉換或字串重映射；user 升 alpha 後須跑 `pdx install --reinstall` 才能繼續用（per §0.1 no-migration 原則）
+- **有的：** **main-only dev-time lifecycle fallback**（per §3.4.2）— Phase 1/2 期間 codex/opencode catalog 尚未填 PurdexName/Lifecycle 時，daemon lifecycle 處理對符合 `isLegacyHookForUnmigrated` predicate 的 (agentType, raw event name) 走 legacy 字面值處理，**僅限未升級 catalog 的 main-time 中間態**；Phase 3 ship 同 PR 整段移除
+
+兩者邊界清楚：fallback 是 main 上 catalog literal 的 phase 進度過渡產物（user 端不會看到，因為 bump 才釋出 daemon binary，bump 在 Phase 3 後），不是對 user 端版本不同步的相容層。
 
 ---
 

@@ -33,10 +33,11 @@ Phase 0/1/2/3/3.5 全 ship 至 alpha.234。Phase 4a 系列發生**架構性跑�
 ```
 HOOK LAYER (per-agent installer + handler entry)
   cc:       ~/.claude/settings.json   key=UpstreamKey "SessionStart"
+                                      command arg = PurdexName "PdxSessionStart"
   codex:    ~/.codex/hooks.json       key=UpstreamKey "SessionStart"
-  opencode: plugin emit               key=UpstreamKey "session.created"
-                          ↓
-                   command argument = PurdexName "PdxSessionStart"
+                                      command arg = PurdexName "PdxSessionStart"
+  opencode: plugin Bus listener       case label=UpstreamKey "session.created"
+                                      plugin emit() arg = PurdexName "PdxSessionStart"
                           ↓
         Daemon handler entry 收到永遠是 (agent_type, PurdexName)
                           ↓
