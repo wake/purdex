@@ -80,7 +80,9 @@ func ExtractPathHint(
 	cwdFallback string,
 	now time.Time,
 ) (PathHint, string, bool) {
-	if eventName != "PreToolUse" && eventName != "PostToolUse" {
+	switch normalizeLifecycleName(eventName) {
+	case "PreToolUse", "PostToolUse":
+	default:
 		return PathHint{}, "", false
 	}
 	if len(rawEvent) > MaxRawEventBytes {

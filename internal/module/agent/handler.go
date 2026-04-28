@@ -166,7 +166,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// not resolve (e.g. unknown tmux session). cwd is read from CC's raw event
 	// (every CC hook payload includes `cwd`); the cached SessionInfo.Cwd acts
 	// as a fallback for older / non-conforming senders.
-	if req.AgentType == "cc" && (req.PurdexName == "PreToolUse" || req.PurdexName == "PostToolUse") &&
+	if req.AgentType == "cc" && (req.PurdexName == "PdxPreToolUse" || req.PurdexName == "PdxPostToolUse") &&
 		m.core != nil && m.pathHintDedup != nil && m.pathHintBuffer != nil {
 		if code := m.resolveSessionCode(req.TmuxSession); code != "" {
 			cwdFallback := ""
@@ -236,14 +236,14 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		current := m.currentStatus[req.TmuxSession]
 		m.mu.Unlock()
 		if current == agentpkg.StatusError {
-			canClear := req.PurdexName == "UserPromptSubmit" || req.PurdexName == "SessionStart"
+			canClear := matchesLifecycleName(req.PurdexName, "UserPromptSubmit") || matchesLifecycleName(req.PurdexName, "SessionStart")
 			// SessionEnd carries StatusClear and unconditionally tears down
 			// session state — it must always pass the error guard or the
 			// session would stay stuck red after a StopFailure followed by a
 			// real session shutdown.
-			canClear = canClear || req.PurdexName == "SessionEnd"
+			canClear = canClear || matchesLifecycleName(req.PurdexName, "SessionEnd")
 			if req.AgentType != "opencode" {
-				canClear = canClear || req.PurdexName == "Stop"
+				canClear = canClear || matchesLifecycleName(req.PurdexName, "Stop")
 			}
 			if !canClear {
 				normalized := buildProjectionNormalized(nil, req.AgentType, req.PurdexName, broadcastTs, result)
@@ -290,7 +290,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Handle subagent events (transient — broadcast only, don't persist)
-	if req.PurdexName == "SubagentStart" || req.PurdexName == "SubagentStop" {
+	if matchesLifecycleName(req.PurdexName, "SubagentStart") || matchesLifecycleName(req.PurdexName, "SubagentStop") {
 		if frameMeta.Decision != "updated_frame" {
 			trace.Finish("completed", "emit_skipped")
 			traceFinished = true
@@ -356,7 +356,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clear subagents on non-compact SessionStart
-	if req.PurdexName == "SessionStart" && result.Valid {
+	if matchesLifecycleName(req.PurdexName, "SessionStart") && result.Valid {
 		m.mu.Lock()
 		delete(m.subagents, req.TmuxSession)
 		m.mu.Unlock()

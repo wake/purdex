@@ -1732,7 +1732,7 @@ func TestHandleEvent_CatalogMiss_NoActivityWatch(t *testing.T) {
 // false-positive catalog-miss trace rows.
 func TestHandleEvent_InvalidWithReason_UsesProviderReason(t *testing.T) {
 	m := catalogMissModule(t)
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{"source":"compact"},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{"source":"compact"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
