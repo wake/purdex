@@ -48,10 +48,30 @@ function getAppBundlePath(): string | null {
   return dirname(dirname(dirname(app.getPath('exe'))))
 }
 
+type SignedState = 'signed' | 'unsigned' | 'unknown'
+
+function detectSignedState(appBundle: string): SignedState {
+  const result = spawnSync('codesign', ['-dv', appBundle], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+  })
+  if (result.status === 0) return 'signed'
+  if (result.status !== null && result.stderr?.includes('code object is not signed at all')) {
+    return 'unsigned'
+  }
+  return 'unknown'
+}
+
 function resignAppBundle(): void {
   const appBundle = getAppBundlePath()
   if (!appBundle || process.env.PDX_SKIP_MAC_SIGN === '1') return
 
+  const state = detectSignedState(appBundle)
+  if (state === 'unsigned') return
+  if (state === 'unknown') {
+    throw new Error('codesign preflight detection failed; aborting re-sign')
+  }
+  // state === 'signed'
   const identity = process.env.PDX_MAC_SIGN_IDENTITY || '-'
   const signArgs = [
     '--force',
@@ -216,16 +236,6 @@ export async function applyUpdate(
   app.exit(0)
 
   return { success: true, message: 'Update applied, restarting...' }
-}
-
-// T2 stub — T3 replaces detectSignedState body with real codesign -dv
-// invocation. The stub returns 'unknown' so that all 11 runtime tests
-// in signing.test.ts run and fail on assertions (behaviour RED), not
-// on missing __testing export.
-type SignedState = 'signed' | 'unsigned' | 'unknown'
-
-function detectSignedState(_appBundle: string): SignedState {
-  return 'unknown'
 }
 
 export const __testing = { detectSignedState, resignAppBundle }
