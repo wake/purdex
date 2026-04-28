@@ -32,11 +32,40 @@ describe('Electron macOS signing configuration (static)', () => {
     expect(script).toContain('--verify')
   })
 
-  it('updater exposes signing preflight + re-sign helpers', () => {
+  it('updater no longer ships runtime signing helpers', () => {
     const updater = readFileSync(resolve(root, 'electron/updater.ts'), 'utf8')
-    expect(updater).toContain('detectSignedState')
-    expect(updater).toContain('resignAppBundle')
-    expect(updater).toContain("'node:child_process'")
+    expect(updater).not.toContain('detectSignedState')
+    expect(updater).not.toContain('resignAppBundle')
+    expect(updater).not.toMatch(/\bcodesign\b/)
+    expect(updater).not.toContain('child_process')
+  })
+
+  it('updater applyUpdate emits exactly downloading → extracting → applying in order', () => {
+    const updater = readFileSync(resolve(root, 'electron/updater.ts'), 'utf8')
+    const literals = Array.from(
+      updater.matchAll(/progress\(\s*['"]([^'"]+)['"]\s*\)/g),
+      (m) => m[1],
+    )
+    expect(literals).toEqual(['downloading', 'extracting', 'applying'])
+  })
+
+  it('preload still gates dev update API behind PDX_DEV_MODE', () => {
+    const preload = readFileSync(resolve(root, 'electron/preload.ts'), 'utf8')
+    expect(preload).toMatch(/PDX_DEV_MODE/)
+    expect(preload).toMatch(/applyUpdate:/)
+    expect(preload).toMatch(/checkUpdate:/)
+    expect(preload).toMatch(/onUpdateProgress:/)
+    const gateIdx = preload.indexOf('PDX_DEV_MODE')
+    const applyIdx = preload.indexOf('applyUpdate:')
+    expect(gateIdx).toBeGreaterThan(-1)
+    expect(applyIdx).toBeGreaterThan(gateIdx)
+  })
+
+  it('daemon still gates /api/dev/update routes behind PDX_DEV_MODE=1', () => {
+    const mod = readFileSync(resolve(root, 'internal/module/dev/module.go'), 'utf8')
+    expect(mod).toMatch(/os\.Getenv\("PDX_DEV_MODE"\)\s*!=\s*"1"/)
+    expect(mod).toMatch(/\/api\/dev\/update\/check/)
+    expect(mod).toMatch(/\/api\/dev\/update\/download/)
   })
 })
 
