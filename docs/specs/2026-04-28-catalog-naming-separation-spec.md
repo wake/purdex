@@ -76,13 +76,15 @@ W1 audit doc (`docs/specs/2026-04-28-hook-status-audit-spec.md`) §4 與 §6/§7
 
 | 區塊 | 修改內容 |
 |------|---------|
-| 共用層 schema | `internal/agent/provider.go` 加 `PurdexName` + `UpstreamKeys []string` 欄位；`Name` 欄位**保留為 deprecated alias**，僅 transition 期間相容（spec §6 收尾刪除）|
-| cc | `internal/agent/cc/{events,hooks,status}.go` 三檔；catalog entry rename + installer 改寫 + DeriveStatus case rename |
+| 共用層 schema | `internal/agent/provider.go` 加 `PurdexName` + `UpstreamKeys []string` + `Lifecycle LifecycleEventKind` 三欄位；`Name` 欄位**保留為 deprecated dev-time backfill**，Phase 3 ship 移除（per §3.4）|
+| 共用層 lifecycle | `internal/agent/lifecycle.go`（新檔）定義 `LifecycleEventKind` 列舉（per §2.6）|
+| cc | `internal/agent/cc/{events,hooks,status}.go` 三檔；catalog entry plain struct literal 列全欄位 + installer 改寫 + DeriveStatus case rename |
 | codex | `internal/agent/codex/{events,hooks,status}.go` 三檔；同 cc + DRY 修補 `codexOwnedCleanupEventNames` |
 | opencode | `internal/agent/opencode/{events,hooks,plugin_template,status}.go` 四檔；plugin emit RHS 改 Go 端常數注入 |
 | CLI | `cmd/pdx/hook.go` positional arg 語義升級（值轉變：UpstreamKey → PurdexName） |
 | Handler | `internal/module/agent/handler.go` `EventRequest` 欄位語義升級；JSON tag 更新；NormalizedEvent.RawEventName 語意保持 |
-| Tests | 三家 hooks_test / status_test / 共用 events_test；新增「installer key vs command arg 不同字串」斷言 + handler per-agent_type per-phase 行為矩陣（§6.3）|
+| Daemon lifecycle 改造 | `internal/module/agent/handler.go` + `frame_ops.go` 對 raw event-name 的字面值比對改為 `LookupByPurdexName(...).Lifecycle == LifecycleXxx`（per §2.3.1）；Phase 1 起加 fallback path，Phase 3 ship 同 PR 移除 fallback |
+| Tests | 三家 hooks_test / status_test / 共用 events_test；新增「installer key vs command arg 不同字串」+ catalog metadata invariant 斷言 + handler per-agent_type per-phase 行為矩陣（§6.3）+ frame lifecycle per-phase 行為斷言（§6.3.1）|
 | Documentation | 本 spec / kickoff memory / fix-spec §10 dev spec 路徑勾稽 |
 
 ### 1.2 不在範圍
@@ -99,25 +101,34 @@ W1 audit doc (`docs/specs/2026-04-28-hook-status-audit-spec.md`) §4 與 §6/§7
 
 當下列全達成時 W2 視為完成：
 
-1. ✅ `HookEventSpec` 加 `PurdexName` + `UpstreamKeys` 欄位；`Name` 標 deprecated comment 並在 transition PR 後刪除
-2. ✅ 三家 catalog 全 rename 為 `Pdx` prefix；`UpstreamKeys` 正確填入
+1. ✅ `HookEventSpec` 加 `PurdexName` + `UpstreamKeys` + `Lifecycle` 三欄位；`Name` 在 Phase 3 ship 同 PR 移除
+2. ✅ 三家 catalog 全 rename 為 `Pdx` prefix；`UpstreamKeys` 正確填入；`Lifecycle` 對 frame-mutating entry 正確填值
 3. ✅ 三家 installer / plugin 寫入 hooks file 後 key=UpstreamKey、command(or plugin emit)=PurdexName
-4. ✅ Daemon handler / DeriveStatus 全用 PurdexName
+4. ✅ Daemon handler / DeriveStatus / frame_ops lifecycle 比對全用 catalog metadata（無硬編 event-name 字面值）
 5. ✅ Go test (`go test ./...`) 全綠
 6. ✅ SPA 邊跑 vitest + lint + build 全綠（NormalizedEvent.RawEventName 字面值改變，需更新 fixture）
 7. ✅ 三 phase PR 依序 ship（PR-W2-1 → PR-W2-2 → PR-W2-3），全 merged 後**才**出單一 PR-W2-bump
 8. ✅ Post-ship 在 mlab 主機跑 `pdx install --reinstall` 並 ad-hoc 檢查三個 hook 檔案命名對齊
-9. ✅ Spec 過 codex review 兩輪（per CLAUDE.md PR Review 兩輪制）
+9. ✅ Spec 過 codex review 兩輪以上收斂（per CLAUDE.md PR Review 兩輪制）
 
 ---
 
 ## 2. 設計核心
 
-### 2.1 雙欄位 schema
+### 2.1 三欄位 schema 擴充
 
 ```go
 // internal/agent/provider.go
 type HookEventSpec struct {
+    // Name is the legacy raw upstream event identifier. Kept during W2
+    // transition to allow Phase 1/2 main-branch builds where codex/opencode
+    // catalogs have not yet migrated. Removed in Phase 3 ship together with
+    // any remaining backfill literals.
+    //
+    // Deprecated: use PurdexName for daemon-internal matching, UpstreamKeys for
+    // installer/plugin boundary writes.
+    Name string
+
     // PurdexName is the daemon-internal stable identifier for this catalog
     // entry. Always prefixed with "Pdx". Used as:
     //   - DeriveStatus switch case label
@@ -137,6 +148,13 @@ type HookEventSpec struct {
     // multiple upstream Bus events may map to the same PurdexName
     // (e.g., permission.asked + question.asked → PdxPermissionRequest).
     UpstreamKeys []string
+
+    // Lifecycle classifies the daemon-internal side effect kind for this
+    // catalog entry. Used by frame_ops / handler so that lifecycle handling
+    // (frame reset, subagent membership, frame delete, error guard whitelist)
+    // can be done via catalog metadata lookup instead of hardcoded event-name
+    // string comparison. See §2.6 for the value table.
+    Lifecycle LifecycleEventKind
 
     EmitsStatus []Status
     Description string
@@ -185,6 +203,41 @@ func LookupByUpstreamKey(specs []HookEventSpec, upstreamKey string) (HookEventSp
 
 cc 額外的 catalog miss 路徑（`compact_ignored` / `notification_unknown_type`）為 reason string，**不是 catalog entry**，不在 rename 範圍。
 
+### 2.2.1 Catalog literal 風格 — plain struct literal（不用 builder helper）
+
+**Phase 1 起每個 catalog literal 完整列出全欄位**（含 transition 期間的 `Name` backfill）：
+
+```go
+// internal/agent/cc/events.go (Phase 1 起)
+var ccEventSpecs = []agent.HookEventSpec{
+    {
+        Name:         "SessionStart",                    // dev-time backfill (§3.4)
+        PurdexName:   "PdxSessionStart",
+        UpstreamKeys: []string{"SessionStart"},
+        Lifecycle:    agent.LifecycleSessionStart,
+        EmitsStatus:  []agent.Status{agent.StatusIdle},
+        Description:  "Session has started",
+        Handling:     agent.HookHandlingStatus,
+    },
+    {
+        Name:         "UserPromptSubmit",
+        PurdexName:   "PdxUserPromptSubmit",
+        UpstreamKeys: []string{"UserPromptSubmit"},
+        Lifecycle:    agent.LifecycleUserPromptSubmit,
+        EmitsStatus:  []agent.Status{agent.StatusRunning},
+        Description:  "User submitted a prompt",
+        Handling:     agent.HookHandlingStatus,
+    },
+    // ...
+}
+```
+
+**為什麼不用 builder helper（如 `agent.NewSpec(...)`）**：
+
+- builder 強制限定 「填哪些參數」 → 容易誤把既有欄位（`EmitsStatus` / `Description` / `FutureOnly` / `Handling`）漏掉，phase 1 ship 時 catalog 變 zero-valued 副欄位，連帶破壞 SupportedStatuses derivation / installer Handling / Inspector descriptions
+- plain struct literal 強制 reviewer 看見每欄位的具體值，phase 3 移除 `Name:` 行時 Go 編譯器抓所有 stale references，零漏
+- 防漂移責任改交給 unit test：`event_spec_test.go` 校驗每筆 entry 的「PurdexName 以 `Pdx` 開頭」「`Name == strings.TrimPrefix(PurdexName, "Pdx")`」「`UpstreamKeys` 對 installable entry 至少一元素」「`PurdexName ∉ UpstreamKeys`」（§6.1）
+
 ### 2.3 UpstreamKeys 填值規則（per agent）
 
 #### cc（9 installable）
@@ -224,6 +277,42 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
 
 ⚠️ **設計界限**：filter 條件（`type==='idle'` / `input.tool==='task'`）**不入 catalog**，仍歸 plugin 端 dispatch 邏輯。catalog UpstreamKeys 只表達「哪些 raw event 名會 fire 進這個 catalog entry」，不表達 demux 細節。
 
+### 2.3.1 Lifecycle 欄位填值（三家對齊）
+
+每個 catalog entry 必填 `Lifecycle` 欄位，daemon 端 frame_ops / handler 用此 metadata 判斷 lifecycle 處理路徑（取代 hardcoded event-name 字面值比對）。
+
+| PurdexName（三家共通）| LifecycleEventKind | daemon 副作用 |
+|---|---|---|
+| `PdxSessionStart` | `LifecycleSessionStart` | frame reset + 清 subagents（`handler.go:301-305`）|
+| `PdxUserPromptSubmit` | `LifecycleUserPromptSubmit` | error guard 白名單（`handler.go:181`）— 任何狀態下都可清回 running |
+| `PdxStop` | `LifecycleStop` | error guard 白名單（cc/codex；opencode 排除：`handler.go:187-189`）|
+| `PdxStopFailure` | `LifecycleStopFailure` | error transition |
+| `PdxNotification` | `LifecycleNone` | 純 status emit（waiting / idle）由 DeriveStatus 決定，無 frame 副作用 |
+| `PdxPermissionRequest` | `LifecycleNone` | 同上（純 waiting）|
+| `PdxSessionEnd` | `LifecycleSessionEnd` | frame delete + 清 currentStatus / subagents（`handler.go:278-285`）+ error guard 白名單 |
+| `PdxSubagentStart` | `LifecycleSubagentStart` | 加入 frame.Subagents membership（`frame_ops.go:133-174`）|
+| `PdxSubagentStop` | `LifecycleSubagentStop` | 從 frame.Subagents membership 移除 |
+
+**Lifecycle vs Handling 維度區分**：
+
+- `Handling`：catalog entry 是不是要 install / 處理（`status` / `detail` / `ignored` / `unsupported`）
+- `Lifecycle`：daemon 收到後對 frame / subagent / error guard 的副作用 kind
+
+兩個正交。`Notification` / `PermissionRequest` 雖 `Handling=status`，但 `Lifecycle=None`（不動 frame，僅推 status）。
+
+**daemon 端比對改寫**（W2 範圍內必須完成）：
+
+| 原硬編字串比對 | 改為 catalog metadata lookup |
+|---|---|
+| `req.EventName == "SessionStart"`（handler.go:301）| `LookupByPurdexName(req.PurdexName).Lifecycle == LifecycleSessionStart` |
+| `req.EventName == "SessionEnd"`（handler.go:278）| `... == LifecycleSessionEnd` |
+| `req.EventName == "Stop"`（handler.go:188）| `... == LifecycleStop` |
+| `req.EventName == "UserPromptSubmit"`（error guard）| `... == LifecycleUserPromptSubmit` |
+| `req.EventName == "SubagentStart"`（frame_ops）| `... == LifecycleSubagentStart` |
+| `req.EventName == "SubagentStop"`（frame_ops）| `... == LifecycleSubagentStop` |
+
+`req.AgentType != "opencode"` 這條 opencode-specific Stop guard（handler.go:187-189）**保留** — 那是 per-agent 行為差異，不是字面值比對問題。
+
 ### 2.4 邊界擺位（單張表收斂）
 
 | 邊界位置 | 用 PurdexName 還是 UpstreamKey | 程式位置 |
@@ -240,6 +329,7 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
 | DeriveStatus eventName 參數 | PurdexName | 三家 `status.go:9-...` |
 | NormalizedEvent.RawEventName | PurdexName | `handler.go:308 / 337`（SPA 已視 opaque 字串）|
 | TraceStore record event_name 欄位 | PurdexName | trace 寫入點 |
+| **frame_ops / handler lifecycle 比對** | **catalog `Lifecycle` 欄位（不是字面值）** | `handler.go:181/186/188/278-285/301-305`、`frame_ops.go:133-174`（per §2.3.1）|
 
 ### 2.5 反查需求
 
@@ -251,36 +341,113 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
 - 因此 reverse lookup 在 plugin 內是 O(1) switch case，不需 runtime 反查
 - Go 端的 `LookupByUpstreamKey` helper 只供測試斷言與將來其他用途
 
+### 2.6 LifecycleEventKind 列舉
+
+```go
+// internal/agent/lifecycle.go (新增檔)
+type LifecycleEventKind int
+
+const (
+    LifecycleNone LifecycleEventKind = iota
+    LifecycleSessionStart
+    LifecycleUserPromptSubmit
+    LifecycleStop
+    LifecycleStopFailure
+    LifecycleSessionEnd
+    LifecycleSubagentStart
+    LifecycleSubagentStop
+)
+
+// String() implementation for trace / log 可讀性
+func (k LifecycleEventKind) String() string { ... }
+```
+
+每個 catalog entry 透過 `Lifecycle` 欄位標識其 lifecycle kind（per §2.3.1 表）。daemon 端 lifecycle 處理改為 metadata-driven：
+
+```go
+// internal/module/agent/handler.go (Phase 1 ship 起)
+spec, ok := provider.LookupByPurdexName(req.PurdexName)
+if !ok {
+    // catalog miss 路徑（不變）
+}
+
+switch spec.Lifecycle {
+case agent.LifecycleSessionStart:
+    // 清 subagents / frame reset
+case agent.LifecycleSessionEnd:
+    // 刪 frame / 清 currentStatus
+case agent.LifecycleSubagentStart, agent.LifecycleSubagentStop:
+    // frame.Subagents membership 變動
+case agent.LifecycleStop:
+    if req.AgentType != "opencode" { /* error guard 白名單 */ }
+case agent.LifecycleUserPromptSubmit:
+    // error guard 白名單
+case agent.LifecycleStopFailure:
+    // error transition
+case agent.LifecycleNone:
+    // status emit only
+}
+```
+
+**替代方案考量**（記錄一下為何不選）：
+
+- **B. `LifecycleClassifier` interface（每家 provider 自實作 IsSessionStart 等）**：可行但引入新 interface，落入「generic framework」嫌疑（per `feedback_skeleton_convergence`）。本案三家 PurdexName 完全相同（都是 PdxXxx），catalog metadata 自報已足，不需 dispatch interface
+- **A. 撤回 phase 切分一次大 PR**：違反先前共識；diff 太大不易 review
+
+選定**方案 D（catalog `Lifecycle` 欄位）**：catalog 結構強化，與既有 `Handling HookHandling` 欄位同性質，無新 interface，daemon 完全 PurdexName-aware（per fix-spec §1）。
+
 ---
 
 ## 3. 三 phase 切分
 
-### Phase 1（M）— 共用 schema + cc 端到端
+### Phase 1（M-L）— 共用 schema + cc 端到端 + lifecycle 改造
 
 **範圍**：
 
-- `internal/agent/provider.go`：新增 `PurdexName` + `UpstreamKeys` 欄位 + lookup helpers + `Name` 欄位標 `// Deprecated:` comment（保留以利 codex/opencode phase 過渡編譯）
-- `internal/agent/cc/events.go`：catalog entry 用共用 helper `agent.NewSpec(...)` 一次填 PurdexName + UpstreamKeys（同時 backfill `Name` deprecated 欄位以利 codex/opencode 過渡編譯）；phase 3 ship 同 PR 移除 `Name` backfill
-- `internal/agent/cc/hooks.go`：`mergeClaudeHooks` / `makePdxEntry` 改寫；`ccKnownEventNames` / `ccOwnedCleanupEventNames` 從 catalog 自動衍生（DRY 修補）
+Schema / 共用層：
+
+- `internal/agent/provider.go`：新增 `PurdexName` / `UpstreamKeys []string` / `Lifecycle LifecycleEventKind` 三個欄位；`Name` 欄位標 `// Deprecated:`（dev-time backfill）；新增 `LookupByPurdexName` / `LookupByUpstreamKey` helpers
+- `internal/agent/lifecycle.go`（新檔）：`LifecycleEventKind` 列舉與 String()
+- `internal/agent/event_spec_test.go`（新檔）：catalog 校驗測試 — 對每 entry 斷言 `PurdexName` 開頭 `Pdx`、`Name == TrimPrefix(PurdexName, "Pdx")`、installable entry `UpstreamKeys` 至少一元素、`PurdexName ∉ UpstreamKeys`、`Lifecycle` 對非 `LifecycleNone` entry 與 PurdexName 對齊（per §2.3.1）
+
+cc 端：
+
+- `internal/agent/cc/events.go`：catalog entry 改 plain struct literal 列全欄位（per §2.2.1）— `Name` / `PurdexName` / `UpstreamKeys` / `Lifecycle` / 既有 `EmitsStatus` / `Description` / `FutureOnly` / `Handling` 全填
+- `internal/agent/cc/hooks.go`：
+  - `mergeClaudeHooks` 寫 settings.json：hooks map key 改用 `spec.UpstreamKeys[0]`（cc 單元素）
+  - `makePdxEntry` command 字串末段 token 改用 `spec.PurdexName`
+  - `ccKnownEventNames` / `ccOwnedCleanupEventNames` 從 catalog 自動衍生（DRY 修補）— `IsInstallableHookSpec` 篩選後取 `UpstreamKeys` union
 - `internal/agent/cc/status.go`：`deriveCCStatus` switch case 改 `PdxXxx`
-- `cmd/pdx/hook.go`：positional[0] 註解改為 `purdexName`，buildHookPayload 第二參數命名同步
-- `internal/module/agent/handler.go`：`EventRequest.EventName` 改名 `PurdexName`，**primary JSON tag = `purdex_name`**；保留 `event_name` 為 unmarshal-only alias（Go custom UnmarshalJSON：兩鍵都接、`purdex_name` 優先；marshal 只送 `purdex_name`），Phase 3 ship 同 PR 移除 alias — see §3.4 / §4.1 transition 策略
-- `internal/module/agent/handler.go`：呼 `provider.DeriveStatus(req.PurdexName, req.RawEvent)`
-- 共用 `event_spec_test.go`（新檔）：測 lookup helpers + cc spec 的「PurdexName 與 UpstreamKeys 互斥（PurdexName 不能 == 任一 UpstreamKey）」斷言（防止退化成單一字串）
-- `cc/hooks_test.go`：新增測試「installer 寫入 settings.json 時 hooks key == UpstreamKey 且 command 字串末段 token == PurdexName」
+- `cc/hooks_test.go` / `cc/status_test.go`：installer 端「hooks key == UpstreamKey、command 末段 == PurdexName」+ DeriveStatus case 斷言
+
+CLI / Handler：
+
+- `cmd/pdx/hook.go`：positional[0] 變數名改 `purdexName`，buildHookPayload 第二參數命名同步
+- `internal/module/agent/handler.go`：
+  - `EventRequest.EventName` → `PurdexName`，primary JSON tag `purdex_name`
+  - 加 custom UnmarshalJSON：unmarshal 接受 `purdex_name`（優先）+ `event_name`（alias），marshal 只送 `purdex_name`
+  - 呼 `provider.DeriveStatus(req.PurdexName, req.RawEvent)`
+
+Lifecycle 改造（W2 範圍內必做，per §2.3.1）：
+
+- `internal/module/agent/handler.go:181/186/187-189/278-285/301-305`：所有硬編 event-name 字面值改為 `LookupByPurdexName(req.PurdexName).Lifecycle == LifecycleXxx`
+- `internal/module/agent/frame_ops.go`：frame mutation 路徑同步改 lifecycle metadata-driven
+- `req.AgentType != "opencode"` 這條 opencode-specific Stop guard **保留**（per-agent 行為差異不是字面值問題）
+- 改寫後 daemon 對 cc Phase 1 後送 `PdxSessionEnd` / codex/opencode 中間態送 `SessionEnd`（catalog literal `Name=SessionEnd`、`Lifecycle=LifecycleSessionEnd`）兩者都正確 match → frame 處理一致
 
 **測試**：
 
-- `go test ./internal/agent/...` 全綠
-- `go test ./internal/module/agent/...` 全綠
-- `go test ./cmd/pdx/...` 全綠
+- `handler_test.go`：per agent_type per phase 行為矩陣（§6.3）— Phase 1 後 cc 新格式合法、舊格式 invalid；codex/opencode 中間態仍合法
+- `frame_ops_test.go`：lifecycle 行為斷言 — `PdxSessionEnd` (cc) 與 `SessionEnd` (codex/opencode 中間態) 都應 frame deleted；`PdxSubagentStart` / `SubagentStart` 都應 subagents +1
+- `go test ./internal/agent/...` / `go test ./internal/module/agent/...` / `go test ./cmd/pdx/...` 全綠
 - 手動驗證：`go run ./cmd/pdx install --check`（cc 部分）顯示無漂移
 
 **退場驗證**：
 
 - 在 worktree 內跑 `go run ./cmd/pdx install --reinstall`（針對 mlab 主機 cc）後檢視 `~/.claude/settings.json`：`"hooks"` 下 key 應仍是 `"SessionStart"` 等 UpstreamKey；每個 entry 的 `command` 字串末段應改為 `PdxSessionStart`
+- 啟動實機 cc session，跑 lifecycle 觸發（new prompt / SessionEnd / Subagent）— 透過 `PDX_DEV_MODE=1` log 確認 lifecycle metadata 命中
 
-**PR 範圍**：~600-900 行 diff（含測試）
+**PR 範圍**：~800-1100 行 diff（含 lifecycle 改造 + 測試）
 
 ---
 
@@ -288,17 +455,22 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
 
 **範圍**：
 
-- `internal/agent/codex/events.go`：catalog entry 加 PurdexName + UpstreamKeys
-- `internal/agent/codex/hooks.go`：`mergeCodexHooksFile` matcher-group key=UpstreamKey、command=PurdexName；`codexOwnedCleanupEventNames()` 從 catalog 自動衍生（DRY 修補）；`checkCodexEvent` 用 UpstreamKey 反查 hooks.json key
+- `internal/agent/codex/events.go`：catalog entry 改 plain struct literal 列全欄位（per §2.2.1）— `Name` / `PurdexName` / `UpstreamKeys` / `Lifecycle` + 既有 metadata 全填；含 11 entries（9 installable + 2 unsupported `PdxPreToolUse` / `PdxPostToolUse`）
+- `internal/agent/codex/hooks.go`：
+  - `mergeCodexHooksFile` matcher-group key=`spec.UpstreamKeys[0]`、command 末段 token=`spec.PurdexName`
+  - `codexOwnedCleanupEventNames()` 從 catalog 自動衍生（DRY 修補）
+  - `checkCodexEvent` 用 UpstreamKey 反查 hooks.json key
 - `internal/agent/codex/status.go`：`deriveCodexStatus` switch case 改 `PdxXxx`
 - `codex/hooks_test.go`：新增測試「matcher-group key == UpstreamKey 且 command == PurdexName」+「`codexOwnedCleanupEventNames()` 與 `codexEventSpecs` 同步」
+
+**Lifecycle 改造**：daemon 端 lifecycle 比對於 Phase 1 已遷至 catalog metadata-driven，Phase 2 codex catalog literal 填上正確 `Lifecycle` 欄位後自動命中（per §2.3.1 對照表）。codex 不需在 daemon 層額外改動。
 
 **驗證**：
 
 - `~/.codex/hooks.json` reinstall 後 key 為 `"SessionStart"` 等，command 字串末段為 `PdxSessionStart`
 - `~/.codex/config.toml` 的 `features.codex_hooks=true` 不變動（與 event name 無耦合）
 
-**前置依賴**：Phase 1 ship（schema 已加雙欄位 + handler 已用 PurdexName）
+**前置依賴**：Phase 1 ship（schema 已加三欄位 + handler 已用 PurdexName + lifecycle 已改 metadata-driven）
 
 **並行可能**：與 Phase 3 可在 Phase 1 ship 後並行 catalog 改寫部分；但 Phase 3 內含「移除 `Name` 欄位 + 移除 `event_name` JSON alias」cleanup step **必須在 Phase 2 merged 後**才能進行（否則 codex package 仍引用 `spec.Name` 編譯失敗）
 
@@ -308,9 +480,11 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
 
 **範圍**：
 
-- `internal/agent/opencode/events.go`：catalog 加 PurdexName + UpstreamKeys（含多元素 PdxPermissionRequest）
+opencode 端：
+
+- `internal/agent/opencode/events.go`：catalog 改 plain struct literal 列全欄位（per §2.2.1）— `Name` 不再需要（同 PR cleanup）/ `PurdexName` / `UpstreamKeys`（含多元素 `PdxPermissionRequest`）/ `Lifecycle` + 既有 metadata
 - `internal/agent/opencode/plugin_template.go`：
-  - 模板頭部加 `const PURDEX_EVENT = { PdxSessionStart: "PdxSessionStart", ... }` 物件，由 Go 端編譯期生成（`renderManagedPlugin` 內 string concat）
+  - 模板頭部加 `const PURDEX_EVENT = { PdxSessionStart: "PdxSessionStart", ... }` 物件，由 Go 端編譯期生成（`renderManagedPlugin` 內 string concat 從 catalog 衍生）
   - emit() 呼叫點 8 處 RHS 從硬寫 `'SessionStart'` 改為 `PURDEX_EVENT.PdxSessionStart`
   - case label（LHS）保持原樣（UpstreamKey）
   - 其他 plugin 邏輯（`suppressIdleForSession` / type filter）不動
@@ -320,10 +494,13 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
   - 8 處 `emit('PdxXxx', ...)` 出現
   - 沒有殘留硬寫的 `emit('SessionStart', ...)` 形態
   - magic marker 仍為 `pdx-managed:opencode-hooks:v1`
-- **Transition cleanup（同 PR）**：
-  - 移除 `internal/agent/provider.go` 的 `Name` 欄位 + `agent.NewSpec` helper 的 `Name` backfill
-  - 移除 `EventRequest` 的 `event_name` JSON alias（custom UnmarshalJSON 簡化為單鍵 `purdex_name`）
-  - cc / codex 的 catalog literal 不再有 `Name`（前兩 phase 的 backfill 路徑全清）
+
+**Transition cleanup（同 PR，per §3.4）**：
+
+- 移除 `internal/agent/provider.go` 的 `Name` 欄位
+- 移除 `EventRequest` custom UnmarshalJSON 的 `event_name` alias（簡化為單鍵 `purdex_name`）
+- cc / codex / opencode 三家 `events.go` catalog literal 移除 `Name:` 行
+- Go 編譯器掃出所有殘留 `spec.Name` 引用（理應為 0），逐一修正（如有遺漏）
 
 **驗證**：
 
@@ -339,55 +516,81 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
 
 ### 3.4 Dev-time transition 機制（**not** user-facing migration）
 
-Phase 1 加 `PurdexName` 後 `Name` 欄位**短暫並存於 main**（cc 已用新欄位、codex/opencode 仍用舊）。**這是 main-branch dev-time 雙寫，不是 user-facing migration** — bump 之前 user 永遠跑 pre-W2 daemon（per §0.1 「No user-facing migration」），看不到 main 的中間態。
+Phase 1 加 `PurdexName` / `UpstreamKeys` / `Lifecycle` 三個欄位後 `Name` 欄位**短暫並存於 main**（cc catalog 全填新欄位、codex/opencode catalog 仍引用舊 `Name`）。**這是 main-branch dev-time 雙寫，不是 user-facing migration** — bump 之前 user 永遠跑 pre-W2 daemon（per §0.1 「No user-facing migration」），看不到 main 的中間態。
 
-| Phase（main-only） | provider.go HookEventSpec | cc | codex | opencode |
-|---|---|---|---|---|
-| Pre-W2 | 只有 `Name` | 用 Name | 用 Name | 用 Name |
-| Phase 1 ship | 加 PurdexName + UpstreamKeys；Name 標 Deprecated；helper 雙寫 | 用 PurdexName/UpstreamKeys；DeriveStatus case=PdxXxx | 仍用 Name（catalog literal 經 helper 雙寫）；DeriveStatus case=Name | 仍用 Name（同上）；DeriveStatus case=Name |
-| Phase 2 ship | 同上 | 已遷 | 用 PurdexName/UpstreamKeys；DeriveStatus case=PdxXxx | 仍用 Name；DeriveStatus case=Name |
-| Phase 3 ship | 移除 Name 欄位 + helper 雙寫 + JSON alias | 已遷 | 已遷 | 已遷 |
-| Bump alpha | 三 phase 全 merge 後 single bump PR | — | — | — |
+| Phase（main-only） | provider.go HookEventSpec | cc | codex | opencode | daemon lifecycle 比對 |
+|---|---|---|---|---|---|
+| Pre-W2 | 只有 `Name` 等 | 用 Name | 用 Name | 用 Name | 字面值（"SessionStart" 等）|
+| Phase 1 ship | 加 PurdexName / UpstreamKeys / Lifecycle；Name 標 Deprecated | catalog 全填四命名欄位；DeriveStatus case=PdxXxx | catalog literal 仍用 Name（其他三新欄位 zero-value，daemon 不直接 dispatch codex 經 PurdexName 路徑因為 codex DeriveStatus 仍 case=Name）| 同 codex | catalog `Lifecycle` metadata 取代字面值（per §2.3.1）— 但 codex/opencode catalog 還沒填 Lifecycle 所以 lifecycle 處理照常用 fallback 字面值（Phase 1 短暫 hybrid）|
+| Phase 2 ship | 同上 | 已遷 | 全填四命名欄位 | 仍用 Name | 全 metadata-driven for cc + codex；opencode 仍 hybrid |
+| Phase 3 ship | 移除 `Name` 欄位 + JSON alias | 已遷 | 已遷 | 全填四命名欄位 | 完全 metadata-driven |
+| Bump alpha | 三 phase 全 merge 後 single bump PR | — | — | — | — |
 
-Phase 1/2 期間 `Name` 與 `PurdexName` 並存：
+#### 3.4.1 Catalog literal 雙寫策略
 
-- 為避免雙寫漂移，**catalog literal 用共用 exported helper builder 自動生成兩欄位**：
-
-```go
-// internal/agent/provider.go
-// NewSpec is a transition helper used by catalog packages (cc / codex / opencode)
-// to populate both the new PurdexName/UpstreamKeys fields and the deprecated Name
-// field in a single literal. Removed in Phase 3 ship together with the Name field.
-//
-// Exported because cc/codex/opencode are separate packages and cannot reference
-// a package-private helper.
-func NewSpec(purdexName string, upstreamKeys ...string) HookEventSpec {
-    return HookEventSpec{
-        PurdexName:   purdexName,
-        UpstreamKeys: upstreamKeys,
-        Name:         strings.TrimPrefix(purdexName, "Pdx"), // dev-time backfill only
-    }
-}
-```
-
-Catalog 各 package 引用：
+**用 plain struct literal，不用 builder helper**（per §2.2.1 + Round-2 G1 防漂移評估）：
 
 ```go
 // internal/agent/cc/events.go (Phase 1 ship 起)
 var ccEventSpecs = []agent.HookEventSpec{
-    agent.NewSpec("PdxSessionStart", "SessionStart"), // PurdexName, then UpstreamKeys...
-    agent.NewSpec("PdxUserPromptSubmit", "UserPromptSubmit"),
+    {
+        Name:         "SessionStart",                      // dev-time backfill, removed Phase 3
+        PurdexName:   "PdxSessionStart",
+        UpstreamKeys: []string{"SessionStart"},
+        Lifecycle:    agent.LifecycleSessionStart,
+        EmitsStatus:  []agent.Status{agent.StatusIdle},
+        Description:  "Session has started",
+        Handling:     agent.HookHandlingStatus,
+    },
+    // ... 其他 8 entries
+}
+
+// internal/agent/codex/events.go (Phase 1 期間 — 仍 pre-W2 形態)
+var codexEventSpecs = []agent.HookEventSpec{
+    {
+        Name:        "SessionStart",
+        EmitsStatus: []agent.Status{agent.StatusIdle},
+        Description: "Session has started",
+        Handling:    agent.HookHandlingStatus,
+        // PurdexName / UpstreamKeys / Lifecycle 留 zero-value，等 Phase 2 補
+    },
     // ...
 }
 ```
 
-- Phase 3 ship（依賴 Phase 2 merged）：移除 `Name` 欄位 + `NewSpec` helper 改為 plain literal `agent.HookEventSpec{PurdexName: ..., UpstreamKeys: ...}`
+#### 3.4.2 Phase 1 lifecycle hybrid 策略
 
-**Phase 1/2 main-only safety net**：Phase 1/2 期間若 codex / opencode package 仍引用 `spec.Name`，因 helper 自動 backfill `strings.TrimPrefix(purdexName, "Pdx")` 仍可編譯且行為正確（拿到 pre-W2 字面值）。**這是 dev-time transition aid 而非 user-facing fallback**：
+Phase 1 ship 後 cc catalog 已填 `Lifecycle` 但 codex/opencode 還沒。daemon 端 lifecycle 比對改寫成：
 
-- main daemon binary 在 Phase 1/2 期間 build 出來時，cc 部分用新 catalog（DeriveStatus case=`PdxXxx`），codex/opencode 部分用舊 catalog（DeriveStatus case=`Xxx`）— 兩條 codepath 都對自家 hook payload 自洽，**無 cross-agent fallback / two-step lookup 行為**
-- bump 之前 user 永遠跑 pre-W2 daemon binary，所以 main 的這個 dev-time 中間態完全不暴露給 user
-- Phase 3 ship 同 PR 移除 `Name` + helper 雙寫，所有 stale reference 在編譯期被抓出
+```go
+// internal/module/agent/handler.go (Phase 1 ship 起)
+spec, ok := provider.LookupByPurdexName(req.PurdexName)
+if ok && spec.Lifecycle != agent.LifecycleNone {
+    // metadata-driven path (cc Phase 1 後走這條)
+    handleLifecycleByKind(spec.Lifecycle, ...)
+} else {
+    // dev-time fallback：catalog 還沒填 Lifecycle 的 agent 走原字面值比對
+    // 此 fallback 路徑在 Phase 3 ship 同 PR 移除（屆時三家全填 Lifecycle，Lookup 永遠命中 metadata）
+    handleLifecycleByLegacyName(req.PurdexName, ...)
+}
+```
+
+注意：fallback path 是**main-only dev-time** — bump 前 user 看不到。同 §0.1「No user-facing migration」原則：daemon 不對未升級 user 的 raw payload 做 fallback，僅對 main 上 catalog literal 的 phase 進度做 fallback。Phase 3 ship 同 PR 整段 fallback 移除。
+
+#### 3.4.3 防漂移責任分配
+
+無 builder helper，改靠 unit test：`event_spec_test.go` 校驗每筆 catalog entry 的：
+
+- `PurdexName != ""` 且 `strings.HasPrefix(PurdexName, "Pdx")`
+- `Name == strings.TrimPrefix(PurdexName, "Pdx")`（dev-time invariant，Phase 3 後測試移除）
+- `UpstreamKeys` 對 `IsInstallableHookSpec` 的 entry 至少一元素
+- `PurdexName ∉ UpstreamKeys`（防止退化單一字串）
+- `Lifecycle` 對與「frame-mutating event」對應 entry 必填非 `LifecycleNone`（per §2.3.1 對照表）
+
+Phase 3 ship 同 PR：
+
+- 移除 `Name` 欄位 → Go 編譯器抓所有殘留 `spec.Name` 引用
+- 移除 lifecycle fallback 路徑 → 行為集中於單一 metadata-driven codepath
 
 ---
 
@@ -484,9 +687,12 @@ func (r *EventRequest) UnmarshalJSON(b []byte) error {
 每 phase 至少新增以下 assertion：
 
 1. **catalog 一致性**：`PurdexName != ""` 且以 `Pdx` 開頭；`UpstreamKeys` 對 installable entry 至少一個元素
-2. **Name vs PurdexName 互斥**：所有 entry 的 PurdexName 不在自己的 UpstreamKeys 列表內（否則 schema 退化）
-3. **DRY 衍生**：`ccKnownEventNames()` / `codexOwnedCleanupEventNames()` 結果 == `Filter(catalog, IsInstallable)` 的 UpstreamKeys union
-4. **lookup helpers**：`LookupByPurdexName("PdxSessionStart")` 能找到；`LookupByUpstreamKey("session.created")`（opencode）能找到 `PdxSessionStart`
+2. **Name dev-time 對應**：catalog literal 的 `Name == strings.TrimPrefix(PurdexName, "Pdx")`（Phase 1/2 期間有效，Phase 3 ship 同 PR 移除此測試）
+3. **PurdexName 與 UpstreamKeys 互斥**：所有 entry 的 PurdexName 不在自己的 UpstreamKeys 列表內（否則 schema 退化成單一字串）
+4. **既有 metadata 保留**：每 entry 的 `EmitsStatus` / `Description` / `FutureOnly` / `Handling` 與 pre-W2 時相同（plain struct literal 改寫不能誤丟欄位 — 對應 Round-2 G1 防漂移）
+5. **Lifecycle 對齊**：`Lifecycle` 欄位對「frame-mutating」entry（SessionStart / SessionEnd / SubagentStart / SubagentStop / Stop / StopFailure / UserPromptSubmit）為對應的 `LifecycleXxx`；`Notification` / `PermissionRequest` 為 `LifecycleNone`（per §2.3.1）
+6. **DRY 衍生**：`ccKnownEventNames()` / `codexOwnedCleanupEventNames()` 結果 == `Filter(catalog, IsInstallable)` 的 UpstreamKeys union
+7. **lookup helpers**：`LookupByPurdexName("PdxSessionStart")` 能找到；`LookupByUpstreamKey("session.created")`（opencode）能找到 `PdxSessionStart`
 
 ### 6.2 整合測試（installer）
 
@@ -518,6 +724,36 @@ func (r *EventRequest) UnmarshalJSON(b []byte) error {
 | codex 新格式 | `codex` | `PdxUserPromptSubmit` | 200 + status=running |
 | codex 舊格式 | `codex` | `UserPromptSubmit` | invalid |
 | opencode 中間態仍合法 | `opencode` | `UserPromptSubmit` | 200 + status=running |
+
+### 6.3.1 Frame lifecycle 行為測試（per phase，**Round-2 G2 補入**）
+
+`internal/module/agent/handler_test.go` / `frame_ops_test.go`：lifecycle 處理改 metadata-driven 後，需 per agent_type per phase 斷言 frame 副作用真有發生。
+
+**Phase 1 ship 後（cc catalog 填 Lifecycle）**：
+
+| Test case | agent_type | purdex_name | 預期 frame 副作用 |
+|---|---|---|---|
+| cc SessionStart frame reset | `cc` | `PdxSessionStart` | frame 重置 + subagents 清空（per `handler.go:301-305`）|
+| cc SessionEnd frame delete | `cc` | `PdxSessionEnd` | frame deleted + currentStatus 清（per `handler.go:278-285`）|
+| cc SubagentStart membership | `cc` | `PdxSubagentStart`（含 subagent_id）| frame.Subagents +1 |
+| cc SubagentStop membership | `cc` | `PdxSubagentStop` | frame.Subagents -1 |
+| cc Stop error guard | `cc` | `PdxStop`（在 error 狀態下）| status 清回 idle |
+| codex 中間態 SessionEnd | `codex` | `SessionEnd`（catalog literal `Name=SessionEnd`，daemon 走 fallback 字面值比對）| frame deleted（fallback 路徑生效）|
+| opencode 中間態 SessionStart | `opencode` | `SessionStart`（同上 fallback）| frame reset（fallback 路徑生效）|
+
+**Phase 2 ship 後（cc + codex catalog 填 Lifecycle，opencode 仍 fallback）**：
+
+| Test case | agent_type | purdex_name | 預期 |
+|---|---|---|---|
+| codex SessionEnd metadata-driven | `codex` | `PdxSessionEnd` | frame deleted (metadata 路徑) |
+| opencode 中間態 | `opencode` | `SessionEnd` | frame deleted (fallback 路徑) |
+
+**Phase 3 ship 後（三家全 metadata-driven，fallback 路徑移除）**：
+
+| Test case | agent_type | purdex_name | 預期 |
+|---|---|---|---|
+| opencode metadata-driven | `opencode` | `PdxSessionEnd` | frame deleted (metadata 路徑) |
+| 任一家送舊字面值 | any | `SessionEnd` | invalid + `event_not_in_catalog`（fallback 已移除）|
 
 **Phase 3 ship 後（三家全遷）**：
 
@@ -558,10 +794,12 @@ Phase 1 起即更新（影響 cc 相關 snapshot）。Phase 2/3 順帶更新各�
 | Risk | Mitigation |
 |---|---|
 | Phase 1/2 main 中間態誤 bump → user 升到 dev-only 中間態 daemon | §0.1 + §8 + §9 多處明示「三 phase 全 merge 後才出 bump PR」；PR-W2-bump 排在 PR-W2-3 後 |
-| Phase 1/2 transition 期間 `Name` 與 `PurdexName` 雙欄位漂移 | exported `agent.NewSpec(...)` helper 強制兩欄位同源；catalog literal 不直接寫 `Name` 欄位；Phase 3 ship 同 PR 移除 helper 確保 stale ref 編譯期被抓 |
+| plain struct literal 改寫誤丟既有 metadata 欄位（`EmitsStatus` / `Description` / `FutureOnly` / `Handling`）| §6.1 加固定 invariant 測試斷言每 entry 既有欄位值與 pre-W2 時相同；reviewer 與 codex review 重點檢查 catalog literal diff |
+| Phase 1/2 期間 `Name` 與 `PurdexName` 漂移 | §6.1 測試斷言 `Name == TrimPrefix(PurdexName, "Pdx")` 強制同源；Phase 3 ship 同 PR 移除 `Name` 欄位讓編譯器抓所有 stale references |
+| daemon lifecycle fallback 路徑（§3.4.2）在 Phase 1/2 期間誤跨 agent 命中 | fallback 路徑只在 `LookupByPurdexName` 命中但 `Lifecycle == LifecycleNone` 時走（即 catalog 已宣告 entry 但未填 Lifecycle）；測試覆蓋 cc 已填 / codex/opencode 未填的中間態 |
 | 既有 SPA fixture / snapshot 大量需更新 | spec §6.4 一次性 grep 清單；每 phase 改自家 agent 對應 fixture |
 | EventRequest JSON `event_name` alias 期內潛伏 bug | 整合 test 同時測新舊 JSON；alias 在 Phase 3 同 PR 移除 |
-| `LookupByUpstreamKey` 被誤用於 opencode filter events 的 routing | helper godoc 明文限制（§2.1）+ §2.5 不得作為 plugin filter routing 的 SOT；如果未來真的需要表達 filter，另開 issue 設計 `UpstreamFilter` metadata（不在 W2 範圍）|
+| `LookupByUpstreamKey` 被誤用於 opencode filter events 的 routing | helper godoc 明文限制（§2.1）+ §2.5 不得作為 plugin filter routing 的 SOT；如未來真要表達 filter，另開 issue 設計 `UpstreamFilter` metadata（不在 W2 範圍）|
 | codex `codexOwnedCleanupEventNames` DRY 修補意外破壞 lifecycle | 修補同 PR 加 round-trip test：install → catalog 全 entry 都被 cleanup recognise；catalog 增刪 entry 時 cleanup 自動跟上 |
 | opencode plugin emit 改常數注入後 JS template 解析錯誤 | renderManagedPlugin 新增 unit test：模板渲染後 `Bun.spawn` 呼叫處字串為 PurdexName；磁碟寫入後 grep 反查 |
 | reinstall 對 user 環境破壞性 | alpha 階段允許（per `feedback_no_alpha_migration`）；ship + bump 同 commit chain，user 升 alpha 時 reinstall |
