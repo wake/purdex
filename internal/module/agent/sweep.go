@@ -548,7 +548,15 @@ func (m *Module) afterFrameCleared(frame store.Frame, reason string) error {
 	if code == "" || m.core == nil {
 		return nil
 	}
-	normalized := buildProjectionNormalized(projection, frame.AgentType, "sweep:"+reason, nowFn().UnixNano(), agentpkg.DeriveResult{})
+	// Issue #717: pass StatusClear explicitly. When projection is nil
+	// (the cleared frame was the last one in this session),
+	// buildProjectionNormalized's projection==nil branch passes the
+	// DeriveResult.Status through verbatim. An empty string would leak
+	// to the WS broadcast and the SPA would not recognize it as a
+	// session-clear signal. The non-nil projection branches override
+	// Status from TopFrame so the value here only matters for the
+	// session-empty case.
+	normalized := buildProjectionNormalized(projection, frame.AgentType, "sweep:"+reason, nowFn().UnixNano(), agentpkg.DeriveResult{Status: agentpkg.StatusClear})
 	payload, _ := json.Marshal(normalized)
 	m.core.Events.Broadcast(code, "hook", string(payload))
 	return nil
