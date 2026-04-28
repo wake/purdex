@@ -4109,3 +4109,61 @@ func TestCandidateHasOwnedState_EmptySubagentsReturnsFalse(t *testing.T) {
 		t.Fatal("candidateHasOwnedState = true, want false (empty subagents — no state to preserve)")
 	}
 }
+
+// #717 — buildProjectionNormalized must produce status=clear whenever
+// the projection has no top frame to display. Both nil branches
+// (projection==nil and projection!=nil with TopFrame==nil) share the
+// same wire-format invariant; the function previously enforced it
+// only on the second branch, leaking caller-supplied empty status
+// through the first.
+func TestBuildProjectionNormalized_NilProjectionGuard(t *testing.T) {
+	cases := []struct {
+		name       string
+		projection *SessionProjection
+		result     agentpkg.DeriveResult
+		wantStatus string
+		wantAgent  string
+	}{
+		{
+			name:       "nil_projection_empty_status",
+			projection: nil,
+			result:     agentpkg.DeriveResult{},
+			wantStatus: string(agentpkg.StatusClear),
+			wantAgent:  "fallback",
+		},
+		{
+			name:       "nil_projection_non_empty_status",
+			projection: nil,
+			result:     agentpkg.DeriveResult{Status: agentpkg.StatusRunning},
+			wantStatus: string(agentpkg.StatusRunning),
+			wantAgent:  "fallback",
+		},
+		{
+			name:       "non_nil_projection_no_top_frame",
+			projection: &SessionProjection{},
+			result:     agentpkg.DeriveResult{},
+			wantStatus: string(agentpkg.StatusClear),
+			wantAgent:  "fallback",
+		},
+		{
+			name: "non_nil_projection_with_top_frame",
+			projection: &SessionProjection{
+				TopFrame: &store.Frame{AgentType: "cc", Status: agentpkg.StatusRunning},
+			},
+			result:     agentpkg.DeriveResult{},
+			wantStatus: string(agentpkg.StatusRunning),
+			wantAgent:  "cc",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildProjectionNormalized(tc.projection, "fallback", "test_event", 0, tc.result)
+			if got.Status != tc.wantStatus {
+				t.Fatalf("Status = %q, want %q", got.Status, tc.wantStatus)
+			}
+			if got.AgentType != tc.wantAgent {
+				t.Fatalf("AgentType = %q, want %q", got.AgentType, tc.wantAgent)
+			}
+		})
+	}
+}
