@@ -178,3 +178,144 @@ function trySwitch(deps: Deps, hostId: string, sessionCode: string): boolean {
     return false
   }
 }
+
+/**
+ * Host-narrowed slot context (Phase 1c — spec §3.2 HOST_ACTIONS row + §3.3.1).
+ *
+ * `hostId` is required non-null string — host detail page (the only Phase 1c
+ * caller) owns the hostId via prop. spec §3.3.1 explicitly defers
+ * HostSlotContext shape to 1c. We pick the minimal shape today; widen only
+ * when a real caller demands it.
+ */
+export interface HostSlotContext extends SlotContext {
+  hostId: string
+}
+
+interface HostDeps {
+  switchToSession: (hostId: string, sessionCode: string) => void
+  /**
+   * Required — Finding 1 of plan-review job task-moijtc8w-w8rf8w + R2 of
+   * codex PR #705 adversarial review.
+   *
+   * Host liveness probe. Must return false if the host record (the row
+   * matching `hostId` in `useHostStore.hosts`) was deleted while async work
+   * was in flight — `useHostStore.getDaemonBase` falls back to
+   * `activeHostId ?? hostOrder[0]` when the host is gone, so without this
+   * guard a destructive command can ship to the wrong host.
+   *
+   * Called at THREE sites for defense in depth:
+   *   1. Pre-create — at the top of runHostSlot, before createSession.
+   *      Catches the stale-click case (host already dead at click time, e.g.
+   *      Settings deletion before the chip re-renders disabled). Without
+   *      this, an orphan session would still be created on a fallback host.
+   *   2. Post-create — after createSession resolves, before executeCommand.
+   *      Catches the during-await race (host deleted during the createSession
+   *      Promise window). Stops destructive commands from shipping.
+   *   3. Retry — inside the retry action. Catches the between-toast-and-retry
+   *      window where the toast sits before the user clicks Retry.
+   *
+   * On a successful pipeline (host alive throughout) you'll see TWO calls:
+   * pre-create + post-create. With send-keys failure → user clicks Retry →
+   * three calls. Tests should expect ≥1 call rather than exact counts.
+   */
+  assertHostLive: (hostId: string) => boolean
+}
+
+/**
+ * Host-slot executor — same failure-precedence rules as runWorkspaceSlot but
+ * with a host-side (not workspace-side) liveness probe. See spec §3.3 for
+ * shared failure UX, plan §1c for HOST_ACTIONS-specific carve-outs.
+ */
+export async function runHostSlot(
+  cmd: QuickCommand,
+  ctx: HostSlotContext,
+  deps: HostDeps,
+): Promise<void> {
+  const t = useI18nStore.getState().t
+  const toast = useUndoToast.getState()
+
+  // R2 fix (codex adversarial review) — pre-createSession host liveness
+  // gate. Without this, a stale chip click after Settings-side host
+  // deletion (before the chip re-renders disabled) would still call
+  // createSession; useHostStore.getDaemonBase falls back to
+  // activeHostId ?? hostOrder[0], so the orphan session would be created
+  // on the WRONG host. The post-create probe stops executeCommand but
+  // can't undo the orphan session. Pre-check + post-check + retry-check
+  // is defense in depth.
+  if (!isHostLive(deps, ctx.hostId)) {
+    toast.show(t('quick_commands.toast.switch_failed'))
+    return
+  }
+
+  let sessionCode: string
+  try {
+    const session = await createSession(ctx.hostId, genSessionName(cmd), ctx.cwd ?? '~', 'terminal')
+    // Finding 6 — blank session.code is treated as a create failure: the
+    // server returned 200 but produced no usable handle. Letting it through
+    // would surface a confusing 404 from executeCommand later.
+    const code = session.code?.trim()
+    if (!code) {
+      toast.show(t('quick_commands.toast.create_failed', { reason: 'empty session code' }))
+      return
+    }
+    sessionCode = code
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    toast.show(t('quick_commands.toast.create_failed', { reason }))
+    return
+  }
+
+  // Finding 1 — host liveness gate. Defense in depth (mirrors PR #686
+  // round-4 / #690 round-2 A2 for workspace): typeof + try/catch + strict
+  // bool. Even with type-level required, a cast-bypass or buggy probe must
+  // fail closed so executeCommand never ships to a fallback host.
+  if (!isHostLive(deps, ctx.hostId)) {
+    toast.show(t('quick_commands.toast.switch_failed'))
+    return
+  }
+
+  let sendKeysOk = true
+  try {
+    await executeCommand(ctx.hostId, sessionCode, cmd.command)
+  } catch {
+    sendKeysOk = false
+  }
+
+  const switchOk = tryHostSwitch(deps, ctx.hostId, sessionCode)
+
+  if (sendKeysOk && switchOk) return
+
+  if (!switchOk) {
+    toast.show(t('quick_commands.toast.switch_failed'))
+    return
+  }
+
+  toast.show(
+    t('quick_commands.toast.send_keys_failed'),
+    () => {
+      // Finding 1 — retry must re-check host liveness. Toast can sit
+      // for several seconds; user may have deleted the host in that window.
+      if (!isHostLive(deps, ctx.hostId)) return
+      void executeCommand(ctx.hostId, sessionCode, cmd.command).catch(() => undefined)
+    },
+    t('quick_commands.toast.retry'),
+  )
+}
+
+function isHostLive(deps: HostDeps, hostId: string): boolean {
+  try {
+    if (typeof deps.assertHostLive !== 'function') return false
+    return deps.assertHostLive(hostId) === true
+  } catch {
+    return false
+  }
+}
+
+function tryHostSwitch(deps: HostDeps, hostId: string, sessionCode: string): boolean {
+  try {
+    deps.switchToSession(hostId, sessionCode)
+    return true
+  } catch {
+    return false
+  }
+}
