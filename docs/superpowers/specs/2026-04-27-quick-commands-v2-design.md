@@ -281,6 +281,10 @@ picker owner（持有 promise resolver 的元件）必須保證 `resolveHostId()
 
 **Phase 1c HOST_ACTIONS 影響**：強制需 `runHostSlot` / `HostSlotContext`（不再選擇性建議，是 type-level hard 約束）。`HostSlotContext` 形狀以 1c 寫到時的 cwd 解析需求為準（spec §3.2 表格）；不在 #690 預先設計。
 
+**Phase 1c 補強：host liveness probe（plan-review job `task-moijtc8w-w8rf8w` Finding 1）**：1c 實作時發現 `useHostStore.getDaemonBase(hostId)` 在 host 不存在時 fallback 到 `activeHostId ?? hostOrder[0]`，造成「createSession(h1) + Settings-delete-h1 + executeCommand(h1)」會把指令送到別台 host。為此 `runHostSlot.HostDeps` 加 required `assertHostLive: (hostId) => boolean`，在 createSession 後、executeCommand 前 fail-closed；retry action 內也要再驗一次（toast 期間 host 仍可被刪）。
+
+**`assertHostLive` 與 `assertContextLive` 不混用**：兩者的 origin 不同 — `assertContextLive` 是 workspace-context destruction probe（user 在 sidebar 刪 workspace），`assertHostLive` 是 host record race probe（user 在 Settings 刪 host）。Type-level negative test 對 `runHostSlot.Deps` 斷言「不可有 `assertContextLive` / `resolveHostId`」、positive 斷言「必須有 `assertHostLive`」；對 `runWorkspaceSlot.Deps` 維持原有「必須有 `assertContextLive`」斷言。Cross-shape probe pollution 會立即失敗 `tsc -b`。
+
 **驗收**：
 - 未傳 `assertContextLive` 或 `workspaceId` 的 caller 編譯期 fail
 - 既有 7 個 test 補 `assertContextLive: () => true` 作 negative control（不影響 toast assertion）
