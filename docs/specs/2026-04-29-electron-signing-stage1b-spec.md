@@ -2,7 +2,7 @@
 
 - **Version**: 1.0.0-alpha.248 (worktree base; ship target alpha.250+, see §0.1)
 - **Date**: 2026-04-29
-- **Spec revision**: v1.1 (2026-04-29) — incorporates codex spec review (job `task-moivfw7n-a8x1ph`, 8 findings: 2 P1 + 4 P2 + 2 P3, all addressed).
+- **Spec revision**: v1.2 (2026-04-29) — v1.1 addressed codex spec review (job `task-moivfw7n-a8x1ph`, 8 findings, all incorporated). v1.2 backports plan-review findings that touch spec test contract: §4.1b uses ordered array equality (P1-2), §4.1c/d/e formalise the preload/daemon/SPA-absence guards spec §6.1 had asserted as acceptance but had not detailed (P1-1, P2-7), §6.1 final test count corrected to 26 (job `task-moiw8665-6ak7i6`).
 - **Base**: `96bae3ce` (main @ alpha.248)
 - **Author**: claude-code + wake
 - **Status**: Draft (pending codex review)
@@ -248,30 +248,85 @@ it('updater no longer ships runtime signing helpers', () => {
 Purpose: regression guard. Future PRs that re-introduce runtime
 codesign will fail this test, surfacing intent for explicit review.
 
-### 4.1b Add static progress-sequence guard (P2-2)
+### 4.1b Add static progress-sequence guard
 
 Adds one static test asserting `applyUpdate` emits exactly the three
-expected progress literals, and no others:
+expected progress literals, in order, with no duplicates and no
+extras. Uses ordered array equality (not `Set`) so a re-ordered or
+duplicated step also fails:
 
 ```ts
-it('updater applyUpdate emits exactly downloading → extracting → applying', () => {
+it('updater applyUpdate emits exactly downloading → extracting → applying in order', () => {
   const updater = readFileSync(resolve(root, 'electron/updater.ts'), 'utf8')
-  // Positive: each expected literal appears at least once
-  expect(updater).toMatch(/progress\(\s*['"]downloading['"]\s*\)/)
-  expect(updater).toMatch(/progress\(\s*['"]extracting['"]\s*\)/)
-  expect(updater).toMatch(/progress\(\s*['"]applying['"]\s*\)/)
-  // Negative: no other progress(...) literal sneaks in
   const literals = Array.from(
     updater.matchAll(/progress\(\s*['"]([^'"]+)['"]\s*\)/g),
     (m) => m[1],
   )
-  expect(new Set(literals)).toEqual(new Set(['downloading', 'extracting', 'applying']))
+  expect(literals).toEqual(['downloading', 'extracting', 'applying'])
 })
 ```
 
 Purpose: prevents `signing` (or any new step) from being silently
-re-introduced and protects the SPA `stepLabels` map from drifting out
-of sync with updater emits.
+re-introduced; protects the SPA `stepLabels` map from drifting out
+of sync with updater emits; catches order regressions.
+
+### 4.1c Add preload-gate guard
+
+Adds one static test asserting `electron/preload.ts` continues to
+expose dev-update API only behind `PDX_DEV_MODE`:
+
+```ts
+it('preload still gates dev update API behind PDX_DEV_MODE', () => {
+  const preload = readFileSync(resolve(root, 'electron/preload.ts'), 'utf8')
+  expect(preload).toMatch(/PDX_DEV_MODE/)
+  expect(preload).toMatch(/applyUpdate:/)
+  expect(preload).toMatch(/checkUpdate:/)
+  expect(preload).toMatch(/onUpdateProgress:/)
+  const gateIdx = preload.indexOf('PDX_DEV_MODE')
+  const applyIdx = preload.indexOf('applyUpdate:')
+  expect(gateIdx).toBeGreaterThan(-1)
+  expect(applyIdx).toBeGreaterThan(gateIdx)
+})
+```
+
+Purpose: locks the §3.4 claim 4 contract — production renderers
+have no `applyUpdate` channel exposed.
+
+### 4.1d Add daemon-gate guard
+
+Adds one static test asserting `internal/module/dev/module.go`
+continues to refuse `/api/dev/update/*` route registration unless
+`PDX_DEV_MODE === "1"`:
+
+```ts
+it('daemon still gates /api/dev/update routes behind PDX_DEV_MODE=1', () => {
+  const mod = readFileSync(resolve(root, 'internal/module/dev/module.go'), 'utf8')
+  expect(mod).toMatch(/os\.Getenv\("PDX_DEV_MODE"\)\s*!=\s*"1"/)
+  expect(mod).toMatch(/\/api\/dev\/update\/check/)
+  expect(mod).toMatch(/\/api\/dev\/update\/download/)
+})
+```
+
+Purpose: locks the §3.4 claim 4 contract on the daemon side.
+
+### 4.1e Add SPA-absence guard
+
+Adds one static test asserting the SPA `stepLabels` map no longer
+carries a `signing` entry (matches the §3.1 SPA-row deletion):
+
+```ts
+it('SPA stepLabels no longer carries the signing entry', () => {
+  const tsx = readFileSync(
+    resolve(root, 'spa/src/components/settings/DevEnvironmentSection.tsx'),
+    'utf8',
+  )
+  expect(tsx).not.toMatch(/signing\s*:\s*['"]Signing app/)
+})
+```
+
+Purpose: prevents the dead label from being re-introduced while
+keeping the rest of the file (including any unrelated comments
+mentioning "signing") untouched.
 
 ### 4.2 Existing static tests preserved unchanged
 
@@ -344,11 +399,16 @@ manual verification).
 - `electron/signing.test.ts` 2 existing static tests (§4.2) still pass.
 - `spa/src/components/settings/DevEnvironmentSection.tsx` `stepLabels`
   has no `signing` entry.
-- `pnpm --prefix electron test` green. Expected count drops from 39
-  to 23: `signing.test.ts` from 20 → 4 (2 existing static preserved
-  + 1 new absence smoke replaces the old 3rd presence test + 1 new
-  progress-sequence guard from §4.1b); `keybindings.test.ts` 19
-  unchanged.
+- `pnpm --prefix electron test` green. Expected count moves from 39
+  to **26**: `signing.test.ts` from 20 → 7
+  - 2 existing static preserved (package.json + build-electron.mjs)
+  - 1 new absence smoke (replaces the old 3rd presence test) — §4.1
+  - 1 new progress-sequence guard — §4.1b
+  - 1 new preload-gate guard (PDX_DEV_MODE bridge surface) — §6.1
+  - 1 new daemon-gate guard (`/api/dev/update/*` route) — §6.1
+  - 1 new SPA-absence guard (`stepLabels.signing` removed) — §6.1
+
+  `keybindings.test.ts` 19 unchanged.
 - `pnpm exec electron-vite build` green (no type/build regressions).
 - `pnpm --prefix spa exec tsc -p ../electron/tsconfig.json --noEmit`
   green (no dangling references).
