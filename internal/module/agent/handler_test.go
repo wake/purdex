@@ -23,6 +23,51 @@ import (
 
 // fakeSessionProvider is defined in fakes_test.go (shared test fixture).
 
+func TestEventRequest_Unmarshal_PurdexNameTag(t *testing.T) {
+	var req EventRequest
+	if err := json.Unmarshal([]byte(`{"purdex_name":"PdxSessionStart"}`), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.PurdexName != "PdxSessionStart" {
+		t.Errorf("got PurdexName=%q want PdxSessionStart", req.PurdexName)
+	}
+}
+
+func TestEventRequest_Unmarshal_EventNameAlias(t *testing.T) {
+	var req EventRequest
+	if err := json.Unmarshal([]byte(`{"event_name":"SessionStart"}`), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.PurdexName != "SessionStart" {
+		t.Errorf("legacy event_name alias: got PurdexName=%q want SessionStart", req.PurdexName)
+	}
+}
+
+func TestEventRequest_Unmarshal_PurdexNamePriority(t *testing.T) {
+	var req EventRequest
+	if err := json.Unmarshal([]byte(`{"purdex_name":"PdxStop","event_name":"Stop"}`), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.PurdexName != "PdxStop" {
+		t.Errorf("purdex_name should win over event_name: got %q", req.PurdexName)
+	}
+}
+
+func TestEventRequest_Marshal_OnlyPurdexName(t *testing.T) {
+	req := EventRequest{PurdexName: "PdxSessionStart"}
+	out, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, `"purdex_name":"PdxSessionStart"`) {
+		t.Errorf("marshal missing purdex_name: %s", s)
+	}
+	if strings.Contains(s, `"event_name"`) {
+		t.Errorf("marshal must not emit event_name alias: %s", s)
+	}
+}
+
 func newTestModule(t *testing.T) *Module {
 	t.Helper()
 	events, err := store.OpenAgentEvent(":memory:")
