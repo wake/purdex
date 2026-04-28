@@ -9,13 +9,6 @@ import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStor
 interface WorkspaceState {
   workspaces: Workspace[]
   activeWorkspaceId: string | null
-  /**
-   * Transient hint set by removeWorkspace when the caller passed
-   * keepSettings:true (tear-off / merge). Read by path-cache auto-cleanup
-   * (and other workspace-scoped caches) so they can skip clearing for that
-   * id. Excluded from partialize so it never persists or sync-broadcasts.
-   */
-  _lastRemovedKeepSettings?: string
 
   addWorkspace: (name: string, opts?: { icon?: string }) => Workspace
   removeWorkspace: (wsId: string, opts?: { keepSettings?: boolean }) => void
@@ -68,11 +61,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const activeId = state.activeWorkspaceId === wsId
             ? (remaining[0]?.id ?? null)
             : state.activeWorkspaceId
-          return {
-            workspaces: remaining,
-            activeWorkspaceId: activeId,
-            _lastRemovedKeepSettings: opts?.keepSettings ? wsId : undefined,
-          }
+          return { workspaces: remaining, activeWorkspaceId: activeId }
         })
       },
 

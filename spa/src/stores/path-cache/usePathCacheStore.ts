@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { STORAGE_KEYS, purdexStorage, syncManager } from '../../lib/storage'
+import { STORAGE_KEYS, purdexStorage } from '../../lib/storage'
 
 const MAX_DIRS_PER_SCOPE = 50
 const scopeKey = (hostId: string, workspaceId: string) => `${hostId}:${workspaceId}`
@@ -125,6 +125,8 @@ export const usePathCacheStore = create<PathCacheState>()(
   ),
 )
 
-// Cross-window propagation — every persisted purdex-* store registers so a
-// write in one window broadcasts to others (matches workspace / tab / etc).
-syncManager.register(STORAGE_KEYS.PATH_CACHE_V1, usePathCacheStore)
+// NOTE: intentionally NOT registered with syncManager. Cache is scoped to
+// (hostId, cwd) and lookups only happen inside the window that owns the
+// session — cross-window in-memory copies would be dead state, and sync would
+// recreate the tear-off race that R2-D1 exposed. Persisted state still
+// survives via per-origin localStorage when a tear-off opens a new window.
