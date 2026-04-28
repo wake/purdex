@@ -9,10 +9,16 @@ import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
 import { useLayoutStore } from './stores/useLayoutStore'
+import { attachPathCacheAutoCleanup } from './stores/path-cache/auto-cleanup'
 
 registerBuiltinLocales()
 registerBuiltinThemes()
 registerBuiltinModules()
+
+const disposePathCacheCleanup = attachPathCacheAutoCleanup()
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => disposePathCacheCleanup())
+}
 
 useLayoutStore.getState().reconcileViews()
 
