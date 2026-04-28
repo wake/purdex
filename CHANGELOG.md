@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.244] - 2026-04-28
+
+### Feat(spa): Quick Commands v2 Phase 1b' — Plus hover popover (WORKSPACE_ACTIONS) (#701)
+
+Quick Commands v2 Phase 1b' — adds the Plus-button hover popover entry-point for `WORKSPACE_ACTIONS` chips on each `WorkspaceRow` in the sidebar, with mobile/touch long-press fallback. Marked transitional and packaged as a stand-alone PR so it can be reverted/replaced later without touching the stable Phase 1b foundation (data layer / Settings UI / context menu).
+
+- Desktop: hover (or keyboard focus) on Plus → chip popover unfolds left of the button. Mouseleave / blur the wrapper → popover collapses.
+- Mobile/touch: long-press (≥500ms) on Plus → popover latches open; release-then-tap a chip executes. Short tap (<500ms) → original add-tab behavior unchanged. Tapping outside the hub closes the popover.
+- `HostPickerPopover` portal'd to `document.body` so the picker escapes the transformed wrapper subtree and isn't torn down by hub blur events. Sync `onPickerOpenChange` notification from `resolveHostId` / `settlePicker` (not `useEffect`) so the hub's `pickerOpenRef` updates BEFORE child auto-focus fires blur on the chip.
+- Wires `runWorkspaceSlot` with the #690 `assertContextLive` enforcement (alpha.242); passes a workspace-liveness probe for fail-closed during async `createSession`.
+- `switchToSession` carries the canonical pre-check / read-back / rollback transaction so workspace-deletion mid-`executeCommand` leaves no orphan tab + no active-tab/workspace mutation.
+- Long-press click suppressor is now one-shot — cleared inline in `onClick` and via `popoverOpen=false` effect, so post-touch mouse/keyboard activation isn't silently dropped on hybrid devices.
+- Four rounds of codex review collapsed to zero findings: R1 standard (3 P2), R2 3-parallel attacker/defender/file-quality (5 medium-high), R3 verification (1 medium portal+focus race), R4 final approve. Twelve regression tests added across `WorkspaceQuickActionsPopover.test.tsx` + `WorkspaceRow.test.tsx`.
+
+### Followup issues
+
+- #689 — server-side orphan session cleanup (Phase 2)
+- #695 — ESLint custom rule limiting `runWorkspaceSlot` / `runHostSlot` second/third arg cast/spread escape hatches
+
 ## [1.0.0-alpha.243] - 2026-04-28
 
 ### Docs(specs): hook→status→燈號 audit (W1, fix-spec PR-2) (#692)
