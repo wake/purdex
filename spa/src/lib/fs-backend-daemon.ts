@@ -1,5 +1,6 @@
 import type { FsBackend } from './fs-backend'
 import type { FileStat, FileEntry } from '../types/fs'
+import { useHostStore } from '../stores/useHostStore'
 
 export class DaemonBackend implements FsBackend {
   readonly id = 'daemon'
@@ -66,5 +67,36 @@ export class DaemonBackend implements FsBackend {
 
   async rename(from: string, to: string): Promise<void> {
     await this.post('/api/fs/rename', { from, to })
+  }
+}
+
+/**
+ * Build an `FsBackend` permanently bound to `hostId`.
+ *
+ * Contrast with the active-host proxy in `register-modules/fs-backends.tsx`
+ * which intentionally re-resolves the active host on every call. The
+ * file-open pipeline (P5) needs the opposite guarantee: once `tryOpenFile`
+ * captures `ctx.hostId`, every subsequent `stat` along that flow MUST stay
+ * on that host even if the user switches active host mid-flight (Deviation 2
+ * + attack-critical C5). Each `getDaemon()` call still re-reads
+ * `useHostStore` so daemon-base / auth-header changes for *that* host stay
+ * picked up.
+ */
+export function createDaemonBackendForHost(hostId: string): FsBackend {
+  const getDaemon = (): DaemonBackend => {
+    const state = useHostStore.getState()
+    return new DaemonBackend(state.getDaemonBase(hostId), () => state.getAuthHeaders(hostId))
+  }
+  return {
+    id: 'daemon',
+    label: 'Remote Host',
+    available: () => !!useHostStore.getState().hosts[hostId],
+    read: (path) => getDaemon().read(path),
+    write: (path, content) => getDaemon().write(path, content),
+    stat: (path) => getDaemon().stat(path),
+    list: (path) => getDaemon().list(path),
+    mkdir: (path, recursive) => getDaemon().mkdir(path, recursive),
+    delete: (path, recursive) => getDaemon().delete(path, recursive),
+    rename: (from, to) => getDaemon().rename(from, to),
   }
 }
