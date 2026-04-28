@@ -12,6 +12,70 @@ import (
 	"github.com/wake/purdex/internal/config"
 )
 
+func TestBuildHookPayload_MarshalsPurdexName(t *testing.T) {
+	stdin := strings.NewReader(`{}`)
+	p := buildHookPayload("sess", "PdxSessionStart", stdin, "cc", hookProvenance{
+		TmuxPaneID:      "%5",
+		SenderPID:       1,
+		SenderStartTime: "Sun Apr 20 01:30:00 2026",
+	})
+	out, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, `"purdex_name":"PdxSessionStart"`) {
+		t.Errorf("payload missing purdex_name: %s", s)
+	}
+	if strings.Contains(s, `"event_name"`) {
+		t.Errorf("payload must not emit legacy event_name: %s", s)
+	}
+}
+
+func TestRunHook_PositionalArgPassedAsPurdexName(t *testing.T) {
+	origSession := queryTmuxSessionFn
+	origResolve := resolveHookProvenanceFn
+	origPost := postHookEventFn
+	origLoad := loadConfigFn
+	origStdin := os.Stdin
+	t.Cleanup(func() {
+		queryTmuxSessionFn = origSession
+		resolveHookProvenanceFn = origResolve
+		postHookEventFn = origPost
+		loadConfigFn = origLoad
+		os.Stdin = origStdin
+	})
+
+	queryTmuxSessionFn = func() string { return "work" }
+	resolveHookProvenanceFn = func() hookProvenance {
+		return hookProvenance{
+			TmuxPaneID:      "%5",
+			SenderPID:       42,
+			SenderStartTime: "Sun Apr 20 01:30:00 2026",
+		}
+	}
+	loadConfigFn = func(string) (config.Config, error) { return config.Config{}, nil }
+
+	var got hookPayload
+	postHookEventFn = func(_ string, _ string, payload hookPayload) error {
+		got = payload
+		return nil
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	_ = w.Close()
+	os.Stdin = r
+
+	runHook([]string{"--agent", "cc", "PdxSessionStart"})
+
+	if got.PurdexName != "PdxSessionStart" {
+		t.Errorf("PurdexName = %q, want PdxSessionStart", got.PurdexName)
+	}
+}
+
 func TestBuildHookPayload(t *testing.T) {
 	stdin := strings.NewReader(`{"type":"Stop","session_id":"abc123"}`)
 	p := buildHookPayload("my-session", "Stop", stdin, "", hookProvenance{
@@ -23,8 +87,8 @@ func TestBuildHookPayload(t *testing.T) {
 	if p.TmuxSession != "my-session" {
 		t.Errorf("TmuxSession = %q, want %q", p.TmuxSession, "my-session")
 	}
-	if p.EventName != "Stop" {
-		t.Errorf("EventName = %q, want %q", p.EventName, "Stop")
+	if p.PurdexName != "Stop" {
+		t.Errorf("PurdexName = %q, want %q", p.PurdexName, "Stop")
 	}
 	if p.TmuxPaneID != "%5" {
 		t.Errorf("TmuxPaneID = %q, want %%5", p.TmuxPaneID)
@@ -57,8 +121,8 @@ func TestBuildHookPayload_EmptyStdin(t *testing.T) {
 		SenderStartTime: "Sun Apr 20 01:40:00 2026",
 	})
 
-	if p.EventName != "Start" {
-		t.Errorf("EventName = %q, want %q", p.EventName, "Start")
+	if p.PurdexName != "Start" {
+		t.Errorf("PurdexName = %q, want %q", p.PurdexName, "Start")
 	}
 	if string(p.RawEvent) != "{}" {
 		t.Errorf("RawEvent = %s, want {}", string(p.RawEvent))
@@ -113,7 +177,7 @@ func TestPostHookEvent(t *testing.T) {
 	p := hookPayload{
 		TmuxSession:     "test-sess",
 		TmuxPaneID:      "%9",
-		EventName:       "Stop",
+		PurdexName:      "Stop",
 		RawEvent:        json.RawMessage(`{"foo":"bar"}`),
 		SenderPID:       777,
 		SenderStartTime: "Sun Apr 20 01:30:00 2026",
@@ -126,8 +190,8 @@ func TestPostHookEvent(t *testing.T) {
 	if received.TmuxSession != "test-sess" {
 		t.Errorf("received TmuxSession = %q, want %q", received.TmuxSession, "test-sess")
 	}
-	if received.EventName != "Stop" {
-		t.Errorf("received EventName = %q, want %q", received.EventName, "Stop")
+	if received.PurdexName != "Stop" {
+		t.Errorf("received PurdexName = %q, want %q", received.PurdexName, "Stop")
 	}
 	if received.TmuxPaneID != "%9" {
 		t.Errorf("received TmuxPaneID = %q, want %%9", received.TmuxPaneID)
@@ -154,7 +218,7 @@ func TestPostHookEvent_NoToken(t *testing.T) {
 
 	p := hookPayload{
 		TmuxSession:     "x",
-		EventName:       "Stop",
+		PurdexName:      "Stop",
 		RawEvent:        json.RawMessage(`{}`),
 		SenderPID:       1,
 		SenderStartTime: "Sun Apr 20 01:30:00 2026",
@@ -171,7 +235,7 @@ func TestPostHookEvent_NoToken(t *testing.T) {
 func TestPostHookEvent_ServerDown(t *testing.T) {
 	p := hookPayload{
 		TmuxSession:     "x",
-		EventName:       "Stop",
+		PurdexName:      "Stop",
 		RawEvent:        json.RawMessage(`{}`),
 		SenderPID:       1,
 		SenderStartTime: "Sun Apr 20 01:30:00 2026",
