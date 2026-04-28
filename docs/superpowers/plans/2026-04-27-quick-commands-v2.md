@@ -4320,9 +4320,308 @@ Expected: clean
 
 ## Phase 1c — HOST_ACTIONS 入口（小 PR）
 
-> **⚠️ #690 superseded note（2026-04-28）**：本 phase 範例（Task 1c.1b）寫「HOST_ACTIONS 與 WORKSPACE_ACTIONS 共用 `runWorkspaceSlot`」— 此設計與 [issue #690](https://github.com/wake/purdex/issues/690) / spec §3.3.1 衝突。enforcement 落地後 `runWorkspaceSlot.Deps.assertContextLive` 為 required，但 host caller 無 workspace 可驗。1c 實作時須**新建 `runHostSlot`**（或以 generic 分流 `WorkspaceDeps` / `HostDeps`），不得 reuse `runWorkspaceSlot`；分流形狀以 1c 寫到時的 cwd 解析需求為準（spec §3.2 表格）。範例本身保留為 historical reference。
+> **2026-04-28 — Phase 1c 改寫**：原 Task 1c.1b 共用 `runWorkspaceSlot` 的設計被 PR #694（#690 enforcement）封死 — `runWorkspaceSlot.Deps.assertContextLive` 為 required，`WorkspaceSlotContext.workspaceId` 為 required 非 null string；host caller 無此資訊，編譯期即 fail。
+>
+> 改寫後 Phase 1c 增加 **Task 1c.0**：新建 `runHostSlot` + `HostSlotContext`（無 workspace 邊界、無 picker、無 destructive-context probe），由 1c.1b 使用。`HostSlotContext` 形狀依 spec §3.2 表格 HOST_ACTIONS ctx `{ hostId, cwd? }` 收窄為 `hostId: string`（非 null）。`assertContextLive` 不引入 — 主機詳情頁的 host record 不會因 tab 關閉而消失，沒有 workspace 等級的「context 在 async 中被 user 摧毀」風險（spec §3.3.1 留白由 1c 自行定義）。
 
 **目標：** Host 詳情頁加 quick actions 區塊；user 設 mount = HOST 即可在 host 頁看到按鈕。
+
+### Task 1c.0: 新建 `runHostSlot` + `HostSlotContext`
+
+**Files:**
+- Modify: `spa/src/lib/slot-executor.ts`
+- Modify: `spa/src/lib/slot-executor.test.ts`
+
+**設計：**
+- `HostSlotContext extends SlotContext { hostId: string }` — `hostId` 收窄為 required string（host 詳情頁 prop 來源即為非 null hostId）。`workspaceId` / `cwd` 沿用父 `SlotContext` 的 optional 欄位，不引入新欄位
+- `HostDeps { switchToSession: (hostId, sessionCode) => void }` — 不需要 `resolveHostId`（host 已知）、不需要 `assertContextLive`（無 destruction risk；spec §3.3.1 把 `HostSlotContext` 形狀留白由 1c 定義 → 不預先設計 #690 等價物）
+- 失敗 UX 與 `runWorkspaceSlot` 等價（spec §3.3）：
+  - createSession fail → `quick_commands.toast.create_failed`，no action
+  - send-keys fail + switch ok → `quick_commands.toast.send_keys_failed`，action = retry
+  - switch fail（with or without send-keys fail）→ `quick_commands.toast.switch_failed`，no action（避免 retry 一個 user 看不到的 orphan session）
+- cwd：`ctx.cwd ?? '~'`（host default）；session 名稱沿用 `genSessionName(cmd)` helper
+
+**理由摘錄（記錄於 commit message）：** spec §3.3.1 定 `HostSlotContext` 形狀以 1c 寫到時的需求為準。本 task 限縮為「不需 picker、不需 workspace-context probe」的最簡形狀；未來若 HOST_ACTIONS 在其他更易失效的 host context（如即將被刪除的 host record）上 mount，再行擴充。YAGNI 不預先設計。
+
+- [ ] **Step 1: Write failing tests**
+
+Append to `spa/src/lib/slot-executor.test.ts`：
+
+```ts
+import { runHostSlot, type HostSlotContext } from './slot-executor'
+
+describe('runHostSlot', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useUndoToast.setState({ toast: null })
+  })
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('happy path — creates session with host default cwd, sends keys, switches focus', async () => {
+    const switchFocus = vi.fn()
+    ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 'sess-h',
+      name: 'A',
+      cwd: '~',
+      mode: 'terminal',
+    })
+    ;(executeCommand as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+
+    await runHostSlot(
+      { id: 'cmd-h', name: 'HostCmd', command: 'echo h' },
+      { hostId: 'h1' },
+      { switchToSession: switchFocus },
+    )
+
+    // host default cwd ('~') applied when ctx.cwd is undefined
+    expect(createSession).toHaveBeenCalledWith('h1', expect.any(String), '~', 'terminal')
+    expect(executeCommand).toHaveBeenCalledWith('h1', 'sess-h', 'echo h')
+    expect(switchFocus).toHaveBeenCalledWith('h1', 'sess-h')
+    expect(useUndoToast.getState().toast).toBeNull()
+  })
+
+  it('respects ctx.cwd override when provided', async () => {
+    const switchFocus = vi.fn()
+    ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 'sess-h', name: 'A', cwd: '/srv', mode: 'terminal',
+    })
+    ;(executeCommand as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+
+    await runHostSlot(
+      { id: 'cmd-h', name: 'HostCmd', command: 'echo h' },
+      { hostId: 'h1', cwd: '/srv' },
+      { switchToSession: switchFocus },
+    )
+    expect(createSession).toHaveBeenCalledWith('h1', expect.any(String), '/srv', 'terminal')
+  })
+
+  it('createSession failure — toast WITHOUT action button', async () => {
+    const switchFocus = vi.fn()
+    ;(createSession as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('500'))
+
+    await runHostSlot(
+      { id: 'cmd-h', name: 'HostCmd', command: 'echo h' },
+      { hostId: 'h1' },
+      { switchToSession: switchFocus },
+    )
+
+    expect(switchFocus).not.toHaveBeenCalled()
+    expect(executeCommand).not.toHaveBeenCalled()
+    const toast = useUndoToast.getState().toast
+    expect(toast).not.toBeNull()
+    expect(toast!.message).toMatch(/Failed to start session/i)
+    expect(toast!.action).toBeUndefined()
+    expect(toast!.actionLabel).toBeUndefined()
+  })
+
+  it('send-keys failure — STILL switches focus + toast carries Retry action', async () => {
+    const switchFocus = vi.fn()
+    ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 'sess-h', name: 'A', cwd: '~', mode: 'terminal',
+    })
+    ;(executeCommand as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('503'))
+
+    await runHostSlot(
+      { id: 'cmd-h', name: 'HostCmd', command: 'echo h' },
+      { hostId: 'h1' },
+      { switchToSession: switchFocus },
+    )
+
+    expect(switchFocus).toHaveBeenCalledWith('h1', 'sess-h')
+    const toast = useUndoToast.getState().toast
+    expect(toast).not.toBeNull()
+    expect(toast!.message).toMatch(/Session created.*command failed/i)
+    expect(toast!.action).toBeTypeOf('function')
+    expect(toast!.actionLabel).toMatch(/retry/i)
+
+    // retry triggers executeCommand again
+    ;(executeCommand as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    toast!.action!()
+    await Promise.resolve()
+    expect(executeCommand).toHaveBeenCalledTimes(2)
+  })
+
+  it('switchToSession failure — toast WITHOUT action button', async () => {
+    const switchFocus = vi.fn().mockImplementation(() => { throw new Error('switch failed') })
+    ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 'sess-h', name: 'A', cwd: '~', mode: 'terminal',
+    })
+    ;(executeCommand as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+
+    await runHostSlot(
+      { id: 'cmd-h', name: 'HostCmd', command: 'echo h' },
+      { hostId: 'h1' },
+      { switchToSession: switchFocus },
+    )
+
+    const toast = useUndoToast.getState().toast
+    expect(toast!.message).toMatch(/could not switch/i)
+    expect(toast!.action).toBeUndefined()
+  })
+
+  it('send-keys AND switch BOTH fail — surfaces switch_failed (no retry)', async () => {
+    const switchFocus = vi.fn().mockImplementation(() => { throw new Error('switch failed') })
+    ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 'sess-orphan', name: 'A', cwd: '~', mode: 'terminal',
+    })
+    ;(executeCommand as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('send-keys failed'))
+
+    await runHostSlot(
+      { id: 'cmd-h', name: 'HostCmd', command: 'echo h' },
+      { hostId: 'h1' },
+      { switchToSession: switchFocus },
+    )
+
+    const toast = useUndoToast.getState().toast
+    expect(toast!.message).toMatch(/could not switch/i)
+    expect(toast!.message).not.toMatch(/command failed/i)
+    expect(toast!.action).toBeUndefined()
+  })
+
+  // Type-level invariants verified by `tsc -b` (pnpm run build), NOT by vitest
+  // runtime — same caveat as the runWorkspaceSlot type-level test above.
+  // Phase 1c contract: HostSlotContext.hostId is required non-null string;
+  // HostDeps does NOT carry assertContextLive or resolveHostId.
+  it('type-level invariants verified by tsc -b — HostSlotContext.hostId required, HostDeps narrow', () => {
+    type Deps = Parameters<typeof runHostSlot>[2]
+    type Ctx = Parameters<typeof runHostSlot>[1]
+    type IsAny<T> = 0 extends 1 & T ? true : false
+
+    type DepsIsNotAny = IsAny<Deps> extends true ? false : true
+    type HostIdRequired = object extends Pick<Ctx, 'hostId'> ? false : true
+    type HostIdRejectsNull = null extends Ctx['hostId'] ? false : true
+    // Negative: HostDeps must NOT have assertContextLive (spec §3.3.1 carved
+    // out — no workspace-context probe needed). If a future change adds it,
+    // this assertion fails and forces a redesign discussion.
+    type HostDepsHasNoAssert = 'assertContextLive' extends keyof Deps ? false : true
+    type HostDepsHasNoResolve = 'resolveHostId' extends keyof Deps ? false : true
+
+    const _depsNotAny: DepsIsNotAny = true
+    const _hostIdRequired: HostIdRequired = true
+    const _hostIdRejectsNull: HostIdRejectsNull = true
+    const _noAssert: HostDepsHasNoAssert = true
+    const _noResolve: HostDepsHasNoResolve = true
+
+    expect(_depsNotAny && _hostIdRequired && _hostIdRejectsNull && _noAssert && _noResolve).toBe(true)
+  })
+})
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cd spa && npx vitest run src/lib/slot-executor.test.ts`
+Expected: FAIL — `runHostSlot` / `HostSlotContext` not exported.
+
+- [ ] **Step 3: Implement `runHostSlot`**
+
+In `spa/src/lib/slot-executor.ts`，append after `runWorkspaceSlot` 區塊：
+
+```ts
+/**
+ * Host-narrowed slot context (Phase 1c — spec §3.2 HOST_ACTIONS row + §3.3.1).
+ *
+ * `hostId` is required non-null string — host detail page (the only Phase 1c
+ * caller) owns the hostId via prop. No `workspaceId`, no nullable hostId, no
+ * `assertContextLive` probe in HostDeps:
+ *   - Host detail page is not a destructible context like a workspace; the
+ *     host record persists across tab close, so there's no parallel of the
+ *     #690 destructive-command guard.
+ *   - spec §3.3.1 explicitly defers HostSlotContext shape to 1c. We pick the
+ *     minimal shape today; widen only when a real caller demands it.
+ */
+export interface HostSlotContext extends SlotContext {
+  hostId: string
+}
+
+interface HostDeps {
+  switchToSession: (hostId: string, sessionCode: string) => void
+}
+
+/**
+ * Host-slot executor — same 3-stage failure UX as runWorkspaceSlot but with a
+ * narrower contract (no picker, no destructive-context probe). See spec §3.3
+ * for failure-precedence rules.
+ */
+export async function runHostSlot(
+  cmd: QuickCommand,
+  ctx: HostSlotContext,
+  deps: HostDeps,
+): Promise<void> {
+  const t = useI18nStore.getState().t
+  const toast = useUndoToast.getState()
+
+  let sessionCode: string
+  try {
+    const session = await createSession(ctx.hostId, genSessionName(cmd), ctx.cwd ?? '~', 'terminal')
+    sessionCode = session.code
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    toast.show(t('quick_commands.toast.create_failed', { reason }))
+    return
+  }
+
+  let sendKeysOk = true
+  try {
+    await executeCommand(ctx.hostId, sessionCode, cmd.command)
+  } catch {
+    sendKeysOk = false
+  }
+
+  const switchOk = tryHostSwitch(deps, ctx.hostId, sessionCode)
+
+  if (sendKeysOk && switchOk) return
+
+  if (!switchOk) {
+    toast.show(t('quick_commands.toast.switch_failed'))
+    return
+  }
+
+  toast.show(
+    t('quick_commands.toast.send_keys_failed'),
+    () => {
+      void executeCommand(ctx.hostId, sessionCode, cmd.command).catch(() => undefined)
+    },
+    t('quick_commands.toast.retry'),
+  )
+}
+
+function tryHostSwitch(deps: HostDeps, hostId: string, sessionCode: string): boolean {
+  try {
+    deps.switchToSession(hostId, sessionCode)
+    return true
+  } catch {
+    return false
+  }
+}
+```
+
+註：`tryHostSwitch` 與既有 `trySwitch` 結構相同但形態不同（`HostDeps` vs `Deps`）。不抽共用 helper — 兩個 callsite 已是最少重複，引入額外 generic 反而模糊 type contract。
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cd spa && npx vitest run src/lib/slot-executor.test.ts`
+Expected: PASS — `runHostSlot` 6 tests + 既有 `runWorkspaceSlot` tests 全綠。
+
+- [ ] **Step 5: Type-check**
+
+Run: `cd spa && pnpm run build`
+Expected: clean. Type-level invariant test 由 `tsc -b` 強制，runtime vitest 看不到失敗。
+
+- [ ] **Step 6: Commit**
+
+```
+feat(spa): introduce runHostSlot for Phase 1c HOST_ACTIONS
+
+Spec §3.3.1 deferred HostSlotContext shape to Phase 1c. This task
+defines the minimal contract: hostId is required non-null string,
+HostDeps carries only switchToSession (no picker, no destructive-
+context probe). Failure UX matches runWorkspaceSlot's 3-stage rules
+per spec §3.3.
+
+Closes the prerequisite for Task 1c.1b (mount HOST_ACTIONS slot).
+```
 
 ### Task 1c.1a: 移除 `SessionsSection` row 上殘留的 v1 `QuickCommandMenu` 整合
 
@@ -4413,42 +4712,56 @@ refactor(spa): remove v1 QuickCommandMenu from SessionsSection rows (consolidate
 - Modify: `spa/src/components/hosts/SessionsSection.tsx`
 - Modify: `spa/src/components/hosts/SessionsSection.test.tsx`
 
-**Mount 位置（user 決策）：** `SessionsSection.tsx` L165-175 的 `<div className="flex items-center justify-between mb-4">` 內，new-session 按鈕（L167-174）的**同一個 flex container**裡並列。`<CommandSlot>` 預設 chip toolbar 樣式恰好對應，視覺與 `Plus + 新增 session` 按鈕對齊；不做特殊 popover。
+**Mount 位置（user 決策）：** `SessionsSection.tsx` 標題列 `<div className="flex items-center justify-between mb-4">` 內，new-session 按鈕的**同一個 flex container**裡並列。`<CommandSlot>` 預設 chip toolbar 樣式恰好對應，視覺與 `Plus + 新增 session` 按鈕對齊；不做特殊 popover。
 
 **設計：** 把 new-session 按鈕外層改為 `<div className="flex items-center gap-2">`（包 CommandSlot + new-session button 兩者），整體右對齊（保留外層 `justify-between` 與標題的相對位置）。
 
-**Spec v4 — HOST_ACTIONS 不需 picker：** Host 詳情頁本身已知 hostId（透過 prop 傳入），ctx 一律帶非 null hostId，executor 不會呼叫 `resolveHostId` callback。儘管如此，executor 簽名要求 `resolveHostId` 為必要欄位，所以仍需傳一個 noop（或永遠 reject 的 promise）以滿足型別契約 — 推薦用 `() => Promise.resolve(null)`，行為等同「user 取消」，僅在型別誤用（hostId 不慎傳 null）時觸發 no-op safety net。
+**Spec §3.3.1 — type-locked：** 必須使用 `runHostSlot`（Task 1c.0 引入）。`runWorkspaceSlot` 因 `WorkspaceSlotContext.workspaceId` 為 required 非 null string 編譯期會失敗 — 這是 PR #694 設下的 forward-compat 防線，讓 host caller 不能誤用 workspace executor。
+
+**switchToSession 設計：** 與 `SessionsSection.handleOpen` 等價（既有 row 上 Open 按鈕的行為） — `openSingletonTab` + `useWorkspaceStore.insertTab(tabId)` + `setActiveTab`。Host 詳情頁本身是某個 workspace 內的 tab；新建的 session tab 該插進**同一個 active workspace**（`insertTab` 不傳 workspaceId 時預設 `activeWorkspaceId`），讓 user 立即看到 tab 出現在 tab strip 上。
 
 - [ ] **Step 1: Write the failing test**
 
-Edit `spa/src/components/hosts/SessionsSection.test.tsx`：
+Edit `spa/src/components/hosts/SessionsSection.test.tsx`，在現有 `describe('SessionsSection', ...)` 之外新增：
 
 ```tsx
 import { useQuickCommandStore } from '../../stores/useQuickCommandStore'
 import { QUICK_COMMAND_SLOTS } from '../../lib/quick-command-slots'
 
 describe('SessionsSection — host quick actions slot adjacent to new-session button (Phase 1c)', () => {
-  it('renders <CommandSlot mountTo=HOST_ACTIONS> chips next to the new-session button', () => {
+  beforeEach(() => {
     useQuickCommandStore.setState({
       global: [{ id: 'cmd-h', name: 'HostCmd', command: 'echo h' }],
       byHost: {},
       bindings: { 'cmd-h': [QUICK_COMMAND_SLOTS.HOST_ACTIONS] },
     })
-    // 既有 host store setup（hostId='h1' connected）
-    render(<SessionsSection hostId="h1" />)
-    // chip 與 new-session 按鈕同一 flex 容器；簡化驗證：兩者都在 DOM
+  })
+
+  it('renders <CommandSlot mountTo=HOST_ACTIONS> chips next to the new-session button', () => {
+    render(<SessionsSection hostId={HOST_ID} />)
     expect(screen.getByLabelText(/^HostCmd/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /new session/i })).toBeInTheDocument()
   })
 
   it('hides slot when no commands are bound to HOST_ACTIONS (new-session button still visible)', () => {
-    useQuickCommandStore.setState({ global: [], byHost: {}, bindings: {} })
-    render(<SessionsSection hostId="h1" />)
+    useQuickCommandStore.setState({
+      global: [],
+      byHost: {},
+      bindings: {},
+    })
+    render(<SessionsSection hostId={HOST_ID} />)
     expect(screen.queryByLabelText(/^HostCmd/)).toBeNull()
     expect(screen.getByRole('button', { name: /new session/i })).toBeInTheDocument()
   })
 })
 ```
+
+註：既有 `vi.mock('../../stores/useQuickCommandStore', ...)` 的 mock 形狀只覆蓋 `global` / `byHost` / `getCommands`（無 `bindings` / `setState`），會導致 `<CommandSlot>` 取 `bindings` 為 undefined。subagent 實作時請：
+1. 把該 mock 改為**真實 store**（移除 `vi.mock` 那段，import `useQuickCommandStore` from `'../../stores/useQuickCommandStore'`），或
+2. 擴充 mock 為含 `bindings` selector + `setState`（但保留其他既有測試的 default empty state）。
+推薦選項 1（更簡單，且既有測試仍 pass — 既有 `setState({ sessions: ..., })` 不會 wipe 其他 store）。
+
+註 2：Phase 1b' 已建立 `useQuickCommandStore` 真實 store 在多個元件 test 中正常 init；本檔案是 1b' 之前留下的舊 mock。改用真實 store 順便還清這條歷史包袱。
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -4463,12 +4776,13 @@ In `spa/src/components/hosts/SessionsSection.tsx`：
 
 ```tsx
 import { CommandSlot } from '../CommandSlot'
-import { runWorkspaceSlot } from '../../lib/slot-executor'
+import { runHostSlot } from '../../lib/slot-executor'
 import { QUICK_COMMAND_SLOTS } from '../../lib/quick-command-slots'
-import { useTabStore } from '../../stores/useTabStore'
 ```
 
-修改 L165-175 區段（codex round-1 B5 — switchToSession 補完整 tmux-session content 欄位；HOST_ACTIONS 不需 workspace insertTab）：
+（`useTabStore` 與 `useWorkspaceStore` 已 imported）
+
+修改標題列區段：
 
 ```tsx
 <div className="flex items-center justify-between mb-4">
@@ -4478,10 +4792,12 @@ import { useTabStore } from '../../stores/useTabStore'
       mountTo={QUICK_COMMAND_SLOTS.HOST_ACTIONS}
       ctx={{ hostId }}
       executor={(cmd, ctx) =>
-        runWorkspaceSlot(cmd, ctx, {
+        runHostSlot(cmd, ctx, {
           switchToSession: (h, sessionCode) => {
-            // codex round-1 B5 — fill ALL tmux-session content fields per types/tab.ts:38
-            useTabStore.getState().openSingletonTab({
+            // 與 handleOpen 等價：openSingletonTab + insertTab(active ws) + setActiveTab。
+            // tmux-session content 必填欄位（types/tab.ts:38）：kind / hostId /
+            // sessionCode / mode / cachedName / tmuxInstance。
+            const tabId = useTabStore.getState().openSingletonTab({
               kind: 'tmux-session',
               hostId: h,
               sessionCode,
@@ -4489,13 +4805,9 @@ import { useTabStore } from '../../stores/useTabStore'
               cachedName: sessionCode,
               tmuxInstance: '',
             })
-            // codex round-1 B6 — HOST_ACTIONS does NOT insert into a workspace
-            // (host detail page is a standalone tab, not a workspace context).
-            // We just open the session tab and let user navigate via tab strip.
+            useWorkspaceStore.getState().insertTab(tabId)
+            useTabStore.getState().setActiveTab(tabId)
           },
-          // HOST_ACTIONS 入口必有 hostId；resolveHostId 不會被呼叫。仍提供
-          // safety-net noop 以滿足型別契約（spec v4）。
-          resolveHostId: () => Promise.resolve(null),
         })
       }
     />
@@ -4511,7 +4823,9 @@ import { useTabStore } from '../../stores/useTabStore'
 </div>
 ```
 
-註：HOST_ACTIONS slot 和 WORKSPACE_ACTIONS 共用同一個 `runWorkspaceSlot`（spec §3.2 兩列行為差只在 cwd 取值來源；Phase 1 兩者都 fallback 到 host default `~`，所以 helper 命名雖叫 `runWorkspaceSlot` 仍正確；Phase 2 若 cwd 取值要分流再拆）。
+註：`runHostSlot` 的 ctx type 是 `HostSlotContext`（`{ hostId: string; ... }`，hostId 收窄為非 null）。`<CommandSlot ctx={{ hostId }}>` 傳的是 `SlotContext`（`hostId: string | null`）。本 callsite 的 hostId 來自 prop（`Props.hostId: string`），執行期一定非 null，但 TypeScript 看 `<CommandSlot>` 簽名時無法推導。executor closure 收的 ctx 仍是 `SlotContext` shape；`runHostSlot` 第二參數要 `HostSlotContext`。subagent 實作時用以下任一處理：
+1. **執行期 narrow + as cast**：`executor={(cmd, ctx) => runHostSlot(cmd, { ...ctx, hostId: hostId }, deps)}` — 直接從 closure scope 取 prop 的非 null hostId 覆蓋。**推薦此法** — 顯式說明「ctx.hostId 在此 callsite 必為非 null」的 invariant 來源是 SessionsSection prop，不是 ctx 本身
+2. 提供 generic `<CommandSlot<HostSlotContext>>` — 但 `<CommandSlot>` 並非 generic 元件，需要先 refactor，scope 過大。不採
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -4522,6 +4836,13 @@ Expected: PASS
 
 ```
 feat(spa): mount HOST_ACTIONS slot beside new-session button in SessionsSection
+
+Wires runHostSlot (Task 1c.0) into SessionsSection. switchToSession
+opens a singleton tab + inserts into the active workspace + activates
+it (matches existing handleOpen). HostSlotContext is built by
+narrowing the SlotContext.hostId from the SessionsSection prop —
+runWorkspaceSlot is intentionally not reachable here per spec §3.3.1
+type lock.
 ```
 
 ---
@@ -4574,7 +4895,7 @@ Expected: clean
 - [ ] **Phase 1b' 已 merge → main**，**Plus hover popover 過渡入口獨立 PR**（codex round-1 結構性變更 — 風險隔離）
   - Phase 1b' 內 task 順序：**1b'.1（WorkspaceQuickActionsPopover + WorkspaceRow Plus hover + mobile/touch fallback — codex round-1 C17）→ 1b'.2（全域驗證）**
   - User 標記此入口為過渡實作；獨立 PR 便於日後 revert / replace
-- [ ] Phase 1c 已 merge → main，**1c.1a（移除 SessionsSection row 的 v1 整合 — codex round-1 B8）→ 1c.1b（new-session 旁掛 HOST_ACTIONS — codex round-1 B5）兩個 commits 同 PR、依序 ship**（先 commit 純減量，再 commit 純新增；diff 易 review）
+- [ ] Phase 1c 已 merge → main，**1c.0（runHostSlot + tests — spec §3.3.1 type-lock 前置）→ 1c.1a（移除 SessionsSection row 的 v1 整合 — codex round-1 B8）→ 1c.1b（new-session 旁掛 HOST_ACTIONS）三個 commits 同 PR、依序 ship**（1c.0 純新增 lib + tests / 1c.1a 純減量 / 1c.1b 純新增 UI；diff 易 review）
 - [ ] Phase 1a 不可單獨 ship 在沒有 Phase 1b 計畫的情況（純資料層 user 看不到任何成果，會困惑）— 但 1a + 1b 兩個 PR 接力 ship 是允許的（spec §6 只要求 Settings UI 出現時必有 slot 生效）
 - [ ] Phase 1b' 與 1c 之間順序可彈性（user 可決定先 ship 哪個）；建議 1b' → 1c 因為 1b' 是 Phase 1b 的延伸，1c 是新 mount 點
 
@@ -4601,5 +4922,6 @@ Expected: clean
 4. 任何測試 / lint / build 指令在主 Claude 機器跑（feedback_codex_sandbox_no_install.md）
 5. **Phase 1b 任務依賴**（codex round-1/2 後）：1b.0a → 1b.0c（i18n 必須前置 — round-2 B9）→ 1b.0b（HostPickerPopover；仰賴 0c keys）→ 1b.1（CommandSlot）→ 1b.1.5（toast schema 擴充）→ 1b.2（executor）→ 1b.3 → 1b.4 → 1b.5a → 1b.6。其中 1b.5a 的 switchToSession 必須做完整 `openSingletonAndSelect` 等價邏輯（codex round-1 B5/B6）：openSingletonTab（含 mode/cachedName/tmuxInstance 完整欄位）→ insertTab → setActiveWorkspace + setActiveTab。
 6. **Phase 1b' 任務依賴**：必須在 Phase 1b PR merge 後才能開工；`<CommandSlot>`、`<HostPickerPopover>`、`runWorkspaceSlot`、`inferWorkspaceHostId`、i18n keys 全部就緒後再實作 hover popover + 與 1b.5a 同等的 switchToSession 邏輯。
-7. PR 完成後委派 codex 兩輪 review（標準 + 攻擊/防守/體質）；發現問題彙整成表格（信心 / 關聯 / 複雜度）後決定即修 vs 開 issue 追蹤
+7. **Phase 1c 任務依賴**：必須在 #690 enforcement (PR #694 / alpha.242) merge 後才能開工；task 順序 **1c.0（runHostSlot + tests）→ 1c.1a（移除 row v1）→ 1c.1b（mount HOST_ACTIONS chip 用 runHostSlot）→ 1c.2（全域驗證）**。1c.1b 的 ctx narrowing 從 `SessionsSection` prop 取非 null hostId（細節見 Task 1c.1b 內註）。
+8. PR 完成後委派 codex 兩輪 review（標準 + 攻擊/防守/體質）；發現問題彙整成表格（信心 / 關聯 / 複雜度）後決定即修 vs 開 issue 追蹤
 8. **Toast 行為的 spec §3.3 對應**（codex round-1 B4）：create-session failure → `toast.show(msg)` 不傳 action；switch-to-session failure → `toast.show(msg)` 不傳 action；send-keys failure → `toast.show(msg, retryFn, t('quick_commands.toast.retry'))`。元件渲染規則：`toast.action == null` → 不渲染 button。
