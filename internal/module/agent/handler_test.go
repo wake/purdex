@@ -391,7 +391,7 @@ func TestHandleEvent_StoresAgentType(t *testing.T) {
 		},
 	})
 
-	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxStop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -433,7 +433,7 @@ func TestHandleEvent_AcceptedV2HookRemovesLegacyRow(t *testing.T) {
 		t.Fatalf("seed event: %v", err)
 	}
 
-	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxStop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -458,7 +458,7 @@ func TestHandleEvent_RejectsUncertainV2Payload_WhenVerifyEnabled(t *testing.T) {
 	verifyEventFn = defaultVerifyEvent
 	m.tmux = tmux.NewFakeExecutor()
 
-	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_uncertain":true,"event_name":"Stop","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_uncertain":true,"event_name":"PdxStop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -521,7 +521,7 @@ func TestHandleEvent_ErrorGuardBlocksFrameMutation(t *testing.T) {
 		},
 	})
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PostToolUse","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxPostToolUse","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -705,9 +705,9 @@ func TestHandleEvent_BroadcastPayloadCarriesSubagentRefs(t *testing.T) {
 		typeName: "cc",
 		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
 			switch event {
-			case "SessionStart":
+			case "PdxSessionStart":
 				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
-			case "SubagentStart":
+			case "PdxSubagentStart":
 				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": "sub-1"}}
 			default:
 				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
@@ -718,8 +718,8 @@ func TestHandleEvent_BroadcastPayloadCarriesSubagentRefs(t *testing.T) {
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"cc"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SubagentStart","raw_event":{"agent_id":"sub-1"},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSubagentStart","raw_event":{"agent_id":"sub-1"},"agent_type":"cc"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -1170,12 +1170,12 @@ func TestActivityWatch_HookEventSupersedes(t *testing.T) {
 	fake.SetPaneContent("work:", "Allow  Deny")
 	fake.SetPaneSessionName("%5", "work")
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Notification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxNotification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	m.handleEvent(w, req)
 
-	body2 := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"UserPromptSubmit","raw_event":{},"agent_type":"cc"}`
+	body2 := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxUserPromptSubmit","raw_event":{},"agent_type":"cc"}`
 	req2 := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body2))
 	w2 := httptest.NewRecorder()
 	m.handleEvent(w2, req2)
@@ -1941,7 +1941,7 @@ func TestHandleEvent_ProxyBroadcastCarriesIsProxyTrue(t *testing.T) {
 
 	// cc SessionStart first.
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
 		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":300,"sender_start_time":"Sun Apr 20 01:35:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"codex"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
@@ -2034,7 +2034,7 @@ func TestHandleEvent_ColdStart_RebuildRecovers(t *testing.T) {
 	// lookup chain misses naturally: GetByIdentity → nil (empty DB),
 	// findProxyParent → nil (no ancestor frame), FindByPanePID(pane, 1) → nil.
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -2102,7 +2102,7 @@ func TestHandleEvent_DaemonRestart_RebuildRecoversForExistingPane(t *testing.T) 
 
 	// Fire SessionStart for an "existing" pane (daemon restart scenario:
 	// pane was already running cc, the daemon came back up, hook arrives).
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -2124,13 +2124,13 @@ func TestHandleEvent_DaemonRestart_RebuildRecoversForExistingPane(t *testing.T) 
 	}
 
 	// Now a SubagentStart hook arrives post-rebuild — ref must accumulate.
-	subBody := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SubagentStart","raw_event":{},"agent_type":"cc"}`
+	subBody := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSubagentStart","raw_event":{},"agent_type":"cc"}`
 	// Need a provider that emits agent_id for SubagentStart.
 	m.registry = agentpkg.NewRegistry()
 	m.registry.Register(&fakeAgentProvider{
 		typeName: "cc",
 		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
-			if event == "SubagentStart" {
+			if event == "PdxSubagentStart" {
 				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": "sub-1"}}
 			}
 			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
@@ -2178,7 +2178,7 @@ func TestHandleEvent_MidConnectionGone_NoParentFallback(t *testing.T) {
 	}
 	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

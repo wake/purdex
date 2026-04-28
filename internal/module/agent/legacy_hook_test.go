@@ -6,23 +6,11 @@ import (
 	agentpkg "github.com/wake/purdex/internal/agent"
 )
 
-// ccMetadataCatalog is a P1-T11 unit-test fixture: a minimal cc-style hook
-// catalog whose PurdexName ↔ Lifecycle mapping mirrors the real cc Phase 1
-// catalog. classifyLifecycle test cases inject this slice via fakeAgentProvider.events
-// to exercise the metadata-driven (branch 1) path without depending on the
-// cc package directly. PdxNotification + PdxPermissionRequest are included
-// to exercise LifecycleNone catalog hits.
-var ccMetadataCatalog = []agentpkg.HookEventSpec{
-	{Name: "SessionStart", PurdexName: "PdxSessionStart", UpstreamKeys: []string{"SessionStart"}, Lifecycle: agentpkg.LifecycleSessionStart},
-	{Name: "UserPromptSubmit", PurdexName: "PdxUserPromptSubmit", UpstreamKeys: []string{"UserPromptSubmit"}, Lifecycle: agentpkg.LifecycleUserPromptSubmit},
-	{Name: "Stop", PurdexName: "PdxStop", UpstreamKeys: []string{"Stop"}, Lifecycle: agentpkg.LifecycleStop},
-	{Name: "StopFailure", PurdexName: "PdxStopFailure", UpstreamKeys: []string{"StopFailure"}, Lifecycle: agentpkg.LifecycleStopFailure},
-	{Name: "SessionEnd", PurdexName: "PdxSessionEnd", UpstreamKeys: []string{"SessionEnd"}, Lifecycle: agentpkg.LifecycleSessionEnd},
-	{Name: "SubagentStart", PurdexName: "PdxSubagentStart", UpstreamKeys: []string{"SubagentStart"}, Lifecycle: agentpkg.LifecycleSubagentStart},
-	{Name: "SubagentStop", PurdexName: "PdxSubagentStop", UpstreamKeys: []string{"SubagentStop"}, Lifecycle: agentpkg.LifecycleSubagentStop},
-	{Name: "Notification", PurdexName: "PdxNotification", UpstreamKeys: []string{"Notification"}, Lifecycle: agentpkg.LifecycleNone},
-	{Name: "PermissionRequest", PurdexName: "PdxPermissionRequest", UpstreamKeys: []string{"PermissionRequest"}, Lifecycle: agentpkg.LifecycleNone},
-}
+// ccMetadataCatalog aliases fakeDefaultEvents so existing classifyLifecycle
+// tests stay self-documenting under the cc-leaning name. Tests that want a
+// true catalog miss inject the explicit empty slice instead — see the
+// "PrematureCatalogMissIsInvalid" cases below.
+var ccMetadataCatalog = fakeDefaultEvents
 
 func TestIsLegacyHookForUnmigrated_CodexAllNames(t *testing.T) {
 	names := []string{
@@ -110,8 +98,13 @@ func TestClassifyLifecycle_CCMetadataPath(t *testing.T) {
 	}
 }
 
+// emptyEvents is the negative-test sentinel: a non-nil but empty catalog so
+// fakeAgentProvider.Events bypasses the default-fill and returns a true
+// "catalog miss" classification.
+var emptyEvents = []agentpkg.HookEventSpec{}
+
 func TestClassifyLifecycle_CodexLegacyFallback(t *testing.T) {
-	codex := &fakeAgentProvider{typeName: "codex"} // events nil → catalog miss
+	codex := &fakeAgentProvider{typeName: "codex", events: emptyEvents}
 	req := EventRequest{AgentType: "codex", PurdexName: "SessionEnd"}
 	if got := classifyLifecycle(codex, req); got != agentpkg.LifecycleSessionEnd {
 		t.Errorf("codex SessionEnd fallback: got %s, want LifecycleSessionEnd", got)
@@ -119,7 +112,7 @@ func TestClassifyLifecycle_CodexLegacyFallback(t *testing.T) {
 }
 
 func TestClassifyLifecycle_OpencodeLegacyFallback(t *testing.T) {
-	oc := &fakeAgentProvider{typeName: "opencode"}
+	oc := &fakeAgentProvider{typeName: "opencode", events: emptyEvents}
 	req := EventRequest{AgentType: "opencode", PurdexName: "SessionStart"}
 	if got := classifyLifecycle(oc, req); got != agentpkg.LifecycleSessionStart {
 		t.Errorf("opencode SessionStart fallback: got %s, want LifecycleSessionStart", got)
@@ -132,7 +125,7 @@ func TestClassifyLifecycle_OpencodeLegacyFallback(t *testing.T) {
 // set has "Stop" not "PdxStop"), so branch 3 wins. The handler then routes
 // this through the catalog-miss invalid path rather than dispatching as Stop.
 func TestClassifyLifecycle_CodexPrematureCatalogMissIsInvalid(t *testing.T) {
-	codex := &fakeAgentProvider{typeName: "codex"}
+	codex := &fakeAgentProvider{typeName: "codex", events: emptyEvents}
 	req := EventRequest{AgentType: "codex", PurdexName: "PdxStop"}
 	if got := classifyLifecycle(codex, req); got != agentpkg.LifecycleNone {
 		t.Errorf("codex PdxStop premature: got %s, want LifecycleNone", got)
@@ -144,7 +137,7 @@ func TestClassifyLifecycle_CodexPrematureCatalogMissIsInvalid(t *testing.T) {
 // emitted a class we don't classify yet). Must NOT route through the legacy
 // fallback as some other lifecycle kind.
 func TestClassifyLifecycle_OpencodeNotificationIsInvalid(t *testing.T) {
-	oc := &fakeAgentProvider{typeName: "opencode"}
+	oc := &fakeAgentProvider{typeName: "opencode", events: emptyEvents}
 	req := EventRequest{AgentType: "opencode", PurdexName: "Notification"}
 	if got := classifyLifecycle(oc, req); got != agentpkg.LifecycleNone {
 		t.Errorf("opencode Notification: got %s, want LifecycleNone", got)
@@ -159,7 +152,7 @@ func TestClassifyLifecycle_OpencodeNotificationIsInvalid(t *testing.T) {
 // so the daemon's downstream path treats it as a known no-op rather than an
 // unclassified event.
 func TestClassifyLifecycle_OpencodePermissionRequestIsKnownNoop(t *testing.T) {
-	oc := &fakeAgentProvider{typeName: "opencode"}
+	oc := &fakeAgentProvider{typeName: "opencode", events: emptyEvents}
 	req := EventRequest{AgentType: "opencode", PurdexName: "PermissionRequest"}
 	// PermissionRequest is in the legacy fallback predicate set but has no
 	// lifecycle kind (no frame mutation), so legacyLifecycleFor returns None.

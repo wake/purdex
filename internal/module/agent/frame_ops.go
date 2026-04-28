@@ -62,7 +62,9 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	if m.frames == nil {
 		return nil, FrameTraceMeta{Decision: "skipped", Reason: "frame_store_unavailable", Before: map[string]any{}, After: map[string]any{}}, nil
 	}
-	if !matchesLifecycleName(req.PurdexName, "SubagentStart") && !matchesLifecycleName(req.PurdexName, "SubagentStop") && !result.Valid {
+	lifecycle := m.classifyLifecycleForReq(req)
+	isDetailOnly := lifecycle == agentpkg.LifecycleSubagentStart || lifecycle == agentpkg.LifecycleSubagentStop
+	if !isDetailOnly && !result.Valid {
 		projection, err := m.projectPane(req.TmuxPaneID)
 		return projection, FrameTraceMeta{Decision: "skipped", Reason: "derive_invalid", Before: map[string]any{}, After: map[string]any{}}, err
 	}
@@ -73,8 +75,8 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	}
 	before := summarizeFrame(frame)
 
-	switch normalizeLifecycleName(req.PurdexName) {
-	case "SessionEnd":
+	switch lifecycle {
+	case agentpkg.LifecycleSessionEnd:
 		if frame != nil {
 			// Phase 3.5 §2.3 (v8 L1 fix, codex round PR-2 attack):
 			// detach-first ordering. The previous delete-first +
@@ -130,7 +132,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			Before:   before,
 			After:    map[string]any{},
 		}, err
-	case "SubagentStart", "SubagentStop":
+	case agentpkg.LifecycleSubagentStart, agentpkg.LifecycleSubagentStop:
 		if frame == nil {
 			projection, err := m.projectPane(req.TmuxPaneID)
 			return projection, FrameTraceMeta{
@@ -171,7 +173,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		// that motivated the proxy atomic fix applies here. Delegate to
 		// the shared helper that reloads + re-merges on UpsertIfUnchanged
 		// conflict.
-		applied, stored, merr := m.mutateSubagentsWithRetry(*frame, req.PurdexName, ref, broadcastTs)
+		applied, stored, merr := m.mutateSubagentsWithRetry(*frame, lifecycle, ref, broadcastTs)
 		if merr != nil {
 			return nil, FrameTraceMeta{}, merr
 		}
@@ -205,7 +207,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	// creating a standalone frame. Observed in practice for codex spawned from
 	// inside a cc session via codex-companion: cc owns the UX, codex should
 	// show as a dot on cc's tab, not as a separate lit-up frame.
-	if matchesLifecycleName(req.PurdexName, "SessionStart") && frame == nil {
+	if lifecycle == agentpkg.LifecycleSessionStart && frame == nil {
 		parent, perr := m.findProxyParent(req)
 		if perr != nil {
 			return nil, FrameTraceMeta{}, perr
@@ -326,7 +328,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		// naturally preserved), prunes stale IsProxy via the live
 		// identity gate, and writes via UpsertIfUnchanged. A conflict
 		// reload picks up the newer ref before the next prune pass.
-		if matchesLifecycleName(req.PurdexName, "SessionStart") {
+		if lifecycle == agentpkg.LifecycleSessionStart {
 			var success bool
 			// initialNativeBaseline is the BASELINE native ref identity
 			// set captured before the retry loop. SessionStart's reset
@@ -463,7 +465,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		// SessionStart raced this existing-frame's SessionStart and
 		// landed standalone instead of being collapsed via PR-2b's
 		// pre-Upsert proxy fast-path.
-		if matchesLifecycleName(req.PurdexName, "SessionStart") {
+		if lifecycle == agentpkg.LifecycleSessionStart {
 			updated, cerr := m.canonicalizeDescendantsAfterUpsert(stored, broadcastTs)
 			if cerr != nil {
 				return nil, FrameTraceMeta{}, cerr
@@ -498,7 +500,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		//   (b) any standalone cross-type descendants whose SessionStart
 		//       raced ours and landed before our PPID-walk could see us
 		//       as an ancestor (descendant scan, plan §2.1.2).
-		if matchesLifecycleName(req.PurdexName, "SessionStart") {
+		if lifecycle == agentpkg.LifecycleSessionStart {
 			canonicalized, parentStored, rerr := m.reconcileCreatedFrameAsProxy(stored, req, broadcastTs)
 			if rerr != nil {
 				return nil, FrameTraceMeta{}, rerr
@@ -597,19 +599,19 @@ func summarizeFrame(frame *store.Frame) map[string]any {
 // This isolates namespaces so a native ref whose agent_id happens to collide
 // with a synthesized proxy ID cannot shadow or evict a proxy ref, and vice
 // versa.
-func updateSubagents(current []agentpkg.SubagentRef, eventName string, ref agentpkg.SubagentRef) []agentpkg.SubagentRef {
+func updateSubagents(current []agentpkg.SubagentRef, lifecycle agentpkg.LifecycleEventKind, ref agentpkg.SubagentRef) []agentpkg.SubagentRef {
 	if current == nil {
 		current = []agentpkg.SubagentRef{}
 	}
-	switch normalizeLifecycleName(eventName) {
-	case "SubagentStart":
+	switch lifecycle {
+	case agentpkg.LifecycleSubagentStart:
 		for _, existing := range current {
 			if subagentRefMatches(existing, ref) {
 				return current
 			}
 		}
 		return append(current, ref)
-	case "SubagentStop":
+	case agentpkg.LifecycleSubagentStop:
 		filtered := make([]agentpkg.SubagentRef, 0, len(current))
 		for _, existing := range current {
 			if !subagentRefMatches(existing, ref) {
@@ -840,11 +842,11 @@ func subagentsContainProxySender(refs []agentpkg.SubagentRef, senderPID int, sen
 // Serves both native SubagentStart/Stop (from hook events) and proxy
 // attach (via attachProxyRefWithRetry). All three paths share the same
 // subagents_json read-modify-write cycle and would race without this helper.
-func (m *Module) mutateSubagentsWithRetry(frame store.Frame, eventName string, ref agentpkg.SubagentRef, broadcastTs int64) (bool, store.Frame, error) {
+func (m *Module) mutateSubagentsWithRetry(frame store.Frame, lifecycle agentpkg.LifecycleEventKind, ref agentpkg.SubagentRef, broadcastTs int64) (bool, store.Frame, error) {
 	current := frame
 	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
 		expected := current.LastSeenAt
-		current.Subagents = updateSubagents(current.Subagents, eventName, ref)
+		current.Subagents = updateSubagents(current.Subagents, lifecycle, ref)
 		current.LastSeenAt = broadcastTs
 		ok, stored, err := m.frames.UpsertIfUnchanged(current, expected)
 		if err != nil {
@@ -862,7 +864,7 @@ func (m *Module) mutateSubagentsWithRetry(frame store.Frame, eventName string, r
 		}
 		current = *reloaded
 	}
-	return false, store.Frame{}, fmt.Errorf("subagent mutation %s: exceeded %d retries for frame %s", eventName, proxyUpsertMaxAttempts, frame.FrameID)
+	return false, store.Frame{}, fmt.Errorf("subagent mutation %s: exceeded %d retries for frame %s", lifecycle, proxyUpsertMaxAttempts, frame.FrameID)
 }
 
 // attachProxyRefWithRetry is a thin wrapper over mutateSubagentsWithRetry
@@ -870,7 +872,7 @@ func (m *Module) mutateSubagentsWithRetry(frame store.Frame, eventName string, r
 // caller at applyFrameEvent reads as "attach proxy ref" rather than
 // "SubagentStart mutation on the parent".
 func (m *Module) attachProxyRefWithRetry(parent store.Frame, ref agentpkg.SubagentRef, broadcastTs int64) (bool, store.Frame, error) {
-	return m.mutateSubagentsWithRetry(parent, "SubagentStart", ref, broadcastTs)
+	return m.mutateSubagentsWithRetry(parent, agentpkg.LifecycleSubagentStart, ref, broadcastTs)
 }
 
 // detachProxyRefWithRetry mirrors attachProxyRefWithRetry for the SessionEnd

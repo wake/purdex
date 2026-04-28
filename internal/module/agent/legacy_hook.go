@@ -36,32 +36,6 @@ var opencodeLegacyEventNames = map[string]bool{
 	"SubagentStop":      true,
 }
 
-// matchesLifecycleName reports whether a request's PurdexName matches a
-// lifecycle event identified by its legacy raw upstream name. Accepts both
-// the legacy literal (sent by codex / opencode while their catalogs have
-// not yet migrated) and its Pdx-prefixed counterpart (sent by cc post
-// Phase 1).
-//
-// Transitional helper for the W2 main-time lifecycle dispatch. P1-T11 /
-// P1-T12 replace these comparisons with metadata-driven dispatch via
-// LookupByPurdexName(...).Lifecycle, at which point this helper is unused
-// and gets removed.
-func matchesLifecycleName(purdexName, legacyName string) bool {
-	return purdexName == legacyName || purdexName == "Pdx"+legacyName
-}
-
-// normalizeLifecycleName strips the "Pdx" prefix from a PurdexName so a
-// single switch statement keyed on legacy literals can dispatch both cc
-// (Pdx-prefixed) and codex / opencode (legacy literal) traffic during the
-// W2 transition. Companion to matchesLifecycleName; same removal point at
-// P1-T11 / P1-T12.
-func normalizeLifecycleName(purdexName string) string {
-	if len(purdexName) > 3 && purdexName[:3] == "Pdx" {
-		return purdexName[3:]
-	}
-	return purdexName
-}
-
 // legacyLifecycleFor maps a pre-W2 raw upstream event-name literal back to
 // its LifecycleEventKind so the W2 fallback dispatch path can route
 // codex/opencode events whose catalogs have not yet migrated to PurdexName +
@@ -96,6 +70,20 @@ func legacyLifecycleFor(name string) agentpkg.LifecycleEventKind {
 // across agents (opencode lacks Notification; cc is already migrated in
 // Phase 1). A merged set would let unknown events leak into the fallback
 // branch.
+// classifyLifecycleForReq is the Module-bound counterpart to classifyLifecycle:
+// it resolves the request's provider via m.registry and then runs the same
+// three-branch decision tree. Returns LifecycleNone when registry is missing
+// or the agent_type is unknown — same effect as a catalog miss with no legacy
+// fallback. frame_ops.go's hot path uses this so callers don't replicate the
+// registry / type-assert lookup at every dispatch site.
+func (m *Module) classifyLifecycleForReq(req EventRequest) agentpkg.LifecycleEventKind {
+	if m == nil || m.registry == nil {
+		return agentpkg.LifecycleNone
+	}
+	provider, _ := m.registry.Get(req.AgentType)
+	return classifyLifecycle(provider, req)
+}
+
 // classifyLifecycle resolves an EventRequest to its LifecycleEventKind via
 // the spec §3.4.2 three-branch decision tree:
 //

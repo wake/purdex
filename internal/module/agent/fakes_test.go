@@ -76,12 +76,40 @@ func (f *fakeAgentProvider) DeriveStatus(eventName string, raw json.RawMessage) 
 	return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
 }
 
+// fakeDefaultEvents is the W2 default catalog returned by fakeAgentProvider
+// when no per-test events are injected. Mirrors the cc Phase 1 lifecycle
+// mapping; codex/opencode tests can rely on this since the
+// PurdexName ↔ Lifecycle assignment is identical across the three providers
+// once migrated.
+//
+// Tests that need a true catalog miss (the "codex prematurely emits
+// PdxXxx before its catalog migrates" negative case) inject an explicit
+// empty slice — `events: []agentpkg.HookEventSpec{}` — which is non-nil
+// and so bypasses the default-fill below.
+var fakeDefaultEvents = []agentpkg.HookEventSpec{
+	{Name: "SessionStart", PurdexName: "PdxSessionStart", UpstreamKeys: []string{"SessionStart"}, Lifecycle: agentpkg.LifecycleSessionStart},
+	{Name: "UserPromptSubmit", PurdexName: "PdxUserPromptSubmit", UpstreamKeys: []string{"UserPromptSubmit"}, Lifecycle: agentpkg.LifecycleUserPromptSubmit},
+	{Name: "Stop", PurdexName: "PdxStop", UpstreamKeys: []string{"Stop"}, Lifecycle: agentpkg.LifecycleStop},
+	{Name: "StopFailure", PurdexName: "PdxStopFailure", UpstreamKeys: []string{"StopFailure"}, Lifecycle: agentpkg.LifecycleStopFailure},
+	{Name: "SessionEnd", PurdexName: "PdxSessionEnd", UpstreamKeys: []string{"SessionEnd"}, Lifecycle: agentpkg.LifecycleSessionEnd},
+	{Name: "SubagentStart", PurdexName: "PdxSubagentStart", UpstreamKeys: []string{"SubagentStart"}, Lifecycle: agentpkg.LifecycleSubagentStart},
+	{Name: "SubagentStop", PurdexName: "PdxSubagentStop", UpstreamKeys: []string{"SubagentStop"}, Lifecycle: agentpkg.LifecycleSubagentStop},
+	{Name: "Notification", PurdexName: "PdxNotification", UpstreamKeys: []string{"Notification"}, Lifecycle: agentpkg.LifecycleNone},
+	{Name: "PermissionRequest", PurdexName: "PdxPermissionRequest", UpstreamKeys: []string{"PermissionRequest"}, Lifecycle: agentpkg.LifecycleNone},
+}
+
 // Events / InstallHooks / RemoveHooks / CheckHooks satisfy HookInstaller so
 // classifyLifecycle's provider.(agentpkg.HookInstaller) type-assert succeeds
-// for tests. Events returns the injected slice (nil → catalog miss → fallback
-// path). The mutation methods are not exercised by handler tests; they exist
-// purely to satisfy the interface and panic on unexpected use.
-func (f *fakeAgentProvider) Events() []agentpkg.HookEventSpec { return f.events }
+// for tests. Events returns the injected slice when non-nil (including the
+// explicit empty slice for negative tests); a nil slice falls back to
+// fakeDefaultEvents. The mutation methods are not exercised by handler tests;
+// they exist purely to satisfy the interface.
+func (f *fakeAgentProvider) Events() []agentpkg.HookEventSpec {
+	if f.events == nil {
+		return fakeDefaultEvents
+	}
+	return f.events
+}
 func (f *fakeAgentProvider) InstallHooks(string) error        { return nil }
 func (f *fakeAgentProvider) RemoveHooks(string) error         { return nil }
 func (f *fakeAgentProvider) CheckHooks() (agentpkg.HookStatus, error) {
