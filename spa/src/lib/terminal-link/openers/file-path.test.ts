@@ -17,17 +17,17 @@ function makeDeps() {
   // insertTab` directly; it calls `tryOpenFile`. We keep the same fakes for
   // assertion-compat, wired through a `tryOpenFile` shim that mimics the
   // bootstrap-time `tabOpener` (P5).
-  const openSingletonTab = vi.fn(() => 'tab-1')
-  const insertTab = vi.fn()
+  const openSingletonTab = vi.fn((_content: unknown, _opts?: { afterTabId?: string }) => 'tab-1')
+  const insertTab = vi.fn((_tabId: string, _wsId: string, _afterTabId?: string) => {})
   const paneContent = { kind: 'editor', source: { type: 'daemon', hostId: 'h1' }, filePath: '/a/b.ts' }
   const fakeOpener: FileOpener = {
     id: 'fake', label: '', icon: 'File',
     match: () => true, priority: 'default',
     createContent: vi.fn(() => paneContent as never),
   }
-  const getDefaultOpener = vi.fn((): FileOpener | null => fakeOpener)
+  const getDefaultOpener = vi.fn((_file: unknown): FileOpener | null => fakeOpener)
   const getActiveWorkspaceId = vi.fn((): string | null => 'ws-1')
-  const computeInsertTarget = vi.fn((): string | undefined => 'after-tab-id')
+  const computeInsertTarget = vi.fn((_wsId: string, _pred: (c: { kind: string }) => boolean): string | undefined => 'after-tab-id')
   const fetchPaneCwd = vi.fn(async (_h: string, _s: string, _sig?: AbortSignal) => '/home/user/proj')
   const fetchPaneHome = vi.fn(async (_h: string, _s: string, _sig?: AbortSignal) => '/home/user')
   const resolveOpenContextCwd = vi.fn((_h: string, _s?: string): string | null => null)

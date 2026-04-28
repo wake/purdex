@@ -9,13 +9,11 @@ describe('registerBuiltinTerminalLinks', () => {
     registerBuiltinTerminalLinks({
       urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
       filePathOpener: {
-        getDefaultOpener: () => null,
-        openSingletonTab: () => 't',
-        insertTab: () => {},
+        tryOpenFile: async () => {},
         getActiveWorkspaceId: () => null,
-        computeInsertTarget: () => undefined,
         fetchPaneCwd: async (_h: string, _s: string, _sig?: AbortSignal) => '',
         fetchPaneHome: async (_h: string, _s: string, _sig?: AbortSignal) => '',
+        resolveOpenContextCwd: () => null,
       },
     })
     const types = terminalLinkRegistry.getMatchers().map((m) => m.type)
@@ -27,13 +25,11 @@ describe('registerBuiltinTerminalLinks', () => {
     const deps = {
       urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
       filePathOpener: {
-        getDefaultOpener: () => null,
-        openSingletonTab: () => 't',
-        insertTab: () => {},
+        tryOpenFile: async () => {},
         getActiveWorkspaceId: () => null,
-        computeInsertTarget: () => undefined,
         fetchPaneCwd: async (_h: string, _s: string, _sig?: AbortSignal) => '',
         fetchPaneHome: async (_h: string, _s: string, _sig?: AbortSignal) => '',
+        resolveOpenContextCwd: () => null,
       },
     }
     registerBuiltinTerminalLinks(deps)
@@ -55,13 +51,11 @@ describe('registerBuiltinTerminalLinks — 4 file-path matchers', () => {
     registerBuiltinTerminalLinks({
       urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
       filePathOpener: {
-        getDefaultOpener: () => null,
-        openSingletonTab: () => 'tab',
-        insertTab: () => {},
+        tryOpenFile: async () => {},
         getActiveWorkspaceId: () => 'ws',
-        computeInsertTarget: () => undefined,
         fetchPaneCwd: async () => '/cwd',
         fetchPaneHome: async () => '/home/user',
+        resolveOpenContextCwd: () => null,
       },
     })
     const ids = terminalLinkRegistry.getMatchers().map((m) => m.id)
@@ -80,13 +74,11 @@ describe('registerBuiltinTerminalLinks — 4 file-path matchers', () => {
     registerBuiltinTerminalLinks({
       urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
       filePathOpener: {
-        getDefaultOpener: () => null,
-        openSingletonTab: () => 'tab',
-        insertTab: () => {},
+        tryOpenFile: async () => {},
         getActiveWorkspaceId: () => 'ws',
-        computeInsertTarget: () => undefined,
         fetchPaneCwd: async () => '/cwd',
         fetchPaneHome: async () => '/home/user',
+        resolveOpenContextCwd: () => null,
       },
       fileMatchersEnabled: false,
     })

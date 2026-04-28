@@ -4,6 +4,7 @@ import {
   FileNotFoundError,
   isNotFoundError,
   type OpenFileContext,
+  type PopupSpec,
 } from './open-file'
 import { usePathCacheStore } from '../../stores/path-cache/usePathCacheStore'
 import { useEditorSettingsStore, DEFAULT_EDITOR_SETTINGS } from '../../stores/useEditorSettingsStore'
@@ -12,8 +13,8 @@ import type { FileInfo, FileSource } from '../../types/fs'
 const mockStatH1 = vi.fn()
 const mockStatH2 = vi.fn()
 const mockOpenInTab = vi.fn()
-const mockShow = vi.fn(() => new AbortController())
-const mockHide = vi.fn()
+const mockShow = vi.fn<(spec: PopupSpec) => AbortController>(() => new AbortController())
+const mockHide = vi.fn<() => void>()
 
 const fsBackendFactory = (hostId: string) =>
   ({
@@ -113,7 +114,7 @@ describe('createOpenFileService', () => {
     await svc.tryOpenFile(file, source, ctx)
     expect(mockShow).toHaveBeenCalledTimes(1)
     const spec = mockShow.mock.calls[0][0]
-    expect(spec.mode).toBe('layer1-multi')
+    if (spec.mode !== 'layer1-multi') throw new Error(`expected layer1-multi spec, got ${spec.mode}`)
     expect(spec.hits).toEqual(expect.arrayContaining(['/cached/x/foo.go', '/cached/y/foo.go']))
   })
 

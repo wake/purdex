@@ -15,7 +15,7 @@ describe('fsSearchByCapability', () => {
       getDaemonBase: () => 'http://daemon',
       getAuthHeaders: () => ({}),
     })
-    global.fetch = vi.fn(async () =>
+    globalThis.fetch = vi.fn(async () =>
       new Response(
         JSON.stringify({
           matches: [
@@ -37,7 +37,7 @@ describe('fsSearchByCapability', () => {
     const matches = await fsSearchByCapability('h1', 'foo.go', roots)
     // Newer mtime sorted first
     expect(matches.map((m) => m.path)).toEqual(['/b/foo.go', '/a/foo.go'])
-    const fetchCall = (global.fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]
+    const fetchCall = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]
     expect(fetchCall[0]).toBe('http://daemon/api/fs/search')
     const body = JSON.parse(fetchCall[1].body as string)
     expect(body.mode).toBe('basename')
@@ -47,12 +47,12 @@ describe('fsSearchByCapability', () => {
 
   it('forwards limits when provided', async () => {
     await fsSearchByCapability('h1', 'foo.go', [{ kind: 'session-cwd', sessionCode: 's1' }], { maxResults: 5, maxDepth: 4, timeoutMs: 1000 })
-    const body = JSON.parse(((global.fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0])[1].body as string)
+    const body = JSON.parse(((globalThis.fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0])[1].body as string)
     expect(body.limits).toEqual({ maxResults: 5, maxDepth: 4, timeoutMs: 1000 })
   })
 
   it('throws on 4xx error', async () => {
-    global.fetch = vi.fn(async () => new Response('bad request', { status: 400 })) as never
+    globalThis.fetch = vi.fn(async () => new Response('bad request', { status: 400 })) as never
     await expect(
       fsSearchByCapability('h1', 'foo.go', [{ kind: 'session-cwd', sessionCode: 's1' }]),
     ).rejects.toThrow(/400/)
@@ -62,7 +62,7 @@ describe('fsSearchByCapability', () => {
     // Layer 3 caller decides what to do; helper just exposes the status via thrown error.
     // For this contract: 501 is treated as a soft failure — helper throws Error tagged with status,
     // so layer 3 caller catches and suppresses (per plan v4).
-    global.fetch = vi.fn(async () => new Response('not implemented', { status: 501 })) as never
+    globalThis.fetch = vi.fn(async () => new Response('not implemented', { status: 501 })) as never
     await expect(
       fsSearchByCapability('h1', 'foo.go', [{ kind: 'workspace-projectPath', workspaceId: 'w1' }]),
     ).rejects.toMatchObject({ status: 501 })

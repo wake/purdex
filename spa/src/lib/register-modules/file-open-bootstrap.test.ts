@@ -94,7 +94,7 @@ describe('layer 2 / 3 expand search wiring', () => {
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       )
     })
-    global.fetch = fetchSpy as never
+    globalThis.fetch = fetchSpy as never
 
     // Use the public popup-mount path — show with ask-expand spec, then
     // simulate a click on Workspace CTA. The bootstrap's `onSearchWorkspace`
@@ -117,7 +117,7 @@ describe('layer 2 / 3 expand search wiring', () => {
   })
 
   it('layer 2 (session-cwd) succeeds with matches sorted by mtime', async () => {
-    global.fetch = vi.fn(async (_url: string, init: RequestInit) => {
+    globalThis.fetch = vi.fn(async (_url: string, init: RequestInit) => {
       const body = JSON.parse(init.body as string) as { roots: { kind: string; sessionCode?: string }[] }
       expect(body.roots[0].kind).toBe('session-cwd')
       expect(body.roots[0].sessionCode).toBe('sess1')
