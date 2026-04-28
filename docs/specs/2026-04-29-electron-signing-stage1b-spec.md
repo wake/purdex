@@ -2,7 +2,7 @@
 
 - **Version**: 1.0.0-alpha.248 (worktree base; ship target alpha.250+, see §0.1)
 - **Date**: 2026-04-29
-- **Spec revision**: v1.2 (2026-04-29) — v1.1 addressed codex spec review (job `task-moivfw7n-a8x1ph`, 8 findings, all incorporated). v1.2 backports plan-review findings that touch spec test contract: §4.1b uses ordered array equality (P1-2), §4.1c/d/e formalise the preload/daemon/SPA-absence guards spec §6.1 had asserted as acceptance but had not detailed (P1-1, P2-7), §6.1 final test count corrected to 26 (job `task-moiw8665-6ak7i6`).
+- **Spec revision**: v1.3 (2026-04-29) — v1.1 addressed codex spec review (job `task-moivfw7n-a8x1ph`, 8 findings, all incorporated). v1.2 backports plan-review findings that touch spec test contract: §4.1b uses ordered array equality (P1-2), §4.1c/d/e formalise the preload/daemon/SPA-absence guards spec §6.1 had asserted as acceptance but had not detailed (P1-1, P2-7), §6.1 test count corrected to 26 (job `task-moiw8665-6ak7i6`). v1.3 incorporates Round-2 PR review (jobs `review-moiyv5n5-eqxwcr` attacker, `review-moiyz7eb-l7hofd` defender, `review-moiyzrod-r7x9j2` file-health): preload tightened to strict `=== '1'`, main.ts `dev:*` handlers gated to match (boundary completion closes §7 R7), progress guard strengthened to reject non-literal `progress(...)` calls, dead `restarting` removed from SPA `stepLabels`, final test count 27.
 - **Base**: `96bae3ce` (main @ alpha.248)
 - **Author**: claude-code + wake
 - **Status**: Draft (pending codex review)
@@ -103,7 +103,7 @@ The fix is to delete the runtime codesign concept end-to-end:
 | ---- | ------ |
 | `electron/updater.ts` | Remove `node:child_process` import (line 2), `APP_ID` constant (line 12), `getAppBundlePath()` (lines 45-49), `SignedState` type + signing helpers (lines 51-107), `progress('signing'); resignAppBundle()` call site (lines 228-229), `__testing` export (line 260). |
 | `electron/signing.test.ts` | Replace 3rd static test (presence assertion) with absence smoke. Delete the entire `describe('updater signing preflight (runtime)', ...)` block (17 tests). |
-| `spa/src/components/settings/DevEnvironmentSection.tsx` | Remove `signing: 'Signing app…'` entry from `stepLabels` map (line 256) — dead entry once the updater no longer emits the `signing` step. This is not an i18n key removal; `stepLabels` is an inline `Record<string, string>` literal (no locale file involvement), and the render path falls back to the raw `updateStep` for unknown keys, so removing the entry cannot dangle. |
+| `spa/src/components/settings/DevEnvironmentSection.tsx` | Remove `signing: 'Signing app…'` and `restarting: 'Restarting…'` entries from `stepLabels` map. `signing` is dead because the updater no longer emits the step; `restarting` was already dead — the macOS update flow's `app.exit(0)` kills the process before any `progress('restarting')` IPC could be delivered (the daemon-rebuild flow's separate `daemonPhase === 'restarting'` state has its own render path and is unaffected). Neither is an i18n key removal; `stepLabels` is an inline `Record<string, string>` literal, and the render path falls back to the raw `updateStep` for unknown keys. |
 
 ### 3.2 Symbols removed
 
@@ -187,24 +187,25 @@ Within that scope, evidence the claim holds:
    under `Resources/app/out/` change. AMFI does not gate Node's
    `require()` resolution.
 
-4. **Dev update is `PDX_DEV_MODE`-gated at the renderer-API and
-   daemon-route layers.** Specifically:
+4. **Dev update is `PDX_DEV_MODE`-gated at three layers, all using
+   strict `=== "1"` comparison (matches across renderer-API,
+   main-process, and daemon-route boundaries).** Specifically:
    - `electron/preload.ts:122-148` only exposes `applyUpdate`,
      `checkUpdate`, `streamCheck`, `onUpdateProgress` on
-     `window.electronAPI` when `process.env.PDX_DEV_MODE` is truthy.
+     `window.electronAPI` when `process.env.PDX_DEV_MODE === '1'`.
+   - `electron/main.ts:120-160` only registers the corresponding
+     `dev:*` `ipcMain.handle(...)` registrations inside an
+     `if (process.env.PDX_DEV_MODE === '1')` block. Even if
+     contextIsolation regressed and the renderer reached
+     `ipcRenderer` directly, the handlers are absent in production.
    - `internal/module/dev/module.go:166-178` only registers the
-     `/api/dev/update/*` HTTP routes when `PDX_DEV_MODE === "1"`.
-   - The corresponding `dev:*` `ipcMain.handle(...)` handlers in
-     `electron/main.ts:120-150` are registered unconditionally.
-     They are reachable only via `ipcRenderer`, which the renderer
-     cannot access (sandbox + contextIsolation), and the preload
-     bridge omits the channels in production. Production renderers
-     therefore have no path to invoke them, but the handlers
-     themselves remain registered.
+     `/api/dev/update/*` HTTP routes when
+     `os.Getenv("PDX_DEV_MODE") == "1"`.
 
    Blast radius: developer machines with `PDX_DEV_MODE=1`. Production
-   users cannot reach the path through the public API. See §7 R7 for
-   the residual main-process handler surface.
+   users have no path to invoke dev update through any of the three
+   surfaces. The Round-2 defender's "boundary half-closed" concern
+   is closed.
 
 5. **`codesign --verify --deep --strict` would notice.** A developer
    running this manually after dev update on a signed bundle would
@@ -309,6 +310,31 @@ it('daemon still gates /api/dev/update routes behind PDX_DEV_MODE=1', () => {
 
 Purpose: locks the §3.4 claim 4 contract on the daemon side.
 
+### 4.1f Add main-process gate guard (Round-2 defender)
+
+Adds one static test asserting `electron/main.ts` registers `dev:*`
+IPC handlers only inside an `if (process.env.PDX_DEV_MODE === '1')`
+block — closing the boundary that earlier revisions had marked
+out-of-scope (§7 R7):
+
+```ts
+it('main.ts gates dev:* IPC handler registration behind strict PDX_DEV_MODE === "1"', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  expect(main).toMatch(/process\.env\.PDX_DEV_MODE\s*===\s*['"]1['"]/)
+  expect(main).toMatch(/ipcMain\.handle\(['"]dev:apply-update['"]/)
+  const gateIdx = main.search(/process\.env\.PDX_DEV_MODE\s*===\s*['"]1['"]/)
+  const applyIdx = main.indexOf(`ipcMain.handle('dev:apply-update'`)
+  const checkIdx = main.indexOf(`ipcMain.handle('dev:check-update'`)
+  const streamIdx = main.indexOf(`ipcMain.handle('dev:stream-check'`)
+  expect(gateIdx).toBeGreaterThan(-1)
+  expect(applyIdx).toBeGreaterThan(gateIdx)
+  expect(checkIdx).toBeGreaterThan(gateIdx)
+  expect(streamIdx).toBeGreaterThan(gateIdx)
+})
+```
+
+Purpose: locks the §3.4 claim 4 boundary on the main-process side.
+
 ### 4.1e Add SPA-absence guard
 
 Adds one static test asserting the SPA `stepLabels` map no longer
@@ -389,24 +415,33 @@ manual verification).
   no order regression). Static assertion in `signing.test.ts` greps
   for these three string literals and asserts no other
   `progress('...')` call exists.
-- `electron/preload.ts` continues to gate `applyUpdate`,
-  `checkUpdate`, `streamCheck`, and `onUpdateProgress` behind
-  `process.env.PDX_DEV_MODE` (static grep assertion).
+- `electron/preload.ts` gates `applyUpdate`,
+  `checkUpdate`, `streamCheck`, and `onUpdateProgress` behind strict
+  `process.env.PDX_DEV_MODE === '1'` (static grep assertion).
+- `electron/main.ts` registers `dev:apply-update`, `dev:check-update`,
+  `dev:stream-check` `ipcMain.handle(...)` calls only inside an
+  `if (process.env.PDX_DEV_MODE === '1')` block (static grep
+  assertion). Closes the §7 R7 boundary residual.
 - `internal/module/dev/module.go` continues to gate
   `/api/dev/update/*` route registration on `PDX_DEV_MODE === "1"`
   (static grep assertion).
 - `electron/signing.test.ts` static absence smoke (§4.1) passes.
 - `electron/signing.test.ts` 2 existing static tests (§4.2) still pass.
 - `spa/src/components/settings/DevEnvironmentSection.tsx` `stepLabels`
-  has no `signing` entry.
+  has no `signing` entry **and** no `restarting` entry — `restarting`
+  was dead alongside `signing` (the daemon-rebuild flow's
+  `daemonPhase === 'restarting'` is a separate render path; the update
+  `progress(...)` stream never emitted `restarting` on macOS because
+  `app.exit(0)` kills the process before IPC delivers).
 - `pnpm --prefix electron test` green. Expected count moves from 39
-  to **26**: `signing.test.ts` from 20 → 7
+  to **27**: `signing.test.ts` from 20 → 8
   - 2 existing static preserved (package.json + build-electron.mjs)
   - 1 new absence smoke (replaces the old 3rd presence test) — §4.1
-  - 1 new progress-sequence guard — §4.1b
-  - 1 new preload-gate guard (PDX_DEV_MODE bridge surface) — §6.1
+  - 1 new progress-sequence guard (literal-only + total-count) — §4.1b
+  - 1 new preload-gate guard (strict `=== '1'`) — §6.1
   - 1 new daemon-gate guard (`/api/dev/update/*` route) — §6.1
   - 1 new SPA-absence guard (`stepLabels.signing` removed) — §6.1
+  - 1 new main-gate guard (PR-review addition) — §6.1
 
   `keybindings.test.ts` 19 unchanged.
 - `pnpm exec electron-vite build` green (no type/build regressions).
@@ -457,7 +492,7 @@ manual verification).
 | R4 | Followup #712 (darwin integration test for Stage 0 preflight) becomes obsolete | High | Low | Stage 1b PR explicitly closes #712 — preflight is gone, nothing to integration-test. Same for #713 (`APP_ID` deleted). |
 | R5 | A user is depending on `PDX_SKIP_MAC_SIGN=1` or `PDX_MAC_SIGN_IDENTITY` taking effect at dev-update time | Very low | Negligible | Both env vars retain build-time semantics in `scripts/build-electron.mjs`. CHANGELOG (bump PR) notes the runtime-time interpretation removal. |
 | R6 | Stage 1a/2/3 surfaces a need to re-sign at runtime that we didn't anticipate | Low | Low | None of the Stage 1a/2/3 designs require it (#709 epic). If discovered, re-add as a focused, well-tested feature instead of carrying vestigial code "just in case". |
-| R7 | Production-built `electron/main.ts` keeps `dev:*` `ipcMain.handle(...)` registrations even when `PDX_DEV_MODE` is unset (§3.4 claim 4) | Always present in production builds | Negligible | Renderer cannot reach `ipcMain` directly (sandbox + contextIsolation), and `electron/preload.ts` does not expose the `dev:*` channels in production. The handlers are inert in practice. Out of scope for Stage 1b; tracked as a hardening followup if needed. |
+| R7 | Production-built `electron/main.ts` keeps `dev:*` `ipcMain.handle(...)` registrations even when `PDX_DEV_MODE` is unset (§3.4 claim 4) | **Closed in PR review** | — | Round-2 defender flagged this as scope-drift once the preload gate was tightened. Stage 1b PR completes the boundary: `main.ts` `dev:*` handlers are now registered inside `if (process.env.PDX_DEV_MODE === '1')`, matching `preload.ts` and `module.go`. A static guard in `signing.test.ts` locks the contract. |
 
 ## 8. Verification plan
 
@@ -465,7 +500,7 @@ manual verification).
 
 ```
 pnpm install --frozen-lockfile          # from worktree root
-pnpm --prefix electron test             # 22 tests, all green
+pnpm --prefix electron test             # 27 tests, all green
 pnpm exec electron-vite build           # no regressions; out/ produced
 pnpm --prefix spa exec tsc -p ../electron/tsconfig.json --noEmit
 pnpm --prefix spa run lint

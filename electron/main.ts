@@ -116,54 +116,57 @@ function registerIpcHandlers(): void {
     }
   })
 
-  // Dev Update
-  ipcMain.handle('dev:app-info', () => getAppInfo())
-  ipcMain.handle('dev:check-update', (_event, daemonUrl: string, token?: string) => checkUpdate(daemonUrl, token))
+  // Dev Update — gated by PDX_DEV_MODE === '1', matching the daemon
+  // (internal/module/dev/module.go) and preload (electron/preload.ts).
+  if (process.env.PDX_DEV_MODE === '1') {
+    ipcMain.handle('dev:app-info', () => getAppInfo())
+    ipcMain.handle('dev:check-update', (_event, daemonUrl: string, token?: string) => checkUpdate(daemonUrl, token))
 
-  // Only one active stream at a time — a new request aborts the previous one.
-  let activeStream: AbortController | null = null
-  ipcMain.handle('dev:stream-check', async (event, daemonUrl: string, token: string | undefined, channel: string) => {
-    activeStream?.abort()
-    const controller = new AbortController()
-    activeStream = controller
-    const win = BrowserWindow.fromWebContents(event.sender)
-    try {
-      await streamCheck(daemonUrl, token, (ev) => {
-        if (win && !win.isDestroyed()) {
-          win.webContents.send(channel, ev)
+    // Only one active stream at a time — a new request aborts the previous one.
+    let activeStream: AbortController | null = null
+    ipcMain.handle('dev:stream-check', async (event, daemonUrl: string, token: string | undefined, channel: string) => {
+      activeStream?.abort()
+      const controller = new AbortController()
+      activeStream = controller
+      const win = BrowserWindow.fromWebContents(event.sender)
+      try {
+        await streamCheck(daemonUrl, token, (ev) => {
+          if (win && !win.isDestroyed()) {
+            win.webContents.send(channel, ev)
+          }
+        }, controller.signal)
+      } catch (err) {
+        // AbortError on manual stop is expected — surface everything else.
+        const msg = err instanceof Error ? err.message : String(err)
+        if ((err as { name?: string })?.name !== 'AbortError' && win && !win.isDestroyed()) {
+          win.webContents.send(channel, { type: 'error', error: msg })
         }
-      }, controller.signal)
-    } catch (err) {
-      // AbortError on manual stop is expected — surface everything else.
-      const msg = err instanceof Error ? err.message : String(err)
-      if ((err as { name?: string })?.name !== 'AbortError' && win && !win.isDestroyed()) {
-        win.webContents.send(channel, { type: 'error', error: msg })
+      } finally {
+        if (activeStream === controller) activeStream = null
       }
-    } finally {
-      if (activeStream === controller) activeStream = null
-    }
-  })
-  ipcMain.on('dev:stream-check-stop', () => {
-    activeStream?.abort()
-  })
+    })
+    ipcMain.on('dev:stream-check-stop', () => {
+      activeStream?.abort()
+    })
 
-  ipcMain.handle('dev:apply-update', async (event, daemonUrl: string, token?: string) => {
-    if (updateInProgress) throw 'Update already in progress'
-    updateInProgress = true
-    const win = BrowserWindow.fromWebContents(event.sender)
-    try {
-      return await applyUpdate(daemonUrl, (step) => {
-        if (win && !win.isDestroyed()) {
-          win.webContents.send('dev:update-progress', step)
-        }
-      }, token)
-    } catch (err) {
-      updateInProgress = false
-      // Error objects lose their message across contextBridge serialization.
-      // Re-throw as a plain string so the renderer gets a useful message.
-      throw String(err instanceof Error ? err.message : err)
-    }
-  })
+    ipcMain.handle('dev:apply-update', async (event, daemonUrl: string, token?: string) => {
+      if (updateInProgress) throw 'Update already in progress'
+      updateInProgress = true
+      const win = BrowserWindow.fromWebContents(event.sender)
+      try {
+        return await applyUpdate(daemonUrl, (step) => {
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('dev:update-progress', step)
+          }
+        }, token)
+      } catch (err) {
+        updateInProgress = false
+        // Error objects lose their message across contextBridge serialization.
+        // Re-throw as a plain string so the renderer gets a useful message.
+        throw String(err instanceof Error ? err.message : err)
+      }
+    })
+  }
 }
 
 function startMetricsPolling(): void {

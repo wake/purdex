@@ -4,7 +4,7 @@
 - **Status**: Draft v1.0 (pending codex plan review)
 - **Worktree**: `.claude/worktrees/electron-signing-stage1b` (branch `worktree-electron-signing-stage1b`)
 - **Baseline**: `origin/main @ 96bae3ce` (`1.0.0-alpha.248`)
-- **Spec**: `docs/specs/2026-04-29-electron-signing-stage1b-spec.md` (v1.1)
+- **Spec**: `docs/specs/2026-04-29-electron-signing-stage1b-spec.md` (v1.2)
 - **Tracking**: #709 (epic) — Stage 1b deliverable
 - **Target ship**: alpha.250+ (separate post-merge bump PR; spec §0.1)
 
@@ -17,8 +17,10 @@
 | Path | Reason | Spec ref |
 | ---- | ------ | -------- |
 | `electron/updater.ts` | Delete runtime codesign helpers, import, call site | §3.1, §3.2 |
-| `electron/signing.test.ts` | Replace 3rd static test with absence smoke; add progress-sequence guard; delete 17 runtime tests | §4.1, §4.1b, §4.3 |
-| `spa/src/components/settings/DevEnvironmentSection.tsx` | Remove dead `signing: 'Signing app…'` entry from `stepLabels` | §3.1 SPA row |
+| `electron/signing.test.ts` | Replace 3rd static test with absence smoke; add progress-sequence guard; delete 17 runtime tests; add gate guards (preload/daemon/main/SPA-absence) | §4.1, §4.1b/c/d/e, §4.3 |
+| `spa/src/components/settings/DevEnvironmentSection.tsx` | Remove dead `signing` and `restarting` entries from `stepLabels` | §3.1 SPA row |
+| `electron/preload.ts` | Tighten gate from truthy `process.env.PDX_DEV_MODE` to strict `=== '1'`. Added during PR review (round-2 attacker, F1 P1) — preload gate diverged from daemon's strict check, so the boundary that Stage 1b's safety claim relies on was incomplete. | §3.4 claim 4 |
+| `electron/main.ts` | Wrap `dev:*` `ipcMain.handle(...)` registrations in `if (process.env.PDX_DEV_MODE === '1')`. Added during PR review (round-2 defender, D2) — completes the boundary so it is not preload-only. | §3.4 claim 4 (was §7 R7 residual; now closed) |
 | `docs/specs/2026-04-29-electron-signing-stage1b-plan.md` | This plan (added in T0) | — |
 
 ### 0.2 Files this PR must NOT touch
@@ -27,9 +29,7 @@
 | ---- | ------ |
 | `scripts/build-electron.mjs` | Build-time signing pipeline; spec §5 non-goal |
 | `package.json` (mac.identity, mac.hardenedRuntime, etc.) | Stage 1a territory |
-| `internal/module/dev/*` | Daemon-side; no diff per spec §5 / §3.1 |
-| `electron/main.ts` | `dev:*` IPC handlers stay registered (spec §7 R7) |
-| `electron/preload.ts` | `PDX_DEV_MODE` gate for dev API stays as-is |
+| `internal/module/dev/*` | Daemon-side; no diff per spec §5 / §3.1 (gate already strict) |
 | `VERSION`, `CHANGELOG.md` | Separate post-merge bump PR (spec §0.1) |
 
 Concurrent-session safety: worktree is isolated; only files we own

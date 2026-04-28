@@ -253,7 +253,6 @@ export function DevEnvironmentSection() {
     downloading: 'Downloading update…',
     extracting: 'Extracting…',
     applying: 'Applying update…',
-    restarting: 'Restarting…',
   }
 
   const hasElectronUpdate = remoteInfo && appInfo && remoteInfo.electronHash !== appInfo.electronHash
