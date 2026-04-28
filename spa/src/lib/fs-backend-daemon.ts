@@ -25,7 +25,7 @@ export class DaemonBackend implements FsBackend {
     })
     if (!res.ok) {
       const text = await res.text().catch(() => `HTTP ${res.status}`)
-      throw new Error(text)
+      throw Object.assign(new Error(text), { status: res.status })
     }
     return res
   }

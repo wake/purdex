@@ -1,7 +1,7 @@
 import type { LinkOpener } from '../types'
 import type { FileInfo, FileSource } from '../../../types/fs'
 import { resolveEditorHomePath } from '../../editor-home-resolver'
-import type { OpenFileContext } from '../../file-open'
+import { FileNotFoundError, type OpenFileContext } from '../../file-open'
 
 export interface FilePathOpenerDeps {
   /**
@@ -187,11 +187,21 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
       try {
         await deps.tryOpenFile(file, source, openCtx)
       } catch (err) {
-        // Swallow FileNotFoundError when popup is enabled (it never throws),
-        // but auth/network errors still bubble — log them with click context.
-        console.warn(
-          `[file-path] tryOpenFile failed for ${file.path}: ${(err as Error)?.message ?? String(err)}`,
-        )
+        // Click-handler context: we can't propagate the rejection up the stack,
+        // so distinguish for the operator:
+        // - FileNotFoundError → expected when `popupOnMissingFile` is off; warn.
+        // - Anything else (auth/network/host removed) → unexpected; log loud
+        //   so console-watching surfaces the broken connection / token issue
+        //   instead of a quiet "tryOpenFile failed" line that reads like a
+        //   harmless missing file.
+        if (err instanceof FileNotFoundError) {
+          console.warn(`[file-path] file not found (popup disabled): ${file.path}`)
+        } else {
+          console.error(
+            `[file-path] tryOpenFile failed for ${file.path}: ${(err as Error)?.message ?? String(err)}`,
+            err,
+          )
+        }
       }
     },
   }
