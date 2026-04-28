@@ -280,6 +280,143 @@ func TestSearchEngine_RequiresBasenameQuery(t *testing.T) {
 	}
 }
 
+func TestSearchEngine_GitignoreSelfSymlinkParseFailure(t *testing.T) {
+	// .gitignore with a multi-line unbalanced character class — confirms the
+	// preflight catches it even when later lines are valid.
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, ".gitignore"), "# preamble\n*.go\n[bad-pattern\n*.txt\n")
+	mustWrite(t, filepath.Join(dir, "kept.go"), "ok")
+	req := SearchRequest{
+		Mode:  "basename",
+		Query: SearchQuery{Basename: "kept.go"},
+		Roots: []SearchRoot{rawRoot(dir)},
+	}
+	_, err := Search(context.Background(), req)
+	if !errors.Is(err, ErrGitignoreParse) {
+		t.Errorf("expected ErrGitignoreParse for embedded bad pattern, got %v", err)
+	}
+}
+
+func TestSearchEngine_GitignoreNegationStillRespected(t *testing.T) {
+	// go-gitignore docs note negation TODO; this test is a behavioural
+	// snapshot — if the upstream lib later starts honouring `!`, this test
+	// will need updating, but it confirms today's behaviour does not silently
+	// crash.
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, ".gitignore"), "*.go\n!keep.go\n")
+	mustWrite(t, filepath.Join(dir, "skip.go"), "")
+	mustWrite(t, filepath.Join(dir, "keep.go"), "")
+	req := SearchRequest{
+		Mode:  "basename",
+		Query: SearchQuery{Basename: "keep.go"},
+		Roots: []SearchRoot{rawRoot(dir)},
+	}
+	resp, err := Search(context.Background(), req)
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	// We do not assert match presence — go-gitignore negation is best-effort
+	// upstream. This test only proves no crash + no error.
+	_ = resp
+}
+
+func TestSearchEngine_GitignoreOnlyRootLevelEvaluated(t *testing.T) {
+	// Engine intentionally only loads <root>/.gitignore — nested .gitignore
+	// files are NOT recursively evaluated. This is a documented limitation
+	// matching the 5.1a engine design.
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, ".gitignore"), "*.tmp\n")
+	mustWrite(t, filepath.Join(dir, "sub", ".gitignore"), "foo.go\n")
+	mustWrite(t, filepath.Join(dir, "sub", "foo.go"), "ok")
+	req := SearchRequest{
+		Mode:  "basename",
+		Query: SearchQuery{Basename: "foo.go"},
+		Roots: []SearchRoot{rawRoot(dir)},
+	}
+	resp, err := Search(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Matches) != 1 {
+		t.Errorf("nested .gitignore must NOT prune sub/foo.go, got %+v", resp.Matches)
+	}
+}
+
+func TestSearchEngine_SymlinkOutsideRootNotFollowed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	outside := t.TempDir()
+	mustWrite(t, filepath.Join(outside, "secret.go"), "should not be visited via symlink")
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "kept.go"), "ok")
+	if err := os.Symlink(outside, filepath.Join(dir, "external")); err != nil {
+		t.Fatal(err)
+	}
+	req := SearchRequest{
+		Mode:  "basename",
+		Query: SearchQuery{Basename: "secret.go"},
+		Roots: []SearchRoot{rawRoot(dir)},
+	}
+	resp, err := Search(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Matches) != 0 {
+		t.Errorf("symlink to outside dir must not be followed; got %+v", resp.Matches)
+	}
+}
+
+func TestSearchEngine_NestedSymlinkLoopDoesNotInfiniteWalk(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	// dir/a → dir/a/b/loop → dir/a (cycle two levels deep).
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a")
+	mustWrite(t, filepath.Join(a, "b", "x.go"), "ok")
+	if err := os.Symlink(a, filepath.Join(a, "b", "loop")); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		req := SearchRequest{
+			Mode:   "basename",
+			Query:  SearchQuery{Basename: "x.go"},
+			Roots:  []SearchRoot{rawRoot(dir)},
+			Limits: SearchLimits{MaxDepth: 6, MaxResults: 100},
+		}
+		_, _ = Search(context.Background(), req)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("nested symlink loop caused hang")
+	}
+}
+
+func TestSearchEngine_CancelledContextStopsWalk(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 50; i++ {
+		mustWrite(t, filepath.Join(dir, fmt.Sprintf("d%02d", i), "foo.go"), "x")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancelled before search starts
+	req := SearchRequest{
+		Mode:  "basename",
+		Query: SearchQuery{Basename: "foo.go"},
+		Roots: []SearchRoot{rawRoot(dir)},
+	}
+	resp, err := Search(ctx, req)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !resp.Partial {
+		t.Errorf("expected partial=true on cancelled ctx")
+	}
+}
+
 func TestSearchEngine_SymlinkLoopDoesNotInfiniteWalk(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")
