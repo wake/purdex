@@ -11,6 +11,14 @@ export interface FilePathOpenerDeps {
    * controller, and tab opener are pre-wired.
    */
   tryOpenFile(file: FileInfo, source: FileSource, ctx: OpenFileContext): Promise<void>
+  /**
+   * Direct-open path that bypasses the stat/cache/popup pipeline. Used when
+   * we have a path the daemon cannot stat (e.g. unresolved `~/foo` after
+   * fetchPaneHome failed) but the user still wants a blank editor buffer at
+   * that name — preserving the pre-P5 fallback UX. R3 P2: without this, the
+   * daemon rejected `stat('~/foo')` with 400 and the click silently failed.
+   */
+  openAsBuffer(file: FileInfo, source: FileSource, ctx: OpenFileContext): void
   /** Active workspace ID — used as a fallback when ctx.workspaceId is unset. */
   getActiveWorkspaceId(): string | null
   /** Resolve the cwd of a tmux pane (relative-path expansion). */
@@ -183,6 +191,15 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
         cwd: cacheCwd,
         sourceWorkspaceId: targetWorkspaceId,
         sessionCode: ctx.sessionCode,
+      }
+      // R3 P2: tilde branch may leave `path` as `~/foo` if home resolution
+      // failed; daemon rejects stat() on non-absolute paths with 400, which
+      // isn't ENOENT, so the missing-file pipeline would surface a stat error
+      // instead of opening an untitled buffer. Preserve the pre-P5 fallback
+      // by routing non-absolute leftovers through the direct-open path.
+      if (!path.startsWith('/')) {
+        deps.openAsBuffer(file, source, openCtx)
+        return
       }
       try {
         await deps.tryOpenFile(file, source, openCtx)

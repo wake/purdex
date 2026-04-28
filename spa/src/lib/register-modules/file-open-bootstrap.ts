@@ -235,6 +235,21 @@ export function tryOpenFileForFileTree(
   return getFileTreeService().tryOpenFile(file, source, ctx)
 }
 
+/**
+ * Direct-open bypass — used by terminal-link's tilde fallback (R3 P2). When
+ * the path can't be made absolute (home endpoint failed), the pre-P5
+ * behavior was to open it as a blank editor buffer. The stat/cache/popup
+ * pipeline can't do that because the daemon rejects non-absolute stat
+ * with 400, so this skips straight to the tab-opener.
+ */
+export function openFileAsBufferDirect(
+  file: FileInfo,
+  source: FileSource,
+  ctx: OpenFileContext,
+): void {
+  defaultTabOpener(file, source, ctx)
+}
+
 export function tryOpenFileForTerminalLink(
   file: FileInfo,
   source: FileSource,

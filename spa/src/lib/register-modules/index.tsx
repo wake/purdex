@@ -55,6 +55,7 @@ import { editorModuleDefinition, registerEditorNewTabProviders } from './editor-
 import { registerBuiltinFsBackends } from './fs-backends'
 import {
   tryOpenFileForTerminalLink,
+  openFileAsBufferDirect,
   resolveOpenContextCwdFromSessions,
 } from './file-open-bootstrap'
 import { applyModuleFileOpeners } from './module-file-openers'
@@ -336,6 +337,7 @@ export function registerBuiltinModules(): void {
       // → popup) rather than calling tab APIs directly. The pipeline's
       // tabOpener still does getDefaultOpener + openSingletonTab + insertTab.
       tryOpenFile: (file, source, ctx) => tryOpenFileForTerminalLink(file, source, ctx),
+      openAsBuffer: (file, source, ctx) => openFileAsBufferDirect(file, source, ctx),
       getActiveWorkspaceId: () => useWorkspaceStore.getState().activeWorkspaceId,
       fetchPaneCwd: (hostId, sessionCode, signal) => fetchSessionCwd(hostId, sessionCode, signal),
       fetchPaneHome: (hostId, sessionCode, signal) => fetchSessionHome(hostId, sessionCode, signal),

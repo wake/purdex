@@ -10,6 +10,7 @@ describe('registerBuiltinTerminalLinks', () => {
       urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
       filePathOpener: {
         tryOpenFile: async () => {},
+        openAsBuffer: () => {},
         getActiveWorkspaceId: () => null,
         fetchPaneCwd: async (_h: string, _s: string, _sig?: AbortSignal) => '',
         fetchPaneHome: async (_h: string, _s: string, _sig?: AbortSignal) => '',
@@ -26,6 +27,7 @@ describe('registerBuiltinTerminalLinks', () => {
       urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
       filePathOpener: {
         tryOpenFile: async () => {},
+        openAsBuffer: () => {},
         getActiveWorkspaceId: () => null,
         fetchPaneCwd: async (_h: string, _s: string, _sig?: AbortSignal) => '',
         fetchPaneHome: async (_h: string, _s: string, _sig?: AbortSignal) => '',
@@ -52,6 +54,7 @@ describe('registerBuiltinTerminalLinks — 4 file-path matchers', () => {
       urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
       filePathOpener: {
         tryOpenFile: async () => {},
+        openAsBuffer: () => {},
         getActiveWorkspaceId: () => 'ws',
         fetchPaneCwd: async () => '/cwd',
         fetchPaneHome: async () => '/home/user',
@@ -75,6 +78,7 @@ describe('registerBuiltinTerminalLinks — 4 file-path matchers', () => {
       urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
       filePathOpener: {
         tryOpenFile: async () => {},
+        openAsBuffer: () => {},
         getActiveWorkspaceId: () => 'ws',
         fetchPaneCwd: async () => '/cwd',
         fetchPaneHome: async () => '/home/user',

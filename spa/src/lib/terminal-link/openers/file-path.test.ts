@@ -35,10 +35,22 @@ function makeDeps() {
   // tryOpenFile shim — mimics the bootstrap-time tabOpener so existing
   // assertions on `getDefaultOpener / openSingletonTab / insertTab` still hold.
   const FILE_KINDS = new Set(['editor', 'image-preview', 'pdf-preview'])
-  const tryOpenFile = vi.fn(async (file, source, ctx) => {
+  const tryOpenFile = vi.fn(async (file: { path: string; name?: string }, source: { type: string; hostId?: string }, ctx: { sourceWorkspaceId: string | null }) => {
     const opener = getDefaultOpener(file)
     if (!opener) return
-    const content = opener.createContent(source, file)
+    const content = opener.createContent(source as never, file as never)
+    const targetWs = ctx.sourceWorkspaceId
+    if (!targetWs) return
+    const afterTabId = computeInsertTarget(targetWs, (c: { kind: string }) => FILE_KINDS.has(c.kind))
+    const tabId = openSingletonTab(content, { afterTabId })
+    insertTab(tabId, targetWs, afterTabId)
+  })
+  // openAsBuffer shim — direct-open bypass used by the tilde fallback when
+  // home resolution fails. Does NOT call stat — same shape as tryOpenFile.
+  const openAsBuffer = vi.fn((file: { path: string; name?: string }, source: { type: string; hostId?: string }, ctx: { sourceWorkspaceId: string | null }) => {
+    const opener = getDefaultOpener(file)
+    if (!opener) return
+    const content = opener.createContent(source as never, file as never)
     const targetWs = ctx.sourceWorkspaceId
     if (!targetWs) return
     const afterTabId = computeInsertTarget(targetWs, (c: { kind: string }) => FILE_KINDS.has(c.kind))
@@ -47,7 +59,7 @@ function makeDeps() {
   })
 
   return {
-    tryOpenFile, openSingletonTab, insertTab, getDefaultOpener,
+    tryOpenFile, openAsBuffer, openSingletonTab, insertTab, getDefaultOpener,
     getActiveWorkspaceId, computeInsertTarget, fetchPaneCwd, fetchPaneHome,
     resolveOpenContextCwd, fakeOpener, paneContent,
   }
@@ -524,6 +536,19 @@ describe('file-path opener — tilde path layered resolve (PR-5)', () => {
     const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
     expect(createContentCalls[0][1].path).toBe('~/foo.ts')
     expect(deps.openSingletonTab).toHaveBeenCalled()
+  })
+
+  it('R3 P2: unresolved tilde routes to openAsBuffer (NOT tryOpenFile) so daemon stat 400 cannot block buffer creation', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneHome.mockRejectedValueOnce(new Error('home endpoint timeout'))
+    const o = createFilePathOpener(deps)
+
+    await o.open(tildeToken, { hostId: 'h1', sessionCode: 'c1', workspaceId: 'wsA' }, new MouseEvent('click'))
+
+    expect(deps.openAsBuffer).toHaveBeenCalledTimes(1)
+    expect(deps.tryOpenFile).not.toHaveBeenCalled()
+    const buffArgs = deps.openAsBuffer.mock.calls[0]
+    expect(buffArgs[0].path).toBe('~/foo.ts')
   })
 
   it('multi-workspace: reads link-source workspace (wsB), not active (wsA)', async () => {
