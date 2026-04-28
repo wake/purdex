@@ -62,6 +62,9 @@ type Module struct {
 
 	sweepCancel context.CancelFunc
 	sweepWG     sync.WaitGroup
+
+	pathHintDedup  *PathHintDedupCache
+	pathHintBuffer *PathHintRingBuffer
 }
 
 // Test seams for Module.New. framesInitFn failure is fatal (hook processing
@@ -110,6 +113,8 @@ func New(events *store.AgentEventStore) (*Module, error) {
 		activeWatchers:  make(map[string]string),
 		statusSnapshots: make(map[string]statusSnapshot),
 		testObservers:   make(map[string]*testObserver),
+		pathHintDedup:   NewPathHintDedupCache(5 * time.Second),
+		pathHintBuffer:  NewPathHintRingBuffer(200),
 	}
 	if traces != nil {
 		m.traceSink = newHookTraceSink(traces)

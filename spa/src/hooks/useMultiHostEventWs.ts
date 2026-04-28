@@ -6,7 +6,8 @@ import { useStreamStore } from '../stores/useStreamStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useTabStore } from '../stores/useTabStore'
 import { connectHostEvents, type EventConnection } from '../lib/host-events'
-import { dispatchAgentWsEvent } from '../lib/agent-ws-dispatch'
+import { dispatchAgentWsEvent, isAgentWsEvent } from '../lib/agent-ws'
+import { usePathCacheStore } from '../stores/path-cache/usePathCacheStore'
 import { debugStatuslineTest } from '../lib/statusline-test-debug'
 import { scanPaneTree } from '../lib/pane-tree'
 import { hostWsUrl, fetchWsTicket, fetchHistory, type Session } from '../lib/host-api'
@@ -123,6 +124,12 @@ export function useMultiHostEventWs() {
                 // Clear agent state (subagents, status, etc.) so indicators
                 // don't linger after the tmux session disappears.
                 useAgentStore.getState().clearSession(hostId, code)
+                // Path-cache entries tagged with this sessionCode are now
+                // dead (their owning agent session is gone); other sessions
+                // sharing the same cwd keep their entries. SessionCode is
+                // host-local so we must scope the clear by hostId — sibling
+                // hosts can mint identical codes (R3 P2).
+                usePathCacheStore.getState().clearBySession(hostId, code)
               }
             } catch { /* ignore */ }
             return
@@ -163,7 +170,10 @@ export function useMultiHostEventWs() {
               store.setHandoffProgress(hostId, event.session, event.value)
             }
           }
-          if (event.type === 'agent.status' || event.type === 'agent.status.cleared') {
+          // Whitelist sourced from agent-ws/index.ts — single source so adding
+          // a new agent.* handler only requires updating AGENT_WS_EVENT_TYPES
+          // (R2-F2). No broad startsWith filter (defender review #9).
+          if (isAgentWsEvent(event.type)) {
             if (event.session.startsWith('__pdx_test_')) {
               debugStatuslineTest('ws.entry', {
                 hostId,

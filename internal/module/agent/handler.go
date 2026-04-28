@@ -122,6 +122,26 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	trace.Verify(req, "accepted", "verify_passed", map[string]any{"decision": "accepted"})
 
+	// Emit PathHint for CC PreToolUse / PostToolUse before status derivation —
+	// path hints are independent of status and should still seed the SPA cache
+	// even when DeriveStatus returns Valid=false. Skipped when sessionCode does
+	// not resolve (e.g. unknown tmux session). cwd is read from CC's raw event
+	// (every CC hook payload includes `cwd`); the cached SessionInfo.Cwd acts
+	// as a fallback for older / non-conforming senders.
+	if req.AgentType == "cc" && (req.EventName == "PreToolUse" || req.EventName == "PostToolUse") &&
+		m.core != nil && m.pathHintDedup != nil && m.pathHintBuffer != nil {
+		if code := m.resolveSessionCode(req.TmuxSession); code != "" {
+			cwdFallback := ""
+			if m.sessions != nil {
+				if info, err := m.sessions.GetSession(code); err == nil && info != nil {
+					cwdFallback = info.Cwd
+				}
+			}
+			EmitPathHint(m.core.Events, m.pathHintDedup, m.pathHintBuffer,
+				req.RawEvent, req.EventName, "cc", code, cwdFallback, time.Now())
+		}
+	}
+
 	broadcastTs := time.Now().UnixNano()
 
 	// Find provider
