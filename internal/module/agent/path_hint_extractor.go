@@ -80,7 +80,13 @@ func ExtractPathHint(
 	cwdFallback string,
 	now time.Time,
 ) (PathHint, string, bool) {
-	if eventName != "PreToolUse" && eventName != "PostToolUse" {
+	// cc-only path: only PdxPreToolUse / PdxPostToolUse carry tool input.
+	// Phase 1 cc emits Pdx-prefixed names; codex / opencode have no
+	// equivalent hook event (file-tool semantics aren't part of their
+	// catalogs), so other agents naturally never reach this branch.
+	switch eventName {
+	case "PdxPreToolUse", "PdxPostToolUse":
+	default:
 		return PathHint{}, "", false
 	}
 	if len(rawEvent) > MaxRawEventBytes {

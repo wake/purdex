@@ -261,7 +261,7 @@ describe('HookModuleCard lastTrigger reactivity', () => {
       useAgentStore.setState({
         lastEvents: {
           [`${HOST_ID}:sess1`]: {
-            raw_event_name: 'SessionStart',
+            raw_event_name: 'PdxSessionStart',
             status: 'idle', agent_type: 'cc', broadcast_ts: now,
           },
         },

@@ -85,11 +85,97 @@ const (
 )
 
 type HookEventSpec struct {
-	Name        string
+	// Name is the legacy raw upstream event identifier. Kept during W2
+	// transition to allow Phase 1/2 main-branch builds where codex/opencode
+	// catalogs have not yet migrated. Removed in Phase 3 ship together with
+	// any remaining backfill literals.
+	//
+	// Deprecated: use PurdexName for daemon-internal matching, UpstreamKeys
+	// for installer/plugin boundary writes.
+	Name string
+
+	// PurdexName is the daemon-internal stable identifier for this catalog
+	// entry. Always prefixed with "Pdx". Used as:
+	//   - DeriveStatus switch case label
+	//   - CLI `pdx hook --agent <agent> <PurdexName>` positional argument
+	//   - HTTP EventRequest.PurdexName payload value
+	//   - NormalizedEvent.PurdexName / TraceStore record key
+	// Daemon code MUST use PurdexName for all internal lookups and matching.
+	PurdexName string
+
+	// UpstreamKeys lists the raw event names that the agent's upstream hook
+	// system fires when this catalog entry should match. Always non-empty
+	// post-migration (installable / unsupported / ignored alike).
+	//
+	// Used at the installer/plugin boundary:
+	//   - cc: written as ~/.claude/settings.json "hooks" map key
+	//   - codex: written as ~/.codex/hooks.json matcher-group key
+	//   - opencode: matched against Bus event name in plugin demux switch
+	//
+	// For cc/codex this is normally a single-element slice. For opencode
+	// installable entries, multiple upstream Bus events may map to the same
+	// PurdexName (e.g., permission.asked + question.asked → PdxPermissionRequest).
+	// For opencode unsupported/ignored entries, UpstreamKeys is a
+	// single-element slice equal to the legacy Name value.
+	UpstreamKeys []string
+
+	// Lifecycle classifies the daemon-internal side effect kind for this
+	// catalog entry. Used by frame_ops / handler so that lifecycle handling
+	// (frame reset, subagent membership, frame delete, error guard whitelist)
+	// can be done via catalog metadata lookup instead of hardcoded event-name
+	// string comparison. See lifecycle.go for the value table.
+	Lifecycle LifecycleEventKind
+
 	EmitsStatus []Status
 	Description string
 	FutureOnly  bool
 	Handling    HookHandling
+}
+
+// LookupByPurdexName scans specs for the catalog entry whose PurdexName
+// matches purdexName. The empty string never matches even if a (legacy /
+// not-yet-migrated) entry has an empty PurdexName, which keeps malformed
+// payloads from accidentally landing on a real catalog row.
+//
+// Intended caller: daemon-internal lookups (handler routing, frame_ops
+// dispatch, DeriveStatus). Slice scan is O(N) with N ≤ ~11; an index would
+// add cache invalidation without measurable benefit.
+func LookupByPurdexName(specs []HookEventSpec, purdexName string) (HookEventSpec, bool) {
+	if purdexName == "" {
+		return HookEventSpec{}, false
+	}
+	for _, s := range specs {
+		if s.PurdexName == purdexName {
+			return s, true
+		}
+	}
+	return HookEventSpec{}, false
+}
+
+// LookupByUpstreamKey scans specs for the catalog entry whose UpstreamKeys
+// contains upstreamKey. Used for installer/checker boundary inspection and
+// for test assertions when verifying the cc/codex 1:1 PurdexName ↔
+// UpstreamKey mapping.
+//
+// Caveat: NOT suitable for opencode runtime routing of filter-based events
+// (`session.status`, `tool.execute.before`, `tool.execute.after`). Those
+// upstream keys require a `type` / `tool` filter to determine the correct
+// PurdexName, and catalog UpstreamKeys does not encode filter conditions —
+// hitting `session.status` here would resolve to PdxStop even for busy /
+// retry sub-states. opencode plugin demux remains the authority for that
+// runtime path.
+func LookupByUpstreamKey(specs []HookEventSpec, upstreamKey string) (HookEventSpec, bool) {
+	if upstreamKey == "" {
+		return HookEventSpec{}, false
+	}
+	for _, s := range specs {
+		for _, k := range s.UpstreamKeys {
+			if k == upstreamKey {
+				return s, true
+			}
+		}
+	}
+	return HookEventSpec{}, false
 }
 
 func EffectiveHookHandling(spec HookEventSpec) HookHandling {

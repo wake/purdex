@@ -59,7 +59,7 @@ describe('hook-modules', () => {
       'host-1:s3': {
         agent_type: 'cc',
         status: 'idle',
-        raw_event_name: 'SubagentStart',
+        raw_event_name: 'PdxSubagentStart',
         broadcast_ts: 999,
       },
     })

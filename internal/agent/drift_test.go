@@ -39,18 +39,18 @@ type driftFixture struct {
 // document the catalog without polluting the set-equality comparison.
 var providerFixtures = map[string][]driftFixture{
 	"cc": {
-		{"SessionStart", `{}`, agent.StatusIdle, true},
-		{"UserPromptSubmit", `{}`, agent.StatusRunning, true},
-		{"Notification", `{"notification_type":"permission_prompt"}`, agent.StatusWaiting, true},
-		{"Notification", `{"notification_type":"elicitation_dialog"}`, agent.StatusWaiting, true},
-		{"Notification", `{"notification_type":"idle_prompt"}`, agent.StatusIdle, true},
-		{"Notification", `{"notification_type":"auth_success"}`, agent.StatusIdle, true},
-		{"PermissionRequest", `{"tool_name":"Bash"}`, agent.StatusWaiting, true},
-		{"Stop", `{}`, agent.StatusIdle, true},
-		{"StopFailure", `{"error":"x"}`, agent.StatusError, true},
-		{"SessionEnd", `{}`, agent.StatusClear, true},
-		{"SubagentStart", `{"agent_id":"a"}`, "", true}, // Valid=true, Status="" (filtered)
-		{"SubagentStop", `{"agent_id":"a"}`, "", true},  // Valid=true, Status="" (filtered)
+		{"PdxSessionStart", `{}`, agent.StatusIdle, true},
+		{"PdxUserPromptSubmit", `{}`, agent.StatusRunning, true},
+		{"PdxNotification", `{"notification_type":"permission_prompt"}`, agent.StatusWaiting, true},
+		{"PdxNotification", `{"notification_type":"elicitation_dialog"}`, agent.StatusWaiting, true},
+		{"PdxNotification", `{"notification_type":"idle_prompt"}`, agent.StatusIdle, true},
+		{"PdxNotification", `{"notification_type":"auth_success"}`, agent.StatusIdle, true},
+		{"PdxPermissionRequest", `{"tool_name":"Bash"}`, agent.StatusWaiting, true},
+		{"PdxStop", `{}`, agent.StatusIdle, true},
+		{"PdxStopFailure", `{"error":"x"}`, agent.StatusError, true},
+		{"PdxSessionEnd", `{}`, agent.StatusClear, true},
+		{"PdxSubagentStart", `{"agent_id":"a"}`, "", true}, // Valid=true, Status="" (filtered)
+		{"PdxSubagentStop", `{"agent_id":"a"}`, "", true},  // Valid=true, Status="" (filtered)
 	},
 	"codex": {
 		{"SessionStart", `{}`, agent.StatusIdle, true},
@@ -222,9 +222,16 @@ func TestDriftFixtureCoversAllEvents(t *testing.T) {
 			if !agent.IsInstallableHookSpec(spec) {
 				continue
 			}
-			if !covered[spec.Name] {
+			// W2 transition: cc fixtures key on PurdexName (post Phase 1
+			// rename); codex / opencode fixtures still key on legacy Name.
+			// Phase 3 ship drops the Name fallback once all three migrate.
+			key := spec.PurdexName
+			if key == "" {
+				key = spec.Name
+			}
+			if !covered[key] {
 				t.Errorf("provider %q: installable Events() declares %q but providerFixtures has no entry (add a fixture or make the spec non-installable)",
-					row.AgentType, spec.Name)
+					row.AgentType, key)
 			}
 		}
 	}
@@ -291,10 +298,14 @@ func TestDriftPerEventEmitsStatusMatch(t *testing.T) {
 					continue
 				}
 				spec := spec
-				t.Run(spec.Name, func(t *testing.T) {
-					fxs, ok := fixturesByEvent[spec.Name]
+				key := spec.PurdexName
+				if key == "" {
+					key = spec.Name
+				}
+				t.Run(key, func(t *testing.T) {
+					fxs, ok := fixturesByEvent[key]
 					if !ok || len(fxs) == 0 {
-						t.Fatalf("provider %q event %q has no fixture", row.AgentType, spec.Name)
+						t.Fatalf("provider %q event %q has no fixture", row.AgentType, key)
 					}
 					// Declared set (from the spec).
 					declared := make(map[agent.Status]bool, len(spec.EmitsStatus))
@@ -315,7 +326,7 @@ func TestDriftPerEventEmitsStatusMatch(t *testing.T) {
 							"  emitted:  %v\n"+
 							"  declared-not-emitted (remove from EmitsStatus or add a fixture): %v\n"+
 							"  emitted-not-declared (add to EmitsStatus or fix DeriveStatus):   %v",
-							row.AgentType, spec.Name,
+							row.AgentType, key,
 							statusSetSorted(declared),
 							statusSetSorted(emitted),
 							statusSetSorted(diffSet(declared, emitted)),

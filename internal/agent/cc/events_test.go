@@ -206,6 +206,165 @@ func TestCCEvents_DescriptionsNonEmpty(t *testing.T) {
 	}
 }
 
+// expectedCCLifecycle pins the W2 LifecycleEventKind value per cc Name. Any
+// catalog edit that touches lifecycle classification must update this map and
+// the §2.3.1 spec table together.
+var expectedCCLifecycle = map[string]agent.LifecycleEventKind{
+	"SessionStart":      agent.LifecycleSessionStart,
+	"UserPromptSubmit":  agent.LifecycleUserPromptSubmit,
+	"Stop":              agent.LifecycleStop,
+	"StopFailure":       agent.LifecycleStopFailure,
+	"Notification":      agent.LifecycleNone,
+	"PermissionRequest": agent.LifecycleNone,
+	"SessionEnd":        agent.LifecycleSessionEnd,
+	"SubagentStart":     agent.LifecycleSubagentStart,
+	"SubagentStop":      agent.LifecycleSubagentStop,
+}
+
+// expectedCCPreservedMetadata locks the EmitsStatus / Description / FutureOnly
+// / Handling tuple per cc Name as of the pre-W2 catalog. Plain-struct-literal
+// migration must not lose any of these fields (Round-2 G1 防漂移).
+type ccLegacyMetadata struct {
+	EmitsStatus []agent.Status
+	Description string
+	FutureOnly  bool
+	Handling    agent.HookHandling
+}
+
+var expectedCCPreservedMetadata = map[string]ccLegacyMetadata{
+	"Setup":               {[]agent.Status{}, "Claude Code setup hook initialization", false, agent.HookHandlingUnsupported},
+	"SessionStart":        {[]agent.Status{agent.StatusIdle}, "Claude Code session started (non-compact source)", false, ""},
+	"UserPromptSubmit":    {[]agent.Status{agent.StatusRunning}, "User submitted a prompt to the agent", false, ""},
+	"SubagentStart":       {[]agent.Status{}, "Nested sub-agent task dispatched", false, ""},
+	"SubagentStop":        {[]agent.Status{}, "Nested sub-agent task completed", false, ""},
+	"Stop":                {[]agent.Status{agent.StatusIdle}, "Agent finished responding and is idle", false, ""},
+	"StopFailure":         {[]agent.Status{agent.StatusError}, "Agent stopped due to an error", false, ""},
+	"Notification":        {[]agent.Status{agent.StatusWaiting, agent.StatusIdle}, "Permission/elicitation prompt, idle prompt, or auth success", false, ""},
+	"PermissionRequest":   {[]agent.Status{agent.StatusWaiting}, "Tool permission request awaiting user approval", false, ""},
+	"SessionEnd":          {[]agent.Status{agent.StatusClear}, "Claude Code session ended", false, ""},
+	"UserPromptExpansion": {[]agent.Status{}, "User command expanded before model processing", false, agent.HookHandlingUnsupported},
+	"PreToolUse":          {[]agent.Status{}, "Tool call about to execute", false, agent.HookHandlingUnsupported},
+	"PermissionDenied":    {[]agent.Status{}, "Tool permission denied by auto mode classifier", false, agent.HookHandlingIgnored},
+	"PostToolUse":         {[]agent.Status{}, "Tool call completed successfully", false, agent.HookHandlingIgnored},
+	"PostToolUseFailure":  {[]agent.Status{}, "Tool call failed", false, agent.HookHandlingIgnored},
+	"PostToolBatch":       {[]agent.Status{}, "Parallel tool call batch resolved", false, agent.HookHandlingUnsupported},
+	"TaskCreated":         {[]agent.Status{}, "Task was created", false, agent.HookHandlingIgnored},
+	"TaskCompleted":       {[]agent.Status{}, "Task was completed", false, agent.HookHandlingIgnored},
+	"TeammateIdle":        {[]agent.Status{}, "Agent team teammate is about to go idle", false, agent.HookHandlingIgnored},
+	"InstructionsLoaded":  {[]agent.Status{}, "Project instructions were loaded", false, agent.HookHandlingIgnored},
+	"ConfigChange":        {[]agent.Status{}, "Claude Code configuration changed", false, agent.HookHandlingIgnored},
+	"CwdChanged":          {[]agent.Status{}, "Working directory changed", false, agent.HookHandlingIgnored},
+	"FileChanged":         {[]agent.Status{}, "Watched file changed on disk", false, agent.HookHandlingUnsupported},
+	"WorktreeCreate":      {[]agent.Status{}, "Worktree is being created", false, agent.HookHandlingUnsupported},
+	"WorktreeRemove":      {[]agent.Status{}, "Worktree is being removed", false, agent.HookHandlingUnsupported},
+	"PreCompact":          {[]agent.Status{}, "Context compaction is about to run", false, agent.HookHandlingUnsupported},
+	"PostCompact":         {[]agent.Status{}, "Context compaction completed", false, agent.HookHandlingIgnored},
+	"Elicitation":         {[]agent.Status{}, "MCP server requested user input", false, agent.HookHandlingIgnored},
+	"ElicitationResult":   {[]agent.Status{}, "MCP elicitation response was submitted", false, agent.HookHandlingIgnored},
+}
+
+// TestCcEventSpecs_PurdexNamePdxPrefix verifies invariant 1: every cc entry
+// has a non-empty PurdexName starting with "Pdx".
+func TestCcEventSpecs_PurdexNamePdxPrefix(t *testing.T) {
+	for _, e := range ccEventSpecs {
+		if e.PurdexName == "" {
+			t.Errorf("cc %q: PurdexName empty", e.Name)
+			continue
+		}
+		if !strings.HasPrefix(e.PurdexName, "Pdx") {
+			t.Errorf("cc %q: PurdexName %q lacks Pdx prefix", e.Name, e.PurdexName)
+		}
+	}
+}
+
+// TestCcEventSpecs_NameMatchesTrimPrefix verifies invariant 2: the legacy
+// dev-time Name backfill equals strings.TrimPrefix(PurdexName, "Pdx") so
+// fixtures and migration tooling can round-trip the rename mechanically.
+// Phase 3 ship removes this invariant (and the Name field).
+func TestCcEventSpecs_NameMatchesTrimPrefix(t *testing.T) {
+	for _, e := range ccEventSpecs {
+		want := strings.TrimPrefix(e.PurdexName, "Pdx")
+		if e.Name != want {
+			t.Errorf("cc %q: Name %q != TrimPrefix(PurdexName,%q)=%q", e.PurdexName, e.Name, "Pdx", want)
+		}
+	}
+}
+
+// TestCcEventSpecs_UpstreamKeysNotEmpty verifies invariant 1 sub-clause:
+// every entry (installable / unsupported / ignored) has a non-empty
+// UpstreamKeys slice so the upstream identifier is always traceable post
+// Phase 3 Name removal.
+func TestCcEventSpecs_UpstreamKeysNotEmpty(t *testing.T) {
+	for _, e := range ccEventSpecs {
+		if len(e.UpstreamKeys) == 0 {
+			t.Errorf("cc %q: UpstreamKeys empty", e.PurdexName)
+		}
+	}
+}
+
+// TestCcEventSpecs_PurdexNameNotInUpstreamKeys verifies invariant 3: a
+// PurdexName must not appear in its own UpstreamKeys slice (otherwise the
+// schema degenerates to a single string).
+func TestCcEventSpecs_PurdexNameNotInUpstreamKeys(t *testing.T) {
+	for _, e := range ccEventSpecs {
+		for _, k := range e.UpstreamKeys {
+			if k == e.PurdexName {
+				t.Errorf("cc %q: PurdexName %q present in UpstreamKeys", e.PurdexName, k)
+			}
+		}
+	}
+}
+
+// TestCcEventSpecs_LifecycleAlignment verifies invariant 5: the Lifecycle
+// field aligns with the §2.3.1 table. Entries not listed in
+// expectedCCLifecycle must be LifecycleNone (unsupported / ignored).
+func TestCcEventSpecs_LifecycleAlignment(t *testing.T) {
+	for _, e := range ccEventSpecs {
+		want, listed := expectedCCLifecycle[e.Name]
+		if !listed {
+			want = agent.LifecycleNone
+		}
+		if e.Lifecycle != want {
+			t.Errorf("cc %q (Name=%q): Lifecycle=%v, want %v", e.PurdexName, e.Name, e.Lifecycle, want)
+		}
+	}
+}
+
+// TestCcEventSpecs_PreservedLegacyMetadata verifies invariant 4: the plain-
+// struct-literal rewrite did not drop any pre-W2 metadata field
+// (EmitsStatus / Description / FutureOnly / Handling).
+func TestCcEventSpecs_PreservedLegacyMetadata(t *testing.T) {
+	for _, e := range ccEventSpecs {
+		want, ok := expectedCCPreservedMetadata[e.Name]
+		if !ok {
+			t.Errorf("cc %q: not present in expectedCCPreservedMetadata; update test fixture", e.Name)
+			continue
+		}
+		if e.Description != want.Description {
+			t.Errorf("cc %q: Description=%q want %q", e.Name, e.Description, want.Description)
+		}
+		if e.FutureOnly != want.FutureOnly {
+			t.Errorf("cc %q: FutureOnly=%v want %v", e.Name, e.FutureOnly, want.FutureOnly)
+		}
+		if e.Handling != want.Handling {
+			t.Errorf("cc %q: Handling=%q want %q", e.Name, e.Handling, want.Handling)
+		}
+		if len(e.EmitsStatus) != len(want.EmitsStatus) {
+			t.Errorf("cc %q: EmitsStatus len=%d want %d", e.Name, len(e.EmitsStatus), len(want.EmitsStatus))
+			continue
+		}
+		gotSet := make(map[agent.Status]bool, len(e.EmitsStatus))
+		for _, s := range e.EmitsStatus {
+			gotSet[s] = true
+		}
+		for _, s := range want.EmitsStatus {
+			if !gotSet[s] {
+				t.Errorf("cc %q: EmitsStatus missing %q (got %v)", e.Name, s, e.EmitsStatus)
+			}
+		}
+	}
+}
+
 // TestCCEvents_FreshSliceDefensiveCopy guards the defensive-copy convention:
 // each Events() call must return an independent backing array so consumers
 // cannot mutate provider-internal state.

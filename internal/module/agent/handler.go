@@ -75,15 +75,53 @@ func (m *Module) resolveStatuslineInstaller(w http.ResponseWriter, r *http.Reque
 }
 
 // EventRequest is the JSON body expected by POST /api/agent/event.
+//
+// PurdexName is the daemon-internal stable identifier carried in the JSON
+// payload as `purdex_name`. The legacy `event_name` key is accepted as an
+// unmarshal-only alias during the W2 transition (cc/codex/opencode CLI/plugin
+// roll out the rename across phases). Phase 3 ship removes the alias.
 type EventRequest struct {
 	TmuxSession     string          `json:"tmux_session"`
 	TmuxPaneID      string          `json:"tmux_pane_id"`
-	EventName       string          `json:"event_name"`
+	PurdexName      string          `json:"purdex_name"`
 	RawEvent        json.RawMessage `json:"raw_event"`
 	AgentType       string          `json:"agent_type"`
 	SenderPID       int             `json:"sender_pid"`
 	SenderStartTime string          `json:"sender_start_time"`
 	SenderUncertain bool            `json:"sender_uncertain"`
+}
+
+// UnmarshalJSON accepts the legacy `event_name` JSON key as an alias for
+// `purdex_name`. When both keys are present, `purdex_name` wins.
+func (r *EventRequest) UnmarshalJSON(data []byte) error {
+	type wire struct {
+		TmuxSession     string          `json:"tmux_session"`
+		TmuxPaneID      string          `json:"tmux_pane_id"`
+		PurdexName      string          `json:"purdex_name"`
+		EventNameAlias  string          `json:"event_name"`
+		RawEvent        json.RawMessage `json:"raw_event"`
+		AgentType       string          `json:"agent_type"`
+		SenderPID       int             `json:"sender_pid"`
+		SenderStartTime string          `json:"sender_start_time"`
+		SenderUncertain bool            `json:"sender_uncertain"`
+	}
+	var w wire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	r.TmuxSession = w.TmuxSession
+	r.TmuxPaneID = w.TmuxPaneID
+	r.RawEvent = w.RawEvent
+	r.AgentType = w.AgentType
+	r.SenderPID = w.SenderPID
+	r.SenderStartTime = w.SenderStartTime
+	r.SenderUncertain = w.SenderUncertain
+	if w.PurdexName != "" {
+		r.PurdexName = w.PurdexName
+	} else {
+		r.PurdexName = w.EventNameAlias
+	}
+	return nil
 }
 
 // handleEvent handles POST /api/agent/event.
@@ -95,7 +133,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.TmuxSession == "" || req.TmuxPaneID == "" || req.AgentType == "" || req.EventName == "" || req.SenderPID == 0 {
+	if req.TmuxSession == "" || req.TmuxPaneID == "" || req.AgentType == "" || req.PurdexName == "" || req.SenderPID == 0 {
 		http.Error(w, `{"error":"schema_invalid"}`, http.StatusBadRequest)
 		return
 	}
@@ -128,7 +166,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// not resolve (e.g. unknown tmux session). cwd is read from CC's raw event
 	// (every CC hook payload includes `cwd`); the cached SessionInfo.Cwd acts
 	// as a fallback for older / non-conforming senders.
-	if req.AgentType == "cc" && (req.EventName == "PreToolUse" || req.EventName == "PostToolUse") &&
+	if req.AgentType == "cc" && (req.PurdexName == "PdxPreToolUse" || req.PurdexName == "PdxPostToolUse") &&
 		m.core != nil && m.pathHintDedup != nil && m.pathHintBuffer != nil {
 		if code := m.resolveSessionCode(req.TmuxSession); code != "" {
 			cwdFallback := ""
@@ -138,7 +176,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			EmitPathHint(m.core.Events, m.pathHintDedup, m.pathHintBuffer,
-				req.RawEvent, req.EventName, "cc", code, cwdFallback, time.Now())
+				req.RawEvent, req.PurdexName, "cc", code, cwdFallback, time.Now())
 		}
 	}
 
@@ -153,8 +191,15 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// Derive status via provider
 	var result agentpkg.DeriveResult
 	if provider != nil {
-		result = provider.DeriveStatus(req.EventName, req.RawEvent)
+		result = provider.DeriveStatus(req.PurdexName, req.RawEvent)
 	}
+
+	// W2 metadata-driven lifecycle dispatch (spec §3.4.2): catalog hit on
+	// PurdexName, falling back to legacyLifecycleFor for codex/opencode
+	// pre-migration traffic. classifyLifecycle returns LifecycleNone for
+	// no-op events and unknown PurdexNames alike — branches below key on
+	// specific lifecycle kinds, so a None classification simply skips them.
+	lifecycle := classifyLifecycle(provider, req)
 
 	// Invalid result: provider returned Valid=false. Two sub-classes:
 	//   - Reason=="" → truly unknown event name → "event_not_in_catalog"
@@ -198,17 +243,17 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		current := m.currentStatus[req.TmuxSession]
 		m.mu.Unlock()
 		if current == agentpkg.StatusError {
-			canClear := req.EventName == "UserPromptSubmit" || req.EventName == "SessionStart"
+			canClear := lifecycle == agentpkg.LifecycleUserPromptSubmit || lifecycle == agentpkg.LifecycleSessionStart
 			// SessionEnd carries StatusClear and unconditionally tears down
 			// session state — it must always pass the error guard or the
 			// session would stay stuck red after a StopFailure followed by a
 			// real session shutdown.
-			canClear = canClear || req.EventName == "SessionEnd"
+			canClear = canClear || lifecycle == agentpkg.LifecycleSessionEnd
 			if req.AgentType != "opencode" {
-				canClear = canClear || req.EventName == "Stop"
+				canClear = canClear || lifecycle == agentpkg.LifecycleStop
 			}
 			if !canClear {
-				normalized := buildProjectionNormalized(nil, req.AgentType, req.EventName, broadcastTs, result)
+				normalized := buildProjectionNormalized(nil, req.AgentType, req.PurdexName, broadcastTs, result)
 				trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, "skipped", "error_guard_blocked")
 				trace.Finish("completed", "emit_skipped")
 				traceFinished = true
@@ -252,7 +297,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Handle subagent events (transient — broadcast only, don't persist)
-	if req.EventName == "SubagentStart" || req.EventName == "SubagentStop" {
+	if lifecycle == agentpkg.LifecycleSubagentStart || lifecycle == agentpkg.LifecycleSubagentStop {
 		if frameMeta.Decision != "updated_frame" {
 			trace.Finish("completed", "emit_skipped")
 			traceFinished = true
@@ -263,7 +308,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
 		m.mu.Unlock()
-		normalized := buildProjectionNormalized(projection, req.AgentType, req.EventName, broadcastTs, result)
+		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
 		emitDecision, emitReason := m.emitHookToSession(req.TmuxSession, normalized)
 		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 		if emitDecision == "broadcasted" {
@@ -318,14 +363,14 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clear subagents on non-compact SessionStart
-	if req.EventName == "SessionStart" && result.Valid {
+	if lifecycle == agentpkg.LifecycleSessionStart && result.Valid {
 		m.mu.Lock()
 		delete(m.subagents, req.TmuxSession)
 		m.mu.Unlock()
 	}
 
 	// Build and broadcast normalized event
-	normalized := buildProjectionNormalized(projection, req.AgentType, req.EventName, broadcastTs, result)
+	normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
 	m.mu.Lock()
 	syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
 	m.mu.Unlock()

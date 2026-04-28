@@ -62,7 +62,7 @@ func TestVerify_AcceptsPaneNativeHook(t *testing.T) {
 		TmuxSession:     "work",
 		TmuxPaneID:      "%5",
 		AgentType:       "cc",
-		EventName:       "Stop",
+		PurdexName:      "Stop",
 		SenderPID:       200,
 		SenderStartTime: "Sun Apr 20 01:30:00 2026",
 	})
@@ -87,7 +87,7 @@ func TestVerify_RejectsDetachedRuntime(t *testing.T) {
 		TmuxSession:     "work",
 		TmuxPaneID:      "%5",
 		AgentType:       "codex",
-		EventName:       "Stop",
+		PurdexName:      "Stop",
 		SenderPID:       999,
 		SenderStartTime: "Sun Apr 20 01:30:00 2026",
 	})
@@ -115,7 +115,7 @@ func TestVerify_AcceptsNestedAgent(t *testing.T) {
 		TmuxSession:     "work",
 		TmuxPaneID:      "%5",
 		AgentType:       "codex",
-		EventName:       "Stop",
+		PurdexName:      "Stop",
 		SenderPID:       300,
 		SenderStartTime: "Sun Apr 20 01:30:00 2026",
 	})

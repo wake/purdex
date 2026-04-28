@@ -62,7 +62,8 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	var upgrades []string
 	allInstalled := true
 	for _, spec := range specs {
-		entries, keyExists := hooks[spec.Name]
+		key := spec.UpstreamKeys[0]
+		entries, keyExists := hooks[key]
 		if !keyExists {
 			events[spec.Name] = agent.HookEventInfo{Installed: false, FutureOnly: spec.FutureOnly}
 			if spec.FutureOnly {
@@ -73,7 +74,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			allInstalled = false
 			continue
 		}
-		command := findPdxCommandForEvent(entries, spec.Name)
+		command := findPdxCommandForEvent(entries, spec.PurdexName)
 		events[spec.Name] = agent.HookEventInfo{
 			Installed:  command != "",
 			Command:    command,
@@ -151,11 +152,11 @@ func mergeClaudeHooks(path, pdxPath string, remove bool) error {
 		if !installable {
 			continue
 		}
-		event := spec.Name
-		entries := toEntrySlice(hooks[event])
+		key := spec.UpstreamKeys[0]
+		entries := toEntrySlice(hooks[key])
 		entries = filterOutPdx(entries)
-		entries = append(entries, makePdxEntry(pdxPath, "cc", event))
-		hooks[event] = entries
+		entries = append(entries, makePdxEntry(pdxPath, "cc", spec.PurdexName))
+		hooks[key] = entries
 	}
 	settings["hooks"] = hooks
 	return writeClaudeSettings(path, settings)
@@ -178,12 +179,13 @@ func validateClaudeInstallableHookShapes(hooks map[string]any) error {
 		if !agent.IsInstallableHookSpec(spec) {
 			continue
 		}
-		value, ok := hooks[spec.Name]
+		key := spec.UpstreamKeys[0]
+		value, ok := hooks[key]
 		if !ok || value == nil {
 			continue
 		}
 		if _, ok := value.([]any); !ok {
-			return fmt.Errorf("claude hook %s has unsupported value shape", spec.Name)
+			return fmt.Errorf("claude hook %s has unsupported value shape", key)
 		}
 	}
 	return nil
@@ -312,8 +314,12 @@ func entryIsPdxCCKnownEvent(entry any, known map[string]bool) bool {
 	return false
 }
 
+// isPdxCommand reports whether cmd is a pdx-installed hook command. It
+// matches the cleanup set (UpstreamKeys ∪ PurdexName ∪ legacy Name three-way
+// union) so both pre-W2 and W2 command tokens are recognised; ccKnownEventNames
+// is reserved for upstream-key-only checks.
 func isPdxCommand(cmd string) bool {
-	return isPdxCommandCCKnownEvent(cmd, ccKnownEventNames())
+	return isPdxCommandCCKnownEvent(cmd, ccOwnedCleanupEventNames())
 }
 
 func isPdxCommandForCCEvent(cmd string, eventName string) bool {
@@ -378,24 +384,39 @@ func tokenizeCCCommand(cmd string) []string {
 	return tokens
 }
 
+// ccKnownEventNames is the set of installable upstream hook keys derived
+// from the catalog (Filter(IsInstallable).UpstreamKeys union). Used for
+// upstream-key checks; command-token recognition uses ccOwnedCleanupEventNames.
 func ccKnownEventNames() map[string]bool {
-	known := make(map[string]bool, len(ccEventSpecs))
+	known := make(map[string]bool)
 	for _, spec := range ccEventSpecs {
-		known[spec.Name] = true
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		for _, key := range spec.UpstreamKeys {
+			known[key] = true
+		}
 	}
 	return known
 }
 
+// ccOwnedCleanupEventNames is the three-set union per spec §6.1 invariant 6:
+// installable specs' UpstreamKeys ∪ PurdexName ∪ legacy Name. cc has
+// one-to-one upstream/Pdx mapping so the union collapses to legacy Name ∪
+// PurdexName at runtime. Legacy Name is preserved per plan G1 until
+// PR-W2-cleanup-followup so reinstalls following the alpha.244 ship still
+// recognise pre-W2 command tokens.
 func ccOwnedCleanupEventNames() map[string]bool {
-	return map[string]bool{
-		"SessionStart":      true,
-		"UserPromptSubmit":  true,
-		"SubagentStart":     true,
-		"SubagentStop":      true,
-		"Stop":              true,
-		"StopFailure":       true,
-		"Notification":      true,
-		"PermissionRequest": true,
-		"SessionEnd":        true,
+	owned := make(map[string]bool)
+	for _, spec := range ccEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		for _, key := range spec.UpstreamKeys {
+			owned[key] = true
+		}
+		owned[spec.PurdexName] = true
+		owned[spec.Name] = true
 	}
+	return owned
 }

@@ -6,12 +6,12 @@ import (
 	"github.com/wake/purdex/internal/agent"
 )
 
-func deriveCCStatus(eventName string, rawEvent json.RawMessage) agent.DeriveResult {
+func deriveCCStatus(purdexName string, rawEvent json.RawMessage) agent.DeriveResult {
 	var raw map[string]any
 	_ = json.Unmarshal(rawEvent, &raw)
 
-	switch eventName {
-	case "SessionStart":
+	switch purdexName {
+	case "PdxSessionStart":
 		if raw["source"] == "compact" {
 			return agent.DeriveResult{Valid: false, Reason: "compact_ignored"}
 		}
@@ -21,13 +21,13 @@ func deriveCCStatus(eventName string, rawEvent json.RawMessage) agent.DeriveResu
 			Model:  strVal(raw, "modelName"),
 		}
 
-	case "UserPromptSubmit":
+	case "PdxUserPromptSubmit":
 		return agent.DeriveResult{
 			Valid:  true,
 			Status: agent.StatusRunning,
 		}
 
-	case "Notification":
+	case "PdxNotification":
 		nt := strVal(raw, "notification_type")
 		var status agent.Status
 		switch nt {
@@ -47,7 +47,7 @@ func deriveCCStatus(eventName string, rawEvent json.RawMessage) agent.DeriveResu
 			},
 		}
 
-	case "PermissionRequest":
+	case "PdxPermissionRequest":
 		return agent.DeriveResult{
 			Valid:  true,
 			Status: agent.StatusWaiting,
@@ -56,7 +56,7 @@ func deriveCCStatus(eventName string, rawEvent json.RawMessage) agent.DeriveResu
 			},
 		}
 
-	case "Stop":
+	case "PdxStop":
 		return agent.DeriveResult{
 			Valid:  true,
 			Status: agent.StatusIdle,
@@ -66,7 +66,7 @@ func deriveCCStatus(eventName string, rawEvent json.RawMessage) agent.DeriveResu
 			},
 		}
 
-	case "StopFailure":
+	case "PdxStopFailure":
 		return agent.DeriveResult{
 			Valid:  true,
 			Status: agent.StatusError,
@@ -76,13 +76,13 @@ func deriveCCStatus(eventName string, rawEvent json.RawMessage) agent.DeriveResu
 			},
 		}
 
-	case "SessionEnd":
+	case "PdxSessionEnd":
 		return agent.DeriveResult{
 			Valid:  true,
 			Status: agent.StatusClear,
 		}
 
-	case "SubagentStart", "SubagentStop":
+	case "PdxSubagentStart", "PdxSubagentStop":
 		return agent.DeriveResult{
 			Valid:  true,
 			Detail: map[string]any{"agent_id": raw["agent_id"]},

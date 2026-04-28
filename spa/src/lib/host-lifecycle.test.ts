@@ -82,7 +82,7 @@ describe('host delete cascade', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
       status: 'idle',
-      raw_event_name: 'Stop',
+      raw_event_name: 'PdxStop',
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleNormalizedEvent(HOST_A, 'dev001', event)
@@ -216,7 +216,7 @@ describe('host delete cascade', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
       status: 'running',
-      raw_event_name: 'UserPromptSubmit',
+      raw_event_name: 'PdxUserPromptSubmit',
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleNormalizedEvent(HOST_A, 'dev001', event)
@@ -235,7 +235,7 @@ describe('host delete cascade', () => {
       agent_type: 'cc',
       status: 'running',
       model: 'claude-sonnet-4-20250514',
-      raw_event_name: 'UserPromptSubmit',
+      raw_event_name: 'PdxUserPromptSubmit',
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleNormalizedEvent(HOST_A, 'dev001', event)
@@ -371,7 +371,7 @@ describe('host delete cascade', () => {
     const eventB: NormalizedEvent = {
       agent_type: 'cc',
       status: 'running',
-      raw_event_name: 'UserPromptSubmit',
+      raw_event_name: 'PdxUserPromptSubmit',
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleNormalizedEvent(HOST_B, 'stg001', eventB)
@@ -701,7 +701,7 @@ describe('#541 cross-store rehydrate order invariants', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
       status: 'idle',
-      raw_event_name: 'Stop',
+      raw_event_name: 'PdxStop',
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleNormalizedEvent(hA, 'dev001', event)
