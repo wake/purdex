@@ -30,7 +30,7 @@ describe('useAgentStore', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
       status: 'running',
-      raw_event_name: 'UserPromptSubmit',
+      raw_event_name: 'PdxUserPromptSubmit',
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', event)
@@ -41,7 +41,7 @@ describe('useAgentStore', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
       status: 'waiting',
-      raw_event_name: 'Notification',
+      raw_event_name: 'PdxNotification',
       broadcast_ts: Date.now(),
       detail: { notification_type: 'permission_prompt' },
     }
@@ -54,7 +54,7 @@ describe('useAgentStore', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
       status: 'idle',
-      raw_event_name: 'Stop',
+      raw_event_name: 'PdxStop',
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', event)
@@ -65,7 +65,7 @@ describe('useAgentStore', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
       status: 'error',
-      raw_event_name: 'StopFailure',
+      raw_event_name: 'PdxStopFailure',
       broadcast_ts: Date.now(),
       detail: { error: 'rate_limit' },
     }
@@ -81,13 +81,13 @@ describe('useAgentStore', () => {
       agentTypes: { [`${H}:dev`]: 'cc' },
       models: { [`${H}:dev`]: 'claude-sonnet-4-6' },
       subagents: { [`${H}:dev`]: [ref('sub-1')] },
-      lastEvents: { [`${H}:dev`]: { agent_type: 'cc', status: 'idle', raw_event_name: 'Stop', broadcast_ts: 1 } },
+      lastEvents: { [`${H}:dev`]: { agent_type: 'cc', status: 'idle', raw_event_name: 'PdxStop', broadcast_ts: 1 } },
       unread: { [`${H}:dev`]: true },
     })
     const event: NormalizedEvent = {
       agent_type: 'cc',
       status: 'clear',
-      raw_event_name: 'SessionEnd',
+      raw_event_name: 'PdxSessionEnd',
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', event)
@@ -105,7 +105,7 @@ describe('useAgentStore', () => {
       agent_type: 'cc',
       status: 'idle',
       model: 'claude-sonnet-4-6',
-      raw_event_name: 'SessionStart',
+      raw_event_name: 'PdxSessionStart',
       broadcast_ts: Date.now(),
     })
     expect(useAgentStore.getState().models[`${H}:dev`]).toBe('claude-sonnet-4-6')
@@ -114,7 +114,7 @@ describe('useAgentStore', () => {
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', {
       agent_type: 'cc',
       status: 'running',
-      raw_event_name: 'UserPromptSubmit',
+      raw_event_name: 'PdxUserPromptSubmit',
       broadcast_ts: Date.now(),
     })
     expect(useAgentStore.getState().models[`${H}:dev`]).toBe('claude-sonnet-4-6')
@@ -128,7 +128,7 @@ describe('useAgentStore', () => {
       agent_type: 'cc',
       status: 'running',
       subagents: [a, b],
-      raw_event_name: 'UserPromptSubmit',
+      raw_event_name: 'PdxUserPromptSubmit',
       broadcast_ts: Date.now(),
     })
     expect(useAgentStore.getState().subagents[`${H}:dev`]).toEqual([a, b])
@@ -138,7 +138,7 @@ describe('useAgentStore', () => {
       agent_type: 'cc',
       status: 'running',
       subagents: [],
-      raw_event_name: 'UserPromptSubmit',
+      raw_event_name: 'PdxUserPromptSubmit',
       broadcast_ts: Date.now(),
     })
     expect(useAgentStore.getState().subagents[`${H}:dev`]).toBeUndefined()
@@ -150,7 +150,7 @@ describe('useAgentStore', () => {
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', {
       agent_type: 'cc',
       status: 'running',
-      raw_event_name: 'UserPromptSubmit',
+      raw_event_name: 'PdxUserPromptSubmit',
       broadcast_ts: Date.now(),
     })
     expect(useAgentStore.getState().subagents[`${H}:dev`]).toEqual([a])
@@ -182,8 +182,8 @@ describe('useAgentStore', () => {
         ['other-host:dev']: [ref('agent-B')],
       },
       lastEvents: {
-        [`${H}:dev`]: { agent_type: 'cc', status: 'idle', raw_event_name: 'Stop', broadcast_ts: 1 },
-        [`${H}:staging`]: { agent_type: 'cc', status: 'running', raw_event_name: 'UserPromptSubmit', broadcast_ts: 2 },
+        [`${H}:dev`]: { agent_type: 'cc', status: 'idle', raw_event_name: 'PdxStop', broadcast_ts: 1 },
+        [`${H}:staging`]: { agent_type: 'cc', status: 'running', raw_event_name: 'PdxUserPromptSubmit', broadcast_ts: 2 },
         ['other-host:dev']: { agent_type: 'codex', status: 'waiting', raw_event_name: 'Notification', broadcast_ts: 3 },
       },
       unread: {
@@ -218,7 +218,7 @@ describe('useAgentStore', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
       status: 'idle',
-      raw_event_name: 'Notification',
+      raw_event_name: 'PdxNotification',
       broadcast_ts: Date.now(),
       detail: { notification_type: 'idle_prompt' },
     }
@@ -231,7 +231,7 @@ describe('useAgentStore', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
       status: 'idle',
-      raw_event_name: 'Stop',
+      raw_event_name: 'PdxStop',
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', event)
@@ -245,7 +245,7 @@ describe('useAgentStore', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
       status: 'idle',
-      raw_event_name: 'Stop',
+      raw_event_name: 'PdxStop',
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', event)
@@ -266,7 +266,7 @@ describe('useAgentStore', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
       status: 'running',
-      raw_event_name: 'UserPromptSubmit',
+      raw_event_name: 'PdxUserPromptSubmit',
       broadcast_ts: Date.now(),
       detail: { session_id: 'abc123' },
     }
@@ -281,7 +281,7 @@ describe('useAgentStore', () => {
       agent_type: 'cc',
       status: '',
       subagents: [a],
-      raw_event_name: 'SubagentStart',
+      raw_event_name: 'PdxSubagentStart',
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', event)
@@ -301,7 +301,7 @@ describe('useAgentStore', () => {
       agentTypes: { [`${H}:dev`]: 'cc' },
       models: { [`${H}:dev`]: 'claude-sonnet-4-6' },
       subagents: { [`${H}:dev`]: [ref('sub-1'), ref('sub-2')] },
-      lastEvents: { [`${H}:dev`]: { agent_type: 'cc', status: 'idle', raw_event_name: 'Stop', broadcast_ts: 1 } },
+      lastEvents: { [`${H}:dev`]: { agent_type: 'cc', status: 'idle', raw_event_name: 'PdxStop', broadcast_ts: 1 } },
       unread: { [`${H}:dev`]: true, [`${H}:staging`]: true },
     })
     useAgentStore.getState().clearSession(H, 'dev')
@@ -328,7 +328,7 @@ describe('useAgentStore', () => {
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', {
       agent_type: 'cc',
       status: 'clear',
-      raw_event_name: 'SessionEnd',
+      raw_event_name: 'PdxSessionEnd',
       broadcast_ts: Date.now(),
     })
     expect(useAgentStore.getState().statuses[`${H}:dev`]).toBeUndefined()

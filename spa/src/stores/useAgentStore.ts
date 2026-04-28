@@ -156,9 +156,14 @@ export const useAgentStore = create<AgentState>()(
       if (status) {
         set((s) => ({ statuses: { ...s.statuses, [key]: status } }))
 
-        // Mark unread when not focused
+        // Mark unread when not focused. Notification raises status=idle but
+        // shouldn't surface as actionable: cc emits PdxNotification post-W2,
+        // codex/opencode pre-migration still emit "Notification". Recognise
+        // both literals during the transition.
+        const rawName = event.raw_event_name
+        const isNotification = rawName === 'Notification' || rawName === 'PdxNotification'
         const isActionable = status === 'waiting' || status === 'error' ||
-          (status === 'idle' && event.raw_event_name !== 'Notification')
+          (status === 'idle' && !isNotification)
         const activeInfo = getActiveSessionInfo()
         const activeKey = activeInfo ? compositeKey(activeInfo.hostId, activeInfo.sessionCode) : ''
         if (isActionable && activeKey !== key) {
