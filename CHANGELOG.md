@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.246] - 2026-04-28
+
+### Feat(spa): Quick Commands v2 Phase 1c — HOST_ACTIONS entry with host liveness probe (#705)
+
+Phase 1c of the Quick Commands v2 capability/binding/slot system — adds a chip slot beside the new-session button on the host detail page (`SessionsSection`). Users who bind a command to mount = HOST in Settings now see chips next to the `+ New Session` button; clicking creates a tmux session on that host (cwd = host default `~`), sends the bound command, and switches to the new session.
+
+- **`runHostSlot` / `HostSlotContext`** — new sibling executor to `runWorkspaceSlot`. `HostSlotContext.hostId` is required non-null string (host detail page owns it via prop). `HostDeps` carries `switchToSession` + `assertHostLive`; deliberately omits `assertContextLive` and `resolveHostId` (workspace probes / picker callback) so cross-shape pollution fails `tsc -b`. Failure UX matches `runWorkspaceSlot`'s precedence rules per spec §3.3.
+- **Host liveness probe — three call sites for defense in depth** (R2 of codex PR review):
+  1. **Pre-create** — at `runHostSlot` entry, before `createSession`. Catches stale chip clicks (host already deleted at click time, before chip re-rendered disabled). Without this gate, `useHostStore.getDaemonBase` falls back to `activeHostId ?? hostOrder[0]` and creates an orphan session on the wrong host.
+  2. **Post-create** — after `createSession` resolves, before `executeCommand`. Catches the during-await race (host deleted while createSession Promise was in flight). Stops destructive commands from shipping.
+  3. **Retry** — inside the toast retry action. Catches the between-toast-and-retry window.
+- **Workspace-aware switch** (R1 of codex PR review): `switchToSession` snapshots the host page's owning workspace at click time via `findWorkspaceByTab(activeTabId)` BEFORE any await, then closes over the captured `owningWsId`. Standalone host pages get explicit `null` (bypasses `insertTab`'s `activeWorkspaceId` fallback so a stale or post-await `activeWorkspaceId` can't redirect the new session).
+- **Executor-level busy guard** — `executingRef + executing` state mirrors workspace popover pattern; suppresses fast double-click between React event ticks.
+- **Disconnect handling** — chip is `busy={isOffline || executing}`, matching new-session / row actions disable semantics.
+- **`<QuickCommandMenu>` row removal** — removed from `SessionsSection` rows (consolidated to new-session entry); v1 component itself stays for `PaneLayoutRenderer`.
+- **Empty `session.code` handling** — server returning blank/whitespace `code` is treated as create failure (avoids confusing 404 from downstream `executeCommand`).
+- **Spec / plan / JSDoc** — three-site `assertHostLive` contract documented in spec §3.3.1, plan §1c.0 design block, and `HostDeps.assertHostLive` JSDoc. Tests use `mockReturnValueOnce` sequences to model phase-specific probe states; assertions favor `>= 1` over exact counts to avoid false-fails when probe timing changes.
+- **Review history** — codex plan-review (`task-moijtc8w-w8rf8w`, 6 findings) → R1 standard PR review (1 P2: click-time snapshot race, fixed `4a54af18`) → R2 adversarial (1 medium: pre-create gate missing, fixed `0103c942`) → R3 verification (1 low: docs not aligned with three-site contract, fixed `976c83c2`) → R4 final approve.
+
+### Followup issues
+
+- #689 — server-side orphan session cleanup (Phase 2)
+- #695 — ESLint custom rule restricting `runWorkspaceSlot` / `runHostSlot` parameter shape escape hatches (`as any`, spread, `Object.assign` cast bypass)
+
 ## [1.0.0-alpha.245] - 2026-04-28
 
 ### Feat(daemon+spa): pathhint v1 channel + spa path cache (P4) (#696)
