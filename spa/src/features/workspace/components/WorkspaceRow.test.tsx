@@ -426,6 +426,41 @@ describe('WorkspaceRow — touch fallback (codex round-1 C17)', () => {
     expect(screen.queryByLabelText(/^X/)).toBeNull()
   })
 
+  // codex round-2 A2/F2 — long-press click suppression must be one-shot.
+  // Without resetting longPressFiredRef the synthetic click after touchend
+  // would leave the ref true, blocking every subsequent mouse / keyboard
+  // activation of Plus until another touchstart on the hub.
+  it('long-press → tap outside (close) → click Plus → onAddTabToWorkspace fires (suppressor cleared)', () => {
+    const onAddTabToWorkspace = vi.fn()
+    render(
+      <WorkspaceRow {...hoverBaseProps} onAddTabToWorkspace={onAddTabToWorkspace} />,
+    )
+    const plusBtn = screen.getByLabelText(/new tab in/i)
+    const hub = plusBtn.parentElement!
+
+    // 1. long-press → popover open
+    fireEvent.touchStart(hub)
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(screen.getByLabelText(/^X/)).toBeInTheDocument()
+    fireEvent.touchEnd(hub)
+
+    // 2. simulate the synthetic compatibility click that browsers fire after
+    // touchstart/touchend: hits Plus, but onClick should suppress add-tab AND
+    // clear the suppressor.
+    fireEvent.click(plusBtn)
+    expect(onAddTabToWorkspace).not.toHaveBeenCalled()
+
+    // 3. tap outside to dismiss popover (also clears via the popoverOpen useEffect).
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByLabelText(/^X/)).toBeNull()
+
+    // 4. click Plus again with a real mouse → MUST trigger add-tab now.
+    fireEvent.click(plusBtn)
+    expect(onAddTabToWorkspace).toHaveBeenCalledWith('w1')
+  })
+
   it('tapping outside the hub closes an open touch-popover', () => {
     render(<WorkspaceRow {...hoverBaseProps} />)
     const plusBtn = screen.getByLabelText(/new tab in/i)

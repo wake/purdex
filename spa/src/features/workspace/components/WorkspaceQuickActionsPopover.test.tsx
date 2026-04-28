@@ -5,24 +5,38 @@ import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
 import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useWorkspaceStore } from '../../../stores/useWorkspaceStore'
+import { useTabStore } from '../../../stores/useTabStore'
 import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
 import { clearModuleRegistry, registerModule } from '../../../lib/module-registry'
-import { createSession } from '../../../lib/host-api'
 
-// codex round-1 P2 fix tests need to spy on createSession (the cwd sink in
-// runWorkspaceSlot) without performing real network calls. importActual
-// preserves every other host-api export so unrelated callers still resolve.
+// codex round-1 P2 + round-2 fix tests need to drive runWorkspaceSlot to
+// completion or pause it at the picker stage. importActual preserves every
+// other host-api / execute-command export so unrelated callers still resolve.
+// Default: createSession resolves quickly so transaction-safety tests can
+// reach switchToSession; tests that need to inspect cwd/double-click before
+// completion still get accurate call args because runWorkspaceSlot synchronously
+// calls createSession from the executor.
 vi.mock('../../../lib/host-api', async () => {
   const actual = await vi.importActual<typeof import('../../../lib/host-api')>(
     '../../../lib/host-api',
   )
   return {
     ...actual,
-    // Never resolves — keeps runWorkspaceSlot pending so we can assert call args
-    // before the executor moves past createSession.
-    createSession: vi.fn(() => new Promise(() => {})),
+    createSession: vi.fn().mockResolvedValue({
+      code: 'sess-new',
+      name: 'sess-new',
+      cwd: '/tmp',
+      mode: 'terminal',
+    }),
   }
 })
+
+vi.mock('../../../lib/execute-command', () => ({
+  executeCommand: vi.fn().mockResolvedValue(undefined),
+}))
+
+import { createSession } from '../../../lib/host-api'
+import { executeCommand } from '../../../lib/execute-command'
 
 function setup() {
   useQuickCommandStore.setState({
@@ -38,13 +52,32 @@ function setup() {
     runtime: { h1: { status: 'connected' } },
     activeHostId: 'h1',
   } as Partial<ReturnType<typeof useHostStore.getState>> as never)
+  // Tab + workspace stores need a baseline shape so insertTab / setActiveTab
+  // don't blow up when the executor reaches switchToSession.
+  useTabStore.setState({
+    tabs: {},
+    tabOrder: [],
+    activeTabId: null,
+  } as Partial<ReturnType<typeof useTabStore.getState>> as never)
+  useWorkspaceStore.setState({
+    workspaces: [{ id: 'w1', name: 'WS', tabs: [], activeTabId: null, moduleConfig: {} }],
+    activeWorkspaceId: 'w1',
+  } as Partial<ReturnType<typeof useWorkspaceStore.getState>> as never)
   clearModuleRegistry()
   registerModule({ id: 'quick-commands', name: 'Quick Commands', disableable: true })
+  vi.clearAllMocks()
+  // Restore the default createSession resolved value after clearAllMocks wipes it.
+  vi.mocked(createSession).mockResolvedValue({
+    code: 'sess-new',
+    name: 'sess-new',
+    cwd: '/tmp',
+    mode: 'terminal',
+  } as Awaited<ReturnType<typeof createSession>>)
+  vi.mocked(executeCommand).mockResolvedValue(undefined)
 }
 
 beforeEach(() => {
   cleanup()
-  vi.mocked(createSession).mockClear()
   setup()
 })
 
@@ -170,5 +203,105 @@ describe('WorkspaceQuickActionsPopover', () => {
     onPickerOpenChange.mockClear()
     unmount()
     expect(onPickerOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  // ────────────────────────────────────────────────────────────────────
+  // codex round-2 fix tests (R2)
+  // ────────────────────────────────────────────────────────────────────
+
+  // codex round-2 D1 — picker positioning when wrapper has CSS transform
+  // (-translate-y-1/2). HostPickerPopover uses position:fixed; portal'ing it
+  // out of the transformed subtree restores viewport-anchored layout.
+  it('R2 D1: HostPickerPopover renders via portal into document.body, NOT inside the wrapper', () => {
+    const { container } = render(<WorkspaceQuickActionsPopover workspaceId="w1" hostId={null} />)
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    const listbox = screen.getByRole('listbox')
+    expect(listbox).toBeInTheDocument()
+    // The container is the (transformed) wrapper subtree; listbox must NOT be inside it.
+    expect(container.contains(listbox)).toBe(false)
+    expect(document.body.contains(listbox)).toBe(true)
+  })
+
+  // codex round-2 D2 — pendingResolverRef cleanup. Unmount while picker is up
+  // must actually settle the executor's await Promise (resolveHostId) so the
+  // executor returns through its `finally` block. Without the ref, settling
+  // relied on a setState updater that could miss a torn-down component, leaving
+  // executingRef stuck and chips disabled forever.
+  it('R2 D2: unmount while picker open → executor resolveHostId resolves null → createSession NOT called', async () => {
+    const { unmount } = render(<WorkspaceQuickActionsPopover workspaceId="w1" hostId={null} />)
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+    unmount()
+    await new Promise<void>((r) => setTimeout(r, 0))
+    expect(createSession).not.toHaveBeenCalled()
+  })
+
+  // codex round-2 F1 — early-return-null cleanup. When module is disabled (or
+  // bindings disappear) mid-pick, the popover hides via early-return; the
+  // unmount cleanup never fires because the component itself is still mounted.
+  // Without the F1 effect, resolveHostId hangs forever and the chips stay busy.
+  it('R2 F1: module disabled while picker open → picker closes, executor short-circuits without createSession', async () => {
+    render(<WorkspaceQuickActionsPopover workspaceId="w1" hostId={null} />)
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+
+    act(() => {
+      useModuleEnabledStore.getState().setEnabled('quick-commands', false)
+    })
+    await new Promise<void>((r) => setTimeout(r, 0))
+
+    // Picker DOM gone; executor returned early with hostId=null cancellation.
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(createSession).not.toHaveBeenCalled()
+  })
+
+  // codex round-2 A1 — switchToSession transaction safety. If the workspace
+  // is deleted in the executeCommand await window (after assertContextLive
+  // already passed), switchToSession's pre-check fast-fails BEFORE
+  // openSingletonTab, so no orphan tab + no active-tab/workspace mutations
+  // leak through.
+  it('R2 A1: workspace deleted during executeCommand await → switchToSession pre-check rejects, no orphan tab', async () => {
+    let resumeExecuteCommand: (() => void) | null = null
+    vi.mocked(executeCommand).mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        resumeExecuteCommand = resolve
+      }),
+    )
+
+    const prevTabsCount = Object.keys(useTabStore.getState().tabs).length
+    const prevActiveTabId = useTabStore.getState().activeTabId
+
+    render(<WorkspaceQuickActionsPopover workspaceId="w1" hostId="h1" />)
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+
+    // Flush createSession + assertContextLive; we are now paused inside the
+    // executeCommand await.
+    await act(async () => {
+      await new Promise<void>((r) => setTimeout(r, 0))
+    })
+    expect(executeCommand).toHaveBeenCalledTimes(1)
+    expect(resumeExecuteCommand).not.toBeNull()
+
+    // Delete the workspace mid-flight.
+    act(() => {
+      useWorkspaceStore.setState({
+        workspaces: [],
+        activeWorkspaceId: null,
+      } as Partial<ReturnType<typeof useWorkspaceStore.getState>> as never)
+    })
+
+    // Resume executeCommand → trySwitch → switchToSession's pre-check throws.
+    // trySwitch swallows the throw and returns false; slot-executor surfaces
+    // switch_failed toast and returns. Tab store stays clean.
+    await act(async () => {
+      resumeExecuteCommand?.()
+      await new Promise<void>((r) => setTimeout(r, 0))
+    })
+
+    expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(prevTabsCount)
+    expect(useTabStore.getState().activeTabId).toBe(prevActiveTabId)
+    // Workspace stays deleted; we did NOT force activeWorkspaceId back to 'w1'.
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === 'w1')).toBeUndefined()
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(null)
   })
 })

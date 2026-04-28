@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { CommandSlot } from '../../../components/CommandSlot'
 import { HostPickerPopover } from '../../../components/HostPickerPopover'
 import { runWorkspaceSlot } from '../../../lib/slot-executor'
@@ -68,6 +69,11 @@ export function WorkspaceQuickActionsPopover({
     resolver: ((id: string | null) => void) | null
     anchor: HTMLElement | null
   } | null>(null)
+  // codex round-2 D2 — resolver mirrored in a ref so unmount cleanup and
+  // early-return-null cleanup (F1) can settle the Promise without going
+  // through React state. setState updaters do not run reliably on unmounted
+  // / about-to-return-null components, but a ref is always readable.
+  const pendingResolverRef = useRef<((id: string | null) => void) | null>(null)
 
   // codex round-1 P2 (F2 — double-click race) — when hostId is already known the
   // picker never opens, so `picker?.open` stays false for the entire async
@@ -79,9 +85,17 @@ export function WorkspaceQuickActionsPopover({
   const executingRef = useRef(false)
   const [executing, setExecuting] = useState(false)
 
+  const settlePicker = useCallback((id: string | null) => {
+    const resolver = pendingResolverRef.current
+    pendingResolverRef.current = null
+    setPicker(null)
+    if (resolver) resolver(id)
+  }, [])
+
   const resolveHostId = useCallback(
     () =>
       new Promise<string | null>((resolve) => {
+        pendingResolverRef.current = resolve
         setPicker({ open: true, resolver: resolve, anchor: wrapperRef.current })
       }),
     [],
@@ -89,14 +103,13 @@ export function WorkspaceQuickActionsPopover({
 
   // codex round-2 — dangling Promise cleanup. The popover lives behind a hover
   // trigger; mouseleave on the parent hub will unmount this component while a
-  // resolver may still be pending. We MUST resolve null on unmount so the
-  // executor's await returns and busy state clears.
+  // resolver may still be pending. Settling via ref (D2) so cleanup remains
+  // reliable even if React has already torn down the component.
   useEffect(() => {
     return () => {
-      setPicker((current) => {
-        if (current?.resolver) current.resolver(null)
-        return null
-      })
+      const resolver = pendingResolverRef.current
+      pendingResolverRef.current = null
+      if (resolver) resolver(null)
     }
   }, [])
 
@@ -112,10 +125,41 @@ export function WorkspaceQuickActionsPopover({
     return () => onPickerOpenChange?.(false)
   }, [onPickerOpenChange])
 
-  // codex round-1 B5/B6 — full openSingletonAndSelect equivalent: complete
-  // tmux-session content fields + insertTab into workspace + setActive.
+  // codex round-2 F1 — early-return-null does NOT unmount the component, so the
+  // unmount-cleanup `useEffect` above never fires when bindings disappear or
+  // the module is disabled mid-pick. That leaves the picker resolver hanging
+  // forever (executor's await never resolves; busy state sticks; pointer/blur
+  // close paths stay suppressed). Detect the transition and settle ourselves.
+  const visible = moduleEnabled && hasBindings
+  useEffect(() => {
+    if (!visible) {
+      settlePicker(null)
+      // keep executing flag in sync; if executor was past resolveHostId we
+      // can't unwind it, but the resolver-null path will short-circuit it.
+      if (executingRef.current && !pickerOpen) {
+        // Executor was past the picker stage — let it finish naturally.
+      }
+    }
+  }, [visible, pickerOpen, settlePicker])
+
+  // codex round-2 A1 — workspace-deletion transaction safety (parity with
+  // WorkspaceQuickCommandsContextMenu). createSession + send-keys are async;
+  // the workspace can be deleted in that window. Without pre-check / read-back
+  // / rollback, openSingletonTab would still create a tab while insertTab
+  // silently no-ops (workspace gone), then setActive* would mutate state for
+  // a nonexistent workspace and leave an orphan tab unattached anywhere.
   const switchToSession = useCallback(
     (h: string, sessionCode: string) => {
+      // (1) pre-check — fail fast if the workspace is already gone.
+      if (
+        !useWorkspaceStore.getState().workspaces.some((w) => w.id === workspaceId)
+      ) {
+        throw new Error(
+          `WorkspaceQuickActionsPopover: workspace ${workspaceId} no longer exists; aborting before tab creation`,
+        )
+      }
+      // Snapshot for rollback when the residual race fires.
+      const prevActiveTabId = useTabStore.getState().activeTabId
       const tabId = useTabStore.getState().openSingletonTab({
         kind: 'tmux-session',
         hostId: h,
@@ -125,13 +169,30 @@ export function WorkspaceQuickActionsPopover({
         tmuxInstance: '',
       })
       useWorkspaceStore.getState().insertTab(tabId, workspaceId)
+      // (2) read-back — workspace may have been deleted between the pre-check
+      // and insertTab.
+      const inserted =
+        useWorkspaceStore
+          .getState()
+          .workspaces.find((w) => w.id === workspaceId)
+          ?.tabs.includes(tabId) ?? false
+      if (!inserted) {
+        // (3) rollback — close the freshly-created tab and restore the prior
+        // activeTabId so the failed switch leaves no orphan + no dangling
+        // active-tab mutation. Throw so trySwitch surfaces switch_failed.
+        useTabStore.getState().closeTab(tabId)
+        useTabStore.getState().setActiveTab(prevActiveTabId)
+        throw new Error(
+          `WorkspaceQuickActionsPopover: workspace ${workspaceId} deleted mid-flight; rolled back tab ${tabId}`,
+        )
+      }
       useWorkspaceStore.getState().setActiveWorkspace(workspaceId)
       useTabStore.getState().setActiveTab(tabId)
     },
     [workspaceId],
   )
 
-  if (!moduleEnabled || !hasBindings) return null
+  if (!visible) return null
 
   return (
     <div
@@ -177,21 +238,24 @@ export function WorkspaceQuickActionsPopover({
           }
         }}
       />
-      <HostPickerPopover
-        open={picker?.open ?? false}
-        anchor={picker?.anchor ?? null}
-        onSelect={(hid) => {
-          // codex round-2 — null-out resolver before invoking to make duplicate-call safe
-          const resolver = picker?.resolver
-          setPicker(null)
-          resolver?.(hid)
-        }}
-        onCancel={() => {
-          const resolver = picker?.resolver
-          setPicker(null)
-          resolver?.(null)
-        }}
-      />
+      {/*
+        codex round-2 D1 — HostPickerPopover uses position:fixed sourced from
+        anchor.getBoundingClientRect(). Inside our transformed wrapper
+        (-translate-y-1/2) a fixed descendant is positioned relative to that
+        ancestor instead of the viewport, throwing the picker off by tens of
+        pixels in real browsers (jsdom tests don't reproduce). Portal to body
+        so the picker escapes the transformed subtree while still receiving
+        the same DOM anchor for coordinate computation.
+      */}
+      {createPortal(
+        <HostPickerPopover
+          open={pickerOpen}
+          anchor={picker?.anchor ?? null}
+          onSelect={(hid) => settlePicker(hid)}
+          onCancel={() => settlePicker(null)}
+        />,
+        document.body,
+      )}
     </div>
   )
 }

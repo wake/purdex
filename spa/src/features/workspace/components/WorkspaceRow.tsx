@@ -106,6 +106,18 @@ export function WorkspaceRow(props: Props) {
     }
   }, [])
 
+  // codex round-2 A2/F2 — clear the long-press click suppressor whenever the
+  // popover collapses. Without this the ref stays true after long-press → tap
+  // outside → next mouse/keyboard activation of Plus is silently dropped.
+  // (We also clear it inline in onClick when we actually consume the
+  // compatibility click; this useEffect catches the case where the browser
+  // skips the synthetic click entirely.)
+  useEffect(() => {
+    if (!popoverOpen) {
+      longPressFiredRef.current = false
+    }
+  }, [popoverOpen])
+
   // Document-level pointerdown closes touch-popover when user taps outside hub.
   // codex round-1 P2 (F3) — but NOT while the host picker is open; the picker
   // is positioned outside the hub DOM and a pointerdown on a host option would
@@ -217,6 +229,9 @@ export function WorkspaceRow(props: Props) {
               onClick={(e) => {
                 // codex round-1 C17 — touch → click compat: if long-press fired, suppress click.
                 if (longPressFiredRef.current) {
+                  // codex round-2 A2 — one-shot suppressor: clear immediately
+                  // so the next mouse/keyboard activation isn't also dropped.
+                  longPressFiredRef.current = false
                   e.preventDefault()
                   e.stopPropagation()
                   return
