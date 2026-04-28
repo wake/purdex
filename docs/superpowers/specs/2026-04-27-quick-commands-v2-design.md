@@ -257,6 +257,39 @@ picker owner（持有 promise resolver 的元件）必須保證 `resolveHostId()
 
 關鍵：**send-keys 失敗也要切過去**，user 才知道 session 在那、可以手動跑 — 這比「保留 session 但不切」少一個孤兒問題。
 
+#### 3.3.1 Workspace executor `assertContextLive` enforcement（post-1b，補強 #690）
+
+`runWorkspaceSlot` 的 `Deps.assertContextLive` 為 **type-level required**（非 optional）。
+
+**Why**：codex round-4（PR #686）引入 `assertContextLive` 作為 destructive-command guard — 在 `createSession` resolve 後、`executeCommand` 發送前，確認 workspace 仍存在；否則 user 已手動刪 workspace 但 `rm -rf` 仍會 ship 到 host tmux。Phase 1b 將其設為 optional 是預留 Phase 1c HOST_ACTIONS（host caller 無 workspace 可驗）。但 optional 形狀代表 **未來新增的 workspace-context caller 漏 wire 時，會靜默回退到 round-4 之前的不安全狀態**（type checker 不抓、test 不抓、UX 看似正常）。Phase 1b' 即將新增 Plus hover popover 這個 caller，是最容易出包的 forward-compat 缺口。
+
+**Enforcement（PR #694 codex round-2 強化後的最終形狀）**：
+- `Deps.assertContextLive: () => boolean`（移除 optional `?`）
+- **`ctx: WorkspaceSlotContext`** — `WorkspaceSlotContext extends SlotContext { workspaceId: string }`。Phase 1c HOST_ACTIONS 即使硬塞 dummy `assertContextLive` 也通不過編譯（缺 workspaceId）→ 強制 1c 必須走 `runHostSlot` / `HostSlotContext`，不能用 trick reuse 此入口（round-2 D1）。
+- runtime guard 改為 **fail-closed defense in depth**（round-2 A2）：
+  ```ts
+  let live = false
+  try {
+    if (typeof deps.assertContextLive === 'function') {
+      live = deps.assertContextLive() === true
+    }
+  } catch { live = false }
+  if (!live) { toast.show(switch_failed); return }
+  ```
+  Type-level required 是首層；runtime typeof + try/catch + strict bool check 是第二層。即便 `as any` cast 繞過或 probe 拋例外，`executeCommand` 也不會被觸發，destructive command 不會 ship。
+- **Type-level test 靠 `tsc -b` 保證**（round-2 A1 / F1）：用 conditional types 對 `Parameters<typeof runWorkspaceSlot>` 斷言 `Deps !== any`、`assertContextLive` required、`workspaceId` required、`workspaceId` 不可 null。`@ts-expect-error` 不夠精準（未來 Deps 加新 required field 會吃掉 directive），改用顯式 conditional type assertion。**Test 跑在 vitest 檔內，但實際保證來自 `tsc -b`，不是 `vitest run`** — 必須在 PR description / test 註解清楚此事，避免 reviewer 誤以為 `pnpm vitest run` 就驗過 type contract。
+
+**Phase 1c HOST_ACTIONS 影響**：強制需 `runHostSlot` / `HostSlotContext`（不再選擇性建議，是 type-level hard 約束）。`HostSlotContext` 形狀以 1c 寫到時的 cwd 解析需求為準（spec §3.2 表格）；不在 #690 預先設計。
+
+**驗收**：
+- 未傳 `assertContextLive` 或 `workspaceId` 的 caller 編譯期 fail
+- 既有 7 個 test 補 `assertContextLive: () => true` 作 negative control（不影響 toast assertion）
+- 加 2 個 fail-closed test（probe throws / probe non-function cast bypass）
+- 加 1 個 type-level invariant test（IsAny + required-prop + null-rejection conditional types）
+- `pnpm run build`（內含 `tsc -b`）/ vitest / lint 全綠
+
+**已知殘留風險**：`as any` / `as unknown as Deps` / `Object.assign(... payload as any)` 仍可從 type 層繞過。Type-level required 擋誠實 caller，runtime fail-closed 擋 broken probe；但 ESLint 層面尚無 enforcement（custom rule 限制 `runWorkspaceSlot` 第三/第二參數形狀）— 為 followup（issue 追蹤）。
+
 ### 3.4 不在 Phase 1 範圍
 
 - `PaneLayoutRenderer` 內 `extraActions` 的 v1 `QuickCommandMenu` 整合保留現狀（後續 phase 再遷移為 `CommandSlot`）

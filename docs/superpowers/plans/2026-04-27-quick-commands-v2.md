@@ -3684,6 +3684,13 @@ Expected: clean
 
 ## Phase 1b' — Plus hover popover 過渡入口（獨立 PR）
 
+> **⚠️ #690 superseded note（2026-04-28）**：本 phase 範例（Task 1b'.1）內的 `runWorkspaceSlot(...)` deps 物件**漏 `assertContextLive`**。依 [issue #690](https://github.com/wake/purdex/issues/690) / spec §3.3.1，`Deps.assertContextLive` 為 type-level required。1b' 實作時必須補：
+> ```tsx
+> assertContextLive: () =>
+>   useWorkspaceStore.getState().workspaces.some((w) => w.id === workspaceId),
+> ```
+> 範例本身保留為 historical reference（codex review 採納紀錄），實作前以 #690 enforcement 規範為準。
+
 **目標：** 在已 ship 的 Phase 1b（Settings + 資料層 + 右鍵 context menu）之上，加上 `WorkspaceRow` Plus 按鈕 hover 往左展開的 chip popover；同時設計 mobile/touch fallback。
 
 **為何拆獨立 PR（codex round-1 結構性變更）：**
@@ -4312,6 +4319,8 @@ Expected: clean
 ---
 
 ## Phase 1c — HOST_ACTIONS 入口（小 PR）
+
+> **⚠️ #690 superseded note（2026-04-28）**：本 phase 範例（Task 1c.1b）寫「HOST_ACTIONS 與 WORKSPACE_ACTIONS 共用 `runWorkspaceSlot`」— 此設計與 [issue #690](https://github.com/wake/purdex/issues/690) / spec §3.3.1 衝突。enforcement 落地後 `runWorkspaceSlot.Deps.assertContextLive` 為 required，但 host caller 無 workspace 可驗。1c 實作時須**新建 `runHostSlot`**（或以 generic 分流 `WorkspaceDeps` / `HostDeps`），不得 reuse `runWorkspaceSlot`；分流形狀以 1c 寫到時的 cwd 解析需求為準（spec §3.2 表格）。範例本身保留為 historical reference。
 
 **目標：** Host 詳情頁加 quick actions 區塊；user 設 mount = HOST 即可在 host 頁看到按鈕。
 

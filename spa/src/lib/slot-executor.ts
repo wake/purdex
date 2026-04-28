@@ -5,6 +5,20 @@ import { useI18nStore } from '../stores/useI18nStore'
 import type { QuickCommand } from './quick-command-bindings'
 import type { SlotContext } from '../components/CommandSlot'
 
+/**
+ * Workspace-narrowed slot context (#690 round-2 D1 / spec §3.3.1):
+ * `workspaceId` is required (non-null string) — the round-4 destructive-command
+ * guard relies on a real workspace to validate via `assertContextLive`. Host
+ * contexts have no workspace to probe and must NOT reuse `runWorkspaceSlot`;
+ * Phase 1c will introduce a sibling `runHostSlot` with `HostSlotContext` instead.
+ *
+ * `SlotContext.workspaceId` itself stays optional (HOST_ACTIONS shares the same
+ * shape via CommandSlot props). The narrow happens at this entry point only.
+ */
+export interface WorkspaceSlotContext extends SlotContext {
+  workspaceId: string
+}
+
 interface Deps {
   /**
    * Switches the active tab/pane to the freshly-created session.
@@ -25,16 +39,19 @@ interface Deps {
   resolveHostId: () => Promise<string | null>
 
   /**
-   * codex round-4 — workspace liveness probe. Returns false if the surrounding
-   * UI context (e.g. workspace) was destroyed while async work was in flight.
-   * The executor calls this after `createSession` resolves and BEFORE
-   * `executeCommand` runs so destructive commands aren't sent to a session
-   * the user can no longer reach.
+   * Required (#690 / spec §3.3.1) — workspace liveness probe. Returns false if
+   * the surrounding UI context (e.g. workspace) was destroyed while async work
+   * was in flight. The executor calls this after `createSession` resolves and
+   * BEFORE `executeCommand` runs so destructive commands aren't sent to a
+   * session the user can no longer reach (codex round-4 of PR #686).
    *
-   * Optional — HOST_ACTIONS callers (Phase 1c) don't have a workspace context
-   * to verify and pass `undefined` to opt out of this check.
+   * Phase 1c HOST_ACTIONS will introduce a separate `runHostSlot` entry point
+   * — host context has no workspace to verify and must NOT reuse this function
+   * (was originally optional to share, but that path silently regresses the
+   * round-4 guard for any future workspace-context caller that forgets to
+   * wire it; e.g. Phase 1b' Plus hover popover).
    */
-  assertContextLive?: () => boolean
+  assertContextLive: () => boolean
 }
 
 function genSessionName(cmd: QuickCommand): string {
@@ -54,13 +71,15 @@ function genSessionName(cmd: QuickCommand): string {
  *  - Step 1 ok + Step 2 ok + Step 3 fails (rare) → toast pointing user to
  *    the sessions list (session is alive elsewhere).
  *
- * The executor is shared by Phase 1b workspace entry and Phase 1c host entry
- * (the latter calls it with workspaceId omitted; the cwd-resolution defaults
- * differ per slot caller, see spec §3.2 table).
+ * Workspace-only entry (#690 / spec §3.3.1). Phase 1c HOST_ACTIONS will
+ * introduce a sibling `runHostSlot` rather than reusing this — host callers
+ * have no workspace context to validate via `assertContextLive`, and sharing
+ * the executor with an optional probe was the round-4 regression risk #690
+ * is closing.
  */
 export async function runWorkspaceSlot(
   cmd: QuickCommand,
-  ctx: SlotContext,
+  ctx: WorkspaceSlotContext,
   deps: Deps,
 ): Promise<void> {
   const t = useI18nStore.getState().t
@@ -92,14 +111,28 @@ export async function runWorkspaceSlot(
     return
   }
 
-  // codex round-4 — workspace liveness gate. If the surrounding context (e.g.
-  // workspace) was destroyed while createSession was in flight, do NOT send
-  // the user command — destructive quick commands (rm / drop / etc.) must not
-  // execute remotely once their context is gone. The session is already
-  // created server-side; surface it as a switch failure (no retry) so the
-  // user knows the operation didn't reach completion. Cleanup of the
-  // server-side session is a separate concern (see PR follow-up).
-  if (deps.assertContextLive && !deps.assertContextLive()) {
+  // codex round-4 (PR #686) — workspace liveness gate. If the surrounding
+  // context (e.g. workspace) was destroyed while createSession was in flight,
+  // do NOT send the user command — destructive quick commands (rm / drop /
+  // etc.) must not execute remotely once their context is gone. The session
+  // is already created server-side; surface it as a switch failure (no retry)
+  // so the user knows the operation didn't reach completion. Cleanup of the
+  // server-side session is tracked separately (#689).
+  //
+  // #690 round-2 A2 — defense in depth. Type-level enforcement guarantees
+  // `assertContextLive` is a function, but a cast-bypass (`as any` / `as
+  // unknown as Deps` / Object.assign with payload-as-any) could still ship
+  // a non-function or one that throws. Fail closed in either case so we
+  // never reach `executeCommand` when the probe is unreliable.
+  let live = false
+  try {
+    if (typeof deps.assertContextLive === 'function') {
+      live = deps.assertContextLive() === true
+    }
+  } catch {
+    live = false
+  }
+  if (!live) {
     toast.show(t('quick_commands.toast.switch_failed'))
     return
   }
