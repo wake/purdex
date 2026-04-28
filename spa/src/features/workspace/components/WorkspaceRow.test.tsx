@@ -1,9 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 import { WorkspaceRow } from './WorkspaceRow'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
+import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
+import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
+import { useHostStore } from '../../../stores/useHostStore'
+import { useTabStore } from '../../../stores/useTabStore'
+import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
+import { clearModuleRegistry, registerModule } from '../../../lib/module-registry'
 import type { Workspace, Tab } from '../../../types/tab'
 
 const mkWs = (id: string, name: string, tabs: string[] = []): Workspace => ({
@@ -226,5 +232,174 @@ describe('WorkspaceRow — header "+ New tab"', () => {
     useLayoutStore.setState({ tabPosition: 'top' })
     render(<WorkspaceRow {...baseProps} onAddTabToWorkspace={() => {}} />)
     expect(screen.queryByLabelText(/new tab in alpha/i)).not.toBeInTheDocument()
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────
+// Phase 1b' — Plus hover popover + touch fallback (codex round-1 B8 / C17)
+// ──────────────────────────────────────────────────────────────────────
+
+function setupHoverPopoverFixtures(opts: { withBindings: boolean }) {
+  useQuickCommandStore.setState({
+    global: opts.withBindings ? [{ id: 'cmd-x', name: 'X', command: 'x' }] : [],
+    byHost: {},
+    bindings: opts.withBindings ? { 'cmd-x': [QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS] } : {},
+  })
+  useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+  useHostStore.setState({
+    hosts: { h1: { id: 'h1', name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 } },
+    hostOrder: ['h1'],
+    runtime: { h1: { status: 'connected' } },
+    activeHostId: 'h1',
+  } as Partial<ReturnType<typeof useHostStore.getState>> as never)
+  // workspace has a tmux-session tab so inferWorkspaceHostId returns 'h1' (no picker prompt)
+  useTabStore.setState({
+    tabs: {
+      t1: {
+        id: 't1', pinned: false, locked: false, createdAt: 0,
+        layout: {
+          type: 'leaf',
+          pane: {
+            id: 'p1',
+            content: {
+              kind: 'tmux-session', hostId: 'h1', sessionCode: 'sess', mode: 'terminal',
+              cachedName: 'x', tmuxInstance: '',
+            },
+          },
+        },
+      },
+    },
+    tabOrder: ['t1'],
+    activeTabId: 't1',
+  } as Partial<ReturnType<typeof useTabStore.getState>> as never)
+  useLayoutStore.setState({
+    ...useLayoutStore.getInitialState(),
+    tabPosition: 'left',
+    activityBarWidth: 'wide',
+  })
+  clearModuleRegistry()
+  registerModule({ id: 'quick-commands', name: 'Quick Commands', disableable: true })
+}
+
+// Props 依 WorkspaceRow.tsx Props 介面 (L11-24) 對齊
+const hoverBaseProps: React.ComponentProps<typeof WorkspaceRow> = {
+  workspace: { id: 'w1', name: 'WS', tabs: ['t1'], activeTabId: 't1' },
+  isActive: false,
+  tabsById: {
+    t1: {
+      id: 't1', pinned: false, locked: false, createdAt: 0,
+      layout: {
+        type: 'leaf' as const,
+        pane: {
+          id: 'p1',
+          content: {
+            kind: 'tmux-session' as const, hostId: 'h1', sessionCode: 'sess', mode: 'terminal' as const,
+            cachedName: 'x', tmuxInstance: '',
+          },
+        },
+      },
+    } as Tab,
+  },
+  activeTabId: 't1',
+  onSelectWorkspace: vi.fn(),
+  onContextMenuWorkspace: vi.fn(),
+  onSelectTab: vi.fn(),
+  onCloseTab: vi.fn(),
+  onMiddleClickTab: vi.fn(),
+  onContextMenuTab: vi.fn(),
+  onRenameTab: vi.fn(),
+  onAddTabToWorkspace: vi.fn(),
+}
+
+describe("WorkspaceRow — Plus hover popover (Phase 1b')", () => {
+  beforeEach(() => {
+    cleanup()
+    setupHoverPopoverFixtures({ withBindings: true })
+  })
+
+  it('opens popover on Plus hover, closes on mouseleave', () => {
+    render(<WorkspaceRow {...hoverBaseProps} />)
+    const plusBtn = screen.getByLabelText(/new tab in/i)
+    const hub = plusBtn.parentElement!
+
+    // 預設未 hover → chip 不在 DOM
+    expect(screen.queryByLabelText(/^X/)).toBeNull()
+
+    // hover Plus → popover 顯示
+    fireEvent.mouseEnter(hub)
+    expect(screen.getByLabelText(/^X/)).toBeInTheDocument()
+
+    // mouseleave wrapper → popover 收回
+    fireEvent.mouseLeave(hub)
+    expect(screen.queryByLabelText(/^X/)).toBeNull()
+  })
+
+  it('does NOT open popover when no WORKSPACE_ACTIONS bindings exist', () => {
+    setupHoverPopoverFixtures({ withBindings: false })
+    render(<WorkspaceRow {...hoverBaseProps} />)
+    const plusBtn = screen.getByLabelText(/new tab in/i)
+    fireEvent.mouseEnter(plusBtn.parentElement!)
+    // popover wrapper not rendered → no toolbar / no chip
+    expect(screen.queryByLabelText(/^X/)).toBeNull()
+  })
+})
+
+describe('WorkspaceRow — touch fallback (codex round-1 C17)', () => {
+  beforeEach(() => {
+    cleanup()
+    setupHoverPopoverFixtures({ withBindings: true })
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('long-press (>=500ms) on Plus opens the popover; tap chip executes', () => {
+    render(<WorkspaceRow {...hoverBaseProps} />)
+    const plusBtn = screen.getByLabelText(/new tab in/i)
+    const hub = plusBtn.parentElement!
+
+    // touch start → wait 500ms → long-press fires
+    fireEvent.touchStart(hub)
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(screen.getByLabelText(/^X/)).toBeInTheDocument()
+    fireEvent.touchEnd(hub)
+    // popover stays open (long-press fired)
+    expect(screen.getByLabelText(/^X/)).toBeInTheDocument()
+  })
+
+  it('short tap (<500ms) on Plus triggers add-tab, NOT popover', () => {
+    const onAddTabToWorkspace = vi.fn()
+    render(<WorkspaceRow {...hoverBaseProps} onAddTabToWorkspace={onAddTabToWorkspace} />)
+    const plusBtn = screen.getByLabelText(/new tab in/i)
+
+    fireEvent.touchStart(plusBtn.parentElement!)
+    act(() => {
+      vi.advanceTimersByTime(200) // less than 500ms
+    })
+    fireEvent.touchEnd(plusBtn.parentElement!)
+    fireEvent.click(plusBtn)
+
+    expect(onAddTabToWorkspace).toHaveBeenCalledWith('w1')
+    expect(screen.queryByLabelText(/^X/)).toBeNull()
+  })
+
+  it('tapping outside the hub closes an open touch-popover', () => {
+    render(<WorkspaceRow {...hoverBaseProps} />)
+    const plusBtn = screen.getByLabelText(/new tab in/i)
+    const hub = plusBtn.parentElement!
+
+    fireEvent.touchStart(hub)
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(screen.getByLabelText(/^X/)).toBeInTheDocument()
+    fireEvent.touchEnd(hub)
+
+    // tap outside the hub
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByLabelText(/^X/)).toBeNull()
   })
 })
