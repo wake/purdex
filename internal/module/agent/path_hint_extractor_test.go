@@ -129,6 +129,18 @@ func TestExtractPathHint_TrimsTrailingSlashCwd(t *testing.T) {
 	}
 }
 
+func TestExtractPathHint_PreservesRootCwd(t *testing.T) {
+	for _, in := range []string{"/", "//", "///"} {
+		h, _, ok := ExtractPathHint(mkRawWithCwd(in, "Read", "/etc/passwd"), "PreToolUse", "cc", "s1", "", time.Unix(0, 0))
+		if !ok {
+			t.Fatalf("expected hint for cwd=%q", in)
+		}
+		if h.Cwd != "/" {
+			t.Errorf("cwd=%q normalized to %q, want /", in, h.Cwd)
+		}
+	}
+}
+
 func TestExtractPathHint_DropsOversizedRawEvent(t *testing.T) {
 	huge := make([]byte, MaxRawEventBytes+1)
 	for i := range huge {

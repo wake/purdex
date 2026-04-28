@@ -100,13 +100,21 @@ describe('usePathCacheStore', () => {
     expect(dirsAt('h2', '/repo')).toEqual(['/repo/c'])
   })
 
-  it('clearBySession purges entries for that session across all scopes; deletes empty scopes', () => {
+  it('clearBySession purges entries for (host, session) across all cwds within that host; deletes empty scopes', () => {
     usePathCacheStore.getState().add('h1', '/repo', 'sessA', '/repo/a1')
     usePathCacheStore.getState().add('h1', '/repo', 'sessB', '/repo/b1')
     usePathCacheStore.getState().add('h1', '/other', 'sessA', '/other/a2')
-    usePathCacheStore.getState().clearBySession('sessA')
+    usePathCacheStore.getState().clearBySession('h1', 'sessA')
     expect(dirsAt('h1', '/repo')).toEqual(['/repo/b1'])
     expect(usePathCacheStore.getState().entriesByScope[scopeKey('h1', '/other')]).toBeUndefined()
+  })
+
+  it('clearBySession is host-scoped — same sessionCode on another host survives (R3 P2)', () => {
+    usePathCacheStore.getState().add('h1', '/repo', 'shared', '/repo/x')
+    usePathCacheStore.getState().add('h2', '/repo', 'shared', '/repo/y')
+    usePathCacheStore.getState().clearBySession('h1', 'shared')
+    expect(usePathCacheStore.getState().entriesByScope[scopeKey('h1', '/repo')]).toBeUndefined()
+    expect(dirsAt('h2', '/repo')).toEqual(['/repo/y'])
   })
 
   it('clearHost removes all scopes for that host (works with colon-containing hostId)', () => {

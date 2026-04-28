@@ -126,8 +126,10 @@ export function useMultiHostEventWs() {
                 useAgentStore.getState().clearSession(hostId, code)
                 // Path-cache entries tagged with this sessionCode are now
                 // dead (their owning agent session is gone); other sessions
-                // sharing the same cwd keep their entries.
-                usePathCacheStore.getState().clearBySession(code)
+                // sharing the same cwd keep their entries. SessionCode is
+                // host-local so we must scope the clear by hostId — sibling
+                // hosts can mint identical codes (R3 P2).
+                usePathCacheStore.getState().clearBySession(hostId, code)
               }
             } catch { /* ignore */ }
             return

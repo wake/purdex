@@ -46,7 +46,13 @@ interface PathCacheState {
   lookup: (hostId: string, cwd: string, basename: string, currentSessionCode?: string) => string[]
   pruneStaleCandidate: (hostId: string, cwd: string, candidatePath: string) => void
   clearScope: (hostId: string, cwd: string) => void
-  clearBySession: (sessionCode: string) => void
+  /**
+   * Purge entries tagged with sessionCode within hostId. SessionCode is only
+   * unique per-host (each daemon mints them from local tmux IDs), so a
+   * global clear would erase entries on other hosts that happen to share
+   * the same code.
+   */
+  clearBySession: (hostId: string, sessionCode: string) => void
   clearHost: (hostId: string) => void
 }
 
@@ -108,11 +114,16 @@ export const usePathCacheStore = create<PathCacheState>()(
           return { entriesByScope: rest }
         }),
 
-      clearBySession: (sessionCode) =>
+      clearBySession: (hostId, sessionCode) =>
         set((state) => {
           let changed = false
           const next: Record<string, PathCacheEntry[]> = {}
           for (const [k, list] of Object.entries(state.entriesByScope)) {
+            const parsed = parseScopeKey(k)
+            if (!parsed || parsed.hostId !== hostId) {
+              next[k] = list
+              continue
+            }
             const filtered = list.filter((e) => e.sessionCode !== sessionCode)
             if (filtered.length !== list.length) changed = true
             if (filtered.length > 0) next[k] = filtered

@@ -32,6 +32,19 @@ type rawCCEvent struct {
 	} `json:"tool_input"`
 }
 
+// normalizeCwd trims trailing slashes but preserves "/" itself (root). An
+// agent legitimately running at root would otherwise lose its scope key.
+func normalizeCwd(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	trimmed := strings.TrimRight(raw, "/")
+	if trimmed == "" {
+		return "/"
+	}
+	return trimmed
+}
+
 // hasControlOrNul rejects NUL and any C0 control char (0x00-0x1F, 0x7F).
 // Newlines and tabs are not valid in POSIX path components in any meaningful
 // way and would let an attacker inject WS protocol tokens.
@@ -82,9 +95,9 @@ func ExtractPathHint(
 		return PathHint{}, "", false
 	}
 
-	cwd := strings.TrimRight(ev.Cwd, "/")
+	cwd := normalizeCwd(ev.Cwd)
 	if cwd == "" {
-		cwd = strings.TrimRight(cwdFallback, "/")
+		cwd = normalizeCwd(cwdFallback)
 	}
 	if cwd == "" || !filepath.IsAbs(cwd) || len(cwd) > MaxCwdBytes || hasControlOrNul(cwd) {
 		return PathHint{}, "", false
