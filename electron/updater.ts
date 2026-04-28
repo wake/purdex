@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { execFileSync } from 'child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, renameSync, cpSync, createWriteStream } from 'fs'
 import { dirname, join } from 'path'
 import { pipeline } from 'stream/promises'
