@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CaretRight, CaretDown, Plus } from '@phosphor-icons/react'
 import { useDroppable } from '@dnd-kit/core'
 import { useSortable } from '@dnd-kit/sortable'
@@ -59,6 +59,25 @@ export function WorkspaceRow(props: Props) {
 
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressFiredRef = useRef(false)
+  // codex round-1 P2 (F3 — picker hover-dismissal). When the popover's internal
+  // HostPickerPopover is up we must NOT collapse the hub on mouseleave /
+  // pointerdown — otherwise moving the pointer toward a host option unmounts
+  // the popover (and the picker with it) before the user can click. Tracked
+  // via refs because mouseleave/pointerdown handlers fire from event listeners
+  // whose closures snapshot stale state.
+  const pickerOpenRef = useRef(false)
+  const pointerInHubRef = useRef(false)
+  const handlePickerOpenChange = useCallback((open: boolean) => {
+    const wasOpen = pickerOpenRef.current
+    pickerOpenRef.current = open
+    // Only collapse on the open → closed transition. Initial mount notifies
+    // false (and so does the unmount cleanup); collapsing on that would shut
+    // the popover the moment it opens, especially on touch where mouseEnter
+    // never fires and pointerInHubRef stays false.
+    if (wasOpen && !open && !pointerInHubRef.current) {
+      setPopoverOpen(false)
+    }
+  }, [])
 
   const handleTouchStart = () => {
     longPressFiredRef.current = false
@@ -88,9 +107,13 @@ export function WorkspaceRow(props: Props) {
   }, [])
 
   // Document-level pointerdown closes touch-popover when user taps outside hub.
+  // codex round-1 P2 (F3) — but NOT while the host picker is open; the picker
+  // is positioned outside the hub DOM and a pointerdown on a host option would
+  // otherwise close the popover before the picker's own onSelect handler fires.
   useEffect(() => {
     if (!popoverOpen) return
     const onPointer = (e: PointerEvent) => {
+      if (pickerOpenRef.current) return
       if (!hubRef.current?.contains(e.target as Node | null)) {
         setPopoverOpen(false)
       }
@@ -163,12 +186,23 @@ export function WorkspaceRow(props: Props) {
           <div
             ref={hubRef}
             className="relative inline-flex"
-            onMouseEnter={() => setPopoverOpen(true)}
-            onMouseLeave={() => setPopoverOpen(false)}
+            onMouseEnter={() => {
+              pointerInHubRef.current = true
+              setPopoverOpen(true)
+            }}
+            onMouseLeave={() => {
+              pointerInHubRef.current = false
+              // codex round-1 P2 (F3) — keep popover up while picker is open so
+              // the user can drift the pointer onto a host option without it
+              // disappearing.
+              if (pickerOpenRef.current) return
+              setPopoverOpen(false)
+            }}
             onFocusCapture={() => setPopoverOpen(true)}
             onBlurCapture={(e) => {
               // Only close if focus actually left the hub (chip→chip Tab keeps focus inside).
               if (!hubRef.current?.contains(e.relatedTarget as Node | null)) {
+                if (pickerOpenRef.current) return
                 setPopoverOpen(false)
               }
             }}
@@ -196,7 +230,11 @@ export function WorkspaceRow(props: Props) {
               <Plus size={12} />
             </button>
             {popoverOpen && (
-              <WorkspaceQuickActionsPopover workspaceId={workspace.id} hostId={hostId} />
+              <WorkspaceQuickActionsPopover
+                workspaceId={workspace.id}
+                hostId={hostId}
+                onPickerOpenChange={handlePickerOpenChange}
+              />
             )}
           </div>
         )}

@@ -17,6 +17,14 @@ interface Props {
    * 讓 user 選 host（spec v4 §3.2.2）。
    */
   hostId: string | null
+  /**
+   * codex round-1 P2 (F3 — picker hover-dismissal) — invoked whenever the
+   * internal HostPickerPopover open state flips. The parent hub uses this to
+   * suppress its own mouseleave / pointerdown close logic while the picker is
+   * up, so moving the pointer toward a host option does not unmount the
+   * popover (and the picker with it) before the user can click.
+   */
+  onPickerOpenChange?: (open: boolean) => void
 }
 
 /**
@@ -30,7 +38,11 @@ interface Props {
  * the picker flow handles that case. Only no-bindings / module-disabled
  * suppress the wrapper.
  */
-export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
+export function WorkspaceQuickActionsPopover({
+  workspaceId,
+  hostId,
+  onPickerOpenChange,
+}: Props) {
   const t = useI18nStore((s) => s.t)
   const moduleEnabled = useModuleEnabledStore((s) => s.isEnabled('quick-commands'))
   const hasBindings = useQuickCommandStore((s) => {
@@ -40,6 +52,15 @@ export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
       return targets !== undefined && targets.includes(QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS)
     })
   })
+  // codex round-1 P2 (F1 — cwd parity with context-menu) — spec §3.2 says
+  // WORKSPACE_ACTIONS sessions inherit `workspace.moduleConfig.files.projectPath`
+  // as cwd. Without this, hover-popover commands fall back to `~` while the
+  // identical command from the right-click context menu would run in projectPath.
+  const cwd = useWorkspaceStore((s) => {
+    const ws = s.workspaces.find((w) => w.id === workspaceId)
+    const path = ws?.moduleConfig?.['files']?.['projectPath']
+    return typeof path === 'string' && path.length > 0 ? path : undefined
+  })
   const wrapperRef = useRef<HTMLDivElement>(null)
   // codex round-2 — picker state shape pinned: open implied by resolver !== null.
   const [picker, setPicker] = useState<{
@@ -47,6 +68,16 @@ export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
     resolver: ((id: string | null) => void) | null
     anchor: HTMLElement | null
   } | null>(null)
+
+  // codex round-1 P2 (F2 — double-click race) — when hostId is already known the
+  // picker never opens, so `picker?.open` stays false for the entire async
+  // createSession + send-keys round-trip. Without an explicit pending flag a
+  // fast double-click would queue two executor pipelines and create two sessions
+  // for the same command. The ref is the synchronous guard (covers same-tick
+  // double-fire before React re-renders); `executing` mirrors it to React state
+  // so the disabled UI in CommandSlot updates.
+  const executingRef = useRef(false)
+  const [executing, setExecuting] = useState(false)
 
   const resolveHostId = useCallback(
     () =>
@@ -68,6 +99,18 @@ export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
       })
     }
   }, [])
+
+  // codex round-1 P2 (F3 — picker hover-dismissal) — propagate picker open state
+  // to the parent hub so it can suppress its mouseleave/pointerdown close logic
+  // while the picker is up. Cleanup notifies false on unmount so the hub never
+  // gets stuck thinking a picker is still open after the popover is gone.
+  const pickerOpen = picker?.open ?? false
+  useEffect(() => {
+    onPickerOpenChange?.(pickerOpen)
+  }, [pickerOpen, onPickerOpenChange])
+  useEffect(() => {
+    return () => onPickerOpenChange?.(false)
+  }, [onPickerOpenChange])
 
   // codex round-1 B5/B6 — full openSingletonAndSelect equivalent: complete
   // tmux-session content fields + insertTab into workspace + setActive.
@@ -100,25 +143,39 @@ export function WorkspaceQuickActionsPopover({ workspaceId, hostId }: Props) {
     >
       <CommandSlot
         mountTo={QUICK_COMMAND_SLOTS.WORKSPACE_ACTIONS}
-        ctx={{ hostId, workspaceId }}
-        // codex round-1 C11 — picker race guard
-        busy={picker?.open ?? false}
-        executor={(cmd, ctx) =>
-          runWorkspaceSlot(
-            cmd,
-            { ...ctx, workspaceId },
-            {
-              switchToSession,
-              resolveHostId,
-              // #690 enforcement (alpha.242) — workspace liveness probe is
-              // type-level required on Deps. Workspace gets unmounted async
-              // (mouseleave / route change) while createSession is in flight;
-              // returning false here aborts before send-keys.
-              assertContextLive: () =>
-                useWorkspaceStore.getState().workspaces.some((w) => w.id === workspaceId),
-            },
-          )
-        }
+        // codex round-1 P2 (F1) — pass cwd so hover-popover commands inherit
+        // workspace projectPath, matching context-menu behavior.
+        ctx={{ hostId, workspaceId, cwd }}
+        // codex round-1 C11 + P2 (F2) — busy=true during picker mid-flight OR
+        // executor mid-flight; without `executing` the hostId-known path would
+        // never disable chips, allowing double-click duplicate session creation.
+        busy={pickerOpen || executing}
+        executor={async (cmd, ctx) => {
+          // codex round-1 P2 (F2) — synchronous ref guard catches the
+          // double-click window before React re-renders the disabled state.
+          if (executingRef.current) return
+          executingRef.current = true
+          setExecuting(true)
+          try {
+            await runWorkspaceSlot(
+              cmd,
+              { ...ctx, workspaceId },
+              {
+                switchToSession,
+                resolveHostId,
+                // #690 enforcement (alpha.242) — workspace liveness probe is
+                // type-level required on Deps. Workspace gets unmounted async
+                // (mouseleave / route change) while createSession is in flight;
+                // returning false here aborts before send-keys.
+                assertContextLive: () =>
+                  useWorkspaceStore.getState().workspaces.some((w) => w.id === workspaceId),
+              },
+            )
+          } finally {
+            executingRef.current = false
+            setExecuting(false)
+          }
+        }}
       />
       <HostPickerPopover
         open={picker?.open ?? false}

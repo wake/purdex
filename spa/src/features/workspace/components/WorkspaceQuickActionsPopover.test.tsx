@@ -1,11 +1,28 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { WorkspaceQuickActionsPopover } from './WorkspaceQuickActionsPopover'
 import { useQuickCommandStore } from '../../../stores/useQuickCommandStore'
 import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
 import { useHostStore } from '../../../stores/useHostStore'
+import { useWorkspaceStore } from '../../../stores/useWorkspaceStore'
 import { QUICK_COMMAND_SLOTS } from '../../../lib/quick-command-slots'
 import { clearModuleRegistry, registerModule } from '../../../lib/module-registry'
+import { createSession } from '../../../lib/host-api'
+
+// codex round-1 P2 fix tests need to spy on createSession (the cwd sink in
+// runWorkspaceSlot) without performing real network calls. importActual
+// preserves every other host-api export so unrelated callers still resolve.
+vi.mock('../../../lib/host-api', async () => {
+  const actual = await vi.importActual<typeof import('../../../lib/host-api')>(
+    '../../../lib/host-api',
+  )
+  return {
+    ...actual,
+    // Never resolves — keeps runWorkspaceSlot pending so we can assert call args
+    // before the executor moves past createSession.
+    createSession: vi.fn(() => new Promise(() => {})),
+  }
+})
 
 function setup() {
   useQuickCommandStore.setState({
@@ -27,6 +44,7 @@ function setup() {
 
 beforeEach(() => {
   cleanup()
+  vi.mocked(createSession).mockClear()
   setup()
 })
 
@@ -73,5 +91,84 @@ describe('WorkspaceQuickActionsPopover', () => {
     expect(screen.getByRole('listbox')).toBeInTheDocument()
     // simulate parent hub mouseleave force-closing the popover wrapper.
     expect(() => unmount()).not.toThrow()
+  })
+
+  // codex round-1 P2 (F1) — cwd parity with context-menu path. Without this fix
+  // the hover popover would call createSession with cwd='~' even when the
+  // workspace has files.projectPath configured, while the right-click context
+  // menu correctly inherits projectPath. Same command, divergent behavior.
+  it('hostId known + workspace has projectPath → createSession invoked with cwd=projectPath', async () => {
+    useWorkspaceStore.setState({
+      workspaces: [
+        {
+          id: 'w1',
+          name: 'WS',
+          tabs: [],
+          activeTabId: null,
+          moduleConfig: { files: { projectPath: '/srv/work' } },
+        },
+      ],
+      activeWorkspaceId: 'w1',
+    } as Partial<ReturnType<typeof useWorkspaceStore.getState>> as never)
+    render(<WorkspaceQuickActionsPopover workspaceId="w1" hostId="h1" />)
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText(/^Alpha/))
+    })
+    expect(createSession).toHaveBeenCalledTimes(1)
+    // createSession(hostId, name, cwd, mode)
+    expect(vi.mocked(createSession).mock.calls[0]?.[2]).toBe('/srv/work')
+  })
+
+  // codex round-1 P2 (F2) — double-click race. With hostId already known the
+  // picker never opens, so without an explicit executing guard busy stayed
+  // false for the entire async createSession round-trip and a fast double-click
+  // would queue two pipelines. Synchronous ref guard catches the same-tick
+  // double-fire before React re-renders the disabled state.
+  it('rapid double-click on chip → executor fires only once (executing race guard)', async () => {
+    render(<WorkspaceQuickActionsPopover workspaceId="w1" hostId="h1" />)
+    const chip = screen.getByLabelText(/^Alpha/)
+    await act(async () => {
+      fireEvent.click(chip)
+      fireEvent.click(chip)
+    })
+    expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
+  // codex round-1 P2 (F3) — picker hover-dismissal. The parent hub uses
+  // onPickerOpenChange to decide whether to honor mouseleave / pointerdown
+  // close events. Mount notifies false; opening the picker notifies true;
+  // selecting/cancelling notifies false; unmount notifies false again.
+  it('onPickerOpenChange fires true when picker opens, false when picker closes', () => {
+    const onPickerOpenChange = vi.fn()
+    render(
+      <WorkspaceQuickActionsPopover
+        workspaceId="w1"
+        hostId={null}
+        onPickerOpenChange={onPickerOpenChange}
+      />,
+    )
+    // initial mount fires false; record the count then verify subsequent transitions.
+    onPickerOpenChange.mockClear()
+    fireEvent.click(screen.getByLabelText(/^Alpha/))
+    expect(onPickerOpenChange).toHaveBeenCalledWith(true)
+
+    // select host → picker closes
+    onPickerOpenChange.mockClear()
+    fireEvent.click(screen.getByText(/mlab/))
+    expect(onPickerOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('onPickerOpenChange fires false on unmount even if picker was never opened', () => {
+    const onPickerOpenChange = vi.fn()
+    const { unmount } = render(
+      <WorkspaceQuickActionsPopover
+        workspaceId="w1"
+        hostId="h1"
+        onPickerOpenChange={onPickerOpenChange}
+      />,
+    )
+    onPickerOpenChange.mockClear()
+    unmount()
+    expect(onPickerOpenChange).toHaveBeenCalledWith(false)
   })
 })

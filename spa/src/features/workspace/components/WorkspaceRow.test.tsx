@@ -342,6 +342,46 @@ describe("WorkspaceRow — Plus hover popover (Phase 1b')", () => {
     // popover wrapper not rendered → no toolbar / no chip
     expect(screen.queryByLabelText(/^X/)).toBeNull()
   })
+
+  // codex round-1 P2 (F3 — picker hover-dismissal). Without this guard the
+  // hub's mouseleave handler unconditionally collapsed the popover, taking the
+  // HostPickerPopover (rendered inside) down with it the moment the user
+  // moved the pointer toward a host option.
+  it('keeps popover up while picker is open; collapses after picker resolves outside hub', () => {
+    // Override fixture so workspace has no tmux-session tabs → hostId resolves
+    // to null → clicking a chip opens HostPickerPopover.
+    useTabStore.setState({
+      tabs: {},
+      tabOrder: [],
+      activeTabId: null,
+    } as Partial<ReturnType<typeof useTabStore.getState>> as never)
+    const props: React.ComponentProps<typeof WorkspaceRow> = {
+      ...hoverBaseProps,
+      workspace: { ...hoverBaseProps.workspace, tabs: [] },
+      tabsById: {},
+    }
+    render(<WorkspaceRow {...props} />)
+    const plusBtn = screen.getByLabelText(/new tab in/i)
+    const hub = plusBtn.parentElement!
+
+    fireEvent.mouseEnter(hub)
+    expect(screen.getByLabelText(/^X/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByLabelText(/^X/))
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+
+    // mouseleave the hub while picker is up — popover MUST stay so the user
+    // can drift onto a host option without losing it.
+    fireEvent.mouseLeave(hub)
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+    expect(screen.getByLabelText(/^X/)).toBeInTheDocument()
+
+    // select a host → picker resolves → onPickerOpenChange(false) →
+    // pointerInHubRef is false (we left earlier) → popover collapses.
+    fireEvent.click(screen.getByText(/mlab/))
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(screen.queryByLabelText(/^X/)).toBeNull()
+  })
 })
 
 describe('WorkspaceRow — touch fallback (codex round-1 C17)', () => {
