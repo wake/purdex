@@ -11,13 +11,13 @@ func deriveCodexStatus(eventName string, rawEvent json.RawMessage) agent.DeriveR
 	_ = json.Unmarshal(rawEvent, &raw)
 
 	switch eventName {
-	case "SessionStart":
+	case "PdxSessionStart":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusIdle}
 
-	case "UserPromptSubmit":
+	case "PdxUserPromptSubmit":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusRunning}
 
-	case "Notification":
+	case "PdxNotification":
 		// Mirror cc/status.go subtype mapping; codex hooks share the pdx
 		// hook CLI schema, so notification_type values align.
 		nt := strVal(raw, "notification_type")
@@ -39,7 +39,7 @@ func deriveCodexStatus(eventName string, rawEvent json.RawMessage) agent.DeriveR
 			},
 		}
 
-	case "PermissionRequest":
+	case "PdxPermissionRequest":
 		return agent.DeriveResult{
 			Valid:  true,
 			Status: agent.StatusWaiting,
@@ -48,10 +48,10 @@ func deriveCodexStatus(eventName string, rawEvent json.RawMessage) agent.DeriveR
 			},
 		}
 
-	case "Stop":
+	case "PdxStop":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusIdle}
 
-	case "StopFailure":
+	case "PdxStopFailure":
 		return agent.DeriveResult{
 			Valid:  true,
 			Status: agent.StatusError,
@@ -61,10 +61,10 @@ func deriveCodexStatus(eventName string, rawEvent json.RawMessage) agent.DeriveR
 			},
 		}
 
-	case "SessionEnd":
+	case "PdxSessionEnd":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusClear}
 
-	case "SubagentStart", "SubagentStop":
+	case "PdxSubagentStart", "PdxSubagentStop":
 		// Detail-only event: Valid=true, Status="" (mirrors cc/opencode).
 		return agent.DeriveResult{
 			Valid:  true,

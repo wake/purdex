@@ -1768,11 +1768,12 @@ func TestHandleEvent_InvalidWithReason_UsesProviderReason(t *testing.T) {
 // downstream reaction to that classification stays unverified for codex/
 // opencode shapes that aren't yet covered by H1/H2/H3.
 
-// W2-D1: codex prematurely emitting a PdxXxx name before its Phase 2 catalog
-// migration must surface as event_not_in_catalog. Branch 1 misses (codex
-// HookEventSpecs not yet keyed by PurdexName), branch 2 misses (codex legacy
-// set has "Stop" not "PdxStop"), so DeriveStatus must classify as Valid=false.
-func TestHandleEvent_CodexPrematurePdxName_IsCatalogMiss(t *testing.T) {
+// W2-D1 (Phase 2): codex PdxXxx is now a legitimate catalog hit post-P2-T1.
+// Asserts the inverse direction of the original Phase 1 drift guard: after
+// codex catalog migrates, PdxStop must NOT classify as event_not_in_catalog.
+// Lifecycle is LifecycleStop (codex catalog entry) so the handler routes
+// through the regular lifecycle path, not the catalog-miss early return.
+func TestHandleEvent_CodexPdxName_IsCatalogHit(t *testing.T) {
 	m := newTestModule(t)
 	fakeTmux := tmux.NewFakeExecutor()
 	fakeTmux.SetPaneSessionName("%5", "work")
@@ -1781,6 +1782,13 @@ func TestHandleEvent_CodexPrematurePdxName_IsCatalogMiss(t *testing.T) {
 	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
 	m.prober = probe.New(fakeTmux)
 	m.registry.Register(agentcodex.NewProvider())
+	// Stub identify so the verify gate doesn't drop the event before
+	// classifyLifecycle reaches its decision.
+	origRead := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1, ExePath: "/usr/local/bin/codex", Argv: []string{"codex"}}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origRead })
 
 	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxStop","raw_event":{},"agent_type":"codex"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
@@ -1795,8 +1803,40 @@ func TestHandleEvent_CodexPrematurePdxName_IsCatalogMiss(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
+	if resp["reason"] == "event_not_in_catalog" {
+		t.Errorf("reason = %q; codex PdxStop must hit the catalog post-P2 (was Phase 1 drift guard)", resp["reason"])
+	}
+}
+
+// W2-D1b (Phase 2): opencode prematurely emitting a PdxXxx name before its
+// Phase 3 catalog migration must surface as event_not_in_catalog. This
+// preserves the cross-phase drift guard the original codex-targeted test
+// provided in Phase 1 — opencode is now the still-unmigrated agent.
+func TestHandleEvent_OpencodePrematurePdxName_IsCatalogMiss(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.prober = probe.New(fakeTmux)
+	m.registry.Register(opencode.NewProvider())
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxStop","raw_event":{},"agent_type":"opencode"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s), want 200", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	if resp["reason"] != "event_not_in_catalog" {
-		t.Errorf("reason = %q, want event_not_in_catalog (codex catalog still legacy in Phase 1)", resp["reason"])
+		t.Errorf("reason = %q, want event_not_in_catalog (opencode catalog still legacy in Phase 2)", resp["reason"])
 	}
 }
 
@@ -1894,7 +1934,7 @@ func TestHandleEvent_CodexSessionEndClearsErrorGuard(t *testing.T) {
 	m.currentStatus["work"] = agentpkg.StatusError
 	m.mu.Unlock()
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionEnd","raw_event":{},"agent_type":"codex"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionEnd","raw_event":{},"agent_type":"codex"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
