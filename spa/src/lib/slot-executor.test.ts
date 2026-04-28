@@ -466,13 +466,45 @@ describe('runHostSlot', () => {
     expect(toast!.action).toBeUndefined()
   })
 
-  // Finding 1 (high) — host liveness guard. createSession resolves; user
-  // deletes the host in Settings before executeCommand fires; assertHostLive
-  // returns false → fail closed, no executeCommand, no switchToSession,
-  // switch_failed toast (no retry — retry can't bring host back).
-  it('assertHostLive returning false after createSession aborts before executeCommand (Finding 1)', async () => {
+  // R2 fix (codex adversarial review) — pre-createSession host liveness
+  // gate. A stale chip click after Settings-side host deletion (before the
+  // chip re-renders disabled) must NOT call createSession at all — otherwise
+  // useHostStore.getDaemonBase falls back to activeHostId ?? hostOrder[0]
+  // and creates the orphan session on the WRONG host. The post-create probe
+  // catches the during-create-await race; this pre-check catches the
+  // already-dead-at-click case.
+  it('assertHostLive returning false BEFORE createSession blocks the entire pipeline (R2)', async () => {
     const switchFocus = vi.fn()
     const assertHostLive = vi.fn().mockReturnValue(false)
+
+    await runHostSlot(
+      { id: 'cmd-h', name: 'HostCmd', command: 'rm -rf /' },
+      { hostId: 'h1' },
+      { switchToSession: switchFocus, assertHostLive },
+    )
+
+    expect(assertHostLive).toHaveBeenCalledWith('h1')
+    // CRITICAL: createSession was NOT called — orphan session never created
+    expect(createSession).not.toHaveBeenCalled()
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(switchFocus).not.toHaveBeenCalled()
+    const toast = useUndoToast.getState().toast
+    expect(toast!.message).toMatch(/could not switch/i)
+    expect(toast!.action).toBeUndefined()
+  })
+
+  // Finding 1 (high) — host liveness guard during createSession await. User
+  // deletes the host in Settings AFTER createSession resolves but BEFORE
+  // executeCommand fires; assertHostLive returns false on the second call
+  // → fail closed, no executeCommand, no switchToSession, switch_failed
+  // toast (no retry — retry can't bring host back).
+  it('assertHostLive returning false after createSession aborts before executeCommand (Finding 1)', async () => {
+    const switchFocus = vi.fn()
+    // First call (pre-create): true (host exists at click time)
+    // Second call (post-create): false (host deleted during createSession await)
+    const assertHostLive = vi.fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false)
     ;(createSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       code: 'sess-orphan', name: 'A', cwd: '~', mode: 'terminal',
     })
@@ -485,7 +517,7 @@ describe('runHostSlot', () => {
     )
 
     expect(createSession).toHaveBeenCalledTimes(1)
-    expect(assertHostLive).toHaveBeenCalledWith('h1')
+    expect(assertHostLive).toHaveBeenCalledTimes(2) // pre + post
     expect(executeCommand).not.toHaveBeenCalled() // critical: command did NOT ship to fallback host
     expect(switchFocus).not.toHaveBeenCalled()
     const toast = useUndoToast.getState().toast

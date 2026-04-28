@@ -222,6 +222,19 @@ export async function runHostSlot(
   const t = useI18nStore.getState().t
   const toast = useUndoToast.getState()
 
+  // R2 fix (codex adversarial review) — pre-createSession host liveness
+  // gate. Without this, a stale chip click after Settings-side host
+  // deletion (before the chip re-renders disabled) would still call
+  // createSession; useHostStore.getDaemonBase falls back to
+  // activeHostId ?? hostOrder[0], so the orphan session would be created
+  // on the WRONG host. The post-create probe stops executeCommand but
+  // can't undo the orphan session. Pre-check + post-check + retry-check
+  // is defense in depth.
+  if (!isHostLive(deps, ctx.hostId)) {
+    toast.show(t('quick_commands.toast.switch_failed'))
+    return
+  }
+
   let sessionCode: string
   try {
     const session = await createSession(ctx.hostId, genSessionName(cmd), ctx.cwd ?? '~', 'terminal')
