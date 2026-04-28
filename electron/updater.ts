@@ -1,15 +1,12 @@
 import { app } from 'electron'
-import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, renameSync, cpSync, createWriteStream } from 'fs'
-import { dirname, join } from 'path'
+import { join } from 'path'
 import { pipeline } from 'stream/promises'
 import { extract } from 'tar'
 
 declare const __APP_VERSION__: string
 declare const __ELECTRON_HASH__: string
 declare const __SPA_HASH__: string
-
-const APP_ID = 'dev.wake.purdex'
 
 export interface AppInfo {
   version: string
@@ -40,70 +37,6 @@ export function getAppInfo(): AppInfo {
 
 function authHeaders(token?: string): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
-function getAppBundlePath(): string | null {
-  if (process.platform !== 'darwin') return null
-  // /Foo.app/Contents/MacOS/Foo -> /Foo.app
-  return dirname(dirname(dirname(app.getPath('exe'))))
-}
-
-type SignedState = 'signed' | 'unsigned' | 'unknown'
-
-const PREFLIGHT_TIMEOUT_MS = 10_000
-
-// Loose match — tolerates ANSI escapes, leading paths/colons, case
-// differences, and varying whitespace. The phrase itself is documented
-// codesign output going back many macOS releases, but Apple makes no
-// stability guarantee, so we normalise both stdout and stderr before
-// matching.
-const NOT_SIGNED_PATTERN = /code object\s+is\s+not\s+signed\s+at\s+all/i
-
-function stripAnsi(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
-}
-
-function detectSignedState(appBundle: string): SignedState {
-  const result = spawnSync('codesign', ['-dv', appBundle], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    encoding: 'utf8',
-    timeout: PREFLIGHT_TIMEOUT_MS,
-  })
-  if (result.status === 0) return 'signed'
-  // status === null covers SIGTERM kills, ETIMEDOUT, ENOENT, etc.
-  if (result.status === null || result.error) return 'unknown'
-  const merged = stripAnsi(`${result.stdout ?? ''}\n${result.stderr ?? ''}`)
-  if (NOT_SIGNED_PATTERN.test(merged)) return 'unsigned'
-  return 'unknown'
-}
-
-function resignAppBundle(): void {
-  const appBundle = getAppBundlePath()
-  if (!appBundle || process.env.PDX_SKIP_MAC_SIGN === '1') return
-
-  const state = detectSignedState(appBundle)
-  if (state === 'unsigned') return
-  if (state === 'unknown') {
-    throw new Error(
-      `codesign preflight detection failed for ${appBundle}; ` +
-      `set PDX_SKIP_MAC_SIGN=1 to bypass, or rebuild the app bundle.`
-    )
-  }
-  // state === 'signed'
-  const identity = process.env.PDX_MAC_SIGN_IDENTITY || '-'
-  const signArgs = [
-    '--force',
-    '--deep',
-    '--options', 'runtime',
-    '--identifier', APP_ID,
-    '--sign', identity,
-  ]
-  if (identity === '-') signArgs.push('--timestamp=none')
-  signArgs.push(appBundle)
-
-  execFileSync('codesign', signArgs, { stdio: 'inherit' })
-  execFileSync('codesign', ['--verify', '--deep', '--strict', '--verbose=4', appBundle], { stdio: 'inherit' })
 }
 
 export async function checkUpdate(daemonUrl: string, token?: string): Promise<RemoteVersionInfo> {
@@ -225,8 +158,6 @@ export async function applyUpdate(
         renameSync(src, dst)
       }
     }
-    progress('signing')
-    resignAppBundle()
   } catch (err) {
     // Rollback: restore from backup — each target independently so one
     // failure does not prevent restoring the others
@@ -249,12 +180,8 @@ export async function applyUpdate(
   // Cleanup temp
   rmSync(tmpDir, { recursive: true })
 
-  // Relaunch — no progress('restarting') here because app.exit(0)
-  // kills the process before the IPC message reaches the renderer.
   app.relaunch()
   app.exit(0)
 
   return { success: true, message: 'Update applied, restarting...' }
 }
-
-export const __testing = { detectSignedState, resignAppBundle }
