@@ -42,12 +42,20 @@ func (f *fakeSessionProvider) UpdateMeta(string, session.MetaUpdate) error { ret
 func (f *fakeSessionProvider) HandleTerminalWS(http.ResponseWriter, *http.Request, string) {
 }
 
-// fakeAgentProvider is a configurable AgentProvider for tests.
+// fakeAgentProvider is a configurable AgentProvider for tests. The events
+// slice is optional: tests exercising the metadata-driven lifecycle dispatch
+// path inject a per-test catalog (typically a slice of HookEventSpec keyed by
+// PurdexName + Lifecycle); tests that want the daemon to fall back to the
+// pre-W2 legacy-literal path leave it nil. fakeAgentProvider implements
+// HookInstaller so handler.classifyLifecycle's type-assert succeeds in both
+// cases — the inject-vs-not distinction lives in Events()'s return value, not
+// in the type.
 type fakeAgentProvider struct {
 	typeName string
 	alive    bool
 	derive   func(eventName string, raw json.RawMessage) agentpkg.DeriveResult
 	identify func(agentpkg.ProcessInfo) bool
+	events   []agentpkg.HookEventSpec
 }
 
 func (f *fakeAgentProvider) Type() string                       { return f.typeName }
@@ -66,4 +74,16 @@ func (f *fakeAgentProvider) DeriveStatus(eventName string, raw json.RawMessage) 
 		return f.derive(eventName, raw)
 	}
 	return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
+}
+
+// Events / InstallHooks / RemoveHooks / CheckHooks satisfy HookInstaller so
+// classifyLifecycle's provider.(agentpkg.HookInstaller) type-assert succeeds
+// for tests. Events returns the injected slice (nil → catalog miss → fallback
+// path). The mutation methods are not exercised by handler tests; they exist
+// purely to satisfy the interface and panic on unexpected use.
+func (f *fakeAgentProvider) Events() []agentpkg.HookEventSpec { return f.events }
+func (f *fakeAgentProvider) InstallHooks(string) error        { return nil }
+func (f *fakeAgentProvider) RemoveHooks(string) error         { return nil }
+func (f *fakeAgentProvider) CheckHooks() (agentpkg.HookStatus, error) {
+	return agentpkg.HookStatus{}, nil
 }

@@ -194,6 +194,13 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		result = provider.DeriveStatus(req.PurdexName, req.RawEvent)
 	}
 
+	// W2 metadata-driven lifecycle dispatch (spec §3.4.2): catalog hit on
+	// PurdexName, falling back to legacyLifecycleFor for codex/opencode
+	// pre-migration traffic. classifyLifecycle returns LifecycleNone for
+	// no-op events and unknown PurdexNames alike — branches below key on
+	// specific lifecycle kinds, so a None classification simply skips them.
+	lifecycle := classifyLifecycle(provider, req)
+
 	// Invalid result: provider returned Valid=false. Two sub-classes:
 	//   - Reason=="" → truly unknown event name → "event_not_in_catalog"
 	//   - Reason!="" → known event but payload not mappable → use that reason
@@ -236,14 +243,14 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		current := m.currentStatus[req.TmuxSession]
 		m.mu.Unlock()
 		if current == agentpkg.StatusError {
-			canClear := matchesLifecycleName(req.PurdexName, "UserPromptSubmit") || matchesLifecycleName(req.PurdexName, "SessionStart")
+			canClear := lifecycle == agentpkg.LifecycleUserPromptSubmit || lifecycle == agentpkg.LifecycleSessionStart
 			// SessionEnd carries StatusClear and unconditionally tears down
 			// session state — it must always pass the error guard or the
 			// session would stay stuck red after a StopFailure followed by a
 			// real session shutdown.
-			canClear = canClear || matchesLifecycleName(req.PurdexName, "SessionEnd")
+			canClear = canClear || lifecycle == agentpkg.LifecycleSessionEnd
 			if req.AgentType != "opencode" {
-				canClear = canClear || matchesLifecycleName(req.PurdexName, "Stop")
+				canClear = canClear || lifecycle == agentpkg.LifecycleStop
 			}
 			if !canClear {
 				normalized := buildProjectionNormalized(nil, req.AgentType, req.PurdexName, broadcastTs, result)
@@ -290,7 +297,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Handle subagent events (transient — broadcast only, don't persist)
-	if matchesLifecycleName(req.PurdexName, "SubagentStart") || matchesLifecycleName(req.PurdexName, "SubagentStop") {
+	if lifecycle == agentpkg.LifecycleSubagentStart || lifecycle == agentpkg.LifecycleSubagentStop {
 		if frameMeta.Decision != "updated_frame" {
 			trace.Finish("completed", "emit_skipped")
 			traceFinished = true
@@ -356,7 +363,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clear subagents on non-compact SessionStart
-	if matchesLifecycleName(req.PurdexName, "SessionStart") && result.Valid {
+	if lifecycle == agentpkg.LifecycleSessionStart && result.Valid {
 		m.mu.Lock()
 		delete(m.subagents, req.TmuxSession)
 		m.mu.Unlock()
