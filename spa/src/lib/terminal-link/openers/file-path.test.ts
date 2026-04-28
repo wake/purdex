@@ -13,6 +13,10 @@ const fileToken: LinkToken = {
 }
 
 function makeDeps() {
+  // The opener no longer drives `getDefaultOpener / openSingletonTab /
+  // insertTab` directly; it calls `tryOpenFile`. We keep the same fakes for
+  // assertion-compat, wired through a `tryOpenFile` shim that mimics the
+  // bootstrap-time `tabOpener` (P5).
   const openSingletonTab = vi.fn(() => 'tab-1')
   const insertTab = vi.fn()
   const paneContent = { kind: 'editor', source: { type: 'daemon', hostId: 'h1' }, filePath: '/a/b.ts' }
@@ -26,7 +30,27 @@ function makeDeps() {
   const computeInsertTarget = vi.fn((): string | undefined => 'after-tab-id')
   const fetchPaneCwd = vi.fn(async (_h: string, _s: string, _sig?: AbortSignal) => '/home/user/proj')
   const fetchPaneHome = vi.fn(async (_h: string, _s: string, _sig?: AbortSignal) => '/home/user')
-  return { openSingletonTab, insertTab, getDefaultOpener, getActiveWorkspaceId, computeInsertTarget, fetchPaneCwd, fetchPaneHome, fakeOpener, paneContent }
+  const resolveOpenContextCwd = vi.fn((_h: string, _s?: string): string | null => null)
+
+  // tryOpenFile shim — mimics the bootstrap-time tabOpener so existing
+  // assertions on `getDefaultOpener / openSingletonTab / insertTab` still hold.
+  const FILE_KINDS = new Set(['editor', 'image-preview', 'pdf-preview'])
+  const tryOpenFile = vi.fn(async (file, source, ctx) => {
+    const opener = getDefaultOpener(file)
+    if (!opener) return
+    const content = opener.createContent(source, file)
+    const targetWs = ctx.sourceWorkspaceId
+    if (!targetWs) return
+    const afterTabId = computeInsertTarget(targetWs, (c: { kind: string }) => FILE_KINDS.has(c.kind))
+    const tabId = openSingletonTab(content, { afterTabId })
+    insertTab(tabId, targetWs, afterTabId)
+  })
+
+  return {
+    tryOpenFile, openSingletonTab, insertTab, getDefaultOpener,
+    getActiveWorkspaceId, computeInsertTarget, fetchPaneCwd, fetchPaneHome,
+    resolveOpenContextCwd, fakeOpener, paneContent,
+  }
 }
 
 describe('file-path opener', () => {

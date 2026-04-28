@@ -556,16 +556,22 @@ describe('Commit 1: Editor HSR migration', () => {
     clearAll()
   })
 
-  it('R1-1: editor module declares exactly 4 settings entries (3 HSR + link-detect)', () => {
-    // P3 added a 4th entry under purdex scope (settings.editor.link_detect)
-    // that migrated from the Terminal section. The Editor module remains
-    // the owner of file-path link detection toggles.
+  it('R1-1: editor module declares exactly 5 settings entries (3 HSR + link-detect + open-behavior)', () => {
+    // P3 added link-detect (file-path link toggles, migrated from Terminal).
+    // P5 added open-behavior (popupOnMissingFile + autoSearchLayer1) — owned by
+    // Editor because the popup belongs to the file-open pipeline.
     registerBuiltinModules()
     const editor = getModules().find((m) => m.id === 'editor')
     expect(editor).toBeDefined()
-    expect(editor?.settings?.length).toBe(4)
+    expect(editor?.settings?.length).toBe(5)
     const localIds = editor?.settings?.map((s) => s.localId).sort()
-    expect(localIds).toEqual(['editor', 'host-home-path', 'link-detect', 'workspace-home-path'])
+    expect(localIds).toEqual([
+      'editor',
+      'host-home-path',
+      'link-detect',
+      'open-behavior',
+      'workspace-home-path',
+    ])
   })
 
   it('R1-2: editor.editor contribution is purdex-scope', () => {

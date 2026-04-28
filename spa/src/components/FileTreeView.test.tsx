@@ -6,6 +6,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import * as FsBackend from '../lib/fs-backend'
 import * as FileOpenerRegistry from '../lib/file-opener-registry'
+import * as FileOpenBootstrap from '../lib/register-modules/file-open-bootstrap'
 
 const mockEntries = [
   { name: 'docs', isDir: true, size: 0 },
@@ -108,7 +109,7 @@ describe('FileTreeWorkspaceView', () => {
     expect(mockBackend.list).not.toHaveBeenCalled()
   })
 
-  it('clicking a file opens editor tab via file-opener-registry', async () => {
+  it('clicking a file opens editor tab via tryOpenFile pipeline', async () => {
     mockBackend.list.mockResolvedValueOnce(mockEntries)
     const mockContent = { kind: 'editor' as const, source: { type: 'daemon' as const, hostId: 'test-host' }, filePath: '/home/user/README.md' }
     const mockOpener = {
@@ -123,6 +124,19 @@ describe('FileTreeWorkspaceView', () => {
     vi.spyOn(FileOpenerRegistry, 'getDefaultOpener').mockReturnValue(mockOpener)
     const openSingletonTab = vi.spyOn(useTabStore.getState(), 'openSingletonTab').mockReturnValue('new-tab-id')
     const insertTab = vi.spyOn(useWorkspaceStore.getState(), 'insertTab').mockImplementation(() => {})
+    // P5: FileTreeView routes through tryOpenFileForFileTree (stat → cache →
+    // popup). Stub it to call the legacy "happy path" so the assertions on
+    // getDefaultOpener / openSingletonTab / insertTab still hold without
+    // needing a real daemon.
+    vi.spyOn(FileOpenBootstrap, 'tryOpenFileForFileTree').mockImplementation(
+      async (file, source, ctx) => {
+        const opener = FileOpenerRegistry.getDefaultOpener(file)
+        if (!opener) return
+        const content = opener.createContent(source, file)
+        const tabId = useTabStore.getState().openSingletonTab(content, { afterTabId: undefined })
+        useWorkspaceStore.getState().insertTab(tabId, ctx.sourceWorkspaceId, undefined)
+      },
+    )
 
     render(<FileTreeWorkspaceView isActive={true} workspaceId={TEST_WORKSPACE_ID} />)
 
@@ -132,15 +146,12 @@ describe('FileTreeWorkspaceView', () => {
 
     fireEvent.click(screen.getByTestId('file-entry-README.md'))
 
-    expect(mockOpener.createContent).toHaveBeenCalledWith(
-      { type: 'daemon', hostId: 'test-host' },
-      expect.objectContaining({ name: 'README.md', path: '/home/user/README.md', extension: 'md' }),
-    )
-    // openClusteredTab forwards a single afterTabId to BOTH stores so
-    // tabOrder and workspace.tabs agree on placement (the TabBar
-    // renders from workspace.tabs). The exact afterTabId depends on
-    // workspace state — here no active tab is seeded, so it falls
-    // through as undefined (append at end).
+    await waitFor(() => {
+      expect(mockOpener.createContent).toHaveBeenCalledWith(
+        { type: 'daemon', hostId: 'test-host' },
+        expect.objectContaining({ name: 'README.md', path: '/home/user/README.md', extension: 'md' }),
+      )
+    })
     expect(openSingletonTab).toHaveBeenCalledWith(
       mockContent,
       { afterTabId: undefined },
