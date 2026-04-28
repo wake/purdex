@@ -416,7 +416,8 @@ cc 端：
 - `internal/agent/cc/hooks.go`：
   - `mergeClaudeHooks` 寫 settings.json：hooks map key 改用 `spec.UpstreamKeys[0]`（cc 單元素）
   - `makePdxEntry` command 字串末段 token 改用 `spec.PurdexName`
-  - `ccKnownEventNames` / `ccOwnedCleanupEventNames` 從 catalog 自動衍生（DRY 修補）— `IsInstallableHookSpec` 篩選後取 `UpstreamKeys` union
+  - `ccKnownEventNames` 從 catalog 自動衍生 — `IsInstallableHookSpec` 篩選後取 `UpstreamKeys` union（settings.json hooks map key 比對用）
+  - `ccOwnedCleanupEventNames` 從 catalog 自動衍生 — **三 set 聯集**：`UpstreamKeys` ∪ `PurdexName` ∪ pre-W2 legacy `Name`（command 末段 token 比對用，需覆蓋（a）pre-W2 安裝的 legacy `Stop` 等舊命令以利 first reinstall cleanup；（b）W2 後新安裝的 `PdxStop` 等新命令）；Phase 3 ship 同 PR 移除 pre-W2 legacy `Name` set（屆時 user 已 reinstall，舊命令不應再存在）
 - `internal/agent/cc/status.go`：`deriveCCStatus` switch case 改 `PdxXxx`
 - `cc/hooks_test.go` / `cc/status_test.go`：installer 端「hooks key == UpstreamKey、command 末段 == PurdexName」+ DeriveStatus case 斷言
 
@@ -463,7 +464,7 @@ Lifecycle 改造（W2 範圍內必做，per §2.3.1 + §3.4.2 三分支 decision
 - `internal/agent/codex/events.go`：catalog entry 改 plain struct literal 列全欄位（per §2.2.1）— `Name` / `PurdexName` / `UpstreamKeys` / `Lifecycle` + 既有 metadata 全填；含 11 entries（9 installable + 2 unsupported `PdxPreToolUse` / `PdxPostToolUse`）
 - `internal/agent/codex/hooks.go`：
   - `mergeCodexHooksFile` matcher-group key=`spec.UpstreamKeys[0]`、command 末段 token=`spec.PurdexName`
-  - `codexOwnedCleanupEventNames()` 從 catalog 自動衍生（DRY 修補）
+  - `codexOwnedCleanupEventNames()` 從 catalog 自動衍生（DRY 修補）— 三 set 聯集（同 cc，per §3 Phase 1）：`UpstreamKeys` ∪ `PurdexName` ∪ pre-W2 legacy `Name`，覆蓋 hooks.json matcher-group cleanup 的歷史與新命令；Phase 3 ship 同 PR 移除 pre-W2 legacy `Name` set
   - `checkCodexEvent` 用 UpstreamKey 反查 hooks.json key
 - `internal/agent/codex/status.go`：`deriveCodexStatus` switch case 改 `PdxXxx`
 - `codex/hooks_test.go`：新增測試「matcher-group key == UpstreamKey 且 command == PurdexName」+「`codexOwnedCleanupEventNames()` 與 `codexEventSpecs` 同步」
@@ -615,7 +616,19 @@ func isLegacyHookForUnmigrated(agentType, name string) bool {
 - Phase 2 ship 同 PR：移除 codex case
 - Phase 3 ship 同 PR：移除整個 predicate + fallback case
 
-**per-agent set 不可合併**：opencode catalog 沒有 `Notification` / `PermissionRequest`（後者用 `permission.asked`+`question.asked` plugin demux，僅 1 個 catalog entry；cf. §2.3 表）— 若用共用 set 會誤讓 opencode `Notification` 命中 fallback、得到錯誤 lifecycle 副作用，破壞 catalog miss 防線。Negative test：`agent_type=opencode + purdex_name=Notification` 應得 invalid + `event_not_in_catalog`（不命中 fallback）。
+**per-agent set 不可合併**：
+
+- **opencode 沒有 `Notification`** — opencode catalog 不含 Notification entry（cc/codex 才有；opencode 的 polymorphic waiting 由 plugin 用 `permission.asked` + `question.asked` 兩個 upstream Bus event 同時 emit `PdxPermissionRequest`，per §2.3 表）。`opencodeLegacyEventNames` **不**含 `Notification`；若誤含會讓 opencode `Notification` 命中 fallback、得到錯誤 lifecycle 副作用、破壞 catalog miss 防線
+- **opencode 有 `PermissionRequest`** — 對應 §2.3 中 `PdxPermissionRequest` opencode installable entry，pre-W2 legacy emit 字面值是 `"PermissionRequest"`。`opencodeLegacyEventNames` **必須**含 `PermissionRequest`，否則 Phase 1/2 opencode 的 permission.asked / question.asked 事件會被當作 `event_not_in_catalog`，等待授權燈號在中間態失效
+
+完整 `opencodeLegacyEventNames` 對 8 installable entries pre-W2 字面值：`SessionStart` / `UserPromptSubmit` / `Stop` / `StopFailure` / `PermissionRequest` / `SessionEnd` / `SubagentStart` / `SubagentStop`（**8 個，無 Notification**）。
+
+完整 `codexLegacyEventNames` 對 9 installable entries pre-W2 字面值：`SessionStart` / `UserPromptSubmit` / `Notification` / `Stop` / `StopFailure` / `PermissionRequest` / `SessionEnd` / `SubagentStart` / `SubagentStop`（**9 個，有 Notification**）。
+
+對應測試（per §6.3.1）：
+
+- Positive: `agent_type=opencode + purdex_name=PermissionRequest` (Phase 1/2) → fallback 命中 → waiting status emit（`Lifecycle=None` 對應的 status path，無 frame 副作用）
+- Negative: `agent_type=opencode + purdex_name=Notification` (Phase 1/2) → fallback predicate fail → invalid + `event_not_in_catalog`
 
 注意：fallback path 是**main-only dev-time** — bump 前 user 看不到。同 §0.1「No user-facing migration」原則：daemon 不對未升級 user 的 raw payload 做 fallback，僅對 main 上 catalog literal 的 phase 進度做 fallback。Phase 3 ship 同 PR 整段 fallback 移除。
 
@@ -744,7 +757,9 @@ invariants 拆 per-agent 套用，反映 phase 進度。`internal/agent/event_sp
 3. **PurdexName 與 UpstreamKeys 互斥**：所有 entry 的 PurdexName 不在自己的 UpstreamKeys 列表內（否則 schema 退化成單一字串）
 4. **既有 metadata 保留**：每 entry 的 `EmitsStatus` / `Description` / `FutureOnly` / `Handling` 與 pre-W2 時相同（plain struct literal 改寫不能誤丟欄位 — 對應 Round-2 G1 防漂移）
 5. **Lifecycle 對齊**：`Lifecycle` 欄位對「frame-mutating」entry（SessionStart / SessionEnd / SubagentStart / SubagentStop / Stop / StopFailure / UserPromptSubmit）為對應的 `LifecycleXxx`；`Notification` / `PermissionRequest` 為 `LifecycleNone`（per §2.3.1）
-6. **DRY 衍生**：`ccKnownEventNames()` / `codexOwnedCleanupEventNames()` 結果 == `Filter(catalog, IsInstallable)` 的 UpstreamKeys union
+6. **DRY 衍生**：
+   - `ccKnownEventNames()` / `codexKnownEventNames()` == `Filter(catalog, IsInstallable)` 的 `UpstreamKeys` union（settings.json/hooks.json key 比對用）
+   - `ccOwnedCleanupEventNames()` / `codexOwnedCleanupEventNames()` == `UpstreamKeys` ∪ `PurdexName` ∪ pre-W2 legacy `Name`（command 末段 token 比對用，覆蓋 pre-W2 殘留與 W2 新命令；Phase 3 ship 同 PR 移除 legacy `Name` set 後簡化為前兩 set 聯集）
 7. **lookup helpers**：`LookupByPurdexName("PdxSessionStart")` 能找到；`LookupByUpstreamKey("session.created")`（opencode）能找到 `PdxSessionStart`
 
 **對「未遷移」agent 反向斷言**（防止意外提早 partial migrate）：
@@ -804,6 +819,8 @@ invariants 拆 per-agent 套用，反映 phase 進度。`internal/agent/event_sp
 | codex 中間態 SessionEnd fallback | `codex` | `SessionEnd` | miss | legacy fallback (predicate 通過) | frame deleted |
 | opencode 中間態 SessionStart fallback | `opencode` | `SessionStart` | miss | legacy fallback (predicate 通過) | frame reset |
 | codex 提早送 PdxXxx | `codex` | `PdxSessionEnd` | miss（codex catalog Phase 1 還沒填 PurdexName）| legacy predicate fail（不在 pre-W2 字面值集）→ invalid | 無副作用 + `event_not_in_catalog` |
+| opencode legacy PermissionRequest（per `opencodeLegacyEventNames`）| `opencode` | `PermissionRequest` | miss | legacy fallback (predicate 通過：opencode 有此 legacy entry) | 無 frame 副作用，純 status emit waiting（status path 處理）|
+| opencode legacy Notification（catalog 不存在）| `opencode` | `Notification` | miss | legacy predicate fail（opencode 無 Notification entry）→ invalid | 無副作用 + `event_not_in_catalog`（負向斷言 — 防止誤合併三家 fallback set）|
 
 **Phase 2 ship 後（cc + codex catalog 填 Lifecycle，opencode 仍 fallback）**：
 
@@ -864,7 +881,7 @@ Phase 1 起即更新（影響 cc 相關 snapshot）。Phase 2/3 順帶更新各�
 | 既有 SPA fixture / snapshot 大量需更新 | spec §6.4 一次性 grep 清單；每 phase 改自家 agent 對應 fixture |
 | EventRequest JSON `event_name` alias 期內潛伏 bug | 整合 test 同時測新舊 JSON；alias 在 Phase 3 同 PR 移除 |
 | `LookupByUpstreamKey` 被誤用於 opencode filter events 的 routing | helper godoc 明文限制（§2.1）+ §2.5 不得作為 plugin filter routing 的 SOT；如未來真要表達 filter，另開 issue 設計 `UpstreamFilter` metadata（不在 W2 範圍）|
-| codex `codexOwnedCleanupEventNames` DRY 修補意外破壞 lifecycle | 修補同 PR 加 round-trip test：install → catalog 全 entry 都被 cleanup recognise；catalog 增刪 entry 時 cleanup 自動跟上 |
+| `*OwnedCleanupEventNames` DRY 修補後 cleanup 漏抓 pre-W2 殘留 / W2 新命令 | cleanup set = `UpstreamKeys` ∪ `PurdexName` ∪ pre-W2 legacy `Name` 三聯集（per §3 Phase 1/2 範圍 + §6.1 invariant 6）；round-trip test 跑兩次 reinstall：第一次清掉 pre-W2 manual fixture 的 `Stop` 命令、第二次清掉 W2 安裝的 `PdxStop` 命令；Phase 3 ship 同 PR 移除 legacy `Name` set |
 | opencode plugin emit 改常數注入後 JS template 解析錯誤 | renderManagedPlugin 新增 unit test：模板渲染後 `Bun.spawn` 呼叫處字串為 PurdexName；磁碟寫入後 grep 反查 |
 | reinstall 對 user 環境破壞性 | alpha 階段允許（per `feedback_no_alpha_migration`）；ship + bump 同 commit chain，user 升 alpha 時 reinstall |
 | 並發 session（per `feedback_concurrent_session_safety`）| 三 phase 各自 PR；每次 enter worktree 前 base 來自 origin/main（per `feedback_bump_base_origin_not_local`）|
