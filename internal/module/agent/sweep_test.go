@@ -24,6 +24,24 @@ func newSweepTestModule(t *testing.T) *Module {
 	return m
 }
 
+// decodeSweepBroadcast unwraps a raw subscriber message into the
+// inner agentpkg.NormalizedEvent. The broadcaster sends each event
+// as core.HostEvent JSON; HostEvent.Value is itself a JSON-encoded
+// NormalizedEvent string. Strict equality assertions on Status /
+// RawEventName / AgentType need both layers parsed.
+func decodeSweepBroadcast(t *testing.T, raw []byte) agentpkg.NormalizedEvent {
+	t.Helper()
+	var hostEvent core.HostEvent
+	if err := json.Unmarshal(raw, &hostEvent); err != nil {
+		t.Fatalf("unmarshal HostEvent: %v (raw=%s)", err, raw)
+	}
+	var normalized agentpkg.NormalizedEvent
+	if err := json.Unmarshal([]byte(hostEvent.Value), &normalized); err != nil {
+		t.Fatalf("unmarshal NormalizedEvent: %v (value=%s)", err, hostEvent.Value)
+	}
+	return normalized
+}
+
 func TestSweep_ClearsDeadFramesByPid(t *testing.T) {
 	m := newSweepTestModule(t)
 	if err := m.events.Set("work", "Stop", json.RawMessage(`{}`), "cc", 1); err != nil {
@@ -2641,5 +2659,143 @@ func TestSweep_CanonicalizeSkipsCandidateWithLiveProxy(t *testing.T) {
 	}
 	if delta := agentpkg.MetricPartialCanonicalizationCreated.Value() - startPartial; delta != 1 {
 		t.Fatalf("MetricPartialCanonicalizationCreated delta = %d, want 1 (deliberate partial: attach without delete)", delta)
+	}
+}
+
+// #717 — sweep:pid_dead broadcast must carry status=clear when the
+// dead frame was the only frame in its tmux session. SPA's
+// useAgentStore strict-equality tests (`event.status === 'clear'`)
+// drop empty status as a no-op, leaving the agent indicator stuck
+// at its last value (the user-visible #717 symptom).
+func TestSweep_PidDead_BroadcastsClearWhenSessionEmpties(t *testing.T) {
+	m := newSweepTestModule(t)
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: m.tmux}
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "opencode",
+		PID:              99999,
+		PPID:             1,
+		ProcessStartTime: "dead",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(int) bool { return false }
+	processStartTimeFn = func(int) (string, error) { return "dead", nil }
+	nowFn = func() time.Time { return time.Unix(0, 20) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	select {
+	case msg := <-sub.SendCh():
+		got := decodeSweepBroadcast(t, msg)
+		if got.RawEventName != "sweep:pid_dead" {
+			t.Fatalf("RawEventName = %q, want %q", got.RawEventName, "sweep:pid_dead")
+		}
+		if got.Status != string(agentpkg.StatusClear) {
+			t.Fatalf("Status = %q, want %q (#717: empty status leaks through projection==nil branch)", got.Status, agentpkg.StatusClear)
+		}
+		if got.AgentType != "opencode" {
+			t.Fatalf("AgentType = %q, want %q (fallback should preserve dead frame's type)", got.AgentType, "opencode")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for sweep:pid_dead broadcast")
+	}
+}
+
+// #717 — when a sibling frame survives the sweep in the same tmux
+// session, the broadcast must surface the surviving TopFrame's status
+// (branch [C] of buildProjectionNormalized), NOT clear. This guards
+// against an over-eager fix that would always force clear regardless
+// of remaining projection state.
+func TestSweep_PidDead_PreservesSiblingStatus(t *testing.T) {
+	m := newSweepTestModule(t)
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: m.tmux}
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	// cc parent (alive, idle, StartedAt=10) and codex child (dead,
+	// running, StartedAt=20). Explicit non-equal StartedAt eliminates
+	// the projectionSortGreater FrameID-uuid tiebreak (codex plan
+	// review P2 0.94: would otherwise be flaky on tie).
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "A",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert cc parent: %v", err)
+	}
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "codex",
+		PID:              300,
+		PPID:             200,
+		ProcessStartTime: "B",
+		Status:           agentpkg.StatusRunning,
+		StartedAt:        20,
+		LastSeenAt:       20,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert codex child: %v", err)
+	}
+
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origNow := nowFn
+	isPidAliveFn = func(pid int) bool { return pid != 300 }
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 200 {
+			return "A", nil
+		}
+		return "B", nil
+	}
+	nowFn = func() time.Time { return time.Unix(0, 30) }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		nowFn = origNow
+	})
+
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+
+	select {
+	case msg := <-sub.SendCh():
+		got := decodeSweepBroadcast(t, msg)
+		if got.RawEventName != "sweep:pid_dead" {
+			t.Fatalf("RawEventName = %q, want %q", got.RawEventName, "sweep:pid_dead")
+		}
+		if got.Status != string(agentpkg.StatusIdle) {
+			t.Fatalf("Status = %q, want %q (TopFrame=cc StatusIdle should dominate via branch [C])", got.Status, agentpkg.StatusIdle)
+		}
+		if got.AgentType != "cc" {
+			t.Fatalf("AgentType = %q, want %q (TopFrame override expected)", got.AgentType, "cc")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for sweep:pid_dead broadcast")
 	}
 }
