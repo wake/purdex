@@ -60,15 +60,27 @@ A structural fix in `buildProjectionNormalized` (`if projection == nil && normal
 
 - Surgical: 1 line, in the broken caller.
 - Semantically explicit at the callsite: sweep's intent is "this frame is gone; tell SPA to clear".
-- Zero regression risk on `handler.go:256` (the only other `projection==nil` callsite, which already passes a real `result.Status`).
-- Cheaper review.
+- Cheaper review and zero risk to other callers.
+
+`buildProjectionNormalized`'s other callers in `handler.go`:
+
+| Callsite | `projection` arg | Notes |
+|---|---|---|
+| `handler.go:256` (`error_guard_blocked`) | hard-coded `nil` | passes real `result` with non-empty `result.Status` (derive output is "running"/"error"/etc) |
+| `handler.go:311` / `handler.go:373` | runtime variable, may be nil | passes real `result.Status` from derive logic |
+
+None of these are modified by Option A — only the sweep callsite (`sweep.go:551`) changes. Handler's runtime-nil-projection paths continue to passthrough `result.Status` exactly as before. (Option B would also have been safe for these because `if normalized.Status == "" { … }` would only trigger when handler accidentally passes empty status, which today's derive logic doesn't do — but Option A leaves that helper contract untouched, which is the point.)
 
 ## Tests
 
-Add to `internal/module/agent/sweep_test.go` (existing file). Follow `TestSweep_PruneDeadProxyRefs_BroadcastsProjectionAfterDetach` (line 811) pattern: install `core.Core` with broadcaster + test subscriber, drive sweep, capture WS payload, assert.
+Add to `internal/module/agent/sweep_test.go` (existing file). Set up `core.Core` with broadcaster + test subscriber as `TestSweep_PruneDeadProxyRefs_BroadcastsProjectionAfterDetach` (line 811) does, drive sweep, capture WS message.
 
-1. **`TestSweep_PidDeadBroadcastsStatusClearWhenSessionEmpty`** — single frame in session; sweep kills it. Assert broadcast payload contains `"status":"clear"` and `"raw_event_name":"sweep:pid_dead"`.
-2. **`TestSweep_PidDeadBroadcastsSiblingStatusWhenSessionNonEmpty`** — two frames (different panes, same session); sweep kills one. Assert broadcast payload contains the surviving frame's `Status` (not `"clear"`) and the surviving `agent_type`.
+**Assertion style** (stricter than the proxy_pruned test, which only does `strings.Contains`): unmarshal the WS envelope, then unmarshal `Value` into `agentpkg.NormalizedEvent`, and assert exact field values. `strings.Contains("status":"clear")` would be brittle (JSON inside JSON, escaping concerns, false positives on `"sweep:proxy_pruned"`-style substrings).
+
+1. **`TestSweep_PidDeadBroadcastsStatusClearWhenSessionEmpty`** — single frame in session; sweep kills it. Assert `Status == "clear"`, `RawEventName == "sweep:pid_dead"`, `AgentType == frame.AgentType`.
+2. **`TestSweep_PidDeadBroadcastsSiblingStatusWhenSessionNonEmpty`** — two frames in the same tmux session but on different panes; sweep kills one. Assert `Status == surviving_frame.Status` (not `"clear"`) and `AgentType == surviving_frame.AgentType`.
+
+`pid_dead` is the representative reason for `afterFrameCleared` — `pid_reused` and `idle_timeout` go through the same `sweep.go:551` callsite, so the fix and these two tests cover all three reasons. (Existing `TestSweep_ClearsIdleFramesByLastSeen` at line 250 verifies the DB delete path for `idle_timeout` but does not assert broadcast `Status`, so the new test #1 also fills that regression-protection gap implicitly via the shared callsite.)
 
 ## Out of scope
 
