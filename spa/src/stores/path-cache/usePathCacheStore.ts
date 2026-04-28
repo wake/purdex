@@ -1,132 +1,151 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { STORAGE_KEYS, purdexStorage } from '../../lib/storage'
-
-const MAX_DIRS_PER_SCOPE = 50
-const scopeKey = (hostId: string, workspaceId: string) => `${hostId}:${workspaceId}`
+import {
+  type PathCacheEntry,
+  scopeKey,
+  parseScopeKey,
+  normalizeDir,
+  normalizeCwd,
+  dirname,
+  upsertEntry,
+  rankCandidates,
+  sanitizeEntries,
+} from './path-utils'
 
 /**
- * Mutate persisted state in place during rehydration so the store ref isn't
- * needed (Zustand calls the rehydrate callback synchronously when storage is
- * synchronous, before the create() return assigns to usePathCacheStore — the
- * old setState() approach hit a TDZ).
+ * Zustand persist sanitizer — runs the same invariants `add()` enforces so a
+ * tampered or stale persisted file can't bypass normalization / cap / dedup
+ * (R2-F1). Mutates the rehydrated state object in place; using setState here
+ * would TDZ when persist fires synchronously for the localStorage backend
+ * (R1 finding #1).
  *
- * Exported for unit tests; production wires it through onRehydrateStorage.
+ * Exported for direct unit testing.
  */
 export function sanitizeRehydratedPathCache(
-  state: { dirsByScope?: unknown } | undefined,
+  state: { entriesByScope?: unknown } | undefined,
   error: unknown,
 ): void {
   if (!state) return
-  if (error || typeof state.dirsByScope !== 'object' || state.dirsByScope === null || Array.isArray(state.dirsByScope)) {
-    state.dirsByScope = {}
+  if (error || typeof state.entriesByScope !== 'object' || state.entriesByScope === null || Array.isArray(state.entriesByScope)) {
+    state.entriesByScope = {}
     return
   }
-  const cleaned: Record<string, string[]> = {}
-  for (const [k, v] of Object.entries(state.dirsByScope as Record<string, unknown>)) {
-    if (Array.isArray(v) && v.every((x) => typeof x === 'string')) cleaned[k] = v
+  const cleaned: Record<string, PathCacheEntry[]> = {}
+  for (const [k, v] of Object.entries(state.entriesByScope as Record<string, unknown>)) {
+    if (!parseScopeKey(k)) continue  // drop malformed scope keys
+    const entries = sanitizeEntries(v)
+    if (entries.length > 0) cleaned[k] = entries
   }
-  state.dirsByScope = cleaned
-}
-
-function normalizeDir(raw: unknown): string | null {
-  if (typeof raw !== 'string' || !raw.startsWith('/')) return null
-  const parts: string[] = []
-  for (const seg of raw.split('/')) {
-    if (seg === '' || seg === '.') continue
-    if (seg === '..') {
-      if (parts.length > 0) parts.pop()
-      continue
-    }
-    parts.push(seg)
-  }
-  return parts.length === 0 ? '/' : '/' + parts.join('/')
-}
-
-function dirname(p: string): string {
-  const idx = p.lastIndexOf('/')
-  if (idx <= 0) return '/'
-  return p.substring(0, idx)
+  state.entriesByScope = cleaned
 }
 
 interface PathCacheState {
-  dirsByScope: Record<string, string[]>
-  add: (hostId: string, workspaceId: string, dir: string) => void
-  lookup: (hostId: string, workspaceId: string, basename: string) => string[]
-  pruneStaleCandidate: (hostId: string, workspaceId: string, candidatePath: string) => void
-  clearScope: (hostId: string, workspaceId: string) => void
+  entriesByScope: Record<string, PathCacheEntry[]>  // key = scopeKey(hostId, cwd)
+  add: (hostId: string, cwd: string, sessionCode: string, dir: string) => void
+  lookup: (hostId: string, cwd: string, basename: string, currentSessionCode?: string) => string[]
+  pruneStaleCandidate: (hostId: string, cwd: string, candidatePath: string) => void
+  clearScope: (hostId: string, cwd: string) => void
+  clearBySession: (sessionCode: string) => void
   clearHost: (hostId: string) => void
 }
 
 export const usePathCacheStore = create<PathCacheState>()(
   persist(
     (set, get) => ({
-      dirsByScope: {},
+      entriesByScope: {},
 
-      add: (hostId, workspaceId, dir) =>
+      add: (hostId, cwd, sessionCode, dir) =>
         set((state) => {
-          const norm = normalizeDir(dir)
-          if (!norm) return state
-          const key = scopeKey(hostId, workspaceId)
-          const existing = state.dirsByScope[key] ?? []
-          const filtered = existing.filter((d) => d !== norm)
-          const next = [norm, ...filtered].slice(0, MAX_DIRS_PER_SCOPE)
-          return { dirsByScope: { ...state.dirsByScope, [key]: next } }
+          const cwdNorm = normalizeCwd(cwd)
+          const dirNorm = normalizeDir(dir)
+          if (!cwdNorm || !dirNorm) return state
+          const key = scopeKey(hostId, cwdNorm)
+          const next = upsertEntry(state.entriesByScope[key], {
+            dir: dirNorm,
+            sessionCode,
+            touchedAt: Date.now(),
+          })
+          return { entriesByScope: { ...state.entriesByScope, [key]: next } }
         }),
 
-      lookup: (hostId, workspaceId, basename) => {
-        const key = scopeKey(hostId, workspaceId)
-        const dirs = get().dirsByScope[key] ?? []
-        return dirs.map((d) => (d === '/' ? `/${basename}` : `${d}/${basename}`))
+      lookup: (hostId, cwd, basename, currentSessionCode) => {
+        const cwdNorm = normalizeCwd(cwd)
+        if (!cwdNorm) return []
+        const list = get().entriesByScope[scopeKey(hostId, cwdNorm)] ?? []
+        return rankCandidates(list, currentSessionCode).map((e) =>
+          e.dir === '/' ? `/${basename}` : `${e.dir}/${basename}`,
+        )
       },
 
-      pruneStaleCandidate: (hostId, workspaceId, candidatePath) =>
+      pruneStaleCandidate: (hostId, cwd, candidatePath) =>
         set((state) => {
-          const key = scopeKey(hostId, workspaceId)
-          const existing = state.dirsByScope[key]
+          const cwdNorm = normalizeCwd(cwd)
+          if (!cwdNorm) return state
+          const key = scopeKey(hostId, cwdNorm)
+          const existing = state.entriesByScope[key]
           if (!existing) return state
           const dir = normalizeDir(dirname(candidatePath))
           if (!dir) return state
-          const next = existing.filter((d) => d !== dir)
+          const next = existing.filter((e) => e.dir !== dir)
           if (next.length === existing.length) return state
-          return { dirsByScope: { ...state.dirsByScope, [key]: next } }
+          if (next.length === 0) {
+            const { [key]: _removed, ...rest } = state.entriesByScope
+            void _removed
+            return { entriesByScope: rest }
+          }
+          return { entriesByScope: { ...state.entriesByScope, [key]: next } }
         }),
 
-      clearScope: (hostId, workspaceId) =>
+      clearScope: (hostId, cwd) =>
         set((state) => {
-          const key = scopeKey(hostId, workspaceId)
-          if (!(key in state.dirsByScope)) return state
-          const { [key]: _removed, ...rest } = state.dirsByScope
+          const cwdNorm = normalizeCwd(cwd)
+          if (!cwdNorm) return state
+          const key = scopeKey(hostId, cwdNorm)
+          if (!(key in state.entriesByScope)) return state
+          const { [key]: _removed, ...rest } = state.entriesByScope
           void _removed
-          return { dirsByScope: rest }
+          return { entriesByScope: rest }
+        }),
+
+      clearBySession: (sessionCode) =>
+        set((state) => {
+          let changed = false
+          const next: Record<string, PathCacheEntry[]> = {}
+          for (const [k, list] of Object.entries(state.entriesByScope)) {
+            const filtered = list.filter((e) => e.sessionCode !== sessionCode)
+            if (filtered.length !== list.length) changed = true
+            if (filtered.length > 0) next[k] = filtered
+          }
+          return changed ? { entriesByScope: next } : state
         }),
 
       clearHost: (hostId) =>
         set((state) => {
-          const prefix = `${hostId}:`
-          const next: Record<string, string[]> = {}
           let changed = false
-          for (const [k, v] of Object.entries(state.dirsByScope)) {
-            if (k.startsWith(prefix)) {
+          const next: Record<string, PathCacheEntry[]> = {}
+          for (const [k, list] of Object.entries(state.entriesByScope)) {
+            const parsed = parseScopeKey(k)
+            if (parsed && parsed.hostId === hostId) {
               changed = true
             } else {
-              next[k] = v
+              next[k] = list
             }
           }
-          return changed ? { dirsByScope: next } : state
+          return changed ? { entriesByScope: next } : state
         }),
     }),
     {
       name: STORAGE_KEYS.PATH_CACHE_V1,
       storage: purdexStorage,
-      partialize: (s) => ({ dirsByScope: s.dirsByScope }),
+      partialize: (s) => ({ entriesByScope: s.entriesByScope }),
       onRehydrateStorage: () => (state, error) => sanitizeRehydratedPathCache(state, error),
     },
   ),
 )
 
-// NOTE: intentionally NOT registered with syncManager. Cache is scoped to
-// (hostId, cwd) and lookups only happen inside the window that owns the
+// NOTE: intentionally NOT registered with syncManager. Cache is scoped per
+// (hostId, cwd) and lookups only happen inside the window owning the agent
 // session — cross-window in-memory copies would be dead state, and sync would
 // recreate the tear-off race that R2-D1 exposed. Persisted state still
 // survives via per-origin localStorage when a tear-off opens a new window.

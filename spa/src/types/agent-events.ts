@@ -11,7 +11,8 @@ export interface PathHint {
   schemaVersion: 1
   agentId: string  // 'cc' today; 'codex' / 'opencode' reserved for future bumps
   sessionCode: string
-  dir: string      // absolute dirname
+  cwd: string      // agent's working dir; cache scope key
+  dir: string      // touched file's parent dir (absolute)
   kind: PathHintKind
   timestamp: string  // ISO 8601 from daemon time.Time MarshalJSON
 }
