@@ -73,4 +73,23 @@ describe('buildNotificationContent', () => {
     const result = buildNotificationContent('Stop', { last_assistant_message: 'Line 1\n\n\nLine 2\n\nLine 3' }, 'my-session')
     expect(result).toEqual({ title: 'my-session', body: 'Line 1\nLine 2\nLine 3' })
   })
+
+  // W2 transition: cc broadcasts PdxXxx; buildNotificationContent normalizes
+  // at entry so PdxXxx and legacy literals produce identical output.
+  it('PdxNotification → identical to Notification (W2)', () => {
+    const result = buildNotificationContent('PdxNotification', { message: 'Claude needs your permission' }, 'my-session')
+    expect(result).toEqual({ title: 'my-session', body: 'Claude needs your permission' })
+  })
+  it('PdxPermissionRequest → identical to PermissionRequest (W2)', () => {
+    const result = buildNotificationContent('PdxPermissionRequest', { tool_name: 'Bash' }, 'my-session')
+    expect(result).toEqual({ title: 'my-session', body: 'Permission required: Bash' })
+  })
+  it('PdxStop → identical to Stop (W2)', () => {
+    const result = buildNotificationContent('PdxStop', { last_assistant_message: 'Done.' }, 'my-session')
+    expect(result).toEqual({ title: 'my-session', body: 'Done.' })
+  })
+  it('PdxStopFailure → identical to StopFailure (W2)', () => {
+    const result = buildNotificationContent('PdxStopFailure', { error_details: '429 Too Many Requests' }, 'my-session')
+    expect(result).toEqual({ title: 'my-session', body: '429 Too Many Requests' })
+  })
 })

@@ -1,4 +1,5 @@
 // spa/src/lib/notification-content.ts
+import { normalizeEventName } from './event-name'
 
 interface NotificationContent { title: string; body: string }
 
@@ -14,7 +15,10 @@ export function buildNotificationContent(
   t?: (key: string, params?: Record<string, string | number>) => string,
 ): NotificationContent | null {
   let content: NotificationContent | null
-  switch (eventName) {
+  // W2 transition: cc broadcasts PdxXxx; the legacy switch arms live below.
+  // Normalize once at entry so callers (dispatcher / settings UI / tests) can
+  // pass either form.
+  switch (normalizeEventName(eventName)) {
     case 'Notification': {
       const nt = rawEvent.notification_type as string | undefined
       let body: string

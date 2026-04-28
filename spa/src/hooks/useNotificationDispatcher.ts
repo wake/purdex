@@ -9,6 +9,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { buildNotificationContent } from '../lib/notification-content'
+import { normalizeEventName } from '../lib/event-name'
 import { findTabBySessionCode, getPrimaryPane } from '../lib/pane-tree'
 import { getPlatformCapabilities } from '../lib/platform'
 import { useHostStore } from '../stores/useHostStore'
@@ -57,7 +58,10 @@ interface ShouldNotifyParams {
 }
 
 export function shouldNotify(params: ShouldNotifyParams): boolean {
-  const { derived, eventName, compositeKey: ck, focusedCompositeKey, hasTab, settings } = params
+  const { derived, eventName: rawEventName, compositeKey: ck, focusedCompositeKey, hasTab, settings } = params
+  // W2 transition: cc broadcasts PdxXxx; legacy literal keys live in shouldNotify
+  // suppression checks and NotificationSettings.events. Normalize once at entry.
+  const eventName = normalizeEventName(rawEventName)
   if (derived !== 'waiting' && derived !== 'idle' && derived !== 'error') return false
   // Informational Notification subtypes (idle_prompt, auth_success) derive to 'idle'
   // but should not trigger desktop notifications — consistent with unread marking logic.

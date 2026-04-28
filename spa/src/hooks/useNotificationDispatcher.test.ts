@@ -57,6 +57,23 @@ describe('shouldNotify', () => {
   it('returns true for error event (StopFailure)', () => {
     expect(shouldNotify({ derived: 'error', eventName: 'StopFailure', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(true)
   })
+
+  // W2 transition: cc broadcasts PdxXxx; shouldNotify normalizes at entry so
+  // PdxXxx behaves identically to the legacy literal.
+  it('idle PdxNotification suppressed identically to Notification (W2)', () => {
+    expect(shouldNotify({ derived: 'idle', eventName: 'PdxNotification', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(false)
+  })
+  it('waiting PdxPermissionRequest dispatched identically to PermissionRequest (W2)', () => {
+    expect(shouldNotify({ derived: 'waiting', eventName: 'PdxPermissionRequest', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(true)
+  })
+  it('error PdxStopFailure dispatched identically to StopFailure (W2)', () => {
+    expect(shouldNotify({ derived: 'error', eventName: 'PdxStopFailure', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(true)
+  })
+  it('settings.events legacy key disables PdxXxx event (W2)', () => {
+    // user previously toggled "Notification" off in settings UI; W2 cc still
+    // broadcasts PdxNotification but normalize → legacy key lookup hits.
+    expect(shouldNotify({ derived: 'waiting', eventName: 'PdxNotification', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: { ...defaultSettings, events: { Notification: false } } })).toBe(false)
+  })
 })
 
 describe('shouldDispatch', () => {
