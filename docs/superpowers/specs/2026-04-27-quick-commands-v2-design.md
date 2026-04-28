@@ -257,6 +257,24 @@ picker owner（持有 promise resolver 的元件）必須保證 `resolveHostId()
 
 關鍵：**send-keys 失敗也要切過去**，user 才知道 session 在那、可以手動跑 — 這比「保留 session 但不切」少一個孤兒問題。
 
+#### 3.3.1 Workspace executor `assertContextLive` enforcement（post-1b，補強 #690）
+
+`runWorkspaceSlot` 的 `Deps.assertContextLive` 為 **type-level required**（非 optional）。
+
+**Why**：codex round-4（PR #686）引入 `assertContextLive` 作為 destructive-command guard — 在 `createSession` resolve 後、`executeCommand` 發送前，確認 workspace 仍存在；否則 user 已手動刪 workspace 但 `rm -rf` 仍會 ship 到 host tmux。Phase 1b 將其設為 optional 是預留 Phase 1c HOST_ACTIONS（host caller 無 workspace 可驗）。但 optional 形狀代表 **未來新增的 workspace-context caller 漏 wire 時，會靜默回退到 round-4 之前的不安全狀態**（type checker 不抓、test 不抓、UX 看似正常）。Phase 1b' 即將新增 Plus hover popover 這個 caller，是最容易出包的 forward-compat 缺口。
+
+**Enforcement**：
+- `Deps.assertContextLive: () => boolean`（移除 optional `?`）
+- runtime guard `if (deps.assertContextLive && !deps.assertContextLive())` 簡化為 `if (!deps.assertContextLive())`
+- 加一個 type-level test（`@ts-expect-error - assertContextLive is required`）卡住未來「再次 optional 化」的退路
+
+**Phase 1c HOST_ACTIONS 影響**：HOST_ACTIONS 不能再 reuse `runWorkspaceSlot`（強制需 `assertContextLive` 但 host caller 沒有 workspace 可驗）。由 1c 寫到時新建 `runHostSlot`（或以 generic 分流 `WorkspaceDeps` / `HostDeps`），本次 #690 不預先設計 — 避免 over-engineer，且 Phase 1c 的 cwd 解析邏輯仍在 spec §3.2 表格規畫中，分流形狀以彼時為準。
+
+**驗收**：
+- 未傳 `assertContextLive` 的 caller 編譯期 fail
+- 既有 7 個 test 補 `assertContextLive: () => true` 作 negative control（保留行為，不影響 toast assertion）
+- vitest / lint / build / tsc --noEmit 全綠
+
 ### 3.4 不在 Phase 1 範圍
 
 - `PaneLayoutRenderer` 內 `extraActions` 的 v1 `QuickCommandMenu` 整合保留現狀（後續 phase 再遷移為 `CommandSlot`）
