@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.242] - 2026-04-28
+
+### Feat(spa): enforce assertContextLive on runWorkspaceSlot Deps (#690) (#694)
+
+Quick Commands v2 — type-level + runtime fail-closed defense in depth for the round-4 destructive-command guard introduced in PR #686. Future workspace-context Slot callers (Phase 1b' Plus hover popover is the first) can no longer silently regress the guard by omitting `assertContextLive`, and Phase 1c HOST_ACTIONS is now type-locked into a sibling `runHostSlot` rather than reusing the workspace executor.
+
+- `runWorkspaceSlot.Deps.assertContextLive` is type-level required (was optional). Single production caller already wires it; no caller change needed for the 1b path.
+- New `WorkspaceSlotContext = SlotContext & { workspaceId: string }`; `runWorkspaceSlot(ctx)` requires it, so `{ hostId }` + dummy probe can no longer slip through (round-2 D1).
+- Runtime guard hardened to fail-closed: `typeof === 'function'` + try/catch + strict bool check. Cast-bypassed or throwing probes now route to the `switch_failed` toast path instead of unhandled-rejecting after `createSession` (round-2 A2).
+- Type-level invariants verified by `tsc -b` (run via `pnpm run build`), not vitest. Conditional-type assertions (`IsAny` + `Pick`-required + null-rejection) replace the round-1 `@ts-expect-error` directive that could be silently consumed by unrelated `Deps` growth.
+- Spec §3.3.1 + master plan superseded notes added so Phase 1b' / 1c implementers see the enforcement contract before copying historical examples.
+- Three rounds of codex review converged: spec+plan pre-impl review (5 findings) → R1 standard (0) → R2 attacker / defender / file-quality (5 medium — D1/A1/A2/F1 fixed; A3 → issue #695 for ESLint custom rule) → R3 verification (1 high — branch base lagged main, rebased). Followup #695 (ESLint enforcement against type cast escape hatches) deferred as scope > #690.
+
 ## [1.0.0-alpha.241] - 2026-04-28
 
 ### Refactor(spa): migrate file path link detection settings to editor (P3) (#688)
