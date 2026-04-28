@@ -120,7 +120,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Dev Update (only exposed when PDX_DEV_MODE=1)
-  ...(process.env.PDX_DEV_MODE ? {
+  ...(process.env.PDX_DEV_MODE === '1' ? {
     getAppInfo: () => ipcRenderer.invoke('dev:app-info'),
     checkUpdate: (daemonUrl: string, token?: string) => ipcRenderer.invoke('dev:check-update', daemonUrl, token),
     applyUpdate: (daemonUrl: string, token?: string) => ipcRenderer.invoke('dev:apply-update', daemonUrl, token),
