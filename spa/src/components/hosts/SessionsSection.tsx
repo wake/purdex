@@ -167,6 +167,18 @@ export function SessionsSection({ hostId }: Props) {
     if (executingRef.current) return
     executingRef.current = true
     setExecuting(true)
+
+    // Finding 2 + R1 fix — snapshot the host page's owning workspace at
+    // CLICK TIME, before any await. If we read activeTabId inside
+    // switchToSession (which fires after createSession + executeCommand
+    // resolve) the user could switch tabs/workspaces during those awaits,
+    // and findWorkspaceByTab would resolve against a different host page or
+    // a non-host tab — defeating the workspace-aware insertion.
+    const clickActiveTabId = useTabStore.getState().activeTabId
+    const owningWsId = clickActiveTabId
+      ? useWorkspaceStore.getState().findWorkspaceByTab(clickActiveTabId)?.id ?? null
+      : null
+
     try {
       // Finding 1 + Type-lock — narrow the SlotContext (nullable hostId) to
       // HostSlotContext (required hostId) using the prop value as the source
@@ -174,15 +186,7 @@ export function SessionsSection({ hostId }: Props) {
       // narrowing, not an unsafe cast.
       const hostCtx: HostSlotContext = { hostId, cwd: ctx.cwd }
       await runHostSlot(cmd, hostCtx, {
-        // Finding 2 — workspace-aware insertion. Snapshot active tab here (NOT
-        // inside switchToSession's own closure) so the lookup uses the host
-        // page's tab id at click time, even if the user switches tabs while
-        // createSession is in flight.
         switchToSession: (h, sessionCode) => {
-          const activeTabId = useTabStore.getState().activeTabId
-          const owningWs = activeTabId
-            ? useWorkspaceStore.getState().findWorkspaceByTab(activeTabId)
-            : null
           const tabId = useTabStore.getState().openSingletonTab({
             kind: 'tmux-session',
             hostId: h,
@@ -191,10 +195,11 @@ export function SessionsSection({ hostId }: Props) {
             cachedName: sessionCode,
             tmuxInstance: '',
           })
-          // Explicit null when standalone — bypasses the activeWorkspaceId
-          // fallback in insertTab so a stale activeWorkspaceId doesn't
-          // accidentally swallow the new session into a background workspace.
-          useWorkspaceStore.getState().insertTab(tabId, owningWs?.id ?? null)
+          // Explicit null when host page was standalone at click time —
+          // bypasses the activeWorkspaceId fallback in insertTab so a stale
+          // activeWorkspaceId (or a workspace switch during createSession)
+          // doesn't redirect the new session.
+          useWorkspaceStore.getState().insertTab(tabId, owningWsId)
           useTabStore.getState().setActiveTab(tabId)
         },
         // Finding 1 — host liveness probe. Reads the latest store snapshot

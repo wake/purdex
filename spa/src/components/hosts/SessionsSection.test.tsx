@@ -16,14 +16,18 @@ import { executeCommand } from '../../lib/execute-command'
 const mockOpenSingletonTab = vi.fn(() => 'tab-1')
 const mockSetActiveTab = vi.fn()
 const mockInsertTab = vi.fn()
-const mockFindWorkspaceByTab = vi.fn(() => null)
+const mockFindWorkspaceByTab = vi.fn<(tabId: string) => unknown>(() => null)
+// Mutable so the R1 race test can flip the active tab mid-flight (e.g.
+// during await createSession) and assert the executor uses the click-time
+// snapshot, not the post-await value.
+let mockActiveTabId: string | null = 'tab-host'
 
 vi.mock('../../stores/useTabStore', () => ({
   useTabStore: {
     getState: () => ({
       openSingletonTab: mockOpenSingletonTab,
       setActiveTab: mockSetActiveTab,
-      activeTabId: 'tab-host',
+      get activeTabId() { return mockActiveTabId },
     }),
   },
 }))
@@ -65,6 +69,7 @@ beforeEach(() => {
   mockInsertTab.mockClear()
   mockFindWorkspaceByTab.mockReset()
   mockFindWorkspaceByTab.mockReturnValue(null)
+  mockActiveTabId = 'tab-host'
   vi.mocked(createSession).mockReset()
   vi.mocked(executeCommand).mockReset()
   vi.mocked(executeCommand).mockResolvedValue(undefined)
@@ -277,6 +282,48 @@ describe('SessionsSection — host quick actions slot adjacent to new-session bu
 
     // explicit null — NOT a stale activeWorkspaceId fallback
     expect(mockInsertTab).toHaveBeenCalledWith(expect.any(String), null)
+  })
+
+  // R1 fix (codex PR review round 1) — workspace snapshot must be taken at
+  // click time, NOT inside switchToSession's closure (which fires after
+  // createSession + executeCommand resolve). Otherwise a user who switches
+  // to another tab during the in-flight pipeline would have the new session
+  // routed by `findWorkspaceByTab` against a different tab id.
+  it('snapshots owning workspace at click time, not after createSession resolves (R1 race)', async () => {
+    // findWorkspaceByTab resolves DIFFERENTLY depending on which tab id is
+    // queried. Old buggy code would call this with 'tab-other' (post-await
+    // value) and route to ws-B; fixed code calls with 'tab-host' (click-time
+    // value) and routes to ws-A.
+    mockFindWorkspaceByTab.mockImplementation((tabId: string) => {
+      if (tabId === 'tab-host') return { id: 'ws-A', name: 'A', tabs: ['tab-host'], activeTabId: 'tab-host' } as never
+      if (tabId === 'tab-other') return { id: 'ws-B', name: 'B', tabs: ['tab-other'], activeTabId: 'tab-other' } as never
+      return null
+    })
+
+    let resolveCreate: ((value: unknown) => void) | null = null
+    vi.mocked(createSession).mockImplementation(
+      () => new Promise((r) => { resolveCreate = r as (v: unknown) => void }),
+    )
+
+    render(<SessionsSection hostId={HOST_ID} />)
+    fireEvent.click(screen.getByLabelText(/^HostCmd/))
+
+    // User switches to another tab while createSession is still pending.
+    mockActiveTabId = 'tab-other'
+
+    await act(async () => {
+      resolveCreate?.({ code: 'sess-h', name: 'A', cwd: '~', mode: 'terminal' })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // The lookup must have used 'tab-host' (the click-time active tab),
+    // NOT 'tab-other' (the now-current tab). insertTab must target ws-A.
+    expect(mockFindWorkspaceByTab).toHaveBeenCalledWith('tab-host')
+    expect(mockFindWorkspaceByTab).not.toHaveBeenCalledWith('tab-other')
+    expect(mockInsertTab).toHaveBeenCalledWith(expect.any(String), 'ws-A')
+    expect(mockInsertTab).not.toHaveBeenCalledWith(expect.any(String), 'ws-B')
   })
 
   // Finding 1 (smoke test for the wiring; full assertHostLive coverage lives
