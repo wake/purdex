@@ -40,7 +40,7 @@ describe('runWorkspaceSlot', () => {
     await runWorkspaceSlot(
       { id: 'cmd-a', name: 'A', command: 'echo hi' },
       { hostId: 'h1', workspaceId: 'w1', cwd: '/tmp' },
-      { switchToSession: switchFocus, resolveHostId },
+      { switchToSession: switchFocus, resolveHostId, assertContextLive: () => true },
     )
 
     expect(resolveHostId).not.toHaveBeenCalled()
@@ -64,7 +64,7 @@ describe('runWorkspaceSlot', () => {
     await runWorkspaceSlot(
       { id: 'cmd-a', name: 'A', command: 'echo hi' },
       { hostId: null, workspaceId: 'w1' },
-      { switchToSession: switchFocus, resolveHostId },
+      { switchToSession: switchFocus, resolveHostId, assertContextLive: () => true },
     )
 
     expect(resolveHostId).toHaveBeenCalledTimes(1)
@@ -80,7 +80,7 @@ describe('runWorkspaceSlot', () => {
     await runWorkspaceSlot(
       { id: 'cmd-a', name: 'A', command: 'echo hi' },
       { hostId: null, workspaceId: 'w1' },
-      { switchToSession: switchFocus, resolveHostId },
+      { switchToSession: switchFocus, resolveHostId, assertContextLive: () => true },
     )
 
     expect(resolveHostId).toHaveBeenCalledTimes(1)
@@ -98,7 +98,7 @@ describe('runWorkspaceSlot', () => {
     await runWorkspaceSlot(
       { id: 'cmd-a', name: 'A', command: 'echo hi' },
       { hostId: 'h1', workspaceId: 'w1' },
-      { switchToSession: switchFocus, resolveHostId },
+      { switchToSession: switchFocus, resolveHostId, assertContextLive: () => true },
     )
 
     expect(switchFocus).not.toHaveBeenCalled()
@@ -127,7 +127,7 @@ describe('runWorkspaceSlot', () => {
     await runWorkspaceSlot(
       { id: 'cmd-a', name: 'A', command: 'echo hi' },
       { hostId: 'h1', workspaceId: 'w1' },
-      { switchToSession: switchFocus, resolveHostId },
+      { switchToSession: switchFocus, resolveHostId, assertContextLive: () => true },
     )
 
     expect(switchFocus).toHaveBeenCalledWith('h1', 'sess-1')
@@ -162,7 +162,7 @@ describe('runWorkspaceSlot', () => {
     await runWorkspaceSlot(
       { id: 'cmd-a', name: 'A', command: 'echo hi' },
       { hostId: 'h1', workspaceId: 'w1' },
-      { switchToSession: switchFocus, resolveHostId },
+      { switchToSession: switchFocus, resolveHostId, assertContextLive: () => true },
     )
 
     const toast = useUndoToast.getState().toast
@@ -249,7 +249,7 @@ describe('runWorkspaceSlot', () => {
     await runWorkspaceSlot(
       { id: 'cmd-a', name: 'A', command: 'echo hi' },
       { hostId: 'h1', workspaceId: 'w1' },
-      { switchToSession: switchFocus, resolveHostId },
+      { switchToSession: switchFocus, resolveHostId, assertContextLive: () => true },
     )
 
     const toast = useUndoToast.getState().toast
@@ -260,5 +260,20 @@ describe('runWorkspaceSlot', () => {
     // No retry — retry would re-send to a session the user cannot see
     expect(toast!.action).toBeUndefined()
     expect(toast!.actionLabel).toBeUndefined()
+  })
+
+  // #690 / spec §3.3.1 — type-level enforcement: Deps.assertContextLive is required.
+  // Future workspace-context callers (e.g. Phase 1b' Plus hover popover) cannot
+  // silently regress the round-4 destructive-command guard by omitting the probe.
+  // If we ever add `assertContextLive` to the literal below (or revert the type
+  // to optional), this @ts-expect-error directive becomes "unused" and TS will
+  // fail the build — surfacing the regression loudly.
+  it('requires assertContextLive at type level (#690 / spec §3.3.1)', () => {
+    // @ts-expect-error - assertContextLive is required (#690)
+    const deps: Parameters<typeof runWorkspaceSlot>[2] = {
+      switchToSession: () => {},
+      resolveHostId: async () => null,
+    }
+    expect(deps).toBeDefined()
   })
 })

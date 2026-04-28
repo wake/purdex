@@ -25,16 +25,19 @@ interface Deps {
   resolveHostId: () => Promise<string | null>
 
   /**
-   * codex round-4 — workspace liveness probe. Returns false if the surrounding
-   * UI context (e.g. workspace) was destroyed while async work was in flight.
-   * The executor calls this after `createSession` resolves and BEFORE
-   * `executeCommand` runs so destructive commands aren't sent to a session
-   * the user can no longer reach.
+   * Required (#690 / spec §3.3.1) — workspace liveness probe. Returns false if
+   * the surrounding UI context (e.g. workspace) was destroyed while async work
+   * was in flight. The executor calls this after `createSession` resolves and
+   * BEFORE `executeCommand` runs so destructive commands aren't sent to a
+   * session the user can no longer reach (codex round-4 of PR #686).
    *
-   * Optional — HOST_ACTIONS callers (Phase 1c) don't have a workspace context
-   * to verify and pass `undefined` to opt out of this check.
+   * Phase 1c HOST_ACTIONS will introduce a separate `runHostSlot` entry point
+   * — host context has no workspace to verify and must NOT reuse this function
+   * (was originally optional to share, but that path silently regresses the
+   * round-4 guard for any future workspace-context caller that forgets to
+   * wire it; e.g. Phase 1b' Plus hover popover).
    */
-  assertContextLive?: () => boolean
+  assertContextLive: () => boolean
 }
 
 function genSessionName(cmd: QuickCommand): string {
@@ -54,9 +57,11 @@ function genSessionName(cmd: QuickCommand): string {
  *  - Step 1 ok + Step 2 ok + Step 3 fails (rare) → toast pointing user to
  *    the sessions list (session is alive elsewhere).
  *
- * The executor is shared by Phase 1b workspace entry and Phase 1c host entry
- * (the latter calls it with workspaceId omitted; the cwd-resolution defaults
- * differ per slot caller, see spec §3.2 table).
+ * Workspace-only entry (#690 / spec §3.3.1). Phase 1c HOST_ACTIONS will
+ * introduce a sibling `runHostSlot` rather than reusing this — host callers
+ * have no workspace context to validate via `assertContextLive`, and sharing
+ * the executor with an optional probe was the round-4 regression risk #690
+ * is closing.
  */
 export async function runWorkspaceSlot(
   cmd: QuickCommand,
@@ -92,14 +97,14 @@ export async function runWorkspaceSlot(
     return
   }
 
-  // codex round-4 — workspace liveness gate. If the surrounding context (e.g.
-  // workspace) was destroyed while createSession was in flight, do NOT send
-  // the user command — destructive quick commands (rm / drop / etc.) must not
-  // execute remotely once their context is gone. The session is already
-  // created server-side; surface it as a switch failure (no retry) so the
-  // user knows the operation didn't reach completion. Cleanup of the
-  // server-side session is a separate concern (see PR follow-up).
-  if (deps.assertContextLive && !deps.assertContextLive()) {
+  // codex round-4 (PR #686) — workspace liveness gate. If the surrounding
+  // context (e.g. workspace) was destroyed while createSession was in flight,
+  // do NOT send the user command — destructive quick commands (rm / drop /
+  // etc.) must not execute remotely once their context is gone. The session
+  // is already created server-side; surface it as a switch failure (no retry)
+  // so the user knows the operation didn't reach completion. Cleanup of the
+  // server-side session is tracked separately (#689).
+  if (!deps.assertContextLive()) {
     toast.show(t('quick_commands.toast.switch_failed'))
     return
   }
