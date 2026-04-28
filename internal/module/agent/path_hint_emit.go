@@ -15,15 +15,20 @@ type pathHintBroadcaster interface {
 // EmitPathHint walks the extract → dedup → buffer → broadcast pipeline.
 // Pure helper — no Module dependency, so tests can drive it without spinning
 // up the full agent module.
+//
+// cwdFallback is consulted only when the raw event lacks `cwd`. Production
+// wires it from the cached SessionInfo.Cwd so a brand-new CC version that
+// drops the field still emits hints.
 func EmitPathHint(
 	b pathHintBroadcaster,
 	dedup *PathHintDedupCache,
 	buf *PathHintRingBuffer,
 	rawEvent json.RawMessage,
 	eventName, agentID, sessionCode string,
+	cwdFallback string,
 	now time.Time,
 ) {
-	hint, basename, ok := ExtractPathHint(rawEvent, eventName, agentID, sessionCode, now)
+	hint, basename, ok := ExtractPathHint(rawEvent, eventName, agentID, sessionCode, cwdFallback, now)
 	if !ok {
 		return
 	}

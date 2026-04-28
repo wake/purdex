@@ -30,7 +30,7 @@ func TestHandleEvent_EmitsPathHintForCCPreToolUseRead(t *testing.T) {
 	sub := m.core.Events.AddTestSubscriber()
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PreToolUse","raw_event":{"tool_name":"Read","tool_input":{"file_path":"/x/y/z.go"}},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PreToolUse","raw_event":{"cwd":"/x","tool_name":"Read","tool_input":{"file_path":"/x/y/z.go"}},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -39,7 +39,7 @@ func TestHandleEvent_EmitsPathHintForCCPreToolUseRead(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 
-	if !awaitPathHint(t, sub, "code-work", "/x/y", []string{"z.go", `"path"`, `"basename"`}) {
+	if !awaitPathHint(t, sub, "code-work", "/x/y", "/x", []string{"z.go", `"path":`, `"basename"`}) {
 		t.Fatal("expected agent.path_hint broadcast within deadline")
 	}
 }
@@ -90,7 +90,7 @@ func TestHandleEvent_DoesNotEmitPathHintForOpenCode(t *testing.T) {
 	sub := m.core.Events.AddTestSubscriber()
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PreToolUse","raw_event":{"tool_name":"Read","tool_input":{"file_path":"/x/y/z.go"}},"agent_type":"opencode"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PreToolUse","raw_event":{"cwd":"/x","tool_name":"Read","tool_input":{"file_path":"/x/y/z.go"}},"agent_type":"opencode"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -105,8 +105,8 @@ func TestHandleEvent_DoesNotEmitPathHintForOpenCode(t *testing.T) {
 }
 
 // awaitPathHint scans broadcasts for an agent.path_hint matching the expected
-// session + dir, asserting that no banned tokens leak into the payload.
-func awaitPathHint(t *testing.T, sub *core.EventSubscriber, wantSession, wantDir string, bannedTokens []string) bool {
+// session, dir, and cwd, asserting that no banned tokens leak into the payload.
+func awaitPathHint(t *testing.T, sub *core.EventSubscriber, wantSession, wantDir, wantCwd string, bannedTokens []string) bool {
 	t.Helper()
 	deadline := time.After(200 * time.Millisecond)
 	for {
@@ -124,6 +124,9 @@ func awaitPathHint(t *testing.T, sub *core.EventSubscriber, wantSession, wantDir
 			}
 			if !strings.Contains(env.Value, `"dir":"`+wantDir+`"`) {
 				t.Errorf("agent.path_hint value missing dir=%q; got %s", wantDir, env.Value)
+			}
+			if !strings.Contains(env.Value, `"cwd":"`+wantCwd+`"`) {
+				t.Errorf("agent.path_hint value missing cwd=%q; got %s", wantCwd, env.Value)
 			}
 			for _, banned := range bannedTokens {
 				if strings.Contains(env.Value, banned) {

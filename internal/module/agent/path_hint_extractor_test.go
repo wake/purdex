@@ -2,11 +2,30 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
 
 func mkRaw(toolName, filePath string) json.RawMessage {
+	b, _ := json.Marshal(map[string]any{
+		"cwd":        "/repo",
+		"tool_name":  toolName,
+		"tool_input": map[string]any{"file_path": filePath},
+	})
+	return b
+}
+
+func mkRawWithCwd(cwd, toolName, filePath string) json.RawMessage {
+	b, _ := json.Marshal(map[string]any{
+		"cwd":        cwd,
+		"tool_name":  toolName,
+		"tool_input": map[string]any{"file_path": filePath},
+	})
+	return b
+}
+
+func mkRawNoCwd(toolName, filePath string) json.RawMessage {
 	b, _ := json.Marshal(map[string]any{
 		"tool_name":  toolName,
 		"tool_input": map[string]any{"file_path": filePath},
@@ -16,12 +35,12 @@ func mkRaw(toolName, filePath string) json.RawMessage {
 
 func TestExtractPathHint_AbsoluteRead(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
-	h, basename, ok := ExtractPathHint(mkRaw("Read", "/a/b/c.go"), "PreToolUse", "claude-code", "abc123", now)
+	h, basename, ok := ExtractPathHint(mkRaw("Read", "/repo/src/c.go"), "PreToolUse", "cc", "abc123", "", now)
 	if !ok {
 		t.Fatal("expected hint, got drop")
 	}
-	if h.SchemaVersion != 1 || h.AgentID != "claude-code" || h.SessionCode != "abc123" ||
-		h.Dir != "/a/b" || h.Kind != PathHintKindRead {
+	if h.SchemaVersion != 1 || h.AgentID != "cc" || h.SessionCode != "abc123" ||
+		h.Cwd != "/repo" || h.Dir != "/repo/src" || h.Kind != PathHintKindRead {
 		t.Errorf("unexpected hint: %+v", h)
 	}
 	if basename != "c.go" {
@@ -35,7 +54,7 @@ func TestExtractPathHint_WriteEditNotebookEdit(t *testing.T) {
 		{"Edit", PathHintKindEdit},
 		{"NotebookEdit", PathHintKindEdit},
 	} {
-		h, _, ok := ExtractPathHint(mkRaw(tc.tool, "/a/b/c"), "PreToolUse", "claude-code", "s1", time.Unix(0, 0))
+		h, _, ok := ExtractPathHint(mkRaw(tc.tool, "/repo/src/c"), "PreToolUse", "cc", "s1", "", time.Unix(0, 0))
 		if !ok || h.Kind != tc.kind {
 			t.Errorf("%s expected kind=%s, got ok=%v kind=%s", tc.tool, tc.kind, ok, h.Kind)
 		}
@@ -43,38 +62,112 @@ func TestExtractPathHint_WriteEditNotebookEdit(t *testing.T) {
 }
 
 func TestExtractPathHint_DropsRelative(t *testing.T) {
-	if _, _, ok := ExtractPathHint(mkRaw("Read", "rel/path.go"), "PreToolUse", "claude-code", "s1", time.Unix(0, 0)); ok {
+	if _, _, ok := ExtractPathHint(mkRaw("Read", "rel/path.go"), "PreToolUse", "cc", "s1", "", time.Unix(0, 0)); ok {
 		t.Fatal("expected drop for non-absolute path")
 	}
 }
 
 func TestExtractPathHint_DropsUnknownTool(t *testing.T) {
-	if _, _, ok := ExtractPathHint(mkRaw("Bash", "/a/b"), "PreToolUse", "claude-code", "s1", time.Unix(0, 0)); ok {
+	if _, _, ok := ExtractPathHint(mkRaw("Bash", "/repo/src"), "PreToolUse", "cc", "s1", "", time.Unix(0, 0)); ok {
 		t.Fatal("expected drop for non-file tool")
 	}
 }
 
 func TestExtractPathHint_DropsWrongEventName(t *testing.T) {
-	if _, _, ok := ExtractPathHint(mkRaw("Read", "/a/b"), "SessionStart", "claude-code", "s1", time.Unix(0, 0)); ok {
+	if _, _, ok := ExtractPathHint(mkRaw("Read", "/repo/src"), "SessionStart", "cc", "s1", "", time.Unix(0, 0)); ok {
 		t.Fatal("expected drop for non-PreToolUse/PostToolUse event")
 	}
 }
 
 func TestExtractPathHint_AcceptsPostToolUse(t *testing.T) {
-	if _, _, ok := ExtractPathHint(mkRaw("Read", "/a/b/c.go"), "PostToolUse", "claude-code", "s1", time.Unix(0, 0)); !ok {
+	if _, _, ok := ExtractPathHint(mkRaw("Read", "/repo/src/c.go"), "PostToolUse", "cc", "s1", "", time.Unix(0, 0)); !ok {
 		t.Fatal("PostToolUse should also qualify")
 	}
 }
 
 func TestExtractPathHint_DropsEmptyFilePath(t *testing.T) {
-	if _, _, ok := ExtractPathHint(mkRaw("Read", ""), "PreToolUse", "claude-code", "s1", time.Unix(0, 0)); ok {
+	if _, _, ok := ExtractPathHint(mkRaw("Read", ""), "PreToolUse", "cc", "s1", "", time.Unix(0, 0)); ok {
 		t.Fatal("expected drop for empty file_path")
 	}
 }
 
 func TestExtractPathHint_DropsMalformedJSON(t *testing.T) {
-	if _, _, ok := ExtractPathHint([]byte("not-json"), "PreToolUse", "claude-code", "s1", time.Unix(0, 0)); ok {
+	if _, _, ok := ExtractPathHint([]byte("not-json"), "PreToolUse", "cc", "s1", "", time.Unix(0, 0)); ok {
 		t.Fatal("expected drop for malformed JSON")
+	}
+}
+
+func TestExtractPathHint_FallbackCwdWhenRawEventLacksIt(t *testing.T) {
+	h, _, ok := ExtractPathHint(mkRawNoCwd("Read", "/repo/src/c.go"), "PreToolUse", "cc", "s1", "/repo", time.Unix(0, 0))
+	if !ok {
+		t.Fatal("expected fallback cwd to be used")
+	}
+	if h.Cwd != "/repo" {
+		t.Errorf("Cwd = %q, want /repo", h.Cwd)
+	}
+}
+
+func TestExtractPathHint_DropsWhenNoCwdAvailable(t *testing.T) {
+	if _, _, ok := ExtractPathHint(mkRawNoCwd("Read", "/repo/src/c.go"), "PreToolUse", "cc", "s1", "", time.Unix(0, 0)); ok {
+		t.Fatal("expected drop when neither raw_event nor fallback supplies cwd")
+	}
+}
+
+func TestExtractPathHint_DropsRelativeCwd(t *testing.T) {
+	if _, _, ok := ExtractPathHint(mkRawWithCwd("rel/dir", "Read", "/repo/src/c.go"), "PreToolUse", "cc", "s1", "", time.Unix(0, 0)); ok {
+		t.Fatal("expected drop for non-absolute cwd")
+	}
+}
+
+func TestExtractPathHint_TrimsTrailingSlashCwd(t *testing.T) {
+	h, _, ok := ExtractPathHint(mkRawWithCwd("/repo/", "Read", "/repo/src/c.go"), "PreToolUse", "cc", "s1", "", time.Unix(0, 0))
+	if !ok {
+		t.Fatal("expected hint")
+	}
+	if h.Cwd != "/repo" {
+		t.Errorf("Cwd = %q, want /repo (trimmed)", h.Cwd)
+	}
+}
+
+func TestExtractPathHint_DropsOversizedRawEvent(t *testing.T) {
+	huge := make([]byte, MaxRawEventBytes+1)
+	for i := range huge {
+		huge[i] = '"'
+	}
+	if _, _, ok := ExtractPathHint(huge, "PreToolUse", "cc", "s1", "/repo", time.Unix(0, 0)); ok {
+		t.Fatal("expected drop for raw event exceeding MaxRawEventBytes")
+	}
+}
+
+func TestExtractPathHint_DropsOversizedFilePath(t *testing.T) {
+	long := "/" + strings.Repeat("a", MaxFilePathBytes)
+	if _, _, ok := ExtractPathHint(mkRaw("Read", long), "PreToolUse", "cc", "s1", "", time.Unix(0, 0)); ok {
+		t.Fatal("expected drop for file_path exceeding MaxFilePathBytes")
+	}
+}
+
+func TestExtractPathHint_DropsControlCharsInPath(t *testing.T) {
+	for _, bad := range []string{
+		"/repo/src/\x00null.go",
+		"/repo/src/\nnewline.go",
+		"/repo/src/\ttab.go",
+		"/repo/src/\x1bescape.go",
+		"/repo/src/\x7fdel.go",
+	} {
+		if _, _, ok := ExtractPathHint(mkRaw("Read", bad), "PreToolUse", "cc", "s1", "", time.Unix(0, 0)); ok {
+			t.Errorf("expected drop for file_path with control char: %q", bad)
+		}
+	}
+}
+
+func TestExtractPathHint_DropsControlCharsInCwd(t *testing.T) {
+	for _, bad := range []string{
+		"/re\x00po",
+		"/re\npo",
+	} {
+		if _, _, ok := ExtractPathHint(mkRawWithCwd(bad, "Read", "/repo/src/c.go"), "PreToolUse", "cc", "s1", "", time.Unix(0, 0)); ok {
+			t.Errorf("expected drop for cwd with control char: %q", bad)
+		}
 	}
 }
 

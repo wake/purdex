@@ -7,12 +7,13 @@ import (
 	"time"
 )
 
-func TestPathHint_V1Minimal_JSON(t *testing.T) {
+func TestPathHint_V1_JSON(t *testing.T) {
 	h := PathHint{
 		SchemaVersion: 1,
-		AgentID:       "claude-code",
+		AgentID:       "cc",
 		SessionCode:   "abc123",
-		Dir:           "/a/b",
+		Cwd:           "/repo",
+		Dir:           "/repo/src",
 		Kind:          PathHintKindRead,
 		Timestamp:     time.Unix(1000, 0).UTC(),
 	}
@@ -30,7 +31,7 @@ func TestPathHint_V1Minimal_JSON(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.SchemaVersion != 1 || got.Dir != "/a/b" || got.Kind != PathHintKindRead {
+	if got.SchemaVersion != 1 || got.Cwd != "/repo" || got.Dir != "/repo/src" || got.Kind != PathHintKindRead {
 		t.Errorf("roundtrip mismatch: %+v", got)
 	}
 }

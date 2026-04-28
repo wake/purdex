@@ -13,12 +13,18 @@ const (
 	PathHintKindEdit  = "edit"
 )
 
-// PathHint v1 — minimal schema. Dir-level only (no `path`, no `basename`).
-// HostId travels in the broadcast envelope, never in payload.
+// PathHint v1 schema (7 fields). Dir-level only — no full file path, no
+// basename. HostId travels in the broadcast envelope, never in payload.
+//
+// Cwd is the agent's working directory and acts as the SPA cache scope key;
+// SessionCode is a per-session tag the SPA uses for lookup priority (entries
+// from the current session sort first when more than one session shares a
+// cwd, e.g. CC restarts in the same repo).
 type PathHint struct {
 	SchemaVersion int       `json:"schemaVersion"`
 	AgentID       string    `json:"agentId"`
 	SessionCode   string    `json:"sessionCode"`
+	Cwd           string    `json:"cwd"`
 	Dir           string    `json:"dir"`
 	Kind          string    `json:"kind"`
 	Timestamp     time.Time `json:"timestamp"`
