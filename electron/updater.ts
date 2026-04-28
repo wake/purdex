@@ -217,3 +217,15 @@ export async function applyUpdate(
 
   return { success: true, message: 'Update applied, restarting...' }
 }
+
+// T2 stub — T3 replaces detectSignedState body with real codesign -dv
+// invocation. The stub returns 'unknown' so that all 11 runtime tests
+// in signing.test.ts run and fail on assertions (behaviour RED), not
+// on missing __testing export.
+type SignedState = 'signed' | 'unsigned' | 'unknown'
+
+function detectSignedState(_appBundle: string): SignedState {
+  return 'unknown'
+}
+
+export const __testing = { detectSignedState, resignAppBundle }
