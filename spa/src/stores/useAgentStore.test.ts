@@ -184,7 +184,7 @@ describe('useAgentStore', () => {
       lastEvents: {
         [`${H}:dev`]: { agent_type: 'cc', status: 'idle', raw_event_name: 'PdxStop', broadcast_ts: 1 },
         [`${H}:staging`]: { agent_type: 'cc', status: 'running', raw_event_name: 'PdxUserPromptSubmit', broadcast_ts: 2 },
-        ['other-host:dev']: { agent_type: 'codex', status: 'waiting', raw_event_name: 'Notification', broadcast_ts: 3 },
+        ['other-host:dev']: { agent_type: 'codex', status: 'waiting', raw_event_name: 'PdxNotification', broadcast_ts: 3 },
       },
       unread: {
         [`${H}:dev`]: true,
@@ -256,7 +256,7 @@ describe('useAgentStore', () => {
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', {
       agent_type: 'codex',
       status: 'running',
-      raw_event_name: 'UserPromptSubmit',
+      raw_event_name: 'PdxUserPromptSubmit',
       broadcast_ts: Date.now(),
     })
     expect(useAgentStore.getState().agentTypes[`${H}:dev`]).toBe('codex')
