@@ -1,9 +1,33 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { STORAGE_KEYS, purdexStorage } from '../../lib/storage'
+import { STORAGE_KEYS, purdexStorage, syncManager } from '../../lib/storage'
 
 const MAX_DIRS_PER_SCOPE = 50
 const scopeKey = (hostId: string, workspaceId: string) => `${hostId}:${workspaceId}`
+
+/**
+ * Mutate persisted state in place during rehydration so the store ref isn't
+ * needed (Zustand calls the rehydrate callback synchronously when storage is
+ * synchronous, before the create() return assigns to usePathCacheStore — the
+ * old setState() approach hit a TDZ).
+ *
+ * Exported for unit tests; production wires it through onRehydrateStorage.
+ */
+export function sanitizeRehydratedPathCache(
+  state: { dirsByScope?: unknown } | undefined,
+  error: unknown,
+): void {
+  if (!state) return
+  if (error || typeof state.dirsByScope !== 'object' || state.dirsByScope === null || Array.isArray(state.dirsByScope)) {
+    state.dirsByScope = {}
+    return
+  }
+  const cleaned: Record<string, string[]> = {}
+  for (const [k, v] of Object.entries(state.dirsByScope as Record<string, unknown>)) {
+    if (Array.isArray(v) && v.every((x) => typeof x === 'string')) cleaned[k] = v
+  }
+  state.dirsByScope = cleaned
+}
 
 function normalizeDir(raw: unknown): string | null {
   if (typeof raw !== 'string' || !raw.startsWith('/')) return null
@@ -96,17 +120,11 @@ export const usePathCacheStore = create<PathCacheState>()(
       name: STORAGE_KEYS.PATH_CACHE_V1,
       storage: purdexStorage,
       partialize: (s) => ({ dirsByScope: s.dirsByScope }),
-      onRehydrateStorage: () => (state, error) => {
-        if (error || !state || typeof state.dirsByScope !== 'object' || state.dirsByScope === null) {
-          usePathCacheStore.setState({ dirsByScope: {} } as never, false)
-          return
-        }
-        const cleaned: Record<string, string[]> = {}
-        for (const [k, v] of Object.entries(state.dirsByScope)) {
-          if (Array.isArray(v) && v.every((x) => typeof x === 'string')) cleaned[k] = v
-        }
-        usePathCacheStore.setState({ dirsByScope: cleaned } as never, false)
-      },
+      onRehydrateStorage: () => (state, error) => sanitizeRehydratedPathCache(state, error),
     },
   ),
 )
+
+// Cross-window propagation — every persisted purdex-* store registers so a
+// write in one window broadcasts to others (matches workspace / tab / etc).
+syncManager.register(STORAGE_KEYS.PATH_CACHE_V1, usePathCacheStore)

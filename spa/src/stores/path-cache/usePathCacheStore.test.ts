@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { usePathCacheStore } from './usePathCacheStore'
+import { usePathCacheStore, sanitizeRehydratedPathCache } from './usePathCacheStore'
 
 const reset = () =>
   usePathCacheStore.setState({ dirsByScope: {} } as never, false)
@@ -91,5 +91,53 @@ describe('usePathCacheStore', () => {
     usePathCacheStore.getState().clearHost('h1')
     expect(usePathCacheStore.getState().dirsByScope['h1:w1']).toBeUndefined()
     expect(usePathCacheStore.getState().dirsByScope['h2:w1']).toEqual(['/b'])
+  })
+})
+
+describe('sanitizeRehydratedPathCache', () => {
+  it('keeps a well-formed dirsByScope intact', () => {
+    const state = { dirsByScope: { 'h1:w1': ['/a', '/b'] } as Record<string, string[]> }
+    sanitizeRehydratedPathCache(state, null)
+    expect(state.dirsByScope).toEqual({ 'h1:w1': ['/a', '/b'] })
+  })
+
+  it('drops scopes whose value is not a string array', () => {
+    const state = {
+      dirsByScope: {
+        'h1:w1': ['/a'],
+        'h1:w2': 'not-an-array' as unknown as string[],
+        'h1:w3': [1, 2, 3] as unknown as string[],
+      },
+    }
+    sanitizeRehydratedPathCache(state, null)
+    expect(state.dirsByScope).toEqual({ 'h1:w1': ['/a'] })
+  })
+
+  it('resets when rehydrate received an error', () => {
+    const state = { dirsByScope: { 'h1:w1': ['/a'] } as Record<string, string[]> }
+    sanitizeRehydratedPathCache(state, new Error('boom'))
+    expect(state.dirsByScope).toEqual({})
+  })
+
+  it('resets when dirsByScope is missing / null / wrong type', () => {
+    const a: { dirsByScope?: unknown } = {}
+    sanitizeRehydratedPathCache(a, null)
+    expect(a.dirsByScope).toEqual({})
+
+    const b = { dirsByScope: null }
+    sanitizeRehydratedPathCache(b, null)
+    expect(b.dirsByScope).toEqual({})
+
+    const c = { dirsByScope: 'string' }
+    sanitizeRehydratedPathCache(c, null)
+    expect(c.dirsByScope).toEqual({})
+
+    const d = { dirsByScope: [1, 2, 3] }
+    sanitizeRehydratedPathCache(d, null)
+    expect(d.dirsByScope).toEqual({})
+  })
+
+  it('no-op when state is undefined (Zustand passes undefined when nothing was persisted)', () => {
+    expect(() => sanitizeRehydratedPathCache(undefined, null)).not.toThrow()
   })
 })
