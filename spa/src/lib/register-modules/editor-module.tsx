@@ -14,6 +14,7 @@ import { EditorHomePathWorkspaceSection } from '../../components/editor/EditorHo
 import { EditorHomePathHostSection } from '../../components/editor/EditorHomePathHostSection'
 import { EditorPurdexSettingsSection } from '../../components/settings/EditorPurdexSettingsSection'
 import { EditorLinkDetectionSection } from '../../components/settings/editor/EditorLinkDetectionSection'
+import { EditorOpenBehaviorSection } from '../../components/settings/editor/EditorOpenBehaviorSection'
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'])
 const PDF_EXTS = new Set(['pdf'])
@@ -44,6 +45,13 @@ export const editorModuleDefinition: ModuleDefinition = {
       order: 8,
       labelKey: 'settings.editor.link_detect.title',
       component: EditorLinkDetectionSection,
+    },
+    {
+      localId: 'open-behavior',
+      scope: 'purdex',
+      order: 7,
+      labelKey: 'settings.editor.open_behavior.title',
+      component: EditorOpenBehaviorSection,
     },
     {
       localId: 'workspace-home-path',

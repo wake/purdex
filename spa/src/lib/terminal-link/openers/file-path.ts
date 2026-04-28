@@ -1,31 +1,38 @@
 import type { LinkOpener } from '../types'
 import type { FileInfo, FileSource } from '../../../types/fs'
-import type { PaneContent } from '../../../types/tab'
-import type { FileOpener } from '../../file-opener-registry'
 import { resolveEditorHomePath } from '../../editor-home-resolver'
-
-export interface OpenSingletonTabOpts {
-  afterTabId?: string
-}
+import { FileNotFoundError, type OpenFileContext } from '../../file-open'
 
 export interface FilePathOpenerDeps {
-  getDefaultOpener(file: FileInfo): FileOpener | null
-  openSingletonTab(content: PaneContent, opts?: OpenSingletonTabOpts): string
-  insertTab(tabId: string, workspaceId: string, afterTabId?: string): void
-  getActiveWorkspaceId(): string | null
   /**
-   * Returns the tabId after which a new clustered tab should be
-   * inserted within `workspaceId`, or undefined to append at end. The
-   * returned value MUST be used both for `openSingletonTab` and
-   * `insertTab` — see `computeClusterInsertTarget` rationale for why.
+   * Open the file via the P5 tryOpenFile pipeline (stat → cache → popup).
+   * The caller MUST construct the service at bootstrap (see
+   * `register-modules/index.tsx`) so the host-bound backend, popup
+   * controller, and tab opener are pre-wired.
    */
-  computeInsertTarget(workspaceId: string | null, isSameKind: (c: PaneContent) => boolean): string | undefined
+  tryOpenFile(file: FileInfo, source: FileSource, ctx: OpenFileContext): Promise<void>
+  /**
+   * Direct-open path that bypasses the stat/cache/popup pipeline. Used when
+   * we have a path the daemon cannot stat (e.g. unresolved `~/foo` after
+   * fetchPaneHome failed) but the user still wants a blank editor buffer at
+   * that name — preserving the pre-P5 fallback UX. R3 P2: without this, the
+   * daemon rejected `stat('~/foo')` with 400 and the click silently failed.
+   */
+  openAsBuffer(file: FileInfo, source: FileSource, ctx: OpenFileContext): void
+  /** Active workspace ID — used as a fallback when ctx.workspaceId is unset. */
+  getActiveWorkspaceId(): string | null
+  /** Resolve the cwd of a tmux pane (relative-path expansion). */
   fetchPaneCwd(hostId: string, sessionCode: string, signal?: AbortSignal): Promise<string>
+  /** Resolve `~` for tilde-prefixed paths. */
   fetchPaneHome(hostId: string, sessionCode: string, signal?: AbortSignal): Promise<string>
+  /**
+   * Resolve the cwd for the open-file context — usually the active session's
+   * cwd. Used as the path-cache scope key (per-host, per-cwd). When unset
+   * (no active session), the resolver may return null and the cwd field is
+   * filled from a sensible fallback (workspace projectPath / home).
+   */
+  resolveOpenContextCwd(hostId: string, sessionCode?: string): string | null
 }
-
-const FILE_KINDS = new Set<string>(['editor', 'image-preview', 'pdf-preview'])
-const isFileKind = (c: PaneContent): boolean => FILE_KINDS.has(c.kind)
 
 function buildFileInfo(path: string): FileInfo {
   const name = path.split('/').pop() ?? path
@@ -166,15 +173,53 @@ export function createFilePathOpener(deps: FilePathOpenerDeps): LinkOpener {
       }
 
       const file = buildFileInfo(path)
-      const opener = deps.getDefaultOpener(file)
-      if (!opener) return
       const source: FileSource = { type: 'daemon', hostId: ctx.hostId }
-      const content = opener.createContent(source, file)
       const targetWorkspaceId = sourceWorkspaceId ?? deps.getActiveWorkspaceId()
       if (!targetWorkspaceId) return
-      const afterTabId = deps.computeInsertTarget(targetWorkspaceId, isFileKind)
-      const tabId = deps.openSingletonTab(content, { afterTabId })
-      deps.insertTab(tabId, targetWorkspaceId, afterTabId)
+
+      // P5: route through the openFile pipeline so missing files surface the
+      // FileNotFoundPopup instead of opening empty buffers. The pipeline's
+      // tabOpener (wired at bootstrap) does the same getDefaultOpener +
+      // openSingletonTab + insertTab work the previous direct path did.
+      // ctx.cwd is the path-cache scope key — best-effort: session cwd when
+      // available, otherwise the resolved file's directory.
+      const cacheCwdResolved = deps.resolveOpenContextCwd(ctx.hostId, ctx.sessionCode)
+      const fallbackCwd = path.replace(/\/[^/]*$/, '') || '/'
+      const cacheCwd = cacheCwdResolved ?? fallbackCwd
+      const openCtx: OpenFileContext = {
+        hostId: ctx.hostId,
+        cwd: cacheCwd,
+        sourceWorkspaceId: targetWorkspaceId,
+        sessionCode: ctx.sessionCode,
+      }
+      // R3 P2: tilde branch may leave `path` as `~/foo` if home resolution
+      // failed; daemon rejects stat() on non-absolute paths with 400, which
+      // isn't ENOENT, so the missing-file pipeline would surface a stat error
+      // instead of opening an untitled buffer. Preserve the pre-P5 fallback
+      // by routing non-absolute leftovers through the direct-open path.
+      if (!path.startsWith('/')) {
+        deps.openAsBuffer(file, source, openCtx)
+        return
+      }
+      try {
+        await deps.tryOpenFile(file, source, openCtx)
+      } catch (err) {
+        // Click-handler context: we can't propagate the rejection up the stack,
+        // so distinguish for the operator:
+        // - FileNotFoundError → expected when `popupOnMissingFile` is off; warn.
+        // - Anything else (auth/network/host removed) → unexpected; log loud
+        //   so console-watching surfaces the broken connection / token issue
+        //   instead of a quiet "tryOpenFile failed" line that reads like a
+        //   harmless missing file.
+        if (err instanceof FileNotFoundError) {
+          console.warn(`[file-path] file not found (popup disabled): ${file.path}`)
+        } else {
+          console.error(
+            `[file-path] tryOpenFile failed for ${file.path}: ${(err as Error)?.message ?? String(err)}`,
+            err,
+          )
+        }
+      }
     },
   }
 }

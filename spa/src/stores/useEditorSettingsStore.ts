@@ -29,12 +29,30 @@ export interface EditorSettingsState {
   minimap: boolean
   fontSize: number
 
+  /**
+   * P5 file-open flow: when a click target file does not exist (stat returns
+   * ENOENT/404 only — see open-file.ts `isNotFoundError` for the strict
+   * classifier), show the FileNotFound popup instead of throwing. Auth /
+   * network errors always bubble regardless of this flag.
+   */
+  popupOnMissingFile: boolean
+
+  /**
+   * P5 layer-1 auto search: when popup is enabled and the file is missing,
+   * automatically attempt to resolve via path cache (P4 hint pipeline) before
+   * falling through to the popup's expand UI. Off → popup always renders the
+   * `ask-expand` mode.
+   */
+  autoSearchLayer1: boolean
+
   setTabSize: (value: TabSizeOption) => void
   setInsertSpaces: (value: boolean) => void
   setWordWrap: (value: WordWrapOption) => void
   setLineNumbers: (value: LineNumbersOption) => void
   setMinimap: (value: boolean) => void
   setFontSize: (value: number) => void
+  setPopupOnMissingFile: (value: boolean) => void
+  setAutoSearchLayer1: (value: boolean) => void
   reset: () => void
 }
 
@@ -45,6 +63,8 @@ export const DEFAULT_EDITOR_SETTINGS = {
   lineNumbers: 'on' as LineNumbersOption,
   minimap: true,
   fontSize: 13,
+  popupOnMissingFile: true,
+  autoSearchLayer1: true,
 } as const
 
 function isTabSize(v: unknown): v is TabSizeOption {
@@ -73,7 +93,7 @@ function clampFontSize(value: number): number {
  */
 function sanitize(raw: unknown): Partial<Pick<
   EditorSettingsState,
-  'tabSize' | 'insertSpaces' | 'wordWrap' | 'lineNumbers' | 'minimap' | 'fontSize'
+  'tabSize' | 'insertSpaces' | 'wordWrap' | 'lineNumbers' | 'minimap' | 'fontSize' | 'popupOnMissingFile' | 'autoSearchLayer1'
 >> {
   if (raw === null || typeof raw !== 'object') return {}
   const src = raw as Record<string, unknown>
@@ -87,6 +107,8 @@ function sanitize(raw: unknown): Partial<Pick<
   if (typeof src.fontSize === 'number' && Number.isFinite(src.fontSize)) {
     out.fontSize = clampFontSize(src.fontSize)
   }
+  if (typeof src.popupOnMissingFile === 'boolean') out.popupOnMissingFile = src.popupOnMissingFile
+  if (typeof src.autoSearchLayer1 === 'boolean') out.autoSearchLayer1 = src.autoSearchLayer1
 
   return out
 }
@@ -102,6 +124,8 @@ export const useEditorSettingsStore = create<EditorSettingsState>()(
       setLineNumbers: (lineNumbers) => set({ lineNumbers }),
       setMinimap: (minimap) => set({ minimap }),
       setFontSize: (value) => set({ fontSize: clampFontSize(value) }),
+      setPopupOnMissingFile: (popupOnMissingFile) => set({ popupOnMissingFile }),
+      setAutoSearchLayer1: (autoSearchLayer1) => set({ autoSearchLayer1 }),
       reset: () => set({ ...DEFAULT_EDITOR_SETTINGS }),
     }),
     {
@@ -116,6 +140,8 @@ export const useEditorSettingsStore = create<EditorSettingsState>()(
         lineNumbers: state.lineNumbers,
         minimap: state.minimap,
         fontSize: state.fontSize,
+        popupOnMissingFile: state.popupOnMissingFile,
+        autoSearchLayer1: state.autoSearchLayer1,
       }),
       merge: (persisted, current) => {
         const clean = sanitize(persisted)

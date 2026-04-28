@@ -37,6 +37,18 @@ describe('useEditorSettingsStore', () => {
     expect(s.lineNumbers).toBe('on')
     expect(s.minimap).toBe(true)
     expect(s.fontSize).toBe(13)
+    // P5: open-behavior toggles default ON — popup + auto layer-1 search.
+    expect(s.popupOnMissingFile).toBe(true)
+    expect(s.autoSearchLayer1).toBe(true)
+  })
+
+  it('S1-1b: setPopupOnMissingFile / setAutoSearchLayer1 toggle the store', () => {
+    const { setPopupOnMissingFile, setAutoSearchLayer1 } = useEditorSettingsStore.getState()
+    setPopupOnMissingFile(false)
+    setAutoSearchLayer1(false)
+    const s = useEditorSettingsStore.getState()
+    expect(s.popupOnMissingFile).toBe(false)
+    expect(s.autoSearchLayer1).toBe(false)
   })
 
   it('S1-2: setFontSize(5) clamps to 10', () => {

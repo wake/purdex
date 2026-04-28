@@ -259,6 +259,13 @@
   "settings.editor.link_detect.relative_slash.label": "Relative paths with /",
   "settings.editor.link_detect.relative_slash.desc": "e.g. src/App.tsx — resolved via tmux pane cwd at click time",
 
+  "settings.editor.open_behavior.title": "Open Behavior",
+  "settings.editor.open_behavior.desc": "What happens when you click a file path that does not exist.",
+  "settings.editor.open_behavior.popup.label": "Show popup on missing file",
+  "settings.editor.open_behavior.popup.desc": "Open the search popup when the target file is missing (default on); otherwise the click throws.",
+  "settings.editor.open_behavior.auto_layer1.label": "Auto-apply cached candidates (Layer 1)",
+  "settings.editor.open_behavior.auto_layer1.desc": "Before showing the popup, try paths recorded in the hook cache; a single verified hit opens directly.",
+
   "theme.editor.title": "Theme Editor",
   "theme.editor.close": "Close editor",
   "theme.editor.name_label": "Theme Name",

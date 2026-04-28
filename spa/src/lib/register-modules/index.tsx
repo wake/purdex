@@ -40,11 +40,9 @@ import {
 import { InterfaceSection } from '../../components/settings/InterfaceSection'
 import { NewTabSubsection } from '../../components/settings/new-tab/NewTabSubsection'
 import { registerBuiltinTerminalLinks, __resetBuiltinTerminalLinks } from '../terminal-link'
-import { computeClusterInsertTarget } from '../tab-insert/compute-cluster-insert-target'
 import { fetchSessionCwd, fetchSessionHome } from '../host-api'
 import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
 import { openBrowserTab } from '../open-browser-tab'
-import { getDefaultOpener } from '../file-opener-registry'
 import { setHostBuiltinSections } from '../host-builtin-sections'
 import { useModuleEnabledStore } from '../../stores/useModuleEnabledStore'
 import { OverviewSection } from '../../components/hosts/OverviewSection'
@@ -55,6 +53,11 @@ import { UploadSection } from '../../components/hosts/UploadSection'
 import { LogsSection } from '../../components/hosts/LogsSection'
 import { editorModuleDefinition, registerEditorNewTabProviders } from './editor-module'
 import { registerBuiltinFsBackends } from './fs-backends'
+import {
+  tryOpenFileForTerminalLink,
+  openFileAsBufferDirect,
+  resolveOpenContextCwdFromSessions,
+} from './file-open-bootstrap'
 import { applyModuleFileOpeners } from './module-file-openers'
 import { clearAllForHmr as clearFileOpenerRegistryForHmr } from '../file-opener-registry'
 import { QuickCommandsSettingsSection } from '../../components/settings/QuickCommandsSettingsSection'
@@ -330,13 +333,16 @@ export function registerBuiltinModules(): void {
       openMiniWindow: (url) => window.electronAPI?.browserViewOpenMiniWindow(url),
     },
     filePathOpener: {
-      getDefaultOpener,
-      openSingletonTab: (content, opts) => useTabStore.getState().openSingletonTab(content, opts),
-      insertTab: (tabId, wsId, afterTabId) => useWorkspaceStore.getState().insertTab(tabId, wsId, afterTabId),
+      // P5: file-path opener now drives the openFile pipeline (stat → cache
+      // → popup) rather than calling tab APIs directly. The pipeline's
+      // tabOpener still does getDefaultOpener + openSingletonTab + insertTab.
+      tryOpenFile: (file, source, ctx) => tryOpenFileForTerminalLink(file, source, ctx),
+      openAsBuffer: (file, source, ctx) => openFileAsBufferDirect(file, source, ctx),
       getActiveWorkspaceId: () => useWorkspaceStore.getState().activeWorkspaceId,
-      computeInsertTarget: (wsId, isSameKind) => computeClusterInsertTarget(wsId, isSameKind),
       fetchPaneCwd: (hostId, sessionCode, signal) => fetchSessionCwd(hostId, sessionCode, signal),
       fetchPaneHome: (hostId, sessionCode, signal) => fetchSessionHome(hostId, sessionCode, signal),
+      resolveOpenContextCwd: (hostId, sessionCode) =>
+        resolveOpenContextCwdFromSessions(hostId, sessionCode),
     },
     // P3: file-path matchers register together with the Editor module's
     // file-opening capability. When Editor is disabled, no file opener

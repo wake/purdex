@@ -159,4 +159,16 @@ describe('DaemonBackend', () => {
 
     await expect(backend.stat('/some/path')).rejects.toThrow('HTTP 500')
   })
+
+  it('attaches response status to thrown error so isNotFoundError can detect 404', async () => {
+    // P5 codex R1 P1: missing-file popup pipeline relied on `status` on the
+    // thrown error. Without this, daemon 404 stat errors were classified as
+    // "auth/network" and re-thrown instead of triggering the popup flow.
+    testGlobal.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      text: () => Promise.resolve('not found'),
+    })
+    await expect(backend.stat('/nope')).rejects.toMatchObject({ status: 404 })
+  })
 })

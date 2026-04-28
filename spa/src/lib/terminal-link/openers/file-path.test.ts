@@ -13,20 +13,56 @@ const fileToken: LinkToken = {
 }
 
 function makeDeps() {
-  const openSingletonTab = vi.fn(() => 'tab-1')
-  const insertTab = vi.fn()
+  // The opener no longer drives `getDefaultOpener / openSingletonTab /
+  // insertTab` directly; it calls `tryOpenFile`. We keep the same fakes for
+  // assertion-compat, wired through a `tryOpenFile` shim that mimics the
+  // bootstrap-time `tabOpener` (P5).
+  const openSingletonTab = vi.fn((_content: unknown, _opts?: { afterTabId?: string }) => 'tab-1')
+  const insertTab = vi.fn((_tabId: string, _wsId: string, _afterTabId?: string) => {})
   const paneContent = { kind: 'editor', source: { type: 'daemon', hostId: 'h1' }, filePath: '/a/b.ts' }
   const fakeOpener: FileOpener = {
     id: 'fake', label: '', icon: 'File',
     match: () => true, priority: 'default',
     createContent: vi.fn(() => paneContent as never),
   }
-  const getDefaultOpener = vi.fn((): FileOpener | null => fakeOpener)
+  const getDefaultOpener = vi.fn((_file: unknown): FileOpener | null => fakeOpener)
   const getActiveWorkspaceId = vi.fn((): string | null => 'ws-1')
-  const computeInsertTarget = vi.fn((): string | undefined => 'after-tab-id')
+  const computeInsertTarget = vi.fn((_wsId: string, _pred: (c: { kind: string }) => boolean): string | undefined => 'after-tab-id')
   const fetchPaneCwd = vi.fn(async (_h: string, _s: string, _sig?: AbortSignal) => '/home/user/proj')
   const fetchPaneHome = vi.fn(async (_h: string, _s: string, _sig?: AbortSignal) => '/home/user')
-  return { openSingletonTab, insertTab, getDefaultOpener, getActiveWorkspaceId, computeInsertTarget, fetchPaneCwd, fetchPaneHome, fakeOpener, paneContent }
+  const resolveOpenContextCwd = vi.fn((_h: string, _s?: string): string | null => null)
+
+  // tryOpenFile shim — mimics the bootstrap-time tabOpener so existing
+  // assertions on `getDefaultOpener / openSingletonTab / insertTab` still hold.
+  const FILE_KINDS = new Set(['editor', 'image-preview', 'pdf-preview'])
+  const tryOpenFile = vi.fn(async (file: { path: string; name?: string }, source: { type: string; hostId?: string }, ctx: { sourceWorkspaceId: string | null }) => {
+    const opener = getDefaultOpener(file)
+    if (!opener) return
+    const content = opener.createContent(source as never, file as never)
+    const targetWs = ctx.sourceWorkspaceId
+    if (!targetWs) return
+    const afterTabId = computeInsertTarget(targetWs, (c: { kind: string }) => FILE_KINDS.has(c.kind))
+    const tabId = openSingletonTab(content, { afterTabId })
+    insertTab(tabId, targetWs, afterTabId)
+  })
+  // openAsBuffer shim — direct-open bypass used by the tilde fallback when
+  // home resolution fails. Does NOT call stat — same shape as tryOpenFile.
+  const openAsBuffer = vi.fn((file: { path: string; name?: string }, source: { type: string; hostId?: string }, ctx: { sourceWorkspaceId: string | null }) => {
+    const opener = getDefaultOpener(file)
+    if (!opener) return
+    const content = opener.createContent(source as never, file as never)
+    const targetWs = ctx.sourceWorkspaceId
+    if (!targetWs) return
+    const afterTabId = computeInsertTarget(targetWs, (c: { kind: string }) => FILE_KINDS.has(c.kind))
+    const tabId = openSingletonTab(content, { afterTabId })
+    insertTab(tabId, targetWs, afterTabId)
+  })
+
+  return {
+    tryOpenFile, openAsBuffer, openSingletonTab, insertTab, getDefaultOpener,
+    getActiveWorkspaceId, computeInsertTarget, fetchPaneCwd, fetchPaneHome,
+    resolveOpenContextCwd, fakeOpener, paneContent,
+  }
 }
 
 describe('file-path opener', () => {
@@ -500,6 +536,19 @@ describe('file-path opener — tilde path layered resolve (PR-5)', () => {
     const createContentCalls = (deps.fakeOpener.createContent as ReturnType<typeof vi.fn>).mock.calls
     expect(createContentCalls[0][1].path).toBe('~/foo.ts')
     expect(deps.openSingletonTab).toHaveBeenCalled()
+  })
+
+  it('R3 P2: unresolved tilde routes to openAsBuffer (NOT tryOpenFile) so daemon stat 400 cannot block buffer creation', async () => {
+    const deps = makeDeps()
+    deps.fetchPaneHome.mockRejectedValueOnce(new Error('home endpoint timeout'))
+    const o = createFilePathOpener(deps)
+
+    await o.open(tildeToken, { hostId: 'h1', sessionCode: 'c1', workspaceId: 'wsA' }, new MouseEvent('click'))
+
+    expect(deps.openAsBuffer).toHaveBeenCalledTimes(1)
+    expect(deps.tryOpenFile).not.toHaveBeenCalled()
+    const buffArgs = deps.openAsBuffer.mock.calls[0]
+    expect(buffArgs[0].path).toBe('~/foo.ts')
   })
 
   it('multi-workspace: reads link-source workspace (wsB), not active (wsA)', async () => {

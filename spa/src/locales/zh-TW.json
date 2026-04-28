@@ -259,6 +259,13 @@
   "settings.editor.link_detect.relative_slash.label": "含 / 的相對路徑",
   "settings.editor.link_detect.relative_slash.desc": "例如 src/App.tsx — 點擊時即時向 tmux pane 查 cwd 拼接",
 
+  "settings.editor.open_behavior.title": "開檔行為",
+  "settings.editor.open_behavior.desc": "點擊檔案路徑時，若檔案不存在的處理方式。",
+  "settings.editor.open_behavior.popup.label": "檔案不存在時顯示彈窗",
+  "settings.editor.open_behavior.popup.desc": "找不到檔案時改開搜尋彈窗（預設開啟）；關閉則直接拋錯。",
+  "settings.editor.open_behavior.auto_layer1.label": "自動套用快取建議（Layer 1）",
+  "settings.editor.open_behavior.auto_layer1.desc": "彈窗開啟前先用 hook 快取的歷史路徑試開（命中單一即直接開檔）。",
+
   "theme.editor.title": "主題編輯器",
   "theme.editor.close": "關閉編輯器",
   "theme.editor.name_label": "主題名稱",

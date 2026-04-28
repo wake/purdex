@@ -51,8 +51,16 @@ func TestModuleMetadata(t *testing.T) {
 		t.Fatalf("Name() = %q, want %q", got, "fs")
 	}
 
-	if deps := m.Dependencies(); deps != nil {
-		t.Fatalf("Dependencies() = %v, want nil", deps)
+	deps := m.Dependencies()
+	found := false
+	for _, d := range deps {
+		if d == "session" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("Dependencies() = %v, want to include %q", deps, "session")
 	}
 }
 

@@ -3,14 +3,10 @@ import { FolderSimple, File, CaretRight, CaretDown } from '@phosphor-icons/react
 import { useHostStore } from '../stores/useHostStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { getFsBackend } from '../lib/fs-backend'
-import { getDefaultOpener } from '../lib/file-opener-registry'
-import { openClusteredTab } from '../lib/tab-insert/open-clustered-tab'
+import { tryOpenFileForFileTree } from '../lib/register-modules/file-open-bootstrap'
+import { FileNotFoundError } from '../lib/file-open'
 import type { ViewProps } from '../lib/module-registry'
 import type { FileSource, FileInfo, FileEntry } from '../types/fs'
-import type { PaneContent } from '../types/tab'
-
-const FILE_KINDS = new Set<string>(['editor', 'image-preview', 'pdf-preview'])
-const isFileKind = (c: PaneContent): boolean => FILE_KINDS.has(c.kind)
 
 interface DirState {
   entries: FileEntry[]
@@ -131,11 +127,29 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
                     size: entry.size,
                     isDirectory: false,
                   }
-                  const opener = getDefaultOpener(fileInfo)
-                  if (opener) {
-                    const content = opener.createContent(source, fileInfo)
-                    openClusteredTab(content, isFileKind, workspaceId)
-                  }
+                  // P5: route through openFile pipeline so missing files
+                  // (e.g. between a stale list and the click) surface a
+                  // popup instead of opening empty buffers.
+                  // R4 P2: catch rejections (auth/network errors, plus
+                  // FileNotFoundError when popupOnMissingFile is off) so
+                  // the promise doesn't surface as an unhandled rejection.
+                  // Mirror the terminal-link opener's split: expected
+                  // missing-file (popup disabled) → warn; everything else
+                  // → error so console-watching surfaces broken transport.
+                  tryOpenFileForFileTree(fileInfo, source, {
+                    hostId: activeHostId,
+                    cwd: projectPath,
+                    sourceWorkspaceId: workspaceId,
+                  }).catch((err) => {
+                    if (err instanceof FileNotFoundError) {
+                      console.warn(`[file-tree] file not found (popup disabled): ${fileInfo.path}`)
+                    } else {
+                      console.error(
+                        `[file-tree] tryOpenFile failed for ${fileInfo.path}: ${(err as Error)?.message ?? String(err)}`,
+                        err,
+                      )
+                    }
+                  })
                 }
               }}
             >
