@@ -14,3 +14,12 @@ func SetResolveCanonicalPdxPathForTesting(t *testing.T, fn func() (string, bool)
 	resolveCanonicalPdxPath = fn
 	t.Cleanup(func() { resolveCanonicalPdxPath = prev })
 }
+
+// RenderManagedPluginForTesting exposes renderManagedPlugin to the
+// external _test package so the drift-detection contract test (#715,
+// 2026-04-29 plan §T3.5) can synthesize a pre-fix managed body by
+// string-substitution against the current fixed render. Test-only —
+// production callers go through InstallHooks.
+func RenderManagedPluginForTesting(pdxPath string) string {
+	return renderManagedPlugin(pdxPath)
+}
