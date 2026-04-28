@@ -13,7 +13,7 @@ Two new tests appended to the file (after the existing `TestSweep_ClearingFrameP
 **Test fixture conventions** (consistent with the existing file):
 
 - Use `newSweepTestModule(t)` for the base module.
-- Install `m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: m.tmux}` and add a test subscriber.
+- Install `m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: m.tmux}`, add a test subscriber via `m.core.Events.AddTestSubscriber()`, and pair with `defer m.core.Events.RemoveTestSubscriber(sub)`.
 - Override `isPidAliveFn` / `processStartTimeFn` / `nowFn` via the existing module-level vars.
 - Reset all overrides via `t.Cleanup`.
 
@@ -84,9 +84,10 @@ Nothing else changes.
 
 **Run**: `go test ./internal/module/agent/ -run TestSweep_PidDead -v` → both PASS.
 
-### Task 1.3 — Full regression run
+### Task 1.3 — Format + full regression run
 
 ```bash
+gofmt -w internal/module/agent/sweep.go internal/module/agent/sweep_test.go
 go test ./internal/module/agent/...
 go vet ./...
 ```
@@ -123,14 +124,15 @@ Closes #717
 
 ## Out of scope (do NOT touch)
 
-- `frame_ops.go` — kept untouched per Option A.
+- `frame_ops.go` and `buildProjectionNormalized`'s helper contract — Option A keeps the helper signature/semantics intact; only the sweep callsite changes its argument.
 - `sweep.go:327` (proxy_canonicalized) and `sweep.go:499` (proxy_pruned) — verified safe.
 - `useAgentStore.ts` — no SPA change needed once daemon broadcasts `clear`.
 - W2 PR #710 / W3 framework / probe rework — separate concerns.
 
 ## Verification gate before opening PR
 
-- [ ] Both new tests fail before the 1-line fix, pass after.
+- [ ] Test 1 (`PidDeadBroadcastsStatusClearWhenSessionEmpty`) fails before fix; Test 2 (`PidDeadBroadcastsSiblingStatusWhenSessionNonEmpty`) passes before fix (the surviving-sibling branch is unaffected by the empty-DeriveResult passthrough). Both pass after fix.
+- [ ] `gofmt -l internal/module/agent/sweep.go internal/module/agent/sweep_test.go` prints nothing.
 - [ ] All other `internal/module/agent/...` tests still pass.
 - [ ] `go vet ./...` clean.
 - [ ] No file modifications outside `sweep.go`, `sweep_test.go`, and the spec/plan docs.
