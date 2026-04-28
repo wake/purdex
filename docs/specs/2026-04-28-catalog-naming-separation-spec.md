@@ -139,14 +139,20 @@ type HookEventSpec struct {
     PurdexName string
 
     // UpstreamKeys lists the raw event names that the agent's upstream hook
-    // system fires when this catalog entry should match. Used only at the
-    // installer/plugin boundary:
+    // system fires when this catalog entry should match. Always non-empty
+    // (installable / unsupported / ignored alike — non-installable entries
+    // store the upstream identifier here so it remains traceable after
+    // Phase 3 removes the Name field).
+    //
+    // Used at the installer/plugin boundary:
     //   - cc: written as ~/.claude/settings.json "hooks" map key
     //   - codex: written as ~/.codex/hooks.json matcher-group key
     //   - opencode: matched against Bus event name in plugin demux switch
-    // For cc/codex this is normally a single-element slice. For opencode,
-    // multiple upstream Bus events may map to the same PurdexName
-    // (e.g., permission.asked + question.asked → PdxPermissionRequest).
+    // For cc/codex this is normally a single-element slice. For opencode
+    // installable entries, multiple upstream Bus events may map to the same
+    // PurdexName (e.g., permission.asked + question.asked → PdxPermissionRequest).
+    // For opencode unsupported/ignored entries, UpstreamKeys is a single-
+    // element slice equal to the legacy Name value (no demux involvement).
     UpstreamKeys []string
 
     // Lifecycle classifies the daemon-internal side effect kind for this
@@ -236,7 +242,7 @@ var ccEventSpecs = []agent.HookEventSpec{
 
 - builder 強制限定 「填哪些參數」 → 容易誤把既有欄位（`EmitsStatus` / `Description` / `FutureOnly` / `Handling`）漏掉，phase 1 ship 時 catalog 變 zero-valued 副欄位，連帶破壞 SupportedStatuses derivation / installer Handling / Inspector descriptions
 - plain struct literal 強制 reviewer 看見每欄位的具體值，phase 3 移除 `Name:` 行時 Go 編譯器抓所有 stale references，零漏
-- 防漂移責任改交給 unit test：`event_spec_test.go` 校驗每筆 entry 的「PurdexName 以 `Pdx` 開頭」「`Name == strings.TrimPrefix(PurdexName, "Pdx")`」「`UpstreamKeys` 對 installable entry 至少一元素」「`PurdexName ∉ UpstreamKeys`」（§6.1）
+- 防漂移責任改交給 unit test：`event_spec_test.go` 校驗每筆 entry 的「PurdexName 以 `Pdx` 開頭」「`Name == strings.TrimPrefix(PurdexName, "Pdx")`」「`UpstreamKeys` 全 entry 至少一元素」「`PurdexName ∉ UpstreamKeys`」（§6.1）
 
 ### 2.3 UpstreamKeys 填值規則（per agent）
 
@@ -262,7 +268,9 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
 
 #### opencode（8 installable + 20 unsupported + 37 ignored = 65 total）
 
-只 8 installable 需要填 UpstreamKeys（其餘 Unsupported / Ignored 不安裝、不參與 plugin demux，UpstreamKeys 留 `nil`）：
+**所有 65 entries 都填 UpstreamKeys**，與 cc/codex 規則一致。Unsupported / Ignored entry 的 UpstreamKeys = `[原 Name]`（單元素），讓「PurdexName 之外的上游身份」始終有地方存放（catalog drift detection / Inspector / 將來 promote 為 installable 時零遷移）。
+
+8 installable entry 的 UpstreamKeys（Bus 事件來源 — 部分多元素）：
 
 | PurdexName | UpstreamKeys（plugin Bus 事件來源）|
 |---|---|
@@ -275,7 +283,11 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
 | `PdxSubagentStart` | `["tool.execute.before"]`（plugin 內 input.tool==='task' filter）|
 | `PdxSubagentStop` | `["tool.execute.after"]`（同上 filter）|
 
+20 unsupported + 37 ignored entry 的 UpstreamKeys：每個都是單元素 `[原 Name]`（即現行 catalog 的 `Name` 欄位值）。例如 `PdxPreToolUse` → `["PreToolUse"]`，`PdxAuthSession` → `["auth.session"]` 等。實際枚舉以 `internal/agent/opencode/events.go` 既有 catalog 為準。
+
 ⚠️ **設計界限**：filter 條件（`type==='idle'` / `input.tool==='task'`）**不入 catalog**，仍歸 plugin 端 dispatch 邏輯。catalog UpstreamKeys 只表達「哪些 raw event 名會 fire 進這個 catalog entry」，不表達 demux 細節。
+
+**invariant 對 non-installable entry 的鬆綁**（per §6.1 invariant 1）：UpstreamKeys 必填非空，但**不**強制要求等於 plugin Bus event 命名規範（unsupported/ignored 上游本就不參與 demux，UpstreamKeys 僅當作 upstream identifier 留存）。
 
 ### 2.3.1 Lifecycle 欄位填值（三家對齊）
 
@@ -341,6 +353,17 @@ UpstreamKeys 都是單元素 slice，值 = pre-W2 Name（即 cc CLI 上游 hook 
 - 因此 reverse lookup 在 plugin 內是 O(1) switch case，不需 runtime 反查
 - Go 端的 `LookupByUpstreamKey` helper 只供測試斷言與將來其他用途
 
+**Lookup helper 呼叫慣例**（per §2.1）：
+
+`LookupByPurdexName` 與 `LookupByUpstreamKey` 都是 **free function**（不是 `AgentProvider` 上的 method）。daemon 內部需要反查 catalog 時，先取 `HookInstaller.Events()` 拿到 catalog slice，再傳入 helper：
+
+```go
+// 已 type-assert 過 provider.(agent.HookInstaller) → installer
+spec, ok := agent.LookupByPurdexName(installer.Events(), req.PurdexName)
+```
+
+本 spec 後續 pseudo-code（§2.6 / §3.4.2）一律寫 `LookupByPurdexName(provider.Events(), name)`，其中 `provider` 已是 `HookInstaller` reference。`AgentProvider` interface 不擴增 `LookupByPurdexName` method（避免 daemon 在每家 provider 重寫同邏輯）。
+
 ### 2.6 LifecycleEventKind 列舉
 
 ```go
@@ -366,7 +389,8 @@ func (k LifecycleEventKind) String() string { ... }
 
 ```go
 // internal/module/agent/handler.go (Phase 1 ship 起)
-spec, ok := provider.LookupByPurdexName(req.PurdexName)
+// provider 已 type-assert 為 agent.HookInstaller
+spec, ok := agent.LookupByPurdexName(provider.Events(), req.PurdexName)
 if !ok {
     // catalog miss 路徑（不變）
 }
@@ -570,7 +594,8 @@ Phase 1 ship 後 cc catalog 已填 `Lifecycle` 但 codex/opencode 還沒。daemo
 
 ```go
 // internal/module/agent/handler.go (Phase 1 ship 起，Phase 3 ship 同 PR 簡化)
-spec, ok := provider.LookupByPurdexName(req.PurdexName)
+// provider 已 type-assert 為 agent.HookInstaller
+spec, ok := agent.LookupByPurdexName(provider.Events(), req.PurdexName)
 switch {
 case ok:
     // 已遷移 agent (Phase 1 後的 cc / Phase 2 後的 codex / Phase 3 後的 opencode)
@@ -640,7 +665,7 @@ func isLegacyHookForUnmigrated(agentType, name string) bool {
 
 - `PurdexName != ""` 且 `strings.HasPrefix(PurdexName, "Pdx")`
 - `Name == strings.TrimPrefix(PurdexName, "Pdx")`（dev-time invariant，Phase 3 後測試移除）
-- `UpstreamKeys` 對 `IsInstallableHookSpec` 的 entry 至少一元素
+- `UpstreamKeys` 對**所有 entry**（installable / unsupported / ignored）至少一元素（per §2.3 opencode 規則）
 - `PurdexName ∉ UpstreamKeys`（防止退化單一字串）
 - `Lifecycle` 對與「frame-mutating event」對應 entry 必填非 `LifecycleNone`（per §2.3.1 對照表）
 
@@ -752,7 +777,7 @@ invariants 拆 per-agent 套用，反映 phase 進度。`internal/agent/event_sp
 
 **對「已遷移」agent 套用以下 invariants**（Phase 1 對 cc / Phase 2 起對 cc+codex / Phase 3 起對三家）：
 
-1. **catalog 一致性**：`PurdexName != ""` 且以 `Pdx` 開頭；`UpstreamKeys` 對 installable entry 至少一個元素
+1. **catalog 一致性**：`PurdexName != ""` 且以 `Pdx` 開頭；**所有 entry 的 `UpstreamKeys` 至少一個元素**（installable / unsupported / ignored 一視同仁，per §2.3 opencode 規則 — 讓 upstream identifier 始終可追溯）
 2. **Name dev-time 對應**：catalog literal 的 `Name == strings.TrimPrefix(PurdexName, "Pdx")`（Phase 1/2 期間有效，Phase 3 ship 同 PR 移除此測試）
 3. **PurdexName 與 UpstreamKeys 互斥**：所有 entry 的 PurdexName 不在自己的 UpstreamKeys 列表內（否則 schema 退化成單一字串）
 4. **既有 metadata 保留**：每 entry 的 `EmitsStatus` / `Description` / `FutureOnly` / `Handling` 與 pre-W2 時相同（plain struct literal 改寫不能誤丟欄位 — 對應 Round-2 G1 防漂移）
