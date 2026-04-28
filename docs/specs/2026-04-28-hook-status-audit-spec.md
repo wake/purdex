@@ -21,6 +21,40 @@ W1 是 fix-spec §4 PR-2 工作 — 在 W3 撤回 generic framework 之前，先
 
 不做：自設計 / 自修 bug / 自寫 probe — 屬 W3-W6。
 
+### 0.1 Audit Baseline（重要 framing）
+
+**本 audit 描述的是 W3 撤回後的純 hook coverage 形態（post-W3 baseline）。**
+
+當前 main（alpha.234+）有 PR-4a-1 ship 的 always-on activity probe（`internal/module/agent/module.go:469-501` `manageActivityWatch` 在 status ∈ {waiting, running, idle} 啟動 watcher，screen-change → running、screen-stable → idle）— 此 probe 對 §6 部分 W5 條目（如 W5-1 cc permission→running、W5-3 cc compact→idle）**目前提供不精準的補位**，所以 current main 的使用者**體感不到「lights 卡死」**。
+
+W3 撤回 always-on policy 後，這些補位才會裸露。W5 / W6 工作池條目以**post-W3 baseline 為準**，因為 W5 / W6 PR 全部在 W3 撤回後執行（per fix-spec §4 PR 順序）。
+
+### 0.2 Quick Paths
+
+| 想看什麼 | 跳到 |
+|----------|------|
+| Audit 方法論 / hook 路徑分類 | §1, §3 |
+| 5 status 定義 + legend | §2 |
+| cc 矩陣 + 事件詳述 | §4.1 |
+| codex 矩陣（FutureOnly 主缺口）| §4.2 |
+| opencode 矩陣（plugin filter）| §4.3 |
+| 跨家比對 | §5 |
+| W5 燈號 bug 工作池（**canonical**）| §6 |
+| W6 probe 缺口工作池（**canonical** + 設計約束 + 推薦順序）| §7 |
+| Cross-cutting 共通 platform prerequisites | §8 |
+| 結束條件 + 後續 hand-off | §9, §10 |
+
+### 0.3 Symbol Legend（§4 矩陣 + §6/§7 統一使用）
+
+| 符號 | 意義 |
+|------|------|
+| `✓` | 路徑可達（hook fire 且 DeriveStatus 推 Status）|
+| `✗` | 路徑不可達 |
+| `⚠` | 部分可達 / 多源 / 條件性 |
+| `🐛` | 已知 bug（配對 W5-N）|
+| `🚨` | 嚴重缺口（catalog 已宣告但 CLI 不 fire / 物理不可達）|
+| `(FutureOnly)` | catalog FutureOnly 標識，CLI 0.124.0 不 fire |
+
 ---
 
 ## 1. Audit 範圍與目標
@@ -31,19 +65,20 @@ W1 是 fix-spec §4 PR-2 工作 — 在 W3 撤回 generic framework 之前，先
 
 - 🔧 **Catalog event**：`events.go` 列出且 Handling 非 `Unsupported` / `Ignored` 的事件
 - 🧬 **Subagent**：`SubagentStart` / `SubagentStop` 路徑（detail-only, Status=""）
-- 📡 **Proxy**：daemon 在不同情境主動合成的事件（cc statusLine wrap、opencode plugin runtime filter 等）
-- ⚠️ **Error**：`StopFailure` / Notification(error) / catalog miss reason 對應路徑
+- 🧩 **Filter / 合成路徑**：plugin / proxy 端基於 upstream signal 過濾或合成投遞 catalog event（opencode plugin runtime filter；不含 cc statusline-proxy 的 render-data channel）
+- ⚠️ **Error**：`StopFailure` / catalog miss known-but-unmappable reason（如 `notification_unknown_type`）對應路徑
 - 🔚 **SessionEnd / Clear**：對應 `status=clear` 的退場路徑
 - ❓ **Catalog miss**：`DeriveResult{Valid: false, Reason: ...}` 路徑（含 known-but-unmappable 與 truly-unknown）
 
 ### 1.2 目標
 
-每家 × 5 status 矩陣呈現四件事：
+每家 × 5 status 矩陣呈現三件事（**不**驗證狀態機 transition；只列來源與可達性）：
 
-1. **可達性**：當前 hook 形態下 status X 可由哪些 event 達到
-2. **bug**：實際運行中誤判 / 漏發 / 重發 / 競爭等 lights 不對的情境
-3. **probe 缺口**：hook coverage 物理上不可能達到 status X 的縫隙（候選 W6）
-4. **跨家不一致**：同一語意行為在三家 agent 表現差異
+1. **可達性**：post-W3 baseline 下 status X 可由哪些 catalog event / filter 路徑達到
+2. **bug**：實際運行中誤判 / 漏發 / 重發 / 競爭等 lights 不對的情境（標 W5-N 引用至 §6）
+3. **probe 缺口**：hook coverage 物理上不可能達到 status X 的縫隙（標 W6-N 引用至 §7）
+
+跨家不一致整理在 §5。**真正的 transition 驗證需要 runtime trace evidence**（屬 W4 observability + W6 ad-hoc probe ship 後的事），不在本 audit 結束條件內。
 
 ### 1.3 不在範圍
 
@@ -51,6 +86,7 @@ W1 是 fix-spec §4 PR-2 工作 — 在 W3 撤回 generic framework 之前，先
 - ❌ Inspector UI 視覺化 — 屬 W7
 - ❌ Phase 0-3.5 已 ship 的設計 — 不重新討論
 - ❌ Tab / SPA 端 status projection — 本 audit 只到 broadcast 入口，不追 SPA UI 渲染
+- ❌ Runtime trace transition 驗證 — 需 W4 + 實機觀察，本 audit 只列「理論可達性 + 文獻 + 已知 bug」
 
 ---
 
@@ -80,25 +116,30 @@ W1 是 fix-spec §4 PR-2 工作 — 在 W3 撤回 generic framework 之前，先
 
 ### 3.2 Subagent detail-only 路徑（Status=""）
 
-`SubagentStart` / `SubagentStop`：`Valid=true` 但不改 lights — daemon 應正確忽略 status 變動，但仍記錄 subagent ref。
+`SubagentStart` / `SubagentStop`：`Valid=true` 但 Status 為空 — **不改 lights**，但 handler `applyFrameEvent` (`internal/module/agent/handler.go:202` + `frame_ops.go:133-174`) **會持久化 frame.Subagents membership**。  
+邊界情境：
 
-### 3.3 Proxy 路徑
+- `frame_meta.Decision != "updated_frame"`（如 `frame_missing` / `subagent_id_missing`）→ handler `handler.go:236-242` 早 return，**skip broadcast**
+- 唯一 mutation 是 frame subagents list；`currentStatus` / `m.subagents` 不變動
 
-daemon 端基於其他訊號合成或過濾 hook 事件投遞自家 catalog：
+### 3.3 Filter / 合成路徑（plugin / proxy 端）
 
-- **cc**：⚠️ 無 lights status proxy。`statusline-proxy`（`cmd/pdx/statusline_proxy.go`）只 ferry render data（model/cost/context）至 `/api/agent/status` 廣播 `agent.status` WS event 給 SPA UI；**不**經 DeriveStatus、**不**合成 lights `hook` event
-- **opencode**：plugin 內 runtime filter（Decision 3：`session.status` filter `type==='idle'` → emit `Stop`；Decision 4 defer：busy/retry receive-but-no-op）
-- **codex**：✗ 無 proxy / filter
-- **將來**：W6 寫 ad-hoc ProbeIntent 時，daemon 主動觀察 process / TUI 並投遞合成 hook event 屬此分類
+agent-side plugin 或 proxy 端基於 upstream signal 過濾或合成投遞 catalog event。**這是 hook 入口的 _前置處理_，不是 daemon 端的 status 推斷**：
+
+- **opencode**：plugin 內 runtime filter（Decision 3：`session.status` filter `type==='idle'` → emit `Stop`；Decision 4 defer：busy/retry receive-but-no-op）— filter 結果仍進 daemon catalog event 路徑
+- **cc**：⚠️ **無** lights status filter。`statusline-proxy`（`cmd/pdx/statusline_proxy.go`）只 ferry render data（model/cost/context）至 `/api/agent/status`，廣播 `agent.status` WS event 給 SPA UI 顯示；**不**經 DeriveStatus、**不**進 lights hook 路徑
+- **codex**：✗ 無 plugin / proxy / filter
+
+> ⚠️ **W6 ProbeIntent 不屬此分類**。W6 走 spec §8.2 既定 `ProbeIntentProvider` 模型 — probe 產生 **probe signal**（如 process exit、TUI 樣式變化），經 per-agent detector 的 `on_signal` 映射為 status 更新；**不**偽裝為 hook event、**不**合成 `UserPromptSubmit` 之類 catalog event。詳 §7.1 設計約束。
 
 ### 3.4 Error 路徑
 
 - `StopFailure` → `status=error`
 - `Notification` 子型未知 → `DeriveResult{Valid: false, Reason: "notification_unknown_type"}`
 - `SessionStart` source=compact → `DeriveResult{Valid: false, Reason: "compact_ignored"}`
-- catalog miss truly-unknown → `DeriveResult{Valid: false}`（Reason 空）
+- catalog miss truly-unknown → `DeriveResult{Valid: false, Reason: ""}` → handler `handler.go:155-158` 正規化為 `"event_not_in_catalog"`
 
-Reason 非空 = handler 仍記 trace；Reason 空 = catalog miss 計數但不記 trace（per `internal/agent/status.go:20-26`）。
+**所有 invalid 結果均記 verify-kind trace**（`handler.go:159` `trace.Verify(req, "skipped", reason, nil)`）— Reason 空與否只決定 reason 字串；trace 都會寫，不存在「不記 trace」的子型別。Reason 非空 = 保留 provider 給的具體原因（如 `compact_ignored`）；Reason 空 = handler 補預設 `event_not_in_catalog`。
 
 ### 3.5 SessionEnd / Clear 路徑
 
@@ -115,124 +156,113 @@ Reason 非空 = handler 仍記 trace；Reason 空 = catalog miss 計數但不記
 
 ## 4. 三家 Agent 矩陣
 
-每家共用以下 schema：
+### 4.0 通用 Schema
 
-```
-| Status | 主路徑 (catalog event) | Subagent | Proxy | Error | SessionEnd | Catalog miss | bug 標記 | probe 候選 |
-```
+每家 §4.X 子節結構一致：
 
-每格內容：
+- **§4.X.1 Inventory & Source**：catalog files / DeriveStatus / installer / 特殊結構（FutureOnly / plugin filter）
+- **§4.X.2 Status Matrix**：5 status × 路徑分類（schema 三家統一）
+- **§4.X.3 Event Details**：installable 事件層詳述
+- **§4.X.4 W5 / W6 References**：列出 IDs，內容歸 §6 / §7 canonical 工作池（避免雙來源 drift）
 
-- `✓` = 主路徑 / `✗` = 不可達 / `⚠` = 部分可達（多源 / 條件）/ `🐛` = 已知 bug
-- `bug 標記` 欄寫 bug 描述（短）+ 引用 W5 工作池編號（W5-N）
-- `probe 候選` 欄寫缺口描述 + 引用 W6 工作池編號（W6-N）
+矩陣 schema（三家統一）：
+
+| Status | 主路徑 (catalog event) | Filter / Plugin 路徑 | Catalog miss reason | bug ref | probe ref |
+|--------|-----------------------|----------------------|---------------------|---------|-----------|
+
+每格符號統一見 §0.3 legend。`bug ref` / `probe ref` 只標 ID（W5-N / W6-N），詳情查 §6 / §7。
+
+> **判讀規則補充**：
+> - **EmitsStatus 多元 entry**（如 cc Notification → `[Waiting, Idle]`）：拆 polymorphic 子型獨立列入對應 status row
+> - **FutureOnly entry**：`✓ (FutureOnly)` 標記，並評估「目前運行 hook 是否實際發送」— 若 CLI 不發 = 缺口候選
+> - **Subagent / Proxy 路徑**：不入 status matrix（Status="" 不影響 lights；statusline-proxy 為獨立 channel）；說明歸 §4.X.1 / §4.X.3
+> - **catalog miss reason**：列 provider 給的字串（`compact_ignored` / `notification_unknown_type`），truly-unknown 統一寫 `event_not_in_catalog`
 
 ### 4.1 cc
 
-**Catalog 來源**：`internal/agent/cc/events.go`：29 entries（9 installable + 20 Unsupported / Ignored）  
-**DeriveStatus 邏輯**：`internal/agent/cc/status.go:9-93`  
-**Hook installer**：`internal/agent/cc/hooks.go:116-162`（mergeClaudeHooks 為 9 installable 事件寫入 `~/.claude/settings.json` "hooks" key，每筆對應 `pdx hook --agent cc <event>`）  
-**Proxy 機制**：`internal/agent/cc/statusline.go` + `cmd/pdx/statusline_proxy.go` — `statusline-proxy` 由 cc CLI 每 ~300ms 觸發，POST 至 daemon `/api/agent/status`（**只傳 render data**：model / context / cost；`internal/module/agent/handler.go:864-912`），**不**經 DeriveStatus、**不**廣播 lights status 事件（broadcast 用 `agent.status` event 給 SPA 顯示，跟 lights 用的 `hook` event 是兩條獨立 channel）
+#### 4.1.1 Inventory & Source
 
-#### 4.1.1 5 status 對齊矩陣
+| 項目 | 位置 / 內容 |
+|------|-------------|
+| Catalog 來源 | `internal/agent/cc/events.go`：29 entries（9 installable + 20 Unsupported / Ignored） |
+| DeriveStatus | `internal/agent/cc/status.go:9-93` |
+| Hook installer | `internal/agent/cc/hooks.go:116-162`（mergeClaudeHooks 寫入 `~/.claude/settings.json` "hooks" key；每筆 `pdx hook --agent cc <event>`） |
+| Filter / Plugin | ✗ 無 lights status filter |
+| 獨立 channel | `statusline-proxy`（`cmd/pdx/statusline_proxy.go` + `internal/module/agent/handler.go:864-912`）— 只 ferry render data (model/context/cost) 至 `agent.status` WS event，**不**進 lights 路徑 |
+| Operator probe | `cc/operator.go:14-34` `Interrupt` 用 `prober.CheckReadiness("cc",...)` 輪詢 idle |
 
-| Status | 主路徑 (catalog event) | Subagent | Proxy | Error | SessionEnd | Catalog miss | bug 標記 | probe 候選 |
-|--------|-----------------------|----------|-------|-------|-----------|--------------|----------|-----------|
-| `running` | ✓ `UserPromptSubmit` | ✗ | ✗ | ✗ | ✗ | — | 🐛 W5-1（permission 批准後不重發）| W6-1（permission 批准 → running 補位） |
-| `waiting` | ⚠ **dual**：`PermissionRequest` + `Notification(permission_prompt / elicitation_dialog)` | ✗ | ✗ | ✗ | ✗ | — | 🐛 W5-2（dual-path 重發 / 競爭）| — |
-| `idle` | ⚠ **multi**：`Stop` / `SessionStart`(non-compact) / `Notification(idle_prompt / auth_success)` | ✗ | ✗ | ✗ | ✗ | known-but-unmappable: `compact_ignored` | 🐛 W5-3（compact 結束無 idle 信號）| W6-2（compact 退場 idle 補位） |
-| `error` | ✓ `StopFailure` | ✗ | ✗ | ✓ 主源 | ✗ | known-but-unmappable: `notification_unknown_type` | — | — |
-| `clear` | ✓ `SessionEnd` | ✗ | ✗ | ✗ | ✓ 主源 | — | — | — |
+#### 4.1.2 Status Matrix
 
-判讀規則：
+| Status | 主路徑 (catalog event) | Filter / Plugin | Catalog miss reason | bug ref | probe ref |
+|--------|-----------------------|-----------------|---------------------|---------|-----------|
+| `running` | ✓ `UserPromptSubmit` | ✗ | — | 🐛 W5-1 | W6-1 |
+| `waiting` | ⚠ **dual**：`PermissionRequest` + `Notification(permission_prompt / elicitation_dialog)` | ✗ | — | 🐛 W5-2 (downgraded) | — |
+| `idle` | ⚠ **multi**：`Stop` / `SessionStart(non-compact)` / `Notification(idle_prompt / auth_success)` | ✗ | `compact_ignored` (known-but-unmappable) | 🐛 W5-3 | W6-2 |
+| `error` | ✓ `StopFailure` | ✗ | `notification_unknown_type` (known-but-unmappable) | — | — |
+| `clear` | ✓ `SessionEnd` | ✗ | — | — | — |
 
-- **dual / multi**：同 status 由多個 catalog event 達到 — 跨路徑可能造成重複廣播或競爭（trace.Emit 會記 `decision` + `reason`，但 lights 可能閃爍）
-- **Subagent / Proxy**：cc 的 `SubagentStart` / `SubagentStop` 為 detail-only（status=""），handler 早 return（`handler.go:235-258`）不影響 lights；`statusline-proxy` 是獨立 channel，不入此矩陣（不影響 lights）
-
-#### 4.1.2 事件層詳述（installable only）
+#### 4.1.3 Event Details（installable only）
 
 1. **`SessionStart`** → `idle`（non-compact）/ `compact_ignored`（compact source）
    - DeriveStatus `cc/status.go:14-22`：`raw["source"] == "compact"` 走 invalid + reason
-   - Handler `handler.go:154-173` 對 invalid + reason 走「skipped, reason」trace + 200 OK，**不改 lights**
-   - 配合 `SessionStart` 觸發時 handler `handler.go:301-305` 清 subagents
+   - Handler `handler.go:154-173` 對 invalid + reason 走 verify-trace（`skipped` decision）+ 200 OK，**不改 lights**
+   - `SessionStart` 觸發時 handler `handler.go:301-305` 清 subagents
 2. **`UserPromptSubmit`** → `running`
    - DeriveStatus `cc/status.go:24-28`：無條件 running
    - Error guard 白名單（`handler.go:181`）：error 狀態下可清回 running
-3. **`SubagentStart` / `SubagentStop`** → status=""
-   - DeriveStatus `cc/status.go:85-89`：valid + detail-only
-   - Handler `handler.go:235-258`：transient broadcast，不持久化、不改 lights
+3. **`SubagentStart` / `SubagentStop`** → status="" (detail-only)
+   - DeriveStatus `cc/status.go:85-89`：valid + detail
+   - Handler `handler.go:235-258`：**會持久化 frame.Subagents membership**（`frame_ops.go:133-174`）；status 不變動；`frame_missing` / `subagent_id_missing` 時 skip broadcast 早 return
 4. **`Stop`** → `idle`
    - DeriveStatus `cc/status.go:59-67`：infallible idle
-   - Error guard 白名單（`handler.go:188`）：error 狀態下可清回 idle（`req.AgentType != "opencode"`）
+   - Error guard 白名單（`handler.go:188`）：cc/codex error 狀態下可清回 idle（不適用 opencode）
 5. **`StopFailure`** → `error`
    - DeriveStatus `cc/status.go:69-77`：infallible error
-   - error 後續事件被 error guard 阻擋，需 `UserPromptSubmit` / `SessionStart` / `Stop` / `SessionEnd` 之一才能離開
-6. **`Notification`** → `waiting`（permission_prompt / elicitation_dialog）/ `idle`（idle_prompt / auth_success）/ `notification_unknown_type`（其他）
+   - error 後續事件被 error guard 阻擋，需 `UserPromptSubmit` / `SessionStart` / `Stop`(cc/codex) / `SessionEnd` 之一才能離開
+6. **`Notification`** → `waiting` (permission_prompt / elicitation_dialog) / `idle` (idle_prompt / auth_success) / `notification_unknown_type`（其他）
    - DeriveStatus `cc/status.go:30-48` 4 個已知子型 + reason fallback
 7. **`PermissionRequest`** → `waiting`
    - DeriveStatus `cc/status.go:50-57`：無條件 waiting
-   - **與 `Notification(permission_prompt)` 重複**：兩者語意均為「等使用者批准權限」 → 同個使用者操作可能依 cc CLI 版本同時 / 先後送兩條
+   - **與 `Notification(permission_prompt)` 重複**：catalog 同時宣告兩條；runtime 是否兩條都送由 cc CLI 版本決定（W5-2，downgraded — needs trace evidence）
 8. **`SessionEnd`** → `clear`
    - DeriveStatus `cc/status.go:79-83`：infallible clear
    - Handler `handler.go:278-285`：刪 currentStatus + subagents
-   - error guard 白名單（`handler.go:186`）：必過
+   - Error guard 白名單（`handler.go:186`）：必過
 
-#### 4.1.3 Operator 內部 probe 使用
+#### 4.1.4 W5 / W6 References
 
-`cc/operator.go:14-34` `Interrupt`：`prober.CheckReadiness("cc", ...)` 輪詢 idle 確認。  
-此路徑與 lights 不直接相關（內部等待機制），但跟 W6 readiness 整合屬同類觀察手段。
-
-#### 4.1.4 cc 已知 bug 候選（含原始位置）
-
-- **W5-1**：cc Notification(permission_prompt) → waiting → 使用者於 cc TUI 點批准 → cc 繼續處理 → **無 hook fire** → lights 仍顯 waiting 直到 `Stop`（idle）；中間 spinner 期應為 running 但缺乏觸發點
-- **W5-2**：cc 同時 fire `PermissionRequest` 與 `Notification(permission_prompt)`（2.x 觀察）→ handler 連續廣播兩次 waiting → SPA lights 短暫雙重事件；trace 會看到 `decision="broadcasted"` 兩筆連發
-- **W5-3**：cc SessionStart source=compact 走 `compact_ignored` 不改 lights → 但 compact 結束後沒有 PostCompact handler（events.go 中 `PostCompact` 是 `HookHandlingIgnored` non-installable）→ 若 compact 在 running 狀態觸發，**理論上**可能未在 compact 期間正確顯示處理中（需運行驗證）
-
-#### 4.1.5 cc probe 缺口候選
-
-- **W6-1**（與 W5-1 配對）：permission 批准後無 hook，需 ad-hoc probe 觀察 cc TUI spinner 出現/消失，補位 waiting → running 的轉換
-- **W6-2**（與 W5-3 配對）：compact 結束無 hook，需 ad-hoc probe 觀察 compact UI 退場後 cc 是否回到 idle 或繼續 running
+- **W5**: W5-1, W5-2, W5-3 — 詳 §6
+- **W6**: W6-1, W6-2 — 詳 §7
 
 ### 4.2 codex
 
-**Catalog 來源**：`internal/agent/codex/events.go`：11 entries（9 installable + 2 Unsupported = PreToolUse / PostToolUse）  
-**DeriveStatus 邏輯**：`internal/agent/codex/status.go:9-76`（mirror cc Notification 邏輯 + Stop/SubagentX detail-only）  
-**Hook installer**：`internal/agent/codex/hooks.go:108-128, 209-298`（installCodexHooks 寫入 `~/.codex/hooks.json` matcher-group 結構 + `~/.codex/config.toml` 啟用 `features.codex_hooks=true`，每筆 `pdx hook --agent codex <event>`）  
-**Proxy 機制**：⚠️ **無**（codex 沒有 statusline-like proxy；hooks 是唯一 status 入口）
+#### 4.2.1 Inventory & Source
 
-#### 4.2.1 FutureOnly 重要性
+| 項目 | 位置 / 內容 |
+|------|-------------|
+| Catalog 來源 | `internal/agent/codex/events.go`：11 entries（9 installable + 2 Unsupported = PreToolUse / PostToolUse） |
+| DeriveStatus | `internal/agent/codex/status.go:9-76`（mirror cc Notification + Stop/SubagentX detail-only） |
+| Hook installer | `internal/agent/codex/hooks.go:108-128, 209-298`（installCodexHooks 寫入 `~/.codex/hooks.json` matcher-group + `~/.codex/config.toml` 啟用 `features.codex_hooks=true`） |
+| Filter / Plugin | ✗ 無 plugin / proxy / filter；hooks 是唯一 status 入口 |
+| Operator probe | ✗ 無（cf. cc 有；W6-3 / W6-4 完成可順帶 readiness 整合）|
 
-codex catalog 9 installable 中 **5 個為 FutureOnly**（`SubagentStart`、`SubagentStop`、`StopFailure`、`Notification`、`SessionEnd`），意指：catalog 已宣告、installer 已寫入 `hooks.json`、DeriveStatus 已能解析，**但目前 codex CLI 0.124.0 不主動 fire 這些事件**（cf. `internal/agent/codex/events.go:11-15` 註釋 "may not be emitted by the current codex CLI in every path"）。
+**FutureOnly 結構特性**：codex 9 installable 中 **5 個為 FutureOnly**（`SubagentStart` / `SubagentStop` / `StopFailure` / `Notification` / `SessionEnd`） — catalog 已宣告、installer 已寫入、DeriveStatus 已能解析，**但 codex CLI 0.124.0 不主動 fire 這些事件**（cf. `internal/agent/codex/events.go:11-15` 註釋 "may not be emitted by the current codex CLI in every path"）。
 
-| 事件 | Active / FutureOnly | 實際 fire 嗎 |
-|------|---------------------|---------------|
-| `SessionStart` | Active | ✓ |
-| `UserPromptSubmit` | Active | ✓ |
-| `SubagentStart` | FutureOnly | ✗ |
-| `SubagentStop` | FutureOnly | ✗ |
-| `Stop` | Active | ✓ |
-| `StopFailure` | FutureOnly | ✗ |
-| `Notification` | FutureOnly | ✗ |
-| `PermissionRequest` | Active | ✓ |
-| `SessionEnd` | FutureOnly | ✗ |
+| Active (4) | FutureOnly (5) — 0.124.0 不發 |
+|------------|-------------------------------|
+| `SessionStart`、`UserPromptSubmit`、`Stop`、`PermissionRequest` | `SubagentStart`、`SubagentStop`、`StopFailure`、`Notification`、`SessionEnd` |
 
-**結論**：今日 codex 實質只 fire 4 條 hook（SessionStart / UserPromptSubmit / Stop / PermissionRequest）。
+#### 4.2.2 Status Matrix
 
-#### 4.2.2 5 status 對齊矩陣
+| Status | 主路徑 (catalog event) | Filter / Plugin | Catalog miss reason | bug ref | probe ref |
+|--------|-----------------------|-----------------|---------------------|---------|-----------|
+| `running` | ✓ `UserPromptSubmit` | ✗ | — | — | W6-6（PermissionRequest reply 缺口）|
+| `waiting` | ✓ `PermissionRequest` | ✗ | — | — | W6-6 |
+| `idle` | ⚠ multi：`Stop` / `SessionStart`(無 compact 子型) | ✗ | `notification_unknown_type` (FutureOnly 觸發機率低) | — | — |
+| `error` | 🚨 `StopFailure` (FutureOnly = ✗ 0.124.0 不發) | ✗ | — | 🐛 W5-4 | W6-3 |
+| `clear` | 🚨 `SessionEnd` (FutureOnly = ✗ 0.124.0 不發) | ✗ | — | 🐛 W5-5 | W6-4 |
 
-| Status | 主路徑 (catalog event) | Subagent | Proxy | Error | SessionEnd | Catalog miss | bug 標記 | probe 候選 |
-|--------|-----------------------|----------|-------|-------|-----------|--------------|----------|-----------|
-| `running` | ✓ `UserPromptSubmit` | ✗ (FutureOnly) | ✗ (無 proxy) | ✗ | ✗ | — | — | — |
-| `waiting` | ✓ `PermissionRequest` | ✗ | ✗ | ✗ | ✗ | — | — | — |
-| `idle` | ⚠ multi：`Stop` / `SessionStart`(無 compact 子型) | ✗ (FutureOnly) | ✗ | ✗ | ✗ | known-but-unmappable: `notification_unknown_type`（FutureOnly 觸發機率低）| — | — |
-| `error` | 🚨 `StopFailure` (FutureOnly = ✗ 今日不發) | ✗ | ✗ | ✗ 主源缺失 | ✗ | — | 🐛 W5-4（error 物理不可達）| W6-3（error 探測 — 主缺口）|
-| `clear` | 🚨 `SessionEnd` (FutureOnly = ✗ 今日不發) | ✗ | ✗ | ✗ | ✗ 主源缺失 | — | 🐛 W5-5（clear 物理不可達）| W6-4（session 結束探測 — 主缺口）|
-
-判讀規則：
-
-- **🚨 主源缺失**：catalog 宣告但 CLI 不 fire = lights 物理上達不到該 status；今日唯一退場路徑為 daemon 端外部清理（process 觀察 / WS 斷線）
-
-#### 4.2.3 事件層詳述
+#### 4.2.3 Event Details
 
 1. **`SessionStart`** → `idle`
    - DeriveStatus `codex/status.go:14-15`：infallible idle（**無 cc 的 compact subtype 處理 — codex 不發 compact**）
@@ -241,44 +271,44 @@ codex catalog 9 installable 中 **5 個為 FutureOnly**（`SubagentStart`、`Sub
    - DeriveStatus `codex/status.go:17-18`：infallible running
 3. **`Stop`** → `idle`
    - DeriveStatus `codex/status.go:51-52`：infallible idle
-   - Error guard 白名單（`handler.go:188`）：error 狀態下可清回 idle（`req.AgentType != "opencode"` → codex 適用）
+   - Error guard 白名單（`handler.go:188`）：codex 適用 — `req.AgentType != "opencode"` 走 idle 退場路徑
 4. **`PermissionRequest`** → `waiting`
    - DeriveStatus `codex/status.go:42-49`：infallible waiting
+   - ⚠️ catalog 無 `permission.replied` 等對應 reply event；user 答覆後無 hook → W6-6 probe 補位
 5. **`SubagentStart` / `SubagentStop`** (FutureOnly)
    - DeriveStatus `codex/status.go:67-72`：detail-only（與 cc 對齊）
-   - 今日不 fire，無實際路徑
+   - 今日不 fire
 6. **`StopFailure`** (FutureOnly)
    - DeriveStatus `codex/status.go:54-62`：infallible error
-   - 今日不 fire；error status 無觸發點
+   - 今日不 fire → W5-4 / W6-3
 7. **`Notification`** (FutureOnly)
-   - DeriveStatus `codex/status.go:20-40`：4 子型同 cc + reason fallback
+   - DeriveStatus `codex/status.go:20-40`：4 子型同 cc
    - 今日不 fire
 8. **`SessionEnd`** (FutureOnly)
    - DeriveStatus `codex/status.go:64-65`：infallible clear
-   - 今日不 fire；clear status 無觸發點
+   - 今日不 fire → W5-5 / W6-4
 
-#### 4.2.4 codex 已知 bug 候選
+#### 4.2.4 W5 / W6 References
 
-- **W5-4**：codex 任何 error 情境（API 失敗、CLI crash、tool 執行 error）目前**完全沒有 lights error 信號** — `StopFailure` FutureOnly 不 fire。使用者只能從 codex TUI 看到 error，lights 永遠停在 running 或 waiting
-- **W5-5**：codex session 結束（使用者關閉 CLI、或 sandbox 終止）**完全沒有 lights clear 信號** — `SessionEnd` FutureOnly 不 fire。lights 永遠停在最後一個 active status
-
-#### 4.2.5 codex probe 缺口候選
-
-- **W6-3**（與 W5-4 配對）：error 探測 — codex CLI exit code / stderr 樣式偵測 / TUI error 對話框偵測，補位 error status；**主缺口，P1 優先**
-- **W6-4**（與 W5-5 配對）：session 結束探測 — process 結束 / tmux pane 退場 / TUI 關閉偵測，補位 clear status；**主缺口，P1 優先**
-- 注意：codex `Interrupt` / `Exit` 操作目前無對應 readiness check 路徑（cf. cc operator 用 `prober.CheckReadiness("cc", ...)`），這是另一缺口（W6-3 / W6-4 修完可順帶 readiness 整合）
+- **W5**: W5-4, W5-5 — 詳 §6
+- **W6**: W6-3, W6-4, W6-6 — 詳 §7
 
 ### 4.3 opencode
 
-**Catalog 來源**：`internal/agent/opencode/events.go`：65 entries（8 installable + 20 Unsupported + 37 Ignored；只 8 installable 在 audit 範圍）  
-**DeriveStatus 邏輯**：`internal/agent/opencode/status.go:9-31`  
-**Hook installer**：`internal/agent/opencode/hooks.go:33-39, 152-171`（writeManagedPlugin 寫入 `~/.config/opencode/plugins/pdx-agent-hooks.js`，**單檔 all-or-nothing managed template**，`renderManagedPlugin` byte-exact 比對驗證）  
-**Plugin template**：`internal/agent/opencode/plugin_template.go:24-132`（JS plugin 訂閱 opencode Bus event 與 strong hook 後，用 `Bun.spawn` 呼叫 `pdx hook --agent opencode <Name>` 投遞）  
-**Proxy 機制**：plugin 內 runtime filter（Decision 3 — `session.status` filter `type === 'idle'`，其他 type 受 Decision 4 defer 為 receive-but-no-op）
+#### 4.3.1 Inventory & Source
 
-⚠️ **結構差異**：opencode catalog 不含 `Notification`（cc / codex 都有）。所有 polymorphic waiting 子型由 plugin 端兩個 Bus event 映射為同一個 `PermissionRequest`（permission.asked → request_type=permission；question.asked → request_type=question）。`idle_prompt` / `auth_success` 路徑不存在 — opencode `idle` 僅可由 `Stop` / `SessionStart` 達到。
+| 項目 | 位置 / 內容 |
+|------|-------------|
+| Catalog 來源 | `internal/agent/opencode/events.go`：65 entries（8 installable + 20 Unsupported + 37 Ignored；只 8 installable 在 audit 範圍） |
+| DeriveStatus | `internal/agent/opencode/status.go:9-31` |
+| Hook installer | `internal/agent/opencode/hooks.go:33-39, 152-171`（writeManagedPlugin 寫入 `~/.config/opencode/plugins/pdx-agent-hooks.js`，**單檔 all-or-nothing managed template**） |
+| Plugin template | `internal/agent/opencode/plugin_template.go:24-132`（JS plugin 訂閱 Bus event + strong hook，用 `Bun.spawn` 呼叫 `pdx hook --agent opencode <Name>`） |
+| Filter / Plugin | ✓ plugin 內 runtime filter（Decision 3：`session.status` filter `type==='idle'`；Decision 4 defer：busy/retry receive-but-no-op） |
+| Operator probe | ✗ 無 |
 
-#### 4.3.1 Plugin 端事件映射表（plugin_template.go:48-129）
+**結構差異**：opencode catalog **不含 `Notification`**（cc / codex 都有）。所有 polymorphic waiting 子型由 plugin 端兩個 Bus event 映射為同一個 `PermissionRequest`（permission.asked → request_type=permission；question.asked → request_type=question）。`idle_prompt` / `auth_success` 路徑不存在。
+
+**Plugin 端事件映射表**（`plugin_template.go:48-129`）：
 
 | upstream event | type filter | plugin emit | DeriveStatus → status |
 |----------------|-------------|-------------|------------------------|
@@ -289,28 +319,31 @@ codex catalog 9 installable 中 **5 個為 FutureOnly**（`SubagentStart`、`Sub
 | `session.deleted` | — | `SessionEnd` | `clear` |
 | `permission.asked` | — | `PermissionRequest`(request_type=permission) | `waiting` |
 | `question.asked` | — | `PermissionRequest`(request_type=question) | `waiting` |
+| `permission.replied` | — | **Unsupported（events.go non-installable）— plugin 不 consume** | ✗ |
+| `question.replied` | — | **Unsupported — plugin 不 consume** | ✗ |
+| `question.rejected` | — | **Unsupported — plugin 不 consume** | ✗ |
 | `chat.message`(strong hook) | — | `UserPromptSubmit` + clear `suppress` Set for sessionID | `running` |
 | `tool.execute.before` | tool==='task' | `SubagentStart` | "" (detail-only) |
 | `tool.execute.after` | tool==='task' | `SubagentStop` | "" (detail-only) |
 
-**suppressIdleForSession 機制**（plugin_template.go:28, 68, 76-79, 92）：
+**suppressIdleForSession 機制**（`plugin_template.go:28, 68, 76-79, 92`）：
 
 - `session.error` fire 時把 sessionID 加入 Set
-- 下一個 `session.status` idle 進來若 sessionID 在 Set，**skip emit Stop**（保留 error 狀態）
+- 下一個 `session.status` idle 進來若 sessionID 在 Set → **skip emit Stop**（保留 error 狀態）
 - `chat.message`（新 prompt cycle）開始時 delete sessionID（重設 — 否則下個正常 idle 會被 stale entry 吃掉）
-- 注意：JS plugin 的 in-process Set；plugin 重載 / opencode 重啟 → Set 清空 → race 中可能漏 suppress
+- ⚠️ JS plugin in-process Set；plugin 重載 / opencode 重啟 → Set 清空 → race 中可能漏 suppress
 
-#### 4.3.2 5 status 對齊矩陣
+#### 4.3.2 Status Matrix
 
-| Status | 主路徑 (catalog event) | Subagent | Proxy / Filter | Error | SessionEnd | Catalog miss | bug 標記 | probe 候選 |
-|--------|-----------------------|----------|----------------|-------|-----------|--------------|----------|-----------|
-| `running` | ✓ `UserPromptSubmit` | ✗ | ⚠ Decision 4 defer：busy/retry 變體無映射 | ✗ | ✗ | — | 🐛 W5-6（busy/retry 期間狀態停滯）| W6-5（busy/retry 路徑映射；可能僅 events.go 補 entry，無需 probe） |
-| `waiting` | ✓ `PermissionRequest`(request_type=permission OR question) | ✗ | ✓ plugin filter（permission.asked / question.asked → 同 catalog event） | ✗ | ✗ | — | — | — |
-| `idle` | ⚠ multi：`Stop`(via session.status filter) / `SessionStart` | ✗ | ✓ plugin filter（session.status type==='idle' → Stop；suppressIdle 過濾）| ✗ | ✗ | — | 🐛 W5-7（suppressIdle race：plugin 重啟後可能漏 suppress）| W6-6（plugin 重啟後 session 狀態 reconcile） |
-| `error` | ✓ `StopFailure` | ✗ | ✓ plugin filter（session.error → StopFailure + suppress armed）| ✓ 主源 | ✗ | — | 🐛 W5-8（error guard 對 opencode 不允許 Stop 清 — 若 plugin suppress 失效則卡死）| W6-6 同上 |
-| `clear` | ✓ `SessionEnd` | ✗ | ✓ plugin filter（session.deleted）| ✗ | ✓ 主源 | — | — | — |
+| Status | 主路徑 (catalog event) | Filter / Plugin | Catalog miss reason | bug ref | probe ref |
+|--------|-----------------------|-----------------|---------------------|---------|-----------|
+| `running` | ✓ `UserPromptSubmit` | ⚠ Decision 4 defer：busy/retry 變體無映射 | — | 🐛 W5-6, 🐛 W5-8 | W6-5 |
+| `waiting` | ✓ `PermissionRequest`(request_type=permission OR question) | ✓ plugin filter（permission.asked / question.asked → 同 catalog event） | — | — | — |
+| `idle` | ⚠ multi：`Stop`(via session.status filter) / `SessionStart` | ✓ plugin filter（session.status type==='idle' → Stop；suppressIdle 過濾）| — | 🐛 W5-7 | — |
+| `error` | ✓ `StopFailure` | ✓ plugin filter（session.error → StopFailure + suppress armed）| — | 🐛 W5-7 | — |
+| `clear` | ✓ `SessionEnd` | ✓ plugin filter（session.deleted）| — | — | — |
 
-#### 4.3.3 事件層詳述（installable only）
+#### 4.3.3 Event Details（installable only）
 
 1. **`SessionStart`** → `idle`
    - DeriveStatus `opencode/status.go:14-15`：infallible idle
@@ -318,12 +351,14 @@ codex catalog 9 installable 中 **5 個為 FutureOnly**（`SubagentStart`、`Sub
 2. **`UserPromptSubmit`** → `running`
    - DeriveStatus `opencode/status.go:16-17`：infallible running，附 model
    - plugin 來源：chat.message strong hook（同時 clear suppressIdleForSession entry）
-3. **`SubagentStart` / `SubagentStop`** → status=""
+3. **`SubagentStart` / `SubagentStop`** → status="" (detail-only)
    - DeriveStatus `opencode/status.go:18-19`：detail-only with `agent_id` / `agent_type` / `description` / `prompt` / `title` / `output`
    - plugin 來源：tool.execute.before/after with input.tool==='task'
+   - Handler `handler.go:235-258`：會持久化 frame.Subagents；`frame_missing` / `subagent_id_missing` skip broadcast
 4. **`PermissionRequest`** → `waiting`
    - DeriveStatus `opencode/status.go:20-21`：infallible waiting，含 request_type 區分 permission / question
    - plugin 來源：permission.asked OR question.asked
+   - ⚠️ user reply 後 upstream `permission.replied` / `question.replied` 不被 plugin consume → **無 waiting 退場 hook** → W5-8 plugin 補 mapping
 5. **`Stop`** → `idle`
    - DeriveStatus `opencode/status.go:22-23`：infallible idle
    - plugin 來源：session.status with type==='idle' AND sessionID NOT in suppressIdleForSession
@@ -335,16 +370,10 @@ codex catalog 9 installable 中 **5 個為 FutureOnly**（`SubagentStart`、`Sub
    - DeriveStatus `opencode/status.go:26-27`：infallible clear
    - plugin 來源：session.deleted
 
-#### 4.3.4 opencode 已知 bug 候選
+#### 4.3.4 W5 / W6 References
 
-- **W5-6**：opencode session.status type 為 'busy' / 'retry' 時 plugin receive-but-no-op（Decision 4 defer），lights 不更新。若 running → 內部 retry → 結束 idle，期間 lights 顯示停滯（沒有「正在重試」中介狀態）
-- **W5-7**：opencode plugin 重啟後 `suppressIdleForSession` Set 清空 → 若 session.error 後 plugin 重啟，下個 session.status idle 不被 suppress → fire Stop → 但 daemon 端 error guard 阻擋（handler.go:187-189 對 opencode Stop 不放行）→ trace 顯示 `error_guard_blocked`，但**狀態仍是 error 卡住**直到下個 UserPromptSubmit / SessionStart / SessionEnd
-- **W5-8**：在 W5-7 情境下，若使用者**沒有**送新 prompt 也沒結束 session，lights 永久停在 error；唯一退場路徑是 SessionEnd（使用者主動關 session）
-
-#### 4.3.5 opencode probe 缺口候選
-
-- **W6-5**（與 W5-6 配對）：busy/retry 變體映射 — **可能不需 probe**，純 catalog/plugin 補 mapping 即可（issue #661 已追蹤）；若決議走 probe（觀察 TUI spinner / 進度條），優先序 P2
-- **W6-6**（與 W5-7 / W5-8 配對）：plugin 重啟後 session 狀態 reconcile — daemon 端在 plugin reconnect 時對所有 active session 查詢 opencode 內部狀態並補 sync；可能不純 probe（更像 RPC）；優先序 P2
+- **W5**: W5-6, W5-7, W5-8 — 詳 §6
+- **W6**: W6-5 — 詳 §7
 
 ---
 
@@ -377,42 +406,49 @@ codex catalog 9 installable 中 **5 個為 FutureOnly**（`SubagentStart`、`Sub
 
 **cc**：
 
-- 雙路徑 waiting（W5-2）— catalog 同時宣告 `PermissionRequest` 與 `Notification(permission_prompt)`，runtime 由 cc CLI 決定先後 / 是否兩條都送
-- compact 退場無 hook（W5-3）— `SessionStart(compact)` 走 `compact_ignored` 不改 lights，但 compact 結束沒 PostCompact 處理（events.go 中 `PostCompact` 為 `HookHandlingIgnored`），也沒 SessionStart non-compact
+- 雙路徑 waiting（W5-2，**已降級至「需 trace evidence」**，per R2 防守 D4）— catalog 同時宣告 `PermissionRequest` 與 `Notification(permission_prompt)`；無實機 trace 證明 dual fire 之前僅列為觀察項
+- compact 退場無 hook（W5-3）— `SessionStart(compact)` 走 `compact_ignored` 不改 lights，但 compact 結束沒 PostCompact handler（`PostCompact` 為 `HookHandlingIgnored` non-installable）
 
 **codex**：
 
-- 5/9 installable 為 FutureOnly（SubagentStart/Stop / StopFailure / Notification / SessionEnd）— **error 與 clear 兩 status 物理上不可達**（W5-4 / W5-5）；今日 codex CLI 0.124.0 只 fire 4 事件
-- 無 Notification → polymorphic waiting / 多源 idle 路徑全缺（FutureOnly 標識的待補項）
+- 5/9 installable 為 FutureOnly（SubagentStart/Stop / StopFailure / Notification / SessionEnd）— **error 與 clear 兩 status 物理上不可達**（W5-4 / W5-5）；CLI 0.124.0 只 fire 4 事件
+- 無 Notification → polymorphic waiting / 多源 idle 路徑全缺；同時 `PermissionRequest` 後 user reply 也無 hook（W6-6 補位）
 
 **opencode**：
 
-- Plugin 端 in-process state（`suppressIdleForSession` Set）有 race 風險（W5-7）— plugin 重啟 / opencode 重啟即遺失
-- error guard 對 opencode Stop 特殊處理（`handler.go:187-189`）— 跟 plugin suppress 互鎖；plugin suppress 失效時 daemon 端阻擋會卡死（W5-8）
+- Plugin 端 in-process state（`suppressIdleForSession` Set）有 race 風險 — plugin 重啟 / opencode 重啟即遺失（合併入 W5-7）
+- error guard 對 opencode Stop 特殊處理（`handler.go:187-189`）— 跟 plugin suppress 互鎖；plugin suppress 失效時 daemon 端阻擋會卡死（合併入 W5-7）
 - Decision 4 defer：busy/retry 變體 receive-but-no-op（W5-6）— 已知 follow-up issue #661
+- upstream `permission.replied` / `question.replied` / `question.rejected` 全 Unsupported，plugin 不 consume → user reply waiting → running 缺 plugin mapping（W5-8）
 
 ### 5.4 跨家觀察優先序
 
 依 fix-spec §0 「probe 不是 always-on，是缺口導向」原則，三家 probe 缺口輕重排序：
 
-1. **codex error / clear（W6-3 / W6-4）** — P1 主缺口，今日完全不可達
-2. **opencode error 卡死 / busy retry（W6-5 / W6-6）** — P2 邊緣但實機可重現
-3. **cc permission/compact 退場（W6-1 / W6-2）** — P2 體感優化
+1. **codex error / clear（W6-3 / W6-4）** — **P1** 主缺口，今日完全不可達
+2. **codex PermissionRequest reply（W6-6）** — P2，常見路徑但有 plugin 補 mapping 替代方案
+3. **cc permission / compact 退場（W6-1 / W6-2）** — P2 體感優化（W3 撤 always-on probe 後 W6-1 條件升 P1，per R1 F6）
+4. **opencode busy/retry（W6-5）** — P3，可能 plugin 補 mapping 替代
+
+> opencode plugin reconcile（原 W6-6）因「更像 RPC 不是 probe」（per R2 防守 D3，spec §1 邊界）已**移出 W6 工作池**，整併入 W5-7 plugin lifecycle reconciliation bug。
 
 ---
 
-## 6. W5 燈號 Bug 工作池
+## 6. W5 燈號 Bug 工作池（**canonical**）
 
-| ID | agent | 影響 status | 觸發條件 | 期望 | 實際 | 修復複雜度 (S/M/L) | 配對 W6 |
-|----|-------|-------------|---------|------|------|--------------------|---------|
-| **W5-1** | cc | running | Notification(permission_prompt) → 使用者於 cc TUI 點批准 → cc 繼續處理（無 hook fire 直到 Stop）| 批准後 lights 顯示 running | lights 仍顯 waiting 直到 Stop | L（依賴 probe）| W6-1 |
-| **W5-2** | cc | waiting | cc 同時 fire `PermissionRequest` 與 `Notification(permission_prompt)` 兩條 hook | 單次 lights 變化 | trace 看到兩筆 broadcast，SPA 雙重事件 | M（handler dedup OR catalog 取捨主從） | — |
-| **W5-3** | cc | idle | SessionStart source=compact 觸發 compact_ignored，compact 結束無 PostCompact handler | compact 結束後 lights 適切轉換到 idle / running | lights 停在 compact 前的最後狀態 | L（依賴 probe + 可能改 catalog 把 PostCompact / PreCompact 從 ignored 移為 handled） | W6-2 |
-| **W5-4** | codex | error | codex CLI 任何 error（API failure / tool error / crash）| lights 顯紅 | **永不顯紅** — `StopFailure` FutureOnly = 0.124.0 不 fire | L（依賴 probe；catalog 已備但 CLI 不發） | W6-3 |
-| **W5-5** | codex | clear | codex session 結束（CLI close / sandbox 終止）| lights 清空 | **永不清空** — `SessionEnd` FutureOnly = 0.124.0 不 fire | L（依賴 probe；catalog 已備但 CLI 不發） | W6-4 |
-| **W5-6** | opencode | running（中介）| session.status type='busy' 或 'retry' | lights 反映重試 / 中介狀態（或保持 running） | plugin receive-but-no-op，狀態停滯 | S（plugin 加 mapping；可能 events.go 補 entry 即可，無需 probe；issue #661 已追蹤）| W6-5 |
-| **W5-7** | opencode | error / idle 互鎖 | session.error 後 plugin 重啟 → suppressIdleForSession Set 丟失 → 下個 session.status idle 不被 suppress → fire Stop | 保持 error 狀態（待 user 動作）| daemon error guard `handler.go:187-188` 阻擋 Stop（trace=`error_guard_blocked`），但若使用者不送新 prompt，error **卡死直到 SessionEnd** | M（plugin 補狀態 reconciliation；OR 改 daemon 端 error guard 對 opencode 加退場路徑）| W6-6 |
-| **W5-8** | opencode | error 卡死 | W5-7 後 / plugin restart 後 / 使用者不送新 prompt 也不結束 session | 提供退場路徑 | 永久卡 error；唯一退場是手動 SessionEnd | M（同 W5-7 修復路徑） | W6-6 |
+> 本表為 W5 工作池 single source of truth。§4 矩陣 `bug ref` 欄位只列 ID，詳情查此處。  
+> Status / PR / decision 不在本表維護 — ship / 廢棄 / 拆分由對應 issue 與 PR 追蹤；本表只記**發現時的 bug 描述與修復方向**。
+
+| ID | agent | 影響 status | 觸發條件 | 期望（post-W3 baseline） | 實際（post-W3 baseline） | 修復複雜度 | 配對 |
+|----|-------|-------------|---------|------|------|------------|------|
+| **W5-1** | cc | running | `Notification(permission_prompt)` 或 `PermissionRequest` → user 於 cc TUI 批准 → cc 繼續處理（無 hook fire 直到 Stop）| 批准後 lights 顯示 running | lights 仍顯 waiting 直到 Stop | L（依賴 W6-1 probe）| W6-1 |
+| **W5-2** | cc | waiting | cc 是否同時 fire `PermissionRequest` 與 `Notification(permission_prompt)` 兩條 hook（catalog 已宣告 dual） | （unknown — needs trace evidence） | （unknown — needs trace evidence） | **降級為觀察項**（per R2 防守 D4）：先以 W4 dev log / TraceStore 收 trace；確認 dual fire 後才升 bug；修復限定 plumbing 層 idempotency（不改 catalog 主從關係，per spec §2.4.3/.4） | — |
+| **W5-3** | cc | idle | `SessionStart(compact)` 走 `compact_ignored`；compact 結束無 PostCompact handler（events.go `PostCompact` = `HookHandlingIgnored`）| compact 結束後 lights 適切轉換到 idle / running | lights 停在 compact 前的最後狀態 | L（依賴 W6-2 probe + 評估改 catalog 把 PostCompact 從 ignored 移為 handled）| W6-2 |
+| **W5-4** | codex | error | codex CLI 任何 error（API failure / tool error / crash）| lights 顯紅 | **永不顯紅** — `StopFailure` FutureOnly，CLI 0.124.0 不 fire | L（依賴 W6-3 probe；catalog 已備但 CLI 不發；W6-3 first PR 範圍**僅 process-exit + crash detection**，TUI / stderr API/tool error 屬同一 P1 缺口但**拆 follow-up PR**，per R1 F4 收斂）| W6-3 |
+| **W5-5** | codex | clear | codex session 結束（CLI close / sandbox 終止）| lights 清空 | **永不清空** — `SessionEnd` FutureOnly，CLI 0.124.0 不 fire | L（依賴 W6-4 probe；catalog 已備但 CLI 不發）| W6-4 |
+| **W5-6** | opencode | running（中介）| session.status type='busy' 或 'retry' | lights 反映重試 / 中介狀態（或保持 running） | plugin receive-but-no-op，狀態停滯 | S（plugin 加 mapping；可能 events.go 補 entry 即可；issue #661 已追蹤）| W6-5（替代方案）|
+| **W5-7** | opencode | error / idle / lifecycle 多重交織（merged from R1 W5-7 + R1 W5-8 + R2 防守 D3 W6-6）| (a) session.error 後 plugin 重啟 → `suppressIdleForSession` Set 丟失 → 下個 session.status idle 不被 suppress → fire Stop → daemon error guard `handler.go:187-188` 阻擋；(b) 使用者不送新 prompt 也不結束 session 時 lights 永久卡 error；(c) plugin reconnect 時 daemon 缺 reconciliation 路徑 | plugin lifecycle 過渡期 lights 維持一致；user 有可預期的退場路徑 | (a) trace `error_guard_blocked`；(b) 唯一退場是手動 SessionEnd；(c) reconnect 後 daemon 與 plugin in-process state 不同步 | M-L（複合：plugin 補狀態 reconciliation + daemon 端可選擇放寬 opencode error guard 或加 reconnect RPC；建議拆 sub-PR 處理）| — (RPC 性質，per R2 防守 D3 不放 W6) |
+| **W5-8** | opencode | running | user 於 opencode TUI 回答 permission / question → upstream `permission.replied` / `question.replied` / `question.rejected` fire 但 plugin 不 consume（events.go non-installable）→ 下次 hook 之前 lights 卡 waiting | reply 後 lights 顯示 running | lights 仍顯 waiting 直到下個 session.status idle 或 chat.message | S（plugin 補 emit mapping：reply → 合成 catalog event 進 hook；events.go 對應 entry 從 Unsupported 移為 installable；不需 probe）| — (plugin-side fix) |
 
 **複雜度判準**：
 
@@ -422,40 +458,80 @@ codex catalog 9 installable 中 **5 個為 FutureOnly**（`SubagentStart`、`Sub
 
 ---
 
-## 7. W6 Probe 缺口工作池
+## 7. W6 Probe 缺口工作池（**canonical**）
 
-| ID | agent | 缺口 status | 缺口描述 | 補位構想（不細到 ProbeIntent 介面） | 優先序 (P1/P2/P3) | 配對 W5 |
-|----|-------|-------------|---------|-------------------------------------|-------------------|---------|
-| **W6-1** | cc | running | permission 批准後無 hook，spinner 期 lights 卡 waiting | tmux pane 觀察 cc TUI spinner 字元出現/消失 → 推 ProbeIntent("waiting→running")；批准 / spinner 消失即 fire 合成 UserPromptSubmit-equivalent（避免 dual emit） | P2 | W5-1 |
-| **W6-2** | cc | idle | compact 結束無 hook（PostCompact ignored）| 觀察 cc TUI compact 對話框退場 / 回到主 prompt → 推 idle；OR 改 catalog 把 PostCompact 從 ignored 移為 status emitting | P2 | W5-3 |
-| **W6-3** | codex | error | codex CLI 任何 error 完全沒 lights 信號 | exit code / stderr 樣式偵測 / TUI error 對話框偵測 → 推 ProbeIntent("any→error")；可結合 process 結束碼 與 TUI 文字觀察 | **P1**（主缺口）| W5-4 |
-| **W6-4** | codex | clear | codex session 結束完全沒 lights 信號 | process 結束 / tmux pane 退場 / TUI 關閉偵測 → 推 ProbeIntent("any→clear")；最簡實作觀察 codex CLI 進程退出 | **P1**（主缺口）| W5-5 |
-| **W6-5** | opencode | running 中介 | busy/retry 變體無映射 | **可能不需 probe** — plugin 端補 mapping 即可（issue #661 已追蹤）；若決議走 probe，觀察 opencode TUI spinner / retry 提示文字 | P3 | W5-6 |
-| **W6-6** | opencode | error/idle reconcile | plugin 重啟後 in-process state 丟失 | daemon 端在 plugin reconnect 時對所有 active session 查詢 opencode 狀態並補 sync；**更像 RPC 而非 probe**；若走 probe，觀察 tmux pane 內 opencode TUI 當前指示器 | P2 | W5-7 / W5-8 |
+> 本表為 W6 工作池 single source of truth。§4 矩陣 `probe ref` 欄位只列 ID，詳情查此處。
+
+| ID | agent | 缺口 status | 缺口描述 | 補位構想（probe signal → status mapping，per spec §8.2）| 優先序 | 配對 W5 |
+|----|-------|-------------|---------|-------------------------------------------------------|--------|---------|
+| **W6-1** | cc | running | permission 批准後無 hook（W5-1）| cc provider 宣告 ProbeIntent；detector 觀察 cc TUI spinner 字元出現/消失（tmux capture）；signal `tui_spinner_visible` 在 status==waiting → status=running；spinner 消失於 status==running 且不在 grace window → 不變動（等 Stop hook） | **P2**（W3 撤 always-on probe 後可能升 **P1**，per R1 F6）| W5-1 |
+| **W6-2** | cc | idle | compact 結束無 hook（W5-3，PostCompact ignored）| cc provider 宣告 ProbeIntent；detector 觀察 cc TUI compact 對話框退場 → 回到主 prompt；signal `tui_compact_exited` → status=idle；或評估改 catalog 把 PostCompact 從 ignored 移為 status emitting（純 hook 解，不需 probe）| P2 | W5-3 |
+| **W6-3** | codex | error | codex error 物理不可達（W5-4）| codex provider 宣告 ProbeIntent；detector 觀察 codex 進程 exit code（非零）；signal `process_error_exit` → status=error。**約束（per R2 防守 D2）**：detector 實作歸 `internal/agent/codex/`；module 層只負責 plumbing；只在 status ∈ {running, waiting} 且 codex sender PID 已知時 watch；status==idle 或 PID 缺失時 unwatch；first PR 僅 process-exit + crash detection，TUI / stderr 偵測為延伸 PR | **P1** | W5-4 |
+| **W6-4** | codex | clear | codex session 結束物理不可達（W5-5）| codex provider 宣告 ProbeIntent；detector 觀察 codex 進程結束（exit code 0 或 SIGTERM）+ tmux pane 退場；signal `process_normal_exit` → status=clear。**約束**：同 W6-3，per-agent only；只在 codex sender PID 已知 + session 仍 active 時 watch | **P1** | W5-5 |
+| **W6-5** | opencode | running 中介 | busy/retry 變體無映射（W5-6）| **首選方案：W5-6 plugin 端補 mapping** — 不需 probe（issue #661）。若決議 probe：opencode provider 宣告 ProbeIntent；detector 觀察 opencode TUI spinner / retry 提示文字；signal `tui_retry_indicator_shown` 在 status==running 期間記為中介 sub-state（不改 lights status，僅作 detail observability）| P3 | W5-6 |
+| **W6-6** | codex | running | `PermissionRequest` 後 user reply 無 hook（catalog 無 reply event；per R2 攻擊 A1）| codex provider 宣告 ProbeIntent；detector 觀察 codex TUI permission 對話框消失 + spinner 復現；signal `tui_permission_dismissed` 在 status==waiting → status=running。**約束**：per-agent only，detector 歸 `internal/agent/codex/`；status!=waiting 時 unwatch | P2 | — (新缺口) |
 
 **優先序判準**：
 
 - **P1**：影響核心使用情境（status 物理上不可達、使用者立即可感）
-- **P2**：邊緣場景（特殊 agent 行為、罕見路徑、體感優化）
-- **P3**：nice-to-have（觀察用、可能 plugin 改動取代 probe）
+- **P2**：邊緣場景（特殊 agent 行為、罕見路徑、體感優化）；條件性可升 P1（如 W3 撤 always-on probe 後）
+- **P3**：nice-to-have（觀察用、有 hook / plugin 替代方案）
 
-### 7.1 設計約束（per fix-spec §0 + §1）
+### 7.1 設計約束（per fix-spec §0 + §1，與 lights-rebuild-spec §8.2）
 
-- ❌ **不**做 always-on probe — 每個 W6 條目都 ad-hoc，gating 條件由各 agent 自己宣告
-- ❌ **不**抽 generic framework — ProbeIntent interface lazy 設計，**等實作第一個（建議 W6-3 codex error，最簡單可單純 process 退出觀察）才 finalize interface shape**
-- ✅ 利用 PR-4a-1 ship 的 shared utilities（`probe.Watch` / `WatchOptions` / `tmux.CapturePaneTopLines` / `LooksLikeShellPrompt` / orchestrator graceWindow / Error guard / stale-callback / transition gate / recordHookAt）
-- ✅ 每個 ProbeIntent 寫在 agent module 內（`internal/agent/{cc,codex,opencode}/probe_intent_*.go`），不集中於 `internal/module/agent`
-- ✅ ProbeIntent gating 不是布林開關，而是「滿足某些條件才 watch」 — 例：W6-3 在 status==running OR waiting 時 watch process exit；status==idle 時 unwatch
-- ⚠️ 警覺 `feedback_skeleton_convergence` 五大 bloat 徵兆（把 working code 變 data / parallel registry / 統一抽象 / refactor working code / config flag）— 任何 W6 PR 設計時 self-check
+#### 7.1.1 ProbeIntent 模型（per R2 防守 D1 / R1 F5）
+
+W6 走 spec §8.2 既定 `ProbeIntentProvider` interface 模型。每個 W6 條目的 detector 產生 **probe signal**，經 per-agent 的 `on_signal` 邏輯映射為 status 更新：
+
+```
+detector → signal (e.g. process_error_exit / tui_spinner_visible)
+  → per-agent on_signal handler
+  → daemon plumbing 更新 currentStatus + broadcast
+```
+
+**禁止做的事**：
+
+- ❌ probe 偽裝為 hook event（**不要**寫 "fire 合成 UserPromptSubmit-equivalent" 之類的描述）— probe 與 hook 是兩條獨立 channel；hook 權威、probe 推論
+- ❌ 跨 agent 的中央 liveness watcher / 中央狀態轉移規則（如 generic `any→error`）
+- ❌ generic ProbeProfileProvider / always-on policy（fix-spec §3 已列待 W3 撤回）
+
+**該做的事**：
+
+- ✅ 每個 W6 ProbeIntent **由對應 agent provider 透過 `ProbeIntentProvider` interface 宣告**（spec §8.2 既定）；detector 實作歸 `internal/agent/{cc,codex,opencode}/probe_intent_*.go`
+- ✅ `internal/module/agent/` 只保留共用 plumbing / lifecycle（watcher 啟停、grace window、stale callback guard 等 PR-4a-1 ship 的 utilities）
+- ✅ ProbeIntent gating 為條件式而非布林開關 — 例：W6-3 在 status ∈ {running, waiting} 且 sender PID 已知時 watch；status==idle 或 PID 缺失時 unwatch
+- ✅ ProbeIntent interface lazy 設計 — 等 W6-3 實作時 finalize interface shape，不預先抽象
+
+#### 7.1.2 W6 Platform Prerequisite（per R2 攻擊 A2）
+
+**Daemon restart / reconnect 後 watcher 不恢復** — `internal/module/agent/module.go:217` `Start()` → `replayFromDB()` 只重建 `currentStatus`，**不**呼叫 `manageActivityWatch()` 恢復 `activeWatchers`。所有 W6 ProbeIntent 在 daemon 重啟後**直到下個 hook 才會重新掛**。
+
+此非 W6 工作池條目（屬 plumbing 層而非 ProbeIntent），但**所有 W6 在 daemon restart 場景下的功能性依賴此修復**。建議：
+
+- 列為 W4 observability 完成後接著處理的 platform plumbing
+- 或於 W6-3 ship 時順帶補 startup replay → projection top status → re-arm gated watchers
+- 開 follow-up issue 追蹤（W1 audit ship 後立即開）
+
+#### 7.1.3 五大 Bloat 徵兆 Self-Check
+
+警覺 `feedback_skeleton_convergence` 五大 bloat 徵兆 — 每個 W6 PR 設計時自我檢查：
+
+- 把 working code 變 data
+- parallel registry
+- 統一抽象（generic framework）
+- refactor working code without functional reason
+- config flag
+
+任一冒出 → 停手 surface（per fix-spec §7）。
 
 ### 7.2 W6 PR 推薦實作順序
 
-1. **W6-3 codex error**（最簡 — 純 process 觀察）→ 第一個 ProbeIntent，藉此 finalize interface shape
+1. **W6-3 codex error**（最簡：純 process exit 觀察）→ 第一個 ProbeIntent，藉此 finalize interface shape；first PR 範圍**僅含 process-exit + crash detection**（含 exit code），TUI / stderr 偵測 API/tool error 屬同一 P1 缺口但**拆 follow-up PR 處理**（per R1 F4 收斂）
 2. **W6-4 codex clear**（同 W6-3 機制延伸）— 沿用 W6-3 確立的 interface
-3. **W6-5 opencode busy/retry**（決議 plugin 補 vs probe；後者沿用 interface）
-4. **W6-6 opencode reconcile**（特殊 — 可能走 RPC 路徑，再評估是否套 ProbeIntent）
-5. **W6-1 cc permission spinner**（最複雜 — TUI 樣式觀察）
-6. **W6-2 cc compact**（同 W6-1 機制延伸）
+3. **W6-6 codex PermissionRequest reply**（沿用 W6-3 / W6-4 interface，TUI 文字觀察為主）
+4. **W6-5 opencode busy/retry**（**首選 W5-6 plugin 補 mapping，不 ship W6**；若仍需 probe，沿用 interface）
+5. **W6-1 cc permission spinner**（W3 撤 always-on probe 後優先序可能升 P1；TUI 樣式觀察）
+6. **W6-2 cc compact**（同 W6-1 機制延伸；可評估改 catalog PostCompact 取代 probe）
 
 ---
 
@@ -463,21 +539,27 @@ codex catalog 9 installable 中 **5 個為 FutureOnly**（`SubagentStart`、`Sub
 
 當下列全達成時 W1 視為完成：
 
-1. ✅ §4 三家 × 5 status 矩陣全填
-2. ✅ §5 跨家比對列出至少共通 / 各家獨有兩類條目
-3. ✅ §6 W5 工作池列出 audit 中發現的 bug（也可能 0 條 — 若無，§5 須提出解釋）
-4. ✅ §7 W6 工作池列至少 1 條（per fix-spec §0 — fix-spec 存在的前提就是有缺口）
+1. ✅ §4 三家 × 5 status 矩陣全填，schema 一致
+2. ✅ §5 跨家比對列出共通結構 / 兩家共有特性 / 各家獨有問題 / 跨家觀察優先序
+3. ✅ §6 W5 工作池為 canonical 版本（§4 不重複描述）
+4. ✅ §7 W6 工作池為 canonical 版本，含設計約束（§7.1）+ Platform Prerequisite（§7.1.2）+ 推薦順序（§7.2）
 5. ✅ doc 過 codex review 兩輪（per CLAUDE.md PR Review 兩輪制）
+
+**結束條件不含的事**（per R2 防守 D5）：
+
+- ❌ 狀態機 transition 驗證 — 屬 W4 observability + W6 ad-hoc probe ship 後的 runtime 觀察
+- ❌ W5 / W6 條目修復 — 屬 W3-W6 PR 工作
 
 ---
 
 ## 9. 後續 Hand-off
 
-- **W2** 不依賴本 audit 結果（catalog naming 是 input/output 邊界整理，跟 audit 結果正交）
-- **W3** 撤回 framework 時，per-agent gating 的初始 disable list 直接列為三家 — 因為 W6 工作池項目都還沒 ship
-- **W4** dev log 補完路徑優先序：先補 W6 缺口涉及的路徑，再補 §5 跨家比對發現不一致的路徑
-- **W5 / W6** PR 拆分以本 doc §6 / §7 工作池為準；S 複雜度可 batch 入單 PR，M / L 各自獨立 PR
-- **W7** Inspector UI 的 Coverage Matrix 視覺化結構直接照本 doc §4 矩陣 schema；endpoint payload 照 §3 路徑分類
+- **W2** 不依賴本 audit 結果（catalog naming 是 input/output 邊界整理，跟 audit 結果正交）；但**注意命名 disclaimer**（per R2 防守 D6）：本 doc §4 矩陣與 §6/§7 工作池中的 `SessionStart` / `Stop` / 等 catalog event name 是 **pre-W2 current command-arg / logical event label**；W2 之後 daemon 內部一律使用 PurdexName，UpstreamKey 只出現在 installer / plugin 邊界（per fix-spec §1）。W7 hand-off 到 endpoint payload 時必須使用 PurdexName，不可直接照抄本 doc 用詞
+- **W3** 撤回 framework 時，`manageActivityWatch` policy 改 per-agent gating，**初始 disable list 含三家**（W6 工作池項目都還沒 ship）
+- **W4** dev log 補完路徑優先序：先補 W6 缺口涉及的路徑（codex process exit / cc TUI 觀察 / opencode plugin lifecycle），再補 §5 跨家比對發現不一致的路徑
+- **W5 / W6** PR 拆分以本 doc §6 / §7 為準；S 複雜度 batch 入單 PR，M / L 各自獨立 PR
+- **W7** Inspector UI 的 Coverage Matrix 視覺化結構照本 doc §4 矩陣 schema；endpoint payload 字段命名遵守 W2 PurdexName 規則（不直接照抄本 doc）；§3 路徑分類為 endpoint enum 來源
+- **Platform Prerequisite**（per §7.1.2）：W4 / W6 過程中處理 daemon restart watcher recovery；ship 後本 audit doc 開 follow-up issue 追蹤
 
 ---
 
@@ -491,14 +573,5 @@ codex catalog 9 installable 中 **5 個為 FutureOnly**（`SubagentStart`、`Sub
 - statusline (cc proxy)：`internal/agent/cc/statusline.go`
 - plugin template (opencode proxy / runtime filter)：`internal/agent/opencode/plugin_template.go`
 
----
+<!-- §11 Audit Methodology Notes 已移到 §4.0 通用 Schema，避免讀者跨段對照 (per R2 體質 Q6) -->
 
-## 11. Audit Methodology Notes
-
-執行 §4 矩陣時的判讀規則（避免落差）：
-
-- **EmitsStatus 多元 entry**（如 cc Notification → `[Waiting, Idle]`）：拆 polymorphic 子型獨立列入對應 status row
-- **FutureOnly entry**（如 codex 6 個 FutureOnly）：`✓ (FutureOnly)` 標記，並評估「目前運行 hook 是否實際發送」— 若 CLI 不發 = 缺口候選
-- **Handling=Unsupported / Ignored**：不入 audit 範圍，但 events.go 描述若揭示 fall-through 行為（如 cc PostToolUseFailure），記入 §3.6 catalog miss 路徑
-- **proxy 路徑**：審 statusline.go / plugin_template.go 的合成事件來源；列出每條 proxy 投遞的 catalog event name + 觸發條件
-- **catalog miss reason 列表**：盤點所有 `Reason != ""` 字串，作為 §3.4 / §3.6 完整列舉
