@@ -766,12 +766,27 @@ func TestCheckHooks_PreFixManagedBodyReportsDrift(t *testing.T) {
 	p := opencode.NewProvider()
 
 	fixed := opencode.RenderManagedPluginForTesting("/usr/local/bin/pdx")
-	preFix := strings.Replace(
-		fixed,
-		"      stdin: 'pipe',\n      stdout: 'ignore',",
-		"      stdin: JSON.stringify(payload),\n      stdout: 'ignore',",
-		1,
-	)
+	// Synthesize the actual pre-fix body: stdin: JSON.stringify(...) and
+	// no separate proc.stdin.write/.end lines (those lines did not exist
+	// before the fix). Without removing them this test would only prove
+	// "any byte difference triggers drift" rather than "the broken
+	// managed plugin from #715 is detected and repaired."
+	const fixedBlock = "    const encoded = JSON.stringify(payload)\n" +
+		"    const proc = Bun.spawn({\n" +
+		"      cmd: [pdxPath, 'hook', '--agent', 'opencode', eventName],\n" +
+		"      stdin: 'pipe',\n" +
+		"      stdout: 'ignore',\n" +
+		"      stderr: 'ignore',\n" +
+		"    })\n" +
+		"    proc.stdin.write(encoded)\n" +
+		"    proc.stdin.end()\n"
+	const preFixBlock = "    const proc = Bun.spawn({\n" +
+		"      cmd: [pdxPath, 'hook', '--agent', 'opencode', eventName],\n" +
+		"      stdin: JSON.stringify(payload),\n" +
+		"      stdout: 'ignore',\n" +
+		"      stderr: 'ignore',\n" +
+		"    })\n"
+	preFix := strings.Replace(fixed, fixedBlock, preFixBlock, 1)
 	if preFix == fixed {
 		t.Fatal("synthetic pre-fix body identical to fixed render; replace pattern stale — re-derive from current emit() shape")
 	}
