@@ -132,6 +132,52 @@ type HookEventSpec struct {
 	Handling    HookHandling
 }
 
+// LookupByPurdexName scans specs for the catalog entry whose PurdexName
+// matches purdexName. The empty string never matches even if a (legacy /
+// not-yet-migrated) entry has an empty PurdexName, which keeps malformed
+// payloads from accidentally landing on a real catalog row.
+//
+// Intended caller: daemon-internal lookups (handler routing, frame_ops
+// dispatch, DeriveStatus). Slice scan is O(N) with N ≤ ~11; an index would
+// add cache invalidation without measurable benefit.
+func LookupByPurdexName(specs []HookEventSpec, purdexName string) (HookEventSpec, bool) {
+	if purdexName == "" {
+		return HookEventSpec{}, false
+	}
+	for _, s := range specs {
+		if s.PurdexName == purdexName {
+			return s, true
+		}
+	}
+	return HookEventSpec{}, false
+}
+
+// LookupByUpstreamKey scans specs for the catalog entry whose UpstreamKeys
+// contains upstreamKey. Used for installer/checker boundary inspection and
+// for test assertions when verifying the cc/codex 1:1 PurdexName ↔
+// UpstreamKey mapping.
+//
+// Caveat: NOT suitable for opencode runtime routing of filter-based events
+// (`session.status`, `tool.execute.before`, `tool.execute.after`). Those
+// upstream keys require a `type` / `tool` filter to determine the correct
+// PurdexName, and catalog UpstreamKeys does not encode filter conditions —
+// hitting `session.status` here would resolve to PdxStop even for busy /
+// retry sub-states. opencode plugin demux remains the authority for that
+// runtime path.
+func LookupByUpstreamKey(specs []HookEventSpec, upstreamKey string) (HookEventSpec, bool) {
+	if upstreamKey == "" {
+		return HookEventSpec{}, false
+	}
+	for _, s := range specs {
+		for _, k := range s.UpstreamKeys {
+			if k == upstreamKey {
+				return s, true
+			}
+		}
+	}
+	return HookEventSpec{}, false
+}
+
 func EffectiveHookHandling(spec HookEventSpec) HookHandling {
 	if spec.Handling != "" {
 		return spec.Handling
