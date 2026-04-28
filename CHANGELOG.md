@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.0.0-alpha.248] - 2026-04-28
+
+### Fix(electron): unsigned-aware preflight in dev update resign (#709 Stage 0) (#711)
+
+Stage 0 of the macOS code signing roadmap (#709). Fixes the dev update regression introduced by PR #672 (alpha.234) where `applyUpdate` unconditionally re-signed the running bundle and triggered macOS AMFI to SIGKILL the process before `app.relaunch()` could run — symptom: SPA progress reaches `applying` then disappears, app does not relaunch, manual restart shows old version. Reproduces on **unsigned** `Purdex.app` (the actual user deployment — `codesign -dv` reports `code object is not signed at all`).
+
+- **Electron `electron/updater.ts`** — `resignAppBundle()` gains a three-state preflight via new `detectSignedState()` helper. `codesign -dv` exit 0 → `signed` (re-sign + verify, unchanged); non-zero with normalised stdout/stderr matching `/code object\s+is\s+not\s+signed\s+at\s+all/i` → `unsigned` (skip codesign, the actual fix); any other outcome (status null / spawnSync error / unrelated stderr) → `unknown` (throw with actionable error including bundle path + `PDX_SKIP_MAC_SIGN=1` remediation hint, routed through existing `applyUpdate` rollback). `PREFLIGHT_TIMEOUT_MS = 10_000` prevents codesign hang from blocking the main process. Detection normalises ANSI escapes + merges stdout/stderr so case differences, ANSI wrapping, stdout-borne phrasing, and irregular whitespace don't cause false-negatives. Imports unified to `node:child_process` so tests can `vi.mock('node:child_process')`. `__testing` namespace export gates `detectSignedState` + `resignAppBundle` for unit tests (Stage 1 will retire this when bundle-swap refactor lands).
+- **Test `electron/signing.test.ts`** — restructured into static block (3 grep tests for package.json + build-electron + updater contract markers) and runtime block (17 tests under `vi.mock('node:child_process')` + `vi.mock('electron')`): 5 detection core cases, 5 resilience cases (case difference / ANSI wrap / stdout-borne / irregular whitespace / timeout), 1 timeout-option assertion, 6 `resignAppBundle` dispatch cases (PDX_SKIP_MAC_SIGN / non-darwin / unsigned-skip / unknown-throw + actionable / ad-hoc identity / forced identity). `mockCodesign()` + `loadTesting()` helpers eliminate boilerplate. `process.platform` mock preserves descriptor flags via `getOwnPropertyDescriptor` + `afterEach` restore (vs. `vi.stubGlobal` which would replace the entire process object).
+
+### Review history
+
+| Round | Findings | Outcome |
+|-------|----------|---------|
+| Spec review | 9 (4 P1 + 4 P2 + 1 P3) — three-state detection contract gap, mock strategy, identity precedence, etc. | All addressed in spec v1.1 before plan |
+| Plan review | 8 (4 P1 + 4 P2) — verification toolchain availability, T2 RED contract, `process.platform` descriptor restore, bump base protocol | All addressed in plan v1.1 before implementation |
+| R1 standard | 0 blockers (sandbox couldn't run vitest due to read-only filesystem; static analysis clean) | — |
+| R2 4-parallel (adversarial + attacker + defender + file-health) | 12 (2 P1 + 4 P2 + 6 P3) — stderr brittleness, no spawnSync timeout, runtime test boilerplate, plan docs RED count inconsistency, error message actionability, `__testing` namespace style, `applyUpdate` SRP, APP_ID drift | All P1 + must-fix P2 fixed in commit `17b81143`; F6/F9 → issues #712/#713; F7/F8 deferred to Stage 1 (#709) |
+
+### Plan deviations
+
+1. T2 RED count: plan v1.0 predicted 11 RED runtime tests; actual was 4 because the stub's hardcoded `'unknown'` coincidentally satisfied 3 detection assertions and the unmodified `resignAppBundle` satisfied 4 dispatch assertions. The 4 actual REDs were exactly the new contract paths (`signed`/`unsigned` classification + unsigned-skip + unknown-throw); plan v1.1 documented this.
+2. R2 stderr matching expanded beyond plan's exact-substring shape — added ANSI strip + normalised regex per adversarial F1.
+
+### Out-of-scope (tracked under #709)
+
+- Stage 1: dev update bundle-swap refactor + entitlements + Hardened Runtime config
+- Stage 2: self-signed cert flow + cross-machine trust docs
+- Stage 3: Apple Developer ID + notarization in CI release pipeline
+
+### Followup
+
+- `#712` — Stage 1+: darwin integration test for real codesign -dv (close stderr-format-drift gap)
+- `#713` — refactor(electron): consolidate APP_ID across updater.ts / package.json / build-electron.mjs
+
 ## [1.0.0-alpha.247] - 2026-04-28
 
 ### Feat(spa+daemon): file-not-found popup with three-layer fallback (P5) (#707)
