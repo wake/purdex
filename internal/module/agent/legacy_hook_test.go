@@ -185,17 +185,18 @@ func TestClassifyLifecycle_CatalogHitWinsOverPredicate(t *testing.T) {
 	}
 }
 
-// Nil provider (registry miss) must short-circuit to LifecycleNone without
-// panicking on the type-assert.
+// Nil provider must not panic on the branch-1 type-assert and must still
+// reach the branch-2 legacy fallback when (agentType, name) is in the
+// per-agent legacy set. classifyLifecycle does not short-circuit on nil
+// provider — registry-miss handling lives upstream in
+// classifyLifecycleForReq, which returns LifecycleNone before this function
+// is called. Routing nil provider straight to branch 2 here keeps the test
+// expressing pure decision-tree behaviour.
 func TestClassifyLifecycle_NilProvider(t *testing.T) {
 	req := EventRequest{AgentType: "codex", PurdexName: "Stop"}
-	// Even though codex Stop would fall back to LifecycleStop with a real
-	// fake, no-provider input shouldn't reach branch 2 — provider==nil means
-	// registry returned nothing for the agent_type, so the daemon already
-	// has no business dispatching. classifyLifecycle defends against nil.
+	// Branch 1 fails (nil → type-assert false), branch 2 succeeds
+	// (codex+Stop is in legacy set), so the result is LifecycleStop.
 	if got := classifyLifecycle(nil, req); got != agentpkg.LifecycleStop {
-		// Note: branch 1 fails (nil → type-assert false), branch 2 succeeds
-		// (codex+Stop is in legacy set). nil provider does NOT skip branch 2.
 		t.Errorf("nil provider + codex Stop: got %s, want LifecycleStop (branch 2)", got)
 	}
 }
