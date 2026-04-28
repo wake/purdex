@@ -52,4 +52,12 @@ describe('Electron macOS signing configuration (static)', () => {
     expect(mod).toMatch(/\/api\/dev\/update\/check/)
     expect(mod).toMatch(/\/api\/dev\/update\/download/)
   })
+
+  it('SPA stepLabels no longer carries the signing entry', () => {
+    const tsx = readFileSync(
+      resolve(root, 'spa/src/components/settings/DevEnvironmentSection.tsx'),
+      'utf8',
+    )
+    expect(tsx).not.toMatch(/signing\s*:\s*['"]Signing app/)
+  })
 })
