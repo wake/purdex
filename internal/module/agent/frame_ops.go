@@ -657,6 +657,9 @@ func buildProjectionNormalized(projection *SessionProjection, fallbackAgentType,
 		Detail:       result.Detail,
 	}
 	if projection == nil {
+		if normalized.Status == "" {
+			normalized.Status = string(agentpkg.StatusClear)
+		}
 		return normalized
 	}
 	normalized.Subagents = append([]agentpkg.SubagentRef(nil), projection.Subagents...)
