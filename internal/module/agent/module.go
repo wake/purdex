@@ -137,6 +137,24 @@ func New(events *store.AgentEventStore) (*Module, error) {
 	// can call manageActivityWatch / replay paths without nil-checking.
 	// parentCtx defaults to context.Background; rotated in Stop().
 	m.probeIntentDisp = newProbeIntentDispatcher(m)
+	// W6-3 P2-T4: route declared ProbeIntent kinds to their per-agent detectors.
+	// The closure resolves m.tmux lazily so it picks up Init()'s wiring (m.tmux
+	// is nil at New() time and assigned during Init); callers (lifecycle plan)
+	// only invoke startDetector after applyIntentLifecycle has read top-frame
+	// state, by which point Init has long completed in production.
+	//
+	// Per spec §5.4 lines 776-780: dispatcher switches on Kind; future Kinds
+	// add cases here. Unknown Kind falls through to defaultStartProbeIntentDetector
+	// (waits on ctx, never emits) — defensive landing for a Kind that surfaces
+	// in registry before its detector lands.
+	m.probeIntentDisp.startDetector = func(ctx context.Context, mod *Module, kind agentpkg.ProbeIntentKind, paneID string, senderPID int, out chan<- agentpkg.Signal) {
+		switch kind {
+		case agentpkg.ProbeIntentKindProcessDead:
+			codex.StartProcessDeadDetector(ctx, mod.tmux, paneID, senderPID, out)
+		default:
+			defaultStartProbeIntentDetector(ctx, mod, kind, paneID, senderPID, out)
+		}
+	}
 	return m, nil
 }
 

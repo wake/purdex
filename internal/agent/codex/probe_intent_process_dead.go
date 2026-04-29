@@ -9,6 +9,7 @@ package codex
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/wake/purdex/internal/agent"
@@ -20,16 +21,45 @@ import (
 // deliberately run slower than ScreenChangeWatcher (200ms tick) to honour
 // the "probe is recovery, not authority" principle. Tests override via the
 // withFastPoll helper.
-var processDeadPollInterval = 1 * time.Second
+//
+// Stored in an atomic.Int64 (nanos) so cross-package integration tests
+// running under -race can mutate it concurrently with a polling detector
+// goroutine without tripping the race detector. Production never mutates
+// it after init; the atomic load is a single instruction on amd64/arm64
+// so the cost vs a plain int64 is negligible at the 1Hz cadence.
+var processDeadPollInterval atomic.Int64
+
+func init() {
+	processDeadPollInterval.Store(int64(1 * time.Second))
+}
+
+func currentProcessDeadPollInterval() time.Duration {
+	return time.Duration(processDeadPollInterval.Load())
+}
 
 // isPidAliveFn is the injectable pid-liveness probe. Production points at
-// probe.IsPidAlive (a syscall.Kill(pid, 0) wrapper). Tests override the
-// package var to control the alive/dead state per call rather than spawning
-// real processes (per b36pap7jc / by2z79ouc FH-1 — the
+// probe.IsPidAlive (a syscall.Kill(pid, 0) wrapper). Tests override via
+// SetIsPidAliveFnForTest to control the alive/dead state per call rather
+// than spawning real processes (per b36pap7jc / by2z79ouc FH-1 — the
 // pidAlive×paneAlive matrix needs deterministic injection).
 //
-// Same pattern as internal/module/agent/probe_orchestrator.go's isPidAliveFn.
-var isPidAliveFn = probe.IsPidAlive
+// Held in an atomic.Pointer so cross-package integration tests running
+// under -race can swap the function pointer concurrently with a polling
+// detector goroutine. The fn is loaded once per poll tick so the atomic
+// cost is negligible at the 1Hz cadence (and ≪ the syscall.Kill itself).
+var isPidAliveFn atomic.Pointer[func(int) bool]
+
+func init() {
+	productionFn := probe.IsPidAlive
+	isPidAliveFn.Store(&productionFn)
+}
+
+// loadIsPidAliveFn dereferences the active pid-liveness probe. Returns a
+// non-nil func — init seeds it with probe.IsPidAlive and the test seam
+// always restores via the same atomic store path.
+func loadIsPidAliveFn() func(int) bool {
+	return *isPidAliveFn.Load()
+}
 
 // tmuxPaneLister is the minimal contract this detector requires for pane
 // existence checks. Implementation in production: tmux.Executor.HasPane(paneID)
@@ -71,7 +101,7 @@ func StartProcessDeadDetector(
 	senderPID int,
 	out chan<- agent.Signal,
 ) {
-	ticker := time.NewTicker(processDeadPollInterval)
+	ticker := time.NewTicker(currentProcessDeadPollInterval())
 	defer ticker.Stop()
 
 	for {
@@ -79,7 +109,7 @@ func StartProcessDeadDetector(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			pidAlive := isPidAliveFn(senderPID)
+			pidAlive := loadIsPidAliveFn()(senderPID)
 			paneAlive := paneLister.HasPane(paneID)
 			if pidAlive && paneAlive {
 				continue // both alive, keep polling

@@ -59,18 +59,14 @@ func (f *fakePaneLister) CallLog() []string {
 // a test. Restored via t.Cleanup.
 func withFastPoll(t *testing.T, d time.Duration) {
 	t.Helper()
-	orig := processDeadPollInterval
-	processDeadPollInterval = d
-	t.Cleanup(func() { processDeadPollInterval = orig })
+	t.Cleanup(SetProcessDeadPollIntervalForTest(d))
 }
 
 // withPidAlive overrides isPidAliveFn for the duration of a test, restoring
 // the production probe.IsPidAlive implementation in cleanup.
 func withPidAlive(t *testing.T, fn func(int) bool) {
 	t.Helper()
-	orig := isPidAliveFn
-	isPidAliveFn = fn
-	t.Cleanup(func() { isPidAliveFn = orig })
+	t.Cleanup(SetIsPidAliveFnForTest(fn))
 }
 
 // TestStartProcessDeadDetector_BothAlive_KeepsPolling verifies that when both
@@ -286,7 +282,7 @@ func TestStartProcessDeadDetector_PidAliveFn_OverrideAndCleanup(t *testing.T) {
 		withPidAlive(t, func(pid int) bool { return false })
 		// detector logic is exercised elsewhere — here we just confirm the
 		// package var IS overridden during the test
-		if isPidAliveFn(99999) != false {
+		if loadIsPidAliveFn()(99999) != false {
 			t.Errorf("override did not take effect")
 		}
 	})
@@ -295,7 +291,7 @@ func TestStartProcessDeadDetector_PidAliveFn_OverrideAndCleanup(t *testing.T) {
 	// We can't compare function values directly in Go, but we can check
 	// behaviour (production probe.IsPidAlive on pid 1 — process 0/1 always
 	// either exists or returns EPERM, both → true).
-	if isPidAliveFn(1) != productionFn(1) {
+	if loadIsPidAliveFn()(1) != productionFn(1) {
 		t.Errorf("isPidAliveFn was not restored to production probe.IsPidAlive after cleanup")
 	}
 }
