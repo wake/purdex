@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CaretRight, CaretDown, Plus } from '@phosphor-icons/react'
 import { useDroppable } from '@dnd-kit/core'
 import { useSortable } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
 import type { Workspace, Tab } from '../../../types/tab'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -144,8 +143,14 @@ export function WorkspaceRow(props: Props) {
     data: { type: 'workspace-header', wsId: workspace.id },
   })
 
+  // Use a Y-only integer translate to avoid sub-pixel transform interpolation
+  // blurring the row's text during drag (CSS.Transform.toString emits a 3-axis
+  // translate + scaleX/Y which can land on non-integer pixels). Mirrors the
+  // narrow-mode InlineTab / SortableWorkspaceButton pattern.
   const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
+    transform: transform
+      ? `translate3d(0, ${Math.round(transform.y)}px, 0)`
+      : undefined,
     transition,
     opacity: isDragging ? 0.5 : 1,
   }
@@ -177,7 +182,6 @@ export function WorkspaceRow(props: Props) {
               onSelectWorkspace(workspace.id)
             }
           }}
-          onPointerDown={(e) => e.stopPropagation()}
           onContextMenu={(e) => {
             e.preventDefault()
             onContextMenuWorkspace?.(e, workspace.id)
@@ -190,9 +194,7 @@ export function WorkspaceRow(props: Props) {
             size={16}
             weight={workspace.iconWeight}
           />
-          <span className="truncate" title={workspace.name}>
-            {workspace.name}
-          </span>
+          <span className="truncate">{workspace.name}</span>
         </button>
         {showTabs && (
           <div
@@ -239,7 +241,6 @@ export function WorkspaceRow(props: Props) {
                 e.stopPropagation()
                 onAddTabToWorkspace(workspace.id)
               }}
-              onPointerDown={(e) => e.stopPropagation()}
               className="p-0.5 rounded hover:bg-surface-secondary hover:text-text-primary cursor-pointer opacity-0 group-hover/ws-header:opacity-100 focus:opacity-100 transition-opacity focus:outline-none"
             >
               <Plus size={12} />

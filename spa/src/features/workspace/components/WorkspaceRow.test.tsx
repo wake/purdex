@@ -142,23 +142,40 @@ describe('WorkspaceRow', () => {
     })
   })
 
-  describe('drag-steals-click guard', () => {
-    it('name button stops pointer-down propagation so dnd-kit drag does not start on click', () => {
+  // Header drag activation must reach the dnd-kit listeners attached to the
+  // header wrapper, otherwise wide-mode workspaces become un-reorderable
+  // (the name button covers `flex-1` of the row, dwarfing chevron / Plus).
+  // PointerSensor's `activationConstraint: { distance: 5 }` already separates
+  // click-without-movement from drag-with-movement, so inner buttons must NOT
+  // call stopPropagation on pointerdown — doing so was the regression in
+  // 259c2a4f / Phase 3a.
+  describe('header pointer-down propagation (drag reachability)', () => {
+    it('name button does not block pointer-down', () => {
       renderRow(mkWs('ws-1', 'Alpha'))
       const nameBtn = screen.getByText('Alpha').closest('button')!
       const evt = new Event('pointerdown', { bubbles: true, cancelable: true })
       const stopPropagationSpy = vi.spyOn(evt, 'stopPropagation')
       nameBtn.dispatchEvent(evt)
-      expect(stopPropagationSpy).toHaveBeenCalled()
+      expect(stopPropagationSpy).not.toHaveBeenCalled()
     })
 
-    it('chevron does not block pointer-down (keeps row drag reachable)', () => {
+    it('chevron does not block pointer-down', () => {
       useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
       renderRow(mkWs('ws-1', 'Alpha'))
       const chevron = screen.getByRole('button', { name: /expand|collapse/i })
       const evt = new Event('pointerdown', { bubbles: true, cancelable: true })
       const stopPropagationSpy = vi.spyOn(evt, 'stopPropagation')
       chevron.dispatchEvent(evt)
+      expect(stopPropagationSpy).not.toHaveBeenCalled()
+    })
+
+    it('Plus button does not block pointer-down', () => {
+      useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
+      renderRow(mkWs('ws-1', 'Alpha'))
+      const plusBtn = screen.getByLabelText(/new tab in alpha/i)
+      const evt = new Event('pointerdown', { bubbles: true, cancelable: true })
+      const stopPropagationSpy = vi.spyOn(evt, 'stopPropagation')
+      plusBtn.dispatchEvent(evt)
       expect(stopPropagationSpy).not.toHaveBeenCalled()
     })
   })
