@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.268] - 2026-04-30
+
+### Feat(spa): fetch monitor rows per host (#763)
+
+Fetches monitor snapshots for every distinct host-bound `tmux-session` pane, so Performance Monitor rows can show daemon metrics for non-active hosts without colliding on equal session codes.
+
+Active-host summary rendering now remains independent from slow or failing secondary host snapshots. Secondary row snapshots settle per host, use bounded timeouts, preserve last matching metrics across active refreshes, and are invalidated when the host record or endpoint identity changes.
+
 ## [1.0.0-alpha.267] - 2026-04-30
 
 ### Feat(spa): show monitor session metrics (#760)
