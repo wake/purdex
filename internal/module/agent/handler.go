@@ -93,6 +93,46 @@ type EventRequest struct {
 	SenderUncertain bool            `json:"sender_uncertain"`
 }
 
+// classifyLifecycle resolves an EventRequest to its LifecycleEventKind via
+// the post-W2 two-branch decision tree (spec §3.4.2):
+//
+//  1. Catalog hit (provider implements HookInstaller and Events() lookup
+//     by PurdexName succeeds) — use spec.Lifecycle. LifecycleNone is a
+//     legitimate hit value for events with no frame-mutation effect
+//     (PdxNotification, PdxPermissionRequest, etc.).
+//  2. Catalog miss — return LifecycleNone. The handler surfaces a catalog
+//     miss as event_not_in_catalog via DeriveStatus's Valid=false branch
+//     before this lifecycle classification is consulted; LifecycleNone
+//     therefore behaves as a no-op for any code that did reach this point.
+//
+// The pre-W2 third branch — `isLegacyHookForUnmigrated` falling through to a
+// hardcoded per-agent literal-string switch — was removed in P3-T6 once all
+// three agents (cc Phase 1, codex Phase 2, opencode Phase 3) populated their
+// catalogs with PurdexName + Lifecycle. provider may be nil; branch 1 is
+// then skipped.
+func classifyLifecycle(provider agentpkg.AgentProvider, req EventRequest) agentpkg.LifecycleEventKind {
+	if installer, ok := provider.(agentpkg.HookInstaller); ok {
+		if spec, found := agentpkg.LookupByPurdexName(installer.Events(), req.PurdexName); found {
+			return spec.Lifecycle
+		}
+	}
+	return agentpkg.LifecycleNone
+}
+
+// classifyLifecycleForReq is the Module-bound counterpart to
+// classifyLifecycle: it resolves the request's provider via m.registry and
+// then runs the lookup. Returns LifecycleNone when the registry is missing
+// or the agent_type is unknown — same effect as a catalog miss.
+// frame_ops.go's hot path uses this so callers don't replicate the registry /
+// type-assert lookup at every dispatch site.
+func (m *Module) classifyLifecycleForReq(req EventRequest) agentpkg.LifecycleEventKind {
+	if m == nil || m.registry == nil {
+		return agentpkg.LifecycleNone
+	}
+	provider, _ := m.registry.Get(req.AgentType)
+	return classifyLifecycle(provider, req)
+}
+
 // handleEvent handles POST /api/agent/event.
 // It stores the hook event and broadcasts normalized events to WS subscribers.
 func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
@@ -164,10 +204,12 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// W2 metadata-driven lifecycle dispatch (spec §3.4.2): catalog hit on
-	// PurdexName, falling back to legacyLifecycleFor for codex/opencode
-	// pre-migration traffic. classifyLifecycle returns LifecycleNone for
-	// no-op events and unknown PurdexNames alike — branches below key on
-	// specific lifecycle kinds, so a None classification simply skips them.
+	// PurdexName routes the request through the lifecycle branches; a catalog
+	// miss returns LifecycleNone (the request will surface as
+	// event_not_in_catalog at the result.Valid=false branch above).
+	// classifyLifecycle also returns LifecycleNone for known no-op events
+	// (PdxNotification, PdxPermissionRequest), which simply skips lifecycle
+	// branches keyed on specific kinds.
 	lifecycle := classifyLifecycle(provider, req)
 
 	// Invalid result: provider returned Valid=false. Two sub-classes:

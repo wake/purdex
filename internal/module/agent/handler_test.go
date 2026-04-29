@@ -519,7 +519,7 @@ func TestHandleEvent_OpenCodeSessionEndClearsErrorState(t *testing.T) {
 		typeName: "opencode",
 		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
 			switch event {
-			case "SessionEnd":
+			case "PdxSessionEnd":
 				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}
 			default:
 				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
@@ -528,10 +528,10 @@ func TestHandleEvent_OpenCodeSessionEndClearsErrorState(t *testing.T) {
 	})
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SessionEnd","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionEnd","raw_event":{},"agent_type":"opencode"}`,
 	} {
-		if strings.Contains(body, `"SessionEnd"`) {
+		if strings.Contains(body, `"PdxSessionEnd"`) {
 			m.currentStatus["work"] = agentpkg.StatusError
 		}
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
@@ -598,9 +598,9 @@ func TestHandleEvent_OpenCodeValidSubagentBroadcasts(t *testing.T) {
 		typeName: "opencode",
 		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
 			switch event {
-			case "SessionStart":
+			case "PdxSessionStart":
 				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
-			case "SubagentStart":
+			case "PdxSubagentStart":
 				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": "call-1", "agent_type": "Explore"}}
 			default:
 				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
@@ -611,8 +611,8 @@ func TestHandleEvent_OpenCodeValidSubagentBroadcasts(t *testing.T) {
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SubagentStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSubagentStart","raw_event":{},"agent_type":"opencode"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -646,7 +646,7 @@ func TestHandleEvent_OpenCodeValidSubagentBroadcasts(t *testing.T) {
 		if env.Session != "code-work" {
 			t.Fatalf("broadcast session = %q, want code-work", env.Session)
 		}
-		if !strings.Contains(env.Value, `"raw_event_name":"SubagentStart"`) {
+		if !strings.Contains(env.Value, `"raw_event_name":"PdxSubagentStart"`) {
 			t.Fatalf("broadcast value missing raw_event_name: %s", env.Value)
 		}
 		if !strings.Contains(env.Value, `"id":"call-1"`) {
@@ -757,9 +757,9 @@ func TestHandleEvent_OpenCodeMalformedSubagentDoesNotBroadcast(t *testing.T) {
 		typeName: "opencode",
 		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
 			switch event {
-			case "SessionStart":
+			case "PdxSessionStart":
 				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
-			case "SubagentStart":
+			case "PdxSubagentStart":
 				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_type": "Explore"}}
 			default:
 				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
@@ -770,8 +770,8 @@ func TestHandleEvent_OpenCodeMalformedSubagentDoesNotBroadcast(t *testing.T) {
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SubagentStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSubagentStart","raw_event":{},"agent_type":"opencode"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -1821,6 +1821,43 @@ func TestHandleEvent_CodexLegacyEventName_IsCatalogMiss(t *testing.T) {
 	}
 	if resp["reason"] != "event_not_in_catalog" {
 		t.Errorf("reason = %q, want event_not_in_catalog (codex legacy literal post-P2-T5 must surface as catalog miss, not silent fallback)", resp["reason"])
+	}
+}
+
+// W2-D1d (Phase 3): opencode post-W2 with un-reinstalled hooks (user
+// upgraded daemon but never ran `pdx install --reinstall`) emits the legacy
+// literal via purdex_name=Stop. P3-T6 removed opencode from
+// isLegacyHookForUnmigrated, and P3-T2 narrowed deriveOpenCodeStatus to
+// Pdx-prefixed names only. The handler must surface event_not_in_catalog
+// rather than silently 200ing — making the reinstall transition observable
+// instead of a silent black hole. Mirrors
+// TestHandleEvent_CodexLegacyEventName_IsCatalogMiss; together they pin the
+// post-P3 hit/miss boundary for both agents on legacy literal names.
+func TestHandleEvent_OpencodeLegacyEventName_IsCatalogMiss(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.prober = probe.New(fakeTmux)
+	m.registry.Register(opencode.NewProvider())
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"Stop","raw_event":{},"agent_type":"opencode"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s), want 200", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["reason"] != "event_not_in_catalog" {
+		t.Errorf("reason = %q, want event_not_in_catalog (opencode legacy literal post-P3 must surface as catalog miss, not silent fallback)", resp["reason"])
 	}
 }
 
