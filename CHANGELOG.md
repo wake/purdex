@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.266] - 2026-04-29
+
+### Feat(spa): show monitor pane rows (#758)
+
+Adds the first Performance Monitor tab-row slice. The page now renders an Open Panes table with one row for every open leaf pane, including split-pane leaves, and shows stable `{tabId, paneId}` identity plus pane kind.
+
+Rows follow the active workspace tab order when present, falling back to global tab order otherwise, and skip stale tab ids safely. Client and daemon metric cells are explicitly marked as not wired yet so later slices can attach Electron client metrics and daemon session matching without changing row identity.
+
+Adds localized Open Panes labels and empty-state text in English and Traditional Chinese.
+
 ## [1.0.0-alpha.265] - 2026-04-29
 
 ### Feat(spa): show monitor host summary (#756)
