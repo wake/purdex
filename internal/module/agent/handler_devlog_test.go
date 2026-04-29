@@ -369,6 +369,89 @@ func TestHandler_DevModeLog_BroadcastSubagent(t *testing.T) {
 	}
 }
 
+// TestHandler_DevModeLog_InvalidSkipCatalogMiss verifies the [handler]
+// invalid_skip line emitted from the catalog-miss / payload-not-mappable
+// branch (handler.go: if !result.Valid). Fields: reason / chain_id.
+func TestHandler_DevModeLog_InvalidSkipCatalogMiss(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	buf := captureDevLog(t)
+	m := newTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: false}
+		},
+		events: []agentpkg.HookEventSpec{},
+	})
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"BogusEvent","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	if m.traceSink != nil {
+		m.traceSink.FlushForTest()
+	}
+	out := buf.String()
+	line := findLogLine(t, out, `\[handler\] invalid_skip`)
+	if !strings.Contains(line, "reason=event_not_in_catalog") {
+		t.Errorf("[handler] invalid_skip catalog-miss missing reason=event_not_in_catalog: %s", line)
+	}
+	if extractField(line, "chain_id=") == "" {
+		t.Errorf("[handler] invalid_skip catalog-miss chain_id should be non-empty: %s", line)
+	}
+}
+
+// TestHandler_DevModeLog_InvalidSkipSubagentNoFrame verifies the [handler]
+// invalid_skip line emitted from the SubagentStart early-return when the
+// pane has no frame (frame_ops returns Decision="skipped", Reason="frame_missing").
+// PdxSubagentStart fires before any session frame exists, so the pane has
+// no frame and applyFrameEvent returns the skipped/frame_missing meta.
+func TestHandler_DevModeLog_InvalidSkipSubagentNoFrame(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	buf := captureDevLog(t)
+	m := newTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
+			if event == "PdxSubagentStart" {
+				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": "call-1"}}
+			}
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
+	})
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSubagentStart","raw_event":{"agent_id":"call-1"},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	if m.traceSink != nil {
+		m.traceSink.FlushForTest()
+	}
+	out := buf.String()
+	line := findLogLine(t, out, `\[handler\] invalid_skip`)
+	// frameMeta.Decision is "skipped" for the subagent frame_missing branch;
+	// the dev log carries the raw decision per plan §P2-T6 ("frameMeta.Decision
+	// 原始值"). Test against the actual decision string emitted by frame_ops.
+	if !strings.Contains(line, "reason=skipped") {
+		t.Errorf("[handler] invalid_skip subagent missing reason=skipped: %s", line)
+	}
+	if extractField(line, "chain_id=") == "" {
+		t.Errorf("[handler] invalid_skip subagent chain_id should be non-empty: %s", line)
+	}
+	// No [broadcast] for this path (early return before emit site).
+	if strings.Contains(out, "[broadcast]") {
+		t.Errorf("[broadcast] should not appear on subagent frame_missing path:\n%s", out)
+	}
+}
+
 // findLogLine returns the first log line matching the given regexp pattern,
 // failing the test if none is found.
 func findLogLine(t *testing.T, out, pattern string) string {

@@ -241,6 +241,8 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		if isDevMode() {
 			log.Printf("[derive] skipped agent=%s purdex_name=%s reason=%s chain_id=%s",
 				req.AgentType, req.PurdexName, reason, trace.ChainID())
+			log.Printf("[handler] invalid_skip reason=%s chain_id=%s",
+				reason, trace.ChainID())
 		}
 		if req.TmuxSession != "" && m.events != nil {
 			if err := m.events.Delete(req.TmuxSession); err != nil {
@@ -340,6 +342,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// Handle subagent events (transient — broadcast only, don't persist)
 	if lifecycle == agentpkg.LifecycleSubagentStart || lifecycle == agentpkg.LifecycleSubagentStop {
 		if frameMeta.Decision != "updated_frame" {
+			if isDevMode() {
+				log.Printf("[handler] invalid_skip reason=%s chain_id=%s",
+					frameMeta.Decision, trace.ChainID())
+			}
 			trace.Finish("completed", "emit_skipped")
 			traceFinished = true
 			w.Header().Set("Content-Type", "application/json")
