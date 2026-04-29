@@ -15,95 +15,6 @@ import (
 	"github.com/wake/purdex/internal/tmux"
 )
 
-// CC2 — manageActivityWatch routes through the orchestrator. Uses the
-// recording fake from probe_orchestrator_test.go: when manageActivityWatch
-// hands a watch-eligible status it must call orchestrator.startWatch (which
-// invokes recordingProber.Watch with target="sess:"); when it hands an
-// off-style status the recording prober must observe StopWatch("sess:").
-func TestModule_ManageActivityWatch_RoutesThroughOrchestrator(t *testing.T) {
-	m := newTestModule(t)
-	rec := newRecordingProber()
-	m.probeOrch.watcher = rec
-	provider := &fakeAgentProvider{typeName: "cc"}
-	m.registry.Register(provider)
-
-	// waiting → start watch
-	m.manageActivityWatch("sess", "cc", agentpkg.StatusWaiting)
-
-	rec.mu.Lock()
-	if _, ok := rec.watchOpts["sess:"]; !ok {
-		rec.mu.Unlock()
-		t.Fatalf("expected Watch on target %q after StatusWaiting, got %v", "sess:", rec.watchOpts)
-	}
-	rec.mu.Unlock()
-
-	// off (anything not in shouldWatchActivity, e.g. StatusError) → stop watch
-	m.manageActivityWatch("sess", "cc", agentpkg.StatusError)
-
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	stopped := false
-	for _, target := range rec.stops {
-		if target == "sess:" {
-			stopped = true
-			break
-		}
-	}
-	if !stopped {
-		t.Fatalf("expected StopWatch on target %q after off-status, got %v", "sess:", rec.stops)
-	}
-}
-
-// CC2b — G6 watcher-leak gate (R15 fix #2). End-to-end integration test
-// using a REAL *probe.Prober (no recordingProber seam) so failures surface
-// the actual map state. Walks: waiting → assert activeWatchers and prober
-// HasWatcher are populated → off → assert both are cleared.
-func TestModule_ManageActivityWatch_OffClearsActiveWatchers(t *testing.T) {
-	m := newTestModule(t)
-	// Real prober wired against a fake tmux executor. The watcher goroutine
-	// ticks at watchPollInterval (default 500ms) but this test only inspects
-	// map state immediately after Watch / StopWatch — no need to override
-	// the cadence.
-	fake := tmux.NewFakeExecutor()
-	fake.SetPaneContent("sess:", "irrelevant")
-	m.tmux = fake
-	m.prober = probe.New(fake)
-	t.Cleanup(func() { m.prober.StopAllWatches() })
-
-	// fakeAgentProvider does not implement ProbeProfileProvider — orchestrator
-	// will use defaultProbeProfile (BottomLines=10), which is fine for this
-	// gate; we only care about lifecycle, not capture mode.
-	provider := &fakeAgentProvider{typeName: "cc"}
-	m.registry.Register(provider)
-
-	// waiting → watcher live + activeWatchers populated.
-	m.manageActivityWatch("sess", "cc", agentpkg.StatusWaiting)
-
-	m.mu.Lock()
-	if got, ok := m.activeWatchers["sess"]; !ok || got != "cc" {
-		m.mu.Unlock()
-		t.Fatalf("activeWatchers[sess] = (%q, %v), want (\"cc\", true)", got, ok)
-	}
-	m.mu.Unlock()
-	if !m.prober.HasWatcher("sess:") {
-		t.Fatalf("prober.HasWatcher(\"sess:\") = false, want true after StatusWaiting")
-	}
-
-	// off (StatusError → not in shouldWatchActivity) → watcher torn down +
-	// activeWatchers entry gone.
-	m.manageActivityWatch("sess", "cc", agentpkg.StatusError)
-
-	m.mu.Lock()
-	if _, ok := m.activeWatchers["sess"]; ok {
-		m.mu.Unlock()
-		t.Fatalf("activeWatchers[sess] still present after StatusOff (G6 watcher leak)")
-	}
-	m.mu.Unlock()
-	if m.prober.HasWatcher("sess:") {
-		t.Fatalf("prober.HasWatcher(\"sess:\") = true, want false after StatusOff (G6 watcher leak)")
-	}
-}
-
 // CC3 — hook handler calls recordHookAt. Verifies the wiring put in place
 // in Commit 4 (handler.go calls m.probeOrch.recordHookAt before
 // manageActivityWatch). Confirms lastHookAt[session] is populated within the
@@ -206,24 +117,26 @@ func TestHandler_RecordHookAtBeforeCurrentStatus(t *testing.T) {
 	}
 }
 
-// CC4 — E2E ScreenChanged → broadcast Running. cc registered with its real
-// ProbeProfile (TopLines=12). manageActivityWatch starts the watcher, then
-// we feed a ScreenChanged event through the orchestrator's callback and
-// assert the WS broadcast carries StatusRunning.
+// CC4 — E2E ScreenChanged → broadcast Running. W3 撤回: manageActivityWatch
+// is now stop-only, so the test seeds activeWatchers + invokes startWatch
+// directly with WatchOptions{TopLines: 12} (mirroring the future W6
+// ProbeIntent caller for cc). The downstream broadcast assertion is
+// unchanged: feed a ScreenChanged event through the orchestrator's callback
+// and confirm the WS broadcast carries StatusRunning.
 func TestCC_E2E_ScreenChangedToRunning(t *testing.T) {
 	m, _, _ := orchTestModule(t) // installs recordingProber + cc registry
 	seedOrchFrame(t, m, agentpkg.StatusWaiting, 280)
 
-	// manageActivityWatch starts the watcher (recording fake observes it).
-	m.manageActivityWatch("work", "cc", agentpkg.StatusWaiting)
-
+	// Seed the active-watcher entry under m.mu (the orchestrator's stale-
+	// callback guard reads it under the same lock) and start the watcher
+	// explicitly — the production W6 caller will do the same.
 	m.mu.Lock()
-	if got, ok := m.activeWatchers["work"]; !ok || got != "cc" {
-		m.mu.Unlock()
-		t.Fatalf("activeWatchers[work] = (%q, %v) after manageActivityWatch", got, ok)
-	}
+	m.activeWatchers["work"] = "cc"
 	m.currentStatus["work"] = agentpkg.StatusWaiting
 	m.mu.Unlock()
+	if !m.probeOrch.startWatch("work", "cc", probe.WatchOptions{TopLines: 12}) {
+		t.Fatalf("startWatch returned false; expected true for valid TopLines opts")
+	}
 
 	// Subscribe BEFORE firing the event so the broadcast is observed.
 	sub := m.core.Events.AddTestSubscriber()
@@ -354,14 +267,14 @@ func TestRenameSession_MigratesLastHookAt(t *testing.T) {
 	}
 }
 
-// CC6 — RenameSession routes through orchestrator (R2 fix #1). The watcher
-// for `oldname` must be torn down and a new watcher started for `newname`,
-// with the activeWatchers map atomically transferred. The whole rename runs
-// under m.mu (caller contract); the orchestrator deliberately does NOT
-// touch m.mu, so the call must complete promptly. We enforce a 100ms
-// fail-loud guard so a regression that re-enters m.mu fails the test
-// (R3 deadlock-freedom regression).
-func TestCC_RenameSession_RestartsWatchViaOrchestrator(t *testing.T) {
+// CC6 — RenameSession is stop-only after W3 撤回. The watcher for `oldname`
+// must be torn down and the activeWatchers map evicted (no new start for
+// `newname` — Phase 4a-1 always-on start was reverted; W6 will reintroduce
+// starts via ProbeIntent). The whole rename runs under m.mu (caller
+// contract); the orchestrator deliberately does NOT touch m.mu, so the call
+// must complete promptly. We keep the 100ms fail-loud guard so a regression
+// that re-enters m.mu fails the test (R3 deadlock-freedom regression).
+func TestCC_RenameSession_StopsWatchViaOrchestrator(t *testing.T) {
 	m := newTestModule(t)
 	rec := newRecordingProber()
 	m.probeOrch.watcher = rec
@@ -372,8 +285,6 @@ func TestCC_RenameSession_RestartsWatchViaOrchestrator(t *testing.T) {
 	m.mu.Lock()
 	m.activeWatchers["oldname"] = "cc"
 	m.mu.Unlock()
-	// Pre-record a Watch entry so the rec fake's pre-state matches a real
-	// watcher (orchestrator doesn't read this; we assert post-state instead).
 
 	// Deadlock guard: rename should complete well within 100ms. If a
 	// regression re-enters m.mu inside orchestrator calls, the rename hangs
@@ -389,29 +300,26 @@ func TestCC_RenameSession_RestartsWatchViaOrchestrator(t *testing.T) {
 		t.Fatal("RenameSession hung — likely deadlock re-entering m.mu inside orchestrator")
 	}
 
-	// Post-state: activeWatchers transferred.
+	// Post-state: activeWatchers EVICTED for both names (stop-only path).
 	m.mu.Lock()
 	if _, ok := m.activeWatchers["oldname"]; ok {
 		m.mu.Unlock()
 		t.Fatalf("activeWatchers[oldname] still present after rename")
 	}
-	if got, ok := m.activeWatchers["newname"]; !ok || got != "cc" {
+	if _, ok := m.activeWatchers["newname"]; ok {
 		m.mu.Unlock()
-		t.Fatalf("activeWatchers[newname] = (%q, %v), want (\"cc\", true)", got, ok)
+		t.Fatalf("activeWatchers[newname] present after rename — W3 reverted always-on start; W6 will reintroduce via ProbeIntent")
 	}
 	m.mu.Unlock()
 
-	// Recording fake observed exactly one StopWatch + one Watch with the new
-	// target.
+	// Recording fake observed exactly one StopWatch (oldname:) and NO Watch
+	// calls — the orchestrator no longer auto-starts on rename.
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	if len(rec.stops) != 1 || rec.stops[0] != "oldname:" {
 		t.Fatalf("recordingProber stops = %v, want [oldname:]", rec.stops)
 	}
-	if _, ok := rec.watchOpts["newname:"]; !ok {
-		t.Fatalf("recordingProber watchOpts missing newname:; got %v", rec.watchOpts)
-	}
-	if _, ok := rec.watchOpts["oldname:"]; ok {
-		t.Fatalf("recordingProber watchOpts unexpectedly contains oldname:; got %v", rec.watchOpts)
+	if len(rec.watchOpts) != 0 {
+		t.Fatalf("recordingProber watchOpts = %v, want empty (no auto-start after rename)", rec.watchOpts)
 	}
 }

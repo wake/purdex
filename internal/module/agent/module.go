@@ -275,32 +275,23 @@ func (m *Module) renameSessionLocked(oldName, newName string) {
 		m.currentStatus[newName] = status
 		delete(m.currentStatus, oldName)
 	}
-	if agentType, ok := m.activeWatchers[oldName]; ok {
-		// activeWatchers transfer (m.mu-protected map mutation; caller holds m.mu).
+	if _, ok := m.activeWatchers[oldName]; ok {
+		// W3 撤回: rename is now stop-only. Phase 4a-1 wired a stopWatch +
+		// startWatch(newName) sequence to keep the screen-watcher alive across
+		// rename, but with manageActivityWatch reduced to a default no-op
+		// there is no production caller starting watchers in the first place.
+		// W6 will reintroduce starts via ProbeIntent; until then, evict the
+		// renamed entry and tear down the orchestrator-side watcher (if any).
+		// activeWatchers eviction is m.mu-protected; caller holds m.mu.
 		delete(m.activeWatchers, oldName)
-		m.activeWatchers[newName] = agentType
-		// R2 fix #1 + R3 deadlock-freedom: orchestrator stop/start are lock-free
-		// wrt m.mu (they touch prober.watcherMu, a different mutex), so calling
-		// them while we hold m.mu is safe. The orchestrator restores the full
-		// status-mapping callback (graceWindow + transition gate + Error Guard
-		// + broadcast) so the renamed session keeps responding to screen events.
-		// nil-prober is handled inside startWatch/stopWatch (R14 fix).
+		// orchestrator stop is lock-free wrt m.mu (it touches prober.watcherMu,
+		// a different mutex) so calling it while we hold m.mu is safe.
+		// nil-prober is handled inside stopWatch (R14 fix).
 		m.probeOrch.stopWatch(oldName)
-		// W3 P1-T2 transitional: pass empty WatchOptions while P1-T3 removes
-		// this call site entirely. After P1-T3 lands renameSessionLocked is
-		// stop-only and this branch no longer invokes startWatch.
-		if !m.probeOrch.startWatch(newName, agentType, probe.WatchOptions{}) {
-			// Codex finding #7 regression: invalid profile / nil prober — roll
-			// back the activeWatchers transfer so the orchestrator's stale-
-			// callback guard does not see a phantom watcher.
-			delete(m.activeWatchers, newName)
-		}
-		// Codex finding #2 regression: migrate the active graceWindow so a
-		// hook-set status that was just recorded under oldName cannot be
-		// overwritten by probe events arriving for newName within
-		// probeGraceWindow. Done AFTER orchestrator stop/start so it's
-		// clear that we preserve a brand-new graceWindow rather than
-		// starting fresh.
+		// Codex finding #2 regression (kept under W3): migrate the active
+		// graceWindow so a hook-set status that was just recorded under
+		// oldName is not overwritten by a probe event arriving for newName
+		// within probeGraceWindow once W6 wires starts again.
 		m.probeOrch.migrateLastHookAt(oldName, newName)
 	}
 }
@@ -490,49 +481,30 @@ func (m *Module) resolvePaneSession(paneID string) (string, string) {
 	return sessionName, m.resolveSessionCode(sessionName)
 }
 
-// manageActivityWatch handles starting/stopping Activity watchers in response
-// to hook events. Watcher lifecycle is delegated to probeOrchestrator, which
-// resolves the agent's ProbeProfile (default profile when the provider does
-// not implement agentpkg.ProbeProfileProvider). The screen-change callback
-// installed by the orchestrator is a no-op stub in Commit 3; Commit 4 wires
-// interpretScreenEvent (graceWindow + transition gate + Error Guard +
-// broadcast).
+// manageActivityWatch is invoked by hook handlers as a status changes; W3
+// reduces it to a default no-op (stop-only) path. When a watcher is already
+// registered for `session`, it is stopped + evicted from activeWatchers; no
+// new watcher is ever started here.
 //
-// R3 fix: m.activeWatchers is owned by this function (and renameSessionLocked
-// in Commit 5); the orchestrator deliberately does not touch it.
+// W3 撤回 rationale: Phase 4a-1 wired this function as the always-on probe
+// start site, which violated the "probe is recovery-only" v2.0 contract by
+// covering every Waiting/Running/Idle transition with a screen watcher. W6
+// will reintroduce starts via an explicit ProbeIntent caller that calls
+// `m.probeOrch.startWatch(session, agentType, opts)` directly with chosen
+// WatchOptions. The newStatus parameter is intentionally retained (reserved
+// for that future caller) but currently unused.
+//
+// R3 fix: m.activeWatchers is owned by this function (and renameSessionLocked);
+// the orchestrator deliberately does not touch it.
 func (m *Module) manageActivityWatch(session, agentType string, newStatus agentpkg.Status) {
+	_ = newStatus // reserved for W6 ProbeIntent wiring
+	_ = agentType // reserved for W6 ProbeIntent wiring (e.g. profile lookup)
+
 	m.mu.Lock()
 	_, wasWatching := m.activeWatchers[session]
 	delete(m.activeWatchers, session)
 	m.mu.Unlock()
 	if wasWatching {
 		m.probeOrch.stopWatch(session)
-	}
-
-	if shouldWatchActivity(newStatus) {
-		m.mu.Lock()
-		m.activeWatchers[session] = agentType
-		m.mu.Unlock()
-		// W3 P1-T2 transitional: pass empty WatchOptions while P1-T3 removes
-		// this branch entirely. After P1-T3 lands manageActivityWatch is a
-		// default no-op (stop-only) and W6 callers invoke startWatch directly.
-		if !m.probeOrch.startWatch(session, agentType, probe.WatchOptions{}) {
-			// Codex finding #7 regression: invalid profile / nil prober — roll
-			// back the activeWatchers entry so the stale-callback guard sees
-			// the session as not watched and /debug/vars stays consistent
-			// (no "started" without a registered watcher).
-			m.mu.Lock()
-			delete(m.activeWatchers, session)
-			m.mu.Unlock()
-		}
-	}
-}
-
-func shouldWatchActivity(status agentpkg.Status) bool {
-	switch status {
-	case agentpkg.StatusWaiting, agentpkg.StatusRunning, agentpkg.StatusIdle:
-		return true
-	default:
-		return false
 	}
 }
