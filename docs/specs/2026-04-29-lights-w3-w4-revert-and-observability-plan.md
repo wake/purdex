@@ -92,15 +92,17 @@ cd spa && npx vitest run       # 預期 4 既有 fail（TabBar + hosts contribut
 
 ### 3.1 Phase 1 task list
 
+**Final commit 編號 = P1-T1 ~ P1-T4**（per round-2 R2-06 統一）。子任務（compile-driven 同 commit 合併進 final commit 的部分）標 a/b/c：
+
 | Task | 名稱 | 內容 | 依賴 | 預期 LoC |
 |------|------|------|------|---------|
-| P1-T1 | 撤 cc ProbeProfile impl + test 整檔 | 刪 `internal/agent/cc/probe_profile.go` (19 行) + `_test.go` (26 行) | — | -45 |
-| P1-T2 | 撤 ProbeProfileProvider/ProbeProfile + startWatch signature 改 | 改 provider.go (-21) / probe_orchestrator.go startWatch 改吃 opts (-15/+10) / 撤 defaultProbeProfile (-10) | P1-T1 | -36 |
-| P1-T3 | 改 manageActivityWatch + renameSessionLocked stop-only | module.go: 撤 shouldWatchActivity / 改 manageActivityWatch / 改 renameSessionLocked / 重寫 doc comment | P1-T2 | -25/+20 |
-| P1-T4 | 改 probe_orchestrator_test.go：撤 OR1/OR2 + 改 FX4 | 撤 L757-810 (~55 行) + 改 FX4 (~20 行 reshape) | P1-T2 (compile-driven) | -55/+30 |
-| P1-T5 | 改 probe_orchestrator_integration_test.go：撤 always-on assumption + 改 rename | 撤 L40-101 OR1 integration (~62) / 撤 L203-225 OR2 integration (~23) / 改 rename test L260-300 + L325-410 (~120 reshape) | P1-T3 (compile-driven) | -85/+85 |
-| P1-T6 | 改 handler_test.go 三處 activeWatchers["work"] 斷言反向 | L1157 / L1188 / L1694 watching=false 改測 | P1-T3 (compile-driven) | -10/+15 |
-| P1-T7 | 新增 module_test.go: TestManageActivityWatch_DefaultNoOp + StopsExistingWatcher + TestRenameSessionLocked_StopOnly | 3 新 test | P1-T3 | +85 |
+| **P1-T1** | 撤 cc ProbeProfile impl + test 整檔 | 刪 `internal/agent/cc/probe_profile.go` (19 行) + `_test.go` (26 行) | — | -45 |
+| **P1-T2** | 撤 ProbeProfileProvider/ProbeProfile + startWatch signature 改 + orchestrator_test 改 (含 P1-T2a) | provider.go (-21) / probe_orchestrator.go startWatch 改吃 opts (-15/+10) / 撤 defaultProbeProfile (-10) / orchestrator_test 撤 OR1+OR2 + 改 FX4 (-55/+30) | P1-T1 | -91/+40 |
+| └─ P1-T2a | (compile-driven sub of T2) probe_orchestrator_test.go 撤 L757-810 OR1/OR2 + 改 FX4 (L507) reshape | 同 commit 整合進 P1-T2 | — | (含於 P1-T2) |
+| **P1-T3** | 改 manageActivityWatch + renameSessionLocked stop-only + integration_test + handler_test (含 P1-T3a/P1-T3b) | module.go: 撤 shouldWatchActivity / 改 manageActivityWatch / 改 renameSessionLocked / 重寫 doc comment / integration_test 撤 OR1 + reshape CC4 + 改 rename / handler_test 三處反向 | P1-T2 | -100/+120 |
+| └─ P1-T3a | (compile-driven sub of T3) probe_orchestrator_integration_test.go 撤 OR1 (L40-101) + reshape CC4 (L209+) + 改 rename (L260-300, L325-410) | 同 commit 整合進 P1-T3 | — | (含於 P1-T3) |
+| └─ P1-T3b | (compile-driven sub of T3) handler_test.go 三處 activeWatchers["work"] (L1157/L1188/L1694) 斷言反向 | 同 commit 整合進 P1-T3 | — | (含於 P1-T3) |
+| **P1-T4** | 新增 module_test.go positive coverage（per round-2 R2-06 改編號自原 P1-T7） | 3 新 test：TestManageActivityWatch_DefaultNoOp / StopsExistingWatcher / TestRenameSessionLocked_StopOnly | P1-T3 | +85 |
 
 ### 3.2 Phase 1 commit 順序與 compile dependency
 
@@ -111,29 +113,28 @@ P1-T1: 純 deletion（cc/probe_profile.go 撤）
         → 但 go test ./internal/module/agent/... 仍綠（既有 OR1/OR2 用 fake provider 不依 cc impl）
         commit ✅
 
-P1-T2: 撤 provider.go ProbeProfileProvider/ProbeProfile + 撤 defaultProbeProfile + startWatch 改吃 opts
+P1-T2 (含 P1-T2a)：撤 provider.go ProbeProfileProvider/ProbeProfile + 撤 defaultProbeProfile + startWatch 改吃 opts
         → 同 commit 同步改 probe_orchestrator.go startWatch caller path
-        → 此 commit 後 OR1/OR2/FX4 編譯失敗（type 不存在）
-        → 必須立刻配 P1-T4（同 commit 或下一 commit；本 plan 採「同 commit」避免 build 中段不綠）
-        合併 P1-T2 + P1-T4 為單一 commit `P1-T2`：撤 provider 三型別 + 改 orchestrator + 改 orchestrator_test
+        → 同 commit 改 orchestrator_test (P1-T2a) 撤 OR1/OR2 改 FX4 — 因 type 撤後既有 OR1/OR2 compile 失敗，必須整合
+        → 單一 commit `P1-T2`：撤 provider 三型別 + 改 orchestrator + 改 orchestrator_test
 
-P1-T3: manageActivityWatch + renameSessionLocked + shouldWatchActivity 撤
-        → 此 commit 後 integration_test 與 handler_test 編譯失敗（assert active watcher）
-        → 必須立刻配 P1-T5 + P1-T6（同 commit）
-        合併 P1-T3 + P1-T5 + P1-T6 為單一 commit `P1-T3`：caller 改 + integration_test 改 + handler_test 改
+P1-T3 (含 P1-T3a + P1-T3b)：manageActivityWatch + renameSessionLocked + shouldWatchActivity 撤
+        → 同 commit 改 integration_test (P1-T3a) 撤 OR1 + reshape CC4 + 改 rename
+        → 同 commit 改 handler_test (P1-T3b) 三處 activeWatchers 斷言反向
+        → 單一 commit `P1-T3`：caller 改 + integration_test 改 + handler_test 改
 
-P1-T7: 新增 module_test.go positive coverage（TestManageActivityWatch_DefaultNoOp 等 3 test）
+P1-T4: 新增 module_test.go positive coverage（TestManageActivityWatch_DefaultNoOp 等 3 test）
         → 獨立 commit
 ```
 
-**最終 Phase 1 commit chain**（4 個 commit）：
+**最終 Phase 1 commit chain**（4 個 commit，per round-2 R2-06）：
 
 | Commit | 含 task | 主題 |
 |--------|---------|------|
 | 1 | P1-T1 | 撤 cc/probe_profile.go + test 整檔 |
-| 2 | P1-T2 + P1-T4 | 撤 ProbeProfileProvider/ProbeProfile + startWatch 改吃 opts + orchestrator_test 撤 OR1/OR2 改 FX4 |
-| 3 | P1-T3 + P1-T5 + P1-T6 | 改 manageActivityWatch/renameSessionLocked stop-only + integration_test 撤 always-on + handler_test 三處反向 |
-| 4 | P1-T7 | 新增 module_test.go 三個 positive coverage test |
+| 2 | P1-T2 (含 P1-T2a) | 撤 ProbeProfileProvider/ProbeProfile + startWatch 改吃 opts + orchestrator_test 撤 OR1/OR2 改 FX4 |
+| 3 | P1-T3 (含 P1-T3a + P1-T3b) | 改 manageActivityWatch/renameSessionLocked stop-only + integration_test 撤 OR1 + reshape CC4 + 改 rename + handler_test 三處反向 |
+| 4 | P1-T4 | 新增 module_test.go 三個 positive coverage test |
 
 ### 3.3 Phase 1 各 task 詳情
 
@@ -211,7 +212,7 @@ git commit -am "refactor(agent): W3 P1-T2 drop ProbeProfileProvider abstraction;
    - 改 `renameSessionLocked`（L267-303）：撤 L289-294 startWatch + rollback 區塊；保留 stopWatch (L288) + delete activeWatchers (L280) + migrateLastHookAt (L301)；新 doc comment 說明 W3 後 stop-only
 2. `internal/module/agent/probe_orchestrator_integration_test.go`：
    - 撤 OR1 integration（L40-101，整個 `TestOrchestrator_ManageActivityWatchEvictsOnStatusOff` 假設 always-on）
-   - 撤 OR2 integration（L203-225，假設 cc TopLines=12 + activeWatchers populated）
+   - **Reshape CC4 `TestCC_E2E_ScreenChangedToRunning`（L209+）**：撤 L218 `m.manageActivityWatch("work", "cc", agentpkg.StatusWaiting)`；改成 `m.activeWatchers["work"] = "cc"` 手動 seed + 直接呼叫 `m.probeOrch.startWatch("work", "cc", probe.WatchOptions{TopLines: 12})` 模擬 W6 caller；保留 ScreenChanged → Running broadcast 主測試骨架（L228+ Subscribe / L232+ callback / WS broadcast 全部不動）
    - 改 rename test（L260-300 + L325-410 兩段）：
      - 改前：rename 後 `m.activeWatchers["newname"]` 期 active
      - 改後：rename 後 `m.activeWatchers["newname"]` 不存在 + stopWatch +1 + migrateLastHookAt 仍轉移 graceWindow
@@ -320,7 +321,7 @@ curl -s http://100.64.0.2:7860/debug/vars | jq '.purdex_probe_watch_started_tota
 | P2-T3 | 補 `[handler] frame_apply` log | handler.go:286 trace.Frame 後 1 條 | P2-T1 | +15 |
 | P2-T4 | 補 `[handler] projection_built` log | handler.go:298 trace.Projection 後 1 條 | P2-T1 | +15 |
 | P2-T5 | 補 `[broadcast]` log | handler.go:324 trace.Emit 後 1 條（含 client count + reason） | P2-T1 | +20 |
-| P2-T6 | 補 `[handler] invalid_skip` log | handler.go:155-158 catalog miss + 236-242 subagent skip 等 invalid 早 return path | P2-T1 | +20 |
+| P2-T6 | 補 `[handler] invalid_skip` log | **handler.go:230-248** catalog miss `if !result.Valid` 區塊 + **handler.go:310-318** SubagentStart/Stop frame_missing/subagent_id_missing 早 return | P2-T1 | +20 |
 
 ### 4.2 Phase 2 commit 順序
 
@@ -387,7 +388,7 @@ tail -50 /tmp/pdx-w3-p2.log | grep -E '\[hook\]|\[derive\]|\[handler\]|\[broadca
 # [derive]    verify_passed agent=cc purdex_name=PdxUserPromptSubmit status=running reason=
 # [handler]   frame_apply session=X frame_id=... lifecycle=PdxUserPromptSubmit decision=updated_frame
 # [handler]   projection_built session=X top_status=running tabs=... codes=...
-# [broadcast] session=X clients=N reason=... raw_event_name=PdxUserPromptSubmit chain_id=...
+# [broadcast] session=X has_clients=true decision=delivered reason=... raw_event_name=PdxUserPromptSubmit chain_id=...
 
 # 跑 invalid catalog miss
 /tmp/pdx hook --agent cc BogusEvent ...

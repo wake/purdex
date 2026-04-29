@@ -219,7 +219,7 @@ if req.TmuxSession != "" && m.prober != nil && result.Valid {
 [derive]    verify_passed agent=Y purdex_name=Z status=running reason=
 [handler]   frame_apply session=X frame_id=... lifecycle=Pdx... decision=updated_frame
 [handler]   projection_built session=X top_status=running tabs=... codes=...
-[broadcast] session=X clients=N reason=... raw_event_name=Z chain_id=...
+[broadcast] session=X has_clients=true decision=delivered reason=... raw_event_name=Z chain_id=...
 ```
 
 對應 5 個 trace step：trigger / verify / frame / projection / emit（per `internal/module/agent/trace.go`）。每步在 dev mode 下都對應一條 `[xxx]` log line。
@@ -228,7 +228,7 @@ if req.TmuxSession != "" && m.prober != nil && result.Valid {
 - `[hook]` / `[derive]` / `[handler]` / `[broadcast]` — **dev-mode normal-path trace**（W4 引入；isDevMode gate；production 不印）
 - `[probe]` — **dev-mode probe orchestrator trace**（既有 5 條；isDevMode gate；W3 撤回後 normal-path 期間應無 startWatch / status reason=screen-* / graceWindow suppress 三類訊息，但 recordHookAt 訊息仍會出現）
 - `[agent]` — **production error log**（既有 9 條；無 isDevMode gate；error path only）
-- `[agent][trace]` — **TraceStore save/drop**（既有 2 條；isDevMode gate）
+- `[agent][trace]` — **既有 TraceStore save/drop production log**（既有 2 條於 `internal/module/agent/trace.go:35,52`；**無 isDevMode gate**；本 PR 不動）
 
 ### 2.3 補完路徑（依 W1 audit Quick Paths priority）
 
@@ -237,12 +237,12 @@ if req.TmuxSession != "" && m.prober != nil && result.Valid {
 **P1 – 必補（W6-3/W6-4 直接會用）**
 - `[hook]` trigger 入口（handler.go HandleEvent / handleHook 開頭）— 每 hook event 一條
 - `[derive]` DeriveStatus 出口（每家 `cc/codex/opencode/status.go DeriveStatus` return 後）— invalid path 也記
-- `[handler]` invalid path 早 return（handler.go:155-158 catalog miss / 236-242 subagent skip 等）
-- `[broadcast]` 廣播決策（handler.go:324 trace.Emit 後）
+- `[handler]` invalid path 早 return（**handler.go:230-248 catalog miss `if !result.Valid` 區塊** / **handler.go:310-318 SubagentStart/Stop frame_missing/subagent_id_missing 早 return**）
+- `[broadcast]` 廣播決策（handler.go:324 / handler.go:355 兩處 trace.Emit 後 — SubagentStart updated_frame 與 main valid path 各一）
 
 **P2 – 高值補完（W5-7 opencode reconcile 路徑、W6-1/W6-2 cc spinner 路徑）**
 - `[handler]` frame_apply 結果（handler.go:286 trace.Frame 後）
-- `[handler]` projection_built 結果（handler.go:298 trace.Projection 後）
+- `[handler]` projection_built 結果（handler.go:298 trace.Projection 後 — **此點 SubagentStart updated_frame 路徑也會走過，per handler.go:298 在 subagent branch 前**）
 - frame_ops.go 各 lifecycle dispatch 入口（detail-only / SessionEnd / SubagentStart-Stop / SessionStart hot path 4 處）
 
 **P3 – 補完（次要）**
@@ -256,7 +256,7 @@ if req.TmuxSession != "" && m.prober != nil && result.Valid {
 - `[hook]` — handler 入口 trigger，1 hook = 1 條
 - `[derive]` — DeriveStatus 出口 verify_passed/skipped + reason
 - `[handler]` — handler.go 內處理流程（frame_apply / projection_built / broadcasted / invalid_skip）
-- `[broadcast]` — 實際 WS 廣播決策（含 client count / suppress reason）
+- `[broadcast]` — 實際 WS 廣播決策（含 `has_clients=bool`（用既有 `EventsBroadcaster.HasSubscribers()`）+ `decision/reason`（從 `emitHookToSession` 回傳）；**不**包 client count，避免擴 `internal/core/events.go` scope）
 
 **沿用標籤**：
 - `[probe]` — orchestrator（W3 撤回後本 PR 期間幾乎不會印）
@@ -379,9 +379,13 @@ B. **`internal/module/agent/probe_orchestrator_test.go` 改動**：
 - 撤 OR2 (`TestOrchestrator_DefaultProfileWhenAgentMissing`，L785-810)
 - 改 FX4 / `TestStartWatch_InvalidOptionsRollback`（L507 區塊；具體名稱以實際檔案為準）：caller 直接傳入 `probe.WatchOptions{TopLines: 5, BottomLines: 5}` → 期 false + dev log 印 `[probe] startWatch invalid opts`
 
-C. **`internal/module/agent/probe_orchestrator_integration_test.go` 改動**（codex F4 引用 L18, L83-99, L210-223, L333+, L373+）：
+C. **`internal/module/agent/probe_orchestrator_integration_test.go` 改動**（per round-2 R2-02 line range 校正）：
 - 撤 OR1 integration `TestOrchestrator_ManageActivityWatchEvictsOnStatusOff`（L40-101）— 整個 walks `waiting → activeWatchers populated → StatusError → torn down` 假設 always-on，撤
-- 撤 OR2 integration `Test*UsesProbeProfile`（L203-225 區塊）— 假設 cc ProbeProfileProvider TopLines=12 + activeWatchers populated，整段撤
+- **Reshape CC4 `TestCC_E2E_ScreenChangedToRunning`（L209+）**：此測本意是 ScreenChanged callback → Running broadcast e2e 路徑（不是純 profile lookup）。W3 後 `manageActivityWatch` 不再 startWatch，所以**改動**：
+  - 不靠 `manageActivityWatch` 啟動 watcher（撤 L218 那行）
+  - **手動 seed `m.activeWatchers["work"]="cc"`** + 直接 call `m.probeOrch.startWatch("work", "cc", probe.WatchOptions{TopLines: 12})` 模擬 W6 caller 行為
+  - 保留 ScreenChanged → Running broadcast 主測試骨架
+  - 此 reshape 預示 W6 第一個 ProbeIntent 進來時的呼叫面，但**不**前置定義 ProbeIntent interface
 - 改 rename test（L260-300 + L325-410 兩段）：W3 後 `renameSessionLocked` 不再 startWatch + activeWatchers 不轉移到 newName；測 case 改成「rename 後 oldName 從 activeWatchers 消失，**newName 不出現**，stopWatch +1，migrateLastHookAt 仍轉移 graceWindow」
 - 保留 OR3 / OR4 / OR5 / FX1 / FX2 / FX3 / FX5 等測 graceWindow / Error guard / stale-callback / transition gate / interruptBeforeFinalLockFn 的整套 case（W3 撤回不改變這些保護機制）
 
@@ -434,7 +438,8 @@ F. **既有不改但需要走過確認沒 break 的 case**：
 | §8 | tail daemon log，跑 cc UserPromptSubmit | 看到 5 條連貫 log：`[hook] trigger ...` → `[derive] verify_passed ...` → `[handler] frame_apply ...` → `[handler] projection_built ...` → `[broadcast] ...` |
 | §9 | 同步 chain_id 對得上 | 5 條 log 同 chain_id |
 | §10 | 跑 invalid catalog miss（發 `purdex_name=BogusEvent` 給 cc） | `[hook] trigger` → `[derive] skipped reason=event_not_in_catalog` → `[handler] invalid_skip`；無 frame/projection/broadcast log |
-| §11 | 跑 SubagentStart | trigger/derive/frame 都有；projection skip（detail-only 不 broadcast）；用 doc 解釋 |
+| §11 | 跑 SubagentStart updated_frame 路徑 | trigger/verify/frame/projection/emit 5 step 都有（per `handler.go:298` projection 在 subagent branch 之前 + `handler.go:323` updated_frame 走 emitHookToSession + trace.Emit） |
+| §11b | 跑 SubagentStart frame_missing / subagent_id_missing 路徑（合成 missing-frame request） | trigger/verify/frame 有；**projection 跑過 + emit skip**（per `handler.go:310-318` `frameMeta.Decision != "updated_frame"` 早 return；audit §3.2 對應） |
 | §12 | 切 PDX_DEV_MODE=0 重啟 | tail 無新標籤 log；既有 `[agent]` error path 不變 |
 
 ### 4.3 已知盲區（live verify 不覆蓋）
@@ -451,7 +456,7 @@ F. **既有不改但需要走過確認沒 break 的 case**：
 | R1 撤回後 cc/codex/opencode 出現 lights 卡死 user 投訴 | medium | high | spec §0.2 explicit；CHANGELOG entry 標 known regression；W6-3 第一個 ad-hoc ProbeIntent 推薦立即啟動 |
 | R2 W4 dev log 量太大，PDX_DEV_MODE=1 跑 console 噴 | low | medium | 每 hook 5 條 + 每秒最多 ~10 hook = ~50 line/sec；可接受；用 isDevMode gate 確保 production 0 影響 |
 | R3 撤回 OR1/OR2 後 startWatch 邏輯回退測試覆蓋率不足 | medium | medium | 改 FX4 + 新增 default-no-op test 補回；codex round 1 review 抓漏 |
-| R4 W4 dev log 加在 hot path 衝擊性能 | low | low | **可驗證約束**：所有新增 dev log line 必須 `if isDevMode() { log.Printf(...) }` 包住整段參數組裝；禁止在 gate 外做 string concat / fmt.Sprintf 預備字串；production 不做 format 也不 I/O。codex review 可機械驗證 (grep `log.Printf` not preceded by `if isDevMode()` within ±5 lines) |
+| R4 W4 dev log 加在 hot path 衝擊性能 | low | low | **可驗證約束（diff-scoped）**：本 PR `git diff origin/main...HEAD` 中**新增**的 `[hook]` / `[derive]` / `[handler]` normal-path / `[broadcast]` log line 必須 `if isDevMode() { log.Printf(...) }` 包住整段參數組裝；禁止在 gate 外做 string concat / fmt.Sprintf 預備字串。**既有 `[agent]` error log 9 條 / `[agent][trace]` 2 條 / `[probe]` 5 條皆不在驗證範圍**（既有設計，本 PR 不動）。codex review 對 diff 的新 log block 機械驗證 |
 | R5 issue #719 always-on residue 沒在 mlab log 完整消失（殘留 watcher 沒清） | medium | medium | Phase 1 verify §5 grep `[probe]` 必須 0 hit；非 0 視為 P1 finding |
 | R6 並發 session 寫 main repo 期間 worktree 被污染 | low | high | feedback `concurrent_session_safety` + `worktree_absolute_path`；Edit 全用絕對路徑 |
 | R7 codex round-1 不讀 spec, 建議違反 W3 「不前置 ProbeIntent interface」原則 | medium | high | feedback `codex_pr_review_spec_alignment`；round-2 防守視角必派 |
