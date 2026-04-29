@@ -161,15 +161,20 @@ func codexHooksManaged(hooks map[string]any, _ []agent.HookEventSpec) bool {
 // checkCodexEvent classifies a single hook event as absent / broken / valid
 // per fix-plan §1.4 and applies the FutureOnly-aware decision table. It
 // takes the full hooks map so absent vs present-but-empty can be told apart
-// via the double-return form `entries, ok := hooks[spec.Name]` — a hand-edited
+// via the double-return form `entries, ok := hooks[key]` — a hand-edited
 // value of `[]any{}` must be classified as broken, not absent.
+//
+// W2 P2-T3: hooks.json is keyed by spec.UpstreamKeys[0] (upstream Codex
+// hook event name); the per-event command's trailing token is spec.PurdexName
+// (daemon-internal canonical id). The lookup mirrors the write boundary.
 //
 // Returns:
 //   - HookEventInfo for events[spec.Name]
 //   - zero or more Issue strings to append
 //   - whether this event blocks allInstalled
 func checkCodexEvent(spec agent.HookEventSpec, hooks map[string]any) (agent.HookEventInfo, []string, bool) {
-	entries, keyExists := hooks[spec.Name]
+	key := spec.UpstreamKeys[0]
+	entries, keyExists := hooks[key]
 	// State A — absent (strict: key not present in map).
 	if !keyExists {
 		info := agent.HookEventInfo{Installed: false}
@@ -177,29 +182,28 @@ func checkCodexEvent(spec agent.HookEventSpec, hooks map[string]any) (agent.Hook
 			// Tolerated legacy: no issue, does not block.
 			return info, nil, false
 		}
-		return info, []string{spec.Name + " hook not installed"}, true
+		return info, []string{key + " hook not installed"}, true
 	}
 	// Legacy direct-entry shape is its own signal (present but uses the
 	// pre-0.121 shape pdx installer no longer writes).
 	if hasLegacyPdxDirectCodexEntry(entries) {
 		return agent.HookEventInfo{Installed: false},
-			[]string{spec.Name + " hook uses legacy format; reinstall required"},
+			[]string{key + " hook uses legacy format; reinstall required"},
 			true
 	}
 	// Find a pdx command inside the matcher-group list that passes strict
-	// per-event validation (tokenized binary / --agent codex / matching event
-	// name tail). Empty entries, wrong shape, wrong agent, wrong event-name
-	// tail all collapse to command == "" here → State B. Substring matches
-	// alone no longer qualify: PR #616 review Finding #1.
-	command := findPdxCommandInCodexForEvent(entries, spec.Name)
+	// per-event validation (tokenized binary / --agent codex / matching
+	// PurdexName tail). Empty entries, wrong shape, wrong agent, wrong
+	// command tail all collapse to command == "" here → State B.
+	command := findPdxCommandInCodexForEvent(entries, spec.PurdexName)
 	if command == "" {
 		if spec.FutureOnly {
 			return agent.HookEventInfo{Installed: false},
-				[]string{spec.Name + " hook: pdx command malformed (FutureOnly event has existing hook entry but pdx path incorrect — run install to repair)"},
+				[]string{key + " hook: pdx command malformed (FutureOnly event has existing hook entry but pdx path incorrect — run install to repair)"},
 				true
 		}
 		return agent.HookEventInfo{Installed: false},
-			[]string{spec.Name + " hook: pdx command not found"},
+			[]string{key + " hook: pdx command not found"},
 			true
 	}
 	// State C — valid.
@@ -231,12 +235,13 @@ func validateCodexInstallableHookShapes(hooksFile map[string]any) error {
 		if !agent.IsInstallableHookSpec(spec) {
 			continue
 		}
-		value, ok := hooks[spec.Name]
+		key := spec.UpstreamKeys[0]
+		value, ok := hooks[key]
 		if !ok || value == nil {
 			continue
 		}
 		if _, ok := value.([]any); !ok {
-			return fmt.Errorf("codex hook %s has unsupported value shape", spec.Name)
+			return fmt.Errorf("codex hook %s has unsupported value shape", key)
 		}
 	}
 	return nil
@@ -279,18 +284,23 @@ func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) 
 		if !installable {
 			continue
 		}
-		event := spec.Name
-		entries := filterOutPdxCodexKnownEvents(hooks[event])
+		// W2 P2-T3 boundary: hooks.json key is the upstream Codex event name
+		// (UpstreamKeys[0]); the per-event command's trailing token is the
+		// daemon-internal PurdexName (PdxXxx). Phase 3 ship drops the legacy
+		// Name field; codex maps one UpstreamKey per spec so the file shape
+		// is unchanged here.
+		key := spec.UpstreamKeys[0]
+		entries := filterOutPdxCodexKnownEvents(hooks[key])
 		entries = append(entries, map[string]any{
 			"hooks": []any{
 				map[string]any{
 					"type":    "command",
-					"command": fmt.Sprintf(`"%s" hook --agent codex %s`, pdxPath, event),
+					"command": fmt.Sprintf(`"%s" hook --agent codex %s`, pdxPath, spec.PurdexName),
 					"timeout": 5,
 				},
 			},
 		})
-		hooks[event] = entries
+		hooks[key] = entries
 	}
 	hooksFile["hooks"] = hooks
 	return nil
@@ -678,24 +688,40 @@ func lastCodexCommandToken(cmd string) string {
 	return tokens[len(tokens)-1]
 }
 
+// codexKnownEventNames is the set of installable upstream hook keys derived
+// from the catalog (Filter(IsInstallable).UpstreamKeys union). Used for
+// upstream-key checks; command-token recognition uses
+// codexOwnedCleanupEventNames.
 func codexKnownEventNames() map[string]bool {
-	known := make(map[string]bool, len(codexEventSpecs))
+	known := make(map[string]bool)
 	for _, spec := range codexEventSpecs {
-		known[spec.Name] = true
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		for _, key := range spec.UpstreamKeys {
+			known[key] = true
+		}
 	}
 	return known
 }
 
+// codexOwnedCleanupEventNames is the three-set union per spec §6.1
+// invariant 6: installable specs' UpstreamKeys ∪ PurdexName ∪ legacy Name.
+// codex has one-to-one upstream/Pdx mapping so the union collapses to legacy
+// Name ∪ PurdexName at runtime. Legacy Name is preserved per plan G1 until
+// PR-W2-cleanup-followup so reinstalls following the alpha bump still
+// recognise pre-W2 command tokens.
 func codexOwnedCleanupEventNames() map[string]bool {
-	return map[string]bool{
-		"SessionStart":      true,
-		"UserPromptSubmit":  true,
-		"SubagentStart":     true,
-		"SubagentStop":      true,
-		"Stop":              true,
-		"StopFailure":       true,
-		"Notification":      true,
-		"PermissionRequest": true,
-		"SessionEnd":        true,
+	owned := make(map[string]bool)
+	for _, spec := range codexEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		for _, key := range spec.UpstreamKeys {
+			owned[key] = true
+		}
+		owned[spec.PurdexName] = true
+		owned[spec.Name] = true
 	}
+	return owned
 }

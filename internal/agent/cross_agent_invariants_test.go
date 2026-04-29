@@ -80,14 +80,14 @@ func TestCatalogInvariants_CC_AllForwardInvariants(t *testing.T) {
 	runForwardInvariants(t, "cc", specs)
 }
 
-// TestCatalogInvariants_Codex_LegacyShape asserts codex has not yet been
-// migrated in Phase 1. P2-T1 will flip this from reverse to forward.
-func TestCatalogInvariants_Codex_LegacyShape(t *testing.T) {
+// TestCatalogInvariants_Codex_AllForwardInvariants runs forward invariants
+// against codex's Phase 2 migrated catalog.
+func TestCatalogInvariants_Codex_AllForwardInvariants(t *testing.T) {
 	specs := codex.NewProvider().Events()
 	if len(specs) == 0 {
 		t.Fatal("codex catalog snapshot is empty")
 	}
-	runReverseInvariants(t, "codex", specs)
+	runForwardInvariants(t, "codex", specs)
 }
 
 // TestCatalogInvariants_Opencode_LegacyShape mirrors the codex assertion

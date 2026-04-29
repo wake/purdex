@@ -615,7 +615,7 @@ func TestHookStatusUpdate_DoesNotClobberConcurrentSubagents(t *testing.T) {
 
 	req1 := EventRequest{
 		TmuxSession: "work", TmuxPaneID: "%5",
-		PurdexName: "SessionStart", AgentType: "codex",
+		PurdexName: "PdxSessionStart", AgentType: "codex",
 		SenderPID: 200, SenderStartTime: "t200",
 	}
 	if _, _, err := m.applyFrameEvent(req1, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
@@ -803,7 +803,7 @@ func TestProxySubagent_DirectPPIDAttachesToCCParent(t *testing.T) {
 	})
 
 	req := EventRequest{
-		TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart",
+		TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart",
 		AgentType: "codex", SenderPID: 200, SenderStartTime: "t200",
 	}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
@@ -871,7 +871,7 @@ func TestProxySubagent_TreeWalkThroughCodexCompanion(t *testing.T) {
 		isPidAliveFn = origAlive
 	})
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 300, SenderStartTime: "t300"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 300, SenderStartTime: "t300"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -914,7 +914,7 @@ func TestProxySubagent_TreeWalkDepthLimit(t *testing.T) {
 		isPidAliveFn = origAlive
 	})
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 700, SenderStartTime: "t700"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 700, SenderStartTime: "t700"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -941,7 +941,7 @@ func TestProxySubagent_SkipsWhenNoAncestorHasFrame(t *testing.T) {
 	}
 	t.Cleanup(func() { readProcessInfoFn = origInfo })
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 9999, SenderStartTime: "t9999"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 9999, SenderStartTime: "t9999"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -1018,7 +1018,7 @@ func TestProxySubagent_SkipsWhenParentPidDead(t *testing.T) {
 		isPidAliveFn = origAlive
 	})
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -1039,7 +1039,7 @@ func TestProxySubagent_SkipsWhenEventNotSessionStart(t *testing.T) {
 	}
 	t.Cleanup(func() { readProcessInfoFn = origInfo })
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "UserPromptSubmit", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxUserPromptSubmit", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -1068,7 +1068,7 @@ func TestProxySubagent_TraceMetaCorrect(t *testing.T) {
 		isPidAliveFn = origAlive
 	})
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -1116,7 +1116,7 @@ func TestProxySubagent_DoesNotDoubleAttachOnReHook(t *testing.T) {
 		isPidAliveFn = origAlive
 	})
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	for i := 0; i < 2; i++ {
 		_, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, int64(100+i))
 		if err != nil {
@@ -1148,7 +1148,7 @@ func TestProxySubagent_CrossPaneAncestorNotMatched(t *testing.T) {
 	}
 	t.Cleanup(func() { readProcessInfoFn = origInfo })
 
-	req := EventRequest{TmuxSession: "work2", TmuxPaneID: "%7", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work2", TmuxPaneID: "%7", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -1179,7 +1179,7 @@ func TestProxySubagent_SelfCycleGuard(t *testing.T) {
 	}
 	t.Cleanup(func() { readProcessInfoFn = origInfo })
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	done := make(chan struct{})
 	go func() {
 		_, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
@@ -1213,7 +1213,7 @@ func TestProxySubagent_PartialChainOnReadError(t *testing.T) {
 	}
 	t.Cleanup(func() { readProcessInfoFn = origInfo })
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -1252,7 +1252,7 @@ func TestProxySubagent_SkipsStaleFrameByStartTimeMismatch(t *testing.T) {
 
 	beforeParent, _ := m.frames.GetByIdentity("%5", 100, "t100")
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -1311,7 +1311,7 @@ func TestProxySubagent_SameTypeAncestorStopsWalk(t *testing.T) {
 		processStartTimeFn = origStart
 	})
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 400, SenderStartTime: "t400"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 400, SenderStartTime: "t400"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -1352,7 +1352,7 @@ func TestProxySubagent_AbortsWalkOnStartTimeReadError(t *testing.T) {
 		isPidAliveFn = origAlive
 	})
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -1413,7 +1413,7 @@ func TestProxySubagent_StaleSameTypeAncestorDoesNotBlockWalk(t *testing.T) {
 	req := EventRequest{
 		TmuxSession:     "work",
 		TmuxPaneID:      "%5",
-		PurdexName:      "SessionStart",
+		PurdexName:      "PdxSessionStart",
 		AgentType:       "codex",
 		SenderPID:       400,
 		SenderStartTime: "t400",
@@ -1459,7 +1459,7 @@ func TestProxySubagent_ConcurrentAttachesBothLand(t *testing.T) {
 	// Attach #1: codex PID 200, start t200.
 	req1 := EventRequest{
 		TmuxSession: "work", TmuxPaneID: "%5",
-		PurdexName: "SessionStart", AgentType: "codex",
+		PurdexName: "PdxSessionStart", AgentType: "codex",
 		SenderPID: 200, SenderStartTime: "t200",
 	}
 	_, meta1, err := m.applyFrameEvent(req1, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
@@ -1502,7 +1502,7 @@ func TestProxySubagent_ConcurrentAttachesBothLand(t *testing.T) {
 	// racer ref.
 	req2 := EventRequest{
 		TmuxSession: "work", TmuxPaneID: "%5",
-		PurdexName: "SessionStart", AgentType: "codex",
+		PurdexName: "PdxSessionStart", AgentType: "codex",
 		SenderPID: 300, SenderStartTime: "t300",
 	}
 	_, meta2, err := m.applyFrameEvent(req2, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
@@ -1562,7 +1562,7 @@ func TestSessionEnd_RemovesProxyRefFromParent(t *testing.T) {
 	})
 
 	// First: proxy attach.
-	startReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	startReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	if _, meta, err := m.applyFrameEvent(startReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
 		t.Fatalf("attach: %v", err)
 	} else if meta.Reason != "proxy_subagent_attached" {
@@ -1570,7 +1570,7 @@ func TestSessionEnd_RemovesProxyRefFromParent(t *testing.T) {
 	}
 
 	// Then: SessionEnd with same identity — should remove the ref.
-	endReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionEnd", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	endReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionEnd", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(endReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}, 200)
 	if err != nil {
 		t.Fatalf("applyFrameEvent SessionEnd: %v", err)
@@ -1597,7 +1597,7 @@ func TestSessionEnd_OrphanFallsBackToExistingSkip(t *testing.T) {
 	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
 	// No proxy ref attached.
 
-	endReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionEnd", AgentType: "codex", SenderPID: 999, SenderStartTime: "t999"}
+	endReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionEnd", AgentType: "codex", SenderPID: 999, SenderStartTime: "t999"}
 	_, meta, err := m.applyFrameEvent(endReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}, 200)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -1628,7 +1628,7 @@ func TestSessionEnd_OwnFrameDeletePreservesOtherProxyRefs(t *testing.T) {
 		isPidAliveFn = origAlive
 	})
 
-	startReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	startReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	if _, _, err := m.applyFrameEvent(startReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
 		t.Fatalf("proxy attach: %v", err)
 	}
@@ -1844,7 +1844,7 @@ func TestApplyFrameEvent_RebuildHit_MismatchedTypePreservedInMeta(t *testing.T) 
 	}
 	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 300, SenderStartTime: "t300"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 300, SenderStartTime: "t300"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 500)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -1935,7 +1935,7 @@ func TestApplyFrameEvent_ProxyHit_SkipsRebuild(t *testing.T) {
 	}
 	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -2473,7 +2473,7 @@ func TestPhase35_IT3_PreWalkMiss_PostReconcileHit(t *testing.T) {
 		processStartTimeFn = origStart
 	})
 
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -2538,7 +2538,7 @@ func TestPhase35_IT4_AncestorLateRecoveredByDescendantScan(t *testing.T) {
 	// Step (a): codex SessionStart with cc not yet in DB → pre-walk misses
 	// (FindByPanePID(100) = nil), reconcile post-walk also misses (same
 	// reason), new standalone codex created.
-	req1 := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req1 := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	if _, _, err := m.applyFrameEvent(req1, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100); err != nil {
 		t.Fatalf("codex applyFrameEvent: %v", err)
 	}
@@ -3289,7 +3289,7 @@ func TestPhase35_IT1_DescendantThenAncestorCanonicalizesViaDescendantScan(t *tes
 	})
 
 	// codex first → standalone (no cc parent yet).
-	codexReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	codexReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	if _, _, err := m.applyFrameEvent(codexReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 50); err != nil {
 		t.Fatalf("codex apply: %v", err)
 	}
@@ -3361,7 +3361,7 @@ func TestPhase35_IT2_AncestorThenDescendantUsesPR2bFastPath(t *testing.T) {
 	}
 
 	// codex → PR-2b fast-path collapses.
-	codexReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	codexReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(codexReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("codex apply: %v", err)
@@ -3575,7 +3575,7 @@ func TestPhase35_IT8_NonSessionStartEventNoCanonicalization(t *testing.T) {
 
 	// codex Notification (non-SessionStart). Should hit fallback create-
 	// frame and emit created_frame trace; no canonicalization.
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "Notification", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxNotification", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -3771,7 +3771,7 @@ func TestPhase35_IT15_PartialMetricIncrementsOnPartialState(t *testing.T) {
 	})
 
 	startMetric := agentpkg.MetricPartialCanonicalizationCreated.Value()
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionStart", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -3885,7 +3885,7 @@ func TestPhase35_IT12_SessionEndClearsParentProxyRef(t *testing.T) {
 	codexStandalone := seedFrame(t, m, "%5", "codex", 200, "t200", 60)
 
 	// codex SessionEnd: own-frame delete path + new §2.3 proxy cleanup.
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "SessionEnd", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionEnd", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)

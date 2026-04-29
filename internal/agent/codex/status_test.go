@@ -18,22 +18,22 @@ func deriveWithRaw(eventName, rawJSON string) agent.DeriveResult {
 	return p.DeriveStatus(eventName, json.RawMessage(rawJSON))
 }
 
-func TestCodexDeriveStatus_SessionStart(t *testing.T) {
-	r := deriveViaProvider("SessionStart")
+func TestCodexDeriveStatus_PdxSessionStart(t *testing.T) {
+	r := deriveViaProvider("PdxSessionStart")
 	if !r.Valid || r.Status != agent.StatusIdle {
 		t.Fatalf("expected idle, got %+v", r)
 	}
 }
 
-func TestCodexDeriveStatus_UserPromptSubmit(t *testing.T) {
-	r := deriveViaProvider("UserPromptSubmit")
+func TestCodexDeriveStatus_PdxUserPromptSubmit(t *testing.T) {
+	r := deriveViaProvider("PdxUserPromptSubmit")
 	if !r.Valid || r.Status != agent.StatusRunning {
 		t.Fatalf("expected running, got %+v", r)
 	}
 }
 
-func TestCodexDeriveStatus_Stop(t *testing.T) {
-	r := deriveViaProvider("Stop")
+func TestCodexDeriveStatus_PdxStop(t *testing.T) {
+	r := deriveViaProvider("PdxStop")
 	if !r.Valid || r.Status != agent.StatusIdle {
 		t.Fatalf("expected idle, got %+v", r)
 	}
@@ -50,8 +50,8 @@ func TestCodexDeriveStatus_UnknownEvent(t *testing.T) {
 }
 
 // CD1: Notification(permission_prompt) → Waiting + detail
-func TestCodexDeriveStatus_NotificationPermission(t *testing.T) {
-	r := deriveWithRaw("Notification", `{"notification_type":"permission_prompt","message":"hi"}`)
+func TestCodexDeriveStatus_PdxNotificationPermission(t *testing.T) {
+	r := deriveWithRaw("PdxNotification", `{"notification_type":"permission_prompt","message":"hi"}`)
 	if !r.Valid {
 		t.Fatalf("expected Valid, got %+v", r)
 	}
@@ -67,24 +67,24 @@ func TestCodexDeriveStatus_NotificationPermission(t *testing.T) {
 }
 
 // CD1b: Notification(elicitation_dialog) → Waiting (mirrors cc)
-func TestCodexDeriveStatus_NotificationElicitation(t *testing.T) {
-	r := deriveWithRaw("Notification", `{"notification_type":"elicitation_dialog"}`)
+func TestCodexDeriveStatus_PdxNotificationElicitation(t *testing.T) {
+	r := deriveWithRaw("PdxNotification", `{"notification_type":"elicitation_dialog"}`)
 	if !r.Valid || r.Status != agent.StatusWaiting {
 		t.Fatalf("expected waiting, got %+v", r)
 	}
 }
 
 // CD2: Notification(idle_prompt) → Idle
-func TestCodexDeriveStatus_NotificationIdle(t *testing.T) {
-	r := deriveWithRaw("Notification", `{"notification_type":"idle_prompt"}`)
+func TestCodexDeriveStatus_PdxNotificationIdle(t *testing.T) {
+	r := deriveWithRaw("PdxNotification", `{"notification_type":"idle_prompt"}`)
 	if !r.Valid || r.Status != agent.StatusIdle {
 		t.Fatalf("expected idle, got %+v", r)
 	}
 }
 
 // CD2b: Notification(auth_success) → Idle (mirrors cc)
-func TestCodexDeriveStatus_NotificationAuthSuccess(t *testing.T) {
-	r := deriveWithRaw("Notification", `{"notification_type":"auth_success"}`)
+func TestCodexDeriveStatus_PdxNotificationAuthSuccess(t *testing.T) {
+	r := deriveWithRaw("PdxNotification", `{"notification_type":"auth_success"}`)
 	if !r.Valid || r.Status != agent.StatusIdle {
 		t.Fatalf("expected idle, got %+v", r)
 	}
@@ -92,8 +92,8 @@ func TestCodexDeriveStatus_NotificationAuthSuccess(t *testing.T) {
 
 // CD3: Notification(unknown subtype) → Valid=false + Reason=notification_unknown_type
 // (so handler can distinguish payload-schema drift from truly unknown event names).
-func TestCodexDeriveStatus_NotificationUnknown(t *testing.T) {
-	r := deriveWithRaw("Notification", `{"notification_type":"weird"}`)
+func TestCodexDeriveStatus_PdxNotificationUnknown(t *testing.T) {
+	r := deriveWithRaw("PdxNotification", `{"notification_type":"weird"}`)
 	if r.Valid {
 		t.Fatalf("expected Valid=false for unknown notification subtype, got %+v", r)
 	}
@@ -115,8 +115,8 @@ func TestCodexDeriveStatus_UnknownEventEmptyReason(t *testing.T) {
 }
 
 // CD4: PermissionRequest → Waiting + detail.tool_name
-func TestCodexDeriveStatus_PermissionRequest(t *testing.T) {
-	r := deriveWithRaw("PermissionRequest", `{"tool_name":"Bash"}`)
+func TestCodexDeriveStatus_PdxPermissionRequest(t *testing.T) {
+	r := deriveWithRaw("PdxPermissionRequest", `{"tool_name":"Bash"}`)
 	if !r.Valid {
 		t.Fatalf("expected Valid, got %+v", r)
 	}
@@ -129,8 +129,8 @@ func TestCodexDeriveStatus_PermissionRequest(t *testing.T) {
 }
 
 // CD5: SubagentStart → Valid=true, Status="" (detail-only), detail.agent_id
-func TestCodexDeriveStatus_SubagentStart(t *testing.T) {
-	r := deriveWithRaw("SubagentStart", `{"agent_id":"abc"}`)
+func TestCodexDeriveStatus_PdxSubagentStart(t *testing.T) {
+	r := deriveWithRaw("PdxSubagentStart", `{"agent_id":"abc"}`)
 	if !r.Valid {
 		t.Fatalf("expected Valid, got %+v", r)
 	}
@@ -143,8 +143,8 @@ func TestCodexDeriveStatus_SubagentStart(t *testing.T) {
 }
 
 // CD6: SubagentStop → Valid=true, Status=""
-func TestCodexDeriveStatus_SubagentStop(t *testing.T) {
-	r := deriveWithRaw("SubagentStop", `{"agent_id":"xyz"}`)
+func TestCodexDeriveStatus_PdxSubagentStop(t *testing.T) {
+	r := deriveWithRaw("PdxSubagentStop", `{"agent_id":"xyz"}`)
 	if !r.Valid {
 		t.Fatalf("expected Valid, got %+v", r)
 	}
@@ -157,16 +157,16 @@ func TestCodexDeriveStatus_SubagentStop(t *testing.T) {
 }
 
 // CD7: SessionEnd → Clear
-func TestCodexDeriveStatus_SessionEnd(t *testing.T) {
-	r := deriveWithRaw("SessionEnd", `{}`)
+func TestCodexDeriveStatus_PdxSessionEnd(t *testing.T) {
+	r := deriveWithRaw("PdxSessionEnd", `{}`)
 	if !r.Valid || r.Status != agent.StatusClear {
 		t.Fatalf("expected clear, got %+v", r)
 	}
 }
 
 // CD8: StopFailure → Error + detail.error
-func TestCodexDeriveStatus_StopFailure(t *testing.T) {
-	r := deriveWithRaw("StopFailure", `{"error":"OOM","error_details":"out of memory"}`)
+func TestCodexDeriveStatus_PdxStopFailure(t *testing.T) {
+	r := deriveWithRaw("PdxStopFailure", `{"error":"OOM","error_details":"out of memory"}`)
 	if !r.Valid {
 		t.Fatalf("expected Valid, got %+v", r)
 	}
@@ -178,5 +178,19 @@ func TestCodexDeriveStatus_StopFailure(t *testing.T) {
 	}
 	if r.Detail["error_details"] != "out of memory" {
 		t.Fatalf("detail.error_details = %v, want 'out of memory'", r.Detail["error_details"])
+	}
+}
+
+// TestCodexDeriveStatus_LegacyNames_Invalid asserts the pre-W2 raw
+// event-name literals are no longer a catalog match for codex post-P2-T1.
+// Phase 2's daemon path falls back through isLegacyHookForUnmigrated only
+// for opencode; for codex, a legacy literal is genuinely a catalog miss
+// (Valid=false, empty Reason). P2-T5 then strips codex from the predicate.
+func TestCodexDeriveStatus_LegacyNames_Invalid(t *testing.T) {
+	for _, legacy := range []string{"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "Notification", "PermissionRequest", "StopFailure", "SubagentStart", "SubagentStop"} {
+		r := deriveViaProvider(legacy)
+		if r.Valid {
+			t.Errorf("legacy %q must not be valid post-rename", legacy)
+		}
 	}
 }

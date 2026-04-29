@@ -12,7 +12,11 @@ import (
 // "PrematureCatalogMissIsInvalid" cases below.
 var ccMetadataCatalog = fakeDefaultEvents
 
-func TestIsLegacyHookForUnmigrated_CodexAllNames(t *testing.T) {
+// Post-P2-T5: codex catalog has migrated, so the predicate's codex case is
+// gone. Any (agentType=codex, name) → false. This is the inverse of the
+// pre-P2 TestIsLegacyHookForUnmigrated_CodexAllNames assertion; renamed so
+// the intent is unambiguous when reading test output.
+func TestIsLegacyHookForUnmigrated_CodexAllFalse(t *testing.T) {
 	names := []string{
 		"SessionStart",
 		"UserPromptSubmit",
@@ -23,10 +27,13 @@ func TestIsLegacyHookForUnmigrated_CodexAllNames(t *testing.T) {
 		"SessionEnd",
 		"SubagentStart",
 		"SubagentStop",
+		"PdxStop",
+		"PdxSessionEnd",
+		"anything",
 	}
 	for _, n := range names {
-		if !isLegacyHookForUnmigrated("codex", n) {
-			t.Errorf("codex + %q expected true", n)
+		if isLegacyHookForUnmigrated("codex", n) {
+			t.Errorf("codex + %q must be false (codex catalog migrated in Phase 2)", n)
 		}
 	}
 }
@@ -103,11 +110,15 @@ func TestClassifyLifecycle_CCMetadataPath(t *testing.T) {
 // "catalog miss" classification.
 var emptyEvents = []agentpkg.HookEventSpec{}
 
-func TestClassifyLifecycle_CodexLegacyFallback(t *testing.T) {
+// Post-P2-T5: codex no longer participates in the legacy fallback predicate.
+// A genuine catalog miss (empty events) on a legacy literal must surface as
+// branch 3 (LifecycleNone) — handler then routes through catalog-miss invalid
+// path. Renamed from CodexLegacyFallback to flip the documented expectation.
+func TestClassifyLifecycle_CodexNoLegacyFallback(t *testing.T) {
 	codex := &fakeAgentProvider{typeName: "codex", events: emptyEvents}
 	req := EventRequest{AgentType: "codex", PurdexName: "SessionEnd"}
-	if got := classifyLifecycle(codex, req); got != agentpkg.LifecycleSessionEnd {
-		t.Errorf("codex SessionEnd fallback: got %s, want LifecycleSessionEnd", got)
+	if got := classifyLifecycle(codex, req); got != agentpkg.LifecycleNone {
+		t.Errorf("codex SessionEnd post-P2: got %s, want LifecycleNone (no legacy fallback)", got)
 	}
 }
 
@@ -119,16 +130,16 @@ func TestClassifyLifecycle_OpencodeLegacyFallback(t *testing.T) {
 	}
 }
 
-// Codex prematurely emitting a Pdx-prefixed name before its catalog migrates
-// must surface as an unclassified event (LifecycleNone) — branch 1 misses
-// (codex events not yet keyed by PurdexName), branch 2 misses (codex legacy
-// set has "Stop" not "PdxStop"), so branch 3 wins. The handler then routes
-// this through the catalog-miss invalid path rather than dispatching as Stop.
-func TestClassifyLifecycle_CodexPrematureCatalogMissIsInvalid(t *testing.T) {
+// codex catalog miss (empty events) plus codex absent from the legacy
+// predicate (post-P2-T5) means branch 1 and branch 2 both fail; branch 3
+// returns LifecycleNone, which the handler routes through the catalog-miss
+// invalid path. Used to also guard the pre-P2 "premature Pdx prefix" case;
+// post-P2 the same outcome arises from a different cause (predicate gone).
+func TestClassifyLifecycle_CodexEmptyCatalogIsInvalid(t *testing.T) {
 	codex := &fakeAgentProvider{typeName: "codex", events: emptyEvents}
 	req := EventRequest{AgentType: "codex", PurdexName: "PdxStop"}
 	if got := classifyLifecycle(codex, req); got != agentpkg.LifecycleNone {
-		t.Errorf("codex PdxStop premature: got %s, want LifecycleNone", got)
+		t.Errorf("codex PdxStop with empty catalog: got %s, want LifecycleNone", got)
 	}
 }
 
@@ -187,17 +198,15 @@ func TestClassifyLifecycle_CatalogHitWinsOverPredicate(t *testing.T) {
 
 // Nil provider must not panic on the branch-1 type-assert and must still
 // reach the branch-2 legacy fallback when (agentType, name) is in the
-// per-agent legacy set. classifyLifecycle does not short-circuit on nil
-// provider — registry-miss handling lives upstream in
-// classifyLifecycleForReq, which returns LifecycleNone before this function
-// is called. Routing nil provider straight to branch 2 here keeps the test
-// expressing pure decision-tree behaviour.
+// per-agent legacy set. Post-P2-T5 codex is no longer in the predicate, so
+// the test uses opencode (still pre-Phase-3) to keep exercising the nil-
+// provider → branch 2 fallback path.
 func TestClassifyLifecycle_NilProvider(t *testing.T) {
-	req := EventRequest{AgentType: "codex", PurdexName: "Stop"}
+	req := EventRequest{AgentType: "opencode", PurdexName: "Stop"}
 	// Branch 1 fails (nil → type-assert false), branch 2 succeeds
-	// (codex+Stop is in legacy set), so the result is LifecycleStop.
+	// (opencode+Stop is in legacy set), so the result is LifecycleStop.
 	if got := classifyLifecycle(nil, req); got != agentpkg.LifecycleStop {
-		t.Errorf("nil provider + codex Stop: got %s, want LifecycleStop (branch 2)", got)
+		t.Errorf("nil provider + opencode Stop: got %s, want LifecycleStop (branch 2)", got)
 	}
 }
 
