@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { collectLeaves } from '../lib/pane-tree'
 import {
   fetchMonitorConfig,
   fetchMonitorSnapshot,
@@ -9,6 +10,9 @@ import {
 } from '../lib/host-api'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
+import { useTabStore } from '../stores/useTabStore'
+import { useWorkspaceStore } from '../features/workspace/store'
+import type { PaneContent, Tab } from '../types/tab'
 
 type LoadState = 'loading' | 'ready' | 'error'
 
@@ -23,10 +27,20 @@ interface MonitorError {
   message: string
 }
 
+interface PaneRow {
+  tabId: string
+  paneId: string
+  kind: PaneContent['kind']
+}
+
 export function MemoryMonitorPage() {
   const t = useI18nStore((s) => s.t)
   const activeHostId = useHostStore((s) => s.activeHostId)
   const host = useHostStore((s) => (activeHostId ? s.hosts[activeHostId] : undefined))
+  const tabs = useTabStore((s) => s.tabs)
+  const tabOrder = useTabStore((s) => s.tabOrder)
+  const workspaces = useWorkspaceStore((s) => s.workspaces)
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
   const [data, setData] = useState<MonitorData | null>(null)
   const [error, setError] = useState<MonitorError | null>(null)
   const retryIntervalMS = useRef(5000)
@@ -81,6 +95,8 @@ export function MemoryMonitorPage() {
   const loadState: LoadState = currentData ? 'ready' : currentError ? 'error' : 'loading'
   const snapshot = currentData?.snapshot ?? null
   const config = currentData?.config ?? null
+  const activeWorkspace = activeWorkspaceId ? workspaces.find((workspace) => workspace.id === activeWorkspaceId) : undefined
+  const paneRows = collectPaneRows(tabs, activeWorkspace?.tabs ?? tabOrder)
 
   return (
     <div className="flex-1 overflow-y-auto bg-bg-base">
@@ -138,9 +154,63 @@ export function MemoryMonitorPage() {
             </div>
           </section>
         )}
+
+        <section className="rounded-2xl border border-border-subtle bg-bg-surface/80 p-4 shadow-sm">
+          <div className="mb-4">
+            <h3 className="text-base font-semibold text-text-primary">{t('performance_monitor.open_panes')}</h3>
+            <p className="text-xs text-text-muted">{t('performance_monitor.open_panes_desc')}</p>
+          </div>
+
+          <div className="overflow-x-auto text-xs">
+            <table className="min-w-[720px] w-full border-collapse">
+              <thead>
+                <tr className="border-b border-border-subtle uppercase tracking-[0.16em] text-text-muted">
+                  <th className="px-3 py-2 text-left font-medium">{t('performance_monitor.col.tab')}</th>
+                  <th className="px-3 py-2 text-left font-medium">{t('performance_monitor.col.pane')}</th>
+                  <th className="px-3 py-2 text-left font-medium">{t('performance_monitor.col.kind')}</th>
+                  <th className="px-3 py-2 text-left font-medium">{t('performance_monitor.col.client')}</th>
+                  <th className="px-3 py-2 text-left font-medium">{t('performance_monitor.col.daemon')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paneRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-4 text-center text-sm text-text-muted">
+                      {t('performance_monitor.no_open_panes')}
+                    </td>
+                  </tr>
+                ) : paneRows.map((row) => (
+                  <tr
+                    key={`${row.tabId}:${row.paneId}`}
+                    data-testid={`monitor-row-${row.tabId}-${row.paneId}`}
+                    className="border-b border-border-subtle last:border-b-0"
+                  >
+                    <td className="max-w-48 truncate px-3 py-2 font-mono text-text-primary">{row.tabId}</td>
+                    <td className="max-w-48 truncate px-3 py-2 font-mono text-text-primary">{row.paneId}</td>
+                    <td className="px-3 py-2 text-text-muted">{row.kind}</td>
+                    <td className="px-3 py-2 text-text-muted">{t('performance_monitor.not_wired')}</td>
+                    <td className="px-3 py-2 text-text-muted">{t('performance_monitor.not_wired')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div>
     </div>
   )
+}
+
+function collectPaneRows(tabs: Record<string, Tab>, tabOrder: string[]): PaneRow[] {
+  const rows: PaneRow[] = []
+  for (const tabId of tabOrder) {
+    const tab = tabs[tabId]
+    if (!tab) continue
+    for (const pane of collectLeaves(tab.layout)) {
+      rows.push({ tabId, paneId: pane.id, kind: pane.content.kind })
+    }
+  }
+  return rows
 }
 
 function MetricCard({ label, primary, detail }: { label: string; primary: string; detail: string }) {

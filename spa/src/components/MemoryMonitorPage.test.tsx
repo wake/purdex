@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryMonitorPage } from './MemoryMonitorPage'
+import { useWorkspaceStore } from '../features/workspace/store'
 import { useHostStore } from '../stores/useHostStore'
+import { useTabStore } from '../stores/useTabStore'
 import {
   fetchMonitorConfig,
   fetchMonitorSnapshot,
   type MonitorConfig,
   type MonitorSnapshot,
 } from '../lib/host-api'
+import type { PaneContent, Tab } from '../types/tab'
 
 vi.mock('../lib/host-api', () => ({
   fetchMonitorConfig: vi.fn(),
@@ -45,6 +48,8 @@ describe('MemoryMonitorPage', () => {
       activeHostId: HOST_ID,
       runtime: {},
     })
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
     vi.mocked(fetchMonitorConfig).mockResolvedValue(monitorConfig)
     vi.mocked(fetchMonitorSnapshot).mockResolvedValue(monitorSnapshot)
   })
@@ -157,6 +162,98 @@ describe('MemoryMonitorPage', () => {
     expect(await screen.findByText('80.0%')).toBeInTheDocument()
   })
 
+  it('renders one monitor row for each open leaf pane', async () => {
+    useTabStore.setState({
+      tabs: {
+        'tab-dashboard': tabWithLeaf('tab-dashboard', 'pane-dashboard', { kind: 'dashboard' }),
+        'tab-split': {
+          id: 'tab-split',
+          pinned: false,
+          locked: false,
+          createdAt: 2,
+          layout: {
+            type: 'split',
+            id: 'split-root',
+            direction: 'h',
+            sizes: [50, 50],
+            children: [
+              { type: 'leaf', pane: { id: 'pane-session', content: { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'abc123', mode: 'terminal', cachedName: 'Work', tmuxInstance: 'main' } } },
+              { type: 'leaf', pane: { id: 'pane-browser', content: { kind: 'browser', url: 'https://example.com' } } },
+            ],
+          },
+        },
+      },
+      tabOrder: ['tab-dashboard', 'tab-split'],
+      activeTabId: 'tab-split',
+      visitHistory: [],
+    })
+
+    render(<MemoryMonitorPage />)
+
+    expect(await screen.findByText('Open Panes')).toBeInTheDocument()
+
+    expect(screen.getAllByTestId(/^monitor-row-/).map((row) => row.getAttribute('data-testid'))).toEqual([
+      'monitor-row-tab-dashboard-pane-dashboard',
+      'monitor-row-tab-split-pane-session',
+      'monitor-row-tab-split-pane-browser',
+    ])
+
+    const dashboardRow = screen.getByTestId('monitor-row-tab-dashboard-pane-dashboard')
+    expect(within(dashboardRow).getByText('tab-dashboard')).toBeInTheDocument()
+    expect(within(dashboardRow).getByText('pane-dashboard')).toBeInTheDocument()
+    expect(within(dashboardRow).getByText('dashboard')).toBeInTheDocument()
+
+    const sessionRow = screen.getByTestId('monitor-row-tab-split-pane-session')
+    expect(within(sessionRow).getByText('tab-split')).toBeInTheDocument()
+    expect(within(sessionRow).getByText('pane-session')).toBeInTheDocument()
+    expect(within(sessionRow).getByText('tmux-session')).toBeInTheDocument()
+
+    const browserRow = screen.getByTestId('monitor-row-tab-split-pane-browser')
+    expect(within(browserRow).getByText('tab-split')).toBeInTheDocument()
+    expect(within(browserRow).getByText('pane-browser')).toBeInTheDocument()
+    expect(within(browserRow).getByText('browser')).toBeInTheDocument()
+
+    for (const row of [dashboardRow, sessionRow, browserRow]) {
+      expect(within(row).getAllByText('Not wired')).toHaveLength(2)
+    }
+  })
+
+  it('uses active workspace tab order when workspace order differs from global tab order', async () => {
+    useTabStore.setState({
+      tabs: {
+        'tab-a': tabWithLeaf('tab-a', 'pane-a', { kind: 'dashboard' }),
+        'tab-b': tabWithLeaf('tab-b', 'pane-b', { kind: 'history' }),
+      },
+      tabOrder: ['tab-a', 'tab-b'],
+      activeTabId: 'tab-b',
+      visitHistory: [],
+    })
+    useWorkspaceStore.setState({
+      activeWorkspaceId: 'workspace-1',
+      workspaces: [{
+        id: 'workspace-1',
+        name: 'Workspace',
+        tabs: ['tab-b', 'tab-a'],
+        activeTabId: 'tab-b',
+        moduleConfig: {},
+      }],
+    })
+
+    render(<MemoryMonitorPage />)
+
+    await screen.findByText('Open Panes')
+    expect(screen.getAllByTestId(/^monitor-row-/).map((row) => row.getAttribute('data-testid'))).toEqual([
+      'monitor-row-tab-b-pane-b',
+      'monitor-row-tab-a-pane-a',
+    ])
+  })
+
+  it('shows an empty open panes state when there are no tabs', async () => {
+    render(<MemoryMonitorPage />)
+
+    expect(await screen.findByText('No open panes')).toBeInTheDocument()
+  })
+
   it('does not fetch when the active host record is missing', async () => {
     useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: HOST_ID })
 
@@ -175,3 +272,13 @@ describe('MemoryMonitorPage', () => {
     expect(await screen.findByText('Unable to load monitor data: snapshot failed')).toBeInTheDocument()
   })
 })
+
+function tabWithLeaf(id: string, paneId: string, content: PaneContent): Tab {
+  return {
+    id,
+    pinned: false,
+    locked: false,
+    createdAt: 1,
+    layout: { type: 'leaf', pane: { id: paneId, content } },
+  }
+}
