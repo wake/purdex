@@ -183,11 +183,18 @@ git commit -m "refactor(agent): W3 P1-T1 remove cc ProbeProfile impl + test"
      // dev log capture: assert "[probe] startWatch invalid opts" present
      ```
 
-**TDD step**：
+**TDD step（compile-driven，必須三 file 同 commit；中間步驟 build/test 都 fail，git bisect 看的是最終 commit）**：
 ```bash
-# 1. 改 orchestrator_test.go（撤 OR1/OR2 改 FX4）— 此時 provider.go 還在，test 仍編得過
-# 2. 改 provider.go（撤 ProbeProfileProvider/ProbeProfile）— compile fail（probe_orchestrator.go 還用 type-assert）
-# 3. 改 probe_orchestrator.go（撤 type-assert + signature 改吃 opts）— compile pass
+# 三檔同步改（順序不重要，但都要在 commit 之前完成）：
+#   - probe_orchestrator_test.go: 撤 OR1/OR2 + 改 FX4 吃新 signature (session, agentType, opts)
+#   - provider.go: 撤 ProbeProfileProvider interface + ProbeProfile struct
+#   - probe_orchestrator.go: 撤 defaultProbeProfile + type-assert + startWatch signature 改吃 opts
+# 中間任一步單獨改都會 compile fail：
+#   - 只改 _test.go: FX4 用三參數 signature 但 production 仍二參數 → fail
+#   - 只改 provider.go: orchestrator.go type-assert 找不到 type → fail
+#   - 只改 orchestrator.go: provider.go 還宣告 type 但 unused → vet warn
+# 全部改完才驗證：
+go build ./...                                     # compile pass
 go test ./internal/module/agent/... -run Probe   # FX4 pass / OR1 OR2 不存在
 go vet ./...                                       # 0 warning
 git commit -am "refactor(agent): W3 P1-T2 drop ProbeProfileProvider abstraction; startWatch takes WatchOptions"
@@ -320,7 +327,7 @@ curl -s http://100.64.0.2:7860/debug/vars | jq '.purdex_probe_watch_started_tota
 | P2-T2 | DeriveStatus 出口補 `[derive]` verify_passed/skipped log | 三家（cc/codex/opencode）DeriveStatus return 之後在 handler 統一一條（避免每家重複） | P2-T1 | +25 |
 | P2-T3 | 補 `[handler] frame_apply` log | handler.go:286 trace.Frame 後 1 條 | P2-T1 | +15 |
 | P2-T4 | 補 `[handler] projection_built` log | handler.go:298 trace.Projection 後 1 條 | P2-T1 | +15 |
-| P2-T5 | 補 `[broadcast]` log | handler.go:324 trace.Emit 後 1 條（含 client count + reason） | P2-T1 | +20 |
+| P2-T5 | 補 `[broadcast]` log | **handler.go:324** trace.Emit (SubagentStart updated_frame) + **handler.go:388** trace.Emit (main valid path) 兩處各 1 條，含 `has_clients=bool` (用 `EventsBroadcaster.HasSubscribers()`) + `decision/reason` (從 `emitHookToSession` 回傳) | P2-T1 | +30 |
 | P2-T6 | 補 `[handler] invalid_skip` log | **handler.go:230-248** catalog miss `if !result.Valid` 區塊 + **handler.go:310-318** SubagentStart/Stop frame_missing/subagent_id_missing 早 return | P2-T1 | +20 |
 
 ### 4.2 Phase 2 commit 順序
@@ -399,9 +406,13 @@ tail -20 /tmp/pdx-w3-p2.log | grep -E '\[hook\]|\[derive\]|\[handler\]'
 # [handler]   invalid_skip reason=event_not_in_catalog
 # 無 frame/projection/broadcast log
 
-# 跑 SubagentStart
+# 跑 SubagentStart updated_frame 路徑（hook 帶完整 frame_id + subagent_id）
 /tmp/pdx hook --agent cc SubagentStart ...
-# 預期：trigger/derive/frame 都有；projection skip（detail-only 不 broadcast）；broadcast 不出現
+# 預期：trigger/verify/frame/projection/broadcast 5 step 全有（per handler.go:298 projection 在 subagent branch 之前 + handler.go:324 updated_frame 走 emitHookToSession + trace.Emit）
+
+# 跑 SubagentStart frame_missing 路徑（合成 missing frame_id 的 request）
+/tmp/pdx hook --agent cc SubagentStart ... # missing frame
+# 預期：trigger/verify/frame 有；**projection 跑過 + emit skip**（per handler.go:310-318 frameMeta.Decision != "updated_frame" 早 return）；無 broadcast log
 
 # 切 PDX_DEV_MODE=0 重啟
 killall pdx
@@ -438,7 +449,8 @@ grep '\[agent\]' /tmp/pdx-prod.log
 |---|------|----------------------|
 | 1 | cc valid main（UserPromptSubmit/Stop） | trigger/verify/frame/projection/emit 全有 |
 | 2 | cc invalid catalog miss（BogusEvent） | trigger/verify(skipped) 有；frame/projection/emit 不有（合理） |
-| 3 | cc subagent SubagentStart/Stop（detail-only） | trigger/verify/frame 有；projection/emit 不有（detail-only 不 broadcast，合理） |
+| 3a | cc subagent SubagentStart/Stop **updated_frame** | trigger/verify/frame/projection/emit 5 step 全有（projection 在 subagent branch 之前；updated_frame 走 emitHookToSession） |
+| 3b | cc subagent SubagentStart/Stop **frame_missing/subagent_id_missing 早 return** | trigger/verify/frame/projection 有；emit 不有（per handler.go:310-318 早 return；audit §3.2 對應） |
 | 4 | cc SessionEnd（status=clear） | trigger/verify/frame/projection/emit 全有 |
 | 5 | replay-from-DB（snapshot/cold reconnect） | trigger 是否有？需驗 |
 | 6 | codex valid main | 同 cc valid main |
@@ -472,7 +484,7 @@ grep '\[agent\]' /tmp/pdx-prod.log
 |----|------|------|------|------------|
 | MR1 | 撤掉 OR1/OR2 後 startWatch invalid-opts 校驗測試覆蓋率不足 | medium | high | P1-T2 改 FX4 + P1-T4 新 module_test + codex round 1 review 抓漏 |
 | MR2 | renameSessionLocked stop-only 改造後 graceWindow 不再正確轉移 | medium | medium | P1-T4 TestRenameSessionLocked_StopOnly 顯式驗 migrateLastHookAt 仍轉；OR4/OR5 既有 graceWindow 測試走過一輪 |
-| MR3 | W4 dev log 加在 hot path 衝擊性能（per F7） | low | low | spec §5 R4 + spec §2.5 MUST 約束 + verifiable grep（all log.Printf inside isDevMode gate）；codex round 1 機械驗證 |
+| MR3 | W4 dev log 加在 hot path 衝擊性能（per F7） | low | low | spec §5 R4 + spec §2.5 MUST 約束 + **diff-scoped 機械驗證**：`git diff origin/main...HEAD` 中新增的 `[hook]` / `[derive]` / `[handler]` / `[broadcast]` log block 必須整段在 `if isDevMode()` gate 內；既有 `[agent]` / `[agent][trace]` / `[probe]` 不在驗證範圍 |
 | MR4 | issue #719 always-on residue 沒在 mlab log 完整消失 | medium | medium | Phase 1 verify §5 三類 [probe] 訊息必 0 hit；非 0 視為 P1 finding |
 | MR5 | 並發 session 寫主 repo 期間 worktree 被污染 | low | high | conventions §1.4 + feedback `concurrent_session_safety` |
 | MR6 | codex round-1 不讀 spec, 建議違反 spec 設計（如建議重新引入 ProbeIntent interface） | medium | high | feedback `codex_pr_review_spec_alignment`；PR review round-2 防守視角必派 |
@@ -499,7 +511,7 @@ grep '\[agent\]' /tmp/pdx-prod.log
 - ✅ 6 個 commit（P2-T1 ~ P2-T6）all push
 - ✅ Phase 1 DoD 全部仍滿足
 - ✅ mlab live verify §8-§12 PASS（5 條 chain log 連貫 + chain_id 對得上 + production-mode 對照無新標籤）
-- ✅ codex round-1 spec §2.5 MUST 約束機械驗證 0 finding（grep `log.Printf` outside isDevMode gate）
+- ✅ codex review 對 `git diff origin/main...HEAD` 中**新增**的 `[hook]` / `[derive]` / `[handler]` normal-path / `[broadcast]` log block 機械驗證：每段都在 `if isDevMode()` gate 內 + 參數 fmt 也在 gate 內（per spec §2.5 MUST 約束 + §5 R4）；既有 production logs 不在驗證範圍
 
 ### 7.3 Phase 3 DoD
 

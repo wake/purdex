@@ -173,10 +173,10 @@ if agentType, ok := m.activeWatchers[oldName]; ok {
 
 ### 1.4 撤回後 manageActivityWatch caller 路徑
 
-`manageActivityWatch` 的 caller 在 `handler.go:361` 仍會呼叫（per issue #719 source pointer），但**只執行 stop 半邊**：
+`manageActivityWatch` 的 caller 在 `handler.go:373` 仍會呼叫（per issue #719 source pointer），但**只執行 stop 半邊**：
 
 ```go
-// handler.go:361 (unchanged)
+// handler.go:373 (unchanged)
 if req.TmuxSession != "" && m.prober != nil && result.Valid {
     m.manageActivityWatch(req.TmuxSession, watchAgentType, watchStatus)
 }
@@ -238,7 +238,7 @@ if req.TmuxSession != "" && m.prober != nil && result.Valid {
 - `[hook]` trigger 入口（handler.go HandleEvent / handleHook 開頭）— 每 hook event 一條
 - `[derive]` DeriveStatus 出口（每家 `cc/codex/opencode/status.go DeriveStatus` return 後）— invalid path 也記
 - `[handler]` invalid path 早 return（**handler.go:230-248 catalog miss `if !result.Valid` 區塊** / **handler.go:310-318 SubagentStart/Stop frame_missing/subagent_id_missing 早 return**）
-- `[broadcast]` 廣播決策（handler.go:324 / handler.go:355 兩處 trace.Emit 後 — SubagentStart updated_frame 與 main valid path 各一）
+- `[broadcast]` 廣播決策（**handler.go:324**（SubagentStart updated_frame）/ **handler.go:388**（main valid path）兩處 trace.Emit 後）
 
 **P2 – 高值補完（W5-7 opencode reconcile 路徑、W6-1/W6-2 cc spinner 路徑）**
 - `[handler]` frame_apply 結果（handler.go:286 trace.Frame 後）
@@ -246,7 +246,7 @@ if req.TmuxSession != "" && m.prober != nil && result.Valid {
 - frame_ops.go 各 lifecycle dispatch 入口（detail-only / SessionEnd / SubagentStart-Stop / SessionStart hot path 4 處）
 
 **P3 – 補完（次要）**
-- `m.broadcastToSession` 內 client count + 過濾條件
+- `m.broadcastToSession` 內 has_clients (per `EventsBroadcaster.HasSubscribers()`) + 過濾條件
 - `replayFromDB` / `sendSnapshot` 路徑（snapshot 重送時 dev log 標記 source=replay）
 - `path_hint_extractor` PreToolUse / PostToolUse 命中與否
 
@@ -284,7 +284,8 @@ if req.TmuxSession != "" && m.prober != nil && result.Valid {
 - `trace.go:150+` `Verify` → `verify`
 - `handler.go:286` `trace.Frame` → `frame`
 - `handler.go:298` `trace.Projection` → `projection`
-- `handler.go:324` `trace.Emit` → `emit`
+- `handler.go:324` `trace.Emit` (SubagentStart updated_frame) → `emit`
+- `handler.go:388` `trace.Emit` (main valid path) → `emit`
 
 需 audit 確認是否每條 hook 路徑都會走過全部 5 步。**Phase 3 預期工作**：
 - 寫 audit script / 跑 mlab 看哪些 hook 類型缺 step（subagent detail-only / invalid catalog miss / SessionEnd / replay-from-DB）
