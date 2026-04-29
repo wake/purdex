@@ -218,6 +218,149 @@ describe('MemoryMonitorPage', () => {
     }
   })
 
+  it('renders daemon metrics for matching active-host session panes', async () => {
+    useTabStore.setState({
+      tabs: {
+        'tab-session': tabWithLeaf('tab-session', 'pane-session', {
+          kind: 'tmux-session',
+          hostId: HOST_ID,
+          sessionCode: 'abc123',
+          mode: 'terminal',
+          cachedName: 'Work',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-session'],
+      activeTabId: 'tab-session',
+      visitHistory: [],
+    })
+    vi.mocked(fetchMonitorSnapshot).mockResolvedValue({
+      ...monitorSnapshot,
+      sessions: [{
+        session_code: 'abc123',
+        tmux_session: { id: '$1', name: 'pdx-abc123' },
+        daemon: {
+          cpu_percent: 12.3,
+          memory_bytes: 2048,
+          process_count: 3,
+          top_processes: [],
+          unavailable_reason: null,
+        },
+      }],
+    })
+
+    render(<MemoryMonitorPage />)
+
+    const sessionRow = await screen.findByTestId('monitor-row-tab-session-pane-session')
+    expect(within(sessionRow).getByText('CPU 12.3%')).toBeInTheDocument()
+    expect(within(sessionRow).getByText('Memory 2 KB')).toBeInTheDocument()
+    expect(within(sessionRow).getByText('3 processes')).toBeInTheDocument()
+    expect(within(sessionRow).getAllByText('Not wired')).toHaveLength(1)
+  })
+
+  it('renders daemon unavailable reasons for matching session panes', async () => {
+    useTabStore.setState({
+      tabs: {
+        'tab-session': tabWithLeaf('tab-session', 'pane-session', {
+          kind: 'tmux-session',
+          hostId: HOST_ID,
+          sessionCode: 'abc123',
+          mode: 'terminal',
+          cachedName: 'Work',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-session'],
+      activeTabId: 'tab-session',
+      visitHistory: [],
+    })
+    vi.mocked(fetchMonitorSnapshot).mockResolvedValue({
+      ...monitorSnapshot,
+      sessions: [{
+        session_code: 'abc123',
+        tmux_session: { id: '$1', name: 'pdx-abc123' },
+        daemon: {
+          cpu_percent: null,
+          memory_bytes: null,
+          process_count: null,
+          top_processes: [],
+          unavailable_reason: 'process_table_unavailable',
+        },
+      }],
+    })
+
+    render(<MemoryMonitorPage />)
+
+    const sessionRow = await screen.findByTestId('monitor-row-tab-session-pane-session')
+    expect(within(sessionRow).getByText('Process table unavailable')).toBeInTheDocument()
+    expect(within(sessionRow).getAllByText('Not wired')).toHaveLength(1)
+  })
+
+  it('does not apply active-host daemon metrics to session panes from another host', async () => {
+    useTabStore.setState({
+      tabs: {
+        'tab-session': tabWithLeaf('tab-session', 'pane-session', {
+          kind: 'tmux-session',
+          hostId: 'host-b',
+          sessionCode: 'abc123',
+          mode: 'terminal',
+          cachedName: 'Remote Work',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-session'],
+      activeTabId: 'tab-session',
+      visitHistory: [],
+    })
+    vi.mocked(fetchMonitorSnapshot).mockResolvedValue({
+      ...monitorSnapshot,
+      sessions: [{
+        session_code: 'abc123',
+        tmux_session: { id: '$1', name: 'pdx-abc123' },
+        daemon: {
+          cpu_percent: 12.3,
+          memory_bytes: 2048,
+          process_count: 3,
+          top_processes: [],
+          unavailable_reason: null,
+        },
+      }],
+    })
+
+    render(<MemoryMonitorPage />)
+
+    const sessionRow = await screen.findByTestId('monitor-row-tab-session-pane-session')
+    expect(within(sessionRow).queryByText('CPU 12.3%')).not.toBeInTheDocument()
+    expect(within(sessionRow).getAllByText('Not wired')).toHaveLength(2)
+  })
+
+  it('keeps daemon metrics unwired when the active-host session is absent from the snapshot', async () => {
+    useTabStore.setState({
+      tabs: {
+        'tab-session': tabWithLeaf('tab-session', 'pane-session', {
+          kind: 'tmux-session',
+          hostId: HOST_ID,
+          sessionCode: 'missing',
+          mode: 'terminal',
+          cachedName: 'Missing',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-session'],
+      activeTabId: 'tab-session',
+      visitHistory: [],
+    })
+    vi.mocked(fetchMonitorSnapshot).mockResolvedValue({
+      ...monitorSnapshot,
+      sessions: [],
+    })
+
+    render(<MemoryMonitorPage />)
+
+    const sessionRow = await screen.findByTestId('monitor-row-tab-session-pane-session')
+    expect(within(sessionRow).getAllByText('Not wired')).toHaveLength(2)
+  })
+
   it('uses active workspace tab order when workspace order differs from global tab order', async () => {
     useTabStore.setState({
       tabs: {

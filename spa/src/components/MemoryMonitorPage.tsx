@@ -6,6 +6,7 @@ import {
   type MonitorConfig,
   type MonitorHostDisk,
   type MonitorHostMemory,
+  type MonitorSessionDaemonMetrics,
   type MonitorSnapshot,
 } from '../lib/host-api'
 import { useHostStore } from '../stores/useHostStore'
@@ -31,6 +32,7 @@ interface PaneRow {
   tabId: string
   paneId: string
   kind: PaneContent['kind']
+  content: PaneContent
 }
 
 export function MemoryMonitorPage() {
@@ -189,7 +191,9 @@ export function MemoryMonitorPage() {
                     <td className="max-w-48 truncate px-3 py-2 font-mono text-text-primary">{row.paneId}</td>
                     <td className="px-3 py-2 text-text-muted">{row.kind}</td>
                     <td className="px-3 py-2 text-text-muted">{t('performance_monitor.not_wired')}</td>
-                    <td className="px-3 py-2 text-text-muted">{t('performance_monitor.not_wired')}</td>
+                    <td className="px-3 py-2 text-text-muted">
+                      <DaemonMetricCell row={row} snapshot={snapshot} activeHostId={activeHostId} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -207,10 +211,31 @@ function collectPaneRows(tabs: Record<string, Tab>, tabOrder: string[]): PaneRow
     const tab = tabs[tabId]
     if (!tab) continue
     for (const pane of collectLeaves(tab.layout)) {
-      rows.push({ tabId, paneId: pane.id, kind: pane.content.kind })
+      rows.push({ tabId, paneId: pane.id, kind: pane.content.kind, content: pane.content })
     }
   }
   return rows
+}
+
+function DaemonMetricCell({ row, snapshot, activeHostId }: { row: PaneRow; snapshot: MonitorSnapshot | null; activeHostId: string }) {
+  const t = useI18nStore((s) => s.t)
+  const metrics = findDaemonMetrics(row, snapshot, activeHostId)
+  if (!metrics) return t('performance_monitor.not_wired')
+  if (metrics.unavailable_reason) return formatUnavailableReason(metrics.unavailable_reason, t)
+
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1">
+      <span>{t('performance_monitor.daemon_cpu', { value: formatDaemonCPU(metrics.cpu_percent, t) })}</span>
+      <span>{t('performance_monitor.daemon_memory', { value: formatDaemonMemory(metrics.memory_bytes, t) })}</span>
+      <span>{formatProcessCount(metrics.process_count, t)}</span>
+    </div>
+  )
+}
+
+function findDaemonMetrics(row: PaneRow, snapshot: MonitorSnapshot | null, activeHostId: string): MonitorSessionDaemonMetrics | null {
+  const content = row.content
+  if (!snapshot || content.kind !== 'tmux-session' || content.hostId !== activeHostId) return null
+  return snapshot.sessions.find((session) => session.session_code === content.sessionCode)?.daemon ?? null
 }
 
 function MetricCard({ label, primary, detail }: { label: string; primary: string; detail: string }) {
@@ -236,6 +261,21 @@ function formatBytePair(metric: MonitorHostMemory | MonitorHostDisk, t: (key: st
 function formatPercent(percent: number | null, t: (key: string) => string) {
   if (percent === null) return t('performance_monitor.unavailable')
   return `${percent.toFixed(1)}%`
+}
+
+function formatDaemonCPU(percent: number | null, t: (key: string) => string) {
+  if (percent === null) return t('performance_monitor.pending')
+  return `${percent.toFixed(1)}%`
+}
+
+function formatDaemonMemory(bytes: number | null, t: (key: string) => string) {
+  if (bytes === null) return t('performance_monitor.unavailable')
+  return formatBytes(bytes)
+}
+
+function formatProcessCount(count: number | null, t: (key: string, params?: Record<string, string | number>) => string) {
+  if (count === null) return t('performance_monitor.processes_unavailable')
+  return t(count === 1 ? 'performance_monitor.process_count_one' : 'performance_monitor.process_count_other', { count })
 }
 
 function formatBytes(bytes: number) {
