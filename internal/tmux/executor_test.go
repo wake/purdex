@@ -397,3 +397,85 @@ func TestFakeExecutor_RangeMethods_Roundtrip(t *testing.T) {
 		t.Errorf("CapturePaneTopLines(3) = %q, want %q", got, want)
 	}
 }
+
+// --- P2-T1: Executor.HasPane(paneID) tests ---
+
+// TestHasPane_PaneExists_ReturnsTrue verifies that HasPane returns true
+// when the requested pane id appears in `tmux list-panes -a -F '#{pane_id}'`.
+func TestHasPane_PaneExists_ReturnsTrue(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	// Mimic `tmux list-panes -a -F '#{pane_id}'` returning two panes.
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+if [ "$1" != "list-panes" ] || [ "$2" != "-a" ] || [ "$3" != "-F" ] || [ "$4" != "#{pane_id}" ]; then
+  printf 'unexpected args: %s\n' "$*" >&2
+  exit 2
+fi
+printf '%%5\n%%7\n'
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if !(&tmux.RealExecutor{}).HasPane("%5") {
+		t.Errorf("HasPane(%q) = false, want true", "%5")
+	}
+}
+
+// TestHasPane_PaneNotInList_ReturnsFalse verifies that HasPane returns false
+// when the pane id is absent from `tmux list-panes` output.
+func TestHasPane_PaneNotInList_ReturnsFalse(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+if [ "$1" != "list-panes" ] || [ "$2" != "-a" ] || [ "$3" != "-F" ] || [ "$4" != "#{pane_id}" ]; then
+  printf 'unexpected args: %s\n' "$*" >&2
+  exit 2
+fi
+printf '%%5\n%%7\n'
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if (&tmux.RealExecutor{}).HasPane("%9") {
+		t.Errorf("HasPane(%q) = true, want false", "%9")
+	}
+}
+
+// TestHasPane_TmuxCommandError_ReturnsFalse verifies that any tmux invocation
+// error (e.g. server not running) is treated conservatively as not-found.
+func TestHasPane_TmuxCommandError_ReturnsFalse(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+printf 'no server running\n' >&2
+exit 1
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if (&tmux.RealExecutor{}).HasPane("%5") {
+		t.Errorf("HasPane returned true on tmux error, want false")
+	}
+}
+
+// TestHasPane_EmptyPaneID_ReturnsFalse verifies that an empty paneID short
+// circuits to false without invoking tmux. The script below would fail the
+// test if executed.
+func TestHasPane_EmptyPaneID_ReturnsFalse(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+printf 'tmux must not be invoked for empty paneID\n' >&2
+exit 99
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if (&tmux.RealExecutor{}).HasPane("") {
+		t.Errorf("HasPane(\"\") = true, want false")
+	}
+}

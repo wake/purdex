@@ -36,6 +36,11 @@ type Executor interface {
 	KillSession(name string) error
 	RenameSession(oldName, newName string) error
 	HasSession(name string) bool
+	// HasPane reports whether the given pane id (e.g. "%5") still exists in
+	// the global tmux pane list. Returns false on empty paneID, missing
+	// tmux server, or any command error (conservative — caller treats
+	// false as "pane gone").
+	HasPane(paneID string) bool
 	SendKeys(target, keys string) error
 	SendKeysRaw(target string, keys ...string) error
 	PasteText(target, text string) error
@@ -199,6 +204,29 @@ func (r *RealExecutor) HasSession(name string) bool {
 	// Use "=" prefix for exact name matching (tmux 3.2+).
 	// Without it, "has-session -t foo" matches "foobar" via prefix.
 	return exec.Command("tmux", "has-session", "-t", "="+name).Run() == nil
+}
+
+// HasPane reports whether the given pane id is currently listed by
+// `tmux list-panes -a -F '#{pane_id}'`. Conservative on any error: a
+// non-zero exit (no server running, etc) returns false. Empty paneID
+// short-circuits to false without invoking tmux.
+//
+// Used by codex ProbeIntent ProcessDead detector — see
+// internal/agent/codex/probe_intent_process_dead.go.
+func (r *RealExecutor) HasPane(paneID string) bool {
+	if paneID == "" {
+		return false
+	}
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_id}").Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) == paneID {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *RealExecutor) SendKeys(target, keys string) error {
