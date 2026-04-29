@@ -14,6 +14,7 @@ import (
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/session"
 )
 
 func TestSnapshot_ReusesCachedSnapshotWithinRefreshInterval(t *testing.T) {
@@ -122,6 +123,87 @@ func TestSnapshot_IncludesHostMetrics(t *testing.T) {
 	assert.Equal(t, uint64(2000), *host.Disk.TotalBytes)
 }
 
+func TestSnapshot_IncludesPurdexSessionProcessTotals(t *testing.T) {
+	collector := newFakeHostCollector()
+	tmuxLister := &fakeSnapshotTmuxPaneLister{panes: []TmuxPane{
+		{TmuxSessionID: "$1", TmuxSessionName: "work", PaneID: "%1", PanePID: 101},
+		{TmuxSessionID: "$1", TmuxSessionName: "work", PaneID: "%2", PanePID: 201},
+		{TmuxSessionID: "$2", TmuxSessionName: "other", PaneID: "%3", PanePID: 901},
+	}}
+	processCollector := &fakeSnapshotProcessCollector{processes: []Process{
+		{PID: 101, PPID: 1, Command: "shell", CPUPercent: 1, MemoryBytes: 100},
+		{PID: 201, PPID: 101, Command: "worker", CPUPercent: 2, MemoryBytes: 200},
+		{PID: 301, PPID: 201, Command: "nested", CPUPercent: 3, MemoryBytes: 300},
+		{PID: 901, PPID: 1, Command: "unrelated", CPUPercent: 90, MemoryBytes: 9000},
+	}}
+	m := New(WithCollectors(Collectors{
+		HostCollector:         collector,
+		TmuxPaneLister:        tmuxLister,
+		ProcessTableCollector: processCollector,
+	}), withSessionProvider(&fakeSessionProvider{sessions: []session.SessionInfo{
+		{Code: "abc123", TmuxID: "$1", Name: "work"},
+	}}))
+	require.NoError(t, m.Init(core.New(core.CoreDeps{Config: &config.Config{}})))
+
+	snapshot := requestSnapshot(t, m)
+
+	var sessions []SessionMetrics
+	require.NoError(t, json.Unmarshal(snapshot.Sessions, &sessions))
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "abc123", sessions[0].SessionCode)
+	assert.Equal(t, "$1", sessions[0].TmuxSession.ID)
+	assert.Equal(t, "work", sessions[0].TmuxSession.Name)
+	assert.Equal(t, 6.0, sessions[0].Daemon.CPUPercent)
+	assert.Equal(t, uint64(600), sessions[0].Daemon.MemoryBytes)
+	assert.Equal(t, 3, sessions[0].Daemon.ProcessCount)
+	assert.Equal(t, 1, tmuxLister.calls)
+	assert.Equal(t, 1, processCollector.calls)
+}
+
+func TestSnapshot_UsesSessionProviderFromRegistry(t *testing.T) {
+	collector := newFakeHostCollector()
+	tmuxLister := &fakeSnapshotTmuxPaneLister{panes: []TmuxPane{
+		{TmuxSessionID: "$1", TmuxSessionName: "work", PaneID: "%1", PanePID: 101},
+	}}
+	processCollector := &fakeSnapshotProcessCollector{processes: []Process{
+		{PID: 101, PPID: 1, Command: "shell", CPUPercent: 1, MemoryBytes: 100},
+	}}
+	provider := &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "abc123", TmuxID: "$1", Name: "work"}}}
+	c := core.New(core.CoreDeps{Config: &config.Config{}})
+	c.Registry.Register(session.RegistryKey, sessionProvider(provider))
+	m := New(WithCollectors(Collectors{
+		HostCollector:         collector,
+		TmuxPaneLister:        tmuxLister,
+		ProcessTableCollector: processCollector,
+	}))
+	require.NoError(t, m.Init(c))
+
+	snapshot := requestSnapshot(t, m)
+
+	var sessions []SessionMetrics
+	require.NoError(t, json.Unmarshal(snapshot.Sessions, &sessions))
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "abc123", sessions[0].SessionCode)
+	assert.Equal(t, 1, provider.calls)
+}
+
+func TestSnapshot_SkipsTmuxAndProcessCollectorsWhenNoLiveSessions(t *testing.T) {
+	tmuxLister := &fakeSnapshotTmuxPaneLister{}
+	processCollector := &fakeSnapshotProcessCollector{}
+	m := New(WithCollectors(Collectors{
+		HostCollector:         newFakeHostCollector(),
+		TmuxPaneLister:        tmuxLister,
+		ProcessTableCollector: processCollector,
+	}), withSessionProvider(&fakeSessionProvider{}))
+	require.NoError(t, m.Init(core.New(core.CoreDeps{Config: &config.Config{}})))
+
+	snapshot := requestSnapshot(t, m)
+
+	assert.JSONEq(t, `[]`, string(snapshot.Sessions))
+	assert.Zero(t, tmuxLister.calls)
+	assert.Zero(t, processCollector.calls)
+}
+
 type snapshotResponse struct {
 	SampledAt int64           `json:"sampled_at"`
 	Host      json.RawMessage `json:"host"`
@@ -163,4 +245,35 @@ func (c *fakeClock) Now() time.Time {
 
 func (c *fakeClock) Advance(d time.Duration) {
 	c.now = c.now.Add(d)
+}
+
+type fakeSessionProvider struct {
+	sessions []session.SessionInfo
+	err      error
+	calls    int
+}
+
+func (p *fakeSessionProvider) ListSessions() ([]session.SessionInfo, error) {
+	p.calls++
+	return p.sessions, p.err
+}
+
+type fakeSnapshotTmuxPaneLister struct {
+	panes []TmuxPane
+	calls int
+}
+
+func (l *fakeSnapshotTmuxPaneLister) ListPanes(context.Context) ([]TmuxPane, error) {
+	l.calls++
+	return l.panes, nil
+}
+
+type fakeSnapshotProcessCollector struct {
+	processes []Process
+	calls     int
+}
+
+func (c *fakeSnapshotProcessCollector) ListProcesses(context.Context) ([]Process, error) {
+	c.calls++
+	return c.processes, nil
 }

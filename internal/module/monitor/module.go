@@ -10,6 +10,7 @@ import (
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/session"
 )
 
 type TmuxPane struct {
@@ -27,6 +28,10 @@ type ProcessTableCollector interface {
 	ListProcesses(context.Context) ([]Process, error)
 }
 
+type sessionProvider interface {
+	ListSessions() ([]session.SessionInfo, error)
+}
+
 type Collectors struct {
 	HostCollector         HostCollector
 	TmuxPaneLister        TmuxPaneLister
@@ -36,10 +41,11 @@ type Collectors struct {
 type Option func(*Module)
 
 type Module struct {
-	collectors Collectors
-	core       *core.Core
-	now        func() time.Time
-	hostState  *HostMetricsState
+	collectors      Collectors
+	core            *core.Core
+	now             func() time.Time
+	hostState       *HostMetricsState
+	sessionProvider sessionProvider
 
 	snapshotMu     sync.Mutex
 	cachedSnapshot *snapshot
@@ -75,12 +81,25 @@ func withClock(now func() time.Time) Option {
 	}
 }
 
+func withSessionProvider(provider sessionProvider) Option {
+	return func(m *Module) {
+		m.sessionProvider = provider
+	}
+}
+
 func (m *Module) Name() string { return "monitor" }
 
-func (m *Module) Dependencies() []string { return nil }
+func (m *Module) Dependencies() []string { return []string{"session"} }
 
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+	if m.sessionProvider == nil && c != nil && c.Registry != nil {
+		if svc, ok := c.Registry.Get(session.RegistryKey); ok {
+			if provider, ok := svc.(sessionProvider); ok {
+				m.sessionProvider = provider
+			}
+		}
+	}
 	return nil
 }
 
@@ -108,11 +127,22 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 type snapshot struct {
-	SampledAt int64           `json:"sampled_at"`
-	Host      HostMetrics     `json:"host"`
-	Sessions  []any           `json:"sessions"`
-	Config    EffectiveConfig `json:"config"`
+	SampledAt int64            `json:"sampled_at"`
+	Host      HostMetrics      `json:"host"`
+	Sessions  []SessionMetrics `json:"sessions"`
+	Config    EffectiveConfig  `json:"config"`
 	sampledAt time.Time
+}
+
+type TmuxSessionRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type SessionMetrics struct {
+	SessionCode string               `json:"session_code"`
+	TmuxSession TmuxSessionRef       `json:"tmux_session"`
+	Daemon      PaneProcessAggregate `json:"daemon"`
 }
 
 func (m *Module) getSnapshot(ctx context.Context) (*snapshot, error) {
@@ -127,11 +157,16 @@ func (m *Module) getSnapshot(ctx context.Context) (*snapshot, error) {
 		return m.cachedSnapshot, nil
 	}
 
+	sessions, err := m.collectSessionMetrics(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	sampledAt := m.now()
 	snapshot := &snapshot{
 		SampledAt: sampledAt.UnixMilli(),
 		Host:      collectHostMetrics(ctx, m.ensureHostMetricsState()),
-		Sessions:  []any{},
+		Sessions:  sessions,
 		Config:    cfg,
 		sampledAt: sampledAt,
 	}
@@ -144,6 +179,41 @@ func (m *Module) ensureHostMetricsState() *HostMetricsState {
 		m.hostState = NewHostMetricsState(m.collectors.HostCollector)
 	}
 	return m.hostState
+}
+
+func (m *Module) collectSessionMetrics(ctx context.Context) ([]SessionMetrics, error) {
+	if m.sessionProvider == nil {
+		return []SessionMetrics{}, nil
+	}
+	sessions, err := m.sessionProvider.ListSessions()
+	if err != nil {
+		return nil, err
+	}
+	if len(sessions) == 0 {
+		return []SessionMetrics{}, nil
+	}
+
+	panes, err := m.collectors.TmuxPaneLister.ListPanes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	processes, err := m.collectors.ProcessTableCollector.ListProcesses(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	metrics := make([]SessionMetrics, 0, len(sessions))
+	for _, sess := range sessions {
+		metrics = append(metrics, SessionMetrics{
+			SessionCode: sess.Code,
+			TmuxSession: TmuxSessionRef{
+				ID:   sess.TmuxID,
+				Name: sess.Name,
+			},
+			Daemon: AggregateSessionProcesses(sess.TmuxID, panes, processes),
+		})
+	}
+	return metrics, nil
 }
 
 func (m *Module) effectiveConfig() EffectiveConfig {

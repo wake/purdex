@@ -185,6 +185,21 @@ func TestAggregatePaneDescendantsHandlesCyclesAndMalformedParents(t *testing.T) 
 	assert.Equal(t, PaneProcessAggregate{CPUPercent: 6, MemoryBytes: 600, ProcessCount: 3}, got)
 }
 
+func TestAggregateSessionProcessesAggregatesAllPanesAndDeduplicatesByPID(t *testing.T) {
+	got := AggregateSessionProcesses("$1", []TmuxPane{
+		{TmuxSessionID: "$1", TmuxSessionName: "work", PaneID: "%1", PanePID: 101},
+		{TmuxSessionID: "$1", TmuxSessionName: "work", PaneID: "%2", PanePID: 201},
+		{TmuxSessionID: "$2", TmuxSessionName: "other", PaneID: "%3", PanePID: 901},
+	}, []Process{
+		{PID: 101, PPID: 1, Command: "shell", CPUPercent: 1, MemoryBytes: 100},
+		{PID: 201, PPID: 101, Command: "worker", CPUPercent: 2, MemoryBytes: 200},
+		{PID: 301, PPID: 201, Command: "nested", CPUPercent: 3, MemoryBytes: 300},
+		{PID: 901, PPID: 1, Command: "unrelated", CPUPercent: 90, MemoryBytes: 9000},
+	})
+
+	assert.Equal(t, PaneProcessAggregate{CPUPercent: 6, MemoryBytes: 600, ProcessCount: 3}, got)
+}
+
 func assertProcessField(t *testing.T, processType reflect.Type, name string, kind reflect.Kind, tag string) {
 	t.Helper()
 
