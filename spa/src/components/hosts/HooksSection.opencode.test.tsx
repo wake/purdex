@@ -26,8 +26,8 @@ beforeEach(() => {
     json: async () => ({
       installed: path.includes('/opencode/') ? false : true,
       events: path.includes('/opencode/')
-        ? { SessionStart: { installed: false }, SubagentStart: { installed: false } }
-        : { SessionStart: { installed: true } },
+        ? { PdxSessionStart: { installed: false }, PdxSubagentStart: { installed: false } }
+        : { PdxSessionStart: { installed: true } },
       issues: [],
     }),
   }))
