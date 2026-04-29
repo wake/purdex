@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.258] - 2026-04-29
+
+### Feat(monitor): aggregate session process totals (#742)
+
+Adds the next daemon monitor slice: live Purdex sessions are now represented in monitor snapshots by `session_code` and tmux session identity. The monitor reads the session provider from the core registry and aggregates process totals for each Purdex tmux session.
+
+Session totals include every pane in the tmux session, including inactive panes, and include each pane root process plus descendants. Processes are de-duplicated by PID across panes so split/session layouts do not double-count shared descendants.
+
+This remains a daemon-only, non-breaking slice. SPA UI, unavailable-state rendering, top-process selection, and single-flight sampling are still deferred to later PRs.
+
 ## [1.0.0-alpha.257] - 2026-04-29
 
 ### Feat(monitor): add daemon performance monitor foundation (#740)
