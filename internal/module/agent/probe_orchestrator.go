@@ -56,8 +56,8 @@ func isDevMode() bool { return os.Getenv("PDX_DEV_MODE") == "1" }
 // translates raw probe.ScreenChangeEvent ticks into agent status broadcasts.
 //
 // Lifecycle (v2.0 — dumb probe, orchestrator-only dedup):
-//   - startWatch resolves the agent's ProbeProfile, registers a callback
-//     bound to (session, agentType), and increments MetricProbeWatchStarted
+//   - startWatch registers a callback bound to (session, agentType) using
+//     caller-provided probe.WatchOptions, and increments MetricProbeWatchStarted
 //   - The watcher fires ScreenChanged on every diff tick + ScreenStable
 //     after IdleStableTicks consecutive matches (no emit-once flags)
 //   - interpretScreenEvent applies guards (stale-callback, graceWindow,
@@ -115,8 +115,10 @@ func (o *probeOrchestrator) prober() proberWatcher {
 // match the existing tmux-target convention (R7 fix).
 //
 // W3 (this PR): orchestrator no longer owns a default profile or looks up
-// per-agent ProbeProfile via the registry. Callers (e.g. W6 ProbeIntent or
-// future explicit start sites) supply opts directly. While Phase 1 keeps
+// per-agent profile data via the registry (the former `ProbeProfile` /
+// `ProbeProfileProvider` types have been removed). Callers (e.g. W6
+// ProbeIntent or future explicit start sites) supply opts directly. While
+// Phase 1 keeps
 // manageActivityWatch / renameSessionLocked as default no-ops, no production
 // caller invokes startWatch yet — tests exercise it directly to pin the
 // surface (FX4 invalid-opts, CC4 explicit start) until W6 lands.
