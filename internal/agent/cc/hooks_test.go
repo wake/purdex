@@ -960,51 +960,14 @@ func TestCcKnownEventNames_DerivedFromUpstreamKeys(t *testing.T) {
 	}
 }
 
-// ---- P1-T10: ccOwnedCleanupEventNames is the three-set union ----
+// ---- CLEANUP-T1: ccOwnedCleanupEventNames is the two-set union ----
 
-// TestCcOwnedCleanupEventNames_FixtureDerivedLegacySet pins the static
-// fixture introduced in P3-T4a to the runtime cc installable upstream-key
-// set. After P3-T4 removed spec.Name, the legacy upstream-key strings live
-// only in ccLegacyEventNames; the catalog still exposes them via
-// UpstreamKeys[0] (cc has 1:1 PurdexName ↔ UpstreamKey mapping). This test
-// guards against drift — adding/removing an installable in the catalog must
-// be reflected in ccLegacyEventNames manually (PR-W2-cleanup-followup will
-// retire the legacy set entirely).
-func TestCcOwnedCleanupEventNames_FixtureDerivedLegacySet(t *testing.T) {
-	fixture := make(map[string]bool, len(ccLegacyEventNames))
-	for _, n := range ccLegacyEventNames {
-		fixture[n] = true
-	}
-	runtime := make(map[string]bool)
-	for _, spec := range ccEventSpecs {
-		if !agent.IsInstallableHookSpec(spec) {
-			continue
-		}
-		// cc installable specs have a single-element UpstreamKeys slice; that
-		// element is the legacy upstream event name (e.g. "Stop") that
-		// ccLegacyEventNames also lists.
-		runtime[spec.UpstreamKeys[0]] = true
-	}
-	if len(fixture) != len(runtime) {
-		t.Errorf("ccLegacyEventNames size = %d, runtime installable upstream-key set size = %d", len(fixture), len(runtime))
-	}
-	for n := range runtime {
-		if !fixture[n] {
-			t.Errorf("ccLegacyEventNames missing runtime installable UpstreamKey %q", n)
-		}
-	}
-	for n := range fixture {
-		if !runtime[n] {
-			t.Errorf("ccLegacyEventNames has %q but no runtime installable UpstreamKey matches (drift — update fixture or catalog)", n)
-		}
-	}
-}
-
-// TestCcOwnedCleanupEventNames_ThreeSetUnion asserts cleanup set == union of
-// installable specs' UpstreamKeys ∪ PurdexName ∪ legacy Name. Per spec §6.1
-// invariant 6. cc has one-to-one mapping so UpstreamKeys[0] == Name and the
-// union collapses to legacy Name ∪ PurdexName.
-func TestCcOwnedCleanupEventNames_ThreeSetUnion(t *testing.T) {
+// TestCcOwnedCleanupEventNames_TwoSetUnion asserts cleanup set == union of
+// installable specs' UpstreamKeys ∪ PurdexName. Per spec §6.1 invariant 6
+// post-cleanup: legacy Name set retired (W2 alpha.255 + reinstall assumed).
+// cc has one-to-one upstream/Pdx mapping so the two-set union has 2× the
+// installable count keys (legacy upstream key + Pdx-prefixed).
+func TestCcOwnedCleanupEventNames_TwoSetUnion(t *testing.T) {
 	got := ccOwnedCleanupEventNames()
 	want := map[string]bool{}
 	for _, spec := range ccEventSpecs {
@@ -1014,7 +977,6 @@ func TestCcOwnedCleanupEventNames_ThreeSetUnion(t *testing.T) {
 		for _, key := range spec.UpstreamKeys {
 			want[key] = true
 		}
-		want[spec.PurdexName] = true
 		want[spec.PurdexName] = true
 	}
 	if len(got) != len(want) {

@@ -708,31 +708,12 @@ func codexKnownEventNames() map[string]bool {
 	return known
 }
 
-// codexLegacyEventNames pins the pre-W2 command-tail tokens codex
-// installers emitted (e.g. `pdx hook --agent codex SessionStart`). Sourced
-// as a static fixture rather than a runtime spec.Name traversal so that
-// P3-T4 can remove HookEventSpec.Name without breaking the cleanup helper.
-// The set is kept until PR-W2-cleanup-followup (plan G1 / §5.3
-// CLEANUP-T1) so reinstalls following alpha.254 still recognise pre-W2
-// tokens.
-var codexLegacyEventNames = []string{
-	"SessionStart",
-	"UserPromptSubmit",
-	"SubagentStart",
-	"SubagentStop",
-	"Stop",
-	"StopFailure",
-	"Notification",
-	"PermissionRequest",
-	"SessionEnd",
-}
-
-// codexOwnedCleanupEventNames is the three-set union per spec §6.1
-// invariant 6: installable specs' UpstreamKeys ∪ PurdexName ∪ legacy Name.
-// codex has one-to-one upstream/Pdx mapping so the union collapses to legacy
-// Name ∪ PurdexName at runtime. P3-T4a sources the legacy Name set from
-// codexLegacyEventNames (static fixture) so removing the deprecated
-// HookEventSpec.Name field in P3-T4 doesn't break the cleanup helper.
+// codexOwnedCleanupEventNames is the two-set union per spec §6.1 invariant
+// 6 post-cleanup: installable specs' UpstreamKeys ∪ PurdexName. codex has
+// one-to-one upstream/Pdx mapping so pre-W2 command-tail tokens (e.g.
+// `Stop`) are still recognised via the UpstreamKey leg; the redundant
+// legacy Name set retired in PR-W2-cleanup-followup (plan §5.3 CLEANUP-T1)
+// once W2 alpha.255 shipped and user reinstall completed.
 func codexOwnedCleanupEventNames() map[string]bool {
 	owned := make(map[string]bool)
 	for _, spec := range codexEventSpecs {
@@ -743,9 +724,6 @@ func codexOwnedCleanupEventNames() map[string]bool {
 			owned[key] = true
 		}
 		owned[spec.PurdexName] = true
-	}
-	for _, legacy := range codexLegacyEventNames {
-		owned[legacy] = true
 	}
 	return owned
 }

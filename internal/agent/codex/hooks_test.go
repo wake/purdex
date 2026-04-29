@@ -1796,49 +1796,13 @@ func TestCodexKnownEventNames_DerivedFromUpstreamKeys(t *testing.T) {
 	}
 }
 
-// TestCodexOwnedCleanupEventNames_FixtureDerivedLegacySet pins the static
-// fixture introduced in P3-T4a to the runtime codex installable upstream-key
-// set. After P3-T4 removed spec.Name the legacy upstream-key strings live
-// only in codexLegacyEventNames; the catalog still exposes them via
-// UpstreamKeys[0] (codex has 1:1 PurdexName ↔ UpstreamKey mapping). Drift
-// detected here means the fixture is out of sync with the catalog (until
-// PR-W2-cleanup-followup removes the legacy set entirely).
-func TestCodexOwnedCleanupEventNames_FixtureDerivedLegacySet(t *testing.T) {
-	fixture := make(map[string]bool, len(codexLegacyEventNames))
-	for _, n := range codexLegacyEventNames {
-		fixture[n] = true
-	}
-	runtime := make(map[string]bool)
-	for _, spec := range codexEventSpecs {
-		if !agent.IsInstallableHookSpec(spec) {
-			continue
-		}
-		// codex installable specs have a single-element UpstreamKeys slice
-		// equal to the legacy upstream event name (e.g. "Stop") that
-		// codexLegacyEventNames also lists.
-		runtime[spec.UpstreamKeys[0]] = true
-	}
-	if len(fixture) != len(runtime) {
-		t.Errorf("codexLegacyEventNames size = %d, runtime installable upstream-key set size = %d", len(fixture), len(runtime))
-	}
-	for n := range runtime {
-		if !fixture[n] {
-			t.Errorf("codexLegacyEventNames missing runtime installable Name %q", n)
-		}
-	}
-	for n := range fixture {
-		if !runtime[n] {
-			t.Errorf("codexLegacyEventNames has %q but no runtime installable Name matches (drift — update fixture or catalog)", n)
-		}
-	}
-}
-
-// TestCodexOwnedCleanupEventNames_ThreeSetUnion asserts the cleanup set is
-// the three-set union per spec §6.1 invariant 6: installable specs'
-// UpstreamKeys ∪ PurdexName ∪ legacy Name. codex has one-to-one mapping so
-// the union collapses to legacy Name ∪ PurdexName at runtime; the legacy
-// Name set is preserved per plan G1 until PR-W2-cleanup-followup.
-func TestCodexOwnedCleanupEventNames_ThreeSetUnion(t *testing.T) {
+// TestCodexOwnedCleanupEventNames_TwoSetUnion asserts the cleanup set is
+// the two-set union per spec §6.1 invariant 6 post-cleanup: installable
+// specs' UpstreamKeys ∪ PurdexName. codex has one-to-one upstream/Pdx
+// mapping so the union has 2× the installable count keys. Legacy Name set
+// retired in CLEANUP-T1 (W2 alpha.255 + reinstall assumed; cc/codex
+// 1:1 mapping makes the legacy Name set redundant with UpstreamKeys).
+func TestCodexOwnedCleanupEventNames_TwoSetUnion(t *testing.T) {
 	got := codexOwnedCleanupEventNames()
 	want := map[string]bool{}
 	for _, spec := range codexEventSpecs {
@@ -1848,7 +1812,6 @@ func TestCodexOwnedCleanupEventNames_ThreeSetUnion(t *testing.T) {
 		for _, key := range spec.UpstreamKeys {
 			want[key] = true
 		}
-		want[spec.PurdexName] = true
 		want[spec.PurdexName] = true
 	}
 	if len(got) != len(want) {
