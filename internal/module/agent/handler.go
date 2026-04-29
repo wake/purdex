@@ -343,8 +343,8 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	if lifecycle == agentpkg.LifecycleSubagentStart || lifecycle == agentpkg.LifecycleSubagentStop {
 		if frameMeta.Decision != "updated_frame" {
 			if isDevMode() {
-				log.Printf("[handler] invalid_skip reason=%s chain_id=%s",
-					frameMeta.Decision, trace.ChainID())
+				log.Printf("[handler] invalid_skip decision=%s reason=%s chain_id=%s",
+					frameMeta.Decision, frameMeta.Reason, trace.ChainID())
 			}
 			trace.Finish("completed", "emit_skipped")
 			traceFinished = true

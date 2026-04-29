@@ -437,11 +437,15 @@ func TestHandler_DevModeLog_InvalidSkipSubagentNoFrame(t *testing.T) {
 	}
 	out := buf.String()
 	line := findLogLine(t, out, `\[handler\] invalid_skip`)
-	// frameMeta.Decision is "skipped" for the subagent frame_missing branch;
-	// the dev log carries the raw decision per plan §P2-T6 ("frameMeta.Decision
-	// 原始值"). Test against the actual decision string emitted by frame_ops.
-	if !strings.Contains(line, "reason=skipped") {
-		t.Errorf("[handler] invalid_skip subagent missing reason=skipped: %s", line)
+	// Subagent early-return surfaces both frameMeta.Decision ("skipped") and
+	// frameMeta.Reason ("frame_missing" here). Decision alone is identical
+	// across every invalid branch, so reason is the field that distinguishes
+	// frame_missing / subagent_id_missing / frame_store_unavailable / etc.
+	if !strings.Contains(line, "decision=skipped") {
+		t.Errorf("[handler] invalid_skip subagent missing decision=skipped: %s", line)
+	}
+	if !strings.Contains(line, "reason=frame_missing") {
+		t.Errorf("[handler] invalid_skip subagent missing reason=frame_missing: %s", line)
 	}
 	if extractField(line, "chain_id=") == "" {
 		t.Errorf("[handler] invalid_skip subagent chain_id should be non-empty: %s", line)
