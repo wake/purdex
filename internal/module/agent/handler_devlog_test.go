@@ -181,6 +181,41 @@ func TestHandler_DevModeLog_DeriveSkipped(t *testing.T) {
 	}
 }
 
+// TestHandler_DevModeLog_FrameApply verifies the [handler] frame_apply
+// line under PDX_DEV_MODE=1 after applyFrameEvent succeeds. Fields:
+// session / frame_id / lifecycle (= req.PurdexName) / decision / chain_id.
+func TestHandler_DevModeLog_FrameApply(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	buf := captureDevLog(t)
+	m := newTestModule(t)
+
+	devLogPostValid(t, m)
+
+	if m.traceSink != nil {
+		m.traceSink.FlushForTest()
+	}
+	out := buf.String()
+	line := findLogLine(t, out, `\[handler\] frame_apply`)
+	if !strings.Contains(line, "session=dev") {
+		t.Errorf("[handler] frame_apply missing session=dev: %s", line)
+	}
+	if !strings.Contains(line, "lifecycle=PdxStop") {
+		t.Errorf("[handler] frame_apply missing lifecycle=PdxStop: %s", line)
+	}
+	if extractField(line, "decision=") == "" {
+		t.Errorf("[handler] frame_apply decision should be non-empty: %s", line)
+	}
+	if extractField(line, "frame_id=") == "" {
+		// Empty string is valid (skipped frames have no FrameID); just confirm the field is present.
+		if !strings.Contains(line, "frame_id=") {
+			t.Errorf("[handler] frame_apply missing frame_id= field: %s", line)
+		}
+	}
+	if extractField(line, "chain_id=") == "" {
+		t.Errorf("[handler] frame_apply chain_id should be non-empty: %s", line)
+	}
+}
+
 // findLogLine returns the first log line matching the given regexp pattern,
 // failing the test if none is found.
 func findLogLine(t *testing.T, out, pattern string) string {
