@@ -11,6 +11,7 @@ import {
   type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
+  type Modifier,
 } from '@dnd-kit/core'
 import {
   SortableContext,
@@ -33,12 +34,38 @@ import { computeDragEndAction, dispatchDragEndAction, type DragData } from '../l
 import { useSpringLoad } from '../lib/useSpringLoad'
 import { useCrossWorkspaceDragOver } from '../lib/useCrossWorkspaceDragOver'
 
+// Each WorkspaceRow registers two overlapping droppables: the useSortable
+// wrapper (id = workspace.id) for workspace reordering, and a useDroppable
+// header (id = `ws-header-${id}`) for tab cross-ws drops. When dragging a
+// workspace, both contain the pointer; pointerWithin returns both and `over`
+// flickers between them — verticalListSortingStrategy displaces siblings only
+// when over.id is in its items list, so siblings bounce in/out as the over
+// alternates. Filter the droppable set by the active drag's type so each
+// drag mode only sees its meaningful targets.
 const customCollisionDetection: CollisionDetection = (args) => {
-  const pw = pointerWithin(args)
+  const activeData = args.active.data.current as DragData | undefined
+  const containers =
+    activeData?.type === 'workspace'
+      ? args.droppableContainers.filter((c) => {
+          const d = c.data.current as DragData | undefined
+          return d?.type === 'workspace'
+        })
+      : activeData?.type === 'tab'
+        ? args.droppableContainers.filter((c) => {
+            const d = c.data.current as DragData | undefined
+            // Workspace sortables produce no meaningful action for tab drops
+            // (computeDragEndAction returns NOOP); excluding them prevents
+            // the same over-flicker between the workspace sortable and its
+            // own header droppable when a tab hovers over a row.
+            return d?.type !== 'workspace'
+          })
+        : args.droppableContainers
+  const filtered = { ...args, droppableContainers: containers }
+  const pw = pointerWithin(filtered)
   if (pw.length > 0) return pw
-  const ri = rectIntersection(args)
+  const ri = rectIntersection(filtered)
   if (ri.length > 0) return ri
-  return closestCenter(args)
+  return closestCenter(filtered)
 }
 
 const NOOP = () => {}
@@ -86,6 +113,30 @@ export function ActivityBarWide(props: ActivityBarProps) {
   )
   const wsIds = useMemo(() => workspaces.map((ws) => ws.id), [workspaces])
   const isHomeActive = !activeWorkspaceId
+
+  // Lock workspace drag to the Y axis and clamp inside the scroll zone so the
+  // dragged row cannot escape the list. Tab drag must remain unrestricted to
+  // preserve cross-workspace movement, so the modifier short-circuits unless
+  // the active drag is a workspace. Mirrors ActivityBarNarrow's restriction.
+  const wsScrollRef = useRef<HTMLDivElement>(null)
+  const restrictWorkspaceDrag = useCallback<Modifier>(
+    ({ transform, activeNodeRect, active }) => {
+      const activeData = active?.data?.current as DragData | undefined
+      if (activeData?.type !== 'workspace') return transform
+      if (!activeNodeRect || !wsScrollRef.current) {
+        return { ...transform, x: 0 }
+      }
+      const zoneRect = wsScrollRef.current.getBoundingClientRect()
+      const minY = zoneRect.top - activeNodeRect.top
+      const maxY = zoneRect.bottom - activeNodeRect.bottom
+      return {
+        ...transform,
+        x: 0,
+        y: Math.min(Math.max(transform.y, minY), maxY),
+      }
+    },
+    [],
+  )
 
   const selectTab = onSelectTab ?? NOOP
   const closeTab = onCloseTab ?? NOOP
@@ -265,6 +316,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
         <DndContext
           sensors={sensors}
           collisionDetection={customCollisionDetection}
+          modifiers={[restrictWorkspaceDrag]}
           onDragStart={handleDragStart}
           onDragOver={handleDragOver}
           onDragEnd={handleDragEnd}
@@ -287,6 +339,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
           )}
 
           <div
+            ref={wsScrollRef}
             data-testid="activity-bar-workspace-scroll"
             className="activity-bar-workspace-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain py-0.5"
           >
