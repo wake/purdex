@@ -33,23 +33,19 @@ func TestEventRequest_Unmarshal_PurdexNameTag(t *testing.T) {
 	}
 }
 
-func TestEventRequest_Unmarshal_EventNameAlias(t *testing.T) {
+// TestEventRequest_Unmarshal_LegacyEventNameRejected pins the post-W2
+// rejection of the legacy `event_name` JSON key. P3-T5 removed the alias —
+// clients must use `purdex_name`. A fallback regression (re-introducing the
+// alias) would silently route stale CLI/plugin payloads to the catalog
+// branch; pinning the rejection here surfaces such a regression in unit
+// tests instead of in live multi-agent traffic.
+func TestEventRequest_Unmarshal_LegacyEventNameRejected(t *testing.T) {
 	var req EventRequest
-	if err := json.Unmarshal([]byte(`{"event_name":"SessionStart"}`), &req); err != nil {
+	if err := json.Unmarshal([]byte(`{"event_name":"PdxStop"}`), &req); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if req.PurdexName != "SessionStart" {
-		t.Errorf("legacy event_name alias: got PurdexName=%q want SessionStart", req.PurdexName)
-	}
-}
-
-func TestEventRequest_Unmarshal_PurdexNamePriority(t *testing.T) {
-	var req EventRequest
-	if err := json.Unmarshal([]byte(`{"purdex_name":"PdxStop","event_name":"Stop"}`), &req); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if req.PurdexName != "PdxStop" {
-		t.Errorf("purdex_name should win over event_name: got %q", req.PurdexName)
+	if req.PurdexName != "" {
+		t.Errorf("legacy event_name must not populate PurdexName; got %q", req.PurdexName)
 	}
 }
 
@@ -311,37 +307,14 @@ func TestTitleCapabilities_CoversSupportedAgents(t *testing.T) {
 	}
 }
 
-func TestHandleEvent_StoresAndReturns(t *testing.T) {
-	m := newTestModule(t)
-
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"agent:lifecycle:start","raw_event":{"session_id":"abc"},"agent_type":"cc"}`
-	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	m.handleEvent(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
-	}
-
-	var resp map[string]string
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp["status"] != "ok" {
-		t.Errorf("status field: want ok, got %s", resp["status"])
-	}
-
-	// Accepted v2 hooks should not keep dual-written legacy rows around.
-	ev, err := m.events.Get("work")
-	if err != nil {
-		t.Fatalf("events.Get: %v", err)
-	}
-	if ev != nil {
-		t.Fatalf("legacy event row should be cleared, got %+v", ev)
-	}
-}
+// TestHandleEvent_StoresAndReturns was a pre-W2 transition test: it sent a
+// raw upstream hook event (`agent:lifecycle:start`) via the legacy
+// `event_name` alias and asserted the daemon accepted it without keeping a
+// legacy DB row. P3-T5 removed the alias, so this test's wire shape now
+// fails schema validation; the surviving negative-case coverage lives in
+// TestHandleEvent_RejectsLegacyPayload (`event_name`-only body → 400) and
+// TestEventRequest_Unmarshal_LegacyEventNameRejected (`event_name` does not
+// populate PurdexName).
 
 func TestHandleEvent_BadJSON(t *testing.T) {
 	m := newTestModule(t)
@@ -360,7 +333,7 @@ func TestHandleEvent_BadJSON(t *testing.T) {
 func TestHandleEvent_RejectsLegacyPayload(t *testing.T) {
 	m := newTestModule(t)
 
-	body := `{"tmux_session":"work","event_name":"agent:lifecycle:stop","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","purdex_name":"agent:lifecycle:stop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -391,7 +364,7 @@ func TestHandleEvent_StoresAgentType(t *testing.T) {
 		},
 	})
 
-	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxStop","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxStop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -433,7 +406,7 @@ func TestHandleEvent_AcceptedV2HookRemovesLegacyRow(t *testing.T) {
 		t.Fatalf("seed event: %v", err)
 	}
 
-	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxStop","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxStop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -458,7 +431,7 @@ func TestHandleEvent_RejectsUncertainV2Payload_WhenVerifyEnabled(t *testing.T) {
 	verifyEventFn = defaultVerifyEvent
 	m.tmux = tmux.NewFakeExecutor()
 
-	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_uncertain":true,"event_name":"PdxStop","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_uncertain":true,"purdex_name":"PdxStop","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -488,7 +461,7 @@ func TestHandleEvent_RejectedHookDoesNotOverwriteSession(t *testing.T) {
 		t.Fatalf("seed event: %v", err)
 	}
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxStop","raw_event":{},"agent_type":"codex"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxStop","raw_event":{},"agent_type":"codex"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -521,7 +494,7 @@ func TestHandleEvent_ErrorGuardBlocksFrameMutation(t *testing.T) {
 		},
 	})
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxPostToolUse","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxPostToolUse","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -555,8 +528,8 @@ func TestHandleEvent_OpenCodeSessionEndClearsErrorState(t *testing.T) {
 	})
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionEnd","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SessionEnd","raw_event":{},"agent_type":"opencode"}`,
 	} {
 		if strings.Contains(body, `"SessionEnd"`) {
 			m.currentStatus["work"] = agentpkg.StatusError
@@ -592,7 +565,7 @@ func TestHandleEvent_OpenCodeStopDoesNotClearError(t *testing.T) {
 		},
 	})
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"opencode"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"Stop","raw_event":{},"agent_type":"opencode"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -638,8 +611,8 @@ func TestHandleEvent_OpenCodeValidSubagentBroadcasts(t *testing.T) {
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SubagentStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SubagentStart","raw_event":{},"agent_type":"opencode"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -718,8 +691,8 @@ func TestHandleEvent_BroadcastPayloadCarriesSubagentRefs(t *testing.T) {
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSubagentStart","raw_event":{"agent_id":"sub-1"},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSubagentStart","raw_event":{"agent_id":"sub-1"},"agent_type":"cc"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -797,8 +770,8 @@ func TestHandleEvent_OpenCodeMalformedSubagentDoesNotBroadcast(t *testing.T) {
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SubagentStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SubagentStart","raw_event":{},"agent_type":"opencode"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -1170,12 +1143,12 @@ func TestActivityWatch_HookEventSupersedes(t *testing.T) {
 	fake.SetPaneContent("work:", "Allow  Deny")
 	fake.SetPaneSessionName("%5", "work")
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxNotification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxNotification","raw_event":{"type":"notification","notification_type":"permission_prompt"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	m.handleEvent(w, req)
 
-	body2 := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxUserPromptSubmit","raw_event":{},"agent_type":"cc"}`
+	body2 := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxUserPromptSubmit","raw_event":{},"agent_type":"cc"}`
 	req2 := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body2))
 	w2 := httptest.NewRecorder()
 	m.handleEvent(w2, req2)
@@ -1206,7 +1179,7 @@ func TestActivityWatch_StartsForRunningStatus(t *testing.T) {
 	}
 	m.registry.Register(provider)
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxUserPromptSubmit","raw_event":{},"agent_type":"codex"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxUserPromptSubmit","raw_event":{},"agent_type":"codex"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	m.handleEvent(w, req)
@@ -1600,7 +1573,7 @@ func catalogMissModule(t *testing.T) *Module {
 }
 
 func catalogMissRequest() *http.Request {
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"FutureMysteryEvent","raw_event":{"foo":"bar"},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"FutureMysteryEvent","raw_event":{"foo":"bar"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	return req
@@ -1732,7 +1705,7 @@ func TestHandleEvent_CatalogMiss_NoActivityWatch(t *testing.T) {
 // false-positive catalog-miss trace rows.
 func TestHandleEvent_InvalidWithReason_UsesProviderReason(t *testing.T) {
 	m := catalogMissModule(t)
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{"source":"compact"},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{"source":"compact"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1833,7 +1806,7 @@ func TestHandleEvent_CodexLegacyEventName_IsCatalogMiss(t *testing.T) {
 
 	// event_name (legacy alias) rather than purdex_name mimics an
 	// un-reinstalled codex hook payload exactly as alpha.252 hooks emit.
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"codex"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"Stop","raw_event":{},"agent_type":"codex"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -2134,8 +2107,8 @@ func TestHandleEvent_ProxyBroadcastCarriesIsProxyTrue(t *testing.T) {
 
 	// cc SessionStart first.
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":300,"sender_start_time":"Sun Apr 20 01:35:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"codex"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":300,"sender_start_time":"Sun Apr 20 01:35:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"codex"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -2227,7 +2200,7 @@ func TestHandleEvent_ColdStart_RebuildRecovers(t *testing.T) {
 	// lookup chain misses naturally: GetByIdentity → nil (empty DB),
 	// findProxyParent → nil (no ancestor frame), FindByPanePID(pane, 1) → nil.
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -2295,7 +2268,7 @@ func TestHandleEvent_DaemonRestart_RebuildRecoversForExistingPane(t *testing.T) 
 
 	// Fire SessionStart for an "existing" pane (daemon restart scenario:
 	// pane was already running cc, the daemon came back up, hook arrives).
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -2317,7 +2290,7 @@ func TestHandleEvent_DaemonRestart_RebuildRecoversForExistingPane(t *testing.T) 
 	}
 
 	// Now a SubagentStart hook arrives post-rebuild — ref must accumulate.
-	subBody := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSubagentStart","raw_event":{},"agent_type":"cc"}`
+	subBody := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSubagentStart","raw_event":{},"agent_type":"cc"}`
 	// Need a provider that emits agent_id for SubagentStart.
 	m.registry = agentpkg.NewRegistry()
 	m.registry.Register(&fakeAgentProvider{
@@ -2371,7 +2344,7 @@ func TestHandleEvent_MidConnectionGone_NoParentFallback(t *testing.T) {
 	}
 	t.Cleanup(func() { firstAliveAgentInTreeFn = origSeam })
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

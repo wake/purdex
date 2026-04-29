@@ -24,7 +24,7 @@ func TestHandleEvent_SessionStartUpsertsFrame(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`))
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -58,8 +58,8 @@ func TestHandleEvent_StopDoesNotPopFrame(t *testing.T) {
 	})
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxStop","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxStop","raw_event":{},"agent_type":"cc"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -92,8 +92,8 @@ func TestHandleEvent_SessionEndPopsFrame(t *testing.T) {
 	})
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionEnd","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionEnd","raw_event":{},"agent_type":"cc"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -125,7 +125,7 @@ func TestHandleEvent_SubagentDoesNotCreateFrame(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSubagentStart","raw_event":{},"agent_type":"cc"}`))
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSubagentStart","raw_event":{},"agent_type":"cc"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	m.handleEvent(w, req)
@@ -159,9 +159,9 @@ func TestHandleEvent_OpenCodeSessionStartClearsPersistedSubagents(t *testing.T) 
 	})
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SubagentStart","raw_event":{},"agent_type":"opencode"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SubagentStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")

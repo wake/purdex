@@ -77,9 +77,11 @@ func (m *Module) resolveStatuslineInstaller(w http.ResponseWriter, r *http.Reque
 // EventRequest is the JSON body expected by POST /api/agent/event.
 //
 // PurdexName is the daemon-internal stable identifier carried in the JSON
-// payload as `purdex_name`. The legacy `event_name` key is accepted as an
-// unmarshal-only alias during the W2 transition (cc/codex/opencode CLI/plugin
-// roll out the rename across phases). Phase 3 ship removes the alias.
+// payload as `purdex_name`. The pre-W2 `event_name` key was retained as an
+// unmarshal-only alias during Phase 1/2 of the W2 rollout while the
+// cc/codex/opencode CLIs and plugins migrated to the new field name; Phase 3
+// (P3-T5) removed that alias so standard struct unmarshal with the
+// `purdex_name` tag is the only shape now accepted.
 type EventRequest struct {
 	TmuxSession     string          `json:"tmux_session"`
 	TmuxPaneID      string          `json:"tmux_pane_id"`
@@ -89,39 +91,6 @@ type EventRequest struct {
 	SenderPID       int             `json:"sender_pid"`
 	SenderStartTime string          `json:"sender_start_time"`
 	SenderUncertain bool            `json:"sender_uncertain"`
-}
-
-// UnmarshalJSON accepts the legacy `event_name` JSON key as an alias for
-// `purdex_name`. When both keys are present, `purdex_name` wins.
-func (r *EventRequest) UnmarshalJSON(data []byte) error {
-	type wire struct {
-		TmuxSession     string          `json:"tmux_session"`
-		TmuxPaneID      string          `json:"tmux_pane_id"`
-		PurdexName      string          `json:"purdex_name"`
-		EventNameAlias  string          `json:"event_name"`
-		RawEvent        json.RawMessage `json:"raw_event"`
-		AgentType       string          `json:"agent_type"`
-		SenderPID       int             `json:"sender_pid"`
-		SenderStartTime string          `json:"sender_start_time"`
-		SenderUncertain bool            `json:"sender_uncertain"`
-	}
-	var w wire
-	if err := json.Unmarshal(data, &w); err != nil {
-		return err
-	}
-	r.TmuxSession = w.TmuxSession
-	r.TmuxPaneID = w.TmuxPaneID
-	r.RawEvent = w.RawEvent
-	r.AgentType = w.AgentType
-	r.SenderPID = w.SenderPID
-	r.SenderStartTime = w.SenderStartTime
-	r.SenderUncertain = w.SenderUncertain
-	if w.PurdexName != "" {
-		r.PurdexName = w.PurdexName
-	} else {
-		r.PurdexName = w.EventNameAlias
-	}
-	return nil
 }
 
 // handleEvent handles POST /api/agent/event.

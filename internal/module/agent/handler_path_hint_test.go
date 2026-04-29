@@ -30,7 +30,7 @@ func TestHandleEvent_EmitsPathHintForCCPreToolUseRead(t *testing.T) {
 	sub := m.core.Events.AddTestSubscriber()
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxPreToolUse","raw_event":{"cwd":"/x","tool_name":"Read","tool_input":{"file_path":"/x/y/z.go"}},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxPreToolUse","raw_event":{"cwd":"/x","tool_name":"Read","tool_input":{"file_path":"/x/y/z.go"}},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -60,7 +60,7 @@ func TestHandleEvent_DoesNotEmitPathHintForBashTool(t *testing.T) {
 	sub := m.core.Events.AddTestSubscriber()
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxPreToolUse","raw_event":{"tool_name":"Bash","tool_input":{"command":"ls"}},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxPreToolUse","raw_event":{"tool_name":"Bash","tool_input":{"command":"ls"}},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -90,7 +90,7 @@ func TestHandleEvent_DoesNotEmitPathHintForOpenCode(t *testing.T) {
 	sub := m.core.Events.AddTestSubscriber()
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PreToolUse","raw_event":{"cwd":"/x","tool_name":"Read","tool_input":{"file_path":"/x/y/z.go"}},"agent_type":"opencode"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PreToolUse","raw_event":{"cwd":"/x","tool_name":"Read","tool_input":{"file_path":"/x/y/z.go"}},"agent_type":"opencode"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
