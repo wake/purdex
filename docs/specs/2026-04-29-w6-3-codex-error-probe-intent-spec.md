@@ -1,6 +1,6 @@
 # W6-3 codex error ad-hoc ProbeIntent spec
 
-> **Status**：draft v5（codex review round 4 1 P1 — cross-provider lifecycle gap — 採納修訂）
+> **Status**：v6 final（codex round 1-5 共 12 P1+P2 採納；user 同意 (D) — round 5 P1 微修 + 不再派 round 6 直接進 plan）
 > **Worktree**：`.claude/worktrees/lights-w6-3-codex-error` / branch `worktree-lights-w6-3-codex-error`
 > **Base**：`origin/main` @ alpha.261（W3+W4 reverted ProbeProfile framework + monitor top processes）
 > **依賴**：W1 audit `docs/specs/2026-04-28-hook-status-audit-spec.md` §6/§7 / lights-rebuild-spec `docs/specs/2026-04-23-lights-rebuild-spec.md` §8.2 / fix-spec `docs/specs/2026-04-28-lights-rebuild-fix-spec.md` §3
@@ -95,6 +95,7 @@ W3 撤回後（alpha.260）的現況：
 | **detector `isPidAliveFn` package var injection** | by2z79ouc FH-1 | 本 spec §4.2 |
 | **單一 lifecycle helper + active target mismatch 第五 case** | round 3 P1 | 本 spec §5.4 |
 | **applyStatus 入口 reconcileSessionActive（cross-provider cleanup）** | round 4 P1 | 本 spec §5.4 |
+| **consumeSignals applied 後 re-run applyStatus（probe-applied teardown）** | round 5 P1 | 本 spec §5.4 |
 
 ---
 
@@ -149,6 +150,7 @@ W3 撤回後（alpha.260）的現況：
 12. ✅ Detector pidAlive 注入（per by2z79ouc FH-1）：codex 包用 `isPidAliveFn` package var（沿 module 包既有 `orchNowFn` / `isPidAliveFn` pattern）；test 覆寫後 cleanup
 13. ✅ ProbeIntent active target re-arm（per round 3 P1）：lifecycle helper 在 `wasActive && shouldActive` 時 m.mu 內比對 `(agentType, paneID, senderPID)` 是否與 active entry 一致；不一致 → cancel 舊 detector + 計算 new generation + 寫入新 entry；防同 status 內 codex 換 pid/pane（restart / multi-pane 切換）後舊 detector 蓋掉新狀態
 14. ✅ Cross-provider reconcile（per round 4 P1）：`applyStatus` 入口先 `reconcileSessionActive`，cancel/delete 任何 `(agentType, kind)` 不再屬於新 provider 宣告集合的 active entry；防 session 切到無 ProbeIntent 的 provider（cc / opencode）後舊 codex detector 仍 emit 蓋掉新狀態
+15. ✅ Probe-applied teardown（per round 5 P1）：`consumeSignals` 在 `applyProbeGuards` 回傳 `applied=true` 後 re-run `applyStatus(session, agentType, newStatus)` — 讓 lifecycle helper 看到 newStatus 不在 OnEntryStatus（error / clear）走 case 3 cancel+delete；防 active entry 與 currentStatus 不一致（detector goroutine 已退出但 activeProbeIntents 仍含舊 entry → map leak / 後續 lifecycle 誤以為已 armed）
 
 ### 2.2 禁忌
 
@@ -791,7 +793,7 @@ func (d *probeIntentDispatcher) consumeSignals(
 ) {
     for sig := range in {
         // OnSignal 由 applyProbeGuards 在 guard 通過後 invoke（per by2z79ouc DEF-1）
-        applyProbeGuards(d.parent, probeGuardArgs{
+        applied := applyProbeGuards(d.parent, probeGuardArgs{
             Session:    session,
             AgentType:  agentType,
             Reason:     "probe-intent:" + string(intent.Kind),
@@ -799,6 +801,17 @@ func (d *probeIntentDispatcher) consumeSignals(
             Mapping:    intent.OnSignal,
             StaleCheck: makeProbeIntentStaleCheck(session, intent.Kind, agentType, generation),
         })
+        if !applied { continue }
+
+        // round 5 P1：probe 把 status 改了 (error/clear) — re-run lifecycle 觸發
+        // case 3 (active && !shouldActive)：cancel + delete active entry。
+        // 否則 detector goroutine 已退出但 activeProbeIntents 仍含舊 entry：
+        //   - map leak（每次 probe-applied 都累積一筆死 entry）
+        //   - 後續 lifecycle 看到 wasActive=true 走 case 4/5 而非 case 2 重 arm
+        d.parent.mu.Lock()
+        appliedStatus := d.parent.currentStatus[session]
+        d.parent.mu.Unlock()
+        d.applyStatus(session, agentType, appliedStatus)
     }
 }
 
@@ -921,7 +934,7 @@ func (d *probeIntentDispatcher) replayStatus() {
 |---|---|
 | P1-T1 | `ProbeIntent` / `ProbeIntentKind` / `Signal` / `ProbeIntentProvider` 落 `internal/agent/provider.go` + 單元測試（schema 對齊 §3.2；Signal 4 fields） |
 | P1-T2 | `applyProbeGuards` free function 抽出（mechanical extraction `probe_orchestrator.go interpretScreenEvent` step 1+2+4+5+6） + 新 `staleCheck strategy` 注入點；regression test 確保 ScreenChange 行為零變動（既有 probe_orchestrator_test.go / probe_orchestrator_integration_test.go 全綠） |
-| P1-T3 | 新檔 `internal/module/agent/probe_intent_dispatcher.go`：`applyStatus` / `reconcileSessionActive` / `applyIntentLifecycle` / `consumeSignals` + activeProbeIntents 結構（在 m.mu 內保護） + generation token；用 stub detector 測 lifecycle 5 case（含 active target mismatch 觸發 cancel-and-rearm） + cross-provider reconcile（codex → cc 切換清掉舊 entry） + stale-callback re-check + generation 不匹配 drop |
+| P1-T3 | 新檔 `internal/module/agent/probe_intent_dispatcher.go`：`applyStatus` / `reconcileSessionActive` / `applyIntentLifecycle` / `consumeSignals` + activeProbeIntents 結構（在 m.mu 內保護） + generation token；用 stub detector 測 lifecycle 5 case（含 active target mismatch 觸發 cancel-and-rearm） + cross-provider reconcile（codex → cc 切換清掉舊 entry） + stale-callback re-check + generation 不匹配 drop + **probe-applied teardown**（detector emit 把 status 改成 error → activeProbeIntents 該 entry 被清） |
 | P1-T4 | `Module.lookupTopFrameForSession` helper（讀 projection top frame `(paneID, pid)`）+ test |
 | P1-T5 | `manageActivityWatch` 接 `probeIntentDisp.applyStatus`；rename / Stop 路徑也接；test 覆蓋 rename 期間 (oldName stop, newName 重評估) |
 | P1-T6 | `Module.Start` 加 `probeIntentDisp.replayStatus`；daemon-restart recovery integration test（fixture：projection top frame 含 dead pid + status=running → Start 後 detector 啟動立即 emit → broadcast error） |
@@ -1050,9 +1063,24 @@ func (d *probeIntentDispatcher) replayStatus() {
 
 **決議**：`applyStatus` 入口先 reconcile session 既有 active entries，cancel/delete 任何 `(agentType, kind)` 不再屬於新 provider 宣告集合的 entry；防 cross-provider 切換的 stranded detector。修法詳 §5.4 reconcileSessionActive helper。
 
+### 9.12 ✅ 採 probe-applied teardown re-run applyStatus — 解 round 5 P1
+
+**決議**：`consumeSignals` 在 `applied=true` 後 re-run `applyStatus(session, agentType, newStatus)` — 讓 newStatus（error / clear）走 lifecycle case 3 cancel+delete active entry。修法詳 §5.4 consumeSignals。
+
+### 9.13 Spec convergence 與 stopping criterion（user 同意 (D)）
+
+5 輪 codex review finding 趨勢：5 → 4 → 1 → 1 → 1。每輪挖到不同類別 lifecycle corner case，convergence 明顯但非到 0。User 2026-04-29 決議採 (D)：修 v6 採納 round 5 P1 + **不再派 round 6**，直接進 plan。理由：
+
+- 修法 scope 5 行內，不涉及架構
+- spec lifecycle 已大致窮舉（hook → applyStatus → reconcile → applyIntentLifecycle → consumeSignals → re-apply）
+- plan 階段 codex review 仍會驗證實作正確性（test plan 涵蓋全部 5 case + 4 reconcile + probe-applied teardown）
+- 5 輪是 spec 階段合理上限（同 W2 spec 經驗）
+
+**Known issue 追蹤**：若 round 5 之後仍有 lifecycle corner case（unlikely），於 plan / 實作 / PR review 階段以 follow-up issue 追蹤。
+
 ---
 
-**所有 spec drift signal 已收斂；本 spec v5 進 plan 前需通過 codex 第五輪確認。**
+**所有 spec drift signal 已收斂。本 spec v6 為 final draft；直接進 plan 階段。**
 
 ---
 
