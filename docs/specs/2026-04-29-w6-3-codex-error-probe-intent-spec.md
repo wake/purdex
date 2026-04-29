@@ -1,6 +1,6 @@
 # W6-3 codex error ad-hoc ProbeIntent spec
 
-> **Status**：draft v2（codex review b36pap7jc 5 finding 全採納修訂；待 codex 二輪確認）
+> **Status**：draft v3（codex review by2z79ouc 4 finding 採納精度修訂；progressive precision，非 architectural drift）
 > **Worktree**：`.claude/worktrees/lights-w6-3-codex-error` / branch `worktree-lights-w6-3-codex-error`
 > **Base**：`origin/main` @ alpha.261（W3+W4 reverted ProbeProfile framework + monitor top processes）
 > **依賴**：W1 audit `docs/specs/2026-04-28-hook-status-audit-spec.md` §6/§7 / lights-rebuild-spec `docs/specs/2026-04-23-lights-rebuild-spec.md` §8.2 / fix-spec `docs/specs/2026-04-28-lights-rebuild-fix-spec.md` §3
@@ -89,6 +89,10 @@ W3 撤回後（alpha.260）的現況：
 | **detector 用 pane id target，非 session target** | b36pap7jc ATK-2 / PR #638 教訓 | 本 spec §4.2 |
 | **W6-3 + W6-4 合併 first PR**（避免 ship 已知 false alarm） | b36pap7jc ATK-3 | 本 spec §0.2.1 / §1.1 |
 | **reuse `agent_frames.pid + pane_id`，不新增 schema 欄位** | b36pap7jc FH-1 + self-check | 本 spec §4.3 / §6.2 |
+| **單一 m.mu 統管 active-set（含 activeProbeIntents）** | by2z79ouc ATK-1 | 本 spec §5.1 / §5.2 |
+| **startDetector compare-and-arm（m.mu 內 re-read currentStatus）** | by2z79ouc ATK-2 | 本 spec §5.4 / §6.4 |
+| **OnSignal mapping callback in applyProbeGuards（guard 後才 invoke）** | by2z79ouc DEF-1 | 本 spec §3.2 / §5.2 / §5.4 |
+| **detector `isPidAliveFn` package var injection** | by2z79ouc FH-1 | 本 spec §4.2 |
 
 ---
 
@@ -135,9 +139,12 @@ W3 撤回後（alpha.260）的現況：
 4. ✅ Interface lazy 設計 — W6-3 first PR finalize 唯一 `ProcessDead` Kind；後續 PR 加新 Kind 時 extend struct（Signal 既有 fields 必保持向後相容）
 5. ✅ probe channel 與 hook channel 獨立 — probe 推論、hook 權威；`recordHookAt` graceWindow 機制保留
 6. ✅ ErrorGuard 維持：`currentStatus == StatusError` 時 probe 不再覆寫
-7. ✅ Stale-callback guard（per-route）：ProbeIntent 路徑必須 re-check `activeProbeIntents[session][kind] && agentType == 期望` 兩條件；ScreenChange 路徑維持 re-check `activeWatchers[session] == agentType`；**兩條 active-set 互不共用** — `applyProbeGuards` 透過 strategy 注入正確的 active-set checker
-8. ✅ Detector goroutine 不持有 `m.mu`（鎖路徑 `dispatcher mu → m.mu` 嚴禁逆向）；Signal channel buffer = 1（detector emit 一次後退出）
+7. ✅ Stale-callback guard（per-route）：ProbeIntent 路徑必須 re-check `activeProbeIntents[session][kind] && agentType == 期望 && generation == 期望` 三條件；ScreenChange 路徑維持 re-check `activeWatchers[session] == agentType`；**兩條 active-set 共享 m.mu**（per by2z79ouc ATK-1）— `applyProbeGuards` 透過 strategy 注入正確的 active-set checker，但 checker 與 module mutation 在同一 mutex 內，no cross-lock
+8. ✅ Detector goroutine 不持有 `m.mu`；channel emit 後 dispatcher 內 consume → 走 `applyProbeGuards`；Signal channel buffer = 1（detector emit 一次後退出）；**鎖序：m.mu only**（per by2z79ouc ATK-1：activeProbeIntents 移進 m.mu 保護，dispatcher 不另持 mutex）
 9. ✅ ProbeIntent state 必須含 pane id；detector 觀察 pane existence 用 pane id 為 tmux target（不是 session target）— 防 multi-pane window 取錯 pane PID（per PR #638 教訓 / b36pap7jc ATK-2）
+10. ✅ ProbeIntent contract（per by2z79ouc DEF-1）：dispatcher 在 **guard 通過後**才 invoke OnSignal（mapping callback）；OnSignal 不會看到被 stale guard / graceWindow / ErrorGuard drop 的 signal — provider 即使有 side effect 也安全
+11. ✅ ProbeIntent compare-and-arm（per by2z79ouc ATK-2）：`startDetector` 在 m.mu 內 re-read `currentStatus` + 比對 `OnEntryStatus`，只在 live status 仍 match 才 record active；防 replay 期間 hook race 後 arm stale watcher
+12. ✅ Detector pidAlive 注入（per by2z79ouc FH-1）：codex 包用 `isPidAliveFn` package var（沿 module 包既有 `orchNowFn` / `isPidAliveFn` pattern）；test 覆寫後 cleanup
 
 ### 2.2 禁忌
 
@@ -226,10 +233,13 @@ type ProbeIntent struct {
     // by OnSignal means "drop this signal" (detector observed transient state
     // that doesn't warrant a transition).
     //
-    // dispatcher applies guards BEFORE invoking OnSignal: stale-callback guard
-    // (re-check activeProbeIntents[session][kind] + agentType), graceWindow,
-    // ErrorGuard, transition gate. OnSignal sees only signals that survive
-    // those guards.
+    // Contract (per by2z79ouc DEF-1): dispatcher invokes OnSignal as a
+    // mapping callback INSIDE applyProbeGuards, AFTER the stale-callback
+    // guard + graceWindow guard pass. OnSignal therefore never sees signals
+    // that should have been dropped by hook authority. ErrorGuard +
+    // transition gate run AFTER OnSignal returns (they need newStatus to
+    // compare against currentStatus). Provider may safely log / count in
+    // OnSignal because pre-guard-survived signals are guaranteed.
     OnSignal func(Signal) Status
 }
 
@@ -366,10 +376,20 @@ import (
     "github.com/wake/purdex/internal/agent/probe"
 )
 
-// processDeadPollInterval is the polling cadence for IsPidAlive + HasPane.
+// processDeadPollInterval is the polling cadence for pidAlive + HasPane.
 // Exported as a package var so tests can override — production code never
 // mutates it.
 var processDeadPollInterval = 1 * time.Second
+
+// isPidAliveFn is the injectable pid-liveness probe. Production points at
+// probe.IsPidAlive (which is a syscall.Kill(pid, 0) wrapper). Tests override
+// to control the alive/dead state per call (per by2z79ouc FH-1 — the
+// 4 pidAlive×paneAlive combinations require deterministic injection rather
+// than spawning real processes).
+//
+// Same pattern as internal/module/agent/probe_orchestrator.go's
+// `isPidAliveFn` / `orchNowFn` / `recordHookAtHook` etc.
+var isPidAliveFn = probe.IsPidAlive
 
 // StartProcessDeadDetector is the codex-side detector for
 // ProbeIntentKindProcessDead. It polls senderPID + paneID; on first dead-
@@ -380,8 +400,9 @@ var processDeadPollInterval = 1 * time.Second
 // paneLister is the minimal contract the detector needs (HasPane(paneID)).
 // Tests inject a recording fake. Production wires *tmux.Executor.
 //
-// Caller is expected to dispatch the emitted Signal to OnSignal and apply the
-// usual probe guards (graceWindow / ErrorGuard / transition gate).
+// Caller is expected to consume the emitted Signal via dispatcher's
+// applyProbeGuards (graceWindow / stale-callback / ErrorGuard / transition
+// gate / OnSignal mapping all live there).
 func StartProcessDeadDetector(
     ctx context.Context,
     paneLister tmuxPaneLister,
@@ -397,7 +418,7 @@ func StartProcessDeadDetector(
         case <-ctx.Done():
             return
         case <-ticker.C:
-            pidAlive := probe.IsPidAlive(senderPID)
+            pidAlive := isPidAliveFn(senderPID)
             paneAlive := paneLister.HasPane(paneID)
             if pidAlive && paneAlive {
                 continue  // both alive, keep polling
@@ -474,10 +495,14 @@ type tmuxPaneLister interface {
 
 職責：
 
-- 持有 per-session × per-Kind detector goroutine 集合：`activeProbeIntents map[session]map[Kind]activeIntent`，其中 `activeIntent` 含 `cancelFn` + `agentType` + `paneID` + `senderPID` + `generation` token（防 stale callback / re-arm race）
-- 在 status 變更時讀取 provider.ProbeIntents()，啟停對應 detector
-- detector 透過 channel emit Signal → dispatcher 套 ProbeIntent-aware guards → 走 OnSignal → broadcast
-- 不直接 mutate `m.activeWatchers`（保留給 ScreenChangeWatcher）
+- 提供 ProbeIntent gating logic（status 變更時讀 provider.ProbeIntents() 啟停對應 detector）
+- detector 透過 channel emit Signal → dispatcher 套 `applyProbeGuards`（含 OnSignal mapping）
+
+**Lock ownership**（per by2z79ouc ATK-1 — v2 設計修正）：
+
+- `activeProbeIntents map[session]map[Kind]activeIntent` **由 m.mu 保護**（與 `activeWatchers` 同一 mutex），**不**另起 dispatcher.mu
+- 統一鎖序：`m.mu only`，無 cross-lock；`applyProbeGuards` 在 m.mu 內 re-check active-set 是 lock-free read（lock 已持）
+- `activeIntent` 結構：`cancel func()` / `agentType string` / `paneID string` / `senderPID int` / `generation uint64`
 
 **為何不 reuse `probeOrchestrator`**（per b36pap7jc DEF — 重新挑戰過）：
 
@@ -485,41 +510,57 @@ type tmuxPaneLister interface {
 - ProcessDead detector 與 ScreenChange 是兩種獨立 mechanism（前者 `(senderPID, paneID) → bool×bool`；後者 `tmux pane content hash → ScreenChanged|ScreenStable`）— 強行整進 `probeOrchestrator` 會引入「unify abstraction」bloat（§2.3）
 - 共用部分（graceWindow / ErrorGuard / transition gate / **strategy-injectable** stale-callback guard）抽為 free function `applyProbeGuards(m, args)`，在兩個 dispatcher 間共用 — 行為零變動，是 mechanical extraction（不違 §2.3 refactor without functional reason）
 
-### 5.2 `applyProbeGuards` strategy 注入（核心修正：per b36pap7jc ATK-1）
+### 5.2 `applyProbeGuards` 重設計（per by2z79ouc ATK-1 / DEF-1）
 
-抽 free function，但**stale-callback guard 用 strategy 注入** — ProbeIntent 路徑與 ScreenChange 路徑各自走自己的 active-set checker，不共用 `m.activeWatchers`：
+抽 free function — **單一 m.mu 保護**所有 active-set；OnSignal 在 guard 通過後才被 invoke：
 
 ```go
-// applyProbeGuards 套用 5 層 guard 並 broadcast。回傳 (newStatus, applied)；
-// applied=false 代表此 signal 被 guard drop / 視為 no-op。
+// applyProbeGuards 套用 4 層 guard（含 mapping）並 broadcast。
+// 回傳 applied=false 代表此 signal 被 guard drop / 視為 no-op。
 //
-// 5 層 guard（按順序）：
-//   1. Stale-callback guard（透過 staleCheck 注入）：
-//        ProbeIntent 路徑：active.checker = activeProbeIntentChecker(session, kind, agentType, generation)
-//        ScreenChange 路徑：active.checker = activeWatcherChecker(session, agentType)
-//   2. graceWindow（hook authority；既有 probeGraceWindow=2s）
-//   3. Mapping → newStatus（caller-provided：ScreenChange 路徑用 kind→status；ProbeIntent 路徑用 OnSignal）
-//   4. ErrorGuard：currentStatus == StatusError 時 drop
-//   5. Transition gate：currentStatus == newStatus 時 drop（避免 broadcast spam）
+// 流程（m.mu 在 step 1+5 內各持一次）：
+//   1. m.mu Lock — Stale-callback guard：透過 StaleCheck closure（caller 提供）
+//      檢查 active-set 是否仍含目標 entry 且 agentType + generation 都匹配
+//      ProbeIntent 路徑：staleCheck 讀 m.activeProbeIntents[session][kind] +
+//                        agentType + generation
+//      ScreenChange 路徑：staleCheck 讀 m.activeWatchers[session] + agentType
+//      不匹配 → m.mu Unlock + return false
+//      匹配 → m.mu Unlock（不持 lock 進下一步，因為 graceWindow / mapping 不需要）
 //
-// 通過 5 層後在最後 critical section 執行：
-//   - 再次原子 re-check staleCheck（codex finding #4 regression — close race window）
-//   - mutate m.currentStatus[session]
-//   - setProjectionTopStatus + buildProjectionNormalized + broadcastToSession
+//   2. graceWindow check（probeGraceMu 獨立 mutex — 既有 lock）
+//      hook recent (≤ probeGraceWindow) → return false
 //
-// 簽名：
+//   3. Mapping callback (per by2z79ouc DEF-1)：
+//      caller 已 captured Signal + Mapping function 進 args
+//      newStatus := args.Mapping(args.Signal)
+//      newStatus == "" → return false
+//      （ProbeIntent 路徑：args.Mapping = intent.OnSignal；
+//        ScreenChange 路徑：args.Mapping = kind→status fixed function）
+//
+//   4. m.mu Lock — final critical section + 再次原子 staleCheck
+//      （close race window between step 1 unlock and this lock — codex
+//       finding #4 regression）
+//      staleCheck false → m.mu Unlock + return false
+//      ErrorGuard：m.currentStatus[session] == StatusError → m.mu Unlock + return false
+//      Transition gate：m.currentStatus[session] == newStatus → m.mu Unlock + return false
+//      mutate m.currentStatus[session] = newStatus
+//      m.mu Unlock
+//
+//   5. broadcast（lock-free）：setProjectionTopStatus + buildProjectionNormalized + broadcastToSession
+//
 type probeGuardArgs struct {
     Session    string
     AgentType  string
-    Reason     string                 // 進 trace dev log（"probe-intent:process_dead" / "probe:activity"）
-    NewStatus  Status                 // 已 mapping 完的 status（caller 已套 OnSignal / kind→status）
-    StaleCheck func(*Module) bool     // 同一 critical section 內 re-check active-set；true=still active, false=drop
+    Reason     string                          // dev log："probe-intent:process_dead" / "probe:activity"
+    Signal     Signal                          // raw signal，未 mapping
+    Mapping    func(Signal) Status             // OnSignal (ProbeIntent) / kind→status (ScreenChange)
+    StaleCheck func(*Module) bool              // m.mu 內 lock-free read（caller 已持 m.mu 進入）
 }
 
 func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool) { ... }
 ```
 
-ProbeIntent 路徑的 staleCheck 範例：
+ProbeIntent 路徑的 staleCheck 範例（**caller 在 m.mu 內呼叫 — lock-free read**）：
 
 ```go
 staleCheck := func(m *Module) bool {
@@ -533,7 +574,9 @@ staleCheck := func(m *Module) bool {
 }
 ```
 
-`generation` token：每次 `startDetector` 對 (session, kind) 啟動時遞增；detector emit signal 時帶當下 generation；guard re-check 確保 detector 沒被中途 stop+restart 過（防 ghost broadcast，per audit §7.1 必守 #7）。
+`generation` token：每次 `startDetector` 對 (session, kind) 啟動時遞增；detector emit signal 時帶當下 generation；guard re-check 確保 detector 沒被中途 stop+restart 過（防 ghost broadcast，per audit §7.1 必守 #7 / by2z79ouc DEF）。
+
+**Generation token 必要性**（回應 by2z79ouc Defense round 2 questioning）：理論上 ctx cancel 後 detector goroutine 已退出，新 detector 是新 goroutine，channel 也不同 — 但 emission 在 channel buffer 內可能還沒被 consume；start→stop→start' 期間 stop 走的 cancel 不保證**已 consume 的 signal** 不會繼續走完 `applyProbeGuards`（goroutine schedule 問題）。Generation 是兩次 active set 檢查的雙保險，相對 over-engineering 風險低（uint64 增量；無 owner reuse）。
 
 ### 5.3 `manageActivityWatch` 改造
 
@@ -577,25 +620,40 @@ func (d *probeIntentDispatcher) applyStatus(session, agentType string, newStatus
 }
 ```
 
-### 5.4 startDetector / Signal 處理
+### 5.4 startDetector / Signal 處理（per by2z79ouc ATK-2 compare-and-arm + DEF-1 mapping callback）
 
 ```go
 func (d *probeIntentDispatcher) startDetector(session, agentType string, intent agent.ProbeIntent) {
     paneID, senderPID, ok := d.parent.lookupTopFrameForSession(session)
     if !ok || paneID == "" || senderPID == 0 {
-        return  // top frame 缺失（罕見），下個 hook 重 hydrate 後 applyStatus 再試
+        return  // top frame 缺失，下個 hook 重 hydrate 後 applyStatus 再試
     }
-    generation := d.nextGeneration()
+
+    // Compare-and-arm（per by2z79ouc ATK-2）：在 m.mu 內 re-read currentStatus，
+    // 確認 live status 仍 match OnEntryStatus 才 record active。防 replay race —
+    // snapshot 與 startDetector 之間 hook 可能改 status。
+    d.parent.mu.Lock()
+    curStatus, hasStatus := d.parent.currentStatus[session]
+    if !hasStatus || !slices.Contains(intent.OnEntryStatus, curStatus) {
+        d.parent.mu.Unlock()
+        return  // status 已變，stale arming attempt → skip
+    }
+    // 還在 m.mu 內 record active — 與 hook applyStatus 路徑同 mutex 保證原子
+    generation := d.parent.nextProbeIntentGeneration()
     ctx, cancel := context.WithCancel(d.parentCtx)
-    out := make(chan agent.Signal, 1)
-    d.recordActive(session, intent.Kind, activeIntent{
+    if d.parent.activeProbeIntents[session] == nil {
+        d.parent.activeProbeIntents[session] = make(map[agent.ProbeIntentKind]activeIntent)
+    }
+    d.parent.activeProbeIntents[session][intent.Kind] = activeIntent{
         agentType:  agentType,
         paneID:     paneID,
         senderPID:  senderPID,
         cancel:     cancel,
         generation: generation,
-    })
+    }
+    d.parent.mu.Unlock()
 
+    out := make(chan agent.Signal, 1)
     go func() {
         switch intent.Kind {
         case agent.ProbeIntentKindProcessDead:
@@ -615,20 +673,29 @@ func (d *probeIntentDispatcher) consumeSignals(
     in <-chan agent.Signal,
 ) {
     for sig := range in {
-        newStatus := intent.OnSignal(sig)
-        if newStatus == "" { continue }
+        // OnSignal 由 applyProbeGuards 在 guard 通過後 invoke（per by2z79ouc DEF-1）
         applyProbeGuards(d.parent, probeGuardArgs{
             Session:    session,
             AgentType:  agentType,
             Reason:     "probe-intent:" + string(intent.Kind),
-            NewStatus:  newStatus,
-            StaleCheck: d.makeStaleCheck(session, intent.Kind, agentType, generation),
+            Signal:     sig,
+            Mapping:    intent.OnSignal,
+            StaleCheck: makeProbeIntentStaleCheck(session, intent.Kind, agentType, generation),
         })
+    }
+}
+
+func makeProbeIntentStaleCheck(session string, kind agent.ProbeIntentKind, agentType string, generation uint64) func(*Module) bool {
+    return func(m *Module) bool {
+        intents, ok := m.activeProbeIntents[session]
+        if !ok { return false }
+        cur, ok := intents[kind]
+        return ok && cur.agentType == agentType && cur.generation == generation
     }
 }
 ```
 
-`recordActive` 在 dispatcher 內部 mutex 保護下 mutate `activeProbeIntents`；不持有 `m.mu`（鎖序：dispatcher.mu → m.mu，per §2.1 必守 #8）。
+`stopDetector`：在 m.mu 內 lookup activeProbeIntents → 取 cancel → call cancel → 從 map 刪除。Cancel 後 detector 收到 ctx.Done()，退出時 close(out)；consumeSignals goroutine 走完 range 後退出。Generation 不重置 — uint64 純遞增，無 reuse 風險。
 
 ### 5.5 Polling 頻率 / grace window
 
@@ -707,11 +774,13 @@ func (d *probeIntentDispatcher) replayStatus() {
 }
 ```
 
-### 6.4 Race / 一致性（per b36pap7jc Defense — replay 期間 hook race）
+### 6.4 Race / 一致性（per b36pap7jc + by2z79ouc ATK-2）
 
 - `applyStatus` 已是 dispatcher 公開介面（hook 路徑也走它）— 重用即可
 - replay 順序：先 `replayFromDB` 把 currentStatus + projection 全 hydrate 完，再 `replayStatus()` — 避免 detector 啟動時 `lookupTopFrameForSession` miss
+- **Replay vs hook race（by2z79ouc ATK-2 修法）**：`replayStatus` 內部呼叫 `applyStatus(session, agentType, snapshotStatus)` 走標準路徑；`startDetector` 內部 compare-and-arm（§5.4）— 若 snapshot 取到 `running` 但 hook 已先把 status 改成 `idle`，`startDetector` 在 m.mu 內 re-read `currentStatus` 看到 `idle` 不在 OnEntryStatus 即 skip arming。**Race 完全封閉**
 - **Stale frame race**：若 daemon 在 codex 已死的情況下重啟，replay 取到的 top frame.pid 已是 dead → detector 第一次 poll 立即 emit signal → 套 guards → 因 currentStatus 經 replay 仍是 running，transition gate 通過 → broadcast `error`。**這是預期行為**：user-facing 結果是「daemon restart 後正確發現 codex 不見了，立刻變色」，符合 #698 修復目標
+- **Idle session pane gone（accept 限制）**：若 codex 走完 PdxStop hook（status=idle）後 daemon restart，replay snapshot status=idle → ProbeIntent 不在 OnEntryStatus 不啟 detector → pane 後續被 close 不會自動轉 clear。此屬 §8.1 #4 的 accept 限制（idle 期間 pane 退場由 sweep / SessionEnd hook 處理，不在 W6-3+W6-4 scope）
 - ErrorGuard 與 grace window：replay 路徑**沒有**剛收的 hook，故 graceWindow 不啟動；ErrorGuard 視 currentStatus 而定（若已是 error，guard 阻擋無妨）
 - 若 replay 後某 session 的 top frame 缺失（projection rebuild 失敗 / 老資料），`startDetector` skip — 等下個 hook 補
 
@@ -748,8 +817,8 @@ func (d *probeIntentDispatcher) replayStatus() {
 
 | ID | 內容 |
 |---|---|
-| P2-T1 | `internal/agent/codex/probe_intent_process_dead.go` 新檔 + 單元測試（fake `tmuxPaneLister` + IsPidAlive 控制 4 種 pidAlive×paneAlive 組合 + emit Signal 1 次後退出 + ctx cancel 提早退出 + multi-pane fixture 驗 paneID 路徑取對 pane） |
-| P2-T2 | `tmux.Executor.HasPane(paneID string) bool` 方法新增 + 單元測試（wraps `tmux list-panes -a -F '#{pane_id}'`） |
+| P2-T1 | `tmux.Executor.HasPane(paneID string) bool` 方法新增 + 單元測試（wraps `tmux list-panes -a -F '#{pane_id}'`）— 排序前置 detector，因 detector 編譯需要此方法（per by2z79ouc Defense） |
+| P2-T2 | `internal/agent/codex/probe_intent_process_dead.go` 新檔 + 單元測試（fake `tmuxPaneLister` + 覆寫 `isPidAliveFn` package var 控制 4 種 pidAlive×paneAlive 組合 + emit Signal 1 次後退出 + ctx cancel 提早退出 + multi-pane fixture 驗 paneID 路徑取對 pane）；test cleanup 還原 `isPidAliveFn` |
 | P2-T3 | codex `Provider.ProbeIntents()` 宣告 + provider_test.go regression（OnSignal 區分 PaneAlive=true→error / =false→clear） |
 | P2-T4 | dispatcher 路由 `ProbeIntentKindProcessDead` 到 `codex.StartProcessDeadDetector`（生產 wiring，傳 `(tmux, paneID, senderPID)` 三參數） |
 | P2-T5 | drift test：iterate `registry` 找出所有 `ProbeIntentProvider`；逐一驗證 `ProbeIntents()` 宣告的 Kind 都有 dispatcher case + OnSignal 不為 nil + OnEntryStatus 非空 + Signal context fields semantics 不被改變（PaneAlive / PaneID / SenderPID 必填） |
@@ -831,9 +900,25 @@ func (d *probeIntentDispatcher) replayStatus() {
 
 **決議**：per b36pap7jc FH-1 + 後續 self-check（既有 frame.pid / pane_id 已涵蓋語意，新增 last_sender_pid 欄位是「把 working code 變 data」徵兆）。修法詳 §4.3 / §6.2。
 
+### 9.6 ✅ 採單一 m.mu 統管 active-set — 解 by2z79ouc ATK-1
+
+**決議**：`activeProbeIntents` 移到 `m.mu` 保護（與 `activeWatchers` 同 mutex），不另起 dispatcher.mu。鎖序簡化為 m.mu only，`applyProbeGuards` 內 staleCheck closure 為 lock-free read（caller 已持 m.mu）。修法詳 §5.1 / §5.2。
+
+### 9.7 ✅ 採 compare-and-arm — 解 by2z79ouc ATK-2
+
+**決議**：`startDetector` 在 m.mu 內 re-read `currentStatus` + 比對 `OnEntryStatus`，只在 live status 仍 match 才 record active；防 replay snapshot 與 hook 之間 race。修法詳 §5.4 / §6.4。
+
+### 9.8 ✅ 採 mapping callback in applyProbeGuards — 解 by2z79ouc DEF-1
+
+**決議**：`applyProbeGuards` 接受 `Mapping func(Signal) Status` callback，在 stale guard + graceWindow guard 通過後才 invoke；ProbeIntent 路徑 args.Mapping = intent.OnSignal；ScreenChange 路徑 args.Mapping = kind→status。Provider OnSignal 不會被 drop signal 打到。修法詳 §3.2 / §5.2 / §5.4。
+
+### 9.9 ✅ 採 `isPidAliveFn` package var injection — 解 by2z79ouc FH-1
+
+**決議**：codex 包加 `isPidAliveFn = probe.IsPidAlive` package var；test 覆寫 + cleanup（同既有 `orchNowFn` / `recordHookAtHook` / `interruptBeforeFinalLockFn` pattern）。修法詳 §4.2。
+
 ---
 
-**所有 spec drift signal 已收斂；本 spec 進 plan 前需通過 codex 二輪確認。**
+**所有 spec drift signal 已收斂；本 spec v3 進 plan 前需通過 codex 第三輪確認。**
 
 ---
 
