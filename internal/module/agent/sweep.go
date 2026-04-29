@@ -548,7 +548,23 @@ func (m *Module) afterFrameCleared(frame store.Frame, reason string) error {
 	if code == "" || m.core == nil {
 		return nil
 	}
-	normalized := buildProjectionNormalized(projection, frame.AgentType, "sweep:"+reason, nowFn().UnixNano(), agentpkg.DeriveResult{})
+	// Issue #717 round-2 race fix: re-resolve projection right before
+	// broadcasting. A hook handler may have created a new frame for
+	// this session between the projectionForSession call above and
+	// this broadcast (e.g. user kills opencode and immediately runs
+	// `opencode` again — the SessionStart hook can land mid-sweep).
+	// Without re-resolve, the broadcast carries the stale
+	// projection==nil view and overwrites the just-installed running
+	// status with clear. The race is best-effort — we cannot fully
+	// serialize without per-session locking, which is tracked
+	// separately. Empty result.Status carries StatusClear via the
+	// projection==nil branch in buildProjectionNormalized; passing
+	// it explicitly documents intent at the callsite.
+	freshProjection, ferr := m.projectionForSession(sessionName)
+	if ferr != nil {
+		return ferr
+	}
+	normalized := buildProjectionNormalized(freshProjection, frame.AgentType, "sweep:"+reason, nowFn().UnixNano(), agentpkg.DeriveResult{Status: agentpkg.StatusClear})
 	payload, _ := json.Marshal(normalized)
 	m.core.Events.Broadcast(code, "hook", string(payload))
 	return nil

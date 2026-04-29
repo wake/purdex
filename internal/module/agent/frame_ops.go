@@ -659,6 +659,15 @@ func buildProjectionNormalized(projection *SessionProjection, fallbackAgentType,
 		Detail:       result.Detail,
 	}
 	if projection == nil {
+		// Issue #717: when no projection exists for this session, "no top
+		// frame" is the same semantic as the projection!=nil && TopFrame==nil
+		// branch below — emit StatusClear so SPA's clear-handling path
+		// triggers. Caller's empty result.Status used to leak through and
+		// SPA ignored "" as a no-op. Defense in depth alongside the explicit
+		// StatusClear at sweep.go:551.
+		if normalized.Status == "" {
+			normalized.Status = string(agentpkg.StatusClear)
+		}
 		return normalized
 	}
 	normalized.Subagents = append([]agentpkg.SubagentRef(nil), projection.Subagents...)

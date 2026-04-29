@@ -2106,13 +2106,14 @@ func TestSweep_CanonicalizeSkipsAlreadyProxiedCandidate(t *testing.T) {
 // child's native subagent state during partial recovery.
 //
 // Scenario (recreating the original round 1 high data-loss path):
-//   (a) cc frame with codex IsProxy already attached (hot-path success)
-//   (b) codex standalone row still present (hot-path DeleteIfUnchanged
-//       failed in the past)
-//   (c) codex.Subagents has a native ref (subsequent SubagentStart on
-//       child landed before sweep)
-//   (d) codex.LastSeenAt was bumped by that SubagentStart so the
-//       hot-path's saved baseline would not match
+//
+//	(a) cc frame with codex IsProxy already attached (hot-path success)
+//	(b) codex standalone row still present (hot-path DeleteIfUnchanged
+//	    failed in the past)
+//	(c) codex.Subagents has a native ref (subsequent SubagentStart on
+//	    child landed before sweep)
+//	(d) codex.LastSeenAt was bumped by that SubagentStart so the
+//	    hot-path's saved baseline would not match
 //
 // Without candidateHasOwnedState(), sweep would attach a duplicate codex
 // IsProxy ref to cc (or no-op via idempotent retry) and then delete
