@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.267] - 2026-04-30
+
+### Feat(spa): show monitor session metrics (#760)
+
+Wires daemon session metrics into Performance Monitor rows for active-host `tmux-session` panes. Matching rows now display daemon CPU, memory, and process count using the current monitor snapshot's `sessions[].session_code` data.
+
+Rows from other hosts and active-host session panes missing from the snapshot stay explicitly marked as not wired, avoiding accidental cross-host metric attribution. Daemon unavailable reasons now use localized stable reason text.
+
 ## [1.0.0-alpha.266] - 2026-04-29
 
 ### Feat(spa): show monitor pane rows (#758)
