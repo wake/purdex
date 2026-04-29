@@ -9,7 +9,7 @@ import {
   type MonitorSessionDaemonMetrics,
   type MonitorSnapshot,
 } from '../lib/host-api'
-import { useHostStore } from '../stores/useHostStore'
+import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
@@ -17,10 +17,14 @@ import type { PaneContent, Tab } from '../types/tab'
 
 type LoadState = 'loading' | 'ready' | 'error'
 
+const MIN_SECONDARY_SNAPSHOT_TIMEOUT_MS = 1000
+
 interface MonitorData {
   hostId: string
+  activeHostKey: string
+  snapshotHostKey: string
   config: MonitorConfig
-  snapshot: MonitorSnapshot
+  snapshotsByHostId: Record<string, MonitorSnapshot>
 }
 
 interface MonitorError {
@@ -35,10 +39,17 @@ interface PaneRow {
   content: PaneContent
 }
 
+interface SnapshotHostTarget {
+  hostId: string
+  key: string
+}
+
 export function MemoryMonitorPage() {
   const t = useI18nStore((s) => s.t)
   const activeHostId = useHostStore((s) => s.activeHostId)
-  const host = useHostStore((s) => (activeHostId ? s.hosts[activeHostId] : undefined))
+  const hosts = useHostStore((s) => s.hosts)
+  const host = activeHostId ? hosts[activeHostId] : undefined
+  const activeHostKey = host ? snapshotHostTargetKey(host) : ''
   const tabs = useTabStore((s) => s.tabs)
   const tabOrder = useTabStore((s) => s.tabOrder)
   const workspaces = useWorkspaceStore((s) => s.workspaces)
@@ -46,16 +57,25 @@ export function MemoryMonitorPage() {
   const [data, setData] = useState<MonitorData | null>(null)
   const [error, setError] = useState<MonitorError | null>(null)
   const retryIntervalMS = useRef(5000)
+  const activeWorkspace = activeWorkspaceId ? workspaces.find((workspace) => workspace.id === activeWorkspaceId) : undefined
+  const paneRows = collectPaneRows(tabs, activeWorkspace?.tabs ?? tabOrder)
+  const snapshotHostTargets = collectSnapshotHostTargets(activeHostId, paneRows, hosts)
+  const snapshotHostIdKey = snapshotHostTargets.map((target) => target.hostId).join('\0')
+  const snapshotHostKey = snapshotHostTargets.map((target) => target.key).join('\0')
 
   useEffect(() => {
     if (!activeHostId || !host) return
 
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    const secondaryInFlight = new Set<string>()
     retryIntervalMS.current = 5000
 
     const load = async () => {
       const requestHostId = activeHostId
+      const requestActiveHostKey = activeHostKey
+      const requestSnapshotHostKey = snapshotHostKey
+      const requestHostIds = snapshotHostIdKey ? snapshotHostIdKey.split('\0') : []
       queueMicrotask(() => {
         if (cancelled) return
         setError((current) => (current?.hostId === requestHostId ? null : current))
@@ -65,10 +85,47 @@ export function MemoryMonitorPage() {
         const nextConfig = await fetchMonitorConfig(requestHostId)
         if (cancelled) return
         retryIntervalMS.current = nextConfig.refresh_interval_ms
-        const nextSnapshot = await fetchMonitorSnapshot(requestHostId)
+        const activeSnapshot = await fetchMonitorSnapshot(requestHostId)
         if (cancelled) return
-        setData({ hostId: requestHostId, config: nextConfig, snapshot: nextSnapshot })
+        setData((current) => ({
+          hostId: requestHostId,
+          activeHostKey: requestActiveHostKey,
+          snapshotHostKey: requestSnapshotHostKey,
+          config: nextConfig,
+          snapshotsByHostId: {
+            ...preserveSecondarySnapshots(
+              current?.snapshotHostKey === requestSnapshotHostKey ? current : null,
+              requestHostId,
+              requestHostIds,
+            ),
+            [requestHostId]: activeSnapshot,
+          },
+        }))
         timer = setTimeout(load, nextConfig.refresh_interval_ms)
+
+        const secondaryHostIds = requestHostIds.filter((hostId) => hostId !== requestHostId)
+        const secondaryTimeoutMS = Math.max(nextConfig.refresh_interval_ms, MIN_SECONDARY_SNAPSHOT_TIMEOUT_MS)
+        for (const hostId of secondaryHostIds) {
+          if (secondaryInFlight.has(hostId)) continue
+          secondaryInFlight.add(hostId)
+          void fetchSnapshotResult(hostId, secondaryTimeoutMS).then((result) => {
+            if (cancelled) return
+            secondaryInFlight.delete(hostId)
+
+            const snapshot = result.snapshot
+            if (snapshot) {
+              setData((current) => {
+                if (current?.hostId !== requestHostId) return current
+                return {
+                  ...current,
+                  snapshotsByHostId: { ...current.snapshotsByHostId, [result.hostId]: snapshot },
+                }
+              })
+            }
+
+            if (result.error) setError({ hostId: requestHostId, message: formatSnapshotError(result.hostId, result.error) })
+          })
+        }
       } catch (err: unknown) {
         if (cancelled) return
         setError({ hostId: requestHostId, message: err instanceof Error ? err.message : String(err) })
@@ -80,9 +137,10 @@ export function MemoryMonitorPage() {
 
     return () => {
       cancelled = true
+      secondaryInFlight.clear()
       if (timer) clearTimeout(timer)
     }
-  }, [activeHostId, host])
+  }, [activeHostId, activeHostKey, host, snapshotHostIdKey, snapshotHostKey])
 
   if (!activeHostId || !host) {
     return (
@@ -94,11 +152,15 @@ export function MemoryMonitorPage() {
 
   const currentData = data?.hostId === activeHostId ? data : null
   const currentError = error?.hostId === activeHostId ? error : null
-  const loadState: LoadState = currentData ? 'ready' : currentError ? 'error' : 'loading'
-  const snapshot = currentData?.snapshot ?? null
+  const activeHostKeyMatches = currentData?.activeHostKey === activeHostKey
+  const loadState: LoadState = currentData && activeHostKeyMatches ? 'ready' : currentError ? 'error' : 'loading'
+  const snapshotsByHostId = currentData?.snapshotsByHostId ?? {}
+  const rowSnapshotsByHostId = currentData?.snapshotHostKey === snapshotHostKey
+    ? snapshotsByHostId
+    : activeHostKeyMatches ? preserveActiveSnapshot(activeHostId, snapshotsByHostId) : {}
+  const snapshot = activeHostKeyMatches && activeHostId ? snapshotsByHostId[activeHostId] ?? null : null
   const config = currentData?.config ?? null
-  const activeWorkspace = activeWorkspaceId ? workspaces.find((workspace) => workspace.id === activeWorkspaceId) : undefined
-  const paneRows = collectPaneRows(tabs, activeWorkspace?.tabs ?? tabOrder)
+  const validSnapshotHostIds = snapshotHostIdKey ? snapshotHostIdKey.split('\0') : []
 
   return (
     <div className="flex-1 overflow-y-auto bg-bg-base">
@@ -192,7 +254,7 @@ export function MemoryMonitorPage() {
                     <td className="px-3 py-2 text-text-muted">{row.kind}</td>
                     <td className="px-3 py-2 text-text-muted">{t('performance_monitor.not_wired')}</td>
                     <td className="px-3 py-2 text-text-muted">
-                      <DaemonMetricCell row={row} snapshot={snapshot} activeHostId={activeHostId} />
+                      <DaemonMetricCell row={row} snapshotsByHostId={rowSnapshotsByHostId} validHostIds={validSnapshotHostIds} />
                     </td>
                   </tr>
                 ))}
@@ -217,9 +279,75 @@ function collectPaneRows(tabs: Record<string, Tab>, tabOrder: string[]): PaneRow
   return rows
 }
 
-function DaemonMetricCell({ row, snapshot, activeHostId }: { row: PaneRow; snapshot: MonitorSnapshot | null; activeHostId: string }) {
+function preserveSecondarySnapshots(current: MonitorData | null, activeHostId: string, requestHostIds: string[]) {
+  if (!current) return {}
+  return Object.fromEntries(
+    requestHostIds.flatMap((hostId) => {
+      const snapshot = hostId === activeHostId ? null : current.snapshotsByHostId[hostId]
+      return snapshot ? [[hostId, snapshot] as const] : []
+    }),
+  )
+}
+
+function preserveActiveSnapshot(activeHostId: string | null, snapshotsByHostId: Record<string, MonitorSnapshot>) {
+  if (!activeHostId || !snapshotsByHostId[activeHostId]) return {}
+  return { [activeHostId]: snapshotsByHostId[activeHostId] }
+}
+
+function collectSnapshotHostTargets(activeHostId: string | null, rows: PaneRow[], hosts: Record<string, HostConfig>): SnapshotHostTarget[] {
+  const rowHostIds = new Set<string>()
+
+  for (const row of rows) {
+    if (row.content.kind === 'tmux-session' && hosts[row.content.hostId] && row.content.hostId !== activeHostId) {
+      rowHostIds.add(row.content.hostId)
+    }
+  }
+
+  const hostIds = activeHostId && hosts[activeHostId]
+    ? [activeHostId, ...[...rowHostIds].sort()]
+    : [...rowHostIds].sort()
+  return hostIds.map((hostId) => ({ hostId, key: snapshotHostTargetKey(hosts[hostId]) }))
+}
+
+function snapshotHostTargetKey(host: HostConfig) {
+  return JSON.stringify([host.id, host.ip, host.port, host.token ?? ''])
+}
+
+async function fetchSnapshotResult(hostId: string, timeoutMS?: number): Promise<{ hostId: string; snapshot?: MonitorSnapshot; error?: unknown }> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    const snapshot = timeoutMS === undefined
+      ? await fetchMonitorSnapshot(hostId)
+      : await Promise.race([
+        fetchMonitorSnapshot(hostId),
+        new Promise<MonitorSnapshot>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('snapshot timed out')), timeoutMS)
+        }),
+      ])
+    return { hostId, snapshot }
+  } catch (error) {
+    return { hostId, error }
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
+
+function formatSnapshotError(hostId: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return `${hostId}: ${message}`
+}
+
+function DaemonMetricCell({
+  row,
+  snapshotsByHostId,
+  validHostIds,
+}: {
+  row: PaneRow
+  snapshotsByHostId: Record<string, MonitorSnapshot>
+  validHostIds: string[]
+}) {
   const t = useI18nStore((s) => s.t)
-  const metrics = findDaemonMetrics(row, snapshot, activeHostId)
+  const metrics = findDaemonMetrics(row, snapshotsByHostId, validHostIds)
   if (!metrics) return t('performance_monitor.not_wired')
   if (metrics.unavailable_reason) return formatUnavailableReason(metrics.unavailable_reason, t)
 
@@ -232,9 +360,11 @@ function DaemonMetricCell({ row, snapshot, activeHostId }: { row: PaneRow; snaps
   )
 }
 
-function findDaemonMetrics(row: PaneRow, snapshot: MonitorSnapshot | null, activeHostId: string): MonitorSessionDaemonMetrics | null {
+function findDaemonMetrics(row: PaneRow, snapshotsByHostId: Record<string, MonitorSnapshot>, validHostIds: string[]): MonitorSessionDaemonMetrics | null {
   const content = row.content
-  if (!snapshot || content.kind !== 'tmux-session' || content.hostId !== activeHostId) return null
+  if (content.kind !== 'tmux-session' || !validHostIds.includes(content.hostId)) return null
+  const snapshot = snapshotsByHostId[content.hostId]
+  if (!snapshot) return null
   return snapshot.sessions.find((session) => session.session_code === content.sessionCode)?.daemon ?? null
 }
 
