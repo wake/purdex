@@ -11,19 +11,19 @@ func deriveOpenCodeStatus(eventName string, rawEvent json.RawMessage) agent.Deri
 	_ = json.Unmarshal(rawEvent, &raw)
 
 	switch eventName {
-	case "SessionStart":
+	case "PdxSessionStart":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusIdle}
-	case "UserPromptSubmit":
+	case "PdxUserPromptSubmit":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusRunning, Model: strVal(raw, "modelName")}
-	case "SubagentStart", "SubagentStop":
+	case "PdxSubagentStart", "PdxSubagentStop":
 		return agent.DeriveResult{Valid: true, Detail: detailSubset(raw, "agent_id", "agent_type", "description", "prompt", "title", "output")}
-	case "PermissionRequest":
+	case "PdxPermissionRequest":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusWaiting, Detail: detailSubset(raw, "request_type", "permission", "patterns", "questions")}
-	case "Stop":
+	case "PdxStop":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusIdle}
-	case "StopFailure":
+	case "PdxStopFailure":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusError, Detail: detailSubset(raw, "error", "error_details")}
-	case "SessionEnd":
+	case "PdxSessionEnd":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusClear}
 	default:
 		return agent.DeriveResult{Valid: false}

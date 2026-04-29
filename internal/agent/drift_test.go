@@ -67,14 +67,14 @@ var providerFixtures = map[string][]driftFixture{
 		{"PdxSubagentStop", `{"agent_id":"a"}`, "", true},
 	},
 	"opencode": {
-		{"SessionStart", `{}`, agent.StatusIdle, true},
-		{"UserPromptSubmit", `{}`, agent.StatusRunning, true},
-		{"PermissionRequest", `{"request_type":"tool"}`, agent.StatusWaiting, true},
-		{"Stop", `{}`, agent.StatusIdle, true},
-		{"StopFailure", `{"error":"x"}`, agent.StatusError, true},
-		{"SessionEnd", `{}`, agent.StatusClear, true},
-		{"SubagentStart", `{"agent_id":"a"}`, "", true},
-		{"SubagentStop", `{"agent_id":"a"}`, "", true},
+		{"PdxSessionStart", `{}`, agent.StatusIdle, true},
+		{"PdxUserPromptSubmit", `{}`, agent.StatusRunning, true},
+		{"PdxPermissionRequest", `{"request_type":"tool"}`, agent.StatusWaiting, true},
+		{"PdxStop", `{}`, agent.StatusIdle, true},
+		{"PdxStopFailure", `{"error":"x"}`, agent.StatusError, true},
+		{"PdxSessionEnd", `{}`, agent.StatusClear, true},
+		{"PdxSubagentStart", `{"agent_id":"a"}`, "", true},
+		{"PdxSubagentStop", `{"agent_id":"a"}`, "", true},
 	},
 }
 

@@ -463,3 +463,183 @@ func TestOpenCodeEvents_StalenessPolicyContract(t *testing.T) {
 	check("busEvents", frozen.BusEvents)
 	check("strongHooks", frozen.StrongHooks)
 }
+
+// === W2 Phase 3 (P3-T1) catalog naming separation invariants ===
+//
+// Mirrors cc/codex events_test.go invariant 1/3/4/5 assertions but skips
+// invariant 2 (Name backfill mechanical rename) — opencode's non-installable
+// entries use dotted-lowercase upstream names that don't satisfy the
+// PurdexName == "Pdx" + TrimPrefix constraint (e.g. auth.session vs
+// PdxAuthSession). Phase 3 P3-T4 removes the Name field entirely so this
+// invariant is vacuous after merge.
+
+// expectedOpenCodeLifecycle pins the LifecycleEventKind for every installable
+// per spec §2.3.1. Non-installable entries default to LifecycleNone (verified
+// directly in TestOpenCodeEventSpecs_LifecycleAlignment).
+var expectedOpenCodeLifecycle = map[string]agent.LifecycleEventKind{
+	"SessionStart":      agent.LifecycleSessionStart,
+	"UserPromptSubmit":  agent.LifecycleUserPromptSubmit,
+	"SubagentStart":     agent.LifecycleSubagentStart,
+	"SubagentStop":      agent.LifecycleSubagentStop,
+	"PermissionRequest": agent.LifecycleNone,
+	"Stop":              agent.LifecycleStop,
+	"StopFailure":       agent.LifecycleStopFailure,
+	"SessionEnd":        agent.LifecycleSessionEnd,
+}
+
+// expectedOpenCodeInstallableUpstreamKeys pins the multi-source mapping for
+// the 8 installable entries per spec §2.3 — UpstreamKeys lists the plugin
+// Bus event sources that fire this catalog entry.
+var expectedOpenCodeInstallableUpstreamKeys = map[string][]string{
+	"SessionStart":      {"session.created"},
+	"UserPromptSubmit":  {"chat.message"},
+	"SubagentStart":     {"tool.execute.before"},
+	"SubagentStop":      {"tool.execute.after"},
+	"PermissionRequest": {"permission.asked", "question.asked"},
+	"Stop":              {"session.status"},
+	"StopFailure":       {"session.error"},
+	"SessionEnd":        {"session.deleted"},
+}
+
+// opencodeLegacyMetadata mirrors cc/codex pattern for P3-T1 invariant 4 —
+// preserved metadata after the plain-struct-literal rewrite.
+type opencodeLegacyMetadata struct {
+	EmitsStatus []agent.Status
+	Description string
+	FutureOnly  bool
+	Handling    agent.HookHandling
+}
+
+var expectedOpenCodeInstallablePreservedMetadata = map[string]opencodeLegacyMetadata{
+	"SessionStart":      {EmitsStatus: []agent.Status{agent.StatusIdle}, Description: "OpenCode session started"},
+	"UserPromptSubmit":  {EmitsStatus: []agent.Status{agent.StatusRunning}, Description: "User submitted a prompt"},
+	"SubagentStart":     {EmitsStatus: []agent.Status{}, Description: "Nested sub-agent task dispatched"},
+	"SubagentStop":      {EmitsStatus: []agent.Status{}, Description: "Nested sub-agent task completed"},
+	"PermissionRequest": {EmitsStatus: []agent.Status{agent.StatusWaiting}, Description: "Tool permission request awaiting user approval"},
+	"Stop":              {EmitsStatus: []agent.Status{agent.StatusIdle}, Description: "Agent finished responding and is idle"},
+	"StopFailure":       {EmitsStatus: []agent.Status{agent.StatusError}, Description: "Agent stopped due to an error"},
+	"SessionEnd":        {EmitsStatus: []agent.Status{agent.StatusClear}, Description: "OpenCode session ended"},
+}
+
+// TestOpenCodeEventSpecs_PurdexNamePdxPrefix verifies invariant 1 across all
+// 65 entries: every PurdexName starts with "Pdx".
+func TestOpenCodeEventSpecs_PurdexNamePdxPrefix(t *testing.T) {
+	for _, e := range opencode.NewProvider().Events() {
+		if e.PurdexName == "" {
+			t.Errorf("opencode %q: PurdexName empty", e.Name)
+			continue
+		}
+		if !strings.HasPrefix(e.PurdexName, "Pdx") {
+			t.Errorf("opencode %q: PurdexName %q lacks Pdx prefix", e.Name, e.PurdexName)
+		}
+	}
+}
+
+// TestOpenCodeEventSpecs_UpstreamKeysNotEmpty verifies invariant 1 sub-clause:
+// every entry has a non-empty UpstreamKeys slice (installable / unsupported /
+// ignored alike per spec §2.3 — non-installable UpstreamKeys = [legacy Name]).
+func TestOpenCodeEventSpecs_UpstreamKeysNotEmpty(t *testing.T) {
+	for _, e := range opencode.NewProvider().Events() {
+		if len(e.UpstreamKeys) == 0 {
+			t.Errorf("opencode %q: UpstreamKeys empty", e.PurdexName)
+		}
+	}
+}
+
+// TestOpenCodeEventSpecs_PurdexNameNotInUpstreamKeys verifies invariant 3.
+func TestOpenCodeEventSpecs_PurdexNameNotInUpstreamKeys(t *testing.T) {
+	for _, e := range opencode.NewProvider().Events() {
+		for _, k := range e.UpstreamKeys {
+			if k == e.PurdexName {
+				t.Errorf("opencode %q: PurdexName %q present in UpstreamKeys", e.PurdexName, k)
+			}
+		}
+	}
+}
+
+// TestOpenCodeEventSpecs_InstallableMultiSource pins the 8 installable
+// entries' UpstreamKeys to the plugin Bus event sources per spec §2.3 —
+// PdxPermissionRequest is the multi-source case (permission.asked +
+// question.asked).
+func TestOpenCodeEventSpecs_InstallableMultiSource(t *testing.T) {
+	got := make(map[string][]string)
+	for _, e := range opencode.NewProvider().Events() {
+		if !agent.IsInstallableHookSpec(e) {
+			continue
+		}
+		got[e.Name] = e.UpstreamKeys
+	}
+	for name, want := range expectedOpenCodeInstallableUpstreamKeys {
+		gotKeys, ok := got[name]
+		if !ok {
+			t.Errorf("opencode installable %q: not in catalog", name)
+			continue
+		}
+		if len(gotKeys) != len(want) {
+			t.Errorf("opencode installable %q: UpstreamKeys=%v want %v", name, gotKeys, want)
+			continue
+		}
+		for i, k := range want {
+			if gotKeys[i] != k {
+				t.Errorf("opencode installable %q: UpstreamKeys[%d]=%q want %q", name, i, gotKeys[i], k)
+			}
+		}
+	}
+}
+
+// TestOpenCodeEventSpecs_LifecycleAlignment verifies invariant 5 across all
+// 65 entries: installable Lifecycle matches the §2.3.1 table; non-installable
+// entries default to LifecycleNone.
+func TestOpenCodeEventSpecs_LifecycleAlignment(t *testing.T) {
+	for _, e := range opencode.NewProvider().Events() {
+		want := agent.LifecycleNone
+		if agent.IsInstallableHookSpec(e) {
+			if w, ok := expectedOpenCodeLifecycle[e.Name]; ok {
+				want = w
+			}
+		}
+		if e.Lifecycle != want {
+			t.Errorf("opencode %q (Name=%q, installable=%v): Lifecycle=%v, want %v",
+				e.PurdexName, e.Name, agent.IsInstallableHookSpec(e), e.Lifecycle, want)
+		}
+	}
+}
+
+// TestOpenCodeEventSpecs_InstallablePreservedMetadata verifies invariant 4
+// for the 8 installable entries — the plain-struct-literal rewrite in P3-T1
+// did not drop any pre-W2 metadata field (EmitsStatus / Description /
+// FutureOnly / Handling).
+func TestOpenCodeEventSpecs_InstallablePreservedMetadata(t *testing.T) {
+	for _, e := range opencode.NewProvider().Events() {
+		if !agent.IsInstallableHookSpec(e) {
+			continue
+		}
+		want, ok := expectedOpenCodeInstallablePreservedMetadata[e.Name]
+		if !ok {
+			t.Errorf("opencode %q: not present in expectedOpenCodeInstallablePreservedMetadata; update fixture", e.Name)
+			continue
+		}
+		if e.Description != want.Description {
+			t.Errorf("opencode %q: Description=%q want %q", e.Name, e.Description, want.Description)
+		}
+		if e.FutureOnly != want.FutureOnly {
+			t.Errorf("opencode %q: FutureOnly=%v want %v", e.Name, e.FutureOnly, want.FutureOnly)
+		}
+		if e.Handling != want.Handling {
+			t.Errorf("opencode %q: Handling=%q want %q", e.Name, e.Handling, want.Handling)
+		}
+		if len(e.EmitsStatus) != len(want.EmitsStatus) {
+			t.Errorf("opencode %q: EmitsStatus len=%d want %d (got=%v want=%v)", e.Name, len(e.EmitsStatus), len(want.EmitsStatus), e.EmitsStatus, want.EmitsStatus)
+			continue
+		}
+		gotSet := make(map[agent.Status]bool, len(e.EmitsStatus))
+		for _, s := range e.EmitsStatus {
+			gotSet[s] = true
+		}
+		for _, s := range want.EmitsStatus {
+			if !gotSet[s] {
+				t.Errorf("opencode %q: EmitsStatus missing %q (got %v)", e.Name, s, e.EmitsStatus)
+			}
+		}
+	}
+}

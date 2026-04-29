@@ -1851,11 +1851,12 @@ func TestHandleEvent_CodexLegacyEventName_IsCatalogMiss(t *testing.T) {
 	}
 }
 
-// W2-D1b (Phase 2): opencode prematurely emitting a PdxXxx name before its
-// Phase 3 catalog migration must surface as event_not_in_catalog. This
-// preserves the cross-phase drift guard the original codex-targeted test
-// provided in Phase 1 — opencode is now the still-unmigrated agent.
-func TestHandleEvent_OpencodePrematurePdxName_IsCatalogMiss(t *testing.T) {
+// W2-D1b (Phase 3): opencode catalog has migrated to PdxXxx; PdxStop must
+// hit the catalog. Pre-Phase 3 this test asserted the inverse — opencode
+// emitting PdxXxx prematurely was a drift guard. Now that drift guard moves
+// down to TestHandleEvent_OpencodeLegacyEventName_IsCatalogMiss (legacy
+// literal post-P3 → catalog miss), mirroring the cc/codex pair.
+func TestHandleEvent_OpencodePdxName_IsCatalogHit(t *testing.T) {
 	m := newTestModule(t)
 	fakeTmux := tmux.NewFakeExecutor()
 	fakeTmux.SetPaneSessionName("%5", "work")
@@ -1878,8 +1879,8 @@ func TestHandleEvent_OpencodePrematurePdxName_IsCatalogMiss(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp["reason"] != "event_not_in_catalog" {
-		t.Errorf("reason = %q, want event_not_in_catalog (opencode catalog still legacy in Phase 2)", resp["reason"])
+	if resp["reason"] == "event_not_in_catalog" {
+		t.Errorf("reason = %q; opencode PdxStop must hit the catalog post-P3 (was Phase 2 drift guard)", resp["reason"])
 	}
 }
 
