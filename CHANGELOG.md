@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.263] - 2026-04-29
+
+### Feat(monitor): stabilize API contract fields (#752)
+
+Adds handler-level monitor API contract coverage for snapshot JSON shape, stable units, sample timestamps, config bounds, and partial config updates.
+
+Monitor host metrics and session daemon metrics now serialize `unavailable_reason` as a stable nullable field. Available metrics return `null`, while pending or unavailable metrics return the corresponding reason string, giving future SPA consumers a consistent response shape.
+
+This remains a daemon-only API contract slice; SPA host API types and UI integration remain deferred.
+
 ## [1.0.0-alpha.262] - 2026-04-29
 
 ### Feat(monitor): single-flight snapshot sampling (#750)
