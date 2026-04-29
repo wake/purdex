@@ -215,6 +215,110 @@ export async function agentUpload(
   return res.json()
 }
 
+/* ─── Monitor API ─── */
+
+export interface MonitorMetricBounds {
+  min: number
+  max: number
+}
+
+export interface MonitorConfigBounds {
+  refresh_interval_ms: MonitorMetricBounds
+  top_process_limit: MonitorMetricBounds
+}
+
+export interface MonitorConfig {
+  refresh_interval_ms: number
+  top_process_limit: number
+  bounds: MonitorConfigBounds
+}
+
+export type MonitorConfigUpdate = Partial<Pick<MonitorConfig, 'refresh_interval_ms' | 'top_process_limit'>>
+
+export interface MonitorHostCPU {
+  percent: number | null
+  unavailable_reason: string | null
+}
+
+export interface MonitorHostMemory {
+  total_bytes: number | null
+  used_bytes: number | null
+  used_percent: number | null
+  unavailable_reason: string | null
+}
+
+export interface MonitorHostDisk {
+  total_bytes: number | null
+  used_bytes: number | null
+  used_percent: number | null
+  unavailable_reason: string | null
+}
+
+export interface MonitorHostMetrics {
+  cpu: MonitorHostCPU
+  memory: MonitorHostMemory
+  disk: MonitorHostDisk
+}
+
+export interface MonitorTopProcess {
+  pid: number
+  ppid: number
+  command: string
+  cpu_percent: number
+  memory_bytes: number
+}
+
+export interface MonitorTmuxSession {
+  id: string
+  name: string
+}
+
+export interface MonitorSessionDaemonMetrics {
+  cpu_percent: number | null
+  memory_bytes: number | null
+  process_count: number | null
+  top_processes: MonitorTopProcess[]
+  unavailable_reason: string | null
+}
+
+export interface MonitorSessionMetrics {
+  session_code: string
+  tmux_session: MonitorTmuxSession
+  daemon: MonitorSessionDaemonMetrics
+}
+
+export interface MonitorSnapshot {
+  sampled_at: number
+  host: MonitorHostMetrics
+  sessions: MonitorSessionMetrics[]
+  config: MonitorConfig
+}
+
+export async function fetchMonitorSnapshot(hostId: string): Promise<MonitorSnapshot> {
+  const res = await hostFetch(hostId, '/api/monitor/snapshot')
+  if (!res.ok) throw new Error(`fetchMonitorSnapshot failed: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchMonitorConfig(hostId: string): Promise<MonitorConfig> {
+  const res = await hostFetch(hostId, '/api/monitor/config')
+  if (!res.ok) throw new Error(`fetchMonitorConfig failed: ${res.status}`)
+  return res.json()
+}
+
+export async function updateMonitorConfig(
+  hostId: string,
+  updates: MonitorConfigUpdate,
+): Promise<MonitorConfig> {
+  const res = await hostFetch(hostId, '/api/monitor/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  })
+  if (!res.ok) throw new Error(`updateMonitorConfig failed: ${res.status}`)
+  return res.json()
+}
+
 /* ─── Agent Monitor API ─── */
 
 export interface AgentMonitorChainSummary {

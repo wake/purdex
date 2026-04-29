@@ -5,7 +5,8 @@ import {
   listSessions, createSession, deleteSession, switchMode,
   handoff, fetchHistory, fetchSessionCwd, fetchSessionHome, getConfig, updateConfig, agentUpload,
   fetchAgentMonitorChains, fetchAgentMonitorChain, fetchAgentMonitorProjection,
-  type Session,
+  fetchMonitorSnapshot, fetchMonitorConfig, updateMonitorConfig,
+  type MonitorSnapshot, type Session,
 } from './host-api'
 
 const HOST_ID = 'test-host'
@@ -306,6 +307,94 @@ describe('agent monitor api', () => {
 
     await expect(fetchAgentMonitorProjection(HOST_ID, new URLSearchParams({ pane: '%7' })))
       .rejects.toThrow('fetchAgentMonitorProjection failed: 500')
+  })
+})
+
+describe('monitor api', () => {
+  const monitorSnapshot: MonitorSnapshot = {
+    sampled_at: 180000,
+    host: {
+      cpu: { percent: null, unavailable_reason: 'pending' },
+      memory: { total_bytes: 1024, used_bytes: 256, used_percent: 25, unavailable_reason: null },
+      disk: { total_bytes: 4096, used_bytes: 1024, used_percent: 25, unavailable_reason: null },
+    },
+    sessions: [
+      {
+        session_code: 'abc123',
+        tmux_session: { id: '$1', name: 'work' },
+        daemon: {
+          cpu_percent: null,
+          memory_bytes: 2048,
+          process_count: 2,
+          unavailable_reason: null,
+          top_processes: [
+            { pid: 101, ppid: 1, command: 'shell', cpu_percent: 1.5, memory_bytes: 1024 },
+          ],
+        },
+      },
+    ],
+    config: {
+      refresh_interval_ms: 5000,
+      top_process_limit: 10,
+      bounds: {
+        refresh_interval_ms: { min: 1000, max: 60000 },
+        top_process_limit: { min: 1, max: 50 },
+      },
+    },
+  }
+
+  it('fetches monitor snapshot with auth', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(monitorSnapshot), { status: 200 }),
+    )
+
+    const result = await fetchMonitorSnapshot(HOST_ID)
+
+    expect(result).toEqual(monitorSnapshot)
+    expectAuthFetch(`${BASE}/api/monitor/snapshot`)
+  })
+
+  it('throws when monitor snapshot request fails', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('error', { status: 503 }),
+    )
+
+    await expect(fetchMonitorSnapshot(HOST_ID)).rejects.toThrow('fetchMonitorSnapshot failed: 503')
+  })
+
+  it('fetches monitor config with auth', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(monitorSnapshot.config), { status: 200 }),
+    )
+
+    const result = await fetchMonitorConfig(HOST_ID)
+
+    expect(result).toEqual(monitorSnapshot.config)
+    expectAuthFetch(`${BASE}/api/monitor/config`)
+  })
+
+  it('updates monitor config with JSON body', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ...monitorSnapshot.config, top_process_limit: 25 }), { status: 200 }),
+    )
+
+    const result = await updateMonitorConfig(HOST_ID, { top_process_limit: 25 })
+
+    expect(result.top_process_limit).toBe(25)
+    expectAuthFetch(`${BASE}/api/monitor/config`, { method: 'PUT' })
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect((call[1].headers as Headers).get('Content-Type')).toBe('application/json')
+    expect(JSON.parse(call[1].body)).toEqual({ top_process_limit: 25 })
+  })
+
+  it('throws when monitor config requests fail', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('error', { status: 500 }),
+    )
+
+    await expect(fetchMonitorConfig(HOST_ID)).rejects.toThrow('fetchMonitorConfig failed: 500')
+    await expect(updateMonitorConfig(HOST_ID, { refresh_interval_ms: 2000 }))
+      .rejects.toThrow('updateMonitorConfig failed: 500')
   })
 })
 
