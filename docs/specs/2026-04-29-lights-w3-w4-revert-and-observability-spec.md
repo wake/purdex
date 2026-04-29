@@ -41,7 +41,15 @@ audit §0.1 已說明：當前 main `manageActivityWatch` always-on 對 §6 部�
 | W5-7 | opencode | error/idle 交織 RPC 性質 | W5-7 仍走 RPC reconcile，本 PR 不影響 |
 | W5-8 | opencode | running plugin 補 mapping | plugin 補 mapping |
 
-**結論**：本 PR 是觀察期切換點，明知 W5-1/W5-3/W5-4/W5-5 會回到「純 hook coverage」缺口狀態。W6-3 (codex error) 是 W6 推薦第一個動工的 ProbeIntent，定 interface 後逐步補位。
+**非 W5 配對但 post-W3 可見的 W6-only 缺口**（per audit §7.1）：
+
+| W6 ID | agent | 缺口 status | 之前 always-on 是否補到？ | post-W3 觀察期影響 |
+|-------|-------|-------------|---------------------------|---------------------|
+| W6-6 | codex | running（PermissionRequest reply 後 user 重啟提問 spinner） | 部分（screen-change 撞到視覺改變可能補上） | 失去視覺 fallback，若無 hook 跟進 spinner 不亮 |
+
+audit §7.2 推薦順序為 **W6-3 → W6-4 → W6-6 → W6-5 → W6-1 → W6-2**（先 codex 兩大缺口建立 ProbeIntent interface），W6-6 排第三。
+
+**結論**：本 PR 是觀察期切換點，明知 W5-1/W5-3/W5-4/W5-5 會回到「純 hook coverage」缺口狀態，W6-6 也可能裸露。W6-3 (codex error) 是 W6 推薦第一個動工的 ProbeIntent，定 interface 後逐步補位。
 
 ### 0.3 解掉的 issue
 
@@ -80,6 +88,7 @@ audit §0.1 已說明：當前 main `manageActivityWatch` always-on 對 §6 部�
 | R10 | OR2 `TestOrchestrator_DefaultProfileWhenAgentMissing` | `internal/module/agent/probe_orchestrator_test.go:785-810` | 撤（無 default，即不需 fallback test） |
 | R11 | FX4 mutually-exclusive validation test | `internal/module/agent/probe_orchestrator_test.go:507`（具體名稱以實際檔案為準） | 改成測「caller 傳入 invalid opts → startWatch 回 false 並 dev-log 抱怨」；保留校驗邏輯 |
 | R12 | `manageActivityWatch` 整個函式 doc comment 中關於 ProbeProfile / 預設 fallback 的描述 | `internal/module/agent/module.go:490-499` | 重寫；說明本 PR 後預設 no-op |
+| R13 | `renameSessionLocked` 內 `stopWatch + startWatch` rename-restart 區塊 | `internal/module/agent/module.go:288-294` | 改成 stop-only；W3 後沒有 opts 來源也沒有 active watcher 要 restart；保留 `migrateLastHookAt`（L301）因 graceWindow 機制不變 |
 
 ### 1.2 保留清單（不變動）
 
@@ -142,6 +151,25 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 ```
 
 > **設計選項討論**：另一個極端是把 `manageActivityWatch` / `activeWatchers` map 全部撤掉，由 W6 caller 完全自管。但這會在 W6 第一個 ProbeIntent PR 內重新生出活動 watcher 的 lifecycle 機制（rename / stop on session-end / restart-recovery），同時把 stale-callback guard 機制再講一遍。**保留 stop-on-status-change 入口**（即上述 simplified 版本）讓 W6 可以漸進加 start 邏輯，避免大重構。
+>
+> **Rename lifecycle（F1 codex review fix）**：W3 撤回後 `renameSessionLocked` 不能 restart watcher（沒有 caller-provided opts 來源），改成純 stop-only：
+
+```go
+// W3 simplified rename: stop-only path; orchestrator no longer restarts a
+// watcher across rename because nothing in W3 starts one in the first place.
+// W6 第一個 ProbeIntent caller 接管 rename-restart 時，必須升級 activeWatchers
+// 從 map[string]string 為含 WatchOptions / intent key 的 struct，並重新引入 startWatch。
+if agentType, ok := m.activeWatchers[oldName]; ok {
+    delete(m.activeWatchers, oldName)
+    _ = agentType
+    m.probeOrch.stopWatch(oldName)
+    // migrateLastHookAt 仍保留 — graceWindow 機制不依賴 watcher
+    m.probeOrch.migrateLastHookAt(oldName, newName)
+    // newName 不重建 activeWatchers entry；W6 caller 在 ProbeIntent fire 時自行建立
+}
+```
+
+`activeWatchers` map 結構維持 `map[string]string`（W3 不前置升級為 struct）— W6-3 第一個 ProbeIntent 進來時再決定要不要升級為 `map[string]watcherState{ AgentType, Opts }`。
 
 ### 1.4 撤回後 manageActivityWatch caller 路徑
 
@@ -191,10 +219,16 @@ if req.TmuxSession != "" && m.prober != nil && result.Valid {
 [derive]    verify_passed agent=Y purdex_name=Z status=running reason=
 [handler]   frame_apply session=X frame_id=... lifecycle=Pdx... decision=updated_frame
 [handler]   projection_built session=X top_status=running tabs=... codes=...
-[handler]   broadcasted session=X clients=N reason=... raw_event_name=Z
+[broadcast] session=X clients=N reason=... raw_event_name=Z chain_id=...
 ```
 
 對應 5 個 trace step：trigger / verify / frame / projection / emit（per `internal/module/agent/trace.go`）。每步在 dev mode 下都對應一條 `[xxx]` log line。
+
+**標籤語意分層**（reviewer 不要混淆）：
+- `[hook]` / `[derive]` / `[handler]` / `[broadcast]` — **dev-mode normal-path trace**（W4 引入；isDevMode gate；production 不印）
+- `[probe]` — **dev-mode probe orchestrator trace**（既有 5 條；isDevMode gate；W3 撤回後 normal-path 期間應無 startWatch / status reason=screen-* / graceWindow suppress 三類訊息，但 recordHookAt 訊息仍會出現）
+- `[agent]` — **production error log**（既有 9 條；無 isDevMode gate；error path only）
+- `[agent][trace]` — **TraceStore save/drop**（既有 2 條；isDevMode gate）
 
 ### 2.3 補完路徑（依 W1 audit Quick Paths priority）
 
@@ -232,7 +266,7 @@ if req.TmuxSession != "" && m.prober != nil && result.Valid {
 ### 2.5 設計約束
 
 **MUST**:
-- 所有新增 dev log line 必須 `if isDevMode() { ... }` gate，避免 production log 噴發
+- 所有新增 dev log line 必須 `if isDevMode() { ... }` gate；**參數組裝（fmt.Sprintf / string concat / format 計算）必須在 gate 內**，production 不做 format 也不做 I/O
 - 每行格式統一 `[xxx] kind key=value key=value`，便於 grep / `tail -f` 解讀
 - chain_id (= TraceChainID) 帶在前段欄位（[hook]/[derive]/[handler]/[broadcast]）
 - 不得改 production log 行為（既有 `[agent]` error 9 條原樣保留）
@@ -298,13 +332,18 @@ if req.TmuxSession != "" && m.prober != nil && result.Valid {
 
 ### 3.3 Phase 3 — W4 TraceStore step gap audit
 
-**Scope**：§2.6 audit doc + 必要補測試
+**PR-4 必含 scope（無條件做）**：
+- audit report：列出每條 hook 路徑（valid main / invalid catalog miss / subagent detail-only / SessionEnd / replay-from-DB / SubagentStart-Stop）走過 5 step (trigger/verify/frame/projection/emit) 的覆蓋情況
+- 對「合理缺步」case（如 subagent detail-only 不 broadcast 故無 emit step）寫 doc 註解進 `internal/module/agent/trace.go` package comment
+- 補既有 step 在 dev log 端的 PDX_DEV_MODE=1 trace log line（屬 P2 dev log 工作的延伸）
 
-**併入 Phase 2 的條件**：實際發現的 gap < 50 lines diff（high probability — 既有 trace 已大致覆蓋）
+**PR-4 不做 scope（follow-up issue）**：
+- 若 audit 發現需新增 trace step（如 replay-from-DB 沒進任何 step、需新 `replay` kind）→ **不阻擋 PR-4**；開 follow-up issue 註明 step 種類 + 觸發條件 + 為何 W3+W4 不擴
+- TraceStore schema 變更（`agent_trace_steps.Kind` 加新值）需謹慎評估 cross-version compat → 必走獨立 PR
 
-**獨立 phase 的條件**：發現有需要補新 trace step（如 replay-from-DB 路徑沒進 trace）— 需要動 trace.go schema 級
+**判斷時機**：Phase 2 結束 mlab live verify §8-§12 跑完後，看 chain DB 紀錄與 dev log；若覆蓋空洞需補測試而非 schema → 併入 P2 commit；若需 schema → 開 issue 不阻擋 PR-4 完成。
 
-**判斷時機**：Phase 2 結束時，跑一輪 hook coverage smoke + 看 TraceStore 出來的 chain 有沒有缺 step。
+**§3.3 對 §6 結束條件的對應**：§6 不要求補新 trace step；只要求 audit doc + 既有 step coverage 確認 + 必要 follow-up issue 已開。
 
 ### 3.4 Phase 順序與依賴
 
@@ -331,15 +370,34 @@ P3 (TraceStore audit)← 視結果併入 P2 或拆 PR
 ### 4.1 單元測試（Go）
 
 **Phase 1**：
-- 撤 `internal/agent/cc/probe_profile_test.go` 全檔
-- `internal/module/agent/probe_orchestrator_test.go`：
-  - 撤 OR1 (`TestOrchestrator_StartWatchUsesAgentProfile`)
-  - 撤 OR2 (`TestOrchestrator_DefaultProfileWhenAgentMissing`)
-  - 改 FX4 (`TestStartWatch_InvalidOptionsRollback` 或新名稱)：caller 直接傳入 `probe.WatchOptions{TopLines: 5, BottomLines: 5}` → 期 false + dev log 印 `[probe] startWatch invalid opts`
-- `internal/module/agent/module_test.go` 新增：
-  - `TestManageActivityWatch_DefaultNoOp` — 任何 status 改變都只 stop 既有 watcher，不 startWatch（用 fake prober 觀察 Watch 呼叫 0 次）
-  - `TestManageActivityWatch_StopsExistingWatcher` — 先 manually 設 activeWatchers，呼叫後驗 stopWatch +1
-- 既有 `Test*Probe*` 測試走完一輪 — 確認 graceWindow / Error guard / stale-callback / transition gate 沒被破壞
+
+A. **整檔刪**：
+- `internal/agent/cc/probe_profile_test.go`（26 行）
+
+B. **`internal/module/agent/probe_orchestrator_test.go` 改動**：
+- 撤 OR1 (`TestOrchestrator_StartWatchUsesAgentProfile`，L757-783)
+- 撤 OR2 (`TestOrchestrator_DefaultProfileWhenAgentMissing`，L785-810)
+- 改 FX4 / `TestStartWatch_InvalidOptionsRollback`（L507 區塊；具體名稱以實際檔案為準）：caller 直接傳入 `probe.WatchOptions{TopLines: 5, BottomLines: 5}` → 期 false + dev log 印 `[probe] startWatch invalid opts`
+
+C. **`internal/module/agent/probe_orchestrator_integration_test.go` 改動**（codex F4 引用 L18, L83-99, L210-223, L333+, L373+）：
+- 撤 OR1 integration `TestOrchestrator_ManageActivityWatchEvictsOnStatusOff`（L40-101）— 整個 walks `waiting → activeWatchers populated → StatusError → torn down` 假設 always-on，撤
+- 撤 OR2 integration `Test*UsesProbeProfile`（L203-225 區塊）— 假設 cc ProbeProfileProvider TopLines=12 + activeWatchers populated，整段撤
+- 改 rename test（L260-300 + L325-410 兩段）：W3 後 `renameSessionLocked` 不再 startWatch + activeWatchers 不轉移到 newName；測 case 改成「rename 後 oldName 從 activeWatchers 消失，**newName 不出現**，stopWatch +1，migrateLastHookAt 仍轉移 graceWindow」
+- 保留 OR3 / OR4 / OR5 / FX1 / FX2 / FX3 / FX5 等測 graceWindow / Error guard / stale-callback / transition gate / interruptBeforeFinalLockFn 的整套 case（W3 撤回不改變這些保護機制）
+
+D. **`internal/module/agent/handler_test.go` 改動**（codex F4 引用 L1157, L1188, L1694）：
+- L1157 `_, watching := m.activeWatchers["work"]` — 三處斷言反向：W3 後 valid hook 處理完不再有 active watcher（測 `watching == false`）
+- 更精確：保留測「hook 處理後 stopWatch 被呼叫於既有 watcher」case，刪「hook 啟動 watcher」case
+- 三處測試名稱以實際檔案為準（讀 surrounding context 判斷）
+
+E. **新增 `internal/module/agent/module_test.go` 測試**：
+- `TestManageActivityWatch_DefaultNoOp` — 任何 status (waiting/running/idle/error/clear) 改變都只 stop 既有 watcher，不 startWatch（用 fake prober 觀察 Watch 呼叫 0 次）
+- `TestManageActivityWatch_StopsExistingWatcher` — 先 manually 設 activeWatchers["sess"]="cc"，呼叫後驗 stopWatch +1，map 清空
+- `TestRenameSessionLocked_StopOnly` — 設定 activeWatchers oldname/cc，呼叫 renameSessionLocked，驗：oldname 從 map 消失、newname 不出現、stopWatch +1、migrateLastHookAt 仍轉移（graceWindow timestamp 在 newname 下可查到）
+
+F. **既有不改但需要走過確認沒 break 的 case**：
+- 全套 `Test*Probe*` 直接觀察 watcher 行為的 unit test（OR3/OR4/OR5/FX1-FX3/FX5）— 改完跑一次確認 0 fail
+- handler_test 內非 watcher 主題的測試（catalog parse / lifecycle dispatch / projection compose）— 同步確認不 break
 
 **Phase 2**：
 - `internal/module/agent/handler_test.go` 新增：
@@ -365,9 +423,9 @@ P3 (TraceStore audit)← 視結果併入 P2 或拆 PR
 | §2 | stop 舊 daemon, start `/tmp/pdx serve` env `PDX_DEV_MODE=1` | listen 100.64.0.2:7860 |
 | §3 | 跑 cc UserPromptSubmit | broadcast normalized event；status=running |
 | §4 | 跑 cc Stop | broadcast；status=idle |
-| §5 | grep daemon log `\[probe\]` | 0 hit（撤回後無 always-on） |
-| §6 | curl `/debug/vars` | `purdex_probe_watch_started_total=0` 不再增長 |
-| §7 | 跑 codex / opencode 同樣 hook 一遍 | broadcast 正常；無 `[probe]` log |
+| §5 | grep daemon log 三類 `[probe]` 訊息 | `[probe] startWatch` / `[probe] status reason=screen-*` / `[probe] graceWindow suppress` 三類**全 0 hit**；`[probe] recordHookAt` 仍會出現（保留行為，graceWindow 機制不依賴 watcher） |
+| §6 | curl `/debug/vars` | `purdex_probe_watch_started_total=0` / `purdex_probe_screen_event_total=0` / `purdex_probe_grace_window_suppressed_total=0` 三 counter 全不增長；`purdex_probe_watch_stopped_total` 在 ship 初期可能 +N（清 user 升級前殘留） |
+| §7 | 跑 codex / opencode 同樣 hook 一遍 | broadcast 正常；同 §5 三類 `[probe]` 0 hit |
 
 **Phase 2 verify**（dev log 跨層覆蓋）：
 
@@ -393,7 +451,7 @@ P3 (TraceStore audit)← 視結果併入 P2 或拆 PR
 | R1 撤回後 cc/codex/opencode 出現 lights 卡死 user 投訴 | medium | high | spec §0.2 explicit；CHANGELOG entry 標 known regression；W6-3 第一個 ad-hoc ProbeIntent 推薦立即啟動 |
 | R2 W4 dev log 量太大，PDX_DEV_MODE=1 跑 console 噴 | low | medium | 每 hook 5 條 + 每秒最多 ~10 hook = ~50 line/sec；可接受；用 isDevMode gate 確保 production 0 影響 |
 | R3 撤回 OR1/OR2 後 startWatch 邏輯回退測試覆蓋率不足 | medium | medium | 改 FX4 + 新增 default-no-op test 補回；codex round 1 review 抓漏 |
-| R4 W4 dev log 加在 hot path 衝擊性能 | low | low | `isDevMode()` 是 env-var read，~10ns；production 不印；hot path 平均加 2 funccall 量級可忽略 |
+| R4 W4 dev log 加在 hot path 衝擊性能 | low | low | **可驗證約束**：所有新增 dev log line 必須 `if isDevMode() { log.Printf(...) }` 包住整段參數組裝；禁止在 gate 外做 string concat / fmt.Sprintf 預備字串；production 不做 format 也不 I/O。codex review 可機械驗證 (grep `log.Printf` not preceded by `if isDevMode()` within ±5 lines) |
 | R5 issue #719 always-on residue 沒在 mlab log 完整消失（殘留 watcher 沒清） | medium | medium | Phase 1 verify §5 grep `[probe]` 必須 0 hit；非 0 視為 P1 finding |
 | R6 並發 session 寫 main repo 期間 worktree 被污染 | low | high | feedback `concurrent_session_safety` + `worktree_absolute_path`；Edit 全用絕對路徑 |
 | R7 codex round-1 不讀 spec, 建議違反 W3 「不前置 ProbeIntent interface」原則 | medium | high | feedback `codex_pr_review_spec_alignment`；round-2 防守視角必派 |
@@ -405,7 +463,7 @@ P3 (TraceStore audit)← 視結果併入 P2 或拆 PR
 
 - ✅ §1 撤回清單 R1-R12 全部完成
 - ✅ §2.3 P1 + P2 dev log 行全部就位（`[hook]` / `[derive]` / `[handler]` / `[broadcast]`）
-- ✅ §2.6 TraceStore audit 完成（gap doc 或補測試）
+- ✅ §2.6 / §3.3 TraceStore audit 完成（audit doc + 既有 5-step coverage 確認；如需新 trace step 已開 follow-up issue 不阻擋本 PR）
 - ✅ Go test `go test ./...` 全綠（22 packages）
 - ✅ SPA `pnpm lint` / `pnpm build` clean（baseline 4 既有 vitest fail 不變）
 - ✅ mlab live verify §1-§12 全 PASS
