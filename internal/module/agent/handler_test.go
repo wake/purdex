@@ -1808,6 +1808,49 @@ func TestHandleEvent_CodexPdxName_IsCatalogHit(t *testing.T) {
 	}
 }
 
+// W2-D1c (Phase 2): codex post-W2 with un-reinstalled hooks (user upgraded
+// daemon but never ran `pdx install --reinstall`) emits the legacy literal
+// via event_name=Stop. P2-T5 removed codex from isLegacyHookForUnmigrated,
+// and P2-T2 narrowed deriveCodexStatus to Pdx-prefixed names only. The
+// handler must surface event_not_in_catalog rather than silently 200ing,
+// making the reinstall transition observable instead of a silent black hole.
+// Pairs with TestHandleEvent_CodexPdxName_IsCatalogHit above as the post-P2
+// hit/miss boundary for codex legacy literals.
+func TestHandleEvent_CodexLegacyEventName_IsCatalogMiss(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.prober = probe.New(fakeTmux)
+	m.registry.Register(agentcodex.NewProvider())
+	origRead := readProcessInfoFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1, ExePath: "/usr/local/bin/codex", Argv: []string{"codex"}}, nil
+	}
+	t.Cleanup(func() { readProcessInfoFn = origRead })
+
+	// event_name (legacy alias) rather than purdex_name mimics an
+	// un-reinstalled codex hook payload exactly as alpha.252 hooks emit.
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":36649,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"Stop","raw_event":{},"agent_type":"codex"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s), want 200", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["reason"] != "event_not_in_catalog" {
+		t.Errorf("reason = %q, want event_not_in_catalog (codex legacy literal post-P2-T5 must surface as catalog miss, not silent fallback)", resp["reason"])
+	}
+}
+
 // W2-D1b (Phase 2): opencode prematurely emitting a PdxXxx name before its
 // Phase 3 catalog migration must surface as event_not_in_catalog. This
 // preserves the cross-phase drift guard the original codex-targeted test
