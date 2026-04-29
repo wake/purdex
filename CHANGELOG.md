@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.0.0-alpha.255] - 2026-04-29
+
+### Feat(agent): W2 Phase 3 — opencode catalog naming separation + transition cleanup (#736)
+
+Final phase of the W2 catalog naming separation. opencode joins cc (alpha.251) and codex (alpha.254) on the unified `PurdexName` / `UpstreamKey` / `Lifecycle` schema, and the legacy fallback path is fully removed. All three agents are now metadata-driven end-to-end.
+
+**opencode catalog** — 65 entries gain `PurdexName` (Pdx-prefixed) / `UpstreamKeys[]` / `Lifecycle`. The cross-agent invariant runner flips opencode from reverse `LegacyShape` → forward `AllForwardInvariants`. `DeriveStatus` switch cases route on `PdxXxx`; legacy literals miss the catalog. `PdxPermissionRequest` keeps its multi-source mapping (`UpstreamKeys = ["permission.asked", "question.asked"]`) per spec §2.3.
+
+**Plugin emit via `PURDEX_EVENT` const** — installer injects an 8-key Go-sourced JS const into `~/.config/opencode/plugins/pdx-agent-hooks.js`; all `emit(...)` callsites now reference `PURDEX_EVENT.PdxXxx` instead of legacy string literals. Magic marker `pdx-managed:opencode-hooks:v1` unchanged. Reinstall is idempotent (sha256 stable on second run).
+
+**Transition cleanup** — `legacy_hook.go` deleted in full; `isLegacyHookForUnmigrated` predicate removed; `classifyLifecycle` now dispatches purely on catalog `LifecycleEventKind` metadata. Hot path (`handler.go`) and cold path (`sendSnapshot` / `replayFromDB`) both skip+clean events whose stored `event_name` no longer maps to a catalog `PurdexName` (R2-Attack follow-up `P3-T6.2` covers SPA cold reconnect).
+
+**Schema cleanup** — deprecated `Name` field on `HookEventSpec` removed (`P3-T4`); `event_name` JSON unmarshal alias on `EventRequest` removed (`P3-T5`). The cleanup helper's legacy event-name set is now derived from a fixture constant (P3-T4a), unblocking the field removal.
+
+**Round-2 follow-ups**
+
+- **P3-T6.1** (R1 P2 → alpha-acceptable): `replayFromDB` rejects stored opencode legacy `event_name` rows on daemon restart. Spec §0 + plan G1 + memory feedback `no_alpha_migration` accept the cross-version transition gap; the negative test pins the alpha boundary.
+- **P3-T6.2** (R2-Attack medium): SPA cold reconnect path (`sendSnapshot` / `replayFromDB`) was rebroadcasting `Valid=false` rows keyed by `raw_event_name`, causing stale legacy events to resurrect on a freshly-upgraded daemon. Mirrors `handler.go:230` hot-path cleanup in both replay paths.
+- **P3-T7.1** (R2-Defense medium): `pluginSimState` contract simulator was a second SOT emitting legacy literals; renamed all 9 callsites to `PdxXxx` to match the post-P3-T3 plugin emit contract.
+
+**File-Health (R2)** — approved.
+
+**Upgrade note** — after upgrading to alpha.255, run:
+
+```
+pdx install --reinstall --agent opencode
+# (cc/codex already migrated at alpha.251/.254)
+```
+
+Pre-existing opencode plugins (loaded into already-running opencode processes) continue emitting legacy literals until opencode is restarted; the daemon classifies these as `event_not_in_catalog` (no broadcast). User-facing impact: opencode lights stop updating until user reinstalls plugin and restarts opencode. This is the alpha breaking change deliberately accepted in spec §0.
+
+**Live verify (mlab)** — fresh `tmux new-session 'opencode'` produced 3 chains (`PdxSessionStart` / `PdxUserPromptSubmit` / `PdxStop`), all 5-step `trigger → verify_passed → frame → projection → broadcasted`. Pre-existing opencode session emitting legacy literals classified `event_not_in_catalog → skipped` — confirms fallback predicate is gone.
+
 ## [1.0.0-alpha.254] - 2026-04-29
 
 ### Feat(agent): W2 Phase 2 — codex catalog naming separation + lifecycle metadata (#730)
