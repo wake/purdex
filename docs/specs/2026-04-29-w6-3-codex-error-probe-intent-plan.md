@@ -525,7 +525,7 @@ Concurrent rename（補 §6.4 race）：
 - [ ] `pnpm lint && pnpm build` clean
 - [ ] drift test 通過 + 失敗訊息有意義
 - [ ] dev log 4 類 line 都產出
-- [ ] mlab live §1-§4 全 PASS
+- [ ] mlab live §1-§5 全 PASS（含 daemon-restart pane-gone clear 路徑）
 
 ---
 

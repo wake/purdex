@@ -934,8 +934,8 @@ func (d *probeIntentDispatcher) replayStatus() {
 |---|---|
 | P1-T1 | `ProbeIntent` / `ProbeIntentKind` / `Signal` / `ProbeIntentProvider` 落 `internal/agent/provider.go` + 單元測試（schema 對齊 §3.2；Signal 4 fields） |
 | P1-T2 | `applyProbeGuards` free function 抽出（mechanical extraction `probe_orchestrator.go interpretScreenEvent` step 1+2+4+5+6） + 新 `staleCheck strategy` 注入點；regression test 確保 ScreenChange 行為零變動（既有 probe_orchestrator_test.go / probe_orchestrator_integration_test.go 全綠） |
-| P1-T3 | 新檔 `internal/module/agent/probe_intent_dispatcher.go`：`applyStatus` / `reconcileSessionActive` / `applyIntentLifecycle` / `consumeSignals` + activeProbeIntents 結構（在 m.mu 內保護） + generation token；用 stub detector 測 lifecycle 5 case（含 active target mismatch 觸發 cancel-and-rearm） + cross-provider reconcile（codex → cc 切換清掉舊 entry） + stale-callback re-check + generation 不匹配 drop + **probe-applied teardown**（detector emit 把 status 改成 error → activeProbeIntents 該 entry 被清） |
-| P1-T4 | `Module.lookupTopFrameForSession` helper（讀 projection top frame `(paneID, pid)`）+ test |
+| P1-T3 | `Module.lookupTopFrameForSessionLocked` helper（讀 projection top frame `(paneID, pid)`）+ test — **plan v2 swap 後為 dispatcher core 的前置依賴** |
+| P1-T4 | 新檔 `internal/module/agent/probe_intent_dispatcher.go`：`applyStatus` / `reconcileSessionActive` / `applyIntentLifecycle` / `consumeSignals` + activeProbeIntents 結構（在 m.mu 內保護） + generation token；用 stub detector 測 lifecycle 5 case（含 active target mismatch 觸發 cancel-and-rearm） + cross-provider reconcile（codex → cc 切換清掉舊 entry） + stale-callback re-check + generation 不匹配 drop + **probe-applied teardown**（detector emit 把 status 改成 error → activeProbeIntents 該 entry 被清） |
 | P1-T5 | `manageActivityWatch` 接 `probeIntentDisp.applyStatus`；rename / Stop 路徑也接；test 覆蓋 rename 期間 (oldName stop, newName 重評估) |
 | P1-T6 | `Module.Start` 加 `probeIntentDisp.replayStatus`；daemon-restart recovery integration test（fixture：projection top frame 含 dead pid + status=running → Start 後 detector 啟動立即 emit → broadcast error） |
 
