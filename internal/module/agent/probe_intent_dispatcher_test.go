@@ -627,3 +627,105 @@ func TestStopAll_CancelsAndClearsActiveMap(t *testing.T) {
 
 	waitFor(t, time.Second, func() bool { return rec.cancelCount() == 1 }, "detector cancel after stopAll")
 }
+
+// -----------------------------------------------------------------------------
+// W6-3 P1-T6: replayStatus daemon-restart recovery (closes #698)
+// -----------------------------------------------------------------------------
+
+// TestReplayStatus_RunningSession_DetectorArmed pins the recovery contract:
+// after replayFromDB hydrates currentStatus + frame projection, replayStatus
+// re-runs applyStatus per session so a session whose top frame matches a
+// ProbeIntent provider rearms its detector.
+func TestReplayStatus_RunningSession_DetectorArmed(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	rec := installRecordingDetector(t, m)
+	if fake, ok := m.tmux.(*tmux.FakeExecutor); ok {
+		fake.SetPaneSessionName("%5", "work")
+	}
+	// Seed a frame + currentStatus the way replayFromDB would after a
+	// daemon restart with codex still running on session "work".
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+	m.probeIntentDisp.replayStatus()
+
+	<-rec.started
+	if rec.startCount() != 1 {
+		t.Fatalf("detector started count = %d, want 1", rec.startCount())
+	}
+	cur, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+	if !ok {
+		t.Fatalf("activeProbeIntents missing after replayStatus")
+	}
+	if cur.agentType != "codex" || cur.paneID != "%5" || cur.senderPID != 4242 {
+		t.Fatalf("active entry = %+v, want codex/%%5/4242", cur)
+	}
+}
+
+// TestReplayStatus_IdleSession_DetectorNotArmed pins the gating contract:
+// a session whose replayed status is Idle (not in OnEntryStatus for the
+// ProcessDead intent) does NOT arm a detector.
+func TestReplayStatus_IdleSession_DetectorNotArmed(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	rec := installRecordingDetector(t, m)
+	if fake, ok := m.tmux.(*tmux.FakeExecutor); ok {
+		fake.SetPaneSessionName("%5", "work")
+	}
+	// Seed a frame but flip currentStatus to Idle.
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+	m.mu.Lock()
+	m.currentStatus["work"] = agentpkg.StatusIdle
+	m.mu.Unlock()
+
+	m.probeIntentDisp.replayStatus()
+
+	// Give any goroutine that might wrongly start a brief moment to do so.
+	time.Sleep(20 * time.Millisecond)
+	if rec.startCount() != 0 {
+		t.Fatalf("detector started for idle session: count = %d, want 0", rec.startCount())
+	}
+	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead); ok {
+		t.Fatalf("activeProbeIntents present for idle session, want absent")
+	}
+}
+
+// TestReplayStatus_StaleFrame_DetectorEmitsImmediately exercises the
+// canonical issue-#698 fix path: daemon restart inherits a frame whose
+// process has already died. The detector (here stub-driven via
+// installEmitOnceDetector) emits a Signal on first call; consumeSignals
+// runs it through applyProbeGuards which broadcasts error + tears down
+// the active entry.
+//
+// In production the detector polls IsPidAlive at 1Hz; here we simulate
+// the immediate emit so the test stays deterministic without timing
+// dependencies. Real codex emit path is tested in P2-T7 / mlab.
+func TestReplayStatus_StaleFrame_DetectorEmitsImmediately(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	m.sessions = &fakeSessionProvider{}
+	if fake, ok := m.tmux.(*tmux.FakeExecutor); ok {
+		fake.SetPaneSessionName("%5", "work")
+	}
+	installEmitOnceDetector(t, m, agentpkg.Signal{
+		Kind:      agentpkg.ProbeIntentKindProcessDead,
+		PaneAlive: true,
+		PaneID:    "%5",
+		SenderPID: 4242,
+	})
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+	m.probeIntentDisp.replayStatus()
+
+	// After detector emits PaneAlive=true → OnSignal returns Error → guards
+	// pass → applied=true → consumeSignals invokes applyStatus(error) →
+	// case 3 tears down the active entry.
+	waitFor(t, time.Second, func() bool {
+		_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+		return !ok
+	}, "active entry torn down after stale-frame emit")
+
+	m.mu.Lock()
+	got := m.currentStatus["work"]
+	m.mu.Unlock()
+	if got != agentpkg.StatusError {
+		t.Fatalf("currentStatus = %q, want error after stale-frame replay", got)
+	}
+}

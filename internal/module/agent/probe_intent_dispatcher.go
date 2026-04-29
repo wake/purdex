@@ -372,6 +372,32 @@ func probeIntentsOf(p agentpkg.AgentProvider) []agentpkg.ProbeIntent {
 	return nil
 }
 
+// replayStatus walks every session that has a currentStatus entry and
+// re-runs applyStatus so ProbeIntent detectors arm against post-replay
+// state. Called from Module.Start after replayFromDB + startSweep so a
+// daemon restart inherits the same gating behavior as a live status
+// transition.
+//
+// Per spec §6.3 / §6.4: snapshot is taken under m.mu via
+// snapshotStatuses; for each session, applyStatus runs outside m.mu.
+// applyIntentLifecycle re-reads currentStatus + lookupTopFrameForSessionLocked
+// inside its own m.mu critical section, so any hook arriving between
+// snapshot and lifecycle observes consistent state — race fully closed.
+//
+// Per spec §6.4 stale-frame race: if the snapshot says Running but the
+// top frame.pid is already dead (codex crashed before daemon restart),
+// the production codex detector polls and emits a Signal on its first
+// IsPidAlive call → applyProbeGuards broadcasts error → consumeSignals
+// re-runs applyStatus(error) which tears down the entry. This is the
+// canonical issue #698 fix: daemon restart correctly discovers the
+// missing process and flips lights without waiting for the next hook.
+func (d *probeIntentDispatcher) replayStatus() {
+	snapshot := d.parent.snapshotStatuses()
+	for session, entry := range snapshot {
+		d.applyStatus(session, entry.agentType, entry.status)
+	}
+}
+
 // stopAll cancels every active ProbeIntent detector and clears the map.
 // Called from Module.Stop. Locks m.mu so no concurrent applyStatus can
 // observe a partial map.

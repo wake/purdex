@@ -233,12 +233,22 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 }
 
 // Start replays DB state and registers OnSubscribe callback.
+//
+// W6-3 P1-T6 (closes #698): after replayFromDB hydrates currentStatus +
+// frame projection and startSweep is running, replayStatus walks every
+// session and re-evaluates ProbeIntent gating so detectors armed before
+// shutdown rearm after restart. Sequence MUST be replayFromDB → startSweep
+// → replayStatus so detectors see fully-hydrated state on first poll
+// (per spec §6.3 / §6.4).
 func (m *Module) Start(_ context.Context) error {
 	if err := m.sweepOnce(); err != nil {
 		log.Printf("[agent] startup sweep: %v", err)
 	}
 	m.replayFromDB()
 	m.startSweep()
+	if m.probeIntentDisp != nil {
+		m.probeIntentDisp.replayStatus()
+	}
 
 	if m.core != nil {
 		m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
@@ -595,6 +605,38 @@ func (m *Module) resolvePaneSession(paneID string) (string, string) {
 func (m *Module) nextProbeIntentGeneration() uint64 {
 	m.probeIntentGen++
 	return m.probeIntentGen
+}
+
+// sessionStatusSnapshot pairs a session's top-frame agentType with its
+// current status. Used by probeIntentDispatcher.replayStatus to drive
+// applyStatus per-session after a daemon-restart hydrate.
+type sessionStatusSnapshot struct {
+	agentType string
+	status    agentpkg.Status
+}
+
+// snapshotStatuses returns a session → (agentType, status) snapshot taken
+// under m.mu. Used by probeIntentDispatcher.replayStatus (W6-3 P1-T6 /
+// issue #698) so a daemon restart re-arms ProbeIntent detectors based on
+// post-replay state.
+//
+// agentType is sourced from the top-frame projection (NOT from the legacy
+// agent_events row) so the value matches what live hook handlers would
+// produce. Sessions without a resolvable top frame still appear in the
+// snapshot with agentType="" — applyIntentLifecycle handles that path
+// (frame lookup fails inside m.mu → skip arm).
+func (m *Module) snapshotStatuses() map[string]sessionStatusSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]sessionStatusSnapshot, len(m.currentStatus))
+	for session, status := range m.currentStatus {
+		entry := sessionStatusSnapshot{status: status}
+		if proj, err := m.projectionForSession(session); err == nil && proj != nil && proj.TopFrame != nil {
+			entry.agentType = proj.TopFrame.AgentType
+		}
+		out[session] = entry
+	}
+	return out
 }
 
 // lookupTopFrameForSessionLocked returns the top frame's pane_id + pid for
