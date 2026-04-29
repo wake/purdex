@@ -961,6 +961,42 @@ func TestCcKnownEventNames_DerivedFromUpstreamKeys(t *testing.T) {
 
 // ---- P1-T10: ccOwnedCleanupEventNames is the three-set union ----
 
+// TestCcOwnedCleanupEventNames_FixtureDerivedLegacySet pins the static
+// fixture introduced in P3-T4a to the runtime cc installable Names. This
+// guards against drift between the fixture chosen for the legacy set and
+// the catalog's actual installable Name field while spec.Name still
+// exists. Once P3-T4 removes spec.Name, the fixture is the only source of
+// truth — a drift detected here would only fire from the catalog side
+// adding/removing an installable, which by then must be reflected in
+// ccLegacyEventNames manually (and in PR-W2-cleanup-followup the legacy
+// set is removed entirely).
+func TestCcOwnedCleanupEventNames_FixtureDerivedLegacySet(t *testing.T) {
+	fixture := make(map[string]bool, len(ccLegacyEventNames))
+	for _, n := range ccLegacyEventNames {
+		fixture[n] = true
+	}
+	runtime := make(map[string]bool)
+	for _, spec := range ccEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		runtime[spec.Name] = true
+	}
+	if len(fixture) != len(runtime) {
+		t.Errorf("ccLegacyEventNames size = %d, runtime installable Name set size = %d", len(fixture), len(runtime))
+	}
+	for n := range runtime {
+		if !fixture[n] {
+			t.Errorf("ccLegacyEventNames missing runtime installable Name %q", n)
+		}
+	}
+	for n := range fixture {
+		if !runtime[n] {
+			t.Errorf("ccLegacyEventNames has %q but no runtime installable Name matches (drift — update fixture or catalog)", n)
+		}
+	}
+}
+
 // TestCcOwnedCleanupEventNames_ThreeSetUnion asserts cleanup set == union of
 // installable specs' UpstreamKeys ∪ PurdexName ∪ legacy Name. Per spec §6.1
 // invariant 6. cc has one-to-one mapping so UpstreamKeys[0] == Name and the

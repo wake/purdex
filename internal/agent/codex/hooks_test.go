@@ -1784,6 +1784,38 @@ func TestCodexKnownEventNames_DerivedFromUpstreamKeys(t *testing.T) {
 	}
 }
 
+// TestCodexOwnedCleanupEventNames_FixtureDerivedLegacySet pins the static
+// fixture introduced in P3-T4a to the runtime codex installable Names.
+// Mirrors cc's equivalent — guards drift between fixture and catalog while
+// spec.Name still exists; after P3-T4 removes spec.Name the fixture is the
+// only source of truth (until PR-W2-cleanup-followup removes it entirely).
+func TestCodexOwnedCleanupEventNames_FixtureDerivedLegacySet(t *testing.T) {
+	fixture := make(map[string]bool, len(codexLegacyEventNames))
+	for _, n := range codexLegacyEventNames {
+		fixture[n] = true
+	}
+	runtime := make(map[string]bool)
+	for _, spec := range codexEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		runtime[spec.Name] = true
+	}
+	if len(fixture) != len(runtime) {
+		t.Errorf("codexLegacyEventNames size = %d, runtime installable Name set size = %d", len(fixture), len(runtime))
+	}
+	for n := range runtime {
+		if !fixture[n] {
+			t.Errorf("codexLegacyEventNames missing runtime installable Name %q", n)
+		}
+	}
+	for n := range fixture {
+		if !runtime[n] {
+			t.Errorf("codexLegacyEventNames has %q but no runtime installable Name matches (drift — update fixture or catalog)", n)
+		}
+	}
+}
+
 // TestCodexOwnedCleanupEventNames_ThreeSetUnion asserts the cleanup set is
 // the three-set union per spec §6.1 invariant 6: installable specs'
 // UpstreamKeys ∪ PurdexName ∪ legacy Name. codex has one-to-one mapping so
